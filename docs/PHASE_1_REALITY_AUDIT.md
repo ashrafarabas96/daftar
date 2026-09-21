@@ -87,4 +87,6 @@ The handover archive (Kimi agent export) was imported as-is (commit 53bbb50) and
 | Migrations | 0000–0032 present; manifest frozen through 0027 | now 0000–0037 frozen |
 | Docs | Phase 0 set + reality audit + protected behaviours; no Phase 1 closure documents | 21 documents at closure |
 
-Reality at closure (measured): 74 routes, 38 migrations, 33 RLS policies, 16 SECURITY DEFINER commands, 291 integration/security cases, 40 goldens, 58 unit tests, 13 Android JVM tests, 16 web pages, 11 admin pages, 187 × 3 i18n keys. All commands in `PHASE_1_ACCEPTANCE_REPORT.md` pass on a clean checkout.
+Reality at the FIRST closure (historical snapshot, commit `db24f70`, superseded by the Final Release Blocker Patch): 74 routes, 38 migrations, 33 RLS policies, 16 SECURITY DEFINER commands, 291 integration/security cases, 40 goldens, 58 unit tests, 13 Android JVM tests, 16 web pages, 11 admin pages, 187 × 3 i18n keys.
+
+Current measured reality is recorded in `PHASE_1_ACCEPTANCE_REPORT.md` and regenerated into `release/evidence.json` by every release-gate run; the migration set is now 0000–0039.

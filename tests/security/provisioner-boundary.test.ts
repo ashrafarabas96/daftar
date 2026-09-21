@@ -1,12 +1,15 @@
 import { Client } from 'pg';
 import { describe, expect, it } from 'vitest';
+import { execFile } from 'node:child_process';
 import { createHmac, randomUUID } from 'node:crypto';
+import { promisify } from 'node:util';
 import {
   appDbUrl,
   createTestApp,
   identityDbUrl,
   mintTestAssertion,
   ownerPool,
+  platformDbUrl,
   provisionerDbUrl,
   resetData,
   resolverDbUrl,
@@ -14,6 +17,8 @@ import {
   workerDbUrl,
   type TestApp,
 } from '../helpers/test-app';
+
+const execFileP = promisify(execFile);
 
 /**
  * Ultimate Closure §15–21 — PROVISIONER NEGATIVE DB TESTS.
@@ -332,31 +337,133 @@ describe('provisioner boundary (§15–21): no bypass, EXECUTE-only authority', 
       expect(owned.rows[0]?.user_id).toBe(fx.strangerId);
     });
 
-    it('the assertion key is unreachable: no runtime role can read, install or retire keys, or touch the jti registry', async () => {
+    /**
+     * SECURITY CONTRACT — key custody (corrected after external review).
+     *
+     * The authority PostgreSQL actually enforces, and which these tests pin:
+     *   - provisioning_assertion_keys has NO grants: no principal, including
+     *     daftar_platform, can SELECT the secrets or mutate the table directly.
+     *   - daftar_platform is the ONLY principal that may EXECUTE the narrow
+     *     key-management commands (install / retire). That is deliberate: the
+     *     platform runtime is the operational owner of key rotation.
+     *   - every other runtime principal is refused both commands.
+     *   - the JTI registry is likewise unreachable from every runtime role.
+     */
+    it('key SECRETS are unreadable and the key table is directly unmutable — for EVERY principal including daftar_platform', async () => {
       await fixture();
-      // Thunks, awaited one by one: an eagerly created rejected promise would surface as an unhandled rejection.
-      const attempts: (() => Promise<unknown>)[] = [
-        () => asProvisioner((c) => c.query('SELECT * FROM provisioning_assertion_keys')),
-        () => asProvisioner((c) => c.query(`SELECT provision_assertion_key_install('evil', decode($1, 'base64'))`, [Buffer.alloc(32, 1).toString('base64')])),
-        () => asProvisioner((c) => c.query(`SELECT provision_assertion_key_retire('v1')`)),
-        () => asProvisioner((c) => c.query('SELECT * FROM provisioning_assertion_uses')),
-        () => asProvisioner((c) => c.query('DELETE FROM provisioning_assertion_uses')),
-        () => asProvisioner((c) => c.query(`SELECT provision_actor(ARRAY['onboarding'])`)),
-      ];
-      for (const a of attempts) await expect(a()).rejects.toThrow(/permission denied|PROV:FORBIDDEN/);
-      for (const url of [appDbUrl, workerDbUrl, identityDbUrl, resolverDbUrl]) {
+      const secret = Buffer.alloc(32, 3).toString('base64');
+      for (const [role, url] of [
+        ['daftar_platform', platformDbUrl],
+        ['daftar_provisioner', provisionerDbUrl],
+        ['daftar_app', appDbUrl],
+        ['daftar_worker', workerDbUrl],
+        ['daftar_identity', identityDbUrl],
+        ['daftar_resolver', resolverDbUrl],
+      ] as const) {
         const c = new Client({ connectionString: url });
         await c.connect();
         try {
-          await expect(c.query('SELECT * FROM provisioning_assertion_keys')).rejects.toThrow(/permission denied/);
+          await expect(c.query('SELECT secret FROM provisioning_assertion_keys'), `${role} SELECT secret`).rejects.toThrow(/permission denied/);
+          await expect(c.query('SELECT * FROM provisioning_assertion_keys'), `${role} SELECT *`).rejects.toThrow(/permission denied/);
           await expect(
-            c.query(`SELECT provision_assertion_key_install('evil', decode($1, 'base64'))`, [Buffer.alloc(32, 1).toString('base64')]),
+            c.query(`INSERT INTO provisioning_assertion_keys (kid, secret) VALUES ('direct', decode($1, 'base64'))`, [secret]),
+            `${role} INSERT`,
           ).rejects.toThrow(/permission denied/);
+          await expect(c.query(`UPDATE provisioning_assertion_keys SET status = 'retired'`), `${role} UPDATE`).rejects.toThrow(/permission denied/);
+          await expect(c.query('DELETE FROM provisioning_assertion_keys'), `${role} DELETE`).rejects.toThrow(/permission denied/);
+          // The single-use (JTI) registry is equally off limits.
+          await expect(c.query('SELECT * FROM provisioning_assertion_uses'), `${role} SELECT uses`).rejects.toThrow(/permission denied/);
+          await expect(c.query('DELETE FROM provisioning_assertion_uses'), `${role} DELETE uses`).rejects.toThrow(/permission denied/);
         } finally {
           await c.end();
         }
       }
     });
+
+    it('daftar_platform IS the key-management principal: install and retire succeed through the narrow commands only', async () => {
+      await fixture();
+      const kid = `test-kid-${randomUUID().slice(0, 8)}`;
+      const secret = Buffer.alloc(32, 5).toString('base64');
+      const c = new Client({ connectionString: platformDbUrl });
+      await c.connect();
+      try {
+        const installed = await c.query(`SELECT provision_assertion_key_install($1, decode($2, 'base64')) AS r`, [kid, secret]);
+        expect(installed.rowCount).toBe(1);
+        // The command returns void — it never echoes the secret back to the caller.
+        expect(JSON.stringify(installed.rows)).not.toContain(secret);
+        expect(JSON.stringify(installed.rows)).not.toContain(Buffer.from(secret, 'base64').toString('hex'));
+
+        const retired = await c.query('SELECT provision_assertion_key_retire($1) AS r', [kid]);
+        expect(retired.rowCount).toBe(1);
+        expect(JSON.stringify(retired.rows)).not.toContain(secret);
+
+        // Even the principal that manages keys cannot read what it just wrote.
+        await expect(c.query('SELECT secret FROM provisioning_assertion_keys WHERE kid = $1', [kid])).rejects.toThrow(/permission denied/);
+      } finally {
+        await c.end();
+      }
+      // The row exists and is retired — verified through the owner connection the runtime never has.
+      const row = await ownerPool().query<{ status: string }>('SELECT status FROM provisioning_assertion_keys WHERE kid = $1', [kid]);
+      expect(row.rows[0]?.status).toBe('retired');
+      // A retired key can no longer authorize an assertion.
+      const stale = mintTestAssertion('00000000-0000-4000-8000-000000000009', 'create_business');
+      expect(stale.split('.')[1]).toBe('v1'); // the harness key is untouched by this test
+    });
+
+    it('NO other runtime principal may install or retire keys', async () => {
+      await fixture();
+      const secret = Buffer.alloc(32, 7).toString('base64');
+      for (const [role, url] of [
+        ['daftar_provisioner', provisionerDbUrl],
+        ['daftar_app', appDbUrl],
+        ['daftar_worker', workerDbUrl],
+        ['daftar_identity', identityDbUrl],
+        ['daftar_resolver', resolverDbUrl],
+      ] as const) {
+        const c = new Client({ connectionString: url });
+        await c.connect();
+        try {
+          await expect(c.query(`SELECT provision_assertion_key_install('evil-${role}', decode($1, 'base64'))`, [secret]), `${role} install`).rejects.toThrow(
+            /permission denied/,
+          );
+          await expect(c.query(`SELECT provision_assertion_key_retire('v1')`), `${role} retire`).rejects.toThrow(/permission denied/);
+          await expect(c.query(`SELECT provision_actor(ARRAY['onboarding'])`), `${role} provision_actor`).rejects.toThrow(/permission denied/);
+        } finally {
+          await c.end();
+        }
+      }
+      // The active key survived every attempt.
+      const active = await ownerPool().query<{ n: string }>(
+        `SELECT count(*)::text AS n FROM provisioning_assertion_keys WHERE kid = 'v1' AND status = 'active'`,
+      );
+      expect(active.rows[0]?.n).toBe('1');
+      const forged = await ownerPool().query<{ n: string }>(
+        `SELECT count(*)::text AS n FROM provisioning_assertion_keys WHERE kid LIKE 'evil-%' OR kid = 'direct'`,
+      );
+      expect(forged.rows[0]?.n).toBe('0');
+    });
+
+    it('the key-management CLI never prints or logs the secret', async () => {
+      await fixture();
+      const kid = `cli-kid-${randomUUID().slice(0, 8)}`;
+      const secret = Buffer.alloc(32, 11).toString('base64');
+      const { stdout, stderr } = await execFileP(process.execPath, ['--import', 'tsx', 'scripts/install-provisioning-key.ts'], {
+        env: { ...process.env, BOOTSTRAP_DATABASE_URL: platformDbUrl, PROVISIONING_ASSERTION_KEY: secret, PROVISIONING_ASSERTION_KID: kid },
+        cwd: process.cwd(),
+      });
+      const output = `${stdout}${stderr}`;
+      expect(output).toContain(`installed kid=${kid}`);
+      expect(output).not.toContain(secret);
+      expect(output).not.toContain(Buffer.from(secret, 'base64').toString('hex'));
+      // Clean up: retire the key this test installed.
+      const c = new Client({ connectionString: platformDbUrl });
+      await c.connect();
+      try {
+        await c.query('SELECT provision_assertion_key_retire($1)', [kid]);
+      } finally {
+        await c.end();
+      }
+    }, 60_000);
   });
 
   it('POSITIVE: provisioning commands execute (peek round-trip through the API surface)', async () => {

@@ -9,7 +9,7 @@
 | Date | 2026-09-21 |
 | Node | v24.12.0 |
 | API | in-process NestJS app (`createTestApp`, `PROCESS_MODE=all`), supertest over the HTTP server |
-| Database | embedded PostgreSQL 18 on localhost, RLS enabled, six principals, fresh schema 0000–0037 |
+| Database | embedded PostgreSQL 18 on localhost, RLS enabled, six principals, fresh schema 0000–0039 |
 | Data | 1 tenant, 1 business, 120 seeded products (2 translations each, SKU registered), 1 member, 1 platform owner |
 | Machine | shared Linux container (release-gate runner), single process, no warm-up beyond the seed |
 
@@ -42,7 +42,7 @@ Raw JSON: `release/perf-baseline.json` (written by the run that produced this ta
 | No new slow query without an index | `0035` adds delivery-queue (due, lease), invitation (business, status) and audit (created, tenant) indexes; `0036` adds `product_translations (business_id, lower(name))`; `0037` adds `catalog_identifiers (business_id, owner_type, owner_id)` (31 indexes total) |
 | No N+1 in list endpoints | Product list = one query with `jsonb_object_agg` over translations; members list = a fixed number of queries independent of member count (no per-member query); verified by reading the services and by the flat p95 across 60 iterations |
 | Pagination capped | `limit` ≤ 100 (400 above), cursor-based, stable order (`catalog.test.ts`) |
-| Connection budget | Pools opened per `PROCESS_MODE`; the harness runs 291 tests on a stock `max_connections=100` server after the leak fix |
+| Connection budget | Pools opened per `PROCESS_MODE`; the whole integration/security suite runs on a stock `max_connections=100` server after the leak fix |
 | Rate limiter cost | Redis limiter in production; the memory limiter in this baseline adds < 1 ms |
 
 ## 5. What is NOT claimed

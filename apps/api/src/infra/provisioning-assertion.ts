@@ -10,7 +10,10 @@ import { createHmac, randomUUID } from 'node:crypto';
  * daftar_provisioner credential cannot impersonate anyone.
  *
  * Format: v1.<kid>.<actor uuid>.<kind>.<expires epoch s>.<jti uuid>.<hmac-sha256 hex>
- * Bound to ONE operation kind, short-lived, and single-use per transaction.
+ * Bound to ONE operation kind, short-lived, and SINGLE-TRANSACTION: the same
+ * assertion may be presented by the several trusted commands that compose one
+ * provisioning workflow inside the same transaction, but it can never be
+ * replayed in a later transaction (cross-transaction replay protection).
  */
 export type ProvisioningKind = 'onboarding' | 'create_business' | 'accept_invitation';
 
