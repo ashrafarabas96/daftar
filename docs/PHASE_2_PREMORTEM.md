@@ -1,60 +1,68 @@
 # DAFTAR — Phase 2 Pre-mortem / تشريح مسبق للمرحلة الثانية
 
-> Written at Phase 1 closure, BEFORE any Phase 2 code exists. "Imagine Phase 2 failed — why?" Each failure names the Phase 1 asset that prevents it and the rule to keep.
+> Written before any Phase 2 code exists. "Imagine Phase 2 failed — why?" Each failure names the Phase 1 asset that prevents it and the rule to keep.
+>
+> **Scope note (normalized 2026-09-21).** Phase 2 is **Accounting & Financial Core only**, per `DAFTAR_IMPLEMENTATION_ROADMAP.md`. Inventory, purchases and suppliers are Phase 3; sales, POS, customers, debts and installments are Phase 4. Scenarios below that concern those domains are kept because they shape the *interfaces* Phase 2 must expose, and each is labelled with the phase that will exercise it.
 
-## Scenario 1 — "The ledger doesn't balance and nobody noticed for weeks"
+## Scenario 1 — "The ledger doesn't balance and nobody noticed for weeks" (Phase 2)
 
-- Cause: journal posting done in application code with partial writes; reconciliation added late.
-- Prevention: the outbox + audit patterns already commit business change and event atomically (`outbox.test.ts`); Phase 2 must post journals in the SAME transaction as the sale and add the balance invariant test on day one (Golden 01–08 in `DAFTAR_GOLDEN_REGRESSION_SUITE.md`). No silent reconciliation fixes (`DAFTAR_OBSERVABILITY.md` §3).
+- Cause: posting done in application code with partial writes; reconciliation added late.
+- Prevention: debit = credit is enforced at the database boundary (deferred constraint trigger over the entry's lines), not only in the service. The journal is append-only. Every posting writes its lines and its outbox event in ONE transaction, exactly as `outbox.test.ts` already proves for business events. Trial balance is a read model derived from the journal, never an independent writable total.
 
-## Scenario 2 — "Two cashiers sold the last unit"
+## Scenario 2 — "Two operations posted the same source twice" (Phase 2)
 
-- Cause: stock read then written without a lock; RLS made people assume the DB "handles it".
-- Prevention: the quota engine already shows the pattern (`assertCanConsume` under `FOR UPDATE` + advisory lock; `quota-race.test.ts`). Inventory movements must follow it and ship with a concurrency test from `concurrency-matrix.test.ts`'s template.
+- Cause: a retry, a duplicated queue message or a double click produced two journal entries for one business fact.
+- Prevention: `(business_id, source_type, source_id)` is unique on posted entries; posting is idempotent by construction and returns the existing entry on replay. This mirrors the onboarding idempotency contract (`provision_replay_operation`) that Phase 1 already ships and tests.
 
-## Scenario 3 — "Money drifted by a fils"
+## Scenario 3 — "Money drifted by a fils" (Phase 2)
 
 - Cause: a `Number` sneaked into a total, or a client rounded.
-- Prevention: `bigint` minor units end-to-end, `BigDecimal` on Android, static guard 6b, money tests at 18 digits. Rule: any new money field is `bigint` + currency, every total computed server-side, goldens with JOD (3 decimals).
+- Prevention: `bigint` minor units end-to-end, `BigDecimal` on Android, static guard 6b, money tests at 18 digits. Rule: every new money column is `bigint` + currency, every total is computed server-side, goldens include JOD (3 decimals).
 
-## Scenario 4 — "Idempotency worked for onboarding but not for payments"
+## Scenario 4 — "Foreign-currency numbers could not be explained months later" (Phase 2)
 
-- Cause: each team invented its own key semantics.
-- Prevention: `provision_replay_operation` / `persist_operation` define replay = 200 same result, mismatch = 409 `IDEMPOTENCY_KEY_REUSED`, incomplete = 409 `IDEMPOTENCY_CONFLICT`. Phase 2 financial POSTs must use a generalised `operations` table with the same three outcomes and the same tests.
+- Cause: the rate used at posting time was not stored, so restating the entry became guesswork.
+- Prevention: every foreign-currency line stores the transaction amount, the base-currency amount, the rate, the rate source and the rate timestamp. Manual rate is the default; an automatic provider is optional and must not become a dependency (`DAFTAR_MULTI_CURRENCY.md`, OD-11).
 
-## Scenario 5 — "A merchant saw another merchant's invoice"
+## Scenario 5 — "A merchant saw another merchant's journal" (Phase 2)
 
 - Cause: a reporting query bypassed RLS through a platform pool "for performance".
-- Prevention: `db-privileges.test.ts` and static guard 13 fail if merchant runtime code touches the platform pool. Rule: reports run as `daftar_app` with tenant context; heavy reads get read replicas, never bypass.
+- Prevention: `db-privileges.test.ts` and static guard 13 fail if merchant runtime code touches the platform pool. Accounting tables carry `business_id` with the same RLS policy shape as catalog, and cross-business posting is impossible by FK + policy.
 
-## Scenario 6 — "Storefront launch took the API down"
+## Scenario 6 — "A posted entry was edited to fix a mistake" (Phase 2)
 
-- Cause: public traffic hit the merchant-api process.
-- Prevention: runtime composition is per process; a `storefront` mode gets its own pool sizes, limiter buckets and readiness. Rule: no public route in `MerchantApiModule`.
+- Cause: an "edit" endpoint looked harmless.
+- Prevention: posted entries are immutable at trigger level (the same pattern that freezes published plan versions). Corrections are reversal entries or new correcting entries, both auditable and both pointing at the original.
 
-## Scenario 7 — "Migration 0041 destroyed data on rollback"
+## Scenario 7 — "Migration 0041 destroyed data on rollback" (Phase 2)
 
-- Cause: contract step without expand/migrate; app rolled back across a column drop.
-- Prevention: `0036` is the worked example (validate copy → drop) and `PHASE_1_MIGRATION_HISTORY_DECISION.md` records the rollback boundary. Rule: every destructive step lands two releases after the expand step.
+- Cause: a contract step without expand/migrate; the app rolled back across a column drop.
+- Prevention: `0036` is the worked example (validate copy → drop) and `PHASE_1_MIGRATION_HISTORY_DECISION.md` records the rollback boundaries. Rule: every destructive step lands two releases after the expand step.
 
-## Scenario 8 — "The Android app duplicated sales on retry"
+## Scenario 8 — "Sales shipped before accounting could carry it" (Phase 4, shaped now)
 
-- Cause: request rebuilt on retry.
-- Prevention: `RequestSpec` replay with the same `Idempotency-Key` (`RetryContractTest.kt`). Rule: every Phase 2 mutation from Android carries a key generated once per user action, persisted before send (offline sync in Phase 4 builds on this).
+- Cause: the operational domain grew its own money tables because the engine was not ready.
+- Prevention: Phase 2 must ship a posting API that a later domain can call without modification: `post(sourceType, sourceId, lines[], date, currency, rate?)`. Phase 4 writes no financial truth of its own.
 
-## Scenario 9 — "The WhatsApp queue silently dropped statements"
+## Scenario 9 — "Inventory valuation and the ledger disagreed" (Phase 3, shaped now)
 
-- Cause: a job with retries but no dead-letter visibility.
-- Prevention: delivery worker pattern (status/attempts/lease/dead-letter + operations page). Rule: no worker without a dead-letter view.
+- Cause: stock value maintained separately from the accounts.
+- Prevention: inventory movements post through the accounting engine; the ledger is the authority, inventory keeps quantities. Reconciliation compares, it does not correct silently.
 
-## Scenario 10 — "Phase 2 ran out of time on tooling"
+## Scenario 10 — "Phase 2 ran out of time on tooling" (Phase 2)
 
 - Cause: CI/DB/gate rebuilt per feature.
-- Prevention: `gate:phase1:release` and CI DB-from-zero are feature-agnostic. Rule: Phase 2 adds tests and migrations; it does not touch the gate.
+- Prevention: `gate:phase1:release`, `check:db-from-zero` and CI-from-zero are feature-agnostic. Phase 2 adds tests and migrations; it does not touch the gate.
 
-## Entry conditions for Phase 2 (all satisfied at this closure)
+## Scenario 11 — "The Android app duplicated a financial action on retry" (Phase 4/7, shaped now)
 
-1. PHASE 1 PASS with evidence (`PHASE_1_ACCEPTANCE_REPORT.md`).
+- Cause: request rebuilt on retry.
+- Prevention: `RequestSpec` replay with the same `Idempotency-Key` (`RetryContractTest.kt`). Rule: every money-moving request carries a key generated once per user action and persisted before send.
+
+## Entry conditions for Phase 2
+
+1. Phase 1 PASS with evidence (`PHASE_1_ACCEPTANCE_REPORT.md`) **and the Tech Lead's explicit approval of the Phase 1 pull request**.
 2. Open P0/P1/security P2 = 0.
-3. Accounting rules, inventory rules, state machines and transaction map documents exist and are unchanged since Phase 0 (`docs/DAFTAR_*`).
-4. Perf baseline recorded to compare after the money core lands.
+3. Accounting rules, multi-currency, transaction map, data model, source-of-truth matrix, state machines and golden-suite documents exist and are unchanged since Phase 0.
+4. Performance baseline recorded, so the money core can be compared against it.
+5. `PHASE_2_ACCOUNTING_EXECUTION_PLAN.md` reviewed and accepted as the execution contract.
