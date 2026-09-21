@@ -21,6 +21,7 @@
     "format": "prettier --check .",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "migrate": "npm run migrate -w @daftar/api",
+    "bootstrap:db-roles": "tsx scripts/bootstrap-db-roles.ts",
     "check:localization": "tsx scripts/check-localization.ts",
     "check:guards": "tsx scripts/static-guards.ts",
     "check:migrations": "tsx scripts/check-migration-manifest.ts",

@@ -9,6 +9,19 @@ export class RateLimitError extends Error {
   }
 }
 
+/**
+ * Directive §67 (Redis outage): the rate-limit backend being unreachable is
+ * a FAIL-CLOSED condition for the abuse-protected auth paths — the request
+ * is refused with a safe 503, never a 500 and never "no limit".
+ */
+export class RateLimiterUnavailableError extends Error {
+  constructor(cause: unknown) {
+    super('rate limiter backend unavailable');
+    this.name = 'RateLimiterUnavailableError';
+    this.cause = cause;
+  }
+}
+
 export interface RateLimiter {
   /** Throws RateLimitError when the key exceeds max within windowSeconds. */
   take(key: string, max: number, windowSeconds: number): Promise<void>;
@@ -33,25 +46,47 @@ export class RedisRateLimiter implements RateLimiter {
   private readonly redis: Redis;
   constructor(@Inject('APP_CONFIG') config: AppConfig) {
     if (!config.REDIS_URL) throw new Error('REDIS_URL required for RedisRateLimiter');
-    this.redis = new Redis(config.REDIS_URL, { lazyConnect: true, maxRetriesPerRequest: 2 });
+    this.redis = new Redis(config.REDIS_URL, {
+      lazyConnect: true,
+      maxRetriesPerRequest: 2,
+      connectTimeout: 2_000,
+      enableOfflineQueue: false, // an outage surfaces as an error immediately, not a hang
+      retryStrategy: (times) => (times > 3 ? null : Math.min(times * 200, 1_000)),
+    });
+    // Errors are surfaced per command (below); the client-level listener only
+    // prevents an unhandled 'error' event from crashing the process.
+    this.redis.on('error', () => undefined);
   }
-  async take(key: string, max: number, windowSeconds: number): Promise<void> {
-    const k = `rl:${key}`;
-    const count = await this.redis.incr(k);
-    if (count === 1) await this.redis.expire(k, windowSeconds);
-    if (count > max) {
-      const ttl = await this.redis.ttl(k);
-      throw new RateLimitError(ttl > 0 ? ttl : windowSeconds);
+  /** Wrap backend failures into the fail-closed error (RateLimitError passes through). */
+  private async guarded<T>(fn: () => Promise<T>): Promise<T> {
+    try {
+      return await fn();
+    } catch (e) {
+      if (e instanceof RateLimitError) throw e;
+      throw new RateLimiterUnavailableError(e);
     }
   }
+  async take(key: string, max: number, windowSeconds: number): Promise<void> {
+    await this.guarded(async () => {
+      const k = `rl:${key}`;
+      const count = await this.redis.incr(k);
+      if (count === 1) await this.redis.expire(k, windowSeconds);
+      if (count > max) {
+        const ttl = await this.redis.ttl(k);
+        throw new RateLimitError(ttl > 0 ? ttl : windowSeconds);
+      }
+    });
+  }
   async increment(key: string, windowSeconds: number): Promise<number> {
-    const k = `rl:${key}`;
-    const count = await this.redis.incr(k);
-    if (count === 1) await this.redis.expire(k, windowSeconds);
-    return count;
+    return this.guarded(async () => {
+      const k = `rl:${key}`;
+      const count = await this.redis.incr(k);
+      if (count === 1) await this.redis.expire(k, windowSeconds);
+      return count;
+    });
   }
   async reset(key: string): Promise<void> {
-    await this.redis.del(`rl:${key}`);
+    await this.guarded(() => this.redis.del(`rl:${key}`).then(() => undefined));
   }
   async healthCheck(): Promise<boolean> {
     try {

@@ -52,45 +52,54 @@ for (const [name, hash] of frozen) {
   else if (diskHash !== hash) fail(`frozen migration bytes changed: ${name}`);
 }
 
-const pool = new Pool({ connectionString: url, max: 1 });
-try {
-  const { rows } = await pool.query<{ name: string }>(`SELECT name FROM schema_migrations ORDER BY name`);
-  const applied = rows.map((r) => r.name);
-  if (applied.length === 0) fail('schema_migrations is empty — database has no migration history');
+async function verifyDatabaseHistory(): Promise<void> {
+  const pool = new Pool({ connectionString: url, max: 1 });
+  try {
+    const { rows } = await pool.query<{ name: string }>(`SELECT name FROM schema_migrations ORDER BY name`);
+    const applied = rows.map((r) => r.name);
+    if (applied.length === 0) fail('schema_migrations is empty — database has no migration history');
 
-  for (const name of applied) {
-    if (!onDisk.has(name)) {
-      fail(`database contains migration unknown to repository: ${name} (tampered/foreign history)`);
-      continue;
+    for (const name of applied) {
+      if (!onDisk.has(name)) {
+        fail(`database contains migration unknown to repository: ${name} (tampered/foreign history)`);
+        continue;
+      }
+      const frozenHash = frozen.get(name);
+      if (frozenHash !== undefined && onDisk.get(name) !== frozenHash) {
+        fail(`applied frozen migration ${name} does not match manifest hash`);
+      }
     }
-    const frozenHash = frozen.get(name);
-    if (frozenHash !== undefined && onDisk.get(name) !== frozenHash) {
-      fail(`applied frozen migration ${name} does not match manifest hash`);
-    }
-  }
 
-  // Frozen migrations must form a contiguous applied prefix (no skipped frozen files).
-  const sortedFrozen = [...frozen.keys()].sort();
-  for (const name of sortedFrozen) {
-    const num = Number(name.slice(0, 4));
-    const anyAppliedHigher = applied.some((a) => Number(a.slice(0, 4)) >= num);
-    if (!applied.includes(name) && anyAppliedHigher) {
-      fail(`frozen migration ${name} not applied but a later migration is — history gap`);
+    // Frozen migrations must form a contiguous applied prefix (no skipped frozen files).
+    const sortedFrozen = [...frozen.keys()].sort();
+    for (const name of sortedFrozen) {
+      const num = Number(name.slice(0, 4));
+      const anyAppliedHigher = applied.some((a) => Number(a.slice(0, 4)) >= num);
+      if (!applied.includes(name) && anyAppliedHigher) {
+        fail(`frozen migration ${name} not applied but a later migration is — history gap`);
+      }
     }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (/schema_migrations/.test(msg)) {
+      fail(`schema_migrations table missing or unreadable: ${msg}`);
+    } else {
+      throw err;
+    }
+  } finally {
+    await pool.end();
   }
-} catch (err) {
-  const msg = err instanceof Error ? err.message : String(err);
-  if (/schema_migrations/.test(msg)) {
-    fail(`schema_migrations table missing or unreadable: ${msg}`);
-  } else {
-    throw err;
-  }
-} finally {
-  await pool.end();
 }
 
-if (failures > 0) {
-  console.error(`\nMIGRATION HISTORY VERIFY: FAIL (${failures} problem${failures === 1 ? '' : 's'})`);
-  process.exit(1);
-}
-console.log('MIGRATION HISTORY VERIFY: PASS — database history matches repository and manifest.');
+verifyDatabaseHistory()
+  .then(() => {
+    if (failures > 0) {
+      console.error(`\nMIGRATION HISTORY VERIFY: FAIL (${failures} problem${failures === 1 ? '' : 's'})`);
+      process.exit(1);
+    }
+    console.log('MIGRATION HISTORY VERIFY: PASS — database history matches repository and manifest.');
+  })
+  .catch((e: unknown) => {
+    console.error(`MIGRATION HISTORY VERIFY: ERROR — ${e instanceof Error ? e.message : String(e)}`);
+    process.exit(1);
+  });

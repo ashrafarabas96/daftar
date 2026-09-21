@@ -82,38 +82,55 @@ jobs:
         run: npm run typecheck
       - name: Unit tests
         run: npm test
+      # §55–56: a FRESH PostgreSQL starts from ZERO — database + roles first (no
+      # manually prepared database), then migrations, then a no-op second pass,
+      # then the test suites run against THAT database (PG_PORT=5432 makes the
+      # test harness reuse the service instead of an embedded instance).
+      - name: Create DAFTAR database + DB roles (fresh PostgreSQL from zero)
+        run: |
+          set -e
+          psql postgres://postgres:postgres@localhost:5432/postgres -c "CREATE DATABASE daftar" >/dev/null
+          npm run bootstrap:db-roles
+        env:
+          MIGRATION_DATABASE_URL: postgres://postgres:postgres@localhost:5432/daftar
+          APP_DB_PASSWORD: test_app_password_123
+          PLATFORM_DB_PASSWORD: test_platform_password_123
+          WORKER_DB_PASSWORD: test_worker_password_123
+          RESOLVER_DB_PASSWORD: test_resolver_password_123
+          IDENTITY_DB_PASSWORD: test_identity_password_123
+          PROVISIONER_DB_PASSWORD: test_provisioner_password_123
       - name: Fresh database migrate (0000 → latest)
         run: npm run migrate -w @daftar/api
         env:
-          MIGRATION_DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+          MIGRATION_DATABASE_URL: postgres://postgres:postgres@localhost:5432/daftar
       - name: Re-migrate latest → no-op
         run: npm run migrate -w @daftar/api
         env:
-          MIGRATION_DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+          MIGRATION_DATABASE_URL: postgres://postgres:postgres@localhost:5432/daftar
       - name: Migration history verify
         run: npm run verify:history
         env:
-          DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/daftar
       - name: Integration + security tests
         run: npm run test:integration
         env:
-          DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+          PG_PORT: '5432'
       - name: Golden regression suite
         run: npm run test:golden
         env:
-          DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+          PG_PORT: '5432'
       - name: Tampered-migration hard-fail proof
         run: |
           set -e
-          psql postgres://postgres:postgres@localhost:5432/postgres -c \
-            "INSERT INTO schema_migrations(name) VALUES ('9999_foreign_tamper.sql')" >/dev/null
+          psql postgres://postgres:postgres@localhost:5432/daftar -c \
+            "INSERT INTO schema_migrations(name, sha256) VALUES ('9999_foreign_tamper.sql', 'deadbeef')" >/dev/null
           if npm run verify:history; then
             echo "tampered history was ACCEPTED — gate broken"; exit 1
           fi
-          psql postgres://postgres:postgres@localhost:5432/postgres -c \
+          psql postgres://postgres:postgres@localhost:5432/daftar -c \
             "DELETE FROM schema_migrations WHERE name='9999_foreign_tamper.sql'" >/dev/null
         env:
-          DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/daftar
       - name: API build
         run: npm run build -w @daftar/api
 

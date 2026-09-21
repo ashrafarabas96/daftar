@@ -2,7 +2,7 @@ import { ArgumentsHost, Catch, ExceptionFilter, HttpException, HttpStatus, Injec
 import type { Response } from 'express';
 import { ZodError } from 'zod';
 import { AppError, CountryPackError, CurrencyError, type ApiErrorBody, type ApiErrorCode } from '@daftar/domain-core';
-import { RateLimitError } from '../infra/redis';
+import { RateLimitError, RateLimiterUnavailableError } from '../infra/redis';
 import { getContext } from '../infra/request-context';
 import type { Logger } from '../infra/logger';
 
@@ -38,6 +38,13 @@ export class GlobalExceptionFilter implements ExceptionFilter {
     if (exception instanceof RateLimitError) {
       res.setHeader('Retry-After', String(exception.retryAfterSeconds));
       body('RATE_LIMITED', 'Too many requests', HttpStatus.TOO_MANY_REQUESTS);
+      return;
+    }
+    if (exception instanceof RateLimiterUnavailableError) {
+      // §67: fail closed with a safe, retryable contract — no internals leak.
+      this.logger.error({ requestId, err: 'rate limiter backend unavailable' }, 'rate limiter outage');
+      res.setHeader('Retry-After', '5');
+      body('RATE_LIMITED', 'Service temporarily unavailable — retry shortly', HttpStatus.SERVICE_UNAVAILABLE);
       return;
     }
     if (exception instanceof CountryPackError) {

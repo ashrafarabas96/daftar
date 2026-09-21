@@ -1,7 +1,7 @@
 'use client';
 import { useEffect, useState } from 'react';
 import { Card, colors, spacing, typography } from '@daftar/design-system';
-import { apiFetch } from '@/lib/client';
+import { listBusinesses, listSupportSessions, listTenants, listUsers } from '@/lib/admin-api';
 import { Shell } from './Shell';
 
 interface Counts {
@@ -17,16 +17,16 @@ export default function OverviewPage() {
   useEffect(() => {
     void (async () => {
       const [tenants, businesses, users, sessions] = await Promise.all([
-        apiFetch<{ items?: unknown[] }>('/api/proxy/admin/tenants').catch(() => null),
-        apiFetch<{ items?: unknown[] }>('/api/proxy/admin/businesses').catch(() => null),
-        apiFetch<{ items?: unknown[] }>('/api/proxy/admin/users').catch(() => null),
-        apiFetch<{ items?: unknown[] }>('/api/proxy/admin/support-sessions').catch(() => null),
+        listTenants().catch(() => null),
+        listBusinesses().catch(() => null),
+        listUsers().catch(() => null),
+        listSupportSessions().catch(() => null),
       ]);
       setCounts({
-        tenants: tenants?.items?.length ?? null,
-        businesses: businesses?.items?.length ?? null,
-        users: users?.items?.length ?? null,
-        supportSessions: sessions?.items?.length ?? null,
+        tenants: tenants?.items.length ?? null,
+        businesses: businesses?.items.length ?? null,
+        users: users?.items.length ?? null,
+        supportSessions: sessions?.items.filter((s) => !s.revokedAt && new Date(s.expiresAt) > new Date()).length ?? null,
       });
     })();
   }, []);
@@ -45,7 +45,7 @@ export default function OverviewPage() {
         {tile('Tenants', counts.tenants)}
         {tile('Businesses', counts.businesses)}
         {tile('Users', counts.users)}
-        {tile('Support sessions', counts.supportSessions)}
+        {tile('Active support sessions', counts.supportSessions)}
       </div>
     </Shell>
   );

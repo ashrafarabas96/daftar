@@ -1,22 +1,13 @@
 'use client';
 import { useEffect, useState } from 'react';
+import type { OverrideDto } from '@daftar/shared-contracts';
 import { Button, Dialog, Select, Table, TextField, colors, spacing, typography } from '@daftar/design-system';
-import { apiFetch } from '@/lib/client';
+import { ApiError } from '@/lib/client';
+import { createOverride, listOverrides, revokeOverride } from '@/lib/admin-api';
 import { Shell } from '../Shell';
 
-interface Override {
-  id: string;
-  business_id: string;
-  feature_key: string | null;
-  enabled_value: boolean | null;
-  limit_key: string | null;
-  limit_value: number | null;
-  reason: string;
-  revoked_at: string | null;
-}
-
 export default function OverridesPage() {
-  const [items, setItems] = useState<Override[]>([]);
+  const [items, setItems] = useState<OverrideDto[]>([]);
   const [open, setOpen] = useState(false);
   const [businessId, setBusinessId] = useState('');
   const [kind, setKind] = useState<'feature' | 'limit'>('feature');
@@ -27,12 +18,12 @@ export default function OverridesPage() {
   const [reason, setReason] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [revoking, setRevoking] = useState<OverrideDto | null>(null);
+  const [revokeReason, setRevokeReason] = useState('');
 
   async function load() {
-    const res = await apiFetch<{ items: Override[] }>('/api/proxy/admin/entitlement-overrides');
-    setItems(res.items);
+    setItems((await listOverrides()).items);
   }
-
   useEffect(() => {
     void load();
   }, []);
@@ -42,26 +33,31 @@ export default function OverridesPage() {
     setError(null);
     try {
       // XOR contract: exactly one of featureKey / limitKey.
-      await apiFetch('/api/proxy/admin/entitlement-overrides', {
-        method: 'POST',
-        body: JSON.stringify({
-          businessId,
-          reason,
-          ...(kind === 'feature' ? { featureKey, enabledValue: enabledValue === 'true' } : { limitKey, limitValue: Number(limitValue) }),
-        }),
+      await createOverride({
+        businessId,
+        reason,
+        ...(kind === 'feature' ? { featureKey, enabledValue: enabledValue === 'true' } : { limitKey, limitValue: Number(limitValue) }),
       });
       setOpen(false);
       await load();
-    } catch {
-      setError('Failed — check the business id and XOR shape (feature OR limit, never both).');
+    } catch (e) {
+      setError(e instanceof ApiError ? e.code : 'Failed — check the business id and XOR shape (feature OR limit, never both).');
     } finally {
       setBusy(false);
     }
   }
 
-  async function revoke(id: string) {
-    await apiFetch(`/api/proxy/admin/entitlement-overrides/${id}/revoke`, { method: 'POST', body: '{}' });
-    await load();
+  async function revoke() {
+    if (!revoking) return;
+    setBusy(true);
+    try {
+      await revokeOverride(revoking.id, revokeReason);
+      setRevoking(null);
+      setRevokeReason('');
+      await load();
+    } finally {
+      setBusy(false);
+    }
   }
 
   return (
@@ -74,21 +70,26 @@ export default function OverridesPage() {
         <Table
           rows={items}
           columns={[
-            { key: 'business', header: 'Business', render: (o) => <code>{o.business_id.slice(0, 8)}…</code> },
+            { key: 'business', header: 'Business', render: (o) => <code>{o.businessId.slice(0, 8)}…</code> },
             {
               key: 'what',
               header: 'Override',
-              render: (o) => (o.feature_key ? `feature ${o.feature_key}=${o.enabled_value}` : `limit ${o.limit_key}=${o.limit_value}`),
+              render: (o) => (o.featureKey ? `feature ${o.featureKey}=${String(o.enabledValue)}` : `limit ${o.limitKey}=${o.limitValue}`),
             },
             { key: 'reason', header: 'Reason', render: (o) => o.reason },
-            { key: 'state', header: 'State', render: (o) => (o.revoked_at ? 'revoked' : 'active') },
+            {
+              key: 'window',
+              header: 'Window',
+              render: (o) => `${new Date(o.startsAt).toLocaleDateString()} → ${o.endsAt ? new Date(o.endsAt).toLocaleDateString() : '∞'}`,
+            },
+            { key: 'state', header: 'State', render: (o) => (o.revokedAt ? 'revoked' : 'active') },
             {
               key: 'actions',
               header: '',
               align: 'end',
               render: (o) =>
-                !o.revoked_at ? (
-                  <Button size="sm" variant="ghost" onClick={() => void revoke(o.id)}>
+                !o.revokedAt ? (
+                  <Button size="sm" variant="ghost" onClick={() => setRevoking(o)}>
                     Revoke
                   </Button>
                 ) : null,
@@ -148,6 +149,23 @@ export default function OverridesPage() {
             </p>
           ) : null}
         </div>
+      </Dialog>
+      <Dialog
+        open={!!revoking}
+        title="Revoke override"
+        onClose={() => setRevoking(null)}
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setRevoking(null)}>
+              Cancel
+            </Button>
+            <Button variant="danger" loading={busy} disabled={revokeReason.trim().length < 3} onClick={() => void revoke()}>
+              Revoke
+            </Button>
+          </>
+        }
+      >
+        <TextField label="Reason (audited)" value={revokeReason} onChange={setRevokeReason} required />
       </Dialog>
     </Shell>
   );

@@ -1,26 +1,14 @@
 'use client';
 import { useEffect, useState } from 'react';
+import type { AuditEventDto } from '@daftar/shared-contracts';
 import { Table, colors, radius, spacing, typography } from '@daftar/design-system';
-import { apiFetch } from '@/lib/client';
+import { listAuditEvents } from '@/lib/admin-api';
 import { Shell } from '../Shell';
 
-interface AuditEvent {
-  id: string;
-  action: string;
-  entity: string;
-  entity_id: string | null;
-  actor_user_id: string | null;
-  request_id: string | null;
-  created_at: string;
-}
-
 export default function AuditPage() {
-  const [items, setItems] = useState<AuditEvent[]>([]);
+  const [items, setItems] = useState<AuditEventDto[]>([]);
   useEffect(() => {
-    void (async () => {
-      const res = await apiFetch<{ items: AuditEvent[] }>('/api/proxy/admin/audit-events');
-      setItems(res.items);
-    })();
+    void listAuditEvents().then((r) => setItems(r.items));
   }, []);
   return (
     <Shell active="audit">
@@ -39,11 +27,12 @@ export default function AuditPage() {
       <Table
         rows={items}
         columns={[
-          { key: 'time', header: 'Time', render: (e) => new Date(e.created_at).toLocaleString() },
+          { key: 'time', header: 'Time', render: (e) => new Date(e.createdAt).toLocaleString() },
           { key: 'action', header: 'Action', render: (e) => <code>{e.action}</code> },
-          { key: 'entity', header: 'Entity', render: (e) => `${e.entity}${e.entity_id ? `/${e.entity_id.slice(0, 8)}…` : ''}` },
-          { key: 'actor', header: 'Actor', render: (e) => (e.actor_user_id ? <code>{e.actor_user_id.slice(0, 8)}…</code> : '—') },
-          { key: 'request', header: 'Request', render: (e) => (e.request_id ? <code>{e.request_id.slice(0, 8)}…</code> : '—') },
+          { key: 'entity', header: 'Entity', render: (e) => `${e.entity}${e.entityId ? `/${e.entityId.slice(0, 8)}…` : ''}` },
+          { key: 'tenant', header: 'Tenant / business', render: (e) => `${e.tenantId?.slice(0, 8) ?? '—'} / ${e.businessId?.slice(0, 8) ?? '—'}` },
+          { key: 'actor', header: 'Actor', render: (e) => (e.actorUserId ? <code>{e.actorUserId.slice(0, 8)}…</code> : '—') },
+          { key: 'request', header: 'Request', render: (e) => (e.requestId ? <code>{e.requestId.slice(0, 8)}…</code> : '—') },
         ]}
       />
     </Shell>

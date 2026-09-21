@@ -194,8 +194,66 @@ for (const f of tsFiles(join(ROOT, 'apps/api/src/modules'))) {
   }
 }
 
+// Rule 13 (Completion Directive §15–18): REAL runtime process isolation is a
+// compile-time property of the process modules — a merchant process module
+// must never reference admin/worker/decrypt providers; the platform module
+// must never reference merchant mutation surfaces; the worker must have no
+// controllers at all.
+{
+  // Comments may NAME the forbidden providers (to say they are absent); only code counts.
+  const read = (rel: string) =>
+    readFileSync(join(ROOT, rel), 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/^\s*\/\/.*$/gm, '');
+  const merchant = read('apps/api/src/app/merchant-api.module.ts');
+  for (const forbidden of [
+    'AdminController',
+    'AdminService',
+    'CredentialDeliveryWorker',
+    'CredentialPayloadProtector',
+    'OutboxPublisher',
+    'workerProviders',
+    'CREDENTIAL_DELIVERY',
+  ]) {
+    if (merchant.includes(forbidden)) fail('runtime-isolation', 'apps/api/src/app/merchant-api.module.ts', `merchant process references ${forbidden}`);
+  }
+  const platform = read('apps/api/src/app/platform-api.module.ts');
+  for (const forbidden of [
+    'TenancyController',
+    'CatalogController',
+    'EntitlementsController',
+    'MediaService',
+    'CatalogService',
+    'StructureService',
+    'InvitationsService',
+    'CredentialDeliveryWorker',
+    'CredentialPayloadProtector',
+    'workerProviders',
+    'merchantInfraProviders',
+  ]) {
+    if (platform.includes(forbidden)) fail('runtime-isolation', 'apps/api/src/app/platform-api.module.ts', `platform process references ${forbidden}`);
+  }
+  const worker = read('apps/api/src/app/worker.module.ts');
+  if (/controllers\s*:/.test(worker) || /Controller\b/.test(worker) || /httpProviders|identityProviders|merchantInfraProviders|TokenService/.test(worker)) {
+    fail('runtime-isolation', 'apps/api/src/app/worker.module.ts', 'worker process must have no HTTP surface, identity or merchant providers');
+  }
+  const main = read('apps/api/src/main.ts');
+  for (const mod of ['MerchantApiModule', 'PlatformApiModule', 'WorkerModule']) {
+    if (!main.includes(mod)) fail('runtime-isolation', 'apps/api/src/main.ts', `entrypoint does not compose ${mod}`);
+  }
+}
+
+// Rule 14 (§57): migration credentials never appear in any runtime module,
+// package or client; only the migrator/bootstrap CLIs may read them.
+for (const dir of ['apps/api/src', 'apps/web/src', 'apps/admin/src', 'packages']) {
+  for (const f of tsFiles(join(ROOT, dir))) {
+    if (/migrate\.ts$|config\.ts$/.test(f)) continue;
+    if (/MIGRATION_DATABASE_URL/.test(readFileSync(f, 'utf8'))) fail('no-migration-creds-in-runtime', f, 'references MIGRATION_DATABASE_URL');
+  }
+}
+
 if (failures > 0) {
   console.error(`\nSTATIC GUARDS: FAIL (${failures})`);
   process.exit(1);
 }
-console.log('STATIC GUARDS: PASS (12 rules)');
+console.log('STATIC GUARDS: PASS (14 rules)');

@@ -29,12 +29,22 @@ export class AuditService {
 
   async recordTx(client: PoolClient, entry: AuditEntry): Promise<void> {
     const ctx = getContext();
+    const businessId = entry.businessId ?? ctx?.businessId ?? null;
+    let tenantId = entry.tenantId ?? ctx?.tenantId ?? null;
+    // §47: a business-scoped record ALWAYS carries its owning tenant (DB CHECK +
+    // composite FK). Platform-context writers (admin console) name a business
+    // without a tenant context — resolve it here, inside the same transaction.
+    if (businessId && !tenantId) {
+      const { rows } = await client.query<{ tenant_id: string }>('SELECT tenant_id FROM businesses WHERE id = $1', [businessId]);
+      tenantId = rows[0]?.tenant_id ?? null;
+      if (!tenantId) throw new Error(`audit record names business ${businessId} which has no resolvable tenant`);
+    }
     await client.query(
       `INSERT INTO audit_events (tenant_id, business_id, actor_user_id, action, entity, entity_id, request_id, metadata)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
       [
-        entry.tenantId ?? ctx?.tenantId ?? null,
-        entry.businessId ?? ctx?.businessId ?? null,
+        tenantId,
+        businessId,
         entry.actorUserId ?? ctx?.userId ?? null,
         entry.action,
         entry.entity,
@@ -63,8 +73,14 @@ export class OutboxService {
   constructor(@Inject(Database) private readonly db: Database) {}
 
   async emitTx(client: PoolClient, event: OutboxEvent): Promise<void> {
+    let tenantId = event.tenantId ?? null;
+    if (event.businessId && !tenantId) {
+      const { rows } = await client.query<{ tenant_id: string }>('SELECT tenant_id FROM businesses WHERE id = $1', [event.businessId]);
+      tenantId = rows[0]?.tenant_id ?? null;
+      if (!tenantId) throw new Error(`outbox event names business ${event.businessId} which has no resolvable tenant`);
+    }
     await client.query(`INSERT INTO outbox_events (tenant_id, business_id, type, payload) VALUES ($1, $2, $3, $4)`, [
-      event.tenantId ?? null,
+      tenantId,
       event.businessId ?? null,
       event.type,
       JSON.stringify(event.payload),

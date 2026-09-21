@@ -65,7 +65,7 @@ describe('§LII–LIV: support sessions', () => {
         .set(auth)
         .send({ tenantId, reason: 'Customer ticket #12345 investigation', expiresAt });
       expect(created.status).toBe(201);
-      const sessionId = (created.body as { sessionId: string }).sessionId;
+      const sessionId = (created.body as { id: string }).id;
 
       // Access with banner.
       const detail = await t.request.get(`/v1/admin/tenants/${tenantId}`).set(auth);
@@ -209,7 +209,7 @@ describe('§7–12 (Final Enforcement): business-scoped support sessions', () =>
           expiresAt: new Date(Date.now() + 60 * 60_000).toISOString(),
         });
       expect(created.status).toBe(201);
-      const sessionId = (created.body as { sessionId: string }).sessionId;
+      const sessionId = (created.body as { id: string }).id;
 
       const detail = await t.request.get(`/v1/admin/tenants/${tenantId}`).set(auth);
       expect(detail.status).toBe(200);
@@ -248,7 +248,7 @@ describe('§7–12 (Final Enforcement): business-scoped support sessions', () =>
         .set(auth)
         .send({ tenantId, reason: 'Whole-tenant support review', expiresAt: new Date(Date.now() + 60 * 60_000).toISOString() });
       expect(created.status).toBe(201);
-      const sessionId = (created.body as { sessionId: string }).sessionId;
+      const sessionId = (created.body as { id: string }).id;
       const detail = await t.request.get(`/v1/admin/tenants/${tenantId}`).set(auth);
       const visible = (detail.body as { tenant: { businesses: { id: string }[] } }).tenant.businesses.map((b) => b.id);
       expect(visible).toEqual(expect.arrayContaining([businessA, businessB]));
@@ -303,7 +303,7 @@ describe('§7–12 (Final Enforcement): business-scoped support sessions', () =>
         .post('/v1/admin/support-sessions')
         .set(auth)
         .send({ tenantId, reason: 'Concurrent revoke boundary', expiresAt: new Date(Date.now() + 60 * 60_000).toISOString() });
-      const sessionId = (created.body as { sessionId: string }).sessionId;
+      const sessionId = (created.body as { id: string }).id;
 
       const [r1, r2] = await Promise.all([
         t.request.post(`/v1/admin/support-sessions/${sessionId}/revoke`).set(auth).send({ reason: 'revoke A' }),

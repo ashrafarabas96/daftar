@@ -74,7 +74,7 @@ describe('plan lifecycle & override integrity (§34–44)', () => {
       .set('Authorization', `Bearer ${p.token}`)
       .send({ planKey: 'free', limits: { MAX_USERS: 3 } });
     expect(created.status).toBe(201);
-    const pvId = (created.body as { planVersionId: string }).planVersionId;
+    const pvId = (created.body as { id: string }).id;
 
     // DRAFT children remain editable.
     await ownerPool().query(`UPDATE plan_limits SET limit_value = 4 WHERE plan_version_id = $1 AND limit_key = 'MAX_USERS'`, [pvId]);
@@ -183,7 +183,7 @@ describe('plan lifecycle & override integrity (§34–44)', () => {
       .set('Authorization', `Bearer ${p.token}`)
       .send({ businessId: b, featureKey: 'CUSTOM_ROLES', enabledValue: true, reason: 'comp grant' });
     expect(created.status).toBe(201);
-    const overrideId = (created.body as { overrideId: string }).overrideId;
+    const overrideId = (created.body as { id: string }).id;
 
     const revoke = await t.request
       .post(`/v1/admin/entitlement-overrides/${overrideId}/revoke`)
@@ -325,7 +325,7 @@ describe('§19–22: future-safe plan version immutability + clone (Terminal Clo
         .set('Authorization', `Bearer ${reg.body.accessToken as string}`)
         .send({ planKey: 'free', trialDays: 30 });
       expect(created.status).toBe(201);
-      const pvId = (created.body as { planVersionId: string }).planVersionId;
+      const pvId = (created.body as { id: string }).id;
       const row = must(
         (await ownerPool().query<{ trial_days: number; state: string }>('SELECT trial_days, state FROM plan_versions WHERE id = $1', [pvId])).rows[0],
       );

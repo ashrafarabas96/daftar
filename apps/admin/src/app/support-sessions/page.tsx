@@ -1,31 +1,19 @@
 'use client';
 import { useEffect, useState } from 'react';
-import { Badge, Button, ConfirmationDialog, Table, typography } from '@daftar/design-system';
-import { apiFetch } from '@/lib/client';
+import type { SupportSessionDto } from '@daftar/shared-contracts';
+import { Badge, Button, Dialog, Table, TextField, typography } from '@daftar/design-system';
+import { listSupportSessions, revokeSupportSession } from '@/lib/admin-api';
 import { Shell } from '../Shell';
 
-interface Session {
-  id: string;
-  reason: string;
-  actor_user_id: string;
-  tenant_id: string;
-  business_id: string | null;
-  mode: string;
-  starts_at: string;
-  expires_at: string;
-  revoked_at: string | null;
-}
-
 export default function SupportSessionsPage() {
-  const [items, setItems] = useState<Session[]>([]);
-  const [revoking, setRevoking] = useState<Session | null>(null);
+  const [items, setItems] = useState<SupportSessionDto[]>([]);
+  const [revoking, setRevoking] = useState<SupportSessionDto | null>(null);
+  const [reason, setReason] = useState('');
   const [busy, setBusy] = useState(false);
 
   async function load() {
-    const res = await apiFetch<{ items: Session[] }>('/api/proxy/admin/support-sessions');
-    setItems(res.items);
+    setItems((await listSupportSessions()).items);
   }
-
   useEffect(() => {
     void load();
   }, []);
@@ -34,21 +22,19 @@ export default function SupportSessionsPage() {
     if (!revoking) return;
     setBusy(true);
     try {
-      await apiFetch(`/api/proxy/admin/support-sessions/${revoking.id}/revoke`, {
-        method: 'POST',
-        body: JSON.stringify({ reason: 'revoked from console' }),
-      });
+      await revokeSupportSession(revoking.id, reason);
       setRevoking(null);
+      setReason('');
       await load();
     } finally {
       setBusy(false);
     }
   }
 
-  const stateOf = (s: Session) =>
-    s.revoked_at ? (
+  const stateOf = (s: SupportSessionDto) =>
+    s.revokedAt ? (
       <Badge tone="neutral">revoked</Badge>
-    ) : new Date(s.expires_at) < new Date() ? (
+    ) : new Date(s.expiresAt) < new Date() ? (
       <Badge tone="neutral">expired</Badge>
     ) : (
       <Badge tone="danger">ACTIVE</Badge>
@@ -60,21 +46,22 @@ export default function SupportSessionsPage() {
       <Table
         rows={items}
         columns={[
-          { key: 'tenant', header: 'Tenant', render: (s) => <code>{s.tenant_id.slice(0, 8)}…</code> },
+          { key: 'tenant', header: 'Tenant', render: (s) => <code>{s.tenantId.slice(0, 8)}…</code> },
           {
             key: 'scope',
             header: 'Scope',
-            render: (s) => (s.business_id ? <Badge tone="info">business {s.business_id.slice(0, 8)}…</Badge> : <Badge tone="neutral">whole tenant</Badge>),
+            render: (s) => (s.businessId ? <Badge tone="info">business {s.businessId.slice(0, 8)}…</Badge> : <Badge tone="neutral">whole tenant</Badge>),
           },
+          { key: 'actor', header: 'Actor', render: (s) => <code>{s.actorUserId.slice(0, 8)}…</code> },
           { key: 'reason', header: 'Reason', render: (s) => s.reason },
-          { key: 'expires', header: 'Expires', render: (s) => new Date(s.expires_at).toLocaleString() },
+          { key: 'expires', header: 'Expires', render: (s) => new Date(s.expiresAt).toLocaleString() },
           { key: 'state', header: 'State', render: stateOf },
           {
             key: 'actions',
             header: '',
             align: 'end',
             render: (s) =>
-              !s.revoked_at && new Date(s.expires_at) > new Date() ? (
+              !s.revokedAt && new Date(s.expiresAt) > new Date() ? (
                 <Button size="sm" variant="danger" onClick={() => setRevoking(s)}>
                   Revoke
                 </Button>
@@ -82,17 +69,26 @@ export default function SupportSessionsPage() {
           },
         ]}
       />
-      <ConfirmationDialog
+      <Dialog
         open={!!revoking}
         title="Revoke support session"
-        message="Revocation is immediate — the next request with this session fails."
-        confirmLabel="Revoke now"
-        cancelLabel="Cancel"
-        danger
-        loading={busy}
-        onConfirm={() => void revoke()}
-        onCancel={() => setRevoking(null)}
-      />
+        onClose={() => setRevoking(null)}
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setRevoking(null)}>
+              Cancel
+            </Button>
+            <Button variant="danger" loading={busy} disabled={reason.trim().length < 3} onClick={() => void revoke()}>
+              Revoke now
+            </Button>
+          </>
+        }
+      >
+        <p style={{ fontFamily: typography.fontFamily.base, fontSize: typography.size.sm }}>
+          Revocation is immediate — the next request with this session fails.
+        </p>
+        <TextField label="Reason (audited)" value={reason} onChange={setReason} required />
+      </Dialog>
     </Shell>
   );
 }

@@ -1,68 +1,49 @@
 'use client';
 import { useEffect, useState } from 'react';
+import type { TenantDetailDto, TenantSummaryDto } from '@daftar/shared-contracts';
 import { Badge, Button, Dialog, Select, Table, TextField, colors, radius, spacing, typography } from '@daftar/design-system';
-import { apiFetch } from '@/lib/client';
+import { ApiError } from '@/lib/client';
+import { createSupportSession, getTenantDetail, listTenants } from '@/lib/admin-api';
 import { Shell } from '../Shell';
 
-interface Tenant {
-  id: string;
-  created_at: string;
-  businesses?: { id: string; name: string; storeSlug: string; status: string }[];
-}
-
-interface TenantDetail {
-  tenant: Tenant;
-  supportBanner: { sessionId: string; mode: string; expiresAt: string; message: string };
-}
-
 export default function TenantsPage() {
-  const [tenants, setTenants] = useState<Tenant[]>([]);
-  const [detail, setDetail] = useState<TenantDetail | null>(null);
+  const [tenants, setTenants] = useState<TenantSummaryDto[]>([]);
+  const [detail, setDetail] = useState<TenantDetailDto | null>(null);
   const [detailError, setDetailError] = useState<string | null>(null);
   const [sessionOpen, setSessionOpen] = useState(false);
   const [reason, setReason] = useState('');
   const [businessId, setBusinessId] = useState('');
   const [duration, setDuration] = useState('60');
   const [busy, setBusy] = useState(false);
-  const [selected, setSelected] = useState<Tenant | null>(null);
+  const [selected, setSelected] = useState<TenantSummaryDto | null>(null);
 
   async function load() {
-    const res = await apiFetch<{ items: Tenant[] }>('/api/proxy/admin/tenants');
-    setTenants(res.items);
+    setTenants((await listTenants()).items);
   }
-
   useEffect(() => {
     void load();
   }, []);
 
-  async function openDetail(tenant: Tenant) {
+  async function openDetail(tenant: TenantSummaryDto) {
     setSelected(tenant);
     setDetail(null);
     setDetailError(null);
     try {
-      const d = await apiFetch<TenantDetail>(`/api/proxy/admin/tenants/${tenant.id}`);
-      setDetail(d);
+      setDetail(await getTenantDetail(tenant.id));
     } catch (e) {
-      setDetailError(
-        e instanceof Error && 'status' in e && (e as { status: number }).status === 403
-          ? 'No active support session — create one to view tenant data.'
-          : 'Failed to load tenant',
-      );
+      setDetailError(e instanceof ApiError && e.status === 403 ? 'No active support session — create one to view tenant data.' : 'Failed to load tenant');
     }
   }
 
-  async function createSession() {
+  async function startSession() {
     if (!selected) return;
     setBusy(true);
     try {
-      await apiFetch('/api/proxy/admin/support-sessions', {
-        method: 'POST',
-        body: JSON.stringify({
-          tenantId: selected.id,
-          ...(businessId ? { businessId } : {}),
-          reason,
-          expiresAt: new Date(Date.now() + Number(duration) * 60_000).toISOString(),
-        }),
+      await createSupportSession({
+        tenantId: selected.id,
+        ...(businessId ? { businessId } : {}),
+        reason,
+        expiresAt: new Date(Date.now() + Number(duration) * 60_000).toISOString(),
       });
       setSessionOpen(false);
       setReason('');
@@ -79,7 +60,8 @@ export default function TenantsPage() {
         rows={tenants}
         columns={[
           { key: 'id', header: 'Tenant', render: (t) => <code>{t.id.slice(0, 8)}…</code> },
-          { key: 'created', header: 'Created', render: (t) => new Date(t.created_at).toLocaleDateString() },
+          { key: 'businesses', header: 'Businesses', align: 'end', render: (t) => t.businessCount },
+          { key: 'created', header: 'Created', render: (t) => new Date(t.createdAt).toLocaleDateString() },
           {
             key: 'open',
             header: '',
@@ -133,7 +115,7 @@ export default function TenantsPage() {
           <div style={{ fontFamily: typography.fontFamily.base }}>
             <h3 style={{ fontSize: typography.size.md }}>Businesses</h3>
             <ul>
-              {(detail.tenant.businesses ?? []).map((b) => (
+              {detail.tenant.businesses.map((b) => (
                 <li key={b.id}>
                   {b.name} (<code>{b.storeSlug}</code>) <Badge tone={b.status === 'active' ? 'success' : 'neutral'}>{b.status}</Badge>
                 </li>
@@ -151,7 +133,7 @@ export default function TenantsPage() {
             <Button variant="ghost" onClick={() => setSessionOpen(false)}>
               Cancel
             </Button>
-            <Button loading={busy} disabled={reason.trim().length < 10} onClick={() => void createSession()}>
+            <Button loading={busy} disabled={reason.trim().length < 10} onClick={() => void startSession()}>
               Start session
             </Button>
           </>
@@ -163,7 +145,7 @@ export default function TenantsPage() {
             label="Scope"
             value={businessId}
             onChange={setBusinessId}
-            options={[{ value: '', label: 'Whole tenant' }, ...(selected?.businesses ?? []).map((b) => ({ value: b.id, label: `Business: ${b.name}` }))]}
+            options={[{ value: '', label: 'Whole tenant' }, ...(detail?.tenant.businesses ?? []).map((b) => ({ value: b.id, label: `Business: ${b.name}` }))]}
           />
           <Select
             label="Duration"

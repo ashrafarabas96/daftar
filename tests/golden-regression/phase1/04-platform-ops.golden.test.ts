@@ -47,7 +47,7 @@ describe('golden: platform ops', () => {
     const res = await t.request.post('/v1/admin/plan-versions').set('Authorization', `Bearer ${owner.token}`).send({ planKey: 'free' });
     expect(res.status).toBe(201);
     expect(res.body.version).toBe(2);
-    const st = await ownerPool().query('SELECT state FROM plan_versions WHERE id=$1', [res.body.planVersionId]);
+    const st = await ownerPool().query('SELECT state FROM plan_versions WHERE id=$1', [res.body.id]);
     expect(st.rows[0]?.state).toBe('DRAFT');
   });
 
@@ -63,7 +63,7 @@ describe('golden: platform ops', () => {
   it('P1-GOLD-28 published plan version is immutable', async () => {
     const owner = await platformOwner();
     const clone = await t.request.post('/v1/admin/plan-versions').set('Authorization', `Bearer ${owner.token}`).send({ planKey: 'free' });
-    const id = clone.body.planVersionId as string;
+    const id = clone.body.id as string;
     const pub = await t.request.post(`/v1/admin/plan-versions/${id}/publish`).set('Authorization', `Bearer ${owner.token}`);
     expect(pub.status).toBe(200);
     const tamper = await ownerPool()
@@ -100,7 +100,7 @@ describe('golden: platform ops', () => {
     expect(detail.status).toBe(200);
     expect(String((detail.body.supportBanner as { message: string } | undefined)?.message ?? '')).toContain('SUPPORT SESSION ACTIVE');
     const revoke = await t.request
-      .post(`/v1/admin/support-sessions/${session.body.sessionId}/revoke`)
+      .post(`/v1/admin/support-sessions/${session.body.id}/revoke`)
       .set('Authorization', `Bearer ${owner.token}`)
       .send({ reason: 'done' });
     expect([200, 201, 204]).toContain(revoke.status);
@@ -131,7 +131,7 @@ describe('golden: platform ops', () => {
         expiresAt: new Date(Date.now() + 30 * 60_000).toISOString(),
       });
     expect(session.status).toBe(201);
-    const id = session.body.sessionId as string;
+    const id = session.body.id as string;
     const tamper = await ownerPool()
       .query(`UPDATE support_sessions SET reason = 'changed' WHERE id = $1`, [id])
       .then(() => 'updated')
