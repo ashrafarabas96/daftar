@@ -54,7 +54,7 @@ Run B is the Blocker 3 reproduction: it proves the archive installs, builds, mig
 
 Run A produced the same 24 PASS rows with the same test counts (`release/evidence.json`). The per-step durations in the table above are from the recorded run; the authoritative durations, exit codes and commit identity for the delivered artifacts are in the evidence files, which the gate generates and never hand-edits.
 
-Outside the gate, on the same archive: `npm run perf:baseline` 8/8 — login p95 54.7 ms (argon2id), every other endpoint p95 ≤ 31.5 ms (`release/archive-perf-baseline.json`; both recorded runs are tabulated in `PHASE_1_PERFORMANCE_BASELINE.md`). These 8 cases are benchmarks, not release-gate tests, and are counted separately from the 440.
+Outside the gate, on the same archive: `npm run perf:baseline` **8/8** — login is the slowest call (argon2id, p95 in the 50–80 ms band on this shared host) and every other endpoint stays in single- to low-double-digit milliseconds. The shipped numbers are in `release/perf-baseline.json` and `release/archive-perf-baseline.json`; `PHASE_1_PERFORMANCE_BASELINE.md` explains why absolute milliseconds from this environment are not a regression threshold. These 8 cases are benchmarks, not release-gate tests, and are counted separately from the 440.
 
 ## 3. Final Release Blocker Patch — status
 
