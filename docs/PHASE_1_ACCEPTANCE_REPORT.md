@@ -22,7 +22,7 @@
 
 ## 2. Command matrix (§74) — evidence from `release/evidence.json`
 
-Gate verdict: **PASS** · generated 2026-09-21T13:12:47Z · node 24.12.0 · linux/x64 · commit `abfcdf4`
+Gate verdict: **PASS** · generated 2026-09-21T13:19:36Z · node 24.12.0 · linux/x64 · commit `c0b3be5`
 
 | # | Step | Status | Duration | Summary |
 |--:|---|---|---:|---|
@@ -32,23 +32,23 @@ Gate verdict: **PASS** · generated 2026-09-21T13:12:47Z · node 24.12.0 · linu
 | 4 | phase 1 machine gate | PASS | 0.3s | product tree, machine checks, workspace integrity, artifact hygiene, RC reports: PASS |
 | 5 | static architecture guards | PASS | 0.4s | STATIC GUARDS: PASS (14 rules) |
 | 6 | localization completeness | PASS | 0.3s | LOCALIZATION CHECK: PASS (187 keys × 3 locales) |
-| 7 | format (`prettier --check .`) | PASS | 3.7s | |
+| 7 | format (`prettier --check .`) | PASS | 3.9s | |
 | 8 | build contract + design packages | PASS | 4.0s | |
-| 9 | lint (zero warnings) | PASS | 18.5s | |
-| 10 | typecheck (all workspaces) | PASS | 13.9s | |
+| 9 | lint (zero warnings) | PASS | 18.1s | |
+| 10 | typecheck (all workspaces) | PASS | 14.2s | |
 | 11 | unit tests | PASS | 2.3s | domain-core 45/45 · shared-contracts 13/13 |
-| 12 | integration + security tests | PASS | 104.9s | 36 files · 291/291 |
-| 13 | golden regression suite | PASS | 25.1s | 7 files · 40/40 |
-| 14 | API build | PASS | 5.5s | |
-| 15 | merchant web build (`next build`, 16 pages × 3 locales) | PASS | 26.3s | |
-| 16 | admin web build (`next build`, 11 pages) | PASS | 23.3s | |
-| 17 | Android lint + unit tests + assemble | PASS | 18.8s | lint 0 errors / 4 warnings · 13/13 JVM tests · `app-debug.apk` 18.5 MB |
+| 12 | integration + security tests | PASS | 107.0s | 36 files · 291/291 |
+| 13 | golden regression suite | PASS | 25.4s | 7 files · 40/40 |
+| 14 | API build | PASS | 5.8s | |
+| 15 | merchant web build (`next build`, 16 pages × 3 locales) | PASS | 29.4s | |
+| 16 | admin web build (`next build`, 11 pages) | PASS | 23.2s | |
+| 17 | Android lint + unit tests + assemble | PASS | 18.0s | lint 0 errors / 4 warnings · 13/13 JVM tests · `app-debug.apk` 18.5 MB |
 | 18 | dependency audit (`npm audit --audit-level=high`) | PASS | 0.7s | 0 high/critical (2 moderate, dev-only, TD-01) |
 | 19 | forbidden artifact scan (files git would ship) | PASS | 0.0s | ok |
 | 20 | raw credential scan | PASS | 0.0s | ok |
 | 21 | release documents (§76) present and non-placeholder | PASS | 0.0s | 21 documents |
 
-Total wall time of the matrix: 4.1 min · 21 pass · 0 fail · 0 skipped.
+Total wall time of the matrix: 4.2 min · 21 pass · 0 fail · 0 skipped.
 
 Measurement outside the gate, same commit: `npm run perf:baseline` 8/8 (table in `PHASE_1_PERFORMANCE_BASELINE.md`, p95 ≤ 58 ms for every read/write endpoint, login p95 79 ms).
 
