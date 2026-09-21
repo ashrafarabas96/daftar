@@ -1,5 +1,7 @@
 # DAFTAR — Phase 2 Accounting & Financial Core Execution Plan / خطة تنفيذ النواة المحاسبية
 
+> **⚠ SUPERSEDED IN PART — read `PHASE_2_ARCHITECTURE_LOCK.md` first.** The Architecture Lock (P2-S0) resolved eighteen decisions that this plan left ambiguous or, in seven cases, stated incorrectly (`AL-01` … `AL-18`, conflicts `K-01` … `K-07`). **Where the two differ, the Architecture Lock wins.** The corrected passages below carry an inline `→ AL-nn` marker.
+>
 > **Status: PLANNING ONLY. No Phase 2 code, migration, table, endpoint or screen exists or may be created under this document.**
 > Implementation begins only after the Tech Lead approves the Phase 1 pull request and accepts this plan as the execution contract (`PHASE_2_PREMORTEM.md` entry conditions).
 >
@@ -8,6 +10,25 @@
 >
 > **Design inputs (Phase 0, authoritative — this plan does not override them):** `DAFTAR_ACCOUNTING_RULES.md`, `DAFTAR_MULTI_CURRENCY.md`, `DAFTAR_DATA_MODEL.md`, `DAFTAR_TRANSACTION_MAP.md`, `DAFTAR_SOURCE_OF_TRUTH_MATRIX.md`, `DAFTAR_STATE_MACHINES.md`, `DAFTAR_GOLDEN_REGRESSION_SUITE.md`, `DAFTAR_SECURITY_MODEL.md`, `DAFTAR_TEST_STRATEGY.md`, `DAFTAR_OBSERVABILITY.md`, `DAFTAR_RELEASE_GATES.md`.
 > Where this plan is narrower than a Phase 0 document, the narrowing is a **scope split across phases**, recorded in §36 (Conflicts and deferrals) — never a silent contradiction.
+
+---
+
+## 0. Gated implementation slices
+
+Phase 2 ships as ten gated slices (`PHASE_2_ARCHITECTURE_LOCK.md` AL-18). **Each slice requires its own documented PASS before the next begins.** A slice may not borrow a later slice's migration number, and no slice may start before the Tech Lead authorizes it.
+
+| slice | content | migrations | exit criteria |
+|---|---|---|---|
+| **P2-S0** | Architecture lock — decisions only | **0** | Tech Lead approval of `PHASE_2_ARCHITECTURE_LOCK.md` |
+| **P2-S1** | `accounts`, system-key registry, seeding + trigger + backfill, permissions | `0040`, `0041` | every existing and new business has a chart; AL-05/06/07/08 tests green |
+| **P2-S2** | Journal tables, immutability, the two constraint triggers, FX CHECKs, narrow write authority | `0042`, `0043` | raw-SQL matrix A–G green for all six roles; no write grant exists |
+| **P2-S3** | TypeScript posting engine, source registry, fingerprint, idempotency, audit + outbox atomicity | `0044` | AL-11 matrix and AL-17 failure-injection matrix green |
+| **P2-S4** | Reversal, manual adjustment, opening balance — Phase-2-owned sources only | `0045`, `0046` | AL-12 and AL-13 tests green |
+| **P2-S5** | FX foundation: manual rate source, immutable snapshot, rounding, realized-FX primitive | `0047` | every worked FX journal in `DAFTAR_ACCOUNTING_RULES.md` reproduced line by line through the engine |
+| **P2-S6** | Accounting periods — **only if confirmed at that point** | `0048` | close/reopen/concurrency tests green |
+| **P2-S7** | Trial balance, general ledger, account balances — live aggregation | `0049` (indexes only, if needed) | reports balance; rebuild-equals-live green |
+| **P2-S8** | Red team, cross-tenant, raw SQL, failure injection, rollback rehearsal, performance dataset | 0 | budgets met, or materialization justified |
+| **P2-S9** | Release closure: gate, RC archive, evidence, docs | 0 | repository and extracted-archive gates both PASS, zero skips |
 
 ---
 
@@ -56,11 +77,11 @@ These hold for every line of Phase 2 code and for every later phase that posts t
 - One chart **per business** (`DAFTAR_ACCOUNTING_RULES.md` §1). Never per tenant, never shared.
 - `accounts (id, tenant_id, business_id, code, name, type, is_active, UNIQUE(business_id, code))` — exactly as `DAFTAR_DATA_MODEL.md` §13 defines it. Phase 2 implements that shape; it does not redesign it.
 - `type ∈ {asset, liability, equity, revenue, expense}` with the normal-balance side derived from the type (asset/expense = debit, liability/equity/revenue = credit). Normal balance is **presentational**, never a posting constraint: a contra account (4100 Sales Returns, 4200 Discounts) legitimately carries the opposite side.
-- **Seeding.** Creating a business seeds the standard chart of `DAFTAR_ACCOUNTING_RULES.md` §2 (1000, 1010, 1020, 1030, 1040, 1100, 1150, 1200, 2000, 2100, 2200, 2210, 3000, 4000, 4100, 4200, 4900, 5000, 6100, 6200, 6900) in the **same transaction** as the business row, with names localized ar/en/tr from a country pack default. A business without a chart must be unreachable, not merely unlikely.
-- **System accounts.** The codes the engine posts to by itself (4900, 6900, 6100, 6200, 3000) are flagged `is_system`. System accounts may be renamed but **not deleted, not deactivated and not re-coded**. A business-scoped constraint guarantees each system role resolves to exactly one active account.
+- **Seeding (→ AL-08).** An `AFTER INSERT` trigger on `businesses` calls a SECURITY DEFINER seeding routine, so the chart is written in the **same transaction** as the business row — including inside the frozen `provision_create_business` command, because a trigger attaches to the table, not to the caller. No frozen migration is edited. Migration `0040` backfills every existing business and **fails** if any business is left without a chart. Seeding writes one `name` per account; **there is no `account_translations` table (→ AL-06)** — system accounts are displayed through i18n keys derived from their `system_key`, custom accounts through the merchant's own text.
+- **System accounts (→ AL-07).** Engine semantics are bound to an immutable `system_key` (`cash`, `fx_gain`, `rounding`, `opening_equity`, …) from a closed registry — **not** to the numeric code, because a country pack may legitimately renumber the chart. `UNIQUE (business_id, system_key)` (partial) gives exactly one account per role per business. System accounts may be renamed but **not deleted, not deactivated and not re-coded**, and `system_key` itself is immutable. Merchants can never set `system_key`, so a custom account named "FX Gain" carries no engine meaning. A missing or inactive system account raises `accounting.system_account_missing` — loud, never a silent posting to the wrong account.
 - **Merchant-facing?** No. Accounting is internal in Phase 2 (`DAFTAR_ACCOUNTING_RULES.md` header: "داخلية — لا تظهر في واجهة التاجر"). Chart management is a platform/admin capability plus a read-only merchant view behind `accounting.view` (§19). No merchant chart editor ships in Phase 2.
 - **Custom accounts** may be added by an authorized principal inside the business's own code space, with a reserved range for system codes so a custom account can never shadow 4900/6900/6100/6200.
-- **Deactivation** is allowed only when the account has no posted lines; otherwise the account stays active-in-history and is merely hidden from pickers. Codes are never reused.
+- **Deactivation (→ AL-05).** The earlier "cannot deactivate / but hidden from pickers" contradiction is resolved to normal accounting semantics: a **non-system** account with posted history **may** be deactivated. `is_active` is the only flag — "hidden from pickers" is not a separate concept. Deactivation stops **future** posting (refused inside the posting primitive) and changes nothing about history: the account keeps appearing in the trial balance, the general ledger and every historical report. Deleting or re-coding an account with posted lines stays forbidden (`ON DELETE RESTRICT` + BEFORE UPDATE trigger); renaming is allowed and audited; codes are never reused.
 
 ---
 
@@ -87,7 +108,7 @@ journal_lines   (id, tenant_id, business_id, journal_entry_id, account_id,
 Immutability (L-01) is enforced **in the database**, using the pattern Phase 1 already ships for frozen plan versions:
 
 - `BEFORE UPDATE OR DELETE` triggers on both tables raise unconditionally for `status='posted'` rows.
-- No runtime role receives `UPDATE` or `DELETE` on `journal_entries` / `journal_lines`. `daftar_app` gets `SELECT, INSERT` only. This is a **grant shape**, so the trigger is defence in depth, not the only lock.
+- **No runtime role receives ANY DML on `journal_entries` / `journal_lines` — not even INSERT (→ AL-03).** The earlier `daftar_app → SELECT, INSERT` proposal was withdrawn: a balanced entry inserted directly would still bypass the source registry, the fingerprint, the audit row, the outbox row and the FX checks. The only physical writer is the narrow SECURITY DEFINER primitive `accounting_post_entry(...)`; runtime roles hold `SELECT` plus `EXECUTE` on that one function.
 - `entry_date` is the **accounting date** (a `DATE` in the business's calendar); `created_at` is the wall clock. They are different facts and are never conflated.
 - Only status `posted` exists in Phase 2. There is no draft journal. A fact is either posted or it does not exist. (A `draft`/`void` state machine is a later decision, recorded in §36.)
 
@@ -105,7 +126,7 @@ Immutability (L-01) is enforced **in the database**, using the pattern Phase 1 a
 | `source_type` | NOT NULL, from a closed enum-like registry in `@daftar/domain-core` (§5). No free strings. |
 | `source_id` | NOT NULL `UUID`. The identity of the originating business fact. |
 | `status` | NOT NULL, `'posted'` only in Phase 2. |
-| `posted_by_user_id` | NOT NULL. The authenticated actor, or the system actor for engine-initiated postings — never NULL, never spoofable from a client field. |
+| `actor_kind` / `actor_user_id` / `actor_system_key` (→ AL-04) | Replaces `posted_by_user_id`. A CHECK admits exactly two shapes: `user` (user id set, system key NULL) or `system` (system key set from a closed registry, user id NULL). **No fake user is ever invented.** The Phase 2 registry is seeded empty, so every Phase 2 posting is a `user` actor. The id is derived from authenticated server context and re-verified against an active membership inside the primitive — never taken from a client field. |
 | `request_id` | The correlation id already carried by Phase 1 logging, stored for audit joins. |
 | `journal_lines.line_no` | Stable ordering within an entry, so golden tests can assert lines **literally** (GOLD-28 requires line-by-line equality, not just a balance check). |
 | `journal_lines.account_id` | Composite FK to `accounts(business_id, id)` — a cross-business account is a foreign-key error, not a policy question (L-07). |
@@ -148,11 +169,11 @@ Rules:
 
 ## 6. Debit = credit at the database boundary
 
-- A `DEFERRABLE INITIALLY DEFERRED` constraint trigger on `journal_lines` evaluates, **at COMMIT**, `SUM(base debit) = SUM(base credit)` for every entry touched by the transaction (`DAFTAR_DATA_MODEL.md` §1 table; `DAFTAR_ACCOUNTING_RULES.md` §3). Deferral is required: lines are inserted one by one and the entry is momentarily unbalanced mid-transaction.
+- **Two deferred constraint triggers, not one (→ AL-02).** A line-only trigger never fires when a transaction inserts an entry with **zero** lines, so raw SQL could commit a phantom entry. Phase 2 therefore installs a `DEFERRABLE INITIALLY DEFERRED` constraint trigger on **`journal_entries`** (fires for the entry row itself, closing the zero-line hole) **and** one on `journal_lines` (catches later tampering), both calling one validation routine that evaluates the whole entry at COMMIT. Deferral is required either way: lines are inserted one by one and the entry is momentarily unbalanced mid-transaction.
 - The trigger raises with a stable, machine-readable error (`accounting.entry_unbalanced`) carrying the entry id and the two sums. Never a generic 500.
 - The balance is checked on **base-currency** amounts (`DAFTAR_MULTI_CURRENCY.md` §7.3). Foreign-currency line amounts are informational; only base amounts balance.
 - Phase 1's failure-injection discipline applies: a test proves that raw SQL inserting an unbalanced entry through `daftar_app` **fails at COMMIT**, not merely that the service refuses it.
-- The same trigger refuses an entry with fewer than two lines, and an entry whose lines reference more than one `business_id`.
+- The same routine refuses an entry with **fewer than two lines**, an entry whose lines reference more than one `business_id` or `tenant_id`, an entry whose status is not `posted`, and an entry whose FX arithmetic does not hold (→ AL-09). Sums are computed in `NUMERIC`, never `bigint`, so the check itself cannot overflow (→ AL-10). The mandatory raw-SQL matrix A–G in `PHASE_2_ARCHITECTURE_LOCK.md` AL-02 is a P2-S2 exit criterion, run as each of the six database roles.
 
 ---
 
@@ -160,7 +181,7 @@ Rules:
 
 - `UNIQUE(business_id, source_type, source_id)` on `journal_entries`, columns real (never expression/partial), per `DAFTAR_DATA_MODEL.md` §13 and INV-ACC-07.
 - The pair is the **business fact's identity**, not a request id: two different HTTP requests describing the same fact collapse to one entry; one request describing two facts posts two entries.
-- Sources are **typed**: `source_id` references a row in the table implied by `source_type`. Phase 2 cannot add a composite FK for a source table that does not exist yet, so the registry (§5) is the contract and each later phase adds its own FK in its own migration. This is recorded as a deliberate, documented gap in §36 — not an oversight.
+- **Inverted relational ownership (→ AL-01).** The earlier claim that later phases would add composite FKs onto `journal_entries.source_id` was withdrawn: one UUID column cannot carry several conditional FKs to different tables. `source_id` therefore carries **no FK, ever**, and is documented as a correlation key. `source_type` carries a real FK to a closed `accounting_source_types` registry. Every source table owns the link from **its own side** — `journal_entry_id NOT NULL`, `UNIQUE(business_id, journal_entry_id)`, composite FK back to the entry, `DEFERRABLE INITIALLY DEFERRED` so either row may be written first inside the posting transaction.
 - `manual_adjustment` and `opening_balance` sources get their own Phase 2 tables so their `source_id` is a real FK from day one; there is no free-floating source in Phase 2.
 
 ---
@@ -171,7 +192,7 @@ Rules:
 - RLS enabled **and forced** on every accounting table, with the two-policy shape Phase 1 uses:
   - permissive `tenant_membership`: `app_bypass() OR EXISTS (SELECT 1 FROM businesses b WHERE b.id = <t>.business_id AND b.tenant_id::text = app_tenant())`
   - restrictive `business_isolation`: `app_bypass() OR business_id::text = app_business()`
-- Grants: `daftar_app` → `SELECT, INSERT` on entries/lines, `SELECT` on accounts (chart mutation goes through the platform path); **no `UPDATE`, no `DELETE` to anyone**; `daftar_worker` → `SELECT` for reconciliation and read-model rebuild; `daftar_platform` → `SELECT` plus chart management; `daftar_identity`, `daftar_resolver`, `daftar_provisioner` → **nothing**.
+- Grants (→ AL-03): `daftar_app` → `SELECT` on entries/lines/accounts **plus `EXECUTE` on `accounting_post_entry`**; **no `INSERT`, `UPDATE` or `DELETE` on the journal to anyone**; `daftar_worker` → `SELECT` for reconciliation and read-model rebuild; `daftar_platform` → `SELECT` plus chart management; `daftar_identity`, `daftar_resolver`, `daftar_provisioner` → **nothing**.
 - `db-privileges.test.ts` and static guard 13 already fail the build if merchant runtime code reaches the platform pool; Phase 2 extends the privilege test with the accounting tables rather than adding a parallel mechanism.
 
 ---
@@ -233,6 +254,7 @@ Rules:
 ## 13. Rounding policy
 
 - Rounding mode: **HALF_EVEN**, applied only at conversion boundaries (`DAFTAR_MULTI_CURRENCY.md` §3).
+- **Range and overflow (→ AL-10).** Domain cap `MAX_MONEY_MINOR = 10^18` on every line amount and every API-accepted amount, by column CHECK and by contract validation — roughly 9.2× below the `BIGINT` limit so aggregates cannot approach it. FX conversion multiplies in unbounded JS `BigInt` (rate carried as an integer scaled to 10 decimals); intermediates never reach the database. Money crosses the wire as a decimal **string**; a JSON number for a money field is rejected. `SQLSTATE 22003` maps to `accounting.amount_out_of_range`.
 - **6100 Rounding Adjustment receives arithmetic rounding differences only.** It is never a dumping ground: FX differences go to 4900/6900 and purchase-price differences to 6200. Mixing them violates INV-ACC-12 and is caught by golden tests.
 - **Residual distribution.** When an amount is split across N lines (allocation of a total to components), the engine distributes the integer remainder deterministically across the lines so `Σ lines = total` **exactly** — the discipline GOLD-45 already specifies for COGS. Only a residual that cannot be distributed within the entry's own lines reaches 6100, and its magnitude is bounded by the line count. A rounding line larger than that bound is a bug and fails a test, not a silent posting.
 - Every posting that generates a 6100 line records **why** in the line memo and in the audit record. An unexplained rounding line is not acceptable.
@@ -267,7 +289,7 @@ Rules:
 - **Posting into a closed period is refused at the database level** (a trigger on `journal_entries` checking `entry_date` against the period table), not only in the service. A closed period is a financial fact, so a raw-SQL insert must fail too.
 - Closing a period is a domain command: it locks the period row, verifies the period's entries balance, writes an audit record and emits an outbox event. Phase 2 does **not** implement year-end income-statement closing entries (revenue/expense → equity) — that requires a retained-earnings policy decision, recorded in §36.
 - **Reopening** a closed period is a separate, audited, permission-gated command (`accounting.period.reopen`, sensitive). It is allowed in Phase 2 — a company that cannot reopen a mistakenly closed month is worse off than one that can, provided every reopen is recorded and every entry posted afterwards is visible as post-close activity.
-- Periods are created lazily: the first posting into an uncovered date creates the covering period as `open`, so a merchant never hits "no period exists".
+- **Placement (→ AL-14): periods are NOT in the first implementation slice.** They are slice **P2-S6**, conditional on confirmation at that point. Nothing in P2-S1…P2-S5 needs a closed period to be correct, and designing close/reopen concurrency before any posting traffic exists would be speculation. `journal_entries.entry_date` ships in P2-S2 and the AL-02 validation routine is the documented plug-in point, so adding periods later needs **no journal schema change**. Until then the narrower temporal rule is: `entry_date` within `[business.created_at − 10 years, today + 1 day]` in the business's own timezone — absurd dates refused without pretending to be a period system.
 
 ---
 
@@ -308,13 +330,13 @@ New permission keys added to the `PERMISSIONS` registry in `@daftar/domain-core`
 
 | Permission | Grants |
 |---|---|
-| `accounting.view` | Read chart, entries, trial balance, GL, balances. |
-| `accounting.post` | Post a manual adjustment / opening balance through the API. |
-| `accounting.reverse` | Post a reversal of an existing entry. |
-| `accounting.period.manage` | Close a period. |
-| `accounting.period.reopen` | Reopen a closed period. **Sensitive.** |
+| `accounting.view` | Read chart, entries, trial balance, GL, balances. Ordinary. |
+| `accounting.post` | Post a manual adjustment / opening balance through the API. **Sensitive (→ AL-16 — upgraded: it creates financial truth).** |
+| `accounting.reverse` | Post a reversal of an existing entry. **Sensitive.** |
 | `accounting.chart.manage` | Add/rename/deactivate accounts within the business's own chart. **Sensitive.** |
 | `accounting.fx.manage` | Enter or correct an FX rate. **Sensitive.** |
+| `accounting.period.manage` | Close a period. **Sensitive.** Registered only in P2-S6 (→ AL-14) — the registry ships no dead keys. |
+| `accounting.period.reopen` | Reopen a closed period. **Sensitive.** Registered only in P2-S6. |
 
 Rules:
 
@@ -340,7 +362,7 @@ Rules:
 - **No edit. No delete. Ever.** (L-01, L-08.)
 - A correction is a new entry with `source_type='reversal'` and `source_id = <the original entry id>`, whose lines are the original lines with debit and credit exchanged, at the **original base amounts and original FX snapshots** — never recomputed at today's rate (the explicit rule of `DAFTAR_ACCOUNTING_RULES.md` §5.2: "ممنوع إعادة الحساب بسعر اليوم").
 - The unique `(business_id, source_type, source_id)` makes **double reversal structurally impossible**: a second reversal of the same entry collides on the unique index.
-- `journal_entries.reversed_by_entry_id` / `reverses_entry_id` are explicit FKs (no generic/polymorphic reference — `DAFTAR_DATA_MODEL.md` §7 forbids a generic FK without a target).
+- **The link lives in `accounting_reversals`, not on the original entry (→ AL-12).** A `reversed_by_entry_id` column on the original was rejected: writing it would mutate a posted entry and contradict law L-01. "Is this entry reversed?" is answered by a join, never by a flag on the original. The unique source key `(business_id, 'reversal', original_entry_id)` makes a second reversal physically impossible.
 - A reversal of a reversal is refused. A correcting entry after a reversal is an ordinary new posting with its own source.
 - Reversal requires `accounting.reverse`, a mandatory non-empty `reason`, and an audit record. A reversal into a closed period is refused; reopen first (§16), visibly.
 - The **operational** reversal semantics of Phase 0 (`reverse_payment_allocation` vs `payment_reversal`, INV-ACC-18) are **not** Phase 2 work. Phase 2 guarantees only that both can be expressed as distinct source types with distinct entries — which §30 verifies by constructing both journals against the engine's API.
@@ -366,7 +388,7 @@ Every row above gets a real concurrency test in the style of the existing `concu
 ## 23. Posting idempotency
 
 - **Key:** `(business_id, source_type, source_id)`. Not the HTTP `Idempotency-Key`, which is a *transport* concern; the two coexist.
-- **Behaviour:** `post()` attempts the insert; on unique violation it re-reads the existing entry and returns `{ entryId, created: false }`. It does **not** compare the new lines against the old and it does **not** "fix" a divergence — a differing payload for the same source is a caller bug, reported as a conflict with the existing entry id, never silently reconciled.
+- **Behaviour (→ AL-11, corrected):** every entry stores a `posting_fingerprint` — SHA-256 over a canonical serialization of the **financial content only** (business, source, date, and the ordered lines with account key, side, base amount, currency, rate, branch, warehouse). Description, memos, request id, actor and timestamps are deliberately excluded, so a retry that differs only in narrative is the same fact. On unique violation the primitive re-reads the existing entry and **compares fingerprints**: identical → `{ entryId, created: false }` with no second audit row and no second outbox event; different → `accounting.idempotency_conflict` (HTTP 409) carrying the existing entry id. Returning the old entry as success for materially different financial content is the most dangerous failure mode a ledger API can have, and is explicitly refused.
 - **Replay across transactions** is safe because the uniqueness lives in the database, not in a cache.
 - The manual API path additionally honours the Phase 1 `Idempotency-Key` header so a retried HTTP request does not create a second *manual adjustment source*, mirroring the Android retry contract (`RetryContractTest.kt`).
 - Idempotency is proven by test at three levels: same transaction, two sequential transactions, two concurrent transactions.
@@ -416,16 +438,21 @@ Every row above gets a real concurrency test in the style of the existing `concu
 
 Phase 2 migrations begin at **`0040`**. Migrations `0000`–`0039` are frozen and are never edited (`PHASE_1_MIGRATION_HISTORY_DECISION.md`, `npm run check:migrations`). **This closure task itself adds no migration**; every number below is a Phase 2 proposal that exists only after approval.
 
-| # | Migration | Contents |
-|---|---|---|
-| 0040 | `accounting_chart` | `accounts` + RLS + grants + system-account flags + per-business seeding function. |
-| 0041 | `accounting_journal` | `journal_entries`, `journal_lines`, composite FKs, XOR + non-negative CHECKs, unique source key, immutability triggers, RLS + grants. |
-| 0042 | `accounting_balance_trigger` | The deferrable constraint trigger for Σdebit = Σcredit, minimum-two-lines and single-business checks. |
-| 0043 | `accounting_periods` | Period table, non-overlap exclusion constraint, closed-period posting trigger. |
-| 0044 | `accounting_fx_rates` | `fx_rates` append-only history + lookup function. |
-| 0045 | `accounting_opening_balances` | Opening balance source tables + partial unique + FK from the journal source. |
-| 0046 | `accounting_manual_adjustments` | Manual adjustment source table + FK. |
-| 0047 | `accounting_read_models` | Only if §24 shows materialization is needed; otherwise not created. |
+Migration numbers are **reserved per slice** (§0). No slice may use a number reserved for a later one.
+
+| # | Slice | Migration | Contents |
+|---|---|---|---|
+| 0040 | P2-S1 | `accounting_chart` | `accounts` (+ `system_key`), system-key registry, RLS, grants, seeding routine + `businesses` AFTER INSERT trigger, **backfill for every existing business with a hard completeness assertion** (→ AL-07, AL-08). |
+| 0041 | P2-S1 | `accounting_permissions` | Accounting permission keys and their sensitivity flags (→ AL-16). |
+| 0042 | P2-S2 | `accounting_journal` | `journal_entries`, `journal_lines`, composite FKs, XOR + non-negative + FX-completeness CHECKs, unique source key, actor CHECK, immutability triggers, RLS (→ AL-04, AL-09). |
+| 0043 | P2-S2 | `accounting_write_authority` | Deferred constraint triggers on **both** tables, the shared validation routine, `accounting_post_entry` and the grant shape that leaves no runtime role any DML (→ AL-02, AL-03). |
+| 0044 | P2-S3 | `accounting_source_types` | Closed source-type registry + the FK from `journal_entries.source_type` (→ AL-01). |
+| 0045 | P2-S4 | `accounting_sources` | `accounting_manual_adjustments`, `accounting_reversals`, each owning its deferred composite FK to the journal (→ AL-01, AL-12). |
+| 0046 | P2-S4 | `accounting_opening_balances` | Opening-balance source tables, partial unique on `status='posted'`, `superseded` transition (→ AL-13). |
+| 0047 | P2-S5 | `accounting_fx_rates` | `fx_rates` append-only history + lookup function (→ AL-09). |
+| 0048 | P2-S6 | `accounting_periods` | **Only if P2-S6 is confirmed** (→ AL-14). Period table, non-overlap exclusion constraint, closed-period check added to the existing validation routine — no journal schema change. |
+| 0049 | P2-S7 | `accounting_report_indexes` | Reporting indexes, only if measurement requires them. |
+| — | P2-S8 | none | Materialized read models only if the performance dataset proves the need (→ AL-15). |
 
 Rules carried from Phase 1, unchanged:
 
@@ -575,7 +602,7 @@ Recorded rather than resolved silently, per the directive.
 | C-05 | Draft / unposted journal entries. | **Not in Phase 2** — posted is the only status. Opening balances have their own draft state on their own source table. |
 | C-06 | Base-currency re-denomination migration for a business that already posted. | **Forbidden in Phase 2** (trigger-enforced). A formal migration procedure is a separate decision. |
 | C-07 | Branch-level trial balances as a first-class concept. | Dimensions are reporting attributes in Phase 2 (§9). First-class per-branch books are a later decision. |
-| C-08 | `source_id` has no composite FK for source types whose tables do not exist yet. | Deliberate. The closed registry (§5) is the contract; each later phase adds its own FK in its own migration. |
+| C-08 | `source_id` has no composite FK for source types whose tables do not exist yet. | **Superseded by AL-01.** The earlier wording promised future FKs on `journal_entries.source_id`, which is not implementable. `source_id` now carries no FK by design; `source_type` carries a real FK to a closed registry; each source table owns a deferred composite FK to the entry from its own side. |
 | C-09 | Materialized read models. | Deferred pending the performance gate (§34). Live aggregation first. |
 | C-10 | OD-11 (manual vs provider FX rates). | Settled for Phase 2 by §38: manual is the default and the only implemented source; a provider is optional and must never become a dependency. |
 | C-11 | Merchant-facing accounting UI. | None in Phase 2 beyond an internal read-only view; accounting is internal by `DAFTAR_ACCOUNTING_RULES.md`. |
