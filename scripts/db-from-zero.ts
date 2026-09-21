@@ -22,6 +22,7 @@ import { join } from 'node:path';
 import EmbeddedPostgres from 'embedded-postgres';
 import { Pool } from 'pg';
 import { MIGRATIONS_DIR, runMigrations } from '../apps/api/src/infra/migrate';
+import { ensureEmbeddedPgBinariesExecutable } from './ensure-embedded-pg-binaries';
 
 const ROOT = join(__dirname, '..');
 const PORT = Number(process.env['DB_FROM_ZERO_PORT'] ?? 55461);
@@ -37,6 +38,7 @@ const PASSWORDS = {
 async function main(): Promise<void> {
   // The embedded server creates and owns its data directory (initdb refuses a root-owned one).
   const dir = join(tmpdir(), `daftar-db-from-zero-${randomUUID()}`);
+  ensureEmbeddedPgBinariesExecutable();
   const pg = new EmbeddedPostgres({ databaseDir: dir, user: 'postgres', password: 'postgres', port: PORT, persistent: false });
   const summary: Record<string, unknown> = { port: PORT };
   const pools: Pool[] = [];

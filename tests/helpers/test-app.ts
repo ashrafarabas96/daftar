@@ -14,6 +14,7 @@ import type { OutboxSink } from '../../apps/api/src/modules/outbox/publisher';
 import type { CredentialPayloadEncryptor } from '../../apps/api/src/modules/delivery/credential-protector';
 import { CredentialDeliveryWorker } from '../../apps/api/src/modules/delivery/delivery-worker.service';
 import { mintProvisioningAssertion, type ProvisioningKind } from '../../apps/api/src/infra/provisioning-assertion';
+import { ensureEmbeddedPgBinariesExecutable } from '../../scripts/ensure-embedded-pg-binaries';
 
 export const PG_DIR = process.env['PG_DIR'] ?? '/tmp/daftar-pg-shared';
 export const PG_PORT = Number(process.env['PG_PORT'] ?? 55432);
@@ -86,6 +87,7 @@ export async function ensurePostgres(): Promise<void> {
     await installProvisioningKey();
     return;
   }
+  ensureEmbeddedPgBinariesExecutable();
   pg = new EmbeddedPostgres({
     databaseDir: PG_DIR,
     user: PG_USER,
