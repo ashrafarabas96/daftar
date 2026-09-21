@@ -17,16 +17,18 @@
 
 Phase 2 ships as ten gated slices (`PHASE_2_ARCHITECTURE_LOCK.md` AL-18). **Each slice requires its own documented PASS before the next begins.** A slice may not borrow a later slice's migration number, and no slice may start before the Tech Lead authorizes it.
 
+**Governing rule: every slice must be independently safe.** Structural schema may land before its writer exists — a table nobody can write to is safe. A writer may **not** land before the verification, binding, fingerprint, audit and outbox protections it depends on. `GRANT EXECUTE` on the posting primitive happens in exactly one slice: P2-S3, the slice that supplies all of them. A slice PASS never means "safe after the next slice".
+
 | slice | content | migrations | exit criteria |
 |---|---|---|---|
 | **P2-S0** | Architecture lock — decisions only | **0** | Tech Lead approval of `PHASE_2_ARCHITECTURE_LOCK.md` |
 | **P2-S1** | `accounts`, system-key registry, seeding + trigger + backfill, permissions | `0040`, `0041` | every existing and new business has a chart; AL-05/06/07/08 tests green |
-| **P2-S2** | Journal tables, immutability, the two constraint triggers, FX CHECKs, narrow write authority | `0042`, `0043` | raw-SQL matrix A–G green for all six roles; no write grant exists |
-| **P2-S3** | TypeScript posting engine, source registry, fingerprint, idempotency, audit + outbox atomicity | `0044` | AL-11 matrix and AL-17 failure-injection matrix green |
-| **P2-S4** | Reversal, manual adjustment, opening balance — Phase-2-owned sources only | `0045`, `0046` | AL-12 and AL-13 tests green |
-| **P2-S5** | FX foundation: manual rate source, immutable snapshot, rounding, realized-FX primitive | `0047` | every worked FX journal in `DAFTAR_ACCOUNTING_RULES.md` reproduced line by line through the engine |
-| **P2-S6** | Accounting periods — **only if confirmed at that point** | `0048` | close/reopen/concurrency tests green |
-| **P2-S7** | Trial balance, general ledger, account balances — live aggregation | `0049` (indexes only, if needed) | reports balance; rebuild-equals-live green |
+| **P2-S2** | Journal + binding **structural schema only**: tables, CHECKs, immutability triggers, both validation triggers, RLS and the full REVOKE shape. **No writer function, no EXECUTE granted** | `0042`, `0043` | Matrix 1 (privilege, all six roles) **and** Matrix 2 (invariants A–H, schema owner) both green |
+| **P2-S3** | Assertion keys, assertion verification, `accounting_post_entry`, fingerprint, audit + outbox — **and only now `GRANT EXECUTE`** | `0044`, `0045` | AL-03 spoofing suite, AL-11 matrix, AL-17 failure-injection matrix green |
+| **P2-S4** | Reversal, manual adjustment, opening balance — Phase-2-owned sources only | `0046`, `0047` | AL-12 and AL-13 state-machine tests green |
+| **P2-S5** | FX foundation: manual rate source, immutable snapshot, rounding, realized-FX primitive | `0048` | the seven AL-09 vectors green in both implementations |
+| **P2-S6** | Accounting periods — **only if confirmed at that point** | `0049` | close/reopen/concurrency tests green |
+| **P2-S7** | Trial balance, general ledger, account balances — live aggregation | `0050` (indexes only, if needed) | reports balance; rebuild-equals-live green |
 | **P2-S8** | Red team, cross-tenant, raw SQL, failure injection, rollback rehearsal, performance dataset | 0 | budgets met, or materialization justified |
 | **P2-S9** | Release closure: gate, RC archive, evidence, docs | 0 | repository and extracted-archive gates both PASS, zero skips |
 
@@ -126,7 +128,7 @@ Immutability (L-01) is enforced **in the database**, using the pattern Phase 1 a
 | `source_type` | NOT NULL, from a closed enum-like registry in `@daftar/domain-core` (§5). No free strings. |
 | `source_id` | NOT NULL `UUID`. The identity of the originating business fact. |
 | `status` | NOT NULL, `'posted'` only in Phase 2. |
-| `actor_kind` / `actor_user_id` / `actor_system_key` (→ AL-04) | Replaces `posted_by_user_id`. A CHECK admits exactly two shapes: `user` (user id set, system key NULL) or `system` (system key set from a closed registry, user id NULL). **No fake user is ever invented.** The Phase 2 registry is seeded empty, so every Phase 2 posting is a `user` actor. The id is derived from authenticated server context and re-verified against an active membership inside the primitive — never taken from a client field. |
+| `actor_kind` / `actor_user_id` / `actor_system_key` (→ AL-04) | Replaces `posted_by_user_id`. A CHECK admits exactly two shapes: `user` (user id set, system key NULL) or `system` (system key set from a closed registry, user id NULL). **No fake user is ever invented.** The Phase 2 registry is seeded empty, so every Phase 2 posting is a `user` actor. The identity comes from the **verified assertion** (→ AL-03) and from nowhere else — not a DTO, not a GUC, not a caller-controlled argument. Membership is checked as defence in depth, never as the proof of identity. |
 | `request_id` | The correlation id already carried by Phase 1 logging, stored for audit joins. |
 | `journal_lines.line_no` | Stable ordering within an entry, so golden tests can assert lines **literally** (GOLD-28 requires line-by-line equality, not just a balance check). |
 | `journal_lines.account_id` | Composite FK to `accounts(business_id, id)` — a cross-business account is a foreign-key error, not a policy question (L-07). |
@@ -170,10 +172,12 @@ Rules:
 ## 6. Debit = credit at the database boundary
 
 - **Two deferred constraint triggers, not one (→ AL-02).** A line-only trigger never fires when a transaction inserts an entry with **zero** lines, so raw SQL could commit a phantom entry. Phase 2 therefore installs a `DEFERRABLE INITIALLY DEFERRED` constraint trigger on **`journal_entries`** (fires for the entry row itself, closing the zero-line hole) **and** one on `journal_lines` (catches later tampering), both calling one validation routine that evaluates the whole entry at COMMIT. Deferral is required either way: lines are inserted one by one and the entry is momentarily unbalanced mid-transaction.
-- The trigger raises with a stable, machine-readable error (`accounting.entry_unbalanced`) carrying the entry id and the two sums. Never a generic 500.
+- The trigger raises a **stable machine code with safe identifiers only** (`accounting.entry_unbalanced` plus the entry id) — never a generic 500, and **never the debit/credit sums** (→ AL-02): a database exception propagates into driver logs where the observability redaction rules cannot be re-applied.
 - The balance is checked on **base-currency** amounts (`DAFTAR_MULTI_CURRENCY.md` §7.3). Foreign-currency line amounts are informational; only base amounts balance.
 - Phase 1's failure-injection discipline applies: a test proves that raw SQL inserting an unbalanced entry through `daftar_app` **fails at COMMIT**, not merely that the service refuses it.
-- The same routine refuses an entry with **fewer than two lines**, an entry whose lines reference more than one `business_id` or `tenant_id`, an entry whose status is not `posted`, and an entry whose FX arithmetic does not hold (→ AL-09). Sums are computed in `NUMERIC`, never `bigint`, so the check itself cannot overflow (→ AL-10). The mandatory raw-SQL matrix A–G in `PHASE_2_ARCHITECTURE_LOCK.md` AL-02 is a P2-S2 exit criterion, run as each of the six database roles.
+- The same routine refuses an entry with **fewer than two lines**, an entry whose lines reference more than one `business_id` or `tenant_id`, an entry whose status is not `posted`, an entry with no source binding (→ AL-01), and an entry whose FX arithmetic does not hold (→ AL-09). Sums are computed in `NUMERIC`, never `bigint` (→ AL-10).
+- **Two separate test matrices, not one (→ AL-02, corrected).** Claiming cases A–G "run as all six roles" was misleading: under AL-03 no runtime role holds journal DML, so the attempt fails at permission checking and never reaches the invariant. **Matrix 1** proves the privilege boundary for every role; **Matrix 2** exercises invariants A–H through the schema owner. A P2-S2 PASS requires both.
+- **Errors carry stable codes and safe identifiers only (→ AL-02).** No debit/credit sums, amounts, rates or balances in exception messages — a database exception reaches driver logs where `DAFTAR_OBSERVABILITY.md` redaction cannot be re-applied. Diagnostic sums are available only through an authorized internal reconciliation path.
 
 ---
 
@@ -181,8 +185,8 @@ Rules:
 
 - `UNIQUE(business_id, source_type, source_id)` on `journal_entries`, columns real (never expression/partial), per `DAFTAR_DATA_MODEL.md` §13 and INV-ACC-07.
 - The pair is the **business fact's identity**, not a request id: two different HTTP requests describing the same fact collapse to one entry; one request describing two facts posts two entries.
-- **Inverted relational ownership (→ AL-01).** The earlier claim that later phases would add composite FKs onto `journal_entries.source_id` was withdrawn: one UUID column cannot carry several conditional FKs to different tables. `source_id` therefore carries **no FK, ever**, and is documented as a correlation key. `source_type` carries a real FK to a closed `accounting_source_types` registry. Every source table owns the link from **its own side** — `journal_entry_id NOT NULL`, `UNIQUE(business_id, journal_entry_id)`, composite FK back to the entry, `DEFERRABLE INITIALLY DEFERRED` so either row may be written first inside the posting transaction.
-- `manual_adjustment` and `opening_balance` sources get their own Phase 2 tables so their `source_id` is a real FK from day one; there is no free-floating source in Phase 2.
+- **Bidirectional binding registry (→ AL-01, corrected twice).** First correction: later phases cannot add composite FKs onto `journal_entries.source_id`, because one UUID column cannot carry several conditional FKs. Second correction: a source-side FK alone is **one-way** — it restricts deleting the *journal* row, not the source row, and proves nothing about entries that have no source. The model is therefore `accounting_source_bindings (business_id, source_type, source_id) ↔ journal_entries`, with a `PRIMARY KEY` on the source triple, `UNIQUE (business_id, journal_entry_id)`, and mutually `DEFERRABLE INITIALLY DEFERRED` FKs in **both** directions so either row may be written first and both are verified at COMMIT.
+- **Source identity lives in `accounting_source_bindings` (→ AL-01, corrected).** Every posted entry has exactly one binding row, linked in **both** directions by mutually `DEFERRABLE` foreign keys verified at COMMIT: the binding references the entry, and `journal_entries (business_id, source_type, source_id)` references the binding. An orphan entry is therefore impossible, not merely unlikely. `journal_entries.source_id` itself still carries no FK. Phase 2 detail tables (`accounting_manual_adjustments`, `accounting_opening_balances`, `accounting_reversals`) reference the binding, so deleting a detail row cannot destroy the identity or the journal link; binding rows are undeletable by every role.
 
 ---
 
@@ -192,7 +196,8 @@ Rules:
 - RLS enabled **and forced** on every accounting table, with the two-policy shape Phase 1 uses:
   - permissive `tenant_membership`: `app_bypass() OR EXISTS (SELECT 1 FROM businesses b WHERE b.id = <t>.business_id AND b.tenant_id::text = app_tenant())`
   - restrictive `business_isolation`: `app_bypass() OR business_id::text = app_business()`
-- Grants (→ AL-03): `daftar_app` → `SELECT` on entries/lines/accounts **plus `EXECUTE` on `accounting_post_entry`**; **no `INSERT`, `UPDATE` or `DELETE` on the journal to anyone**; `daftar_worker` → `SELECT` for reconciliation and read-model rebuild; `daftar_platform` → `SELECT` plus chart management; `daftar_identity`, `daftar_resolver`, `daftar_provisioner` → **nothing**.
+- Grants (→ AL-03): `daftar_app` → `SELECT` on entries/lines/bindings/accounts **plus `EXECUTE` on `accounting_post_entry`**; **no `INSERT`, `UPDATE` or `DELETE` on the journal or the bindings to anyone**; `daftar_worker` → `SELECT` for reconciliation and read-model rebuild; `daftar_platform` → `SELECT` plus chart management; `daftar_identity`, `daftar_resolver`, `daftar_provisioner` → **nothing**.
+- **Authorization is a signed command assertion, not a GUC (→ AL-03, security-critical correction).** `app_tenant()` / `app_business()` are **caller-settable**: a stolen `daftar_app` credential can set any tenant/business and name a genuinely active member, so GUC scope plus membership verification proves nothing. `accounting_post_entry` therefore derives tenant, business and actor from an **HMAC-signed Accounting Command Assertion** minted by the merchant API after authentication, RBAC and branch-scope checks, and verified in the database against `accounting_assertion_keys` — a table with no grants at all. The assertion binds version, kid, actor, tenant, business, operation kind, source type, source id, **posting fingerprint**, expiry and jti, and is single-transaction with cross-transaction replay protection. A stolen database credential alone cannot post. A fully compromised merchant API process holds the minting key and **can** — that larger boundary is stated honestly in AL-03 rather than implied away.
 - `db-privileges.test.ts` and static guard 13 already fail the build if merchant runtime code reaches the platform pool; Phase 2 extends the privilege test with the accounting tables rather than adding a parallel mechanism.
 
 ---
@@ -289,7 +294,8 @@ Rules:
 - **Posting into a closed period is refused at the database level** (a trigger on `journal_entries` checking `entry_date` against the period table), not only in the service. A closed period is a financial fact, so a raw-SQL insert must fail too.
 - Closing a period is a domain command: it locks the period row, verifies the period's entries balance, writes an audit record and emits an outbox event. Phase 2 does **not** implement year-end income-statement closing entries (revenue/expense → equity) — that requires a retained-earnings policy decision, recorded in §36.
 - **Reopening** a closed period is a separate, audited, permission-gated command (`accounting.period.reopen`, sensitive). It is allowed in Phase 2 — a company that cannot reopen a mistakenly closed month is worse off than one that can, provided every reopen is recorded and every entry posted afterwards is visible as post-close activity.
-- **Placement (→ AL-14): periods are NOT in the first implementation slice.** They are slice **P2-S6**, conditional on confirmation at that point. Nothing in P2-S1…P2-S5 needs a closed period to be correct, and designing close/reopen concurrency before any posting traffic exists would be speculation. `journal_entries.entry_date` ships in P2-S2 and the AL-02 validation routine is the documented plug-in point, so adding periods later needs **no journal schema change**. Until then the narrower temporal rule is: `entry_date` within `[business.created_at − 10 years, today + 1 day]` in the business's own timezone — absurd dates refused without pretending to be a period system.
+- **Placement (→ AL-14): periods are NOT in the first implementation slice.** They are slice **P2-S6**, conditional on confirmation. `journal_entries.entry_date` ships in P2-S2 and the AL-02 validation routine is the documented plug-in point, so adding periods later needs **no journal schema change**. When periods land they become the authoritative posting-date gate.
+- **The arbitrary 10-year floor is withdrawn (→ AL-14).** It had no accounting authority and would reject a legitimate opening position for a company older than the window. Date rules are now **source-specific**, all evaluated in the business's own timezone: `opening_balance` — **no lower bound**, it may predate onboarding by any amount; `manual_adjustment` — back-dating permitted and audited; `reversal` — not earlier than the entry it reverses. **Future-dated posting is forbidden for every source** (`entry_date ≤ today`). The policy is data on `accounting_source_types`, so a new source declares its rule rather than editing the primitive.
 
 ---
 
@@ -444,14 +450,15 @@ Migration numbers are **reserved per slice** (§0). No slice may use a number re
 |---|---|---|---|
 | 0040 | P2-S1 | `accounting_chart` | `accounts` (+ `system_key`), system-key registry, RLS, grants, seeding routine + `businesses` AFTER INSERT trigger, **backfill for every existing business with a hard completeness assertion** (→ AL-07, AL-08). |
 | 0041 | P2-S1 | `accounting_permissions` | Accounting permission keys and their sensitivity flags (→ AL-16). |
-| 0042 | P2-S2 | `accounting_journal` | `journal_entries`, `journal_lines`, composite FKs, XOR + non-negative + FX-completeness CHECKs, unique source key, actor CHECK, immutability triggers, RLS (→ AL-04, AL-09). |
-| 0043 | P2-S2 | `accounting_write_authority` | Deferred constraint triggers on **both** tables, the shared validation routine, `accounting_post_entry` and the grant shape that leaves no runtime role any DML (→ AL-02, AL-03). |
-| 0044 | P2-S3 | `accounting_source_types` | Closed source-type registry + the FK from `journal_entries.source_type` (→ AL-01). |
-| 0045 | P2-S4 | `accounting_sources` | `accounting_manual_adjustments`, `accounting_reversals`, each owning its deferred composite FK to the journal (→ AL-01, AL-12). |
-| 0046 | P2-S4 | `accounting_opening_balances` | Opening-balance source tables, partial unique on `status='posted'`, `superseded` transition (→ AL-13). |
-| 0047 | P2-S5 | `accounting_fx_rates` | `fx_rates` append-only history + lookup function (→ AL-09). |
-| 0048 | P2-S6 | `accounting_periods` | **Only if P2-S6 is confirmed** (→ AL-14). Period table, non-overlap exclusion constraint, closed-period check added to the existing validation routine — no journal schema change. |
-| 0049 | P2-S7 | `accounting_report_indexes` | Reporting indexes, only if measurement requires them. |
+| 0042 | P2-S2 | `accounting_journal` | `journal_entries`, `journal_lines`, `accounting_source_types`, `accounting_source_bindings`, the mutually deferred bidirectional FKs, XOR + non-negative + FX-completeness CHECKs, actor CHECK, immutability triggers, RLS (→ AL-01, AL-04, AL-09). |
+| 0043 | P2-S2 | `accounting_invariants` | Deferred constraint triggers on **both** tables, the shared validation routine, and the REVOKE shape that leaves no runtime role any DML. **No writer function and no EXECUTE grant in this slice** (→ AL-02, AL-18). |
+| 0044 | P2-S3 | `accounting_assertion_keys` | Assertion key table with no grants at all, install/retire commands granted to `daftar_platform` only, `accounting_actor()` verification (→ AL-03). |
+| 0045 | P2-S3 | `accounting_post_entry` | The narrow SECURITY DEFINER writer, fingerprint handling, audit + outbox, **and the single `GRANT EXECUTE` to `daftar_app`** (→ AL-03, AL-11, AL-17). |
+| 0046 | P2-S4 | `accounting_sources` | `accounting_manual_adjustments`, `accounting_reversals`, each referencing the binding registry plus its own deletion guard (→ AL-01, AL-12). |
+| 0047 | P2-S4 | `accounting_opening_balances` | Opening-balance source tables, partial unique on `status='posted'`, the guarded `posted → superseded` transition (→ AL-13). |
+| 0048 | P2-S5 | `accounting_fx_rates` | `fx_rates` append-only history + lookup function (→ AL-09). |
+| 0049 | P2-S6 | `accounting_periods` | **Only if P2-S6 is confirmed** (→ AL-14). Period table, non-overlap exclusion constraint, closed-period check added to the existing validation routine — no journal schema change. |
+| 0050 | P2-S7 | `accounting_report_indexes` | Reporting indexes, only if measurement requires them. |
 | — | P2-S8 | none | Materialized read models only if the performance dataset proves the need (→ AL-15). |
 
 Rules carried from Phase 1, unchanged:

@@ -33,89 +33,109 @@
 
 ---
 
-## AL-01 — Source-to-journal relational model
+## AL-01 — Source-to-journal relational model (CORRECTED)
 
-**Problem.** The execution plan (§7, C-08) promised that later phases would "add a composite FK for a source table" on `journal_entries.source_id`. That is not implementable. One UUID column cannot carry several conditional foreign keys to different tables: SQL foreign keys are unconditional, so every added FK would apply to *every* row simultaneously and the first non-matching `source_type` would break all of them. The plan promised physical integrity it could never deliver.
+**Problem, restated.** The first version of this decision claimed that a foreign key from each source table to `journal_entries`, with `ON DELETE RESTRICT`, meant "a posted entry's source may never vanish". **That was relationally wrong.** A FK from SOURCE → JOURNAL proves the journal row exists when the source references it, and it prevents deleting the *journal* row. It does **not** prevent deleting the *source* row, and it does **not** prove that every journal entry has a source at all. The model was one-way and the stated guarantee was unearned.
 
-**Chosen solution — inverted relational ownership + a closed source-type registry.**
+**Required invariant.** Every posted journal entry corresponds to exactly one registered business-fact identity, and once posted that identity may not silently disappear.
 
-1. `journal_entries` keeps `business_id`, `source_type`, `source_id` and `UNIQUE (business_id, source_type, source_id)` for traceability and posting idempotency. **`source_id` carries no foreign key, now or ever**, and the column comment says so in the migration.
-2. `source_type` is constrained by a real FK to `accounting_source_types (source_type PK, owning_phase, registered_in_migration)`. Phase 2 seeds exactly three rows: `opening_balance`, `manual_adjustment`, `reversal`. An unregistered source type is rejected by the database, not by a service.
-3. **Every source table owns the link from its own side**:
-   ```
-   <source_table>.journal_entry_id UUID NOT NULL,
-   UNIQUE (business_id, journal_entry_id),
-   FOREIGN KEY (business_id, journal_entry_id)
-     REFERENCES journal_entries (business_id, id)
-     DEFERRABLE INITIALLY DEFERRED
-   ```
-   The FK is deferred so the source row and its entry can be written in either order inside the one posting transaction.
-4. A later operational domain registers its `source_type` in its own migration and adds `journal_entry_id` to **its** table. `journal_entries` is never altered again.
+**Chosen solution — an internal source-binding registry with mutually deferred links in both directions (approach A).**
 
-**Rejected alternatives.**
+```
+accounting_source_bindings (
+  business_id       UUID NOT NULL,
+  source_type       TEXT NOT NULL REFERENCES accounting_source_types (source_type),
+  source_id         UUID NOT NULL,
+  journal_entry_id  UUID NOT NULL,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (business_id, source_type, source_id),
+  UNIQUE (business_id, journal_entry_id),
+  FOREIGN KEY (business_id, journal_entry_id)
+    REFERENCES journal_entries (business_id, id)
+    DEFERRABLE INITIALLY DEFERRED
+);
 
-- *Polymorphic FK on `source_id`* — physically impossible, as above.
-- *One nullable FK column per source table on `journal_entries`, with a growing XOR CHECK* (the `0039` `catalog_identifiers` pattern). This **is** enforceable and gives slightly stronger immediate integrity: the journal row itself would prove its source exists. Rejected honestly, with the trade-off stated: it requires altering the most sensitive table in the system once per future domain, it grows an unbounded XOR CHECK, and it couples the ledger to every operational domain — the exact coupling the posting engine contract forbids. Inverted ownership keeps the journal domain-agnostic while still giving full physical integrity, enforced from the source side.
-- *Leaving the promise vague* — that is the defect being corrected.
+-- the other direction, so an entry cannot exist without its binding:
+ALTER TABLE journal_entries
+  ADD CONSTRAINT journal_entries_binding_fk
+  FOREIGN KEY (business_id, source_type, source_id)
+    REFERENCES accounting_source_bindings (business_id, source_type, source_id)
+    DEFERRABLE INITIALLY DEFERRED;
+```
 
-**Is `accounting_source_types` a second source of truth?** No. It holds no financial data — only the vocabulary of legal source types. It cannot disagree with the ledger about money; it can only refuse a posting whose type was never registered. The ledger remains the sole financial authority.
+Both foreign keys are `DEFERRABLE INITIALLY DEFERRED`, so the two rows may be written in either order inside the posting transaction and **both directions are verified at COMMIT**. This is the bidirectional integrity the earlier version only asserted.
 
-**Database implication.** `journal_entries.source_type` → FK to the registry. `source_id` → plain UUID, NOT NULL, documented as a correlation key. Phase-2 source tables each carry a deferred composite FK back to the entry. Source rows use `ON DELETE RESTRICT` toward the journal: a posted entry's source may never vanish.
+**The binding registry is the source identity.** It is not a convenience index: it is where a business fact's accounting identity lives. Domain detail tables (`accounting_manual_adjustments`, `accounting_opening_balances`, and every future domain's table) reference the binding rather than owning identity themselves:
 
-**API implication.** `post()` returns `{ entryId, created }`; each source command also returns its own source id. A caller cannot invent a source type.
+```
+FOREIGN KEY (business_id, source_type, id)
+  REFERENCES accounting_source_bindings (business_id, source_type, source_id)
+```
 
-**Security implication.** A forged `source_id` cannot reach another business's data, because the *source table's* FK is composite on `business_id`. A forged `source_type` is refused by the registry FK.
+so deleting a detail row cannot destroy the identity or the journal link — the binding survives, and it is undeletable.
 
-**Test implication.** Raw SQL with an unregistered `source_type` → FAIL. Source row referencing another business's entry → FAIL. Deleting a source row whose entry exists → FAIL. Posting the same source twice → one entry (AL-11).
+**Binding rows are inside the immutable ledger perimeter**: no runtime role holds `INSERT`, `UPDATE` or `DELETE` on `accounting_source_bindings` (AL-03), and `BEFORE UPDATE OR DELETE` triggers raise unconditionally. The only writer is the posting primitive.
 
-**Future-phase implication.** Phase 3/4 add their rows to the registry and their own `journal_entry_id`; no journal migration, no change to this decision.
+**The six required proofs.**
+
+| # | requirement | how it is physically enforced |
+|---|---|---|
+| 1 | orphan journal entry impossible | `journal_entries → accounting_source_bindings` deferred FK, verified at COMMIT |
+| 2 | source referencing a wrong-business journal impossible | both FKs are composite on `business_id` |
+| 3 | source identity cannot disappear after posting | binding rows have no DELETE grant and a BEFORE DELETE trigger; detail rows additionally carry a per-table deletion guard (below) |
+| 4 | duplicate source impossible | `PRIMARY KEY (business_id, source_type, source_id)` |
+| 5 | future domains extend without touching `journal_entries.source_id` | a domain registers its `source_type` and FKs **its** table to the binding; the journal is never altered again |
+| 6 | journal stays domain-agnostic | `journal_entries` references only the binding registry and the type registry — never a domain table |
+
+**Honest residual.** Requirement 3 is fully physical for the *identity* (the binding row cannot be deleted by anyone). For a domain's *detail* row, the guard is a `BEFORE DELETE` trigger installed by the migration that creates that table — a per-table contract, not one global constraint, because a single global constraint would require exactly the polymorphic reference this decision exists to avoid. The contract is enforced by a test that enumerates `accounting_source_types` and asserts that every registered type's detail table carries the guard; a new source type without a guard fails the suite. This is stated as a contract-plus-test, not as a foreign key, because it is not one.
+
+**Rejected alternatives.** The original source-side-only FK (the defect — one-way, as shown). A polymorphic FK on `source_id` (physically impossible). One nullable FK column per source on `journal_entries` with a growing XOR CHECK (enforceable, but alters the ledger for every future domain and couples it to every operational domain).
+
+**API implication.** `post()` writes entry, lines and binding in one transaction and returns `{ entryId, sourceType, sourceId, created }`.
+
+**Test implication.** Insert a journal entry with no binding → COMMIT FAIL (case H in Matrix 2, AL-02). Binding pointing at another business's entry → FAIL. Delete a binding → FAIL for every role. Delete a detail row whose binding exists → FAIL. Duplicate `(business_id, source_type, source_id)` → FAIL. Registry-completeness test over every registered source type.
 
 ---
 
-## AL-02 — Zero-line / one-line / unbalanced entry prevention at COMMIT
+## AL-02 — Zero-line / one-line / unbalanced prevention, and how it is tested
 
-**Problem.** The plan relied on a deferred trigger over `journal_lines`. A trigger on lines never fires when there are no lines, so raw SQL inserting a `journal_entries` row and zero lines would commit a phantom entry.
+**Problem.** A trigger on `journal_lines` never fires when a transaction inserts an entry with no lines, so raw SQL could commit a phantom entry.
 
-**Chosen solution — deferred constraint triggers on BOTH mutation paths, validating the entry as a whole.**
+**Chosen solution — deferred constraint triggers on BOTH mutation paths.**
 
 ```
 CREATE CONSTRAINT TRIGGER journal_entry_validate
   AFTER INSERT OR UPDATE ON journal_entries
-  DEFERRABLE INITIALLY DEFERRED
-  FOR EACH ROW EXECUTE FUNCTION accounting_validate_entry();
+  DEFERRABLE INITIALLY DEFERRED FOR EACH ROW
+  EXECUTE FUNCTION accounting_validate_entry();
 
 CREATE CONSTRAINT TRIGGER journal_line_validate
   AFTER INSERT OR UPDATE OR DELETE ON journal_lines
-  DEFERRABLE INITIALLY DEFERRED
-  FOR EACH ROW EXECUTE FUNCTION accounting_validate_entry_of_line();
+  DEFERRABLE INITIALLY DEFERRED FOR EACH ROW
+  EXECUTE FUNCTION accounting_validate_entry_of_line();
 ```
 
-The entry-side trigger is the crux: it is attached to the **entry insert**, so a transaction that writes an entry and no lines still has a pending deferred check that fires at COMMIT and raises. The line-side trigger catches any attempt to touch lines of an entry written earlier.
+The entry-side trigger is the crux: it is attached to the **entry insert**, so a transaction that writes an entry and no lines still has a pending deferred check that fires at COMMIT.
 
-Both call one validation routine, which for a given entry id asserts, at COMMIT:
+Validated at COMMIT for each touched entry: line count ≥ 2; Σ base debit = Σ base credit and > 0; every line's `business_id` and `tenant_id` match the entry; every line's account belongs to the same business; FX arithmetic holds exactly (AL-09); status is `posted`. Sums are computed in `NUMERIC`, never `bigint`, so the check itself cannot overflow (AL-10).
 
-| assertion | error code |
-|---|---|
-| line count ≥ 2 | `accounting.entry_too_few_lines` |
-| Σ base debit = Σ base credit, and > 0 | `accounting.entry_unbalanced` |
-| every line's `business_id` and `tenant_id` equal the entry's | `accounting.entry_business_mismatch` |
-| every line's account belongs to the same business | `accounting.entry_account_foreign` (also FK-enforced) |
-| every line's base amount equals HALF_EVEN(txn × rate) | `accounting.entry_fx_arithmetic` (AL-09) |
-| entry status is `posted` | `accounting.entry_status_invalid` |
+Immutability is separate and unconditional: `BEFORE UPDATE OR DELETE` triggers raise for any posted row, **and** no runtime role holds UPDATE or DELETE (AL-03). Two independent mechanisms, deliberately redundant.
 
-Sums are computed in `NUMERIC`, not `bigint`, so the check itself cannot overflow (AL-10).
+### Error messages must not carry financial values
 
-Immutability is separate and unconditional: `BEFORE UPDATE OR DELETE` triggers on both tables raise for any posted row, and no runtime role holds UPDATE or DELETE grants (AL-03). Two independent mechanisms, deliberately redundant.
+Commit-time failures raise a **stable machine code plus safe identifiers only** — `ERRCODE` plus the entry id. They do **not** include debit/credit sums, amounts, rates or balances. `DAFTAR_OBSERVABILITY.md` forbids financial values in logs, and a database exception message propagates into driver logs and generic error handlers where that rule cannot be re-applied. The earlier draft of this decision proposed putting the two sums in the message; that is withdrawn.
 
-**Rejected alternatives.** A line-only trigger (leaves case A open). A `CHECK` constraint (cannot aggregate across rows). A maintained `line_count` column with `CHECK (line_count >= 2)` (still needs a trigger, and stores derived data inside the authoritative table). Application-only validation (forbidden by the project's law).
+Codes: `accounting.entry_unbalanced`, `accounting.entry_too_few_lines`, `accounting.entry_business_mismatch`, `accounting.entry_account_foreign`, `accounting.entry_fx_arithmetic`, `accounting.entry_status_invalid`, `accounting.entry_binding_missing`.
 
-**Database implication.** Two constraint triggers, one shared validation function, `SET CONSTRAINTS` never relaxed by application code.
+Where reconciliation tooling genuinely needs the offending sums, it obtains them through an explicitly authorized internal diagnostic path that is subject to the normal redaction and audit rules — never through an exception message.
 
-**API implication.** A commit-time failure surfaces as a typed error carrying the entry id and the two sums — never a generic 500.
+### Two independent test matrices — they prove different things
 
-**Security implication.** The guarantee holds against raw SQL from any of the six roles, not only against the service layer.
+The earlier version claimed cases A–G "run as each of the six database roles". That is misleading: under AL-03 no runtime role holds journal DML, so such an attempt fails at **permission checking** and never reaches the invariant. Authorization and structural integrity are separate properties and are tested separately.
 
-**Test implication — mandatory raw-SQL matrix (P2-S2 exit criteria).**
+**Matrix 1 — privilege boundary.** For every runtime role (`daftar_app`, `daftar_platform`, `daftar_worker`, `daftar_identity`, `daftar_resolver`, `daftar_provisioner`): direct `INSERT` / `UPDATE` / `DELETE` on `journal_entries`, `journal_lines` and `accounting_source_bindings` must fail with *permission denied*, matching the intended grant model exactly. This proves **nobody may write directly**.
+
+**Matrix 2 — database invariants.** Executed through the schema owner (a dedicated test authority that legitimately holds DML), so the structural constraint itself is exercised rather than the grant:
 
 | # | case | expected |
 |---|---|---|
@@ -123,68 +143,76 @@ Immutability is separate and unconditional: `BEFORE UPDATE OR DELETE` triggers o
 | B | entry + one line | COMMIT FAIL |
 | C | two unbalanced lines | COMMIT FAIL |
 | D | balanced two-line entry | COMMIT PASS |
-| E | line whose `business_id` differs from the entry | FAIL |
+| E | line referencing another business's account | FAIL |
 | F | DELETE a line of a posted entry | FAIL |
 | G | UPDATE a line of a posted entry | FAIL |
+| H | entry with no source binding (AL-01) | COMMIT FAIL |
 
-Each case is run as every one of the six database roles.
+A PASS requires **both** matrices. Neither substitutes for the other.
 
-**Future-phase implication.** The same validation routine is the single place a future accounting-period check plugs in (AL-14) — no journal schema change.
+**Future-phase implication.** The validation routine is the single plug-in point for a future accounting-period check (AL-14) — no journal schema change.
 
 ---
 
-## AL-03 — Who may physically write journal truth
+## AL-03 — Journal write authority and the unforgeable command boundary (CORRECTED)
 
-**Problem.** The plan granted `daftar_app` `SELECT, INSERT` on `journal_entries` and `journal_lines`. Any application code path — or anything holding that credential — could then insert a *balanced but unaudited* entry, bypassing the posting engine's validation, the source registry, audit creation, outbox creation, FX validation and idempotency handling. Balance alone is not integrity.
+**Problem 1.** Granting `daftar_app` `INSERT` on the journal lets any code path holding that credential insert a balanced but unaudited entry, bypassing the source binding, the fingerprint, audit, outbox and the FX checks.
 
-**Chosen solution — no runtime role holds any DML on the journal; one narrow SECURITY DEFINER primitive is the only physical writer.**
+**Problem 2 — the serious one, raised in review.** The earlier design had `accounting_post_entry` authorize by reading `app_tenant()` / `app_business()` and verifying the supplied actor is an active member of that business. **Those GUCs are caller-settable.** A stolen `daftar_app` database credential can `set_config('app.tenant_id', <victim>)`, `set_config('app.business_id', <victim>)`, pick the UUID of a genuinely active member of that business, and post an entry attributed to that member. Membership verification does not help: the attacker chooses a *real* member. This is precisely the Phase 1 provisioner actor-spoofing defect, reappearing in the ledger. **GUC scope does not prove authorization, and a caller-supplied UUID does not prove identity.**
+
+**Chosen solution — a signed Accounting Command Assertion, verified inside the database against key material `daftar_app` cannot read.**
 
 Grants:
 
 ```
-REVOKE ALL ON journal_entries, journal_lines FROM PUBLIC;
+REVOKE ALL ON journal_entries, journal_lines, accounting_source_bindings FROM PUBLIC;
 -- no INSERT/UPDATE/DELETE to any runtime role, ever
-GRANT SELECT ON journal_entries, journal_lines TO daftar_app, daftar_worker, daftar_platform;
+GRANT SELECT ON journal_entries, journal_lines, accounting_source_bindings
+  TO daftar_app, daftar_worker, daftar_platform;
 GRANT EXECUTE ON FUNCTION accounting_post_entry(...) TO daftar_app;
--- daftar_identity, daftar_resolver, daftar_provisioner: nothing at all
 ```
 
-`accounting_post_entry(...)` is SECURITY DEFINER, owned by the schema owner, and deliberately narrow — **structural integrity and atomic write authority only**:
+`daftar_app` keeps EXECUTE, and the function therefore carries the whole authority check itself. It trusts **none** of: the GUC business scope, the caller-supplied actor UUID, or any client-supplied permission claim.
 
-- accepts `business_id`, `tenant_id`, `source_type`, `source_id`, `entry_date`, `description`, the actor shape (AL-04), `request_id`, the posting fingerprint (AL-11) and a `jsonb` array of lines;
-- resolves accounts by `(business_id, system_key | code)` and refuses unknown or inactive accounts (AL-05, AL-07);
-- verifies the target business is inside the caller's RLS context (`app_tenant()` / `app_business()`), because a SECURITY DEFINER routine bypasses RLS and must re-assert it — the same discipline the Phase 1 provisioning commands use;
-- writes entry + lines + audit row + outbox row (AL-17);
-- returns `(entry_id, created)`, handling replay per AL-11;
-- contains **no domain orchestration**: no invoice logic, no allocation logic, no rate-sourcing policy. Amounts, rates and the fingerprint are computed by the TypeScript posting engine and handed over.
+**Assertion format** — the proven `0038` shape, with accounting semantics:
 
-Division of authority, stated once:
+```
+v1.<kid>.<actor uuid>.<tenant uuid>.<business uuid>.<operation kind>
+   .<source_type>.<source uuid>.<posting fingerprint>.<exp epoch s>.<jti uuid>
+   .<hmac-sha256 hex>
+```
 
-| layer | owns |
+Minted by the merchant API **only after** authentication, tenant/business resolution, RBAC authorization and branch-scope authorization have all succeeded. Verified inside `accounting_post_entry` by `accounting_actor(kinds TEXT[])`, which:
+
+- recomputes the HMAC with the key named by `<kid>`, read from `accounting_assertion_keys` — a table with **no grants at all**, unreadable by `daftar_app` and by every other runtime role;
+- binds every field above, so an assertion minted for one business, actor, operation, source or payload cannot be replayed for another. Because the **posting fingerprint** is inside the signature, altering a single amount invalidates the assertion;
+- enforces the expiry (60 s) and single-transaction use with cross-transaction replay protection via `accounting_assertion_uses` (`jti` + `pg_current_xact_id()`), exactly as `0038` does;
+- returns the actor; the function derives tenant, business and actor **from the verified assertion**, never from a GUC or an argument. The GUCs remain only as RLS scoping for *reads*.
+
+**Key ownership and rotation.** A **separate** key namespace from provisioning — `accounting_assertion_keys`, with its own `accounting_assertion_key_install` / `_retire` commands whose EXECUTE belongs to `daftar_platform` alone. Reusing the provisioning key was rejected: the two domains have different blast radii and different rotation cadences, and a single key would mean a provisioning-key compromise is also a ledger compromise. Rotation is the Phase 1 CLI pattern (install new kid → roll the API → retire old kid), and the CLI never prints key material.
+
+### Threat boundary, stated honestly
+
+| threat | outcome |
 |---|---|
-| TypeScript posting engine | domain orchestration, FX computation, rounding, fingerprint, the developer-facing API |
-| `accounting_post_entry` | atomic write authority and the refusal of malformed input |
-| constraints + triggers | the invariants, at COMMIT, against every role |
+| **Stolen `daftar_app` database credential, alone** | **Cannot post.** It cannot read the assertion key, so it cannot mint a valid assertion; the function refuses every call without one. No cross-business posting, no actor impersonation, no arbitrary accounting command. It can still `SELECT` whatever RLS allows for its GUC scope — a confidentiality exposure that exists today in Phase 1 and is unchanged here. |
+| **Fully compromised merchant API process** | **Can post as any business and actor it can reach**, because the minting key is in that process's memory. This is a strictly larger compromise and is **not** defended by this design. Stated plainly rather than implied away. |
+| Compromised worker or platform process | Cannot post: neither holds EXECUTE on the primitive, and neither holds the minting key. |
+| Compromised `daftar_platform` credential | Can install or retire assertion keys (it is the key-management principal) but holds no EXECUTE on the posting primitive and cannot read existing key secrets. |
 
-**Rejected alternatives.** `daftar_app` INSERT (the plan's original — bypass demonstrated above). Updatable views or rules (obscure failure modes). Moving domain logic into PL/pgSQL (explicitly forbidden: the DB primitive must stay narrow).
+Mitigations for the second row, which reduce blast radius without pretending to eliminate it: the key lives only in the merchant API process (never the worker, never the admin API); assertions expire in 60 seconds and are single-transaction; every posting writes an audit row naming actor, source and request id; and moving the signer behind the existing KMS bridge is recorded as the future hardening step (P2-S8 review item).
 
-**Database implication.** Two tables with no write grants; one EXECUTE-granted function; the `0039` `catalog_identifiers` precedent already proves this pattern works in this codebase.
+**Division of authority.** TypeScript engine → domain orchestration, FX computation, rounding, fingerprint, the mint call. `accounting_post_entry` → assertion verification and atomic write authority. Constraints and triggers → the invariants at COMMIT. PostgreSQL logic stays narrow: verification plus writes, no domain orchestration.
 
-**API implication.** `@daftar/accounting` remains the only module that may call the primitive; static guard (new) fails the build if any module outside it writes SQL naming `journal_entries` or `journal_lines`.
-
-**Security implication.** A compromised merchant application credential can still only produce well-formed, audited, outboxed, fingerprinted entries inside its own business. It cannot write an unaudited entry, an unbalanced entry, a cross-business entry, or mutate history.
-
-**Test implication.** For each of the six roles: direct INSERT/UPDATE/DELETE on both tables → permission denied. EXECUTE of the primitive by a role other than `daftar_app` → denied. The primitive called with a business outside the RLS context → refused inside the function.
-
-**Future-phase implication.** Worker-initiated posting (Phase 3+) gains `GRANT EXECUTE` to `daftar_worker` plus a registered system actor (AL-04) — no new write path.
+**Test implication.** No assertion → refused. Assertion minted for business A replayed against business B → refused. Actor field altered → HMAC fails. A single amount changed after minting → fingerprint mismatch inside the signature → refused. Expired → refused. Replayed in a second transaction → refused. Wrong operation kind → refused. `daftar_app` reading `accounting_assertion_keys` → permission denied. Every runtime role attempting direct journal DML → permission denied (Matrix 1). A stolen-credential simulation that sets arbitrary GUCs and supplies a real member's UUID → **refused**, which is the regression test for this exact defect.
 
 ---
 
-## AL-04 — Actor authority model
+## AL-04 — Actor model
 
-**Problem.** `posted_by_user_id NOT NULL` combined with a mention of a "system actor" is contradictory, and inventing a synthetic user row to represent the system is forbidden.
+**Problem.** `posted_by_user_id NOT NULL` plus a mention of a "system actor" is contradictory, and inventing a synthetic user to represent the system is forbidden. Separately — and more seriously — the actor must not be believable merely because a caller supplied it (AL-03).
 
-**Chosen solution — an explicit two-shape actor, enforced by CHECK; Phase 2 policy permits only the user shape.**
+**Chosen solution — an explicit two-shape actor, enforced by CHECK; the value derived from a verified assertion, never from a caller.**
 
 ```
 actor_kind        TEXT NOT NULL CHECK (actor_kind IN ('user','system')),
@@ -196,21 +224,13 @@ CHECK (
 )
 ```
 
-`accounting_system_actors` is a closed registry **seeded empty in Phase 2**. Every Phase 2 posting is therefore `actor_kind='user'`. The *shape* exists from day one so that a later worker-initiated posting registers a key instead of inventing a fake user; the *policy* in Phase 2 is that no system actor exists yet. This satisfies both directions the directive allowed, without ambiguity.
+`accounting_system_actors` is a closed registry **seeded empty in Phase 2**, so every Phase 2 posting is `actor_kind='user'`. The shape exists from day one so a later worker-initiated posting registers a key instead of inventing a fake user; the Phase 2 policy is that no system actor exists yet.
 
-**Authority derivation — the Phase 1 lesson, applied.** The actor is never taken from a client DTO. The TypeScript layer passes the authenticated user id from server context, and `accounting_post_entry` independently verifies that this user holds an **active membership in the target business**. A forged id therefore fails in the database, not merely in the service. A request body field named `actorUserId` is ignored by the contract and asserted absent by a contract test.
+**Authority.** The actor identity is taken from the **signed assertion** (AL-03) and from nowhere else — not from a DTO, not from a GUC, not from a function argument the caller controls. Membership is additionally verified, but as a defence-in-depth check, **not** as the proof of identity: the earlier version treated membership as the authorization, which an attacker defeats by naming a genuine member.
 
-**Rejected alternatives.** A synthetic "system" user row (forbidden; pollutes identity and audit). `posted_by_user_id NOT NULL` alone (cannot express a future worker posting). A nullable user id with no `actor_kind` (unreadable shape, no CHECK possible).
+**Rejected alternatives.** A synthetic system user (forbidden; pollutes identity and audit). `posted_by_user_id NOT NULL` alone (cannot express a future worker posting). A nullable user id with no `actor_kind` (no CHECK expressible). Caller-supplied actor with membership verification only (the defect corrected above).
 
-**Database implication.** Three columns plus one CHECK on `journal_entries`; a registry table; an FK to `users`.
-
-**API implication.** DTOs never carry actor identity. Responses expose the actor as `{ kind, userId | systemKey }`.
-
-**Security implication.** Closes the Phase 1 class of defect (caller-settable actor identity) by construction.
-
-**Test implication.** `user` shape with NULL user id → CHECK FAIL. `system` shape with a user id → CHECK FAIL. Unregistered system key → FK FAIL. Actor who is not a member of the business → refused inside the primitive. `actorUserId` supplied in the request body → ignored.
-
-**Future-phase implication.** Compatible with `audit_events.actor_user_id` (nullable), which carries the system key in `metadata` when the actor is a system one.
+**Test implication.** `user` shape with NULL user id → CHECK FAIL. `system` shape with a user id → CHECK FAIL. Unregistered system key → FK FAIL. Actor in the request body → ignored. Actor field tampered after minting → HMAC failure. Actor who is a real member but whose assertion names a different actor → refused.
 
 ---
 
@@ -332,41 +352,78 @@ THEN RAISE EXCEPTION 'chart backfill incomplete — refusing to finish the migra
 
 ---
 
-## AL-09 — FX line consistency
+## AL-09 — FX line consistency and the exact conversion formula
 
-**Problem.** A line carrying both `debit_minor`/`credit_minor` and an FX snapshot can be internally contradictory: a partially filled snapshot, a domestic line with a rate ≠ 1, or a base amount that does not match the booked side.
-
-**Chosen solution — structural completeness by CHECK; arithmetic correctness by the AL-02 commit-time trigger.**
-
-Immediate CHECK constraints on `journal_lines`:
+**Structural completeness — immediate CHECK constraints on `journal_lines`:**
 
 ```
-CHECK ((debit_minor > 0)::int + (credit_minor > 0)::int = 1)        -- exactly one side
+CHECK ((debit_minor > 0)::int + (credit_minor > 0)::int = 1)
 CHECK (debit_minor >= 0 AND credit_minor >= 0)
-CHECK (base_amount_minor = GREATEST(debit_minor, credit_minor))     -- base = the booked side
+CHECK (base_amount_minor = GREATEST(debit_minor, credit_minor))
 CHECK (fx_rate > 0)
 CHECK (
   (txn_currency =  base_currency AND fx_rate = 1
      AND txn_amount_minor = base_amount_minor
-     AND fx_rate_source = 'base'      AND fx_rate_at IS NOT NULL)
+     AND fx_rate_source = 'base'   AND fx_rate_at IS NOT NULL)
   OR
   (txn_currency <> base_currency AND fx_rate > 0
      AND fx_rate_source IN ('manual','provider')
-     AND fx_rate_at IS NOT NULL       AND txn_amount_minor > 0)
+     AND fx_rate_at IS NOT NULL   AND txn_amount_minor > 0)
 )
 ```
 
-Notes that matter:
+`base_currency` is denormalised onto the line so the CHECK is self-contained; `fx_rate NUMERIC(20,10)`, never float; domestic lines use the explicit sentinel `fx_rate_source = 'base'`. **Partially populated FX snapshots are structurally impossible.**
 
-- `base_currency` is denormalised onto the line (copied from the entry, itself copied from the business) so the CHECK is self-contained and a historical line remains readable without a join. Immutability comes from the posted-row trigger.
-- `fx_rate NUMERIC(20,10) NOT NULL` — never float, never double, never a JavaScript number.
-- Domestic lines use the explicit sentinel `fx_rate_source = 'base'`, so "domestic" is a stated fact rather than an inferred NULL. **Partially populated FX snapshots are structurally impossible.**
+### The conversion formula, exactly
 
-**Why the base↔txn arithmetic is a trigger, not a CHECK.** `base = HALF_EVEN(txn × rate)` needs both currencies' minor units, which requires reading the `currencies` table — a `CHECK` constraint may only call IMMUTABLE expressions and may not read other tables. The equality is therefore asserted by the same deferred constraint trigger that validates balance (AL-02), which may join freely. It is still database-enforced against every role; it simply fires at COMMIT rather than on the row. This is a real trade-off and is recorded rather than glossed over.
+`fx_rate` means: **1 major unit of the transaction currency = R major units of the base currency.**
 
-**Rejected alternatives.** Nullable FX columns with "the service will fill them" (the defect). A per-line CHECK calling a non-IMMUTABLE function (PostgreSQL refuses it). Storing the rate as a float (forbidden).
+Let `et` = transaction currency minor-unit exponent, `eb` = base currency minor-unit exponent, `rate_scale = 10^10`, and `rate_scaled = R × rate_scale` (an exact integer, since `fx_rate` is `NUMERIC(20,10)`).
 
-**Test implication.** Rate without source → FAIL. Domestic line with rate ≠ 1 → FAIL. Foreign line with rate 0 or negative → FAIL. `base_amount_minor` ≠ booked side → FAIL. `base` ≠ HALF_EVEN(txn × rate) → FAIL at COMMIT. Cases in JOD (3 minor units) and LBP (large magnitude).
+From `base_major = txn_major × R` and `x_minor = x_major × 10^e`:
+
+```
+base_minor = txn_minor × R × 10^(eb − et)
+           = txn_minor × rate_scaled × 10^(eb − et) / 10^10
+```
+
+Kept in integers by moving the sign of the exponent into either side:
+
+```
+numerator   = txn_minor × rate_scaled × 10^max(0, eb − et)
+denominator = rate_scale × 10^max(0, et − eb)
+base_minor  = HALF_EVEN(numerator / denominator)
+```
+
+with half-even on non-negative integers defined as:
+
+```
+q = numerator / denominator          -- floor
+r = numerator − q × denominator
+if 2r > denominator            -> q + 1
+if 2r < denominator            -> q
+if 2r = denominator            -> q if q is even else q + 1
+```
+
+**No floating point at any step.** In TypeScript every value is `BigInt`. In PostgreSQL the same expression is evaluated in `NUMERIC`/`BIGINT` with the identical floor-and-remainder comparison — `ROUND()` is **not** used, because PostgreSQL rounds half-up and would disagree with the engine on ties. The two implementations are mathematically identical by construction and are pinned by a shared test vector table.
+
+### Worked examples
+
+| # | case | txn_minor | R | rate_scaled | et → eb | numerator / denominator | base_minor | check |
+|---|---|---:|---:|---:|---|---|---:|---|
+| 1 | USD→ILS | 10 000 (100.00) | 3.70 | 37 000 000 000 | 2→2 | 3.7×10¹⁴ / 10¹⁰ | 37 000 | 370.00 ILS ✓ |
+| 2 | JOD→ILS | 10 000 (10.000) | 5.25 | 52 500 000 000 | 3→2 | 5.25×10¹⁴ / 10¹¹ | 5 250 | 52.50 ILS ✓ |
+| 3 | ILS→JOD | 5 250 (52.50) | 0.1904761905 | 1 904 761 905 | 2→3 | 1.000000000125×10¹⁴ / 10¹⁰ | 10 000 | 10.000 JOD ✓ |
+| 4 | LBP→ILS (large) | 1 000 000 000 (10 000 000.00) | 0.0000111 | 111 000 | 2→2 | 1.11×10¹⁴ / 10¹⁰ | 11 100 | 111.00 ILS ✓ |
+| 5 | halfway, q even | 5 (0.05) | 0.1 | 1 000 000 000 | 2→2 | 5×10⁹ / 10¹⁰ → q=0, 2r=10¹⁰=denominator | **0** | ties to even ✓ |
+| 6 | halfway, q odd | 15 (0.15) | 0.1 | 1 000 000 000 | 2→2 | 1.5×10¹⁰ / 10¹⁰ → q=1, 2r=10¹⁰=denominator | **2** | ties to even ✓ |
+| 7 | `MAX_MONEY_MINOR` boundary | 10¹⁸ | 1.0 | 10¹⁰ | 2→2 | 10²⁸ / 10¹⁰ | 10¹⁸ | at the cap, accepted; ×1.000000001 → rejected by AL-10 |
+
+Cases 5 and 6 are the ones that separate HALF_EVEN from HALF_UP and are mandatory test vectors. Case 7's intermediate (10²⁸) exceeds `BIGINT` and is the reason intermediates live in `BigInt`/`NUMERIC` and never touch a `bigint` column (AL-10).
+
+**Why the arithmetic is a trigger, not a CHECK.** The formula needs both currencies' minor-unit exponents, which requires reading `currencies`; a `CHECK` may only call IMMUTABLE expressions and may not read other tables. The equality is therefore asserted by the same deferred constraint trigger that validates balance (AL-02), which may join freely. Still database-enforced against every writer — it simply fires at COMMIT.
+
+**Test implication.** All seven vectors above in both implementations, asserted equal. Rate without source → FAIL. Domestic line with rate ≠ 1 → FAIL. Foreign line with rate ≤ 0 → FAIL. `base_amount_minor` ≠ booked side → FAIL. `base` ≠ HALF_EVEN(txn × rate) → FAIL at COMMIT.
 
 ---
 
@@ -389,28 +446,64 @@ A financially valid operation must never wrap, truncate or silently coerce. **Pl
 
 ---
 
-## AL-11 — Idempotency semantics and mismatch behaviour
+## AL-11 — Idempotency, and the canonical fingerprint specification
 
-**Chosen solution — `UNIQUE (business_id, source_type, source_id)` plus a canonical financial fingerprint.**
+**Chosen solution — `UNIQUE (business_id, source_type, source_id)` plus a precisely specified financial fingerprint.**
 
-`journal_entries.posting_fingerprint CHAR(64) NOT NULL` — SHA-256 over a canonical serialization of the **financial content only**:
+`journal_entries.posting_fingerprint CHAR(64) NOT NULL` — SHA-256 over a **canonical byte string**, not over `JSON.stringify()`.
 
-*included*: business id, source type, source id, entry date, and the ordered list of `(account system_key or code, side, base_amount_minor, txn_currency, txn_amount_minor, fx_rate, branch_id, warehouse_id)`.
-*excluded*: description, line memos, request id, actor, timestamps — a retry differing only in narrative is the same financial fact.
+### Canonical serialization (version `acctfp/1`)
+
+```
+acctfp/1\n
+<tenant_id>\n<business_id>\n<source_type>\n<source_id>\n<entry_date>\n
+<line>\n<line>\n...
+```
+
+Each line, fields separated by `\x1f` (unit separator), lines terminated by `\x1e` (record separator):
+
+```
+<account_identity><side><base_amount_minor><base_currency>
+<txn_currency><txn_amount_minor><fx_rate><fx_rate_source>
+<fx_rate_at><branch_id><warehouse_id>
+```
+
+Normalization rules, all mandatory:
+
+| element | rule |
+|---|---|
+| version prefix | literal `acctfp/1`, so the format can evolve without silently changing meaning |
+| UUID | lowercase canonical 8-4-4-4-12, no braces |
+| `account_identity` | `system_key` when present, else `code:` + the code — resolved identity, never the display name, never the surrogate id |
+| `side` | literal `D` or `C` |
+| amounts | decimal integer, no sign for positive, no leading zeros, no separators |
+| currency | uppercase ISO-4217 |
+| `fx_rate` | fixed **10** fraction digits, always, including `1.0000000000` for domestic lines |
+| `fx_rate_source` | lowercase enum literal |
+| `fx_rate_at` | RFC 3339 UTC with `Z`, second precision |
+| `entry_date` | `YYYY-MM-DD` |
+| NULL | the single byte `\x00` — distinct from an empty string, so a NULL branch and an empty branch cannot collide |
+| line ordering | sort ascending by the serialized line bytes themselves, so ordering is defined by the canonical form and not by insertion order |
+| text | no free text is included, so no Unicode normalization question arises; if a future version adds text it must specify NFC |
+| encoding | UTF-8 |
+
+**Included** (every immutable field that changes the financial snapshot): tenant, business, source type, source id, entry date, and per line — resolved account identity, side, base amount, base currency, transaction currency, transaction amount, rate, rate source, rate timestamp, branch, warehouse.
+
+**Deliberately excluded**, and documented as narrative-only: description, line memos, request id, actor, created timestamps. A retry differing only in narrative is the same financial fact. **A materially different FX snapshot is not narrative** — rate, source and timestamp are all inside the fingerprint, so changing any of them produces a conflict rather than a silent replay.
+
+### Behaviour matrix
 
 | scenario | behaviour |
 |---|---|
-| sequential retry, identical content | `created=false`, existing entry id returned; **no** second audit row, **no** second outbox event |
-| concurrent retry, identical content | one transaction inserts; the loser catches the unique violation, re-reads, compares the fingerprint, returns `created=false` |
-| same source, **materially different** financial content | `accounting.idempotency_conflict` → HTTP 409, carrying the existing entry id. **Never silent success, never a second entry** |
-| rollback then retry | nothing persisted; the retry posts normally — uniqueness lives in the database, not in a cache |
-| same source, different description only | `created=false` (fingerprint unchanged by design) |
+| sequential retry, identical content | `created=false`, existing entry id; no second audit row, no second outbox event |
+| concurrent retry, identical content | one inserts; the loser catches the unique violation, re-reads, compares fingerprints, returns `created=false` |
+| same source, **materially different** content (including a different rate, source or rate timestamp) | `accounting.idempotency_conflict` → HTTP 409 with the existing entry id. **Never silent success** |
+| rollback then retry | nothing persisted; the retry posts normally — uniqueness lives in the database |
+| same source, different description only | `created=false` |
 
-The comparison happens **inside** `accounting_post_entry`, so no caller can skip it. The Phase 1 transport-level `Idempotency-Key` header remains as an additional, independent guard on the HTTP mutation path.
+The comparison happens inside `accounting_post_entry`, so no caller can skip it. The fingerprint is also bound into the command assertion (AL-03), so tampering with amounts after minting invalidates the signature before the fingerprint is even compared.
 
-**Rejected alternative.** Returning the existing entry on any replay regardless of content — it would let a caller believe a *different* financial fact was recorded when it was not. That is the single most dangerous failure mode in a ledger API.
-
-**Test implication.** All five rows above, plus the concurrent case with two real connections.
+**Test implication.** All five rows, the concurrent case on two real connections, and a vector suite pinning the canonical bytes for a known entry so an accidental serialization change fails loudly rather than silently re-hashing history.
 
 ---
 
@@ -431,44 +524,62 @@ The comparison happens **inside** `accounting_post_entry`, so no caller can skip
 
 ---
 
-## AL-13 — Opening balance model
+## AL-13 — Opening balance model and its exact state machine (CORRECTED)
 
-**Chosen solution.**
+**Problem.** The earlier version said `posted` is "terminal and immutable" and then described a `posted → superseded` transition. Those cannot both be true.
+
+**Chosen lifecycle — financial CONTENT is immutable after posting; ONE controlled status transition exists.**
 
 ```
-accounting_opening_balances(business_id, id, as_of_date,
-  status TEXT CHECK (status IN ('draft','posted','superseded')),
-  journal_entry_id UUID NULL, actor_*, created_at, posted_at)
-accounting_opening_balance_lines(business_id, opening_balance_id, account_id, side,
-  amount_minor, txn_currency, txn_amount_minor, fx_rate, fx_rate_source, fx_rate_at)
-
-CREATE UNIQUE INDEX ON accounting_opening_balances (business_id) WHERE status = 'posted';
+draft ──post──▶ posted ──supersede──▶ superseded
+  │                                        
+  └──discard──▶ (row deleted, no journal entry ever existed)
 ```
 
-- **Draft lifecycle**: freely editable while `draft`; `posted` is terminal and immutable (BEFORE UPDATE trigger on the posted row).
-- **Exactly one posted set per business**, enforced by the partial unique index.
-- **Explicit equity plug**: the engine computes `plug = Σcredits − Σdebits` over the merchant-supplied positions and emits a **visible line** to the `opening_equity` system account. Never an invisible adjustment; if the plug is zero, no line is emitted.
-- **Date rules**: `as_of_date` is the entry date, and the opening entry is the only entry permitted to predate the business's first period when periods land (AL-14).
-- **FX**: foreign positions carry a complete snapshot with `fx_rate_source='manual'` and `fx_rate_at = as_of_date`.
-- **Idempotency**: `source_type='opening_balance'`, `source_id = accounting_opening_balances.id`.
-- **Corrections after posting**: reverse the opening entry (AL-12), mark the set `superseded` (a change to the *source* row, audited — not to the journal), then post a new set. The partial unique index makes replacement impossible without that sequence.
-- **Not a magical import**: it goes through `accounting_post_entry` exactly like every other posting.
+| property after `posted` | rule | enforcement |
+|---|---|---|
+| lines | immutable | BEFORE UPDATE/DELETE trigger on `accounting_opening_balance_lines` raises when the parent is not `draft` |
+| `as_of_date` | immutable | BEFORE UPDATE trigger |
+| `journal_entry_id` | immutable | BEFORE UPDATE trigger |
+| `id` (source identity) | immutable | primary key + the AL-01 binding, which is undeletable |
+| `status` | **the only mutable column**, and only `posted → superseded` | BEFORE UPDATE trigger admits exactly that one transition and rejects every other column change |
+| supersession precondition | a valid reversal of this opening balance's journal entry must already exist | the same trigger checks `accounting_reversals` for `original_entry_id = journal_entry_id`; absent → `accounting.supersede_without_reversal` |
+| who may do it | the narrow audited command only — no runtime role holds UPDATE on the table | grants + AL-03 write boundary |
+| audit | mandatory row in the same transaction | AL-17 |
 
-**Test implication.** Two posted sets → unique violation. Plug line present and correct, including the zero case. Edit after posting → FAIL. Foreign-currency opening with a full snapshot. Replacement only via reversal + supersede.
+So the resolved statement is: **the posted financial content is immutable; the source row carries one audited, precondition-guarded status transition.** An arbitrary `UPDATE` is denied by grants, and even through the owner the trigger admits nothing but that single transition.
+
+**Rejected alternative.** An append-only `accounting_opening_balance_supersessions` record instead of a status column. It is equally sound and avoids mutating the source row at all; it was rejected only because "which set is current" then requires a join on every read, and the partial unique index below gives the same guarantee more cheaply. Recorded so the choice is visible rather than assumed.
+
+Other properties, unchanged: `CREATE UNIQUE INDEX ... ON accounting_opening_balances (business_id) WHERE status = 'posted'` gives exactly one current set per business, and makes replacement impossible without first superseding; the equity plug is an explicit visible line to the `opening_equity` system account, never an invisible adjustment; foreign positions carry a complete FX snapshot with `fx_rate_source='manual'`; `source_type='opening_balance'`, `source_id = accounting_opening_balances.id`; and it posts through `accounting_post_entry` like everything else.
+
+**Test implication.** Edit lines after posting → FAIL. Change `as_of_date` after posting → FAIL. Change `journal_entry_id` → FAIL. `posted → superseded` without a reversal → FAIL. With a reversal → PASS, audited. `superseded → posted` → FAIL. Two posted sets → unique violation. Plug line present and correct, including the zero case.
 
 ---
 
-## AL-14 — Accounting periods: placement
+## AL-14 — Posting-date semantics, and where periods belong (CORRECTED)
 
-**Decision — periods are NOT in the first implementation slice.** They become slice **P2-S6**, conditional on Tech Lead confirmation at that point.
+**Periods are NOT in the first implementation slice.** They are slice **P2-S6**, conditional on confirmation at that point. Nothing in P2-S1…P2-S5 needs a closed period to be correct, and designing close/reopen concurrency before any posting traffic exists would be speculation. `journal_entries.entry_date DATE NOT NULL` ships in P2-S2, and the AL-02 validation routine is the documented plug-in point, so adding periods later requires **no journal schema change**. When periods land, **the period model becomes the authoritative posting-date gate** and the interim rules below are superseded by it.
 
-**Reasoning.** Periods introduce a second temporal authority — timezone and date semantics, close/reopen actors and reasons, and close↔post concurrency — whose only Phase 2 consumer would be "prevent back-dating". Phase 2 has three sources, all created by an authenticated merchant action dated today or at an explicit opening date. Nothing in P2-S1…P2-S5 needs a closed period to be correct. Designing close/reopen concurrency before any posting traffic exists would be speculation, and the directive forbids introducing them merely because the plan mentions them.
+### The arbitrary 10-year rule is withdrawn
 
-**What is done now so periods remain cheap to add.** `journal_entries.entry_date DATE NOT NULL` ships in P2-S2, and the AL-02 validation routine is the single, documented plug-in point for a future period check — adding periods later requires **no journal schema change**.
+The earlier version proposed rejecting any `entry_date` before `business.created_at − 10 years`. That has **no accounting authority** and would reject legitimate history: a company founded in 1974 joining DAFTAR in 2026 has a real opening position older than any such window. It is removed, not softened.
 
-**The narrower temporal rule Phase 2 does enforce**, so back-dating is not unbounded in the meantime: `entry_date` must fall within `[business.created_at − 10 years, today + 1 day]` evaluated in the business's own timezone (`businesses.timezone`, already stored in Phase 1). This refuses absurd dates without pretending to be a period system.
+### Source-specific date semantics instead
 
-**When P2-S6 is authorized it must specify**: non-overlapping contiguous periods (exclusion constraint), open/closed state, close actor and time, reopen actor, time and mandatory reason, closed-period posting refused **in the database**, the timezone/date authority, close↔post concurrency (`FOR UPDATE` on the period row vs `FOR SHARE` on posting), and full audit.
+Each source type declares its own rule, because the correct rule genuinely differs by source. All comparisons use "today" in the **business's own timezone** (`businesses.timezone`, already stored in Phase 1), never the server's.
+
+| source | lower bound | upper bound | rationale |
+|---|---|---|---|
+| `opening_balance` | **none** — it may predate DAFTAR onboarding by any amount | `as_of_date ≤ today` | the opening position is historical by definition; an arbitrary cutoff would exclude long-running companies |
+| `manual_adjustment` | none in Phase 2; back-dating is permitted and audited | `entry_date ≤ today` | once periods exist, the open-period boundary becomes the real lower bound |
+| `reversal` | `entry_date ≥ the original entry's date` | `entry_date ≤ today` | a reversal cannot precede the fact it reverses |
+
+**Future-dated postings are forbidden in Phase 2 for every source**, explicitly and uniformly: `entry_date ≤ today` in the business timezone. The earlier draft's `today + 1 day` tolerance is withdrawn — it existed only to paper over timezone ambiguity, which resolving "today" in the business timezone removes.
+
+The rule is enforced in `accounting_post_entry` per source type, so it cannot be bypassed, and it is expressed as data (a column on `accounting_source_types`) rather than as branching logic, so a future source type declares its policy rather than editing the primitive.
+
+**When P2-S6 is authorized it must specify**: non-overlapping contiguous periods (exclusion constraint), open/closed state, close actor and time, reopen actor, time and mandatory reason, closed-period posting refused in the database, the timezone/date authority, close↔post concurrency, and full audit.
 
 ---
 
@@ -531,22 +642,26 @@ Outbox payloads carry **ids only, never amounts**, so the event stream does not 
 
 ---
 
-## AL-18 — Implementation slice boundaries
+## AL-18 — Implementation slice boundaries (CORRECTED)
 
-Each slice requires its own documented PASS before the next begins. Migration numbers are reserved per slice; `0000`–`0039` stay frozen forever and Phase 2 starts at `0040`.
+**Problem.** The earlier ordering put the journal **and** `accounting_post_entry` in P2-S2, with the source binding, fingerprint and idempotency arriving in P2-S3. That would have ended a slice with an executable ledger writer whose integrity and authority dependencies did not yet exist. A slice PASS must never mean "safe after the next slice".
 
-| slice | content | migrations | exit criteria |
-|---|---|---|---|
-| **P2-S0** | Architecture lock (this document) | **0** | Tech Lead approval |
-| **P2-S1** | `accounts`, system-key registry, seeding routine + trigger + backfill, accounting permissions | `0040`, `0041` | every existing and new business has a chart; AL-05/06/07/08 tests green |
-| **P2-S2** | Journal tables, immutability triggers, AL-02 constraint triggers, AL-09 CHECKs, narrow write authority and grants | `0042`, `0043` | raw-SQL matrix A–G green for all six roles; no write grant exists |
-| **P2-S3** | TypeScript posting engine, source-type registry, fingerprint, idempotency and concurrency, audit + outbox atomicity | `0044` | AL-11 matrix and AL-17 failure-injection matrix green |
-| **P2-S4** | Reversal, manual adjustment, opening balance — Phase-2-owned sources only | `0045`, `0046` | AL-12 and AL-13 tests green |
-| **P2-S5** | FX foundation: manual rate source, immutable snapshot, rounding, realized-FX primitive | `0047` | Phase 0 worked FX journals reproduced line by line through the engine |
-| **P2-S6** | Accounting periods — **only if confirmed at that point** (AL-14) | `0048` | close/reopen/concurrency tests green |
-| **P2-S7** | Trial balance, general ledger, account balances — live aggregation | `0049` (indexes only, if needed) | reports balance; rebuild-equals-live green |
-| **P2-S8** | Red team, cross-tenant/cross-business, raw SQL, failure injection, rollback rehearsal, performance dataset | 0 | all budgets met or materialization justified (AL-15) |
-| **P2-S9** | Release closure: full gate, RC archive, evidence, documentation | 0 | repository and extracted-archive gates both PASS with zero skips |
+**Governing rule.** *Every slice must be independently safe.* Structural schema may land before its writer exists — a table nobody can write to is safe. A writer may **not** land before every verification, binding, fingerprint, audit and outbox protection it depends on. `GRANT EXECUTE` on the posting primitive happens in exactly one slice: the one where all of them are present.
+
+| slice | content | migrations | why it is safe on its own | exit criteria |
+|---|---|---|---|---|
+| **P2-S0** | Architecture lock — decisions only | **0** | no schema, no code | Tech Lead approval |
+| **P2-S1** | `accounts`, system-key registry, seeding routine + `businesses` trigger + backfill, accounting permissions | `0040`, `0041` | a chart with no journal and no writer cannot record financial truth | every existing and new business has a chart; AL-05/06/07/08 green |
+| **P2-S2** | Journal + binding **structural schema only**: `journal_entries`, `journal_lines`, `accounting_source_types`, `accounting_source_bindings`, all CHECKs, both immutability triggers, both deferred validation triggers, RLS, **and the full REVOKE shape**. **No writer function. No EXECUTE granted to anyone.** | `0042`, `0043` | nothing can write to these tables at all — not `daftar_app`, not any runtime role, and no primitive exists yet. The invariants are already active before the first row can exist | Matrix 1 (privilege) and Matrix 2 (invariants A–H) both green |
+| **P2-S3** | Assertion keys + `accounting_actor()` verification + `accounting_post_entry` + fingerprint + audit + outbox, **and only now `GRANT EXECUTE` to `daftar_app`** | `0044`, `0045` | the writer becomes reachable in the same slice that gives it its unforgeable authority boundary, its binding integrity and its atomicity — never before | AL-03 spoofing suite, AL-11 matrix, AL-17 failure-injection matrix all green |
+| **P2-S4** | Manual adjustment, reversal, opening balance — Phase-2-owned sources | `0046`, `0047` | each source rides the already-hardened writer | AL-12 and AL-13 state-machine tests green |
+| **P2-S5** | FX foundation: manual rate source, immutable snapshot, rounding, realized-FX primitive | `0048` | additive to a hardened engine | the seven AL-09 vectors green in both implementations |
+| **P2-S6** | Accounting periods — **only if confirmed** (AL-14) | `0049` | plugs into the existing validation routine | close/reopen/concurrency green |
+| **P2-S7** | Trial balance, general ledger, account balances — live aggregation | `0050` (indexes only, if needed) | read-only | reports balance; rebuild-equals-live green |
+| **P2-S8** | Red team, cross-tenant, raw SQL, failure injection, rollback rehearsal, performance dataset, KMS-backed signer review | 0 | verification only | budgets met or materialization justified |
+| **P2-S9** | Release closure: gate, RC archive, evidence, docs | 0 | verification only | repository and extracted-archive gates both PASS, zero skips |
+
+The migration numbers shifted by one from the first version because assertion-key management is its own migration in P2-S3.
 
 ---
 
@@ -561,6 +676,13 @@ Each slice requires its own documented PASS before the next begins. Migration nu
 | K-05 | The plan said used accounts cannot be deactivated *and* may be hidden | AL-05 — one flag, deactivation allowed, history preserved |
 | K-06 | The plan required `posted_by_user_id NOT NULL` while mentioning a system actor | AL-04 — explicit actor shape, system registry seeded empty |
 | K-07 | The plan's deferred trigger was line-driven only | AL-02 — entry-side constraint trigger closes the zero-line hole |
+
+| K-08 | The first version of AL-01 claimed a source-side FK with `ON DELETE RESTRICT` stopped a source row from disappearing | **Relationally false** — that FK restricts deletion of the *journal* row, not the source row, and proves nothing about entries without a source. Corrected by the bidirectional binding registry |
+| K-09 | The first version of AL-03/AL-04 treated `app_tenant()`/`app_business()` plus membership verification as authorization | **Insufficient** — GUCs are caller-settable and an attacker names a genuine member. Corrected by the signed Accounting Command Assertion |
+| K-10 | The first version of AL-13 called `posted` terminal *and* described a `posted → superseded` transition | Corrected to one explicit state machine: content immutable, exactly one audited status transition, gated on an existing reversal |
+| K-11 | The first version of AL-14 imposed an arbitrary `created_at − 10 years` floor | Withdrawn — it has no accounting authority and rejects legitimate history. Replaced by source-specific date semantics |
+| K-12 | The first version of AL-02 claimed cases A–G run meaningfully as all six roles, and allowed sums in error messages | Corrected — two separate matrices (privilege vs invariant), and stable codes with no financial values in exceptions |
+| K-13 | The first version of AL-18 exposed the writer in P2-S2, before its authority and integrity dependencies | Corrected — structural schema and writer are separated; `GRANT EXECUTE` lands only with the full protection set |
 
 No conflict was resolved by silently preferring one document; each is recorded above.
 

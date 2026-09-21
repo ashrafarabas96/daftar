@@ -59,6 +59,16 @@
 - Cause: request rebuilt on retry.
 - Prevention: `RequestSpec` replay with the same `Idempotency-Key` (`RetryContractTest.kt`). Rule: every money-moving request carries a key generated once per user action and persisted before send.
 
+## Scenario 12 — "A stolen database credential wrote entries into someone else's books" (Phase 2)
+
+- Cause: authorization was read from `app.tenant_id` / `app.business_id`, which are caller-settable GUCs, and the actor was a UUID the caller supplied. A stolen `daftar_app` credential sets the victim's scope, names a genuinely active member of that business, and posts. Membership verification does not help — the member is real.
+- Prevention: the posting primitive derives tenant, business and actor **only** from an HMAC-signed Accounting Command Assertion, minted by the merchant API after authentication, RBAC and branch-scope checks, and verified against key material no runtime role can read (`PHASE_2_ARCHITECTURE_LOCK.md` AL-03). The assertion binds the posting fingerprint, so altering one amount invalidates the signature. This is the Phase 1 provisioner defect (R-27) generalized to the ledger before it could happen a second time. The honest limit is recorded too: a fully compromised merchant API process holds the minting key and is a larger boundary this design does not defend.
+
+## Scenario 13 — "A journal entry existed with no business fact behind it" (Phase 2)
+
+- Cause: source integrity was one-way. A foreign key from the source table to the journal restricts deleting the *journal* row; it does not stop the source row being deleted, and it says nothing about entries that never had a source.
+- Prevention: `accounting_source_bindings` links entry and source identity with mutually `DEFERRABLE` foreign keys in **both** directions, verified at COMMIT (AL-01). An orphan entry fails the commit; binding rows are undeletable by every role; detail tables reference the binding, so deleting a detail row cannot destroy identity. Case H of the invariant matrix is the standing proof.
+
 ## Entry conditions for Phase 2
 
 1. Phase 1 PASS with evidence (`PHASE_1_ACCEPTANCE_REPORT.md`) **and the Tech Lead's explicit approval of the Phase 1 pull request**.
@@ -66,4 +76,4 @@
 3. Accounting rules, multi-currency, transaction map, data model, source-of-truth matrix, state machines and golden-suite documents exist and are unchanged since Phase 0.
 4. Performance baseline recorded, so the money core can be compared against it.
 5. `PHASE_2_ACCOUNTING_EXECUTION_PLAN.md` reviewed and accepted as the execution contract.
-6. **`PHASE_2_ARCHITECTURE_LOCK.md` approved by the Tech Lead.** It resolves AL-01…AL-18 — the eighteen decisions that must be settled before migration `0040` exists — and wins over the execution plan wherever the two differ. Implementation starts at slice P2-S1, not before.
+6. **`PHASE_2_ARCHITECTURE_LOCK.md` approved by the Tech Lead, in its corrected form** (AL-01 bidirectional binding, AL-03 signed command assertion, AL-13 state machine, AL-14 source-specific dates, AL-18 safe slice ordering). It resolves AL-01…AL-18 — the eighteen decisions that must be settled before migration `0040` exists — and wins over the execution plan wherever the two differ. Implementation starts at slice P2-S1, not before.
