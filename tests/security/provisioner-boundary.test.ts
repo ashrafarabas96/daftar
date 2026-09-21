@@ -334,15 +334,16 @@ describe('provisioner boundary (§15–21): no bypass, EXECUTE-only authority', 
 
     it('the assertion key is unreachable: no runtime role can read, install or retire keys, or touch the jti registry', async () => {
       await fixture();
-      const attempts: Promise<unknown>[] = [
-        asProvisioner((c) => c.query('SELECT * FROM provisioning_assertion_keys')),
-        asProvisioner((c) => c.query(`SELECT provision_assertion_key_install('evil', decode($1, 'base64'))`, [Buffer.alloc(32, 1).toString('base64')])),
-        asProvisioner((c) => c.query(`SELECT provision_assertion_key_retire('v1')`)),
-        asProvisioner((c) => c.query('SELECT * FROM provisioning_assertion_uses')),
-        asProvisioner((c) => c.query('DELETE FROM provisioning_assertion_uses')),
-        asProvisioner((c) => c.query(`SELECT provision_actor(ARRAY['onboarding'])`)),
+      // Thunks, awaited one by one: an eagerly created rejected promise would surface as an unhandled rejection.
+      const attempts: (() => Promise<unknown>)[] = [
+        () => asProvisioner((c) => c.query('SELECT * FROM provisioning_assertion_keys')),
+        () => asProvisioner((c) => c.query(`SELECT provision_assertion_key_install('evil', decode($1, 'base64'))`, [Buffer.alloc(32, 1).toString('base64')])),
+        () => asProvisioner((c) => c.query(`SELECT provision_assertion_key_retire('v1')`)),
+        () => asProvisioner((c) => c.query('SELECT * FROM provisioning_assertion_uses')),
+        () => asProvisioner((c) => c.query('DELETE FROM provisioning_assertion_uses')),
+        () => asProvisioner((c) => c.query(`SELECT provision_actor(ARRAY['onboarding'])`)),
       ];
-      for (const a of attempts) await expect(a).rejects.toThrow(/permission denied|PROV:FORBIDDEN/);
+      for (const a of attempts) await expect(a()).rejects.toThrow(/permission denied|PROV:FORBIDDEN/);
       for (const url of [appDbUrl, workerDbUrl, identityDbUrl, resolverDbUrl]) {
         const c = new Client({ connectionString: url });
         await c.connect();
