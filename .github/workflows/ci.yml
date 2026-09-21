@@ -190,7 +190,12 @@ jobs:
     needs: workspaces
     runs-on: ubuntu-latest
     steps:
+      # Full history: gitleaks scans the pull request's commit RANGE, so with the
+      # default depth-1 checkout the base commit is absent, git writes to stderr
+      # and the action fails having scanned ~0 bytes. Depth 0 makes the scan real.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
