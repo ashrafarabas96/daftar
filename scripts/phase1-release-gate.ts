@@ -17,7 +17,7 @@
  *   npm run gate:phase1:release [-- --evidence=<file.json>] [--log-dir=<dir>]
  */
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 
@@ -153,16 +153,13 @@ const REQUIRED_DOCS = [
 ];
 
 const FORBIDDEN_ARTIFACT = /(^|\/)(\.env|.*\.log|dev-mailbox.*|.*\.tsbuildinfo|.*\.pem|.*\.key|.*\.zip)$/;
-const SKIP_DIRS = new Set(['node_modules', '.git', '.next', 'dist', 'build', '.gradle', 'coverage', 'release']);
 const RAW_CREDENTIAL = /argon2id\$[A-Za-z0-9+/=]{20,}|-----BEGIN [A-Z ]*PRIVATE KEY-----/;
 
-function walk(dir: string, visit: (file: string) => void): void {
-  for (const entry of readdirSync(dir)) {
-    if (SKIP_DIRS.has(entry)) continue;
-    const full = join(dir, entry);
-    if (statSync(full).isDirectory()) walk(full, visit);
-    else visit(full);
-  }
+/** Tracked + untracked-but-not-ignored files: exactly what a commit or export would carry. */
+function shippedFiles(): string[] {
+  const out = spawnSync('git', ['ls-files', '--cached', '--others', '--exclude-standard', '-z'], { cwd: ROOT, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+  if (out.status !== 0) throw new Error(`git ls-files failed: ${out.stderr}`);
+  return out.stdout.split('\0').filter((f) => f.length > 0 && existsSync(join(ROOT, f)));
 }
 
 const steps: (() => boolean)[] = [
@@ -225,27 +222,23 @@ const steps: (() => boolean)[] = [
   },
   () => run('dependency audit (high/critical = 0)', npm, ['audit', '--audit-level=high']),
   () =>
-    inProcess('forbidden artifact scan', () => {
-      const bad: string[] = [];
-      walk(ROOT, (f) => {
-        const rel = relative(ROOT, f);
-        if (FORBIDDEN_ARTIFACT.test(rel)) bad.push(`forbidden artifact: ${rel}`);
-      });
-      if (existsSync(join(ROOT, 'apps/api/dist'))) bad.push('stale apps/api/dist in source tree');
+    inProcess('forbidden artifact scan (files git would ship)', () => {
+      // The matrix itself builds dist/.next; what matters is what git tracks or
+      // would add — build outputs are git-ignored and must stay that way.
+      const bad = shippedFiles()
+        .filter((rel) => FORBIDDEN_ARTIFACT.test(rel))
+        .map((rel) => `forbidden artifact: ${rel}`);
+      if (shippedFiles().some((rel) => rel.startsWith('apps/api/dist/'))) bad.push('apps/api/dist is tracked or not git-ignored');
       return bad;
     }),
   () =>
-    inProcess('raw credential scan', () => {
-      const bad: string[] = [];
-      for (const top of ['apps', 'packages', 'infrastructure', 'scripts']) {
-        walk(join(ROOT, top), (f) => {
-          if (!/\.(ts|tsx|sql|kt)$/.test(f)) return;
-          if (/static-guards|export-release|phase1-release-gate/.test(f)) return;
-          if (RAW_CREDENTIAL.test(readFileSync(f, 'utf8'))) bad.push(`raw credential material: ${relative(ROOT, f)}`);
-        });
-      }
-      return bad;
-    }),
+    inProcess('raw credential scan', () =>
+      shippedFiles()
+        .filter((rel) => /^(apps|packages|infrastructure|scripts)\//.test(rel) && /\.(ts|tsx|sql|kt)$/.test(rel))
+        .filter((rel) => !/static-guards|export-release|phase1-release-gate/.test(rel))
+        .filter((rel) => RAW_CREDENTIAL.test(readFileSync(join(ROOT, rel), 'utf8')))
+        .map((rel) => `raw credential material: ${rel}`),
+    ),
   () =>
     inProcess('release documents (§76) present and non-placeholder', () =>
       REQUIRED_DOCS.flatMap((d) => {
