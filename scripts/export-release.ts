@@ -156,7 +156,8 @@ const manifest = {
     'PROVISIONING_ASSERTION_KEY=<base64 ≥32B> BOOTSTRAP_DATABASE_URL=<daftar_platform url> npm run bootstrap:provisioning-key',
   ],
 };
-writeFileSync(join(tree, 'DELIVERY_MANIFEST.json'), JSON.stringify(manifest, null, 2));
+// Trailing newline: the archive must pass its OWN `npm run format` check.
+writeFileSync(join(tree, 'DELIVERY_MANIFEST.json'), JSON.stringify(manifest, null, 2) + '\n');
 
 mkdirSync(join(ROOT, 'release'), { recursive: true });
 const zipPath = join(ROOT, 'release', 'DAFTAR_PHASE_1_RC.zip');
