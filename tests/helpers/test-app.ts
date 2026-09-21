@@ -183,6 +183,7 @@ export async function resetData(): Promise<void> {
     category_translations, categories,
     business_invitations, member_branch_scopes, membership_roles, memberships,
     entitlement_overrides, business_entitlements, support_sessions,
+    accounting_source_bindings, journal_lines, journal_entries,
     role_permissions, business_roles, accounts, warehouses, branches, businesses, tenant_memberships, tenants,
     platform_role_memberships, password_reset_tokens, session_refresh_tokens, sessions, users CASCADE`);
   // Plan registry is reference data with test-created versions — reset it to

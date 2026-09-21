@@ -22,8 +22,8 @@ Phase 2 ships as ten gated slices (`PHASE_2_ARCHITECTURE_LOCK.md` AL-18). **Each
 | slice | content | migrations | exit criteria |
 |---|---|---|---|
 | **P2-S0** | Architecture lock — decisions only | **0** | Tech Lead approval of `PHASE_2_ARCHITECTURE_LOCK.md` |
-| **P2-S1** ✅ implemented, pending Tech Lead review | `accounts`, system-key registry, seeding + trigger + backfill, permissions | `0040`, `0041` (candidates — not yet frozen) | every existing and new business has a chart; AL-05/06/07/08 tests green; guard G-3 active. Evidence: `PHASE_2_S1_ACCEPTANCE.md` |
-| **P2-S2** | Journal + binding **structural schema only**: tables, CHECKs, immutability triggers, both validation triggers, RLS and the full REVOKE shape. **No writer function, no EXECUTE granted** | `0042`, `0043` | Matrix 1 (privilege, all six roles) **and** Matrix 2 (invariants A–H, schema owner) both green |
+| **P2-S1** ✅ **ACCEPTED / FROZEN** | `accounts`, system-key registry, seeding + trigger + backfill, permissions | `0040`, `0041` (frozen; `frozenThrough` = `0041_accounting_permissions.sql`) | every existing and new business has a chart; AL-05/06/07/08 tests green; guard G-3 active. Evidence: `PHASE_2_S1_ACCEPTANCE.md`. `npm run gate:phase2:s1` is now a **permanent** regression gate and runs as P2-S2's predecessor |
+| **P2-S2** ✅ implemented, pending Tech Lead review | Journal + binding **structural schema only**: tables, CHECKs, immutability triggers, both validation triggers, RLS and the full REVOKE shape. **No writer function, no EXECUTE granted** | `0042`, `0043` (candidates — not yet frozen) | Matrix 1 (privilege, all six roles) **and** Matrix 2 (invariants A–H, schema owner) both green; guards G-1 and G-2 active; `npm run gate:phase2:s2` green. Evidence: `PHASE_2_S2_ACCEPTANCE.md` |
 | **P2-S3** | Assertion keys, assertion verification, `accounting_post_entry`, fingerprint, audit + outbox — **and only now `GRANT EXECUTE`** | `0044`, `0045` | AL-03 spoofing suite, AL-11 matrix, AL-17 failure-injection matrix green |
 | **P2-S4** | Reversal, manual adjustment, opening balance — Phase-2-owned sources only | `0046`, `0047` | AL-12 and AL-13 state-machine tests green |
 | **P2-S5** | FX foundation: manual rate source, immutable snapshot, rounding, realized-FX primitive | `0048` | the seven AL-09 vectors green in both implementations |
@@ -90,6 +90,8 @@ These hold for every line of Phase 2 code and for every later phase that posts t
 ---
 
 ## 3. Immutable double-entry journal
+
+> **Implemented in P2-S2** (migrations `0042`/`0043`, branch `phase/2-accounting-core`). What §3, §4, §6, §7, §8, §9 and §11 describe is now schema, not plan. One thing named below is deliberately **not** in P2-S2 and stays future work: the posting primitive itself. `accounting_post_entry()` does not exist, nothing holds EXECUTE on anything, and the sentence "runtime roles hold `SELECT` plus `EXECUTE` on that one function" describes P2-S3's end state — after P2-S2 runtime roles hold `SELECT` and nothing else. The structural invariants are enforced against whoever can write; today nobody can.
 
 Two tables, exactly as `DAFTAR_DATA_MODEL.md` §13:
 
@@ -178,7 +180,7 @@ Rules:
 - The balance is checked on **base-currency** amounts (`DAFTAR_MULTI_CURRENCY.md` §7.3). Foreign-currency line amounts are informational; only base amounts balance.
 - Phase 1's failure-injection discipline applies: a test proves that raw SQL inserting an unbalanced entry through `daftar_app` **fails at COMMIT**, not merely that the service refuses it.
 - The same routine refuses an entry with **fewer than two lines**, an entry whose lines reference more than one `business_id` or `tenant_id`, an entry whose status is not `posted`, an entry with no source binding (→ AL-01), and an entry whose FX arithmetic does not hold (→ AL-09). Sums are computed in `NUMERIC`, never `bigint` (→ AL-10).
-- **Two separate test matrices, not one (→ AL-02, corrected).** Claiming cases A–G "run as all six roles" was misleading: under AL-03 no runtime role holds journal DML, so the attempt fails at permission checking and never reaches the invariant. **Matrix 1** proves the privilege boundary for every role; **Matrix 2** exercises invariants A–H through the schema owner. A P2-S2 PASS requires both.
+- **Two separate test matrices, not one (→ AL-02, corrected).** Claiming cases A–G "run as all six roles" was misleading: under AL-03 no runtime role holds journal DML, so the attempt fails at permission checking and never reaches the invariant. **Matrix 1** proves the privilege boundary for every role; **Matrix 2** exercises invariants A–H through the schema owner. A P2-S2 PASS requires both. **Both are green in P2-S2**: Matrix 1 is `tests/security/journal-privilege-matrix.test.ts` (and is an enumeration over the live grant catalogue, not a hand-written list — guard G-1); Matrix 2 is `tests/integration/accounting-journal.test.ts`, run as the schema owner so that a permission error can never masquerade as invariant coverage.
 - **Errors carry stable codes and safe identifiers only (→ AL-02).** No debit/credit sums, amounts, rates or balances in exception messages — a database exception reaches driver logs where `DAFTAR_OBSERVABILITY.md` redaction cannot be re-applied. Diagnostic sums are available only through an authorized internal reconciliation path.
 
 ---
@@ -453,8 +455,8 @@ Migration numbers are **reserved per slice** (§0). No slice may use a number re
 |---|---|---|---|
 | 0040 | P2-S1 | `accounting_chart` | `accounts` (+ `system_key`), system-key registry, RLS, grants, seeding routine + `businesses` AFTER INSERT trigger, **backfill for every existing business with a hard completeness assertion** (→ AL-07, AL-08). |
 | 0041 | P2-S1 | `accounting_permissions` | Accounting permission keys and their sensitivity flags (→ AL-16). |
-| 0042 | P2-S2 | `accounting_journal` | `journal_entries`, `journal_lines`, `accounting_source_types`, `accounting_source_bindings`, the mutually deferred bidirectional FKs, XOR + non-negative + FX-completeness CHECKs, actor CHECK, immutability triggers, RLS (→ AL-01, AL-04, AL-09). |
-| 0043 | P2-S2 | `accounting_invariants` | Deferred constraint triggers on **both** tables, the shared validation routine, and the REVOKE shape that leaves no runtime role any DML. **No writer function and no EXECUTE grant in this slice** (→ AL-02, AL-18). |
+| 0042 | P2-S2 ✅ | `accounting_journal` | `journal_entries`, `journal_lines`, `accounting_source_types`, `accounting_system_actors` (created **empty**), `accounting_source_bindings`, the mutually deferred bidirectional FKs, XOR + non-negative + money-cap + FX-completeness CHECKs, actor CHECK, immutability triggers, RLS (`ENABLE` + `FORCE`), read-only grants, and the base-currency lock on `businesses` (→ AL-01, AL-04, AL-09). |
+| 0043 | P2-S2 ✅ | `accounting_invariants` | Deferred constraint triggers on **both** tables, the shared validation routine (balance, line count, ownership, base-currency agreement, exact HALF_EVEN FX arithmetic, binding presence), `accounting_pow10()` for exact powers of ten, and the REVOKE shape that leaves no runtime role any DML or EXECUTE. **No writer function and no EXECUTE grant in this slice** (→ AL-02, AL-18). |
 | 0044 | P2-S3 | `accounting_assertion_keys` | Assertion key table with no grants at all, install/retire commands granted to `daftar_platform` only, `accounting_actor()` verification (→ AL-03). |
 | 0045 | P2-S3 | `accounting_post_entry` | The narrow SECURITY DEFINER writer, fingerprint handling, audit + outbox, **and the single `GRANT EXECUTE` to `daftar_app`** (→ AL-03, AL-11, AL-17). |
 | 0046 | P2-S4 | `accounting_sources` | `accounting_manual_adjustments`, `accounting_reversals`, each referencing the binding registry plus its own deletion guard (→ AL-01, AL-12). |

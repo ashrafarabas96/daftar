@@ -254,9 +254,15 @@ describe('migration upgrade path: pre-encryption schema → latest (§13–16)',
         await pool.query(`INSERT INTO business_roles (business_id, key, name, is_system) VALUES ($1, 'cashier', 'Cashier', false)`, [biz.id]);
       }
 
-      // Apply exactly the P2-S1 migrations.
+      // Apply every migration after the checkpoint: P2-S1's two and P2-S2's
+      // two. The supported upgrade path is 0039 → latest, not 0039 → 0041.
       const applied = await runMigrations(url4);
-      expect(applied).toEqual(['0040_accounting_chart.sql', '0041_accounting_permissions.sql']);
+      expect(applied).toEqual([
+        '0040_accounting_chart.sql',
+        '0041_accounting_permissions.sql',
+        '0042_accounting_journal.sql',
+        '0043_accounting_invariants.sql',
+      ]);
 
       // Every existing business now holds all 21 required system accounts,
       // active, correctly typed, and owned by its own tenant.
@@ -317,6 +323,100 @@ describe('migration upgrade path: pre-encryption schema → latest (§13–16)',
     } finally {
       await pool.end();
       await admin.query(`DROP DATABASE IF EXISTS ${db4} WITH (FORCE)`).catch(() => undefined);
+    }
+  }, 180_000);
+
+  /**
+   * P2-S2 (directive §41): the upgrade path every deployment that already ran
+   * P2-S1 will take. The checkpoint is the FROZEN boundary — 0041 — and what
+   * follows must be exactly the two candidate migrations, must leave the
+   * journal writable by nobody, and must be a no-op on a second run.
+   */
+  it('compatibility matrix (P2-S2 §41): frozen 0041-checkpoint + existing business → 0042/0043 journal, no writer, rerun no-op', async () => {
+    await ensurePostgres();
+    const db5 = 'daftar_upgrade_0041';
+    await admin.query(`DROP DATABASE IF EXISTS ${db5} WITH (FORCE)`);
+    await admin.query(`CREATE DATABASE ${db5}`);
+    const url5 = `postgresql://${PG_USER}:${PG_PASSWORD}@localhost:${PG_PORT}/${db5}`;
+    const pool = new Pool({ connectionString: url5, max: 1 });
+    try {
+      await pool.query(bootstrapSql());
+      const preDir = migrationsUpTo('0041_accounting_permissions.sql');
+      await runMigrations(url5, preDir);
+      rmSync(preDir, { recursive: true, force: true });
+
+      // The checkpoint must be honest in both directions: the chart is there,
+      // the journal is not.
+      expect((await pool.query(`SELECT 1 FROM information_schema.tables WHERE table_name = 'accounts'`)).rows).toHaveLength(1);
+      for (const table of ['journal_entries', 'journal_lines', 'accounting_source_bindings', 'accounting_source_types', 'accounting_system_actors']) {
+        expect((await pool.query(`SELECT 1 FROM information_schema.tables WHERE table_name = $1`, [table])).rows, table).toEqual([]);
+      }
+
+      // A business that existed before the journal did.
+      const tenant = (await pool.query<{ id: string }>(`INSERT INTO tenants DEFAULT VALUES RETURNING id`)).rows[0];
+      const biz = (
+        await pool.query<{ id: string }>(
+          `INSERT INTO businesses (tenant_id, name, store_slug, country_code, base_currency, timezone)
+           VALUES ($1, 'Before Journal', 'upgrade-journal', 'PS', 'ILS', 'Asia/Hebron') RETURNING id`,
+          [tenant?.id],
+        )
+      ).rows[0];
+      expect((await pool.query<{ n: number }>(`SELECT count(*)::int AS n FROM accounts WHERE business_id = $1`, [biz?.id])).rows[0]?.n).toBe(21);
+
+      // Exactly P2-S2's two migrations follow the frozen boundary.
+      expect(await runMigrations(url5)).toEqual(['0042_accounting_journal.sql', '0043_accounting_invariants.sql']);
+
+      // The closed registries came out with the shape the slice specifies:
+      // three source types, and no system actor at all (AL-04 invents nobody).
+      expect((await pool.query<{ t: string }>(`SELECT source_type AS t FROM accounting_source_types ORDER BY sort_order`)).rows.map((r) => r.t)).toEqual([
+        'opening_balance',
+        'manual_adjustment',
+        'reversal',
+      ]);
+      expect((await pool.query<{ n: number }>(`SELECT count(*)::int AS n FROM accounting_system_actors`)).rows[0]?.n).toBe(0);
+
+      // Both deferred validators and both binding directions survived the
+      // upgrade path, not just a fresh install.
+      const triggers = (
+        await pool.query<{ t: string }>(
+          `SELECT tgname AS t FROM pg_trigger WHERE tgname IN ('journal_entry_validate', 'journal_line_validate') AND tgdeferrable AND tginitdeferred ORDER BY 1`,
+        )
+      ).rows.map((r) => r.t);
+      expect(triggers).toEqual(['journal_entry_validate', 'journal_line_validate']);
+      const fks = (
+        await pool.query<{ c: string }>(
+          `SELECT conname AS c FROM pg_constraint
+           WHERE conname IN ('accounting_source_bindings_entry_fk', 'journal_entries_binding_fk')
+             AND contype = 'f' AND condeferrable AND condeferred ORDER BY 1`,
+        )
+      ).rows.map((r) => r.c);
+      expect(fks).toEqual(['accounting_source_bindings_entry_fk', 'journal_entries_binding_fk']);
+
+      // The upgrade must not have handed anyone the ability to write.
+      const writers = (
+        await pool.query<{ g: string }>(
+          `SELECT DISTINCT r.rolname AS g
+             FROM pg_class c
+             JOIN pg_namespace n ON n.oid = c.relnamespace
+             CROSS JOIN LATERAL aclexplode(coalesce(c.relacl, acldefault('r', c.relowner))) a
+             LEFT JOIN pg_roles r ON r.oid = a.grantee
+            WHERE n.nspname = 'public'
+              AND c.relname IN ('journal_entries', 'journal_lines', 'accounting_source_bindings')
+              AND a.privilege_type IN ('INSERT', 'UPDATE', 'DELETE', 'TRUNCATE')
+              AND a.grantee <> c.relowner`,
+        )
+      ).rows;
+      expect(writers).toEqual([]);
+      expect((await pool.query(`SELECT 1 FROM pg_proc WHERE proname IN ('accounting_post_entry', 'accounting_actor')`)).rows).toEqual([]);
+
+      // The chart alone still does not start the business's financial life.
+      expect((await pool.query(`SELECT 1 FROM businesses WHERE financial_started_at IS NOT NULL`)).rows).toEqual([]);
+
+      // Second run does nothing.
+      expect(await runMigrations(url5)).toEqual([]);
+    } finally {
+      await pool.end();
+      await admin.query(`DROP DATABASE IF EXISTS ${db5} WITH (FORCE)`).catch(() => undefined);
     }
   }, 180_000);
 

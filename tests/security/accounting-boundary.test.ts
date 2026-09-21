@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { Client } from 'pg';
 import {
@@ -329,13 +331,26 @@ describe('accounting chart privilege boundary', () => {
     });
   });
 
-  it('P2-S1 has shipped no journal, no bindings and no posting primitive', async () => {
-    const { rows: tables } = await ownerPool().query<{ table_name: string }>(
-      `SELECT table_name FROM information_schema.tables
-       WHERE table_schema = 'public' AND table_name IN ('journal_entries','journal_lines','accounting_source_bindings','accounting_source_types')`,
+  /**
+   * P2-S1 is frozen, so this claim is now about what the CHART slice shipped,
+   * not about what the repository contains. P2-S2 legitimately creates the
+   * journal; asserting its absence here would make an accepted slice's
+   * regression gate block every slice that follows it (freeze directive §7).
+   *
+   * What stays true forever, and is what the chart slice actually promised:
+   * `0040` and `0041` created no journal surface of their own, and no posting
+   * primitive exists anywhere until P2-S3 grants one its authority boundary.
+   */
+  it('the accepted P2-S1 migrations shipped no journal surface, and no posting primitive exists yet', async () => {
+    const s1Sql = ['0040_accounting_chart.sql', '0041_accounting_permissions.sql']
+      .map((f) => readFileSync(join(__dirname, '../../infrastructure/database/migrations', f), 'utf8'))
+      .join('\n');
+    for (const surface of ['journal_entries', 'journal_lines', 'accounting_source_bindings', 'accounting_source_types', 'accounting_system_actors']) {
+      expect(s1Sql, surface).not.toMatch(new RegExp(`CREATE\\s+TABLE\\s+(?:IF\\s+NOT\\s+EXISTS\\s+)?${surface}\\b`, 'i'));
+    }
+    const { rows: fns } = await ownerPool().query<{ proname: string }>(
+      `SELECT proname FROM pg_proc WHERE proname IN ('accounting_post_entry','accounting_actor')`,
     );
-    expect(tables).toEqual([]);
-    const { rows: fns } = await ownerPool().query<{ proname: string }>(`SELECT proname FROM pg_proc WHERE proname = 'accounting_post_entry'`);
     expect(fns).toEqual([]);
   });
 });

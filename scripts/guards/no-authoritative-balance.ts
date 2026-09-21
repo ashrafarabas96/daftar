@@ -12,18 +12,20 @@
  * declared authoritative below. A report DTO, a query result or a TypeScript
  * field named `balance` is a read model and is none of this guard's business.
  */
+import { CONSTRAINT_OPENERS, balancedBody, stripNonSchema, topLevelItems, unquote } from './sql-schema';
 
-/** Accounting source-of-truth tables. P2-S7 adds any read-model table it introduces. */
-export const ACCOUNTING_AUTHORITY_TABLES = ['accounts'] as const;
+/**
+ * Accounting source-of-truth tables. The journal joined the list in P2-S2:
+ * a stored balance on an entry or a line would be exactly the second truth
+ * this rule exists to refuse. P2-S7 adds any read-model table it introduces.
+ */
+export const ACCOUNTING_AUTHORITY_TABLES = ['accounts', 'journal_entries', 'journal_lines', 'accounting_source_bindings'] as const;
 
 /**
  * Column names that would claim storage authority over a derived financial
  * quantity: any balance, a running debit/credit total, a stock level.
  */
 const FORBIDDEN_COLUMN_PATTERNS: readonly RegExp[] = [/(^|_)balances?($|_)/, /(^|_)(debit|credit)_(total|totals|sum|sums)($|_)/, /(^|_)stock($|_)/];
-
-/** Table-level constraint openers — these are never column definitions. */
-const CONSTRAINT_OPENERS = /^(CONSTRAINT|PRIMARY|UNIQUE|FOREIGN|CHECK|EXCLUDE|LIKE|DEFERRABLE)\b/i;
 
 export interface BalanceColumnFinding {
   readonly table: string;
@@ -34,86 +36,6 @@ export function isAuthoritativeBalanceColumn(column: string): boolean {
   const name = column.toLowerCase();
   return FORBIDDEN_COLUMN_PATTERNS.some((re) => re.test(name));
 }
-
-/**
- * Strip what is not schema: line comments, block comments, single-quoted
- * literals and dollar-quoted bodies. A comment that NAMES the anti-pattern
- * (as 0040 does, to say the column is deliberately absent) must not trip the
- * guard, and neither must a function body that happens to contain the word.
- */
-function stripNonSchema(sql: string): string {
-  let out = '';
-  let i = 0;
-  while (i < sql.length) {
-    const rest = sql.slice(i);
-    if (rest.startsWith('--')) {
-      const end = sql.indexOf('\n', i);
-      i = end === -1 ? sql.length : end;
-      continue;
-    }
-    if (rest.startsWith('/*')) {
-      const end = sql.indexOf('*/', i + 2);
-      i = end === -1 ? sql.length : end + 2;
-      continue;
-    }
-    const dollar = /^\$[A-Za-z_]*\$/.exec(rest);
-    if (dollar) {
-      const tag = dollar[0];
-      const end = sql.indexOf(tag, i + tag.length);
-      i = end === -1 ? sql.length : end + tag.length;
-      out += ' ';
-      continue;
-    }
-    if (rest.startsWith("'")) {
-      let j = i + 1;
-      while (j < sql.length) {
-        if (sql[j] === "'" && sql[j + 1] === "'") j += 2;
-        else if (sql[j] === "'") break;
-        else j += 1;
-      }
-      i = j + 1;
-      out += " '' ";
-      continue;
-    }
-    out += sql[i];
-    i += 1;
-  }
-  return out;
-}
-
-/** Read the balanced parenthesised body that starts at `open`. */
-function balancedBody(sql: string, open: number): string | null {
-  let depth = 0;
-  for (let i = open; i < sql.length; i += 1) {
-    if (sql[i] === '(') depth += 1;
-    else if (sql[i] === ')') {
-      depth -= 1;
-      if (depth === 0) return sql.slice(open + 1, i);
-    }
-  }
-  return null;
-}
-
-/** Split a CREATE TABLE body on top-level commas only. */
-function topLevelItems(body: string): string[] {
-  const items: string[] = [];
-  let depth = 0;
-  let current = '';
-  for (const ch of body) {
-    if (ch === '(') depth += 1;
-    if (ch === ')') depth -= 1;
-    if (ch === ',' && depth === 0) {
-      items.push(current);
-      current = '';
-      continue;
-    }
-    current += ch;
-  }
-  if (current.trim().length > 0) items.push(current);
-  return items;
-}
-
-const unquote = (ident: string): string => ident.replace(/^"(.*)"$/, '$1').toLowerCase();
 
 /**
  * Find authoritative balance columns declared on any of `tables` in one SQL

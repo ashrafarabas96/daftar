@@ -129,6 +129,15 @@ jobs:
         run: npm run gate:phase2:s1
         env:
           PG_PORT: '5432'
+      # P2-S2 keeps P2-S1 as a permanent predecessor and adds the journal
+      # structural core: the migration boundary (0042 + 0043, nothing after),
+      # no P2-S3 posting surface, both deferred validators, bidirectional
+      # deferred bindings, unconditional immutability, guards G-1/G-2/G-3, and
+      # the live privilege and invariant matrices.
+      - name: Phase 2 slice gate — P2-S2
+        run: npm run gate:phase2:s2
+        env:
+          PG_PORT: '5432'
       - name: Tampered-migration hard-fail proof
         run: |
           set -e

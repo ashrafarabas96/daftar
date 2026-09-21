@@ -7,6 +7,7 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { ACCOUNTING_AUTHORITY_TABLES, findAuthoritativeBalanceColumns } from './guards/no-authoritative-balance';
+import { findFloatRateColumns } from './guards/no-float-rate';
 
 const ROOT = join(__dirname, '..');
 let failures = 0;
@@ -280,8 +281,29 @@ for (const dir of ['apps/api/src', 'apps/web/src', 'apps/admin/src', 'packages']
   }
 }
 
+// Rule 16 — GUARD G-2 (Architecture Lock, P2-S2): no floating-point financial
+// rate in authoritative accounting storage. Rule 6's SQL half keys off
+// `amount|price|total|balance`, so a column named `fx_rate` passes it
+// untouched; this is the rate-shaped half. Scoped to accounting tables on
+// purpose — a conversion rate on a marketing funnel is not ledger authority,
+// and a repository-wide ban would be a guard nobody could live with.
+{
+  const migrations = walk(join(ROOT, 'infrastructure/database/migrations'), /\.sql$/);
+  for (const f of migrations) {
+    for (const hit of findFloatRateColumns(readFileSync(f, 'utf8'))) {
+      fail('no-float-rate', f, `${hit.table}.${hit.column} ${hit.detail}`);
+    }
+  }
+  // A guard watching nothing is decorative: the rate column it exists for
+  // must actually be in the tree.
+  const schema = migrations.map((f) => readFileSync(f, 'utf8')).join('\n');
+  if (!/CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?journal_lines\b/i.test(schema)) {
+    fail('no-float-rate', 'infrastructure/database/migrations', 'journal_lines does not exist — G-2 is watching nothing');
+  }
+}
+
 if (failures > 0) {
   console.error(`\nSTATIC GUARDS: FAIL (${failures})`);
   process.exit(1);
 }
-console.log('STATIC GUARDS: PASS (15 rules)');
+console.log('STATIC GUARDS: PASS (16 rules)');

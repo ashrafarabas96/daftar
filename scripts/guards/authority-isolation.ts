@@ -51,6 +51,22 @@ export const MIGRATION_ROLE = 'daftar_migrator';
 /** Tables whose write authority this rule isolates. */
 export const CHART_TABLES = ['accounts', 'accounting_system_account_keys'] as const;
 
+/**
+ * P2-S2's ledger tables. The rule for these is STRICTER than for the chart:
+ * the chart has one legitimate writer (the seeding routine, owned by the
+ * internal principal), while the journal has NONE. No grant in any migration
+ * may hand anyone — runtime role, internal principal or PUBLIC — INSERT,
+ * UPDATE, DELETE or TRUNCATE on them. The writer arrives in P2-S3 with its
+ * authority boundary, or not at all.
+ */
+export const JOURNAL_TABLES = [
+  'journal_entries',
+  'journal_lines',
+  'accounting_source_bindings',
+  'accounting_source_types',
+  'accounting_system_actors',
+] as const;
+
 /** The two SECURITY DEFINER routines whose OWNER is the authority itself. */
 export const SEEDING_ROUTINES = ['accounting_seed_chart(uuid)', 'accounting_seed_chart_trg()'] as const;
 
@@ -243,6 +259,17 @@ export function findAuthorityViolations(src: AuthoritySources): string[] {
     v.push(
       `bootstrap.sql grants ${INTERNAL_ROLE} CREATE on schema public — that privilege belongs to one migration statement, not to the permanent role shape`,
     );
+  }
+
+  // 9. The journal has no writer at all (AL-18 / directive §32, §40). This
+  //    reads every migration, so a GRANT added by a later slice is caught the
+  //    moment it lands rather than when someone re-reads the file.
+  for (const grant of grants) {
+    const journal = grant.tables.filter((t) => (JOURNAL_TABLES as readonly string[]).includes(t));
+    if (journal.length === 0) continue;
+    const write = grant.privileges.filter(isWrite);
+    if (write.length === 0) continue;
+    v.push(`${grant.grantees.join(', ')} is granted ${write.join('/')} on ${journal.join(', ')} — the journal has no writer until P2-S3 grants one`);
   }
 
   // 8. Isolation is not bought by weakening the global bypass.

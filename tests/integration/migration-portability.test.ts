@@ -27,7 +27,8 @@ import {
  * IS a superuser and a superuser bypasses every privilege check that would
  * otherwise fail.
  *
- * So this suite parks a database at 0039 and then applies `0040` and `0041`
+ * So this suite parks a database at 0039 and then applies every migration
+ * after it — `0040` and `0041` (P2-S1) and `0042` and `0043` (P2-S2) —
  * **through a connection authenticated as `daftar_migrator`** — a LOGIN
  * deployment principal with `rolsuper = false` and `rolbypassrls = false`.
  * Nothing is executed as postgres after the checkpoint, and nothing is
@@ -75,13 +76,13 @@ function migrationsUpTo(upTo: string): string {
 
 const admin = new Pool({ connectionString: dbUrl, max: 1 });
 
-describe('managed PostgreSQL: 0039 → 0041 under a non-superuser migration principal', () => {
+describe('managed PostgreSQL: 0039 → 0043 under a non-superuser migration principal', () => {
   afterAll(async () => {
     await admin.query(`DROP DATABASE IF EXISTS ${SCRATCH_DB} WITH (FORCE)`).catch(() => undefined);
     await admin.end();
   });
 
-  it('applies 0040 and 0041 with no superuser anywhere in the path', async () => {
+  it('applies 0040 through 0043 with no superuser anywhere in the path', async () => {
     await ensurePostgres();
     await admin.query(`DROP DATABASE IF EXISTS ${SCRATCH_DB} WITH (FORCE)`);
     await admin.query(`CREATE DATABASE ${SCRATCH_DB}`);
@@ -165,9 +166,17 @@ describe('managed PostgreSQL: 0039 → 0041 under a non-superuser migration prin
       ).rows[0];
       expect(who).toEqual({ rolname: 'daftar_migrator', rolsuper: false, rolbypassrls: false, rolcreaterole: false });
 
-      // ── THE PROOF: 0040 and 0041 execute over this connection. ─────────
+      // ── THE PROOF: every post-0039 migration executes over this
+      //    connection, P2-S2's two included. Each of them transfers function
+      //    ownership to the internal principal, and each of them has to do it
+      //    through ordinary privilege rules.
       const applied = await runMigrations(migratorScratchUrl);
-      expect(applied).toEqual(['0040_accounting_chart.sql', '0041_accounting_permissions.sql']);
+      expect(applied).toEqual([
+        '0040_accounting_chart.sql',
+        '0041_accounting_permissions.sql',
+        '0042_accounting_journal.sql',
+        '0043_accounting_invariants.sql',
+      ]);
 
       // The ALTER FUNCTION ownership transfer was legitimate, not bypassed.
       const owners = (
@@ -180,6 +189,34 @@ describe('managed PostgreSQL: 0039 → 0041 under a non-superuser migration prin
         { proname: 'accounting_seed_chart', owner: 'daftar_accounting_internal' },
         { proname: 'accounting_seed_chart_trg', owner: 'daftar_accounting_internal' },
       ]);
+
+      // P2-S2 repeats the same dance for five more routines. A superuser run
+      // could not tell whether any of them needed elevation; this one can.
+      const p2s2Owners = (
+        await migrator.query<{ proname: string; owner: string }>(
+          `SELECT p.proname, r.rolname AS owner FROM pg_proc p JOIN pg_roles r ON r.oid = p.proowner
+            WHERE p.proname IN ('accounting_pow10','accounting_assert_entry_valid','accounting_validate_entry',
+                                'accounting_validate_entry_of_line','businesses_base_currency_lock')
+            ORDER BY p.proname`,
+        )
+      ).rows;
+      expect(p2s2Owners).toEqual([
+        { proname: 'accounting_assert_entry_valid', owner: 'daftar_accounting_internal' },
+        { proname: 'accounting_pow10', owner: 'daftar_accounting_internal' },
+        { proname: 'accounting_validate_entry', owner: 'daftar_accounting_internal' },
+        { proname: 'accounting_validate_entry_of_line', owner: 'daftar_accounting_internal' },
+        { proname: 'businesses_base_currency_lock', owner: 'daftar_accounting_internal' },
+      ]);
+
+      // Both deferred constraint triggers survived the non-superuser path.
+      const validators = (
+        await migrator.query<{ tgname: string }>(
+          `SELECT t.tgname FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid
+            WHERE NOT t.tgisinternal AND t.tgdeferrable AND t.tginitdeferred
+              AND t.tgname IN ('journal_entry_validate','journal_line_validate') ORDER BY t.tgname`,
+        )
+      ).rows.map((r) => r.tgname);
+      expect(validators).toEqual(['journal_entry_validate', 'journal_line_validate']);
 
       // The backfill ran: every pre-existing business has its full chart.
       //

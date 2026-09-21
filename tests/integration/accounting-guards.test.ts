@@ -4,6 +4,15 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { ACCOUNTING_AUTHORITY_TABLES, findAuthoritativeBalanceColumns, isAuthoritativeBalanceColumn } from '../../scripts/guards/no-authoritative-balance';
 import { LOGIN_ROLES, findAuthorityViolations, parseTableGrants } from '../../scripts/guards/authority-isolation';
+import { REQUIRED_RATE_SCALE, findFloatRateColumns, isRateAuthorityTable, isRateColumn } from '../../scripts/guards/no-float-rate';
+import { stripComments } from '../../scripts/guards/sql-schema';
+import {
+  ACCOUNTING_REGISTRY_TABLES,
+  FORBIDDEN_P2_S3_SURFACES,
+  INTENDED_TABLE_GRANTS,
+  WRITE_PRIVILEGES,
+  compareTableGrants,
+} from '../../scripts/guards/journal-privilege-model';
 
 const ROOT = join(__dirname, '../..');
 const MIGRATIONS = join(ROOT, 'infrastructure/database/migrations');
@@ -388,5 +397,235 @@ CREATE ROLE daftar_migrator LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROL
       { privileges: ['SELECT', 'INSERT'], tables: ['accounts'], grantees: ['daftar_accounting_internal'] },
       { privileges: ['SELECT'], tables: ['accounts', 'businesses'], grantees: ['daftar_platform'] },
     ]);
+  });
+});
+
+/**
+ * Guard G-2 (directive §35): a permanent regression test for the GUARD.
+ *
+ * The directive asks for two opposite proofs, and both matter. The guard must
+ * detect tampered SQL — a `fx_rate DOUBLE PRECISION` slipped into a future
+ * migration — and it must NOT be so broad that a legitimate percentage
+ * elsewhere in the product can no longer be declared. A guard that fails the
+ * second test gets disabled within a month, which is the same as not having it.
+ */
+describe('guard G-2 — no floating-point financial rate', () => {
+  const journalTable = (rateDecl: string): string =>
+    `CREATE TABLE journal_lines (
+       business_id UUID NOT NULL,
+       id UUID NOT NULL,
+       txn_amount_minor BIGINT,
+       ${rateDecl}
+     );`;
+
+  it('detects every floating-point spelling of a tampered rate column', () => {
+    for (const type of ['REAL', 'FLOAT', 'FLOAT(24)', 'FLOAT4', 'FLOAT8', 'DOUBLE PRECISION', 'double precision']) {
+      const findings = findFloatRateColumns(journalTable(`fx_rate ${type} NOT NULL`));
+      expect(findings).toHaveLength(1);
+      expect(findings[0]).toMatchObject({ table: 'journal_lines', column: 'fx_rate' });
+      expect(findings[0]?.detail).toMatch(/floating-point/);
+    }
+  });
+
+  it('detects a rate quietly rounded by an under-scaled or scale-less NUMERIC', () => {
+    expect(findFloatRateColumns(journalTable('fx_rate NUMERIC NOT NULL'))[0]?.detail).toMatch(/without an explicit scale/);
+    expect(findFloatRateColumns(journalTable('fx_rate NUMERIC(20,4) NOT NULL'))[0]?.detail).toMatch(/scale 4/);
+    expect(findFloatRateColumns(journalTable(`fx_rate NUMERIC(20,${REQUIRED_RATE_SCALE - 1}) NOT NULL`))).toHaveLength(1);
+  });
+
+  it('accepts the declaration AL-09 actually mandates', () => {
+    expect(findFloatRateColumns(journalTable(`fx_rate NUMERIC(20,${REQUIRED_RATE_SCALE}) NOT NULL`))).toEqual([]);
+    expect(findFloatRateColumns(journalTable('fx_rate NUMERIC(24,12) NOT NULL'))).toEqual([]);
+  });
+
+  it('detects a tampered rate added later by ALTER TABLE, not only at CREATE', () => {
+    const findings = findFloatRateColumns('ALTER TABLE journal_lines ADD COLUMN settlement_rate DOUBLE PRECISION;');
+    expect(findings).toEqual([{ table: 'journal_lines', column: 'settlement_rate', detail: expect.stringMatching(/floating-point/) }]);
+  });
+
+  it('watches a future accounting_* table the day it is created, not the day someone lists it', () => {
+    expect(findFloatRateColumns('CREATE TABLE accounting_fx_snapshots (business_id UUID, rate REAL);')).toHaveLength(1);
+    expect(isRateAuthorityTable('accounting_anything_at_all')).toBe(true);
+  });
+
+  it('is scoped: a percentage outside accounting authority stays declarable', () => {
+    // A marketing funnel, a tax percentage on a product, a delivery surcharge.
+    // None of these is a ledger rate, and banning them would make the guard
+    // something a contributor works around rather than with.
+    expect(findFloatRateColumns('CREATE TABLE campaigns (conversion_rate DOUBLE PRECISION);')).toEqual([]);
+    expect(findFloatRateColumns('CREATE TABLE products (tax_rate REAL, price_minor BIGINT);')).toEqual([]);
+    expect(isRateAuthorityTable('campaigns')).toBe(false);
+  });
+
+  it('reads the column NAME the way a human would, not by substring', () => {
+    // `rate` as a whole token is a rate; `aggregate` and `rating` are not.
+    expect(isRateColumn('fx_rate')).toBe(true);
+    expect(isRateColumn('payment_to_base_rate')).toBe(true);
+    expect(isRateColumn('fx_rate_source')).toBe(true);
+    expect(isRateColumn('aggregate')).toBe(false);
+    expect(isRateColumn('rating')).toBe(false);
+    expect(isRateColumn('generated')).toBe(false);
+    expect(findFloatRateColumns('CREATE TABLE journal_lines (aggregate DOUBLE PRECISION, rating REAL);')).toEqual([]);
+  });
+
+  it('the real migration tree is clean and the guard is watching a rate column that exists', () => {
+    const files = readdirSync(MIGRATIONS).filter((f) => f.endsWith('.sql'));
+    for (const file of files) expect(findFloatRateColumns(readFileSync(join(MIGRATIONS, file), 'utf8'))).toEqual([]);
+    // If the journal ever stops declaring a rate, this guard would pass
+    // vacuously; it must be proven to have a live subject.
+    const journal = readFileSync(join(MIGRATIONS, '0042_accounting_journal.sql'), 'utf8');
+    expect(journal).toMatch(/fx_rate\s+NUMERIC\(20,\s*10\)/i);
+  });
+
+  it('is wired into static-guards.ts, not merely available to be imported', () => {
+    const guards = readFileSync(join(ROOT, 'scripts/static-guards.ts'), 'utf8');
+    expect(guards).toMatch(/findFloatRateColumns/);
+  });
+});
+
+/**
+ * Guard G-1 (directive §34), tested as a MODEL. The live-catalogue comparison
+ * is in tests/security/journal-privilege-matrix.test.ts, where a real database
+ * exists; here the question is whether the model itself still says what P2-S2
+ * decided, and whether the comparator actually reports a difference.
+ */
+describe('guard G-1 — the intended journal privilege model', () => {
+  const live = (table: string, grantee: string, privilege: string) => ({ table, grantee, privilege });
+  const intended = (): { table: string; grantee: string; privilege: string }[] =>
+    Object.entries(INTENDED_TABLE_GRANTS).flatMap(([table, grants]) =>
+      Object.entries(grants).flatMap(([grantee, privileges]) => privileges.map((privilege) => live(table, grantee, privilege))),
+    );
+
+  it('grants no write privilege to anybody, on any journal table', () => {
+    for (const [table, grants] of Object.entries(INTENDED_TABLE_GRANTS)) {
+      for (const [grantee, privileges] of Object.entries(grants)) {
+        for (const privilege of privileges) {
+          expect(WRITE_PRIVILEGES, `${grantee} would write ${table}`).not.toContain(privilege);
+        }
+      }
+    }
+  });
+
+  it('keeps the two closed registries at default deny', () => {
+    for (const registry of ACCOUNTING_REGISTRY_TABLES) expect(Object.keys(INTENDED_TABLE_GRANTS[registry] ?? {})).toEqual([]);
+  });
+
+  it('accepts a catalogue that matches the model exactly', () => {
+    expect(compareTableGrants(intended())).toEqual([]);
+  });
+
+  it('detects the GRANT nobody remembered to write a negative test for', () => {
+    const tampered = [...intended(), live('journal_lines', 'daftar_worker', 'INSERT')];
+    expect(compareTableGrants(tampered).join(' ')).toMatch(/daftar_worker holds INSERT on journal_lines/);
+    expect(compareTableGrants(tampered).join(' ')).toMatch(/NO writer/);
+  });
+
+  it('detects a read grant to a role that should have none, not only a write grant', () => {
+    expect(compareTableGrants([...intended(), live('journal_entries', 'daftar_identity', 'SELECT')]).join(' ')).toMatch(
+      /daftar_identity holds SELECT on journal_entries/,
+    );
+    expect(compareTableGrants([...intended(), live('accounting_source_types', 'daftar_app', 'SELECT')]).join(' ')).toMatch(/does not include/);
+  });
+
+  it('detects PUBLIC being handed the ledger', () => {
+    expect(compareTableGrants([...intended(), live('journal_lines', 'PUBLIC', 'SELECT')]).join(' ')).toMatch(/PUBLIC holds SELECT on journal_lines/);
+  });
+
+  it('detects a grant silently disappearing, so the validators cannot see a whole entry', () => {
+    const missing = intended().filter((g) => !(g.table === 'journal_lines' && g.grantee === 'daftar_accounting_internal'));
+    expect(compareTableGrants(missing).join(' ')).toMatch(/is missing/);
+  });
+
+  it('ignores tables outside the journal, so an unrelated grant is not a false alarm', () => {
+    expect(compareTableGrants([...intended(), live('products', 'daftar_app', 'INSERT')])).toEqual([]);
+  });
+});
+
+/**
+ * P2-S2 structural regressions (directive §42). These read the migration text
+ * rather than a database: they are the checks the gate performs, held here as
+ * tests so that a change which removes one fails loudly in the normal suite
+ * and not only when someone runs the gate.
+ */
+describe('P2-S2 migration boundary', () => {
+  const files = (): string[] =>
+    readdirSync(MIGRATIONS)
+      .filter((f) => f.endsWith('.sql'))
+      .sort();
+  const journal = (): string => readFileSync(join(MIGRATIONS, '0042_accounting_journal.sql'), 'utf8');
+  const invariants = (): string => readFileSync(join(MIGRATIONS, '0043_accounting_invariants.sql'), 'utf8');
+
+  it('P2-S2 is exactly 0042 and 0043, with nothing after them', () => {
+    expect(files()).toContain('0042_accounting_journal.sql');
+    expect(files()).toContain('0043_accounting_invariants.sql');
+    expect(files().filter((f) => f.slice(0, 4) > '0043')).toEqual([]);
+  });
+
+  it('0042 and 0043 are CANDIDATES — a slice freezes only on acceptance', () => {
+    const manifest = JSON.parse(readFileSync(join(ROOT, 'infrastructure/database/MIGRATION_MANIFEST.json'), 'utf8')) as {
+      frozenThrough: string;
+      migrations: { name: string }[];
+    };
+    const names = manifest.migrations.map((m) => m.name);
+    expect(names).not.toContain('0042_accounting_journal.sql');
+    expect(names).not.toContain('0043_accounting_invariants.sql');
+    expect(manifest.frozenThrough).toBe('0041_accounting_permissions.sql');
+  });
+
+  it('every business-scoped journal table carries both tenant_id and business_id (§14)', () => {
+    const sql = journal();
+    for (const table of ['journal_entries', 'journal_lines', 'accounting_source_bindings']) {
+      const body = new RegExp(`CREATE TABLE ${table} \\(([\\s\\S]*?)\\n\\);`, 'i').exec(sql)?.[1] ?? '';
+      expect(body, table).toMatch(/\btenant_id\s+UUID\s+NOT NULL/i);
+      expect(body, table).toMatch(/\bbusiness_id\s+UUID\s+NOT NULL/i);
+    }
+  });
+
+  it('both commit-time validators exist and both are deferred (§28)', () => {
+    const sql = invariants();
+    expect(sql).toMatch(/CREATE CONSTRAINT TRIGGER journal_entry_validate[\s\S]{0,400}?ON journal_entries[\s\S]{0,200}?DEFERRABLE INITIALLY DEFERRED/i);
+    expect(sql).toMatch(/CREATE CONSTRAINT TRIGGER journal_line_validate[\s\S]{0,400}?ON journal_lines[\s\S]{0,200}?DEFERRABLE INITIALLY DEFERRED/i);
+  });
+
+  it('the source binding keeps both deferred foreign-key directions (§19)', () => {
+    const sql = journal();
+    expect(sql).toMatch(/CONSTRAINT\s+accounting_source_bindings_entry_fk\s+FOREIGN KEY[\s\S]{0,300}?DEFERRABLE INITIALLY DEFERRED/i);
+    expect(sql).toMatch(/CONSTRAINT\s+journal_entries_binding_fk\s+FOREIGN KEY[\s\S]{0,300}?DEFERRABLE INITIALLY DEFERRED/i);
+  });
+
+  it('immutability is unconditional — no identity is exempt (§27)', () => {
+    const sql = journal();
+    for (const table of ['journal_entries', 'journal_lines', 'accounting_source_bindings']) {
+      expect(sql, table).toMatch(new RegExp(`CREATE\\s+TRIGGER\\s+\\w+\\s+BEFORE\\s+UPDATE\\s+OR\\s+DELETE\\s+ON\\s+${table}\\b`, 'i'));
+    }
+    const bodies = [...sql.matchAll(/CREATE (?:OR REPLACE )?FUNCTION (\w*immutable\w*)\s*\([\s\S]*?\$\$([\s\S]*?)\$\$/gi)].map((m) => m[2] ?? '');
+    expect(bodies.length).toBeGreaterThan(0);
+    // An identity test inside the refusal would be exactly the hidden "admin"
+    // bypass §27 forbids: platform, support and the migration credential are
+    // all refused the same way an application would be.
+    for (const body of bodies) expect(body).not.toMatch(/current_user|session_user|current_setting\(/i);
+  });
+
+  it('no P2-S3 posting surface exists yet (§40, §49)', () => {
+    const schema = stripComments(
+      files()
+        .map((f) => readFileSync(join(MIGRATIONS, f), 'utf8'))
+        .join('\n'),
+    );
+    for (const surface of FORBIDDEN_P2_S3_SURFACES) {
+      expect(schema, surface).not.toMatch(new RegExp(`CREATE\\s+(?:TABLE|VIEW|OR REPLACE FUNCTION|FUNCTION|PROCEDURE)\\s+${surface}\\b`, 'i'));
+    }
+    expect(schema).not.toMatch(/session_replication_role/i);
+  });
+
+  it('the base-amount expectation is derived, never ROUND()ed, and sums are NUMERIC (§22, §24)', () => {
+    const sql = stripComments(invariants());
+    expect(sql).not.toMatch(/\bROUND\s*\(/i);
+    expect(sql).toMatch(/accounting_pow10/);
+    // Every SUM over a minor-unit column casts first: four lines at the money
+    // cap would overflow a BIGINT sum before the balance check could run.
+    for (const match of sql.matchAll(/SUM\s*\(([^)]*)\)/gi)) {
+      if (/amount_minor/i.test(match[1] ?? '')) expect(match[1], match[0]).toMatch(/::\s*numeric/i);
+    }
   });
 });
