@@ -56,6 +56,8 @@
 | R-33 | Android debug base URL was cleartext while the app denied cleartext everywhere | One network config for all build types | Debug-only config permits `10.0.2.2`; release unchanged | `NetworkSecurityConfigTest.kt` (3 cases) |
 | R-34 | Evidence lacked toolchain/OS/source/migration/DB-from-zero facts | Minimal writer | `evidence.json` schema v2 generated from the executed steps | gate `--evidence` |
 
+| R-35 | **First run on a clean machine failed**: the extracted archive's very first database step died with `EACCES` spawning `initdb` | `embedded-postgres` calls `ensureBinIsExecutable()` without awaiting it, then spawns immediately; on a fresh `node_modules` the chmod races the spawn. A long-lived working copy hides it because the chmod persists | `scripts/ensure-embedded-pg-binaries.ts` sets the bits synchronously before any embedded server starts (test harness + `check:db-from-zero`) | The Blocker 3 archive reproduction run itself (fresh `npm ci`, fresh data directory) |
+
 Open defects at closure: **P0 = 0, P1 = 0, security P2 = 0, other P2 = 0**. Non-defect items are in `TECHNICAL_DEBT.md` (TD-01…TD-06).
 
 ## 3. Previously protected behaviours
