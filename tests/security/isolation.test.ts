@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { createTestApp, ownerPool, resetData, uniqueEmail, type TestApp } from '../helpers/test-app';
+import { appDbUrl, createTestApp, ownerPool, resetData, uniqueEmail, type TestApp } from '../helpers/test-app';
 
 /**
  * Tenant/Business isolation (§37–39, §92–93) + owner safety (§28) +
@@ -119,7 +119,7 @@ describe('isolation & tenancy security', () => {
     const aBranch = (await ownerPool().query('SELECT id FROM branches WHERE business_id = $1 AND is_default', [a.businessId])).rows[0]?.id as string;
     // Direct DB write attempt as app role under B's scope:
     const appPool = (await import('pg')).Pool;
-    const pool = new appPool({ connectionString: process.env['APP_DB_URL'] ?? 'postgresql://daftar_app:test_app_password_123@localhost:55432/daftar', max: 1 });
+    const pool = new appPool({ connectionString: process.env['APP_DB_URL'] ?? appDbUrl, max: 1 });
     const c = await pool.connect();
     const bTenant = (await ownerPool().query('SELECT tenant_id FROM businesses WHERE id = $1', [b.businessId])).rows[0]?.tenant_id as string;
     await c.query('BEGIN');
@@ -239,7 +239,7 @@ describe('isolation & tenancy security', () => {
     it('app role cannot INSERT/UPDATE/DELETE system roles even in bypass-free tx', async () => {
       const a = await onboardUser('sysrole-biz');
       const pool = new (await import('pg')).Pool({
-        connectionString: 'postgresql://daftar_app:test_app_password_123@localhost:55432/daftar',
+        connectionString: appDbUrl,
         max: 1,
       });
       const c = await pool.connect();
@@ -316,7 +316,7 @@ describe('isolation & tenancy security', () => {
     it('default-deny: app role with NO context sees zero rows (proven at DB)', async () => {
       await onboardUser('deny-biz');
       const pool = new (await import('pg')).Pool({
-        connectionString: 'postgresql://daftar_app:test_app_password_123@localhost:55432/daftar',
+        connectionString: appDbUrl,
         max: 1,
       });
       const r = await pool.query('SELECT count(*) FROM businesses');
