@@ -43,6 +43,9 @@ The supported upgrade matrix is enforced by
 | Fresh database 0000 → latest              | yes (every test run; global setup migrates from empty) |
 | Database at 0024 (pre-encryption, with legacy plaintext pending/failed/sent deliveries, plan versions, tenants/businesses) → latest | yes (dedicated fixture test) |
 | Database at 0026 → latest                 | yes (checkpoint upgrade test) |
+| Database at 0035 (JSONB catalog translations, cross-table SKUs) → latest | yes (checkpoint upgrade test: content preserved, identifier registry built, rerun no-op) |
+| A migration that fails mid-file            | rolled back atomically, no history row, rerun clean (`failure-injection.test.ts`) |
+| Migration under a runtime principal        | refused with permission denied, nothing applied (`failure-injection.test.ts`) |
 | Latest → migration command is a no-op     | yes (idempotency test) |
 | Legitimate supported upgrade NEVER hits a checksum mismatch | yes (checksums only trip on tampering with applied files) |
 
@@ -58,3 +61,28 @@ disposable databases, which were reset).
   around the 0026 trial_days backfill — permitted for the table-owner
   migration role on managed PostgreSQL without SUPERUSER.
 - No broad trigger disabling anywhere else.
+
+## Phase 1 release freeze (§51–54): 0028–0037 appended to the frozen set
+
+At the Phase 1 release the manifest was extended from `0027` to
+`0037_catalog_identifiers.sql`. `frozenThrough` in
+`infrastructure/database/MIGRATION_MANIFEST.json` names the last frozen file
+and the guard derives its policy message from it, so the next freeze only
+appends entries.
+
+Rules that held while 0028–0037 were written:
+
+- `0000`–`0027` were not touched (the guard ran on every commit).
+- Every schema correction introduced by the Phase 1 closure is a NEW migration:
+  `0033` (provisioner atomic authority), `0034` (platform console grants),
+  `0035` (ownership implication + indexes), `0036` (normalized catalog
+  translations), `0037` (catalog identifier registry).
+- The second and last narrow trigger toggle is in `0035`:
+  `ALTER TABLE audit_events DISABLE/ENABLE TRIGGER audit_no_update` around the
+  tenant backfill of historical platform-console audit rows. It is scoped to
+  one named trigger on one table, inside the migration transaction, and the
+  append-only trigger is re-enabled before the migration commits.
+- `0036` drops the JSONB translation columns only after a validation block
+  proves every row was copied into `product_translations` /
+  `category_translations`; the 0035-checkpoint upgrade test replays this on
+  real data.

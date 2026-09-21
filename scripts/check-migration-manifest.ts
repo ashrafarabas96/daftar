@@ -20,7 +20,7 @@ interface ManifestEntry {
   sha256: string;
 }
 
-const manifest = JSON.parse(readFileSync(MANIFEST, 'utf8')) as { migrations?: ManifestEntry[] };
+const manifest = JSON.parse(readFileSync(MANIFEST, 'utf8')) as { frozenThrough?: string; migrations?: ManifestEntry[] };
 if (!Array.isArray(manifest.migrations) || manifest.migrations.length === 0) {
   console.error('MIGRATION_MANIFEST.json is missing or has no migrations');
   process.exit(1);
@@ -43,7 +43,19 @@ for (const entry of manifest.migrations) {
   }
 }
 if (failures > 0) {
-  console.error(`Migration manifest check FAILED (${failures} violation(s)). Frozen migrations 0000–0027 must never change — add a new migration instead.`);
+  console.error(
+    `Migration manifest check FAILED (${failures} violation(s)). Frozen migrations 0000–${(manifest.frozenThrough ?? '').slice(0, 4)} must never change — add a new migration instead.`,
+  );
   process.exit(1);
 }
-console.log(`Migration manifest OK: ${manifest.migrations.length} frozen migrations verified.`);
+// A migration on disk that is newer than the frozen set is allowed (it will be
+// frozen at the next release); one that is OLDER than frozenThrough but absent
+// from the manifest is a hole in the history and fails.
+for (const f of [...onDisk].sort()) {
+  if (manifest.frozenThrough && f <= manifest.frozenThrough && !manifest.migrations.some((m) => m.name === f)) {
+    console.error(`migration ${f} predates frozenThrough=${manifest.frozenThrough} but is not in the manifest`);
+    failures++;
+  }
+}
+if (failures > 0) process.exit(1);
+console.log(`Migration manifest OK: ${manifest.migrations.length} frozen migrations verified (frozen through ${manifest.frozenThrough ?? 'n/a'}).`);

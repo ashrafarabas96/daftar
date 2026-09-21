@@ -1,7 +1,7 @@
 {
-  "generatedAt": "2026-09-19T23:38:17.548Z",
-  "frozenThrough": "0027_plan_version_immutability_hardening.sql",
-  "policy": "Migrations 0000–0027 are FROZEN (PATH A — pre-release, disposable databases only). All future schema changes are new migrations 0028+.",
+  "generatedAt": "2026-09-21T12:40:14.000Z",
+  "frozenThrough": "0037_catalog_identifiers.sql",
+  "policy": "Migrations 0000–0037 are FROZEN at the Phase 1 release. A frozen migration is never edited or deleted; every schema correction is a NEW migration appended after 0037. Check: npm run check:migrations.",
   "migrations": [
     {
       "name": "0000_extensions.sql",
@@ -114,6 +114,46 @@
     {
       "name": "0027_plan_version_immutability_hardening.sql",
       "sha256": "37909b885fc22514cf55aea7a5372c24d30f5b207c93810bac5e013e7da74fa9"
+    },
+    {
+      "name": "0028_credential_delivery_hardening.sql",
+      "sha256": "6b64bd760ebc37aee37ea360cd5804f935e37ec352572716d05d1d8a21a3bf1c"
+    },
+    {
+      "name": "0029_support_sessions.sql",
+      "sha256": "cbaa85bf9777fc61942a1ec327ada3b3e830441adfbb195672cdead4b7338b09"
+    },
+    {
+      "name": "0030_provisioner_role.sql",
+      "sha256": "70941c698959b00b06c2b0315243fbb9f78ce56a7d9ee2e75733f27362771346"
+    },
+    {
+      "name": "0031_provisioner_entitlement_read.sql",
+      "sha256": "6de2c7561f75f912f3db356627bcf2306d27ff093ea743f48fa1a1a884cf85cb"
+    },
+    {
+      "name": "0032_provisioner_narrow_functions.sql",
+      "sha256": "694d57f7efd6584edb78305ff6c336ade85ae39e2e3be630a6ec73829dad4888"
+    },
+    {
+      "name": "0033_provisioner_atomic_authority.sql",
+      "sha256": "de125a460e103b73a081696a808dacb4979727005a9c7b6c65a088bfc3ee3f51"
+    },
+    {
+      "name": "0034_platform_console_grants.sql",
+      "sha256": "f9048997296e39b92e44bd2ee8bb13c3d843af6529dfbcc779dabdfcd21291c8"
+    },
+    {
+      "name": "0035_ownership_implication_and_indexes.sql",
+      "sha256": "847558583c005357972ce1c44c9bef66e39a08fb7cc74d4976d10572928dfa68"
+    },
+    {
+      "name": "0036_catalog_translations_normalized.sql",
+      "sha256": "7f1f4aa5f087e88cd2e292e26de0c9e9ee58fc20dafcc38fe6efda0376710343"
+    },
+    {
+      "name": "0037_catalog_identifiers.sql",
+      "sha256": "540fa71d28f3c3140935a7325b68667d1679abf461a1ecf84512b18eb3271aed"
     }
   ]
 }
