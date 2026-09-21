@@ -46,7 +46,7 @@
 |---|---|---|---|---|
 | 1 | Provisioner actor cannot be spoofed through a GUC; authorization + mutation stay atomic | DONE | `provisioner-boundary` Blocker 1 suite | `0038` |
 | 2 | Every identifier belongs to one real product XOR variant; registry internal-only | DONE | `catalog-identifiers` owner-integrity suite | `0039` |
-| 3 | Release zip self-contained; acceptance reproduced from the extracted archive | DONE | `export:release` audit, gate "self-contained source tree", archive run in the acceptance report | — |
+| 3 | Release zip self-contained; acceptance reproduced from the extracted archive | DONE | `export:release` audit, gate "self-contained source tree", full 24-step gate + performance baseline executed inside the extracted archive (fresh `npm ci`, fresh PostgreSQL, no `.git`); the run found and fixed R-36…R-38 | — |
 | 4 | KMS: HTTPS-only, authenticated, timeout/abort, bounded response, sanitized errors, fail-closed enqueue | DONE | `kms-encryptor` | — |
 | 5 | Release gate fails on any mandatory skip; the gate itself is tested | DONE | `release-gate` | — |
 | 6 | Android debug cleartext scoped to the emulator host; release TLS-only | DONE | `NetworkSecurityConfigTest.kt` | — |
