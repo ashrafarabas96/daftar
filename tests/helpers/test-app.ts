@@ -78,37 +78,6 @@ async function applyBootstrap(): Promise<void> {
   }
 }
 
-/** Start (or reuse) a REAL PostgreSQL 18 instance and migrate a fresh schema. */
-export async function ensurePostgres(): Promise<void> {
-  if (await ping()) {
-    // Reused instance: bootstrap is idempotent; still apply any PENDING migrations.
-    await applyBootstrap();
-    await runMigrations(dbUrl);
-    await installProvisioningKey();
-    return;
-  }
-  ensureEmbeddedPgBinariesExecutable();
-  pg = new EmbeddedPostgres({
-    databaseDir: PG_DIR,
-    user: PG_USER,
-    password: PG_PASSWORD,
-    port: PG_PORT,
-    persistent: true,
-  });
-  if (!existsSync(join(PG_DIR, 'PG_VERSION'))) {
-    await pg.initialise();
-  }
-  await pg.start();
-  try {
-    await pg.createDatabase('daftar');
-  } catch {
-    // database already exists
-  }
-  await applyBootstrap();
-  await runMigrations(dbUrl);
-  await installProvisioningKey();
-}
-
 /** The database side of the assertion key (0038) — what the ops job does with BOOTSTRAP_DATABASE_URL in production. */
 async function installProvisioningKey(): Promise<void> {
   const pool = new Pool({ connectionString: dbUrl, max: 1 });
@@ -117,6 +86,84 @@ async function installProvisioningKey(): Promise<void> {
   } finally {
     await pool.end();
   }
+}
+
+/**
+ * Start (or reuse) a REAL PostgreSQL 18 instance and migrate a fresh schema.
+ *
+ * Consecutive suite runs share one data directory (PG_DIR). A previous run's
+ * server may still be shutting down when the next one starts: its socket
+ * already refuses connections while `postmaster.pid` is still held, so a naive
+ * "ping, else start" would try to start a second postmaster in the same
+ * directory and die with `lock file "postmaster.pid" already exists`. The
+ * handshake below waits — bounded — for the directory to settle into one of
+ * the two usable states (a server that answers, or no server at all) and
+ * retries a start that loses that race.
+ */
+const START_ATTEMPTS = 12;
+const SETTLE_DELAY_MS = 500;
+
+const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** True while a previous postmaster still owns the data directory. */
+function pidFileHeld(): boolean {
+  return existsSync(join(PG_DIR, 'postmaster.pid'));
+}
+
+async function startOrReuse(): Promise<void> {
+  for (let attempt = 0; attempt < START_ATTEMPTS; attempt += 1) {
+    if (await ping()) return; // a usable server is already listening
+    if (pidFileHeld()) {
+      // Someone else owns the directory: either still starting or still stopping.
+      await delay(SETTLE_DELAY_MS);
+      continue;
+    }
+    ensureEmbeddedPgBinariesExecutable();
+    pg = new EmbeddedPostgres({
+      databaseDir: PG_DIR,
+      user: PG_USER,
+      password: PG_PASSWORD,
+      port: PG_PORT,
+      persistent: true,
+    });
+    if (!existsSync(join(PG_DIR, 'PG_VERSION'))) {
+      await pg.initialise();
+    }
+    try {
+      await pg.start();
+      return;
+    } catch (e) {
+      pg = null;
+      // Lost the race against a concurrent start: settle and re-evaluate.
+      if (!/postmaster\.pid|already (exists|running)/i.test(e instanceof Error ? e.message : String(e))) throw e;
+      await delay(SETTLE_DELAY_MS);
+    }
+  }
+  throw new Error(`PostgreSQL at ${PG_DIR} (port ${PG_PORT}) did not become usable within ${(START_ATTEMPTS * SETTLE_DELAY_MS) / 1000}s`);
+}
+
+export async function ensurePostgres(): Promise<void> {
+  await startOrReuse();
+  try {
+    await (pg?.createDatabase('daftar') ?? Promise.resolve());
+  } catch {
+    // database already exists
+  }
+  if (!pg) {
+    // Reused instance: make sure the database exists before bootstrapping it.
+    const admin = new Pool({ connectionString: `postgresql://${PG_USER}:${PG_PASSWORD}@localhost:${PG_PORT}/postgres`, max: 1 });
+    try {
+      await admin.query('CREATE DATABASE daftar');
+    } catch {
+      // already exists
+    } finally {
+      await admin.end().catch(() => undefined);
+    }
+  }
+  // Bootstrap is idempotent; migrations apply only what is pending.
+  await applyBootstrap();
+  await runMigrations(dbUrl);
+  await installProvisioningKey();
 }
 
 let ownerPoolInstance: Pool | null = null;
