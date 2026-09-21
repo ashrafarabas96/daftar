@@ -5,6 +5,7 @@ import tr from '@/messages/tr.json';
 export type Locale = 'ar' | 'en' | 'tr';
 export const LOCALES: Locale[] = ['ar', 'en', 'tr'];
 export const dirOf = (locale: Locale): 'rtl' | 'ltr' => (locale === 'ar' ? 'rtl' : 'ltr');
+export const isLocale = (value: string): value is Locale => (LOCALES as readonly string[]).includes(value);
 
 const dicts: Record<Locale, Record<string, string>> = { ar, en, tr };
 

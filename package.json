@@ -28,6 +28,7 @@
     "bootstrap:platform-owner": "tsx scripts/bootstrap-platform-owner.ts",
     "check:key-retirement": "tsx scripts/check-key-retirement.ts",
     "gate:phase1": "tsx scripts/phase1-gate.ts",
+    "gate:phase1:release": "tsx scripts/phase1-release-gate.ts",
     "export:release": "tsx scripts/export-release.ts",
     "verify:history": "tsx scripts/verify-migration-history.ts"
   },
@@ -36,7 +37,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.39.1",
-    "@nestjs/testing": "^11.1.9",
+    "@nestjs/testing": "11.2.5",
     "@types/node": "24.10.1",
     "@types/nodemailer": "^8.0.2",
     "@types/supertest": "^6.0.3",
@@ -56,5 +57,9 @@
     "@aws-sdk/s3-request-presigner": "^3.1136.0",
     "@smithy/node-http-handler": "^4.12.1",
     "nodemailer": "^10.0.10"
+  },
+  "overrides": {
+    "multer": "2.4.0",
+    "postcss": "8.5.28"
   }
 }
