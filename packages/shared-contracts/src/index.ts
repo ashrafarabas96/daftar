@@ -24,6 +24,16 @@ export interface Page<T> {
   nextCursor: string | null;
 }
 
+/** Unpaged list wrapper — EVERY list endpoint returns `{ items }`, never a bare array (Directive §26). */
+export interface ListDto<T> {
+  items: T[];
+}
+
+/** Acknowledgement for state-transition commands that have no entity to return (suspend, cancel, logout…). */
+export interface AckDto {
+  ok: true;
+}
+
 // ── Auth ──────────────────────────────────────────────────────────────────
 export interface AuthTokensDto {
   accessToken: string;
@@ -136,6 +146,13 @@ export interface SlugAvailabilityDto {
   suggestions: string[];
 }
 
+/** Request body of PATCH /businesses/current/members/:userId/branch-scope (Directive §26: `mode` + `branchIds`). */
+export interface BranchScopeUpdateDto {
+  mode: 'all' | 'assigned';
+  /** Exact allowed set when mode = 'assigned'; ignored for 'all'. */
+  branchIds?: string[];
+}
+
 export interface OnboardingResultDto {
   businessId: string;
   tenantId: string;
@@ -177,10 +194,179 @@ export interface ProductDto extends ProductListItemDto {
   media: MediaDto[];
 }
 
+/**
+ * Media reference. `url` is ALWAYS the authorized access-URL endpoint
+ * (`/v1/catalog/media/{id}/access-url[?variant=w{size}]`) — never a storage
+ * key and never an unsigned private-bucket URL (Directive §48). Clients call
+ * it (through their BFF) to obtain a short-lived signed URL.
+ */
 export interface MediaDto {
   id: string;
   url: string;
   variants: { size: number; url: string; width: number; height: number }[];
+}
+
+/** POST /catalog/media response. */
+export interface MediaUploadResultDto {
+  id: string;
+  url: string;
+}
+
+/** GET /catalog/media/:id/access-url response — short-TTL signed URL. */
+export interface MediaAccessUrlDto {
+  url: string;
+  expiresInSeconds: number;
+}
+
+// ── Admin / platform console (Completion Directive §28) ──────────────────
+// Stable contracts for the super-admin surface. The admin web NEVER consumes
+// raw SQL row shapes: every admin route returns one of these DTOs.
+
+export type PlanVersionStateDto = 'DRAFT' | 'PUBLISHED' | 'SUNSET';
+
+export interface PlanVersionDto {
+  id: string;
+  planKey: string;
+  version: number;
+  state: PlanVersionStateDto;
+  trialDays: number;
+  effectiveFrom: string;
+  createdAt: string;
+  /** feature key → enabled */
+  features: Record<string, boolean>;
+  /** limit key → value (-1 = unlimited) */
+  limits: Record<string, number>;
+}
+
+export interface PlanDto {
+  key: string;
+  name: string;
+  /** Newest first. */
+  versions: PlanVersionDto[];
+}
+
+export type PlanListResponseDto = ListDto<PlanDto>;
+
+export interface PlanVersionDiffDto {
+  planKey: string;
+  fromVersion: number;
+  toVersion: number;
+  trialDays: { from: number | null; to: number | null; changed: boolean };
+  features: { key: string; from: boolean | null; to: boolean | null }[];
+  limits: { key: string; from: number | null; to: number | null }[];
+}
+
+export interface OverrideDto {
+  id: string;
+  businessId: string;
+  featureKey: string | null;
+  enabledValue: boolean | null;
+  limitKey: string | null;
+  limitValue: number | null;
+  reason: string;
+  actorUserId: string | null;
+  startsAt: string;
+  endsAt: string | null;
+  revokedAt: string | null;
+  revokedBy: string | null;
+  createdAt: string;
+}
+
+export interface FeatureFlagDto {
+  key: string;
+  enabled: boolean;
+  description: string;
+  updatedAt: string;
+}
+
+export interface SupportSessionDto {
+  id: string;
+  reason: string;
+  actorUserId: string;
+  tenantId: string;
+  businessId: string | null;
+  mode: 'READ_ONLY';
+  startsAt: string;
+  expiresAt: string;
+  revokedAt: string | null;
+  revokedReason: string | null;
+  createdAt: string;
+}
+
+export interface SupportBannerDto {
+  sessionId: string;
+  mode: 'READ_ONLY';
+  expiresAt: string;
+  businessId: string | null;
+  message: string;
+}
+
+export interface TenantSummaryDto {
+  id: string;
+  createdAt: string;
+  businessCount: number;
+}
+
+export interface TenantDetailDto {
+  tenant: {
+    id: string;
+    createdAt: string;
+    businesses: { id: string; name: string; storeSlug: string; status: string }[];
+  };
+  supportBanner: SupportBannerDto;
+}
+
+export interface AdminBusinessSummaryDto {
+  id: string;
+  tenantId: string;
+  name: string;
+  storeSlug: string;
+  baseCurrency: string;
+  countryCode: string;
+  status: string;
+  createdAt: string;
+  subscriptionState: SubscriptionStateDto | null;
+  planKey: string | null;
+  planVersion: number | null;
+}
+
+export interface BusinessSubscriptionDetailDto extends AdminBusinessSummaryDto {
+  subscription: {
+    planVersionId: string;
+    planKey: string;
+    planVersion: number;
+    state: SubscriptionStateDto;
+    effectiveState: SubscriptionStateDto;
+    trialEndsAt: string | null;
+    periodEndsAt: string | null;
+  } | null;
+  /** Every override ever granted to this business (active + revoked), newest first. */
+  overrides: OverrideDto[];
+}
+
+export interface AdminUserDto {
+  id: string;
+  email: string;
+  displayName: string;
+  platformRole: string | null;
+  createdAt: string;
+}
+
+export interface AuditEventDto {
+  id: string;
+  tenantId: string | null;
+  businessId: string | null;
+  actorUserId: string | null;
+  action: string;
+  entity: string;
+  entityId: string | null;
+  requestId: string | null;
+  createdAt: string;
+}
+
+export interface PlatformCapabilitiesDto {
+  userId: string;
+  platformRole: string | null;
 }
 
 // ── Platform reference ────────────────────────────────────────────────────

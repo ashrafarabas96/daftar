@@ -13,3 +13,6 @@ apps/android/.gradle/
 apps/android/build/
 apps/android/**/build/
 var/
+
+# Android local SDK path (machine-specific, never committed)
+apps/android/local.properties

@@ -9,8 +9,20 @@ import androidx.security.crypto.MasterKey
  * - refresh token lives ONLY in Keystore-backed EncryptedSharedPreferences,
  * - access token lives in process memory only (never persisted),
  * - nothing sensitive is ever logged.
+ * The interface lets JVM contract tests substitute an in-memory store.
  */
-class TokenStore(context: Context) {
+interface TokenStore {
+    var refreshToken: String?
+    fun accessToken(): String?
+    fun setAccessToken(token: String?)
+    fun clear()
+
+    companion object {
+        operator fun invoke(context: Context): TokenStore = KeystoreTokenStore(context)
+    }
+}
+
+class KeystoreTokenStore(context: Context) : TokenStore {
 
     private val prefs = EncryptedSharedPreferences.create(
         context,
@@ -23,7 +35,7 @@ class TokenStore(context: Context) {
     @Volatile
     private var accessToken: String? = null
 
-    var refreshToken: String?
+    override var refreshToken: String?
         get() = prefs.getString(KEY_REFRESH, null)
         set(value) {
             prefs.edit().apply {
@@ -31,13 +43,13 @@ class TokenStore(context: Context) {
             }.apply()
         }
 
-    fun accessToken(): String? = accessToken
+    override fun accessToken(): String? = accessToken
 
-    fun setAccessToken(token: String?) {
+    override fun setAccessToken(token: String?) {
         accessToken = token
     }
 
-    fun clear() {
+    override fun clear() {
         accessToken = null
         prefs.edit().clear().apply()
     }

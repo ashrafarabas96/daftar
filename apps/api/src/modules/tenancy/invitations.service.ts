@@ -79,10 +79,11 @@ export class InvitationsService {
   }
 
   /** Invite. Duplicate pending invite for same email → 409 (partial unique index is the final arbiter). */
-  async invite(m: MembershipContext, email: string, roleKey: string): Promise<{ invitationId: string }> {
+  async invite(m: MembershipContext, email: string, roleKey: string): Promise<InvitationDto> {
     if (roleKey === 'owner') throw AppError.forbidden('Owner role is system-managed');
     const token = randomBytes(32).toString('base64url');
     const id = newId();
+    const created: { value: { expiresAt: string; createdAt: string } | null } = { value: null };
     // §16–17 (Final Closure): email → userId runs on the IDENTITY boundary
     // (daftar_identity owns the users table); the membership check then runs
     // on the business app boundary. Platform credentials are never used for
@@ -130,11 +131,16 @@ export class InvitationsService {
         if (dupe) throw AppError.conflict('INVITATION_EXISTS', 'A pending invitation already exists for this email');
         // Pending invites count against MAX_USERS — quota checked inside the same tx.
         await this.entitlements.assertCanConsume(c, m.businessId, 'MAX_USERS');
-        await c.query(
-          `INSERT INTO business_invitations (id, business_id, email, role_id, token_hash, invited_by, expires_at)
-           VALUES ($1, $2, $3, $4, $5, $6, now() + interval '72 hours')`,
-          [id, m.businessId, email, role.id, hashInviteToken(token), m.userId],
-        );
+        const inserted = (
+          await c.query<{ expires_at: Date; created_at: Date }>(
+            `INSERT INTO business_invitations (id, business_id, email, role_id, token_hash, invited_by, expires_at)
+             VALUES ($1, $2, $3, $4, $5, $6, now() + interval '72 hours')
+             RETURNING expires_at, created_at`,
+            [id, m.businessId, email, role.id, hashInviteToken(token), m.userId],
+          )
+        ).rows[0];
+        if (!inserted) throw new Error('invitation insert returned no row');
+        created.value = { expiresAt: inserted.expires_at.toISOString(), createdAt: inserted.created_at.toISOString() };
         await this.audit.recordTx(c, {
           action: 'structure.invitation_created',
           entity: 'invitation',
@@ -153,7 +159,17 @@ export class InvitationsService {
       }
       throw e;
     }
-    return { invitationId: id };
+    if (!created.value) throw new Error('invitation was not created');
+    return {
+      id,
+      email,
+      roleKey,
+      status: 'pending',
+      expiresAt: created.value.expiresAt,
+      createdAt: created.value.createdAt,
+      deliveryStatus: 'pending',
+      deliveryAttempts: 0,
+    };
   }
 
   async cancel(m: MembershipContext, invitationId: string): Promise<void> {

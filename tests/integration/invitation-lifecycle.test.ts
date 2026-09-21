@@ -117,7 +117,7 @@ describe('invitation lifecycle hardening (WAVE 4)', () => {
     await makeRole(a, 'clerk');
     const email = uniqueEmail();
     const inv = await t.request.post('/v1/businesses/current/invitations').set(auth(a.token, a.businessId)).send({ email, roleKey: 'clerk' });
-    const id = inv.body.invitationId as string;
+    const id = inv.body.id as string;
     await t.worker.drain(); // request path enqueues only; the worker delivers
     await forceExpire(a.businessId, email);
     const res = await t.request.post(`/v1/businesses/current/invitations/${id}/resend`).set(auth(a.token, a.businessId));
@@ -132,7 +132,7 @@ describe('invitation lifecycle hardening (WAVE 4)', () => {
     await makeRole(a, 'clerk');
     const email = uniqueEmail();
     const inv = await t.request.post('/v1/businesses/current/invitations').set(auth(a.token, a.businessId)).send({ email, roleKey: 'clerk' });
-    const id = inv.body.invitationId as string;
+    const id = inv.body.id as string;
     await t.worker.drain(); // first token delivered (request path never drains)
     const res = await t.request.post(`/v1/businesses/current/invitations/${id}/resend`).set(auth(a.token, a.businessId));
     expect(res.status).toBe(200);

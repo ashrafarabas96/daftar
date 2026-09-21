@@ -68,8 +68,10 @@ export class CatalogController {
   @Post('products')
   @RequiresPermission('catalog.create')
   @UsePipes(new ZodValidationPipe(ProductCreateSchema))
-  async createProduct(@Membership() m: MembershipContext, @Body() body: unknown) {
-    return this.catalog.createProduct(m, body as z.infer<typeof ProductCreateSchema>);
+  async createProduct(@Membership() m: MembershipContext, @Body() body: unknown, @Req() req: Request) {
+    const { id } = await this.catalog.createProduct(m, body as z.infer<typeof ProductCreateSchema>);
+    // Directive §26: creation returns the full ProductDto.
+    return this.catalog.getProduct(m, id, localeOf(req));
   }
 
   @Get('products/:id')
@@ -81,9 +83,9 @@ export class CatalogController {
   @Patch('products/:id')
   @RequiresPermission('catalog.update')
   @UsePipes(new ZodValidationPipe(ProductUpdateSchema))
-  async updateProduct(@Membership() m: MembershipContext, @Param('id') id: string, @Body() body: unknown) {
+  async updateProduct(@Membership() m: MembershipContext, @Param('id') id: string, @Body() body: unknown, @Req() req: Request) {
     await this.catalog.updateProduct(m, uuidParam(id), body as z.infer<typeof ProductUpdateSchema>);
-    return { ok: true };
+    return this.catalog.getProduct(m, uuidParam(id), localeOf(req));
   }
 
   @Delete('products/:id')
@@ -111,7 +113,8 @@ export class CatalogController {
   /** §47: private-bucket access — authorized short-TTL signed URL. */
   @Get('media/:id/access-url')
   @RequiresPermission('catalog.view')
-  async mediaAccessUrl(@Membership() m: MembershipContext, @Param('id') id: string) {
-    return this.media.getAccessUrl(m, uuidParam(id));
+  async mediaAccessUrl(@Membership() m: MembershipContext, @Param('id') id: string, @Query('variant') variant?: string) {
+    if (variant !== undefined && !/^w\d{2,5}$/.test(variant)) throw AppError.validation({ variant: ['invalid_variant'] });
+    return this.media.getAccessUrl(m, uuidParam(id), variant);
   }
 }

@@ -67,7 +67,8 @@ export function setCurrentBusinessId(id: string): void {
 
 export async function apiFetch<T>(path: string, init: RequestInit = {}, retry = true): Promise<T> {
   const headers = new Headers(init.headers);
-  headers.set('content-type', 'application/json');
+  // FormData (media upload) sets its own multipart boundary; everything else is JSON.
+  if (!(init.body instanceof FormData)) headers.set('content-type', 'application/json');
   if (accessToken) headers.set('authorization', `Bearer ${accessToken}`);
   const businessId = currentBusinessId();
   if (businessId) headers.set('x-business-id', businessId);

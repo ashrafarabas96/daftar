@@ -55,7 +55,7 @@ export default function CatalogPage({ params }: { params: Promise<{ locale: Loca
     }
     setBusy(true);
     try {
-      await createProduct({ name, basePriceMinor: minor, locale });
+      await createProduct({ translations: { [locale]: name }, basePriceMinor: minor });
       setOpen(false);
       setName('');
       setPrice('');

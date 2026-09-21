@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Brand mark: rounded square in brand primary with a ledger-line glyph (mirrors @daftar/design-system tokens). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#2563EB"
+        android:pathData="M20,8h68a12,12 0 0 1 12,12v68a12,12 0 0 1 -12,12h-68a12,12 0 0 1 -12,-12v-68a12,12 0 0 1 12,-12z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M30,34h48v6h-48zM30,51h48v6h-48zM30,68h30v6h-30z" />
+</vector>

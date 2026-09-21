@@ -1,11 +1,20 @@
 /**
- * Money contract helpers (Stabilization Part F §38–39, Part S §97).
- * Minor units are ALWAYS a decimal string (bigint-safe). Parsing user input
- * is EXACT decimal arithmetic — no JS float ever touches money. Supports
- * 0-, 2- and 3-decimal currencies (e.g. JOD=3, ILS/USD/TRY=2, KWD=3, JPY=0).
+ * Money contract helpers (Stabilization Part F §38–39, Part S §97; Completion
+ * Directive §34–36).
+ *
+ * ONE SOURCE OF TRUTH (§35): currency facts (supported codes, minor units)
+ * live in @daftar/domain-core's ISO 4217 registry, which the database
+ * `currencies` table mirrors. This module holds NO registry of its own.
+ *
+ * NO BigInt → Number (§34): formatting delegates to domain-core's
+ * BigInt-safe Intl formatter, so values above Number.MAX_SAFE_INTEGER
+ * (e.g. 900719925474099399 minor) keep every digit. Minor units are ALWAYS
+ * a decimal string on the wire; parsing user input is exact decimal
+ * arithmetic — no JS float ever touches money.
  */
+import { Money, formatMoney, minorUnitsOf as registryMinorUnitsOf } from '@daftar/domain-core';
 
-/** Exact decimal-string → minor-units-string parser. Throws on invalid input. */
+/** Exact decimal-string → minor-units-string parser. Throws on invalid input or excess precision. */
 export function parseMajorToMinor(input: string, minorUnits: number): string {
   if (!Number.isInteger(minorUnits) || minorUnits < 0 || minorUnits > 3) {
     throw new Error(`unsupported minorUnits: ${minorUnits}`);
@@ -25,42 +34,15 @@ export function parseMajorToMinor(input: string, minorUnits: number): string {
   return (negative ? -scaled : scaled).toString();
 }
 
-/** Minor-units-string → formatted major amount for display (Intl/CLDR). Never shows the raw minor value. */
+/**
+ * Minor-units-string → formatted major amount for display (Intl/CLDR).
+ * Never shows the raw minor value; never converts the amount to a JS number.
+ */
 export function formatMinor(minor: string | bigint, currency: string, locale: string): string {
-  const minorUnits = minorUnitsOf(currency);
-  const value = BigInt(minor);
-  const negative = value < 0n;
-  const abs = negative ? -value : value;
-  const scale = 10n ** BigInt(minorUnits);
-  const intPart = abs / scale;
-  const fracPart = (abs % scale).toString().padStart(minorUnits, '0');
-  const decimal = Number(`${intPart}.${fracPart}`) * (negative ? -1 : 1);
-  return new Intl.NumberFormat(locale, { style: 'currency', currency }).format(decimal);
+  return formatMoney(Money.ofMinor(minor, currency, { allowNegative: true }), locale);
 }
 
-/** ISO 4217 minor units for the currencies DAFTAR supports in Phase 1. */
-const MINOR_UNITS: Record<string, number> = {
-  JOD: 3,
-  KWD: 3,
-  BHD: 3,
-  OMR: 3,
-  IQD: 3,
-  LYD: 3,
-  TND: 3,
-  USD: 2,
-  EUR: 2,
-  TRY: 2,
-  ILS: 2,
-  SAR: 2,
-  AED: 2,
-  EGP: 2,
-  GBP: 2,
-  MAD: 2,
-  QAR: 2,
-  JPY: 0,
-  KRW: 0,
-};
-
+/** ISO 4217 minor units — the domain-core registry (throws CurrencyError for an unsupported code). */
 export function minorUnitsOf(currency: string): number {
-  return MINOR_UNITS[currency.toUpperCase()] ?? 2;
+  return registryMinorUnitsOf(currency);
 }

@@ -17,7 +17,8 @@ async function handler(req: NextRequest, ctx: { params: Promise<{ path: string[]
     const v = req.headers.get(name);
     if (v) headers.set(name, v);
   }
-  const body = req.method === 'GET' || req.method === 'HEAD' ? undefined : await req.text();
+  // Bodies are forwarded as raw bytes so multipart uploads (media) survive intact.
+  const body = req.method === 'GET' || req.method === 'HEAD' ? undefined : Buffer.from(await req.arrayBuffer());
   const res = await fetch(target, { method: req.method, headers, body });
   const text = await res.text();
   return new NextResponse(text, {

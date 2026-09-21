@@ -132,7 +132,8 @@ export class TenancyController {
   @UsePipes(new ZodValidationPipe(SettingsSchema))
   async updateSettings(@Membership() m: MC, @Body() body: unknown) {
     await this.tenancy.updateSettings(m, body as z.infer<typeof SettingsSchema>);
-    return { ok: true };
+    // Directive §26: mutations return the full DTO, never a bare {ok:true}.
+    return this.tenancy.getBusiness(m);
   }
 
   @Post('businesses/current/base-currency')
@@ -179,10 +180,11 @@ export class TenancyController {
   @Post('businesses/current/members')
   @RequiresPermission('member.manage')
   @UsePipes(new ZodValidationPipe(MemberSchema))
-  async addMember(@Membership() m: MC, @Body() body: unknown) {
+  async addMember(@Membership() m: MC, @Body() body: unknown, @Res({ passthrough: true }) res: Response) {
     const b = body as z.infer<typeof MemberSchema>;
-    await this.structure.addMember(m, b.email, b.roleKey);
-    return { ok: true };
+    const member = await this.structure.addMember(m, b.email, b.roleKey);
+    res.status(201);
+    return member;
   }
 
   @Get('businesses/current/roles')

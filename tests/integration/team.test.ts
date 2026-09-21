@@ -193,7 +193,7 @@ describe('team, invitations & entitlements', () => {
       displayName: 'X',
     });
     expect(wrong.status).toBe(400);
-    const cancel = await t.request.delete(`/v1/businesses/current/invitations/${inv.body.invitationId as string}`).set(auth(a.token, a.businessId));
+    const cancel = await t.request.delete(`/v1/businesses/current/invitations/${inv.body.id as string}`).set(auth(a.token, a.businessId));
     expect(cancel.status).toBe(200);
     const acc = await t.request.post('/v1/invitations/accept-register').send({
       token: await lastInviteToken(),

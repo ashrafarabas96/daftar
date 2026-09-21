@@ -225,7 +225,14 @@ export class StructureService {
    * the IDENTITY boundary; the membership mutation itself runs as the APP role
    * in a business-scoped transaction — defense in depth preserved.
    */
-  async addMember(m: MembershipContext, email: string, roleKey: string): Promise<void> {
+  /** Single member DTO (same projection as listMembers). */
+  async getMember(m: MembershipContext, userId: string): Promise<MemberDto> {
+    const member = (await this.listMembers(m)).find((x) => x.userId === userId);
+    if (!member) throw AppError.notFound('Member not found');
+    return member;
+  }
+
+  async addMember(m: MembershipContext, email: string, roleKey: string): Promise<MemberDto> {
     if (roleKey === 'owner') throw AppError.forbidden('Owner role is system-managed');
     const user = (
       await this.db.withIdentityTransaction((c) => c.query<{ id: string }>('SELECT id FROM users WHERE email = $1 AND status = $2', [email, 'active']))
@@ -292,6 +299,7 @@ export class StructureService {
         },
       });
     });
+    return this.getMember(m, user.id);
   }
 
   async listRoles(m: MembershipContext): Promise<RoleDto[]> {

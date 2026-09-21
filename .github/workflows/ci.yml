@@ -130,8 +130,10 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
       - run: npm ci
-      - name: Design system build
-        run: npm run build -w @daftar/design-system
+      - name: Contract + design-system builds
+        # web/admin import runtime helpers from @daftar/shared-contracts (which
+        # depends on @daftar/domain-core) — both must be built before Next.
+        run: npm run build -w @daftar/domain-core -w @daftar/shared-contracts -w @daftar/design-system
       - name: Web build
         run: npm run build -w @daftar/web
       - name: Admin build

@@ -171,10 +171,17 @@ export class CatalogService {
           priceMinor: v.price_minor,
         }),
       ),
+      // Directive §48: private storage — clients receive the AUTHORIZED
+      // access-url endpoint (short-TTL signed URL on demand), never a storage key.
       media: media.map((md) => ({
         id: md.id,
-        url: `/media/${md.storage_key}`,
-        variants: md.variants.map((vv) => ({ size: vv.size, url: `/media/${vv.storage_key}`, width: vv.width, height: vv.height })),
+        url: `/v1/catalog/media/${md.id}/access-url`,
+        variants: md.variants.map((vv) => ({
+          size: vv.size,
+          url: `/v1/catalog/media/${md.id}/access-url?variant=w${vv.size}`,
+          width: vv.width,
+          height: vv.height,
+        })),
       })),
     };
   }

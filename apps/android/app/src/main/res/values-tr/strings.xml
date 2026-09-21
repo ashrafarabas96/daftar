@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">DAFTAR</string>
+
+    <string name="nav_home">Ana sayfa</string>
+    <string name="nav_catalog">Ürünler</string>
+    <string name="nav_team">Ekip</string>
+    <string name="nav_plan">Plan</string>
+    <string name="nav_settings">Ayarlar</string>
+
+    <string name="auth_email">E-posta</string>
+    <string name="auth_password">Şifre</string>
+    <string name="auth_login">Giriş yap</string>
+    <string name="auth_invalid_credentials">Geçersiz kimlik bilgileri</string>
+    <string name="auth_logout">Çıkış yap</string>
+
+    <string name="error_offline">Çevrimdışısınız — bağlantınızı kontrol edin</string>
+    <string name="error_generic">Bir şeyler ters gitti. Tekrar deneyin.</string>
+    <string name="error_rate_limited">Çok fazla deneme — biraz bekleyip tekrar deneyin</string>
+    <string name="error_conflict">Bu öğe başkası tarafından değiştirildi — yenileyip tekrar deneyin</string>
+    <string name="error_plan_limit">Plan limitine ulaşıldı</string>
+
+    <string name="common_save">Kaydet</string>
+    <string name="common_loading">Yükleniyor…</string>
+    <string name="common_saved">Kaydedildi</string>
+    <string name="common_back">Geri</string>
+
+    <string name="onboarding_title">İşletmenizi kurun</string>
+    <string name="onboarding_business_name">İşletme adı</string>
+    <string name="onboarding_country">Ülke (örn. TR)</string>
+    <string name="onboarding_currency">Ana para birimi (örn. TRY)</string>
+    <string name="onboarding_slug">Mağaza adresi</string>
+    <string name="onboarding_submit">İşletme oluştur</string>
+    <string name="onboarding_failed">İşletme oluşturulamadı — bilgileri kontrol edin</string>
+
+    <string name="home_my_businesses">İşletmelerim</string>
+    <string name="home_current">geçerli</string>
+
+    <string name="catalog_title">Ürünler</string>
+    <string name="catalog_search">Ad veya SKU ile ara…</string>
+    <string name="catalog_empty">Henüz ürün yok — ilk ürününüzü oluşturun.</string>
+    <string name="catalog_new">Yeni ürün</string>
+    <string name="catalog_edit">Ürünü düzenle</string>
+    <string name="catalog_name">Ürün adı</string>
+    <string name="catalog_price">Fiyat (%1$s)</string>
+    <string name="catalog_price_invalid">Geçerli bir fiyat girin</string>
+    <string name="catalog_sku">SKU (isteğe bağlı)</string>
+    <string name="catalog_archived">Arşivlendi</string>
+    <string name="catalog_media">Fotoğraflar</string>
+    <string name="catalog_add_photo">Fotoğraf ekle</string>
+    <string name="catalog_photo_uploaded">Fotoğraf yüklendi</string>
+    <string name="catalog_photo_failed">Fotoğraf yüklenemedi</string>
+
+    <string name="team_title">Ekip</string>
+    <string name="team_status_active">Aktif</string>
+    <string name="team_status_suspended">Askıya alındı</string>
+    <string name="team_status_invited">Davet edildi</string>
+
+    <string name="plan_title">Plan ve kullanım</string>
+    <string name="plan_current">Geçerli plan</string>
+    <string name="plan_limits">Limitler</string>
+    <string name="plan_features">Özellikler</string>
+    <string name="plan_unlimited">Sınırsız</string>
+
+    <string name="settings_title">Ayarlar</string>
+    <string name="settings_business_name">İşletme adı</string>
+    <string name="settings_default_locale">Varsayılan dil</string>
+    <string name="settings_base_currency">Ana para birimi</string>
+    <string name="settings_security">Güvenlik</string>
+</resources>

@@ -2,8 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { formatMinor, minorUnitsOf, parseMajorToMinor } from '../src/money';
 
 /**
- * Money contract (Stabilization Part S §97): exact decimal parsing across
- * 0/2/3-decimal currencies, very large values, no float ever.
+ * Money contract (Stabilization Part S §97; Completion Directive §34–36):
+ * exact decimal parsing, very large values, no float ever, ONE currency
+ * registry (domain-core) behind every client-facing helper.
  */
 describe('money contract', () => {
   it('parses 3-decimal currencies exactly (JOD)', () => {
@@ -18,7 +19,7 @@ describe('money contract', () => {
     expect(parseMajorToMinor('100', 2)).toBe('10000');
   });
 
-  it('parses 0-decimal currencies (JPY)', () => {
+  it('parses 0-decimal scales', () => {
     expect(parseMajorToMinor('1500', 0)).toBe('1500');
     expect(() => parseMajorToMinor('1.5', 0)).toThrow();
   });
@@ -44,16 +45,41 @@ describe('money contract', () => {
     expect(jod).not.toBe('1234');
     const ils = formatMinor('1234', 'ILS', 'en');
     expect(ils).toContain('12.34');
-    const jpy = formatMinor('1500', 'JPY', 'en');
-    expect(jpy).toContain('1,500');
   });
 
-  it('knows the minor units of supported currencies', () => {
+  const digits = (s: string) => s.replace(/[^0-9]/g, '');
+  const toAscii = (s: string) => s.replace(/[٠-٩]/g, (d) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(d)));
+
+  it('§36 TEST LARGE MONEY: values above the JS safe integer keep exact digits in every locale', () => {
+    for (const minor of ['900719925474099399', '999999999999999999', '9007199254740993']) {
+      for (const currency of ['ILS', 'JOD', 'TRY', 'USD']) {
+        for (const locale of ['en', 'ar', 'tr']) {
+          const out = formatMinor(minor, currency, locale);
+          expect(digits(toAscii(out)), `${minor} ${currency} ${locale} → ${out}`).toBe(minor);
+          // The fraction is exactly the currency's minor units — never float noise.
+          const frac = minor.slice(-minorUnitsOf(currency));
+          expect(
+            toAscii(out)
+              .replace(/[^0-9]/g, '')
+              .endsWith(frac),
+          ).toBe(true);
+        }
+      }
+    }
+  });
+
+  it('formats negative values without touching Number', () => {
+    const out = formatMinor('-900719925474099399', 'USD', 'en');
+    expect(digits(out)).toBe('900719925474099399');
+    expect(out).toMatch(/[-−]/);
+  });
+
+  it('minor units come from the domain-core registry — no second table', () => {
     expect(minorUnitsOf('JOD')).toBe(3);
-    expect(minorUnitsOf('KWD')).toBe(3);
     expect(minorUnitsOf('USD')).toBe(2);
     expect(minorUnitsOf('TRY')).toBe(2);
     expect(minorUnitsOf('ILS')).toBe(2);
-    expect(minorUnitsOf('JPY')).toBe(0);
+    expect(() => minorUnitsOf('KWD')).toThrow(/Unsupported currency/);
+    expect(() => minorUnitsOf('JPY')).toThrow(/Unsupported currency/);
   });
 });

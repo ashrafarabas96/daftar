@@ -115,15 +115,26 @@ export class MediaService {
    * scope is verified against the media row (RLS scope); the storage key
    * never leaves the server.
    */
-  async getAccessUrl(m: MembershipContext, mediaId: string): Promise<{ url: string; expiresInSeconds: number }> {
+  async getAccessUrl(m: MembershipContext, mediaId: string, variant?: string): Promise<{ url: string; expiresInSeconds: number }> {
     const row = await this.db
       .scoped<{
         storage_key: string;
-      }>({ tenantId: m.tenantId, businessId: m.businessId }, 'SELECT storage_key FROM media WHERE business_id = $1 AND id = $2', [m.businessId, mediaId])
+        variants: { size: number; storage_key: string }[];
+      }>({ tenantId: m.tenantId, businessId: m.businessId }, 'SELECT storage_key, variants FROM media WHERE business_id = $1 AND id = $2', [
+        m.businessId,
+        mediaId,
+      ])
       .then((r) => r.rows[0]);
     if (!row) throw AppError.notFound('Media not found');
+    let key = row.storage_key;
+    if (variant) {
+      const size = Number(variant.slice(1));
+      const v = row.variants.find((x) => x.size === size);
+      if (!v) throw AppError.notFound('Media variant not found');
+      key = v.storage_key;
+    }
     const expiresInSeconds = 300;
-    const url = await this.storage.signedUrl(row.storage_key, expiresInSeconds);
+    const url = await this.storage.signedUrl(key, expiresInSeconds);
     return { url, expiresInSeconds };
   }
 

@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">دفتر</string>
+
+    <string name="nav_home">الرئيسية</string>
+    <string name="nav_catalog">المنتجات</string>
+    <string name="nav_team">الفريق</string>
+    <string name="nav_plan">الباقة</string>
+    <string name="nav_settings">الإعدادات</string>
+
+    <string name="auth_email">البريد الإلكتروني</string>
+    <string name="auth_password">كلمة المرور</string>
+    <string name="auth_login">دخول</string>
+    <string name="auth_invalid_credentials">بيانات الدخول غير صحيحة</string>
+    <string name="auth_logout">تسجيل الخروج</string>
+
+    <string name="error_offline">لا يوجد اتصال — تحقق من الشبكة</string>
+    <string name="error_generic">حدث خطأ. حاول مجدداً.</string>
+    <string name="error_rate_limited">محاولات كثيرة — انتظر قليلاً ثم أعد المحاولة</string>
+    <string name="error_conflict">تم تعديل هذا العنصر من شخص آخر — أعد التحميل ثم حاول مجدداً</string>
+    <string name="error_plan_limit">وصلت إلى حد الباقة</string>
+
+    <string name="common_save">حفظ</string>
+    <string name="common_loading">جارٍ التحميل…</string>
+    <string name="common_saved">تم الحفظ</string>
+    <string name="common_back">رجوع</string>
+
+    <string name="onboarding_title">إعداد نشاطك التجاري</string>
+    <string name="onboarding_business_name">اسم النشاط</string>
+    <string name="onboarding_country">الدولة (مثل JO)</string>
+    <string name="onboarding_currency">العملة الأساسية (مثل JOD)</string>
+    <string name="onboarding_slug">الرابط المميز</string>
+    <string name="onboarding_submit">إنشاء النشاط</string>
+    <string name="onboarding_failed">تعذر إنشاء النشاط — تحقق من البيانات</string>
+
+    <string name="home_my_businesses">أنشطتي التجارية</string>
+    <string name="home_current">الحالي</string>
+
+    <string name="catalog_title">المنتجات</string>
+    <string name="catalog_search">ابحث بالاسم أو الرمز…</string>
+    <string name="catalog_empty">لا توجد منتجات بعد — أنشئ أول منتج.</string>
+    <string name="catalog_new">منتج جديد</string>
+    <string name="catalog_edit">تعديل المنتج</string>
+    <string name="catalog_name">اسم المنتج</string>
+    <string name="catalog_price">السعر (%1$s)</string>
+    <string name="catalog_price_invalid">أدخل سعراً صحيحاً</string>
+    <string name="catalog_sku">رمز المنتج (اختياري)</string>
+    <string name="catalog_archived">مؤرشف</string>
+    <string name="catalog_media">الصور</string>
+    <string name="catalog_add_photo">إضافة صورة</string>
+    <string name="catalog_photo_uploaded">تم رفع الصورة</string>
+    <string name="catalog_photo_failed">فشل رفع الصورة</string>
+
+    <string name="team_title">الفريق</string>
+    <string name="team_status_active">نشط</string>
+    <string name="team_status_suspended">موقوف</string>
+    <string name="team_status_invited">مدعو</string>
+
+    <string name="plan_title">الباقة والاستخدام</string>
+    <string name="plan_current">الباقة الحالية</string>
+    <string name="plan_limits">الحدود</string>
+    <string name="plan_features">المزايا</string>
+    <string name="plan_unlimited">غير محدود</string>
+
+    <string name="settings_title">الإعدادات</string>
+    <string name="settings_business_name">اسم النشاط</string>
+    <string name="settings_default_locale">اللغة الافتراضية</string>
+    <string name="settings_base_currency">العملة الأساسية</string>
+    <string name="settings_security">الأمان</string>
+</resources>

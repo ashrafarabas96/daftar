@@ -90,6 +90,29 @@ for (const f of walk(join(ROOT, 'infrastructure/database/migrations'), /\.sql$/)
   }
 }
 
+// Rule 6b (Completion Directive §34): NO BigInt → Number for money anywhere a
+// client or contract package formats or parses amounts. `Number(`/parseFloat/
+// parseInt applied to anything named like money is forbidden in every TS
+// surface (API, contract packages, web, admin).
+for (const dir of [
+  'apps/api/src',
+  'packages/domain-core/src',
+  'packages/shared-contracts/src',
+  'packages/design-system/src',
+  'apps/web/src',
+  'apps/admin/src',
+]) {
+  for (const f of tsFiles(join(ROOT, dir))) {
+    const src = readFileSync(f, 'utf8');
+    src.split('\n').forEach((line, i) => {
+      if (/^\s*(\/\/|\*)/.test(line)) return;
+      if (/\b(Number|parseFloat|parseInt)\(\s*[^)]*\b\w*(minor|amount|price|money)\w*/i.test(line)) {
+        fail('money-no-number-conversion', f, `line ${i + 1}: money converted through Number/parseFloat/parseInt`);
+      }
+    });
+  }
+}
+
 // Rule 7: no mutable derived financial columns (product.stock / customer.balance ledgers).
 for (const f of walk(join(ROOT, 'infrastructure/database/migrations'), /\.sql$/)) {
   const src = readFileSync(f, 'utf8');
