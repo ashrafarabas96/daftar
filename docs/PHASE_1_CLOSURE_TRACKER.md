@@ -34,11 +34,23 @@
 | 69 | Performance review + baseline numbers | DONE | `tests/perf/phase1-baseline.test.ts`, `PHASE_1_PERFORMANCE_BASELINE.md` | this closure |
 | 70–73 | Release artifact hygiene, export with manifest + sibling SHA-256, `gate:phase1:release`, clean acceptance on Node 24.12.x | DONE | `scripts/phase1-release-gate.ts`, `scripts/export-release.ts`, golden 05 | 96a076c |
 | 74 | Command matrix executed on a clean environment | DONE | `PHASE_1_ACCEPTANCE_REPORT.md` evidence table (real durations/exit codes) | this closure |
-| 75 | Adversarial passes (auth abuse, RLS, privilege, delegation ceiling, mass assignment, cross-tenant) | DONE | `tests/security/*` (139 cases) | archive + this closure |
+| 75 | Adversarial passes (auth abuse, RLS, privilege, delegation ceiling, mass assignment, cross-tenant) | DONE | `tests/security/*` (155 cases in 15 files) | archive + this closure |
 | 76 | Final document set (21 documents) | DONE | `gate:phase1:release` step "release documents present and non-placeholder" | this closure |
 | 77 | Evidence with actual numbers | DONE | `PHASE_1_TEST_REPORT.md`, `PHASE_1_ACCEPTANCE_REPORT.md` | this closure |
 | 78 | Bug budget: P0 = P1 = security P2 = 0 | DONE | `PHASE_1_REGRESSION_REPORT.md` (open defects: 0) | — |
 | 79–82 | Only PASS or FAIL; stop after PASS; nothing from Phase 2 started | DONE | acceptance verdict | — |
+
+## Final Release Blocker Patch (directive "FIX ONLY THE VERIFIED FINAL BLOCKERS")
+
+| Blocker | Requirement | Status | Guard | Migration |
+|---|---|---|---|---|
+| 1 | Provisioner actor cannot be spoofed through a GUC; authorization + mutation stay atomic | DONE | `provisioner-boundary` Blocker 1 suite | `0038` |
+| 2 | Every identifier belongs to one real product XOR variant; registry internal-only | DONE | `catalog-identifiers` owner-integrity suite | `0039` |
+| 3 | Release zip self-contained; acceptance reproduced from the extracted archive | DONE | `export:release` audit, gate "self-contained source tree", full 24-step gate + performance baseline executed inside the extracted archive (fresh `npm ci`, fresh PostgreSQL, no `.git`); the run found and fixed R-36…R-38 | — |
+| 4 | KMS: HTTPS-only, authenticated, timeout/abort, bounded response, sanitized errors, fail-closed enqueue | DONE | `kms-encryptor` | — |
+| 5 | Release gate fails on any mandatory skip; the gate itself is tested | DONE | `release-gate` | — |
+| 6 | Android debug cleartext scoped to the emulator host; release TLS-only | DONE | `NetworkSecurityConfigTest.kt` | — |
+| 7 | Raw structured evidence from the final tree | DONE | `release/evidence.json` v2 | — |
 
 ## Out of Phase (per the directive, not deferred by us)
 

@@ -1,6 +1,7 @@
 import { Injectable, Inject, type OnModuleDestroy, type OnModuleInit } from '@nestjs/common';
 import { Pool, type PoolClient, type QueryResult, type QueryResultRow } from 'pg';
 import type { AppConfig } from '../config';
+import { mintProvisioningAssertion, parseProvisioningAssertionKey, type ProvisioningAssertionKey, type ProvisioningKind } from './provisioning-assertion';
 
 /** Merchant business scope — tenant + business context for the app role. */
 export interface Scope {
@@ -12,6 +13,12 @@ export interface Scope {
    * (provision_actor()) instead of trusting a caller-supplied user id.
    */
   actorUserId?: string;
+  /**
+   * Provisioning assertion (Final Release Blocker 1): an HMAC-signed,
+   * single-use, kind-bound claim of the actor that the database verifies
+   * inside provision_actor(). Set ONLY on provisioner transactions.
+   */
+  provisioningAssertion?: string;
 }
 
 /**
@@ -43,6 +50,7 @@ export class Database implements OnModuleDestroy, OnModuleInit {
   private readonly provisionerPool: Pool | null;
 
   private readonly expectedPrincipals: [Pool | null, string][] = [];
+  private readonly provisioningKey: ProvisioningAssertionKey | null;
 
   constructor(@Inject('APP_CONFIG') private readonly config: AppConfig) {
     // §XXV–XXXI + Directive §16–18: a process opens pools ONLY for the
@@ -54,6 +62,7 @@ export class Database implements OnModuleDestroy, OnModuleInit {
     //   worker:       worker only
     //   all:          everything (dev/test; production rejects this mode)
     const mode = config.PROCESS_MODE;
+    this.provisioningKey = parseProvisioningAssertionKey(config);
     const owns = {
       app: mode === 'all' || mode === 'merchant-api',
       platform: mode === 'all' || mode === 'platform-api',
@@ -104,8 +113,9 @@ export class Database implements OnModuleDestroy, OnModuleInit {
       set_config('app.tenant_id', $1, true),
       set_config('app.business_id', $2, true),
       set_config('app.bypass_rls', $3, true),
-      set_config('app.actor_user_id', $4, true)`,
-      [scope.tenantId ?? '', scope.businessId ?? '', bypass ? 'true' : 'false', scope.actorUserId ?? ''],
+      set_config('app.actor_user_id', $4, true),
+      set_config('app.provisioning_assertion', $5, true)`,
+      [scope.tenantId ?? '', scope.businessId ?? '', bypass ? 'true' : 'false', scope.actorUserId ?? '', scope.provisioningAssertion ?? ''],
     );
   }
 
@@ -168,12 +178,18 @@ export class Database implements OnModuleDestroy, OnModuleInit {
    * authority is EXECUTE on narrow SECURITY DEFINER commands that verify the
    * server-derived actor's authority INSIDE the same command (0033).
    */
-  async withProvisionerTransaction<T>(actorUserId: string | null, fn: (client: PoolClient) => Promise<T>): Promise<T> {
-    // §12: the actor travels as transaction-local context, derived from the
-    // authenticated principal by the caller — never from a request body.
-    // `null` = no actor: only actor-independent lookups (invitation peek /
-    // expire) may run; every mutating command raises PROV:FORBIDDEN.
-    return this.run(this.provisionerPool, actorUserId ? { actorUserId } : {}, true, fn);
+  async withProvisionerTransaction<T>(actorUserId: string | null, kind: ProvisioningKind | null, fn: (client: PoolClient) => Promise<T>): Promise<T> {
+    // Blocker 1: the actor travels as a server-MINTED assertion (HMAC over
+    // actor + operation kind + expiry + jti) that provision_actor() verifies
+    // against a key no runtime role can read. A caller-settable GUC is never
+    // trusted. `null` = no actor: only actor-independent lookups (invitation
+    // peek / expire) may run; every mutating command raises PROV:FORBIDDEN.
+    if (actorUserId === null || kind === null) return this.run(this.provisionerPool, {}, true, fn);
+    if (!this.provisioningKey) {
+      throw new Error('PROVISIONING_ASSERTION_KEY is not configured — provisioning requires a server-minted actor assertion');
+    }
+    const provisioningAssertion = mintProvisioningAssertion(this.provisioningKey, actorUserId, kind);
+    return this.run(this.provisionerPool, { provisioningAssertion }, true, fn);
   }
 
   /** Names of the pools this process actually opened (boot-test evidence, §20). */

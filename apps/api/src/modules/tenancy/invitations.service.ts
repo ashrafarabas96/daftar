@@ -240,7 +240,7 @@ export class InvitationsService {
     // §13 (Stabilization): invitation acceptance is PROVISIONER authority.
     // No actor yet (new-user registration path): peek/expire only touch the
     // token's own row and take no actor-dependent decision.
-    const peek = await this.db.withProvisionerTransaction(null, async (c) => {
+    const peek = await this.db.withProvisionerTransaction(null, null, async (c) => {
       const row = (
         await c.query<{ id: string; email: string; expires_at: Date }>('SELECT id, email, expires_at FROM provision_peek_invitation($1)', [
           hashInviteToken(token),
@@ -292,6 +292,7 @@ export class InvitationsService {
     try {
       const accepted = await this.db.withProvisionerTransaction(
         userId,
+        'accept_invitation',
         async (c) =>
           (
             await c.query<{ invitation_id: string; business_id: string; tenant_id: string }>(

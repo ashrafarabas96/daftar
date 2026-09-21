@@ -4,6 +4,12 @@ import { createObjectStorage, S3ObjectStorage } from '../../apps/api/src/infra/s
 import { createCredentialDelivery, SmtpDelivery } from '../../apps/api/src/modules/delivery/smtp-delivery';
 import { RedisRateLimiter } from '../../apps/api/src/infra/redis';
 
+/** Blocker 4: production KMS bridge = https endpoint + bearer token (both mandatory). */
+const KMS_BRIDGE = {
+  CREDENTIAL_KMS_ENDPOINT: 'https://kms.example.com/encrypt',
+  CREDENTIAL_KMS_TOKEN: 'kms-bridge-token-with-at-least-32-characters!!',
+} as const;
+
 const PROD_ENV: NodeJS.ProcessEnv = {
   NODE_ENV: 'production',
   APP_DATABASE_URL: 'postgresql://daftar_app:x@db/daftar',
@@ -11,6 +17,7 @@ const PROD_ENV: NodeJS.ProcessEnv = {
   IDENTITY_DATABASE_URL: 'postgresql://daftar_identity:x@db/daftar',
   RESOLVER_DATABASE_URL: 'postgresql://daftar_resolver:x@db/daftar',
   PROVISIONER_DATABASE_URL: 'postgresql://daftar_provisioner:x@db/daftar',
+  PROVISIONING_ASSERTION_KEY: Buffer.alloc(32, 9).toString('base64'),
   WORKER_DATABASE_URL: 'postgresql://daftar_worker:x@db/daftar',
   JWT_SECRET: 'production-secret-with-at-least-32-characters',
   MEDIA_STORAGE: 's3',
@@ -34,7 +41,7 @@ describe('production provider wiring (Gate A §20–32)', () => {
   it('NODE_ENV=production + MEDIA_STORAGE=s3 → REAL S3 adapter', () => {
     // media storage belongs to the merchant-api process — strip secrets it must not receive
     const { PLATFORM_DATABASE_URL: _p, WORKER_DATABASE_URL: _w, CREDENTIAL_PAYLOAD_KEY: _k, SMTP_URL: _s, ...merchantEnv } = PROD_ENV;
-    const config = loadConfig({ ...merchantEnv, PROCESS_MODE: 'merchant-api', CREDENTIAL_KMS_ENDPOINT: 'https://kms.example.com/encrypt' });
+    const config = loadConfig({ ...merchantEnv, PROCESS_MODE: 'merchant-api', ...KMS_BRIDGE });
     const storage = createObjectStorage(config);
     expect(storage).toBeInstanceOf(S3ObjectStorage);
     expect(storage.kind).toBe('s3');
@@ -58,8 +65,15 @@ describe('production provider wiring (Gate A §20–32)', () => {
 
   it('NODE_ENV=production + REDIS_URL → distributed Redis limiter', () => {
     // HTTP surface (platform-api) — strip worker/provisioner/credential secrets
-    const { WORKER_DATABASE_URL: _w, PROVISIONER_DATABASE_URL: _pv, CREDENTIAL_PAYLOAD_KEY: _k, SMTP_URL: _s, ...platformEnv } = PROD_ENV;
-    const config = loadConfig({ ...platformEnv, PROCESS_MODE: 'platform-api', CREDENTIAL_KMS_ENDPOINT: 'https://kms.example.com/encrypt' });
+    const {
+      WORKER_DATABASE_URL: _w,
+      PROVISIONER_DATABASE_URL: _pv,
+      PROVISIONING_ASSERTION_KEY: _pa,
+      CREDENTIAL_PAYLOAD_KEY: _k,
+      SMTP_URL: _s,
+      ...platformEnv
+    } = PROD_ENV;
+    const config = loadConfig({ ...platformEnv, PROCESS_MODE: 'platform-api', ...KMS_BRIDGE });
     const limiter = new RedisRateLimiter(config);
     expect(limiter.kind).toBe('redis');
     void limiter.close().catch(() => undefined);
@@ -91,7 +105,7 @@ describe('process-level secret separation (§XXV–XXXI)', () => {
     // Part C: the merchant carries NO credential key material — it encrypts
     // via a KMS-style provider endpoint only.
     const { PLATFORM_DATABASE_URL: _p, WORKER_DATABASE_URL: _w, CREDENTIAL_PAYLOAD_KEY: _k, SMTP_URL: _s, ...merchantEnv } = PROD_ENV;
-    const cfg = loadConfig({ ...merchantEnv, PROCESS_MODE: 'merchant-api', CREDENTIAL_KMS_ENDPOINT: 'https://kms.example.com/encrypt' });
+    const cfg = loadConfig({ ...merchantEnv, PROCESS_MODE: 'merchant-api', ...KMS_BRIDGE });
     expect(cfg.PROCESS_MODE).toBe('merchant-api');
   });
 
@@ -112,11 +126,18 @@ describe('process-level secret separation (§XXV–XXXI)', () => {
 
   it('platform-api REJECTS worker secrets and credential keys', () => {
     expect(() => loadConfig({ ...PROD_ENV, PROCESS_MODE: 'platform-api' })).toThrow(/must NOT be set in PROCESS_MODE=platform-api/);
-    const { WORKER_DATABASE_URL: _w, PROVISIONER_DATABASE_URL: _pv, CREDENTIAL_PAYLOAD_KEY: _k, SMTP_URL: _s, ...platformEnv } = PROD_ENV;
+    const {
+      WORKER_DATABASE_URL: _w,
+      PROVISIONER_DATABASE_URL: _pv,
+      PROVISIONING_ASSERTION_KEY: _pa,
+      CREDENTIAL_PAYLOAD_KEY: _k,
+      SMTP_URL: _s,
+      ...platformEnv
+    } = PROD_ENV;
     // Directive §24: the platform HTTP runtime enqueues password resets, so it
     // needs the KMS-style ENCRYPT provider too — never local key material.
     expect(() => loadConfig({ ...platformEnv, PROCESS_MODE: 'platform-api' })).toThrow(/CREDENTIAL_KMS_ENDPOINT/);
-    expect(() => loadConfig({ ...platformEnv, PROCESS_MODE: 'platform-api', CREDENTIAL_KMS_ENDPOINT: 'https://kms.example.com/encrypt' })).not.toThrow();
+    expect(() => loadConfig({ ...platformEnv, PROCESS_MODE: 'platform-api', ...KMS_BRIDGE })).not.toThrow();
   });
 
   it('worker: requires worker DB + key ring + SMTP; REJECTS merchant/platform DB URLs and JWT', () => {
@@ -135,6 +156,22 @@ describe('process-level secret separation (§XXV–XXXI)', () => {
     expect(() => loadConfig(noDb)).toThrow(/WORKER_DATABASE_URL/);
     const { CREDENTIAL_PAYLOAD_KEY: _k, ...noKey } = workerEnv;
     expect(() => loadConfig(noKey)).toThrow(/CREDENTIAL_PAYLOAD_KEY/);
+  });
+
+  it('Blocker 1: merchant-api production REQUIRES the provisioning assertion key; platform-api and worker must NOT receive it', () => {
+    const { PLATFORM_DATABASE_URL: _p, WORKER_DATABASE_URL: _w, CREDENTIAL_PAYLOAD_KEY: _k, SMTP_URL: _s, ...merchantEnv } = PROD_ENV;
+    const { PROVISIONING_ASSERTION_KEY: _pa, ...noKey } = merchantEnv;
+    expect(() => loadConfig({ ...noKey, PROCESS_MODE: 'merchant-api', ...KMS_BRIDGE })).toThrow(/PROVISIONING_ASSERTION_KEY/);
+    expect(() =>
+      loadConfig({
+        ...merchantEnv,
+        PROVISIONING_ASSERTION_KEY: Buffer.alloc(8, 1).toString('base64'),
+        PROCESS_MODE: 'merchant-api',
+        ...KMS_BRIDGE,
+      }),
+    ).toThrow(/at least 32 bytes/);
+    const { WORKER_DATABASE_URL: _w2, PROVISIONER_DATABASE_URL: _pv, CREDENTIAL_PAYLOAD_KEY: _k2, SMTP_URL: _s2, ...platformWithKey } = PROD_ENV;
+    expect(() => loadConfig({ ...platformWithKey, PROCESS_MODE: 'platform-api', ...KMS_BRIDGE })).toThrow(/PROVISIONING_ASSERTION_KEY.*must NOT be set/);
   });
 
   it('mode=all is FORBIDDEN in production (§10 separated runtimes), allowed in dev/test', () => {

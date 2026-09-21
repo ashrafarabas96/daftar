@@ -11,7 +11,10 @@ import { loadConfig, type AppConfig } from '../../apps/api/src/config';
 import { runMigrations } from '../../apps/api/src/infra/migrate';
 import type { CredentialDelivery } from '../../apps/api/src/modules/auth/tokens';
 import type { OutboxSink } from '../../apps/api/src/modules/outbox/publisher';
+import type { CredentialPayloadEncryptor } from '../../apps/api/src/modules/delivery/credential-protector';
 import { CredentialDeliveryWorker } from '../../apps/api/src/modules/delivery/delivery-worker.service';
+import { mintProvisioningAssertion, type ProvisioningKind } from '../../apps/api/src/infra/provisioning-assertion';
+import { ensureEmbeddedPgBinariesExecutable } from '../../scripts/ensure-embedded-pg-binaries';
 
 export const PG_DIR = process.env['PG_DIR'] ?? '/tmp/daftar-pg-shared';
 export const PG_PORT = Number(process.env['PG_PORT'] ?? 55432);
@@ -23,6 +26,19 @@ export const WORKER_DB_PASSWORD = 'test_worker_password_123';
 export const RESOLVER_DB_PASSWORD = 'test_resolver_password_123';
 export const IDENTITY_DB_PASSWORD = 'test_identity_password_123';
 export const PROVISIONER_DB_PASSWORD = 'test_provisioner_password_123';
+/** Blocker 1: the HMAC key the API mints provisioning assertions with; installed in the DB by ensurePostgres(). */
+export const PROVISIONING_ASSERTION_KEY_B64 = Buffer.from('test-provisioning-assertion-key-32-bytes!!').subarray(0, 32).toString('base64');
+export const PROVISIONING_ASSERTION_KID = 'v1';
+/** Mint a valid assertion exactly as the API does (tests that PROVE the boundary, not bypass it). */
+export function mintTestAssertion(actorUserId: string, kind: ProvisioningKind, now: Date = new Date(), ttlSeconds = 60): string {
+  return mintProvisioningAssertion(
+    { kid: PROVISIONING_ASSERTION_KID, secret: Buffer.from(PROVISIONING_ASSERTION_KEY_B64, 'base64') },
+    actorUserId,
+    kind,
+    now,
+    ttlSeconds,
+  );
+}
 
 export const dbUrl = `postgresql://${PG_USER}:${PG_PASSWORD}@localhost:${PG_PORT}/daftar`;
 export const appDbUrl = `postgresql://daftar_app:${APP_DB_PASSWORD}@localhost:${PG_PORT}/daftar`;
@@ -62,32 +78,92 @@ async function applyBootstrap(): Promise<void> {
   }
 }
 
-/** Start (or reuse) a REAL PostgreSQL 18 instance and migrate a fresh schema. */
-export async function ensurePostgres(): Promise<void> {
-  if (await ping()) {
-    // Reused instance: bootstrap is idempotent; still apply any PENDING migrations.
-    await applyBootstrap();
-    await runMigrations(dbUrl);
-    return;
-  }
-  pg = new EmbeddedPostgres({
-    databaseDir: PG_DIR,
-    user: PG_USER,
-    password: PG_PASSWORD,
-    port: PG_PORT,
-    persistent: true,
-  });
-  if (!existsSync(join(PG_DIR, 'PG_VERSION'))) {
-    await pg.initialise();
-  }
-  await pg.start();
+/** The database side of the assertion key (0038) — what the ops job does with BOOTSTRAP_DATABASE_URL in production. */
+async function installProvisioningKey(): Promise<void> {
+  const pool = new Pool({ connectionString: dbUrl, max: 1 });
   try {
-    await pg.createDatabase('daftar');
+    await pool.query(`SELECT provision_assertion_key_install($1, decode($2, 'base64'))`, [PROVISIONING_ASSERTION_KID, PROVISIONING_ASSERTION_KEY_B64]);
+  } finally {
+    await pool.end();
+  }
+}
+
+/**
+ * Start (or reuse) a REAL PostgreSQL 18 instance and migrate a fresh schema.
+ *
+ * Consecutive suite runs share one data directory (PG_DIR). A previous run's
+ * server may still be shutting down when the next one starts: its socket
+ * already refuses connections while `postmaster.pid` is still held, so a naive
+ * "ping, else start" would try to start a second postmaster in the same
+ * directory and die with `lock file "postmaster.pid" already exists`. The
+ * handshake below waits — bounded — for the directory to settle into one of
+ * the two usable states (a server that answers, or no server at all) and
+ * retries a start that loses that race.
+ */
+const START_ATTEMPTS = 12;
+const SETTLE_DELAY_MS = 500;
+
+const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** True while a previous postmaster still owns the data directory. */
+function pidFileHeld(): boolean {
+  return existsSync(join(PG_DIR, 'postmaster.pid'));
+}
+
+async function startOrReuse(): Promise<void> {
+  for (let attempt = 0; attempt < START_ATTEMPTS; attempt += 1) {
+    if (await ping()) return; // a usable server is already listening
+    if (pidFileHeld()) {
+      // Someone else owns the directory: either still starting or still stopping.
+      await delay(SETTLE_DELAY_MS);
+      continue;
+    }
+    ensureEmbeddedPgBinariesExecutable();
+    pg = new EmbeddedPostgres({
+      databaseDir: PG_DIR,
+      user: PG_USER,
+      password: PG_PASSWORD,
+      port: PG_PORT,
+      persistent: true,
+    });
+    if (!existsSync(join(PG_DIR, 'PG_VERSION'))) {
+      await pg.initialise();
+    }
+    try {
+      await pg.start();
+      return;
+    } catch (e) {
+      pg = null;
+      // Lost the race against a concurrent start: settle and re-evaluate.
+      if (!/postmaster\.pid|already (exists|running)/i.test(e instanceof Error ? e.message : String(e))) throw e;
+      await delay(SETTLE_DELAY_MS);
+    }
+  }
+  throw new Error(`PostgreSQL at ${PG_DIR} (port ${PG_PORT}) did not become usable within ${(START_ATTEMPTS * SETTLE_DELAY_MS) / 1000}s`);
+}
+
+export async function ensurePostgres(): Promise<void> {
+  await startOrReuse();
+  try {
+    await (pg?.createDatabase('daftar') ?? Promise.resolve());
   } catch {
     // database already exists
   }
+  if (!pg) {
+    // Reused instance: make sure the database exists before bootstrapping it.
+    const admin = new Pool({ connectionString: `postgresql://${PG_USER}:${PG_PASSWORD}@localhost:${PG_PORT}/postgres`, max: 1 });
+    try {
+      await admin.query('CREATE DATABASE daftar');
+    } catch {
+      // already exists
+    } finally {
+      await admin.end().catch(() => undefined);
+    }
+  }
+  // Bootstrap is idempotent; migrations apply only what is pending.
   await applyBootstrap();
   await runMigrations(dbUrl);
+  await installProvisioningKey();
 }
 
 let ownerPoolInstance: Pool | null = null;
@@ -168,6 +244,8 @@ export interface TestApp {
 export interface TestAppOptions {
   delivery?: CredentialDelivery;
   outboxSink?: OutboxSink;
+  /** Blocker 4 seam: the merchant-side credential encryptor (KMS bridge stand-in). */
+  encryptor?: CredentialPayloadEncryptor;
   storage?: import('../../apps/api/src/infra/storage').ObjectStorage;
   /** Extra env applied on top of the test config (e.g. TRUST_PROXY, JWT_KEYS). */
   configOverrides?: Record<string, string>;
@@ -197,6 +275,8 @@ export async function createTestApp(options: TestAppOptions = {}): Promise<TestA
     RESOLVER_DATABASE_URL: resolverDbUrl,
     WORKER_DATABASE_URL: workerDbUrl,
     PROVISIONER_DATABASE_URL: provisionerDbUrl,
+    PROVISIONING_ASSERTION_KEY: PROVISIONING_ASSERTION_KEY_B64,
+    PROVISIONING_ASSERTION_KID,
     JWT_SECRET: 'test-secret-key-with-at-least-32-characters!',
     MEDIA_ROOT: '/tmp/daftar-test-media',
     LOG_LEVEL: process.env['TEST_LOG_LEVEL'] ?? 'warn',
@@ -209,6 +289,7 @@ export async function createTestApp(options: TestAppOptions = {}): Promise<TestA
         config,
         ...(options.delivery ? { delivery: options.delivery } : {}),
         ...(options.outboxSink ? { outboxSink: options.outboxSink } : {}),
+        ...(options.encryptor ? { encryptor: options.encryptor } : {}),
         ...(options.storage ? { storage: options.storage } : {}),
       }),
     ],

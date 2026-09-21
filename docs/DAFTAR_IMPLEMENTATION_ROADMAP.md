@@ -1,56 +1,105 @@
 # DAFTAR — Implementation Roadmap / خارطة الطريق التنفيذية
 
-> وثيقة تخطيط فقط — **لا يبدأ التنفيذ الآن**. كل Phase لها Gate وفق `DAFTAR_RELEASE_GATES.md`، وتنتهي نظيفة (لا تراكم أخطاء).
+> **Authoritative phase map.** Every phase has a gate in `DAFTAR_RELEASE_GATES.md` and must close clean (no accumulated defects). No phase starts before the previous one is documented PASS.
+>
+> This document was normalized on 2026-09-21 to the approved 16-phase map. The pre-normalization map (Phase 0–9, "Money Core" at Phase 2 bundling accounting + inventory + sales + POS) is preserved at the end of this file as a historical record — it is **not** the plan of record.
 
-## Phase 0 — Product, Architecture & Quality Foundation (الحالية)
-كل وثائق `docs/` + Acceptance Report. **مخرجة: قرار PHASE 0 PASS.**
+## Phase 0 — Architecture Constitution ✅ PASS
 
-## Phase 1 — Core Platform Skeleton
-- Tenancy + Identity/RBAC + إعدادات Business/Branch/Warehouse.
-- Design System (packages) + هيكل apps (api/web/android) + CI/CD + Observability أساسية.
-- Catalog (منتجات/تصنيفات/صور) + Localization infrastructure (ar/en/tr).
-- **Gate:** tenant isolation مُثبت، CI أخضر، Design tokens معتمدة.
+All `docs/` specifications, data model, security model, accounting rules, state machines, golden-suite definition + `PHASE_0_ACCEPTANCE_REPORT.md`.
 
-## Phase 2 — Money Core
-- Accounting Engine (Posting + CoA seeding) + Inventory Ledger + Sales/Invoices/Payments/Receivables + POS (ويب أولًا).
-- Cash/Credit/Partial + Dashboard الأساسي.
-- **Gate:** Golden 01–08, 19–21 خضراء؛ Invariants آلية.
+## Phase 1 — Foundation, Security, Platform ✅ PASS
 
-## Phase 3 — Debts, Installments, Returns
-- Installments + Returns/Refunds/Credit Notes + كشوف الحساب + تقارير أساسية.
-- **Gate:** Golden 09–12 + Reconciliation jobs تعمل.
+Tenancy · identity + auth (sessions, refresh lineage, JWT ring) · multi-user + RBAC (roles, delegation ceiling, branch scope) · business/branch/warehouse structure · catalog (products, variants, categories, normalized translations, identifier registry, media) · merchant web · admin web · Android foundation · entitlement foundation (plans, versions, limits, overrides) · super-admin foundation (platform console, support sessions) · localization ar/en/tr · CI, release gate, observability basics.
 
-## Phase 4 — Purchases, Suppliers, Expenses + Offline Android
-- دورة الشراء والمخزون المتقدم (تحويلات/جرد) + Android مع Offline Sync مصمَّم.
-- **Gate:** Golden 18 + اختبارات تعارض المزامنة.
+**Gate:** `PHASE_1_ACCEPTANCE_REPORT.md` — repository and extracted-archive release gates both PASS, tenant isolation proven, bug budget clean.
 
-## Phase 5 — Online Store & Orders
-- Storefront عام + Cart/Checkout + دورة الطلبات + الحجوزات.
-- **Gate:** Golden 13–14 + أداء Storefront (LCP).
+## Phase 2 — Accounting & Financial Core ⟵ NEXT (not started)
 
-## Phase 6 — WhatsApp
-- الربط الرسمي + القوالب + الرسائل التلقائية + كشف الحساب + التقرير اليومي.
-- **Gate:** Golden 15 + موثوقية الطابور.
+Chart of accounts · immutable double-entry journal (entries + lines) · posting engine with balanced debit/credit enforced at the database boundary · deterministic, idempotent posting keyed by `(source_type, source_id)` · integer minor-unit money · base-currency authority + FX rate snapshots · rounding policy · opening balances · reversal/correction semantics · trial balance, general ledger and account balances as read models · RBAC permissions · outbox events · audit.
 
-## Phase 7 — AI Assistant
-- STT + Intent + Drafts + Confirmation + تدقيق كامل.
-- **Gate:** Golden 16–17 + اختبارات الحقن والغموض.
+**Explicitly NOT in Phase 2:** inventory, purchases, suppliers, sales, POS, customers, debts, installments, ecommerce, offline, WhatsApp, AI, CRM. Phase 2 builds the financial authority those later domains post **through**.
 
-## Phase 8 — Subscriptions, Entitlements, Super Admin
-- Entitlement Engine + الباقات + لوحة المنصة + الفوترة (حسب القرار التجاري).
-- **Gate:** Golden 22 + حدود الباقات مفروضة على الخادم.
+**Gate:** `PHASE_2_ACCOUNTING_EXECUTION_PLAN.md` acceptance gates + accounting golden tests + invariant enforcement.
 
-## Phase 9 — Hardening & Launch
-- التدقيقات النهائية الأربعة (Simplicity/Premium/Financial Integrity/Regression) + Load tests + Restore drill + Country packs نهائية بمصادر رسمية.
-- **Gate:** Launch Definition كامل (Master §166) → إطلاق تدريجي.
+## Phase 3 — Inventory, Purchases, Suppliers
 
-## قواعد
-1. لا انتقال بين المراحل دون PASS موثّق.
-2. داخل كل Phase: أمر البدء (Master §178) وأمر الانتهاء (§179) يلزمان كل مهمة.
-3. الترتيب قابل لضبط طفيف بقرار موثّق؛ ترتيب الاعتماديات (Accounting قبل Sales الكاملة، Inventory قبل Storefront) غير قابل للكسر.
+Inventory ledger and stock movements · warehouses/locations dimensionality · purchase cycle · suppliers · landed cost · stock valuation posting **through** the Phase 2 engine · transfers and stock counts.
 
-## Status update — Phase 1 closed (2026-09-21)
+## Phase 4 — Sales, POS, Customers, Debts, Installments
 
-- **Phase 1 — Core Platform Skeleton: PASS** (`PHASE_1_ACCEPTANCE_REPORT.md`). Delivered: tenancy + identity/RBAC + business/branch/warehouse structure, design system, api/web/admin/android apps, CI with DB-from-zero, observability basics (structured logs, request id, readiness per runtime), catalog with normalized translations and identifier registry, localization infrastructure ar/en/tr, entitlements engine + plan builder, platform console, release gate and export.
-- Nothing from Phase 2 was started (no accounting, inventory, sales or POS tables/endpoints/screens exist).
-- Next: Phase 2 — Money Core, entered through `PHASE_2_PREMORTEM.md` entry conditions.
+Sales documents and invoices · POS (web first) · customers · receivables · payments (cash/credit/partial) · debts and statements · installment plans · returns, refunds and credit notes.
+
+## Phase 5 — SaaS Billing, Plans, Limits, Add-ons, Merchant Billing Portal
+
+Subscription billing for the platform itself · plan catalogue and add-ons · limit enforcement surfaces · merchant-facing billing portal · dunning.
+
+## Phase 6 — Orders, Ecommerce, Omnichannel
+
+Public storefront · cart and checkout · order lifecycle · channel reconciliation.
+
+## Phase 7 — Offline and Mobile Production Workflows
+
+Android offline capture and sync · conflict resolution · mobile-first operational flows.
+
+## Phase 8 — Notifications, WhatsApp, Automation
+
+Official WhatsApp integration · templates · automated messages, statements and daily reports · notification engine.
+
+## Phase 9 — Universal Booking and Services
+
+Appointments and service scheduling · resources and calendars.
+
+## Phase 10 — Restaurant / Cafe Pack
+
+Tables, orders, kitchen flow, modifiers.
+
+## Phase 11 — Apparel, Electronics, Repair, Lot/Expiry Packs
+
+Vertical packs: variants matrices, serials, repair tickets, lot and expiry tracking.
+
+## Phase 12 — AI Assistant
+
+Speech to text · intent · drafts with explicit confirmation · full auditing.
+
+## Phase 13 — Advanced Reports, CRM, Loyalty, Marketing
+
+Analytical reporting · customer relationship features · loyalty · campaigns.
+
+## Phase 14 — Integrations, Public API, Developer Platform
+
+Outbound/inbound integrations · public API · keys, scopes and developer docs.
+
+## Phase 15 — Production Hardening, Pentest, Load, DR, Launch
+
+External penetration test · load testing · disaster-recovery drill · final audits (simplicity, premium experience, financial integrity, regression) · launch definition.
+
+## Rules
+
+1. No phase transition without a documented PASS.
+2. Dependency order is not negotiable: **accounting before every operational domain that posts money**; inventory before storefront fulfilment; billing before paid-plan enforcement at scale.
+3. Every operational domain posts through the accounting engine — none writes financial truth directly.
+4. Minor ordering adjustments require a documented decision; the dependency order above does not bend.
+
+## Status
+
+- **Phase 0: PASS** (`PHASE_0_ACCEPTANCE_REPORT.md`).
+- **Phase 1: PASS** (`PHASE_1_ACCEPTANCE_REPORT.md`, 2026-09-21). Nothing from Phase 2 exists: no accounting, inventory, sales or POS table, endpoint or screen.
+- **Phase 2: planned, not started.** Entry conditions in `PHASE_2_PREMORTEM.md`; the execution plan is `PHASE_2_ACCOUNTING_EXECUTION_PLAN.md`. Implementation begins only after the Tech Lead approves the Phase 1 pull request.
+
+---
+
+## Historical — pre-normalization map (superseded 2026-09-21)
+
+Kept for traceability of earlier documents that cite these numbers. Do **not** plan against it.
+
+| Old phase | Old scope | Where that scope lives now |
+|---|---|---|
+| Phase 2 — Money Core | Accounting engine + inventory ledger + sales/invoices/payments/receivables + POS | split: accounting → Phase 2; inventory → Phase 3; sales/POS/receivables → Phase 4 |
+| Phase 3 — Debts, Installments, Returns | Installments, returns, credit notes, statements | Phase 4 |
+| Phase 4 — Purchases, Suppliers, Expenses + Offline Android | Purchase cycle, advanced inventory, offline sync | purchases/suppliers → Phase 3; offline → Phase 7 |
+| Phase 5 — Online Store & Orders | Storefront, cart, checkout, orders, bookings | ecommerce/orders → Phase 6; bookings → Phase 9 |
+| Phase 6 — WhatsApp | WhatsApp integration and automation | Phase 8 |
+| Phase 7 — AI Assistant | STT, intent, drafts | Phase 12 |
+| Phase 8 — Subscriptions, Entitlements, Super Admin | Entitlement engine, plans, platform console, billing | foundation delivered in Phase 1; SaaS billing → Phase 5 |
+| Phase 9 — Hardening & Launch | Final audits, load, restore drill, launch | Phase 15 |

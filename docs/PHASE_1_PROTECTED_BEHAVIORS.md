@@ -59,7 +59,24 @@ _تُسجَّل هنا: migrations contract، RLS isolation، auth rotation/reus
 | PB-33 | Concurrent onboarding with one Idempotency-Key → one 201 + one 200 replay (same payload) or one 409 (different payload), one business | `concurrency-matrix.test.ts` |
 | PB-34 | Crashed worker lease is reclaimed after expiry and the job delivered once; a live lease is never stolen | `tests/integration/failure-injection.test.ts` |
 | PB-35 | A migration failing mid-file rolls back atomically with no history row; runtime principals cannot migrate | `failure-injection.test.ts` |
-| PB-36 | Frozen migrations 0000–0037 never change (SHA-256 manifest) | `npm run check:migrations`, CI tamper proof |
+| PB-36 | Frozen migrations 0000–0039 never change (SHA-256 manifest) | `npm run check:migrations`, CI tamper proof, `check:db-from-zero` |
 | PB-37 | Merchant web builds and prerenders all 16 pages × 3 locales; 187 keys present in every locale | `next build`, `check:localization` |
 | PB-38 | Last-owner operations under concurrency never deadlock (business-level advisory lock) | `owner-authority.test.ts`, `isolation.test.ts` |
 | PB-39 | `npm audit --audit-level=high` reports 0 high/critical | CI hygiene job, `gate:phase1:release` |
+
+## PB — Final Release Blocker Patch additions
+
+| ID | Behaviour | Guard test |
+|---|---|---|
+| PB-40 | Provisioning commands derive the actor ONLY from a server-minted HMAC assertion; a caller-set GUC, a forged or tampered signature, an expired assertion, a wrong operation kind or a replayed jti is refused inside the command | `tests/security/provisioner-boundary.test.ts` |
+| PB-41 | Assertion key SECRETS are unreadable and the key table is directly unmutable for EVERY principal — `daftar_platform` included; the JTI registry is likewise unreachable | `provisioner-boundary.test.ts` "key SECRETS are unreadable…", `scripts/db-from-zero.ts` |
+| PB-41a | `daftar_platform` is the ONLY principal that may EXECUTE the narrow key-management commands (`provision_assertion_key_install` / `_retire`); it is the operational owner of key rotation | `provisioner-boundary.test.ts` "daftar_platform IS the key-management principal…" |
+| PB-41b | No other runtime principal (app, worker, identity, resolver, provisioner) may install or retire keys, and none may call `provision_actor()` directly | `provisioner-boundary.test.ts` "NO other runtime principal may install or retire keys" |
+| PB-41c | Key material never appears in a command result, CLI output or log — the install/retire commands return void and the CLI prints only the kid | `provisioner-boundary.test.ts` "the key-management CLI never prints or logs the secret" |
+| PB-42 | Every `catalog_identifiers` row references exactly one real product XOR variant of the same business and disappears with it; `daftar_app` cannot write the registry directly | `tests/security/catalog-identifiers.test.ts` |
+| PB-43 | Production refuses an `http://` or unauthenticated KMS endpoint; the KMS client bounds timeout and response size, validates the response, follows no redirects and never surfaces plaintext or response bodies; an encrypt failure rolls the enqueue transaction back | `tests/integration/kms-encryptor.test.ts`, `production-providers.test.ts` |
+| PB-44 | The release gate fails immediately when any `RELEASE_GATE_SKIP_*` variable is set; only the dev helper may skip, and it never prints a release verdict | `tests/integration/release-gate.test.ts` |
+| PB-45 | Android debug permits cleartext for `10.0.2.2` only; release denies cleartext everywhere and uses an https base URL | `NetworkSecurityConfigTest.kt` |
+| PB-46 | The release archive contains every input the reproduction commands read; the gate and acceptance run from the extracted archive without the repository | `scripts/export-release.ts`, gate step "self-contained source tree" |
+| PB-47 | A fresh PostgreSQL goes roles → 40 migrations → no-op → verified history; a foreign history row is rejected by the verifier | `scripts/db-from-zero.ts` (gate step) |
+| PB-48 | The embedded PostgreSQL starts even if an install ever ships non-executable binaries (the helper sets the bits synchronously, before the dependency's own un-awaited chmod) | `tests/integration/embedded-pg-binaries.test.ts` (strips the bit, proves restoration and idempotence) |

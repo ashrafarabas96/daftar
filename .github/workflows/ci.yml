@@ -131,6 +131,8 @@ jobs:
             "DELETE FROM schema_migrations WHERE name='9999_foreign_tamper.sql'" >/dev/null
         env:
           DATABASE_URL: postgres://postgres:postgres@localhost:5432/daftar
+      - name: Database contract from zero (throw-away embedded server; same check as the release gate)
+        run: npm run check:db-from-zero
       - name: API build
         run: npm run build -w @daftar/api
 
@@ -168,7 +170,13 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
+      # `packages` is set explicitly: the action's default installs the obsolete
+      # `tools` package, which no longer exists in the SDK repository and fails
+      # the job before Gradle runs. The build needs platform 35 + build-tools
+      # 35.0.0 (apps/android/app/build.gradle.kts compileSdk/targetSdk = 35).
       - uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools platforms;android-35 build-tools;35.0.0'
       - name: Android lint + unit tests + assemble
         run: |
           cd apps/android
@@ -182,7 +190,12 @@ jobs:
     needs: workspaces
     runs-on: ubuntu-latest
     steps:
+      # Full history: gitleaks scans the pull request's commit RANGE, so with the
+      # default depth-1 checkout the base commit is absent, git writes to stderr
+      # and the action fails having scanned ~0 bytes. Depth 0 makes the scan real.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
@@ -207,5 +220,9 @@ jobs:
             | grep -v 'static-guards' | grep -v 'export-release'; then
             echo "raw credential material found"; exit 1
           fi
+      # GITHUB_TOKEN is REQUIRED by gitleaks-action v2 to scan a pull request;
+      # without it the action exits non-zero before scanning anything.
       - name: Secret scan (gitleaks)
         uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

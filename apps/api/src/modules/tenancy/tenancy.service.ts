@@ -144,7 +144,7 @@ export class TenancyService {
     try {
       // §13 (Stabilization): onboarding runs on the NARROW PROVISIONER
       // boundary — never the platform transaction.
-      return await this.db.withProvisionerTransaction(userId, async (c) => {
+      return await this.db.withProvisionerTransaction(userId, 'onboarding', async (c) => {
         // Serialize onboarding per user (§54): advisory lock on the user id —
         // the provisioner intentionally has NO grant on the identity users
         // table. A concurrent double submit waits, then sees the committed
@@ -202,7 +202,7 @@ export class TenancyService {
     const slug = normalizeSlug(input.storeSlug);
     try {
       // §13: additional business creation is provisioner authority.
-      return await this.db.withProvisionerTransaction(userId, async (c) => {
+      return await this.db.withProvisionerTransaction(userId, 'create_business', async (c) => {
         await c.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 73))', [userId]);
 
         // §34: the idempotency scope includes the TARGET TENANT — the same key

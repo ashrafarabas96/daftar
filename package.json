@@ -26,10 +26,13 @@
     "check:localization": "tsx scripts/check-localization.ts",
     "check:guards": "tsx scripts/static-guards.ts",
     "check:migrations": "tsx scripts/check-migration-manifest.ts",
+    "check:db-from-zero": "tsx scripts/db-from-zero.ts",
     "bootstrap:platform-owner": "tsx scripts/bootstrap-platform-owner.ts",
+    "bootstrap:provisioning-key": "tsx scripts/install-provisioning-key.ts",
     "check:key-retirement": "tsx scripts/check-key-retirement.ts",
     "gate:phase1": "tsx scripts/phase1-gate.ts",
     "gate:phase1:release": "tsx scripts/phase1-release-gate.ts",
+    "gate:phase1:dev": "tsx scripts/phase1-release-gate.ts --dev",
     "export:release": "tsx scripts/export-release.ts",
     "verify:history": "tsx scripts/verify-migration-history.ts"
   },

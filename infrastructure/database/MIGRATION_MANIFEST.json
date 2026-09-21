@@ -1,7 +1,7 @@
 {
-  "generatedAt": "2026-09-21T12:40:14.000Z",
-  "frozenThrough": "0037_catalog_identifiers.sql",
-  "policy": "Migrations 0000–0037 are FROZEN at the Phase 1 release. A frozen migration is never edited or deleted; every schema correction is a NEW migration appended after 0037. Check: npm run check:migrations.",
+  "generatedAt": "2026-09-21T16:02:43.000Z",
+  "frozenThrough": "0039_catalog_identifiers_owner_integrity.sql",
+  "policy": "Migrations 0000–0039 are FROZEN at the Phase 1 release. A frozen migration is never edited or deleted; every schema correction is a NEW migration appended after 0039. Check: npm run check:migrations.",
   "migrations": [
     {
       "name": "0000_extensions.sql",
@@ -154,6 +154,14 @@
     {
       "name": "0037_catalog_identifiers.sql",
       "sha256": "540fa71d28f3c3140935a7325b68667d1679abf461a1ecf84512b18eb3271aed"
+    },
+    {
+      "name": "0038_provisioning_assertions.sql",
+      "sha256": "1baa0f8aa0b318c9ee89e1f1863da1459607826bfe44e129a57bbaa0a5b1ca1b"
+    },
+    {
+      "name": "0039_catalog_identifiers_owner_integrity.sql",
+      "sha256": "935fb8b767054f2c919ff48968af28df6abb823e564f8cee8b2284b42520d9cd"
     }
   ]
 }

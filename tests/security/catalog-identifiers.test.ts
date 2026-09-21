@@ -119,4 +119,154 @@ describe('catalog identifier registry (§39–40)', () => {
     const p = await rawProduct(businessA, null);
     await expect(ownerPool().query(`DELETE FROM product_translations WHERE product_id = $1`, [p])).rejects.toThrow(/requires at least one translation/);
   });
+
+  /**
+   * Final Release Blocker 2 — OWNER INTEGRITY. Every registry row must
+   * reference exactly one REAL owner (product XOR variant) in the same
+   * business, and the registry is internal: only the owner-row triggers may
+   * write it. Raw SQL as the schema owner AND as daftar_app.
+   */
+  describe('owner integrity (Blocker 2, migration 0039)', () => {
+    const rnd = () =>
+      ownerPool()
+        .query<{ u: string }>('SELECT gen_random_uuid()::text AS u')
+        .then((r) => r.rows[0]?.u as string);
+
+    it('a FAKE product owner uuid is rejected (composite FK)', async () => {
+      const fake = await rnd();
+      await expect(
+        ownerPool().query(
+          `INSERT INTO catalog_identifiers (business_id, kind, value_norm, owner_type, owner_id, product_id) VALUES ($1, 'sku', 'ghost-p', 'product', $2, $2)`,
+          [businessA, fake],
+        ),
+      ).rejects.toThrow(/catalog_identifiers_product_fk|violates foreign key/);
+    });
+
+    it('a FAKE variant owner uuid is rejected (composite FK)', async () => {
+      const fake = await rnd();
+      await expect(
+        ownerPool().query(
+          `INSERT INTO catalog_identifiers (business_id, kind, value_norm, owner_type, owner_id, variant_id) VALUES ($1, 'sku', 'ghost-v', 'variant', $2, $2)`,
+          [businessA, fake],
+        ),
+      ).rejects.toThrow(/catalog_identifiers_variant_fk|violates foreign key/);
+    });
+
+    it('a CROSS-BUSINESS owner is rejected: business B cannot register an identifier owned by a product of business A', async () => {
+      const pA = await rawProduct(businessA, null);
+      await expect(
+        ownerPool().query(
+          `INSERT INTO catalog_identifiers (business_id, kind, value_norm, owner_type, owner_id, product_id) VALUES ($1, 'sku', 'stolen', 'product', $2, $2)`,
+          [businessB, pA],
+        ),
+      ).rejects.toThrow(/violates foreign key/);
+    });
+
+    it('owner XOR: a row cannot claim both, neither, or a mismatching owner column', async () => {
+      const p = await rawProduct(businessA, null);
+      const v = await rawVariant(businessA, p, null);
+      const cases: { label: string; sql: string; params: unknown[] }[] = [
+        { label: 'both', sql: `'product', $2, $2, $3`, params: [businessA, p, v] },
+        { label: 'neither', sql: `'product', $2, NULL, NULL`, params: [businessA, p] },
+        { label: 'product typed, variant column', sql: `'product', $2, NULL, $3`, params: [businessA, p, v] },
+        { label: 'variant typed, product column', sql: `'variant', $3, $2, NULL`, params: [businessA, p, v] },
+      ];
+      for (const c of cases) {
+        await expect(
+          ownerPool().query(
+            `INSERT INTO catalog_identifiers (business_id, kind, value_norm, owner_type, owner_id, product_id, variant_id) VALUES ($1, 'sku', 'xor-${c.label.replace(/\W/g, '')}', ${c.sql})`,
+            c.params,
+          ),
+          c.label,
+        ).rejects.toThrow(/catalog_identifiers_owner_xor|check constraint/);
+      }
+    });
+
+    it('the registry is INTERNAL: daftar_app cannot INSERT, UPDATE or DELETE registry rows directly (only owner-row triggers write it)', async () => {
+      const p = await rawProduct(businessA, 'INTERNAL-1');
+      const c = new Client({ connectionString: appDbUrl });
+      await c.connect();
+      try {
+        await c.query('BEGIN');
+        await c.query(`SELECT set_config('app.tenant_id', $1, true), set_config('app.business_id', $2, true)`, [tenantId, businessA]);
+        await expect(
+          c.query(
+            `INSERT INTO catalog_identifiers (business_id, kind, value_norm, owner_type, owner_id, product_id) VALUES ($1, 'sku', 'reserved', 'product', $2, $2)`,
+            [businessA, p],
+          ),
+        ).rejects.toThrow(/permission denied/);
+        await c.query('ROLLBACK');
+        await c.query('BEGIN');
+        await c.query(`SELECT set_config('app.tenant_id', $1, true), set_config('app.business_id', $2, true)`, [tenantId, businessA]);
+        await expect(c.query(`UPDATE catalog_identifiers SET value_norm = 'moved' WHERE business_id = $1`, [businessA])).rejects.toThrow(/permission denied/);
+        await c.query('ROLLBACK');
+        await c.query('BEGIN');
+        await c.query(`SELECT set_config('app.tenant_id', $1, true), set_config('app.business_id', $2, true)`, [tenantId, businessA]);
+        await expect(c.query(`DELETE FROM catalog_identifiers WHERE business_id = $1`, [businessA])).rejects.toThrow(/permission denied/);
+        await c.query('ROLLBACK');
+        // …but a legitimate product write (through the trigger) still registers, and reads stay scoped.
+        await c.query('BEGIN');
+        await c.query(`SELECT set_config('app.tenant_id', $1, true), set_config('app.business_id', $2, true)`, [tenantId, businessA]);
+        await c.query(
+          `WITH p AS (INSERT INTO products (business_id, sku, base_price_minor, price_currency) VALUES ($1, 'APP-WRITES', 1, 'JOD') RETURNING id, business_id)
+           INSERT INTO product_translations (business_id, product_id, locale, name) SELECT business_id, id, 'en', 'x' FROM p`,
+          [businessA],
+        );
+        const seen = await c.query(`SELECT value_norm FROM catalog_identifiers WHERE value_norm = 'app-writes'`);
+        expect(seen.rows).toHaveLength(1);
+        await c.query('ROLLBACK');
+      } finally {
+        await c.end();
+      }
+    });
+
+    it('lifecycle: product and variant identifiers appear on create, follow SKU changes, vanish on archive and on hard delete (cascade)', async () => {
+      const p = await rawProduct(businessA, 'LIFE-P', '5000000000001');
+      const v = await rawVariant(businessA, p, 'LIFE-V', '5000000000002');
+      const rows = async () =>
+        (
+          await ownerPool().query<{ value_norm: string; owner_type: string; product_id: string | null; variant_id: string | null }>(
+            `SELECT value_norm, owner_type, product_id, variant_id FROM catalog_identifiers WHERE business_id = $1 AND value_norm LIKE 'life-%' OR value_norm LIKE '50000000%' ORDER BY value_norm`,
+            [businessA],
+          )
+        ).rows;
+      expect(await rows()).toEqual([
+        { value_norm: '5000000000001', owner_type: 'product', product_id: p, variant_id: null },
+        { value_norm: '5000000000002', owner_type: 'variant', product_id: null, variant_id: v },
+        { value_norm: 'life-p', owner_type: 'product', product_id: p, variant_id: null },
+        { value_norm: 'life-v', owner_type: 'variant', product_id: null, variant_id: v },
+      ]);
+      // SKU change moves the registration.
+      await ownerPool().query(`UPDATE product_variants SET sku = 'LIFE-V2' WHERE id = $1`, [v]);
+      expect((await rows()).map((r) => r.value_norm)).toEqual(['5000000000001', '5000000000002', 'life-p', 'life-v2']);
+      // Archiving the variant releases its identifiers; the product keeps its own.
+      await ownerPool().query(`UPDATE product_variants SET status = 'archived' WHERE id = $1`, [v]);
+      expect((await rows()).map((r) => r.value_norm)).toEqual(['5000000000001', 'life-p']);
+      // Hard delete of the product (domain never does it, but the FK must not leave orphans).
+      await ownerPool().query(`DELETE FROM product_variants WHERE id = $1`, [v]);
+      await ownerPool()
+        .query(`DELETE FROM product_translations WHERE product_id = $1`, [p])
+        .catch(() => undefined);
+      await ownerPool().query(`DELETE FROM products WHERE id = $1`, [p]);
+      expect(await rows()).toEqual([]);
+      const orphans = await ownerPool().query<{ n: string }>(
+        `SELECT count(*)::text AS n FROM catalog_identifiers ci
+         WHERE (ci.owner_type = 'product' AND NOT EXISTS (SELECT 1 FROM products p WHERE p.business_id = ci.business_id AND p.id = ci.product_id))
+            OR (ci.owner_type = 'variant' AND NOT EXISTS (SELECT 1 FROM product_variants v WHERE v.business_id = ci.business_id AND v.id = ci.variant_id))`,
+      );
+      expect(orphans.rows[0]?.n).toBe('0');
+    });
+
+    it('product SKU X + variant SKU X (same business) → rejected; the sync routine is not callable directly', async () => {
+      const p = await rawProduct(businessA, 'SAME-X');
+      await expect(rawVariant(businessA, p, 'same-x')).rejects.toThrow(/duplicate key/);
+      const c = new Client({ connectionString: appDbUrl });
+      await c.connect();
+      try {
+        await expect(c.query('SELECT catalog_identifiers_sync()')).rejects.toThrow(/permission denied|trigger functions can only be called as triggers/);
+      } finally {
+        await c.end();
+      }
+    });
+  });
 });

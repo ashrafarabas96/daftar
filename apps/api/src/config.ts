@@ -31,6 +31,14 @@ const EnvSchema = z
     // §13 (Stabilization): narrow provisioning principal — onboarding,
     // create-business, invitation acceptance ONLY.
     PROVISIONER_DATABASE_URL: z.string().min(1).optional(),
+    // Blocker 1: HMAC key (base64, ≥32 bytes) the merchant API uses to MINT
+    // provisioning assertions; the database holds the same key (0038) and
+    // verifies every provisioning command against it.
+    PROVISIONING_ASSERTION_KEY: z.string().optional(),
+    PROVISIONING_ASSERTION_KID: z
+      .string()
+      .regex(/^[A-Za-z0-9_-]{1,32}$/)
+      .optional(),
     WORKER_DATABASE_URL: z.string().min(1).optional(),
     // Required for HTTP modes; the WORKER process must not receive it (§XXVIII).
     JWT_SECRET: z.string().min(32).optional(),
@@ -63,6 +71,10 @@ const EnvSchema = z
     CREDENTIAL_DELIVERY_KIND: z.enum(['log', 'smtp']).default('log'),
     CREDENTIAL_PAYLOAD_KEY: z.string().optional(),
     CREDENTIAL_KMS_ENDPOINT: z.string().url().optional(),
+    // Blocker 4: the KMS bridge is an AUTHENTICATED HTTPS service. Token ≥32
+    // chars; bounded timeout (ms) for the encrypt call.
+    CREDENTIAL_KMS_TOKEN: z.string().min(32).optional(),
+    CREDENTIAL_KMS_TIMEOUT_MS: z.coerce.number().int().min(100).max(60_000).default(5000),
     // §23–27: credential encryption key ring — JSON [{version, key(base64 32B), status:'active'|'previous'}].
     CREDENTIAL_PAYLOAD_KEYS: z.string().optional(),
     SMTP_URL: z.string().optional(),
@@ -102,6 +114,7 @@ const EnvSchema = z
         'IDENTITY_DATABASE_URL',
         'RESOLVER_DATABASE_URL',
         'PROVISIONER_DATABASE_URL',
+        'PROVISIONING_ASSERTION_KEY',
         'CREDENTIAL_KMS_ENDPOINT',
       ] as const) {
         if (c[n]) fail(n, 'must NOT be set in PROCESS_MODE=worker (worker receives worker DB + key ring + SMTP only)');
@@ -111,7 +124,14 @@ const EnvSchema = z
     // ── §XXV–XXIX: per-mode SECRET ENVIRONMENT SEPARATION ────────────────
     // A process must not even RECEIVE secrets outside its authority.
     const forbid = (
-      name: 'PLATFORM_DATABASE_URL' | 'WORKER_DATABASE_URL' | 'PROVISIONER_DATABASE_URL' | 'CREDENTIAL_PAYLOAD_KEY' | 'CREDENTIAL_PAYLOAD_KEYS' | 'SMTP_URL',
+      name:
+        | 'PLATFORM_DATABASE_URL'
+        | 'WORKER_DATABASE_URL'
+        | 'PROVISIONER_DATABASE_URL'
+        | 'PROVISIONING_ASSERTION_KEY'
+        | 'CREDENTIAL_PAYLOAD_KEY'
+        | 'CREDENTIAL_PAYLOAD_KEYS'
+        | 'SMTP_URL',
       why: string,
     ): void => {
       if (c[name]) fail(name, `must NOT be set in PROCESS_MODE=${mode} (${why})`);
@@ -126,6 +146,7 @@ const EnvSchema = z
     if (mode === 'platform-api') {
       forbid('WORKER_DATABASE_URL', 'platform API has no worker authority');
       forbid('PROVISIONER_DATABASE_URL', 'provisioning is a merchant-surface boundary');
+      forbid('PROVISIONING_ASSERTION_KEY', 'only the merchant API mints provisioning assertions');
       forbid('CREDENTIAL_PAYLOAD_KEY', 'no worker credential payload authority');
       forbid('CREDENTIAL_PAYLOAD_KEYS', 'no worker credential payload authority');
       forbid('SMTP_URL', 'delivery is the worker process');
@@ -170,6 +191,13 @@ const EnvSchema = z
           'CREDENTIAL_KMS_ENDPOINT',
           `production ${mode} runtime requires a KMS-style credential encrypt provider (local/DEV keys are structurally forbidden)`,
         );
+      } else {
+        if (!/^https:\/\//i.test(c.CREDENTIAL_KMS_ENDPOINT)) {
+          fail('CREDENTIAL_KMS_ENDPOINT', 'production requires an https:// KMS endpoint (credential plaintext never travels over plaintext http)');
+        }
+        if (!c.CREDENTIAL_KMS_TOKEN) {
+          fail('CREDENTIAL_KMS_TOKEN', 'production requires CREDENTIAL_KMS_TOKEN (authenticated KMS bridge; unauthenticated endpoints are forbidden)');
+        }
       }
     }
     if (mode === 'all' || mode === 'merchant-api') {
@@ -180,6 +208,11 @@ const EnvSchema = z
         fail('PROVISIONER_DATABASE_URL', 'production requires the provisioning DB URL (daftar_provisioner role)');
       } else if (c.PROVISIONER_DATABASE_URL === c.APP_DATABASE_URL || c.PROVISIONER_DATABASE_URL === c.PLATFORM_DATABASE_URL) {
         fail('PROVISIONER_DATABASE_URL', 'must be a distinct role from APP/PLATFORM (least-privilege provisioning boundary)');
+      }
+      if (!c.PROVISIONING_ASSERTION_KEY) {
+        fail('PROVISIONING_ASSERTION_KEY', 'production provisioning requires the assertion HMAC key (base64 ≥32 bytes) installed in the database (0038)');
+      } else if (Buffer.from(c.PROVISIONING_ASSERTION_KEY, 'base64').length < 32) {
+        fail('PROVISIONING_ASSERTION_KEY', 'must be base64 of at least 32 bytes');
       }
       if (c.MEDIA_STORAGE === 'local') {
         fail('MEDIA_STORAGE', 'production requires MEDIA_STORAGE=s3 (local disk is dev-only)');

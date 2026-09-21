@@ -10,18 +10,18 @@ Route 53 → CloudFront (web, admin, storefront later) → ALB
    ALB /admin-api/*→ ECS Fargate service: platform-api   (PROCESS_MODE=platform-api, internal ALB + SSO/VPN)
    (no ingress)    → ECS Fargate service: worker         (PROCESS_MODE=worker)
    Next.js web / admin → ECS Fargate (SSR + BFF proxy) or Amplify Hosting
-RDS PostgreSQL 16+ (Multi-AZ) · ElastiCache Redis (limiter) · S3 private bucket (media) · SES SMTP (credential delivery) · KMS + a small encrypt endpoint (Lambda) for credential payloads
+RDS PostgreSQL 16+ (Multi-AZ) · ElastiCache Redis (limiter) · S3 private bucket (media) · SES SMTP (credential delivery) · KMS bridge: a private HTTPS endpoint (Lambda behind API Gateway with an IAM-scoped role that holds kms:Encrypt only) authenticated with `CREDENTIAL_KMS_TOKEN` from Secrets Manager; the worker's key ring is the decrypt side
 ```
 
 ## 2. Process → secrets matrix (mirrors `loadConfig` validation)
 
 | Process | DB principals | Other secrets | Must NOT have |
 |---|---|---|---|
-| merchant-api | `APP_DATABASE_URL`, `IDENTITY_DATABASE_URL`, `RESOLVER_DATABASE_URL`, `PROVISIONER_DATABASE_URL` | `JWT_SECRET`/`JWT_KEYS`, `REDIS_URL`, S3 credentials, `CREDENTIAL_KMS_ENDPOINT` | platform pool, worker pool, `CREDENTIAL_PAYLOAD_KEY`, `SMTP_URL` |
-| platform-api | `PLATFORM_DATABASE_URL`, `IDENTITY_DATABASE_URL`, `RESOLVER_DATABASE_URL` | `JWT_*`, `REDIS_URL`, `CREDENTIAL_KMS_ENDPOINT` | worker/provisioner pools, payload key, SMTP |
+| merchant-api | `APP_DATABASE_URL`, `IDENTITY_DATABASE_URL`, `RESOLVER_DATABASE_URL`, `PROVISIONER_DATABASE_URL` | `JWT_SECRET`/`JWT_KEYS`, `REDIS_URL`, S3 credentials, `CREDENTIAL_KMS_ENDPOINT` (https) + `CREDENTIAL_KMS_TOKEN`, `PROVISIONING_ASSERTION_KEY` | platform pool, worker pool, `CREDENTIAL_PAYLOAD_KEY`, `SMTP_URL` |
+| platform-api | `PLATFORM_DATABASE_URL`, `IDENTITY_DATABASE_URL`, `RESOLVER_DATABASE_URL` | `JWT_*`, `REDIS_URL`, `CREDENTIAL_KMS_ENDPOINT` (https) + `CREDENTIAL_KMS_TOKEN` | worker/provisioner pools, payload key, SMTP, `PROVISIONING_ASSERTION_KEY` |
 | worker | `WORKER_DATABASE_URL` | `CREDENTIAL_PAYLOAD_KEY` (ring), `SMTP_URL`, `SMTP_FROM` | any HTTP secret, app/platform pools, JWT |
 | migrate job | `MIGRATION_DATABASE_URL` (table owner) | — | runtime secrets |
-| bootstrap job | `BOOTSTRAP_DATABASE_URL` (= platform principal) | — | migration credentials (refused by the CLI) |
+| bootstrap job | `BOOTSTRAP_DATABASE_URL` (= platform principal) | `PROVISIONING_ASSERTION_KEY` for `npm run bootstrap:provisioning-key` (installs/rotates the key the database verifies assertions with) | migration credentials (refused by the CLI) |
 
 Secrets live in AWS Secrets Manager; each ECS task definition injects only its row. Static guard 13/14 and `production-providers.test.ts` keep the code honest.
 

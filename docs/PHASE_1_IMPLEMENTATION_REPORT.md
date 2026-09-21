@@ -9,7 +9,7 @@
 | API source files / lines (`apps/api/src`) | 42 / 6 991 |
 | HTTP routes / controllers | 74 / 6 |
 | Permissions in the registry | 38 |
-| SQL migrations (all frozen, SHA-256 in manifest) | 38 (0000–0037) |
+| SQL migrations (all frozen, SHA-256 in manifest) | 40 (0000–0039) |
 | RLS policies / indexes / SECURITY DEFINER functions | 33 / 31 / 16 |
 | Database principals | 6 (`daftar_app`, `daftar_platform`, `daftar_identity`, `daftar_resolver`, `daftar_worker`, `daftar_provisioner`) |
 | Merchant web pages / admin pages | 16 / 11 |
@@ -17,9 +17,9 @@
 | Android Kotlin files / lines; string resources | 16 / 1 405; 57 × 3 locales |
 | Design-system components | 34 exported components + token sets |
 | Unit tests (domain-core + shared-contracts) | 58 |
-| Integration + security tests | 291 cases in 36 files |
+| Integration + security tests | 326 cases in 39 files |
 | Golden regression cases | 40 (P1-GOLD-01…40) |
-| Android JVM tests | 13 |
+| Android JVM tests | 16 |
 | Static guard rules | 14 |
 
 ## 2. Work delivered per commit (branch `claude/new-session-2sxgo5`)
@@ -37,13 +37,15 @@
 | b6cfab5 | Concurrency matrix + failure-injection suites (§66–67) | Races and faults were asserted in prose only |
 | da2f995 | Dependency audit: next 15.5.25, nest 11.2.5, sharp 0.35.4, image-size 2.0.4, overrides multer 2.4.0 / postcss 8.5.28 | 12 advisories (1 critical) |
 | 96a076c | `gate:phase1:release`, manifest frozen through 0037, checker derives policy from `frozenThrough` | No single command produced release evidence |
+| abe77ac | **Final release blocker patch**: `0038` provisioning assertions (actor is an HMAC claim verified in the DB against a key table with no grants at all — key rotation only through the narrow commands granted to `daftar_platform`; kind-bound, expiring, single-transaction with cross-transaction replay protection), `0039` identifier owner integrity (composite FKs + XOR CHECK, DML revoked, SECURITY DEFINER sync), hardened KMS bridge (https + bearer + timeout + bounded body + sanitized errors + fail-closed enqueue), self-contained export + `check:db-from-zero`, release gate that refuses mandatory skips, Android debug-only cleartext for `10.0.2.2`, evidence schema v2 | A `daftar_provisioner` connection could spoof any actor via the GUC; registry rows could name non-existent or foreign owners; credential plaintext could go to an unauthenticated http endpoint with no timeout; the archive omitted build configs; the gate could PASS with Android skipped; debug networking was self-contradictory |
+| aa40301, b4ad021 | Test fixtures for the mandatory KMS token; sequential awaits in the key-table attack loop | Fixtures predated the new production rules; eagerly created rejected promises surfaced as unhandled rejections |
 
 ## 3. Rules honoured (spot-checkable)
 
 - **No test was disabled, skipped or quarantined.** `grep -rn "it.skip\|describe.skip\|xit(" tests` returns nothing.
 - **No RLS was disabled and no broad privilege was granted.** Grants added in `0034` are the two DELETE grants the plan builder needs on `plan_entitlements` / `plan_limits` for DRAFT versions only (published rows are frozen by trigger).
 - **No `@ts-ignore`, no float money, no BigInt→Number for money.** Guarded by static guards 6/6b and lint (`--max-warnings 0`).
-- **No frozen migration modified.** `npm run check:migrations` verifies 38 SHA-256 hashes; every schema correction is `0033`–`0037`.
+- **No frozen migration modified.** `npm run check:migrations` verifies 40 SHA-256 hashes; every schema correction is `0033`–`0039`.
 - **No swallowed errors.** Every `catch` in `apps/api/src` re-throws, classifies (`classifyDeliveryError`) or logs structured with `requestId`; drain failures are counted.
 - **No fake adapters in production.** `loadConfig` refuses `MEDIA_STORAGE=local`, `CREDENTIAL_DELIVERY_KIND=log`, missing `REDIS_URL`, missing `CREDENTIAL_KMS_ENDPOINT` under `NODE_ENV=production`.
 
@@ -56,6 +58,7 @@ npm run format && npm run lint && npm run typecheck && npm test
 npm run test:integration && npm run test:golden
 npm run build -w @daftar/api && npm run build -w @daftar/web && npm run build -w @daftar/admin
 npm audit --audit-level=high
+npm run check:db-from-zero
 cd apps/android && gradle lint testDebugUnitTest assembleDebug
 npm run gate:phase1:release -- --evidence=release/evidence.json
 ```

@@ -1,13 +1,9 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { ownerPool, resetData } from '../helpers/test-app';
+import { appDbUrl, ownerPool, platformDbUrl, resetData, workerDbUrl } from '../helpers/test-app';
 import { Database } from '../../apps/api/src/infra/database';
 import { loadConfig } from '../../apps/api/src/config';
 import { OutboxPublisher, backoffSeconds, MAX_ATTEMPTS, type OutboxSink } from '../../apps/api/src/modules/outbox/publisher';
 import { OutboxService } from '../../apps/api/src/modules/audit/audit.service';
-
-const appDbUrl = 'postgresql://daftar_app:test_app_password_123@localhost:55432/daftar';
-const platformDbUrl = 'postgresql://daftar_platform:test_platform_password_123@localhost:55432/daftar';
-const workerDbUrl = 'postgresql://daftar_worker:test_worker_password_123@localhost:55432/daftar';
 
 function testDb(): Database {
   return new Database(
