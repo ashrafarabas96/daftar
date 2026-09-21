@@ -1,0 +1,16 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "declaration": false,
+    "sourceMap": false,
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "types": ["node"],
+    "paths": {
+      "@daftar/domain-core": ["./packages/domain-core/src"],
+      "@daftar/shared-contracts": ["./packages/shared-contracts/src"]
+    }
+  },
+  "include": ["tests/**/*.ts", "vitest.config.ts", "scripts/**/*.ts"]
+}

@@ -1,0 +1,15 @@
+node_modules/
+dist/
+.next/
+out/
+coverage/
+*.log
+.env
+.env.local
+!.env.example
+.DS_Store
+.pgdata/
+apps/android/.gradle/
+apps/android/build/
+apps/android/**/build/
+var/

@@ -1,0 +1,206 @@
+import { existsSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import EmbeddedPostgres from 'embedded-postgres';
+import { Pool } from 'pg';
+import supertest from 'supertest';
+import type { INestApplication } from '@nestjs/common';
+import { Test } from '@nestjs/testing';
+import { AppModule } from '../../apps/api/src/app/app.module';
+import { loadConfig, type AppConfig } from '../../apps/api/src/config';
+import { runMigrations } from '../../apps/api/src/infra/migrate';
+import type { CredentialDelivery } from '../../apps/api/src/modules/auth/tokens';
+import type { OutboxSink } from '../../apps/api/src/modules/outbox/publisher';
+import { CredentialDeliveryWorker } from '../../apps/api/src/modules/delivery/delivery-worker.service';
+
+export const PG_DIR = process.env['PG_DIR'] ?? '/tmp/daftar-pg-shared';
+export const PG_PORT = Number(process.env['PG_PORT'] ?? 55432);
+export const PG_USER = 'postgres';
+export const PG_PASSWORD = 'postgres';
+export const APP_DB_PASSWORD = 'test_app_password_123';
+export const PLATFORM_DB_PASSWORD = 'test_platform_password_123';
+export const WORKER_DB_PASSWORD = 'test_worker_password_123';
+export const RESOLVER_DB_PASSWORD = 'test_resolver_password_123';
+export const IDENTITY_DB_PASSWORD = 'test_identity_password_123';
+export const PROVISIONER_DB_PASSWORD = 'test_provisioner_password_123';
+
+export const dbUrl = `postgresql://${PG_USER}:${PG_PASSWORD}@localhost:${PG_PORT}/daftar`;
+export const appDbUrl = `postgresql://daftar_app:${APP_DB_PASSWORD}@localhost:${PG_PORT}/daftar`;
+export const platformDbUrl = `postgresql://daftar_platform:${PLATFORM_DB_PASSWORD}@localhost:${PG_PORT}/daftar`;
+export const workerDbUrl = `postgresql://daftar_worker:${WORKER_DB_PASSWORD}@localhost:${PG_PORT}/daftar`;
+export const resolverDbUrl = `postgresql://daftar_resolver:${RESOLVER_DB_PASSWORD}@localhost:${PG_PORT}/daftar`;
+export const identityDbUrl = `postgresql://daftar_identity:${IDENTITY_DB_PASSWORD}@localhost:${PG_PORT}/daftar`;
+export const provisionerDbUrl = `postgresql://daftar_provisioner:${PROVISIONER_DB_PASSWORD}@localhost:${PG_PORT}/daftar`;
+
+let pg: EmbeddedPostgres | null = null;
+
+async function ping(): Promise<boolean> {
+  const pool = new Pool({ connectionString: `postgresql://${PG_USER}:${PG_PASSWORD}@localhost:${PG_PORT}/postgres`, max: 1, connectionTimeoutMillis: 1500 });
+  try {
+    await pool.query('SELECT 1');
+    return true;
+  } catch {
+    return false;
+  } finally {
+    await pool.end().catch(() => undefined);
+  }
+}
+
+async function applyBootstrap(): Promise<void> {
+  const bootstrap = (await readFile(
+    join(__dirname, '../../infrastructure/database/bootstrap.sql'), 'utf8',
+  )).replaceAll('__APP_DB_PASSWORD__', APP_DB_PASSWORD)
+    .replaceAll('__PLATFORM_DB_PASSWORD__', PLATFORM_DB_PASSWORD)
+    .replaceAll('__WORKER_DB_PASSWORD__', WORKER_DB_PASSWORD)
+    .replaceAll('__RESOLVER_DB_PASSWORD__', RESOLVER_DB_PASSWORD)
+    .replaceAll('__IDENTITY_DB_PASSWORD__', IDENTITY_DB_PASSWORD)
+    .replaceAll('__PROVISIONER_DB_PASSWORD__', PROVISIONER_DB_PASSWORD);
+  const pool = new Pool({ connectionString: dbUrl, max: 1 });
+  try {
+    await pool.query(bootstrap);
+  } finally {
+    await pool.end();
+  }
+}
+
+/** Start (or reuse) a REAL PostgreSQL 18 instance and migrate a fresh schema. */
+export async function ensurePostgres(): Promise<void> {
+  if (await ping()) {
+    // Reused instance: bootstrap is idempotent; still apply any PENDING migrations.
+    await applyBootstrap();
+    await runMigrations(dbUrl);
+    return;
+  }
+  pg = new EmbeddedPostgres({
+    databaseDir: PG_DIR,
+    user: PG_USER,
+    password: PG_PASSWORD,
+    port: PG_PORT,
+    persistent: true,
+  });
+  if (!existsSync(join(PG_DIR, 'PG_VERSION'))) {
+    await pg.initialise();
+  }
+  await pg.start();
+  try {
+    await pg.createDatabase('daftar');
+  } catch {
+    // database already exists
+  }
+  await applyBootstrap();
+  await runMigrations(dbUrl);
+}
+
+let ownerPoolInstance: Pool | null = null;
+export function ownerPool(): Pool {
+  ownerPoolInstance ??= new Pool({ connectionString: dbUrl, max: 4 });
+  return ownerPoolInstance;
+}
+
+export async function resetData(): Promise<void> {
+  await ownerPool().query(`TRUNCATE
+    audit_events, outbox_events, credential_deliveries, product_media, media, product_variants, products, categories,
+    business_invitations, member_branch_scopes, membership_roles, memberships,
+    entitlement_overrides, business_entitlements, support_sessions,
+    role_permissions, business_roles, warehouses, branches, businesses, tenant_memberships, tenants,
+    platform_role_memberships, password_reset_tokens, session_refresh_tokens, sessions, users CASCADE`);
+  // Plan registry is reference data with test-created versions — reset it to
+  // the migration seed so provisioning defaults are deterministic.
+  await ownerPool().query(`TRUNCATE plan_limits, plan_entitlements, plan_versions, plans CASCADE`);
+  await ownerPool().query(`INSERT INTO plans (key, name) VALUES
+    ('free','Free'), ('starter','Starter'), ('pro','Pro'), ('business','Business')`);
+  await ownerPool().query(`INSERT INTO plan_versions (plan_key, version, state, trial_days)
+    SELECT key, 1, 'DRAFT', 14 FROM plans`);
+  await ownerPool().query(`INSERT INTO plan_limits (plan_version_id, limit_key, limit_value)
+    SELECT pv.id, x.limit_key, x.limit_value
+    FROM plan_versions pv
+    JOIN (VALUES
+      ('free','MAX_USERS',2),      ('free','MAX_BRANCHES',1),  ('free','MAX_PRODUCTS',100),
+      ('starter','MAX_USERS',5),   ('starter','MAX_BRANCHES',3),('starter','MAX_PRODUCTS',1000),
+      ('pro','MAX_USERS',25),      ('pro','MAX_BRANCHES',10),  ('pro','MAX_PRODUCTS',100000),
+      ('business','MAX_USERS',100),('business','MAX_BRANCHES',50),('business','MAX_PRODUCTS',-1)
+    ) AS x(plan_key, limit_key, limit_value) ON pv.plan_key = x.plan_key AND pv.version = 1`);
+  await ownerPool().query(`INSERT INTO plan_entitlements (plan_version_id, feature_key, enabled)
+    SELECT pv.id, f.key,
+      CASE
+        WHEN pv.plan_key = 'business' THEN true
+        WHEN pv.plan_key = 'pro' AND f.key IN ('MULTI_BRANCH','CUSTOM_ROLES','ADVANCED_REPORTS') THEN true
+        WHEN pv.plan_key = 'starter' AND f.key = 'MULTI_BRANCH' THEN true
+        ELSE false
+      END
+    FROM plan_versions pv CROSS JOIN features f
+    WHERE pv.version = 1`);
+  await ownerPool().query(`UPDATE plan_versions SET state = 'PUBLISHED' WHERE state = 'DRAFT'`);
+}
+
+let seq = 0;
+
+/** Test fixture: grant a feature via entitlement override (platform-level). */
+export async function grantFeature(businessId: string, actorUserId: string, featureKey: string, enabled = true): Promise<void> {
+  await ownerPool().query(
+    `INSERT INTO entitlement_overrides (business_id, feature_key, enabled_value, reason, actor_user_id)
+     VALUES ($1, $2, $3, 'test-fixture', $4)`,
+    [businessId, featureKey, enabled, actorUserId],
+  );
+}
+
+/** Test fixture: raise a plan limit via entitlement override (platform-level). */
+export async function raiseLimit(businessId: string, actorUserId: string, limitKey: string, value: number): Promise<void> {
+  await ownerPool().query(
+    `INSERT INTO entitlement_overrides (business_id, limit_key, limit_value, reason, actor_user_id)
+     VALUES ($1, $2, $3, 'test-fixture', $4)`,
+    [businessId, limitKey, value, actorUserId],
+  );
+}
+
+export function uniqueEmail(): string {
+  seq += 1;
+  return `user-${Date.now()}-${seq}@test.daftar.local`;
+}
+
+export interface TestApp {
+  app: INestApplication;
+  request: ReturnType<typeof supertest>;
+  worker: CredentialDeliveryWorker;
+  close: () => Promise<void>;
+}
+
+export interface TestAppOptions {
+  delivery?: CredentialDelivery;
+  outboxSink?: OutboxSink;
+  storage?: import('../../apps/api/src/infra/storage').ObjectStorage;
+  /** Extra env applied on top of the test config (e.g. TRUST_PROXY, JWT_KEYS). */
+  configOverrides?: Record<string, string>;
+}
+
+export async function createTestApp(options: TestAppOptions = {}): Promise<TestApp> {
+  await ensurePostgres(); // each vitest fork is a fresh process — ping-reuse the shared instance
+  const config: AppConfig = loadConfig({
+    NODE_ENV: 'test',
+    APP_DATABASE_URL: appDbUrl,
+    PLATFORM_DATABASE_URL: platformDbUrl,
+    IDENTITY_DATABASE_URL: identityDbUrl,
+    RESOLVER_DATABASE_URL: resolverDbUrl,
+    WORKER_DATABASE_URL: workerDbUrl,
+    PROVISIONER_DATABASE_URL: provisionerDbUrl,
+    JWT_SECRET: 'test-secret-key-with-at-least-32-characters!',
+    MEDIA_ROOT: '/tmp/daftar-test-media',
+    LOG_LEVEL: process.env['TEST_LOG_LEVEL'] ?? 'warn',
+    PORT: '0',
+    ...(options.configOverrides ?? {}),
+  });
+  const moduleRef = await Test.createTestingModule({
+    imports: [AppModule.register({ config, ...(options.delivery ? { delivery: options.delivery } : {}), ...(options.outboxSink ? { outboxSink: options.outboxSink } : {}), ...(options.storage ? { storage: options.storage } : {}) })],
+  }).compile();
+  const app = moduleRef.createNestApplication();
+  await app.init();
+  const request = supertest(app.getHttpServer());
+  return {
+    app,
+    request,
+    worker: moduleRef.get(CredentialDeliveryWorker),
+    close: async () => {
+      await app.close();
+    },
+  };
+}

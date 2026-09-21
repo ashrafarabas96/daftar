@@ -1,0 +1,190 @@
+name: DAFTAR Phase 1 CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  NODE_VERSION: '24.12.x'
+
+jobs:
+  # -------------------------------------------------------------------------
+  # 1. Workspace integrity — every declared workspace must exist; a missing
+  #    workspace is a HARD FAILURE, never a skipped job.
+  # -------------------------------------------------------------------------
+  workspaces:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify exact workspace set
+        run: |
+          set -e
+          for ws in apps/api apps/web apps/admin packages/domain-core packages/shared-contracts packages/design-system; do
+            test -f "$ws/package.json" || { echo "MISSING WORKSPACE: $ws"; exit 1; }
+          done
+          test -f apps/android/settings.gradle.kts || { echo "MISSING: apps/android (Gradle)"; exit 1; }
+          node -e "
+            const pkg = require('./package.json');
+            const expected = ['apps/api','apps/web','apps/admin','packages/domain-core','packages/shared-contracts','packages/design-system'].sort();
+            const actual = [...pkg.workspaces].sort();
+            if (JSON.stringify(expected) !== JSON.stringify(actual)) {
+              console.error('workspace mismatch', { expected, actual });
+              process.exit(1);
+            }
+          "
+          for ws in apps/api apps/web apps/admin packages/domain-core packages/shared-contracts packages/design-system; do
+            name=$(node -p "require('./$ws/package.json').name")
+            grep -q "\"node_modules/$name\"" package-lock.json || { echo "package-lock missing workspace $name"; exit 1; }
+          done
+
+  # -------------------------------------------------------------------------
+  # 2. Backend: install, manifest, gate, static guards, format/lint/typecheck,
+  #    unit + integration + security + DB-contract + golden + localization.
+  # -------------------------------------------------------------------------
+  backend:
+    needs: workspaces
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - name: Build contract packages
+        run: npm run build -w packages/domain-core -w packages/shared-contracts
+      - name: Migration manifest check
+        run: npm run check:migrations
+      - name: Phase 1 machine gate
+        run: npm run gate:phase1
+      - name: Static guards
+        run: npm run check:guards
+      - name: Localization check
+        run: npm run check:localization
+      - name: Format
+        run: npm run format
+      - name: Lint
+        run: npm run lint
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Unit tests
+        run: npm test
+      - name: Fresh database migrate (0000 → latest)
+        run: npm run migrate -w @daftar/api
+        env:
+          MIGRATION_DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+      - name: Re-migrate latest → no-op
+        run: npm run migrate -w @daftar/api
+        env:
+          MIGRATION_DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+      - name: Migration history verify
+        run: npm run verify:history
+        env:
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+      - name: Integration + security tests
+        run: npm run test:integration
+        env:
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+      - name: Golden regression suite
+        run: npm run test:golden
+        env:
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+      - name: Tampered-migration hard-fail proof
+        run: |
+          set -e
+          psql postgres://postgres:postgres@localhost:5432/postgres -c \
+            "INSERT INTO schema_migrations(name) VALUES ('9999_foreign_tamper.sql')" >/dev/null
+          if npm run verify:history; then
+            echo "tampered history was ACCEPTED — gate broken"; exit 1
+          fi
+          psql postgres://postgres:postgres@localhost:5432/postgres -c \
+            "DELETE FROM schema_migrations WHERE name='9999_foreign_tamper.sql'" >/dev/null
+        env:
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+      - name: API build
+        run: npm run build -w @daftar/api
+
+  # -------------------------------------------------------------------------
+  # 3. Web + Admin builds.
+  # -------------------------------------------------------------------------
+  web-admin:
+    needs: workspaces
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - name: Design system build
+        run: npm run build -w @daftar/design-system
+      - name: Web build
+        run: npm run build -w @daftar/web
+      - name: Admin build
+        run: npm run build -w @daftar/admin
+
+  # -------------------------------------------------------------------------
+  # 4. Android lint + unit test + assemble.
+  # -------------------------------------------------------------------------
+  android:
+    needs: workspaces
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - name: Android lint + unit tests + assemble
+        run: |
+          cd apps/android
+          gradle wrapper --gradle-version 8.9 --distribution-type bin
+          ./gradlew lint testDebugUnitTest assembleDebug --no-daemon --stacktrace
+
+  # -------------------------------------------------------------------------
+  # 5. Secret / dependency / artifact hygiene scans.
+  # -------------------------------------------------------------------------
+  hygiene:
+    needs: workspaces
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - name: Dependency audit
+        run: npm audit --audit-level=high
+      - name: Forbidden artifact scan
+        run: |
+          set -e
+          bad=$(find . -path ./node_modules -prune -o -type f \( \
+            -name '.env' -o -name '*.log' -o -name 'dev-mailbox*' -o \
+            -name '*.tsbuildinfo' -o -name '*.pem' -o -name '*.key' -o \
+            -name '*.zip' \) -print | grep -v node_modules || true)
+          test -z "$bad" || { echo "FORBIDDEN ARTIFACTS:"; echo "$bad"; exit 1; }
+          test ! -d apps/api/dist || { echo "stale apps/api/dist committed"; exit 1; }
+      - name: Raw credential scan
+        run: |
+          set -e
+          if grep -rInE 'argon2id\$[A-Za-z0-9+/=]{20,}|-----BEGIN [A-Z ]*PRIVATE KEY-----' \
+            apps packages infrastructure scripts --include='*.ts' --include='*.sql' \
+            | grep -v 'static-guards' | grep -v 'export-release'; then
+            echo "raw credential material found"; exit 1
+          fi
+      - name: Secret scan (gitleaks)
+        uses: gitleaks/gitleaks-action@v2

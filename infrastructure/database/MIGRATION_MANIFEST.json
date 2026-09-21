@@ -1,0 +1,119 @@
+{
+  "generatedAt": "2026-09-19T23:38:17.548Z",
+  "frozenThrough": "0027_plan_version_immutability_hardening.sql",
+  "policy": "Migrations 0000–0027 are FROZEN (PATH A — pre-release, disposable databases only). All future schema changes are new migrations 0028+.",
+  "migrations": [
+    {
+      "name": "0000_extensions.sql",
+      "sha256": "1f37486fbad1f29f6918f223bf859e2c715dfcc972b49944495fba35515a14b7"
+    },
+    {
+      "name": "0001_platform.sql",
+      "sha256": "49a577344361791ba0c0c3d1d0969be70247744688b88b577d8d637e1dcb3aed"
+    },
+    {
+      "name": "0002_identity.sql",
+      "sha256": "1595dd0be8e385b0bb7f53411200fff558ab228abcd0759ac9c72ae484bcaf55"
+    },
+    {
+      "name": "0003_tenancy.sql",
+      "sha256": "b72bcb3bd36e9aca1d2beaee01bd7ad324f098e542358a0984ea7a99e912818a"
+    },
+    {
+      "name": "0004_infra.sql",
+      "sha256": "07a647e9d38662cad0d6c00274823e8f0390b6071a3dc7c8afed1bd614d8cb49"
+    },
+    {
+      "name": "0005_catalog.sql",
+      "sha256": "dafe23d27f2a62553bb65c9069a7e54b7d6f5559ff7cca2ea46e89c8c156f04a"
+    },
+    {
+      "name": "0006_rls.sql",
+      "sha256": "0670ccb65630ef017cc2aaccb2319e31ae4f6bded8fbe45b3fedeb54cf866e75"
+    },
+    {
+      "name": "0007_entitlements.sql",
+      "sha256": "e790ef5b6b19837c4df6b7364e3c88737b6a3a9562d44eda0a0ff09277154717"
+    },
+    {
+      "name": "0008_multiuser_rbac.sql",
+      "sha256": "befbd18e31d2e21acd6f21746a43e447a439650d064e3098f09ab196ac7a6fad"
+    },
+    {
+      "name": "0009_admin.sql",
+      "sha256": "1c46a75481d898116635e7338f913291378dc7660dd081af9e25503f3b320308"
+    },
+    {
+      "name": "0010_db_roles.sql",
+      "sha256": "a21ae45158e92717e60628a6b7a7fad9cdd96c6a3a0e92197954fc679899fb9c"
+    },
+    {
+      "name": "0011_auth_lineage.sql",
+      "sha256": "cc470416864a6c4e19ecf64e1216f127d676faacf42232c3c0f588bb33ae3b73"
+    },
+    {
+      "name": "0012_tenant_memberships.sql",
+      "sha256": "e42669136d15c9e92114a62b7546ba3d68b6504456c7605ddc541bf8e1b5a82c"
+    },
+    {
+      "name": "0013_security_boundary.sql",
+      "sha256": "a14a7c4744e3f41c8133b49540b96107536feb9724cf0427d02550c0cab7a14d"
+    },
+    {
+      "name": "0014_branch_scopes.sql",
+      "sha256": "5c6d02c2829c0eae8b200c4a56dba9df5d4659a62f9bf77486f5b0abfdaa88f5"
+    },
+    {
+      "name": "0015_identity_role.sql",
+      "sha256": "ccc2725df0ff456c0e128992690f13b03d30335a3d8dc4125f39e1f9b2d5c74b"
+    },
+    {
+      "name": "0016_tenant_membership_invariant.sql",
+      "sha256": "154c71d92a98daf386926bb399bba3aec8c3399e40eec02f680f80133f4d2732"
+    },
+    {
+      "name": "0017_delivery_tracking.sql",
+      "sha256": "c6f3cc98db5ccb735fb5d224a45fbcbac8a6dd1309aabdab405b99d54c357d52"
+    },
+    {
+      "name": "0018_onboarding_operations.sql",
+      "sha256": "fe65bf8080b3b809e2f69b312906b9b50828340130c649ca79f77fcee8c8396d"
+    },
+    {
+      "name": "0019_owner_authority_integrity.sql",
+      "sha256": "d93e7429fa35ef90c1ef140b69c5bc50bd3c7228cadf26a9acc322a9e546c435"
+    },
+    {
+      "name": "0020_credential_delivery_outbox.sql",
+      "sha256": "a275d67fa6cd988b69d6282105908419e5da264a2e564023aaecf6c95206d0bc"
+    },
+    {
+      "name": "0021_saas_enforcement.sql",
+      "sha256": "d929e205a687638246e65c4d62fe420f049e9f0acadacb9f7751ee1f8613f88d"
+    },
+    {
+      "name": "0022_plan_lifecycle_overrides.sql",
+      "sha256": "16804a7c476d672a9bb89f0aa3d7817eda59528b65b331cd4161a6884c334c57"
+    },
+    {
+      "name": "0023_country_timezone_locale.sql",
+      "sha256": "2fda39bf599532f98f3ddcb9f4e42c2995d9ee6364171d23c2da6e7f59c59716"
+    },
+    {
+      "name": "0024_role_crud_grants.sql",
+      "sha256": "839b13f6a4c83a7c11698b1fc21d1600e1732d4cea25f5053d6d30dc4c93cb7b"
+    },
+    {
+      "name": "0025_credential_payload_protection.sql",
+      "sha256": "8ce47be8329aa119873f35b64e2fe6791ed88a1c515ee0aba46689def83f6452"
+    },
+    {
+      "name": "0026_versioned_trial_override_shape_ownership.sql",
+      "sha256": "b5b9e0e0d1ca3027e66b76bce7723c3a4f96c2b825973caf006d4639e8714152"
+    },
+    {
+      "name": "0027_plan_version_immutability_hardening.sql",
+      "sha256": "37909b885fc22514cf55aea7a5372c24d30f5b207c93810bac5e013e7da74fa9"
+    }
+  ]
+}

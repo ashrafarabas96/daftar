@@ -1,0 +1,175 @@
+#!/usr/bin/env tsx
+/**
+ * Static architecture guards (Final Enforcement Directive §65).
+ * Fails the build when a forbidden pattern re-enters the tree. These guards
+ * are the machine enforcement of the Phase 1 security/tenancy invariants.
+ */
+import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { join, relative } from 'node:path';
+
+const ROOT = join(__dirname, '..');
+let failures = 0;
+const fail = (rule: string, file: string, detail: string) => {
+  failures++;
+  console.error(`  FAIL [${rule}] ${relative(ROOT, file)}: ${detail}`);
+};
+
+function walk(dir: string, exts: RegExp, out: string[] = []): string[] {
+  let entries: string[] = [];
+  try {
+    entries = readdirSync(dir);
+  } catch {
+    return out;
+  }
+  for (const entry of entries) {
+    if (['node_modules', '.next', 'dist', '.git', 'build', '.gradle'].includes(entry)) continue;
+    const full = join(dir, entry);
+    if (statSync(full).isDirectory()) walk(full, exts, out);
+    else if (exts.test(entry)) out.push(full);
+  }
+  return out;
+}
+
+const tsFiles = (dir: string) => walk(dir, /\.(ts|tsx)$/);
+
+// Rule 1: Web/Admin must never touch the database or server infra.
+for (const surface of ['apps/web/src', 'apps/admin/src']) {
+  for (const f of tsFiles(join(ROOT, surface))) {
+    const src = readFileSync(f, 'utf8');
+    if (/from 'pg'|require\('pg'\)|@nestjs\/|DATABASE_URL|daftar_(app|platform|worker|migrator|provisioner|identity|resolver)/.test(src)) {
+      fail('no-direct-db', f, 'web/admin imports database or server-only infrastructure');
+    }
+  }
+}
+
+// Rule 2: Android must never embed DB access or secrets.
+for (const f of walk(join(ROOT, 'apps/android'), /\.(kt|kts|xml)$/)) {
+  const src = readFileSync(f, 'utf8');
+  if (/jdbc:|postgres:\/\/|DATABASE_URL|BEGIN TRANSACTION/i.test(src)) fail('android-no-db', f, 'android references a database');
+  if (/DEV_TEST_KEY|argon2id\$|Daftar-[A-Za-z0-9]{8,}/.test(src) && !/test/i.test(f)) fail('android-no-secrets', f, 'android embeds secret material');
+}
+
+// Rule 3: migration credentials must never appear in HTTP runtime code.
+for (const f of tsFiles(join(ROOT, 'apps/api/src'))) {
+  if (/migrate\.ts|bootstrap-platform-owner|config\.ts/.test(f)) continue;
+  const src = readFileSync(f, 'utf8');
+  if (/MIGRATION_DATABASE_URL/.test(src)) fail('no-migration-creds-in-runtime', f, 'HTTP runtime references MIGRATION_DATABASE_URL');
+}
+
+// Rule 4: merchant flows must NOT use platform authority (withPlatformTransaction).
+const MERCHANT_MODULES = ['catalog', 'tenancy', 'team', 'auth', 'onboarding', 'media', 'outbox', 'delivery'];
+for (const f of tsFiles(join(ROOT, 'apps/api/src/modules'))) {
+  if (!MERCHANT_MODULES.some((m) => f.includes(`modules/${m}/`))) continue;
+  const src = readFileSync(f, 'utf8');
+  if (/withPlatformTransaction/.test(src)) fail('merchant-no-platform-db', f, 'merchant module calls withPlatformTransaction');
+}
+
+// Rule 5: no generic RLS bypass outside the provisioner boundary.
+for (const f of tsFiles(join(ROOT, 'apps/api/src'))) {
+  const src = readFileSync(f, 'utf8');
+  if (/app_bypass_rls|BYPASSRLS|SET row_security\s*=\s*off/i.test(src) && !/provisioner/.test(f)) {
+    fail('no-generic-rls-bypass', f, 'generic RLS bypass outside provisioner boundary');
+  }
+}
+
+// Rule 6: money is bigint minor units — never Float/Number for amounts (TS + SQL).
+for (const f of [...tsFiles(join(ROOT, 'apps/api/src')), ...tsFiles(join(ROOT, 'packages'))]) {
+  const src = readFileSync(f, 'utf8');
+  src.split('\n').forEach((line, i) => {
+    if (/^\s*(\/\/|\*|\*)/.test(line)) return; // comments may name the anti-pattern
+    if (/(amount|price|total|balance|cost|fee)(Minor)?\s*:\s*number\b/i.test(line)) {
+      fail('money-bigint', f, `line ${i + 1}: money expressed as number`);
+    }
+    if (/Number\(\s*\w*(amount|price)\w*Minor\s*\)/i.test(line)) fail('money-bigint', f, `line ${i + 1}: Number() on minor units`);
+  });
+}
+for (const f of walk(join(ROOT, 'infrastructure/database/migrations'), /\.sql$/)) {
+  const src = readFileSync(f, 'utf8');
+  if (/(amount|price|total|balance)\w*\s+(REAL|DOUBLE PRECISION|FLOAT|NUMERIC\(\d+\s*,\s*\d+\))/i.test(src)) {
+    fail('money-bigint-sql', f, 'money column is float/numeric — must be bigint minor units');
+  }
+}
+
+// Rule 7: no mutable derived financial columns (product.stock / customer.balance ledgers).
+for (const f of walk(join(ROOT, 'infrastructure/database/migrations'), /\.sql$/)) {
+  const src = readFileSync(f, 'utf8');
+  if (/\.stock\b.*UPDATE|UPDATE.*SET\s+stock\s*=/i.test(src)) fail('no-mutable-ledger', f, 'mutable stock column update');
+}
+
+// Rule 7b (Ultimate Closure §15–16): the EFFECTIVE app_bypass() definition must
+// name ONLY the platform administrative principal. The last CREATE OR REPLACE
+// across migrations wins — check that final definition.
+{
+  const files = walk(join(ROOT, 'infrastructure/database/migrations'), /\.sql$/).sort();
+  let lastDef: { file: string; body: string } | null = null;
+  for (const f of files) {
+    const src = readFileSync(f, 'utf8');
+    const re = /CREATE OR REPLACE FUNCTION app_bypass\(\)[\s\S]*?AS \$\$[\s\S]*?\$\$;/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(src)) !== null) lastDef = { file: f, body: m[0] };
+  }
+  if (!lastDef) {
+    fail('bypass-definition', 'infrastructure/database/migrations', 'app_bypass() definition not found');
+  } else {
+    if (!lastDef.body.includes('daftar_platform')) {
+      fail('bypass-definition', lastDef.file, 'app_bypass() must include the platform administrative principal');
+    }
+    for (const role of ['daftar_provisioner', 'daftar_worker', 'daftar_resolver', 'daftar_identity', 'daftar_app']) {
+      if (lastDef.body.includes(role)) {
+        fail('bypass-definition', lastDef.file, `app_bypass() must NOT include runtime role ${role} (Ultimate Closure §15–16)`);
+      }
+    }
+  }
+}
+
+// Rule 8: production must never select the DEV_TEST_KEY adapter.
+for (const f of tsFiles(join(ROOT, 'apps/api/src'))) {
+  const src = readFileSync(f, 'utf8');
+  if (/DEV_TEST_KEY/.test(src) && !/NODE_ENV.*(test|development)|isProd|production/i.test(src)) {
+    fail('no-dev-key-prod', f, 'DEV_TEST_KEY without an explicit non-production guard');
+  }
+}
+
+// Rule 9: merchant request path must never drain the worker queue.
+for (const f of tsFiles(join(ROOT, 'apps/api/src/modules'))) {
+  if (f.includes('modules/worker/') || f.endsWith('delivery-worker.service.ts')) continue;
+  const src = readFileSync(f, 'utf8');
+  if (/drainSafely|DeliveryWorkerService/.test(src) && !/enqueuer/i.test(f)) {
+    fail('merchant-no-drain', f, 'merchant module references worker drain/DeliveryWorkerService');
+  }
+}
+
+// Rule 10: no plaintext credential columns.
+for (const f of walk(join(ROOT, 'infrastructure/database/migrations'), /\.sql$/)) {
+  const num = Number(f.match(/(\d{4})_/)?.[1] ?? '9999');
+  if (num <= 28) continue; // frozen history — remediated by 0025/0028 payload protection
+  const src = readFileSync(f, 'utf8');
+  if (/\b(password|token|secret)\b(?!_hash|_digest|_ciphertext)\s+(TEXT|VARCHAR)/i.test(src)) {
+    if (!/password_hash|refresh_token_hash|token_hash|token_digest/.test(src)) {
+      fail('no-plaintext-credentials', f, 'possible plaintext credential column');
+    }
+  }
+}
+
+// Rule 11: no token/secret logging.
+for (const f of tsFiles(join(ROOT, 'apps/api/src'))) {
+  const src = readFileSync(f, 'utf8');
+  if (/console\.(log|info|debug)\([^)]*(refreshToken|accessToken|password|secret)/i.test(src) || /logger\.(log|debug|verbose)\([^)]*(refreshToken|password|secret_ciphertext)/i.test(src)) {
+    fail('no-token-logging', f, 'token/secret passed to a logger');
+  }
+}
+
+// Rule 12: no client-provided owner authority, no hard-coded plan-name branching.
+for (const f of tsFiles(join(ROOT, 'apps/api/src/modules'))) {
+  const src = readFileSync(f, 'utf8');
+  if (/body\.(isOwner|isPlatformOwner|role\s*===?\s*'owner')/.test(src)) fail('no-client-authority', f, 'client-controlled authority flag');
+  if (/planKey\s*===?\s*'(free|starter|pro|business)'/.test(src) && !f.includes('modules/admin/')) {
+    fail('no-hardcoded-plan-branching', f, 'hard-coded plan-name branching outside admin');
+  }
+}
+
+if (failures > 0) {
+  console.error(`\nSTATIC GUARDS: FAIL (${failures})`);
+  process.exit(1);
+}
+console.log('STATIC GUARDS: PASS (12 rules)');

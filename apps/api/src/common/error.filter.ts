@@ -1,0 +1,88 @@
+import { ArgumentsHost, Catch, ExceptionFilter, HttpException, HttpStatus, Inject } from '@nestjs/common';
+import type { Response } from 'express';
+import { ZodError } from 'zod';
+import { AppError, CountryPackError, CurrencyError, type ApiErrorBody, type ApiErrorCode } from '@daftar/domain-core';
+import { RateLimitError } from '../infra/redis';
+import { getContext } from '../infra/request-context';
+import type { Logger } from '../infra/logger';
+
+/**
+ * Error architecture (§29): the backend returns a STABLE ERROR CODE + requestId
+ * + safe structured details. Messages are generic safe fallbacks; the UI
+ * translates codes in the web/android localization layer. SQL text, stack
+ * traces and internal class names never leak.
+ */
+@Catch()
+export class GlobalExceptionFilter implements ExceptionFilter {
+  constructor(@Inject('LOGGER') private readonly logger: Logger) {}
+
+  catch(exception: unknown, host: ArgumentsHost): void {
+    const res = host.switchToHttp().getResponse<Response>();
+    const requestId = getContext()?.requestId ?? 'unknown';
+
+    const body = (code: ApiErrorCode, message: string, status: number, details?: Record<string, unknown>): void => {
+      const payload: ApiErrorBody = { error: { code, message, requestId, ...(details ? { details } : {}) } };
+      res.status(status).json(payload);
+    };
+
+    if (exception instanceof AppError) {
+      body(exception.code, exception.message, exception.httpStatus, exception.details);
+      return;
+    }
+    if (exception instanceof ZodError) {
+      body('VALIDATION_FAILED', 'Validation failed', HttpStatus.BAD_REQUEST, {
+        issues: exception.issues.map((i) => ({ path: i.path.join('.'), code: i.code })),
+      });
+      return;
+    }
+    if (exception instanceof RateLimitError) {
+      res.setHeader('Retry-After', String(exception.retryAfterSeconds));
+      body('RATE_LIMITED', 'Too many requests', HttpStatus.TOO_MANY_REQUESTS);
+      return;
+    }
+    if (exception instanceof CountryPackError) {
+      body('UNSUPPORTED_COUNTRY', 'Unsupported country', HttpStatus.BAD_REQUEST);
+      return;
+    }
+    if (exception instanceof CurrencyError) {
+      body('UNSUPPORTED_CURRENCY', 'Unsupported currency', HttpStatus.CONFLICT);
+      return;
+    }
+    if (exception instanceof HttpException) {
+      const s = exception.getStatus();
+      const map: Record<number, [ApiErrorCode, string]> = {
+        400: ['VALIDATION_FAILED', 'Bad request'],
+        401: ['UNAUTHENTICATED', 'Authentication required'],
+        403: ['FORBIDDEN', 'Access denied'],
+        404: ['NOT_FOUND', 'Resource not found'],
+        413: ['MEDIA_TOO_LARGE', 'Payload too large'],
+        415: ['MEDIA_INVALID', 'Unsupported media type'],
+        429: ['RATE_LIMITED', 'Too many requests'],
+      };
+      const [code, msg] = map[s] ?? ['INTERNAL_ERROR', 'Internal error'];
+      body(code, msg, s);
+      return;
+    }
+    // PostgreSQL error codes → safe contracts
+    const pg = exception as { code?: string; constraint?: string };
+    if (pg.code === '23503') {
+      body('VALIDATION_FAILED', 'Related record violates scope or does not exist', HttpStatus.BAD_REQUEST);
+      return;
+    }
+    if (pg.code === '23505') {
+      const c = pg.constraint ?? '';
+      if (c.includes('store_slug')) {
+        body('SLUG_TAKEN', 'Store slug is taken', HttpStatus.CONFLICT);
+        return;
+      }
+      body('CONFLICT', 'Duplicate value', HttpStatus.CONFLICT, { constraint: c.replace(/_?\d*$/, '') });
+      return;
+    }
+    if (pg.code === '42501' || pg.code === 'P0001') {
+      body('FORBIDDEN', 'Access denied', HttpStatus.FORBIDDEN);
+      return;
+    }
+    this.logger.error({ err: exception, requestId }, 'unhandled error');
+    body('INTERNAL_ERROR', 'Internal error', HttpStatus.INTERNAL_SERVER_ERROR);
+  }
+}
