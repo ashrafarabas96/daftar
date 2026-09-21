@@ -11,6 +11,7 @@ const PROD_ENV: NodeJS.ProcessEnv = {
   IDENTITY_DATABASE_URL: 'postgresql://daftar_identity:x@db/daftar',
   RESOLVER_DATABASE_URL: 'postgresql://daftar_resolver:x@db/daftar',
   PROVISIONER_DATABASE_URL: 'postgresql://daftar_provisioner:x@db/daftar',
+  PROVISIONING_ASSERTION_KEY: Buffer.alloc(32, 9).toString('base64'),
   WORKER_DATABASE_URL: 'postgresql://daftar_worker:x@db/daftar',
   JWT_SECRET: 'production-secret-with-at-least-32-characters',
   MEDIA_STORAGE: 's3',
@@ -58,7 +59,14 @@ describe('production provider wiring (Gate A §20–32)', () => {
 
   it('NODE_ENV=production + REDIS_URL → distributed Redis limiter', () => {
     // HTTP surface (platform-api) — strip worker/provisioner/credential secrets
-    const { WORKER_DATABASE_URL: _w, PROVISIONER_DATABASE_URL: _pv, CREDENTIAL_PAYLOAD_KEY: _k, SMTP_URL: _s, ...platformEnv } = PROD_ENV;
+    const {
+      WORKER_DATABASE_URL: _w,
+      PROVISIONER_DATABASE_URL: _pv,
+      PROVISIONING_ASSERTION_KEY: _pa,
+      CREDENTIAL_PAYLOAD_KEY: _k,
+      SMTP_URL: _s,
+      ...platformEnv
+    } = PROD_ENV;
     const config = loadConfig({ ...platformEnv, PROCESS_MODE: 'platform-api', CREDENTIAL_KMS_ENDPOINT: 'https://kms.example.com/encrypt' });
     const limiter = new RedisRateLimiter(config);
     expect(limiter.kind).toBe('redis');
@@ -112,7 +120,14 @@ describe('process-level secret separation (§XXV–XXXI)', () => {
 
   it('platform-api REJECTS worker secrets and credential keys', () => {
     expect(() => loadConfig({ ...PROD_ENV, PROCESS_MODE: 'platform-api' })).toThrow(/must NOT be set in PROCESS_MODE=platform-api/);
-    const { WORKER_DATABASE_URL: _w, PROVISIONER_DATABASE_URL: _pv, CREDENTIAL_PAYLOAD_KEY: _k, SMTP_URL: _s, ...platformEnv } = PROD_ENV;
+    const {
+      WORKER_DATABASE_URL: _w,
+      PROVISIONER_DATABASE_URL: _pv,
+      PROVISIONING_ASSERTION_KEY: _pa,
+      CREDENTIAL_PAYLOAD_KEY: _k,
+      SMTP_URL: _s,
+      ...platformEnv
+    } = PROD_ENV;
     // Directive §24: the platform HTTP runtime enqueues password resets, so it
     // needs the KMS-style ENCRYPT provider too — never local key material.
     expect(() => loadConfig({ ...platformEnv, PROCESS_MODE: 'platform-api' })).toThrow(/CREDENTIAL_KMS_ENDPOINT/);
@@ -135,6 +150,26 @@ describe('process-level secret separation (§XXV–XXXI)', () => {
     expect(() => loadConfig(noDb)).toThrow(/WORKER_DATABASE_URL/);
     const { CREDENTIAL_PAYLOAD_KEY: _k, ...noKey } = workerEnv;
     expect(() => loadConfig(noKey)).toThrow(/CREDENTIAL_PAYLOAD_KEY/);
+  });
+
+  it('Blocker 1: merchant-api production REQUIRES the provisioning assertion key; platform-api and worker must NOT receive it', () => {
+    const { PLATFORM_DATABASE_URL: _p, WORKER_DATABASE_URL: _w, CREDENTIAL_PAYLOAD_KEY: _k, SMTP_URL: _s, ...merchantEnv } = PROD_ENV;
+    const { PROVISIONING_ASSERTION_KEY: _pa, ...noKey } = merchantEnv;
+    expect(() => loadConfig({ ...noKey, PROCESS_MODE: 'merchant-api', CREDENTIAL_KMS_ENDPOINT: 'https://kms.example.com/encrypt' })).toThrow(
+      /PROVISIONING_ASSERTION_KEY/,
+    );
+    expect(() =>
+      loadConfig({
+        ...merchantEnv,
+        PROVISIONING_ASSERTION_KEY: Buffer.alloc(8, 1).toString('base64'),
+        PROCESS_MODE: 'merchant-api',
+        CREDENTIAL_KMS_ENDPOINT: 'https://kms.example.com/encrypt',
+      }),
+    ).toThrow(/at least 32 bytes/);
+    const { WORKER_DATABASE_URL: _w2, PROVISIONER_DATABASE_URL: _pv, CREDENTIAL_PAYLOAD_KEY: _k2, SMTP_URL: _s2, ...platformWithKey } = PROD_ENV;
+    expect(() => loadConfig({ ...platformWithKey, PROCESS_MODE: 'platform-api', CREDENTIAL_KMS_ENDPOINT: 'https://kms.example.com/encrypt' })).toThrow(
+      /PROVISIONING_ASSERTION_KEY.*must NOT be set/,
+    );
   });
 
   it('mode=all is FORBIDDEN in production (§10 separated runtimes), allowed in dev/test', () => {

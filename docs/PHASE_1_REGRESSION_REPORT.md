@@ -47,6 +47,15 @@
 | R-25 | Release export zipped the Android `build/` directory (1 547 files, ~100 MB) although the inventory skipped it | Forbidden directories were pruned from the inventory only | Pruned from the staging tree; export fails if zip entries ≠ inventory + manifest | `export:release` self-check |
 | R-26 | Release gate flagged its own build outputs as stale artifacts; lint rejected Next-generated `next-env.d.ts` | Scan walked the filesystem; Next 15.5 regenerates the file | Scan uses git's shipped-file list; `next-env.d.ts` excluded from lint | `gate:phase1:release` |
 
+| R-27 | **Provisioner actor spoofing**: `set_config('app.actor_user_id', <victim owner>)` from a `daftar_provisioner` connection let `provision_create_business` run in the victim tenant | The GUC was treated as authentication | `0038`: HMAC provisioning assertions verified in the DB; key unreadable by runtime roles; kind-bound, expiring, single-use | `provisioner-boundary` Blocker 1 suite (11 cases) |
+| R-28 | `provision_replay_operation` skipped actor verification when no row matched (volatile call in `WHERE` evaluated per row) | SQL-language body | plpgsql body derives the actor first, unconditionally | `provisioner-boundary` replay case |
+| R-29 | **Identifier registry accepted fake / cross-business owners** and direct DML from `daftar_app` | No FK, broad grants, invoker-rights trigger | `0039`: composite FKs + XOR CHECK, DML revoked, SECURITY DEFINER sync routine | `catalog-identifiers` owner-integrity suite (7 cases) |
+| R-30 | Release archive omitted build configs (`tsconfig.build.json`), bootstrap SQL and other reproduction inputs | Hand-written allowlist | Inventory = git-tracked files + audited required-input list; gate checks the same list; acceptance rerun from the extracted archive | `export:release`, gate step "self-contained source tree" |
+| R-31 | KMS bridge: plaintext http allowed, no auth, no timeout, unbounded body, raw errors | Minimal client | HTTPS + bearer required in production; abort timeout, 64 KiB cap, schema check, no redirects, one retry, classified errors; fail-closed enqueue | `kms-encryptor` (12 cases) |
+| R-32 | Release gate could print PASS with Android skipped | Env opt-out honoured by the release gate | Any `RELEASE_GATE_SKIP_*` fails the release gate; dev helper separate | `release-gate` (4 cases, runs the gate itself) |
+| R-33 | Android debug base URL was cleartext while the app denied cleartext everywhere | One network config for all build types | Debug-only config permits `10.0.2.2`; release unchanged | `NetworkSecurityConfigTest.kt` (3 cases) |
+| R-34 | Evidence lacked toolchain/OS/source/migration/DB-from-zero facts | Minimal writer | `evidence.json` schema v2 generated from the executed steps | gate `--evidence` |
+
 Open defects at closure: **P0 = 0, P1 = 0, security P2 = 0, other P2 = 0**. Non-defect items are in `TECHNICAL_DEBT.md` (TD-01…TD-06).
 
 ## 3. Previously protected behaviours

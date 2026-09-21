@@ -247,7 +247,11 @@ describe('migration upgrade path: pre-encryption schema → latest (§13–16)',
       );
 
       const applied = await runMigrations(url3);
-      expect(applied).toEqual(['0036_catalog_translations_normalized.sql', '0037_catalog_identifiers.sql']);
+      const after0035 = readdirSync(MIGRATIONS_DIR)
+        .filter((f) => f.endsWith('.sql') && f.slice(0, 4) > '0035')
+        .sort();
+      expect(after0035[0]).toBe('0036_catalog_translations_normalized.sql');
+      expect(applied).toEqual(after0035);
       expect(await runMigrations(url3)).toEqual([]);
 
       // Translations preserved exactly, JSONB gone.

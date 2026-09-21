@@ -168,27 +168,153 @@ export class LocalCredentialEncryptor implements CredentialPayloadEncryptor {
   }
 }
 
+/** Sanitized, classified failure of the KMS bridge — never carries plaintext, response bodies or headers. */
+export class KmsEncryptError extends Error {
+  constructor(
+    readonly code: 'KMS_TIMEOUT' | 'KMS_UNREACHABLE' | 'KMS_REJECTED' | 'KMS_MALFORMED' | 'KMS_TOO_LARGE',
+    detail: string,
+  ) {
+    super(`credential KMS encrypt failed: ${code} (${detail})`);
+    this.name = 'KmsEncryptError';
+  }
+}
+
+export interface KmsEncryptorOptions {
+  endpoint: string;
+  /** Bearer token for the bridge — REQUIRED in production (authenticated encryption service only). */
+  token: string | null;
+  timeoutMs: number;
+  /** Non-production only: allow http:// for a local bridge. Production is HTTPS-only. */
+  allowInsecureHttp: boolean;
+  /** Injectable for tests. */
+  fetchImpl?: typeof fetch;
+}
+
+const KMS_MAX_RESPONSE_BYTES = 64 * 1024;
+
 /**
- * Production merchant-side encryptor: delegates encryption to a KMS-style
- * endpoint. The merchant process carries NO key material of any kind —
- * neither encryption nor decryption keys.
+ * Production merchant-side encryptor (Final Release Blocker 4): delegates
+ * encryption to an AUTHENTICATED KMS-style bridge over HTTPS. The merchant
+ * process carries NO key material of any kind.
+ *
+ * Network protections: HTTPS-only (production), bearer authentication,
+ * bounded timeout with abort, bounded response size, schema-validated
+ * response, ONE retry only on transport failure / 502–504 (the request is
+ * idempotent: same plaintext + AAD → a fresh envelope, nothing is persisted
+ * until the transaction commits), and classified errors that never include
+ * the plaintext, the response body or headers. Nothing here logs.
  */
 export class KmsCredentialEncryptor implements CredentialPayloadEncryptor {
-  constructor(private readonly endpoint: string) {}
+  private readonly endpoint: URL;
+  private readonly fetchImpl: typeof fetch;
+
+  constructor(private readonly opts: KmsEncryptorOptions) {
+    let url: URL;
+    try {
+      url = new URL(opts.endpoint);
+    } catch {
+      throw new Error('CREDENTIAL_KMS_ENDPOINT is not a valid URL');
+    }
+    if (url.protocol !== 'https:' && !(opts.allowInsecureHttp && url.protocol === 'http:')) {
+      throw new Error('CREDENTIAL_KMS_ENDPOINT must use https:// (plaintext http is forbidden for credential payloads)');
+    }
+    if (url.username || url.password) throw new Error('CREDENTIAL_KMS_ENDPOINT must not embed credentials');
+    if (opts.token !== null && opts.token.length < 32) throw new Error('CREDENTIAL_KMS_TOKEN must be at least 32 characters');
+    if (!Number.isInteger(opts.timeoutMs) || opts.timeoutMs < 100 || opts.timeoutMs > 60_000) throw new Error('CREDENTIAL_KMS_TIMEOUT_MS must be 100–60000');
+    this.endpoint = url;
+    this.fetchImpl = opts.fetchImpl ?? fetch;
+  }
 
   async encrypt(secret: string, aad: Buffer): Promise<ProtectedPayload> {
-    const res = await fetch(this.endpoint, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ plaintext: Buffer.from(secret, 'utf8').toString('base64'), aad: aad.toString('base64') }),
-    });
-    if (!res.ok) throw new Error(`credential KMS encrypt failed (status ${res.status})`);
-    const body = (await res.json()) as Partial<ProtectedPayload>;
-    if (typeof body.ciphertext !== 'string' || typeof body.nonce !== 'string' || typeof body.keyVersion !== 'string') {
-      throw new Error('credential KMS encrypt returned a malformed payload');
+    const body = JSON.stringify({ plaintext: Buffer.from(secret, 'utf8').toString('base64'), aad: aad.toString('base64') });
+    let lastError: KmsEncryptError | null = null;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        return await this.once(body);
+      } catch (e) {
+        const err = e instanceof KmsEncryptError ? e : new KmsEncryptError('KMS_UNREACHABLE', 'unexpected client failure');
+        lastError = err;
+        const retryable = err.code === 'KMS_UNREACHABLE' || err.code === 'KMS_TIMEOUT' || (err.code === 'KMS_REJECTED' && /status 50[234]/.test(err.message));
+        if (!retryable || attempt === 1) throw err;
+      }
     }
-    return { ciphertext: body.ciphertext, nonce: body.nonce, keyVersion: body.keyVersion };
+    throw lastError ?? new KmsEncryptError('KMS_UNREACHABLE', 'no attempt made');
   }
+
+  private async once(body: string): Promise<ProtectedPayload> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), this.opts.timeoutMs);
+    let res: Response;
+    try {
+      const headers: Record<string, string> = { 'content-type': 'application/json', accept: 'application/json' };
+      if (this.opts.token !== null) headers['authorization'] = `Bearer ${this.opts.token}`;
+      res = await this.fetchImpl(this.endpoint, { method: 'POST', headers, body, signal: controller.signal, redirect: 'error' });
+    } catch (e) {
+      clearTimeout(timer);
+      if (controller.signal.aborted) throw new KmsEncryptError('KMS_TIMEOUT', `no response within ${this.opts.timeoutMs}ms`);
+      throw new KmsEncryptError('KMS_UNREACHABLE', (e as { cause?: { code?: string } })?.cause?.code ?? 'transport failure');
+    }
+    try {
+      if (!res.ok) {
+        // Drain without reading into memory beyond the cap; never surface the body.
+        await res.body?.cancel().catch(() => undefined);
+        throw new KmsEncryptError('KMS_REJECTED', `status ${res.status}`);
+      }
+      const declared = Number(res.headers.get('content-length') ?? '0');
+      if (declared > KMS_MAX_RESPONSE_BYTES) {
+        await res.body?.cancel().catch(() => undefined);
+        throw new KmsEncryptError('KMS_TOO_LARGE', `content-length ${declared}`);
+      }
+      const text = await readBounded(res, KMS_MAX_RESPONSE_BYTES, controller);
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(text);
+      } catch {
+        throw new KmsEncryptError('KMS_MALFORMED', 'response is not JSON');
+      }
+      const o = parsed as Partial<Record<keyof ProtectedPayload, unknown>>;
+      if (
+        typeof o?.ciphertext !== 'string' ||
+        typeof o?.nonce !== 'string' ||
+        typeof o?.keyVersion !== 'string' ||
+        !/^[A-Za-z0-9+/=]{16,}$/.test(o.ciphertext) ||
+        !/^[A-Za-z0-9+/=]{12,}$/.test(o.nonce) ||
+        !/^[A-Za-z0-9_.:-]{1,64}$/.test(o.keyVersion)
+      ) {
+        throw new KmsEncryptError('KMS_MALFORMED', 'response fields missing or malformed');
+      }
+      return { ciphertext: o.ciphertext, nonce: o.nonce, keyVersion: o.keyVersion };
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+}
+
+/** Read at most `max` bytes of the body; abort the request and fail if the peer sends more. */
+async function readBounded(res: Response, max: number, controller: AbortController): Promise<string> {
+  const reader = (res.body as ReadableStream<Uint8Array> | null)?.getReader();
+  if (!reader) return '';
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    let next: Awaited<ReturnType<typeof reader.read>>;
+    try {
+      next = await reader.read();
+    } catch {
+      if (controller.signal.aborted) throw new KmsEncryptError('KMS_TIMEOUT', 'response body timed out');
+      throw new KmsEncryptError('KMS_UNREACHABLE', 'response body failed');
+    }
+    if (next.done) break;
+    const chunk = next.value;
+    total += chunk.byteLength;
+    if (total > max) {
+      controller.abort();
+      await reader.cancel().catch(() => undefined);
+      throw new KmsEncryptError('KMS_TOO_LARGE', `body exceeds ${max} bytes`);
+    }
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks).toString('utf8');
 }
 
 /**
@@ -196,12 +322,26 @@ export class KmsCredentialEncryptor implements CredentialPayloadEncryptor {
  * provider (CREDENTIAL_KMS_ENDPOINT) — the DEV_TEST_KEY path is structurally
  * impossible in production (config validation + this guard).
  */
-export function createCredentialEncryptor(config: { NODE_ENV: string; CREDENTIAL_KMS_ENDPOINT?: string | undefined }): CredentialPayloadEncryptor {
-  if (config.NODE_ENV === 'production') {
-    if (!config.CREDENTIAL_KMS_ENDPOINT) {
-      throw new Error('production merchant runtime requires CREDENTIAL_KMS_ENDPOINT (KMS-style encrypt provider; local keys are forbidden)');
+export function createCredentialEncryptor(config: {
+  NODE_ENV: string;
+  CREDENTIAL_KMS_ENDPOINT?: string | undefined;
+  CREDENTIAL_KMS_TOKEN?: string | undefined;
+  CREDENTIAL_KMS_TIMEOUT_MS?: number | undefined;
+}): CredentialPayloadEncryptor {
+  const isProd = config.NODE_ENV === 'production';
+  if (config.CREDENTIAL_KMS_ENDPOINT) {
+    if (isProd && !config.CREDENTIAL_KMS_TOKEN) {
+      throw new Error('production requires CREDENTIAL_KMS_TOKEN — credential plaintext is never sent to an unauthenticated endpoint');
     }
-    return new KmsCredentialEncryptor(config.CREDENTIAL_KMS_ENDPOINT);
+    return new KmsCredentialEncryptor({
+      endpoint: config.CREDENTIAL_KMS_ENDPOINT,
+      token: config.CREDENTIAL_KMS_TOKEN ?? null,
+      timeoutMs: config.CREDENTIAL_KMS_TIMEOUT_MS ?? 5000,
+      allowInsecureHttp: !isProd,
+    });
+  }
+  if (isProd) {
+    throw new Error('production merchant runtime requires CREDENTIAL_KMS_ENDPOINT (KMS-style encrypt provider; local keys are forbidden)');
   }
   return new LocalCredentialEncryptor(DEV_TEST_KEY, CREDENTIAL_KEY_VERSION);
 }

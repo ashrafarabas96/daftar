@@ -63,3 +63,16 @@ _تُسجَّل هنا: migrations contract، RLS isolation، auth rotation/reus
 | PB-37 | Merchant web builds and prerenders all 16 pages × 3 locales; 187 keys present in every locale | `next build`, `check:localization` |
 | PB-38 | Last-owner operations under concurrency never deadlock (business-level advisory lock) | `owner-authority.test.ts`, `isolation.test.ts` |
 | PB-39 | `npm audit --audit-level=high` reports 0 high/critical | CI hygiene job, `gate:phase1:release` |
+
+## PB — Final Release Blocker Patch additions
+
+| ID | Behaviour | Guard test |
+|---|---|---|
+| PB-40 | Provisioning commands derive the actor ONLY from a server-minted HMAC assertion; a caller-set GUC, a forged or tampered signature, an expired assertion, a wrong operation kind or a replayed jti is refused inside the command | `tests/security/provisioner-boundary.test.ts` |
+| PB-41 | No runtime role (app, platform, identity, resolver, worker, provisioner) can read, install or retire provisioning assertion keys or touch the jti registry | `provisioner-boundary.test.ts`, `scripts/db-from-zero.ts` |
+| PB-42 | Every `catalog_identifiers` row references exactly one real product XOR variant of the same business and disappears with it; `daftar_app` cannot write the registry directly | `tests/security/catalog-identifiers.test.ts` |
+| PB-43 | Production refuses an `http://` or unauthenticated KMS endpoint; the KMS client bounds timeout and response size, validates the response, follows no redirects and never surfaces plaintext or response bodies; an encrypt failure rolls the enqueue transaction back | `tests/integration/kms-encryptor.test.ts`, `production-providers.test.ts` |
+| PB-44 | The release gate fails immediately when any `RELEASE_GATE_SKIP_*` variable is set; only the dev helper may skip, and it never prints a release verdict | `tests/integration/release-gate.test.ts` |
+| PB-45 | Android debug permits cleartext for `10.0.2.2` only; release denies cleartext everywhere and uses an https base URL | `NetworkSecurityConfigTest.kt` |
+| PB-46 | The release archive contains every input the reproduction commands read; the gate and acceptance run from the extracted archive without the repository | `scripts/export-release.ts`, gate step "self-contained source tree" |
+| PB-47 | A fresh PostgreSQL goes roles → 40 migrations → no-op → verified history; a foreign history row is rejected by the verifier | `scripts/db-from-zero.ts` (gate step) |

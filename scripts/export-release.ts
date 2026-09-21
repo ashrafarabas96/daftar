@@ -1,133 +1,160 @@
 #!/usr/bin/env tsx
 /**
- * Release export (Final Enforcement Directive §70–72).
- * Allowlist-based source export: copies only declared paths into a staging
- * tree, scans for forbidden content, writes DELIVERY_MANIFEST.json (tree
- * hash, inventory, migration hashes, toolchain, evidence), then zips and
- * writes a SIBLING .sha256 (never inside the zip — no circular hash).
+ * Release export (Final Enforcement Directive §70–72; Final Release Blocker 3).
+ *
+ * The release archive must be SELF-CONTAINED: unpacked on a clean machine it
+ * supports npm ci, build, tests, database bootstrap, migrations and the
+ * release gate without a single file from anywhere else. The inventory is
+ * therefore EVERY file the repository tracks (git is the source of truth for
+ * "what is source"), minus nothing — and the export FAILS if any tracked file
+ * is forbidden release content (debris, secrets, dumps, nested archives) or if
+ * a file the reproduction commands need is not tracked.
+ *
+ * Output: release/DAFTAR_PHASE_1_RC.zip (tree under DAFTAR/ with
+ * DELIVERY_MANIFEST.json: tree hash, inventory, migration hashes, source
+ * commit) and a SIBLING .sha256 (never inside the zip — no circular hash).
  */
 import { createHash } from 'node:crypto';
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, relative } from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { dirname, join } from 'node:path';
+import { execFileSync, spawnSync } from 'node:child_process';
 
 const ROOT = join(__dirname, '..');
 const sha = (buf: Buffer | string) => createHash('sha256').update(buf).digest('hex');
 
-const ALLOWLIST = [
-  'apps/api/src',
-  'apps/api/package.json',
-  'apps/api/tsconfig.json',
-  'apps/web/src',
-  'apps/web/package.json',
-  'apps/web/next.config.mjs',
-  'apps/web/tsconfig.json',
-  'apps/admin/src',
-  'apps/admin/package.json',
-  'apps/admin/next.config.mjs',
-  'apps/admin/tsconfig.json',
-  'apps/android/settings.gradle.kts',
-  'apps/android/build.gradle.kts',
-  'apps/android/gradle.properties',
-  'apps/android/app',
-  'packages/domain-core/src',
-  'packages/domain-core/package.json',
-  'packages/domain-core/tsconfig.json',
-  'packages/shared-contracts/src',
-  'packages/shared-contracts/package.json',
-  'packages/shared-contracts/tsconfig.json',
-  'packages/design-system/src',
-  'packages/design-system/package.json',
-  'packages/design-system/tsconfig.json',
-  'infrastructure/database/migrations',
-  'infrastructure/database/MIGRATION_MANIFEST.json',
-  'scripts',
-  'tests',
-  'docs',
-  'package.json',
-  'package-lock.json',
-  'tsconfig.base.json',
-  'tsconfig.json',
-  'vitest.config.ts',
-  'eslint.config.mjs',
-  '.github/workflows/ci.yml',
-];
-
-const FORBIDDEN_NAME = /(^|\/)(node_modules|dist|\.next|var|coverage|\.gradle|build)(\/|$)|\.env($|\.)|\.log$|\.tsbuildinfo$|\.zip$|\.pem$|\.key$|dev-mailbox/i;
+const FORBIDDEN_NAME =
+  /(^|\/)(node_modules|dist|\.next|var|coverage|\.gradle|build)(\/|$)|(^|\/)\.env($|\.)|\.log$|\.tsbuildinfo$|\.zip$|\.pem$|\.key$|\.dump$|\.sql\.gz$|dev-mailbox|local\.properties$/i;
 const FORBIDDEN_CONTENT = /DEV_TEST_KEY(?!\w)|argon2id\$[A-Za-z0-9+/=]{20,}|-----BEGIN [A-Z ]*PRIVATE KEY-----/;
+/** Files with a documented reason to mention the dev-only key constant or scan patterns. */
+const CONTENT_SCAN_EXEMPT = /static-guards|export-release|phase1-release-gate|credential-protector\.ts$|\.test\.|^docs\//;
+
+/** Every input the reproduction commands read. Derived from package.json scripts, CI and the build configs — kept explicit so a mis-tracked file fails loudly. */
+function requiredFiles(): string[] {
+  const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as { scripts: Record<string, string>; workspaces: string[] };
+  const fromScripts = Object.values(pkg.scripts)
+    .flatMap((s) => [...s.matchAll(/(scripts\/[A-Za-z0-9_.-]+\.(?:ts|mjs))/g)].map((m) => m[1] as string))
+    .filter((f, i, a) => a.indexOf(f) === i);
+  const workspaceFiles = pkg.workspaces.flatMap((ws) => {
+    const wpkg = JSON.parse(readFileSync(join(ROOT, ws, 'package.json'), 'utf8')) as { scripts?: Record<string, string> };
+    const configs = Object.values(wpkg.scripts ?? {}).flatMap((s) => [...s.matchAll(/-p\s+([A-Za-z0-9_.-]+\.json)/g)].map((m) => `${ws}/${m[1]}`));
+    return [`${ws}/package.json`, `${ws}/tsconfig.json`, ...configs];
+  });
+  const ci = readFileSync(join(ROOT, '.github/workflows/ci.yml'), 'utf8');
+  const fromCi = [...ci.matchAll(/(infrastructure\/[A-Za-z0-9_./-]+|scripts\/[A-Za-z0-9_.-]+\.ts)/g)].map((m) => m[1] as string);
+  return [
+    'package.json',
+    'package-lock.json',
+    'tsconfig.base.json',
+    'tsconfig.json',
+    'vitest.config.ts',
+    'eslint.config.mjs',
+    '.prettierrc.json',
+    '.prettierignore',
+    '.nvmrc',
+    '.node-version',
+    '.gitignore',
+    '.github/workflows/ci.yml',
+    'TECHNICAL_DEBT.md',
+    'infrastructure/database/bootstrap.sql',
+    'infrastructure/database/MIGRATION_MANIFEST.json',
+    'apps/web/next.config.mjs',
+    'apps/admin/next.config.mjs',
+    'apps/android/settings.gradle.kts',
+    'apps/android/build.gradle.kts',
+    'apps/android/gradle.properties',
+    'apps/android/app/build.gradle.kts',
+    'apps/android/app/proguard-rules.pro',
+    'apps/android/app/src/main/AndroidManifest.xml',
+    'apps/android/app/src/debug/res/xml/network_security_config.xml',
+    'tests/helpers/test-app.ts',
+    'tests/helpers/global-setup.ts',
+    'tests/helpers/setup.ts',
+    ...fromScripts,
+    ...workspaceFiles,
+    ...fromCi,
+  ].filter((f, i, a) => a.indexOf(f) === i);
+}
+
+const git = spawnSync('git', ['ls-files', '-z'], { cwd: ROOT, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+if (git.status !== 0) {
+  console.error('  FAIL export must run from the git repository (git ls-files is the source inventory)');
+  process.exit(1);
+}
+const tracked = git.stdout.split('\0').filter((f) => f.length > 0 && existsSync(join(ROOT, f)));
+const sourceCommit = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: ROOT, encoding: 'utf8' }).stdout.trim();
+const dirty = spawnSync('git', ['status', '--porcelain'], { cwd: ROOT, encoding: 'utf8' }).stdout.trim();
+if (dirty.length > 0) {
+  console.error(`  FAIL working tree has uncommitted changes — the export must describe exactly one commit:\n${dirty}`);
+  process.exit(1);
+}
+
+console.log('EXPORT — auditing required reproduction inputs');
+const missing = requiredFiles().filter((f) => !tracked.includes(f));
+if (missing.length > 0) {
+  console.error(`  FAIL required source files are not tracked (the archive would not be self-contained):\n  ${missing.join('\n  ')}`);
+  process.exit(1);
+}
+console.log(`  ok ${requiredFiles().length} required inputs tracked`);
+
+console.log('EXPORT — hygiene of the tracked inventory');
+for (const rel of tracked) {
+  if (FORBIDDEN_NAME.test(rel)) {
+    console.error(`  FAIL forbidden file is tracked: ${rel}`);
+    process.exit(1);
+  }
+}
 
 const staging = mkdtempSync(join(tmpdir(), 'daftar-export-'));
 const tree = join(staging, 'DAFTAR');
 mkdirSync(tree, { recursive: true });
 
-console.log('EXPORT — copying allowlist');
-for (const rel of ALLOWLIST) {
+console.log('EXPORT — copying + hashing inventory');
+const inventory: { path: string; sha256: string; bytes: number }[] = [];
+for (const rel of tracked) {
   const src = join(ROOT, rel);
-  if (!existsSync(src)) {
-    console.error(`  FAIL allowlisted path missing: ${rel}`);
+  const dst = join(tree, rel);
+  mkdirSync(dirname(dst), { recursive: true });
+  cpSync(src, dst);
+  const buf = readFileSync(src);
+  inventory.push({ path: rel, sha256: sha(buf), bytes: buf.byteLength });
+  if (/\.(ts|tsx|sql|kt|kts|json|mjs|yml|yaml|xml|properties)$/.test(rel) && FORBIDDEN_CONTENT.test(buf.toString('utf8')) && !CONTENT_SCAN_EXEMPT.test(rel)) {
+    console.error(`  FAIL raw credential material in export: ${rel}`);
     process.exit(1);
   }
-  cpSync(src, join(tree, rel), { recursive: true });
 }
 
-console.log('EXPORT — walking + hashing inventory');
-const inventory: { path: string; sha256: string; bytes: number }[] = [];
-const walk = (d: string): void => {
-  for (const e of readdirSync(d)) {
-    const f = join(d, e);
-    const rel = relative(tree, f);
-    if (FORBIDDEN_NAME.test(rel + (statSync(f).isDirectory() ? '/' : ''))) {
-      if (statSync(f).isDirectory()) {
-        // Allowlisted parents (e.g. apps/android/app) may contain build debris on a
-        // developer machine: remove it from the staging tree so the zip never carries it.
-        rmSync(f, { recursive: true, force: true });
-        continue;
-      }
-      console.error(`  FAIL forbidden file in export: ${rel}`);
-      process.exit(1);
-    }
-    if (statSync(f).isDirectory()) walk(f);
-    else {
-      const buf = readFileSync(f);
-      inventory.push({ path: rel, sha256: sha(buf), bytes: buf.byteLength });
-      if (/\.(ts|tsx|sql|kt|kts|json|mjs|yml|yaml|xml)$/.test(e) && FORBIDDEN_CONTENT.test(buf.toString('utf8'))) {
-        // credential-protector.ts DEFINES the dev-only constant (gated on NODE_ENV by
-        // static guard rule 8 and production-providers.test.ts); every other file
-        // that mentions it is a leak.
-        if (!/static-guards|export-release|phase1-release-gate|credential-protector\.ts$|\.test\.|docs\//.test(rel)) {
-          console.error(`  FAIL raw credential material in export: ${rel}`);
-          process.exit(1);
-        }
-      }
-    }
-  }
-};
-walk(tree);
-
 const migrationsDir = join(ROOT, 'infrastructure/database/migrations');
-const migrationHashes = readdirSync(migrationsDir)
-  .filter((f) => f.endsWith('.sql'))
+const migrationHashes = tracked
+  .filter((f) => f.startsWith('infrastructure/database/migrations/') && f.endsWith('.sql'))
   .sort()
-  .map((f) => ({ name: f, sha256: sha(readFileSync(join(migrationsDir, f))) }));
+  .map((f) => ({ name: f.slice('infrastructure/database/migrations/'.length), sha256: sha(readFileSync(join(ROOT, f))) }));
+const manifestOnDisk = JSON.parse(readFileSync(join(ROOT, 'infrastructure/database/MIGRATION_MANIFEST.json'), 'utf8')) as { frozenThrough: string };
+const unmanifested = migrationHashes.filter((m) => m.name > manifestOnDisk.frozenThrough);
+if (unmanifested.length > 0) {
+  console.error(`  FAIL migrations newer than the frozen manifest: ${unmanifested.map((m) => m.name).join(', ')} — freeze them before exporting`);
+  process.exit(1);
+}
+void migrationsDir;
 
 const manifest = {
   product: 'DAFTAR',
   phase: 1,
   kind: 'release-candidate',
   generatedAt: new Date().toISOString(),
+  sourceCommit,
   treeHash: sha(inventory.map((i) => `${i.path}:${i.sha256}`).join('\n')),
   fileCount: inventory.length,
   inventory,
   migrationHashes,
-  toolchain: { node: '24.12.x', npm: '>=11' },
-  evidence: {
-    gate: 'npm run gate:phase1',
-    golden: 'npm run test:golden',
-    localization: 'npm run check:localization',
-    staticGuards: 'npm run check:guards',
-    migrationHistory: 'npm run verify:history',
-  },
+  migrationManifestSha256: sha(readFileSync(join(ROOT, 'infrastructure/database/MIGRATION_MANIFEST.json'))),
+  toolchain: { node: '24.12.x', npm: '>=11', gradle: '8.14.x', androidSdk: 'platform 35 / build-tools 35.0.0' },
+  reproduction: [
+    'npm ci',
+    'npm run gate:phase1:release -- --evidence=release/evidence.json',
+    'npm run perf:baseline',
+    'PROVISIONING_ASSERTION_KEY=<base64 ≥32B> BOOTSTRAP_DATABASE_URL=<daftar_platform url> npm run bootstrap:provisioning-key',
+  ],
 };
 writeFileSync(join(tree, 'DELIVERY_MANIFEST.json'), JSON.stringify(manifest, null, 2));
 
@@ -146,6 +173,6 @@ const zipHash = sha(readFileSync(zipPath));
 writeFileSync(`${zipPath}.sha256`, `${zipHash}  DAFTAR_PHASE_1_RC.zip\n`);
 rmSync(staging, { recursive: true, force: true });
 
-console.log(`EXPORT: PASS — release/DAFTAR_PHASE_1_RC.zip (${inventory.length} files)`);
+console.log(`EXPORT: PASS — release/DAFTAR_PHASE_1_RC.zip (${inventory.length} files, commit ${sourceCommit.slice(0, 7)})`);
 console.log(`  treeHash ${manifest.treeHash}`);
 console.log(`  zip sha256 ${zipHash} (sibling .sha256 written)`);

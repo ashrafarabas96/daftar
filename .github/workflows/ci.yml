@@ -131,6 +131,8 @@ jobs:
             "DELETE FROM schema_migrations WHERE name='9999_foreign_tamper.sql'" >/dev/null
         env:
           DATABASE_URL: postgres://postgres:postgres@localhost:5432/daftar
+      - name: Database contract from zero (throw-away embedded server; same check as the release gate)
+        run: npm run check:db-from-zero
       - name: API build
         run: npm run build -w @daftar/api
 

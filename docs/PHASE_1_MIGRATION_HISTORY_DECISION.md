@@ -62,6 +62,12 @@ disposable databases, which were reset).
   migration role on managed PostgreSQL without SUPERUSER.
 - No broad trigger disabling anywhere else.
 
+## Final Release Blocker Patch: 0038–0039 appended to the frozen set
+
+- `0038_provisioning_assertions.sql` — provisioning assertions (Blocker 1). Deploy order: apply 0038, install the assertion key with `npm run bootstrap:provisioning-key` under the platform principal, deploy the merchant API carrying `PROVISIONING_ASSERTION_KEY`. Rolling the API back across 0038 without rolling the migration back makes provisioning fail closed (every command raises `PROV:FORBIDDEN`); nothing is corrupted, but onboarding and invitation acceptance stop until the API is rolled forward.
+- `0039_catalog_identifiers_owner_integrity.sql` — FK-backed owner columns, DML revoked from runtime roles, SECURITY DEFINER sync routine (Blocker 2). Backward compatible with the pre-0039 API (the trigger writes the new columns itself).
+- `frozenThrough` is now `0039_catalog_identifiers_owner_integrity.sql`; the gate's DB-from-zero step refuses any migration newer than `frozenThrough`.
+
 ## Phase 1 release freeze (§51–54): 0028–0037 appended to the frozen set
 
 At the Phase 1 release the manifest was extended from `0027` to

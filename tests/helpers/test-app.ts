@@ -11,7 +11,9 @@ import { loadConfig, type AppConfig } from '../../apps/api/src/config';
 import { runMigrations } from '../../apps/api/src/infra/migrate';
 import type { CredentialDelivery } from '../../apps/api/src/modules/auth/tokens';
 import type { OutboxSink } from '../../apps/api/src/modules/outbox/publisher';
+import type { CredentialPayloadEncryptor } from '../../apps/api/src/modules/delivery/credential-protector';
 import { CredentialDeliveryWorker } from '../../apps/api/src/modules/delivery/delivery-worker.service';
+import { mintProvisioningAssertion, type ProvisioningKind } from '../../apps/api/src/infra/provisioning-assertion';
 
 export const PG_DIR = process.env['PG_DIR'] ?? '/tmp/daftar-pg-shared';
 export const PG_PORT = Number(process.env['PG_PORT'] ?? 55432);
@@ -23,6 +25,19 @@ export const WORKER_DB_PASSWORD = 'test_worker_password_123';
 export const RESOLVER_DB_PASSWORD = 'test_resolver_password_123';
 export const IDENTITY_DB_PASSWORD = 'test_identity_password_123';
 export const PROVISIONER_DB_PASSWORD = 'test_provisioner_password_123';
+/** Blocker 1: the HMAC key the API mints provisioning assertions with; installed in the DB by ensurePostgres(). */
+export const PROVISIONING_ASSERTION_KEY_B64 = Buffer.from('test-provisioning-assertion-key-32-bytes!!').subarray(0, 32).toString('base64');
+export const PROVISIONING_ASSERTION_KID = 'v1';
+/** Mint a valid assertion exactly as the API does (tests that PROVE the boundary, not bypass it). */
+export function mintTestAssertion(actorUserId: string, kind: ProvisioningKind, now: Date = new Date(), ttlSeconds = 60): string {
+  return mintProvisioningAssertion(
+    { kid: PROVISIONING_ASSERTION_KID, secret: Buffer.from(PROVISIONING_ASSERTION_KEY_B64, 'base64') },
+    actorUserId,
+    kind,
+    now,
+    ttlSeconds,
+  );
+}
 
 export const dbUrl = `postgresql://${PG_USER}:${PG_PASSWORD}@localhost:${PG_PORT}/daftar`;
 export const appDbUrl = `postgresql://daftar_app:${APP_DB_PASSWORD}@localhost:${PG_PORT}/daftar`;
@@ -68,6 +83,7 @@ export async function ensurePostgres(): Promise<void> {
     // Reused instance: bootstrap is idempotent; still apply any PENDING migrations.
     await applyBootstrap();
     await runMigrations(dbUrl);
+    await installProvisioningKey();
     return;
   }
   pg = new EmbeddedPostgres({
@@ -88,6 +104,17 @@ export async function ensurePostgres(): Promise<void> {
   }
   await applyBootstrap();
   await runMigrations(dbUrl);
+  await installProvisioningKey();
+}
+
+/** The database side of the assertion key (0038) — what the ops job does with BOOTSTRAP_DATABASE_URL in production. */
+async function installProvisioningKey(): Promise<void> {
+  const pool = new Pool({ connectionString: dbUrl, max: 1 });
+  try {
+    await pool.query(`SELECT provision_assertion_key_install($1, decode($2, 'base64'))`, [PROVISIONING_ASSERTION_KID, PROVISIONING_ASSERTION_KEY_B64]);
+  } finally {
+    await pool.end();
+  }
 }
 
 let ownerPoolInstance: Pool | null = null;
@@ -168,6 +195,8 @@ export interface TestApp {
 export interface TestAppOptions {
   delivery?: CredentialDelivery;
   outboxSink?: OutboxSink;
+  /** Blocker 4 seam: the merchant-side credential encryptor (KMS bridge stand-in). */
+  encryptor?: CredentialPayloadEncryptor;
   storage?: import('../../apps/api/src/infra/storage').ObjectStorage;
   /** Extra env applied on top of the test config (e.g. TRUST_PROXY, JWT_KEYS). */
   configOverrides?: Record<string, string>;
@@ -197,6 +226,8 @@ export async function createTestApp(options: TestAppOptions = {}): Promise<TestA
     RESOLVER_DATABASE_URL: resolverDbUrl,
     WORKER_DATABASE_URL: workerDbUrl,
     PROVISIONER_DATABASE_URL: provisionerDbUrl,
+    PROVISIONING_ASSERTION_KEY: PROVISIONING_ASSERTION_KEY_B64,
+    PROVISIONING_ASSERTION_KID,
     JWT_SECRET: 'test-secret-key-with-at-least-32-characters!',
     MEDIA_ROOT: '/tmp/daftar-test-media',
     LOG_LEVEL: process.env['TEST_LOG_LEVEL'] ?? 'warn',
@@ -209,6 +240,7 @@ export async function createTestApp(options: TestAppOptions = {}): Promise<TestA
         config,
         ...(options.delivery ? { delivery: options.delivery } : {}),
         ...(options.outboxSink ? { outboxSink: options.outboxSink } : {}),
+        ...(options.encryptor ? { encryptor: options.encryptor } : {}),
         ...(options.storage ? { storage: options.storage } : {}),
       }),
     ],

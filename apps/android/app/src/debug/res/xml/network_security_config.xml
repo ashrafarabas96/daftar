@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  DEBUG-ONLY network security configuration (Final Release Blocker 6).
+
+  The debug build points API_BASE_URL at the emulator host (10.0.2.2), where
+  the local development API listens over plain HTTP. Cleartext is permitted for
+  THAT host only; every other destination stays TLS-only exactly like release.
+  This file lives in src/debug and is absent from release builds, whose
+  configuration (src/main) denies cleartext everywhere.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">10.0.2.2</domain>
+    </domain-config>
+</network-security-config>

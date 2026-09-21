@@ -40,6 +40,18 @@
 | 78 | Bug budget: P0 = P1 = security P2 = 0 | DONE | `PHASE_1_REGRESSION_REPORT.md` (open defects: 0) | — |
 | 79–82 | Only PASS or FAIL; stop after PASS; nothing from Phase 2 started | DONE | acceptance verdict | — |
 
+## Final Release Blocker Patch (directive "FIX ONLY THE VERIFIED FINAL BLOCKERS")
+
+| Blocker | Requirement | Status | Guard | Migration |
+|---|---|---|---|---|
+| 1 | Provisioner actor cannot be spoofed through a GUC; authorization + mutation stay atomic | DONE | `provisioner-boundary` Blocker 1 suite | `0038` |
+| 2 | Every identifier belongs to one real product XOR variant; registry internal-only | DONE | `catalog-identifiers` owner-integrity suite | `0039` |
+| 3 | Release zip self-contained; acceptance reproduced from the extracted archive | DONE | `export:release` audit, gate "self-contained source tree", archive run in the acceptance report | — |
+| 4 | KMS: HTTPS-only, authenticated, timeout/abort, bounded response, sanitized errors, fail-closed enqueue | DONE | `kms-encryptor` | — |
+| 5 | Release gate fails on any mandatory skip; the gate itself is tested | DONE | `release-gate` | — |
+| 6 | Android debug cleartext scoped to the emulator host; release TLS-only | DONE | `NetworkSecurityConfigTest.kt` | — |
+| 7 | Raw structured evidence from the final tree | DONE | `release/evidence.json` v2 | — |
+
 ## Out of Phase (per the directive, not deferred by us)
 
 - Money core (accounting, inventory ledger, sales, POS), installments, storefront, WhatsApp, AI assistant: Phase 2+ (`DAFTAR_IMPLEMENTATION_ROADMAP.md`). No table, endpoint or screen for them was started.
