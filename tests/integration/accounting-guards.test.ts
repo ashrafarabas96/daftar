@@ -250,11 +250,69 @@ describe('authority isolation guard', () => {
       ['CREATE ROLE daftar_accounting_internal NOLOGIN CREATEROLE;', /declared CREATEROLE/],
       ['CREATE ROLE daftar_accounting_internal NOLOGIN CREATEDB;', /declared CREATEDB/],
       ['CREATE ROLE daftar_accounting_internal NOLOGIN NOINHERIT;\nGRANT CONNECT ON DATABASE daftar TO daftar_accounting_internal;', /granted CONNECT/],
-      ['CREATE ROLE daftar_accounting_internal NOLOGIN NOINHERIT;\nGRANT daftar_accounting_internal TO daftar_app;', /granted to another role/],
     ];
     for (const [bootstrap, expected] of cases) {
       expect(findAuthorityViolations({ ...REAL, bootstrap }).join(' '), bootstrap).toMatch(expected);
     }
+  });
+
+  it('permits the ONE deployment membership and rejects every other one', () => {
+    const base = `CREATE ROLE daftar_accounting_internal NOLOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+CREATE ROLE daftar_migrator LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION PASSWORD 'x';`;
+
+    // The permitted case: a deployment principal that must assume the role.
+    expect(
+      findAuthorityViolations({ ...REAL, bootstrap: `${base}\nGRANT daftar_accounting_internal TO daftar_migrator WITH INHERIT FALSE, SET TRUE;` }),
+    ).toEqual([]);
+
+    // Every runtime role is refused, whatever the options say.
+    for (const role of LOGIN_ROLES) {
+      const v = findAuthorityViolations({ ...REAL, bootstrap: `${base}\nGRANT daftar_accounting_internal TO ${role} WITH INHERIT FALSE, SET TRUE;` });
+      expect(v.join(' '), `${role} must not be a member`).toMatch(new RegExp(`granted to the runtime role ${role}`));
+    }
+    expect(findAuthorityViolations({ ...REAL, bootstrap: `${base}\nGRANT daftar_accounting_internal TO PUBLIC;` }).join(' ')).toMatch(/granted to PUBLIC/);
+    expect(findAuthorityViolations({ ...REAL, bootstrap: `${base}\nGRANT daftar_accounting_internal TO some_other_role;` }).join(' ')).toMatch(
+      /only the deployment principal daftar_migrator may be a member/,
+    );
+
+    // The permitted membership still has to be a capability, not a privilege.
+    expect(findAuthorityViolations({ ...REAL, bootstrap: `${base}\nGRANT daftar_accounting_internal TO daftar_migrator WITH SET TRUE;` }).join(' ')).toMatch(
+      /not WITH INHERIT FALSE/,
+    );
+    expect(
+      findAuthorityViolations({ ...REAL, bootstrap: `${base}\nGRANT daftar_accounting_internal TO daftar_migrator WITH INHERIT FALSE, ADMIN TRUE;` }).join(' '),
+    ).toMatch(/WITH ADMIN TRUE/);
+  });
+
+  it('rejects a migration principal that is itself the problem', () => {
+    const internal = `CREATE ROLE daftar_accounting_internal NOLOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;`;
+    const cases: ReadonlyArray<readonly [string, RegExp]> = [
+      ["CREATE ROLE daftar_migrator LOGIN SUPERUSER NOBYPASSRLS PASSWORD 'x';", /declared SUPERUSER/],
+      ["CREATE ROLE daftar_migrator LOGIN NOSUPERUSER BYPASSRLS PASSWORD 'x';", /declared BYPASSRLS/],
+      ["CREATE ROLE daftar_migrator LOGIN NOSUPERUSER NOBYPASSRLS CREATEROLE PASSWORD 'x';", /declared CREATEROLE/],
+      ["CREATE ROLE daftar_migrator LOGIN PASSWORD 'x';", /does not assert NOSUPERUSER/],
+    ];
+    for (const [migrator, expected] of cases) {
+      expect(findAuthorityViolations({ ...REAL, bootstrap: `${internal}\n${migrator}` }).join(' '), migrator).toMatch(expected);
+    }
+    expect(findAuthorityViolations({ ...REAL, bootstrap: internal }).join(' ')).toMatch(/daftar_migrator is not created by bootstrap\.sql/);
+
+    // Deployment authority comes from owning the schema, never from a grant.
+    expect(findAuthorityViolations({ ...REAL, schema: `${REAL.schema}\nGRANT INSERT ON accounts TO daftar_migrator;` }).join(' ')).toMatch(
+      /granted table privileges by a migration/,
+    );
+  });
+
+  it('rejects a temporary CREATE privilege that is never given back', () => {
+    // 0040 needs CREATE on public for the ownership transfer to be legal for a
+    // non-superuser. Taking it is fine; keeping it is not.
+    const kept = REAL.chartSql.replace(/REVOKE CREATE ON SCHEMA public FROM daftar_accounting_internal;/, '');
+    expect(kept).not.toBe(REAL.chartSql);
+    expect(findAuthorityViolations({ ...REAL, chartSql: kept }).join(' ')).toMatch(/never revokes it/);
+
+    // And it is a migration-scoped privilege, not part of the role's shape.
+    const permanent = `${REAL.bootstrap}\nGRANT CREATE ON SCHEMA public TO daftar_accounting_internal;`;
+    expect(findAuthorityViolations({ ...REAL, bootstrap: permanent }).join(' ')).toMatch(/not to the permanent role shape/);
   });
 
   it('rejects a slice that never creates the internal principal at all', () => {

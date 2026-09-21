@@ -60,6 +60,7 @@ const P2_S1_TESTS = [
   'tests/integration/accounting-permissions.test.ts',
   'tests/integration/accounting-guards.test.ts',
   'tests/integration/migration-upgrade.test.ts',
+  'tests/integration/migration-portability.test.ts',
   'tests/security/accounting-boundary.test.ts',
 ];
 

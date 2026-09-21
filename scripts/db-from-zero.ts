@@ -37,6 +37,7 @@ const PASSWORDS = {
   __RESOLVER_DB_PASSWORD__: 'zero_resolver_pw_123456',
   __IDENTITY_DB_PASSWORD__: 'zero_identity_pw_123456',
   __PROVISIONER_DB_PASSWORD__: 'zero_provisioner_pw_123456',
+  __MIGRATOR_DB_PASSWORD__: 'zero_migrator_pw_123456',
 } as const;
 
 async function main(): Promise<void> {

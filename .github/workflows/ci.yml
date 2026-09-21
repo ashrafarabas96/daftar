@@ -99,6 +99,8 @@ jobs:
           RESOLVER_DB_PASSWORD: test_resolver_password_123
           IDENTITY_DB_PASSWORD: test_identity_password_123
           PROVISIONER_DB_PASSWORD: test_provisioner_password_123
+          # Deployment, not runtime: the non-superuser migration principal.
+          MIGRATOR_DB_PASSWORD: test_migrator_password_123
       - name: Fresh database migrate (0000 → latest)
         run: npm run migrate -w @daftar/api
         env:

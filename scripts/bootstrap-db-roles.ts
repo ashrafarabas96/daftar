@@ -11,6 +11,7 @@
  *   MIGRATION_DATABASE_URL=postgres://postgres:postgres@localhost:5432/daftar \
  *   APP_DB_PASSWORD=... PLATFORM_DB_PASSWORD=... WORKER_DB_PASSWORD=... \
  *   RESOLVER_DB_PASSWORD=... IDENTITY_DB_PASSWORD=... PROVISIONER_DB_PASSWORD=... \
+ *   MIGRATOR_DB_PASSWORD=... \
  *     tsx scripts/bootstrap-db-roles.ts
  *
  * The bootstrap SQL is idempotent (CREATE ROLE if missing, else ALTER the
@@ -33,6 +34,8 @@ const PLACEHOLDERS = [
   ['__RESOLVER_DB_PASSWORD__', 'RESOLVER_DB_PASSWORD'],
   ['__IDENTITY_DB_PASSWORD__', 'IDENTITY_DB_PASSWORD'],
   ['__PROVISIONER_DB_PASSWORD__', 'PROVISIONER_DB_PASSWORD'],
+  // Deployment, not runtime: the migration principal's credential.
+  ['__MIGRATOR_DB_PASSWORD__', 'MIGRATOR_DB_PASSWORD'],
 ] as const;
 
 let sql = readFileSync(join(__dirname, '../infrastructure/database/bootstrap.sql'), 'utf8');

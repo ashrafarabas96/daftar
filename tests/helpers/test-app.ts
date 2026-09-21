@@ -26,6 +26,8 @@ export const WORKER_DB_PASSWORD = 'test_worker_password_123';
 export const RESOLVER_DB_PASSWORD = 'test_resolver_password_123';
 export const IDENTITY_DB_PASSWORD = 'test_identity_password_123';
 export const PROVISIONER_DB_PASSWORD = 'test_provisioner_password_123';
+/** Deployment, not runtime: the schema-migration principal (P2-S1 portability). */
+export const MIGRATOR_DB_PASSWORD = 'test_migrator_password_123';
 /** Blocker 1: the HMAC key the API mints provisioning assertions with; installed in the DB by ensurePostgres(). */
 export const PROVISIONING_ASSERTION_KEY_B64 = Buffer.from('test-provisioning-assertion-key-32-bytes!!').subarray(0, 32).toString('base64');
 export const PROVISIONING_ASSERTION_KID = 'v1';
@@ -47,6 +49,8 @@ export const workerDbUrl = `postgresql://daftar_worker:${WORKER_DB_PASSWORD}@loc
 export const resolverDbUrl = `postgresql://daftar_resolver:${RESOLVER_DB_PASSWORD}@localhost:${PG_PORT}/daftar`;
 export const identityDbUrl = `postgresql://daftar_identity:${IDENTITY_DB_PASSWORD}@localhost:${PG_PORT}/daftar`;
 export const provisionerDbUrl = `postgresql://daftar_provisioner:${PROVISIONER_DB_PASSWORD}@localhost:${PG_PORT}/daftar`;
+/** Never used by the API — only by the migration-portability proof. */
+export const migratorDbUrl = `postgresql://daftar_migrator:${MIGRATOR_DB_PASSWORD}@localhost:${PG_PORT}/daftar`;
 
 let pg: EmbeddedPostgres | null = null;
 
@@ -69,7 +73,8 @@ async function applyBootstrap(): Promise<void> {
     .replaceAll('__WORKER_DB_PASSWORD__', WORKER_DB_PASSWORD)
     .replaceAll('__RESOLVER_DB_PASSWORD__', RESOLVER_DB_PASSWORD)
     .replaceAll('__IDENTITY_DB_PASSWORD__', IDENTITY_DB_PASSWORD)
-    .replaceAll('__PROVISIONER_DB_PASSWORD__', PROVISIONER_DB_PASSWORD);
+    .replaceAll('__PROVISIONER_DB_PASSWORD__', PROVISIONER_DB_PASSWORD)
+    .replaceAll('__MIGRATOR_DB_PASSWORD__', MIGRATOR_DB_PASSWORD);
   const pool = new Pool({ connectionString: dbUrl, max: 1 });
   try {
     await pool.query(bootstrap);

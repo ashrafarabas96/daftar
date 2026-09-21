@@ -10,21 +10,43 @@
  * success, so the rule is now mechanical.
  *
  * The rule, in one sentence: the only principal that can write the chart is
- * `daftar_accounting_internal`, which is NOLOGIN, passwordless, unelevated and
- * granted to nobody — so its authority exists only inside the routines it
- * owns, and those are reachable only from the `businesses` trigger and the
- * migration itself.
+ * `daftar_accounting_internal`, which is NOLOGIN, passwordless and unelevated,
+ * so its authority exists only inside the routines it owns, and those are
+ * reachable only from the `businesses` trigger and the migration itself.
+ *
+ * Tech Lead review, P2-S1 MANAGED-POSTGRESQL CORRECTION: the earlier form of
+ * this rule said the internal principal is "granted to nobody". That is too
+ * strict to be true. PostgreSQL will not let a non-superuser hand a function to
+ * a new owner it cannot SET ROLE to, so "granted to nobody" silently meant
+ * "DAFTAR requires a superuser to migrate", which is not a contract a managed
+ * PostgreSQL can meet. The boundary that actually matters is narrower and is
+ * what this guard now enforces:
+ *
+ *   NO RUNTIME PRINCIPAL MAY ASSUME daftar_accounting_internal.
+ *
+ * Exactly one membership is permitted — the deployment migrator, WITH INHERIT
+ * FALSE so the membership is not authority in itself. Runtime authority and
+ * deployment authority are two different trust boundaries.
  *
  * This reads migration and bootstrap TEXT, so a violation is caught before any
  * database is started. tests/security/accounting-boundary.test.ts proves the
- * same contract against a live server.
+ * same contract against a live server, and
+ * tests/integration/migration-portability.test.ts proves the migration itself
+ * runs without a superuser.
  */
 
-/** The six roles a credential can exist for. None may touch the chart. */
+/** The six roles an application runtime authenticates as. None may touch the chart. */
 export const LOGIN_ROLES = ['daftar_app', 'daftar_platform', 'daftar_worker', 'daftar_resolver', 'daftar_identity', 'daftar_provisioner'] as const;
 
 /** The internal, unreachable principal that owns chart-writing authority. */
 export const INTERNAL_ROLE = 'daftar_accounting_internal';
+
+/**
+ * The deployment migration principal — a LOGIN role, but not a runtime: no
+ * service loads its credential. It is the ONLY permitted member of
+ * INTERNAL_ROLE, and only because PostgreSQL ownership semantics require it.
+ */
+export const MIGRATION_ROLE = 'daftar_migrator';
 
 /** Tables whose write authority this rule isolates. */
 export const CHART_TABLES = ['accounts', 'accounting_system_account_keys'] as const;
@@ -155,15 +177,79 @@ export function findAuthorityViolations(src: AuthoritySources): string[] {
   if (new RegExp(`GRANT\\s+CONNECT[^;]*\\b${INTERNAL_ROLE}\\b`, 'i').test(src.bootstrap)) {
     v.push(`${INTERNAL_ROLE} is granted CONNECT — it is NOLOGIN and must not be listed with the runtime logins`);
   }
-  if (new RegExp(`GRANT\\s+${INTERNAL_ROLE}\\s+TO\\b`, 'i').test(`${src.bootstrap}\n${src.schema}`)) {
-    v.push(`${INTERNAL_ROLE} is granted to another role — no runtime role may assume it`);
+
+  // 5. Membership. Exactly one is permitted, and it is not a runtime.
+  for (const m of `${src.bootstrap}\n${src.schema}`.matchAll(new RegExp(`GRANT\\s+${INTERNAL_ROLE}\\s+TO\\s+([^;]+);`, 'gi'))) {
+    const clause = m[1] ?? '';
+    const [granteeText = ''] = clause.split(/\bWITH\b/i);
+    const grantees = granteeText
+      .split(',')
+      .map((x) => x.trim())
+      .filter(Boolean);
+    for (const grantee of grantees) {
+      if ((LOGIN_ROLES as readonly string[]).includes(grantee)) {
+        v.push(`${INTERNAL_ROLE} is granted to the runtime role ${grantee} — no runtime principal may assume chart-writing authority`);
+      } else if (grantee.toUpperCase() === 'PUBLIC') {
+        v.push(`${INTERNAL_ROLE} is granted to PUBLIC — every principal would inherit chart-writing authority`);
+      } else if (grantee !== MIGRATION_ROLE) {
+        v.push(`${INTERNAL_ROLE} is granted to ${grantee}; only the deployment principal ${MIGRATION_ROLE} may be a member`);
+      } else {
+        // The one permitted membership has to stay a capability that must be
+        // assumed deliberately, not privileges the migrator simply carries.
+        if (!/\bINHERIT\s+FALSE\b/i.test(clause)) {
+          v.push(`${MIGRATION_ROLE}'s membership in ${INTERNAL_ROLE} is not WITH INHERIT FALSE — it would carry accounting authority implicitly`);
+        }
+        if (/\bADMIN\s+TRUE\b/i.test(clause)) {
+          v.push(`${MIGRATION_ROLE} is granted ${INTERNAL_ROLE} WITH ADMIN TRUE — it could then hand that authority to a runtime role`);
+        }
+      }
+    }
   }
 
-  // 5. Isolation is not bought by weakening the global bypass.
+  // 6. The deployment principal is deployment authority, not a seventh runtime
+  //    and never a superuser.
+  const migratorStatements = [...src.bootstrap.matchAll(new RegExp(`\\b(?:CREATE|ALTER)\\s+ROLE\\s+${MIGRATION_ROLE}\\b([^;]*);`, 'gi'))].map((m) =>
+    (m[1] ?? '').toUpperCase(),
+  );
+  if (migratorStatements.length === 0) {
+    v.push(`${MIGRATION_ROLE} is not created by bootstrap.sql — a managed deployment would have no non-superuser way to run 0040`);
+  }
+  for (const body of migratorStatements) {
+    for (const attr of ['SUPERUSER', 'BYPASSRLS', 'CREATEROLE', 'CREATEDB', 'REPLICATION']) {
+      if (new RegExp(`(?<!NO)\\b${attr}\\b`).test(body)) {
+        v.push(`${MIGRATION_ROLE} is declared ${attr} — DAFTAR must never require, or quietly hold, that much authority to migrate`);
+      }
+    }
+    for (const required of ['NOSUPERUSER', 'NOBYPASSRLS']) {
+      if (!new RegExp(`\\b${required}\\b`).test(body)) {
+        v.push(`${MIGRATION_ROLE} does not assert ${required} — the portability claim depends on it`);
+      }
+    }
+  }
+  // It must not be handed runtime data authority in a migration either.
+  for (const grant of grants) {
+    if (grant.grantees.includes(MIGRATION_ROLE)) {
+      v.push(`${MIGRATION_ROLE} is granted table privileges by a migration — deployment authority comes from ownership, never from runtime grants`);
+    }
+  }
+
+  // 7. The temporary CREATE that ownership transfer needs must be given back.
+  const takesCreate = new RegExp(`GRANT\\s+CREATE\\s+ON\\s+SCHEMA\\s+public\\s+TO\\s+[^;]*\\b${INTERNAL_ROLE}\\b`, 'i').test(src.chartSql);
+  const givesCreateBack = new RegExp(`REVOKE\\s+CREATE\\s+ON\\s+SCHEMA\\s+public\\s+FROM\\s+[^;]*\\b${INTERNAL_ROLE}\\b`, 'i').test(src.chartSql);
+  if (takesCreate && !givesCreateBack) {
+    v.push(`0040 grants ${INTERNAL_ROLE} CREATE on schema public and never revokes it — a lingering CREATE privilege is not a temporary one`);
+  }
+  if (new RegExp(`GRANT\\s+CREATE\\s+ON\\s+SCHEMA\\s+public\\s+TO\\s+[^;]*\\b${INTERNAL_ROLE}\\b`, 'i').test(src.bootstrap)) {
+    v.push(
+      `bootstrap.sql grants ${INTERNAL_ROLE} CREATE on schema public — that privilege belongs to one migration statement, not to the permanent role shape`,
+    );
+  }
+
+  // 8. Isolation is not bought by weakening the global bypass.
   if (/FUNCTION\s+app_bypass\s*\(/i.test(src.chartSql)) {
     v.push('0040 redefines app_bypass() — authority isolation must not be bought by weakening the global bypass');
   }
-  if (/BYPASSRLS/i.test(src.chartSql)) v.push('0040 mentions BYPASSRLS — RLS stays real for the seeder');
+  if (/\bBYPASSRLS\b/i.test(src.chartSql)) v.push('0040 mentions BYPASSRLS — RLS stays real for the seeder');
 
   return v;
 }

@@ -198,7 +198,8 @@ CREATE POLICY tenant_membership ON accounts
 -- a business the trigger or the migration named, before any request context
 -- exists. It is admitted by IDENTITY, the same shape 0014 uses for the
 -- resolver — and its identity is unreachable, because the role is NOLOGIN,
--- has no password and is granted to nobody. app_bypass() is NOT touched.
+-- has no password, and is granted only to the deployment migrator (INHERIT
+-- FALSE) so migrations can hand it ownership. app_bypass() is NOT touched.
 CREATE POLICY accounting_seeder ON accounts
   USING (current_user = 'daftar_accounting_internal')
   WITH CHECK (current_user = 'daftar_accounting_internal');
@@ -224,12 +225,15 @@ CREATE POLICY accounting_seeder_read ON businesses
 --   daftar_platform              SELECT only (support/console read).
 --   daftar_identity / daftar_resolver / daftar_provisioner / daftar_worker
 --                                nothing at all.
---   daftar_accounting_internal   SELECT + INSERT — and it is NOLOGIN, has no
---                                password and is granted to nobody, so this
---                                authority exists only inside the SECURITY
---                                DEFINER routine that role owns. Still no
---                                UPDATE and no DELETE: even the seeder cannot
---                                rewrite or remove a chart.
+--   daftar_accounting_internal   SELECT + INSERT — and it is NOLOGIN and has
+--                                no password, so this authority exists only
+--                                inside the SECURITY DEFINER routine that role
+--                                owns. Its one membership is the deployment
+--                                migrator, WITH INHERIT FALSE, which is what
+--                                lets a non-superuser hand it that ownership;
+--                                no runtime role is a member. Still no UPDATE
+--                                and no DELETE: even the seeder cannot rewrite
+--                                or remove a chart.
 -- ─────────────────────────────────────────────────────────────────────────
 GRANT SELECT ON accounting_system_account_keys TO daftar_app, daftar_platform;
 GRANT SELECT ON accounts TO daftar_app, daftar_platform;
@@ -237,6 +241,26 @@ GRANT SELECT ON accounts TO daftar_app, daftar_platform;
 GRANT SELECT ON businesses TO daftar_accounting_internal;
 GRANT SELECT ON accounting_system_account_keys TO daftar_accounting_internal;
 GRANT SELECT, INSERT ON accounts TO daftar_accounting_internal;
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- 5b. Temporary ownership-transfer authority — managed PostgreSQL.
+--
+-- DAFTAR must never silently require a SUPERUSER to migrate. PostgreSQL lets
+-- a non-superuser change a function's owner only when all three hold:
+--   1. it owns the function          — it just created it;
+--   2. it can SET ROLE to the new owner
+--                                    — bootstrap.sql grants daftar_migrator
+--                                      membership in daftar_accounting_internal
+--                                      WITH INHERIT FALSE, SET TRUE;
+--   3. the NEW OWNER has CREATE on the function's schema
+--                                    — which is what this grant is for.
+--
+-- It is taken here and given back at the end of this same file (section 9),
+-- inside one transaction, so it never exists in any committed state. The end
+-- state is asserted, and the P2-S1 gate fails if this file ever stops
+-- revoking it.
+-- ─────────────────────────────────────────────────────────────────────────
+GRANT CREATE ON SCHEMA public TO daftar_accounting_internal;
 
 -- ─────────────────────────────────────────────────────────────────────────
 -- 6. accounting_seed_chart — the one idempotent, concurrency-safe,
@@ -325,13 +349,17 @@ BEGIN
 END $$;
 
 -- The routine runs as the internal NOLOGIN principal, never as a login role.
--- PUBLIC EXECUTE is revoked and no runtime role is granted EXECUTE: the only
--- callers are the businesses trigger below (PostgreSQL checks EXECUTE when a
--- trigger is created, not when it fires) and this migration, which runs under
--- migration authority. A narrow account command earns its own grant when its
--- slice arrives.
+-- Ownership moves NOW, so every call below — the trigger and this migration's
+-- own backfill — already runs with the final authority; nothing here depends
+-- on the migration connection being privileged.
+--
+-- PUBLIC EXECUTE is revoked in section 9, after the trigger is installed and
+-- the backfill has run, because a non-superuser migrator legitimately reaches
+-- the routine that way and only the owner may revoke. DDL is transactional in
+-- PostgreSQL, so the open EXECUTE never exists in a committed state: no other
+-- session can see this function until the migration commits, by which time it
+-- is closed.
 ALTER FUNCTION accounting_seed_chart(uuid) OWNER TO daftar_accounting_internal;
-REVOKE ALL ON FUNCTION accounting_seed_chart(uuid) FROM PUBLIC;
 
 -- ─────────────────────────────────────────────────────────────────────────
 -- 7. New-business atomicity (AL-08 / §12).
@@ -355,8 +383,11 @@ BEGIN
 END $$;
 
 ALTER FUNCTION accounting_seed_chart_trg() OWNER TO daftar_accounting_internal;
-REVOKE ALL ON FUNCTION accounting_seed_chart_trg() FROM PUBLIC;
 
+-- Installed while EXECUTE is still open, which is the legal way for a
+-- non-superuser migrator to do it. PostgreSQL checks EXECUTE on a trigger
+-- function when the trigger is CREATED, never when it fires, so revoking in
+-- section 9 does not disarm this trigger.
 CREATE TRIGGER businesses_seed_chart
   AFTER INSERT ON businesses
   FOR EACH ROW EXECUTE FUNCTION accounting_seed_chart_trg();
@@ -367,7 +398,18 @@ CREATE TRIGGER businesses_seed_chart
 -- If a single business would be left without a complete, correctly typed,
 -- active chart, this migration rolls back. No best-effort migration.
 -- financial_started_at is not read and not written.
+--
+-- RUN AS THE SEEDER, NOT AS THE MIGRATOR. `businesses` has FORCE ROW LEVEL
+-- SECURITY and its policies admit a tenant-scoped session or the seeder — not
+-- a migration principal. A SUPERUSER migrator never notices, because it
+-- bypasses RLS; a managed, non-superuser migrator would see ZERO businesses,
+-- loop over nothing, and pass its own completeness check vacuously. That is a
+-- silent no-op backfill, which is worse than a failure. Assuming the seeder's
+-- identity here makes the backfill see exactly what the seeder is entitled to
+-- see, identically under both kinds of connection.
 -- ─────────────────────────────────────────────────────────────────────────
+SET LOCAL ROLE daftar_accounting_internal;
+
 DO $$
 DECLARE
   b RECORD;
@@ -402,5 +444,91 @@ BEGIN
     GROUP BY business_id, system_key HAVING count(*) > 1
   ) THEN
     RAISE EXCEPTION 'accounting.chart_backfill_incomplete: duplicate system account identity detected';
+  END IF;
+END $$;
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- 9. Close the door, and prove it is closed.
+--
+-- Everything the migration legitimately needed is now spent. What remains
+-- must be the permanent shape, and this file refuses to commit otherwise.
+-- ─────────────────────────────────────────────────────────────────────────
+
+-- Still under the seeder's identity from section 8, which is what makes this
+-- legal: only the owner may revoke, and the owner is now the internal
+-- principal. A non-superuser migrator reaches that identity through its
+-- SET-enabled membership; a superuser reaches it the same way.
+REVOKE ALL ON FUNCTION accounting_seed_chart(uuid) FROM PUBLIC;
+REVOKE ALL ON FUNCTION accounting_seed_chart_trg() FROM PUBLIC;
+
+-- Back to migration authority. Explicit, rather than relying on the
+-- transaction ending.
+RESET ROLE;
+
+-- Hand back the ownership-transfer authority from section 5b. From here the
+-- internal principal can create nothing: it can only read what it was granted
+-- and insert chart rows from inside its own routine.
+REVOKE CREATE ON SCHEMA public FROM daftar_accounting_internal;
+
+DO $$
+DECLARE
+  v_role   TEXT;
+  v_detail TEXT;
+BEGIN
+  -- (a) No RUNTIME principal holds any write on the chart. The migrator is
+  --     deliberately not in this list: it created these tables, so PostgreSQL
+  --     gives it owner rights unavoidably. That is exactly why its credential
+  --     is a deployment credential and is loaded by no service.
+  FOREACH v_role IN ARRAY ARRAY['daftar_app','daftar_platform','daftar_worker','daftar_identity','daftar_resolver','daftar_provisioner'] LOOP
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = v_role) THEN
+      IF has_table_privilege(v_role, 'accounts', 'INSERT')
+         OR has_table_privilege(v_role, 'accounts', 'UPDATE')
+         OR has_table_privilege(v_role, 'accounts', 'DELETE') THEN
+        RAISE EXCEPTION 'accounting.authority_leak: runtime role % holds DML on accounts', v_role;
+      END IF;
+      IF has_function_privilege(v_role, 'accounting_seed_chart(uuid)', 'EXECUTE') THEN
+        RAISE EXCEPTION 'accounting.authority_leak: runtime role % can execute the seeding routine', v_role;
+      END IF;
+    END IF;
+  END LOOP;
+
+  -- (b) Both routines are owned by the internal principal, and PUBLIC holds
+  --     no EXECUTE on either.
+  SELECT string_agg(p.proname, ', ' ORDER BY p.proname) INTO v_detail
+  FROM pg_proc p JOIN pg_roles r ON r.oid = p.proowner
+  WHERE p.proname IN ('accounting_seed_chart','accounting_seed_chart_trg')
+    AND r.rolname <> 'daftar_accounting_internal';
+  IF v_detail IS NOT NULL THEN
+    RAISE EXCEPTION 'accounting.authority_leak: seeding routine(s) not owned by daftar_accounting_internal: %', v_detail;
+  END IF;
+
+  SELECT string_agg(p.proname, ', ' ORDER BY p.proname) INTO v_detail
+  FROM pg_proc p
+  WHERE p.proname IN ('accounting_seed_chart','accounting_seed_chart_trg')
+    AND EXISTS (SELECT 1 FROM unnest(coalesce(p.proacl, '{}'::aclitem[])) acl WHERE acl::text LIKE '=%');
+  IF v_detail IS NOT NULL THEN
+    RAISE EXCEPTION 'accounting.authority_leak: PUBLIC still holds EXECUTE on: %', v_detail;
+  END IF;
+
+  -- (c) The temporary CREATE from section 5b is gone.
+  IF has_schema_privilege('daftar_accounting_internal', 'public', 'CREATE') THEN
+    RAISE EXCEPTION 'accounting.authority_leak: daftar_accounting_internal still holds CREATE on schema public';
+  END IF;
+
+  -- (d) The principal itself is still unreachable.
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'daftar_accounting_internal'
+               AND (rolcanlogin OR rolsuper OR rolbypassrls OR rolcreaterole OR rolcreatedb OR rolreplication)) THEN
+    RAISE EXCEPTION 'accounting.authority_leak: daftar_accounting_internal is no longer an unreachable principal';
+  END IF;
+
+  -- (e) Its only member is the deployment migrator. A runtime member would
+  --     mean a credential could assume chart-writing authority.
+  SELECT string_agg(m.rolname, ', ' ORDER BY m.rolname) INTO v_detail
+  FROM pg_auth_members a
+  JOIN pg_roles g ON g.oid = a.roleid
+  JOIN pg_roles m ON m.oid = a.member
+  WHERE g.rolname = 'daftar_accounting_internal' AND m.rolname <> 'daftar_migrator';
+  IF v_detail IS NOT NULL THEN
+    RAISE EXCEPTION 'accounting.authority_leak: unexpected member(s) of daftar_accounting_internal: %', v_detail;
   END IF;
 END $$;

@@ -246,14 +246,27 @@ describe('accounting chart privilege boundary', () => {
       has_password: false,
     });
 
-    // It is granted to nobody, so no runtime role can SET ROLE into it.
-    const { rows: members } = await ownerPool().query<{ member: string }>(
-      `SELECT m.rolname AS member FROM pg_auth_members a
+    // Its ONLY member is the deployment migrator, and that membership does not
+    // inherit: it has to be assumed deliberately, which no runtime can do
+    // because no runtime holds that credential. PostgreSQL will not let a
+    // non-superuser hand a function to an owner it cannot SET ROLE to, so this
+    // one membership is what keeps DAFTAR migratable without a superuser.
+    const { rows: members } = await ownerPool().query<{ member: string; inherit_option: boolean; set_option: boolean; admin_option: boolean }>(
+      `SELECT m.rolname AS member, a.inherit_option, a.set_option, a.admin_option
+         FROM pg_auth_members a
          JOIN pg_roles g ON g.oid = a.roleid
          JOIN pg_roles m ON m.oid = a.member
-        WHERE g.rolname = 'daftar_accounting_internal'`,
+        WHERE g.rolname = 'daftar_accounting_internal' ORDER BY m.rolname`,
     );
-    expect(members).toEqual([]);
+    expect(members).toEqual([{ member: 'daftar_migrator', inherit_option: false, set_option: true, admin_option: false }]);
+    for (const [login] of LOGIN_ROLES) expect(members.map((m) => m.member)).not.toContain(login);
+
+    // The CREATE that migration 0040 needs for the ownership transfer was
+    // handed back in the same file. A lingering CREATE is not a temporary one.
+    const { rows: create } = await ownerPool().query<{ can_create: boolean }>(
+      `SELECT has_schema_privilege('daftar_accounting_internal', 'public', 'CREATE') AS can_create`,
+    );
+    expect(create[0]?.can_create).toBe(false);
 
     // It was never granted CONNECT either. (PostgreSQL still hands CONNECT to
     // PUBLIC by default, so that is not the barrier — NOLOGIN above is; this
