@@ -119,6 +119,14 @@ jobs:
         run: npm run test:golden
         env:
           PG_PORT: '5432'
+      # Phase 2 slice gate: structural boundary checks (migration numbers,
+      # frozen history, no journal/posting surface, the 21-key registry, guard
+      # G-3) plus the composed P2-S1 suites. A gate that only runs locally is a
+      # gate that drifts.
+      - name: Phase 2 slice gate — P2-S1
+        run: npm run gate:phase2:s1
+        env:
+          PG_PORT: '5432'
       - name: Tampered-migration hard-fail proof
         run: |
           set -e

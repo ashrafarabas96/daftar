@@ -22,7 +22,7 @@ Phase 2 ships as ten gated slices (`PHASE_2_ARCHITECTURE_LOCK.md` AL-18). **Each
 | slice | content | migrations | exit criteria |
 |---|---|---|---|
 | **P2-S0** | Architecture lock — decisions only | **0** | Tech Lead approval of `PHASE_2_ARCHITECTURE_LOCK.md` |
-| **P2-S1** | `accounts`, system-key registry, seeding + trigger + backfill, permissions | `0040`, `0041` | every existing and new business has a chart; AL-05/06/07/08 tests green |
+| **P2-S1** ✅ implemented, pending Tech Lead review | `accounts`, system-key registry, seeding + trigger + backfill, permissions | `0040`, `0041` (candidates — not yet frozen) | every existing and new business has a chart; AL-05/06/07/08 tests green; guard G-3 active. Evidence: `PHASE_2_S1_ACCEPTANCE.md` |
 | **P2-S2** | Journal + binding **structural schema only**: tables, CHECKs, immutability triggers, both validation triggers, RLS and the full REVOKE shape. **No writer function, no EXECUTE granted** | `0042`, `0043` | Matrix 1 (privilege, all six roles) **and** Matrix 2 (invariants A–H, schema owner) both green |
 | **P2-S3** | Assertion keys, assertion verification, `accounting_post_entry`, fingerprint, audit + outbox — **and only now `GRANT EXECUTE`** | `0044`, `0045` | AL-03 spoofing suite, AL-11 matrix, AL-17 failure-injection matrix green |
 | **P2-S4** | Reversal, manual adjustment, opening balance — Phase-2-owned sources only | `0046`, `0047` | AL-12 and AL-13 state-machine tests green |
@@ -75,6 +75,8 @@ These hold for every line of Phase 2 code and for every later phase that posts t
 ---
 
 ## 2. Chart of accounts model
+
+> **Implemented in P2-S1** (migration `0040`, branch `phase/2-accounting-core`). What this section describes is now schema, not plan: `accounting_system_account_keys` (21 closed identities), `accounts`, the `(system_key, type)` composite FK, the immutability trigger, RLS, `accounting_seed_chart()` and the `businesses_seed_chart` AFTER INSERT trigger. Two things named below are deliberately **not** in P2-S1 and remain future work: `accounting_resolve_system_account()` / `accounting.system_account_missing` (it is a posting-time concern, P2-S2/P2-S3) and the reserved code range for custom accounts (no account-creation path exists yet, §9 of the P2-S1 directive).
 
 - One chart **per business** (`DAFTAR_ACCOUNTING_RULES.md` §1). Never per tenant, never shared.
 - `accounts (id, tenant_id, business_id, code, name, type, is_active, UNIQUE(business_id, code))` — exactly as `DAFTAR_DATA_MODEL.md` §13 defines it. Phase 2 implements that shape; it does not redesign it.
@@ -349,7 +351,8 @@ Rules:
 - `accounting.reverse`, `accounting.period.reopen`, `accounting.chart.manage`, `accounting.fx.manage` join `SENSITIVE_PERMISSIONS`.
 - The Phase 1 **delegation ceiling** applies unchanged: no member may grant a permission they do not themselves hold, and owner authority remains role **identity** from trusted persistence, never a boolean on a request object.
 - **Engine-initiated postings** (a later domain posting a sale) are authorized by the *domain* permission (e.g. `sale.create`), not by `accounting.post`. `accounting.post` is strictly the manual path. Otherwise every cashier would need ledger rights.
-- Default roles: `owner` gets everything; `accountant` (a new system role, or an owner-defined role — decided at implementation, recorded either way) gets view/post/reverse/period.manage; no existing Phase 1 role silently gains financial authority.
+- Default roles (**settled in P2-S1, C-12**): `owner` gets everything, by role identity, and its `role_permissions` rows carry the five keys for display and persistence consistency. **No built-in `accountant` role is created.** `manager` and `cashier` gain nothing; existing custom roles gain nothing. A business that wants a bookkeeper composes one through the existing custom-role flow, under the unchanged delegation ceiling.
+- **Registered in P2-S1 (migration `0041`):** `accounting.view`, `accounting.post`, `accounting.reverse`, `accounting.chart.manage`, `accounting.fx.manage`. The two period keys stay unregistered until P2-S6 — the registry ships no dead keys.
 
 ---
 
@@ -613,7 +616,7 @@ Recorded rather than resolved silently, per the directive.
 | C-09 | Materialized read models. | Deferred pending the performance gate (§34). Live aggregation first. |
 | C-10 | OD-11 (manual vs provider FX rates). | Settled for Phase 2 by §38: manual is the default and the only implemented source; a provider is optional and must never become a dependency. |
 | C-11 | Merchant-facing accounting UI. | None in Phase 2 beyond an internal read-only view; accounting is internal by `DAFTAR_ACCOUNTING_RULES.md`. |
-| C-12 | An `accountant` system role vs owner-defined roles. | Decided at implementation; whichever is chosen is recorded in `DAFTAR_OPEN_DECISIONS.md` with its rationale. |
+| C-12 | An `accountant` system role vs owner-defined roles. | **Decided in P2-S1: no built-in `accountant` role.** The role topology stays `owner` / `manager` / `cashier`; accounting authority is composed through the existing custom-role flow. Rationale and consequences in `DAFTAR_OPEN_DECISIONS.md` (OD-18) and `PHASE_2_S1_ACCEPTANCE.md`. |
 
 ---
 

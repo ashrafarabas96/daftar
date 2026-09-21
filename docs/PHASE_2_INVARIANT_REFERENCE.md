@@ -2,7 +2,9 @@
 
 > **What this is.** One page that states each resolved accounting/security invariant, names where it is enforced, and names the test that covers it. It adds no decisions: `PHASE_2_ARCHITECTURE_LOCK.md` remains the decision record, and this page only reports what the repository actually does today.
 >
-> **Read the status column first.** Compiled against `a510737` (branch `phase/2-accounting-core`), whose tree is Phase 1 (`2e01dba`) plus four documentation commits. A repository-wide search for `journal_entries`, `journal_lines`, `posting_fingerprint` and `accounting` across `*.ts` and `*.sql` returns **nothing**. Migrations stop at `0039`. So **every accounting-specific rule below is SPECIFIED, not ENFORCED** — which is exactly what the lock intends ("This document does NOT authorize... No migration `0040`"), but it means no rule below can be cited as protection today.
+> **Read the status column first.** Recompiled after slice **P2-S1** landed on `phase/2-accounting-core` (migrations `0040`/`0041`). That slice moved the **chart** rules — AL-05, AL-06, AL-07, AL-08, AL-15's no-balance-column guard and AL-16's permission registration — from SPECIFIED to ENFORCED. Everything about the **journal** is unchanged and still SPECIFIED: `journal_entries`, `journal_lines`, `accounting_source_bindings` and `accounting_post_entry` do not exist, migrations stop at `0041`, and no rule about posting, fingerprints, reversal, FX or periods can be cited as protection today.
+>
+> `0040` and `0041` are **candidate** migrations: they are not in `MIGRATION_MANIFEST.json` and `frozenThrough` is still `0039`, so they may still be corrected without consuming P2-S2's numbers.
 
 ## Status legend
 
@@ -133,18 +135,18 @@ Half-even by floor-and-remainder comparison (`2r > d`, `2r < d`, `2r = d` → ti
 |---|---|---|---|---|
 | Zero-line / one-line / unbalanced entry impossible at COMMIT | AL-02 | SPECIFIED | — | Matrix 2 A–D, planned |
 | Posted entries and lines immutable (triggers **and** absent grants, deliberately redundant) | AL-02, AL-03 | SPECIFIED | — | Matrix 2 F–G, planned |
-| Account lifecycle: delete forbidden, `code`/`system_key` immutable, deactivation allowed, system accounts stricter | AL-05 | SPECIFIED | — | planned |
-| `system_key` is the engine's identity, never the code or the name; missing system account is a loud failure | AL-07 | SPECIFIED | — | planned |
-| No `account_translations`; system accounts localized by i18n key from `system_key` | AL-06 | SPECIFIED | gate exists: `scripts/check-localization.ts` (keys × ar/en/tr parity) | gate runs today; no accounting keys yet |
-| Chart seeding by `AFTER INSERT` trigger on `businesses` + `0040` backfill that fails the migration if incomplete | AL-08 | SPECIFIED | — | planned; `scripts/db-from-zero.ts` is the existing from-zero harness |
+| Account lifecycle: delete forbidden, `code`/`system_key` immutable, deactivation allowed, system accounts stricter | AL-05 | **ENFORCED** (system accounts) | `0040` `accounts_protect_system()` BEFORE UPDATE OR DELETE trigger — no principal is exempt, not even the platform bypass | `tests/integration/accounting-chart.test.ts` cases J–P |
+| `system_key` is the engine's identity, never the code or the name | AL-07 | **ENFORCED** | `0040`: `accounting_system_account_keys` closed registry, composite FK `accounts (system_key, type) → (system_key, account_type)`, partial `UNIQUE (business_id, system_key)`, immutability trigger, and `system_key` writable only by the seeding routine | `accounting-chart.test.ts` (registry exactness, wrong-type FK, G/K/L, custom-account promotion refused) |
+| No `account_translations`; system accounts localized by i18n key from `system_key` | AL-06 | **ENFORCED** | 21 `accounting.account.*` keys in `apps/web/src/messages/{ar,en,tr}.json`; `scripts/check-localization.ts` now gates 208 keys × 3 locales; no `account_translations` table exists | `tests/integration/accounting-guards.test.ts` (parity, Arabic-script check, absence of the table) |
+| Chart seeding by `AFTER INSERT` trigger on `businesses` + `0040` backfill that fails the migration if incomplete | AL-08 | **ENFORCED** | `0040`: `accounting_seed_chart(uuid)` (SECURITY DEFINER, pinned `search_path`, advisory xact lock, loud on conflict, no silent repair) + `businesses_seed_chart` trigger + a backfill block that RAISEs and rolls the migration back | `accounting-chart.test.ts` S and T (same-transaction chart; injected failure kills the whole business creation); `migration-upgrade.test.ts` P2-S1 §25 checkpoint |
 | Money: BIGINT minor units, cap `10^18`, sums in `NUMERIC`, minor units as a JSON string never a number | AL-10 | PRECEDENT (cap and `assertWithinMoneyRange` missing) | `packages/domain-core/src/money.ts`, static-guard Rule 6 | `domain-core.test.ts:89`–`:151`, `money.test.ts`, P1-GOLD-35 |
 | Reversal is a new entry, `source_type='reversal'`, `source_id = original entry id`; second reversal physically impossible; mirror lines at the **original** FX snapshot; original row never touched | AL-12 | SPECIFIED | — | planned |
-| No materialized balances; `accounts` carries no balance column; no cached balance is authoritative | AL-15 | SPECIFIED | partial: static-guard Rule 7 | **see gap below** |
-| `accounting.post`, `.reverse`, `.chart.manage`, `.fx.manage` are sensitive; default deny; delegation ceiling; no permission grants direct DML | AL-16 | PRECEDENT | `packages/domain-core/src/permissions.ts` (`PERMISSIONS`, `SENSITIVE_PERMISSIONS:48`, `isSensitive:61`) — no `accounting.*` key registered | `tests/security/delegation-ceiling.test.ts`, `tests/security/owner-authority.test.ts`, `tests/security/role-crud.test.ts` |
+| No materialized balances; `accounts` carries no balance column; no cached balance is authoritative | AL-15 | **ENFORCED** for `accounts` (guard G-3) | `scripts/guards/no-authoritative-balance.ts`, run as static-guard Rule 15; `accounts` has no balance column | `accounting-guards.test.ts` tests the GUARD itself, not just today's schema. Extends to read-model tables in P2-S7 |
+| `accounting.post`, `.reverse`, `.chart.manage`, `.fx.manage` are sensitive; default deny; delegation ceiling; no permission grants direct DML | AL-16 | **ENFORCED** for the five non-period keys | `packages/domain-core/src/permissions.ts` (`PERMISSIONS`, `SENSITIVE_PERMISSIONS`); `0041` backfills the owner role only; no runtime role holds DML on `accounts` | `domain-core.test.ts` P2-S1 block; `tests/integration/accounting-permissions.test.ts` (real onboarding path); `tests/security/accounting-boundary.test.ts` (grant shape) |
 | Entry → lines → audit → outbox in one transaction; no asynchronous step decides whether the ledger commits; outbox payloads carry ids only, never amounts | AL-17 | PRECEDENT | `apps/api/src/modules/audit/audit.service.ts` (`recordTx` / `emitTx` both take the caller's `PoolClient`), `apps/api/src/modules/outbox/publisher.ts` | `tests/integration/outbox.test.ts:26` (atomicity), `:41` (exactly once), `:66` (backoff then dead-letter), `:87` (idempotent consumer); `tests/integration/failure-injection.test.ts:60`, `:90`, `:121`, `:135` |
 | Migrations `0000`–`0039` frozen byte-for-byte | Phase 1 directive | ENFORCED | `infrastructure/database/MIGRATION_MANIFEST.json` | `scripts/check-migration-manifest.ts`, `scripts/verify-migration-history.ts`, `tests/integration/migration-upgrade.test.ts` |
 
-**AL-15 gap.** Static-guard Rule 7 is commented "no mutable derived financial columns (product.stock / customer.balance ledgers)", but its regex matches only `stock` (`scripts/static-guards.ts:116`–`:121`). Nothing would catch a `balance` column added to `accounts`, which AL-15 calls "the single most common way a ledger rots". Recorded in the lock as **guard G-3**, due in P2-S1 and extended in P2-S7.
+**AL-15 gap — closed in P2-S1.** Static-guard Rule 7 still matches only `stock`, so it was never the protection AL-15 needed. Guard **G-3** now lives in `scripts/guards/no-authoritative-balance.ts` and runs as Rule 15: it parses `CREATE TABLE` column lists and `ALTER TABLE ... ADD COLUMN` for the tables declared authoritative (`accounts` today) and refuses any balance-, running-total- or stock-shaped column, while ignoring comments, string literals and function bodies. It is about **storage authority**, not vocabulary, so a report DTO named `balance` is untouched. P2-S7 extends the declared table list to whatever read-model tables it introduces.
 
 ---
 
@@ -152,18 +154,18 @@ Half-even by floor-and-remainder comparison (`2r > d`, `2r < d`, `2r = d` → ti
 
 Stated plainly, because the list is the point of this page.
 
-1. **All of AL-01 through AL-18** — no accounting schema, no accounting code, no accounting test. Migrations stop at `0039`; no `accounting.*` permission key is registered; no `HALF_EVEN` implementation exists in either language.
+1. **AL-01, AL-02, AL-03, AL-04, AL-09 through AL-14, AL-17, AL-18** — the journal half of Phase 2. No `journal_entries`, no `journal_lines`, no source-binding registry, no posting primitive, no assertion keys, no `HALF_EVEN` implementation in either language. Migrations stop at `0041`. (AL-05, AL-06, AL-07, AL-08 and the chart parts of AL-15/AL-16 are now enforced — see the table above.)
 2. **AL-01's detail-table delete guard** — a contract-plus-test by the lock's own admission, and the enumerating test does not exist.
 3. **AL-18 (writer exposure ordering)** — a process rule with no mechanical check today; now scheduled as guard G-4 in P2-S3.
 4. **AL-02's Matrix 1 as specified** — needs an enumeration over the live grant catalogue; the Phase 1 equivalent is hand-written per table and will not notice a new `GRANT`. Now scheduled as guard G-1 in P2-S2.
 5. **AL-02's "no financial values in errors or logs"** — the cited authority (`DAFTAR_OBSERVABILITY.md`) does not contain that rule, and no guard or test covers amounts in exception messages.
 6. **AL-09's rate column type** — static-guard Rule 6 does not match `*_rate` columns, so a float rate would pass CI. Now scheduled as guard G-2 in P2-S2.
 7. **AL-10's `MAX_MONEY_MINOR` / `assertWithinMoneyRange()`** — absent; `MoneyError.PRECISION_OVERFLOW` already exists to carry it.
-8. **AL-15's no-balance-column rule** — static-guard Rule 7 covers `stock` only. Now scheduled as guard G-3 in P2-S1.
+8. ~~**AL-15's no-balance-column rule**~~ — **closed in P2-S1**: guard G-3 is in CI with its own regression test. It watches `accounts`; extending it to P2-S7's read-model tables is that slice's job.
 9. **AL-14's periods** — slice P2-S6, explicitly conditional; until then no posting-date gate of any kind exists.
 10. **The database-side fingerprint recomputation** (AL-03, added after Tech Lead review) — specified, with no implementation in either language and no payload-mismatch test.
 
-Items 3, 4, 6 and 8 are now scheduled as named guards G-1…G-4 in the lock's slice table. Scheduled is not enforced: none of them exists in CI today.
+Items 3, 4 and 6 are still scheduled as named guards G-4, G-1 and G-2 in the lock's slice table. Scheduled is not enforced: none of those three exists in CI today. G-3 does.
 
 ## Where these documents live
 

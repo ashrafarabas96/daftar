@@ -421,9 +421,14 @@ const steps: { name: string; fn: () => boolean }[] = [
   {
     name: 'db from zero',
     fn: () =>
-      run('database contract from zero (roles → migrate → no-op → manifest → tamper → role contract)', npm, ['run', '-s', 'check:db-from-zero'], {
-        enrich: (out) => ({ dbFromZero: JSON.parse(/DB_FROM_ZERO: (\{.*\})/.exec(out)?.[1] ?? 'null') }),
-      }),
+      run(
+        'database contract from zero (roles → migrate → no-op → manifest → tamper → role contract)',
+        npm,
+        ['run', '-s', 'check:db-from-zero', '--', '--release'],
+        {
+          enrich: (out) => ({ dbFromZero: JSON.parse(/DB_FROM_ZERO: (\{.*\})/.exec(out)?.[1] ?? 'null') }),
+        },
+      ),
   },
   { name: 'machine gate', fn: () => run('phase 1 machine gate', npm, ['run', '-s', 'gate:phase1']) },
   { name: 'static guards', fn: () => run('static architecture guards', npm, ['run', '-s', 'check:guards']) },

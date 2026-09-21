@@ -37,6 +37,14 @@ export const PERMISSIONS = [
   'billing.manage',
   'subscription.view',
   'subscription.manage',
+  // Phase 2 — accounting (P2-S1). Period permissions (accounting.period.manage /
+  // accounting.period.reopen) are P2-S6 and deliberately absent until AL-14 is
+  // confirmed: an unregistered key cannot be granted, delegated or tested for.
+  'accounting.view',
+  'accounting.post',
+  'accounting.reverse',
+  'accounting.chart.manage',
+  'accounting.fx.manage',
 ] as const;
 
 export type Permission = (typeof PERMISSIONS)[number];
@@ -56,6 +64,13 @@ export const SENSITIVE_PERMISSIONS = [
   'billing.manage',
   'subscription.manage',
   'business.manage',
+  // Accounting authority is financial authority: posting, reversing, changing
+  // the chart and setting FX rates all move accounting truth (AL-16).
+  // accounting.view is ordinary — reading never corrupts a ledger.
+  'accounting.post',
+  'accounting.reverse',
+  'accounting.chart.manage',
+  'accounting.fx.manage',
 ] as const satisfies readonly Permission[];
 export function isSensitivePermission(p: Permission): boolean {
   return (SENSITIVE_PERMISSIONS as readonly string[]).includes(p);

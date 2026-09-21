@@ -8,7 +8,9 @@
  *   2. bootstrap.sql                       (six runtime roles, CONNECT/USAGE only)
  *   3. migrations 0000 → latest            (advisory-locked, per-file transactions)
  *   4. migrations again                    (must be a no-op)
- *   5. history verification                (every applied file matches the frozen manifest hash)
+ *   5. history verification                (every applied file matches the frozen manifest hash;
+ *                                          migrations past `frozenThrough` are candidates — still
+ *                                          hash-verified against disk, frozen only at release)
  *   6. tamper proof                        (a foreign history row is detected)
  *   7. runtime roles can connect, hold no DDL, and cannot read the assertion key table
  * Prints a JSON summary line (DB_FROM_ZERO: {...}) the gate records as evidence.
@@ -25,6 +27,8 @@ import { MIGRATIONS_DIR, runMigrations } from '../apps/api/src/infra/migrate';
 import { ensureEmbeddedPgBinariesExecutable } from './ensure-embedded-pg-binaries';
 
 const ROOT = join(__dirname, '..');
+/** `--release`: every applied migration must already be frozen in the manifest. */
+const RELEASE_MODE = process.argv.slice(2).includes('--release');
 const PORT = Number(process.env['DB_FROM_ZERO_PORT'] ?? 55461);
 const PASSWORDS = {
   __APP_DB_PASSWORD__: 'zero_app_pw_123456',
@@ -87,10 +91,24 @@ async function main(): Promise<void> {
       if (onDisk !== m.sha256) throw new Error(`frozen migration ${m.name} differs from the manifest`);
       if (byName.get(m.name) !== m.sha256) throw new Error(`history for ${m.name} does not match the manifest`);
     }
-    for (const f of files) {
-      if (f > manifest.frozenThrough)
-        throw new Error(`migration ${f} is newer than frozenThrough=${manifest.frozenThrough} — freeze it in the manifest before release`);
+    // Migrations newer than `frozenThrough` are CANDIDATES: the manifest's own
+    // policy allows them mid-phase ("New migrations ... are appended to the
+    // manifest only at release time") and a slice directive may forbid freezing
+    // them before its acceptance review. History integrity is still proven for
+    // them — applied exactly once, and the applied hash equals the file on disk
+    // — only the freeze requirement is deferred. `--release` restores the hard
+    // rule, and the Phase 1 release gate passes it, so a RELEASE still cannot
+    // ship an unfrozen migration.
+    const candidates = files.filter((f) => f > manifest.frozenThrough);
+    for (const f of candidates) {
+      if (RELEASE_MODE) throw new Error(`migration ${f} is newer than frozenThrough=${manifest.frozenThrough} — freeze it in the manifest before release`);
+      const onDisk = createHash('sha256')
+        .update(readFileSync(join(MIGRATIONS_DIR, f)))
+        .digest('hex');
+      if (!byName.has(f)) throw new Error(`candidate migration ${f} was never applied`);
+      if (byName.get(f) !== onDisk) throw new Error(`candidate migration ${f} history hash does not match the file on disk`);
     }
+    summary['candidateMigrations'] = candidates;
     summary['manifestFrozenThrough'] = manifest.frozenThrough;
     summary['manifestVerified'] = manifest.migrations.length;
 

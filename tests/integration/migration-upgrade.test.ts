@@ -203,6 +203,123 @@ describe('migration upgrade path: pre-encryption schema → latest (§13–16)',
     }
   }, 180_000);
 
+  /**
+   * P2-S1 (directive §25): a database parked at 0039 with a real tenant and
+   * business must take 0040/0041 and come out with a complete, correctly
+   * typed, active chart, consistent permissions, and a second run that does
+   * nothing. This is the upgrade path every existing deployment will take.
+   */
+  it('compatibility matrix (P2-S1 §25): 0039-checkpoint + existing business → 0040/0041 chart + permissions, rerun no-op', async () => {
+    await ensurePostgres();
+    const db4 = 'daftar_upgrade_0039';
+    await admin.query(`DROP DATABASE IF EXISTS ${db4} WITH (FORCE)`);
+    await admin.query(`CREATE DATABASE ${db4}`);
+    const url4 = `postgresql://${PG_USER}:${PG_PASSWORD}@localhost:${PG_PORT}/${db4}`;
+    const pool = new Pool({ connectionString: url4, max: 1 });
+    try {
+      await pool.query(bootstrapSql());
+      const preDir = migrationsUpTo('0039_catalog_identifiers_owner_integrity.sql');
+      await runMigrations(url4, preDir);
+      rmSync(preDir, { recursive: true, force: true });
+
+      // Nothing accounting exists at 0039 — the checkpoint must be honest.
+      const before = await pool.query(`SELECT 1 FROM information_schema.tables WHERE table_name = 'accounts'`);
+      expect(before.rows).toEqual([]);
+
+      // Two existing businesses in two tenants, each with a system owner role.
+      const businesses: string[] = [];
+      for (const slug of ['upgrade-acct-one', 'upgrade-acct-two']) {
+        const tenant = (await pool.query<{ id: string }>(`INSERT INTO tenants DEFAULT VALUES RETURNING id`)).rows[0];
+        const biz = (
+          await pool.query<{ id: string }>(
+            `INSERT INTO businesses (tenant_id, name, store_slug, country_code, base_currency, timezone)
+             VALUES ($1, $2, $2, 'JO', 'JOD', 'Asia/Amman') RETURNING id`,
+            [tenant?.id, slug],
+          )
+        ).rows[0];
+        if (!biz) throw new Error('business fixture insert failed');
+        businesses.push(biz.id);
+        // The 0006 system-role guard admits only the platform principal, so
+        // this fixture creates the owner role the way provisioning would —
+        // with row triggers detached for the fixture insert alone.
+        await pool.query('BEGIN');
+        await pool.query(`SET LOCAL session_replication_role = replica`);
+        const role = (
+          await pool.query<{ id: string }>(`INSERT INTO business_roles (business_id, key, name, is_system) VALUES ($1, 'owner', 'Owner', true) RETURNING id`, [
+            biz.id,
+          ])
+        ).rows[0];
+        await pool.query('COMMIT');
+        await pool.query(`INSERT INTO role_permissions (business_id, role_id, permission) VALUES ($1, $2, 'business.view')`, [biz.id, role?.id]);
+        await pool.query(`INSERT INTO business_roles (business_id, key, name, is_system) VALUES ($1, 'cashier', 'Cashier', false)`, [biz.id]);
+      }
+
+      // Apply exactly the P2-S1 migrations.
+      const applied = await runMigrations(url4);
+      expect(applied).toEqual(['0040_accounting_chart.sql', '0041_accounting_permissions.sql']);
+
+      // Every existing business now holds all 21 required system accounts,
+      // active, correctly typed, and owned by its own tenant.
+      const charts = (
+        await pool.query<{ id: string; n: number }>(
+          `SELECT b.id,
+                  (SELECT count(*)::int FROM accounts a
+                   JOIN accounting_system_account_keys k ON k.system_key = a.system_key AND k.account_type = a.type
+                   WHERE a.business_id = b.id AND a.is_active AND a.tenant_id = b.tenant_id) AS n
+           FROM businesses b ORDER BY b.store_slug`,
+        )
+      ).rows;
+      expect(charts).toHaveLength(2);
+      for (const c of charts) expect(c.n).toBe(21);
+      expect(charts.map((c) => c.id).sort()).toEqual([...businesses].sort());
+
+      // Permissions: owner roles carry the five accounting keys, cashier none.
+      const owner = (
+        await pool.query<{ n: number }>(
+          `SELECT count(*)::int AS n FROM role_permissions rp
+           JOIN business_roles r ON r.business_id = rp.business_id AND r.id = rp.role_id
+           WHERE r.is_system AND r.key = 'owner' AND rp.permission LIKE 'accounting.%'`,
+        )
+      ).rows[0];
+      expect(owner?.n).toBe(10); // 5 keys × 2 businesses
+      const others = (
+        await pool.query<{ n: number }>(
+          `SELECT count(*)::int AS n FROM role_permissions rp
+           JOIN business_roles r ON r.business_id = rp.business_id AND r.id = rp.role_id
+           WHERE NOT (r.is_system AND r.key = 'owner') AND rp.permission LIKE 'accounting.%'`,
+        )
+      ).rows[0];
+      expect(others?.n).toBe(0);
+      // Period permissions stay absent (P2-S6).
+      const period = await pool.query(`SELECT 1 FROM role_permissions WHERE permission LIKE 'accounting.period.%'`);
+      expect(period.rows).toEqual([]);
+
+      // Creating a business AFTER the upgrade gets its chart in the same transaction.
+      const t3 = (await pool.query<{ id: string }>(`INSERT INTO tenants DEFAULT VALUES RETURNING id`)).rows[0];
+      const b3 = (
+        await pool.query<{ id: string }>(
+          `INSERT INTO businesses (tenant_id, name, store_slug, country_code, base_currency, timezone)
+           VALUES ($1, 'After', 'upgrade-acct-after', 'JO', 'JOD', 'Asia/Amman') RETURNING id`,
+          [t3?.id],
+        )
+      ).rows[0];
+      const n3 = (await pool.query<{ n: number }>(`SELECT count(*)::int AS n FROM accounts WHERE business_id = $1`, [b3?.id])).rows[0];
+      expect(n3?.n).toBe(21);
+
+      // financial_started_at was never touched by any of this.
+      const started = await pool.query(`SELECT 1 FROM businesses WHERE financial_started_at IS NOT NULL`);
+      expect(started.rows).toEqual([]);
+
+      // Second run is a no-op, and the chart is not re-seeded or duplicated.
+      expect(await runMigrations(url4)).toEqual([]);
+      const total = (await pool.query<{ n: number }>(`SELECT count(*)::int AS n FROM accounts`)).rows[0];
+      expect(total?.n).toBe(63); // 3 businesses × 21
+    } finally {
+      await pool.end();
+      await admin.query(`DROP DATABASE IF EXISTS ${db4} WITH (FORCE)`).catch(() => undefined);
+    }
+  }, 180_000);
+
   it('compatibility matrix (§54): 0035-checkpoint (JSONB translations, cross-table SKUs) → latest; content preserved, registry built, no-op rerun', async () => {
     await ensurePostgres();
     const db3 = 'daftar_upgrade_0035';

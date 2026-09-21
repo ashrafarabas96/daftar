@@ -6,6 +6,7 @@
  */
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
+import { ACCOUNTING_AUTHORITY_TABLES, findAuthoritativeBalanceColumns } from './guards/no-authoritative-balance';
 
 const ROOT = join(__dirname, '..');
 let failures = 0;
@@ -252,8 +253,35 @@ for (const dir of ['apps/api/src', 'apps/web/src', 'apps/admin/src', 'packages']
   }
 }
 
+// Rule 15 — GUARD G-3 (Architecture Lock, P2-S1): no authoritative mutable
+// balance column on an accounting source-of-truth table. The journal is the
+// financial truth; a stored balance column is a second truth that can drift
+// and, once it does, nothing says which of the two lied. Storage authority
+// only — a report DTO or a query result named `balance` is a read model and
+// is deliberately untouched by this rule.
+{
+  const migrations = walk(join(ROOT, 'infrastructure/database/migrations'), /\.sql$/);
+  for (const f of migrations) {
+    for (const hit of findAuthoritativeBalanceColumns(readFileSync(f, 'utf8'))) {
+      fail('no-authoritative-balance', f, `${hit.table}.${hit.column} claims storage authority over a derived financial quantity (G-3)`);
+    }
+  }
+  // The guard must actually be watching something: if the declared
+  // source-of-truth table has not been created yet, G-3 is decorative.
+  const schema = migrations.map((f) => readFileSync(f, 'utf8')).join('\n');
+  for (const table of ACCOUNTING_AUTHORITY_TABLES) {
+    if (!new RegExp(`CREATE\\s+TABLE\\s+(?:IF\\s+NOT\\s+EXISTS\\s+)?${table}\\b`, 'i').test(schema)) {
+      fail(
+        'no-authoritative-balance',
+        'infrastructure/database/migrations',
+        `declared accounting source-of-truth table \`${table}\` does not exist — G-3 is watching nothing`,
+      );
+    }
+  }
+}
+
 if (failures > 0) {
   console.error(`\nSTATIC GUARDS: FAIL (${failures})`);
   process.exit(1);
 }
-console.log('STATIC GUARDS: PASS (14 rules)');
+console.log('STATIC GUARDS: PASS (15 rules)');
