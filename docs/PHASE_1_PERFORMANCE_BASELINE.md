@@ -15,25 +15,29 @@
 
 ## 2. Results (60 iterations per endpoint; login 8 — under the per-account limiter window)
 
-| endpoint | n | p50 ms | p95 ms | max ms | mean ms |
-|---|---:|---:|---:|---:|---:|
-| POST /v1/auth/login (argon2id verify m=19456 t=3 + token issue) | 8 | 59.5 | 79 | 79 | 64.6 |
-| GET /v1/auth/me (JWT verify + identity read) | 60 | 3.2 | 5.4 | 9.3 | 3.5 |
-| GET /v1/catalog/products?limit=50 (RLS + translation join over 120 rows) | 60 | 13.1 | 14.9 | 18.6 | 13.0 |
-| GET /v1/catalog/products?q=Product 7 (search over translation rows) | 60 | 11.5 | 13.6 | 14.1 | 11.4 |
-| POST /v1/catalog/products (translations + identifier registry + audit + outbox) | 60 | 27.3 | 35.4 | 40.2 | 27.9 |
-| GET /v1/businesses/current/entitlement (effective state + 3 usage counters) | 60 | 46.1 | 58.3 | 65.7 | 46.8 |
-| GET /v1/businesses/current/members (team screen) | 60 | 10.1 | 17.1 | 21.8 | 11.4 |
-| GET /v1/admin/tenants (platform console list) | 60 | 5.0 | 8.5 | 20.2 | 5.8 |
+Two runs of the same code on the same host, both recorded. **Run B is the delivered baseline** (it is the one produced inside the extracted release archive, alongside the archive's own 24/24 gate).
 
-Raw JSON: `release/perf-baseline.json` (written by the run that produced this table; the `release/` directory is not committed).
+| endpoint | n | Run A p95 ms | Run B p95 ms | Run B p50 / max / mean ms |
+|---|---:|---:|---:|---|
+| POST /v1/auth/login (argon2id verify m=19456 t=3 + token issue) | 8 | 79.0 | **54.7** | 45.9 / 54.7 / 47.7 |
+| GET /v1/auth/me (JWT verify + identity read) | 60 | 5.4 | **2.3** | 2.0 / 2.9 / 2.0 |
+| GET /v1/catalog/products?limit=50 (RLS + translation join over 120 rows) | 60 | 14.9 | **8.6** | 7.0 / 14.7 / 7.2 |
+| GET /v1/catalog/products?q=… (search over translation rows) | 60 | 13.6 | **8.4** | 6.1 / 9.6 / 6.6 |
+| POST /v1/catalog/products (translations + identifier registry + audit + outbox) | 60 | 35.4 | **19.2** | 15.1 / 24.2 / 15.5 |
+| GET /v1/businesses/current/entitlement (effective state + 3 usage counters) | 60 | 58.3 | **31.5** | 26.2 / 31.9 / 26.5 |
+| GET /v1/businesses/current/members (team screen) | 60 | 17.1 | **10.0** | 7.0 / 21.2 / 7.7 |
+| GET /v1/admin/tenants (platform console list) | 60 | 8.5 | **3.7** | 3.1 / 6.8 / 3.2 |
+
+Raw JSON: `release/perf-baseline.json` (Run A, repository) and `release/archive-perf-baseline.json` (Run B, inside the extracted archive). `release/` is not committed; both files ship as artifacts.
+
+**On the spread between the two runs.** This is a shared container, so absolute latency depends on what else the host is doing; the two runs differ by up to a factor of two on the same code. That is measurement noise, not a change in behaviour — the *shape* is identical in both (login dominated by argon2id, entitlement the slowest read, everything else in single-digit to low-double-digit milliseconds). Compare future phases against Run B and against the shape, not against a single absolute number, and re-measure on a quiet host before calling anything a regression.
 
 ## 3. Reading the numbers
 
-- **Login** is dominated by argon2id at the OWASP-recommended cost; ~60 ms per verify is the intended price. It is measured with 8 iterations because the per-IP+account limiter (10 attempts) is part of the product, not a test artefact.
-- **Entitlement** is the slowest read (p95 58 ms): it evaluates plan version + overrides + subscription state and counts usage for three limits (`MAX_USERS`, `MAX_BRANCHES`, `MAX_PRODUCTS`) in one request. The counters are `count(*)` over business-scoped rows (memberships, branches, products) using their `(business_id, …)` primary keys; the remaining cost is the three counts plus the override window lookup. Acceptable for Phase 1 (the merchant plan page and the limit checks); a cached usage snapshot is the Phase 2 optimisation if the POS hits this path per sale.
-- **Product create** (p95 35 ms) performs the writes in one transaction (product, one insert per locale — at most three, identifier registry via trigger, audit, outbox). No per-item fan-out beyond the locale count.
-- **List/search** (p95 ≤ 15 ms) read through `jsonb_object_agg` over the translation rows (primary key `(business_id, product_id, locale)`). Search is an `ILIKE '%term%'` match over the business's translation, SKU and barcode rows — bounded by the business scope, not indexed for infix matching. At Phase 1 catalog sizes (≤ 100 000 products on the pro plan) this is a bounded scan; a trigram index is the Phase 2 optimisation if search latency grows with catalog size.
+- **Login** is dominated by argon2id at the OWASP-recommended cost; tens of milliseconds per verify is the intended price. It is measured with 8 iterations because the per-IP+account limiter (10 attempts) is part of the product, not a test artefact.
+- **Entitlement** is the slowest read (p95 31.5 ms in Run B, 58.3 ms in Run A): it evaluates plan version + overrides + subscription state and counts usage for three limits (`MAX_USERS`, `MAX_BRANCHES`, `MAX_PRODUCTS`) in one request. The counters are `count(*)` over business-scoped rows (memberships, branches, products) using their `(business_id, …)` primary keys; the remaining cost is the three counts plus the override window lookup. Acceptable for Phase 1 (the merchant plan page and the limit checks); a cached usage snapshot is the Phase 2 optimisation if the POS hits this path per sale.
+- **Product create** (p95 19.2 ms in Run B) performs the writes in one transaction (product, one insert per locale — at most three, identifier registry via trigger, audit, outbox). No per-item fan-out beyond the locale count.
+- **List/search** (p95 ≤ 8.6 ms in Run B) read through `jsonb_object_agg` over the translation rows (primary key `(business_id, product_id, locale)`). Search is an `ILIKE '%term%'` match over the business's translation, SKU and barcode rows — bounded by the business scope, not indexed for infix matching. At Phase 1 catalog sizes (≤ 100 000 products on the pro plan) this is a bounded scan; a trigram index is the Phase 2 optimisation if search latency grows with catalog size.
 
 ## 4. Review checklist (§69) — outcome
 

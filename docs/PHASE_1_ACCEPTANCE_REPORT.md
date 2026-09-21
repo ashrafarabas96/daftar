@@ -12,13 +12,13 @@
 
 | | Run A — repository | Run B — extracted release archive |
 |---|---|---|
-| Source | git checkout, commit `9ad05db`, clean tree | `DAFTAR_PHASE_1_RC.zip` unpacked into an empty directory; **no `.git`**, original tree not referenced |
+| Source | git checkout of the delivered commit, clean tree — the exact commit is recorded in `release/evidence.json` (`source.gitCommit`) | `DAFTAR_PHASE_1_RC.zip` unpacked into an empty directory; **no `.git`**, original tree not referenced. The archive's sha256 and the delivery manifest's tree hash are recorded in `release/archive-evidence.json` |
 | Dependencies | existing `node_modules` | `npm ci` from the archive's own lockfile (419 packages) |
 | Database | embedded PostgreSQL 18, throw-away data directory | separate data directory and port, created from nothing |
 | Android | SDK platform 35, build-tools 35.0.0, Gradle 8.14.3, JDK 17 | same toolchain, `build/` absent at start |
 | Node / npm | v24.12.0 / 11.6.2 | v24.12.0 / 11.6.2 |
 | OS | linux 6.18.44 x64, 4 CPU, 15.7 GiB | identical host |
-| Verdict | **PASS — 24 pass, 0 fail, 0 skipped, 4.9 min** | **PASS — 24 pass, 0 fail, 0 skipped, 5.2 min** |
+| Verdict | **PASS — 24 pass, 0 fail, 0 skipped** | **PASS — 24 pass, 0 fail, 0 skipped** |
 | Evidence | `release/evidence.json` | `release/archive-evidence.json` (carries the archive's sha256 and the delivery manifest's tree hash) |
 
 Run B is the Blocker 3 reproduction: it proves the archive installs, builds, migrates, tests and gates itself. It also found three defects invisible in a long-lived working copy (R-36 manifest newline, R-37 hard-coded database port, R-38 shared data-directory startup race); all three are fixed and re-proven.
@@ -34,27 +34,27 @@ Run B is the Blocker 3 reproduction: it proves the archive installs, builds, mig
 | 5 | migration manifest | PASS | 0.3s | 40 frozen migrations verified, frozen through `0039`, nothing unmanifested |
 | 6 | database contract from zero | PASS | 2.3s | roles 6 → 40 migrations → no-op rerun → manifest + history verified → tamper rejected → `daftar_app` denied DDL, assertion keys and registry writes |
 | 7 | phase 1 machine gate | PASS | 0.3s | product tree, machine checks, workspace integrity, artifact hygiene, RC reports |
-| 8 | static architecture guards | PASS | 0.4s | 14 rules |
+| 8 | static architecture guards | PASS | 0.3s | 14 rules |
 | 9 | localization completeness | PASS | 0.3s | 187 keys × 3 locales |
-| 10 | format | PASS | 4.4s | |
-| 11 | build contract + design packages | PASS | 4.1s | |
-| 12 | lint (zero warnings) | PASS | 22.4s | |
-| 13 | typecheck (all workspaces) | PASS | 14.6s | |
-| 14 | unit tests | PASS | 2.3s | 58/58 (domain-core 45, shared-contracts 13) |
-| 15 | integration + security tests | PASS | 138.1s | 39 files, 326/326 |
-| 16 | golden regression suite | PASS | 38.5s | 7 files, 40/40 |
-| 17 | API build | PASS | 5.9s | |
-| 18 | merchant web build | PASS | 28.4s | 16 pages × 3 locales |
-| 19 | admin web build | PASS | 25.0s | 11 pages |
-| 20 | Android lint + unit tests + assemble | PASS | 25.0s | lint 0 errors / 4 warnings, 16/16 JVM tests, `app-debug.apk` 18.5 MB |
-| 21 | dependency audit (high/critical = 0) | PASS | 0.8s | 2 moderate remain, dev-only (TD-01) |
+| 10 | format | PASS | 3.8s | |
+| 11 | build contract + design packages | PASS | 4.0s | |
+| 12 | lint (zero warnings) | PASS | 20.4s | |
+| 13 | typecheck (all workspaces) | PASS | 13.8s | |
+| 14 | unit tests | PASS | 2.5s | 58/58 (domain-core 45, shared-contracts 13) |
+| 15 | integration + security tests | PASS | 135.3s | 39 files, 326/326 |
+| 16 | golden regression suite | PASS | 36.0s | 7 files, 40/40 |
+| 17 | API build | PASS | 5.5s | |
+| 18 | merchant web build | PASS | 26.4s | 16 pages × 3 locales |
+| 19 | admin web build | PASS | 22.4s | 11 pages |
+| 20 | Android lint + unit tests + assemble | PASS | 20.0s | lint 0 errors / 4 warnings, 16/16 JVM tests, `app-debug.apk` 18.5 MB |
+| 21 | dependency audit (high/critical = 0) | PASS | 0.7s | 2 moderate remain, dev-only (TD-01) |
 | 22 | forbidden artifact scan | PASS | 0.0s | |
 | 23 | raw credential scan | PASS | 0.0s | |
 | 24 | release documents (§76) | PASS | 0.0s | 21 documents, none a placeholder |
 
-Total 5.2 min. Run A produced the same 24 PASS rows with the same test counts (`release/evidence.json`).
+Run A produced the same 24 PASS rows with the same test counts (`release/evidence.json`). The per-step durations in the table above are from the recorded run; the authoritative durations, exit codes and commit identity for the delivered artifacts are in the evidence files, which the gate generates and never hand-edits.
 
-Outside the gate, on the same archive: `npm run perf:baseline` 8/8 — login p95 80.5 ms (argon2id), every other endpoint p95 ≤ 34.6 ms (`release/archive-perf-baseline.json`; table in `PHASE_1_PERFORMANCE_BASELINE.md`).
+Outside the gate, on the same archive: `npm run perf:baseline` 8/8 — login p95 54.7 ms (argon2id), every other endpoint p95 ≤ 31.5 ms (`release/archive-perf-baseline.json`; both recorded runs are tabulated in `PHASE_1_PERFORMANCE_BASELINE.md`). These 8 cases are benchmarks, not release-gate tests, and are counted separately from the 440.
 
 ## 3. Final Release Blocker Patch — status
 
