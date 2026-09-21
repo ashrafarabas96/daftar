@@ -44,6 +44,8 @@
 | R-22 | Locale layout rejected by Next 15.5 typed routes | Narrow param type | `isLocale` narrowing + 404 | `typecheck` / `next build` |
 | R-23 | 12 npm advisories (1 critical) | Stale versions | Bumps within majors + 2 overrides | `npm audit --audit-level=high` in CI and gate |
 | R-24 | Perf baseline seed hit `MAX_PRODUCTS`; login hit the limiter | Product behaviour, not defects | Test raises the limit explicitly and measures 8 logins | `perf:baseline` |
+| R-25 | Release export zipped the Android `build/` directory (1 547 files, ~100 MB) although the inventory skipped it | Forbidden directories were pruned from the inventory only | Pruned from the staging tree; export fails if zip entries ≠ inventory + manifest | `export:release` self-check |
+| R-26 | Release gate flagged its own build outputs as stale artifacts; lint rejected Next-generated `next-env.d.ts` | Scan walked the filesystem; Next 15.5 regenerates the file | Scan uses git's shipped-file list; `next-env.d.ts` excluded from lint | `gate:phase1:release` |
 
 Open defects at closure: **P0 = 0, P1 = 0, security P2 = 0, other P2 = 0**. Non-defect items are in `TECHNICAL_DEBT.md` (TD-01…TD-06).
 

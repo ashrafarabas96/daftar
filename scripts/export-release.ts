@@ -78,7 +78,12 @@ const walk = (d: string): void => {
     const f = join(d, e);
     const rel = relative(tree, f);
     if (FORBIDDEN_NAME.test(rel + (statSync(f).isDirectory() ? '/' : ''))) {
-      if (statSync(f).isDirectory()) continue; // prune silently — allowlisted parents may contain build debris
+      if (statSync(f).isDirectory()) {
+        // Allowlisted parents (e.g. apps/android/app) may contain build debris on a
+        // developer machine: remove it from the staging tree so the zip never carries it.
+        rmSync(f, { recursive: true, force: true });
+        continue;
+      }
       console.error(`  FAIL forbidden file in export: ${rel}`);
       process.exit(1);
     }
@@ -87,7 +92,10 @@ const walk = (d: string): void => {
       const buf = readFileSync(f);
       inventory.push({ path: rel, sha256: sha(buf), bytes: buf.byteLength });
       if (/\.(ts|tsx|sql|kt|kts|json|mjs|yml|yaml|xml)$/.test(e) && FORBIDDEN_CONTENT.test(buf.toString('utf8'))) {
-        if (!/static-guards|export-release|\.test\.|docs\//.test(rel)) {
+        // credential-protector.ts DEFINES the dev-only constant (gated on NODE_ENV by
+        // static guard rule 8 and production-providers.test.ts); every other file
+        // that mentions it is a leak.
+        if (!/static-guards|export-release|phase1-release-gate|credential-protector\.ts$|\.test\.|docs\//.test(rel)) {
           console.error(`  FAIL raw credential material in export: ${rel}`);
           process.exit(1);
         }
@@ -127,6 +135,13 @@ mkdirSync(join(ROOT, 'release'), { recursive: true });
 const zipPath = join(ROOT, 'release', 'DAFTAR_PHASE_1_RC.zip');
 rmSync(zipPath, { force: true });
 execFileSync('zip', ['-qr', zipPath, 'DAFTAR'], { cwd: staging });
+const zipEntries = execFileSync('unzip', ['-Z1', zipPath], { encoding: 'utf8' })
+  .split('\n')
+  .filter((l) => l.length > 0 && !l.endsWith('/'));
+if (zipEntries.length !== inventory.length + 1) {
+  console.error(`  FAIL zip carries ${zipEntries.length} files but the inventory has ${inventory.length} (+ DELIVERY_MANIFEST.json)`);
+  process.exit(1);
+}
 const zipHash = sha(readFileSync(zipPath));
 writeFileSync(`${zipPath}.sha256`, `${zipHash}  DAFTAR_PHASE_1_RC.zip\n`);
 rmSync(staging, { recursive: true, force: true });
