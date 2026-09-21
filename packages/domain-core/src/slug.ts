@@ -11,7 +11,6 @@
  * `store-<short-stable-random-token>` — never a hard-coded word like
  * "store-shop" that would collide across merchants.
  */
-import { randomBytes } from 'node:crypto';
 
 export const SLUG_MIN = 3;
 export const SLUG_MAX = 48;
@@ -190,7 +189,11 @@ export function suggestSlugFromName(businessName: string, random: () => string =
 
 function defaultToken(): string {
   // Short stable random token — safe fallback, never a reused word.
-  return randomBytes(4).toString('hex');
+  // Web Crypto (globalThis.crypto) is available in Node ≥ 20 and every
+  // browser, so this package stays isomorphic for the web client bundle.
+  const bytes = new Uint8Array(4);
+  globalThis.crypto.getRandomValues(bytes);
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
 }
 
 /** Deterministic alternative suggestions when a slug is taken. */

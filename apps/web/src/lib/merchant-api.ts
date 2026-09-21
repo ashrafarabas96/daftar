@@ -99,6 +99,9 @@ export const resendInvitation = (id: string) => apiFetch<AckDto>(`${BFF}/busines
 export const cancelInvitation = (id: string) => apiFetch<AckDto>(`${BFF}/businesses/current/invitations/${id}`, { method: 'DELETE' });
 export const acceptInvitation = (token: string) =>
   apiFetch<{ businessId: string }>(`${BFF}/invitations/accept`, { method: 'POST', body: JSON.stringify({ token }) });
+/** Public: a NEW user registers and joins in one step — the token is the credential. */
+export const acceptInvitationRegister = (input: { token: string; email: string; password: string; displayName: string }) =>
+  apiFetch<{ businessId: string }>(`${BFF}/invitations/accept-register`, { method: 'POST', body: JSON.stringify(input) });
 
 // ── Roles ────────────────────────────────────────────────────────────────
 export const listRoles = () => apiFetch<ListDto<RoleDto>>(`${BFF}/businesses/current/roles`);

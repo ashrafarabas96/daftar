@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { describe, expect, it } from 'vitest';
-import { createTestApp, dbUrl, ownerPool, resetData, uniqueEmail, type TestApp } from '../helpers/test-app';
+import { createTestApp, ownerPool, platformDbUrl, resetData, uniqueEmail, type TestApp } from '../helpers/test-app';
 
 const execFileP = promisify(execFile);
 
@@ -320,7 +320,7 @@ describe('§7–12 (Final Enforcement): business-scoped support sessions', () =>
 describe('§LIV: platform owner bootstrap CLI', () => {
   it('creates the first owner, prints a one-time password, refuses to run twice', async () => {
     await resetData();
-    const env = { ...process.env, MIGRATION_DATABASE_URL: dbUrl };
+    const env = { ...process.env, BOOTSTRAP_DATABASE_URL: platformDbUrl };
     const first = await execFileP(
       process.execPath,
       ['--import', 'tsx', 'scripts/bootstrap-platform-owner.ts', `--email=${uniqueEmail()}`, '--confirm=BOOTSTRAP'],

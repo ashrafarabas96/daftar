@@ -384,6 +384,14 @@ describe('golden: web contract', () => {
       }),
       () => ({ client: 'acceptInvitation', method: 'POST', path: 'invitations/accept', body: { token: 'nope-nope-nope' }, status: 404, response: apiError }),
       () => ({ client: 'logoutAllSessions', method: 'POST', path: 'auth/logout-all', body: {}, status: 201, response: ack }),
+      () => ({
+        client: 'acceptInvitationRegister',
+        method: 'POST',
+        path: 'invitations/accept-register',
+        body: { token: 'nope-nope-nope', email: uniqueEmail(), password: 'Str0ng!Passw0rd', displayName: 'Invitee' },
+        status: 404,
+        response: apiError,
+      }),
     ];
 
     // Error contract: a business-scoped call without permission carries the stable error envelope.

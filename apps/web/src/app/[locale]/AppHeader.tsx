@@ -1,23 +1,44 @@
 'use client';
 import { useRouter } from 'next/navigation';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import type { BusinessSummaryDto } from '@daftar/shared-contracts';
 import { Button, Card, Dropdown, colors, spacing, typography } from '@daftar/design-system';
 import { makeT, type Locale } from '@/lib/i18n';
-import { logout } from '@/lib/client';
+import { currentBusinessId, logout, setCurrentBusinessId } from '@/lib/client';
+import { getMyBusinesses } from '@/lib/merchant-api';
 
 const NAV = [
   { key: 'dashboard', path: 'dashboard' },
   { key: 'catalog', path: 'catalog' },
   { key: 'team', path: 'team' },
+  { key: 'structure', path: 'structure' },
+  { key: 'roles', path: 'roles' },
   { key: 'plan', path: 'plan' },
   { key: 'settings', path: 'settings' },
   { key: 'security', path: 'security' },
 ] as const;
 
+/**
+ * App header with the BUSINESS SWITCHER (Directive §62 "Business switch"):
+ * every business the user is a member of, from /me/businesses; switching
+ * changes the X-Business-Id context and reloads the current page.
+ */
 export function AppHeader({ locale, active }: { locale: Locale; active: string }) {
   const t = makeT(locale);
   const router = useRouter();
   const [busy, setBusy] = useState(false);
+  const [businesses, setBusinesses] = useState<BusinessSummaryDto[]>([]);
+  const [current, setCurrent] = useState<string | null>(null);
+
+  useEffect(() => {
+    setCurrent(currentBusinessId());
+    getMyBusinesses()
+      .then((r) => setBusinesses(r.items))
+      .catch(() => setBusinesses([]));
+  }, []);
+
+  const currentName = businesses.find((b) => b.businessId === current)?.name ?? t('nav.switchBusiness');
+
   return (
     <header
       style={{
@@ -29,10 +50,11 @@ export function AppHeader({ locale, active }: { locale: Locale; active: string }
         background: colors.neutral[0],
         borderBottom: `1px solid ${colors.neutral[200]}`,
         fontFamily: typography.fontFamily.base,
+        flexWrap: 'wrap',
       }}
     >
       <strong style={{ color: colors.brand.primary, fontSize: typography.size.lg }}>{t('app.name')}</strong>
-      <nav style={{ display: 'flex', gap: spacing[1], flex: 1 }}>
+      <nav style={{ display: 'flex', gap: spacing[1], flex: 1, flexWrap: 'wrap' }}>
         {NAV.map((item) => (
           <a
             key={item.key}
@@ -54,10 +76,21 @@ export function AppHeader({ locale, active }: { locale: Locale; active: string }
       <Dropdown
         trigger={
           <Button variant="secondary" size="sm">
-            {t('nav.switchBusiness')}
+            {currentName}
           </Button>
         }
-        items={[{ key: 'switch', label: t('nav.switchBusiness'), onSelect: () => router.push(`/${locale}/dashboard`) }]}
+        items={[
+          ...businesses.map((b) => ({
+            key: b.businessId,
+            label: b.businessId === current ? `✓ ${b.name}` : b.name,
+            onSelect: () => {
+              setCurrentBusinessId(b.businessId);
+              setCurrent(b.businessId);
+              window.location.reload();
+            },
+          })),
+          { key: 'new', label: t('nav.createBusiness'), onSelect: () => router.push(`/${locale}/businesses/new`) },
+        ]}
       />
       <Button
         variant="ghost"
