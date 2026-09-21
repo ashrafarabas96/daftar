@@ -40,7 +40,7 @@
 
 **Tests (Phase 1, passing).** `tests/security/provisioner-boundary.test.ts` — no assertion `:220`; old-GUC spoof `:226`; forged assertion `:234`; tampered actor under a genuine signature `:246`; expired `:255`; wrong operation kind `:262`; cross-transaction replay `:275`; valid assertion but non-owner `:292`; key secrets unreadable by every principal including `daftar_platform` `:352`. Branch scope: `tests/security/branch-scopes.test.ts:124`–`:212`. Owner identity: `packages/domain-core/test/domain-core.test.ts:285`, `:291`.
 
-**Gap to close when AL-03 lands:** Phase 1's assertion binds actor and operation kind. The accounting assertion additionally binds tenant, business, source type, source id and the posting fingerprint. None of those extra bindings has a test yet, and the fingerprint binding is what makes "amount changed after minting" fail — it needs its own case, not a re-run of the provisioning suite.
+**Gap to close when AL-03 lands:** Phase 1's assertion binds actor and operation kind. The accounting assertion additionally binds tenant, business, source type, source id and the posting fingerprint, and the primitive must **recompute** that fingerprint from the submitted payload and require equality before any write, refusing with `accounting.assertion_payload_mismatch`. None of that has a test yet, and the payload-mismatch case is the one that cannot be inherited from the provisioning suite: Phase 1 has no equivalent, because provisioning assertions carry no payload hash.
 
 ## 3. Writer exposure ordering (AL-18)
 
@@ -48,7 +48,7 @@
 
 **Status: SPECIFIED.** Lock AL-18. This is a process rule about commit ordering, so nothing can enforce it mechanically; what *can* be checked is that a released tree never contains a writer without its protections.
 
-**Tests.** None, and none is planned in the lock. The release gate (`scripts/phase1-release-gate.ts`, `scripts/phase1-gate.ts`) is per-phase and has no equivalent for this rule. A cheap static guard — "if `accounting_post_entry` exists in any migration, then the assertion key table, the fingerprint column, the binding table and the audit/outbox writes exist too" — would turn the governing rule into something the CI can actually refuse.
+**Tests.** None yet. The release gate (`scripts/phase1-release-gate.ts`, `scripts/phase1-gate.ts`) is per-phase and has no equivalent for this rule. The lock now records the missing check as **guard G-4**, due in P2-S3: if `accounting_post_entry` exists in a released tree, its assertion verification, source binding, fingerprint recomputation, audit and outbox must exist too. Until that guard is written, the governing rule remains a habit rather than something CI can refuse.
 
 ## 4. Opening balance lifecycle (AL-13)
 
@@ -74,13 +74,15 @@
 
 **Tests (Phase 1, passing).** `tests/security/db-privileges.test.ts` — `daftar_app` bypass flag does nothing `:44`, cross-business read `:57`, cross-business write `:73`, DDL impossible `:84`, RLS cannot be disabled `:92`, revoked grants `:103`–`:146`; `daftar_identity` separation `:178`–`:260`. `tests/security/provisioner-boundary.test.ts:55`, `:66` cover the provisioner's grant shape.
 
-**Gap:** the Phase 1 matrix is written per-table by hand. Matrix 1 as specified is *six roles × three tables × three verbs*, and the lock asks it to match the intended grant model **exactly** — that is an enumeration over `information_schema.role_table_grants`, not a list of hand-written negative cases. Writing it by hand is how a later `GRANT` slips in unnoticed.
+**Gap:** the Phase 1 matrix is written per-table by hand. Matrix 1 as specified is *six roles × three tables × three verbs*, and the lock asks it to match the intended grant model **exactly** — that is an enumeration over `information_schema.role_table_grants`, not a list of hand-written negative cases. Writing it by hand is how a later `GRANT` slips in unnoticed. Recorded in the lock as **guard G-1**, due in P2-S2.
 
 ## 7. Fingerprint canonicalization (AL-11)
 
 **Rule.** `posting_fingerprint CHAR(64)` = SHA-256 over canonical bytes `acctfp/1`, never `JSON.stringify()`. Fields `\x1f`-separated, lines `\x1e`-terminated; lowercase canonical UUIDs; account identity = `system_key` else `code:<code>`, never the display name or surrogate id; side `D`/`C`; amounts as bare decimal integers; uppercase ISO-4217; `fx_rate` always 10 fraction digits including `1.0000000000`; `fx_rate_at` RFC 3339 UTC seconds; NULL is the single byte `\x00`; lines sorted by their own serialized bytes; UTF-8. Description, memos, request id, actor and timestamps are excluded as narrative. FX rate, source and timestamp are *inside* the fingerprint, so a changed rate is a conflict, not a silent replay. Idempotency: `UNIQUE (business_id, source_type, source_id)`; identical retry → `created=false`; materially different → `accounting.idempotency_conflict` / HTTP 409, never silent success.
 
-**Status: SPECIFIED.** No canonicalizer, no fingerprint column, no idempotency key.
+The fingerprint a caller presents is never believed on its own: `accounting_post_entry` recomputes the canonical form from the submitted payload inside the database and requires it to equal the fingerprint the assertion signed, refusing with `accounting.assertion_payload_mismatch` before any write (AL-03). The canonicalization is therefore implemented twice — TypeScript and PL/pgSQL — and the two must agree byte-for-byte.
+
+**Status: SPECIFIED.** No canonicalizer in either language, no fingerprint column, no idempotency key.
 
 **Tests.** None. The lock asks for the five behaviour rows, the concurrent case on two real connections, and a byte-vector suite pinning the canonical form. The byte-vector suite is the load-bearing one: without it a refactor re-hashes history silently and every stored fingerprint becomes unverifiable.
 
@@ -104,7 +106,7 @@ Half-even by floor-and-remainder comparison (`2r > d`, `2r < d`, `2r = d` → ti
 
 **Two gaps worth fixing before P2-S5:**
 - `MAX_MONEY_MINOR = 10^18` and `assertWithinMoneyRange()` (AL-10) do not exist. `MoneyError` already reserves the `PRECISION_OVERFLOW` code, so this is an addition to an existing type, not a new concept.
-- Static-guard Rule 6's SQL check keys off column *names* — `amount|price|total|balance`. A column named `fx_rate` declared `DOUBLE PRECISION` would pass the guard untouched, which is precisely the mistake AL-09 exists to prevent. Adding `rate` to that pattern is a one-line change and should happen in the migration that introduces the column.
+- Static-guard Rule 6's SQL check keys off column *names* — `amount|price|total|balance`. A column named `fx_rate` declared `DOUBLE PRECISION` would pass the guard untouched, which is precisely the mistake AL-09 exists to prevent. Recorded in the lock as **guard G-2**, due in P2-S2 and extended in P2-S5.
 
 ## 9. Error redaction (AL-02, AL-10)
 
@@ -142,7 +144,7 @@ Half-even by floor-and-remainder comparison (`2r > d`, `2r < d`, `2r = d` → ti
 | Entry → lines → audit → outbox in one transaction; no asynchronous step decides whether the ledger commits; outbox payloads carry ids only, never amounts | AL-17 | PRECEDENT | `apps/api/src/modules/audit/audit.service.ts` (`recordTx` / `emitTx` both take the caller's `PoolClient`), `apps/api/src/modules/outbox/publisher.ts` | `tests/integration/outbox.test.ts:26` (atomicity), `:41` (exactly once), `:66` (backoff then dead-letter), `:87` (idempotent consumer); `tests/integration/failure-injection.test.ts:60`, `:90`, `:121`, `:135` |
 | Migrations `0000`–`0039` frozen byte-for-byte | Phase 1 directive | ENFORCED | `infrastructure/database/MIGRATION_MANIFEST.json` | `scripts/check-migration-manifest.ts`, `scripts/verify-migration-history.ts`, `tests/integration/migration-upgrade.test.ts` |
 
-**AL-15 gap.** Static-guard Rule 7 is commented "no mutable derived financial columns (product.stock / customer.balance ledgers)", but its regex matches only `stock` (`scripts/static-guards.ts:116`–`:121`). Nothing would catch a `balance` column added to `accounts`, which AL-15 calls "the single most common way a ledger rots". Extending that regex is a one-line change and is worth making before `0040`, not after.
+**AL-15 gap.** Static-guard Rule 7 is commented "no mutable derived financial columns (product.stock / customer.balance ledgers)", but its regex matches only `stock` (`scripts/static-guards.ts:116`–`:121`). Nothing would catch a `balance` column added to `accounts`, which AL-15 calls "the single most common way a ledger rots". Recorded in the lock as **guard G-3**, due in P2-S1 and extended in P2-S7.
 
 ---
 
@@ -152,13 +154,16 @@ Stated plainly, because the list is the point of this page.
 
 1. **All of AL-01 through AL-18** — no accounting schema, no accounting code, no accounting test. Migrations stop at `0039`; no `accounting.*` permission key is registered; no `HALF_EVEN` implementation exists in either language.
 2. **AL-01's detail-table delete guard** — a contract-plus-test by the lock's own admission, and the enumerating test does not exist.
-3. **AL-18 (writer exposure ordering)** — a process rule with no mechanical check; a static guard tying `accounting_post_entry`'s existence to its protections would make it enforceable.
-4. **AL-02's Matrix 1 as specified** — needs an enumeration over the live grant catalogue; the Phase 1 equivalent is hand-written per table and will not notice a new `GRANT`.
+3. **AL-18 (writer exposure ordering)** — a process rule with no mechanical check today; now scheduled as guard G-4 in P2-S3.
+4. **AL-02's Matrix 1 as specified** — needs an enumeration over the live grant catalogue; the Phase 1 equivalent is hand-written per table and will not notice a new `GRANT`. Now scheduled as guard G-1 in P2-S2.
 5. **AL-02's "no financial values in errors or logs"** — the cited authority (`DAFTAR_OBSERVABILITY.md`) does not contain that rule, and no guard or test covers amounts in exception messages.
-6. **AL-09's rate column type** — static-guard Rule 6 does not match `*_rate` columns, so a float rate would pass CI.
+6. **AL-09's rate column type** — static-guard Rule 6 does not match `*_rate` columns, so a float rate would pass CI. Now scheduled as guard G-2 in P2-S2.
 7. **AL-10's `MAX_MONEY_MINOR` / `assertWithinMoneyRange()`** — absent; `MoneyError.PRECISION_OVERFLOW` already exists to carry it.
-8. **AL-15's no-balance-column rule** — static-guard Rule 7 covers `stock` only.
+8. **AL-15's no-balance-column rule** — static-guard Rule 7 covers `stock` only. Now scheduled as guard G-3 in P2-S1.
 9. **AL-14's periods** — slice P2-S6, explicitly conditional; until then no posting-date gate of any kind exists.
+10. **The database-side fingerprint recomputation** (AL-03, added after Tech Lead review) — specified, with no implementation in either language and no payload-mismatch test.
+
+Items 3, 4, 6 and 8 are now scheduled as named guards G-1…G-4 in the lock's slice table. Scheduled is not enforced: none of them exists in CI today.
 
 ## Where these documents live
 

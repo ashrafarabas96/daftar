@@ -127,6 +127,8 @@ Commit-time failures raise a **stable machine code plus safe identifiers only** 
 
 Codes: `accounting.entry_unbalanced`, `accounting.entry_too_few_lines`, `accounting.entry_business_mismatch`, `accounting.entry_account_foreign`, `accounting.entry_fx_arithmetic`, `accounting.entry_status_invalid`, `accounting.entry_binding_missing`.
 
+The posting primitive refuses earlier and under the same redaction rule with `accounting.assertion_payload_mismatch` when the recomputed canonical fingerprint does not equal the one the assertion signed (AL-03) — before any write, and with no amounts in the message.
+
 Where reconciliation tooling genuinely needs the offending sums, it obtains them through an explicitly authorized internal diagnostic path that is subject to the normal redaction and audit rules — never through an exception message.
 
 ### Two independent test matrices — they prove different things
@@ -185,9 +187,27 @@ v1.<kid>.<actor uuid>.<tenant uuid>.<business uuid>.<operation kind>
 Minted by the merchant API **only after** authentication, tenant/business resolution, RBAC authorization and branch-scope authorization have all succeeded. Verified inside `accounting_post_entry` by `accounting_actor(kinds TEXT[])`, which:
 
 - recomputes the HMAC with the key named by `<kid>`, read from `accounting_assertion_keys` — a table with **no grants at all**, unreadable by `daftar_app` and by every other runtime role;
-- binds every field above, so an assertion minted for one business, actor, operation, source or payload cannot be replayed for another. Because the **posting fingerprint** is inside the signature, altering a single amount invalidates the assertion;
+- binds every field above, so an assertion minted for one business, actor, operation, source or payload cannot be replayed for another. Because the **posting fingerprint** is inside the signature, an assertion cannot be re-pointed at a different financial snapshot after minting — but the signature alone says nothing about the payload actually submitted, which is why the primitive recomputes the fingerprint itself (below);
 - enforces the expiry (60 s) and single-transaction use with cross-transaction replay protection via `accounting_assertion_uses` (`jti` + `pg_current_xact_id()`), exactly as `0038` does;
 - returns the actor; the function derives tenant, business and actor **from the verified assertion**, never from a GUC or an argument. The GUCs remain only as RLS scoping for *reads*.
+
+### The signed fingerprint is a claim about the payload, not evidence — the database recomputes it (CORRECTED)
+
+**Problem.** Binding the posting fingerprint into the assertion proves only that *the fingerprint string* was not altered after minting. It proves nothing about the payload actually handed to `accounting_post_entry`. A caller presenting a genuine assertion for fingerprint F while submitting lines that canonicalize to G would write G into the ledger under an authorization that was never granted for it — no forgery required. An engine defect produces the same divergence with no attacker at all. **A caller-supplied fingerprint is a claim; only a recomputed one is evidence.**
+
+**Required invariant.** `accounting_post_entry` **MUST** recompute the canonical posting fingerprint from the **actual submitted payload** — the entry header and every line as passed to it — inside the trusted database boundary, using the exact `acctfp/1` canonicalization contract of AL-11, and **MUST** require
+
+```
+recomputed_fingerprint = the fingerprint carried by the verified assertion
+```
+
+before any ledger write. On difference the call is refused with the stable, value-free code `accounting.assertion_payload_mismatch`. The comparison precedes every write in the function body — entry, lines, binding, audit and outbox alike — so a mismatch cannot leave a partial trace. A fingerprint the caller supplies as an argument is never trusted by itself and is never what is stored.
+
+**Fields the recomputation covers** — every immutable financial field AL-11 canonicalizes, and nothing else: tenant, business, `source_type`, `source_id`, `entry_date`, and per line the resolved account identity, the debit/credit side, base amount, base currency, transaction amount, transaction currency, `fx_rate`, `fx_rate_source`, `fx_rate_at`, `branch_id`, `warehouse_id`. Narrative fields stay excluded exactly as AL-11 specifies, so a retry differing only in a description still matches.
+
+**Consequence for AL-11 and for the division of authority.** The canonical serialization becomes a **dual implementation**, exactly like the FX formula of AL-09: `accounting_canonical_fingerprint(...)` in PL/pgSQL and the TypeScript canonicalizer must emit byte-identical output, and one shared vector suite runs against both. This is the single piece of domain serialization that legitimately belongs in the database, because it is verification rather than orchestration. The engine still computes the fingerprint in order to mint; the database simply no longer believes it.
+
+**Test implication.** A genuine assertion for fingerprint F presented with a payload canonicalizing to G → `accounting.assertion_payload_mismatch`, and all four tables are counted afterwards to prove nothing was written. One amount, one rate, one `fx_rate_source`, one `fx_rate_at`, one `branch_id`, one `warehouse_id` and one resolved account identity altered in turn, each under an otherwise valid assertion → refused in every case. Description changed only → accepted, because narrative is outside the canonical form. The shared vector suite asserts SQL and TypeScript agree byte-for-byte on every pinned entry, including the `\x00` NULL sentinel and the line-ordering rule.
 
 **Key ownership and rotation.** A **separate** key namespace from provisioning — `accounting_assertion_keys`, with its own `accounting_assertion_key_install` / `_retire` commands whose EXECUTE belongs to `daftar_platform` alone. Reusing the provisioning key was rejected: the two domains have different blast radii and different rotation cadences, and a single key would mean a provisioning-key compromise is also a ledger compromise. Rotation is the Phase 1 CLI pattern (install new kid → roll the API → retire old kid), and the CLI never prints key material.
 
@@ -202,7 +222,7 @@ Minted by the merchant API **only after** authentication, tenant/business resolu
 
 Mitigations for the second row, which reduce blast radius without pretending to eliminate it: the key lives only in the merchant API process (never the worker, never the admin API); assertions expire in 60 seconds and are single-transaction; every posting writes an audit row naming actor, source and request id; and moving the signer behind the existing KMS bridge is recorded as the future hardening step (P2-S8 review item).
 
-**Division of authority.** TypeScript engine → domain orchestration, FX computation, rounding, fingerprint, the mint call. `accounting_post_entry` → assertion verification and atomic write authority. Constraints and triggers → the invariants at COMMIT. PostgreSQL logic stays narrow: verification plus writes, no domain orchestration.
+**Division of authority.** TypeScript engine → domain orchestration, FX computation, rounding, fingerprint, the mint call. `accounting_post_entry` → assertion verification, **canonical fingerprint recomputation and payload equality**, and atomic write authority. Constraints and triggers → the invariants at COMMIT. PostgreSQL logic stays narrow: verification plus writes, no domain orchestration.
 
 **Test implication.** No assertion → refused. Assertion minted for business A replayed against business B → refused. Actor field altered → HMAC fails. A single amount changed after minting → fingerprint mismatch inside the signature → refused. Expired → refused. Replayed in a second transaction → refused. Wrong operation kind → refused. `daftar_app` reading `accounting_assertion_keys` → permission denied. Every runtime role attempting direct journal DML → permission denied (Matrix 1). A stolen-credential simulation that sets arbitrary GUCs and supplies a real member's UUID → **refused**, which is the regression test for this exact defect.
 
@@ -501,9 +521,9 @@ Normalization rules, all mandatory:
 | rollback then retry | nothing persisted; the retry posts normally — uniqueness lives in the database |
 | same source, different description only | `created=false` |
 
-The comparison happens inside `accounting_post_entry`, so no caller can skip it. The fingerprint is also bound into the command assertion (AL-03), so tampering with amounts after minting invalidates the signature before the fingerprint is even compared.
+The comparison happens inside `accounting_post_entry`, so no caller can skip it. The fingerprint is also bound into the command assertion (AL-03), and the primitive **recomputes the canonical form from the submitted payload** before any write, so a signature over a fingerprint that does not describe that payload is refused with `accounting.assertion_payload_mismatch`. Consequently the serialization specified above is implemented twice — TypeScript and PL/pgSQL — and pinned by one shared vector suite; the two must agree byte-for-byte.
 
-**Test implication.** All five rows, the concurrent case on two real connections, and a vector suite pinning the canonical bytes for a known entry so an accidental serialization change fails loudly rather than silently re-hashing history.
+**Test implication.** All five rows, the concurrent case on two real connections, and a vector suite pinning the canonical bytes for a known entry so an accidental serialization change fails loudly rather than silently re-hashing history — run against **both** implementations, since a divergence between them would refuse every legitimate posting.
 
 ---
 
@@ -651,17 +671,30 @@ Outbox payloads carry **ids only, never amounts**, so the event stream does not 
 | slice | content | migrations | why it is safe on its own | exit criteria |
 |---|---|---|---|---|
 | **P2-S0** | Architecture lock — decisions only | **0** | no schema, no code | Tech Lead approval |
-| **P2-S1** | `accounts`, system-key registry, seeding routine + `businesses` trigger + backfill, accounting permissions | `0040`, `0041` | a chart with no journal and no writer cannot record financial truth | every existing and new business has a chart; AL-05/06/07/08 green |
-| **P2-S2** | Journal + binding **structural schema only**: `journal_entries`, `journal_lines`, `accounting_source_types`, `accounting_source_bindings`, all CHECKs, both immutability triggers, both deferred validation triggers, RLS, **and the full REVOKE shape**. **No writer function. No EXECUTE granted to anyone.** | `0042`, `0043` | nothing can write to these tables at all — not `daftar_app`, not any runtime role, and no primitive exists yet. The invariants are already active before the first row can exist | Matrix 1 (privilege) and Matrix 2 (invariants A–H) both green |
-| **P2-S3** | Assertion keys + `accounting_actor()` verification + `accounting_post_entry` + fingerprint + audit + outbox, **and only now `GRANT EXECUTE` to `daftar_app`** | `0044`, `0045` | the writer becomes reachable in the same slice that gives it its unforgeable authority boundary, its binding integrity and its atomicity — never before | AL-03 spoofing suite, AL-11 matrix, AL-17 failure-injection matrix all green |
+| **P2-S1** | `accounts`, system-key registry, seeding routine + `businesses` trigger + backfill, accounting permissions | `0040`, `0041` | a chart with no journal and no writer cannot record financial truth | every existing and new business has a chart; AL-05/06/07/08 green; guard G-3 active |
+| **P2-S2** | Journal + binding **structural schema only**: `journal_entries`, `journal_lines`, `accounting_source_types`, `accounting_source_bindings`, all CHECKs, both immutability triggers, both deferred validation triggers, RLS, **and the full REVOKE shape**. **No writer function. No EXECUTE granted to anyone.** | `0042`, `0043` | nothing can write to these tables at all — not `daftar_app`, not any runtime role, and no primitive exists yet. The invariants are already active before the first row can exist | Matrix 1 (privilege, generated from the live catalogue) and Matrix 2 (invariants A–H) both green; guard G-2 active |
+| **P2-S3** | Assertion keys + `accounting_actor()` verification + `accounting_post_entry` + fingerprint **computed in TypeScript and recomputed in PL/pgSQL, with the equality check before any write (AL-03)** + audit + outbox, **and only now `GRANT EXECUTE` to `daftar_app`** | `0044`, `0045` | the writer becomes reachable in the same slice that gives it its unforgeable authority boundary, its binding integrity and its atomicity — never before | AL-03 spoofing suite including the payload-mismatch cases, the shared canonical-fingerprint vectors green in both implementations, AL-11 matrix, AL-17 failure-injection matrix all green; guard G-4 active |
 | **P2-S4** | Manual adjustment, reversal, opening balance — Phase-2-owned sources | `0046`, `0047` | each source rides the already-hardened writer | AL-12 and AL-13 state-machine tests green |
-| **P2-S5** | FX foundation: manual rate source, immutable snapshot, rounding, realized-FX primitive | `0048` | additive to a hardened engine | the seven AL-09 vectors green in both implementations |
+| **P2-S5** | FX foundation: manual rate source, immutable snapshot, rounding, realized-FX primitive | `0048` | additive to a hardened engine | the seven AL-09 vectors green in both implementations; guard G-2 extended to every rate field introduced here |
 | **P2-S6** | Accounting periods — **only if confirmed** (AL-14) | `0049` | plugs into the existing validation routine | close/reopen/concurrency green |
-| **P2-S7** | Trial balance, general ledger, account balances — live aggregation | `0050` (indexes only, if needed) | read-only | reports balance; rebuild-equals-live green |
+| **P2-S7** | Trial balance, general ledger, account balances — live aggregation | `0050` (indexes only, if needed) | read-only | reports balance; rebuild-equals-live green; guard G-3 extended to any read-model table added here |
 | **P2-S8** | Red team, cross-tenant, raw SQL, failure injection, rollback rehearsal, performance dataset, KMS-backed signer review | 0 | verification only | budgets met or materialization justified |
 | **P2-S9** | Release closure: gate, RC archive, evidence, docs | 0 | verification only | repository and extracted-archive gates both PASS, zero skips |
 
 The migration numbers shifted by one from the first version because assertion-key management is its own migration in P2-S3.
+
+### Mechanical guards required by slice
+
+Each of these is a machine check in CI, not a review habit. A guard lands **in the slice named**, so no slice ships a surface its guard does not yet watch.
+
+| # | guard | slice | what it refuses |
+|---|---|---|---|
+| G-1 | privilege matrix generated from the **live** PostgreSQL grant catalogue (`information_schema.role_table_grants` and the function ACLs), compared against the intended grant model as data | P2-S2 | any DML grant on `journal_entries`, `journal_lines` or `accounting_source_bindings` reaching any runtime role, including one added later by a migration nobody re-reviewed. Hand-written negative tests stay, but they prove only the cases someone thought of; the enumeration proves the rest |
+| G-2 | static guard rejecting `REAL`, `DOUBLE PRECISION` and `FLOAT` for `fx_rate` and every accounting financial-rate column | P2-S2, extended in P2-S5 | a float rate. The existing `static-guards.ts` money rule keys off the column names `amount|price|total|balance`, so a rate column passes it untouched today — the guard must match rate-shaped names as well |
+| G-3 | static guard forbidding an authoritative mutable balance column on `accounts` or any accounting source-of-truth table | P2-S1, extended in P2-S7 | the AL-15 failure mode. The existing rule's comment names `customer.balance` but its pattern matches `stock` only, so nothing would catch it today |
+| G-4 | release check tying the writer to its protections: if `accounting_post_entry` exists in a released tree, then assertion verification, the source-binding registry, the canonical fingerprint recomputation, the audit write and the outbox write must all exist too | P2-S3 | a tree in which AL-18's governing rule was broken by a later edit. This is the one mechanical expression of "a writer may not land before its protections" |
+
+
 
 ---
 
@@ -683,6 +716,7 @@ The migration numbers shifted by one from the first version because assertion-ke
 | K-11 | The first version of AL-14 imposed an arbitrary `created_at − 10 years` floor | Withdrawn — it has no accounting authority and rejects legitimate history. Replaced by source-specific date semantics |
 | K-12 | The first version of AL-02 claimed cases A–G run meaningfully as all six roles, and allowed sums in error messages | Corrected — two separate matrices (privilege vs invariant), and stable codes with no financial values in exceptions |
 | K-13 | The first version of AL-18 exposed the writer in P2-S2, before its authority and integrity dependencies | Corrected — structural schema and writer are separated; `GRANT EXECUTE` lands only with the full protection set |
+| K-14 | AL-03/AL-11 treated the **caller-supplied** posting fingerprint inside the assertion as proof about the submitted payload | **Insufficient** — the signature proves only that the fingerprint string is intact, not that it describes the lines actually submitted, so a genuine assertion for fingerprint F could accompany a payload canonicalizing to G. Corrected: the primitive recomputes the canonical fingerprint in the database and requires equality before any write, refusing with `accounting.assertion_payload_mismatch` |
 
 No conflict was resolved by silently preferring one document; each is recorded above.
 
