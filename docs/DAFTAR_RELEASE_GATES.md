@@ -38,3 +38,8 @@ P0=0 · P1=0 · P2=0 لـ(Accounting/Inventory/Security/Tenant isolation/Data in
 
 - القرار موثّق في Acceptance Report لكل Phase: PASS/FAIL + أدلة (روابط نتائج اختبارات، تقارير مراجعات A/B/C).
 - عند FAIL: تُصلح المشكلات ثم يُعاد التقرير — لا انتقال بأعذار.
+
+## 6. Phase 1 machine gate (added at the Phase 1 closure)
+
+`npm run gate:phase1:release -- --evidence=release/evidence.json` runs the whole command matrix in order (toolchain, clean build outputs, frozen-migration manifest, machine gate, static guards, localization, format, package builds, lint, typecheck, unit, integration + security, golden, API/web/admin builds, Android lint + unit + assemble, dependency audit, artifact and credential scans, required documents) and stops at the first failure. Its JSON evidence file is the only accepted source for the numbers in `PHASE_1_ACCEPTANCE_REPORT.md`. The Android step can be skipped only with `RELEASE_GATE_SKIP_ANDROID=1`, which the summary and evidence file print as SKIPPED.
+
