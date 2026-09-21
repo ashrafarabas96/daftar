@@ -6,6 +6,12 @@ import type { AppConfig } from '../config';
 export interface Scope {
   tenantId?: string;
   businessId?: string;
+  /**
+   * Server-derived actor (Directive §12): the authenticated principal, set
+   * as a TRANSACTION-LOCAL GUC so trusted SQL commands read it themselves
+   * (provision_actor()) instead of trusting a caller-supplied user id.
+   */
+  actorUserId?: string;
 }
 
 /**
@@ -85,8 +91,9 @@ export class Database implements OnModuleDestroy, OnModuleInit {
       `SELECT
       set_config('app.tenant_id', $1, true),
       set_config('app.business_id', $2, true),
-      set_config('app.bypass_rls', $3, true)`,
-      [scope.tenantId ?? '', scope.businessId ?? '', bypass ? 'true' : 'false'],
+      set_config('app.bypass_rls', $3, true),
+      set_config('app.actor_user_id', $4, true)`,
+      [scope.tenantId ?? '', scope.businessId ?? '', bypass ? 'true' : 'false', scope.actorUserId ?? ''],
     );
   }
 
@@ -145,11 +152,16 @@ export class Database implements OnModuleDestroy, OnModuleInit {
   /**
    * Provisioning boundary (Stabilization §13–14): daftar_provisioner — the
    * ONLY authority for initial onboarding, additional business creation and
-   * invitation acceptance. RLS bypass (cross-scope transition) but a STRICT
-   * grant subset: no plans/flags/overrides/platform-roles/credentials.
+   * invitation acceptance. NO bypass and NO table CRUD (0032): its only
+   * authority is EXECUTE on narrow SECURITY DEFINER commands that verify the
+   * server-derived actor's authority INSIDE the same command (0033).
    */
-  async withProvisionerTransaction<T>(fn: (client: PoolClient) => Promise<T>): Promise<T> {
-    return this.run(this.provisionerPool, {}, true, fn);
+  async withProvisionerTransaction<T>(actorUserId: string | null, fn: (client: PoolClient) => Promise<T>): Promise<T> {
+    // §12: the actor travels as transaction-local context, derived from the
+    // authenticated principal by the caller — never from a request body.
+    // `null` = no actor: only actor-independent lookups (invitation peek /
+    // expire) may run; every mutating command raises PROV:FORBIDDEN.
+    return this.run(this.provisionerPool, actorUserId ? { actorUserId } : {}, true, fn);
   }
 
   async healthCheck(): Promise<boolean> {

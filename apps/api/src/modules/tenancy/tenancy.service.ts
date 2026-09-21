@@ -144,7 +144,7 @@ export class TenancyService {
     try {
       // §13 (Stabilization): onboarding runs on the NARROW PROVISIONER
       // boundary — never the platform transaction.
-      return await this.db.withProvisionerTransaction(async (c) => {
+      return await this.db.withProvisionerTransaction(userId, async (c) => {
         // Serialize onboarding per user (§54): advisory lock on the user id —
         // the provisioner intentionally has NO grant on the identity users
         // table. A concurrent double submit waits, then sees the committed
@@ -152,17 +152,19 @@ export class TenancyService {
         await c.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 73))', [userId]);
 
         // §37–39: Idempotency-Key is REQUIRED — enforced at the controller.
-        const replay = await this.replayOperation(c, userId, idempotencyKey, 'initial_onboarding', { ...input, storeSlug: slug });
+        const replay = await this.replayOperation(c, idempotencyKey, 'initial_onboarding', { ...input, storeSlug: slug });
         if (replay) return replay;
 
         const tenantId = newId();
         const businessId = newId();
         // §15–21 (Ultimate Closure): the cross-scope transition runs ONLY via
         // narrow SECURITY DEFINER commands — no direct table writes, no bypass.
-        await c.query('SELECT provision_create_tenant($1, $2)', [tenantId, userId]);
-        await this.provisionBusiness(c, tenantId, userId, businessId, input, slug, userId, 'tenancy.onboarding_completed');
+        // The actor (transaction context) becomes the tenant_owner, which is
+        // exactly the authority provision_create_business verifies next.
+        await c.query('SELECT provision_create_tenant($1)', [tenantId]);
+        await this.provisionBusiness(c, tenantId, businessId, input, slug, 'tenancy.onboarding_completed');
         const onboardResult: OnboardingResultDto = { businessId, tenantId, storeSlug: slug, replayed: false };
-        await this.persistOperation(c, userId, idempotencyKey, 'initial_onboarding', { ...input, storeSlug: slug }, onboardResult);
+        await this.persistOperation(c, idempotencyKey, 'initial_onboarding', { ...input, storeSlug: slug }, onboardResult);
         return onboardResult;
       });
     } catch (e) {
@@ -200,28 +202,23 @@ export class TenancyService {
     const slug = normalizeSlug(input.storeSlug);
     try {
       // §13: additional business creation is provisioner authority.
-      return await this.db.withProvisionerTransaction(async (c) => {
+      return await this.db.withProvisionerTransaction(userId, async (c) => {
         await c.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 73))', [userId]);
 
         // §34: the idempotency scope includes the TARGET TENANT — the same key
         // aimed at a different tenant is a different operation.
         const fingerprint = { ...input, storeSlug: slug, tenantId };
-        const replay = await this.replayOperation(c, userId, idempotencyKey, 'create_business', fingerprint);
+        const replay = await this.replayOperation(c, idempotencyKey, 'create_business', fingerprint);
         if (replay) return replay;
 
-        // §33–35 SERVER AUTHORITY: the client tenantId is only the TARGET —
-        // the caller must be an ACTIVE tenant_owner of EXACTLY that tenant.
-        // No ORDER BY created_at guessing: the tenant is explicit.
-        try {
-          await c.query('SELECT provision_assert_tenant_owner($1, $2)', [tenantId, userId]);
-        } catch (e) {
-          mapProvisionError(e);
-        }
-
+        // §33–35 / Directive §11 SERVER AUTHORITY: the client tenantId is only
+        // the TARGET. The check that the ACTOR is an ACTIVE tenant_owner of
+        // EXACTLY that tenant happens INSIDE provision_create_business — the
+        // same trusted command that mutates. There is no separate assert.
         const businessId = newId();
-        await this.provisionBusiness(c, tenantId, userId, businessId, input, slug, userId, 'tenancy.business_created');
+        await this.provisionBusiness(c, tenantId, businessId, input, slug, 'tenancy.business_created');
         const result: OnboardingResultDto = { businessId, tenantId, storeSlug: slug, replayed: false };
-        await this.persistOperation(c, userId, idempotencyKey, 'create_business', fingerprint, result);
+        await this.persistOperation(c, idempotencyKey, 'create_business', fingerprint, result);
         return result;
       });
     } catch (e) {
@@ -241,7 +238,6 @@ export class TenancyService {
   private async provisionBusiness(
     c: import('pg').PoolClient,
     tenantId: string,
-    userId: string,
     businessId: string,
     input: {
       businessName: string;
@@ -252,15 +248,14 @@ export class TenancyService {
       timezone?: string;
     },
     slug: string,
-    actorUserId: string,
     auditAction: string,
   ): Promise<void> {
     const resolvedTimezone = input.timezone ?? getCountryPack(input.countryCode).recommendedTimezone;
     assertValidTimezone(resolvedTimezone);
     try {
-      await c.query(`SELECT provision_create_business($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`, [
+      // Owner + audit actor = the transaction's server-derived actor (§12).
+      await c.query(`SELECT provision_create_business($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`, [
         tenantId,
-        userId,
         businessId,
         input.businessName,
         slug,
@@ -272,7 +267,6 @@ export class TenancyService {
         resolvedTimezone,
         JSON.stringify(BUILTIN_ROLE_PERMISSIONS),
         auditAction,
-        actorUserId,
       ]);
     } catch (e) {
       if (isProvisionError(e, 'SLUG_RESERVED')) {
@@ -291,7 +285,6 @@ export class TenancyService {
    *  with a different payload; returns null when the key is new. */
   private async replayOperation(
     c: import('pg').PoolClient,
-    userId: string,
     key: string,
     kind: 'initial_onboarding' | 'create_business',
     payload: unknown,
@@ -304,7 +297,7 @@ export class TenancyService {
         result_tenant_id: string | null;
         result_business_id: string | null;
         result_store_slug: string | null;
-      }>('SELECT kind, payload_hash, result_tenant_id, result_business_id, result_store_slug FROM provision_replay_operation($1, $2)', [userId, key])
+      }>('SELECT kind, payload_hash, result_tenant_id, result_business_id, result_store_slug FROM provision_replay_operation($1)', [key])
     ).rows[0];
     if (!op) return null;
     if (op.kind !== kind || op.payload_hash !== hash) {
@@ -319,20 +312,12 @@ export class TenancyService {
 
   private async persistOperation(
     c: import('pg').PoolClient,
-    userId: string,
     key: string,
     kind: 'initial_onboarding' | 'create_business',
     payload: unknown,
     result: OnboardingResultDto,
   ): Promise<void> {
-    await c.query('SELECT provision_persist_operation($1, $2, $3, $4, $5, $6)', [
-      userId,
-      key,
-      kind,
-      operationHash(payload),
-      result.tenantId,
-      result.businessId,
-    ]);
+    await c.query('SELECT provision_persist_operation($1, $2, $3, $4, $5)', [key, kind, operationHash(payload), result.tenantId, result.businessId]);
   }
 
   async listMyBusinesses(userId: string): Promise<BusinessSummaryDto[]> {

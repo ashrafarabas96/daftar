@@ -222,7 +222,9 @@ export class InvitationsService {
     // Phase 1 (lock-free): resolve + expiry check. Expiry is a committed state
     // transition of its own — it must NOT roll back with an aborted accept tx.
     // §13 (Stabilization): invitation acceptance is PROVISIONER authority.
-    const peek = await this.db.withProvisionerTransaction(async (c) => {
+    // No actor yet (new-user registration path): peek/expire only touch the
+    // token's own row and take no actor-dependent decision.
+    const peek = await this.db.withProvisionerTransaction(null, async (c) => {
       const row = (
         await c.query<{ id: string; email: string; expires_at: Date }>('SELECT id, email, expires_at FROM provision_peek_invitation($1)', [
           hashInviteToken(token),
@@ -273,11 +275,12 @@ export class InvitationsService {
     // bypass exists only inside that function (§15–21).
     try {
       const accepted = await this.db.withProvisionerTransaction(
+        userId,
         async (c) =>
           (
             await c.query<{ invitation_id: string; business_id: string; tenant_id: string }>(
-              'SELECT o_invitation_id AS invitation_id, o_business_id AS business_id, o_tenant_id AS tenant_id FROM provision_accept_invitation($1, $2)',
-              [hashInviteToken(token), userId],
+              'SELECT o_invitation_id AS invitation_id, o_business_id AS business_id, o_tenant_id AS tenant_id FROM provision_accept_invitation($1)',
+              [hashInviteToken(token)],
             )
           ).rows[0],
       );
