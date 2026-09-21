@@ -26,7 +26,7 @@
 | V7.1 | Log content: no secrets, correlation id | Met | pino redaction; `requestId` everywhere |
 | V7.2 | Log processing: security events logged | Met | audit events; limiter outage logged |
 | V7.4 | Error handling: generic messages, no stack to client | Met | `error.filter.ts` stable codes |
-| V8.1 | Data protection at rest; sensitive data minimization | Met | credential ciphertext wiped on terminal state; no PII in outbox payloads |
+| V8.1 | Data protection at rest; sensitive data minimization | Met | credential ciphertext wiped on terminal state; outbox payloads carry ids only (e.g. `{ productId }`), never PII |
 | V8.3 | Sensitive private data: access audited | Met | support-session access audit |
 | V9.1 | TLS for client communications | Met (deployment) | `upgrade-insecure-requests` CSP in prod; `DAFTAR_AWS_REFERENCE_ARCHITECTURE.md` |
 | V10.3 | Application integrity: dependencies, artifacts | Met | `npm audit --audit-level=high` in CI; frozen migrations manifest; signed release export |

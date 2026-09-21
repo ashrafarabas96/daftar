@@ -16,3 +16,6 @@ var/
 
 # Android local SDK path (machine-specific, never committed)
 apps/android/local.properties
+
+# Release gate evidence + export output (never committed; produced by gate:phase1:release / export:release)
+release/

@@ -20,28 +20,26 @@ Static checks on the same commit: `check:migrations` (38 frozen hashes OK), `gat
 
 | File | Cases | Covers |
 |---|---:|---|
-| admin.test.ts | — | platform console endpoints, audit rows, capability checks |
-| auth.test.ts | — | register/login/refresh/logout-all, password reset, me |
-| bootstrap-owner.test.ts | — | first-owner CLI, race, promote-existing |
-| business-locale.test.ts | — | locales, base currency authority, timezone |
+| admin.test.ts | 6 | platform console endpoints, audit rows, capability checks |
+| auth.test.ts | 10 | register/login/refresh/logout-all, password reset, me |
+| bootstrap-owner.test.ts | 3 | first-owner CLI, race, promote-existing |
+| business-locale.test.ts | 6 | locales, base currency authority, timezone |
 | catalog.test.ts | 16 | products/categories/variants, search, optimistic concurrency, pagination, adversarial inputs |
 | concurrency-matrix.test.ts | 5 | §66 races |
 | delivery-outbox.test.ts | 3 | credential delivery retry/dead-letter/recovery |
 | failure-injection.test.ts | 4 | §67 worker crash lease, migration failure, wrong principal |
-| invitation-lifecycle.test.ts | — | expiry sweep, resend policy, direct add, delivery tracking |
+| invitation-lifecycle.test.ts | 9 | expiry sweep, resend policy, direct add, delivery tracking |
 | media.test.ts / media-compensation.test.ts | 7 + 2 | upload validation, keys, variants, compensation, orphan record |
 | migration-upgrade.test.ts | 3 | 0024/0026/0035 → latest, no-op rerun |
 | onboarding.test.ts | 16 | atomic provisioning, idempotency semantics, slug race, fallback slug stability |
 | outbox.test.ts | 4 | atomicity, exactly-once to healthy sink, retry/dead-letter, duplicate absorption |
-| plan-lifecycle.test.ts | — | DRAFT→PUBLISHED→SUNSET, child immutability, overrides integrity |
-| production-providers.test.ts | 10 | real adapters in production, per-process secret separation |
-| quota-race.test.ts | 3 | MAX_USERS / MAX_PRODUCTS / MAX_BRANCHES under concurrency |
+| plan-lifecycle.test.ts | 12 | DRAFT→PUBLISHED→SUNSET, child immutability, overrides integrity |
+| production-providers.test.ts | 11 | real adapters in production, per-process secret separation |
+| quota-race.test.ts | 4 | MAX_USERS / MAX_PRODUCTS / MAX_BRANCHES under concurrency |
 | runtime-isolation.test.ts | 5 | merchant/platform/worker boot shape, prod refusals |
 | support-sessions.test.ts | 8 | scope, expiry, revoke race, audit, bootstrap CLI |
-| team.test.ts | — | members, roles union, suspend/reactivate, downgrade behaviour |
-| tenant-memberships.test.ts | — | multi-tenant identity |
-
-(“—” = counted in the 152 total; see the file for its cases.)
+| team.test.ts | 12 | members, roles union, suspend/reactivate, downgrade behaviour |
+| tenant-memberships.test.ts | 6 | multi-tenant identity |
 
 ## 3. Security suite (15 files, 139 cases)
 

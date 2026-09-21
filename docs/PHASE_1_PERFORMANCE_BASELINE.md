@@ -31,16 +31,16 @@ Raw JSON: `release/perf-baseline.json` (written by the run that produced this ta
 ## 3. Reading the numbers
 
 - **Login** is dominated by argon2id at the OWASP-recommended cost; ~60 ms per verify is the intended price. It is measured with 8 iterations because the per-IP+account limiter (10 attempts) is part of the product, not a test artefact.
-- **Entitlement** is the slowest read (p95 58 ms): it evaluates plan version + overrides + subscription state and counts usage for three limits (`MAX_USERS`, `MAX_BRANCHES`, `MAX_PRODUCTS`) in one request. Indexes from `0035` cover the counters; the remaining cost is the three `count(*)` queries. Acceptable for Phase 1 (the merchant plan page and the limit checks); a cached usage snapshot is the Phase 2 optimisation if the POS hits this path per sale.
-- **Product create** (p95 35 ms) performs five writes in one transaction (product, translations, identifier registry via trigger, audit, outbox). No N+1: translations are inserted with one multi-row statement.
-- **List/search** (p95 ≤ 15 ms) read through `jsonb_object_agg` over the translation rows with the `(business_id, product_id)` index; the search path uses the translation index rather than a full scan.
+- **Entitlement** is the slowest read (p95 58 ms): it evaluates plan version + overrides + subscription state and counts usage for three limits (`MAX_USERS`, `MAX_BRANCHES`, `MAX_PRODUCTS`) in one request. The counters are `count(*)` over business-scoped rows (memberships, branches, products) using their `(business_id, …)` primary keys; the remaining cost is the three counts plus the override window lookup. Acceptable for Phase 1 (the merchant plan page and the limit checks); a cached usage snapshot is the Phase 2 optimisation if the POS hits this path per sale.
+- **Product create** (p95 35 ms) performs the writes in one transaction (product, one insert per locale — at most three, identifier registry via trigger, audit, outbox). No per-item fan-out beyond the locale count.
+- **List/search** (p95 ≤ 15 ms) read through `jsonb_object_agg` over the translation rows (primary key `(business_id, product_id, locale)`). Search is an `ILIKE '%term%'` match over the business's translation, SKU and barcode rows — bounded by the business scope, not indexed for infix matching. At Phase 1 catalog sizes (≤ 100 000 products on the pro plan) this is a bounded scan; a trigram index is the Phase 2 optimisation if search latency grows with catalog size.
 
 ## 4. Review checklist (§69) — outcome
 
 | Check | Result |
 |---|---|
-| No new slow query without an index | `0035` added indexes for audit/outbox/entitlement counters; `0036`/`0037` add translation and registry indexes (31 indexes total) |
-| No N+1 in list endpoints | Product list = 1 query + aggregation; members = 2 queries (members, roles); verified by reading the services and by the flat p95 across 60 iterations |
+| No new slow query without an index | `0035` adds delivery-queue (due, lease), invitation (business, status) and audit (created, tenant) indexes; `0036` adds `product_translations (business_id, lower(name))`; `0037` adds `catalog_identifiers (business_id, owner_type, owner_id)` (31 indexes total) |
+| No N+1 in list endpoints | Product list = one query with `jsonb_object_agg` over translations; members list = a fixed number of queries independent of member count (no per-member query); verified by reading the services and by the flat p95 across 60 iterations |
 | Pagination capped | `limit` ≤ 100 (400 above), cursor-based, stable order (`catalog.test.ts`) |
 | Connection budget | Pools opened per `PROCESS_MODE`; the harness runs 291 tests on a stock `max_connections=100` server after the leak fix |
 | Rate limiter cost | Redis limiter in production; the memory limiter in this baseline adds < 1 ms |

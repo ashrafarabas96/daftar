@@ -17,7 +17,7 @@
  *   npm run gate:phase1:release [-- --evidence=<file.json>] [--log-dir=<dir>]
  */
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 
@@ -153,7 +153,7 @@ const REQUIRED_DOCS = [
 ];
 
 const FORBIDDEN_ARTIFACT = /(^|\/)(\.env|.*\.log|dev-mailbox.*|.*\.tsbuildinfo|.*\.pem|.*\.key|.*\.zip)$/;
-const SKIP_DIRS = new Set(['node_modules', '.git', '.next', 'dist', 'build', '.gradle', 'coverage']);
+const SKIP_DIRS = new Set(['node_modules', '.git', '.next', 'dist', 'build', '.gradle', 'coverage', 'release']);
 const RAW_CREDENTIAL = /argon2id\$[A-Za-z0-9+/=]{20,}|-----BEGIN [A-Z ]*PRIVATE KEY-----/;
 
 function walk(dir: string, visit: (file: string) => void): void {
@@ -170,6 +170,22 @@ const steps: (() => boolean)[] = [
     inProcess(`toolchain: Node ${REQUIRED_NODE_MAJOR}.x`, () => {
       const major = Number(process.versions.node.split('.')[0]);
       return major === REQUIRED_NODE_MAJOR ? [] : [`node ${process.versions.node} — release acceptance runs on Node ${REQUIRED_NODE_MAJOR}.x (engines)`];
+    }),
+  () =>
+    inProcess('clean build outputs (build from source, like a fresh checkout)', () => {
+      for (const rel of [
+        'apps/api/dist',
+        'apps/web/.next',
+        'apps/admin/.next',
+        'packages/domain-core/dist',
+        'packages/shared-contracts/dist',
+        'packages/design-system/dist',
+        'apps/android/app/build',
+        'apps/android/build',
+      ]) {
+        rmSync(join(ROOT, rel), { recursive: true, force: true });
+      }
+      return [];
     }),
   () => run('migration manifest (frozen files unchanged)', npm, ['run', '-s', 'check:migrations']),
   () => run('phase 1 machine gate', npm, ['run', '-s', 'gate:phase1']),
