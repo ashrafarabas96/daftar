@@ -76,4 +76,4 @@ _تُسجَّل هنا: migrations contract، RLS isolation، auth rotation/reus
 | PB-45 | Android debug permits cleartext for `10.0.2.2` only; release denies cleartext everywhere and uses an https base URL | `NetworkSecurityConfigTest.kt` |
 | PB-46 | The release archive contains every input the reproduction commands read; the gate and acceptance run from the extracted archive without the repository | `scripts/export-release.ts`, gate step "self-contained source tree" |
 | PB-47 | A fresh PostgreSQL goes roles → 40 migrations → no-op → verified history; a foreign history row is rejected by the verifier | `scripts/db-from-zero.ts` (gate step) |
-| PB-48 | The FIRST run on a freshly installed `node_modules` starts the embedded PostgreSQL (binaries made executable synchronously, no chmod/spawn race) | `scripts/ensure-embedded-pg-binaries.ts`; proven by the archive reproduction run |
+| PB-48 | The embedded PostgreSQL starts even if an install ever ships non-executable binaries (the helper sets the bits synchronously, before the dependency's own un-awaited chmod) | `tests/integration/embedded-pg-binaries.test.ts` (strips the bit, proves restoration and idempotence) |
