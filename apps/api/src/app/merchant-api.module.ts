@@ -1,7 +1,7 @@
-import { Module, NestModule, MiddlewareConsumer, DynamicModule } from '@nestjs/common';
+import { Module, type DynamicModule, type MiddlewareConsumer, type NestModule } from '@nestjs/common';
 import type { AppConfig } from '../config';
 import { RequestContextMiddleware } from './request-context.middleware';
-import { coreProviders, httpImports, httpProviders, identityProviders, merchantInfraProviders, workerProviders, type RuntimeSeams } from './runtime';
+import { coreProviders, httpImports, httpProviders, identityProviders, merchantInfraProviders, type RuntimeSeams } from './runtime';
 import { AuthController } from '../modules/auth/auth.controller';
 import { TenancyService } from '../modules/tenancy/tenancy.service';
 import { StructureService } from '../modules/tenancy/structure.service';
@@ -13,42 +13,36 @@ import { CatalogService } from '../modules/catalog/catalog.service';
 import { MediaService } from '../modules/catalog/media.service';
 import { CatalogController } from '../modules/catalog/catalog.controller';
 import { PlatformController, HealthController } from '../modules/platform/platform.controller';
-import { AdminService } from '../modules/admin/admin.service';
-import { AdminController } from '../modules/admin/admin.controller';
-import { OutboxPublisher } from '../modules/outbox/publisher';
-import { CredentialDeliveryWorker } from '../modules/delivery/delivery-worker.service';
-
-export type AppModuleOptions = { config: AppConfig } & RuntimeSeams;
 
 /**
- * SINGLE-PROCESS composition (PROCESS_MODE=all): merchant + platform + worker
- * in one Nest application. Development/test ONLY — production configuration
- * validation rejects this mode (Directive §19); the separated runtimes are
- * MerchantApiModule / PlatformApiModule / WorkerModule (see runtime.ts).
+ * MERCHANT PROCESS (Directive §16). Composes the merchant HTTP surface and
+ * NOTHING else. Structurally absent here — not "disabled", absent:
+ *   - platform DB pool, worker DB pool, migration credentials (Database opens
+ *     pools per PROCESS_MODE; config validation refuses the secrets),
+ *   - credential DECRYPT key ring (CredentialPayloadProtector),
+ *   - AdminController / AdminService,
+ *   - CredentialDeliveryWorker / OutboxPublisher / SMTP delivery.
+ * Credential delivery here is ENCRYPT + ENQUEUE only (§21–22).
  */
 @Module({})
-export class AppModule implements NestModule {
-  static register(options: AppModuleOptions): DynamicModule {
+export class MerchantApiModule implements NestModule {
+  static register(options: { config: AppConfig } & RuntimeSeams): DynamicModule {
     const { config } = options;
     return {
-      module: AppModule,
+      module: MerchantApiModule,
       imports: httpImports(),
-      controllers: [AuthController, TenancyController, CatalogController, PlatformController, HealthController, EntitlementsController, AdminController],
+      controllers: [AuthController, TenancyController, CatalogController, PlatformController, HealthController, EntitlementsController],
       providers: [
         ...coreProviders(config),
         ...httpProviders(config, TenancyService),
         ...identityProviders(config, options),
         ...merchantInfraProviders(config, options),
-        ...workerProviders(config, options),
-        AdminService,
         TenancyService,
         StructureService,
         InvitationsService,
         EntitlementService,
         CatalogService,
         MediaService,
-        OutboxPublisher,
-        CredentialDeliveryWorker,
       ],
     };
   }

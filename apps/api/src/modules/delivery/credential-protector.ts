@@ -95,6 +95,7 @@ export class CredentialPayloadProtector {
 
 /** Build the ring from config: JSON ring preferred, legacy single key → v1. */
 export function credentialKeyRingFromConfig(config: {
+  NODE_ENV?: string | undefined;
   CREDENTIAL_PAYLOAD_KEYS?: string | undefined;
   CREDENTIAL_PAYLOAD_KEY?: string | undefined;
 }): CredentialKeyEntry[] {
@@ -123,7 +124,12 @@ export function credentialKeyRingFromConfig(config: {
     if (key.length !== 32) throw new Error('CREDENTIAL_PAYLOAD_KEY must be base64 of 32 bytes');
     return [{ version: CREDENTIAL_KEY_VERSION, key, status: 'active' }];
   }
-  // Non-production only (config validation forbids this in production).
+  // Directive §24: NO DEV_TEST_KEY fallback in production — config validation
+  // already fails startup, and this guard makes the fallback structurally
+  // impossible even if a caller bypasses loadConfig().
+  if (config.NODE_ENV === 'production') {
+    throw new Error('production requires CREDENTIAL_PAYLOAD_KEYS (or CREDENTIAL_PAYLOAD_KEY); the DEV_TEST_KEY fallback is forbidden');
+  }
   return [{ version: CREDENTIAL_KEY_VERSION, key: DEV_TEST_KEY, status: 'active' }];
 }
 

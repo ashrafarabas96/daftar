@@ -4,10 +4,20 @@ import type { Request } from 'express';
 import { AppError, type Permission } from '@daftar/domain-core';
 import { TokenService } from '../modules/auth/tokens';
 import { AuthService } from '../modules/auth/auth.service';
-import { TenancyService, type MembershipContext } from '../modules/tenancy/tenancy.service';
+import type { MembershipContext } from '../modules/tenancy/tenancy.service';
 import { patchContext } from '../infra/request-context';
 
 export const PERMISSION_KEY = 'daftar:required_permission';
+/**
+ * Runtime seam (Directive §15–17): the merchant process resolves business
+ * membership (TenancyService); the platform process has NO merchant context
+ * and provides a resolver that refuses X-Business-Id outright.
+ */
+export const MEMBERSHIP_RESOLVER = 'MEMBERSHIP_RESOLVER';
+export interface MembershipResolver {
+  resolveMembership(userId: string, businessId: string): Promise<MembershipContext>;
+  require(membership: MembershipContext, permission: Permission): void;
+}
 export const PUBLIC_KEY = 'daftar:public';
 
 /** Route metadata: required permission. Absence of metadata = authenticated only. */
@@ -36,7 +46,7 @@ export class AuthGuard implements CanActivate {
   constructor(
     @Inject(TokenService) private readonly tokens: TokenService,
     @Inject(AuthService) private readonly auth: AuthService,
-    @Inject(TenancyService) private readonly tenancy: TenancyService,
+    @Inject(MEMBERSHIP_RESOLVER) private readonly tenancy: MembershipResolver,
     @Inject(Reflector) private readonly reflector: Reflector,
   ) {}
 

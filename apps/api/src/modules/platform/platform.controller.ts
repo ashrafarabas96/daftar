@@ -1,4 +1,4 @@
-import { Controller, Get, HttpException, HttpStatus, Inject, Req } from '@nestjs/common';
+import { Controller, Get, HttpException, HttpStatus, Inject, Optional, Req } from '@nestjs/common';
 import type { Request } from 'express';
 import { getCountryDisplayName, getCurrencyDisplayName, supportedCurrencies, supportedCountries } from '@daftar/domain-core';
 import type { CountryDto, CurrencyDto, LocaleCode } from '@daftar/shared-contracts';
@@ -49,8 +49,10 @@ export class HealthController {
   constructor(
     @Inject('HEALTH_CHECK') private readonly check: () => Promise<boolean>,
     @Inject('APP_CONFIG') private readonly config: AppConfig,
-    @Inject('OBJECT_STORAGE') private readonly storage: ObjectStorage,
-    @Inject('CREDENTIAL_DELIVERY') private readonly delivery: CredentialDelivery,
+    // Per-process adapters (§17–18): the platform process has no object
+    // storage; only the single-process mode carries the delivery adapter.
+    @Optional() @Inject('OBJECT_STORAGE') private readonly storage: ObjectStorage | null,
+    @Optional() @Inject('CREDENTIAL_DELIVERY') private readonly delivery: CredentialDelivery | null,
     @Inject('RATE_LIMITER') private readonly limiter: RateLimiter,
   ) {}
 
@@ -79,7 +81,7 @@ export class HealthController {
     };
     let ok = db;
     let prodKindsOk = true;
-    if (mode === 'merchant-api' || mode === 'all') {
+    if ((mode === 'merchant-api' || mode === 'all') && this.storage) {
       const storageOk = await this.storage.healthCheck().catch(() => false);
       components['objectStorage'] = { kind: this.storage.kind, ok: storageOk };
       ok = ok && storageOk;
@@ -91,7 +93,7 @@ export class HealthController {
       ok = ok && limiterOk;
       prodKindsOk = prodKindsOk && this.limiter.kind === 'redis';
     }
-    if (mode === 'all') {
+    if (mode === 'all' && this.delivery) {
       const deliveryOk =
         this.delivery.kind === 'smtp'
           ? ((await (this.delivery as { healthCheck?: () => Promise<boolean> }).healthCheck?.().catch(() => false)) ?? false)

@@ -237,7 +237,7 @@ describe('provisioner boundary (§15–21): no bypass, EXECUTE-only authority', 
         await c.query(`SELECT set_config('app.actor_user_id', $1, true)`, [fx.strangerId]);
         try {
           // The owner's onboarding record is invisible from the stranger's actor scope.
-          const { rows } = await c.query(`SELECT * FROM provision_replay_operation($1)`, [ownerKey]);
+          const { rows } = await c.query<{ kind: string }>(`SELECT * FROM provision_replay_operation($1)`, [ownerKey]);
           return rows;
         } finally {
           await c.query('ROLLBACK');

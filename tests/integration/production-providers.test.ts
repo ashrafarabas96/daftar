@@ -59,7 +59,7 @@ describe('production provider wiring (Gate A §20–32)', () => {
   it('NODE_ENV=production + REDIS_URL → distributed Redis limiter', () => {
     // HTTP surface (platform-api) — strip worker/provisioner/credential secrets
     const { WORKER_DATABASE_URL: _w, PROVISIONER_DATABASE_URL: _pv, CREDENTIAL_PAYLOAD_KEY: _k, SMTP_URL: _s, ...platformEnv } = PROD_ENV;
-    const config = loadConfig({ ...platformEnv, PROCESS_MODE: 'platform-api' });
+    const config = loadConfig({ ...platformEnv, PROCESS_MODE: 'platform-api', CREDENTIAL_KMS_ENDPOINT: 'https://kms.example.com/encrypt' });
     const limiter = new RedisRateLimiter(config);
     expect(limiter.kind).toBe('redis');
     void limiter.close().catch(() => undefined);
@@ -113,7 +113,10 @@ describe('process-level secret separation (§XXV–XXXI)', () => {
   it('platform-api REJECTS worker secrets and credential keys', () => {
     expect(() => loadConfig({ ...PROD_ENV, PROCESS_MODE: 'platform-api' })).toThrow(/must NOT be set in PROCESS_MODE=platform-api/);
     const { WORKER_DATABASE_URL: _w, PROVISIONER_DATABASE_URL: _pv, CREDENTIAL_PAYLOAD_KEY: _k, SMTP_URL: _s, ...platformEnv } = PROD_ENV;
-    expect(() => loadConfig({ ...platformEnv, PROCESS_MODE: 'platform-api' })).not.toThrow();
+    // Directive §24: the platform HTTP runtime enqueues password resets, so it
+    // needs the KMS-style ENCRYPT provider too — never local key material.
+    expect(() => loadConfig({ ...platformEnv, PROCESS_MODE: 'platform-api' })).toThrow(/CREDENTIAL_KMS_ENDPOINT/);
+    expect(() => loadConfig({ ...platformEnv, PROCESS_MODE: 'platform-api', CREDENTIAL_KMS_ENDPOINT: 'https://kms.example.com/encrypt' })).not.toThrow();
   });
 
   it('worker: requires worker DB + key ring + SMTP; REJECTS merchant/platform DB URLs and JWT', () => {

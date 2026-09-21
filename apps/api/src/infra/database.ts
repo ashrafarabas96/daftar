@@ -45,30 +45,42 @@ export class Database implements OnModuleDestroy, OnModuleInit {
   private readonly expectedPrincipals: [Pool | null, string][] = [];
 
   constructor(@Inject('APP_CONFIG') private readonly config: AppConfig) {
-    // §XXV–XXXI: a process creates pools ONLY for the credentials it actually
-    // received. Absent URL → no pool → accidental cross-boundary use fails
-    // loudly ("role pool is not configured"), never silently connects
-    // somewhere default.
-    const fallback = config.isProd ? undefined : config.APP_DATABASE_URL;
-    this.pool = config.APP_DATABASE_URL ? new Pool({ connectionString: config.APP_DATABASE_URL, max: 10 }) : null;
-    this.platformPool = (config.PLATFORM_DATABASE_URL ?? fallback) ? new Pool({ connectionString: config.PLATFORM_DATABASE_URL ?? fallback, max: 4 }) : null;
-    this.identityPool =
-      (config.IDENTITY_DATABASE_URL ?? config.PLATFORM_DATABASE_URL ?? fallback)
-        ? new Pool({ connectionString: config.IDENTITY_DATABASE_URL ?? config.PLATFORM_DATABASE_URL ?? fallback, max: 4 })
-        : null;
-    this.resolverPool = (config.RESOLVER_DATABASE_URL ?? fallback) ? new Pool({ connectionString: config.RESOLVER_DATABASE_URL ?? fallback, max: 4 }) : null;
-    this.workerPool = (config.WORKER_DATABASE_URL ?? fallback) ? new Pool({ connectionString: config.WORKER_DATABASE_URL ?? fallback, max: 2 }) : null;
-    this.provisionerPool =
-      (config.PROVISIONER_DATABASE_URL ?? fallback) ? new Pool({ connectionString: config.PROVISIONER_DATABASE_URL ?? fallback, max: 2 }) : null;
+    // §XXV–XXXI + Directive §16–18: a process opens pools ONLY for the
+    // authority of its PROCESS_MODE. A URL that is present but outside the
+    // mode's authority is ignored; a pool that does not exist cannot be
+    // reached ("role pool is not configured") — never a silent fallback.
+    //   merchant-api: app + identity + resolver + provisioner
+    //   platform-api: platform + identity
+    //   worker:       worker only
+    //   all:          everything (dev/test; production rejects this mode)
+    const mode = config.PROCESS_MODE;
+    const owns = {
+      app: mode === 'all' || mode === 'merchant-api',
+      platform: mode === 'all' || mode === 'platform-api',
+      identity: mode !== 'worker',
+      resolver: mode === 'all' || mode === 'merchant-api',
+      worker: mode === 'all' || mode === 'worker',
+      provisioner: mode === 'all' || mode === 'merchant-api',
+    };
+    // Dev/test convenience ONLY for the single-process mode: a missing role
+    // URL falls back to the app URL. Separated runtimes never fall back.
+    const fallback = mode === 'all' && !config.isProd ? config.APP_DATABASE_URL : undefined;
+    const open = (owned: boolean, url: string | undefined, max: number): Pool | null => (owned && url ? new Pool({ connectionString: url, max }) : null);
+    this.pool = open(owns.app, config.APP_DATABASE_URL, 10);
+    this.platformPool = open(owns.platform, config.PLATFORM_DATABASE_URL ?? fallback, 4);
+    this.identityPool = open(owns.identity, config.IDENTITY_DATABASE_URL ?? (mode === 'all' ? config.PLATFORM_DATABASE_URL : undefined) ?? fallback, 4);
+    this.resolverPool = open(owns.resolver, config.RESOLVER_DATABASE_URL ?? fallback, 4);
+    this.workerPool = open(owns.worker, config.WORKER_DATABASE_URL ?? fallback, 2);
+    this.provisionerPool = open(owns.provisioner, config.PROVISIONER_DATABASE_URL ?? fallback, 2);
     // §32/§XXX startup verification: every explicitly-configured pool must be
     // authenticated as its intended DB role — per deployment mode, only the
     // pools this process actually owns are verified.
     if (config.isProd && this.pool) this.expectedPrincipals.push([this.pool, 'daftar_app']);
-    if (config.PLATFORM_DATABASE_URL) this.expectedPrincipals.push([this.platformPool, 'daftar_platform']);
-    if (config.IDENTITY_DATABASE_URL) this.expectedPrincipals.push([this.identityPool, 'daftar_identity']);
-    if (config.RESOLVER_DATABASE_URL) this.expectedPrincipals.push([this.resolverPool, 'daftar_resolver']);
-    if (config.WORKER_DATABASE_URL) this.expectedPrincipals.push([this.workerPool, 'daftar_worker']);
-    if (config.PROVISIONER_DATABASE_URL) this.expectedPrincipals.push([this.provisionerPool, 'daftar_provisioner']);
+    if (this.platformPool && config.PLATFORM_DATABASE_URL) this.expectedPrincipals.push([this.platformPool, 'daftar_platform']);
+    if (this.identityPool && config.IDENTITY_DATABASE_URL) this.expectedPrincipals.push([this.identityPool, 'daftar_identity']);
+    if (this.resolverPool && config.RESOLVER_DATABASE_URL) this.expectedPrincipals.push([this.resolverPool, 'daftar_resolver']);
+    if (this.workerPool && config.WORKER_DATABASE_URL) this.expectedPrincipals.push([this.workerPool, 'daftar_worker']);
+    if (this.provisionerPool && config.PROVISIONER_DATABASE_URL) this.expectedPrincipals.push([this.provisionerPool, 'daftar_provisioner']);
   }
 
   /** §32: fail startup on principal mismatch — SELECT current_user per pool. */
@@ -162,6 +174,22 @@ export class Database implements OnModuleDestroy, OnModuleInit {
     // `null` = no actor: only actor-independent lookups (invitation peek /
     // expire) may run; every mutating command raises PROV:FORBIDDEN.
     return this.run(this.provisionerPool, actorUserId ? { actorUserId } : {}, true, fn);
+  }
+
+  /** Names of the pools this process actually opened (boot-test evidence, §20). */
+  ownedPools(): string[] {
+    return (
+      [
+        ['app', this.pool],
+        ['platform', this.platformPool],
+        ['identity', this.identityPool],
+        ['resolver', this.resolverPool],
+        ['worker', this.workerPool],
+        ['provisioner', this.provisionerPool],
+      ] as const
+    )
+      .filter(([, p]) => p !== null)
+      .map(([n]) => n);
   }
 
   async healthCheck(): Promise<boolean> {

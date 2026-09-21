@@ -89,8 +89,11 @@ const EnvSchema = z
     // production must deploy the separated runtimes.
     if (mode === 'all') fail('PROCESS_MODE', 'PROCESS_MODE=all is forbidden in production (dev/test only)');
     if (mode !== 'worker') {
-      if (!c.APP_DATABASE_URL) fail('APP_DATABASE_URL', `${mode} requires the app DB URL (daftar_app role)`);
       if (!c.JWT_SECRET && !c.JWT_KEYS) fail('JWT_SECRET', `${mode} requires JWT_SECRET or JWT_KEYS`);
+    }
+    if (mode === 'all' || mode === 'merchant-api') {
+      // Directive §17: the platform process has no merchant (app-role) pool.
+      if (!c.APP_DATABASE_URL) fail('APP_DATABASE_URL', `${mode} requires the app DB URL (daftar_app role)`);
     }
     if (mode === 'worker') {
       for (const n of [
@@ -158,13 +161,14 @@ const EnvSchema = z
         fail('IDENTITY_DATABASE_URL', 'must be distinct from APP_DATABASE_URL and PLATFORM_DATABASE_URL (auth credentials ≠ platform admin credentials)');
       }
     }
-    if (mode === 'merchant-api') {
-      // Part C: merchant encrypts via a KMS-style provider only — it must
-      // never hold credential key material (encrypt OR decrypt) in prod.
+    if (mode === 'merchant-api' || mode === 'platform-api') {
+      // Part C / Directive §24: HTTP runtimes encrypt (password-reset and
+      // invitation enqueue) via a KMS-style provider only — they must never
+      // hold credential key material (encrypt OR decrypt) in production.
       if (!c.CREDENTIAL_KMS_ENDPOINT) {
         fail(
           'CREDENTIAL_KMS_ENDPOINT',
-          'production merchant runtime requires a KMS-style credential encrypt provider (local/DEV keys are structurally forbidden)',
+          `production ${mode} runtime requires a KMS-style credential encrypt provider (local/DEV keys are structurally forbidden)`,
         );
       }
     }
