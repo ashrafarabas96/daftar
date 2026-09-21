@@ -34,7 +34,7 @@
 | 69 | Performance review + baseline numbers | DONE | `tests/perf/phase1-baseline.test.ts`, `PHASE_1_PERFORMANCE_BASELINE.md` | this closure |
 | 70–73 | Release artifact hygiene, export with manifest + sibling SHA-256, `gate:phase1:release`, clean acceptance on Node 24.12.x | DONE | `scripts/phase1-release-gate.ts`, `scripts/export-release.ts`, golden 05 | 96a076c |
 | 74 | Command matrix executed on a clean environment | DONE | `PHASE_1_ACCEPTANCE_REPORT.md` evidence table (real durations/exit codes) | this closure |
-| 75 | Adversarial passes (auth abuse, RLS, privilege, delegation ceiling, mass assignment, cross-tenant) | DONE | `tests/security/*` (139 cases) | archive + this closure |
+| 75 | Adversarial passes (auth abuse, RLS, privilege, delegation ceiling, mass assignment, cross-tenant) | DONE | `tests/security/*` (155 cases in 15 files) | archive + this closure |
 | 76 | Final document set (21 documents) | DONE | `gate:phase1:release` step "release documents present and non-placeholder" | this closure |
 | 77 | Evidence with actual numbers | DONE | `PHASE_1_TEST_REPORT.md`, `PHASE_1_ACCEPTANCE_REPORT.md` | this closure |
 | 78 | Bug budget: P0 = P1 = security P2 = 0 | DONE | `PHASE_1_REGRESSION_REPORT.md` (open defects: 0) | — |

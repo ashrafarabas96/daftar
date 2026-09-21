@@ -6,7 +6,7 @@
 
 # PHASE 1: PASS
 
-القرار: **نجاح المرحلة الأولى** — بوابة الإصدار 24/24 على المستودع و24/24 من داخل أرشيف الإصدار المستخرج وحده، 443 حالة اختبار آلية ناجحة، 0 عيوب مفتوحة من فئة P0/P1/أمان P2، ولم يبدأ أي عمل من المرحلة الثانية.
+القرار: **نجاح المرحلة الأولى** — بوابة الإصدار 24/24 على المستودع و24/24 من داخل أرشيف الإصدار المستخرج وحده، **440** حالة اختبار آلية ناجحة في بوابة الإصدار (وحدة 58 + تكامل وأمن 326 + ذهبية 40 + أندرويد 16)، إضافة إلى 8 قياسات أداء تُرفع منفصلة (أي 448 تنفيذًا بالمجمل **شاملًا قياسات الأداء**)، 0 عيوب مفتوحة من فئة P0/P1/أمان P2، ولم يبدأ أي عمل من المرحلة الثانية.
 
 ## 1. Two independent runs, same code
 
@@ -41,7 +41,7 @@ Run B is the Blocker 3 reproduction: it proves the archive installs, builds, mig
 | 12 | lint (zero warnings) | PASS | 22.4s | |
 | 13 | typecheck (all workspaces) | PASS | 14.6s | |
 | 14 | unit tests | PASS | 2.3s | 58/58 (domain-core 45, shared-contracts 13) |
-| 15 | integration + security tests | PASS | 138.1s | 39 files, 323/323 |
+| 15 | integration + security tests | PASS | 138.1s | 39 files, 326/326 |
 | 16 | golden regression suite | PASS | 38.5s | 7 files, 40/40 |
 | 17 | API build | PASS | 5.9s | |
 | 18 | merchant web build | PASS | 28.4s | 16 pages × 3 locales |

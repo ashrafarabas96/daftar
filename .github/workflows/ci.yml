@@ -170,7 +170,13 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
+      # `packages` is set explicitly: the action's default installs the obsolete
+      # `tools` package, which no longer exists in the SDK repository and fails
+      # the job before Gradle runs. The build needs platform 35 + build-tools
+      # 35.0.0 (apps/android/app/build.gradle.kts compileSdk/targetSdk = 35).
       - uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools platforms;android-35 build-tools;35.0.0'
       - name: Android lint + unit tests + assemble
         run: |
           cd apps/android
@@ -209,5 +215,9 @@ jobs:
             | grep -v 'static-guards' | grep -v 'export-release'; then
             echo "raw credential material found"; exit 1
           fi
+      # GITHUB_TOKEN is REQUIRED by gitleaks-action v2 to scan a pull request;
+      # without it the action exits non-zero before scanning anything.
       - name: Secret scan (gitleaks)
         uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -17,7 +17,7 @@
 | Android Kotlin files / lines; string resources | 16 / 1 405; 57 × 3 locales |
 | Design-system components | 34 exported components + token sets |
 | Unit tests (domain-core + shared-contracts) | 58 |
-| Integration + security tests | 321 cases in 38 files |
+| Integration + security tests | 326 cases in 39 files |
 | Golden regression cases | 40 (P1-GOLD-01…40) |
 | Android JVM tests | 16 |
 | Static guard rules | 14 |
