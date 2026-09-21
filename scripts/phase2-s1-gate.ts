@@ -1,10 +1,25 @@
 #!/usr/bin/env tsx
 /**
- * PHASE 2 SLICE GATE — P2-S1 (directive §26).
+ * PHASE 2 SLICE GATE — P2-S1 (directive §26; made permanent by the P2-S1
+ * FREEZE directive §7).
  *
- * `npm run gate:phase2:s1` is the deterministic answer to "is the chart slice
- * actually done, and did it stay inside its boundary?". It refuses a tree in
- * which the slice is incomplete OR in which a later slice has leaked in.
+ * `npm run gate:phase2:s1` was the deterministic answer to "is the chart slice
+ * actually done, and did it stay inside its boundary?". P2-S1 is now ACCEPTED
+ * and FROZEN, so the question it answers has changed tense: "is the accepted
+ * chart slice still exactly what was accepted?". It is a PERMANENT regression
+ * gate.
+ *
+ * Two consequences follow, and they are the whole point of the transition:
+ *
+ *  - 0040 and 0041 MUST now be frozen, at the accepted hashes. The gate carries
+ *    its own copy of those hashes, so editing the migration and the manifest in
+ *    the same commit still fails here.
+ *  - The gate MUST NOT block later authorized slices. 0042, 0043 and their
+ *    successors are legitimate; this gate has no opinion about them beyond the
+ *    rules that are permanent anyway (G-3, authority isolation, AL-06). The
+ *    slice-boundary check is therefore scoped to P2-S1's own two files: it
+ *    proves P2-S1 did not contain a journal, not that the repository never
+ *    will.
  *
  * Structural checks run first — they are instant, and there is no point
  * running a test suite against a tree that already broke the migration
@@ -25,7 +40,17 @@ const MIGRATIONS_DIR = join(ROOT, 'infrastructure/database/migrations');
 const LIST_ONLY = process.argv.slice(2).includes('--list');
 const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 
-const S1_MIGRATIONS = ['0040_accounting_chart.sql', '0041_accounting_permissions.sql'] as const;
+/**
+ * P2-S1's two migrations, with the bytes the Tech Lead accepted at
+ * 18d2d1c0d38a726c503ce4b6cafe833de28a1bf6. Held here as a second, independent
+ * copy of the manifest's hashes — a single source would let one commit move the
+ * migration and its recorded hash together.
+ */
+const S1_MIGRATIONS = {
+  '0040_accounting_chart.sql': '535c8182a922a8363df2c791759c3e1eff2790757e402e6e28a41a5d113651db',
+  '0041_accounting_permissions.sql': '3aea7eedfd6ccb9d8fd93ed827d84abaa9923ccd3b01497960237098c19b1f77',
+} as const;
+const S1_MIGRATION_NAMES = Object.keys(S1_MIGRATIONS) as (keyof typeof S1_MIGRATIONS)[];
 
 /** The 21 Phase 2 system identities, from docs/DAFTAR_ACCOUNTING_RULES.md §2. */
 const REGISTRY: readonly (readonly [string, string, string])[] = [
@@ -80,18 +105,27 @@ const sqlFiles = (): string[] =>
 function checkMigrationBoundary(): void {
   console.log('P2-S1 GATE — migration boundary');
   const files = sqlFiles();
-  for (const name of S1_MIGRATIONS) {
-    if (!files.includes(name)) fail('migration-present', `${name} is missing — P2-S1 is not implemented`);
-    else
-      ok(
-        `${name} present (sha256 ${createHash('sha256')
-          .update(readFileSync(join(MIGRATIONS_DIR, name)))
-          .digest('hex')})`,
+
+  // The accepted bytes, checked against disk directly rather than against the
+  // manifest — the manifest is checked separately, below, and the two have to
+  // agree with the same third value for either to mean anything.
+  for (const name of S1_MIGRATION_NAMES) {
+    if (!files.includes(name)) {
+      fail('accepted-bytes', `${name} is missing — P2-S1 is accepted history and its files may not be removed`);
+      continue;
+    }
+    const sha = createHash('sha256')
+      .update(readFileSync(join(MIGRATIONS_DIR, name)))
+      .digest('hex');
+    if (sha !== S1_MIGRATIONS[name]) {
+      fail(
+        'accepted-bytes',
+        `${name} no longer matches the accepted P2-S1 bytes (expected ${S1_MIGRATIONS[name]}, got ${sha}) — a defect in frozen history needs a NEW migration`,
       );
+    } else {
+      ok(`${name} byte-for-byte as accepted (sha256 ${sha})`);
+    }
   }
-  const beyond = files.filter((f) => f.slice(0, 4) > '0041');
-  if (beyond.length > 0) fail('no-0042', `migration(s) beyond 0041 exist — P2-S2 is unauthorized: ${beyond.join(', ')}`);
-  else ok('no 0042+ migration exists');
 
   const manifest = JSON.parse(readFileSync(join(ROOT, 'infrastructure/database/MIGRATION_MANIFEST.json'), 'utf8')) as {
     frozenThrough: string;
@@ -112,36 +146,70 @@ function checkMigrationBoundary(): void {
       drifted += 1;
     }
   }
-  if (drifted === 0) ok(`${manifest.migrations.length} frozen Phase 1 migrations byte-for-byte unchanged`);
-  // 0040/0041 stay candidates until Tech Lead approval is the freeze boundary (§3, §30).
-  const frozen = new Set(manifest.migrations.map((m) => m.name));
-  for (const name of S1_MIGRATIONS) {
-    if (frozen.has(name)) fail('candidate-migrations', `${name} was frozen before Tech Lead acceptance (§3)`);
+  if (drifted === 0) ok(`${manifest.migrations.length} frozen migrations byte-for-byte unchanged`);
+
+  // P2-S1 is ACCEPTED, so the freeze is now the rule rather than the thing
+  // being withheld. The manifest must carry the accepted hashes, not merely
+  // some hash of the current file.
+  const frozen = new Map(manifest.migrations.map((m) => [m.name, m.sha256]));
+  for (const name of S1_MIGRATION_NAMES) {
+    const recorded = frozen.get(name);
+    if (recorded === undefined) {
+      fail('frozen-p2s1', `${name} is not in MIGRATION_MANIFEST.json — accepted P2-S1 migrations are frozen history (freeze directive §6)`);
+    } else if (recorded !== S1_MIGRATIONS[name]) {
+      fail('frozen-p2s1', `${name} is frozen at ${recorded}, but the accepted hash is ${S1_MIGRATIONS[name]}`);
+    } else {
+      ok(`${name} frozen at its accepted hash`);
+    }
   }
-  if (manifest.frozenThrough !== '0039_catalog_identifiers_owner_integrity.sql') {
-    fail('candidate-migrations', `frozenThrough moved past 0039 (${manifest.frozenThrough}) — P2-S1 migrations are candidates, not release history`);
+  if (manifest.frozenThrough < '0041_accounting_permissions.sql') {
+    fail('frozen-p2s1', `frozenThrough is ${manifest.frozenThrough} — it must include P2-S1 (0041_accounting_permissions.sql or later)`);
   } else {
-    ok('0040/0041 are candidate migrations — frozenThrough still 0039');
+    ok(`frozenThrough = ${manifest.frozenThrough} — P2-S1 is release history`);
   }
+
+  // Deliberately NOT checked: whether 0042+ exists. This gate is permanent and
+  // must never be the reason an authorized later slice cannot land (§7).
+  const later = files.filter((f) => f.slice(0, 4) > '0041');
+  ok(
+    later.length === 0
+      ? 'no migration after 0041 yet (not a requirement of this gate)'
+      : `${later.length} later migration(s) present — out of scope for the P2-S1 gate`,
+  );
 }
 
-// ── 2. Slice boundary: nothing from a later slice may exist ─────────────────
+// ── 2. Slice boundary: P2-S1 itself contains no later slice ─────────────────
+//
+// Scoped to 0040/0041. Before acceptance this scanned the whole tree, because
+// the whole tree WAS the slice. Now that P2-S1 is frozen the honest claim is
+// narrower and permanent: the accepted chart slice shipped no journal, no
+// binding registry and no posting primitive. Whether 0042 adds them is P2-S2's
+// gate to judge, not this one's (§7).
 function checkSliceBoundary(): void {
   console.log('P2-S1 GATE — slice boundary');
-  const schema = sqlFiles()
+  const sliceSql = S1_MIGRATION_NAMES.filter((f) => sqlFiles().includes(f))
     .map((f) => readFileSync(join(MIGRATIONS_DIR, f), 'utf8'))
     .join('\n');
   let leaked = 0;
   for (const surface of FUTURE_SLICE_SURFACES) {
     const re = new RegExp(`CREATE\\s+(?:TABLE|OR\\s+REPLACE\\s+FUNCTION|FUNCTION)\\s+(?:IF\\s+NOT\\s+EXISTS\\s+)?${surface}\\b`, 'i');
-    if (re.test(schema)) {
-      fail('slice-boundary', `${surface} exists — that is P2-S2/P2-S3 and is unauthorized in this slice`);
+    if (re.test(sliceSql)) {
+      fail('slice-boundary', `${surface} is created by a P2-S1 migration — the accepted chart slice contained no such surface`);
       leaked += 1;
     }
   }
-  if (leaked === 0) ok('no journal, binding registry or posting primitive in the tree');
+  if (leaked === 0) ok('accepted P2-S1 migrations create no journal, binding registry or posting primitive');
+
+  // AL-06 is a permanent accounting decision, not a slice boundary: system
+  // accounts localize through i18n keys, in every slice. So this one scans the
+  // whole tree, forever.
+  const schema = sqlFiles()
+    .map((f) => readFileSync(join(MIGRATIONS_DIR, f), 'utf8'))
+    .join('\n');
   if (/CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?account_translations\b/i.test(schema)) {
     fail('slice-boundary', 'account_translations exists — AL-06 resolved that system accounts localize through i18n keys');
+  } else {
+    ok('AL-06 holds: no account_translations table anywhere in the migration tree');
   }
 }
 
@@ -233,7 +301,7 @@ function runSteps(): void {
 
 if (LIST_ONLY) {
   console.log('P2-S1 GATE plan:');
-  console.log('  structural: migration boundary, slice boundary, 21-key registry, guard G-3, authority isolation');
+  console.log('  structural: accepted-byte freeze, slice boundary, 21-key registry, guard G-3, authority isolation');
   for (const s of STEPS) console.log(`  command:    ${s.cmd} ${s.args.join(' ')}`);
   process.exit(0);
 }

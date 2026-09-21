@@ -4,20 +4,34 @@
 >
 > **ما هذه الوثيقة.** سجل أدلة الشريحة P2-S1. العمود الحاسم هو الحالة: **ENFORCED** يعني أن قاعدة البيانات أو الـCI ترفض المخالفة اليوم ويوجد اختبار يثبت ذلك. لا شيء في دفتر القيود (journal) مُنفَّذ في هذه الشريحة.
 
+## 0. Status: ACCEPTED / FROZEN
+
+**P2-S1: ACCEPTED / FROZEN.**
+
+- Tech Lead verdict: **P2-S1 — FINAL PASS**, at accepted head `18d2d1c0d38a726c503ce4b6cafe833de28a1bf6`.
+- Freeze HEAD: `__FREEZE_HEAD__`
+- Frozen hashes:
+  - `0040_accounting_chart.sql` = `535c8182a922a8363df2c791759c3e1eff2790757e402e6e28a41a5d113651db`
+  - `0041_accounting_permissions.sql` = `3aea7eedfd6ccb9d8fd93ed827d84abaa9923ccd3b01497960237098c19b1f77`
+
+`قُبِلَت P2-S1 وجُمِّدَت هجرتاها. من هذه اللحظة لا تُعدَّل بايتات 0040 أو 0041 أبدًا؛ أي خلل يُصحَّح بهجرة جديدة.`
+
 - Branch: `phase/2-accounting-core` · Draft PR: **#2** (stays draft for all of Phase 2)
 - Base accepted P2-S0 head: `3b1d2e23baf754d6a1a133f4d9a890f5a0d11e22`
 - Phase 1 baseline: `2e01dbab3df2cf112cb0a7d5ac827a5578c61b81`
 
-## 1. Candidate migrations — not yet frozen
+## 1. Frozen migrations
 
-| migration | SHA-256 |
-|---|---|
-| `0040_accounting_chart.sql` | `535c8182a922a8363df2c791759c3e1eff2790757e402e6e28a41a5d113651db` |
-| `0041_accounting_permissions.sql` | `3aea7eedfd6ccb9d8fd93ed827d84abaa9923ccd3b01497960237098c19b1f77` |
+| migration | SHA-256 | state |
+|---|---|---|
+| `0040_accounting_chart.sql` | `535c8182a922a8363df2c791759c3e1eff2790757e402e6e28a41a5d113651db` | FROZEN |
+| `0041_accounting_permissions.sql` | `3aea7eedfd6ccb9d8fd93ed827d84abaa9923ccd3b01497960237098c19b1f77` | FROZEN |
 
-`MIGRATION_MANIFEST.json` is **unchanged**: `frozenThrough` is still `0039_catalog_identifiers_owner_integrity.sql` and the two files above are absent from it. That is deliberate (directive §3, §30) — a defect found during independent review can be corrected in place instead of consuming a P2-S2 migration number. Freezing them is a separate, explicit instruction after acceptance. The P2-S1 gate **fails** if either file is frozen early, and `tests/integration/accounting-guards.test.ts` asserts the same.
+`MIGRATION_MANIFEST.json` now lists `0000` → `0041` in canonical order — 42 entries — with `frozenThrough = 0041_accounting_permissions.sql`. Migrations `0000`–`0039` are byte-for-byte the Phase 1 release bytes; the freeze commit only appended.
 
-Migrations `0000`–`0039` are byte-for-byte unchanged (40 manifest hashes verified). No `0042` or later file exists.
+While P2-S1 was under review these two files were deliberately **candidates** (directive §3, §30), so that a defect found in review could be corrected in place instead of consuming a P2-S2 migration number. That was used twice — the runtime authority isolation and the managed-PostgreSQL portability correction both landed inside `0040`. Acceptance closed that window. `npm run gate:phase2:s1` now asserts the opposite of what it asserted before: both files **must** be frozen, at the two hashes above. The gate holds its own copy of those hashes, so a commit that edits a migration and its manifest entry together still fails, and `tests/integration/accounting-guards.test.ts` re-proves it against disk and manifest independently.
+
+The P2-S1 gate is now a **permanent regression gate**. It has no opinion about whether `0042` or later migrations exist: a gate for an accepted slice must never be the reason a later authorized slice cannot land.
 
 ## 2. Status legend
 

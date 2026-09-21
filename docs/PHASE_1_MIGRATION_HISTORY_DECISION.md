@@ -66,7 +66,7 @@ disposable databases, which were reset).
 
 - `0038_provisioning_assertions.sql` — provisioning assertions (Blocker 1). Deploy order: apply 0038, install the assertion key with `npm run bootstrap:provisioning-key` under the platform principal, deploy the merchant API carrying `PROVISIONING_ASSERTION_KEY`. Rolling the API back across 0038 without rolling the migration back makes provisioning fail closed (every command raises `PROV:FORBIDDEN`); nothing is corrupted, but onboarding and invitation acceptance stop until the API is rolled forward.
 - `0039_catalog_identifiers_owner_integrity.sql` — FK-backed owner columns, DML revoked from runtime roles, SECURITY DEFINER sync routine (Blocker 2). Backward compatible with the pre-0039 API (the trigger writes the new columns itself).
-- `frozenThrough` is now `0039_catalog_identifiers_owner_integrity.sql`; the gate's DB-from-zero step refuses any migration newer than `frozenThrough`.
+- `frozenThrough` became `0039_catalog_identifiers_owner_integrity.sql` at that point, and the gate's DB-from-zero step refused any migration newer than `frozenThrough`. Both statements describe the Phase 1 release and have since moved on — see *Phase 2 freeze (P2-S1)* at the end of this document.
 
 ## Phase 1 release freeze (§51–54): 0028–0037 appended to the frozen set
 
@@ -92,3 +92,38 @@ Rules that held while 0028–0037 were written:
   proves every row was copied into `product_translations` /
   `category_translations`; the 0035-checkpoint upgrade test replays this on
   real data.
+
+## Phase 2 freeze (P2-S1): 0040–0041 appended to the frozen set
+
+Phase 1 history is unchanged by this section. `0000`–`0039` are exactly the
+bytes frozen at the Phase 1 release, and nothing in Phase 2 edits them.
+
+On Tech Lead acceptance of P2-S1 at
+`18d2d1c0d38a726c503ce4b6cafe833de28a1bf6`, the manifest was extended from
+`0039` to `0041_accounting_permissions.sql`:
+
+| Migration | SHA-256 |
+| --- | --- |
+| `0040_accounting_chart.sql` | `535c8182a922a8363df2c791759c3e1eff2790757e402e6e28a41a5d113651db` |
+| `0041_accounting_permissions.sql` | `3aea7eedfd6ccb9d8fd93ed827d84abaa9923ccd3b01497960237098c19b1f77` |
+
+The manifest now lists `0000` → `0041` in canonical order, 42 entries, with
+`frozenThrough = 0041_accounting_permissions.sql`. From this commit onward a
+defect in `0040` or `0041` is corrected by a NEW migration, never by editing
+their bytes.
+
+Two mechanics changed with this freeze, and both are deliberate:
+
+- **Candidates are a release-mode question.** The Phase 1 rule above —
+  DB-from-zero refusing any migration newer than `frozenThrough` — ran on
+  every push, which made a candidate migration impossible mid-phase. That
+  refusal now belongs to `--release` (`scripts/db-from-zero.ts`), which
+  `scripts/phase1-release-gate.ts` passes; outside release mode a candidate is
+  still proven applied exactly once with a history hash equal to the file on
+  disk. A release therefore still cannot ship an unfrozen migration.
+- **`gate:phase2:s1` is now a permanent regression gate.** It asserts that
+  `0040`/`0041` ARE frozen, at the two hashes above, held as a second copy
+  inside the gate so that moving a migration and its manifest entry in one
+  commit still fails. It deliberately has no opinion about whether `0042` and
+  later exist: a gate for an accepted slice must never be the reason a later
+  authorized slice cannot land.

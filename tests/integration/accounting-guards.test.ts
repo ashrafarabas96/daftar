@@ -121,15 +121,28 @@ describe('accounting localization (AL-06)', () => {
   });
 });
 
-/** Directive §3 / §21-D — the Phase 1 migration history is untouched. */
-describe('P2-S1 migration boundary', () => {
+/**
+ * Directive §3 / §21-D, superseded by the P2-S1 FREEZE directive §6–§7.
+ *
+ * Until Tech Lead acceptance these tests asserted the opposite of what they now
+ * assert: that 0040/0041 were NOT frozen, because freezing them early would
+ * have made a review correction impossible. P2-S1 is accepted at
+ * 18d2d1c0d38a726c503ce4b6cafe833de28a1bf6, so the freeze is now the invariant,
+ * pinned to the accepted hashes rather than to whatever is on disk.
+ */
+describe('P2-S1 migration freeze', () => {
+  /** The bytes the Tech Lead accepted. Never recomputed from disk. */
+  const ACCEPTED = {
+    '0040_accounting_chart.sql': '535c8182a922a8363df2c791759c3e1eff2790757e402e6e28a41a5d113651db',
+    '0041_accounting_permissions.sql': '3aea7eedfd6ccb9d8fd93ed827d84abaa9923ccd3b01497960237098c19b1f77',
+  } as const;
   const manifest = JSON.parse(readFileSync(join(ROOT, 'infrastructure/database/MIGRATION_MANIFEST.json'), 'utf8')) as {
     frozenThrough: string;
     migrations: { name: string; sha256: string }[];
   };
 
-  it('D: every frozen 0000–0039 hash is unchanged', () => {
-    expect(manifest.migrations).toHaveLength(40);
+  it('D: every frozen 0000–0041 hash is unchanged', () => {
+    expect(manifest.migrations).toHaveLength(42);
     for (const entry of manifest.migrations) {
       const sha = createHash('sha256')
         .update(readFileSync(join(MIGRATIONS, entry.name)))
@@ -138,16 +151,44 @@ describe('P2-S1 migration boundary', () => {
     }
   });
 
-  it('0040 and 0041 exist and are NOT yet frozen — Tech Lead approval is the freeze boundary (§3, §30)', () => {
+  it('0040 and 0041 are frozen at the accepted hashes, on disk and in the manifest (freeze §6)', () => {
     const files = readdirSync(MIGRATIONS)
       .filter((f) => f.endsWith('.sql'))
       .sort();
-    expect(files).toContain('0040_accounting_chart.sql');
-    expect(files).toContain('0041_accounting_permissions.sql');
-    expect(manifest.frozenThrough).toBe('0039_catalog_identifiers_owner_integrity.sql');
-    const frozen = new Set(manifest.migrations.map((m) => m.name));
-    expect(frozen.has('0040_accounting_chart.sql')).toBe(false);
-    expect(frozen.has('0041_accounting_permissions.sql')).toBe(false);
+    const frozen = new Map(manifest.migrations.map((m) => [m.name, m.sha256]));
+    for (const [name, sha256] of Object.entries(ACCEPTED)) {
+      expect(files, name).toContain(name);
+      // On disk AND in the manifest, both against the accepted literal — so a
+      // commit that edits the migration and its manifest entry together still
+      // fails here.
+      expect(
+        createHash('sha256')
+          .update(readFileSync(join(MIGRATIONS, name)))
+          .digest('hex'),
+        `${name} on disk`,
+      ).toBe(sha256);
+      expect(frozen.get(name), `${name} in manifest`).toBe(sha256);
+    }
+    expect(manifest.frozenThrough).toBe('0041_accounting_permissions.sql');
+  });
+
+  it('the manifest lists 0000→0041 in canonical order with no hole', () => {
+    const names = manifest.migrations.map((m) => m.name);
+    expect(names).toEqual([...names].sort());
+    expect(new Set(names).size).toBe(names.length);
+    expect(names[0]).toMatch(/^0000_/);
+    expect(names.at(-1)).toBe('0041_accounting_permissions.sql');
+    for (const [i, name] of names.entries()) {
+      expect(name.slice(0, 4), name).toBe(String(i).padStart(4, '0'));
+    }
+  });
+
+  it('the P2-S1 gate carries the accepted hashes as its own second source', () => {
+    const gate = readFileSync(join(ROOT, 'scripts/phase2-s1-gate.ts'), 'utf8');
+    for (const [name, sha256] of Object.entries(ACCEPTED)) {
+      expect(gate, name).toContain(name);
+      expect(gate, `${name} hash`).toContain(sha256);
+    }
   });
 
   /**
@@ -166,9 +207,17 @@ describe('P2-S1 migration boundary', () => {
     expect(fromZero).toMatch(/candidate migration \$\{f\} history hash does not match the file on disk/);
   });
 
-  it('no 0042 or later migration exists — P2-S2 is unauthorized (§34)', () => {
-    const beyond = readdirSync(MIGRATIONS).filter((f) => f.endsWith('.sql') && f.slice(0, 4) > '0041');
-    expect(beyond).toEqual([]);
+  /**
+   * Freeze directive §7. This test used to assert that no 0042 existed. That
+   * rule was correct only while P2-S1 was under review; as a permanent gate it
+   * would block every authorized slice that follows. The rule it is replaced
+   * by is the one that stays true forever: the P2-S1 gate must not refuse a
+   * tree merely because a later migration is present.
+   */
+  it('the P2-S1 gate does not block later authorized migrations (§7)', () => {
+    const gate = readFileSync(join(ROOT, 'scripts/phase2-s1-gate.ts'), 'utf8');
+    expect(gate).not.toMatch(/fail\('no-0042'/);
+    expect(gate).toMatch(/must never be the reason an authorized later slice cannot land/);
   });
 });
 
