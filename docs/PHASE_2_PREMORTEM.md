@@ -66,3 +66,4 @@
 3. Accounting rules, multi-currency, transaction map, data model, source-of-truth matrix, state machines and golden-suite documents exist and are unchanged since Phase 0.
 4. Performance baseline recorded, so the money core can be compared against it.
 5. `PHASE_2_ACCOUNTING_EXECUTION_PLAN.md` reviewed and accepted as the execution contract.
+6. **`PHASE_2_ARCHITECTURE_LOCK.md` approved by the Tech Lead.** It resolves AL-01…AL-18 — the eighteen decisions that must be settled before migration `0040` exists — and wins over the execution plan wherever the two differ. Implementation starts at slice P2-S1, not before.
