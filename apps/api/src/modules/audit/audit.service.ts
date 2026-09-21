@@ -63,10 +63,12 @@ export class OutboxService {
   constructor(@Inject(Database) private readonly db: Database) {}
 
   async emitTx(client: PoolClient, event: OutboxEvent): Promise<void> {
-    await client.query(
-      `INSERT INTO outbox_events (tenant_id, business_id, type, payload) VALUES ($1, $2, $3, $4)`,
-      [event.tenantId ?? null, event.businessId ?? null, event.type, JSON.stringify(event.payload)],
-    );
+    await client.query(`INSERT INTO outbox_events (tenant_id, business_id, type, payload) VALUES ($1, $2, $3, $4)`, [
+      event.tenantId ?? null,
+      event.businessId ?? null,
+      event.type,
+      JSON.stringify(event.payload),
+    ]);
   }
 
   /**

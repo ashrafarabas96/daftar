@@ -34,7 +34,9 @@ const manifest = JSON.parse(readFileSync(MANIFEST, 'utf8')) as {
 const frozen = new Map(manifest.migrations.map((m) => [m.name, m.sha256]));
 
 const onDisk = new Map<string, string>();
-for (const f of readdirSync(MIGRATIONS_DIR).filter((f) => f.endsWith('.sql')).sort()) {
+for (const f of readdirSync(MIGRATIONS_DIR)
+  .filter((f) => f.endsWith('.sql'))
+  .sort()) {
   onDisk.set(f, sha(readFileSync(join(MIGRATIONS_DIR, f))));
 }
 
@@ -52,9 +54,7 @@ for (const [name, hash] of frozen) {
 
 const pool = new Pool({ connectionString: url, max: 1 });
 try {
-  const { rows } = await pool.query<{ name: string }>(
-    `SELECT name FROM schema_migrations ORDER BY name`,
-  );
+  const { rows } = await pool.query<{ name: string }>(`SELECT name FROM schema_migrations ORDER BY name`);
   const applied = rows.map((r) => r.name);
   if (applied.length === 0) fail('schema_migrations is empty — database has no migration history');
 

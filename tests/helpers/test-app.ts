@@ -47,9 +47,8 @@ async function ping(): Promise<boolean> {
 }
 
 async function applyBootstrap(): Promise<void> {
-  const bootstrap = (await readFile(
-    join(__dirname, '../../infrastructure/database/bootstrap.sql'), 'utf8',
-  )).replaceAll('__APP_DB_PASSWORD__', APP_DB_PASSWORD)
+  const bootstrap = (await readFile(join(__dirname, '../../infrastructure/database/bootstrap.sql'), 'utf8'))
+    .replaceAll('__APP_DB_PASSWORD__', APP_DB_PASSWORD)
     .replaceAll('__PLATFORM_DB_PASSWORD__', PLATFORM_DB_PASSWORD)
     .replaceAll('__WORKER_DB_PASSWORD__', WORKER_DB_PASSWORD)
     .replaceAll('__RESOLVER_DB_PASSWORD__', RESOLVER_DB_PASSWORD)
@@ -173,6 +172,20 @@ export interface TestAppOptions {
   configOverrides?: Record<string, string>;
 }
 
+/** Registry of apps that have not been closed yet (see tests/helpers/setup.ts). */
+const openApps = new Set<TestApp>();
+
+export function openTestApps(): readonly TestApp[] {
+  return [...openApps];
+}
+
+/** Close (and forget) every open app matching the predicate. Idempotent. */
+export async function closeTestApps(predicate: (app: TestApp) => boolean): Promise<void> {
+  for (const app of [...openApps]) {
+    if (predicate(app)) await app.close();
+  }
+}
+
 export async function createTestApp(options: TestAppOptions = {}): Promise<TestApp> {
   await ensurePostgres(); // each vitest fork is a fresh process — ping-reuse the shared instance
   const config: AppConfig = loadConfig({
@@ -190,17 +203,27 @@ export async function createTestApp(options: TestAppOptions = {}): Promise<TestA
     ...(options.configOverrides ?? {}),
   });
   const moduleRef = await Test.createTestingModule({
-    imports: [AppModule.register({ config, ...(options.delivery ? { delivery: options.delivery } : {}), ...(options.outboxSink ? { outboxSink: options.outboxSink } : {}), ...(options.storage ? { storage: options.storage } : {}) })],
+    imports: [
+      AppModule.register({
+        config,
+        ...(options.delivery ? { delivery: options.delivery } : {}),
+        ...(options.outboxSink ? { outboxSink: options.outboxSink } : {}),
+        ...(options.storage ? { storage: options.storage } : {}),
+      }),
+    ],
   }).compile();
   const app = moduleRef.createNestApplication();
   await app.init();
   const request = supertest(app.getHttpServer());
-  return {
+  const testApp: TestApp = {
     app,
     request,
     worker: moduleRef.get(CredentialDeliveryWorker),
     close: async () => {
+      if (!openApps.delete(testApp)) return; // already closed — idempotent
       await app.close();
     },
   };
+  openApps.add(testApp);
+  return testApp;
 }

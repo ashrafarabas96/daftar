@@ -100,8 +100,15 @@ export interface InvitationDto {
 }
 
 export type SubscriptionStateDto =
-  | 'trial' | 'active' | 'grace_period' | 'past_due' | 'paused'
-  | 'cancel_at_period_end' | 'cancelled' | 'expired' | 'complimentary';
+  | 'trial'
+  | 'active'
+  | 'grace_period'
+  | 'past_due'
+  | 'paused'
+  | 'cancel_at_period_end'
+  | 'cancelled'
+  | 'expired'
+  | 'complimentary';
 
 export interface EntitlementSummaryDto {
   planKey: string;

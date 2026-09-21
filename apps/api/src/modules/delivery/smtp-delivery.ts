@@ -37,9 +37,10 @@ export class SmtpDelivery implements CredentialDelivery {
 
   private async deliver(kind: 'password-reset' | 'invitation', email: string, token: string): Promise<void> {
     const subject = kind === 'password-reset' ? 'DAFTAR password reset' : 'DAFTAR invitation';
-    const text = kind === 'password-reset'
-      ? `Use this code to reset your DAFTAR password: ${token}\nIf you did not request this, ignore this message.`
-      : `You have been invited to DAFTAR. Use this code to accept: ${token}`;
+    const text =
+      kind === 'password-reset'
+        ? `Use this code to reset your DAFTAR password: ${token}\nIf you did not request this, ignore this message.`
+        : `You have been invited to DAFTAR. Use this code to accept: ${token}`;
     try {
       await this.transporter.sendMail({ from: this.from, to: email, subject, text });
     } catch (e) {

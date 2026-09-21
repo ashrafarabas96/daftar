@@ -20,9 +20,7 @@ export class EntitlementsController {
   async summary(@Membership() m: MembershipContext): Promise<EntitlementSummaryDto> {
     return this.db.withTransaction({ tenantId: m.tenantId, businessId: m.businessId }, async (c) => {
       const state = await this.entitlements.getState(c, m.businessId);
-      const features = (
-        await c.query<{ key: string }>('SELECT key FROM features ORDER BY key')
-      ).rows;
+      const features = (await c.query<{ key: string }>('SELECT key FROM features ORDER BY key')).rows;
       const limits: EntitlementSummaryDto['limits'] = [];
       for (const key of LIMIT_KEYS) {
         limits.push({
@@ -36,9 +34,14 @@ export class EntitlementsController {
         featureList.push({ key: f.key, enabled: await this.entitlements.hasFeature(c, m.businessId, f.key) });
       }
       return {
-        planKey: state.planKey, planVersion: state.planVersion, state: state.state,
-        effectiveState: state.effectiveState, trialEndsAt: state.trialEndsAt,
-        periodEndsAt: state.periodEndsAt, features: featureList, limits,
+        planKey: state.planKey,
+        planVersion: state.planVersion,
+        state: state.state,
+        effectiveState: state.effectiveState,
+        trialEndsAt: state.trialEndsAt,
+        periodEndsAt: state.periodEndsAt,
+        features: featureList,
+        limits,
       };
     });
   }

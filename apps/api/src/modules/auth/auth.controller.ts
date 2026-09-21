@@ -84,7 +84,9 @@ export class AuthController {
   @Get('me')
   async me(@Principal() p: PrincipalInfo): Promise<MeDto> {
     return {
-      userId: p.userId, email: p.email, displayName: p.displayName,
+      userId: p.userId,
+      email: p.email,
+      displayName: p.displayName,
       preferredLocale: p.preferredLocale as MeDto['preferredLocale'],
     };
   }

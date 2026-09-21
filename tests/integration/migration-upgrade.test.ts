@@ -38,7 +38,9 @@ function bootstrapSql(): string {
 /** Copy migration files up to (and including) `upTo` into a temp dir. */
 function migrationsUpTo(upTo: string): string {
   const dir = mkdtempSync(join(tmpdir(), 'daftar-mig-'));
-  for (const f of readdirSync(MIGRATIONS_DIR).filter((f) => f.endsWith('.sql')).sort()) {
+  for (const f of readdirSync(MIGRATIONS_DIR)
+    .filter((f) => f.endsWith('.sql'))
+    .sort()) {
     if (f <= upTo) cpSync(join(MIGRATIONS_DIR, f), join(dir, f));
   }
   return dir;
@@ -69,9 +71,7 @@ describe('migration upgrade path: pre-encryption schema → latest (§13–16)',
 
       // 2) Insert representative legacy rows (plaintext secrets, as pre-0025).
       const user = (
-        await pool.query<{ id: string }>(
-          `INSERT INTO users (email, password_hash, display_name) VALUES ('upgrade@test.dev', 'x', 'Upgrade') RETURNING id`,
-        )
+        await pool.query<{ id: string }>(`INSERT INTO users (email, password_hash, display_name) VALUES ('upgrade@test.dev', 'x', 'Upgrade') RETURNING id`)
       ).rows[0];
       const prt = (
         await pool.query<{ id: string }>(
@@ -92,12 +92,12 @@ describe('migration upgrade path: pre-encryption schema → latest (§13–16)',
           `INSERT INTO businesses (tenant_id, name, store_slug, country_code, base_currency, timezone)
            VALUES ($1, 'Upgrade Biz', 'upgrade-biz', 'JO', 'JOD', 'Asia/Amman') RETURNING id`,
           [tenant?.id],
-      )).rows[0];
-      const role = (
-        await pool.query<{ id: string }>(
-          `INSERT INTO business_roles (business_id, key, name, is_system) VALUES ($1, 'clerk', 'Clerk', false) RETURNING id`,
-          [biz?.id],
         )
+      ).rows[0];
+      const role = (
+        await pool.query<{ id: string }>(`INSERT INTO business_roles (business_id, key, name, is_system) VALUES ($1, 'clerk', 'Clerk', false) RETURNING id`, [
+          biz?.id,
+        ])
       ).rows[0];
       const inv = (
         await pool.query<{ id: string }>(
@@ -127,9 +127,7 @@ describe('migration upgrade path: pre-encryption schema → latest (§13–16)',
       expect(applied).toContain('0025_credential_payload_protection.sql');
 
       // 4) No plaintext column, no plaintext anywhere.
-      const cols = await pool.query<{ column_name: string }>(
-        `SELECT column_name FROM information_schema.columns WHERE table_name = 'credential_deliveries'`,
-      );
+      const cols = await pool.query<{ column_name: string }>(`SELECT column_name FROM information_schema.columns WHERE table_name = 'credential_deliveries'`);
       expect(cols.rows.map((c) => c.column_name)).not.toContain('secret');
 
       const rows = (
@@ -185,9 +183,7 @@ describe('migration upgrade path: pre-encryption schema → latest (§13–16)',
       rmSync(preDir, { recursive: true, force: true });
       // Representative 0026-state data: a published plan version exists with trial_days.
       const pv = (
-        await pool.query<{ state: string; trial_days: number }>(
-          `SELECT state, trial_days FROM plan_versions WHERE plan_key = 'free' ORDER BY version`,
-        )
+        await pool.query<{ state: string; trial_days: number }>(`SELECT state, trial_days FROM plan_versions WHERE plan_key = 'free' ORDER BY version`)
       ).rows;
       expect(pv.length).toBeGreaterThan(0);
       // Upgrade to latest.
@@ -197,9 +193,7 @@ describe('migration upgrade path: pre-encryption schema → latest (§13–16)',
       const again = await runMigrations(url2);
       expect(again).toEqual([]);
       // Published rows remain frozen under the hardened lifecycle.
-      const pub = (await pool.query<{ id: string }>(
-        `SELECT id FROM plan_versions WHERE state = 'PUBLISHED' LIMIT 1`,
-      )).rows[0];
+      const pub = (await pool.query<{ id: string }>(`SELECT id FROM plan_versions WHERE state = 'PUBLISHED' LIMIT 1`)).rows[0];
       if (pub) {
         await expect(pool.query(`UPDATE plan_versions SET trial_days = 3 WHERE id = $1`, [pub.id])).rejects.toThrow();
       }

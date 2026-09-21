@@ -15,14 +15,10 @@ describe('auth abuse rate limiting (layered)', () => {
     try {
       await resetData();
       for (let i = 0; i < 30; i++) {
-        const res = await t.request
-          .post('/v1/auth/login')
-          .send({ email: `spray-${i}@example.com`, password: 'wrong-password-1' });
+        const res = await t.request.post('/v1/auth/login').send({ email: `spray-${i}@example.com`, password: 'wrong-password-1' });
         expect(res.status).toBe(401);
       }
-      const blocked = await t.request
-        .post('/v1/auth/login')
-        .send({ email: 'spray-31@example.com', password: 'wrong-password-1' });
+      const blocked = await t.request.post('/v1/auth/login').send({ email: 'spray-31@example.com', password: 'wrong-password-1' });
       expect(blocked.status).toBe(429);
       expect(blocked.body.error.code).toBe('RATE_LIMITED');
     } finally {
@@ -35,19 +31,13 @@ describe('auth abuse rate limiting (layered)', () => {
     try {
       await resetData();
       for (let i = 0; i < 10; i++) {
-        const res = await t.request
-          .post('/v1/auth/login')
-          .send({ email: 'victim@example.com', password: 'wrong-password-1' });
+        const res = await t.request.post('/v1/auth/login').send({ email: 'victim@example.com', password: 'wrong-password-1' });
         expect(res.status).toBe(401);
       }
-      const blocked = await t.request
-        .post('/v1/auth/login')
-        .send({ email: 'victim@example.com', password: 'wrong-password-1' });
+      const blocked = await t.request.post('/v1/auth/login').send({ email: 'victim@example.com', password: 'wrong-password-1' });
       expect(blocked.status).toBe(429);
       // A different email from the same IP is unaffected by the IP+account layer.
-      const other = await t.request
-        .post('/v1/auth/login')
-        .send({ email: 'bystander@example.com', password: 'wrong-password-1' });
+      const other = await t.request.post('/v1/auth/login').send({ email: 'bystander@example.com', password: 'wrong-password-1' });
       expect(other.status).toBe(401);
     } finally {
       await t.close();
@@ -59,29 +49,21 @@ describe('auth abuse rate limiting (layered)', () => {
     try {
       await resetData();
       // Register a real user so a CORRECT password can succeed after failures.
-      await t.request
-        .post('/v1/auth/register')
-        .send({ email: 'soft@example.com', password: 'correct-horse-1', displayName: 'Soft', preferredLocale: 'en' });
+      await t.request.post('/v1/auth/register').send({ email: 'soft@example.com', password: 'correct-horse-1', displayName: 'Soft', preferredLocale: 'en' });
       // Accumulate failures past the soft-delay threshold (5) from "many IPs"
       // — simulate a distributed spray by... the IP layer is per socket here,
       // so failures accumulate on the account signal regardless.
       for (let i = 0; i < 6; i++) {
-        const res = await t.request
-          .post('/v1/auth/login')
-          .send({ email: 'soft@example.com', password: 'wrong-password-1' });
+        const res = await t.request.post('/v1/auth/login').send({ email: 'soft@example.com', password: 'wrong-password-1' });
         expect(res.status).toBe(401); // NEVER 429 — account is never locked
       }
       // The next failure is DELAYED (soft slowdown), still 401.
       const started = Date.now();
-      const delayed = await t.request
-        .post('/v1/auth/login')
-        .send({ email: 'soft@example.com', password: 'wrong-password-1' });
+      const delayed = await t.request.post('/v1/auth/login').send({ email: 'soft@example.com', password: 'wrong-password-1' });
       expect(delayed.status).toBe(401);
       expect(Date.now() - started).toBeGreaterThanOrEqual(400); // ~500ms step
       // Successful authentication still works (no lockout) and resets risk.
-      const ok = await t.request
-        .post('/v1/auth/login')
-        .send({ email: 'soft@example.com', password: 'correct-horse-1' });
+      const ok = await t.request.post('/v1/auth/login').send({ email: 'soft@example.com', password: 'correct-horse-1' });
       expect(ok.status).toBe(201);
       // After success the delay is gone: a fresh wrong attempt is fast again.
       const t2 = Date.now();

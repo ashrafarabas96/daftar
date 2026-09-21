@@ -87,7 +87,12 @@ if (zips.length > 0) fail(`nested zip(s) in source tree: ${zips.join(', ')}`);
 ok('no forbidden release artifacts');
 
 console.log('PHASE 1 GATE — RC evidence reports (final stage)');
-for (const doc of ['docs/PHASE_1_ACCEPTANCE_REPORT.md', 'docs/PHASE_1_IMPLEMENTATION_REPORT.md', 'docs/PHASE_1_TEST_REPORT.md', 'docs/PHASE_1_SECURITY_REVIEW.md']) {
+for (const doc of [
+  'docs/PHASE_1_ACCEPTANCE_REPORT.md',
+  'docs/PHASE_1_IMPLEMENTATION_REPORT.md',
+  'docs/PHASE_1_TEST_REPORT.md',
+  'docs/PHASE_1_SECURITY_REVIEW.md',
+]) {
   if (existsSync(join(ROOT, doc))) ok(doc);
   else console.log(`  pending ${doc} (required before release export)`);
 }

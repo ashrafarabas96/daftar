@@ -139,11 +139,7 @@ export function formatDateTime(date: Date, locale: string, timeZone?: string): s
 }
 
 /** ICU pluralization helper — picks the form for `count` in `locale`. */
-export function plural(
-  locale: string,
-  count: number,
-  forms: Partial<Record<Intl.LDMLPluralRule, string>> & { other: string },
-): string {
+export function plural(locale: string, count: number, forms: Partial<Record<Intl.LDMLPluralRule, string>> & { other: string }): string {
   const rule = new Intl.PluralRules(resolveLocale(locale)).select(count);
   return (forms[rule] ?? forms.other).replace('{count}', formatNumber(count, locale));
 }

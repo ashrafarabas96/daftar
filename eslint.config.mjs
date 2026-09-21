@@ -44,7 +44,15 @@ export default tseslint.config(
   {
     // Tests and scripts: console allowed; supertest response bodies are `any`
     // by library design, so type-aware unsafe-* rules are scoped off here only.
-    files: ['tests/**', 'scripts/**', '**/test/**', '**/*.test.ts', 'apps/api/src/main.ts', 'apps/api/src/infra/migrate.ts', 'apps/api/src/modules/outbox/publisher.ts'],
+    files: [
+      'tests/**',
+      'scripts/**',
+      '**/test/**',
+      '**/*.test.ts',
+      'apps/api/src/main.ts',
+      'apps/api/src/infra/migrate.ts',
+      'apps/api/src/modules/outbox/publisher.ts',
+    ],
     rules: {
       'no-console': 'off',
       '@typescript-eslint/no-unsafe-assignment': 'off',

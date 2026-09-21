@@ -43,9 +43,11 @@ export default function TenantsPage() {
       const d = await apiFetch<TenantDetail>(`/api/proxy/admin/tenants/${tenant.id}`);
       setDetail(d);
     } catch (e) {
-      setDetailError(e instanceof Error && 'status' in e && (e as { status: number }).status === 403
-        ? 'No active support session — create one to view tenant data.'
-        : 'Failed to load tenant');
+      setDetailError(
+        e instanceof Error && 'status' in e && (e as { status: number }).status === 403
+          ? 'No active support session — create one to view tenant data.'
+          : 'Failed to load tenant',
+      );
     }
   }
 
@@ -78,16 +80,30 @@ export default function TenantsPage() {
         columns={[
           { key: 'id', header: 'Tenant', render: (t) => <code>{t.id.slice(0, 8)}…</code> },
           { key: 'created', header: 'Created', render: (t) => new Date(t.created_at).toLocaleDateString() },
-          { key: 'open', header: '', align: 'end', render: (t) => <Button size="sm" variant="secondary" onClick={() => void openDetail(t)}>Open</Button> },
+          {
+            key: 'open',
+            header: '',
+            align: 'end',
+            render: (t) => (
+              <Button size="sm" variant="secondary" onClick={() => void openDetail(t)}>
+                Open
+              </Button>
+            ),
+          },
         ]}
       />
       <Dialog
         open={!!selected}
         title={`Tenant ${selected?.id.slice(0, 8) ?? ''}…`}
-        onClose={() => { setSelected(null); setDetail(null); }}
+        onClose={() => {
+          setSelected(null);
+          setDetail(null);
+        }}
         footer={
           <>
-            <Button variant="ghost" onClick={() => setSelected(null)}>Close</Button>
+            <Button variant="ghost" onClick={() => setSelected(null)}>
+              Close
+            </Button>
             <Button onClick={() => setSessionOpen(true)}>New support session</Button>
           </>
         }
@@ -96,15 +112,23 @@ export default function TenantsPage() {
           <div
             role="alert"
             style={{
-              background: colors.semantic.warningSoft, color: colors.semantic.warning,
-              border: `1px solid ${colors.semantic.warning}`, borderRadius: radius.md,
-              padding: spacing[3], marginBottom: spacing[4], fontWeight: 600,
+              background: colors.semantic.warningSoft,
+              color: colors.semantic.warning,
+              border: `1px solid ${colors.semantic.warning}`,
+              borderRadius: radius.md,
+              padding: spacing[3],
+              marginBottom: spacing[4],
+              fontWeight: 600,
             }}
           >
             {detail.supportBanner.message}
           </div>
         ) : null}
-        {detailError ? <p role="alert" style={{ color: colors.semantic.danger }}>{detailError}</p> : null}
+        {detailError ? (
+          <p role="alert" style={{ color: colors.semantic.danger }}>
+            {detailError}
+          </p>
+        ) : null}
         {detail ? (
           <div style={{ fontFamily: typography.fontFamily.base }}>
             <h3 style={{ fontSize: typography.size.md }}>Businesses</h3>
@@ -124,8 +148,12 @@ export default function TenantsPage() {
         onClose={() => setSessionOpen(false)}
         footer={
           <>
-            <Button variant="ghost" onClick={() => setSessionOpen(false)}>Cancel</Button>
-            <Button loading={busy} disabled={reason.trim().length < 10} onClick={() => void createSession()}>Start session</Button>
+            <Button variant="ghost" onClick={() => setSessionOpen(false)}>
+              Cancel
+            </Button>
+            <Button loading={busy} disabled={reason.trim().length < 10} onClick={() => void createSession()}>
+              Start session
+            </Button>
           </>
         }
       >
@@ -135,10 +163,7 @@ export default function TenantsPage() {
             label="Scope"
             value={businessId}
             onChange={setBusinessId}
-            options={[
-              { value: '', label: 'Whole tenant' },
-              ...(selected?.businesses ?? []).map((b) => ({ value: b.id, label: `Business: ${b.name}` })),
-            ]}
+            options={[{ value: '', label: 'Whole tenant' }, ...(selected?.businesses ?? []).map((b) => ({ value: b.id, label: `Business: ${b.name}` }))]}
           />
           <Select
             label="Duration"

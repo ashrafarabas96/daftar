@@ -154,7 +154,10 @@ for (const f of walk(join(ROOT, 'infrastructure/database/migrations'), /\.sql$/)
 // Rule 11: no token/secret logging.
 for (const f of tsFiles(join(ROOT, 'apps/api/src'))) {
   const src = readFileSync(f, 'utf8');
-  if (/console\.(log|info|debug)\([^)]*(refreshToken|accessToken|password|secret)/i.test(src) || /logger\.(log|debug|verbose)\([^)]*(refreshToken|password|secret_ciphertext)/i.test(src)) {
+  if (
+    /console\.(log|info|debug)\([^)]*(refreshToken|accessToken|password|secret)/i.test(src) ||
+    /logger\.(log|debug|verbose)\([^)]*(refreshToken|password|secret_ciphertext)/i.test(src)
+  ) {
     fail('no-token-logging', f, 'token/secret passed to a logger');
   }
 }

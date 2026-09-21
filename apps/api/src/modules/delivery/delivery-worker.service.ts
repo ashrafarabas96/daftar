@@ -52,13 +52,15 @@ export class CredentialDeliveryWorker {
     await this.drain(limit).catch((e: unknown) => {
       CredentialDeliveryWorker.drainFailures += 1;
       // eslint-disable-next-line no-console
-      console.warn(JSON.stringify({
-        level: 'warn',
-        msg: 'credential delivery drain failed',
-        worker: this.workerId,
-        errorCode: classifyDeliveryError(e),
-        drainFailuresTotal: CredentialDeliveryWorker.drainFailures,
-      }));
+      console.warn(
+        JSON.stringify({
+          level: 'warn',
+          msg: 'credential delivery drain failed',
+          worker: this.workerId,
+          errorCode: classifyDeliveryError(e),
+          drainFailuresTotal: CredentialDeliveryWorker.drainFailures,
+        }),
+      );
     });
   }
 
@@ -72,24 +74,31 @@ export class CredentialDeliveryWorker {
       c.query<{ key_version: string }>(
         `SELECT DISTINCT key_version FROM credential_deliveries
          WHERE secret_ciphertext IS NOT NULL AND key_version IS NOT NULL`,
-      ));
+      ),
+    );
     const covered = new Set(this.protector.coveredVersions());
     const missing = rows.map((r) => r.key_version).filter((v) => !covered.has(v));
     if (missing.length > 0) {
-      throw new Error(
-        `credential key ring does not cover in-use version(s): ${missing.join(', ')} — refusing to start (§XX)`,
-      );
+      throw new Error(`credential key ring does not cover in-use version(s): ${missing.join(', ')} — refusing to start (§XX)`);
     }
   }
 
   async drain(limit = 25): Promise<{ sent: number; failed: number; dead: number }> {
-    const claimed = await this.db.withWorkerTransaction(async (c) => (
-      await c.query<{
-        id: string; kind: 'invitation' | 'password_reset'; email: string;
-        secret_ciphertext: string | null; secret_nonce: string | null; key_version: string | null;
-        invitation_id: string | null; password_reset_token_id: string | null; attempts: number;
-      }>(
-        `UPDATE credential_deliveries
+    const claimed = await this.db.withWorkerTransaction(
+      async (c) =>
+        (
+          await c.query<{
+            id: string;
+            kind: 'invitation' | 'password_reset';
+            email: string;
+            secret_ciphertext: string | null;
+            secret_nonce: string | null;
+            key_version: string | null;
+            invitation_id: string | null;
+            password_reset_token_id: string | null;
+            attempts: number;
+          }>(
+            `UPDATE credential_deliveries
          SET status = 'processing', locked_at = now(), locked_by = $2,
              lease_until = now() + ($3 || ' milliseconds')::interval, updated_at = now()
          WHERE id IN (
@@ -100,9 +109,10 @@ export class CredentialDeliveryWorker {
          )
          RETURNING id, kind, email::text AS email, secret_ciphertext, secret_nonce, key_version,
                    invitation_id, password_reset_token_id, attempts`,
-        [limit, this.workerId, String(DELIVERY_LEASE_MS)],
-      )
-    ).rows);
+            [limit, this.workerId, String(DELIVERY_LEASE_MS)],
+          )
+        ).rows,
+    );
 
     let sent = 0;
     let failed = 0;

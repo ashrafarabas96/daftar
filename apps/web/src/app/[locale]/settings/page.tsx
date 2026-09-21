@@ -68,9 +68,15 @@ export default function SettingsPage({ params }: { params: Promise<{ locale: Loc
           />
           <TextField label={t('settings.baseCurrency')} value={business.baseCurrency} disabled hint={t('settings.currencyLocked')} onChange={() => undefined} />
           <div>
-            <Button type="submit" loading={busy}>{t('common.save')}</Button>
+            <Button type="submit" loading={busy}>
+              {t('common.save')}
+            </Button>
           </div>
-          {saved ? <p role="status" style={{ color: colors.semantic.success }}>{t('settings.saved')}</p> : null}
+          {saved ? (
+            <p role="status" style={{ color: colors.semantic.success }}>
+              {t('settings.saved')}
+            </p>
+          ) : null}
         </form>
       ) : (
         <p>{t('common.loading')}</p>

@@ -45,21 +45,15 @@ export class Database implements OnModuleDestroy, OnModuleInit {
     // somewhere default.
     const fallback = config.isProd ? undefined : config.APP_DATABASE_URL;
     this.pool = config.APP_DATABASE_URL ? new Pool({ connectionString: config.APP_DATABASE_URL, max: 10 }) : null;
-    this.platformPool = (config.PLATFORM_DATABASE_URL ?? fallback)
-      ? new Pool({ connectionString: config.PLATFORM_DATABASE_URL ?? fallback, max: 4 })
-      : null;
-    this.identityPool = (config.IDENTITY_DATABASE_URL ?? config.PLATFORM_DATABASE_URL ?? fallback)
-      ? new Pool({ connectionString: config.IDENTITY_DATABASE_URL ?? config.PLATFORM_DATABASE_URL ?? fallback, max: 4 })
-      : null;
-    this.resolverPool = (config.RESOLVER_DATABASE_URL ?? fallback)
-      ? new Pool({ connectionString: config.RESOLVER_DATABASE_URL ?? fallback, max: 4 })
-      : null;
-    this.workerPool = (config.WORKER_DATABASE_URL ?? fallback)
-      ? new Pool({ connectionString: config.WORKER_DATABASE_URL ?? fallback, max: 2 })
-      : null;
-    this.provisionerPool = (config.PROVISIONER_DATABASE_URL ?? fallback)
-      ? new Pool({ connectionString: config.PROVISIONER_DATABASE_URL ?? fallback, max: 2 })
-      : null;
+    this.platformPool = (config.PLATFORM_DATABASE_URL ?? fallback) ? new Pool({ connectionString: config.PLATFORM_DATABASE_URL ?? fallback, max: 4 }) : null;
+    this.identityPool =
+      (config.IDENTITY_DATABASE_URL ?? config.PLATFORM_DATABASE_URL ?? fallback)
+        ? new Pool({ connectionString: config.IDENTITY_DATABASE_URL ?? config.PLATFORM_DATABASE_URL ?? fallback, max: 4 })
+        : null;
+    this.resolverPool = (config.RESOLVER_DATABASE_URL ?? fallback) ? new Pool({ connectionString: config.RESOLVER_DATABASE_URL ?? fallback, max: 4 }) : null;
+    this.workerPool = (config.WORKER_DATABASE_URL ?? fallback) ? new Pool({ connectionString: config.WORKER_DATABASE_URL ?? fallback, max: 2 }) : null;
+    this.provisionerPool =
+      (config.PROVISIONER_DATABASE_URL ?? fallback) ? new Pool({ connectionString: config.PROVISIONER_DATABASE_URL ?? fallback, max: 2 }) : null;
     // §32/§XXX startup verification: every explicitly-configured pool must be
     // authenticated as its intended DB role — per deployment mode, only the
     // pools this process actually owns are verified.
@@ -80,21 +74,20 @@ export class Database implements OnModuleDestroy, OnModuleInit {
       if (actual !== expected) {
         throw new Error(
           `DB principal mismatch: expected role "${expected}", connected as "${actual}". ` +
-          'Refusing to start — each runtime boundary must use its own database role (§30–32).',
+            'Refusing to start — each runtime boundary must use its own database role (§30–32).',
         );
       }
     }
   }
 
   private async applyScope(client: PoolClient, scope: Scope, bypass: boolean): Promise<void> {
-    await client.query(`SELECT
+    await client.query(
+      `SELECT
       set_config('app.tenant_id', $1, true),
       set_config('app.business_id', $2, true),
-      set_config('app.bypass_rls', $3, true)`, [
-      scope.tenantId ?? '',
-      scope.businessId ?? '',
-      bypass ? 'true' : 'false',
-    ]);
+      set_config('app.bypass_rls', $3, true)`,
+      [scope.tenantId ?? '', scope.businessId ?? '', bypass ? 'true' : 'false'],
+    );
   }
 
   private async run<T>(pool: Pool | null, scope: Scope, bypass: boolean, fn: (client: PoolClient) => Promise<T>): Promise<T> {
@@ -161,8 +154,9 @@ export class Database implements OnModuleDestroy, OnModuleInit {
 
   async healthCheck(): Promise<boolean> {
     // Per-mode: check every pool this process actually owns.
-    const pools = [this.pool, this.platformPool, this.identityPool, this.resolverPool, this.workerPool, this.provisionerPool]
-      .filter((x): x is Pool => x !== null);
+    const pools = [this.pool, this.platformPool, this.identityPool, this.resolverPool, this.workerPool, this.provisionerPool].filter(
+      (x): x is Pool => x !== null,
+    );
     if (pools.length === 0) return false;
     try {
       for (const p of pools) await p.query('SELECT 1');

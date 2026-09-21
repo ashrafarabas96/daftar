@@ -38,9 +38,7 @@ async function main(): Promise<void> {
 
   const pool = new pg.Pool({ connectionString: url, max: 1 });
   try {
-    const existing = await pool.query<{ n: string }>(
-      `SELECT count(*)::text AS n FROM platform_role_memberships WHERE role_key = 'platform_owner'`,
-    );
+    const existing = await pool.query<{ n: string }>(`SELECT count(*)::text AS n FROM platform_role_memberships WHERE role_key = 'platform_owner'`);
     if (Number(existing.rows[0]?.n ?? '0') > 0) {
       throw new Error('A platform owner already exists — bootstrap is disabled');
     }
@@ -72,7 +70,9 @@ async function main(): Promise<void> {
       );
       await client.query('COMMIT');
       // Printed ONCE. Never written to any file or log.
-      process.stdout.write(`\nPlatform owner created: ${email.toLowerCase()}\nOne-time password: ${oneTimePassword}\nChange it immediately after first login.\n\n`);
+      process.stdout.write(
+        `\nPlatform owner created: ${email.toLowerCase()}\nOne-time password: ${oneTimePassword}\nChange it immediately after first login.\n\n`,
+      );
     } catch (e) {
       await client.query('ROLLBACK');
       throw e;

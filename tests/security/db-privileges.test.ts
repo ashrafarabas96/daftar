@@ -55,10 +55,9 @@ describe('db privilege separation (as daftar_app)', () => {
   });
 
   it('cross-business read returns zero rows even with tenant context of the other business', async () => {
-    await ownerPool().query(
-      `INSERT INTO products (business_id, translations, base_price_minor, price_currency) VALUES ($1, '{"ar":"ب"}', 100, 'ILS')`,
-      [businessB],
-    );
+    await ownerPool().query(`INSERT INTO products (business_id, translations, base_price_minor, price_currency) VALUES ($1, '{"ar":"ب"}', 100, 'ILS')`, [
+      businessB,
+    ]);
     await asApp(async (c) => {
       await c.query('BEGIN');
       await c.query(`SELECT set_config('app.tenant_id', $1, true), set_config('app.business_id', $2, true)`, [tenantA, businessA]);
@@ -103,12 +102,9 @@ describe('db privilege separation (as daftar_app)', () => {
     await asApp(async (c) => {
       await c.query('BEGIN');
       await c.query(`SELECT set_config('app.tenant_id', $1, true), set_config('app.business_id', $2, true)`, [tenantA, businessA]);
-      await expect(
-        c.query(
-          `INSERT INTO entitlement_overrides (business_id, feature_key, enabled_value) VALUES ($1, 'x', true)`,
-          [businessA],
-        ),
-      ).rejects.toThrow(/permission denied/i);
+      await expect(c.query(`INSERT INTO entitlement_overrides (business_id, feature_key, enabled_value) VALUES ($1, 'x', true)`, [businessA])).rejects.toThrow(
+        /permission denied/i,
+      );
       await c.query('ROLLBACK');
     });
   });
@@ -121,7 +117,11 @@ describe('db privilege separation (as daftar_app)', () => {
       await c.query('ROLLBACK');
       await c.query('BEGIN');
       await c.query(`SELECT set_config('app.tenant_id', $1, true), set_config('app.business_id', $2, true)`, [tenantA, businessA]);
-      await expect(c.query(`INSERT INTO business_entitlements (business_id, plan_version_id, state) VALUES ($1, '00000000-0000-0000-0000-000000000000', 'active')`, [businessA])).rejects.toThrow(/permission denied/i);
+      await expect(
+        c.query(`INSERT INTO business_entitlements (business_id, plan_version_id, state) VALUES ($1, '00000000-0000-0000-0000-000000000000', 'active')`, [
+          businessA,
+        ]),
+      ).rejects.toThrow(/permission denied/i);
       await c.query('ROLLBACK');
     });
   });
@@ -195,7 +195,10 @@ describe('identity DB role separation (as daftar_identity)', () => {
       const { rows } = await c.query('SELECT id FROM users WHERE id = $1', [uid]);
       expect(rows.length).toBe(1);
       const sid = '00000000-0000-4000-8000-0000000000bb';
-      await c.query(`INSERT INTO sessions (id, user_id, family_id, refresh_token_hash, expires_at) VALUES ($1, $2, '00000000-0000-4000-8000-0000000000cc', 'h', now() + interval '1 day')`, [sid, uid]);
+      await c.query(
+        `INSERT INTO sessions (id, user_id, family_id, refresh_token_hash, expires_at) VALUES ($1, $2, '00000000-0000-4000-8000-0000000000cc', 'h', now() + interval '1 day')`,
+        [sid, uid],
+      );
       await c.query(`INSERT INTO session_refresh_tokens (session_id, token_hash, state) VALUES ($1, 'th', 'issued')`, [sid]);
       await c.query(`INSERT INTO password_reset_tokens (user_id, token_hash, expires_at) VALUES ($1, 'rh', now() + interval '1 hour')`, [uid]);
       // cleanup via superuser pool
@@ -233,10 +236,14 @@ describe('identity DB role separation (as daftar_identity)', () => {
   it('identity CANNOT write catalog or create businesses', async () => {
     await asIdentity(async (c) => {
       await expect(
-        c.query(`INSERT INTO products (business_id, translations, base_price_minor, price_currency) VALUES ('00000000-0000-0000-0000-000000000000', '{}', 1, 'ILS')`),
+        c.query(
+          `INSERT INTO products (business_id, translations, base_price_minor, price_currency) VALUES ('00000000-0000-0000-0000-000000000000', '{}', 1, 'ILS')`,
+        ),
       ).rejects.toThrow(/permission denied/i);
       await expect(
-        c.query(`INSERT INTO businesses (tenant_id, name, store_slug, base_currency, country_code) VALUES ('00000000-0000-0000-0000-000000000000', 'X', 'pwn-slug', 'ILS', 'PS')`),
+        c.query(
+          `INSERT INTO businesses (tenant_id, name, store_slug, base_currency, country_code) VALUES ('00000000-0000-0000-0000-000000000000', 'X', 'pwn-slug', 'ILS', 'PS')`,
+        ),
       ).rejects.toThrow(/permission denied/i);
     });
   });

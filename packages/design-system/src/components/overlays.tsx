@@ -4,13 +4,24 @@ import { colors, elevation, radius, spacing, typography, zIndex } from '../token
 import { Button } from './buttons';
 
 const backdrop: CSSProperties = {
-  position: 'fixed', inset: 0, background: 'rgba(17,24,39,0.5)', zIndex: zIndex.overlay,
-  display: 'flex', alignItems: 'center', justifyContent: 'center', padding: spacing[4],
+  position: 'fixed',
+  inset: 0,
+  background: 'rgba(17,24,39,0.5)',
+  zIndex: zIndex.overlay,
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  padding: spacing[4],
 };
 
 const panel: CSSProperties = {
-  background: colors.neutral[0], borderRadius: radius.xl, boxShadow: elevation.lg,
-  padding: spacing[6], maxWidth: '32rem', width: '100%', fontFamily: typography.fontFamily.base,
+  background: colors.neutral[0],
+  borderRadius: radius.xl,
+  boxShadow: elevation.lg,
+  padding: spacing[6],
+  maxWidth: '32rem',
+  width: '100%',
+  fontFamily: typography.fontFamily.base,
 };
 
 export interface DialogProps {
@@ -25,7 +36,9 @@ export function Dialog({ open, title, onClose, children, footer }: DialogProps) 
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!open) return;
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
     document.addEventListener('keydown', onKey);
     ref.current?.focus();
     return () => document.removeEventListener('keydown', onKey);
@@ -33,15 +46,7 @@ export function Dialog({ open, title, onClose, children, footer }: DialogProps) 
   if (!open) return null;
   return (
     <div style={backdrop} onClick={onClose}>
-      <div
-        ref={ref}
-        role="dialog"
-        aria-modal="true"
-        aria-label={title}
-        tabIndex={-1}
-        style={panel}
-        onClick={(e) => e.stopPropagation()}
-      >
+      <div ref={ref} role="dialog" aria-modal="true" aria-label={title} tabIndex={-1} style={panel} onClick={(e) => e.stopPropagation()}>
         <h2 style={{ margin: `0 0 ${spacing[4]}`, fontSize: typography.size.xl, color: colors.neutral[900] }}>{title}</h2>
         <div>{children}</div>
         {footer ? <div style={{ display: 'flex', gap: spacing[2], justifyContent: 'flex-end', marginTop: spacing[5] }}>{footer}</div> : null}
@@ -70,8 +75,12 @@ export function ConfirmationDialog(props: ConfirmationDialogProps) {
       onClose={props.onCancel}
       footer={
         <>
-          <Button variant="ghost" onClick={props.onCancel}>{props.cancelLabel}</Button>
-          <Button variant={props.danger ? 'danger' : 'primary'} loading={props.loading} onClick={props.onConfirm}>{props.confirmLabel}</Button>
+          <Button variant="ghost" onClick={props.onCancel}>
+            {props.cancelLabel}
+          </Button>
+          <Button variant={props.danger ? 'danger' : 'primary'} loading={props.loading} onClick={props.onConfirm}>
+            {props.confirmLabel}
+          </Button>
         </>
       }
     >
@@ -97,9 +106,17 @@ export function Drawer({ open, title, onClose, children }: DrawerProps) {
         aria-label={title}
         onClick={(e) => e.stopPropagation()}
         style={{
-          position: 'fixed', top: 0, bottom: 0, insetInlineEnd: 0, width: 'min(28rem, 92vw)',
-          background: colors.neutral[0], boxShadow: elevation.lg, padding: spacing[5],
-          overflowY: 'auto', fontFamily: typography.fontFamily.base, zIndex: zIndex.modal,
+          position: 'fixed',
+          top: 0,
+          bottom: 0,
+          insetInlineEnd: 0,
+          width: 'min(28rem, 92vw)',
+          background: colors.neutral[0],
+          boxShadow: elevation.lg,
+          padding: spacing[5],
+          overflowY: 'auto',
+          fontFamily: typography.fontFamily.base,
+          zIndex: zIndex.modal,
         }}
       >
         <h2 style={{ margin: `0 0 ${spacing[4]}`, fontSize: typography.size.xl }}>{title}</h2>
@@ -119,9 +136,14 @@ export function BottomSheet({ open, title, onClose, children }: DrawerProps) {
         aria-label={title}
         onClick={(e) => e.stopPropagation()}
         style={{
-          width: '100%', maxHeight: '85vh', overflowY: 'auto',
-          background: colors.neutral[0], borderRadius: `${radius.xl} ${radius.xl} 0 0`,
-          padding: spacing[5], fontFamily: typography.fontFamily.base, zIndex: zIndex.modal,
+          width: '100%',
+          maxHeight: '85vh',
+          overflowY: 'auto',
+          background: colors.neutral[0],
+          borderRadius: `${radius.xl} ${radius.xl} 0 0`,
+          padding: spacing[5],
+          fontFamily: typography.fontFamily.base,
+          zIndex: zIndex.modal,
         }}
       >
         <div style={{ width: '2.5rem', height: '0.25rem', borderRadius: radius.full, background: colors.neutral[300], margin: `0 auto ${spacing[3]}` }} />
@@ -141,14 +163,29 @@ export interface Toast {
 export function ToastRegion({ toasts }: { toasts: Toast[] }) {
   const bg = { success: colors.semantic.success, danger: colors.semantic.danger, info: colors.semantic.info };
   return (
-    <div aria-live="polite" style={{ position: 'fixed', bottom: spacing[4], insetInlineEnd: spacing[4], zIndex: zIndex.toast, display: 'flex', flexDirection: 'column', gap: spacing[2] }}>
+    <div
+      aria-live="polite"
+      style={{
+        position: 'fixed',
+        bottom: spacing[4],
+        insetInlineEnd: spacing[4],
+        zIndex: zIndex.toast,
+        display: 'flex',
+        flexDirection: 'column',
+        gap: spacing[2],
+      }}
+    >
       {toasts.map((t) => (
         <div
           key={t.id}
           role="status"
           style={{
-            background: bg[t.tone ?? 'info'], color: colors.neutral[0], padding: `${spacing[3]} ${spacing[4]}`,
-            borderRadius: radius.md, boxShadow: elevation.md, fontFamily: typography.fontFamily.base,
+            background: bg[t.tone ?? 'info'],
+            color: colors.neutral[0],
+            padding: `${spacing[3]} ${spacing[4]}`,
+            borderRadius: radius.md,
+            boxShadow: elevation.md,
+            fontFamily: typography.fontFamily.base,
             fontSize: typography.size.sm,
           }}
         >

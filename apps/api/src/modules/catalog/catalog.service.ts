@@ -1,8 +1,6 @@
 import { Injectable, Inject } from '@nestjs/common';
 import { AppError } from '@daftar/domain-core';
-import type {
-  CategoryDto, LocaleCode, Page, ProductDto, ProductListItemDto, VariantDto,
-} from '@daftar/shared-contracts';
+import type { CategoryDto, LocaleCode, Page, ProductDto, ProductListItemDto, VariantDto } from '@daftar/shared-contracts';
 import { Database } from '../../infra/database';
 import { AuditService, OutboxService, newId } from '../audit/audit.service';
 import { EntitlementService } from '../entitlements/entitlements.service';
@@ -46,7 +44,10 @@ export class CatalogService {
     try {
       await this.db.withTransaction(this.scope(m), async (c) => {
         await c.query('INSERT INTO categories (business_id, id, parent_id, translations) VALUES ($1, $2, $3, $4)', [
-          m.businessId, id, input.parentId ?? null, JSON.stringify(input.translations),
+          m.businessId,
+          id,
+          input.parentId ?? null,
+          JSON.stringify(input.translations),
         ]);
         await this.audit.recordTx(c, { action: 'catalog.category_created', entity: 'category', entityId: id });
       });
@@ -58,11 +59,7 @@ export class CatalogService {
   }
 
   /** Cursor-paginated product list (§96): stable ordering, max page size, no unbounded queries. */
-  async listProducts(
-    m: MembershipContext,
-    query: Record<string, unknown>,
-    locale: LocaleCode,
-  ): Promise<Page<ProductListItemDto>> {
+  async listProducts(m: MembershipContext, query: Record<string, unknown>, locale: LocaleCode): Promise<Page<ProductListItemDto>> {
     let pagination;
     try {
       pagination = parsePagination(query);
@@ -73,8 +70,13 @@ export class CatalogService {
 
     const rows = (
       await this.db.scoped<{
-        id: string; translations: Record<string, string>; sku: string | null;
-        base_price_minor: string; price_currency: string; status: string; created_at: Date;
+        id: string;
+        translations: Record<string, string>;
+        sku: string | null;
+        base_price_minor: string;
+        price_currency: string;
+        status: string;
+        created_at: Date;
       }>(
         this.scope(m),
         `SELECT p.id, p.translations, p.sku, p.base_price_minor::text, p.price_currency, p.status, p.created_at
@@ -111,9 +113,16 @@ export class CatalogService {
   async getProduct(m: MembershipContext, id: string, locale: LocaleCode): Promise<ProductDto> {
     const p = (
       await this.db.scoped<{
-        id: string; category_id: string | null; translations: Record<string, string>; sku: string | null;
-        barcode: string | null; unit: string | null; base_price_minor: string; price_currency: string;
-        version: number; status: string;
+        id: string;
+        category_id: string | null;
+        translations: Record<string, string>;
+        sku: string | null;
+        barcode: string | null;
+        unit: string | null;
+        base_price_minor: string;
+        price_currency: string;
+        version: number;
+        status: string;
       }>(
         this.scope(m),
         `SELECT id, category_id, translations, sku, barcode, unit, base_price_minor::text, price_currency, version, status
@@ -145,15 +154,23 @@ export class CatalogService {
       id: p.id,
       name: p.translations[locale] ?? p.translations['ar'] ?? Object.values(p.translations)[0] ?? '',
       translations: p.translations,
-      sku: p.sku, barcode: p.barcode, unit: p.unit,
+      sku: p.sku,
+      barcode: p.barcode,
+      unit: p.unit,
       categoryId: p.category_id,
       basePriceMinor: p.base_price_minor,
       priceCurrency: p.price_currency,
       version: p.version,
       status: p.status as 'active' | 'archived',
-      variants: variants.map((v): VariantDto => ({
-        id: v.id, attributes: v.attributes, sku: v.sku, barcode: v.barcode, priceMinor: v.price_minor,
-      })),
+      variants: variants.map(
+        (v): VariantDto => ({
+          id: v.id,
+          attributes: v.attributes,
+          sku: v.sku,
+          barcode: v.barcode,
+          priceMinor: v.price_minor,
+        }),
+      ),
       media: media.map((md) => ({
         id: md.id,
         url: `/media/${md.storage_key}`,
@@ -185,10 +202,7 @@ export class CatalogService {
         // §36–37: price currency = the BUSINESS BASE CURRENCY, always. A
         // client-sent currency that disagrees is rejected (400) — the server
         // never trusts the client for money context.
-        const { rows: biz } = await c.query<{ base_currency: string }>(
-          'SELECT base_currency FROM businesses WHERE id = $1',
-          [m.businessId],
-        );
+        const { rows: biz } = await c.query<{ base_currency: string }>('SELECT base_currency FROM businesses WHERE id = $1', [m.businessId]);
         const baseCurrency = biz[0]?.base_currency;
         if (!baseCurrency) throw AppError.notFound('Business not found');
         if (input.priceCurrency && input.priceCurrency !== baseCurrency) {
@@ -201,8 +215,15 @@ export class CatalogService {
           `INSERT INTO products (business_id, id, category_id, translations, sku, barcode, base_price_minor, price_currency, unit)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
           [
-            m.businessId, id, input.categoryId ?? null, JSON.stringify(input.translations),
-            input.sku ?? null, input.barcode ?? null, input.basePriceMinor.toString(), baseCurrency, input.unit ?? null,
+            m.businessId,
+            id,
+            input.categoryId ?? null,
+            JSON.stringify(input.translations),
+            input.sku ?? null,
+            input.barcode ?? null,
+            input.basePriceMinor.toString(),
+            baseCurrency,
+            input.unit ?? null,
           ],
         );
         for (const v of input.variants ?? []) {
@@ -213,7 +234,9 @@ export class CatalogService {
           );
         }
         await this.outbox.emitTx(c, {
-          type: 'catalog.product_created', tenantId: m.tenantId, businessId: m.businessId,
+          type: 'catalog.product_created',
+          tenantId: m.tenantId,
+          businessId: m.businessId,
           payload: { productId: id },
         });
         await this.audit.recordTx(c, { action: 'catalog.product_created', entity: 'product', entityId: id });
@@ -249,10 +272,7 @@ export class CatalogService {
       }
       const nextSku = input.sku === undefined ? current.sku : input.sku;
       const nextBarcode = input.barcode === undefined ? current.barcode : input.barcode;
-      const clash = await this.uniquenessClash(
-        c, m.businessId,
-        nextSku ? [nextSku] : [], nextBarcode ? [nextBarcode] : [], id,
-      );
+      const clash = await this.uniquenessClash(c, m.businessId, nextSku ? [nextSku] : [], nextBarcode ? [nextBarcode] : [], id);
       if (clash) throw AppError.conflict('CONFLICT', `${clash} already exists in this business`);
 
       // §37: price currency is immutable business context — an update may
@@ -274,18 +294,25 @@ export class CatalogService {
            updated_at = now()
          WHERE business_id = $1 AND id = $2`,
         [
-          m.businessId, id,
+          m.businessId,
+          id,
           input.translations ? JSON.stringify(input.translations) : null,
           input.basePriceMinor?.toString() ?? null,
           input.priceCurrency ?? null,
-          input.categoryId !== undefined, input.categoryId ?? null,
-          input.sku !== undefined, nextSku,
-          input.barcode !== undefined, nextBarcode,
-          input.unit !== undefined, input.unit ?? null,
+          input.categoryId !== undefined,
+          input.categoryId ?? null,
+          input.sku !== undefined,
+          nextSku,
+          input.barcode !== undefined,
+          nextBarcode,
+          input.unit !== undefined,
+          input.unit ?? null,
         ],
       );
       await this.audit.recordTx(c, {
-        action: 'catalog.product_updated', entity: 'product', entityId: id,
+        action: 'catalog.product_updated',
+        entity: 'product',
+        entityId: id,
         metadata: { fromVersion: current.version },
       });
     });

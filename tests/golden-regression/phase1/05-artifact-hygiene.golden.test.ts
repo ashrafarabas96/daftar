@@ -25,12 +25,7 @@ describe('golden: artifact hygiene', () => {
     const files = walk(ROOT).map((f) => relative(ROOT, f));
     const forbidden = files.filter(
       (f) =>
-        /(^|\/)var\/dev-mailbox/.test(f) ||
-        /\.env($|\.)/.test(f) ||
-        /\.tsbuildinfo$/.test(f) ||
-        /\.(pem|key)$/.test(f) ||
-        /\.zip$/.test(f) ||
-        /\.log$/.test(f),
+        /(^|\/)var\/dev-mailbox/.test(f) || /\.env($|\.)/.test(f) || /\.tsbuildinfo$/.test(f) || /\.(pem|key)$/.test(f) || /\.zip$/.test(f) || /\.log$/.test(f),
     );
     expect(forbidden).toEqual([]);
   });

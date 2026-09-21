@@ -34,10 +34,15 @@ export function Badge(props: { tone?: BadgeTone; children: ReactNode }) {
   return (
     <span
       style={{
-        display: 'inline-flex', alignItems: 'center', padding: `0 ${spacing[2]}`,
-        minHeight: '1.375rem', borderRadius: radius.full,
-        fontSize: typography.size.xs, fontWeight: typography.weight.semibold,
-        fontFamily: typography.fontFamily.base, ...tones[props.tone ?? 'neutral'],
+        display: 'inline-flex',
+        alignItems: 'center',
+        padding: `0 ${spacing[2]}`,
+        minHeight: '1.375rem',
+        borderRadius: radius.full,
+        fontSize: typography.size.xs,
+        fontWeight: typography.weight.semibold,
+        fontFamily: typography.fontFamily.base,
+        ...tones[props.tone ?? 'neutral'],
       }}
     >
       {props.children}
@@ -55,8 +60,12 @@ export function Tabs(props: { tabs: { key: string; label: string }[]; active: st
           aria-selected={props.active === t.key}
           onClick={() => props.onChange(t.key)}
           style={{
-            padding: `${spacing[2]} ${spacing[4]}`, background: 'none', border: 'none', cursor: 'pointer',
-            fontSize: typography.size.md, fontWeight: props.active === t.key ? typography.weight.semibold : typography.weight.regular,
+            padding: `${spacing[2]} ${spacing[4]}`,
+            background: 'none',
+            border: 'none',
+            cursor: 'pointer',
+            fontSize: typography.size.md,
+            fontWeight: props.active === t.key ? typography.weight.semibold : typography.weight.regular,
             color: props.active === t.key ? colors.brand.primary : colors.neutral[500],
             borderBottom: `2px solid ${props.active === t.key ? colors.brand.primary : 'transparent'}`,
             minHeight: '2.75rem',
@@ -78,8 +87,10 @@ export interface Column<T> {
 
 export function Table<T extends { id?: string }>(props: { columns: Column<T>[]; rows: T[]; empty?: ReactNode }) {
   const cell = (align?: 'start' | 'end' | 'center'): CSSProperties => ({
-    padding: `${spacing[2]} ${spacing[3]}`, textAlign: align === 'end' ? 'end' : align === 'center' ? 'center' : 'start',
-    borderBottom: `1px solid ${colors.neutral[100]}`, fontSize: typography.size.sm,
+    padding: `${spacing[2]} ${spacing[3]}`,
+    textAlign: align === 'end' ? 'end' : align === 'center' ? 'center' : 'start',
+    borderBottom: `1px solid ${colors.neutral[100]}`,
+    fontSize: typography.size.sm,
   });
   if (props.rows.length === 0 && props.empty) return <>{props.empty}</>;
   return (
@@ -88,7 +99,9 @@ export function Table<T extends { id?: string }>(props: { columns: Column<T>[]; 
         <thead>
           <tr>
             {props.columns.map((c) => (
-              <th key={c.key} style={{ ...cell(c.align), color: colors.neutral[500], fontWeight: typography.weight.medium }}>{c.header}</th>
+              <th key={c.key} style={{ ...cell(c.align), color: colors.neutral[500], fontWeight: typography.weight.medium }}>
+                {c.header}
+              </th>
             ))}
           </tr>
         </thead>
@@ -96,7 +109,9 @@ export function Table<T extends { id?: string }>(props: { columns: Column<T>[]; 
           {props.rows.map((r, i) => (
             <tr key={r.id ?? i}>
               {props.columns.map((c) => (
-                <td key={c.key} style={{ ...cell(c.align), color: colors.neutral[800] }}>{c.render(r)}</td>
+                <td key={c.key} style={{ ...cell(c.align), color: colors.neutral[800] }}>
+                  {c.render(r)}
+                </td>
               ))}
             </tr>
           ))}
@@ -114,8 +129,12 @@ export function List(props: { items: { key: string; primary: ReactNode; secondar
           key={it.key}
           onClick={it.onClick}
           style={{
-            display: 'flex', alignItems: 'center', gap: spacing[3], padding: `${spacing[3]} ${spacing[2]}`,
-            borderBottom: `1px solid ${colors.neutral[100]}`, cursor: it.onClick ? 'pointer' : undefined,
+            display: 'flex',
+            alignItems: 'center',
+            gap: spacing[3],
+            padding: `${spacing[3]} ${spacing[2]}`,
+            borderBottom: `1px solid ${colors.neutral[100]}`,
+            cursor: it.onClick ? 'pointer' : undefined,
             minHeight: '2.75rem',
           }}
         >
@@ -139,7 +158,10 @@ export function Pagination(props: { page: number; pageCount: number; onChange: (
           aria-current={p === props.page ? 'page' : undefined}
           onClick={() => props.onChange(p)}
           style={{
-            minWidth: '2.75rem', minHeight: '2.75rem', borderRadius: radius.md, cursor: 'pointer',
+            minWidth: '2.75rem',
+            minHeight: '2.75rem',
+            borderRadius: radius.md,
+            cursor: 'pointer',
             border: `1px solid ${p === props.page ? colors.brand.primary : colors.neutral[300]}`,
             background: p === props.page ? colors.brand.primarySoft : colors.neutral[0],
             color: p === props.page ? colors.brand.primary : colors.neutral[700],
@@ -159,7 +181,13 @@ export function Breadcrumb(props: { items: { label: string; href?: string }[] })
         {props.items.map((it, i) => (
           <li key={i} style={{ display: 'flex', gap: spacing[2], color: colors.neutral[500] }}>
             {i > 0 ? <span aria-hidden>/</span> : null}
-            {it.href ? <a href={it.href} style={{ color: colors.brand.primary, textDecoration: 'none' }}>{it.label}</a> : <span aria-current="page">{it.label}</span>}
+            {it.href ? (
+              <a href={it.href} style={{ color: colors.brand.primary, textDecoration: 'none' }}>
+                {it.label}
+              </a>
+            ) : (
+              <span aria-current="page">{it.label}</span>
+            )}
           </li>
         ))}
       </ol>
@@ -176,20 +204,37 @@ export function Dropdown(props: { trigger: ReactNode; items: { key: string; labe
         <div
           role="menu"
           style={{
-            position: 'absolute', insetInlineEnd: 0, top: '100%', zIndex: zIndex.dropdown,
-            background: colors.neutral[0], border: `1px solid ${colors.neutral[200]}`, borderRadius: radius.md,
-            boxShadow: elevation.md, minWidth: '12rem', padding: spacing[1],
+            position: 'absolute',
+            insetInlineEnd: 0,
+            top: '100%',
+            zIndex: zIndex.dropdown,
+            background: colors.neutral[0],
+            border: `1px solid ${colors.neutral[200]}`,
+            borderRadius: radius.md,
+            boxShadow: elevation.md,
+            minWidth: '12rem',
+            padding: spacing[1],
           }}
         >
           {props.items.map((it) => (
             <button
               key={it.key}
               role="menuitem"
-              onClick={() => { setOpen(false); it.onSelect(); }}
+              onClick={() => {
+                setOpen(false);
+                it.onSelect();
+              }}
               style={{
-                display: 'block', width: '100%', textAlign: 'start', padding: `${spacing[2]} ${spacing[3]}`,
-                background: 'none', border: 'none', cursor: 'pointer', borderRadius: radius.sm,
-                color: it.danger ? colors.semantic.danger : colors.neutral[800], fontSize: typography.size.sm,
+                display: 'block',
+                width: '100%',
+                textAlign: 'start',
+                padding: `${spacing[2]} ${spacing[3]}`,
+                background: 'none',
+                border: 'none',
+                cursor: 'pointer',
+                borderRadius: radius.sm,
+                color: it.danger ? colors.semantic.danger : colors.neutral[800],
+                fontSize: typography.size.sm,
                 minHeight: '2.75rem',
               }}
             >

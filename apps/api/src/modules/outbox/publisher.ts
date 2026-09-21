@@ -37,7 +37,7 @@ export class OutboxPublisher {
   ) {}
 
   async publishOnce(): Promise<{ delivered: number; dead: number }> {
-    return this.db.withWorkerTransaction( async (c) => {
+    return this.db.withWorkerTransaction(async (c) => {
       const rows = (
         await c.query<{ id: string; type: string; payload: Record<string, unknown>; attempts: number }>(
           `SELECT id, type, payload, attempts FROM outbox_events
@@ -60,10 +60,11 @@ export class OutboxPublisher {
             await c.query(`UPDATE outbox_events SET status = 'dead', attempts = $2 WHERE id = $1`, [row.id, attempts]);
             dead += 1;
           } else {
-            await c.query(
-              `UPDATE outbox_events SET attempts = $2, next_attempt_at = now() + ($3 || ' seconds')::interval WHERE id = $1`,
-              [row.id, attempts, backoffSeconds(attempts)],
-            );
+            await c.query(`UPDATE outbox_events SET attempts = $2, next_attempt_at = now() + ($3 || ' seconds')::interval WHERE id = $1`, [
+              row.id,
+              attempts,
+              backoffSeconds(attempts),
+            ]);
           }
         }
       }

@@ -47,8 +47,14 @@ export default function RegisterPage({ params }: { params: Promise<{ locale: Loc
           <TextField label={t('auth.displayName')} required value={displayName} onChange={setDisplayName} autoComplete="name" />
           <TextField label={t('auth.email')} type="email" required value={email} onChange={setEmail} autoComplete="email" />
           <PasswordField label={t('auth.password')} required value={password} onChange={setPassword} autoComplete="new-password" />
-          {error ? <p role="alert" style={{ color: colors.semantic.danger, margin: 0 }}>{error}</p> : null}
-          <Button type="submit" loading={busy} fullWidth>{t('auth.register')}</Button>
+          {error ? (
+            <p role="alert" style={{ color: colors.semantic.danger, margin: 0 }}>
+              {error}
+            </p>
+          ) : null}
+          <Button type="submit" loading={busy} fullWidth>
+            {t('auth.register')}
+          </Button>
         </form>
         <p style={{ fontSize: typography.size.sm }}>
           <a href={`/${locale}/login`}>{t('auth.haveAccount')}</a>

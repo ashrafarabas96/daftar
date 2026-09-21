@@ -46,7 +46,13 @@ export default function SupportSessionsPage() {
   }
 
   const stateOf = (s: Session) =>
-    s.revoked_at ? <Badge tone="neutral">revoked</Badge> : new Date(s.expires_at) < new Date() ? <Badge tone="neutral">expired</Badge> : <Badge tone="danger">ACTIVE</Badge>;
+    s.revoked_at ? (
+      <Badge tone="neutral">revoked</Badge>
+    ) : new Date(s.expires_at) < new Date() ? (
+      <Badge tone="neutral">expired</Badge>
+    ) : (
+      <Badge tone="danger">ACTIVE</Badge>
+    );
 
   return (
     <Shell active="support-sessions">
@@ -55,11 +61,25 @@ export default function SupportSessionsPage() {
         rows={items}
         columns={[
           { key: 'tenant', header: 'Tenant', render: (s) => <code>{s.tenant_id.slice(0, 8)}…</code> },
-          { key: 'scope', header: 'Scope', render: (s) => (s.business_id ? <Badge tone="info">business {s.business_id.slice(0, 8)}…</Badge> : <Badge tone="neutral">whole tenant</Badge>) },
+          {
+            key: 'scope',
+            header: 'Scope',
+            render: (s) => (s.business_id ? <Badge tone="info">business {s.business_id.slice(0, 8)}…</Badge> : <Badge tone="neutral">whole tenant</Badge>),
+          },
           { key: 'reason', header: 'Reason', render: (s) => s.reason },
           { key: 'expires', header: 'Expires', render: (s) => new Date(s.expires_at).toLocaleString() },
           { key: 'state', header: 'State', render: stateOf },
-          { key: 'actions', header: '', align: 'end', render: (s) => (!s.revoked_at && new Date(s.expires_at) > new Date() ? <Button size="sm" variant="danger" onClick={() => setRevoking(s)}>Revoke</Button> : null) },
+          {
+            key: 'actions',
+            header: '',
+            align: 'end',
+            render: (s) =>
+              !s.revoked_at && new Date(s.expires_at) > new Date() ? (
+                <Button size="sm" variant="danger" onClick={() => setRevoking(s)}>
+                  Revoke
+                </Button>
+              ) : null,
+          },
         ]}
       />
       <ConfirmationDialog

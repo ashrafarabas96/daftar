@@ -35,7 +35,9 @@ export function Shell({ active, children }: { active: string; children: ReactNod
 
   return (
     <div style={{ display: 'flex', minHeight: '100vh', fontFamily: typography.fontFamily.base }}>
-      <aside style={{ width: '14rem', background: '#0F172A', color: '#E2E8F0', padding: spacing[4], display: 'flex', flexDirection: 'column', gap: spacing[1] }}>
+      <aside
+        style={{ width: '14rem', background: '#0F172A', color: '#E2E8F0', padding: spacing[4], display: 'flex', flexDirection: 'column', gap: spacing[1] }}
+      >
         <strong style={{ color: '#60A5FA', fontSize: typography.size.lg, marginBottom: spacing[4] }}>DAFTAR Admin</strong>
         {NAV.map((item) => (
           <a
@@ -43,10 +45,15 @@ export function Shell({ active, children }: { active: string; children: ReactNod
             href={item.path}
             aria-current={active === item.key ? 'page' : undefined}
             style={{
-              padding: `${spacing[2]} ${spacing[3]}`, borderRadius: '0.5rem', textDecoration: 'none',
+              padding: `${spacing[2]} ${spacing[3]}`,
+              borderRadius: '0.5rem',
+              textDecoration: 'none',
               color: active === item.key ? '#FFFFFF' : '#94A3B8',
               background: active === item.key ? '#1E293B' : 'transparent',
-              fontSize: typography.size.sm, minHeight: '2.75rem', display: 'flex', alignItems: 'center',
+              fontSize: typography.size.sm,
+              minHeight: '2.75rem',
+              display: 'flex',
+              alignItems: 'center',
             }}
           >
             {item.label}

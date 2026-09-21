@@ -92,9 +92,10 @@ export class HealthController {
       prodKindsOk = prodKindsOk && this.limiter.kind === 'redis';
     }
     if (mode === 'all') {
-      const deliveryOk = this.delivery.kind === 'smtp'
-        ? await (this.delivery as { healthCheck?: () => Promise<boolean> }).healthCheck?.().catch(() => false) ?? false
-        : true;
+      const deliveryOk =
+        this.delivery.kind === 'smtp'
+          ? ((await (this.delivery as { healthCheck?: () => Promise<boolean> }).healthCheck?.().catch(() => false)) ?? false)
+          : true;
       components['credentialDelivery'] = { kind: this.delivery.kind, ok: deliveryOk };
       ok = ok && deliveryOk;
       prodKindsOk = prodKindsOk && this.delivery.kind === 'smtp';

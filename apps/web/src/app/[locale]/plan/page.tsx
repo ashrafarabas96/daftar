@@ -29,9 +29,7 @@ export default function PlanPage({ params }: { params: Promise<{ locale: Locale 
     })();
   }, [locale, router]);
 
-  const trialDays = plan?.trialEndsAt
-    ? Math.max(0, Math.ceil((new Date(plan.trialEndsAt).getTime() - Date.now()) / 86_400_000))
-    : null;
+  const trialDays = plan?.trialEndsAt ? Math.max(0, Math.ceil((new Date(plan.trialEndsAt).getTime() - Date.now()) / 86_400_000)) : null;
 
   return (
     <PageShell locale={locale} active="plan">
@@ -41,7 +39,10 @@ export default function PlanPage({ params }: { params: Promise<{ locale: Locale 
       ) : plan ? (
         <>
           <p style={{ fontFamily: typography.fontFamily.base }}>
-            {t('plan.current')}: <Badge tone="brand">{plan.planKey} · v{plan.planVersion}</Badge>{' '}
+            {t('plan.current')}:{' '}
+            <Badge tone="brand">
+              {plan.planKey} · v{plan.planVersion}
+            </Badge>{' '}
             <Badge tone={plan.effectiveState === 'active' ? 'success' : 'warning'}>{plan.effectiveState}</Badge>
             {trialDays !== null ? ` — ${t('plan.trialDaysLeft')}: ${trialDays}` : ''}
             {plan.periodEndsAt ? ` — ${new Date(plan.periodEndsAt).toLocaleDateString(locale)}` : ''}

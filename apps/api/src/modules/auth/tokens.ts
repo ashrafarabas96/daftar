@@ -37,12 +37,9 @@ export function parseKeyRing(config: Pick<AppConfig, 'JWT_SECRET' | 'JWT_KEYS'>)
     if (!Array.isArray(raw)) throw new Error('JWT_KEYS must be a JSON array of {kid, secret, status}');
     entries = raw.map((e): JwtKeyEntry => {
       const o = e as Record<string, unknown>;
-      if (typeof o?.kid !== 'string' || o.kid.length < 1 || o.kid.length > 64)
-        throw new Error('JWT_KEYS: every key needs a kid (1–64 chars)');
-      if (typeof o?.secret !== 'string' || o.secret.length < 32)
-        throw new Error(`JWT_KEYS: key ${o.kid} secret must be ≥ 32 chars`);
-      if (o?.status !== 'active' && o?.status !== 'previous')
-        throw new Error(`JWT_KEYS: key ${o.kid} status must be 'active' or 'previous'`);
+      if (typeof o?.kid !== 'string' || o.kid.length < 1 || o.kid.length > 64) throw new Error('JWT_KEYS: every key needs a kid (1–64 chars)');
+      if (typeof o?.secret !== 'string' || o.secret.length < 32) throw new Error(`JWT_KEYS: key ${o.kid} secret must be ≥ 32 chars`);
+      if (o?.status !== 'active' && o?.status !== 'previous') throw new Error(`JWT_KEYS: key ${o.kid} status must be 'active' or 'previous'`);
       return { kid: o.kid, secret: o.secret, status: o.status };
     });
   }

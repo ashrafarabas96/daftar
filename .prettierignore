@@ -1,0 +1,18 @@
+# Build outputs / dependencies / runtime artifacts
+node_modules/
+dist/
+.next/
+out/
+coverage/
+build/
+release/
+var/
+apps/android/.gradle/
+apps/android/build/
+apps/android/**/build/
+# Generated lockfile (owned by npm)
+package-lock.json
+# Prose documentation (Arabic/English markdown tables are hand-aligned)
+*.md
+# SQL migrations are frozen by SHA-256 — never reformatted
+*.sql

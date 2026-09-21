@@ -37,13 +37,22 @@ describe('invitation lifecycle hardening (WAVE 4)', () => {
 
   async function onboard(): Promise<{ token: string; businessId: string; userId: string }> {
     const reg = await t.request.post('/v1/auth/register').send({
-      email: uniqueEmail(), password: 'Str0ng!Passw0rd', displayName: 'U', preferredLocale: 'ar',
+      email: uniqueEmail(),
+      password: 'Str0ng!Passw0rd',
+      displayName: 'U',
+      preferredLocale: 'ar',
     });
     const token = reg.body.accessToken as string;
-    const on = await t.request.post('/v1/onboarding/complete').set('Idempotency-Key', `idem-${Date.now()}-${Math.floor(Math.random()*1e9)}`).set('Authorization', `Bearer ${token}`).send({
-      businessName: 'Biz', countryCode: 'PS', baseCurrency: 'ILS',
-      storeSlug: `il-${Date.now()}-${Math.floor(Math.random() * 1e6)}`,
-    });
+    const on = await t.request
+      .post('/v1/onboarding/complete')
+      .set('Idempotency-Key', `idem-${Date.now()}-${Math.floor(Math.random() * 1e9)}`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        businessName: 'Biz',
+        countryCode: 'PS',
+        baseCurrency: 'ILS',
+        storeSlug: `il-${Date.now()}-${Math.floor(Math.random() * 1e6)}`,
+      });
     const me = await t.request.get('/v1/auth/me').set('Authorization', `Bearer ${token}`);
     const userId = me.body.userId as string;
     await grantFeature(on.body.businessId as string, userId, 'CUSTOM_ROLES');
@@ -51,9 +60,14 @@ describe('invitation lifecycle hardening (WAVE 4)', () => {
   }
 
   async function makeRole(a: { token: string; businessId: string }, key: string) {
-    const role = await t.request.post('/v1/businesses/current/roles').set(auth(a.token, a.businessId)).send({
-      key, name: key, permissions: ['catalog.view'],
-    });
+    const role = await t.request
+      .post('/v1/businesses/current/roles')
+      .set(auth(a.token, a.businessId))
+      .send({
+        key,
+        name: key,
+        permissions: ['catalog.view'],
+      });
     expect(role.status).toBe(201);
   }
 
@@ -128,11 +142,17 @@ describe('invitation lifecycle hardening (WAVE 4)', () => {
     const oldToken = inviteTokens[0] ?? '';
     const newToken = inviteTokens[1] ?? '';
     const regB = await t.request.post('/v1/invitations/accept-register').send({
-      token: oldToken, email, password: 'Str0ng!Passw0rd', displayName: 'B',
+      token: oldToken,
+      email,
+      password: 'Str0ng!Passw0rd',
+      displayName: 'B',
     });
     expect(regB.status).toBe(404);
     const accB = await t.request.post('/v1/invitations/accept-register').send({
-      token: newToken, email, password: 'Str0ng!Passw0rd', displayName: 'B',
+      token: newToken,
+      email,
+      password: 'Str0ng!Passw0rd',
+      displayName: 'B',
     });
     expect(accB.status).toBe(200);
     expect(accB.status).toBe(200);
@@ -143,7 +163,10 @@ describe('invitation lifecycle hardening (WAVE 4)', () => {
     await makeRole(a, 'clerk');
     const email = uniqueEmail();
     const reg = await t.request.post('/v1/auth/register').send({
-      email, password: 'Str0ng!Passw0rd', displayName: 'B', preferredLocale: 'ar',
+      email,
+      password: 'Str0ng!Passw0rd',
+      displayName: 'B',
+      preferredLocale: 'ar',
     });
     expect(reg.status).toBe(201);
     const inv = await t.request.post('/v1/businesses/current/invitations').set(auth(a.token, a.businessId)).send({ email, roleKey: 'clerk' });
@@ -185,7 +208,10 @@ describe('invitation lifecycle hardening (WAVE 4)', () => {
   it('password reset delivery failure is tracked on the token row', async () => {
     const email = uniqueEmail();
     await t.request.post('/v1/auth/register').send({
-      email, password: 'Str0ng!Passw0rd', displayName: 'U', preferredLocale: 'ar',
+      email,
+      password: 'Str0ng!Passw0rd',
+      displayName: 'U',
+      preferredLocale: 'ar',
     });
     failDelivery = true;
     const res = await t.request.post('/v1/auth/password-reset/request').send({ email });
@@ -204,7 +230,10 @@ describe('invitation lifecycle hardening (WAVE 4)', () => {
   it('password reset successful delivery is tracked', async () => {
     const email = uniqueEmail();
     await t.request.post('/v1/auth/register').send({
-      email, password: 'Str0ng!Passw0rd', displayName: 'U', preferredLocale: 'ar',
+      email,
+      password: 'Str0ng!Passw0rd',
+      displayName: 'U',
+      preferredLocale: 'ar',
     });
     const res = await t.request.post('/v1/auth/password-reset/request').send({ email });
     expect([200, 201, 204]).toContain(res.status);

@@ -5,10 +5,7 @@ import type { InvitationDto, MemberDto, RoleDto } from '@daftar/shared-contracts
 import { Badge, Button, Dialog, Select, Table, Tabs, TextField, spacing, typography } from '@daftar/design-system';
 import { makeT, type Locale } from '@/lib/i18n';
 import { refreshSession } from '@/lib/client';
-import {
-  inviteMember, listInvitations, listMembers, listRoles,
-  reactivateMember, resendInvitation, cancelInvitation, suspendMember,
-} from '@/lib/merchant-api';
+import { inviteMember, listInvitations, listMembers, listRoles, reactivateMember, resendInvitation, cancelInvitation, suspendMember } from '@/lib/merchant-api';
 import { PageShell } from '../AppHeader';
 
 export default function TeamPage({ params }: { params: Promise<{ locale: Locale }> }) {
@@ -56,7 +53,13 @@ export default function TeamPage({ params }: { params: Promise<{ locale: Locale 
   }
 
   const statusBadge = (status: string) =>
-    status === 'active' ? <Badge tone="success">{t('team.active')}</Badge> : status === 'suspended' ? <Badge tone="danger">{t('team.suspended')}</Badge> : <Badge tone="warning">{t('team.pending')}</Badge>;
+    status === 'active' ? (
+      <Badge tone="success">{t('team.active')}</Badge>
+    ) : status === 'suspended' ? (
+      <Badge tone="danger">{t('team.suspended')}</Badge>
+    ) : (
+      <Badge tone="warning">{t('team.pending')}</Badge>
+    );
 
   return (
     <PageShell locale={locale} active="team">
@@ -64,7 +67,14 @@ export default function TeamPage({ params }: { params: Promise<{ locale: Locale 
         <h1 style={{ fontFamily: typography.fontFamily.base, margin: 0 }}>{t('team.title')}</h1>
         <Button onClick={() => setOpen(true)}>{t('team.invite')}</Button>
       </div>
-      <Tabs tabs={[{ key: 'members', label: t('team.members') }, { key: 'invitations', label: t('team.invitations') }]} active={tab} onChange={setTab} />
+      <Tabs
+        tabs={[
+          { key: 'members', label: t('team.members') },
+          { key: 'invitations', label: t('team.invitations') },
+        ]}
+        active={tab}
+        onChange={setTab}
+      />
       <div style={{ marginTop: spacing[4] }}>
         {tab === 'members' ? (
           <Table
@@ -80,9 +90,13 @@ export default function TeamPage({ params }: { params: Promise<{ locale: Locale 
                 align: 'end',
                 render: (m) =>
                   m.status === 'active' ? (
-                    <Button variant="ghost" size="sm" onClick={() => void suspendMember(m.userId).then(load)}>{t('team.suspend')}</Button>
+                    <Button variant="ghost" size="sm" onClick={() => void suspendMember(m.userId).then(load)}>
+                      {t('team.suspend')}
+                    </Button>
                   ) : m.status === 'suspended' ? (
-                    <Button variant="ghost" size="sm" onClick={() => void reactivateMember(m.userId).then(load)}>{t('team.reactivate')}</Button>
+                    <Button variant="ghost" size="sm" onClick={() => void reactivateMember(m.userId).then(load)}>
+                      {t('team.reactivate')}
+                    </Button>
                   ) : null,
               },
             ]}
@@ -101,8 +115,12 @@ export default function TeamPage({ params }: { params: Promise<{ locale: Locale 
                 render: (i) =>
                   i.status === 'pending' ? (
                     <span style={{ display: 'inline-flex', gap: spacing[2] }}>
-                      <Button variant="ghost" size="sm" onClick={() => void resendInvitation(i.id).then(load)}>{t('team.resend')}</Button>
-                      <Button variant="ghost" size="sm" onClick={() => void cancelInvitation(i.id).then(load)}>{t('team.cancelInvite')}</Button>
+                      <Button variant="ghost" size="sm" onClick={() => void resendInvitation(i.id).then(load)}>
+                        {t('team.resend')}
+                      </Button>
+                      <Button variant="ghost" size="sm" onClick={() => void cancelInvitation(i.id).then(load)}>
+                        {t('team.cancelInvite')}
+                      </Button>
                     </span>
                   ) : null,
               },
@@ -110,15 +128,23 @@ export default function TeamPage({ params }: { params: Promise<{ locale: Locale 
           />
         )}
       </div>
-      {note ? <p role="status" style={{ fontFamily: typography.fontFamily.base }}>{note}</p> : null}
+      {note ? (
+        <p role="status" style={{ fontFamily: typography.fontFamily.base }}>
+          {note}
+        </p>
+      ) : null}
       <Dialog
         open={open}
         title={t('team.invite')}
         onClose={() => setOpen(false)}
         footer={
           <>
-            <Button variant="ghost" onClick={() => setOpen(false)}>{t('common.cancel')}</Button>
-            <Button loading={busy} disabled={!email.includes('@')} onClick={() => void invite()}>{t('team.invite')}</Button>
+            <Button variant="ghost" onClick={() => setOpen(false)}>
+              {t('common.cancel')}
+            </Button>
+            <Button loading={busy} disabled={!email.includes('@')} onClick={() => void invite()}>
+              {t('team.invite')}
+            </Button>
           </>
         }
       >

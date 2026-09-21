@@ -48,7 +48,11 @@ const EnvSchema = z
     MEDIA_STORAGE: z.enum(['local', 's3']).default('local'),
     MEDIA_ROOT: z.string().min(1).default('./var/media'),
     MEDIA_PUBLIC_BASE_URL: z.string().min(1).default('/media'),
-    MEDIA_MAX_BYTES: z.coerce.number().int().min(1024).default(5 * 1024 * 1024),
+    MEDIA_MAX_BYTES: z.coerce
+      .number()
+      .int()
+      .min(1024)
+      .default(5 * 1024 * 1024),
     S3_ENDPOINT: z.string().optional(),
     S3_REGION: z.string().optional(),
     S3_PUBLIC_BASE_URL: z.string().optional(),
@@ -67,7 +71,12 @@ const EnvSchema = z
     CORS_ORIGINS: z.string().default('http://localhost:3001'),
     // §11 (Final Enforcement): support session lifetime is capped SERVER-SIDE.
     // Arbitrary far-future expiry is rejected; default maximum is 4 hours.
-    SUPPORT_SESSION_MAX_MINUTES: z.coerce.number().int().min(5).max(24 * 60).default(240),
+    SUPPORT_SESSION_MAX_MINUTES: z.coerce
+      .number()
+      .int()
+      .min(5)
+      .max(24 * 60)
+      .default(240),
     LOG_LEVEL: z.string().default('info'),
   })
   .superRefine((c, ctx) => {
@@ -84,14 +93,24 @@ const EnvSchema = z
       if (!c.JWT_SECRET && !c.JWT_KEYS) fail('JWT_SECRET', `${mode} requires JWT_SECRET or JWT_KEYS`);
     }
     if (mode === 'worker') {
-      for (const n of ['APP_DATABASE_URL', 'PLATFORM_DATABASE_URL', 'IDENTITY_DATABASE_URL', 'RESOLVER_DATABASE_URL', 'PROVISIONER_DATABASE_URL', 'CREDENTIAL_KMS_ENDPOINT'] as const) {
+      for (const n of [
+        'APP_DATABASE_URL',
+        'PLATFORM_DATABASE_URL',
+        'IDENTITY_DATABASE_URL',
+        'RESOLVER_DATABASE_URL',
+        'PROVISIONER_DATABASE_URL',
+        'CREDENTIAL_KMS_ENDPOINT',
+      ] as const) {
         if (c[n]) fail(n, 'must NOT be set in PROCESS_MODE=worker (worker receives worker DB + key ring + SMTP only)');
       }
     }
 
     // ── §XXV–XXIX: per-mode SECRET ENVIRONMENT SEPARATION ────────────────
     // A process must not even RECEIVE secrets outside its authority.
-    const forbid = (name: 'PLATFORM_DATABASE_URL' | 'WORKER_DATABASE_URL' | 'PROVISIONER_DATABASE_URL' | 'CREDENTIAL_PAYLOAD_KEY' | 'CREDENTIAL_PAYLOAD_KEYS' | 'SMTP_URL', why: string): void => {
+    const forbid = (
+      name: 'PLATFORM_DATABASE_URL' | 'WORKER_DATABASE_URL' | 'PROVISIONER_DATABASE_URL' | 'CREDENTIAL_PAYLOAD_KEY' | 'CREDENTIAL_PAYLOAD_KEYS' | 'SMTP_URL',
+      why: string,
+    ): void => {
       if (c[name]) fail(name, `must NOT be set in PROCESS_MODE=${mode} (${why})`);
     };
     if (mode === 'merchant-api') {
@@ -122,7 +141,10 @@ const EnvSchema = z
         fail('WORKER_DATABASE_URL', `${mode} requires the worker DB URL (daftar_worker role)`);
       }
       if (!c.CREDENTIAL_PAYLOAD_KEY && !c.CREDENTIAL_PAYLOAD_KEYS) {
-        fail('CREDENTIAL_PAYLOAD_KEYS', 'production requires CREDENTIAL_PAYLOAD_KEYS (JSON key ring, base64 32-byte AES-256-GCM keys, KMS-managed) or legacy CREDENTIAL_PAYLOAD_KEY. The dev/test key is forbidden in production.');
+        fail(
+          'CREDENTIAL_PAYLOAD_KEYS',
+          'production requires CREDENTIAL_PAYLOAD_KEYS (JSON key ring, base64 32-byte AES-256-GCM keys, KMS-managed) or legacy CREDENTIAL_PAYLOAD_KEY. The dev/test key is forbidden in production.',
+        );
       }
     }
     if (mode === 'all' || mode === 'merchant-api' || mode === 'platform-api') {
@@ -140,7 +162,10 @@ const EnvSchema = z
       // Part C: merchant encrypts via a KMS-style provider only — it must
       // never hold credential key material (encrypt OR decrypt) in prod.
       if (!c.CREDENTIAL_KMS_ENDPOINT) {
-        fail('CREDENTIAL_KMS_ENDPOINT', 'production merchant runtime requires a KMS-style credential encrypt provider (local/DEV keys are structurally forbidden)');
+        fail(
+          'CREDENTIAL_KMS_ENDPOINT',
+          'production merchant runtime requires a KMS-style credential encrypt provider (local/DEV keys are structurally forbidden)',
+        );
       }
     }
     if (mode === 'all' || mode === 'merchant-api') {

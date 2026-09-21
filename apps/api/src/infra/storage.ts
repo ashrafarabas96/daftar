@@ -65,7 +65,10 @@ export class LocalObjectStorage implements ObjectStorage {
     return Promise.resolve(this.publicUrl(key));
   }
   healthCheck(): Promise<boolean> {
-    return mkdir(this.root, { recursive: true }).then(() => true, () => false);
+    return mkdir(this.root, { recursive: true }).then(
+      () => true,
+      () => false,
+    );
   }
 }
 

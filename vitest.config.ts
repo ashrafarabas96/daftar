@@ -13,6 +13,7 @@ export default defineConfig({
     pool: 'forks',
     poolOptions: { forks: { singleFork: true } },
     globalSetup: 'tests/helpers/global-setup.ts',
+    setupFiles: ['tests/helpers/setup.ts'],
     env: { NODE_PATH: '' },
   },
 });

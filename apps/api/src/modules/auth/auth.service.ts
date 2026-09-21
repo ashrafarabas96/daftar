@@ -4,9 +4,7 @@ import { Database } from '../../infra/database';
 import { AuditService, newId } from '../audit/audit.service';
 import type { RateLimiter } from '../../infra/redis';
 import { CredentialDeliveryEnqueuer } from '../delivery/credential-enqueuer.service';
-import {
-  TokenService, hashPassword, hashRefreshToken, verifyPassword,
-} from './tokens';
+import { TokenService, hashPassword, hashRefreshToken, verifyPassword } from './tokens';
 import type { AuthTokensDto, LocaleCode } from '@daftar/shared-contracts';
 
 // §XXXII–XXXVIII: layered auth-abuse defense.
@@ -63,7 +61,7 @@ export class AuthService {
     await this.rateLimiter.take(`register:ip:${clientIp}`, REGISTER_IP_MAX_ATTEMPTS, RESET_WINDOW_SECONDS);
     const passwordHash = await hashPassword(input.password);
     try {
-      const userId = await this.db.withIdentityTransaction( async (c) => {
+      const userId = await this.db.withIdentityTransaction(async (c) => {
         const r = await c.query<{ id: string }>(
           `INSERT INTO users (email, password_hash, display_name, preferred_locale)
            VALUES ($1, $2, $3, $4) RETURNING id`,
@@ -100,10 +98,9 @@ export class AuthService {
       throw e;
     };
     const user = (
-      await this.db.withIdentityTransaction((c) => c.query<{ id: string; password_hash: string; status: string }>(
-        'SELECT id, password_hash, status FROM users WHERE email = $1',
-        [email],
-      ))
+      await this.db.withIdentityTransaction((c) =>
+        c.query<{ id: string; password_hash: string; status: string }>('SELECT id, password_hash, status FROM users WHERE email = $1', [email]),
+      )
     ).rows[0];
 
     // Uniform timing: verify against a dummy hash when the user doesn't exist.
@@ -125,16 +122,13 @@ export class AuthService {
     const sessionId = newId();
     const refresh = this.tokens.newRefreshToken();
     const family = this.tokens.newSessionFamily();
-    await this.db.withIdentityTransaction( async (c) => {
+    await this.db.withIdentityTransaction(async (c) => {
       await c.query(
         `INSERT INTO sessions (id, user_id, family_id, refresh_token_hash, expires_at)
          VALUES ($1, $2, $3, $4, now() + interval '${SESSION_TTL_DAYS} days')`,
         [sessionId, userId, family, hashRefreshToken(refresh)],
       );
-      await c.query(
-        `INSERT INTO session_refresh_tokens (session_id, token_hash, state) VALUES ($1, $2, 'issued')`,
-        [sessionId, hashRefreshToken(refresh)],
-      );
+      await c.query(`INSERT INTO session_refresh_tokens (session_id, token_hash, state) VALUES ($1, $2, 'issued')`, [sessionId, hashRefreshToken(refresh)]);
       await this.audit.recordTx(c, { action: 'auth.session_created', entity: 'session', entityId: sessionId, actorUserId: userId });
     });
     const accessToken = await this.tokens.signAccessToken(userId, sessionId);
@@ -162,11 +156,16 @@ export class AuthService {
       | { kind: 'reuse'; userId: string; sessionId: string; familyId: string }
       | { kind: 'unknown' };
 
-    const verdict = await this.db.withIdentityTransaction( async (c): Promise<Verdict> => {
+    const verdict = await this.db.withIdentityTransaction(async (c): Promise<Verdict> => {
       const row = (
         await c.query<{
-          id: string; state: string; session_id: string;
-          user_id: string; family_id: string; session_status: string; session_expires: Date;
+          id: string;
+          state: string;
+          session_id: string;
+          user_id: string;
+          family_id: string;
+          session_status: string;
+          session_expires: Date;
         }>(
           `SELECT l.id, l.state, l.session_id, s.user_id, s.family_id,
                   s.status AS session_status, s.expires_at AS session_expires
@@ -189,10 +188,10 @@ export class AuthService {
         return { kind: 'reuse', userId: row.user_id, sessionId: row.session_id, familyId: row.family_id };
       }
       const successor = (
-        await c.query<{ id: string }>(
-          `INSERT INTO session_refresh_tokens (session_id, token_hash, state) VALUES ($1, $2, 'issued') RETURNING id`,
-          [row.session_id, hashRefreshToken(next)],
-        )
+        await c.query<{ id: string }>(`INSERT INTO session_refresh_tokens (session_id, token_hash, state) VALUES ($1, $2, 'issued') RETURNING id`, [
+          row.session_id,
+          hashRefreshToken(next),
+        ])
       ).rows[0];
       if (!successor) throw new Error('refresh successor insert failed');
       await c.query('UPDATE session_refresh_tokens SET replaced_by = $2 WHERE id = $1', [row.id, successor.id]);
@@ -211,7 +210,7 @@ export class AuthService {
     }
     if (verdict.kind === 'reuse') {
       // §20: revocation COMMITS before the throw.
-      await this.db.withIdentityTransaction( async (c) => {
+      await this.db.withIdentityTransaction(async (c) => {
         await c.query(
           `UPDATE sessions SET status = 'revoked', revoked_reason = 'token_reuse_detected'
            WHERE family_id = $1 AND status = 'active'`,
@@ -223,7 +222,10 @@ export class AuthService {
           [verdict.familyId],
         );
         await this.audit.recordTx(c, {
-          action: 'auth.refresh_token_reuse_detected', entity: 'session', entityId: verdict.sessionId, actorUserId: verdict.userId,
+          action: 'auth.refresh_token_reuse_detected',
+          entity: 'session',
+          entityId: verdict.sessionId,
+          actorUserId: verdict.userId,
         });
       });
       throw new AppError('TOKEN_REUSE_DETECTED', 'Session terminated for security reasons', 401);
@@ -238,11 +240,8 @@ export class AuthService {
   }
 
   async logoutAll(userId: string): Promise<void> {
-    await this.db.withIdentityTransaction( async (c) => {
-      await c.query(
-        `UPDATE sessions SET status = 'revoked', revoked_reason = 'logout_all' WHERE user_id = $1 AND status = 'active'`,
-        [userId],
-      );
+    await this.db.withIdentityTransaction(async (c) => {
+      await c.query(`UPDATE sessions SET status = 'revoked', revoked_reason = 'logout_all' WHERE user_id = $1 AND status = 'active'`, [userId]);
       await c.query(
         `UPDATE session_refresh_tokens SET state = 'revoked'
          WHERE state = 'issued' AND session_id IN (SELECT id FROM sessions WHERE user_id = $1)`,
@@ -253,15 +252,9 @@ export class AuthService {
   }
 
   private async revokeSession(sessionId: string, reason: string): Promise<void> {
-    await this.db.withIdentityTransaction( async (c) => {
-      await c.query(
-        `UPDATE sessions SET status = 'revoked', revoked_reason = $2 WHERE id = $1 AND status = 'active'`,
-        [sessionId, reason],
-      );
-      await c.query(
-        `UPDATE session_refresh_tokens SET state = 'revoked' WHERE session_id = $1 AND state = 'issued'`,
-        [sessionId],
-      );
+    await this.db.withIdentityTransaction(async (c) => {
+      await c.query(`UPDATE sessions SET status = 'revoked', revoked_reason = $2 WHERE id = $1 AND status = 'active'`, [sessionId, reason]);
+      await c.query(`UPDATE session_refresh_tokens SET state = 'revoked' WHERE session_id = $1 AND state = 'issued'`, [sessionId]);
       await this.audit.recordTx(c, { action: 'auth.session_revoked', entity: 'session', entityId: sessionId });
     });
   }
@@ -271,13 +264,11 @@ export class AuthService {
     await this.rateLimiter.take(`pwd-reset:ip:${clientIp}`, RESET_IP_MAX_ATTEMPTS, RESET_WINDOW_SECONDS);
     await this.rateLimiter.take(`pwd-reset:${email.toLowerCase()}`, RESET_MAX_ATTEMPTS, RESET_WINDOW_SECONDS);
     const user = (
-      await this.db.withIdentityTransaction((c) => c.query<{ id: string }>(
-        'SELECT id FROM users WHERE email = $1 AND status = $2', [email, 'active'],
-      ))
+      await this.db.withIdentityTransaction((c) => c.query<{ id: string }>('SELECT id FROM users WHERE email = $1 AND status = $2', [email, 'active']))
     ).rows[0];
     if (!user) return; // silent — identical response either way
     const token = this.tokens.newRefreshToken();
-    await this.db.withIdentityTransaction( async (c) => {
+    await this.db.withIdentityTransaction(async (c) => {
       const row = (
         await c.query<{ id: string }>(
           `INSERT INTO password_reset_tokens (user_id, token_hash, expires_at)
@@ -289,7 +280,10 @@ export class AuthService {
       // §18–20: same outbox pipeline as invitations — enqueue IN the identity
       // transaction; the worker drains with retry + dead-letter after commit.
       await this.enqueuer.enqueueTx(c, {
-        kind: 'password_reset', passwordResetTokenId: row?.id as string, email, secret: token,
+        kind: 'password_reset',
+        passwordResetTokenId: row?.id as string,
+        email,
+        secret: token,
       });
     });
   }
@@ -298,7 +292,7 @@ export class AuthService {
     // §XXXVII: token-guessing defense — per-IP cap on reset completion.
     await this.rateLimiter.take(`pwd-reset-complete:ip:${clientIp}`, RESET_COMPLETE_IP_MAX_ATTEMPTS, RESET_WINDOW_SECONDS);
     const passwordHash = await hashPassword(newPassword);
-    await this.db.withIdentityTransaction( async (c) => {
+    await this.db.withIdentityTransaction(async (c) => {
       const row = (
         await c.query<{ id: string; user_id: string }>(
           `SELECT id, user_id FROM password_reset_tokens
@@ -309,10 +303,7 @@ export class AuthService {
       if (!row) throw AppError.validation({ token: ['invalid_or_expired'] });
       await c.query('UPDATE password_reset_tokens SET used_at = now() WHERE id = $1', [row.id]);
       await c.query('UPDATE users SET password_hash = $2, updated_at = now() WHERE id = $1', [row.user_id, passwordHash]);
-      await c.query(
-        `UPDATE sessions SET status = 'revoked', revoked_reason = 'password_reset' WHERE user_id = $1 AND status = 'active'`,
-        [row.user_id],
-      );
+      await c.query(`UPDATE sessions SET status = 'revoked', revoked_reason = 'password_reset' WHERE user_id = $1 AND status = 'active'`, [row.user_id]);
       await c.query(
         `UPDATE session_refresh_tokens SET state = 'revoked'
          WHERE state = 'issued' AND session_id IN (SELECT id FROM sessions WHERE user_id = $1)`,
@@ -323,18 +314,30 @@ export class AuthService {
   }
 
   /** Principal resolution for the guard: session must be live, user active. */
-  async resolvePrincipal(userId: string, sessionId: string): Promise<{
-    userId: string; email: string | null; displayName: string; preferredLocale: string;
+  async resolvePrincipal(
+    userId: string,
+    sessionId: string,
+  ): Promise<{
+    userId: string;
+    email: string | null;
+    displayName: string;
+    preferredLocale: string;
   }> {
     const row = (
-      await this.db.withIdentityTransaction((c) => c.query<{
-        id: string; email: string | null; display_name: string; preferred_locale: string; user_status: string;
-      }>(
-        `SELECT u.id, u.email::text AS email, u.display_name, u.preferred_locale, u.status AS user_status
+      await this.db.withIdentityTransaction((c) =>
+        c.query<{
+          id: string;
+          email: string | null;
+          display_name: string;
+          preferred_locale: string;
+          user_status: string;
+        }>(
+          `SELECT u.id, u.email::text AS email, u.display_name, u.preferred_locale, u.status AS user_status
          FROM users u JOIN sessions s ON s.user_id = u.id
          WHERE u.id = $1 AND s.id = $2 AND s.status = 'active' AND s.expires_at > now() AND u.status = 'active'`,
-        [userId, sessionId],
-      ))
+          [userId, sessionId],
+        ),
+      )
     ).rows[0];
     if (!row) throw AppError.unauthenticated('Session is no longer valid');
     return { userId: row.id, email: row.email, displayName: row.display_name, preferredLocale: row.preferred_locale };

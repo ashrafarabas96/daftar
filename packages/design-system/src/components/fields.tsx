@@ -1,5 +1,14 @@
 'use client';
-import { useId, useState, type ChangeEvent, type CSSProperties, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes, type TextareaHTMLAttributes } from 'react';
+import {
+  useId,
+  useState,
+  type ChangeEvent,
+  type CSSProperties,
+  type InputHTMLAttributes,
+  type ReactNode,
+  type SelectHTMLAttributes,
+  type TextareaHTMLAttributes,
+} from 'react';
 import { colors, radius, spacing, TOUCH_TARGET, typography } from '../tokens';
 
 const fieldShell: CSSProperties = {
@@ -37,7 +46,9 @@ export function TextField({ label, hint, error, onChange, id, style, ...rest }: 
   const inputId = id ?? autoId;
   return (
     <div style={{ ...fieldShell, ...style }}>
-      <label htmlFor={inputId} style={labelStyle}>{label}</label>
+      <label htmlFor={inputId} style={labelStyle}>
+        {label}
+      </label>
       <input
         {...rest}
         id={inputId}
@@ -46,7 +57,15 @@ export function TextField({ label, hint, error, onChange, id, style, ...rest }: 
         onChange={(e: ChangeEvent<HTMLInputElement>) => onChange?.(e.target.value)}
         style={{ ...inputBase, borderColor: error ? colors.semantic.danger : colors.neutral[300] }}
       />
-      {error ? <span id={`${inputId}-error`} role="alert" style={errorStyle}>{error}</span> : hint ? <span id={`${inputId}-hint`} style={hintStyle}>{hint}</span> : null}
+      {error ? (
+        <span id={`${inputId}-error`} role="alert" style={errorStyle}>
+          {error}
+        </span>
+      ) : hint ? (
+        <span id={`${inputId}-hint`} style={hintStyle}>
+          {hint}
+        </span>
+      ) : null}
     </div>
   );
 }
@@ -61,9 +80,15 @@ export function PasswordField(props: TextFieldProps) {
         aria-label={visible ? 'hide password' : 'show password'}
         onClick={() => setVisible((v) => !v)}
         style={{
-          position: 'absolute', insetInlineEnd: spacing[2], top: '2.1rem',
-          background: 'none', border: 'none', cursor: 'pointer', color: colors.neutral[500],
-          minWidth: TOUCH_TARGET, minHeight: TOUCH_TARGET,
+          position: 'absolute',
+          insetInlineEnd: spacing[2],
+          top: '2.1rem',
+          background: 'none',
+          border: 'none',
+          cursor: 'pointer',
+          color: colors.neutral[500],
+          minWidth: TOUCH_TARGET,
+          minHeight: TOUCH_TARGET,
         }}
       >
         {visible ? '◡' : '👁'}
@@ -88,7 +113,9 @@ export function Textarea({ label, hint, error, onChange, id, style, ...rest }: T
   const inputId = id ?? autoId;
   return (
     <div style={{ ...fieldShell, ...style }}>
-      <label htmlFor={inputId} style={labelStyle}>{label}</label>
+      <label htmlFor={inputId} style={labelStyle}>
+        {label}
+      </label>
       <textarea
         {...rest}
         id={inputId}
@@ -96,7 +123,13 @@ export function Textarea({ label, hint, error, onChange, id, style, ...rest }: T
         onChange={(e: ChangeEvent<HTMLTextAreaElement>) => onChange?.(e.target.value)}
         style={{ ...inputBase, minHeight: '6rem', padding: spacing[3], resize: 'vertical' }}
       />
-      {error ? <span role="alert" style={errorStyle}>{error}</span> : hint ? <span style={hintStyle}>{hint}</span> : null}
+      {error ? (
+        <span role="alert" style={errorStyle}>
+          {error}
+        </span>
+      ) : hint ? (
+        <span style={hintStyle}>{hint}</span>
+      ) : null}
     </div>
   );
 }
@@ -114,7 +147,9 @@ export function Select({ label, hint, error, options, onChange, id, style, ...re
   const inputId = id ?? autoId;
   return (
     <div style={{ ...fieldShell, ...style }}>
-      <label htmlFor={inputId} style={labelStyle}>{label}</label>
+      <label htmlFor={inputId} style={labelStyle}>
+        {label}
+      </label>
       <select
         {...rest}
         id={inputId}
@@ -123,10 +158,18 @@ export function Select({ label, hint, error, options, onChange, id, style, ...re
         style={{ ...inputBase, borderColor: error ? colors.semantic.danger : colors.neutral[300] }}
       >
         {options.map((o) => (
-          <option key={o.value} value={o.value}>{o.label}</option>
+          <option key={o.value} value={o.value}>
+            {o.label}
+          </option>
         ))}
       </select>
-      {error ? <span role="alert" style={errorStyle}>{error}</span> : hint ? <span style={hintStyle}>{hint}</span> : null}
+      {error ? (
+        <span role="alert" style={errorStyle}>
+          {error}
+        </span>
+      ) : hint ? (
+        <span style={hintStyle}>{hint}</span>
+      ) : null}
     </div>
   );
 }
@@ -144,7 +187,9 @@ export function Combobox({ options, onSelect, ...rest }: ComboboxProps) {
       <TextField {...rest} list={listId} role="combobox" aria-expanded={undefined} onChange={(v) => onSelect(v)} />
       <datalist id={listId}>
         {options.map((o) => (
-          <option key={o.value} value={o.value}>{o.label}</option>
+          <option key={o.value} value={o.value}>
+            {o.label}
+          </option>
         ))}
       </datalist>
     </div>
@@ -160,8 +205,23 @@ export interface CheckboxProps {
 
 export function Checkbox({ label, checked, onChange, disabled }: CheckboxProps) {
   return (
-    <label style={{ display: 'flex', alignItems: 'center', gap: spacing[2], minHeight: TOUCH_TARGET, cursor: disabled ? 'not-allowed' : 'pointer', fontFamily: typography.fontFamily.base }}>
-      <input type="checkbox" checked={checked} disabled={disabled} onChange={(e) => onChange(e.target.checked)} style={{ width: '1.25rem', height: '1.25rem', accentColor: colors.brand.primary }} />
+    <label
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: spacing[2],
+        minHeight: TOUCH_TARGET,
+        cursor: disabled ? 'not-allowed' : 'pointer',
+        fontFamily: typography.fontFamily.base,
+      }}
+    >
+      <input
+        type="checkbox"
+        checked={checked}
+        disabled={disabled}
+        onChange={(e) => onChange(e.target.checked)}
+        style={{ width: '1.25rem', height: '1.25rem', accentColor: colors.brand.primary }}
+      />
       <span style={{ fontSize: typography.size.md, color: colors.neutral[800] }}>{label}</span>
     </label>
   );
@@ -180,14 +240,25 @@ export function RadioCard({ name, value, title, description, checked, onChange }
   return (
     <label
       style={{
-        display: 'flex', gap: spacing[3], alignItems: 'flex-start',
-        padding: spacing[4], borderRadius: radius.lg, cursor: 'pointer',
+        display: 'flex',
+        gap: spacing[3],
+        alignItems: 'flex-start',
+        padding: spacing[4],
+        borderRadius: radius.lg,
+        cursor: 'pointer',
         border: `2px solid ${checked ? colors.brand.primary : colors.neutral[200]}`,
         background: checked ? colors.brand.primarySoft : colors.neutral[0],
         fontFamily: typography.fontFamily.base,
       }}
     >
-      <input type="radio" name={name} value={value} checked={checked} onChange={() => onChange(value)} style={{ marginTop: spacing[1], accentColor: colors.brand.primary }} />
+      <input
+        type="radio"
+        name={name}
+        value={value}
+        checked={checked}
+        onChange={() => onChange(value)}
+        style={{ marginTop: spacing[1], accentColor: colors.brand.primary }}
+      />
       <span>
         <span style={{ display: 'block', fontWeight: typography.weight.semibold, color: colors.neutral[900] }}>{title}</span>
         {description ? <span style={{ display: 'block', fontSize: typography.size.sm, color: colors.neutral[500] }}>{description}</span> : null}
@@ -206,22 +277,36 @@ export function Switch({ label, checked, onChange, disabled }: CheckboxProps) {
       disabled={disabled}
       onClick={() => onChange(!checked)}
       style={{
-        display: 'inline-flex', alignItems: 'center', gap: spacing[2],
-        background: 'none', border: 'none', cursor: disabled ? 'not-allowed' : 'pointer',
-        minHeight: TOUCH_TARGET, fontFamily: typography.fontFamily.base,
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: spacing[2],
+        background: 'none',
+        border: 'none',
+        cursor: disabled ? 'not-allowed' : 'pointer',
+        minHeight: TOUCH_TARGET,
+        fontFamily: typography.fontFamily.base,
       }}
     >
       <span
         style={{
-          width: '2.75rem', height: '1.5rem', borderRadius: radius.full,
+          width: '2.75rem',
+          height: '1.5rem',
+          borderRadius: radius.full,
           background: checked ? colors.brand.primary : colors.neutral[300],
-          position: 'relative', transition: 'background 120ms ease-out', display: 'inline-block',
+          position: 'relative',
+          transition: 'background 120ms ease-out',
+          display: 'inline-block',
         }}
       >
         <span
           style={{
-            position: 'absolute', top: '0.125rem', insetInlineStart: checked ? '1.375rem' : '0.125rem',
-            width: '1.25rem', height: '1.25rem', borderRadius: radius.full, background: colors.neutral[0],
+            position: 'absolute',
+            top: '0.125rem',
+            insetInlineStart: checked ? '1.375rem' : '0.125rem',
+            width: '1.25rem',
+            height: '1.25rem',
+            borderRadius: radius.full,
+            background: colors.neutral[0],
             transition: 'inset-inline-start 120ms ease-out',
           }}
         />

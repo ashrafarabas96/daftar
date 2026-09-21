@@ -10,11 +10,15 @@ const platformDbUrl = 'postgresql://daftar_platform:test_platform_password_123@l
 const workerDbUrl = 'postgresql://daftar_worker:test_worker_password_123@localhost:55432/daftar';
 
 function testDb(): Database {
-  return new Database(loadConfig({
-    NODE_ENV: 'test', APP_DATABASE_URL: appDbUrl, PLATFORM_DATABASE_URL: platformDbUrl,
-    WORKER_DATABASE_URL: workerDbUrl,
-    JWT_SECRET: 'test-secret-key-with-at-least-32-characters!',
-  }));
+  return new Database(
+    loadConfig({
+      NODE_ENV: 'test',
+      APP_DATABASE_URL: appDbUrl,
+      PLATFORM_DATABASE_URL: platformDbUrl,
+      WORKER_DATABASE_URL: workerDbUrl,
+      JWT_SECRET: 'test-secret-key-with-at-least-32-characters!',
+    }),
+  );
 }
 
 /** Transactional outbox (§66): atomicity, at-least-once, retry, dead-letter, idempotent consumers. */
@@ -45,7 +49,12 @@ describe('outbox', () => {
       await outbox.emitTx(c, { type: 'business.created', payload: { businessId: 'x' } });
     });
     const deliveries: string[] = [];
-    const sink: OutboxSink = { deliver: (type) => { deliveries.push(type); return Promise.resolve(); } };
+    const sink: OutboxSink = {
+      deliver: (type) => {
+        deliveries.push(type);
+        return Promise.resolve();
+      },
+    };
     const publisher = new OutboxPublisher(db, sink);
     const res = await publisher.publishOnce();
     expect(res.delivered).toBe(1);

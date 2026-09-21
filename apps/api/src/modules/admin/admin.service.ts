@@ -5,13 +5,7 @@ import { AuditService } from '../audit/audit.service';
 import type { AppConfig } from '../../config';
 
 /** Platform roles — a SEPARATE namespace from merchant RBAC (§49–50). */
-export type PlatformRole =
-  | 'platform_owner'
-  | 'platform_admin'
-  | 'support_agent'
-  | 'billing_admin'
-  | 'security_admin'
-  | 'read_only_analyst';
+export type PlatformRole = 'platform_owner' | 'platform_admin' | 'support_agent' | 'billing_admin' | 'security_admin' | 'read_only_analyst';
 
 /** Capability map: which platform role may perform which admin capability. */
 const MANAGE_PERMISSIONS: Record<string, PlatformRole[]> = {
@@ -43,10 +37,9 @@ export class AdminService {
   ) {}
 
   async resolvePlatformRole(userId: string): Promise<PlatformRole | null> {
-    const { rows } = await this.db.withPlatformTransaction((c) => c.query<{ role_key: PlatformRole }>(
-      'SELECT role_key FROM platform_role_memberships WHERE user_id = $1',
-      [userId],
-    ));
+    const { rows } = await this.db.withPlatformTransaction((c) =>
+      c.query<{ role_key: PlatformRole }>('SELECT role_key FROM platform_role_memberships WHERE user_id = $1', [userId]),
+    );
     const row = rows[0];
     return row ? row.role_key : null;
   }
@@ -61,25 +54,29 @@ export class AdminService {
   }
 
   async listTenants(): Promise<unknown[]> {
-    const { rows } = await this.db.withPlatformTransaction((c) => c.query<Record<string, unknown>>(
-      `SELECT t.id, t.created_at, count(b.id)::int AS business_count
+    const { rows } = await this.db.withPlatformTransaction((c) =>
+      c.query<Record<string, unknown>>(
+        `SELECT t.id, t.created_at, count(b.id)::int AS business_count
        FROM tenants t LEFT JOIN businesses b ON b.tenant_id = t.id
        GROUP BY t.id ORDER BY t.created_at DESC LIMIT $1`,
-      [PAGE],
-    ));
+        [PAGE],
+      ),
+    );
     return rows;
   }
 
   async listBusinesses(): Promise<unknown[]> {
-    const { rows } = await this.db.withPlatformTransaction((c) => c.query<Record<string, unknown>>(
-      `SELECT b.id, b.tenant_id, b.name, b.store_slug, b.created_at,
+    const { rows } = await this.db.withPlatformTransaction((c) =>
+      c.query<Record<string, unknown>>(
+        `SELECT b.id, b.tenant_id, b.name, b.store_slug, b.created_at,
               be.state AS entitlement_state, pv.plan_key, pv.version AS plan_version
        FROM businesses b
        LEFT JOIN business_entitlements be ON be.business_id = b.id
        LEFT JOIN plan_versions pv ON pv.id = be.plan_version_id
        ORDER BY b.created_at DESC LIMIT $1`,
-      [PAGE],
-    ));
+        [PAGE],
+      ),
+    );
     return rows;
   }
 
@@ -93,7 +90,9 @@ export class AdminService {
     fromVersion: number,
     toVersion: number,
   ): Promise<{
-    planKey: string; fromVersion: number; toVersion: number;
+    planKey: string;
+    fromVersion: number;
+    toVersion: number;
     trialDays: { from: number | null; to: number | null; changed: boolean };
     features: { key: string; from: boolean | null; to: boolean | null }[];
     limits: { key: string; from: number | null; to: number | null }[];
@@ -101,20 +100,22 @@ export class AdminService {
     return this.db.withPlatformTransaction(async (c) => {
       const load = async (v: number) => {
         const pv = (
-          await c.query<{ id: string; trial_days: number | null }>(
-            `SELECT id, trial_days FROM plan_versions WHERE plan_key = $1 AND version = $2`,
-            [planKey, v],
-          )
+          await c.query<{ id: string; trial_days: number | null }>(`SELECT id, trial_days FROM plan_versions WHERE plan_key = $1 AND version = $2`, [
+            planKey,
+            v,
+          ])
         ).rows[0];
         if (!pv) throw AppError.notFound(`Unknown plan version: ${planKey} v${v}`);
         const features = new Map<string, boolean>();
-        for (const r of (await c.query<{ feature_key: string; enabled: boolean }>(
-          `SELECT feature_key, enabled FROM plan_entitlements WHERE plan_version_id = $1`, [pv.id],
-        )).rows) features.set(r.feature_key, r.enabled);
+        for (const r of (
+          await c.query<{ feature_key: string; enabled: boolean }>(`SELECT feature_key, enabled FROM plan_entitlements WHERE plan_version_id = $1`, [pv.id])
+        ).rows)
+          features.set(r.feature_key, r.enabled);
         const limits = new Map<string, number>();
-        for (const r of (await c.query<{ limit_key: string; limit_value: string }>(
-          `SELECT limit_key, limit_value FROM plan_limits WHERE plan_version_id = $1`, [pv.id],
-        )).rows) limits.set(r.limit_key, Number(r.limit_value));
+        for (const r of (
+          await c.query<{ limit_key: string; limit_value: string }>(`SELECT limit_key, limit_value FROM plan_limits WHERE plan_version_id = $1`, [pv.id])
+        ).rows)
+          limits.set(r.limit_key, Number(r.limit_value));
         return { trialDays: pv.trial_days, features, limits };
       };
       const a = await load(fromVersion);
@@ -132,7 +133,9 @@ export class AdminService {
         if (from !== to) limits.push({ key, from, to });
       }
       return {
-        planKey, fromVersion, toVersion,
+        planKey,
+        fromVersion,
+        toVersion,
         trialDays: { from: a.trialDays, to: b.trialDays, changed: a.trialDays !== b.trialDays },
         features: features.sort((x, y) => x.key.localeCompare(y.key)),
         limits: limits.sort((x, y) => x.key.localeCompare(y.key)),
@@ -169,20 +172,25 @@ export class AdminService {
       const id = rows[0]?.id;
       if (!id) throw new Error('support session insert failed');
       await this.audit.recordTx(c, {
-        action: 'admin.support_session_created', entity: 'support_session', entityId: id,
-        actorUserId, metadata: { tenantId: dto.tenantId, businessId: dto.businessId ?? null, expiresAt: dto.expiresAt },
+        action: 'admin.support_session_created',
+        entity: 'support_session',
+        entityId: id,
+        actorUserId,
+        metadata: { tenantId: dto.tenantId, businessId: dto.businessId ?? null, expiresAt: dto.expiresAt },
       });
       return { sessionId: id };
     });
   }
 
   async listSupportSessions(): Promise<unknown[]> {
-    const { rows } = await this.db.withPlatformTransaction((c) => c.query<Record<string, unknown>>(
-      `SELECT id, reason, actor_user_id, tenant_id, business_id, mode,
+    const { rows } = await this.db.withPlatformTransaction((c) =>
+      c.query<Record<string, unknown>>(
+        `SELECT id, reason, actor_user_id, tenant_id, business_id, mode,
               starts_at, expires_at, revoked_at, revoked_reason, created_at
        FROM support_sessions ORDER BY created_at DESC LIMIT $1`,
-      [PAGE],
-    ));
+        [PAGE],
+      ),
+    );
     return rows;
   }
 
@@ -195,8 +203,11 @@ export class AdminService {
       );
       if (r.rowCount !== 1) throw AppError.notFound('Active support session not found');
       await this.audit.recordTx(c, {
-        action: 'admin.support_session_revoked', entity: 'support_session', entityId: sessionId,
-        actorUserId, metadata: { reason },
+        action: 'admin.support_session_revoked',
+        entity: 'support_session',
+        entityId: sessionId,
+        actorUserId,
+        metadata: { reason },
       });
     });
   }
@@ -207,18 +218,31 @@ export class AdminService {
    * §8 (Final Enforcement): when the session carries a businessId, the scope
    * is THAT business only — tenant-wide data must not be returned.
    */
-  async requireActiveSupportSession(actorUserId: string, tenantId: string): Promise<{
-    id: string; mode: string; expiresAt: Date; reason: string; businessId: string | null;
+  async requireActiveSupportSession(
+    actorUserId: string,
+    tenantId: string,
+  ): Promise<{
+    id: string;
+    mode: string;
+    expiresAt: Date;
+    reason: string;
+    businessId: string | null;
   }> {
-    const { rows } = await this.db.withPlatformTransaction((c) => c.query<{
-      id: string; mode: string; expires_at: Date; reason: string; business_id: string | null;
-    }>(
-      `SELECT id, mode, expires_at, reason, business_id FROM support_sessions
+    const { rows } = await this.db.withPlatformTransaction((c) =>
+      c.query<{
+        id: string;
+        mode: string;
+        expires_at: Date;
+        reason: string;
+        business_id: string | null;
+      }>(
+        `SELECT id, mode, expires_at, reason, business_id FROM support_sessions
        WHERE actor_user_id = $1 AND tenant_id = $2
          AND revoked_at IS NULL AND starts_at <= now() AND expires_at > now()
        ORDER BY created_at DESC LIMIT 1`,
-      [actorUserId, tenantId],
-    ));
+        [actorUserId, tenantId],
+      ),
+    );
     const s = rows[0];
     if (!s) throw AppError.forbidden('An active support session is required to access this tenant');
     return { id: s.id, mode: s.mode, expiresAt: s.expires_at, reason: s.reason, businessId: s.business_id };
@@ -228,7 +252,10 @@ export class AdminService {
    * Tenant detail for support — REQUIRES an active session and returns the
    * visible banner the UI must render while the session is live.
    */
-  async tenantDetailWithBanner(actorUserId: string, tenantId: string): Promise<{
+  async tenantDetailWithBanner(
+    actorUserId: string,
+    tenantId: string,
+  ): Promise<{
     tenant: Record<string, unknown>;
     supportBanner: { sessionId: string; mode: string; expiresAt: Date; businessId: string | null; message: string };
   }> {
@@ -278,32 +305,38 @@ export class AdminService {
   }
 
   async listUsers(): Promise<unknown[]> {
-    const { rows } = await this.db.withPlatformTransaction((c) => c.query<Record<string, unknown>>(
-      `SELECT u.id, u.email, u.display_name, u.created_at, prm.role_key AS platform_role
+    const { rows } = await this.db.withPlatformTransaction((c) =>
+      c.query<Record<string, unknown>>(
+        `SELECT u.id, u.email, u.display_name, u.created_at, prm.role_key AS platform_role
        FROM users u LEFT JOIN platform_role_memberships prm ON prm.user_id = u.id
        ORDER BY u.created_at DESC LIMIT $1`,
-      [PAGE],
-    ));
+        [PAGE],
+      ),
+    );
     return rows;
   }
 
   async listPlans(): Promise<unknown[]> {
-    const { rows } = await this.db.withPlatformTransaction((c) => c.query<Record<string, unknown>>(
-      `SELECT p.key, p.name, pv.id AS plan_version_id, pv.version, pv.effective_from,
+    const { rows } = await this.db.withPlatformTransaction((c) =>
+      c.query<Record<string, unknown>>(
+        `SELECT p.key, p.name, pv.id AS plan_version_id, pv.version, pv.effective_from,
               (SELECT jsonb_object_agg(limit_key, limit_value) FROM plan_limits pl WHERE pl.plan_version_id = pv.id) AS limits,
               (SELECT jsonb_object_agg(feature_key, enabled) FROM plan_entitlements pe WHERE pe.plan_version_id = pv.id) AS features
        FROM plans p JOIN plan_versions pv ON pv.plan_key = p.key
        ORDER BY p.key, pv.version DESC`,
-    ));
+      ),
+    );
     return rows;
   }
 
   async listAuditEvents(): Promise<unknown[]> {
-    const { rows } = await this.db.withPlatformTransaction((c) => c.query<Record<string, unknown>>(
-      `SELECT id, tenant_id, business_id, actor_user_id, action, entity, entity_id, request_id, created_at
+    const { rows } = await this.db.withPlatformTransaction((c) =>
+      c.query<Record<string, unknown>>(
+        `SELECT id, tenant_id, business_id, actor_user_id, action, entity, entity_id, request_id, created_at
        FROM audit_events ORDER BY created_at DESC LIMIT $1`,
-      [PAGE],
-    ));
+        [PAGE],
+      ),
+    );
     return rows;
   }
 
@@ -316,7 +349,7 @@ export class AdminService {
     planKey: string,
     changes: { features?: Record<string, boolean>; limits?: Record<string, number>; trialDays?: number },
   ): Promise<{ planVersionId: string; version: number }> {
-    return this.db.withPlatformTransaction( async (c) => {
+    return this.db.withPlatformTransaction(async (c) => {
       const { rows: prev } = await c.query<{ id: string; version: number }>(
         `SELECT id, version FROM plan_versions WHERE plan_key = $1 ORDER BY version DESC LIMIT 1`,
         [planKey],
@@ -407,7 +440,7 @@ export class AdminService {
     if (hasLimit && typeof dto.limitValue !== 'number') {
       throw AppError.validation({ field: 'limitValue', reason: 'limitValue is required for a limit override' });
     }
-    return this.db.withPlatformTransaction( async (c) => {
+    return this.db.withPlatformTransaction(async (c) => {
       const { rows } = await c.query<{ id: string }>(
         `INSERT INTO entitlement_overrides
            (business_id, feature_key, enabled_value, limit_key, limit_value, reason, actor_user_id, starts_at, ends_at)
@@ -442,13 +475,13 @@ export class AdminService {
   /** §35–37: publish a DRAFT version (one-way; its children freeze). */
   async publishPlanVersion(actorUserId: string, planVersionId: string): Promise<void> {
     await this.db.withPlatformTransaction(async (c) => {
-      const res = await c.query(
-        `UPDATE plan_versions SET state = 'PUBLISHED' WHERE id = $1 AND state = 'DRAFT'`,
-        [planVersionId],
-      );
+      const res = await c.query(`UPDATE plan_versions SET state = 'PUBLISHED' WHERE id = $1 AND state = 'DRAFT'`, [planVersionId]);
       if (!res.rowCount) throw AppError.conflict('CONFLICT', 'Only a DRAFT version can be published');
       await this.audit.recordTx(c, {
-        action: 'admin.plan_version_published', entity: 'plan_version', entityId: planVersionId, actorUserId,
+        action: 'admin.plan_version_published',
+        entity: 'plan_version',
+        entityId: planVersionId,
+        actorUserId,
       });
     });
   }
@@ -456,13 +489,13 @@ export class AdminService {
   /** §35: sunset a PUBLISHED version (existing subscribers keep it). */
   async sunsetPlanVersion(actorUserId: string, planVersionId: string): Promise<void> {
     await this.db.withPlatformTransaction(async (c) => {
-      const res = await c.query(
-        `UPDATE plan_versions SET state = 'SUNSET' WHERE id = $1 AND state = 'PUBLISHED'`,
-        [planVersionId],
-      );
+      const res = await c.query(`UPDATE plan_versions SET state = 'SUNSET' WHERE id = $1 AND state = 'PUBLISHED'`, [planVersionId]);
       if (!res.rowCount) throw AppError.conflict('CONFLICT', 'Only a PUBLISHED version can be sunset');
       await this.audit.recordTx(c, {
-        action: 'admin.plan_version_sunset', entity: 'plan_version', entityId: planVersionId, actorUserId,
+        action: 'admin.plan_version_sunset',
+        entity: 'plan_version',
+        entityId: planVersionId,
+        actorUserId,
       });
     });
   }
@@ -478,15 +511,19 @@ export class AdminService {
       const row = res.rows[0];
       if (!row) throw AppError.conflict('CONFLICT', 'Override not found or already revoked');
       await this.audit.recordTx(c, {
-        action: 'admin.entitlement_override_revoked', entity: 'entitlement_override', entityId: overrideId,
-        actorUserId, businessId: row.business_id, metadata: { reason },
+        action: 'admin.entitlement_override_revoked',
+        entity: 'entitlement_override',
+        entityId: overrideId,
+        actorUserId,
+        businessId: row.business_id,
+        metadata: { reason },
       });
     });
   }
 
   /** Feature flags are technical enablement — separate from entitlements (§36). */
   async setFeatureFlag(actorUserId: string, key: string, enabled: boolean, description?: string): Promise<void> {
-    await this.db.withPlatformTransaction( async (c) => {
+    await this.db.withPlatformTransaction(async (c) => {
       await c.query(
         `INSERT INTO feature_flags (key, enabled, description) VALUES ($1, $2, coalesce($3, ''))
          ON CONFLICT (key) DO UPDATE SET enabled = EXCLUDED.enabled, updated_at = now()`,
@@ -504,7 +541,7 @@ export class AdminService {
 
   /** Grant/replace a user's platform role (platform_owner only, audited). */
   async grantPlatformRole(actorUserId: string, targetUserId: string, roleKey: PlatformRole): Promise<void> {
-    await this.db.withPlatformTransaction( async (c) => {
+    await this.db.withPlatformTransaction(async (c) => {
       const { rowCount } = await c.query(
         `INSERT INTO platform_role_memberships (user_id, role_key, granted_by) VALUES ($1, $2, $3)
          ON CONFLICT (user_id) DO UPDATE SET role_key = EXCLUDED.role_key, granted_by = EXCLUDED.granted_by`,

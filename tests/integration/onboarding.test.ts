@@ -11,19 +11,30 @@ describe('onboarding', () => {
 
   async function freshUser(): Promise<string> {
     const res = await t.request.post('/v1/auth/register').send({
-      email: uniqueEmail(), password: 'Str0ng!Passw0rd', displayName: 'Owner', preferredLocale: 'ar',
+      email: uniqueEmail(),
+      password: 'Str0ng!Passw0rd',
+      displayName: 'Owner',
+      preferredLocale: 'ar',
     });
     return (res.body.accessToken ?? res.body.tokens?.accessToken) as string;
   }
 
   const onboard = (token: string, payload: Record<string, unknown>, key?: string) =>
-    t.request.post('/v1/onboarding/complete').set('Idempotency-Key', key ?? `idem-${Date.now()}-${Math.floor(Math.random()*1e9)}`).set('Authorization', `Bearer ${token}`).send(payload);
+    t.request
+      .post('/v1/onboarding/complete')
+      .set('Idempotency-Key', key ?? `idem-${Date.now()}-${Math.floor(Math.random() * 1e9)}`)
+      .set('Authorization', `Bearer ${token}`)
+      .send(payload);
 
   describe('golden locales (P1-GOLD-02/03/04)', () => {
     it('Arabic / Palestine / ILS — full atomic creation', async () => {
       const token = await freshUser();
       const res = await onboard(token, {
-        businessName: 'متجر النور', countryCode: 'PS', baseCurrency: 'ILS', storeSlug: 'alnoor-shop', preferredLocale: 'ar',
+        businessName: 'متجر النور',
+        countryCode: 'PS',
+        baseCurrency: 'ILS',
+        storeSlug: 'alnoor-shop',
+        preferredLocale: 'ar',
       });
       expect(res.status).toBe(201);
       expect(res.body.replayed).toBe(false);
@@ -49,7 +60,11 @@ describe('onboarding', () => {
     it('Türkiye / TRY / Türkçe', async () => {
       const token = await freshUser();
       const res = await onboard(token, {
-        businessName: 'Işık Mağazası', countryCode: 'TR', baseCurrency: 'TRY', storeSlug: 'isik-magaza', preferredLocale: 'tr',
+        businessName: 'Işık Mağazası',
+        countryCode: 'TR',
+        baseCurrency: 'TRY',
+        storeSlug: 'isik-magaza',
+        preferredLocale: 'tr',
       });
       expect(res.status).toBe(201);
       const biz = await ownerPool().query('SELECT default_locale, base_currency FROM businesses WHERE id = $1', [res.body.businessId]);
@@ -60,8 +75,12 @@ describe('onboarding', () => {
     it('Jordan / JOD / English + industry profile key (§46)', async () => {
       const token = await freshUser();
       const res = await onboard(token, {
-        businessName: 'Amman Electronics', countryCode: 'JO', baseCurrency: 'JOD', storeSlug: 'amman-electro',
-        preferredLocale: 'en', industryProfileKey: 'Electronics',
+        businessName: 'Amman Electronics',
+        countryCode: 'JO',
+        baseCurrency: 'JOD',
+        storeSlug: 'amman-electro',
+        preferredLocale: 'en',
+        industryProfileKey: 'Electronics',
       });
       expect(res.status).toBe(201);
       const biz = await ownerPool().query('SELECT industry_profile_key FROM businesses WHERE id = $1', [res.body.businessId]);
@@ -109,10 +128,18 @@ describe('onboarding', () => {
     it('same key + same payload replays the SAME Business A (200, replayed)', async () => {
       const token = await freshUser();
       const payload = { businessName: 'مفتاح', countryCode: 'PS', baseCurrency: 'ILS', storeSlug: 'key-shop-a' };
-      const r1 = await t.request.post('/v1/onboarding/complete').set('Idempotency-Key', `idem-${Date.now()}-${Math.floor(Math.random()*1e9)}`)
-        .set('Authorization', `Bearer ${token}`).set('Idempotency-Key', KEY).send(payload);
-      const r2 = await t.request.post('/v1/onboarding/complete').set('Idempotency-Key', `idem-${Date.now()}-${Math.floor(Math.random()*1e9)}`)
-        .set('Authorization', `Bearer ${token}`).set('Idempotency-Key', KEY).send(payload);
+      const r1 = await t.request
+        .post('/v1/onboarding/complete')
+        .set('Idempotency-Key', `idem-${Date.now()}-${Math.floor(Math.random() * 1e9)}`)
+        .set('Authorization', `Bearer ${token}`)
+        .set('Idempotency-Key', KEY)
+        .send(payload);
+      const r2 = await t.request
+        .post('/v1/onboarding/complete')
+        .set('Idempotency-Key', `idem-${Date.now()}-${Math.floor(Math.random() * 1e9)}`)
+        .set('Authorization', `Bearer ${token}`)
+        .set('Idempotency-Key', KEY)
+        .send(payload);
       expect(r1.status).toBe(201);
       expect(r2.status).toBe(200);
       expect(r2.body.businessId).toBe(r1.body.businessId);
@@ -123,36 +150,48 @@ describe('onboarding', () => {
 
     it('same key + different payload → 409 IDEMPOTENCY_KEY_REUSED', async () => {
       const token = await freshUser();
-      const r1 = await t.request.post('/v1/onboarding/complete').set('Idempotency-Key', `idem-${Date.now()}-${Math.floor(Math.random()*1e9)}`)
-        .set('Authorization', `Bearer ${token}`).set('Idempotency-Key', KEY)
+      const r1 = await t.request
+        .post('/v1/onboarding/complete')
+        .set('Idempotency-Key', `idem-${Date.now()}-${Math.floor(Math.random() * 1e9)}`)
+        .set('Authorization', `Bearer ${token}`)
+        .set('Idempotency-Key', KEY)
         .send({ businessName: 'أ', countryCode: 'PS', baseCurrency: 'ILS', storeSlug: 'key-mismatch-a' });
       expect(r1.status).toBe(201);
-      const r2 = await t.request.post('/v1/onboarding/complete').set('Idempotency-Key', `idem-${Date.now()}-${Math.floor(Math.random()*1e9)}`)
-        .set('Authorization', `Bearer ${token}`).set('Idempotency-Key', KEY)
+      const r2 = await t.request
+        .post('/v1/onboarding/complete')
+        .set('Idempotency-Key', `idem-${Date.now()}-${Math.floor(Math.random() * 1e9)}`)
+        .set('Authorization', `Bearer ${token}`)
+        .set('Idempotency-Key', KEY)
         .send({ businessName: 'ب', countryCode: 'JO', baseCurrency: 'JOD', storeSlug: 'key-mismatch-b' });
       expect(r2.status).toBe(409);
       expect(r2.body.error.code).toBe('IDEMPOTENCY_KEY_REUSED');
-      const count = await ownerPool().query(
-        `SELECT count(*) FROM businesses WHERE store_slug IN ('key-mismatch-a','key-mismatch-b')`, []);
+      const count = await ownerPool().query(`SELECT count(*) FROM businesses WHERE store_slug IN ('key-mismatch-a','key-mismatch-b')`, []);
       expect(Number(count.rows[0]?.count)).toBe(1);
     });
 
     it('create-business with a NEW key creates Business B in the SAME tenant; listMyBusinesses → A + B', async () => {
       const token = await freshUser();
-      const r1 = await t.request.post('/v1/onboarding/complete').set('Idempotency-Key', `idem-${Date.now()}-${Math.floor(Math.random()*1e9)}`)
-        .set('Authorization', `Bearer ${token}`).set('Idempotency-Key', KEY)
+      const r1 = await t.request
+        .post('/v1/onboarding/complete')
+        .set('Idempotency-Key', `idem-${Date.now()}-${Math.floor(Math.random() * 1e9)}`)
+        .set('Authorization', `Bearer ${token}`)
+        .set('Idempotency-Key', KEY)
         .send({ businessName: 'أول', countryCode: 'PS', baseCurrency: 'ILS', storeSlug: 'multi-biz-a' });
       expect(r1.status).toBe(201);
-      const r2 = await t.request.post(`/v1/tenants/${r1.body.tenantId as string}/businesses`)
-        .set('Authorization', `Bearer ${token}`).set('Idempotency-Key', 'create-biz-key-0002')
+      const r2 = await t.request
+        .post(`/v1/tenants/${r1.body.tenantId as string}/businesses`)
+        .set('Authorization', `Bearer ${token}`)
+        .set('Idempotency-Key', 'create-biz-key-0002')
         .send({ businessName: 'ثاني', countryCode: 'JO', baseCurrency: 'JOD', storeSlug: 'multi-biz-b' });
       expect(r2.status).toBe(201);
       expect(r2.body.businessId).not.toBe(r1.body.businessId);
       expect(r2.body.tenantId).toBe(r1.body.tenantId);
 
       // Replay of create-business key returns B.
-      const r3 = await t.request.post(`/v1/tenants/${r1.body.tenantId as string}/businesses`)
-        .set('Authorization', `Bearer ${token}`).set('Idempotency-Key', 'create-biz-key-0002')
+      const r3 = await t.request
+        .post(`/v1/tenants/${r1.body.tenantId as string}/businesses`)
+        .set('Authorization', `Bearer ${token}`)
+        .set('Idempotency-Key', 'create-biz-key-0002')
         .send({ businessName: 'ثاني', countryCode: 'JO', baseCurrency: 'JOD', storeSlug: 'multi-biz-b' });
       expect(r3.status).toBe(200);
       expect(r3.body.businessId).toBe(r2.body.businessId);
@@ -164,8 +203,10 @@ describe('onboarding', () => {
 
     it('non-owner cannot create an additional business (403)', async () => {
       const token = await freshUser(); // registered, never onboarded → no tenant_owner row
-      const res = await t.request.post('/v1/tenants/00000000-0000-0000-0000-000000000000/businesses')
-        .set('Authorization', `Bearer ${token}`).set('Idempotency-Key', 'create-biz-key-0003')
+      const res = await t.request
+        .post('/v1/tenants/00000000-0000-0000-0000-000000000000/businesses')
+        .set('Authorization', `Bearer ${token}`)
+        .set('Idempotency-Key', 'create-biz-key-0003')
         .send({ businessName: 'x', countryCode: 'PS', baseCurrency: 'ILS', storeSlug: 'non-owner-biz' });
       expect(res.status).toBe(403);
     });
@@ -200,7 +241,11 @@ describe('onboarding', () => {
     it('unknown industry profile does not block onboarding (§48 generic)', async () => {
       const token = await freshUser();
       const res = await onboard(token, {
-        businessName: 'Tattoo', countryCode: 'PS', baseCurrency: 'ILS', storeSlug: 'tattoo-place', industryProfileKey: 'tattoo-parlor',
+        businessName: 'Tattoo',
+        countryCode: 'PS',
+        baseCurrency: 'ILS',
+        storeSlug: 'tattoo-place',
+        industryProfileKey: 'tattoo-parlor',
       });
       expect(res.status).toBe(201);
       const biz = await ownerPool().query('SELECT industry_profile_key FROM businesses WHERE id = $1', [res.body.businessId]);
@@ -212,7 +257,10 @@ describe('onboarding', () => {
     it('editable before financial start; locked after financial_started_at', async () => {
       const token = await freshUser();
       const res = await onboard(token, {
-        businessName: 'Currency Lock Co', countryCode: 'SY', baseCurrency: 'SYP', storeSlug: 'cur-lock',
+        businessName: 'Currency Lock Co',
+        countryCode: 'SY',
+        baseCurrency: 'SYP',
+        storeSlug: 'cur-lock',
       });
       expect(res.status).toBe(201);
       const businessId = res.body.businessId as string;
@@ -249,33 +297,44 @@ describe('explicit tenant targeting + required idempotency (Gate A §33–39)', 
 
   async function freshUser(): Promise<string> {
     const res = await t.request.post('/v1/auth/register').send({
-      email: uniqueEmail(), password: 'Str0ng!Passw0rd', displayName: 'Owner', preferredLocale: 'ar',
+      email: uniqueEmail(),
+      password: 'Str0ng!Passw0rd',
+      displayName: 'Owner',
+      preferredLocale: 'ar',
     });
     return res.body.accessToken as string;
   }
 
   it('§36: owner of TWO tenants creates a business in the TARGET tenant — never the older one', async () => {
     const token = await freshUser();
-    const a = await t.request.post('/v1/onboarding/complete')
-      .set('Authorization', `Bearer ${token}`).set('Idempotency-Key', 'tenant-a-onboard-01')
+    const a = await t.request
+      .post('/v1/onboarding/complete')
+      .set('Authorization', `Bearer ${token}`)
+      .set('Idempotency-Key', 'tenant-a-onboard-01')
       .send({ businessName: 'A', countryCode: 'PS', baseCurrency: 'ILS', storeSlug: `ta-${Date.now()}` });
     expect(a.status).toBe(201);
-    const b = await t.request.post('/v1/onboarding/complete')
-      .set('Authorization', `Bearer ${token}`).set('Idempotency-Key', 'tenant-b-onboard-01')
+    const b = await t.request
+      .post('/v1/onboarding/complete')
+      .set('Authorization', `Bearer ${token}`)
+      .set('Idempotency-Key', 'tenant-b-onboard-01')
       .send({ businessName: 'B', countryCode: 'JO', baseCurrency: 'JOD', storeSlug: `tb-${Date.now()}` });
     expect(b.status).toBe(201);
     const tenantB = b.body.tenantId as string;
     expect(tenantB).not.toBe(a.body.tenantId as string);
 
-    const created = await t.request.post(`/v1/tenants/${tenantB}/businesses`)
-      .set('Authorization', `Bearer ${token}`).set('Idempotency-Key', 'targeted-create-b-01')
+    const created = await t.request
+      .post(`/v1/tenants/${tenantB}/businesses`)
+      .set('Authorization', `Bearer ${token}`)
+      .set('Idempotency-Key', 'targeted-create-b-01')
       .send({ businessName: 'B2', countryCode: 'JO', baseCurrency: 'JOD', storeSlug: `tb2-${Date.now()}` });
     expect(created.status).toBe(201);
     expect(created.body.tenantId).toBe(tenantB);
 
     // Targeting tenant A with the SAME key is a DIFFERENT operation → 409.
-    const conflict = await t.request.post(`/v1/tenants/${a.body.tenantId as string}/businesses`)
-      .set('Authorization', `Bearer ${token}`).set('Idempotency-Key', 'targeted-create-b-01')
+    const conflict = await t.request
+      .post(`/v1/tenants/${a.body.tenantId as string}/businesses`)
+      .set('Authorization', `Bearer ${token}`)
+      .set('Idempotency-Key', 'targeted-create-b-01')
       .send({ businessName: 'B2', countryCode: 'JO', baseCurrency: 'JOD', storeSlug: `tb2x-${Date.now()}` });
     expect(conflict.status).toBe(409);
     expect(conflict.body.error.code).toBe('IDEMPOTENCY_KEY_REUSED');
@@ -283,27 +342,35 @@ describe('explicit tenant targeting + required idempotency (Gate A §33–39)', 
 
   it('§35: tenant member (not owner) cannot create a business in that tenant', async () => {
     const owner = await freshUser();
-    const a = await t.request.post('/v1/onboarding/complete')
-      .set('Authorization', `Bearer ${owner}`).set('Idempotency-Key', 'member-target-onboard-01')
+    const a = await t.request
+      .post('/v1/onboarding/complete')
+      .set('Authorization', `Bearer ${owner}`)
+      .set('Idempotency-Key', 'member-target-onboard-01')
       .send({ businessName: 'A', countryCode: 'PS', baseCurrency: 'ILS', storeSlug: `mt-${Date.now()}` });
     const other = await freshUser(); // not a member of tenant A at all
-    const res = await t.request.post(`/v1/tenants/${a.body.tenantId as string}/businesses`)
-      .set('Authorization', `Bearer ${other}`).set('Idempotency-Key', 'member-target-create-01')
+    const res = await t.request
+      .post(`/v1/tenants/${a.body.tenantId as string}/businesses`)
+      .set('Authorization', `Bearer ${other}`)
+      .set('Idempotency-Key', 'member-target-create-01')
       .send({ businessName: 'X', countryCode: 'PS', baseCurrency: 'ILS', storeSlug: `mtx-${Date.now()}` });
     expect(res.status).toBe(403);
   });
 
   it('§38: missing Idempotency-Key → stable 400 on both creation commands', async () => {
     const token = await freshUser();
-    const r1 = await t.request.post('/v1/onboarding/complete')
+    const r1 = await t.request
+      .post('/v1/onboarding/complete')
       .set('Authorization', `Bearer ${token}`)
       .send({ businessName: 'A', countryCode: 'PS', baseCurrency: 'ILS', storeSlug: `nk-${Date.now()}` });
     expect(r1.status).toBe(400);
-    const a = await t.request.post('/v1/onboarding/complete')
-      .set('Authorization', `Bearer ${token}`).set('Idempotency-Key', 'with-key-01')
+    const a = await t.request
+      .post('/v1/onboarding/complete')
+      .set('Authorization', `Bearer ${token}`)
+      .set('Idempotency-Key', 'with-key-01')
       .send({ businessName: 'A', countryCode: 'PS', baseCurrency: 'ILS', storeSlug: `nk2-${Date.now()}` });
     expect(a.status).toBe(201);
-    const r2 = await t.request.post(`/v1/tenants/${a.body.tenantId as string}/businesses`)
+    const r2 = await t.request
+      .post(`/v1/tenants/${a.body.tenantId as string}/businesses`)
       .set('Authorization', `Bearer ${token}`)
       .send({ businessName: 'B', countryCode: 'PS', baseCurrency: 'ILS', storeSlug: `nk3-${Date.now()}` });
     expect(r2.status).toBe(400);

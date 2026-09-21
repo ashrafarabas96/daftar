@@ -31,8 +31,12 @@ describe('auth', () => {
 
   it('rejects unexpected fields (strict schema, §94)', async () => {
     const res = await t.request.post('/v1/auth/register').send({
-      email: uniqueEmail(), password: 'Str0ng!Passw0rd', displayName: 'X', preferredLocale: 'ar',
-      tenant_id: 'injected', isSystemOwner: true,
+      email: uniqueEmail(),
+      password: 'Str0ng!Passw0rd',
+      displayName: 'X',
+      preferredLocale: 'ar',
+      tenant_id: 'injected',
+      isSystemOwner: true,
     });
     expect(res.status).toBe(400);
     expect(res.body.error.code).toBe('VALIDATION_FAILED');

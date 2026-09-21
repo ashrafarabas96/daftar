@@ -17,8 +17,7 @@ describe('golden: identity & access', () => {
   });
 
   const password = 'Str0ng!Passw0rd';
-  const register = (email: string) =>
-    t.request.post('/v1/auth/register').send({ email, password, displayName: 'Owner', preferredLocale: 'ar' });
+  const register = (email: string) => t.request.post('/v1/auth/register').send({ email, password, displayName: 'Owner', preferredLocale: 'ar' });
 
   it('P1-GOLD-01 register → access token + refresh token + session row', async () => {
     const res = await register(uniqueEmail());
@@ -58,14 +57,9 @@ describe('golden: identity & access', () => {
   it('P1-GOLD-05 logout revokes the session immediately', async () => {
     const email = uniqueEmail();
     const reg = await register(email);
-    const out = await t.request
-      .post('/v1/auth/logout')
-      .set('Authorization', `Bearer ${reg.body.accessToken}`)
-      .send({ refreshToken: reg.body.refreshToken });
+    const out = await t.request.post('/v1/auth/logout').set('Authorization', `Bearer ${reg.body.accessToken}`).send({ refreshToken: reg.body.refreshToken });
     expect([200, 201, 204]).toContain(out.status);
-    const after = await t.request
-      .get('/v1/me/businesses')
-      .set('Authorization', `Bearer ${reg.body.accessToken}`);
+    const after = await t.request.get('/v1/me/businesses').set('Authorization', `Bearer ${reg.body.accessToken}`);
     expect(after.status).toBe(401);
   });
 
@@ -74,15 +68,9 @@ describe('golden: identity & access', () => {
     await register(email);
     // Attacker spoofs a fresh IP per attempt — must NOT reset the real-IP budget.
     for (let i = 0; i < 12; i++) {
-      await t.request
-        .post('/v1/auth/login')
-        .set('X-Forwarded-For', `10.99.0.${i}`)
-        .send({ email, password: 'Wrong!Passw0rd1' });
+      await t.request.post('/v1/auth/login').set('X-Forwarded-For', `10.99.0.${i}`).send({ email, password: 'Wrong!Passw0rd1' });
     }
-    const res = await t.request
-      .post('/v1/auth/login')
-      .set('X-Forwarded-For', '10.99.0.99')
-      .send({ email, password: 'Wrong!Passw0rd1' });
+    const res = await t.request.post('/v1/auth/login').set('X-Forwarded-For', '10.99.0.99').send({ email, password: 'Wrong!Passw0rd1' });
     expect(res.status).toBe(429); // real socket peer exhausted its budget
   });
 

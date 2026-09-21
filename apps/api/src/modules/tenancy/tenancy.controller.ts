@@ -26,7 +26,10 @@ const SettingsSchema = z
   .object({
     name: z.string().min(1).max(160).optional(),
     defaultLocale: z.enum(LOCALES as ['ar', 'en', 'tr']).optional(),
-    enabledLocales: z.array(z.enum(LOCALES as ['ar', 'en', 'tr'])).min(1).optional(),
+    enabledLocales: z
+      .array(z.enum(LOCALES as ['ar', 'en', 'tr']))
+      .min(1)
+      .optional(),
     timezone: z.string().min(1).max(64).optional(),
     storefrontLocale: z.enum(LOCALES as ['ar', 'en', 'tr']).optional(),
   })

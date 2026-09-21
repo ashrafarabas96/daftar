@@ -33,11 +33,7 @@ export default function DashboardPage({ params }: { params: Promise<{ locale: Lo
       try {
         // §31: the SAME entitlement endpoint the plan page uses — a contract
         // failure surfaces as an error state, never a silent null.
-        const [products, members, entitlement] = await Promise.all([
-          listProducts(),
-          listMembers(),
-          getEntitlement(),
-        ]);
+        const [products, members, entitlement] = await Promise.all([listProducts(), listMembers(), getEntitlement()]);
         setStats({
           products: products.items.length,
           team: members.items.length,
@@ -52,9 +48,7 @@ export default function DashboardPage({ params }: { params: Promise<{ locale: Lo
   const statCard = (label: string, value: string | number) => (
     <Card key={label} style={{ flex: 1, minWidth: '12rem' }}>
       <p style={{ margin: 0, color: colors.neutral[500], fontSize: typography.size.sm }}>{label}</p>
-      <p style={{ margin: `${spacing[2]} 0 0`, fontSize: typography.size['2xl'], fontWeight: 700, color: colors.neutral[900] }}>
-        {value}
-      </p>
+      <p style={{ margin: `${spacing[2]} 0 0`, fontSize: typography.size['2xl'], fontWeight: 700, color: colors.neutral[900] }}>{value}</p>
     </Card>
   );
 

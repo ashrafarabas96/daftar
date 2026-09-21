@@ -25,12 +25,10 @@ export function classifyDeliveryError(err: unknown): DeliveryErrorCode {
   if (code === 'ETIMEDOUT' || code === 'ESOCKETTIMEDOUT' || /timeout/i.test(msg)) {
     return 'SMTP_TIMEOUT';
   }
-  if (
-    ['ECONNREFUSED', 'ECONNRESET', 'ENOTFOUND', 'EAI_AGAIN', 'ESOCKET', 'ECONNECTION'].includes(code)
-  ) {
+  if (['ECONNREFUSED', 'ECONNRESET', 'ENOTFOUND', 'EAI_AGAIN', 'ESOCKET', 'ECONNECTION'].includes(code)) {
     return 'SMTP_CONNECTION_FAILED';
   }
-  if (/\b5\d\d\b/.test(msg) || /unavailable|service/i.test(msg) && /provider|smtp/i.test(msg)) {
+  if (/\b5\d\d\b/.test(msg) || (/unavailable|service/i.test(msg) && /provider|smtp/i.test(msg))) {
     return 'PROVIDER_UNAVAILABLE';
   }
   return 'DELIVERY_FAILED';

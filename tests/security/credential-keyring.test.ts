@@ -1,13 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
-import {
-  CredentialPayloadProtector,
-  credentialAad,
-  credentialKeyRingFromConfig,
-} from '../../apps/api/src/modules/delivery/credential-protector';
-import {
-  createTestApp, ownerPool, resetData, uniqueEmail, type TestApp,
-} from '../helpers/test-app';
+import { CredentialPayloadProtector, credentialAad, credentialKeyRingFromConfig } from '../../apps/api/src/modules/delivery/credential-protector';
+import { createTestApp, ownerPool, resetData, uniqueEmail, type TestApp } from '../helpers/test-app';
 
 function must<T>(v: T | undefined | null, what: string): T {
   if (v === undefined || v === null) throw new Error(`missing ${what}`);
@@ -56,11 +50,12 @@ describe('credential encryption key ring (§23–27)', () => {
 
   it('ring validation: exactly one active, no duplicate versions, 32-byte keys', () => {
     expect(() => new CredentialPayloadProtector([{ version: 'v1', key: key(), status: 'previous' }])).toThrow(/exactly one active/);
-    expect(() =>
-      new CredentialPayloadProtector([
-        { version: 'v1', key: key(), status: 'active' },
-        { version: 'v1', key: key(), status: 'previous' },
-      ]),
+    expect(
+      () =>
+        new CredentialPayloadProtector([
+          { version: 'v1', key: key(), status: 'active' },
+          { version: 'v1', key: key(), status: 'previous' },
+        ]),
     ).toThrow(/duplicate/);
     expect(() => new CredentialPayloadProtector([{ version: 'v1', key: Buffer.alloc(16), status: 'active' }])).toThrow(/32 bytes/);
   });
@@ -125,15 +120,16 @@ describe('AAD context binding (§28–29)', () => {
       const emailB = uniqueEmail();
       for (const email of [emailA, emailB]) {
         await t.request.post('/v1/auth/register').send({
-          email, password: 'Str0ng!Passw0rd', displayName: 'U', preferredLocale: 'ar',
+          email,
+          password: 'Str0ng!Passw0rd',
+          displayName: 'U',
+          preferredLocale: 'ar',
         });
         await t.request.post('/v1/auth/password-reset/request').send({ email });
       }
       // Swap the payloads of the two queued deliveries (privilege: superuser,
       // simulating any attacker who can write rows but has no key/AAD context).
-      const { rows } = await ownerPool().query<{ id: string }>(
-        `SELECT id FROM credential_deliveries WHERE status IN ('pending','failed') ORDER BY email`,
-      );
+      const { rows } = await ownerPool().query<{ id: string }>(`SELECT id FROM credential_deliveries WHERE status IN ('pending','failed') ORDER BY email`);
       expect(rows.length).toBe(2);
       const a = must(rows[0], 'row a').id;
       const b = must(rows[1], 'row b').id;
@@ -148,7 +144,8 @@ describe('AAD context binding (§28–29)', () => {
       expect(result.sent).toBe(0);
       expect(delivered).toHaveLength(0);
       const after = await ownerPool().query<{ status: string; last_error: string | null }>(
-        `SELECT status, last_error FROM credential_deliveries WHERE id IN ($1, $2)`, [a, b],
+        `SELECT status, last_error FROM credential_deliveries WHERE id IN ($1, $2)`,
+        [a, b],
       );
       for (const r of after.rows) {
         expect(['pending', 'failed']).toContain(r.status);

@@ -27,8 +27,11 @@ export default function AuditPage() {
       <h1 style={{ fontFamily: typography.fontFamily.base }}>Audit events</h1>
       <p
         style={{
-          background: colors.semantic.infoSoft, color: colors.semantic.info,
-          padding: spacing[3], borderRadius: radius.md, fontSize: typography.size.sm,
+          background: colors.semantic.infoSoft,
+          color: colors.semantic.info,
+          padding: spacing[3],
+          borderRadius: radius.md,
+          fontSize: typography.size.sm,
         }}
       >
         Audit events contain safe metadata only — never tokens, passwords, or credential payloads.

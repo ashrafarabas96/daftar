@@ -12,31 +12,38 @@ function must<T>(v: T | undefined | null): T {
 
 async function platformUser(t: TestApp, role: string): Promise<{ token: string; userId: string }> {
   const reg = await t.request.post('/v1/auth/register').send({
-    email: uniqueEmail(), password: 'Str0ng!Passw0rd', displayName: 'Agent', preferredLocale: 'en',
+    email: uniqueEmail(),
+    password: 'Str0ng!Passw0rd',
+    displayName: 'Agent',
+    preferredLocale: 'en',
   });
   expect(reg.status).toBe(201);
-  const userId = must((await ownerPool().query<{ id: string }>(
-    'SELECT id FROM users ORDER BY created_at DESC LIMIT 1')).rows[0]).id;
+  const userId = must((await ownerPool().query<{ id: string }>('SELECT id FROM users ORDER BY created_at DESC LIMIT 1')).rows[0]).id;
   await ownerPool().query('INSERT INTO platform_role_memberships (user_id, role_key) VALUES ($1, $2)', [userId, role]);
   return { token: (reg.body as { accessToken: string }).accessToken, userId };
 }
 
 async function tenantWithBusiness(t: TestApp): Promise<string> {
   const reg = await t.request.post('/v1/auth/register').send({
-    email: uniqueEmail(), password: 'Str0ng!Passw0rd', displayName: 'M', preferredLocale: 'en',
+    email: uniqueEmail(),
+    password: 'Str0ng!Passw0rd',
+    displayName: 'M',
+    preferredLocale: 'en',
   });
   const token = (reg.body as { accessToken: string }).accessToken;
-  const onb = await t.request.post('/v1/onboarding/complete')
+  const onb = await t.request
+    .post('/v1/onboarding/complete')
     .set('Authorization', `Bearer ${token}`)
     .set('Idempotency-Key', `onb-${Date.now()}-${Math.random()}`)
     .send({
-      businessName: 'Support Test Co', countryCode: 'JO', baseCurrency: 'JOD',
+      businessName: 'Support Test Co',
+      countryCode: 'JO',
+      baseCurrency: 'JOD',
       storeSlug: `sup-${Date.now()}-${Math.floor(Math.random() * 1e6)}`,
       timezone: 'Asia/Amman',
     });
   expect(onb.status).toBe(201);
-  return must((await ownerPool().query<{ tenant_id: string }>(
-    'SELECT tenant_id FROM businesses ORDER BY created_at DESC LIMIT 1')).rows[0]).tenant_id;
+  return must((await ownerPool().query<{ tenant_id: string }>('SELECT tenant_id FROM businesses ORDER BY created_at DESC LIMIT 1')).rows[0]).tenant_id;
 }
 
 describe('§LII–LIV: support sessions', () => {
@@ -53,7 +60,9 @@ describe('§LII–LIV: support sessions', () => {
 
       // Create session.
       const expiresAt = new Date(Date.now() + 60 * 60_000).toISOString();
-      const created = await t.request.post('/v1/admin/support-sessions').set(auth)
+      const created = await t.request
+        .post('/v1/admin/support-sessions')
+        .set(auth)
         .send({ tenantId, reason: 'Customer ticket #12345 investigation', expiresAt });
       expect(created.status).toBe(201);
       const sessionId = (created.body as { sessionId: string }).sessionId;
@@ -71,8 +80,7 @@ describe('§LII–LIV: support sessions', () => {
       expect((list.body as { items: unknown[] }).items.length).toBe(1);
 
       // Revoke → denied IMMEDIATELY.
-      const revoke = await t.request.post(`/v1/admin/support-sessions/${sessionId}/revoke`).set(auth)
-        .send({ reason: 'ticket resolved' });
+      const revoke = await t.request.post(`/v1/admin/support-sessions/${sessionId}/revoke`).set(auth).send({ reason: 'ticket resolved' });
       expect(revoke.status).toBe(200);
       expect((await t.request.get(`/v1/admin/tenants/${tenantId}`).set(auth)).status).toBe(403);
 
@@ -85,9 +93,7 @@ describe('§LII–LIV: support sessions', () => {
       expect((await t.request.get(`/v1/admin/tenants/${tenantId}`).set(auth)).status).toBe(403);
 
       // Sessions are immutable except revocation.
-      await expect(ownerPool().query(
-        `UPDATE support_sessions SET reason = 'tampered reason' WHERE id = $1`, [sessionId],
-      )).rejects.toThrow(/immutable/);
+      await expect(ownerPool().query(`UPDATE support_sessions SET reason = 'tampered reason' WHERE id = $1`, [sessionId])).rejects.toThrow(/immutable/);
     } finally {
       await t.close();
     }
@@ -99,15 +105,20 @@ describe('§LII–LIV: support sessions', () => {
     try {
       const tenantId = await tenantWithBusiness(t);
       const analyst = await platformUser(t, 'read_only_analyst');
-      const res = await t.request.post('/v1/admin/support-sessions')
+      const res = await t.request
+        .post('/v1/admin/support-sessions')
         .set('Authorization', `Bearer ${analyst.token}`)
         .send({ tenantId, reason: 'Should not be allowed at all', expiresAt: new Date(Date.now() + 3600_000).toISOString() });
       expect(res.status).toBe(403);
 
       const merchantReg = await t.request.post('/v1/auth/register').send({
-        email: uniqueEmail(), password: 'Str0ng!Passw0rd', displayName: 'M', preferredLocale: 'en',
+        email: uniqueEmail(),
+        password: 'Str0ng!Passw0rd',
+        displayName: 'M',
+        preferredLocale: 'en',
       });
-      const denied = await t.request.get(`/v1/admin/tenants/${tenantId}`)
+      const denied = await t.request
+        .get(`/v1/admin/tenants/${tenantId}`)
         .set('Authorization', `Bearer ${(merchantReg.body as { accessToken: string }).accessToken}`);
       expect(denied.status).toBe(403);
     } finally {
@@ -121,11 +132,14 @@ describe('§LII–LIV: support sessions', () => {
     try {
       const tenantId = await tenantWithBusiness(t);
       const agent = await platformUser(t, 'support_agent');
-      const res = await t.request.post('/v1/admin/support-sessions')
+      const res = await t.request
+        .post('/v1/admin/support-sessions')
         .set('Authorization', `Bearer ${agent.token}`)
         .send({
-          tenantId, businessId: '00000000-0000-0000-0000-000000000000',
-          reason: 'Cross-tenant business scope attempt', expiresAt: new Date(Date.now() + 3600_000).toISOString(),
+          tenantId,
+          businessId: '00000000-0000-0000-0000-000000000000',
+          reason: 'Cross-tenant business scope attempt',
+          expiresAt: new Date(Date.now() + 3600_000).toISOString(),
         });
       expect(res.status).toBeGreaterThanOrEqual(400);
     } finally {
@@ -137,31 +151,42 @@ describe('§LII–LIV: support sessions', () => {
 describe('§7–12 (Final Enforcement): business-scoped support sessions', () => {
   async function tenantWithTwoBusinesses(t: TestApp): Promise<{ tenantId: string; businessA: string; businessB: string }> {
     const reg = await t.request.post('/v1/auth/register').send({
-      email: uniqueEmail(), password: 'Str0ng!Passw0rd', displayName: 'M', preferredLocale: 'en',
+      email: uniqueEmail(),
+      password: 'Str0ng!Passw0rd',
+      displayName: 'M',
+      preferredLocale: 'en',
     });
     const token = (reg.body as { accessToken: string }).accessToken;
-    const onb = await t.request.post('/v1/onboarding/complete')
+    const onb = await t.request
+      .post('/v1/onboarding/complete')
       .set('Authorization', `Bearer ${token}`)
       .set('Idempotency-Key', `onb-${Date.now()}-${Math.random()}`)
       .send({
-        businessName: 'Business A', countryCode: 'JO', baseCurrency: 'JOD',
+        businessName: 'Business A',
+        countryCode: 'JO',
+        baseCurrency: 'JOD',
         storeSlug: `ba-${Date.now()}-${Math.floor(Math.random() * 1e6)}`,
         timezone: 'Asia/Amman',
       });
     expect(onb.status).toBe(201);
-    const tenantId = must((await ownerPool().query<{ tenant_id: string }>(
-      'SELECT tenant_id FROM businesses ORDER BY created_at DESC LIMIT 1')).rows[0]).tenant_id;
-    const second = await t.request.post(`/v1/tenants/${tenantId}/businesses`)
+    const tenantId = must(
+      (await ownerPool().query<{ tenant_id: string }>('SELECT tenant_id FROM businesses ORDER BY created_at DESC LIMIT 1')).rows[0],
+    ).tenant_id;
+    const second = await t.request
+      .post(`/v1/tenants/${tenantId}/businesses`)
       .set('Authorization', `Bearer ${token}`)
       .set('Idempotency-Key', `biz2-${Date.now()}-${Math.random()}`)
       .send({
-        businessName: 'Business B', countryCode: 'JO', baseCurrency: 'JOD',
+        businessName: 'Business B',
+        countryCode: 'JO',
+        baseCurrency: 'JOD',
         storeSlug: `bb-${Date.now()}-${Math.floor(Math.random() * 1e6)}`,
         timezone: 'Asia/Amman',
       });
     expect(second.status).toBe(201);
-    const ids = (await ownerPool().query<{ id: string }>(
-      'SELECT id FROM businesses WHERE tenant_id = $1 ORDER BY created_at ASC', [tenantId])).rows.map((r) => r.id);
+    const ids = (await ownerPool().query<{ id: string }>('SELECT id FROM businesses WHERE tenant_id = $1 ORDER BY created_at ASC', [tenantId])).rows.map(
+      (r) => r.id,
+    );
     expect(ids.length).toBe(2);
     return { tenantId, businessA: must(ids[0]), businessB: must(ids[1]) };
   }
@@ -174,10 +199,14 @@ describe('§7–12 (Final Enforcement): business-scoped support sessions', () =>
       const agent = await platformUser(t, 'support_agent');
       const auth = { Authorization: `Bearer ${agent.token}` };
 
-      const created = await t.request.post('/v1/admin/support-sessions').set(auth)
+      const created = await t.request
+        .post('/v1/admin/support-sessions')
+        .set(auth)
         .send({
-          tenantId, businessId: businessA,
-          reason: 'Investigating Business A order issue', expiresAt: new Date(Date.now() + 60 * 60_000).toISOString(),
+          tenantId,
+          businessId: businessA,
+          reason: 'Investigating Business A order issue',
+          expiresAt: new Date(Date.now() + 60 * 60_000).toISOString(),
         });
       expect(created.status).toBe(201);
       const sessionId = (created.body as { sessionId: string }).sessionId;
@@ -214,7 +243,9 @@ describe('§7–12 (Final Enforcement): business-scoped support sessions', () =>
       const { tenantId, businessA, businessB } = await tenantWithTwoBusinesses(t);
       const agent = await platformUser(t, 'support_agent');
       const auth = { Authorization: `Bearer ${agent.token}` };
-      const created = await t.request.post('/v1/admin/support-sessions').set(auth)
+      const created = await t.request
+        .post('/v1/admin/support-sessions')
+        .set(auth)
         .send({ tenantId, reason: 'Whole-tenant support review', expiresAt: new Date(Date.now() + 60 * 60_000).toISOString() });
       expect(created.status).toBe(201);
       const sessionId = (created.body as { sessionId: string }).sessionId;
@@ -238,17 +269,21 @@ describe('§7–12 (Final Enforcement): business-scoped support sessions', () =>
     try {
       const tenantId = await tenantWithBusiness(t);
       const agent = await platformUser(t, 'support_agent');
-      const res = await t.request.post('/v1/admin/support-sessions')
+      const res = await t.request
+        .post('/v1/admin/support-sessions')
         .set('Authorization', `Bearer ${agent.token}`)
         .send({
-          tenantId, reason: 'Far-future expiry must be rejected',
+          tenantId,
+          reason: 'Far-future expiry must be rejected',
           expiresAt: new Date(Date.now() + 5 * 60 * 60_000).toISOString(), // 5h > 4h cap
         });
       expect(res.status).toBe(400);
-      const past = await t.request.post('/v1/admin/support-sessions')
+      const past = await t.request
+        .post('/v1/admin/support-sessions')
         .set('Authorization', `Bearer ${agent.token}`)
         .send({
-          tenantId, reason: 'Past expiry must be rejected',
+          tenantId,
+          reason: 'Past expiry must be rejected',
           expiresAt: new Date(Date.now() - 60_000).toISOString(),
         });
       expect(past.status).toBe(400);
@@ -264,7 +299,9 @@ describe('§7–12 (Final Enforcement): business-scoped support sessions', () =>
       const tenantId = await tenantWithBusiness(t);
       const agent = await platformUser(t, 'support_agent');
       const auth = { Authorization: `Bearer ${agent.token}` };
-      const created = await t.request.post('/v1/admin/support-sessions').set(auth)
+      const created = await t.request
+        .post('/v1/admin/support-sessions')
+        .set(auth)
         .send({ tenantId, reason: 'Concurrent revoke boundary', expiresAt: new Date(Date.now() + 60 * 60_000).toISOString() });
       const sessionId = (created.body as { sessionId: string }).sessionId;
 
@@ -292,15 +329,14 @@ describe('§LIV: platform owner bootstrap CLI', () => {
     expect(first.stdout).toContain('Platform owner created');
     expect(first.stdout).toContain('One-time password: Daftar-');
 
-    await expect(execFileP(
-      process.execPath,
-      ['--import', 'tsx', 'scripts/bootstrap-platform-owner.ts', `--email=${uniqueEmail()}`, '--confirm=BOOTSTRAP'],
-      { env, cwd: process.cwd() },
-    )).rejects.toThrow(/already exists/);
+    await expect(
+      execFileP(process.execPath, ['--import', 'tsx', 'scripts/bootstrap-platform-owner.ts', `--email=${uniqueEmail()}`, '--confirm=BOOTSTRAP'], {
+        env,
+        cwd: process.cwd(),
+      }),
+    ).rejects.toThrow(/already exists/);
 
-    const audit = await ownerPool().query<{ n: string }>(
-      `SELECT count(*)::text AS n FROM audit_events WHERE action = 'platform.owner_bootstrapped'`,
-    );
+    const audit = await ownerPool().query<{ n: string }>(`SELECT count(*)::text AS n FROM audit_events WHERE action = 'platform.owner_bootstrapped'`);
     expect(Number(must(audit.rows[0]).n)).toBe(1);
   }, 60_000);
 });

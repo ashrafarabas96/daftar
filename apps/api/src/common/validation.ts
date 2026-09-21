@@ -35,11 +35,7 @@ export function parsePagination(query: Record<string, unknown>): Pagination {
   return { limit: rawLimit, ...(cursor ? { cursor } : {}) };
 }
 
-export function toPage<T>(
-  rows: T[],
-  limit: number,
-  cursorOf: (row: T) => string,
-): { items: T[]; nextCursor: string | null } {
+export function toPage<T>(rows: T[], limit: number, cursorOf: (row: T) => string): { items: T[]; nextCursor: string | null } {
   const hasMore = rows.length > limit;
   const items = hasMore ? rows.slice(0, limit) : rows;
   const last = items[items.length - 1];

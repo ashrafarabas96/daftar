@@ -34,7 +34,9 @@ for (const entry of manifest.migrations) {
     failures++;
     continue;
   }
-  const sha = createHash('sha256').update(readFileSync(join(MIGRATIONS_DIR, entry.name))).digest('hex');
+  const sha = createHash('sha256')
+    .update(readFileSync(join(MIGRATIONS_DIR, entry.name)))
+    .digest('hex');
   if (sha !== entry.sha256) {
     console.error(`FROZEN migration modified: ${entry.name} (expected ${entry.sha256}, got ${sha})`);
     failures++;

@@ -19,7 +19,11 @@ if (!existsSync(`${PG_DIR}/PG_VERSION`)) {
   await pg.initialise();
 }
 await pg.start();
-try { appendFileSync(`${PG_DIR}/postgresql.auto.conf`, '\nmax_connections=500\n'); } catch {}
-try { await pg.createDatabase('daftar'); } catch {}
+try {
+  appendFileSync(`${PG_DIR}/postgresql.auto.conf`, '\nmax_connections=500\n');
+} catch {}
+try {
+  await pg.createDatabase('daftar');
+} catch {}
 console.log('PG-UP');
 setInterval(() => {}, 1 << 30);

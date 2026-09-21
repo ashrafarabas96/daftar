@@ -45,7 +45,10 @@ describe('golden: web contract', () => {
   it('P1-GOLD-38 every endpoint the merchant client uses exists on the API', async () => {
     t = await createTestApp();
     const reg = await t.request.post('/v1/auth/register').send({
-      email: uniqueEmail(), password: 'Str0ng!Passw0rd', displayName: 'W', preferredLocale: 'en',
+      email: uniqueEmail(),
+      password: 'Str0ng!Passw0rd',
+      displayName: 'W',
+      preferredLocale: 'en',
     });
     const token = (reg.body as { accessToken: string }).accessToken;
     const auth = { Authorization: `Bearer ${token}` };
@@ -56,11 +59,16 @@ describe('golden: web contract', () => {
     expect((await t.request.get('/v1/onboarding/slug-availability?slug=golden-contract').set(auth)).status).toBe(200);
 
     // Onboard so business-scoped endpoints have a context.
-    const onb = await t.request.post('/v1/onboarding/complete').set(auth)
+    const onb = await t.request
+      .post('/v1/onboarding/complete')
+      .set(auth)
       .set('Idempotency-Key', `webc-${Date.now()}`)
       .send({
-        businessName: 'Web Contract Co', countryCode: 'JO', baseCurrency: 'JOD',
-        storeSlug: `wc-${Date.now()}`, timezone: 'Asia/Amman',
+        businessName: 'Web Contract Co',
+        countryCode: 'JO',
+        baseCurrency: 'JOD',
+        storeSlug: `wc-${Date.now()}`,
+        timezone: 'Asia/Amman',
       });
     expect(onb.status).toBe(201);
     const businessId = (onb.body as { businessId: string }).businessId;
@@ -93,7 +101,9 @@ describe('golden: web contract', () => {
     expect(body).toHaveProperty('trialEndsAt');
 
     // §32: catalog list items carry name/sku/basePriceMinor — no translations map.
-    const prod = await t.request.post('/v1/catalog/products').set(scoped)
+    const prod = await t.request
+      .post('/v1/catalog/products')
+      .set(scoped)
       .send({ translations: { en: 'Contract Product' }, basePriceMinor: '1250' });
     expect(prod.status, 'create without priceCurrency derives business base currency').toBe(201);
     const list = await t.request.get('/v1/catalog/products').set(scoped);
@@ -104,7 +114,9 @@ describe('golden: web contract', () => {
     expect(item).not.toHaveProperty('translations');
 
     // §37: a client-sent currency ≠ business base currency is rejected.
-    const bad = await t.request.post('/v1/catalog/products').set(scoped)
+    const bad = await t.request
+      .post('/v1/catalog/products')
+      .set(scoped)
       .send({ translations: { en: 'Wrong Currency' }, basePriceMinor: '100', priceCurrency: 'USD' });
     expect(bad.status).toBe(400);
 

@@ -42,16 +42,8 @@ export const CREDENTIAL_KEY_VERSION = 'v1';
 export const DEV_TEST_KEY = Buffer.from('daftar-dev-test-credential-key-32b').subarray(0, 32);
 
 /** §28: AAD context binding for one delivery row. */
-export function credentialAad(parts: {
-  kind: 'invitation' | 'password_reset';
-  email: string;
-  parentId: string;
-  deliveryId: string;
-}): Buffer {
-  return Buffer.from(
-    `daftar-credential|${parts.kind}|${parts.email.trim().toLowerCase()}|${parts.parentId}|${parts.deliveryId}`,
-    'utf8',
-  );
+export function credentialAad(parts: { kind: 'invitation' | 'password_reset'; email: string; parentId: string; deliveryId: string }): Buffer {
+  return Buffer.from(`daftar-credential|${parts.kind}|${parts.email.trim().toLowerCase()}|${parts.parentId}|${parts.deliveryId}`, 'utf8');
 }
 
 export class CredentialPayloadProtector {
@@ -198,10 +190,7 @@ export class KmsCredentialEncryptor implements CredentialPayloadEncryptor {
  * provider (CREDENTIAL_KMS_ENDPOINT) — the DEV_TEST_KEY path is structurally
  * impossible in production (config validation + this guard).
  */
-export function createCredentialEncryptor(config: {
-  NODE_ENV: string;
-  CREDENTIAL_KMS_ENDPOINT?: string | undefined;
-}): CredentialPayloadEncryptor {
+export function createCredentialEncryptor(config: { NODE_ENV: string; CREDENTIAL_KMS_ENDPOINT?: string | undefined }): CredentialPayloadEncryptor {
   if (config.NODE_ENV === 'production') {
     if (!config.CREDENTIAL_KMS_ENDPOINT) {
       throw new Error('production merchant runtime requires CREDENTIAL_KMS_ENDPOINT (KMS-style encrypt provider; local keys are forbidden)');

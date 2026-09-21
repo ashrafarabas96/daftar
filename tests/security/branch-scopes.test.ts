@@ -29,17 +29,24 @@ describe('branch scope enforcement (§32–37)', () => {
 
   async function setup(): Promise<Ctx> {
     const reg = await t.request.post('/v1/auth/register').send({
-      email: uniqueEmail(), password: 'Str0ng!Passw0rd', displayName: 'Owner', preferredLocale: 'ar',
+      email: uniqueEmail(),
+      password: 'Str0ng!Passw0rd',
+      displayName: 'Owner',
+      preferredLocale: 'ar',
     });
     const ownerToken = reg.body.accessToken as string;
-    const on = await t.request.post('/v1/onboarding/complete').set('Idempotency-Key', `idem-${Date.now()}-${Math.floor(Math.random()*1e9)}`).set('Authorization', `Bearer ${ownerToken}`).send({
-      businessName: 'Branch Biz', countryCode: 'PS', baseCurrency: 'ILS',
-      storeSlug: `br-${Date.now()}-${Math.floor(Math.random() * 1e6)}`,
-    });
+    const on = await t.request
+      .post('/v1/onboarding/complete')
+      .set('Idempotency-Key', `idem-${Date.now()}-${Math.floor(Math.random() * 1e9)}`)
+      .set('Authorization', `Bearer ${ownerToken}`)
+      .send({
+        businessName: 'Branch Biz',
+        countryCode: 'PS',
+        baseCurrency: 'ILS',
+        storeSlug: `br-${Date.now()}-${Math.floor(Math.random() * 1e6)}`,
+      });
     const businessId = on.body.businessId as string;
-    const ownerId = (
-      await t.request.get('/v1/auth/me').set('Authorization', `Bearer ${ownerToken}`)
-    ).body.userId as string;
+    const ownerId = (await t.request.get('/v1/auth/me').set('Authorization', `Bearer ${ownerToken}`)).body.userId as string;
 
     // Free plan: MULTI_BRANCH off + 1 branch — fixture overrides both.
     await grantFeature(businessId, ownerId, 'MULTI_BRANCH');
@@ -50,9 +57,7 @@ describe('branch scope enforcement (§32–37)', () => {
       [businessId, ownerId],
     );
 
-    const branches = (
-      await t.request.get('/v1/businesses/current/branches').set(auth(ownerToken, businessId))
-    ).body.items as { id: string }[];
+    const branches = (await t.request.get('/v1/businesses/current/branches').set(auth(ownerToken, businessId))).body.items as { id: string }[];
     const branch1 = branches[0]?.id ?? '';
     const b2 = await t.request.post('/v1/businesses/current/branches').set(auth(ownerToken, businessId)).send({ name: 'Second' });
     expect(b2.status).toBe(201);
@@ -65,30 +70,35 @@ describe('branch scope enforcement (§32–37)', () => {
     expect(w2.status).toBe(201);
 
     // Scoped member: branch/warehouse permissions but no business-wide power.
-    const role = await t.request.post('/v1/businesses/current/roles').set(auth(ownerToken, businessId)).send({
-      key: 'scoped', name: 'Scoped',
-      permissions: ['branch.view', 'warehouse.view', 'warehouse.manage', 'member.view'],
-    });
+    const role = await t.request
+      .post('/v1/businesses/current/roles')
+      .set(auth(ownerToken, businessId))
+      .send({
+        key: 'scoped',
+        name: 'Scoped',
+        permissions: ['branch.view', 'warehouse.view', 'warehouse.manage', 'member.view'],
+      });
     expect(role.status).toBe(201);
     const regB = await t.request.post('/v1/auth/register').send({
-      email: uniqueEmail(), password: 'Str0ng!Passw0rd', displayName: 'Scoped', preferredLocale: 'ar',
+      email: uniqueEmail(),
+      password: 'Str0ng!Passw0rd',
+      displayName: 'Scoped',
+      preferredLocale: 'ar',
     });
     const scopedToken = regB.body.accessToken as string;
-    const scopedEmail = (
-      await t.request.get('/v1/auth/me').set('Authorization', `Bearer ${scopedToken}`)
-    ).body.email as string;
-    const scopedId = (
-      await t.request.get('/v1/auth/me').set('Authorization', `Bearer ${scopedToken}`)
-    ).body.userId as string;
+    const scopedEmail = (await t.request.get('/v1/auth/me').set('Authorization', `Bearer ${scopedToken}`)).body.email as string;
+    const scopedId = (await t.request.get('/v1/auth/me').set('Authorization', `Bearer ${scopedToken}`)).body.userId as string;
     const add = await t.request.post('/v1/businesses/current/members').set(auth(ownerToken, businessId)).send({
-      email: scopedEmail, roleKey: 'scoped',
+      email: scopedEmail,
+      roleKey: 'scoped',
     });
     expect(add.status).toBe(201);
 
     return {
       owner: { token: ownerToken, businessId, userId: ownerId },
       scoped: { token: scopedToken, userId: scopedId },
-      branch1, branch2,
+      branch1,
+      branch2,
     };
   }
 
@@ -162,20 +172,14 @@ describe('branch scope enforcement (§32–37)', () => {
   it('assigned user cannot create a branch (business-wide action)', async () => {
     const c = await setup();
     expect((await setScope(c, 'assigned', [c.branch1])).status).toBe(200);
-    const res = await t.request
-      .post('/v1/businesses/current/branches')
-      .set(auth(c.scoped.token, c.owner.businessId))
-      .send({ name: 'Self-service branch' });
+    const res = await t.request.post('/v1/businesses/current/branches').set(auth(c.scoped.token, c.owner.businessId)).send({ name: 'Self-service branch' });
     expect(res.status).toBe(403);
   });
 
   it('archived assigned branch disappears from scope; warehouse creation rejected', async () => {
     const c = await setup();
     expect((await setScope(c, 'assigned', [c.branch2])).status).toBe(200);
-    await ownerPool().query(
-      `UPDATE branches SET status = 'archived' WHERE business_id = $1 AND id = $2`,
-      [c.owner.businessId, c.branch2],
-    );
+    await ownerPool().query(`UPDATE branches SET status = 'archived' WHERE business_id = $1 AND id = $2`, [c.owner.businessId, c.branch2]);
     expect(await branchesOf(c.scoped.token, c.owner.businessId)).toEqual([]);
     expect(await warehouseBranchesOf(c.scoped.token, c.owner.businessId)).toEqual([]);
     const res = await t.request
@@ -209,12 +213,10 @@ describe('branch scope enforcement (§32–37)', () => {
     const c = await setup();
     expect((await setScope(c, 'assigned', [c.branch1])).status).toBe(200);
     const res = await t.request.get('/v1/businesses/current/members').set(auth(c.owner.token, c.owner.businessId));
-    const scoped = (res.body.items as { userId: string; branchScopeMode: string; allowedBranchIds: string[] }[])
-      .find((x) => x.userId === c.scoped.userId);
+    const scoped = (res.body.items as { userId: string; branchScopeMode: string; allowedBranchIds: string[] }[]).find((x) => x.userId === c.scoped.userId);
     expect(scoped?.branchScopeMode).toBe('assigned');
     expect(scoped?.allowedBranchIds).toEqual([c.branch1]);
-    const ownerRow = (res.body.items as { userId: string; branchScopeMode: string }[])
-      .find((x) => x.userId === c.owner.userId);
+    const ownerRow = (res.body.items as { userId: string; branchScopeMode: string }[]).find((x) => x.userId === c.owner.userId);
     expect(ownerRow?.branchScopeMode).toBe('all');
   });
 });

@@ -35,10 +35,7 @@ export class MediaService {
     @Inject('APP_CONFIG') private readonly config: AppConfig,
   ) {}
 
-  async upload(
-    m: MembershipContext,
-    file: { buffer: Buffer; mimetype: string; originalname: string; size: number },
-  ): Promise<{ id: string; url: string }> {
+  async upload(m: MembershipContext, file: { buffer: Buffer; mimetype: string; originalname: string; size: number }): Promise<{ id: string; url: string }> {
     if (file.buffer.length === 0) throw AppError.validation({ file: ['empty'] });
     if (file.size > this.config.MEDIA_MAX_BYTES || file.buffer.length > this.config.MEDIA_MAX_BYTES) {
       throw new AppError('MEDIA_TOO_LARGE', 'File exceeds the size limit', 413);
@@ -93,7 +90,9 @@ export class MediaService {
           [m.businessId, mediaId, originalKey, 'image/webp', cleaned.length, dims.width, dims.height, JSON.stringify(variants)],
         );
         await this.audit.recordTx(c, {
-          action: 'catalog.media_uploaded', entity: 'media', entityId: mediaId,
+          action: 'catalog.media_uploaded',
+          entity: 'media',
+          entityId: mediaId,
           metadata: { byteSize: cleaned.length, scan: scanNote },
         });
       });
@@ -117,11 +116,11 @@ export class MediaService {
    * never leaves the server.
    */
   async getAccessUrl(m: MembershipContext, mediaId: string): Promise<{ url: string; expiresInSeconds: number }> {
-    const row = await this.db.scoped<{ storage_key: string }>(
-      { tenantId: m.tenantId, businessId: m.businessId },
-      'SELECT storage_key FROM media WHERE business_id = $1 AND id = $2',
-      [m.businessId, mediaId],
-    ).then((r) => r.rows[0]);
+    const row = await this.db
+      .scoped<{
+        storage_key: string;
+      }>({ tenantId: m.tenantId, businessId: m.businessId }, 'SELECT storage_key FROM media WHERE business_id = $1 AND id = $2', [m.businessId, mediaId])
+      .then((r) => r.rows[0]);
     if (!row) throw AppError.notFound('Media not found');
     const expiresInSeconds = 300;
     const url = await this.storage.signedUrl(row.storage_key, expiresInSeconds);
@@ -158,18 +157,25 @@ export class MediaService {
   async attachToProduct(m: MembershipContext, productId: string, mediaId: string): Promise<void> {
     try {
       await this.db.withTransaction({ tenantId: m.tenantId, businessId: m.businessId }, async (c) => {
-        const pos = (
-          await c.query<{ n: number }>(
-            'SELECT coalesce(max(position) + 1, 0) AS n FROM product_media WHERE business_id = $1 AND product_id = $2',
-            [m.businessId, productId],
-          )
-        ).rows[0]?.n ?? 0;
-        await c.query(
-          'INSERT INTO product_media (business_id, id, product_id, media_id, position) VALUES ($1, $2, $3, $4, $5)',
-          [m.businessId, newId(), productId, mediaId, pos],
-        );
+        const pos =
+          (
+            await c.query<{ n: number }>('SELECT coalesce(max(position) + 1, 0) AS n FROM product_media WHERE business_id = $1 AND product_id = $2', [
+              m.businessId,
+              productId,
+            ])
+          ).rows[0]?.n ?? 0;
+        await c.query('INSERT INTO product_media (business_id, id, product_id, media_id, position) VALUES ($1, $2, $3, $4, $5)', [
+          m.businessId,
+          newId(),
+          productId,
+          mediaId,
+          pos,
+        ]);
         await this.audit.recordTx(c, {
-          action: 'catalog.media_attached', entity: 'product', entityId: productId, metadata: { mediaId },
+          action: 'catalog.media_attached',
+          entity: 'product',
+          entityId: productId,
+          metadata: { mediaId },
         });
       });
     } catch (e) {

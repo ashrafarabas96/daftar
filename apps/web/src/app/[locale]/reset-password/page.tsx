@@ -37,8 +37,14 @@ function ResetForm({ locale }: { locale: Locale }) {
       style={{ display: 'flex', flexDirection: 'column', gap: spacing[4] }}
     >
       <PasswordField label={t('auth.newPassword')} required value={password} onChange={setPassword} autoComplete="new-password" />
-      {error ? <p role="alert" style={{ color: colors.semantic.danger, margin: 0 }}>{error}</p> : null}
-      <Button type="submit" loading={busy} fullWidth disabled={!token}>{t('auth.reset')}</Button>
+      {error ? (
+        <p role="alert" style={{ color: colors.semantic.danger, margin: 0 }}>
+          {error}
+        </p>
+      ) : null}
+      <Button type="submit" loading={busy} fullWidth disabled={!token}>
+        {t('auth.reset')}
+      </Button>
     </form>
   );
 }

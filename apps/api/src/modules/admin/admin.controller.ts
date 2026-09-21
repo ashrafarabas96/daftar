@@ -50,10 +50,7 @@ const FeatureFlagSchema = z
 const PlatformRoleSchema = z
   .object({
     userId: z.string().uuid(),
-    roleKey: z.enum([
-      'platform_owner', 'platform_admin', 'support_agent',
-      'billing_admin', 'security_admin', 'read_only_analyst',
-    ]),
+    roleKey: z.enum(['platform_owner', 'platform_admin', 'support_agent', 'billing_admin', 'security_admin', 'read_only_analyst']),
   })
   .strict();
 
@@ -196,9 +193,7 @@ export class AdminController {
   @Post('entitlement-overrides/:id/revoke')
   @HttpCode(200)
   @UsePipes(new ZodValidationPipe(z.object({ reason: z.string().min(3) }).strict()))
-  async revokeOverride(
-    @Principal() p: PrincipalInfo, @Param('id') id: string, @Body() body: unknown,
-  ): Promise<{ ok: true }> {
+  async revokeOverride(@Principal() p: PrincipalInfo, @Param('id') id: string, @Body() body: unknown): Promise<{ ok: true }> {
     await this.admin.require(p.userId, 'overrides.manage');
     await this.admin.revokeOverride(p.userId, id, (body as { reason: string }).reason);
     return { ok: true };

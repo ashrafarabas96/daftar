@@ -20,11 +20,11 @@ export async function runMigrations(databaseUrl: string, dir = MIGRATIONS_DIR): 
       await client.query('SELECT pg_advisory_lock($1)', [ADVISORY_LOCK]);
       await client.query(`CREATE TABLE IF NOT EXISTS schema_migrations (
         name TEXT PRIMARY KEY, sha256 TEXT NOT NULL, applied_at TIMESTAMPTZ NOT NULL DEFAULT now())`);
-      const files = readdirSync(dir).filter((f) => f.endsWith('.sql')).sort();
+      const files = readdirSync(dir)
+        .filter((f) => f.endsWith('.sql'))
+        .sort();
       const existing = new Map(
-        (await client.query<{ name: string; sha256: string }>('SELECT name, sha256 FROM schema_migrations')).rows.map(
-          (r) => [r.name, r.sha256] as const,
-        ),
+        (await client.query<{ name: string; sha256: string }>('SELECT name, sha256 FROM schema_migrations')).rows.map((r) => [r.name, r.sha256] as const),
       );
       for (const file of files) {
         const sql = readFileSync(join(dir, file), 'utf8');

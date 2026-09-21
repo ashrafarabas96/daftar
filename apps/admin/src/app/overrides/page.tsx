@@ -75,10 +75,24 @@ export default function OverridesPage() {
           rows={items}
           columns={[
             { key: 'business', header: 'Business', render: (o) => <code>{o.business_id.slice(0, 8)}…</code> },
-            { key: 'what', header: 'Override', render: (o) => (o.feature_key ? `feature ${o.feature_key}=${o.enabled_value}` : `limit ${o.limit_key}=${o.limit_value}`) },
+            {
+              key: 'what',
+              header: 'Override',
+              render: (o) => (o.feature_key ? `feature ${o.feature_key}=${o.enabled_value}` : `limit ${o.limit_key}=${o.limit_value}`),
+            },
             { key: 'reason', header: 'Reason', render: (o) => o.reason },
             { key: 'state', header: 'State', render: (o) => (o.revoked_at ? 'revoked' : 'active') },
-            { key: 'actions', header: '', align: 'end', render: (o) => (!o.revoked_at ? <Button size="sm" variant="ghost" onClick={() => void revoke(o.id)}>Revoke</Button> : null) },
+            {
+              key: 'actions',
+              header: '',
+              align: 'end',
+              render: (o) =>
+                !o.revoked_at ? (
+                  <Button size="sm" variant="ghost" onClick={() => void revoke(o.id)}>
+                    Revoke
+                  </Button>
+                ) : null,
+            },
           ]}
         />
       </div>
@@ -88,18 +102,38 @@ export default function OverridesPage() {
         onClose={() => setOpen(false)}
         footer={
           <>
-            <Button variant="ghost" onClick={() => setOpen(false)}>Cancel</Button>
-            <Button loading={busy} disabled={!businessId || reason.trim().length < 3} onClick={() => void create()}>Create</Button>
+            <Button variant="ghost" onClick={() => setOpen(false)}>
+              Cancel
+            </Button>
+            <Button loading={busy} disabled={!businessId || reason.trim().length < 3} onClick={() => void create()}>
+              Create
+            </Button>
           </>
         }
       >
         <div style={{ display: 'flex', flexDirection: 'column', gap: spacing[4] }}>
           <TextField label="Business ID" value={businessId} onChange={setBusinessId} required />
-          <Select label="Kind" value={kind} onChange={(v) => setKind(v as 'feature' | 'limit')} options={[{ value: 'feature', label: 'Feature' }, { value: 'limit', label: 'Limit' }]} />
+          <Select
+            label="Kind"
+            value={kind}
+            onChange={(v) => setKind(v as 'feature' | 'limit')}
+            options={[
+              { value: 'feature', label: 'Feature' },
+              { value: 'limit', label: 'Limit' },
+            ]}
+          />
           {kind === 'feature' ? (
             <>
               <TextField label="Feature key" value={featureKey} onChange={setFeatureKey} required />
-              <Select label="Enabled" value={enabledValue} onChange={setEnabledValue} options={[{ value: 'true', label: 'true' }, { value: 'false', label: 'false' }]} />
+              <Select
+                label="Enabled"
+                value={enabledValue}
+                onChange={setEnabledValue}
+                options={[
+                  { value: 'true', label: 'true' },
+                  { value: 'false', label: 'false' },
+                ]}
+              />
             </>
           ) : (
             <>
@@ -108,7 +142,11 @@ export default function OverridesPage() {
             </>
           )}
           <TextField label="Reason (audited)" value={reason} onChange={setReason} required />
-          {error ? <p role="alert" style={{ color: colors.semantic.danger, margin: 0 }}>{error}</p> : null}
+          {error ? (
+            <p role="alert" style={{ color: colors.semantic.danger, margin: 0 }}>
+              {error}
+            </p>
+          ) : null}
         </div>
       </Dialog>
     </Shell>

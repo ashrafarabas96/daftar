@@ -32,7 +32,9 @@ import {
 
 describe('currency registry (financial facts only)', () => {
   it('holds exactly the seven platform currencies with ISO facts', () => {
-    const codes = supportedCurrencies().map((c) => c.code).sort();
+    const codes = supportedCurrencies()
+      .map((c) => c.code)
+      .sort();
     expect(codes).toEqual(['EUR', 'ILS', 'JOD', 'LBP', 'SYP', 'TRY', 'USD']);
     expect(minorUnitsOf('JOD')).toBe(3);
     expect(minorUnitsOf('ILS')).toBe(2);
@@ -87,8 +89,7 @@ describe('Money VO — precision hard tests (§17)', () => {
   it('keeps 9007199254740993 minor (MAX_SAFE_INTEGER + 2) exact for USD', () => {
     const m = Money.ofMinor(9007199254740993n, 'USD');
     expect(m.amountMinor).toBe(9007199254740993n);
-    expect(Money.ofMinor(9007199254740993n, 'USD').add(Money.ofMinor(1n, 'USD')).amountMinor)
-      .toBe(9007199254740994n);
+    expect(Money.ofMinor(9007199254740993n, 'USD').add(Money.ofMinor(1n, 'USD')).amountMinor).toBe(9007199254740994n);
   });
   it('keeps 9007199254740993 minor exact for LBP (large-denomination reality)', () => {
     const m = Money.ofMinor('9007199254740993', 'LBP');
@@ -190,7 +191,9 @@ describe('Money formatting — BigInt-safe, no Number() path (§15–16)', () =>
 
 describe('country packs', () => {
   it('covers PS/JO/LB/SY/TR with tax unconfigured everywhere', () => {
-    const codes = supportedCountries().map((c) => c.code).sort();
+    const codes = supportedCountries()
+      .map((c) => c.code)
+      .sort();
     expect(codes).toEqual(['JO', 'LB', 'PS', 'SY', 'TR']);
     for (const p of supportedCountries()) {
       expect(p.tax.status).toBe('unconfigured');

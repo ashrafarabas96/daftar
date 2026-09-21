@@ -111,7 +111,11 @@ export default function OnboardingPage({ params }: { params: Promise<{ locale: L
             }
             error={slugState === 'taken' ? t('onboarding.slugTaken') : undefined}
           />
-          {error ? <p role="alert" style={{ color: colors.semantic.danger, margin: 0 }}>{error}</p> : null}
+          {error ? (
+            <p role="alert" style={{ color: colors.semantic.danger, margin: 0 }}>
+              {error}
+            </p>
+          ) : null}
           <Button type="submit" loading={busy} fullWidth disabled={slugState === 'taken'}>
             {t('onboarding.submit')}
           </Button>

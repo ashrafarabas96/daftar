@@ -29,7 +29,10 @@ describe('golden: tenancy & isolation', () => {
   async function onboardedBusiness(): Promise<{ token: string; businessId: string; email: string }> {
     const email = uniqueEmail();
     const reg = await t.request.post('/v1/auth/register').send({
-      email, password: 'Str0ng!Passw0rd', displayName: 'Owner', preferredLocale: 'ar',
+      email,
+      password: 'Str0ng!Passw0rd',
+      displayName: 'Owner',
+      preferredLocale: 'ar',
     });
     const token = reg.body.accessToken as string;
     const on = await t.request
@@ -37,7 +40,9 @@ describe('golden: tenancy & isolation', () => {
       .set('Idempotency-Key', `gold-${Date.now()}-${++seq}`)
       .set('Authorization', `Bearer ${token}`)
       .send({
-        businessName: 'Golden Co', countryCode: 'JO', baseCurrency: 'JOD',
+        businessName: 'Golden Co',
+        countryCode: 'JO',
+        baseCurrency: 'JOD',
         storeSlug: `gold-${Date.now()}-${seq}`,
       });
     expect(on.status).toBe(201);
@@ -62,7 +67,10 @@ describe('golden: tenancy & isolation', () => {
   it('P1-GOLD-10 double submit (same Idempotency-Key) creates exactly ONE business', async () => {
     const email = uniqueEmail();
     const reg = await t.request.post('/v1/auth/register').send({
-      email, password: 'Str0ng!Passw0rd', displayName: 'Owner', preferredLocale: 'ar',
+      email,
+      password: 'Str0ng!Passw0rd',
+      displayName: 'Owner',
+      preferredLocale: 'ar',
     });
     const token = reg.body.accessToken as string;
     const payload = { businessName: 'مرة واحدة', countryCode: 'PS', baseCurrency: 'ILS', storeSlug: `once-${Date.now()}` };
@@ -84,27 +92,21 @@ describe('golden: tenancy & isolation', () => {
       .set({ Authorization: `Bearer ${a.token}`, 'X-Business-Id': a.businessId })
       .send({ translations: { ar: 'سرّي' }, basePriceMinor: '100', priceCurrency: 'JOD' });
     expect(created.status).toBe(201);
-    const stolen = await t.request
-      .get(`/v1/catalog/products/${created.body.id}`)
-      .set({ Authorization: `Bearer ${b.token}`, 'X-Business-Id': b.businessId });
+    const stolen = await t.request.get(`/v1/catalog/products/${created.body.id}`).set({ Authorization: `Bearer ${b.token}`, 'X-Business-Id': b.businessId });
     expect([403, 404]).toContain(stolen.status);
   });
 
   it('P1-GOLD-12 cross-tenant member list is denied', async () => {
     const a = await onboardedBusiness();
     const b = await onboardedBusiness();
-    const res = await t.request
-      .get('/v1/businesses/current/members')
-      .set({ Authorization: `Bearer ${b.token}`, 'X-Business-Id': a.businessId });
+    const res = await t.request.get('/v1/businesses/current/members').set({ Authorization: `Bearer ${b.token}`, 'X-Business-Id': a.businessId });
     expect(res.status).toBe(403);
   });
 
   it('P1-GOLD-13 a business id in the header never overrides the caller tenant (BOLA guard)', async () => {
     const a = await onboardedBusiness();
     const b = await onboardedBusiness();
-    const res = await t.request
-      .get('/v1/businesses/current')
-      .set({ Authorization: `Bearer ${b.token}`, 'X-Business-Id': a.businessId });
+    const res = await t.request.get('/v1/businesses/current').set({ Authorization: `Bearer ${b.token}`, 'X-Business-Id': a.businessId });
     expect(res.status).toBe(403);
   });
 
@@ -120,7 +122,10 @@ describe('golden: tenancy & isolation', () => {
     const token = inviteTokens[0] ?? '';
     expect(token).toBeTruthy();
     const accept = await t.request.post('/v1/invitations/accept-register').send({
-      token, email, password: 'Str0ng!Passw0rd', displayName: 'Staff',
+      token,
+      email,
+      password: 'Str0ng!Passw0rd',
+      displayName: 'Staff',
     });
     expect(accept.status).toBe(200);
     const membership = await ownerPool().query(
@@ -136,7 +141,10 @@ describe('golden: tenancy & isolation', () => {
     const pool = ownerPool();
     const email = uniqueEmail();
     const reg = await t.request.post('/v1/auth/register').send({
-      email, password: 'Str0ng!Passw0rd', displayName: 'Staff', preferredLocale: 'ar',
+      email,
+      password: 'Str0ng!Passw0rd',
+      displayName: 'Staff',
+      preferredLocale: 'ar',
     });
     const user = await pool.query('SELECT id FROM users WHERE email=$1', [email]);
     const userId = user.rows[0]?.id as string;
@@ -145,18 +153,14 @@ describe('golden: tenancy & isolation', () => {
       .set({ Authorization: `Bearer ${a.token}`, 'X-Business-Id': a.businessId })
       .send({ email, roleKey: 'manager' });
     expect([200, 201]).toContain(add.status);
-    const before = await t.request
-      .get('/v1/businesses/current')
-      .set({ Authorization: `Bearer ${reg.body.accessToken}`, 'X-Business-Id': a.businessId });
+    const before = await t.request.get('/v1/businesses/current').set({ Authorization: `Bearer ${reg.body.accessToken}`, 'X-Business-Id': a.businessId });
     expect(before.status).toBe(200);
     const suspend = await t.request
       .post(`/v1/businesses/current/members/${userId}/suspend`)
       .set({ Authorization: `Bearer ${a.token}`, 'X-Business-Id': a.businessId })
       .send({});
     expect([200, 201, 204]).toContain(suspend.status);
-    const after = await t.request
-      .get('/v1/businesses/current')
-      .set({ Authorization: `Bearer ${reg.body.accessToken}`, 'X-Business-Id': a.businessId });
+    const after = await t.request.get('/v1/businesses/current').set({ Authorization: `Bearer ${reg.body.accessToken}`, 'X-Business-Id': a.businessId });
     expect(after.status).toBe(403);
   });
 

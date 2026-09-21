@@ -53,10 +53,12 @@ export class StructureService {
       await this.entitlements.assertCanConsume(c, m.businessId, 'MAX_BRANCHES');
       await c.query('INSERT INTO branches (business_id, id, name) VALUES ($1, $2, $3)', [m.businessId, id, name]);
       // §68: every branch has a default warehouse from birth.
-      await c.query(
-        'INSERT INTO warehouses (business_id, id, branch_id, name, is_default) VALUES ($1, $2, $3, $4, true)',
-        [m.businessId, newId(), id, `${name} — default warehouse`],
-      );
+      await c.query('INSERT INTO warehouses (business_id, id, branch_id, name, is_default) VALUES ($1, $2, $3, $4, true)', [
+        m.businessId,
+        newId(),
+        id,
+        `${name} — default warehouse`,
+      ]);
       await this.audit.recordTx(c, { action: 'structure.branch_created', entity: 'branch', entityId: id });
     });
     return { id, name, isDefault: false };
@@ -86,19 +88,12 @@ export class StructureService {
     const id = newId();
     try {
       await this.db.withTransaction(this.scope(m), async (c) => {
-        const branch = (
-          await c.query<{ status: string }>(
-            'SELECT status FROM branches WHERE business_id = $1 AND id = $2',
-            [m.businessId, branchId],
-          )
-        ).rows[0];
+        const branch = (await c.query<{ status: string }>('SELECT status FROM branches WHERE business_id = $1 AND id = $2', [m.businessId, branchId])).rows[0];
         if (branch && branch.status !== 'active') {
           throw AppError.validation({ branchId: ['branch_archived'] });
         }
         // Composite FK enforces same-business branch; we still fail clean.
-        await c.query('INSERT INTO warehouses (business_id, id, branch_id, name) VALUES ($1, $2, $3, $4)', [
-          m.businessId, id, branchId, name,
-        ]);
+        await c.query('INSERT INTO warehouses (business_id, id, branch_id, name) VALUES ($1, $2, $3, $4)', [m.businessId, id, branchId, name]);
         await this.audit.recordTx(c, { action: 'structure.warehouse_created', entity: 'warehouse', entityId: id });
       });
     } catch (e) {
@@ -116,12 +111,7 @@ export class StructureService {
    * the new list IS the resulting assignment. Audited. Requires
    * 'member.branch_scope.manage' (fine-grained, §37) at the controller.
    */
-  async setBranchScope(
-    m: MembershipContext,
-    targetUserId: string,
-    mode: 'all' | 'assigned',
-    branchIds: string[],
-  ): Promise<void> {
+  async setBranchScope(m: MembershipContext, targetUserId: string, mode: 'all' | 'assigned', branchIds: string[]): Promise<void> {
     if (mode === 'assigned' && branchIds.length === 0) {
       // Explicitly allowed by the matrix ("none assigned") — the member keeps
       // membership but sees zero branches.
@@ -131,31 +121,29 @@ export class StructureService {
       if (!target || target.status === 'removed') throw AppError.notFound('Member not found');
       if (mode === 'assigned' && branchIds.length > 0) {
         const valid = (
-          await c.query<{ id: string }>(
-            `SELECT id FROM branches WHERE business_id = $1 AND id = ANY($2) AND status = 'active'`,
-            [m.businessId, branchIds],
-          )
+          await c.query<{ id: string }>(`SELECT id FROM branches WHERE business_id = $1 AND id = ANY($2) AND status = 'active'`, [m.businessId, branchIds])
         ).rows;
         if (valid.length !== new Set(branchIds).size) {
           throw AppError.validation({ branchIds: ['unknown_or_archived_branch'] });
         }
       }
-      await c.query(
-        'UPDATE memberships SET branch_scope_mode = $3, updated_at = now() WHERE business_id = $1 AND user_id = $2',
-        [m.businessId, targetUserId, mode],
-      );
+      await c.query('UPDATE memberships SET branch_scope_mode = $3, updated_at = now() WHERE business_id = $1 AND user_id = $2', [
+        m.businessId,
+        targetUserId,
+        mode,
+      ]);
       await c.query('DELETE FROM member_branch_scopes WHERE business_id = $1 AND user_id = $2', [m.businessId, targetUserId]);
       if (mode === 'assigned') {
         for (const branchId of new Set(branchIds)) {
-          await c.query(
-            'INSERT INTO member_branch_scopes (business_id, user_id, branch_id) VALUES ($1, $2, $3)',
-            [m.businessId, targetUserId, branchId],
-          );
+          await c.query('INSERT INTO member_branch_scopes (business_id, user_id, branch_id) VALUES ($1, $2, $3)', [m.businessId, targetUserId, branchId]);
         }
       }
       await this.audit.recordTx(c, {
-        action: 'structure.member_branch_scope_changed', entity: 'membership', entityId: targetUserId,
-        tenantId: m.tenantId, businessId: m.businessId,
+        action: 'structure.member_branch_scope_changed',
+        entity: 'membership',
+        entityId: targetUserId,
+        tenantId: m.tenantId,
+        businessId: m.businessId,
         metadata: { mode, branchIds: mode === 'assigned' ? [...new Set(branchIds)] : [] },
       });
     });
@@ -168,7 +156,11 @@ export class StructureService {
     // super-join.
     const rows = (
       await this.db.scoped<{
-        user_id: string; status: string; joined_at: Date | null; role_key: string | null; branch_scope_mode: string;
+        user_id: string;
+        status: string;
+        joined_at: Date | null;
+        role_key: string | null;
+        branch_scope_mode: string;
       }>(
         { tenantId: m.tenantId, businessId: m.businessId },
         `SELECT m.user_id, m.status, m.joined_at, r.key AS role_key, m.branch_scope_mode
@@ -202,7 +194,8 @@ export class StructureService {
           c.query<{ id: string; email: string | null; display_name: string }>(
             'SELECT id, email::text AS email, display_name FROM users WHERE id = ANY($1::uuid[])',
             [userIds],
-          ))
+          ),
+        )
       ).rows;
       for (const u of idRows) identities.set(u.id, { email: u.email, display_name: u.display_name });
     }
@@ -211,10 +204,14 @@ export class StructureService {
       const mode = r.branch_scope_mode === 'assigned' ? ('assigned' as const) : ('all' as const);
       const identity = identities.get(r.user_id);
       const e = byUser.get(r.user_id) ?? {
-        userId: r.user_id, email: identity?.email ?? null, displayName: identity?.display_name ?? '',
-        roleKeys: [] as string[], status: r.status as MemberDto['status'],
+        userId: r.user_id,
+        email: identity?.email ?? null,
+        displayName: identity?.display_name ?? '',
+        roleKeys: [] as string[],
+        status: r.status as MemberDto['status'],
         joinedAt: r.joined_at?.toISOString() ?? null,
-        branchScopeMode: mode, allowedBranchIds: mode === 'assigned' ? (scopesByUser.get(r.user_id) ?? []) : [],
+        branchScopeMode: mode,
+        allowedBranchIds: mode === 'assigned' ? (scopesByUser.get(r.user_id) ?? []) : [],
       };
       if (r.role_key && !e.roleKeys.includes(r.role_key)) e.roleKeys.push(r.role_key);
       byUser.set(r.user_id, e);
@@ -231,8 +228,7 @@ export class StructureService {
   async addMember(m: MembershipContext, email: string, roleKey: string): Promise<void> {
     if (roleKey === 'owner') throw AppError.forbidden('Owner role is system-managed');
     const user = (
-      await this.db.withIdentityTransaction((c) =>
-        c.query<{ id: string }>('SELECT id FROM users WHERE email = $1 AND status = $2', [email, 'active']))
+      await this.db.withIdentityTransaction((c) => c.query<{ id: string }>('SELECT id FROM users WHERE email = $1 AND status = $2', [email, 'active']))
     ).rows[0];
     if (!user) throw AppError.notFound('User not found');
     await this.db.withTransaction({ tenantId: m.tenantId, businessId: m.businessId }, async (c) => {
@@ -278,13 +274,18 @@ export class StructureService {
          ON CONFLICT (business_id, user_id) DO UPDATE SET status = 'active', disabled_at = NULL, branch_scope_mode = 'all', joined_at = coalesce(memberships.joined_at, now()), updated_at = now()`,
         [m.tenantId, m.businessId, user.id],
       );
-      await c.query(
-        `INSERT INTO membership_roles (business_id, user_id, role_id, assigned_by) VALUES ($1, $2, $3, $4)`,
-        [m.businessId, user.id, role.id, m.userId],
-      );
+      await c.query(`INSERT INTO membership_roles (business_id, user_id, role_id, assigned_by) VALUES ($1, $2, $3, $4)`, [
+        m.businessId,
+        user.id,
+        role.id,
+        m.userId,
+      ]);
       await this.audit.recordTx(c, {
-        action: 'structure.member_added', entity: 'membership', entityId: user.id,
-        tenantId: m.tenantId, businessId: m.businessId,
+        action: 'structure.member_added',
+        entity: 'membership',
+        entityId: user.id,
+        tenantId: m.tenantId,
+        businessId: m.businessId,
         metadata: {
           roleKey,
           cancelledPendingInvitationIds: cancelled.rows.map((r) => (r as { id: string }).id),
@@ -330,14 +331,14 @@ export class StructureService {
       // §21–22: custom roles require the CUSTOM_ROLES capability — the API
       // enforces it even if a UI hides the button (§24).
       await this.entitlements.assertFeature(c, m.businessId, 'CUSTOM_ROLES');
-      await c.query(
-        'INSERT INTO business_roles (business_id, id, key, name, is_system) VALUES ($1, $2, $3, $4, false)',
-        [m.businessId, id, input.key, input.name],
-      );
+      await c.query('INSERT INTO business_roles (business_id, id, key, name, is_system) VALUES ($1, $2, $3, $4, false)', [
+        m.businessId,
+        id,
+        input.key,
+        input.name,
+      ]);
       for (const p of input.permissions as Permission[]) {
-        await c.query('INSERT INTO role_permissions (business_id, role_id, permission) VALUES ($1, $2, $3)', [
-          m.businessId, id, p,
-        ]);
+        await c.query('INSERT INTO role_permissions (business_id, role_id, permission) VALUES ($1, $2, $3)', [m.businessId, id, p]);
       }
       await this.audit.recordTx(c, { action: 'structure.role_created', entity: 'role', entityId: id });
     });
@@ -351,11 +352,7 @@ export class StructureService {
    * permission set: a non-owner editor cannot widen a role beyond their own
    * authority, even into a role they could previously edit.
    */
-  async updateRole(
-    m: MembershipContext,
-    roleId: string,
-    input: { name?: string; permissions?: string[] },
-  ): Promise<RoleDto> {
+  async updateRole(m: MembershipContext, roleId: string, input: { name?: string; permissions?: string[] }): Promise<RoleDto> {
     if (input.permissions) {
       for (const p of input.permissions) {
         if (!isPermission(p)) throw AppError.validation({ permissions: [`unknown_permission:${p}`] });
@@ -372,28 +369,23 @@ export class StructureService {
       if (!role) throw AppError.notFound('Role not found');
       if (role.is_system) throw AppError.forbidden('System roles are immutable');
       const name = input.name ?? role.name;
-      await c.query('UPDATE business_roles SET name = $3 WHERE business_id = $1 AND id = $2', [
-        m.businessId, roleId, name,
-      ]);
+      await c.query('UPDATE business_roles SET name = $3 WHERE business_id = $1 AND id = $2', [m.businessId, roleId, name]);
       let permissions: string[];
       if (input.permissions) {
         await c.query('DELETE FROM role_permissions WHERE business_id = $1 AND role_id = $2', [m.businessId, roleId]);
         for (const p of input.permissions) {
-          await c.query('INSERT INTO role_permissions (business_id, role_id, permission) VALUES ($1, $2, $3)', [
-            m.businessId, roleId, p,
-          ]);
+          await c.query('INSERT INTO role_permissions (business_id, role_id, permission) VALUES ($1, $2, $3)', [m.businessId, roleId, p]);
         }
         permissions = input.permissions;
       } else {
         permissions = (
-          await c.query<{ permission: string }>(
-            'SELECT permission FROM role_permissions WHERE business_id = $1 AND role_id = $2',
-            [m.businessId, roleId],
-          )
+          await c.query<{ permission: string }>('SELECT permission FROM role_permissions WHERE business_id = $1 AND role_id = $2', [m.businessId, roleId])
         ).rows.map((r) => r.permission);
       }
       await this.audit.recordTx(c, {
-        action: 'structure.role_updated', entity: 'role', entityId: roleId,
+        action: 'structure.role_updated',
+        entity: 'role',
+        entityId: roleId,
         metadata: { key: role.key, name, permissions },
       });
       return { id: role.id, key: role.key, name, isSystem: false, permissions };
@@ -417,12 +409,9 @@ export class StructureService {
       ).rows[0];
       if (!role) throw AppError.notFound('Role not found');
       if (role.is_system) throw AppError.forbidden('System roles cannot be deleted');
-      const assigned = (
-        await c.query<{ n: number }>(
-          'SELECT count(*)::int AS n FROM membership_roles WHERE business_id = $1 AND role_id = $2',
-          [m.businessId, roleId],
-        )
-      ).rows[0]?.n ?? 0;
+      const assigned =
+        (await c.query<{ n: number }>('SELECT count(*)::int AS n FROM membership_roles WHERE business_id = $1 AND role_id = $2', [m.businessId, roleId]))
+          .rows[0]?.n ?? 0;
       if (assigned > 0) {
         if (!replacementRoleKey) {
           throw AppError.conflict('ROLE_IN_USE', `Role is still assigned to ${assigned} member(s)`);
@@ -441,15 +430,19 @@ export class StructureService {
                          WHERE x.business_id = mr.business_id AND x.user_id = mr.user_id AND x.role_id = $3)`,
           [m.businessId, roleId, replacement.id],
         );
-        await c.query(
-          'UPDATE membership_roles SET role_id = $3, assigned_by = $4 WHERE business_id = $1 AND role_id = $2',
-          [m.businessId, roleId, replacement.id, m.userId],
-        );
+        await c.query('UPDATE membership_roles SET role_id = $3, assigned_by = $4 WHERE business_id = $1 AND role_id = $2', [
+          m.businessId,
+          roleId,
+          replacement.id,
+          m.userId,
+        ]);
       }
       await c.query('DELETE FROM role_permissions WHERE business_id = $1 AND role_id = $2', [m.businessId, roleId]);
       await c.query('DELETE FROM business_roles WHERE business_id = $1 AND id = $2', [m.businessId, roleId]);
       await this.audit.recordTx(c, {
-        action: 'structure.role_deleted', entity: 'role', entityId: roleId,
+        action: 'structure.role_deleted',
+        entity: 'role',
+        entityId: roleId,
         metadata: { key: role.key, assignedCount: assigned, replacementRoleKey: replacementRoleKey ?? null },
       });
     });
@@ -490,8 +483,11 @@ export class StructureService {
         [m.businessId, targetUserId],
       );
       await this.audit.recordTx(c, {
-        action: 'structure.member_removed', entity: 'membership', entityId: targetUserId,
-        tenantId: m.tenantId, businessId: m.businessId,
+        action: 'structure.member_removed',
+        entity: 'membership',
+        entityId: targetUserId,
+        tenantId: m.tenantId,
+        businessId: m.businessId,
         metadata: { removedRoleKeys: removedRoles },
       });
     });
@@ -532,8 +528,10 @@ export class StructureService {
       }
       await this.audit.recordTx(c, {
         action: suspended ? 'structure.member_suspended' : 'structure.member_reactivated',
-        entity: 'membership', entityId: targetUserId,
-        tenantId: m.tenantId, businessId: m.businessId,
+        entity: 'membership',
+        entityId: targetUserId,
+        tenantId: m.tenantId,
+        businessId: m.businessId,
       });
     });
   }
@@ -563,23 +561,32 @@ export class StructureService {
       // permissions must not exceed the actor's own grant authority.
       const roleIds = roles.map((r) => r.id as string);
       const grantedRows = (
-        await c.query<{ permission: string }>(
-          'SELECT DISTINCT permission FROM role_permissions WHERE business_id = $1 AND role_id = ANY($2)',
-          [m.businessId, roleIds],
-        )
+        await c.query<{ permission: string }>('SELECT DISTINCT permission FROM role_permissions WHERE business_id = $1 AND role_id = ANY($2)', [
+          m.businessId,
+          roleIds,
+        ])
       ).rows;
-      this.assertDelegationCeiling(m, grantedRows.map((r) => r.permission as Permission));
+      this.assertDelegationCeiling(
+        m,
+        grantedRows.map((r) => r.permission as Permission),
+      );
 
       await c.query('DELETE FROM membership_roles WHERE business_id = $1 AND user_id = $2', [m.businessId, targetUserId]);
       for (const r of roles) {
-        await c.query(
-          'INSERT INTO membership_roles (business_id, user_id, role_id, assigned_by) VALUES ($1, $2, $3, $4)',
-          [m.businessId, targetUserId, r.id, m.userId],
-        );
+        await c.query('INSERT INTO membership_roles (business_id, user_id, role_id, assigned_by) VALUES ($1, $2, $3, $4)', [
+          m.businessId,
+          targetUserId,
+          r.id,
+          m.userId,
+        ]);
       }
       await this.audit.recordTx(c, {
-        action: 'structure.member_roles_changed', entity: 'membership', entityId: targetUserId,
-        tenantId: m.tenantId, businessId: m.businessId, metadata: { roleKeys },
+        action: 'structure.member_roles_changed',
+        entity: 'membership',
+        entityId: targetUserId,
+        tenantId: m.tenantId,
+        businessId: m.businessId,
+        metadata: { roleKeys },
       });
     });
   }
@@ -596,27 +603,31 @@ export class StructureService {
   }
 
   /** Ceiling check for role assignment: the role's effective permissions must be ⊆ the actor's authority. */
-  private async assertRoleWithinCeiling(
-    c: import('pg').PoolClient,
-    m: MembershipContext,
-    roleId: string,
-  ): Promise<void> {
+  private async assertRoleWithinCeiling(c: import('pg').PoolClient, m: MembershipContext, roleId: string): Promise<void> {
     const rows = (
-      await c.query<{ permission: string }>(
-        'SELECT permission FROM role_permissions WHERE business_id = $1 AND role_id = $2',
-        [m.businessId, roleId],
-      )
+      await c.query<{ permission: string }>('SELECT permission FROM role_permissions WHERE business_id = $1 AND role_id = $2', [m.businessId, roleId])
     ).rows;
-    this.assertDelegationCeiling(m, rows.map((r) => r.permission as Permission));
+    this.assertDelegationCeiling(
+      m,
+      rows.map((r) => r.permission as Permission),
+    );
   }
 
+  /**
+   * Membership authority lock — DEADLOCK-FREE ORDER (Concurrency Review §66,
+   * "last owner"): every membership mutation first takes ONE business-level
+   * advisory lock, then the target row (FOR UPDATE), then (when ownership is
+   * involved) all owner rows via lockOwnerCount. Without the business-level
+   * lock, two concurrent removals of the last two owners each locked their
+   * own row and then waited for the other's (40P01 deadlock → HTTP 500).
+   * With it, the second command waits and then sees the committed state
+   * (one 200, one 409 LAST_OWNER_REMOVAL) — the invariant is proven by
+   * tests/security/isolation.test.ts and the owner-authority suite.
+   */
   private async lockMembership(c: import('pg').PoolClient, businessId: string, userId: string) {
-    return (
-      await c.query<{ status: string }>(
-        'SELECT status FROM memberships WHERE business_id = $1 AND user_id = $2 FOR UPDATE',
-        [businessId, userId],
-      )
-    ).rows[0];
+    await c.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 91))', [businessId]);
+    return (await c.query<{ status: string }>('SELECT status FROM memberships WHERE business_id = $1 AND user_id = $2 FOR UPDATE', [businessId, userId]))
+      .rows[0];
   }
 
   private async isOwnerMember(c: import('pg').PoolClient, businessId: string, userId: string): Promise<boolean> {
@@ -632,10 +643,10 @@ export class StructureService {
 
   private async roleByKey(c: import('pg').PoolClient, businessId: string, key: string) {
     const role = (
-      await c.query<{ id: string; is_system: boolean; key: string }>(
-        'SELECT id, is_system, key FROM business_roles WHERE business_id = $1 AND key = $2',
-        [businessId, key],
-      )
+      await c.query<{ id: string; is_system: boolean; key: string }>('SELECT id, is_system, key FROM business_roles WHERE business_id = $1 AND key = $2', [
+        businessId,
+        key,
+      ])
     ).rows[0];
     if (!role) throw AppError.validation({ roleKey: ['unknown_role'] });
     return role;

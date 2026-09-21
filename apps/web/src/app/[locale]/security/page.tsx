@@ -38,8 +38,14 @@ export default function SecurityPage({ params }: { params: Promise<{ locale: Loc
       <h1 style={{ fontFamily: typography.fontFamily.base }}>{t('security.title')}</h1>
       <h2 style={{ fontFamily: typography.fontFamily.base, fontSize: typography.size.lg }}>{t('security.sessions')}</h2>
       <div style={{ marginTop: spacing[4] }}>
-        <Button variant="danger" onClick={() => setConfirmOpen(true)}>{t('security.logoutAll')}</Button>
-        {done ? <p role="status" style={{ color: colors.semantic.success }}>{t('security.done')}</p> : null}
+        <Button variant="danger" onClick={() => setConfirmOpen(true)}>
+          {t('security.logoutAll')}
+        </Button>
+        {done ? (
+          <p role="status" style={{ color: colors.semantic.success }}>
+            {t('security.done')}
+          </p>
+        ) : null}
       </div>
       <ConfirmationDialog
         open={confirmOpen}

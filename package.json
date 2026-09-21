@@ -2,7 +2,7 @@
   "name": "daftar",
   "version": "0.1.0",
   "private": true,
-  "description": "DAFTAR \u2014 multi-tenant SaaS commerce platform",
+  "description": "DAFTAR — multi-tenant SaaS commerce platform",
   "packageManager": "npm@11.6.2",
   "workspaces": [
     "apps/api",

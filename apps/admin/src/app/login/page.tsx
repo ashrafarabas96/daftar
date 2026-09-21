@@ -42,8 +42,14 @@ export default function AdminLoginPage() {
         >
           <TextField label="Email" type="email" required value={email} onChange={setEmail} autoComplete="email" />
           <PasswordField label="Password" required value={password} onChange={setPassword} />
-          {error ? <p role="alert" style={{ color: colors.semantic.danger, margin: 0 }}>{error}</p> : null}
-          <Button type="submit" loading={busy} fullWidth>Sign in</Button>
+          {error ? (
+            <p role="alert" style={{ color: colors.semantic.danger, margin: 0 }}>
+              {error}
+            </p>
+          ) : null}
+          <Button type="submit" loading={busy} fullWidth>
+            Sign in
+          </Button>
         </form>
       </Card>
     </main>

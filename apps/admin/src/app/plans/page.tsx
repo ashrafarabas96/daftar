@@ -70,7 +70,13 @@ export default function PlansPage() {
   }
 
   const stateBadge = (s: PlanVersion['state']) =>
-    s === 'PUBLISHED' ? <Badge tone="success">PUBLISHED (read-only)</Badge> : s === 'DRAFT' ? <Badge tone="warning">DRAFT</Badge> : <Badge tone="neutral">SUNSET</Badge>;
+    s === 'PUBLISHED' ? (
+      <Badge tone="success">PUBLISHED (read-only)</Badge>
+    ) : s === 'DRAFT' ? (
+      <Badge tone="warning">DRAFT</Badge>
+    ) : (
+      <Badge tone="neutral">SUNSET</Badge>
+    );
 
   return (
     <Shell active="plans">
@@ -93,13 +99,19 @@ export default function PlansPage() {
               render: (v) => (
                 <span style={{ display: 'inline-flex', gap: spacing[1] }}>
                   {v.version > 1 ? (
-                    <Button size="sm" variant="ghost" onClick={() => void showDiff(v.plan_key, v.version - 1, v.version)}>Diff</Button>
+                    <Button size="sm" variant="ghost" onClick={() => void showDiff(v.plan_key, v.version - 1, v.version)}>
+                      Diff
+                    </Button>
                   ) : null}
                   {v.state === 'DRAFT' ? (
-                    <Button size="sm" variant="secondary" onClick={() => void transition(v.id, 'publish')}>Publish</Button>
+                    <Button size="sm" variant="secondary" onClick={() => void transition(v.id, 'publish')}>
+                      Publish
+                    </Button>
                   ) : null}
                   {v.state === 'PUBLISHED' ? (
-                    <Button size="sm" variant="ghost" onClick={() => void transition(v.id, 'sunset')}>Sunset</Button>
+                    <Button size="sm" variant="ghost" onClick={() => void transition(v.id, 'sunset')}>
+                      Sunset
+                    </Button>
                   ) : null}
                 </span>
               ),
@@ -113,8 +125,12 @@ export default function PlansPage() {
         onClose={() => setCloneOpen(false)}
         footer={
           <>
-            <Button variant="ghost" onClick={() => setCloneOpen(false)}>Cancel</Button>
-            <Button loading={busy} disabled={!clonePlan} onClick={() => void clone()}>Create draft</Button>
+            <Button variant="ghost" onClick={() => setCloneOpen(false)}>
+              Cancel
+            </Button>
+            <Button loading={busy} disabled={!clonePlan} onClick={() => void clone()}>
+              Create draft
+            </Button>
           </>
         }
       >
@@ -135,13 +151,25 @@ export default function PlansPage() {
       <Dialog open={diffOpen} title="Version diff preview" onClose={() => setDiffOpen(false)}>
         {diff ? (
           <div style={{ fontFamily: typography.fontFamily.base, fontSize: typography.size.sm }}>
-            {diff.trialDays.changed ? <p>Trial days: {diff.trialDays.from} → {diff.trialDays.to}</p> : null}
-            {diff.features.filter((f) => f.from !== f.to).map((f) => (
-              <p key={f.key}>Feature {f.key}: {String(f.from)} → {String(f.to)}</p>
-            ))}
-            {diff.limits.filter((l) => l.from !== l.to).map((l) => (
-              <p key={l.key}>Limit {l.key}: {String(l.from)} → {String(l.to)}</p>
-            ))}
+            {diff.trialDays.changed ? (
+              <p>
+                Trial days: {diff.trialDays.from} → {diff.trialDays.to}
+              </p>
+            ) : null}
+            {diff.features
+              .filter((f) => f.from !== f.to)
+              .map((f) => (
+                <p key={f.key}>
+                  Feature {f.key}: {String(f.from)} → {String(f.to)}
+                </p>
+              ))}
+            {diff.limits
+              .filter((l) => l.from !== l.to)
+              .map((l) => (
+                <p key={l.key}>
+                  Limit {l.key}: {String(l.from)} → {String(l.to)}
+                </p>
+              ))}
             {!diff.trialDays.changed && diff.features.every((f) => f.from === f.to) && diff.limits.every((l) => l.from === l.to) ? (
               <p>No changes between versions.</p>
             ) : null}

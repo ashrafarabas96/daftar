@@ -45,12 +45,16 @@ export class InvitationsService {
 
   async list(m: MembershipContext): Promise<InvitationDto[]> {
     // Sweep expired rows first so listings never show stale 'pending' rows.
-    await this.db.withTransaction({ tenantId: m.tenantId, businessId: m.businessId }, (c) =>
-      this.sweepExpired(c, m.businessId));
+    await this.db.withTransaction({ tenantId: m.tenantId, businessId: m.businessId }, (c) => this.sweepExpired(c, m.businessId));
     const rows = (
       await this.db.scoped<{
-        id: string; email: string; role_key: string; status: InvitationDto['status'];
-        expires_at: Date; created_at: Date; delivery_status: InvitationDto['deliveryStatus'];
+        id: string;
+        email: string;
+        role_key: string;
+        status: InvitationDto['status'];
+        expires_at: Date;
+        created_at: Date;
+        delivery_status: InvitationDto['deliveryStatus'];
         delivery_attempts: number;
       }>(
         { tenantId: m.tenantId, businessId: m.businessId },
@@ -63,9 +67,14 @@ export class InvitationsService {
       )
     ).rows;
     return rows.map((r) => ({
-      id: r.id, email: r.email, roleKey: r.role_key, status: r.status,
-      expiresAt: r.expires_at.toISOString(), createdAt: r.created_at.toISOString(),
-      deliveryStatus: r.delivery_status, deliveryAttempts: r.delivery_attempts,
+      id: r.id,
+      email: r.email,
+      roleKey: r.role_key,
+      status: r.status,
+      expiresAt: r.expires_at.toISOString(),
+      createdAt: r.created_at.toISOString(),
+      deliveryStatus: r.delivery_status,
+      deliveryAttempts: r.delivery_attempts,
     }));
   }
 
@@ -78,17 +87,16 @@ export class InvitationsService {
     // (daftar_identity owns the users table); the membership check then runs
     // on the business app boundary. Platform credentials are never used for
     // convenience lookups.
-    const invitee = (
-      await this.db.withIdentityTransaction((c) =>
-        c.query<{ id: string }>('SELECT id FROM users WHERE email = $1', [email]))
-    ).rows[0];
+    const invitee = (await this.db.withIdentityTransaction((c) => c.query<{ id: string }>('SELECT id FROM users WHERE email = $1', [email]))).rows[0];
     if (invitee) {
       const existingMember = (
-        await this.db.withTransaction({ tenantId: m.tenantId, businessId: m.businessId }, (c) => c.query(
-          `SELECT 1 FROM memberships mm
+        await this.db.withTransaction({ tenantId: m.tenantId, businessId: m.businessId }, (c) =>
+          c.query(
+            `SELECT 1 FROM memberships mm
            WHERE mm.business_id = $1 AND mm.user_id = $2 AND mm.status IN ('active','invited')`,
-          [m.businessId, invitee.id],
-        ))
+            [m.businessId, invitee.id],
+          ),
+        )
       ).rowCount;
       if (existingMember) throw AppError.conflict('ALREADY_MEMBER', 'User is already a member');
     }
@@ -96,18 +104,17 @@ export class InvitationsService {
       await this.db.withTransaction({ tenantId: m.tenantId, businessId: m.businessId }, async (c) => {
         await this.sweepExpired(c, m.businessId);
         const role = (
-          await c.query<{ id: string; is_system: boolean }>(
-            'SELECT id, is_system FROM business_roles WHERE business_id = $1 AND key = $2', [m.businessId, roleKey])
+          await c.query<{ id: string; is_system: boolean }>('SELECT id, is_system FROM business_roles WHERE business_id = $1 AND key = $2', [
+            m.businessId,
+            roleKey,
+          ])
         ).rows[0];
         if (!role) throw AppError.validation({ roleKey: ['unknown_role'] });
         if (role.is_system) throw AppError.forbidden('System roles are not assignable via invitation');
         // Delegation ceiling (§27–30): the invited role's effective permissions
         // must not exceed the inviter's own grant authority (owner exempt).
         const granted = (
-          await c.query<{ permission: string }>(
-            'SELECT permission FROM role_permissions WHERE business_id = $1 AND role_id = $2',
-            [m.businessId, role.id],
-          )
+          await c.query<{ permission: string }>('SELECT permission FROM role_permissions WHERE business_id = $1 AND role_id = $2', [m.businessId, role.id])
         ).rows.map((r) => r.permission as Permission);
         const beyond = beyondGrantAuthority(m.roles, granted);
         if (beyond.length > 0) throw AppError.forbidden(`Delegation ceiling exceeded: ${beyond.join(', ')}`);
@@ -129,8 +136,12 @@ export class InvitationsService {
           [id, m.businessId, email, role.id, hashInviteToken(token), m.userId],
         );
         await this.audit.recordTx(c, {
-          action: 'structure.invitation_created', entity: 'invitation', entityId: id,
-          tenantId: m.tenantId, businessId: m.businessId, metadata: { email, roleKey },
+          action: 'structure.invitation_created',
+          entity: 'invitation',
+          entityId: id,
+          tenantId: m.tenantId,
+          businessId: m.businessId,
+          metadata: { email, roleKey },
         });
         // Outbox enqueue IN the same transaction — a committed invitation is
         // never left without a pending delivery (§18).
@@ -154,8 +165,11 @@ export class InvitationsService {
       );
       if (!res.rowCount) throw AppError.notFound('Pending invitation not found');
       await this.audit.recordTx(c, {
-        action: 'structure.invitation_cancelled', entity: 'invitation', entityId: invitationId,
-        tenantId: m.tenantId, businessId: m.businessId,
+        action: 'structure.invitation_cancelled',
+        entity: 'invitation',
+        entityId: invitationId,
+        tenantId: m.tenantId,
+        businessId: m.businessId,
       });
     });
   }
@@ -172,10 +186,7 @@ export class InvitationsService {
     await this.db.withTransaction({ tenantId: m.tenantId, businessId: m.businessId }, async (c) => {
       await this.sweepExpired(c, m.businessId);
       const current = (
-        await c.query<{ status: string }>(
-          'SELECT status FROM business_invitations WHERE id = $1 AND business_id = $2',
-          [invitationId, m.businessId],
-        )
+        await c.query<{ status: string }>('SELECT status FROM business_invitations WHERE id = $1 AND business_id = $2', [invitationId, m.businessId])
       ).rows[0];
       if (!current) throw AppError.notFound('Invitation not found');
       if (current.status === 'expired') {
@@ -191,8 +202,11 @@ export class InvitationsService {
       const row = res.rows[0];
       if (!row) throw AppError.notFound('Pending invitation not found');
       await this.audit.recordTx(c, {
-        action: 'structure.invitation_resent', entity: 'invitation', entityId: invitationId,
-        tenantId: m.tenantId, businessId: m.businessId,
+        action: 'structure.invitation_resent',
+        entity: 'invitation',
+        entityId: invitationId,
+        tenantId: m.tenantId,
+        businessId: m.businessId,
       });
       // Resend re-enqueues with the ROTATED token (old token dead).
       await this.enqueuer.enqueueTx(c, { kind: 'invitation', invitationId, businessId: m.businessId, email: row.email, secret: token });
@@ -204,19 +218,15 @@ export class InvitationsService {
    * authenticated. New user: token + password + display name registers and
    * joins in one transaction.
    */
-  async accept(
-    token: string,
-    user: { userId: string } | { email: string; password: string; displayName: string },
-  ): Promise<{ businessId: string }> {
+  async accept(token: string, user: { userId: string } | { email: string; password: string; displayName: string }): Promise<{ businessId: string }> {
     // Phase 1 (lock-free): resolve + expiry check. Expiry is a committed state
     // transition of its own — it must NOT roll back with an aborted accept tx.
     // §13 (Stabilization): invitation acceptance is PROVISIONER authority.
     const peek = await this.db.withProvisionerTransaction(async (c) => {
       const row = (
-        await c.query<{ id: string; email: string; expires_at: Date }>(
-          'SELECT id, email, expires_at FROM provision_peek_invitation($1)',
-          [hashInviteToken(token)],
-        )
+        await c.query<{ id: string; email: string; expires_at: Date }>('SELECT id, email, expires_at FROM provision_peek_invitation($1)', [
+          hashInviteToken(token),
+        ])
       ).rows[0];
       if (row && row.expires_at.getTime() < Date.now()) {
         await c.query('SELECT provision_expire_invitation($1)', [row.id]);
@@ -234,7 +244,8 @@ export class InvitationsService {
       userId = user.userId;
       const u = (
         await this.db.withIdentityTransaction((c) =>
-          c.query<{ email: string }>('SELECT email::text AS email FROM users WHERE id = $1 AND status = $2', [userId, 'active']))
+          c.query<{ email: string }>('SELECT email::text AS email FROM users WHERE id = $1 AND status = $2', [userId, 'active']),
+        )
       ).rows[0];
       if (!u) throw AppError.unauthenticated('User no longer active');
       if (u.email.toLowerCase() !== peek.email.toLowerCase()) {
@@ -248,8 +259,8 @@ export class InvitationsService {
       userId = newId();
       try {
         await this.db.withIdentityTransaction((c) =>
-          c.query('INSERT INTO users (id, email, password_hash, display_name) VALUES ($1, $2, $3, $4)',
-            [userId, user.email, hash, user.displayName]));
+          c.query('INSERT INTO users (id, email, password_hash, display_name) VALUES ($1, $2, $3, $4)', [userId, user.email, hash, user.displayName]),
+        );
       } catch (e) {
         if ((e as { code?: string }).code === '23505') throw AppError.conflict('EMAIL_TAKEN', 'Email already registered');
         throw e;
@@ -261,12 +272,15 @@ export class InvitationsService {
     // tenant member → membership state machine → role → audit). The RLS
     // bypass exists only inside that function (§15–21).
     try {
-      const accepted = await this.db.withProvisionerTransaction(async (c) => (
-        await c.query<{ invitation_id: string; business_id: string; tenant_id: string }>(
-          'SELECT o_invitation_id AS invitation_id, o_business_id AS business_id, o_tenant_id AS tenant_id FROM provision_accept_invitation($1, $2)',
-          [hashInviteToken(token), userId],
-        )
-      ).rows[0]);
+      const accepted = await this.db.withProvisionerTransaction(
+        async (c) =>
+          (
+            await c.query<{ invitation_id: string; business_id: string; tenant_id: string }>(
+              'SELECT o_invitation_id AS invitation_id, o_business_id AS business_id, o_tenant_id AS tenant_id FROM provision_accept_invitation($1, $2)',
+              [hashInviteToken(token), userId],
+            )
+          ).rows[0],
+      );
       if (!accepted) throw AppError.notFound('Invitation not found');
       return { businessId: accepted.business_id };
     } catch (e) {

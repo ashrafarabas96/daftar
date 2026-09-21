@@ -1,9 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { Client } from 'pg';
-import {
-  createTestApp, ownerPool, resetData, uniqueEmail, appDbUrl, identityDbUrl, workerDbUrl, platformDbUrl,
-  type TestApp,
-} from '../helpers/test-app';
+import { createTestApp, ownerPool, resetData, uniqueEmail, appDbUrl, identityDbUrl, workerDbUrl, platformDbUrl, type TestApp } from '../helpers/test-app';
 
 function must<T>(v: T | undefined | null, what: string): T {
   if (v === undefined || v === null) throw new Error(`missing ${what}`);
@@ -39,7 +36,10 @@ describe('credential payload protection + worker lease (Gate A §3–19)', () =>
   async function queuePasswordReset(): Promise<{ email: string }> {
     const email = uniqueEmail();
     await t.request.post('/v1/auth/register').send({
-      email, password: 'Str0ng!Passw0rd', displayName: 'U', preferredLocale: 'ar',
+      email,
+      password: 'Str0ng!Passw0rd',
+      displayName: 'U',
+      preferredLocale: 'ar',
     });
     const res = await t.request.post('/v1/auth/password-reset/request').send({ email });
     expect(res.status).toBeLessThan(300);
@@ -57,12 +57,17 @@ describe('credential payload protection + worker lease (Gate A §3–19)', () =>
     });
     const email = uniqueEmail();
     await t2.request.post('/v1/auth/register').send({
-      email, password: 'Str0ng!Passw0rd', displayName: 'U', preferredLocale: 'ar',
+      email,
+      password: 'Str0ng!Passw0rd',
+      displayName: 'U',
+      preferredLocale: 'ar',
     });
     await t2.request.post('/v1/auth/password-reset/request').send({ email });
     await t2.worker.drain();
     const { rows } = await ownerPool().query<{
-      secret_ciphertext: string | null; secret_nonce: string | null; key_version: string | null;
+      secret_ciphertext: string | null;
+      secret_nonce: string | null;
+      key_version: string | null;
     }>(`SELECT secret_ciphertext, secret_nonce, key_version FROM credential_deliveries WHERE status = 'failed'`);
     expect(rows.length).toBeGreaterThan(0);
     const row = must(rows[0], 'delivery row');
@@ -79,9 +84,7 @@ describe('credential payload protection + worker lease (Gate A §3–19)', () =>
   it('ATTACK (§14): daftar_app and daftar_identity cannot SELECT the credential payload', async () => {
     await queuePasswordReset();
     for (const url of [appDbUrl, identityDbUrl]) {
-      await expect(
-        asRole(url, (c) => c.query('SELECT secret_ciphertext FROM credential_deliveries')),
-      ).rejects.toThrow(/permission denied/i);
+      await expect(asRole(url, (c) => c.query('SELECT secret_ciphertext FROM credential_deliveries'))).rejects.toThrow(/permission denied/i);
       // enqueue (INSERT) still works for the correct kind — verified implicitly
       // by the invitation/reset flows; here we assert the read boundary only.
     }
@@ -108,14 +111,18 @@ describe('credential payload protection + worker lease (Gate A §3–19)', () =>
         kind: 'capture',
         sendPasswordReset: (_e: string, tok: string) => {
           if (mode === 'fail') return Promise.reject(new Error('smtp down'));
-          captured.push(tok); return Promise.resolve();
+          captured.push(tok);
+          return Promise.resolve();
         },
         sendInvitation: () => Promise.resolve(),
       },
     });
     const email = uniqueEmail();
     await t2.request.post('/v1/auth/register').send({
-      email, password: 'Str0ng!Passw0rd', displayName: 'U', preferredLocale: 'ar',
+      email,
+      password: 'Str0ng!Passw0rd',
+      displayName: 'U',
+      preferredLocale: 'ar',
     });
     await t2.request.post('/v1/auth/password-reset/request').send({ email });
     // Worker A claims the row, then "dies" before finalize: status=processing
@@ -131,9 +138,7 @@ describe('credential payload protection + worker lease (Gate A §3–19)', () =>
     const result = await t2.worker.drain();
     expect(result.sent).toBe(1);
     expect(captured.length).toBe(1);
-    const { rows } = await ownerPool().query<{ status: string; locked_by: string | null }>(
-      'SELECT status, locked_by FROM credential_deliveries',
-    );
+    const { rows } = await ownerPool().query<{ status: string; locked_by: string | null }>('SELECT status, locked_by FROM credential_deliveries');
     expect(must(rows[0], 'delivery row').status).toBe('sent');
     await t2.close();
   });
@@ -146,13 +151,19 @@ describe('credential payload protection + worker lease (Gate A §3–19)', () =>
         kind: 'capture',
         // The external send happens, then the worker "crashes" (finalize
         // never runs) — modelled as an adapter error AFTER the send.
-        sendPasswordReset: () => { sends += 1; return crashAfterSend ? Promise.reject(new Error('worker crashed after send')) : Promise.resolve(); },
+        sendPasswordReset: () => {
+          sends += 1;
+          return crashAfterSend ? Promise.reject(new Error('worker crashed after send')) : Promise.resolve();
+        },
         sendInvitation: () => Promise.resolve(),
       },
     });
     const email = uniqueEmail();
     await t2.request.post('/v1/auth/register').send({
-      email, password: 'Str0ng!Passw0rd', displayName: 'U', preferredLocale: 'ar',
+      email,
+      password: 'Str0ng!Passw0rd',
+      displayName: 'U',
+      preferredLocale: 'ar',
     });
     await t2.request.post('/v1/auth/password-reset/request').send({ email });
     // Part C: the request path only enqueues — the first (crashing) delivery
@@ -177,21 +188,17 @@ describe('credential payload protection + worker lease (Gate A §3–19)', () =>
 
   it('ATTACK (§XVII): daftar_platform cannot SELECT ciphertext; safe view exposes metadata only', async () => {
     await queuePasswordReset();
-    await expect(
-      asRole(platformDbUrl, (c) => c.query('SELECT secret_ciphertext FROM credential_deliveries')),
-    ).rejects.toThrow(/permission denied/i);
-    await expect(
-      asRole(platformDbUrl, (c) => c.query('SELECT secret_nonce FROM credential_deliveries')),
-    ).rejects.toThrow(/permission denied/i);
+    await expect(asRole(platformDbUrl, (c) => c.query('SELECT secret_ciphertext FROM credential_deliveries'))).rejects.toThrow(/permission denied/i);
+    await expect(asRole(platformDbUrl, (c) => c.query('SELECT secret_nonce FROM credential_deliveries'))).rejects.toThrow(/permission denied/i);
     // Safe metadata columns still readable (delivery monitoring).
-    const meta = (await asRole(platformDbUrl, async (c) => (
-      await c.query<{ status: string }>('SELECT status FROM credential_deliveries')
-    ))) as { rows: { status: string }[] };
+    const meta = (await asRole(platformDbUrl, async (c) => await c.query<{ status: string }>('SELECT status FROM credential_deliveries'))) as {
+      rows: { status: string }[];
+    };
     expect(meta.rows.length).toBeGreaterThan(0);
     // §XVIII: the safe view masks the recipient and carries no payload columns.
-    const view = (await asRole(platformDbUrl, async (c) => (
-      await c.query<Record<string, unknown>>('SELECT * FROM credential_deliveries_safe')
-    ))) as { rows: Record<string, unknown>[] };
+    const view = (await asRole(platformDbUrl, async (c) => await c.query<Record<string, unknown>>('SELECT * FROM credential_deliveries_safe'))) as {
+      rows: Record<string, unknown>[];
+    };
     expect(view.rows.length).toBeGreaterThan(0);
     const row = view.rows[0] as Record<string, unknown>;
     expect(row).not.toHaveProperty('secret_ciphertext');
@@ -202,38 +209,75 @@ describe('credential payload protection + worker lease (Gate A §3–19)', () =>
 
   it('§XIX: strict parent invariant — password_reset carries NO business; invitation business must match', async () => {
     // password_reset with business_id → CHECK violation
-    const user = must((await ownerPool().query<{ id: string }>(
-      `INSERT INTO users (email, password_hash, display_name) VALUES ($1, 'x', 'U') RETURNING id`,
-      [uniqueEmail()])).rows[0], 'user');
-    const prt = must((await ownerPool().query<{ id: string }>(
-      `INSERT INTO password_reset_tokens (user_id, token_hash, expires_at)
-       VALUES ($1, $2, now() + interval '1 hour') RETURNING id`, [user.id, `h-${Date.now()}`])).rows[0], 'prt');
-    const tenant = must((await ownerPool().query<{ id: string }>(
-      'INSERT INTO tenants DEFAULT VALUES RETURNING id')).rows[0], 'tenant');
-    const biz = must((await ownerPool().query<{ id: string }>(
-      `INSERT INTO businesses (tenant_id, name, store_slug, country_code, base_currency, timezone)
+    const user = must(
+      (await ownerPool().query<{ id: string }>(`INSERT INTO users (email, password_hash, display_name) VALUES ($1, 'x', 'U') RETURNING id`, [uniqueEmail()]))
+        .rows[0],
+      'user',
+    );
+    const prt = must(
+      (
+        await ownerPool().query<{ id: string }>(
+          `INSERT INTO password_reset_tokens (user_id, token_hash, expires_at)
+       VALUES ($1, $2, now() + interval '1 hour') RETURNING id`,
+          [user.id, `h-${Date.now()}`],
+        )
+      ).rows[0],
+      'prt',
+    );
+    const tenant = must((await ownerPool().query<{ id: string }>('INSERT INTO tenants DEFAULT VALUES RETURNING id')).rows[0], 'tenant');
+    const biz = must(
+      (
+        await ownerPool().query<{ id: string }>(
+          `INSERT INTO businesses (tenant_id, name, store_slug, country_code, base_currency, timezone)
        VALUES ($1, 'B', $2, 'JO', 'JOD', 'Asia/Amman') RETURNING id`,
-      [tenant.id, `b-${Date.now()}`])).rows[0], 'biz');
-    await expect(ownerPool().query(
-      `INSERT INTO credential_deliveries (kind, password_reset_token_id, business_id, email, secret_ciphertext, secret_nonce, key_version)
-       VALUES ('password_reset', $1, $2, 'x@x.dev', 'c', 'n', 'v1')`, [prt.id, biz.id],
-    )).rejects.toThrow(/parent_chk/);
+          [tenant.id, `b-${Date.now()}`],
+        )
+      ).rows[0],
+      'biz',
+    );
+    await expect(
+      ownerPool().query(
+        `INSERT INTO credential_deliveries (kind, password_reset_token_id, business_id, email, secret_ciphertext, secret_nonce, key_version)
+       VALUES ('password_reset', $1, $2, 'x@x.dev', 'c', 'n', 'v1')`,
+        [prt.id, biz.id],
+      ),
+    ).rejects.toThrow(/parent_chk/);
     // invitation with mismatched business → composite FK violation
-    const role = must((await ownerPool().query<{ id: string }>(
-      `INSERT INTO business_roles (business_id, key, name) VALUES ($1, $2, 'R') RETURNING id`,
-      [biz.id, `r-${Date.now()}`])).rows[0], 'role');
-    const inv = must((await ownerPool().query<{ id: string }>(
-      `INSERT INTO business_invitations (business_id, email, role_id, token_hash, invited_by, expires_at)
+    const role = must(
+      (
+        await ownerPool().query<{ id: string }>(`INSERT INTO business_roles (business_id, key, name) VALUES ($1, $2, 'R') RETURNING id`, [
+          biz.id,
+          `r-${Date.now()}`,
+        ])
+      ).rows[0],
+      'role',
+    );
+    const inv = must(
+      (
+        await ownerPool().query<{ id: string }>(
+          `INSERT INTO business_invitations (business_id, email, role_id, token_hash, invited_by, expires_at)
        VALUES ($1, $2, $3, $4, $5, now() + interval '7 days') RETURNING id`,
-      [biz.id, uniqueEmail(), role.id, `t-${Date.now()}`, user.id])).rows[0], 'inv');
-    const otherBiz = must((await ownerPool().query<{ id: string }>(
-      `INSERT INTO businesses (tenant_id, name, store_slug, country_code, base_currency, timezone)
+          [biz.id, uniqueEmail(), role.id, `t-${Date.now()}`, user.id],
+        )
+      ).rows[0],
+      'inv',
+    );
+    const otherBiz = must(
+      (
+        await ownerPool().query<{ id: string }>(
+          `INSERT INTO businesses (tenant_id, name, store_slug, country_code, base_currency, timezone)
        SELECT tenant_id, 'Other', $1, 'JO', 'JOD', 'Asia/Amman' FROM businesses WHERE id = $2 RETURNING id`,
-      [`other-${Date.now()}`, biz.id])).rows[0], 'otherBiz');
-    await expect(ownerPool().query(
-      `INSERT INTO credential_deliveries (kind, invitation_id, business_id, email, secret_ciphertext, secret_nonce, key_version)
-       VALUES ('invitation', $1, $2, 'y@y.dev', 'c', 'n', 'v1')`, [inv.id, otherBiz.id],
-    )).rejects.toThrow(/invitation_business_fk/);
+          [`other-${Date.now()}`, biz.id],
+        )
+      ).rows[0],
+      'otherBiz',
+    );
+    await expect(
+      ownerPool().query(
+        `INSERT INTO credential_deliveries (kind, invitation_id, business_id, email, secret_ciphertext, secret_nonce, key_version)
+       VALUES ('invitation', $1, $2, 'y@y.dev', 'c', 'n', 'v1')`,
+        [inv.id, otherBiz.id],
+      ),
+    ).rejects.toThrow(/invitation_business_fk/);
   });
-
 });

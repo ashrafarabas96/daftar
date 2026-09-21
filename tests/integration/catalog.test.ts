@@ -11,12 +11,22 @@ describe('catalog', () => {
     t = await createTestApp();
     await resetData();
     const reg = await t.request.post('/v1/auth/register').send({
-      email: uniqueEmail(), password: 'Str0ng!Passw0rd', displayName: 'Merchant', preferredLocale: 'ar',
+      email: uniqueEmail(),
+      password: 'Str0ng!Passw0rd',
+      displayName: 'Merchant',
+      preferredLocale: 'ar',
     });
     token = reg.body.accessToken as string;
-    const on = await t.request.post('/v1/onboarding/complete').set('Idempotency-Key', `idem-${Date.now()}-${Math.floor(Math.random()*1e9)}`).set('Authorization', `Bearer ${token}`).send({
-      businessName: 'Catalog Co', countryCode: 'JO', baseCurrency: 'JOD', storeSlug: `cat-${Date.now()}-${Math.floor(Math.random() * 1e6)}`,
-    });
+    const on = await t.request
+      .post('/v1/onboarding/complete')
+      .set('Idempotency-Key', `idem-${Date.now()}-${Math.floor(Math.random() * 1e9)}`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        businessName: 'Catalog Co',
+        countryCode: 'JO',
+        baseCurrency: 'JOD',
+        storeSlug: `cat-${Date.now()}-${Math.floor(Math.random() * 1e6)}`,
+      });
     businessId = on.body.businessId as string;
   });
 
@@ -24,38 +34,49 @@ describe('catalog', () => {
 
   describe('golden', () => {
     it('category with 3 translations', async () => {
-      const res = await t.request.post('/v1/catalog/categories').set(auth()).send({
-        translations: { ar: 'قهوة', en: 'Coffee', tr: 'Kahve' },
-      });
+      const res = await t.request
+        .post('/v1/catalog/categories')
+        .set(auth())
+        .send({
+          translations: { ar: 'قهوة', en: 'Coffee', tr: 'Kahve' },
+        });
       expect(res.status).toBe(201);
       expect(res.body.translations.tr).toBe('Kahve');
     });
 
     it('minimal product: Name + Price + Save ONLY (§57) + outbox event emitted', async () => {
-      const res = await t.request.post('/v1/catalog/products').set(auth()).send({
-        translations: { ar: 'قهوة عربية' }, basePriceMinor: '1500', priceCurrency: 'JOD',
-      });
+      const res = await t.request
+        .post('/v1/catalog/products')
+        .set(auth())
+        .send({
+          translations: { ar: 'قهوة عربية' },
+          basePriceMinor: '1500',
+          priceCurrency: 'JOD',
+        });
       expect(res.status).toBe(201);
-      const outbox = await ownerPool().query(
-        `SELECT * FROM outbox_events WHERE business_id = $1 AND type = 'catalog.product_created'`, [businessId],
-      );
+      const outbox = await ownerPool().query(`SELECT * FROM outbox_events WHERE business_id = $1 AND type = 'catalog.product_created'`, [businessId]);
       expect(outbox.rows.length).toBe(1);
-      const audit = await ownerPool().query(
-        `SELECT * FROM audit_events WHERE entity = 'product' AND entity_id = $1`, [res.body.id],
-      );
+      const audit = await ownerPool().query(`SELECT * FROM audit_events WHERE entity = 'product' AND entity_id = $1`, [res.body.id]);
       expect(audit.rows.length).toBe(1);
       expect(audit.rows[0]?.request_id).toBeTruthy();
     });
 
     it('full product + variants + search by name/sku/barcode', async () => {
-      const res = await t.request.post('/v1/catalog/products').set(auth()).send({
-        translations: { ar: 'قميص', en: 'Shirt' }, basePriceMinor: '25000', priceCurrency: 'JOD',
-        sku: 'SHIRT-1', barcode: '6291234567890', unit: 'piece',
-        variants: [
-          { attributes: { size: 'M', color: 'black' }, sku: 'SHIRT-1-M' },
-          { attributes: { size: 'L', color: 'black' }, sku: 'SHIRT-1-L', priceMinor: '26000' },
-        ],
-      });
+      const res = await t.request
+        .post('/v1/catalog/products')
+        .set(auth())
+        .send({
+          translations: { ar: 'قميص', en: 'Shirt' },
+          basePriceMinor: '25000',
+          priceCurrency: 'JOD',
+          sku: 'SHIRT-1',
+          barcode: '6291234567890',
+          unit: 'piece',
+          variants: [
+            { attributes: { size: 'M', color: 'black' }, sku: 'SHIRT-1-M' },
+            { attributes: { size: 'L', color: 'black' }, sku: 'SHIRT-1-L', priceMinor: '26000' },
+          ],
+        });
       expect(res.status).toBe(201);
 
       const byName = await t.request.get('/v1/catalog/products?search=Shirt').set(auth());
@@ -79,12 +100,22 @@ describe('catalog', () => {
 
       // other business, same SKU → OK
       const reg2 = await t.request.post('/v1/auth/register').send({
-        email: uniqueEmail(), password: 'Str0ng!Passw0rd', displayName: 'Other', preferredLocale: 'en',
+        email: uniqueEmail(),
+        password: 'Str0ng!Passw0rd',
+        displayName: 'Other',
+        preferredLocale: 'en',
       });
       const token2 = reg2.body.accessToken as string;
-      const on2 = await t.request.post('/v1/onboarding/complete').set('Idempotency-Key', `idem-${Date.now()}-${Math.floor(Math.random()*1e9)}`).set('Authorization', `Bearer ${token2}`).send({
-        businessName: 'Other Biz', countryCode: 'TR', baseCurrency: 'TRY', storeSlug: `other-${Date.now()}`,
-      });
+      const on2 = await t.request
+        .post('/v1/onboarding/complete')
+        .set('Idempotency-Key', `idem-${Date.now()}-${Math.floor(Math.random() * 1e9)}`)
+        .set('Authorization', `Bearer ${token2}`)
+        .send({
+          businessName: 'Other Biz',
+          countryCode: 'TR',
+          baseCurrency: 'TRY',
+          storeSlug: `other-${Date.now()}`,
+        });
       const ok = await t.request
         .post('/v1/catalog/products')
         .set({ Authorization: `Bearer ${token2}`, 'X-Business-Id': on2.body.businessId as string })
@@ -93,17 +124,28 @@ describe('catalog', () => {
     });
 
     it('duplicate SKU inside one payload → 409', async () => {
-      const res = await t.request.post('/v1/catalog/products').set(auth()).send({
-        translations: { ar: 'داخلي' }, basePriceMinor: '100', priceCurrency: 'JOD', sku: 'INNER-1',
-        variants: [{ attributes: {}, sku: 'inner-1' }],
-      });
+      const res = await t.request
+        .post('/v1/catalog/products')
+        .set(auth())
+        .send({
+          translations: { ar: 'داخلي' },
+          basePriceMinor: '100',
+          priceCurrency: 'JOD',
+          sku: 'INNER-1',
+          variants: [{ attributes: {}, sku: 'inner-1' }],
+        });
       expect(res.status).toBe(409);
     });
 
     it('update + optimistic concurrency (§98): stale version rejected, no silent lost update', async () => {
-      const created = await t.request.post('/v1/catalog/products').set(auth()).send({
-        translations: { ar: 'منتج' }, basePriceMinor: '100', priceCurrency: 'JOD',
-      });
+      const created = await t.request
+        .post('/v1/catalog/products')
+        .set(auth())
+        .send({
+          translations: { ar: 'منتج' },
+          basePriceMinor: '100',
+          priceCurrency: 'JOD',
+        });
       const id = created.body.id as string;
       const upd1 = await t.request.patch(`/v1/catalog/products/${id}`).set(auth()).send({ basePriceMinor: '200', version: 1 });
       expect(upd1.status).toBe(200);
@@ -117,9 +159,14 @@ describe('catalog', () => {
     });
 
     it('concurrent updates both apply, version ends at 3 (no lost update)', async () => {
-      const created = await t.request.post('/v1/catalog/products').set(auth()).send({
-        translations: { ar: 'تزامن' }, basePriceMinor: '100', priceCurrency: 'JOD',
-      });
+      const created = await t.request
+        .post('/v1/catalog/products')
+        .set(auth())
+        .send({
+          translations: { ar: 'تزامن' },
+          basePriceMinor: '100',
+          priceCurrency: 'JOD',
+        });
       const id = created.body.id as string;
       const [r1, r2] = await Promise.all([
         t.request.patch(`/v1/catalog/products/${id}`).set(auth()).send({ unit: 'kg' }),
@@ -134,24 +181,32 @@ describe('catalog', () => {
     });
 
     it('archive removes from list; audit has before/after trail', async () => {
-      const created = await t.request.post('/v1/catalog/products').set(auth()).send({
-        translations: { ar: 'أرشيف' }, basePriceMinor: '100', priceCurrency: 'JOD',
-      });
+      const created = await t.request
+        .post('/v1/catalog/products')
+        .set(auth())
+        .send({
+          translations: { ar: 'أرشيف' },
+          basePriceMinor: '100',
+          priceCurrency: 'JOD',
+        });
       const id = created.body.id as string;
       expect((await t.request.delete(`/v1/catalog/products/${id}`).set(auth())).status).toBe(200);
       const list = await t.request.get('/v1/catalog/products').set(auth());
       expect(list.body.items.length).toBe(0);
-      const audit = await ownerPool().query(
-        `SELECT action FROM audit_events WHERE entity = 'product' AND entity_id = $1 ORDER BY created_at`, [id],
-      );
+      const audit = await ownerPool().query(`SELECT action FROM audit_events WHERE entity = 'product' AND entity_id = $1 ORDER BY created_at`, [id]);
       expect(audit.rows.map((r: { action: string }) => r.action)).toEqual(['catalog.product_created', 'catalog.product_archived']);
     });
 
     it('pagination: cursor pages, stable order, no duplicates', async () => {
       for (let i = 0; i < 5; i += 1) {
-        await t.request.post('/v1/catalog/products').set(auth()).send({
-          translations: { ar: `منتج ${i}` }, basePriceMinor: String(100 + i), priceCurrency: 'JOD',
-        });
+        await t.request
+          .post('/v1/catalog/products')
+          .set(auth())
+          .send({
+            translations: { ar: `منتج ${i}` },
+            basePriceMinor: String(100 + i),
+            priceCurrency: 'JOD',
+          });
       }
       const p1 = await t.request.get('/v1/catalog/products?limit=2').set(auth());
       expect(p1.body.items.length).toBe(2);
@@ -175,24 +230,41 @@ describe('catalog', () => {
     });
 
     it('strict schema: unexpected field → 400 (§94)', async () => {
-      const res = await t.request.post('/v1/catalog/products').set(auth()).send({
-        translations: { ar: 'x' }, basePriceMinor: '100', priceCurrency: 'JOD',
-        business_id: 'injected', stock: 5,
-      });
+      const res = await t.request
+        .post('/v1/catalog/products')
+        .set(auth())
+        .send({
+          translations: { ar: 'x' },
+          basePriceMinor: '100',
+          priceCurrency: 'JOD',
+          business_id: 'injected',
+          stock: 5,
+        });
       expect(res.status).toBe(400);
     });
 
     it('unsupported currency → 400', async () => {
-      const res = await t.request.post('/v1/catalog/products').set(auth()).send({
-        translations: { ar: 'x' }, basePriceMinor: '100', priceCurrency: 'BTC',
-      });
+      const res = await t.request
+        .post('/v1/catalog/products')
+        .set(auth())
+        .send({
+          translations: { ar: 'x' },
+          basePriceMinor: '100',
+          priceCurrency: 'BTC',
+        });
       expect(res.status).toBe(400);
     });
 
     it('oversized SKU → 400', async () => {
-      const res = await t.request.post('/v1/catalog/products').set(auth()).send({
-        translations: { ar: 'x' }, basePriceMinor: '100', priceCurrency: 'JOD', sku: 'S'.repeat(65),
-      });
+      const res = await t.request
+        .post('/v1/catalog/products')
+        .set(auth())
+        .send({
+          translations: { ar: 'x' },
+          basePriceMinor: '100',
+          priceCurrency: 'JOD',
+          sku: 'S'.repeat(65),
+        });
       expect(res.status).toBe(400);
     });
 

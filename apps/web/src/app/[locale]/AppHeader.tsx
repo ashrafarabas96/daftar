@@ -21,8 +21,13 @@ export function AppHeader({ locale, active }: { locale: Locale; active: string }
   return (
     <header
       style={{
-        display: 'flex', alignItems: 'center', gap: spacing[4], padding: `0 ${spacing[4]}`,
-        minHeight: '3.5rem', background: colors.neutral[0], borderBottom: `1px solid ${colors.neutral[200]}`,
+        display: 'flex',
+        alignItems: 'center',
+        gap: spacing[4],
+        padding: `0 ${spacing[4]}`,
+        minHeight: '3.5rem',
+        background: colors.neutral[0],
+        borderBottom: `1px solid ${colors.neutral[200]}`,
         fontFamily: typography.fontFamily.base,
       }}
     >
@@ -34,9 +39,12 @@ export function AppHeader({ locale, active }: { locale: Locale; active: string }
             href={`/${locale}/${item.path}`}
             aria-current={active === item.key ? 'page' : undefined}
             style={{
-              padding: `${spacing[2]} ${spacing[3]}`, borderRadius: '0.5rem', textDecoration: 'none',
+              padding: `${spacing[2]} ${spacing[3]}`,
+              borderRadius: '0.5rem',
+              textDecoration: 'none',
               color: active === item.key ? colors.brand.primary : colors.neutral[600],
-              fontWeight: active === item.key ? 600 : 400, fontSize: typography.size.sm,
+              fontWeight: active === item.key ? 600 : 400,
+              fontSize: typography.size.sm,
             }}
           >
             {t(`nav.${item.key}`)}
@@ -44,7 +52,11 @@ export function AppHeader({ locale, active }: { locale: Locale; active: string }
         ))}
       </nav>
       <Dropdown
-        trigger={<Button variant="secondary" size="sm">{t('nav.switchBusiness')}</Button>}
+        trigger={
+          <Button variant="secondary" size="sm">
+            {t('nav.switchBusiness')}
+          </Button>
+        }
         items={[{ key: 'switch', label: t('nav.switchBusiness'), onSelect: () => router.push(`/${locale}/dashboard`) }]}
       />
       <Button

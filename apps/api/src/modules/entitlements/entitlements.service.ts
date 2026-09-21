@@ -8,8 +8,15 @@ export type LimitKey = 'MAX_USERS' | 'MAX_BRANCHES' | 'MAX_PRODUCTS' | 'MAX_STOR
 
 /** Stored subscription states (§29). */
 export type SubscriptionState =
-  | 'trial' | 'active' | 'grace_period' | 'past_due' | 'paused'
-  | 'cancel_at_period_end' | 'cancelled' | 'expired' | 'complimentary';
+  | 'trial'
+  | 'active'
+  | 'grace_period'
+  | 'past_due'
+  | 'paused'
+  | 'cancel_at_period_end'
+  | 'cancelled'
+  | 'expired'
+  | 'complimentary';
 
 export interface EntitlementState {
   businessId: string;
@@ -30,9 +37,7 @@ export interface EntitlementState {
  *  - grace_period past period end         → past_due
  * Everything else: stored state stands. Pure function of (row, now).
  */
-export function effectiveStateOf(
-  state: SubscriptionState, trialEndsAt: Date | null, periodEndsAt: Date | null, now: Date,
-): SubscriptionState {
+export function effectiveStateOf(state: SubscriptionState, trialEndsAt: Date | null, periodEndsAt: Date | null, now: Date): SubscriptionState {
   if (state === 'trial' && trialEndsAt && trialEndsAt.getTime() <= now.getTime()) return 'expired';
   if (state === 'cancel_at_period_end' && periodEndsAt && periodEndsAt.getTime() <= now.getTime()) return 'cancelled';
   if (state === 'grace_period' && periodEndsAt && periodEndsAt.getTime() <= now.getTime()) return 'past_due';
@@ -40,9 +45,7 @@ export function effectiveStateOf(
 }
 
 /** States that entitle the business to features/limits (§31). */
-const ENTITLING_STATES: ReadonlySet<SubscriptionState> = new Set([
-  'trial', 'active', 'grace_period', 'past_due', 'complimentary',
-]);
+const ENTITLING_STATES: ReadonlySet<SubscriptionState> = new Set(['trial', 'active', 'grace_period', 'past_due', 'complimentary']);
 
 /**
  * Central Entitlement/Quota Engine (Wave 8). Modules NEVER branch on plan
@@ -56,8 +59,11 @@ export class EntitlementService {
   async getState(c: PoolClient, businessId: string): Promise<EntitlementState> {
     const row = (
       await c.query<{
-        plan_key: string; version: number; state: SubscriptionState;
-        trial_ends_at: Date | null; period_ends_at: Date | null;
+        plan_key: string;
+        version: number;
+        state: SubscriptionState;
+        trial_ends_at: Date | null;
+        period_ends_at: Date | null;
       }>(
         `SELECT pv.plan_key, pv.version, be.state, be.trial_ends_at, be.period_ends_at
          FROM business_entitlements be JOIN plan_versions pv ON pv.id = be.plan_version_id
@@ -67,7 +73,9 @@ export class EntitlementService {
     ).rows[0];
     if (!row) throw AppError.notFound('Business entitlement not provisioned');
     return {
-      businessId, planKey: row.plan_key, planVersion: row.version,
+      businessId,
+      planKey: row.plan_key,
+      planVersion: row.version,
       state: row.state,
       effectiveState: effectiveStateOf(row.state, row.trial_ends_at, row.period_ends_at, new Date()),
       trialEndsAt: row.trial_ends_at?.toISOString() ?? null,
@@ -155,17 +163,24 @@ export class EntitlementService {
       case 'MAX_USERS':
         // §27: active users + VALID PENDING invitations (slot reservation;
         // cancel/expire releases the slot, accept converts it to a member).
-        return Number((await c.query<{ n: string }>(
-          `SELECT (SELECT count(*) FROM memberships WHERE business_id = $1 AND status = 'active')
+        return Number(
+          (
+            await c.query<{ n: string }>(
+              `SELECT (SELECT count(*) FROM memberships WHERE business_id = $1 AND status = 'active')
                 + (SELECT count(*) FROM business_invitations
                    WHERE business_id = $1 AND status = 'pending' AND expires_at > now()) AS n`,
-          [businessId])).rows[0]?.n ?? 0);
+              [businessId],
+            )
+          ).rows[0]?.n ?? 0,
+        );
       case 'MAX_BRANCHES':
-        return Number((await c.query<{ n: string }>(
-          `SELECT count(*) AS n FROM branches WHERE business_id = $1 AND status = 'active'`, [businessId])).rows[0]?.n ?? 0);
+        return Number(
+          (await c.query<{ n: string }>(`SELECT count(*) AS n FROM branches WHERE business_id = $1 AND status = 'active'`, [businessId])).rows[0]?.n ?? 0,
+        );
       case 'MAX_PRODUCTS':
-        return Number((await c.query<{ n: string }>(
-          `SELECT count(*) AS n FROM products WHERE business_id = $1 AND status <> 'archived'`, [businessId])).rows[0]?.n ?? 0);
+        return Number(
+          (await c.query<{ n: string }>(`SELECT count(*) AS n FROM products WHERE business_id = $1 AND status <> 'archived'`, [businessId])).rows[0]?.n ?? 0,
+        );
       default:
         // Not yet measurable in Phase 1 (storage/AI/WhatsApp quotas are future).
         return 0;
@@ -203,14 +218,10 @@ export class EntitlementService {
   /** Plan change: point business at another plan version. Never deletes data. */
   async changePlan(c: PoolClient, businessId: string, planKey: string): Promise<EntitlementState> {
     const pv = (
-      await c.query<{ id: string }>(
-        `SELECT id FROM plan_versions WHERE plan_key = $1 AND state = 'PUBLISHED' ORDER BY version DESC LIMIT 1`, [planKey])
+      await c.query<{ id: string }>(`SELECT id FROM plan_versions WHERE plan_key = $1 AND state = 'PUBLISHED' ORDER BY version DESC LIMIT 1`, [planKey])
     ).rows[0];
     if (!pv) throw AppError.validation({ planKey: ['unknown plan'] });
-    await c.query(
-      `UPDATE business_entitlements SET plan_version_id = $2, updated_at = now() WHERE business_id = $1`,
-      [businessId, pv.id],
-    );
+    await c.query(`UPDATE business_entitlements SET plan_version_id = $2, updated_at = now() WHERE business_id = $1`, [businessId, pv.id]);
     return this.getState(c, businessId);
   }
 }

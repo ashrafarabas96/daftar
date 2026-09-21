@@ -93,7 +93,12 @@ export default function CatalogPage({ params }: { params: Promise<{ locale: Loca
             { key: 'sku', header: t('catalog.sku'), render: (p) => p.sku ?? '—' },
             // §39: formatted major value via Intl/CLDR — never the raw minor integer.
             { key: 'price', header: t('catalog.price'), align: 'end', render: (p) => formatMinor(p.basePriceMinor, p.priceCurrency, locale) },
-            { key: 'status', header: t('team.status'), render: (p) => (p.status === 'archived' ? <Badge tone="neutral">{t('catalog.archived')}</Badge> : <Badge tone="success">{t('team.active')}</Badge>) },
+            {
+              key: 'status',
+              header: t('team.status'),
+              render: (p) =>
+                p.status === 'archived' ? <Badge tone="neutral">{t('catalog.archived')}</Badge> : <Badge tone="success">{t('team.active')}</Badge>,
+            },
           ]}
         />
       )}
@@ -103,8 +108,12 @@ export default function CatalogPage({ params }: { params: Promise<{ locale: Loca
         onClose={() => setOpen(false)}
         footer={
           <>
-            <Button variant="ghost" onClick={() => setOpen(false)}>{t('common.cancel')}</Button>
-            <Button loading={busy} disabled={!name.trim() || !price.trim()} onClick={() => void save()}>{t('common.save')}</Button>
+            <Button variant="ghost" onClick={() => setOpen(false)}>
+              {t('common.cancel')}
+            </Button>
+            <Button loading={busy} disabled={!name.trim() || !price.trim()} onClick={() => void save()}>
+              {t('common.save')}
+            </Button>
           </>
         }
       >
@@ -112,12 +121,18 @@ export default function CatalogPage({ params }: { params: Promise<{ locale: Loca
           <TextField label={t('catalog.productName')} required value={name} onChange={setName} autoFocus />
           <TextField
             label={`${t('catalog.price')}${baseCurrency ? ` (${baseCurrency})` : ''}`}
-            required value={price} onChange={setPrice} error={priceError ?? undefined} inputMode="decimal"
+            required
+            value={price}
+            onChange={setPrice}
+            error={priceError ?? undefined}
+            inputMode="decimal"
           />
         </div>
       </Dialog>
       {toast ? (
-        <p role="status" style={{ color: colors.semantic.success, fontFamily: typography.fontFamily.base }}>{toast}</p>
+        <p role="status" style={{ color: colors.semantic.success, fontFamily: typography.fontFamily.base }}>
+          {toast}
+        </p>
       ) : null}
     </PageShell>
   );

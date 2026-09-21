@@ -45,8 +45,14 @@ export default function LoginPage({ params }: { params: Promise<{ locale: Locale
         >
           <TextField label={t('auth.email')} type="email" required value={email} onChange={setEmail} autoComplete="email" />
           <PasswordField label={t('auth.password')} required value={password} onChange={setPassword} />
-          {error ? <p role="alert" style={{ color: colors.semantic.danger, margin: 0 }}>{error}</p> : null}
-          <Button type="submit" loading={busy} fullWidth>{t('auth.login')}</Button>
+          {error ? (
+            <p role="alert" style={{ color: colors.semantic.danger, margin: 0 }}>
+              {error}
+            </p>
+          ) : null}
+          <Button type="submit" loading={busy} fullWidth>
+            {t('auth.login')}
+          </Button>
         </form>
         <p style={{ fontSize: typography.size.sm }}>
           <a href={`/${locale}/forgot-password`}>{t('auth.forgot')}</a>

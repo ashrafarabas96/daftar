@@ -19,13 +19,7 @@ import { getCurrency } from './currencies';
 export class MoneyError extends Error {
   constructor(
     message: string,
-    readonly code:
-      | 'CURRENCY_MISMATCH'
-      | 'NEGATIVE_NOT_ALLOWED'
-      | 'INVALID_AMOUNT'
-      | 'UNSAFE_NUMBER'
-      | 'FRACTIONAL_FACTOR'
-      | 'PRECISION_OVERFLOW',
+    readonly code: 'CURRENCY_MISMATCH' | 'NEGATIVE_NOT_ALLOWED' | 'INVALID_AMOUNT' | 'UNSAFE_NUMBER' | 'FRACTIONAL_FACTOR' | 'PRECISION_OVERFLOW',
   ) {
     super(message);
     this.name = 'MoneyError';
@@ -41,10 +35,7 @@ function toMinorBigInt(value: bigint | string | number): bigint {
   if (typeof value === 'bigint') return value;
   if (typeof value === 'number') {
     if (!Number.isSafeInteger(value)) {
-      throw new MoneyError(
-        `Unsafe number cannot represent money exactly: ${value}`,
-        'UNSAFE_NUMBER',
-      );
+      throw new MoneyError(`Unsafe number cannot represent money exactly: ${value}`, 'UNSAFE_NUMBER');
     }
     return BigInt(value);
   }
@@ -62,10 +53,7 @@ export class Money {
   ) {
     getCurrency(currency); // throws on unsupported currency
     if (!signed && amountMinor < 0n) {
-      throw new MoneyError(
-        `Negative money is not allowed without explicit policy: ${amountMinor} ${currency}`,
-        'NEGATIVE_NOT_ALLOWED',
-      );
+      throw new MoneyError(`Negative money is not allowed without explicit policy: ${amountMinor} ${currency}`, 'NEGATIVE_NOT_ALLOWED');
     }
   }
 
@@ -89,10 +77,7 @@ export class Money {
     const whole = m[2] ?? '0';
     const frac = m[3] ?? '';
     if (frac.length > cur.minorUnits) {
-      throw new MoneyError(
-        `Too many fraction digits for ${cur.code} (max ${cur.minorUnits}): ${major}`,
-        'PRECISION_OVERFLOW',
-      );
+      throw new MoneyError(`Too many fraction digits for ${cur.code} (max ${cur.minorUnits}): ${major}`, 'PRECISION_OVERFLOW');
     }
     const scale = 10n ** BigInt(cur.minorUnits);
     const minor = BigInt(whole) * scale + BigInt(frac.padEnd(cur.minorUnits, '0') || '0');
@@ -101,10 +86,7 @@ export class Money {
 
   private assertSameCurrency(other: Money): void {
     if (this.currency !== other.currency) {
-      throw new MoneyError(
-        `Currency mismatch: ${this.currency} vs ${other.currency}`,
-        'CURRENCY_MISMATCH',
-      );
+      throw new MoneyError(`Currency mismatch: ${this.currency} vs ${other.currency}`, 'CURRENCY_MISMATCH');
     }
   }
 
@@ -128,8 +110,12 @@ export class Money {
     return new Money(-this.amountMinor, this.currency, true);
   }
 
-  isZero(): boolean { return this.amountMinor === 0n; }
-  isNegative(): boolean { return this.amountMinor < 0n; }
+  isZero(): boolean {
+    return this.amountMinor === 0n;
+  }
+  isNegative(): boolean {
+    return this.amountMinor < 0n;
+  }
 
   compareTo(other: Money): number {
     this.assertSameCurrency(other);
@@ -140,8 +126,12 @@ export class Money {
     return this.currency === other.currency && this.amountMinor === other.amountMinor;
   }
 
-  static min(a: Money, b: Money): Money { return a.compareTo(b) <= 0 ? a : b; }
-  static max(a: Money, b: Money): Money { return a.compareTo(b) >= 0 ? a : b; }
+  static min(a: Money, b: Money): Money {
+    return a.compareTo(b) <= 0 ? a : b;
+  }
+  static max(a: Money, b: Money): Money {
+    return a.compareTo(b) >= 0 ? a : b;
+  }
 
   /** Serialization keeps the exact minor value as a string — never a JS number. */
   toJSON(): { amountMinor: string; currency: string } {

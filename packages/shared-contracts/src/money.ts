@@ -40,9 +40,25 @@ export function formatMinor(minor: string | bigint, currency: string, locale: st
 
 /** ISO 4217 minor units for the currencies DAFTAR supports in Phase 1. */
 const MINOR_UNITS: Record<string, number> = {
-  JOD: 3, KWD: 3, BHD: 3, OMR: 3, IQD: 3, LYD: 3, TND: 3,
-  USD: 2, EUR: 2, TRY: 2, ILS: 2, SAR: 2, AED: 2, EGP: 2, GBP: 2, MAD: 2, QAR: 2,
-  JPY: 0, KRW: 0,
+  JOD: 3,
+  KWD: 3,
+  BHD: 3,
+  OMR: 3,
+  IQD: 3,
+  LYD: 3,
+  TND: 3,
+  USD: 2,
+  EUR: 2,
+  TRY: 2,
+  ILS: 2,
+  SAR: 2,
+  AED: 2,
+  EGP: 2,
+  GBP: 2,
+  MAD: 2,
+  QAR: 2,
+  JPY: 0,
+  KRW: 0,
 };
 
 export function minorUnitsOf(currency: string): number {

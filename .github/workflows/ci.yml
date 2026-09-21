@@ -62,8 +62,10 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
       - run: npm ci
-      - name: Build contract packages
-        run: npm run build -w packages/domain-core -w packages/shared-contracts
+      - name: Build contract + design-system packages
+        # typecheck/lint of apps/web and apps/admin resolve @daftar/design-system
+        # from its built dist/ — an unbuilt package fails them with TS2307.
+        run: npm run build -w packages/domain-core -w packages/shared-contracts -w packages/design-system
       - name: Migration manifest check
         run: npm run check:migrations
       - name: Phase 1 machine gate

@@ -41,7 +41,7 @@ export function isTrustedProxy(ip: string, trusted: string[]): boolean {
       const target = ipv4ToInt(norm);
       if (base !== null && target !== null && mask >= 0 && mask <= 32) {
         const shift = 32 - mask;
-        if ((base >>> shift) === (target >>> shift)) return true;
+        if (base >>> shift === target >>> shift) return true;
       }
     }
   }
@@ -56,7 +56,7 @@ export function clientIp(req: Request, config: Pick<AppConfig, 'TRUST_PROXY' | '
     .filter(Boolean);
 
   const xffRaw = req.headers['x-forwarded-for'];
-  const chain = (Array.isArray(xffRaw) ? xffRaw.join(',') : xffRaw ?? '')
+  const chain = (Array.isArray(xffRaw) ? xffRaw.join(',') : (xffRaw ?? ''))
     .split(',')
     .map((s) => s.trim())
     .filter((s) => s.length > 0 && s.length <= 45); // malformed entries dropped

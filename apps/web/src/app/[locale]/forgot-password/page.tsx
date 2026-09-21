@@ -34,7 +34,9 @@ export default function ForgotPasswordPage({ params }: { params: Promise<{ local
             style={{ display: 'flex', flexDirection: 'column', gap: spacing[4] }}
           >
             <TextField label={t('auth.email')} type="email" required value={email} onChange={setEmail} autoComplete="email" />
-            <Button type="submit" loading={busy} fullWidth>{t('auth.sendReset')}</Button>
+            <Button type="submit" loading={busy} fullWidth>
+              {t('auth.sendReset')}
+            </Button>
           </form>
         )}
       </Card>

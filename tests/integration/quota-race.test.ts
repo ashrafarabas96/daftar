@@ -26,11 +26,21 @@ describe('quota concurrency', () => {
 
   async function onboard(slug: string): Promise<{ token: string; businessId: string; userId: string }> {
     const reg = await t.request.post('/v1/auth/register').send({
-      email: uniqueEmail(), password: 'Str0ng!Passw0rd', displayName: 'U', preferredLocale: 'ar',
+      email: uniqueEmail(),
+      password: 'Str0ng!Passw0rd',
+      displayName: 'U',
+      preferredLocale: 'ar',
     });
-    const on = await t.request.post('/v1/onboarding/complete').set('Idempotency-Key', `idem-${Date.now()}-${Math.floor(Math.random()*1e9)}`).set('Authorization', `Bearer ${reg.body.accessToken as string}`).send({
-      businessName: 'B', countryCode: 'PS', baseCurrency: 'ILS', storeSlug: slug,
-    });
+    const on = await t.request
+      .post('/v1/onboarding/complete')
+      .set('Idempotency-Key', `idem-${Date.now()}-${Math.floor(Math.random() * 1e9)}`)
+      .set('Authorization', `Bearer ${reg.body.accessToken as string}`)
+      .send({
+        businessName: 'B',
+        countryCode: 'PS',
+        baseCurrency: 'ILS',
+        storeSlug: slug,
+      });
     const me = await t.request.get('/v1/auth/me').set('Authorization', `Bearer ${reg.body.accessToken as string}`);
     return { token: reg.body.accessToken as string, businessId: on.body.businessId as string, userId: me.body.userId as string };
   }
@@ -42,10 +52,8 @@ describe('quota concurrency', () => {
   it('MAX_USERS race: one slot left + two simultaneous invitations → exactly one success', async () => {
     const a = await onboard(`qr-u-${Date.now()}`); // free plan: MAX_USERS=2, owner occupies 1
     const [r1, r2] = await Promise.all([
-      t.request.post('/v1/businesses/current/invitations').set(auth(a.token, a.businessId))
-        .send({ email: uniqueEmail(), roleKey: 'cashier' }),
-      t.request.post('/v1/businesses/current/invitations').set(auth(a.token, a.businessId))
-        .send({ email: uniqueEmail(), roleKey: 'cashier' }),
+      t.request.post('/v1/businesses/current/invitations').set(auth(a.token, a.businessId)).send({ email: uniqueEmail(), roleKey: 'cashier' }),
+      t.request.post('/v1/businesses/current/invitations').set(auth(a.token, a.businessId)).send({ email: uniqueEmail(), roleKey: 'cashier' }),
     ]);
     const statuses = [r1.status, r2.status].sort();
     expect(statuses).toEqual([201, 409]);
@@ -55,11 +63,12 @@ describe('quota concurrency', () => {
 
   it('pending invite reserves the slot: cancel releases it, expiry releases it', async () => {
     const a = await onboard(`qr-r-${Date.now()}`);
-    const inv = await t.request.post('/v1/businesses/current/invitations').set(auth(a.token, a.businessId))
-      .send({ email: uniqueEmail(), roleKey: 'cashier' });
+    const inv = await t.request.post('/v1/businesses/current/invitations').set(auth(a.token, a.businessId)).send({ email: uniqueEmail(), roleKey: 'cashier' });
     expect(inv.status).toBe(201);
     // slot now reserved — second invite denied
-    const denied = await t.request.post('/v1/businesses/current/invitations').set(auth(a.token, a.businessId))
+    const denied = await t.request
+      .post('/v1/businesses/current/invitations')
+      .set(auth(a.token, a.businessId))
       .send({ email: uniqueEmail(), roleKey: 'cashier' });
     expect(denied.status).toBe(409);
     // cancel releases
@@ -68,7 +77,9 @@ describe('quota concurrency', () => {
     if (!invId) throw new Error('invitation not listed');
     const cancel = await t.request.delete(`/v1/businesses/current/invitations/${invId}`).set(auth(a.token, a.businessId));
     expect(cancel.status).toBe(200);
-    const after = await t.request.post('/v1/businesses/current/invitations').set(auth(a.token, a.businessId))
+    const after = await t.request
+      .post('/v1/businesses/current/invitations')
+      .set(auth(a.token, a.businessId))
       .send({ email: uniqueEmail(), roleKey: 'cashier' });
     expect(after.status).toBe(201);
   });
@@ -80,8 +91,11 @@ describe('quota concurrency', () => {
        VALUES ($1, 'MAX_PRODUCTS', 1, 'race-test', $2)`,
       [a.businessId, a.userId],
     );
-    const mk = () => t.request.post('/v1/catalog/products').set(auth(a.token, a.businessId))
-      .send({ translations: { ar: 'منتج' }, basePriceMinor: '100', priceCurrency: 'ILS' });
+    const mk = () =>
+      t.request
+        .post('/v1/catalog/products')
+        .set(auth(a.token, a.businessId))
+        .send({ translations: { ar: 'منتج' }, basePriceMinor: '100', priceCurrency: 'ILS' });
     const [r1, r2] = await Promise.all([mk(), mk()]);
     expect([r1.status, r2.status].sort()).toEqual([201, 409]);
   });
@@ -95,8 +109,11 @@ describe('quota concurrency', () => {
        VALUES ($1, 'MAX_BRANCHES', 2, 'race-test', $2)`,
       [a.businessId, a.userId],
     );
-    const mk = () => t.request.post('/v1/businesses/current/branches').set(auth(a.token, a.businessId))
-      .send({ name: `Br-${Math.random()}` });
+    const mk = () =>
+      t.request
+        .post('/v1/businesses/current/branches')
+        .set(auth(a.token, a.businessId))
+        .send({ name: `Br-${Math.random()}` });
     const [r1, r2] = await Promise.all([mk(), mk()]);
     expect([r1.status, r2.status].sort()).toEqual([201, 409]);
   });

@@ -46,6 +46,10 @@ export function resolveIndustryProfile(key: string | null | undefined): Industry
 /** Non-empty, URL-ish safe profile key normalization for storage. */
 export function normalizeIndustryProfileKey(key: string | null | undefined): string {
   if (!key) return GENERIC_INDUSTRY_PROFILE.key;
-  const k = key.trim().toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '');
+  const k = key
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9-]+/g, '-')
+    .replace(/^-+|-+$/g, '');
   return k.length > 0 && k.length <= 64 ? k : GENERIC_INDUSTRY_PROFILE.key;
 }

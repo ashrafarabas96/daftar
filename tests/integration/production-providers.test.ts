@@ -137,12 +137,14 @@ describe('process-level secret separation (§XXV–XXXI)', () => {
   it('mode=all is FORBIDDEN in production (§10 separated runtimes), allowed in dev/test', () => {
     expect(() => loadConfig({ ...PROD_ENV, PROCESS_MODE: 'all' })).toThrow(/PROCESS_MODE=all is forbidden in production/);
     // dev/test convenience mode still works outside production
-    expect(() => loadConfig({
-      NODE_ENV: 'development',
-      PROCESS_MODE: 'all',
-      APP_DATABASE_URL: 'postgresql://daftar_app:x@localhost/daftar',
-      JWT_SECRET: 'dev-secret-with-at-least-32-characters!',
-    })).not.toThrow();
+    expect(() =>
+      loadConfig({
+        NODE_ENV: 'development',
+        PROCESS_MODE: 'all',
+        APP_DATABASE_URL: 'postgresql://daftar_app:x@localhost/daftar',
+        JWT_SECRET: 'dev-secret-with-at-least-32-characters!',
+      }),
+    ).not.toThrow();
     // HTTP surfaces still require REDIS_URL in production (merchant-api shown)
     const { PLATFORM_DATABASE_URL: _p, WORKER_DATABASE_URL: _w, CREDENTIAL_PAYLOAD_KEY: _k, SMTP_URL: _s, REDIS_URL: _r, ...noRedis } = PROD_ENV;
     expect(() => loadConfig({ ...noRedis, PROCESS_MODE: 'merchant-api' })).toThrow(/REDIS_URL/);

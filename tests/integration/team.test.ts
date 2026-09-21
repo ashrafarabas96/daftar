@@ -26,12 +26,22 @@ describe('team, invitations & entitlements', () => {
 
   async function onboardUser(slug: string): Promise<{ token: string; businessId: string; userId: string }> {
     const reg = await t.request.post('/v1/auth/register').send({
-      email: uniqueEmail(), password: 'Str0ng!Passw0rd', displayName: 'U', preferredLocale: 'ar',
+      email: uniqueEmail(),
+      password: 'Str0ng!Passw0rd',
+      displayName: 'U',
+      preferredLocale: 'ar',
     });
     const token = reg.body.accessToken as string;
-    const on = await t.request.post('/v1/onboarding/complete').set('Idempotency-Key', `idem-${Date.now()}-${Math.floor(Math.random()*1e9)}`).set('Authorization', `Bearer ${token}`).send({
-      businessName: `Biz ${slug}`, countryCode: 'PS', baseCurrency: 'ILS', storeSlug: slug,
-    });
+    const on = await t.request
+      .post('/v1/onboarding/complete')
+      .set('Idempotency-Key', `idem-${Date.now()}-${Math.floor(Math.random() * 1e9)}`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        businessName: `Biz ${slug}`,
+        countryCode: 'PS',
+        baseCurrency: 'ILS',
+        storeSlug: slug,
+      });
     const me = await t.request.get('/v1/auth/me').set('Authorization', `Bearer ${token}`);
     return { token, businessId: on.body.businessId as string, userId: me.body.userId as string };
   }
@@ -66,16 +76,20 @@ describe('team, invitations & entitlements', () => {
     const email2 = uniqueEmail();
     const email3 = uniqueEmail();
     await t.request.post('/v1/auth/register').send({
-      email: email2, password: 'Str0ng!Passw0rd', displayName: 'M2', preferredLocale: 'ar',
+      email: email2,
+      password: 'Str0ng!Passw0rd',
+      displayName: 'M2',
+      preferredLocale: 'ar',
     });
     await t.request.post('/v1/auth/register').send({
-      email: email3, password: 'Str0ng!Passw0rd', displayName: 'M3', preferredLocale: 'ar',
+      email: email3,
+      password: 'Str0ng!Passw0rd',
+      displayName: 'M3',
+      preferredLocale: 'ar',
     });
-    const add2 = await t.request.post('/v1/businesses/current/members').set(auth(a.token, a.businessId))
-      .send({ email: email2, roleKey: 'cashier' });
+    const add2 = await t.request.post('/v1/businesses/current/members').set(auth(a.token, a.businessId)).send({ email: email2, roleKey: 'cashier' });
     expect(add2.status).toBe(201);
-    const add3 = await t.request.post('/v1/businesses/current/members').set(auth(a.token, a.businessId))
-      .send({ email: email3, roleKey: 'cashier' });
+    const add3 = await t.request.post('/v1/businesses/current/members').set(auth(a.token, a.businessId)).send({ email: email3, roleKey: 'cashier' });
     expect(add3.status).toBe(409);
     expect(add3.body.error.code).toBe('PLAN_LIMIT_EXCEEDED');
     expect(add3.body.error.details).toMatchObject({ limitKey: 'MAX_USERS', limit: 2, usage: 2 });
@@ -85,10 +99,12 @@ describe('team, invitations & entitlements', () => {
     const a = await onboardUser('downgrade-biz');
     const email2 = uniqueEmail();
     await t.request.post('/v1/auth/register').send({
-      email: email2, password: 'Str0ng!Passw0rd', displayName: 'M2', preferredLocale: 'ar',
+      email: email2,
+      password: 'Str0ng!Passw0rd',
+      displayName: 'M2',
+      preferredLocale: 'ar',
     });
-    await t.request.post('/v1/businesses/current/members').set(auth(a.token, a.businessId))
-      .send({ email: email2, roleKey: 'cashier' });
+    await t.request.post('/v1/businesses/current/members').set(auth(a.token, a.businessId)).send({ email: email2, roleKey: 'cashier' });
     // Super-admin-style override lowers MAX_USERS to 1 (system op, seeded directly).
     const ownerId = a.userId;
     await ownerPool().query(
@@ -98,10 +114,12 @@ describe('team, invitations & entitlements', () => {
     );
     const email3 = uniqueEmail();
     await t.request.post('/v1/auth/register').send({
-      email: email3, password: 'Str0ng!Passw0rd', displayName: 'M3', preferredLocale: 'ar',
+      email: email3,
+      password: 'Str0ng!Passw0rd',
+      displayName: 'M3',
+      preferredLocale: 'ar',
     });
-    const add3 = await t.request.post('/v1/businesses/current/members').set(auth(a.token, a.businessId))
-      .send({ email: email3, roleKey: 'cashier' });
+    const add3 = await t.request.post('/v1/businesses/current/members').set(auth(a.token, a.businessId)).send({ email: email3, roleKey: 'cashier' });
     expect(add3.status).toBe(409);
     // Data preserved: both members still listed, none deleted.
     const members = await t.request.get('/v1/businesses/current/members').set(auth(a.token, a.businessId));
@@ -111,25 +129,25 @@ describe('team, invitations & entitlements', () => {
   it('invitation lifecycle: invite → accept (new user registers) → member active with role', async () => {
     const a = await onboardUser('invite-biz');
     const email = uniqueEmail();
-    const inv = await t.request.post('/v1/businesses/current/invitations').set(auth(a.token, a.businessId))
-      .send({ email, roleKey: 'cashier' });
+    const inv = await t.request.post('/v1/businesses/current/invitations').set(auth(a.token, a.businessId)).send({ email, roleKey: 'cashier' });
     expect(inv.status).toBe(201);
     // duplicate pending invite → 409
-    const dup = await t.request.post('/v1/businesses/current/invitations').set(auth(a.token, a.businessId))
-      .send({ email, roleKey: 'cashier' });
+    const dup = await t.request.post('/v1/businesses/current/invitations').set(auth(a.token, a.businessId)).send({ email, roleKey: 'cashier' });
     expect(dup.status).toBe(409);
     expect(dup.body.error.code).toBe('INVITATION_EXISTS');
 
     const token = await lastInviteToken();
     const acc = await t.request.post('/v1/invitations/accept-register').send({
-      token, email, password: 'Str0ng!Passw0rd', displayName: 'New Joiner',
+      token,
+      email,
+      password: 'Str0ng!Passw0rd',
+      displayName: 'New Joiner',
     });
     expect(acc.status).toBe(200);
     expect(acc.body.businessId).toBe(a.businessId);
 
     const members = await t.request.get('/v1/businesses/current/members').set(auth(a.token, a.businessId));
-    const joined = (members.body.items as { email: string; roleKeys: string[]; status: string; joinedAt: string | null }[])
-      .find((mm) => mm.email === email);
+    const joined = (members.body.items as { email: string; roleKeys: string[]; status: string; joinedAt: string | null }[]).find((mm) => mm.email === email);
     if (!joined) throw new Error('member not found after accept');
     expect(joined.status).toBe('active');
     expect(joined.roleKeys).toEqual(['cashier']);
@@ -137,7 +155,10 @@ describe('team, invitations & entitlements', () => {
 
     // token is single-use
     const again = await t.request.post('/v1/invitations/accept-register').send({
-      token, email, password: 'Str0ng!Passw0rd', displayName: 'Replay',
+      token,
+      email,
+      password: 'Str0ng!Passw0rd',
+      displayName: 'Replay',
     });
     expect(again.status).toBe(404);
   });
@@ -145,12 +166,14 @@ describe('team, invitations & entitlements', () => {
   it('invitation expiry: expired invite → 409 INVITATION_EXPIRED, row marked expired', async () => {
     const a = await onboardUser('expiry-biz');
     const email = uniqueEmail();
-    await t.request.post('/v1/businesses/current/invitations').set(auth(a.token, a.businessId))
-      .send({ email, roleKey: 'cashier' });
+    await t.request.post('/v1/businesses/current/invitations').set(auth(a.token, a.businessId)).send({ email, roleKey: 'cashier' });
     await ownerPool().query(`UPDATE business_invitations SET expires_at = now() - interval '1 hour' WHERE email = $1`, [email]);
     const token = await lastInviteToken();
     const acc = await t.request.post('/v1/invitations/accept-register').send({
-      token, email, password: 'Str0ng!Passw0rd', displayName: 'Late',
+      token,
+      email,
+      password: 'Str0ng!Passw0rd',
+      displayName: 'Late',
     });
     expect(acc.status).toBe(409);
     expect(acc.body.error.code).toBe('INVITATION_EXPIRED');
@@ -161,18 +184,22 @@ describe('team, invitations & entitlements', () => {
   it('invitation cancel + wrong-email acceptance forbidden', async () => {
     const a = await onboardUser('cancel-biz');
     const email = uniqueEmail();
-    const inv = await t.request.post('/v1/businesses/current/invitations').set(auth(a.token, a.businessId))
-      .send({ email, roleKey: 'cashier' });
+    const inv = await t.request.post('/v1/businesses/current/invitations').set(auth(a.token, a.businessId)).send({ email, roleKey: 'cashier' });
     // wrong email register attempt
     const wrong = await t.request.post('/v1/invitations/accept-register').send({
-      token: await lastInviteToken(), email: uniqueEmail(), password: 'Str0ng!Passw0rd', displayName: 'X',
+      token: await lastInviteToken(),
+      email: uniqueEmail(),
+      password: 'Str0ng!Passw0rd',
+      displayName: 'X',
     });
     expect(wrong.status).toBe(400);
-    const cancel = await t.request.delete(`/v1/businesses/current/invitations/${inv.body.invitationId as string}`)
-      .set(auth(a.token, a.businessId));
+    const cancel = await t.request.delete(`/v1/businesses/current/invitations/${inv.body.invitationId as string}`).set(auth(a.token, a.businessId));
     expect(cancel.status).toBe(200);
     const acc = await t.request.post('/v1/invitations/accept-register').send({
-      token: await lastInviteToken(), email, password: 'Str0ng!Passw0rd', displayName: 'X',
+      token: await lastInviteToken(),
+      email,
+      password: 'Str0ng!Passw0rd',
+      displayName: 'X',
     });
     expect(acc.status).toBe(404);
   });
@@ -185,33 +212,42 @@ describe('team, invitations & entitlements', () => {
        VALUES ($1, 'CUSTOM_ROLES', true, 'union-test', $2)`,
       [a.businessId, a.userId],
     );
-    const role = await t.request.post('/v1/businesses/current/roles').set(auth(a.token, a.businessId))
+    const role = await t.request
+      .post('/v1/businesses/current/roles')
+      .set(auth(a.token, a.businessId))
       .send({ key: 'stock-clerk', name: 'Stock Clerk', permissions: ['catalog.view', 'catalog.create'] });
     expect(role.status).toBe(201);
 
     const email = uniqueEmail();
-    await t.request.post('/v1/businesses/current/invitations').set(auth(a.token, a.businessId))
-      .send({ email, roleKey: 'cashier' });
+    await t.request.post('/v1/businesses/current/invitations').set(auth(a.token, a.businessId)).send({ email, roleKey: 'cashier' });
     const acc = await t.request.post('/v1/invitations/accept-register').send({
-      token: await lastInviteToken(), email, password: 'Str0ng!Passw0rd', displayName: 'J',
+      token: await lastInviteToken(),
+      email,
+      password: 'Str0ng!Passw0rd',
+      displayName: 'J',
     });
     const login = await t.request.post('/v1/auth/login').send({ email, password: 'Str0ng!Passw0rd' });
     const memberToken = login.body.accessToken as string;
     void acc;
 
     // cashier alone cannot create products
-    const denied = await t.request.post('/v1/catalog/products').set(auth(memberToken, a.businessId))
+    const denied = await t.request
+      .post('/v1/catalog/products')
+      .set(auth(memberToken, a.businessId))
       .send({ translations: { ar: 'منتج' }, basePriceMinor: '100', priceCurrency: 'ILS' });
     expect(denied.status).toBe(403);
 
     // add the custom role as a SECOND role (union)
     const me = await t.request.get('/v1/auth/me').set('Authorization', `Bearer ${memberToken}`);
-    const set = await t.request.patch(`/v1/businesses/current/members/${me.body.userId as string}/roles`)
+    const set = await t.request
+      .patch(`/v1/businesses/current/members/${me.body.userId as string}/roles`)
       .set(auth(a.token, a.businessId))
       .send({ roleKeys: ['cashier', 'stock-clerk'] });
     expect(set.status).toBe(200);
 
-    const allowed = await t.request.post('/v1/catalog/products').set(auth(memberToken, a.businessId))
+    const allowed = await t.request
+      .post('/v1/catalog/products')
+      .set(auth(memberToken, a.businessId))
       .send({ translations: { ar: 'منتج' }, basePriceMinor: '100', priceCurrency: 'ILS' });
     expect(allowed.status).toBe(201);
   });
@@ -220,12 +256,15 @@ describe('team, invitations & entitlements', () => {
     const a = await onboardUser('owner-grant-biz');
     const email2 = uniqueEmail();
     const reg2 = await t.request.post('/v1/auth/register').send({
-      email: email2, password: 'Str0ng!Passw0rd', displayName: 'M2', preferredLocale: 'ar',
+      email: email2,
+      password: 'Str0ng!Passw0rd',
+      displayName: 'M2',
+      preferredLocale: 'ar',
     });
-    await t.request.post('/v1/businesses/current/members').set(auth(a.token, a.businessId))
-      .send({ email: email2, roleKey: 'cashier' });
+    await t.request.post('/v1/businesses/current/members').set(auth(a.token, a.businessId)).send({ email: email2, roleKey: 'cashier' });
     const me2 = await t.request.get('/v1/auth/me').set('Authorization', `Bearer ${reg2.body.accessToken as string}`);
-    const grant = await t.request.patch(`/v1/businesses/current/members/${me2.body.userId as string}/roles`)
+    const grant = await t.request
+      .patch(`/v1/businesses/current/members/${me2.body.userId as string}/roles`)
       .set(auth(a.token, a.businessId))
       .send({ roleKeys: ['owner'] });
     expect(grant.status).toBe(403);
@@ -235,11 +274,13 @@ describe('team, invitations & entitlements', () => {
     const a = await onboardUser('suspend-biz');
     const email = uniqueEmail();
     const reg2 = await t.request.post('/v1/auth/register').send({
-      email, password: 'Str0ng!Passw0rd', displayName: 'M2', preferredLocale: 'ar',
+      email,
+      password: 'Str0ng!Passw0rd',
+      displayName: 'M2',
+      preferredLocale: 'ar',
     });
     const token2 = reg2.body.accessToken as string;
-    await t.request.post('/v1/businesses/current/members').set(auth(a.token, a.businessId))
-      .send({ email, roleKey: 'cashier' });
+    await t.request.post('/v1/businesses/current/members').set(auth(a.token, a.businessId)).send({ email, roleKey: 'cashier' });
     const me2 = await t.request.get('/v1/auth/me').set('Authorization', `Bearer ${token2}`);
     const uid2 = me2.body.userId as string;
 
@@ -258,8 +299,7 @@ describe('team, invitations & entitlements', () => {
 
     // removed members are preserved in history (status='removed'), not deleted
     await t.request.delete(`/v1/businesses/current/members/${uid2}`).set(auth(a.token, a.businessId));
-    const row = (await ownerPool().query(
-      `SELECT status, disabled_at FROM memberships WHERE business_id = $1 AND user_id = $2`, [a.businessId, uid2])).rows[0];
+    const row = (await ownerPool().query(`SELECT status, disabled_at FROM memberships WHERE business_id = $1 AND user_id = $2`, [a.businessId, uid2])).rows[0];
     expect(row?.status).toBe('removed');
     expect(row?.disabled_at).toBeTruthy();
     const list = await t.request.get('/v1/businesses/current/members').set(auth(a.token, a.businessId));

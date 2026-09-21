@@ -16,7 +16,10 @@ describe('refresh token lineage & reuse security', () => {
   async function loginUser(): Promise<{ refreshToken: string; accessToken: string; userId: string }> {
     const email = uniqueEmail();
     const reg = await t.request.post('/v1/auth/register').send({
-      email, password: 'Str0ng!Passw0rd', displayName: 'U', preferredLocale: 'ar',
+      email,
+      password: 'Str0ng!Passw0rd',
+      displayName: 'U',
+      preferredLocale: 'ar',
     });
     const me = await t.request.get('/v1/auth/me').set('Authorization', `Bearer ${reg.body.accessToken as string}`);
     return {
@@ -35,9 +38,7 @@ describe('refresh token lineage & reuse security', () => {
     expect(replay.status).toBe(401);
     expect(replay.body.error.code).toBe('TOKEN_REUSE_DETECTED');
 
-    const { rows } = await ownerPool().query<{ state: string }>(
-      `SELECT state FROM session_refresh_tokens ORDER BY created_at`,
-    );
+    const { rows } = await ownerPool().query<{ state: string }>(`SELECT state FROM session_refresh_tokens ORDER BY created_at`);
     const states = rows.map((r) => r.state);
     expect(states.filter((s) => s === 'consumed').length).toBe(1);
     // successor was revoked by the reuse-triggered family kill
@@ -80,9 +81,7 @@ describe('refresh token lineage & reuse security', () => {
     expect(out.status).toBe(201);
     const r = await t.request.post('/v1/auth/refresh').send({ refreshToken: u.refreshToken });
     expect(r.status).toBe(401);
-    const { rows } = await ownerPool().query<{ state: string }>(
-      `SELECT state FROM session_refresh_tokens WHERE state = 'issued'`,
-    );
+    const { rows } = await ownerPool().query<{ state: string }>(`SELECT state FROM session_refresh_tokens WHERE state = 'issued'`);
     expect(rows.length).toBe(0);
   });
 });

@@ -15,17 +15,17 @@ describe('super admin', () => {
 
   async function registerUser(): Promise<{ token: string; userId: string }> {
     const reg = await t.request.post('/v1/auth/register').send({
-      email: uniqueEmail(), password: 'Str0ng!Passw0rd', displayName: 'U', preferredLocale: 'ar',
+      email: uniqueEmail(),
+      password: 'Str0ng!Passw0rd',
+      displayName: 'U',
+      preferredLocale: 'ar',
     });
     const me = await t.request.get('/v1/auth/me').set('Authorization', `Bearer ${reg.body.accessToken as string}`);
     return { token: reg.body.accessToken as string, userId: me.body.userId as string };
   }
 
   async function makePlatformOwner(userId: string): Promise<void> {
-    await ownerPool().query(
-      `INSERT INTO platform_role_memberships (user_id, role_key) VALUES ($1, 'platform_owner')`,
-      [userId],
-    );
+    await ownerPool().query(`INSERT INTO platform_role_memberships (user_id, role_key) VALUES ($1, 'platform_owner')`, [userId]);
   }
 
   it('merchant without platform role is forbidden from every admin route', async () => {
@@ -43,17 +43,15 @@ describe('super admin', () => {
     expect(tenants.status).toBe(200);
 
     const analyst = await registerUser();
-    await ownerPool().query(
-      `INSERT INTO platform_role_memberships (user_id, role_key) VALUES ($1, 'read_only_analyst')`,
-      [analyst.userId],
-    );
+    await ownerPool().query(`INSERT INTO platform_role_memberships (user_id, role_key) VALUES ($1, 'read_only_analyst')`, [analyst.userId]);
     const plans = await t.request.get('/v1/admin/plans').set('Authorization', `Bearer ${analyst.token}`);
     expect(plans.status).toBe(200);
-    const denied = await t.request.post('/v1/admin/plan-versions').set('Authorization', `Bearer ${analyst.token}`)
+    const denied = await t.request
+      .post('/v1/admin/plan-versions')
+      .set('Authorization', `Bearer ${analyst.token}`)
       .send({ planKey: 'free', limits: { MAX_USERS: 3 } });
     expect(denied.status).toBe(403);
-    const flagsDenied = await t.request.post('/v1/admin/feature-flags').set('Authorization', `Bearer ${analyst.token}`)
-      .send({ key: 'x', enabled: true });
+    const flagsDenied = await t.request.post('/v1/admin/feature-flags').set('Authorization', `Bearer ${analyst.token}`).send({ key: 'x', enabled: true });
     expect(flagsDenied.status).toBe(403);
   });
 
@@ -65,21 +63,15 @@ describe('super admin', () => {
     // cannot delete its own versions either (unique key per run).
     const planKey = `testplan-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
     await ownerPool().query(`INSERT INTO plans (key, name) VALUES ($1, 'Test Plan')`, [planKey]);
-    const { rows: v1rows } = await ownerPool().query<{ id: string }>(
-      `INSERT INTO plan_versions (plan_key, version) VALUES ($1, 1) RETURNING id`, [planKey],
-    );
+    const { rows: v1rows } = await ownerPool().query<{ id: string }>(`INSERT INTO plan_versions (plan_key, version) VALUES ($1, 1) RETURNING id`, [planKey]);
     const v1 = v1rows[0];
     if (!v1) throw new Error('fixture plan version insert failed');
-    await ownerPool().query(
-      `INSERT INTO plan_limits (plan_version_id, limit_key, limit_value) VALUES ($1, 'MAX_USERS', 2), ($1, 'MAX_BRANCHES', 1)`,
-      [v1.id],
-    );
-    await ownerPool().query(
-      `INSERT INTO plan_entitlements (plan_version_id, feature_key, enabled) VALUES ($1, 'MULTI_BRANCH', false)`,
-      [v1.id],
-    );
+    await ownerPool().query(`INSERT INTO plan_limits (plan_version_id, limit_key, limit_value) VALUES ($1, 'MAX_USERS', 2), ($1, 'MAX_BRANCHES', 1)`, [v1.id]);
+    await ownerPool().query(`INSERT INTO plan_entitlements (plan_version_id, feature_key, enabled) VALUES ($1, 'MULTI_BRANCH', false)`, [v1.id]);
 
-    const res = await t.request.post('/v1/admin/plan-versions').set('Authorization', `Bearer ${owner.token}`)
+    const res = await t.request
+      .post('/v1/admin/plan-versions')
+      .set('Authorization', `Bearer ${owner.token}`)
       .send({ planKey, limits: { MAX_USERS: 4 }, features: { MULTI_BRANCH: true } });
     expect(res.status).toBe(201);
     expect(res.body.version).toBe(2);
@@ -105,16 +97,27 @@ describe('super admin', () => {
     const owner = await registerUser();
     await makePlatformOwner(owner.userId);
     // onboard a business to override
-    const on = await t.request.post('/v1/onboarding/complete').set('Idempotency-Key', `idem-${Date.now()}-${Math.floor(Math.random()*1e9)}`).set('Authorization', `Bearer ${owner.token}`).send({
-      businessName: 'Biz', countryCode: 'PS', baseCurrency: 'ILS', storeSlug: `adm-${Date.now()}`,
-    });
+    const on = await t.request
+      .post('/v1/onboarding/complete')
+      .set('Idempotency-Key', `idem-${Date.now()}-${Math.floor(Math.random() * 1e9)}`)
+      .set('Authorization', `Bearer ${owner.token}`)
+      .send({
+        businessName: 'Biz',
+        countryCode: 'PS',
+        baseCurrency: 'ILS',
+        storeSlug: `adm-${Date.now()}`,
+      });
     const businessId = on.body.businessId as string;
 
-    const both = await t.request.post('/v1/admin/entitlement-overrides').set('Authorization', `Bearer ${owner.token}`)
+    const both = await t.request
+      .post('/v1/admin/entitlement-overrides')
+      .set('Authorization', `Bearer ${owner.token}`)
       .send({ businessId, featureKey: 'MULTI_BRANCH', enabledValue: true, limitKey: 'MAX_USERS', limitValue: 9, reason: 'both' });
     expect(both.status).toBe(400);
 
-    const ok = await t.request.post('/v1/admin/entitlement-overrides').set('Authorization', `Bearer ${owner.token}`)
+    const ok = await t.request
+      .post('/v1/admin/entitlement-overrides')
+      .set('Authorization', `Bearer ${owner.token}`)
       .send({ businessId, limitKey: 'MAX_USERS', limitValue: 9, reason: 'vip customer' });
     expect(ok.status).toBe(201);
 
@@ -126,25 +129,26 @@ describe('super admin', () => {
   it('feature flag set is audited; platform_roles.manage is platform_owner-only', async () => {
     const owner = await registerUser();
     await makePlatformOwner(owner.userId);
-    const flag = await t.request.post('/v1/admin/feature-flags').set('Authorization', `Bearer ${owner.token}`)
+    const flag = await t.request
+      .post('/v1/admin/feature-flags')
+      .set('Authorization', `Bearer ${owner.token}`)
       .send({ key: 'beta_checkout', enabled: true, description: 'beta' });
     expect(flag.status).toBe(200);
 
     const admin = await registerUser();
-    await ownerPool().query(
-      `INSERT INTO platform_role_memberships (user_id, role_key) VALUES ($1, 'platform_admin')`,
-      [admin.userId],
-    );
-    const denied = await t.request.post('/v1/admin/platform-roles').set('Authorization', `Bearer ${admin.token}`)
+    await ownerPool().query(`INSERT INTO platform_role_memberships (user_id, role_key) VALUES ($1, 'platform_admin')`, [admin.userId]);
+    const denied = await t.request
+      .post('/v1/admin/platform-roles')
+      .set('Authorization', `Bearer ${admin.token}`)
       .send({ userId: admin.userId, roleKey: 'platform_owner' });
     expect(denied.status).toBe(403);
 
-    const granted = await t.request.post('/v1/admin/platform-roles').set('Authorization', `Bearer ${owner.token}`)
+    const granted = await t.request
+      .post('/v1/admin/platform-roles')
+      .set('Authorization', `Bearer ${owner.token}`)
       .send({ userId: admin.userId, roleKey: 'security_admin' });
     expect(granted.status).toBe(200);
-    const { rows } = await ownerPool().query<{ role_key: string }>(
-      'SELECT role_key FROM platform_role_memberships WHERE user_id = $1', [admin.userId],
-    );
+    const { rows } = await ownerPool().query<{ role_key: string }>('SELECT role_key FROM platform_role_memberships WHERE user_id = $1', [admin.userId]);
     expect(rows[0]?.role_key).toBe('security_admin');
   });
 

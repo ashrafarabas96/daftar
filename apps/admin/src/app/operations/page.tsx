@@ -14,8 +14,12 @@ export default function OperationsPage() {
   useEffect(() => {
     const ping = async () => {
       const [live, ready] = await Promise.all([
-        fetch('/api/proxy/health/live').then((r) => r.ok).catch(() => false),
-        fetch('/api/proxy/health/ready').then((r) => r.ok).catch(() => false),
+        fetch('/api/proxy/health/live')
+          .then((r) => r.ok)
+          .catch(() => false),
+        fetch('/api/proxy/health/ready')
+          .then((r) => r.ok)
+          .catch(() => false),
       ]);
       setHealth({ live, ready });
     };

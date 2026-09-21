@@ -24,9 +24,7 @@ describe('provisioner boundary (§15–21): no bypass, EXECUTE-only authority', 
   it('app_bypass() names ONLY the platform principal (provisioner removed)', async () => {
     t = await createTestApp();
     await resetData();
-    const { rows } = await ownerPool().query<{ def: string }>(
-      `SELECT pg_get_functiondef(oid) AS def FROM pg_proc WHERE proname = 'app_bypass'`,
-    );
+    const { rows } = await ownerPool().query<{ def: string }>(`SELECT pg_get_functiondef(oid) AS def FROM pg_proc WHERE proname = 'app_bypass'`);
     expect(rows.length).toBeGreaterThan(0);
     expect(rows[0]?.def).toContain('daftar_platform');
     expect(rows[0]?.def).not.toContain('daftar_provisioner');
@@ -89,29 +87,33 @@ describe('provisioner boundary (§15–21): no bypass, EXECUTE-only authority', 
     await attempt('select businesses', 'SELECT * FROM businesses');
     await attempt('select memberships', 'SELECT * FROM memberships');
     // INSERT owner into an existing unrelated tenant
-    await attempt('insert owner into unrelated tenant',
-      `INSERT INTO tenant_memberships (tenant_id, user_id, role_key) VALUES (gen_random_uuid(), gen_random_uuid(), 'tenant_owner')`);
+    await attempt(
+      'insert owner into unrelated tenant',
+      `INSERT INTO tenant_memberships (tenant_id, user_id, role_key) VALUES (gen_random_uuid(), gen_random_uuid(), 'tenant_owner')`,
+    );
     // DELETE unrelated membership
     await attempt('delete membership', 'DELETE FROM memberships WHERE true');
     // INSERT arbitrary owner role
-    await attempt('insert owner role',
-      `INSERT INTO membership_roles (business_id, user_id, role_id) VALUES (gen_random_uuid(), gen_random_uuid(), gen_random_uuid())`);
+    await attempt(
+      'insert owner role',
+      `INSERT INTO membership_roles (business_id, user_id, role_id) VALUES (gen_random_uuid(), gen_random_uuid(), gen_random_uuid())`,
+    );
     // INSERT entitlement for unrelated business
-    await attempt('insert entitlement',
-      `INSERT INTO business_entitlements (business_id, plan_version_id, state) VALUES (gen_random_uuid(), gen_random_uuid(), 'active')`);
+    await attempt(
+      'insert entitlement',
+      `INSERT INTO business_entitlements (business_id, plan_version_id, state) VALUES (gen_random_uuid(), gen_random_uuid(), 'active')`,
+    );
     // UPDATE unrelated invitation
     await attempt('update invitation', `UPDATE business_invitations SET status = 'cancelled' WHERE true`);
     // Read credential payload
     await attempt('read credential payload', 'SELECT secret_ciphertext FROM credential_deliveries');
     // Grant platform role
-    await attempt('grant platform role',
-      `INSERT INTO platform_role_memberships (user_id, role_key) VALUES (gen_random_uuid(), 'super_admin')`);
+    await attempt('grant platform role', `INSERT INTO platform_role_memberships (user_id, role_key) VALUES (gen_random_uuid(), 'super_admin')`);
     // Modify feature flag / plan
     await attempt('modify feature flag', 'UPDATE feature_flags SET enabled = true WHERE true');
     await attempt('modify plan', `UPDATE plans SET name = 'hacked' WHERE true`);
     // Write catalog arbitrarily
-    await attempt('write catalog',
-      `INSERT INTO products (business_id, sku, base_price_minor, price_currency) VALUES (gen_random_uuid(), 'X', '0', 'ILS')`);
+    await attempt('write catalog', `INSERT INTO products (business_id, sku, base_price_minor, price_currency) VALUES (gen_random_uuid(), 'X', '0', 'ILS')`);
     // audit/outbox injection
     await attempt('inject audit', `INSERT INTO audit_events (action, entity) VALUES ('x', 'x')`);
     await attempt('inject outbox', `INSERT INTO outbox_events (type, payload) VALUES ('x', '{}')`);
@@ -122,9 +124,13 @@ describe('provisioner boundary (§15–21): no bypass, EXECUTE-only authority', 
     t = await createTestApp();
     await resetData();
     const reg = await t.request.post('/v1/auth/register').send({
-      email: uniqueEmail(), password: 'Str0ng!Passw0rd', displayName: 'P', preferredLocale: 'ar',
+      email: uniqueEmail(),
+      password: 'Str0ng!Passw0rd',
+      displayName: 'P',
+      preferredLocale: 'ar',
     });
-    const on = await t.request.post('/v1/onboarding/complete')
+    const on = await t.request
+      .post('/v1/onboarding/complete')
       .set('Idempotency-Key', `idem-${Date.now()}-prov`)
       .set('Authorization', `Bearer ${reg.body.accessToken as string}`)
       .send({ businessName: 'Prov Co', countryCode: 'PS', baseCurrency: 'ILS', storeSlug: `prov-${Date.now()}` });

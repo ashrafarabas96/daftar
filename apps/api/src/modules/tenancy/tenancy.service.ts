@@ -12,9 +12,7 @@ import {
   suggestSlugs,
   type Permission,
 } from '@daftar/domain-core';
-import type {
-  BusinessSettingsDto, BusinessSummaryDto, LocaleCode, OnboardingResultDto, SlugAvailabilityDto,
-} from '@daftar/shared-contracts';
+import type { BusinessSettingsDto, BusinessSummaryDto, LocaleCode, OnboardingResultDto, SlugAvailabilityDto } from '@daftar/shared-contracts';
 import { Database } from '../../infra/database';
 import { isProvisionError, mapProvisionError } from './provision-errors';
 import { AuditService, OutboxService, newId } from '../audit/audit.service';
@@ -89,15 +87,17 @@ export class TenancyService {
       const allowedBranchIds =
         branchScopeMode === 'assigned'
           ? (
-              await c.query<{ branch_id: string }>(
-                'SELECT branch_id FROM member_branch_scopes WHERE business_id = $1 AND user_id = $2',
-                [businessId, userId],
-              )
+              await c.query<{ branch_id: string }>('SELECT branch_id FROM member_branch_scopes WHERE business_id = $1 AND user_id = $2', [businessId, userId])
             ).rows.map((r) => r.branch_id)
           : [];
       return {
-        tenantId: m.tenant_id, businessId, userId, roles,
-        roleKeys: [...byKey.keys()], branchScopeMode, allowedBranchIds,
+        tenantId: m.tenant_id,
+        businessId,
+        userId,
+        roles,
+        roleKeys: [...byKey.keys()],
+        branchScopeMode,
+        allowedBranchIds,
       };
     });
   }
@@ -145,25 +145,25 @@ export class TenancyService {
       // §13 (Stabilization): onboarding runs on the NARROW PROVISIONER
       // boundary — never the platform transaction.
       return await this.db.withProvisionerTransaction(async (c) => {
-      // Serialize onboarding per user (§54): advisory lock on the user id —
-      // the provisioner intentionally has NO grant on the identity users
-      // table. A concurrent double submit waits, then sees the committed
-      // operation row → replay, no race.
-      await c.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 73))', [userId]);
+        // Serialize onboarding per user (§54): advisory lock on the user id —
+        // the provisioner intentionally has NO grant on the identity users
+        // table. A concurrent double submit waits, then sees the committed
+        // operation row → replay, no race.
+        await c.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 73))', [userId]);
 
-      // §37–39: Idempotency-Key is REQUIRED — enforced at the controller.
-      const replay = await this.replayOperation(c, userId, idempotencyKey, 'initial_onboarding', { ...input, storeSlug: slug });
-      if (replay) return replay;
+        // §37–39: Idempotency-Key is REQUIRED — enforced at the controller.
+        const replay = await this.replayOperation(c, userId, idempotencyKey, 'initial_onboarding', { ...input, storeSlug: slug });
+        if (replay) return replay;
 
-      const tenantId = newId();
-      const businessId = newId();
-      // §15–21 (Ultimate Closure): the cross-scope transition runs ONLY via
-      // narrow SECURITY DEFINER commands — no direct table writes, no bypass.
-      await c.query('SELECT provision_create_tenant($1, $2)', [tenantId, userId]);
-      await this.provisionBusiness(c, tenantId, userId, businessId, input, slug, userId, 'tenancy.onboarding_completed');
-      const onboardResult: OnboardingResultDto = { businessId, tenantId, storeSlug: slug, replayed: false };
-      await this.persistOperation(c, userId, idempotencyKey, 'initial_onboarding', { ...input, storeSlug: slug }, onboardResult);
-      return onboardResult;
+        const tenantId = newId();
+        const businessId = newId();
+        // §15–21 (Ultimate Closure): the cross-scope transition runs ONLY via
+        // narrow SECURITY DEFINER commands — no direct table writes, no bypass.
+        await c.query('SELECT provision_create_tenant($1, $2)', [tenantId, userId]);
+        await this.provisionBusiness(c, tenantId, userId, businessId, input, slug, userId, 'tenancy.onboarding_completed');
+        const onboardResult: OnboardingResultDto = { businessId, tenantId, storeSlug: slug, replayed: false };
+        await this.persistOperation(c, userId, idempotencyKey, 'initial_onboarding', { ...input, storeSlug: slug }, onboardResult);
+        return onboardResult;
       });
     } catch (e) {
       // Slug race lost (§23): map ONLY the store-slug unique constraint to
@@ -258,17 +258,22 @@ export class TenancyService {
     const resolvedTimezone = input.timezone ?? getCountryPack(input.countryCode).recommendedTimezone;
     assertValidTimezone(resolvedTimezone);
     try {
-      await c.query(
-        `SELECT provision_create_business($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
-        [
-          tenantId, userId, businessId, input.businessName, slug, input.countryCode,
-          input.baseCurrency, normalizeIndustryProfileKey(input.industryProfileKey),
-          input.preferredLocale ?? 'ar', [input.preferredLocale ?? 'ar'],
-          resolvedTimezone,
-          JSON.stringify(BUILTIN_ROLE_PERMISSIONS),
-          auditAction, actorUserId,
-        ],
-      );
+      await c.query(`SELECT provision_create_business($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`, [
+        tenantId,
+        userId,
+        businessId,
+        input.businessName,
+        slug,
+        input.countryCode,
+        input.baseCurrency,
+        normalizeIndustryProfileKey(input.industryProfileKey),
+        input.preferredLocale ?? 'ar',
+        [input.preferredLocale ?? 'ar'],
+        resolvedTimezone,
+        JSON.stringify(BUILTIN_ROLE_PERMISSIONS),
+        auditAction,
+        actorUserId,
+      ]);
     } catch (e) {
       if (isProvisionError(e, 'SLUG_RESERVED')) {
         // Friendly suggestions come from the read-only resolver directory —
@@ -293,10 +298,13 @@ export class TenancyService {
   ): Promise<OnboardingResultDto | null> {
     const hash = operationHash(payload);
     const op = (
-      await c.query<{ kind: string; payload_hash: string; result_tenant_id: string | null; result_business_id: string | null; result_store_slug: string | null }>(
-        'SELECT kind, payload_hash, result_tenant_id, result_business_id, result_store_slug FROM provision_replay_operation($1, $2)',
-        [userId, key],
-      )
+      await c.query<{
+        kind: string;
+        payload_hash: string;
+        result_tenant_id: string | null;
+        result_business_id: string | null;
+        result_store_slug: string | null;
+      }>('SELECT kind, payload_hash, result_tenant_id, result_business_id, result_store_slug FROM provision_replay_operation($1, $2)', [userId, key])
     ).rows[0];
     if (!op) return null;
     if (op.kind !== kind || op.payload_hash !== hash) {
@@ -317,18 +325,34 @@ export class TenancyService {
     payload: unknown,
     result: OnboardingResultDto,
   ): Promise<void> {
-    await c.query('SELECT provision_persist_operation($1, $2, $3, $4, $5, $6)',
-      [userId, key, kind, operationHash(payload), result.tenantId, result.businessId]);
+    await c.query('SELECT provision_persist_operation($1, $2, $3, $4, $5, $6)', [
+      userId,
+      key,
+      kind,
+      operationHash(payload),
+      result.tenantId,
+      result.businessId,
+    ]);
   }
 
   async listMyBusinesses(userId: string): Promise<BusinessSummaryDto[]> {
     const rows = (
-      await this.db.withResolverTransaction((c) => c.query<{
-        business_id: string; tenant_id: string; name: string; store_slug: string; country_code: string;
-        base_currency: string; industry_profile_key: string; default_locale: string; enabled_locales: string[];
-        timezone: string; storefront_locale: string; role_keys: string | null;
-      }>(
-        `SELECT m.business_id, b.tenant_id, b.name, b.store_slug, b.country_code, b.base_currency,
+      await this.db.withResolverTransaction((c) =>
+        c.query<{
+          business_id: string;
+          tenant_id: string;
+          name: string;
+          store_slug: string;
+          country_code: string;
+          base_currency: string;
+          industry_profile_key: string;
+          default_locale: string;
+          enabled_locales: string[];
+          timezone: string;
+          storefront_locale: string;
+          role_keys: string | null;
+        }>(
+          `SELECT m.business_id, b.tenant_id, b.name, b.store_slug, b.country_code, b.base_currency,
                 b.industry_profile_key, b.default_locale, b.enabled_locales, b.timezone, b.storefront_locale,
                 string_agg(r.key, ',' ORDER BY r.key) AS role_keys
          FROM memberships m
@@ -339,14 +363,22 @@ export class TenancyService {
          GROUP BY m.business_id, b.tenant_id, b.name, b.store_slug, b.country_code, b.base_currency,
                   b.industry_profile_key, b.default_locale, b.enabled_locales, b.timezone, b.storefront_locale, b.created_at
          ORDER BY b.created_at`,
-        [userId],
-      ))
+          [userId],
+        ),
+      )
     ).rows;
     return rows.map((r) => ({
-      businessId: r.business_id, tenantId: r.tenant_id, name: r.name, storeSlug: r.store_slug,
-      countryCode: r.country_code, baseCurrency: r.base_currency, industryProfileKey: r.industry_profile_key,
-      defaultLocale: r.default_locale as LocaleCode, enabledLocales: r.enabled_locales as LocaleCode[],
-      timezone: r.timezone, storefrontLocale: r.storefront_locale as LocaleCode,
+      businessId: r.business_id,
+      tenantId: r.tenant_id,
+      name: r.name,
+      storeSlug: r.store_slug,
+      countryCode: r.country_code,
+      baseCurrency: r.base_currency,
+      industryProfileKey: r.industry_profile_key,
+      defaultLocale: r.default_locale as LocaleCode,
+      enabledLocales: r.enabled_locales as LocaleCode[],
+      timezone: r.timezone,
+      storefrontLocale: r.storefront_locale as LocaleCode,
       roleKey: r.role_keys?.split(',')[0] ?? 'member',
     }));
   }
@@ -354,9 +386,19 @@ export class TenancyService {
   async getBusiness(m: MembershipContext): Promise<BusinessSettingsDto> {
     const r = (
       await this.db.scoped<{
-        id: string; tenant_id: string; name: string; store_slug: string; country_code: string; base_currency: string;
-        industry_profile_key: string; default_locale: string; enabled_locales: string[];
-        timezone: string; storefront_locale: string; financial_started_at: Date | null; created_at: Date;
+        id: string;
+        tenant_id: string;
+        name: string;
+        store_slug: string;
+        country_code: string;
+        base_currency: string;
+        industry_profile_key: string;
+        default_locale: string;
+        enabled_locales: string[];
+        timezone: string;
+        storefront_locale: string;
+        financial_started_at: Date | null;
+        created_at: Date;
       }>(
         { tenantId: m.tenantId, businessId: m.businessId },
         `SELECT id, tenant_id, name, store_slug, country_code, base_currency, industry_profile_key,
@@ -367,10 +409,17 @@ export class TenancyService {
     ).rows[0];
     if (!r) throw AppError.notFound('Business not found');
     return {
-      businessId: r.id, tenantId: r.tenant_id, name: r.name, storeSlug: r.store_slug,
-      countryCode: r.country_code, baseCurrency: r.base_currency, industryProfileKey: r.industry_profile_key,
-      defaultLocale: r.default_locale as LocaleCode, enabledLocales: r.enabled_locales as LocaleCode[],
-      timezone: r.timezone, storefrontLocale: r.storefront_locale as LocaleCode,
+      businessId: r.id,
+      tenantId: r.tenant_id,
+      name: r.name,
+      storeSlug: r.store_slug,
+      countryCode: r.country_code,
+      baseCurrency: r.base_currency,
+      industryProfileKey: r.industry_profile_key,
+      defaultLocale: r.default_locale as LocaleCode,
+      enabledLocales: r.enabled_locales as LocaleCode[],
+      timezone: r.timezone,
+      storefrontLocale: r.storefront_locale as LocaleCode,
       roleKey: m.roleKeys[0] ?? 'member',
       baseCurrencyLocked: r.financial_started_at !== null,
       createdAt: r.created_at.toISOString(),
@@ -383,9 +432,7 @@ export class TenancyService {
   ): Promise<void> {
     if (patch.timezone) assertValidTimezone(patch.timezone);
     await this.db.withTransaction({ tenantId: m.tenantId, businessId: m.businessId }, async (c) => {
-      const current = (
-        await c.query<{ id: string }>('SELECT id FROM businesses WHERE id = $1 FOR UPDATE', [m.businessId])
-      ).rows[0];
+      const current = (await c.query<{ id: string }>('SELECT id FROM businesses WHERE id = $1 FOR UPDATE', [m.businessId])).rows[0];
       if (!current) throw AppError.notFound('Business not found');
       await c.query(
         `UPDATE businesses SET
@@ -396,12 +443,14 @@ export class TenancyService {
            storefront_locale = coalesce($6, storefront_locale),
            updated_at = now()
          WHERE id = $1`,
-        [m.businessId, patch.name ?? null, patch.defaultLocale ?? null, patch.enabledLocales ?? null,
-         patch.timezone ?? null, patch.storefrontLocale ?? null],
+        [m.businessId, patch.name ?? null, patch.defaultLocale ?? null, patch.enabledLocales ?? null, patch.timezone ?? null, patch.storefrontLocale ?? null],
       );
       await this.audit.recordTx(c, {
-        action: 'tenancy.settings_updated', entity: 'business', entityId: m.businessId,
-        tenantId: m.tenantId, businessId: m.businessId,
+        action: 'tenancy.settings_updated',
+        entity: 'business',
+        entityId: m.businessId,
+        tenantId: m.tenantId,
+        businessId: m.businessId,
       });
     });
   }
@@ -409,21 +458,20 @@ export class TenancyService {
   /** Base currency (§55): editable only before financial_started_at; locked forever after. */
   async changeBaseCurrency(m: MembershipContext, newCurrency: string): Promise<void> {
     await this.db.withTransaction({ tenantId: m.tenantId, businessId: m.businessId }, async (c) => {
-      const row = (
-        await c.query<{ financial_started_at: Date | null }>(
-          'SELECT financial_started_at FROM businesses WHERE id = $1 FOR UPDATE', [m.businessId],
-        )
-      ).rows[0];
+      const row = (await c.query<{ financial_started_at: Date | null }>('SELECT financial_started_at FROM businesses WHERE id = $1 FOR UPDATE', [m.businessId]))
+        .rows[0];
       if (!row) throw AppError.notFound('Business not found');
       if (row.financial_started_at !== null) {
         throw AppError.conflict('BASE_CURRENCY_LOCKED', 'Base currency is locked after financial activity started');
       }
-      await c.query('UPDATE businesses SET base_currency = $2, updated_at = now() WHERE id = $1', [
-        m.businessId, newCurrency,
-      ]);
+      await c.query('UPDATE businesses SET base_currency = $2, updated_at = now() WHERE id = $1', [m.businessId, newCurrency]);
       await this.audit.recordTx(c, {
-        action: 'tenancy.base_currency_changed', entity: 'business', entityId: m.businessId,
-        tenantId: m.tenantId, businessId: m.businessId, metadata: { newCurrency },
+        action: 'tenancy.base_currency_changed',
+        entity: 'business',
+        entityId: m.businessId,
+        tenantId: m.tenantId,
+        businessId: m.businessId,
+        metadata: { newCurrency },
       });
     });
   }
@@ -433,12 +481,8 @@ export class TenancyService {
     const slug = normalizeSlug(slugRaw);
     // §15 (Stabilization): the slug directory is the narrow READ-ONLY
     // RESOLVER boundary — no platform authority for a UX availability check.
-    const taken = (
-      await this.db.withResolverTransaction((c) => c.query('SELECT 1 FROM businesses WHERE store_slug = $1', [slug]))
-    ).rowCount;
-    const reserved = (
-      await this.db.withResolverTransaction((c) => c.query('SELECT 1 FROM reserved_store_slugs WHERE slug = $1', [slug]))
-    ).rowCount;
+    const taken = (await this.db.withResolverTransaction((c) => c.query('SELECT 1 FROM businesses WHERE store_slug = $1', [slug]))).rowCount;
+    const reserved = (await this.db.withResolverTransaction((c) => c.query('SELECT 1 FROM reserved_store_slugs WHERE slug = $1', [slug]))).rowCount;
     const available = !(taken && taken > 0) && !(reserved && reserved > 0);
     const suggestions = available ? [] : await this.db.withResolverTransaction((c) => this.slugSuggestions(c, slug));
     return { slug, available, suggestions };
