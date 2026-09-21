@@ -53,3 +53,7 @@
 ## 8. الاتساق المصطلحي
 
 المصدر الملزم: `DAFTAR_LOCALIZATION_GLOSSARY.md`. نفس الإجراء = نفس الكلمة دائمًا (Master §155): "إتمام البيع" لا تتبدل مع "تسجيل البيع" بلا سبب موثّق.
+
+## 9. Phase 1 closure decision — admin console language (§58–61)
+
+The merchant web (187 keys × ar/en/tr, `npm run check:localization`) and Android (57 strings × 3) are fully localized and RTL-verified. The **platform admin console is English-only by documented decision**: it is an internal operations tool for the platform operator's staff, its vocabulary (audit actions, plan lifecycle, overrides) is the same vocabulary that appears in audit trails, and translating it without an operations glossary would fragment those terms. The console's pages already route strings through one helper per page, so enabling `messages/*.json` later is additive. Recorded in `docs/PHASE_1_DESIGN_REVIEW.md` §3 and `TECHNICAL_DEBT.md` TD-02.

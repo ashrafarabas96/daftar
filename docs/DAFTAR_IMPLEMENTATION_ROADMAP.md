@@ -48,3 +48,9 @@
 1. لا انتقال بين المراحل دون PASS موثّق.
 2. داخل كل Phase: أمر البدء (Master §178) وأمر الانتهاء (§179) يلزمان كل مهمة.
 3. الترتيب قابل لضبط طفيف بقرار موثّق؛ ترتيب الاعتماديات (Accounting قبل Sales الكاملة، Inventory قبل Storefront) غير قابل للكسر.
+
+## Status update — Phase 1 closed (2026-09-21)
+
+- **Phase 1 — Core Platform Skeleton: PASS** (`PHASE_1_ACCEPTANCE_REPORT.md`). Delivered: tenancy + identity/RBAC + business/branch/warehouse structure, design system, api/web/admin/android apps, CI with DB-from-zero, observability basics (structured logs, request id, readiness per runtime), catalog with normalized translations and identifier registry, localization infrastructure ar/en/tr, entitlements engine + plan builder, platform console, release gate and export.
+- Nothing from Phase 2 was started (no accounting, inventory, sales or POS tables/endpoints/screens exist).
+- Next: Phase 2 — Money Core, entered through `PHASE_2_PREMORTEM.md` entry conditions.

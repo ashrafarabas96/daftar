@@ -68,3 +68,23 @@ daftar/
 - Locale fallback + RTL/LTR + Turkish characters + plural rules.
 
 Baseline مثبت — لا يبدأ تنفيذ ما بعده إلا على هذا الواقع.
+
+## 5. Closure-time re-audit (2026-09-21 · Node v24.12.0 · npm 11.6.2 · branch `claude/new-session-2sxgo5`)
+
+The handover archive (Kimi agent export) was imported as-is (commit 53bbb50) and re-audited before any change. Reality then:
+
+| Item | Archive state | Evidence |
+|---|---|---|
+| `npm ci` | FAIL — lockfile carried a versionless stub and 531 URLs to a private mirror | fixed in 0c60b54 |
+| Integration suite | 130 failures: connection slots exhausted (apps leaked per test) | fixed in 0c60b54 (harness lifecycle guard) |
+| Lint / typecheck | 800 lint errors, TS2307: design-system `dist` never built before typecheck | build order fixed in CI + local |
+| Prettier | 209 unformatted files | config + one reformat |
+| Provisioner | authorization outside the mutation; actor id passed by caller | `0033` |
+| Runtimes | one `AppModule`; isolation only by env validation | per-process modules |
+| Web ↔ API contract | 44 client calls, 19 with mismatched shapes (`{ok:true}`, snake_case, missing `{items}`) | golden 06 |
+| Admin ↔ API | pages read raw proxy JSON | golden 07 |
+| Android | retry rebuilt requests; `Double` money; hand-written DTOs | 7ef906c |
+| Migrations | 0000–0032 present; manifest frozen through 0027 | now 0000–0037 frozen |
+| Docs | Phase 0 set + reality audit + protected behaviours; no Phase 1 closure documents | 21 documents at closure |
+
+Reality at closure (measured): 74 routes, 38 migrations, 33 RLS policies, 16 SECURITY DEFINER commands, 291 integration/security cases, 40 goldens, 58 unit tests, 13 Android JVM tests, 16 web pages, 11 admin pages, 187 × 3 i18n keys. All commands in `PHASE_1_ACCEPTANCE_REPORT.md` pass on a clean checkout.
