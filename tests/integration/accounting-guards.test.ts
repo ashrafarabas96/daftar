@@ -3,6 +3,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { ACCOUNTING_AUTHORITY_TABLES, findAuthoritativeBalanceColumns, isAuthoritativeBalanceColumn } from '../../scripts/guards/no-authoritative-balance';
+import { LOGIN_ROLES, findAuthorityViolations, parseTableGrants } from '../../scripts/guards/authority-isolation';
 
 const ROOT = join(__dirname, '../..');
 const MIGRATIONS = join(ROOT, 'infrastructure/database/migrations');
@@ -168,5 +169,117 @@ describe('P2-S1 migration boundary', () => {
   it('no 0042 or later migration exists — P2-S2 is unauthorized (§34)', () => {
     const beyond = readdirSync(MIGRATIONS).filter((f) => f.endsWith('.sql') && f.slice(0, 4) > '0041');
     expect(beyond).toEqual([]);
+  });
+});
+
+/**
+ * Authority isolation (Tech Lead P2-S1 FINAL SECURITY CORRECTION §16).
+ *
+ * The blocker was a LOGIN runtime role holding INSERT on the chart. This tests
+ * the GUARD, not just today's tree: each case below is the mistake as it would
+ * actually be written, and the guard has to say no to every one of them.
+ */
+describe('authority isolation guard', () => {
+  const REAL = {
+    schema: readdirSync(MIGRATIONS)
+      .filter((f) => f.endsWith('.sql'))
+      .sort()
+      .map((f) => readFileSync(join(MIGRATIONS, f), 'utf8'))
+      .join('\n'),
+    chartSql: readFileSync(join(MIGRATIONS, '0040_accounting_chart.sql'), 'utf8'),
+    bootstrap: readFileSync(join(ROOT, 'infrastructure/database/bootstrap.sql'), 'utf8'),
+  };
+
+  it('accepts the tree as it stands — the chart has no credential-reachable writer', () => {
+    expect(findAuthorityViolations(REAL)).toEqual([]);
+  });
+
+  it('rejects the exact regression it was written for: platform INSERT on accounts', () => {
+    const v = findAuthorityViolations({ ...REAL, schema: `${REAL.schema}\nGRANT SELECT, INSERT ON accounts TO daftar_platform;` });
+    expect(v).toHaveLength(1);
+    expect(v[0]).toMatch(/daftar_platform is granted INSERT on accounts/);
+  });
+
+  it('rejects chart DML granted to any one of the six login roles', () => {
+    for (const role of LOGIN_ROLES) {
+      for (const priv of ['INSERT', 'UPDATE', 'DELETE', 'ALL']) {
+        const v = findAuthorityViolations({ ...REAL, schema: `${REAL.schema}\nGRANT ${priv} ON accounts TO ${role};` });
+        expect(v.join(' '), `${role} must not hold ${priv}`).toContain(role);
+      }
+    }
+  });
+
+  it('rejects chart DML granted to PUBLIC', () => {
+    const v = findAuthorityViolations({ ...REAL, schema: `${REAL.schema}\nGRANT INSERT ON accounts TO PUBLIC;` });
+    expect(v.join(' ')).toMatch(/PUBLIC is granted INSERT/);
+  });
+
+  it('rejects UPDATE or DELETE on accounts even for the internal principal', () => {
+    for (const priv of ['UPDATE', 'DELETE', 'TRUNCATE']) {
+      const v = findAuthorityViolations({ ...REAL, schema: `${REAL.schema}\nGRANT ${priv} ON accounts TO daftar_accounting_internal;` });
+      expect(v.join(' '), `nobody may hold ${priv}`).toMatch(new RegExp(`accounts grants ${priv}`));
+    }
+  });
+
+  it('rejects a seeding routine owned by a login role', () => {
+    const tampered = REAL.chartSql.replace(
+      /ALTER FUNCTION accounting_seed_chart\(uuid\) OWNER TO [a-z_]+/,
+      'ALTER FUNCTION accounting_seed_chart(uuid) OWNER TO daftar_platform',
+    );
+    expect(tampered).not.toBe(REAL.chartSql);
+    const v = findAuthorityViolations({ ...REAL, chartSql: tampered });
+    expect(v.join(' ')).toMatch(/owned by the LOGIN role daftar_platform/);
+  });
+
+  it('rejects a seeding routine that leaves EXECUTE with PUBLIC', () => {
+    const tampered = REAL.chartSql.replace('REVOKE ALL ON FUNCTION accounting_seed_chart(uuid) FROM PUBLIC;', '');
+    expect(tampered).not.toBe(REAL.chartSql);
+    expect(findAuthorityViolations({ ...REAL, chartSql: tampered }).join(' ')).toMatch(/does not revoke EXECUTE from PUBLIC/);
+  });
+
+  it('rejects EXECUTE handed to a login role', () => {
+    const tampered = `${REAL.chartSql}\nGRANT EXECUTE ON FUNCTION accounting_seed_chart(uuid) TO daftar_app;`;
+    expect(findAuthorityViolations({ ...REAL, chartSql: tampered }).join(' ')).toMatch(/daftar_app is granted EXECUTE/);
+  });
+
+  it('rejects the internal principal becoming reachable', () => {
+    const cases: ReadonlyArray<readonly [string, RegExp]> = [
+      ["CREATE ROLE daftar_accounting_internal LOGIN PASSWORD 'x';", /declared LOGIN|given a password/],
+      ['CREATE ROLE daftar_accounting_internal NOLOGIN BYPASSRLS;', /declared BYPASSRLS/],
+      ['CREATE ROLE daftar_accounting_internal NOLOGIN SUPERUSER;', /declared SUPERUSER/],
+      ['CREATE ROLE daftar_accounting_internal NOLOGIN CREATEROLE;', /declared CREATEROLE/],
+      ['CREATE ROLE daftar_accounting_internal NOLOGIN CREATEDB;', /declared CREATEDB/],
+      ['CREATE ROLE daftar_accounting_internal NOLOGIN NOINHERIT;\nGRANT CONNECT ON DATABASE daftar TO daftar_accounting_internal;', /granted CONNECT/],
+      ['CREATE ROLE daftar_accounting_internal NOLOGIN NOINHERIT;\nGRANT daftar_accounting_internal TO daftar_app;', /granted to another role/],
+    ];
+    for (const [bootstrap, expected] of cases) {
+      expect(findAuthorityViolations({ ...REAL, bootstrap }).join(' '), bootstrap).toMatch(expected);
+    }
+  });
+
+  it('rejects a slice that never creates the internal principal at all', () => {
+    expect(findAuthorityViolations({ ...REAL, bootstrap: '-- no roles here' }).join(' ')).toMatch(/is not created by bootstrap\.sql/);
+  });
+
+  it('rejects buying isolation by weakening the global bypass', () => {
+    const widened = `${REAL.chartSql}\nCREATE OR REPLACE FUNCTION app_bypass() RETURNS BOOLEAN LANGUAGE sql STABLE AS $$ SELECT true $$;`;
+    expect(findAuthorityViolations({ ...REAL, chartSql: widened }).join(' ')).toMatch(/redefines app_bypass\(\)/);
+    const bypassrls = `${REAL.chartSql}\nALTER ROLE daftar_accounting_internal BYPASSRLS;`;
+    expect(findAuthorityViolations({ ...REAL, chartSql: bypassrls }).join(' ')).toMatch(/BYPASSRLS/);
+  });
+
+  it('reads grants the way PostgreSQL does, not the way a regex hopes to', () => {
+    const grants = parseTableGrants(
+      `GRANT SELECT, INSERT ON public.accounts TO daftar_accounting_internal;
+       GRANT USAGE ON SCHEMA public TO daftar_app;
+       GRANT EXECUTE ON FUNCTION accounting_seed_chart(uuid) TO daftar_app;
+       GRANT SELECT ON TABLE accounts, businesses TO daftar_platform;`,
+    );
+    // Schema and function grants are not table grants and must not be read as
+    // chart DML; `public.` and `TABLE` are noise, not different tables.
+    expect(grants).toEqual([
+      { privileges: ['SELECT', 'INSERT'], tables: ['accounts'], grantees: ['daftar_accounting_internal'] },
+      { privileges: ['SELECT'], tables: ['accounts', 'businesses'], grantees: ['daftar_platform'] },
+    ]);
   });
 });

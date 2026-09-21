@@ -18,6 +18,7 @@ import { createHash } from 'node:crypto';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { findAuthoritativeBalanceColumns } from './guards/no-authoritative-balance';
+import { CHART_TABLES, INTERNAL_ROLE, findAuthorityViolations } from './guards/authority-isolation';
 
 const ROOT = join(__dirname, '..');
 const MIGRATIONS_DIR = join(ROOT, 'infrastructure/database/migrations');
@@ -177,7 +178,32 @@ function checkGuardG3(): void {
   else ok('G-3 wired into static-guards.ts and clean across the migration tree');
 }
 
-// ── 5. Composed command matrix ──────────────────────────────────────────────
+// ── 5. Authority isolation (security correction §16) ────────────────────────
+//
+// The rule lives in scripts/guards/authority-isolation.ts so it can be
+// regression-tested directly (tests/integration/accounting-guards.test.ts):
+// a guard that has never been shown to fail is not a guard.
+function checkAuthorityIsolation(): void {
+  console.log('P2-S1 GATE — authority isolation');
+  const violations = findAuthorityViolations({
+    schema: sqlFiles()
+      .map((f) => readFileSync(join(MIGRATIONS_DIR, f), 'utf8'))
+      .join('\n'),
+    chartSql: readFileSync(join(MIGRATIONS_DIR, '0040_accounting_chart.sql'), 'utf8'),
+    bootstrap: readFileSync(join(ROOT, 'infrastructure/database/bootstrap.sql'), 'utf8'),
+  });
+  if (violations.length > 0) {
+    for (const detail of violations) fail('authority-isolation', detail);
+    return;
+  }
+  ok(`no LOGIN role (nor PUBLIC) holds INSERT/UPDATE/DELETE on ${CHART_TABLES.join(' or ')}`);
+  ok('no principal holds UPDATE, DELETE or TRUNCATE on accounts');
+  ok(`both seeding routines owned by ${INTERNAL_ROLE}, EXECUTE revoked from PUBLIC and from every login role`);
+  ok(`${INTERNAL_ROLE} is NOLOGIN, passwordless, unelevated and granted to nobody`);
+  ok('app_bypass() untouched by P2-S1, and no BYPASSRLS in the slice');
+}
+
+// ── 6. Composed command matrix ──────────────────────────────────────────────
 interface Step {
   readonly name: string;
   readonly cmd: string;
@@ -206,7 +232,7 @@ function runSteps(): void {
 
 if (LIST_ONLY) {
   console.log('P2-S1 GATE plan:');
-  console.log('  structural: migration boundary, slice boundary, 21-key registry, guard G-3');
+  console.log('  structural: migration boundary, slice boundary, 21-key registry, guard G-3, authority isolation');
   for (const s of STEPS) console.log(`  command:    ${s.cmd} ${s.args.join(' ')}`);
   process.exit(0);
 }
@@ -215,6 +241,7 @@ checkMigrationBoundary();
 checkSliceBoundary();
 checkRegistry();
 checkGuardG3();
+checkAuthorityIsolation();
 if (failures > 0) {
   console.error(`\nP2-S1 GATE: FAIL (${failures} structural violation${failures === 1 ? '' : 's'}) — not running the regression matrix`);
   process.exit(1);

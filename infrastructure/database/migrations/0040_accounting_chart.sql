@@ -9,8 +9,9 @@
 --     primitive — those are P2-S2/P2-S3 and must not exist yet;
 --   * no authoritative balance column anywhere (AL-15 / guard G-3): the
 --     journal will be the single financial source of truth;
---   * no DML grant on accounts to any merchant runtime role — the chart is
---     created only by the seeding routine below;
+--   * no DML grant on accounts to ANY login runtime role — the chart is
+--     created only by the seeding routine below, which runs as a dedicated
+--     NOLOGIN principal nothing can authenticate as;
 --   * businesses.financial_started_at is NEVER written here. Owning a chart
 --     is not a financial transaction, so the base currency stays unlocked.
 
@@ -193,28 +194,49 @@ CREATE POLICY tenant_membership ON accounts
   WITH CHECK (app_bypass() OR EXISTS (
     SELECT 1 FROM businesses b WHERE b.id = accounts.business_id AND b.tenant_id::text = app_tenant()));
 
+-- The internal seeder is not a tenant-scoped principal: it writes a chart for
+-- a business the trigger or the migration named, before any request context
+-- exists. It is admitted by IDENTITY, the same shape 0014 uses for the
+-- resolver — and its identity is unreachable, because the role is NOLOGIN,
+-- has no password and is granted to nobody. app_bypass() is NOT touched.
+CREATE POLICY accounting_seeder ON accounts
+  USING (current_user = 'daftar_accounting_internal')
+  WITH CHECK (current_user = 'daftar_accounting_internal');
+
 CREATE POLICY business_isolation ON accounts AS RESTRICTIVE
-  USING (app_bypass() OR business_id::text = app_business())
-  WITH CHECK (app_bypass() OR business_id::text = app_business());
+  USING (app_bypass() OR current_user = 'daftar_accounting_internal' OR business_id::text = app_business())
+  WITH CHECK (app_bypass() OR current_user = 'daftar_accounting_internal' OR business_id::text = app_business());
+
+-- Reading the owning tenant of the target business is the seeding routine's
+-- only need on `businesses`: SELECT, by identity, nothing else.
+CREATE POLICY accounting_seeder_read ON businesses
+  FOR SELECT USING (current_user = 'daftar_accounting_internal');
 
 -- ─────────────────────────────────────────────────────────────────────────
 -- 5. Grants — default deny.
 --
---   daftar_app        SELECT only. P2-S1 exposes no chart mutation at all, so
---                     the merchant runtime gets no INSERT/UPDATE/DELETE. A
---                     future account command earns its own narrow authority.
---   daftar_platform   SELECT (support/console read) + INSERT. The INSERT
---                     exists for exactly ONE reason: accounting_seed_chart()
---                     below is SECURITY DEFINER owned by daftar_platform,
---                     which is how every provisioning routine in this schema
---                     already writes (0032/0033/0038). It gets no UPDATE and
---                     no DELETE, so it can never rewrite or remove a chart.
+-- NO LOGIN runtime role holds INSERT, UPDATE or DELETE on the chart. Not the
+-- merchant runtime, and not the platform administrator either: platform
+-- administration is not financial configuration authority, and a stolen
+-- platform credential must not be able to mint an account row by hand.
+--
+--   daftar_app                   SELECT only.
+--   daftar_platform              SELECT only (support/console read).
 --   daftar_identity / daftar_resolver / daftar_provisioner / daftar_worker
---                     nothing at all.
+--                                nothing at all.
+--   daftar_accounting_internal   SELECT + INSERT — and it is NOLOGIN, has no
+--                                password and is granted to nobody, so this
+--                                authority exists only inside the SECURITY
+--                                DEFINER routine that role owns. Still no
+--                                UPDATE and no DELETE: even the seeder cannot
+--                                rewrite or remove a chart.
 -- ─────────────────────────────────────────────────────────────────────────
 GRANT SELECT ON accounting_system_account_keys TO daftar_app, daftar_platform;
-GRANT SELECT ON accounts TO daftar_app;
-GRANT SELECT, INSERT ON accounts TO daftar_platform;
+GRANT SELECT ON accounts TO daftar_app, daftar_platform;
+
+GRANT SELECT ON businesses TO daftar_accounting_internal;
+GRANT SELECT ON accounting_system_account_keys TO daftar_accounting_internal;
+GRANT SELECT, INSERT ON accounts TO daftar_accounting_internal;
 
 -- ─────────────────────────────────────────────────────────────────────────
 -- 6. accounting_seed_chart — the one idempotent, concurrency-safe,
@@ -302,11 +324,14 @@ BEGIN
   END IF;
 END $$;
 
-ALTER FUNCTION accounting_seed_chart(uuid) OWNER TO daftar_platform;
+-- The routine runs as the internal NOLOGIN principal, never as a login role.
+-- PUBLIC EXECUTE is revoked and no runtime role is granted EXECUTE: the only
+-- callers are the businesses trigger below (PostgreSQL checks EXECUTE when a
+-- trigger is created, not when it fires) and this migration, which runs under
+-- migration authority. A narrow account command earns its own grant when its
+-- slice arrives.
+ALTER FUNCTION accounting_seed_chart(uuid) OWNER TO daftar_accounting_internal;
 REVOKE ALL ON FUNCTION accounting_seed_chart(uuid) FROM PUBLIC;
--- No runtime EXECUTE grant: the only caller is the businesses trigger below
--- and the migration-time backfill. A narrow account command earns its own
--- grant when its slice arrives.
 
 -- ─────────────────────────────────────────────────────────────────────────
 -- 7. New-business atomicity (AL-08 / §12).
@@ -316,6 +341,11 @@ REVOKE ALL ON FUNCTION accounting_seed_chart(uuid) FROM PUBLIC;
 -- into businesses and the chart is seeded inside that same transaction. Any
 -- failure here aborts the whole business creation — the safe failure mode is
 -- no business, never a chart-less business.
+--
+-- SECURITY DEFINER owned by daftar_accounting_internal, so the insert succeeds
+-- even though the caller — daftar_provisioner, daftar_platform or the migrator
+-- — holds no INSERT on accounts. The authority belongs to the routine, not to
+-- whoever happened to create the business.
 -- ─────────────────────────────────────────────────────────────────────────
 CREATE OR REPLACE FUNCTION accounting_seed_chart_trg() RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_catalog AS $$
@@ -324,7 +354,7 @@ BEGIN
   RETURN NEW;
 END $$;
 
-ALTER FUNCTION accounting_seed_chart_trg() OWNER TO daftar_platform;
+ALTER FUNCTION accounting_seed_chart_trg() OWNER TO daftar_accounting_internal;
 REVOKE ALL ON FUNCTION accounting_seed_chart_trg() FROM PUBLIC;
 
 CREATE TRIGGER businesses_seed_chart

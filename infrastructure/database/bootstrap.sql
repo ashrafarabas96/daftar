@@ -7,6 +7,18 @@
 --   daftar_provisioner narrow provisioning boundary (Stabilization §13–14):
 --                     initial onboarding, additional business creation,
 --                     invitation acceptance. NOTHING else.
+--
+-- INTERNAL, NON-LOGIN principal (P2-S1 authority correction):
+--   daftar_accounting_internal
+--                     the ONLY principal holding physical INSERT on the
+--                     accounting chart. It is NOLOGIN and has no password, so
+--                     no credential for it can exist or be stolen; it is
+--                     NOINHERIT and is granted to nobody, so no runtime role
+--                     can assume it. Its authority is reachable only by
+--                     calling the SECURITY DEFINER routine it owns, which in
+--                     turn is reachable only from the businesses trigger and
+--                     the migration. A platform administrator is not a
+--                     financial configuration authority.
 DO $$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'daftar_app') THEN
@@ -39,6 +51,17 @@ BEGIN
   ELSE
     ALTER ROLE daftar_provisioner LOGIN PASSWORD '__PROVISIONER_DB_PASSWORD__';
   END IF;
+  -- Internal accounting authority. NOLOGIN, NOINHERIT, never a password —
+  -- re-asserted on every run so an existing database cannot drift into a
+  -- seventh login role.
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'daftar_accounting_internal') THEN
+    CREATE ROLE daftar_accounting_internal NOLOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+  ELSE
+    ALTER ROLE daftar_accounting_internal NOLOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD NULL;
+  END IF;
 END $$;
 GRANT CONNECT ON DATABASE daftar TO daftar_app, daftar_platform, daftar_worker, daftar_resolver, daftar_identity, daftar_provisioner;
 GRANT USAGE ON SCHEMA public TO daftar_app, daftar_platform, daftar_worker, daftar_resolver, daftar_identity, daftar_provisioner;
+-- The internal accounting principal gets schema USAGE only. It is NOLOGIN, so
+-- it deliberately receives no CONNECT: nothing can open a session as it.
+GRANT USAGE ON SCHEMA public TO daftar_accounting_internal;

@@ -53,6 +53,16 @@ describe('accounting chart privilege boundary', () => {
     }
   }
 
+  // The six — and only six — roles a credential can exist for.
+  const LOGIN_ROLES: ReadonlyArray<readonly [string, string]> = [
+    ['daftar_app', appDbUrl],
+    ['daftar_platform', platformDbUrl],
+    ['daftar_worker', workerDbUrl],
+    ['daftar_resolver', resolverDbUrl],
+    ['daftar_identity', identityDbUrl],
+    ['daftar_provisioner', provisionerDbUrl],
+  ];
+
   const scoped = async (c: Client, businessId: string): Promise<void> => {
     await c.query('BEGIN');
     await c.query(`SELECT set_config('app.tenant_id', $1, true), set_config('app.business_id', $2, true)`, [tenantId, businessId]);
@@ -131,7 +141,7 @@ describe('accounting chart privilege boundary', () => {
     }
   });
 
-  it('the platform grant shape matches the documented intent exactly', async () => {
+  it('the chart grant shape gives NO login role any DML — INSERT lives on the internal principal', async () => {
     const { rows } = await ownerPool().query<{ grantee: string; privilege_type: string }>(
       `SELECT grantee, privilege_type FROM information_schema.role_table_grants
        WHERE table_name = 'accounts' AND grantee LIKE 'daftar_%'
@@ -139,17 +149,148 @@ describe('accounting chart privilege boundary', () => {
     );
     const shape: Record<string, string[]> = {};
     for (const r of rows) (shape[r.grantee] ??= []).push(r.privilege_type);
-    // daftar_app reads only; daftar_platform reads and may INSERT, which is
-    // what the SECURITY DEFINER seeding routine runs as. No role anywhere
-    // holds UPDATE or DELETE on the chart.
-    expect(shape).toEqual({ daftar_app: ['SELECT'], daftar_platform: ['INSERT', 'SELECT'] });
+    // The whole authority contract in one assertion: the two login roles that
+    // can see the chart can ONLY see it. The single INSERT in the system
+    // belongs to daftar_accounting_internal, which is NOLOGIN — so that
+    // privilege is reachable only from inside the routine that role owns.
+    // Nobody, internal principal included, holds UPDATE or DELETE.
+    expect(shape).toEqual({
+      daftar_accounting_internal: ['INSERT', 'SELECT'],
+      daftar_app: ['SELECT'],
+      daftar_platform: ['SELECT'],
+    });
 
     const { rows: registry } = await ownerPool().query<{ grantee: string; privilege_type: string }>(
       `SELECT grantee, privilege_type FROM information_schema.role_table_grants
        WHERE table_name = 'accounting_system_account_keys' AND grantee LIKE 'daftar_%'
        ORDER BY grantee, privilege_type`,
     );
-    expect(registry.map((r) => `${r.grantee}:${r.privilege_type}`)).toEqual(['daftar_app:SELECT', 'daftar_platform:SELECT']);
+    expect(registry.map((r) => `${r.grantee}:${r.privilege_type}`)).toEqual([
+      'daftar_accounting_internal:SELECT',
+      'daftar_app:SELECT',
+      'daftar_platform:SELECT',
+    ]);
+  });
+
+  it('every one of the six login roles is denied INSERT, UPDATE and DELETE on the chart', async () => {
+    for (const [name, url] of LOGIN_ROLES) {
+      await as(url, async (c) => {
+        for (const sql of [
+          `INSERT INTO accounts (tenant_id, business_id, code, name, type) VALUES ('${tenantId}', '${businessA}', 'X9', 'x', 'asset')`,
+          `UPDATE accounts SET name = 'pwned'`,
+          `DELETE FROM accounts`,
+        ]) {
+          await c.query('BEGIN');
+          await expect(c.query(sql), `${name} must be denied: ${sql}`).rejects.toThrow(/permission denied/i);
+          await c.query('ROLLBACK');
+        }
+      });
+    }
+  });
+
+  it('every one of the six login roles is denied EXECUTE on both seeding routines', async () => {
+    for (const [name, url] of LOGIN_ROLES) {
+      await as(url, async (c) => {
+        await expect(c.query(`SELECT accounting_seed_chart($1)`, [businessA]), `${name} must not seed`).rejects.toThrow(/permission denied/i);
+        await expect(c.query(`SELECT accounting_seed_chart_trg()`), `${name} must not call the trigger routine`).rejects.toThrow(/permission denied/i);
+      });
+    }
+  });
+
+  it('both seeding routines are owned by the internal principal, and PUBLIC holds no EXECUTE', async () => {
+    const { rows } = await ownerPool().query<{ proname: string; owner: string; owner_can_login: boolean; acl: string | null }>(
+      `SELECT p.proname, r.rolname AS owner, r.rolcanlogin AS owner_can_login, array_to_string(p.proacl, ',') AS acl
+         FROM pg_proc p JOIN pg_roles r ON r.oid = p.proowner
+        WHERE p.proname IN ('accounting_seed_chart', 'accounting_seed_chart_trg')
+        ORDER BY p.proname`,
+    );
+    expect(rows.map((r) => r.proname)).toEqual(['accounting_seed_chart', 'accounting_seed_chart_trg']);
+    for (const r of rows) {
+      expect(r.owner).toBe('daftar_accounting_internal');
+      // The owner of a SECURITY DEFINER function IS its authority. If that
+      // owner could log in, the authority would have a credential.
+      expect(r.owner_can_login).toBe(false);
+      // REVOKE ALL FROM PUBLIC leaves an explicit ACL with no `=X/` entry.
+      expect(r.acl ?? '').not.toMatch(/(^|,)=[^/]*X/);
+      for (const [login] of LOGIN_ROLES) {
+        expect(r.acl ?? '', `${login} must hold no EXECUTE on ${r.proname}`).not.toContain(`${login}=`);
+      }
+    }
+  });
+
+  it('daftar_accounting_internal is an unreachable principal, not a seventh runtime login', async () => {
+    const { rows } = await ownerPool().query<{
+      rolcanlogin: boolean;
+      rolsuper: boolean;
+      rolcreaterole: boolean;
+      rolcreatedb: boolean;
+      rolreplication: boolean;
+      rolbypassrls: boolean;
+      rolinherit: boolean;
+      has_password: boolean;
+    }>(
+      `SELECT rolcanlogin, rolsuper, rolcreaterole, rolcreatedb, rolreplication, rolbypassrls, rolinherit,
+              (rolpassword IS NOT NULL) AS has_password
+         FROM pg_authid WHERE rolname = 'daftar_accounting_internal'`,
+    );
+    // Inspected through the catalogues. We never connect as this role, because
+    // connecting as it is exactly what must be impossible.
+    expect(rows[0]).toEqual({
+      rolcanlogin: false,
+      rolsuper: false,
+      rolcreaterole: false,
+      rolcreatedb: false,
+      rolreplication: false,
+      rolbypassrls: false,
+      rolinherit: false,
+      has_password: false,
+    });
+
+    // It is granted to nobody, so no runtime role can SET ROLE into it.
+    const { rows: members } = await ownerPool().query<{ member: string }>(
+      `SELECT m.rolname AS member FROM pg_auth_members a
+         JOIN pg_roles g ON g.oid = a.roleid
+         JOIN pg_roles m ON m.oid = a.member
+        WHERE g.rolname = 'daftar_accounting_internal'`,
+    );
+    expect(members).toEqual([]);
+
+    // It was never granted CONNECT either. (PostgreSQL still hands CONNECT to
+    // PUBLIC by default, so that is not the barrier — NOLOGIN above is; this
+    // asserts we did not go on to name it alongside the six runtime logins.)
+    const { rows: acl } = await ownerPool().query<{ datacl: string | null }>(
+      `SELECT array_to_string(datacl, ',') AS datacl FROM pg_database WHERE datname = current_database()`,
+    );
+    expect(acl[0]?.datacl ?? '').not.toContain('daftar_accounting_internal=');
+  });
+
+  it('no login role gained a bypass: app_bypass() is untouched and BYPASSRLS is held by nobody', async () => {
+    const { rows } = await ownerPool().query<{ rolname: string }>(
+      `SELECT rolname FROM pg_roles WHERE rolname LIKE 'daftar_%' AND rolbypassrls ORDER BY rolname`,
+    );
+    expect(rows).toEqual([]);
+
+    // The seeder policies admit ONE identity. A login role that reaches them
+    // would be a business-isolation hole, so assert the literal.
+    const { rows: pol } = await ownerPool().query<{ polname: string; qual: string | null }>(
+      `SELECT polname, pg_get_expr(polqual, polrelid) AS qual FROM pg_policy
+        WHERE polname IN ('accounting_seeder', 'accounting_seeder_read') ORDER BY polname`,
+    );
+    expect(pol.map((p) => p.polname)).toEqual(['accounting_seeder', 'accounting_seeder_read']);
+    for (const p of pol) {
+      expect(p.qual ?? '').toContain(`'daftar_accounting_internal'`);
+      for (const [login] of LOGIN_ROLES) expect(p.qual ?? '').not.toContain(login);
+    }
+  });
+
+  it('the platform role is a reader of the chart, nothing more', async () => {
+    await as(platformDbUrl, async (c) => {
+      const { rows } = await c.query<{ n: number }>(`SELECT count(*)::int AS n FROM accounts`);
+      expect(rows[0]?.n).toBe(42);
+      await expect(
+        c.query(`INSERT INTO accounts (tenant_id, business_id, code, name, type) VALUES ($1, $2, 'X3', 'x', 'asset')`, [tenantId, businessA]),
+      ).rejects.toThrow(/permission denied/i);
+    });
   });
 
   it('even the platform role cannot rewrite or delete a system account', async () => {
