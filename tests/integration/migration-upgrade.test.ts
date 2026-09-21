@@ -202,4 +202,100 @@ describe('migration upgrade path: pre-encryption schema → latest (§13–16)',
       await admin.query(`DROP DATABASE IF EXISTS ${db2} WITH (FORCE)`).catch(() => undefined);
     }
   }, 180_000);
+
+  it('compatibility matrix (§54): 0035-checkpoint (JSONB translations, cross-table SKUs) → latest; content preserved, registry built, no-op rerun', async () => {
+    await ensurePostgres();
+    const db3 = 'daftar_upgrade_0035';
+    await admin.query(`DROP DATABASE IF EXISTS ${db3} WITH (FORCE)`);
+    await admin.query(`CREATE DATABASE ${db3}`);
+    const url3 = `postgresql://${PG_USER}:${PG_PASSWORD}@localhost:${PG_PORT}/${db3}`;
+    const pool = new Pool({ connectionString: url3, max: 1 });
+    try {
+      await pool.query(bootstrapSql());
+      const preDir = migrationsUpTo('0035_ownership_implication_and_indexes.sql');
+      await runMigrations(url3, preDir);
+      rmSync(preDir, { recursive: true, force: true });
+
+      // Representative 0035-state data: JSONB translations, a product SKU and a
+      // variant SKU that are distinct, an archived duplicate that must NOT
+      // block the upgrade, and a category tree.
+      const tenant = (await pool.query<{ id: string }>(`INSERT INTO tenants DEFAULT VALUES RETURNING id`)).rows[0];
+      const biz = (
+        await pool.query<{ id: string }>(
+          `INSERT INTO businesses (tenant_id, name, store_slug, country_code, base_currency, timezone)
+           VALUES ($1, 'Upgrade Cat', 'upgrade-cat', 'JO', 'JOD', 'Asia/Amman') RETURNING id`,
+          [tenant?.id],
+        )
+      ).rows[0];
+      const cat = (
+        await pool.query<{ id: string }>(`INSERT INTO categories (business_id, translations) VALUES ($1, '{"ar":"مشروبات","en":"Drinks"}') RETURNING id`, [
+          biz?.id,
+        ])
+      ).rows[0];
+      const p1 = (
+        await pool.query<{ id: string }>(
+          `INSERT INTO products (business_id, category_id, translations, sku, barcode, base_price_minor, price_currency)
+           VALUES ($1, $2, '{"ar":"قهوة","en":"Coffee","tr":"Kahve"}', 'COF-1', '111', 900719925474099399, 'JOD') RETURNING id`,
+          [biz?.id, cat?.id],
+        )
+      ).rows[0];
+      await pool.query(`INSERT INTO product_variants (business_id, product_id, sku, barcode) VALUES ($1, $2, 'COF-1-L', '222')`, [biz?.id, p1?.id]);
+      await pool.query(
+        `INSERT INTO products (business_id, translations, sku, base_price_minor, price_currency, status)
+         VALUES ($1, '{"en":"Old"}', 'cof-1', 1, 'JOD', 'archived')`,
+        [biz?.id],
+      );
+
+      const applied = await runMigrations(url3);
+      expect(applied).toEqual(['0036_catalog_translations_normalized.sql', '0037_catalog_identifiers.sql']);
+      expect(await runMigrations(url3)).toEqual([]);
+
+      // Translations preserved exactly, JSONB gone.
+      const tr = (
+        await pool.query<{ locale: string; name: string }>(`SELECT locale, name FROM product_translations WHERE product_id = $1 ORDER BY locale`, [p1?.id])
+      ).rows;
+      expect(tr).toEqual([
+        { locale: 'ar', name: 'قهوة' },
+        { locale: 'en', name: 'Coffee' },
+        { locale: 'tr', name: 'Kahve' },
+      ]);
+      const ctr = (
+        await pool.query<{ locale: string; name: string }>(`SELECT locale, name FROM category_translations WHERE category_id = $1 ORDER BY locale`, [cat?.id])
+      ).rows;
+      expect(ctr).toEqual([
+        { locale: 'ar', name: 'مشروبات' },
+        { locale: 'en', name: 'Drinks' },
+      ]);
+      const cols = await pool.query(`SELECT 1 FROM information_schema.columns WHERE table_name IN ('products','categories') AND column_name = 'translations'`);
+      expect(cols.rows).toEqual([]);
+      // Money survived the round trip exactly.
+      const price = (await pool.query<{ p: string }>(`SELECT base_price_minor::text AS p FROM products WHERE id = $1`, [p1?.id])).rows[0];
+      expect(price?.p).toBe('900719925474099399');
+
+      // Registry: live identifiers only (archived duplicate excluded), cross-table.
+      const reg = (
+        await pool.query<{ kind: string; value_norm: string; owner_type: string }>(
+          `SELECT kind, value_norm, owner_type FROM catalog_identifiers WHERE business_id = $1 ORDER BY kind, value_norm`,
+          [biz?.id],
+        )
+      ).rows;
+      expect(reg).toEqual([
+        { kind: 'barcode', value_norm: '111', owner_type: 'product' },
+        { kind: 'barcode', value_norm: '222', owner_type: 'variant' },
+        { kind: 'sku', value_norm: 'cof-1', owner_type: 'product' },
+        { kind: 'sku', value_norm: 'cof-1-l', owner_type: 'variant' },
+      ]);
+      // And it now enforces the cross-table rule for raw SQL.
+      await expect(
+        pool.query(
+          `WITH p AS (INSERT INTO products (business_id, sku, base_price_minor, price_currency) VALUES ($1, 'cof-1-l', 1, 'JOD') RETURNING business_id, id)
+           INSERT INTO product_translations (business_id, product_id, locale, name) SELECT business_id, id, 'en', 'x' FROM p`,
+          [biz?.id],
+        ),
+      ).rejects.toThrow(/duplicate key/);
+    } finally {
+      await pool.end();
+      await admin.query(`DROP DATABASE IF EXISTS ${db3} WITH (FORCE)`).catch(() => undefined);
+    }
+  }, 180_000);
 });

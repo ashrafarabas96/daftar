@@ -55,9 +55,11 @@ describe('db privilege separation (as daftar_app)', () => {
   });
 
   it('cross-business read returns zero rows even with tenant context of the other business', async () => {
-    await ownerPool().query(`INSERT INTO products (business_id, translations, base_price_minor, price_currency) VALUES ($1, '{"ar":"ب"}', 100, 'ILS')`, [
-      businessB,
-    ]);
+    await ownerPool().query(
+      `WITH p AS (INSERT INTO products (business_id, base_price_minor, price_currency) VALUES ($1, 100, 'ILS') RETURNING business_id, id)
+       INSERT INTO product_translations (business_id, product_id, locale, name) SELECT business_id, id, 'ar', 'ب' FROM p`,
+      [businessB],
+    );
     await asApp(async (c) => {
       await c.query('BEGIN');
       await c.query(`SELECT set_config('app.tenant_id', $1, true), set_config('app.business_id', $2, true)`, [tenantA, businessA]);
@@ -72,9 +74,9 @@ describe('db privilege separation (as daftar_app)', () => {
     await asApp(async (c) => {
       await c.query('BEGIN');
       await c.query(`SELECT set_config('app.tenant_id', $1, true), set_config('app.business_id', $2, true)`, [tenantA, businessA]);
-      await expect(
-        c.query(`INSERT INTO products (business_id, translations, base_price_minor, price_currency) VALUES ($1, '{"ar":"x"}', 100, 'ILS')`, [businessB]),
-      ).rejects.toThrow(/row-level security|row violates/i);
+      await expect(c.query(`INSERT INTO products (business_id, base_price_minor, price_currency) VALUES ($1, 100, 'ILS')`, [businessB])).rejects.toThrow(
+        /row-level security|row violates/i,
+      );
       await c.query('ROLLBACK');
     });
   });
@@ -236,9 +238,7 @@ describe('identity DB role separation (as daftar_identity)', () => {
   it('identity CANNOT write catalog or create businesses', async () => {
     await asIdentity(async (c) => {
       await expect(
-        c.query(
-          `INSERT INTO products (business_id, translations, base_price_minor, price_currency) VALUES ('00000000-0000-0000-0000-000000000000', '{}', 1, 'ILS')`,
-        ),
+        c.query(`INSERT INTO products (business_id, base_price_minor, price_currency) VALUES ('00000000-0000-0000-0000-000000000000', 1, 'ILS')`),
       ).rejects.toThrow(/permission denied/i);
       await expect(
         c.query(

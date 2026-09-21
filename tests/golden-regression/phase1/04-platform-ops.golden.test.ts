@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { createTestApp, dbUrl, ownerPool, resetData, uniqueEmail, type TestApp } from '../../helpers/test-app';
+import { type TestApp, createTestApp, ownerPool, platformDbUrl, resetData, uniqueEmail } from '../../helpers/test-app';
 
 const execFileP = promisify(execFile);
 
@@ -152,7 +152,8 @@ describe('golden: platform ops', () => {
 
   it('P1-GOLD-32 bootstrap CLI: first run succeeds, second refuses, one audit event', async () => {
     const email = uniqueEmail();
-    const env = { ...process.env, MIGRATION_DATABASE_URL: dbUrl };
+    // §44: the bootstrap runs with the PLATFORM principal, never migration credentials.
+    const env = { ...process.env, BOOTSTRAP_DATABASE_URL: platformDbUrl };
     const first = await execFileP('./node_modules/.bin/tsx', ['scripts/bootstrap-platform-owner.ts', `--email=${email}`, '--confirm=BOOTSTRAP'], {
       env,
       cwd: process.cwd(),

@@ -98,7 +98,8 @@ export function ownerPool(): Pool {
 
 export async function resetData(): Promise<void> {
   await ownerPool().query(`TRUNCATE
-    audit_events, outbox_events, credential_deliveries, product_media, media, product_variants, products, categories,
+    audit_events, outbox_events, credential_deliveries, product_media, media, catalog_identifiers, product_translations, product_variants, products,
+    category_translations, categories,
     business_invitations, member_branch_scopes, membership_roles, memberships,
     entitlement_overrides, business_entitlements, support_sessions,
     role_permissions, business_roles, warehouses, branches, businesses, tenant_memberships, tenants,

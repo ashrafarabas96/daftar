@@ -9,6 +9,11 @@ import type { MembershipContext } from '../tenancy/tenancy.service';
 import type { z } from 'zod';
 import type { CategoryCreateSchema, ProductCreateSchema, ProductUpdateSchema } from './catalog.schemas';
 
+/** Locale resolution for list/detail names: requested → ar → any. */
+function resolveName(translations: Record<string, string>, locale: LocaleCode): string {
+  return translations[locale] ?? translations['ar'] ?? Object.values(translations)[0] ?? '';
+}
+
 /**
  * Catalog (§56–58): industry-neutral. No stock quantity fields, no COGS, no
  * dependency on Accounting/Ledger/Sales/Payments/Inventory (architecture guard
@@ -29,26 +34,25 @@ export class CatalogService {
 
   async listCategories(m: MembershipContext): Promise<CategoryDto[]> {
     const rows = (
-      await this.db.scoped<{ id: string; parent_id: string | null; translations: Record<string, string> }>(
+      await this.db.scoped<{ id: string; parent_id: string | null; translations: Record<string, string> | null }>(
         this.scope(m),
-        `SELECT id, parent_id, translations FROM categories
-         WHERE business_id = $1 AND status = 'active' ORDER BY created_at`,
+        `SELECT c.id, c.parent_id,
+                (SELECT jsonb_object_agg(t.locale, t.name) FROM category_translations t
+                  WHERE t.business_id = c.business_id AND t.category_id = c.id) AS translations
+         FROM categories c
+         WHERE c.business_id = $1 AND c.status = 'active' ORDER BY c.created_at`,
         [m.businessId],
       )
     ).rows;
-    return rows.map((r) => ({ id: r.id, parentId: r.parent_id, translations: r.translations }));
+    return rows.map((r) => ({ id: r.id, parentId: r.parent_id, translations: r.translations ?? {} }));
   }
 
   async createCategory(m: MembershipContext, input: z.infer<typeof CategoryCreateSchema>): Promise<CategoryDto> {
     const id = newId();
     try {
       await this.db.withTransaction(this.scope(m), async (c) => {
-        await c.query('INSERT INTO categories (business_id, id, parent_id, translations) VALUES ($1, $2, $3, $4)', [
-          m.businessId,
-          id,
-          input.parentId ?? null,
-          JSON.stringify(input.translations),
-        ]);
+        await c.query('INSERT INTO categories (business_id, id, parent_id) VALUES ($1, $2, $3)', [m.businessId, id, input.parentId ?? null]);
+        await this.writeTranslations(c, 'category', m.businessId, id, input.translations);
         await this.audit.recordTx(c, { action: 'catalog.category_created', entity: 'category', entityId: id });
       });
     } catch (e) {
@@ -71,7 +75,7 @@ export class CatalogService {
     const rows = (
       await this.db.scoped<{
         id: string;
-        translations: Record<string, string>;
+        translations: Record<string, string> | null;
         sku: string | null;
         base_price_minor: string;
         price_currency: string;
@@ -79,11 +83,14 @@ export class CatalogService {
         created_at: Date;
       }>(
         this.scope(m),
-        `SELECT p.id, p.translations, p.sku, p.base_price_minor::text, p.price_currency, p.status, p.created_at
+        `SELECT p.id, p.sku, p.base_price_minor::text, p.price_currency, p.status, p.created_at,
+                (SELECT jsonb_object_agg(t.locale, t.name) FROM product_translations t
+                  WHERE t.business_id = p.business_id AND t.product_id = p.id) AS translations
          FROM products p
          WHERE p.business_id = $1 AND p.status <> 'archived'
            AND ($2::text IS NULL OR
-                p.translations::text ILIKE '%' || $2 || '%' OR
+                EXISTS (SELECT 1 FROM product_translations t
+                        WHERE t.business_id = p.business_id AND t.product_id = p.id AND t.name ILIKE '%' || $2 || '%') OR
                 p.sku ILIKE '%' || $2 || '%' OR
                 p.barcode ILIKE '%' || $2 || '%' OR
                 EXISTS (SELECT 1 FROM product_variants v
@@ -100,7 +107,7 @@ export class CatalogService {
     return {
       items: page.items.map((r) => ({
         id: r.id,
-        name: r.translations[locale] ?? r.translations['ar'] ?? Object.values(r.translations)[0] ?? '',
+        name: resolveName(r.translations ?? {}, locale),
         sku: r.sku,
         basePriceMinor: r.base_price_minor,
         priceCurrency: r.price_currency,
@@ -115,7 +122,7 @@ export class CatalogService {
       await this.db.scoped<{
         id: string;
         category_id: string | null;
-        translations: Record<string, string>;
+        translations: Record<string, string> | null;
         sku: string | null;
         barcode: string | null;
         unit: string | null;
@@ -125,8 +132,10 @@ export class CatalogService {
         status: string;
       }>(
         this.scope(m),
-        `SELECT id, category_id, translations, sku, barcode, unit, base_price_minor::text, price_currency, version, status
-         FROM products WHERE business_id = $1 AND id = $2`,
+        `SELECT p.id, p.category_id, p.sku, p.barcode, p.unit, p.base_price_minor::text, p.price_currency, p.version, p.status,
+                (SELECT jsonb_object_agg(t.locale, t.name) FROM product_translations t
+                  WHERE t.business_id = p.business_id AND t.product_id = p.id) AS translations
+         FROM products p WHERE p.business_id = $1 AND p.id = $2`,
         [m.businessId, id],
       )
     ).rows[0];
@@ -152,8 +161,8 @@ export class CatalogService {
 
     return {
       id: p.id,
-      name: p.translations[locale] ?? p.translations['ar'] ?? Object.values(p.translations)[0] ?? '',
-      translations: p.translations,
+      name: resolveName(p.translations ?? {}, locale),
+      translations: p.translations ?? {},
       sku: p.sku,
       barcode: p.barcode,
       unit: p.unit,
@@ -219,13 +228,12 @@ export class CatalogService {
         }
 
         await c.query(
-          `INSERT INTO products (business_id, id, category_id, translations, sku, barcode, base_price_minor, price_currency, unit)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+          `INSERT INTO products (business_id, id, category_id, sku, barcode, base_price_minor, price_currency, unit)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
           [
             m.businessId,
             id,
             input.categoryId ?? null,
-            JSON.stringify(input.translations),
             input.sku ?? null,
             input.barcode ?? null,
             input.basePriceMinor.toString(),
@@ -233,6 +241,8 @@ export class CatalogService {
             input.unit ?? null,
           ],
         );
+        // §37: translations live in the normalized table — the ONLY writable source.
+        await this.writeTranslations(c, 'product', m.businessId, id, input.translations);
         for (const v of input.variants ?? []) {
           await c.query(
             `INSERT INTO product_variants (business_id, id, product_id, attributes, sku, barcode, price_minor)
@@ -288,22 +298,21 @@ export class CatalogService {
         throw AppError.validation({ priceCurrency: ['is fixed to the business base currency'] });
       }
 
+      if (input.translations) await this.writeTranslations(c, 'product', m.businessId, id, input.translations);
       await c.query(
         `UPDATE products SET
-           translations = coalesce($3, translations),
-           base_price_minor = coalesce($4, base_price_minor),
-           price_currency = coalesce($5, price_currency),
-           category_id = CASE WHEN $6 THEN $7 ELSE category_id END,
-           sku = CASE WHEN $8 THEN $9 ELSE sku END,
-           barcode = CASE WHEN $10 THEN $11 ELSE barcode END,
-           unit = CASE WHEN $12 THEN $13 ELSE unit END,
+           base_price_minor = coalesce($3, base_price_minor),
+           price_currency = coalesce($4, price_currency),
+           category_id = CASE WHEN $5 THEN $6 ELSE category_id END,
+           sku = CASE WHEN $7 THEN $8 ELSE sku END,
+           barcode = CASE WHEN $9 THEN $10 ELSE barcode END,
+           unit = CASE WHEN $11 THEN $12 ELSE unit END,
            version = version + 1,
            updated_at = now()
          WHERE business_id = $1 AND id = $2`,
         [
           m.businessId,
           id,
-          input.translations ? JSON.stringify(input.translations) : null,
           input.basePriceMinor?.toString() ?? null,
           input.priceCurrency ?? null,
           input.categoryId !== undefined,
@@ -335,6 +344,26 @@ export class CatalogService {
       if (r.rowCount !== 1) throw AppError.notFound('Product not found');
       await this.audit.recordTx(c, { action: 'catalog.product_archived', entity: 'product', entityId: id });
     });
+  }
+
+  /**
+   * Replace the translation set of a product/category (normalized tables,
+   * §37). The deferred DB trigger guarantees at least one row at commit.
+   */
+  private async writeTranslations(
+    c: import('pg').PoolClient,
+    kind: 'product' | 'category',
+    businessId: string,
+    ownerId: string,
+    translations: Partial<Record<LocaleCode, string>>,
+  ): Promise<void> {
+    const table = kind === 'product' ? 'product_translations' : 'category_translations';
+    const column = kind === 'product' ? 'product_id' : 'category_id';
+    await c.query(`DELETE FROM ${table} WHERE business_id = $1 AND ${column} = $2`, [businessId, ownerId]);
+    for (const [locale, name] of Object.entries(translations)) {
+      if (typeof name !== 'string' || name.length === 0) continue;
+      await c.query(`INSERT INTO ${table} (business_id, ${column}, locale, name) VALUES ($1, $2, $3, $4)`, [businessId, ownerId, locale, name]);
+    }
   }
 
   /** Cross-table SKU/barcode clash check within the business scope. */
