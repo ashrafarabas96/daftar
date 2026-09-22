@@ -17,7 +17,7 @@ The tables exist. Balance, line count, ownership, money range, FX arithmetic, im
 | migration | SHA-256 | state |
 |---|---|---|
 | `0042_accounting_journal.sql` | `78c852cd1f5888013a02244327a1eb606e3f0fd9582fbbed2018b9382cb92e33` | CANDIDATE |
-| `0043_accounting_invariants.sql` | `d72737dfd38aa8a9e478310829b394f4b2d99fd464716f125a70e0084f5849ea` | CANDIDATE |
+| `0043_accounting_invariants.sql` | `9744da043d3c8b3fe68af30b135e5f5f36207ec5b457d115a3f5a465d268e70f` | CANDIDATE |
 
 Neither is in `MIGRATION_MANIFEST.json`, and `frozenThrough` remains `0041_accounting_permissions.sql`. That is intentional and is what the P2-S2 gate checks: while the slice is under review a defect must be correctable **in place**, rather than consuming a P2-S3 migration number. Freezing happens on acceptance, never before — the same protocol P2-S1 followed, where the candidate window was used twice for corrections the Tech Lead asked for.
 
@@ -25,6 +25,9 @@ Migrations `0000`–`0041` are byte-for-byte unchanged. Nothing after `0043` exi
 
 - Branch: `phase/2-accounting-core` · Draft PR: **#2** (stays draft for all of Phase 2)
 - Accepted P2-S1 head: `18d2d1c0d38a726c503ce4b6cafe833de28a1bf6`
+- Base reviewed P2-S2 head: `eb4a73fd5e925da76fba305ecb9e6b25111be0b0` (returned CHANGES REQUIRED — see §4b)
+
+**Evidence law.** CI SUCCESS is reported for a commit only when GitHub shows a workflow run whose head SHA is that exact commit. The P2-S1 freeze commit `161369c76223bc7405010f97cb0e266e521f65df` has **no exact-SHA workflow run**: it was pushed together with its successor, so Actions ran on the branch tip. The freeze is nonetheless exercised by every later run through the permanent P2-S1 regression gate, and a previous handoff's "Freeze CI: SUCCESS" line should not be repeated as historical fact.
 
 ## 2. Status legend
 
@@ -75,6 +78,32 @@ Migrations `0000`–`0041` are byte-for-byte unchanged. Nothing after `0043` exi
 | Error messages carry no financial values | the raised messages themselves | §30 block |
 
 **Guards added.** **G-1** (`scripts/guards/journal-privilege-model.ts`) states the intended grant matrix as data and the test compares it against the live catalogue read two ways — `information_schema.role_table_grants` and the unfiltered `aclexplode(coalesce(relacl, acldefault('r', relowner)))` — so a `GRANT` added years from now fails CI even though no one wrote a test for it. **G-2** (`scripts/guards/no-float-rate.ts`) refuses a floating-point or under-scaled rate column on the journal, the chart and any `accounting_*` table, and deliberately leaves a marketing `conversion_rate` or a product `tax_rate` alone. **G-3** was extended to watch the journal tables. All three have tamper regressions in `tests/integration/accounting-guards.test.ts`: a guard nobody has seen fail is not a guard.
+
+## 4b. Correction after Tech Lead review — composite journal identity
+
+The first submitted head (`eb4a73f`) was returned CHANGES REQUIRED for one structural blocker, corrected in place in `0043`.
+
+**The defect.** `accounting_assert_entry_valid(p_business_id, p_entry_id)` loaded the entry by `(business_id, id)` correctly, and then addressed its lines by `journal_entry_id` alone — in the ownership check, the account check, the line count, the base-currency check, the balance sums and the FX loop. `journal_entries` is keyed on `(business_id, id)` and carries no global `UNIQUE (id)`, deliberately: two businesses may legitimately hold entries whose UUID component is identical while being entirely different relational entities. Reading by the UUID alone pulled the other business's independent entry into this one's validation, which counted its lines, summed its amounts, judged its base currency, and reported `accounting.entry_business_mismatch` for data that was perfectly correct.
+
+The ownership check was the root of it, and its own comment said why: lines were gathered by entry id alone *so that the business comparison would not be tautological*. That reasoning inverted the priority — it manufactured cross-business visibility in order to double-check a constraint the composite foreign keys already enforce physically. The correct scope makes the business half structurally true rather than checked, and leaves the tenant comparison as the defence in depth.
+
+**The fix.** Every statement that means "this entry's lines" now reads `jl.business_id = e.business_id AND jl.journal_entry_id = e.id`. `p_entry_id` survives only in the entry lookup and in error messages. No index was added: `(business_id, journal_entry_id)` is already the left prefix of `UNIQUE (business_id, journal_entry_id, line_no)`. No `UNIQUE (id)` was added, and no foreign key or key shape changed — business-scoped composite identity is the relational contract, not an accident to be normalised away.
+
+**Proof, in the order it was produced.** Five behavioural cases were written first and failed against the reviewed implementation:
+
+| case | what it proves | before the fix |
+|---|---|---|
+| two businesses, same entry UUID, both balanced, one transaction | the headline case: both COMMIT | `accounting.entry_business_mismatch` |
+| two same-UUID entries unbalanced in opposite directions by the same amount | sums are per business — merged they would balance at 11000 = 11000 | wrong verdict |
+| two same-UUID entries with one line each | the line count is per business — merged they would be two | wrong verdict |
+| two businesses with different base currencies sharing a UUID | the currency rule is per business | `accounting.entry_business_mismatch` |
+| a line claiming business A while referencing B's entry, and B's account | cross-business isolation is unchanged by the fix | already refused, still refused |
+
+The two properties now hold at once: two legitimate entries in different businesses may share the UUID component, and neither can ever reach the other's financial rows.
+
+A sixth test is a tripwire rather than a proof — it reads the installed routine from `pg_proc` and refuses any line predicate keyed on `p_entry_id` — and `npm run gate:phase2:s2` performs the same check on the migration text so a reintroduction fails before a database starts.
+
+**Scope audit (§9).** Every remaining query in `0042` and `0043` that touches a business-owned row was re-read. The RLS policies and the base-currency lock resolve `businesses.id`, which is a global primary key, so they are correct as written; the binding check was already composite. Three assertions in the P2-S2 test suite addressed an entry or its lines by UUID alone — correct only because the fixtures happen to generate distinct UUIDs — and were scoped to the pair as well.
 
 ## 5. Three decisions worth stating plainly
 

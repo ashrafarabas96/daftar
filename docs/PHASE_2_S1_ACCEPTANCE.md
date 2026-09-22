@@ -9,7 +9,8 @@
 **P2-S1: ACCEPTED / FROZEN.**
 
 - Tech Lead verdict: **P2-S1 — FINAL PASS**, at accepted head `18d2d1c0d38a726c503ce4b6cafe833de28a1bf6`.
-- Freeze commit: `161369c76223bc7405010f97cb0e266e521f65df` — `chore(phase2): freeze accepted P2-S1 migrations`, the commit that appended `0040`/`0041` to `MIGRATION_MANIFEST.json` and moved `frozenThrough` to `0041_accounting_permissions.sql`. (A commit cannot contain its own hash, so this line was written in the commit immediately after it; the freeze HEAD that CI validated is that successor.)
+- Freeze commit: `161369c76223bc7405010f97cb0e266e521f65df` — `chore(phase2): freeze accepted P2-S1 migrations`, the commit that appended `0040`/`0041` to `MIGRATION_MANIFEST.json` and moved `frozenThrough` to `0041_accounting_permissions.sql`. (A commit cannot contain its own hash, so this line was written in the commit immediately after it.)
+- Exact freeze-commit CI: **NOT RUN.** GitHub shows no workflow run whose head SHA is `161369c…`; the two commits were pushed together, so Actions ran on the branch tip. The freeze is exercised by every later run through the permanent P2-S1 regression gate, which is what validates it. CI SUCCESS is reported for a commit only when a workflow run exists for that exact SHA.
 - Frozen hashes:
   - `0040_accounting_chart.sql` = `535c8182a922a8363df2c791759c3e1eff2790757e402e6e28a41a5d113651db`
   - `0041_accounting_permissions.sql` = `3aea7eedfd6ccb9d8fd93ed827d84abaa9923ccd3b01497960237098c19b1f77`

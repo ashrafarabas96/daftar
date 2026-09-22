@@ -222,7 +222,12 @@ afterAll(async () => {
 describe('Matrix 2 — journal invariants (A–H)', () => {
   it('D: a balanced two-line entry with a matching binding COMMITS', async () => {
     const id = await post({}, balancedLines());
-    const { rows } = await ownerPool().query<{ n: number }>(`SELECT count(*)::int AS n FROM journal_lines WHERE journal_entry_id = $1`, [id]);
+    // Addressed by the entry's full identity, as everything that means "this
+    // entry's lines" must be: the UUID alone is not an entry (§9).
+    const { rows } = await ownerPool().query<{ n: number }>(`SELECT count(*)::int AS n FROM journal_lines WHERE business_id = $1 AND journal_entry_id = $2`, [
+      fx.businessId,
+      id,
+    ]);
     expect(rows[0]?.n).toBe(2);
   });
 
@@ -265,29 +270,36 @@ describe('Matrix 2 — immutability (F, G and the binding perimeter)', () => {
   });
 
   it('F: DELETE of a posted line is refused', async () => {
-    await expect(ownerPool().query(`DELETE FROM journal_lines WHERE journal_entry_id = $1`, [entryId])).rejects.toThrow(/accounting\.journal_immutable/);
+    await expect(ownerPool().query(`DELETE FROM journal_lines WHERE business_id = $1 AND journal_entry_id = $2`, [fx.businessId, entryId])).rejects.toThrow(
+      /accounting\.journal_immutable/,
+    );
   });
 
   it('G: UPDATE of a posted line is refused', async () => {
-    await expect(ownerPool().query(`UPDATE journal_lines SET memo = 'edited' WHERE journal_entry_id = $1`, [entryId])).rejects.toThrow(
-      /accounting\.journal_immutable/,
-    );
+    await expect(
+      ownerPool().query(`UPDATE journal_lines SET memo = 'edited' WHERE business_id = $1 AND journal_entry_id = $2`, [fx.businessId, entryId]),
+    ).rejects.toThrow(/accounting\.journal_immutable/);
   });
 
   it('UPDATE and DELETE of a posted entry are refused', async () => {
-    await expect(ownerPool().query(`UPDATE journal_entries SET description = 'edited' WHERE id = $1`, [entryId])).rejects.toThrow(
+    await expect(
+      ownerPool().query(`UPDATE journal_entries SET description = 'edited' WHERE business_id = $1 AND id = $2`, [fx.businessId, entryId]),
+    ).rejects.toThrow(/accounting\.journal_immutable/);
+    await expect(ownerPool().query(`DELETE FROM journal_entries WHERE business_id = $1 AND id = $2`, [fx.businessId, entryId])).rejects.toThrow(
       /accounting\.journal_immutable/,
     );
-    await expect(ownerPool().query(`DELETE FROM journal_entries WHERE id = $1`, [entryId])).rejects.toThrow(/accounting\.journal_immutable/);
   });
 
   it('UPDATE and DELETE of a source binding are refused', async () => {
     await expect(
-      ownerPool().query(`UPDATE accounting_source_bindings SET source_id = gen_random_uuid() WHERE journal_entry_id = $1`, [entryId]),
+      ownerPool().query(`UPDATE accounting_source_bindings SET source_id = gen_random_uuid() WHERE business_id = $1 AND journal_entry_id = $2`, [
+        fx.businessId,
+        entryId,
+      ]),
     ).rejects.toThrow(/accounting\.binding_immutable/);
-    await expect(ownerPool().query(`DELETE FROM accounting_source_bindings WHERE journal_entry_id = $1`, [entryId])).rejects.toThrow(
-      /accounting\.binding_immutable/,
-    );
+    await expect(
+      ownerPool().query(`DELETE FROM accounting_source_bindings WHERE business_id = $1 AND journal_entry_id = $2`, [fx.businessId, entryId]),
+    ).rejects.toThrow(/accounting\.binding_immutable/);
   });
 
   it('there is no admin, support or platform bypass — the schema OWNER is refused too', async () => {
@@ -296,7 +308,9 @@ describe('Matrix 2 — immutability (F, G and the binding perimeter)', () => {
     // which is the whole reason it exists alongside the grant shape.
     const who = (await ownerPool().query<{ su: boolean }>(`SELECT rolsuper AS su FROM pg_roles WHERE rolname = current_user`)).rows[0];
     expect(who?.su, 'this suite must run as a principal that could otherwise do anything').toBe(true);
-    await expect(ownerPool().query(`DELETE FROM journal_entries WHERE id = $1`, [entryId])).rejects.toThrow(/accounting\.journal_immutable/);
+    await expect(ownerPool().query(`DELETE FROM journal_entries WHERE business_id = $1 AND id = $2`, [fx.businessId, entryId])).rejects.toThrow(
+      /accounting\.journal_immutable/,
+    );
   });
 });
 
@@ -774,5 +788,258 @@ describe('§26 — base currency locks on the first posted entry, never on the c
     // Everything else about the business is still editable — the lock is
     // narrow, not a freeze on the row.
     await expect(ownerPool().query(`UPDATE businesses SET name = 'Journal One Renamed' WHERE id = $1`, [fx.businessId])).resolves.toBeTruthy();
+  });
+});
+
+/**
+ * COMPOSITE JOURNAL IDENTITY (Tech Lead correction, §2–§8).
+ *
+ * A journal entry's identity is `(business_id, id)`. There is deliberately no
+ * global `UNIQUE (id)`, so two businesses may legitimately hold entries whose
+ * UUID component is identical while being entirely different relational
+ * entities. The commit-time validator must therefore reason only over rows
+ * belonging to the target composite entry: addressing lines by
+ * `journal_entry_id` alone lets one business's rows enter another business's
+ * accounting validation.
+ *
+ * These cases are behavioural, not textual. Each one is constructed so that a
+ * validator scoped by entry id alone gives a DIFFERENT answer from one scoped
+ * by the composite pair, which is what makes them a real regression rather
+ * than a restatement of the code.
+ */
+describe('composite journal identity — (business_id, id), never id alone', () => {
+  /**
+   * Write two complete, independently valid entries that share a UUID, in ONE
+   * transaction, so both deferred validators see the simultaneous state.
+   */
+  async function postTwoSharingId(
+    sharedId: string,
+    a: { lines: LineSpec[] },
+    b: { lines: LineSpec[] },
+  ): Promise<{ client: Client; commit: () => Promise<void> }> {
+    const client = await owner();
+    const sourceA = randomUUID();
+    const sourceB = randomUUID();
+    await client.query('BEGIN');
+
+    const insertEntry = async (tenantId: string, businessId: string, sourceId: string): Promise<void> => {
+      await client.query(
+        `INSERT INTO journal_entries
+          (tenant_id, business_id, id, entry_date, description, source_type, source_id, status,
+           actor_kind, actor_user_id, actor_system_key, request_id, posting_fingerprint)
+         VALUES ($1,$2,$3,'2026-09-01','shared-uuid','manual_adjustment',$4,'posted','user',$5,NULL,'req-fixture',$6)`,
+        [tenantId, businessId, sharedId, sourceId, tenantId === fx.tenantId ? fx.userId : fx.otherUserId, FINGERPRINT],
+      );
+      await client.query(
+        `INSERT INTO accounting_source_bindings (tenant_id, business_id, source_type, source_id, journal_entry_id)
+         VALUES ($1,$2,'manual_adjustment',$3,$4)`,
+        [tenantId, businessId, sourceId, sharedId],
+      );
+    };
+
+    await insertEntry(fx.tenantId, fx.businessId, sourceA);
+    for (const line of a.lines) await client.query(INSERT_LINE, lineValues({ ...line }, sharedId));
+
+    await insertEntry(fx.otherTenantId, fx.otherBusinessId, sourceB);
+    for (const line of b.lines) {
+      await client.query(INSERT_LINE, lineValues({ ...line, tenantId: fx.otherTenantId, businessId: fx.otherBusinessId, baseCurrency: 'JOD' }, sharedId));
+    }
+
+    return { client, commit: async () => void (await client.query('COMMIT')) };
+  }
+
+  /**
+   * §7. The headline case. Two businesses, the same `journal_entries.id`, each
+   * with its own tenant, accounts, source id, binding and balanced lines.
+   *
+   * Against the reviewed implementation this FAILED with
+   * `accounting.entry_business_mismatch`, because the ownership check gathered
+   * lines by entry id alone and then found the other business's rows among
+   * them. Nothing was wrong with the data; the validator was asking the
+   * database the wrong question.
+   */
+  it('two businesses may hold entries sharing a UUID, and both commit', async () => {
+    const sharedId = randomUUID();
+    const { client, commit } = await postTwoSharingId(
+      sharedId,
+      { lines: balancedLines(10000) },
+      {
+        lines: [
+          { lineNo: 1, accountId: fx.otherAccounts['cash'] ?? '', debitMinor: 7500 },
+          { lineNo: 2, accountId: fx.otherAccounts['sales_revenue'] ?? '', creditMinor: 7500 },
+        ],
+      },
+    );
+    try {
+      await expect(commit()).resolves.toBeUndefined();
+    } finally {
+      await client.end();
+    }
+
+    // Each entry kept its own lines, and neither borrowed the other's.
+    const rows = (
+      await ownerPool().query<{ business_id: string; n: number; total: string }>(
+        `SELECT business_id, count(*)::int AS n, sum(base_amount_minor)::text AS total
+           FROM journal_lines WHERE journal_entry_id = $1 GROUP BY business_id ORDER BY business_id`,
+        [sharedId],
+      )
+    ).rows;
+    expect(rows).toHaveLength(2);
+    const byBusiness = Object.fromEntries(rows.map((r) => [r.business_id, r]));
+    expect(byBusiness[fx.businessId]).toMatchObject({ n: 2, total: '20000' });
+    expect(byBusiness[fx.otherBusinessId]).toMatchObject({ n: 2, total: '15000' });
+  });
+
+  /**
+   * §7, the sums half, stated so that only a correctly scoped validator can
+   * pass it. Each entry is unbalanced on its own, but the two are unbalanced
+   * in opposite directions by the same amount — so a validator that summed
+   * lines by entry id alone would see a perfectly balanced 11000 = 11000 and
+   * let both through. Scoped correctly, each is refused on its own merits.
+   */
+  it('balance is summed per business: two same-UUID entries whose merged sums balance are still both refused', async () => {
+    const sharedId = randomUUID();
+    const { client, commit } = await postTwoSharingId(
+      sharedId,
+      {
+        lines: [
+          { lineNo: 1, accountId: fx.accounts['cash'] ?? '', debitMinor: 10000 },
+          { lineNo: 2, accountId: fx.accounts['sales_revenue'] ?? '', creditMinor: 9000 },
+        ],
+      },
+      {
+        lines: [
+          { lineNo: 1, accountId: fx.otherAccounts['cash'] ?? '', debitMinor: 1000 },
+          { lineNo: 2, accountId: fx.otherAccounts['sales_revenue'] ?? '', creditMinor: 2000 },
+        ],
+      },
+    );
+    try {
+      await expect(commit()).rejects.toThrow(/accounting\.entry_unbalanced/);
+    } finally {
+      await client.end();
+    }
+  });
+
+  /**
+   * §7, the count half. One line each. Merged they are two, which is what the
+   * "at least two lines" rule asks for — so an unscoped count would accept a
+   * pair of one-line entries. Each must be refused.
+   */
+  it('line count is per business: two same-UUID one-line entries do not add up to a valid entry', async () => {
+    const sharedId = randomUUID();
+    const { client, commit } = await postTwoSharingId(
+      sharedId,
+      { lines: [{ lineNo: 1, accountId: fx.accounts['cash'] ?? '', debitMinor: 10000 }] },
+      { lines: [{ lineNo: 1, accountId: fx.otherAccounts['sales_revenue'] ?? '', creditMinor: 10000 }] },
+    );
+    try {
+      await expect(commit()).rejects.toThrow(/accounting\.entry_too_few_lines|accounting\.entry_unbalanced/);
+    } finally {
+      await client.end();
+    }
+  });
+
+  /**
+   * §7, the base-currency half. The two businesses have different base
+   * currencies (ILS and JOD) by construction, so a validator that gathered the
+   * other business's lines would call a perfectly correct entry
+   * `entry_base_currency_mismatch`. This is the same defect seen from the
+   * currency rule rather than the ownership rule, and it is worth its own case
+   * because a partial fix could close one and leave the other open.
+   */
+  it('base currency is judged per business, not across a shared UUID', async () => {
+    const sharedId = randomUUID();
+    const { client, commit } = await postTwoSharingId(
+      sharedId,
+      { lines: balancedLines(4200) },
+      {
+        lines: [
+          { lineNo: 1, accountId: fx.otherAccounts['cash'] ?? '', debitMinor: 300 },
+          { lineNo: 2, accountId: fx.otherAccounts['sales_revenue'] ?? '', creditMinor: 300 },
+        ],
+      },
+    );
+    try {
+      await expect(commit()).resolves.toBeUndefined();
+    } finally {
+      await client.end();
+    }
+    const currencies = (
+      await ownerPool().query<{ base_currency: string }>(
+        `SELECT DISTINCT base_currency FROM journal_lines WHERE journal_entry_id = $1 ORDER BY base_currency`,
+        [sharedId],
+      )
+    ).rows.map((r) => r.base_currency);
+    expect(currencies).toEqual(['ILS', 'JOD']);
+  });
+
+  /**
+   * §8. The companion property, and the reason the fix is not a weakening:
+   * scoping the validator must not make it possible for one business's line to
+   * reach another business's entry or account. The composite foreign keys
+   * refuse it before any validator runs.
+   */
+  it('a line cannot claim one business while referencing another business entry', async () => {
+    const client = await owner();
+    const entryId = randomUUID();
+    try {
+      await client.query('BEGIN');
+      await client.query(
+        `INSERT INTO journal_entries
+          (tenant_id, business_id, id, entry_date, description, source_type, source_id, status,
+           actor_kind, actor_user_id, actor_system_key, request_id, posting_fingerprint)
+         VALUES ($1,$2,$3,'2026-09-01','x','manual_adjustment',$4,'posted','user',$5,NULL,'req',$6)`,
+        [fx.otherTenantId, fx.otherBusinessId, entryId, randomUUID(), fx.otherUserId, FINGERPRINT],
+      );
+      // A line owned by business ONE, pointing at business TWO's entry.
+      await expect(client.query(INSERT_LINE, lineValues({ lineNo: 1, accountId: fx.accounts['cash'] ?? '', debitMinor: 100 }, entryId))).rejects.toThrow(
+        /journal_lines_entry_fk/,
+      );
+    } finally {
+      await client.query('ROLLBACK').catch(() => undefined);
+      await client.end();
+    }
+  });
+
+  it('a line cannot reference an account belonging to another business', async () => {
+    const client = await owner();
+    const entryId = randomUUID();
+    try {
+      await client.query('BEGIN');
+      await client.query(
+        `INSERT INTO journal_entries
+          (tenant_id, business_id, id, entry_date, description, source_type, source_id, status,
+           actor_kind, actor_user_id, actor_system_key, request_id, posting_fingerprint)
+         VALUES ($1,$2,$3,'2026-09-01','x','manual_adjustment',$4,'posted','user',$5,NULL,'req',$6)`,
+        [fx.tenantId, fx.businessId, entryId, randomUUID(), fx.userId, FINGERPRINT],
+      );
+      await expect(client.query(INSERT_LINE, lineValues({ lineNo: 1, accountId: fx.otherAccounts['cash'] ?? '', debitMinor: 100 }, entryId))).rejects.toThrow(
+        /journal_lines_account_fk/,
+      );
+    } finally {
+      await client.query('ROLLBACK').catch(() => undefined);
+      await client.end();
+    }
+  });
+
+  /**
+   * A tripwire, not the proof — the five behavioural cases above are the
+   * proof. It exists because the defect had one exact textual shape, and a
+   * refactor that reintroduced it would otherwise be caught only by whichever
+   * behavioural case happened to notice first. The validator addresses lines
+   * through the loaded entry's own `(business_id, id)`; `p_entry_id` survives
+   * only in the entry lookup and in error messages.
+   */
+  it('the validator never addresses journal lines by entry id alone', async () => {
+    const { rows } = await ownerPool().query<{ prosrc: string }>(`SELECT prosrc FROM pg_proc WHERE proname = 'accounting_assert_entry_valid'`);
+    expect(rows).toHaveLength(1);
+    const src = rows[0]?.prosrc ?? '';
+    expect(src).not.toMatch(/journal_entry_id\s*=\s*p_entry_id/i);
+    // And every line-addressing predicate carries its business alongside.
+    const lineScopes = src.match(/jl\.journal_entry_id\s*=\s*e\.id/gi) ?? [];
+    const businessScopes = src.match(/jl\.business_id\s*=\s*e\.business_id/gi) ?? [];
+    expect(lineScopes.length).toBeGreaterThan(0);
+    expect(businessScopes.length).toBe(lineScopes.length);
   });
 });

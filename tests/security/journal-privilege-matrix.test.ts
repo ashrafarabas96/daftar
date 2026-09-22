@@ -329,9 +329,11 @@ describe('RLS is real on the ledger', () => {
         await owner.query(insertLine, [m.tenant, m.business, entry?.id, 1, accounts[0]?.id, 1000, 0, 1000]);
         await owner.query(insertLine, [m.tenant, m.business, entry?.id, 2, accounts[1]?.id, 0, 1000, 1000]);
         await owner.query(
+          // Scoped by (business_id, id): an entry's identity is the pair, and
+          // the UUID alone may legitimately belong to another business (§9).
           `INSERT INTO accounting_source_bindings (tenant_id, business_id, source_type, source_id, journal_entry_id)
-           SELECT tenant_id, business_id, source_type, source_id, id FROM journal_entries WHERE id = $1`,
-          [entry?.id],
+           SELECT tenant_id, business_id, source_type, source_id, id FROM journal_entries WHERE business_id = $1 AND id = $2`,
+          [m.business, entry?.id],
         );
         await owner.query('COMMIT');
       }

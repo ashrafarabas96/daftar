@@ -82,9 +82,14 @@ ALTER FUNCTION accounting_pow10(integer) OWNER TO daftar_accounting_internal;
 --    authority"). Both constraint triggers delegate here, so the entry-side
 --    and line-side paths can never drift into judging an entry differently.
 --
+-- Every statement below addresses the entry's lines by the COMPLETE identity
+-- `(business_id, id)`. `journal_entries` has no global UNIQUE on `id`, so
+-- reading lines by `journal_entry_id` alone can reach another business's
+-- independent entry that happens to share the UUID component.
+--
 -- Checked for every touched entry, in this order (§29):
 --   * the entry exists and its status is `posted`
---   * every line names the same business AND the same tenant as the entry
+--   * every line of THIS entry names the same tenant as the entry
 --   * every line's account belongs to that same business
 --   * at least two lines
 --   * every line's base_currency is the owning business's base currency
@@ -126,30 +131,44 @@ BEGIN
     RAISE EXCEPTION 'accounting.entry_status_invalid: journal entry % is not posted', p_entry_id USING ERRCODE = 'P0001';
   END IF;
 
-  -- Ownership. The composite foreign keys already make a mismatch very hard
-  -- to write; checking it here means the validator does not DEPEND on that
-  -- being true, which is the difference between a proof and an assumption.
-  -- Lines are gathered by entry id alone, deliberately: filtering by business
-  -- first would make the business comparison tautological.
+  -- Ownership, over the target entry's own rows and nothing else.
+  --
+  -- An earlier version gathered lines by entry id alone so that the business
+  -- comparison would not be tautological. That was wrong, and it was wrong in
+  -- the direction that matters: `journal_entries` is keyed on
+  -- `(business_id, id)` with no global UNIQUE on `id`, so two businesses may
+  -- legitimately hold entries whose UUID component is identical. Reading by
+  -- id alone pulled the OTHER business's independent entry into this one's
+  -- validation and reported `entry_business_mismatch` for data that was
+  -- perfectly correct. A validator must never manufacture cross-business
+  -- visibility to double-check a constraint.
+  --
+  -- What is left to check is the tenant. The business half is now guaranteed
+  -- by the scope predicate itself rather than by a comparison that can never
+  -- be false, and by `journal_lines_entry_fk (business_id, journal_entry_id)`
+  -- → `journal_entries (business_id, id)`, which is what physically stops a
+  -- line claiming one business while pointing at another's entry.
   IF EXISTS (
     SELECT 1 FROM journal_lines jl
-    WHERE jl.journal_entry_id = p_entry_id
-      AND (jl.business_id <> e.business_id OR jl.tenant_id <> e.tenant_id)
+    WHERE jl.business_id = e.business_id
+      AND jl.journal_entry_id = e.id
+      AND jl.tenant_id <> e.tenant_id
   ) THEN
-    RAISE EXCEPTION 'accounting.entry_business_mismatch: journal entry % has a line owned by a different business or tenant', p_entry_id
+    RAISE EXCEPTION 'accounting.entry_business_mismatch: journal entry % has a line owned by a different tenant', p_entry_id
       USING ERRCODE = 'P0001';
   END IF;
 
   IF EXISTS (
     SELECT 1 FROM journal_lines jl
     LEFT JOIN accounts a ON a.business_id = jl.business_id AND a.id = jl.account_id
-    WHERE jl.journal_entry_id = p_entry_id AND a.id IS NULL
+    WHERE jl.business_id = e.business_id AND jl.journal_entry_id = e.id AND a.id IS NULL
   ) THEN
     RAISE EXCEPTION 'accounting.entry_account_foreign: journal entry % references an account outside its business', p_entry_id
       USING ERRCODE = 'P0001';
   END IF;
 
-  SELECT count(*) INTO v_lines FROM journal_lines jl WHERE jl.journal_entry_id = p_entry_id;
+  SELECT count(*) INTO v_lines FROM journal_lines jl
+  WHERE jl.business_id = e.business_id AND jl.journal_entry_id = e.id;
   IF v_lines < 2 THEN
     -- Covers the zero-line phantom entry and the one-line entry alike.
     RAISE EXCEPTION 'accounting.entry_too_few_lines: journal entry % has fewer than two lines', p_entry_id USING ERRCODE = 'P0001';
@@ -162,7 +181,10 @@ BEGIN
     RAISE EXCEPTION 'accounting.entry_business_mismatch: journal entry % names a business that cannot be read', p_entry_id
       USING ERRCODE = 'P0001';
   END IF;
-  IF EXISTS (SELECT 1 FROM journal_lines jl WHERE jl.journal_entry_id = p_entry_id AND jl.base_currency <> v_base) THEN
+  IF EXISTS (
+    SELECT 1 FROM journal_lines jl
+    WHERE jl.business_id = e.business_id AND jl.journal_entry_id = e.id AND jl.base_currency <> v_base
+  ) THEN
     RAISE EXCEPTION 'accounting.entry_base_currency_mismatch: journal entry % has a line whose base currency is not the business base currency', p_entry_id
       USING ERRCODE = 'P0001';
   END IF;
@@ -174,7 +196,7 @@ BEGIN
          coalesce(sum(jl.base_amount_minor::numeric) FILTER (WHERE jl.credit_minor > 0), 0)
     INTO v_debit, v_credit
   FROM journal_lines jl
-  WHERE jl.journal_entry_id = p_entry_id;
+  WHERE jl.business_id = e.business_id AND jl.journal_entry_id = e.id;
 
   IF v_debit <= 0 THEN
     RAISE EXCEPTION 'accounting.entry_unbalanced: journal entry % has no positive debit total', p_entry_id USING ERRCODE = 'P0001';
@@ -201,7 +223,7 @@ BEGIN
     FROM journal_lines jl
     JOIN currencies ct ON ct.code = jl.txn_currency
     JOIN currencies cb ON cb.code = jl.base_currency
-    WHERE jl.journal_entry_id = p_entry_id
+    WHERE jl.business_id = e.business_id AND jl.journal_entry_id = e.id
     ORDER BY jl.line_no
   LOOP
     v_num := l.txn_amount_minor::numeric * (l.fx_rate * 10000000000::numeric) * accounting_pow10(l.eb - l.et);

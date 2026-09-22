@@ -230,6 +230,21 @@ function checkStructuralEnforcement(): void {
     if (FLOAT_TYPES.test(sql))
       fail('exact-money', `${name} declares a floating-point or MONEY type — money is BIGINT minor units and rates are NUMERIC(20,10)`);
   }
+  // Composite identity. An entry is `(business_id, id)`; `journal_entries` has
+  // no global UNIQUE on `id`, so a validator that reads lines by
+  // `journal_entry_id` alone can pull another business's independent entry
+  // into this one's validation. The behavioural proof is in
+  // tests/integration/accounting-journal.test.ts; this is the fast tripwire,
+  // so a reintroduction fails before a database is even started.
+  if (/journal_entry_id\s*=\s*p_entry_id/i.test(invariants)) {
+    fail(
+      'composite-identity',
+      '0043 addresses journal lines by entry id alone — an entry is (business_id, id), and the UUID alone may belong to another business',
+    );
+  } else {
+    ok('the validator addresses journal lines by the composite (business_id, id), never by the UUID alone');
+  }
+
   if (!/ROUND\s*\(/i.test(invariants)) ok('0043 computes the base-amount expectation without PostgreSQL ROUND() — HALF_EVEN is spelled out (§24)');
   else fail('exact-money', '0043 uses ROUND() — §24 forbids the shortcut; HALF_EVEN must be derived from quotient and remainder');
   if (/SUM\s*\(\s*(?!.*::\s*numeric)[^)]*amount_minor[^)]*\)/i.test(invariants)) {
