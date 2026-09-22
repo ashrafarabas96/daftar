@@ -407,6 +407,7 @@ Every row above gets a real concurrency test in the style of the existing `concu
 - **Replay across transactions** is safe because the uniqueness lives in the database, not in a cache.
 - The manual API path additionally honours the Phase 1 `Idempotency-Key` header so a retried HTTP request does not create a second *manual adjustment source*, mirroring the Android retry contract (`RetryContractTest.kt`).
 - Idempotency is proven by test at three levels: same transaction, two sequential transactions, two concurrent transactions.
+- **P2-S4 correction.** The rule above belongs to the primitive. Any command that can return an already-posted entry *without reaching* the primitive owes the same comparison for itself, and `accounting_open_balance_post` originally did not — it replayed on `status = 'posted'` before checking which command was being retried. It now compares the persisted `posting_fingerprint` to the one carried by the verified assertion and raises `accounting.idempotency_conflict` on any difference, with the entry loaded by composite identity `(business_id, journal_entry_id)`. The permanent proofs are `tests/integration/accounting-idempotency.test.ts` (the nine-field mutation matrix, the canonical-equivalence replays, the exact retry, and the same audit over manual adjustments and reversals) and the two same-key races in `tests/integration/accounting-sources-concurrency.test.ts`; `npm run gate:phase2:s4` requires all of them to exist and runs them.
 
 ---
 

@@ -39,13 +39,21 @@ export const OPENING_EQUITY_SYSTEM_KEY = 'opening_equity';
  * same source identity, so the constraint the ledger already enforces does
  * the work:
  *
- *   same key + same request       → same source id, same fingerprint
- *                                 → the existing entry, `created: false`
- *   same key + different request  → same source id, different fingerprint
- *                                 → `accounting.idempotency_conflict`
- *   two requests at once          → the posting primitive's advisory lock on
- *                                   that exact source identity serializes
- *                                   them; one creates, the other replays
+ *   same key, same financial      → same source id, same fingerprint
+ *   payload                       → the existing entry, `created: false`
+ *   same key, materially          → same source id, different fingerprint
+ *   different financial payload   → `accounting.idempotency_conflict`
+ *   two requests at once          → the advisory lock on that exact source
+ *                                   identity serializes them; one creates,
+ *                                   and the other replays or conflicts by
+ *                                   the same rule
+ *
+ * "Materially different" is exactly acctfp/1 and nothing wider: the fields
+ * the canonical fingerprint carries. A retry that changes only narrative —
+ * a description, a memo's wording where acctfp/1 excludes it, a request id —
+ * is the same financial fact and replays, and the narrative already in the
+ * ledger is NOT rewritten to match the newest attempt. This wording is
+ * deliberately no stronger than the fingerprint contract that enforces it.
  *
  * No cache, no expiry, no second source of truth that could disagree with the
  * ledger, and nothing to reconcile after a crash. The derivation is

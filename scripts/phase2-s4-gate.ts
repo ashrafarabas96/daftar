@@ -69,6 +69,7 @@ const S4_MODULES = ['src/sources.ts'] as const;
 /** The suites that prove, against a real database, what the structure only claims. */
 const P2_S4_TESTS = [
   'tests/integration/accounting-sources.test.ts',
+  'tests/integration/accounting-idempotency.test.ts',
   'tests/integration/accounting-sources-concurrency.test.ts',
   'tests/security/accounting-sources-authority.test.ts',
   'tests/integration/accounting-journal.test.ts',
@@ -377,6 +378,86 @@ function checkEngineAndSurface(): void {
   }
 }
 
+// ── 4b. The idempotency property, proved by behaviour (§23) ────────────────
+//
+// An idempotency rule cannot be established by reading SQL for a string. The
+// string can be there while the comparison sits below an early return that
+// never reaches it — which is exactly how the defect this section exists for
+// survived a green gate. So the gate does two separate things: it requires
+// the named behavioural cases to EXIST (below), and it RUNS them (the step
+// list). Neither substitutes for the other; deleting a case now fails the
+// gate instead of quietly shrinking what "ready" means.
+const REQUIRED_BEHAVIOUR: ReadonlyArray<{ file: string; needle: RegExp; what: string }> = [
+  { file: 'tests/integration/accounting-idempotency.test.ts', needle: /an exact retry replays/, what: 'exact opening-balance replay (§11)' },
+  {
+    file: 'tests/integration/accounting-idempotency.test.ts',
+    needle: /the financial mutation matrix/,
+    what: 'same-source material financial conflict, every acctfp/1 field (§9)',
+  },
+  { file: 'tests/integration/accounting-idempotency.test.ts', needle: /canonically equivalent retries replay/, what: 'canonical equivalence (§10)' },
+  {
+    file: 'tests/integration/accounting-idempotency.test.ts',
+    needle: /adds nothing to the ledger/,
+    what: 'no duplicate journal, binding, source, audit or outbox row on a conflict (§8)',
+  },
+  {
+    file: 'tests/integration/accounting-idempotency.test.ts',
+    needle: /the posted reason is not rewritten/,
+    what: 'no mutation of the original posted source (§16, §19)',
+  },
+  {
+    file: 'tests/integration/accounting-sources-concurrency.test.ts',
+    needle: /same key, SAME payload/,
+    what: 'concurrent same-key same-payload (§13)',
+  },
+  {
+    file: 'tests/integration/accounting-sources-concurrency.test.ts',
+    needle: /same key, DIFFERENT payload/,
+    what: 'concurrent same-key different-payload (§12)',
+  },
+];
+
+function checkIdempotencyProof(): void {
+  console.log('P2-S4 GATE — the idempotency property');
+
+  for (const { file, needle, what } of REQUIRED_BEHAVIOUR) {
+    const path = join(ROOT, file);
+    if (!existsSync(path)) {
+      fail('idempotency-proof', `${file} is missing — it carries the permanent proof of ${what} (§23)`);
+      continue;
+    }
+    if (needle.test(readFileSync(path, 'utf8'))) ok(`behavioural regression present: ${what}`);
+    else fail('idempotency-proof', `${file} no longer proves ${what} (§23)`);
+  }
+
+  // The structural half of the same property: every routine that can hand a
+  // caller an already-posted entry must compare the VERIFIED assertion
+  // fingerprint to the one the ledger persisted before it does so.
+  const s4 = stripComments(s4Sql());
+  if (!/accounting\.idempotency_conflict/.test(s4)) {
+    fail('idempotency-proof', 'no P2-S4 command raises accounting.idempotency_conflict — a replay path is answering success for a different payload (§3)');
+  } else {
+    ok('a P2-S4 command refuses a conflicting retry by its stable domain name');
+  }
+
+  // §5: the current fingerprint comes from the verified assertion. A
+  // parameter the caller could choose is a parameter the caller could match.
+  if (/\bp_(posting_)?fingerprint\b/.test(s4)) {
+    fail('idempotency-proof', 'a P2-S4 command takes a caller-supplied fingerprint parameter — the current fingerprint must come from accounting_actor (§5)');
+  } else {
+    ok('no command accepts a caller-supplied fingerprint (§5)');
+  }
+
+  // §20: the refusal names the rule, never the money it was protecting.
+  const conflict = /RAISE EXCEPTION 'accounting\.idempotency_conflict:[^']*'/g;
+  for (const raised of s4.match(conflict) ?? []) {
+    if (/%/.test(raised)) {
+      fail('idempotency-proof', 'an idempotency_conflict message interpolates a value — the refusal must carry no amount, rate, balance or index name (§20)');
+    }
+  }
+  ok('every idempotency_conflict refusal is a constant string (§20)');
+}
+
 // ── 5. Composed command matrix ──────────────────────────────────────────────
 interface Step {
   readonly name: string;
@@ -412,12 +493,14 @@ if (LIST_ONLY) {
   console.log('  structural: the journal carries no reversal marker; reversal and opening-balance uniqueness are physical; supersession requires a reversal');
   console.log('  structural: G-4 protects EVERY journal writer, G-5 covers the new definers, no runtime DML on any source table');
   console.log('  structural: the engine owns the derivations, no bypass seam exists, exactly three merchant endpoints, money crosses HTTP as strings');
+  console.log('  structural: every named idempotency regression exists, no caller-supplied fingerprint, refusals carry no financial values');
   for (const s of STEPS) console.log(`  command:    ${s.cmd} ${s.args.join(' ')}`);
   process.exit(0);
 }
 
 checkMigrationBoundary();
 checkSurfaces();
+checkIdempotencyProof();
 checkGuards();
 checkEngineAndSurface();
 if (failures > 0) {

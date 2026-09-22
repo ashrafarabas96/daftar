@@ -686,6 +686,10 @@ DECLARE
   v_prev     UUID;
   v_prev_je  UUID;
   v_count    INTEGER;
+  v_exist_fp   TEXT;
+  v_exist_date DATE;
+  v_exist_st   TEXT;
+  v_exist_sid  UUID;
 BEGIN
   v_actor := accounting_opening_balance_authority(p_id);
 
@@ -710,7 +714,70 @@ BEGIN
     RAISE EXCEPTION 'accounting.opening_balance_state_invalid: no opening balance of this business has that id' USING ERRCODE = 'P0001';
   END IF;
   IF v_status = 'posted' THEN
-    -- An at-least-once retry of a posting that already happened.
+    -- ── A retry, but of WHICH command? ──────────────────────────────────
+    --
+    -- An `Idempotency-Key` says "this is the same request I sent a moment
+    -- ago". It is not evidence that the money in it is the money already in
+    -- the ledger, and it is not permission to ignore the difference. Every
+    -- other writer in this slice proves that before it replays — the
+    -- primitive compares the signed fingerprint to the entry it already has
+    -- (0045 §7) and refuses `accounting.idempotency_conflict` when they
+    -- differ. This command used to return here first, so a merchant who
+    -- re-sent one key with a different opening position was told "done" and
+    -- handed back the position they had just tried to change.
+    --
+    -- The comparison is made here, at the database command boundary, rather
+    -- than in the caller: a direct caller of this trusted routine is owed
+    -- the same guarantee as the merchant API, and a guarantee that lives in
+    -- an `if` somewhere above the database is a guarantee only for callers
+    -- who go through that `if`.
+    --
+    -- The CURRENT side of the comparison is `v_actor.posting_fingerprint`,
+    -- which came out of `accounting_actor` — HMAC-verified over all twelve
+    -- assertion components. There is deliberately no `p_fingerprint`
+    -- parameter: a fingerprint the caller could choose is a fingerprint the
+    -- caller could match.
+    --
+    -- The `draft` call that precedes this one does NOT restate a posted
+    -- source's positions, and must not: repairing the stored source to match
+    -- the newest request is exactly the silent rewrite of history this slice
+    -- exists to prevent. So the persisted rows still describe the first
+    -- committed fact, and the only honest question left is whether the
+    -- command now being retried is that same fact.
+    SELECT je.posting_fingerprint, je.entry_date, je.source_type, je.source_id
+      INTO v_exist_fp, v_exist_date, v_exist_st, v_exist_sid
+    FROM journal_entries je
+    WHERE je.business_id = v_actor.business_id AND je.id = v_entry;
+
+    -- COMPOSITE identity throughout: (business_id, id), never the uuid
+    -- alone. An entry of another business is simply not found.
+    IF v_exist_fp IS NULL THEN
+      RAISE EXCEPTION 'accounting.opening_balance_state_invalid: the opening balance is posted but its journal entry is missing' USING ERRCODE = 'P0001';
+    END IF;
+
+    -- The entry must actually be THIS opening balance's entry. These three
+    -- facts are immutable once written, so a disagreement is corruption
+    -- rather than a conflicting retry, and saying so plainly is better than
+    -- letting a fingerprint comparison stand in for a structural check.
+    IF v_exist_st IS DISTINCT FROM 'opening_balance'
+       OR v_exist_sid IS DISTINCT FROM p_id
+       OR v_exist_date IS DISTINCT FROM v_as_of THEN
+      RAISE EXCEPTION 'accounting.opening_balance_state_invalid: the opening balance does not own the journal entry it names' USING ERRCODE = 'P0001';
+    END IF;
+
+    IF v_exist_fp IS DISTINCT FROM v_actor.posting_fingerprint THEN
+      -- §20: the code is stable and the message carries no amount, rate,
+      -- balance, assertion or index name. The caller learns that this key
+      -- already describes different financial truth, and nothing about what
+      -- that truth is.
+      RAISE EXCEPTION 'accounting.idempotency_conflict: this opening balance identity already describes different financial truth'
+        USING ERRCODE = 'P0001';
+    END IF;
+
+    -- Same identity, same financial fact: the original entry, unchanged. No
+    -- second journal, binding, audit or outbox row, and the posted narrative
+    -- is NOT rewritten to the latest retry — a request id is narrative, and
+    -- narrative that is already in the ledger is history (§7).
     RETURN QUERY SELECT v_entry, false;
     RETURN;
   END IF;

@@ -17,9 +17,9 @@ A correction is another accounting fact. Nothing in this slice edits a posted en
 | migration | SHA-256 | state |
 |---|---|---|
 | `0046_accounting_sources.sql` | `347faf5063205f9acf71848cb369444f9e03ef11d65cb038e79549e19af0e4e0` | CANDIDATE |
-| `0047_accounting_opening_balances.sql` | `975768714affba8719a6cbc8f492b25f7c88ea686c1a4e692b221eed6c3f2f65` | CANDIDATE |
+| `0047_accounting_opening_balances.sql` | `1b41ee08c4242618eb206005daf0e5195f244a118f977bfc75f17c3755b19939` | CANDIDATE |
 
-Neither is in `MIGRATION_MANIFEST.json`, and `frozenThrough` remains `0045_accounting_post_entry.sql` with 46 frozen migrations. That is intentional and is what the P2-S4 gate checks: while the slice is under review a defect must be correctable **in place**, rather than consuming a P2-S5 migration number. Freezing happens on acceptance, never before.
+`0046` is byte-for-byte unchanged from the first revision — the idempotency correction of §6a lives entirely in `0047`, so there was no reason to churn it. Neither is in `MIGRATION_MANIFEST.json`, and `frozenThrough` remains `0045_accounting_post_entry.sql` with 46 frozen migrations. That is intentional and is what the P2-S4 gate checks: while the slice is under review a defect must be correctable **in place**, rather than consuming a P2-S5 migration number. Freezing happens on acceptance, never before.
 
 Migrations `0000`–`0045` are byte-for-byte unchanged. Nothing after `0047` exists.
 
@@ -95,6 +95,12 @@ Migrations `0000`–`0045` are byte-for-byte unchanged. Nothing after `0047` exi
 | 29 | Every journal writer carries the full protection set (G-4 widened) | `scripts/guards/posting-surface.ts` discovers writers from the schema | `posting-surface-guard.test.ts`; `gate:phase2:s4` | **ENFORCED** |
 | 30 | Every new SECURITY DEFINER routine pins `search_path` with `pg_temp` LAST (G-5) | `scripts/guards/definer-search-path.ts` | `search-path-shadowing.test.ts`; "every SECURITY DEFINER routine…pins its path" | **ENFORCED** |
 | 31 | Refusals never leak SQLSTATE, index names, amounts, rates or assertions | `AccountingError.toSafeJSON()` is the only representation out | `error.filter.ts`; "a concurrent DIFFERENT reversal loses by name, never by index" | **ENFORCED** |
+| 32 | Same source identity + materially different financial payload → refused, on EVERY source | `accounting_post_entry` (0045 §7) and the fingerprint comparison in `accounting_open_balance_post` | `accounting-idempotency.test.ts` — the §9 matrix, all nine acctfp/1 fields; the manual-adjustment and reversal audits | **ENFORCED** |
+| 33 | A canonically equivalent retry replays rather than conflicting | acctfp/1 sorts lines and normalizes rates; nothing outside it counts | "positions submitted in a different order…", "a rate written with fewer digits…" | **ENFORCED** |
+| 34 | A conflicting retry writes nothing and rewrites nothing | one transaction; the refusal precedes every write | "refuses with accounting.idempotency_conflict and adds nothing to the ledger" | **ENFORCED** |
+| 35 | Two connections, one key, different payloads → exactly one financial truth | the per-business advisory lock plus the fingerprint comparison | `accounting-sources-concurrency.test.ts` — "same key, DIFFERENT payload…" | **ENFORCED** |
+| 36 | Two connections, one key, same payload → one posting, one `created=true` | the same lock; the loser replays | "same key, SAME payload…" | **ENFORCED** |
+| 37 | The current fingerprint always comes from the verified assertion, never a parameter | no command takes a fingerprint argument | `gate:phase2:s4` idempotency-proof check (§5) | **ENFORCED** |
 
 ## 5. The one architectural decision that needs stating
 
@@ -110,9 +116,63 @@ The opening balance, by contrast, rides the hardened primitive unchanged. It nee
 
 §11 permits reusing Phase 1's request-identity mechanism if a reusable one exists. It does not. Phase 1's `onboarding_operations` is scoped to onboarding operations and keyed to their own lifecycle; it is not a general business-scoped command registry, and widening it would have made an onboarding table the arbiter of accounting identity.
 
-The smallest durable thing that works instead: the source id is **derived** from `(business_id, Idempotency-Key)` by `deriveSourceId` — a SHA-256 to a stable v5-shaped UUID. The existing `(business_id, source_type, source_id)` uniqueness then does the whole job, so there is no parallel cache and no second answer to "has this already happened". Same key + same request returns the same source; same key + different request conflicts on the fingerprint; concurrent same key yields one source.
+The smallest durable thing that works instead: the source id is **derived** from `(business_id, Idempotency-Key)` by `deriveSourceId` — a SHA-256 to a stable v5-shaped UUID. The existing `(business_id, source_type, source_id)` uniqueness then does the whole job, so there is no parallel cache and no second answer to "has this already happened".
 
 The HTTP `Idempotency-Key` remains **transport only**. It is not the financial identity, and it is not stored as one.
+
+The contract, stated exactly:
+
+| the retry | the answer |
+|---|---|
+| same key, same financial payload | the existing entry, `created: false`, no second journal, binding, source, audit or outbox row |
+| same key, **materially different** financial payload | `accounting.idempotency_conflict` |
+| same key, narrative-only difference (description, request id) | the existing entry, `created: false` — and the posted narrative is **not** rewritten |
+| same key twice at once | one creates; the other replays or conflicts by the same rule |
+
+"Materially different" is exactly `acctfp/1` and nothing wider: the fields the canonical fingerprint carries. Reordered positions and a rate written with fewer digits are the *same* fact, because acctfp/1 sorts lines by their canonical bytes and normalizes a rate to ten fraction digits — so they replay, and the tests pin that too. This wording is deliberately no stronger than the fingerprint contract that enforces it.
+
+## 6a. The correction this slice needed (§2–§5, §29)
+
+The first revision of `accounting_open_balance_post` got this wrong, and it is worth writing down plainly rather than quietly fixing.
+
+The routine short-circuited on an already-posted source:
+
+```sql
+IF v_status = 'posted' THEN
+  RETURN QUERY SELECT v_entry, false;   -- before proving WHICH command this was
+END IF;
+```
+
+So a merchant who re-sent one `Idempotency-Key` with a different opening position was told **success**, and handed back the position they had just tried to change. `accounting_post_entry` had always compared the signed fingerprint to the entry it already held (0045 §7) and refused `accounting.idempotency_conflict` — but this path returned before the primitive was ever reached, so the guarantee the rest of the slice rests on was simply skipped here.
+
+The fix lives at the **database command boundary**, not in NestJS: a direct caller of the trusted command is owed the same guarantee as the HTTP caller, and a guarantee that lives in an `if` above the database is a guarantee only for callers who go through that `if`. Before replaying, the routine now loads the existing entry by **composite** identity `(business_id, journal_entry_id)`, requires it to be this opening balance's own entry (`source_type`, `source_id` and `entry_date` all agree with the source row), and requires its persisted `posting_fingerprint` to equal `v_actor.posting_fingerprint` — the fingerprint `accounting_actor` verified out of the HMAC-signed assertion. There is deliberately **no** `p_fingerprint` parameter: a fingerprint the caller could choose is a fingerprint the caller could match.
+
+Two things the fix deliberately does **not** do:
+
+- It does not repair the stored source to match the newest request. The `draft` call preceding `post` leaves a posted source's positions alone, and must: rewriting them so a key becomes reusable is the silent rewrite of history this slice exists to prevent (§19). The first committed financial fact wins; conflict is the correct answer.
+- It does not re-derive the *submitted* payload's fingerprint inside `post`. It could not do so honestly — `post` never receives the new payload, only the persisted one — and reaching for it would have meant duplicating the plug arithmetic in a second place, which is a second source of truth about what the entry is. Comparing the verified assertion fingerprint is the strongest comparison available without inventing one.
+
+`تصحيح: كان الرصيد الافتتاحي يعيد القيد القديم بصمت عند إعادة إرسال نفس مفتاح Idempotency بمبلغ مختلف. الآن يقارن البصمة المالية الموقَّعة بالبصمة المحفوظة قبل أي إعادة، ويرفض بـ accounting.idempotency_conflict عند الاختلاف.`
+
+## 6b. Early-return self-review (§24)
+
+Every exit point in the five commands, asked one question: *could this return success for the same source while the financial payload differs?*
+
+| routine | exit point | verdict |
+|---|---|---|
+| `accounting_post_manual_adjustment` | `ON CONFLICT (business_id, id) DO NOTHING` on the detail row | **No** — narrative only; the financial decision was already made by `accounting_post_entry`, and the reason is deliberately not rewritten on replay (§16) |
+| `accounting_post_manual_adjustment` | final `RETURN QUERY` | **No** — returns whatever the primitive decided, and the primitive conflicts on a different fingerprint |
+| `accounting_post_reversal` | replay of an existing reversal | **No** — reached only after the assertion fingerprint was required to equal the freshly derived mirror, and guarded by fingerprint **and** date **and** reason equality |
+| `accounting_post_reversal` | final `RETURN QUERY … true` | **No** — only after the insert |
+| `accounting_open_balance_draft` | draft re-stated (→ `edit`) | **No** — returns an id, never an entry; nothing financial is confirmed here |
+| `accounting_open_balance_draft` | posted or superseded source | **No** — returns an id and deliberately leaves the stored positions alone; `post` is what answers, and `post` now compares |
+| `accounting_open_balance_draft` | fresh draft inserted | **No** — returns an id |
+| `accounting_open_balance_post` | replay of a posted source | **This was the defect.** Now compares the verified assertion fingerprint to the persisted one and raises `accounting.idempotency_conflict` on any difference |
+| `accounting_open_balance_post` | final `RETURN QUERY` | **No** — only after the primitive posted, and the primitive made the same comparison |
+| `accounting_open_balance_edit` | — | **No** — refuses anything but `draft` |
+| `accounting_open_balance_supersede` | — | **No** — no early return; refuses anything but `posted`, and only with an existing reversal |
+
+Zero remaining cases where a material financial difference returns success.
 
 ## 7. What this slice deliberately did NOT build
 

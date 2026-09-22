@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { deriveSourceId } from '@daftar/accounting';
 import type { Client } from 'pg';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { ensurePostgres, ownerPool, resetData } from '../helpers/test-app';
@@ -362,5 +363,136 @@ describe('a failed workflow leaves nothing behind (§33, §44)', () => {
       ).rows[0],
     );
     expect(after).toEqual({ entries: 0, details: 0 });
+  });
+});
+
+// ── §12, §13 one idempotency key, two connections ─────────────────────────
+
+/**
+ * The transport identity, derived exactly as the merchant API derives it, so
+ * these two cases race over a real `Idempotency-Key` rather than over a UUID
+ * the test chose to share.
+ */
+function keyedOpening(who: OpeningInput, idempotencyKey: string, positions: readonly PostLine[]): { id: string; assertion: string } {
+  const id = deriveSourceId(who.businessId, idempotencyKey);
+  return { id, assertion: openingAssertion(who, id, positions) };
+}
+
+describe('one idempotency key, two connections (§12, §13)', () => {
+  it('same key, SAME payload: one posting, one created=true, one created=false, no duplicate domain events (§13)', async () => {
+    const b = await seedPostingFixture(ownerPool(), `src-conc-idem-same-${Date.now()}`);
+    const positions = [position('cash', 'D', 64000n)];
+    const key = 'concurrent-opening-key-same';
+    // Two independently minted assertions over one identical payload: the
+    // same fingerprint, different replay ids. Replay protection must not turn
+    // a legitimate concurrent retry into a failure.
+    const a = keyedOpening(b, key, positions);
+    const d = keyedOpening(b, key, positions);
+    expect(a.id).toBe(d.id);
+    expect(a.assertion).not.toBe(d.assertion);
+
+    const ca = await appClient();
+    const cd = await appClient();
+    try {
+      await ca.query('BEGIN');
+      await cd.query('BEGIN');
+      const ra = await postOpeningBalanceAs(a.assertion, { asOfDate: today, positions, openingBalanceId: a.id, requestId: 'req-a' }, ca);
+      // D issues the identical command while A still holds the per-business
+      // advisory lock. It must block on A rather than write a second posting.
+      const pending = postOpeningBalanceAs(d.assertion, { asOfDate: today, positions, openingBalanceId: d.id, requestId: 'req-d' }, cd).catch(
+        (e) => e as Error,
+      );
+      await ca.query('COMMIT');
+      const rd = await pending;
+      await cd.query('COMMIT');
+
+      expect(rd).not.toBeInstanceOf(Error);
+      const loser = rd as { entryId: string; created: boolean };
+      expect(ra.created).toBe(true);
+      expect(loser.created).toBe(false);
+      expect(loser.entryId).toBe(ra.entryId);
+
+      const counts = must(
+        (
+          await ownerPool().query<{ posted: number; sets: number; entries: number; bindings: number; audits: number; outbox: number }>(
+            `SELECT (SELECT count(*) FROM accounting_opening_balances WHERE business_id = $1 AND status = 'posted')::int AS posted,
+                    (SELECT count(*) FROM accounting_opening_balances WHERE business_id = $1)::int AS sets,
+                    (SELECT count(*) FROM journal_entries WHERE business_id = $1)::int AS entries,
+                    (SELECT count(*) FROM accounting_source_bindings WHERE business_id = $1)::int AS bindings,
+                    (SELECT count(*) FROM audit_events WHERE business_id = $1 AND action = 'accounting.opening_balance_posted')::int AS audits,
+                    (SELECT count(*) FROM outbox_events WHERE business_id = $1 AND type = 'accounting.opening_balance.posted')::int AS outbox`,
+            [b.businessId],
+          )
+        ).rows[0],
+      );
+      expect(counts).toEqual({ posted: 1, sets: 1, entries: 1, bindings: 1, audits: 1, outbox: 1 });
+    } finally {
+      await closeAll(ca, cd);
+    }
+  });
+
+  it('same key, DIFFERENT payload: exactly one financial source wins and the loser gets accounting.idempotency_conflict (§12)', async () => {
+    const b = await seedPostingFixture(ownerPool(), `src-conc-idem-diff-${Date.now()}`);
+    const positionsA = [position('cash', 'D', 64000n)];
+    const positionsD = [position('cash', 'D', 99000n)];
+    const key = 'concurrent-opening-key-diff';
+    const a = keyedOpening(b, key, positionsA);
+    const d = keyedOpening(b, key, positionsD);
+    // One key, one source identity — and two different financial facts
+    // claiming it. Exactly one of them may become truth.
+    expect(a.id).toBe(d.id);
+
+    const ca = await appClient();
+    const cd = await appClient();
+    try {
+      await ca.query('BEGIN');
+      await cd.query('BEGIN');
+      const ra = await postOpeningBalanceAs(a.assertion, { asOfDate: today, positions: positionsA, openingBalanceId: a.id, requestId: 'req-a' }, ca);
+      const pending = postOpeningBalanceAs(d.assertion, { asOfDate: today, positions: positionsD, openingBalanceId: d.id, requestId: 'req-d' }, cd).catch(
+        (e) => e as Error,
+      );
+      await ca.query('COMMIT');
+      const rd = await pending;
+
+      expect(ra.created).toBe(true);
+      expect(rd).toBeInstanceOf(Error);
+      const message = (rd as Error).message;
+      // Never both success, never last-write-wins, and never the index that
+      // enforced it (§12, §20).
+      expect(message).toMatch(/accounting\.idempotency_conflict/);
+      expect(message).not.toMatch(/duplicate key|unique constraint|23505|_uq\b|64000|99000/);
+      await cd.query('ROLLBACK').catch(() => undefined);
+
+      const state = must(
+        (
+          await ownerPool().query<{ posted: number; sets: number; entries: number; bindings: number; positions: number; audits: number; outbox: number }>(
+            `SELECT (SELECT count(*) FROM accounting_opening_balances WHERE business_id = $1 AND status = 'posted')::int AS posted,
+                    (SELECT count(*) FROM accounting_opening_balances WHERE business_id = $1)::int AS sets,
+                    (SELECT count(*) FROM journal_entries WHERE business_id = $1)::int AS entries,
+                    (SELECT count(*) FROM accounting_source_bindings WHERE business_id = $1)::int AS bindings,
+                    (SELECT count(*) FROM accounting_opening_balance_lines WHERE business_id = $1)::int AS positions,
+                    (SELECT count(*) FROM audit_events WHERE business_id = $1 AND action = 'accounting.opening_balance_posted')::int AS audits,
+                    (SELECT count(*) FROM outbox_events WHERE business_id = $1 AND type = 'accounting.opening_balance.posted')::int AS outbox`,
+            [b.businessId],
+          )
+        ).rows[0],
+      );
+      // One source, one entry, one binding, one of each event — and no orphan
+      // draft left behind by the loser.
+      expect(state).toEqual({ posted: 1, sets: 1, entries: 1, bindings: 1, positions: positionsA.length, audits: 1, outbox: 1 });
+
+      // §19: the winner's stored position is untouched by the loser's attempt.
+      const stored = must(
+        (
+          await ownerPool().query<{ base_amount_minor: string }>(
+            `SELECT base_amount_minor::text FROM accounting_opening_balance_lines WHERE business_id = $1`,
+            [b.businessId],
+          )
+        ).rows[0],
+      );
+      expect(stored.base_amount_minor).toBe('64000');
+    } finally {
+      await closeAll(ca, cd);
+    }
   });
 });
