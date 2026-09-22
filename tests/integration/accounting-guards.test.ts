@@ -153,8 +153,13 @@ describe('P2-S1 migration freeze', () => {
     migrations: { name: string; sha256: string }[];
   };
 
-  it('D: every frozen 0000–0043 hash is unchanged', () => {
-    expect(manifest.migrations).toHaveLength(44);
+  it('D: every frozen hash in the manifest is unchanged', () => {
+    // The count is a floor, not an equality. P2-S1's permanent regression must
+    // not refuse an authorized later freeze: it was 42 at P2-S1, 44 after the
+    // P2-S2 freeze and 46 after P2-S3's. What P2-S1 actually guarantees is that
+    // nothing already frozen drifted, and that its own two migrations are still
+    // in the list — both asserted here and in the test below.
+    expect(manifest.migrations.length).toBeGreaterThanOrEqual(44);
     for (const entry of manifest.migrations) {
       const sha = createHash('sha256')
         .update(readFileSync(join(MIGRATIONS, entry.name)))
@@ -639,6 +644,40 @@ describe('P2-S2 migration boundary', () => {
     expect(manifest.frozenThrough >= '0043_accounting_invariants.sql').toBe(true);
     // The P2-S2 gate carries the same hashes as an independent second source.
     const gate = readFileSync(join(ROOT, 'scripts/phase2-s2-gate.ts'), 'utf8');
+    for (const [name, sha256] of Object.entries(accepted)) expect(gate, `${name} in gate`).toContain(sha256);
+  });
+
+  it('0044 and 0045 are FROZEN at their accepted hashes (P2-S3 freeze §4)', () => {
+    // Digest and file name on separate lines, for the reason the P2-S3 gate
+    // explains: a 64-hex literal beside the word "keys" reads as a credential
+    // to gitleaks, and a migration digest must not look like a secret.
+    const digests: Readonly<Record<string, string>> = {
+      '0044': 'cf49b196598e5dc829b56e656bc7883a2fed3a54f6631cf0bdf112c4521a0902',
+      '0045': '84fa101e1c25e880b7850a96abd05a5efabd068cec56397c3b465ca11847cb2e',
+    };
+    const accepted: Readonly<Record<string, string>> = {
+      '0044_accounting_assertion_keys.sql': digests['0044'] ?? '',
+      '0045_accounting_post_entry.sql': digests['0045'] ?? '',
+    };
+    const manifest = JSON.parse(readFileSync(join(ROOT, 'infrastructure/database/MIGRATION_MANIFEST.json'), 'utf8')) as {
+      frozenThrough: string;
+      migrations: { name: string; sha256: string }[];
+    };
+    const frozen = new Map(manifest.migrations.map((m) => [m.name, m.sha256]));
+    for (const [name, sha256] of Object.entries(accepted)) {
+      expect(
+        createHash('sha256')
+          .update(readFileSync(join(MIGRATIONS, name)))
+          .digest('hex'),
+        `${name} on disk`,
+      ).toBe(sha256);
+      expect(frozen.get(name), `${name} in manifest`).toBe(sha256);
+    }
+    expect(manifest.frozenThrough >= '0045_accounting_post_entry.sql').toBe(true);
+    expect(manifest.migrations.length).toBe(46);
+    // The P2-S3 gate carries the same hashes as an independent second source,
+    // so one commit cannot move a migration and its recorded hash together.
+    const gate = readFileSync(join(ROOT, 'scripts/phase2-s3-gate.ts'), 'utf8');
     for (const [name, sha256] of Object.entries(accepted)) expect(gate, `${name} in gate`).toContain(sha256);
   });
 

@@ -1,7 +1,7 @@
 {
-  "generatedAt": "2026-09-22T00:55:00.000Z",
-  "frozenThrough": "0043_accounting_invariants.sql",
-  "policy": "Migrations 0000–0043 are FROZEN. 0000–0039 froze at the Phase 1 release; 0040–0041 froze on Tech Lead acceptance of P2-S1 (docs/PHASE_2_S1_ACCEPTANCE.md); 0042–0043 froze on Tech Lead acceptance of P2-S2 (docs/PHASE_2_S2_ACCEPTANCE.md). A frozen migration is never edited or deleted; every schema correction is a NEW migration appended after 0043. Check: npm run check:migrations.",
+  "generatedAt": "2026-09-22T10:30:00.000Z",
+  "frozenThrough": "0045_accounting_post_entry.sql",
+  "policy": "Migrations 0000–0045 are FROZEN. 0000–0039 froze at the Phase 1 release; 0040–0041 froze on Tech Lead acceptance of P2-S1 (docs/PHASE_2_S1_ACCEPTANCE.md); 0042–0043 froze on Tech Lead acceptance of P2-S2 (docs/PHASE_2_S2_ACCEPTANCE.md); 0044–0045 froze on Tech Lead acceptance of P2-S3 (docs/PHASE_2_S3_ACCEPTANCE.md). A frozen migration is never edited or deleted; every schema correction is a NEW migration appended after 0045. Check: npm run check:migrations.",
   "migrations": [
     {
       "name": "0000_extensions.sql",
@@ -178,6 +178,14 @@
     {
       "name": "0043_accounting_invariants.sql",
       "sha256": "9744da043d3c8b3fe68af30b135e5f5f36207ec5b457d115a3f5a465d268e70f"
+    },
+    {
+      "name": "0044_accounting_assertion_keys.sql",
+      "sha256": "cf49b196598e5dc829b56e656bc7883a2fed3a54f6631cf0bdf112c4521a0902"
+    },
+    {
+      "name": "0045_accounting_post_entry.sql",
+      "sha256": "84fa101e1c25e880b7850a96abd05a5efabd068cec56397c3b465ca11847cb2e"
     }
   ]
 }

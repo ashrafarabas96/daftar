@@ -14,20 +14,22 @@
 
 ### The correction of 2026-09-22
 
-The first review of this slice found two blockers, and the second sentence above did not hold when they were found. Both are fixed in place in the candidate migrations; §10 is the account of them, and it is the part of this page to read first.
+The first review of this slice found two blockers, and the second sentence above did not hold when they were found. Both are fixed in place in 0044/0045 themselves, while they were still candidates; §10 is the account of them, and it is the part of this page to read first.
 
 `مراجعة القائد التقني وجدت عيبين قاطعين في النسخة الأولى من هذه الشريحة. صُحّحا داخل 0044/0045 نفسيهما لأنهما ما زالتا مرشّحتين. التفصيل في القسم 10.`
 
-## 1. Candidate migrations
+## 1. Accepted migrations, now frozen
 
 | migration | SHA-256 | state |
 |---|---|---|
-| `0044_accounting_assertion_keys.sql` | `cf49b196598e5dc829b56e656bc7883a2fed3a54f6631cf0bdf112c4521a0902` | CANDIDATE |
-| `0045_accounting_post_entry.sql` | `84fa101e1c25e880b7850a96abd05a5efabd068cec56397c3b465ca11847cb2e` | CANDIDATE |
+| `0044_accounting_assertion_keys.sql` | `cf49b196598e5dc829b56e656bc7883a2fed3a54f6631cf0bdf112c4521a0902` | FROZEN |
+| `0045_accounting_post_entry.sql` | `84fa101e1c25e880b7850a96abd05a5efabd068cec56397c3b465ca11847cb2e` | FROZEN |
 
-Both hashes changed with the 2026-09-22 correction (§10): the values a reader may have from the first review round are stale, and these are the ones to verify against. Neither is in `MIGRATION_MANIFEST.json`, and `frozenThrough` remains `0043_accounting_invariants.sql`. That is intentional and is what the P2-S3 gate checks in both directions: while the slice is under review a defect must be correctable **in place** rather than consuming a P2-S4 migration number, and a slice must never freeze itself — acceptance is the Tech Lead's decision and nobody else's.
+Both hashes changed with the 2026-09-22 correction (§10): the values a reader may have from the first review round are stale, and these are the ones the Tech Lead accepted.
 
-Migrations `0000`–`0043` are byte-for-byte unchanged, and `0046` does not exist.
+**Accepted by the Tech Lead on 2026-09-22** at head `18d29557be41c31cd60898d51f6f9a546201467b`, whose exact-SHA workflow is **35712359018** with all five jobs SUCCESS. Both migrations are now in `MIGRATION_MANIFEST.json`, `frozenThrough` is `0045_accounting_post_entry.sql`, and the manifest lists **46 frozen migrations**. `0000`–`0045` is release history: a defect in any of it needs a NEW migration, never an edit.
+
+`npm run gate:phase2:s3` changed tense with the freeze. It is now a **permanent predecessor gate**: it carries the two accepted hashes as an independent second source, requires the manifest to record them frozen through `0045` or later, and has dropped the candidate-era rules — it no longer asks whether 0044/0045 are unfrozen, and it has no opinion at all about whether `0046` exists, because a permanent gate that forbids its authorized successor is a gate that stops the project.
 
 - Branch: `phase/2-accounting-core` · Draft PR: **#2** (stays draft for all of Phase 2)
 - Accepted P2-S2 head: `cd41573469563dc334bb5f84a660558cd805950c`, frozen at `9214bc1`
@@ -154,7 +156,7 @@ Neither can exist without the other. The stamp is written inside `accounting_pos
 npm run gate:phase2:s3      # composes gate:phase2:s2, which composes s1 and Phase 1
 ```
 
-It refuses if `0044` or `0045` is missing, if either is already frozen or `frozenThrough` has moved past `0043`, if any frozen `0000`–`0043` migration changed, if `0046` exists, if any required P2-S3 surface is missing, if the assertion key domain is incomplete, if the primitive stops recomputing the fingerprint or stops establishing `financial_started_at`, if guard G-4 is absent from `static-guards.ts` or reports a violation, if `accounting_post_entry` is granted EXECUTE to anyone but `daftar_app`, if the grant model ever gives a runtime credential journal DML, if authority isolation finds a reachable write path, if `packages/accounting` or any of its modules or the shared `acctfp/1` vectors are missing, if nothing compares the SQL and TypeScript canonicalizers, if the accounting assertion key is not configured separately from provisioning or the startup refusal on byte-equality is gone, or if any predecessor gate, the unit suite, the posting, concurrency, parity, authority or engine-shape matrices fail.
+It refuses if `0044` or `0045` is missing or no longer matches its accepted hash, if the manifest stops recording them frozen through `0045` or later, if any frozen migration changed, if any required P2-S3 surface is missing, if the assertion key domain is incomplete, if the primitive stops recomputing the fingerprint or stops establishing `financial_started_at`, if guard G-4 is absent from `static-guards.ts` or reports a violation, if `accounting_post_entry` is granted EXECUTE to anyone but `daftar_app`, if the grant model ever gives a runtime credential journal DML, if authority isolation finds a reachable write path, if `packages/accounting` or any of its modules or the shared `acctfp/1` vectors are missing, if nothing compares the SQL and TypeScript canonicalizers, if the accounting assertion key is not configured separately from provisioning or the startup refusal on byte-equality is gone, or if any predecessor gate, the unit suite, the posting, concurrency, parity, authority or engine-shape matrices fail.
 
 ## 10. The correction of 2026-09-22 — two blockers found in review
 
