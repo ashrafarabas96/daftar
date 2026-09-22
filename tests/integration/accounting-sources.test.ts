@@ -545,9 +545,7 @@ describe('reversal (§12-§21, §41, §42)', () => {
       sourceId: original.entryId,
       postingFingerprint: reversalFingerprintOf(c, original.entryId, today),
     });
-    expect(await refusal(() => postReversalAs(assertion, original.entryId, null, 'no date given', randomUUID()))).toMatch(
-      /accounting\.entry_date_required/,
-    );
+    expect(await refusal(() => postReversalAs(assertion, original.entryId, null, 'no date given', randomUUID()))).toMatch(/accounting\.entry_date_required/);
   });
 
   it('records exactly one reversal registration, one audit row and one outbox event', async () => {

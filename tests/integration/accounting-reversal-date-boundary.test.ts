@@ -185,17 +185,13 @@ describe('the reversal is a pure function of its stated inputs (§8)', () => {
 
   it('the business clock still answers the one question it owns: is this date in the future?', async () => {
     const o = await original(today);
-    const beyond = await ownerPool().query<{ d: string }>(
-      `SELECT to_char(((now() AT TIME ZONE 'Asia/Hebron')::date + 1), 'YYYY-MM-DD') AS d`,
-    );
+    const beyond = await ownerPool().query<{ d: string }>(`SELECT to_char(((now() AT TIME ZONE 'Asia/Hebron')::date + 1), 'YYYY-MM-DD') AS d`);
     expect(await refusal(() => directReversal(o, must(beyond.rows[0]).d))).toMatch(/accounting\.entry_date_in_future/);
   });
 
   it('and the lower bound is still the original’s own date', async () => {
     const o = await original(today);
-    const before = await ownerPool().query<{ d: string }>(
-      `SELECT to_char(((now() AT TIME ZONE 'Asia/Hebron')::date - 1), 'YYYY-MM-DD') AS d`,
-    );
+    const before = await ownerPool().query<{ d: string }>(`SELECT to_char(((now() AT TIME ZONE 'Asia/Hebron')::date - 1), 'YYYY-MM-DD') AS d`);
     expect(await refusal(() => directReversal(o, must(before.rows[0]).d))).toMatch(/accounting\.entry_date_before_original/);
   });
 });
