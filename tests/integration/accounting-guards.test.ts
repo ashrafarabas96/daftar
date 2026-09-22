@@ -150,8 +150,8 @@ describe('P2-S1 migration freeze', () => {
     migrations: { name: string; sha256: string }[];
   };
 
-  it('D: every frozen 0000–0041 hash is unchanged', () => {
-    expect(manifest.migrations).toHaveLength(42);
+  it('D: every frozen 0000–0043 hash is unchanged', () => {
+    expect(manifest.migrations).toHaveLength(44);
     for (const entry of manifest.migrations) {
       const sha = createHash('sha256')
         .update(readFileSync(join(MIGRATIONS, entry.name)))
@@ -178,15 +178,18 @@ describe('P2-S1 migration freeze', () => {
       ).toBe(sha256);
       expect(frozen.get(name), `${name} in manifest`).toBe(sha256);
     }
-    expect(manifest.frozenThrough).toBe('0041_accounting_permissions.sql');
+    // P2-S1 is frozen: frozenThrough must be at or past 0041. It has since moved
+    // to 0043 (P2-S2 freeze), which still includes P2-S1.
+    expect(manifest.frozenThrough >= '0041_accounting_permissions.sql').toBe(true);
   });
 
-  it('the manifest lists 0000→0041 in canonical order with no hole', () => {
+  it('the manifest lists 0000→N in canonical order with no hole, P2-S1 included', () => {
     const names = manifest.migrations.map((m) => m.name);
     expect(names).toEqual([...names].sort());
     expect(new Set(names).size).toBe(names.length);
     expect(names[0]).toMatch(/^0000_/);
-    expect(names.at(-1)).toBe('0041_accounting_permissions.sql');
+    expect(names).toContain('0040_accounting_chart.sql');
+    expect(names).toContain('0041_accounting_permissions.sql');
     for (const [i, name] of names.entries()) {
       expect(name.slice(0, 4), name).toBe(String(i).padStart(4, '0'));
     }
@@ -555,21 +558,37 @@ describe('P2-S2 migration boundary', () => {
   const journal = (): string => readFileSync(join(MIGRATIONS, '0042_accounting_journal.sql'), 'utf8');
   const invariants = (): string => readFileSync(join(MIGRATIONS, '0043_accounting_invariants.sql'), 'utf8');
 
-  it('P2-S2 is exactly 0042 and 0043, with nothing after them', () => {
+  it('P2-S2 shipped 0042 and 0043 (later authorized migrations are allowed)', () => {
     expect(files()).toContain('0042_accounting_journal.sql');
     expect(files()).toContain('0043_accounting_invariants.sql');
-    expect(files().filter((f) => f.slice(0, 4) > '0043')).toEqual([]);
+    // Deliberately NOT asserting "nothing after 0043": P2-S2 is frozen and its
+    // gate must never block P2-S3's authorized 0044/0045 (freeze §6).
   });
 
-  it('0042 and 0043 are CANDIDATES — a slice freezes only on acceptance', () => {
+  it('0042 and 0043 are FROZEN at their accepted hashes (P2-S2 freeze §5)', () => {
+    const accepted = {
+      '0042_accounting_journal.sql': '78c852cd1f5888013a02244327a1eb606e3f0fd9582fbbed2018b9382cb92e33',
+      '0043_accounting_invariants.sql': '9744da043d3c8b3fe68af30b135e5f5f36207ec5b457d115a3f5a465d268e70f',
+    } as const;
     const manifest = JSON.parse(readFileSync(join(ROOT, 'infrastructure/database/MIGRATION_MANIFEST.json'), 'utf8')) as {
       frozenThrough: string;
-      migrations: { name: string }[];
+      migrations: { name: string; sha256: string }[];
     };
-    const names = manifest.migrations.map((m) => m.name);
-    expect(names).not.toContain('0042_accounting_journal.sql');
-    expect(names).not.toContain('0043_accounting_invariants.sql');
-    expect(manifest.frozenThrough).toBe('0041_accounting_permissions.sql');
+    const frozen = new Map(manifest.migrations.map((m) => [m.name, m.sha256]));
+    for (const [name, sha256] of Object.entries(accepted)) {
+      // On disk and in the manifest, both against the accepted literal.
+      expect(
+        createHash('sha256')
+          .update(readFileSync(join(MIGRATIONS, name)))
+          .digest('hex'),
+        `${name} on disk`,
+      ).toBe(sha256);
+      expect(frozen.get(name), `${name} in manifest`).toBe(sha256);
+    }
+    expect(manifest.frozenThrough >= '0043_accounting_invariants.sql').toBe(true);
+    // The P2-S2 gate carries the same hashes as an independent second source.
+    const gate = readFileSync(join(ROOT, 'scripts/phase2-s2-gate.ts'), 'utf8');
+    for (const [name, sha256] of Object.entries(accepted)) expect(gate, `${name} in gate`).toContain(sha256);
   });
 
   it('every business-scoped journal table carries both tenant_id and business_id (§14)', () => {
@@ -606,12 +625,10 @@ describe('P2-S2 migration boundary', () => {
     for (const body of bodies) expect(body).not.toMatch(/current_user|session_user|current_setting\(/i);
   });
 
-  it('no P2-S3 posting surface exists yet (§40, §49)', () => {
-    const schema = stripComments(
-      files()
-        .map((f) => readFileSync(join(MIGRATIONS, f), 'utf8'))
-        .join('\n'),
-    );
+  it('the accepted 0042/0043 shipped no writer or assertion surface (§40)', () => {
+    // Scoped to P2-S2's own two migrations: a permanent gate must not forbid
+    // P2-S3's authorized 0044/0045 surfaces (freeze §6).
+    const schema = stripComments([journal(), invariants()].join('\n'));
     for (const surface of FORBIDDEN_P2_S3_SURFACES) {
       expect(schema, surface).not.toMatch(new RegExp(`CREATE\\s+(?:TABLE|VIEW|OR REPLACE FUNCTION|FUNCTION|PROCEDURE)\\s+${surface}\\b`, 'i'));
     }

@@ -17,7 +17,7 @@
 
 Phase 2 ships as ten gated slices (`PHASE_2_ARCHITECTURE_LOCK.md` AL-18). **Each slice requires its own documented PASS before the next begins.** A slice may not borrow a later slice's migration number, and no slice may start before the Tech Lead authorizes it.
 
-**Governing rule: every slice must be independently safe.** Structural schema may land before its writer exists — a table nobody can write to is safe. A writer may **not** land before the verification, binding, fingerprint, audit and outbox protections it depends on. `GRANT EXECUTE` on the posting primitive happens in exactly one slice: P2-S3, the slice that supplies all of them. A slice PASS never means "safe after the next slice".
+**Governing rule: every slice must be independently safe.** Structural schema may land before its writer exists — a table that no runtime principal can write to, and for which no writer primitive exists, is safe (the deployment migrator that creates it is a deployment trust boundary, not a runtime writer). A writer may **not** land before the verification, binding, fingerprint, audit and outbox protections it depends on. `GRANT EXECUTE` on the posting primitive happens in exactly one slice: P2-S3, the slice that supplies all of them. A slice PASS never means "safe after the next slice".
 
 | slice | content | migrations | exit criteria |
 |---|---|---|---|
