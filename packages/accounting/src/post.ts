@@ -17,7 +17,15 @@
 import { AccountingError } from './errors';
 import { computeFingerprint, type CanonicalLineInput } from './fingerprint';
 import { isExactConversion } from './fx';
-import type { AccountingAssertionMinter, AccountingPostingPort } from './ports';
+import type {
+  AccountingAdjustmentPort,
+  AccountingAssertionMinter,
+  AccountingLedgerReader,
+  AccountingOpeningBalancePort,
+  AccountingPostingPort,
+  AccountingReversalPort,
+} from './ports';
+import { computeOpeningBalanceFingerprint, computeReversalFingerprint, deriveOpeningBalanceLines, mirrorReversalLines, type OpeningPosition } from './sources';
 import { MAX_MONEY_MINOR, type AccountRef, type BranchScope, type PostingCommand, type PostingLineCommand, type PostingResult } from './types';
 
 /**
@@ -162,15 +170,28 @@ export interface AuthorizedPostingContext {
 /**
  * The posting engine.
  *
- * `post` is the entire public mutation surface of this slice. `reverse`,
- * `openingBalance`, `trialBalance`, `ledger` and `balance` are deliberately
- * absent: each belongs to a later slice and exposing an empty one now would
- * invite a caller to depend on a shape that has not been designed (§10).
+ * `post` is the primitive every source rides. `adjust`, `reverse` and
+ * `openingBalance` are the three Phase-2-native sources of P2-S4, and each of
+ * them is a thin derivation in front of that primitive rather than a second
+ * way to write the ledger. `trialBalance`, `ledger` and `balance` are still
+ * deliberately absent: each belongs to a later slice and exposing an empty
+ * one now would invite a caller to depend on a shape that has not been
+ * designed (§10).
+ *
+ * There is no `postTrusted`, no `skipPermission`, no `systemPost` and no
+ * `rawWrite` on this class, and there is no flag that would produce one. The
+ * authority for every method is a freshly minted assertion over the payload
+ * that method derived, and a caller that could bypass that would be a caller
+ * the ledger cannot audit.
  */
 export class AccountingEngine {
   constructor(
     private readonly minter: AccountingAssertionMinter,
     private readonly posting: AccountingPostingPort,
+    private readonly adjustments: AccountingAdjustmentPort,
+    private readonly reversals: AccountingReversalPort,
+    private readonly openingBalances: AccountingOpeningBalancePort,
+    private readonly reader: AccountingLedgerReader,
   ) {}
 
   async post(command: PostingCommand, context: AuthorizedPostingContext): Promise<PostingResult> {
@@ -193,5 +214,213 @@ export class AccountingEngine {
     // fingerprint from THIS payload and refuses if it differs from the signed
     // one, so the two can never describe different financial facts.
     return this.posting.postEntry({ assertion, command });
+  }
+
+  /**
+   * A merchant-authored correction (§10, §40).
+   *
+   * Financially this is an ordinary posting: the merchant states the lines
+   * and every rule that governs new truth governs them. The only things this
+   * method adds are the mandatory reason and the source identity, and the
+   * only thing it refuses that `post` would not is a missing reason — a
+   * correction nobody explained is a correction nobody can review.
+   */
+  async adjust(command: PostingCommand, reason: string, context: AuthorizedPostingContext): Promise<PostingResult> {
+    if (command.sourceType !== 'manual_adjustment') {
+      throw new AccountingError('accounting.assertion_wrong_source', 'an adjustment is posted under the manual_adjustment source type', {
+        businessId: command.businessId,
+        sourceType: command.sourceType,
+      });
+    }
+    if (reason.trim().length === 0) {
+      throw new AccountingError('accounting.adjustment_reason_required', 'a manual adjustment must state a reason', {
+        businessId: command.businessId,
+        sourceId: command.sourceId,
+      });
+    }
+    validatePostingCommand(command);
+    validateBranchScope(command, context.branchScope);
+
+    const postingFingerprint = computeCommandFingerprint(command);
+    const assertion = this.minter.mint({
+      actorUserId: context.actorUserId,
+      tenantId: command.tenantId,
+      businessId: command.businessId,
+      operationKind: 'post',
+      sourceType: 'manual_adjustment',
+      sourceId: command.sourceId,
+      postingFingerprint,
+    });
+
+    return this.adjustments.postAdjustment({ assertion, command, reason: reason.trim() });
+  }
+
+  /**
+   * The undo of an earlier entry (§12-§21).
+   *
+   * The caller states WHICH entry, WHEN and WHY, and nothing else. This
+   * method reads the persisted original, derives its mirror, checks the
+   * member's branch authority against the lines the mirror actually has, and
+   * signs the digest of that derivation. The database derives its own mirror
+   * from its own rows and refuses any difference, so the two derivations must
+   * agree for a reversal to exist at all.
+   *
+   * The source identity is the ORIGINAL ENTRY's id. A second reversal of one
+   * entry is therefore not refused by a check here — it is impossible.
+   */
+  async reverse(
+    input: {
+      readonly tenantId: string;
+      readonly businessId: string;
+      readonly originalEntryId: string;
+      /** Omitted means today in the business's own timezone, resolved below. */
+      readonly entryDate: string | null;
+      readonly reason: string;
+      readonly requestId?: string | null;
+    },
+    context: AuthorizedPostingContext,
+  ): Promise<PostingResult> {
+    if (input.reason.trim().length === 0) {
+      throw new AccountingError('accounting.reversal_reason_required', 'a reversal must state a reason', {
+        businessId: input.businessId,
+        originalEntryId: input.originalEntryId,
+      });
+    }
+
+    const scope = { tenantId: input.tenantId, businessId: input.businessId };
+    // A date has to be concrete before anything is signed: the fingerprint
+    // covers it, and the database recomputes the digest from the date it
+    // actually receives. Resolving "today" here, from the one authority that
+    // knows the business's timezone, is what keeps the two in step.
+    const entryDate = input.entryDate ?? (await this.reader.readBusinessToday(scope));
+    if (entryDate === null) {
+      throw new AccountingError('accounting.forbidden', 'the business does not exist', { businessId: input.businessId });
+    }
+
+    const original = await this.reader.readEntry(scope, input.originalEntryId);
+    // Composite identity: an entry of another business is simply not found,
+    // which is also the only thing the caller learns (§20).
+    if (original === null || original.tenantId !== input.tenantId) {
+      throw new AccountingError('accounting.entry_not_found', 'no journal entry of this business has that id', {
+        businessId: input.businessId,
+        originalEntryId: input.originalEntryId,
+      });
+    }
+    if (entryDate < original.entryDate) {
+      throw new AccountingError('accounting.entry_date_before_original', 'a reversal may not precede the entry it reverses', {
+        businessId: input.businessId,
+        originalEntryId: input.originalEntryId,
+      });
+    }
+
+    const mirrored = mirrorReversalLines(original);
+    // The branch authority is checked against the mirror's OWN lines, so a
+    // member holding only some branches cannot reverse a business-level entry
+    // whose lines carry no branch at all (§18).
+    validateBranchScope(
+      {
+        tenantId: input.tenantId,
+        businessId: input.businessId,
+        sourceType: 'reversal',
+        sourceId: input.originalEntryId,
+        entryDate,
+        lines: mirrored,
+      },
+      context.branchScope,
+    );
+
+    const postingFingerprint = computeReversalFingerprint(original, entryDate, mirrored);
+    const assertion = this.minter.mint({
+      actorUserId: context.actorUserId,
+      tenantId: input.tenantId,
+      businessId: input.businessId,
+      // A different authority from a posting, because a different routine
+      // writes it under different rules (§19).
+      operationKind: 'reverse',
+      sourceType: 'reversal',
+      sourceId: input.originalEntryId,
+      postingFingerprint,
+    });
+
+    return this.reversals.postReversal({
+      assertion,
+      businessId: input.businessId,
+      originalEntryId: input.originalEntryId,
+      entryDate,
+      reason: input.reason.trim(),
+      requestId: input.requestId ?? null,
+    });
+  }
+
+  /**
+   * The opening position (§22-§34).
+   *
+   * The merchant states positions; the engine derives the equity plug and
+   * therefore the journal. The base currency is READ from the business, never
+   * taken from the request, so a caller cannot denominate an opening balance
+   * in a currency the ledger does not use.
+   */
+  async openingBalance(
+    input: {
+      readonly tenantId: string;
+      readonly businessId: string;
+      readonly openingBalanceId: string;
+      readonly asOfDate: string;
+      readonly positions: readonly OpeningPosition[];
+      readonly description?: string | null;
+      readonly requestId?: string | null;
+    },
+    context: AuthorizedPostingContext,
+  ): Promise<PostingResult> {
+    // §31: an opening balance is stated at business level, with no branch
+    // dimension on any line. A member who holds only some branches therefore
+    // cannot state one — and this is the reason, written once, rather than a
+    // silent consequence of a branch check further down.
+    if (context.branchScope.mode !== 'all') {
+      throw new AccountingError('accounting.branch_scope_violation', 'an opening balance is stated at business level and needs business-wide authority', {
+        businessId: input.businessId,
+        sourceId: input.openingBalanceId,
+      });
+    }
+
+    const baseCurrency = await this.reader.readBusinessBaseCurrency({ tenantId: input.tenantId, businessId: input.businessId });
+    if (baseCurrency === null) {
+      throw new AccountingError('accounting.forbidden', 'the business does not exist', { businessId: input.businessId });
+    }
+
+    const lines = deriveOpeningBalanceLines(input.positions, baseCurrency, input.asOfDate);
+    const command: PostingCommand = {
+      tenantId: input.tenantId,
+      businessId: input.businessId,
+      sourceType: 'opening_balance',
+      sourceId: input.openingBalanceId,
+      entryDate: input.asOfDate,
+      lines,
+    };
+    validatePostingCommand(command);
+
+    const postingFingerprint = computeOpeningBalanceFingerprint(
+      { tenantId: input.tenantId, businessId: input.businessId, openingBalanceId: input.openingBalanceId, asOfDate: input.asOfDate },
+      lines,
+    );
+    const assertion = this.minter.mint({
+      actorUserId: context.actorUserId,
+      tenantId: input.tenantId,
+      businessId: input.businessId,
+      operationKind: 'post',
+      sourceType: 'opening_balance',
+      sourceId: input.openingBalanceId,
+      postingFingerprint,
+    });
+
+    return this.openingBalances.postOpeningBalance({
+      assertion,
+      businessId: input.businessId,
+      openingBalanceId: input.openingBalanceId,
+      asOfDate: input.asOfDate,
+      positions: input.positions,
+      description: input.description ?? null,
+      requestId: input.requestId ?? null,
+    });
   }
 }

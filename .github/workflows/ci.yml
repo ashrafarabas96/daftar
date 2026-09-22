@@ -155,6 +155,18 @@ jobs:
         run: npm run gate:phase2:s3
         env:
           PG_PORT: '5432'
+      # P2-S4 keeps the whole chain above as permanent predecessors and adds
+      # the three accounting-native sources: 0046/0047 present, nothing beyond
+      # them, both still candidates; the source tables and commands; no
+      # reversal marker on the journal; physical uniqueness for reversals and
+      # posted opening balances; supersession only after a reversal; G-4
+      # widened to protect EVERY journal writer; no bypass seam; exactly three
+      # merchant endpoints; and the source, concurrency, authority and upgrade
+      # matrices.
+      - name: Phase 2 slice gate — P2-S4
+        run: npm run gate:phase2:s4
+        env:
+          PG_PORT: '5432'
       - name: Tampered-migration hard-fail proof
         run: |
           set -e

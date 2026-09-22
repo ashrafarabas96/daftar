@@ -1,6 +1,7 @@
 import { ArgumentsHost, Catch, ExceptionFilter, HttpException, HttpStatus, Inject } from '@nestjs/common';
 import type { Response } from 'express';
 import { ZodError } from 'zod';
+import { AccountingError } from '@daftar/accounting';
 import { AppError, CountryPackError, CurrencyError, type ApiErrorBody, type ApiErrorCode } from '@daftar/domain-core';
 import { RateLimitError, RateLimiterUnavailableError } from '../infra/redis';
 import { getContext } from '../infra/request-context';
@@ -27,6 +28,14 @@ export class GlobalExceptionFilter implements ExceptionFilter {
 
     if (exception instanceof AppError) {
       body(exception.code, exception.message, exception.httpStatus, exception.details);
+      return;
+    }
+    // A refusal from the accounting authority (§49). The stable code is the
+    // contract; `toSafeJSON()` is the ONLY representation allowed out, and it
+    // carries identifiers alone — never an amount, a rate, a balance, an
+    // assertion, a SQLSTATE or the name of a unique index.
+    if (exception instanceof AccountingError) {
+      body('ACCOUNTING_REFUSED', 'The accounting authority refused this command', accountingStatus(exception.code), { ...exception.toSafeJSON() });
       return;
     }
     if (exception instanceof ZodError) {
@@ -92,4 +101,28 @@ export class GlobalExceptionFilter implements ExceptionFilter {
     this.logger.error({ err: exception, requestId }, 'unhandled error');
     body('INTERNAL_ERROR', 'Internal error', HttpStatus.INTERNAL_SERVER_ERROR);
   }
+}
+
+/**
+ * Stable code → HTTP status. The mapping is exhaustive by construction: a new
+ * accounting code that nobody classified lands on 400 rather than on 500, so
+ * an unclassified refusal is still a refusal and never reads as an outage.
+ */
+function accountingStatus(code: string): number {
+  if (code === 'accounting.forbidden' || code === 'accounting.branch_scope_violation' || code.startsWith('accounting.assertion_')) {
+    return HttpStatus.FORBIDDEN;
+  }
+  if (code === 'accounting.entry_not_found') return HttpStatus.NOT_FOUND;
+  if (
+    code === 'accounting.idempotency_conflict' ||
+    code === 'accounting.reversal_exists' ||
+    code === 'accounting.reversal_of_reversal' ||
+    code === 'accounting.opening_balance_exists' ||
+    code === 'accounting.opening_balance_state_invalid' ||
+    code === 'accounting.supersede_without_reversal' ||
+    code === 'accounting.source_immutable'
+  ) {
+    return HttpStatus.CONFLICT;
+  }
+  return HttpStatus.BAD_REQUEST;
 }

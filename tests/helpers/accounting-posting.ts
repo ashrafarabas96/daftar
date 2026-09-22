@@ -10,6 +10,13 @@
  */
 import { Client } from 'pg';
 import { computeCommandFingerprint } from '../../packages/accounting/src/post';
+import {
+  computeOpeningBalanceFingerprint,
+  computeReversalFingerprint,
+  deriveOpeningBalanceLines,
+  mirrorReversalLines,
+  type PostedEntrySnapshot,
+} from '../../packages/accounting/src/sources';
 import type { AccountRef, PostingLineCommand, PostingSide } from '../../packages/accounting/src/types';
 import { appDbUrl, mintTestAccountingAssertion } from './test-app';
 
@@ -285,4 +292,246 @@ export function simpleCommand(fx: PostingFixture, sourceId: string, entryDate: s
 export function must<T>(value: T | undefined | null, what = 'value'): T {
   if (value === undefined || value === null) throw new Error(`expected a ${what}, found none`);
   return value;
+}
+
+// ── P2-S4 sources ─────────────────────────────────────────────────────────
+//
+// Same discipline as everything above: every helper goes through the REAL
+// boundary, as `daftar_app`, carrying a real assertion minted with the real
+// key. Nothing here borrows the schema owner's identity or the internal
+// principal's, because a test that did would prove nothing about the path
+// production uses.
+
+/** Mint an assertion for a source command, with optional tampering. */
+export function sourceAssertion(
+  claims: {
+    actorUserId: string;
+    tenantId: string;
+    businessId: string;
+    operationKind: 'post' | 'reverse';
+    sourceType: string;
+    sourceId: string;
+    postingFingerprint: string;
+  },
+  mintedAt: Date = new Date(),
+  ttlSeconds = 60,
+): string {
+  return mintTestAccountingAssertion(claims, mintedAt, ttlSeconds);
+}
+
+/** Execute `accounting_post_manual_adjustment` as the merchant runtime. */
+export async function postAdjustmentAs(assertion: string, c: PostCommand, reason: string, client?: Client): Promise<PostOutcome> {
+  const own = client === undefined;
+  const conn = client ?? (await appClient());
+  try {
+    if (own) await conn.query('BEGIN');
+    await conn.query(`SELECT set_config('app.accounting_assertion', $1, true)`, [assertion]);
+    const r = await conn.query<{ entry_id: string; created: boolean }>(
+      `SELECT entry_id, created FROM accounting_post_manual_adjustment($1::date, $2, $3, $4, $5::jsonb)`,
+      [c.entryDate, c.description ?? null, reason, c.requestId ?? null, JSON.stringify(dbPayload(c.lines))],
+    );
+    if (own) await conn.query('COMMIT');
+    return { entryId: must(r.rows[0]).entry_id, created: must(r.rows[0]).created };
+  } catch (e) {
+    if (own) await conn.query('ROLLBACK').catch(() => undefined);
+    throw e;
+  } finally {
+    if (own) await conn.end().catch(() => undefined);
+  }
+}
+
+/** Execute `accounting_post_reversal` as the merchant runtime. */
+export async function postReversalAs(
+  assertion: string,
+  originalEntryId: string,
+  entryDate: string | null,
+  reason: string,
+  requestId: string | null = 'req-reversal',
+  client?: Client,
+): Promise<PostOutcome> {
+  const own = client === undefined;
+  const conn = client ?? (await appClient());
+  try {
+    if (own) await conn.query('BEGIN');
+    await conn.query(`SELECT set_config('app.accounting_assertion', $1, true)`, [assertion]);
+    const r = await conn.query<{ entry_id: string; created: boolean }>(`SELECT entry_id, created FROM accounting_post_reversal($1::uuid, $2::date, $3, $4)`, [
+      originalEntryId,
+      entryDate,
+      reason,
+      requestId,
+    ]);
+    if (own) await conn.query('COMMIT');
+    return { entryId: must(r.rows[0]).entry_id, created: must(r.rows[0]).created };
+  } catch (e) {
+    if (own) await conn.query('ROLLBACK').catch(() => undefined);
+    throw e;
+  } finally {
+    if (own) await conn.end().catch(() => undefined);
+  }
+}
+
+/** The position payload `accounting_open_balance_draft` accepts — ten keys, no branch. */
+export function positionPayload(lines: readonly PostLine[]): unknown[] {
+  return lines.map((l) => ({
+    account: l.account.kind === 'system' ? { kind: 'system', system_key: l.account.systemKey } : { kind: 'code', code: l.account.code },
+    side: l.side,
+    base_amount_minor: l.baseAmountMinor.toString(),
+    base_currency: l.baseCurrency,
+    txn_amount_minor: l.txnAmountMinor.toString(),
+    txn_currency: l.txnCurrency,
+    fx_rate: rate10(l.fxRate),
+    fx_rate_source: l.fxRateSource,
+    fx_rate_at: `${l.fxRateAt.toISOString().slice(0, 19)}Z`,
+    memo: l.memo ?? null,
+  }));
+}
+
+/** Open a draft and post it, in ONE transaction, exactly as the adapter does. */
+export async function postOpeningBalanceAs(
+  assertion: string,
+  input: { asOfDate: string; positions: readonly PostLine[]; openingBalanceId: string; description?: string | null; requestId?: string | null },
+  client?: Client,
+): Promise<PostOutcome> {
+  const own = client === undefined;
+  const conn = client ?? (await appClient());
+  try {
+    if (own) await conn.query('BEGIN');
+    await conn.query(`SELECT set_config('app.accounting_assertion', $1, true)`, [assertion]);
+    await conn.query(`SELECT accounting_open_balance_draft($1::date, $2::jsonb)`, [input.asOfDate, JSON.stringify(positionPayload(input.positions))]);
+    const r = await conn.query<{ entry_id: string; created: boolean }>(`SELECT entry_id, created FROM accounting_open_balance_post($1::uuid, $2, $3)`, [
+      input.openingBalanceId,
+      input.description ?? null,
+      input.requestId ?? 'req-opening',
+    ]);
+    if (own) await conn.query('COMMIT');
+    return { entryId: must(r.rows[0]).entry_id, created: must(r.rows[0]).created };
+  } catch (e) {
+    if (own) await conn.query('ROLLBACK').catch(() => undefined);
+    throw e;
+  } finally {
+    if (own) await conn.end().catch(() => undefined);
+  }
+}
+
+/**
+ * The fingerprint a reversal authority signs, built from the command that was
+ * posted rather than from a database read.
+ *
+ * That is deliberate: it makes every reversal case an independent derivation
+ * of the mirror, so a test passes only when the test's mirror, the engine's
+ * mirror and the database's mirror all agree. A helper that asked the database
+ * what the mirror should be would agree with the database by construction and
+ * prove nothing.
+ */
+export function reversalFingerprintOf(original: PostCommand, originalEntryId: string, entryDate: string): string {
+  const snapshot: PostedEntrySnapshot = {
+    entryId: originalEntryId,
+    tenantId: original.tenantId,
+    businessId: original.businessId,
+    sourceType: original.sourceType,
+    entryDate: original.entryDate,
+    lines: original.lines.map((l, i) => ({
+      lineNo: i + 1,
+      account: l.account,
+      side: l.side,
+      baseAmountMinor: l.baseAmountMinor,
+      baseCurrency: l.baseCurrency,
+      txnAmountMinor: l.txnAmountMinor,
+      txnCurrency: l.txnCurrency,
+      fxRate: rate10(l.fxRate),
+      fxRateSource: l.fxRateSource,
+      fxRateAt: l.fxRateAt,
+      branchId: l.branchId ?? null,
+      warehouseId: l.warehouseId ?? null,
+      memo: l.memo ?? null,
+    })),
+  };
+  return computeReversalFingerprint(snapshot, entryDate, mirrorReversalLines(snapshot));
+}
+
+/**
+ * The same fingerprint, for an entry whose lines the ENGINE derived rather
+ * than the caller — an opening balance, whose equity plug no test writes by
+ * hand. The snapshot still comes from the test's own derivation, so the
+ * mirror is independently computed exactly as it is above.
+ */
+export function reversalFingerprintOfSnapshot(snapshot: PostedEntrySnapshot, entryDate: string): string {
+  return computeReversalFingerprint(snapshot, entryDate, mirrorReversalLines(snapshot));
+}
+
+/** The posted shape of an opening balance, derived the way the engine derives it. */
+export function openingBalanceSnapshot(input: {
+  entryId: string;
+  tenantId: string;
+  businessId: string;
+  asOfDate: string;
+  baseCurrency: string;
+  positions: readonly PostLine[];
+}): PostedEntrySnapshot {
+  const lines = deriveOpeningBalanceLines(
+    input.positions.map((p) => ({
+      account: p.account,
+      side: p.side,
+      baseAmountMinor: p.baseAmountMinor,
+      baseCurrency: p.baseCurrency,
+      txnAmountMinor: p.txnAmountMinor,
+      txnCurrency: p.txnCurrency,
+      fxRate: rate10(p.fxRate),
+      fxRateSource: p.fxRateSource === 'provider' ? 'manual' : p.fxRateSource,
+      fxRateAt: p.fxRateAt,
+      memo: p.memo ?? null,
+    })),
+    input.baseCurrency,
+    input.asOfDate,
+  );
+  return {
+    entryId: input.entryId,
+    tenantId: input.tenantId,
+    businessId: input.businessId,
+    sourceType: 'opening_balance',
+    entryDate: input.asOfDate,
+    lines: lines.map((l, i) => ({
+      lineNo: i + 1,
+      account: l.account,
+      side: l.side,
+      baseAmountMinor: l.baseAmountMinor,
+      baseCurrency: l.baseCurrency,
+      txnAmountMinor: l.txnAmountMinor,
+      txnCurrency: l.txnCurrency,
+      fxRate: l.fxRate,
+      fxRateSource: l.fxRateSource,
+      fxRateAt: l.fxRateAt,
+      branchId: null,
+      warehouseId: null,
+      memo: l.memo ?? null,
+    })),
+  };
+}
+
+/** The fingerprint an opening-balance authority signs, over the engine-derived lines. */
+export function openingBalanceFingerprintOf(input: {
+  tenantId: string;
+  businessId: string;
+  openingBalanceId: string;
+  asOfDate: string;
+  baseCurrency: string;
+  positions: readonly PostLine[];
+}): string {
+  const lines = deriveOpeningBalanceLines(
+    input.positions.map((p) => ({
+      account: p.account,
+      side: p.side,
+      baseAmountMinor: p.baseAmountMinor,
+      baseCurrency: p.baseCurrency,
+      txnAmountMinor: p.txnAmountMinor,
+      txnCurrency: p.txnCurrency,
+      fxRate: rate10(p.fxRate),
+      fxRateSource: p.fxRateSource === 'provider' ? 'manual' : p.fxRateSource,
+      fxRateAt: p.fxRateAt,
+      memo: p.memo ?? null,
+    })),
+    input.baseCurrency,
+    input.asOfDate,
+  );
+  return computeOpeningBalanceFingerprint(input, lines);
 }

@@ -188,10 +188,26 @@ describe('the engine binds authority to the payload (§27, §54)', () => {
     };
   };
 
+  /**
+   * The engine under test, with every source port stubbed. P2-S4 gave the
+   * engine three more workflows; the posting behaviour these cases pin is
+   * unchanged, so they build it through one helper rather than restating the
+   * dependency list six times.
+   */
+  const engineWith = (port: AccountingPostingPort): AccountingEngine =>
+    new AccountingEngine(
+      minter,
+      port,
+      { postAdjustment: async () => ({ entryId: SOURCE, created: true }) },
+      { postReversal: async () => ({ entryId: SOURCE, created: true }) },
+      { postOpeningBalance: async () => ({ entryId: SOURCE, created: true }) },
+      { readEntry: async () => null, readBusinessBaseCurrency: async () => 'ILS', readBusinessToday: async () => '2026-09-22' },
+    );
+
   it('mints an assertion over the fingerprint of the ACTUAL command', async () => {
     const { port, seen } = capturingPort();
     const cmd = command();
-    await new AccountingEngine(minter, port).post(cmd, { actorUserId: ACTOR, branchScope: { mode: 'all' } });
+    await engineWith(port).post(cmd, { actorUserId: ACTOR, branchScope: { mode: 'all' } });
     expect(seen).toHaveLength(1);
     const parts = must(seen[0]).assertion.split('.');
     expect(parts[8]).toBe(computeCommandFingerprint(cmd));
@@ -205,7 +221,7 @@ describe('the engine binds authority to the payload (§27, §54)', () => {
     // nowhere to put it: PostingCommand has no actor field at all.
     const cmd = command() as PostingCommand & { actorUserId?: string };
     cmd.actorUserId = '00000000-0000-4000-8000-000000000000';
-    await new AccountingEngine(minter, port).post(cmd, { actorUserId: ACTOR, branchScope: { mode: 'all' } });
+    await engineWith(port).post(cmd, { actorUserId: ACTOR, branchScope: { mode: 'all' } });
     expect(must(seen[0]).assertion.split('.')[2]).toBe(ACTOR);
   });
 
@@ -213,7 +229,7 @@ describe('the engine binds authority to the payload (§27, §54)', () => {
     const { port, seen } = capturingPort();
     const mint = vi.spyOn(minter, 'mint');
     const bad = command({ lines: [line(), line({ side: 'C', baseAmountMinor: 1n, txnAmountMinor: 1n })] });
-    await expect(new AccountingEngine(minter, port).post(bad, { actorUserId: ACTOR, branchScope: { mode: 'all' } })).rejects.toThrow(AccountingError);
+    await expect(engineWith(port).post(bad, { actorUserId: ACTOR, branchScope: { mode: 'all' } })).rejects.toThrow(AccountingError);
     expect(mint).not.toHaveBeenCalled();
     expect(seen).toHaveLength(0);
     mint.mockRestore();
@@ -222,9 +238,9 @@ describe('the engine binds authority to the payload (§27, §54)', () => {
   it('refuses before minting when branch scope is violated', async () => {
     const { port, seen } = capturingPort();
     const mint = vi.spyOn(minter, 'mint');
-    await expect(
-      new AccountingEngine(minter, port).post(command(), { actorUserId: ACTOR, branchScope: { mode: 'assigned', allowedBranchIds: [BRANCH_A] } }),
-    ).rejects.toThrow(AccountingError);
+    await expect(engineWith(port).post(command(), { actorUserId: ACTOR, branchScope: { mode: 'assigned', allowedBranchIds: [BRANCH_A] } })).rejects.toThrow(
+      AccountingError,
+    );
     expect(mint).not.toHaveBeenCalled();
     expect(seen).toHaveLength(0);
     mint.mockRestore();
@@ -232,13 +248,16 @@ describe('the engine binds authority to the payload (§27, §54)', () => {
 
   it('returns the database result verbatim, including an idempotent replay', async () => {
     const port: AccountingPostingPort = { postEntry: async () => ({ entryId: '5e8c6bfe-6fe5-11d2-9a0c-0305e82c3305', created: false }) };
-    const result = await new AccountingEngine(minter, port).post(command(), { actorUserId: ACTOR, branchScope: { mode: 'all' } });
+    const result = await engineWith(port).post(command(), { actorUserId: ACTOR, branchScope: { mode: 'all' } });
     expect(result).toEqual({ entryId: '5e8c6bfe-6fe5-11d2-9a0c-0305e82c3305', created: false });
   });
 
-  it('exposes only post() — no reverse, ledger, balance or trial balance yet (§10)', () => {
-    const engine = new AccountingEngine(minter, { postEntry: async () => ({ entryId: SOURCE, created: true }) });
+  it('exposes exactly the four P2-S4 workflows — no ledger, balance, trial balance or trusted path', () => {
+    const engine = engineWith({ postEntry: async () => ({ entryId: SOURCE, created: true }) });
     const surface = Object.getOwnPropertyNames(Object.getPrototypeOf(engine)).filter((n) => n !== 'constructor');
-    expect(surface).toEqual(['post']);
+    // The list is asserted EXACTLY, in order. A future slice that quietly
+    // adds `postTrusted`, `systemPost`, `rawWrite` or a read model to this
+    // class fails here before it reaches a reviewer (§38, §39).
+    expect(surface).toEqual(['post', 'adjust', 'reverse', 'openingBalance']);
   });
 });

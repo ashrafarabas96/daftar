@@ -76,13 +76,13 @@ function migrationsUpTo(upTo: string): string {
 
 const admin = new Pool({ connectionString: dbUrl, max: 1 });
 
-describe('managed PostgreSQL: 0039 → 0045 under a non-superuser migration principal', () => {
+describe('managed PostgreSQL: 0039 → 0047 under a non-superuser migration principal', () => {
   afterAll(async () => {
     await admin.query(`DROP DATABASE IF EXISTS ${SCRATCH_DB} WITH (FORCE)`).catch(() => undefined);
     await admin.end();
   });
 
-  it('applies 0040 through 0045 with no superuser anywhere in the path', async () => {
+  it('applies 0040 through 0047 with no superuser anywhere in the path', async () => {
     await ensurePostgres();
     await admin.query(`DROP DATABASE IF EXISTS ${SCRATCH_DB} WITH (FORCE)`);
     await admin.query(`CREATE DATABASE ${SCRATCH_DB}`);
@@ -178,6 +178,8 @@ describe('managed PostgreSQL: 0039 → 0045 under a non-superuser migration prin
         '0043_accounting_invariants.sql',
         '0044_accounting_assertion_keys.sql',
         '0045_accounting_post_entry.sql',
+        '0046_accounting_sources.sql',
+        '0047_accounting_opening_balances.sql',
       ]);
 
       // The ALTER FUNCTION ownership transfer was legitimate, not bypassed.

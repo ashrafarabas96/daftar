@@ -27,8 +27,17 @@
 import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import { AccountingError } from './errors';
 
-/** Only one operation kind exists in P2-S3. Speculative kinds are not registered (§14). */
-export type AccountingOperationKind = 'post';
+/**
+ * The operation kinds that exist. P2-S3 registered one; P2-S4 registers
+ * `reverse`, because a reversal is written by a different routine under
+ * different rules and an assertion minted to post must not be able to drive
+ * it. Which kind may carry which source identity is data in the database's
+ * `accounting_operation_kinds` registry, not a rule duplicated here.
+ * Speculative kinds are still not registered.
+ */
+export type AccountingOperationKind = 'post' | 'reverse';
+
+export const ACCOUNTING_OPERATION_KINDS: readonly AccountingOperationKind[] = ['post', 'reverse'];
 
 export interface AccountingAssertionKey {
   readonly kid: string;
@@ -125,7 +134,7 @@ export function mintAccountingAssertion(
   if (!UUID_RE.test(claims.businessId)) reject('requires a business uuid');
   if (!UUID_RE.test(claims.sourceId)) reject('requires a source uuid');
   if (!/^[0-9a-f]{64}$/i.test(claims.postingFingerprint)) reject('requires a sha-256 posting fingerprint');
-  if (claims.operationKind !== 'post') reject('supports only the post operation kind');
+  if (!ACCOUNTING_OPERATION_KINDS.includes(claims.operationKind)) reject('names an unregistered operation kind');
   if (!/^[a-z_]{1,64}$/.test(claims.sourceType)) reject('requires a registered source type');
   // The TTL is BOUNDED, not merely defaulted. `ttlSeconds` exists so a test
   // can mint a shorter-lived assertion, and a parameter that only tests are

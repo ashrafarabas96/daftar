@@ -120,7 +120,9 @@ describe('G-4 — who may reach the writer', () => {
   it('refuses a migration handing a runtime role direct ledger DML', () => {
     for (const role of ['daftar_app', 'daftar_worker', 'daftar_platform']) {
       const widened = `${schema()}\nGRANT INSERT ON journal_lines TO ${role};`;
-      expect(findPostingSurfaceViolations({ schema: widened, ...clean }).join('\n'), role).toMatch(new RegExp(`grants ${role} direct DML on the ledger`));
+      expect(findPostingSurfaceViolations({ schema: widened, ...clean }).join('\n'), role).toMatch(
+        new RegExp(`grants ${role} direct DML inside the ledger perimeter`),
+      );
     }
   });
 });
@@ -135,7 +137,7 @@ describe('G-4 — application code may CALL the writer and never replace it', ()
     it(`refuses application code that updates or deletes ${table}`, () => {
       for (const sql of [`UPDATE ${table} SET x = 1`, `DELETE FROM ${table}`, `TRUNCATE ${table}`]) {
         const appFiles = { 'apps/api/src/x.ts': `await c.query(\`${sql}\`);` };
-        expect(findPostingSurfaceViolations({ schema: schema(), appFiles }).join('\n'), sql).toMatch(/may only CALL accounting_post_entry/);
+        expect(findPostingSurfaceViolations({ schema: schema(), appFiles }).join('\n'), sql).toMatch(/may only CALL the accounting commands/);
       }
     });
   }

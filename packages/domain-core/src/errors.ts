@@ -32,6 +32,11 @@ export type ApiErrorCode =
   | 'PLAN_LIMIT_EXCEEDED'
   | 'FEATURE_NOT_ENTITLED'
   | 'ROLE_IN_USE'
+  // The accounting authority refused a command. The stable `accounting.*`
+  // code travels in `details.accountingCode`: one HTTP contract, and a
+  // machine-readable reason underneath it that the ledger and the client
+  // share word for word.
+  | 'ACCOUNTING_REFUSED'
   | 'INTERNAL_ERROR';
 
 export interface ApiErrorBody {

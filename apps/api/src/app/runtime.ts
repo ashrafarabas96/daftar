@@ -26,6 +26,9 @@ import { AccountingEngine } from '@daftar/accounting';
 import { AccountingAssertionMinterService } from '../modules/accounting/accounting-assertion.minter';
 import { DatabaseAccountingPostingAdapter } from '../modules/accounting/accounting-posting.adapter';
 import { AccountingPostingService } from '../modules/accounting/accounting-posting.service';
+import { DatabaseAccountingSourcesAdapter } from '../modules/accounting/accounting-sources.adapter';
+import { DatabaseAccountingLedgerReader } from '../modules/accounting/accounting-ledger.reader';
+import { AccountingSourcesService } from '../modules/accounting/accounting-sources.service';
 
 /**
  * RUNTIME COMPOSITION (Phase 1 Completion Directive §15–20).
@@ -134,13 +137,20 @@ export function accountingProviders(): Provider[] {
   return [
     AccountingAssertionMinterService,
     DatabaseAccountingPostingAdapter,
+    DatabaseAccountingSourcesAdapter,
+    DatabaseAccountingLedgerReader,
     {
       provide: AccountingEngine,
-      useFactory: (minter: AccountingAssertionMinterService, posting: DatabaseAccountingPostingAdapter): AccountingEngine =>
-        new AccountingEngine(minter, posting),
-      inject: [AccountingAssertionMinterService, DatabaseAccountingPostingAdapter],
+      useFactory: (
+        minter: AccountingAssertionMinterService,
+        posting: DatabaseAccountingPostingAdapter,
+        sources: DatabaseAccountingSourcesAdapter,
+        reader: DatabaseAccountingLedgerReader,
+      ): AccountingEngine => new AccountingEngine(minter, posting, sources, sources, sources, reader),
+      inject: [AccountingAssertionMinterService, DatabaseAccountingPostingAdapter, DatabaseAccountingSourcesAdapter, DatabaseAccountingLedgerReader],
     },
     AccountingPostingService,
+    AccountingSourcesService,
   ];
 }
 

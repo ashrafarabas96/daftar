@@ -387,3 +387,88 @@ export { formatMinor, minorUnitsOf, parseMajorToMinor } from './money';
 /** RBAC permission registry (contract primitive): the exact keys the API accepts in role definitions. */
 export { PERMISSIONS } from '@daftar/domain-core';
 export type { Permission } from '@daftar/domain-core';
+
+// ── Accounting sources (P2-S4) ────────────────────────────────────────────
+//
+// Every amount here is a STRING of minor units and every rate is a decimal
+// STRING. Nothing financial ever crosses this boundary as a JSON number: a
+// double cannot hold an LBP balance or a ten-digit rate exactly, and a single
+// implicit coercion would be unrecoverable once it reached the ledger.
+
+/** How a line names its account: a stable system key, or the business's own chart code. */
+export type AccountingAccountRefDto = { kind: 'system'; systemKey: string } | { kind: 'code'; code: string };
+
+/** One line of a merchant-stated journal command. */
+export interface AccountingLineDto {
+  account: AccountingAccountRefDto;
+  side: 'D' | 'C';
+  /** Minor units of the business's base currency, as a decimal string. */
+  baseAmountMinor: string;
+  baseCurrency: string;
+  txnAmountMinor: string;
+  txnCurrency: string;
+  /** Decimal string, at most ten fraction digits. */
+  fxRate: string;
+  fxRateSource: 'base' | 'manual' | 'provider';
+  /** RFC3339 UTC at second precision, e.g. `2026-09-22T10:00:00Z`. */
+  fxRateAt: string;
+  branchId?: string | null;
+  warehouseId?: string | null;
+  memo?: string | null;
+}
+
+/** `POST /v1/businesses/:businessId/accounting/adjustments` */
+export interface AccountingAdjustmentCreateDto {
+  /** Civil date in the business's timezone, `YYYY-MM-DD`. Never in the future. */
+  entryDate: string;
+  description?: string | null;
+  /** Mandatory: a correction nobody explained is a correction nobody can review. */
+  reason: string;
+  lines: AccountingLineDto[];
+}
+
+/** `POST /v1/businesses/:businessId/accounting/entries/:entryId/reversals` */
+export interface AccountingReversalCreateDto {
+  /**
+   * `YYYY-MM-DD`, on or after the original entry's date and never in the
+   * future. Omitted means today in the business's timezone.
+   */
+  entryDate?: string | null;
+  reason: string;
+}
+
+/** One position of an opening balance. No branch, no warehouse: it is stated at business level. */
+export interface AccountingOpeningPositionDto {
+  account: AccountingAccountRefDto;
+  side: 'D' | 'C';
+  baseAmountMinor: string;
+  baseCurrency: string;
+  txnAmountMinor: string;
+  txnCurrency: string;
+  fxRate: string;
+  /** `base` for a domestic position, `manual` for a foreign one. */
+  fxRateSource: 'base' | 'manual';
+  fxRateAt: string;
+  memo?: string | null;
+}
+
+/** `POST /v1/businesses/:businessId/accounting/opening-balance` */
+export interface AccountingOpeningBalanceCreateDto {
+  /** `YYYY-MM-DD`. May predate DAFTAR by any amount; never in the future. */
+  asOfDate: string;
+  description?: string | null;
+  /** The equity plug is computed by the engine and may not appear here. */
+  positions: AccountingOpeningPositionDto[];
+}
+
+/**
+ * What every accounting command returns.
+ *
+ * `created` distinguishes new truth from an idempotent replay: `false` means
+ * the identical command had already been recorded and this call changed
+ * nothing.
+ */
+export interface AccountingEntryRefDto {
+  entryId: string;
+  created: boolean;
+}

@@ -44,6 +44,18 @@ export const ACCOUNTING_REGISTRY_TABLES = ['accounting_source_types', 'accountin
 /** The P2-S3 assertion key domain. No runtime role may touch either (§15, §58). */
 export const ASSERTION_TABLES = ['accounting_assertion_keys', 'accounting_assertion_uses'] as const;
 
+/**
+ * The P2-S4 source tables. Every runtime role that can read the journal can
+ * read these — a reversal and an opening balance are meant to be visible —
+ * and none of them may write one.
+ */
+export const SOURCE_TABLES = [
+  'accounting_manual_adjustments',
+  'accounting_reversals',
+  'accounting_opening_balances',
+  'accounting_opening_balance_lines',
+] as const;
+
 /** Every role an application runtime authenticates as. */
 export const RUNTIME_ROLES = ['daftar_app', 'daftar_platform', 'daftar_worker', 'daftar_resolver', 'daftar_identity', 'daftar_provisioner'] as const;
 
@@ -81,6 +93,31 @@ export const INTENDED_TABLE_GRANTS: Readonly<Record<string, Readonly<Record<stri
   accounting_system_actors: {},
   accounting_assertion_keys: { [INTERNAL_ROLE]: ['INSERT', 'SELECT', 'UPDATE'] },
   accounting_assertion_uses: { [INTERNAL_ROLE]: ['DELETE', 'INSERT', 'SELECT'] },
+  // P2-S4. The two append-only detail tables carry the same shape as the
+  // journal: the writer inserts and can never rewrite what it wrote.
+  accounting_manual_adjustments: { daftar_app: ['SELECT'], daftar_platform: ['SELECT'], daftar_worker: ['SELECT'], [INTERNAL_ROLE]: ['INSERT', 'SELECT'] },
+  accounting_reversals: { daftar_app: ['SELECT'], daftar_platform: ['SELECT'], daftar_worker: ['SELECT'], [INTERNAL_ROLE]: ['INSERT', 'SELECT'] },
+  // The opening balance is the ONE place the internal authority holds UPDATE
+  // and DELETE, and the reason is stated in 0047 section 6: a draft is a
+  // workflow record nobody has relied on, its financial content freezes the
+  // moment a journal entry exists for it, and the state triggers then admit
+  // exactly one status change and nothing else. No runtime role holds either
+  // privilege in any state, which is the invariant that matters.
+  accounting_opening_balances: {
+    daftar_app: ['SELECT'],
+    daftar_platform: ['SELECT'],
+    daftar_worker: ['SELECT'],
+    [INTERNAL_ROLE]: ['DELETE', 'INSERT', 'SELECT', 'UPDATE'],
+  },
+  accounting_opening_balance_lines: {
+    daftar_app: ['SELECT'],
+    daftar_platform: ['SELECT'],
+    daftar_worker: ['SELECT'],
+    [INTERNAL_ROLE]: ['DELETE', 'INSERT', 'SELECT', 'UPDATE'],
+  },
+  // Reference data: which signed operation kind may create which source.
+  // Readable by the writer, writable by nobody at runtime.
+  accounting_operation_kinds: { [INTERNAL_ROLE]: ['SELECT'] },
 };
 
 /**
@@ -108,6 +145,21 @@ export const ACCOUNTING_ROUTINES = [
   // principal instead.
   'accounting_account_lock_key',
   'accounts_posting_stability',
+  // P2-S4 internals. `accounting_post_reversal` is deliberately absent for the
+  // same reason `accounting_post_entry` is: it is a surface the merchant
+  // runtime may execute, and it is modelled below.
+  'accounting_reversal_entry_complete',
+  'accounting_manual_adjustments_immutable',
+  'accounting_reversals_immutable',
+  'accounting_opening_balance_entry_complete',
+  'accounting_opening_balances_state',
+  'accounting_opening_balance_lines_state',
+  'accounting_opening_balance_check_payload',
+  'accounting_opening_balance_authority',
+  // Retiring an opening position is only ever correct as part of posting its
+  // replacement, so it is a step of `accounting_open_balance_post` and not a
+  // verb anyone can reach on its own.
+  'accounting_open_balance_supersede',
 ] as const;
 
 /**
@@ -124,6 +176,16 @@ export const RUNTIME_CALLABLE_ROUTINES: Readonly<Record<string, readonly string[
   accounting_post_entry: ['daftar_app'],
   accounting_assertion_key_install: ['daftar_platform'],
   accounting_assertion_key_retire: ['daftar_platform'],
+  // P2-S4: the four merchant commands and the draft lifecycle. Each one is
+  // assertion-gated, each one narrows to exactly one source identity, and the
+  // platform credential reaches none of them — platform administration is not
+  // financial authority.
+  accounting_post_manual_adjustment: ['daftar_app'],
+  accounting_post_reversal: ['daftar_app'],
+  accounting_open_balance_draft: ['daftar_app'],
+  accounting_open_balance_edit: ['daftar_app'],
+  accounting_open_balance_discard: ['daftar_app'],
+  accounting_open_balance_post: ['daftar_app'],
 };
 
 /**
@@ -157,7 +219,7 @@ export interface LiveTableGrant {
 const key = (g: LiveTableGrant): string => `${g.grantee} ${g.privilege} ON ${g.table}`;
 
 /** The tables this model governs. */
-export const WATCHED_TABLES = [...JOURNAL_TABLES, ...ACCOUNTING_REGISTRY_TABLES, ...ASSERTION_TABLES] as const;
+export const WATCHED_TABLES = [...JOURNAL_TABLES, ...ACCOUNTING_REGISTRY_TABLES, ...ASSERTION_TABLES, ...SOURCE_TABLES, 'accounting_operation_kinds'] as const;
 
 /**
  * Compare a live catalogue snapshot against the intended model. Returns one

@@ -282,6 +282,8 @@ describe('migration upgrade path: pre-encryption schema → latest (§13–16)',
         '0043_accounting_invariants.sql',
         '0044_accounting_assertion_keys.sql',
         '0045_accounting_post_entry.sql',
+        '0046_accounting_sources.sql',
+        '0047_accounting_opening_balances.sql',
       ]);
 
       // Every existing business now holds all 21 required system accounts,
@@ -349,7 +351,7 @@ describe('migration upgrade path: pre-encryption schema → latest (§13–16)',
   /**
    * P2-S2/P2-S3 (directive §41, §73): the upgrade path every deployment that
    * already ran P2-S1 will take. The checkpoint is the FROZEN P2-S1 boundary —
-   * 0041 — and what follows must be exactly the four migrations of the two
+   * 0041 — and what follows must be exactly the six migrations of the three
    * slices since, must leave the journal writable by no RUNTIME credential,
    * and must be a no-op on a second run.
    *
@@ -358,7 +360,7 @@ describe('migration upgrade path: pre-encryption schema → latest (§13–16)',
    * principal classes rather than asserting a sentence that was true only
    * while no writer had shipped.
    */
-  it('compatibility matrix (P2-S2 §41 / P2-S3 §73): frozen 0041-checkpoint + existing business → 0042…0045, one writer, rerun no-op', async () => {
+  it('compatibility matrix (P2-S2 §41 / P2-S3 §73 / P2-S4 §52): frozen 0041-checkpoint + existing business → 0042…0047, one writer per slice, rerun no-op', async () => {
     await ensurePostgres();
     const db5 = 'daftar_upgrade_0041';
     await admin.query(`DROP DATABASE IF EXISTS ${db5} WITH (FORCE)`);
@@ -397,13 +399,15 @@ describe('migration upgrade path: pre-encryption schema → latest (§13–16)',
       ).rows[0];
       expect((await pool.query<{ n: number }>(`SELECT count(*)::int AS n FROM accounts WHERE business_id = $1`, [biz?.id])).rows[0]?.n).toBe(21);
 
-      // Exactly the four migrations of P2-S2 and P2-S3 follow the frozen
+      // Exactly the six migrations of P2-S2, P2-S3 and P2-S4 follow the frozen
       // P2-S1 boundary, in order.
       expect(await runMigrations(url5)).toEqual([
         '0042_accounting_journal.sql',
         '0043_accounting_invariants.sql',
         '0044_accounting_assertion_keys.sql',
         '0045_accounting_post_entry.sql',
+        '0046_accounting_sources.sql',
+        '0047_accounting_opening_balances.sql',
       ]);
 
       // The closed registries came out with the shape the slice specifies:

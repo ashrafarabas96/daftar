@@ -13,6 +13,7 @@ import { CatalogService } from '../modules/catalog/catalog.service';
 import { MediaService } from '../modules/catalog/media.service';
 import { CatalogController } from '../modules/catalog/catalog.controller';
 import { PlatformController, HealthController } from '../modules/platform/platform.controller';
+import { AccountingController } from '../modules/accounting/accounting.controller';
 
 /**
  * MERCHANT PROCESS (Directive §16). Composes the merchant HTTP surface and
@@ -31,7 +32,7 @@ export class MerchantApiModule implements NestModule {
     return {
       module: MerchantApiModule,
       imports: httpImports(),
-      controllers: [AuthController, TenancyController, CatalogController, PlatformController, HealthController, EntitlementsController],
+      controllers: [AuthController, TenancyController, CatalogController, PlatformController, HealthController, EntitlementsController, AccountingController],
       providers: [
         ...coreProviders(config),
         ...httpProviders(config, TenancyService),

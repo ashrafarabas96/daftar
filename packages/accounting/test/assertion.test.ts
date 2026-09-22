@@ -107,8 +107,15 @@ describe('accounting assertion — refusals at mint time', () => {
     });
   }
 
-  it('refuses an operation kind other than post — no speculative kinds', () => {
-    expect(() => mintAccountingAssertion(key, { ...claims, operationKind: 'reverse' as 'post' })).toThrow(AccountingError);
+  it('mints the two REGISTERED operation kinds and refuses every other — no speculative kinds', () => {
+    // P2-S4 registered `reverse`, because a reversal is written by a
+    // different routine under different rules and a posting authority must
+    // not be able to drive it. Nothing else is registered: a kind that no
+    // database routine accepts is a kind that can only confuse a reader.
+    expect(() => mintAccountingAssertion(key, { ...claims, operationKind: 'reverse' })).not.toThrow();
+    for (const speculative of ['open', 'close', 'period', 'adjust', 'POST', '']) {
+      expect(() => mintAccountingAssertion(key, { ...claims, operationKind: speculative as 'post' })).toThrow(AccountingError);
+    }
   });
 
   /**

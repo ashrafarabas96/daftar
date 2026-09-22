@@ -341,6 +341,13 @@ describe('AL-01 — the binding is deferred in BOTH directions', () => {
     // Binding first, entry second. A non-deferred FK would reject the binding
     // the moment it is written; this is what "DEFERRABLE INITIALLY DEFERRED"
     // actually buys, and the reason it is worth testing rather than declaring.
+    //
+    // The source type is `manual_adjustment` because P2-S4 gave `reversal`
+    // and `opening_balance` deferred completeness triggers of their own: an
+    // entry of either type must also carry its detail row. That is a
+    // SEPARATE rule from the one under test here, and naming one of those
+    // types would make this case prove two things and fail for the wrong
+    // reason. `manual_adjustment` isolates the deferred binding by itself.
     const client = await owner();
     const entryId = randomUUID();
     const sourceId = randomUUID();
@@ -348,12 +355,12 @@ describe('AL-01 — the binding is deferred in BOTH directions', () => {
       await client.query('BEGIN');
       await client.query(
         `INSERT INTO accounting_source_bindings (tenant_id, business_id, source_type, source_id, journal_entry_id)
-         VALUES ($1,$2,'opening_balance',$3,$4)`,
+         VALUES ($1,$2,'manual_adjustment',$3,$4)`,
         [fx.tenantId, fx.businessId, sourceId, entryId],
       );
       await client.query(
         `INSERT INTO journal_entries (tenant_id, business_id, id, entry_date, source_type, source_id, actor_kind, actor_user_id, posting_fingerprint)
-         VALUES ($1,$2,$3,'2026-09-02','opening_balance',$4,'user',$5,$6)`,
+         VALUES ($1,$2,$3,'2026-09-02','manual_adjustment',$4,'user',$5,$6)`,
         [fx.tenantId, fx.businessId, entryId, sourceId, fx.userId, FINGERPRINT],
       );
       for (const line of balancedLines(4200)) await client.query(INSERT_LINE, lineValues(line, entryId));

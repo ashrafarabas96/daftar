@@ -278,17 +278,24 @@ describe('the accounting routine surface — exactly one runtime entry point (§
     expect(rows.map((r) => r.name).sort()).toEqual([...REQUIRED_P2_S3_SURFACES].sort());
   });
 
-  it('no SECOND ledger write routine slipped in under another name', async () => {
+  it('no ledger write routine slipped in under another name', async () => {
     // Anything that both names the journal and writes to it is a writer,
-    // whatever it is called. There must be exactly one, and it must be the one
-    // this slice reviewed. Read from pg_proc's own source text.
+    // whatever it is called. The list is asserted EXACTLY, from pg_proc's own
+    // source text, so a third writer added by a future slice fails here on the
+    // day it is written.
+    //
+    // P2-S4 added the second one deliberately: a reversal must succeed against
+    // an account that has since been deactivated, and the frozen primitive
+    // refuses one. Guard G-4 was widened in the same slice, from "protect
+    // accounting_post_entry" to "protect every routine capable of a journal
+    // write", so this list growing is not the protection weakening.
     const { rows } = await ownerPool().query<{ proname: string }>(
       `SELECT p.proname FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
         WHERE n.nspname = 'public'
           AND p.prosrc ~* '(insert|update|delete)[[:space:]]+(into[[:space:]]+)?(journal_entries|journal_lines|accounting_source_bindings)'
         ORDER BY p.proname`,
     );
-    expect(rows.map((r) => r.proname)).toEqual(['accounting_post_entry']);
+    expect(rows.map((r) => r.proname)).toEqual(['accounting_post_entry', 'accounting_post_reversal']);
   });
 });
 
@@ -312,7 +319,15 @@ describe('RLS is real on the ledger', () => {
       `SELECT tablename, cmd, qual, with_check AS withcheck FROM pg_policies
         WHERE schemaname = 'public' AND policyname = 'accounting_validator' ORDER BY tablename`,
     );
-    expect(rows).toHaveLength(3);
+    // Three journal tables plus the two P2-S4 detail tables. The count is
+    // asserted so a policy appearing on a table nobody reviewed fails here.
+    expect(rows.map((r) => r.tablename)).toEqual([
+      'accounting_manual_adjustments',
+      'accounting_reversals',
+      'accounting_source_bindings',
+      'journal_entries',
+      'journal_lines',
+    ]);
     for (const row of rows) {
       expect(row.cmd).toBe('SELECT');
       expect(row.qual).toMatch(/daftar_accounting_internal/);

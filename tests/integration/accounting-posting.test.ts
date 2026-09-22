@@ -8,7 +8,10 @@ import {
   fingerprintOf,
   post,
   postAs,
+  postReversalAs,
   refusal,
+  reversalFingerprintOf,
+  sourceAssertion,
   seedPostingFixture,
   simpleCommand,
   todayIn,
@@ -391,16 +394,34 @@ describe('the posting date policy is data, not a hardcoded branch (§43, §44)',
   });
 
   it('refuses a reversal dated before the entry it reverses, and permits one dated on or after it', async () => {
-    const origin = await post({ ...cmd(), entryDate: '2025-06-10' }, fx.userId);
-    const before: PostCommand = { ...cmd(origin.entryId, 'reversal'), entryDate: '2025-06-09' };
-    expect(await refusal(() => post(before, fx.userId))).toMatch(/entry_date_before_original/);
+    // The `not_before_origin` lower bound is a COLUMN on
+    // accounting_source_types, and this case is what proves it is read rather
+    // than hardcoded. P2-S4 moved reversals onto their own writer, so the
+    // case now drives that writer — but the rule it proves is unchanged, and
+    // accounting_post_reversal reads the same registry row that
+    // accounting_post_entry does. Were the bound ever inlined in either
+    // writer, this case would still be the one that notices.
+    const reverseAt = async (original: { entryId: string }, originalCmd: PostCommand, date: string): Promise<{ created: boolean }> => {
+      const assertion = sourceAssertion({
+        actorUserId: fx.userId,
+        tenantId: fx.tenantId,
+        businessId: fx.businessId,
+        operationKind: 'reverse',
+        sourceType: 'reversal',
+        sourceId: original.entryId,
+        postingFingerprint: reversalFingerprintOf(originalCmd, original.entryId, date),
+      });
+      return postReversalAs(assertion, original.entryId, date, 'date policy regression', randomUUID());
+    };
 
-    const sameDay: PostCommand = { ...cmd(origin.entryId, 'reversal'), entryDate: '2025-06-10' };
-    expect((await post(sameDay, fx.userId)).created).toBe(true);
+    const originCmd: PostCommand = { ...cmd(), entryDate: '2025-06-10' };
+    const origin = await post(originCmd, fx.userId);
+    expect(await refusal(() => reverseAt(origin, originCmd, '2025-06-09'))).toMatch(/entry_date_before_original/);
+    expect((await reverseAt(origin, originCmd, '2025-06-10')).created).toBe(true);
 
-    const origin2 = await post({ ...cmd(), entryDate: '2025-06-10' }, fx.userId);
-    const after: PostCommand = { ...cmd(origin2.entryId, 'reversal'), entryDate: '2025-06-11' };
-    expect((await post(after, fx.userId)).created).toBe(true);
+    const origin2Cmd: PostCommand = { ...cmd(), entryDate: '2025-06-10' };
+    const origin2 = await post(origin2Cmd, fx.userId);
+    expect((await reverseAt(origin2, origin2Cmd, '2025-06-11')).created).toBe(true);
   });
 
   it('refuses a source type the registry does not carry', async () => {

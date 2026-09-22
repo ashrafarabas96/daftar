@@ -40,7 +40,21 @@ export type AccountingErrorCode =
   | 'accounting.entry_date_in_future'
   | 'accounting.entry_date_before_original'
   // Idempotency (§45-§49)
-  | 'accounting.idempotency_conflict';
+  | 'accounting.idempotency_conflict'
+  // Sources — P2-S4 (§10-§34, §49)
+  | 'accounting.assertion_wrong_source'
+  | 'accounting.adjustment_reason_required'
+  | 'accounting.reversal_reason_required'
+  | 'accounting.reversal_exists'
+  | 'accounting.reversal_of_reversal'
+  | 'accounting.reversal_detail_missing'
+  | 'accounting.entry_not_found'
+  | 'accounting.entry_base_currency_mismatch'
+  | 'accounting.opening_balance_exists'
+  | 'accounting.opening_balance_state_invalid'
+  | 'accounting.opening_balance_detail_missing'
+  | 'accounting.supersede_without_reversal'
+  | 'accounting.source_immutable';
 
 /**
  * Safe identifiers that may accompany a refusal. Deliberately a closed shape:
@@ -49,6 +63,9 @@ export type AccountingErrorCode =
 export interface AccountingErrorContext {
   readonly businessId?: string;
   readonly entryId?: string;
+  /** The entry a reversal is about. An identifier, like every field here. */
+  readonly originalEntryId?: string;
+  readonly openingBalanceId?: string;
   readonly sourceType?: string;
   readonly sourceId?: string;
   readonly accountRef?: string;

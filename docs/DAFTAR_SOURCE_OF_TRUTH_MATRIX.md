@@ -13,6 +13,9 @@
 | **كمية المخزون** | `stock_movements` (append-only) | on_hand = Σqty حسب (variant × warehouse) | stock_levels (Cache، INV-INV-03) |
 | **تكلفة المخزون** | تقييم الحركات (`movement_unit_cost_base_minor` NUMERIC(28,10)) + `negative_deficit_coverages` | avg مرجّح متحرك لكل (variant × warehouse) وفق Inventory §5/§5أ | stock_levels.avg (Cache) |
 | **GL** | `journal_entries` + `journal_lines` (append-only) | أرصدة الحسابات = Σ أسطر القيود | لا رصيد يدوي؛ INV-ACC-11 GL Inventory = valuation |
+| **التسوية اليدوية** (P2-S4) | `accounting_manual_adjustments` + القيد المرتبط بها عبر `accounting_source_bindings` | القيد هو الواقعة؛ صف التفصيل يحمل السبب والفاعل فقط | — |
+| **عكس قيد** (P2-S4) | `accounting_reversals` + القيد الجديد `source_type='reversal'` | سطور العكس **مشتقة** من `journal_lines` للقيد الأصلي: مبادلة مدين/دائن وكل ما عداه منسوخ حرفيًا بما فيه سعر الصرف ووقته ومصدره | — |
+| **الرصيد الافتتاحي** (P2-S4) | `accounting_opening_balances` + `accounting_opening_balance_lines` | سطر حقوق الملكية الموازن (`opening_equity`) **مشتق** من مراكز التاجر ولا يُصرَّح به؛ مجموعة واحدة فقط بحالة `posted` لكل نشاط | — |
 | **النقد/البنك/Clearing** | أسطر القيود على حسابات 1000/1010/1020/1030/1040 | رصيد الحساب = Σdebit − Σcredit | — |
 | **المتاح للبيع** | on_hand − Σreservations(active) | مشتق لحظي | — |
 | **حالة الفاتورة** | `invoices` + allocations + void | open/partially_paid/paid/voided — مشتقة من المعادلة لا تُحرَّر يدويًا | — |
@@ -23,8 +26,9 @@
 
 1. ممنوع أي عمود `balance` قابل للكتابة اليدوية على customer/supplier/product.
 2. ممنوع تحديث `stock_levels` مباشرة من الواجهة — يُبنى من الحركات فقط.
-3. ممنوع قيد محاسبي بلا مصدر (source_type/source_id) — Posting Engine Idempotent بـUNIQUE(business_id, source_type, source_id).
+3. ممنوع قيد محاسبي بلا مصدر (source_type/source_id) — Posting Engine Idempotent بـUNIQUE(business_id, source_type, source_id). الهوية المالية هي هذه الثلاثية وحدها؛ مفتاح `Idempotency-Key` في HTTP وسيلة نقل فقط ولا يُخزَّن كهوية مالية (P2-S4 §11).
 4. ممنوع أي "تصحيح صامت" — كل Reconciliation discrepancy → Alert.
+5. ممنوع تعديل أو حذف قيد مُرحَّل، وممنوع وضع علامة "معكوس" عليه — التصحيح واقعة محاسبية جديدة (P2-S4 §61).
 
 ## 3. الارتباط بالاختبارات
 
