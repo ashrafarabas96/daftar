@@ -26,6 +26,18 @@ export interface Scope {
    * `accounting_post_entry`. Set ONLY on accounting posting transactions.
    */
   accountingAssertion?: string;
+  /**
+   * Accounting CONTROL assertion (P2-S5): the `acctctl/1` claim
+   * `accounting_control_actor()` verifies inside an accounting CONFIGURATION
+   * command such as `accounting_fx_rate_enter`.
+   *
+   * A GUC of its own, not a second value in the posting one. The two formats
+   * are cryptographically domain-separated, and keeping the transports
+   * separate too means a transaction that set only the posting assertion
+   * cannot reach a control command at all — a compromised caller cannot
+   * smuggle one into a posting workflow by reusing the connection's setting.
+   */
+  accountingControlAssertion?: string;
 }
 
 /**
@@ -122,7 +134,8 @@ export class Database implements OnModuleDestroy, OnModuleInit {
       set_config('app.bypass_rls', $3, true),
       set_config('app.actor_user_id', $4, true),
       set_config('app.provisioning_assertion', $5, true),
-      set_config('app.accounting_assertion', $6, true)`,
+      set_config('app.accounting_assertion', $6, true),
+      set_config('app.accounting_control_assertion', $7, true)`,
       [
         scope.tenantId ?? '',
         scope.businessId ?? '',
@@ -130,6 +143,7 @@ export class Database implements OnModuleDestroy, OnModuleInit {
         scope.actorUserId ?? '',
         scope.provisioningAssertion ?? '',
         scope.accountingAssertion ?? '',
+        scope.accountingControlAssertion ?? '',
       ],
     );
   }
@@ -220,6 +234,19 @@ export class Database implements OnModuleDestroy, OnModuleInit {
    */
   async withAccountingTransaction<T>(accountingAssertion: string, fn: (client: PoolClient) => Promise<T>): Promise<T> {
     return this.run(this.pool, { accountingAssertion }, false, fn);
+  }
+
+  /**
+   * Accounting CONFIGURATION boundary (P2-S5): the same merchant runtime
+   * role, carrying a server-minted `acctctl/1` CONTROL assertion.
+   *
+   * Separate from the posting boundary on purpose. The posting assertion is
+   * not set here and the control assertion is not set there, so neither
+   * command can be driven by the other's authority even if the two formats
+   * were somehow confusable — which §30 requires them not to be anyway.
+   */
+  async withAccountingControlTransaction<T>(accountingControlAssertion: string, fn: (client: PoolClient) => Promise<T>): Promise<T> {
+    return this.run(this.pool, { accountingControlAssertion }, false, fn);
   }
 
   /** Names of the pools this process actually opened (boot-test evidence, §20). */

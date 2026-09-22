@@ -76,13 +76,13 @@ function migrationsUpTo(upTo: string): string {
 
 const admin = new Pool({ connectionString: dbUrl, max: 1 });
 
-describe('managed PostgreSQL: 0039 → 0047 under a non-superuser migration principal', () => {
+describe('managed PostgreSQL: 0039 → 0048 under a non-superuser migration principal', () => {
   afterAll(async () => {
     await admin.query(`DROP DATABASE IF EXISTS ${SCRATCH_DB} WITH (FORCE)`).catch(() => undefined);
     await admin.end();
   });
 
-  it('applies 0040 through 0047 with no superuser anywhere in the path', async () => {
+  it('applies 0040 through 0048 with no superuser anywhere in the path', async () => {
     await ensurePostgres();
     await admin.query(`DROP DATABASE IF EXISTS ${SCRATCH_DB} WITH (FORCE)`);
     await admin.query(`CREATE DATABASE ${SCRATCH_DB}`);
@@ -180,6 +180,7 @@ describe('managed PostgreSQL: 0039 → 0047 under a non-superuser migration prin
         '0045_accounting_post_entry.sql',
         '0046_accounting_sources.sql',
         '0047_accounting_opening_balances.sql',
+        '0048_accounting_fx_rates.sql',
       ]);
 
       // The ALTER FUNCTION ownership transfer was legitimate, not bypassed.
@@ -283,7 +284,7 @@ describe('managed PostgreSQL: 0039 → 0047 under a non-superuser migration prin
    * happened to be in place because an earlier migration in the same
    * transaction put it there — would pass the long path and fail here.
    */
-  it('applies 0046 and 0047 onto the frozen 0045 boundary, with no superuser and a no-op rerun (§52)', async () => {
+  it('applies 0046 through 0048 onto the frozen 0045 boundary, with no superuser and a no-op rerun (§52, P2-S5 §70)', async () => {
     await ensurePostgres();
     const db = 'daftar_portability_0045';
     await admin.query(`DROP DATABASE IF EXISTS ${db} WITH (FORCE)`);
@@ -343,7 +344,8 @@ describe('managed PostgreSQL: 0039 → 0047 under a non-superuser migration prin
         END $$;
       `);
 
-      // Exactly the two candidates, applied by the NON-SUPERUSER principal.
+      // Exactly the migrations after the boundary, applied by the
+      // NON-SUPERUSER principal.
       const migrator = new Pool({ connectionString: migratorUrl, max: 1 });
       try {
         const who = (
@@ -353,7 +355,7 @@ describe('managed PostgreSQL: 0039 → 0047 under a non-superuser migration prin
       } finally {
         await migrator.end().catch(() => undefined);
       }
-      expect(await runMigrations(migratorUrl)).toEqual(['0046_accounting_sources.sql', '0047_accounting_opening_balances.sql']);
+      expect(await runMigrations(migratorUrl)).toEqual(['0046_accounting_sources.sql', '0047_accounting_opening_balances.sql', '0048_accounting_fx_rates.sql']);
       expect(await runMigrations(migratorUrl)).toEqual([]);
 
       // And the sources arrived with the shape the slice specifies.
@@ -391,6 +393,155 @@ describe('managed PostgreSQL: 0039 → 0047 under a non-superuser migration prin
             )
           ).rows[0],
         ).toEqual({ app: true, pub: false });
+      } finally {
+        await check.end().catch(() => undefined);
+      }
+    } finally {
+      await setup.end().catch(() => undefined);
+      await admin.query(`DROP DATABASE IF EXISTS ${db} WITH (FORCE)`).catch(() => undefined);
+    }
+  }, 180_000);
+
+  /**
+   * P2-S5 §70 — 0048 alone, onto the frozen 0047 boundary, applied by
+   * `daftar_migrator`.
+   *
+   * The FX slice adds a SECURITY DEFINER command owned by a principal the
+   * migrator is only a member of, a table with FORCE row level security, and
+   * a set of helper routines whose ownership has to be handed over. Every one
+   * of those is a step a superuser performs without noticing and a managed
+   * deployment cannot perform at all if the migration relied on being
+   * superuser. So the question is not whether 0048 is correct — other suites
+   * answer that — but whether it INSTALLS under the credential a managed
+   * PostgreSQL actually gives you.
+   */
+  it('applies 0048 alone onto the frozen 0047 boundary, with no superuser and a no-op rerun (P2-S5 §70)', async () => {
+    await ensurePostgres();
+    const db = 'daftar_portability_0047';
+    await admin.query(`DROP DATABASE IF EXISTS ${db} WITH (FORCE)`);
+    await admin.query(`CREATE DATABASE ${db}`);
+    const adminUrl = `postgresql://${PG_USER}:${PG_PASSWORD}@localhost:${PG_PORT}/${db}`;
+    const migratorUrl = `postgresql://daftar_migrator:${MIGRATOR_DB_PASSWORD}@localhost:${PG_PORT}/${db}`;
+
+    const setup = new Pool({ connectionString: adminUrl, max: 1 });
+    try {
+      await setup.query(bootstrapSql());
+      await setup.query(`GRANT CONNECT ON DATABASE ${db} TO daftar_migrator`);
+
+      const preDir = migrationsUpTo('0047_accounting_opening_balances.sql');
+      await runMigrations(adminUrl, preDir);
+      rmSync(preDir, { recursive: true, force: true });
+
+      // The checkpoint is honest in both directions.
+      expect((await setup.query(`SELECT 1 FROM pg_proc WHERE proname = 'accounting_open_balance_post'`)).rows).toHaveLength(1);
+      expect((await setup.query(`SELECT 1 FROM information_schema.tables WHERE table_name = 'accounting_fx_rates'`)).rows).toEqual([]);
+
+      // Hand the settled schema to the migrator, as a managed deployment has
+      // it from the start.
+      await setup.query(`ALTER SCHEMA public OWNER TO daftar_migrator`);
+      await setup.query(`
+        DO $$
+        DECLARE r RECORD;
+        BEGIN
+          FOR r IN SELECT c.relname, c.relkind FROM pg_class c
+                     JOIN pg_namespace n ON n.oid = c.relnamespace
+                     JOIN pg_roles o ON o.oid = c.relowner
+                    WHERE n.nspname = 'public' AND o.rolname = 'postgres' AND c.relkind IN ('r','v','m','S','p')
+          LOOP
+            EXECUTE format('ALTER %s public.%I OWNER TO daftar_migrator',
+                           CASE r.relkind WHEN 'S' THEN 'SEQUENCE' WHEN 'v' THEN 'VIEW' WHEN 'm' THEN 'MATERIALIZED VIEW' ELSE 'TABLE' END,
+                           r.relname);
+          END LOOP;
+          FOR r IN SELECT p.oid::regprocedure AS sig FROM pg_proc p
+                     JOIN pg_namespace n ON n.oid = p.pronamespace
+                     JOIN pg_roles o ON o.oid = p.proowner
+                    WHERE n.nspname = 'public' AND o.rolname = 'postgres'
+          LOOP
+            EXECUTE format('ALTER FUNCTION %s OWNER TO daftar_migrator', r.sig);
+          END LOOP;
+        END $$;
+      `);
+
+      const who = new Pool({ connectionString: migratorUrl, max: 1 });
+      try {
+        expect(
+          (await who.query<{ rolsuper: boolean; rolbypassrls: boolean }>(`SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user`)).rows[0],
+        ).toEqual({ rolsuper: false, rolbypassrls: false });
+      } finally {
+        await who.end().catch(() => undefined);
+      }
+
+      expect(await runMigrations(migratorUrl)).toEqual(['0048_accounting_fx_rates.sql']);
+      expect(await runMigrations(migratorUrl)).toEqual([]);
+
+      // Everything below is read through the NON-SUPERUSER connection: if the
+      // migrator can see it, so can a deployment operator.
+      const check = new Pool({ connectionString: migratorUrl, max: 1 });
+      try {
+        // Row level security arrived enabled AND forced — forced matters
+        // because the table's owner is the migrator itself here.
+        expect(
+          (
+            await check.query<{ e: boolean; f: boolean }>(
+              `SELECT relrowsecurity AS e, relforcerowsecurity AS f FROM pg_class WHERE relname = 'accounting_fx_rates'`,
+            )
+          ).rows[0],
+        ).toEqual({ e: true, f: true });
+
+        // The ownership transfers happened through ordinary privilege rules:
+        // the migrator is a MEMBER of the internal principal, which is how a
+        // non-superuser is allowed to give an object away.
+        expect(
+          (
+            await check.query<{ proname: string }>(
+              `SELECT p.proname FROM pg_proc p
+                 JOIN pg_namespace n ON n.oid = p.pronamespace
+                 JOIN pg_roles o ON o.oid = p.proowner
+                WHERE n.nspname = 'public' AND o.rolname = 'daftar_accounting_internal'
+                  AND p.proname IN ('accounting_control_actor', 'accounting_fx_rate_enter', 'accounting_fx_rate_canonical',
+                                    'accounting_fx_rate_fingerprint', 'accounting_fx_rate_lock_key', 'accounting_fx_rate_identity_lock_key')
+                ORDER BY 1`,
+            )
+          ).rows.map((r) => r.proname),
+        ).toEqual([
+          'accounting_control_actor',
+          'accounting_fx_rate_canonical',
+          'accounting_fx_rate_enter',
+          'accounting_fx_rate_fingerprint',
+          'accounting_fx_rate_identity_lock_key',
+          'accounting_fx_rate_lock_key',
+        ]);
+
+        // The command is callable by the merchant runtime and nobody else —
+        // asked with has_function_privilege, because a REVOKE that silently
+        // did nothing leaves a NULL acl an acl-shaped test passes vacuously.
+        expect(
+          (
+            await check.query<{ app: boolean; pub: boolean }>(
+              `SELECT has_function_privilege('daftar_app', 'accounting_fx_rate_enter(text,text,text,timestamptz,text)', 'EXECUTE') AS app,
+                      has_function_privilege('public', 'accounting_fx_rate_enter(text,text,text,timestamptz,text)', 'EXECUTE') AS pub`,
+            )
+          ).rows[0],
+        ).toEqual({ app: true, pub: false });
+
+        // No runtime credential can write the registry (§25), and the migrator
+        // did not leave itself BYPASSRLS anywhere (§43).
+        expect(
+          (
+            await check.query<{ role: string; p: string }>(
+              `SELECT coalesce(r.rolname, 'PUBLIC') AS role, a.privilege_type AS p
+                 FROM pg_class c
+                 JOIN pg_namespace n ON n.oid = c.relnamespace
+                 CROSS JOIN LATERAL aclexplode(coalesce(c.relacl, acldefault('r', c.relowner))) a
+                 LEFT JOIN pg_roles r ON r.oid = a.grantee
+                WHERE n.nspname = 'public' AND c.relname = 'accounting_fx_rates'
+                  AND a.privilege_type IN ('INSERT', 'UPDATE', 'DELETE', 'TRUNCATE')
+                  AND a.grantee <> c.relowner
+                ORDER BY role, a.privilege_type`,
+            )
+          ).rows,
+        ).toEqual([{ role: 'daftar_accounting_internal', p: 'INSERT' }]);
+        expect((await check.query(`SELECT 1 FROM pg_roles WHERE rolname LIKE 'daftar\\_%' AND rolbypassrls`)).rows).toEqual([]);
       } finally {
         await check.end().catch(() => undefined);
       }

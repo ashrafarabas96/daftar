@@ -470,6 +470,40 @@ export interface AccountingOpeningBalanceCreateDto {
   positions: AccountingOpeningPositionDto[];
 }
 
+// ── Accounting FX rates (P2-S5) ───────────────────────────────────────────
+
+/**
+ * `POST /v1/businesses/:businessId/accounting/fx-rates`
+ *
+ * Requires `accounting.fx.manage` AND business-wide branch authority: a rate
+ * is configuration for every branch, so a member restricted to one of them
+ * may not set it. An `Idempotency-Key` header is required, and the rate's
+ * identity is derived from it.
+ *
+ * The body states the pair, the rate and when it takes effect, and NOTHING
+ * else. There is no actor, no tenant, no business and no `source` field: the
+ * source is fixed as `manual` inside the trusted command, so a caller cannot
+ * claim a provenance that never existed.
+ */
+export interface AccountingFxRateCreateDto {
+  fromCurrency: string;
+  toCurrency: string;
+  /**
+   * A decimal STRING with at most ten fraction digits, e.g. `"3.71"`. Never a
+   * JSON number: a double cannot hold a ten-digit rate exactly, and a rate
+   * whose precision exceeds the contract is REFUSED, never rounded.
+   */
+  rate: string;
+  /** RFC3339 UTC at second precision, e.g. `2026-09-22T10:00:00Z`. */
+  effectiveAt: string;
+}
+
+/** What a rate entry returns. `created: false` is an idempotent replay. */
+export interface AccountingFxRateRefDto {
+  rateId: string;
+  created: boolean;
+}
+
 /**
  * What every accounting command returns.
  *

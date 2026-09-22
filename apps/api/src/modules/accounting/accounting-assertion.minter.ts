@@ -1,11 +1,14 @@
 import { Inject, Injectable } from '@nestjs/common';
 import {
   mintAccountingAssertion,
+  mintAccountingControlAssertion,
   parseAccountingAssertionKey,
   secretsAreIdentical,
   type AccountingAssertionClaims,
   type AccountingAssertionKey,
   type AccountingAssertionMinter,
+  type AccountingControlAssertionClaims,
+  type AccountingControlAssertionMinter,
 } from '@daftar/accounting';
 import type { AppConfig } from '../../config';
 
@@ -23,7 +26,7 @@ import type { AppConfig } from '../../config';
  * until the day one of them leaked.
  */
 @Injectable()
-export class AccountingAssertionMinterService implements AccountingAssertionMinter {
+export class AccountingAssertionMinterService implements AccountingAssertionMinter, AccountingControlAssertionMinter {
   private readonly key: AccountingAssertionKey | null;
 
   constructor(@Inject('APP_CONFIG') config: AppConfig) {
@@ -46,5 +49,20 @@ export class AccountingAssertionMinterService implements AccountingAssertionMint
       throw new Error('ACCOUNTING_ASSERTION_KEY is not configured — posting requires a server-minted accounting assertion');
     }
     return mintAccountingAssertion(this.key, claims);
+  }
+
+  /**
+   * The CONTROL format, on the same key material (§29).
+   *
+   * A separate method rather than an argument to `mint`, because the two
+   * formats are cryptographically domain-separated and a single entry point
+   * taking either claim shape would be one edit away from minting the wrong
+   * one — exactly the substitution §30 requires to be impossible.
+   */
+  mintControl(claims: AccountingControlAssertionClaims): string {
+    if (!this.key) {
+      throw new Error('ACCOUNTING_ASSERTION_KEY is not configured — an accounting control command requires a server-minted assertion');
+    }
+    return mintAccountingControlAssertion(this.key, claims);
   }
 }

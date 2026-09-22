@@ -120,7 +120,12 @@ function accountingStatus(code: string): number {
     code === 'accounting.opening_balance_exists' ||
     code === 'accounting.opening_balance_state_invalid' ||
     code === 'accounting.supersede_without_reversal' ||
-    code === 'accounting.source_immutable'
+    code === 'accounting.source_immutable' ||
+    // Two merchants stated different rates for one pair at one instant, or a
+    // rate row was asked to change. Both are conflicts over existing truth,
+    // not malformed requests.
+    code === 'accounting.fx_rate_conflict' ||
+    code === 'accounting.fx_rate_immutable'
   ) {
     return HttpStatus.CONFLICT;
   }

@@ -270,10 +270,10 @@ describe('migration upgrade path: pre-encryption schema → latest (§13–16)',
         await pool.query(`INSERT INTO business_roles (business_id, key, name, is_system) VALUES ($1, 'cashier', 'Cashier', false)`, [biz.id]);
       }
 
-      // Apply every migration after the checkpoint: P2-S1's two, P2-S2's two
-      // and P2-S3's two. The supported upgrade path is 0039 → latest, not
-      // 0039 → 0041 and not 0039 → 0043; a deployment that has been away for
-      // three slices takes exactly one path, and this is it.
+      // Apply every migration after the checkpoint, one slice after another.
+      // The supported upgrade path is 0039 → latest, not 0039 → 0041 and not
+      // 0039 → 0043; a deployment that has been away for several slices takes
+      // exactly one path, and this is it.
       const applied = await runMigrations(url4);
       expect(applied).toEqual([
         '0040_accounting_chart.sql',
@@ -284,6 +284,7 @@ describe('migration upgrade path: pre-encryption schema → latest (§13–16)',
         '0045_accounting_post_entry.sql',
         '0046_accounting_sources.sql',
         '0047_accounting_opening_balances.sql',
+        '0048_accounting_fx_rates.sql',
       ]);
 
       // Every existing business now holds all 21 required system accounts,
@@ -360,7 +361,7 @@ describe('migration upgrade path: pre-encryption schema → latest (§13–16)',
    * principal classes rather than asserting a sentence that was true only
    * while no writer had shipped.
    */
-  it('compatibility matrix (P2-S2 §41 / P2-S3 §73 / P2-S4 §52): frozen 0041-checkpoint + existing business → 0042…0047, one writer per slice, rerun no-op', async () => {
+  it('compatibility matrix (P2-S2 §41 / P2-S3 §73 / P2-S4 §52 / P2-S5 §71): frozen 0041-checkpoint + existing business → 0042…0048, one writer per slice, rerun no-op', async () => {
     await ensurePostgres();
     const db5 = 'daftar_upgrade_0041';
     await admin.query(`DROP DATABASE IF EXISTS ${db5} WITH (FORCE)`);
@@ -399,8 +400,8 @@ describe('migration upgrade path: pre-encryption schema → latest (§13–16)',
       ).rows[0];
       expect((await pool.query<{ n: number }>(`SELECT count(*)::int AS n FROM accounts WHERE business_id = $1`, [biz?.id])).rows[0]?.n).toBe(21);
 
-      // Exactly the six migrations of P2-S2, P2-S3 and P2-S4 follow the frozen
-      // P2-S1 boundary, in order.
+      // Exactly the migrations of P2-S2, P2-S3, P2-S4 and P2-S5 follow the
+      // frozen P2-S1 boundary, in order.
       expect(await runMigrations(url5)).toEqual([
         '0042_accounting_journal.sql',
         '0043_accounting_invariants.sql',
@@ -408,6 +409,7 @@ describe('migration upgrade path: pre-encryption schema → latest (§13–16)',
         '0045_accounting_post_entry.sql',
         '0046_accounting_sources.sql',
         '0047_accounting_opening_balances.sql',
+        '0048_accounting_fx_rates.sql',
       ]);
 
       // The closed registries came out with the shape the slice specifies:
@@ -418,6 +420,10 @@ describe('migration upgrade path: pre-encryption schema → latest (§13–16)',
         'reversal',
       ]);
       expect((await pool.query<{ n: number }>(`SELECT count(*)::int AS n FROM accounting_system_actors`)).rows[0]?.n).toBe(0);
+      // P2-S5 §28: entering a rate is not a journal fact, so it registers no
+      // source type. A registry that grew here would mean the FX slice had
+      // quietly claimed the ability to post.
+      expect((await pool.query(`SELECT 1 FROM accounting_source_types WHERE source_type LIKE 'fx%'`)).rows).toEqual([]);
 
       // Both deferred validators and both binding directions survived the
       // upgrade path, not just a fresh install.
@@ -492,6 +498,119 @@ describe('migration upgrade path: pre-encryption schema → latest (§13–16)',
     } finally {
       await pool.end();
       await admin.query(`DROP DATABASE IF EXISTS ${db5} WITH (FORCE)`).catch(() => undefined);
+    }
+  }, 180_000);
+
+  /**
+   * P2-S5 §71 — the upgrade matrix for the FX slice, from the boundary that
+   * actually exists in production: a database frozen at 0047.
+   *
+   * The questions are narrow on purpose. Does exactly ONE migration follow
+   * (§9 allows no 0049)? Does it arrive with its protections already on,
+   * rather than as a table somebody is expected to lock down afterwards? Does
+   * a second run do nothing? And are the forty-eight frozen files still the
+   * bytes the manifest recorded — checked against the history the migrator
+   * itself wrote, not against the files this process just read.
+   */
+  it('compatibility matrix (P2-S5 §71): frozen 0047-checkpoint → 0048 alone, protected on arrival, rerun no-op', async () => {
+    await ensurePostgres();
+    const db6 = 'daftar_upgrade_0047';
+    await admin.query(`DROP DATABASE IF EXISTS ${db6} WITH (FORCE)`);
+    await admin.query(`CREATE DATABASE ${db6}`);
+    const url6 = `postgresql://${PG_USER}:${PG_PASSWORD}@localhost:${PG_PORT}/${db6}`;
+    const pool = scratchPool(url6);
+    try {
+      await pool.query(bootstrapSql());
+      const preDir = migrationsUpTo('0047_accounting_opening_balances.sql');
+      await runMigrations(url6, preDir);
+      rmSync(preDir, { recursive: true, force: true });
+
+      // The checkpoint is honest: the journal is there, the registry is not.
+      expect((await pool.query(`SELECT 1 FROM information_schema.tables WHERE table_name = 'journal_lines'`)).rows).toHaveLength(1);
+      expect((await pool.query(`SELECT 1 FROM information_schema.tables WHERE table_name = 'accounting_fx_rates'`)).rows).toEqual([]);
+
+      // A business that existed before the registry did.
+      const tenant = (await pool.query<{ id: string }>(`INSERT INTO tenants DEFAULT VALUES RETURNING id`)).rows[0];
+      const biz = (
+        await pool.query<{ id: string }>(
+          `INSERT INTO businesses (tenant_id, name, store_slug, country_code, base_currency, timezone)
+           VALUES ($1, 'Before FX', 'upgrade-fx', 'PS', 'ILS', 'Asia/Hebron') RETURNING id`,
+          [tenant?.id],
+        )
+      ).rows[0];
+      expect(biz?.id).toBeTypeOf('string');
+
+      // Exactly one migration follows the frozen P2-S4 boundary.
+      expect(await runMigrations(url6)).toEqual(['0048_accounting_fx_rates.sql']);
+
+      // It arrived with row level security ENABLED and FORCED (§43): a table
+      // that had to be secured in a later step would be readable across
+      // businesses for however long that step took.
+      const rls = (
+        await pool.query<{ e: boolean; f: boolean }>(`SELECT relrowsecurity AS e, relforcerowsecurity AS f FROM pg_class WHERE relname = 'accounting_fx_rates'`)
+      ).rows[0];
+      expect(rls).toEqual({ e: true, f: true });
+
+      // And with its immutability trigger (§18) and its routines (§26, §21).
+      expect(
+        (
+          await pool.query<{ t: string }>(`SELECT tgname AS t FROM pg_trigger WHERE tgrelid = 'accounting_fx_rates'::regclass AND NOT tgisinternal ORDER BY 1`)
+        ).rows.map((r) => r.t),
+      ).toEqual(['accounting_fx_rates_no_mutation']);
+      expect(
+        (
+          await pool.query<{ n: string }>(
+            `SELECT proname AS n FROM pg_proc WHERE proname IN ('accounting_fx_rate_enter', 'accounting_fx_rate_lookup', 'accounting_control_actor') ORDER BY 1`,
+          )
+        ).rows.map((r) => r.n),
+      ).toEqual(['accounting_control_actor', 'accounting_fx_rate_enter', 'accounting_fx_rate_lookup']);
+
+      // Every DML grant on the new table that exists after the upgrade, named
+      // exactly (§25, §44): one runtime READER, one internal writer, and no
+      // UPDATE or DELETE for anybody at all.
+      const grants = (
+        await pool.query<{ g: string; p: string }>(
+          `SELECT coalesce(r.rolname, 'PUBLIC') AS g, a.privilege_type AS p
+             FROM pg_class c
+             JOIN pg_namespace n ON n.oid = c.relnamespace
+             CROSS JOIN LATERAL aclexplode(coalesce(c.relacl, acldefault('r', c.relowner))) a
+             LEFT JOIN pg_roles r ON r.oid = a.grantee
+            WHERE n.nspname = 'public' AND c.relname = 'accounting_fx_rates'
+              AND a.privilege_type IN ('SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE')
+              AND a.grantee <> c.relowner
+            ORDER BY g, a.privilege_type`,
+        )
+      ).rows;
+      expect(grants).toEqual([
+        { g: 'daftar_accounting_internal', p: 'INSERT' },
+        { g: 'daftar_accounting_internal', p: 'SELECT' },
+        { g: 'daftar_app', p: 'SELECT' },
+      ]);
+
+      // The upgrade registered no source type (§28) and started nobody's
+      // financial life.
+      expect((await pool.query(`SELECT 1 FROM accounting_source_types WHERE source_type LIKE 'fx%'`)).rows).toEqual([]);
+      expect((await pool.query(`SELECT 1 FROM businesses WHERE financial_started_at IS NOT NULL`)).rows).toEqual([]);
+
+      // The forty-eight frozen files are byte-for-byte what the manifest
+      // recorded, as the migrator recorded them on the way in.
+      const manifest = JSON.parse(readFileSync(join(__dirname, '../../infrastructure/database/MIGRATION_MANIFEST.json'), 'utf8')) as {
+        frozenThrough: string;
+        migrations: { name: string; sha256: string }[];
+      };
+      expect(manifest.frozenThrough).toBe('0047_accounting_opening_balances.sql');
+      const frozen = manifest.migrations.filter((m) => m.name <= manifest.frozenThrough);
+      expect(frozen).toHaveLength(48);
+      const applied = new Map(
+        (await pool.query<{ name: string; sha256: string }>(`SELECT name, sha256 FROM schema_migrations ORDER BY name`)).rows.map((r) => [r.name, r.sha256]),
+      );
+      for (const m of frozen) expect(applied.get(m.name), m.name).toBe(m.sha256);
+
+      // Second run does nothing.
+      expect(await runMigrations(url6)).toEqual([]);
+    } finally {
+      await pool.end();
+      await admin.query(`DROP DATABASE IF EXISTS ${db6} WITH (FORCE)`).catch(() => undefined);
     }
   }, 180_000);
 

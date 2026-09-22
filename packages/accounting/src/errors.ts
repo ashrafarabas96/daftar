@@ -56,7 +56,18 @@ export type AccountingErrorCode =
   | 'accounting.opening_balance_state_invalid'
   | 'accounting.opening_balance_detail_missing'
   | 'accounting.supersede_without_reversal'
-  | 'accounting.source_immutable';
+  | 'accounting.source_immutable'
+  // FX rate registry — P2-S5 (§11-§46)
+  | 'accounting.fx_rate_invalid'
+  | 'accounting.fx_rate_missing'
+  | 'accounting.fx_rate_conflict'
+  | 'accounting.fx_rate_immutable'
+  | 'accounting.fx_same_currency'
+  | 'accounting.fx_currency_unknown'
+  | 'accounting.fx_effective_at_required'
+  | 'accounting.fx_effective_at_precision'
+  // Allocation residuals — P2-S5 (§55)
+  | 'accounting.rounding_residual_unbounded';
 
 /**
  * Safe identifiers that may accompany a refusal. Deliberately a closed shape:
@@ -72,6 +83,10 @@ export interface AccountingErrorContext {
   readonly sourceId?: string;
   readonly accountRef?: string;
   readonly lineNo?: number;
+  /** An FX rate row's id. An identifier, like every field here — never the rate. */
+  readonly rateId?: string;
+  /** The ordered pair a refusal is about, e.g. `USD->ILS`. Currency codes only. */
+  readonly currencyPair?: string;
 }
 
 export class AccountingError extends Error {

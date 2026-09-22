@@ -14,7 +14,7 @@ import type { OutboxSink } from '../../apps/api/src/modules/outbox/publisher';
 import type { CredentialPayloadEncryptor } from '../../apps/api/src/modules/delivery/credential-protector';
 import { CredentialDeliveryWorker } from '../../apps/api/src/modules/delivery/delivery-worker.service';
 import { mintProvisioningAssertion, type ProvisioningKind } from '../../apps/api/src/infra/provisioning-assertion';
-import { mintAccountingAssertion, type AccountingAssertionClaims } from '../../packages/accounting/src/assertion';
+import { mintAccountingAssertion, type AccountingAssertionClaims, type AccountingAssertionKey } from '../../packages/accounting/src/assertion';
 import { ensureEmbeddedPgBinariesExecutable } from '../../scripts/ensure-embedded-pg-binaries';
 
 export const PG_DIR = process.env['PG_DIR'] ?? '/tmp/daftar-pg-shared';
@@ -52,9 +52,20 @@ export function mintTestAssertion(actorUserId: string, kind: ProvisioningKind, n
 export const ACCOUNTING_ASSERTION_KEY_B64 = Buffer.from('test-accounting-assertion-key-32b!!!!!!!!').subarray(0, 32).toString('base64');
 export const ACCOUNTING_ASSERTION_KID = 'acct1';
 
+/**
+ * The key both accounting assertion formats are signed with (P2-S5 §29).
+ *
+ * ONE secret, two cryptographic domains. The control format prefixes its MAC
+ * preimage with `acctctl/1` and a newline; the posting format does not, and
+ * cannot, because no posting preimage can contain those bytes.
+ */
+export function accountingAssertionKey(): AccountingAssertionKey {
+  return { kid: ACCOUNTING_ASSERTION_KID, secret: Buffer.from(ACCOUNTING_ASSERTION_KEY_B64, 'base64') };
+}
+
 /** Mint an accounting assertion exactly as the merchant API would. */
 export function mintTestAccountingAssertion(claims: AccountingAssertionClaims, now: Date = new Date(), ttlSeconds = 60): string {
-  return mintAccountingAssertion({ kid: ACCOUNTING_ASSERTION_KID, secret: Buffer.from(ACCOUNTING_ASSERTION_KEY_B64, 'base64') }, claims, now, ttlSeconds);
+  return mintAccountingAssertion(accountingAssertionKey(), claims, now, ttlSeconds);
 }
 
 export const dbUrl = `postgresql://${PG_USER}:${PG_PASSWORD}@localhost:${PG_PORT}/daftar`;

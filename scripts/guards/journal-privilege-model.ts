@@ -56,6 +56,14 @@ export const SOURCE_TABLES = [
   'accounting_opening_balance_lines',
 ] as const;
 
+/**
+ * The P2-S5 FX rate registry. ONE runtime reader — the merchant runtime,
+ * which shows a business its own rates — and no runtime writer anywhere.
+ * §44 is explicit that a role with no current requirement gets nothing,
+ * so the platform and worker credentials are absent by decision.
+ */
+export const FX_TABLES = ['accounting_fx_rates'] as const;
+
 /** Every role an application runtime authenticates as. */
 export const RUNTIME_ROLES = ['daftar_app', 'daftar_platform', 'daftar_worker', 'daftar_resolver', 'daftar_identity', 'daftar_provisioner'] as const;
 
@@ -118,6 +126,9 @@ export const INTENDED_TABLE_GRANTS: Readonly<Record<string, Readonly<Record<stri
   // Reference data: which signed operation kind may create which source.
   // Readable by the writer, writable by nobody at runtime.
   accounting_operation_kinds: { [INTERNAL_ROLE]: ['SELECT'] },
+  // P2-S5. Append-only history: the writer inserts and can never rewrite
+  // what it wrote, and the merchant runtime reads under row level security.
+  accounting_fx_rates: { daftar_app: ['SELECT'], [INTERNAL_ROLE]: ['INSERT', 'SELECT'] },
 };
 
 /**
@@ -160,6 +171,17 @@ export const ACCOUNTING_ROUTINES = [
   // replacement, so it is a step of `accounting_open_balance_post` and not a
   // verb anyone can reach on its own.
   'accounting_open_balance_supersede',
+  // P2-S5 internals. `accounting_fx_rate_enter` and `accounting_fx_rate_lookup`
+  // are deliberately absent for the same reason `accounting_post_entry` is:
+  // they are surfaces the merchant runtime may execute, and they are modelled
+  // below. Everything else the FX slice adds is reachable only from inside
+  // the elevated command.
+  'accounting_control_actor',
+  'accounting_fx_rate_canonical',
+  'accounting_fx_rate_fingerprint',
+  'accounting_fx_rate_lock_key',
+  'accounting_fx_rate_identity_lock_key',
+  'accounting_fx_rates_immutable',
 ] as const;
 
 /**
@@ -186,6 +208,11 @@ export const RUNTIME_CALLABLE_ROUTINES: Readonly<Record<string, readonly string[
   accounting_open_balance_edit: ['daftar_app'],
   accounting_open_balance_discard: ['daftar_app'],
   accounting_open_balance_post: ['daftar_app'],
+  // P2-S5: entering a rate is financial CONFIGURATION, and reading one is a
+  // deterministic read. Both belong to the merchant runtime alone — platform
+  // administration is not financial authority here either.
+  accounting_fx_rate_enter: ['daftar_app'],
+  accounting_fx_rate_lookup: ['daftar_app'],
 };
 
 /**
@@ -219,7 +246,14 @@ export interface LiveTableGrant {
 const key = (g: LiveTableGrant): string => `${g.grantee} ${g.privilege} ON ${g.table}`;
 
 /** The tables this model governs. */
-export const WATCHED_TABLES = [...JOURNAL_TABLES, ...ACCOUNTING_REGISTRY_TABLES, ...ASSERTION_TABLES, ...SOURCE_TABLES, 'accounting_operation_kinds'] as const;
+export const WATCHED_TABLES = [
+  ...JOURNAL_TABLES,
+  ...ACCOUNTING_REGISTRY_TABLES,
+  ...ASSERTION_TABLES,
+  ...SOURCE_TABLES,
+  ...FX_TABLES,
+  'accounting_operation_kinds',
+] as const;
 
 /**
  * Compare a live catalogue snapshot against the intended model. Returns one

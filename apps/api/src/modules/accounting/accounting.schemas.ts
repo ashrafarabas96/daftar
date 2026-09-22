@@ -92,3 +92,38 @@ export const AccountingOpeningBalanceCreateSchema = z
     positions: z.array(AccountingOpeningPositionSchema).min(1).max(500),
   })
   .strict();
+
+/**
+ * `POST /v1/businesses/:businessId/accounting/fx-rates` (§39, §40).
+ *
+ * Four fields, `.strict()`, and every one of them a fact about the rate.
+ * There is deliberately NO `source`, no `enteredByUserId`, no `tenantId` and
+ * no `businessId`: each of those is either fixed by the server or taken from
+ * the verified authority, and a field a client could send is a field a client
+ * could lie about.
+ *
+ * `fxRateString`, not the posting `rate` shape: a rate that is merely zero
+ * matches `^(0|[1-9]…)` and is not a rate anything can be converted at, so it
+ * is refused at the edge as well as at the database boundary.
+ */
+const fxRateString = z
+  .string()
+  .regex(/^(0|[1-9][0-9]{0,9})(\.[0-9]{1,10})?$/, 'a rate has at most ten fraction digits and no exponent')
+  // A decimal is greater than zero exactly when it contains a non-zero digit.
+  // Stated that way rather than by parsing: a ten-digit rate does not survive
+  // a round trip through a JavaScript number, and this file is the boundary
+  // where that must never happen.
+  .refine((v) => /[1-9]/.test(v), 'a rate must be greater than zero');
+
+export const AccountingFxRateCreateSchema = z
+  .object({
+    fromCurrency: currency,
+    toCurrency: currency,
+    rate: fxRateString,
+    effectiveAt: instant,
+  })
+  .strict()
+  .refine((v) => v.fromCurrency !== v.toCurrency, {
+    message: 'a currency has no exchange rate against itself — domestic money uses the base sentinel',
+    path: ['toCurrency'],
+  });

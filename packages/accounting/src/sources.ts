@@ -64,16 +64,33 @@ export const OPENING_EQUITY_SYSTEM_KEY = 'opening_equity';
  * fingerprint, and is stored for tracing only.
  */
 export function deriveSourceId(businessId: string, idempotencyKey: string): string {
+  return deriveAccountingResourceId('daftar/accounting-source-id/v1', businessId, idempotencyKey);
+}
+
+/**
+ * The derivation itself, with its domain label as a parameter (P2-S5 §33).
+ *
+ * P2-S5 needs the same property for a thing that is NOT a journal source: an
+ * FX rate id, stable per business and idempotency key. Copying the algorithm
+ * would create a second implementation to keep in step; widening
+ * `deriveSourceId` to serve both would mean one key reused across an
+ * adjustment and a rate entry derived ONE uuid for two unrelated things.
+ *
+ * So the algorithm is stated once and the DOMAIN LABEL distinguishes the
+ * namespaces. `deriveSourceId` passes exactly the label it always passed, so
+ * every source identity P2-S4 ever derived is byte-for-byte unchanged.
+ */
+export function deriveAccountingResourceId(domain: string, businessId: string, idempotencyKey: string): string {
   const key = idempotencyKey.trim();
   if (key.length < 8 || key.length > 200 || !/^[\x20-\x7e]+$/.test(key)) {
     throw new AccountingError('accounting.payload_invalid', 'an idempotency key must be 8 to 200 printable ASCII characters');
   }
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(businessId)) {
-    throw new AccountingError('accounting.payload_invalid', 'a source identity must be derived for a real business');
+    throw new AccountingError('accounting.payload_invalid', 'an accounting identity must be derived for a real business');
   }
   // Domain-separated, so a digest from anywhere else in the system can never
   // be mistaken for a source identity.
-  const digest = createHash('sha256').update(`daftar/accounting-source-id/v1\n${businessId.toLowerCase()}\n${key}`, 'utf8').digest();
+  const digest = createHash('sha256').update(`${domain}\n${businessId.toLowerCase()}\n${key}`, 'utf8').digest();
   const b = Buffer.from(digest.subarray(0, 16));
   // RFC 4122 version 5 / variant 10, so the value is a well-formed UUID and
   // not merely 32 hex characters that happen to fit the shape.

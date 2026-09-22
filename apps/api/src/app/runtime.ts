@@ -29,6 +29,8 @@ import { AccountingPostingService } from '../modules/accounting/accounting-posti
 import { DatabaseAccountingSourcesAdapter } from '../modules/accounting/accounting-sources.adapter';
 import { DatabaseAccountingLedgerReader } from '../modules/accounting/accounting-ledger.reader';
 import { AccountingSourcesService } from '../modules/accounting/accounting-sources.service';
+import { AccountingFxService } from '../modules/accounting/accounting-fx.service';
+import { DatabaseAccountingFxAdapter } from '../modules/accounting/accounting-fx.adapter';
 
 /**
  * RUNTIME COMPOSITION (Phase 1 Completion Directive §15–20).
@@ -151,6 +153,14 @@ export function accountingProviders(): Provider[] {
     },
     AccountingPostingService,
     AccountingSourcesService,
+    // P2-S5: the FX rate registry. The port and the CONTROL minter are
+    // injected by token rather than by class so the service depends on the
+    // two contracts and not on a Nest adapter — and so nothing can reach the
+    // control minter without asking for it by name.
+    DatabaseAccountingFxAdapter,
+    { provide: 'ACCOUNTING_FX_PORT', useExisting: DatabaseAccountingFxAdapter },
+    { provide: 'ACCOUNTING_CONTROL_MINTER', useExisting: AccountingAssertionMinterService },
+    AccountingFxService,
   ];
 }
 

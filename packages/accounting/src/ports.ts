@@ -14,6 +14,8 @@
  * a permanent bypass the moment a later slice found it convenient.
  */
 import type { AccountingAssertionClaims } from './assertion';
+import type { AccountingControlAssertionClaims } from './control-assertion';
+import type { FxRateEntryCommand, FxRateEntryResult, FxRateSnapshot } from './fx-rate';
 import type { OpeningPosition, PostedEntrySnapshot } from './sources';
 import type { PostingCommand, PostingResult } from './types';
 
@@ -150,4 +152,43 @@ export interface PostOpeningBalanceRequest {
 
 export interface AccountingOpeningBalancePort {
   postOpeningBalance(request: PostOpeningBalanceRequest): Promise<PostingResult>;
+}
+
+// ── P2-S5 FX rate registry (directive §26, §33) ───────────────────────────
+
+/**
+ * Mints an accounting CONTROL assertion for already-authorized claims.
+ *
+ * Separate from `AccountingAssertionMinter` on purpose. The two formats are
+ * cryptographically domain-separated, and a single `mint()` that took either
+ * claim shape would be one edit away from minting the wrong one — which is
+ * precisely the substitution §30 requires to be impossible.
+ */
+export interface AccountingControlAssertionMinter {
+  mintControl(claims: AccountingControlAssertionClaims): string;
+}
+
+/** One call of `accounting_fx_rate_enter`, inside one transaction. */
+export interface EnterFxRateRequest {
+  /** The minted control assertion, presented to the database as-is. */
+  readonly assertion: string;
+  readonly command: FxRateEntryCommand;
+}
+
+/**
+ * Executes `accounting_fx_rate_enter`.
+ *
+ * The adapter's only permitted interaction with `accounting_fx_rates` is
+ * CALLING this command and reading rows back. It must never issue
+ * INSERT/UPDATE/DELETE against the table — and could not if it tried, because
+ * `daftar_app` holds no DML on it.
+ */
+export interface AccountingFxRatePort {
+  enterRate(request: EnterFxRateRequest): Promise<FxRateEntryResult>;
+  /**
+   * The deterministic read (§21-§23). Present on the port because future
+   * domains resolve rates through it; it mutates nothing, so there is no
+   * write path hiding behind a read method.
+   */
+  lookupRate(scope: LedgerReadScope, pair: { from: string; to: string }, at: Date): Promise<FxRateSnapshot>;
 }

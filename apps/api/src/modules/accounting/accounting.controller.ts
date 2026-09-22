@@ -3,6 +3,8 @@ import type { z } from 'zod';
 import type {
   AccountingAdjustmentCreateDto,
   AccountingEntryRefDto,
+  AccountingFxRateCreateDto,
+  AccountingFxRateRefDto,
   AccountingOpeningBalanceCreateDto,
   AccountingReversalCreateDto,
 } from '@daftar/shared-contracts';
@@ -11,18 +13,27 @@ import { Membership, RequiresPermission } from '../../common/guards';
 import { getContext } from '../../infra/request-context';
 import type { MembershipContext } from '../tenancy/tenancy.service';
 import { AccountingSourcesService } from './accounting-sources.service';
-import { AccountingAdjustmentCreateSchema, AccountingOpeningBalanceCreateSchema, AccountingReversalCreateSchema } from './accounting.schemas';
+import { AccountingFxService } from './accounting-fx.service';
+import {
+  AccountingAdjustmentCreateSchema,
+  AccountingFxRateCreateSchema,
+  AccountingOpeningBalanceCreateSchema,
+  AccountingReversalCreateSchema,
+} from './accounting.schemas';
 
 const UUID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 
 /**
  * The ENTIRE merchant accounting write surface (§35).
  *
- * Three routes. There is no generic `/accounting/post`, no chart editor, no
- * FX or period endpoint and no merchant accounting UI, and their absence is
- * the point: a generic posting endpoint would let a client state any source
- * type it liked, and the whole design of this slice is that each source has
- * its own narrow command with its own rules.
+ * Four routes. Three create journal facts; the fourth, added by P2-S5,
+ * configures an exchange rate and creates none.
+ *
+ * There is still no generic `/accounting/post`, no chart editor, no period
+ * endpoint and no merchant accounting UI, and their absence is the point: a
+ * generic posting endpoint would let a client state any source type it liked,
+ * and the whole design of this surface is that each command is narrow and
+ * carries its own rules.
  *
  * The business in the path must be the business the membership resolved. A
  * mismatch is refused rather than quietly re-scoped: a caller that believed
@@ -31,7 +42,10 @@ const UUID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0
  */
 @Controller('/v1/businesses/:businessId/accounting')
 export class AccountingController {
-  constructor(@Inject(AccountingSourcesService) private readonly sources: AccountingSourcesService) {}
+  constructor(
+    @Inject(AccountingSourcesService) private readonly sources: AccountingSourcesService,
+    @Inject(AccountingFxService) private readonly fx: AccountingFxService,
+  ) {}
 
   @Post('adjustments')
   @RequiresPermission('accounting.post')
@@ -81,6 +95,31 @@ export class AccountingController {
     const dto = body as z.infer<typeof AccountingOpeningBalanceCreateSchema> & AccountingOpeningBalanceCreateDto;
     return this.sources.postOpeningBalance(m, dto, requireIdempotencyKey(idempotencyKey), requestId());
   }
+
+  /**
+   * Enter a manual exchange rate (P2-S5 §38).
+   *
+   * `accounting.fx.manage`, and not `accounting.post`: configuring the rate
+   * every future posting will be measured against is a different authority
+   * from recording one fact, and there is no fallback between them.
+   *
+   * The service additionally requires business-wide branch authority, which
+   * the guard cannot express: a rate applies to every branch, so a member
+   * restricted to one of them may not set it even holding the permission.
+   */
+  @Post('fx-rates')
+  @RequiresPermission('accounting.fx.manage')
+  @UsePipes(new ZodValidationPipe(AccountingFxRateCreateSchema))
+  async enterFxRate(
+    @Membership() m: MembershipContext,
+    @Param('businessId') businessId: string,
+    @Headers('idempotency-key') idempotencyKey: string | undefined,
+    @Body() body: unknown,
+  ): Promise<AccountingFxRateRefDto> {
+    sameBusiness(m, businessId);
+    const dto = body as z.infer<typeof AccountingFxRateCreateSchema> & AccountingFxRateCreateDto;
+    return this.fx.enterRate(m, dto, requireIdempotencyKey(idempotencyKey), requestId());
+  }
 }
 
 function sameBusiness(m: MembershipContext, businessId: string): void {
@@ -90,8 +129,8 @@ function sameBusiness(m: MembershipContext, businessId: string): void {
 }
 
 /**
- * The `Idempotency-Key` is REQUIRED on the two endpoints that create new
- * financial truth, and that is a deliberate contract rather than a
+ * The `Idempotency-Key` is REQUIRED on the three endpoints that create new
+ * durable accounting truth, and that is a deliberate contract rather than a
  * convenience. Without it there is no stable source identity, so a retried
  * request after a timeout would post the same money twice — and a client
  * cannot tell a lost response from a lost request. Making the key optional

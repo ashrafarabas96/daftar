@@ -167,6 +167,19 @@ jobs:
         run: npm run gate:phase2:s4
         env:
           PG_PORT: '5432'
+      # P2-S5 keeps the whole chain above as permanent predecessors and adds
+      # the FX rate foundation: 0048 present and still a candidate with no
+      # 0049; the append-only registry with its composite ownership, currency
+      # references and four physical rules; a lookup that never invents a
+      # reciprocal, a cross-rate or an implicit 1; the second, domain-separated
+      # acctctl/1 assertion format; one elevated write path granted to the
+      # merchant runtime alone; the clock audit over the whole migration; the
+      # pure realized-FX and rounding primitives; and the registry, authority,
+      # concurrency, HTTP, parity, upgrade and portability matrices.
+      - name: Phase 2 slice gate — P2-S5
+        run: npm run gate:phase2:s5
+        env:
+          PG_PORT: '5432'
       - name: Tampered-migration hard-fail proof
         run: |
           set -e

@@ -406,11 +406,19 @@ function checkEngineAndSurface(): void {
   }
   const body = readFileSync(controller, 'utf8');
   const routes = [...body.matchAll(/@(Post|Get|Put|Patch|Delete)\(\s*'([^']*)'\s*\)/g)].map((m) => `${m[1]} ${m[2]}`);
+  // The three routes §35 authorized, as a FLOOR rather than an equality.
+  //
+  // What this gate is entitled to prove is that P2-S4's own surface survives
+  // intact and that no generic poster ever appeared beside it. It is not
+  // entitled to an opinion about a route an authorized later slice added —
+  // P2-S5 adds `fx-rates`, which creates no journal fact at all — and an
+  // accepted gate that forbade its successor would stop the project.
   const expected = ['Post adjustments', 'Post entries/:entryId/reversals', 'Post opening-balance'];
-  if (routes.length !== expected.length || expected.some((r) => !routes.includes(r))) {
-    fail('http-surface', `the accounting controller exposes [${routes.join(', ')}] — §35 authorizes exactly [${expected.join(', ')}]`);
+  const missing = expected.filter((r) => !routes.includes(r));
+  if (missing.length > 0) {
+    fail('http-surface', `the accounting controller no longer exposes [${missing.join(', ')}] — §35 fixed P2-S4's merchant surface at those three endpoints`);
   } else {
-    ok('exactly three merchant endpoints: adjustments, reversals, opening balance (§35)');
+    ok(`P2-S4's three merchant endpoints are intact: adjustments, reversals, opening balance (§35)`);
   }
   if (/@(Post|Put|Patch)\(\s*'(post|entries|journal)'\s*\)/.test(body)) {
     fail('http-surface', 'a generic posting endpoint is exposed — §35 forbids /accounting/post');
