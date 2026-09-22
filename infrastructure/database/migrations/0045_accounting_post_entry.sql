@@ -91,7 +91,7 @@ CREATE OR REPLACE FUNCTION accounting_canonical_line(
 -- Deliberately NOT STRICT: a NULL branch or warehouse is a legitimate
 -- dimension that serializes to the 0x00 sentinel, and STRICT would collapse
 -- the whole line to NULL instead.
-LANGUAGE sql IMMUTABLE SET search_path = public, pg_catalog AS $$
+LANGUAGE sql IMMUTABLE SET search_path = pg_catalog, public, pg_temp AS $$
   SELECT convert_to(p_identity, 'UTF8')
       || decode('1f', 'hex') || convert_to(p_side, 'UTF8')
       || decode('1f', 'hex') || convert_to(p_base_minor::text, 'UTF8')
@@ -122,7 +122,7 @@ CREATE OR REPLACE FUNCTION accounting_fingerprint(
   p_entry_date  DATE,
   p_lines       BYTEA[]
 ) RETURNS TEXT
-LANGUAGE sql IMMUTABLE SET search_path = public, pg_catalog AS $$
+LANGUAGE sql IMMUTABLE SET search_path = pg_catalog, public, pg_temp AS $$
   SELECT encode(
     digest(
       convert_to(
@@ -160,7 +160,7 @@ CREATE TYPE accounting_verified_actor AS (
 );
 
 CREATE OR REPLACE FUNCTION accounting_actor(p_allowed_kinds TEXT[]) RETURNS accounting_verified_actor
-LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_catalog AS $$
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $$
 DECLARE
   v_raw      TEXT;
   v_parts    TEXT[];
@@ -237,6 +237,85 @@ END;
 $$;
 
 -- ─────────────────────────────────────────────────────────────────────────
+-- 4b. Account stability: the lock a posting holds, and the lock every
+--     account mutation must wait for (§11, §12, §13).
+--
+-- ── Why this is not `SELECT ... FOR SHARE` ───────────────────────────────
+--
+-- FOR SHARE is the obvious mechanism and the first one tried. PostgreSQL
+-- refuses it here: every row-locking clause, FOR KEY SHARE included, requires
+-- ACL_UPDATE on the table (ACL_SELECT_FOR_UPDATE is a synonym for it), and
+-- `daftar_accounting_internal` holds SELECT and INSERT on `accounts` and must
+-- never hold UPDATE. Granting the ledger writer UPDATE on the chart so that it
+-- could take a read lock would hand it the authority to rename and deactivate
+-- accounts — trading a real boundary for a convenient lock. It is not on the
+-- table.
+--
+-- So the mutual exclusion is explicit and symmetric instead: a posting takes a
+-- transaction-scoped advisory lock per account it resolved, and EVERY update
+-- or delete of an account row waits for the same lock, through the trigger
+-- below. It needs no privilege on either side, it blocks exactly what FOR
+-- SHARE would have blocked — a change to `code`, `type` or `is_active`, and a
+-- delete — and unlike FOR SHARE it is visible in the schema as a rule rather
+-- than as a clause someone could quietly drop from one query.
+--
+-- The pair is shared/exclusive, not exclusive/exclusive. A posting takes
+-- `pg_advisory_xact_lock_shared`, so several postings may hold the same
+-- account at once and none waits for another — the property FOR SHARE would
+-- have given them, and one that an exclusive advisory lock would have
+-- destroyed by serializing every posting that happened to touch cash. The
+-- mutation trigger takes the exclusive mode, so it waits for all of them and
+-- they wait for it.
+--
+-- The one honest limitation: a single statement updating SEVERAL account rows
+-- takes their locks in whatever order the executor produces them, so it can
+-- deadlock against a posting holding them in id order. PostgreSQL detects that
+-- and aborts one side; no path in DAFTAR issues such a statement today, and
+-- the account-management slice must lock in id order when it does.
+-- ─────────────────────────────────────────────────────────────────────────
+
+-- Callable by nobody, like every other helper this slice adds. The key it
+-- returns is not a secret — anyone may compute the same hash from the two
+-- identifiers with a built-in — but §68 says the runtime EXECUTE surface is
+-- the posting primitive and the two key commands, and a helper that widened
+-- that surface to four would be trading a stated invariant for nothing. The
+-- trigger below therefore runs SECURITY DEFINER as the internal principal,
+-- which owns this function, rather than as the role updating the account.
+CREATE OR REPLACE FUNCTION accounting_account_lock_key(p_business UUID, p_account UUID) RETURNS BIGINT
+LANGUAGE sql IMMUTABLE STRICT SET search_path = pg_catalog, public, pg_temp AS $$
+  SELECT hashtextextended('acct:' || lower(p_business::text) || '|' || lower(p_account::text), 0)
+$$;
+
+COMMENT ON FUNCTION accounting_account_lock_key(UUID, UUID) IS
+  'The advisory lock key that serializes a posting against a mutation of the accounts it resolved. Composite by construction: an account is (business_id, id), never id alone.';
+
+-- SECURITY DEFINER for one reason only: so it can call
+-- `accounting_account_lock_key` without that helper having to be executable by
+-- every role that maintains an account. It reads nothing, writes nothing and
+-- decides nothing — it takes an advisory lock and returns the row unchanged —
+-- so the elevated identity buys the caller no authority it did not have.
+CREATE OR REPLACE FUNCTION accounts_posting_stability() RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $$
+BEGIN
+  -- Named `accounts_posting_stability` so it sorts before
+  -- `accounts_system_guard` and `accounts_used_identity_lock`: PostgreSQL
+  -- fires row triggers in name order, and waiting for the posting to finish
+  -- BEFORE the identity guard looks for posted history is the whole point. A
+  -- guard that decided first and waited afterwards would read the history of a
+  -- posting that had not committed yet.
+  PERFORM pg_advisory_xact_lock(accounting_account_lock_key(OLD.business_id, OLD.id));
+  IF TG_OP = 'DELETE' THEN
+    RETURN OLD;
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER accounts_posting_stability
+  BEFORE UPDATE OR DELETE ON accounts
+  FOR EACH ROW EXECUTE FUNCTION accounts_posting_stability();
+
+-- ─────────────────────────────────────────────────────────────────────────
 -- 5. §31 — a used custom account's identity is historical identity.
 --
 -- Once an account has posted history, its `code` is what the canonical
@@ -250,7 +329,7 @@ $$;
 -- the stricter P2-S1 rules, which this does not touch.
 -- ─────────────────────────────────────────────────────────────────────────
 CREATE OR REPLACE FUNCTION accounts_used_identity_immutable() RETURNS trigger
-LANGUAGE plpgsql SET search_path = public, pg_catalog AS $$
+LANGUAGE plpgsql SET search_path = pg_catalog, public, pg_temp AS $$
 BEGIN
   IF NEW.code IS DISTINCT FROM OLD.code OR NEW.type IS DISTINCT FROM OLD.type THEN
     -- Composite identity: an account is (business_id, id), never id alone.
@@ -281,7 +360,7 @@ CREATE TRIGGER accounts_used_identity_lock
 -- unlock it after real history existed.
 -- ─────────────────────────────────────────────────────────────────────────
 CREATE OR REPLACE FUNCTION businesses_financial_start_guard() RETURNS trigger
-LANGUAGE plpgsql SET search_path = public, pg_catalog AS $$
+LANGUAGE plpgsql SET search_path = pg_catalog, public, pg_temp AS $$
 BEGIN
   IF NEW.financial_started_at IS DISTINCT FROM OLD.financial_started_at THEN
     IF OLD.financial_started_at IS NOT NULL THEN
@@ -363,14 +442,58 @@ CREATE POLICY accounting_financial_start ON businesses
 
 -- ─────────────────────────────────────────────────────────────────────────
 -- 8. `accounting_post_entry` — the one narrow write path (§32).
+--
+-- ── Why there is no scratch table here ───────────────────────────────────
+--
+-- The posting engine resolves N lines set-wise and inserts them set-wise, and
+-- an earlier draft held the intermediate result in a `CREATE TEMP TABLE IF
+-- NOT EXISTS accounting_posting_scratch`. That was a privilege escalation
+-- with a performance justification.
+--
+-- PostgreSQL searches the session temporary schema for relation names FIRST,
+-- ahead of every schema a function's search_path names, whether or not
+-- `pg_temp` appears in it. A caller holding the daftar_app credential could
+-- therefore create `pg_temp.accounting_posting_scratch` itself; `IF NOT
+-- EXISTS` would then quietly decline to create the real one, and the elevated
+-- routine would read, write and finally INSERT INTO journal_lines FROM a
+-- relation the caller owns and controls. The same trick against
+-- `accounting_assertion_keys` let a stolen credential choose the key the
+-- verifier trusts — it forged a journal entry in
+-- tests/security/search-path-shadowing.test.ts before this was corrected.
+--
+-- The answer is not a safer temp table. It is no session relation at all: the
+-- intermediate result is an ARRAY of the composite type below, held in a
+-- plpgsql variable. It cannot be named, shadowed, pre-created or granted away,
+-- it still resolves every account in ONE statement and still inserts every
+-- line in ONE statement, and it disappears with the variable rather than
+-- depending on ON COMMIT DROP.
 -- ─────────────────────────────────────────────────────────────────────────
+CREATE TYPE accounting_posting_line AS (
+  line_no       INTEGER,
+  account_id    UUID,
+  identity      TEXT,
+  is_active     BOOLEAN,
+  side          TEXT,
+  base_minor    BIGINT,
+  base_currency TEXT,
+  txn_minor     BIGINT,
+  txn_currency  TEXT,
+  rate          NUMERIC(20,10),
+  rate_source   TEXT,
+  rate_at       TIMESTAMPTZ,
+  branch_id     UUID,
+  warehouse_id  UUID,
+  memo          TEXT,
+  canonical     BYTEA
+);
+
 CREATE OR REPLACE FUNCTION accounting_post_entry(
   p_entry_date  DATE,
   p_description TEXT,
   p_request_id  TEXT,
   p_lines       JSONB
 ) RETURNS TABLE (entry_id UUID, created BOOLEAN)
-LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_catalog AS $$
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $$
 DECLARE
   v_actor     accounting_verified_actor;
   v_tenant    UUID;
@@ -383,6 +506,9 @@ DECLARE
                               'warehouse_id','memo'];
   v_bad       TEXT;
   v_count     INTEGER;
+  v_want      UUID[];
+  v_acct      UUID;
+  v_lines     accounting_posting_line[];
   v_canon     BYTEA[];
   v_actualfp  TEXT;
   v_existing  UUID;
@@ -466,65 +592,101 @@ BEGIN
     RAISE EXCEPTION 'accounting.payload_invalid: % posting line(s) do not match the exact input schema', v_count USING ERRCODE = 'P0001';
   END IF;
 
-  -- ── 4. Resolve accounts and recompute the fingerprint (§27, §29) ───────
-  -- Set-wise: one statement resolves every line's account (§79).
+  -- ── 4. Stabilize the accounts, then resolve under that lock (§11-§13) ──
+  --
+  -- An account's `code` and `type` ARE the identity the canonical fingerprint
+  -- is computed from, and `is_active` decides whether NEW truth may name it.
+  -- Reading those columns and then writing journal_lines without holding the
+  -- rows still would mean persisting an identity that another transaction may
+  -- have changed in between — the stored line would disagree with the
+  -- fingerprint it was posted under, and a later idempotent replay of the same
+  -- source would recompute a different fingerprint and conflict with itself.
+  --
+  -- So: resolve once WITHOUT a lock, only to learn which rows to hold; lock
+  -- them; then resolve AGAIN against the locked rows and let the second
+  -- resolution be the only one that counts.
+  --
+  -- The lock is the advisory one section 4b describes, taken here and released
+  -- by this transaction ending; section 4b says why a row-locking clause was
+  -- not available to a principal that must never hold UPDATE on `accounts`.
+  --
+  -- The accounts are locked in `id` order, never payload order (§13). Two
+  -- postings naming cash and sales in opposite line order would otherwise
+  -- each hold what the other wants and deadlock for no reason at all.
+  SELECT coalesce(array_agg(DISTINCT a.id), ARRAY[]::uuid[]) INTO v_want
+  FROM jsonb_array_elements(p_lines) AS t(e)
+  JOIN accounts a
+    ON a.business_id = v_actor.business_id
+   AND ( (t.e->'account'->>'kind' = 'system' AND a.system_key = t.e->'account'->>'system_key')
+      OR (t.e->'account'->>'kind' = 'code'   AND a.code       = t.e->'account'->>'code') );
+
+  FOR v_acct IN SELECT u.id FROM unnest(v_want) AS u(id) ORDER BY u.id
+  LOOP
+    -- SHARED: several postings may hold the same account at once, which is
+    -- what FOR SHARE would have given them. The exclusive counterpart is taken
+    -- by the mutation trigger in section 4b, and that is the pair that makes
+    -- this a read lock rather than a bottleneck.
+    PERFORM pg_advisory_xact_lock_shared(accounting_account_lock_key(v_actor.business_id, v_acct));
+  END LOOP;
+
+  -- The authoritative resolution, restricted to the rows now held still.
+  --
+  -- Restricting the join to `v_want` is what makes the lock mean something: an
+  -- account that only started matching this payload AFTER the unlocked read —
+  -- because a concurrent rename freed the code — is not in the locked set, so
+  -- the line resolves to nothing and the posting is refused by name rather
+  -- than posted against a row nobody is holding. An account that stopped
+  -- matching, for the same reason, is refused the same way. Neither case can
+  -- post under an identity that no longer exists (§14 CASE A), and both are
+  -- safely retryable by the caller.
   --
   -- Deliberately WITHOUT an is_active filter. Whether this is a retry of old
   -- truth is not yet known, and a retry must resolve an account that has since
   -- been deactivated (§30). The active rule is applied in step 8, for NEW
   -- truth only.
-  CREATE TEMP TABLE IF NOT EXISTS accounting_posting_scratch (
-    line_no      INTEGER,
-    account_id   UUID,
-    identity     TEXT,
-    is_active    BOOLEAN,
-    side         TEXT,
-    base_minor   BIGINT,
-    base_currency TEXT,
-    txn_minor    BIGINT,
-    txn_currency TEXT,
-    rate         NUMERIC(20,10),
-    rate_source  TEXT,
-    rate_at      TIMESTAMPTZ,
-    branch_id    UUID,
-    warehouse_id UUID,
-    memo         TEXT,
-    canonical    BYTEA
-  ) ON COMMIT DROP;
-  DELETE FROM accounting_posting_scratch;
-
-  INSERT INTO accounting_posting_scratch
-  SELECT t.ord::int,
-         a.id,
-         CASE WHEN t.e->'account'->>'kind' = 'system' THEN t.e->'account'->>'system_key'
-              ELSE 'code:' || (t.e->'account'->>'code') END,
-         a.is_active,
-         t.e->>'side',
-         (t.e->>'base_amount_minor')::bigint,
-         upper(t.e->>'base_currency'),
-         (t.e->>'txn_amount_minor')::bigint,
-         upper(t.e->>'txn_currency'),
-         (t.e->>'fx_rate')::numeric(20,10),
-         t.e->>'fx_rate_source',
-         (t.e->>'fx_rate_at')::timestamptz,
-         (t.e->>'branch_id')::uuid,
-         (t.e->>'warehouse_id')::uuid,
-         t.e->>'memo',
-         NULL
-  FROM jsonb_array_elements(p_lines) WITH ORDINALITY AS t(e, ord)
-  LEFT JOIN accounts a
-    ON a.business_id = v_actor.business_id
-   AND ( (t.e->'account'->>'kind' = 'system' AND a.system_key = t.e->'account'->>'system_key')
-      OR (t.e->'account'->>'kind' = 'code'   AND a.code       = t.e->'account'->>'code') );
+  WITH resolved AS (
+    SELECT t.ord::int AS line_no,
+           a.id       AS account_id,
+           CASE WHEN t.e->'account'->>'kind' = 'system' THEN t.e->'account'->>'system_key'
+                ELSE 'code:' || (t.e->'account'->>'code') END AS identity,
+           a.is_active                          AS is_active,
+           t.e->>'side'                         AS side,
+           (t.e->>'base_amount_minor')::bigint  AS base_minor,
+           upper(t.e->>'base_currency')         AS base_currency,
+           (t.e->>'txn_amount_minor')::bigint   AS txn_minor,
+           upper(t.e->>'txn_currency')          AS txn_currency,
+           (t.e->>'fx_rate')::numeric(20,10)    AS rate,
+           t.e->>'fx_rate_source'               AS rate_source,
+           (t.e->>'fx_rate_at')::timestamptz    AS rate_at,
+           (t.e->>'branch_id')::uuid            AS branch_id,
+           (t.e->>'warehouse_id')::uuid         AS warehouse_id,
+           t.e->>'memo'                         AS memo
+    FROM jsonb_array_elements(p_lines) WITH ORDINALITY AS t(e, ord)
+    LEFT JOIN accounts a
+      ON a.business_id = v_actor.business_id
+     AND a.id = ANY (v_want)
+     AND ( (t.e->'account'->>'kind' = 'system' AND a.system_key = t.e->'account'->>'system_key')
+        OR (t.e->'account'->>'kind' = 'code'   AND a.code       = t.e->'account'->>'code') )
+  )
+  SELECT array_agg(
+           row(r.line_no, r.account_id, r.identity, r.is_active, r.side, r.base_minor, r.base_currency,
+               r.txn_minor, r.txn_currency, r.rate, r.rate_source, r.rate_at, r.branch_id, r.warehouse_id,
+               r.memo,
+               accounting_canonical_line(r.identity, r.side, r.base_minor, r.base_currency, r.txn_minor,
+                                         r.txn_currency, r.rate, r.rate_source, r.rate_at,
+                                         r.branch_id, r.warehouse_id))::accounting_posting_line
+           ORDER BY r.line_no)
+    INTO v_lines
+  FROM resolved r;
 
   -- An unresolved reference is refused by the kind of name it used, so the
   -- caller learns whether a system account is missing from the chart or a
   -- code simply does not exist. Neither message carries a financial value.
-  SELECT count(*) INTO v_count FROM accounting_posting_scratch WHERE account_id IS NULL AND identity NOT LIKE 'code:%';
+  SELECT count(*) INTO v_count FROM unnest(v_lines) AS l WHERE l.account_id IS NULL AND l.identity NOT LIKE 'code:%';
   IF v_count > 0 THEN
     RAISE EXCEPTION 'accounting.system_account_missing: the business chart has no system account for % line(s)', v_count USING ERRCODE = 'P0001';
   END IF;
-  SELECT count(*) INTO v_count FROM accounting_posting_scratch WHERE account_id IS NULL;
+  SELECT count(*) INTO v_count FROM unnest(v_lines) AS l WHERE l.account_id IS NULL;
   IF v_count > 0 THEN
     RAISE EXCEPTION 'accounting.account_not_found: % posting line(s) name an account this business does not have', v_count USING ERRCODE = 'P0001';
   END IF;
@@ -535,17 +697,13 @@ BEGIN
   -- caller that loses a race with a base-currency change is refused HERE, by
   -- name, instead of learning at commit time that a deferred trigger rejected
   -- an entry it believed it had written.
-  SELECT count(*) INTO v_count FROM accounting_posting_scratch WHERE base_currency <> v_base;
+  SELECT count(*) INTO v_count FROM unnest(v_lines) AS l WHERE l.base_currency <> v_base;
   IF v_count > 0 THEN
     RAISE EXCEPTION 'accounting.entry_base_currency_mismatch: % posting line(s) are not denominated in the business base currency %', v_count, v_base
       USING ERRCODE = 'P0001';
   END IF;
 
-  UPDATE accounting_posting_scratch s
-  SET canonical = accounting_canonical_line(s.identity, s.side, s.base_minor, s.base_currency, s.txn_minor,
-                                            s.txn_currency, s.rate, s.rate_source, s.rate_at, s.branch_id, s.warehouse_id);
-
-  SELECT array_agg(s.canonical) INTO v_canon FROM accounting_posting_scratch s;
+  SELECT array_agg(l.canonical) INTO v_canon FROM unnest(v_lines) AS l;
   v_actualfp := accounting_fingerprint(v_actor.tenant_id, v_actor.business_id, v_actor.source_type,
                                        v_actor.source_id, p_entry_date, v_canon);
 
@@ -582,7 +740,7 @@ BEGIN
   END IF;
 
   -- ── 8. NEW truth only: the dynamic rules (§29, §30, §44, §48) ──────────
-  SELECT count(*) INTO v_count FROM accounting_posting_scratch WHERE NOT is_active;
+  SELECT count(*) INTO v_count FROM unnest(v_lines) AS l WHERE NOT l.is_active;
   IF v_count > 0 THEN
     RAISE EXCEPTION 'accounting.account_inactive: % posting line(s) name an inactive account', v_count USING ERRCODE = 'P0001';
   END IF;
@@ -626,13 +784,13 @@ BEGIN
                              debit_minor, credit_minor, base_amount_minor, base_currency,
                              txn_currency, txn_amount_minor, fx_rate, fx_rate_source, fx_rate_at,
                              branch_id, warehouse_id, memo)
-  SELECT v_tenant, v_actor.business_id, v_entry, s.line_no, s.account_id,
-         CASE WHEN s.side = 'D' THEN s.base_minor ELSE 0 END,
-         CASE WHEN s.side = 'C' THEN s.base_minor ELSE 0 END,
-         s.base_minor, s.base_currency, s.txn_currency, s.txn_minor, s.rate, s.rate_source, s.rate_at,
-         s.branch_id, s.warehouse_id, s.memo
-  FROM accounting_posting_scratch s
-  ORDER BY s.line_no;
+  SELECT v_tenant, v_actor.business_id, v_entry, l.line_no, l.account_id,
+         CASE WHEN l.side = 'D' THEN l.base_minor ELSE 0 END,
+         CASE WHEN l.side = 'C' THEN l.base_minor ELSE 0 END,
+         l.base_minor, l.base_currency, l.txn_currency, l.txn_minor, l.rate, l.rate_source, l.rate_at,
+         l.branch_id, l.warehouse_id, l.memo
+  FROM unnest(v_lines) AS l
+  ORDER BY l.line_no;
 
   INSERT INTO accounting_source_bindings (tenant_id, business_id, source_type, source_id, journal_entry_id)
   VALUES (v_tenant, v_actor.business_id, v_actor.source_type, v_actor.source_id, v_entry);
@@ -701,6 +859,10 @@ REVOKE ALL ON FUNCTION accounting_post_entry(DATE, TEXT, TEXT, JSONB) FROM PUBLI
 -- should not be callable by everyone.
 REVOKE ALL ON FUNCTION accounts_used_identity_immutable() FROM PUBLIC;
 REVOKE ALL ON FUNCTION businesses_financial_start_guard() FROM PUBLIC;
+-- The account-stabilization pair from section 4b, for the same reason: §68's
+-- runtime EXECUTE surface is three routines, and it stays three.
+REVOKE ALL ON FUNCTION accounting_account_lock_key(UUID, UUID) FROM PUBLIC;
+REVOKE ALL ON FUNCTION accounts_posting_stability() FROM PUBLIC;
 
 GRANT EXECUTE ON FUNCTION accounting_post_entry(DATE, TEXT, TEXT, JSONB) TO daftar_app;
 
@@ -715,11 +877,114 @@ ALTER FUNCTION accounting_canonical_line(TEXT, TEXT, BIGINT, TEXT, BIGINT, TEXT,
 ALTER FUNCTION accounting_fingerprint(UUID, UUID, TEXT, UUID, DATE, BYTEA[]) OWNER TO daftar_accounting_internal;
 ALTER FUNCTION accounting_actor(TEXT[]) OWNER TO daftar_accounting_internal;
 ALTER FUNCTION accounts_used_identity_immutable() OWNER TO daftar_accounting_internal;
+ALTER FUNCTION accounting_account_lock_key(UUID, UUID) OWNER TO daftar_accounting_internal;
+ALTER FUNCTION accounts_posting_stability() OWNER TO daftar_accounting_internal;
 ALTER FUNCTION businesses_financial_start_guard() OWNER TO daftar_accounting_internal;
 ALTER FUNCTION accounting_post_entry(DATE, TEXT, TEXT, JSONB) OWNER TO daftar_accounting_internal;
 
 -- Hand back the ownership-transfer authority from section 2.
 REVOKE CREATE ON SCHEMA public FROM daftar_accounting_internal;
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- 9b. Effective-state hardening of every routine the frozen files left
+--     resolving names through the caller's schemas (§8).
+--
+-- 0000-0043 are frozen and their bytes may not change. A function's
+-- `search_path` is not bytes in a file, though — it is configuration held in
+-- the catalogue, and `ALTER FUNCTION ... SET search_path` changes the
+-- effective state without touching a frozen migration. That is what this
+-- block does, and it is the only kind of correction available for code that
+-- may not be rewritten.
+--
+-- Two shapes are corrected:
+--
+--   * a routine that pins `public, pg_catalog` — 29 of them, including every
+--     SECURITY DEFINER provisioning command — gains `, pg_temp` at the END.
+--   * a routine that pins NOTHING, and so resolves every name through
+--     whatever search_path its caller happens to have set, gains the
+--     repository's standard path. Most of these are constraint and
+--     immutability trigger functions, which is precisely the code whose
+--     reading of a table must not be redirectable.
+--
+-- The existing ORDER is preserved and pg_temp is only appended. Reordering a
+-- frozen routine's path would be a behavioural change to code that cannot be
+-- re-reviewed: `public` holds pgcrypto's digest/hmac and citext's operator
+-- overloads, so which schema is searched first is not a free choice. Putting
+-- pg_temp last is the entire fix; moving anything else is not part of it.
+--
+-- ── The one set this deliberately does NOT touch ─────────────────────────
+--
+-- Routines owned by `daftar_platform`. A non-superuser deployment migrator is
+-- not a member of daftar_platform, and must not become one: a deployment
+-- credential that can assume platform authority is a worse problem than the
+-- one being fixed. Hardening them would therefore succeed on a superuser
+-- deployment and fail on a managed one — the effective schema would differ
+-- between CI and production, which is worse than a boundary that is the same
+-- everywhere.
+--
+-- What protects them instead is bootstrap.sql revoking TEMPORARY from PUBLIC
+-- and from every runtime role. With no relation to find, it does not matter
+-- where pg_temp sits in a path. THAT is the boundary; this block is defence
+-- in depth on the set that can be hardened identically in every environment.
+-- ─────────────────────────────────────────────────────────────────────────
+DO $$
+DECLARE
+  r        RECORD;
+  v_path   TEXT;
+  v_role   TEXT := current_user;
+  v_fixed  INTEGER := 0;
+  v_left   INTEGER := 0;
+BEGIN
+  FOR r IN
+    SELECT p.oid::regprocedure::text AS sig,
+           o.rolname                 AS owner,
+           (SELECT c FROM unnest(coalesce(p.proconfig, ARRAY[]::text[])) AS c WHERE c LIKE 'search\_path=%') AS cfg
+    FROM pg_proc p
+    JOIN pg_namespace n ON n.oid = p.pronamespace
+    JOIN pg_roles    o ON o.oid = p.proowner
+    WHERE n.nspname = 'public'
+      AND p.prokind = 'f'
+      -- Never an extension's own function. pgcrypto and citext install ~130
+      -- of them in `public`, and rewriting an extension's catalogue entries
+      -- is not this migration's business: the change would not survive a
+      -- DROP/CREATE EXTENSION or a dump-and-restore, so it would be a
+      -- difference between two databases that both claim to be DAFTAR.
+      AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.objid = p.oid AND d.deptype = 'e')
+    ORDER BY 1
+  LOOP
+    IF r.owner = 'daftar_platform' THEN
+      v_left := v_left + 1;
+      CONTINUE;
+    END IF;
+
+    IF r.cfg IS NULL THEN
+      v_path := 'public, pg_catalog';
+    ELSE
+      v_path := substring(r.cfg FROM length('search_path=') + 1);
+      CONTINUE WHEN v_path ~ ',\s*pg_temp$';
+      -- Only the shapes this repository actually writes are rewritten. A
+      -- migration that silently rewrites a search_path it does not recognise
+      -- is worse than one that stops and says so.
+      IF v_path !~ '^[a-z_, ]+$' THEN
+        RAISE EXCEPTION 'accounting.search_path_invalid: % has an unrecognised search_path (%)', r.sig, v_path;
+      END IF;
+    END IF;
+
+    IF r.owner = 'daftar_accounting_internal' THEN
+      -- The migrator holds this membership WITH SET TRUE for exactly this
+      -- kind of statement, and holds it WITH INHERIT FALSE so it is never
+      -- accounting authority by accident.
+      EXECUTE 'SET LOCAL ROLE daftar_accounting_internal';
+      EXECUTE format('ALTER FUNCTION %s SET search_path = %s, pg_temp', r.sig, v_path);
+      EXECUTE format('SET LOCAL ROLE %I', v_role);
+    ELSE
+      EXECUTE format('ALTER FUNCTION %s SET search_path = %s, pg_temp', r.sig, v_path);
+    END IF;
+    v_fixed := v_fixed + 1;
+  END LOOP;
+  EXECUTE 'RESET ROLE';
+  RAISE NOTICE 'P2-S3: pg_temp pinned last on % routine(s); % left to the privilege boundary (owned by daftar_platform)', v_fixed, v_left;
+END $$;
 
 -- ─────────────────────────────────────────────────────────────────────────
 -- 10. Refuse to commit unless the end state is exactly right.
@@ -789,7 +1054,9 @@ BEGIN
        OR has_function_privilege(v_role, 'accounting_canonical_line(text,text,bigint,text,bigint,text,numeric,text,timestamptz,uuid,uuid)', 'EXECUTE')
        OR has_function_privilege(v_role, 'accounting_fingerprint(uuid,uuid,text,uuid,date,bytea[])', 'EXECUTE')
        OR has_function_privilege(v_role, 'accounts_used_identity_immutable()', 'EXECUTE')
-       OR has_function_privilege(v_role, 'businesses_financial_start_guard()', 'EXECUTE') THEN
+       OR has_function_privilege(v_role, 'businesses_financial_start_guard()', 'EXECUTE')
+       OR has_function_privilege(v_role, 'accounting_account_lock_key(uuid,uuid)', 'EXECUTE')
+       OR has_function_privilege(v_role, 'accounts_posting_stability()', 'EXECUTE') THEN
       RAISE EXCEPTION 'accounting.writer_exposed: % may execute an internal accounting helper directly', v_role;
     END IF;
   END LOOP;
@@ -798,10 +1065,11 @@ BEGIN
   SELECT count(*) INTO v_n
   FROM pg_proc p JOIN pg_roles r ON r.oid = p.proowner
   WHERE p.proname IN ('accounting_post_entry','accounting_actor','accounting_fingerprint','accounting_canonical_line',
-                      'accounts_used_identity_immutable','businesses_financial_start_guard')
+                      'accounts_used_identity_immutable','businesses_financial_start_guard',
+                      'accounting_account_lock_key','accounts_posting_stability')
     AND r.rolname = 'daftar_accounting_internal';
-  IF v_n <> 6 THEN
-    RAISE EXCEPTION 'accounting.writer_invalid: expected 6 routines owned by daftar_accounting_internal, found %', v_n;
+  IF v_n <> 8 THEN
+    RAISE EXCEPTION 'accounting.writer_invalid: expected 8 routines owned by daftar_accounting_internal, found %', v_n;
   END IF;
 
   -- (f) The business grant is column-level, not a blanket UPDATE. The two
@@ -829,5 +1097,47 @@ BEGIN
   -- (h) app_bypass() was not widened (§3).
   IF pg_get_functiondef('app_bypass()'::regprocedure) NOT LIKE '%current_user = ''daftar_platform''%' THEN
     RAISE EXCEPTION 'accounting.writer_invalid: app_bypass() was modified by this slice';
+  END IF;
+
+  -- (i) The boundary that actually closes the pg_temp shadowing class (§4).
+  --     This is asserted HERE, in the migration, and not only in the test
+  --     suite, because it lives in bootstrap.sql: a deployment that applied
+  --     migrations without re-running the role bootstrap would otherwise end
+  --     up with a posting primitive whose caller can still choose what
+  --     `accounting_assertion_keys` means. Failing at deploy time is the
+  --     correct outcome; the fix is to run bootstrap.sql.
+  FOR v_role IN
+    SELECT unnest(ARRAY['daftar_app','daftar_platform','daftar_worker','daftar_identity','daftar_resolver','daftar_provisioner','public'])
+  LOOP
+    IF has_database_privilege(v_role, current_database(), 'TEMPORARY') THEN
+      RAISE EXCEPTION 'accounting.temp_schema_writable: % holds TEMPORARY on %, so it can shadow any relation an elevated routine reads by name — re-run bootstrap.sql', v_role, current_database();
+    END IF;
+    IF has_schema_privilege(v_role, 'public', 'CREATE') THEN
+      RAISE EXCEPTION 'accounting.schema_writable: % may CREATE in schema public, which every accounting routine searches — re-run bootstrap.sql', v_role;
+    END IF;
+  END LOOP;
+
+  -- (j) Every routine section 9b was allowed to touch puts pg_temp last.
+  --     That block either did it or raised; this proves the end state rather
+  --     than trusting the loop that produced it. daftar_platform's routines
+  --     are excluded for the reason stated there, and the TEMPORARY check
+  --     above is what covers them.
+  SELECT count(*) INTO v_n
+  FROM pg_proc p
+  JOIN pg_namespace ns ON ns.oid = p.pronamespace
+  JOIN pg_roles     o  ON o.oid  = p.proowner
+  WHERE ns.nspname = 'public'
+    AND p.prokind = 'f'
+    AND o.rolname <> 'daftar_platform'
+    AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.objid = p.oid AND d.deptype = 'e')
+    AND NOT EXISTS (SELECT 1 FROM unnest(coalesce(p.proconfig, ARRAY[]::text[])) AS c
+                    WHERE c ~ '^search_path=.*,\s*pg_temp$');
+  IF v_n <> 0 THEN
+    RAISE EXCEPTION 'accounting.search_path_invalid: % routine(s) do not pin pg_temp last', v_n;
+  END IF;
+
+  -- (k) The writer depends on no session relation at all (§5).
+  IF pg_get_functiondef('accounting_post_entry(date,text,text,jsonb)'::regprocedure) ~* 'create\s+(temp|temporary)' THEN
+    RAISE EXCEPTION 'accounting.writer_invalid: the posting primitive creates a temporary relation, which its caller can pre-create and own';
   END IF;
 END $$;

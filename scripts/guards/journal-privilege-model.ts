@@ -102,6 +102,12 @@ export const ACCOUNTING_ROUTINES = [
   'accounting_fingerprint',
   'accounts_used_identity_immutable',
   'businesses_financial_start_guard',
+  // The P2-S3 correction's account-stabilization pair. The lock key is not
+  // secret, but §68's runtime surface is three routines and a helper does not
+  // get to make it four; the trigger function reaches the key as the internal
+  // principal instead.
+  'accounting_account_lock_key',
+  'accounts_posting_stability',
 ] as const;
 
 /**

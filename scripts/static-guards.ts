@@ -8,6 +8,7 @@ import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { ACCOUNTING_AUTHORITY_TABLES, findAuthoritativeBalanceColumns } from './guards/no-authoritative-balance';
 import { findFloatRateColumns } from './guards/no-float-rate';
+import { findDefinerSearchPathViolations } from './guards/definer-search-path';
 import { findPostingSurfaceViolations } from './guards/posting-surface';
 
 const ROOT = join(__dirname, '..');
@@ -328,8 +329,34 @@ for (const dir of ['apps/api/src', 'apps/web/src', 'apps/admin/src', 'packages']
   }
 }
 
+// Rule 18 — GUARD G-5 (P2-S3 correction, §9): no SECURITY DEFINER routine may
+// resolve a name through a schema its caller can write, and no routine may
+// depend on a session relation. The live half of this rule is the catalogue
+// matrix in tests/security/search-path-shadowing.test.ts; this half fails on a
+// pull request, before any server exists to ask.
+{
+  const migrations: Record<string, string> = {};
+  for (const f of walk(join(ROOT, 'infrastructure/database/migrations'), /\.sql$/).sort()) {
+    migrations[relative(ROOT, f)] = readFileSync(f, 'utf8');
+  }
+  // Frozen files are reported only for the one shape no ALTER can repair (no
+  // pinned path at all). Their ordering is corrected in the effective state by
+  // a candidate migration, because their bytes may never change.
+  const manifest = JSON.parse(readFileSync(join(ROOT, 'infrastructure/database/MIGRATION_MANIFEST.json'), 'utf8')) as {
+    migrations: { name: string }[];
+  };
+  const frozen = new Set(manifest.migrations.map((m) => m.name));
+  for (const violation of findDefinerSearchPathViolations({
+    migrations,
+    bootstrap: readFileSync(join(ROOT, 'infrastructure/database/bootstrap.sql'), 'utf8'),
+    frozen,
+  })) {
+    fail('definer-search-path', 'infrastructure/database', violation);
+  }
+}
+
 if (failures > 0) {
   console.error(`\nSTATIC GUARDS: FAIL (${failures})`);
   process.exit(1);
 }
-console.log('STATIC GUARDS: PASS (17 rules)');
+console.log('STATIC GUARDS: PASS (18 rules)');

@@ -98,6 +98,23 @@ GRANT SELECT, INSERT, DELETE ON accounting_assertion_uses TO daftar_accounting_i
 
 -- ─────────────────────────────────────────────────────────────────────────
 -- 4. Key management — daftar_platform only, and write-only even for it.
+--
+-- ── Why every routine below pins `pg_catalog, public, pg_temp` ───────────
+--
+-- A `search_path` that does not name `pg_temp` is not a path without
+-- `pg_temp`. PostgreSQL still searches the session temporary schema for
+-- relation and type names, and it searches it FIRST — ahead of every schema
+-- that IS named. Omitting it does not exclude it; it forfeits the choice of
+-- where it sits. Naming it last is the only way to put it after the trusted
+-- schemas.
+--
+-- That matters here because `accounting_assertion_keys` is read by name from
+-- inside an elevated routine. A caller that could create
+-- `pg_temp.accounting_assertion_keys` would be choosing the key material the
+-- verifier trusts. `bootstrap.sql` takes TEMPORARY away from PUBLIC and from
+-- every runtime role, which is the boundary that actually closes the class
+-- (it covers the frozen Phase 1 routines too, whose bytes may not change).
+-- This line is the second lock on the same door.
 -- ─────────────────────────────────────────────────────────────────────────
 
 -- Install a key.
@@ -113,7 +130,7 @@ GRANT SELECT, INSERT, DELETE ON accounting_assertion_uses TO daftar_accounting_i
 -- it is compromised, and "preserve posting availability" is never a reason to
 -- undo that decision (§16). Rotation is install-new → deploy → retire-old.
 CREATE OR REPLACE FUNCTION accounting_assertion_key_install(p_kid TEXT, p_secret BYTEA) RETURNS void
-LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_catalog AS $$
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $$
 DECLARE
   v_existing BYTEA;
   v_status   TEXT;
@@ -149,7 +166,7 @@ $$;
 
 -- Retire a key. Terminal, and idempotent on an already-retired kid.
 CREATE OR REPLACE FUNCTION accounting_assertion_key_retire(p_kid TEXT) RETURNS void
-LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_catalog AS $$
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $$
 BEGIN
   UPDATE accounting_assertion_keys
   SET status = 'retired', retired_at = coalesce(retired_at, now())
@@ -260,6 +277,20 @@ BEGIN
   IF has_schema_privilege('daftar_accounting_internal', 'public', 'CREATE') THEN
     RAISE EXCEPTION 'accounting.key_domain_invalid: the temporary CREATE on schema public was not revoked';
   END IF;
+
+  -- (f2) Both commands put pg_temp last, so a caller-created temporary
+  --      relation cannot shadow the key registry they read by name.
+  FOR v_table IN SELECT unnest(ARRAY['accounting_assertion_key_install', 'accounting_assertion_key_retire'])
+  LOOP
+    SELECT count(*) INTO v_count
+    FROM pg_proc p
+    WHERE p.proname = v_table
+      AND EXISTS (SELECT 1 FROM unnest(coalesce(p.proconfig, ARRAY[]::text[])) AS c
+                  WHERE c ~ '^search_path=.*,\s*pg_temp$');
+    IF v_count <> 1 THEN
+      RAISE EXCEPTION 'accounting.key_domain_invalid: % does not pin pg_temp last in its search_path', v_table;
+    END IF;
+  END LOOP;
 
   -- (g) The internal principal is still unreachable.
   -- pg_roles, not pg_authid: the latter is superuser-only, and a check that

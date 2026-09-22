@@ -26,6 +26,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { findAuthorityViolations } from './guards/authority-isolation';
+import { findDefinerSearchPathViolations } from './guards/definer-search-path';
 import { findPostingSurfaceViolations, POSTING_CALLER, POSTING_PRIMITIVE, postingPrimitiveGrantees } from './guards/posting-surface';
 import { stripComments } from './guards/sql-schema';
 import { INTENDED_TABLE_GRANTS, INTERNAL_ROLE, REQUIRED_P2_S3_SURFACES, RUNTIME_ROLES, WRITE_PRIVILEGES } from './guards/journal-privilege-model';
@@ -60,6 +61,8 @@ const ASSERTION_OBJECTS = [
 const P2_S3_TESTS = [
   'tests/integration/accounting-posting.test.ts',
   'tests/integration/accounting-concurrency.test.ts',
+  'tests/integration/accounting-account-race.test.ts',
+  'tests/security/search-path-shadowing.test.ts',
   'tests/integration/accounting-engine.test.ts',
   'tests/integration/accounting-fingerprint-parity.test.ts',
   'tests/integration/posting-surface-guard.test.ts',
@@ -224,6 +227,52 @@ function checkGuards(): void {
     }
   }
   if (modelWriters === 0) ok(`no runtime credential holds journal DML; the writer reaches the ledger only as ${INTERNAL_ROLE}`);
+
+  // ── G-5 (§9, §21) ─────────────────────────────────────────────────────
+  //
+  // The live half of this rule is the catalogue matrix in
+  // tests/security/search-path-shadowing.test.ts, which the step list runs.
+  // This half is structural, so the gate names the failure even on a machine
+  // with no database.
+  const g5Path = join(ROOT, 'scripts/guards/definer-search-path.ts');
+  if (!existsSync(g5Path)) {
+    fail('guard-g5', 'scripts/guards/definer-search-path.ts is missing — G-5 is required (§9)');
+  } else if (!/findDefinerSearchPathViolations/.test(readFileSync(join(ROOT, 'scripts/static-guards.ts'), 'utf8'))) {
+    fail('guard-g5', 'static-guards.ts does not run G-5 — a guard that runs nowhere guards nothing');
+  } else {
+    const migrations: Record<string, string> = {};
+    for (const name of sqlFiles()) migrations[name] = readMigration(name);
+    const manifest = JSON.parse(readFileSync(join(ROOT, 'infrastructure/database/MIGRATION_MANIFEST.json'), 'utf8')) as {
+      migrations: { name: string }[];
+    };
+    const violations = findDefinerSearchPathViolations({
+      migrations,
+      bootstrap: readFileSync(join(ROOT, 'infrastructure/database/bootstrap.sql'), 'utf8'),
+      frozen: new Set(manifest.migrations.map((m) => m.name)),
+    });
+    if (violations.length > 0) for (const detail of violations) fail('guard-g5', detail);
+    else
+      ok(
+        'G-5 clean: TEMPORARY is revoked from PUBLIC, no candidate routine resolves names through a caller-writable schema, and nothing creates a session relation',
+      );
+  }
+
+  // Account stabilization is a property of the writer, not of a test name, so
+  // the gate reads the primitive itself. Both halves must be there: the lock
+  // a posting takes, and the trigger every mutation waits on (§11-§13).
+  const s3 = readMigration('0045_accounting_post_entry.sql');
+  const stabilization: readonly [string, RegExp][] = [
+    ['the shared account lock a posting takes', /pg_advisory_xact_lock_shared\s*\(\s*accounting_account_lock_key/],
+    ['the exclusive lock every account mutation waits for', /CREATE\s+TRIGGER\s+accounts_posting_stability\s+BEFORE\s+UPDATE\s+OR\s+DELETE\s+ON\s+accounts/i],
+    ['deterministic lock ordering by account id', /FROM\s+unnest\(v_want\)\s+AS\s+u\(id\)\s+ORDER\s+BY\s+u\.id/i],
+  ];
+  let stableParts = 0;
+  for (const [what, pattern] of stabilization) {
+    if (!pattern.test(s3)) fail('account-stabilization', `the posting engine is missing ${what} — a resolved account could change underneath a posting (§12)`);
+    else stableParts += 1;
+  }
+  if (stableParts === stabilization.length)
+    ok('resolved account rows are stabilized: shared lock on the posting side, exclusive on every mutation, taken in id order');
 
   const authority = findAuthorityViolations({
     schema: wholeTree(),

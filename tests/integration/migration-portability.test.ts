@@ -293,7 +293,7 @@ describe('managed PostgreSQL: 0039 → 0045 under a non-superuser migration prin
             WHERE n.nspname = 'public'
               AND p.proname IN ('accounting_seed_chart','accounting_seed_chart_trg','accounting_post_entry','accounting_actor',
                                 'accounting_canonical_line','accounting_fingerprint','accounting_assertion_key_install',
-                                'accounting_assertion_key_retire')
+                                'accounting_assertion_key_retire','accounting_account_lock_key','accounts_posting_stability')
               AND has_function_privilege('public', p.oid, 'EXECUTE')
             ORDER BY p.proname`,
         )

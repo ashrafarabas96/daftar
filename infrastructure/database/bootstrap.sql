@@ -100,3 +100,53 @@ GRANT USAGE, CREATE ON SCHEMA public TO daftar_migrator;
 -- membership from being accounting authority in its own right. Any membership
 -- beyond this one — above all a runtime role — fails the P2-S1 gate.
 GRANT daftar_accounting_internal TO daftar_migrator WITH INHERIT FALSE, SET TRUE;
+
+-- ── Default deny on every namespace a caller could write (P2-S3 correction) ─
+--
+-- PostgreSQL grants TEMPORARY on a database to PUBLIC, and it has to be taken
+-- away explicitly. That matters far more than it looks, because of a second
+-- default: a function's `search_path` that does not name `pg_temp` is not a
+-- path without `pg_temp`. The session temporary schema is still searched for
+-- relation and type names — FIRST, ahead of every schema that IS named.
+-- Leaving it out does not exclude it; it only forfeits the choice of where it
+-- sits.
+--
+-- Put together, those two defaults are a complete authority bypass. A stolen
+-- runtime credential can create `pg_temp.accounting_assertion_keys`, grant the
+-- elevated principal SELECT on the table it now owns, and the SECURITY DEFINER
+-- verifier running as daftar_accounting_internal will read the attacker's key
+-- material instead of the registry — and then accept an assertion the attacker
+-- signed. That is not hypothetical: it is the regression in
+-- tests/security/search-path-shadowing.test.ts, which forged a journal entry
+-- from the daftar_app credential alone before these lines existed.
+--
+-- This is the boundary that closes the class, for every SECURITY DEFINER
+-- routine in the database at once — including the frozen Phase 1 ones, whose
+-- bytes may not be changed and whose owners the deployment migrator may not
+-- assume. Hardening individual search_paths is defence in depth on top of it,
+-- never instead of it.
+--
+-- Default deny: nothing here grants TEMPORARY back to anybody.
+--
+-- `current_database()` rather than the literal name the GRANTs above use.
+-- REVOKE takes no expression, so this needs dynamic SQL — and it is worth it:
+-- a privilege boundary that only lands when the database happens to be called
+-- `daftar` is a boundary that a scratch database, a staging restore under
+-- another name, or a per-tenant deployment would silently not have.
+DO $$
+DECLARE
+  v_db TEXT := current_database();
+BEGIN
+  EXECUTE format('REVOKE TEMPORARY ON DATABASE %I FROM PUBLIC', v_db);
+  EXECUTE format(
+    'REVOKE TEMPORARY ON DATABASE %I FROM daftar_app, daftar_platform, daftar_worker, daftar_resolver, daftar_identity, daftar_provisioner',
+    v_db);
+  EXECUTE format('REVOKE TEMPORARY ON DATABASE %I FROM daftar_accounting_internal', v_db);
+END $$;
+
+-- The other caller-writable namespace. PostgreSQL 15 and later no longer give
+-- PUBLIC CREATE on schema public, but a database created earlier and upgraded
+-- carries the old grant, and a deployment must not depend on which one it got.
+REVOKE CREATE ON SCHEMA public FROM PUBLIC;
+REVOKE CREATE ON SCHEMA public FROM
+  daftar_app, daftar_platform, daftar_worker, daftar_resolver, daftar_identity, daftar_provisioner;

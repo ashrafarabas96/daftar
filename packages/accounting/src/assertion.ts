@@ -127,6 +127,16 @@ export function mintAccountingAssertion(
   if (!/^[0-9a-f]{64}$/i.test(claims.postingFingerprint)) reject('requires a sha-256 posting fingerprint');
   if (claims.operationKind !== 'post') reject('supports only the post operation kind');
   if (!/^[a-z_]{1,64}$/.test(claims.sourceType)) reject('requires a registered source type');
+  // The TTL is BOUNDED, not merely defaulted. `ttlSeconds` exists so a test
+  // can mint a shorter-lived assertion, and a parameter that only tests are
+  // expected to pass is a parameter production will eventually pass by
+  // accident. AL-03 fixes accounting assertions at sixty seconds; nothing —
+  // a retry wrapper, a queue, a batch job, a future overload — may mint one
+  // that outlives that, so the ceiling is enforced here rather than trusted
+  // to every call site that omits the argument.
+  if (!Number.isInteger(ttlSeconds) || ttlSeconds <= 0 || ttlSeconds > ACCOUNTING_ASSERTION_TTL_SECONDS) {
+    reject(`requires a ttl of 1 to ${ACCOUNTING_ASSERTION_TTL_SECONDS} seconds`);
+  }
 
   const exp = Math.floor(now.getTime() / 1000) + ttlSeconds;
   const parts = claimComponents(key.kid, claims, exp, randomUUID());

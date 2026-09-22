@@ -2,6 +2,7 @@ import { createHmac } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import {
   ACCOUNTING_ASSERTION_COMPONENTS,
+  ACCOUNTING_ASSERTION_TTL_SECONDS,
   mintAccountingAssertion,
   parseAccountingAssertionKey,
   secretsAreIdentical,
@@ -108,6 +109,28 @@ describe('accounting assertion — refusals at mint time', () => {
 
   it('refuses an operation kind other than post — no speculative kinds', () => {
     expect(() => mintAccountingAssertion(key, { ...claims, operationKind: 'reverse' as 'post' })).toThrow(AccountingError);
+  });
+
+  /**
+   * The TTL ceiling (§16). `ttlSeconds` is there so a test can mint something
+   * shorter-lived; a parameter only tests are expected to pass is one that
+   * production eventually passes by accident. AL-03 fixes accounting
+   * assertions at sixty seconds, so sixty is a ceiling and not just a default.
+   */
+  it('refuses a ttl longer than the sixty seconds AL-03 fixes', () => {
+    expect(() => mintAccountingAssertion(key, claims, new Date(), ACCOUNTING_ASSERTION_TTL_SECONDS + 1)).toThrow(AccountingError);
+    expect(() => mintAccountingAssertion(key, claims, new Date(), 3600)).toThrow(AccountingError);
+  });
+
+  it('refuses a ttl that is zero, negative or fractional', () => {
+    for (const ttl of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(() => mintAccountingAssertion(key, claims, new Date(), ttl), `ttl ${ttl}`).toThrow(AccountingError);
+    }
+  });
+
+  it('still allows a SHORTER ttl, which is what the parameter is for', () => {
+    expect(() => mintAccountingAssertion(key, claims, new Date(), 1)).not.toThrow();
+    expect(() => mintAccountingAssertion(key, claims, new Date(), ACCOUNTING_ASSERTION_TTL_SECONDS)).not.toThrow();
   });
 });
 
