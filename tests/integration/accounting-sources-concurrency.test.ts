@@ -185,7 +185,19 @@ function openingAssertion(who: OpeningInput, openingBalanceId: string, positions
   });
 }
 
-describe('two simultaneous opening balances in one business (§43)', () => {
+/**
+ * The case below is a LATE arrival, not a race: A's whole command has already
+ * returned when D's begins, so what it proves is that a second opening
+ * balance arriving after the first is refused by name and leaves nothing
+ * behind. That is worth keeping and it is not the race.
+ *
+ * The genuine contention — both commands inside the workflow at the same
+ * moment, neither transaction committed, the test refusing to proceed until
+ * PostgreSQL reports a backend actually waiting on a lock — lives in
+ * `accounting-opening-balance-race.test.ts`, with the same-key, different-key
+ * and first-ordinary-posting cases.
+ */
+describe('a second opening balance arriving after the first (§43)', () => {
   it('at most one posted set survives, the loser gets a stable domain error, and nothing is orphaned', async () => {
     const b = await seedPostingFixture(ownerPool(), `src-conc-ob-${Date.now()}`);
     const positionsA = [position('cash', 'D', 50000n)];

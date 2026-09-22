@@ -404,7 +404,57 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON accounting_opening_balances, accounting_
 -- type `opening_balance`, source id equal to the row it names. The assertion
 -- is what proves the business and the actor; the argument only says which
 -- row, and a disagreement between the two is refused rather than resolved.
+--
+-- ── THE LOCK ORDER ────────────────────────────────────────────────────────
+--
+-- All five commands take their locks in ONE order, and it is written here
+-- once so that nobody has to reconstruct it from five function bodies:
+--
+--   1. verify the accounting assertion            (no lock)
+--   2. pg_advisory_xact_lock, per business        accounting_opening_balance_lock_key
+--   3. the `businesses` row                       FOR UPDATE
+--   4. the `accounting_opening_balances` row      FOR UPDATE
+--   5. mutate the source
+--   6. accounting_post_entry, where posting       (its own accounts, then its source identity)
+--
+-- Step 2 comes before step 3, and that is the whole point of writing it down.
+-- The earlier draft of this file did the opposite: it read `businesses` FOR
+-- SHARE and only then took the per-business lock. Two opening balances could
+-- therefore both hold a SHARE lock on the same business row — SHARE does not
+-- conflict with SHARE — before one of them queued behind the other's advisory
+-- lock; the one that held the advisory lock then called
+-- `accounting_post_entry`, which takes `businesses` FOR UPDATE for a
+-- business's first posting, and waited for the SHARE lock the blocked
+-- transaction was still holding. Neither could move. PostgreSQL broke the tie
+-- the only way it can, with `deadlock detected`, and a merchant received a
+-- 40P01 where the accounting answer was `accounting.opening_balance_exists`.
+--
+-- Taking the advisory lock first removes the cycle rather than surviving it:
+-- a transaction that has not got the advisory lock has no lock on the
+-- business row either, so there is nothing for the advisory-lock holder to
+-- wait behind. Step 3 is then FOR UPDATE, not FOR SHARE, so the mode never
+-- has to be upgraded inside the primitive further down. An opening balance is
+-- stated roughly once in a business's life; serializing it against another
+-- opening balance, against a base-currency change and against a first posting
+-- costs nothing anybody will ever measure, and it is the difference between a
+-- deterministic accounting answer and a lock-manager error.
+--
+-- The lock is transaction-scoped and re-entrant, which matters because two of
+-- these commands call the others: `draft` delegates to `edit`, and `post`
+-- calls `supersede`. Each re-takes the lock it already holds, which is free.
 -- ─────────────────────────────────────────────────────────────────────────
+
+-- The one per-business opening-balance lock. Written as a function, not an
+-- inline `hashtextextended(...)`, so that all five commands provably take the
+-- SAME lock — a lock key copied five times is a lock key that will one day be
+-- five keys — and so that the live catalogue can be asked what it is.
+CREATE OR REPLACE FUNCTION accounting_opening_balance_lock_key(p_business UUID) RETURNS BIGINT
+LANGUAGE sql IMMUTABLE STRICT SET search_path = pg_catalog, public, pg_temp AS $$
+  SELECT hashtextextended('ob:' || lower(p_business::text) || '|opening_balance', 0)
+$$;
+
+COMMENT ON FUNCTION accounting_opening_balance_lock_key(UUID) IS
+  'The advisory lock key serializing every opening-balance command of one business. Taken FIRST by all five commands, before any row lock, so the workflow can never form a lock cycle with itself or with a first ordinary posting.';
 
 -- The exact position payload. Deliberately its own list, NOT the journal
 -- line schema: an opening position has no branch and no warehouse, and a
@@ -508,8 +558,12 @@ BEGIN
   v_actor := accounting_opening_balance_authority(NULL);
   PERFORM accounting_opening_balance_check_payload(p_lines);
 
+  -- Lock order step 2: the per-business opening-balance lock, before any
+  -- row lock this command will take. See the section 7 header.
+  PERFORM pg_advisory_xact_lock(accounting_opening_balance_lock_key(v_actor.business_id));
+
   SELECT b.tenant_id, b.timezone INTO v_tenant, v_tz
-  FROM businesses b WHERE b.id = v_actor.business_id FOR SHARE;
+  FROM businesses b WHERE b.id = v_actor.business_id FOR UPDATE;
   IF v_tenant IS NULL THEN
     RAISE EXCEPTION 'accounting.forbidden: the accounting assertion names a business that does not exist' USING ERRCODE = 'P0001';
   END IF;
@@ -525,6 +579,15 @@ BEGIN
     RAISE EXCEPTION 'accounting.entry_date_in_future: an opening balance may not be dated after today in the business timezone' USING ERRCODE = 'P0001';
   END IF;
 
+  -- Reading the status and then acting on it is a decision, and a decision
+  -- made without a lock is a guess. Two simultaneous requests carrying the
+  -- same `Idempotency-Key` derive the SAME source id, so before the lock
+  -- above existed both could read `no draft here` and both go on to INSERT;
+  -- one of them then lost to the primary key and the merchant read
+  -- `duplicate key value violates unique constraint` — an index name, for a
+  -- retry that deserved the answer `you already sent this`. Serialized here,
+  -- the second request reads what the first actually wrote and takes one of
+  -- the branches below.
   SELECT ob.status INTO v_status
   FROM accounting_opening_balances ob
   WHERE ob.business_id = v_actor.business_id AND ob.id = v_actor.source_id;
@@ -578,8 +641,12 @@ BEGIN
   v_actor := accounting_opening_balance_authority(p_id);
   PERFORM accounting_opening_balance_check_payload(p_lines);
 
+  -- Lock order step 2: the per-business opening-balance lock, before any
+  -- row lock this command will take. See the section 7 header.
+  PERFORM pg_advisory_xact_lock(accounting_opening_balance_lock_key(v_actor.business_id));
+
   SELECT b.tenant_id, b.timezone INTO v_tenant, v_tz
-  FROM businesses b WHERE b.id = v_actor.business_id FOR SHARE;
+  FROM businesses b WHERE b.id = v_actor.business_id FOR UPDATE;
   v_today := (now() AT TIME ZONE v_tz)::date;
   IF p_as_of_date IS NULL OR p_as_of_date > v_today THEN
     RAISE EXCEPTION 'accounting.entry_date_in_future: an opening balance may not be dated after today in the business timezone' USING ERRCODE = 'P0001';
@@ -625,6 +692,16 @@ DECLARE
   v_status TEXT;
 BEGIN
   v_actor := accounting_opening_balance_authority(p_id);
+
+  -- Lock order step 2: the per-business opening-balance lock, before any
+  -- row lock this command will take. See the section 7 header.
+  PERFORM pg_advisory_xact_lock(accounting_opening_balance_lock_key(v_actor.business_id));
+
+  -- This command mutates nothing on `businesses`, and takes the row anyway:
+  -- the order is the order, and a command that skips a step “because it does
+  -- not need it” is how the order stops being one.
+  PERFORM 1 FROM businesses b WHERE b.id = v_actor.business_id FOR UPDATE;
+
   SELECT ob.status INTO v_status
   FROM accounting_opening_balances ob
   WHERE ob.business_id = v_actor.business_id AND ob.id = p_id FOR UPDATE;
@@ -655,6 +732,12 @@ BEGIN
   -- which is a different id from the one the assertion carries; the business
   -- and the actor still come only from the assertion.
   v_actor := accounting_opening_balance_authority(NULL);
+
+  -- Lock order step 2: the per-business opening-balance lock, before any
+  -- row lock this command will take. See the section 7 header.
+  PERFORM pg_advisory_xact_lock(accounting_opening_balance_lock_key(v_actor.business_id));
+
+  PERFORM 1 FROM businesses b WHERE b.id = v_actor.business_id FOR UPDATE;
 
   SELECT ob.tenant_id, ob.status, ob.journal_entry_id INTO v_tenant, v_status, v_entry
   FROM accounting_opening_balances ob
@@ -723,19 +806,25 @@ DECLARE
 BEGIN
   v_actor := accounting_opening_balance_authority(p_id);
 
+  -- Lock order step 2: the per-business opening-balance lock, before any
+  -- row lock this command will take. See the section 7 header.
+  PERFORM pg_advisory_xact_lock(accounting_opening_balance_lock_key(v_actor.business_id));
+
+  -- FOR UPDATE, not FOR SHARE. `accounting_post_entry` takes this same row
+  -- FOR UPDATE when the entry below is the business's first financial
+  -- activity, and a transaction that arrived holding SHARE would have to
+  -- upgrade — the upgrade that used to deadlock against a second opening
+  -- balance. Taking the strong mode once, here, means there is no upgrade to
+  -- perform and nothing to deadlock with. The base currency and the timezone
+  -- read below are then the values the posting will actually use.
   SELECT b.tenant_id, b.base_currency, b.timezone INTO v_tenant, v_base, v_tz
-  FROM businesses b WHERE b.id = v_actor.business_id FOR SHARE;
+  FROM businesses b WHERE b.id = v_actor.business_id FOR UPDATE;
   IF v_tenant IS NULL THEN
     RAISE EXCEPTION 'accounting.forbidden: the accounting assertion names a business that does not exist' USING ERRCODE = 'P0001';
   END IF;
   IF v_tenant IS DISTINCT FROM v_actor.tenant_id THEN
     RAISE EXCEPTION 'accounting.forbidden: the accounting assertion tenant does not own the named business' USING ERRCODE = 'P0001';
   END IF;
-
-  -- One opening-balance posting per business at a time. The partial unique
-  -- index is the real guarantee; this lock is what turns the loser's outcome
-  -- from an index name into a sentence.
-  PERFORM pg_advisory_xact_lock(hashtextextended(v_actor.business_id::text || '|opening_balance', 0));
 
   SELECT ob.status, ob.as_of_date, ob.journal_entry_id INTO v_status, v_as_of, v_entry
   FROM accounting_opening_balances ob
@@ -938,6 +1027,7 @@ $$;
 -- ─────────────────────────────────────────────────────────────────────────
 -- 8. Ownership and the final ACL. ACL first, ownership second — 0045 §9.
 -- ─────────────────────────────────────────────────────────────────────────
+REVOKE ALL ON FUNCTION accounting_opening_balance_lock_key(UUID) FROM PUBLIC;
 REVOKE ALL ON FUNCTION accounting_opening_balance_check_payload(JSONB) FROM PUBLIC;
 REVOKE ALL ON FUNCTION accounting_opening_balance_authority(UUID) FROM PUBLIC;
 REVOKE ALL ON FUNCTION accounting_opening_balances_state() FROM PUBLIC;
@@ -961,6 +1051,7 @@ GRANT EXECUTE ON FUNCTION accounting_open_balance_post(UUID, TEXT, TEXT) TO daft
 COMMENT ON FUNCTION accounting_open_balance_post(UUID, TEXT, TEXT) IS
   'Derives an opening balance''s journal from its persisted positions plus the engine-computed opening_equity plug, posts it through accounting_post_entry, and moves the source from draft to posted in the same transaction. Supersedes a previous posted set only when that set''s journal entry has already been reversed.';
 
+ALTER FUNCTION accounting_opening_balance_lock_key(UUID) OWNER TO daftar_accounting_internal;
 ALTER FUNCTION accounting_opening_balance_check_payload(JSONB) OWNER TO daftar_accounting_internal;
 ALTER FUNCTION accounting_opening_balance_authority(UUID) OWNER TO daftar_accounting_internal;
 ALTER FUNCTION accounting_opening_balances_state() OWNER TO daftar_accounting_internal;

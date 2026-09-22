@@ -16,10 +16,10 @@ A correction is another accounting fact. Nothing in this slice edits a posted en
 
 | migration | SHA-256 | state |
 |---|---|---|
-| `0046_accounting_sources.sql` | `347faf5063205f9acf71848cb369444f9e03ef11d65cb038e79549e19af0e4e0` | CANDIDATE |
-| `0047_accounting_opening_balances.sql` | `55d3fb042d7f20fdeace344270b0d001e20e26603336a987779cdcad49c1dce5` | CANDIDATE |
+| `0046_accounting_sources.sql` | `33ae8c2593bae14dd538708f326a0b9adf09dc0b1855b1b23e50019d829f2f16` | CANDIDATE |
+| `0047_accounting_opening_balances.sql` | `0938d513c0bb844c5f36cbdb170612a08f9f52f828660ca88e2db00aeea1cabc` | CANDIDATE |
 
-`0046` is byte-for-byte unchanged from the first revision, through both review rounds — the idempotency correction of §6a and the ownership and FX corrections of §6c live entirely in `0047`, so there was no reason to churn it. The P2-S4 gate now pins that digest, so a change to the reviewed file fails the gate rather than passing unremarked. Neither is in `MIGRATION_MANIFEST.json`, and `frozenThrough` remains `0045_accounting_post_entry.sql` with 46 frozen migrations. That is intentional and is what the P2-S4 gate checks: while the slice is under review a defect must be correctable **in place**, rather than consuming a P2-S5 migration number. Freezing happens on acceptance, never before.
+**Both files have now been corrected in place.** Through the first two review rounds `0046` did not move, and earlier revisions of this page said so; the third round's manual-adjustment completeness rule lives in it, so that sentence is no longer true and has been removed rather than qualified. The gate's pinned digest went with it: a digest recomputed after every round proves only that somebody recomputed it. What a candidate owes is unchanged and still checked — it exists, nothing exists beyond it, and it has not been written into the frozen manifest. Neither is in `MIGRATION_MANIFEST.json`, and `frozenThrough` remains `0045_accounting_post_entry.sql` with 46 frozen migrations. That is intentional and is what the P2-S4 gate checks: while the slice is under review a defect must be correctable **in place**, rather than consuming a P2-S5 migration number. Freezing happens on acceptance, never before.
 
 Migrations `0000`–`0045` are byte-for-byte unchanged. Nothing after `0047` exists.
 
@@ -108,6 +108,14 @@ Migrations `0000`–`0045` are byte-for-byte unchanged. Nothing after `0047` exi
 | 42 | A merchant reversal states its own date; the server never supplies one | `entryDate` required in the DTO, the Zod schema, the service and the engine; `readBusinessToday` removed from the port | `accounting-reversal-contract.test.ts` — "a request that omits entryDate is refused" | **ENFORCED** |
 | 43 | An identical reversal request replays across a civil-day boundary | the command is a pure function of the request | "the identical request replayed after the business day has advanced returns the same entry" | **ENFORCED** |
 | 44 | The accounting routes exist in the composition integration tests can reach | `AppModule` and `MerchantApiModule` are held to each other | `process-composition.test.ts` | **ENFORCED** |
+| 45 | A `manual_adjustment` entry owes its detail row at COMMIT | `accounting_manual_adjustment_entry_complete()` on a deferred constraint trigger | `accounting-source-completeness.test.ts` — "the statement passes, the COMMIT does not, and nothing survives" | **ENFORCED** |
+| 46 | All three native sources are protected identically | the three triggers, read out of `pg_trigger` and `pg_proc` as a set | "all three native sources carry the same completeness trigger, equally deferred" | **ENFORCED** |
+| 47 | A native source detail row cannot exist without its binding | three `DEFERRABLE INITIALLY DEFERRED` foreign keys to `accounting_source_bindings` | "a source detail row written without its binding cannot commit either" | **ENFORCED** |
+| 48 | The generic engine path refuses the three native source types | `AccountingEngine.post` rejects before minting | `accounting-engine.test.ts` — "refuses every Phase-2-native source type on the generic posting path" | **ENFORCED** |
+| 49 | Every opening-balance command takes one per-business lock, before any row lock | `accounting_opening_balance_lock_key`, read out of `pg_proc` | "every opening-balance command takes the one per-business lock, and takes it first" | **ENFORCED** |
+| 50 | Two genuinely simultaneous opening balances get an accounting answer, never a lock-manager error | the lock order, plus the fingerprint comparison | `accounting-opening-balance-race.test.ts` — CASE A, B, C, all asserting no 40P01 and no `23505` | **ENFORCED** |
+| 51 | A lost race leaves no orphan draft and no half-stated position | the whole command is one transaction | CASE C — the ledger is counted after the rollback | **ENFORCED** |
+| 52 | An opening balance and a business's first ordinary posting do not deadlock | both take the business row `FOR UPDATE`, in the same order | CASE D | **ENFORCED** |
 
 ## 5. The one architectural decision that needs stating
 
@@ -236,6 +244,42 @@ Every HTTP case answered `404` at first. `AccountingController` had been registe
 This was not in the directive — it was found by executing it. `AppModule` now composes `AccountingController`, and `process-composition.test.ts` holds the two module definitions to each other permanently: everything the merchant process serves, the single process serves too, plus exactly one named exception (`AdminController`, which the merchant process must never carry).
 
 `الجولة الثانية من المراجعة صحّحت ثلاثة عيوب: سطر الرصيد الافتتاحي كان يستطيع ادّعاء مستأجر لا يملك النشاط، ومسودّة الرصيد كانت تقبل عملة غير مسجَّلة وسعر صرف محلي غير 1، وتاريخ قيد العكس كان اختياريًا فيحدّده الخادم من ساعته — فتفشل إعادة الإرسال نفسها بعد منتصف الليل المحلي. التاريخ صار إلزاميًا، وأُزيلت من المحرّك إمكانية قراءة "اليوم" أصلًا. كما تبيّن أن مسارات المحاسبة لم تكن مُركَّبة في بيئة الاختبار، وهذا سبب عدم اكتشاف العيب الثالث سابقًا.`
+
+## 6d. The third review round — a source that owed nothing, and a race nobody had run
+
+### A. A manual adjustment could exist with no reason and no actor
+
+`journal_entries` carried a deferred completeness trigger for `reversal` and another for `opening_balance`: an entry of either type must have its detail row by COMMIT. `manual_adjustment` had none.
+
+That asymmetry was the whole defect. `accounting_post_entry` is generic by design — it posts whatever source type the verified assertion names, which is what lets a later phase's sale be a thin derivation in front of one hardened primitive. An assertion for `post` / `manual_adjustment` is not a forgery; it is exactly the assertion `accounting_post_manual_adjustment` carries. So anyone holding one could drive the primitive **directly** and get an entry, its lines, its binding, its audit row and its outbox row while `accounting_manual_adjustments` stayed empty. The adjustment would sit in the ledger with no reason and no actor: the one source whose entire justification is "a person decided this" was the one source that recorded neither who nor why. "A manual adjustment requires a reason" was a convention about which function people called, not an invariant.
+
+And nobody had to be hostile to get there. `@daftar/accounting` offers `post()` beside `adjust()` and takes the source type as a string; a domain written next year reaches for the general one.
+
+Reproduced first, as a permanent regression: a real assertion, the real primitive, the real runtime role. Before the fix the statement succeeded **and so did the COMMIT**. After it the statement still succeeds — that is what DEFERRED means, and asserting it is what distinguishes a completeness rule from a `NOT NULL` that would have stopped the INSERT — and the COMMIT fails with `accounting.adjustment_detail_missing`, leaving zero entries, lines, bindings, detail rows, audit rows and outbox rows.
+
+`accounting_manual_adjustment_entry_complete()` is the twin of the other two: SECURITY DEFINER, owned by `daftar_accounting_internal`, `pg_temp` last, installed as a `DEFERRABLE INITIALLY DEFERRED` constraint trigger on `journal_entries`. With `accounting_manual_adjustments_binding_fk` in the other direction, neither end can be an orphan.
+
+The engine refuses it too, one layer earlier: `AccountingEngine.post` now rejects all three native source types by name, before minting anything. That is a convenience, not the guarantee — TypeScript is not a constraint, and the database is what actually holds. Its consequence is that the generic path has no legitimate caller in Phase 2, because the closed registry holds exactly the three types this slice owns. Every suite that had been building fixtures through it now builds them through the command that owns the source, which is how the application builds them.
+
+### B. The opening-balance concurrency tests were not concurrent
+
+The earlier cases held two connections and used them in sequence: `await` the whole of A's command, then start B, then commit A. Everything A could lock, A had locked before B existed. What they proved is that a transaction blocks behind a finished statement — worth keeping, and not the race.
+
+Run as a real race, two defects appeared immediately, both as `deadlock detected`:
+
+`accounting_open_balance_draft` read the existing status and then INSERTed with nothing serializing the decision. Two simultaneous requests carrying the same `Idempotency-Key` derive the **same** source id, so both could read "no draft here" and both go on to write it.
+
+And the lock order was inverted. Every command took `businesses FOR SHARE` and only then the per-business advisory lock. SHARE does not conflict with SHARE, so two opening balances could both hold the business row before one queued behind the other's advisory lock — and the advisory-lock holder then called `accounting_post_entry`, which takes that row **FOR UPDATE** for a business's first posting, and waited for the SHARE lock the blocked transaction still held. Neither could move. A merchant received a 40P01 where the accounting answer was `accounting.opening_balance_exists`.
+
+The fix is the order, not a retry. All five commands — draft, edit, discard, post, supersede — now take one `accounting_opening_balance_lock_key(business)` advisory lock FIRST, then the business row **FOR UPDATE**, then the source row. A transaction without the advisory lock holds nothing for the advisory-lock holder to wait behind, and taking the strong mode once means there is no upgrade to perform. An opening balance is stated about once in a business's life; serializing it costs nothing anybody will measure.
+
+The new matrix launches both commands before either transaction commits and then refuses to proceed until PostgreSQL reports one of **its own two backends** waiting on a lock — the barrier is also the evidence, and a case where the two never met fails rather than passing quietly. Six cases: same key/same payload, same key/different payload, different keys, against a first ordinary posting, against a base-currency change, against a timezone change. Every one asserts that no deadlock, serialization failure, statement timeout, duplicate key or index name reaches the caller.
+
+### C. What the fixtures were doing
+
+Making the completeness rule real broke a number of existing suites, and the reason is worth recording rather than smoothing over: they built their fixtures by driving the generic primitive with `manual_adjustment` — the bypass itself. The shared helper now routes a `manual_adjustment` through `accounting_post_manual_adjustment`, which forwards the same assertion and the same payload to the primitive unchanged, so every property those suites prove about it is proved exactly as before. The raw-SQL fixtures in the journal and RLS matrices write the detail row themselves, so the journal invariant under test stays the only thing that can refuse.
+
+`الجولة الثالثة صحّحت عيبين. الأول: قيد التسوية اليدوية لم يكن مُلزَمًا بسجل السبب والفاعل، فكان يمكن كتابته عبر الدالة العامة بلا سبب ولا فاعل — وهي الحالة الوحيدة التي مبرّرها كلّه "قرار إنسان". صار القيد يسقط عند COMMIT إن غاب السجل، كما هو الحال في المصدرين الآخرين منذ البداية. الثاني: اختبارات التزامن للرصيد الافتتاحي لم تكن متزامنة فعلًا، وعند تشغيلها كسباق حقيقي ظهر تعارض ترتيب أقفال ينتهي بـ deadlock. أُعيد ترتيب الأقفال في الأوامر الخمسة كلها: قفل واحد لكل نشاط أولًا، ثم صفّ النشاط بـ FOR UPDATE، ثم صفّ المصدر. الاختبارات الجديدة لا تمرّ إلا إذا تصادم الأمران فعلًا.`
 
 ## 7. What this slice deliberately did NOT build
 

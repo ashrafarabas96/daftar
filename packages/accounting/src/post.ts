@@ -184,6 +184,12 @@ export interface AuthorizedPostingContext {
  * that method derived, and a caller that could bypass that would be a caller
  * the ledger cannot audit.
  */
+/**
+ * The source types Phase 2 owns natively. Each has a command of its own on
+ * `AccountingEngine`, and none of them may be posted through `post`.
+ */
+export const NATIVE_SOURCE_TYPES = ['manual_adjustment', 'reversal', 'opening_balance'] as const;
+
 export class AccountingEngine {
   constructor(
     private readonly minter: AccountingAssertionMinter,
@@ -195,6 +201,31 @@ export class AccountingEngine {
   ) {}
 
   async post(command: PostingCommand, context: AuthorizedPostingContext): Promise<PostingResult> {
+    // `post` is the entry point for a source this slice does not own: a sale,
+    // an invoice, a payment, whatever a later phase brings. The three sources
+    // Phase 2 owns each have their own method on this class, because each
+    // carries something the generic path has no way to supply -- a mandatory
+    // reason, an original entry to mirror, a persisted draft. Reaching them
+    // through here would produce a journal entry with none of it.
+    //
+    // The database refuses that too, and does so unconditionally: the
+    // completeness triggers in 0046 and 0047 fail the COMMIT when a native
+    // source's entry has no detail row, whichever process wrote it. This
+    // check does not replace that one and could not -- TypeScript is not a
+    // constraint -- it just turns a COMMIT-time trigger failure into a typed
+    // refusal naming the method the caller wanted, at the moment they called
+    // the wrong one.
+    if ((NATIVE_SOURCE_TYPES as readonly string[]).includes(command.sourceType)) {
+      throw new AccountingError(
+        'accounting.assertion_wrong_source',
+        `${command.sourceType} entries are posted through their own command, not the generic posting entry point`,
+        {
+          businessId: command.businessId,
+          sourceType: command.sourceType,
+          sourceId: command.sourceId,
+        },
+      );
+    }
     validatePostingCommand(command);
     validateBranchScope(command, context.branchScope);
 

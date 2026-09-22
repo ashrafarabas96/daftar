@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { beforeAll, describe, expect, it } from 'vitest';
 import type { PostingCommand } from '@daftar/accounting';
-import { AccountingPostingService } from '../../apps/api/src/modules/accounting/accounting-posting.service';
+import { AccountingSourcesService } from '../../apps/api/src/modules/accounting/accounting-sources.service';
 import { TenancyService, type MembershipContext } from '../../apps/api/src/modules/tenancy/tenancy.service';
 import { createTestApp, ownerPool, resetData, uniqueEmail, type TestApp } from '../helpers/test-app';
 import { must, todayIn } from '../helpers/accounting-posting';
@@ -28,7 +28,7 @@ import { must, todayIn } from '../helpers/accounting-posting';
  */
 
 let t: TestApp;
-let posting: AccountingPostingService;
+let sources: AccountingSourcesService;
 let tenancy: TenancyService;
 let today: string;
 
@@ -53,6 +53,42 @@ async function onboard(): Promise<Owner> {
   const userId = (await t.request.get('/v1/auth/me').set('Authorization', `Bearer ${token}`)).body.userId as string;
   const membership = await tenancy.resolveMembership(userId, businessId);
   return { token, userId, businessId, membership };
+}
+
+/**
+ * The entry these cases reverse, posted the way the application posts one.
+ *
+ * It goes through the command that OWNS `manual_adjustment` rather than the
+ * generic engine path: since round three that path refuses a native source
+ * type by name, and the database refuses an adjustment entry with no detail
+ * row at COMMIT. A fixture built through the bypass would be a fixture the
+ * ledger no longer accepts.
+ */
+async function postOriginal(m: MembershipContext, entryDate: string): Promise<{ entryId: string }> {
+  const c = command(m, entryDate);
+  return sources.postAdjustment(
+    m,
+    {
+      entryDate,
+      description: c.description,
+      reason: 'the fact that will be undone',
+      lines: c.lines.map((l) => ({
+        account: l.account.kind === 'system' ? { kind: 'system' as const, systemKey: l.account.systemKey } : { kind: 'code' as const, code: l.account.code },
+        side: l.side,
+        baseAmountMinor: l.baseAmountMinor.toString(),
+        baseCurrency: l.baseCurrency,
+        txnAmountMinor: l.txnAmountMinor.toString(),
+        txnCurrency: l.txnCurrency,
+        fxRate: l.fxRate,
+        fxRateSource: l.fxRateSource,
+        fxRateAt: l.fxRateAt.toISOString().replace(/\.\d{3}Z$/, 'Z'),
+        branchId: l.branchId,
+        warehouseId: l.warehouseId,
+      })),
+    },
+    `idem-original-${randomUUID()}`,
+    'req-original',
+  );
 }
 
 function command(m: MembershipContext, entryDate: string): PostingCommand {
@@ -109,7 +145,7 @@ async function reverseOverHttp(o: Owner, entryId: string, body: Record<string, u
 beforeAll(async () => {
   t = await createTestApp();
   await resetData();
-  posting = t.app.get(AccountingPostingService);
+  sources = t.app.get(AccountingSourcesService);
   tenancy = t.app.get(TenancyService);
   today = await todayIn(ownerPool(), 'Asia/Hebron');
 });
@@ -119,7 +155,7 @@ beforeAll(async () => {
 describe('the public reversal contract requires an explicit date (§8, §10)', () => {
   it('H · a request that omits entryDate is refused, and reverses nothing', async () => {
     const o = await onboard();
-    const original = await posting.post(o.membership, command(o.membership, today));
+    const original = await postOriginal(o.membership, today);
 
     const res = await reverseOverHttp(o, original.entryId, { reason: 'no date stated' });
     expect(res.status).toBe(400);
@@ -130,14 +166,14 @@ describe('the public reversal contract requires an explicit date (§8, §10)', (
 
   it('H · a request that sends entryDate: null is refused too', async () => {
     const o = await onboard();
-    const original = await posting.post(o.membership, command(o.membership, today));
+    const original = await postOriginal(o.membership, today);
     const res = await reverseOverHttp(o, original.entryId, { entryDate: null, reason: 'an explicit nothing' });
     expect(res.status).toBe(400);
   });
 
   it('A · an explicit date posts the reversal', async () => {
     const o = await onboard();
-    const original = await posting.post(o.membership, command(o.membership, today));
+    const original = await postOriginal(o.membership, today);
     const res = await reverseOverHttp(o, original.entryId, { entryDate: today, reason: 'a considered correction' });
     expect(res.status).toBe(201);
     expect(res.body['entryId']).toBeTypeOf('string');
@@ -150,7 +186,7 @@ describe('the public reversal contract requires an explicit date (§8, §10)', (
 describe('the same reversal request replays whatever day it is (§10)', () => {
   it('B · an identical retry returns the same entry', async () => {
     const o = await onboard();
-    const original = await posting.post(o.membership, command(o.membership, today));
+    const original = await postOriginal(o.membership, today);
     const body = { entryDate: today, reason: 'a considered correction' };
 
     const first = await reverseOverHttp(o, original.entryId, body);
@@ -168,7 +204,7 @@ describe('the same reversal request replays whatever day it is (§10)', () => {
     const o = await onboard();
     // Start far to the west, so the business's civil date is the earlier one.
     const dayOne = await setTimezone(o.businessId, 'Pacific/Honolulu');
-    const original = await posting.post(o.membership, command(o.membership, dayOne));
+    const original = await postOriginal(o.membership, dayOne);
 
     // The merchant's client formed this body once and will resend it verbatim.
     const body = { entryDate: dayOne, reason: 'a considered correction' };
@@ -201,7 +237,7 @@ describe('the same reversal request replays whatever day it is (§10)', () => {
   it('D · a different explicit date is a different command, and is refused', async () => {
     const o = await onboard();
     const origin = shift(today, -3);
-    const original = await posting.post(o.membership, command(o.membership, origin));
+    const original = await postOriginal(o.membership, origin);
     const first = await reverseOverHttp(o, original.entryId, { entryDate: today, reason: 'a considered correction' });
     expect(first.status).toBe(201);
 
@@ -212,7 +248,7 @@ describe('the same reversal request replays whatever day it is (§10)', () => {
 
   it('E · a date before the original is refused', async () => {
     const o = await onboard();
-    const original = await posting.post(o.membership, command(o.membership, today));
+    const original = await postOriginal(o.membership, today);
     const res = await reverseOverHttp(o, original.entryId, { entryDate: shift(today, -1), reason: 'too early' });
     expect(res.status).toBeGreaterThanOrEqual(400);
     expect(JSON.stringify(res.body)).toMatch(/entry_date_before_original/);
@@ -220,7 +256,7 @@ describe('the same reversal request replays whatever day it is (§10)', () => {
 
   it('F · a future date is refused', async () => {
     const o = await onboard();
-    const original = await posting.post(o.membership, command(o.membership, today));
+    const original = await postOriginal(o.membership, today);
     const res = await reverseOverHttp(o, original.entryId, { entryDate: shift(today, 1), reason: 'too late' });
     expect(res.status).toBeGreaterThanOrEqual(400);
     expect(JSON.stringify(res.body)).toMatch(/entry_date_in_future/);
@@ -228,7 +264,7 @@ describe('the same reversal request replays whatever day it is (§10)', () => {
 
   it('G · the same date with a different reason is a different fact, and is refused', async () => {
     const o = await onboard();
-    const original = await posting.post(o.membership, command(o.membership, today));
+    const original = await postOriginal(o.membership, today);
     expect((await reverseOverHttp(o, original.entryId, { entryDate: today, reason: 'the first reason' })).status).toBe(201);
     const second = await reverseOverHttp(o, original.entryId, { entryDate: today, reason: 'a different reason' });
     expect(second.status).toBeGreaterThanOrEqual(400);

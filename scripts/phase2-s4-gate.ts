@@ -22,7 +22,6 @@
  * Usage: npm run gate:phase2:s4 [-- --list]
  */
 import { spawnSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { findDefinerSearchPathViolations } from './guards/definer-search-path';
@@ -39,13 +38,16 @@ const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 const S4_MIGRATIONS = ['0046_accounting_sources.sql', '0047_accounting_opening_balances.sql'] as const;
 
 /**
- * The digest of 0046 as the Tech Lead reviewed it (§14). 0047 is corrected in
- * place across review rounds and so carries no pinned digest; 0046 is not, and
- * a change to it would move ground the review already stood on. This is not a
- * freeze — the manifest checks below still require BOTH files to be
- * candidates — it is the narrower promise that one reviewed file did not move.
+ * There is deliberately NO pinned digest here any more.
+ *
+ * Earlier rounds pinned 0046, on the argument that it was the one reviewed
+ * file which had not been corrected in place. Round three corrected it — the
+ * manual-adjustment completeness trigger lives in it — so that sentence is
+ * simply no longer true, and a pin recomputed after every round proves
+ * nothing except that somebody recomputed it. What a candidate actually owes
+ * is stated below and is unchanged: it is present, nothing exists beyond it,
+ * and it has NOT been written into the frozen manifest.
  */
-const S4_REVIEWED_0046_SHA256 = '347faf5063205f9acf71848cb369444f9e03ef11d65cb038e79549e19af0e4e0';
 const FROZEN_THROUGH = '0045_accounting_post_entry.sql';
 
 /** The tables and routines this slice owes. */
@@ -84,6 +86,9 @@ const P2_S4_TESTS = [
   'tests/integration/accounting-reversal-contract.test.ts',
   'tests/integration/process-composition.test.ts',
   'tests/integration/accounting-sources-concurrency.test.ts',
+  'tests/integration/accounting-source-completeness.test.ts',
+  'tests/integration/accounting-opening-balance-race.test.ts',
+  'tests/integration/accounting-engine.test.ts',
   'tests/security/accounting-sources-authority.test.ts',
   'tests/integration/accounting-journal.test.ts',
   'tests/integration/migration-upgrade.test.ts',
@@ -124,15 +129,6 @@ function checkMigrationBoundary(): void {
     fail('scope', `migrations beyond 0047 exist (${beyond.join(', ')}) — §7 authorizes exactly 0046 and 0047, and §59 forbids starting P2-S5`);
   } else {
     ok('no migration after 0047 — the slice stopped where it was authorized to stop');
-  }
-
-  const actual0046 = createHash('sha256')
-    .update(readFileSync(join(MIGRATIONS_DIR, '0046_accounting_sources.sql')))
-    .digest('hex');
-  if (actual0046 !== S4_REVIEWED_0046_SHA256) {
-    fail('reviewed-0046', `0046_accounting_sources.sql is ${actual0046} — it must stay byte-for-byte at the reviewed ${S4_REVIEWED_0046_SHA256} (§14)`);
-  } else {
-    ok('0046 is byte-for-byte the file the Tech Lead reviewed (§14)');
   }
 
   const manifest = JSON.parse(readFileSync(join(ROOT, 'infrastructure/database/MIGRATION_MANIFEST.json'), 'utf8')) as {
@@ -475,6 +471,61 @@ const REQUIRED_BEHAVIOUR: ReadonlyArray<{ file: string; needle: RegExp; what: st
     needle: /accounting write surface is composed in both/,
     what: 'the accounting routes exist in the composition the tests can reach',
   },
+  {
+    file: 'tests/integration/accounting-source-completeness.test.ts',
+    needle: /the statement passes, the COMMIT does not, and nothing survives/,
+    what: 'a native source entry driven straight through the primitive fails at COMMIT (§2-§5)',
+  },
+  {
+    file: 'tests/integration/accounting-source-completeness.test.ts',
+    needle: /the refusal is the INVARIANT, not a missing grant/,
+    what: 'the bypass case is refused by the invariant and not by a missing grant (§5)',
+  },
+  {
+    file: 'tests/integration/accounting-source-completeness.test.ts',
+    needle: /all three native sources carry the same completeness trigger, equally deferred/,
+    what: 'the three completeness triggers, read out of the live catalogue (§7)',
+  },
+  {
+    file: 'tests/integration/accounting-source-completeness.test.ts',
+    needle: /every opening-balance command takes the one per-business lock, and takes it first/,
+    what: 'the opening-balance lock ORDER, read out of the live catalogue (§12, §17)',
+  },
+  {
+    file: 'tests/integration/accounting-opening-balance-race.test.ts',
+    needle: /CASE A — the same idempotency key and the same positions, at the same moment/,
+    what: 'truly simultaneous same-key, same-payload opening balances (§15 A)',
+  },
+  {
+    file: 'tests/integration/accounting-opening-balance-race.test.ts',
+    needle: /CASE B — the same idempotency key, materially different money, at the same moment/,
+    what: 'truly simultaneous same-key, different-payload opening balances (§15 B)',
+  },
+  {
+    file: 'tests/integration/accounting-opening-balance-race.test.ts',
+    needle: /CASE C — two different opening balances of one business, at the same moment/,
+    what: 'truly simultaneous different-key opening balances (§15 C)',
+  },
+  {
+    file: 'tests/integration/accounting-opening-balance-race.test.ts',
+    needle: /first manual adjustment, at the same moment/,
+    what: 'an opening balance against the first ordinary posting (§15 D)',
+  },
+  {
+    file: 'tests/integration/accounting-opening-balance-race.test.ts',
+    needle: /function assertNoRawFailure/,
+    what: 'every race asserts no deadlock, no serialization failure and no unique-violation leakage (§16)',
+  },
+  {
+    file: 'tests/integration/accounting-opening-balance-race.test.ts',
+    needle: /no backend ever waited on a lock, so the two commands did not contend/,
+    what: 'each race refuses to pass unless the two commands actually contended (§14)',
+  },
+  {
+    file: 'tests/integration/accounting-engine.test.ts',
+    needle: /refuses every Phase-2-native source type on the generic posting path/,
+    what: 'the generic engine path refuses the three native source types (§8)',
+  },
 ];
 
 /**
@@ -585,6 +636,100 @@ function checkDataIntegrityAndDeterminism(): void {
   }
 }
 
+/**
+ * ── 4c. Source completeness and lock order (round three, §2-§7, §12, §17) ──
+ *
+ * The structural half. Every native source must owe a detail row at COMMIT,
+ * and every opening-balance command must take one lock before any row lock.
+ * The behavioural half runs in the two suites named in REQUIRED_BEHAVIOUR,
+ * against a real cluster; this half notices the day somebody deletes a
+ * trigger from a file that has not been re-applied to a test database yet.
+ */
+function checkSourceCompletenessAndLockOrder(): void {
+  console.log('P2-S4 GATE — source completeness and opening-balance lock order');
+
+  const s4 = stripComments(s4Sql());
+
+  // §2, §4, §7: all three native sources, protected identically. Named as a
+  // set rather than one at a time, because the defect was asymmetry.
+  const completeness = [
+    { source: 'manual_adjustment', fn: 'accounting_manual_adjustment_entry_complete', trigger: 'journal_entries_manual_adjustment_complete' },
+    { source: 'reversal', fn: 'accounting_reversal_entry_complete', trigger: 'journal_entries_reversal_complete' },
+    { source: 'opening_balance', fn: 'accounting_opening_balance_entry_complete', trigger: 'journal_entries_opening_balance_complete' },
+  ];
+
+  for (const { source, fn, trigger } of completeness) {
+    const definer = new RegExp(`CREATE OR REPLACE FUNCTION ${fn}\\(\\) RETURNS trigger[\\s\\S]{0,200}?SECURITY DEFINER`, 'i');
+    if (!definer.test(s4)) {
+      fail('source-completeness', `${fn} is missing or is not SECURITY DEFINER — a visibility-dependent integrity check is not one (§4)`);
+      continue;
+    }
+    const installed = new RegExp(
+      `CREATE CONSTRAINT TRIGGER ${trigger}\\s+AFTER INSERT ON journal_entries\\s+DEFERRABLE INITIALLY DEFERRED\\s+FOR EACH ROW EXECUTE FUNCTION ${fn}\\(\\)`,
+      'i',
+    );
+    if (installed.test(s4)) ok(`a ${source} entry owes its detail row at COMMIT (§4, §7)`);
+    else fail('source-completeness', `${trigger} is not installed as a DEFERRABLE INITIALLY DEFERRED constraint trigger on journal_entries (§4)`);
+
+    const owned = new RegExp(`ALTER FUNCTION ${fn}\\(\\) OWNER TO daftar_accounting_internal`, 'i');
+    const revoked = new RegExp(`REVOKE ALL ON FUNCTION ${fn}\\(\\) FROM PUBLIC`, 'i');
+    if (!owned.test(s4) || !revoked.test(s4)) {
+      fail('source-completeness', `${fn} is not both revoked from PUBLIC and owned by daftar_accounting_internal (G-5)`);
+    }
+  }
+
+  // §4: the manual-adjustment check must key on the source identity, which
+  // for an adjustment IS the detail row's id. Keying on anything else would
+  // compile and prove nothing.
+  if (/m\.business_id = NEW\.business_id AND m\.id = NEW\.source_id/.test(s4)) {
+    ok('the manual-adjustment check resolves the detail by (business_id, source_id) (§4)');
+  } else {
+    fail('source-completeness', 'the manual-adjustment completeness check does not resolve its detail row by (business_id, source_id) (§4)');
+  }
+
+  // §5: a stable domain code, so the caller reads a sentence and not a
+  // trigger name.
+  if (/accounting\.adjustment_detail_missing/.test(s4)) ok('the refusal has a stable domain code (§5)');
+  else fail('source-completeness', 'no command raises accounting.adjustment_detail_missing — the refusal must have a stable code (§5)');
+
+  // §12, §17: ONE lock key, taken by ALL five commands, before any row lock.
+  if (/CREATE OR REPLACE FUNCTION accounting_opening_balance_lock_key\(p_business UUID\) RETURNS BIGINT/.test(s4)) {
+    ok('there is one per-business opening-balance lock key (§12)');
+  } else {
+    fail('lock-order', 'accounting_opening_balance_lock_key is missing — five copies of a lock key become five keys (§12)');
+  }
+
+  const bodies = stripComments(readMigration('0047_accounting_opening_balances.sql'));
+  for (const routine of [
+    'accounting_open_balance_draft',
+    'accounting_open_balance_edit',
+    'accounting_open_balance_discard',
+    'accounting_open_balance_post',
+    'accounting_open_balance_supersede',
+  ]) {
+    const start = bodies.indexOf(`CREATE OR REPLACE FUNCTION ${routine}(`);
+    if (start < 0) {
+      fail('lock-order', `${routine} is missing (§12)`);
+      continue;
+    }
+    const end = bodies.indexOf('\n$$;', start);
+    const body = bodies.slice(start, end < 0 ? bodies.length : end);
+    const lock = body.indexOf('accounting_opening_balance_lock_key');
+    const share = body.indexOf('FOR SHARE');
+    const update = body.indexOf('FOR UPDATE');
+    const firstRowLock = Math.min(share < 0 ? Number.MAX_SAFE_INTEGER : share, update < 0 ? Number.MAX_SAFE_INTEGER : update);
+    if (lock < 0) {
+      fail('lock-order', `${routine} never takes the per-business opening-balance lock (§12)`);
+    } else if (lock > firstRowLock) {
+      fail('lock-order', `${routine} locks a row before taking the opening-balance lock — that is the cycle §11 describes`);
+    } else if (share >= 0) {
+      fail('lock-order', `${routine} takes the business row FOR SHARE — the primitive upgrades to FOR UPDATE and deadlocks against it (§13)`);
+    } else {
+      ok(`${routine} takes its lock first, then the business row FOR UPDATE (§12, §13)`);
+    }
+  }
+}
+
 function checkIdempotencyProof(): void {
   console.log('P2-S4 GATE — the idempotency property');
 
@@ -662,7 +807,9 @@ if (LIST_ONLY) {
   console.log('  structural: G-4 protects EVERY journal writer, G-5 covers the new definers, no runtime DML on any source table');
   console.log('  structural: the engine owns the derivations, no bypass seam exists, exactly three merchant endpoints, money crosses HTTP as strings');
   console.log('  structural: every named idempotency regression exists, no caller-supplied fingerprint, refusals carry no financial values');
-  console.log('  structural: 0046 is byte-for-byte the reviewed file; every P2-S4 table names its tenant physically');
+  console.log('  structural: every P2-S4 table names its tenant physically');
+  console.log('  structural: all three native sources owe a detail row at COMMIT, through a deferred constraint trigger on journal_entries');
+  console.log('  structural: all five opening-balance commands take one per-business lock FIRST, and never take the business row FOR SHARE');
   console.log("  structural: opening-balance currencies answer to the registry, a domestic position is rate 1, the reversal date is the client's");
   for (const s of STEPS) console.log(`  command:    ${s.cmd} ${s.args.join(' ')}`);
   process.exit(0);
@@ -672,6 +819,7 @@ checkMigrationBoundary();
 checkSurfaces();
 checkIdempotencyProof();
 checkDataIntegrityAndDeterminism();
+checkSourceCompletenessAndLockOrder();
 checkGuards();
 checkEngineAndSurface();
 if (failures > 0) {

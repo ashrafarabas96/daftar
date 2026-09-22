@@ -47,6 +47,7 @@ export type AccountingErrorCode =
   | 'accounting.reversal_reason_required'
   | 'accounting.reversal_exists'
   | 'accounting.reversal_of_reversal'
+  | 'accounting.adjustment_detail_missing'
   | 'accounting.reversal_detail_missing'
   | 'accounting.entry_not_found'
   | 'accounting.entry_base_currency_mismatch'

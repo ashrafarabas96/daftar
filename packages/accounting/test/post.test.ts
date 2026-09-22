@@ -33,10 +33,17 @@ const line = (over: Partial<PostingLineCommand> = {}): PostingLineCommand => ({
   ...over,
 });
 
+/**
+ * A command on the GENERIC posting path, which means a source type this slice
+ * does not own. `sale` stands in for the operational source a later phase
+ * will register: `post` exists for that caller, and since the round-three
+ * correction it refuses the three Phase-2-native types by name, so a generic
+ * command can no longer be written as `manual_adjustment` even in a test.
+ */
 const command = (over: Partial<PostingCommand> = {}): PostingCommand => ({
   tenantId: TENANT,
   businessId: BUSINESS,
-  sourceType: 'manual_adjustment',
+  sourceType: 'sale',
   sourceId: SOURCE,
   entryDate: '2026-03-14',
   lines: [line(), line({ account: { kind: 'system', systemKey: 'owner_equity' }, side: 'C' })],
@@ -244,6 +251,30 @@ describe('the engine binds authority to the payload (§27, §54)', () => {
     expect(mint).not.toHaveBeenCalled();
     expect(seen).toHaveLength(0);
     mint.mockRestore();
+  });
+
+  it('refuses each Phase-2-native source type before minting anything', async () => {
+    // The bypass the round-three directive closes: `post` is generic and
+    // takes the source type as a string, so a domain written later can reach
+    // a source that has its own command and produce an entry with none of
+    // what that command supplies. The database refuses it at COMMIT; this
+    // refuses it at the call, and spends no authority doing so.
+    for (const sourceType of ['manual_adjustment', 'reversal', 'opening_balance']) {
+      const { port, seen } = capturingPort();
+      const mint = vi.spyOn(minter, 'mint');
+      await expect(engineWith(port).post(command({ sourceType }), { actorUserId: ACTOR, branchScope: { mode: 'all' } })).rejects.toThrow(
+        /manual_adjustment|reversal|opening_balance/,
+      );
+      expect(mint).not.toHaveBeenCalled();
+      expect(seen).toHaveLength(0);
+      mint.mockRestore();
+    }
+  });
+
+  it('still posts a source this slice does not own', async () => {
+    const { port, seen } = capturingPort();
+    await engineWith(port).post(command({ sourceType: 'sale' }), { actorUserId: ACTOR, branchScope: { mode: 'all' } });
+    expect(seen).toHaveLength(1);
   });
 
   it('returns the database result verbatim, including an idempotent replay', async () => {

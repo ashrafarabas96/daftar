@@ -111,6 +111,23 @@ const INSERT_LINE = `INSERT INTO journal_lines
 // in milliseconds would share one fingerprint.
 
 /**
+ * The detail row a `manual_adjustment` entry owes at COMMIT (0046 §6b).
+ *
+ * Every case in this file is about a JOURNAL invariant. Since round three all
+ * three native source types carry a deferred completeness trigger, so an
+ * entry written straight into the table is incomplete on the SOURCE side as
+ * well — and two deferred rules failing at one COMMIT means the case proves
+ * whichever fired first. Supplying the detail leaves the journal as the only
+ * thing that can refuse, which is what these cases were written to establish.
+ */
+async function adjustmentDetail(client: Client, tenantId: string, businessId: string, sourceId: string, actorUserId: string): Promise<void> {
+  await client.query(
+    `INSERT INTO accounting_manual_adjustments (tenant_id, business_id, id, reason, actor_user_id) VALUES ($1,$2,$3,'a fixture adjustment',$4)`,
+    [tenantId, businessId, sourceId, actorUserId],
+  );
+}
+
+/**
  * Write an entry, its lines and its binding in ONE transaction and commit.
  * Resolves on a successful COMMIT, rejects with the database's error.
  */
@@ -141,11 +158,21 @@ async function post(entry: EntrySpec, lines: LineSpec[], opts: { binding?: boole
     );
     for (const line of lines) await client.query(INSERT_LINE, lineValues(line, entryId));
     if (opts.binding !== false) {
+      const sourceType = entry.sourceType ?? 'manual_adjustment';
       await client.query(
         `INSERT INTO accounting_source_bindings (tenant_id, business_id, source_type, source_id, journal_entry_id)
          VALUES ($1,$2,$3,$4,$5)`,
-        [entry.tenantId ?? fx.tenantId, entry.businessId ?? fx.businessId, entry.sourceType ?? 'manual_adjustment', sourceId, entryId],
+        [entry.tenantId ?? fx.tenantId, entry.businessId ?? fx.businessId, sourceType, sourceId, entryId],
       );
+      if (sourceType === 'manual_adjustment') {
+        await adjustmentDetail(
+          client,
+          entry.tenantId ?? fx.tenantId,
+          entry.businessId ?? fx.businessId,
+          sourceId,
+          entry.actorUserId === undefined ? fx.userId : entry.actorUserId,
+        );
+      }
     }
     await client.query('COMMIT');
     return entryId;
@@ -342,12 +369,12 @@ describe('AL-01 — the binding is deferred in BOTH directions', () => {
     // the moment it is written; this is what "DEFERRABLE INITIALLY DEFERRED"
     // actually buys, and the reason it is worth testing rather than declaring.
     //
-    // The source type is `manual_adjustment` because P2-S4 gave `reversal`
-    // and `opening_balance` deferred completeness triggers of their own: an
-    // entry of either type must also carry its detail row. That is a
-    // SEPARATE rule from the one under test here, and naming one of those
-    // types would make this case prove two things and fail for the wrong
-    // reason. `manual_adjustment` isolates the deferred binding by itself.
+    // Since round three ALL THREE native source types carry a deferred
+    // completeness trigger, so there is no longer a source type that isolates
+    // the deferred binding by having no detail rule of its own. The detail
+    // row is therefore written here as well, and what remains under test is
+    // exactly the binding: the entry references it before it exists, and the
+    // transaction still commits.
     const client = await owner();
     const entryId = randomUUID();
     const sourceId = randomUUID();
@@ -364,6 +391,7 @@ describe('AL-01 — the binding is deferred in BOTH directions', () => {
         [fx.tenantId, fx.businessId, entryId, sourceId, fx.userId, FINGERPRINT],
       );
       for (const line of balancedLines(4200)) await client.query(INSERT_LINE, lineValues(line, entryId));
+      await adjustmentDetail(client, fx.tenantId, fx.businessId, sourceId, fx.userId);
       await client.query('COMMIT');
     } finally {
       await client.end();
@@ -727,6 +755,7 @@ describe('AL-09 — FX arithmetic, computed in the database', () => {
          VALUES ($1,$2,'manual_adjustment',$3,$4)`,
         [fx.otherTenantId, fx.otherBusinessId, sourceId, entryId],
       );
+      await adjustmentDetail(client, fx.otherTenantId, fx.otherBusinessId, sourceId, fx.otherUserId);
       await client.query('COMMIT');
     } finally {
       await client.end();
@@ -845,6 +874,7 @@ describe('composite journal identity — (business_id, id), never id alone', () 
          VALUES ($1,$2,'manual_adjustment',$3,$4)`,
         [tenantId, businessId, sourceId, sharedId],
       );
+      await adjustmentDetail(client, tenantId, businessId, sourceId, tenantId === fx.tenantId ? fx.userId : fx.otherUserId);
     };
 
     await insertEntry(fx.tenantId, fx.businessId, sourceA);

@@ -395,6 +395,14 @@ describe('RLS is real on the ledger', () => {
            SELECT tenant_id, business_id, source_type, source_id, id FROM journal_entries WHERE business_id = $1 AND id = $2`,
           [m.business, entry?.id],
         );
+        // A `manual_adjustment` entry owes its detail row at COMMIT (0046
+        // §6b). This case is about RLS, so the entry is made complete and
+        // row level security is left as the only thing under test.
+        await owner.query(
+          `INSERT INTO accounting_manual_adjustments (tenant_id, business_id, id, reason, actor_user_id)
+           SELECT tenant_id, business_id, source_id, 'a fixture adjustment', $3 FROM journal_entries WHERE business_id = $1 AND id = $2`,
+          [m.business, entry?.id, user?.id],
+        );
         await owner.query('COMMIT');
       }
     } finally {

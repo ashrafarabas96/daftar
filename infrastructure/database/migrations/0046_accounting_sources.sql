@@ -277,6 +277,55 @@ CREATE CONSTRAINT TRIGGER journal_entries_reversal_complete
   DEFERRABLE INITIALLY DEFERRED
   FOR EACH ROW EXECUTE FUNCTION accounting_reversal_entry_complete();
 
+-- ────────────────────────────────────────────────────────────────────────
+-- 6b. The same rule, for the manual adjustment.
+--
+-- Section 6 makes "a reversal entry is a registered reversal" physically
+-- true. The third native source needs the identical sentence, and the reason
+-- it needs it is not only an attacker.
+--
+-- `accounting_post_entry` is generic by design: it posts whatever source type
+-- the verified assertion names. An assertion for `operation_kind = post`,
+-- `source_type = manual_adjustment` is not a forgery — it is exactly the
+-- assertion `accounting_post_manual_adjustment` carries — so whoever holds
+-- one can call the primitive DIRECTLY and get an entry, its lines, its
+-- binding, its audit row and its outbox row while `accounting_manual_adjustments`
+-- is never written. The result is an adjustment in the ledger with no reason
+-- and no actor: the one source whose entire justification is "a person
+-- decided this" would be the one source that fails to record who, or why.
+--
+-- Nobody has to be hostile to arrive there. `@daftar/accounting` offers
+-- `post()` next to `adjust()`, and `post()` takes the source type as a
+-- string. A domain written later, by somebody who has never read this file,
+-- will reach for the general one. "The wrapper requires a reason" is then a
+-- convention about which function people call, and a convention is not an
+-- invariant. This trigger is what makes the sentence true at COMMIT whichever
+-- internal API the caller picked.
+--
+-- `accounting_manual_adjustments_binding_fk` already proves the other
+-- direction: a detail row must resolve to a real source binding. The two
+-- together leave no orphan on either side.
+--
+-- DEFERRED and SECURITY DEFINER for precisely the reasons section 6 gives.
+-- ────────────────────────────────────────────────────────────────────────
+CREATE OR REPLACE FUNCTION accounting_manual_adjustment_entry_complete() RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $$
+BEGIN
+  IF NEW.source_type = 'manual_adjustment'
+     AND NOT EXISTS (SELECT 1 FROM accounting_manual_adjustments m
+                     WHERE m.business_id = NEW.business_id AND m.id = NEW.source_id) THEN
+    RAISE EXCEPTION 'accounting.adjustment_detail_missing: a manual-adjustment entry must be registered in accounting_manual_adjustments in the same transaction'
+      USING ERRCODE = 'P0001';
+  END IF;
+  RETURN NULL;
+END;
+$$;
+
+CREATE CONSTRAINT TRIGGER journal_entries_manual_adjustment_complete
+  AFTER INSERT ON journal_entries
+  DEFERRABLE INITIALLY DEFERRED
+  FOR EACH ROW EXECUTE FUNCTION accounting_manual_adjustment_entry_complete();
+
 -- ─────────────────────────────────────────────────────────────────────────
 -- 7. RLS and grants — default deny, and no runtime writer anywhere.
 --
@@ -685,6 +734,7 @@ REVOKE ALL ON FUNCTION accounting_post_reversal(UUID, DATE, TEXT, TEXT) FROM PUB
 REVOKE ALL ON FUNCTION accounting_manual_adjustments_immutable() FROM PUBLIC;
 REVOKE ALL ON FUNCTION accounting_reversals_immutable() FROM PUBLIC;
 REVOKE ALL ON FUNCTION accounting_reversal_entry_complete() FROM PUBLIC;
+REVOKE ALL ON FUNCTION accounting_manual_adjustment_entry_complete() FROM PUBLIC;
 
 -- The merchant runtime, and nobody else. Not the platform administrator:
 -- platform administration is not financial authority.
@@ -697,6 +747,7 @@ COMMENT ON FUNCTION accounting_post_reversal(UUID, DATE, TEXT, TEXT) IS
   'The second journal writer (AL-12). Derives every line of the mirror from the persisted original — the caller supplies no account, amount, currency, rate or dimension — verifies the derivation against the signed fingerprint, and writes entry, lines, binding, reversal registration, audit and outbox in one transaction. Requires an assertion whose operation kind is reverse.';
 
 ALTER FUNCTION accounting_reversal_entry_complete() OWNER TO daftar_accounting_internal;
+ALTER FUNCTION accounting_manual_adjustment_entry_complete() OWNER TO daftar_accounting_internal;
 ALTER FUNCTION accounting_post_manual_adjustment(DATE, TEXT, TEXT, TEXT, JSONB) OWNER TO daftar_accounting_internal;
 ALTER FUNCTION accounting_post_reversal(UUID, DATE, TEXT, TEXT) OWNER TO daftar_accounting_internal;
 

@@ -142,9 +142,14 @@ describe('the stabilization is real (§12)', () => {
       const c = commandOn(scope, '7100');
       await poster.query('BEGIN');
       await poster.query(`SELECT set_config('app.accounting_assertion', $1, true)`, [assertionFor(c, fx.userId)]);
-      await poster.query(`SELECT entry_id FROM accounting_post_entry($1::date, $2, $3, $4::jsonb)`, [
+      // Through the command that owns `manual_adjustment`: it forwards this
+      // assertion and this payload to `accounting_post_entry` unchanged, so
+      // the account advisory lock under test is taken exactly as before, and
+      // the entry is source-complete when the transaction commits below.
+      await poster.query(`SELECT entry_id FROM accounting_post_manual_adjustment($1::date, $2, $3, $4, $5::jsonb)`, [
         c.entryDate,
         c.description ?? '',
+        'a fixture adjustment',
         c.requestId ?? null,
         JSON.stringify(dbPayload(c.lines)),
       ]);

@@ -153,12 +153,34 @@ export async function postAs(assertion: string | null, c: PostCommand, extraGucs
     if (own) await conn.query('BEGIN');
     if (assertion !== null) await conn.query(`SELECT set_config('app.accounting_assertion', $1, true)`, [assertion]);
     for (const [k, v] of Object.entries(extraGucs)) await conn.query(`SELECT set_config($1, $2, true)`, [k, v]);
-    const r = await conn.query<{ entry_id: string; created: boolean }>(`SELECT entry_id, created FROM accounting_post_entry($1::date, $2, $3, $4::jsonb)`, [
-      c.entryDate,
-      c.description ?? 'test posting',
-      c.requestId ?? null,
-      JSON.stringify(dbPayload(c.lines)),
-    ]);
+    // A `manual_adjustment` goes through the command that OWNS it.
+    //
+    // Since round three every Phase-2-native source owes a detail row at
+    // COMMIT, so driving the primitive straight produces an entry the
+    // database refuses — correctly, because such an entry would carry no
+    // reason and no actor. The wrapper is a thin one: it narrows the
+    // authority, requires a reason, and forwards THIS assertion and THIS
+    // payload to `accounting_post_entry` unchanged. Everything these suites
+    // prove about the primitive — replay, idempotent identity, tenancy from
+    // the assertion, indifference to spoofed GUCs — is proved through it
+    // exactly as before.
+    //
+    // A suite that genuinely needs the raw primitive (the completeness
+    // bypass matrix) issues the call itself rather than asking for it here,
+    // because doing so is the thing under test and should be visible where
+    // it happens.
+    const r =
+      c.sourceType === 'manual_adjustment'
+        ? await conn.query<{ entry_id: string; created: boolean }>(
+            `SELECT entry_id, created FROM accounting_post_manual_adjustment($1::date, $2, $3, $4, $5::jsonb)`,
+            [c.entryDate, c.description ?? 'test posting', 'a fixture adjustment', c.requestId ?? null, JSON.stringify(dbPayload(c.lines))],
+          )
+        : await conn.query<{ entry_id: string; created: boolean }>(`SELECT entry_id, created FROM accounting_post_entry($1::date, $2, $3, $4::jsonb)`, [
+            c.entryDate,
+            c.description ?? 'test posting',
+            c.requestId ?? null,
+            JSON.stringify(dbPayload(c.lines)),
+          ]);
     if (own) await conn.query('COMMIT');
     return { entryId: must(r.rows[0]).entry_id, created: must(r.rows[0]).created };
   } catch (e) {
