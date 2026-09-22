@@ -8,11 +8,18 @@
  * manual adjustment, reversal and opening balance — and this gate exists to
  * make sure they stay built on top of it rather than around it.
  *
- * 0046 and 0047 are CANDIDATES, not frozen history, so the questions here are
- * different in kind from the P2-S3 gate's. That gate asks "are the accepted
- * bytes still the accepted bytes". This one asks "is the candidate still
- * correct", which means it checks structure and behaviour rather than digests,
- * and it refuses a 0048 outright because §7 authorizes exactly two migrations.
+ * P2-S4 was ACCEPTED by the Tech Lead at head 2987fbe914645ebae600e95a126c908,
+ * whose exact-SHA workflow 35775902377 was SUCCESS on all five jobs, and 0046
+ * and 0047 were frozen at that acceptance. This gate is therefore PERMANENT:
+ * it carries the accepted digests as an independent second source, requires
+ * the manifest to record them frozen, and keeps proving — against a real
+ * cluster — every property the slice was accepted for.
+ *
+ * It has NO opinion about whether a later authorized migration exists. The
+ * candidate-era rules ("0046/0047 must not be frozen", "nothing beyond 0047")
+ * are gone, and the scope checks that used to read the whole tree now read
+ * only this slice's own two files: a historical accepted gate that forbids its
+ * authorized successor is a gate that stops the project.
  *
  * It COMPOSES rather than duplicates: P2-S3's gate runs unchanged, and it
  * composes P2-S2, P2-S1 and Phase 1 in turn, so the whole chain runs from one
@@ -22,6 +29,7 @@
  * Usage: npm run gate:phase2:s4 [-- --list]
  */
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { findDefinerSearchPathViolations } from './guards/definer-search-path';
@@ -34,21 +42,25 @@ const MIGRATIONS_DIR = join(ROOT, 'infrastructure/database/migrations');
 const LIST_ONLY = process.argv.slice(2).includes('--list');
 const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 
-/** The two migrations §7 authorizes, and the boundary they must not cross. */
+/** The two migrations this slice owns, now frozen history. */
 const S4_MIGRATIONS = ['0046_accounting_sources.sql', '0047_accounting_opening_balances.sql'] as const;
 
 /**
- * There is deliberately NO pinned digest here any more.
+ * The ACCEPTED digests, carried here as an independent second source.
  *
- * Earlier rounds pinned 0046, on the argument that it was the one reviewed
- * file which had not been corrected in place. Round three corrected it — the
- * manual-adjustment completeness trigger lives in it — so that sentence is
- * simply no longer true, and a pin recomputed after every round proves
- * nothing except that somebody recomputed it. What a candidate actually owes
- * is stated below and is unchanged: it is present, nothing exists beyond it,
- * and it has NOT been written into the frozen manifest.
+ * The manifest is one record of what was accepted; this file is another, and
+ * the gate fails if they ever disagree or if either file on disk stops
+ * hashing to its accepted value. A pin was pointless while the files were
+ * candidates being corrected in place — that is why earlier revisions of this
+ * gate carried none — and it is the whole point now that they are history.
  */
-const FROZEN_THROUGH = '0045_accounting_post_entry.sql';
+const S4_ACCEPTED: Readonly<Record<(typeof S4_MIGRATIONS)[number], string>> = {
+  '0046_accounting_sources.sql': '6e4500dcc639149ac25d3e0736bbce77ff372aa06736c1211fe40725e7d196e6',
+  '0047_accounting_opening_balances.sql': '0938d513c0bb844c5f36cbdb170612a08f9f52f828660ca88e2db00aeea1cabc',
+};
+
+/** The manifest must record history through at least this file. */
+const FROZEN_THROUGH_AT_LEAST = '0047_accounting_opening_balances.sql';
 
 /** The tables and routines this slice owes. */
 const S4_TABLES = [
@@ -70,8 +82,13 @@ const S4_ROUTINES = [
 ] as const;
 
 /**
- * Surfaces §7 explicitly DEFERS. A gate that only checks what was built lets
- * scope creep through silently; this half checks what was not.
+ * Surfaces P2-S4 explicitly DEFERRED. A gate that only checks what was built
+ * lets scope creep through silently; this half checks what was not.
+ *
+ * Asked of THIS SLICE'S OWN TWO FILES, never of the tree. A later authorized
+ * slice is expected to build some of these — P2-S5 builds the FX rate history
+ * — and it is not this gate's business to refuse it. What this gate still
+ * proves is that P2-S4 did not build them early.
  */
 const OUT_OF_SCOPE_TABLES = ['accounting_periods', 'accounting_fx_rates', 'accounting_balances', 'accounting_trial_balance', 'accounting_fx_registry'] as const;
 
@@ -117,19 +134,12 @@ const s4Sql = (): string => S4_MIGRATIONS.map(readMigration).join('\n');
 // manifest still frozen where P2-S3 left it, because §59 forbids freezing
 // 0046/0047 before an independent review.
 function checkMigrationBoundary(): void {
-  console.log('P2-S4 GATE — migration boundary');
+  console.log('P2-S4 GATE — accepted history');
   const files = sqlFiles();
 
   for (const name of S4_MIGRATIONS) {
     if (files.includes(name)) ok(`${name} present`);
-    else fail('s4-migrations', `${name} is missing — P2-S4 is the slice that creates it (§7)`);
-  }
-
-  const beyond = files.filter((f) => f.slice(0, 4) > '0047');
-  if (beyond.length > 0) {
-    fail('scope', `migrations beyond 0047 exist (${beyond.join(', ')}) — §7 authorizes exactly 0046 and 0047, and §59 forbids starting P2-S5`);
-  } else {
-    ok('no migration after 0047 — the slice stopped where it was authorized to stop');
+    else fail('s4-migrations', `${name} is missing — it is accepted history and may never be deleted`);
   }
 
   const manifest = JSON.parse(readFileSync(join(ROOT, 'infrastructure/database/MIGRATION_MANIFEST.json'), 'utf8')) as {
@@ -137,26 +147,45 @@ function checkMigrationBoundary(): void {
     migrations: { name: string; sha256: string }[];
   };
 
-  if (manifest.frozenThrough !== FROZEN_THROUGH) {
-    fail(
-      'candidate-status',
-      `frozenThrough is ${manifest.frozenThrough} — P2-S4's migrations are CANDIDATES, so it must stay at ${FROZEN_THROUGH} until a Tech Lead freezes them (§59)`,
-    );
+  // Frozen through AT LEAST 0047. A floor, not an equality: a later
+  // authorized slice freezing its own migrations must not fail this gate.
+  if (manifest.frozenThrough < FROZEN_THROUGH_AT_LEAST) {
+    fail('accepted-history', `frozenThrough is ${manifest.frozenThrough} — P2-S4 was accepted and frozen, so it must be at least ${FROZEN_THROUGH_AT_LEAST}`);
   } else {
-    ok(`frozenThrough = ${FROZEN_THROUGH} — 0046/0047 are candidates, exactly as §59 requires`);
+    ok(`frozenThrough = ${manifest.frozenThrough} — at or beyond the P2-S4 acceptance boundary`);
   }
 
-  const frozen = new Set(manifest.migrations.map((m) => m.name));
-  for (const name of S4_MIGRATIONS) {
-    if (frozen.has(name)) fail('candidate-status', `${name} appears in MIGRATION_MANIFEST.json — a candidate must not be frozen before review (§59)`);
+  const recorded = new Map(manifest.migrations.map((m) => [m.name, m.sha256] as const));
+  for (const [name, accepted] of Object.entries(S4_ACCEPTED)) {
+    const inManifest = recorded.get(name);
+    if (inManifest === undefined) {
+      fail('accepted-history', `${name} is not recorded in MIGRATION_MANIFEST.json — P2-S4 was accepted, so its migrations are frozen history`);
+      continue;
+    }
+    if (inManifest !== accepted) {
+      fail(
+        'accepted-history',
+        `${name} is recorded at ${inManifest.slice(0, 12)}… but was accepted at ${accepted.slice(0, 12)}… — the manifest disagrees with the acceptance`,
+      );
+      continue;
+    }
+    const onDisk = createHash('sha256')
+      .update(readFileSync(join(MIGRATIONS_DIR, name)))
+      .digest('hex');
+    if (onDisk !== accepted) {
+      fail(
+        'accepted-history',
+        `${name} hashes to ${onDisk.slice(0, 12)}… on disk but was accepted at ${accepted.slice(0, 12)}… — accepted bytes are immutable`,
+      );
+    } else {
+      ok(`${name} is frozen at its accepted digest, on disk and in the manifest`);
+    }
   }
-  if (!S4_MIGRATIONS.some((n) => frozen.has(n))) ok('neither candidate is recorded as frozen history');
 }
 
 // ── 2. The surfaces this slice owes, and the ones it must not build ────────
 function checkSurfaces(): void {
   console.log('P2-S4 GATE — the source surfaces');
-  const schema = stripComments(wholeTree());
   const s4 = stripComments(s4Sql());
 
   for (const table of S4_TABLES) {
@@ -171,11 +200,11 @@ function checkSurfaces(): void {
   // §7's deferrals. A table created "for later" is scope creep with a comment
   // on it, and the point of an authorized scope is that it binds.
   for (const table of OUT_OF_SCOPE_TABLES) {
-    if (new RegExp(`CREATE\\s+TABLE\\s+(?:IF\\s+NOT\\s+EXISTS\\s+)?${table}\\b`, 'i').test(schema)) {
-      fail('scope', `${table} exists — §7 defers FX registry, periods and financial reads to a later slice`);
+    if (new RegExp(`CREATE\\s+TABLE\\s+(?:IF\\s+NOT\\s+EXISTS\\s+)?${table}\\b`, 'i').test(s4)) {
+      fail('scope', `${table} is created by 0046/0047 — P2-S4 deferred the FX registry, periods and financial reads to a later slice (§7)`);
     }
   }
-  ok('no FX registry, period or balance-read table was built ahead of its slice (§7)');
+  ok('P2-S4 itself built no FX registry, period or balance-read table (§7)');
 
   // §12: the journal never learns that one of its entries was reversed.
   const journal = stripComments(readMigration('0042_accounting_journal.sql') + '\n' + s4Sql());
@@ -888,8 +917,8 @@ function runSteps(): void {
 
 if (LIST_ONLY) {
   console.log('P2-S4 GATE plan:');
-  console.log('  structural: 0046 and 0047 exist, nothing beyond them, both still candidates in the manifest');
-  console.log('  structural: the five source tables and seven source commands exist; no FX registry, period or balance table was built early');
+  console.log('  structural: 0046 and 0047 exist and are frozen at their accepted digests, on disk and in the manifest');
+  console.log('  structural: the five source tables and seven source commands exist; P2-S4 itself built no FX registry, period or balance table');
   console.log('  structural: the journal carries no reversal marker; reversal and opening-balance uniqueness are physical; supersession requires a reversal');
   console.log('  structural: G-4 protects EVERY journal writer, G-5 covers the new definers, no runtime DML on any source table');
   console.log('  structural: the engine owns the derivations, no bypass seam exists, exactly three merchant endpoints, money crosses HTTP as strings');

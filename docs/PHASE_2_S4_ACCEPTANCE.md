@@ -1,6 +1,6 @@
 # DAFTAR — P2-S4 Acceptance / قبول الشريحة الرابعة من المرحلة الثانية
 
-> **What this is.** The evidence page for slice **P2-S4 — Accounting-native sources**. It states what is now *enforced by a mechanism and covered by a test*, and, just as deliberately, what is not. It authorizes nothing: P2-S5 begins when the Tech Lead says so.
+> **What this is.** The evidence page for slice **P2-S4 — Accounting-native sources**, now **ACCEPTED and FROZEN**. It states what is enforced by a mechanism and covered by a test, and, just as deliberately, what is not.
 >
 > **ما هذه الوثيقة.** سجل أدلة الشريحة P2-S4. العمود الحاسم هو الحالة: **ENFORCED** يعني أن قاعدة البيانات أو الـCI ترفض المخالفة اليوم ويوجد اختبار يثبت ذلك. تبني هذه الشريحة ثلاث حقائق محاسبية فوق محرك الترحيل المُحصَّن: التسوية اليدوية، والعكس، والأرصدة الافتتاحية. لا سجلّ أسعار صرف، ولا فترات، ولا تقارير.
 
@@ -12,20 +12,23 @@ A correction is another accounting fact. Nothing in this slice edits a posted en
 
 `كل تصحيح في المحاسبة هو واقعة محاسبية جديدة. لا تُعدَّل قيود مُرحَّلة ولا تُحذف. العكس قيد جديد تُشتق سطوره من القيد الأصلي المحفوظ، والقيد الأصلي يبقى كما هو حرفًا بحرف.`
 
-## 1. Candidate migrations
+## 1. Accepted migrations — P2-S4 is ACCEPTED / FROZEN
+
+**Accepted by the Tech Lead on 2026-09-22 at head `2987fbe914645ebae600e95a126c908472f04e1b`, whose exact-SHA workflow is 35775902377 with all five jobs SUCCESS.**
 
 | migration | SHA-256 | state |
 |---|---|---|
-| `0046_accounting_sources.sql` | `6e4500dcc639149ac25d3e0736bbce77ff372aa06736c1211fe40725e7d196e6` | CANDIDATE |
-| `0047_accounting_opening_balances.sql` | `0938d513c0bb844c5f36cbdb170612a08f9f52f828660ca88e2db00aeea1cabc` | CANDIDATE |
+| `0046_accounting_sources.sql` | `6e4500dcc639149ac25d3e0736bbce77ff372aa06736c1211fe40725e7d196e6` | **FROZEN** |
+| `0047_accounting_opening_balances.sql` | `0938d513c0bb844c5f36cbdb170612a08f9f52f828660ca88e2db00aeea1cabc` | **FROZEN** |
 
-**Both files have now been corrected in place.** Through the first two review rounds `0046` did not move, and earlier revisions of this page said so; the third round's manual-adjustment completeness rule lives in it, so that sentence is no longer true and has been removed rather than qualified. The gate's pinned digest went with it: a digest recomputed after every round proves only that somebody recomputed it. What a candidate owes is unchanged and still checked — it exists, nothing exists beyond it, and it has not been written into the frozen manifest. Neither is in `MIGRATION_MANIFEST.json`, and `frozenThrough` remains `0045_accounting_post_entry.sql` with 46 frozen migrations. That is intentional and is what the P2-S4 gate checks: while the slice is under review a defect must be correctable **in place**, rather than consuming a P2-S5 migration number. Freezing happens on acceptance, never before.
+`MIGRATION_MANIFEST.json` now records **48 frozen migrations** with `frozenThrough = 0047_accounting_opening_balances.sql`. Migrations `0000`–`0047` are release history: they are never edited or deleted, and every later schema correction is a NEW migration. `npm run gate:phase2:s4` became a **permanent** regression gate at that acceptance — it carries both accepted digests as an independent second source, so one commit cannot move a migration and its recorded hash together, and it has no opinion about whether a later authorized migration exists.
 
-Migrations `0000`–`0045` are byte-for-byte unchanged. Nothing after `0047` exists.
+**Both files were corrected in place while they were candidates**, which is exactly what candidacy is for. `0046` did not move through the first two review rounds and earlier revisions of this page said so; the third round put the manual-adjustment completeness trigger in it and the fourth put the reversal-date refusal in it, so that sentence stopped being true and was retracted rather than quietly dropped. The four review rounds below are kept in full: they are the engineering record of how this slice became correct.
 
 - Branch: `phase/2-accounting-core` · Draft PR: **#2** (stays draft for all of Phase 2)
 - Starting accepted head (P2-S3): `18d29557be41c31cd60898d51f6f9a546201467b`
 - P2-S3 freeze commit: `a6a472383ef92850b73c21e468d60b9dac707a2b`, exact-SHA workflow **35717246933**, all five jobs SUCCESS
+- P2-S4 accepted head: `2987fbe914645ebae600e95a126c908472f04e1b`, exact-SHA workflow **35775902377**, all five jobs SUCCESS
 
 **Evidence law.** CI SUCCESS is reported for a commit only when GitHub shows a workflow run whose head SHA is that exact commit.
 
@@ -241,7 +244,7 @@ The merchant changed nothing and was refused. That is the failure mode an at-lea
 
 **The exact choice about the database, as it stood after round two.** The application seam was **removed**: `readBusinessToday` is gone from `AccountingLedgerReader`, from its database adapter and from the port interface entirely, so `AccountingEngine.reverse` has no way to learn what day it is and structurally cannot pass NULL. The database routine itself was left accepting `p_entry_date := NULL`, and this page justified that by saying `0046` was frozen by directive at its reviewed digest so tightening it was not available.
 
-**That justification was wrong, and the fourth review round removed it.** `0046` is a CANDIDATE, not frozen — `frozenThrough` is `0045_accounting_post_entry.sql` — and round three had already modified it legitimately, in place. Nothing architectural required the NULL path; what kept it was a stale sentence about migration history. See §6e for the closure.
+**That justification was wrong, and the fourth review round removed it.** `0046` was a CANDIDATE at that point, not frozen — `frozenThrough` was still `0045_accounting_post_entry.sql` — and round three had already modified it legitimately, in place. (Both files are frozen now; see §1. The correction happened while they were candidates, which is what candidacy is for.) Nothing architectural required the NULL path; what kept it was a stale sentence about migration history. See §6e for the closure.
 
 ### D. Found while reproducing C: the accounting routes were untestable
 
@@ -299,7 +302,7 @@ Four application layers required the date. The database did not. A Zod 400 is ev
 
 The routine now refuses `p_entry_date IS NULL` with `accounting.entry_date_required`, in section 1, before any financial truth is derived, and `v_date` is the stated date with no fallback of any kind — not today, not the original's date, not the server's. The business clock is still read, for the one question it owns: is this stated date in the future in the business timezone? It never answers what date the reversal should carry.
 
-**What was retracted along with it.** §6c's paragraph on this point justified the database NULL path by saying `0046` was frozen at its reviewed digest and so could not be tightened. That was factually wrong: `0046` is a candidate, `frozenThrough` is `0045_accounting_post_entry.sql`, and round three had already corrected `0046` in place. A stale justification for a weaker invariant is worse than no justification, because the next reader trusts it instead of checking. It has been corrected rather than quietly deleted.
+**What was retracted along with it.** §6c's paragraph on this point justified the database NULL path by saying `0046` was frozen at its reviewed digest and so could not be tightened. That was factually wrong at the time: `0046` was still a candidate, `frozenThrough` was `0045_accounting_post_entry.sql`, and round three had already corrected `0046` in place. A stale justification for a weaker invariant is worse than no justification, because the next reader trusts it instead of checking. It has been corrected rather than quietly deleted.
 
 `accounting-reversal-date-boundary.test.ts` is the permanent proof and it failed against the reviewed head `ced9b96`: six cases that call the routine itself as `daftar_app` under a real `reverse` assertion whose fingerprint is signed for today — so a routine that carried on with a manufactured date would have found the signature it needed already waiting. It proves the NULL refusal and that nothing survives it; that the refusal is the rule and not a withdrawn `EXECUTE` grant; that an explicit date is not silently replaced by the original's; that the identical direct call replays across a civil-day change in the business timezone; and that both date bounds still hold. The HTTP matrix in `accounting-reversal-contract.test.ts` is unchanged and still runs: both layers matter, and neither replaces the other.
 
@@ -323,8 +326,10 @@ The gate proves it in both registers. Structurally: the refusal exists by its st
 
 The P2-S4 gate fails if any of the first five appears, so this is a checked claim and not a promise.
 
-## 8. Hard stop
+## 8. Acceptance
 
-Per §59: 0046 and 0047 are **not** frozen, there is no 0048, P2-S5 has not begun, and no FX registry, period machinery, trial balance or merchant accounting UI exists. The slice waits for independent Tech Lead review.
+The slice was returned four times and corrected in place each time; on 2026-09-22 the Tech Lead accepted it at head `2987fbe914645ebae600e95a126c908472f04e1b` (exact-SHA workflow 35775902377, five jobs SUCCESS) and authorized the freeze. `0046` and `0047` are now frozen history and may never be modified again; a defect in either needs a NEW migration. `npm run gate:phase2:s4` is permanent from that point and composes P2-S3, P2-S2, P2-S1 and Phase 1.
 
-`حسب البند ٥٩: لم تُجمَّد 0046 و0047، ولا توجد 0048، ولم تبدأ P2-S5. الشريحة تنتظر مراجعة القيادة التقنية.`
+This page authorizes nothing further. What P2-S5 may build is stated in its own directive and its own acceptance page.
+
+`قُبِلت الشريحة في 2026-09-22 عند الرأس 2987fbe بعد أربع جولات مراجعة، وجُمِّدت 0046 و0047 نهائيًا؛ أي تصحيح لاحق يحتاج هجرة جديدة. صارت بوابة P2-S4 بوابة انحدار دائمة.`

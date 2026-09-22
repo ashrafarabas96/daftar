@@ -674,11 +674,49 @@ describe('P2-S2 migration boundary', () => {
       expect(frozen.get(name), `${name} in manifest`).toBe(sha256);
     }
     expect(manifest.frozenThrough >= '0045_accounting_post_entry.sql').toBe(true);
-    expect(manifest.migrations.length).toBe(46);
+    // A FLOOR, not an exact count. This case asserted exactly 46 until P2-S4
+    // was accepted and its two migrations were frozen — which is precisely
+    // the shape of failure a permanent predecessor check must not have: what
+    // P2-S3 guarantees is that its own history is intact, never that nobody
+    // was authorized to add to it.
+    expect(manifest.migrations.length).toBeGreaterThanOrEqual(46);
     // The P2-S3 gate carries the same hashes as an independent second source,
     // so one commit cannot move a migration and its recorded hash together.
     const gate = readFileSync(join(ROOT, 'scripts/phase2-s3-gate.ts'), 'utf8');
     for (const [name, sha256] of Object.entries(accepted)) expect(gate, `${name} in gate`).toContain(sha256);
+  });
+
+  it('0046 and 0047 are FROZEN at their accepted hashes (P2-S4 freeze §5)', () => {
+    // Digest and file name on separate lines, as the P2-S3 case above explains.
+    const digests: Readonly<Record<string, string>> = {
+      '0046': '6e4500dcc639149ac25d3e0736bbce77ff372aa06736c1211fe40725e7d196e6',
+      '0047': '0938d513c0bb844c5f36cbdb170612a08f9f52f828660ca88e2db00aeea1cabc',
+    };
+    const accepted: Readonly<Record<string, string>> = {
+      '0046_accounting_sources.sql': digests['0046'] ?? '',
+      '0047_accounting_opening_balances.sql': digests['0047'] ?? '',
+    };
+    const manifest = JSON.parse(readFileSync(join(ROOT, 'infrastructure/database/MIGRATION_MANIFEST.json'), 'utf8')) as {
+      frozenThrough: string;
+      migrations: { name: string; sha256: string }[];
+    };
+    const frozen = new Map(manifest.migrations.map((m) => [m.name, m.sha256]));
+    for (const [name, sha256] of Object.entries(accepted)) {
+      expect(
+        createHash('sha256')
+          .update(readFileSync(join(MIGRATIONS, name)))
+          .digest('hex'),
+        `${name} on disk`,
+      ).toBe(sha256);
+      expect(frozen.get(name), `${name} in manifest`).toBe(sha256);
+    }
+    expect(manifest.frozenThrough >= '0047_accounting_opening_balances.sql').toBe(true);
+    expect(manifest.migrations.length).toBeGreaterThanOrEqual(48);
+    // The P2-S4 gate carries the same hashes as an independent second source.
+    const gate = readFileSync(join(ROOT, 'scripts/phase2-s4-gate.ts'), 'utf8');
+    for (const [name, sha256] of Object.entries(accepted)) expect(gate, `${name} in gate`).toContain(sha256);
+    // Deliberately NOT asserting "nothing after 0047": P2-S4 is frozen and its
+    // gate must never block an authorized successor.
   });
 
   it('every business-scoped journal table carries both tenant_id and business_id (§14)', () => {
