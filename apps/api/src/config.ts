@@ -39,6 +39,15 @@ const EnvSchema = z
       .string()
       .regex(/^[A-Za-z0-9_-]{1,32}$/)
       .optional(),
+    // P2-S3 (§19): the HMAC key the merchant API uses to MINT accounting
+    // command assertions. A SEPARATE secret from the provisioning key: one
+    // stolen secret must not compromise both business provisioning and the
+    // general ledger, and either must be rotatable without the other.
+    ACCOUNTING_ASSERTION_KEY: z.string().optional(),
+    ACCOUNTING_ASSERTION_KID: z
+      .string()
+      .regex(/^[A-Za-z0-9_-]{1,32}$/)
+      .optional(),
     WORKER_DATABASE_URL: z.string().min(1).optional(),
     // Required for HTTP modes; the WORKER process must not receive it (§XXVIII).
     JWT_SECRET: z.string().min(32).optional(),
@@ -115,6 +124,7 @@ const EnvSchema = z
         'RESOLVER_DATABASE_URL',
         'PROVISIONER_DATABASE_URL',
         'PROVISIONING_ASSERTION_KEY',
+        'ACCOUNTING_ASSERTION_KEY',
         'CREDENTIAL_KMS_ENDPOINT',
       ] as const) {
         if (c[n]) fail(n, 'must NOT be set in PROCESS_MODE=worker (worker receives worker DB + key ring + SMTP only)');
@@ -129,6 +139,7 @@ const EnvSchema = z
         | 'WORKER_DATABASE_URL'
         | 'PROVISIONER_DATABASE_URL'
         | 'PROVISIONING_ASSERTION_KEY'
+        | 'ACCOUNTING_ASSERTION_KEY'
         | 'CREDENTIAL_PAYLOAD_KEY'
         | 'CREDENTIAL_PAYLOAD_KEYS'
         | 'SMTP_URL',
@@ -147,6 +158,10 @@ const EnvSchema = z
       forbid('WORKER_DATABASE_URL', 'platform API has no worker authority');
       forbid('PROVISIONER_DATABASE_URL', 'provisioning is a merchant-surface boundary');
       forbid('PROVISIONING_ASSERTION_KEY', 'only the merchant API mints provisioning assertions');
+      // §19/§20: platform administration is not financial authority. A
+      // platform credential may install and retire accounting keys; holding
+      // the signing secret would let it mint postings.
+      forbid('ACCOUNTING_ASSERTION_KEY', 'only the merchant API mints accounting assertions');
       forbid('CREDENTIAL_PAYLOAD_KEY', 'no worker credential payload authority');
       forbid('CREDENTIAL_PAYLOAD_KEYS', 'no worker credential payload authority');
       forbid('SMTP_URL', 'delivery is the worker process');
@@ -213,6 +228,20 @@ const EnvSchema = z
         fail('PROVISIONING_ASSERTION_KEY', 'production provisioning requires the assertion HMAC key (base64 ≥32 bytes) installed in the database (0038)');
       } else if (Buffer.from(c.PROVISIONING_ASSERTION_KEY, 'base64').length < 32) {
         fail('PROVISIONING_ASSERTION_KEY', 'must be base64 of at least 32 bytes');
+      }
+      // ── P2-S3 §19/§20: the accounting signing key ──────────────────────
+      if (!c.ACCOUNTING_ASSERTION_KEY) {
+        fail('ACCOUNTING_ASSERTION_KEY', 'production posting requires the accounting assertion HMAC key (base64 ≥32 bytes) installed in the database (0044)');
+      } else if (Buffer.from(c.ACCOUNTING_ASSERTION_KEY, 'base64').length < 32) {
+        fail('ACCOUNTING_ASSERTION_KEY', 'must be base64 of at least 32 bytes');
+      } else if (
+        c.PROVISIONING_ASSERTION_KEY &&
+        Buffer.from(c.ACCOUNTING_ASSERTION_KEY, 'base64').equals(Buffer.from(c.PROVISIONING_ASSERTION_KEY, 'base64'))
+      ) {
+        // Compared as BYTES, not as strings: two different base64 spellings of
+        // one secret are still one secret, and sharing it would mean a single
+        // compromise reaches both provisioning and the ledger.
+        fail('ACCOUNTING_ASSERTION_KEY', 'must not be the same secret as PROVISIONING_ASSERTION_KEY (separate domains, rotated independently)');
       }
       if (c.MEDIA_STORAGE === 'local') {
         fail('MEDIA_STORAGE', 'production requires MEDIA_STORAGE=s3 (local disk is dev-only)');

@@ -1,7 +1,7 @@
 import { Module, type DynamicModule, type MiddlewareConsumer, type NestModule } from '@nestjs/common';
 import type { AppConfig } from '../config';
 import { RequestContextMiddleware } from './request-context.middleware';
-import { coreProviders, httpImports, httpProviders, identityProviders, merchantInfraProviders, type RuntimeSeams } from './runtime';
+import { coreProviders, httpImports, httpProviders, identityProviders, accountingProviders, merchantInfraProviders, type RuntimeSeams } from './runtime';
 import { AuthController } from '../modules/auth/auth.controller';
 import { TenancyService } from '../modules/tenancy/tenancy.service';
 import { StructureService } from '../modules/tenancy/structure.service';
@@ -37,6 +37,7 @@ export class MerchantApiModule implements NestModule {
         ...httpProviders(config, TenancyService),
         ...identityProviders(config, options),
         ...merchantInfraProviders(config, options),
+        ...accountingProviders(),
         TenancyService,
         StructureService,
         InvitationsService,

@@ -14,6 +14,7 @@ import type { OutboxSink } from '../../apps/api/src/modules/outbox/publisher';
 import type { CredentialPayloadEncryptor } from '../../apps/api/src/modules/delivery/credential-protector';
 import { CredentialDeliveryWorker } from '../../apps/api/src/modules/delivery/delivery-worker.service';
 import { mintProvisioningAssertion, type ProvisioningKind } from '../../apps/api/src/infra/provisioning-assertion';
+import { mintAccountingAssertion, type AccountingAssertionClaims } from '../../packages/accounting/src/assertion';
 import { ensureEmbeddedPgBinariesExecutable } from '../../scripts/ensure-embedded-pg-binaries';
 
 export const PG_DIR = process.env['PG_DIR'] ?? '/tmp/daftar-pg-shared';
@@ -40,6 +41,20 @@ export function mintTestAssertion(actorUserId: string, kind: ProvisioningKind, n
     now,
     ttlSeconds,
   );
+}
+
+/**
+ * P2-S3: the accounting assertion key. DELIBERATELY different bytes from the
+ * provisioning key — §19 makes equal secrets a production startup failure, and
+ * a test fixture that shared one would quietly defeat the separation it is
+ * supposed to prove.
+ */
+export const ACCOUNTING_ASSERTION_KEY_B64 = Buffer.from('test-accounting-assertion-key-32b!!!!!!!!').subarray(0, 32).toString('base64');
+export const ACCOUNTING_ASSERTION_KID = 'acct1';
+
+/** Mint an accounting assertion exactly as the merchant API would. */
+export function mintTestAccountingAssertion(claims: AccountingAssertionClaims, now: Date = new Date(), ttlSeconds = 60): string {
+  return mintAccountingAssertion({ kid: ACCOUNTING_ASSERTION_KID, secret: Buffer.from(ACCOUNTING_ASSERTION_KEY_B64, 'base64') }, claims, now, ttlSeconds);
 }
 
 export const dbUrl = `postgresql://${PG_USER}:${PG_PASSWORD}@localhost:${PG_PORT}/daftar`;
@@ -88,6 +103,16 @@ async function installProvisioningKey(): Promise<void> {
   const pool = new Pool({ connectionString: dbUrl, max: 1 });
   try {
     await pool.query(`SELECT provision_assertion_key_install($1, decode($2, 'base64'))`, [PROVISIONING_ASSERTION_KID, PROVISIONING_ASSERTION_KEY_B64]);
+  } finally {
+    await pool.end();
+  }
+}
+
+/** The database side of the accounting assertion key (0044) — the platform-only ops command. */
+async function installAccountingKey(): Promise<void> {
+  const pool = new Pool({ connectionString: dbUrl, max: 1 });
+  try {
+    await pool.query(`SELECT accounting_assertion_key_install($1, decode($2, 'base64'))`, [ACCOUNTING_ASSERTION_KID, ACCOUNTING_ASSERTION_KEY_B64]);
   } finally {
     await pool.end();
   }
@@ -169,6 +194,7 @@ export async function ensurePostgres(): Promise<void> {
   await applyBootstrap();
   await runMigrations(dbUrl);
   await installProvisioningKey();
+  await installAccountingKey();
 }
 
 let ownerPoolInstance: Pool | null = null;
@@ -283,6 +309,8 @@ export async function createTestApp(options: TestAppOptions = {}): Promise<TestA
     PROVISIONER_DATABASE_URL: provisionerDbUrl,
     PROVISIONING_ASSERTION_KEY: PROVISIONING_ASSERTION_KEY_B64,
     PROVISIONING_ASSERTION_KID,
+    ACCOUNTING_ASSERTION_KEY: ACCOUNTING_ASSERTION_KEY_B64,
+    ACCOUNTING_ASSERTION_KID,
     JWT_SECRET: 'test-secret-key-with-at-least-32-characters!',
     MEDIA_ROOT: '/tmp/daftar-test-media',
     LOG_LEVEL: process.env['TEST_LOG_LEVEL'] ?? 'warn',

@@ -13,6 +13,7 @@
     "migrate": "tsx src/infra/migrate.ts"
   },
   "dependencies": {
+    "@daftar/accounting": "*",
     "@daftar/domain-core": "*",
     "@daftar/shared-contracts": "*",
     "@nestjs/common": "11.2.5",

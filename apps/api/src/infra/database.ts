@@ -19,6 +19,13 @@ export interface Scope {
    * inside provision_actor(). Set ONLY on provisioner transactions.
    */
   provisioningAssertion?: string;
+  /**
+   * Accounting command assertion (P2-S3): an HMAC-signed claim of the actor,
+   * the tenant, the business, the source and the authorized payload
+   * fingerprint, which `accounting_actor()` verifies inside
+   * `accounting_post_entry`. Set ONLY on accounting posting transactions.
+   */
+  accountingAssertion?: string;
 }
 
 /**
@@ -114,8 +121,16 @@ export class Database implements OnModuleDestroy, OnModuleInit {
       set_config('app.business_id', $2, true),
       set_config('app.bypass_rls', $3, true),
       set_config('app.actor_user_id', $4, true),
-      set_config('app.provisioning_assertion', $5, true)`,
-      [scope.tenantId ?? '', scope.businessId ?? '', bypass ? 'true' : 'false', scope.actorUserId ?? '', scope.provisioningAssertion ?? ''],
+      set_config('app.provisioning_assertion', $5, true),
+      set_config('app.accounting_assertion', $6, true)`,
+      [
+        scope.tenantId ?? '',
+        scope.businessId ?? '',
+        bypass ? 'true' : 'false',
+        scope.actorUserId ?? '',
+        scope.provisioningAssertion ?? '',
+        scope.accountingAssertion ?? '',
+      ],
     );
   }
 
@@ -190,6 +205,21 @@ export class Database implements OnModuleDestroy, OnModuleInit {
     }
     const provisioningAssertion = mintProvisioningAssertion(this.provisioningKey, actorUserId, kind);
     return this.run(this.provisionerPool, { provisioningAssertion }, true, fn);
+  }
+
+  /**
+   * Accounting posting boundary (P2-S3): the merchant runtime role, carrying a
+   * server-minted accounting command assertion.
+   *
+   * It runs on the APP pool because `daftar_app` is the one runtime role that
+   * may execute `accounting_post_entry` — and the role holds no journal DML of
+   * its own, so this boundary can call the primitive and nothing else. The
+   * isolation GUCs are left empty on purpose: every identity the primitive
+   * uses comes from the verified assertion, and setting them here would
+   * suggest they are load-bearing when they are not.
+   */
+  async withAccountingTransaction<T>(accountingAssertion: string, fn: (client: PoolClient) => Promise<T>): Promise<T> {
+    return this.run(this.pool, { accountingAssertion }, false, fn);
   }
 
   /** Names of the pools this process actually opened (boot-test evidence, §20). */

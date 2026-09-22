@@ -62,7 +62,15 @@ requireFile('infrastructure/database/MIGRATION_MANIFEST.json', 'Migration manife
 
 console.log('PHASE 1 GATE — workspace integrity');
 const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as { workspaces: string[] };
-const expected = ['apps/api', 'apps/web', 'apps/admin', 'packages/domain-core', 'packages/shared-contracts', 'packages/design-system'].sort();
+const expected = [
+  'apps/api',
+  'apps/web',
+  'apps/admin',
+  'packages/domain-core',
+  'packages/accounting',
+  'packages/shared-contracts',
+  'packages/design-system',
+].sort();
 const actual = [...pkg.workspaces].sort();
 if (JSON.stringify(expected) !== JSON.stringify(actual)) fail(`root workspaces must be exactly ${expected.join(', ')} (got ${actual.join(', ')})`);
 else ok('exact workspace set');

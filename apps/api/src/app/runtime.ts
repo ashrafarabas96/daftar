@@ -22,6 +22,10 @@ import {
 } from '../modules/delivery/credential-protector';
 import { LogSink, type OutboxSink } from '../modules/outbox/publisher';
 import { TenancyService } from '../modules/tenancy/tenancy.service';
+import { AccountingEngine } from '@daftar/accounting';
+import { AccountingAssertionMinterService } from '../modules/accounting/accounting-assertion.minter';
+import { DatabaseAccountingPostingAdapter } from '../modules/accounting/accounting-posting.adapter';
+import { AccountingPostingService } from '../modules/accounting/accounting-posting.service';
 
 /**
  * RUNTIME COMPOSITION (Phase 1 Completion Directive §15–20).
@@ -111,6 +115,32 @@ export function merchantInfraProviders(config: AppConfig, seams: RuntimeSeams): 
     OutboxService,
     { provide: 'OBJECT_STORAGE', useFactory: (): ObjectStorage => seams.storage ?? createObjectStorage(config) },
     { provide: 'MALWARE_SCANNER', useFactory: (): MalwareScanner => new DisabledDevelopmentMalwareScanner() },
+  ];
+}
+
+/**
+ * Merchant-only accounting authority (P2-S3, §11, §12, §19).
+ *
+ * The signing key lives here and only here: the platform and worker runtimes
+ * never receive `ACCOUNTING_ASSERTION_KEY` (config validation refuses it), so
+ * they cannot mint an assertion and therefore cannot post, whatever code they
+ * happen to link.
+ *
+ * There is no controller. The engine is exported as a service for the domain
+ * slices that own posting sources to call; a generic HTTP endpoint accepting
+ * arbitrary journal lines is exactly the authority this slice removed.
+ */
+export function accountingProviders(): Provider[] {
+  return [
+    AccountingAssertionMinterService,
+    DatabaseAccountingPostingAdapter,
+    {
+      provide: AccountingEngine,
+      useFactory: (minter: AccountingAssertionMinterService, posting: DatabaseAccountingPostingAdapter): AccountingEngine =>
+        new AccountingEngine(minter, posting),
+      inject: [AccountingAssertionMinterService, DatabaseAccountingPostingAdapter],
+    },
+    AccountingPostingService,
   ];
 }
 
