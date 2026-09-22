@@ -57,9 +57,12 @@ export const AccountingAdjustmentCreateSchema = z
   })
   .strict();
 
+// `civilDate`, not `civilDate.nullish()`: an omitted or null date is refused
+// at the edge rather than resolved from the clock. See the note on
+// AccountingReversalCreateDto — this is what makes the retry deterministic.
 export const AccountingReversalCreateSchema = z
   .object({
-    entryDate: civilDate.nullish(),
+    entryDate: civilDate,
     reason,
   })
   .strict();

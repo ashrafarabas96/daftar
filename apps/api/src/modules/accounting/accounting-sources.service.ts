@@ -87,11 +87,11 @@ export class AccountingSourcesService {
         tenantId: membership.tenantId,
         businessId: membership.businessId,
         originalEntryId,
-        // A reversal with no date stated is dated today in the business's own
-        // timezone. The engine resolves that from the database rather than
-        // from this process's clock, so the signed date and the date the
-        // ledger checks are the same date.
-        entryDate: dto.entryDate ?? null,
+        // The client's own date, passed through unchanged. This service does
+        // NOT derive a missing date from any clock: the schema has already
+        // refused a request that omits one, and a date invented here would be
+        // the very thing that makes a retry sign a different fact.
+        entryDate: dto.entryDate,
         reason: dto.reason,
         requestId,
       },

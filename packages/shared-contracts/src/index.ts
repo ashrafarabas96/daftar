@@ -430,10 +430,19 @@ export interface AccountingAdjustmentCreateDto {
 /** `POST /v1/businesses/:businessId/accounting/entries/:entryId/reversals` */
 export interface AccountingReversalCreateDto {
   /**
-   * `YYYY-MM-DD`, on or after the original entry's date and never in the
-   * future. Omitted means today in the business's timezone.
+   * REQUIRED. `YYYY-MM-DD`, on or after the original entry's date and never
+   * in the future.
+   *
+   * A reversal carries no `Idempotency-Key`: the original entry's id IS its
+   * source identity, so an identical request is meant to replay. That only
+   * holds if the command is a pure function of the request, and the
+   * fingerprint covers the entry date. A date the SERVER resolved from its
+   * own clock would make the signed fact depend on WHEN the request arrived:
+   * the same retry, sent either side of local midnight, would sign two
+   * different facts and the second would be refused as a conflict. The
+   * client states the date, so the retry is the same command forever.
    */
-  entryDate?: string | null;
+  entryDate: string;
   reason: string;
 }
 

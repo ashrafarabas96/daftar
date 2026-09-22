@@ -273,8 +273,8 @@ export class AccountingEngine {
       readonly tenantId: string;
       readonly businessId: string;
       readonly originalEntryId: string;
-      /** Omitted means today in the business's own timezone, resolved below. */
-      readonly entryDate: string | null;
+      /** REQUIRED. The caller's stated civil date; never derived here. */
+      readonly entryDate: string;
       readonly reason: string;
       readonly requestId?: string | null;
     },
@@ -288,14 +288,12 @@ export class AccountingEngine {
     }
 
     const scope = { tenantId: input.tenantId, businessId: input.businessId };
-    // A date has to be concrete before anything is signed: the fingerprint
-    // covers it, and the database recomputes the digest from the date it
-    // actually receives. Resolving "today" here, from the one authority that
-    // knows the business's timezone, is what keeps the two in step.
-    const entryDate = input.entryDate ?? (await this.reader.readBusinessToday(scope));
-    if (entryDate === null) {
-      throw new AccountingError('accounting.forbidden', 'the business does not exist', { businessId: input.businessId });
-    }
+    // The date arrives concrete and is used as given. There is no clock read
+    // on this path -- not this process's, not the database's -- and the port
+    // no longer offers one, so a reversal command CANNOT depend on when it
+    // was sent. That is a structural property, not a convention: the seam a
+    // future caller would reach for does not exist.
+    const entryDate = input.entryDate;
 
     const original = await this.reader.readEntry(scope, input.originalEntryId);
     // Composite identity: an entry of another business is simply not found,

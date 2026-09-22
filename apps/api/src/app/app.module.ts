@@ -22,6 +22,7 @@ import { CatalogService } from '../modules/catalog/catalog.service';
 import { MediaService } from '../modules/catalog/media.service';
 import { CatalogController } from '../modules/catalog/catalog.controller';
 import { PlatformController, HealthController } from '../modules/platform/platform.controller';
+import { AccountingController } from '../modules/accounting/accounting.controller';
 import { AdminService } from '../modules/admin/admin.service';
 import { AdminController } from '../modules/admin/admin.controller';
 import { OutboxPublisher } from '../modules/outbox/publisher';
@@ -34,6 +35,12 @@ export type AppModuleOptions = { config: AppConfig } & RuntimeSeams;
  * in one Nest application. Development/test ONLY — production configuration
  * validation rejects this mode (Directive §19); the separated runtimes are
  * MerchantApiModule / PlatformApiModule / WorkerModule (see runtime.ts).
+ *
+ * This composition must carry EVERY merchant controller that
+ * MerchantApiModule carries. A route that exists in one and not the other is
+ * a route no integration test can reach, so its contract goes unproven here
+ * and its first real exercise is production. `tests/integration/
+ * process-composition.test.ts` holds the two lists to each other.
  */
 @Module({})
 export class AppModule implements NestModule {
@@ -42,7 +49,16 @@ export class AppModule implements NestModule {
     return {
       module: AppModule,
       imports: httpImports(),
-      controllers: [AuthController, TenancyController, CatalogController, PlatformController, HealthController, EntitlementsController, AdminController],
+      controllers: [
+        AuthController,
+        TenancyController,
+        CatalogController,
+        PlatformController,
+        HealthController,
+        EntitlementsController,
+        AccountingController,
+        AdminController,
+      ],
       providers: [
         ...coreProviders(config),
         ...httpProviders(config, TenancyService),

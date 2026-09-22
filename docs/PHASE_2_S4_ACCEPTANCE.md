@@ -17,9 +17,9 @@ A correction is another accounting fact. Nothing in this slice edits a posted en
 | migration | SHA-256 | state |
 |---|---|---|
 | `0046_accounting_sources.sql` | `347faf5063205f9acf71848cb369444f9e03ef11d65cb038e79549e19af0e4e0` | CANDIDATE |
-| `0047_accounting_opening_balances.sql` | `1b41ee08c4242618eb206005daf0e5195f244a118f977bfc75f17c3755b19939` | CANDIDATE |
+| `0047_accounting_opening_balances.sql` | `55d3fb042d7f20fdeace344270b0d001e20e26603336a987779cdcad49c1dce5` | CANDIDATE |
 
-`0046` is byte-for-byte unchanged from the first revision — the idempotency correction of §6a lives entirely in `0047`, so there was no reason to churn it. Neither is in `MIGRATION_MANIFEST.json`, and `frozenThrough` remains `0045_accounting_post_entry.sql` with 46 frozen migrations. That is intentional and is what the P2-S4 gate checks: while the slice is under review a defect must be correctable **in place**, rather than consuming a P2-S5 migration number. Freezing happens on acceptance, never before.
+`0046` is byte-for-byte unchanged from the first revision, through both review rounds — the idempotency correction of §6a and the ownership and FX corrections of §6c live entirely in `0047`, so there was no reason to churn it. The P2-S4 gate now pins that digest, so a change to the reviewed file fails the gate rather than passing unremarked. Neither is in `MIGRATION_MANIFEST.json`, and `frozenThrough` remains `0045_accounting_post_entry.sql` with 46 frozen migrations. That is intentional and is what the P2-S4 gate checks: while the slice is under review a defect must be correctable **in place**, rather than consuming a P2-S5 migration number. Freezing happens on acceptance, never before.
 
 Migrations `0000`–`0045` are byte-for-byte unchanged. Nothing after `0047` exists.
 
@@ -101,6 +101,13 @@ Migrations `0000`–`0045` are byte-for-byte unchanged. Nothing after `0047` exi
 | 35 | Two connections, one key, different payloads → exactly one financial truth | the per-business advisory lock plus the fingerprint comparison | `accounting-sources-concurrency.test.ts` — "same key, DIFFERENT payload…" | **ENFORCED** |
 | 36 | Two connections, one key, same payload → one posting, one `created=true` | the same lock; the loser replays | "same key, SAME payload…" | **ENFORCED** |
 | 37 | The current fingerprint always comes from the verified assertion, never a parameter | no command takes a fingerprint argument | `gate:phase2:s4` idempotency-proof check (§5) | **ENFORCED** |
+| 38 | No P2-S4 row can claim a tenant that does not own its business | `(tenant_id, business_id) → businesses (tenant_id, id)` on all four business-owned tables | `accounting-ownership.test.ts` — "tenant A with tenant B's business is refused"; the §12 catalogue audit | **ENFORCED** |
+| 39 | An opening-balance currency must be a currency, not a three-letter word | `base_currency` / `txn_currency` `REFERENCES currencies (code)` | "an unknown base currency is refused by the registry, not by a regex" | **ENFORCED** |
+| 40 | A domestic opening position carries `fx_rate` exactly 1 and equal amounts | `accounting_opening_balance_lines_fx_ck` | "domestic with a rate that is not 1 is refused by the database" | **ENFORCED** |
+| 41 | An opening position never carries a `provider` rate | the same CHECK admits only `base` and `manual` | "a provider rate source is refused outright" | **ENFORCED** |
+| 42 | A merchant reversal states its own date; the server never supplies one | `entryDate` required in the DTO, the Zod schema, the service and the engine; `readBusinessToday` removed from the port | `accounting-reversal-contract.test.ts` — "a request that omits entryDate is refused" | **ENFORCED** |
+| 43 | An identical reversal request replays across a civil-day boundary | the command is a pure function of the request | "the identical request replayed after the business day has advanced returns the same entry" | **ENFORCED** |
+| 44 | The accounting routes exist in the composition integration tests can reach | `AppModule` and `MerchantApiModule` are held to each other | `process-composition.test.ts` | **ENFORCED** |
 
 ## 5. The one architectural decision that needs stating
 
@@ -173,6 +180,62 @@ Every exit point in the five commands, asked one question: *could this return su
 | `accounting_open_balance_supersede` | — | **No** — no early return; refuses anything but `posted`, and only with an existing reversal |
 
 Zero remaining cases where a material financial difference returns success.
+
+**Re-audited in the second review round (§13).** Every return path above was walked again after the corrections. The `accounting_open_balance_post` fingerprint comparison is intact and is still the only gate on that path; no command accepts a caller-supplied fingerprint; no conflicting retry repairs the stored source. One detail worth stating: `accounting_post_reversal`'s replay compares with `=` rather than `IS DISTINCT FROM`, and that is safe here — a NULL persisted fingerprint makes the condition NULL, the replay branch is not taken, and the call falls through to `accounting.reversal_exists`. It fails closed.
+
+## 6c. The second review round — ownership, FX shape and a date the server chose
+
+Three defects, all found by the Tech Lead reading the candidate rather than by any test, because no test asked these questions. Each is written out here with what was actually wrong, not just what changed.
+
+### A. A position could disown its tenant
+
+`accounting_opening_balance_lines` proved that a line belonged to an opening balance of its business — and said nothing about its `tenant_id` column. The three other tables this slice added all carry `(tenant_id, business_id) → businesses (tenant_id, id)`; this one did not, so a row could name one tenant while belonging to another tenant's business and the database would accept it.
+
+The defence in place was that only the routines in `0047` write these rows, and they copy the tenant from `businesses` after verifying it. That is true today and is not the point: the table outlives every writer that exists now, and a cross-tenant row in a ledger is the one defect that cannot be corrected after the fact. Application correctness is not a substitute for database ownership integrity. The constraint is now there, and `accounting-ownership.test.ts` proves it by writing **as the schema owner** — a test that connected as a runtime role would stop on "permission denied" and prove nothing about the constraint it claims to test.
+
+The same question was then asked of all four tables from `pg_constraint` rather than from the migration text, so a table that gains a tenant column later must gain the constraint with it. The audit found `accounting_manual_adjustments`, `accounting_reversals` and `accounting_opening_balances` already correct; the gap was `accounting_opening_balance_lines` alone. `0046` therefore needed no change.
+
+### B. The draft could hold an FX snapshot the journal would refuse
+
+Two gaps, and one overclaim.
+
+`ILS → ILS, base 100, txn 100, source 'base', rate 2.0` was writable as a draft. `journal_lines` has always refused it — a domestic line must carry `fx_rate = 1` — so the merchant would have stated a position the ledger rejected only at posting time. And the currency columns checked a **shape**, `^[A-Z]{3}$`, so `ZZZ` was a perfectly good currency as far as the draft was concerned, while `journal_lines` has always referenced the canonical `currencies` registry.
+
+The overclaim was the comment above the constraint, which called it "the same shape `journal_lines` requires". It was not, and a comment that asserts an invariant the code does not enforce is worse than no comment: it is what a later reader trusts instead of checking.
+
+Both columns now `REFERENCES currencies (code)`, the domestic branch requires `fx_rate = 1` with equal amounts and the `base` source, the foreign branch requires a genuinely different currency at a positive `manual` rate, and `provider` remains impossible — there is no rate feed for a date that predates the merchant's arrival.
+
+What the constraint deliberately still does **not** do is check that `txn_amount_minor × fx_rate` equals `base_amount_minor`. That conversion is HALF_EVEN at the currency's own minor-unit scale and it has exactly two authorities: the posting engine, which computes it, and the frozen P2-S2 journal validator, which proves it at COMMIT. A third copy here would be a second source of arithmetic truth, and the copy that drifts is the one nobody posts through. This is stated plainly in the migration so the next reader does not have to infer it.
+
+### C. The reversal date was the server's, so the retry was not the merchant's
+
+A reversal carries no `Idempotency-Key`: the original entry's id **is** its source identity, so an identical request is meant to replay. That only holds if the command is a pure function of the request — and `entryDate` was optional, filled in with "today in the business's timezone" when omitted. The fingerprint covers the entry date. So the signed fact depended on *when the request arrived*.
+
+This was reproduced end to end before it was fixed, and the reproduction is worth recording:
+
+```
+POST …/reversals   { "reason": "a considered correction" }
+  → 201  { "created": true }                              (business day 2026-09-22)
+
+business's civil day advances
+
+POST …/reversals   { "reason": "a considered correction" }   ← byte-identical
+  → 409  accounting.reversal_exists
+```
+
+The merchant changed nothing and was refused. That is the failure mode an at-least-once client hits when a network timeout lands near local midnight: it cannot safely retry, and it cannot find out what happened.
+
+**The Tech Lead's decision was to make `entryDate` required**, and it is now required at the DTO, the Zod schema, the service and the engine input. `accounting-reversal-contract.test.ts` proves it through the real HTTP endpoint — the real validation pipe, the real permission guard, the real engine, the real database — including the replay across a civil-day boundary, simulated by moving the business between `Pacific/Honolulu` (UTC−10) and `Pacific/Kiritimati` (UTC+14), which are a full day apart at every instant. The test does not wait for midnight.
+
+**The exact choice about the database, documented as §8 asks.** `accounting_post_reversal` in `0046` still accepts `p_entry_date := NULL` and resolves it to the business's today. `0046` is frozen by directive at the reviewed digest, so tightening the routine itself was not available — and §8's own fallback permits retaining NULL internally provided it is unreachable from the merchant boundary. Rather than rely on that as a convention, the seam was **removed**: `readBusinessToday` is gone from `AccountingLedgerReader`, from its database adapter and from the port interface entirely. `AccountingEngine.reverse` now has no way to learn what day it is, so it structurally cannot pass NULL, and a future caller cannot quietly reintroduce a clock-dependent command because there is nothing left to call. The gate checks both halves: the contract requires the date, and none of the four files on that path mentions the removed method.
+
+### D. Found while reproducing C: the accounting routes were untestable
+
+Every HTTP case answered `404` at first. `AccountingController` had been registered in `MerchantApiModule` (what production runs) and never in `AppModule` (what development and **every integration test** compose). The three merchant accounting endpoints therefore existed in no composition a test could reach, which is why the boundary contract in C was never exercised from outside and the defect survived a green gate.
+
+This was not in the directive — it was found by executing it. `AppModule` now composes `AccountingController`, and `process-composition.test.ts` holds the two module definitions to each other permanently: everything the merchant process serves, the single process serves too, plus exactly one named exception (`AdminController`, which the merchant process must never carry).
+
+`الجولة الثانية من المراجعة صحّحت ثلاثة عيوب: سطر الرصيد الافتتاحي كان يستطيع ادّعاء مستأجر لا يملك النشاط، ومسودّة الرصيد كانت تقبل عملة غير مسجَّلة وسعر صرف محلي غير 1، وتاريخ قيد العكس كان اختياريًا فيحدّده الخادم من ساعته — فتفشل إعادة الإرسال نفسها بعد منتصف الليل المحلي. التاريخ صار إلزاميًا، وأُزيلت من المحرّك إمكانية قراءة "اليوم" أصلًا. كما تبيّن أن مسارات المحاسبة لم تكن مُركَّبة في بيئة الاختبار، وهذا سبب عدم اكتشاف العيب الثالث سابقًا.`
 
 ## 7. What this slice deliberately did NOT build
 

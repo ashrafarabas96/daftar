@@ -22,6 +22,7 @@
  * Usage: npm run gate:phase2:s4 [-- --list]
  */
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { findDefinerSearchPathViolations } from './guards/definer-search-path';
@@ -36,6 +37,15 @@ const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 
 /** The two migrations §7 authorizes, and the boundary they must not cross. */
 const S4_MIGRATIONS = ['0046_accounting_sources.sql', '0047_accounting_opening_balances.sql'] as const;
+
+/**
+ * The digest of 0046 as the Tech Lead reviewed it (§14). 0047 is corrected in
+ * place across review rounds and so carries no pinned digest; 0046 is not, and
+ * a change to it would move ground the review already stood on. This is not a
+ * freeze — the manifest checks below still require BOTH files to be
+ * candidates — it is the narrower promise that one reviewed file did not move.
+ */
+const S4_REVIEWED_0046_SHA256 = '347faf5063205f9acf71848cb369444f9e03ef11d65cb038e79549e19af0e4e0';
 const FROZEN_THROUGH = '0045_accounting_post_entry.sql';
 
 /** The tables and routines this slice owes. */
@@ -70,6 +80,9 @@ const S4_MODULES = ['src/sources.ts'] as const;
 const P2_S4_TESTS = [
   'tests/integration/accounting-sources.test.ts',
   'tests/integration/accounting-idempotency.test.ts',
+  'tests/integration/accounting-ownership.test.ts',
+  'tests/integration/accounting-reversal-contract.test.ts',
+  'tests/integration/process-composition.test.ts',
   'tests/integration/accounting-sources-concurrency.test.ts',
   'tests/security/accounting-sources-authority.test.ts',
   'tests/integration/accounting-journal.test.ts',
@@ -111,6 +124,15 @@ function checkMigrationBoundary(): void {
     fail('scope', `migrations beyond 0047 exist (${beyond.join(', ')}) — §7 authorizes exactly 0046 and 0047, and §59 forbids starting P2-S5`);
   } else {
     ok('no migration after 0047 — the slice stopped where it was authorized to stop');
+  }
+
+  const actual0046 = createHash('sha256')
+    .update(readFileSync(join(MIGRATIONS_DIR, '0046_accounting_sources.sql')))
+    .digest('hex');
+  if (actual0046 !== S4_REVIEWED_0046_SHA256) {
+    fail('reviewed-0046', `0046_accounting_sources.sql is ${actual0046} — it must stay byte-for-byte at the reviewed ${S4_REVIEWED_0046_SHA256} (§14)`);
+  } else {
+    ok('0046 is byte-for-byte the file the Tech Lead reviewed (§14)');
   }
 
   const manifest = JSON.parse(readFileSync(join(ROOT, 'infrastructure/database/MIGRATION_MANIFEST.json'), 'utf8')) as {
@@ -313,7 +335,10 @@ function collectAppFiles(): Record<string, string> {
       else if (/\.(ts|tsx)$/.test(entry.name) && !/\.(test|spec)\.tsx?$/.test(entry.name)) out[relative(ROOT, full)] = readFileSync(full, 'utf8');
     }
   };
-  for (const dir of ['apps/api/src', 'packages/accounting/src', 'scripts']) {
+  // shared-contracts is here because the PUBLIC shape of a command is part of
+  // what this gate proves: §8's reversal date is a contract fact, not an
+  // implementation detail, and a DTO that relaxes it relaxes the guarantee.
+  for (const dir of ['apps/api/src', 'packages/accounting/src', 'packages/shared-contracts/src', 'scripts']) {
     const full = join(ROOT, dir);
     if (existsSync(full)) walk(full);
   }
@@ -415,7 +440,150 @@ const REQUIRED_BEHAVIOUR: ReadonlyArray<{ file: string; needle: RegExp; what: st
     needle: /same key, DIFFERENT payload/,
     what: 'concurrent same-key different-payload (§12)',
   },
+  {
+    file: 'tests/integration/accounting-ownership.test.ts',
+    needle: /tenant A with tenant B/,
+    what: 'an opening-balance position cannot disown its tenant (§2, §3)',
+  },
+  {
+    file: 'tests/integration/accounting-ownership.test.ts',
+    needle: /carries a \(tenant_id, business_id\) foreign key/,
+    what: 'every business-owned P2-S4 table proves its tenant physically (§12)',
+  },
+  {
+    file: 'tests/integration/accounting-ownership.test.ts',
+    needle: /domestic with a rate that is not 1 is refused/,
+    what: 'a domestic opening position at a rate other than 1 is unwritable (§4)',
+  },
+  {
+    file: 'tests/integration/accounting-ownership.test.ts',
+    needle: /refused by the registry, not by a regex/,
+    what: 'opening-balance currencies answer to the canonical registry (§5)',
+  },
+  {
+    file: 'tests/integration/accounting-reversal-contract.test.ts',
+    needle: /omits entryDate is refused/,
+    what: 'no external request can omit the reversal date (§8, §10.H)',
+  },
+  {
+    file: 'tests/integration/accounting-reversal-contract.test.ts',
+    needle: /after the business day has advanced/,
+    what: 'the identical reversal request replays across a civil-day boundary (§10.C)',
+  },
+  {
+    file: 'tests/integration/process-composition.test.ts',
+    needle: /accounting write surface is composed in both/,
+    what: 'the accounting routes exist in the composition the tests can reach',
+  },
 ];
+
+/**
+ * The structural half of §2-§11: what the schema and the public contract must
+ * say, checked in the text, alongside the behavioural cases above that prove
+ * the same things against a real database and a real HTTP request. Neither
+ * half stands alone — a regex cannot establish a runtime property, and a
+ * behavioural suite cannot notice a constraint someone deleted from a file
+ * that has not been re-applied to the test cluster yet.
+ */
+function checkDataIntegrityAndDeterminism(): void {
+  console.log('P2-S4 GATE — ownership, FX shape and the reversal date contract');
+
+  const s4 = stripComments(s4Sql());
+
+  // §2, §12: physical ownership on every business-owned table of this slice.
+  for (const table of ['accounting_manual_adjustments', 'accounting_reversals', 'accounting_opening_balances', 'accounting_opening_balance_lines']) {
+    const fk = new RegExp(
+      `CONSTRAINT\\s+${table}_tenant_business_fk\\s+FOREIGN KEY\\s*\\(\\s*tenant_id\\s*,\\s*business_id\\s*\\)\\s*REFERENCES\\s+businesses\\s*\\(\\s*tenant_id\\s*,\\s*id\\s*\\)`,
+      'i',
+    );
+    if (fk.test(s4)) ok(`${table} names its tenant physically (§2, §12)`);
+    else
+      fail(
+        'tenant-ownership',
+        `${table} has no (tenant_id, business_id) -> businesses foreign key — a row could claim a tenant that does not own its business (§2, §12)`,
+      );
+  }
+
+  // §5: the canonical registry, not a shape regex.
+  const linesDdl = /CREATE TABLE accounting_opening_balance_lines\s*\(([\s\S]*?)\n\);/.exec(s4)?.[1] ?? '';
+  if (linesDdl === '') {
+    fail('fx-contract', 'accounting_opening_balance_lines could not be read from the candidate SQL');
+    return;
+  }
+  for (const col of ['base_currency', 'txn_currency']) {
+    if (new RegExp(`${col}\\s+TEXT NOT NULL REFERENCES currencies \\(code\\)`).test(linesDdl)) {
+      ok(`${col} answers to the canonical currencies registry (§5)`);
+    } else {
+      fail('fx-contract', `${col} does not REFERENCE currencies (code) — a correctly shaped non-currency would be writable (§5)`);
+    }
+  }
+  if (/~\s*'\^\[A-Z\]\{3\}\$'/.test(linesDdl)) {
+    fail('fx-contract', 'an opening-balance currency column still checks a three-letter SHAPE — the registry is the authority (§5)');
+  } else {
+    ok('no currency column settles for a shape regex (§5)');
+  }
+
+  // §4: a domestic position is rate 1, or it is not domestic.
+  const domestic = /txn_currency = base_currency\s*AND fx_rate = 1\s*AND txn_amount_minor = base_amount_minor\s*AND fx_rate_source = 'base'/;
+  if (domestic.test(linesDdl)) ok('a domestic opening position must carry fx_rate exactly 1 (§4)');
+  else
+    fail(
+      'fx-contract',
+      "the domestic branch of accounting_opening_balance_lines_fx_ck does not require fx_rate = 1 with equal amounts and the 'base' source (§4)",
+    );
+
+  const foreign = /txn_currency <> base_currency\s*AND fx_rate > 0\s*AND fx_rate_source = 'manual'/;
+  if (foreign.test(linesDdl)) ok('a foreign opening position is manual, positive and genuinely foreign (§4)');
+  else fail('fx-contract', 'the foreign branch of accounting_opening_balance_lines_fx_ck does not require a positive manual rate on a different currency (§4)');
+
+  if (/fx_rate_source[^,]*'provider'/.test(linesDdl)) {
+    fail('fx-contract', "an opening position may not carry a 'provider' rate — there is no rate feed for a date before the merchant arrived (§4)");
+  } else {
+    ok("'provider' is not a permitted opening-balance rate source (§4)");
+  }
+
+  // §7-§11: the reversal date is the client's, at every public layer.
+  const app = collectAppFiles();
+  const contract = app['packages/shared-contracts/src/index.ts'] ?? '';
+  if (/export interface AccountingReversalCreateDto \{[\s\S]*?\n {2}entryDate: string;/.test(contract)) {
+    ok('AccountingReversalCreateDto requires an explicit entryDate (§8)');
+  } else {
+    fail(
+      'reversal-date',
+      'AccountingReversalCreateDto does not require entryDate — an optional date makes the signed command depend on when it arrived (§7, §8)',
+    );
+  }
+
+  const schemas = app['apps/api/src/modules/accounting/accounting.schemas.ts'] ?? '';
+  const reversalSchema = /AccountingReversalCreateSchema = z\s*\.object\(\{([\s\S]*?)\}\)/.exec(schemas)?.[1] ?? '';
+  if (/entryDate:\s*civilDate\s*,/.test(reversalSchema)) {
+    ok('the validation pipe refuses a reversal with no date (§8)');
+  } else {
+    fail('reversal-date', 'AccountingReversalCreateSchema still accepts a missing or null entryDate (§8)');
+  }
+
+  // §8, §9: no merchant reversal path may resolve "today" as command identity.
+  const noClock = [
+    'packages/accounting/src/post.ts',
+    'packages/accounting/src/ports.ts',
+    'apps/api/src/modules/accounting/accounting-sources.service.ts',
+    'apps/api/src/modules/accounting/accounting-ledger.reader.ts',
+  ];
+  for (const file of noClock) {
+    const body = stripTypeScriptComments(app[file] ?? '');
+    if (/readBusinessToday/.test(body)) {
+      fail('reversal-date', `${file} can still read "today" — a clock-derived date is what made an identical retry sign a different fact (§7, §8)`);
+    }
+  }
+  ok('no merchant path on the reversal command can read what day it is (§7, §8)');
+
+  const post = stripTypeScriptComments(app['packages/accounting/src/post.ts'] ?? '');
+  if (/entryDate:\s*string\s*\|\s*null/.test(post) && /input\.entryDate\s*\?\?/.test(post)) {
+    fail('reversal-date', 'AccountingEngine.reverse still defaults a null entryDate — the date must arrive concrete (§8)');
+  } else {
+    ok('AccountingEngine.reverse takes the date as given (§8)');
+  }
+}
 
 function checkIdempotencyProof(): void {
   console.log('P2-S4 GATE — the idempotency property');
@@ -494,6 +662,8 @@ if (LIST_ONLY) {
   console.log('  structural: G-4 protects EVERY journal writer, G-5 covers the new definers, no runtime DML on any source table');
   console.log('  structural: the engine owns the derivations, no bypass seam exists, exactly three merchant endpoints, money crosses HTTP as strings');
   console.log('  structural: every named idempotency regression exists, no caller-supplied fingerprint, refusals carry no financial values');
+  console.log('  structural: 0046 is byte-for-byte the reviewed file; every P2-S4 table names its tenant physically');
+  console.log("  structural: opening-balance currencies answer to the registry, a domestic position is rate 1, the reversal date is the client's");
   for (const s of STEPS) console.log(`  command:    ${s.cmd} ${s.args.join(' ')}`);
   process.exit(0);
 }
@@ -501,6 +671,7 @@ if (LIST_ONLY) {
 checkMigrationBoundary();
 checkSurfaces();
 checkIdempotencyProof();
+checkDataIntegrityAndDeterminism();
 checkGuards();
 checkEngineAndSurface();
 if (failures > 0) {

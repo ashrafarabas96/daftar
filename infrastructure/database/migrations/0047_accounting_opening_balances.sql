@@ -138,9 +138,9 @@ CREATE TABLE accounting_opening_balance_lines (
   account_code       TEXT CHECK (account_code IS NULL OR char_length(account_code) BETWEEN 1 AND 64),
   side               TEXT NOT NULL CHECK (side IN ('D', 'C')),
   base_amount_minor  BIGINT NOT NULL CHECK (base_amount_minor > 0 AND base_amount_minor <= 1000000000000000000),
-  base_currency      TEXT NOT NULL CHECK (base_currency ~ '^[A-Z]{3}$'),
+  base_currency      TEXT NOT NULL REFERENCES currencies (code),
   txn_amount_minor   BIGINT NOT NULL CHECK (txn_amount_minor > 0 AND txn_amount_minor <= 1000000000000000000),
-  txn_currency       TEXT NOT NULL CHECK (txn_currency ~ '^[A-Z]{3}$'),
+  txn_currency       TEXT NOT NULL REFERENCES currencies (code),
   fx_rate            NUMERIC(20, 10) NOT NULL CHECK (fx_rate > 0),
   fx_rate_source     TEXT NOT NULL CHECK (fx_rate_source IN ('base', 'manual')),
   fx_rate_at         TIMESTAMPTZ NOT NULL CHECK (date_trunc('second', fx_rate_at) = fx_rate_at),
@@ -150,13 +150,43 @@ CREATE TABLE accounting_opening_balance_lines (
     (account_ref_kind = 'system' AND account_system_key IS NOT NULL AND account_code IS NULL)
     OR (account_ref_kind = 'code' AND account_code IS NOT NULL AND account_system_key IS NULL)
   ),
-  -- A domestic position carries the base rate source and equal amounts; a
-  -- foreign one is manual. The same shape `journal_lines` requires, stated
-  -- here so a draft cannot hold a position the ledger would later refuse.
+  -- The FX SHAPE the journal requires, restated so a draft cannot hold a
+  -- position the ledger would later refuse. Domestic means the rate is
+  -- exactly 1 and the two amounts are the same number: ILS -> ILS at 2.0 is
+  -- not a rate, it is a doubling, and `journal_lines` has always refused it.
+  -- Foreign means a different currency at a positive manual rate.
+  --
+  -- This is SHAPE only, and deliberately not more. It does NOT check that
+  -- txn_amount_minor x fx_rate equals base_amount_minor: that conversion is
+  -- HALF_EVEN at the currency's own minor-unit scale, and it has exactly two
+  -- authorities -- the posting engine, which computes it, and the frozen
+  -- P2-S2 journal validator, which proves it at COMMIT. A third copy here
+  -- would be a second source of arithmetic truth, and the one that drifts is
+  -- the one nobody posts through. A draft that is shaped right and converted
+  -- wrong is refused at posting time, by the validator that owns that rule.
   CONSTRAINT accounting_opening_balance_lines_fx_ck CHECK (
-    (txn_currency = base_currency AND fx_rate_source = 'base' AND txn_amount_minor = base_amount_minor)
-    OR (txn_currency <> base_currency AND fx_rate_source = 'manual')
+    (
+      txn_currency = base_currency
+      AND fx_rate = 1
+      AND txn_amount_minor = base_amount_minor
+      AND fx_rate_source = 'base'
+    )
+    OR (
+      txn_currency <> base_currency
+      AND fx_rate > 0
+      AND fx_rate_source = 'manual'
+    )
   ),
+  -- Physical ownership, the same way every other business-owned table in
+  -- DAFTAR states it. The parent FK below proves the line belongs to an
+  -- opening balance of this business; it says nothing about the tenant
+  -- column, so without this constraint a row could name one tenant while
+  -- belonging to another tenant's business. Only the routines in this file
+  -- write these rows today, and that is precisely the argument this replaces:
+  -- the table outlives every writer that exists now, and a cross-tenant row
+  -- in a ledger is the one defect that cannot be corrected after the fact.
+  CONSTRAINT accounting_opening_balance_lines_tenant_business_fk
+    FOREIGN KEY (tenant_id, business_id) REFERENCES businesses (tenant_id, id),
   CONSTRAINT accounting_opening_balance_lines_parent_fk
     FOREIGN KEY (business_id, opening_balance_id)
     REFERENCES accounting_opening_balances (business_id, id) ON DELETE CASCADE

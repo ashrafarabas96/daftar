@@ -201,7 +201,7 @@ describe('the engine binds authority to the payload (§27, §54)', () => {
       { postAdjustment: async () => ({ entryId: SOURCE, created: true }) },
       { postReversal: async () => ({ entryId: SOURCE, created: true }) },
       { postOpeningBalance: async () => ({ entryId: SOURCE, created: true }) },
-      { readEntry: async () => null, readBusinessBaseCurrency: async () => 'ILS', readBusinessToday: async () => '2026-09-22' },
+      { readEntry: async () => null, readBusinessBaseCurrency: async () => 'ILS' },
     );
 
   it('mints an assertion over the fingerprint of the ACTUAL command', async () => {

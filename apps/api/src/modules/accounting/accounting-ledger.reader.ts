@@ -111,15 +111,4 @@ export class DatabaseAccountingLedgerReader implements AccountingLedgerReader {
     );
     return rows[0]?.base_currency ?? null;
   }
-
-  async readBusinessToday(scope: LedgerReadScope): Promise<string | null> {
-    // Computed by PostgreSQL from the business's own timezone column, never
-    // from this process's clock or its zone database (§43).
-    const { rows } = await this.db.scoped<{ today: string }>(
-      { tenantId: scope.tenantId, businessId: scope.businessId },
-      `SELECT to_char((now() AT TIME ZONE b.timezone)::date, 'YYYY-MM-DD') AS today FROM businesses b WHERE b.id = $1`,
-      [scope.businessId],
-    );
-    return rows[0]?.today ?? null;
-  }
 }

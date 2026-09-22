@@ -72,17 +72,20 @@ export interface AccountingLedgerReader {
   readEntry(scope: LedgerReadScope, entryId: string): Promise<PostedEntrySnapshot | null>;
   /** The business's base currency, or null when the business does not exist. */
   readBusinessBaseCurrency(scope: LedgerReadScope): Promise<string | null>;
-  /**
-   * Today's civil date in the BUSINESS's own timezone, `YYYY-MM-DD`.
-   *
-   * Resolved by the database, which is also the authority that enforces the
-   * date rules, so there is exactly one answer to "what day is it here" and
-   * no second timezone implementation to drift from it. A caller that omits a
-   * date gets this one written into the command explicitly, because the
-   * fingerprint has to cover a concrete date and "whatever the server thinks
-   * later" is not one.
-   */
-  readBusinessToday(scope: LedgerReadScope): Promise<string | null>;
+  //
+  // There is deliberately NO `readBusinessToday` here.
+  //
+  // It existed, and `reverse` used it to fill in an omitted date. That made
+  // the signed fact a function of when the request arrived: the same retry,
+  // sent either side of the business's local midnight, signed two different
+  // fingerprints and the second was refused as a conflict on a command the
+  // merchant had never changed.
+  //
+  // Every merchant command now states its own date, so no engine method has a
+  // reason to ask what day it is. Removing the seam is what makes that
+  // checkable rather than merely true today: a future caller cannot quietly
+  // reintroduce a clock-dependent command, because there is nothing on this
+  // port to call.
 }
 
 /**
