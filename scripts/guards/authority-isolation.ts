@@ -35,6 +35,8 @@
  * runs without a superuser.
  */
 
+import { stripComments } from './sql-schema';
+
 /** The six roles an application runtime authenticates as. None may touch the chart. */
 export const LOGIN_ROLES = ['daftar_app', 'daftar_platform', 'daftar_worker', 'daftar_resolver', 'daftar_identity', 'daftar_provisioner'] as const;
 
@@ -52,12 +54,11 @@ export const MIGRATION_ROLE = 'daftar_migrator';
 export const CHART_TABLES = ['accounts', 'accounting_system_account_keys'] as const;
 
 /**
- * P2-S2's ledger tables. The rule for these is STRICTER than for the chart:
- * the chart has one legitimate writer (the seeding routine, owned by the
- * internal principal), while the journal has NONE. No grant in any migration
- * may hand anyone — runtime role, internal principal or PUBLIC — INSERT,
- * UPDATE, DELETE or TRUNCATE on them. The writer arrives in P2-S3 with its
- * authority boundary, or not at all.
+ * The ledger tables. The rule for these is as strict as for the chart: the
+ * only principal that may write them is the unreachable internal one, and only
+ * by INSERT. No grant in any migration may hand a LOGIN role or PUBLIC any
+ * journal DML, and no grant may give even the internal principal UPDATE,
+ * DELETE or TRUNCATE — posted truth is never rewritten by grant.
  */
 export const JOURNAL_TABLES = [
   'journal_entries',
@@ -66,6 +67,9 @@ export const JOURNAL_TABLES = [
   'accounting_source_types',
   'accounting_system_actors',
 ] as const;
+
+/** The closed reference registries among them: reference data, never ledger truth. */
+export const JOURNAL_REGISTRY_TABLES = ['accounting_source_types', 'accounting_system_actors'] as const;
 
 /** The two SECURITY DEFINER routines whose OWNER is the authority itself. */
 export const SEEDING_ROUTINES = ['accounting_seed_chart(uuid)', 'accounting_seed_chart_trg()'] as const;
@@ -78,10 +82,19 @@ export interface TableGrant {
   readonly grantees: readonly string[];
 }
 
-/** Every `GRANT ... ON <table list> TO <roles>` in a block of SQL. */
-export function parseTableGrants(sql: string): TableGrant[] {
+/**
+ * Every `GRANT ... ON <table list> TO <roles>` in a block of SQL.
+ *
+ * Comments are stripped first and no capture may span a `;`. Both matter: a
+ * migration that documents the grant it forbids, or that contains a PL/pgSQL
+ * body mentioning `role_table_grants`, would otherwise let one enormous match
+ * swallow the statements after it — and a guard that silently stops seeing
+ * grants is worse than no guard, because it stays green.
+ */
+export function parseTableGrants(rawSql: string): TableGrant[] {
+  const sql = stripComments(rawSql);
   const out: TableGrant[] = [];
-  for (const m of sql.matchAll(/\bGRANT\s+([\s\S]+?)\s+ON\s+([\s\S]+?)\s+TO\s+([^;]+);/gi)) {
+  for (const m of sql.matchAll(/\bGRANT\s+([^;]+?)\s+ON\s+([^;]+?)\s+TO\s+([^;]+);/gi)) {
     const [, privText = '', objText = '', granteeText = ''] = m;
     // Only TABLE grants are chart DML; FUNCTION/SCHEMA/DATABASE grants are
     // asserted separately.
@@ -261,15 +274,41 @@ export function findAuthorityViolations(src: AuthoritySources): string[] {
     );
   }
 
-  // 9. The journal has no writer at all (AL-18 / directive §32, §40). This
-  //    reads every migration, so a GRANT added by a later slice is caught the
-  //    moment it lands rather than when someone re-reads the file.
+  // 9. The journal's write authority is unreachable from every credential
+  //    (AL-18 / directive §32, §69). This reads every migration, so a GRANT
+  //    added by a later slice is caught the moment it lands rather than when
+  //    someone re-reads the file.
+  //
+  //    P2-S3 gave the ledger a writer, so the rule is no longer "nobody".
+  //    It is the rule that always mattered: no LOGIN role and no PUBLIC may
+  //    hold journal DML; the unreachable internal principal may hold INSERT
+  //    and nothing more, so even the writer cannot rewrite what it wrote; and
+  //    the closed reference registries stay write-free for everyone.
   for (const grant of grants) {
     const journal = grant.tables.filter((t) => (JOURNAL_TABLES as readonly string[]).includes(t));
     if (journal.length === 0) continue;
     const write = grant.privileges.filter(isWrite);
     if (write.length === 0) continue;
-    v.push(`${grant.grantees.join(', ')} is granted ${write.join('/')} on ${journal.join(', ')} — the journal has no writer until P2-S3 grants one`);
+    const registries = journal.filter((t) => (JOURNAL_REGISTRY_TABLES as readonly string[]).includes(t));
+    for (const grantee of grant.grantees) {
+      if ((LOGIN_ROLES as readonly string[]).includes(grantee) || grantee.toUpperCase() === 'PUBLIC') {
+        v.push(`${grantee} is granted ${write.join('/')} on ${journal.join(', ')} — a credential-reachable principal must never hold journal DML`);
+        continue;
+      }
+      if (grantee === INTERNAL_ROLE) {
+        const beyond = write.filter((p) => p !== 'INSERT');
+        if (beyond.length > 0) {
+          v.push(
+            `${INTERNAL_ROLE} is granted ${beyond.join('/')} on ${journal.join(', ')} — the posting authority may INSERT and must never rewrite or remove posted truth`,
+          );
+        }
+        if (registries.length > 0) {
+          v.push(`${INTERNAL_ROLE} is granted ${write.join('/')} on ${registries.join(', ')} — the closed registries are reference data, not ledger truth`);
+        }
+        continue;
+      }
+      v.push(`${grantee} is granted ${write.join('/')} on ${journal.join(', ')} — only ${INTERNAL_ROLE} may write the ledger, and only by INSERT`);
+    }
   }
 
   // 8. Isolation is not bought by weakening the global bypass.

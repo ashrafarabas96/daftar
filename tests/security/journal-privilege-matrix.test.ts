@@ -3,10 +3,13 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   ACCOUNTING_REGISTRY_TABLES,
   ACCOUNTING_ROUTINES,
-  FORBIDDEN_P2_S3_SURFACES,
   INTENDED_TABLE_GRANTS,
+  INTERNAL_ROLE,
   JOURNAL_TABLES,
+  REQUIRED_P2_S3_SURFACES,
+  RUNTIME_CALLABLE_ROUTINES,
   RUNTIME_ROLES,
+  WATCHED_TABLES,
   compareTableGrants,
   type LiveTableGrant,
 } from '../../scripts/guards/journal-privilege-model';
@@ -53,7 +56,7 @@ const ROLE_URLS: Readonly<Record<string, string>> = {
   daftar_provisioner: provisionerDbUrl,
 };
 
-const ALL_TABLES = [...JOURNAL_TABLES, ...ACCOUNTING_REGISTRY_TABLES];
+const ALL_TABLES = [...WATCHED_TABLES];
 
 beforeAll(async () => {
   await ensurePostgres();
@@ -65,7 +68,7 @@ afterAll(async () => {
 });
 
 describe('G-1 — the live grant catalogue equals the intended model', () => {
-  it('information_schema.role_table_grants matches the intended P2-S2 matrix exactly', async () => {
+  it('information_schema.role_table_grants matches the intended accounting grant matrix exactly', async () => {
     const { rows } = await ownerPool().query<LiveTableGrant>(
       `SELECT g.table_name AS table, g.grantee AS grantee, g.privilege_type AS privilege
          FROM information_schema.role_table_grants g
@@ -91,47 +94,62 @@ describe('G-1 — the live grant catalogue equals the intended model', () => {
     expect(compareTableGrants(rows)).toEqual([]);
   });
 
-  it('the model itself says what P2-S2 promised: read for three runtimes, write for nobody', () => {
+  it('the model says what the slices promised: read for three runtimes, INSERT for one unreachable writer', () => {
     for (const table of JOURNAL_TABLES) {
       expect(Object.keys(INTENDED_TABLE_GRANTS[table] ?? {}).sort()).toEqual(['daftar_accounting_internal', 'daftar_app', 'daftar_platform', 'daftar_worker']);
-      for (const privileges of Object.values(INTENDED_TABLE_GRANTS[table] ?? {})) expect(privileges).toEqual(['SELECT']);
+      for (const [grantee, privileges] of Object.entries(INTENDED_TABLE_GRANTS[table] ?? {})) {
+        expect(privileges, grantee).toEqual(grantee === INTERNAL_ROLE ? ['INSERT', 'SELECT'] : ['SELECT']);
+      }
     }
-    for (const table of ACCOUNTING_REGISTRY_TABLES) expect(INTENDED_TABLE_GRANTS[table]).toEqual({});
+    // The registries stay closed to every runtime; the primitive reads the
+    // date policy out of one of them, so the writer alone may SELECT it.
+    for (const table of ACCOUNTING_REGISTRY_TABLES) {
+      expect(
+        Object.keys(INTENDED_TABLE_GRANTS[table] ?? {}).filter((g) => g !== INTERNAL_ROLE),
+        table,
+      ).toEqual([]);
+    }
   });
+
+  // The tamper fixtures start from the model itself, so adding a legitimate
+  // grant next slice does not turn every negative case red for the wrong
+  // reason — what each case proves is the DIFFERENCE it introduces.
+  const modelled = (): LiveTableGrant[] =>
+    Object.entries(INTENDED_TABLE_GRANTS).flatMap(([table, grants]) =>
+      Object.entries(grants).flatMap(([grantee, privileges]) => privileges.map((privilege) => ({ table, grantee, privilege }))),
+    );
 
   it('G-1 detects a grant that no hand-written negative test would have covered', () => {
     // The whole point of the guard, exercised: a future migration hands the
     // worker INSERT on the journal, and nobody remembers to add a test.
-    const tampered: LiveTableGrant[] = [
-      ...JOURNAL_TABLES.flatMap((table) =>
-        ['daftar_app', 'daftar_platform', 'daftar_worker', 'daftar_accounting_internal'].map((grantee) => ({ table, grantee, privilege: 'SELECT' })),
-      ),
-      { table: 'journal_lines', grantee: 'daftar_worker', privilege: 'INSERT' },
-    ];
-    const violations = compareTableGrants(tampered);
+    const violations = compareTableGrants([...modelled(), { table: 'journal_lines', grantee: 'daftar_worker', privilege: 'INSERT' }]);
     expect(violations).toHaveLength(1);
-    expect(violations[0]).toMatch(/daftar_worker holds INSERT on journal_lines .*NO writer/);
+    expect(violations[0]).toMatch(/daftar_worker holds INSERT on journal_lines .*RUNTIME principal must never hold journal DML/);
+  });
+
+  it('G-1 detects the posting authority being handed more than INSERT', () => {
+    const violations = compareTableGrants([...modelled(), { table: 'journal_entries', grantee: INTERNAL_ROLE, privilege: 'UPDATE' }]);
+    expect(violations).toHaveLength(1);
+    expect(violations[0]).toMatch(/may INSERT and must never be able to rewrite or destroy posted truth/);
   });
 
   it('G-1 also detects a read that quietly went missing', () => {
-    const narrowed: LiveTableGrant[] = JOURNAL_TABLES.flatMap((table) =>
-      ['daftar_app', 'daftar_platform', 'daftar_worker', 'daftar_accounting_internal']
-        .filter((grantee) => !(table === 'journal_entries' && grantee === 'daftar_worker'))
-        .map((grantee) => ({ table, grantee, privilege: 'SELECT' })),
-    );
+    const narrowed = modelled().filter((g) => !(g.table === 'journal_entries' && g.grantee === 'daftar_worker'));
     expect(compareTableGrants(narrowed)).toEqual([
-      'the intended grant "daftar_worker SELECT ON journal_entries" is missing — the ledger is less readable than P2-S2 specifies',
+      'the intended grant "daftar_worker SELECT ON journal_entries" is missing — the accounting grant model and the live database disagree',
     ]);
   });
 
   it('G-1 detects a reference registry that was opened up', () => {
-    const opened: LiveTableGrant[] = [
-      ...JOURNAL_TABLES.flatMap((table) =>
-        ['daftar_app', 'daftar_platform', 'daftar_worker', 'daftar_accounting_internal'].map((grantee) => ({ table, grantee, privilege: 'SELECT' })),
-      ),
-      { table: 'accounting_source_types', grantee: 'PUBLIC', privilege: 'SELECT' },
-    ];
-    expect(compareTableGrants(opened)).toEqual(['PUBLIC holds SELECT on accounting_source_types, which the intended P2-S2 grant model does not include']);
+    expect(compareTableGrants([...modelled(), { table: 'accounting_source_types', grantee: 'PUBLIC', privilege: 'SELECT' }])).toEqual([
+      'PUBLIC holds SELECT on accounting_source_types, which the intended accounting grant model does not include',
+    ]);
+  });
+
+  it('G-1 watches the assertion key domain too — no runtime role may read a secret', () => {
+    expect(compareTableGrants([...modelled(), { table: 'accounting_assertion_keys', grantee: 'daftar_app', privilege: 'SELECT' }]).join(' ')).toMatch(
+      /daftar_app holds SELECT on accounting_assertion_keys/,
+    );
   });
 });
 
@@ -209,8 +227,8 @@ describe('Matrix 1 — every runtime role, attempted for real', () => {
   });
 });
 
-describe('§40 — P2-S2 contains no writer and no assertion machinery', () => {
-  it('no routine P2-S2 added is callable by a runtime role or by PUBLIC', async () => {
+describe('the accounting routine surface — exactly one runtime entry point (§68)', () => {
+  it('no internal accounting routine is callable by a runtime role or by PUBLIC', async () => {
     const { rows } = await ownerPool().query<{ proname: string; grantee: string }>(
       `SELECT p.proname, coalesce(r.rolname, 'PUBLIC') AS grantee
          FROM pg_proc p
@@ -223,27 +241,54 @@ describe('§40 — P2-S2 contains no writer and no assertion machinery', () => {
     expect(rows).toEqual([]);
   });
 
-  it('the P2-S3 surfaces do not exist yet', async () => {
+  it('every CALLABLE accounting routine a runtime role can execute is one the model names, and no other', async () => {
+    // Trigger functions are excluded, and deliberately so rather than by
+    // oversight: PostgreSQL refuses to invoke a `RETURNS trigger` routine
+    // outside a trigger ("trigger functions can only be called as triggers"),
+    // so EXECUTE on one confers nothing. What this asserts is the surface a
+    // credential can actually call — which must be the posting primitive for
+    // the merchant runtime, the two key commands for the platform, and
+    // nothing else at all.
+    const { rows } = await ownerPool().query<{ proname: string; grantee: string }>(
+      `SELECT p.proname, r.rolname AS grantee
+         FROM pg_proc p
+         JOIN pg_namespace n ON n.oid = p.pronamespace
+         CROSS JOIN unnest($1::text[]) AS r(rolname)
+        WHERE n.nspname = 'public'
+          AND p.proname LIKE 'accounting%'
+          AND p.prorettype <> 'trigger'::regtype
+          AND has_function_privilege(r.rolname, p.oid, 'EXECUTE')
+        ORDER BY p.proname, r.rolname`,
+      [RUNTIME_ROLES],
+    );
+    const actual = new Map<string, string[]>();
+    for (const row of rows) actual.set(row.proname, [...(actual.get(row.proname) ?? []), row.grantee]);
+    expect(Object.fromEntries([...actual].map(([k, v]) => [k, v.sort()]))).toEqual(RUNTIME_CALLABLE_ROUTINES);
+  });
+
+  it('the P2-S3 surfaces all exist — the writer is not half-installed', async () => {
     const { rows } = await ownerPool().query<{ name: string }>(
       `SELECT p.proname AS name FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
         WHERE n.nspname = 'public' AND p.proname = ANY($1::text[])
-       UNION ALL
+       UNION
        SELECT c.relname AS name FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
         WHERE n.nspname = 'public' AND c.relname = ANY($1::text[])`,
-      [FORBIDDEN_P2_S3_SURFACES],
+      [REQUIRED_P2_S3_SURFACES],
     );
-    expect(rows).toEqual([]);
+    expect(rows.map((r) => r.name).sort()).toEqual([...REQUIRED_P2_S3_SURFACES].sort());
   });
 
-  it('no generic ledger write routine slipped in under another name', async () => {
-    // Anything that both names the journal and writes to it would be a writer
-    // whatever it is called. Read from pg_proc's own source text.
+  it('no SECOND ledger write routine slipped in under another name', async () => {
+    // Anything that both names the journal and writes to it is a writer,
+    // whatever it is called. There must be exactly one, and it must be the one
+    // this slice reviewed. Read from pg_proc's own source text.
     const { rows } = await ownerPool().query<{ proname: string }>(
       `SELECT p.proname FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
         WHERE n.nspname = 'public'
-          AND p.prosrc ~* '(insert|update|delete)[[:space:]]+(into[[:space:]]+)?(journal_entries|journal_lines|accounting_source_bindings)'`,
+          AND p.prosrc ~* '(insert|update|delete)[[:space:]]+(into[[:space:]]+)?(journal_entries|journal_lines|accounting_source_bindings)'
+        ORDER BY p.proname`,
     );
-    expect(rows).toEqual([]);
+    expect(rows.map((r) => r.proname)).toEqual(['accounting_post_entry']);
   });
 });
 
@@ -325,7 +370,7 @@ describe('RLS is real on the ledger', () => {
         const insertLine = `INSERT INTO journal_lines
           (tenant_id, business_id, journal_entry_id, line_no, account_id, debit_minor, credit_minor, base_amount_minor,
            base_currency, txn_currency, txn_amount_minor, fx_rate, fx_rate_source, fx_rate_at)
-          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'ILS','ILS',$8,1,'base',now())`;
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'ILS','ILS',$8,1,'base',date_trunc('second', now()))`;
         await owner.query(insertLine, [m.tenant, m.business, entry?.id, 1, accounts[0]?.id, 1000, 0, 1000]);
         await owner.query(insertLine, [m.tenant, m.business, entry?.id, 2, accounts[1]?.id, 0, 1000, 1000]);
         await owner.query(

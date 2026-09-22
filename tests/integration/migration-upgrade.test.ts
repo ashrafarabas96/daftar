@@ -46,7 +46,23 @@ function migrationsUpTo(upTo: string): string {
   return dir;
 }
 
-const admin = new Pool({ connectionString: dbUrl, max: 1 });
+/**
+ * Every scratch database in this suite is torn down with
+ * `DROP DATABASE ... WITH (FORCE)`, which terminates whatever backend is still
+ * attached. `pg` surfaces that termination on the POOL, and a pool with no
+ * `error` listener re-throws it as an uncaught exception — which vitest counts
+ * as a run failure even when every test passed, and which then fails the gate
+ * that runs this suite. The connection is being torn down on purpose, so the
+ * listener is the correct response, not a swallowed defect: the queries
+ * themselves are all awaited, and a real query failure still rejects.
+ */
+function scratchPool(connectionString: string, max = 1): Pool {
+  const pool = new Pool({ connectionString, max });
+  pool.on('error', () => undefined);
+  return pool;
+}
+
+const admin = scratchPool(dbUrl);
 
 describe('migration upgrade path: pre-encryption schema → latest (§13–16)', () => {
   afterAll(async () => {
@@ -59,7 +75,7 @@ describe('migration upgrade path: pre-encryption schema → latest (§13–16)',
     await admin.query(`DROP DATABASE IF EXISTS ${SCRATCH_DB} WITH (FORCE)`);
     await admin.query(`CREATE DATABASE ${SCRATCH_DB}`);
 
-    const pool = new Pool({ connectionString: scratchUrl, max: 2 });
+    const pool = scratchPool(scratchUrl, 2);
     try {
       await pool.query(bootstrapSql());
 
@@ -175,7 +191,7 @@ describe('migration upgrade path: pre-encryption schema → latest (§13–16)',
     await admin.query(`DROP DATABASE IF EXISTS ${db2} WITH (FORCE)`);
     await admin.query(`CREATE DATABASE ${db2}`);
     const url2 = `postgresql://${PG_USER}:${PG_PASSWORD}@localhost:${PG_PORT}/${db2}`;
-    const pool = new Pool({ connectionString: url2, max: 1 });
+    const pool = scratchPool(url2);
     try {
       await pool.query(bootstrapSql());
       const preDir = migrationsUpTo('0026_versioned_trial_override_shape_ownership.sql');
@@ -215,7 +231,7 @@ describe('migration upgrade path: pre-encryption schema → latest (§13–16)',
     await admin.query(`DROP DATABASE IF EXISTS ${db4} WITH (FORCE)`);
     await admin.query(`CREATE DATABASE ${db4}`);
     const url4 = `postgresql://${PG_USER}:${PG_PASSWORD}@localhost:${PG_PORT}/${db4}`;
-    const pool = new Pool({ connectionString: url4, max: 1 });
+    const pool = scratchPool(url4);
     try {
       await pool.query(bootstrapSql());
       const preDir = migrationsUpTo('0039_catalog_identifiers_owner_integrity.sql');
@@ -254,14 +270,18 @@ describe('migration upgrade path: pre-encryption schema → latest (§13–16)',
         await pool.query(`INSERT INTO business_roles (business_id, key, name, is_system) VALUES ($1, 'cashier', 'Cashier', false)`, [biz.id]);
       }
 
-      // Apply every migration after the checkpoint: P2-S1's two and P2-S2's
-      // two. The supported upgrade path is 0039 → latest, not 0039 → 0041.
+      // Apply every migration after the checkpoint: P2-S1's two, P2-S2's two
+      // and P2-S3's two. The supported upgrade path is 0039 → latest, not
+      // 0039 → 0041 and not 0039 → 0043; a deployment that has been away for
+      // three slices takes exactly one path, and this is it.
       const applied = await runMigrations(url4);
       expect(applied).toEqual([
         '0040_accounting_chart.sql',
         '0041_accounting_permissions.sql',
         '0042_accounting_journal.sql',
         '0043_accounting_invariants.sql',
+        '0044_accounting_assertion_keys.sql',
+        '0045_accounting_post_entry.sql',
       ]);
 
       // Every existing business now holds all 21 required system accounts,
@@ -327,18 +347,24 @@ describe('migration upgrade path: pre-encryption schema → latest (§13–16)',
   }, 180_000);
 
   /**
-   * P2-S2 (directive §41): the upgrade path every deployment that already ran
-   * P2-S1 will take. The checkpoint is the FROZEN boundary — 0041 — and what
-   * follows must be exactly the two candidate migrations, must leave the
-   * journal writable by nobody, and must be a no-op on a second run.
+   * P2-S2/P2-S3 (directive §41, §73): the upgrade path every deployment that
+   * already ran P2-S1 will take. The checkpoint is the FROZEN P2-S1 boundary —
+   * 0041 — and what follows must be exactly the four migrations of the two
+   * slices since, must leave the journal writable by no RUNTIME credential,
+   * and must be a no-op on a second run.
+   *
+   * The "writable by nobody" of P2-S2 became "writable only by the posting
+   * primitive" in P2-S3, so the assertion below now distinguishes the two
+   * principal classes rather than asserting a sentence that was true only
+   * while no writer had shipped.
    */
-  it('compatibility matrix (P2-S2 §41): frozen 0041-checkpoint + existing business → 0042/0043 journal, no writer, rerun no-op', async () => {
+  it('compatibility matrix (P2-S2 §41 / P2-S3 §73): frozen 0041-checkpoint + existing business → 0042…0045, one writer, rerun no-op', async () => {
     await ensurePostgres();
     const db5 = 'daftar_upgrade_0041';
     await admin.query(`DROP DATABASE IF EXISTS ${db5} WITH (FORCE)`);
     await admin.query(`CREATE DATABASE ${db5}`);
     const url5 = `postgresql://${PG_USER}:${PG_PASSWORD}@localhost:${PG_PORT}/${db5}`;
-    const pool = new Pool({ connectionString: url5, max: 1 });
+    const pool = scratchPool(url5);
     try {
       await pool.query(bootstrapSql());
       const preDir = migrationsUpTo('0041_accounting_permissions.sql');
@@ -348,7 +374,15 @@ describe('migration upgrade path: pre-encryption schema → latest (§13–16)',
       // The checkpoint must be honest in both directions: the chart is there,
       // the journal is not.
       expect((await pool.query(`SELECT 1 FROM information_schema.tables WHERE table_name = 'accounts'`)).rows).toHaveLength(1);
-      for (const table of ['journal_entries', 'journal_lines', 'accounting_source_bindings', 'accounting_source_types', 'accounting_system_actors']) {
+      for (const table of [
+        'journal_entries',
+        'journal_lines',
+        'accounting_source_bindings',
+        'accounting_source_types',
+        'accounting_system_actors',
+        'accounting_assertion_keys',
+        'accounting_assertion_uses',
+      ]) {
         expect((await pool.query(`SELECT 1 FROM information_schema.tables WHERE table_name = $1`, [table])).rows, table).toEqual([]);
       }
 
@@ -363,8 +397,14 @@ describe('migration upgrade path: pre-encryption schema → latest (§13–16)',
       ).rows[0];
       expect((await pool.query<{ n: number }>(`SELECT count(*)::int AS n FROM accounts WHERE business_id = $1`, [biz?.id])).rows[0]?.n).toBe(21);
 
-      // Exactly P2-S2's two migrations follow the frozen boundary.
-      expect(await runMigrations(url5)).toEqual(['0042_accounting_journal.sql', '0043_accounting_invariants.sql']);
+      // Exactly the four migrations of P2-S2 and P2-S3 follow the frozen
+      // P2-S1 boundary, in order.
+      expect(await runMigrations(url5)).toEqual([
+        '0042_accounting_journal.sql',
+        '0043_accounting_invariants.sql',
+        '0044_accounting_assertion_keys.sql',
+        '0045_accounting_post_entry.sql',
+      ]);
 
       // The closed registries came out with the shape the slice specifies:
       // three source types, and no system actor at all (AL-04 invents nobody).
@@ -392,10 +432,13 @@ describe('migration upgrade path: pre-encryption schema → latest (§13–16)',
       ).rows.map((r) => r.c);
       expect(fks).toEqual(['accounting_source_bindings_entry_fk', 'journal_entries_binding_fk']);
 
-      // The upgrade must not have handed anyone the ability to write.
+      // The upgrade must not have handed any RUNTIME credential the ability to
+      // write, and must not have given even the internal posting authority the
+      // ability to rewrite or destroy what it wrote. Every journal DML grant
+      // that exists after the upgrade is named here, exactly.
       const writers = (
-        await pool.query<{ g: string }>(
-          `SELECT DISTINCT r.rolname AS g
+        await pool.query<{ g: string; p: string; t: string }>(
+          `SELECT coalesce(r.rolname, 'PUBLIC') AS g, a.privilege_type AS p, c.relname AS t
              FROM pg_class c
              JOIN pg_namespace n ON n.oid = c.relnamespace
              CROSS JOIN LATERAL aclexplode(coalesce(c.relacl, acldefault('r', c.relowner))) a
@@ -403,11 +446,39 @@ describe('migration upgrade path: pre-encryption schema → latest (§13–16)',
             WHERE n.nspname = 'public'
               AND c.relname IN ('journal_entries', 'journal_lines', 'accounting_source_bindings')
               AND a.privilege_type IN ('INSERT', 'UPDATE', 'DELETE', 'TRUNCATE')
-              AND a.grantee <> c.relowner`,
+              AND a.grantee <> c.relowner
+            ORDER BY c.relname, g, a.privilege_type`,
         )
       ).rows;
-      expect(writers).toEqual([]);
-      expect((await pool.query(`SELECT 1 FROM pg_proc WHERE proname IN ('accounting_post_entry', 'accounting_actor')`)).rows).toEqual([]);
+      expect(writers).toEqual([
+        { g: 'daftar_accounting_internal', p: 'INSERT', t: 'accounting_source_bindings' },
+        { g: 'daftar_accounting_internal', p: 'INSERT', t: 'journal_entries' },
+        { g: 'daftar_accounting_internal', p: 'INSERT', t: 'journal_lines' },
+      ]);
+
+      // The one writer arrived, and it is reachable only by executing the
+      // posting primitive: the internal principal cannot log in, and the
+      // primitive is callable by the merchant runtime alone — not by the
+      // platform credential, and not by PUBLIC.
+      expect(
+        (
+          await pool.query<{ n: string }>(`SELECT proname AS n FROM pg_proc WHERE proname IN ('accounting_post_entry', 'accounting_actor') ORDER BY 1`)
+        ).rows.map((r) => r.n),
+      ).toEqual(['accounting_actor', 'accounting_post_entry']);
+      expect((await pool.query<{ l: boolean }>(`SELECT rolcanlogin AS l FROM pg_roles WHERE rolname = 'daftar_accounting_internal'`)).rows[0]?.l).toBe(false);
+      const callers = (
+        await pool.query<{ g: string }>(
+          `SELECT coalesce(r.rolname, 'PUBLIC') AS g
+             FROM pg_proc p
+             JOIN pg_namespace n ON n.oid = p.pronamespace
+             CROSS JOIN LATERAL aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) a
+             LEFT JOIN pg_roles r ON r.oid = a.grantee
+            WHERE n.nspname = 'public' AND p.proname = 'accounting_post_entry'
+              AND a.privilege_type = 'EXECUTE' AND a.grantee <> p.proowner
+            ORDER BY 1`,
+        )
+      ).rows.map((r) => r.g);
+      expect(callers).toEqual(['daftar_app']);
 
       // The chart alone still does not start the business's financial life.
       expect((await pool.query(`SELECT 1 FROM businesses WHERE financial_started_at IS NOT NULL`)).rows).toEqual([]);
@@ -426,7 +497,7 @@ describe('migration upgrade path: pre-encryption schema → latest (§13–16)',
     await admin.query(`DROP DATABASE IF EXISTS ${db3} WITH (FORCE)`);
     await admin.query(`CREATE DATABASE ${db3}`);
     const url3 = `postgresql://${PG_USER}:${PG_PASSWORD}@localhost:${PG_PORT}/${db3}`;
-    const pool = new Pool({ connectionString: url3, max: 1 });
+    const pool = scratchPool(url3);
     try {
       await pool.query(bootstrapSql());
       const preDir = migrationsUpTo('0035_ownership_implication_and_indexes.sql');

@@ -8,6 +8,7 @@ import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { ACCOUNTING_AUTHORITY_TABLES, findAuthoritativeBalanceColumns } from './guards/no-authoritative-balance';
 import { findFloatRateColumns } from './guards/no-float-rate';
+import { findPostingSurfaceViolations } from './guards/posting-surface';
 
 const ROOT = join(__dirname, '..');
 let failures = 0;
@@ -302,8 +303,33 @@ for (const dir of ['apps/api/src', 'apps/web/src', 'apps/admin/src', 'packages']
   }
 }
 
+// Rule 17 — GUARD G-4 (P2-S3, §67): the ledger writer may not exist without
+// the protections that make it safe, may not be reachable by any runtime role
+// but the merchant one, and may not be bypassed by application code writing
+// the journal directly. Stated as an implication, so a repository with no
+// writer passes and a repository with a half-dismantled one does not.
+{
+  const migrations = walk(join(ROOT, 'infrastructure/database/migrations'), /\.sql$/)
+    .sort()
+    .map((f) => readFileSync(f, 'utf8'))
+    .join('\n');
+  // Application code only. Tests legitimately write the journal as the schema
+  // owner to reach a constraint the writer would never let them reach, and
+  // migrations ARE the schema; neither is a service going around the writer.
+  const appFiles: Record<string, string> = {};
+  for (const surface of ['apps/api/src', 'apps/web/src', 'apps/admin/src', 'packages']) {
+    for (const f of tsFiles(join(ROOT, surface))) {
+      if (/\.(test|spec)\.ts$/.test(f) || /[\\/]test[\\/]/.test(f)) continue;
+      appFiles[relative(ROOT, f)] = readFileSync(f, 'utf8');
+    }
+  }
+  for (const violation of findPostingSurfaceViolations({ schema: migrations, appFiles })) {
+    fail('posting-surface', 'infrastructure/database/migrations', violation);
+  }
+}
+
 if (failures > 0) {
   console.error(`\nSTATIC GUARDS: FAIL (${failures})`);
   process.exit(1);
 }
-console.log('STATIC GUARDS: PASS (16 rules)');
+console.log('STATIC GUARDS: PASS (17 rules)');

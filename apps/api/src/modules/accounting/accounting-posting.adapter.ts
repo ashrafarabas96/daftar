@@ -15,6 +15,12 @@ import { Database } from '../../infra/database';
  * money and rates as decimal STRINGS. A JSON number would be a double by the
  * time PostgreSQL saw it, and a BIGINT's low digits or a rate's tenth decimal
  * would be gone with no error anywhere.
+ *
+ * The `JSON.stringify` below is the JSONB TRANSPORT and nothing else. It is
+ * not the financial identity of the command: `acctfp/1` is a byte stream built
+ * by `packages/accounting/src/fingerprint.ts`, and the database rebuilds the
+ * same stream from the row it is about to write and compares the two. Key
+ * order, escaping and whitespace in this payload therefore change nothing.
  */
 @Injectable()
 export class DatabaseAccountingPostingAdapter implements AccountingPostingPort {

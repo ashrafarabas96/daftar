@@ -338,19 +338,23 @@ describe('accounting chart privilege boundary', () => {
    * regression gate block every slice that follows it (freeze directive §7).
    *
    * What stays true forever, and is what the chart slice actually promised:
-   * `0040` and `0041` created no journal surface of their own, and no posting
-   * primitive exists anywhere until P2-S3 grants one its authority boundary.
+   * `0040` and `0041` created no journal surface and no posting primitive of
+   * their own. The same reasoning applies a second time now that P2-S3 has
+   * shipped `accounting_post_entry` and `accounting_actor`: asking the LIVE
+   * database whether a posting primitive exists made this permanent gate fail
+   * the moment an authorized later slice created one, which is precisely the
+   * failure mode the paragraph above exists to prevent. The question is about
+   * two frozen files, so it is asked of their text.
    */
-  it('the accepted P2-S1 migrations shipped no journal surface, and no posting primitive exists yet', async () => {
+  it('the accepted P2-S1 migrations shipped no journal surface and no posting primitive', () => {
     const s1Sql = ['0040_accounting_chart.sql', '0041_accounting_permissions.sql']
       .map((f) => readFileSync(join(__dirname, '../../infrastructure/database/migrations', f), 'utf8'))
       .join('\n');
     for (const surface of ['journal_entries', 'journal_lines', 'accounting_source_bindings', 'accounting_source_types', 'accounting_system_actors']) {
       expect(s1Sql, surface).not.toMatch(new RegExp(`CREATE\\s+TABLE\\s+(?:IF\\s+NOT\\s+EXISTS\\s+)?${surface}\\b`, 'i'));
     }
-    const { rows: fns } = await ownerPool().query<{ proname: string }>(
-      `SELECT proname FROM pg_proc WHERE proname IN ('accounting_post_entry','accounting_actor')`,
-    );
-    expect(fns).toEqual([]);
+    for (const routine of ['accounting_post_entry', 'accounting_actor', 'accounting_canonical_line', 'accounting_fingerprint']) {
+      expect(s1Sql, routine).not.toMatch(new RegExp(`CREATE\\s+(?:OR\\s+REPLACE\\s+)?FUNCTION\\s+${routine}\\b`, 'i'));
+    }
   });
 });

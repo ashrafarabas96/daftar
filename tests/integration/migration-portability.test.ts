@@ -76,13 +76,13 @@ function migrationsUpTo(upTo: string): string {
 
 const admin = new Pool({ connectionString: dbUrl, max: 1 });
 
-describe('managed PostgreSQL: 0039 → 0043 under a non-superuser migration principal', () => {
+describe('managed PostgreSQL: 0039 → 0045 under a non-superuser migration principal', () => {
   afterAll(async () => {
     await admin.query(`DROP DATABASE IF EXISTS ${SCRATCH_DB} WITH (FORCE)`).catch(() => undefined);
     await admin.end();
   });
 
-  it('applies 0040 through 0043 with no superuser anywhere in the path', async () => {
+  it('applies 0040 through 0045 with no superuser anywhere in the path', async () => {
     await ensurePostgres();
     await admin.query(`DROP DATABASE IF EXISTS ${SCRATCH_DB} WITH (FORCE)`);
     await admin.query(`CREATE DATABASE ${SCRATCH_DB}`);
@@ -176,6 +176,8 @@ describe('managed PostgreSQL: 0039 → 0043 under a non-superuser migration prin
         '0041_accounting_permissions.sql',
         '0042_accounting_journal.sql',
         '0043_accounting_invariants.sql',
+        '0044_accounting_assertion_keys.sql',
+        '0045_accounting_post_entry.sql',
       ]);
 
       // The ALTER FUNCTION ownership transfer was legitimate, not bypassed.
@@ -276,14 +278,26 @@ describe('managed PostgreSQL: 0039 → 0043 under a non-superuser migration prin
         false,
       );
 
-      // PUBLIC holds no EXECUTE on either routine.
+      // PUBLIC holds no EXECUTE on any accounting routine.
+      //
+      // Asked with has_function_privilege, not by looking for a `=…` entry in
+      // proacl: a function nobody has granted or revoked has a NULL acl and
+      // PUBLIC can execute it, so an acl-shaped test passes VACUOUSLY on
+      // exactly the function whose REVOKE silently did nothing. That is not a
+      // hypothetical — under a non-superuser migrator holding membership
+      // WITH INHERIT FALSE, a REVOKE issued after the ownership transfer
+      // matches no grantor and PostgreSQL only warns.
       const open = (
         await migrator.query<{ proname: string }>(
-          `SELECT p.proname FROM pg_proc p
-            WHERE p.proname IN ('accounting_seed_chart','accounting_seed_chart_trg')
-              AND EXISTS (SELECT 1 FROM unnest(coalesce(p.proacl, '{}'::aclitem[])) acl WHERE acl::text LIKE '=%')`,
+          `SELECT p.proname FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+            WHERE n.nspname = 'public'
+              AND p.proname IN ('accounting_seed_chart','accounting_seed_chart_trg','accounting_post_entry','accounting_actor',
+                                'accounting_canonical_line','accounting_fingerprint','accounting_assertion_key_install',
+                                'accounting_assertion_key_retire')
+              AND has_function_privilege('public', p.oid, 'EXECUTE')
+            ORDER BY p.proname`,
         )
-      ).rows;
+      ).rows.map((r) => r.proname);
       expect(open).toEqual([]);
 
       // No runtime role can write the chart or call the routine.

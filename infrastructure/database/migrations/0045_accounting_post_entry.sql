@@ -529,6 +529,18 @@ BEGIN
     RAISE EXCEPTION 'accounting.account_not_found: % posting line(s) name an account this business does not have', v_count USING ERRCODE = 'P0001';
   END IF;
 
+  -- Every line is denominated in the business's base currency, as it stands
+  -- under the row lock taken above (§42). The frozen 0043 validator enforces
+  -- the same rule at COMMIT and stays the authority; this check exists so the
+  -- caller that loses a race with a base-currency change is refused HERE, by
+  -- name, instead of learning at commit time that a deferred trigger rejected
+  -- an entry it believed it had written.
+  SELECT count(*) INTO v_count FROM accounting_posting_scratch WHERE base_currency <> v_base;
+  IF v_count > 0 THEN
+    RAISE EXCEPTION 'accounting.entry_base_currency_mismatch: % posting line(s) are not denominated in the business base currency %', v_count, v_base
+      USING ERRCODE = 'P0001';
+  END IF;
+
   UPDATE accounting_posting_scratch s
   SET canonical = accounting_canonical_line(s.identity, s.side, s.base_minor, s.base_currency, s.txn_minor,
                                             s.txn_currency, s.rate, s.rate_source, s.rate_at, s.branch_id, s.warehouse_id);
@@ -659,7 +671,45 @@ $$;
 -- platform administration is not financial authority, and a stolen platform
 -- credential must not be able to post. The helper functions get no runtime
 -- EXECUTE at all — they are internals of the primitive, not an API.
+--
+-- ── The ACL comes FIRST, then the ownership transfer (§72) ───────────────
+--
+-- The order is not cosmetic. A non-superuser deployment migrator is a MEMBER
+-- of daftar_accounting_internal (WITH INHERIT FALSE, which is what lets it
+-- run ALTER FUNCTION ... OWNER TO at all) but does not hold that role's
+-- privileges. PostgreSQL resolves the implicit grantor of a GRANT or REVOKE
+-- through inheritance, so once the function belongs to the internal
+-- principal, a REVOKE issued by the migrator matches no grantor and
+-- PostgreSQL emits a WARNING and changes nothing.
+--
+-- A warning is not an error, so the migration would commit, CI would be
+-- green, and on a managed PostgreSQL the posting primitive would be left
+-- executable by PUBLIC — the exact opposite of what these lines say. Doing
+-- the ACL while the migrator still owns the functions avoids that entirely;
+-- ALTER ... OWNER then rewrites the old owner's ACL entries to the new one
+-- and leaves the explicit grant to daftar_app intact.
 -- ─────────────────────────────────────────────────────────────────────────
+REVOKE ALL ON FUNCTION accounting_canonical_line(TEXT, TEXT, BIGINT, TEXT, BIGINT, TEXT, NUMERIC, TEXT, TIMESTAMPTZ, UUID, UUID) FROM PUBLIC;
+REVOKE ALL ON FUNCTION accounting_fingerprint(UUID, UUID, TEXT, UUID, DATE, BYTEA[]) FROM PUBLIC;
+REVOKE ALL ON FUNCTION accounting_actor(TEXT[]) FROM PUBLIC;
+REVOKE ALL ON FUNCTION accounting_post_entry(DATE, TEXT, TEXT, JSONB) FROM PUBLIC;
+-- The two trigger functions as well. PostgreSQL checks EXECUTE when a trigger
+-- is CREATED, never when it fires, so revoking here does not disarm the
+-- triggers installed above — and it does stop anyone calling a guard function
+-- directly. `businesses_financial_start_guard` in particular reads
+-- `current_user`, and a routine whose decision depends on who is calling it
+-- should not be callable by everyone.
+REVOKE ALL ON FUNCTION accounts_used_identity_immutable() FROM PUBLIC;
+REVOKE ALL ON FUNCTION businesses_financial_start_guard() FROM PUBLIC;
+
+GRANT EXECUTE ON FUNCTION accounting_post_entry(DATE, TEXT, TEXT, JSONB) TO daftar_app;
+
+-- The comment goes on before the ownership transfer for the same reason the
+-- ACL does: COMMENT ON requires ownership, and the deployment migrator holds
+-- membership without inheritance.
+COMMENT ON FUNCTION accounting_post_entry(DATE, TEXT, TEXT, JSONB) IS
+  'The only write path into the journal. Derives actor, tenant, business, source and the authorized payload fingerprint from a verified Accounting Command Assertion; recomputes the acctfp/1 fingerprint from the submitted lines and refuses any mismatch before writing. Writes entry, lines, source binding, audit event and outbox event in one transaction, and establishes businesses.financial_started_at on the first successful posting.';
+
 ALTER FUNCTION accounting_canonical_line(TEXT, TEXT, BIGINT, TEXT, BIGINT, TEXT, NUMERIC, TEXT, TIMESTAMPTZ, UUID, UUID)
   OWNER TO daftar_accounting_internal;
 ALTER FUNCTION accounting_fingerprint(UUID, UUID, TEXT, UUID, DATE, BYTEA[]) OWNER TO daftar_accounting_internal;
@@ -667,13 +717,6 @@ ALTER FUNCTION accounting_actor(TEXT[]) OWNER TO daftar_accounting_internal;
 ALTER FUNCTION accounts_used_identity_immutable() OWNER TO daftar_accounting_internal;
 ALTER FUNCTION businesses_financial_start_guard() OWNER TO daftar_accounting_internal;
 ALTER FUNCTION accounting_post_entry(DATE, TEXT, TEXT, JSONB) OWNER TO daftar_accounting_internal;
-
-REVOKE ALL ON FUNCTION accounting_canonical_line(TEXT, TEXT, BIGINT, TEXT, BIGINT, TEXT, NUMERIC, TEXT, TIMESTAMPTZ, UUID, UUID) FROM PUBLIC;
-REVOKE ALL ON FUNCTION accounting_fingerprint(UUID, UUID, TEXT, UUID, DATE, BYTEA[]) FROM PUBLIC;
-REVOKE ALL ON FUNCTION accounting_actor(TEXT[]) FROM PUBLIC;
-REVOKE ALL ON FUNCTION accounting_post_entry(DATE, TEXT, TEXT, JSONB) FROM PUBLIC;
-
-GRANT EXECUTE ON FUNCTION accounting_post_entry(DATE, TEXT, TEXT, JSONB) TO daftar_app;
 
 -- Hand back the ownership-transfer authority from section 2.
 REVOKE CREATE ON SCHEMA public FROM daftar_accounting_internal;
@@ -683,33 +726,46 @@ REVOKE CREATE ON SCHEMA public FROM daftar_accounting_internal;
 -- ─────────────────────────────────────────────────────────────────────────
 DO $$
 DECLARE
-  v_role TEXT;
-  v_n    INTEGER;
+  v_role  TEXT;
+  v_table TEXT;
+  v_priv  TEXT;
+  v_n     INTEGER;
 BEGIN
   -- (a) No runtime role holds direct journal DML. The writer is a function,
   --     not a grant.
+  --     `has_table_privilege`, not `information_schema.role_table_grants`:
+  --     that view only shows grants involving a role the CURRENT user can
+  --     enable, so under a non-superuser deployment migrator it would hide
+  --     exactly the rows this is looking for and the check would pass by
+  --     seeing nothing (§72). A check another session's role membership can
+  --     silence is not a check.
   FOR v_role IN
-    SELECT unnest(ARRAY['daftar_app','daftar_platform','daftar_worker','daftar_identity','daftar_resolver','daftar_provisioner'])
+    SELECT unnest(ARRAY['daftar_app','daftar_platform','daftar_worker','daftar_identity','daftar_resolver','daftar_provisioner','public'])
   LOOP
-    IF EXISTS (
-      SELECT 1 FROM information_schema.role_table_grants g
-      WHERE g.table_name IN ('journal_entries','journal_lines','accounting_source_bindings')
-        AND g.grantee = v_role
-        AND g.privilege_type IN ('INSERT','UPDATE','DELETE','TRUNCATE')
-    ) THEN
-      RAISE EXCEPTION 'accounting.writer_exposed: runtime role % holds direct journal DML', v_role;
-    END IF;
+    FOR v_table IN SELECT unnest(ARRAY['journal_entries','journal_lines','accounting_source_bindings'])
+    LOOP
+      FOR v_priv IN SELECT unnest(ARRAY['INSERT','UPDATE','DELETE','TRUNCATE'])
+      LOOP
+        IF has_table_privilege(v_role, v_table, v_priv) THEN
+          RAISE EXCEPTION 'accounting.writer_exposed: % holds direct % on %', v_role, v_priv, v_table;
+        END IF;
+      END LOOP;
+    END LOOP;
   END LOOP;
 
   -- (b) The internal authority may INSERT, and still may not UPDATE or DELETE.
-  IF EXISTS (
-    SELECT 1 FROM information_schema.role_table_grants g
-    WHERE g.table_name IN ('journal_entries','journal_lines','accounting_source_bindings')
-      AND g.grantee = 'daftar_accounting_internal'
-      AND g.privilege_type IN ('UPDATE','DELETE','TRUNCATE')
-  ) THEN
-    RAISE EXCEPTION 'accounting.writer_exposed: the internal authority holds more than INSERT on journal truth';
-  END IF;
+  FOR v_table IN SELECT unnest(ARRAY['journal_entries','journal_lines','accounting_source_bindings'])
+  LOOP
+    FOR v_priv IN SELECT unnest(ARRAY['UPDATE','DELETE','TRUNCATE'])
+    LOOP
+      IF has_table_privilege('daftar_accounting_internal', v_table, v_priv) THEN
+        RAISE EXCEPTION 'accounting.writer_exposed: the posting authority holds % on % — it may INSERT and never rewrite posted truth', v_priv, v_table;
+      END IF;
+    END LOOP;
+    IF NOT has_table_privilege('daftar_accounting_internal', v_table, 'INSERT') THEN
+      RAISE EXCEPTION 'accounting.writer_invalid: the posting authority cannot INSERT into % — the writer would be unable to write', v_table;
+    END IF;
+  END LOOP;
 
   -- (c) Only daftar_app may execute the primitive.
   FOR v_role IN
@@ -723,12 +779,18 @@ BEGIN
     RAISE EXCEPTION 'accounting.writer_invalid: daftar_app cannot execute the posting primitive';
   END IF;
 
-  -- (d) The verifier is an internal helper, not an API.
+  -- (d) Every helper is an internal of the primitive, not an API. PUBLIC is
+  --     checked too: a function nobody revoked is executable by everyone, and
+  --     that is the default, not an oversight anyone has to commit.
   FOR v_role IN
-    SELECT unnest(ARRAY['daftar_app','daftar_platform','daftar_worker','daftar_identity','daftar_resolver','daftar_provisioner'])
+    SELECT unnest(ARRAY['daftar_app','daftar_platform','daftar_worker','daftar_identity','daftar_resolver','daftar_provisioner','public'])
   LOOP
-    IF has_function_privilege(v_role, 'accounting_actor(text[])', 'EXECUTE') THEN
-      RAISE EXCEPTION 'accounting.writer_exposed: runtime role % may execute accounting_actor directly', v_role;
+    IF has_function_privilege(v_role, 'accounting_actor(text[])', 'EXECUTE')
+       OR has_function_privilege(v_role, 'accounting_canonical_line(text,text,bigint,text,bigint,text,numeric,text,timestamptz,uuid,uuid)', 'EXECUTE')
+       OR has_function_privilege(v_role, 'accounting_fingerprint(uuid,uuid,text,uuid,date,bytea[])', 'EXECUTE')
+       OR has_function_privilege(v_role, 'accounts_used_identity_immutable()', 'EXECUTE')
+       OR has_function_privilege(v_role, 'businesses_financial_start_guard()', 'EXECUTE') THEN
+      RAISE EXCEPTION 'accounting.writer_exposed: % may execute an internal accounting helper directly', v_role;
     END IF;
   END LOOP;
 
@@ -742,26 +804,25 @@ BEGIN
     RAISE EXCEPTION 'accounting.writer_invalid: expected 6 routines owned by daftar_accounting_internal, found %', v_n;
   END IF;
 
-  -- (f) The business grant is column-level, not a blanket UPDATE.
-  IF EXISTS (
-    SELECT 1 FROM information_schema.role_table_grants g
-    WHERE g.table_name = 'businesses' AND g.grantee = 'daftar_accounting_internal' AND g.privilege_type = 'UPDATE'
-  ) THEN
-    RAISE EXCEPTION 'accounting.writer_exposed: the internal authority holds table-wide UPDATE on businesses';
+  -- (f) The business grant is column-level, not a blanket UPDATE. The two
+  --     functions differ exactly here: has_table_privilege answers about the
+  --     TABLE privilege, has_column_privilege about the one column.
+  IF has_table_privilege('daftar_accounting_internal', 'businesses', 'UPDATE') THEN
+    RAISE EXCEPTION 'accounting.writer_exposed: the posting authority holds table-wide UPDATE on businesses';
   END IF;
-  IF NOT EXISTS (
-    SELECT 1 FROM information_schema.column_privileges g
-    WHERE g.table_name = 'businesses' AND g.grantee = 'daftar_accounting_internal'
-      AND g.column_name = 'financial_started_at' AND g.privilege_type = 'UPDATE'
-  ) THEN
-    RAISE EXCEPTION 'accounting.writer_invalid: the internal authority cannot establish financial_started_at';
+  IF NOT has_column_privilege('daftar_accounting_internal', 'businesses', 'financial_started_at', 'UPDATE') THEN
+    RAISE EXCEPTION 'accounting.writer_invalid: the posting authority cannot establish financial_started_at';
   END IF;
 
   -- (g) The temporary CREATE is gone and the principal is still unreachable.
   IF has_schema_privilege('daftar_accounting_internal', 'public', 'CREATE') THEN
     RAISE EXCEPTION 'accounting.writer_invalid: the temporary CREATE on schema public was not revoked';
   END IF;
-  IF EXISTS (SELECT 1 FROM pg_authid WHERE rolname = 'daftar_accounting_internal' AND (rolcanlogin OR rolbypassrls OR rolsuper)) THEN
+  -- pg_roles, not pg_authid: the latter is superuser-only, and a check that
+  -- only a superuser can run is a check a managed deployment cannot run at
+  -- all (§72). pg_roles is the public view over the same columns, minus the
+  -- password hash this has no business reading.
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'daftar_accounting_internal' AND (rolcanlogin OR rolbypassrls OR rolsuper)) THEN
     RAISE EXCEPTION 'accounting.writer_invalid: daftar_accounting_internal must remain NOLOGIN, NOBYPASSRLS and NOSUPERUSER';
   END IF;
 
@@ -770,6 +831,3 @@ BEGIN
     RAISE EXCEPTION 'accounting.writer_invalid: app_bypass() was modified by this slice';
   END IF;
 END $$;
-
-COMMENT ON FUNCTION accounting_post_entry(DATE, TEXT, TEXT, JSONB) IS
-  'The only write path into the journal. Derives actor, tenant, business, source and the authorized payload fingerprint from a verified Accounting Command Assertion; recomputes the acctfp/1 fingerprint from the submitted lines and refuses any mismatch before writing. Writes entry, lines, source binding, audit event and outbox event in one transaction, and establishes businesses.financial_started_at on the first successful posting.';

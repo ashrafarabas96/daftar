@@ -16,6 +16,14 @@
  * trusted.
  */
 
+/**
+ * The money cap (AL-10): no amount, on either side of a line, may exceed
+ * 10^18 minor units. It is the same bound `journal_lines` CHECKs, named once
+ * here so the application refuses an over-cap amount by name instead of
+ * letting an opaque constraint violation come back from PostgreSQL.
+ */
+export const MAX_MONEY_MINOR = 10n ** 18n;
+
 /** Which side of the ledger a line falls on. Exactly one per line. */
 export type PostingSide = 'D' | 'C';
 

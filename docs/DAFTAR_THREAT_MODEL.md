@@ -24,6 +24,16 @@
 | TH-16 | Secrets Exposure | مفاتيح في الكود/السجلات | Secret Manager + فحص CI + redaction في السجلات | CI scan + مراجعة سجلات |
 | TH-17 | Admin Misuse | Super Admin يعدّل مبلغًا | Domain Commands فقط + MFA + Audit | محاولة تعديل مباشر → لا مسار موجود |
 | TH-18 | Migration Destructive | فقدان بيانات عند ترقية | Expand/Migrate/Contract + فحص migrations في CI + backup قبل | dry-run migration على نسخة إنتاجية |
+| TH-19 | Forged Posting | مهاجم يملي الفاعل أو الحساب أو المنشأة في أمر ترحيل | الفاعل والمنشأة يُشتقّان من توكيد موقّع بـHMAC يُتحقق منه داخل قاعدة البيانات (`accounting_actor`)؛ لا GUC ولا حقل من المستدعي له سلطة | `tests/security/accounting-posting-authority.test.ts` — توقيع مزوَّر، فاعل معدَّل تحت توقيع صحيح، GUC منتحَل |
+| TH-20 | Stolen DB Credential | سرقة بيانات اعتماد `daftar_app` واستخدامها للكتابة في دفتر القيود مباشرة | لا دور تشغيلي يملك INSERT/UPDATE/DELETE/TRUNCATE على جداول الدفتر؛ الكاتب الوحيد `accounting_post_entry` وهو SECURITY DEFINER مملوك لمبدأ NOLOGIN، ويرفض الاستدعاء بلا توكيد | `tests/security/journal-privilege-matrix.test.ts` (المصفوفة الحيّة مقابل النموذج) + الحارس G-4 |
+| TH-21 | Payload Tampering | تعديل المبالغ أو الحسابات بعد توقيع الأمر | قاعدة البيانات تعيد حوسبة بصمة `acctfp/1` من الحمولة نفسها وتقارنها بالموقَّعة قبل أي كتابة (`accounting.assertion_payload_mismatch`) | `accounting-posting.test.ts` + `accounting-fingerprint-parity.test.ts` |
+| TH-22 | Posting Replay | إعادة إرسال أمر ترحيل صالح لإنتاج قيد ثانٍ | صلاحية 60 ثانية + `jti` أحادي الاستخدام مقيَّد بالمعاملة + هوية مصدر فريدة `(business_id, source_type, source_id)` مع قفل استشاري | `accounting-posting-authority.test.ts` + `accounting-concurrency.test.ts` §50 |
+| TH-23 | Cross-Business Posting | استخدام توكيد منشأة لكتابة قيد في منشأة أخرى | المنشأة من التوكيد المتحقَّق فقط؛ مفاتيح أجنبية مركّبة `(business_id, …)` ترفض حسابًا أو فرعًا من منشأة أخرى فيزيائيًا؛ RLS مفعّلة ومفروضة | `accounting-posting-authority.test.ts` + `accounting-posting.test.ts` |
+| TH-24 | Key Confusion | إعادة استخدام مفتاح التزويد كمفتاح سلطة مالية | فضاء مفاتيح منفصل (`accounting_assertion_keys`)، ورفض الإقلاع عند تطابق السرّين بايتًا ببايت | فحوص `apps/api/src/config.ts` + بوابة `gate:phase2:s3` |
+| TH-25 | Back-dating | ترحيل قيد بتاريخ خارج الحدود أو بتوقيت الخادم بدل توقيت المنشأة | «اليوم» يُقرأ بتوقيت المنشأة تحت قفل صف المنشأة نفسه؛ الحدود بيانات على `accounting_source_types` لا فروع في الكود | `accounting-posting.test.ts` + `accounting-concurrency.test.ts` §43 (Pacific/Kiritimati مقابل Pacific/Honolulu) |
+| TH-26 | Ledger Tampering | تعديل أو حذف قيد مرحَّل | مشغّلات `BEFORE UPDATE OR DELETE` بلا أي استثناء هوية، إضافةً إلى غياب الصلاحيات؛ حتى مالك المخطط مرفوض | `accounting-journal.test.ts` (المصفوفة الثانية، تُشغَّل كمالك المخطط بعد إثبات `rolsuper`) |
+
+**الحد المقبول المُعلن (P2-S3).** هذه الضوابط لا تحمي من مهاجم اخترق عملية `merchant-api` نفسها: تلك العملية تحمل مفتاح التوقيع، فتستطيع إصدار توكيدات لأي سلطة تصل إليها. التفصيل الكامل في `PHASE_2_S3_ACCEPTANCE.md` §7، ويجب ألا يُدَّعى أكثر منه.
 
 ## قواعد
 

@@ -33,9 +33,12 @@ import { findFloatRateColumns } from './guards/no-float-rate';
 import { stripComments } from './guards/sql-schema';
 import {
   ACCOUNTING_REGISTRY_TABLES,
-  FORBIDDEN_P2_S3_SURFACES,
+  P2_S2_EXCLUDED_SURFACES,
   INTENDED_TABLE_GRANTS,
+  INTERNAL_ROLE,
   JOURNAL_TABLES,
+  MUTATING_PRIVILEGES,
+  RUNTIME_ROLES,
   WRITE_PRIVILEGES,
 } from './guards/journal-privilege-model';
 
@@ -205,14 +208,14 @@ function checkSliceBoundary(): void {
       .join('\n'),
   );
   let leaked = 0;
-  for (const surface of FORBIDDEN_P2_S3_SURFACES) {
+  for (const surface of P2_S2_EXCLUDED_SURFACES) {
     const re = new RegExp(`CREATE\\s+(?:TABLE|VIEW|OR\\s+REPLACE\\s+FUNCTION|FUNCTION|PROCEDURE)\\s+(?:IF\\s+NOT\\s+EXISTS\\s+)?${surface}\\b`, 'i');
     if (re.test(sliceSchema)) {
       fail('slice-boundary', `${surface} is created by a P2-S2 migration — the accepted journal slice contained no writer or assertion surface`);
       leaked += 1;
     }
   }
-  if (leaked === 0) ok(`the accepted P2-S2 migrations create no posting or assertion surface: ${FORBIDDEN_P2_S3_SURFACES.join(', ')}`);
+  if (leaked === 0) ok(`the accepted P2-S2 migrations create no posting or assertion surface: ${P2_S2_EXCLUDED_SURFACES.join(', ')}`);
 
   // session_replication_role would silently disable every trigger this slice
   // installed, immutability and validation alike. It has no legitimate use in
@@ -312,24 +315,48 @@ function checkGuards(): void {
     fail('guard-g1', 'scripts/guards/journal-privilege-model.ts is missing — G-1 is required (§34)');
   } else {
     let writers = 0;
+    // The invariant this gate carries forward is about RUNTIME credentials,
+    // not about "nobody". P2-S2 could say nobody because it shipped no writer;
+    // a permanent gate that kept saying it would forbid every later slice that
+    // legitimately adds one, which the freeze explicitly forbids (§6, §69).
+    // What must never change: a role a service authenticates as holds no
+    // journal DML, and the internal NOLOGIN authority can never rewrite or
+    // destroy posted truth.
+    const runtime = new Set<string>(RUNTIME_ROLES);
     for (const [table, grants] of Object.entries(INTENDED_TABLE_GRANTS)) {
       for (const [grantee, privileges] of Object.entries(grants)) {
         for (const privilege of privileges) {
-          if ((WRITE_PRIVILEGES as readonly string[]).includes(privilege)) {
-            fail('guard-g1', `the intended grant model gives ${grantee} ${privilege} on ${table} — P2-S2 has NO writer (§32, §40)`);
+          if (runtime.has(grantee) && (WRITE_PRIVILEGES as readonly string[]).includes(privilege)) {
+            fail(
+              'guard-g1',
+              `the intended grant model gives the runtime role ${grantee} ${privilege} on ${table} — no runtime credential may write the ledger (§32, §40)`,
+            );
+            writers += 1;
+          }
+          if (
+            grantee === INTERNAL_ROLE &&
+            (MUTATING_PRIVILEGES as readonly string[]).includes(privilege) &&
+            (JOURNAL_TABLES as readonly string[]).includes(table)
+          ) {
+            fail(
+              'guard-g1',
+              `the intended grant model gives the posting authority ${privilege} on ${table} — it may INSERT and must never rewrite posted truth`,
+            );
             writers += 1;
           }
         }
       }
     }
     for (const registry of ACCOUNTING_REGISTRY_TABLES) {
-      if (Object.keys(INTENDED_TABLE_GRANTS[registry] ?? {}).length > 0)
-        fail('guard-g1', `${registry} is granted to someone — the closed registries are default deny (§33)`);
+      const grantees = Object.keys(INTENDED_TABLE_GRANTS[registry] ?? {});
+      const exposed = grantees.filter((g) => g !== INTERNAL_ROLE);
+      if (exposed.length > 0)
+        fail('guard-g1', `${registry} is granted to ${exposed.join(', ')} — the closed registries are default deny to every runtime role (§33)`);
     }
     for (const table of JOURNAL_TABLES) {
       if (INTENDED_TABLE_GRANTS[table] === undefined) fail('guard-g1', `${table} is absent from the intended grant model — G-1 would not watch it`);
     }
-    if (writers === 0) ok(`G-1 model covers ${JOURNAL_TABLES.length + ACCOUNTING_REGISTRY_TABLES.length} tables and grants no write privilege to anyone`);
+    if (writers === 0) ok(`G-1 model grants no runtime credential any journal DML, and the posting authority no way to rewrite posted truth`);
   }
   const matrixSuite = join(ROOT, 'tests/security/journal-privilege-matrix.test.ts');
   if (!existsSync(matrixSuite))

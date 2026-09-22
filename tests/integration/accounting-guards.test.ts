@@ -8,8 +8,11 @@ import { REQUIRED_RATE_SCALE, findFloatRateColumns, isRateAuthorityTable, isRate
 import { stripComments } from '../../scripts/guards/sql-schema';
 import {
   ACCOUNTING_REGISTRY_TABLES,
-  FORBIDDEN_P2_S3_SURFACES,
+  P2_S2_EXCLUDED_SURFACES,
   INTENDED_TABLE_GRANTS,
+  INTERNAL_ROLE,
+  JOURNAL_TABLES,
+  RUNTIME_ROLES,
   WRITE_PRIVILEGES,
   compareTableGrants,
 } from '../../scripts/guards/journal-privilege-model';
@@ -275,6 +278,36 @@ describe('authority isolation guard', () => {
     expect(v.join(' ')).toMatch(/PUBLIC is granted INSERT/);
   });
 
+  it('still sees a grant appended after a migration full of prose about grants', () => {
+    // The regression this catches for real: `[\s\S]+?` across the whole
+    // concatenated schema let one match swallow every statement after a
+    // PL/pgSQL body that mentions `role_table_grants`, and the guard went
+    // quietly blind while staying green.
+    const noisy = `${REAL.schema}\n-- GRANT INSERT ON journal_lines TO daftar_worker is what this forbids\nDO $$ BEGIN\n  IF EXISTS (SELECT 1 FROM information_schema.role_table_grants g WHERE g.grantee = 'x') THEN\n    RAISE EXCEPTION 'no';\n  END IF;\nEND $$;\nGRANT INSERT ON accounts TO daftar_app;`;
+    expect(findAuthorityViolations({ ...REAL, schema: noisy }).join(' ')).toMatch(/daftar_app is granted INSERT on accounts/);
+  });
+
+  it('accepts the posting authority holding INSERT on the journal, and only INSERT (§69)', () => {
+    const withWriter = `${REAL.schema}\nGRANT INSERT ON journal_entries TO daftar_accounting_internal;`;
+    expect(findAuthorityViolations({ ...REAL, schema: withWriter })).toEqual([]);
+    for (const priv of ['UPDATE', 'DELETE', 'TRUNCATE']) {
+      const rewriting = `${REAL.schema}\nGRANT ${priv} ON journal_entries TO daftar_accounting_internal;`;
+      expect(findAuthorityViolations({ ...REAL, schema: rewriting }).join(' '), priv).toMatch(/must never rewrite or remove posted truth/);
+    }
+  });
+
+  it('never accepts journal DML for a credential, writer or no writer', () => {
+    for (const role of [...LOGIN_ROLES, 'PUBLIC']) {
+      const v = findAuthorityViolations({ ...REAL, schema: `${REAL.schema}\nGRANT INSERT ON journal_lines TO ${role};` });
+      expect(v.join(' '), role).toMatch(/must never hold journal DML/);
+    }
+  });
+
+  it('keeps the closed registries write-free even for the posting authority', () => {
+    const v = findAuthorityViolations({ ...REAL, schema: `${REAL.schema}\nGRANT INSERT ON accounting_source_types TO daftar_accounting_internal;` });
+    expect(v.join(' ')).toMatch(/reference data, not ledger truth/);
+  });
+
   it('rejects UPDATE or DELETE on accounts even for the internal principal', () => {
     for (const priv of ['UPDATE', 'DELETE', 'TRUNCATE']) {
       const v = findAuthorityViolations({ ...REAL, schema: `${REAL.schema}\nGRANT ${priv} ON accounts TO daftar_accounting_internal;` });
@@ -499,9 +532,13 @@ describe('guard G-1 — the intended journal privilege model', () => {
       Object.entries(grants).flatMap(([grantee, privileges]) => privileges.map((privilege) => live(table, grantee, privilege))),
     );
 
-  it('grants no write privilege to anybody, on any journal table', () => {
+  it('grants no RUNTIME credential a write privilege, on any accounting table', () => {
+    // The permanent invariant. P2-S3 added a writer, so "nobody writes" is no
+    // longer the rule; "no credential a service authenticates as writes" is,
+    // and always was the one that mattered (§69).
     for (const [table, grants] of Object.entries(INTENDED_TABLE_GRANTS)) {
       for (const [grantee, privileges] of Object.entries(grants)) {
+        if (!(RUNTIME_ROLES as readonly string[]).includes(grantee)) continue;
         for (const privilege of privileges) {
           expect(WRITE_PRIVILEGES, `${grantee} would write ${table}`).not.toContain(privilege);
         }
@@ -509,8 +546,22 @@ describe('guard G-1 — the intended journal privilege model', () => {
     }
   });
 
-  it('keeps the two closed registries at default deny', () => {
-    for (const registry of ACCOUNTING_REGISTRY_TABLES) expect(Object.keys(INTENDED_TABLE_GRANTS[registry] ?? {})).toEqual([]);
+  it('lets the posting authority INSERT and never rewrite or destroy posted truth', () => {
+    for (const table of JOURNAL_TABLES) {
+      expect(INTENDED_TABLE_GRANTS[table]?.[INTERNAL_ROLE], table).toEqual(['INSERT', 'SELECT']);
+    }
+    // And it cannot destroy key material either.
+    expect(INTENDED_TABLE_GRANTS['accounting_assertion_keys']?.[INTERNAL_ROLE]).not.toContain('DELETE');
+  });
+
+  it('keeps the closed registries at default deny for every runtime role', () => {
+    for (const registry of ACCOUNTING_REGISTRY_TABLES) {
+      const grantees = Object.keys(INTENDED_TABLE_GRANTS[registry] ?? {});
+      expect(
+        grantees.filter((g) => g !== INTERNAL_ROLE),
+        registry,
+      ).toEqual([]);
+    }
   });
 
   it('accepts a catalogue that matches the model exactly', () => {
@@ -520,7 +571,7 @@ describe('guard G-1 — the intended journal privilege model', () => {
   it('detects the GRANT nobody remembered to write a negative test for', () => {
     const tampered = [...intended(), live('journal_lines', 'daftar_worker', 'INSERT')];
     expect(compareTableGrants(tampered).join(' ')).toMatch(/daftar_worker holds INSERT on journal_lines/);
-    expect(compareTableGrants(tampered).join(' ')).toMatch(/NO writer/);
+    expect(compareTableGrants(tampered).join(' ')).toMatch(/RUNTIME principal must never hold journal DML/);
   });
 
   it('detects a read grant to a role that should have none, not only a write grant', () => {
@@ -629,7 +680,7 @@ describe('P2-S2 migration boundary', () => {
     // Scoped to P2-S2's own two migrations: a permanent gate must not forbid
     // P2-S3's authorized 0044/0045 surfaces (freeze §6).
     const schema = stripComments([journal(), invariants()].join('\n'));
-    for (const surface of FORBIDDEN_P2_S3_SURFACES) {
+    for (const surface of P2_S2_EXCLUDED_SURFACES) {
       expect(schema, surface).not.toMatch(new RegExp(`CREATE\\s+(?:TABLE|VIEW|OR REPLACE FUNCTION|FUNCTION|PROCEDURE)\\s+${surface}\\b`, 'i'));
     }
     expect(schema).not.toMatch(/session_replication_role/i);

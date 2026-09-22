@@ -18,6 +18,12 @@ const PROD_ENV: NodeJS.ProcessEnv = {
   RESOLVER_DATABASE_URL: 'postgresql://daftar_resolver:x@db/daftar',
   PROVISIONER_DATABASE_URL: 'postgresql://daftar_provisioner:x@db/daftar',
   PROVISIONING_ASSERTION_KEY: Buffer.alloc(32, 9).toString('base64'),
+  // Deliberately DIFFERENT bytes from the provisioning key: since P2-S3 a
+  // production merchant process refuses to start when the two secrets are
+  // byte-equal, because one compromise would then reach both provisioning
+  // and the ledger.
+  ACCOUNTING_ASSERTION_KEY: Buffer.alloc(32, 11).toString('base64'),
+  ACCOUNTING_ASSERTION_KID: 'acct1',
   WORKER_DATABASE_URL: 'postgresql://daftar_worker:x@db/daftar',
   JWT_SECRET: 'production-secret-with-at-least-32-characters',
   MEDIA_STORAGE: 's3',
@@ -69,6 +75,9 @@ describe('production provider wiring (Gate A §20–32)', () => {
       WORKER_DATABASE_URL: _w,
       PROVISIONER_DATABASE_URL: _pv,
       PROVISIONING_ASSERTION_KEY: _pa,
+      // §19/§20: platform administration is not financial authority, so the
+      // platform process must not carry the accounting signing key either.
+      ACCOUNTING_ASSERTION_KEY: _ak,
       CREDENTIAL_PAYLOAD_KEY: _k,
       SMTP_URL: _s,
       ...platformEnv
@@ -130,6 +139,9 @@ describe('process-level secret separation (§XXV–XXXI)', () => {
       WORKER_DATABASE_URL: _w,
       PROVISIONER_DATABASE_URL: _pv,
       PROVISIONING_ASSERTION_KEY: _pa,
+      // §19/§20: platform administration is not financial authority, so the
+      // platform process must not carry the accounting signing key either.
+      ACCOUNTING_ASSERTION_KEY: _ak,
       CREDENTIAL_PAYLOAD_KEY: _k,
       SMTP_URL: _s,
       ...platformEnv

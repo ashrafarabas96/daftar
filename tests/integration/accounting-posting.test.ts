@@ -59,6 +59,26 @@ async function postRaw(assertion: string, c: PostCommand, lines: unknown): Promi
   }
 }
 
+/**
+ * A business with a seeded chart and no posted history, so its first posting
+ * is the one that would stamp `financial_started_at`. The cases that assert
+ * "no stamp" need a business that could have been stamped, or they pass
+ * vacuously.
+ */
+async function freshUnstampedBusiness(slug: string): Promise<PostingFixture> {
+  const tenantId = must((await ownerPool().query<{ id: string }>(`INSERT INTO tenants DEFAULT VALUES RETURNING id`)).rows[0]).id;
+  const businessId = must(
+    (
+      await ownerPool().query<{ id: string }>(
+        `INSERT INTO businesses (tenant_id, name, store_slug, country_code, base_currency, timezone)
+         VALUES ($1, 'Fresh', $2, 'PS', 'ILS', 'Asia/Hebron') RETURNING id`,
+        [tenantId, `posting-${slug}-${randomUUID().slice(0, 8)}`],
+      )
+    ).rows[0],
+  ).id;
+  return { ...fx, tenantId, businessId };
+}
+
 beforeAll(async () => {
   await ensurePostgres();
   await resetData();
@@ -552,5 +572,81 @@ describe('atomicity (§37, §62)', () => {
       [fx.businessId, c.sourceId],
     );
     expect(after.rows[0]).toEqual({ entries: 0, audits: 0, outbox: 0 });
+  });
+
+  /**
+   * §62 and §63 — injected failure, not a refused command.
+   *
+   * The cases above prove the posting is atomic when the PRIMITIVE refuses.
+   * These prove it when one of the two side-effect writes fails for a reason
+   * the primitive knows nothing about, which is the failure AL-17 is actually
+   * about: an audit or outbox row that cannot be written must take the ledger
+   * entry down with it, rather than leaving a posted entry nobody recorded.
+   *
+   * The injection is a trigger the test creates and drops around the attempt.
+   * It adds no production bypass: nothing in any migration changes, the
+   * primitive is unmodified, and no flag or GUC exists that a caller could set
+   * to reach this behaviour. `finally` drops it whatever happens, so a failing
+   * assertion cannot leave the table broken for the rest of the run.
+   */
+  const injectFailureOn = async (table: 'audit_events' | 'outbox_events', run: () => Promise<void>): Promise<void> => {
+    const trigger = `test_fail_${table}`;
+    await ownerPool().query(
+      `CREATE OR REPLACE FUNCTION ${trigger}() RETURNS trigger LANGUAGE plpgsql AS $fn$
+       BEGIN RAISE EXCEPTION 'injected.${table}_unavailable' USING ERRCODE = 'P0001'; END $fn$`,
+    );
+    await ownerPool().query(`CREATE TRIGGER ${trigger} BEFORE INSERT ON ${table} FOR EACH ROW EXECUTE FUNCTION ${trigger}()`);
+    try {
+      await run();
+    } finally {
+      await ownerPool().query(`DROP TRIGGER IF EXISTS ${trigger} ON ${table}`);
+      await ownerPool().query(`DROP FUNCTION IF EXISTS ${trigger}()`);
+    }
+  };
+
+  /** Everything a posting writes, for one source, plus the business's stamp. */
+  const traces = async (businessId: string, sourceId: string): Promise<Record<string, unknown>> =>
+    must(
+      (
+        await ownerPool().query<Record<string, unknown>>(
+          `SELECT (SELECT count(*) FROM journal_entries WHERE business_id = $1 AND source_id = $2)::int AS entries,
+                  (SELECT count(*) FROM journal_lines l JOIN journal_entries e ON e.business_id = l.business_id AND e.id = l.journal_entry_id
+                    WHERE e.business_id = $1 AND e.source_id = $2)::int AS lines,
+                  (SELECT count(*) FROM accounting_source_bindings WHERE business_id = $1 AND source_id = $2)::int AS bindings,
+                  (SELECT count(*) FROM audit_events WHERE metadata->>'sourceId' = $2::text)::int AS audits,
+                  (SELECT count(*) FROM outbox_events WHERE payload->>'sourceId' = $2::text)::int AS outbox,
+                  (SELECT financial_started_at IS NOT NULL FROM businesses WHERE id = $1) AS started`,
+          [businessId, sourceId],
+        )
+      ).rows[0],
+    );
+
+  it('an audit write that fails takes the whole posting with it — no entry, no lines, no binding, no outbox, no stamp (§62)', async () => {
+    const fresh = await freshUnstampedBusiness('audit-fail');
+    const c = simpleCommand(fresh, randomUUID(), today);
+    await injectFailureOn('audit_events', async () => {
+      expect(await refusal(() => post(c, fx.userId))).toMatch(/injected\.audit_events_unavailable/);
+    });
+    expect(await traces(fresh.businessId, c.sourceId)).toEqual({ entries: 0, lines: 0, bindings: 0, audits: 0, outbox: 0, started: false });
+  });
+
+  it('an outbox write that fails takes the whole posting with it — no entry, no lines, no binding, no audit, no stamp (§63)', async () => {
+    const fresh = await freshUnstampedBusiness('outbox-fail');
+    const c = simpleCommand(fresh, randomUUID(), today);
+    await injectFailureOn('outbox_events', async () => {
+      expect(await refusal(() => post(c, fx.userId))).toMatch(/injected\.outbox_events_unavailable/);
+    });
+    expect(await traces(fresh.businessId, c.sourceId)).toEqual({ entries: 0, lines: 0, bindings: 0, audits: 0, outbox: 0, started: false });
+  });
+
+  it('and the same source posts cleanly once the injected failure is gone — nothing was poisoned by the attempt', async () => {
+    const fresh = await freshUnstampedBusiness('recovers');
+    const c = simpleCommand(fresh, randomUUID(), today);
+    await injectFailureOn('outbox_events', async () => {
+      await refusal(() => post(c, fx.userId));
+    });
+    const r = await post(c, fx.userId);
+    expect(r.created).toBe(true);
+    expect(await traces(fresh.businessId, c.sourceId)).toEqual({ entries: 1, lines: 2, bindings: 1, audits: 1, outbox: 1, started: true });
   });
 });

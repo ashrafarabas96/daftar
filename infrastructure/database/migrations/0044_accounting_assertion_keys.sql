@@ -157,6 +157,13 @@ BEGIN
 END;
 $$;
 
+-- The ACL is set while the MIGRATOR still owns these functions, and the
+-- ownership transfer follows in section 5. That order matters on a managed
+-- PostgreSQL: a non-superuser migrator is a member of the internal principal
+-- WITH INHERIT FALSE, so once the function belongs to that principal a REVOKE
+-- issued by the migrator matches no grantor, PostgreSQL emits a WARNING
+-- rather than an error, and the migration commits with PUBLIC still able to
+-- execute (§72). Do not reorder these two sections.
 REVOKE ALL ON FUNCTION accounting_assertion_key_install(TEXT, BYTEA) FROM PUBLIC;
 REVOKE ALL ON FUNCTION accounting_assertion_key_retire(TEXT) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION accounting_assertion_key_install(TEXT, BYTEA) TO daftar_platform;
@@ -188,31 +195,34 @@ REVOKE CREATE ON SCHEMA public FROM daftar_accounting_internal;
 DO $$
 DECLARE
   v_role   TEXT;
+  v_table  TEXT;
+  v_priv   TEXT;
   v_count  INTEGER;
 BEGIN
-  -- (a) No runtime login role holds ANY privilege on either table. The
-  --     migrator is deliberately excluded: it owns these tables and
-  --     PostgreSQL gives an owner rights that cannot be revoked.
+  -- (a) No runtime login role holds ANY privilege on either table, and
+  --     neither does PUBLIC. The migrator is deliberately excluded: it owns
+  --     these tables and PostgreSQL gives an owner rights that cannot be
+  --     revoked.
+  --
+  --     `has_table_privilege`, not `information_schema.role_table_grants`:
+  --     that view only shows grants involving a role the CURRENT user can
+  --     enable, so under a non-superuser deployment migrator it would hide
+  --     exactly the rows this is looking for and the check would pass by
+  --     seeing nothing (§72). A check another session's role membership can
+  --     silence is not a check.
   FOR v_role IN
-    SELECT unnest(ARRAY['daftar_app', 'daftar_platform', 'daftar_worker', 'daftar_identity', 'daftar_resolver', 'daftar_provisioner'])
+    SELECT unnest(ARRAY['daftar_app', 'daftar_platform', 'daftar_worker', 'daftar_identity', 'daftar_resolver', 'daftar_provisioner', 'public'])
   LOOP
-    IF EXISTS (
-      SELECT 1 FROM information_schema.role_table_grants g
-      WHERE g.table_name IN ('accounting_assertion_keys', 'accounting_assertion_uses')
-        AND g.grantee = v_role
-    ) THEN
-      RAISE EXCEPTION 'accounting.key_domain_exposed: runtime role % holds a privilege on the accounting assertion key domain', v_role;
-    END IF;
+    FOR v_table IN SELECT unnest(ARRAY['accounting_assertion_keys', 'accounting_assertion_uses'])
+    LOOP
+      FOR v_priv IN SELECT unnest(ARRAY['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER'])
+      LOOP
+        IF has_table_privilege(v_role, v_table, v_priv) THEN
+          RAISE EXCEPTION 'accounting.key_domain_exposed: % holds % on %', v_role, v_priv, v_table;
+        END IF;
+      END LOOP;
+    END LOOP;
   END LOOP;
-
-  -- (b) PUBLIC holds nothing either.
-  IF EXISTS (
-    SELECT 1 FROM information_schema.role_table_grants g
-    WHERE g.table_name IN ('accounting_assertion_keys', 'accounting_assertion_uses')
-      AND g.grantee = 'PUBLIC'
-  ) THEN
-    RAISE EXCEPTION 'accounting.key_domain_exposed: PUBLIC holds a privilege on the accounting assertion key domain';
-  END IF;
 
   -- (c) The key domain is genuinely separate from the provisioning one.
   IF NOT EXISTS (SELECT 1 FROM pg_class WHERE relname = 'provisioning_assertion_keys') THEN
@@ -233,12 +243,17 @@ BEGIN
   END IF;
 
   -- (e) Only daftar_platform may execute them, and PUBLIC may not.
-  IF has_function_privilege('daftar_app', 'accounting_assertion_key_install(text,bytea)', 'EXECUTE')
-     OR has_function_privilege('daftar_worker', 'accounting_assertion_key_install(text,bytea)', 'EXECUTE') THEN
-    RAISE EXCEPTION 'accounting.key_domain_exposed: a non-platform runtime role may install accounting assertion keys';
-  END IF;
-  IF NOT has_function_privilege('daftar_platform', 'accounting_assertion_key_install(text,bytea)', 'EXECUTE') THEN
-    RAISE EXCEPTION 'accounting.key_domain_invalid: daftar_platform cannot install accounting assertion keys';
+  FOR v_role IN
+    SELECT unnest(ARRAY['daftar_app','daftar_worker','daftar_identity','daftar_resolver','daftar_provisioner','public'])
+  LOOP
+    IF has_function_privilege(v_role, 'accounting_assertion_key_install(text,bytea)', 'EXECUTE')
+       OR has_function_privilege(v_role, 'accounting_assertion_key_retire(text)', 'EXECUTE') THEN
+      RAISE EXCEPTION 'accounting.key_domain_exposed: % may install or retire accounting assertion keys', v_role;
+    END IF;
+  END LOOP;
+  IF NOT has_function_privilege('daftar_platform', 'accounting_assertion_key_install(text,bytea)', 'EXECUTE')
+     OR NOT has_function_privilege('daftar_platform', 'accounting_assertion_key_retire(text)', 'EXECUTE') THEN
+    RAISE EXCEPTION 'accounting.key_domain_invalid: daftar_platform cannot manage accounting assertion keys';
   END IF;
 
   -- (f) The temporary CREATE is gone.
@@ -247,7 +262,11 @@ BEGIN
   END IF;
 
   -- (g) The internal principal is still unreachable.
-  IF EXISTS (SELECT 1 FROM pg_authid WHERE rolname = 'daftar_accounting_internal' AND (rolcanlogin OR rolbypassrls OR rolsuper)) THEN
+  -- pg_roles, not pg_authid: the latter is superuser-only, and a check that
+  -- only a superuser can run is a check a managed deployment cannot run at
+  -- all (§72). pg_roles is the public view over the same columns, minus the
+  -- password hash this has no business reading.
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'daftar_accounting_internal' AND (rolcanlogin OR rolbypassrls OR rolsuper)) THEN
     RAISE EXCEPTION 'accounting.key_domain_invalid: daftar_accounting_internal must remain NOLOGIN, NOBYPASSRLS and NOSUPERUSER';
   END IF;
 END $$;

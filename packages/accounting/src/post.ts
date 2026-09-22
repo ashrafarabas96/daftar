@@ -18,7 +18,7 @@ import { AccountingError } from './errors';
 import { computeFingerprint, type CanonicalLineInput } from './fingerprint';
 import { isExactConversion } from './fx';
 import type { AccountingAssertionMinter, AccountingPostingPort } from './ports';
-import type { AccountRef, BranchScope, PostingCommand, PostingLineCommand, PostingResult } from './types';
+import { MAX_MONEY_MINOR, type AccountRef, type BranchScope, type PostingCommand, type PostingLineCommand, type PostingResult } from './types';
 
 /**
  * The canonical identity of the account a line names.
@@ -104,8 +104,8 @@ export function validatePostingCommand(command: PostingCommand): void {
     if (line.side !== 'D' && line.side !== 'C') fail('line side must be D or C', lineNo);
     if (line.baseAmountMinor <= 0n) fail('line base amount must be positive', lineNo);
     if (line.txnAmountMinor <= 0n) fail('line transaction amount must be positive', lineNo);
-    if (line.baseAmountMinor > 1_000_000_000_000_000_000n) fail('line base amount exceeds the money cap', lineNo);
-    if (line.txnAmountMinor > 1_000_000_000_000_000_000n) fail('line transaction amount exceeds the money cap', lineNo);
+    if (line.baseAmountMinor > MAX_MONEY_MINOR) fail('line base amount exceeds the money cap', lineNo);
+    if (line.txnAmountMinor > MAX_MONEY_MINOR) fail('line transaction amount exceeds the money cap', lineNo);
 
     // The FX snapshot shape `0042` requires, restated so a bad line is named
     // here rather than surfacing as an opaque CHECK violation.

@@ -105,7 +105,10 @@ const INSERT_LINE = `INSERT INTO journal_lines
   (tenant_id, business_id, journal_entry_id, line_no, account_id,
    debit_minor, credit_minor, base_amount_minor, base_currency,
    txn_currency, txn_amount_minor, fx_rate, fx_rate_source, fx_rate_at, branch_id)
-  VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13, now(), $14)`;
+  VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13, date_trunc('second', now()), $14)`;
+// Second precision, because 0045 §24 now requires it: the canonical
+// fingerprint serializes fx_rate_at to the second, so two rows differing only
+// in milliseconds would share one fingerprint.
 
 /**
  * Write an entry, its lines and its binding in ONE transaction and commit.
