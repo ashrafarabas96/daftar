@@ -270,6 +270,136 @@ describe('managed PostgreSQL: 0039 → 0047 under a non-superuser migration prin
     }
   });
 
+  /**
+   * P2-S4 §52: the SHORT path, from the frozen P2-S3 boundary.
+   *
+   * The 0039 case above already runs 0040…0047 in one sweep, so this looks
+   * redundant — it is not. That sweep applies the candidates onto a schema
+   * the same migrator built moments earlier in the same run. This one parks
+   * at exactly 0045, the frozen release boundary, and asks the question a
+   * real deployment asks: do the two NEW migrations apply, unaided, on top of
+   * the schema that is already in production? A defect that only shows when
+   * 0046 meets a settled 0045 — an assumption about ownership, an ACL that
+   * happened to be in place because an earlier migration in the same
+   * transaction put it there — would pass the long path and fail here.
+   */
+  it('applies 0046 and 0047 onto the frozen 0045 boundary, with no superuser and a no-op rerun (§52)', async () => {
+    await ensurePostgres();
+    const db = 'daftar_portability_0045';
+    await admin.query(`DROP DATABASE IF EXISTS ${db} WITH (FORCE)`);
+    await admin.query(`CREATE DATABASE ${db}`);
+    const adminUrl = `postgresql://${PG_USER}:${PG_PASSWORD}@localhost:${PG_PORT}/${db}`;
+    const migratorUrl = `postgresql://daftar_migrator:${MIGRATOR_DB_PASSWORD}@localhost:${PG_PORT}/${db}`;
+
+    const setup = new Pool({ connectionString: adminUrl, max: 1 });
+    try {
+      await setup.query(bootstrapSql());
+      await setup.query(`GRANT CONNECT ON DATABASE ${db} TO daftar_migrator`);
+
+      // Park at exactly the frozen boundary.
+      const preDir = migrationsUpTo('0045_accounting_post_entry.sql');
+      await runMigrations(adminUrl, preDir);
+      rmSync(preDir, { recursive: true, force: true });
+
+      // The checkpoint is honest in both directions: the posting engine is
+      // there, the sources are not.
+      expect((await setup.query(`SELECT 1 FROM pg_proc WHERE proname = 'accounting_post_entry'`)).rows).toHaveLength(1);
+      for (const table of ['accounting_manual_adjustments', 'accounting_reversals', 'accounting_opening_balances', 'accounting_operation_kinds']) {
+        expect((await setup.query(`SELECT 1 FROM information_schema.tables WHERE table_name = $1`, [table])).rows, table).toEqual([]);
+      }
+
+      // A business that existed before the sources did.
+      const tenant = (await setup.query<{ id: string }>(`INSERT INTO tenants DEFAULT VALUES RETURNING id`)).rows[0];
+      await setup.query(
+        `INSERT INTO businesses (tenant_id, name, store_slug, country_code, base_currency, timezone)
+         VALUES ($1, 'Before Sources', 'portability-0045', 'JO', 'JOD', 'Asia/Amman')`,
+        [tenant?.id],
+      );
+
+      // Hand the settled 0045 schema to the migrator, as a managed deployment
+      // has it from the start — the same handover the 0039 case performs, and
+      // for the same reason (see the file header).
+      await setup.query(`ALTER SCHEMA public OWNER TO daftar_migrator`);
+      await setup.query(`
+        DO $$
+        DECLARE r RECORD;
+        BEGIN
+          FOR r IN SELECT c.relname, c.relkind FROM pg_class c
+                     JOIN pg_namespace n ON n.oid = c.relnamespace
+                     JOIN pg_roles o ON o.oid = c.relowner
+                    WHERE n.nspname = 'public' AND o.rolname = 'postgres' AND c.relkind IN ('r','v','m','S','p')
+          LOOP
+            EXECUTE format('ALTER %s public.%I OWNER TO daftar_migrator',
+                           CASE r.relkind WHEN 'S' THEN 'SEQUENCE' WHEN 'v' THEN 'VIEW' WHEN 'm' THEN 'MATERIALIZED VIEW' ELSE 'TABLE' END,
+                           r.relname);
+          END LOOP;
+          FOR r IN SELECT p.oid::regprocedure AS sig FROM pg_proc p
+                     JOIN pg_namespace n ON n.oid = p.pronamespace
+                     JOIN pg_roles o ON o.oid = p.proowner
+                    WHERE n.nspname = 'public' AND o.rolname = 'postgres'
+          LOOP
+            EXECUTE format('ALTER FUNCTION %s OWNER TO daftar_migrator', r.sig);
+          END LOOP;
+        END $$;
+      `);
+
+      // Exactly the two candidates, applied by the NON-SUPERUSER principal.
+      const migrator = new Pool({ connectionString: migratorUrl, max: 1 });
+      try {
+        const who = (
+          await migrator.query<{ rolsuper: boolean; rolbypassrls: boolean }>(`SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user`)
+        ).rows[0];
+        expect(who).toEqual({ rolsuper: false, rolbypassrls: false });
+      } finally {
+        await migrator.end().catch(() => undefined);
+      }
+      expect(await runMigrations(migratorUrl)).toEqual(['0046_accounting_sources.sql', '0047_accounting_opening_balances.sql']);
+      expect(await runMigrations(migratorUrl)).toEqual([]);
+
+      // And the sources arrived with the shape the slice specifies.
+      const check = new Pool({ connectionString: migratorUrl, max: 1 });
+      try {
+        expect(
+          (
+            await check.query<{ t: string }>(
+              `SELECT table_name AS t FROM information_schema.tables
+              WHERE table_name IN ('accounting_manual_adjustments','accounting_reversals','accounting_opening_balances',
+                                   'accounting_opening_balance_lines','accounting_operation_kinds')`,
+              // Sorted here rather than in SQL: ORDER BY uses the database's
+              // collation, which decides where `_` falls against a letter, and
+              // this assertion is about which tables exist, not about that.
+            )
+          ).rows
+            .map((r) => r.t)
+            .sort(),
+        ).toEqual([
+          'accounting_manual_adjustments',
+          'accounting_opening_balance_lines',
+          'accounting_opening_balances',
+          'accounting_operation_kinds',
+          'accounting_reversals',
+        ]);
+        // The second writer is callable by the merchant runtime and nobody
+        // else — asked with has_function_privilege, because a REVOKE that
+        // silently did nothing leaves a NULL acl that an acl-shaped test
+        // passes vacuously on.
+        expect(
+          (
+            await check.query<{ app: boolean; pub: boolean }>(
+              `SELECT has_function_privilege('daftar_app', 'accounting_post_reversal(uuid,date,text,text)', 'EXECUTE') AS app,
+                    has_function_privilege('public', 'accounting_post_reversal(uuid,date,text,text)', 'EXECUTE') AS pub`,
+            )
+          ).rows[0],
+        ).toEqual({ app: true, pub: false });
+      } finally {
+        await check.end().catch(() => undefined);
+      }
+    } finally {
+      await setup.end().catch(() => undefined);
+      await admin.query(`DROP DATABASE IF EXISTS ${db} WITH (FORCE)`).catch(() => undefined);
+    }
+  }, 180_000);
+
   it('leaves no temporary privilege behind and no runtime principal with chart authority', async () => {
     // Read entirely through the non-superuser connection: if daftar_migrator
     // can see it, so can a deployment operator.
