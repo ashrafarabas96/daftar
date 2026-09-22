@@ -500,6 +500,28 @@ BEGIN
     RAISE EXCEPTION 'accounting.payload_invalid: the reversal reason is too long' USING ERRCODE = 'P0001';
   END IF;
 
+  -- The accounting date is the MERCHANT's, and it is required HERE, before
+  -- anything financial is derived, rather than only at the boundaries above.
+  --
+  -- The fingerprint covers the entry date, so a date this routine chose would
+  -- make the command's signed identity a function of when the call arrived.
+  -- An at-least-once client retrying across local midnight would then be
+  -- asking for a different fact than the one it asked for a second earlier,
+  -- and the reversal — which carries no idempotency key, because the original
+  -- entry id IS its identity — would answer `accounting.reversal_exists` to a
+  -- caller that changed nothing.
+  --
+  -- The DTO, the Zod schema, the service and the engine all require it now.
+  -- This is the lowest authorized boundary, and a routine reachable by a
+  -- later phase's worker or a support script may not hold a weaker contract
+  -- than the HTTP route in front of it: an invariant only the callers enforce
+  -- is a convention. The business clock is still consulted below, for the one
+  -- question it owns — is this stated date in the future? It never answers
+  -- what date the reversal should carry.
+  IF p_entry_date IS NULL THEN
+    RAISE EXCEPTION 'accounting.entry_date_required: a reversal must state the accounting date it is posted on' USING ERRCODE = 'P0001';
+  END IF;
+
   -- ── 2. One stable business snapshot ────────────────────────────────────
   -- FOR SHARE only: a reversal cannot be a business's first financial
   -- activity, because it needs an original, so the financial_started_at
@@ -598,10 +620,11 @@ BEGIN
   END IF;
 
   -- ── 6. Dates (AL-14, §44) ──────────────────────────────────────────────
-  -- "Today" in the BUSINESS's timezone, read under the same lock as its
-  -- currency. A NULL date means today, which is the only default AL-12 gives.
+  -- The effective date is the stated one, with no fallback: section 1 already
+  -- refused NULL. "Today" in the BUSINESS's timezone, read under the same
+  -- lock as its currency, is the upper bound and nothing else.
   v_today := (now() AT TIME ZONE v_tz)::date;
-  v_date  := coalesce(p_entry_date, v_today);
+  v_date  := p_entry_date;
   IF v_date > v_today THEN
     RAISE EXCEPTION 'accounting.entry_date_in_future: an entry may not be dated after today in the business timezone' USING ERRCODE = 'P0001';
   END IF;
@@ -744,7 +767,7 @@ GRANT EXECUTE ON FUNCTION accounting_post_reversal(UUID, DATE, TEXT, TEXT) TO da
 COMMENT ON FUNCTION accounting_post_manual_adjustment(DATE, TEXT, TEXT, TEXT, JSONB) IS
   'Posts a merchant-authored adjustment through accounting_post_entry and records its mandatory reason. Adds authority narrowing and narrative; re-validates no financial rule, because the primitive owns every one of them.';
 COMMENT ON FUNCTION accounting_post_reversal(UUID, DATE, TEXT, TEXT) IS
-  'The second journal writer (AL-12). Derives every line of the mirror from the persisted original — the caller supplies no account, amount, currency, rate or dimension — verifies the derivation against the signed fingerprint, and writes entry, lines, binding, reversal registration, audit and outbox in one transaction. Requires an assertion whose operation kind is reverse.';
+  'The second journal writer (AL-12). Derives every line of the mirror from the persisted original — the caller supplies no account, amount, currency, rate or dimension — verifies the derivation against the signed fingerprint, and writes entry, lines, binding, reversal registration, audit and outbox in one transaction. Requires an assertion whose operation kind is reverse, and an EXPLICIT accounting date: a NULL date is refused with accounting.entry_date_required rather than resolved from the business clock, so the command is a pure function of the original entry, the stated date, the reason and the verified authority.';
 
 ALTER FUNCTION accounting_reversal_entry_complete() OWNER TO daftar_accounting_internal;
 ALTER FUNCTION accounting_manual_adjustment_entry_complete() OWNER TO daftar_accounting_internal;

@@ -84,6 +84,7 @@ const P2_S4_TESTS = [
   'tests/integration/accounting-idempotency.test.ts',
   'tests/integration/accounting-ownership.test.ts',
   'tests/integration/accounting-reversal-contract.test.ts',
+  'tests/integration/accounting-reversal-date-boundary.test.ts',
   'tests/integration/process-composition.test.ts',
   'tests/integration/accounting-sources-concurrency.test.ts',
   'tests/integration/accounting-source-completeness.test.ts',
@@ -526,6 +527,26 @@ const REQUIRED_BEHAVIOUR: ReadonlyArray<{ file: string; needle: RegExp; what: st
     needle: /refuses every Phase-2-native source type on the generic posting path/,
     what: 'the generic engine path refuses the three native source types (§8)',
   },
+  {
+    file: 'tests/integration/accounting-reversal-date-boundary.test.ts',
+    needle: /a NULL date is refused by name, under a genuine reverse authority/,
+    what: 'the database routine itself refuses a NULL reversal date (§4-§6)',
+  },
+  {
+    file: 'tests/integration/accounting-reversal-date-boundary.test.ts',
+    needle: /the refusal is the RULE, not a missing grant/,
+    what: 'the NULL-date refusal is the contract, not a withdrawn EXECUTE grant (§6)',
+  },
+  {
+    file: 'tests/integration/accounting-reversal-date-boundary.test.ts',
+    needle: /the identical direct call replays across a civil-day change/,
+    what: 'the direct reversal command is a pure function of its stated inputs (§8)',
+  },
+  {
+    file: 'tests/integration/accounting-reversal-date-boundary.test.ts',
+    needle: /the business clock still answers the one question it owns/,
+    what: 'the business clock still bounds the stated date without choosing it (§5)',
+  },
 ];
 
 /**
@@ -730,6 +751,72 @@ function checkSourceCompletenessAndLockOrder(): void {
   }
 }
 
+/**
+ * The reversal accounting date belongs to the merchant, at the LOWEST
+ * authorized boundary (round four, §4, §5, §12).
+ *
+ * The DTO, the Zod schema, the service and the engine all require it, and the
+ * HTTP matrix proves all four. None of them is the authority: a later phase's
+ * worker, a support script or a second service calls the database command
+ * directly, and until this check existed that command filled a NULL date in
+ * from the business clock. The fingerprint covers the entry date, so such a
+ * command's signed identity would be a function of when the call arrived.
+ *
+ * The behavioural half lives in accounting-reversal-date-boundary.test.ts and
+ * runs against a real cluster under a real assertion; this half notices the
+ * day the fallback is written back into a file no test database has applied.
+ */
+function checkReversalDateContract(): void {
+  console.log('P2-S4 GATE — the reversal accounting date');
+
+  const sql = stripComments(readMigration('0046_accounting_sources.sql'));
+  const start = sql.indexOf('CREATE OR REPLACE FUNCTION accounting_post_reversal(');
+  if (start < 0) {
+    fail('reversal-date', 'accounting_post_reversal is missing (§4)');
+    return;
+  }
+  const end = sql.indexOf('\n$$;', start);
+  const body = sql.slice(start, end < 0 ? sql.length : end);
+
+  // §4: the refusal exists, by its stable domain name.
+  const refusal = body.search(/IF\s+p_entry_date\s+IS\s+NULL\s+THEN[\s\S]{0,400}?accounting\.entry_date_required/i);
+  if (refusal < 0) {
+    fail('reversal-date', 'accounting_post_reversal does not refuse a NULL entry date with accounting.entry_date_required (§4)');
+  } else {
+    ok('a NULL reversal date is refused by its stable domain name (§4)');
+  }
+
+  // §5: and no fallback survives anywhere in the routine. Each of these is a
+  // way of answering "what date should this reversal have?", which is the
+  // question the routine may not answer.
+  const fallbacks: ReadonlyArray<{ pattern: RegExp; what: string }> = [
+    { pattern: /coalesce\s*\(\s*p_entry_date/i, what: 'a coalesce over the stated date' },
+    { pattern: /v_date\s*:=(?!\s*p_entry_date\s*;)/i, what: 'an assignment of v_date from anything but p_entry_date' },
+    { pattern: /p_entry_date\s*,\s*current_date|current_date\s*,\s*p_entry_date/i, what: 'a current_date default' },
+    { pattern: /p_entry_date\s+IS\s+NULL\s+THEN\s+v_/i, what: 'a NULL branch that assigns a date' },
+  ];
+  let clean = true;
+  for (const { pattern, what } of fallbacks) {
+    if (pattern.test(body)) {
+      clean = false;
+      fail('reversal-date', `accounting_post_reversal still carries ${what} — the merchant states the date, the routine never invents one (§5)`);
+    }
+  }
+  if (clean) ok('no NULL/today/original fallback survives in the routine (§5)');
+
+  // §5 again, from the other side: the refusal must come BEFORE any financial
+  // truth is derived, and the business clock must still bound the stated date.
+  const derived = body.indexOf('accounting_fingerprint(');
+  if (refusal >= 0 && derived >= 0 && refusal > derived) {
+    fail('reversal-date', 'the NULL-date refusal comes after the fingerprint is derived — it must refuse before deriving financial truth (§4)');
+  }
+  if (/v_date\s*>\s*v_today/.test(body) && /v_today\s*:=\s*\(now\(\) AT TIME ZONE v_tz\)::date/.test(body)) {
+    ok('the business clock still bounds the stated date without choosing it (§5)');
+  } else {
+    fail('reversal-date', 'accounting_post_reversal no longer refuses a stated date in the business future (§5)');
+  }
+}
+
 function checkIdempotencyProof(): void {
   console.log('P2-S4 GATE — the idempotency property');
 
@@ -811,6 +898,7 @@ if (LIST_ONLY) {
   console.log('  structural: all three native sources owe a detail row at COMMIT, through a deferred constraint trigger on journal_entries');
   console.log('  structural: all five opening-balance commands take one per-business lock FIRST, and never take the business row FOR SHARE');
   console.log("  structural: opening-balance currencies answer to the registry, a domestic position is rate 1, the reversal date is the client's");
+  console.log('  structural: accounting_post_reversal refuses a NULL date and carries no clock fallback for it');
   for (const s of STEPS) console.log(`  command:    ${s.cmd} ${s.args.join(' ')}`);
   process.exit(0);
 }
@@ -820,6 +908,7 @@ checkSurfaces();
 checkIdempotencyProof();
 checkDataIntegrityAndDeterminism();
 checkSourceCompletenessAndLockOrder();
+checkReversalDateContract();
 checkGuards();
 checkEngineAndSurface();
 if (failures > 0) {

@@ -16,7 +16,7 @@ A correction is another accounting fact. Nothing in this slice edits a posted en
 
 | migration | SHA-256 | state |
 |---|---|---|
-| `0046_accounting_sources.sql` | `33ae8c2593bae14dd538708f326a0b9adf09dc0b1855b1b23e50019d829f2f16` | CANDIDATE |
+| `0046_accounting_sources.sql` | `6e4500dcc639149ac25d3e0736bbce77ff372aa06736c1211fe40725e7d196e6` | CANDIDATE |
 | `0047_accounting_opening_balances.sql` | `0938d513c0bb844c5f36cbdb170612a08f9f52f828660ca88e2db00aeea1cabc` | CANDIDATE |
 
 **Both files have now been corrected in place.** Through the first two review rounds `0046` did not move, and earlier revisions of this page said so; the third round's manual-adjustment completeness rule lives in it, so that sentence is no longer true and has been removed rather than qualified. The gate's pinned digest went with it: a digest recomputed after every round proves only that somebody recomputed it. What a candidate owes is unchanged and still checked — it exists, nothing exists beyond it, and it has not been written into the frozen manifest. Neither is in `MIGRATION_MANIFEST.json`, and `frozenThrough` remains `0045_accounting_post_entry.sql` with 46 frozen migrations. That is intentional and is what the P2-S4 gate checks: while the slice is under review a defect must be correctable **in place**, rather than consuming a P2-S5 migration number. Freezing happens on acceptance, never before.
@@ -116,6 +116,10 @@ Migrations `0000`–`0045` are byte-for-byte unchanged. Nothing after `0047` exi
 | 50 | Two genuinely simultaneous opening balances get an accounting answer, never a lock-manager error | the lock order, plus the fingerprint comparison | `accounting-opening-balance-race.test.ts` — CASE A, B, C, all asserting no 40P01 and no `23505` | **ENFORCED** |
 | 51 | A lost race leaves no orphan draft and no half-stated position | the whole command is one transaction | CASE C — the ledger is counted after the rollback | **ENFORCED** |
 | 52 | An opening balance and a business's first ordinary posting do not deadlock | both take the business row `FOR UPDATE`, in the same order | CASE D | **ENFORCED** |
+| 53 | A reversal with no stated accounting date is refused by the database itself | `accounting_post_reversal` raises `accounting.entry_date_required` before deriving anything | `accounting-reversal-date-boundary.test.ts` — "a NULL date is refused by name, under a genuine reverse authority" | **ENFORCED** |
+| 54 | No layer, application or database, may resolve a reversal date from a clock | no `coalesce`, no `current_date`, no fallback to the original's date | the gate's structural half, tamper-tested in both directions | **ENFORCED** |
+| 55 | The direct reversal command is a pure function of its stated inputs | the fingerprint covers the stated date, and nothing else chooses it | "the identical direct call replays across a civil-day change" | **ENFORCED** |
+| 56 | The business clock still bounds the stated date | `v_date > v_today` and the `not_before_origin` registry bound | the last two cases of the boundary matrix | **ENFORCED** |
 
 ## 5. The one architectural decision that needs stating
 
@@ -235,7 +239,9 @@ The merchant changed nothing and was refused. That is the failure mode an at-lea
 
 **The Tech Lead's decision was to make `entryDate` required**, and it is now required at the DTO, the Zod schema, the service and the engine input. `accounting-reversal-contract.test.ts` proves it through the real HTTP endpoint — the real validation pipe, the real permission guard, the real engine, the real database — including the replay across a civil-day boundary, simulated by moving the business between `Pacific/Honolulu` (UTC−10) and `Pacific/Kiritimati` (UTC+14), which are a full day apart at every instant. The test does not wait for midnight.
 
-**The exact choice about the database, documented as §8 asks.** `accounting_post_reversal` in `0046` still accepts `p_entry_date := NULL` and resolves it to the business's today. `0046` is frozen by directive at the reviewed digest, so tightening the routine itself was not available — and §8's own fallback permits retaining NULL internally provided it is unreachable from the merchant boundary. Rather than rely on that as a convention, the seam was **removed**: `readBusinessToday` is gone from `AccountingLedgerReader`, from its database adapter and from the port interface entirely. `AccountingEngine.reverse` now has no way to learn what day it is, so it structurally cannot pass NULL, and a future caller cannot quietly reintroduce a clock-dependent command because there is nothing left to call. The gate checks both halves: the contract requires the date, and none of the four files on that path mentions the removed method.
+**The exact choice about the database, as it stood after round two.** The application seam was **removed**: `readBusinessToday` is gone from `AccountingLedgerReader`, from its database adapter and from the port interface entirely, so `AccountingEngine.reverse` has no way to learn what day it is and structurally cannot pass NULL. The database routine itself was left accepting `p_entry_date := NULL`, and this page justified that by saying `0046` was frozen by directive at its reviewed digest so tightening it was not available.
+
+**That justification was wrong, and the fourth review round removed it.** `0046` is a CANDIDATE, not frozen — `frozenThrough` is `0045_accounting_post_entry.sql` — and round three had already modified it legitimately, in place. Nothing architectural required the NULL path; what kept it was a stale sentence about migration history. See §6e for the closure.
 
 ### D. Found while reproducing C: the accounting routes were untestable
 
@@ -280,6 +286,28 @@ The new matrix launches both commands before either transaction commits and then
 Making the completeness rule real broke a number of existing suites, and the reason is worth recording rather than smoothing over: they built their fixtures by driving the generic primitive with `manual_adjustment` — the bypass itself. The shared helper now routes a `manual_adjustment` through `accounting_post_manual_adjustment`, which forwards the same assertion and the same payload to the primitive unchanged, so every property those suites prove about it is proved exactly as before. The raw-SQL fixtures in the journal and RLS matrices write the detail row themselves, so the journal invariant under test stays the only thing that can refuse.
 
 `الجولة الثالثة صحّحت عيبين. الأول: قيد التسوية اليدوية لم يكن مُلزَمًا بسجل السبب والفاعل، فكان يمكن كتابته عبر الدالة العامة بلا سبب ولا فاعل — وهي الحالة الوحيدة التي مبرّرها كلّه "قرار إنسان". صار القيد يسقط عند COMMIT إن غاب السجل، كما هو الحال في المصدرين الآخرين منذ البداية. الثاني: اختبارات التزامن للرصيد الافتتاحي لم تكن متزامنة فعلًا، وعند تشغيلها كسباق حقيقي ظهر تعارض ترتيب أقفال ينتهي بـ deadlock. أُعيد ترتيب الأقفال في الأوامر الخمسة كلها: قفل واحد لكل نشاط أولًا، ثم صفّ النشاط بـ FOR UPDATE، ثم صفّ المصدر. الاختبارات الجديدة لا تمرّ إلا إذا تصادم الأمران فعلًا.`
+
+## 6e. The fourth review round — the reversal date, closed at the boundary that decides it
+
+Round two made `entryDate` required at the DTO, the Zod schema, the service and the engine, and removed `readBusinessToday` so the engine could not learn what day it was. Round four found what that left: `accounting_post_reversal` — the authoritative command, the one that actually writes the entry — still executed
+
+```sql
+v_date := coalesce(p_entry_date, v_today);
+```
+
+Four application layers required the date. The database did not. A Zod 400 is evidence about a validation pipe, not about the command: a later phase's worker, a support script or a second service calling the routine directly would have received a reversal whose accounting date, and therefore whose **signed identity**, was chosen by the clock. A reversal carries no idempotency key — the original entry's id *is* its source identity — so an at-least-once client retrying across local midnight would have been answered `accounting.reversal_exists` having changed nothing.
+
+The routine now refuses `p_entry_date IS NULL` with `accounting.entry_date_required`, in section 1, before any financial truth is derived, and `v_date` is the stated date with no fallback of any kind — not today, not the original's date, not the server's. The business clock is still read, for the one question it owns: is this stated date in the future in the business timezone? It never answers what date the reversal should carry.
+
+**What was retracted along with it.** §6c's paragraph on this point justified the database NULL path by saying `0046` was frozen at its reviewed digest and so could not be tightened. That was factually wrong: `0046` is a candidate, `frozenThrough` is `0045_accounting_post_entry.sql`, and round three had already corrected `0046` in place. A stale justification for a weaker invariant is worse than no justification, because the next reader trusts it instead of checking. It has been corrected rather than quietly deleted.
+
+`accounting-reversal-date-boundary.test.ts` is the permanent proof and it failed against the reviewed head `ced9b96`: six cases that call the routine itself as `daftar_app` under a real `reverse` assertion whose fingerprint is signed for today — so a routine that carried on with a manufactured date would have found the signature it needed already waiting. It proves the NULL refusal and that nothing survives it; that the refusal is the rule and not a withdrawn `EXECUTE` grant; that an explicit date is not silently replaced by the original's; that the identical direct call replays across a civil-day change in the business timezone; and that both date bounds still hold. The HTTP matrix in `accounting-reversal-contract.test.ts` is unchanged and still runs: both layers matter, and neither replaces the other.
+
+**The rest of the slice was audited for the same class, and is clean.** `accounting_post_manual_adjustment` forwards its date to `accounting_post_entry`, which takes `p_entry_date` directly and has never had a fallback of its own; a NULL there produces a NULL fingerprint and is refused as `accounting.assertion_payload_mismatch` long before any write, and `journal_entries.entry_date` is `NOT NULL` underneath that. The opening-balance commands take `as_of_date` from the merchant. After this correction no candidate migration contains a `coalesce` over a date, an assignment from `current_date`, or any other way of answering "what date should this be?".
+
+The gate proves it in both registers. Structurally: the refusal exists by its stable name, it precedes the fingerprint derivation, no `coalesce` over the stated date survives, `v_date` is assigned from nothing but `p_entry_date`, and the future bound is still enforced — each of those was tamper-tested by reintroducing the fallback and watching the gate fail. Behaviourally: the four named cases must exist and run.
+
+`الجولة الرابعة أغلقت آخر ثغرة: أمر قاعدة البيانات نفسه كان ما زال يقبل تاريخًا فارغًا ويملؤه من ساعة النشاط، رغم أن الطبقات الأربع فوقه صارت تشترطه. البصمة الموقَّعة تشمل التاريخ، والقيد العكسي لا يحمل مفتاح تكرار لأن هويته هي القيد الأصلي — فإعادة إرسال مطابقة بعد منتصف الليل المحلي كانت تُرفض دون أن يغيّر التاجر شيئًا. صار التاريخ إلزاميًا في الأمر ذاته، ولم يبقَ أي بديل تلقائي. ساعة النشاط تجيب عن سؤال واحد فقط: هل هذا التاريخ في المستقبل؟ ولا تختار التاريخ أبدًا. كما صُحِّح تبرير قديم في هذه الوثيقة كان يقول إن 0046 مجمَّد ولذلك تعذّر التشديد — وهو غير صحيح، فالملف ما زال مرشَّحًا.`
 
 ## 7. What this slice deliberately did NOT build
 

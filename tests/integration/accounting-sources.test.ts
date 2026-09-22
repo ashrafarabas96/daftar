@@ -528,7 +528,12 @@ describe('reversal (§12-§21, §41, §42)', () => {
     expect(await refusal(() => reverse(original, c, { entryDate: must(future.rows[0]).d }))).toMatch(/entry_date_in_future/);
   });
 
-  it('defaults an omitted date to today in the business timezone', async () => {
+  it('refuses an omitted date rather than resolving one from the business clock', async () => {
+    // This case asserted the opposite until the reversal date became the
+    // merchant's alone. The assertion below is signed for today, so a routine
+    // that still filled the date in would find the signature it needed
+    // already waiting — the refusal is the contract, not a mismatch.
+    // `accounting-reversal-date-boundary.test.ts` is the full matrix.
     const c = adjustment(randomUUID(), '2025-03-01');
     const original = await post(c, fx.userId);
     const assertion = sourceAssertion({
@@ -540,8 +545,9 @@ describe('reversal (§12-§21, §41, §42)', () => {
       sourceId: original.entryId,
       postingFingerprint: reversalFingerprintOf(c, original.entryId, today),
     });
-    const rev = await postReversalAs(assertion, original.entryId, null, 'no date given', randomUUID());
-    expect((await entryOf(rev.entryId)).entry_date).toBe(today);
+    expect(await refusal(() => postReversalAs(assertion, original.entryId, null, 'no date given', randomUUID()))).toMatch(
+      /accounting\.entry_date_required/,
+    );
   });
 
   it('records exactly one reversal registration, one audit row and one outbox event', async () => {

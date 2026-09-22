@@ -37,6 +37,7 @@ export type AccountingErrorCode =
   | 'accounting.system_account_missing'
   | 'accounting.account_identity_locked'
   // Dates (§44)
+  | 'accounting.entry_date_required'
   | 'accounting.entry_date_in_future'
   | 'accounting.entry_date_before_original'
   // Idempotency (§45-§49)
