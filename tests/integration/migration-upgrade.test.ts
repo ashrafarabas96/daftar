@@ -592,15 +592,18 @@ describe('migration upgrade path: pre-encryption schema → latest (§13–16)',
       expect((await pool.query(`SELECT 1 FROM accounting_source_types WHERE source_type LIKE 'fx%'`)).rows).toEqual([]);
       expect((await pool.query(`SELECT 1 FROM businesses WHERE financial_started_at IS NOT NULL`)).rows).toEqual([]);
 
-      // The forty-eight frozen files are byte-for-byte what the manifest
-      // recorded, as the migrator recorded them on the way in.
+      // The forty-nine frozen files this database actually carries are
+      // byte-for-byte what the manifest recorded, as the migrator recorded
+      // them on the way in. The boundary is read as a FLOOR and the comparison
+      // is capped at 0048: this database stops there, and a later authorized
+      // slice freezing its own migration must not fail a test about this one.
       const manifest = JSON.parse(readFileSync(join(__dirname, '../../infrastructure/database/MIGRATION_MANIFEST.json'), 'utf8')) as {
         frozenThrough: string;
         migrations: { name: string; sha256: string }[];
       };
-      expect(manifest.frozenThrough).toBe('0047_accounting_opening_balances.sql');
-      const frozen = manifest.migrations.filter((m) => m.name <= manifest.frozenThrough);
-      expect(frozen).toHaveLength(48);
+      expect(manifest.frozenThrough >= '0048_accounting_fx_rates.sql').toBe(true);
+      const frozen = manifest.migrations.filter((m) => m.name <= '0048_accounting_fx_rates.sql');
+      expect(frozen).toHaveLength(49);
       const applied = new Map(
         (await pool.query<{ name: string; sha256: string }>(`SELECT name, sha256 FROM schema_migrations ORDER BY name`)).rows.map((r) => [r.name, r.sha256]),
       );

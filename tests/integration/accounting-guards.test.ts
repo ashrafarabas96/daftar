@@ -719,6 +719,36 @@ describe('P2-S2 migration boundary', () => {
     // gate must never block an authorized successor.
   });
 
+  it('0048 is FROZEN at its accepted hash (P2-S5 freeze §4)', () => {
+    // Digest and file name on separate lines, as the P2-S3 case above explains.
+    const digests: Readonly<Record<string, string>> = {
+      '0048': '5438538a9f335c918b231db3faa94dd4eac7b71a1a688d1c62b5cda9f8ee4cc1',
+    };
+    const accepted: Readonly<Record<string, string>> = {
+      '0048_accounting_fx_rates.sql': digests['0048'] ?? '',
+    };
+    const manifest = JSON.parse(readFileSync(join(ROOT, 'infrastructure/database/MIGRATION_MANIFEST.json'), 'utf8')) as {
+      frozenThrough: string;
+      migrations: { name: string; sha256: string }[];
+    };
+    const frozen = new Map(manifest.migrations.map((m) => [m.name, m.sha256]));
+    for (const [name, sha256] of Object.entries(accepted)) {
+      expect(
+        createHash('sha256')
+          .update(readFileSync(join(MIGRATIONS, name)))
+          .digest('hex'),
+        `${name} on disk`,
+      ).toBe(sha256);
+      expect(frozen.get(name), `${name} in manifest`).toBe(sha256);
+    }
+    expect(manifest.frozenThrough >= '0048_accounting_fx_rates.sql').toBe(true);
+    expect(manifest.migrations.length).toBeGreaterThanOrEqual(49);
+    // The P2-S5 gate carries the same hash as an independent second source.
+    const gate = readFileSync(join(ROOT, 'scripts/phase2-s5-gate.ts'), 'utf8');
+    for (const [name, sha256] of Object.entries(accepted)) expect(gate, `${name} in gate`).toContain(sha256);
+    // As above: no assertion that nothing follows 0048.
+  });
+
   it('every business-scoped journal table carries both tenant_id and business_id (§14)', () => {
     const sql = journal();
     for (const table of ['journal_entries', 'journal_lines', 'accounting_source_bindings']) {

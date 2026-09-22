@@ -1,8 +1,8 @@
 # DAFTAR — P2-S5 Acceptance / قبول الشريحة الخامسة من المرحلة الثانية
 
-> **What this is.** The evidence page for slice **P2-S5 — FX rate foundation**, submitted as a **CANDIDATE for Tech Lead review**. It states what is enforced by a mechanism and covered by a test, and, just as deliberately, what is not.
+> **What this is.** The evidence page for slice **P2-S5 — FX rate foundation**, now **ACCEPTED and FROZEN**. It states what is enforced by a mechanism and covered by a test, and, just as deliberately, what is not.
 >
-> **ما هذه الوثيقة.** سجل أدلة الشريحة P2-S5، مقدَّمة للمراجعة ولم تُقبل بعد. العمود الحاسم هو الحالة: **ENFORCED** يعني أن قاعدة البيانات أو الـCI ترفض المخالفة اليوم ويوجد اختبار يثبت ذلك. تبني هذه الشريحة سجلًّا لأسعار الصرف يكتبه التاجر بنفسه ولا يُعدَّل بعد كتابته، وأداتين حسابيتين خالصتين تقرران الحساب دون أن ترحّلا شيئًا. لا مزوّد أسعار، ولا فترات محاسبية، ولا تقارير.
+> **ما هذه الوثيقة.** سجل أدلة الشريحة P2-S5، وقد قُبِلت وجُمِّدت. العمود الحاسم هو الحالة: **ENFORCED** يعني أن قاعدة البيانات أو الـCI ترفض المخالفة اليوم ويوجد اختبار يثبت ذلك. تبني هذه الشريحة سجلًّا لأسعار الصرف يكتبه التاجر بنفسه ولا يُعدَّل بعد كتابته، وأداتين حسابيتين خالصتين تقرران الحساب دون أن ترحّلا شيئًا. لا مزوّد أسعار، ولا فترات محاسبية، ولا تقارير.
 
 ## 0. The one sentence that matters
 
@@ -12,18 +12,22 @@ A rate is entered, not fetched. There is no network dependency anywhere in the s
 
 `سعر الصرف يُدخَل ولا يُجلَب. لا مزوّد ولا شبكة ولا تحديث تلقائي. البحث يجيب سؤالًا واحدًا: ما آخر سعر أعلنته هذه المنشأة لهذا الزوج بهذا الاتجاه عند تلك اللحظة أو قبلها؟ وإن لم يوجد، يكون الجواب رفضًا باسمه لا رقمًا مُخترعًا.`
 
-## 1. Candidate migration — P2-S5 is UNDER REVIEW
+## 1. Accepted migration — P2-S5 is ACCEPTED / FROZEN
+
+**Accepted by the Tech Lead on 2026-09-22 at head `ff382719de5e1e7a20999cc9db9e45ecceea2066`, whose exact-SHA workflow is 35791858358 with all five jobs SUCCESS.**
 
 | migration | SHA-256 | state |
 |---|---|---|
-| `0048_accounting_fx_rates.sql` | `5438538a9f335c918b231db3faa94dd4eac7b71a1a688d1c62b5cda9f8ee4cc1` | **CANDIDATE — not frozen** |
+| `0048_accounting_fx_rates.sql` | `5438538a9f335c918b231db3faa94dd4eac7b71a1a688d1c62b5cda9f8ee4cc1` | **FROZEN** |
 
-`MIGRATION_MANIFEST.json` still records **48 frozen migrations** with `frozenThrough = 0047_accounting_opening_balances.sql`, exactly where P2-S4's acceptance left it. `0048` is deliberately absent from it: a candidate is corrected **in place** while it is under review, and freezing it before a Tech Lead has read it would turn the first draft into history. `npm run gate:phase2:s5` enforces both halves of that — the boundary must not move, and `0048` must not appear in the manifest — and those two checks invert on the day the slice is accepted, exactly as P2-S4's did.
+`MIGRATION_MANIFEST.json` now records **49 frozen migrations** with `frozenThrough = 0048_accounting_fx_rates.sql`. Migrations `0000`–`0048` are release history: they are never edited or deleted, and every later FX correction is a NEW migration. `npm run gate:phase2:s5` became a **permanent** regression gate at that acceptance — it carries the accepted digest as an independent second source, so one commit cannot move the migration and its recorded hash together, and it has no opinion about whether a later authorized migration exists.
 
 - Branch: `phase/2-accounting-core` · Draft PR: **#2** (stays draft for all of Phase 2)
 - Starting accepted head (P2-S4): `2987fbe914645ebae600e95a126c908472f04e1b`, exact-SHA workflow **35775902377**, all five jobs SUCCESS
 - P2-S4 freeze commit: `9a503b029c705a4e290cf737c244bcdd35ef67db`, exact-SHA workflow **35779530630**, all five jobs SUCCESS
-- P2-S5 candidate head: recorded in the handoff message for this submission, with its own exact-SHA workflow
+- P2-S5 accepted head: `ff382719de5e1e7a20999cc9db9e45ecceea2066`, exact-SHA workflow **35791858358**, all five jobs SUCCESS
+
+**Clean-history note.** The slice was first submitted at head `c5a7ce5edac0f3a56d058e2070a092b31db2aaec` and corrected at `f3392d90c0c8a45b24474a451c9d3e342881ca0a`, where the hygiene job's secret scan read two idempotency-key fixtures in the FX concurrency test as credentials. Because that scan reads the pull request's whole commit range, the fix in the working tree could not clear the finding out of history. On the Tech Lead's explicit directive the two **candidate** commits were collapsed into one commit on top of the accepted P2-S4 freeze `9a503b02` and force-with-lease pushed, producing `ff382719…`. The new tree is `9aa13fd7f27d0d84402421a87103f8eafbc16f78` — byte-for-byte the tree of `f3392d9`, with an empty diff between them — so nothing in the slice's content changed, and no accepted SHA moved. The secret scan was **not** weakened: there is no `.gitleaks.toml`, no allowlist and no change to its rules, entropy threshold or history depth. The history was cleaned to meet the control rather than the control lowered to accept the history.
 
 **Evidence law.** CI SUCCESS is reported for a commit only when GitHub shows a workflow run whose head SHA is that exact commit.
 
@@ -36,7 +40,7 @@ A rate is entered, not fetched. There is no network dependency anywhere in the s
 
 ## 3. What the slice added
 
-**Migration `0048_accounting_fx_rates.sql`** (one migration; there is no `0049`)
+**Migration `0048_accounting_fx_rates.sql`** (the one migration this slice created)
 
 - `accounting_fx_rates` — the append-only history. `rate NUMERIC(20,10)` (AL-09's type, the same one `journal_lines.fx_rate` carries), `source` pinned by CHECK to the single value `'manual'`, `effective_at TIMESTAMPTZ` constrained to whole UTC seconds, and a composite `(tenant_id, business_id) → businesses (tenant_id, id)` so no row can claim a tenant that does not own its business. Both currency columns `REFERENCES currencies (code)`. There is **no** `status`, `is_current`, `superseded_by` or `last_used_at` column: a rate is not a setting that changes.
 - `UNIQUE (business_id, from_currency, to_currency, effective_at)` — one business, one ordered pair, one instant, one truth. It is also the slice's **only** index: its leading columns are exactly the lookup's predicate followed by its `ORDER BY … DESC LIMIT 1`, and PostgreSQL reads a B-tree backwards as happily as forwards.
@@ -170,4 +174,6 @@ What this slice *does* add to the attacker's cost is stated precisely: a stolen 
 
 ## 9. Review status
 
-**P2-S5 IS A CANDIDATE.** `0048` is not frozen, the manifest boundary has not moved, and no part of this slice may be treated as history until a Tech Lead accepts it. A green gate grants no authority.
+**P2-S5 IS ACCEPTED AND FROZEN.** The Tech Lead accepted the slice on 2026-09-22 at head `ff382719de5e1e7a20999cc9db9e45ecceea2066`, and `0048` was frozen in `MIGRATION_MANIFEST.json` at the digest above, taking the boundary to `frozenThrough = 0048_accounting_fx_rates.sql` and 49 frozen migrations. `0048` is release history now: a later FX defect is a NEW migration, never an edit to this one, and `npm run gate:phase2:s5` is a permanent regression gate that proves the accepted bytes are still the accepted bytes.
+
+`قُبِلت الشريحة وجُمِّد 0048. أي خلل لاحق في أسعار الصرف يُعالَج بترحيل جديد، لا بتعديل هذا الملف.`

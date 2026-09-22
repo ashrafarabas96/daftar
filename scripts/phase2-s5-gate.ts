@@ -17,12 +17,18 @@
  * for, a residual account that becomes a balancing trash can. Every section
  * below exists for one of those.
  *
- * 0048 is a CANDIDATE. §79 computes its digest and explicitly does NOT freeze
- * it, so this gate requires the manifest to stay frozen through 0047 and
- * requires 0048 to be absent from it. That restriction is candidate-era and
- * belongs here exactly as long as P2-S5 is under review — the moment a Tech
- * Lead accepts the slice, this gate becomes permanent and these two checks
- * invert, the way P2-S4's did.
+ * P2-S5 was ACCEPTED by the Tech Lead at head ff382719de5e1e7a20999cc9db9e45,
+ * and 0048 was frozen at that acceptance. This gate is therefore PERMANENT: it
+ * no longer asks whether a candidate is still unfrozen, it proves the accepted
+ * bytes are still the accepted bytes. It carries 0048's accepted digest as an
+ * independent second source and requires the file to hash to it BOTH on disk
+ * and in the manifest, so one commit cannot move a migration and its recorded
+ * hash together.
+ *
+ * The candidate-era rules are gone with the candidacy: this gate has no
+ * opinion about whether a 0049 exists or how far the frozen boundary has since
+ * moved. An accepted historical gate that forbids its successor is a gate that
+ * stops the project.
  *
  * It COMPOSES rather than duplicates: P2-S4's gate runs unchanged, and it
  * composes P2-S3, P2-S2, P2-S1 and Phase 1 in turn, so the whole chain runs
@@ -44,11 +50,21 @@ const MIGRATIONS_DIR = join(ROOT, 'infrastructure/database/migrations');
 const LIST_ONLY = process.argv.slice(2).includes('--list');
 const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 
-/** The ONE migration this slice owns. §9 authorizes no second one. */
+/** The ONE migration this slice owns, now accepted history. */
 const S5_MIGRATION = '0048_accounting_fx_rates.sql';
 
-/** The manifest must still be frozen exactly here while 0048 is a candidate. */
-const FROZEN_THROUGH = '0047_accounting_opening_balances.sql';
+/**
+ * The ACCEPTED digest, carried here as an independent second source so the
+ * manifest alone cannot certify itself.
+ */
+const S5_ACCEPTED = '5438538a9f335c918b231db3faa94dd4eac7b71a1a688d1c62b5cda9f8ee4cc1';
+
+/**
+ * A FLOOR, never an equality: P2-S5 is frozen, so the boundary is at least
+ * here, and a later authorized slice freezing its own migration must not fail
+ * this gate.
+ */
+const FROZEN_THROUGH_AT_LEAST = '0048_accounting_fx_rates.sql';
 
 /** The table and routines the slice owes. */
 const S5_TABLES = ['accounting_fx_rates'] as const;
@@ -137,38 +153,48 @@ function routineBody(sql: string, name: string): string | null {
 
 // ── 1. Migration boundary ──────────────────────────────────────────────────
 //
-// One authorized migration, no 0049, everything up to 0047 untouched, and the
-// candidate deliberately NOT frozen (§9, §79).
+// The accepted migration is present, frozen at the digest it was accepted at,
+// and every frozen predecessor is still byte-identical. Nothing here has an
+// opinion about a later authorized migration.
 function checkMigrationBoundary(): void {
-  console.log('P2-S5 GATE — the candidate boundary');
+  console.log('P2-S5 GATE — accepted history');
   const files = sqlFiles();
 
   if (files.includes(S5_MIGRATION)) ok(`${S5_MIGRATION} present`);
-  else fail('s5-migration', `${S5_MIGRATION} is missing — P2-S5 is the slice that creates the FX registry (§9)`);
-
-  const beyond = files.filter((f) => f > S5_MIGRATION);
-  if (beyond.length > 0) {
-    fail('s5-migration', `migrations beyond the authorized candidate exist: ${beyond.join(', ')} — §9 authorizes exactly one, and there is no 0049`);
-  } else {
-    ok('no migration beyond the one authorized candidate (§9)');
-  }
+  else fail('s5-migration', `${S5_MIGRATION} is missing — it is accepted history and may never be deleted`);
 
   const manifest = JSON.parse(readFileSync(join(ROOT, 'infrastructure/database/MIGRATION_MANIFEST.json'), 'utf8')) as {
     frozenThrough: string;
     migrations: { name: string; sha256: string }[];
   };
 
-  if (manifest.frozenThrough !== FROZEN_THROUGH) {
-    fail('candidate', `frozenThrough is ${manifest.frozenThrough} — while 0048 is under review the frozen boundary stays at ${FROZEN_THROUGH} (§79)`);
+  if (manifest.frozenThrough < FROZEN_THROUGH_AT_LEAST) {
+    fail('accepted-history', `frozenThrough is ${manifest.frozenThrough} — P2-S5 was accepted and frozen, so it must be at least ${FROZEN_THROUGH_AT_LEAST}`);
   } else {
-    ok(`frozenThrough = ${FROZEN_THROUGH} — the P2-S4 acceptance boundary, unchanged (§79)`);
+    ok(`frozenThrough = ${manifest.frozenThrough} — at or beyond the P2-S5 acceptance boundary`);
   }
 
   const recorded = new Map(manifest.migrations.map((m) => [m.name, m.sha256] as const));
-  if (recorded.has(S5_MIGRATION)) {
-    fail('candidate', `${S5_MIGRATION} is recorded in the manifest — §79 computes its digest and explicitly does NOT freeze it before review`);
+  const inManifest = recorded.get(S5_MIGRATION);
+  if (inManifest === undefined) {
+    fail('accepted-history', `${S5_MIGRATION} is not recorded in MIGRATION_MANIFEST.json — P2-S5 was accepted, so its migration is frozen history`);
+  } else if (inManifest !== S5_ACCEPTED) {
+    fail(
+      'accepted-history',
+      `${S5_MIGRATION} is recorded at ${inManifest.slice(0, 12)}… but was accepted at ${S5_ACCEPTED.slice(0, 12)}… — the manifest disagrees with the acceptance`,
+    );
   } else {
-    ok(`${S5_MIGRATION} is a candidate: its digest is reported, not frozen (§79)`);
+    const onDisk = createHash('sha256')
+      .update(readFileSync(join(MIGRATIONS_DIR, S5_MIGRATION)))
+      .digest('hex');
+    if (onDisk !== S5_ACCEPTED) {
+      fail(
+        'accepted-history',
+        `${S5_MIGRATION} hashes to ${onDisk.slice(0, 12)}… on disk but was accepted at ${S5_ACCEPTED.slice(0, 12)}… — accepted bytes are immutable`,
+      );
+    } else {
+      ok(`${S5_MIGRATION} is frozen at its accepted digest, on disk and in the manifest`);
+    }
   }
 
   // Every frozen predecessor still hashes to what the manifest recorded. The
@@ -189,14 +215,6 @@ function checkMigrationBoundary(): void {
     }
   }
   if (drifted === 0) ok(`all ${manifest.migrations.length} frozen migrations are byte-for-byte what the manifest recorded`);
-
-  // The candidate's own digest, reported for the handoff (§79).
-  if (files.includes(S5_MIGRATION)) {
-    const sha = createHash('sha256')
-      .update(readFileSync(join(MIGRATIONS_DIR, S5_MIGRATION)))
-      .digest('hex');
-    ok(`${S5_MIGRATION} sha256 = ${sha} (candidate digest, not frozen)`);
-  }
 }
 
 // ── 2. The registry's physical shape ───────────────────────────────────────
@@ -981,7 +999,7 @@ function runSteps(): void {
 
 if (LIST_ONLY) {
   console.log('P2-S5 GATE plan:');
-  console.log('  structural: exactly one candidate migration, no 0049, 0048 NOT frozen, every frozen predecessor byte-identical');
+  console.log('  structural: 0048 frozen at its accepted digest on disk and in the manifest, every frozen predecessor byte-identical');
   console.log('  structural: the registry’s type, composite ownership, currency registry, four physical rules and one index');
   console.log('  structural: append-only through an unconditional trigger, not through a missing grant');
   console.log('  structural: the lookup is max effective_at <= instant, with no reciprocal, cross-rate, implicit 1 or write');

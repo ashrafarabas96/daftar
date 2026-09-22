@@ -1,7 +1,7 @@
 {
-  "generatedAt": "2026-09-22T20:10:00.000Z",
-  "frozenThrough": "0047_accounting_opening_balances.sql",
-  "policy": "Migrations 0000–0047 are FROZEN. 0000–0039 froze at the Phase 1 release; 0040–0041 froze on Tech Lead acceptance of P2-S1 (docs/PHASE_2_S1_ACCEPTANCE.md); 0042–0043 froze on Tech Lead acceptance of P2-S2 (docs/PHASE_2_S2_ACCEPTANCE.md); 0044–0045 froze on Tech Lead acceptance of P2-S3 (docs/PHASE_2_S3_ACCEPTANCE.md); 0046–0047 froze on Tech Lead acceptance of P2-S4 (docs/PHASE_2_S4_ACCEPTANCE.md). A frozen migration is never edited or deleted; every schema correction is a NEW migration appended after 0047. Check: npm run check:migrations.",
+  "generatedAt": "2026-09-22T23:05:00.000Z",
+  "frozenThrough": "0048_accounting_fx_rates.sql",
+  "policy": "Migrations 0000–0048 are FROZEN. 0000–0039 froze at the Phase 1 release; 0040–0041 froze on Tech Lead acceptance of P2-S1 (docs/PHASE_2_S1_ACCEPTANCE.md); 0042–0043 froze on Tech Lead acceptance of P2-S2 (docs/PHASE_2_S2_ACCEPTANCE.md); 0044–0045 froze on Tech Lead acceptance of P2-S3 (docs/PHASE_2_S3_ACCEPTANCE.md); 0046–0047 froze on Tech Lead acceptance of P2-S4 (docs/PHASE_2_S4_ACCEPTANCE.md); 0048 froze on Tech Lead acceptance of P2-S5 (docs/PHASE_2_S5_ACCEPTANCE.md). A frozen migration is never edited or deleted; every schema correction is a NEW migration appended after 0048. Check: npm run check:migrations.",
   "migrations": [
     {
       "name": "0000_extensions.sql",
@@ -194,6 +194,10 @@
     {
       "name": "0047_accounting_opening_balances.sql",
       "sha256": "0938d513c0bb844c5f36cbdb170612a08f9f52f828660ca88e2db00aeea1cabc"
+    },
+    {
+      "name": "0048_accounting_fx_rates.sql",
+      "sha256": "5438538a9f335c918b231db3faa94dd4eac7b71a1a688d1c62b5cda9f8ee4cc1"
     }
   ]
 }
