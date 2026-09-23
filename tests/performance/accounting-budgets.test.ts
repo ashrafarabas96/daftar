@@ -1,0 +1,346 @@
+/**
+ * THE SIX AUTHORITATIVE BUDGETS (P2-S8 §33, §34, §35, §36).
+ *
+ * The budgets are the ones already accepted in the execution plan, copied here
+ * unchanged. §34 is explicit that they may not be loosened to obtain a pass,
+ * so they are written as constants with the section letter beside each one and
+ * a comment saying where they came from: a future edit that raised one would
+ * be visible in a diff rather than buried in an expectation.
+ *
+ * TWO TIERS (§35). Tier 1 runs on every push against a smaller dataset shaped
+ * like the real thing, and its job is to catch a major regression before it
+ * reaches a reviewer. Tier 2 is the acceptance run at the sizes §34 actually
+ * names — 100,000 lines for the reporting budgets and 1,000,000 for
+ * reconciliation — and is selected with P2S8_PERF_TIER=2. The dataset is NOT
+ * reduced to make Tier 1 pass: Tier 1 asserts the same budgets on less data,
+ * which is a weaker claim, and the evidence file says which tier produced it.
+ *
+ * MEASUREMENT DISCIPLINE (§33). Every case warms up, then takes many measured
+ * iterations, and reports p50/p95/p99/max rather than one lucky timing. The
+ * machine, the versions, the database settings that matter and the dataset
+ * seed are all captured into the evidence file beside the numbers, because a
+ * millisecond figure with no machine attached is not evidence of anything.
+ */
+import { execSync } from 'node:child_process';
+import { cpus, totalmem, arch, platform, release } from 'node:os';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { Pool } from 'pg';
+import { reconcile } from '@daftar/accounting';
+import { createTestApp, ensurePostgres, ownerPool, reconcilerDbUrl, resetData, type TestApp } from '../helpers/test-app';
+import { PoolReconciliationConnection } from '../helpers/accounting-reconciliation';
+import { DatabaseAccountingReconciliationReader } from '../../apps/api/src/modules/accounting/accounting-reconciliation.reader';
+import { appClient, assertionFor, must, postAs, simpleCommand, todayIn } from '../helpers/accounting-posting';
+import { generateDataset, TIER1_SPEC, TIER2_RECONCILIATION_SPEC, type DatasetSpec } from './accounting-dataset';
+
+/**
+ * PHASE_2_ACCOUNTING_EXECUTION_PLAN §34, repeated verbatim. Milliseconds.
+ * These are ceilings on p95 (and on the total, for F).
+ */
+const BUDGET = {
+  /** A — post() of a 2–6 line entry inside an existing transaction. */
+  A_POST_P95: 15,
+  /** B — the manual-adjustment endpoint, end to end. */
+  B_ADJUSTMENT_ENDPOINT_P95: 60,
+  /** C — whole-business trial balance over 100,000 journal lines, one period. */
+  C_TRIAL_BALANCE_P95: 500,
+  /** D — general ledger, a 50-row keyset page, 100,000 lines. */
+  D_LEDGER_PAGE_P95: 150,
+  /** E — account balance as-of, a 100,000-line-class business. */
+  E_BALANCE_AS_OF_P95: 100,
+  /** F — a full reconciliation pass over 1,000,000 journal lines, one business. */
+  F_RECONCILIATION_TOTAL: 5 * 60 * 1000,
+} as const;
+
+const TIER = process.env['P2S8_PERF_TIER'] === '2' ? 2 : 1;
+const RUN_LOCATION = process.env['CI'] === 'true' ? 'CI' : 'LOCAL';
+const ITERATIONS = TIER === 2 ? 60 : 30;
+const WARMUP = 5;
+
+interface Measurement {
+  readonly name: string;
+  readonly budgetMs: number;
+  readonly iterations: number;
+  readonly p50: number;
+  readonly p95: number;
+  readonly p99: number;
+  readonly max: number;
+  readonly min: number;
+}
+
+const measurements: Measurement[] = [];
+
+/** One well-formed domestic amount, shared by both lines of the B measurement. */
+const MONEY = {
+  baseAmountMinor: '5000',
+  baseCurrency: 'ILS',
+  txnAmountMinor: '5000',
+  txnCurrency: 'ILS',
+  fxRate: '1',
+  fxRateSource: 'base',
+  fxRateAt: '2026-03-14T09:15:00.000Z',
+} as const;
+
+function summarise(name: string, budgetMs: number, samples: number[]): Measurement {
+  const sorted = [...samples].sort((a, b) => a - b);
+  const at = (q: number): number => must(sorted[Math.min(sorted.length - 1, Math.floor(q * sorted.length))]);
+  const m: Measurement = {
+    name,
+    budgetMs,
+    iterations: sorted.length,
+    p50: at(0.5),
+    p95: at(0.95),
+    p99: at(0.99),
+    max: must(sorted[sorted.length - 1]),
+    min: must(sorted[0]),
+  };
+  measurements.push(m);
+  return m;
+}
+
+/** Warm up, then measure. The warm-up samples are discarded, never averaged in. */
+async function measure(name: string, budgetMs: number, once: () => Promise<void>, iterations = ITERATIONS): Promise<Measurement> {
+  for (let i = 0; i < WARMUP; i += 1) await once();
+  const samples: number[] = [];
+  for (let i = 0; i < iterations; i += 1) {
+    const started = process.hrtime.bigint();
+    await once();
+    samples.push(Number(process.hrtime.bigint() - started) / 1e6);
+  }
+  return summarise(name, budgetMs, samples);
+}
+
+let t: TestApp;
+let token = '';
+let tenantId = '';
+let businessId = '';
+let userId = '';
+let today = '';
+let accountId = '';
+let spec: DatasetSpec;
+let seededLines = 0;
+
+beforeAll(async () => {
+  await ensurePostgres();
+  await resetData();
+  t = await createTestApp();
+
+  const email = `perf-${Date.now()}@test.daftar.local`;
+  const reg = await t.request.post('/v1/auth/register').send({ email, password: 'Str0ng!Passw0rd', displayName: 'Perf', preferredLocale: 'ar' });
+  token = reg.body.accessToken as string;
+  const me = await t.request.get('/v1/auth/me').set('Authorization', `Bearer ${token}`);
+  userId = me.body.userId as string;
+  const on = await t.request
+    .post('/v1/onboarding/complete')
+    .set('Idempotency-Key', `idem-${Date.now()}`)
+    .set('Authorization', `Bearer ${token}`)
+    .send({ businessName: 'Budget Books', countryCode: 'PS', baseCurrency: 'ILS', storeSlug: `budget-${Date.now()}` });
+  expect(on.status).toBe(201);
+  businessId = on.body.businessId as string;
+  tenantId = must((await ownerPool().query<{ tenant_id: string }>(`SELECT tenant_id FROM businesses WHERE id = $1`, [businessId])).rows[0]).tenant_id;
+  today = await todayIn(ownerPool(), 'Asia/Hebron');
+  accountId = must((await ownerPool().query<{ id: string }>(`SELECT id FROM accounts WHERE business_id = $1 ORDER BY code LIMIT 1`, [businessId])).rows[0]).id;
+
+  // §34 states C/D/E at 100,000 journal lines and F at 1,000,000.
+  //
+  // Tier 2 seeds ONE dataset, the 1,000,000-line reconciliation shape, and
+  // measures every budget against it. For C, D and E that is STRICTER than
+  // §34 asks — ten times the stated volume — and deliberately so: two
+  // datasets in one run would mean two businesses whose numbers cannot be
+  // compared, and a reporting budget that holds at 1,000,000 lines holds at
+  // 100,000. If one of them were ever to miss at this scale, §36 applies and
+  // the miss is diagnosed against the stated 100,000 before anything is
+  // concluded. `TIER2_REPORTING_SPEC` in the dataset module describes that
+  // smaller shape for exactly that diagnosis.
+  //
+  // Tier 1 seeds the small shape, which is what CI runs.
+  spec = TIER === 2 ? TIER2_RECONCILIATION_SPEC : TIER1_SPEC;
+  const result = await generateDataset(ownerPool(), [{ tenantId, businessId, userId, baseCurrency: 'ILS' }], spec);
+  seededLines = result.lineCount;
+}, 3_600_000);
+
+afterAll(async () => {
+  const { rows: version } = await ownerPool().query<{ v: string }>(`SELECT version() AS v`);
+  const { rows: settings } = await ownerPool().query<{ name: string; setting: string; unit: string | null }>(
+    `SELECT name, setting, unit FROM pg_settings
+      WHERE name IN ('shared_buffers','work_mem','maintenance_work_mem','effective_cache_size','max_parallel_workers_per_gather','random_page_cost','jit')
+      ORDER BY name`,
+  );
+  const sha = (() => {
+    try {
+      return execSync('git rev-parse HEAD', { encoding: 'utf8' }).trim();
+    } catch {
+      return 'unknown';
+    }
+  })();
+  const npmVersion = (() => {
+    try {
+      return execSync('npm --version', { encoding: 'utf8' }).trim();
+    } catch {
+      return 'unknown';
+    }
+  })();
+  const evidence = {
+    slice: 'P2-S8',
+    tier: TIER,
+    // §35: a full-scale result run on a laptop is not a CI result, and the
+    // file says which it was rather than leaving a reader to assume.
+    executedIn: RUN_LOCATION,
+    gitSha: sha,
+    node: process.version,
+    npm: npmVersion,
+    postgres: version[0]?.v ?? 'unknown',
+    os: `${platform()} ${release()}`,
+    arch: arch(),
+    cpuCount: cpus().length,
+    cpuModel: cpus()[0]?.model ?? 'unknown',
+    totalMemoryBytes: totalmem(),
+    databaseSettings: settings,
+    dataset: { ...spec, seededLines },
+    budgets: BUDGET,
+    measurements,
+  };
+  const dir = join(__dirname, '../../release');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, `phase2-s8-performance-tier${TIER}.json`), `${JSON.stringify(evidence, null, 2)}\n`);
+  await t?.close();
+});
+
+describe('A — the posting command, inside an existing transaction (§34 A)', () => {
+  it(`p95 ≤ ${BUDGET.A_POST_P95} ms`, async () => {
+    const c = await appClient();
+    try {
+      const m = await measure('A post() in an open transaction', BUDGET.A_POST_P95, async () => {
+        const command = simpleCommand({ tenantId, businessId, userId } as never, randomUUID(), today, 12_345n);
+        await c.query('BEGIN');
+        await postAs(assertionFor(command, userId), command, {}, c);
+        // Measured through COMMIT on purpose: the deferred entry validators
+        // run there, so timing only the call would leave out the part of the
+        // cost that scales with the journal. This is a stricter reading of
+        // the budget than §34 requires, never a looser one.
+        await c.query('COMMIT');
+      });
+      expect(m.p95, JSON.stringify(m)).toBeLessThanOrEqual(BUDGET.A_POST_P95);
+    } finally {
+      await c.end();
+    }
+  }, 900_000);
+});
+
+describe('B — the manual-adjustment endpoint, end to end (§34 B)', () => {
+  it(`p95 ≤ ${BUDGET.B_ADJUSTMENT_ENDPOINT_P95} ms`, async () => {
+    const m = await measure('B manual adjustment endpoint', BUDGET.B_ADJUSTMENT_ENDPOINT_P95, async () => {
+      const response = await t.request
+        .post(`/v1/businesses/${businessId}/accounting/adjustments`)
+        .set('Authorization', `Bearer ${token}`)
+        .set('X-Business-Id', businessId)
+        .set('Idempotency-Key', randomUUID())
+        .send({
+          entryDate: today,
+          description: 'budget measurement',
+          reason: 'budget measurement',
+          lines: [
+            { account: { kind: 'system', systemKey: 'cash' }, side: 'D', ...MONEY },
+            { account: { kind: 'system', systemKey: 'opening_equity' }, side: 'C', ...MONEY },
+          ],
+        });
+      expect([200, 201]).toContain(response.status);
+    });
+    expect(m.p95, JSON.stringify(m)).toBeLessThanOrEqual(BUDGET.B_ADJUSTMENT_ENDPOINT_P95);
+  }, 900_000);
+});
+
+describe('C — whole-business trial balance (§34 C)', () => {
+  it(`p95 ≤ ${BUDGET.C_TRIAL_BALANCE_P95} ms`, async () => {
+    const m = await measure('C trial balance', BUDGET.C_TRIAL_BALANCE_P95, async () => {
+      const response = await t.request
+        .get(`/v1/businesses/${businessId}/accounting/trial-balance?from=2000-01-01&to=${spec.endDate}`)
+        .set('Authorization', `Bearer ${token}`)
+        .set('X-Business-Id', businessId);
+      expect(response.status).toBe(200);
+    });
+    expect(m.p95, JSON.stringify(m)).toBeLessThanOrEqual(BUDGET.C_TRIAL_BALANCE_P95);
+  }, 900_000);
+});
+
+describe('D — a 50-row general-ledger page (§34 D)', () => {
+  it(`p95 ≤ ${BUDGET.D_LEDGER_PAGE_P95} ms`, async () => {
+    const m = await measure('D ledger 50-row page', BUDGET.D_LEDGER_PAGE_P95, async () => {
+      const response = await t.request
+        .get(`/v1/businesses/${businessId}/accounting/ledger?accountId=${accountId}&from=2000-01-01&to=${spec.endDate}&limit=50`)
+        .set('Authorization', `Bearer ${token}`)
+        .set('X-Business-Id', businessId);
+      expect(response.status).toBe(200);
+    });
+    expect(m.p95, JSON.stringify(m)).toBeLessThanOrEqual(BUDGET.D_LEDGER_PAGE_P95);
+  }, 900_000);
+});
+
+describe('E — account balance as of a date (§34 E)', () => {
+  it(`p95 ≤ ${BUDGET.E_BALANCE_AS_OF_P95} ms`, async () => {
+    const m = await measure('E account balance as-of', BUDGET.E_BALANCE_AS_OF_P95, async () => {
+      const response = await t.request
+        .get(`/v1/businesses/${businessId}/accounting/balances?asOf=${spec.endDate}&accountId=${accountId}`)
+        .set('Authorization', `Bearer ${token}`)
+        .set('X-Business-Id', businessId);
+      expect(response.status).toBe(200);
+    });
+    expect(m.p95, JSON.stringify(m)).toBeLessThanOrEqual(BUDGET.E_BALANCE_AS_OF_P95);
+  }, 900_000);
+});
+
+describe('F — a full reconciliation pass (§34 F)', () => {
+  it(`total ≤ ${BUDGET.F_RECONCILIATION_TOTAL / 1000} s`, async () => {
+    const pool = new Pool({ connectionString: reconcilerDbUrl, max: 2 });
+    try {
+      const reader = new DatabaseAccountingReconciliationReader(new PoolReconciliationConnection(pool));
+      const clock = { now: (): Date => new Date() };
+      // One pass, measured once: the budget is a wall-clock ceiling on a
+      // whole cycle, not a percentile over repetitions, and repeating a
+      // five-minute pass thirty times would measure the page cache rather
+      // than the pass.
+      const started = process.hrtime.bigint();
+      const result = await reconcile(reader, clock);
+      const elapsed = Number(process.hrtime.bigint() - started) / 1e6;
+      summarise('F full reconciliation', BUDGET.F_RECONCILIATION_TOTAL, [elapsed]);
+
+      expect(result.enumeration).toBe('complete');
+      expect(result.errorCount).toBe(0);
+      expect(result.unavailableCount).toBe(0);
+      expect(elapsed, `${seededLines} lines in ${elapsed} ms`).toBeLessThanOrEqual(BUDGET.F_RECONCILIATION_TOTAL);
+    } finally {
+      await pool.end();
+    }
+  }, 1_800_000);
+});
+
+describe('the dataset is what it claims to be (§32)', () => {
+  it('is financially valid: balanced, bound, and complete in its FX snapshot', async () => {
+    const { rows } = await ownerPool().query<{ unbalanced: string; unbound: string; lines: string }>(
+      `SELECT (SELECT count(*)::text FROM (
+                 SELECT e.id FROM journal_entries e JOIN journal_lines l ON l.journal_entry_id = e.id
+                  WHERE e.business_id = $1
+                  GROUP BY e.id
+                 HAVING sum(CASE WHEN l.debit_minor > 0 THEN l.base_amount_minor ELSE 0 END)
+                     <> sum(CASE WHEN l.credit_minor > 0 THEN l.base_amount_minor ELSE 0 END)) x) AS unbalanced,
+              (SELECT count(*)::text FROM journal_entries e
+                WHERE e.business_id = $1
+                  AND NOT EXISTS (SELECT 1 FROM accounting_source_bindings b
+                                   WHERE b.business_id = e.business_id AND b.journal_entry_id = e.id)) AS unbound,
+              (SELECT count(*)::text FROM journal_lines l WHERE l.business_id = $1) AS lines`,
+      [businessId],
+    );
+    const row = must(rows[0]);
+    expect({ unbalanced: row.unbalanced, unbound: row.unbound }).toEqual({ unbalanced: '0', unbound: '0' });
+    expect(Number(row.lines)).toBeGreaterThanOrEqual(seededLines);
+  });
+
+  it('reaches the size the tier claims', () => {
+    // Tier 1 is deliberately smaller than §34's datasets and says so; Tier 2
+    // is the acceptance size and must actually be it.
+    if (TIER === 2) expect(seededLines).toBeGreaterThanOrEqual(1_000_000);
+    else expect(seededLines).toBeGreaterThanOrEqual(10_000);
+  });
+});

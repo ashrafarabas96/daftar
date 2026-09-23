@@ -27,6 +27,8 @@
     "check:localization": "tsx scripts/check-localization.ts",
     "check:guards": "tsx scripts/static-guards.ts",
     "check:migrations": "tsx scripts/check-migration-manifest.ts",
+    "check:supply-chain": "tsx scripts/check-supply-chain.ts",
+    "evidence:phase2:s8": "tsx scripts/phase2-s8-evidence.ts",
     "check:db-from-zero": "tsx scripts/db-from-zero.ts",
     "bootstrap:platform-owner": "tsx scripts/bootstrap-platform-owner.ts",
     "bootstrap:provisioning-key": "tsx scripts/install-provisioning-key.ts",
@@ -42,8 +44,10 @@
     "gate:phase2:s5": "tsx scripts/phase2-s5-gate.ts",
     "gate:phase2:s6": "tsx scripts/phase2-s6-gate.ts",
     "gate:phase2:s7": "tsx scripts/phase2-s7-gate.ts",
+    "gate:phase2:s8": "tsx scripts/phase2-s8-gate.ts",
     "export:release": "tsx scripts/export-release.ts",
-    "verify:history": "tsx scripts/verify-migration-history.ts"
+    "verify:history": "tsx scripts/verify-migration-history.ts",
+    "rehearse:phase2:rollback": "tsx scripts/phase2-rollback-rehearsal.ts"
   },
   "engines": {
     "node": ">=24 <25"

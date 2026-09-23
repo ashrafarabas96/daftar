@@ -233,7 +233,7 @@ describe('FI-06 — a missing FX rate fails loudly and writes nothing', () => {
     const command = simpleCommand(fx, randomUUID(), today, 4600n);
     const foreign = {
       ...command,
-      lines: command.lines.map((l, i) => (i === 0 ? { ...l, txnCurrency: 'USD', txnAmountMinor: 1000n, fxRate: '0', fxRateSource: 'provider' } : l)),
+      lines: command.lines.map((l, i) => (i === 0 ? { ...l, txnCurrency: 'USD', txnAmountMinor: 1000n, fxRate: '0', fxRateSource: 'provider' as const } : l)),
     };
     const message = await refusal(() => post(foreign, fx.userId));
     // Refused by the database, at the row: `fx_rate > 0`. Which layer refuses

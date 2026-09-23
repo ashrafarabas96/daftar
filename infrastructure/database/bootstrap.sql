@@ -17,6 +17,27 @@
 -- migration principal's privileges did not.
 CREATE EXTENSION IF NOT EXISTS btree_gist;
 
+-- `citext` and `pgcrypto` are installed here for the SAME reason, and the
+-- reason was found by the P2-S8 rollback rehearsal (§39) rather than by
+-- reading the files.
+--
+-- `0000_extensions.sql` issues `CREATE EXTENSION IF NOT EXISTS` for both.
+-- That statement is a no-op when the extension is already installed and needs
+-- no privilege at all — but on a FRESH database it is a real CREATE, and it
+-- requires CREATE ON DATABASE, which `daftar_migrator` deliberately does not
+-- hold. CI never noticed because CI applies migrations as the superuser; the
+-- rehearsal applies them as `daftar_migrator`, the way §36 requires a
+-- deployment to, and 0000 failed there with `permission denied to create
+-- extension "citext"`.
+--
+-- The fix belongs here and not in 0000, which is frozen and would in any case
+-- be the wrong place: installing an extension is a deployment-administrator
+-- act, exactly as it already is for btree_gist. With these two lines the
+-- migration principal needs no database-wide CREATE on any path, fresh or
+-- upgraded.
+CREATE EXTENSION IF NOT EXISTS citext;
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
 -- Least-privilege roles (Security Gate Zero §11):
 --   daftar_app      normal API runtime — RLS-enforced, cannot bypass RLS
 --   daftar_platform platform administration (provisioning, plans, admin console)
