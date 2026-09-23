@@ -1,4 +1,4 @@
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync, rmSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import EmbeddedPostgres from 'embedded-postgres';
@@ -147,8 +147,46 @@ const SETTLE_DELAY_MS = 500;
 const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 /** True while a previous postmaster still owns the data directory. */
-function pidFileHeld(): boolean {
-  return existsSync(join(PG_DIR, 'postmaster.pid'));
+/**
+ * Is the shared data directory actually held by a live postmaster?
+ *
+ * The file's presence alone is not the answer. `postmaster.pid` survives a
+ * crash, a `kill -9` and — as happened here — a container restart, and a
+ * directory guarded by a dead process's leftovers is not busy, it is littered.
+ * The old check read the file's existence, so one abnormal exit made every
+ * later run wait out its twelve attempts and then fail with "did not become
+ * usable within 6s", forever, until somebody deleted the file by hand. A test
+ * harness that cannot recover from a crash cannot report anything, and §3 of
+ * the P2-S8 directive makes the harness part of the gate.
+ *
+ * So: read the postmaster's pid and ask the operating system whether it is
+ * still there. Signal 0 checks existence and delivers nothing. `ESRCH` means
+ * the process is gone and the file is stale. `EPERM` means it exists but
+ * belongs to someone else, which is still held. An unreadable or malformed
+ * file is treated as stale, because it cannot name a holder.
+ */
+export function pidFileHeld(dir: string = PG_DIR): boolean {
+  const file = join(dir, 'postmaster.pid');
+  if (!existsSync(file)) return false;
+
+  let pid = Number.NaN;
+  try {
+    pid = Number.parseInt((readFileSync(file, 'utf8').split('\n')[0] ?? '').trim(), 10);
+  } catch {
+    return false; // unreadable: it names no holder
+  }
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'EPERM') return true; // alive, not ours
+    // ESRCH — the postmaster is gone. Clear its leftovers so a fresh start can
+    // take the directory, which is the whole point of the check.
+    rmSync(file, { force: true });
+    return false;
+  }
 }
 
 async function startOrReuse(): Promise<void> {
