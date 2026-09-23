@@ -702,11 +702,19 @@ function checkEvidence(): void {
   if (evidence !== null) {
     const parsed = JSON.parse(evidence) as { checks?: { id: string; name: string; status: string; mandatory?: boolean }[] };
     const checks = parsed.checks ?? [];
-    // GATE-S8 is excluded from BOTH of the checks below, for one reason,
-    // given in full at the FAIL check: that row is this gate's own verdict
-    // from the previous evidence run, and a gate that reads its own last
-    // answer as input is a fixpoint rather than a measurement.
-    const skipped = checks.filter((c) => c.mandatory !== false && c.status.toUpperCase() === 'SKIPPED' && c.id !== 'GATE-S8');
+    // Two rows are excluded from BOTH of the checks below, for one reason.
+    // GATE-S8 and SUPPLY-01 are not measurements sitting in the file waiting
+    // to be read: the evidence generator produces them by RUNNING a command,
+    // in the same invocation that runs this gate, and writes them after this
+    // gate has already answered. So their recorded status describes how the
+    // file was last generated — GATE-S8 is this gate's own previous verdict,
+    // which would make it a fixpoint of itself, and SUPPLY-01 reads SKIPPED
+    // purely because the last generation did not pass `--run-commands`.
+    // Everything else in the file is an independent artefact written before
+    // this gate runs, and those rows are exactly what this gate must read.
+    const GENERATED_IN_THIS_INVOCATION = new Set(['GATE-S8', 'SUPPLY-01']);
+    const readable = checks.filter((c) => c.mandatory !== false && !GENERATED_IN_THIS_INVOCATION.has(c.id));
+    const skipped = readable.filter((c) => c.status.toUpperCase() === 'SKIPPED');
     if (skipped.length > 0) {
       fail(
         's8-evidence',
@@ -720,13 +728,7 @@ function checkEvidence(): void {
     // to say it. Without this, a performance budget could miss (f §36) while
     // the gate still reported PASS, and a gate that cannot report the one
     // thing its own evidence file says is wrong is not evidence — f §63.
-    //
-    // GATE-S8 is excluded deliberately, and it is the only exclusion: that
-    // row is this gate's OWN verdict from the previous evidence run, so
-    // reading it here would make the gate a fixpoint of itself — once red,
-    // red forever, even after the finding behind it was repaired. A gate
-    // must judge the work, never its own last answer.
-    const failed = checks.filter((c) => c.mandatory !== false && c.status.toUpperCase() === 'FAIL' && c.id !== 'GATE-S8');
+    const failed = readable.filter((c) => c.status.toUpperCase() === 'FAIL');
     if (failed.length > 0) {
       fail(
         's8-evidence',
@@ -839,11 +841,22 @@ checkProcessBoundary();
 checkDetectNotRepair();
 checkNoTestSeamInProduction();
 checkPrivilegeModel();
-checkEvidence();
 if (failures > 0) {
   console.error(`\nP2-S8 GATE: FAIL (${failures} structural violation${failures === 1 ? '' : 's'}) — not running the regression matrix`);
   process.exit(1);
 }
+
+// The evidence file is read AFTER the structural checks and BEFORE the
+// matrix, and deliberately does not stop the matrix from running.
+//
+// A structural violation above means the thing being gated is not the thing
+// this gate describes, so running a regression matrix over it would produce
+// numbers about something else. A finding inside the evidence file is the
+// opposite: it is a true statement about work that exists, and the first
+// question a reviewer asks about a slice that carries one is whether
+// everything ELSE still passes. A gate that refused to answer that would
+// make a single missed budget hide the state of the whole slice.
+checkEvidence();
 runSteps();
 
 if (failures > 0) {
