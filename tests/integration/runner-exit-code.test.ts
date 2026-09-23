@@ -1,6 +1,7 @@
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
+import { guardedExit } from '../helpers/exit-code';
 
 /**
  * The runner must be able to report failure.
@@ -34,6 +35,75 @@ function runCanary(filter: string): { status: number | null; output: string } {
   });
   return { status: res.status, output: `${res.stdout ?? ''}${res.stderr ?? ''}` };
 }
+
+/**
+ * The rule itself, argument by argument.
+ *
+ * The end-to-end proof below is the one that matters, but it can only observe
+ * whichever exit path a given run happens to take, and there are two: Vitest's
+ * shutdown hook calls `process.exit(0)` with an explicit zero, while its
+ * close-timeout path calls `process.exit()` with none. A run that took the
+ * first path passed while the second was broken — which is exactly what
+ * happened, and what these cases exist to stop happening again.
+ *
+ * The subtle one is arity. Node's exit is `if (arguments.length !== 0)
+ * process.exitCode = code`, so `exit()` honours a recorded failure and
+ * `exit(undefined)` erases it. A forwarder that writes `native(code)` turns
+ * the first into the second and destroys the thing it was guarding.
+ */
+describe('the guard passes everything through except an explicit zero over a failure', () => {
+  const originalExitCode = process.exitCode;
+  afterEach(() => {
+    process.exitCode = originalExitCode;
+  });
+
+  function record(): { calls: [number?][]; exit: (...args: [number?]) => never } {
+    const calls: [number?][] = [];
+    const fake = ((...args: [number?]) => {
+      calls.push(args);
+      return undefined as never;
+    }) as (...args: [number?]) => never;
+    return { calls, exit: guardedExit(fake) };
+  }
+
+  it('turns an explicit zero into the recorded failure', () => {
+    const { calls, exit } = record();
+    process.exitCode = 1;
+    exit(0);
+    expect(calls).toEqual([[1]]);
+  });
+
+  it('passes a no-argument exit through with NO argument, so the recorded failure survives', () => {
+    const { calls, exit } = record();
+    process.exitCode = 1;
+    exit();
+    // Not `[[undefined]]`. One argument, even an undefined one, is Node's
+    // signal that a code was supplied, and it would clear the 1.
+    expect(calls).toEqual([[]]);
+    expect(calls[0]).toHaveLength(0);
+  });
+
+  it('leaves an explicit zero alone when nothing failed', () => {
+    const { calls, exit } = record();
+    process.exitCode = undefined;
+    exit(0);
+    expect(calls).toEqual([[0]]);
+  });
+
+  it('leaves an explicit zero alone when the recorded code is itself zero', () => {
+    const { calls, exit } = record();
+    process.exitCode = 0;
+    exit(0);
+    expect(calls).toEqual([[0]]);
+  });
+
+  it('never lowers or raises a non-zero code a caller asked for', () => {
+    const { calls, exit } = record();
+    process.exitCode = 1;
+    exit(2);
+    expect(calls).toEqual([[2]]);
+  });
+});
 
 describe('the test runner reports failure (gate soundness)', () => {
   it('leaves with a non-zero status when a test fails', () => {

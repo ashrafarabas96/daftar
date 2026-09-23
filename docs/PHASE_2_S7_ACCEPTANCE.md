@@ -203,6 +203,30 @@ That proof is circular in the one case that matters most — a runner that canno
 
 `عيب وُجد أثناء هذه الشريحة ولا يخصّها وحدها: كان مشغّل الاختبارات قادرًا على الخروج بحالة نجاح رغم فشل اختبارات، لأن خطّاف إغلاق في embedded-postgres ينادي process.exit(0) فيمحو رمز الفشل الذي سجّله Vitest. وكل بوّابات المستودع تقرّر حكمها من حالة الخروج هذه. الإصلاح يمنع انتقالًا واحدًا فقط: الصفر لا يمحو فشلًا مُسجَّلًا. والبرهان يشغّل المشغّل نفسه على ملف فاشل عمدًا، وبوّابة P2-S7 تعيد البرهان من خارج Vitest قبل أن تصدّق أي نتيجة في تشغيلها.`
 
+## 11a-bis. A correction to §11a — the first version of the guard had a hole in the path that mattered most
+
+Recorded here rather than silently amended, because §11a is an evidence claim and it was incomplete.
+
+The guard as first written forwarded every call as `native(code)`. That is wrong for a call made with no argument at all, and Node says why in its own source:
+
+```
+function exit(code) {
+  if (arguments.length !== 0) { process.exitCode = code; }
+  ...
+  process.reallyExit(process.exitCode || kNoFailure);
+}
+```
+
+`process.exit()` honours a recorded `process.exitCode`. `process.exit(undefined)` counts as supplying a code, sets it to `undefined`, and leaves as **0**. A forwarder written as `native(code)` turns the first into the second — so the guard erased exactly the failure it existed to preserve.
+
+Which exit path a run takes decides whether that matters. Vitest's shutdown hook calls `process.exit(0)` with an explicit zero, and the guard handled that correctly from the start. Its close-timeout path calls `process.exit()` with none, and that is the path taken whenever something holds the event loop open — which the Vite server routinely does. So the end-to-end canary passed on runs that took the first path and would have failed on runs that took the second.
+
+It was caught by the mechanism built for it: the P2-S7 gate's own canary, run outside Vitest before anything else, refused to run the regression matrix and said the runner could not report failure.
+
+The guard now preserves arity: everything but an explicit zero over a recorded failure is forwarded with the same number of arguments it arrived with. And the rule no longer depends on which path a run happens to take — `guardedExit` is asserted directly, argument by argument, in `tests/integration/runner-exit-code.test.ts`, alongside the end-to-end proof.
+
+`تصحيح للفقرة 11أ: النسخة الأولى من الحارس كانت تمرّر النداء بصيغة `native(code)`، وهذا خطأ حين يُنادى `process.exit()` بلا وسيط أصلًا، لأن Node يعتبر تمرير `undefined` تحديدًا لرمز خروج فيمحو الفشل المُسجَّل. المسار الذي يسلكه التشغيل هو ما يحدّد ظهور العيب، ولذلك نجح البرهان الشامل أحيانًا. اكتشفته الآلية نفسها التي بُنيت له: كناري البوّابة، خارج Vitest، رفض تشغيل المصفوفة. الحارس الآن يحافظ على عدد الوسائط، والقاعدة تُختبَر مباشرة وسيطًا وسيطًا بدل الاعتماد على المسار.`
+
 ## 11b. What the first trustworthy CI run then found — a leak assertion that was right about the rule and wrong about the string
 
 With the runner able to report failure, the first CI run turned the P2-S6 gate red on one test in an accepted slice: `accounting-periods-closed-books.test.ts` → *the refusal names no table, constraint or SQLSTATE*.
