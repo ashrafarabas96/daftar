@@ -172,6 +172,23 @@ describe('a STOLEN reconciler credential (§28)', () => {
     await stolen.connect();
   });
 
+  /**
+   * The two cases below need at least one business to exist, and they must
+   * not borrow one from whatever else ran first. Asserting on ambient data
+   * makes a security test answer "the credential can read across businesses"
+   * when what it actually observed was that some other suite had left rows
+   * behind — and answer nothing at all, loudly, on a database another file
+   * had just reset. Each case seeds its own.
+   */
+  const seedBusiness = async (slug: string): Promise<void> => {
+    const tenantId = must((await ownerPool().query<{ id: string }>(`INSERT INTO tenants DEFAULT VALUES RETURNING id`)).rows[0]).id;
+    await ownerPool().query(
+      `INSERT INTO businesses (tenant_id, name, store_slug, country_code, base_currency, timezone)
+       VALUES ($1, 'Reconciler Fixture', $2, 'PS', 'ILS', 'Asia/Hebron')`,
+      [tenantId, `${slug}-${Date.now()}-${Math.floor(Math.random() * 1e6)}`],
+    );
+  };
+
   const refused = async (sql: string, params: unknown[] = []): Promise<string> => {
     try {
       await stolen.query(sql, params);
@@ -188,6 +205,7 @@ describe('a STOLEN reconciler credential (§28)', () => {
    * application changes it. The value of the separation is everything below.
    */
   it('can, by design, read accounting data across businesses — this is stated, not hidden', async () => {
+    await seedBusiness('stolen-reads');
     const { rows } = await stolen.query<{ n: string }>(`SELECT count(*)::text AS n FROM accounting_reconcile_businesses(NULL, NULL, 1000)`);
     expect(Number(must(rows[0]).n)).toBeGreaterThan(0);
   });
@@ -252,6 +270,7 @@ describe('a STOLEN reconciler credential (§28)', () => {
         WHERE n.nspname = 'public' AND p.proname = 'accounting_reconcile_businesses'`,
     );
     expect(must(rows[0]).args).toBe('uuid, uuid, integer');
+    await seedBusiness('stolen-tunnel');
     const bounded = await stolen.query<{ n: string }>(`SELECT count(*)::text AS n FROM accounting_reconcile_businesses(NULL, NULL, 100000)`);
     const all = await stolen.query<{ n: string }>(`SELECT count(*)::text AS n FROM accounting_reconcile_businesses(NULL, NULL, NULL)`);
     // A caller-supplied limit cannot exceed the routine's own ceiling, so an

@@ -66,9 +66,9 @@ export const ACCOUNTING_METRICS = {
  *
  * Lowercase words, digits, dots, colons, dashes and underscores, up to 64
  * characters. `manual_adjustment`, `R-ACC-03`, `discrepancy` and
- * `accounting.reconciliation_unavailable:accounts` all pass. A UUID fails on
- * length grounds only by accident, so identifiers are refused by name below
- * instead of hoping a pattern catches them.
+ * `accounting.reconciliation_unavailable:accounts` all pass. This pattern is
+ * about SHAPE and says nothing about content — a UUID satisfies it — so the
+ * values that are data rather than a kind are refused separately, below.
  */
 const SAFE_LABEL_VALUE = /^[A-Za-z0-9][A-Za-z0-9._:+-]{0,63}$/;
 
@@ -109,16 +109,49 @@ const FORBIDDEN_LABELS = new Set([
   'secret',
 ]);
 
+/**
+ * Label names are compared with the separators removed.
+ *
+ * `fx_rate`, `fxRate` and `FX-RATE` are the same label, and a list written in
+ * one spelling refuses only that spelling. This was not hypothetical: the
+ * list below contained `fx_rate` and the redaction suite passed `fxRate`
+ * straight through it.
+ */
+const normalizeLabelName = (key: string): string => key.toLowerCase().replace(/[^a-z0-9]/g, '');
+const FORBIDDEN_NAMES = new Set([...FORBIDDEN_LABELS].map(normalizeLabelName));
+
+/**
+ * Values that are data rather than a kind, whatever the label is called.
+ *
+ * The dangerous case is not a label named `business_id` — nobody writes that
+ * after reading the list above. It is a label named `scope` whose value is a
+ * UUID, or a label named `detail` whose value is an amount in minor units.
+ * Both produce an unbounded set of time series, and both put a merchant's
+ * data on an endpoint that is usually less protected than the database.
+ *
+ * A bare number is refused from four digits up: a kind is not a quantity, and
+ * `50000` under any label name is a figure the journal owns.
+ */
+const IDENTIFIER_SHAPED: readonly { readonly pattern: RegExp; readonly what: string }[] = [
+  { pattern: /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i, what: 'a UUID' },
+  { pattern: /^(0x)?[0-9a-f]{16,}$/i, what: 'a hexadecimal identifier or digest' },
+  { pattern: /^[0-9]{4,}$/, what: 'a bare number, which is a quantity rather than a kind' },
+];
+
 export class MetricsContractError extends Error {}
 
 export function assertSafeLabels(name: string, labels: MetricLabels): void {
   for (const [key, value] of Object.entries(labels)) {
-    const lower = key.toLowerCase();
-    if (FORBIDDEN_LABELS.has(lower)) {
+    if (FORBIDDEN_NAMES.has(normalizeLabelName(key))) {
       throw new MetricsContractError(`metric ${name} may not be labelled by ${key}: it is an identifier or a financial value`);
     }
     if (!SAFE_LABEL_VALUE.test(value)) {
       throw new MetricsContractError(`metric ${name} label ${key} carries a value that is not a bounded kind`);
+    }
+    for (const { pattern, what } of IDENTIFIER_SHAPED) {
+      if (pattern.test(value)) {
+        throw new MetricsContractError(`metric ${name} label ${key} carries ${what}, which is data rather than a kind`);
+      }
     }
   }
 }
