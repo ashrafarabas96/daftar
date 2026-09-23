@@ -24,11 +24,18 @@
  *
  * Every section below exists for one of those.
  *
- * P2-S6 is a CANDIDATE: `0049_accounting_periods.sql` is NOT frozen, no
- * `0050` exists, and this gate FAILS if either changes before the Tech Lead
- * accepts the slice. Once accepted, the candidate-era rules come out with the
- * candidacy — an accepted historical gate that forbids its successor is a
- * gate that stops the project.
+ * P2-S6 was ACCEPTED by the Tech Lead at head 74162f04bb5c54a918bd42441f8,
+ * exact-SHA workflow 35852844774, and 0049 was frozen at that acceptance. This
+ * gate is therefore PERMANENT: it no longer asks whether a candidate is still
+ * unfrozen, it proves the accepted bytes are still the accepted bytes. It
+ * carries 0049's accepted digest as an independent second source and requires
+ * the file to hash to it BOTH on disk and in the manifest, so one commit
+ * cannot move a migration and its recorded hash together.
+ *
+ * The candidate-era rules are gone with the candidacy: this gate has no
+ * opinion about whether a 0050 exists or how far the frozen boundary has since
+ * moved. An accepted historical gate that forbids its successor is a gate that
+ * stops the project. Every substantive protection stays.
  *
  * It COMPOSES rather than duplicates: P2-S5's gate runs unchanged, and it
  * composes P2-S4, P2-S3, P2-S2, P2-S1 and Phase 1 in turn, so the whole chain
@@ -50,11 +57,21 @@ const MIGRATIONS_DIR = join(ROOT, 'infrastructure/database/migrations');
 const LIST_ONLY = process.argv.slice(2).includes('--list');
 const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 
-/** The ONE migration this slice owns. A candidate, and the last file. */
+/** The ONE migration this slice owns, now accepted history. */
 const S6_MIGRATION = '0049_accounting_periods.sql';
 
-/** The frozen boundary this slice starts from, exactly. */
-const FROZEN_THROUGH = '0048_accounting_fx_rates.sql';
+/**
+ * The ACCEPTED digest, carried here as an independent second source so the
+ * manifest cannot be the only witness to what was accepted.
+ */
+const S6_ACCEPTED = '454a52183f8666f88bbf17b87b4b44e6413114af069149d2eb2489854307d851';
+
+/**
+ * A FLOOR, never an equality: P2-S6 is frozen, so the boundary is at least
+ * here. A later authorized slice moves it further, and this gate must not be
+ * the thing that stops it.
+ */
+const FROZEN_THROUGH_AT_LEAST = '0049_accounting_periods.sql';
 
 /** The two tables the slice owes (§11, §18). */
 const S6_TABLES = ['accounting_periods', 'accounting_period_operations'] as const;
@@ -209,43 +226,50 @@ const PERIOD_DOCS = [
 
 const readIfPresent = (path: string): string | null => (existsSync(join(ROOT, path)) ? readFileSync(join(ROOT, path), 'utf8') : null);
 
-// ── 1. The candidate boundary ──────────────────────────────────────────────
+// ── 1. Migration boundary ──────────────────────────────────────────────────
 //
-// 0049 exists, is UNFROZEN, is the last migration, and every frozen
-// predecessor is still byte-identical. This section is the candidate-era one:
-// it comes out when the Tech Lead accepts the slice and 0049 is frozen.
+// The accepted migration is present, frozen at the digest it was accepted at,
+// and every frozen predecessor is still byte-identical. Nothing here has an
+// opinion about a later authorized migration.
 function checkMigrationBoundary(): void {
-  console.log('P2-S6 GATE — the candidate boundary');
+  console.log('P2-S6 GATE — accepted history');
   const files = sqlFiles();
 
   if (files.includes(S6_MIGRATION)) ok(`${S6_MIGRATION} present`);
-  else fail('s6-migration', `${S6_MIGRATION} is missing — P2-S6 is the slice that creates it (§8)`);
-
-  // §8: exactly one new migration. Not two, and not a 0050 "while we are here".
-  const beyond = files.filter((f) => f > S6_MIGRATION);
-  if (beyond.length > 0) fail('scope', `migrations beyond ${S6_MIGRATION} exist: ${beyond.join(', ')} — P2-S6 creates exactly one, and no 0050 (§8)`);
-  else ok(`${S6_MIGRATION} is the last migration — no 0050 exists (§8)`);
+  else fail('s6-migration', `${S6_MIGRATION} is missing — it is accepted history and may never be deleted`);
 
   const manifest = JSON.parse(readFileSync(join(ROOT, 'infrastructure/database/MIGRATION_MANIFEST.json'), 'utf8')) as {
     frozenThrough: string;
     migrations: { name: string; sha256: string }[];
   };
 
-  // §49: the candidate is NOT frozen. Freezing it is the Tech Lead's act, not
-  // a step of the work, and a slice that froze its own migration would have
-  // certified itself.
-  if (manifest.frozenThrough !== FROZEN_THROUGH) {
+  if (manifest.frozenThrough < FROZEN_THROUGH_AT_LEAST) {
+    fail('accepted-history', `frozenThrough is ${manifest.frozenThrough} — P2-S6 was accepted and frozen, so it must be at least ${FROZEN_THROUGH_AT_LEAST}`);
+  } else {
+    ok(`frozenThrough = ${manifest.frozenThrough} — at or beyond the P2-S6 acceptance boundary`);
+  }
+
+  const recorded = new Map(manifest.migrations.map((m) => [m.name, m.sha256] as const));
+  const inManifest = recorded.get(S6_MIGRATION);
+  if (inManifest === undefined) {
+    fail('accepted-history', `${S6_MIGRATION} is not recorded in MIGRATION_MANIFEST.json — P2-S6 was accepted, so its migration is frozen history`);
+  } else if (inManifest !== S6_ACCEPTED) {
     fail(
-      'candidate',
-      `frozenThrough is ${manifest.frozenThrough} — while P2-S6 is under review it must be exactly ${FROZEN_THROUGH}, because 0049 is a candidate (§49)`,
+      'accepted-history',
+      `${S6_MIGRATION} is recorded at ${inManifest.slice(0, 12)}… but was accepted at ${S6_ACCEPTED.slice(0, 12)}… — the manifest disagrees with the acceptance`,
     );
   } else {
-    ok(`frozenThrough = ${FROZEN_THROUGH} — the P2-S6 candidate is not frozen (§49)`);
-  }
-  if (manifest.migrations.some((m) => m.name === S6_MIGRATION)) {
-    fail('candidate', `${S6_MIGRATION} is recorded in MIGRATION_MANIFEST.json — a candidate under review is not frozen history (§49)`);
-  } else {
-    ok(`${S6_MIGRATION} is absent from the manifest — it is a candidate (§49)`);
+    const onDisk = createHash('sha256')
+      .update(readFileSync(join(MIGRATIONS_DIR, S6_MIGRATION)))
+      .digest('hex');
+    if (onDisk !== S6_ACCEPTED) {
+      fail(
+        'accepted-history',
+        `${S6_MIGRATION} hashes to ${onDisk.slice(0, 12)}… on disk but was accepted at ${S6_ACCEPTED.slice(0, 12)}… — accepted bytes are immutable`,
+      );
+    } else {
+      ok(`${S6_MIGRATION} is frozen at its accepted digest, on disk and in the manifest`);
+    }
   }
 
   // Every frozen predecessor still hashes to what the manifest recorded. The
@@ -266,13 +290,6 @@ function checkMigrationBoundary(): void {
     }
   }
   if (drifted === 0) ok(`all ${manifest.migrations.length} frozen migrations are byte-for-byte what the manifest recorded`);
-
-  if (files.includes(S6_MIGRATION)) {
-    const digest = createHash('sha256')
-      .update(readFileSync(join(MIGRATIONS_DIR, S6_MIGRATION)))
-      .digest('hex');
-    ok(`${S6_MIGRATION} candidate digest ${digest}`);
-  }
 }
 
 // ── 2. The period's physical shape (§11, §12, §13, §15) ────────────────────
@@ -1372,7 +1389,7 @@ function runSteps(): void {
 
 if (LIST_ONLY) {
   console.log('P2-S6 GATE plan:');
-  console.log('  structural: 0049 present, UNFROZEN, absent from the manifest, the last migration; every frozen predecessor byte-identical');
+  console.log('  structural: 0049 present and frozen at its accepted digest on disk AND in the manifest; every frozen predecessor byte-identical');
   console.log('  structural: the period’s columns, civil-date boundaries, closed status vocabulary, finite range and composite ownership');
   console.log('  structural: non-overlap is a real gist EXCLUDE, and btree_gist comes from bootstrap without widening the migration principal');
   console.log('  structural: no DELETE path, no boundary move, no identity exemption, an append-only operation registry, no generic PATCH');

@@ -781,14 +781,18 @@ describe('migration upgrade path: pre-encryption schema → latest (§13–16)',
         { t: 'accounting_periods', g: 'daftar_app', p: 'SELECT' },
       ]);
 
-      // §49 — 0049 is a CANDIDATE. The manifest must not carry it, and the
-      // freeze boundary must still be 0048, whatever this database now holds.
+      // 0049 was ACCEPTED and FROZEN at the accepted digest. The manifest
+      // carries it, the boundary is at least here, and the accepted bytes are
+      // still the accepted bytes — a floor rather than an equality, so a later
+      // authorized slice can move the boundary without breaking this matrix.
       const manifest = JSON.parse(readFileSync(join(__dirname, '../../infrastructure/database/MIGRATION_MANIFEST.json'), 'utf8')) as {
         frozenThrough: string;
         migrations: { name: string; sha256: string }[];
       };
-      expect(manifest.frozenThrough).toBe('0048_accounting_fx_rates.sql');
-      expect(manifest.migrations.some((m) => m.name === '0049_accounting_periods.sql')).toBe(false);
+      expect(manifest.frozenThrough >= '0049_accounting_periods.sql').toBe(true);
+      expect(manifest.migrations.find((m) => m.name === '0049_accounting_periods.sql')?.sha256).toBe(
+        '454a52183f8666f88bbf17b87b4b44e6413114af069149d2eb2489854307d851',
+      );
 
       // Second run does nothing.
       expect(await runMigrations(url7)).toEqual([]);

@@ -226,9 +226,12 @@ function checkSurfaces(): void {
   if (/accounting\.reversal_exists/.test(s4)) ok('the uniqueness refusal is mapped to accounting.reversal_exists, never a raw duplicate-key error (§14)');
   else fail('reversal-uniqueness', 'nothing maps the reversal uniqueness violation to accounting.reversal_exists (§14)');
 
-  // §24: exactly one POSTED opening balance per business, enforced physically.
+  // §24: at most one CURRENT set with status = 'posted' per business at any
+  // instant, enforced physically. Never a lifetime cap: AL-13 is
+  // draft → posted → reversal → superseded, so a business may post again
+  // once the standing set has been reversed, and the superseded history stays.
   if (/CREATE\s+UNIQUE\s+INDEX[\s\S]{0,200}?ON\s+accounting_opening_balances\s*\(\s*business_id\s*\)\s*WHERE\s+status\s*=\s*'posted'/i.test(s4)) {
-    ok("a partial UNIQUE (business_id) WHERE status = 'posted' makes two posted opening balances impossible (§24)");
+    ok("a partial UNIQUE (business_id) WHERE status = 'posted' makes two CURRENT posted opening balances impossible (§24)");
   } else {
     fail('opening-uniqueness', 'accounting_opening_balances has no partial unique index on the posted status — the rule would be advisory (§24)');
   }

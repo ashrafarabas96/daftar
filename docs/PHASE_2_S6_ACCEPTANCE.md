@@ -1,8 +1,8 @@
 # DAFTAR — P2-S6 Acceptance / قبول الشريحة السادسة من المرحلة الثانية
 
-> **What this is.** The evidence page for slice **P2-S6 — accounting periods**, submitted as a **CANDIDATE** for Tech Lead review. It states what is enforced by a mechanism and covered by a test, and, just as deliberately, what is not.
+> **What this is.** The evidence page for slice **P2-S6 — accounting periods**, **ACCEPTED by the Tech Lead and FROZEN**. It states what is enforced by a mechanism and covered by a test, and, just as deliberately, what is not.
 >
-> **ما هذه الوثيقة.** سجل أدلة الشريحة P2-S6، مُقدَّمة كمرشّحة للمراجعة. العمود الحاسم هو الحالة: **ENFORCED** يعني أن قاعدة البيانات أو الـCI ترفض المخالفة اليوم ويوجد اختبار يثبت ذلك. تبني هذه الشريحة الفترات المحاسبية: مدى زمني للمنشأة يمكن إغلاقه، فترفض قاعدة البيانات أي قيد جديد بتاريخ داخله. لا ميزان مراجعة، ولا أرصدة، ولا إقفال سنوي، ولا تقارير.
+> **ما هذه الوثيقة.** سجل أدلة الشريحة P2-S6، وقد **قبلها القائد التقني وجُمِّد ترحيلها**. العمود الحاسم هو الحالة: **ENFORCED** يعني أن قاعدة البيانات أو الـCI ترفض المخالفة اليوم ويوجد اختبار يثبت ذلك. تبني هذه الشريحة الفترات المحاسبية: مدى زمني للمنشأة يمكن إغلاقه، فترفض قاعدة البيانات أي قيد جديد بتاريخ داخله. لا ميزان مراجعة، ولا أرصدة، ولا إقفال سنوي، ولا تقارير.
 
 ## 0. The one sentence that matters
 
@@ -34,13 +34,15 @@ Two of those rules can both stand between a merchant and a new historical openin
 
 `لا تخترع «دفتر» تقويمًا ماليًّا لأحد. المنشأة التي لا فترات لها تبقى على قواعدها كما هي تمامًا، وأول فترة ينشئها التاجر بنفسه هي ما يُفعِّل إدارة الفترات. بعدها يجب أن يقع تاريخ كل قيد جديد داخل فترة مفتوحة واحدة بالضبط، ولا يُعاد كتابة أي قيد سابق أبدًا. الاستثناء الوحيد: الرصيد الافتتاحي المؤرَّخ قبل بداية أقدم فترة يُقبل بلا فترة تغطّيه، لأن الرصيد الافتتاحي سابق للدفاتر بطبيعته؛ ولا يمتد هذا الاستثناء إلى مصدر آخر، ولا إلى تاريخ داخل فترة مغلقة، ولا إلى تاريخ مستقبلي.`
 
-## 1. Candidate migration — P2-S6 is a CANDIDATE, NOT frozen
+## 1. Accepted migration — P2-S6 is ACCEPTED and FROZEN
 
 | migration | SHA-256 | state |
 |---|---|---|
-| `0049_accounting_periods.sql` | `454a52183f8666f88bbf17b87b4b44e6413114af069149d2eb2489854307d851` | **CANDIDATE — not frozen** |
+| `0049_accounting_periods.sql` | `454a52183f8666f88bbf17b87b4b44e6413114af069149d2eb2489854307d851` | **ACCEPTED — frozen** |
 
-`MIGRATION_MANIFEST.json` is unchanged: it still records **49 frozen migrations** with `frozenThrough = 0048_accounting_fx_rates.sql`, and `0049` is deliberately absent from it. There is **no `0050`**. Freezing is the Tech Lead's act on acceptance, not a step of this work — a slice that froze its own migration would have certified itself — and `npm run gate:phase2:s6` FAILS today if the manifest records `0049`, if `frozenThrough` moves, or if any file beyond `0049` appears.
+**Accepted head:** `74162f04bb5c54a918bd42441f871c1e8a05377c` · **accepted exact-SHA workflow:** `35852844774` (workspaces, backend, web-admin, android, hygiene all SUCCESS).
+
+`MIGRATION_MANIFEST.json` now records **50 frozen migrations** with `frozenThrough = 0049_accounting_periods.sql`. From this commit onward `0049` is immutable release history and is never edited again; any schema correction is a NEW migration appended after it. `npm run gate:phase2:s6` is now a **permanent** regression gate: it carries the accepted digest as an independent second source and fails if `0049` hashes to anything else on disk OR in the manifest, and it has no opinion about whether a later authorized migration exists — a historical gate that forbids its successor is a gate that stops the project.
 
 - Branch: `phase/2-accounting-core` · Draft PR: **#2** (stays draft for all of Phase 2)
 - Starting accepted head (P2-S5): `ff382719de5e1e7a20999cc9db9e45ecceea2066`, exact-SHA workflow **35791858358**, all five jobs SUCCESS
@@ -263,7 +265,7 @@ The exception row is the cross-slice correction, and it is worth saying why it i
 - **No fiscal calendar generator, anywhere.** Not in the migration, not in the engine, not as a convenience helper. A function that offered to turn a year into twelve periods is the seam through which DAFTAR eventually guesses a merchant's books, and the gate fails if one appears.
 - **No inventory, sales, purchases, payments, POS, customers or suppliers.**
 - **No FX provider.** P2-S5's limit is unchanged.
-- **No `0050`.**
+- **No `0050` in this slice.** P2-S6 shipped exactly one migration.
 
 ## 11. The stated limit
 
@@ -291,8 +293,8 @@ Plus the extended `migration-upgrade.test.ts` (7 cases) and `migration-portabili
 
 ## 13. Review status
 
-This document has been through two Tech Lead review rounds, and both corrections are recorded above rather than folded in silently. The first found that the period coverage rule made a historical opening balance depend on setup order; the second found that "refuse an entry dated inside a closed period" is not what a close means, and required the closed-books topology in §7b together with the correction of a false statement about opening-balance quantity in §0.
+This document has been through four Tech Lead review rounds, and every correction is recorded above rather than folded in silently. The first found that the period coverage rule made a historical opening balance depend on setup order; the second found that "refuse an entry dated inside a closed period" is not what a close means, and required the closed-books topology in §7b together with the correction of a false statement about opening-balance quantity in §0; the third accepted that topology provisionally; the fourth found that the opening-balance replacement test's NAME was stronger than its assertions, and required the whole lifecycle to be proved rather than the title repaired.
 
-**P2-S6 IS A CANDIDATE AWAITING TECH LEAD REVIEW.** `0049_accounting_periods.sql` is NOT frozen, is absent from `MIGRATION_MANIFEST.json`, and is the last migration in the tree. Nothing here authorizes freezing it, creating a `0050`, or starting P2-S7.
+**P2-S6 IS ACCEPTED AND FROZEN.** Accepted head `74162f04bb5c54a918bd42441f871c1e8a05377c`, accepted exact-SHA workflow `35852844774`. `0049_accounting_periods.sql` is recorded in `MIGRATION_MANIFEST.json` at `454a52183f8666f88bbf17b87b4b44e6413114af069149d2eb2489854307d851` and `frozenThrough = 0049_accounting_periods.sql`, 50 frozen migrations. From here the file is immutable.
 
-`الشريحة P2-S6 مرشّحة وبانتظار مراجعة القائد التقني. الترحيل 0049 غير مجمَّد وغير مُدرَج في السجل، ولا يوجد 0050. لا شيء هنا يأذن بتجميده ولا ببدء الشريحة التالية.`
+`الشريحة P2-S6 مقبولة ومجمَّدة. الترحيل 0049 مُدرَج الآن في السجل ببصمته المقبولة، وعدد الترحيلات المجمَّدة 50، ولا يجوز تعديل الملف بعد اليوم.`
