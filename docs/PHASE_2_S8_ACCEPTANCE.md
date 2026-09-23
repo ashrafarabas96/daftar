@@ -18,7 +18,7 @@ The first half is the Tech Lead's decision, taken as Option B: a seventh databas
 
 | migration | SHA-256 | state |
 |---|---|---|
-| `0051_accounting_reconciler_read.sql` | `cd86976fe4f9b098bd8fde8fd8734f0ed68bdefa27ad399f66cba54d79a86245` | **CANDIDATE — NOT frozen, NOT in the manifest** |
+| `0051_accounting_reconciler_read.sql` | `2086c87564f5f66243ab64753e7c4f5338f896a1e29984ddf8977be8ba7587cc` | **CANDIDATE — NOT frozen, NOT in the manifest** |
 
 `MIGRATION_MANIFEST.json` is **unchanged**: 51 frozen migrations, `frozenThrough = 0050_accounting_report_indexes.sql`. P2-S8 froze nothing and created no `0052`. `gate:phase2:s8` enforces all three as equalities rather than floors, because §44 is a hard stop and a gate that only checks a floor would let the stop be crossed quietly.
 
@@ -41,6 +41,20 @@ The first half is the Tech Lead's decision, taken as Option B: a seventh databas
 **No RLS policy was changed, and none needed to be.** The existing `tenant_membership` and `business_isolation` policies written in `0040`, `0042` and `0049` already admit any principal presenting the right tenant and business scope. A correctly scoped reconciler is therefore admitted by rules that already existed. `app_bypass()` is untouched.
 
 `لم تُعدَّل أي سياسة عزل صفوف، ولم يكن ذلك ضروريًا: السياسات القائمة منذ 0040 تقبل أي مبدأ يقدّم النطاق الصحيح. و`app_bypass()` كما هي: `daftar_platform` وحدها.`
+
+### 2.1 The assertion block earned its place on the first try
+
+`0051`'s first revision set the enumerator's ownership **before** its privileges. Every superuser-applied suite passed, because a superuser may grant anything. The managed-PostgreSQL portability matrix — which applies the whole history as `daftar_migrator`, with no superuser anywhere in the path — failed, with the migration's own words:
+
+> `accounting.reconciler_authority_invalid: daftar_reconciler may execute exactly one non-public routine, found 0`
+
+The cause is a PostgreSQL behaviour worth knowing: a `GRANT` issued by a role that does not hold grant option on the object **does not raise**. It emits `WARNING: no privileges were granted` and the transaction commits. A migration runner reads exit statuses, not warnings, so the migration would have "succeeded" on a managed deployment and produced a reconciler that could not execute its own enumerator — and the first sign of it would have been a reconciliation cycle reporting `unavailable` in production.
+
+The fix is the order `0040`, `0045` and `0049` already use: set the privileges first, while the migration principal still owns what it just created, and hand ownership over last. Changing the owner keeps the grants, because PostgreSQL substitutes the new owner wherever the old one appears in the ACL.
+
+Two things are worth taking from this beyond the fix. The assertion block is not ceremony: it is the only reason this was a red CI job instead of a production incident. And a suite that only ever runs as a superuser cannot see a privilege defect at all — the portability matrix exists because the deployment principal is not the one the test suite is most convenient with.
+
+`النسخة الأولى من 0051 نقلت الملكية قبل منح الصلاحيات. نجحت كل الاختبارات التي تُطبَّق بصلاحية المدير، وفشلت مصفوفة PostgreSQL المُدارة التي تطبّق التاريخ بمبدأ الترحيل العادي. السبب أن GRANT من دور لا يملك حقّ المنح لا يُخطئ في PostgreSQL، بل يُصدر تحذيرًا ويُكمل — فكان الترحيل "ينجح" وينتج مبدأ مطابقة لا يستطيع تنفيذ دالّته. أُصلح الترتيب كما في 0040 و0045 و0049. والدرس: كتلة التحقّق داخل الترحيل هي وحدها ما حوّل هذا إلى فشل في CI بدل حادثة في الإنتاج.`
 
 ## 3. The process boundary
 

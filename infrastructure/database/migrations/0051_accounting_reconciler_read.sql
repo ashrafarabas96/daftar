@@ -121,10 +121,29 @@ $$;
 COMMENT ON FUNCTION accounting_reconcile_businesses(UUID, UUID, INTEGER) IS
   'P2-S8 §9/§24. The reconciliation enumerator: returns (tenant_id, business_id) pairs in keyset order so the reconciler can enter a normal RLS scope per business. Returns no name, slug, contact detail or financial value, accepts no caller predicate, and mutates nothing. EXECUTE belongs to daftar_reconciler alone.';
 
-ALTER FUNCTION accounting_reconcile_businesses(UUID, UUID, INTEGER) OWNER TO daftar_accounting_internal;
-
+-- THE ORDER OF THESE THREE STATEMENTS IS LOAD-BEARING, and it is the order
+-- 0040/0045/0049 already use. The privileges are set FIRST, while the
+-- migration principal still owns the function it just created, and ownership
+-- is handed over LAST.
+--
+-- Do it the other way round and a managed deployment breaks silently. A GRANT
+-- issued by a role that does not hold grant option on the object does not
+-- raise: PostgreSQL emits `WARNING: no privileges were granted` and commits
+-- the transaction, so the migration "succeeds" and produces a reconciler that
+-- cannot execute its own enumerator. It is silent because a migration runner
+-- reads exit statuses, not warnings.
+--
+-- That is not a hypothetical. It is exactly what this file did in its first
+-- revision, it passed every superuser-applied suite, and the managed-Postgres
+-- portability matrix — which applies the history as `daftar_migrator`, with
+-- no superuser anywhere — is what caught it, through assertion (e) below.
+-- Changing the owner afterwards keeps the grants: PostgreSQL substitutes the
+-- new owner wherever the old one appears in the ACL, as grantee and as
+-- grantor.
 REVOKE ALL ON FUNCTION accounting_reconcile_businesses(UUID, UUID, INTEGER) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION accounting_reconcile_businesses(UUID, UUID, INTEGER) TO daftar_reconciler;
+
+ALTER FUNCTION accounting_reconcile_businesses(UUID, UUID, INTEGER) OWNER TO daftar_accounting_internal;
 
 -- ─────────────────────────────────────────────────────────────────────────
 -- 4. The reads, column by column (§12, §35).
