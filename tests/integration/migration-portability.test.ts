@@ -75,6 +75,28 @@ function migrationsUpTo(upTo: string): string {
 }
 
 /**
+ * Every migration on disk strictly after `after`.
+ *
+ * The matrices below name the frozen sequence exactly and in order, which is
+ * the point of them: an upgrade from a checkpoint must apply those migrations,
+ * those alone, in that order. What they must NOT do is pin the END of the
+ * sequence, because a slice under review carries an unfrozen candidate the
+ * frozen matrix knows nothing about. A permanent predecessor matrix that
+ * failed the moment an authorized successor existed would not be protecting
+ * the frozen history; it would be forbidding the next slice.
+ *
+ * So the assertion stays an equality — the frozen names, in order — and the
+ * candidates the tree actually carries are appended to the expectation rather
+ * than loosened out of it. If a candidate is frozen later, this returns one
+ * fewer name and the frozen list one more, and the assertion is unchanged.
+ */
+function migrationsAfter(after: string): string[] {
+  return readdirSync(MIGRATIONS_DIR)
+    .filter((f) => f.endsWith('.sql') && f > after)
+    .sort();
+}
+
+/**
  * A pool on a scratch database, with the error listener `pg` requires.
  *
  * Every case here ends by dropping its database `WITH (FORCE)`, which
@@ -198,6 +220,7 @@ describe('managed PostgreSQL: 0039 → 0049 under a non-superuser migration prin
         '0047_accounting_opening_balances.sql',
         '0048_accounting_fx_rates.sql',
         '0049_accounting_periods.sql',
+        ...migrationsAfter('0049_accounting_periods.sql'),
       ]);
 
       // The ALTER FUNCTION ownership transfer was legitimate, not bypassed.
@@ -377,6 +400,7 @@ describe('managed PostgreSQL: 0039 → 0049 under a non-superuser migration prin
         '0047_accounting_opening_balances.sql',
         '0048_accounting_fx_rates.sql',
         '0049_accounting_periods.sql',
+        ...migrationsAfter('0049_accounting_periods.sql'),
       ]);
       expect(await runMigrations(migratorUrl)).toEqual([]);
 

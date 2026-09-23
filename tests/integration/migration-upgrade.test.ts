@@ -47,6 +47,28 @@ function migrationsUpTo(upTo: string): string {
 }
 
 /**
+ * Every migration on disk strictly after `after`.
+ *
+ * The matrices below name the frozen sequence exactly and in order, which is
+ * the point of them: an upgrade from a checkpoint must apply those migrations,
+ * those alone, in that order. What they must NOT do is pin the END of the
+ * sequence, because a slice under review carries an unfrozen candidate the
+ * frozen matrix knows nothing about. A permanent predecessor matrix that
+ * failed the moment an authorized successor existed would not be protecting
+ * the frozen history; it would be forbidding the next slice.
+ *
+ * So the assertion stays an equality — the frozen names, in order — and the
+ * candidates the tree actually carries are appended to the expectation rather
+ * than loosened out of it. If a candidate is frozen later, this returns one
+ * fewer name and the frozen list one more, and the assertion is unchanged.
+ */
+function migrationsAfter(after: string): string[] {
+  return readdirSync(MIGRATIONS_DIR)
+    .filter((f) => f.endsWith('.sql') && f > after)
+    .sort();
+}
+
+/**
  * Every scratch database in this suite is torn down with
  * `DROP DATABASE ... WITH (FORCE)`, which terminates whatever backend is still
  * attached. `pg` surfaces that termination on the POOL, and a pool with no
@@ -286,6 +308,7 @@ describe('migration upgrade path: pre-encryption schema → latest (§13–16)',
         '0047_accounting_opening_balances.sql',
         '0048_accounting_fx_rates.sql',
         '0049_accounting_periods.sql',
+        ...migrationsAfter('0049_accounting_periods.sql'),
       ]);
 
       // Every existing business now holds all 21 required system accounts,
@@ -424,6 +447,7 @@ describe('migration upgrade path: pre-encryption schema → latest (§13–16)',
         '0047_accounting_opening_balances.sql',
         '0048_accounting_fx_rates.sql',
         '0049_accounting_periods.sql',
+        ...migrationsAfter('0049_accounting_periods.sql'),
       ]);
 
       // The closed registries came out with the shape the slice specifies:

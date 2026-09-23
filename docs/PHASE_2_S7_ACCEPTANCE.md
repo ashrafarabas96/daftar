@@ -174,6 +174,35 @@ So `0050` creates exactly two indexes and nothing else:
 
 **This measurement is not the P2-S8 performance gate.** There is no latency budget here and no throughput target; the only question it answers is whether the planner can reach one account's lines without reading the whole journal.
 
+## 11a. A defect found during this slice that is not about this slice — the runner could not always report failure
+
+This was found while verifying the P2-S7 gate and it invalidates nothing less than the way every gate in this repository reaches a verdict, so it is recorded here rather than mentioned in passing.
+
+**What was wrong.** `npx vitest run` could leave with status 0 while its own output said `Tests  10 failed`.
+
+**Why.** `embedded-postgres` registers a graceful-shutdown hook at import time through `async-exit-hook`, and `async-exit-hook` subscribes to `beforeExit` with a hardcoded exit code of zero:
+
+```
+add.hookEvent('beforeExit', 0);                      // async-exit-hook/index.js
+process.nextTick(process.exit.bind(null, code));     // code === 0
+```
+
+`beforeExit` fires when the event loop drains naturally. At that moment Vitest has already recorded its verdict the only way it can, by setting `process.exitCode = 1`, but has not yet reached its own exit path. An explicit argument to `process.exit` overwrites `process.exitCode`, so the 1 was erased.
+
+The hook is registered on import, not on use, so it applied in CI as well, where a real PostgreSQL service is reached and no embedded cluster is ever started.
+
+**Why it survived.** Which path ran first was a race between the shutdown hook and Vitest's own teardown, so the failure was reported some of the time and swallowed the rest. A defect that lies intermittently is worse than one that lies always, because the times it tells the truth are taken as proof that it can be trusted.
+
+**What it meant.** Phase 1's gate, P2-S1 through P2-S7, `test:integration` and `test:golden` all decide PASS or FAIL from that exit status. A green verdict issued before this fix is not, by itself, evidence that the suites behind it passed.
+
+**The fix** (`tests/helpers/exit-code.ts`) refuses exactly one transition: an explicit zero may not lower a non-zero `process.exitCode`. Nothing else changes — a clean run still exits 0, an explicit non-zero code is still honoured, and a caller may still raise the code. The direction is the point: the guard can only preserve a failure that was already recorded. It cannot create one and it cannot hide one. The shutdown hook itself is left in place, because reaping the cluster is wanted; only the hardcoded zero is made harmless.
+
+**The evidence.** `tests/integration/runner-exit-code.test.ts` starts a real child `vitest run`, under a configuration identical to the root one except for which files it collects, and reads the status a shell would read: non-zero over `failing.fixture.ts`, zero over `passing.fixture.ts`.
+
+That proof is circular in the one case that matters most — a runner that cannot report failure cannot report *that* failure either — so the P2-S7 gate makes the same check itself, in a process that is not Vitest, from the exit status directly, and makes it **first**: if the canary comes back 0, the gate refuses to run the regression matrix at all and says that no test result in the run is evidence.
+
+`عيب وُجد أثناء هذه الشريحة ولا يخصّها وحدها: كان مشغّل الاختبارات قادرًا على الخروج بحالة نجاح رغم فشل اختبارات، لأن خطّاف إغلاق في embedded-postgres ينادي process.exit(0) فيمحو رمز الفشل الذي سجّله Vitest. وكل بوّابات المستودع تقرّر حكمها من حالة الخروج هذه. الإصلاح يمنع انتقالًا واحدًا فقط: الصفر لا يمحو فشلًا مُسجَّلًا. والبرهان يشغّل المشغّل نفسه على ملف فاشل عمدًا، وبوّابة P2-S7 تعيد البرهان من خارج Vitest قبل أن تصدّق أي نتيجة في تشغيلها.`
+
 ## 12. Test inventory
 
 | suite | what it proves |
@@ -186,6 +215,7 @@ So `0050` creates exactly two indexes and nothing else:
 | `packages/accounting/test/reports.test.ts` | the normal-balance rule over all five types, exact-integer parsing, the cursor codec and the page bound |
 | `tests/performance/accounting-read-plans.test.ts` | the query plans the index decision rests on |
 | `tests/integration/accounting-guards.test.ts` | G-3's discovered watched set and G-6, each asserted to fire as well as to pass |
+| `tests/integration/runner-exit-code.test.ts` | that a failing `vitest run` leaves with a non-zero status, and a clean one with zero — the property every gate verdict in this repository rests on (§11a) |
 
 ## 13. Review status
 
