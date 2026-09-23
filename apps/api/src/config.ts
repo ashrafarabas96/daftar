@@ -20,8 +20,15 @@ const EnvSchema = z
     //  - merchant-api: merchant surface only (app/identity/resolver DB roles)
     //  - platform-api: super-admin surface (platform + identity-read DB roles)
     //  - worker:       credential delivery + outbox (worker DB role, key ring, SMTP)
+    //  - reconciler:   accounting reconciliation ONLY (reconciler DB role, no
+    //                  HTTP surface, no delivery secrets) — P2-S8 §6/§7. It is
+    //                  a separate mode rather than a provider inside the worker
+    //                  because delivery authority is not financial authority:
+    //                  the worker already holds the credential key ring and the
+    //                  SMTP credential, and a process that reads every
+    //                  business's ledger must not also hold those.
     //  - all:          single-process deployment (small installs, dev/test)
-    PROCESS_MODE: z.enum(['merchant-api', 'platform-api', 'worker', 'all']).default('all'),
+    PROCESS_MODE: z.enum(['merchant-api', 'platform-api', 'worker', 'reconciler', 'all']).default('all'),
     PORT: z.coerce.number().int().min(0).max(65535).default(3000), // 0 = ephemeral (tests)
     // Required for HTTP modes; the WORKER process must not receive it (§XXVIII).
     APP_DATABASE_URL: z.string().min(1).optional(),
@@ -49,6 +56,9 @@ const EnvSchema = z
       .regex(/^[A-Za-z0-9_-]{1,32}$/)
       .optional(),
     WORKER_DATABASE_URL: z.string().min(1).optional(),
+    // P2-S8 §6: the reconciliation principal (daftar_reconciler). Read-only by
+    // grant, and the ONLY database authority the reconciler process receives.
+    RECONCILER_DATABASE_URL: z.string().min(1).optional(),
     // Required for HTTP modes; the WORKER process must not receive it (§XXVIII).
     JWT_SECRET: z.string().min(32).optional(),
     // §56–60: JWT key ring — JSON array [{kid, secret, status:'active'|'previous'}].
@@ -101,15 +111,58 @@ const EnvSchema = z
     LOG_LEVEL: z.string().default('info'),
   })
   .superRefine((c, ctx) => {
-    if (c.NODE_ENV !== 'production') return;
     const fail = (path: string, message: string): void => {
       ctx.addIssue({ code: z.ZodIssueCode.custom, path: [path], message });
     };
     const mode = c.PROCESS_MODE;
+
+    // ── P2-S8 §7: the reconciler's environment, checked in EVERY environment ─
+    // The rest of this function only runs in production, because the other
+    // modes accept dev conveniences. The reconciler has none. A process that
+    // may read every business's ledger must not be able to hold the delivery
+    // key ring, the SMTP credential, an assertion signing key or any other
+    // runtime database credential — not in production, not in a staging box,
+    // and not on a laptop where the habit would be formed. So this separation
+    // is a property of the mode rather than of NODE_ENV.
+    if (mode === 'reconciler') {
+      if (!c.RECONCILER_DATABASE_URL) {
+        fail('RECONCILER_DATABASE_URL', 'PROCESS_MODE=reconciler requires the reconciler DB URL (daftar_reconciler role) — there is no fallback');
+      }
+      for (const n of [
+        'APP_DATABASE_URL',
+        'PLATFORM_DATABASE_URL',
+        'IDENTITY_DATABASE_URL',
+        'RESOLVER_DATABASE_URL',
+        'PROVISIONER_DATABASE_URL',
+        'WORKER_DATABASE_URL',
+        'PROVISIONING_ASSERTION_KEY',
+        'ACCOUNTING_ASSERTION_KEY',
+        'CREDENTIAL_PAYLOAD_KEY',
+        'CREDENTIAL_PAYLOAD_KEYS',
+        'CREDENTIAL_KMS_ENDPOINT',
+        'CREDENTIAL_KMS_TOKEN',
+        'SMTP_URL',
+        'JWT_SECRET',
+        'JWT_KEYS',
+        'S3_ACCESS_KEY_ID',
+        'S3_SECRET_ACCESS_KEY',
+      ] as const) {
+        if (c[n]) {
+          fail(n, 'must NOT be set in PROCESS_MODE=reconciler (reconciliation is a read-only accounting authority and holds no other credential)');
+        }
+      }
+    } else if (c.RECONCILER_DATABASE_URL && mode !== 'all') {
+      // The converse, and the one that matters most for §15: no HTTP runtime
+      // and no delivery worker may quietly acquire the credential that can
+      // read every business's ledger.
+      fail('RECONCILER_DATABASE_URL', `must NOT be set in PROCESS_MODE=${mode} (only the reconciler process holds reconciliation authority)`);
+    }
+
+    if (c.NODE_ENV !== 'production') return;
     // §10 (Stabilization): PROCESS_MODE=all is a dev/test convenience ONLY —
     // production must deploy the separated runtimes.
     if (mode === 'all') fail('PROCESS_MODE', 'PROCESS_MODE=all is forbidden in production (dev/test only)');
-    if (mode !== 'worker') {
+    if (mode !== 'worker' && mode !== 'reconciler') {
       if (!c.JWT_SECRET && !c.JWT_KEYS) fail('JWT_SECRET', `${mode} requires JWT_SECRET or JWT_KEYS`);
     }
     if (mode === 'all' || mode === 'merchant-api') {
@@ -269,6 +322,7 @@ const EnvSchema = z
       IDENTITY_DATABASE_URL: c.IDENTITY_DATABASE_URL,
       RESOLVER_DATABASE_URL: c.RESOLVER_DATABASE_URL,
       WORKER_DATABASE_URL: c.WORKER_DATABASE_URL,
+      RECONCILER_DATABASE_URL: c.RECONCILER_DATABASE_URL,
     };
     const seen = new Map<string, string>();
     for (const [name, url] of Object.entries(urls)) {

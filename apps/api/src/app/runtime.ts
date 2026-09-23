@@ -5,6 +5,7 @@ import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import type { AppConfig } from '../config';
 import { createLogger } from '../infra/logger';
 import { Database } from '../infra/database';
+import { InMemoryMetrics, METRICS, type Metrics } from '../infra/metrics';
 import { MemoryRateLimiter, RedisRateLimiter, type RateLimiter } from '../infra/redis';
 import { createObjectStorage, DisabledDevelopmentMalwareScanner, type MalwareScanner, type ObjectStorage } from '../infra/storage';
 import { GlobalExceptionFilter } from '../common/error.filter';
@@ -35,6 +36,18 @@ import { AccountingPeriodsService } from '../modules/accounting/accounting-perio
 import { DatabaseAccountingPeriodsAdapter } from '../modules/accounting/accounting-periods.adapter';
 import { AccountingReportsService } from '../modules/accounting/accounting-reports.service';
 import { DatabaseAccountingReportReader } from '../modules/accounting/accounting-reports.reader';
+import {
+  DatabaseAccountingReconciliationReader,
+  ReconcilerConnection,
+  RECONCILIATION_CONNECTION,
+} from '../modules/accounting/accounting-reconciliation.reader';
+import {
+  AccountingReconciliationService,
+  SystemReconciliationClock,
+  RECONCILIATION_CLOCK,
+  RECONCILIATION_READER,
+} from '../modules/accounting/accounting-reconciliation.service';
+import { AccountingReconciliationWorker } from '../modules/accounting/accounting-reconciliation.worker';
 
 /**
  * RUNTIME COMPOSITION (Phase 1 Completion Directive §15–20).
@@ -55,7 +68,12 @@ import { DatabaseAccountingReportReader } from '../modules/accounting/accounting
  *                      platform + identity pools. NO worker secrets, NO
  *                      merchant mutation surface (tenancy/catalog/media).
  *   WorkerModule       NO HTTP. Owns the worker pool, the DECRYPT key
- *                      ring, SMTP delivery and the outbox relay.
+ *                      ring, SMTP delivery and the outbox relay. Owns NO
+ *                      reconciliation: see ReconcilerModule.
+ *   ReconcilerModule   NO HTTP. Owns the reconciler pool and the daily
+ *                      accounting reconciliation pass, and NOTHING else —
+ *                      no delivery transport, no key ring, no outbox sink,
+ *                      no assertion minter (P2-S8 §6).
  *   AppModule ('all')  dev/test single-process composition of everything;
  *                      production config validation REJECTS it (§19).
  *
@@ -72,6 +90,10 @@ export interface RuntimeSeams {
   storage?: ObjectStorage;
   /** Test seam: deterministic credential encryptor (merchant/platform/all). */
   encryptor?: CredentialPayloadEncryptor;
+  /** Test seam: a metrics recorder to assert against (any process). */
+  metrics?: Metrics;
+  /** Test seam: a controllable clock for the daily reconciliation schedule. */
+  reconciliationClock?: { now(): Date };
 }
 
 /** Throttler module import shared by every HTTP surface. */
@@ -80,10 +102,14 @@ export function httpImports() {
 }
 
 /** Config + logger + Database (pools opened per PROCESS_MODE inside Database). */
-export function coreProviders(config: AppConfig): Provider[] {
+export function coreProviders(config: AppConfig, seams: RuntimeSeams = {}): Provider[] {
   return [
     { provide: 'APP_CONFIG', useValue: config },
     { provide: 'LOGGER', useFactory: () => createLogger(config.LOG_LEVEL) },
+    // The metrics port (§28) is core rather than per-surface: a posting
+    // counter lives in the merchant runtime and a reconciliation counter in
+    // the worker, and neither should have to know which process it is in.
+    { provide: METRICS, useFactory: (): Metrics => seams.metrics ?? new InMemoryMetrics() },
     Database,
     { provide: 'HEALTH_CHECK', useFactory: (db: Database) => () => db.healthCheck(), inject: [Database] },
   ];
@@ -203,6 +229,34 @@ export function workerProviders(config: AppConfig, seams: RuntimeSeams): Provide
       useFactory: (logger: ReturnType<typeof createLogger>): OutboxSink => seams.outboxSink ?? new LogSink(logger),
       inject: ['LOGGER'],
     },
+  ];
+}
+
+/**
+ * Reconciler-only authority (P2-S8 §6, §31): the reconciliation reader, the
+ * clock and the daily scheduler.
+ *
+ * These providers exist in NO other process module, and that placement is the
+ * decision this slice turns on. Reconciliation started out as a provider
+ * inside the worker, which was wrong for a reason no amount of care inside
+ * the code would have fixed: the worker already holds the credential
+ * decryption key ring, the SMTP credential and the outbox relay, so putting a
+ * pass that reads every business's ledger beside them would have made one
+ * compromised process both the delivery authority and the financial
+ * inspection authority. Delivery authority is not financial authority, so the
+ * reconciler is its own process with its own database credential.
+ *
+ * The composition is deliberately thin — `coreProviders` plus these — so that
+ * "this process cannot obtain the worker's secrets" is a fact about what is
+ * in the module rather than a fact about what the code chooses to ask for.
+ */
+export function reconcilerProviders(_config: AppConfig, seams: RuntimeSeams): Provider[] {
+  return [
+    { provide: RECONCILIATION_CONNECTION, useClass: ReconcilerConnection },
+    { provide: RECONCILIATION_READER, useClass: DatabaseAccountingReconciliationReader },
+    { provide: RECONCILIATION_CLOCK, useFactory: () => seams.reconciliationClock ?? new SystemReconciliationClock() },
+    AccountingReconciliationService,
+    AccountingReconciliationWorker,
   ];
 }
 

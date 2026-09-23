@@ -9,6 +9,7 @@ import {
   accountingProviders,
   merchantInfraProviders,
   workerProviders,
+  reconcilerProviders,
   type RuntimeSeams,
 } from './runtime';
 import { AuthController } from '../modules/auth/auth.controller';
@@ -60,12 +61,17 @@ export class AppModule implements NestModule {
         AdminController,
       ],
       providers: [
-        ...coreProviders(config),
+        ...coreProviders(config, options),
         ...httpProviders(config, TenancyService),
         ...identityProviders(config, options),
         ...merchantInfraProviders(config, options),
         ...accountingProviders(),
         ...workerProviders(config, options),
+        // Only PROCESS_MODE=all composes the reconciler beside the worker,
+        // and only because this composition exists for dev and tests;
+        // production refuses this mode outright (§19), so the two
+        // authorities never share a process where it matters.
+        ...reconcilerProviders(config, options),
         AdminService,
         TenancyService,
         StructureService,

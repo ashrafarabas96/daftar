@@ -25,6 +25,16 @@ CREATE EXTENSION IF NOT EXISTS btree_gist;
 --   daftar_provisioner narrow provisioning boundary (Stabilization §13–14):
 --                     initial onboarding, additional business creation,
 --                     invitation acceptance. NOTHING else.
+--   daftar_reconciler READ-ONLY financial verification (P2-S8). A seventh
+--                     runtime boundary, and a deliberate one: delivery
+--                     authority and financial reconciliation authority are
+--                     not the same trust boundary, so the credential that
+--                     holds the SMTP transport and the credential decryption
+--                     key ring does not also get to read every business's
+--                     books. It holds SELECT on the accounting estate and
+--                     EXECUTE on ONE narrow enumerator, and nothing else:
+--                     no write anywhere, no financial command, no identity
+--                     table, no key material, no RLS bypass.
 --
 -- INTERNAL, NON-LOGIN principal (P2-S1 authority correction):
 --   daftar_accounting_internal
@@ -85,6 +95,17 @@ BEGIN
   ELSE
     ALTER ROLE daftar_provisioner LOGIN PASSWORD '__PROVISIONER_DB_PASSWORD__';
   END IF;
+  -- Reconciliation runtime (P2-S8). Every negative attribute is re-asserted on
+  -- every run rather than set once at creation: a role that drifts into
+  -- BYPASSRLS on an existing database would turn a scoped verifier into a
+  -- global reader without a single line of the repository changing.
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'daftar_reconciler') THEN
+    CREATE ROLE daftar_reconciler LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION
+      PASSWORD '__RECONCILER_DB_PASSWORD__';
+  ELSE
+    ALTER ROLE daftar_reconciler LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION
+      PASSWORD '__RECONCILER_DB_PASSWORD__';
+  END IF;
   -- Internal accounting authority. NOLOGIN, NOINHERIT, never a password —
   -- re-asserted on every run so an existing database cannot drift into a
   -- seventh login role.
@@ -101,8 +122,8 @@ BEGIN
     ALTER ROLE daftar_migrator LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION PASSWORD '__MIGRATOR_DB_PASSWORD__';
   END IF;
 END $$;
-GRANT CONNECT ON DATABASE daftar TO daftar_app, daftar_platform, daftar_worker, daftar_resolver, daftar_identity, daftar_provisioner;
-GRANT USAGE ON SCHEMA public TO daftar_app, daftar_platform, daftar_worker, daftar_resolver, daftar_identity, daftar_provisioner;
+GRANT CONNECT ON DATABASE daftar TO daftar_app, daftar_platform, daftar_worker, daftar_resolver, daftar_identity, daftar_provisioner, daftar_reconciler;
+GRANT USAGE ON SCHEMA public TO daftar_app, daftar_platform, daftar_worker, daftar_resolver, daftar_identity, daftar_provisioner, daftar_reconciler;
 -- The internal accounting principal gets schema USAGE only. It is NOLOGIN, so
 -- it deliberately receives no CONNECT: nothing can open a session as it. It
 -- gets no CREATE here either — migration 0040 takes CREATE on public only for
@@ -157,7 +178,7 @@ DECLARE
 BEGIN
   EXECUTE format('REVOKE TEMPORARY ON DATABASE %I FROM PUBLIC', v_db);
   EXECUTE format(
-    'REVOKE TEMPORARY ON DATABASE %I FROM daftar_app, daftar_platform, daftar_worker, daftar_resolver, daftar_identity, daftar_provisioner',
+    'REVOKE TEMPORARY ON DATABASE %I FROM daftar_app, daftar_platform, daftar_worker, daftar_resolver, daftar_identity, daftar_provisioner, daftar_reconciler',
     v_db);
   EXECUTE format('REVOKE TEMPORARY ON DATABASE %I FROM daftar_accounting_internal', v_db);
 END $$;
@@ -167,4 +188,4 @@ END $$;
 -- carries the old grant, and a deployment must not depend on which one it got.
 REVOKE CREATE ON SCHEMA public FROM PUBLIC;
 REVOKE CREATE ON SCHEMA public FROM
-  daftar_app, daftar_platform, daftar_worker, daftar_resolver, daftar_identity, daftar_provisioner;
+  daftar_app, daftar_platform, daftar_worker, daftar_resolver, daftar_identity, daftar_provisioner, daftar_reconciler;

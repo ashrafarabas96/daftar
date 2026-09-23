@@ -15,6 +15,7 @@ import {
   RESOLVER_DB_PASSWORD,
   IDENTITY_DB_PASSWORD,
   PROVISIONER_DB_PASSWORD,
+  RECONCILER_DB_PASSWORD,
   MIGRATOR_DB_PASSWORD,
   ensurePostgres,
 } from '../helpers/test-app';
@@ -61,6 +62,7 @@ function bootstrapSql(): string {
     .replaceAll('__RESOLVER_DB_PASSWORD__', RESOLVER_DB_PASSWORD)
     .replaceAll('__IDENTITY_DB_PASSWORD__', IDENTITY_DB_PASSWORD)
     .replaceAll('__PROVISIONER_DB_PASSWORD__', PROVISIONER_DB_PASSWORD)
+    .replaceAll('__RECONCILER_DB_PASSWORD__', RECONCILER_DB_PASSWORD)
     .replaceAll('__MIGRATOR_DB_PASSWORD__', MIGRATOR_DB_PASSWORD);
 }
 

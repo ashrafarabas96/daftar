@@ -34,7 +34,7 @@ export class MerchantApiModule implements NestModule {
       imports: httpImports(),
       controllers: [AuthController, TenancyController, CatalogController, PlatformController, HealthController, EntitlementsController, AccountingController],
       providers: [
-        ...coreProviders(config),
+        ...coreProviders(config, options),
         ...httpProviders(config, TenancyService),
         ...identityProviders(config, options),
         ...merchantInfraProviders(config, options),

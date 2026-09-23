@@ -24,7 +24,12 @@ export class PlatformApiModule implements NestModule {
       module: PlatformApiModule,
       imports: httpImports(),
       controllers: [AuthController, AdminController, HealthController],
-      providers: [...coreProviders(config), ...httpProviders(config, { useValue: NO_MERCHANT_CONTEXT }), ...identityProviders(config, options), AdminService],
+      providers: [
+        ...coreProviders(config, options),
+        ...httpProviders(config, { useValue: NO_MERCHANT_CONTEXT }),
+        ...identityProviders(config, options),
+        AdminService,
+      ],
     };
   }
 

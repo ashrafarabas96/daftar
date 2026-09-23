@@ -27,6 +27,7 @@ export const WORKER_DB_PASSWORD = 'test_worker_password_123';
 export const RESOLVER_DB_PASSWORD = 'test_resolver_password_123';
 export const IDENTITY_DB_PASSWORD = 'test_identity_password_123';
 export const PROVISIONER_DB_PASSWORD = 'test_provisioner_password_123';
+export const RECONCILER_DB_PASSWORD = 'test_reconciler_password_123';
 /** Deployment, not runtime: the schema-migration principal (P2-S1 portability). */
 export const MIGRATOR_DB_PASSWORD = 'test_migrator_password_123';
 /** Blocker 1: the HMAC key the API mints provisioning assertions with; installed in the DB by ensurePostgres(). */
@@ -75,6 +76,7 @@ export const workerDbUrl = `postgresql://daftar_worker:${WORKER_DB_PASSWORD}@loc
 export const resolverDbUrl = `postgresql://daftar_resolver:${RESOLVER_DB_PASSWORD}@localhost:${PG_PORT}/daftar`;
 export const identityDbUrl = `postgresql://daftar_identity:${IDENTITY_DB_PASSWORD}@localhost:${PG_PORT}/daftar`;
 export const provisionerDbUrl = `postgresql://daftar_provisioner:${PROVISIONER_DB_PASSWORD}@localhost:${PG_PORT}/daftar`;
+export const reconcilerDbUrl = `postgresql://daftar_reconciler:${RECONCILER_DB_PASSWORD}@localhost:${PG_PORT}/daftar`;
 /** Never used by the API — only by the migration-portability proof. */
 export const migratorDbUrl = `postgresql://daftar_migrator:${MIGRATOR_DB_PASSWORD}@localhost:${PG_PORT}/daftar`;
 
@@ -100,6 +102,7 @@ async function applyBootstrap(): Promise<void> {
     .replaceAll('__RESOLVER_DB_PASSWORD__', RESOLVER_DB_PASSWORD)
     .replaceAll('__IDENTITY_DB_PASSWORD__', IDENTITY_DB_PASSWORD)
     .replaceAll('__PROVISIONER_DB_PASSWORD__', PROVISIONER_DB_PASSWORD)
+    .replaceAll('__RECONCILER_DB_PASSWORD__', RECONCILER_DB_PASSWORD)
     .replaceAll('__MIGRATOR_DB_PASSWORD__', MIGRATOR_DB_PASSWORD);
   const pool = new Pool({ connectionString: dbUrl, max: 1 });
   try {
@@ -328,6 +331,10 @@ export interface TestAppOptions {
   /** Blocker 4 seam: the merchant-side credential encryptor (KMS bridge stand-in). */
   encryptor?: CredentialPayloadEncryptor;
   storage?: import('../../apps/api/src/infra/storage').ObjectStorage;
+  /** P2-S8 §28 seam: a metrics recorder the test can read back. */
+  metrics?: import('../../apps/api/src/infra/metrics').Metrics;
+  /** P2-S8 §25 seam: a controllable clock for the daily reconciliation schedule. */
+  reconciliationClock?: { now(): Date };
   /** Extra env applied on top of the test config (e.g. TRUST_PROXY, JWT_KEYS). */
   configOverrides?: Record<string, string>;
 }
@@ -356,6 +363,7 @@ export async function createTestApp(options: TestAppOptions = {}): Promise<TestA
     RESOLVER_DATABASE_URL: resolverDbUrl,
     WORKER_DATABASE_URL: workerDbUrl,
     PROVISIONER_DATABASE_URL: provisionerDbUrl,
+    RECONCILER_DATABASE_URL: reconcilerDbUrl,
     PROVISIONING_ASSERTION_KEY: PROVISIONING_ASSERTION_KEY_B64,
     PROVISIONING_ASSERTION_KID,
     ACCOUNTING_ASSERTION_KEY: ACCOUNTING_ASSERTION_KEY_B64,
@@ -374,6 +382,8 @@ export async function createTestApp(options: TestAppOptions = {}): Promise<TestA
         ...(options.outboxSink ? { outboxSink: options.outboxSink } : {}),
         ...(options.encryptor ? { encryptor: options.encryptor } : {}),
         ...(options.storage ? { storage: options.storage } : {}),
+        ...(options.metrics ? { metrics: options.metrics } : {}),
+        ...(options.reconciliationClock ? { reconciliationClock: options.reconciliationClock } : {}),
       }),
     ],
   }).compile();
