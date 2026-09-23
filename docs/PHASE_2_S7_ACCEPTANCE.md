@@ -176,6 +176,33 @@ So `0050` creates exactly two indexes and nothing else:
 
 **This measurement is not the P2-S8 performance gate.** There is no latency budget here and no throughput target; the only question it answers is whether the planner can reach one account's lines without reading the whole journal.
 
+## 11c. A correction to §11 — the measurement was taken inside the region where the planner is in two minds
+
+**This supersedes the "After `0050`" table above for the ledger-page row.** The index decision stands; the evidence for it did not.
+
+The fixture §11 describes spread both lines of every entry evenly across all 21 accounts, so the measured account held about 4.8% of the journal. At that selectivity the two candidate plans cost almost the same:
+
+- reach the account's lines through `journal_lines_business_account_idx`, then order them; or
+- walk `journal_entries` in date order and take the matching line of each, filtering the rest away.
+
+When two plans cost the same, which one PostgreSQL picks is decided by whatever statistics `ANALYZE` happened to sample and by the planner of the version in front of it. The freeze commit proved it: **the same code and the same data produced a green run and a red one with nothing changed in between.** CI runs PostgreSQL 16 and the embedded test server is PostgreSQL 18, and the two chose differently; PostgreSQL 16 chose the entry walk, visiting 527 entries and discarding two lines from each to return fifty rows.
+
+The file's own opening paragraph had warned about exactly this — "a measurement taken there would say more about the fixture than about the product" — and then took the measurement there anyway.
+
+**What changed.** The fixture now has the shape a real ledger has instead of a uniform one. Every manual adjustment moves **cash**, so cash carries half the journal; the other side lands on one of nineteen ordinary accounts, and one designated **sparse** account is touched once in every sixty-four entries — about 0.8% of the journal, which is what a bank-charges or rounding-difference account actually looks like.
+
+The claims are now made where each one is true on any planner:
+
+| read | asserted property | why it is planner-independent |
+|---|---|---|
+| sparse account, first 50 rows | `Index Scan using journal_lines_business_account_idx` | the entry walk would visit thousands of entries to find fifty rows; the index visits about sixty |
+| sparse account, whole history | `Index Scan using journal_lines_business_account_idx` | no `LIMIT` stops it early, so without the index the only way to total one account is to visit every entry |
+| dense account, first 50 rows | never a `Seq Scan on journal_lines` | half the journal is cash, so both plans are genuinely reasonable — asserting one would be asserting a planner's taste, not a property of the product |
+
+**No budget was loosened and no test was removed.** The ledger-page assertion that failed was not deleted; it was moved to the account where it is a statement about the product, and a second assertion was added over the aggregate read, which is the read the index most clearly exists for. Dropping `0050` fails all three rows on either PostgreSQL version.
+
+**The one claim that is now narrower.** §11 implied the account index is what serves *every* single-account read. It is what serves a *selective* one. For an account that carries a large share of the journal, walking the entries by date is a legitimate plan and PostgreSQL 16 prefers it. That is not a defect in `0050` — the index still bounds the worst case, which is the case that gets worse as a merchant trades.
+
 ## 11a. A defect found during this slice that is not about this slice — the runner could not always report failure
 
 This was found while verifying the P2-S7 gate and it invalidates nothing less than the way every gate in this repository reaches a verdict, so it is recorded here rather than mentioned in passing.

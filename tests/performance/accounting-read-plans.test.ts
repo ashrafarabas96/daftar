@@ -33,14 +33,51 @@ const ENTRIES = 4_000;
  * would put 12% of the journal behind each one, which is the one region
  * where the planner's choice is genuinely a toss-up — and a measurement
  * taken there would say more about the fixture than about the product.
+ *
+ * THE SHAPE, AND WHY IT IS NOT UNIFORM (correction, P2-S8 §7 revalidation).
+ *
+ * The first version of this fixture spread both lines of every entry evenly
+ * across all 21 accounts, which gave each account ~4.8% of the journal. That
+ * put the measured account back INSIDE the toss-up region the paragraph above
+ * warns about: at that selectivity, reaching a page through the account index
+ * and walking the entries by date cost the planner almost the same, so which
+ * one it chose was decided by the statistics ANALYZE happened to sample. The
+ * test was green on one run and red on the next with no code change between
+ * them, and a measurement that can flip like that is not evidence.
+ *
+ * So the fixture now has the shape a real ledger has. Every manual adjustment
+ * moves CASH, and the other side lands on one of the remaining accounts: one
+ * dense account carrying half the journal, twenty sparse ones carrying 2.5%
+ * each. The index decision is then measured where it actually matters and
+ * where no planner is in two minds — on a sparse account — and the dense
+ * account is measured too, for the property that holds either way.
  */
 const ACCOUNTS_USED = 21;
+
+/**
+ * One entry in every SPARSE_EVERY posts to the sparse account.
+ *
+ * The number is chosen to sit clearly OUTSIDE the region where the two plans
+ * cost the same, not to make a particular plan win: at roughly 0.8% of the
+ * journal, answering "the first fifty lines of this account" by walking the
+ * entries in date order means visiting thousands of entries to find fifty
+ * rows, while the account index visits about sixty. No cost model is in two
+ * minds about that, which is precisely the point — the assertion must hold on
+ * any planner, not on the one this machine happens to run.
+ *
+ * It is also the shape of a real chart. A merchant's bank-charges or
+ * rounding-difference account is touched a handful of times a year while cash
+ * moves on every entry.
+ */
+const SPARSE_EVERY = 64;
 
 let t: TestApp;
 let businessId: string;
 let tenantId: string;
 let today: string;
 let cashId: string;
+/** A sparse account: the side of the entry that is NOT cash. */
+let sparseId: string;
 const plans: Record<string, PlanSummary> = {};
 
 interface PlanSummary {
@@ -95,7 +132,10 @@ beforeAll(async () => {
     ])
   ).rows;
   cashId = must(accounts.find((a) => a.code === '1000')).id;
-  const accountIds = accounts.map((a) => a.id);
+  const others = accounts.filter((a) => a.id !== cashId);
+  sparseId = must(others[0]).id;
+  /** The nineteen accounts that carry the ordinary traffic. */
+  const busyIds = others.slice(1).map((a) => a.id);
 
   // The journal is seeded in bulk, as the schema owner, because the point of
   // this file is the SHAPE of the data the planner sees: four thousand
@@ -135,14 +175,15 @@ beforeAll(async () => {
       `INSERT INTO journal_lines (tenant_id, business_id, id, journal_entry_id, line_no, account_id,
                                   debit_minor, credit_minor, base_amount_minor, base_currency,
                                   txn_amount_minor, txn_currency, fx_rate, fx_rate_source, fx_rate_at)
-       SELECT $1, $2, gen_random_uuid(), s.entry_id, v.line_no, ($3::uuid[])[v.slot],
+       SELECT $1, $2, gen_random_uuid(), s.entry_id, v.line_no, v.account,
               v.debit, v.credit, 1000 + (s.i % 997), 'ILS', 1000 + (s.i % 997), 'ILS', 1, 'base', date_trunc('second', now())
          FROM seed_ids s
          CROSS JOIN LATERAL (VALUES
-                (1, (s.i % $4::int) + 1, 1000 + (s.i % 997), 0),
-                (2, ((s.i + 3) % $4::int) + 1, 0, 1000 + (s.i % 997))
-              ) AS v(line_no, slot, debit, credit)`,
-      [tenantId, businessId, accountIds, ACCOUNTS_USED],
+                (1, $3::uuid, 1000 + (s.i % 997), 0),
+                (2, CASE WHEN s.i % $6::int = 0 THEN $4::uuid ELSE ($5::uuid[])[(s.i % $7::int) + 1] END,
+                    0, 1000 + (s.i % 997))
+              ) AS v(line_no, account, debit, credit)`,
+      [tenantId, businessId, cashId, sparseId, busyIds, SPARSE_EVERY, busyIds.length],
     );
     await client.query('COMMIT');
   } catch (e) {
@@ -172,17 +213,21 @@ describe('the three reads, under EXPLAIN (ANALYZE, BUFFERS) (§13, §57, §71)',
     expect(must(plans['trial balance']).rows).toBeGreaterThan(0);
   });
 
-  it('measures one page of one account’s ledger', async () => {
-    plans['ledger page'] = await explain(
-      `SELECT l.journal_entry_id, l.line_no, l.debit_minor, l.credit_minor
+  const LEDGER_PAGE = `SELECT l.journal_entry_id, l.line_no, l.debit_minor, l.credit_minor
          FROM journal_lines l
          JOIN journal_entries e ON e.business_id = l.business_id AND e.id = l.journal_entry_id
         WHERE l.business_id = $1 AND l.account_id = $2 AND e.entry_date BETWEEN $3::date AND $4::date
         ORDER BY e.entry_date, l.journal_entry_id, l.line_no
-        LIMIT 50`,
-      [businessId, cashId, '2000-01-01', today],
-    );
+        LIMIT 50`;
+
+  it('measures one page of a SPARSE account’s ledger', async () => {
+    plans['ledger page'] = await explain(LEDGER_PAGE, [businessId, sparseId, '2000-01-01', today]);
     expect(must(plans['ledger page']).rows).toBeGreaterThan(0);
+  });
+
+  it('measures one page of the DENSE account’s ledger', async () => {
+    plans['ledger page (dense)'] = await explain(LEDGER_PAGE, [businessId, cashId, '2000-01-01', today]);
+    expect(must(plans['ledger page (dense)']).rows).toBeGreaterThan(0);
   });
 
   it('measures one keyset page of the entry list', async () => {
@@ -204,7 +249,7 @@ describe('the three reads, under EXPLAIN (ANALYZE, BUFFERS) (§13, §57, §71)',
          FROM journal_lines l
          JOIN journal_entries e ON e.business_id = l.business_id AND e.id = l.journal_entry_id
         WHERE l.business_id = $1 AND l.account_id = $2 AND e.entry_date <= $3::date`,
-      [businessId, cashId, today],
+      [businessId, sparseId, today],
     );
     expect(must(plans['account balance']).rows).toBeGreaterThan(0);
   });
@@ -219,10 +264,41 @@ describe('the three reads, under EXPLAIN (ANALYZE, BUFFERS) (§13, §57, §71)',
    * exactly this line, and if the index were dropped or stopped being
    * chosen, this is what would say so.
    */
-  it('reaches one account\u2019s ledger page without reading the whole journal', () => {
+  it('reaches a sparse account\u2019s ledger page through the account index', () => {
     const plan = must(plans['ledger page']);
     expect(plan.scans.some((s) => s === 'Seq Scan on journal_lines')).toBe(false);
     expect(plan.text).toContain('journal_lines_business_account_idx');
+  });
+
+  /**
+   * And the whole of that account's history, which has no LIMIT to stop it
+   * early. This is the read the index most clearly exists for: without it the
+   * only way to total one account is to visit every entry of the business.
+   */
+  it('totals a sparse account through the account index', () => {
+    const plan = must(plans['account balance']);
+    expect(plan.scans.some((s) => s === 'Seq Scan on journal_lines')).toBe(false);
+    expect(plan.text).toContain('journal_lines_business_account_idx');
+  });
+
+  /**
+   * The dense account, and the honest limit of what can be asserted about it.
+   *
+   * Half this journal is cash, so a page of the cash ledger is reachable both
+   * ways for about the same cost: through the account index, or by walking
+   * the entries in date order and taking the cash line of each. Which one a
+   * planner picks is a version-and-statistics decision, and PostgreSQL 16 and
+   * 18 were observed picking differently on identical data — so asserting a
+   * particular index here would be asserting a planner's taste, not a
+   * property of the product (§38).
+   *
+   * What IS a property, and is asserted: the page must never fall back to
+   * reading the journal's lines end to end. That fails the moment 0050 is
+   * dropped, on either version.
+   */
+  it('never reads the journal end to end for the dense account\u2019s page', () => {
+    const plan = must(plans['ledger page (dense)']);
+    expect(plan.scans.some((s) => s === 'Seq Scan on journal_lines')).toBe(false);
   });
 
   /**
@@ -256,6 +332,6 @@ describe('the three reads, under EXPLAIN (ANALYZE, BUFFERS) (§13, §57, §71)',
       lines.push(`${name.padEnd(16)} rows=${String(plan.rows).padStart(6)}  ${plan.ms.toFixed(2).padStart(8)} ms   ${plan.scans.join(', ')}`);
     }
     console.log(`\nP2-S7 read-plan measurement — ${ENTRIES} entries, ${ENTRIES * 2} lines, ${ACCOUNTS_USED} accounts\n${lines.join('\n')}\n`);
-    expect(Object.keys(plans).length).toBe(4);
+    expect(Object.keys(plans).length).toBe(5);
   });
 });
