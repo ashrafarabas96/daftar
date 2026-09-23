@@ -1,0 +1,62 @@
+{
+  "role": "daftar_reconciler",
+  "purpose": "P2-S8 reconciliation: a read-only accounting inspection authority, held by PROCESS_MODE=reconciler and by nothing else.",
+  "source": "infrastructure/database/migrations/0051_accounting_reconciler_read.sql",
+  "note": "This file is the INTENDED model. tests/security/reconciler-authority-matrix.test.ts compares it against the live PostgreSQL catalogues, in both directions: an entry here that the database does not grant is a broken deployment, and a grant the database holds that is absent here is an unreviewed privilege. Editing this file does not widen anything — the migration does — but editing it to match a widening is exactly the change a reviewer must see.",
+  "attributes": {
+    "rolcanlogin": true,
+    "rolsuper": false,
+    "rolbypassrls": false,
+    "rolcreatedb": false,
+    "rolcreaterole": false,
+    "rolreplication": false
+  },
+  "memberOf": [],
+  "temporary": false,
+  "createOnSchemaPublic": false,
+  "owns": { "tables": 0, "routines": 0, "schemas": 0 },
+  "selectColumns": {
+    "businesses": ["base_currency", "financial_started_at", "id", "tenant_id"],
+    "accounts": ["business_id", "id", "tenant_id", "type"],
+    "journal_entries": ["business_id", "created_at", "entry_date", "id", "source_id", "source_type", "tenant_id"],
+    "journal_lines": [
+      "account_id",
+      "base_amount_minor",
+      "base_currency",
+      "business_id",
+      "credit_minor",
+      "debit_minor",
+      "fx_rate",
+      "fx_rate_source",
+      "id",
+      "journal_entry_id",
+      "tenant_id",
+      "txn_amount_minor",
+      "txn_currency"
+    ],
+    "accounting_periods": ["business_id", "closed_at", "end_date", "id", "start_date", "status", "tenant_id"],
+    "accounting_source_bindings": ["business_id", "journal_entry_id", "source_id", "source_type", "tenant_id"]
+  },
+  "writePrivileges": [],
+  "executableRoutines": ["accounting_reconcile_businesses(uuid, uuid, integer)"],
+  "mustNotRead": [
+    "users",
+    "sessions",
+    "session_refresh_tokens",
+    "password_reset_tokens",
+    "business_invitations",
+    "memberships",
+    "platform_role_memberships",
+    "support_sessions",
+    "credential_deliveries",
+    "accounting_assertion_keys",
+    "provisioning_assertion_keys",
+    "media",
+    "product_media",
+    "outbox_events",
+    "audit_events",
+    "accounting_fx_rates",
+    "accounting_manual_adjustments",
+    "accounting_reversals"
+  ]
+}

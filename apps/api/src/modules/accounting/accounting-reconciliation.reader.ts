@@ -71,6 +71,23 @@ const ENUMERATION_PAGE_SIZE = 200;
 const MAX_ENUMERATION_PAGES = 10_000;
 
 /**
+ * A per-check bound, in milliseconds (§25).
+ *
+ * A reconciliation pass visits every business in the installation, so one
+ * business whose journal has grown pathological must not be able to hold the
+ * whole cycle open indefinitely. `statement_timeout` is set TRANSACTION-LOCAL
+ * on each check, which means the bound is enforced by PostgreSQL rather than
+ * by a caller that might forget to apply it, and it ends with the transaction
+ * rather than leaking onto the pooled connection.
+ *
+ * A check that exceeds it does NOT become a skipped check. It raises, the
+ * driver records that business and check as `error`, and a run with any error
+ * is not a successful cycle — so the bound can cost a verdict, and can never
+ * buy a false clean one.
+ */
+export const RECONCILIATION_CHECK_TIMEOUT_MS = 120_000;
+
+/**
  * The production connection: the reconciler pool, read-only by grant (§30).
  *
  * Deliberately NOT the worker pool. `daftar_worker` carries the outbox relay,
@@ -94,7 +111,10 @@ export class ReconcilerConnection implements ReconciliationConnection {
 export class DatabaseAccountingReconciliationReader implements AccountingReconciliationReader {
   private readable: Set<string> | null = null;
 
-  constructor(@Inject(RECONCILIATION_CONNECTION) private readonly connection: ReconciliationConnection) {}
+  constructor(
+    @Inject(RECONCILIATION_CONNECTION) private readonly connection: ReconciliationConnection,
+    private readonly timeoutMs: number = RECONCILIATION_CHECK_TIMEOUT_MS,
+  ) {}
 
   /**
    * Which tables this credential may read, asked once per process.
@@ -197,6 +217,8 @@ export class DatabaseAccountingReconciliationReader implements AccountingReconci
     return this.connection.scoped(target.tenantId, target.businessId, async (c) => {
       const definition = RECONCILIATION_CHECKS.find((d) => d.id === checkId);
       if (!definition) throw new Error(`unknown reconciliation check ${checkId}`);
+      // §25. Transaction-local, so it binds this check and nothing after it.
+      await c.query(`SET LOCAL statement_timeout = ${Math.max(1, Math.trunc(this.timeoutMs))}`);
       const readable = await this.readableTables(c);
       const missing = definition.requires.filter((t) => !readable.has(t));
       if (missing.length > 0) throw new ReconciliationUnavailableError(checkId, missing);
