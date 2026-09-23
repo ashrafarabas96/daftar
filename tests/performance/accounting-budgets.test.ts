@@ -33,7 +33,7 @@ import { createTestApp, ensurePostgres, ownerPool, reconcilerDbUrl, resetData, t
 import { PoolReconciliationConnection } from '../helpers/accounting-reconciliation';
 import { DatabaseAccountingReconciliationReader } from '../../apps/api/src/modules/accounting/accounting-reconciliation.reader';
 import { appClient, assertionFor, must, postAs, simpleCommand, todayIn } from '../helpers/accounting-posting';
-import { generateDataset, TIER1_SPEC, TIER2_RECONCILIATION_SPEC, type DatasetSpec } from './accounting-dataset';
+import { generateDataset, TIER1_SPEC, TIER2_RECONCILIATION_SPEC, TIER2_REPORTING_SPEC, type DatasetSpec } from './accounting-dataset';
 
 /**
  * PHASE_2_ACCOUNTING_EXECUTION_PLAN §34, repeated verbatim. Milliseconds.
@@ -124,6 +124,10 @@ let today = '';
 let accountId = '';
 let spec: DatasetSpec;
 let seededLines = 0;
+/** What C, D and E actually read (§13: 100,000 at tier 2). */
+let reportingLines = 0;
+/** What F actually walks in its own business (§13: 1,000,000 at tier 2). */
+let reconciliationLines = 0;
 
 beforeAll(async () => {
   await ensurePostgres();
@@ -146,23 +150,48 @@ beforeAll(async () => {
   today = await todayIn(ownerPool(), 'Asia/Hebron');
   accountId = must((await ownerPool().query<{ id: string }>(`SELECT id FROM accounts WHERE business_id = $1 ORDER BY code LIMIT 1`, [businessId])).rows[0]).id;
 
-  // §34 states C/D/E at 100,000 journal lines and F at 1,000,000.
+  // §34 and the RLS directive §13 state the acceptance sizes exactly:
+  // 100,000 journal lines for the reporting reads C, D and E, and 1,000,000
+  // for the reconciliation pass F.
   //
-  // Tier 2 seeds ONE dataset, the 1,000,000-line reconciliation shape, and
-  // measures every budget against it. For C, D and E that is STRICTER than
-  // §34 asks — ten times the stated volume — and deliberately so: two
-  // datasets in one run would mean two businesses whose numbers cannot be
-  // compared, and a reporting budget that holds at 1,000,000 lines holds at
-  // 100,000. If one of them were ever to miss at this scale, §36 applies and
-  // the miss is diagnosed against the stated 100,000 before anything is
-  // concluded. `TIER2_REPORTING_SPEC` in the dataset module describes that
-  // smaller shape for exactly that diagnosis.
+  // So Tier 2 seeds BOTH, in two businesses: this one carries the 100,000-line
+  // reporting shape that A, B, C, D and E are measured against, and a second
+  // business carries the 1,000,000-line reconciliation shape. F is a pass over
+  // every business, so it reads both — 1.1 million lines — which is at or above
+  // what §13 asks and never below it. An earlier version measured C, D and E
+  // against the million-line business on the reasoning that a stricter dataset
+  // subsumes a weaker one; the evidence then could not state the sizes §13
+  // names, and §15 is explicit that a run whose dataset is not the stated one
+  // is a failure of evidence.
   //
-  // Tier 1 seeds the small shape, which is what CI runs.
-  spec = TIER === 2 ? TIER2_RECONCILIATION_SPEC : TIER1_SPEC;
+  // Tier 1 seeds the small shape, unchanged, which is the weaker claim it has
+  // always made.
+  spec = TIER === 2 ? TIER2_REPORTING_SPEC : TIER1_SPEC;
   const result = await generateDataset(ownerPool(), [{ tenantId, businessId, userId, baseCurrency: 'ILS' }], spec);
   seededLines = result.lineCount;
-}, 3_600_000);
+  reportingLines = result.lineCount;
+
+  if (TIER === 2) {
+    const one = async (sql: string, params: unknown[] = []): Promise<string> => must((await ownerPool().query<{ id: string }>(sql, params)).rows[0]).id;
+    const otherTenantId = await one(`INSERT INTO tenants DEFAULT VALUES RETURNING id`);
+    const otherBusinessId = await one(
+      `INSERT INTO businesses (tenant_id, name, store_slug, country_code, base_currency, timezone)
+       VALUES ($1, 'Reconciliation Scale', $2, 'PS', 'ILS', 'Asia/Hebron') RETURNING id`,
+      [otherTenantId, `recon-scale-${Date.now()}`],
+    );
+    const otherUserId = await one(`INSERT INTO users (email, password_hash, display_name) VALUES ($1, 'x', 'Scale') RETURNING id`, [
+      `perf-scale-${Date.now()}@test.daftar.local`,
+    ]);
+    await one(`INSERT INTO branches (business_id, name, is_default) VALUES ($1, 'Main', true) RETURNING id`, [otherBusinessId]);
+    const big = await generateDataset(
+      ownerPool(),
+      [{ tenantId: otherTenantId, businessId: otherBusinessId, userId: otherUserId, baseCurrency: 'ILS' }],
+      TIER2_RECONCILIATION_SPEC,
+    );
+    reconciliationLines = big.lineCount;
+    seededLines = result.lineCount + big.lineCount;
+  }
+}, 21_600_000);
 
 afterAll(async () => {
   const { rows: version } = await ownerPool().query<{ v: string }>(`SELECT version() AS v`);
@@ -201,7 +230,10 @@ afterAll(async () => {
     cpuModel: cpus()[0]?.model ?? 'unknown',
     totalMemoryBytes: totalmem(),
     databaseSettings: settings,
-    dataset: { ...spec, seededLines },
+    // `reportingLines` and `reconciliationLines` are separate on purpose: §13
+    // names two sizes, and one total would let a reader assume the wrong one
+    // produced a given number.
+    dataset: { ...spec, seededLines, reportingLines, reconciliationLines },
     budgets: BUDGET,
     measurements,
   };
@@ -342,8 +374,13 @@ describe('the dataset is what it claims to be (§32)', () => {
 
   it('reaches the size the tier claims', () => {
     // Tier 1 is deliberately smaller than §34's datasets and says so; Tier 2
-    // is the acceptance size and must actually be it.
-    if (TIER === 2) expect(seededLines).toBeGreaterThanOrEqual(1_000_000);
-    else expect(seededLines).toBeGreaterThanOrEqual(10_000);
+    // is the acceptance size and must actually BE it — both of them. §15: a
+    // "100k" run that created 21k lines is a failure of evidence, not a pass.
+    if (TIER === 2) {
+      expect(reportingLines, 'C, D and E are measured at 100,000 lines (§13)').toBeGreaterThanOrEqual(100_000);
+      expect(reconciliationLines, 'F is measured at 1,000,000 lines (§13)').toBeGreaterThanOrEqual(1_000_000);
+    } else {
+      expect(seededLines).toBeGreaterThanOrEqual(10_000);
+    }
   });
 });

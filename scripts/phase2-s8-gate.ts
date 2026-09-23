@@ -62,8 +62,32 @@ const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
  */
 const FROZEN_THROUGH_EXACTLY = '0050_accounting_report_indexes.sql';
 
-/** The one migration P2-S8 was authorized to create (§2). */
+/** The reconciliation-authority migration P2-S8 was authorized to create (§2). */
 const S8_MIGRATION = '0051_accounting_reconciler_read.sql';
+
+/**
+ * The SECOND candidate, authorized separately once the performance evidence
+ * was accepted: the `journal_lines` tenant-policy correction.
+ *
+ * It is deliberately a migration of its own. `0051` has one architectural
+ * responsibility — reconciler read authority — and `0052` has one — the RLS
+ * performance correction. Folding the second into the first would have made
+ * one file that a reviewer has to read twice with two different questions in
+ * mind. Both stay CANDIDATES until the Tech Lead accepts them.
+ */
+const S8_RLS_MIGRATION = '0052_accounting_journal_lines_rls_performance.sql';
+
+/**
+ * The constraint the optimised policy is a consequence of.
+ *
+ * Since `0052`, tenant isolation on `journal_lines` derives from the line's
+ * own `tenant_id` instead of a per-row lookup in `businesses`. That is only
+ * equivalent because this foreign key guarantees the pair, so the FK is now
+ * load-bearing for ISOLATION and not merely for referential integrity. A
+ * later migration that dropped, disabled or invalidated it would turn a proof
+ * into an assumption silently — hence the static check below (§8).
+ */
+const TENANT_BUSINESS_FK = 'journal_lines_tenant_business_fk';
 
 /** The reconciliation authority, and the principals it must NOT be. */
 const RECONCILER = 'daftar_reconciler';
@@ -90,6 +114,7 @@ const P2_S8_TESTS = [
   'tests/security/accounting-observability-redaction.test.ts',
   'tests/security/accounting-raw-sql-invariants.test.ts',
   'tests/security/accounting-credential-matrix.test.ts',
+  'tests/security/journal-lines-rls-policy.test.ts',
   'tests/integration/accounting-reconciliation.test.ts',
   'tests/integration/runner-exit-code.test.ts',
 ];
@@ -177,28 +202,88 @@ function checkMigrationBoundary(): void {
   }
   if (drifted === 0) ok(`all ${manifest.migrations.length} frozen migrations are byte-for-byte what the manifest recorded`);
 
-  // §2: exactly one new migration, and it is a candidate.
-  if (!files.includes(S8_MIGRATION)) {
-    fail('s8-migration', `${S8_MIGRATION} is missing — §2 authorizes this slice to create it, and the reconciliation authority lives in it`);
-  } else {
-    ok(`${S8_MIGRATION} present`);
-    if (manifest.migrations.some((m) => m.name === S8_MIGRATION)) {
-      fail('s8-hard-stop', `${S8_MIGRATION} is recorded in the manifest — it is a CANDIDATE and P2-S8 may not freeze it (§2, §44)`);
+  // §2: exactly two new migrations, and BOTH are candidates.
+  for (const [candidate, why] of [
+    [S8_MIGRATION, 'the reconciliation authority lives in it'],
+    [S8_RLS_MIGRATION, 'the journal_lines tenant-policy correction lives in it'],
+  ] as const) {
+    if (!files.includes(candidate)) {
+      fail('s8-migration', `${candidate} is missing — it is authorized, and ${why}`);
+      continue;
+    }
+    ok(`${candidate} present`);
+    if (manifest.migrations.some((m) => m.name === candidate)) {
+      fail('s8-hard-stop', `${candidate} is recorded in the manifest — it is a CANDIDATE and P2-S8 may not freeze it (§2, §29)`);
     } else {
-      ok(`${S8_MIGRATION} is a candidate: present on disk, absent from the manifest`);
+      ok(`${candidate} is a candidate: present on disk, absent from the manifest`);
     }
     const digest = createHash('sha256')
-      .update(readFileSync(join(MIGRATIONS_DIR, S8_MIGRATION)))
+      .update(readFileSync(join(MIGRATIONS_DIR, candidate)))
       .digest('hex');
-    ok(`${S8_MIGRATION} SHA-256 ${digest}`);
+    ok(`${candidate} SHA-256 ${digest}`);
   }
 
-  // §44: no 0052 and nothing beyond it.
-  const beyond = files.filter((f) => f > S8_MIGRATION);
+  // §29: no 0053 and nothing beyond it.
+  const beyond = files.filter((f) => f > S8_RLS_MIGRATION);
   if (beyond.length > 0) {
-    fail('s8-hard-stop', `migrations beyond 0051 exist (${beyond.join(', ')}) — §44 forbids creating 0052 and forbids beginning P2-S9`);
+    fail('s8-hard-stop', `migrations beyond 0052 exist (${beyond.join(', ')}) — §29 forbids creating 0053 and forbids beginning P2-S9`);
   } else {
-    ok('no migration beyond 0051 exists');
+    ok('no migration beyond 0052 exists');
+  }
+}
+
+/**
+ * The FK the optimised policy stands on, over the whole migration history (§8).
+ *
+ * `0052` may replace a per-row `businesses` lookup with a direct `tenant_id`
+ * predicate ONLY because `journal_lines_tenant_business_fk` guarantees the
+ * pair. The live catalogue is checked by `0052` itself at apply time and by
+ * `tests/security/journal-lines-rls-policy.test.ts` at run time; what neither
+ * of those can see is a FUTURE migration that removes the constraint, because
+ * a database that never applied it would simply not exist yet. So this reads
+ * the history as text and refuses any statement that would drop, disable or
+ * un-validate it.
+ */
+function checkFkDependencyIsProtected(): void {
+  console.log('P2-S8 GATE — the FK the optimised policy depends on (§8)');
+  const files = sqlFiles();
+
+  const creators = files.filter((f) => readFileSync(join(MIGRATIONS_DIR, f), 'utf8').includes(`CONSTRAINT ${TENANT_BUSINESS_FK}`));
+  if (creators.length === 0) {
+    fail('s8-fk', `no migration declares ${TENANT_BUSINESS_FK} — the optimised tenant policy has no foundation`);
+  } else {
+    ok(`${TENANT_BUSINESS_FK} is declared in ${creators.join(', ')}`);
+  }
+
+  // Anything that would take it away, disable it, or leave it NOT VALID.
+  const dangerous: { file: string; statement: string }[] = [];
+  for (const file of files) {
+    const text = readFileSync(join(MIGRATIONS_DIR, file), 'utf8');
+    const patterns: readonly [RegExp, string][] = [
+      [new RegExp(`DROP\\s+CONSTRAINT\\s+(IF\\s+EXISTS\\s+)?${TENANT_BUSINESS_FK}`, 'i'), 'drops it'],
+      [new RegExp(`ALTER\\s+TABLE[^;]*DISABLE\\s+TRIGGER[^;]*${TENANT_BUSINESS_FK}`, 'is'), 'disables it'],
+      [new RegExp(`ALTER\\s+CONSTRAINT\\s+${TENANT_BUSINESS_FK}[^;]*NOT\\s+VALID`, 'is'), 'leaves it NOT VALID'],
+      [new RegExp(`ADD\\s+CONSTRAINT\\s+${TENANT_BUSINESS_FK}[^;]*NOT\\s+VALID`, 'is'), 'adds it NOT VALID'],
+    ];
+    for (const [pattern, what] of patterns) if (pattern.test(text)) dangerous.push({ file, statement: what });
+  }
+  if (dangerous.length > 0) {
+    for (const d of dangerous) {
+      fail(
+        's8-fk',
+        `${d.file} ${d.statement} ${TENANT_BUSINESS_FK} — since 0052 that constraint is what makes tenant isolation on journal_lines correct, so removing it is a security change and not a schema tidy-up (§8)`,
+      );
+    }
+  } else {
+    ok(`no migration drops, disables or un-validates ${TENANT_BUSINESS_FK}`);
+  }
+
+  // And the dependency is written down where a reader of 0052 will meet it.
+  const rls = files.includes(S8_RLS_MIGRATION) ? readFileSync(join(MIGRATIONS_DIR, S8_RLS_MIGRATION), 'utf8') : '';
+  if (!rls.includes(TENANT_BUSINESS_FK)) {
+    fail('s8-fk', `${S8_RLS_MIGRATION} does not name ${TENANT_BUSINESS_FK} — the equivalence it relies on must be stated where the change is made (§3)`);
+  } else {
+    ok(`${S8_RLS_MIGRATION} names the constraint its equivalence depends on, and asserts it before committing`);
   }
 }
 
@@ -682,8 +767,12 @@ function checkEvidence(): void {
       'tests/integration/accounting-reconciliation.test.ts',
       'the nine checks through the PRODUCTION authority, pagination, the schedule and crash/restart (§11, §17, §21, §22, §24)',
     ],
+    ['tests/security/journal-lines-rls-policy.test.ts', 'the FK foundation, the effective policy shape and the eleven-case isolation matrix (§7, §8, §9)'],
+    ['tests/performance/accounting-rls-equivalence.test.ts', 'the same read at 0051 and at 0052 on one database: the answer and the plan (§10, §11)'],
     ['tests/performance/accounting-budgets.test.ts', 'the six budgets, measured (f §34)'],
     ['tests/performance/accounting-dataset.ts', 'the deterministic dataset generator (f §31)'],
+    ['release/phase2-s8-rls-equivalence.json', 'the recorded before/after answer and plans (§10, §11)'],
+    ['release/phase2-s8-performance-tier2.json', 'the FULL-SCALE acceptance measurement — a Tier 1 file does not satisfy it (§13, §23)'],
     ['scripts/phase2-rollback-rehearsal.ts', 'the rollback/restore rehearsal (f §39–§42)'],
     ['scripts/check-supply-chain.ts', 'supply-chain hygiene (f §47)'],
     ['docs/PHASE_2_KMS_SIGNER_REVIEW.md', 'the KMS signer review (f §43, §44)'],
@@ -753,6 +842,107 @@ function checkEvidence(): void {
         fail('s8-evidence', `TECHNICAL_DEBT.md does not record ${what} — a finding that is not written down is a finding that was not reported`);
     }
     ok('the two findings this slice did not close are recorded as debt');
+  }
+
+  checkRlsEquivalenceEvidence();
+  checkFullScaleAcceptance();
+}
+
+/**
+ * The recorded before/after result (§10, §11).
+ *
+ * The suite that produces this file asserts the same two things while it runs.
+ * Reading the file here is not a duplicate: it is what lets the gate refuse a
+ * run in which the measurement was never taken at all, which is the failure a
+ * green test list cannot show you.
+ */
+function checkRlsEquivalenceEvidence(): void {
+  const raw = readIfPresent('release/phase2-s8-rls-equivalence.json');
+  if (raw === null) return; // the missing-file case is already reported above
+  const e = JSON.parse(raw) as {
+    boundaryBefore?: string;
+    boundaryAfter?: string;
+    answerIdentical?: boolean;
+    rowCount?: number;
+    dataset?: { lineCount?: number };
+    before?: { mentionsBusinesses?: boolean; sharedHit?: number; sharedRead?: number };
+    after?: { mentionsBusinesses?: boolean; sharedHit?: number; sharedRead?: number };
+  };
+
+  if (!(e.boundaryBefore ?? '').startsWith('0051') || !(e.boundaryAfter ?? '').startsWith('0052')) {
+    fail(
+      's8-equivalence',
+      `the before/after evidence was not taken at 0051 → 0052 (${e.boundaryBefore} → ${e.boundaryAfter}) — it compares the wrong two states`,
+    );
+  } else if (e.answerIdentical !== true) {
+    fail('s8-equivalence', 'the recorded trial balance is NOT identical before and after 0052 — a faster wrong answer is a defect (§10)');
+  } else if ((e.rowCount ?? 0) === 0 || (e.dataset?.lineCount ?? 0) < 10_000) {
+    fail('s8-equivalence', `the comparison ran on ${e.dataset?.lineCount ?? 0} lines and ${e.rowCount ?? 0} rows — equality over nothing proves nothing (§10)`);
+  } else {
+    ok(`the trial balance is identical at 0051 and 0052 over ${e.dataset?.lineCount} lines, ${e.rowCount} accounts (§10)`);
+  }
+
+  if (e.before?.mentionsBusinesses !== true || e.after?.mentionsBusinesses !== false) {
+    fail('s8-equivalence', 'the recorded plans do not show the correlated businesses lookup present before 0052 and absent after it (§11)');
+  } else {
+    const beforeBlocks = (e.before.sharedHit ?? 0) + (e.before.sharedRead ?? 0);
+    const afterBlocks = (e.after.sharedHit ?? 0) + (e.after.sharedRead ?? 0);
+    ok(`the per-row businesses lookup is gone from the plan: ${beforeBlocks} → ${afterBlocks} shared blocks (§11)`);
+  }
+}
+
+/**
+ * TIER 2 IS THE ACCEPTANCE MEASUREMENT, AND A TIER 1 FILE DOES NOT SATISFY IT
+ * (§13, §14, §15, §23).
+ *
+ * The distinction is the whole point. Tier 1 asserts the same ceilings on a
+ * smaller dataset, which is a weaker claim and says so. The budgets §14 names
+ * are about 100,000 journal lines for the reporting reads and 1,000,000 for
+ * the reconciliation pass, so a file that records a pass over 21,000 lines is
+ * not evidence for them — §15 is explicit that a "100k" run which created 21k
+ * lines is a FAILURE OF EVIDENCE, not a pass.
+ */
+function checkFullScaleAcceptance(): void {
+  const raw = readIfPresent('release/phase2-s8-performance-tier2.json');
+  if (raw === null) return; // the missing-file case is already reported above
+  const e = JSON.parse(raw) as {
+    tier?: number;
+    dataset?: { seededLines?: number; reportingLines?: number; reconciliationLines?: number };
+    measurements?: { name: string; budgetMs: number; p95: number }[];
+  };
+
+  if (e.tier !== 2) {
+    fail('s8-tier2', `release/phase2-s8-performance-tier2.json records tier ${e.tier} — a Tier 1 result may not stand in for the acceptance run (§23)`);
+    return;
+  }
+
+  const reporting = e.dataset?.reportingLines ?? 0;
+  const reconciliation = e.dataset?.reconciliationLines ?? 0;
+  if (reporting < 100_000) {
+    fail(
+      's8-tier2',
+      `the reporting dataset held ${reporting} journal lines — §13 requires 100,000 for C, D and E, and §15 calls a short dataset a failure of evidence`,
+    );
+  } else {
+    ok(`the reporting dataset actually held ${reporting} journal lines (§13 C/D/E)`);
+  }
+  if (reconciliation < 1_000_000) {
+    fail('s8-tier2', `the reconciliation dataset held ${reconciliation} journal lines — §13 requires 1,000,000 for F`);
+  } else {
+    ok(`the reconciliation dataset actually held ${reconciliation} journal lines (§13 F)`);
+  }
+
+  const measurements = e.measurements ?? [];
+  if (measurements.length < 6) {
+    fail('s8-tier2', `only ${measurements.length} of the six budgets were measured at full scale — §14 admits no conditional pass`);
+    return;
+  }
+  const over = measurements.filter((m) => m.p95 > m.budgetMs);
+  if (over.length > 0) {
+    for (const m of over)
+      fail('s8-tier2', `${m.name}: ${m.p95.toFixed(1)} ms against a ${m.budgetMs} ms ceiling — the budget stays what was accepted (§6, §14)`);
+  } else {
+    ok(`all ${measurements.length} budgets met at the acceptance sizes (§14)`);
   }
 }
 
@@ -841,6 +1031,7 @@ if (LIST_ONLY) {
 
 checkMigrationBoundary();
 checkMigrationContent();
+checkFkDependencyIsProtected();
 checkBypassContract();
 checkRoleAttributes();
 checkProcessBoundary();
