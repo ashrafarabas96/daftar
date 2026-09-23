@@ -8,15 +8,24 @@
 
 **DAFTAR never invents a merchant's fiscal calendar: a business with zero periods keeps exactly the posting rules it had yesterday, and the FIRST period it creates itself is what turns period-managed posting on.**
 
-Shipping `0049` changes nothing for anybody. No period is created by the migration, for any existing business, ever. Once a merchant creates their first period, every NEW posting's `entry_date` must fall inside exactly one existing OPEN period: outside all of them is `accounting.period_missing_for_date`, inside a CLOSED one is `accounting.period_closed`. History is never rewritten — entries posted before the first period existed stay exactly as they are.
+Shipping `0049` changes nothing for anybody. No period is created by the migration, for any existing business, ever. Once a merchant creates their first period, every NEW **ordinary** posting's `entry_date` must fall inside exactly one existing OPEN period: outside all of them is `accounting.period_missing_for_date`, inside a CLOSED one is `accounting.period_closed`. History is never rewritten — entries posted before the first period existed stay exactly as they are.
 
-`لا تخترع «دفتر» تقويمًا ماليًّا لأحد. المنشأة التي لا فترات لها تبقى على قواعدها كما هي تمامًا، وأول فترة ينشئها التاجر بنفسه هي ما يُفعِّل إدارة الفترات. بعدها يجب أن يقع تاريخ كل قيد جديد داخل فترة مفتوحة واحدة بالضبط، ولا يُعاد كتابة أي قيد سابق أبدًا.`
+**The one exception, stated here because it is easy to get wrong.** An `opening_balance` whose `entry_date` is **strictly before the earliest period start** posts **without a covering period**. The first period is where the books begin in DAFTAR and the opening position is by definition what was carried in from before it, so refusing it would make the same financial fact valid or invalid depending on whether the merchant defined a period before or after stating it. The exception goes no further than that sentence:
+
+- it remains subject to the universal no-future rule — no opening balance dated after today in the business timezone, period or no period;
+- if its date falls **inside** a period, that period must be **OPEN**; inside a closed one it is refused exactly like any other entry;
+- if its date is **after** the covered chain, or otherwise uncovered, it is refused for want of a covering period;
+- **no other source** has it: a manual adjustment or a reversal dated before the earliest period is refused.
+
+It is also bounded in quantity, which is worth stating because it is what keeps the exception from becoming a backdating channel: P2-S4 allows a business **at most one posted opening balance**, ever. So the exception admits exactly one entry per business over the lifetime of its books, not a class of entries.
+
+`لا تخترع «دفتر» تقويمًا ماليًّا لأحد. المنشأة التي لا فترات لها تبقى على قواعدها كما هي تمامًا، وأول فترة ينشئها التاجر بنفسه هي ما يُفعِّل إدارة الفترات. بعدها يجب أن يقع تاريخ كل قيد جديد داخل فترة مفتوحة واحدة بالضبط، ولا يُعاد كتابة أي قيد سابق أبدًا. الاستثناء الوحيد: الرصيد الافتتاحي المؤرَّخ قبل بداية أقدم فترة يُقبل بلا فترة تغطّيه، لأن الرصيد الافتتاحي سابق للدفاتر بطبيعته؛ ولا يمتد هذا الاستثناء إلى مصدر آخر، ولا إلى تاريخ داخل فترة مغلقة، ولا إلى تاريخ مستقبلي.`
 
 ## 1. Candidate migration — P2-S6 is a CANDIDATE, NOT frozen
 
 | migration | SHA-256 | state |
 |---|---|---|
-| `0049_accounting_periods.sql` | `d219c81c3cea08f814957cda238a9abb5b1bc0aeea95478ecc64563e187a6128` | **CANDIDATE — not frozen** |
+| `0049_accounting_periods.sql` | `f51094e4ab6047493094be434dc08fad6f8f6333aa9ffde49bcf84c62f4f93c0` | **CANDIDATE — not frozen** |
 
 `MIGRATION_MANIFEST.json` is unchanged: it still records **49 frozen migrations** with `frozenThrough = 0048_accounting_fx_rates.sql`, and `0049` is deliberately absent from it. There is **no `0050`**. Freezing is the Tech Lead's act on acceptance, not a step of this work — a slice that froze its own migration would have certified itself — and `npm run gate:phase2:s6` FAILS today if the manifest records `0049`, if `frozenThrough` moves, or if any file beyond `0049` appears.
 
@@ -66,6 +75,11 @@ Shipping `0049` changes nothing for anybody. No period is created by the migrati
 | 3 | The FIRST period activates period-managed posting | after one period exists, the guard requires a covering period for every new entry | `accounting-periods.test.ts` — activation group; `accounting-periods-concurrency.test.ts` — the activation race | **ENFORCED** |
 | 4 | A posting outside every period is refused | `accounting.period_missing_for_date`, raised by the trigger | `accounting-periods.test.ts` — posting matrix | **ENFORCED** |
 | 5 | A posting into a closed period is refused | `accounting.period_closed`, raised by the trigger | `accounting-periods.test.ts` — posting matrix, for `manual_adjustment` and `opening_balance` alike | **ENFORCED** |
+| 5a | An `opening_balance` dated strictly BEFORE the earliest period start posts without a covering period | the one source-specific branch of `accounting_period_guard_posting()` | `accounting-periods-opening-balance.test.ts` — cases A, B, C | **ENFORCED** |
+| 5b | The same opening balance is accepted whether the first period was created before or after it | the same branch; the rule reads persisted facts only, so setup order cannot reach it | `accounting-periods-opening-balance.test.ts` — FLOW 1 and FLOW 2, ending in a byte comparison of the two businesses' posted entries | **ENFORCED** |
+| 5c | The exception stops at the earliest boundary: an opening balance ON the earliest start, INSIDE a closed period, or AFTER the chain is refused like any other entry | strict `<` against the earliest start, then the ordinary covering-period rule | `accounting-periods-opening-balance.test.ts` — cases D, F, F2, G, H | **ENFORCED** |
+| 5d | No other source has the exception | the branch names `opening_balance` and nothing else; the gate fails on a second source literal | `accounting-periods-opening-balance.test.ts` — a manual adjustment one day before and far before, and a reversal outside coverage | **ENFORCED** |
+| 5e | The exception survives the first-period race in both winner orders | one lock order, business row before period row, on both paths | `accounting-periods-concurrency.test.ts` — the two `obrace` cases, each asserting the same final books | **ENFORCED** |
 | 6 | The refusal is the DATABASE's, not the application's | `BEFORE INSERT ON journal_entries`, independent of Nest, TypeScript and HTTP | `accounting-periods.test.ts` — provoked through the frozen posting primitive rather than a service, AND by a DIRECT `INSERT` issued as the schema OWNER, which reaches no command, no routine and no application at all | **ENFORCED** |
 | 7 | Existing history is never rewritten | `0049` issues no `UPDATE` or `DELETE` against `journal_entries`, `journal_lines`, bindings, sources or FX rates | `migration-upgrade.test.ts` — a digest of every protected table, taken before and compared after; `gate:phase2:s6` scope checks | **ENFORCED** |
 | 8 | No business's financial life begins because periods shipped | `0049` never writes `businesses.financial_started_at` | `migration-upgrade.test.ts`; `gate:phase2:s6` | **ENFORCED** |
@@ -186,10 +200,14 @@ There was a Unicode NFC step, and it came out. PostgreSQL's `normalize(text, NFC
 | periods exist; the date falls in one OPEN period | posted |
 | periods exist; the date falls in one CLOSED period | `accounting.period_closed` |
 | periods exist; the date falls in none of them | `accounting.period_missing_for_date` |
+| periods exist; the source is `opening_balance` and the date is STRICTLY BEFORE the earliest period start | posted — the one exception, because an opening position predates the books |
+| periods exist; the source is `opening_balance` and the date is anywhere else | exactly the three rows above: open period posts, closed period refuses, uncovered refuses |
 | any of the above, and the date is in the future in the business's timezone | `accounting.entry_date_in_future` — the universal rule is unchanged and is checked by the frozen writer, not by this slice |
 | an idempotent replay of an entry posted BEFORE the close | succeeds — the primitive returns from its own registry before it reaches the insert, so the guard never fires |
 
 Two periods can never overlap, so "one OPEN period" is a physical fact rather than a hope. Entries posted before the first period existed are never revisited: `0049` rewrites nothing.
+
+The exception row is the cross-slice correction, and it is worth saying why it is a rule about PLACEMENT rather than about a privileged source. P2-S4 already registers `opening_balance` with `lower_bound_policy = 'none'` — it has no historical floor, because a merchant's opening position can be any age. Periods narrow where NEW truth may be written, and applied without this row they would have turned that into: state your opening position before you define your first period and it is accepted; define the period first and the same position is refused. The correction removes the order dependence, and the four bullets in §0 are what keeps it from becoming a backdating bypass.
 
 ## 10. What this slice deliberately did NOT build
 
@@ -215,9 +233,10 @@ What this slice *does* add to the attacker's cost is stated precisely: a stolen 
 |---|---|---|
 | `tests/integration/accounting-periods.test.ts` | 47 | activation, the overlap and contiguity matrices, immutability asked through the schema authority, the posting matrix, the transition matrix and the replayed-reopen hazard |
 | `tests/integration/accounting-period-parity.test.ts` | 30 | TypeScript and PostgreSQL agree on `acctperiod/1`, byte for byte, including Arabic and the two spellings of one accented word |
-| `tests/integration/accounting-periods-concurrency.test.ts` | 13 | close-versus-post in both directions, no deadlock, the activation race, concurrent first creations, audit and outbox shape and failure injection, and the per-business topology lock |
+| `tests/integration/accounting-periods-concurrency.test.ts` | 15 | close-versus-post in both directions, no deadlock, the activation race, concurrent first creations, audit and outbox shape and failure injection, the per-business topology lock, and the opening balance racing the first period in BOTH winner orders |
 | `tests/integration/accounting-periods-http.test.ts` | 33 | the four routes, the authorization matrix (§21, §22), the list contract (§32) and the strict payload contract |
-| | **123** | |
+| `tests/integration/accounting-periods-opening-balance.test.ts` | 18 | the cross-slice correction: order independence, the nine-case opening-balance period matrix, the refusal of every other source before the earliest period, and the schema owner's two direct `INSERT`s failing at different rules |
+| | **143** | |
 
 Plus the extended `migration-upgrade.test.ts` (7 cases) and `migration-portability.test.ts` (7 cases), the permission suites, and the whole predecessor chain composed by `npm run gate:phase2:s6`.
 

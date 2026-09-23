@@ -104,6 +104,7 @@ const S6_MODULES = ['src/period.ts'] as const;
 /** The suites that prove, against a real database, what the structure only claims. */
 const P2_S6_TESTS = [
   'tests/integration/accounting-periods.test.ts',
+  'tests/integration/accounting-periods-opening-balance.test.ts',
   'tests/integration/accounting-period-parity.test.ts',
   'tests/integration/accounting-periods-concurrency.test.ts',
   'tests/integration/accounting-periods-http.test.ts',
@@ -452,7 +453,10 @@ function checkActivationAndGuard(): void {
     // §9: zero periods preserve the existing behaviour exactly. This is the
     // activation model's whole safety property: shipping the migration must
     // not change one thing for a merchant who has no periods.
-    if (/NOT\s+EXISTS|IF\s+NOT\s+\w+\s+THEN\s+RETURN\s+NEW/i.test(guard))
+    // Either shape says the same thing: no period row for this business means
+    // the guard hands the entry straight back. The `IS NULL` form is the one
+    // 0049 uses, because the same read also yields the earliest boundary.
+    if (/NOT\s+EXISTS|IF\s+NOT\s+\w+\s+THEN\s+RETURN\s+NEW|IF\s+\w+\s+IS\s+NULL\s+THEN\s*\n?\s*RETURN\s+NEW/i.test(guard))
       ok('with zero periods the guard returns NEW unchanged — shipping activates nothing (§9)');
     else
       fail('activation', 'the posting guard has no zero-period passthrough — §9 says existing posting-date rules continue until the FIRST period is created');
@@ -473,6 +477,46 @@ function checkActivationAndGuard(): void {
     if (business !== -1 && period !== -1 && business < period)
       ok('the guard locks the business BEFORE reading a period — one lock order on both paths (§25, §27)');
     else fail('guard', 'the posting guard reads a period before locking the business — two orders is a deadlock, not a race (§25)');
+
+    // ── The opening-balance exception (correction §3, §6, §7, §10, §11) ────
+    //
+    // The rule this protects is not "an opening balance is special". It is
+    // that an accounting fact must not change meaning with setup order: a
+    // merchant who states their opening position AFTER defining their first
+    // period must get the same answer as one who states it before. Three
+    // separate things can silently destroy it, so three separate checks.
+    //
+    // 1. the exception exists at all, and binds BOTH the source and the date.
+    const exception = /NEW\.source_type\s*=\s*'opening_balance'\s+AND\s+NEW\.entry_date\s*(<=?)\s*\w+/i.exec(guard);
+    if (exception === null)
+      fail(
+        'opening-balance-exception',
+        'the guard no longer lets an opening_balance predating the earliest period post — a historical opening position would be REFUSED purely because the merchant created a period first (correction §2, §3)',
+      );
+    else ok('an opening_balance dated before the earliest period start posts without a covering period (correction §3, §6)');
+
+    // 2. it is STRICTLY before. `<=` would swallow the earliest start date,
+    //    which belongs to the ordinary covering rule: on that date the period
+    //    covers the entry, and a CLOSED period there must still refuse it.
+    if (exception !== null && exception[1] === '<=')
+      fail(
+        'opening-balance-exception',
+        'the opening-balance exception uses <= against the earliest start — the start date is COVERED, and a closed period beginning that day must still refuse (correction §3 case 3, §11)',
+      );
+    else if (exception !== null)
+      ok('the exception is strictly BEFORE the earliest start, so the boundary date stays under the covering rule (correction §9 D)');
+
+    // 3. it belongs to exactly ONE source. A second source LITERAL in this
+    //    guard is the shape the bypass would take if it ever broadened. The
+    //    test is on quoted literals, because the guard's own prose names the
+    //    other sources in order to say they are excluded.
+    const others = ["'manual_adjustment'", "'reversal'"].filter((k) => guard.includes(k));
+    if (others.length === 0) ok('no other source carries a period exception — the guard names opening_balance alone (correction §10)');
+    else
+      fail(
+        'opening-balance-exception',
+        `the posting guard carries the source literal ${others.join(' and ')} — the pre-period exception is opening_balance ONLY, and a second source here is a generic backdating bypass (correction §10)`,
+      );
   }
 
   // §9: no fiscal calendar, anywhere. Neither the migration nor the engine may
@@ -976,6 +1020,33 @@ const REQUIRED_BEHAVIOUR: ReadonlyArray<{ file: string; needle: RegExp; what: st
     file: 'tests/integration/accounting-periods-concurrency.test.ts',
     needle: /deadlock/i,
     what: 'a close interleaved with a posting never deadlocks (§25)',
+  },
+  // The correction's own regressions. A regex over 0049 can say the exception
+  // is written; only these can say it WORKS, which is why §28 asks for both.
+  {
+    file: 'tests/integration/accounting-periods-opening-balance.test.ts',
+    needle: /FLOW 1[\s\S]{0,4000}FLOW 2/,
+    what: 'the same opening balance is accepted whether the first period was created before or after it (correction §8)',
+  },
+  {
+    file: 'tests/integration/accounting-periods-opening-balance.test.ts',
+    needle: /inside a CLOSED period[\s\S]{0,600}period_closed/,
+    what: 'an opening balance inside a CLOSED period is still refused (correction §11)',
+  },
+  {
+    file: 'tests/integration/accounting-periods-opening-balance.test.ts',
+    needle: /manual adjustment[\s\S]{0,600}period_missing_for_date/,
+    what: 'a manual adjustment before the earliest period gains nothing from the exception (correction §10)',
+  },
+  {
+    file: 'tests/integration/accounting-periods-opening-balance.test.ts',
+    needle: /REVERSAL[\s\S]{0,1600}period_missing_for_date/,
+    what: 'a reversal outside period coverage is still refused (correction §10)',
+  },
+  {
+    file: 'tests/integration/accounting-periods-concurrency.test.ts',
+    needle: /openBalanceOn[\s\S]{0,8000}the OPENING BALANCE wins the business row/,
+    what: 'the opening balance and the first period race to the same books in BOTH winner orders (correction §12)',
   },
   {
     file: 'tests/integration/accounting-periods-concurrency.test.ts',

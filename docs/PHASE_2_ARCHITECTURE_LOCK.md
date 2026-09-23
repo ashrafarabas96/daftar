@@ -598,7 +598,7 @@ Each source type declares its own rule, because the correct rule genuinely diffe
 
 | source | lower bound | upper bound | rationale |
 |---|---|---|---|
-| `opening_balance` | **none** — it may predate DAFTAR onboarding by any amount | `as_of_date ≤ today` | the opening position is historical by definition; an arbitrary cutoff would exclude long-running companies |
+| `opening_balance` | **none** — it may predate DAFTAR onboarding by any amount | `as_of_date ≤ today` | the opening position is historical by definition; an arbitrary cutoff would exclude long-running companies. **P2-S6:** the period layer preserves this rather than overriding it — an opening balance dated strictly before the earliest period start posts without a covering period; inside the chain it obeys the covering rule in full |
 | `manual_adjustment` | none in Phase 2; back-dating is permitted and audited | `entry_date ≤ today` | **P2-S6:** once the business has created a period, the covering period must exist and be open — both bounds still apply on top of that |
 | `reversal` | `entry_date ≥ the original entry's date` | `entry_date ≤ today` | a reversal cannot precede the fact it reverses |
 
@@ -608,7 +608,7 @@ The rule is enforced in `accounting_post_entry` per source type, so it cannot be
 
 **When P2-S6 is authorized it must specify**: non-overlapping contiguous periods (exclusion constraint), open/closed state, close actor and time, reopen actor, time and mandatory reason, closed-period posting refused in the database, the timezone/date authority, close↔post concurrency, and full audit.
 
-> **Delivered in P2-S6 (candidate `0049`).** Every item above, plus three the lock did not ask for and review required: an append-only operation registry that decides an idempotent replay BEFORE any state is read (without it, an old reopen replayed after a later re-close reopens the period again); a single lock order — business, then period — obeyed by the posting path as well as the commands, which is what makes close-versus-post a race with a determined winner rather than a deadlock; and an ACTIVATION model, because the lock's wording assumed periods would simply exist. Evidence: `docs/PHASE_2_S6_ACCEPTANCE.md`.
+> **Delivered in P2-S6 (candidate `0049`).** Every item above, plus four the lock did not ask for and review required: an append-only operation registry that decides an idempotent replay BEFORE any state is read (without it, an old reopen replayed after a later re-close reopens the period again); a single lock order — business, then period — obeyed by the posting path as well as the commands, which is what makes close-versus-post a race with a determined winner rather than a deadlock; an ACTIVATION model, because the lock's wording assumed periods would simply exist; and the opening-balance exception in the row above, which Tech Lead review found missing. The coverage rule as first written made a legitimate historical opening balance depend on whether the merchant had defined a period first — the same fact accepted in one setup order and refused in the other. The exception is source-specific, strictly before the earliest start, and proved in both race orders. Evidence: `docs/PHASE_2_S6_ACCEPTANCE.md`.
 
 ---
 

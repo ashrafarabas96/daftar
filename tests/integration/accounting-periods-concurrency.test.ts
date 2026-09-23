@@ -14,6 +14,7 @@
  * committed before the close.
  */
 import { randomUUID } from 'node:crypto';
+import { deriveSourceId } from '@daftar/accounting';
 import { Client } from 'pg';
 import { beforeAll, describe, expect, it } from 'vitest';
 import type { Pool } from 'pg';
@@ -22,11 +23,15 @@ import {
   appClient,
   assertionFor,
   must,
+  openingBalanceFingerprintOf,
   postAs,
+  postOpeningBalanceAs,
   seedPostingFixture,
   simpleCommand,
+  sourceAssertion,
   todayIn,
   type PostCommand,
+  type PostLine,
   type PostingFixture,
 } from '../helpers/accounting-posting';
 import {
@@ -715,6 +720,161 @@ describe('a period, its registry entry, its audit and its event are one fact (§
       await b.query('ROLLBACK').catch(() => undefined);
       await a.end().catch(() => undefined);
       await b.end().catch(() => undefined);
+    }
+  }, 120_000);
+});
+
+// ── §12 of the correction: the opening balance and the first period ───────
+
+/**
+ * The race the opening-balance exception has to survive.
+ *
+ * An opening position dated the day before the merchant's first period, and
+ * the creation of that first period, in flight at the same moment. Whichever
+ * transaction reaches the business row first, the books must end up the same:
+ * the period exists, the opening balance exists, and nothing was refused for
+ * want of a covering period. If the two orders could disagree, the exception
+ * would have removed the order dependence from the merchant's clicks and left
+ * it in the database's scheduling, which is worse rather than better.
+ */
+describe('the opening balance and the first period, racing (correction §12)', () => {
+  /** An opening balance on an ALREADY-OPEN transaction, through the real source path. */
+  async function openBalanceOn(conn: Client, scope: PeriodScope, asOfDate: string, key: string): Promise<void> {
+    const positions: PostLine[] = [
+      {
+        account: { kind: 'system', systemKey: 'cash' },
+        side: 'D',
+        baseAmountMinor: 50000n,
+        baseCurrency: 'ILS',
+        txnAmountMinor: 50000n,
+        txnCurrency: 'ILS',
+        fxRate: '1',
+        fxRateSource: 'base',
+        fxRateAt: new Date('2026-03-14T09:15:00Z'),
+        memo: null,
+      },
+    ];
+    const openingBalanceId = deriveSourceId(scope.businessId, key);
+    const assertion = sourceAssertion({
+      actorUserId: scope.userId,
+      tenantId: scope.tenantId,
+      businessId: scope.businessId,
+      operationKind: 'post',
+      sourceType: 'opening_balance',
+      sourceId: openingBalanceId,
+      postingFingerprint: openingBalanceFingerprintOf({
+        tenantId: scope.tenantId,
+        businessId: scope.businessId,
+        openingBalanceId,
+        asOfDate,
+        baseCurrency: 'ILS',
+        positions,
+      }),
+    });
+    await postOpeningBalanceAs(assertion, { asOfDate, positions, openingBalanceId, description: 'opening position', requestId: randomUUID() }, conn);
+  }
+
+  /** The books both orders must arrive at. */
+  async function booksOf(businessId: string): Promise<{ periods: number; openings: number; openingDate: string | null }> {
+    const r = await pool.query<{ periods: number; openings: number; opening_date: string | null }>(
+      `SELECT (SELECT count(*) FROM accounting_periods WHERE business_id = $1)::int AS periods,
+              (SELECT count(*) FROM journal_entries WHERE business_id = $1 AND source_type = 'opening_balance')::int AS openings,
+              (SELECT to_char(min(entry_date), 'YYYY-MM-DD') FROM journal_entries WHERE business_id = $1 AND source_type = 'opening_balance') AS opening_date`,
+      [businessId],
+    );
+    const row = must(r.rows[0]);
+    return { periods: row.periods, openings: row.openings, openingDate: row.opening_date };
+  }
+
+  it('the PERIOD wins the business row — the opening balance still posts', async () => {
+    const s = await newBusiness('obrace-period');
+    const start = await daysAgo(60);
+    const opening = await daysAgo(61);
+
+    const creator = await periodClient();
+    const poster = await appClient();
+    const pids = [await pidOf(creator), await pidOf(poster)];
+    try {
+      await creator.query('BEGIN');
+      const operationId = operationIdFor(s.businessId, 'obrace-period-01');
+      const periodId = periodIdFor(s.businessId, 'obrace-period-01');
+      const assertion = periodAssertion(
+        { kind: 'period_create', tenantId: s.tenantId, businessId: s.businessId, operationId, periodId, startDate: start, endDate: today },
+        s.userId,
+      );
+      await createPeriodAs(assertion, { operationId, startDate: start, endDate: today }, { client: creator });
+
+      await poster.query('BEGIN');
+      const posting = (async (): Promise<Settled> => {
+        try {
+          await openBalanceOn(poster, s, opening, 'obrace-period-opening');
+          await poster.query('COMMIT');
+          return { who: 'post', ok: true };
+        } catch (e) {
+          await poster.query('ROLLBACK').catch(() => undefined);
+          return { who: 'post', ok: false, error: e instanceof Error ? e.message : String(e) };
+        }
+      })();
+
+      await contend('opening balance versus first period', pids);
+      await creator.query('COMMIT');
+
+      const outcome = await posting;
+      // It waited, then saw an ACTIVATED business — and posted anyway,
+      // because its date is older than the books.
+      expect(outcome.error).toBeUndefined();
+      expect(outcome.ok).toBe(true);
+      expect(await booksOf(s.businessId)).toEqual({ periods: 1, openings: 1, openingDate: opening });
+    } finally {
+      await creator.query('ROLLBACK').catch(() => undefined);
+      await creator.end().catch(() => undefined);
+      await poster.end().catch(() => undefined);
+    }
+  }, 120_000);
+
+  it('the OPENING BALANCE wins the business row — the first period still lands, on the same books', async () => {
+    const s = await newBusiness('obrace-opening');
+    const start = await daysAgo(60);
+    const opening = await daysAgo(61);
+
+    const poster = await appClient();
+    const creator = await periodClient();
+    const pids = [await pidOf(creator), await pidOf(poster)];
+    try {
+      await poster.query('BEGIN');
+      await openBalanceOn(poster, s, opening, 'obrace-opening-first');
+
+      await creator.query('BEGIN');
+      const operationId = operationIdFor(s.businessId, 'obrace-opening-01');
+      const periodId = periodIdFor(s.businessId, 'obrace-opening-01');
+      const assertion = periodAssertion(
+        { kind: 'period_create', tenantId: s.tenantId, businessId: s.businessId, operationId, periodId, startDate: start, endDate: today },
+        s.userId,
+      );
+      const creating = (async (): Promise<Settled> => {
+        try {
+          await createPeriodAs(assertion, { operationId, startDate: start, endDate: today }, { client: creator });
+          await creator.query('COMMIT');
+          return { who: 'period', ok: true };
+        } catch (e) {
+          await creator.query('ROLLBACK').catch(() => undefined);
+          return { who: 'period', ok: false, error: e instanceof Error ? e.message : String(e) };
+        }
+      })();
+
+      await contend('first period versus opening balance', pids);
+      await poster.query('COMMIT');
+
+      const outcome = await creating;
+      expect(outcome.error).toBeUndefined();
+      expect(outcome.ok).toBe(true);
+
+      // The same final books as the opposite order, fact for fact.
+      expect(await booksOf(s.businessId)).toEqual({ periods: 1, openings: 1, openingDate: opening });
+    } finally {
+      await poster.query('ROLLBACK').catch(() => undefined);
+      await poster.end().catch(() => undefined);
+      await creator.end().catch(() => undefined);
     }
   }, 120_000);
 });

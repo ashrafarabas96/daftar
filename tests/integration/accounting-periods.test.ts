@@ -391,9 +391,12 @@ describe('what may be posted, and when (§23, §38, §39)', () => {
       expect(await refusal(() => postOn(inside))).toMatch(/accounting\.period_closed/);
     });
 
-    it('an adjustment, a reversal and an opening balance are all refused alike (§38)', async () => {
-      // The guard is on `journal_entries`, so it cannot distinguish source
-      // types — and that is the property: every writer is protected equally.
+    it('an adjustment and an opening balance INSIDE a closed period are refused alike (§38, §11)', async () => {
+      // Inside the chain, the source does not matter. The opening-balance
+      // exception is about a date OLDER than the earliest period, so a date
+      // that falls inside a closed period gets the ordinary refusal — see
+      // accounting-periods-opening-balance.test.ts for the boundary either
+      // side of which these two sources finally differ.
       for (const sourceType of ['manual_adjustment', 'opening_balance']) {
         const c = { ...simpleCommand(fx, randomUUID(), await daysAgo(50), 150000n, sourceType), tenantId: p.tenantId, businessId: p.businessId };
         expect(await refusal(() => post(c, p.userId))).toMatch(/accounting\.period_closed/);

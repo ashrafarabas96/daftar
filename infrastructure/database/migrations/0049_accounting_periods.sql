@@ -28,12 +28,31 @@
 --
 -- The FIRST period a merchant explicitly creates ACTIVATES period-managed
 -- posting for that business, from that moment forward. Afterwards every NEW
--- posting's `entry_date` must fall inside exactly one existing period, and
--- that period must be `open`:
+-- ordinary posting's `entry_date` must fall inside exactly one existing
+-- period, and that period must be `open`:
 --
 --   * inside an OPEN period          -> permitted
 --   * inside a CLOSED period         -> REFUSED (accounting.period_closed)
 --   * outside every period           -> REFUSED (accounting.period_missing_for_date)
+--
+-- ── THE ONE EXCEPTION, and it is narrow ──────────────────────────────────
+--
+-- An `opening_balance` whose `entry_date` PREDATES the earliest period start
+-- posts without a covering period. The first period is where the books BEGIN
+-- in DAFTAR; the opening position is by definition what was carried in from
+-- before that, and 0042 already registers the source with
+-- lower_bound_policy = 'none'. Without this, the same opening balance would
+-- be accepted when entered before the merchant defined their first period and
+-- REFUSED when entered after it — the accounting meaning of a fact would
+-- depend on the order somebody configured the product.
+--
+-- The exception does not travel further than that sentence. An opening
+-- balance INSIDE the chain obeys the covering-period rule in full, so a
+-- CLOSED period still refuses it; an opening balance AFTER the chain is
+-- uncovered and refused; and no other source gets the exception, so a manual
+-- adjustment or a reversal dated before the earliest period is refused
+-- exactly as any other uncovered date is. The universal no-future rule of
+-- P2-S3 is untouched for every source, opening balances included.
 --
 -- History is NEVER rewritten. Entries posted before the first period existed
 -- keep their dates, their entries and their balances, whether or not a period
@@ -565,23 +584,62 @@ CREATE TRIGGER accounting_period_operations_no_mutation
 CREATE OR REPLACE FUNCTION accounting_period_guard_posting() RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $$
 DECLARE
-  v_any    BOOLEAN;
-  v_status TEXT;
-  v_id     UUID;
+  v_earliest DATE;
+  v_status   TEXT;
+  v_id       UUID;
 BEGIN
   -- 1. Stabilize the business in the established lock order. See above for
   --    why the guard takes this itself rather than trusting its caller.
   PERFORM 1 FROM businesses b WHERE b.id = NEW.business_id FOR SHARE;
 
-  -- 2. Activation (§9). Zero periods is a supported permanent state, not a
-  --    state to be migrated away from: the business posts exactly as it did
-  --    before this migration existed.
-  SELECT EXISTS (SELECT 1 FROM accounting_periods p WHERE p.business_id = NEW.business_id) INTO v_any;
-  IF NOT v_any THEN
+  -- 2. Activation (§9) AND the earliest boundary, in ONE set-wise read. A
+  --    NULL minimum means this business has no periods at all, which is a
+  --    supported permanent state rather than a state to be migrated away
+  --    from: the business posts exactly as it did before this migration
+  --    existed.
+  SELECT min(p.start_date) INTO v_earliest
+  FROM accounting_periods p
+  WHERE p.business_id = NEW.business_id;
+
+  IF v_earliest IS NULL THEN
     RETURN NEW;
   END IF;
 
-  -- 3. Exactly one period may contain the date — the exclusion constraint is
+  -- 3. THE ONE HISTORICAL EXCEPTION — an opening position that predates the
+  --    books.
+  --
+  --    A merchant's first period is when their books BEGIN in DAFTAR. The
+  --    opening balance is, by definition, the position carried in from
+  --    before that — 0042 registers `opening_balance` with
+  --    lower_bound_policy = 'none' precisely because it has no historical
+  --    floor. Refusing it for want of a covering period would mean the same
+  --    financial fact is valid or invalid depending on whether the merchant
+  --    entered their opening position before or after they defined their
+  --    first period. Accounting truth does not depend on the order in which
+  --    somebody configured a product.
+  --
+  --    The exception is deliberately narrow, and each half of the condition
+  --    carries its own weight:
+  --
+  --      * the SOURCE must be `opening_balance`. A manual adjustment or a
+  --        reversal dated before the earliest period is refused exactly as
+  --        before — they are ordinary postings and periods narrow them.
+  --      * the DATE must PREDATE the earliest period start. An opening
+  --        balance that lands INSIDE the covered chain is not historical,
+  --        so it falls through to the covering-period rule below and obeys
+  --        it in full: permitted in an open period, REFUSED in a closed one.
+  --        An opening balance after the chain is uncovered and is refused.
+  --
+  --    So this is a rule about placement relative to the beginning of the
+  --    books, not a licence for one source to ignore period state. The
+  --    universal date authority is untouched: P2-S3 still refuses any entry
+  --    dated after today in the business timezone, opening balances
+  --    included, and it does so before this trigger is ever reached.
+  IF NEW.source_type = 'opening_balance' AND NEW.entry_date < v_earliest THEN
+    RETURN NEW;
+  END IF;
+
+  -- 4. Exactly one period may contain the date — the exclusion constraint is
   --    what makes "exactly one" true rather than "the first one found".
   SELECT p.id, p.status INTO v_id, v_status
   FROM accounting_periods p
@@ -612,7 +670,7 @@ CREATE TRIGGER accounting_period_guard
   FOR EACH ROW EXECUTE FUNCTION accounting_period_guard_posting();
 
 COMMENT ON FUNCTION accounting_period_guard_posting() IS
-  'The DATABASE-level closed-period refusal (directive §23). A BEFORE INSERT trigger on journal_entries, so every writer passes through it and no application layer can be the thing that enforces a close. Takes the business row FOR SHARE and the covering period FOR SHARE, in that order, which is the same order the period commands take them in — so a close and a posting contend but never deadlock, and a posting can never commit into a period after it was closed.';
+  'The DATABASE-level closed-period refusal (directive §23). A BEFORE INSERT trigger on journal_entries, so every writer passes through it and no application layer can be the thing that enforces a close. Takes the business row FOR SHARE and the covering period FOR SHARE, in that order, which is the same order the period commands take them in — so a close and a posting contend but never deadlock, and a posting can never commit into a period after it was closed. One narrow exception, which exists so that an accounting fact does not change meaning with setup order: an opening_balance dated strictly before the earliest period start posts without a covering period. It is the only source with that exception, it applies only before the chain begins, and an opening balance inside a CLOSED period is still refused.';
 
 -- ─────────────────────────────────────────────────────────────────────────
 -- 8. RLS — the established business-scoped model, unchanged (§35).
