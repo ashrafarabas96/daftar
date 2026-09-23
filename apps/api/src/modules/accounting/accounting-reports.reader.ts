@@ -380,7 +380,7 @@ export class DatabaseAccountingReportReader implements AccountingReportReader {
  * `bigint`: cumulative history may exceed what a BIGINT holds even though
  * every individual line is capped well below it (§41).
  */
-function accountTotalsSql(lineConditions: readonly string[], accountConditions: readonly string[]): string {
+export function accountTotalsSql(lineConditions: readonly string[], accountConditions: readonly string[]): string {
   return `SELECT a.id, a.code, a.name, a.type, a.is_active,
                  coalesce(t.debit, 0)::text  AS debit,
                  coalesce(t.credit, 0)::text AS credit
