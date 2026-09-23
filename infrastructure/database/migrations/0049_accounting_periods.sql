@@ -526,6 +526,96 @@ CREATE TRIGGER accounting_periods_transition_only
   BEFORE UPDATE ON accounting_periods
   FOR EACH ROW EXECUTE FUNCTION accounting_periods_transition();
 
+-- ─────────────────────────────────────────────────────────────────────────
+-- 6b. THE TOPOLOGY INVARIANT, checked at COMMIT.
+--
+-- Everything above is a rule one command remembers. This is the rule the
+-- DATABASE keeps, and it states the final shape of a business's periods:
+--
+--   * FINITE and NON-OVERLAPPING — the CHECK and the gist EXCLUDE above;
+--   * CONTIGUOUS — sorted by start_date, each period begins exactly one day
+--     after the previous one ends;
+--   * CLOSED PREFIX, OPEN SUFFIX — no OPEN period may begin before a CLOSED
+--     one.
+--
+-- ── Why the last of those is an accounting rule and not a tidiness rule ──
+--
+-- A closed period is a statement that the figures reported for it will not
+-- change. Those figures include the balances CARRIED IN to it, which are
+-- computed from every entry dated before it. So if January is open while
+-- February is closed, a new January entry silently moves February's opening
+-- balance, its closing balance and its balance-sheet positions — while
+-- February is still declared final. The close would be a date filter rather
+-- than an accounting control, and this is the invariant that makes it a
+-- control: once a period is closed, nothing behind it is writable.
+--
+-- ── Why it is DEFERRABLE, and why deferred is not weaker here ────────────
+--
+-- The checks are about the SHAPE OF A SET, so they can only be answered once
+-- the transaction has finished changing that set. A close moves one row; an
+-- immediate check would read a half-applied topology and refuse states that
+-- are valid at COMMIT. Deferring costs nothing in strength — an invalid final
+-- state cannot commit, whatever order the statements ran in — and it is what
+-- lets a future multi-row correction exist without weakening the rule.
+--
+-- ── Serialization (§14) ──────────────────────────────────────────────────
+--
+-- Two transactions can each leave a VALID topology and a broken one between
+-- them: one prepends an open period while the other closes the current
+-- earliest. Each sees a legal set in its own snapshot; the union is
+-- OPEN-before-CLOSED. So the validator takes the SAME per-business advisory
+-- lock the commands take — no new lock namespace, and for a command it is a
+-- lock the transaction already holds, so it costs nothing and cannot
+-- reorder anything.
+-- ─────────────────────────────────────────────────────────────────────────
+CREATE OR REPLACE FUNCTION accounting_period_topology_check() RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $$
+DECLARE
+  v_business UUID := NEW.business_id;
+  v_gap      RECORD;
+  v_open     DATE;
+  v_closed   DATE;
+BEGIN
+  PERFORM pg_advisory_xact_lock(accounting_period_topology_lock_key(v_business));
+
+  -- 1. No gap. One set-wise pass with a window function: a period whose start
+  --    is not the day after the previous end is a hole in the merchant's
+  --    calendar, and every posting into that hole would be refused with no
+  --    way to tell a deliberate boundary from an omission.
+  SELECT * INTO v_gap FROM (
+    SELECT p.start_date, lag(p.end_date) OVER (ORDER BY p.start_date) AS prev_end
+    FROM accounting_periods p WHERE p.business_id = v_business
+  ) t WHERE t.prev_end IS NOT NULL AND t.start_date <> t.prev_end + 1
+  LIMIT 1;
+  IF FOUND THEN
+    RAISE EXCEPTION 'accounting.period_not_contiguous: this business''s periods would leave a gap between % and % (business %)', v_gap.prev_end, v_gap.start_date, v_business
+      USING ERRCODE = 'P0001';
+  END IF;
+
+  -- 2. CLOSED prefix, OPEN suffix. Stated as the one comparison that says it:
+  --    the earliest OPEN period must begin after the latest CLOSED one.
+  SELECT min(p.start_date) FILTER (WHERE p.status = 'open'),
+         max(p.start_date) FILTER (WHERE p.status = 'closed')
+    INTO v_open, v_closed
+  FROM accounting_periods p WHERE p.business_id = v_business;
+
+  IF v_open IS NOT NULL AND v_closed IS NOT NULL AND v_open < v_closed THEN
+    RAISE EXCEPTION 'accounting.period_topology_invalid: an accounting period beginning % is open while a later period beginning % is closed — closed periods are the earlier ones, always (business %)', v_open, v_closed, v_business
+      USING ERRCODE = 'P0001';
+  END IF;
+
+  RETURN NULL;
+END;
+$$;
+
+CREATE CONSTRAINT TRIGGER accounting_periods_topology
+  AFTER INSERT OR UPDATE ON accounting_periods
+  DEFERRABLE INITIALLY DEFERRED
+  FOR EACH ROW EXECUTE FUNCTION accounting_period_topology_check();
+
+COMMENT ON FUNCTION accounting_period_topology_check() IS
+  'The period topology invariant, enforced by PostgreSQL at COMMIT rather than by a command: sorted by start_date a business''s periods are contiguous, and no OPEN period begins before a CLOSED one. The second half is what makes a close an accounting control instead of a date filter — an open period behind a closed one would let new entries change the balances carried into books already declared final. DEFERRABLE INITIALLY DEFERRED because both checks are about the shape of the whole set, which is only final at COMMIT; it takes the same per-business advisory lock the period commands take, so two transactions cannot each leave a legal set whose union is illegal.';
+
 CREATE OR REPLACE FUNCTION accounting_period_operations_immutable() RETURNS trigger
 LANGUAGE plpgsql SET search_path = pg_catalog, public, pg_temp AS $$
 BEGIN
@@ -585,6 +675,7 @@ CREATE OR REPLACE FUNCTION accounting_period_guard_posting() RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $$
 DECLARE
   v_earliest DATE;
+  v_closed   BIGINT;
   v_status   TEXT;
   v_id       UUID;
 BEGIN
@@ -597,7 +688,8 @@ BEGIN
   --    supported permanent state rather than a state to be migrated away
   --    from: the business posts exactly as it did before this migration
   --    existed.
-  SELECT min(p.start_date) INTO v_earliest
+  SELECT min(p.start_date), count(*) FILTER (WHERE p.status = 'closed')
+    INTO v_earliest, v_closed
   FROM accounting_periods p
   WHERE p.business_id = NEW.business_id;
 
@@ -636,6 +728,19 @@ BEGIN
   --    dated after today in the business timezone, opening balances
   --    included, and it does so before this trigger is ever reached.
   IF NEW.source_type = 'opening_balance' AND NEW.entry_date < v_earliest THEN
+    -- …but not BEHIND CLOSED BOOKS. A closed period is a statement that the
+    -- figures reported for it will not change, and a balance carried into it
+    -- is one of those figures: a NEW opening position dated before the chain
+    -- moves the opening balance of every period after it, closed ones
+    -- included. The date itself is outside every period, so
+    -- `accounting.period_closed` would be the wrong sentence — nothing is
+    -- being written into a closed period. What is refused is writing behind
+    -- one. The merchant's route back is explicit and audited: reopen the
+    -- closed periods, newest first, state the position, close them again.
+    IF v_closed > 0 THEN
+      RAISE EXCEPTION 'accounting.period_closed_history: this business has closed accounting periods, so no new entry may be dated before them — reopen them first if the opening position must change'
+        USING ERRCODE = 'P0001';
+    END IF;
     RETURN NEW;
   END IF;
 
@@ -839,6 +944,18 @@ BEGIN
       RAISE EXCEPTION 'accounting.period_not_contiguous: a period joins the existing range exactly — this business''s periods run % to %', v_min, v_max
         USING ERRCODE = 'P0001';
     END IF;
+
+    -- A PREPEND behind closed books is refused. The new period would be open
+    -- and would sit BEFORE periods the merchant has already closed, so every
+    -- entry posted into it would change the balances carried into those
+    -- closed periods. Appending after the chain stays permitted, and
+    -- prepending stays permitted while every existing period is still open.
+    IF p_end_date = v_min - 1 AND EXISTS (
+      SELECT 1 FROM accounting_periods p WHERE p.business_id = v_actor.business_id AND p.status = 'closed'
+    ) THEN
+      RAISE EXCEPTION 'accounting.period_prepend_closed_history: this business has closed accounting periods, so no earlier period may be created before them — reopen them first if history must be extended backwards'
+        USING ERRCODE = 'P0001';
+    END IF;
   END IF;
 
   -- ── 7. The row, its registry entry, its audit and its event ────────────
@@ -937,6 +1054,20 @@ BEGIN
     -- a caller whose belief about the ledger is wrong, and saying so is the
     -- only way they find out. A genuine retry replays above, by its key.
     RAISE EXCEPTION 'accounting.period_not_open: this accounting period is already closed (business %, period %)', v_actor.business_id, v_actor.resource_id
+      USING ERRCODE = 'P0001';
+  END IF;
+
+  -- CLOSING GOES OLDEST FIRST. Closing March while February is still open
+  -- would produce books whose closed period can still be changed from
+  -- behind, because every February entry moves March's opening balance. The
+  -- refusal is explicit and closes nothing else: no cascade, no silent close
+  -- of the earlier period, because closing a period is a decision the
+  -- merchant makes one period at a time and each one is audited separately.
+  IF EXISTS (
+    SELECT 1 FROM accounting_periods p
+    WHERE p.business_id = v_actor.business_id AND p.status = 'open' AND p.start_date < v_period.start_date
+  ) THEN
+    RAISE EXCEPTION 'accounting.period_close_order: an earlier accounting period is still open — periods are closed oldest first (business %, period %)', v_actor.business_id, v_actor.resource_id
       USING ERRCODE = 'P0001';
   END IF;
 
@@ -1045,6 +1176,19 @@ BEGIN
   END IF;
   IF v_period.status <> 'closed' THEN
     RAISE EXCEPTION 'accounting.period_not_closed: this accounting period is already open (business %, period %)', v_actor.business_id, v_actor.resource_id
+      USING ERRCODE = 'P0001';
+  END IF;
+
+  -- REOPENING GOES NEWEST FIRST — the mirror of the close rule, and for the
+  -- same reason. Reopening February while March stays closed would put an
+  -- open period behind a closed one, which is exactly the state the topology
+  -- forbids: new February truth would change March's carried-in balance
+  -- while March is still declared final. Nothing cascades here either.
+  IF EXISTS (
+    SELECT 1 FROM accounting_periods p
+    WHERE p.business_id = v_actor.business_id AND p.status = 'closed' AND p.start_date > v_period.start_date
+  ) THEN
+    RAISE EXCEPTION 'accounting.period_reopen_order: a later accounting period is still closed — periods are reopened newest first (business %, period %)', v_actor.business_id, v_actor.resource_id
       USING ERRCODE = 'P0001';
   END IF;
 
@@ -1163,6 +1307,7 @@ REVOKE ALL ON FUNCTION accounting_period_fingerprint(TEXT, UUID, UUID, UUID, UUI
 REVOKE ALL ON FUNCTION accounting_period_topology_lock_key(UUID) FROM PUBLIC;
 REVOKE ALL ON FUNCTION accounting_period_guard_posting() FROM PUBLIC;
 REVOKE ALL ON FUNCTION accounting_periods_transition() FROM PUBLIC;
+REVOKE ALL ON FUNCTION accounting_period_topology_check() FROM PUBLIC;
 REVOKE ALL ON FUNCTION accounting_periods_no_delete() FROM PUBLIC;
 REVOKE ALL ON FUNCTION accounting_period_operations_immutable() FROM PUBLIC;
 REVOKE ALL ON FUNCTION accounting_period_create(UUID, DATE, DATE, TEXT) FROM PUBLIC;
@@ -1192,6 +1337,10 @@ ALTER FUNCTION accounting_period_canonical(TEXT, UUID, UUID, UUID, UUID, DATE, D
 ALTER FUNCTION accounting_period_fingerprint(TEXT, UUID, UUID, UUID, UUID, DATE, DATE, TEXT) OWNER TO daftar_accounting_internal;
 ALTER FUNCTION accounting_period_topology_lock_key(UUID) OWNER TO daftar_accounting_internal;
 ALTER FUNCTION accounting_period_guard_posting() OWNER TO daftar_accounting_internal;
+-- The topology validator reads `accounting_periods` for a business whose rows
+-- the writer may not be able to see, so it is SECURITY DEFINER and owned by
+-- the internal principal for the same reason the posting guard is.
+ALTER FUNCTION accounting_period_topology_check() OWNER TO daftar_accounting_internal;
 ALTER FUNCTION accounting_period_create(UUID, DATE, DATE, TEXT) OWNER TO daftar_accounting_internal;
 ALTER FUNCTION accounting_period_close(UUID, TEXT) OWNER TO daftar_accounting_internal;
 ALTER FUNCTION accounting_period_reopen(UUID, TEXT, TEXT) OWNER TO daftar_accounting_internal;
@@ -1282,9 +1431,9 @@ BEGIN
   WHERE p.proname IN ('accounting_period_create', 'accounting_period_close', 'accounting_period_reopen',
                       'accounting_period_canonical', 'accounting_period_fingerprint',
                       'accounting_period_reason_digest', 'accounting_period_topology_lock_key',
-                      'accounting_period_guard_posting')
+                      'accounting_period_guard_posting', 'accounting_period_topology_check')
     AND r.rolname = 'daftar_accounting_internal';
-  IF v_count <> 8 THEN
+  IF v_count <> 9 THEN
     RAISE EXCEPTION 'accounting.period_registry_invalid: the elevated period routines must be owned by daftar_accounting_internal (got %)', v_count;
   END IF;
 
@@ -1295,10 +1444,11 @@ BEGIN
                       'accounting_period_canonical', 'accounting_period_fingerprint',
                       'accounting_period_reason_digest', 'accounting_period_topology_lock_key',
                       'accounting_period_guard_posting', 'accounting_periods_transition',
-                      'accounting_periods_no_delete', 'accounting_period_operations_immutable')
+                      'accounting_periods_no_delete', 'accounting_period_operations_immutable',
+                      'accounting_period_topology_check')
     AND EXISTS (SELECT 1 FROM unnest(coalesce(p.proconfig, ARRAY[]::text[])) AS c WHERE c ~ '^search_path=.*,\s*pg_temp$');
-  IF v_count <> 11 THEN
-    RAISE EXCEPTION 'accounting.period_registry_invalid: % of 11 P2-S6 routines pin pg_temp last in their search_path (G-5)', v_count;
+  IF v_count <> 12 THEN
+    RAISE EXCEPTION 'accounting.period_registry_invalid: % of 12 P2-S6 routines pin pg_temp last in their search_path (G-5)', v_count;
   END IF;
 
   -- (g) Both tables ENABLE and FORCE row level security, so even their owner
@@ -1316,6 +1466,18 @@ BEGIN
     WHERE t.relname = 'accounting_periods' AND c.contype = 'x' AND c.conname = 'accounting_periods_no_overlap'
   ) THEN
     RAISE EXCEPTION 'accounting.period_registry_invalid: accounting_periods must carry the gist exclusion constraint that makes overlap physically impossible (§12)';
+  END IF;
+
+  -- (h2) The topology invariant is a DEFERRABLE constraint trigger on the
+  --      period table itself. Deferred so it can read the final shape of the
+  --      set, and physical so that no command — and no direct SQL — can leave
+  --      an OPEN period behind a CLOSED one or a gap in the chain.
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_trigger tg JOIN pg_class t ON t.oid = tg.tgrelid
+    WHERE t.relname = 'accounting_periods' AND tg.tgname = 'accounting_periods_topology'
+      AND tg.tgconstraint <> 0 AND tg.tgdeferrable AND tg.tginitdeferred
+  ) THEN
+    RAISE EXCEPTION 'accounting.period_registry_invalid: the period topology invariant must be a DEFERRABLE INITIALLY DEFERRED constraint trigger on accounting_periods';
   END IF;
 
   -- (i) The posting guard is installed on journal_entries itself, not on a

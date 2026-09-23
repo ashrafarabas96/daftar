@@ -74,7 +74,23 @@ function migrationsUpTo(upTo: string): string {
   return dir;
 }
 
-const admin = new Pool({ connectionString: dbUrl, max: 1 });
+/**
+ * A pool on a scratch database, with the error listener `pg` requires.
+ *
+ * Every case here ends by dropping its database `WITH (FORCE)`, which
+ * terminates whatever backends are still attached. A pool whose idle client
+ * is terminated EMITS an error, and an unhandled one fails the whole run even
+ * though every assertion passed — so the listener is part of using a pool
+ * against a database that will be dropped, not a way to hide a failure. The
+ * assertions are all made through awaited queries, which still reject.
+ */
+function scratchPool(connectionString: string): Pool {
+  const pool = new Pool({ connectionString, max: 1 });
+  pool.on('error', () => undefined);
+  return pool;
+}
+
+const admin = scratchPool(dbUrl);
 
 describe('managed PostgreSQL: 0039 → 0049 under a non-superuser migration principal', () => {
   afterAll(async () => {
@@ -87,7 +103,7 @@ describe('managed PostgreSQL: 0039 → 0049 under a non-superuser migration prin
     await admin.query(`DROP DATABASE IF EXISTS ${SCRATCH_DB} WITH (FORCE)`);
     await admin.query(`CREATE DATABASE ${SCRATCH_DB}`);
 
-    const setup = new Pool({ connectionString: adminScratchUrl, max: 1 });
+    const setup = scratchPool(adminScratchUrl);
     const businesses: string[] = [];
     try {
       await setup.query(bootstrapSql());
@@ -157,7 +173,7 @@ describe('managed PostgreSQL: 0039 → 0049 under a non-superuser migration prin
     // ── The migration principal must be exactly that: no superuser, no RLS
     //    bypass. Asserted before it is used, so a mis-provisioned role can
     //    never make this suite pass by accident.
-    const migrator = new Pool({ connectionString: migratorScratchUrl, max: 1 });
+    const migrator = scratchPool(migratorScratchUrl);
     try {
       const who = (
         await migrator.query<{ rolname: string; rolsuper: boolean; rolbypassrls: boolean; rolcreaterole: boolean }>(
@@ -293,7 +309,7 @@ describe('managed PostgreSQL: 0039 → 0049 under a non-superuser migration prin
     const adminUrl = `postgresql://${PG_USER}:${PG_PASSWORD}@localhost:${PG_PORT}/${db}`;
     const migratorUrl = `postgresql://daftar_migrator:${MIGRATOR_DB_PASSWORD}@localhost:${PG_PORT}/${db}`;
 
-    const setup = new Pool({ connectionString: adminUrl, max: 1 });
+    const setup = scratchPool(adminUrl);
     try {
       await setup.query(bootstrapSql());
       await setup.query(`GRANT CONNECT ON DATABASE ${db} TO daftar_migrator`);
@@ -347,7 +363,7 @@ describe('managed PostgreSQL: 0039 → 0049 under a non-superuser migration prin
 
       // Exactly the migrations after the boundary, applied by the
       // NON-SUPERUSER principal.
-      const migrator = new Pool({ connectionString: migratorUrl, max: 1 });
+      const migrator = scratchPool(migratorUrl);
       try {
         const who = (
           await migrator.query<{ rolsuper: boolean; rolbypassrls: boolean }>(`SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user`)
@@ -365,7 +381,7 @@ describe('managed PostgreSQL: 0039 → 0049 under a non-superuser migration prin
       expect(await runMigrations(migratorUrl)).toEqual([]);
 
       // And the sources arrived with the shape the slice specifies.
-      const check = new Pool({ connectionString: migratorUrl, max: 1 });
+      const check = scratchPool(migratorUrl);
       try {
         expect(
           (
@@ -429,7 +445,7 @@ describe('managed PostgreSQL: 0039 → 0049 under a non-superuser migration prin
     const adminUrl = `postgresql://${PG_USER}:${PG_PASSWORD}@localhost:${PG_PORT}/${db}`;
     const migratorUrl = `postgresql://daftar_migrator:${MIGRATOR_DB_PASSWORD}@localhost:${PG_PORT}/${db}`;
 
-    const setup = new Pool({ connectionString: adminUrl, max: 1 });
+    const setup = scratchPool(adminUrl);
     try {
       await setup.query(bootstrapSql());
       await setup.query(`GRANT CONNECT ON DATABASE ${db} TO daftar_migrator`);
@@ -468,7 +484,7 @@ describe('managed PostgreSQL: 0039 → 0049 under a non-superuser migration prin
         END $$;
       `);
 
-      const who = new Pool({ connectionString: migratorUrl, max: 1 });
+      const who = scratchPool(migratorUrl);
       try {
         expect(
           (await who.query<{ rolsuper: boolean; rolbypassrls: boolean }>(`SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user`)).rows[0],
@@ -493,7 +509,7 @@ describe('managed PostgreSQL: 0039 → 0049 under a non-superuser migration prin
 
       // Everything below is read through the NON-SUPERUSER connection: if the
       // migrator can see it, so can a deployment operator.
-      const check = new Pool({ connectionString: migratorUrl, max: 1 });
+      const check = scratchPool(migratorUrl);
       try {
         // Row level security arrived enabled AND forced — forced matters
         // because the table's owner is the migrator itself here.
@@ -597,7 +613,7 @@ describe('managed PostgreSQL: 0039 → 0049 under a non-superuser migration prin
     const adminUrl = `postgresql://${PG_USER}:${PG_PASSWORD}@localhost:${PG_PORT}/${db}`;
     const migratorUrl = `postgresql://daftar_migrator:${MIGRATOR_DB_PASSWORD}@localhost:${PG_PORT}/${db}`;
 
-    const setup = new Pool({ connectionString: adminUrl, max: 1 });
+    const setup = scratchPool(adminUrl);
     try {
       await setup.query(bootstrapSql());
       await setup.query(`GRANT CONNECT ON DATABASE ${db} TO daftar_migrator`);
@@ -640,7 +656,7 @@ describe('managed PostgreSQL: 0039 → 0049 under a non-superuser migration prin
         END $$;
       `);
 
-      const check = new Pool({ connectionString: migratorUrl, max: 1 });
+      const check = scratchPool(migratorUrl);
       try {
         expect(
           (
@@ -713,6 +729,7 @@ describe('managed PostgreSQL: 0039 → 0049 under a non-superuser migration prin
           'accounting_period_guard_posting',
           'accounting_period_reason_digest',
           'accounting_period_reopen',
+          'accounting_period_topology_check',
           'accounting_period_topology_lock_key',
         ]);
 
@@ -762,7 +779,7 @@ describe('managed PostgreSQL: 0039 → 0049 under a non-superuser migration prin
     await admin.query(`CREATE DATABASE ${db}`);
     const url = `postgresql://${PG_USER}:${PG_PASSWORD}@localhost:${PG_PORT}/${db}`;
 
-    const pool = new Pool({ connectionString: url, max: 1 });
+    const pool = scratchPool(url);
     try {
       await pool.query(bootstrapSql());
 
@@ -809,7 +826,7 @@ describe('managed PostgreSQL: 0039 → 0049 under a non-superuser migration prin
     await admin.query(`CREATE DATABASE ${db}`);
     const url = `postgresql://${PG_USER}:${PG_PASSWORD}@localhost:${PG_PORT}/${db}`;
 
-    const pool = new Pool({ connectionString: url, max: 1 });
+    const pool = scratchPool(url);
     const dir = migrationsUpTo('0049_accounting_periods.sql');
     try {
       await pool.query(bootstrapSql());
@@ -849,7 +866,7 @@ describe('managed PostgreSQL: 0039 → 0049 under a non-superuser migration prin
   it('leaves no temporary privilege behind and no runtime principal with chart authority', async () => {
     // Read entirely through the non-superuser connection: if daftar_migrator
     // can see it, so can a deployment operator.
-    const migrator = new Pool({ connectionString: migratorScratchUrl, max: 1 });
+    const migrator = scratchPool(migratorScratchUrl);
     try {
       // The section 5b CREATE grant is gone.
       expect((await migrator.query<{ c: boolean }>(`SELECT has_schema_privilege('daftar_accounting_internal', 'public', 'CREATE') AS c`)).rows[0]?.c).toBe(

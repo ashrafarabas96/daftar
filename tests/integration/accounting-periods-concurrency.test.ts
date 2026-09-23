@@ -43,6 +43,7 @@ import {
   periodAssertion,
   periodClient,
   periodIdFor,
+  periodRefusal,
   readPeriod,
   reopenPeriod,
   type PeriodScope,
@@ -726,6 +727,54 @@ describe('a period, its registry entry, its audit and its event are one fact (§
 
 // ── §12 of the correction: the opening balance and the first period ───────
 
+/** An opening balance on an ALREADY-OPEN transaction, through the real source path. */
+async function openBalanceOn(conn: Client, scope: PeriodScope, asOfDate: string, key: string): Promise<void> {
+  const positions: PostLine[] = [
+    {
+      account: { kind: 'system', systemKey: 'cash' },
+      side: 'D',
+      baseAmountMinor: 50000n,
+      baseCurrency: 'ILS',
+      txnAmountMinor: 50000n,
+      txnCurrency: 'ILS',
+      fxRate: '1',
+      fxRateSource: 'base',
+      fxRateAt: new Date('2026-03-14T09:15:00Z'),
+      memo: null,
+    },
+  ];
+  const openingBalanceId = deriveSourceId(scope.businessId, key);
+  const assertion = sourceAssertion({
+    actorUserId: scope.userId,
+    tenantId: scope.tenantId,
+    businessId: scope.businessId,
+    operationKind: 'post',
+    sourceType: 'opening_balance',
+    sourceId: openingBalanceId,
+    postingFingerprint: openingBalanceFingerprintOf({
+      tenantId: scope.tenantId,
+      businessId: scope.businessId,
+      openingBalanceId,
+      asOfDate,
+      baseCurrency: 'ILS',
+      positions,
+    }),
+  });
+  await postOpeningBalanceAs(assertion, { asOfDate, positions, openingBalanceId, description: 'opening position', requestId: randomUUID() }, conn);
+}
+
+/** The books both orders must arrive at. */
+async function booksOf(businessId: string): Promise<{ periods: number; openings: number; openingDate: string | null }> {
+  const r = await pool.query<{ periods: number; openings: number; opening_date: string | null }>(
+    `SELECT (SELECT count(*) FROM accounting_periods WHERE business_id = $1)::int AS periods,
+            (SELECT count(*) FROM journal_entries WHERE business_id = $1 AND source_type = 'opening_balance')::int AS openings,
+            (SELECT to_char(min(entry_date), 'YYYY-MM-DD') FROM journal_entries WHERE business_id = $1 AND source_type = 'opening_balance') AS opening_date`,
+    [businessId],
+  );
+  const row = must(r.rows[0]);
+  return { periods: row.periods, openings: row.openings, openingDate: row.opening_date };
+}
+
 /**
  * The race the opening-balance exception has to survive.
  *
@@ -738,54 +787,6 @@ describe('a period, its registry entry, its audit and its event are one fact (§
  * it in the database's scheduling, which is worse rather than better.
  */
 describe('the opening balance and the first period, racing (correction §12)', () => {
-  /** An opening balance on an ALREADY-OPEN transaction, through the real source path. */
-  async function openBalanceOn(conn: Client, scope: PeriodScope, asOfDate: string, key: string): Promise<void> {
-    const positions: PostLine[] = [
-      {
-        account: { kind: 'system', systemKey: 'cash' },
-        side: 'D',
-        baseAmountMinor: 50000n,
-        baseCurrency: 'ILS',
-        txnAmountMinor: 50000n,
-        txnCurrency: 'ILS',
-        fxRate: '1',
-        fxRateSource: 'base',
-        fxRateAt: new Date('2026-03-14T09:15:00Z'),
-        memo: null,
-      },
-    ];
-    const openingBalanceId = deriveSourceId(scope.businessId, key);
-    const assertion = sourceAssertion({
-      actorUserId: scope.userId,
-      tenantId: scope.tenantId,
-      businessId: scope.businessId,
-      operationKind: 'post',
-      sourceType: 'opening_balance',
-      sourceId: openingBalanceId,
-      postingFingerprint: openingBalanceFingerprintOf({
-        tenantId: scope.tenantId,
-        businessId: scope.businessId,
-        openingBalanceId,
-        asOfDate,
-        baseCurrency: 'ILS',
-        positions,
-      }),
-    });
-    await postOpeningBalanceAs(assertion, { asOfDate, positions, openingBalanceId, description: 'opening position', requestId: randomUUID() }, conn);
-  }
-
-  /** The books both orders must arrive at. */
-  async function booksOf(businessId: string): Promise<{ periods: number; openings: number; openingDate: string | null }> {
-    const r = await pool.query<{ periods: number; openings: number; opening_date: string | null }>(
-      `SELECT (SELECT count(*) FROM accounting_periods WHERE business_id = $1)::int AS periods,
-              (SELECT count(*) FROM journal_entries WHERE business_id = $1 AND source_type = 'opening_balance')::int AS openings,
-              (SELECT to_char(min(entry_date), 'YYYY-MM-DD') FROM journal_entries WHERE business_id = $1 AND source_type = 'opening_balance') AS opening_date`,
-      [businessId],
-    );
-    const row = must(r.rows[0]);
-    return { periods: row.periods, openings: row.openings, openingDate: row.opening_date };
-  }
-
   it('the PERIOD wins the business row — the opening balance still posts', async () => {
     const s = await newBusiness('obrace-period');
     const start = await daysAgo(60);
@@ -874,6 +875,313 @@ describe('the opening balance and the first period, racing (correction §12)', (
     } finally {
       await poster.query('ROLLBACK').catch(() => undefined);
       await poster.end().catch(() => undefined);
+      await creator.end().catch(() => undefined);
+    }
+  }, 120_000);
+});
+
+// ── §22, §23: the closed-books topology under contention ──────────────────
+
+/** The business's periods in date order, as statuses — the shape the rule is about. */
+async function topologyOf(businessId: string): Promise<string[]> {
+  const r = await pool.query<{ status: string }>(`SELECT status FROM accounting_periods WHERE business_id = $1 ORDER BY start_date`, [businessId]);
+  return r.rows.map((row) => row.status);
+}
+
+/** A legal set is closed periods first, then open ones — never the other way round. */
+function isMonotonic(statuses: readonly string[]): boolean {
+  return statuses.indexOf('closed') === -1 || statuses.lastIndexOf('closed') < (statuses.indexOf('open') === -1 ? Infinity : statuses.indexOf('open'));
+}
+
+/**
+ * A close and a historical opening balance, in flight at the same moment (§22).
+ *
+ * This is the race the new closed-history rule has to survive, and it is the
+ * one that cannot be decided by looking at either transaction alone: the
+ * opening balance is dated OUTSIDE every period, so nothing about its own
+ * date tells it that a close is happening. What makes the answer definite is
+ * that both transactions take the business row — the posting under FOR SHARE
+ * inside `accounting_post_entry`, the close under FOR UPDATE — so one of them
+ * waits, and the one that waits re-reads the books afterwards.
+ *
+ * There is no correct answer in which the merchant ends up with closed books
+ * that acquired a new entry behind them.
+ */
+describe('a close and a historical opening balance, racing (§22)', () => {
+  it('case A: the opening balance wins the business row — it commits, and the close then succeeds around it', async () => {
+    const s = await newBusiness('obclose-a');
+    const start = await daysAgo(40);
+    const opening = await daysAgo(41);
+    const periodId = (await createPeriod(s, 'obclose-a-period', start, today)).periodId;
+
+    const poster = await appClient();
+    const closer = await periodClient();
+    const pids = [await pidOf(poster), await pidOf(closer)];
+    try {
+      await poster.query('BEGIN');
+      await openBalanceOn(poster, s, opening, 'obclose-a-opening');
+      // The opening balance is written and the business row is held FOR SHARE.
+
+      const operationId = operationIdFor(s.businessId, 'obclose-a-close-key');
+      const assertion = periodAssertion({ kind: 'period_close', tenantId: s.tenantId, businessId: s.businessId, operationId, periodId }, s.userId);
+      await closer.query('BEGIN');
+      const closing = (async (): Promise<Settled> => {
+        try {
+          await closePeriodAs(assertion, { operationId }, { client: closer });
+          await closer.query('COMMIT');
+          return { who: 'period', ok: true };
+        } catch (e) {
+          await closer.query('ROLLBACK').catch(() => undefined);
+          return { who: 'period', ok: false, error: e instanceof Error ? e.message : String(e) };
+        }
+      })();
+
+      await contend('close versus historical opening balance, case A', pids);
+      await poster.query('COMMIT');
+
+      const outcome = await closing;
+      expect(outcome.error).toBeUndefined();
+      expect(outcome.ok).toBe(true);
+
+      // The opening balance was committed BEFORE the close, so the books that
+      // were closed are the books that contain it. Nothing appeared behind
+      // closed history: the history was not closed when it was written.
+      expect(await booksOf(s.businessId)).toEqual({ periods: 1, openings: 1, openingDate: opening });
+      expect((await readPeriod(pool, s.businessId, periodId)).status).toBe('closed');
+    } finally {
+      await poster.query('ROLLBACK').catch(() => undefined);
+      await poster.end().catch(() => undefined);
+      await closer.end().catch(() => undefined);
+    }
+  }, 120_000);
+
+  it('case B: the close wins the business row — the historical opening balance is then refused by name', async () => {
+    const s = await newBusiness('obclose-b');
+    const start = await daysAgo(40);
+    const opening = await daysAgo(41);
+    const periodId = (await createPeriod(s, 'obclose-b-period', start, today)).periodId;
+
+    const closer = await periodClient();
+    const poster = await appClient();
+    const pids = [await pidOf(poster), await pidOf(closer)];
+    try {
+      const operationId = operationIdFor(s.businessId, 'obclose-b-close-key');
+      const assertion = periodAssertion({ kind: 'period_close', tenantId: s.tenantId, businessId: s.businessId, operationId, periodId }, s.userId);
+      await closer.query('BEGIN');
+      await closePeriodAs(assertion, { operationId }, { client: closer });
+      // The close is written and the business row is held FOR UPDATE.
+
+      await poster.query('BEGIN');
+      const posting = (async (): Promise<Settled> => {
+        try {
+          await openBalanceOn(poster, s, opening, 'obclose-b-opening');
+          await poster.query('COMMIT');
+          return { who: 'post', ok: true };
+        } catch (e) {
+          await poster.query('ROLLBACK').catch(() => undefined);
+          return { who: 'post', ok: false, error: e instanceof Error ? e.message : String(e) };
+        }
+      })();
+
+      await contend('close versus historical opening balance, case B', pids);
+      await closer.query('COMMIT');
+
+      const outcome = await posting;
+      expect(outcome.ok).toBe(false);
+      // The date is outside every period, so `period_closed` would be the
+      // wrong sentence to say to the merchant. What refuses this is the state
+      // of the books as a whole.
+      expect(outcome.error).toMatch(/accounting\.period_closed_history/);
+      expect(outcome.error).not.toMatch(/accounting\.period_closed:/);
+
+      // No ambiguous middle state: the period is closed and the books behind
+      // it are exactly what they were.
+      expect(await booksOf(s.businessId)).toEqual({ periods: 1, openings: 0, openingDate: null });
+      expect((await readPeriod(pool, s.businessId, periodId)).status).toBe('closed');
+    } finally {
+      await closer.query('ROLLBACK').catch(() => undefined);
+      await closer.end().catch(() => undefined);
+      await poster.end().catch(() => undefined);
+    }
+  }, 120_000);
+});
+
+/**
+ * Two adjacent open periods, closed at the same moment (§23).
+ *
+ * The chronological rule is read from the set, so two closes that each read a
+ * legal set could in principle both commit and leave an illegal one. They
+ * cannot, because every period command takes
+ * `accounting_period_topology_lock_key(business)` first: the second close
+ * re-reads the set only after the first has committed or rolled back.
+ *
+ * The assertion is therefore not "one of them lost" — under one order both
+ * are meant to succeed — but that the surviving set is closed-then-open under
+ * every order, and that a refused later close is a refusal the merchant can
+ * simply retry.
+ */
+describe('two adjacent periods closed concurrently (§23)', () => {
+  it('the earlier close wins the lock: the later close waits, then succeeds', async () => {
+    const s = await newBusiness('close2-early');
+    const first = (await createPeriod(s, 'close2-early-p1', await daysAgo(60), await daysAgo(31))).periodId;
+    const second = (await createPeriod(s, 'close2-early-p2', await daysAgo(30), today)).periodId;
+
+    const a = await periodClient();
+    const b = await periodClient();
+    const pids = [await pidOf(a), await pidOf(b)];
+    try {
+      const opA = operationIdFor(s.businessId, 'close2-early-close-a');
+      const asA = periodAssertion({ kind: 'period_close', tenantId: s.tenantId, businessId: s.businessId, operationId: opA, periodId: first }, s.userId);
+      await a.query('BEGIN');
+      await closePeriodAs(asA, { operationId: opA }, { client: a });
+      // A holds the topology lock; the earlier period is closed, uncommitted.
+
+      const opB = operationIdFor(s.businessId, 'close2-early-close-b');
+      const asB = periodAssertion({ kind: 'period_close', tenantId: s.tenantId, businessId: s.businessId, operationId: opB, periodId: second }, s.userId);
+      await b.query('BEGIN');
+      const closingB = (async (): Promise<Settled> => {
+        try {
+          await closePeriodAs(asB, { operationId: opB }, { client: b });
+          await b.query('COMMIT');
+          return { who: 'period', ok: true };
+        } catch (e) {
+          await b.query('ROLLBACK').catch(() => undefined);
+          return { who: 'period', ok: false, error: e instanceof Error ? e.message : String(e) };
+        }
+      })();
+
+      await contend('two concurrent closes', pids);
+      await a.query('COMMIT');
+
+      const outcome = await closingB;
+      expect(outcome.error).toBeUndefined();
+      expect(outcome.ok).toBe(true);
+      expect(await topologyOf(s.businessId)).toEqual(['closed', 'closed']);
+    } finally {
+      await a.query('ROLLBACK').catch(() => undefined);
+      await a.end().catch(() => undefined);
+      await b.end().catch(() => undefined);
+    }
+  }, 120_000);
+
+  it('the later close wins the lock: it is refused, and the same command succeeds once the earlier one has committed', async () => {
+    const s = await newBusiness('close2-late');
+    const first = (await createPeriod(s, 'close2-late-p1', await daysAgo(60), await daysAgo(31))).periodId;
+    const second = (await createPeriod(s, 'close2-late-p2', await daysAgo(30), today)).periodId;
+
+    // The later period reaches the lock first and reads a set whose earlier
+    // period is still open. It must not be allowed to commit `OPEN CLOSED`,
+    // even though nothing else is contending for it at that instant.
+    const refusal = await periodRefusal(() => closePeriod(s, 'close2-late-close-b', second));
+    expect(refusal).toMatch(/accounting\.period_close_order/);
+    expect(await topologyOf(s.businessId)).toEqual(['open', 'open']);
+
+    await closePeriod(s, 'close2-late-close-a', first);
+    expect(await topologyOf(s.businessId)).toEqual(['closed', 'open']);
+
+    // The refusal poisoned nothing: the SAME idempotency key, replayed after
+    // the earlier close, is simply the command the merchant meant.
+    const retry = await closePeriod(s, 'close2-late-close-b', second);
+    expect(retry.changed).toBe(true);
+    expect(await topologyOf(s.businessId)).toEqual(['closed', 'closed']);
+  }, 120_000);
+
+  it('fired simultaneously with no orchestration, the surviving set is closed-then-open', async () => {
+    const s = await newBusiness('close2-free');
+    const first = (await createPeriod(s, 'close2-free-p1', await daysAgo(60), await daysAgo(31))).periodId;
+    const second = (await createPeriod(s, 'close2-free-p2', await daysAgo(30), today)).periodId;
+
+    const settle = async (key: string, periodId: string): Promise<Settled> => {
+      try {
+        await closePeriod(s, key, periodId);
+        return { who: 'period', ok: true };
+      } catch (e) {
+        return { who: 'period', ok: false, error: e instanceof Error ? e.message : String(e) };
+      }
+    };
+    const [a, b] = await Promise.all([settle('close2-free-close-a', first), settle('close2-free-close-b', second)]);
+
+    // Whatever the scheduler chose: no deadlock, and the only refusal the
+    // rule may produce is the chronological one.
+    for (const outcome of [a, b]) {
+      if (!outcome.ok) expect(outcome.error).toMatch(/accounting\.period_close_order/);
+    }
+    const shape = await topologyOf(s.businessId);
+    expect(isMonotonic(shape), `an illegal topology survived: ${shape.join(' ')}`).toBe(true);
+    // The earlier period's close never had a reason to fail.
+    expect(a.error).toBeUndefined();
+    expect(shape[0]).toBe('closed');
+  }, 120_000);
+});
+
+/**
+ * The race the deferred validator's own advisory lock exists for (§12, §14).
+ *
+ * Two transactions can each leave a set that is legal on its own and whose
+ * union is not: prepending an open period while somebody else closes the
+ * current earliest one. Both commands take the same per-business topology
+ * key, so one of them re-reads the books after the other committed and is
+ * refused by name — and whichever one that is, the merchant is told which
+ * rule stopped them rather than being told a constraint name.
+ */
+describe('a prepend and a close, racing (§14)', () => {
+  it('the close wins: the prepend is then refused as writing behind closed history', async () => {
+    const s = await newBusiness('prepclose');
+    const existing = (await createPeriod(s, 'prepclose-existing', await daysAgo(30), today)).periodId;
+
+    const closer = await periodClient();
+    const creator = await periodClient();
+    const pids = [await pidOf(closer), await pidOf(creator)];
+    try {
+      const opClose = operationIdFor(s.businessId, 'prepclose-close-key');
+      const asClose = periodAssertion(
+        { kind: 'period_close', tenantId: s.tenantId, businessId: s.businessId, operationId: opClose, periodId: existing },
+        s.userId,
+      );
+      await closer.query('BEGIN');
+      await closePeriodAs(asClose, { operationId: opClose }, { client: closer });
+
+      const start = await daysAgo(60);
+      const end = await daysAgo(31);
+      const opCreate = operationIdFor(s.businessId, 'prepclose-create-key');
+      const periodId = periodIdFor(s.businessId, 'prepclose-create-key');
+      const asCreate = periodAssertion(
+        {
+          kind: 'period_create',
+          tenantId: s.tenantId,
+          businessId: s.businessId,
+          operationId: opCreate,
+          periodId,
+          startDate: start,
+          endDate: end,
+        },
+        s.userId,
+      );
+      await creator.query('BEGIN');
+      const creating = (async (): Promise<Settled> => {
+        try {
+          await createPeriodAs(asCreate, { operationId: opCreate, startDate: start, endDate: end }, { client: creator });
+          await creator.query('COMMIT');
+          return { who: 'period', ok: true };
+        } catch (e) {
+          await creator.query('ROLLBACK').catch(() => undefined);
+          return { who: 'period', ok: false, error: e instanceof Error ? e.message : String(e) };
+        }
+      })();
+
+      await contend('prepend versus close', pids);
+      await closer.query('COMMIT');
+
+      const outcome = await creating;
+      expect(outcome.ok).toBe(false);
+      expect(outcome.error).toMatch(/accounting\.period_prepend_closed_history/);
+      // Not the deferred backstop: the merchant gets the sentence about their
+      // books, and the constraint trigger never had to fire.
+      expect(outcome.error).not.toMatch(/accounting\.period_topology_invalid/);
+      expect(await topologyOf(s.businessId)).toEqual(['closed']);
+    } finally {
+      await closer.query('ROLLBACK').catch(() => undefined);
+      await closer.end().catch(() => undefined);
       await creator.end().catch(() => undefined);
     }
   }, 120_000);

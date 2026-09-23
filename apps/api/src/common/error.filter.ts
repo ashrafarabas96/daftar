@@ -140,6 +140,15 @@ function accountingStatus(code: string): number {
     code === 'accounting.period_not_closed' ||
     code === 'accounting.period_closed' ||
     code === 'accounting.period_missing_for_date' ||
+    // The closed-books topology refusals. Each one says the merchant's books
+    // are in a state that forbids the request, not that the request was
+    // malformed: close an earlier period first, reopen a later one first, or
+    // reopen the closed periods before writing behind them.
+    code === 'accounting.period_close_order' ||
+    code === 'accounting.period_reopen_order' ||
+    code === 'accounting.period_prepend_closed_history' ||
+    code === 'accounting.period_closed_history' ||
+    code === 'accounting.period_topology_invalid' ||
     code === 'accounting.period_immutable'
   ) {
     return HttpStatus.CONFLICT;

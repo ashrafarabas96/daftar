@@ -15,9 +15,20 @@ Shipping `0049` changes nothing for anybody. No period is created by the migrati
 - it remains subject to the universal no-future rule — no opening balance dated after today in the business timezone, period or no period;
 - if its date falls **inside** a period, that period must be **OPEN**; inside a closed one it is refused exactly like any other entry;
 - if its date is **after** the covered chain, or otherwise uncovered, it is refused for want of a covering period;
-- **no other source** has it: a manual adjustment or a reversal dated before the earliest period is refused.
+- **no other source** has it: a manual adjustment or a reversal dated before the earliest period is refused;
+- it applies only while the books behind it are still open: once **any** period of the business is CLOSED, a NEW opening balance dated before the earliest period is refused with `accounting.period_closed_history`. Reopen the closed periods first if the opening position must change.
 
-It is also bounded in quantity, which is worth stating because it is what keeps the exception from becoming a backdating channel: P2-S4 allows a business **at most one posted opening balance**, ever. So the exception admits exactly one entry per business over the lifetime of its books, not a class of entries.
+**A correction to an earlier claim in this document.** It previously said that P2-S4 allows a business one posted opening balance for the whole life of its books, and that the exception therefore admits exactly one entry per business. That is **wrong**, and it is corrected here rather than quietly deleted, because a reader who believed it would reason about the wrong risk. AL-13's lifecycle is `draft → posted → superseded`: a posted opening balance may be reversed and replaced, so a business can post more than one opening-balance entry over its life. What `CREATE UNIQUE INDEX … ON accounting_opening_balances (business_id) WHERE status = 'posted'` guarantees is that **at most one posted set is CURRENT at any instant** — a bound on what stands, not a bound on what has ever existed.
+
+So the exception is not made safe by scarcity. It is made safe by seven properties that hold however many times it is used:
+
+- **source-specific authority** — only `opening_balance` has it, and the source type is carried by the verified source assertion, not chosen by the caller at the moment of insert;
+- **one current posted set** — the partial unique index above, so a second set cannot stand beside the first (`accounting.opening_balance_exists`);
+- **reversal before supersession** — a posted set can only be replaced after its journal entry has been reversed (`accounting.supersede_without_reversal`), so the old position stays visible as a superseded fact instead of disappearing;
+- **closed-history protection** — the bullet above: once any period is closed, this door is shut, so the exception can never move a balance carried into books already declared final;
+- **audit** — every transition is audited in the same transaction as the fact it describes;
+- **immutable posted truth** — a posted opening balance's lines, `as_of_date` and journal entry cannot be edited by anybody, the schema owner included;
+- **the no-future rule** — unchanged and universal, so nothing dated ahead of the business's own today enters this way.
 
 `لا تخترع «دفتر» تقويمًا ماليًّا لأحد. المنشأة التي لا فترات لها تبقى على قواعدها كما هي تمامًا، وأول فترة ينشئها التاجر بنفسه هي ما يُفعِّل إدارة الفترات. بعدها يجب أن يقع تاريخ كل قيد جديد داخل فترة مفتوحة واحدة بالضبط، ولا يُعاد كتابة أي قيد سابق أبدًا. الاستثناء الوحيد: الرصيد الافتتاحي المؤرَّخ قبل بداية أقدم فترة يُقبل بلا فترة تغطّيه، لأن الرصيد الافتتاحي سابق للدفاتر بطبيعته؛ ولا يمتد هذا الاستثناء إلى مصدر آخر، ولا إلى تاريخ داخل فترة مغلقة، ولا إلى تاريخ مستقبلي.`
 
@@ -25,7 +36,7 @@ It is also bounded in quantity, which is worth stating because it is what keeps 
 
 | migration | SHA-256 | state |
 |---|---|---|
-| `0049_accounting_periods.sql` | `f51094e4ab6047493094be434dc08fad6f8f6333aa9ffde49bcf84c62f4f93c0` | **CANDIDATE — not frozen** |
+| `0049_accounting_periods.sql` | `454a52183f8666f88bbf17b87b4b44e6413114af069149d2eb2489854307d851` | **CANDIDATE — not frozen** |
 
 `MIGRATION_MANIFEST.json` is unchanged: it still records **49 frozen migrations** with `frozenThrough = 0048_accounting_fx_rates.sql`, and `0049` is deliberately absent from it. There is **no `0050`**. Freezing is the Tech Lead's act on acceptance, not a step of this work — a slice that froze its own migration would have certified itself — and `npm run gate:phase2:s6` FAILS today if the manifest records `0049`, if `frozenThrough` moves, or if any file beyond `0049` appears.
 
@@ -44,17 +55,18 @@ It is also bounded in quantity, which is worth stating because it is what keeps 
 
 ## 3. What the slice added
 
-**Migration `0049_accounting_periods.sql`** (the one migration this slice created — 1 297 lines, two tables, eleven routines, four triggers)
+**Migration `0049_accounting_periods.sql`** (the one migration this slice created — two tables, twelve routines, five triggers)
 
 - `accounting_periods` — the period itself. `start_date DATE` and `end_date DATE`, both **inclusive** and both civil dates with no time and no zone, because a boundary carrying a time would make "which period is 2026-03-31 in?" depend on where you stand. `status` CHECK-pinned to exactly `'open'` and `'closed'`. Creation, closure and reopening each carry their actor and their instant, and a reopening carries its reason. A composite `(tenant_id, business_id) → businesses (tenant_id, id)` so no row can claim a tenant that does not own its business. A CHECK refuses `'infinity'` and `'-infinity'`, because `daterange` accepts them and an infinite period would swallow every future posting date forever.
 - `EXCLUDE USING gist (business_id WITH =, daterange(start_date, end_date, '[]') WITH &&)` — a **real PostgreSQL exclusion constraint**, not a unique index and not a rule the command is trusted to keep. See §5.
 - `accounting_period_operations` — the append-only command registry (§18). One row per performed operation, binding the operation kind, the period, the canonical payload fingerprint, the resulting status, the actor and the instant. This is what makes a replay answerable: see §6.
 - `accounting_periods_no_delete()` on `BEFORE DELETE`, `accounting_periods_transition()` on `BEFORE UPDATE`, and `accounting_period_operations_immutable()` on `BEFORE UPDATE OR DELETE` — all three **unconditional**, with **no identity exemption**, so the schema owner is refused exactly as a merchant is.
 - `accounting_period_guard_posting()` on `BEFORE INSERT ON journal_entries` — the refusal, in the database. See §4 and §7.
+- `accounting_period_topology_check()` on a **`CREATE CONSTRAINT TRIGGER … AFTER INSERT OR UPDATE … DEFERRABLE INITIALLY DEFERRED`** — the shape of the whole set, judged by PostgreSQL at COMMIT: contiguous, and no OPEN period beginning before a CLOSED one. See §7b.
 - `accounting_period_reason_digest(...)`, `accounting_period_canonical(...)`, `accounting_period_fingerprint(...)` — the `acctperiod/1` canonical byte stream and its SHA-256, all `IMMUTABLE`, the PostgreSQL half of a specification whose TypeScript half is `packages/accounting/src/period.ts` and whose single vector source is `packages/accounting/vectors/acctperiod-vectors.json`.
 - `accounting_period_topology_lock_key(...)` — one advisory key **per business**. There is no global accounting lock: one merchant closing their books does not queue behind another's.
 - `accounting_period_create(...)`, `accounting_period_close(...)`, `accounting_period_reopen(...)` — the three commands. Each `SECURITY DEFINER`, owned by `daftar_accounting_internal`, `EXECUTE` granted to `daftar_app` alone, and each one gated by a verified `acctctl/1` control assertion rather than by the connection's identity.
-- A final `DO $$ … $$` verification block that refuses to COMMIT the migration unless the end state is right: the exclusion constraint exists and is `contype = 'x'`, the posting trigger exists on `journal_entries`, all eleven routines pin `pg_temp` last, the eight elevated ones are owned by the internal principal, `accounting_periods` holds **zero rows**, and no DAFTAR role holds `BYPASSRLS`.
+- A final `DO $$ … $$` verification block that refuses to COMMIT the migration unless the end state is right: the exclusion constraint exists and is `contype = 'x'`, the posting trigger exists on `journal_entries`, all twelve routines pin `pg_temp` last, the nine elevated ones are owned by the internal principal, the topology trigger is a **deferred constraint** trigger and not a plain one, `accounting_periods` holds **zero rows**, and no DAFTAR role holds `BYPASSRLS`.
 
 **`infrastructure/database/bootstrap.sql`** — one added line: `CREATE EXTENSION IF NOT EXISTS btree_gist;`, installed once by the deployment administrator. See §5.
 
@@ -136,6 +148,16 @@ It is also bounded in quantity, which is worth stating because it is what keeps 
 | 59 | A fresh `0000 → 0049` ends at 0049 with no 0050, and a rerun is a no-op | the runner's checksum history | `migration-portability.test.ts` | **ENFORCED** |
 | 60 | A failing migration leaves nothing behind | each file runs in its own transaction | `migration-portability.test.ts` — a fixture migration that creates a table and then divides by zero leaves neither the table nor the history row | **ENFORCED** |
 | 61 | `0048 → 0049` upgrades an existing deployment with its books intact | the upgrade path, from the boundary production actually sits at | `migration-upgrade.test.ts` — protected-table digest unchanged, zero periods, protections present on arrival | **ENFORCED** |
+| 62 | A business's periods are CLOSED-prefix then OPEN-suffix, always | `accounting_period_topology_check()` on a DEFERRABLE INITIALLY DEFERRED constraint trigger: the earliest OPEN start may not precede the latest CLOSED start | `accounting-periods-closed-books.test.ts` — raw SQL as the schema OWNER: `OPEN CLOSED` and `CLOSED OPEN CLOSED` are accepted statement by statement and REFUSED at `COMMIT`; `CLOSED CLOSED OPEN OPEN` commits | **ENFORCED** |
+| 63 | A gap between two periods cannot survive COMMIT either | the same validator, one window-function pass: `next.start_date = previous.end_date + 1 day` | `accounting-periods-closed-books.test.ts` — a gap accepted by the statement and refused by `COMMIT` with `accounting.period_not_contiguous` | **ENFORCED** |
+| 64 | The topology validator serializes on the EXISTING per-business key | `pg_advisory_xact_lock(accounting_period_topology_lock_key(business))` inside the validator — no new lock namespace; for a command it is a lock already held | `accounting-periods-concurrency.test.ts` — the prepend-versus-close race; `gate:phase2:s6` fails on a second lock key | **ENFORCED** |
+| 65 | Periods are closed OLDEST first | `accounting.period_close_order`, raised by `accounting_period_close` when an earlier period is still open — no cascade, nothing closed silently | `accounting-periods-closed-books.test.ts` — the close matrix; `accounting-periods-concurrency.test.ts` — two adjacent closes in both winner orders | **ENFORCED** |
+| 66 | Periods are reopened NEWEST first | `accounting.period_reopen_order`, raised by `accounting_period_reopen` when a later period is still closed — no cascade | `accounting-periods-closed-books.test.ts` — the reopen matrix, ending by reopening the whole chain newest to oldest | **ENFORCED** |
+| 67 | Once ANY period is closed, no earlier period may be created | `accounting.period_prepend_closed_history`, raised by `accounting_period_create`; appending is untouched, and prepending while everything is open is still allowed | `accounting-periods-closed-books.test.ts` — the prepend matrix A, B, C, plus first-period creation | **ENFORCED** |
+| 68 | Once ANY period is closed, no NEW entry dated before the earliest period may be posted | `accounting.period_closed_history`, raised by the posting guard — a code of its own, because the date lies outside every period and `accounting.period_closed` would be a false sentence | `accounting-periods-closed-books.test.ts` — the opening-balance matrix A–G, asserting the code is NOT `accounting.period_closed` | **ENFORCED** |
+| 69 | An idempotent replay of an opening balance posted BEFORE the close still returns the existing entry | the frozen `accounting_post_entry` answers from its registry before any insert, so the guard is never reached | `accounting-periods-closed-books.test.ts` — replay after the close returns the same entry id with `created = false`, and writes no journal, audit or outbox row | **ENFORCED** |
+| 70 | A close racing a historical opening balance settles definitely in both winner orders | one lock order; the waiter re-reads the books | `accounting-periods-concurrency.test.ts` §22 — opening balance first: it commits and the close succeeds around it; close first: the opening balance is refused `accounting.period_closed_history` and nothing is written | **ENFORCED** |
+| 71 | Two concurrent closes can never leave OPEN before CLOSED | the topology lock, the chronological check, and the deferred validator behind both | `accounting-periods-concurrency.test.ts` §23 — three cases, including one fired with no orchestration at all | **ENFORCED** |
 
 ## 5. The first architectural decision that needs stating
 
@@ -179,6 +201,24 @@ The frozen posting primitive already takes the `businesses` row at step 2, and t
 
 `القرار المعماري الثالث: ترتيب قفل واحد — المنشأة ثم الفترة — على مسار الأوامر ومسار الترحيل معًا. هذا ما يجعل التسابق بين الإغلاق والترحيل سباقًا له فائز محدّد لا تعارضًا في الأقفال.`
 
+## 7b. The fourth architectural decision that needs stating
+
+**A close is a statement about the books, not a filter on a date range.**
+
+The first cut of this slice enforced one sentence — an entry dated inside a CLOSED period is refused — and that sentence is true and insufficient. It leaves three ways to change the balances carried into books a merchant has already declared final, none of which writes a row whose own date falls inside a closed period:
+
+1. hold an OPEN period behind a CLOSED one, and post into it;
+2. create a new EARLIER period behind closed books, and post into that;
+3. state a NEW opening position dated before the earliest period, which needs no covering period at all.
+
+So the rule is stated about the SET rather than about the row. Per business, sorted by `start_date`, the periods are **zero or more CLOSED followed by zero or more OPEN**, with no gaps. `OPEN CLOSED`, `OPEN CLOSED OPEN` and `CLOSED OPEN CLOSED` are not states DAFTAR refuses to create — they are states that cannot exist, because `accounting_period_topology_check()` runs as a **DEFERRABLE INITIALLY DEFERRED constraint trigger** and a transaction that would leave one does not commit. Deferred is not weaker than immediate here, it is the only thing that can work: both halves of the rule are about the shape of the whole set, which is not final until COMMIT, and an immediate check would refuse legitimate intermediate states such as closing two periods in one transaction.
+
+Four command-level refusals sit in front of it, because a merchant deserves a sentence about their books rather than a trigger name: `accounting.period_close_order` (close oldest first), `accounting.period_reopen_order` (reopen newest first), `accounting.period_prepend_closed_history` (no earlier period behind closed books) and `accounting.period_closed_history` (no new pre-period opening balance while any period is closed). None of them replaces the invariant. They are the friendly path to the same answer, and the deferred validator is what makes the answer true for a writer who never takes that path — a migration, a support session, the schema owner with `psql` open.
+
+The validator takes the same per-business advisory key the three commands take. It has to: two transactions can each leave a perfectly legal set whose union is illegal — one prepends an open period while the other closes the current earliest one — and each would read a legal set in its own snapshot. It introduces **no new lock namespace**, and for a command it is a lock the transaction already holds, so the documented lock order in §7 is unchanged.
+
+`القرار المعماري الرابع: الإغلاق قرار عن الدفاتر كلها لا مرشّح على تواريخ. فترات المنشأة مرتَّبة زمنيًّا هي فتراتٌ مغلقة أولًا ثم مفتوحة، بلا فجوات؛ ويُنفِّذ PostgreSQL هذه القاعدة عند COMMIT عبر مُحقِّق مؤجَّل (DEFERRABLE INITIALLY DEFERRED)، فلا يمكن لأي كاتب — ولا لمالك المخطط نفسه — أن يترك فترة مفتوحة قبل فترة مغلقة. أمّا رسائل الرفض الأربع في الأوامر فهي الطريق الودّي إلى الجواب نفسه، لا بديلًا عن القاعدة.`
+
 ## 8. The reason-identity contract, and why it has no Unicode step
 
 A reopen's reason is part of the command's identity: the same key with a different reason is a different payload and is refused as a conflict. So the contract must be exact, and it is two steps:
@@ -202,12 +242,13 @@ There was a Unicode NFC step, and it came out. PostgreSQL's `normalize(text, NFC
 | periods exist; the date falls in none of them | `accounting.period_missing_for_date` |
 | periods exist; the source is `opening_balance` and the date is STRICTLY BEFORE the earliest period start | posted — the one exception, because an opening position predates the books |
 | periods exist; the source is `opening_balance` and the date is anywhere else | exactly the three rows above: open period posts, closed period refuses, uncovered refuses |
+| periods exist, **at least one is CLOSED**, the source is `opening_balance` and the date is strictly before the earliest period start | `accounting.period_closed_history` — a NEW entry may not appear behind closed books; it is deliberately NOT `accounting.period_closed`, because the date is outside every period |
 | any of the above, and the date is in the future in the business's timezone | `accounting.entry_date_in_future` — the universal rule is unchanged and is checked by the frozen writer, not by this slice |
 | an idempotent replay of an entry posted BEFORE the close | succeeds — the primitive returns from its own registry before it reaches the insert, so the guard never fires |
 
 Two periods can never overlap, so "one OPEN period" is a physical fact rather than a hope. Entries posted before the first period existed are never revisited: `0049` rewrites nothing.
 
-The exception row is the cross-slice correction, and it is worth saying why it is a rule about PLACEMENT rather than about a privileged source. P2-S4 already registers `opening_balance` with `lower_bound_policy = 'none'` — it has no historical floor, because a merchant's opening position can be any age. Periods narrow where NEW truth may be written, and applied without this row they would have turned that into: state your opening position before you define your first period and it is accepted; define the period first and the same position is refused. The correction removes the order dependence, and the four bullets in §0 are what keeps it from becoming a backdating bypass.
+The exception row is the cross-slice correction, and it is worth saying why it is a rule about PLACEMENT rather than about a privileged source. P2-S4 already registers `opening_balance` with `lower_bound_policy = 'none'` — it has no historical floor, because a merchant's opening position can be any age. Periods narrow where NEW truth may be written, and applied without this row they would have turned that into: state your opening position before you define your first period and it is accepted; define the period first and the same position is refused. The correction removes the order dependence, and the five bullets in §0 — the last of them the closed-history rule — are what keeps it from becoming a backdating bypass.
 
 ## 10. What this slice deliberately did NOT build
 
@@ -223,6 +264,8 @@ The exception row is the cross-slice correction, and it is worth saying why it i
 
 These controls do not protect against an attacker who has compromised the `merchant-api` process itself: that process holds the signing key, so it can mint a control assertion for any authority it can reach. That is the same limit P2-S3 declared and every later slice has inherited, and P2-S6 does not narrow it.
 
+One boundary is worth naming rather than leaving to be discovered, because §17 above says a period is never deleted by anybody and that sentence is about `DELETE`. `TRUNCATE` is governed by PRIVILEGE rather than by a trigger here, exactly as it is for the frozen journal tables in `0042`: no runtime role holds it — the migration's own verification block refuses to commit if one does — so it is reachable only by the table's owner, the migration principal. That is the same principal that could drop the table outright, and DAFTAR treats it as the deployment's own administrator rather than as an attacker inside the runtime. Nothing in this slice narrows that, and nothing in it widens it either.
+
 What this slice *does* add to the attacker's cost is stated precisely: a stolen `daftar_app` credential cannot create, close or reopen a period, because each command refuses without a verified `acctctl/1` assertion and no login role holds INSERT or UPDATE on `accounting_periods`; a stolen or replayed assertion cannot perform a second operation, because the jti is single-use and the registry answers a replay with the original result; a compromised process still cannot move a period's boundaries or delete one, because both triggers are unconditional and admit no identity exemption; and the closed-period refusal survives the application entirely, because it lives on `journal_entries` itself.
 
 `الحدّ المُعلن: هذه الضوابط لا تحمي من اختراق عملية merchant-api نفسها لأنها تحمل مفتاح التوقيع. لكن بيانات اعتماد قاعدة البيانات وحدها لا تكفي لإنشاء فترة أو إغلاقها أو إعادة فتحها، ولا أحد — ولا حتى مالك المخطط — يستطيع تحريك حدود فترة أو حذفها، ورفض الترحيل داخل فترة مغلقة يعيش في قاعدة البيانات لا في التطبيق.`
@@ -233,14 +276,17 @@ What this slice *does* add to the attacker's cost is stated precisely: a stolen 
 |---|---|---|
 | `tests/integration/accounting-periods.test.ts` | 47 | activation, the overlap and contiguity matrices, immutability asked through the schema authority, the posting matrix, the transition matrix and the replayed-reopen hazard |
 | `tests/integration/accounting-period-parity.test.ts` | 30 | TypeScript and PostgreSQL agree on `acctperiod/1`, byte for byte, including Arabic and the two spellings of one accented word |
-| `tests/integration/accounting-periods-concurrency.test.ts` | 15 | close-versus-post in both directions, no deadlock, the activation race, concurrent first creations, audit and outbox shape and failure injection, the per-business topology lock, and the opening balance racing the first period in BOTH winner orders |
+| `tests/integration/accounting-periods-concurrency.test.ts` | 21 | close-versus-post in both directions, no deadlock, the activation race, concurrent first creations, audit and outbox shape and failure injection, the per-business topology lock, the opening balance racing the first period in BOTH winner orders, the close racing a historical opening balance in both (§22), two adjacent closes concurrently (§23) and a prepend racing a close |
 | `tests/integration/accounting-periods-http.test.ts` | 33 | the four routes, the authorization matrix (§21, §22), the list contract (§32) and the strict payload contract |
 | `tests/integration/accounting-periods-opening-balance.test.ts` | 18 | the cross-slice correction: order independence, the nine-case opening-balance period matrix, the refusal of every other source before the earliest period, and the schema owner's two direct `INSERT`s failing at different rules |
-| | **143** | |
+| `tests/integration/accounting-periods-closed-books.test.ts` | 21 | the closed-books topology: the close and reopen matrices, the prepend matrix, the opening-balance closed-book matrix A–G, replacement semantics, and the raw-SQL invariant matrix in which `OPEN CLOSED`, `CLOSED OPEN CLOSED` and a gap are all accepted by the statement and refused at `COMMIT` |
+| | **170** | |
 
 Plus the extended `migration-upgrade.test.ts` (7 cases) and `migration-portability.test.ts` (7 cases), the permission suites, and the whole predecessor chain composed by `npm run gate:phase2:s6`.
 
 ## 13. Review status
+
+This document has been through two Tech Lead review rounds, and both corrections are recorded above rather than folded in silently. The first found that the period coverage rule made a historical opening balance depend on setup order; the second found that "refuse an entry dated inside a closed period" is not what a close means, and required the closed-books topology in §7b together with the correction of a false statement about opening-balance quantity in §0.
 
 **P2-S6 IS A CANDIDATE AWAITING TECH LEAD REVIEW.** `0049_accounting_periods.sql` is NOT frozen, is absent from `MIGRATION_MANIFEST.json`, and is the last migration in the tree. Nothing here authorizes freezing it, creating a `0050`, or starting P2-S7.
 

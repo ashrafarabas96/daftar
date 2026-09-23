@@ -59,7 +59,7 @@ const FROZEN_THROUGH = '0048_accounting_fx_rates.sql';
 /** The two tables the slice owes (§11, §18). */
 const S6_TABLES = ['accounting_periods', 'accounting_period_operations'] as const;
 
-/** Every routine 0049 creates. Eleven, and no twelfth. */
+/** Every routine 0049 creates. Twelve, and no thirteenth. */
 const S6_ROUTINES = [
   'accounting_period_reason_digest',
   'accounting_period_canonical',
@@ -69,6 +69,7 @@ const S6_ROUTINES = [
   'accounting_periods_transition',
   'accounting_period_operations_immutable',
   'accounting_period_guard_posting',
+  'accounting_period_topology_check',
   'accounting_period_create',
   'accounting_period_close',
   'accounting_period_reopen',
@@ -105,6 +106,7 @@ const S6_MODULES = ['src/period.ts'] as const;
 const P2_S6_TESTS = [
   'tests/integration/accounting-periods.test.ts',
   'tests/integration/accounting-periods-opening-balance.test.ts',
+  'tests/integration/accounting-periods-closed-books.test.ts',
   'tests/integration/accounting-period-parity.test.ts',
   'tests/integration/accounting-periods-concurrency.test.ts',
   'tests/integration/accounting-periods-http.test.ts',
@@ -194,6 +196,16 @@ function collectAppFiles(): Record<string, string> {
   }
   return out;
 }
+
+/** The documents §28 of the correction requires to agree with the code. */
+const PERIOD_DOCS = [
+  'docs/PHASE_2_S6_ACCEPTANCE.md',
+  'docs/PHASE_2_ARCHITECTURE_LOCK.md',
+  'docs/PHASE_2_ACCOUNTING_EXECUTION_PLAN.md',
+  'docs/PHASE_2_INVARIANT_REFERENCE.md',
+  'docs/DAFTAR_STATE_MACHINES.md',
+  'docs/DAFTAR_THREAT_MODEL.md',
+] as const;
 
 const readIfPresent = (path: string): string | null => (existsSync(join(ROOT, path)) ? readFileSync(join(ROOT, path), 'utf8') : null);
 
@@ -994,6 +1006,174 @@ function checkSurface(): void {
   else fail('surface', 'a period payload schema is not .strict() — an unknown key must be refused, not dropped (§29-§31)');
 }
 
+// ── 10b. The closed-books topology (correction §5-§15, §29) ────────────────
+/**
+ * A close is an accounting control, not a date filter.
+ *
+ * The first cut of this slice enforced "an entry dated inside a CLOSED period
+ * is refused" and stopped there, which leaves three ways to change the
+ * balances carried into books already declared final: open a period behind a
+ * closed one, prepend history behind closed books, or state a new opening
+ * position dated before them. Every check below exists because one of those
+ * was possible, and because a friendly refusal in a command is a convention
+ * until PostgreSQL itself will not commit the shape.
+ */
+function checkClosedBooksTopology(): void {
+  console.log('P2-S6 GATE — the closed-books topology');
+  const sql = s6Sql();
+  const raw = s6Raw();
+
+  // §12: the invariant is PHYSICAL. A constraint trigger, not a command, and
+  // not a BEFORE trigger either — both checks are about the shape of the
+  // whole set, which no row-at-a-time rule can see.
+  const trigger =
+    /CREATE\s+CONSTRAINT\s+TRIGGER\s+accounting_periods_topology\s+AFTER\s+INSERT\s+OR\s+UPDATE\s+ON\s+accounting_periods\s+DEFERRABLE\s+INITIALLY\s+DEFERRED/i;
+  if (trigger.test(sql)) ok('the topology invariant is a DEFERRABLE INITIALLY DEFERRED constraint trigger on accounting_periods (§12)');
+  else if (/accounting_periods_topology/.test(sql))
+    fail(
+      'topology',
+      'accounting_periods_topology exists but is not an AFTER INSERT OR UPDATE DEFERRABLE INITIALLY DEFERRED constraint trigger — §12 requires the check at COMMIT',
+    );
+  else fail('topology', 'no physical topology validator on accounting_periods — §12 forbids leaving this rule to the commands (§15)');
+
+  const validator = routineBody(sql, 'accounting_period_topology_check');
+  if (validator === null) {
+    fail('topology', 'accounting_period_topology_check does not exist — the topology rule has no enforcer inside PostgreSQL (§12)');
+  } else {
+    // §13: a gap must not survive COMMIT. The validator reads the set in
+    // start_date order and refuses a period that does not begin the day after
+    // the previous one ended.
+    if (/lag\s*\(\s*\w+\.end_date\s*\)\s*OVER\s*\(\s*ORDER\s+BY\s+\w+\.start_date\s*\)/i.test(validator) && /period_not_contiguous/.test(validator))
+      ok('the validator refuses a gap between two periods at COMMIT (§13)');
+    else fail('topology', 'the validator does not refuse a gap at COMMIT — §13 requires next.start_date = previous.end_date + 1 day');
+
+    // §5: CLOSED prefix, OPEN suffix, as the one comparison that says it.
+    const monotonic =
+      /min\s*\(\s*\w+\.start_date\s*\)\s*FILTER\s*\(\s*WHERE\s+\w+\.status\s*=\s*'open'\s*\)/i.test(validator) &&
+      /max\s*\(\s*\w+\.start_date\s*\)\s*FILTER\s*\(\s*WHERE\s+\w+\.status\s*=\s*'closed'\s*\)/i.test(validator) &&
+      /period_topology_invalid/.test(validator);
+    if (monotonic) ok('the validator refuses an OPEN period beginning before a CLOSED one at COMMIT (§5, §12)');
+    else fail('topology', 'the validator does not compare the earliest OPEN start with the latest CLOSED start — OPEN-before-CLOSED could survive COMMIT (§5)');
+
+    // §14: the SAME per-business key the commands take. Two transactions can
+    // each leave a legal set whose union is illegal, and a validator that did
+    // not serialize would read a snapshot in which both looked fine.
+    if (/pg_advisory_xact_lock\s*\(\s*accounting_period_topology_lock_key\s*\(/i.test(validator))
+      ok('the validator serializes on the existing per-business topology key, introducing no new lock namespace (§14)');
+    else fail('topology', 'the validator does not take accounting_period_topology_lock_key — §14 requires the existing key, and requires it to be taken');
+  }
+
+  // §14 again, from the other side: no second lock namespace anywhere in the
+  // slice. A new key would silently break the lock ORDER the slice documents.
+  const lockKeys = [...s6Sql().matchAll(/pg_advisory_xact_lock\s*\(\s*([a-z_]+)\s*\(/gi)].map((m) => m[1]);
+  const foreign = [...new Set(lockKeys)].filter((k) => k !== 'accounting_period_topology_lock_key');
+  if (foreign.length === 0) ok('every advisory lock in the slice comes from the one key function (§14)');
+  else fail('topology', `0049 takes an advisory lock from ${foreign.join(', ')} — §14 forbids a second lock namespace`);
+
+  // §12 again: the migration must VERIFY its own trigger, so a future edit
+  // that downgrades it to a plain trigger fails at apply time rather than in
+  // review. The deferrability is read from the catalog, not asserted in prose.
+  if (/tgconstraint\s*<>\s*0[\s\S]{0,200}tgdeferrable[\s\S]{0,200}tginitdeferred/i.test(raw))
+    ok("the migration's own verification block asserts the trigger is deferred (§12)");
+  else fail('topology', 'the migration does not verify that accounting_periods_topology is a deferred constraint trigger (§12)');
+
+  // §6: close oldest first, refused by name.
+  const close = routineBody(sql, 'accounting_period_close') ?? '';
+  if (/status\s*=\s*'open'\s+AND\s+\w+\.start_date\s*<\s*\w+\.start_date/i.test(close) && /period_close_order/.test(close))
+    ok('a close with an earlier OPEN period is refused with accounting.period_close_order (§6)');
+  else fail('topology', 'accounting_period_close does not refuse while an earlier period is open — §6 closes oldest first, and never cascades');
+
+  // §7: reopen newest first, refused by name.
+  const reopen = routineBody(sql, 'accounting_period_reopen') ?? '';
+  if (/status\s*=\s*'closed'\s+AND\s+\w+\.start_date\s*>\s*\w+\.start_date/i.test(reopen) && /period_reopen_order/.test(reopen))
+    ok('a reopen with a later CLOSED period is refused with accounting.period_reopen_order (§7)');
+  else fail('topology', 'accounting_period_reopen does not refuse while a later period is closed — §7 reopens newest first, and never cascades');
+
+  // §6, §7: neither may fix the topology by moving other periods. A cascade
+  // would close books nobody asked to close.
+  for (const [name, body] of [
+    ['accounting_period_close', close],
+    ['accounting_period_reopen', reopen],
+  ] as const) {
+    const updates = [...body.matchAll(/UPDATE\s+accounting_periods[\s\S]{0,400}?;/gi)].map((m) => m[0]);
+    const cascading = updates.filter((u) => !/\bid\s*=\s*\w+\.(id|resource_id)/i.test(u));
+    if (cascading.length === 0) ok(`${name} changes exactly the period it was asked about, never a second one (§6, §7)`);
+    else fail('topology', `${name} updates accounting_periods without pinning the row id — §6 and §7 forbid a cascading close or reopen`);
+  }
+
+  // §8: prepending behind closed books is refused, and appending is not.
+  const create = routineBody(sql, 'accounting_period_create') ?? '';
+  if (/period_prepend_closed_history/.test(create) && /status\s*=\s*'closed'/i.test(create))
+    ok('creating a period before the earliest one is refused while any period is closed (§8)');
+  else fail('topology', 'accounting_period_create permits prepending behind closed history — §8 refuses it with accounting.period_prepend_closed_history');
+
+  // §9: a NEW pre-period opening balance while any period is closed, refused
+  // by its OWN name. `period_closed` would be a false sentence: the date is
+  // outside every period, so no closed period contains it.
+  const guard = routineBody(sql, 'accounting_period_guard_posting') ?? '';
+  if (/period_closed_history/.test(guard) && /count\s*\(\s*\*\s*\)\s*FILTER\s*\(\s*WHERE\s+\w+\.status\s*=\s*'closed'\s*\)/i.test(guard))
+    ok('a new opening balance dated before closed books is refused with accounting.period_closed_history (§9)');
+  else fail('topology', 'the posting guard permits a new pre-period opening balance while a period is closed — §9 refuses it by its own name');
+
+  const historyBranch = /period_closed_history[\s\S]{0,400}?;/.exec(guard)?.[0] ?? '';
+  if (historyBranch !== '' && !/accounting\.period_closed:/.test(historyBranch))
+    ok('the closed-history refusal is its own code, not accounting.period_closed (§9)');
+  else fail('topology', 'the closed-history refusal reuses accounting.period_closed — §9 requires a distinct code, because the date is outside every period');
+
+  // §10: the exception must not break an idempotent replay. The frozen
+  // posting command returns from its replay branch before it ever inserts a
+  // journal entry, so the guard is not reached at all — and the gate reads
+  // that from 0045, because a correction that moved the replay after the
+  // insert would silently start refusing replays of pre-close entries.
+  const post = routineBody(readMigration('0045_accounting_post_entry.sql'), 'accounting_post_entry') ?? '';
+  const replayFirst = post.search(/RETURN\s+QUERY\s+SELECT\s+\w+\s*,\s*false\s*;/i);
+  const insertEntry = post.search(/INSERT\s+INTO\s+journal_entries/i);
+  if (replayFirst !== -1 && insertEntry !== -1 && replayFirst < insertEntry)
+    ok('an idempotent replay is answered before any journal row is written, so the guard never sees it (§10)');
+  else
+    fail(
+      'topology',
+      'accounting_post_entry no longer answers a replay before inserting — §10 requires a replay of a pre-close entry to return the existing one',
+    );
+
+  // §11: the false lifetime sentence, wherever it is written. AL-13 allows
+  // draft → posted → reversal → superseded, so "one posted opening balance
+  // EVER" is not true of the lifecycle; the partial unique index bounds how
+  // many are CURRENT, not how many have existed.
+  const staleLifetime = [
+    /at most one posted opening balance\*{0,2},?\s*ever/i,
+    /one (?:posted )?opening balance[^.\n]{0,80}over the lifetime/i,
+    /exactly one entry per business over the lifetime/i,
+    /only one opening balance[^.\n]{0,60}ever(?:\s|,|\.)/i,
+  ];
+  let stale = 0;
+  for (const doc of PERIOD_DOCS) {
+    const text = readIfPresent(doc);
+    if (text === null) continue;
+    for (const line of text.split('\n')) {
+      if (/corrected here|was FALSE|is FALSE|no longer true/i.test(line)) continue;
+      if (staleLifetime.some((r) => r.test(line))) {
+        stale += 1;
+        fail('topology', `${doc} still claims a business gets one opening balance for life — §11 says that is false`);
+      }
+    }
+  }
+  if (stale === 0) ok('no document claims a business may post only one opening balance over its lifetime (§11)');
+
+  // §28: and each of them states the topology, in so many words.
+  const acceptance = readIfPresent('docs/PHASE_2_S6_ACCEPTANCE.md') ?? '';
+  for (const [needle, what] of [
+    [/period_close_order/, 'close oldest to newest'],
+    [/period_reopen_order/, 'reopen newest to oldest'],
+    [/period_prepend_closed_history/, 'no prepending behind closed books'],
+    [/period_closed_history/, 'no new pre-period opening balance while any period is closed'],
+    [/DEFERRABLE INITIALLY DEFERRED/i, 'the deferred physical validator'],
+  ] as const) {
+    if (needle.test(acceptance)) ok(`the acceptance document states ${what} (§28)`);
+    else fail('topology', `docs/PHASE_2_S6_ACCEPTANCE.md does not state ${what} — §28 requires it`);
+  }
+}
+
 // ── 11. The behavioural regressions this slice may never lose (§48) ────────
 const REQUIRED_BEHAVIOUR: ReadonlyArray<{ file: string; needle: RegExp; what: string }> = [
   {
@@ -1088,6 +1268,39 @@ const REQUIRED_BEHAVIOUR: ReadonlyArray<{ file: string; needle: RegExp; what: st
     needle: /0049_accounting_periods\.sql/,
     what: '0048 → 0049 upgrades an existing deployment without rewriting its books (§28, §42)',
   },
+  // The closed-books correction. A regex over 0049 can say the four refusals
+  // are written; only a real database can say the SET they defend is the one
+  // PostgreSQL will actually commit.
+  {
+    file: 'tests/integration/accounting-periods-closed-books.test.ts',
+    needle: /period_close_order[\s\S]{0,4000}period_reopen_order/,
+    what: 'the close and reopen matrices, refused by name and never cascading (correction §16, §17)',
+  },
+  {
+    file: 'tests/integration/accounting-periods-closed-books.test.ts',
+    needle: /period_prepend_closed_history/,
+    what: 'prepending a period behind closed books is refused, and appending still is not (correction §19)',
+  },
+  {
+    file: 'tests/integration/accounting-periods-closed-books.test.ts',
+    needle: /period_closed_history[\s\S]{0,2000}not\.toMatch/,
+    what: 'a new pre-period opening balance behind closed books is refused by its OWN code (correction §20)',
+  },
+  {
+    file: 'tests/integration/accounting-periods-closed-books.test.ts',
+    needle: /COMMIT[\s\S]{0,6000}period_topology_invalid/,
+    what: 'OPEN-before-CLOSED cannot survive COMMIT even for the schema owner, in raw SQL (correction §24)',
+  },
+  {
+    file: 'tests/integration/accounting-periods-concurrency.test.ts',
+    needle: /the opening balance wins the business row[\s\S]{0,12000}period_closed_history/i,
+    what: 'a close and a historical opening balance settle definitely in BOTH winner orders (correction §22)',
+  },
+  {
+    file: 'tests/integration/accounting-periods-concurrency.test.ts',
+    needle: /two adjacent periods closed concurrently/i,
+    what: 'two concurrent closes can never leave OPEN before CLOSED, and the refused one simply retries (correction §23)',
+  },
 ];
 
 function checkBehaviouralRegressions(): void {
@@ -1146,6 +1359,9 @@ if (LIST_ONLY) {
   console.log('  structural: one audit and one outbox event per command, rolled back together, with no production failpoint');
   console.log('  structural: one acctperiod/1 vector source, no JSON.stringify, and an IMMUTABLE PostgreSQL half');
   console.log('  structural: four routes, three idempotent mutations, a list that is an object with items and leaks no internals');
+  console.log('  structural: a DEFERRABLE topology validator, no gap and no OPEN-before-CLOSED at COMMIT, on the existing lock key');
+  console.log('  structural: close oldest first, reopen newest first, neither cascading; no prepend and no new pre-period opening balance behind closed books');
+  console.log('  structural: no document claims one opening balance for life, and the acceptance document states the topology');
   console.log('  structural: every named behavioural regression exists');
   for (const s of STEPS) console.log(`  command:    ${s.cmd} ${s.args.join(' ')}`);
   process.exit(0);
@@ -1161,6 +1377,7 @@ checkReopenReason();
 checkAuditAndOutbox();
 checkCanonicalization();
 checkSurface();
+checkClosedBooksTopology();
 checkBehaviouralRegressions();
 if (failures > 0) {
   console.error(`\nP2-S6 GATE: FAIL (${failures} structural violation${failures === 1 ? '' : 's'}) — not running the regression matrix`);

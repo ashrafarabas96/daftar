@@ -13,6 +13,15 @@ const ADVISORY_LOCK = 727272;
 
 export async function runMigrations(databaseUrl: string, dir = MIGRATIONS_DIR): Promise<string[]> {
   const pool = new Pool({ connectionString: databaseUrl, max: 1 });
+  // An idle pooled client whose backend goes away emits on the POOL, and a
+  // pool with no `error` listener turns that into an uncaught exception that
+  // takes the whole process with it. Every migration here is applied through
+  // an AWAITED query, so a real failure still rejects and still aborts the
+  // run; this listener only covers the connection being cut while nothing is
+  // in flight — an administrator dropping the database, a managed provider
+  // recycling the backend — which is not a migration failure and must not be
+  // reported as a crash.
+  pool.on('error', () => undefined);
   const applied: string[] = [];
   try {
     const client = await pool.connect();
