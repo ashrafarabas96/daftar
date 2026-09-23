@@ -308,7 +308,8 @@ describe('migration upgrade path: pre-encryption schema → latest (§13–16)',
         '0047_accounting_opening_balances.sql',
         '0048_accounting_fx_rates.sql',
         '0049_accounting_periods.sql',
-        ...migrationsAfter('0049_accounting_periods.sql'),
+        '0050_accounting_report_indexes.sql',
+        ...migrationsAfter('0050_accounting_report_indexes.sql'),
       ]);
 
       // Every existing business now holds all 21 required system accounts,
@@ -447,7 +448,8 @@ describe('migration upgrade path: pre-encryption schema → latest (§13–16)',
         '0047_accounting_opening_balances.sql',
         '0048_accounting_fx_rates.sql',
         '0049_accounting_periods.sql',
-        ...migrationsAfter('0049_accounting_periods.sql'),
+        '0050_accounting_report_indexes.sql',
+        ...migrationsAfter('0050_accounting_report_indexes.sql'),
       ]);
 
       // The closed registries came out with the shape the slice specifies:

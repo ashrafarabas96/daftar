@@ -220,7 +220,8 @@ describe('managed PostgreSQL: 0039 → 0049 under a non-superuser migration prin
         '0047_accounting_opening_balances.sql',
         '0048_accounting_fx_rates.sql',
         '0049_accounting_periods.sql',
-        ...migrationsAfter('0049_accounting_periods.sql'),
+        '0050_accounting_report_indexes.sql',
+        ...migrationsAfter('0050_accounting_report_indexes.sql'),
       ]);
 
       // The ALTER FUNCTION ownership transfer was legitimate, not bypassed.
@@ -400,7 +401,8 @@ describe('managed PostgreSQL: 0039 → 0049 under a non-superuser migration prin
         '0047_accounting_opening_balances.sql',
         '0048_accounting_fx_rates.sql',
         '0049_accounting_periods.sql',
-        ...migrationsAfter('0049_accounting_periods.sql'),
+        '0050_accounting_report_indexes.sql',
+        ...migrationsAfter('0050_accounting_report_indexes.sql'),
       ]);
       expect(await runMigrations(migratorUrl)).toEqual([]);
 

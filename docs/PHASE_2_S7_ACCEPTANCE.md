@@ -1,8 +1,8 @@
 # DAFTAR — P2-S7 Acceptance / قبول الشريحة السابعة من المرحلة الثانية
 
-> **What this is.** The evidence page for slice **P2-S7 — financial reads**, a **CANDIDATE awaiting Tech Lead review**. It states what is enforced by a mechanism and covered by a test, and, just as deliberately, what is not.
+> **What this is.** The evidence page for slice **P2-S7 — financial reads**, **ACCEPTED and FROZEN**. It states what is enforced by a mechanism and covered by a test, and, just as deliberately, what is not.
 >
-> **ما هذه الوثيقة.** سجل أدلة الشريحة P2-S7 وهي **مرشَّحة بانتظار مراجعة القائد التقني**. العمود الحاسم هو الحالة: **ENFORCED** يعني أن قاعدة البيانات أو الـCI ترفض المخالفة اليوم ويوجد اختبار يثبت ذلك. تبني هذه الشريحة القراءات المالية: ميزان المراجعة، دفتر الأستاذ العام، أرصدة الحسابات، وقوائم القيود. لا تكتب هذه الشريحة أي شيء في الدفاتر، ولا تخزّن أي رصيد، ولا تنشئ أي مجال أعمال جديد.
+> **ما هذه الوثيقة.** سجل أدلة الشريحة P2-S7 وهي **مقبولة ومجمَّدة**. العمود الحاسم هو الحالة: **ENFORCED** يعني أن قاعدة البيانات أو الـCI ترفض المخالفة اليوم ويوجد اختبار يثبت ذلك. تبني هذه الشريحة القراءات المالية: ميزان المراجعة، دفتر الأستاذ العام، أرصدة الحسابات، وقوائم القيود. لا تكتب هذه الشريحة أي شيء في الدفاتر، ولا تخزّن أي رصيد، ولا تنشئ أي مجال أعمال جديد.
 
 ## 0. The one sentence that matters
 
@@ -17,13 +17,15 @@ Two consequences follow, and both are enforced rather than merely intended:
 
 `كل رقم تعرضه «دفتر» محسوب لحظة السؤال من قيود اليومية نفسها. لا رصيد مخزَّن، ولا ذاكرة مؤقتة، ولا جدول مُلخَّص — حتى لا يوجد أبدًا رقمان يختلفان ولا أحد يعرف أيّهما الصحيح. والقراءة قراءة فقط: لا تكتب التقارير شيئًا، ولا تعيد حساب سعر صرف قديم، ولا تخفي حسابًا أُغلق أو قيدًا عُكِس.`
 
-## 1. Candidate migration — status
+## 1. Migration — status
 
 | migration | SHA-256 | state |
 |---|---|---|
-| `0050_accounting_report_indexes.sql` | `see MIGRATION_MANIFEST.json after acceptance` | **CANDIDATE — not frozen, not in the manifest** |
+| `0050_accounting_report_indexes.sql` | `ef20a42788c503317c1e4b9bb69ada47e547faf42330bb1bc0d8e0a2f4c18356` | **ACCEPTED and FROZEN** |
 
-`MIGRATION_MANIFEST.json` still records **50 frozen migrations** with `frozenThrough = 0049_accounting_periods.sql`. `0050` is a candidate: it is applied by `daftar_migrator` like any other migration, but it is not in the manifest and may be corrected in place until the Tech Lead accepts it. There is no `0051`.
+`MIGRATION_MANIFEST.json` records **51 frozen migrations** with `frozenThrough = 0050_accounting_report_indexes.sql`. The Tech Lead accepted P2-S7 at head `39a7503277a315c559291c15c34b66a4f4fab301`, exact-SHA workflow **35874918898**, all five jobs SUCCESS; `0050` was frozen at that acceptance, at the digest above. Its bytes are unchanged — freezing is a statement about them, not an edit to them. `gate:phase2:s7` is now a **permanent** regression gate carrying that digest as its own independent second source, and it no longer has any opinion about whether a later authorized migration exists.
+
+`قَبِل القائد التقني الشريحة P2-S7، وجُمِّد الترحيل 0050 بالبصمة نفسها التي قُبِل بها. السجل يحمل الآن 51 ترحيلًا مجمَّدًا، وبوّابة الشريحة صارت دائمة تحمل البصمة المقبولة كمصدر ثانٍ مستقل.`
 
 - Branch: `phase/2-accounting-core` · Draft PR: **#2** (stays draft for all of Phase 2)
 - Starting accepted head (P2-S6): `74162f04bb5c54a918bd42441f871c1e8a05377c`, exact-SHA workflow **35852844774**, all five jobs SUCCESS
@@ -259,6 +261,6 @@ Four assertions of this shape were corrected, in `accounting-periods-closed-book
 
 ## 13. Review status
 
-**P2-S7 IS A CANDIDATE.** `0050_accounting_report_indexes.sql` is unfrozen and absent from the manifest; `frozenThrough` remains `0049_accounting_periods.sql` with 50 frozen migrations. Nothing in this slice may be frozen, and no P2-S8 work may begin, without an explicit Tech Lead directive.
+**P2-S7 IS ACCEPTED AND FROZEN.** `0050_accounting_report_indexes.sql` is in the manifest at its accepted digest; `frozenThrough` is `0050_accounting_report_indexes.sql` with 51 frozen migrations. Those bytes are immutable from here on. `gate:phase2:s7` is permanent and carries the accepted digest independently of the manifest, so one commit cannot move the migration and its recorded hash together.
 
-`الشريحة P2-S7 مرشَّحة. الترحيل 0050 غير مجمَّد وغير مُدرَج في السجل، وحدّ التجميد ما يزال 0049. لا تجميد ولا بدء للشريحة التالية إلا بتوجيه صريح من القائد التقني.`
+`الشريحة P2-S7 مقبولة ومجمَّدة. الترحيل 0050 مُدرَج في السجل ببصمته المقبولة، وحدّ التجميد صار 0050 بواقع 51 ترحيلًا. هذه البايتات صارت غير قابلة للتغيير من الآن.`

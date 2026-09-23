@@ -30,13 +30,24 @@
  *   — one business reading another's journal, or learning from a refusal
  *     that an id it guessed was real (§32, §64).
  *
- * ── The optional migration ───────────────────────────────────────────────
+ * ── This gate is PERMANENT ───────────────────────────────────────────────
  *
- * `0050_accounting_report_indexes.sql` was OPTIONAL, and this gate accepts
- * BOTH outcomes (§57, §68). If it exists it must be a CANDIDATE — not in the
- * manifest, not frozen — and it must contain nothing but indexes. If it does
- * not exist, that is a complete and passing state. What the gate never
- * accepts is a 0051, or a frozen 0050, or a 0050 that grew a table.
+ * P2-S7 was accepted at head 39a7503277a315c559291c15c34b66a4f4fab301, exact-SHA
+ * workflow 35874918898, five jobs SUCCESS, and `0050_accounting_report_indexes.sql`
+ * was frozen at the digest it was accepted at. So the question this gate asks
+ * changed: not "is the candidate correct" but "is the accepted slice still
+ * exactly what was accepted".
+ *
+ * It carries 0050's accepted digest as an INDEPENDENT SECOND SOURCE and
+ * requires the file to hash to it both on disk and in the manifest, so one
+ * commit cannot move a migration and its recorded hash together.
+ *
+ * The candidate-era rules went with the candidacy: 0050 must no longer be
+ * absent from the manifest, and the "no 0051 may exist" clause is gone,
+ * because an accepted historical gate that forbids its successor is a gate
+ * that stops the project. P2-S8 is still forbidden from creating a 0051 —
+ * that prohibition lives in P2-S8's own gate, where it belongs. Every actual
+ * P2-S7 behaviour check is kept, index-only included.
  *
  * It COMPOSES rather than duplicates: P2-S6's gate runs unchanged, and it
  * composes P2-S5, P2-S4, P2-S3, P2-S2, P2-S1 and Phase 1 in turn.
@@ -56,11 +67,25 @@ const MIGRATIONS_DIR = join(ROOT, 'infrastructure/database/migrations');
 const LIST_ONLY = process.argv.slice(2).includes('--list');
 const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 
-/** The boundary P2-S6's acceptance left behind. A FLOOR, never an equality. */
-const FROZEN_THROUGH_AT_LEAST = '0049_accounting_periods.sql';
+/**
+ * The boundary P2-S7's acceptance left behind. A FLOOR, never an equality:
+ * this gate is permanent now, and a permanent gate has no opinion about how
+ * far the boundary has moved since — only that it never moved back.
+ */
+const FROZEN_THROUGH_AT_LEAST = '0050_accounting_report_indexes.sql';
 
-/** The OPTIONAL migration this slice may own. Absent is a passing state. */
+/** The migration this slice owns. Accepted history now; it may never vanish. */
 const S7_MIGRATION = '0050_accounting_report_indexes.sql';
+
+/**
+ * The ACCEPTED digest, carried here as an independent second source.
+ *
+ * The manifest records it too, and that is the point: one commit cannot move
+ * a migration and its recorded hash together and still pass, because this
+ * file has to agree with both. The Tech Lead accepted these exact bytes at
+ * head 39a7503277a315c559291c15c34b66a4f4fab301, exact-SHA workflow 35874918898.
+ */
+const S7_ACCEPTED = 'ef20a42788c503317c1e4b9bb69ada47e547faf42330bb1bc0d8e0a2f4c18356';
 
 /** The read modules the slice owes. */
 const S7_DOMAIN = 'packages/accounting/src/reports.ts';
@@ -156,12 +181,13 @@ function checkMigrationBoundary(): void {
   };
 
   if (manifest.frozenThrough < FROZEN_THROUGH_AT_LEAST) {
-    fail('frozen-history', `frozenThrough is ${manifest.frozenThrough} — P2-S6 was accepted and frozen through ${FROZEN_THROUGH_AT_LEAST}`);
+    fail('accepted-history', `frozenThrough is ${manifest.frozenThrough} — P2-S7 was accepted and frozen, so it must be at least ${FROZEN_THROUGH_AT_LEAST}`);
   } else {
-    ok(`frozenThrough = ${manifest.frozenThrough}`);
+    ok(`frozenThrough = ${manifest.frozenThrough} — at or beyond the P2-S7 acceptance boundary`);
   }
 
-  // Every frozen migration, 0000 through the boundary, byte-identical.
+  // Every frozen migration, 0000 through the boundary, byte-identical. The
+  // manifest check has its own script; this is the independent second read.
   let drifted = 0;
   for (const m of manifest.migrations) {
     const path = join(MIGRATIONS_DIR, m.name);
@@ -178,33 +204,40 @@ function checkMigrationBoundary(): void {
   }
   if (drifted === 0) ok(`all ${manifest.migrations.length} frozen migrations are byte-for-byte what the manifest recorded`);
 
-  // No 0051, ever, in this slice.
-  const beyond = files.filter((f) => /^00(5[1-9]|[6-9]\d)_/.test(f) || /^0[1-9]\d\d_/.test(f));
-  if (beyond.length > 0) fail('s7-boundary', `P2-S7 owns at most ${S7_MIGRATION}; found ${beyond.join(', ')} (§75)`);
-  else ok('no migration beyond 0050 exists');
-
+  // This gate is PERMANENT. It asks whether P2-S7 is still what was accepted,
+  // and it deliberately has NO opinion about whether a later authorized
+  // migration exists: an accepted historical gate that forbids its successor
+  // is a gate that stops the project. The candidate-era rules — 0050 must not
+  // be frozen, no 0051 may exist — went with the candidacy. (The P2-S8 gate
+  // carries its own 0051 prohibition, because that is P2-S8's rule to keep.)
   const recorded = new Map(manifest.migrations.map((m) => [m.name, m.sha256] as const));
 
   if (!files.includes(S7_MIGRATION)) {
-    // The measurement did not justify an index migration, or it did and the
-    // migration was not written. Either way this is a complete, passing
-    // state — the gate must not manufacture a migration for ceremony (§69).
-    if (recorded.has(S7_MIGRATION)) fail('s7-boundary', `${S7_MIGRATION} is in the manifest but not in the tree`);
-    else ok(`${S7_MIGRATION} does not exist — an index migration was not created, which the directive accepts (§14, §57)`);
+    fail('accepted-history', `${S7_MIGRATION} is missing — it is accepted history and may never be deleted`);
     return;
   }
-
   ok(`${S7_MIGRATION} present`);
-  if (recorded.has(S7_MIGRATION)) {
+
+  const inManifest = recorded.get(S7_MIGRATION);
+  if (inManifest === undefined) {
+    fail('accepted-history', `${S7_MIGRATION} is not recorded in MIGRATION_MANIFEST.json — P2-S7 was accepted, so its migration is frozen history`);
+  } else if (inManifest !== S7_ACCEPTED) {
     fail(
-      's7-candidate',
-      `${S7_MIGRATION} is recorded in MIGRATION_MANIFEST.json — a candidate is frozen by the Tech Lead, never by the slice that wrote it (§57)`,
+      'accepted-history',
+      `${S7_MIGRATION} is recorded at ${inManifest.slice(0, 12)}… but was accepted at ${S7_ACCEPTED.slice(0, 12)}… — the manifest disagrees with the acceptance`,
     );
   } else {
-    ok(`${S7_MIGRATION} is a CANDIDATE — not in the manifest, not frozen`);
-  }
-  if (manifest.frozenThrough >= S7_MIGRATION) {
-    fail('s7-candidate', `frozenThrough is ${manifest.frozenThrough} — ${S7_MIGRATION} is a candidate and may not be inside the frozen boundary`);
+    const onDisk = createHash('sha256')
+      .update(readFileSync(join(MIGRATIONS_DIR, S7_MIGRATION)))
+      .digest('hex');
+    if (onDisk !== S7_ACCEPTED) {
+      fail(
+        'accepted-history',
+        `${S7_MIGRATION} hashes to ${onDisk.slice(0, 12)}… on disk but was accepted at ${S7_ACCEPTED.slice(0, 12)}… — accepted bytes are immutable`,
+      );
+    } else {
+      ok(`${S7_MIGRATION} is frozen at its accepted digest, on disk and in the manifest`);
+    }
   }
 
   // INDEX-ONLY. The one thing this migration was authorized to be.
@@ -225,7 +258,7 @@ function checkMigrationBoundary(): void {
   let clean = true;
   for (const [re, what] of forbidden) {
     if (re.test(sql)) {
-      fail('s7-index-only', `${S7_MIGRATION} ${what} — it was authorized to create indexes and nothing else (§12, §57)`);
+      fail('s7-index-only', `${S7_MIGRATION} ${what} — it was accepted as an index migration and nothing else (§12, §57)`);
       clean = false;
     }
   }
@@ -670,7 +703,7 @@ function runSteps(): void {
 
 if (LIST_ONLY) {
   console.log('P2-S7 GATE plan:');
-  console.log('  structural: every frozen migration byte-identical; no 0051; 0050 either absent or an unfrozen, index-only candidate');
+  console.log('  structural: every frozen migration byte-identical; 0050 present and frozen at its accepted digest on disk AND in the manifest');
   console.log('  structural: no stored balance, no balance table, no materialized view, no cache named anywhere in the application');
   console.log(
     '  structural: the reporting modules write nothing, use no OFFSET, look up no current rate, filter no history on is_active, parse no amount as a double',
