@@ -86,19 +86,45 @@ interface Capture {
   nodeTypes: string[];
   subplanNames: string[];
   relations: string[];
-  mentionsBusinesses: boolean;
+  /**
+   * Which relations each scanned relation reaches THROUGH A SUBPLAN — that is,
+   * once per row of it. `{ journal_lines: ['businesses'] }` is the defect; the
+   * same entry under `journal_entries` is the policy §5 forbids touching, so
+   * it is expected to survive unchanged on both sides of the measurement.
+   */
+  subplanRelations: Record<string, string[]>;
 }
 
-/** Walk the plan tree, gathering everything §11 asks to be recorded. */
-function walk(node: Record<string, unknown>, out: { nodes: string[]; subplans: string[]; relations: string[] }): void {
+/**
+ * Walk the plan tree, gathering everything §11 asks to be recorded.
+ *
+ * `owner` is the relation of the nearest enclosing scan, and `inSubplan` says
+ * whether this node sits under a `"Parent Relationship": "SubPlan"` edge. The
+ * two together are what turn a flat list of relation names — which cannot tell
+ * a per-row lookup apart from a join — into the attribution §11 actually
+ * asks for: this relation is read once per row of that one.
+ */
+function walk(
+  node: Record<string, unknown>,
+  out: { nodes: string[]; subplans: string[]; relations: string[]; subplanRelations: Record<string, string[]> },
+  owner?: string,
+  inSubplan = false,
+): void {
   const type = node['Node Type'];
   if (typeof type === 'string') out.nodes.push(type);
   const subplan = node['Subplan Name'];
   if (typeof subplan === 'string') out.subplans.push(subplan);
   const relation = node['Relation Name'];
   if (typeof relation === 'string') out.relations.push(relation);
+
+  const nowInSubplan = inSubplan || node['Parent Relationship'] === 'SubPlan';
+  if (nowInSubplan && typeof relation === 'string' && owner !== undefined) {
+    (out.subplanRelations[owner] ??= []).push(relation);
+  }
+  const nextOwner = nowInSubplan ? owner : typeof relation === 'string' ? relation : owner;
+
   const children = node['Plans'];
-  if (Array.isArray(children)) for (const child of children) walk(child as Record<string, unknown>, out);
+  if (Array.isArray(children)) for (const child of children) walk(child as Record<string, unknown>, out, nextOwner, nowInSubplan);
 }
 
 async function capture(scope: { tenantId: string; businessId: string; from: string; to: string }): Promise<Capture> {
@@ -114,7 +140,7 @@ async function capture(scope: { tenantId: string; businessId: string; from: stri
 
     const plan = ((explained.rows[0]?.['QUERY PLAN'] as Record<string, unknown>[] | undefined) ?? [])[0] ?? {};
     const root = (plan['Plan'] ?? {}) as Record<string, unknown>;
-    const out = { nodes: [] as string[], subplans: [] as string[], relations: [] as string[] };
+    const out = { nodes: [] as string[], subplans: [] as string[], relations: [] as string[], subplanRelations: {} as Record<string, string[]> };
     walk(root, out);
     return {
       rows: answer.rows,
@@ -129,7 +155,7 @@ async function capture(scope: { tenantId: string; businessId: string; from: stri
       nodeTypes: out.nodes,
       subplanNames: out.subplans,
       relations: out.relations,
-      mentionsBusinesses: out.relations.includes('businesses'),
+      subplanRelations: out.subplanRelations,
     };
   } finally {
     await client.end();
@@ -269,9 +295,27 @@ describe('§10 — the optimisation changes work, not the answer', () => {
 });
 
 describe('§11 — the correlated businesses lookup is gone', () => {
-  it('the plan at 0051 reads businesses; the plan at 0052 does not', () => {
-    expect(before.mentionsBusinesses, `before relations: ${before.relations.join(', ')}`).toBe(true);
-    expect(after.mentionsBusinesses, `after relations: ${after.relations.join(', ')}`).toBe(false);
+  /**
+   * The narrow claim, and only it. `businesses` still appears in the plan
+   * after `0052`, and must: `journal_entries` and `accounts` carry policies of
+   * the same shape, and §5 forbids touching them in this slice. What changed
+   * is the attribution — no relation is read once per JOURNAL LINE any more.
+   */
+  it('at 0051 every journal line looks up businesses; at 0052 none does', () => {
+    expect(before.subplanRelations['journal_lines'] ?? [], `before: ${JSON.stringify(before.subplanRelations)}`).toContain('businesses');
+    expect(after.subplanRelations['journal_lines'] ?? [], `after: ${JSON.stringify(after.subplanRelations)}`).not.toContain('businesses');
+  });
+
+  /**
+   * And the rest of the schema is left exactly as it was. This is the other
+   * half of the same evidence: `0052` is narrow, so the per-row lookups it was
+   * not authorised to touch are still there, unchanged, on both sides.
+   */
+  it('while the entry-level and account-level policies are untouched', () => {
+    for (const table of ['journal_entries', 'accounts']) {
+      expect(before.subplanRelations[table] ?? [], `before ${table}`).toContain('businesses');
+      expect(after.subplanRelations[table] ?? [], `after ${table}`).toContain('businesses');
+    }
   });
 
   it('and the work actually fell', () => {
