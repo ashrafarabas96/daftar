@@ -43,18 +43,20 @@ The evidence file records `tier` and `executedIn` beside every number, so no rea
 
 **Results — 30 measured iterations per case (F: one full pass).**
 
-| # | case | p50 | **p95** | p99 | max | ceiling | verdict |
-|---|---|---:|---:|---:|---:|---:|---|
-| A | `post()` in an open transaction | 7.9 | **13.0** | 35.9 | 35.9 | 15 ms | **PASS** |
-| B | manual-adjustment endpoint, end to end | 18.9 | **28.2** | 35.5 | 35.5 | 60 ms | **PASS** |
-| C | whole-business trial balance | 475.8 | **524.0** | 561.7 | 561.7 | 500 ms | **FAIL — §5.2** |
-| D | 50-row general-ledger page | 55.0 | **75.0** | 77.9 | 77.9 | 150 ms | **PASS** |
-| E | account balance as-of | 46.7 | **55.8** | 60.0 | 60.0 | 100 ms | **PASS** (was 488.6 — §5.1) |
-| F | one full reconciliation pass (total) | — | — | — | **3 877.6** | 300 000 ms | **PASS** |
+The recorded run is at `cd8a3047c2cbd56d0315d2eecdf6ddb903933af7`. A second, independent run of the same code on the same box is quoted beside it, because one run of a timing is an anecdote.
 
-A's p99 of 35.9 ms against a p95 of 13.0 ms is the outlier every 30-sample run on a four-core box produces; the budget is stated on p95 and the distribution is recorded here rather than smoothed away.
+| # | case | p50 | **p95** | p99 | max | ceiling | verdict | p95, repeat run |
+|---|---|---:|---:|---:|---:|---:|---|---:|
+| A | `post()` in an open transaction | 8.8 | **11.2** | 14.7 | 14.7 | 15 ms | **PASS** | 13.0 |
+| B | manual-adjustment endpoint, end to end | 19.5 | **24.6** | 27.7 | 27.7 | 60 ms | **PASS** | 28.2 |
+| C | whole-business trial balance | 464.8 | **504.5** | 534.3 | 534.3 | 500 ms | **FAIL — §5.2** | 524.0 |
+| D | 50-row general-ledger page | 51.2 | **63.9** | 76.8 | 76.8 | 150 ms | **PASS** | 75.0 |
+| E | account balance as-of | 42.3 | **49.7** | 67.2 | 67.2 | 100 ms | **PASS** (was 488.6 — §5.1) | 55.8 |
+| F | one full reconciliation pass (total) | — | — | — | **1 863.2** | 300 000 ms | **PASS** | 3 877.6 |
 
-F is the honest weak claim in this table: 3.9 s is a full pass over **21 614** lines, not the 1 000 000 that §34 names. It says the pass is not accidentally quadratic; it does not say the 300 s budget is met at scale. Only the tier-2 run says that.
+**C misses in both runs, and by a margin that moves** — 504.5 ms and 524.0 ms against a 500 ms ceiling. Read the margin and the miss separately: the margin is a few per cent and varies run to run, as a millisecond figure on a four-core container does; the miss is in both runs, and §5.2 shows it is a property of the query's plan rather than of the host's mood. The number that should worry a reader is not the 4.5 ms of overshoot — it is that a trial balance over **21 614** lines sits on a ceiling written for **100 000**.
+
+F is the honest weak claim in this table: 1.9 s (3.9 s in the repeat run) is a full pass over **21 614** lines, not the 1 000 000 that §34 names. It says the pass is not accidentally quadratic; it does not say the 300 s budget is met at scale. Only the tier-2 run says that.
 
 `الملخّص: خمس ميزانيات من ست ضمن السقف على الطبقة الأولى. الميزانية C — ميزان المراجعة — تجاوزت السقف بنحو ٥٪، والسبب مُشخَّص في البند ٥.٢ وهو ليس ضجيج قياس.`
 
@@ -91,7 +93,7 @@ End to end over HTTP the budget case went from **488.6 ms to 55.8 ms**, inside t
 
 ### 5.2 C — trial balance: the RLS policy on `journal_lines` is evaluated per row (DIAGNOSED, NOT FIXED)
 
-**Symptom.** C measured **524.0 ms** against a 500 ms ceiling — a 5% miss, which is exactly the size of miss a reviewer is tempted to call noise. It is not noise, and one measurement settles it.
+**Symptom.** C measured **504.5 ms** and, in an independent repeat, **524.0 ms**, against a 500 ms ceiling — a small miss of a size a reviewer is tempted to call noise, in both runs. One measurement settles whether it is noise, and it also shows why the small margin is the least interesting part: the query is **34× more expensive than it needs to be**, and it only *looks* borderline because tier 1 runs one fifth of the volume the ceiling was written for.
 
 **The decisive measurement.** The same SQL, the same rows, the same box — run once as `daftar_app` under row level security, and once as a principal for whom `app_bypass()` is true, so the policy is never evaluated:
 

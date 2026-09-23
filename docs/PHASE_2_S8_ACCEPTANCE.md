@@ -124,16 +124,18 @@ Sentinel values — a distinctive amount, a memo, a rate, an assertion, a secret
 
 | # | case | p95 | ceiling | verdict |
 |---|---|---:|---:|---|
-| A | `post()` in an open transaction | 13.0 ms | 15 ms | PASS |
-| B | manual-adjustment endpoint | 28.2 ms | 60 ms | PASS |
-| C | whole-business trial balance | **524.0 ms** | 500 ms | **FAIL** |
-| D | 50-row ledger page | 75.0 ms | 150 ms | PASS |
-| E | account balance as-of | 55.8 ms | 100 ms | PASS |
-| F | full reconciliation pass (total) | 3 877.6 ms | 300 000 ms | PASS |
+| A | `post()` in an open transaction | 11.2 ms | 15 ms | PASS |
+| B | manual-adjustment endpoint | 24.6 ms | 60 ms | PASS |
+| C | whole-business trial balance | **504.5 ms** | 500 ms | **FAIL** |
+| D | 50-row ledger page | 63.9 ms | 150 ms | PASS |
+| E | account balance as-of | 49.7 ms | 100 ms | PASS |
+| F | full reconciliation pass (total) | 1 863.2 ms | 300 000 ms | PASS |
+
+Measured at `cd8a3047c2cbd56d0315d2eecdf6ddb903933af7`, 30 iterations each, over 21 614 journal lines on an idle four-core box. An independent repeat of the same code gave 13.0 / 28.2 / **524.0** / 75.0 / 55.8 ms: C misses in both.
 
 **E missed first, at 488.6 ms, and was fixed here**: the account restriction was applied outside the aggregate, so one account's balance cost a whole-business scan. Pushing the same restriction inside the aggregate — provably answer-preserving, since it restricts the `GROUP BY` key — took the query from 420 ms and 68 108 blocks to 29 ms and 5 644, and the budget case to 55.8 ms. No schema change, no new index.
 
-**C is diagnosed and NOT fixed.** The identical query, same rows, same box: **437.7 ms and 67 866 blocks** under RLS, **12.9 ms and 724 blocks** with the policy not evaluated. The permissive `tenant_membership` policy is planned as a correlated `EXISTS` **per row** on `journal_lines`, while the same policy is hashed once on `journal_entries`. Four query-level rewrites were measured; all returned byte-identical rows and **all read exactly the same 67 866 blocks**. The repair is to the policy's shape, which lives in a frozen migration — so §36 applies and the decision is the Tech Lead's. Full numbers and plans: `docs/PHASE_2_PERFORMANCE_BASELINE.md` §5.2; registered as **TD-11**.
+**C is diagnosed and NOT fixed.** The identical query, same rows, same box: **437.7 ms and 67 866 blocks** under RLS, **12.9 ms and 724 blocks** with the policy not evaluated. The overshoot is small and the cause is not: the read costs 34× what it needs to, and it only looks borderline because tier 1 runs 21 614 lines against a ceiling written for 100 000. The permissive `tenant_membership` policy is planned as a correlated `EXISTS` **per row** on `journal_lines`, while the same policy is hashed once on `journal_entries`. Four query-level rewrites were measured; all returned byte-identical rows and **all read exactly the same 67 866 blocks**. The repair is to the policy's shape, which lives in a frozen migration — so §36 applies and the decision is the Tech Lead's. Full numbers and plans: `docs/PHASE_2_PERFORMANCE_BASELINE.md` §5.2; registered as **TD-11**.
 
 `خمس ميزانيات من ست ضمن السقف. الميزانية E أُصلحت هنا على مستوى التطبيق. الميزانية C مُشخَّصة ولم تُصلَح: السبب شكل سياسة عزل الصفوف على جدول سطور القيود، وهي داخل ترحيل مجمَّد — لذلك القرار للقائد التقني، وهذا سبب حالة BLOCKED.`
 
