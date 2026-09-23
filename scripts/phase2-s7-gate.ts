@@ -79,6 +79,7 @@ const P2_S7_TESTS = [
   'tests/integration/accounting-guards.test.ts',
   'tests/golden-regression/phase2/02-report-shapes.golden.test.ts',
   'tests/performance/accounting-read-plans.test.ts',
+  'tests/integration/runner-exit-code.test.ts',
 ];
 
 let failures = 0;
@@ -559,6 +560,9 @@ function checkBehaviouralRegressions(): void {
     ['tests/golden-regression/phase2/02-report-shapes.golden.test.ts', 'the hand-computed trial balance and ledger (§46, §47, §48)'],
     ['tests/performance/accounting-read-plans.test.ts', 'the query-plan measurement the index decision rests on (§13, §57)'],
     ['packages/accounting/test/reports.test.ts', 'the normal-balance rule over all five types, and the cursor codec (§29, §42)'],
+    ['tests/helpers/exit-code.ts', 'the guard that lets a failing run say so, which every gate verdict rests on'],
+    ['tests/integration/runner-exit-code.test.ts', 'the end-to-end proof that a failing `vitest run` leaves with a non-zero status'],
+    ['tests/fixtures/runner-exit-code/failing.fixture.ts', 'the canary this gate runs before trusting any test result in its own run'],
   ];
   for (const [path, why] of required) {
     if (existsSync(join(ROOT, path))) ok(`${path} — ${why}`);
@@ -603,11 +607,58 @@ const STEPS: { name: string; cmd: string; args: string[] }[] = [
   { name: 'static guards (G-1…G-6)', cmd: npm, args: ['run', 'check:guards'] },
   { name: 'P2-S6 gate (permanent predecessor, composes P2-S5…P2-S1 and Phase 1)', cmd: npm, args: ['run', 'gate:phase2:s6'] },
   { name: '@daftar/accounting unit suite (the read arithmetic and the cursor codec)', cmd: npm, args: ['run', 'test', '-w', '@daftar/accounting'] },
-  { name: 'P2-S7 report, authorization, pagination, incident, golden and plan suites', cmd: 'npx', args: ['vitest', 'run', ...P2_S7_TESTS] },
+  {
+    name: 'P2-S7 report, authorization, pagination, incident, golden, plan and runner-soundness suites',
+    cmd: 'npx',
+    args: ['vitest', 'run', ...P2_S7_TESTS],
+  },
 ];
+
+/**
+ * Before any test result in this run is treated as evidence: prove the test
+ * runner can still report failure.
+ *
+ * This gate, and the six it composes, decide PASS or FAIL from the exit status
+ * of `npx vitest run`. A runner that answered 0 over failing tests would make
+ * every one of those verdicts meaningless while looking exactly like success —
+ * and it did, until `tests/helpers/exit-code.ts`: `embedded-postgres` registers
+ * a shutdown hook through `async-exit-hook`, which subscribes to `beforeExit`
+ * with a hardcoded zero and calls `process.exit(0)` when the loop drains,
+ * erasing the 1 Vitest had just recorded.
+ *
+ * `tests/integration/runner-exit-code.test.ts` asserts the same property, but
+ * that assertion is circular where it matters most: if the runner cannot
+ * report failure, it cannot report THAT failure either. So the check is also
+ * made here, in a process that is not Vitest, from the exit status directly,
+ * and it runs FIRST — nothing below it is trusted until it passes.
+ */
+function checkRunnerReportsFailure(): void {
+  const config = 'tests/fixtures/runner-exit-code/vitest.config.ts';
+  const res = spawnSync('npx', ['vitest', 'run', '--config', config, 'failing'], { cwd: ROOT, encoding: 'utf8', env: process.env });
+  const output = `${res.stdout ?? ''}${res.stderr ?? ''}`;
+
+  if (!/1 failed/.test(output)) {
+    fail('runner', `the exit-code canary did not run its failing test, so this run proves nothing about the runner:\n${output.slice(-2000)}`);
+    return;
+  }
+  if (res.status === 0) {
+    fail(
+      'runner',
+      'the test runner exited 0 over a failing test. No test result in this run — or in any gate it composes — is evidence. ' +
+        'See tests/helpers/exit-code.ts.',
+    );
+    return;
+  }
+  ok(`the test runner reports failure (canary exited ${res.status ?? 'on a signal'})`);
+}
 
 function runSteps(): void {
   console.log('P2-S7 GATE — composed regression matrix');
+  checkRunnerReportsFailure();
+  if (failures > 0) {
+    console.error('\nP2-S7 GATE: FAIL — the test runner cannot report failure; refusing to run the regression matrix');
+    process.exit(1);
+  }
   for (const step of STEPS) {
     const started = Date.now();
     const res = spawnSync(step.cmd, [...step.args], { cwd: ROOT, encoding: 'utf8', stdio: 'inherit', env: process.env });
