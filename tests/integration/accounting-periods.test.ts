@@ -378,7 +378,9 @@ describe('what may be posted, and when (§23, §38, §39)', () => {
     const far = await daysAgo(200);
     const message = await refusal(() => postOn(far));
     expect(message).toMatch(/accounting\.period_missing_for_date/);
-    expect(message).not.toMatch(/journal_entries|trigger|23\d\d\d/i);
+    // Word-bounded: the refusal carries ids the caller owns, and an unbounded
+    // /23\d\d\d/ matches the decimal digits inside a UUID's hex.
+    expect(message).not.toMatch(/journal_entries|trigger|\b23\d{3}\b/i);
   });
 
   describe('once the earlier period is closed', () => {

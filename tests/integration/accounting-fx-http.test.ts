@@ -462,7 +462,9 @@ describe('the payload is strict (§39, §40)', () => {
 
     expect(conflict.status).toBe(409);
     const text = JSON.stringify(conflict.body);
-    expect(text).not.toMatch(/23505|P0001|accounting_fx_rates_|unique|constraint/i);
+    // Word-bounded: the body carries a requestId, and an unbounded SQLSTATE
+    // pattern can match the decimal digits inside a UUID's hex.
+    expect(text).not.toMatch(/\b23505\b|\bP0001\b|accounting_fx_rates_|unique|constraint/i);
     expect(text).not.toContain('9.99');
     expect(text).not.toContain('3.71');
   });

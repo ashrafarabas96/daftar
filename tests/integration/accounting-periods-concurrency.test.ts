@@ -238,7 +238,9 @@ describe('close versus post — the central invariant (§25)', () => {
       expect(outcome.ok).toBe(false);
       expect(outcome.error).toMatch(/accounting\.period_closed/);
       // The refusal is a domain sentence, not a lock or a constraint name.
-      expect(outcome.error).not.toMatch(/deadlock|could not serialize|23\d\d\d|40001/i);
+      // Word-bounded: an unbounded SQLSTATE pattern also matches the decimal
+      // digits inside the ids the refusal legitimately carries.
+      expect(outcome.error).not.toMatch(/deadlock|could not serialize|\b23\d{3}\b|\b40001\b/i);
 
       // NOTHING was written into the closed period.
       const r = await pool.query<{ n: number }>(`SELECT count(*)::int AS n FROM journal_entries WHERE business_id = $1 AND entry_date = $2`, [

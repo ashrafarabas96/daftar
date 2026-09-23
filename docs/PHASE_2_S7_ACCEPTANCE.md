@@ -203,6 +203,22 @@ That proof is circular in the one case that matters most — a runner that canno
 
 `عيب وُجد أثناء هذه الشريحة ولا يخصّها وحدها: كان مشغّل الاختبارات قادرًا على الخروج بحالة نجاح رغم فشل اختبارات، لأن خطّاف إغلاق في embedded-postgres ينادي process.exit(0) فيمحو رمز الفشل الذي سجّله Vitest. وكل بوّابات المستودع تقرّر حكمها من حالة الخروج هذه. الإصلاح يمنع انتقالًا واحدًا فقط: الصفر لا يمحو فشلًا مُسجَّلًا. والبرهان يشغّل المشغّل نفسه على ملف فاشل عمدًا، وبوّابة P2-S7 تعيد البرهان من خارج Vitest قبل أن تصدّق أي نتيجة في تشغيلها.`
 
+## 11b. What the first trustworthy CI run then found — a leak assertion that was right about the rule and wrong about the string
+
+With the runner able to report failure, the first CI run turned the P2-S6 gate red on one test in an accepted slice: `accounting-periods-closed-books.test.ts` → *the refusal names no table, constraint or SQLSTATE*.
+
+The claim is correct and worth making: a merchant who closes periods out of order must get a sentence about their books, never a PostgreSQL error class. What was wrong was how the claim was spelled. The refusal legitimately carries the business and period ids, and the pattern for a SQLSTATE in class 23 was unbounded:
+
+```
+/accounting_periods|trigger|constraint|23\d\d\d|P0001/i
+```
+
+A UUID's hex runs contain decimal digits, so the id `79b263dc-82da-5b20-86b0-8c98d23726f8` satisfies `23\d\d\d` at `23726`. The test was a coin toss that came up tails on a few percent of runs, on ids that are generated fresh each time — and until `tests/helpers/exit-code.ts` the tails could be swallowed.
+
+Four assertions of this shape were corrected, in `accounting-periods-closed-books.test.ts`, `accounting-periods.test.ts`, `accounting-periods-concurrency.test.ts` and `accounting-fx-http.test.ts`. Each numeric SQLSTATE pattern is now word-bounded (`\b23\d{3}\b`, `\b40001\b`, `\b23505\b`, `\bP0001\b`). A SQLSTATE appears in text as a token of its own, so the bound refuses exactly the leak the test is about; and because a UUID's segments are 8, 4, 4, 4 and 12 characters long, a five-digit run inside one can never sit between two word boundaries. The correction makes the assertion strictly more precise: nothing it used to catch stops being caught.
+
+`ما وجده أول تشغيل جدير بالثقة لـCI: اختبار في شريحة مقبولة كان يتحقق من أن الرفض لا يسرّب رمز خطأ من قاعدة البيانات، لكنه كتب النمط بلا حدود كلمة، فصار يطابق أرقامًا عشرية داخل معرّف UUID يحمله الرفض بحق. أربعة اختبارات من هذا الشكل صُحِّحت بإضافة حدود الكلمة، والتصحيح يجعل التحقق أدقّ ولا يُسقط شيئًا كان يُمسَك من قبل.`
+
 ## 12. Test inventory
 
 | suite | what it proves |

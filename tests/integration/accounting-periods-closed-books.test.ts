@@ -147,7 +147,13 @@ describe('the close matrix — oldest first (§16)', () => {
     const b = await books('close-message');
     const { p2 } = await threePeriods(b, 'msg');
     const message = await refusal(() => closePeriod(b, 'close-msg-second', p2));
-    expect(message).not.toMatch(/accounting_periods|trigger|constraint|23\d\d\d|P0001/i);
+    // The SQLSTATE patterns are word-bounded on purpose. The refusal carries
+    // the business and period ids, which the caller owns and is entitled to,
+    // and a UUID's hex runs contain decimal digits: `…8c98d23726f8` satisfies
+    // an unbounded /23\d\d\d/ and turned this assertion into a coin toss that
+    // came up tails a few percent of runs. A SQLSTATE appears as a token of
+    // its own, so `\b` refuses the leak this test is about and nothing else.
+    expect(message).not.toMatch(/accounting_periods|trigger|constraint|\b23\d{3}\b|\bP0001\b/i);
   }, 120_000);
 });
 
