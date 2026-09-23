@@ -127,3 +127,35 @@ Two mechanics changed with this freeze, and both are deliberate:
   commit still fails. It deliberately has no opinion about whether `0042` and
   later exist: a gate for an accepted slice must never be the reason a later
   authorized slice cannot land.
+
+## Phase 2 (P2-S8): who can actually apply this history
+
+Nothing in this section changes a single byte of the frozen history. It
+records a fact about **applying** it that was discovered by doing it, in the
+P2-S8 rollback/restore rehearsal (`npm run rehearse:phase2:rollback`), and it
+matters to whoever writes the deployment runbook.
+
+**`daftar_migrator` cannot apply the accepted migration history.** The
+rehearsal attempted it and was refused with `permission denied for table
+schema_migrations`. The refusal is a property of the history as accepted, not
+of any one file: `0032`, `0033` and `0038` `SET ROLE daftar_platform`, and
+every accounting migration from `0040` onward grants and revokes privileges
+that their grantor must hold. CI has always applied migrations as the
+database owner for exactly this reason; the rehearsal simply made the
+implicit explicit by trying the other principal and recording what happened.
+
+**It is reported, not worked around.** The obvious "fix" — widening
+`daftar_migrator` until the history applies — is forbidden by the P2-S1 rule
+that the migration principal is never widened to make a migration apply. The
+deployment principal for schema changes is therefore the database
+administrator / owner role, and a deployment that hands the job to
+`daftar_migrator` will fail closed on the first privileged statement rather
+than apply half a history.
+
+The rehearsal also found, by failing, that `bootstrap.sql` did not create the
+`citext` and `pgcrypto` extensions it relies on; a restored database is only
+as complete as its bootstrap, and that was fixed in `bootstrap.sql` rather
+than by granting the migration role the right to create extensions.
+
+`ملاحظة بالعربية: بروفة التراجع أثبتت — بالتجربة لا بالقراءة — أن مبدأ الترحيل الضيّق daftar_migrator لا يستطيع تطبيق تاريخ الترحيلات المقبول، ويُرفض برسالة صلاحيات واضحة. الحلّ ليس توسيع صلاحياته (وهذا ممنوع منذ P2-S1)، بل أن يكون مبدأ النشر هو مالك قاعدة البيانات، وهو ما تفعله CI أصلًا. وسُجِّلت الحقيقة هنا لتكون في كرّاس النشر.`
+
