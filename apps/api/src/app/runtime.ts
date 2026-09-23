@@ -22,7 +22,7 @@ import {
 } from '../modules/delivery/credential-protector';
 import { LogSink, type OutboxSink } from '../modules/outbox/publisher';
 import { TenancyService } from '../modules/tenancy/tenancy.service';
-import { AccountingEngine } from '@daftar/accounting';
+import { AccountingEngine, AccountingReports } from '@daftar/accounting';
 import { AccountingAssertionMinterService } from '../modules/accounting/accounting-assertion.minter';
 import { DatabaseAccountingPostingAdapter } from '../modules/accounting/accounting-posting.adapter';
 import { AccountingPostingService } from '../modules/accounting/accounting-posting.service';
@@ -33,6 +33,8 @@ import { AccountingFxService } from '../modules/accounting/accounting-fx.service
 import { DatabaseAccountingFxAdapter } from '../modules/accounting/accounting-fx.adapter';
 import { AccountingPeriodsService } from '../modules/accounting/accounting-periods.service';
 import { DatabaseAccountingPeriodsAdapter } from '../modules/accounting/accounting-periods.adapter';
+import { AccountingReportsService } from '../modules/accounting/accounting-reports.service';
+import { DatabaseAccountingReportReader } from '../modules/accounting/accounting-reports.reader';
 
 /**
  * RUNTIME COMPOSITION (Phase 1 Completion Directive §15–20).
@@ -169,6 +171,19 @@ export function accountingProviders(): Provider[] {
     DatabaseAccountingPeriodsAdapter,
     { provide: 'ACCOUNTING_PERIOD_PORT', useExisting: DatabaseAccountingPeriodsAdapter },
     AccountingPeriodsService,
+    // P2-S7: the financial reads. `AccountingReports` is a SEPARATE object
+    // from `AccountingEngine` on purpose — the engine is the write side and
+    // its surface is asserted exactly, so a read method added there would be
+    // a read one character away from a posting method. The reader it is built
+    // over has no write method at all, so nothing downstream can turn a report
+    // into a second journal writer.
+    DatabaseAccountingReportReader,
+    {
+      provide: 'ACCOUNTING_REPORTS',
+      useFactory: (reader: DatabaseAccountingReportReader): AccountingReports => new AccountingReports(reader),
+      inject: [DatabaseAccountingReportReader],
+    },
+    AccountingReportsService,
   ];
 }
 

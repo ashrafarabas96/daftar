@@ -504,7 +504,14 @@ describe('managed PostgreSQL: 0039 → 0049 under a non-superuser migration prin
       } finally {
         rmSync(s5Only, { recursive: true, force: true });
       }
-      expect(await runMigrations(migratorUrl)).toEqual(['0049_accounting_periods.sql']);
+      // Everything after the frozen boundary, in one sweep: the P2-S6
+      // candidate that has since been accepted, and whatever candidate the
+      // slice in flight has added after it. The assertion is a FLOOR — that
+      // 0049 applied, first, under a non-superuser principal — because a
+      // portability case pinned to an exact tail is a case that fails the
+      // next authorized migration rather than the next portability defect.
+      const tail = await runMigrations(migratorUrl);
+      expect(tail[0]).toBe('0049_accounting_periods.sql');
       expect(await runMigrations(migratorUrl)).toEqual([]);
 
       // Everything below is read through the NON-SUPERUSER connection: if the
@@ -671,7 +678,11 @@ describe('managed PostgreSQL: 0039 → 0049 under a non-superuser migration prin
         // exact call 0049 would have had to make if bootstrap had not.
         expect((await check.query<{ c: boolean }>(`SELECT has_database_privilege(current_user, $1, 'CREATE') AS c`, [db])).rows[0]?.c).toBe(false);
 
-        expect(await runMigrations(migratorUrl)).toEqual(['0049_accounting_periods.sql']);
+        // A FLOOR, not an exact tail: 0049 is what this case is about, and it
+        // must still be the first thing that applies onto the 0048 boundary.
+        // What follows it belongs to the slice in flight.
+        const tail = await runMigrations(migratorUrl);
+        expect(tail[0]).toBe('0049_accounting_periods.sql');
         expect(await runMigrations(migratorUrl)).toEqual([]);
 
         // ── Everything below is read through the NON-SUPERUSER connection ──
@@ -772,7 +783,7 @@ describe('managed PostgreSQL: 0039 → 0049 under a non-superuser migration prin
    * question for 0049 itself is answered by the 0048-boundary case above,
    * which is the path a managed deployment actually walks.
    */
-  it('applies 0000 through 0049 on a fresh database, ending at 0049 with no 0050 and a no-op rerun (P2-S6 §42)', async () => {
+  it('applies 0000 through the candidate tail on a fresh database, with a no-op rerun (P2-S6 §42, P2-S7 §69)', async () => {
     await ensurePostgres();
     const db = 'daftar_portability_fresh';
     await admin.query(`DROP DATABASE IF EXISTS ${db} WITH (FORCE)`);
@@ -785,9 +796,17 @@ describe('managed PostgreSQL: 0039 → 0049 under a non-superuser migration prin
 
       const applied = await runMigrations(url);
       expect(applied[0]).toBe('0000_extensions.sql');
-      expect(applied.at(-1)).toBe('0049_accounting_periods.sql');
-      // §8 — 0049 is the LAST migration. No 0050 exists, and none is created.
-      expect(applied.filter((f) => f >= '0050')).toEqual([]);
+      // Every migration in the tree applied, in order, exactly once. The tail
+      // is read from the tree rather than pinned to a name: this case is
+      // about a FRESH database reaching the current head under a
+      // non-superuser principal, and a version of it that named the last
+      // migration would fail the next authorized one instead of the next
+      // portability defect.
+      const onDisk = readdirSync(MIGRATIONS_DIR)
+        .filter((f) => f.endsWith('.sql'))
+        .sort();
+      expect(applied).toEqual(onDisk);
+      expect(applied).toContain('0049_accounting_periods.sql');
       expect(new Set(applied).size).toBe(applied.length);
 
       // The period machinery is there, on a schema nothing upgraded into.

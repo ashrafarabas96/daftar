@@ -1,16 +1,22 @@
-import { BadRequestException, Body, Controller, ForbiddenException, Get, Headers, Inject, Param, Post, UsePipes } from '@nestjs/common';
+import { BadRequestException, Body, Controller, ForbiddenException, Get, Headers, Inject, Param, Post, Query, UsePipes } from '@nestjs/common';
 import type { z } from 'zod';
 import type {
+  AccountingAccountListDto,
   AccountingAdjustmentCreateDto,
+  AccountingBalanceListDto,
+  AccountingEntryDetailDto,
+  AccountingEntryListDto,
   AccountingEntryRefDto,
   AccountingFxRateCreateDto,
   AccountingFxRateRefDto,
+  AccountingLedgerDto,
   AccountingOpeningBalanceCreateDto,
   AccountingPeriodCreateDto,
   AccountingPeriodListDto,
   AccountingPeriodRefDto,
   AccountingPeriodReopenDto,
   AccountingReversalCreateDto,
+  AccountingTrialBalanceDto,
 } from '@daftar/shared-contracts';
 import { ZodValidationPipe } from '../../common/validation';
 import { Membership, RequiresPermission } from '../../common/guards';
@@ -19,13 +25,19 @@ import type { MembershipContext } from '../tenancy/tenancy.service';
 import { AccountingSourcesService } from './accounting-sources.service';
 import { AccountingFxService } from './accounting-fx.service';
 import { AccountingPeriodsService } from './accounting-periods.service';
+import { AccountingReportsService } from './accounting-reports.service';
 import {
+  AccountingAccountsQuerySchema,
   AccountingAdjustmentCreateSchema,
+  AccountingBalancesQuerySchema,
+  AccountingEntriesQuerySchema,
   AccountingFxRateCreateSchema,
+  AccountingLedgerQuerySchema,
   AccountingOpeningBalanceCreateSchema,
   AccountingPeriodCreateSchema,
   AccountingPeriodReopenSchema,
   AccountingReversalCreateSchema,
+  AccountingTrialBalanceQuerySchema,
 } from './accounting.schemas';
 
 const UUID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
@@ -58,6 +70,7 @@ export class AccountingController {
     @Inject(AccountingSourcesService) private readonly sources: AccountingSourcesService,
     @Inject(AccountingFxService) private readonly fx: AccountingFxService,
     @Inject(AccountingPeriodsService) private readonly periods: AccountingPeriodsService,
+    @Inject(AccountingReportsService) private readonly reports: AccountingReportsService,
   ) {}
 
   @Post('adjustments')
@@ -226,6 +239,135 @@ export class AccountingController {
         lastReopenedAt: p.lastReopenedAt,
       })),
     };
+  }
+
+  // ── The financial reads (P2-S7 §18) ─────────────────────────────────────
+  //
+  // Six routes, every one a GET, every one requiring `accounting.view`, and
+  // not one of them capable of changing a number. There is no POST balance,
+  // no PATCH ledger, no `setBalance` and no `recalculate`: a balance in DAFTAR
+  // is derived from the journal at the moment it is asked for, so there is
+  // nothing to set (AL-15).
+  //
+  // The query schemas are `.strict()` like every payload schema above, and a
+  // refusal is a 400 before any query is built. Branch scope is not among the
+  // things a query decides: `branchId` here is a REQUEST, checked against the
+  // membership in the service before it can reach a predicate.
+
+  /**
+   * The chart of accounts.
+   *
+   * Inactive accounts are INCLUDED by default. `is_active` governs whether an
+   * account may receive NEW postings, not whether the history written in it
+   * exists, and a chart read that hid them would hide the accounts a
+   * merchant's own past is denominated in (§19, §33).
+   */
+  @Get('accounts')
+  @RequiresPermission('accounting.view')
+  async listAccounts(
+    @Membership() m: MembershipContext,
+    @Param('businessId') businessId: string,
+    @Query() query: Record<string, unknown>,
+  ): Promise<AccountingAccountListDto> {
+    sameBusiness(m, businessId);
+    return this.reports.accounts(m, AccountingAccountsQuerySchema.parse(query));
+  }
+
+  /**
+   * The journal-entry list — keyset paginated, never OFFSET (§20).
+   *
+   * Summary fields only. There is deliberately no entry-level total: an
+   * entry's money lives on its lines, and a total invented at the header
+   * would be a second figure that can disagree with them.
+   */
+  @Get('entries')
+  @RequiresPermission('accounting.view')
+  async listEntries(
+    @Membership() m: MembershipContext,
+    @Param('businessId') businessId: string,
+    @Query() query: Record<string, unknown>,
+  ): Promise<AccountingEntryListDto> {
+    sameBusiness(m, businessId);
+    return this.reports.entries(m, AccountingEntriesQuerySchema.parse(query));
+  }
+
+  /**
+   * One journal entry, with every line and the FX snapshot each line was
+   * posted with (§21).
+   *
+   * The rate rendered here is the rate that was POSTED. No report in this
+   * slice calls the FX lookup: a rate entered tomorrow must never change
+   * yesterday's entry, and the only way to be certain is never to ask.
+   */
+  @Get('entries/:entryId')
+  @RequiresPermission('accounting.view')
+  async readEntry(
+    @Membership() m: MembershipContext,
+    @Param('businessId') businessId: string,
+    @Param('entryId') entryId: string,
+  ): Promise<AccountingEntryDetailDto> {
+    sameBusiness(m, businessId);
+    if (!UUID_RE.test(entryId)) throw new BadRequestException('Invalid entry id');
+    return this.reports.entry(m, entryId.toLowerCase());
+  }
+
+  /**
+   * The trial balance (§22-§24).
+   *
+   * `asOf` or `from`+`to`, never both. A whole-business report that does not
+   * balance is REFUSED rather than rendered; a branch-filtered one is labelled
+   * a dimensional view and reports `isBalanced` honestly, because one entry
+   * may carry different branches on different lines and a slice of a sound
+   * ledger need not balance.
+   */
+  @Get('trial-balance')
+  @RequiresPermission('accounting.view')
+  async trialBalance(
+    @Membership() m: MembershipContext,
+    @Param('businessId') businessId: string,
+    @Query() query: Record<string, unknown>,
+  ): Promise<AccountingTrialBalanceDto> {
+    sameBusiness(m, businessId);
+    return this.reports.trialBalance(m, AccountingTrialBalanceQuerySchema.parse(query));
+  }
+
+  /**
+   * The general ledger for ONE account over an inclusive range (§26-§29).
+   *
+   * The opening figure is everything posted strictly before `from`; the rows
+   * are ordered `(entryDate, entryId, lineNo)` and paginated on that exact
+   * tuple, so a page boundary inside a busy date neither repeats nor skips a
+   * row.
+   */
+  @Get('ledger')
+  @RequiresPermission('accounting.view')
+  async ledger(
+    @Membership() m: MembershipContext,
+    @Param('businessId') businessId: string,
+    @Query() query: Record<string, unknown>,
+  ): Promise<AccountingLedgerDto> {
+    sameBusiness(m, businessId);
+    return this.reports.ledger(m, AccountingLedgerQuerySchema.parse(query));
+  }
+
+  /**
+   * Account balances as of an inclusive date (§31).
+   *
+   * `asOf` is REQUIRED and every row repeats it. A balance without the instant
+   * it is true at is a number somebody will quote in another context next
+   * week, and the omission is what makes that possible.
+   */
+  @Get('balances')
+  @RequiresPermission('accounting.view')
+  async balances(
+    @Membership() m: MembershipContext,
+    @Param('businessId') businessId: string,
+    @Query() query: Record<string, unknown>,
+  ): Promise<AccountingBalanceListDto> {
+    sameBusiness(m, businessId);
+    const parsed = AccountingBalancesQuerySchema.parse(query);
+    const accountIds = parsed.accountId === undefined ? null : Array.isArray(parsed.accountId) ? parsed.accountId : [parsed.accountId];
+    return this.reports.balances(m, { ...parsed, accountIds });
   }
 }
 

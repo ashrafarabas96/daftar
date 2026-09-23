@@ -6,9 +6,15 @@
  */
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
-import { ACCOUNTING_AUTHORITY_TABLES, findAuthoritativeBalanceColumns } from './guards/no-authoritative-balance';
+import {
+  ACCOUNTING_AUTHORITY_TABLES,
+  discoverAccountingTables,
+  findAuthoritativeBalanceColumns,
+  isForbiddenBalanceTable,
+} from './guards/no-authoritative-balance';
 import { findFloatRateColumns } from './guards/no-float-rate';
 import { findDefinerSearchPathViolations } from './guards/definer-search-path';
+import { findReadSurfaceViolations, readSurfaceFiles } from './guards/read-surface';
 import { findPostingSurfaceViolations } from './guards/posting-surface';
 
 const ROOT = join(__dirname, '..');
@@ -264,16 +270,33 @@ for (const dir of ['apps/api/src', 'apps/web/src', 'apps/admin/src', 'packages']
 // is deliberately untouched by this rule.
 {
   const migrations = walk(join(ROOT, 'infrastructure/database/migrations'), /\.sql$/);
+  const schema = migrations.map((f) => readFileSync(f, 'utf8')).join('\n');
+
+  // P2-S7 §60: the watched set is every accounting-owned table the schema
+  // actually creates, not a list somebody has to remember to extend.
+  const watched = discoverAccountingTables(schema);
   for (const f of migrations) {
-    for (const hit of findAuthoritativeBalanceColumns(readFileSync(f, 'utf8'))) {
+    for (const hit of findAuthoritativeBalanceColumns(readFileSync(f, 'utf8'), watched)) {
       fail('no-authoritative-balance', f, `${hit.table}.${hit.column} claims storage authority over a derived financial quantity (G-3)`);
     }
   }
+
+  // The other shape: a table that IS the stored balance, whose columns are
+  // innocently named. AL-15 refuses the storage, however it is spelled.
+  for (const table of watched) {
+    if (isForbiddenBalanceTable(table)) {
+      fail(
+        'no-authoritative-balance',
+        'infrastructure/database/migrations',
+        `table \`${table}\` stores accounting balances — the journal is the only financial truth (G-3/AL-15)`,
+      );
+    }
+  }
+
   // The guard must actually be watching something: if the declared
   // source-of-truth table has not been created yet, G-3 is decorative.
-  const schema = migrations.map((f) => readFileSync(f, 'utf8')).join('\n');
   for (const table of ACCOUNTING_AUTHORITY_TABLES) {
-    if (!new RegExp(`CREATE\\s+TABLE\\s+(?:IF\\s+NOT\\s+EXISTS\\s+)?${table}\\b`, 'i').test(schema)) {
+    if (!watched.includes(table)) {
       fail(
         'no-authoritative-balance',
         'infrastructure/database/migrations',
@@ -355,8 +378,31 @@ for (const dir of ['apps/api/src', 'apps/web/src', 'apps/admin/src', 'packages']
   }
 }
 
+// Rule 19 — GUARD G-6 (P2-S7, §61): the financial READ surface is read-only,
+// pages by keyset, renders the FX snapshot frozen on the line, never filters
+// history on `is_active`, and never turns an amount into a double. G-4 says
+// "application code must not write the journal" repository-wide; this says
+// the narrower things that are only wrong in a report, and says them where a
+// report is.
+{
+  const reportFiles: Record<string, string> = {};
+  for (const surface of ['apps/api/src', 'packages']) {
+    for (const f of tsFiles(join(ROOT, surface))) {
+      if (/\.(test|spec)\.ts$/.test(f) || /[\\/]test[\\/]/.test(f)) continue;
+      reportFiles[relative(ROOT, f)] = readFileSync(f, 'utf8');
+    }
+  }
+  for (const v of findReadSurfaceViolations(reportFiles)) {
+    fail('read-surface', v.file, `${v.rule}: found \`${v.evidence}\` — ${v.why} (G-6)`);
+  }
+  // A guard watching nothing is decorative.
+  if (readSurfaceFiles(reportFiles).length === 0) {
+    fail('read-surface', 'apps/api/src', 'no accounting reporting module found — G-6 is watching nothing');
+  }
+}
+
 if (failures > 0) {
   console.error(`\nSTATIC GUARDS: FAIL (${failures})`);
   process.exit(1);
 }
-console.log('STATIC GUARDS: PASS (18 rules)');
+console.log('STATIC GUARDS: PASS (19 rules)');

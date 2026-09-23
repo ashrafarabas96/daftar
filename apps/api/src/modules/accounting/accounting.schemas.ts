@@ -164,3 +164,100 @@ export const AccountingPeriodReopenSchema = z
     reason,
   })
   .strict();
+
+/**
+ * ── The financial READ queries (P2-S7 §53) ────────────────────────────────
+ *
+ * A query string is the least typed thing a client can send, so these are the
+ * strictest schemas in this file. Every one is `.strict()`, every date is a
+ * real calendar date, every id is a UUID, every page size is bounded, and
+ * nothing that arrives here reaches SQL as anything but a bound parameter.
+ *
+ * Booleans arrive as the literal strings `true` and `false` and are converted
+ * once, here. `Boolean('false')` is `true`, and a report that showed inactive
+ * accounts because someone wrote that is a report that was never asked to.
+ */
+const queryFlag = z
+  .enum(['true', 'false'])
+  .transform((v) => v === 'true')
+  .optional();
+const pageSize = z.coerce.number().int().min(1).max(200).optional();
+/** Opaque, versioned, bounded. Parsed by the domain codec, never here. */
+const cursor = z.string().min(1).max(512).optional();
+const sourceType = z
+  .string()
+  .regex(/^[a-z0-9_]{1,64}$/)
+  .optional();
+
+export const AccountingAccountsQuerySchema = z
+  .object({
+    type: z.enum(['asset', 'liability', 'equity', 'revenue', 'expense']).optional(),
+    includeInactive: queryFlag,
+  })
+  .strict();
+
+export const AccountingEntriesQuerySchema = z
+  .object({
+    from: civilDate.optional(),
+    to: civilDate.optional(),
+    sourceType,
+    branchId: uuid.optional(),
+    limit: pageSize,
+    cursor,
+  })
+  .strict()
+  .refine((v) => v.from === undefined || v.to === undefined || v.from <= v.to, {
+    message: 'a date range ends on or after it starts',
+    path: ['to'],
+  });
+
+/**
+ * `asOf` XOR `from`+`to` (§22).
+ *
+ * Stated in the schema as well as in the service, because the two refuse at
+ * different moments and a client deserves the earlier one: this answers a
+ * malformed request with a 400 before any query is built.
+ */
+export const AccountingTrialBalanceQuerySchema = z
+  .object({
+    asOf: civilDate.optional(),
+    from: civilDate.optional(),
+    to: civilDate.optional(),
+    branchId: uuid.optional(),
+    includeZeroActivity: queryFlag,
+  })
+  .strict()
+  .refine((v) => (v.asOf === undefined) !== (v.from === undefined && v.to === undefined), {
+    message: 'a trial balance is either as of a date or over a range, never both and never neither',
+    path: ['asOf'],
+  })
+  .refine((v) => v.asOf !== undefined || (v.from !== undefined && v.to !== undefined), {
+    message: 'a range trial balance needs both from and to',
+    path: ['to'],
+  })
+  .refine((v) => v.from === undefined || v.to === undefined || v.from <= v.to, {
+    message: 'a date range ends on or after it starts',
+    path: ['to'],
+  });
+
+export const AccountingLedgerQuerySchema = z
+  .object({
+    accountId: uuid,
+    from: civilDate,
+    to: civilDate,
+    branchId: uuid.optional(),
+    limit: pageSize,
+    cursor,
+  })
+  .strict()
+  .refine((v) => v.from <= v.to, { message: 'a date range ends on or after it starts', path: ['to'] });
+
+export const AccountingBalancesQuerySchema = z
+  .object({
+    asOf: civilDate,
+    /** Repeatable `accountId` parameters, or one. Bounded so a query cannot ask for an unbounded IN list. */
+    accountId: z.union([uuid, z.array(uuid).min(1).max(200)]).optional(),
+    branchId: uuid.optional(),
+    includeZeroActivity: queryFlag,
+  })
+  .strict();

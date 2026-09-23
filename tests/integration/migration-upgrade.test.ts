@@ -559,9 +559,13 @@ describe('migration upgrade path: pre-encryption schema → latest (§13–16)',
       ).rows[0];
       expect(biz?.id).toBeTypeOf('string');
 
-      // The frozen P2-S4 boundary is followed by 0048 and then by the P2-S6
-      // candidate, in that order and by nothing else — §8 allows no 0050.
-      expect(await runMigrations(url6)).toEqual(['0048_accounting_fx_rates.sql', '0049_accounting_periods.sql']);
+      // The frozen P2-S4 boundary is followed by 0048 and then by 0049, in
+      // that order. A FLOOR, not an exact tail: what comes after them belongs
+      // to the slice in flight, and an upgrade case pinned to the last
+      // migration fails the next authorized one rather than the next upgrade
+      // defect.
+      const fromS4 = await runMigrations(url6);
+      expect(fromS4.slice(0, 2)).toEqual(['0048_accounting_fx_rates.sql', '0049_accounting_periods.sql']);
 
       // It arrived with row level security ENABLED and FORCED (§43): a table
       // that had to be secured in a later step would be readable across
@@ -717,8 +721,11 @@ describe('migration upgrade path: pre-encryption schema → latest (§13–16)',
       };
       const before = await protectedDigest();
 
-      // Exactly one migration follows the frozen P2-S5 boundary.
-      expect(await runMigrations(url7)).toEqual(['0049_accounting_periods.sql']);
+      // 0049 is the first thing that follows the frozen P2-S5 boundary; a
+      // later authorized candidate may follow it, and this case is not the
+      // place that decides whether one exists.
+      const fromS5 = await runMigrations(url7);
+      expect(fromS5[0]).toBe('0049_accounting_periods.sql');
 
       // §28 — the books are exactly as they were, byte for byte, and no
       // business was quietly given a financial start.

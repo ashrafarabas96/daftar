@@ -149,7 +149,15 @@ function accountingStatus(code: string): number {
     code === 'accounting.period_prepend_closed_history' ||
     code === 'accounting.period_closed_history' ||
     code === 'accounting.period_topology_invalid' ||
-    code === 'accounting.period_immutable'
+    code === 'accounting.period_immutable' ||
+    // P2-S7. An unbalanced business-wide trial balance is not a malformed
+    // request and not an outage: the request was well formed and the server
+    // is working. It is the STATE OF THE BOOKS that forbids the answer, which
+    // is what 409 says. 500 would read as "try again"; 400 would tell the
+    // caller to fix a payload that is not wrong. The body carries the code, a
+    // request id and no amounts at all (§56) — the totals that disagree are
+    // exactly what must not reach a log line.
+    code === 'accounting.report_unbalanced'
   ) {
     return HttpStatus.CONFLICT;
   }

@@ -11,3 +11,4 @@ export * from './fx-rate';
 export * from './period';
 export * from './realized-fx';
 export * from './rounding';
+export * from './reports';

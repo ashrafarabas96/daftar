@@ -199,6 +199,19 @@ jobs:
         run: npm run gate:phase2:s6
         env:
           PG_PORT: '5432'
+      # P2-S7 — the financial reads. Proves that every reported figure is
+      # aggregated from the journal at read time and nothing is stored; that
+      # no report writes, pages by OFFSET, renders today's exchange rate over
+      # yesterday's posting, hides a deactivated account's history, or turns
+      # an amount into a double; that a whole-business trial balance balances
+      # exactly or is refused; that `accounting.view` and Phase 1 branch scope
+      # guard all six routes; and that each figure equals an independent
+      # recomputation from the journal rows. Composes the P2-S6 gate, and
+      # through it the whole chain back to Phase 1.
+      - name: Phase 2 slice gate — P2-S7
+        run: npm run gate:phase2:s7
+        env:
+          PG_PORT: '5432'
       - name: Tampered-migration hard-fail proof
         run: |
           set -e

@@ -586,3 +586,212 @@ export interface AccountingPeriodDto {
 export interface AccountingPeriodListDto {
   items: AccountingPeriodDto[];
 }
+
+// ── Accounting financial reads (P2-S7) ────────────────────────────────────
+//
+// The read side of the ledger. Every amount below is a STRING of minor units
+// in the business's base currency, for the same reason every amount above is:
+// a JSON number is an IEEE double, and a double cannot hold an LBP balance or
+// a cumulative total exactly. A client that parses one of these with
+// `Number()` has thrown away the guarantee the server went to some trouble to
+// keep.
+//
+// Nothing in this section mutates anything. There is no `POST balance`, no
+// `PATCH ledger` and no field a client can send that would change a number.
+
+/** The five account types the chart allows. */
+export type AccountingAccountTypeDto = 'asset' | 'liability' | 'equity' | 'revenue' | 'expense';
+
+/** One account of the chart. Deliberately carries no balance: a balance needs an as-of date. */
+export interface AccountingAccountDto {
+  accountId: string;
+  code: string;
+  /** Display label. System accounts are rendered from `accounting.account.<systemKey>` (AL-06). */
+  name: string;
+  type: AccountingAccountTypeDto;
+  /** Engine identity for a system account; `null` for a merchant's own account. */
+  systemKey: string | null;
+  /**
+   * FUTURE POSTING ELIGIBILITY, never history visibility. An inactive account
+   * still appears in every historical report it has movement in.
+   */
+  isActive: boolean;
+}
+
+/** `GET /v1/businesses/:businessId/accounting/accounts` */
+export interface AccountingAccountListDto {
+  items: AccountingAccountDto[];
+}
+
+/** One entry as the list returns it. No total: the amounts are on the lines. */
+export interface AccountingEntrySummaryDto {
+  entryId: string;
+  /** `YYYY-MM-DD`, the accounting date as posted. */
+  entryDate: string;
+  sourceType: string;
+  sourceId: string;
+  description: string | null;
+  /** RFC3339 UTC at second precision. */
+  createdAt: string;
+  lineCount: number;
+}
+
+/** `GET /v1/businesses/:businessId/accounting/entries` */
+export interface AccountingEntryListDto {
+  items: AccountingEntrySummaryDto[];
+  /** Opaque keyset cursor, or `null` on the last page. Never an offset. */
+  nextCursor: string | null;
+}
+
+/** One line of an entry detail, exactly as the journal froze it. */
+export interface AccountingEntryLineDto {
+  lineNo: number;
+  accountId: string;
+  code: string;
+  name: string;
+  type: AccountingAccountTypeDto;
+  side: 'D' | 'C';
+  debitMinor: string;
+  creditMinor: string;
+  baseAmountMinor: string;
+  baseCurrency: string;
+  txnAmountMinor: string;
+  txnCurrency: string;
+  /**
+   * The rate AS POSTED, with the snapshot that came with it. A rate entered
+   * tomorrow never changes this row: the report reads the line, it does not
+   * look a rate up again.
+   */
+  fxRate: string;
+  fxRateSource: 'base' | 'manual' | 'provider';
+  fxRateAt: string;
+  branchId: string | null;
+  warehouseId: string | null;
+  memo: string | null;
+}
+
+/** `GET /v1/businesses/:businessId/accounting/entries/:entryId` */
+export interface AccountingEntryDetailDto {
+  entryId: string;
+  entryDate: string;
+  sourceType: string;
+  sourceId: string;
+  description: string | null;
+  actorKind: 'user' | 'system';
+  actorUserId: string | null;
+  actorSystemKey: string | null;
+  createdAt: string;
+  lines: AccountingEntryLineDto[];
+}
+
+/** One account's row of a trial balance. */
+export interface AccountingTrialBalanceRowDto {
+  accountId: string;
+  code: string;
+  name: string;
+  type: AccountingAccountTypeDto;
+  isActive: boolean;
+  totalDebitMinor: string;
+  totalCreditMinor: string;
+  /**
+   * Signed, in the account's normal direction: `debit - credit` for assets and
+   * expenses, `credit - debit` for liabilities, equity and revenue. A contra
+   * or abnormal balance is NEGATIVE here and is never clamped to zero.
+   */
+  netMinor: string;
+  baseCurrency: string;
+}
+
+/**
+ * `GET /v1/businesses/:businessId/accounting/trial-balance`
+ *
+ * `asOf` and `from`/`to` are MUTUALLY EXCLUSIVE, and one of them is required:
+ * a request that named both would have to be resolved by a convention, and
+ * the convention would be the server deciding which question was asked.
+ *
+ * `kind` distinguishes a legal trial balance from a dimensional view. A
+ * `whole_business` report always balances — an unbalanced one is refused with
+ * `accounting.report_unbalanced` rather than rendered. A `branch_dimension`
+ * report may legitimately NOT balance, because one entry may carry different
+ * branches on different lines, and `isBalanced` says so honestly instead of
+ * the server discarding mixed entries to manufacture a tidy total.
+ */
+export interface AccountingTrialBalanceDto {
+  kind: 'whole_business' | 'branch_dimension';
+  isBalanced: boolean;
+  totalDebitMinor: string;
+  totalCreditMinor: string;
+  baseCurrency: string;
+  items: AccountingTrialBalanceRowDto[];
+}
+
+/** One ledger row: a posted line and the balance after it. */
+export interface AccountingLedgerRowDto {
+  entryId: string;
+  entryDate: string;
+  lineNo: number;
+  sourceType: string;
+  sourceId: string;
+  description: string | null;
+  debitMinor: string;
+  creditMinor: string;
+  baseAmountMinor: string;
+  baseCurrency: string;
+  txnAmountMinor: string;
+  txnCurrency: string;
+  fxRate: string;
+  fxRateSource: 'base' | 'manual' | 'provider';
+  fxRateAt: string;
+  branchId: string | null;
+  warehouseId: string | null;
+  memo: string | null;
+  /** Signed, in the account's normal direction, after this row. */
+  runningMinor: string;
+}
+
+/**
+ * `GET /v1/businesses/:businessId/accounting/ledger`
+ *
+ * One business, one account, one inclusive date range. `openingMinor` is
+ * everything posted STRICTLY BEFORE `from`; the rows are
+ * `from <= entryDate <= to`, ordered `(entryDate, entryId, lineNo)`.
+ *
+ * The consistency model across pages is APPEND-STABLE TRAVERSAL, not a
+ * database snapshot: a row that existed when page 1 was served is never
+ * repeated and never skipped, and a posting made after page 1 may appear on a
+ * later page if it sorts after the cursor. Nothing here promises a frozen
+ * view of the ledger across separate HTTP requests, and a client that needs
+ * one should say what instant it wants with `to`.
+ */
+export interface AccountingLedgerDto {
+  account: AccountingAccountDto;
+  from: string;
+  to: string;
+  baseCurrency: string;
+  openingMinor: string;
+  /** The running balance after the last row of THIS page. */
+  closingMinor: string;
+  items: AccountingLedgerRowDto[];
+  nextCursor: string | null;
+}
+
+/** One account's derived balance at an instant. */
+export interface AccountingAccountBalanceDto {
+  accountId: string;
+  code: string;
+  name: string;
+  type: AccountingAccountTypeDto;
+  isActive: boolean;
+  /** Signed, in the account's normal direction. */
+  balanceMinor: string;
+  currency: string;
+  /** Inclusive: every line with `entryDate <= asOf` is in this figure. */
+  asOf: string;
+}
+
+/** `GET /v1/businesses/:businessId/accounting/balances` */
+export interface AccountingBalanceListDto {
+  asOf: string;
+  baseCurrency: string;
+  items: AccountingAccountBalanceDto[];
+}

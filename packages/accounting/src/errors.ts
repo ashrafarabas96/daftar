@@ -79,7 +79,20 @@ export type AccountingErrorCode =
   | 'accounting.period_missing_for_date'
   | 'accounting.period_reopen_reason_required'
   | 'accounting.period_immutable'
-  | 'accounting.period_extension_missing';
+  | 'accounting.period_extension_missing'
+  // Financial reads — P2-S7 (§22-§32, §53)
+  //
+  // `report_unbalanced` is the one that matters. It is not a payload
+  // complaint: it says the business-wide totals disagree, which the
+  // ledger's own COMMIT-time invariants say cannot happen. It carries a
+  // business id and nothing else — never the totals, never the difference.
+  | 'accounting.report_unbalanced'
+  | 'accounting.report_range_invalid'
+  | 'accounting.report_range_ambiguous'
+  | 'accounting.report_cursor_invalid'
+  | 'accounting.report_scope_invalid'
+  | 'accounting.report_scope_required'
+  | 'accounting.report_amount_invalid';
 
 /**
  * Safe identifiers that may accompany a refusal. Deliberately a closed shape:

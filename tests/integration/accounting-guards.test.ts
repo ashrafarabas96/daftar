@@ -2,7 +2,14 @@ import { createHash } from 'node:crypto';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { ACCOUNTING_AUTHORITY_TABLES, findAuthoritativeBalanceColumns, isAuthoritativeBalanceColumn } from '../../scripts/guards/no-authoritative-balance';
+import {
+  ACCOUNTING_AUTHORITY_TABLES,
+  discoverAccountingTables,
+  findAuthoritativeBalanceColumns,
+  isAuthoritativeBalanceColumn,
+  isForbiddenBalanceTable,
+} from '../../scripts/guards/no-authoritative-balance';
+import { findReadSurfaceViolations, readSurfaceFiles } from '../../scripts/guards/read-surface';
 import { LOGIN_ROLES, findAuthorityViolations, parseTableGrants } from '../../scripts/guards/authority-isolation';
 import { REQUIRED_RATE_SCALE, findFloatRateColumns, isRateAuthorityTable, isRateColumn } from '../../scripts/guards/no-float-rate';
 import { stripComments } from '../../scripts/guards/sql-schema';
@@ -98,6 +105,134 @@ describe('guard G-3 — no authoritative balance column', () => {
     for (const table of ACCOUNTING_AUTHORITY_TABLES) {
       expect(schema).toMatch(new RegExp(`CREATE\\s+TABLE\\s+${table}\\b`, 'i'));
     }
+  });
+});
+
+/**
+ * P2-S7 §60 — G-3 stopped being a list.
+ *
+ * The four names it started with were honest while four tables held
+ * accounting state. The table that breaks AL-15 is by definition the one
+ * nobody added to the list, so the watched set is now read out of the schema.
+ */
+describe('guard G-3 — the watched set is discovered, not listed (§60)', () => {
+  it('finds every accounting-owned table the schema creates', () => {
+    const sql = `
+      CREATE TABLE accounts (code TEXT);
+      CREATE TABLE journal_lines (id UUID);
+      CREATE TABLE accounting_periods (id UUID);
+      CREATE TABLE products (id UUID);
+      CREATE TABLE branches (id UUID);
+    `;
+    expect(discoverAccountingTables(sql)).toEqual(['accounting_periods', 'accounts', 'journal_lines']);
+  });
+
+  it('covers a table nobody declared, the day it is written', () => {
+    const sql = `CREATE TABLE accounting_report_rollup (business_id UUID, cached_balance BIGINT);`;
+    const watched = discoverAccountingTables(sql);
+    expect(watched).toContain('accounting_report_rollup');
+    expect(findAuthoritativeBalanceColumns(sql, watched)).toEqual([{ table: 'accounting_report_rollup', column: 'cached_balance' }]);
+    // …and the list version of the rule would have seen nothing at all.
+    expect(findAuthoritativeBalanceColumns(sql, ACCOUNTING_AUTHORITY_TABLES)).toEqual([]);
+  });
+
+  /**
+   * The other shape AL-15 forbids: the balance is the whole table, and its
+   * columns are innocently named `amount` or `value`.
+   */
+  it('refuses a table whose NAME is the stored balance', () => {
+    for (const table of ['accounting_balances', 'account_balances', 'running_balances', 'trial_balance_cache', 'ledger_cache', 'balance_snapshots']) {
+      expect(isForbiddenBalanceTable(table)).toBe(true);
+    }
+  });
+
+  /**
+   * An opening balance is a source document: what the merchant declared
+   * their position to be, posted through the journal like any other fact.
+   * Nothing recomputes it, so nothing can drift from it.
+   */
+  it('does not mistake AL-13 source documents for stored balances', () => {
+    for (const table of ['accounting_opening_balances', 'accounting_opening_balance_lines', 'accounts', 'journal_lines', 'accounting_periods']) {
+      expect(isForbiddenBalanceTable(table)).toBe(false);
+    }
+    expect(isAuthoritativeBalanceColumn('opening_balance_id')).toBe(false);
+    expect(isAuthoritativeBalanceColumn('opening_balance_minor')).toBe(true);
+  });
+
+  it('the real migration tree declares no stored accounting balance under the wider rule', () => {
+    const files = readdirSync(MIGRATIONS).filter((f) => f.endsWith('.sql'));
+    const schema = files.map((f) => readFileSync(join(MIGRATIONS, f), 'utf8')).join('\n');
+    const watched = discoverAccountingTables(schema);
+    expect(watched.length).toBeGreaterThan(ACCOUNTING_AUTHORITY_TABLES.length);
+    for (const table of watched) expect(isForbiddenBalanceTable(table)).toBe(false);
+    for (const f of files) expect(findAuthoritativeBalanceColumns(readFileSync(join(MIGRATIONS, f), 'utf8'), watched)).toEqual([]);
+  });
+});
+
+/**
+ * P2-S7 §61 — the read surface is read-only, and reads the journal.
+ *
+ * Each rule below is checked twice: against a module that breaks it, so the
+ * guard is known to fire, and against the shipped reporting modules, so the
+ * product is known to pass. A guard only ever asserted to pass is a guard
+ * nobody has seen work.
+ */
+describe('guard G-6 — the financial read surface (§61)', () => {
+  const file = 'apps/api/src/modules/accounting/accounting-reports.reader.ts';
+  const check = (source: string): string[] => findReadSurfaceViolations({ [file]: source }).map((v) => v.rule);
+
+  it('fires on a write to an accounting table inside a report', () => {
+    expect(check(`const sql = \`UPDATE journal_lines SET memo = $1\`;`)).toContain('no write to an accounting table');
+    expect(check(`const sql = \`INSERT INTO accounting_periods (id) VALUES ($1)\`;`)).toContain('no write to an accounting table');
+  });
+
+  it('fires on OFFSET pagination', () => {
+    expect(check(`const sql = \`SELECT 1 FROM journal_lines ORDER BY id LIMIT $1 OFFSET $2\`;`)).toContain('no OFFSET pagination');
+  });
+
+  it('fires on a current exchange-rate lookup', () => {
+    expect(check(`const sql = \`SELECT accounting_fx_rate_lookup($1, $2, now())\`;`)).toContain('no current exchange-rate lookup');
+  });
+
+  it('fires on a historical query filtered by is_active, and not on one that merely reports it', () => {
+    expect(check(`const sql = \`SELECT a.code FROM journal_lines l JOIN accounts a ON a.id = l.account_id WHERE a.is_active\`;`)).toContain(
+      'no historical filter on accounts.is_active',
+    );
+    // Selecting it is how the report TELLS the merchant the account is closed.
+    expect(check(`const sql = \`SELECT a.code, a.is_active FROM journal_lines l JOIN accounts a ON a.id = l.account_id WHERE a.business_id = $1\`;`)).toEqual(
+      [],
+    );
+    // And the chart list, which reads no journal, may filter on it freely.
+    expect(check(`const sql = \`SELECT a.code FROM accounts a WHERE a.business_id = $1 AND a.is_active\`;`)).toEqual([]);
+  });
+
+  it('fires on an amount turned into a double, and not on a page size', () => {
+    expect(check(`const total = Number(row.debitMinor);`)).toContain('no floating-point parse of an amount');
+    expect(check(`const total = parseFloat(row.balance);`)).toContain('no floating-point parse of an amount');
+    expect(check(`const size = Number(limitText);`)).toEqual([]);
+    expect(check(`const lineNo = Number(lineNoText);`)).toEqual([]);
+  });
+
+  it('fires on a persisted or materialized balance source', () => {
+    expect(check(`const sql = \`SELECT amount FROM accounting_balances WHERE business_id = $1\`;`)).toContain('no persisted or materialized balance source');
+    expect(check(`const sql = \`CREATE MATERIALIZED VIEW ledger_rollup AS SELECT 1\`;`)).toContain('no persisted or materialized balance source');
+  });
+
+  it('does not trip on a comment that names the thing it forbids', () => {
+    expect(check(`/** Never write \`OFFSET\`, never call accounting_fx_rate_lookup, never Number(amount). */\nexport const x = 1;`)).toEqual([]);
+  });
+
+  it('the shipped reporting modules pass every rule, and there are some to check', () => {
+    const modules: Record<string, string> = {};
+    for (const path of [
+      'apps/api/src/modules/accounting/accounting-reports.reader.ts',
+      'apps/api/src/modules/accounting/accounting-reports.service.ts',
+      'packages/accounting/src/reports.ts',
+    ]) {
+      modules[path] = readFileSync(join(ROOT, path), 'utf8');
+    }
+    expect(readSurfaceFiles(modules).length).toBe(3);
+    expect(findReadSurfaceViolations(modules)).toEqual([]);
   });
 });
 
