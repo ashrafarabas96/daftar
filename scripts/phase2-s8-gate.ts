@@ -800,8 +800,14 @@ function checkRunnerReportsFailure(): void {
 
 function runSteps(): void {
   console.log('P2-S8 GATE — composed regression matrix');
+  // Only the canary's OWN verdict may stop the matrix here. Counting every
+  // failure recorded so far would let an unrelated finding — a missed
+  // performance budget, say — print the sentence "the test runner cannot
+  // report failure", which would be false, and would hide the state of
+  // every suite behind a claim about the runner.
+  const beforeCanary = failures;
   checkRunnerReportsFailure();
-  if (failures > 0) {
+  if (failures > beforeCanary) {
     console.error('\nP2-S8 GATE: FAIL — the test runner cannot report failure; refusing to run the regression matrix');
     process.exit(1);
   }
