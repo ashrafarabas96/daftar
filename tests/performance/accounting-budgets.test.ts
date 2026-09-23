@@ -80,7 +80,10 @@ const MONEY = {
   txnCurrency: 'ILS',
   fxRate: '1',
   fxRateSource: 'base',
-  fxRateAt: '2026-03-14T09:15:00.000Z',
+  // Second precision, UTC, ending Z: the `instant` scalar refuses sub-second
+  // rather than truncating it, so `.000Z` here would have measured a 400, not
+  // the adjustment endpoint.
+  fxRateAt: '2026-03-14T09:15:00Z',
 } as const;
 
 function summarise(name: string, budgetMs: number, samples: number[]): Measurement {

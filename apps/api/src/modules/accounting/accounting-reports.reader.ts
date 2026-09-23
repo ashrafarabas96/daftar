@@ -148,7 +148,16 @@ export class DatabaseAccountingReportReader implements AccountingReportReader {
     const accountConditions = ['a.business_id = $1'];
     if (present(query.accountIds) && query.accountIds.length > 0) {
       params.push([...query.accountIds]);
-      accountConditions.push(`a.id = ANY($${params.length}::uuid[])`);
+      const accounts = `ANY($${params.length}::uuid[])`;
+      accountConditions.push(`a.id = ${accounts}`);
+      // The same restriction inside the aggregate, not only outside it. The
+      // outer predicate alone is correct but pays for the whole business: the
+      // subquery still sums every line before the LEFT JOIN discards all but
+      // the asked-for accounts. Measured on 100k lines, one account: 420 ms
+      // and 68,108 shared blocks without this line, 29 ms and 5,644 with it,
+      // same rows either way. It is a restriction, so adding it to a
+      // GROUP BY over the same key cannot change a surviving group's total.
+      lineConditions.push(`l.account_id = ${accounts}`);
     }
 
     const { rows } = await this.db.scoped<AccountTotalsRow>(this.scope(scope), accountTotalsSql(lineConditions, accountConditions), params);

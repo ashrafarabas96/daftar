@@ -19,6 +19,7 @@
     "test:integration": "vitest run tests/integration tests/security",
     "test:golden": "vitest run tests/golden-regression",
     "perf:baseline": "vitest run tests/perf",
+    "perf:phase2:s8": "vitest run tests/performance",
     "lint": "eslint . --max-warnings 0",
     "format": "prettier --check .",
     "typecheck": "npm run typecheck --workspaces --if-present",

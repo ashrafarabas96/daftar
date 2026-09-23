@@ -89,6 +89,7 @@ const P2_S8_TESTS = [
   'tests/security/accounting-failure-injection.test.ts',
   'tests/security/accounting-observability-redaction.test.ts',
   'tests/security/accounting-raw-sql-invariants.test.ts',
+  'tests/security/accounting-credential-matrix.test.ts',
   'tests/integration/accounting-reconciliation.test.ts',
   'tests/integration/runner-exit-code.test.ts',
 ];
@@ -674,6 +675,10 @@ function checkEvidence(): void {
     ['tests/security/accounting-observability-redaction.test.ts', 'the redaction sentinels and the metric label contract (f §45, §46)'],
     ['tests/security/accounting-raw-sql-invariants.test.ts', 'the invariants at raw SQL, beneath every application layer'],
     [
+      'tests/security/accounting-credential-matrix.test.ts',
+      'what each runtime database credential can actually do, asked from the credential rather than through the product (f §13, §14, §17)',
+    ],
+    [
       'tests/integration/accounting-reconciliation.test.ts',
       'the nine checks through the PRODUCTION authority, pagination, the schedule and crash/restart (§11, §17, §21, §22, §24)',
     ],
@@ -695,15 +700,40 @@ function checkEvidence(): void {
   // f §50: a mandatory check recorded as SKIPPED is not evidence.
   const evidence = readIfPresent('release/phase2-s8-evidence.json');
   if (evidence !== null) {
-    const parsed = JSON.parse(evidence) as { checks?: { name: string; status: string; mandatory?: boolean }[] };
-    const skipped = (parsed.checks ?? []).filter((c) => c.mandatory !== false && c.status.toUpperCase() === 'SKIPPED');
+    const parsed = JSON.parse(evidence) as { checks?: { id: string; name: string; status: string; mandatory?: boolean }[] };
+    const checks = parsed.checks ?? [];
+    // GATE-S8 is excluded from BOTH of the checks below, for one reason,
+    // given in full at the FAIL check: that row is this gate's own verdict
+    // from the previous evidence run, and a gate that reads its own last
+    // answer as input is a fixpoint rather than a measurement.
+    const skipped = checks.filter((c) => c.mandatory !== false && c.status.toUpperCase() === 'SKIPPED' && c.id !== 'GATE-S8');
     if (skipped.length > 0) {
       fail(
         's8-evidence',
-        `${skipped.length} mandatory check${skipped.length === 1 ? ' is' : 's are'} recorded SKIPPED (${skipped.map((c) => c.name).join(', ')}) — f §50 requires zero`,
+        `${skipped.length} mandatory check${skipped.length === 1 ? ' is' : 's are'} recorded SKIPPED (${skipped.map((c) => c.id).join(', ')}) — f §50 requires zero`,
       );
     } else {
-      ok(`all ${(parsed.checks ?? []).length} recorded checks have a verdict; no mandatory check is skipped`);
+      ok(`all ${checks.length} recorded checks have a verdict; no mandatory check is skipped`);
+    }
+
+    // A mandatory check recorded FAIL is a NO, and this gate has to be able
+    // to say it. Without this, a performance budget could miss (f §36) while
+    // the gate still reported PASS, and a gate that cannot report the one
+    // thing its own evidence file says is wrong is not evidence — f §63.
+    //
+    // GATE-S8 is excluded deliberately, and it is the only exclusion: that
+    // row is this gate's OWN verdict from the previous evidence run, so
+    // reading it here would make the gate a fixpoint of itself — once red,
+    // red forever, even after the finding behind it was repaired. A gate
+    // must judge the work, never its own last answer.
+    const failed = checks.filter((c) => c.mandatory !== false && c.status.toUpperCase() === 'FAIL' && c.id !== 'GATE-S8');
+    if (failed.length > 0) {
+      fail(
+        's8-evidence',
+        `${failed.length} mandatory check${failed.length === 1 ? ' is' : 's are'} recorded FAIL (${failed.map((c) => c.id).join(', ')}) — the evidence file itself says this slice is not ready`,
+      );
+    } else {
+      ok('no mandatory check is recorded FAIL');
     }
   }
 
