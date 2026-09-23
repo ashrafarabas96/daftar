@@ -1286,6 +1286,31 @@ const REQUIRED_BEHAVIOUR: ReadonlyArray<{ file: string; needle: RegExp; what: st
     needle: /period_closed_history[\s\S]{0,2000}not\.toMatch/,
     what: 'a new pre-period opening balance behind closed books is refused by its OWN code (correction §20)',
   },
+  // §14 of the lifecycle directive: this gate asks for the BEHAVIOUR, not for
+  // the test's title. A describe named "replacement semantics" that never
+  // reverses, never reopens and never reaches ['superseded', 'posted'] is
+  // evidence for none of those things, and that is exactly what the earlier
+  // version of this suite was.
+  {
+    file: 'tests/integration/accounting-periods-closed-books.test.ts',
+    needle: /postReversalAs\(/,
+    what: 'the replacement proof reverses the original opening entry through the REAL reversal writer (lifecycle §6)',
+  },
+  {
+    file: 'tests/integration/accounting-periods-closed-books.test.ts',
+    needle: /reopenPeriod\([\s\S]{0,8000}toEqual\(\['open', 'open'\]\)/,
+    what: 'the closed books are reopened through the real period command, newest first, before any replacement (lifecycle §5)',
+  },
+  {
+    file: 'tests/integration/accounting-periods-closed-books.test.ts',
+    needle: /toEqual\(\['superseded', 'posted'\]\)/,
+    what: "the replacement actually ends in ['superseded', 'posted'] — the state the test's own name claims (lifecycle §7, §13)",
+  },
+  {
+    file: 'tests/integration/accounting-periods-closed-books.test.ts',
+    needle: /replay\.created\)\.toBe\(false\)/,
+    what: 'an exact retry of the replacement after the books close again is still a retry (lifecycle §9)',
+  },
   {
     file: 'tests/integration/accounting-periods-closed-books.test.ts',
     needle: /COMMIT[\s\S]{0,6000}period_topology_invalid/,

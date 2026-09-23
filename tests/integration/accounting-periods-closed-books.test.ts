@@ -28,9 +28,12 @@ import { ensurePostgres, ownerPool, resetData } from '../helpers/test-app';
 import {
   must,
   openingBalanceFingerprintOf,
+  openingBalanceSnapshot,
   post,
   postOpeningBalanceAs,
+  postReversalAs,
   refusal,
+  reversalFingerprintOfSnapshot,
   seedPostingFixture,
   simpleCommand,
   sourceAssertion,
@@ -74,8 +77,12 @@ const domestic = (systemKey: string, side: 'D' | 'C', amount: bigint): PostLine 
 
 const positions = (): PostLine[] => [domestic('cash', 'D', 50000n), domestic('bank', 'D', 20000n)];
 
-async function openBalance(who: PostingFixture, idempotencyKey: string, asOfDate: string): Promise<{ entryId: string; created: boolean }> {
-  const lines = positions();
+async function openBalance(
+  who: PostingFixture,
+  idempotencyKey: string,
+  asOfDate: string,
+  lines: readonly PostLine[] = positions(),
+): Promise<{ entryId: string; created: boolean }> {
   const openingBalanceId = deriveSourceId(who.businessId, idempotencyKey);
   const assertion = sourceAssertion({
     actorUserId: who.userId,
@@ -335,28 +342,237 @@ describe('the opening balance and closed books (§20)', () => {
   }, 120_000);
 });
 
-// ── §21: an opening balance is not a once-in-a-lifetime entry ─────────────
+// ── §21 and the cross-slice lifecycle proof ───────────────────────────────
 
-describe('opening-balance replacement semantics (§21, AL-13)', () => {
-  it('a business may hold a SUPERSEDED opening balance and a current POSTED one', async () => {
-    // The physical rule is a partial unique index over `status = 'posted'`,
-    // which says ONE CURRENT posted set — not one set for the life of the
-    // business. Stating the correction as a test, because the acceptance page
-    // said "one over the lifetime" and that was false.
-    const b = await books('supersede');
-    const before = await daysAgo(400);
-    const first = await openBalance(b, 'supersede-first-key', before);
-    expect(first.created).toBe(true);
+/**
+ * The opening balance is not a once-in-a-lifetime entry, and this is the
+ * proof that says so END TO END rather than by assertion.
+ *
+ * An earlier version of this file carried a test with this describe's name
+ * which never created the state its title claimed: it posted one opening
+ * balance, watched a second be refused, and counted the posted rows. That is
+ * evidence for `accounting.opening_balance_exists` and for nothing else. A
+ * test is evidence only for what it actually does, so the whole lifecycle is
+ * performed here through the real commands — no status is written by hand,
+ * no period row is updated directly, and every step uses a genuine signed
+ * assertion.
+ *
+ * What it walks through is the only legal way a merchant can restate their
+ * opening position once their books have periods:
+ *
+ *   post OB1 → open the books with periods → close them → find the
+ *   replacement refused → reopen newest-first → reverse OB1 inside an OPEN
+ *   period → find the replacement STILL refused while the books are closed →
+ *   reopen → post OB2, which supersedes OB1 → close again → and a retry of
+ *   OB2 is still a retry.
+ */
+describe('opening-balance replacement semantics (§21, AL-13) — the whole lifecycle', () => {
+  /** Reverse a posted opening balance through the ordinary reversal writer. */
+  async function reverseOpening(
+    who: PostingFixture,
+    entryId: string,
+    openedAsOf: string,
+    lines: readonly PostLine[],
+    reversalDate: string,
+  ): Promise<{ entryId: string; created: boolean }> {
+    const snap = openingBalanceSnapshot({
+      entryId,
+      tenantId: who.tenantId,
+      businessId: who.businessId,
+      asOfDate: openedAsOf,
+      baseCurrency: 'ILS',
+      positions: lines,
+    });
+    const assertion = sourceAssertion({
+      actorUserId: who.userId,
+      tenantId: who.tenantId,
+      businessId: who.businessId,
+      operationKind: 'reverse',
+      sourceType: 'reversal',
+      sourceId: entryId,
+      postingFingerprint: reversalFingerprintOfSnapshot(snap, reversalDate),
+    });
+    return postReversalAs(assertion, entryId, reversalDate, 'restating the opening position', randomUUID());
+  }
 
-    // A SECOND set with the same identity is refused while the first stands:
-    // the lifecycle is reverse-then-restate, never silently replace.
-    expect(await refusal(() => openBalance(b, 'supersede-second-key', before))).toMatch(/accounting\.opening_balance_exists/);
+  /** Everything a refused attempt must not have left behind. */
+  async function state(businessId: string): Promise<Record<string, number>> {
+    const r = await pool.query<{ entries: number; sets: number; bindings: number; audits: number; outbox: number; reversals: number }>(
+      `SELECT (SELECT count(*) FROM journal_entries              WHERE business_id = $1)::int AS entries,
+              (SELECT count(*) FROM accounting_opening_balances  WHERE business_id = $1)::int AS sets,
+              (SELECT count(*) FROM accounting_source_bindings   WHERE business_id = $1)::int AS bindings,
+              (SELECT count(*) FROM audit_events                 WHERE business_id = $1)::int AS audits,
+              (SELECT count(*) FROM outbox_events                WHERE business_id = $1)::int AS outbox,
+              (SELECT count(*) FROM accounting_reversals         WHERE business_id = $1)::int AS reversals`,
+      [businessId],
+    );
+    const row = must(r.rows[0]);
+    return { entries: row.entries, sets: row.sets, bindings: row.bindings, audits: row.audits, outbox: row.outbox, reversals: row.reversals };
+  }
 
-    const r = await pool.query<{ n: number }>(`SELECT count(*)::int AS n FROM accounting_opening_balances WHERE business_id = $1 AND status = 'posted'`, [
-      b.businessId,
-    ]);
-    expect(must(r.rows[0]).n).toBe(1);
-  }, 120_000);
+  /** A digest of one journal entry and its lines — the bytes that must not move. */
+  async function journalDigest(entryId: string): Promise<string> {
+    const r = await pool.query<{ d: string }>(
+      `SELECT md5(string_agg(t, '|' ORDER BY t)) AS d FROM (
+         SELECT concat_ws(':', je.id, je.entry_date, je.source_type, je.source_id, je.posting_fingerprint, je.description) AS t
+           FROM journal_entries je WHERE je.id = $1
+         UNION ALL
+         SELECT concat_ws(':', l.line_no, l.account_id, l.debit_minor, l.credit_minor, l.base_currency,
+                               l.txn_amount_minor, l.txn_currency, l.fx_rate, l.fx_rate_source) AS t
+           FROM journal_lines l WHERE l.journal_entry_id = $1
+       ) x`,
+      [entryId],
+    );
+    return must(r.rows[0], 'a journal digest').d;
+  }
+
+  /** The opening-balance sets of a business, oldest first, as status words. */
+  async function sets(businessId: string): Promise<{ id: string; status: string; entry: string | null }[]> {
+    const r = await pool.query<{ id: string; status: string; entry: string | null }>(
+      `SELECT id::text AS id, status, journal_entry_id::text AS entry
+         FROM accounting_opening_balances WHERE business_id = $1 ORDER BY created_at, id`,
+      [businessId],
+    );
+    return r.rows;
+  }
+
+  it('OB1 posted behind the books, refused replacement while closed, reversed, replaced, and still replayable', async () => {
+    const b = await books('ob-lifecycle');
+    const firstLines = positions();
+    const secondLines = [domestic('cash', 'D', 61000n), domestic('bank', 'D', 14000n)];
+
+    // ── §3. OB1, dated strictly before any period exists ──────────────────
+    const historic = await daysAgo(400);
+    const ob1 = await openBalance(b, 'lifecycle-ob1-key', historic, firstLines);
+    expect(ob1.created).toBe(true);
+    const ob1Digest = await journalDigest(ob1.entryId);
+
+    // Two periods, so the topology is a real one, then closed oldest first.
+    const p1 = (await createPeriod(b, 'lifecycle-period-one', await daysAgo(90), await daysAgo(31))).periodId;
+    const p2 = (await createPeriod(b, 'lifecycle-period-two', await daysAgo(30), today)).periodId;
+    await closePeriod(b, 'lifecycle-close-one', p1);
+    await closePeriod(b, 'lifecycle-close-two', p2);
+    expect(await shape(b.businessId)).toEqual(['closed', 'closed']);
+    expect((await sets(b.businessId)).map((x) => x.status)).toEqual(['posted']);
+
+    // ── §4. The replacement is refused while the books are closed ─────────
+    //
+    // Two rules stand between the merchant and a new historical opening
+    // position, and the command reports the FIRST one that fails. With OB1
+    // still current and unreversed, that is AL-13's own rule — a posted set
+    // must be reversed before another is stated — so this attempt names it.
+    // The closed-books refusal is proved below on its own, once this one is
+    // out of the way, which is the only honest way to prove either.
+    const blockedWhileCurrent = await state(b.businessId);
+    expect(await refusal(() => openBalance(b, 'lifecycle-ob2-key', historic, secondLines))).toMatch(/accounting\.opening_balance_exists/);
+    expect(await state(b.businessId)).toEqual(blockedWhileCurrent);
+
+    // ── §5. Reopen through the real command, newest first ─────────────────
+    expect(await refusal(() => reopenPeriod(b, 'lifecycle-reopen-wrong', p1, 'oldest first is not how books reopen'))).toMatch(
+      /accounting\.period_reopen_order/,
+    );
+    await reopenPeriod(b, 'lifecycle-reopen-two', p2, 'restating the opening position');
+    expect(await shape(b.businessId)).toEqual(['closed', 'open']);
+    await reopenPeriod(b, 'lifecycle-reopen-one', p1, 'restating the opening position');
+    expect(await shape(b.businessId)).toEqual(['open', 'open']);
+
+    // Each reopen wrote its own audit and outbox rows, in its own transaction.
+    const afterReopen = await state(b.businessId);
+    expect(afterReopen.audits).toBe(blockedWhileCurrent.audits + 2);
+    expect(afterReopen.outbox).toBe(blockedWhileCurrent.outbox + 2);
+
+    // ── §6 step 1. Reverse OB1, dated inside an OPEN period ───────────────
+    //
+    // The reversal is an ordinary entry and obeys the period model like any
+    // other: its own date must be covered, so it is dated inside the open
+    // second period rather than back at the opening position's own date.
+    //
+    // And it really is subject to it: dated back at the opening position's own
+    // date, where no period covers it, the reversal is refused. The
+    // replacement lifecycle does not get a private door through P2-S6.
+    const beforeReversal = await state(b.businessId);
+    expect(await refusal(() => reverseOpening(b, ob1.entryId, historic, firstLines, historic))).toMatch(/accounting\.period_missing_for_date/);
+    expect(await state(b.businessId)).toEqual(beforeReversal);
+
+    const reversalDate = await daysAgo(15);
+    const reversal = await reverseOpening(b, ob1.entryId, historic, firstLines, reversalDate);
+    expect(reversal.created).toBe(true);
+    expect(reversal.entryId).not.toBe(ob1.entryId);
+    expect(await journalDigest(ob1.entryId)).toBe(ob1Digest);
+    expect((await sets(b.businessId)).map((x) => x.status)).toEqual(['posted']);
+
+    // ── §4, isolated. NOW the only thing left is the closed books ─────────
+    //
+    // Close the books again and try the replacement. AL-13 is satisfied —
+    // the current set has been reversed — so the command gets past its own
+    // rule and reaches the posting guard, which refuses by the name that
+    // belongs to a date lying outside every period.
+    await closePeriod(b, 'lifecycle-reclose-one', p1);
+    await closePeriod(b, 'lifecycle-reclose-two', p2);
+    expect(await shape(b.businessId)).toEqual(['closed', 'closed']);
+
+    const beforeBlocked = await state(b.businessId);
+    const blocked = await refusal(() => openBalance(b, 'lifecycle-ob2-key', historic, secondLines));
+    expect(blocked).toMatch(/accounting\.period_closed_history/);
+    expect(blocked).not.toMatch(/accounting\.period_closed:/);
+
+    // Nothing from the attempt survived — and in particular OB1 was NOT left
+    // superseded by a replacement that never posted. The supersession and the
+    // insert are one transaction, and this is what says so.
+    expect(await state(b.businessId)).toEqual(beforeBlocked);
+    expect((await sets(b.businessId)).map((x) => x.status)).toEqual(['posted']);
+    expect(await journalDigest(ob1.entryId)).toBe(ob1Digest);
+
+    // ── §5 again, then §6 step 2. The replacement, legally ────────────────
+    await reopenPeriod(b, 'lifecycle-reopen-two-b', p2, 'restating the opening position');
+    await reopenPeriod(b, 'lifecycle-reopen-one-b', p1, 'restating the opening position');
+    expect(await shape(b.businessId)).toEqual(['open', 'open']);
+
+    const ob2 = await openBalance(b, 'lifecycle-ob2-key', historic, secondLines);
+    expect(ob2.created).toBe(true);
+    expect(ob2.entryId).not.toBe(ob1.entryId);
+
+    // ── §7. The required final state, all of it at once ───────────────────
+    const finalSets = await sets(b.businessId);
+    expect(finalSets.map((x) => x.status)).toEqual(['superseded', 'posted']);
+    expect(must(finalSets[1]).entry).toBe(ob2.entryId);
+    expect(must(finalSets[0]).entry).toBe(ob1.entryId);
+
+    const counts = await pool.query<{ posted: number; superseded: number; reversals: number }>(
+      `SELECT (SELECT count(*) FROM accounting_opening_balances WHERE business_id = $1 AND status = 'posted')::int      AS posted,
+              (SELECT count(*) FROM accounting_opening_balances WHERE business_id = $1 AND status = 'superseded')::int  AS superseded,
+              (SELECT count(*) FROM accounting_reversals        WHERE business_id = $1 AND original_entry_id = $2)::int AS reversals`,
+      [b.businessId, ob1.entryId],
+    );
+    expect(must(counts.rows[0]).posted).toBe(1);
+    expect(must(counts.rows[0]).superseded).toBe(1);
+    expect(must(counts.rows[0]).reversals).toBe(1);
+
+    // The superseded set is history, not an erasure: its lines are still
+    // there and its journal entry has not moved a byte.
+    const keptLines = await pool.query<{ n: number }>(
+      `SELECT count(*)::int AS n FROM accounting_opening_balance_lines WHERE business_id = $1 AND opening_balance_id = $2`,
+      [b.businessId, must(finalSets[0]).id],
+    );
+    expect(must(keptLines.rows[0]).n).toBeGreaterThan(0);
+    expect(await journalDigest(ob1.entryId)).toBe(ob1Digest);
+
+    // ── §8. Close again, and the door stays shut ──────────────────────────
+    await closePeriod(b, 'lifecycle-final-close-one', p1);
+    await closePeriod(b, 'lifecycle-final-close-two', p2);
+    expect(await shape(b.businessId)).toEqual(['closed', 'closed']);
+
+    const beforeThird = await state(b.businessId);
+    expect(await refusal(() => openBalance(b, 'lifecycle-ob3-key', historic, positions()))).toMatch(/accounting\.opening_balance_exists/);
+    expect(await state(b.businessId)).toEqual(beforeThird);
+
+    // ── §9. A retry is still a retry, even though the books closed after ──
+    const replay = await openBalance(b, 'lifecycle-ob2-key', historic, secondLines);
+    expect(replay.created).toBe(false);
+    expect(replay.entryId).toBe(ob2.entryId);
+    expect(await state(b.businessId)).toEqual(beforeThird);
+    expect((await sets(b.businessId)).map((x) => x.status)).toEqual(['superseded', 'posted']);
+  }, 180_000);
 });
 
 async function sideEffects(businessId: string): Promise<Record<string, number>> {
