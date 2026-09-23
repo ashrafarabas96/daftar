@@ -285,6 +285,7 @@ describe('migration upgrade path: pre-encryption schema → latest (§13–16)',
         '0046_accounting_sources.sql',
         '0047_accounting_opening_balances.sql',
         '0048_accounting_fx_rates.sql',
+        '0049_accounting_periods.sql',
       ]);
 
       // Every existing business now holds all 21 required system accounts,
@@ -310,7 +311,7 @@ describe('migration upgrade path: pre-encryption schema → latest (§13–16)',
            WHERE r.is_system AND r.key = 'owner' AND rp.permission LIKE 'accounting.%'`,
         )
       ).rows[0];
-      expect(owner?.n).toBe(10); // 5 keys × 2 businesses
+      expect(owner?.n).toBe(14); // 7 keys × 2 businesses: the five of P2-S1 and the two of P2-S6
       const others = (
         await pool.query<{ n: number }>(
           `SELECT count(*)::int AS n FROM role_permissions rp
@@ -319,9 +320,21 @@ describe('migration upgrade path: pre-encryption schema → latest (§13–16)',
         )
       ).rows[0];
       expect(others?.n).toBe(0);
-      // Period permissions stay absent (P2-S6).
-      const period = await pool.query(`SELECT 1 FROM role_permissions WHERE permission LIKE 'accounting.period.%'`);
-      expect(period.rows).toEqual([]);
+      // P2-S6 §21: the period backfill reached every existing owner role with
+      // BOTH keys and nobody else's role with either. A backfill that wrote
+      // only `manage` would quietly make closing the books imply undoing them.
+      const period = (
+        await pool.query<{ key: string; permission: string; n: number }>(
+          `SELECT r.key, rp.permission, count(*)::int AS n FROM role_permissions rp
+             JOIN business_roles r ON r.business_id = rp.business_id AND r.id = rp.role_id
+            WHERE rp.permission LIKE 'accounting.period.%'
+            GROUP BY r.key, rp.permission ORDER BY r.key, rp.permission`,
+        )
+      ).rows;
+      expect(period).toEqual([
+        { key: 'owner', permission: 'accounting.period.manage', n: 2 },
+        { key: 'owner', permission: 'accounting.period.reopen', n: 2 },
+      ]);
 
       // Creating a business AFTER the upgrade gets its chart in the same transaction.
       const t3 = (await pool.query<{ id: string }>(`INSERT INTO tenants DEFAULT VALUES RETURNING id`)).rows[0];
@@ -361,7 +374,7 @@ describe('migration upgrade path: pre-encryption schema → latest (§13–16)',
    * principal classes rather than asserting a sentence that was true only
    * while no writer had shipped.
    */
-  it('compatibility matrix (P2-S2 §41 / P2-S3 §73 / P2-S4 §52 / P2-S5 §71): frozen 0041-checkpoint + existing business → 0042…0048, one writer per slice, rerun no-op', async () => {
+  it('compatibility matrix (P2-S2 §41 / P2-S3 §73 / P2-S4 §52 / P2-S5 §71 / P2-S6 §42): frozen 0041-checkpoint + existing business → 0042…0049, one writer per slice, rerun no-op', async () => {
     await ensurePostgres();
     const db5 = 'daftar_upgrade_0041';
     await admin.query(`DROP DATABASE IF EXISTS ${db5} WITH (FORCE)`);
@@ -400,8 +413,8 @@ describe('migration upgrade path: pre-encryption schema → latest (§13–16)',
       ).rows[0];
       expect((await pool.query<{ n: number }>(`SELECT count(*)::int AS n FROM accounts WHERE business_id = $1`, [biz?.id])).rows[0]?.n).toBe(21);
 
-      // Exactly the migrations of P2-S2, P2-S3, P2-S4 and P2-S5 follow the
-      // frozen P2-S1 boundary, in order.
+      // Exactly the migrations of P2-S2, P2-S3, P2-S4, P2-S5 and P2-S6 follow
+      // the frozen P2-S1 boundary, in order.
       expect(await runMigrations(url5)).toEqual([
         '0042_accounting_journal.sql',
         '0043_accounting_invariants.sql',
@@ -410,6 +423,7 @@ describe('migration upgrade path: pre-encryption schema → latest (§13–16)',
         '0046_accounting_sources.sql',
         '0047_accounting_opening_balances.sql',
         '0048_accounting_fx_rates.sql',
+        '0049_accounting_periods.sql',
       ]);
 
       // The closed registries came out with the shape the slice specifies:
@@ -505,12 +519,17 @@ describe('migration upgrade path: pre-encryption schema → latest (§13–16)',
    * P2-S5 §71 — the upgrade matrix for the FX slice, from the boundary that
    * actually exists in production: a database frozen at 0047.
    *
-   * The questions are narrow on purpose. Does exactly ONE migration follow
-   * (§9 allows no 0049)? Does it arrive with its protections already on,
-   * rather than as a table somebody is expected to lock down afterwards? Does
-   * a second run do nothing? And are the forty-eight frozen files still the
-   * bytes the manifest recorded — checked against the history the migrator
-   * itself wrote, not against the files this process just read.
+   * The questions are narrow on purpose. Which migrations follow, exactly?
+   * Does the FX registry arrive with its protections already on, rather than
+   * as a table somebody is expected to lock down afterwards? Does a second
+   * run do nothing? And are the forty-nine frozen files still the bytes the
+   * manifest recorded — checked against the history the migrator itself
+   * wrote, not against the files this process just read.
+   *
+   * P2-S6 added one name to the answer and changed nothing else about it: the
+   * authorized successor 0049 follows 0048, and no 0050 exists to follow
+   * that. The list is asserted whole rather than by a floor, so a stray
+   * migration is a failure here rather than a surprise in production.
    */
   it('compatibility matrix (P2-S5 §71): frozen 0047-checkpoint → 0048 alone, protected on arrival, rerun no-op', async () => {
     await ensurePostgres();
@@ -540,8 +559,9 @@ describe('migration upgrade path: pre-encryption schema → latest (§13–16)',
       ).rows[0];
       expect(biz?.id).toBeTypeOf('string');
 
-      // Exactly one migration follows the frozen P2-S4 boundary.
-      expect(await runMigrations(url6)).toEqual(['0048_accounting_fx_rates.sql']);
+      // The frozen P2-S4 boundary is followed by 0048 and then by the P2-S6
+      // candidate, in that order and by nothing else — §8 allows no 0050.
+      expect(await runMigrations(url6)).toEqual(['0048_accounting_fx_rates.sql', '0049_accounting_periods.sql']);
 
       // It arrived with row level security ENABLED and FORCED (§43): a table
       // that had to be secured in a later step would be readable across
@@ -614,6 +634,167 @@ describe('migration upgrade path: pre-encryption schema → latest (§13–16)',
     } finally {
       await pool.end();
       await admin.query(`DROP DATABASE IF EXISTS ${db6} WITH (FORCE)`).catch(() => undefined);
+    }
+  }, 180_000);
+
+  /**
+   * P2-S6 §42 — the upgrade every deployment will actually perform: a
+   * database frozen at 0048, and 0049 alone on top of it.
+   *
+   * The other cases above reach 0049 by sweeping several candidates onto a
+   * schema the same run built moments earlier. This one starts where
+   * production starts, at the accepted boundary, with a business that already
+   * has books, and asks four things.
+   *
+   * Does exactly ONE migration follow — §8 allows no 0050? Does 0049 leave
+   * the existing books ALONE (§28): no synthetic journal entry, no guessed
+   * historical period, no business quietly given a financial start? Does the
+   * new table arrive already protected, rather than as something a later step
+   * is trusted to lock down? And does a second run do nothing?
+   *
+   * The §9 activation model is what makes the second question load-bearing.
+   * A migration that invented a fiscal calendar for every existing merchant
+   * would look harmless here and would start REFUSING their postings the
+   * moment it shipped.
+   */
+  it('compatibility matrix (P2-S6 §42): frozen 0048-checkpoint + existing books → 0049 alone, activating nothing, rerun no-op', async () => {
+    await ensurePostgres();
+    const db7 = 'daftar_upgrade_0048';
+    await admin.query(`DROP DATABASE IF EXISTS ${db7} WITH (FORCE)`);
+    await admin.query(`CREATE DATABASE ${db7}`);
+    const url7 = `postgresql://${PG_USER}:${PG_PASSWORD}@localhost:${PG_PORT}/${db7}`;
+    const pool = scratchPool(url7);
+    try {
+      await pool.query(bootstrapSql());
+      const preDir = migrationsUpTo('0048_accounting_fx_rates.sql');
+      await runMigrations(url7, preDir);
+      rmSync(preDir, { recursive: true, force: true });
+
+      // The checkpoint is honest in both directions: the FX registry is
+      // there, periods are not.
+      expect((await pool.query(`SELECT 1 FROM information_schema.tables WHERE table_name = 'accounting_fx_rates'`)).rows).toHaveLength(1);
+      for (const table of ['accounting_periods', 'accounting_period_operations']) {
+        expect((await pool.query(`SELECT 1 FROM information_schema.tables WHERE table_name = $1`, [table])).rows, table).toEqual([]);
+      }
+
+      // A business that existed before periods did, with accounting data of
+      // its own: the twenty-one seeded system accounts.
+      const tenant = (await pool.query<{ id: string }>(`INSERT INTO tenants DEFAULT VALUES RETURNING id`)).rows[0];
+      const biz = (
+        await pool.query<{ id: string }>(
+          `INSERT INTO businesses (tenant_id, name, store_slug, country_code, base_currency, timezone)
+           VALUES ($1, 'Before Periods', 'upgrade-periods', 'PS', 'ILS', 'Asia/Hebron') RETURNING id`,
+          [tenant?.id],
+        )
+      ).rows[0];
+      expect((await pool.query<{ n: number }>(`SELECT count(*)::int AS n FROM accounts WHERE business_id = $1`, [biz?.id])).rows[0]?.n).toBe(21);
+
+      /**
+       * A digest of everything §28 forbids 0049 to touch, taken before and
+       * compared after.
+       *
+       * A digest rather than a row count, because a migration that rewrote a
+       * date or an account type would leave the counts identical. This
+       * database holds no journal rows — posting one takes the whole control
+       * plane, which is not what a migration test is for — so the case where
+       * the books are FULL is carried by `accounting-periods.test.ts`, whose
+       * cluster holds real postings from every accounting suite and which
+       * asserts there that 0049 created no period anywhere in it.
+       */
+      const protectedDigest = async (): Promise<string> => {
+        const r = await pool.query<{ d: string }>(
+          `SELECT md5(string_agg(t, '|' ORDER BY t)) AS d FROM (
+             SELECT concat_ws(':', 'acc', id, business_id, code, type, system_key, is_active) AS t FROM accounts
+             UNION ALL SELECT concat_ws(':', 'je', id, business_id, entry_date, source_type, source_id, status, posting_fingerprint) FROM journal_entries
+             UNION ALL SELECT concat_ws(':', 'jl', id, journal_entry_id, account_id, debit_minor, credit_minor, base_amount_minor) FROM journal_lines
+             UNION ALL SELECT concat_ws(':', 'bind', business_id, source_type, source_id, journal_entry_id) FROM accounting_source_bindings
+             UNION ALL SELECT concat_ws(':', 'src', source_type, sort_order) FROM accounting_source_types
+             UNION ALL SELECT concat_ws(':', 'fx', id, business_id, from_currency, to_currency, rate, effective_at) FROM accounting_fx_rates
+             UNION ALL SELECT concat_ws(':', 'biz', id, tenant_id, base_currency, timezone, financial_started_at) FROM businesses
+           ) x`,
+        );
+        return r.rows[0]?.d ?? '';
+      };
+      const before = await protectedDigest();
+
+      // Exactly one migration follows the frozen P2-S5 boundary.
+      expect(await runMigrations(url7)).toEqual(['0049_accounting_periods.sql']);
+
+      // §28 — the books are exactly as they were, byte for byte, and no
+      // business was quietly given a financial start.
+      expect(await protectedDigest()).toBe(before);
+      expect((await pool.query<{ n: number }>(`SELECT count(*)::int AS n FROM journal_entries`)).rows[0]?.n).toBe(0);
+      expect((await pool.query(`SELECT 1 FROM businesses WHERE financial_started_at IS NOT NULL`)).rows).toEqual([]);
+
+      // §9 — and NOTHING is activated. Zero periods, for this business and
+      // for every other: the migration guessed no fiscal calendar, so the
+      // posting rules this merchant had yesterday are the ones they have
+      // today. The first period they create themselves is what changes that.
+      expect((await pool.query<{ n: number }>(`SELECT count(*)::int AS n FROM accounting_periods`)).rows[0]?.n).toBe(0);
+      expect((await pool.query<{ n: number }>(`SELECT count(*)::int AS n FROM accounting_period_operations`)).rows[0]?.n).toBe(0);
+
+      // The table arrived with row level security ENABLED and FORCED, with
+      // its physical non-overlap constraint (§12) and with the posting guard
+      // already on `journal_entries` (§23). A protection installed in a later
+      // step is a window, however short.
+      const rls = (
+        await pool.query<{ e: boolean; f: boolean }>(`SELECT relrowsecurity AS e, relforcerowsecurity AS f FROM pg_class WHERE relname = 'accounting_periods'`)
+      ).rows[0];
+      expect(rls).toEqual({ e: true, f: true });
+      expect(
+        (
+          await pool.query<{ t: string }>(
+            `SELECT contype AS t FROM pg_constraint WHERE conrelid = 'accounting_periods'::regclass AND conname = 'accounting_periods_no_overlap'`,
+          )
+        ).rows.map((r) => r.t),
+      ).toEqual(['x']);
+      expect(
+        (
+          await pool.query<{ t: string }>(
+            `SELECT tgname AS t FROM pg_trigger WHERE tgrelid = 'journal_entries'::regclass AND NOT tgisinternal AND tgname = 'accounting_period_guard'`,
+          )
+        ).rows,
+      ).toHaveLength(1);
+
+      // Every DML grant on the two new tables, named exactly (§35): the
+      // runtime reads periods and nothing else, the internal principal writes
+      // both, and NOBODY holds DELETE or TRUNCATE on either.
+      const grants = (
+        await pool.query<{ t: string; g: string; p: string }>(
+          `SELECT c.relname AS t, coalesce(r.rolname, 'PUBLIC') AS g, a.privilege_type AS p
+             FROM pg_class c
+             JOIN pg_namespace n ON n.oid = c.relnamespace
+             CROSS JOIN LATERAL aclexplode(coalesce(c.relacl, acldefault('r', c.relowner))) a
+             LEFT JOIN pg_roles r ON r.oid = a.grantee
+            WHERE n.nspname = 'public' AND c.relname IN ('accounting_periods', 'accounting_period_operations')
+              AND a.privilege_type IN ('SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE')
+              AND a.grantee <> c.relowner
+            ORDER BY t, g, a.privilege_type`,
+        )
+      ).rows;
+      expect(grants).toEqual([
+        { t: 'accounting_period_operations', g: 'daftar_accounting_internal', p: 'INSERT' },
+        { t: 'accounting_period_operations', g: 'daftar_accounting_internal', p: 'SELECT' },
+        { t: 'accounting_periods', g: 'daftar_accounting_internal', p: 'INSERT' },
+        { t: 'accounting_periods', g: 'daftar_accounting_internal', p: 'SELECT' },
+        { t: 'accounting_periods', g: 'daftar_accounting_internal', p: 'UPDATE' },
+        { t: 'accounting_periods', g: 'daftar_app', p: 'SELECT' },
+      ]);
+
+      // §49 — 0049 is a CANDIDATE. The manifest must not carry it, and the
+      // freeze boundary must still be 0048, whatever this database now holds.
+      const manifest = JSON.parse(readFileSync(join(__dirname, '../../infrastructure/database/MIGRATION_MANIFEST.json'), 'utf8')) as {
+        frozenThrough: string;
+        migrations: { name: string; sha256: string }[];
+      };
+      expect(manifest.frozenThrough).toBe('0048_accounting_fx_rates.sql');
+      expect(manifest.migrations.some((m) => m.name === '0049_accounting_periods.sql')).toBe(false);
+
+      // Second run does nothing.
+      expect(await runMigrations(url7)).toEqual([]);
+    } finally {
+      await pool.end();
+      await admin.query(`DROP DATABASE IF EXISTS ${db7} WITH (FORCE)`).catch(() => undefined);
     }
   }, 180_000);
 

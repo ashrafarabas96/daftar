@@ -8,5 +8,6 @@ export * from './ports';
 export * from './post';
 export * from './sources';
 export * from './fx-rate';
+export * from './period';
 export * from './realized-fx';
 export * from './rounding';

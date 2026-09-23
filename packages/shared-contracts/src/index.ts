@@ -515,3 +515,74 @@ export interface AccountingEntryRefDto {
   entryId: string;
   created: boolean;
 }
+
+// ── Accounting periods (P2-S6) ────────────────────────────────────────────
+//
+// DAFTAR creates no period by itself and infers no fiscal calendar. A
+// business with ZERO periods posts under the ordinary date rules; the FIRST
+// period it creates activates period-managed posting, after which every NEW
+// entry's date must fall inside exactly one OPEN period.
+
+/** `open` or `closed`. There is no third state. */
+export type AccountingPeriodStatusDto = 'open' | 'closed';
+
+/**
+ * `POST /v1/businesses/:businessId/accounting/periods`
+ *
+ * Requires `accounting.period.manage` AND business-wide branch authority: a
+ * period governs every branch of the business, so a member restricted to one
+ * of them may not create it. An `Idempotency-Key` header is required, and the
+ * period's identity is derived from it.
+ *
+ * Both dates are EXPLICIT and inclusive. There is no server default, no
+ * "current month" and no calendar the server fills in: a period the merchant
+ * did not state is a policy DAFTAR invented on their behalf.
+ */
+export interface AccountingPeriodCreateDto {
+  /** `YYYY-MM-DD`, inclusive first civil date in the business timezone. */
+  startDate: string;
+  /** `YYYY-MM-DD`, inclusive last civil date. On or after `startDate`. */
+  endDate: string;
+}
+
+/**
+ * `POST /v1/businesses/:businessId/accounting/periods/:periodId/reopen`
+ *
+ * Requires `accounting.period.reopen`, which `accounting.period.manage` does
+ * NOT imply. The reason is mandatory and is written to the audit trail; it is
+ * deliberately absent from the published event.
+ */
+export interface AccountingPeriodReopenDto {
+  /** 1 to 500 characters after trimming. A reopen nobody explained cannot be reviewed. */
+  reason: string;
+}
+
+/** What a period command returns. `changed: false` is an idempotent replay. */
+export interface AccountingPeriodRefDto {
+  periodId: string;
+  changed: boolean;
+}
+
+/** One period, as `GET .../accounting/periods` returns it. */
+export interface AccountingPeriodDto {
+  periodId: string;
+  startDate: string;
+  endDate: string;
+  status: AccountingPeriodStatusDto;
+  /** RFC3339 UTC, or null while the period is open. */
+  closedAt: string | null;
+  /** RFC3339 UTC of the most recent reopen, or null if it was never reopened. */
+  lastReopenedAt: string | null;
+}
+
+/**
+ * `GET /v1/businesses/:businessId/accounting/periods`
+ *
+ * An OBJECT with an `items` array, never a bare array: a top-level array is a
+ * response shape that can never gain a field without breaking every client.
+ * It carries no assertion, no internal operation id, no database role detail
+ * and no audit internals.
+ */
+export interface AccountingPeriodListDto {
+  items: AccountingPeriodDto[];
+}

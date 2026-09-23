@@ -319,12 +319,14 @@ describe('RLS is real on the ledger', () => {
       `SELECT tablename, cmd, qual, with_check AS withcheck FROM pg_policies
         WHERE schemaname = 'public' AND policyname = 'accounting_validator' ORDER BY tablename`,
     );
-    // Three journal tables, the two P2-S4 detail tables and the P2-S5 rate
-    // history. The count is asserted so a policy appearing on a table nobody
-    // reviewed fails here.
+    // Three journal tables, the two P2-S4 detail tables, the P2-S5 rate
+    // history and the two P2-S6 period tables. The list is asserted whole so
+    // a policy appearing on a table nobody reviewed fails here.
     expect(rows.map((r) => r.tablename)).toEqual([
       'accounting_fx_rates',
       'accounting_manual_adjustments',
+      'accounting_period_operations',
+      'accounting_periods',
       'accounting_reversals',
       'accounting_source_bindings',
       'journal_entries',

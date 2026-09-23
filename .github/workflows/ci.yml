@@ -168,16 +168,35 @@ jobs:
         env:
           PG_PORT: '5432'
       # P2-S5 keeps the whole chain above as permanent predecessors and adds
-      # the FX rate foundation: 0048 present and still a candidate with no
-      # 0049; the append-only registry with its composite ownership, currency
-      # references and four physical rules; a lookup that never invents a
-      # reciprocal, a cross-rate or an implicit 1; the second, domain-separated
-      # acctctl/1 assertion format; one elevated write path granted to the
-      # merchant runtime alone; the clock audit over the whole migration; the
-      # pure realized-FX and rounding primitives; and the registry, authority,
-      # concurrency, HTTP, parity, upgrade and portability matrices.
+      # the FX rate foundation: 0048 frozen at its accepted digest, on disk and
+      # in the manifest; the append-only registry with its composite ownership,
+      # currency references and four physical rules; a lookup that never
+      # invents a reciprocal, a cross-rate or an implicit 1; the second,
+      # domain-separated acctctl/1 assertion format; one elevated write path
+      # granted to the merchant runtime alone; the clock audit over the whole
+      # migration; the pure realized-FX and rounding primitives; and the
+      # registry, authority, concurrency, HTTP, parity, upgrade and portability
+      # matrices. It has no opinion about a later authorized migration.
       - name: Phase 2 slice gate — P2-S5
         run: npm run gate:phase2:s5
+        env:
+          PG_PORT: '5432'
+      # P2-S6 keeps the whole chain above as permanent predecessors and adds
+      # accounting periods: 0049 present, still a candidate and the last
+      # migration with no 0050; civil-date boundaries, a closed status
+      # vocabulary and a REAL gist EXCLUDE for non-overlap, with btree_gist
+      # installed by bootstrap rather than by widening the migration
+      # principal; no DELETE path, no boundary move and no identity exemption;
+      # a closed-period refusal that lives in a trigger on journal_entries and
+      # activates nothing until a merchant creates their first period; two
+      # permissions where reopen is never implied by manage; an operation
+      # registry that decides a replay before any state is read; one lock
+      # order, business before period, on the command path and the posting
+      # path alike; a mandatory reopen reason that is audited and never
+      # published; and the period, parity, concurrency, HTTP, authority,
+      # upgrade and portability matrices.
+      - name: Phase 2 slice gate — P2-S6
+        run: npm run gate:phase2:s6
         env:
           PG_PORT: '5432'
       - name: Tampered-migration hard-fail proof

@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, cpSync, readdirSync, readFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, cpSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Pool } from 'pg';
@@ -76,13 +76,13 @@ function migrationsUpTo(upTo: string): string {
 
 const admin = new Pool({ connectionString: dbUrl, max: 1 });
 
-describe('managed PostgreSQL: 0039 → 0048 under a non-superuser migration principal', () => {
+describe('managed PostgreSQL: 0039 → 0049 under a non-superuser migration principal', () => {
   afterAll(async () => {
     await admin.query(`DROP DATABASE IF EXISTS ${SCRATCH_DB} WITH (FORCE)`).catch(() => undefined);
     await admin.end();
   });
 
-  it('applies 0040 through 0048 with no superuser anywhere in the path', async () => {
+  it('applies 0040 through 0049 with no superuser anywhere in the path', async () => {
     await ensurePostgres();
     await admin.query(`DROP DATABASE IF EXISTS ${SCRATCH_DB} WITH (FORCE)`);
     await admin.query(`CREATE DATABASE ${SCRATCH_DB}`);
@@ -181,6 +181,7 @@ describe('managed PostgreSQL: 0039 → 0048 under a non-superuser migration prin
         '0046_accounting_sources.sql',
         '0047_accounting_opening_balances.sql',
         '0048_accounting_fx_rates.sql',
+        '0049_accounting_periods.sql',
       ]);
 
       // The ALTER FUNCTION ownership transfer was legitimate, not bypassed.
@@ -284,7 +285,7 @@ describe('managed PostgreSQL: 0039 → 0048 under a non-superuser migration prin
    * happened to be in place because an earlier migration in the same
    * transaction put it there — would pass the long path and fail here.
    */
-  it('applies 0046 through 0048 onto the frozen 0045 boundary, with no superuser and a no-op rerun (§52, P2-S5 §70)', async () => {
+  it('applies 0046 through 0049 onto the frozen 0045 boundary, with no superuser and a no-op rerun (§52, P2-S5 §70, P2-S6 §42)', async () => {
     await ensurePostgres();
     const db = 'daftar_portability_0045';
     await admin.query(`DROP DATABASE IF EXISTS ${db} WITH (FORCE)`);
@@ -355,7 +356,12 @@ describe('managed PostgreSQL: 0039 → 0048 under a non-superuser migration prin
       } finally {
         await migrator.end().catch(() => undefined);
       }
-      expect(await runMigrations(migratorUrl)).toEqual(['0046_accounting_sources.sql', '0047_accounting_opening_balances.sql', '0048_accounting_fx_rates.sql']);
+      expect(await runMigrations(migratorUrl)).toEqual([
+        '0046_accounting_sources.sql',
+        '0047_accounting_opening_balances.sql',
+        '0048_accounting_fx_rates.sql',
+        '0049_accounting_periods.sql',
+      ]);
       expect(await runMigrations(migratorUrl)).toEqual([]);
 
       // And the sources arrived with the shape the slice specifies.
@@ -415,7 +421,7 @@ describe('managed PostgreSQL: 0039 → 0048 under a non-superuser migration prin
    * answer that — but whether it INSTALLS under the credential a managed
    * PostgreSQL actually gives you.
    */
-  it('applies 0048 alone onto the frozen 0047 boundary, with no superuser and a no-op rerun (P2-S5 §70)', async () => {
+  it('applies 0048 alone onto the frozen 0047 boundary, then 0049, with no superuser and a no-op rerun (P2-S5 §70, P2-S6 §42)', async () => {
     await ensurePostgres();
     const db = 'daftar_portability_0047';
     await admin.query(`DROP DATABASE IF EXISTS ${db} WITH (FORCE)`);
@@ -471,7 +477,18 @@ describe('managed PostgreSQL: 0039 → 0048 under a non-superuser migration prin
         await who.end().catch(() => undefined);
       }
 
-      expect(await runMigrations(migratorUrl)).toEqual(['0048_accounting_fx_rates.sql']);
+      // 0048 ALONE first, from a directory capped at it. That is the P2-S5
+      // claim stated exactly: the FX migration installs by itself, on the
+      // settled 0047 boundary, under a managed credential — not merely as one
+      // step of a sweep that a later migration might have prepared the way
+      // for. The P2-S6 candidate then follows it, and only then.
+      const s5Only = migrationsUpTo('0048_accounting_fx_rates.sql');
+      try {
+        expect(await runMigrations(migratorUrl, s5Only)).toEqual(['0048_accounting_fx_rates.sql']);
+      } finally {
+        rmSync(s5Only, { recursive: true, force: true });
+      }
+      expect(await runMigrations(migratorUrl)).toEqual(['0049_accounting_periods.sql']);
       expect(await runMigrations(migratorUrl)).toEqual([]);
 
       // Everything below is read through the NON-SUPERUSER connection: if the
@@ -550,6 +567,284 @@ describe('managed PostgreSQL: 0039 → 0048 under a non-superuser migration prin
       await admin.query(`DROP DATABASE IF EXISTS ${db} WITH (FORCE)`).catch(() => undefined);
     }
   }, 180_000);
+
+  /**
+   * P2-S6 §42 — 0049 alone, onto the frozen 0048 boundary, applied by
+   * `daftar_migrator`.
+   *
+   * This is the migration with the most to prove under a managed credential,
+   * because §12 asks for a REAL exclusion constraint and a gist exclusion on
+   * a UUID column needs the `btree_gist` extension, which `0000` never
+   * installed. `CREATE EXTENSION` is not something a NOSUPERUSER role may do
+   * on a database it merely connects to, and the obvious ways out are both
+   * refused: granting `daftar_migrator` CREATE on the database hands a
+   * deployment principal the right to install arbitrary C code, and dropping
+   * the exclusion constraint would leave non-overlap as a convention the
+   * application is trusted to keep.
+   *
+   * So the extension is installed ONCE by the deployment administrator, in
+   * `bootstrap.sql`, beside the roles — and 0049 only asserts that it is
+   * there, with a sentence naming the fix if it is not. This test is what
+   * says that arrangement actually works: bootstrap runs as the administrator,
+   * every migration after the checkpoint runs as `daftar_migrator`, and the
+   * migrator is granted nothing beyond CONNECT and what it already had.
+   */
+  it('applies 0049 alone onto the frozen 0048 boundary, with no superuser and a no-op rerun (P2-S6 §42)', async () => {
+    await ensurePostgres();
+    const db = 'daftar_portability_0048';
+    await admin.query(`DROP DATABASE IF EXISTS ${db} WITH (FORCE)`);
+    await admin.query(`CREATE DATABASE ${db}`);
+    const adminUrl = `postgresql://${PG_USER}:${PG_PASSWORD}@localhost:${PG_PORT}/${db}`;
+    const migratorUrl = `postgresql://daftar_migrator:${MIGRATOR_DB_PASSWORD}@localhost:${PG_PORT}/${db}`;
+
+    const setup = new Pool({ connectionString: adminUrl, max: 1 });
+    try {
+      await setup.query(bootstrapSql());
+      await setup.query(`GRANT CONNECT ON DATABASE ${db} TO daftar_migrator`);
+
+      // The extension came from BOOTSTRAP, as the deployment administrator,
+      // before any migration ran. Nothing after this point installs it.
+      expect((await setup.query(`SELECT 1 FROM pg_extension WHERE extname = 'btree_gist'`)).rows).toHaveLength(1);
+
+      const preDir = migrationsUpTo('0048_accounting_fx_rates.sql');
+      await runMigrations(adminUrl, preDir);
+      rmSync(preDir, { recursive: true, force: true });
+
+      // The checkpoint is honest in both directions.
+      expect((await setup.query(`SELECT 1 FROM information_schema.tables WHERE table_name = 'accounting_fx_rates'`)).rows).toHaveLength(1);
+      expect((await setup.query(`SELECT 1 FROM information_schema.tables WHERE table_name = 'accounting_periods'`)).rows).toEqual([]);
+
+      // Hand the settled schema to the migrator, as a managed deployment has
+      // it from the start.
+      await setup.query(`ALTER SCHEMA public OWNER TO daftar_migrator`);
+      await setup.query(`
+        DO $$
+        DECLARE r RECORD;
+        BEGIN
+          FOR r IN SELECT c.relname, c.relkind FROM pg_class c
+                     JOIN pg_namespace n ON n.oid = c.relnamespace
+                     JOIN pg_roles o ON o.oid = c.relowner
+                    WHERE n.nspname = 'public' AND o.rolname = 'postgres' AND c.relkind IN ('r','v','m','S','p')
+          LOOP
+            EXECUTE format('ALTER %s public.%I OWNER TO daftar_migrator',
+                           CASE r.relkind WHEN 'S' THEN 'SEQUENCE' WHEN 'v' THEN 'VIEW' WHEN 'm' THEN 'MATERIALIZED VIEW' ELSE 'TABLE' END,
+                           r.relname);
+          END LOOP;
+          FOR r IN SELECT p.oid::regprocedure AS sig FROM pg_proc p
+                     JOIN pg_namespace n ON n.oid = p.pronamespace
+                     JOIN pg_roles o ON o.oid = p.proowner
+                    WHERE n.nspname = 'public' AND o.rolname = 'postgres'
+          LOOP
+            EXECUTE format('ALTER FUNCTION %s OWNER TO daftar_migrator', r.sig);
+          END LOOP;
+        END $$;
+      `);
+
+      const check = new Pool({ connectionString: migratorUrl, max: 1 });
+      try {
+        expect(
+          (
+            await check.query<{ rolname: string; rolsuper: boolean; rolbypassrls: boolean }>(
+              `SELECT rolname, rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user`,
+            )
+          ).rows[0],
+        ).toEqual({ rolname: 'daftar_migrator', rolsuper: false, rolbypassrls: false });
+
+        // The migrator may NOT install an extension here, and does not need
+        // to. Stated as a measurement rather than as a belief: this is the
+        // exact call 0049 would have had to make if bootstrap had not.
+        expect((await check.query<{ c: boolean }>(`SELECT has_database_privilege(current_user, $1, 'CREATE') AS c`, [db])).rows[0]?.c).toBe(false);
+
+        expect(await runMigrations(migratorUrl)).toEqual(['0049_accounting_periods.sql']);
+        expect(await runMigrations(migratorUrl)).toEqual([]);
+
+        // ── Everything below is read through the NON-SUPERUSER connection ──
+
+        // §12 — a REAL exclusion constraint, not a unique index and not an
+        // application convention. `contype = 'x'` is the whole point.
+        expect(
+          (
+            await check.query<{ conname: string; contype: string }>(
+              `SELECT conname, contype FROM pg_constraint WHERE conrelid = 'accounting_periods'::regclass AND contype = 'x'`,
+            )
+          ).rows,
+        ).toEqual([{ conname: 'accounting_periods_no_overlap', contype: 'x' }]);
+
+        // §23 — the posting refusal arrived as a trigger on `journal_entries`
+        // itself, so it holds for every writer, including a direct INSERT.
+        expect(
+          (
+            await check.query<{ t: string }>(
+              `SELECT tgname AS t FROM pg_trigger WHERE tgrelid = 'journal_entries'::regclass AND NOT tgisinternal AND tgname = 'accounting_period_guard'`,
+            )
+          ).rows,
+        ).toHaveLength(1);
+
+        // §35 — RLS enabled AND forced. Forced matters especially here,
+        // because the table's owner is a DAFTAR principal rather than
+        // postgres, and an owner is exempt from its own policies otherwise.
+        for (const table of ['accounting_periods', 'accounting_period_operations']) {
+          expect(
+            (await check.query<{ e: boolean; f: boolean }>(`SELECT relrowsecurity AS e, relforcerowsecurity AS f FROM pg_class WHERE relname = $1`, [table]))
+              .rows[0],
+            table,
+          ).toEqual({ e: true, f: true });
+        }
+
+        // The ownership handover happened through ordinary privilege rules:
+        // the migrator is a MEMBER of the internal principal, which is how a
+        // non-superuser may give an object away. Eight elevated routines, by
+        // name — a count alone would pass if the wrong eight were listed.
+        expect(
+          (
+            await check.query<{ proname: string }>(
+              `SELECT p.proname FROM pg_proc p
+                 JOIN pg_namespace n ON n.oid = p.pronamespace
+                 JOIN pg_roles o ON o.oid = p.proowner
+                WHERE n.nspname = 'public' AND o.rolname = 'daftar_accounting_internal'
+                  AND p.proname LIKE 'accounting_period%' ORDER BY p.proname`,
+            )
+          ).rows.map((r) => r.proname),
+        ).toEqual([
+          'accounting_period_canonical',
+          'accounting_period_close',
+          'accounting_period_create',
+          'accounting_period_fingerprint',
+          'accounting_period_guard_posting',
+          'accounting_period_reason_digest',
+          'accounting_period_reopen',
+          'accounting_period_topology_lock_key',
+        ]);
+
+        // §35, §12 — the temporary CREATE on the schema is gone, and no
+        // DAFTAR role acquired BYPASSRLS on the way through.
+        expect((await check.query<{ c: boolean }>(`SELECT has_schema_privilege('daftar_accounting_internal', 'public', 'CREATE') AS c`)).rows[0]?.c).toBe(
+          false,
+        );
+        expect((await check.query(`SELECT 1 FROM pg_roles WHERE rolname LIKE 'daftar\\_%' AND rolbypassrls`)).rows).toEqual([]);
+
+        // §9 — and after all of that, not one period exists. The migration
+        // installed the machinery and activated nothing.
+        await check.query(`SET ROLE daftar_accounting_internal`);
+        expect((await check.query<{ n: number }>(`SELECT count(*)::int AS n FROM accounting_periods`)).rows[0]?.n).toBe(0);
+        await check.query(`RESET ROLE`);
+      } finally {
+        await check.end().catch(() => undefined);
+      }
+    } finally {
+      await setup.end().catch(() => undefined);
+      await admin.query(`DROP DATABASE IF EXISTS ${db} WITH (FORCE)`).catch(() => undefined);
+    }
+  }, 180_000);
+
+  /**
+   * P2-S6 §42 — a FRESH database, `0000` through `0049` in one sweep.
+   *
+   * Every case above starts from a checkpoint, which is what an existing
+   * deployment does. A brand-new one starts from nothing, and the two are not
+   * the same path: 0049 reaches for objects that ten earlier migrations
+   * built, and an ordering mistake shows here rather than in an upgrade that
+   * happened to have them already.
+   *
+   * This one runs as the deployment administrator on purpose. `0000`–`0039`
+   * are FROZEN and still contain `ALTER FUNCTION ... OWNER TO daftar_platform`,
+   * which a non-superuser cannot execute unless a RUNTIME role is granted
+   * CREATE on the schema — a pre-existing Phase 1 limitation recorded in
+   * docs/PHASE_2_S1_ACCEPTANCE.md, and one P2-S6 may not fix by reopening a
+   * frozen file or by widening a runtime role. The managed-credential
+   * question for 0049 itself is answered by the 0048-boundary case above,
+   * which is the path a managed deployment actually walks.
+   */
+  it('applies 0000 through 0049 on a fresh database, ending at 0049 with no 0050 and a no-op rerun (P2-S6 §42)', async () => {
+    await ensurePostgres();
+    const db = 'daftar_portability_fresh';
+    await admin.query(`DROP DATABASE IF EXISTS ${db} WITH (FORCE)`);
+    await admin.query(`CREATE DATABASE ${db}`);
+    const url = `postgresql://${PG_USER}:${PG_PASSWORD}@localhost:${PG_PORT}/${db}`;
+
+    const pool = new Pool({ connectionString: url, max: 1 });
+    try {
+      await pool.query(bootstrapSql());
+
+      const applied = await runMigrations(url);
+      expect(applied[0]).toBe('0000_extensions.sql');
+      expect(applied.at(-1)).toBe('0049_accounting_periods.sql');
+      // §8 — 0049 is the LAST migration. No 0050 exists, and none is created.
+      expect(applied.filter((f) => f >= '0050')).toEqual([]);
+      expect(new Set(applied).size).toBe(applied.length);
+
+      // The period machinery is there, on a schema nothing upgraded into.
+      expect(
+        (await pool.query<{ conname: string }>(`SELECT conname FROM pg_constraint WHERE conrelid = 'accounting_periods'::regclass AND contype = 'x'`)).rows.map(
+          (r) => r.conname,
+        ),
+      ).toEqual(['accounting_periods_no_overlap']);
+      expect((await pool.query<{ n: number }>(`SELECT count(*)::int AS n FROM accounting_periods`)).rows[0]?.n).toBe(0);
+
+      // Second run does nothing.
+      expect(await runMigrations(url)).toEqual([]);
+    } finally {
+      await pool.end().catch(() => undefined);
+      await admin.query(`DROP DATABASE IF EXISTS ${db} WITH (FORCE)`).catch(() => undefined);
+    }
+  }, 300_000);
+
+  /**
+   * P2-S6 §42 — a failing migration leaves NOTHING behind.
+   *
+   * The runner wraps each file in its own transaction, so this should hold.
+   * "Should" is the reason to measure it: a migration that stepped outside
+   * that transaction — `CREATE INDEX CONCURRENTLY`, a `COMMIT` in a DO block,
+   * a dblink — would leave a half-built schema AND an unrecorded file, and
+   * the next run would then apply the successful half of it twice.
+   *
+   * The failing file is a FIXTURE written into a temporary directory. No
+   * failure is introduced into a real migration, and nothing in
+   * `infrastructure/database/migrations` is touched.
+   */
+  it('rolls a failing migration back entirely, recording nothing and leaving no object (P2-S6 §42)', async () => {
+    await ensurePostgres();
+    const db = 'daftar_portability_rollback';
+    await admin.query(`DROP DATABASE IF EXISTS ${db} WITH (FORCE)`);
+    await admin.query(`CREATE DATABASE ${db}`);
+    const url = `postgresql://${PG_USER}:${PG_PASSWORD}@localhost:${PG_PORT}/${db}`;
+
+    const pool = new Pool({ connectionString: url, max: 1 });
+    const dir = migrationsUpTo('0049_accounting_periods.sql');
+    try {
+      await pool.query(bootstrapSql());
+      await runMigrations(url, dir);
+
+      // A candidate that creates a table and THEN fails, after the statement
+      // that would be visible if the transaction were not real.
+      writeFileSync(
+        join(dir, '0099_deliberately_failing_fixture.sql'),
+        `CREATE TABLE portability_rollback_probe (id INTEGER PRIMARY KEY);
+         INSERT INTO portability_rollback_probe (id) VALUES (1);
+         SELECT 1 / 0;
+        `,
+        'utf8',
+      );
+
+      await expect(runMigrations(url, dir)).rejects.toThrow(/division by zero/i);
+
+      // Neither half survived: not the table, and not the history row.
+      expect((await pool.query(`SELECT 1 FROM information_schema.tables WHERE table_name = 'portability_rollback_probe'`)).rows).toEqual([]);
+      expect((await pool.query(`SELECT 1 FROM schema_migrations WHERE name = '0099_deliberately_failing_fixture.sql'`)).rows).toEqual([]);
+
+      // And the migrations that DID apply are still recorded, so removing the
+      // bad file makes the next run a clean no-op rather than a replay.
+      expect((await pool.query<{ n: number }>(`SELECT count(*)::int AS n FROM schema_migrations WHERE name = '0049_accounting_periods.sql'`)).rows[0]?.n).toBe(
+        1,
+      );
+      rmSync(join(dir, '0099_deliberately_failing_fixture.sql'), { force: true });
+      expect(await runMigrations(url, dir)).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      await pool.end().catch(() => undefined);
+      await admin.query(`DROP DATABASE IF EXISTS ${db} WITH (FORCE)`).catch(() => undefined);
+    }
+  }, 300_000);
 
   it('leaves no temporary privilege behind and no runtime principal with chart authority', async () => {
     // Read entirely through the non-superuser connection: if daftar_migrator

@@ -324,19 +324,38 @@ describe('RBAC evaluator (§25–27: owner authority = trusted role identity)', 
 describe('P2-S1 accounting permissions (directive §17, §18, §23)', () => {
   const ACCOUNTING = ['accounting.view', 'accounting.post', 'accounting.reverse', 'accounting.chart.manage', 'accounting.fx.manage'] as const;
 
+  /** P2-S6 §21 added exactly these two, and no third. */
+  const PERIOD = ['accounting.period.manage', 'accounting.period.reopen'] as const;
+
   it('isPermission() recognizes all five non-period accounting keys', () => {
     for (const key of ACCOUNTING) expect(isPermission(key)).toBe(true);
   });
 
-  it('period permissions are NOT registered — they belong to P2-S6', () => {
-    expect(isPermission('accounting.period.manage')).toBe(false);
-    expect(isPermission('accounting.period.reopen')).toBe(false);
-    expect(PERMISSIONS.filter((p) => p.startsWith('accounting.'))).toEqual([...ACCOUNTING]);
+  it('the accounting registry is exactly the five P2-S1 keys plus the two P2-S6 period keys', () => {
+    for (const key of PERIOD) expect(isPermission(key)).toBe(true);
+    expect(PERMISSIONS.filter((p) => p.startsWith('accounting.'))).toEqual([...ACCOUNTING, ...PERIOD]);
   });
 
-  it('accounting.view is ordinary; posting, reversing, chart and FX authority are sensitive', () => {
+  /**
+   * §21, in the registry itself: `reopen` is its own key.
+   *
+   * Nothing here derives one from the other, and no code path may. Undoing a
+   * close is a separate authority from closing, so a member trusted to close
+   * the books is not thereby trusted to reopen them.
+   */
+  it('accounting.period.reopen is a SEPARATE key, not implied by accounting.period.manage', () => {
+    const manageOnly = TrustedRoleSet.fromPersistence([{ key: 'closer', isSystem: false, permissions: new Set(['accounting.period.manage']) }]);
+    expect(hasPermission(manageOnly, 'accounting.period.manage')).toBe(true);
+    expect(hasPermission(manageOnly, 'accounting.period.reopen')).toBe(false);
+
+    const reopenOnly = TrustedRoleSet.fromPersistence([{ key: 'undoer', isSystem: false, permissions: new Set(['accounting.period.reopen']) }]);
+    expect(hasPermission(reopenOnly, 'accounting.period.manage')).toBe(false);
+    expect(hasPermission(reopenOnly, 'accounting.period.reopen')).toBe(true);
+  });
+
+  it('accounting.view is ordinary; posting, reversing, chart, FX and BOTH period keys are sensitive', () => {
     expect(isSensitivePermission('accounting.view')).toBe(false);
-    for (const key of ['accounting.post', 'accounting.reverse', 'accounting.chart.manage', 'accounting.fx.manage'] as const) {
+    for (const key of ['accounting.post', 'accounting.reverse', 'accounting.chart.manage', 'accounting.fx.manage', ...PERIOD] as const) {
       expect(isSensitivePermission(key)).toBe(true);
     }
     expect((SENSITIVE_PERMISSIONS as readonly string[]).includes('accounting.view')).toBe(false);
@@ -348,11 +367,19 @@ describe('P2-S1 accounting permissions (directive §17, §18, §23)', () => {
     for (const key of ACCOUNTING) expect(BUILTIN_ROLE_PERMISSIONS.owner).toContain(key);
   });
 
+  it('the system owner holds both period keys by identity too (§21)', () => {
+    const owner = TrustedRoleSet.fromPersistence([{ key: 'owner', isSystem: true, permissions: new Set() }]);
+    for (const key of PERIOD) {
+      expect(hasPermission(owner, key)).toBe(true);
+      expect(BUILTIN_ROLE_PERMISSIONS.owner).toContain(key);
+    }
+  });
+
   it('manager and cashier gain NO accounting authority (C-12: no built-in accountant role)', () => {
     for (const roleKey of ['manager', 'cashier'] as const) {
       expect(BUILTIN_ROLE_PERMISSIONS[roleKey].some((p) => p.startsWith('accounting.'))).toBe(false);
       const set = TrustedRoleSet.fromPersistence([{ key: roleKey, isSystem: false, permissions: new Set(BUILTIN_ROLE_PERMISSIONS[roleKey]) }]);
-      for (const key of ACCOUNTING) expect(hasPermission(set, key)).toBe(false);
+      for (const key of [...ACCOUNTING, ...PERIOD]) expect(hasPermission(set, key)).toBe(false);
     }
   });
 

@@ -509,6 +509,19 @@ describe('golden: engine shapes — supplier return and purchase price variance 
 });
 
 describe('golden: engine shapes prove representability without creating the domains (directive §71, §85)', () => {
+  /**
+   * The claim is about the SHAPES posted above: every one of them was
+   * expressed with the generic journal, and none of them caused an
+   * operational domain to be invented to hold it.
+   *
+   * `accounting_periods` was on this list while no slice owned periods, and
+   * it came off when P2-S6 built them under its own directive. That is the
+   * difference the list is for: a table nobody authorized appearing because
+   * a golden shape needed somewhere to live is the defect; a table an
+   * authorized slice creates on purpose is not, and a permanent regression
+   * that forbade its successor would stop the project. Nothing else moved,
+   * and no shape above posts into a period.
+   */
   it('not one operational table was created to express any of the shapes above', async () => {
     const forbidden = [
       'invoices',
@@ -522,7 +535,6 @@ describe('golden: engine shapes prove representability without creating the doma
       'supplier_credit_notes',
       'supplier_refunds',
       'inventory_movements',
-      'accounting_periods',
       'fx_rates',
     ];
     const present = (

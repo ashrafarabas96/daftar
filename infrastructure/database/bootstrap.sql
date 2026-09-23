@@ -1,4 +1,22 @@
--- Idempotent role bootstrap. Passwords substituted by the runner.
+-- Idempotent role + extension bootstrap. Passwords substituted by the runner.
+--
+-- ── Extensions the schema depends on (P2-S6 §12) ────────────────────────────
+-- `btree_gist` supplies the GiST operator class that lets migration 0049 put
+-- an equality column (business_id) beside a range column in ONE exclusion
+-- constraint — the only mechanism that makes overlapping accounting periods
+-- physically impossible rather than merely checked for.
+--
+-- It is installed HERE, as the deployment administrator that already creates
+-- the roles below, and NOT by the migration. PostgreSQL 13+ marks the
+-- extension `trusted`, so a non-superuser can install it — but only with
+-- CREATE ON DATABASE, which `daftar_migrator` deliberately does not hold and
+-- which would be a permanent, far broader authority bought for one statement.
+-- An already-installed extension needs no privilege at all, so 0049's
+-- `CREATE EXTENSION IF NOT EXISTS` is a no-op under CONNECT alone. That is
+-- the shape this deployment uses: the deployment contract moved, the
+-- migration principal's privileges did not.
+CREATE EXTENSION IF NOT EXISTS btree_gist;
+
 -- Least-privilege roles (Security Gate Zero §11):
 --   daftar_app      normal API runtime — RLS-enforced, cannot bypass RLS
 --   daftar_platform platform administration (provisioning, plans, admin console)

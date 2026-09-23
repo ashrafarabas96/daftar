@@ -43,13 +43,21 @@ import { ACCOUNTING_ASSERTION_TTL_SECONDS, type AccountingAssertionKey } from '.
 import { AccountingError } from './errors';
 
 /**
- * The control commands that exist. P2-S5 registers exactly one. A speculative
- * kind here would be an authority the database has no routine to refuse, so
- * new kinds arrive with the command that consumes them.
+ * The control commands that exist. A speculative kind here would be an
+ * authority the database has no routine to refuse, so new kinds arrive with
+ * the command that consumes them: P2-S5 registered `fx_rate_enter`, and
+ * P2-S6 registers exactly the three period commands it implements.
+ *
+ * Note what P2-S6 did NOT do: it did not invent a third assertion protocol.
+ * `acctctl/1` already expresses "this actor, in this business, was authorized
+ * for this command kind on this resource with this payload", which is exactly
+ * what a period command needs. A second protocol over the same signing secret
+ * would be separated only by its parser's shape, and a parser is not a
+ * cryptographic boundary.
  */
-export type AccountingControlCommandKind = 'fx_rate_enter';
+export type AccountingControlCommandKind = 'fx_rate_enter' | 'period_create' | 'period_close' | 'period_reopen';
 
-export const ACCOUNTING_CONTROL_COMMAND_KINDS: readonly AccountingControlCommandKind[] = ['fx_rate_enter'];
+export const ACCOUNTING_CONTROL_COMMAND_KINDS: readonly AccountingControlCommandKind[] = ['fx_rate_enter', 'period_create', 'period_close', 'period_reopen'];
 
 /** The literal bytes that separate this domain from the posting one. */
 export const ACCTCTL_DOMAIN = 'acctctl/1';
@@ -62,9 +70,15 @@ export interface AccountingControlAssertionClaims {
   readonly tenantId: string;
   readonly businessId: string;
   readonly commandKind: AccountingControlCommandKind;
-  /** The thing the command acts on — for P2-S5, the rate id being entered. */
+  /**
+   * The thing the command acts on: the rate id being entered, or the period
+   * being created, closed or reopened.
+   */
   readonly resourceId: string;
-  /** `fxrate/1` for a rate entry: the digest of every immutable fact. */
+  /**
+   * The digest of every fact that identifies the command — `fxrate/1` for a
+   * rate entry, `acctperiod/1` for a period command.
+   */
   readonly payloadFingerprint: string;
 }
 

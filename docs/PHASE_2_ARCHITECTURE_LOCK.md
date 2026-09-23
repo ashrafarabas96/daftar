@@ -152,7 +152,7 @@ The earlier version claimed cases A–G "run as each of the six database roles".
 
 A PASS requires **both** matrices. Neither substitutes for the other.
 
-**Future-phase implication.** The validation routine is the single plug-in point for a future accounting-period check (AL-14) — no journal schema change.
+**Future-phase implication.** A future accounting-period check needs no journal schema change (AL-14). **P2-S6 landed it as a `BEFORE INSERT` trigger on `journal_entries` rather than inside this routine**: the routine is reached only by the writers that call it, while a trigger binds every writer including a direct `INSERT`, which is what §23 of that slice's directive requires.
 
 ---
 
@@ -580,7 +580,13 @@ Other properties, unchanged: `CREATE UNIQUE INDEX ... ON accounting_opening_bala
 
 ## AL-14 — Posting-date semantics, and where periods belong (CORRECTED)
 
-**Periods are NOT in the first implementation slice.** They are slice **P2-S6**, conditional on confirmation at that point. Nothing in P2-S1…P2-S5 needs a closed period to be correct, and designing close/reopen concurrency before any posting traffic exists would be speculation. `journal_entries.entry_date DATE NOT NULL` ships in P2-S2, and the AL-02 validation routine is the documented plug-in point, so adding periods later requires **no journal schema change**. When periods land, **the period model becomes the authoritative posting-date gate** and the interim rules below are superseded by it.
+**Periods are NOT in the first implementation slice.** They are slice **P2-S6**, confirmed and directed by the Tech Lead and now implemented as candidate migration `0049`. Nothing in P2-S1…P2-S5 needs a closed period to be correct, and designing close/reopen concurrency before any posting traffic exists would have been speculation. `journal_entries.entry_date DATE NOT NULL` ships in P2-S2, and adding periods later required **no journal schema change**.
+
+> **Correction on landing (P2-S6).** Two sentences above turned out to be wrong in ways worth recording rather than quietly editing.
+>
+> The plug-in point is NOT the AL-02 validation routine. It is a `BEFORE INSERT` trigger on `journal_entries` itself. The routine would have covered only the writers that call it; the trigger covers every writer, a direct `INSERT` included — and §23 of the P2-S6 directive asks for a refusal that does not depend on Nest, TypeScript or HTTP.
+>
+> And the period model does NOT become "the authoritative posting-date gate", superseding the interim rules. It becomes an ADDITIONAL gate, for a business that has created a period. The rules below are unchanged and still enforced by the frozen P2-S3 writer: `entry_date ≤ today` in the business's timezone still holds inside an open period. A business with zero periods is governed by those rules and nothing else, because `0049` creates no period for anybody — a migration that invented a fiscal calendar would have started refusing postings for merchants who never asked for periods.
 
 ### The arbitrary 10-year rule is withdrawn
 
@@ -593,7 +599,7 @@ Each source type declares its own rule, because the correct rule genuinely diffe
 | source | lower bound | upper bound | rationale |
 |---|---|---|---|
 | `opening_balance` | **none** — it may predate DAFTAR onboarding by any amount | `as_of_date ≤ today` | the opening position is historical by definition; an arbitrary cutoff would exclude long-running companies |
-| `manual_adjustment` | none in Phase 2; back-dating is permitted and audited | `entry_date ≤ today` | once periods exist, the open-period boundary becomes the real lower bound |
+| `manual_adjustment` | none in Phase 2; back-dating is permitted and audited | `entry_date ≤ today` | **P2-S6:** once the business has created a period, the covering period must exist and be open — both bounds still apply on top of that |
 | `reversal` | `entry_date ≥ the original entry's date` | `entry_date ≤ today` | a reversal cannot precede the fact it reverses |
 
 **Future-dated postings are forbidden in Phase 2 for every source**, explicitly and uniformly: `entry_date ≤ today` in the business timezone. The earlier draft's `today + 1 day` tolerance is withdrawn — it existed only to paper over timezone ambiguity, which resolving "today" in the business timezone removes.
@@ -601,6 +607,8 @@ Each source type declares its own rule, because the correct rule genuinely diffe
 The rule is enforced in `accounting_post_entry` per source type, so it cannot be bypassed, and it is expressed as data (a column on `accounting_source_types`) rather than as branching logic, so a future source type declares its policy rather than editing the primitive.
 
 **When P2-S6 is authorized it must specify**: non-overlapping contiguous periods (exclusion constraint), open/closed state, close actor and time, reopen actor, time and mandatory reason, closed-period posting refused in the database, the timezone/date authority, close↔post concurrency, and full audit.
+
+> **Delivered in P2-S6 (candidate `0049`).** Every item above, plus three the lock did not ask for and review required: an append-only operation registry that decides an idempotent replay BEFORE any state is read (without it, an old reopen replayed after a later re-close reopens the period again); a single lock order — business, then period — obeyed by the posting path as well as the commands, which is what makes close-versus-post a race with a determined winner rather than a deadlock; and an ACTIVATION model, because the lock's wording assumed periods would simply exist. Evidence: `docs/PHASE_2_S6_ACCEPTANCE.md`.
 
 ---
 
@@ -627,8 +635,8 @@ The rule is enforced in `accounting_post_entry` per source type, so it cannot be
 | `accounting.reverse` | sensitive | |
 | `accounting.chart.manage` | sensitive | |
 | `accounting.fx.manage` | sensitive | a rate changes booked values |
-| `accounting.period.manage` | sensitive | registered only in P2-S6 |
-| `accounting.period.reopen` | sensitive | registered only in P2-S6 |
+| `accounting.period.manage` | sensitive | registered in P2-S6 (`0049`); creates and closes, and does NOT imply `reopen` |
+| `accounting.period.reopen` | sensitive | registered in P2-S6 (`0049`); reopens, and nothing else |
 
 Preserved Phase 1 properties, unchanged: default deny; delegation ceiling (no member grants what they do not hold); owner authority from trusted role identity, never a boolean on a request object; custom merchant-defined roles; every grant audited.
 
@@ -637,7 +645,7 @@ Rules specific to Phase 2:
 - **No permission grants direct table mutation.** AL-03 makes this structurally true, not merely policy: there is no DML grant to bind a permission to.
 - **Branch scope** applies to *reads* (branch-filtered reports) and, for posting, restricts which `branch_id` values a scoped member may put on a line — checked inside the primitive.
 - **Later-domain postings are authorized by their own domain permission** (e.g. `sale.create`), not by `accounting.post`; otherwise every cashier would need ledger rights.
-- Period permissions are **not registered until P2-S6**, so the registry never ships dead keys.
+- Period permissions were **not registered until P2-S6**, so the registry never shipped dead keys. `0049` registers both, backfills them onto every existing owner role and onto no other role, and registers no third key.
 
 ---
 
@@ -677,7 +685,7 @@ Outbox payloads carry **ids only, never amounts**, so the event stream does not 
 | **P2-S3** | Assertion keys + `accounting_actor()` verification + `accounting_post_entry` + fingerprint **computed in TypeScript and recomputed in PL/pgSQL, with the equality check before any write (AL-03)** + audit + outbox, **and only now `GRANT EXECUTE` to `daftar_app`** | `0044`, `0045` | the writer becomes reachable in the same slice that gives it its unforgeable authority boundary, its binding integrity and its atomicity — never before | AL-03 spoofing suite including the payload-mismatch cases, the shared canonical-fingerprint vectors green in both implementations, AL-11 matrix, AL-17 failure-injection matrix all green; guard G-4 active |
 | **P2-S4** | Manual adjustment, reversal, opening balance — Phase-2-owned sources | `0046`, `0047` | each source rides the already-hardened writer | AL-12 and AL-13 state-machine tests green |
 | **P2-S5** | FX foundation: manual rate source, immutable snapshot, rounding, realized-FX primitive | `0048` | additive to a hardened engine | the seven AL-09 vectors green in both implementations; guard G-2 extended to every rate field introduced here |
-| **P2-S6** | Accounting periods — **only if confirmed** (AL-14) | `0049` | plugs into the existing validation routine | close/reopen/concurrency green |
+| **P2-S6** ⏳ candidate | Accounting periods (AL-14) — confirmed and directed | `0049` | a `BEFORE INSERT` trigger on `journal_entries`, which binds every writer rather than only the callers of the validation routine | activation, overlap, contiguity, posting, transition, authorization, close↔post and reopen↔post matrices green; `gate:phase2:s6` green |
 | **P2-S7** | Trial balance, general ledger, account balances — live aggregation | `0050` (indexes only, if needed) | read-only | reports balance; rebuild-equals-live green; guard G-3 extended to any read-model table added here |
 | **P2-S8** | Red team, cross-tenant, raw SQL, failure injection, rollback rehearsal, performance dataset, KMS-backed signer review | 0 | verification only | budgets met or materialization justified |
 | **P2-S9** | Release closure: gate, RC archive, evidence, docs | 0 | verification only | repository and extracted-archive gates both PASS, zero skips |

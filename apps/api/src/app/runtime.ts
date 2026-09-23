@@ -31,6 +31,8 @@ import { DatabaseAccountingLedgerReader } from '../modules/accounting/accounting
 import { AccountingSourcesService } from '../modules/accounting/accounting-sources.service';
 import { AccountingFxService } from '../modules/accounting/accounting-fx.service';
 import { DatabaseAccountingFxAdapter } from '../modules/accounting/accounting-fx.adapter';
+import { AccountingPeriodsService } from '../modules/accounting/accounting-periods.service';
+import { DatabaseAccountingPeriodsAdapter } from '../modules/accounting/accounting-periods.adapter';
 
 /**
  * RUNTIME COMPOSITION (Phase 1 Completion Directive §15–20).
@@ -161,6 +163,12 @@ export function accountingProviders(): Provider[] {
     { provide: 'ACCOUNTING_FX_PORT', useExisting: DatabaseAccountingFxAdapter },
     { provide: 'ACCOUNTING_CONTROL_MINTER', useExisting: AccountingAssertionMinterService },
     AccountingFxService,
+    // P2-S6: accounting periods. Same shape as the FX registry above — the
+    // port is injected by token so the service depends on the contract and
+    // not on a Nest adapter, and the control minter is reached only by name.
+    DatabaseAccountingPeriodsAdapter,
+    { provide: 'ACCOUNTING_PERIOD_PORT', useExisting: DatabaseAccountingPeriodsAdapter },
+    AccountingPeriodsService,
   ];
 }
 

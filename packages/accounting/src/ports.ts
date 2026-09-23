@@ -16,6 +16,7 @@
 import type { AccountingAssertionClaims } from './assertion';
 import type { AccountingControlAssertionClaims } from './control-assertion';
 import type { FxRateEntryCommand, FxRateEntryResult, FxRateSnapshot } from './fx-rate';
+import type { AccountingPeriodSnapshot, PeriodCloseCommand, PeriodCommandResult, PeriodCreateCommand, PeriodReopenCommand } from './period';
 import type { OpeningPosition, PostedEntrySnapshot } from './sources';
 import type { PostingCommand, PostingResult } from './types';
 
@@ -191,4 +192,39 @@ export interface AccountingFxRatePort {
    * write path hiding behind a read method.
    */
   lookupRate(scope: LedgerReadScope, pair: { from: string; to: string }, at: Date): Promise<FxRateSnapshot>;
+}
+
+// ── P2-S6 accounting periods (directive §18-§20, §29-§32) ─────────────────
+
+/** One call of a period command, inside one transaction. */
+export interface PeriodCommandRequest<C> {
+  /** The minted control assertion, presented to the database as-is. */
+  readonly assertion: string;
+  readonly command: C;
+}
+
+/**
+ * Executes the three period commands and reads a business's periods.
+ *
+ * The adapter's only permitted interaction with `accounting_periods` is
+ * CALLING these commands and SELECTing rows back. It must never issue
+ * INSERT/UPDATE/DELETE against the table — and could not if it tried, because
+ * `daftar_app` holds only SELECT on it and nothing at all on the operation
+ * registry.
+ *
+ * There is no `reopenTrusted`, no `forceClose` and no method that takes a
+ * period id without a minted assertion, because a seam that could be handed
+ * `true` would become a permanent bypass the moment a later slice found it
+ * convenient.
+ */
+export interface AccountingPeriodPort {
+  createPeriod(request: PeriodCommandRequest<PeriodCreateCommand>): Promise<PeriodCommandResult>;
+  closePeriod(request: PeriodCommandRequest<PeriodCloseCommand>): Promise<PeriodCommandResult>;
+  reopenPeriod(request: PeriodCommandRequest<PeriodReopenCommand>): Promise<PeriodCommandResult>;
+  /**
+   * The merchant read (§32). Runs as the CALLER, so one business is kept out
+   * of another's periods by row level security rather than by this method's
+   * predicate. It exposes no assertion, no operation id and no audit internal.
+   */
+  listPeriods(scope: LedgerReadScope): Promise<readonly AccountingPeriodSnapshot[]>;
 }

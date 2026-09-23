@@ -67,7 +67,19 @@ export type AccountingErrorCode =
   | 'accounting.fx_effective_at_required'
   | 'accounting.fx_effective_at_precision'
   // Allocation residuals — P2-S5 (§55)
-  | 'accounting.rounding_residual_unbounded';
+  | 'accounting.rounding_residual_unbounded'
+  // Accounting periods — P2-S6 (§9-§40)
+  | 'accounting.period_not_found'
+  | 'accounting.period_range_invalid'
+  | 'accounting.period_overlap'
+  | 'accounting.period_not_contiguous'
+  | 'accounting.period_not_open'
+  | 'accounting.period_not_closed'
+  | 'accounting.period_closed'
+  | 'accounting.period_missing_for_date'
+  | 'accounting.period_reopen_reason_required'
+  | 'accounting.period_immutable'
+  | 'accounting.period_extension_missing';
 
 /**
  * Safe identifiers that may accompany a refusal. Deliberately a closed shape:
@@ -87,6 +99,10 @@ export interface AccountingErrorContext {
   readonly rateId?: string;
   /** The ordered pair a refusal is about, e.g. `USD->ILS`. Currency codes only. */
   readonly currencyPair?: string;
+  /** An accounting period's id. An identifier, like every field here. */
+  readonly periodId?: string;
+  /** A civil date a refusal is about, `YYYY-MM-DD`. A date is not a value. */
+  readonly entryDate?: string;
 }
 
 export class AccountingError extends Error {

@@ -64,6 +64,15 @@ export const SOURCE_TABLES = [
  */
 export const FX_TABLES = ['accounting_fx_rates'] as const;
 
+/**
+ * The P2-S6 period tables. The merchant runtime READS the periods — knowing
+ * which months are closed is an ordinary answer a business needs — and reads
+ * nothing of the operation registry, which is command bookkeeping rather than
+ * merchant truth. No runtime role writes either, and nobody holds DELETE on
+ * either: a period is never deleted, and the registry is append-only.
+ */
+export const PERIOD_TABLES = ['accounting_periods', 'accounting_period_operations'] as const;
+
 /** Every role an application runtime authenticates as. */
 export const RUNTIME_ROLES = ['daftar_app', 'daftar_platform', 'daftar_worker', 'daftar_resolver', 'daftar_identity', 'daftar_provisioner'] as const;
 
@@ -129,6 +138,15 @@ export const INTENDED_TABLE_GRANTS: Readonly<Record<string, Readonly<Record<stri
   // P2-S5. Append-only history: the writer inserts and can never rewrite
   // what it wrote, and the merchant runtime reads under row level security.
   accounting_fx_rates: { daftar_app: ['SELECT'], [INTERNAL_ROLE]: ['INSERT', 'SELECT'] },
+  // P2-S6. The period is the ONE accounting table the internal authority
+  // holds UPDATE on, and the reason is narrow: a close and a reopen change
+  // `status` and its metadata in place, and 0049's transition trigger admits
+  // exactly those two moves and refuses every other field, including the
+  // boundaries and the identity. DELETE is held by NOBODY in any state — a
+  // period that could be deleted is a period that could be un-closed without
+  // a trace.
+  accounting_periods: { daftar_app: ['SELECT'], [INTERNAL_ROLE]: ['INSERT', 'SELECT', 'UPDATE'] },
+  accounting_period_operations: { [INTERNAL_ROLE]: ['INSERT', 'SELECT'] },
 };
 
 /**
@@ -182,6 +200,19 @@ export const ACCOUNTING_ROUTINES = [
   'accounting_fx_rate_lock_key',
   'accounting_fx_rate_identity_lock_key',
   'accounting_fx_rates_immutable',
+  // P2-S6 internals. The three period commands are deliberately absent for
+  // the same reason the posting primitive is: they are surfaces the merchant
+  // runtime may execute, and they are modelled below. Everything else the
+  // period slice adds is reachable only from inside an elevated command or
+  // from a trigger.
+  'accounting_period_reason_digest',
+  'accounting_period_canonical',
+  'accounting_period_fingerprint',
+  'accounting_period_topology_lock_key',
+  'accounting_periods_no_delete',
+  'accounting_periods_transition',
+  'accounting_period_operations_immutable',
+  'accounting_period_guard_posting',
 ] as const;
 
 /**
@@ -213,6 +244,13 @@ export const RUNTIME_CALLABLE_ROUTINES: Readonly<Record<string, readonly string[
   // administration is not financial authority here either.
   accounting_fx_rate_enter: ['daftar_app'],
   accounting_fx_rate_lookup: ['daftar_app'],
+  // P2-S6: creating, closing and reopening a period. Three narrow commands
+  // belonging to the merchant runtime alone — the authority behind each one
+  // is a signed acctctl/1 assertion, not the connection's identity, so this
+  // grant is the ability to ASK and never the ability to decide.
+  accounting_period_create: ['daftar_app'],
+  accounting_period_close: ['daftar_app'],
+  accounting_period_reopen: ['daftar_app'],
 };
 
 /**
@@ -252,6 +290,7 @@ export const WATCHED_TABLES = [
   ...ASSERTION_TABLES,
   ...SOURCE_TABLES,
   ...FX_TABLES,
+  ...PERIOD_TABLES,
   'accounting_operation_kinds',
 ] as const;
 

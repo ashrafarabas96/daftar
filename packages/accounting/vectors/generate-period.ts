@@ -1,0 +1,108 @@
+/**
+ * Regenerates `acctperiod-vectors.json`.
+ *
+ * Run with `npx tsx packages/accounting/vectors/generate-period.ts`. The
+ * inputs below are the specification's interesting cases; the expected bytes
+ * and digest are computed by the TypeScript canonicalizer and then
+ * independently reproduced by the PostgreSQL one in
+ * `tests/integration/accounting-period-parity.test.ts`. Regenerating is
+ * therefore only legitimate when the SPEC changed — if a regeneration
+ * silently changes an existing digest, the parity test against the database
+ * fails, which is exactly the alarm it exists to raise.
+ */
+import { writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { computePeriodFingerprint, periodCanonicalStream, type PeriodCommandFacts } from '../src/period';
+
+const T = '3f2504e0-4f89-41d3-9a0c-0305e82c3301';
+const B = '9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d';
+const OP = '6ba7b810-9dad-11d1-80b4-00c04fd430c8';
+const OP2 = '1b4e28ba-2fa1-11d2-9a0c-0305e82c3301';
+const P = 'c9bf9e57-1685-4c89-bafb-ff5af830be8a';
+
+interface RawCase {
+  name: string;
+  why: string;
+  facts: PeriodCommandFacts;
+}
+
+const cases: RawCase[] = [
+  {
+    name: 'create-january',
+    why: 'The ordinary create: a whole month, stated as two inclusive civil dates.',
+    facts: { kind: 'period_create', tenantId: T, businessId: B, operationId: OP, periodId: P, startDate: '2026-01-01', endDate: '2026-01-31' },
+  },
+  {
+    name: 'create-single-day',
+    why: 'A one-day period is a period. start_date = end_date is legal and must hash like any other range.',
+    facts: { kind: 'period_create', tenantId: T, businessId: B, operationId: OP, periodId: P, startDate: '2026-01-01', endDate: '2026-01-01' },
+  },
+  {
+    name: 'create-uppercase-identifiers',
+    why: 'Identifiers are lowercased before hashing, so the same command stated in either case is one command.',
+    facts: {
+      kind: 'period_create',
+      tenantId: T.toUpperCase(),
+      businessId: B.toUpperCase(),
+      operationId: OP.toUpperCase(),
+      periodId: P.toUpperCase(),
+      startDate: '2026-01-01',
+      endDate: '2026-01-31',
+    },
+  },
+  {
+    name: 'create-different-operation',
+    why: 'The SAME period boundaries under a DIFFERENT operation id are a different command. A key is part of the identity, not metadata about it.',
+    facts: { kind: 'period_create', tenantId: T, businessId: B, operationId: OP2, periodId: P, startDate: '2026-01-01', endDate: '2026-01-31' },
+  },
+  {
+    name: 'close',
+    why: 'A close carries no payload beyond the identities — there is nothing about a close to state.',
+    facts: { kind: 'period_close', tenantId: T, businessId: B, operationId: OP, periodId: P },
+  },
+  {
+    name: 'close-different-operation',
+    why: 'Two closes of ONE period under two keys are two commands. Without this the reopen-after-reclose hazard could not be distinguished.',
+    facts: { kind: 'period_close', tenantId: T, businessId: B, operationId: OP2, periodId: P },
+  },
+  {
+    name: 'reopen-plain',
+    why: 'The reason enters the stream as its SHA-256, not as text: the fingerprint must bind it, the audit trail carries it.',
+    facts: { kind: 'period_reopen', tenantId: T, businessId: B, operationId: OP, periodId: P, reason: 'Supplier invoice arrived late' },
+  },
+  {
+    name: 'reopen-padded-reason',
+    why: 'The same reason with surrounding spaces, tabs and a newline. Step 2 of the contract strips exactly those four code points, so this must hash identically to reopen-plain.',
+    facts: { kind: 'period_reopen', tenantId: T, businessId: B, operationId: OP, periodId: P, reason: ' \t\nSupplier invoice arrived late\r\n ' },
+  },
+  {
+    name: 'reopen-arabic-reason',
+    why: 'Arabic text, which DAFTAR merchants actually write. UTF-8 bytes, not code units: a digest taken over UTF-16 would disagree with PostgreSQL on every character here.',
+    facts: { kind: 'period_reopen', tenantId: T, businessId: B, operationId: OP, periodId: P, reason: 'وصلت فاتورة المورد متأخرة' },
+  },
+  {
+    name: 'reopen-decomposed-reason',
+    why: 'A decomposed e-acute (e + U+0301). The contract hashes the bytes VERBATIM — there is no Unicode normalization step, because PostgreSQL cannot normalize on a server whose encoding is not UTF8 — so this spelling is its own reason.',
+    facts: { kind: 'period_reopen', tenantId: T, businessId: B, operationId: OP, periodId: P, reason: 'Cléture corrigée' },
+  },
+  {
+    name: 'reopen-composed-reason',
+    why: 'The same word written composed (U+00E9). It must hash DIFFERENTLY from reopen-decomposed-reason, and both implementations must agree that it does: a retry that changed spelling is refused as a payload mismatch rather than silently accepted.',
+    facts: { kind: 'period_reopen', tenantId: T, businessId: B, operationId: OP, periodId: P, reason: 'Cléture corrigée' },
+  },
+];
+
+const out = {
+  spec: 'acctperiod/1',
+  note: 'Generated by packages/accounting/vectors/generate-period.ts. One source for BOTH the TypeScript and PostgreSQL period canonicalizers (directive §20).',
+  cases: cases.map((c) => ({
+    name: c.name,
+    why: c.why,
+    facts: c.facts,
+    canonicalHex: periodCanonicalStream(c.facts).toString('hex'),
+    fingerprint: computePeriodFingerprint(c.facts),
+  })),
+};
+
+writeFileSync(join(__dirname, 'acctperiod-vectors.json'), `${JSON.stringify(out, null, 2)}\n`, 'utf8');
+process.stdout.write(`wrote ${out.cases.length} vectors\n`);

@@ -127,3 +127,40 @@ export const AccountingFxRateCreateSchema = z
     message: 'a currency has no exchange rate against itself — domestic money uses the base sentinel',
     path: ['toCurrency'],
   });
+
+/**
+ * `POST /v1/businesses/:businessId/accounting/periods` (P2-S6 §29).
+ *
+ * Two fields, `.strict()`, both mandatory. There is deliberately NO `status`,
+ * no `closedAt`, no `createdBy` and no `tenantId`: the status of a new period
+ * is `open` by construction, and everything else is either fixed by the
+ * server or taken from the verified authority.
+ *
+ * Neither date is `.nullish()`. An omitted boundary would have to be resolved
+ * from something — the clock, a calendar, the previous period — and every one
+ * of those would be DAFTAR deciding what a merchant's books look like.
+ */
+export const AccountingPeriodCreateSchema = z
+  .object({
+    startDate: civilDate,
+    endDate: civilDate,
+  })
+  .strict()
+  .refine((v) => v.startDate <= v.endDate, {
+    message: 'a period ends on or after it starts',
+    path: ['endDate'],
+  });
+
+/**
+ * `POST .../accounting/periods/:periodId/reopen` (§31).
+ *
+ * The reason is the whole body, and it is mandatory here as well as in the
+ * database. Two layers say it because they say it to different callers: this
+ * one answers a merchant with a 400, the database answers every other writer
+ * with a refusal no application layer can skip.
+ */
+export const AccountingPeriodReopenSchema = z
+  .object({
+    reason,
+  })
+  .strict();

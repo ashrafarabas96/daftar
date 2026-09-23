@@ -112,7 +112,7 @@ function accountingStatus(code: string): number {
   if (code === 'accounting.forbidden' || code === 'accounting.branch_scope_violation' || code.startsWith('accounting.assertion_')) {
     return HttpStatus.FORBIDDEN;
   }
-  if (code === 'accounting.entry_not_found') return HttpStatus.NOT_FOUND;
+  if (code === 'accounting.entry_not_found' || code === 'accounting.period_not_found') return HttpStatus.NOT_FOUND;
   if (
     code === 'accounting.idempotency_conflict' ||
     code === 'accounting.reversal_exists' ||
@@ -125,7 +125,22 @@ function accountingStatus(code: string): number {
     // rate row was asked to change. Both are conflicts over existing truth,
     // not malformed requests.
     code === 'accounting.fx_rate_conflict' ||
-    code === 'accounting.fx_rate_immutable'
+    code === 'accounting.fx_rate_immutable' ||
+    // P2-S6. Every one of these is a refusal about the SHAPE OF THE BOOKS the
+    // merchant already has — a month that overlaps an existing one, a gap the
+    // topology will not take, a period already in the state asked for, or a
+    // posting whose date the existing periods refuse. The request itself is
+    // well formed, so 400 would tell the caller to fix a payload that is not
+    // wrong. A malformed period payload (`period_range_invalid`, a missing or
+    // oversized reopen reason) still falls through to 400 below, which is the
+    // distinction this list exists to keep.
+    code === 'accounting.period_overlap' ||
+    code === 'accounting.period_not_contiguous' ||
+    code === 'accounting.period_not_open' ||
+    code === 'accounting.period_not_closed' ||
+    code === 'accounting.period_closed' ||
+    code === 'accounting.period_missing_for_date' ||
+    code === 'accounting.period_immutable'
   ) {
     return HttpStatus.CONFLICT;
   }

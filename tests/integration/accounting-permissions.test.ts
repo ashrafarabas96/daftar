@@ -63,10 +63,30 @@ describe('P2-S1 accounting permissions (real onboarding path)', () => {
     }
   });
 
-  it('no role anywhere persists a period permission — those are P2-S6', async () => {
-    await onboard(`perm-period-${Date.now()}`);
-    const { rows } = await ownerPool().query(`SELECT 1 FROM role_permissions WHERE permission IN ('accounting.period.manage','accounting.period.reopen')`);
-    expect(rows).toEqual([]);
+  /**
+   * P2-S6 §21. The two period keys are persisted on the owner role and on
+   * NOTHING else — including no built-in accountant role, which C-12 still
+   * forbids. `manage` and `reopen` are two rows, never one: a backfill that
+   * wrote only `manage` would silently make closing the books imply undoing
+   * them for every existing merchant.
+   */
+  it('the owner role persists BOTH period permissions, and no other role persists either', async () => {
+    const owner = await onboard(`perm-period-${Date.now()}`);
+    const persisted = await permissionsOf(owner.businessId, 'owner');
+    expect(persisted).toContain('accounting.period.manage');
+    expect(persisted).toContain('accounting.period.reopen');
+
+    for (const roleKey of ['manager', 'cashier']) {
+      const other = await permissionsOf(owner.businessId, roleKey);
+      expect(other.filter((k) => k.startsWith('accounting.period.'))).toEqual([]);
+    }
+
+    const { rows } = await ownerPool().query<{ key: string }>(
+      `SELECT DISTINCT r.key FROM role_permissions rp
+       JOIN business_roles r ON r.business_id = rp.business_id AND r.id = rp.role_id
+       WHERE rp.permission LIKE 'accounting.period.%' ORDER BY r.key`,
+    );
+    expect(rows.map((r) => r.key)).toEqual(['owner']);
   });
 
   it('no built-in "accountant" role is created (C-12)', async () => {
