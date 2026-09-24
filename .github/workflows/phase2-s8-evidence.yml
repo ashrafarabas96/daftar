@@ -38,14 +38,29 @@ on:
         description: 'The EXACT commit to produce evidence for. Leave empty to use the head of the ref this was dispatched on.'
         required: false
         type: string
-  # A change to a candidate migration changes every claim below, so it earns a
-  # run. The path list is deliberately narrow: this workflow is measured in
-  # hours, and a trigger that fired on every push would make it something
-  # people cancel rather than read.
+  # The path list is what CAN INVALIDATE the evidence: the schema, the
+  # accounting arithmetic, the reconciliation path, the measurement harnesses
+  # and the scripts that produce and read the artefacts. A change to any of
+  # them makes the previous run's numbers a statement about a different tree.
+  #
+  # It is deliberately not `paths: ['**']`. This workflow is measured in hours
+  # and a trigger that fired on a README edit would make it something people
+  # cancel rather than read. It is also deliberately not narrower: a filter
+  # that missed a change to `packages/accounting` would leave stale Tier 2
+  # numbers looking current, which is the failure this whole file exists to
+  # answer.
   push:
     branches: ['phase/2-accounting-core']
     paths:
-      - 'infrastructure/database/migrations/**'
+      - 'infrastructure/database/**'
+      - 'packages/accounting/**'
+      - 'apps/api/src/modules/accounting/**'
+      - 'scripts/phase2-s8-*.ts'
+      - 'scripts/phase2-rollback-rehearsal.ts'
+      - 'scripts/check-supply-chain.ts'
+      - 'scripts/runner-canary.ts'
+      - 'tests/performance/**'
+      - 'tests/security/**'
       - '.github/workflows/phase2-s8-evidence.yml'
 
 # `workflow_dispatch` can only be pointed at a branch or a tag, so the commit
