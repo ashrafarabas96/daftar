@@ -212,6 +212,7 @@ interface PerfArtefact {
   readonly dataset?: { seededLines?: number; reportingLines?: number; reconciliationLines?: number };
   readonly budgets?: Record<string, number>;
   readonly measurements?: { name: string; budgetMs: number; iterations: number; p50: number; p95: number }[];
+  readonly planningStatistics?: { table: string; relpages: number; reltuples: number; analyzedAt: string | null }[];
 }
 
 /**
@@ -242,6 +243,28 @@ function checkBudgets(label: string, e: PerfArtefact, expectedTier: number): voi
       's8-budgets',
       `${label}: ${unmeasured.map((m) => m.name).join(', ')} recorded zero iterations — f §12 requires the iteration count beside every number`,
     );
+  }
+  // A NUMBER MEASURED WITHOUT STATISTICS IS A NUMBER ABOUT THE MISSING
+  // STATISTICS (f §11, §12).
+  //
+  // This is not a hypothetical. `accounts` is read by the trial balance,
+  // written by no part of the dataset generator, and about twenty rows per
+  // business — under `autovacuum_analyze_threshold`, so nothing analyzed it.
+  // The planner estimated one row where there were twenty-one and re-executed
+  // the whole journal aggregate once per account: 327 ms on a workstation and
+  // 2.9 s on a GitHub runner, where the re-executed side is a parallel
+  // `Gather Merge`. The fix belongs in the harness, and this is what proves
+  // the harness kept doing it.
+  const stats = e.planningStatistics ?? [];
+  if (stats.length === 0) {
+    fail('s8-budgets', `${label} records no planning statistics — a budget measured by a planner nobody can describe is not evidence (f §11)`);
+  } else {
+    const blind = stats.filter((s) => s.analyzedAt === null);
+    if (blind.length > 0) {
+      fail('s8-budgets', `${label}: ${blind.map((s) => s.table).join(', ')} had no statistics when the budgets were measured (f §11, §12)`);
+    } else {
+      ok(`${label}: every measured table had statistics — ${stats.map((s) => `${s.table} ~${Math.round(s.reltuples)} rows`).join('; ')}`);
+    }
   }
   const over = measured.filter((m) => m.p95 > m.budgetMs);
   if (over.length > 0) {

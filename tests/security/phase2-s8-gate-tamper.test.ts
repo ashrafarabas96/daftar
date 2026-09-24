@@ -324,6 +324,48 @@ describe('a Tier 1 measurement over its ceiling is a FAIL, not a note (f §12, �
     expect(run.status, run.output.slice(-2000)).not.toBe(0);
   }, 180_000);
 
+  it('refuses a Tier 1 artefact measured by a planner that had no statistics', () => {
+    // The case this catches actually happened. `accounts` is read by the
+    // trial balance, written by nothing in the dataset generator, and about
+    // twenty rows per business — under `autovacuum_analyze_threshold`, so it
+    // went into the measurement with no statistics at all. The planner
+    // estimated one row where there were twenty-one and re-executed the whole
+    // journal aggregate once per account: 2.9 s on a GitHub runner against a
+    // 500 ms ceiling. Every number in the file was inside its budget on the
+    // run before that one, so only the statistics state tells a reader which
+    // of the two the file describes.
+    const root = cleanCheckout();
+    mkdirSync(join(root, 'release'), { recursive: true });
+    const budgets = {
+      A_POST_P95: 15,
+      B_ADJUSTMENT_ENDPOINT_P95: 60,
+      C_TRIAL_BALANCE_P95: 500,
+      D_LEDGER_PAGE_P95: 150,
+      E_BALANCE_AS_OF_P95: 100,
+      F_RECONCILIATION_TOTAL: 300_000,
+    };
+    writeFileSync(
+      join(root, 'release/phase2-s8-performance-tier1.json'),
+      `${JSON.stringify(
+        {
+          slice: 'P2-S8',
+          tier: 1,
+          budgets,
+          measurements: Object.entries(budgets).map(([name, budgetMs]) => ({ name, budgetMs, iterations: 30, p50: budgetMs / 2, p95: budgetMs / 2 })),
+          planningStatistics: [
+            { table: 'accounts', relpages: 0, reltuples: -1, analyzedAt: null },
+            { table: 'journal_lines', relpages: 540, reltuples: 21614, analyzedAt: '2026-09-24 05:45:47.519354+00' },
+          ],
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    const run = scriptInCopy(root, 'scripts/phase2-s8-release-gate.ts');
+    expect(run.output).toMatch(/accounts had no statistics when the budgets were measured/);
+    expect(run.status, run.output.slice(-2000)).not.toBe(0);
+  }, 180_000);
+
   it('refuses a Tier 1 artefact in which only some of the budgets were measured', () => {
     const root = cleanCheckout();
     mkdirSync(join(root, 'release'), { recursive: true });

@@ -23,6 +23,7 @@ import { join } from 'node:path';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { ensurePostgres, ownerPool, resetData, uniqueEmail, createTestApp, type TestApp } from '../helpers/test-app';
 import { must, todayIn } from '../helpers/accounting-posting';
+import { analyzeMeasuredTables } from './accounting-dataset';
 
 /** Entries seeded. Two years of a merchant posting a few dozen times a week. */
 const ENTRIES = 4_000;
@@ -193,8 +194,10 @@ beforeAll(async () => {
     client.release();
   }
 
-  await ownerPool().query('ANALYZE journal_entries');
-  await ownerPool().query('ANALYZE journal_lines');
+  // Every table these plans read, not only the two this file writes: a plan
+  // asserted against a table with no statistics is a plan about the missing
+  // statistics. See `analyzeMeasuredTables`.
+  await analyzeMeasuredTables(ownerPool());
 }, 600_000);
 
 describe('the three reads, under EXPLAIN (ANALYZE, BUFFERS) (§13, §57, §71)', () => {

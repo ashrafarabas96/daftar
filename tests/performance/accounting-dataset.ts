@@ -368,9 +368,75 @@ export async function generateDataset(pool: Pool, targets: readonly DatasetTarge
   } finally {
     client.release();
   }
-  await pool.query('ANALYZE journal_entries');
-  await pool.query('ANALYZE journal_lines');
+  await analyzeMeasuredTables(pool);
   return { spec, businesses, entryCount, lineCount, elapsedMs: Date.now() - startedAt };
+}
+
+/**
+ * Every table a measured read touches, and therefore every table this harness
+ * must leave with statistics.
+ *
+ * This list used to be `journal_entries` and `journal_lines` alone, which is
+ * the pair the dataset fills, and that was a measurement defect rather than an
+ * omission of tidiness. `accounts` is read by the trial balance on every run,
+ * it is never written by the generator, and one business's chart is around
+ * twenty rows: far below `autovacuum_analyze_threshold`, so autovacuum never
+ * comes for it either. The table therefore went into the measurement with NO
+ * statistics at all — `relpages = 0`, `reltuples = -1`, `last_analyze` null —
+ * and the planner fell back to a default estimate that the row-level security
+ * expression then collapsed to a single row.
+ *
+ * One estimated row on the OUTER side of a join makes re-executing the inner
+ * side look free, so the planner chose a nested loop over the whole journal
+ * aggregate and re-ran it once per account. Measured on this machine, budget C
+ * took 327 ms that way and 125 ms once `accounts` had been analyzed; on a
+ * GitHub runner the same shape cost 2.9 s, because there the inner side is a
+ * parallel `Gather Merge` that cannot be reused between loops.
+ *
+ * A production database never looks like this: `accounts` is one multi-tenant
+ * table with every business's chart in it, far past the autovacuum threshold.
+ * So the missing ANALYZE was the benchmark measuring the absence of statistics
+ * rather than the cost of the policy family. Statistics are established here,
+ * deterministically, for everything the measured reads read.
+ */
+export const MEASURED_TABLES = ['accounts', 'branches', 'businesses', 'journal_entries', 'journal_lines'] as const;
+
+/** Leave every measured table with statistics, in one place, for every caller. */
+export async function analyzeMeasuredTables(pool: Pool): Promise<void> {
+  for (const table of MEASURED_TABLES) {
+    // The names are this module's own literals, never a caller's string.
+    await pool.query(`ANALYZE ${table}`);
+  }
+}
+
+/** What the planner could actually see, recorded beside the measurement. */
+export interface TableStatistics {
+  readonly table: string;
+  readonly relpages: number;
+  readonly reltuples: number;
+  readonly analyzedAt: string | null;
+}
+
+/**
+ * Read the statistics state of the measured tables.
+ *
+ * A budget figure is only evidence about a query if the planner had the same
+ * information a production planner has, so the evidence carries the proof:
+ * every measured table names when it was last analyzed. A null there is a
+ * measurement taken in the dark, and the budget suite fails on it rather than
+ * publishing the number.
+ */
+export async function measuredTableStatistics(pool: Pool): Promise<TableStatistics[]> {
+  const { rows } = await pool.query<{ table: string; relpages: string; reltuples: string; analyzed_at: string | null }>(
+    `SELECT c.relname AS table, c.relpages::text, c.reltuples::text,
+            greatest(s.last_analyze, s.last_autoanalyze)::text AS analyzed_at
+       FROM pg_class c
+       JOIN pg_stat_user_tables s ON s.relid = c.oid
+      WHERE c.relname = ANY($1::text[])
+      ORDER BY c.relname`,
+    [[...MEASURED_TABLES]],
+  );
+  return rows.map((r) => ({ table: r.table, relpages: Number(r.relpages), reltuples: Number(r.reltuples), analyzedAt: r.analyzed_at }));
 }
 
 /** TIER 1 (§35): small enough for every push, shaped like the real thing. */

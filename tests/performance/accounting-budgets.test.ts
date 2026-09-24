@@ -34,7 +34,15 @@ import { PoolReconciliationConnection } from '../helpers/accounting-reconciliati
 import { DatabaseAccountingReconciliationReader } from '../../apps/api/src/modules/accounting/accounting-reconciliation.reader';
 import { accountTotalsSql } from '../../apps/api/src/modules/accounting/accounting-reports.reader';
 import { appClient, assertionFor, must, postAs, simpleCommand, todayIn } from '../helpers/accounting-posting';
-import { generateDataset, TIER1_SPEC, TIER2_RECONCILIATION_SPEC, TIER2_REPORTING_SPEC, type DatasetSpec } from './accounting-dataset';
+import {
+  generateDataset,
+  measuredTableStatistics,
+  TIER1_SPEC,
+  TIER2_RECONCILIATION_SPEC,
+  TIER2_REPORTING_SPEC,
+  type DatasetSpec,
+  type TableStatistics,
+} from './accounting-dataset';
 import { exactShaBinding } from '../../scripts/phase2-s8-binding';
 
 /**
@@ -133,6 +141,8 @@ async function measure(name: string, budgetMs: number, once: () => Promise<void>
  * DAFTAR serves rather than of a copy that can drift away from it.
  */
 let trialBalancePlan: Record<string, unknown> | null = null;
+/** What the planner could see when these numbers were measured (§11). */
+let planningStatistics: TableStatistics[] = [];
 
 async function captureTrialBalancePlan(): Promise<void> {
   const sql = accountTotalsSql(['l.business_id = $1', 'e.entry_date >= $2::date', 'e.entry_date <= $3::date'], ['a.business_id = $1']);
@@ -235,6 +245,10 @@ beforeAll(async () => {
     reconciliationLines = big.lineCount;
     seededLines = result.lineCount + big.lineCount;
   }
+
+  // Read AFTER every business is seeded, so the snapshot describes the
+  // database the budgets are about to be measured on and not an earlier one.
+  planningStatistics = await measuredTableStatistics(ownerPool());
 }, 21_600_000);
 
 afterAll(async () => {
@@ -293,6 +307,13 @@ afterAll(async () => {
     measurements,
     /** §11: the plan behind budget C, recorded rather than described. */
     plans: { C_TRIAL_BALANCE: trialBalancePlan },
+    /**
+     * §11: what the planner could see. A budget figure measured against a
+     * table with no statistics is a figure about the missing statistics, so
+     * the evidence names when each measured table was last analyzed instead
+     * of leaving a reader to assume it was.
+     */
+    planningStatistics,
   };
   const dir = join(__dirname, '../../release');
   mkdirSync(dir, { recursive: true });
@@ -442,6 +463,27 @@ describe('the dataset is what it claims to be (§32)', () => {
       expect(reconciliationLines, 'F is measured at 1,000,000 lines (§13)').toBeGreaterThanOrEqual(1_000_000);
     } else {
       expect(seededLines).toBeGreaterThanOrEqual(10_000);
+    }
+  });
+
+  it('was measured by a planner that had statistics for every table it reads', () => {
+    // The reason this assertion exists, permanently: `accounts` is read by
+    // the trial balance and written by nobody here, and one business's chart
+    // is roughly twenty rows — under `autovacuum_analyze_threshold`, so
+    // nothing analyzes it by itself. It went into the measurement with
+    // `reltuples = -1`, the planner estimated one row where there were
+    // twenty-one, and chose to re-execute the whole journal aggregate once
+    // per account. That cost 327 ms locally and 2.9 s on a GitHub runner,
+    // where the re-executed side is a parallel `Gather Merge`. The budget was
+    // measuring the absence of statistics.
+    //
+    // `generateDataset` now analyzes every measured table. If a future edit
+    // drops one from that list, this fails here rather than turning up as an
+    // unexplained regression in a budget nobody can reproduce.
+    expect(planningStatistics.map((s) => s.table)).toEqual(['accounts', 'branches', 'businesses', 'journal_entries', 'journal_lines']);
+    for (const stat of planningStatistics) {
+      expect(stat.analyzedAt, `${stat.table} was never analyzed: this measurement is not evidence`).not.toBeNull();
+      expect(stat.reltuples, `${stat.table} has no row estimate`).toBeGreaterThanOrEqual(0);
     }
   });
 });
