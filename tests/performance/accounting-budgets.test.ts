@@ -147,6 +147,13 @@ async function captureTrialBalancePlan(): Promise<void> {
     const explained = await client.query<Record<string, unknown>>(`EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) ${sql}`, [businessId, '2000-01-01', spec.endDate]);
     await client.query('ROLLBACK');
     trialBalancePlan = ((explained.rows[0]?.['QUERY PLAN'] as Record<string, unknown>[] | undefined) ?? [])[0] ?? null;
+    // Printed as well as recorded. The artefact is the evidence, but it is an
+    // attachment on a workflow run, and the first person to look at a red
+    // budget is looking at the log. A plan that is only in a file people have
+    // to download is a plan nobody reads while the failure is fresh.
+    if (trialBalancePlan !== null) {
+      console.log(`\nC TRIAL BALANCE PLAN\n${JSON.stringify(trialBalancePlan, null, 1)}\n`);
+    }
   } finally {
     await client.end();
   }
