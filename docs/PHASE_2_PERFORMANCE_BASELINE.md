@@ -1,6 +1,8 @@
 # DAFTAR — Phase 2 Performance Baseline / خط أساس الأداء للمرحلة الثانية
 
-> **P2-S8 §31–§37.** Measured, not estimated. Re-run with `npm run perf:phase2:s8` (tier 1, the default) or `P2S8_PERF_TIER=2 npm run perf:phase2:s8` (the acceptance sizes §34 names — **LOCAL only**, never CI). Each run writes `release/phase2-s8-performance-tier<N>.json`, and that file — not this page — is the evidence `npm run evidence:phase2:s8` reads.
+> **P2-S8 §31–§37.** Measured, not estimated. Re-run with `npm run perf:phase2:s8` (tier 1, the default) or `P2S8_PERF_TIER=2 npm run perf:phase2:s8` (the acceptance sizes §34 names). Each run writes `release/phase2-s8-performance-tier<N>.json`, and that file — not this page — is the evidence `npm run evidence:phase2:s8` reads.
+>
+> **Where each tier actually runs.** Tier 1 is a step inside `npm run gate:phase2:s8`, which the `backend` job of `.github/workflows/ci.yml` runs on every push and pull request. Tier 2 runs on GitHub too, in `.github/workflows/phase2-s8-evidence.yml`, dispatched at an exact commit, and uploads its artefact to the run — it is not a laptop-only measurement and it is never committed to the repository. Earlier revisions of this page described Tier 1 as a per-push run while nothing in CI executed it, and described Tier 2 as LOCAL only; both statements are withdrawn. A number produced on a developer machine is labelled local wherever it appears.
 >
 > **ما هذه الوثيقة.** أرقام أداء مقيسة فعليًا للمرحلة الثانية، مع الآلة التي قيست عليها وحجم البيانات وطريقة القياس. الغرض منها شيئان: أن يُقارَن بها أي تراجع لاحق، وأن تُسجَّل فيها الميزانيتان اللتان لم تُستوفيا أول مرة وما الذي كشفه تشخيصهما. §34 يمنع توسيع أي ميزانية للحصول على نجاح، ولم تُوسَّع أي واحدة.
 
@@ -19,7 +21,7 @@ The budgets live as named constants at the top of `tests/performance/accounting-
 
 ## 2. Two tiers (§35), and what each one is worth
 
-**Tier 1** runs against a smaller dataset shaped like the real thing and asserts **the same ceilings**. That is a deliberately weaker claim: less data under the same budget. Its job is to catch an order-of-magnitude regression on every push, cheaply.
+**Tier 1** runs against a smaller dataset shaped like the real thing and asserts **the same ceilings**. That is a deliberately weaker claim: less data under the same budget. Its job is to catch an order-of-magnitude regression on every push, cheaply — and since the P2-S8 gate carries it, that is now what happens rather than what was intended.
 
 **Tier 2** is the acceptance run at the sizes §34 names. It is selected with `P2S8_PERF_TIER=2` and is **LOCAL, not CI** — a shared CI runner cannot produce a defensible millisecond figure, and a budget asserted on a contended host is a coin toss dressed up as evidence.
 

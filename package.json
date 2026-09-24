@@ -46,6 +46,7 @@
     "gate:phase2:s6": "tsx scripts/phase2-s6-gate.ts",
     "gate:phase2:s7": "tsx scripts/phase2-s7-gate.ts",
     "gate:phase2:s8": "tsx scripts/phase2-s8-gate.ts",
+    "gate:phase2:s8:release": "tsx scripts/phase2-s8-release-gate.ts",
     "export:release": "tsx scripts/export-release.ts",
     "verify:history": "tsx scripts/verify-migration-history.ts",
     "rehearse:phase2:rollback": "tsx scripts/phase2-rollback-rehearsal.ts"

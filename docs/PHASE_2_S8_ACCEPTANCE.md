@@ -152,7 +152,7 @@ The blocker is closed. The table that matters is the tier-2 one, because tier 1 
 | E | account balance as-of | 47.9 ms | 74.0 ms | 100 ms | PASS |
 | F | full reconciliation pass (total) | 13 977.8 ms | 13 977.8 ms | 300 000 ms | PASS |
 
-**Tier 1 — the per-push run**, 21 614 lines, 30 iterations, run twice: A 7.8 / B 18.4 / **C 93.2** / D 24.7 / E 38.0 ms p95. C was **504.5 ms** and, on an independent repeat, **524.0 ms** before the correction.
+**Tier 1 — the smaller dataset**, 21 614 lines, 30 iterations, run twice **locally**: A 7.8 / B 18.4 / **C 93.2** / D 24.7 / E 38.0 ms p95. C was **504.5 ms** and, on an independent repeat, **524.0 ms** before the correction. Earlier revisions of this page called Tier 1 "the per-push run" while nothing in CI ran it; that sentence was false and is withdrawn. Tier 1 is now a step inside `gate:phase2:s8`, which the `backend` job runs on every push and pull request — see §13 for what each kind of evidence does and does not prove.
 
 **Two evidence defects were found and fixed while re-measuring, and they are worth naming.** The tier-2 dataset was producing 90 086 lines where the spec claimed 100 000 and 899 304 where it claimed 1 000 000 — a budget declared met at 90 % of the stated size is not met. The entry counts were raised until the real line counts cleared both figures. And the tier-2 validity assertion was comparing one business's line count against the sum of both datasets, so it could never have caught the first defect.
 
@@ -177,7 +177,25 @@ See `docs/PHASE_2_PERFORMANCE_BASELINE.md` for the machine, the dataset and the 
 | ~~**TD-11**~~ | ~~Budget C misses~~ | **CLOSED by candidate `0052`.** Kept in this table with its outcome rather than deleted, because the first diagnosis of it was recorded here as settled and later refuted; see §11 and `PHASE_2_PERFORMANCE_BASELINE.md` §5.3. It reopens if `0052` is not accepted |
 | **§36** | `daftar_migrator` cannot apply the accepted migration history | See §7.2. Answering it would mean widening the migration principal, which P2-S1 forbids |
 
-## 13. The verdict and the hard stop
+## 13. Where each claim was proved, and what a green tick means
+
+A gate that only ever runs on somebody's laptop is not an acceptance gate, and a JSON file GitHub never produced or consumed is supporting material rather than CI proof. P2-S8's evidence is therefore in **three kinds**, and this page names which kind every claim rests on rather than letting a reader assume the strongest one.
+
+| kind | what runs it | what it proves | what it does NOT prove |
+|---|---|---|---|
+| **Level A — the per-push gate** | `npm run gate:phase2:s8`, as the step `Phase 2 slice gate — P2-S8` in the `backend` job of `.github/workflows/ci.yml` | The structure of this exact commit; the security, isolation, reconciliation and failure-injection suites against a real PostgreSQL; supply-chain hygiene; the runner-failure canary outside Vitest; that the exit-code guard is installed and not merely present; and the six budgets at **Tier 1** | Anything at acceptance scale. It never reads `release/` |
+| **Level B — the acceptance evidence** | `.github/workflows/phase2-s8-evidence.yml`, dispatched at an exact SHA | **Tier 2** at 100 000 reporting lines and 1 000 000 reconciliation lines; the before/after RLS answer equivalence across the `0051 → 0052` boundary; the rollback and restore rehearsal against a real `pg_dump`; and the evidence document with zero mandatory checks skipped and zero failed | Nothing about a commit other than the one it checked out. Its artefacts are **uploaded, never committed** |
+| **Local runs** | the same commands on a developer machine | That a defect exists, or that a fix works, quickly | Acceptance. Every number produced this way is labelled local on this page |
+
+**The two levels are independent in one direction only.** `gate:phase2:s8` reads the repository and the exit status of commands it runs itself, and nothing under `release/`, so it passes on a clean checkout — `tests/security/phase2-s8-gate-tamper.test.ts` proves exactly that as its control case. `evidence:phase2:s8` **runs** the gate and **reads** the produced artefacts. `gate:phase2:s8:release` reads the artefacts and the evidence document. Nothing reads a file that records its own verdict, which is why the old gate's "ignore these two rows" special case is gone rather than documented.
+
+**Every artefact names the commit it was measured on** (head SHA, both candidate digests, Node, PostgreSQL where relevant, dataset tier, actual line counts, iteration counts, and the workflow run when a workflow produced it). The release gate refuses a set in which any two artefacts disagree, which is the case where a migration was edited between two measurements and the two halves of the evidence describe different schemas.
+
+**And the gate is known to be able to say no.** `tests/security/phase2-s8-gate-tamper.test.ts` builds a throwaway hard-linked copy of the checkout, breaks exactly one thing in it, and runs the real gate against the copy: 0051 removed, 0052 removed, a 0053 added, either candidate frozen early, a write privilege granted to the reconciler, an accounting read granted to `daftar_worker`, `app_bypass()` widened, a load-bearing composite foreign key dropped, the policy correction applied to five of six policies, the exit-code guard un-wired, the lockfile's integrity removed, and a Tier 1 budget exceeded. Nothing in this repository is modified to produce any of those cases.
+
+`ثلاثة أنواع من الأدلة، وهذه الصفحة تسمّي النوع الذي يستند إليه كل ادعاء: بوّابة تعمل مع كل دفعة على GitHub، وسير عمل منفصل ينتج أدلة القبول على SHA محدّد بالضبط، وتشغيل محلي لا يُعدّ قبولًا ويُوسَم كذلك. البوّابة لا تقرأ مجلّد release إطلاقًا، فهي تنجح على نسخة نظيفة؛ وملفات الأدلة تُرفَع كمرفقات ولا تُودَع في المستودع أبدًا. وكل ملف دليل يحمل الـSHA وبصمتَي الترحيلين، والبوّابة ترفض أي مجموعة تتعارض فيها ملفّان. وأخيرًا: البوّابة مُثبَت أنها قادرة على الرفض، باثني عشر اختبارًا تُفسد نسخة مؤقتة من الشجرة ولا تمسّ المستودع.`
+
+## 14. The verdict and the hard stop
 
 **`READY FOR TECH LEAD REVIEW`.** The blocker that held this slice — TD-11, budget C — is closed by candidate `0052`, under the authorization of 2026-09-24. All six budgets are met at the FULL acceptance scale, not only at tier 1, and the accounting answer is byte-identical before and after the change. Nothing in this document is a conditional pass: where something is still open it is listed in §12 with its reason.
 

@@ -54,12 +54,41 @@
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
-import { join, relative } from 'node:path';
+import { join, relative, resolve } from 'node:path';
 import { stripComments } from './guards/sql-schema';
+import { canaryRefusal } from './runner-canary';
 
-const ROOT = join(__dirname, '..');
+const ARGV = process.argv.slice(2);
+const LIST_ONLY = ARGV.includes('--list');
+
+/**
+ * ── Why this gate can be pointed at a directory that is not this repository ─
+ *
+ * f §24 asks for permanent proof that each structural refusal below can
+ * actually fire, and is equally explicit that producing that proof may not
+ * modify the repository: a gate proved by breaking the real tree is a gate
+ * that was briefly not protecting anything.
+ *
+ * So `--root` lets `tests/security/phase2-s8-gate-tamper.test.ts` build a
+ * hard-linked copy of the tree in a temporary directory, break exactly one
+ * thing in it by replacing that one file, and run the structural half of this
+ * gate against the copy. The copy is thrown away; the real tree is never
+ * written to.
+ *
+ * Two properties keep this from being a way to weaken the gate:
+ *
+ *   — it changes WHERE the gate looks, never WHAT it demands. There is no
+ *     branch anywhere below that behaves differently because a root was
+ *     given, and no check is skipped;
+ *   — `--structural-only` stops before the regression matrix, so a run under
+ *     `--root` cannot report a verdict about tests it did not execute. The
+ *     real invocation — `npm run gate:phase2:s8`, with no arguments — takes
+ *     neither flag and is unaffected by either.
+ */
+const rootFlag = ARGV.indexOf('--root');
+const ROOT = rootFlag >= 0 ? resolve(ARGV[rootFlag + 1] ?? '.') : join(__dirname, '..');
+const STRUCTURAL_ONLY = ARGV.includes('--structural-only');
 const MIGRATIONS_DIR = join(ROOT, 'infrastructure/database/migrations');
-const LIST_ONLY = process.argv.slice(2).includes('--list');
 const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 
 /**
@@ -126,6 +155,11 @@ const P2_S8_TESTS = [
   'tests/security/journal-lines-rls-policy.test.ts',
   'tests/security/policy-helper-inlining.test.ts',
   'tests/security/search-path-shadowing.test.ts',
+  // Runs THIS gate, structurally, against throwaway copies of the tree with
+  // one thing broken in each (f §24). It is in the matrix rather than beside
+  // it because a proof that the gate can say no is worth exactly as much as
+  // the gate, and should stop being true at the same moment.
+  'tests/security/phase2-s8-gate-tamper.test.ts',
   'tests/integration/accounting-reconciliation.test.ts',
   'tests/integration/runner-exit-code.test.ts',
 ];
@@ -869,9 +903,31 @@ function checkPrivilegeModel(): void {
   }
 }
 
-// ── 9. Every behavioural claim has a suite, and the evidence exists ────────
-function checkEvidence(): void {
-  console.log('P2-S8 GATE — evidence');
+// ── 9. Every behavioural claim has a suite that makes it ──────────────────
+/**
+ * WHAT THIS CHECK READS, AND WHAT IT REFUSES TO READ (f §1, §4, §6).
+ *
+ * It used to read `release/phase2-s8-evidence.json`,
+ * `release/phase2-s8-rls-equivalence.json` and
+ * `release/phase2-s8-performance-tier2.json`, and fail when one was missing.
+ * Those three files are gitignored, so a clean checkout never has them: the
+ * gate could only pass on a machine where somebody had already produced them
+ * by hand. That is the defect f §1 names — a gate that cannot run in CI is
+ * not an acceptance gate, and a local JSON file GitHub never produced is
+ * supporting evidence, not CI proof.
+ *
+ * The answer is NOT to keep reading them and forgive their absence, which
+ * would make the gate silently weaker on exactly the machine whose verdict
+ * matters. It is to move every claim that rests on a produced artefact into
+ * the release gate — `npm run gate:phase2:s8:release`, which requires all of
+ * them and forgives nothing — and to leave THIS gate deriving its verdict
+ * from two things only: files that are in the repository, and the exit status
+ * of commands it runs itself.
+ *
+ * So the list below contains sources and suites, never outputs.
+ */
+function checkClaimsHaveSuites(): void {
+  console.log('P2-S8 GATE — every behavioural claim has a suite');
   const required: [string, string][] = [
     [
       'tests/security/reconciler-authority-matrix.test.ts',
@@ -898,207 +954,148 @@ function checkEvidence(): void {
       'tests/security/policy-helper-inlining.test.ts',
       'the three policy helpers: why they may carry no search_path, that nothing else joined that set, and that their authority did not move',
     ],
+    [
+      'tests/security/phase2-s8-gate-tamper.test.ts',
+      'that each structural refusal in THIS file can actually fire, proved against a throwaway copy of the tree (f §24)',
+    ],
     ['tests/performance/accounting-rls-equivalence.test.ts', 'the same read at 0051 and at 0052 on one database: the answer and the plan (§10, §11)'],
     ['tests/performance/accounting-budgets.test.ts', 'the six budgets, measured (f §34)'],
     ['tests/performance/accounting-dataset.ts', 'the deterministic dataset generator (f §31)'],
-    ['release/phase2-s8-rls-equivalence.json', 'the recorded before/after answer and plans (§10, §11)'],
-    ['release/phase2-s8-performance-tier2.json', 'the FULL-SCALE acceptance measurement — a Tier 1 file does not satisfy it (§13, §23)'],
     ['scripts/phase2-rollback-rehearsal.ts', 'the rollback/restore rehearsal (f §39–§42)'],
     ['scripts/check-supply-chain.ts', 'supply-chain hygiene (f §47)'],
+    ['scripts/phase2-s8-release-gate.ts', 'the release gate: the acceptance-scale claims this gate deliberately does not make (f §4)'],
     ['docs/PHASE_2_KMS_SIGNER_REVIEW.md', 'the KMS signer review (f §43, §44)'],
     ['docs/PHASE_2_S8_ACCEPTANCE.md', 'the acceptance record (f §52)'],
     ['docs/PHASE_2_PERFORMANCE_BASELINE.md', 'the performance baseline (f §51)'],
-    ['release/phase2-s8-evidence.json', 'the machine-readable evidence (f §50)'],
+    ['.github/workflows/phase2-s8-evidence.yml', 'the workflow that produces the release evidence ON GitHub, at an exact SHA (f §9, §10)'],
     ['tests/fixtures/runner-exit-code/failing.fixture.ts', 'the canary this gate runs before trusting any test result in its own run (f §3)'],
   ];
   for (const [path, why] of required) {
     if (existsSync(join(ROOT, path))) ok(`${path} — ${why}`);
-    else fail('s8-evidence', `${path} is missing — ${why}`);
+    else fail('s8-suites', `${path} is missing — ${why}`);
   }
 
-  // f §50: a mandatory check recorded as SKIPPED is not evidence.
-  const evidence = readIfPresent('release/phase2-s8-evidence.json');
-  if (evidence !== null) {
-    const parsed = JSON.parse(evidence) as { checks?: { id: string; name: string; status: string; mandatory?: boolean }[] };
-    const checks = parsed.checks ?? [];
-    // Two rows are excluded from BOTH of the checks below, for one reason.
-    // GATE-S8 and SUPPLY-01 are not measurements sitting in the file waiting
-    // to be read: the evidence generator produces them by RUNNING a command,
-    // in the same invocation that runs this gate, and writes them after this
-    // gate has already answered. So their recorded status describes how the
-    // file was last generated — GATE-S8 is this gate's own previous verdict,
-    // which would make it a fixpoint of itself, and SUPPLY-01 reads SKIPPED
-    // purely because the last generation did not pass `--run-commands`.
-    // Everything else in the file is an independent artefact written before
-    // this gate runs, and those rows are exactly what this gate must read.
-    const GENERATED_IN_THIS_INVOCATION = new Set(['GATE-S8', 'SUPPLY-01']);
-    const readable = checks.filter((c) => c.mandatory !== false && !GENERATED_IN_THIS_INVOCATION.has(c.id));
-    const skipped = readable.filter((c) => c.status.toUpperCase() === 'SKIPPED');
-    if (skipped.length > 0) {
-      fail(
-        's8-evidence',
-        `${skipped.length} mandatory check${skipped.length === 1 ? ' is' : 's are'} recorded SKIPPED (${skipped.map((c) => c.id).join(', ')}) — f §50 requires zero`,
-      );
-    } else {
-      ok(`all ${checks.length} recorded checks have a verdict; no mandatory check is skipped`);
-    }
-
-    // A mandatory check recorded FAIL is a NO, and this gate has to be able
-    // to say it. Without this, a performance budget could miss (f §36) while
-    // the gate still reported PASS, and a gate that cannot report the one
-    // thing its own evidence file says is wrong is not evidence — f §63.
-    const failed = readable.filter((c) => c.status.toUpperCase() === 'FAIL');
-    if (failed.length > 0) {
-      fail(
-        's8-evidence',
-        `${failed.length} mandatory check${failed.length === 1 ? ' is' : 's are'} recorded FAIL (${failed.map((c) => c.id).join(', ')}) — the evidence file itself says this slice is not ready`,
-      );
-    } else {
-      ok('no mandatory check is recorded FAIL');
-    }
+  const suite = readIfPresent('tests/security/reconciler-authority-matrix.test.ts');
+  if (suite !== null && !suite.includes('reconciler-privilege-model.json')) {
+    fail('s8-suites', 'the authority matrix suite does not read the model file — §27 compares the INTENDED model with the LIVE catalogue');
   }
 
   // The debt this slice found and did NOT close must be written down, or the
   // next reader will rediscover it as a surprise.
   const debt = readIfPresent('TECHNICAL_DEBT.md');
   if (debt === null) {
-    fail('s8-evidence', 'TECHNICAL_DEBT.md is missing');
+    fail('s8-suites', 'TECHNICAL_DEBT.md is missing');
   } else {
     for (const [needle, what] of [
       [/entry_date_in_future|future-dat/i, 'the future-dating rule living in the commands rather than in the schema'],
       [/KMS/i, 'the assertion-signing boundary the KMS review left open'],
     ] as [RegExp, string][]) {
       if (!needle.test(debt))
-        fail('s8-evidence', `TECHNICAL_DEBT.md does not record ${what} — a finding that is not written down is a finding that was not reported`);
+        fail('s8-suites', `TECHNICAL_DEBT.md does not record ${what} — a finding that is not written down is a finding that was not reported`);
     }
     ok('the two findings this slice did not close are recorded as debt');
   }
-
-  checkRlsEquivalenceEvidence();
-  checkFullScaleAcceptance();
 }
 
+// ── 10. The guard that makes every green in this run mean something ───────
 /**
- * The recorded before/after result (§10, §11).
+ * A DORMANT GUARD IS NOT A GUARD (f §17, §18).
  *
- * The suite that produces this file asserts the same two things while it runs.
- * Reading the file here is not a duplicate: it is what lets the gate refuse a
- * run in which the measurement was never taken at all, which is the failure a
- * green test list cannot show you.
+ * `tests/helpers/exit-code.ts` is the reason a failing Vitest run in this
+ * repository leaves with a non-zero status at all; without it the
+ * `embedded-postgres` shutdown hook calls `process.exit(0)` over a recorded
+ * failure and every gate that reads an exit status silently becomes a
+ * rubber stamp. The canary below proves the guard WORKS. It cannot prove the
+ * guard is still WIRED IN, because the canary runs through the same
+ * `globalSetup` that installs it — remove the installation and the canary
+ * stops being able to detect its removal, which is the exact shape of the
+ * defect it exists to catch.
+ *
+ * So the wiring is checked here as text: the root configuration names the
+ * global setup, the global setup imports the helper and calls it at module
+ * scope, and the canary's own configuration names the same global setup. An
+ * edit that deletes the call while leaving `exit-code.ts` on disk — the
+ * failure f §18 names — fails this check with the file and the missing line.
  */
-function checkRlsEquivalenceEvidence(): void {
-  const raw = readIfPresent('release/phase2-s8-rls-equivalence.json');
-  if (raw === null) return; // the missing-file case is already reported above
-  const e = JSON.parse(raw) as {
-    boundaryBefore?: string;
-    boundaryAfter?: string;
-    answerIdentical?: boolean;
-    rowCount?: number;
-    dataset?: { lineCount?: number };
-    before?: { subplanRelations?: Record<string, string[]>; sharedHit?: number; sharedRead?: number; executionMs?: number };
-    after?: { subplanRelations?: Record<string, string[]>; sharedHit?: number; sharedRead?: number; executionMs?: number };
-  };
+function checkRunnerGuardIsInstalled(): void {
+  console.log('P2-S8 GATE — the exit-code guard is installed, not merely present (f §17, §18)');
+  const GLOBAL_SETUP = 'tests/helpers/global-setup.ts';
 
-  if (!(e.boundaryBefore ?? '').startsWith('0051') || !(e.boundaryAfter ?? '').startsWith('0052')) {
-    fail(
-      's8-equivalence',
-      `the before/after evidence was not taken at 0051 → 0052 (${e.boundaryBefore} → ${e.boundaryAfter}) — it compares the wrong two states`,
-    );
-  } else if (e.answerIdentical !== true) {
-    fail('s8-equivalence', 'the recorded trial balance is NOT identical before and after 0052 — a faster wrong answer is a defect (§10)');
-  } else if ((e.rowCount ?? 0) === 0 || (e.dataset?.lineCount ?? 0) < 10_000) {
-    fail('s8-equivalence', `the comparison ran on ${e.dataset?.lineCount ?? 0} lines and ${e.rowCount ?? 0} rows — equality over nothing proves nothing (§10)`);
-  } else {
-    ok(`the trial balance is identical at 0051 and 0052 over ${e.dataset?.lineCount} lines, ${e.rowCount} accounts (§10)`);
+  for (const [config, what] of [
+    ['vitest.config.ts', 'the root configuration'],
+    ['tests/fixtures/runner-exit-code/vitest.config.ts', "the canary's own configuration"],
+  ] as const) {
+    const raw = readIfPresent(config);
+    if (raw === null) {
+      fail('s8-runner-guard', `${config} is missing — ${what} is what installs the guard`);
+      continue;
+    }
+    if (!new RegExp(`globalSetup:\\s*(\\[\\s*)?['"\`]${GLOBAL_SETUP}['"\`]`).test(stripTsProse(raw))) {
+      fail('s8-runner-guard', `${config} does not set globalSetup to ${GLOBAL_SETUP} — ${what} no longer installs the exit-code guard (f §18)`);
+    } else {
+      ok(`${config} runs ${GLOBAL_SETUP}`);
+    }
   }
 
-  // Attribution, not a mention. `businesses` appearing anywhere in a plan is
-  // not the defect — a relation being read ONCE PER ROW of another is — so the
-  // recorded evidence keys each per-row lookup to the scan it hangs under, and
-  // this reads that. Before: all three corrected tables do it. After: nothing
-  // does, under any relation at all.
-  const beforeSub = e.before?.subplanRelations ?? {};
-  const afterSub = e.after?.subplanRelations ?? {};
-  const missingBefore = ['journal_lines', 'journal_entries', 'accounts'].filter((t) => !(beforeSub[t] ?? []).includes('businesses'));
-  const remainingAfter = Object.entries(afterSub).filter(([, rels]) => rels.includes('businesses'));
-  if (missingBefore.length > 0 || remainingAfter.length > 0) {
-    fail(
-      's8-equivalence',
-      missingBefore.length > 0
-        ? `the recorded BEFORE plan shows no per-row businesses lookup under ${missingBefore.join(', ')} — the evidence does not contain the defect it claims to remove (§11)`
-        : `the recorded AFTER plan still reads businesses per row under ${remainingAfter.map(([t]) => t).join(', ')} (§11)`,
-    );
-  } else {
-    const beforeBlocks = (e.before?.sharedHit ?? 0) + (e.before?.sharedRead ?? 0);
-    const afterBlocks = (e.after?.sharedHit ?? 0) + (e.after?.sharedRead ?? 0);
-    ok(`the per-row businesses lookup is gone from the plan: ${beforeBlocks} → ${afterBlocks} shared blocks (§11)`);
-  }
-}
-
-/**
- * TIER 2 IS THE ACCEPTANCE MEASUREMENT, AND A TIER 1 FILE DOES NOT SATISFY IT
- * (§13, §14, §15, §23).
- *
- * The distinction is the whole point. Tier 1 asserts the same ceilings on a
- * smaller dataset, which is a weaker claim and says so. The budgets §14 names
- * are about 100,000 journal lines for the reporting reads and 1,000,000 for
- * the reconciliation pass, so a file that records a pass over 21,000 lines is
- * not evidence for them — §15 is explicit that a "100k" run which created 21k
- * lines is a FAILURE OF EVIDENCE, not a pass.
- */
-function checkFullScaleAcceptance(): void {
-  const raw = readIfPresent('release/phase2-s8-performance-tier2.json');
-  if (raw === null) return; // the missing-file case is already reported above
-  const e = JSON.parse(raw) as {
-    tier?: number;
-    dataset?: { seededLines?: number; reportingLines?: number; reconciliationLines?: number };
-    measurements?: { name: string; budgetMs: number; p95: number }[];
-  };
-
-  if (e.tier !== 2) {
-    fail('s8-tier2', `release/phase2-s8-performance-tier2.json records tier ${e.tier} — a Tier 1 result may not stand in for the acceptance run (§23)`);
+  const setup = readIfPresent(GLOBAL_SETUP);
+  const helper = readIfPresent('tests/helpers/exit-code.ts');
+  if (setup === null || helper === null) {
+    fail('s8-runner-guard', `${GLOBAL_SETUP} or tests/helpers/exit-code.ts is missing — no run in this repository can report failure reliably`);
     return;
   }
-
-  const reporting = e.dataset?.reportingLines ?? 0;
-  const reconciliation = e.dataset?.reconciliationLines ?? 0;
-  if (reporting < 100_000) {
-    fail(
-      's8-tier2',
-      `the reporting dataset held ${reporting} journal lines — §13 requires 100,000 for C, D and E, and §15 calls a short dataset a failure of evidence`,
-    );
-  } else {
-    ok(`the reporting dataset actually held ${reporting} journal lines (§13 C/D/E)`);
+  if (!/export\s+function\s+protectFailingExitCode\s*\(/.test(helper)) {
+    fail('s8-runner-guard', 'tests/helpers/exit-code.ts no longer exports protectFailingExitCode()');
   }
-  if (reconciliation < 1_000_000) {
-    fail('s8-tier2', `the reconciliation dataset held ${reconciliation} journal lines — §13 requires 1,000,000 for F`);
-  } else {
-    ok(`the reconciliation dataset actually held ${reconciliation} journal lines (§13 F)`);
-  }
-
-  const measurements = e.measurements ?? [];
-  if (measurements.length < 6) {
-    fail('s8-tier2', `only ${measurements.length} of the six budgets were measured at full scale — §14 admits no conditional pass`);
+  const body = stripTsProse(setup);
+  if (!/import\s*\{[^}]*\bprotectFailingExitCode\b[^}]*\}\s*from\s*['"]\.\/exit-code['"]/.test(body)) {
+    fail('s8-runner-guard', `${GLOBAL_SETUP} does not import protectFailingExitCode from ./exit-code — the helper exists and nothing calls it (f §18)`);
     return;
   }
-  const over = measurements.filter((m) => m.p95 > m.budgetMs);
-  if (over.length > 0) {
-    for (const m of over)
-      fail('s8-tier2', `${m.name}: ${m.p95.toFixed(1)} ms against a ${m.budgetMs} ms ceiling — the budget stays what was accepted (§6, §14)`);
+  // At MODULE scope, so it runs on import rather than when some function is
+  // eventually called. A call nested inside `setup()` would run after Vitest
+  // has already loaded the config — and the leading-margin test is how the
+  // difference is read without a parser.
+  if (!/^protectFailingExitCode\(\);/m.test(body)) {
+    fail(
+      's8-runner-guard',
+      `${GLOBAL_SETUP} imports protectFailingExitCode but does not call it at module scope — an imported guard that is never invoked is not installed (f §18)`,
+    );
   } else {
-    ok(`all ${measurements.length} budgets met at the acceptance sizes (§14)`);
+    ok(`${GLOBAL_SETUP} calls protectFailingExitCode() at module scope, so every run in this repository can report failure`);
   }
 }
 
-const STEPS: { name: string; cmd: string; args: string[] }[] = [
+const STEPS: { name: string; cmd: string; args: string[]; env?: Record<string, string> }[] = [
   { name: 'migration manifest', cmd: npm, args: ['run', 'check:migrations'] },
   { name: 'static guards (G-1…G-6)', cmd: npm, args: ['run', 'check:guards'] },
-  { name: 'supply-chain hygiene (§47)', cmd: npm, args: ['run', 'check:supply-chain'] },
+  { name: 'supply-chain hygiene (§47, f §22)', cmd: npm, args: ['run', 'check:supply-chain'] },
   { name: 'P2-S7 gate (permanent predecessor, composes P2-S6…P2-S1 and Phase 1)', cmd: npm, args: ['run', 'gate:phase2:s7'] },
   {
     name: 'P2-S8 authority, isolation, planted-discrepancy, failure-injection, redaction and reconciliation suites',
     cmd: 'npx',
     args: ['vitest', 'run', ...P2_S8_TESTS],
+  },
+  /**
+   * TIER 1, RUN HERE RATHER THAN READ FROM A FILE (f §5, §12, §23).
+   *
+   * The documentation has called Tier 1 a per-push measurement since it was
+   * written, and until this step existed that sentence was false: nothing in
+   * CI ran it, and the only Tier 1 number anyone had was produced on a
+   * laptop. f §5 is explicit — "if the documentation calls Tier 1 'per-push',
+   * CI must actually run it" — so it is a command this gate executes, and its
+   * verdict is the suite's own exit status against the SAME six budget
+   * ceilings Tier 2 uses. The dataset is smaller and the evidence file says
+   * so; the ceilings are not lowered to fit it.
+   *
+   * It runs LAST because it is the longest step, and a structural violation
+   * or a failing security suite should be reported in minutes rather than
+   * behind a measurement.
+   */
+  {
+    name: 'the six budgets at Tier 1, measured in this run (f §5, §12)',
+    cmd: 'npx',
+    args: ['vitest', 'run', 'tests/performance/accounting-budgets.test.ts'],
+    env: { P2S8_PERF_TIER: '1' },
   },
 ];
 
@@ -1116,17 +1113,12 @@ const STEPS: { name: string; cmd: string; args: string[] }[] = [
 function checkRunnerReportsFailure(): void {
   const config = 'tests/fixtures/runner-exit-code/vitest.config.ts';
   const res = spawnSync('npx', ['vitest', 'run', '--config', config, 'failing'], { cwd: ROOT, encoding: 'utf8', env: process.env });
-  const output = `${res.stdout ?? ''}${res.stderr ?? ''}`;
-
-  if (!/1 failed/.test(output)) {
-    fail('runner', `the exit-code canary did not run its failing test, so this run proves nothing about the runner:\n${output.slice(-2000)}`);
-    return;
-  }
-  if (res.status === 0) {
-    fail(
-      'runner',
-      'the test runner exited 0 over a failing test. No test result in this run — or in any gate it composes — is evidence. See tests/helpers/exit-code.ts.',
-    );
+  // The decision itself lives in `scripts/runner-canary.ts`, where
+  // `tests/security/phase2-s8-gate-tamper.test.ts` can hand it the pair of
+  // values a broken runner would produce and prove it refuses them (f §24).
+  const refusal = canaryRefusal({ output: `${res.stdout ?? ''}${res.stderr ?? ''}`, status: res.status });
+  if (refusal !== null) {
+    fail('runner', refusal);
     return;
   }
   ok(`the test runner reports failure (canary exited ${res.status ?? 'on a signal'})`);
@@ -1147,7 +1139,7 @@ function runSteps(): void {
   }
   for (const step of STEPS) {
     const started = Date.now();
-    const res = spawnSync(step.cmd, [...step.args], { cwd: ROOT, encoding: 'utf8', stdio: 'inherit', env: process.env });
+    const res = spawnSync(step.cmd, [...step.args], { cwd: ROOT, encoding: 'utf8', stdio: 'inherit', env: { ...process.env, ...(step.env ?? {}) } });
     const ms = Date.now() - started;
     if (res.status !== 0) fail('regression', `${step.name} failed (exit ${res.status ?? 'signal'}) after ${ms}ms`);
     else ok(`${step.name} (${ms}ms)`);
@@ -1170,7 +1162,9 @@ if (LIST_ONLY) {
   console.log('  structural: the reconciliation path writes nothing, uses no OFFSET, probes its own authority and bounds each business');
   console.log('  structural: no bypass header, disable-constraint switch or test-only branch in production source');
   console.log('  structural: the intended privilege model is machine-readable and a suite compares it with the live catalogue');
-  console.log('  structural: every behavioural claim has a suite, no mandatory check is SKIPPED, and the open findings are recorded as debt');
+  console.log('  structural: every behavioural claim has a suite, and the open findings are recorded as debt');
+  console.log('  structural: vitest.config.ts installs the exit-code guard through globalSetup, and the guard is CALLED (f §17, §18)');
+  console.log('  structural: nothing above reads release/ — this gate runs on a clean checkout (f §4 LEVEL A)');
   for (const s of STEPS) console.log(`  command:    ${s.cmd} ${s.args.join(' ')}`);
   process.exit(0);
 }
@@ -1185,22 +1179,27 @@ checkProcessBoundary();
 checkDetectNotRepair();
 checkNoTestSeamInProduction();
 checkPrivilegeModel();
+checkClaimsHaveSuites();
+checkRunnerGuardIsInstalled();
+
+// `--structural-only`: every refusal above has been made, and nothing below
+// would be a statement about this tree. It exists so f §24's tamper proofs
+// can ask "does this refusal fire?" against a throwaway copy without also
+// running a two-hour regression matrix inside a unit test.
+if (STRUCTURAL_ONLY) {
+  if (failures > 0) {
+    console.error(`\nP2-S8 GATE: FAIL (${failures} structural violation${failures === 1 ? '' : 's'}) — structural checks only`);
+    process.exit(1);
+  }
+  console.log('\nP2-S8 GATE: PASS (structural checks only)');
+  process.exit(0);
+}
+
 if (failures > 0) {
   console.error(`\nP2-S8 GATE: FAIL (${failures} structural violation${failures === 1 ? '' : 's'}) — not running the regression matrix`);
   process.exit(1);
 }
 
-// The evidence file is read AFTER the structural checks and BEFORE the
-// matrix, and deliberately does not stop the matrix from running.
-//
-// A structural violation above means the thing being gated is not the thing
-// this gate describes, so running a regression matrix over it would produce
-// numbers about something else. A finding inside the evidence file is the
-// opposite: it is a true statement about work that exists, and the first
-// question a reviewer asks about a slice that carries one is whether
-// everything ELSE still passes. A gate that refused to answer that would
-// make a single missed budget hide the state of the whole slice.
-checkEvidence();
 runSteps();
 
 if (failures > 0) {

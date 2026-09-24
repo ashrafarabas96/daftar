@@ -37,6 +37,7 @@
 import { cpSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { exactShaBinding } from '../../scripts/phase2-s8-binding';
 import { execSync } from 'node:child_process';
 import { Client, Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -240,6 +241,8 @@ afterAll(async () => {
   const evidence = {
     slice: 'P2-S8',
     what: 'journal_lines tenant_membership: answer equivalence (§10) and before/after plan evidence (§11)',
+    /** f §11 — which tree this comparison was taken on, and with which candidates. */
+    binding: exactShaBinding(),
     producedAt: new Date().toISOString(),
     gitSha: (() => {
       try {

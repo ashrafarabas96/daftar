@@ -41,6 +41,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Client } from 'pg';
+import { exactShaBinding } from './phase2-s8-binding';
 
 const ROOT = join(__dirname, '..');
 const PHASE1_COMMIT = '2e01dbab3df2cf112cb0a7d5ac827a5578c61b81';
@@ -725,6 +726,8 @@ async function main(): Promise<void> {
   const evidence = {
     slice: 'P2-S8',
     rehearsal: 'phase-2 rollback / restore',
+    /** f §11 — the commit whose migrations were applied to the restored copy. */
+    binding: exactShaBinding(ROOT),
     phase1Commit: PHASE1_COMMIT,
     phase1Boundary: PHASE1_BOUNDARY,
     postgres: run(join(PG_BIN, 'postgres'), ['--version']).trim(),

@@ -21,12 +21,32 @@
  * graded its own homework would be exactly the kind of green that proves
  * nothing.
  *
- * Usage: npm run evidence:phase2:s8
+ * ── THE DEPENDENCY DIRECTION, WHICH IS ONE-WAY (f §15, §16) ──────────────
+ *
+ * This script may RUN `gate:phase2:s8` and `check:supply-chain`, and it may
+ * READ the Tier 1, Tier 2, rehearsal and equivalence artefacts. What it may
+ * never do is be read BY the thing it runs. It used to be: the gate read this
+ * file, this file recorded the gate's verdict, and the gate carried a comment
+ * explaining which two rows it had to ignore to avoid grading itself. That
+ * comment was the smell. `gate:phase2:s8` now reads nothing under `release/`,
+ * so there is no cycle, no fixpoint, and no row anybody has to remember to
+ * skip.
+ *
+ * The commands RUN BY DEFAULT. The old `--run-commands` opt-in meant the
+ * ordinary invocation produced a document with two mandatory rows recorded
+ * SKIPPED, which is precisely the shape f §50 forbids, and made "I ran the
+ * evidence script" mean two different things depending on an argument nobody
+ * could see in the output. `--no-commands` still exists for inspecting the
+ * artefact rows quickly, and a document produced that way says FAIL on its
+ * own face rather than looking finished.
+ *
+ * Usage: npm run evidence:phase2:s8 [-- --no-commands]
  */
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { exactShaBinding, exactShaMismatch, P2_S8_CANDIDATES } from './phase2-s8-binding';
 
 const ROOT = join(__dirname, '..');
 const MIGRATIONS_DIR = join(ROOT, 'infrastructure/database/migrations');
@@ -59,6 +79,26 @@ const git = (...args: string[]): string => spawnSync('git', args, { cwd: ROOT, e
 function artefact<T>(path: string): T | null {
   const raw = readIfPresent(path);
   return raw === null ? null : (JSON.parse(raw) as T);
+}
+
+// ── the commit this document is about (f §11) ──────────────────────────────
+//
+// Every row below describes a tree. This row says WHICH tree, and refuses the
+// case where GitHub is reporting on one commit while the checkout is at
+// another — in which case every number here would be attributed to code the
+// run never read.
+{
+  const mismatch = exactShaMismatch(ROOT);
+  add(
+    'BINDING-01',
+    'the checked-out tree is the commit GitHub is reporting on (f §11)',
+    true,
+    mismatch === null ? 'PASS' : 'FAIL',
+    mismatch ??
+      (process.env['GITHUB_SHA'] === undefined
+        ? `local run at HEAD ${git('rev-parse', 'HEAD')} — no GITHUB_SHA to bind to`
+        : `GITHUB_SHA == HEAD == ${git('rev-parse', 'HEAD')}`),
+  );
 }
 
 // ── the migration boundary ─────────────────────────────────────────────────
@@ -141,7 +181,12 @@ interface PerfEvidence {
 }
 for (const tier of [1, 2] as const) {
   const perf = artefact<PerfEvidence>(`release/phase2-s8-performance-tier${tier}.json`);
-  const mandatory = tier === 1;
+  // BOTH tiers are mandatory here, and that is the Level A / Level B line
+  // (f §4). Tier 1 is the per-push measurement the CI gate now actually runs;
+  // Tier 2 is the acceptance-scale run. A release document that recorded Tier
+  // 2 as optional would be a release document that could be produced without
+  // ever measuring the sizes the budgets were written for.
+  const mandatory = true;
   if (perf === null) {
     add(
       `PERF-TIER${tier}`,
@@ -174,6 +219,41 @@ for (const tier of [1, 2] as const) {
   );
 }
 
+// ── the answer is the same answer (f §13) ──────────────────────────────────
+//
+// "A faster wrong report is FAIL." The suite asserts this while it runs; the
+// row exists so that a release in which the comparison was never taken reads
+// as SKIPPED rather than as silence.
+interface EquivalenceEvidence {
+  readonly answerIdentical?: boolean;
+  readonly boundaryBefore?: string;
+  readonly boundaryAfter?: string;
+  readonly rowCount?: number;
+  readonly dataset?: { lineCount?: number };
+  readonly before?: { subplanRelations?: Record<string, string[]> };
+  readonly after?: { subplanRelations?: Record<string, string[]> };
+}
+{
+  const eq = artefact<EquivalenceEvidence>('release/phase2-s8-rls-equivalence.json');
+  const perRowAfter = Object.entries(eq?.after?.subplanRelations ?? {}).filter(([, rels]) => rels.includes('businesses'));
+  const sound =
+    eq !== null &&
+    eq.answerIdentical === true &&
+    (eq.boundaryBefore ?? '').startsWith('0051') &&
+    (eq.boundaryAfter ?? '').startsWith('0052') &&
+    (eq.dataset?.lineCount ?? 0) >= 10_000 &&
+    perRowAfter.length === 0;
+  add(
+    'RLS-EQUIV-01',
+    'the same trial balance at 0051 and at 0052, byte for byte, with the per-row businesses lookup gone from the plan (§10, §11, f §13)',
+    true,
+    eq === null ? 'SKIPPED' : sound ? 'PASS' : 'FAIL',
+    eq === null
+      ? 'release/phase2-s8-rls-equivalence.json was never produced — run `npx vitest run tests/performance/accounting-rls-equivalence.test.ts`'
+      : `${eq.boundaryBefore} → ${eq.boundaryAfter}, ${eq.dataset?.lineCount ?? 0} lines, ${eq.rowCount ?? 0} accounts, answerIdentical=${String(eq.answerIdentical)}, per-row businesses lookups after: ${perRowAfter.length}`,
+  );
+}
+
 // ── the checks whose evidence is a command's exit status ───────────────────
 //
 // Each of these RUNS the thing and records what it answered. Nothing here
@@ -187,10 +267,10 @@ const COMMANDS: { id: string; name: string; mandatory: boolean; argv: [string, s
   },
   { id: 'SUPPLY-01', name: 'supply-chain hygiene (f §47)', mandatory: true, argv: ['npm', ['run', 'check:supply-chain']] },
 ];
-const RUN_COMMANDS = process.argv.slice(2).includes('--run-commands');
+const RUN_COMMANDS = !process.argv.slice(2).includes('--no-commands');
 for (const c of COMMANDS) {
   if (!RUN_COMMANDS) {
-    add(c.id, c.name, c.mandatory, 'SKIPPED', 'not run in this invocation — pass --run-commands');
+    add(c.id, c.name, c.mandatory, 'SKIPPED', 'not run in this invocation — --no-commands was passed, so this document is not evidence');
     continue;
   }
   const started = Date.now();
@@ -211,6 +291,12 @@ const failed = checks.filter((c) => c.status === 'FAIL');
 const evidence = {
   slice: 'P2-S8',
   title: 'Security / failure / reconciliation / performance hardening + the dedicated reconciliation authority',
+  /**
+   * f §11: the head SHA, both candidate digests, the Node version and the
+   * workflow run identity, in one block shared with every other P2-S8
+   * artefact so a reviewer can line them up and see they describe one tree.
+   */
+  binding: exactShaBinding(ROOT),
   producedAt: new Date().toISOString(),
   head: git('rev-parse', 'HEAD'),
   branch: git('rev-parse', '--abbrev-ref', 'HEAD'),
@@ -218,8 +304,12 @@ const evidence = {
   boundary: {
     frozenThrough: manifest.frozenThrough,
     frozenCount: manifest.migrations.length,
-    candidate: migrations.includes(CANDIDATE) ? { name: CANDIDATE, sha256: sha256(`infrastructure/database/migrations/${CANDIDATE}`), frozen: false } : null,
-    beyondCandidate: migrations.filter((f) => f > CANDIDATE),
+    candidates: P2_S8_CANDIDATES.map((name) => ({
+      name,
+      sha256: migrations.includes(name) ? sha256(`infrastructure/database/migrations/${name}`) : null,
+      frozen: manifest.migrations.some((m) => m.name === name),
+    })),
+    beyondCandidate: migrations.filter((f) => f > RLS_CANDIDATE),
   },
   checks,
   summary: {

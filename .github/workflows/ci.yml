@@ -1,4 +1,11 @@
-name: DAFTAR Phase 1 CI
+# The name used to say "DAFTAR Phase 1 CI", which stopped being true at
+# P2-S1 and had been misdescribing itself for seven slices: this workflow
+# runs Phase 1 AND every accepted Phase 2 slice gate. A truthful name matters
+# more here than anywhere else in the repository, because the run's name is
+# what a reviewer reads in the checks list when deciding what a green tick
+# covers. The JOB names are deliberately unchanged — they are what the
+# required-checks configuration matches on.
+name: DAFTAR CI
 
 on:
   push:
@@ -211,6 +218,37 @@ jobs:
       # through it the whole chain back to Phase 1.
       - name: Phase 2 slice gate — P2-S7
         run: npm run gate:phase2:s7
+        env:
+          PG_PORT: '5432'
+      # P2-S8 — the hardening and reconciliation slice, and the first gate in
+      # this workflow that runs the performance budgets rather than reading
+      # somebody's file. It proves: the migration boundary (0051 and 0052 are
+      # candidates, nothing is frozen past 0050, there is no 0053); that 0052
+      # reshapes exactly the six authorized policies and replaces exactly the
+      # three helpers, creating and granting nothing; that the composite
+      # foreign keys the corrected policies stand on are never dropped,
+      # disabled or left NOT VALID anywhere in the history; the reconciler's
+      # authority, process isolation and read-only privilege model; that the
+      # test runner can still report failure, asked OUTSIDE Vitest before any
+      # test result in the run is trusted; that the exit-code guard is not
+      # merely present but installed through globalSetup; supply-chain
+      # hygiene; and the six budgets at Tier 1.
+      #
+      # It composes the P2-S7 gate, which composes the whole chain back to
+      # Phase 1. The predecessor step above is NOT removed for that reason:
+      # when a predecessor breaks, a reviewer should see WHICH one failed in
+      # the step list rather than having to read the log of a gate that
+      # contains all of them.
+      #
+      # WHAT THIS STEP DELIBERATELY DOES NOT COVER: Tier 2 at a hundred
+      # thousand and a million lines, the rollback/restore rehearsal, and the
+      # before/after RLS answer equivalence. Those are hours of work on a real
+      # cluster and they live in `phase2-s8-evidence.yml`, run at an exact SHA
+      # and uploading their artefacts. A green tick here is a true statement
+      # about this commit's structure and its per-push measurements, and
+      # nothing more — which is the distinction that was missing.
+      - name: Phase 2 slice gate — P2-S8
+        run: npm run gate:phase2:s8
         env:
           PG_PORT: '5432'
       - name: Tampered-migration hard-fail proof

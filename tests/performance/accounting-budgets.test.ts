@@ -34,6 +34,7 @@ import { PoolReconciliationConnection } from '../helpers/accounting-reconciliati
 import { DatabaseAccountingReconciliationReader } from '../../apps/api/src/modules/accounting/accounting-reconciliation.reader';
 import { appClient, assertionFor, must, postAs, simpleCommand, todayIn } from '../helpers/accounting-posting';
 import { generateDataset, TIER1_SPEC, TIER2_RECONCILIATION_SPEC, TIER2_REPORTING_SPEC, type DatasetSpec } from './accounting-dataset';
+import { exactShaBinding } from '../../scripts/phase2-s8-binding';
 
 /**
  * PHASE_2_ACCOUNTING_EXECUTION_PLAN §34, repeated verbatim. Milliseconds.
@@ -216,6 +217,11 @@ afterAll(async () => {
   })();
   const evidence = {
     slice: 'P2-S8',
+    // f §11: the head commit, both candidate migration digests, the Node
+    // version and — when a workflow produced this — the run that did. A
+    // millisecond figure that cannot name the tree it was measured on is a
+    // figure about nothing in particular.
+    binding: exactShaBinding(),
     tier: TIER,
     // §35: a full-scale result run on a laptop is not a CI result, and the
     // file says which it was rather than leaving a reader to assume.
