@@ -206,6 +206,10 @@ const AUTHORITATIVE_DOCS = [
   // and describing a forbidden claim is not licence to write one: §4 of that
   // page names each claim without making it.
   'docs/PHASE_2_S9_RELEASE.md',
+  // The page that states who may apply the migration history. It carried the
+  // refuted RB-P2-01 diagnosis for a whole slice, in a Phase 1 document
+  // nobody re-reads, which is exactly how a withdrawn claim survives.
+  'docs/PHASE_1_MIGRATION_HISTORY_DECISION.md',
 ];
 
 const STALE_CLAIMS: [RegExp, string][] = [
@@ -215,6 +219,11 @@ const STALE_CLAIMS: [RegExp, string][] = [
   [/\b005[12]\b[^\n|]{0,80}\b(is a |are )?candidates?\b(?![^\n|]{0,60}(until|accepted|frozen))/i, 'still calls 0051/0052 a candidate'],
   [/not frozen, not in the manifest/i, 'still says the slice migrations are not in the manifest'],
   [/budget\s+C[^\n|]{0,80}(miss|fail|over)/i, 'still reports budget C as failing'],
+  // RB-P2-01. The claim was carried in three places and refuted in P2-S9 by
+  // performing the deployment; a page that still makes it is describing a
+  // release that cannot be deployed by the principal that deploys it.
+  [/daftar_migrator[^\n|]{0,40}cannot\s+apply/i, 'still says the deployment principal cannot apply the accepted history'],
+  [/permission denied for table schema_migrations/i, 'still repeats the refuted RB-P2-01 refusal'],
 ];
 
 /** A line that says of itself that it is history is not a stale claim. */

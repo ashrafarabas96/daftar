@@ -128,34 +128,50 @@ Two mechanics changed with this freeze, and both are deliberate:
   later exist: a gate for an accepted slice must never be the reason a later
   authorized slice cannot land.
 
-## Phase 2 (P2-S8): who can actually apply this history
+## Phase 2: who can actually apply this history
 
-Nothing in this section changes a single byte of the frozen history. It
-records a fact about **applying** it that was discovered by doing it, in the
-P2-S8 rollback/restore rehearsal (`npm run rehearse:phase2:rollback`), and it
-matters to whoever writes the deployment runbook.
+Nothing in this section changes a single byte of the frozen history.
 
-**`daftar_migrator` cannot apply the accepted migration history.** The
-rehearsal attempted it and was refused with `permission denied for table
-schema_migrations`. The refusal is a property of the history as accepted, not
-of any one file: `0032`, `0033` and `0038` `SET ROLE daftar_platform`, and
-every accounting migration from `0040` onward grants and revokes privileges
-that their grantor must hold. CI has always applied migrations as the
-database owner for exactly this reason; the rehearsal simply made the
-implicit explicit by trying the other principal and recording what happened.
+**What P2-S8 recorded here is WITHDRAWN.** From an attempt made in the
+rollback rehearsal, it made four claims, and every one of them is withdrawn:
 
-**It is reported, not worked around.** The obvious "fix" — widening
-`daftar_migrator` until the history applies — is forbidden by the P2-S1 rule
-that the migration principal is never widened to make a migration apply. The
-deployment principal for schema changes is therefore the database
-administrator / owner role, and a deployment that hands the job to
-`daftar_migrator` will fail closed on the first privileged statement rather
-than apply half a history.
+- withdrawn — that `daftar_migrator` cannot apply the accepted migration history;
+- withdrawn — that the refusal was `permission denied for table schema_migrations`;
+- withdrawn — that the refusal was a property of the history as accepted;
+- withdrawn — that the deployment principal must therefore be the administrator.
 
-The rehearsal also found, by failing, that `bootstrap.sql` did not create the
-`citext` and `pgcrypto` extensions it relies on; a restored database is only
-as complete as its bootstrap, and that was fixed in `bootstrap.sql` rather
-than by granting the migration role the right to create extensions.
+The observation behind them was real: a deployment as the documented
+migration principal did stop at `0032`. Every part of the explanation was
+wrong.
 
-`ملاحظة بالعربية: بروفة التراجع أثبتت — بالتجربة لا بالقراءة — أن مبدأ الترحيل الضيّق daftar_migrator لا يستطيع تطبيق تاريخ الترحيلات المقبول، ويُرفض برسالة صلاحيات واضحة. الحلّ ليس توسيع صلاحياته (وهذا ممنوع منذ P2-S1)، بل أن يكون مبدأ النشر هو مالك قاعدة البيانات، وهو ما تفعله CI أصلًا. وسُجِّلت الحقيقة هنا لتكون في كرّاس النشر.`
+**What P2-S9 established by performing the deployment.**
+`npm run check:deployment-authority` applies `0000` through `0052` as
+`daftar_migrator` and nothing else, from an empty database, and separately
+carries a database at `0039` and one at `0050` forward to `0052` the same
+way. It then proves the result is catalogue-identical to a database a
+superuser builds. Three causes had been stacked, each hiding the next:
 
+1. the accepted history hands ownership to **two** roles,
+   `daftar_accounting_internal` and `daftar_platform`, and `bootstrap.sql`
+   carried a membership for one;
+2. schema `public` belonged to `pg_database_owner`, so the deployer held
+   `CREATE` **without grant option** and could not lend it to the role a
+   migration was about to make owner;
+3. `0038` replaces functions `0032` had already made `daftar_platform`'s, and
+   replacing a function is an ownership check, which reads the `INHERIT` bit
+   and ignores `SET`.
+
+The corrections live in `bootstrap.sql` (the deployer owns schema `public`
+and holds both memberships) and in the migration runner (it lends
+`CREATE ON SCHEMA public` to each file's own ownership targets inside that
+file's transaction and revokes it before commit). **No frozen migration was
+touched and no runtime principal was widened** — the P2-S1 rule that the
+migration principal is never widened to make a migration apply still stands,
+and nothing here widened it.
+
+One thing from the old section survives, narrowed: a copy restored by an
+administrator with `--no-owner` comes out owned by the administrator, so a
+recovery procedure has to leave the restored objects in the deployment
+principal's hands. That is a restore step, not a property of the history.
+
+See `PHASE_2_S9_RELEASE.md` §3.

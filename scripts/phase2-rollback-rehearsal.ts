@@ -17,7 +17,8 @@
  *      accepted Phase 1 build, from a temporary git worktree;
  *   3. a real pg_dump;
  *   4. restored into a new, clean database;
- *   5. the Phase 2 migrations applied to the restored copy, as daftar_migrator;
+ *   5. the Phase 2 migrations applied to the restored copy, by the same
+ *      principal that owns it after the restore;
  *   6. the data proved intact, and the chart proved present;
  *   7. the CURRENT application run against it;
  *   8. the ACCEPTED PHASE 1 application run against the SAME upgraded
@@ -420,43 +421,45 @@ async function call(base: string, c: Call): Promise<{ status: number; json: Reco
 let worktree = '';
 
 /**
- * Can `daftar_migrator` apply migrations to this database? (§36)
+ * WHO OWNS THE OBJECTS IN A RESTORED COPY? (§36)
  *
- * The rehearsal asks by TRYING, because the answer turned out not to be the
- * one the directive assumed, and a finding of that kind must rest on an
- * observation rather than on a reading of the SQL.
+ * THE EARLIER ANSWER RECORDED HERE IS WITHDRAWN. This probe used to report
+ * that `daftar_migrator` cannot apply the accepted migration history, and
+ * that this was "a property of the accepted history" to be reported rather
+ * than fixed. Both halves were wrong, and P2-S9 proved it by performing the
+ * deployment instead of reasoning about it: `npm run check:deployment-authority`
+ * applies `0000` through `0052` as `daftar_migrator` and nothing else, from an
+ * empty database, and separately carries a database at `0039` and one at
+ * `0050` forward to `0052` the same way. The refusal was never
+ * `schema_migrations`, and it was not the history's: it was `bootstrap.sql`
+ * handing the deployer one of the two memberships the history needs, and
+ * schema `public` belonging to `pg_database_owner` so the deployer held
+ * `CREATE` without grant option. Both are corrected, and RB-P2-01 is closed.
  *
- * What it finds, and why it is a property of the ACCEPTED history rather than
- * of anything P2-S8 added:
+ * WHAT THIS PROBE STILL MEASURES, AND WHY IT IS NOT THAT QUESTION. This
+ * rehearsal restores the backup with `pg_restore --no-owner` run by the
+ * ADMINISTRATOR, which is the shape a provider's disaster-recovery restore
+ * has: every restored object comes out owned by the role that performed the
+ * restore. So a refusal here is a fact about the restore's ownership
+ * outcome, not about the migration history — and it is worth recording,
+ * because it is the operational step a recovery procedure has to name: a
+ * restored copy is migratable by the deployment principal once the restore
+ * has left the objects in that principal's hands.
  *
- *   — `0032`, `0033` and `0038` transfer routine ownership to
- *     `daftar_platform`, which the applying principal must be able to SET
- *     ROLE to. `daftar_migrator` is a member of
- *     `daftar_accounting_internal` and of nothing else.
- *   — every accounting migration from `0040` onward, `0051` included, opens
- *     with `GRANT CREATE ON SCHEMA public TO daftar_accounting_internal` and
- *     revokes it at the end. Granting a privilege onward requires holding it
- *     WITH GRANT OPTION, and `daftar_migrator` holds plain CREATE.
- *   — after a restore, every table belongs to the principal that applied the
- *     history, so an `ALTER TABLE` by anyone else is refused outright.
- *
- * Each of those is answered the same way, and it is the way P2-S1 already
- * settled: the deployment administrator does the deployment act, and the
- * migration principal is NEVER widened to make a migration apply. So the
- * recorded outcome is an observation for the Tech Lead, not a failure of the
- * rehearsal — the step's `ok` reflects whether the probe RAN and produced a
- * definite answer, and the answer itself is in the detail and the evidence
- * file.
+ * The step's `ok` therefore reflects that the probe RAN and produced a
+ * definite answer. The answer to §36 itself is in
+ * `release/phase2-s9-deployment-authority.json`, measured on databases the
+ * deployment principal actually built.
  */
 function probeMigratorPrincipal(): void {
   const out = migrate(migratorUrl(UPGRADED_DB), null, { allowFailure: true });
   const refused = /permission denied|must be (?:able to SET ROLE|owner)/i.test(out);
   const reason = /(permission denied[^\n]*|must be [^\n]*)/i.exec(out)?.[1]?.trim() ?? out.trim().split('\n').slice(-1)[0] ?? '(no output)';
   record(
-    '5c §36 probe: can daftar_migrator apply migrations here',
+    '5c ownership after a restore: can daftar_migrator migrate THIS copy',
     true,
     refused
-      ? `NO — refused with "${reason}". A property of the accepted history (0032/0033/0038 SET ROLE daftar_platform; every accounting migration from 0040 grants CREATE onward), not of 0051. The deployment principal is the administrator, as CI also uses. Reported, not worked around: widening daftar_migrator is forbidden.`
+      ? `NO — refused with "${reason}". This copy was restored by the ADMINISTRATOR with --no-owner, so every object belongs to the administrator; the refusal is that ownership, not the migration history. The earlier reading recorded here — that the accepted history cannot be applied by daftar_migrator — is WITHDRAWN: check:deployment-authority applies 0000-0052 as daftar_migrator from an empty database, and carries 0039 and 0050 forward the same way (RB-P2-01, closed in P2-S9). A recovery procedure must leave the restored objects in the deployment principal's hands.`
       : `YES — ${reason}`,
   );
 }
@@ -469,23 +472,18 @@ async function main(): Promise<void> {
   await exec(ownerUrl('postgres'), `CREATE DATABASE ${P1_DB}`);
   await exec(ownerUrl(P1_DB), bootstrapSql().replaceAll('GRANT CONNECT ON DATABASE daftar TO', `GRANT CONNECT ON DATABASE ${P1_DB} TO`));
   const p1Dir = migrationsUpTo(PHASE1_BOUNDARY);
-  // The Phase 1 boundary is applied by the DEPLOYMENT ADMINISTRATOR, not by
-  // `daftar_migrator`, and that is a property of the accepted history rather
-  // than a convenience taken here.
+  // The Phase 1 boundary is applied by the ADMINISTRATOR here, which is what
+  // CI does and what the database being rehearsed was built by: this step
+  // reconstructs a database as it exists BEFORE the upgrade, not as P2-S9
+  // would deploy one today.
   //
-  // `0032`, `0033` and `0038` transfer ownership of their routines to
-  // `daftar_platform`, which requires the applying principal to be able to
-  // SET ROLE to it. `daftar_migrator` is a member of
-  // `daftar_accounting_internal` and of nothing else, deliberately: the
-  // migration principal is never widened to make a migration apply — that is
-  // the rule P2-S1 established, and the reason `citext` moved into
-  // `bootstrap.sql` above rather than a grant moving onto the migrator.
-  //
-  // So the deployment contract for Phase 1 is: the administrator applies
-  // 0000–0039. CI does exactly this (it migrates as `postgres`), and this
-  // rehearsal does not pretend otherwise. What §36 asks to be proved with
-  // `daftar_migrator` is the PHASE 2 upgrade path, and that is what step 5
-  // below does.
+  // It is no longer a claim about what the deployment principal can do. It
+  // once was, and that claim is withdrawn: `check:deployment-authority`
+  // applies 0000–0052 as `daftar_migrator` and nothing else. The migration
+  // principal is still never widened to make a migration apply — what
+  // changed is `bootstrap.sql` (the deployer owns schema `public` and holds
+  // both memberships the history needs) and the runner (it lends CREATE to
+  // each file's own ownership targets inside that file's transaction).
   migrate(ownerUrl(P1_DB), p1Dir);
   const applied = await sql<{ n: string }>(ownerUrl(P1_DB), `SELECT count(*)::text AS n FROM schema_migrations`);
   record('1 Phase 1 boundary', Number(applied[0]?.n ?? 0) === readdirSorted(p1Dir).length, `${applied[0]?.n} migrations applied through ${PHASE1_BOUNDARY}`);
@@ -582,12 +580,14 @@ async function main(): Promise<void> {
 
   // ── 5. the Phase 2 migrations, applied to the restored copy ──────────────
   //
-  // By the SAME principal that applied Phase 1, because a database has one
-  // migration principal and DAFTAR's is the deployment administrator. That
-  // is not a shortcut taken here; it is what the accepted history requires,
-  // and the rehearsal found out by trying the alternative. See
-  // `probeMigratorPrincipal` below, which records the attempt rather than
-  // leaving the claim to a comment.
+  // By the principal that OWNS this copy. The restore above ran as the
+  // administrator with `--no-owner`, so that is the administrator — a
+  // property of how a provider's restore works, not of the migration
+  // history. On a database the deployment principal built, the deployment
+  // principal applies the same history unaided; that is what
+  // `check:deployment-authority` measures, and what closed RB-P2-01.
+  // `probeMigratorPrincipal` below records the attempt on THIS copy rather
+  // than leaving either claim to a comment.
   const upgrade = migrate(ownerUrl(UPGRADED_DB), null);
   const afterMigrate = await sql<{ n: string; last: string }>(ownerUrl(UPGRADED_DB), `SELECT count(*)::text AS n, max(name) AS last FROM schema_migrations`);
   record(
@@ -596,12 +596,11 @@ async function main(): Promise<void> {
     `now at ${afterMigrate[0]?.last} (${afterMigrate[0]?.n} applied)`,
   );
 
-  // §36 asks whether `daftar_migrator` can apply 0051. The answer is recorded
-  // from an ATTEMPT on this very database, not inferred from reading the SQL:
-  // a fresh copy is taken, rolled back to 0050 is not possible, so the probe
-  // is made where it is meaningful — against the upgraded database, where a
-  // rerun should be a pure no-op. If the migration principal cannot even
-  // no-op, it certainly cannot apply.
+  // Recorded from an ATTEMPT on this very database rather than inferred: a
+  // rerun here should be a pure no-op, so if the deployment principal cannot
+  // even no-op against this copy, the restore did not leave the objects in
+  // its hands. The general question — can it apply the accepted history at
+  // all — is answered by `check:deployment-authority`, affirmatively.
   probeMigratorPrincipal();
 
   // rerun no-op, by the deployment's own principal

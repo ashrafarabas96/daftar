@@ -168,6 +168,27 @@ compared literally, so a handover that silently did not happen shows up here.
 Checksum validation is not optional and the runner has no switch that turns it
 off; the gate asserts that too.
 
+### 3.5 What a restore leaves behind, and what P2-S8 had recorded here
+
+P2-S8's rollback rehearsal probed the same question and recorded three things,
+all three now **withdrawn**: that the deployment principal could not apply the
+accepted history; that it was refused over the history table (the message it
+quoted is withdrawn with it); and that this was a property of the history, to
+be reported rather than fixed. The withdrawal is carried in the rehearsal's own
+output, in `PHASE_2_S8_ACCEPTANCE.md` §7.2 and in
+`PHASE_1_MIGRATION_HISTORY_DECISION.md`, and the release gate now fails on any
+authoritative page that still makes the claim. The probe had been asking about
+a database the administrator had built and then restored, not about the
+history.
+
+One narrow fact from it survives and belongs in a recovery runbook: a copy
+restored with `pg_restore --no-owner` comes out owned by whoever performed the
+restore. So **a restore is not finished until the restored objects are in the
+deployment principal's hands** — restore as that principal, or hand ownership
+over afterwards. The six-case matrix measures databases the deployment
+principal built; this is the one step that stands between a provider's restore
+and such a database.
+
 ---
 
 ## 4. RB-P2-02 — the documents agree with reality
