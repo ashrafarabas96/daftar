@@ -78,6 +78,17 @@ interface Measurement {
   readonly p99: number;
   readonly max: number;
   readonly min: number;
+  /**
+   * Every iteration, in the order it was taken (f §11, §12).
+   *
+   * Six summary statistics cannot tell a slow query from one stalled
+   * iteration, and that distinction decides what to do about a missed
+   * budget. Budget A missed once on a GitHub runner at p50 3.1 ms, min
+   * 2.6 and max 208.2: the operation was its normal speed and one iteration
+   * waited on something else. Without the series that had to be argued from
+   * percentiles; with it, a reader can see where the stall sat.
+   */
+  readonly samplesMs: readonly number[];
 }
 
 const measurements: Measurement[] = [];
@@ -108,6 +119,7 @@ function summarise(name: string, budgetMs: number, samples: number[]): Measureme
     p99: at(0.99),
     max: must(sorted[sorted.length - 1]),
     min: must(sorted[0]),
+    samplesMs: samples.map((v) => Number(v.toFixed(3))),
   };
   measurements.push(m);
   return m;
@@ -245,6 +257,21 @@ beforeAll(async () => {
     reconciliationLines = big.lineCount;
     seededLines = result.lineCount + big.lineCount;
   }
+
+  // A MEASUREMENT TAKEN ON TOP OF THE SEEDING MEASURES THE SEEDING (f §11).
+  //
+  // Tier 2 writes a million journal lines immediately before the first
+  // iteration, and those pages are still dirty when it starts. Budget A —
+  // an operation that takes about three milliseconds — missed its 15 ms
+  // ceiling once on a GitHub runner at p50 3.1 ms, min 2.6 and max 208.2:
+  // one iteration waited on a checkpoint flush while every other one was
+  // its normal speed. The flush is forced here instead, deliberately and
+  // before the clock starts, so a measured iteration waits on its own work
+  // rather than on the harness's. `ownerPool()` connects as the cluster
+  // superuser, which is what CHECKPOINT requires; if that ever stops being
+  // true the suite fails here rather than publishing a number it cannot
+  // account for.
+  await ownerPool().query('CHECKPOINT');
 
   // Read AFTER every business is seeded, so the snapshot describes the
   // database the budgets are about to be measured on and not an earlier one.
