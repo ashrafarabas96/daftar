@@ -43,7 +43,7 @@
  */
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { arch, platform, release as osRelease } from 'node:os';
 import { join } from 'node:path';
 
@@ -380,6 +380,26 @@ function main(): void {
         '--',
         `--log-dir=${join(LOG_DIR, 'phase1')}`,
       ]),
+
+    // PUT THE TREE BACK THE WAY THE STEP ABOVE FOUND IT.
+    //
+    // The Phase 1 release gate ends by building the API, which leaves
+    // `apps/api/dist` in the tree. The Phase 1 MACHINE gate — which the P2-S8
+    // gate composes through every predecessor — refuses a source tree that
+    // carries a build output, by name. Both are right: a source tree should
+    // not carry one, and a release gate that never built the API would be
+    // proving nothing. What is wrong is asking the second question without
+    // restoring the state the first one was asked in.
+    //
+    // CI never saw this, because it runs the two in separate jobs on separate
+    // checkouts. Composing them in ONE tree is what made it visible, and it
+    // is the composer's to fix: nothing after this point reads the API build,
+    // and the archive export carries no build output either.
+    () =>
+      inProcess('the source tree is a source tree again (the API build output is removed)', () => {
+        rmSync(join(ROOT, 'apps/api/dist'), { recursive: true, force: true });
+        return existsSync(join(ROOT, 'apps/api/dist')) ? ['apps/api/dist is still present after being removed'] : [];
+      }),
 
     // The Phase 2 slice gates, composed: P2-S8 runs P2-S7 … P2-S1 and the
     // Phase 1 machine gate in turn, and adds the Tier 1 budgets, failure

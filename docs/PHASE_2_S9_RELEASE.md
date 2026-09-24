@@ -279,6 +279,22 @@ A release gate that only passes in a working directory that had already built
 the tree is not a release gate, and nothing but running it somewhere clean
 would have said so.
 
+The second run got past that and failed on the step after it, for a reason
+that only exists because this gate **composes**. `gate:phase1:release` ends by
+building the API, which leaves `apps/api/dist` in the tree; the Phase 1
+machine gate — which `gate:phase2:s8` reaches through every predecessor —
+refuses by name a source tree that carries a build output. Both rules are
+right. What was wrong was asking the second question without restoring the
+state the first one was asked in. CI never saw it because it runs the two in
+separate jobs on separate checkouts; composing them in one tree is what made
+it visible. The composer now puts the tree back between the two, as its own
+named step, and the failure was reproduced and the correction confirmed the
+same way: `gate:phase1` passes on a clean tree, fails the moment the API is
+built, and passes again once the build output is removed.
+
+Both findings are the same shape, and it is the shape RB-P2-01 has: a check
+that had only ever been asked in the state that made it pass.
+
 ---
 
 ## 6. The release candidate archive
