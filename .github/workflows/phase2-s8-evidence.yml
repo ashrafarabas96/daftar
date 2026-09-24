@@ -94,11 +94,14 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
       - run: npm ci
+      # The same two lines, in the same order, as the backend job in ci.yml:
+      # domain-core first, because accounting depends on it, and the API's
+      # posting module imports @daftar/accounting by package name, so the
+      # suites cannot load without its dist/.
       - name: Build contract, accounting and design-system packages
         run: |
-          npm run build -w @daftar/shared-contracts
-          npm run build -w @daftar/accounting
-          npm run build -w @daftar/design-system
+          npm run build -w packages/domain-core -w packages/shared-contracts -w packages/design-system
+          npm run build -w packages/accounting
       - name: Tier 2 acceptance measurement
         run: npx vitest run tests/performance/accounting-budgets.test.ts
         env:
@@ -145,11 +148,14 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
       - run: npm ci
+      # The same two lines, in the same order, as the backend job in ci.yml:
+      # domain-core first, because accounting depends on it, and the API's
+      # posting module imports @daftar/accounting by package name, so the
+      # suites cannot load without its dist/.
       - name: Build contract, accounting and design-system packages
         run: |
-          npm run build -w @daftar/shared-contracts
-          npm run build -w @daftar/accounting
-          npm run build -w @daftar/design-system
+          npm run build -w packages/domain-core -w packages/shared-contracts -w packages/design-system
+          npm run build -w packages/accounting
       - name: Answer and plan equivalence across the 0051 → 0052 boundary
         run: npx vitest run tests/performance/accounting-rls-equivalence.test.ts
         env:
@@ -192,11 +198,14 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
       - run: npm ci
+      # The same two lines, in the same order, as the backend job in ci.yml:
+      # domain-core first, because accounting depends on it, and the API's
+      # posting module imports @daftar/accounting by package name, so the
+      # suites cannot load without its dist/.
       - name: Build contract, accounting and design-system packages
         run: |
-          npm run build -w @daftar/shared-contracts
-          npm run build -w @daftar/accounting
-          npm run build -w @daftar/design-system
+          npm run build -w packages/domain-core -w packages/shared-contracts -w packages/design-system
+          npm run build -w packages/accounting
       - name: A real backup, a real restore, the accepted Phase 1 build on the upgraded database
         run: npm run rehearse:phase2:rollback
         env:
@@ -249,11 +258,14 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
       - run: npm ci
+      # The same two lines, in the same order, as the backend job in ci.yml:
+      # domain-core first, because accounting depends on it, and the API's
+      # posting module imports @daftar/accounting by package name, so the
+      # suites cannot load without its dist/.
       - name: Build contract, accounting and design-system packages
         run: |
-          npm run build -w @daftar/shared-contracts
-          npm run build -w @daftar/accounting
-          npm run build -w @daftar/design-system
+          npm run build -w packages/domain-core -w packages/shared-contracts -w packages/design-system
+          npm run build -w packages/accounting
       # GREEN IS NOT EVIDENCE unless the mechanism that reports green is
       # proven capable of reporting red. Asked here in the workflow, from the
       # exit status directly, before any suite runs: a runner that exits 0
