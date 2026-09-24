@@ -195,6 +195,34 @@ A gate that only ever runs on somebody's laptop is not an acceptance gate, and a
 
 `ثلاثة أنواع من الأدلة، وهذه الصفحة تسمّي النوع الذي يستند إليه كل ادعاء: بوّابة تعمل مع كل دفعة على GitHub، وسير عمل منفصل ينتج أدلة القبول على SHA محدّد بالضبط، وتشغيل محلي لا يُعدّ قبولًا ويُوسَم كذلك. البوّابة لا تقرأ مجلّد release إطلاقًا، فهي تنجح على نسخة نظيفة؛ وملفات الأدلة تُرفَع كمرفقات ولا تُودَع في المستودع أبدًا. وكل ملف دليل يحمل الـSHA وبصمتَي الترحيلين، والبوّابة ترفض أي مجموعة تتعارض فيها ملفّان. وأخيرًا: البوّابة مُثبَت أنها قادرة على الرفض، باثني عشر اختبارًا تُفسد نسخة مؤقتة من الشجرة ولا تمسّ المستودع.`
 
+### 13.1 The runs that produced this, and what they measured
+
+Both halves ran on one commit, `a20ef0936f0e72e10f6b897150b57e37ece1582f`, and later commits re-run the same two workflows on their own trees:
+
+- **Level A** — `DAFTAR CI` run **35964921045**: five jobs SUCCESS, with `Phase 2 slice gate — P2-S8` visible inside the `backend` job.
+- **Level B** — `DAFTAR P2-S8 acceptance evidence` run **35964915865**: four jobs SUCCESS; the evidence document reports **11 pass, 0 fail, 0 skipped**, and `gate:phase2:s8:release` reports PASS with every artefact bound to that SHA.
+
+Measured on a GitHub runner, not on a workstation — 30 iterations at Tier 1, 60 at Tier 2, single pass for F:
+
+| # | case | Tier 1 p50/p95 | Tier 2 p50/p95 | ceiling |
+|---|---|---:|---:|---:|
+| A | `post()` in an open transaction | 5.0 / 6.8 | 4.0 / 6.2 | 15 ms |
+| B | manual-adjustment endpoint | 11.3 / 13.4 | 10.3 / 15.1 | 60 ms |
+| C | whole-business trial balance | 44.7 / 49.5 | **161.3 / 167.8** | 500 ms |
+| D | 50-row ledger page | 10.1 / 11.7 | 43.4 / 47.0 | 150 ms |
+| E | account balance as-of | 16.0 / 16.9 | 35.6 / 39.5 | 100 ms |
+| F | full reconciliation pass | 222.1 total | 8 826.3 total | 300 000 ms |
+
+Tier 2 held **104 478** reporting lines and **1 042 966** reconciliation lines, which are the sizes §13 names.
+
+**Two defects in the measurement itself were found by running it there**, and both are recorded because either would have produced a number nobody could account for.
+
+The first: budget C missed at **2.9 s** on a runner while passing locally on the same commit. The plan named the cause — a nested loop whose outer side was the `accounts` index scan estimated at **one** row against twenty-one actual, and whose inner side, the whole parallel journal aggregate, was re-executed once per account. `accounts` is read by the trial balance, written by nothing in the dataset generator, and about twenty rows per business, which is under `autovacuum_analyze_threshold`: it entered the measurement with no statistics at all. On this workstation the same query took 327 ms without statistics and 125 ms with them; on a runner the re-executed side is a parallel `Gather Merge`, which cannot be reused between loops at all. The generator now analyzes every table a measured read touches, every evidence file records `planningStatistics`, and the budget suite fails if any of them was never analyzed.
+
+The second: budget A missed at **p95 32.9 ms** with p50 3.1, min 2.6 and max 208.2 — one stalled iteration in sixty, on an operation that takes three milliseconds. Tier 2 writes a million journal lines immediately before the first iteration and those pages were still being flushed underneath it. The flush is forced after seeding and before the clock starts, and every measurement now records each iteration in the order it was taken, so a stall can be located rather than argued from percentiles.
+
+`التشغيلتان اللتان أنتجتا هذا جرتا على الالتزام a20ef09: تشغيلة CI رقم 35964921045 بخمس وظائف ناجحة وفيها خطوة بوّابة P2-S8 داخل وظيفة backend، وتشغيلة أدلة القبول رقم 35964915865 بأربع وظائف ناجحة ووثيقة أدلة بأحد عشر فحصًا ناجحًا وصفر إخفاق وصفر تخطٍّ. وقد كشف التشغيل على آلة GitHub خللين في القياس نفسه: جدول الحسابات دخل القياس بلا إحصاءات فأعاد المخطِّط تنفيذ التجميع مرة لكل حساب، والميزانية A انتظرت تفريغ مليون سطر كُتبت قبل أول تكرار. كلاهما مُصلَح في منصة القياس، ولم يُمسّ الترحيلان ولا الميزانيات.`
+
 ## 14. The verdict and the hard stop
 
 **`READY FOR TECH LEAD REVIEW`.** The blocker that held this slice — TD-11, budget C — is closed by candidate `0052`, under the authorization of 2026-09-24. All six budgets are met at the FULL acceptance scale, not only at tier 1, and the accounting answer is byte-identical before and after the change. Nothing in this document is a conditional pass: where something is still open it is listed in §12 with its reason.

@@ -236,7 +236,7 @@ journal". Unset and empty scopes stay silent and closed, as before. Cases L and 
 
 ## 6. What this page does NOT claim
 
-- **No tier-2 acceptance run is recorded here.** Until `release/phase2-s8-performance-tier2.json` exists, nothing on this page is a claim about 100 000 or 1 000 000 lines.
+- **No tier-2 acceptance run is recorded on THIS page.** That sentence used to read "no tier-2 acceptance run is recorded here", full stop, and it is no longer true of the slice: Tier 2 has since been measured on a GitHub runner at 104 478 reporting lines and 1 042 966 reconciliation lines, and the figures are in `docs/PHASE_2_S8_ACCEPTANCE.md` §13.1 with the run that produced them. The artefact itself — `release/phase2-s8-performance-tier2.json` — is uploaded by that workflow and is never committed, so it is not on disk in a fresh checkout. What remains true is that no number on THIS page is a claim about those sizes.
 - **No multi-instance, multi-tenant or network-latency measurement.** One process, one local database, one business.
 - **No claim that these milliseconds transfer to production hardware.** Compare **ordering and ratios** first — C is the most expensive read by an order of magnitude, D and E are tens of milliseconds, A and B are single- to low-double-digit — and re-measure on a quiet host before calling any absolute number a regression.
 
