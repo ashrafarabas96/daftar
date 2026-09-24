@@ -17,7 +17,7 @@
  */
 import { randomUUID } from 'node:crypto';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { Client, Pool } from 'pg';
+import { Client, Pool, type PoolClient } from 'pg';
 import { reconcile, type ReconciliationRunResult } from '@daftar/accounting';
 import {
   appClient,
@@ -382,6 +382,45 @@ describe('FI-09 / FI-10 — an audit or outbox insertion that fails rolls the co
   });
 });
 
+/**
+ * A connection that puts one unhurried statement in front of every scoped
+ * check, so the per-business bound is breached by arithmetic rather than by
+ * luck.
+ *
+ * The sleep is issued AFTER the reader has set its own `statement_timeout`,
+ * because the reader sets it as the first statement of the scope and this
+ * wrapper only delays the first statement that is not a `SET`. PostgreSQL
+ * then cancels the sleep at the bound — error 57014 — which is the same
+ * cancellation a genuinely slow check would receive, raised by the same
+ * mechanism, at the same place in the reader's control flow.
+ */
+class SlowFirstStatementConnection extends PoolReconciliationConnection {
+  override async scoped<T>(tenantId: string, businessId: string, fn: (c: PoolClient) => Promise<T>): Promise<T> {
+    return super.scoped(tenantId, businessId, (c) => fn(delayFirstStatement(c)));
+  }
+}
+
+/** The delay itself: once per scope, ahead of the first non-`SET` statement. */
+function delayFirstStatement(client: PoolClient): PoolClient {
+  let delayed = false;
+  const run = client.query.bind(client) as (...args: unknown[]) => Promise<unknown>;
+  const query = async (...args: unknown[]): Promise<unknown> => {
+    const first = args[0];
+    const sql = typeof first === 'string' ? first : ((first as { text?: string } | undefined)?.text ?? '');
+    if (!delayed && !/^\s*SET\b/i.test(sql)) {
+      delayed = true;
+      // Far longer than any bound this case sets, so the cancellation is a
+      // certainty rather than a race. It costs the bound, not the sleep,
+      // because PostgreSQL stops it at the bound.
+      await run('SELECT pg_sleep(0.5)');
+    }
+    return run(...args);
+  };
+  return new Proxy(client, {
+    get: (target, property, receiver): unknown => (property === 'query' ? query : Reflect.get(target, property, receiver)),
+  });
+}
+
 describe('FI-11 — a reconciliation alert that cannot be delivered changes no financial truth', () => {
   it('fails the cycle, leaves the journal untouched, and stays retryable', async () => {
     const pool = new Pool({ connectionString: reconcilerDbUrl, max: 1 });
@@ -419,22 +458,49 @@ describe('FI-11 — a reconciliation alert that cannot be delivered changes no f
    * §25, as an injected failure rather than as a comment: a check that runs
    * past its bound is reported, not skipped. The bound is imposed by
    * PostgreSQL, so the case proves the real mechanism.
+   *
+   * THE LATENCY IS INJECTED, AND THAT IS THE POINT. An earlier version of
+   * this case set the bound to one millisecond and asserted that at least one
+   * check breached it — which asked the machine, not the product. On a slow
+   * host the catalogue lookup took a few milliseconds and the case passed; on
+   * a fast GitHub runner every statement finished inside the millisecond, the
+   * cycle came back clean, and the case failed having proved nothing either
+   * way. A test whose verdict is decided by how fast the runner is does not
+   * hold the rule it is named after.
+   *
+   * So the delay is injected from outside the product, exactly as §30 allows
+   * and as every other case in this file does: the first statement of each
+   * scoped check is preceded by a sleep the bound cannot accommodate. Nothing
+   * about the mechanism is simulated — the reader sets `statement_timeout`
+   * itself, PostgreSQL cancels the statement, and the reconciler classifies
+   * what it gets back. What changed is only that the breach now happens on
+   * every machine instead of on a slow one.
    */
   it('a check that exceeds its per-business bound is an ERROR, never a silent skip', async () => {
     const pool = new Pool({ connectionString: reconcilerDbUrl, max: 1 });
     try {
-      const reader = new DatabaseAccountingReconciliationReader(new PoolReconciliationConnection(pool), 1);
-      const result = await reconcile(reader, clock);
-      // On a small fixture some checks still finish inside a millisecond, so
-      // the claim is not "everything fails" — it is that a check which
-      // BREACHES the bound is reported as an error and never quietly counted
-      // as a clean verdict.
-      expect(result.errorCount).toBeGreaterThan(0);
+      const plain = new DatabaseAccountingReconciliationReader(new PoolReconciliationConnection(pool), 1);
+      const bounded = new DatabaseAccountingReconciliationReader(new SlowFirstStatementConnection(pool), 1);
+      // Enumeration is not what is under test and must not be delayed: the
+      // cycle has to reach the checks for the checks to breach anything.
+      const injected = {
+        targets: () => plain.targets(),
+        check: (target: Parameters<typeof bounded.check>[0], checkId: Parameters<typeof bounded.check>[1]) => bounded.check(target, checkId),
+      };
+      const result = await reconcile(injected, clock);
+
+      expect(result.enumeration).toBe('complete');
+      // Every check breaches now, deterministically, so the claim is the
+      // whole matrix rather than "at least one of them".
+      expect(result.errorCount).toBe(result.businessCount * result.checkCount);
       for (const failed of result.results.filter((r) => r.status === 'error')) {
         expect(failed.errorCode).toBe('accounting.reconciliation_check_failed');
         expect(failed.offendingCount).toBe(0);
       }
+      // A breach is an error. It is never `unavailable`, which means "this
+      // credential could not look", and never a clean verdict.
       expect(result.results.some((r) => r.status === 'unavailable')).toBe(false);
+      expect(result.results.some((r) => r.status === 'ok')).toBe(false);
     } finally {
       await pool.end();
     }
