@@ -390,14 +390,25 @@ export const TIER1_SPEC: DatasetSpec = {
   ],
 };
 
-/** TIER 2 (§34 C/D/E): the 100,000-line reporting dataset. */
+/**
+ * TIER 2 (§34 C/D/E): the 100,000-line reporting dataset.
+ *
+ * The count is LINES, not entries, and an entry carries 2 to 6 of them, so
+ * the entry count is chosen to land above 100,000 rather than at a round
+ * number that looks like it. 25,000 entries produced 90,086 lines — a "100k"
+ * run that seeds 90k is a failure of evidence under §15, not a pass — and
+ * 29,000 clears it with margin on either side of the draw.
+ */
 export const TIER2_REPORTING_SPEC: DatasetSpec = {
   ...TIER1_SPEC,
-  entriesPerBusiness: 25_000,
+  entriesPerBusiness: 29_000,
 };
 
-/** TIER 2 (§34 F): the 1,000,000-line reconciliation dataset. */
+/**
+ * TIER 2 (§34 F): the 1,000,000-line reconciliation dataset. 250,000 entries
+ * produced 899,304 lines, for the same reason and with the same consequence.
+ */
 export const TIER2_RECONCILIATION_SPEC: DatasetSpec = {
   ...TIER1_SPEC,
-  entriesPerBusiness: 250_000,
+  entriesPerBusiness: 290_000,
 };

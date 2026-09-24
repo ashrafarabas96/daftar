@@ -32,11 +32,19 @@
  *
  * ── The rules this gate carries that no predecessor does ─────────────────
  *
- * 0051 is a CANDIDATE. It is not frozen, it is not in the manifest, and there
- * is no 0052 (§2, §44). That prohibition lives HERE, in P2-S8's own gate,
- * because it is P2-S8's rule — the P2-S7 gate deliberately dropped its own
- * copy when it became permanent, since an accepted historical gate that
- * forbids its successor is a gate that stops the project.
+ * 0051 and 0052 are CANDIDATES. Neither is frozen, neither is in the
+ * manifest, and there is no 0053 (§2, §44). That prohibition lives HERE, in
+ * P2-S8's own gate, because it is P2-S8's rule — the P2-S7 gate deliberately
+ * dropped its own copy when it became permanent, since an accepted historical
+ * gate that forbids its successor is a gate that stops the project.
+ *
+ * 0052 also gets a scope check of its own. It was authorized to reshape six
+ * named policies and replace three named helpers, and the authorization says
+ * in as many words that it extends to no other row-level security. A scope
+ * that lives only in a chat message is a scope nobody can re-check, so it is
+ * written here as an exact set: the six must all be present, because every
+ * partial correction measured SLOWER than no correction at all, and nothing
+ * outside the six may appear.
  *
  * It COMPOSES rather than duplicates: P2-S7's gate runs unchanged, and it
  * composes P2-S6 … P2-S1 and Phase 1 in turn.
@@ -78,16 +86,17 @@ const S8_MIGRATION = '0051_accounting_reconciler_read.sql';
 const S8_RLS_MIGRATION = '0052_accounting_journal_lines_rls_performance.sql';
 
 /**
- * The constraint the optimised policy is a consequence of.
+ * The constraints the optimised policies are a consequence of.
  *
- * Since `0052`, tenant isolation on `journal_lines` derives from the line's
- * own `tenant_id` instead of a per-row lookup in `businesses`. That is only
- * equivalent because this foreign key guarantees the pair, so the FK is now
+ * Since `0052`, tenant isolation on `journal_lines`, `journal_entries` and
+ * `accounts` derives from the row's own `tenant_id` instead of a per-row
+ * lookup in `businesses`. That is only equivalent because each table carries
+ * a composite foreign key guaranteeing the pair, so these FKs are now
  * load-bearing for ISOLATION and not merely for referential integrity. A
- * later migration that dropped, disabled or invalidated it would turn a proof
- * into an assumption silently — hence the static check below (§8).
+ * later migration that dropped, disabled or invalidated one would turn a
+ * proof into an assumption silently — hence the static check below (§8).
  */
-const TENANT_BUSINESS_FK = 'journal_lines_tenant_business_fk';
+const TENANT_BUSINESS_FKS = ['journal_lines_tenant_business_fk', 'journal_entries_tenant_business_fk', 'accounts_tenant_business_fk'] as const;
 
 /** The reconciliation authority, and the principals it must NOT be. */
 const RECONCILER = 'daftar_reconciler';
@@ -115,6 +124,8 @@ const P2_S8_TESTS = [
   'tests/security/accounting-raw-sql-invariants.test.ts',
   'tests/security/accounting-credential-matrix.test.ts',
   'tests/security/journal-lines-rls-policy.test.ts',
+  'tests/security/policy-helper-inlining.test.ts',
+  'tests/security/search-path-shadowing.test.ts',
   'tests/integration/accounting-reconciliation.test.ts',
   'tests/integration/runner-exit-code.test.ts',
 ];
@@ -245,45 +256,157 @@ function checkMigrationBoundary(): void {
  * un-validate it.
  */
 function checkFkDependencyIsProtected(): void {
-  console.log('P2-S8 GATE — the FK the optimised policy depends on (§8)');
+  console.log('P2-S8 GATE — the foreign keys the optimised policies depend on (§8)');
   const files = sqlFiles();
+  const texts = new Map(files.map((f) => [f, readFileSync(join(MIGRATIONS_DIR, f), 'utf8')] as const));
+  const rls = texts.get(S8_RLS_MIGRATION) ?? '';
 
-  const creators = files.filter((f) => readFileSync(join(MIGRATIONS_DIR, f), 'utf8').includes(`CONSTRAINT ${TENANT_BUSINESS_FK}`));
-  if (creators.length === 0) {
-    fail('s8-fk', `no migration declares ${TENANT_BUSINESS_FK} — the optimised tenant policy has no foundation`);
-  } else {
-    ok(`${TENANT_BUSINESS_FK} is declared in ${creators.join(', ')}`);
-  }
+  for (const fk of TENANT_BUSINESS_FKS) {
+    const creators = files.filter((f) => (texts.get(f) ?? '').includes(`CONSTRAINT ${fk}`));
+    if (creators.length === 0) {
+      fail('s8-fk', `no migration declares ${fk} — the optimised tenant policy that stands on it has no foundation`);
+    } else {
+      ok(`${fk} is declared in ${creators.join(', ')}`);
+    }
 
-  // Anything that would take it away, disable it, or leave it NOT VALID.
-  const dangerous: { file: string; statement: string }[] = [];
-  for (const file of files) {
-    const text = readFileSync(join(MIGRATIONS_DIR, file), 'utf8');
-    const patterns: readonly [RegExp, string][] = [
-      [new RegExp(`DROP\\s+CONSTRAINT\\s+(IF\\s+EXISTS\\s+)?${TENANT_BUSINESS_FK}`, 'i'), 'drops it'],
-      [new RegExp(`ALTER\\s+TABLE[^;]*DISABLE\\s+TRIGGER[^;]*${TENANT_BUSINESS_FK}`, 'is'), 'disables it'],
-      [new RegExp(`ALTER\\s+CONSTRAINT\\s+${TENANT_BUSINESS_FK}[^;]*NOT\\s+VALID`, 'is'), 'leaves it NOT VALID'],
-      [new RegExp(`ADD\\s+CONSTRAINT\\s+${TENANT_BUSINESS_FK}[^;]*NOT\\s+VALID`, 'is'), 'adds it NOT VALID'],
-    ];
-    for (const [pattern, what] of patterns) if (pattern.test(text)) dangerous.push({ file, statement: what });
-  }
-  if (dangerous.length > 0) {
+    // Anything that would take it away, disable it, or leave it NOT VALID.
+    const dangerous: { file: string; statement: string }[] = [];
+    for (const file of files) {
+      const text = texts.get(file) ?? '';
+      const patterns: readonly [RegExp, string][] = [
+        [new RegExp(`DROP\\s+CONSTRAINT\\s+(IF\\s+EXISTS\\s+)?${fk}`, 'i'), 'drops it'],
+        [new RegExp(`ALTER\\s+TABLE[^;]*DISABLE\\s+TRIGGER[^;]*${fk}`, 'is'), 'disables it'],
+        [new RegExp(`ALTER\\s+CONSTRAINT\\s+${fk}[^;]*NOT\\s+VALID`, 'is'), 'leaves it NOT VALID'],
+        [new RegExp(`ADD\\s+CONSTRAINT\\s+${fk}[^;]*NOT\\s+VALID`, 'is'), 'adds it NOT VALID'],
+      ];
+      for (const [pattern, what] of patterns) if (pattern.test(text)) dangerous.push({ file, statement: what });
+    }
     for (const d of dangerous) {
       fail(
         's8-fk',
-        `${d.file} ${d.statement} ${TENANT_BUSINESS_FK} — since 0052 that constraint is what makes tenant isolation on journal_lines correct, so removing it is a security change and not a schema tidy-up (§8)`,
+        `${d.file} ${d.statement} ${fk} — since 0052 that constraint is what makes tenant isolation correct on the table it protects, so removing it is a security change and not a schema tidy-up (§8)`,
       );
     }
+    if (dangerous.length === 0) ok(`no migration drops, disables or un-validates ${fk}`);
+
+    // And the dependency is written down where a reader of 0052 will meet it.
+    if (!rls.includes(fk)) {
+      fail('s8-fk', `${S8_RLS_MIGRATION} does not name ${fk} — the equivalence it relies on must be stated where the change is made (§3)`);
+    } else {
+      ok(`${S8_RLS_MIGRATION} names ${fk}, the constraint its equivalence depends on`);
+    }
+  }
+}
+
+/**
+ * ── What 0052 is allowed to contain ──────────────────────────────────────
+ *
+ * 0052 was authorized to do two things and nothing else: replace three policy
+ * helpers so the planner can inline them, and reshape six policies across the
+ * three tables the trial balance reads. The Tech Lead's authorization of
+ * 2026-09-24 is explicit that it does not extend to any other RLS ("لا توسّع
+ * 0052 إلى أي RLS أخرى دون دليل جديد وموافقة جديدة"), so the scope is checked
+ * here as text, where a reviewer can see it fail before a server exists.
+ *
+ * The six ALTERs are required to be present, by table and by policy name,
+ * because the measurement that justifies the change only holds for all six
+ * together: every partial state was measured SLOWER than doing nothing.
+ */
+const S8_RLS_POLICIES: readonly (readonly [string, string])[] = [
+  ['journal_lines', 'tenant_membership'],
+  ['journal_lines', 'business_isolation'],
+  ['journal_entries', 'tenant_membership'],
+  ['journal_entries', 'business_isolation'],
+  ['accounts', 'tenant_membership'],
+  ['accounts', 'business_isolation'],
+];
+
+/** The three policy helpers 0052 replaces, and the only ones it may replace. */
+const S8_RLS_HELPERS = ['app_tenant', 'app_business', 'app_bypass'] as const;
+
+function checkRlsMigrationContent(): void {
+  console.log('P2-S8 GATE — 0052 is a policy-shape migration and nothing else');
+  const raw = readIfPresent(`infrastructure/database/migrations/${S8_RLS_MIGRATION}`);
+  if (raw === null) return;
+  const sql = stripComments(raw);
+  // 0052's own assertion block names what it is asserting the ABSENCE of —
+  // BYPASSRLS, the write privileges, the role names — inside string literals.
+  // Blanking the literals is what lets this scan tell a privilege being taken
+  // from one being checked for, the same reason 0051's scan does it.
+  const sqlNoStrings = sql.replace(/'(?:[^']|'')*'/g, "''");
+
+  const forbidden: [RegExp, string][] = [
+    [/CREATE\s+(?:UNLOGGED\s+|TEMP\s+|TEMPORARY\s+)?TABLE\b/i, 'creates a table — no stored balance, ever (AL-15, §37)'],
+    [/CREATE\s+MATERIALIZED\s+VIEW\b/i, 'creates a materialized view — a second source of financial truth (AL-15)'],
+    [/CREATE\s+(?:OR\s+REPLACE\s+)?VIEW\b/i, 'creates a view'],
+    [/CREATE\s+(?:CONSTRAINT\s+)?TRIGGER\b/i, 'creates a trigger'],
+    [/CREATE\s+INDEX\b|CREATE\s+UNIQUE\s+INDEX\b/i, 'creates an index — 0050 is where the accounting indexes live and it is frozen'],
+    [/ADD\s+COLUMN\b/i, 'adds a column'],
+    [/\b(INSERT\s+INTO|UPDATE\s+\w+\s+SET|DELETE\s+FROM|TRUNCATE)\b/i, 'writes data'],
+    [/\bGRANT\b/i, 'grants a privilege — a performance correction is not permission to widen anything'],
+    [/\bREVOKE\b/i, "revokes a privilege — the privilege surface is 0051's business and bootstrap.sql's, not this file's"],
+    [/\bBYPASSRLS\b/i, 'mentions BYPASSRLS — §4 is non-negotiable'],
+    [/\bSUPERUSER\b(?!\s*;)/i, 'mentions SUPERUSER'],
+    [/CREATE\s+ROLE\b|ALTER\s+ROLE\b/i, 'touches a role'],
+    [/\bPASSWORD\b/i, 'contains a password — a migration must never know a credential'],
+    [/app\.bypass_rls/i, 'reaches for app.bypass_rls — since 0032 that GUC reads nothing'],
+    [/DROP\s+POLICY\b/i, 'drops a policy — ALTER POLICY keeps the table protected at every instant inside the transaction'],
+    [/CREATE\s+POLICY\b/i, 'creates a policy — 0052 reshapes existing boundaries and introduces none'],
+    [/DISABLE\s+ROW\s+LEVEL\s+SECURITY|NO\s+FORCE\s+ROW\s+LEVEL\s+SECURITY/i, 'turns row-level security off'],
+    [/ALTER\s+FUNCTION\b/i, 'alters a function in place — the replacement is asserted as a whole definition, not patched attribute by attribute'],
+  ];
+  let clean = true;
+  for (const [re, what] of forbidden) {
+    if (re.test(sqlNoStrings)) {
+      fail('s8-rls-migration-scope', `${S8_RLS_MIGRATION} ${what}`);
+      clean = false;
+    }
+  }
+  if (clean) ok(`${S8_RLS_MIGRATION} creates, grants, drops and stores nothing`);
+
+  // Exactly the six authorized ALTER POLICY statements, no more and no fewer.
+  const altered = [...sql.matchAll(/ALTER\s+POLICY\s+([A-Za-z_][A-Za-z0-9_]*)\s+ON\s+([A-Za-z_][A-Za-z0-9_]*)/gi)].map(
+    (m) => `${(m[2] ?? '').toLowerCase()}.${(m[1] ?? '').toLowerCase()}`,
+  );
+  const expected = S8_RLS_POLICIES.map(([t, p]) => `${t}.${p}`);
+  const unexpected = altered.filter((a) => !expected.includes(a));
+  const missing = expected.filter((e) => !altered.includes(e));
+  if (unexpected.length > 0) {
+    fail('s8-rls-migration-scope', `${S8_RLS_MIGRATION} alters policies nobody authorized: ${[...new Set(unexpected)].join(', ')}`);
+  }
+  if (missing.length > 0) {
+    fail(
+      's8-rls-migration-scope',
+      `${S8_RLS_MIGRATION} is missing ${missing.join(', ')} — every partial correction was measured SLOWER than no correction, so a subset is not a smaller fix, it is a regression`,
+    );
+  }
+  if (unexpected.length === 0 && missing.length === 0) ok(`${S8_RLS_MIGRATION} alters exactly the six authorized policies`);
+
+  // Exactly the three authorized helper replacements.
+  const replaced = [...sql.matchAll(/CREATE\s+OR\s+REPLACE\s+FUNCTION\s+([A-Za-z_][A-Za-z0-9_]*)/gi)].map((m) => (m[1] ?? '').toLowerCase());
+  const extra = replaced.filter((r) => !(S8_RLS_HELPERS as readonly string[]).includes(r));
+  const absent = S8_RLS_HELPERS.filter((h) => !replaced.includes(h));
+  if (extra.length > 0) fail('s8-rls-migration-scope', `${S8_RLS_MIGRATION} replaces functions nobody authorized: ${[...new Set(extra)].join(', ')}`);
+  if (absent.length > 0) fail('s8-rls-migration-scope', `${S8_RLS_MIGRATION} does not replace ${absent.join(', ')}`);
+  if (extra.length === 0 && absent.length === 0) ok(`${S8_RLS_MIGRATION} replaces exactly ${S8_RLS_HELPERS.join(', ')}`);
+
+  // The replacement must not smuggle authority into app_bypass(): the only
+  // DAFTAR principal its new body may name is the platform one.
+  const bypass = /CREATE\s+OR\s+REPLACE\s+FUNCTION\s+app_bypass[\s\S]*?;/i.exec(sql)?.[0] ?? '';
+  const named = [...new Set(bypass.match(/daftar_[a-z_]+/g) ?? [])];
+  if (named.length !== 1 || named[0] !== 'daftar_platform') {
+    fail('s8-rls-migration-scope', `${S8_RLS_MIGRATION} rewrites app_bypass() to name ${named.join(', ') || 'nothing'} — §4 pins it to daftar_platform alone`);
   } else {
-    ok(`no migration drops, disables or un-validates ${TENANT_BUSINESS_FK}`);
+    ok('the replaced app_bypass() still exempts daftar_platform and nobody else');
   }
 
-  // And the dependency is written down where a reader of 0052 will meet it.
-  const rls = files.includes(S8_RLS_MIGRATION) ? readFileSync(join(MIGRATIONS_DIR, S8_RLS_MIGRATION), 'utf8') : '';
-  if (!rls.includes(TENANT_BUSINESS_FK)) {
-    fail('s8-fk', `${S8_RLS_MIGRATION} does not name ${TENANT_BUSINESS_FK} — the equivalence it relies on must be stated where the change is made (§3)`);
-  } else {
-    ok(`${S8_RLS_MIGRATION} names the constraint its equivalence depends on, and asserts it before committing`);
+  // And the policy bodies must compare the COLUMN, which is the half of the
+  // correction that fixes the row estimate. A single surviving `::text =`
+  // would leave one relation estimating blindly beside two that do not.
+  for (const line of sql.split('\n')) {
+    if (/^\s*(USING|WITH CHECK)\b/i.test(line) && /::text\s*=/.test(line)) {
+      fail('s8-rls-migration-scope', `${S8_RLS_MIGRATION} still casts a column to text in: ${line.trim()}`);
+    }
   }
 }
 
@@ -767,7 +890,14 @@ function checkEvidence(): void {
       'tests/integration/accounting-reconciliation.test.ts',
       'the nine checks through the PRODUCTION authority, pagination, the schedule and crash/restart (§11, §17, §21, §22, §24)',
     ],
-    ['tests/security/journal-lines-rls-policy.test.ts', 'the FK foundation, the effective policy shape and the eleven-case isolation matrix (§7, §8, §9)'],
+    [
+      'tests/security/journal-lines-rls-policy.test.ts',
+      'the FK foundation, the effective policy shape and the isolation matrix A…M over all three corrected tables (§7, §8, §9)',
+    ],
+    [
+      'tests/security/policy-helper-inlining.test.ts',
+      'the three policy helpers: why they may carry no search_path, that nothing else joined that set, and that their authority did not move',
+    ],
     ['tests/performance/accounting-rls-equivalence.test.ts', 'the same read at 0051 and at 0052 on one database: the answer and the plan (§10, §11)'],
     ['tests/performance/accounting-budgets.test.ts', 'the six budgets, measured (f §34)'],
     ['tests/performance/accounting-dataset.ts', 'the deterministic dataset generator (f §31)'],
@@ -865,8 +995,8 @@ function checkRlsEquivalenceEvidence(): void {
     answerIdentical?: boolean;
     rowCount?: number;
     dataset?: { lineCount?: number };
-    before?: { mentionsBusinesses?: boolean; sharedHit?: number; sharedRead?: number };
-    after?: { mentionsBusinesses?: boolean; sharedHit?: number; sharedRead?: number };
+    before?: { subplanRelations?: Record<string, string[]>; sharedHit?: number; sharedRead?: number; executionMs?: number };
+    after?: { subplanRelations?: Record<string, string[]>; sharedHit?: number; sharedRead?: number; executionMs?: number };
   };
 
   if (!(e.boundaryBefore ?? '').startsWith('0051') || !(e.boundaryAfter ?? '').startsWith('0052')) {
@@ -882,11 +1012,25 @@ function checkRlsEquivalenceEvidence(): void {
     ok(`the trial balance is identical at 0051 and 0052 over ${e.dataset?.lineCount} lines, ${e.rowCount} accounts (§10)`);
   }
 
-  if (e.before?.mentionsBusinesses !== true || e.after?.mentionsBusinesses !== false) {
-    fail('s8-equivalence', 'the recorded plans do not show the correlated businesses lookup present before 0052 and absent after it (§11)');
+  // Attribution, not a mention. `businesses` appearing anywhere in a plan is
+  // not the defect — a relation being read ONCE PER ROW of another is — so the
+  // recorded evidence keys each per-row lookup to the scan it hangs under, and
+  // this reads that. Before: all three corrected tables do it. After: nothing
+  // does, under any relation at all.
+  const beforeSub = e.before?.subplanRelations ?? {};
+  const afterSub = e.after?.subplanRelations ?? {};
+  const missingBefore = ['journal_lines', 'journal_entries', 'accounts'].filter((t) => !(beforeSub[t] ?? []).includes('businesses'));
+  const remainingAfter = Object.entries(afterSub).filter(([, rels]) => rels.includes('businesses'));
+  if (missingBefore.length > 0 || remainingAfter.length > 0) {
+    fail(
+      's8-equivalence',
+      missingBefore.length > 0
+        ? `the recorded BEFORE plan shows no per-row businesses lookup under ${missingBefore.join(', ')} — the evidence does not contain the defect it claims to remove (§11)`
+        : `the recorded AFTER plan still reads businesses per row under ${remainingAfter.map(([t]) => t).join(', ')} (§11)`,
+    );
   } else {
-    const beforeBlocks = (e.before.sharedHit ?? 0) + (e.before.sharedRead ?? 0);
-    const afterBlocks = (e.after.sharedHit ?? 0) + (e.after.sharedRead ?? 0);
+    const beforeBlocks = (e.before?.sharedHit ?? 0) + (e.before?.sharedRead ?? 0);
+    const afterBlocks = (e.after?.sharedHit ?? 0) + (e.after?.sharedRead ?? 0);
     ok(`the per-row businesses lookup is gone from the plan: ${beforeBlocks} → ${afterBlocks} shared blocks (§11)`);
   }
 }
@@ -1012,7 +1156,9 @@ function runSteps(): void {
 
 if (LIST_ONLY) {
   console.log('P2-S8 GATE plan:');
-  console.log('  structural: frozenThrough unmoved at 0050; 0051 present and NOT in the manifest; no 0052');
+  console.log('  structural: frozenThrough unmoved at 0050; 0051 and 0052 present and NOT in the manifest; no 0053');
+  console.log('  structural: 0052 alters exactly six named policies, replaces exactly three named helpers, and creates/grants/stores nothing');
+  console.log('  structural: every table whose policy 0052 reshaped still carries the composite FK that equivalence stands on');
   console.log('  structural: 0051 creates one enumerator and no relation, index, column, role, password or policy drop');
   console.log('  structural: the enumerator is a hardened SECURITY DEFINER owned by the internal principal, PUBLIC revoked, keyset and clamped');
   console.log('  structural: column-level SELECT on exactly six tables, no write grant, no PII column, nothing granted to daftar_worker');
@@ -1031,6 +1177,7 @@ if (LIST_ONLY) {
 
 checkMigrationBoundary();
 checkMigrationContent();
+checkRlsMigrationContent();
 checkFkDependencyIsProtected();
 checkBypassContract();
 checkRoleAttributes();

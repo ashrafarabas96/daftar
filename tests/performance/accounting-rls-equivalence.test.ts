@@ -296,25 +296,27 @@ describe('§10 — the optimisation changes work, not the answer', () => {
 
 describe('§11 — the correlated businesses lookup is gone', () => {
   /**
-   * The narrow claim, and only it. `businesses` still appears in the plan
-   * after `0052`, and must: `journal_entries` and `accounts` carry policies of
-   * the same shape, and §5 forbids touching them in this slice. What changed
-   * is the attribution — no relation is read once per JOURNAL LINE any more.
+   * Attribution, not a relation count. `businesses` appearing in a plan is
+   * not the defect; a relation being read ONCE PER ROW of another is. So the
+   * question is asked of the scan the subplan hangs under, which is why
+   * `walk()` carries an owner through the tree instead of flattening it.
    */
-  it('at 0051 every journal line looks up businesses; at 0052 none does', () => {
-    expect(before.subplanRelations['journal_lines'] ?? [], `before: ${JSON.stringify(before.subplanRelations)}`).toContain('businesses');
-    expect(after.subplanRelations['journal_lines'] ?? [], `after: ${JSON.stringify(after.subplanRelations)}`).not.toContain('businesses');
+  it.each(['journal_lines', 'journal_entries', 'accounts'])('at 0051 %s looks up businesses per row; at 0052 it does not', (table) => {
+    expect(before.subplanRelations[table] ?? [], `before: ${JSON.stringify(before.subplanRelations)}`).toContain('businesses');
+    expect(after.subplanRelations[table] ?? [], `after: ${JSON.stringify(after.subplanRelations)}`).not.toContain('businesses');
   });
 
   /**
-   * And the rest of the schema is left exactly as it was. This is the other
-   * half of the same evidence: `0052` is narrow, so the per-row lookups it was
-   * not authorised to touch are still there, unchanged, on both sides.
+   * And the correction stops where the measurement stopped. The trial balance
+   * reads three relations; every other table in the schema still carries the
+   * shape 0042 and 0049 wrote, which `journal-lines-rls-policy.test.ts`
+   * asserts against the live catalogue rather than against a plan.
    */
-  it('while the entry-level and account-level policies are untouched', () => {
-    for (const table of ['journal_entries', 'accounts']) {
-      expect(before.subplanRelations[table] ?? [], `before ${table}`).toContain('businesses');
-      expect(after.subplanRelations[table] ?? [], `after ${table}`).toContain('businesses');
+  it('and no relation outside those three is read per row on either side', () => {
+    for (const state of [before, after]) {
+      for (const owner of Object.keys(state.subplanRelations)) {
+        expect(['journal_lines', 'journal_entries', 'accounts'], `unexpected per-row lookup under ${owner}`).toContain(owner);
+      }
     }
   });
 

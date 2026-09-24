@@ -67,15 +67,42 @@ async function scoped(c: Client, gucs: Record<string, string>): Promise<void> {
   for (const [k, v] of Object.entries(gucs)) await c.query(`SELECT set_config($1, $2, true)`, [k, v]);
 }
 
-async function visibleLines(url: string, gucs: Record<string, string>, businessId?: string): Promise<number> {
+async function visibleIn(table: string, url: string, gucs: Record<string, string>, businessId?: string): Promise<number> {
   return as(url, async (c) => {
     await scoped(c, gucs);
     try {
       const { rows } =
         businessId === undefined
-          ? await c.query<{ n: number }>(`SELECT count(*)::int AS n FROM journal_lines`)
-          : await c.query<{ n: number }>(`SELECT count(*)::int AS n FROM journal_lines WHERE business_id = $1`, [businessId]);
+          ? await c.query<{ n: number }>(`SELECT count(*)::int AS n FROM ${table}`)
+          : await c.query<{ n: number }>(`SELECT count(*)::int AS n FROM ${table} WHERE business_id = $1`, [businessId]);
       return must(rows[0]).n;
+    } finally {
+      await c.query('ROLLBACK').catch(() => undefined);
+    }
+  });
+}
+
+async function visibleLines(url: string, gucs: Record<string, string>, businessId?: string): Promise<number> {
+  return visibleIn('journal_lines', url, gucs, businessId);
+}
+
+/**
+ * What a caller presenting a scope that is not a uuid at all actually gets.
+ *
+ * Returned rather than asserted inline because the two acceptable answers are
+ * different SHAPES, not different values: PostgreSQL may reject the statement
+ * (`22P02 invalid_text_representation`, raised by the `::uuid` cast inside the
+ * policy) or it may never evaluate the cast and simply match nothing. Both are
+ * closed. What must never happen is a row, and that is what the cases assert.
+ */
+async function withMalformedScope(url: string, gucs: Record<string, string>, table: string): Promise<{ error: string | null; rows: number }> {
+  return as(url, async (c) => {
+    await scoped(c, gucs);
+    try {
+      const { rows } = await c.query<{ n: number }>(`SELECT count(*)::int AS n FROM ${table}`);
+      return { error: null, rows: must(rows[0]).n };
+    } catch (e) {
+      return { error: (e as { code?: string }).code ?? 'unknown', rows: -1 };
     } finally {
       await c.query('ROLLBACK').catch(() => undefined);
     }
@@ -201,12 +228,22 @@ async function policyDependsOnBusinesses(table: string, policy: string): Promise
   return must(rows[0]).n;
 }
 
+/**
+ * The three tables 0052 corrects, and the reason it is these three and no
+ * others: they are the three the trial balance reads in ONE statement. The
+ * measurement that forced the set is in the migration header — every partial
+ * correction leaves one relation estimating from real column statistics
+ * beside another estimating blindly, and the plan the planner picks for that
+ * mixture is worse than the one it picked before anything changed.
+ */
+const CORRECTED = ['journal_lines', 'journal_entries', 'accounts'] as const;
+
 describe('the effective policy shape, read from the live catalogue (§9)', () => {
-  it('journal_lines.tenant_membership carries NO dependency on businesses', async () => {
-    expect(await policyDependsOnBusinesses('journal_lines', 'tenant_membership')).toBe(0);
+  it.each(CORRECTED)('%s.tenant_membership carries NO dependency on businesses', async (table) => {
+    expect(await policyDependsOnBusinesses(table, 'tenant_membership')).toBe(0);
   });
 
-  it('it derives tenant isolation from journal_lines.tenant_id itself', async () => {
+  it.each(CORRECTED)('%s derives tenant isolation from its own tenant_id column', async (table) => {
     const { rows } = await ownerPool().query<{ permissive: string; cmd: string; qual: string; withcheck: string; depends_on_tenant_id: number }>(
       `SELECT CASE WHEN p.polpermissive THEN 'PERMISSIVE' ELSE 'RESTRICTIVE' END AS permissive,
               p.polcmd::text AS cmd,
@@ -216,10 +253,11 @@ describe('the effective policy shape, read from the live catalogue (§9)', () =>
                  FROM pg_depend d
                  JOIN pg_attribute a ON a.attrelid = d.refobjid AND a.attnum = d.refobjsubid
                 WHERE d.classid = 'pg_policy'::regclass AND d.objid = p.oid
-                  AND d.refclassid = 'pg_class'::regclass AND d.refobjid = 'journal_lines'::regclass
+                  AND d.refclassid = 'pg_class'::regclass AND d.refobjid = $1::regclass
                   AND a.attname = 'tenant_id') AS depends_on_tenant_id
          FROM pg_policy p
-        WHERE p.polrelid = 'journal_lines'::regclass AND p.polname = 'tenant_membership'`,
+        WHERE p.polrelid = $1::regclass AND p.polname = 'tenant_membership'`,
+      [table],
     );
     const row = must(rows[0]);
     expect(row.permissive).toBe('PERMISSIVE');
@@ -230,6 +268,34 @@ describe('the effective policy shape, read from the live catalogue (§9)', () =>
     expect(row.qual).toMatch(/tenant_id/);
     expect(row.qual).not.toMatch(/\bbusinesses\b/);
     expect(row.withcheck).not.toMatch(/\bbusinesses\b/);
+  });
+
+  /**
+   * The cast is the second half of the correction and it is a SECURITY
+   * property as much as a planning one: `tenant_id::text = app_tenant()`
+   * compares an expression PostgreSQL has no statistics for, and
+   * `tenant_id = nullif(app_tenant(), '')::uuid` compares the column. What
+   * makes it safe to assert here is that the rendered expression must carry
+   * the `nullif`: without it an unset scope would be the empty string, and
+   * `''::uuid` raises rather than matching nothing.
+   */
+  it.each(CORRECTED)('%s compares the column, and answers an unset scope with NULL', async (table) => {
+    const { rows } = await ownerPool().query<{ polname: string; qual: string; withcheck: string }>(
+      `SELECT p.polname,
+              pg_get_expr(p.polqual, p.polrelid)      AS qual,
+              pg_get_expr(p.polwithcheck, p.polrelid) AS withcheck
+         FROM pg_policy p
+        WHERE p.polrelid = $1::regclass AND p.polname IN ('tenant_membership', 'business_isolation')
+        ORDER BY p.polname`,
+      [table],
+    );
+    expect(rows).toHaveLength(2);
+    for (const row of rows) {
+      for (const expr of [row.qual, row.withcheck]) {
+        expect(expr, `${table}.${row.polname}`).not.toMatch(/::text\s*=/);
+        expect(expr, `${table}.${row.polname}`).toMatch(/NULLIF\(/i);
+      }
+    }
   });
 
   it('a plan for an ordinary tenant-scoped read contains no businesses subplan', async () => {
@@ -265,18 +331,44 @@ describe('the effective policy shape, read from the live catalogue (§9)', () =>
   });
 
   it('nothing else was optimised for consistency — the other tables keep the shape they had (§5)', async () => {
-    // The measured blocker was journal_lines and only journal_lines. A
-    // migration that "tidied up" the rest would have changed six security
-    // boundaries on the strength of one measurement.
-    for (const table of ['journal_entries', 'accounting_source_bindings', 'accounts', 'branches', 'memberships']) {
+    // The correction stops at the read it was measured on. Every other table
+    // carries the same written shape and is deliberately left alone: changing
+    // a security boundary on no measurement is not tidying up.
+    for (const table of [
+      'accounting_source_bindings',
+      'accounting_periods',
+      'accounting_period_operations',
+      'accounting_manual_adjustments',
+      'branches',
+      'memberships',
+    ]) {
       expect(await policyDependsOnBusinesses(table, 'tenant_membership'), table).toBeGreaterThan(0);
     }
   });
 
+  /**
+   * `prosrc` is empty for a SQL-standard body — the definition lives in
+   * `pg_proc.prosqlbody` as a parse tree, not as text — so the question is
+   * asked of `pg_get_function_sqlbody`, which deparses that tree. Reading
+   * `prosrc` here would have quietly compared against an empty string and
+   * passed no matter what the function did.
+   */
   it('app_bypass() still exempts daftar_platform alone', async () => {
-    const { rows } = await ownerPool().query<{ src: string }>(`SELECT prosrc AS src FROM pg_proc WHERE proname = 'app_bypass'`);
+    const { rows } = await ownerPool().query<{ body: string; names: string[] }>(
+      `SELECT pg_get_function_sqlbody(p.oid) AS body,
+              (SELECT coalesce(array_agg(DISTINCT m[1] ORDER BY m[1]), ARRAY[]::text[])
+                 FROM regexp_matches(pg_get_function_sqlbody(p.oid), 'daftar_[a-z_]+', 'g') AS m) AS names
+         FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+        WHERE n.nspname = 'public' AND p.proname = 'app_bypass'`,
+    );
     expect(rows).toHaveLength(1);
-    expect(must(rows[0]).src.replace(/\s+/g, ' ').trim()).toBe("SELECT current_user = 'daftar_platform'");
+    // Exactly one DAFTAR principal is named, and it is the platform one.
+    expect(must(rows[0]).names).toEqual(['daftar_platform']);
+    // And it is still a comparison against the session's authenticated role,
+    // not a settable flag: 0006 shipped `app.bypass_rls` and 0013 replaced it
+    // precisely because a GUC is something a caller can set.
+    expect(must(rows[0]).body.replace(/\s+/g, ' ').trim()).toMatch(/^RETURN \(CURRENT_USER = 'daftar_platform'::name\)$/i);
+    expect(must(rows[0]).body).not.toMatch(/current_setting/i);
   });
 });
 
@@ -362,5 +454,98 @@ describe('the isolation matrix, against seeded rows (§7)', () => {
     expect(await visibleLines(platformDbUrl, {})).toBe(all);
     expect(await visibleLines(workerDbUrl, { 'app.tenant_id': tenantA, 'app.business_id': businessA1 })).toBe(linesA1);
     expect(await visibleLines(workerDbUrl, {})).toBe(0);
+  });
+
+  /**
+   * CASE L is new with the uuid comparison and it is the one case where the
+   * OBSERVABLE behaviour changed, so it is asserted rather than described.
+   *
+   * `tenant_id::text = app_tenant()` answered a scope of `'not-a-uuid'` with
+   * silence: no match, no rows, no complaint. `tenant_id = nullif(app_tenant(),
+   * '')::uuid` answers it with `22P02`. Nothing became visible — a refusal is
+   * not a disclosure — and Zero Silent Errors says a caller presenting a
+   * malformed scope should be told, not quietly served an empty result it may
+   * read as "this business has no journal".
+   *
+   * The UNSET and EMPTY scopes are the ones that must stay silent, and they do:
+   * `nullif` turns both into NULL, `tenant_id = NULL` is NULL, and NULL is not
+   * true. Cases D and E already prove the unset half; M proves the empty half,
+   * which the old text comparison handled by accident (`'' <> any uuid text`)
+   * and this one handles on purpose.
+   */
+  it('CASE L — a malformed, non-empty tenant scope fails closed on every corrected table', async () => {
+    for (const table of ['journal_lines', 'journal_entries', 'accounts']) {
+      const r = await withMalformedScope(appDbUrl, { 'app.tenant_id': 'not-a-uuid', 'app.business_id': businessA1 }, table);
+      expect(r.rows, `${table} returned rows for a malformed tenant scope`).toBeLessThanOrEqual(0);
+      if (r.error !== null) expect(r.error, table).toBe('22P02');
+    }
+    // The same for a malformed BUSINESS scope against a valid tenant.
+    for (const table of ['journal_lines', 'journal_entries', 'accounts']) {
+      const r = await withMalformedScope(appDbUrl, { 'app.tenant_id': tenantA, 'app.business_id': 'not-a-uuid' }, table);
+      expect(r.rows, `${table} returned rows for a malformed business scope`).toBeLessThanOrEqual(0);
+      if (r.error !== null) expect(r.error, table).toBe('22P02');
+    }
+  });
+
+  it('CASE M — an EMPTY tenant or business scope is silent and closed, not an error', async () => {
+    expect(await visibleLines(appDbUrl, { 'app.tenant_id': '', 'app.business_id': businessA1 })).toBe(0);
+    expect(await visibleLines(appDbUrl, { 'app.tenant_id': tenantA, 'app.business_id': '' })).toBe(0);
+    expect(await visibleLines(appDbUrl, { 'app.tenant_id': '', 'app.business_id': '' })).toBe(0);
+  });
+});
+
+/**
+ * ── THE SAME MATRIX, FOR THE TWO TABLES 0052 ALSO CORRECTS ────────────────
+ *
+ * `journal_entries` and `accounts` were widened into 0052 because the trial
+ * balance reads all three in one statement and a partial correction plans
+ * worse than none. A boundary changed on performance grounds is asked the
+ * same questions as the one it was changed alongside — the answers below are
+ * the pre-0052 answers, table for table.
+ */
+describe('the isolation matrix on journal_entries and accounts (§7)', () => {
+  it.each(['journal_entries', 'accounts'])('%s — the scoped business is visible and nothing else is', async (table) => {
+    const own = await visibleIn(table, appDbUrl, { 'app.tenant_id': tenantA, 'app.business_id': businessA1 });
+    expect(own, `${table} showed the scoped caller nothing, so this case proves nothing`).toBeGreaterThan(0);
+    // A sibling business of the SAME tenant.
+    expect(await visibleIn(table, appDbUrl, { 'app.tenant_id': tenantA, 'app.business_id': businessA1 }, businessA2)).toBe(0);
+    // A business of a FOREIGN tenant.
+    expect(await visibleIn(table, appDbUrl, { 'app.tenant_id': tenantB, 'app.business_id': businessB1 }, businessA1)).toBe(0);
+    // The right business id under the WRONG tenant.
+    expect(await visibleIn(table, appDbUrl, { 'app.tenant_id': tenantB, 'app.business_id': businessA1 })).toBe(0);
+    // No tenant, and no business.
+    expect(await visibleIn(table, appDbUrl, { 'app.business_id': businessA1 })).toBe(0);
+    expect(await visibleIn(table, appDbUrl, { 'app.tenant_id': tenantA })).toBe(0);
+  });
+
+  it.each(['journal_entries', 'accounts'])('%s — daftar_platform bypasses and no other credential does', async (table) => {
+    const unscopedPlatform = await visibleIn(table, platformDbUrl, {});
+    const scopedApp = await visibleIn(table, appDbUrl, { 'app.tenant_id': tenantA, 'app.business_id': businessA1 });
+    expect(scopedApp, `${table} showed the scoped caller nothing`).toBeGreaterThan(0);
+    expect(unscopedPlatform, `${table}: the platform principal saw no more than one business`).toBeGreaterThan(scopedApp);
+    // An UNSCOPED ordinary credential sees nothing at all, which is the half
+    // that the uuid comparison had to keep: `nullif` turns an unset or empty
+    // scope into NULL, and `tenant_id = NULL` is NULL, not true.
+    expect(await visibleIn(table, appDbUrl, {})).toBe(0);
+  });
+
+  /**
+   * `daftar_worker` is refused `accounts` by PRIVILEGE, not by policy — it
+   * holds no SELECT on the chart at all — while on `journal_entries` it is
+   * granted SELECT and refused by the policy. Both are closed; they are closed
+   * by different mechanisms, and a case that counted rows for both would have
+   * quietly asserted the weaker one twice. 0052 changes neither.
+   */
+  it.each(['journal_entries', 'accounts'])('%s — daftar_worker is closed, by grant or by policy', async (table) => {
+    const unscoped = await withMalformedScope(workerDbUrl, {}, table);
+    if (unscoped.error !== null) expect(unscoped.error, `${table} refused the worker with an unexpected code`).toBe('42501');
+    else expect(unscoped.rows, `${table} showed an unscoped worker rows`).toBe(0);
+
+    const scoped = await withMalformedScope(workerDbUrl, { 'app.tenant_id': tenantA, 'app.business_id': businessA1 }, table);
+    if (scoped.error !== null) expect(scoped.error, table).toBe('42501');
+    else
+      expect(scoped.rows, `${table}: a scoped worker saw a different number of rows than the app credential`).toBe(
+        await visibleIn(table, appDbUrl, { 'app.tenant_id': tenantA, 'app.business_id': businessA1 }),
+      );
   });
 });

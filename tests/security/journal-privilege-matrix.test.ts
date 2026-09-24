@@ -289,10 +289,17 @@ describe('the accounting routine surface — exactly one runtime entry point (§
     // refuses one. Guard G-4 was widened in the same slice, from "protect
     // accounting_post_entry" to "protect every routine capable of a journal
     // write", so this list growing is not the protection weakening.
+    //
+    // It reads `prosrc` OR the deparsed `prosqlbody`, because a routine
+    // written in the SQL-standard body form keeps nothing in `prosrc` — since
+    // 0052 this schema contains such routines, and a scan that asked only
+    // `prosrc` would silently stop seeing a whole class of writer while
+    // continuing to report a clean list.
     const { rows } = await ownerPool().query<{ proname: string }>(
       `SELECT p.proname FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
         WHERE n.nspname = 'public'
-          AND p.prosrc ~* '(insert|update|delete)[[:space:]]+(into[[:space:]]+)?(journal_entries|journal_lines|accounting_source_bindings)'
+          AND coalesce(nullif(p.prosrc, ''), pg_get_function_sqlbody(p.oid), '')
+              ~* '(insert|update|delete)[[:space:]]+(into[[:space:]]+)?(journal_entries|journal_lines|accounting_source_bindings)'
         ORDER BY p.proname`,
     );
     expect(rows.map((r) => r.proname)).toEqual(['accounting_post_entry', 'accounting_post_reversal']);
@@ -344,7 +351,16 @@ describe('RLS is real on the ledger', () => {
   });
 
   it('app_bypass() is still only the platform principal — P2-S2 did not widen it', async () => {
-    const { rows } = await ownerPool().query<{ src: string }>(`SELECT prosrc AS src FROM pg_proc WHERE proname = 'app_bypass'`);
+    // `prosrc` holds the body only while it is TEXT. Since 0052 the body is a
+    // SQL-standard one, stored as a parse tree in `prosqlbody`, and `prosrc`
+    // is empty — so a `not.toMatch` against it would pass for any definition
+    // at all, including a widened one. `coalesce` asks whichever one holds
+    // the definition, which keeps this case meaningful in both worlds.
+    const { rows } = await ownerPool().query<{ src: string }>(
+      `SELECT coalesce(nullif(p.prosrc, ''), pg_get_function_sqlbody(p.oid)) AS src
+         FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+        WHERE n.nspname = 'public' AND p.proname = 'app_bypass'`,
+    );
     expect(rows).toHaveLength(1);
     expect(rows[0]?.src).toMatch(/daftar_platform/);
     expect(rows[0]?.src).not.toMatch(/daftar_accounting_internal|daftar_app|daftar_worker/);

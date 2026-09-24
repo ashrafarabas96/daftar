@@ -19,10 +19,13 @@ The first half is the Tech Lead's decision, taken as Option B: a seventh databas
 | migration | SHA-256 | state |
 |---|---|---|
 | `0051_accounting_reconciler_read.sql` | `2086c87564f5f66243ab64753e7c4f5338f896a1e29984ddf8977be8ba7587cc` | **CANDIDATE — NOT frozen, NOT in the manifest** |
+| `0052_accounting_journal_lines_rls_performance.sql` | `0acf165003c678f8d3017797e77033fadf2e9e791be54f98048031108c72ad84` | **CANDIDATE — NOT frozen, NOT in the manifest** |
 
-`MIGRATION_MANIFEST.json` is **unchanged**: 51 frozen migrations, `frozenThrough = 0050_accounting_report_indexes.sql`. P2-S8 froze nothing and created no `0052`. `gate:phase2:s8` enforces all three as equalities rather than floors, because §44 is a hard stop and a gate that only checks a floor would let the stop be crossed quietly.
+`MIGRATION_MANIFEST.json` is **unchanged**: 51 frozen migrations, `frozenThrough = 0050_accounting_report_indexes.sql`. P2-S8 froze nothing and created no `0053`. `gate:phase2:s8` enforces all of that as equalities rather than floors, because §44 is a hard stop and a gate that only checks a floor would let the stop be crossed quietly.
 
-`السجل لم يتغيّر: 51 ترحيلًا مجمَّدًا، والحدّ ما زال عند 0050. الترحيل 0051 مرشَّح فقط: موجود على القرص، غائب عن السجل. لم يُنشَأ 0052، والبوّابة تفرض ذلك كمساواة لا كحدٍّ أدنى.`
+`0052` was authorized separately, on 2026-09-24, after the performance evidence was re-measured at acceptance scale and the first diagnosis was refuted — see §11 and `docs/PHASE_2_PERFORMANCE_BASELINE.md` §5.3. It was corrected **in place** rather than superseded by a `0053`: a candidate under review is not history, and a review that answers a correction with a new number leaves the reviewer reading two files to learn one thing.
+
+`السجل لم يتغيّر: 51 ترحيلًا مجمَّدًا، والحدّ ما زال عند 0050. الترحيلان 0051 و0052 مرشَّحان فقط: موجودان على القرص، غائبان عن السجل. لم يُنشَأ 0053، والبوّابة تفرض ذلك كمساواة لا كحدٍّ أدنى.`
 
 - Branch: `phase/2-accounting-core` · Draft PR: **#2** (stays draft for all of Phase 2)
 
@@ -134,26 +137,34 @@ Sentinel values — a distinctive amount, a memo, a rate, an assertion, a secret
 
 **With a symmetric HMAC, moving the signer behind a KMS does not remove the secret from the trust boundary — it moves it from the merchant API process to PostgreSQL.** Verification needs the same key that signing needs, and `pgcrypto` cannot verify Ed25519, so only an asymmetric redesign actually removes it. Remote HMAC would buy revocability and observability, which are real, but not secrecy. No fake KMS was built and nothing is claimed to be implemented. Recorded as **TD-10** and escalated to the Tech Lead as a design decision.
 
-## 11. Performance — **five budgets of six met; C misses, and the miss is why this slice is BLOCKED**
+## 11. Performance — **all six budgets met, at the FULL acceptance scale**
 
-| # | case | p95 | ceiling | verdict |
-|---|---|---:|---:|---|
-| A | `post()` in an open transaction | 11.2 ms | 15 ms | PASS |
-| B | manual-adjustment endpoint | 24.6 ms | 60 ms | PASS |
-| C | whole-business trial balance | **504.5 ms** | 500 ms | **FAIL** |
-| D | 50-row ledger page | 63.9 ms | 150 ms | PASS |
-| E | account balance as-of | 49.7 ms | 100 ms | PASS |
-| F | full reconciliation pass (total) | 1 863.2 ms | 300 000 ms | PASS |
+The blocker is closed. The table that matters is the tier-2 one, because tier 1 is a smoke test and the ceilings were written for tier-2 volumes.
 
-Measured at `cd8a3047c2cbd56d0315d2eecdf6ddb903933af7`, 30 iterations each, over 21 614 journal lines on an idle four-core box. An independent repeat of the same code gave 13.0 / 28.2 / **524.0** / 75.0 / 55.8 ms: C misses in both.
+**Tier 2 — the acceptance measurement.** 104 478 journal lines for the reporting cases, 1 042 966 for the reconciliation pass, 60 iterations each:
 
-**E missed first, at 488.6 ms, and was fixed here**: the account restriction was applied outside the aggregate, so one account's balance cost a whole-business scan. Pushing the same restriction inside the aggregate — provably answer-preserving, since it restricts the `GROUP BY` key — took the query from 420 ms and 68 108 blocks to 29 ms and 5 644, and the budget case to 55.8 ms. No schema change, no new index.
+| # | case | p50 | p95 | ceiling | verdict |
+|---|---|---:|---:|---:|---|
+| A | `post()` in an open transaction | 6.2 ms | 9.2 ms | 15 ms | PASS |
+| B | manual-adjustment endpoint | 14.8 ms | 20.9 ms | 60 ms | PASS |
+| C | whole-business trial balance | **179.0 ms** | **205.7 ms** | 500 ms | **PASS** |
+| D | 50-row ledger page | 62.9 ms | 92.0 ms | 150 ms | PASS |
+| E | account balance as-of | 47.9 ms | 74.0 ms | 100 ms | PASS |
+| F | full reconciliation pass (total) | 13 977.8 ms | 13 977.8 ms | 300 000 ms | PASS |
 
-**C is diagnosed and NOT fixed.** The identical query, same rows, same box: **437.7 ms and 67 866 blocks** under RLS, **12.9 ms and 724 blocks** with the policy not evaluated. The overshoot is small and the cause is not: the read costs 34× what it needs to, and it only looks borderline because tier 1 runs 21 614 lines against a ceiling written for 100 000. The permissive `tenant_membership` policy is planned as a correlated `EXISTS` **per row** on `journal_lines`, while the same policy is hashed once on `journal_entries`. Four query-level rewrites were measured; all returned byte-identical rows and **all read exactly the same 67 866 blocks**. The repair is to the policy's shape, which lives in a frozen migration — so §36 applies and the decision is the Tech Lead's. Full numbers and plans: `docs/PHASE_2_PERFORMANCE_BASELINE.md` §5.2; registered as **TD-11**.
+**Tier 1 — the per-push run**, 21 614 lines, 30 iterations, run twice: A 7.8 / B 18.4 / **C 93.2** / D 24.7 / E 38.0 ms p95. C was **504.5 ms** and, on an independent repeat, **524.0 ms** before the correction.
 
-`خمس ميزانيات من ست ضمن السقف. الميزانية E أُصلحت هنا على مستوى التطبيق. الميزانية C مُشخَّصة ولم تُصلَح: السبب شكل سياسة عزل الصفوف على جدول سطور القيود، وهي داخل ترحيل مجمَّد — لذلك القرار للقائد التقني، وهذا سبب حالة BLOCKED.`
+**Two evidence defects were found and fixed while re-measuring, and they are worth naming.** The tier-2 dataset was producing 90 086 lines where the spec claimed 100 000 and 899 304 where it claimed 1 000 000 — a budget declared met at 90 % of the stated size is not met. The entry counts were raised until the real line counts cleared both figures. And the tier-2 validity assertion was comparing one business's line count against the sum of both datasets, so it could never have caught the first defect.
 
-See `docs/PHASE_2_PERFORMANCE_BASELINE.md` for the measured numbers, the dataset that produced them and the machine they were measured on. The dataset generator is deterministic (seeded PRNG, fixed end date) and financially valid by construction: it mirrors the database's own banker's-rounding rule in `BigInt`, because the deferred validators frozen in `0043` reject anything else.
+**What closed C, and the claim this page withdraws.** §11 of the previous revision said the cause was a correlated `EXISTS` planned per row on `journal_lines`. **That claim is withdrawn.** It was measured at tier 1 and refuted at acceptance scale: removing the subplan changed 118 828 shared blocks into 118 827 and the report was no faster. The dominant costs were elsewhere — three policy helpers PostgreSQL could not inline because they carried `SET search_path`, and a cast on the compared column that destroyed the row estimate. Candidate `0052` fixes both, across the three tables the trial balance reads, because every partial correction measured **slower than no correction at all**. The full sequence, the numbers, and what was refuted by what: `docs/PHASE_2_PERFORMANCE_BASELINE.md` §5.3.
+
+**E missed first, at 488.6 ms, and was fixed at the application level**: the account restriction was applied outside the aggregate, so one account's balance cost a whole-business scan. Pushing the same restriction inside the aggregate — provably answer-preserving, since it restricts the `GROUP BY` key — took that query from 420 ms and 68 108 blocks to 29 ms and 5 644. No schema change, no new index.
+
+**The answer did not change.** The trial balance was captured at every stage of the correction and is byte-identical throughout, which `tests/performance/accounting-rls-equivalence.test.ts` asserts independently of any timing.
+
+`كل الميزانيات الستّ مستوفاة عند حجم القبول الكامل: الميزانية C من ٥٠٤٫٥ إلى ٢٠٥٫٧ مللي ثانية (p95) مقابل سقف ٥٠٠، على ١٠٤٬٤٧٨ سطرًا. وقد سُحب ادعاء النسخة السابقة عن سبب البطء صراحةً: القياس عند حجم القبول فنّده. كما صُحّح عيبان في الأدلة نفسها: مجموعة بيانات المستوى الثاني كانت أصغر من الحجم المعلن، والتحقق من صحّتها كان يقارن الرقم الخطأ.`
+
+See `docs/PHASE_2_PERFORMANCE_BASELINE.md` for the machine, the dataset and the plans. The dataset generator is deterministic (seeded PRNG, fixed end date) and financially valid by construction: it mirrors the database's own banker's-rounding rule in `BigInt`, because the deferred validators frozen in `0043` reject anything else.
 
 **No materialization was added.** AL-15 stands: every figure is still aggregated from the journal at read time, there is no stored balance, no rollup table and no materialized view, and the gate sweeps the whole schema and the whole application for all three.
 
@@ -163,15 +174,17 @@ See `docs/PHASE_2_PERFORMANCE_BASELINE.md` for the measured numbers, the dataset
 |---|---|---|
 | **TD-09** | The refusal of a future-dated entry lives in the three posting commands, not in a schema constraint. Raw SQL by the schema owner can insert one | Not reachable by any application path, and the raw-SQL matrix asserts **both halves** — the commands refuse it, the schema does not. Closing it needs a `CHECK` on `journal_entries.entry_date`, and `0000–0050` are frozen while `0051` was authorized to carry the reconciliation authority and nothing else |
 | **TD-10** | Assertion signing is symmetric and the secret lives in the merchant API process | The KMS review's own conclusion: the change is a redesign, not a configuration. Escalated |
-| **TD-11** | Budget C misses: the RLS policy on `journal_lines` is planned per row, costing 34× the same read without the policy | **This is the blocker.** No application-level fix exists — five rewrites measured, all identical in rows and in blocks read. The repair is a schema change to a frozen migration, which P2-S8 may not make |
+| ~~**TD-11**~~ | ~~Budget C misses~~ | **CLOSED by candidate `0052`.** Kept in this table with its outcome rather than deleted, because the first diagnosis of it was recorded here as settled and later refuted; see §11 and `PHASE_2_PERFORMANCE_BASELINE.md` §5.3. It reopens if `0052` is not accepted |
 | **§36** | `daftar_migrator` cannot apply the accepted migration history | See §7.2. Answering it would mean widening the migration principal, which P2-S1 forbids |
 
 ## 13. The verdict and the hard stop
 
-**`P2-S8 BLOCKED — PERFORMANCE EVIDENCE JUSTIFIES A SCHEMA CHANGE`** (§36). Everything else in this document stands on its own evidence and is ready to read; the slice is not ready to accept, because one of its six budgets is missed for a reason that cannot be repaired without a change this slice is not authorized to make. Per §42 there is no conditional pass and no "ready apart from".
+**`READY FOR TECH LEAD REVIEW`.** The blocker that held this slice — TD-11, budget C — is closed by candidate `0052`, under the authorization of 2026-09-24. All six budgets are met at the FULL acceptance scale, not only at tier 1, and the accounting answer is byte-identical before and after the change. Nothing in this document is a conditional pass: where something is still open it is listed in §12 with its reason.
 
-`الحكم: P2-S8 محجوبة — دليل الأداء يبرّر تغييرًا في المخطَّط. بقية الشريحة مكتملة وموثَّقة، لكنها لا تُقبَل ما دامت إحدى الميزانيات الستّ غير مستوفاة لسبب لا يُصلَح إلا بتغيير غير مأذون به في هذه الشريحة. ولا يوجد قبول مشروط.`
+The blocker's own history is part of the evidence rather than tidied out of it. The first diagnosis was wrong about the dominant cause, it was written into this page and into the baseline as if it were settled, and it was refuted by a measurement taken at the scale the budget is actually written for. Both the claim and its retraction are kept, because a reader who only sees the corrected version cannot tell which parts of it were checked.
 
-`0051` is **not frozen**. There is **no `0052`**. **P2-S9 has not begun.** Only a new explicit Tech Lead directive lifts any of the three.
+`الحكم: جاهزة لمراجعة القائد التقني. العائق TD-11 أُغلق بالترحيل المرشَّح 0052 بموجب تفويض ٢٤ أيلول، والميزانيات الستّ كلها مستوفاة عند حجم القبول الكامل لا عند المستوى الأول فقط، والإجابة المحاسبية متطابقة حرفيًا قبل التغيير وبعده. التشخيص الأول كان خاطئًا في تحديد السبب المهيمن، وقد حُفظ مع سحبه صراحةً بدل حذفه.`
 
-`الترحيل 0051 غير مجمَّد، ولا وجود لـ0052، ولم تبدأ P2-S9. ولا يرفع أيًّا من الثلاثة إلا توجيه صريح جديد من القائد التقني.`
+`0051` is **not frozen**. `0052` is **not frozen**. There is **no `0053`**. **P2-S9 has not begun.** Only a new explicit Tech Lead directive lifts any of the four.
+
+`الترحيلان 0051 و0052 غير مجمَّدين، ولا وجود لـ0053، ولم تبدأ P2-S9. ولا يرفع أيًّا من الأربعة إلا توجيه صريح جديد من القائد التقني.`

@@ -462,10 +462,18 @@ describe('the live privilege surface (§68, §69)', () => {
     expect(r.rows[0]).toEqual({ rolcanlogin: false, rolbypassrls: false, rolsuper: false, can_create: false });
   });
 
-  it('leaves app_bypass() exactly as Phase 1 wrote it (§3)', async () => {
+  it('leaves app_bypass() exempting exactly the principal Phase 1 named (§3)', async () => {
+    // 0052 replaced the body with a SQL-standard one — a parse tree rather
+    // than text — so the deparsed form reads `CURRENT_USER = 'daftar_platform'
+    // ::name` where Phase 1 wrote `current_user = 'daftar_platform'`. The same
+    // comparison against the same role: `current_user` HAS type `name`, so the
+    // cast is what the original always meant. What this case is for is the
+    // principal, so it asks about the principal and not about the spelling.
     const r = await ownerPool().query<{ def: string }>(`SELECT pg_get_functiondef('app_bypass()'::regprocedure) AS def`);
-    expect(must(r.rows[0]).def).toContain("current_user = 'daftar_platform'");
+    expect(must(r.rows[0]).def.toLowerCase()).toContain("current_user = 'daftar_platform'");
     expect(must(r.rows[0]).def).not.toContain('daftar_accounting_internal');
+    // …and no other DAFTAR principal joined it.
+    expect([...new Set(must(r.rows[0]).def.match(/daftar_[a-z_]+/g) ?? [])]).toEqual(['daftar_platform']);
   });
 });
 

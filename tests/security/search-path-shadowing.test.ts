@@ -374,6 +374,25 @@ describe('the effective-state SECURITY DEFINER audit (§7, §9, §23)', () => {
    * This case pins that exception down: it must be exactly the
    * daftar_platform-owned set, it must not grow, and the TEMPORARY revocation
    * proven above is what covers it.
+   *
+   * ── The second exception, and why it is not a weakening ────────────────
+   *
+   * A routine with a SQL-standard body (`prosqlbody IS NOT NULL`) is excluded
+   * too, and for the opposite reason to the first exception: not because it
+   * cannot be hardened, but because there is nothing left in it to harden.
+   * PostgreSQL parses such a body WHEN THE FUNCTION IS CREATED and stores the
+   * resulting parse tree, recording every object it touches in `pg_depend`.
+   * A string body (`AS $$ … $$`) is kept as text and parsed at CALL time,
+   * which is the moment `search_path` decides what each unqualified name
+   * means; a parse tree has no such moment. Pinning a path on one would
+   * protect nothing and would cost something real — `inline_function()`
+   * refuses to inline any function carrying a SET clause, which is what P2-S8
+   * measured costing 1.56 µs per row per call inside an RLS expression.
+   *
+   * The exclusion is not taken on trust: `policy-helper-inlining.test.ts`
+   * asserts the whole set against the live catalogue — who is in it, that
+   * each body is fully schema-qualified, and that none of them is SECURITY
+   * DEFINER — and fails if a routine joins it without meeting all of that.
    */
   it('the only routines left unhardened are the ones no migrator may own', async () => {
     const r = await ownerPool().query<{ sig: string; owner: string }>(
@@ -382,6 +401,7 @@ describe('the effective-state SECURITY DEFINER audit (§7, §9, §23)', () => {
        JOIN pg_namespace n ON n.oid = p.pronamespace
        JOIN pg_roles     o ON o.oid = p.proowner
        WHERE n.nspname = 'public' AND p.prokind = 'f'
+         AND p.prosqlbody IS NULL
          AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.objid = p.oid AND d.deptype = 'e')
          AND NOT EXISTS (SELECT 1 FROM unnest(coalesce(p.proconfig, ARRAY[]::text[])) AS c
                          WHERE c ~ $re$^search_path=.*,\\s*pg_temp$$re$)

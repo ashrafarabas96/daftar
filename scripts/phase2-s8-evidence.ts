@@ -70,6 +70,15 @@ const migrations = readdirSync(MIGRATIONS_DIR)
   .filter((f) => f.endsWith('.sql'))
   .sort();
 const CANDIDATE = '0051_accounting_reconciler_read.sql';
+/**
+ * The second candidate, authorized on 2026-09-24 once the performance evidence
+ * had been re-measured at acceptance scale and the first diagnosis refuted.
+ * It was corrected IN PLACE through review rather than superseded by a 0053:
+ * a candidate is not history, and answering a correction with a new number
+ * makes the reviewer read two files to learn one thing.
+ */
+const RLS_CANDIDATE = '0052_accounting_journal_lines_rls_performance.sql';
+const CANDIDATES = [CANDIDATE, RLS_CANDIDATE] as const;
 
 add(
   'BOUNDARY-01',
@@ -80,16 +89,16 @@ add(
 );
 add(
   'BOUNDARY-02',
-  '0051 exists on disk and is absent from the manifest — a candidate, not frozen (g §2)',
+  '0051 and 0052 exist on disk and are absent from the manifest — candidates, not frozen (g §2)',
   true,
-  migrations.includes(CANDIDATE) && !manifest.migrations.some((m) => m.name === CANDIDATE) ? 'PASS' : 'FAIL',
-  `${CANDIDATE} SHA-256 ${migrations.includes(CANDIDATE) ? sha256(`infrastructure/database/migrations/${CANDIDATE}`) : '(absent)'}`,
+  CANDIDATES.every((c) => migrations.includes(c) && !manifest.migrations.some((m) => m.name === c)) ? 'PASS' : 'FAIL',
+  CANDIDATES.map((c) => `${c} SHA-256 ${migrations.includes(c) ? sha256(`infrastructure/database/migrations/${c}`) : '(absent)'}`).join('; '),
 );
 add(
   'BOUNDARY-03',
-  'no 0052 and nothing beyond it (g §44)',
+  'no 0053 and nothing beyond it (g §44)',
   true,
-  migrations.filter((f) => f > CANDIDATE).length === 0 ? 'PASS' : 'FAIL',
+  migrations.filter((f) => f > RLS_CANDIDATE).length === 0 ? 'PASS' : 'FAIL',
   `highest migration on disk: ${migrations[migrations.length - 1] ?? '(none)'}`,
 );
 {

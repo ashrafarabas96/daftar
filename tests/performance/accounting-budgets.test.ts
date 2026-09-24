@@ -369,7 +369,11 @@ describe('the dataset is what it claims to be (§32)', () => {
     );
     const row = must(rows[0]);
     expect({ unbalanced: row.unbalanced, unbound: row.unbound }).toEqual({ unbalanced: '0', unbound: '0' });
-    expect(Number(row.lines)).toBeGreaterThanOrEqual(seededLines);
+    // `reportingLines`, not `seededLines`: the query above counts THIS
+    // business, and at tier 2 `seededLines` also carries the second,
+    // million-line business that F walks. Comparing the one against the other
+    // compared a business against the whole database.
+    expect(Number(row.lines)).toBeGreaterThanOrEqual(reportingLines);
   });
 
   it('reaches the size the tier claims', () => {

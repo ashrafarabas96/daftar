@@ -47,9 +47,33 @@ export interface RoutineHeader {
   readonly securityDefiner: boolean;
   /** The raw `search_path=` value, or null when the routine pins none. */
   readonly searchPath: string | null;
+  /**
+   * True when the body is written in the SQL-standard form — `RETURN <expr>`
+   * or `BEGIN ATOMIC … END` — rather than as a string literal (`AS $$ … $$`).
+   *
+   * The distinction is not stylistic. A string body is text: PostgreSQL keeps
+   * it verbatim in `pg_proc.prosrc` and PARSES IT AT CALL TIME, which is when
+   * the caller's `search_path` decides what each unqualified name means. A
+   * SQL-standard body is parsed and RESOLVED AT CREATE TIME and stored as a
+   * parse tree in `pg_proc.prosqlbody`, with every referenced object recorded
+   * in `pg_depend`. Nothing is left to resolve when it runs, so no path — the
+   * caller's or a pinned one — can reach it.
+   */
+  readonly sqlStandardBody: boolean;
 }
 
 const HEADER = /CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(/gi;
+
+/**
+ * Where a routine's options stop and its body starts.
+ *
+ * `$…$` and `AS '` open a string body. `RETURN` and `BEGIN ATOMIC` open a
+ * SQL-standard one — and they have to be here, not only for the flag above:
+ * without them the window for a SQL-standard routine would run to the end of
+ * the file and pick up the NEXT routine's `SET search_path` as its own.
+ * `\bRETURN\b` does not match `RETURNS`.
+ */
+const BODY_START = /\$[A-Za-z_]*\$|\bAS\s+'|\bRETURN\b|\bBEGIN\s+ATOMIC\b/i;
 
 /**
  * Every routine a migration file defines, with the options PostgreSQL would
@@ -67,7 +91,7 @@ export function parseRoutines(sql: string): RoutineHeader[] {
   for (const m of schema.matchAll(HEADER)) {
     const name = m[1] ?? '';
     const from = m.index ?? 0;
-    const body = /\$[A-Za-z_]*\$|\bAS\s+'/.exec(schema.slice(from));
+    const body = BODY_START.exec(schema.slice(from));
     const header = schema.slice(from, from + (body?.index ?? schema.length - from));
     const path =
       /\bSET\s+search_path\s*(?:=|\bTO\b)\s*([^;]*?)(?=\s+(?:AS|LANGUAGE|STABLE|IMMUTABLE|VOLATILE|STRICT|SECURITY|RETURNS|PARALLEL|COST|ROWS|WINDOW|SET)\b|$)/i.exec(
@@ -77,6 +101,7 @@ export function parseRoutines(sql: string): RoutineHeader[] {
       name,
       securityDefiner: /\bSECURITY\s+DEFINER\b/i.test(header),
       searchPath: path?.[1]?.trim() ?? null,
+      sqlStandardBody: /^(?:RETURN\b|BEGIN\s+ATOMIC\b)/i.test(body?.[0] ?? ''),
     });
   }
   return out;
@@ -138,8 +163,24 @@ export function findDefinerSearchPathViolations(src: DefinerSearchPathSources): 
       if (frozen) continue;
 
       if (routine.searchPath === null) {
-        // A routine with no pinned path takes the caller's entirely, which is
-        // strictly worse than a badly ordered one.
+        // ONE routine shape needs no path, and it is not an exemption: it is
+        // the absence of the thing a path protects. A SQL-standard body
+        // (`RETURN …`, `BEGIN ATOMIC … END`) is resolved when the function is
+        // CREATED and stored as a parse tree, so at call time there is no
+        // unqualified name left for any search_path to bind. Pinning one on
+        // such a routine changes nothing except to make it non-inlinable:
+        // `inline_function()` refuses outright to inline a function carrying
+        // a SET clause, which is what P2-S8 measured costing 1.56 µs per row
+        // per call inside a row-level security expression.
+        //
+        // SECURITY DEFINER is still excluded. Not because a definer's SQL
+        // body would resolve late — it would not — but because this guard's
+        // subject is elevated routines, and an elevated one that looks
+        // unpinned should have to say why in a place a reviewer reads, not
+        // pass a regex. Nothing in DAFTAR needs that combination today.
+        if (routine.sqlStandardBody && !routine.securityDefiner) continue;
+        // Everything else: a routine with no pinned path takes the caller's
+        // entirely, which is strictly worse than a badly ordered one.
         v.push(`${file}: ${routine.name} pins no search_path, so it resolves every name through the caller's (G-5)`);
         continue;
       }
