@@ -157,33 +157,65 @@ describe('the migration boundary can be broken, and the gate says so (f §24)', 
     expectRefusal(structuralGate(root), /0052_accounting_journal_lines_rls_performance\.sql is missing/);
   }, 180_000);
 
-  it('refuses a 0053 — the hard stop f §0 and §28 name', () => {
+  /**
+   * The converse of every other case here, and the one that has to be proved
+   * rather than assumed. P2-S8 is accepted history now, and an accepted
+   * historical gate that forbids its successor is a gate that stops the
+   * project. The candidate-era rule — "no 0053 may exist" — went with the
+   * candidacy; this case exists so that nobody can quietly put it back.
+   */
+  it('ACCEPTS a tree that carries a later migration — a permanent gate does not block its successor', () => {
     const root = cleanCheckout();
-    rewrite(root, `${MIGRATIONS}/0053_accounting_next_slice.sql`, '-- the slice nobody authorized\nSELECT 1;\n');
-    expectRefusal(structuralGate(root), /migrations beyond 0052 exist \(0053_accounting_next_slice\.sql\)/);
+    rewrite(root, `${MIGRATIONS}/0053_accounting_next_slice.sql`, '-- a later slice, authorized by a future directive\nSELECT 1;\n');
+    const run = structuralGate(root);
+    expect(run.output, run.output.slice(-4000)).toContain('P2-S8 GATE: PASS (structural checks only)');
+    expect(run.status).toBe(0);
   }, 180_000);
 
   it.each([
     ['0051', '0051_accounting_reconciler_read.sql'],
     ['0052', '0052_accounting_journal_lines_rls_performance.sql'],
   ])(
-    'refuses a prematurely frozen %s',
+    'refuses an unfrozen %s — it is accepted history, not a candidate',
     (_label, name) => {
       const root = cleanCheckout();
       const manifest = JSON.parse(readFrom(root, MANIFEST)) as { frozenThrough: string; migrations: { name: string; sha256: string }[] };
-      // Frozen WITH the correct digest, so nothing but the freeze itself is
-      // wrong: a manifest entry that also failed its checksum would prove a
-      // different check.
-      const sha = createHash('sha256')
-        .update(readFileSync(join(root, MIGRATIONS, name)))
-        .digest('hex');
-      manifest.migrations.push({ name, sha256: sha });
-      manifest.frozenThrough = name;
+      manifest.migrations = manifest.migrations.filter((m) => m.name !== name);
       rewrite(root, MANIFEST, `${JSON.stringify(manifest, null, 2)}\n`);
-      expectRefusal(structuralGate(root), /is recorded in the manifest — it is a CANDIDATE and P2-S8 may not freeze it/);
+      expectRefusal(structuralGate(root), /is not recorded in MIGRATION_MANIFEST\.json — P2-S8 was accepted/);
     },
     180_000,
   );
+
+  it.each([
+    ['0051', '0051_accounting_reconciler_read.sql'],
+    ['0052', '0052_accounting_journal_lines_rls_performance.sql'],
+  ])(
+    'refuses a %s re-frozen at a digest that is not the accepted one',
+    (_label, name) => {
+      const root = cleanCheckout();
+      // Both halves moved together — the file AND its recorded hash — which is
+      // exactly what a manifest-only check cannot see. The gate's second
+      // source is the accepted digest compiled into it.
+      rewrite(root, `${MIGRATIONS}/${name}`, `${readFrom(root, `${MIGRATIONS}/${name}`)}\n-- a byte nobody accepted\n`);
+      const manifest = JSON.parse(readFrom(root, MANIFEST)) as { frozenThrough: string; migrations: { name: string; sha256: string }[] };
+      const sha = createHash('sha256')
+        .update(readFileSync(join(root, MIGRATIONS, name)))
+        .digest('hex');
+      manifest.migrations = manifest.migrations.map((m) => (m.name === name ? { name, sha256: sha } : m));
+      rewrite(root, MANIFEST, `${JSON.stringify(manifest, null, 2)}\n`);
+      expectRefusal(structuralGate(root), /but was accepted at .+ — the manifest disagrees with the acceptance/);
+    },
+    180_000,
+  );
+
+  it('refuses a manifest whose boundary moved BACK below 0052', () => {
+    const root = cleanCheckout();
+    const manifest = JSON.parse(readFrom(root, MANIFEST)) as { frozenThrough: string; migrations: { name: string; sha256: string }[] };
+    manifest.frozenThrough = '0050_accounting_report_indexes.sql';
+    rewrite(root, MANIFEST, `${JSON.stringify(manifest, null, 2)}\n`);
+    expectRefusal(structuralGate(root), /P2-S8 was accepted and frozen, so it must be at least/);
+  }, 180_000);
 });
 
 describe('the reconciler authority can be widened, and the gate says so (f §24)', () => {

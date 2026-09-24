@@ -30,15 +30,33 @@
  *     added to make failure injection possible (f §30);
  *   — a stored balance or a materialized view added to make a budget (f §37).
  *
- * ── The rules this gate carries that no predecessor does ─────────────────
+ * ── This gate is PERMANENT ───────────────────────────────────────────────
  *
- * 0051 and 0052 are CANDIDATES. Neither is frozen, neither is in the
- * manifest, and there is no 0053 (§2, §44). That prohibition lives HERE, in
- * P2-S8's own gate, because it is P2-S8's rule — the P2-S7 gate deliberately
- * dropped its own copy when it became permanent, since an accepted historical
- * gate that forbids its successor is a gate that stops the project.
+ * P2-S8 was accepted at head d4ec6c4f5be838e3c47d40719e44d3213727e566, with
+ * `DAFTAR CI` 35966829333 (five jobs SUCCESS) and `DAFTAR P2-S8 acceptance
+ * evidence` 35966820087 (release gate PASS) on that exact SHA. Both of its
+ * migrations were frozen at the digests they were accepted at. So the
+ * question this gate asks changed: not "is the candidate correct" but "is
+ * the accepted slice still exactly what was accepted".
  *
- * 0052 also gets a scope check of its own. It was authorized to reshape six
+ * It carries both accepted digests as an INDEPENDENT SECOND SOURCE and
+ * requires each file to hash to it on disk AND in the manifest, so one commit
+ * cannot move a migration and its recorded hash together.
+ *
+ * The candidate-era rules went with the candidacy. `frozenThrough` was an
+ * EQUALITY at 0050 and is now a FLOOR at 0052: a permanent gate has no
+ * opinion about how far the boundary has moved since, only that it never
+ * moved back. The "no 0053 may exist" clause is GONE, because an accepted
+ * historical gate that forbids its successor is a gate that stops the
+ * project — a later authorized phase creates 0053 and this gate stays green.
+ * P2-S9 is still forbidden from creating one; that prohibition belongs to
+ * P2-S9's own closure gate, not to this one. Every actual P2-S8 behaviour
+ * check is kept, unweakened: runner-can-fail, the runner guard, reconciler
+ * authority, no repair authority, the RLS answer-equivalence contract, the
+ * load-bearing FK dependencies, G-1…G-6, supply-chain hygiene, the Tier 1
+ * budgets, failure injection and every predecessor gate.
+ *
+ * 0052 also keeps the scope check of its own. It was authorized to reshape six
  * named policies and replace three named helpers, and the authorization says
  * in as many words that it extends to no other row-level security. A scope
  * that lives only in a chat message is a scope nobody can re-check, so it is
@@ -92,15 +110,20 @@ const MIGRATIONS_DIR = join(ROOT, 'infrastructure/database/migrations');
 const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 
 /**
- * The boundary P2-S7's acceptance left behind, and the boundary P2-S8 must
- * leave UNMOVED. Not a floor, an equality: §44 forbids freezing 0051, so a
- * frozenThrough past 0050 while this gate runs means the hard stop was
- * crossed.
+ * The boundary P2-S8's acceptance left behind. A FLOOR, never an equality:
+ * this gate is permanent now, and a permanent gate has no opinion about how
+ * far the boundary has moved since — only that it never moved back.
  */
-const FROZEN_THROUGH_EXACTLY = '0050_accounting_report_indexes.sql';
+const FROZEN_THROUGH_AT_LEAST = '0052_accounting_journal_lines_rls_performance.sql';
 
-/** The reconciliation-authority migration P2-S8 was authorized to create (§2). */
+/**
+ * The reconciliation-authority migration this slice owns. Accepted history
+ * now; it may never vanish, and its bytes may never change.
+ */
 const S8_MIGRATION = '0051_accounting_reconciler_read.sql';
+
+/** The digest 0051 was accepted at, carried here as a second source. */
+const S8_MIGRATION_ACCEPTED = '2086c87564f5f66243ab64753e7c4f5338f896a1e29984ddf8977be8ba7587cc';
 
 /**
  * The SECOND candidate, authorized separately once the performance evidence
@@ -110,9 +133,12 @@ const S8_MIGRATION = '0051_accounting_reconciler_read.sql';
  * responsibility — reconciler read authority — and `0052` has one — the RLS
  * performance correction. Folding the second into the first would have made
  * one file that a reviewer has to read twice with two different questions in
- * mind. Both stay CANDIDATES until the Tech Lead accepts them.
+ * mind. Both were accepted together and are frozen history now.
  */
 const S8_RLS_MIGRATION = '0052_accounting_journal_lines_rls_performance.sql';
+
+/** The digest 0052 was accepted at, carried here as a second source. */
+const S8_RLS_MIGRATION_ACCEPTED = '0acf165003c678f8d3017797e77033fadf2e9e791be54f98048031108c72ad84';
 
 /**
  * The constraints the optimised policies are a consequence of.
@@ -210,7 +236,7 @@ function collectAppFiles(): Record<string, string> {
   return out;
 }
 
-// ── 1. The boundary: 0050 frozen, 0051 a candidate, no 0052 (§2, §37, §44) ──
+// ── 1. The boundary: 0000–0052 frozen, 0051 and 0052 at their digests ──────
 function checkMigrationBoundary(): void {
   console.log('P2-S8 GATE — the migration boundary');
   const files = sqlFiles();
@@ -219,17 +245,15 @@ function checkMigrationBoundary(): void {
     migrations: { name: string; sha256: string }[];
   };
 
-  // §44: the hard stop. P2-S8 may not freeze 0051.
-  if (manifest.frozenThrough !== FROZEN_THROUGH_EXACTLY) {
-    fail(
-      's8-hard-stop',
-      `frozenThrough is ${manifest.frozenThrough} — P2-S8 freezes nothing. The boundary stays at ${FROZEN_THROUGH_EXACTLY} until a new Tech Lead directive says otherwise (§44).`,
-    );
+  // A floor, not an equality: P2-S8 was accepted and frozen, so the boundary
+  // must be at least 0052 — and a later authorized phase may push it further.
+  if (manifest.frozenThrough < FROZEN_THROUGH_AT_LEAST) {
+    fail('accepted-history', `frozenThrough is ${manifest.frozenThrough} — P2-S8 was accepted and frozen, so it must be at least ${FROZEN_THROUGH_AT_LEAST}`);
   } else {
-    ok(`frozenThrough = ${manifest.frozenThrough} — unmoved, as §44 requires`);
+    ok(`frozenThrough = ${manifest.frozenThrough} — at or beyond the P2-S8 acceptance boundary`);
   }
 
-  // §37: 0000–0050 byte-for-byte. The manifest script asserts this too; this
+  // Every frozen migration byte-for-byte. The manifest script asserts this too; this
   // is the independent second read, in a process that is not that script.
   let drifted = 0;
   for (const m of manifest.migrations) {
@@ -247,34 +271,56 @@ function checkMigrationBoundary(): void {
   }
   if (drifted === 0) ok(`all ${manifest.migrations.length} frozen migrations are byte-for-byte what the manifest recorded`);
 
-  // §2: exactly two new migrations, and BOTH are candidates.
-  for (const [candidate, why] of [
-    [S8_MIGRATION, 'the reconciliation authority lives in it'],
-    [S8_RLS_MIGRATION, 'the journal_lines tenant-policy correction lives in it'],
+  // The two migrations this slice owns, each pinned to the digest the Tech
+  // Lead accepted — on disk AND in the manifest, so that one commit cannot
+  // move a file and its recorded hash together and call the result frozen.
+  const recorded = new Map(manifest.migrations.map((m) => [m.name, m.sha256] as const));
+  for (const [accepted, digest, why] of [
+    [S8_MIGRATION, S8_MIGRATION_ACCEPTED, 'the reconciliation authority lives in it'],
+    [S8_RLS_MIGRATION, S8_RLS_MIGRATION_ACCEPTED, 'the journal_lines tenant-policy correction lives in it'],
   ] as const) {
-    if (!files.includes(candidate)) {
-      fail('s8-migration', `${candidate} is missing — it is authorized, and ${why}`);
+    if (!files.includes(accepted)) {
+      fail('accepted-history', `${accepted} is missing — it is accepted history, and ${why}`);
       continue;
     }
-    ok(`${candidate} present`);
-    if (manifest.migrations.some((m) => m.name === candidate)) {
-      fail('s8-hard-stop', `${candidate} is recorded in the manifest — it is a CANDIDATE and P2-S8 may not freeze it (§2, §29)`);
-    } else {
-      ok(`${candidate} is a candidate: present on disk, absent from the manifest`);
+    ok(`${accepted} present`);
+
+    const inManifest = recorded.get(accepted);
+    if (inManifest === undefined) {
+      fail('accepted-history', `${accepted} is not recorded in MIGRATION_MANIFEST.json — P2-S8 was accepted, so its migrations are frozen history`);
+      continue;
     }
-    const digest = createHash('sha256')
-      .update(readFileSync(join(MIGRATIONS_DIR, candidate)))
+    if (inManifest !== digest) {
+      fail(
+        'accepted-history',
+        `${accepted} is recorded at ${inManifest.slice(0, 12)}… but was accepted at ${digest.slice(0, 12)}… — the manifest disagrees with the acceptance`,
+      );
+      continue;
+    }
+    const onDisk = createHash('sha256')
+      .update(readFileSync(join(MIGRATIONS_DIR, accepted)))
       .digest('hex');
-    ok(`${candidate} SHA-256 ${digest}`);
+    if (onDisk !== digest) {
+      fail(
+        'accepted-history',
+        `${accepted} hashes to ${onDisk.slice(0, 12)}… on disk but was accepted at ${digest.slice(0, 12)}… — accepted bytes are immutable`,
+      );
+    } else {
+      ok(`${accepted} is frozen at its accepted digest ${digest.slice(0, 12)}…, on disk and in the manifest`);
+    }
   }
 
-  // §29: no 0053 and nothing beyond it.
+  // This gate is PERMANENT, and deliberately has NO opinion about whether a
+  // later authorized migration exists. The candidate-era "no 0053" clause
+  // went with the candidacy: a historical gate that forbids its successor is
+  // a gate that stops the project. P2-S9's own closure gate keeps that rule
+  // for as long as P2-S9 is the current slice.
   const beyond = files.filter((f) => f > S8_RLS_MIGRATION);
-  if (beyond.length > 0) {
-    fail('s8-hard-stop', `migrations beyond 0052 exist (${beyond.join(', ')}) — §29 forbids creating 0053 and forbids beginning P2-S9`);
-  } else {
-    ok('no migration beyond 0052 exists');
-  }
+  ok(
+    beyond.length === 0
+      ? 'no migration beyond 0052 exists yet'
+      : `${beyond.length} migration(s) beyond 0052 exist — a permanent gate does not forbid an authorized successor`,
+  );
 }
 
 /**

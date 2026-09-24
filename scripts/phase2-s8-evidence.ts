@@ -109,45 +109,70 @@ const manifest = JSON.parse(read('infrastructure/database/MIGRATION_MANIFEST.jso
 const migrations = readdirSync(MIGRATIONS_DIR)
   .filter((f) => f.endsWith('.sql'))
   .sort();
-const CANDIDATE = '0051_accounting_reconciler_read.sql';
+const S8_MIGRATION = '0051_accounting_reconciler_read.sql';
 /**
- * The second candidate, authorized on 2026-09-24 once the performance evidence
- * had been re-measured at acceptance scale and the first diagnosis refuted.
- * It was corrected IN PLACE through review rather than superseded by a 0053:
- * a candidate is not history, and answering a correction with a new number
- * makes the reviewer read two files to learn one thing.
+ * The second migration of the slice, authorized on 2026-09-24 once the
+ * performance evidence had been re-measured at acceptance scale and the first
+ * diagnosis refuted. It was corrected IN PLACE through review rather than
+ * superseded by a 0053: a candidate is not history, and answering a
+ * correction with a new number makes the reviewer read two files to learn one
+ * thing.
+ *
+ * Both were accepted at head d4ec6c4f5be838e3c47d40719e44d3213727e566 and are
+ * frozen history now, so the boundary rows below changed from "is this still
+ * an unfrozen candidate" to "is this still exactly what was accepted".
  */
-const RLS_CANDIDATE = '0052_accounting_journal_lines_rls_performance.sql';
-const CANDIDATES = [CANDIDATE, RLS_CANDIDATE] as const;
+const S8_RLS_MIGRATION = '0052_accounting_journal_lines_rls_performance.sql';
+/** The digests the Tech Lead accepted, carried here as a second source. */
+const S8_ACCEPTED: Record<string, string> = {
+  [S8_MIGRATION]: '2086c87564f5f66243ab64753e7c4f5338f896a1e29984ddf8977be8ba7587cc',
+  [S8_RLS_MIGRATION]: '0acf165003c678f8d3017797e77033fadf2e9e791be54f98048031108c72ad84',
+};
+const S8_MIGRATIONS = [S8_MIGRATION, S8_RLS_MIGRATION] as const;
 
 add(
   'BOUNDARY-01',
-  'frozenThrough is unmoved at 0050 — P2-S8 froze nothing (g §44)',
+  'frozenThrough is at or beyond 0052 — P2-S8 is accepted and frozen',
   true,
-  manifest.frozenThrough === '0050_accounting_report_indexes.sql' ? 'PASS' : 'FAIL',
+  manifest.frozenThrough >= S8_RLS_MIGRATION ? 'PASS' : 'FAIL',
   `MIGRATION_MANIFEST.json frozenThrough = ${manifest.frozenThrough}`,
 );
 add(
   'BOUNDARY-02',
-  '0051 and 0052 exist on disk and are absent from the manifest — candidates, not frozen (g §2)',
+  '0051 and 0052 are frozen at their accepted digests, on disk and in the manifest',
   true,
-  CANDIDATES.every((c) => migrations.includes(c) && !manifest.migrations.some((m) => m.name === c)) ? 'PASS' : 'FAIL',
-  CANDIDATES.map((c) => `${c} SHA-256 ${migrations.includes(c) ? sha256(`infrastructure/database/migrations/${c}`) : '(absent)'}`).join('; '),
+  S8_MIGRATIONS.every(
+    (c) =>
+      migrations.includes(c) &&
+      sha256(`infrastructure/database/migrations/${c}`) === S8_ACCEPTED[c] &&
+      manifest.migrations.some((m) => m.name === c && m.sha256 === S8_ACCEPTED[c]),
+  )
+    ? 'PASS'
+    : 'FAIL',
+  S8_MIGRATIONS.map((c) => `${c} SHA-256 ${migrations.includes(c) ? sha256(`infrastructure/database/migrations/${c}`) : '(absent)'}`).join('; '),
 );
-add(
-  'BOUNDARY-03',
-  'no 0053 and nothing beyond it (g §44)',
-  true,
-  migrations.filter((f) => f > RLS_CANDIDATE).length === 0 ? 'PASS' : 'FAIL',
-  `highest migration on disk: ${migrations[migrations.length - 1] ?? '(none)'}`,
-);
+{
+  // Every migration in the accepted range is frozen — a hole would mean some
+  // file inside accepted history is not covered by a recorded digest. This
+  // row deliberately does NOT forbid a migration beyond 0052: that hard stop
+  // belongs to whichever slice is current, not to a permanent evidence
+  // document about an accepted one.
+  const unfrozen = migrations.filter((f) => f <= S8_RLS_MIGRATION && !manifest.migrations.some((m) => m.name === f));
+  add(
+    'BOUNDARY-03',
+    'no unfrozen migration exists inside the accepted range 0000–0052',
+    true,
+    unfrozen.length === 0 ? 'PASS' : 'FAIL',
+    `${migrations.filter((f) => f <= S8_RLS_MIGRATION).length} migration(s) in range, ${unfrozen.length} unfrozen; highest on disk: ${migrations[migrations.length - 1] ?? '(none)'}`,
+  );
+}
 {
   const drifted = manifest.migrations.filter(
     (m) => !existsSync(join(MIGRATIONS_DIR, m.name)) || sha256(`infrastructure/database/migrations/${m.name}`) !== m.sha256,
   );
   add(
     'BOUNDARY-04',
-    '0000–0050 byte-for-byte immutable (g §37)',
+    '0000–0052 byte-for-byte immutable — every frozen migration hashes to its recorded digest',
     true,
     drifted.length === 0 ? 'PASS' : 'FAIL',
     drifted.length === 0
@@ -319,12 +344,13 @@ const evidence = {
   boundary: {
     frozenThrough: manifest.frozenThrough,
     frozenCount: manifest.migrations.length,
-    candidates: P2_S8_CANDIDATES.map((name) => ({
+    sliceMigrations: P2_S8_CANDIDATES.map((name) => ({
       name,
       sha256: migrations.includes(name) ? sha256(`infrastructure/database/migrations/${name}`) : null,
+      acceptedSha256: S8_ACCEPTED[name] ?? null,
       frozen: manifest.migrations.some((m) => m.name === name),
     })),
-    beyondCandidate: migrations.filter((f) => f > RLS_CANDIDATE),
+    beyondSlice: migrations.filter((f) => f > S8_RLS_MIGRATION),
   },
   checks,
   summary: {
