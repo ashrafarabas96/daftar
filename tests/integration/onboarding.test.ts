@@ -1,4 +1,6 @@
+import { randomUUID } from 'node:crypto';
 import { beforeEach, describe, expect, it } from 'vitest';
+import { post, simpleCommand, todayIn, type PostingFixture } from '../helpers/accounting-posting';
 import { createTestApp, ownerPool, resetData, uniqueEmail, type TestApp } from '../helpers/test-app';
 
 /** Onboarding (§45, §53–55): golden locales, atomicity, idempotency, slug race, currency lock. */
@@ -272,8 +274,28 @@ describe('onboarding', () => {
         .send({ currency: 'USD' });
       expect(change.status).toBe(201);
 
-      // Simulate first financial transaction (Phase 2 concern; here we only test the guard).
-      await ownerPool().query('UPDATE businesses SET financial_started_at = now() WHERE id = $1', [businessId]);
+      // Start the business's financial life the ONLY way it can now be started:
+      // by posting a journal entry. Since P2-S3, `businesses_financial_start_guard()`
+      // refuses `financial_started_at` to every hand but the posting authority,
+      // so the raw UPDATE this test used to simulate it with is refused — which
+      // is the point of the guard, and makes this the stronger evidence anyway:
+      // the lock is now proved against a real first posting.
+      const me = await t.request.get('/v1/auth/me').set('Authorization', `Bearer ${token}`);
+      const row = (
+        await ownerPool().query<{ tenant_id: string; timezone: string; base_currency: string }>(
+          'SELECT tenant_id, timezone, base_currency FROM businesses WHERE id = $1',
+          [businessId],
+        )
+      ).rows[0];
+      if (!row) throw new Error('the onboarded business was not found');
+      const fixture = { tenantId: row.tenant_id, businessId, userId: me.body.userId as string } as PostingFixture;
+      const entryDate = await todayIn(ownerPool(), row.timezone);
+      // The currency was changed to USD above, and every line must be
+      // denominated in whatever the business's base currency is at posting time.
+      const command = simpleCommand(fixture, randomUUID(), entryDate);
+      await post({ ...command, lines: command.lines.map((l) => ({ ...l, baseCurrency: row.base_currency, txnCurrency: row.base_currency })) }, fixture.userId);
+      expect((await ownerPool().query('SELECT 1 FROM businesses WHERE id = $1 AND financial_started_at IS NOT NULL', [businessId])).rowCount).toBe(1);
+
       const locked = await t.request
         .post('/v1/businesses/current/base-currency')
         .set('Authorization', `Bearer ${token}`)

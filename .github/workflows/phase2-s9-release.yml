@@ -1,0 +1,232 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# P2-S9 RELEASE EVIDENCE — the release candidate, proved on GitHub, at one
+# exact commit.
+#
+# WHAT THIS PRODUCES, AND WHY IT IS ONE JOB
+#
+# The Phase 2 release claim is a chain, and every link has to be the SAME
+# tree:
+#
+#   1. the release gate passes on the repository checkout                (§27)
+#   2. an archive is built FROM that checkout                            (§24)
+#   3. the archive is extracted into a clean directory with NO .git      (§28)
+#   4. the release gate passes AGAIN, inside the extraction              (§28)
+#   5. the evidence file is assembled from what 1–4 actually produced    (§25)
+#
+# Splitting that across jobs would mean shipping the archive between runners
+# and taking on faith that the thing extracted in step 3 is the thing built in
+# step 2. One job, one working directory, one commit.
+#
+# WHAT A GREEN RUN HERE MEANS, EXACTLY
+#
+#   for the commit named in `Resolve the commit under release`: both gate runs
+#   reported PASS with 0 failures and 0 mandatory skips, the second of them on
+#   a tree that had no `.git` and no repository around it, the archive carries
+#   no working tree / dependency tree / secret / build output, and its delivery
+#   manifest describes the same tree hash and commit that the archive gate ran
+#   against.
+#
+# It does NOT stand in for `ci.yml`, which still has to be green on the same
+# commit, and `ci.yml` does not stand in for this.
+# ─────────────────────────────────────────────────────────────────────────────
+name: DAFTAR P2-S9 release evidence
+
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: 'The EXACT commit to produce release evidence for. Leave empty to use the head of the ref this was dispatched on.'
+        required: false
+        type: string
+      ci_run:
+        description: 'The DAFTAR CI run id for the same commit, recorded in the evidence.'
+        required: false
+        type: string
+  # The release candidate is invalidated by a change to anything it is a
+  # statement about: the schema, the accounting engine, the deployment
+  # contract, the gates, or the release tooling itself. It is deliberately not
+  # `paths: ['**']` — this run takes the better part of an hour — and
+  # deliberately not narrower, because a filter that missed the deployment
+  # contract would leave a release claim standing over a tree that can no
+  # longer be deployed.
+  push:
+    branches: ['phase/2-accounting-core']
+    paths:
+      - 'infrastructure/database/**'
+      - 'apps/api/src/infra/migrate.ts'
+      - 'packages/accounting/**'
+      - 'apps/api/src/modules/accounting/**'
+      - 'scripts/**'
+      # The suites the release gate runs, and therefore part of what a green
+      # release verdict is a statement about. Left out at first, and the
+      # omission showed at once: the commit that made the tamper suite work
+      # inside an extracted archive — the fix for the archive half of this
+      # very workflow — did not trigger it.
+      - 'tests/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/phase2-s9-release.yml'
+      # The pages that state what the release candidate IS. A release head is
+      # usually a documentation commit, and a head this workflow never ran on
+      # is a head no hand-off can honestly name.
+      - 'docs/PHASE_2_ACCOUNTING_EXECUTION_PLAN.md'
+      - 'docs/PHASE_2_ARCHITECTURE_LOCK.md'
+      - 'docs/PHASE_2_S9_RELEASE.md'
+      - 'TECHNICAL_DEBT.md'
+
+env:
+  NODE_VERSION: '24.12.x'
+  EXPECTED_SHA: ${{ inputs.sha || github.sha }}
+
+concurrency:
+  group: p2s9-release-${{ inputs.sha || github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Release gate, RC archive, and the gate again from the extraction
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      PG_PORT: '5432'
+    steps:
+      - name: Resolve the commit under release
+        run: echo "producing P2-S9 release evidence for ${{ env.EXPECTED_SHA }}"
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.EXPECTED_SHA }}
+          # The export's inventory is `git ls-files`, and the release gate's
+          # secret scan reads a commit range; a depth-1 checkout has neither.
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      # Same packages as ci.yml's android job: the action's default installs
+      # the obsolete `tools` package, which no longer exists in the SDK
+      # repository and fails before Gradle runs.
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools platforms;android-35 build-tools;35.0.0'
+
+      - name: PostgreSQL 16 server binaries for the deployment matrix
+        # The deployment-authority matrix starts its OWN cluster, because it
+        # has to bootstrap roles and databases and then destroy them. The
+        # service container above is what the rest of the suite talks to.
+        run: |
+          sudo sh -c 'echo "deb http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
+          curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo gpg --dearmor -o /usr/share/keyrings/pgdg.gpg
+          sudo sed -i 's|deb http|deb [signed-by=/usr/share/keyrings/pgdg.gpg] http|' /etc/apt/sources.list.d/pgdg.list
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-16 zip unzip
+          /usr/lib/postgresql/16/bin/postgres --version
+
+      - run: npm ci
+
+      # ── 1. the gate, on the repository checkout (§27) ────────────────────
+      - name: Release gate — repository checkout
+        run: npm run gate:phase2:release -- --evidence=release/phase2-s9-release-gate.json
+
+      # ── 2. the archive, built from that checkout (§24, §25, §26) ─────────
+      - name: Build the Phase 2 release candidate archive
+        run: npm run export:release:phase2
+
+      # ── 3+4. extract somewhere with no repository, and gate it again ─────
+      #
+      # `$RUNNER_TEMP` is outside the checkout on purpose: extracting inside
+      # the working directory would leave the extraction able to reach the
+      # repository's `.git` by walking upwards, and then a gate that quietly
+      # depended on it would still pass.
+      - name: Extract the archive into a clean directory and gate it again
+        run: |
+          set -euo pipefail
+          EXTRACT="$RUNNER_TEMP/rc"
+          rm -rf "$EXTRACT"
+          mkdir -p "$EXTRACT"
+          unzip -q "$GITHUB_WORKSPACE/release/DAFTAR_PHASE_2_RC.zip" -d "$EXTRACT"
+          cd "$EXTRACT/DAFTAR"
+          # Prove the premise of §28 rather than assuming it: no working tree
+          # here, and none reachable above it either.
+          test ! -e .git
+          git -C . rev-parse --is-inside-work-tree 2>/dev/null && { echo "FAIL: the extraction is inside a git work tree"; exit 1; } || true
+          ARCHIVE_SHA="$(cut -d' ' -f1 < "$GITHUB_WORKSPACE/release/DAFTAR_PHASE_2_RC.zip.sha256")"
+          npm ci
+          npm run gate:phase2:release -- \
+            --evidence="$EXTRACT/DAFTAR/release/phase2-s9-release-gate-archive.json" \
+            --archive-sha256="$ARCHIVE_SHA"
+          cp "$EXTRACT/DAFTAR/release/phase2-s9-release-gate-archive.json" "$GITHUB_WORKSPACE/release/"
+
+      # ── 5. the evidence, assembled from what actually happened (§25) ─────
+      - name: Assemble the release evidence
+        run: |
+          npm run evidence:phase2:s9 -- \
+            --repo-gate=release/phase2-s9-release-gate.json \
+            --archive-gate=release/phase2-s9-release-gate-archive.json \
+            --archive=release/DAFTAR_PHASE_2_RC.zip \
+            --ci-run='${{ inputs.ci_run }}'
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo '## P2-S9 release evidence'
+            echo
+            echo "commit: \`${{ env.EXPECTED_SHA }}\`"
+            echo
+            echo '```json'
+            node -e "const e=require('./release/phase2-s9-release-evidence.json');console.log(JSON.stringify({verdict:e.verdict,source:e.source,archive:{sha256:e.archive.sha256,entryCount:e.archive.entryCount},migrations:{count:e.migrations.count,frozenThrough:e.migrations.frozenThrough},gates:{repository:{verdict:e.gates.repository.verdict,fail:e.gates.repository.fail,mandatorySkipped:e.gates.repository.mandatorySkipped},extractedArchive:{verdict:e.gates.extractedArchive.verdict,fail:e.gates.extractedArchive.fail,mandatorySkipped:e.gates.extractedArchive.mandatorySkipped}},deploymentAuthority:e.deploymentAuthority.verdict,problems:e.problems},null,2))" 2>/dev/null || echo '(no evidence file was produced)'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # `always()`: a FAILED release run is exactly the run whose artefacts a
+      # reviewer needs. Uploading only on success would leave a red job with
+      # one assertion message and throw away the logs that say why.
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: phase2-s9-release-evidence
+          path: |
+            release/phase2-s9-release-evidence.json
+            release/phase2-s9-release-gate.json
+            release/phase2-s9-release-gate-archive.json
+            release/phase2-s9-deployment-authority.json
+            release/DAFTAR_PHASE_2_RC.zip.sha256
+          if-no-files-found: error
+
+      # `ignore`, not `error`: a run that failed before the export has no
+      # archive to upload, and a second red X on a missing file says nothing
+      # the gate's own failure did not already say. The archive's existence is
+      # not taken on trust either way — `evidence:phase2:s9` reads it, checks
+      # it against its sidecar digest and against the manifest inside it, so a
+      # green run that produced no archive is impossible.
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: phase2-s9-release-candidate
+          path: release/DAFTAR_PHASE_2_RC.zip
+          if-no-files-found: ignore
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: phase2-s9-release-gate-logs
+          path: release/phase2-gate-logs-*
+          if-no-files-found: ignore

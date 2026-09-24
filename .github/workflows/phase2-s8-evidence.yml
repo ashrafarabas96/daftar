@@ -1,0 +1,379 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# P2-S8 ACCEPTANCE EVIDENCE — the work that cannot run on every push, run on
+# GitHub anyway, at one exact commit (f §9, §10, §26).
+#
+# WHY THIS EXISTS AS A SEPARATE WORKFLOW
+#
+# Three of P2-S8's claims take hours and a real cluster: the Tier 2 budgets at
+# 100,000 reporting lines and 1,000,000 reconciliation lines, the before/after
+# RLS answer equivalence across a migration boundary, and a rollback rehearsal
+# that takes a real `pg_dump`, restores it, applies Phase 2 to the copy and
+# runs the ACCEPTED Phase 1 build against the upgraded database. None of that
+# belongs on a push. Until this file existed, the consequence was that none of
+# it ran on GitHub at all: the numbers were produced on a laptop, written to
+# gitignored files, and read by the push gate — which is the defect f §1 names.
+# A local JSON file GitHub never produced is supporting evidence, not CI proof.
+#
+# THE ANSWER IS NOT A WEAKER GATE. It is this: the same measurements, executed
+# by GitHub, at a commit named in the run, with every artefact carrying that
+# commit's SHA and both candidate migrations' digests, uploaded as run
+# artifacts. Nothing generated here is ever committed to the repository (f §1);
+# `release/` is gitignored and stays that way.
+#
+# WHAT A GREEN RUN HERE MEANS, EXACTLY
+#
+#   the `evidence` job's summary says verdict PASS, 0 mandatory SKIPPED, 0 FAIL
+#   for the commit named in `Resolve the commit under evidence`, and the five
+#   artefacts attached to the run were produced by these jobs on that commit.
+#
+# It does NOT stand in for the per-push gate in `ci.yml`, and the per-push gate
+# does not stand in for this. That is the whole point of there being two.
+# ─────────────────────────────────────────────────────────────────────────────
+name: DAFTAR P2-S8 acceptance evidence
+
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: 'The EXACT commit to produce evidence for. Leave empty to use the head of the ref this was dispatched on.'
+        required: false
+        type: string
+  # The path list is what CAN INVALIDATE the evidence: the schema, the
+  # accounting arithmetic, the reconciliation path, the measurement harnesses
+  # and the scripts that produce and read the artefacts. A change to any of
+  # them makes the previous run's numbers a statement about a different tree.
+  #
+  # It is deliberately not `paths: ['**']`. This workflow is measured in hours
+  # and a trigger that fired on a README edit would make it something people
+  # cancel rather than read. It is also deliberately not narrower: a filter
+  # that missed a change to `packages/accounting` would leave stale Tier 2
+  # numbers looking current, which is the failure this whole file exists to
+  # answer.
+  push:
+    branches: ['phase/2-accounting-core']
+    paths:
+      - 'infrastructure/database/**'
+      - 'packages/accounting/**'
+      - 'apps/api/src/modules/accounting/**'
+      - 'scripts/phase2-s8-*.ts'
+      - 'scripts/phase2-rollback-rehearsal.ts'
+      - 'scripts/check-supply-chain.ts'
+      - 'scripts/runner-canary.ts'
+      - 'tests/performance/**'
+      - 'tests/security/**'
+      - '.github/workflows/phase2-s8-evidence.yml'
+      # The two pages that state what this evidence says. They are here for a
+      # reason that only shows up at the end: f §26 requires a green run of
+      # this workflow on the SAME head as the green `ci.yml` run, and the last
+      # commit before a hand-off is usually the one that writes the run ids
+      # and the measured numbers into these pages. Without them in the list, a
+      # documentation-only commit becomes a head that this workflow never ran
+      # on, and the hand-off cannot be made truthfully.
+      - 'docs/PHASE_2_S8_ACCEPTANCE.md'
+      - 'docs/PHASE_2_PERFORMANCE_BASELINE.md'
+
+# `workflow_dispatch` can only be pointed at a branch or a tag, so the commit
+# is taken as an input and checked out explicitly. Every job below checks out
+# THIS value, and `P2S8_EXPECTED_SHA` makes each script refuse to write an
+# artefact if the tree it is reading is not that commit (f §11).
+env:
+  NODE_VERSION: '24.12.x'
+  EXPECTED_SHA: ${{ inputs.sha || github.sha }}
+
+concurrency:
+  group: p2s8-evidence-${{ inputs.sha || github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # 1. THE ACCEPTANCE-SCALE BUDGETS (§13, §14; f §12).
+  #
+  #    100,000 journal lines for C, D and E, and a second business carrying
+  #    1,000,000 for F. The suite asserts the sizes it actually created, so a
+  #    run that seeded less fails rather than reporting a fast number over a
+  #    small dataset — §15 calls that a failure of evidence, not a pass.
+  # ---------------------------------------------------------------------------
+  tier2:
+    name: Tier 2 — the six budgets at acceptance scale
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    steps:
+      - name: Resolve the commit under evidence
+        run: echo "producing P2-S8 evidence for ${{ env.EXPECTED_SHA }}"
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.EXPECTED_SHA }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      # The same two lines, in the same order, as the backend job in ci.yml:
+      # domain-core first, because accounting depends on it, and the API's
+      # posting module imports @daftar/accounting by package name, so the
+      # suites cannot load without its dist/.
+      - name: Build contract, accounting and design-system packages
+        run: |
+          npm run build -w packages/domain-core -w packages/shared-contracts -w packages/design-system
+          npm run build -w packages/accounting
+      - name: Tier 2 acceptance measurement
+        run: npx vitest run tests/performance/accounting-budgets.test.ts
+        env:
+          PG_PORT: '5432'
+          P2S8_PERF_TIER: '2'
+          P2S8_EXPECTED_SHA: ${{ env.EXPECTED_SHA }}
+      # `always()`: a measurement that MISSED its budget is exactly the
+      # measurement a reviewer needs to read. Uploading only on success would
+      # leave a red job with nothing but a one-line assertion message, and the
+      # plan, the block counts and the machine record — the things that say
+      # WHY — discarded with it.
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: phase2-s8-performance-tier2
+          path: release/phase2-s8-performance-tier2.json
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # 2. THE ANSWER DID NOT CHANGE (§10, §11; f §13).
+  #
+  #    One database, migrated to 0051, the trial balance captured with
+  #    EXPLAIN (ANALYZE, BUFFERS); then 0052 applied to the SAME database and
+  #    the same read taken again. "A faster wrong report is FAIL", so the rows
+  #    are compared byte for byte and the plans are compared for what reads
+  #    `businesses` once per row.
+  # ---------------------------------------------------------------------------
+  equivalence:
+    name: RLS before/after — the same answer, a different plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    steps:
+      - name: Resolve the commit under evidence
+        run: echo "producing P2-S8 evidence for ${{ env.EXPECTED_SHA }}"
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.EXPECTED_SHA }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      # The same two lines, in the same order, as the backend job in ci.yml:
+      # domain-core first, because accounting depends on it, and the API's
+      # posting module imports @daftar/accounting by package name, so the
+      # suites cannot load without its dist/.
+      - name: Build contract, accounting and design-system packages
+        run: |
+          npm run build -w packages/domain-core -w packages/shared-contracts -w packages/design-system
+          npm run build -w packages/accounting
+      - name: Answer and plan equivalence across the 0051 → 0052 boundary
+        run: npx vitest run tests/performance/accounting-rls-equivalence.test.ts
+        env:
+          PG_PORT: '5432'
+          P2S8_EXPECTED_SHA: ${{ env.EXPECTED_SHA }}
+      # `always()`: a measurement that MISSED its budget is exactly the
+      # measurement a reviewer needs to read. Uploading only on success would
+      # leave a red job with nothing but a one-line assertion message, and the
+      # plan, the block counts and the machine record — the things that say
+      # WHY — discarded with it.
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: phase2-s8-rls-equivalence
+          path: release/phase2-s8-rls-equivalence.json
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # 3. THE ROLLBACK REHEARSAL (f §14, §39–§42).
+  #
+  #    Not a mock. It builds the ACCEPTED Phase 1 commit in its own worktree
+  #    with its own node_modules, seeds it through Phase 1's real flows, takes
+  #    a real `pg_dump -Fc`, restores it into a second database, applies the
+  #    Phase 2 migrations to the restored copy, reruns them to prove the rerun
+  #    is a no-op, and then runs the Phase 1 build against the upgraded
+  #    database. `fetch-depth: 0` because it checks out a historical commit.
+  #
+  #    It also probes whether `daftar_migrator` can apply the accepted history
+  #    here, and records the refusal it gets rather than inferring it from the
+  #    SQL. That finding stays in the artefact exactly as measured (f §14);
+  #    the migration principal is not widened to make a rehearsal look tidier.
+  # ---------------------------------------------------------------------------
+  rehearsal:
+    name: Rollback / restore rehearsal
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - name: Resolve the commit under evidence
+        run: echo "producing P2-S8 evidence for ${{ env.EXPECTED_SHA }}"
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.EXPECTED_SHA }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      # The same two lines, in the same order, as the backend job in ci.yml:
+      # domain-core first, because accounting depends on it, and the API's
+      # posting module imports @daftar/accounting by package name, so the
+      # suites cannot load without its dist/.
+      - name: Build contract, accounting and design-system packages
+        run: |
+          npm run build -w packages/domain-core -w packages/shared-contracts -w packages/design-system
+          npm run build -w packages/accounting
+      - name: A real backup, a real restore, the accepted Phase 1 build on the upgraded database
+        run: npm run rehearse:phase2:rollback
+        env:
+          P2S8_EXPECTED_SHA: ${{ env.EXPECTED_SHA }}
+      # `always()`: a measurement that MISSED its budget is exactly the
+      # measurement a reviewer needs to read. Uploading only on success would
+      # leave a red job with nothing but a one-line assertion message, and the
+      # plan, the block counts and the machine record — the things that say
+      # WHY — discarded with it.
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: phase2-s8-rollback-rehearsal
+          path: release/phase2-s8-rollback-rehearsal.json
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # 4. THE DOCUMENT, AND THE REFUSAL (f §10, §26).
+  #
+  #    This job is the one whose green tick means something. It runs the
+  #    runner-failure canary OUTSIDE Vitest first — nothing below it is
+  #    trusted until the runner has proved it can still say no — then the
+  #    whole Level A gate (which itself runs supply-chain hygiene and the
+  #    Tier 1 budgets), collects the three acceptance artefacts produced
+  #    above, writes the evidence document, and finally runs the RELEASE gate,
+  #    which is what asserts verdict PASS with zero mandatory SKIPPED and zero
+  #    FAIL and that every artefact is bound to this exact commit.
+  #
+  #    The order matters: the document is written by a script that RUNS the
+  #    gate, and the release gate READS the document. Nothing reads a file
+  #    recording its own verdict (f §15, §16).
+  # ---------------------------------------------------------------------------
+  evidence:
+    name: Evidence document and release gate
+    needs: [tier2, equivalence, rehearsal]
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    steps:
+      - name: Resolve the commit under evidence
+        run: echo "producing P2-S8 evidence for ${{ env.EXPECTED_SHA }}"
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.EXPECTED_SHA }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      # The same two lines, in the same order, as the backend job in ci.yml:
+      # domain-core first, because accounting depends on it, and the API's
+      # posting module imports @daftar/accounting by package name, so the
+      # suites cannot load without its dist/.
+      - name: Build contract, accounting and design-system packages
+        run: |
+          npm run build -w packages/domain-core -w packages/shared-contracts -w packages/design-system
+          npm run build -w packages/accounting
+      # GREEN IS NOT EVIDENCE unless the mechanism that reports green is
+      # proven capable of reporting red. Asked here in the workflow, from the
+      # exit status directly, before any suite runs: a runner that exits 0
+      # over a failing test would make every step below meaningless.
+      - name: The test runner can still report failure (f §3)
+        # The transcript goes to RUNNER_TEMP, not to the working tree. Written
+        # beside the repository it was a `.log` file in the checkout, and
+        # P1-GOLD-33 — the Phase 1 golden that forbids dev debris in the tree —
+        # caught it and failed the whole composed gate two steps later. The
+        # golden was right: a workflow step is not allowed to leave litter in
+        # the tree it is about to make claims about.
+        run: |
+          set +e
+          npx vitest run --config tests/fixtures/runner-exit-code/vitest.config.ts failing > "$RUNNER_TEMP/canary.log" 2>&1
+          status=$?
+          set -e
+          cat "$RUNNER_TEMP/canary.log"
+          grep -q "1 failed" "$RUNNER_TEMP/canary.log" || { echo "CANARY DID NOT RUN ITS FAILING TEST"; exit 1; }
+          test "$status" -ne 0 || { echo "THE RUNNER EXITED 0 OVER A FAILING TEST — no result in this run is evidence"; exit 1; }
+        env:
+          PG_PORT: '5432'
+      - name: Collect the acceptance-scale artefacts produced by this run
+        uses: actions/download-artifact@v4
+        with:
+          path: release
+          pattern: phase2-s8-*
+          merge-multiple: true
+      - name: What was collected
+        run: ls -l release
+      # Runs `gate:phase2:s8` (structure, the security and reconciliation
+      # suites, supply-chain hygiene and the Tier 1 budgets), reads the three
+      # artefacts above, and writes release/phase2-s8-evidence.json.
+      - name: Evidence document — every mandatory check, none skipped
+        run: npm run evidence:phase2:s8
+        env:
+          PG_PORT: '5432'
+          P2S8_EXPECTED_SHA: ${{ env.EXPECTED_SHA }}
+      - name: Release gate — verdict PASS, 0 mandatory SKIPPED, 0 FAIL, every artefact bound to this commit
+        run: npm run gate:phase2:s8:release
+        env:
+          P2S8_EXPECTED_SHA: ${{ env.EXPECTED_SHA }}
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "## P2-S8 acceptance evidence"
+            echo ""
+            echo "Commit: \`${{ env.EXPECTED_SHA }}\`"
+            echo ""
+            if [ -f release/phase2-s8-evidence.json ]; then
+              node -e "
+                const e = require('./release/phase2-s8-evidence.json');
+                console.log('verdict: **' + e.verdict + '**  |  fail: ' + e.summary.fail + '  |  mandatory skipped: ' + e.summary.mandatorySkipped);
+                console.log('');
+                console.log('| check | status |');
+                console.log('| --- | --- |');
+                for (const c of e.checks) console.log('| ' + c.id + ' — ' + c.name + ' | ' + c.status + ' |');
+              "
+            else
+              echo "the evidence document was never written"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+      # Generated evidence is UPLOADED, never committed (f §1, §10).
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: phase2-s8-evidence
+          path: release/phase2-s8-*.json
+          if-no-files-found: error

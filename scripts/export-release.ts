@@ -23,11 +23,45 @@ import { execFileSync, spawnSync } from 'node:child_process';
 const ROOT = join(__dirname, '..');
 const sha = (buf: Buffer | string) => createHash('sha256').update(buf).digest('hex');
 
+/**
+ * ── Which release this export is ───────────────────────────────────────────
+ *
+ * `--phase=2` produces the Phase 2 release candidate. Everything about the
+ * export is the same — the inventory is still every tracked file, the hygiene
+ * refusals are still the same refusals, the tree hash is still computed the
+ * same way — because an archive built by a different procedure is an archive
+ * that proves something about the procedure rather than about the tree. What
+ * changes is the archive's name, the phase recorded in the manifest, and the
+ * reproduction commands a reader is told to run.
+ */
+const PHASE = process.argv.slice(2).includes('--phase=2') ? 2 : 1;
+const ARCHIVE_NAME = PHASE === 2 ? 'DAFTAR_PHASE_2_RC.zip' : 'DAFTAR_PHASE_1_RC.zip';
+const REPRODUCTION =
+  PHASE === 2
+    ? [
+        'npm ci',
+        'npm run gate:phase2:release -- --evidence=release/phase2-s9-release-gate.json',
+        'npm run check:deployment-authority',
+        'PROVISIONING_ASSERTION_KEY=<base64 >=32B> BOOTSTRAP_DATABASE_URL=<daftar_platform url> npm run bootstrap:provisioning-key',
+        'ACCOUNTING_ASSERTION_KEY=<base64 >=32B> BOOTSTRAP_DATABASE_URL=<daftar_platform url> npm run bootstrap:accounting-key',
+      ]
+    : [
+        'npm ci',
+        'npm run gate:phase1:release -- --evidence=release/evidence.json',
+        'npm run perf:baseline',
+        'PROVISIONING_ASSERTION_KEY=<base64 >=32B> BOOTSTRAP_DATABASE_URL=<daftar_platform url> npm run bootstrap:provisioning-key',
+      ];
+
 const FORBIDDEN_NAME =
   /(^|\/)(node_modules|dist|\.next|var|coverage|\.gradle|build)(\/|$)|(^|\/)\.env($|\.)|\.log$|\.tsbuildinfo$|\.zip$|\.pem$|\.key$|\.dump$|\.sql\.gz$|dev-mailbox|local\.properties$/i;
 const FORBIDDEN_CONTENT = /DEV_TEST_KEY(?!\w)|argon2id\$[A-Za-z0-9+/=]{20,}|-----BEGIN [A-Z ]*PRIVATE KEY-----/;
 /** Files with a documented reason to mention the dev-only key constant or scan patterns. */
 const CONTENT_SCAN_EXEMPT = /static-guards|export-release|phase1-release-gate|credential-protector\.ts$|\.test\.|^docs\//;
+
+function npmVersion(): string {
+  const out = spawnSync(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['--version'], { encoding: 'utf8' });
+  return (out.stdout ?? '').trim() || 'unknown';
+}
 
 /** Every input the reproduction commands read. Derived from package.json scripts, CI and the build configs — kept explicit so a mis-tracked file fails loudly. */
 function requiredFiles(): string[] {
@@ -139,30 +173,45 @@ void migrationsDir;
 
 const manifest = {
   product: 'DAFTAR',
-  phase: 1,
+  phase: PHASE,
   kind: 'release-candidate',
   generatedAt: new Date().toISOString(),
   sourceCommit,
+  /**
+   * The tree hash is deliberately independent of the ZIP: it is computed from
+   * the normalised relative path and the SHA-256 of each file's bytes, sorted
+   * by path, joined with newlines and hashed once. Two archives built from the
+   * same tree on different machines, at different times, with different
+   * compression or timestamps, carry the SAME tree hash and DIFFERENT zip
+   * hashes — so a reader who wants to know whether the content is the same
+   * asks this number, and a reader who wants to know whether the file is the
+   * same asks the sibling .sha256.
+   */
   treeHash: sha(inventory.map((i) => `${i.path}:${i.sha256}`).join('\n')),
+  treeHashAlgorithm: 'sha256 over "<relative path>:<sha256 of file bytes>" lines, sorted by path, joined with \\n',
   fileCount: inventory.length,
+  /** gitDirty is always false: the export refuses to run on a dirty tree. */
+  gitDirty: false,
   inventory,
   migrationHashes,
+  migrationCount: migrationHashes.length,
+  frozenThrough: manifestOnDisk.frozenThrough,
   migrationManifestSha256: sha(readFileSync(join(ROOT, 'infrastructure/database/MIGRATION_MANIFEST.json'))),
+  environment: { node: process.version, npm: npmVersion(), platform: `${process.platform}-${process.arch}` },
   toolchain: { node: '24.12.x', npm: '>=11', gradle: '8.14.x', androidSdk: 'platform 35 / build-tools 35.0.0' },
-  reproduction: [
-    'npm ci',
-    'npm run gate:phase1:release -- --evidence=release/evidence.json',
-    'npm run perf:baseline',
-    'PROVISIONING_ASSERTION_KEY=<base64 ≥32B> BOOTSTRAP_DATABASE_URL=<daftar_platform url> npm run bootstrap:provisioning-key',
-  ],
+  reproduction: REPRODUCTION,
 };
 // Trailing newline: the archive must pass its OWN `npm run format` check.
 writeFileSync(join(tree, 'DELIVERY_MANIFEST.json'), JSON.stringify(manifest, null, 2) + '\n');
 
 mkdirSync(join(ROOT, 'release'), { recursive: true });
-const zipPath = join(ROOT, 'release', 'DAFTAR_PHASE_1_RC.zip');
+const zipPath = join(ROOT, 'release', ARCHIVE_NAME);
 rmSync(zipPath, { force: true });
-execFileSync('zip', ['-qr', zipPath, 'DAFTAR'], { cwd: staging });
+// -X drops extra file attributes and the local timestamps that would make two
+// exports of the same tree differ byte for byte for no reason a reader cares
+// about. The content-tree digest above is the identity that matters; this only
+// removes gratuitous noise from the file digest.
+execFileSync('zip', ['-qrX', zipPath, 'DAFTAR'], { cwd: staging });
 const zipEntries = execFileSync('unzip', ['-Z1', zipPath], { encoding: 'utf8' })
   .split('\n')
   .filter((l) => l.length > 0 && !l.endsWith('/'));
@@ -171,9 +220,9 @@ if (zipEntries.length !== inventory.length + 1) {
   process.exit(1);
 }
 const zipHash = sha(readFileSync(zipPath));
-writeFileSync(`${zipPath}.sha256`, `${zipHash}  DAFTAR_PHASE_1_RC.zip\n`);
+writeFileSync(`${zipPath}.sha256`, `${zipHash}  ${ARCHIVE_NAME}\n`);
 rmSync(staging, { recursive: true, force: true });
 
-console.log(`EXPORT: PASS — release/DAFTAR_PHASE_1_RC.zip (${inventory.length} files, commit ${sourceCommit.slice(0, 7)})`);
+console.log(`EXPORT: PASS — release/${ARCHIVE_NAME} (${inventory.length} files, commit ${sourceCommit.slice(0, 7)})`);
 console.log(`  treeHash ${manifest.treeHash}`);
 console.log(`  zip sha256 ${zipHash} (sibling .sha256 written)`);

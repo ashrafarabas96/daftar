@@ -1,4 +1,11 @@
-name: DAFTAR Phase 1 CI
+# The name used to say "DAFTAR Phase 1 CI", which stopped being true at
+# P2-S1 and had been misdescribing itself for seven slices: this workflow
+# runs Phase 1 AND every accepted Phase 2 slice gate. A truthful name matters
+# more here than anywhere else in the repository, because the run's name is
+# what a reviewer reads in the checks list when deciding what a green tick
+# covers. The JOB names are deliberately unchanged — they are what the
+# required-checks configuration matches on.
+name: DAFTAR CI
 
 on:
   push:
@@ -20,20 +27,20 @@ jobs:
       - name: Verify exact workspace set
         run: |
           set -e
-          for ws in apps/api apps/web apps/admin packages/domain-core packages/shared-contracts packages/design-system; do
+          for ws in apps/api apps/web apps/admin packages/domain-core packages/accounting packages/shared-contracts packages/design-system; do
             test -f "$ws/package.json" || { echo "MISSING WORKSPACE: $ws"; exit 1; }
           done
           test -f apps/android/settings.gradle.kts || { echo "MISSING: apps/android (Gradle)"; exit 1; }
           node -e "
             const pkg = require('./package.json');
-            const expected = ['apps/api','apps/web','apps/admin','packages/domain-core','packages/shared-contracts','packages/design-system'].sort();
+            const expected = ['apps/api','apps/web','apps/admin','packages/domain-core','packages/accounting','packages/shared-contracts','packages/design-system'].sort();
             const actual = [...pkg.workspaces].sort();
             if (JSON.stringify(expected) !== JSON.stringify(actual)) {
               console.error('workspace mismatch', { expected, actual });
               process.exit(1);
             }
           "
-          for ws in apps/api apps/web apps/admin packages/domain-core packages/shared-contracts packages/design-system; do
+          for ws in apps/api apps/web apps/admin packages/domain-core packages/accounting packages/shared-contracts packages/design-system; do
             name=$(node -p "require('./$ws/package.json').name")
             grep -q "\"node_modules/$name\"" package-lock.json || { echo "package-lock missing workspace $name"; exit 1; }
           done
@@ -62,10 +69,16 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
       - run: npm ci
-      - name: Build contract + design-system packages
+      - name: Build contract, accounting and design-system packages
         # typecheck/lint of apps/web and apps/admin resolve @daftar/design-system
         # from its built dist/ — an unbuilt package fails them with TS2307.
-        run: npm run build -w packages/domain-core -w packages/shared-contracts -w packages/design-system
+        # @daftar/accounting is on the same footing since P2-S3: the API's
+        # posting module imports it by package name, so the integration and
+        # security suites cannot even load without its dist/.
+        # domain-core must be built before accounting, which depends on it.
+        run: |
+          npm run build -w packages/domain-core -w packages/shared-contracts -w packages/design-system
+          npm run build -w packages/accounting
       - name: Migration manifest check
         run: npm run check:migrations
       - name: Phase 1 machine gate
@@ -99,6 +112,9 @@ jobs:
           RESOLVER_DB_PASSWORD: test_resolver_password_123
           IDENTITY_DB_PASSWORD: test_identity_password_123
           PROVISIONER_DB_PASSWORD: test_provisioner_password_123
+          RECONCILER_DB_PASSWORD: test_reconciler_password_123
+          # Deployment, not runtime: the non-superuser migration principal.
+          MIGRATOR_DB_PASSWORD: test_migrator_password_123
       - name: Fresh database migrate (0000 → latest)
         run: npm run migrate -w @daftar/api
         env:
@@ -117,6 +133,122 @@ jobs:
           PG_PORT: '5432'
       - name: Golden regression suite
         run: npm run test:golden
+        env:
+          PG_PORT: '5432'
+      # Phase 2 slice gate: structural boundary checks (migration numbers,
+      # frozen history, no journal/posting surface, the 21-key registry, guard
+      # G-3) plus the composed P2-S1 suites. A gate that only runs locally is a
+      # gate that drifts.
+      - name: Phase 2 slice gate — P2-S1
+        run: npm run gate:phase2:s1
+        env:
+          PG_PORT: '5432'
+      # P2-S2 keeps P2-S1 as a permanent predecessor and adds the journal
+      # structural core: the migration boundary (0042 + 0043, nothing after),
+      # no P2-S3 posting surface, both deferred validators, bidirectional
+      # deferred bindings, unconditional immutability, guards G-1/G-2/G-3, and
+      # the live privilege and invariant matrices.
+      - name: Phase 2 slice gate — P2-S2
+        run: npm run gate:phase2:s2
+        env:
+          PG_PORT: '5432'
+      # P2-S3 keeps P2-S2 (and through it P2-S1 and Phase 1) as permanent
+      # predecessors and adds the secure posting engine: 0044/0045 present and
+      # still candidates, no 0046, the assertion key domain, the primitive's
+      # protections and its single-role EXECUTE surface (guard G-4), the
+      # @daftar/accounting workspace with the shared acctfp/1 vectors, key
+      # separation from provisioning, and the posting, concurrency, parity,
+      # authority and engine-shape matrices.
+      - name: Phase 2 slice gate — P2-S3
+        run: npm run gate:phase2:s3
+        env:
+          PG_PORT: '5432'
+      # P2-S4 keeps the whole chain above as permanent predecessors and adds
+      # the three accounting-native sources: 0046/0047 present, nothing beyond
+      # them, both still candidates; the source tables and commands; no
+      # reversal marker on the journal; physical uniqueness for reversals and
+      # posted opening balances; supersession only after a reversal; G-4
+      # widened to protect EVERY journal writer; no bypass seam; exactly three
+      # merchant endpoints; and the source, concurrency, authority and upgrade
+      # matrices.
+      - name: Phase 2 slice gate — P2-S4
+        run: npm run gate:phase2:s4
+        env:
+          PG_PORT: '5432'
+      # P2-S5 keeps the whole chain above as permanent predecessors and adds
+      # the FX rate foundation: 0048 frozen at its accepted digest, on disk and
+      # in the manifest; the append-only registry with its composite ownership,
+      # currency references and four physical rules; a lookup that never
+      # invents a reciprocal, a cross-rate or an implicit 1; the second,
+      # domain-separated acctctl/1 assertion format; one elevated write path
+      # granted to the merchant runtime alone; the clock audit over the whole
+      # migration; the pure realized-FX and rounding primitives; and the
+      # registry, authority, concurrency, HTTP, parity, upgrade and portability
+      # matrices. It has no opinion about a later authorized migration.
+      - name: Phase 2 slice gate — P2-S5
+        run: npm run gate:phase2:s5
+        env:
+          PG_PORT: '5432'
+      # P2-S6 keeps the whole chain above as permanent predecessors and adds
+      # accounting periods: 0049 present, still a candidate and the last
+      # migration with no 0050; civil-date boundaries, a closed status
+      # vocabulary and a REAL gist EXCLUDE for non-overlap, with btree_gist
+      # installed by bootstrap rather than by widening the migration
+      # principal; no DELETE path, no boundary move and no identity exemption;
+      # a closed-period refusal that lives in a trigger on journal_entries and
+      # activates nothing until a merchant creates their first period; two
+      # permissions where reopen is never implied by manage; an operation
+      # registry that decides a replay before any state is read; one lock
+      # order, business before period, on the command path and the posting
+      # path alike; a mandatory reopen reason that is audited and never
+      # published; and the period, parity, concurrency, HTTP, authority,
+      # upgrade and portability matrices.
+      - name: Phase 2 slice gate — P2-S6
+        run: npm run gate:phase2:s6
+        env:
+          PG_PORT: '5432'
+      # P2-S7 — the financial reads. Proves that every reported figure is
+      # aggregated from the journal at read time and nothing is stored; that
+      # no report writes, pages by OFFSET, renders today's exchange rate over
+      # yesterday's posting, hides a deactivated account's history, or turns
+      # an amount into a double; that a whole-business trial balance balances
+      # exactly or is refused; that `accounting.view` and Phase 1 branch scope
+      # guard all six routes; and that each figure equals an independent
+      # recomputation from the journal rows. Composes the P2-S6 gate, and
+      # through it the whole chain back to Phase 1.
+      - name: Phase 2 slice gate — P2-S7
+        run: npm run gate:phase2:s7
+        env:
+          PG_PORT: '5432'
+      # P2-S8 — the hardening and reconciliation slice, and the first gate in
+      # this workflow that runs the performance budgets rather than reading
+      # somebody's file. It proves: the migration boundary (0051 and 0052 are
+      # candidates, nothing is frozen past 0050, there is no 0053); that 0052
+      # reshapes exactly the six authorized policies and replaces exactly the
+      # three helpers, creating and granting nothing; that the composite
+      # foreign keys the corrected policies stand on are never dropped,
+      # disabled or left NOT VALID anywhere in the history; the reconciler's
+      # authority, process isolation and read-only privilege model; that the
+      # test runner can still report failure, asked OUTSIDE Vitest before any
+      # test result in the run is trusted; that the exit-code guard is not
+      # merely present but installed through globalSetup; supply-chain
+      # hygiene; and the six budgets at Tier 1.
+      #
+      # It composes the P2-S7 gate, which composes the whole chain back to
+      # Phase 1. The predecessor step above is NOT removed for that reason:
+      # when a predecessor breaks, a reviewer should see WHICH one failed in
+      # the step list rather than having to read the log of a gate that
+      # contains all of them.
+      #
+      # WHAT THIS STEP DELIBERATELY DOES NOT COVER: Tier 2 at a hundred
+      # thousand and a million lines, the rollback/restore rehearsal, and the
+      # before/after RLS answer equivalence. Those are hours of work on a real
+      # cluster and they live in `phase2-s8-evidence.yml`, run at an exact SHA
+      # and uploading their artefacts. A green tick here is a true statement
+      # about this commit's structure and its per-push measurements, and
+      # nothing more — which is the distinction that was missing.
+      - name: Phase 2 slice gate — P2-S8
+        run: npm run gate:phase2:s8
         env:
           PG_PORT: '5432'
       - name: Tampered-migration hard-fail proof

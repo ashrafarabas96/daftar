@@ -23,6 +23,12 @@ const PROD_BASE: NodeJS.ProcessEnv = {
   RESOLVER_DATABASE_URL: 'postgresql://daftar_resolver:x@db/daftar',
   PROVISIONER_DATABASE_URL: 'postgresql://daftar_provisioner:x@db/daftar',
   PROVISIONING_ASSERTION_KEY: Buffer.alloc(32, 9).toString('base64'),
+  // Deliberately DIFFERENT bytes from the provisioning key: since P2-S3 a
+  // production merchant process refuses to start when the two secrets are
+  // byte-equal, because one compromise would then reach both provisioning
+  // and the ledger.
+  ACCOUNTING_ASSERTION_KEY: Buffer.alloc(32, 11).toString('base64'),
+  ACCOUNTING_ASSERTION_KID: 'acct1',
   JWT_SECRET: 'production-secret-with-at-least-32-characters',
   MEDIA_STORAGE: 's3',
   S3_ENDPOINT: 'https://s3.example.com',

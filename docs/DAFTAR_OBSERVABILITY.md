@@ -37,3 +37,23 @@
 1. **No Silent Failure**: أي Worker/Job مهم له status/retry/dead-letter/alert (Master §70).
 2. **No Swallowed Exceptions**: ممنوع Empty Catch في Core Logic (Master §71).
 3. كل تنبيه قابل للفعل: ماذا حدث، أين، وما الخطوة التالية.
+
+## 6. مقاييس المطابقة المحاسبية (P2-S8)
+
+دورة المطابقة اليومية تُصدر خمسة مقاييس، وكلها تصف **نوعًا** لا **قيمة**:
+
+| المقياس | النوع | الوسوم (labels) |
+|---|---|---|
+| `accounting_reconciliation_run_total` | عدّاد | `outcome`: `complete` أو `incomplete` |
+| `accounting_reconciliation_duration_ms` | قياس | بلا وسوم |
+| `accounting_reconciliation_discrepancy_total` | عدّاد | `check`: معرّف الفحص (`R-ACC-01` … `R-ACC-09`) |
+| `accounting_reconciliation_unavailable_total` | عدّاد | `check`: معرّف الفحص |
+| `accounting_outbox_lag_seconds` | قياس | بلا وسوم — تأخّر أقدم رسالة غير مُسلَّمة |
+
+**القاعدة التي يفرضها الكود لا العُرف.** `assertSafeLabels` في `apps/api/src/infra/metrics.ts` ترفض — وقت التشغيل — أي وسم اسمه معرّف أو قيمة مالية (`business_id`، `tenant_id`، `entry_id`، `account_id`، `user_id`، `amount`، `balance`، `debit`، `credit`، `rate`، `fingerprint`، `secret`، …)، وترفض أي قيمة وسم لا تبدو كنوع محدود. السبب شقّان: وسم بمعرّف عمل يعني عدد سلاسل زمنية غير محدود، ويعني أيضًا أن نقطة المقاييس تكشف أي أعمال موجودة.
+
+**التنقيح يُختبر بالقيم لا بالمفاتيح.** `tests/security/accounting-observability-redaction.test.ts` يزرع قيمًا خافرة (sentinels) — مبلغًا، ورصيدًا، ومعرّف عمل، وسرًّا — ثم يبحث عنها في كل سطر سجلّ وكل مقياس صادر. البحث عن أسماء المفاتيح وحده يمرّ على سجلّ يطبع القيمة بمفتاح آخر.
+
+**`unavailable` ليست نجاحًا.** دورة لم تستطع أن تنظر تُعدّ `incomplete`، ويُزاد لها `accounting_reconciliation_unavailable_total`، ولا تُحسب أبدًا كدورة نظيفة. التنبيه على هذا المقياس إلزامي: صمته يعني أن أحدًا لم ينظر، لا أن كل شيء سليم.
+
+**ما لا يُصلَح تلقائيًا.** المطابقة **تكتشف ولا تُصلح** (Master §46): المبدأ الذي يشغّلها لا يملك أي صلاحية كتابة في أي جدول، فالتصحيح الصامت مرفوض في قاعدة البيانات قبل أن يكون مرفوضًا في الكود.

@@ -1,0 +1,964 @@
+#!/usr/bin/env tsx
+/**
+ * PHASE 2 SLICE GATE — P2-S4, the accounting-native sources (directive §51).
+ *
+ * `npm run gate:phase2:s4` is the deterministic answer to "does the source
+ * slice still do exactly what it was built to do?". P2-S3 shipped the one
+ * hardened writer; P2-S4 builds the three merchant-facing facts ON TOP of it —
+ * manual adjustment, reversal and opening balance — and this gate exists to
+ * make sure they stay built on top of it rather than around it.
+ *
+ * P2-S4 was ACCEPTED by the Tech Lead at head 2987fbe914645ebae600e95a126c908,
+ * whose exact-SHA workflow 35775902377 was SUCCESS on all five jobs, and 0046
+ * and 0047 were frozen at that acceptance. This gate is therefore PERMANENT:
+ * it carries the accepted digests as an independent second source, requires
+ * the manifest to record them frozen, and keeps proving — against a real
+ * cluster — every property the slice was accepted for.
+ *
+ * It has NO opinion about whether a later authorized migration exists. The
+ * candidate-era rules ("0046/0047 must not be frozen", "nothing beyond 0047")
+ * are gone, and the scope checks that used to read the whole tree now read
+ * only this slice's own two files: a historical accepted gate that forbids its
+ * authorized successor is a gate that stops the project.
+ *
+ * It COMPOSES rather than duplicates: P2-S3's gate runs unchanged, and it
+ * composes P2-S2, P2-S1 and Phase 1 in turn, so the whole chain runs from one
+ * command and nothing this slice adds can be paid for with a regression in
+ * what came before.
+ *
+ * Usage: npm run gate:phase2:s4 [-- --list]
+ */
+import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { join, relative } from 'node:path';
+import { findDefinerSearchPathViolations } from './guards/definer-search-path';
+import { findPostingSurfaceViolations, journalWriters } from './guards/posting-surface';
+import { stripComments } from './guards/sql-schema';
+import { INTENDED_TABLE_GRANTS, INTERNAL_ROLE, RUNTIME_ROLES, WRITE_PRIVILEGES } from './guards/journal-privilege-model';
+
+const ROOT = join(__dirname, '..');
+const MIGRATIONS_DIR = join(ROOT, 'infrastructure/database/migrations');
+const LIST_ONLY = process.argv.slice(2).includes('--list');
+const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+
+/** The two migrations this slice owns, now frozen history. */
+const S4_MIGRATIONS = ['0046_accounting_sources.sql', '0047_accounting_opening_balances.sql'] as const;
+
+/**
+ * The ACCEPTED digests, carried here as an independent second source.
+ *
+ * The manifest is one record of what was accepted; this file is another, and
+ * the gate fails if they ever disagree or if either file on disk stops
+ * hashing to its accepted value. A pin was pointless while the files were
+ * candidates being corrected in place — that is why earlier revisions of this
+ * gate carried none — and it is the whole point now that they are history.
+ */
+const S4_ACCEPTED: Readonly<Record<(typeof S4_MIGRATIONS)[number], string>> = {
+  '0046_accounting_sources.sql': '6e4500dcc639149ac25d3e0736bbce77ff372aa06736c1211fe40725e7d196e6',
+  '0047_accounting_opening_balances.sql': '0938d513c0bb844c5f36cbdb170612a08f9f52f828660ca88e2db00aeea1cabc',
+};
+
+/** The manifest must record history through at least this file. */
+const FROZEN_THROUGH_AT_LEAST = '0047_accounting_opening_balances.sql';
+
+/** The tables and routines this slice owes. */
+const S4_TABLES = [
+  'accounting_operation_kinds',
+  'accounting_manual_adjustments',
+  'accounting_reversals',
+  'accounting_opening_balances',
+  'accounting_opening_balance_lines',
+] as const;
+
+const S4_ROUTINES = [
+  'accounting_post_manual_adjustment',
+  'accounting_post_reversal',
+  'accounting_open_balance_draft',
+  'accounting_open_balance_edit',
+  'accounting_open_balance_discard',
+  'accounting_open_balance_post',
+  'accounting_open_balance_supersede',
+] as const;
+
+/**
+ * Surfaces P2-S4 explicitly DEFERRED. A gate that only checks what was built
+ * lets scope creep through silently; this half checks what was not.
+ *
+ * Asked of THIS SLICE'S OWN TWO FILES, never of the tree. A later authorized
+ * slice is expected to build some of these — P2-S5 builds the FX rate history
+ * — and it is not this gate's business to refuse it. What this gate still
+ * proves is that P2-S4 did not build them early.
+ */
+const OUT_OF_SCOPE_TABLES = ['accounting_periods', 'accounting_fx_rates', 'accounting_balances', 'accounting_trial_balance', 'accounting_fx_registry'] as const;
+
+/** The engine modules P2-S4 adds to @daftar/accounting. */
+const S4_MODULES = ['src/sources.ts'] as const;
+
+/** The suites that prove, against a real database, what the structure only claims. */
+const P2_S4_TESTS = [
+  'tests/integration/accounting-sources.test.ts',
+  'tests/integration/accounting-idempotency.test.ts',
+  'tests/integration/accounting-ownership.test.ts',
+  'tests/integration/accounting-reversal-contract.test.ts',
+  'tests/integration/accounting-reversal-date-boundary.test.ts',
+  'tests/integration/process-composition.test.ts',
+  'tests/integration/accounting-sources-concurrency.test.ts',
+  'tests/integration/accounting-source-completeness.test.ts',
+  'tests/integration/accounting-opening-balance-race.test.ts',
+  'tests/integration/accounting-engine.test.ts',
+  'tests/security/accounting-sources-authority.test.ts',
+  'tests/integration/accounting-journal.test.ts',
+  'tests/integration/migration-upgrade.test.ts',
+  'tests/integration/migration-portability.test.ts',
+];
+
+let failures = 0;
+const fail = (check: string, detail: string): void => {
+  failures += 1;
+  console.error(`  FAIL [${check}] ${detail}`);
+};
+const ok = (detail: string): void => console.log(`  ok      ${detail}`);
+
+const sqlFiles = (): string[] =>
+  readdirSync(MIGRATIONS_DIR)
+    .filter((f) => f.endsWith('.sql'))
+    .sort();
+const readMigration = (name: string): string => readFileSync(join(MIGRATIONS_DIR, name), 'utf8');
+const wholeTree = (): string => sqlFiles().map(readMigration).join('\n');
+const s4Sql = (): string => S4_MIGRATIONS.map(readMigration).join('\n');
+
+// ── 1. Migration boundary ───────────────────────────────────────────────────
+//
+// Two authorized migrations, no more; everything up to 0045 untouched; the
+// manifest still frozen where P2-S3 left it, because §59 forbids freezing
+// 0046/0047 before an independent review.
+function checkMigrationBoundary(): void {
+  console.log('P2-S4 GATE — accepted history');
+  const files = sqlFiles();
+
+  for (const name of S4_MIGRATIONS) {
+    if (files.includes(name)) ok(`${name} present`);
+    else fail('s4-migrations', `${name} is missing — it is accepted history and may never be deleted`);
+  }
+
+  const manifest = JSON.parse(readFileSync(join(ROOT, 'infrastructure/database/MIGRATION_MANIFEST.json'), 'utf8')) as {
+    frozenThrough: string;
+    migrations: { name: string; sha256: string }[];
+  };
+
+  // Frozen through AT LEAST 0047. A floor, not an equality: a later
+  // authorized slice freezing its own migrations must not fail this gate.
+  if (manifest.frozenThrough < FROZEN_THROUGH_AT_LEAST) {
+    fail('accepted-history', `frozenThrough is ${manifest.frozenThrough} — P2-S4 was accepted and frozen, so it must be at least ${FROZEN_THROUGH_AT_LEAST}`);
+  } else {
+    ok(`frozenThrough = ${manifest.frozenThrough} — at or beyond the P2-S4 acceptance boundary`);
+  }
+
+  const recorded = new Map(manifest.migrations.map((m) => [m.name, m.sha256] as const));
+  for (const [name, accepted] of Object.entries(S4_ACCEPTED)) {
+    const inManifest = recorded.get(name);
+    if (inManifest === undefined) {
+      fail('accepted-history', `${name} is not recorded in MIGRATION_MANIFEST.json — P2-S4 was accepted, so its migrations are frozen history`);
+      continue;
+    }
+    if (inManifest !== accepted) {
+      fail(
+        'accepted-history',
+        `${name} is recorded at ${inManifest.slice(0, 12)}… but was accepted at ${accepted.slice(0, 12)}… — the manifest disagrees with the acceptance`,
+      );
+      continue;
+    }
+    const onDisk = createHash('sha256')
+      .update(readFileSync(join(MIGRATIONS_DIR, name)))
+      .digest('hex');
+    if (onDisk !== accepted) {
+      fail(
+        'accepted-history',
+        `${name} hashes to ${onDisk.slice(0, 12)}… on disk but was accepted at ${accepted.slice(0, 12)}… — accepted bytes are immutable`,
+      );
+    } else {
+      ok(`${name} is frozen at its accepted digest, on disk and in the manifest`);
+    }
+  }
+}
+
+// ── 2. The surfaces this slice owes, and the ones it must not build ────────
+function checkSurfaces(): void {
+  console.log('P2-S4 GATE — the source surfaces');
+  const s4 = stripComments(s4Sql());
+
+  for (const table of S4_TABLES) {
+    if (new RegExp(`CREATE\\s+TABLE\\s+(?:IF\\s+NOT\\s+EXISTS\\s+)?${table}\\b`, 'i').test(s4)) ok(`${table} exists`);
+    else fail('missing-surface', `${table} does not exist — P2-S4 is the slice that creates it (§9)`);
+  }
+  for (const routine of S4_ROUTINES) {
+    if (new RegExp(`CREATE\\s+(?:OR\\s+REPLACE\\s+)?FUNCTION\\s+${routine}\\b`, 'i').test(s4)) ok(`${routine} exists`);
+    else fail('missing-surface', `${routine} does not exist — the source workflows are DB commands, not application logic (§37)`);
+  }
+
+  // §7's deferrals. A table created "for later" is scope creep with a comment
+  // on it, and the point of an authorized scope is that it binds.
+  for (const table of OUT_OF_SCOPE_TABLES) {
+    if (new RegExp(`CREATE\\s+TABLE\\s+(?:IF\\s+NOT\\s+EXISTS\\s+)?${table}\\b`, 'i').test(s4)) {
+      fail('scope', `${table} is created by 0046/0047 — P2-S4 deferred the FX registry, periods and financial reads to a later slice (§7)`);
+    }
+  }
+  ok('P2-S4 itself built no FX registry, period or balance-read table (§7)');
+
+  // §12: the journal never learns that one of its entries was reversed.
+  const journal = stripComments(readMigration('0042_accounting_journal.sql') + '\n' + s4Sql());
+  for (const column of ['reversed', 'reversed_at', 'reversed_by_entry_id', 'is_reversed']) {
+    if (new RegExp(`ALTER\\s+TABLE\\s+journal_entries[\\s\\S]{0,120}?ADD\\s+COLUMN[\\s\\S]{0,40}?\\b${column}\\b`, 'i').test(journal)) {
+      fail('immutable-journal', `journal_entries gained a ${column} column — a reversal is a NEW entry, never a mark on the old one (§12)`);
+    }
+  }
+  ok('journal_entries carries no reversal marker — the original stays exactly what it was (§12)');
+
+  // §13: a second reversal must be physically impossible, not merely refused.
+  if (/UNIQUE\s*\(\s*business_id\s*,\s*original_entry_id\s*\)/i.test(s4)) {
+    ok('accounting_reversals is UNIQUE (business_id, original_entry_id) — a second reversal cannot be written (§13)');
+  } else {
+    fail('reversal-uniqueness', 'accounting_reversals has no UNIQUE (business_id, original_entry_id) — the rule would live only in code (§13)');
+  }
+
+  // §14: the uniqueness refusal must surface as a domain code.
+  if (/accounting\.reversal_exists/.test(s4)) ok('the uniqueness refusal is mapped to accounting.reversal_exists, never a raw duplicate-key error (§14)');
+  else fail('reversal-uniqueness', 'nothing maps the reversal uniqueness violation to accounting.reversal_exists (§14)');
+
+  // §24: at most one CURRENT set with status = 'posted' per business at any
+  // instant, enforced physically. Never a lifetime cap: AL-13 is
+  // draft → posted → reversal → superseded, so a business may post again
+  // once the standing set has been reversed, and the superseded history stays.
+  if (/CREATE\s+UNIQUE\s+INDEX[\s\S]{0,200}?ON\s+accounting_opening_balances\s*\(\s*business_id\s*\)\s*WHERE\s+status\s*=\s*'posted'/i.test(s4)) {
+    ok("a partial UNIQUE (business_id) WHERE status = 'posted' makes two CURRENT posted opening balances impossible (§24)");
+  } else {
+    fail('opening-uniqueness', 'accounting_opening_balances has no partial unique index on the posted status — the rule would be advisory (§24)');
+  }
+
+  // §28: supersession requires a reversal of the opening entry, at the DB
+  // boundary rather than in the caller.
+  if (/accounting\.supersede_without_reversal/.test(s4) && /FROM\s+accounting_reversals/i.test(s4)) {
+    ok('supersession is refused unless the opening entry has been reversed, enforced in the database (§28)');
+  } else {
+    fail('supersede-rule', 'nothing at the database boundary requires a reversal before an opening balance may be superseded (§28)');
+  }
+
+  // §10: the journal has one status and a draft is never one of its rows.
+  if (/INSERT\s+INTO\s+journal_entries[\s\S]{0,400}?'draft'/i.test(s4)) {
+    fail('draft-journal', "a journal entry is written with a draft status — posted is the journal's only status (§10, §22)");
+  } else {
+    ok('no journal entry is ever written as a draft — the draft lives in accounting_opening_balances (§22, §37)');
+  }
+
+  // §11: the financial identity stays (business_id, source_type, source_id).
+  // A parallel idempotency cache would mean two answers to "has this happened".
+  if (/CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?accounting_(?:idempotency|request|command)_/i.test(s4)) {
+    fail('idempotency', 'a parallel idempotency table was created — the financial identity is (business_id, source_type, source_id) (§11)');
+  } else {
+    ok('no parallel idempotency registry: the source binding remains the single financial identity (§11)');
+  }
+}
+
+// ── 3. Guards, widened for a second writer ─────────────────────────────────
+function checkGuards(): void {
+  console.log('P2-S4 GATE — guards');
+  const schema = wholeTree();
+
+  // §21: with a second SECURITY DEFINER journal writer, G-4 must protect EVERY
+  // routine capable of a journal write, not one named primitive. The guard
+  // discovers writers from the schema; this asserts it actually found both, so
+  // a guard that silently stopped finding them fails here rather than passing.
+  const writers = journalWriters(schema).map((r) => r.name);
+  if (writers.length < 2) {
+    fail(
+      'guard-g4',
+      `G-4 discovered ${writers.length} journal writer(s) (${writers.join(', ') || 'none'}) — P2-S4 adds a second one, so it must find both (§21)`,
+    );
+  } else if (!writers.includes('accounting_post_entry') || !writers.includes('accounting_post_reversal')) {
+    fail('guard-g4', `G-4 found writers [${writers.join(', ')}] — both accounting_post_entry and accounting_post_reversal must be among them (§21)`);
+  } else {
+    ok(`G-4 protects every journal writer it can find: ${writers.join(', ')} (§21)`);
+  }
+
+  const violations = findPostingSurfaceViolations({ schema, appFiles: collectAppFiles() });
+  if (violations.length > 0) for (const detail of violations) fail('guard-g4', detail);
+  else
+    ok('G-4 clean: every writer carries the full protection set, is granted only to the merchant runtime, and no application code writes the ledger directly');
+
+  // §45: G-5 is permanent and must cover the NEW definers too.
+  const migrations: Record<string, string> = {};
+  for (const name of sqlFiles()) migrations[name] = readMigration(name);
+  const manifest = JSON.parse(readFileSync(join(ROOT, 'infrastructure/database/MIGRATION_MANIFEST.json'), 'utf8')) as { migrations: { name: string }[] };
+  const g5 = findDefinerSearchPathViolations({
+    migrations,
+    bootstrap: readFileSync(join(ROOT, 'infrastructure/database/bootstrap.sql'), 'utf8'),
+    frozen: new Set(manifest.migrations.map((m) => m.name)),
+  });
+  if (g5.length > 0) for (const detail of g5) fail('guard-g5', detail);
+  else ok('G-5 clean: every new SECURITY DEFINER routine pins its path with pg_temp named LAST, and nothing creates a session relation (§45)');
+
+  // §45 again, stated directly against the candidates: no runtime DML, no
+  // temp-table design, no CREATE on public left behind.
+  const s4 = stripComments(s4Sql());
+  if (/CREATE\s+(?:TEMP|TEMPORARY|LOCAL\s+TEMP)\s/i.test(s4)) {
+    fail('guard-g5', 'a P2-S4 migration creates a temporary relation — a session-scoped relation is exactly what pg_temp shadowing exploits (§45)');
+  } else {
+    ok('neither candidate creates a temporary relation');
+  }
+  if (/GRANT\s+CREATE\s+ON\s+SCHEMA\s+public/i.test(s4) && !/REVOKE\s+CREATE\s+ON\s+SCHEMA\s+public/i.test(s4)) {
+    fail('schema-authority', 'a P2-S4 migration grants CREATE on schema public without revoking it — the elevated principal keeps schema authority');
+  } else {
+    ok('schema authority is returned: every CREATE grant on public is revoked before the migration ends');
+  }
+
+  // No runtime credential may hold DML on the new source tables either.
+  const runtime = new Set<string>(RUNTIME_ROLES);
+  let modelWriters = 0;
+  for (const table of S4_TABLES) {
+    const grants = INTENDED_TABLE_GRANTS[table];
+    if (grants === undefined) {
+      fail('grant-model', `${table} is not in the intended grant model — G-1 would not notice a grant on it (§50)`);
+      continue;
+    }
+    for (const [grantee, privileges] of Object.entries(grants)) {
+      for (const privilege of privileges) {
+        if (runtime.has(grantee) && (WRITE_PRIVILEGES as readonly string[]).includes(privilege)) {
+          fail(
+            'runtime-dml',
+            `the intended grant model gives the runtime role ${grantee} ${privilege} on ${table} — only the elevated commands write (AL-03/AL-18)`,
+          );
+          modelWriters += 1;
+        }
+      }
+    }
+  }
+  if (modelWriters === 0) ok(`no runtime credential holds DML on any source table; the commands reach them only as ${INTERNAL_ROLE}`);
+}
+
+/**
+ * Strip line and block comments and string literals from TypeScript source.
+ *
+ * Crude on purpose: this is a guard, not a parser, and everything it removes
+ * is something a rule about CODE should not be reading anyway. Over-removal
+ * can only make the guard quieter about prose, never about a real identifier.
+ */
+function stripTypeScriptComments(source: string): string {
+  return source
+    .replace(/\/\*[\s\S]*?\*\//g, ' ')
+    .replace(/\/\/[^\n]*/g, ' ')
+    .replace(/'(?:[^'\\\n]|\\.)*'/g, "''")
+    .replace(/"(?:[^"\\\n]|\\.)*"/g, '""')
+    .replace(/`(?:[^`\\]|\\.)*`/g, '``');
+}
+
+/** Every non-test application and script source file, path → contents. */
+function collectAppFiles(): Record<string, string> {
+  const out: Record<string, string> = {};
+  const skip = new Set(['node_modules', 'dist', '.next', 'build', '.git', 'coverage']);
+  const walk = (dir: string): void => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (skip.has(entry.name)) continue;
+      const full = join(dir, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else if (/\.(ts|tsx)$/.test(entry.name) && !/\.(test|spec)\.tsx?$/.test(entry.name)) out[relative(ROOT, full)] = readFileSync(full, 'utf8');
+    }
+  };
+  // shared-contracts is here because the PUBLIC shape of a command is part of
+  // what this gate proves: §8's reversal date is a contract fact, not an
+  // implementation detail, and a DTO that relaxes it relaxes the guarantee.
+  for (const dir of ['apps/api/src', 'packages/accounting/src', 'packages/shared-contracts/src', 'scripts']) {
+    const full = join(ROOT, dir);
+    if (existsSync(full)) walk(full);
+  }
+  return out;
+}
+
+// ── 4. The engine and the HTTP surface ─────────────────────────────────────
+function checkEngineAndSurface(): void {
+  console.log('P2-S4 GATE — the engine and the merchant surface');
+  for (const module of S4_MODULES) {
+    if (existsSync(join(ROOT, 'packages/accounting', module))) ok(`packages/accounting/${module}`);
+    else fail('engine', `packages/accounting/${module} is missing — the source derivations belong in the engine, not in the API (§36)`);
+  }
+
+  // §38: no trusted path, anywhere in the engine or the adapters.
+  //
+  // CODE only. The engine documents at length why these seams do not exist,
+  // and a check that read prose would fail on the very comments that explain
+  // the rule — so comments and strings come out first, and this file, which
+  // must name the forbidden identifiers to look for them, excludes itself.
+  const appFiles = collectAppFiles();
+  const forbidden = /\b(postTrusted|skipPermission|systemPost|rawWrite|allowInactive|skipAuthorization|forcePost)\b/;
+  const selfPath = relative(ROOT, __filename).replace(/\\/g, '/');
+  const offenders = Object.entries(appFiles)
+    .filter(([path]) => path !== selfPath)
+    .filter(([, body]) => forbidden.test(stripTypeScriptComments(body)));
+  if (offenders.length > 0) {
+    for (const [path] of offenders)
+      fail('trusted-path', `${path} names a bypass seam — authority arrives as a minted assertion or the post does not happen (§38)`);
+  } else {
+    ok('no trusted path, no skip flag and no "allow inactive" switch anywhere in the engine or the adapters (§38)');
+  }
+
+  // §35: exactly three merchant endpoints, and no generic poster.
+  const controller = join(ROOT, 'apps/api/src/modules/accounting/accounting.controller.ts');
+  if (!existsSync(controller)) {
+    fail('http-surface', 'apps/api/src/modules/accounting/accounting.controller.ts is missing — §35 fixes the merchant surface at three endpoints');
+    return;
+  }
+  const body = readFileSync(controller, 'utf8');
+  const routes = [...body.matchAll(/@(Post|Get|Put|Patch|Delete)\(\s*'([^']*)'\s*\)/g)].map((m) => `${m[1]} ${m[2]}`);
+  // The three routes §35 authorized, as a FLOOR rather than an equality.
+  //
+  // What this gate is entitled to prove is that P2-S4's own surface survives
+  // intact and that no generic poster ever appeared beside it. It is not
+  // entitled to an opinion about a route an authorized later slice added —
+  // P2-S5 adds `fx-rates`, which creates no journal fact at all — and an
+  // accepted gate that forbade its successor would stop the project.
+  const expected = ['Post adjustments', 'Post entries/:entryId/reversals', 'Post opening-balance'];
+  const missing = expected.filter((r) => !routes.includes(r));
+  if (missing.length > 0) {
+    fail('http-surface', `the accounting controller no longer exposes [${missing.join(', ')}] — §35 fixed P2-S4's merchant surface at those three endpoints`);
+  } else {
+    ok(`P2-S4's three merchant endpoints are intact: adjustments, reversals, opening balance (§35)`);
+  }
+  if (/@(Post|Put|Patch)\(\s*'(post|entries|journal)'\s*\)/.test(body)) {
+    fail('http-surface', 'a generic posting endpoint is exposed — §35 forbids /accounting/post');
+  }
+
+  // §36: money crosses HTTP as a decimal string, never a JS number.
+  const contracts = join(ROOT, 'packages/shared-contracts/src/index.ts');
+  if (existsSync(contracts)) {
+    const dto = readFileSync(contracts, 'utf8');
+    const section = dto.slice(dto.indexOf('AccountingLineDto'));
+    if (/(?:baseAmountMinor|txnAmountMinor|fxRate)\??:\s*number/.test(section)) {
+      fail('money-shape', 'an accounting DTO types money or a rate as a JS number — money crosses HTTP as a decimal string (§36)');
+    } else {
+      ok('every accounting DTO carries money and rates as strings (§36)');
+    }
+  }
+}
+
+// ── 4b. The idempotency property, proved by behaviour (§23) ────────────────
+//
+// An idempotency rule cannot be established by reading SQL for a string. The
+// string can be there while the comparison sits below an early return that
+// never reaches it — which is exactly how the defect this section exists for
+// survived a green gate. So the gate does two separate things: it requires
+// the named behavioural cases to EXIST (below), and it RUNS them (the step
+// list). Neither substitutes for the other; deleting a case now fails the
+// gate instead of quietly shrinking what "ready" means.
+const REQUIRED_BEHAVIOUR: ReadonlyArray<{ file: string; needle: RegExp; what: string }> = [
+  { file: 'tests/integration/accounting-idempotency.test.ts', needle: /an exact retry replays/, what: 'exact opening-balance replay (§11)' },
+  {
+    file: 'tests/integration/accounting-idempotency.test.ts',
+    needle: /the financial mutation matrix/,
+    what: 'same-source material financial conflict, every acctfp/1 field (§9)',
+  },
+  { file: 'tests/integration/accounting-idempotency.test.ts', needle: /canonically equivalent retries replay/, what: 'canonical equivalence (§10)' },
+  {
+    file: 'tests/integration/accounting-idempotency.test.ts',
+    needle: /adds nothing to the ledger/,
+    what: 'no duplicate journal, binding, source, audit or outbox row on a conflict (§8)',
+  },
+  {
+    file: 'tests/integration/accounting-idempotency.test.ts',
+    needle: /the posted reason is not rewritten/,
+    what: 'no mutation of the original posted source (§16, §19)',
+  },
+  {
+    file: 'tests/integration/accounting-sources-concurrency.test.ts',
+    needle: /same key, SAME payload/,
+    what: 'concurrent same-key same-payload (§13)',
+  },
+  {
+    file: 'tests/integration/accounting-sources-concurrency.test.ts',
+    needle: /same key, DIFFERENT payload/,
+    what: 'concurrent same-key different-payload (§12)',
+  },
+  {
+    file: 'tests/integration/accounting-ownership.test.ts',
+    needle: /tenant A with tenant B/,
+    what: 'an opening-balance position cannot disown its tenant (§2, §3)',
+  },
+  {
+    file: 'tests/integration/accounting-ownership.test.ts',
+    needle: /carries a \(tenant_id, business_id\) foreign key/,
+    what: 'every business-owned P2-S4 table proves its tenant physically (§12)',
+  },
+  {
+    file: 'tests/integration/accounting-ownership.test.ts',
+    needle: /domestic with a rate that is not 1 is refused/,
+    what: 'a domestic opening position at a rate other than 1 is unwritable (§4)',
+  },
+  {
+    file: 'tests/integration/accounting-ownership.test.ts',
+    needle: /refused by the registry, not by a regex/,
+    what: 'opening-balance currencies answer to the canonical registry (§5)',
+  },
+  {
+    file: 'tests/integration/accounting-reversal-contract.test.ts',
+    needle: /omits entryDate is refused/,
+    what: 'no external request can omit the reversal date (§8, §10.H)',
+  },
+  {
+    file: 'tests/integration/accounting-reversal-contract.test.ts',
+    needle: /after the business day has advanced/,
+    what: 'the identical reversal request replays across a civil-day boundary (§10.C)',
+  },
+  {
+    file: 'tests/integration/process-composition.test.ts',
+    needle: /accounting write surface is composed in both/,
+    what: 'the accounting routes exist in the composition the tests can reach',
+  },
+  {
+    file: 'tests/integration/accounting-source-completeness.test.ts',
+    needle: /the statement passes, the COMMIT does not, and nothing survives/,
+    what: 'a native source entry driven straight through the primitive fails at COMMIT (§2-§5)',
+  },
+  {
+    file: 'tests/integration/accounting-source-completeness.test.ts',
+    needle: /the refusal is the INVARIANT, not a missing grant/,
+    what: 'the bypass case is refused by the invariant and not by a missing grant (§5)',
+  },
+  {
+    file: 'tests/integration/accounting-source-completeness.test.ts',
+    needle: /all three native sources carry the same completeness trigger, equally deferred/,
+    what: 'the three completeness triggers, read out of the live catalogue (§7)',
+  },
+  {
+    file: 'tests/integration/accounting-source-completeness.test.ts',
+    needle: /every opening-balance command takes the one per-business lock, and takes it first/,
+    what: 'the opening-balance lock ORDER, read out of the live catalogue (§12, §17)',
+  },
+  {
+    file: 'tests/integration/accounting-opening-balance-race.test.ts',
+    needle: /CASE A — the same idempotency key and the same positions, at the same moment/,
+    what: 'truly simultaneous same-key, same-payload opening balances (§15 A)',
+  },
+  {
+    file: 'tests/integration/accounting-opening-balance-race.test.ts',
+    needle: /CASE B — the same idempotency key, materially different money, at the same moment/,
+    what: 'truly simultaneous same-key, different-payload opening balances (§15 B)',
+  },
+  {
+    file: 'tests/integration/accounting-opening-balance-race.test.ts',
+    needle: /CASE C — two different opening balances of one business, at the same moment/,
+    what: 'truly simultaneous different-key opening balances (§15 C)',
+  },
+  {
+    file: 'tests/integration/accounting-opening-balance-race.test.ts',
+    needle: /first manual adjustment, at the same moment/,
+    what: 'an opening balance against the first ordinary posting (§15 D)',
+  },
+  {
+    file: 'tests/integration/accounting-opening-balance-race.test.ts',
+    needle: /function assertNoRawFailure/,
+    what: 'every race asserts no deadlock, no serialization failure and no unique-violation leakage (§16)',
+  },
+  {
+    file: 'tests/integration/accounting-opening-balance-race.test.ts',
+    needle: /no backend ever waited on a lock, so the two commands did not contend/,
+    what: 'each race refuses to pass unless the two commands actually contended (§14)',
+  },
+  {
+    file: 'tests/integration/accounting-engine.test.ts',
+    needle: /refuses every Phase-2-native source type on the generic posting path/,
+    what: 'the generic engine path refuses the three native source types (§8)',
+  },
+  {
+    file: 'tests/integration/accounting-reversal-date-boundary.test.ts',
+    needle: /a NULL date is refused by name, under a genuine reverse authority/,
+    what: 'the database routine itself refuses a NULL reversal date (§4-§6)',
+  },
+  {
+    file: 'tests/integration/accounting-reversal-date-boundary.test.ts',
+    needle: /the refusal is the RULE, not a missing grant/,
+    what: 'the NULL-date refusal is the contract, not a withdrawn EXECUTE grant (§6)',
+  },
+  {
+    file: 'tests/integration/accounting-reversal-date-boundary.test.ts',
+    needle: /the identical direct call replays across a civil-day change/,
+    what: 'the direct reversal command is a pure function of its stated inputs (§8)',
+  },
+  {
+    file: 'tests/integration/accounting-reversal-date-boundary.test.ts',
+    needle: /the business clock still answers the one question it owns/,
+    what: 'the business clock still bounds the stated date without choosing it (§5)',
+  },
+];
+
+/**
+ * The structural half of §2-§11: what the schema and the public contract must
+ * say, checked in the text, alongside the behavioural cases above that prove
+ * the same things against a real database and a real HTTP request. Neither
+ * half stands alone — a regex cannot establish a runtime property, and a
+ * behavioural suite cannot notice a constraint someone deleted from a file
+ * that has not been re-applied to the test cluster yet.
+ */
+function checkDataIntegrityAndDeterminism(): void {
+  console.log('P2-S4 GATE — ownership, FX shape and the reversal date contract');
+
+  const s4 = stripComments(s4Sql());
+
+  // §2, §12: physical ownership on every business-owned table of this slice.
+  for (const table of ['accounting_manual_adjustments', 'accounting_reversals', 'accounting_opening_balances', 'accounting_opening_balance_lines']) {
+    const fk = new RegExp(
+      `CONSTRAINT\\s+${table}_tenant_business_fk\\s+FOREIGN KEY\\s*\\(\\s*tenant_id\\s*,\\s*business_id\\s*\\)\\s*REFERENCES\\s+businesses\\s*\\(\\s*tenant_id\\s*,\\s*id\\s*\\)`,
+      'i',
+    );
+    if (fk.test(s4)) ok(`${table} names its tenant physically (§2, §12)`);
+    else
+      fail(
+        'tenant-ownership',
+        `${table} has no (tenant_id, business_id) -> businesses foreign key — a row could claim a tenant that does not own its business (§2, §12)`,
+      );
+  }
+
+  // §5: the canonical registry, not a shape regex.
+  const linesDdl = /CREATE TABLE accounting_opening_balance_lines\s*\(([\s\S]*?)\n\);/.exec(s4)?.[1] ?? '';
+  if (linesDdl === '') {
+    fail('fx-contract', 'accounting_opening_balance_lines could not be read from the candidate SQL');
+    return;
+  }
+  for (const col of ['base_currency', 'txn_currency']) {
+    if (new RegExp(`${col}\\s+TEXT NOT NULL REFERENCES currencies \\(code\\)`).test(linesDdl)) {
+      ok(`${col} answers to the canonical currencies registry (§5)`);
+    } else {
+      fail('fx-contract', `${col} does not REFERENCE currencies (code) — a correctly shaped non-currency would be writable (§5)`);
+    }
+  }
+  if (/~\s*'\^\[A-Z\]\{3\}\$'/.test(linesDdl)) {
+    fail('fx-contract', 'an opening-balance currency column still checks a three-letter SHAPE — the registry is the authority (§5)');
+  } else {
+    ok('no currency column settles for a shape regex (§5)');
+  }
+
+  // §4: a domestic position is rate 1, or it is not domestic.
+  const domestic = /txn_currency = base_currency\s*AND fx_rate = 1\s*AND txn_amount_minor = base_amount_minor\s*AND fx_rate_source = 'base'/;
+  if (domestic.test(linesDdl)) ok('a domestic opening position must carry fx_rate exactly 1 (§4)');
+  else
+    fail(
+      'fx-contract',
+      "the domestic branch of accounting_opening_balance_lines_fx_ck does not require fx_rate = 1 with equal amounts and the 'base' source (§4)",
+    );
+
+  const foreign = /txn_currency <> base_currency\s*AND fx_rate > 0\s*AND fx_rate_source = 'manual'/;
+  if (foreign.test(linesDdl)) ok('a foreign opening position is manual, positive and genuinely foreign (§4)');
+  else fail('fx-contract', 'the foreign branch of accounting_opening_balance_lines_fx_ck does not require a positive manual rate on a different currency (§4)');
+
+  if (/fx_rate_source[^,]*'provider'/.test(linesDdl)) {
+    fail('fx-contract', "an opening position may not carry a 'provider' rate — there is no rate feed for a date before the merchant arrived (§4)");
+  } else {
+    ok("'provider' is not a permitted opening-balance rate source (§4)");
+  }
+
+  // §7-§11: the reversal date is the client's, at every public layer.
+  const app = collectAppFiles();
+  const contract = app['packages/shared-contracts/src/index.ts'] ?? '';
+  if (/export interface AccountingReversalCreateDto \{[\s\S]*?\n {2}entryDate: string;/.test(contract)) {
+    ok('AccountingReversalCreateDto requires an explicit entryDate (§8)');
+  } else {
+    fail(
+      'reversal-date',
+      'AccountingReversalCreateDto does not require entryDate — an optional date makes the signed command depend on when it arrived (§7, §8)',
+    );
+  }
+
+  const schemas = app['apps/api/src/modules/accounting/accounting.schemas.ts'] ?? '';
+  const reversalSchema = /AccountingReversalCreateSchema = z\s*\.object\(\{([\s\S]*?)\}\)/.exec(schemas)?.[1] ?? '';
+  if (/entryDate:\s*civilDate\s*,/.test(reversalSchema)) {
+    ok('the validation pipe refuses a reversal with no date (§8)');
+  } else {
+    fail('reversal-date', 'AccountingReversalCreateSchema still accepts a missing or null entryDate (§8)');
+  }
+
+  // §8, §9: no merchant reversal path may resolve "today" as command identity.
+  const noClock = [
+    'packages/accounting/src/post.ts',
+    'packages/accounting/src/ports.ts',
+    'apps/api/src/modules/accounting/accounting-sources.service.ts',
+    'apps/api/src/modules/accounting/accounting-ledger.reader.ts',
+  ];
+  for (const file of noClock) {
+    const body = stripTypeScriptComments(app[file] ?? '');
+    if (/readBusinessToday/.test(body)) {
+      fail('reversal-date', `${file} can still read "today" — a clock-derived date is what made an identical retry sign a different fact (§7, §8)`);
+    }
+  }
+  ok('no merchant path on the reversal command can read what day it is (§7, §8)');
+
+  const post = stripTypeScriptComments(app['packages/accounting/src/post.ts'] ?? '');
+  if (/entryDate:\s*string\s*\|\s*null/.test(post) && /input\.entryDate\s*\?\?/.test(post)) {
+    fail('reversal-date', 'AccountingEngine.reverse still defaults a null entryDate — the date must arrive concrete (§8)');
+  } else {
+    ok('AccountingEngine.reverse takes the date as given (§8)');
+  }
+}
+
+/**
+ * ── 4c. Source completeness and lock order (round three, §2-§7, §12, §17) ──
+ *
+ * The structural half. Every native source must owe a detail row at COMMIT,
+ * and every opening-balance command must take one lock before any row lock.
+ * The behavioural half runs in the two suites named in REQUIRED_BEHAVIOUR,
+ * against a real cluster; this half notices the day somebody deletes a
+ * trigger from a file that has not been re-applied to a test database yet.
+ */
+function checkSourceCompletenessAndLockOrder(): void {
+  console.log('P2-S4 GATE — source completeness and opening-balance lock order');
+
+  const s4 = stripComments(s4Sql());
+
+  // §2, §4, §7: all three native sources, protected identically. Named as a
+  // set rather than one at a time, because the defect was asymmetry.
+  const completeness = [
+    { source: 'manual_adjustment', fn: 'accounting_manual_adjustment_entry_complete', trigger: 'journal_entries_manual_adjustment_complete' },
+    { source: 'reversal', fn: 'accounting_reversal_entry_complete', trigger: 'journal_entries_reversal_complete' },
+    { source: 'opening_balance', fn: 'accounting_opening_balance_entry_complete', trigger: 'journal_entries_opening_balance_complete' },
+  ];
+
+  for (const { source, fn, trigger } of completeness) {
+    const definer = new RegExp(`CREATE OR REPLACE FUNCTION ${fn}\\(\\) RETURNS trigger[\\s\\S]{0,200}?SECURITY DEFINER`, 'i');
+    if (!definer.test(s4)) {
+      fail('source-completeness', `${fn} is missing or is not SECURITY DEFINER — a visibility-dependent integrity check is not one (§4)`);
+      continue;
+    }
+    const installed = new RegExp(
+      `CREATE CONSTRAINT TRIGGER ${trigger}\\s+AFTER INSERT ON journal_entries\\s+DEFERRABLE INITIALLY DEFERRED\\s+FOR EACH ROW EXECUTE FUNCTION ${fn}\\(\\)`,
+      'i',
+    );
+    if (installed.test(s4)) ok(`a ${source} entry owes its detail row at COMMIT (§4, §7)`);
+    else fail('source-completeness', `${trigger} is not installed as a DEFERRABLE INITIALLY DEFERRED constraint trigger on journal_entries (§4)`);
+
+    const owned = new RegExp(`ALTER FUNCTION ${fn}\\(\\) OWNER TO daftar_accounting_internal`, 'i');
+    const revoked = new RegExp(`REVOKE ALL ON FUNCTION ${fn}\\(\\) FROM PUBLIC`, 'i');
+    if (!owned.test(s4) || !revoked.test(s4)) {
+      fail('source-completeness', `${fn} is not both revoked from PUBLIC and owned by daftar_accounting_internal (G-5)`);
+    }
+  }
+
+  // §4: the manual-adjustment check must key on the source identity, which
+  // for an adjustment IS the detail row's id. Keying on anything else would
+  // compile and prove nothing.
+  if (/m\.business_id = NEW\.business_id AND m\.id = NEW\.source_id/.test(s4)) {
+    ok('the manual-adjustment check resolves the detail by (business_id, source_id) (§4)');
+  } else {
+    fail('source-completeness', 'the manual-adjustment completeness check does not resolve its detail row by (business_id, source_id) (§4)');
+  }
+
+  // §5: a stable domain code, so the caller reads a sentence and not a
+  // trigger name.
+  if (/accounting\.adjustment_detail_missing/.test(s4)) ok('the refusal has a stable domain code (§5)');
+  else fail('source-completeness', 'no command raises accounting.adjustment_detail_missing — the refusal must have a stable code (§5)');
+
+  // §12, §17: ONE lock key, taken by ALL five commands, before any row lock.
+  if (/CREATE OR REPLACE FUNCTION accounting_opening_balance_lock_key\(p_business UUID\) RETURNS BIGINT/.test(s4)) {
+    ok('there is one per-business opening-balance lock key (§12)');
+  } else {
+    fail('lock-order', 'accounting_opening_balance_lock_key is missing — five copies of a lock key become five keys (§12)');
+  }
+
+  const bodies = stripComments(readMigration('0047_accounting_opening_balances.sql'));
+  for (const routine of [
+    'accounting_open_balance_draft',
+    'accounting_open_balance_edit',
+    'accounting_open_balance_discard',
+    'accounting_open_balance_post',
+    'accounting_open_balance_supersede',
+  ]) {
+    const start = bodies.indexOf(`CREATE OR REPLACE FUNCTION ${routine}(`);
+    if (start < 0) {
+      fail('lock-order', `${routine} is missing (§12)`);
+      continue;
+    }
+    const end = bodies.indexOf('\n$$;', start);
+    const body = bodies.slice(start, end < 0 ? bodies.length : end);
+    const lock = body.indexOf('accounting_opening_balance_lock_key');
+    const share = body.indexOf('FOR SHARE');
+    const update = body.indexOf('FOR UPDATE');
+    const firstRowLock = Math.min(share < 0 ? Number.MAX_SAFE_INTEGER : share, update < 0 ? Number.MAX_SAFE_INTEGER : update);
+    if (lock < 0) {
+      fail('lock-order', `${routine} never takes the per-business opening-balance lock (§12)`);
+    } else if (lock > firstRowLock) {
+      fail('lock-order', `${routine} locks a row before taking the opening-balance lock — that is the cycle §11 describes`);
+    } else if (share >= 0) {
+      fail('lock-order', `${routine} takes the business row FOR SHARE — the primitive upgrades to FOR UPDATE and deadlocks against it (§13)`);
+    } else {
+      ok(`${routine} takes its lock first, then the business row FOR UPDATE (§12, §13)`);
+    }
+  }
+}
+
+/**
+ * The reversal accounting date belongs to the merchant, at the LOWEST
+ * authorized boundary (round four, §4, §5, §12).
+ *
+ * The DTO, the Zod schema, the service and the engine all require it, and the
+ * HTTP matrix proves all four. None of them is the authority: a later phase's
+ * worker, a support script or a second service calls the database command
+ * directly, and until this check existed that command filled a NULL date in
+ * from the business clock. The fingerprint covers the entry date, so such a
+ * command's signed identity would be a function of when the call arrived.
+ *
+ * The behavioural half lives in accounting-reversal-date-boundary.test.ts and
+ * runs against a real cluster under a real assertion; this half notices the
+ * day the fallback is written back into a file no test database has applied.
+ */
+function checkReversalDateContract(): void {
+  console.log('P2-S4 GATE — the reversal accounting date');
+
+  const sql = stripComments(readMigration('0046_accounting_sources.sql'));
+  const start = sql.indexOf('CREATE OR REPLACE FUNCTION accounting_post_reversal(');
+  if (start < 0) {
+    fail('reversal-date', 'accounting_post_reversal is missing (§4)');
+    return;
+  }
+  const end = sql.indexOf('\n$$;', start);
+  const body = sql.slice(start, end < 0 ? sql.length : end);
+
+  // §4: the refusal exists, by its stable domain name.
+  const refusal = body.search(/IF\s+p_entry_date\s+IS\s+NULL\s+THEN[\s\S]{0,400}?accounting\.entry_date_required/i);
+  if (refusal < 0) {
+    fail('reversal-date', 'accounting_post_reversal does not refuse a NULL entry date with accounting.entry_date_required (§4)');
+  } else {
+    ok('a NULL reversal date is refused by its stable domain name (§4)');
+  }
+
+  // §5: and no fallback survives anywhere in the routine. Each of these is a
+  // way of answering "what date should this reversal have?", which is the
+  // question the routine may not answer.
+  const fallbacks: ReadonlyArray<{ pattern: RegExp; what: string }> = [
+    { pattern: /coalesce\s*\(\s*p_entry_date/i, what: 'a coalesce over the stated date' },
+    { pattern: /v_date\s*:=(?!\s*p_entry_date\s*;)/i, what: 'an assignment of v_date from anything but p_entry_date' },
+    { pattern: /p_entry_date\s*,\s*current_date|current_date\s*,\s*p_entry_date/i, what: 'a current_date default' },
+    { pattern: /p_entry_date\s+IS\s+NULL\s+THEN\s+v_/i, what: 'a NULL branch that assigns a date' },
+  ];
+  let clean = true;
+  for (const { pattern, what } of fallbacks) {
+    if (pattern.test(body)) {
+      clean = false;
+      fail('reversal-date', `accounting_post_reversal still carries ${what} — the merchant states the date, the routine never invents one (§5)`);
+    }
+  }
+  if (clean) ok('no NULL/today/original fallback survives in the routine (§5)');
+
+  // §5 again, from the other side: the refusal must come BEFORE any financial
+  // truth is derived, and the business clock must still bound the stated date.
+  const derived = body.indexOf('accounting_fingerprint(');
+  if (refusal >= 0 && derived >= 0 && refusal > derived) {
+    fail('reversal-date', 'the NULL-date refusal comes after the fingerprint is derived — it must refuse before deriving financial truth (§4)');
+  }
+  if (/v_date\s*>\s*v_today/.test(body) && /v_today\s*:=\s*\(now\(\) AT TIME ZONE v_tz\)::date/.test(body)) {
+    ok('the business clock still bounds the stated date without choosing it (§5)');
+  } else {
+    fail('reversal-date', 'accounting_post_reversal no longer refuses a stated date in the business future (§5)');
+  }
+}
+
+function checkIdempotencyProof(): void {
+  console.log('P2-S4 GATE — the idempotency property');
+
+  for (const { file, needle, what } of REQUIRED_BEHAVIOUR) {
+    const path = join(ROOT, file);
+    if (!existsSync(path)) {
+      fail('idempotency-proof', `${file} is missing — it carries the permanent proof of ${what} (§23)`);
+      continue;
+    }
+    if (needle.test(readFileSync(path, 'utf8'))) ok(`behavioural regression present: ${what}`);
+    else fail('idempotency-proof', `${file} no longer proves ${what} (§23)`);
+  }
+
+  // The structural half of the same property: every routine that can hand a
+  // caller an already-posted entry must compare the VERIFIED assertion
+  // fingerprint to the one the ledger persisted before it does so.
+  const s4 = stripComments(s4Sql());
+  if (!/accounting\.idempotency_conflict/.test(s4)) {
+    fail('idempotency-proof', 'no P2-S4 command raises accounting.idempotency_conflict — a replay path is answering success for a different payload (§3)');
+  } else {
+    ok('a P2-S4 command refuses a conflicting retry by its stable domain name');
+  }
+
+  // §5: the current fingerprint comes from the verified assertion. A
+  // parameter the caller could choose is a parameter the caller could match.
+  if (/\bp_(posting_)?fingerprint\b/.test(s4)) {
+    fail('idempotency-proof', 'a P2-S4 command takes a caller-supplied fingerprint parameter — the current fingerprint must come from accounting_actor (§5)');
+  } else {
+    ok('no command accepts a caller-supplied fingerprint (§5)');
+  }
+
+  // §20: the refusal names the rule, never the money it was protecting.
+  const conflict = /RAISE EXCEPTION 'accounting\.idempotency_conflict:[^']*'/g;
+  for (const raised of s4.match(conflict) ?? []) {
+    if (/%/.test(raised)) {
+      fail('idempotency-proof', 'an idempotency_conflict message interpolates a value — the refusal must carry no amount, rate, balance or index name (§20)');
+    }
+  }
+  ok('every idempotency_conflict refusal is a constant string (§20)');
+}
+
+// ── 5. Composed command matrix ──────────────────────────────────────────────
+interface Step {
+  readonly name: string;
+  readonly cmd: string;
+  readonly args: readonly string[];
+}
+
+const STEPS: readonly Step[] = [
+  // Every predecessor is PERMANENT. The P2-S3 gate composes P2-S2, which
+  // composes P2-S1, which composes Phase 1's, so running it once runs the
+  // whole chain — and a regression anywhere in it fails here.
+  { name: 'P2-S3 gate (permanent predecessor, composes P2-S2, P2-S1 and Phase 1)', cmd: npm, args: ['run', 'gate:phase2:s3'] },
+  { name: 'migrations apply from zero under the migration principal', cmd: npm, args: ['run', 'check:db-from-zero'] },
+  { name: '@daftar/accounting unit suite', cmd: npm, args: ['run', 'test', '-w', '@daftar/accounting'] },
+  { name: 'P2-S4 source, concurrency, authority and upgrade matrices', cmd: 'npx', args: ['vitest', 'run', ...P2_S4_TESTS] },
+];
+
+function runSteps(): void {
+  console.log('P2-S4 GATE — composed regression matrix');
+  for (const step of STEPS) {
+    const started = Date.now();
+    const res = spawnSync(step.cmd, [...step.args], { cwd: ROOT, encoding: 'utf8', stdio: 'inherit', env: process.env });
+    const ms = Date.now() - started;
+    if (res.status !== 0) fail('regression', `${step.name} failed (exit ${res.status ?? 'signal'}) after ${ms}ms`);
+    else ok(`${step.name} (${ms}ms)`);
+  }
+}
+
+if (LIST_ONLY) {
+  console.log('P2-S4 GATE plan:');
+  console.log('  structural: 0046 and 0047 exist and are frozen at their accepted digests, on disk and in the manifest');
+  console.log('  structural: the five source tables and seven source commands exist; P2-S4 itself built no FX registry, period or balance table');
+  console.log('  structural: the journal carries no reversal marker; reversal and opening-balance uniqueness are physical; supersession requires a reversal');
+  console.log('  structural: G-4 protects EVERY journal writer, G-5 covers the new definers, no runtime DML on any source table');
+  console.log('  structural: the engine owns the derivations, no bypass seam exists, exactly three merchant endpoints, money crosses HTTP as strings');
+  console.log('  structural: every named idempotency regression exists, no caller-supplied fingerprint, refusals carry no financial values');
+  console.log('  structural: every P2-S4 table names its tenant physically');
+  console.log('  structural: all three native sources owe a detail row at COMMIT, through a deferred constraint trigger on journal_entries');
+  console.log('  structural: all five opening-balance commands take one per-business lock FIRST, and never take the business row FOR SHARE');
+  console.log("  structural: opening-balance currencies answer to the registry, a domestic position is rate 1, the reversal date is the client's");
+  console.log('  structural: accounting_post_reversal refuses a NULL date and carries no clock fallback for it');
+  for (const s of STEPS) console.log(`  command:    ${s.cmd} ${s.args.join(' ')}`);
+  process.exit(0);
+}
+
+checkMigrationBoundary();
+checkSurfaces();
+checkIdempotencyProof();
+checkDataIntegrityAndDeterminism();
+checkSourceCompletenessAndLockOrder();
+checkReversalDateContract();
+checkGuards();
+checkEngineAndSurface();
+if (failures > 0) {
+  console.error(`\nP2-S4 GATE: FAIL (${failures} structural violation${failures === 1 ? '' : 's'}) — not running the regression matrix`);
+  process.exit(1);
+}
+runSteps();
+
+if (failures > 0) {
+  console.error(`\nP2-S4 GATE: FAIL (${failures})`);
+  process.exit(1);
+}
+console.log('\nP2-S4 GATE: PASS');

@@ -6,6 +6,16 @@
  */
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
+import {
+  ACCOUNTING_AUTHORITY_TABLES,
+  discoverAccountingTables,
+  findAuthoritativeBalanceColumns,
+  isForbiddenBalanceTable,
+} from './guards/no-authoritative-balance';
+import { findFloatRateColumns } from './guards/no-float-rate';
+import { findDefinerSearchPathViolations } from './guards/definer-search-path';
+import { findReadSurfaceViolations, readSurfaceFiles } from './guards/read-surface';
+import { findPostingSurfaceViolations } from './guards/posting-surface';
 
 const ROOT = join(__dirname, '..');
 let failures = 0;
@@ -252,8 +262,147 @@ for (const dir of ['apps/api/src', 'apps/web/src', 'apps/admin/src', 'packages']
   }
 }
 
+// Rule 15 — GUARD G-3 (Architecture Lock, P2-S1): no authoritative mutable
+// balance column on an accounting source-of-truth table. The journal is the
+// financial truth; a stored balance column is a second truth that can drift
+// and, once it does, nothing says which of the two lied. Storage authority
+// only — a report DTO or a query result named `balance` is a read model and
+// is deliberately untouched by this rule.
+{
+  const migrations = walk(join(ROOT, 'infrastructure/database/migrations'), /\.sql$/);
+  const schema = migrations.map((f) => readFileSync(f, 'utf8')).join('\n');
+
+  // P2-S7 §60: the watched set is every accounting-owned table the schema
+  // actually creates, not a list somebody has to remember to extend.
+  const watched = discoverAccountingTables(schema);
+  for (const f of migrations) {
+    for (const hit of findAuthoritativeBalanceColumns(readFileSync(f, 'utf8'), watched)) {
+      fail('no-authoritative-balance', f, `${hit.table}.${hit.column} claims storage authority over a derived financial quantity (G-3)`);
+    }
+  }
+
+  // The other shape: a table that IS the stored balance, whose columns are
+  // innocently named. AL-15 refuses the storage, however it is spelled.
+  for (const table of watched) {
+    if (isForbiddenBalanceTable(table)) {
+      fail(
+        'no-authoritative-balance',
+        'infrastructure/database/migrations',
+        `table \`${table}\` stores accounting balances — the journal is the only financial truth (G-3/AL-15)`,
+      );
+    }
+  }
+
+  // The guard must actually be watching something: if the declared
+  // source-of-truth table has not been created yet, G-3 is decorative.
+  for (const table of ACCOUNTING_AUTHORITY_TABLES) {
+    if (!watched.includes(table)) {
+      fail(
+        'no-authoritative-balance',
+        'infrastructure/database/migrations',
+        `declared accounting source-of-truth table \`${table}\` does not exist — G-3 is watching nothing`,
+      );
+    }
+  }
+}
+
+// Rule 16 — GUARD G-2 (Architecture Lock, P2-S2): no floating-point financial
+// rate in authoritative accounting storage. Rule 6's SQL half keys off
+// `amount|price|total|balance`, so a column named `fx_rate` passes it
+// untouched; this is the rate-shaped half. Scoped to accounting tables on
+// purpose — a conversion rate on a marketing funnel is not ledger authority,
+// and a repository-wide ban would be a guard nobody could live with.
+{
+  const migrations = walk(join(ROOT, 'infrastructure/database/migrations'), /\.sql$/);
+  for (const f of migrations) {
+    for (const hit of findFloatRateColumns(readFileSync(f, 'utf8'))) {
+      fail('no-float-rate', f, `${hit.table}.${hit.column} ${hit.detail}`);
+    }
+  }
+  // A guard watching nothing is decorative: the rate column it exists for
+  // must actually be in the tree.
+  const schema = migrations.map((f) => readFileSync(f, 'utf8')).join('\n');
+  if (!/CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?journal_lines\b/i.test(schema)) {
+    fail('no-float-rate', 'infrastructure/database/migrations', 'journal_lines does not exist — G-2 is watching nothing');
+  }
+}
+
+// Rule 17 — GUARD G-4 (P2-S3, §67): the ledger writer may not exist without
+// the protections that make it safe, may not be reachable by any runtime role
+// but the merchant one, and may not be bypassed by application code writing
+// the journal directly. Stated as an implication, so a repository with no
+// writer passes and a repository with a half-dismantled one does not.
+{
+  const migrations = walk(join(ROOT, 'infrastructure/database/migrations'), /\.sql$/)
+    .sort()
+    .map((f) => readFileSync(f, 'utf8'))
+    .join('\n');
+  // Application code only. Tests legitimately write the journal as the schema
+  // owner to reach a constraint the writer would never let them reach, and
+  // migrations ARE the schema; neither is a service going around the writer.
+  const appFiles: Record<string, string> = {};
+  for (const surface of ['apps/api/src', 'apps/web/src', 'apps/admin/src', 'packages']) {
+    for (const f of tsFiles(join(ROOT, surface))) {
+      if (/\.(test|spec)\.ts$/.test(f) || /[\\/]test[\\/]/.test(f)) continue;
+      appFiles[relative(ROOT, f)] = readFileSync(f, 'utf8');
+    }
+  }
+  for (const violation of findPostingSurfaceViolations({ schema: migrations, appFiles })) {
+    fail('posting-surface', 'infrastructure/database/migrations', violation);
+  }
+}
+
+// Rule 18 — GUARD G-5 (P2-S3 correction, §9): no SECURITY DEFINER routine may
+// resolve a name through a schema its caller can write, and no routine may
+// depend on a session relation. The live half of this rule is the catalogue
+// matrix in tests/security/search-path-shadowing.test.ts; this half fails on a
+// pull request, before any server exists to ask.
+{
+  const migrations: Record<string, string> = {};
+  for (const f of walk(join(ROOT, 'infrastructure/database/migrations'), /\.sql$/).sort()) {
+    migrations[relative(ROOT, f)] = readFileSync(f, 'utf8');
+  }
+  // Frozen files are reported only for the one shape no ALTER can repair (no
+  // pinned path at all). Their ordering is corrected in the effective state by
+  // a candidate migration, because their bytes may never change.
+  const manifest = JSON.parse(readFileSync(join(ROOT, 'infrastructure/database/MIGRATION_MANIFEST.json'), 'utf8')) as {
+    migrations: { name: string }[];
+  };
+  const frozen = new Set(manifest.migrations.map((m) => m.name));
+  for (const violation of findDefinerSearchPathViolations({
+    migrations,
+    bootstrap: readFileSync(join(ROOT, 'infrastructure/database/bootstrap.sql'), 'utf8'),
+    frozen,
+  })) {
+    fail('definer-search-path', 'infrastructure/database', violation);
+  }
+}
+
+// Rule 19 — GUARD G-6 (P2-S7, §61): the financial READ surface is read-only,
+// pages by keyset, renders the FX snapshot frozen on the line, never filters
+// history on `is_active`, and never turns an amount into a double. G-4 says
+// "application code must not write the journal" repository-wide; this says
+// the narrower things that are only wrong in a report, and says them where a
+// report is.
+{
+  const reportFiles: Record<string, string> = {};
+  for (const surface of ['apps/api/src', 'packages']) {
+    for (const f of tsFiles(join(ROOT, surface))) {
+      if (/\.(test|spec)\.ts$/.test(f) || /[\\/]test[\\/]/.test(f)) continue;
+      reportFiles[relative(ROOT, f)] = readFileSync(f, 'utf8');
+    }
+  }
+  for (const v of findReadSurfaceViolations(reportFiles)) {
+    fail('read-surface', v.file, `${v.rule}: found \`${v.evidence}\` — ${v.why} (G-6)`);
+  }
+  // A guard watching nothing is decorative.
+  if (readSurfaceFiles(reportFiles).length === 0) {
+    fail('read-surface', 'apps/api/src', 'no accounting reporting module found — G-6 is watching nothing');
+  }
+}
+
 if (failures > 0) {
   console.error(`\nSTATIC GUARDS: FAIL (${failures})`);
   process.exit(1);
 }
-console.log('STATIC GUARDS: PASS (14 rules)');
+console.log('STATIC GUARDS: PASS (19 rules)');

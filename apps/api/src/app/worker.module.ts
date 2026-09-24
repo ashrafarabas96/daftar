@@ -18,7 +18,7 @@ export class WorkerModule {
     const { config } = options;
     return {
       module: WorkerModule,
-      providers: [...coreProviders(config), ...workerProviders(config, options), CredentialDeliveryWorker, OutboxPublisher],
+      providers: [...coreProviders(config, options), ...workerProviders(config, options), CredentialDeliveryWorker, OutboxPublisher],
     };
   }
 }

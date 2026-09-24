@@ -26,6 +26,87 @@ import { arch, cpus, platform, release, totalmem } from 'node:os';
 import { join, relative } from 'node:path';
 
 const ROOT = join(__dirname, '..');
+
+// THE LIBRARY PACKAGES, IN THE ORDER THEIR TYPES HAVE TO EXIST.
+//
+// `clean build outputs` deletes every build output so the gate builds from
+// source the way a fresh checkout does, and typed linting, typechecking and
+// the tests all read those outputs afterwards. Both the list of outputs to
+// delete and the list of packages to rebuild used to be written out by hand,
+// and `@daftar/accounting` — added in Phase 2, long after this gate — was in
+// neither. On any machine that had built the tree before, its `dist` survived
+// the clean and everything resolved; on a fresh checkout there was nothing to
+// resolve and typed linting reported 695 "type that cannot be resolved"
+// errors. A release gate that passes only where the tree was already built is
+// not a release gate.
+//
+// So neither list is written by hand any more. The SET is every workspace
+// under `packages/` that has a `build` script, and the ORDER is a topological
+// sort of their `@daftar/*` dependencies, so the package added next is built
+// in the right place without anybody remembering to say so.
+interface LibraryPackage {
+  name: string;
+  dir: string;
+  deps: string[];
+}
+
+function libraryPackages(): LibraryPackage[] {
+  const base = join(ROOT, 'packages');
+  if (!existsSync(base)) return [];
+  return readdirSync(base, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && existsSync(join(base, entry.name, 'package.json')))
+    .map((entry) => ({
+      dir: `packages/${entry.name}`,
+      manifest: JSON.parse(readFileSync(join(base, entry.name, 'package.json'), 'utf8')) as {
+        name?: string;
+        scripts?: Record<string, string>;
+        dependencies?: Record<string, string>;
+        peerDependencies?: Record<string, string>;
+        devDependencies?: Record<string, string>;
+      },
+    }))
+    .filter((entry) => typeof entry.manifest.name === 'string' && typeof entry.manifest.scripts?.['build'] === 'string')
+    .map((entry) => ({
+      name: entry.manifest.name as string,
+      dir: entry.dir,
+      deps: [
+        ...new Set([
+          ...Object.keys(entry.manifest.dependencies ?? {}),
+          ...Object.keys(entry.manifest.peerDependencies ?? {}),
+          ...Object.keys(entry.manifest.devDependencies ?? {}),
+        ]),
+      ]
+        .filter((dep) => dep.startsWith('@daftar/'))
+        .sort(),
+    }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+function libraryBuildOrder(): { order: LibraryPackage[]; problems: string[] } {
+  const packages = libraryPackages();
+  const byName = new Map(packages.map((pkg) => [pkg.name, pkg]));
+  const state = new Map<string, 'visiting' | 'built'>();
+  const order: LibraryPackage[] = [];
+  const problems: string[] = [];
+  const visit = (pkg: LibraryPackage, trail: string[]): void => {
+    const seen = state.get(pkg.name);
+    if (seen === 'built') return;
+    if (seen === 'visiting') {
+      problems.push(`the library packages depend on each other in a cycle: ${[...trail, pkg.name].join(' -> ')}`);
+      return;
+    }
+    state.set(pkg.name, 'visiting');
+    for (const dep of pkg.deps) {
+      const next = byName.get(dep);
+      if (next) visit(next, [...trail, pkg.name]);
+    }
+    state.set(pkg.name, 'built');
+    order.push(pkg);
+  };
+  for (const pkg of packages) visit(pkg, []);
+  return { order, problems };
+}
+
 const args = new Map(process.argv.slice(2).map((a) => a.replace(/^--/, '').split('=') as [string, string | undefined]));
 const DEV_MODE = args.has('dev');
 const LIST_ONLY = args.has('list');
@@ -396,11 +477,9 @@ const steps: { name: string; fn: () => boolean }[] = [
           'apps/api/dist',
           'apps/web/.next',
           'apps/admin/.next',
-          'packages/domain-core/dist',
-          'packages/shared-contracts/dist',
-          'packages/design-system/dist',
           'apps/android/app/build',
           'apps/android/build',
+          ...libraryPackages().map((pkg) => `${pkg.dir}/dist`),
         ]) {
           rmSync(join(ROOT, rel), { recursive: true, force: true });
         }
@@ -421,9 +500,14 @@ const steps: { name: string; fn: () => boolean }[] = [
   {
     name: 'db from zero',
     fn: () =>
-      run('database contract from zero (roles → migrate → no-op → manifest → tamper → role contract)', npm, ['run', '-s', 'check:db-from-zero'], {
-        enrich: (out) => ({ dbFromZero: JSON.parse(/DB_FROM_ZERO: (\{.*\})/.exec(out)?.[1] ?? 'null') }),
-      }),
+      run(
+        'database contract from zero (roles → migrate → no-op → manifest → tamper → role contract)',
+        npm,
+        ['run', '-s', 'check:db-from-zero', '--', '--release'],
+        {
+          enrich: (out) => ({ dbFromZero: JSON.parse(/DB_FROM_ZERO: (\{.*\})/.exec(out)?.[1] ?? 'null') }),
+        },
+      ),
   },
   { name: 'machine gate', fn: () => run('phase 1 machine gate', npm, ['run', '-s', 'gate:phase1']) },
   { name: 'static guards', fn: () => run('static architecture guards', npm, ['run', '-s', 'check:guards']) },
@@ -431,18 +515,15 @@ const steps: { name: string; fn: () => boolean }[] = [
   { name: 'format', fn: () => run('format', npm, ['run', '-s', 'format']) },
   {
     name: 'packages',
-    fn: () =>
-      run('build contract + design packages', npm, [
-        'run',
-        '-s',
-        'build',
-        '-w',
-        '@daftar/domain-core',
-        '-w',
-        '@daftar/shared-contracts',
-        '-w',
-        '@daftar/design-system',
-      ]),
+    fn: () => {
+      const { order, problems } = libraryBuildOrder();
+      const resolved = inProcess(
+        'every library package builds, in dependency order',
+        () => problems,
+        () => ({ libraryBuildOrder: order.map((pkg) => pkg.name) }),
+      );
+      return resolved && order.every((pkg) => run(`build ${pkg.name}`, npm, ['run', '-s', 'build', '-w', pkg.name]));
+    },
   },
   { name: 'lint', fn: () => run('lint (zero warnings)', npm, ['run', '-s', 'lint']) },
   { name: 'typecheck', fn: () => run('typecheck (all workspaces)', npm, ['run', '-s', 'typecheck']) },

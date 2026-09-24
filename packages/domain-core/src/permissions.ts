@@ -37,6 +37,21 @@ export const PERMISSIONS = [
   'billing.manage',
   'subscription.view',
   'subscription.manage',
+  // Phase 2 — accounting (P2-S1).
+  'accounting.view',
+  'accounting.post',
+  'accounting.reverse',
+  'accounting.chart.manage',
+  'accounting.fx.manage',
+  // Phase 2 — accounting periods (P2-S6). Two keys, not one.
+  //
+  // `manage` creates and closes; `reopen` undoes a close and does NOTHING
+  // else. Reopen is deliberately NOT implied by manage: closing a period is
+  // the ordinary end of a month, while undoing a close after the fact is a
+  // rarer decision worth delegating to fewer people. One combined key could
+  // not express "this person closes the books, that person may undo it".
+  'accounting.period.manage',
+  'accounting.period.reopen',
 ] as const;
 
 export type Permission = (typeof PERMISSIONS)[number];
@@ -56,6 +71,17 @@ export const SENSITIVE_PERMISSIONS = [
   'billing.manage',
   'subscription.manage',
   'business.manage',
+  // Accounting authority is financial authority: posting, reversing, changing
+  // the chart and setting FX rates all move accounting truth (AL-16).
+  // accounting.view is ordinary — reading never corrupts a ledger.
+  'accounting.post',
+  'accounting.reverse',
+  'accounting.chart.manage',
+  'accounting.fx.manage',
+  // Closing a period decides what a merchant reported; reopening one undoes
+  // that decision. Both move accounting truth, so both are sensitive (AL-16).
+  'accounting.period.manage',
+  'accounting.period.reopen',
 ] as const satisfies readonly Permission[];
 export function isSensitivePermission(p: Permission): boolean {
   return (SENSITIVE_PERMISSIONS as readonly string[]).includes(p);

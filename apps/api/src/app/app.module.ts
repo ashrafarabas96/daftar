@@ -1,7 +1,17 @@
 import { Module, NestModule, MiddlewareConsumer, DynamicModule } from '@nestjs/common';
 import type { AppConfig } from '../config';
 import { RequestContextMiddleware } from './request-context.middleware';
-import { coreProviders, httpImports, httpProviders, identityProviders, merchantInfraProviders, workerProviders, type RuntimeSeams } from './runtime';
+import {
+  coreProviders,
+  httpImports,
+  httpProviders,
+  identityProviders,
+  accountingProviders,
+  merchantInfraProviders,
+  workerProviders,
+  reconcilerProviders,
+  type RuntimeSeams,
+} from './runtime';
 import { AuthController } from '../modules/auth/auth.controller';
 import { TenancyService } from '../modules/tenancy/tenancy.service';
 import { StructureService } from '../modules/tenancy/structure.service';
@@ -13,6 +23,7 @@ import { CatalogService } from '../modules/catalog/catalog.service';
 import { MediaService } from '../modules/catalog/media.service';
 import { CatalogController } from '../modules/catalog/catalog.controller';
 import { PlatformController, HealthController } from '../modules/platform/platform.controller';
+import { AccountingController } from '../modules/accounting/accounting.controller';
 import { AdminService } from '../modules/admin/admin.service';
 import { AdminController } from '../modules/admin/admin.controller';
 import { OutboxPublisher } from '../modules/outbox/publisher';
@@ -25,6 +36,12 @@ export type AppModuleOptions = { config: AppConfig } & RuntimeSeams;
  * in one Nest application. Development/test ONLY — production configuration
  * validation rejects this mode (Directive §19); the separated runtimes are
  * MerchantApiModule / PlatformApiModule / WorkerModule (see runtime.ts).
+ *
+ * This composition must carry EVERY merchant controller that
+ * MerchantApiModule carries. A route that exists in one and not the other is
+ * a route no integration test can reach, so its contract goes unproven here
+ * and its first real exercise is production. `tests/integration/
+ * process-composition.test.ts` holds the two lists to each other.
  */
 @Module({})
 export class AppModule implements NestModule {
@@ -33,13 +50,28 @@ export class AppModule implements NestModule {
     return {
       module: AppModule,
       imports: httpImports(),
-      controllers: [AuthController, TenancyController, CatalogController, PlatformController, HealthController, EntitlementsController, AdminController],
+      controllers: [
+        AuthController,
+        TenancyController,
+        CatalogController,
+        PlatformController,
+        HealthController,
+        EntitlementsController,
+        AccountingController,
+        AdminController,
+      ],
       providers: [
-        ...coreProviders(config),
+        ...coreProviders(config, options),
         ...httpProviders(config, TenancyService),
         ...identityProviders(config, options),
         ...merchantInfraProviders(config, options),
+        ...accountingProviders(),
         ...workerProviders(config, options),
+        // Only PROCESS_MODE=all composes the reconciler beside the worker,
+        // and only because this composition exists for dev and tests;
+        // production refuses this mode outright (§19), so the two
+        // authorities never share a process where it matters.
+        ...reconcilerProviders(config, options),
         AdminService,
         TenancyService,
         StructureService,

@@ -19,6 +19,25 @@ export interface Scope {
    * inside provision_actor(). Set ONLY on provisioner transactions.
    */
   provisioningAssertion?: string;
+  /**
+   * Accounting command assertion (P2-S3): an HMAC-signed claim of the actor,
+   * the tenant, the business, the source and the authorized payload
+   * fingerprint, which `accounting_actor()` verifies inside
+   * `accounting_post_entry`. Set ONLY on accounting posting transactions.
+   */
+  accountingAssertion?: string;
+  /**
+   * Accounting CONTROL assertion (P2-S5): the `acctctl/1` claim
+   * `accounting_control_actor()` verifies inside an accounting CONFIGURATION
+   * command such as `accounting_fx_rate_enter`.
+   *
+   * A GUC of its own, not a second value in the posting one. The two formats
+   * are cryptographically domain-separated, and keeping the transports
+   * separate too means a transaction that set only the posting assertion
+   * cannot reach a control command at all — a compromised caller cannot
+   * smuggle one into a posting workflow by reusing the connection's setting.
+   */
+  accountingControlAssertion?: string;
 }
 
 /**
@@ -48,6 +67,7 @@ export class Database implements OnModuleDestroy, OnModuleInit {
   private readonly resolverPool: Pool | null;
   private readonly workerPool: Pool | null;
   private readonly provisionerPool: Pool | null;
+  private readonly reconcilerPool: Pool | null;
 
   private readonly expectedPrincipals: [Pool | null, string][] = [];
   private readonly provisioningKey: ProvisioningAssertionKey | null;
@@ -60,16 +80,18 @@ export class Database implements OnModuleDestroy, OnModuleInit {
     //   merchant-api: app + identity + resolver + provisioner
     //   platform-api: platform + identity
     //   worker:       worker only
+    //   reconciler:   reconciler only (P2-S8 §30)
     //   all:          everything (dev/test; production rejects this mode)
     const mode = config.PROCESS_MODE;
     this.provisioningKey = parseProvisioningAssertionKey(config);
     const owns = {
       app: mode === 'all' || mode === 'merchant-api',
       platform: mode === 'all' || mode === 'platform-api',
-      identity: mode !== 'worker',
+      identity: mode !== 'worker' && mode !== 'reconciler',
       resolver: mode === 'all' || mode === 'merchant-api',
       worker: mode === 'all' || mode === 'worker',
       provisioner: mode === 'all' || mode === 'merchant-api',
+      reconciler: mode === 'all' || mode === 'reconciler',
     };
     // Dev/test convenience ONLY for the single-process mode: a missing role
     // URL falls back to the app URL. Separated runtimes never fall back.
@@ -81,6 +103,12 @@ export class Database implements OnModuleDestroy, OnModuleInit {
     this.resolverPool = open(owns.resolver, config.RESOLVER_DATABASE_URL ?? fallback, 4);
     this.workerPool = open(owns.worker, config.WORKER_DATABASE_URL ?? fallback, 2);
     this.provisionerPool = open(owns.provisioner, config.PROVISIONER_DATABASE_URL ?? fallback, 2);
+    // P2-S8 §30: NO fallback, in any mode. Reconciliation authority is either
+    // configured explicitly as its own principal or it does not exist — a
+    // reconciler quietly running as `daftar_app` would read the ledger with a
+    // credential that can also write it, which is the whole thing this slice
+    // is built to prevent.
+    this.reconcilerPool = open(owns.reconciler, config.RECONCILER_DATABASE_URL, 2);
     // §32/§XXX startup verification: every explicitly-configured pool must be
     // authenticated as its intended DB role — per deployment mode, only the
     // pools this process actually owns are verified.
@@ -90,6 +118,11 @@ export class Database implements OnModuleDestroy, OnModuleInit {
     if (this.resolverPool && config.RESOLVER_DATABASE_URL) this.expectedPrincipals.push([this.resolverPool, 'daftar_resolver']);
     if (this.workerPool && config.WORKER_DATABASE_URL) this.expectedPrincipals.push([this.workerPool, 'daftar_worker']);
     if (this.provisionerPool && config.PROVISIONER_DATABASE_URL) this.expectedPrincipals.push([this.provisionerPool, 'daftar_provisioner']);
+    // Verified in EVERY environment, unlike the app pool: the reconciler's
+    // whole safety argument is "this connection is daftar_reconciler, whose
+    // grants are read-only", and an unverified pool would make that argument
+    // about the intention rather than about the connection.
+    if (this.reconcilerPool) this.expectedPrincipals.push([this.reconcilerPool, 'daftar_reconciler']);
   }
 
   /** §32: fail startup on principal mismatch — SELECT current_user per pool. */
@@ -114,8 +147,18 @@ export class Database implements OnModuleDestroy, OnModuleInit {
       set_config('app.business_id', $2, true),
       set_config('app.bypass_rls', $3, true),
       set_config('app.actor_user_id', $4, true),
-      set_config('app.provisioning_assertion', $5, true)`,
-      [scope.tenantId ?? '', scope.businessId ?? '', bypass ? 'true' : 'false', scope.actorUserId ?? '', scope.provisioningAssertion ?? ''],
+      set_config('app.provisioning_assertion', $5, true),
+      set_config('app.accounting_assertion', $6, true),
+      set_config('app.accounting_control_assertion', $7, true)`,
+      [
+        scope.tenantId ?? '',
+        scope.businessId ?? '',
+        bypass ? 'true' : 'false',
+        scope.actorUserId ?? '',
+        scope.provisioningAssertion ?? '',
+        scope.accountingAssertion ?? '',
+        scope.accountingControlAssertion ?? '',
+      ],
     );
   }
 
@@ -172,6 +215,38 @@ export class Database implements OnModuleDestroy, OnModuleInit {
   }
 
   /**
+   * Reconciliation ENUMERATION boundary (P2-S8 §11, §30): `daftar_reconciler`,
+   * with NO business scope and NO bypass.
+   *
+   * There is nothing this connection can read without a scope except the one
+   * SECURITY DEFINER enumerator `0051` grants it, which returns two identifier
+   * columns and nothing else. `daftar_reconciler` is not exempt from row level
+   * security — since `0032` the only principal that is, is `daftar_platform` —
+   * so a statement that tried to read the journal here would come back empty,
+   * and the caller is written to treat "cannot enumerate" as an outcome of its
+   * own rather than as a clean book.
+   */
+  async withReconcilerTransaction<T>(fn: (client: PoolClient) => Promise<T>): Promise<T> {
+    return this.run(this.reconcilerPool, {}, false, fn);
+  }
+
+  /**
+   * Reconciliation READ boundary (P2-S8 §11, §20): `daftar_reconciler`, scoped
+   * to one business, with NO bypass.
+   *
+   * The role holds column-level SELECT on six tables and holds no DML anywhere,
+   * so a reconciliation pass physically cannot write financial truth however it
+   * is called (§18). Scoping each business separately adds the second property:
+   * a check that forgot its `business_id` predicate still cannot read across
+   * the boundary, because row level security refuses the rows. The scope is set
+   * TRANSACTION-LOCAL, so a pooled connection carries none of it to the next
+   * business.
+   */
+  async withReconcilerBusinessTransaction<T>(tenantId: string, businessId: string, fn: (client: PoolClient) => Promise<T>): Promise<T> {
+    return this.run(this.reconcilerPool, { tenantId, businessId }, false, fn);
+  }
+
+  /**
    * Provisioning boundary (Stabilization §13–14): daftar_provisioner — the
    * ONLY authority for initial onboarding, additional business creation and
    * invitation acceptance. NO bypass and NO table CRUD (0032): its only
@@ -190,6 +265,34 @@ export class Database implements OnModuleDestroy, OnModuleInit {
     }
     const provisioningAssertion = mintProvisioningAssertion(this.provisioningKey, actorUserId, kind);
     return this.run(this.provisionerPool, { provisioningAssertion }, true, fn);
+  }
+
+  /**
+   * Accounting posting boundary (P2-S3): the merchant runtime role, carrying a
+   * server-minted accounting command assertion.
+   *
+   * It runs on the APP pool because `daftar_app` is the one runtime role that
+   * may execute `accounting_post_entry` — and the role holds no journal DML of
+   * its own, so this boundary can call the primitive and nothing else. The
+   * isolation GUCs are left empty on purpose: every identity the primitive
+   * uses comes from the verified assertion, and setting them here would
+   * suggest they are load-bearing when they are not.
+   */
+  async withAccountingTransaction<T>(accountingAssertion: string, fn: (client: PoolClient) => Promise<T>): Promise<T> {
+    return this.run(this.pool, { accountingAssertion }, false, fn);
+  }
+
+  /**
+   * Accounting CONFIGURATION boundary (P2-S5): the same merchant runtime
+   * role, carrying a server-minted `acctctl/1` CONTROL assertion.
+   *
+   * Separate from the posting boundary on purpose. The posting assertion is
+   * not set here and the control assertion is not set there, so neither
+   * command can be driven by the other's authority even if the two formats
+   * were somehow confusable — which §30 requires them not to be anyway.
+   */
+  async withAccountingControlTransaction<T>(accountingControlAssertion: string, fn: (client: PoolClient) => Promise<T>): Promise<T> {
+    return this.run(this.pool, { accountingControlAssertion }, false, fn);
   }
 
   /** Names of the pools this process actually opened (boot-test evidence, §20). */
@@ -224,7 +327,14 @@ export class Database implements OnModuleDestroy, OnModuleInit {
 
   async close(): Promise<void> {
     await this.pool?.end();
-    await Promise.all([this.platformPool?.end(), this.identityPool?.end(), this.resolverPool?.end(), this.workerPool?.end(), this.provisionerPool?.end()]);
+    await Promise.all([
+      this.platformPool?.end(),
+      this.identityPool?.end(),
+      this.resolverPool?.end(),
+      this.workerPool?.end(),
+      this.provisionerPool?.end(),
+      this.reconcilerPool?.end(),
+    ]);
   }
 
   /** Nest lifecycle: pools die with the app — no connection leaks across tests/reloads. */

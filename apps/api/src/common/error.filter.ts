@@ -1,6 +1,7 @@
 import { ArgumentsHost, Catch, ExceptionFilter, HttpException, HttpStatus, Inject } from '@nestjs/common';
 import type { Response } from 'express';
 import { ZodError } from 'zod';
+import { AccountingError } from '@daftar/accounting';
 import { AppError, CountryPackError, CurrencyError, type ApiErrorBody, type ApiErrorCode } from '@daftar/domain-core';
 import { RateLimitError, RateLimiterUnavailableError } from '../infra/redis';
 import { getContext } from '../infra/request-context';
@@ -27,6 +28,14 @@ export class GlobalExceptionFilter implements ExceptionFilter {
 
     if (exception instanceof AppError) {
       body(exception.code, exception.message, exception.httpStatus, exception.details);
+      return;
+    }
+    // A refusal from the accounting authority (§49). The stable code is the
+    // contract; `toSafeJSON()` is the ONLY representation allowed out, and it
+    // carries identifiers alone — never an amount, a rate, a balance, an
+    // assertion, a SQLSTATE or the name of a unique index.
+    if (exception instanceof AccountingError) {
+      body('ACCOUNTING_REFUSED', 'The accounting authority refused this command', accountingStatus(exception.code), { ...exception.toSafeJSON() });
       return;
     }
     if (exception instanceof ZodError) {
@@ -92,4 +101,65 @@ export class GlobalExceptionFilter implements ExceptionFilter {
     this.logger.error({ err: exception, requestId }, 'unhandled error');
     body('INTERNAL_ERROR', 'Internal error', HttpStatus.INTERNAL_SERVER_ERROR);
   }
+}
+
+/**
+ * Stable code → HTTP status. The mapping is exhaustive by construction: a new
+ * accounting code that nobody classified lands on 400 rather than on 500, so
+ * an unclassified refusal is still a refusal and never reads as an outage.
+ */
+function accountingStatus(code: string): number {
+  if (code === 'accounting.forbidden' || code === 'accounting.branch_scope_violation' || code.startsWith('accounting.assertion_')) {
+    return HttpStatus.FORBIDDEN;
+  }
+  if (code === 'accounting.entry_not_found' || code === 'accounting.period_not_found') return HttpStatus.NOT_FOUND;
+  if (
+    code === 'accounting.idempotency_conflict' ||
+    code === 'accounting.reversal_exists' ||
+    code === 'accounting.reversal_of_reversal' ||
+    code === 'accounting.opening_balance_exists' ||
+    code === 'accounting.opening_balance_state_invalid' ||
+    code === 'accounting.supersede_without_reversal' ||
+    code === 'accounting.source_immutable' ||
+    // Two merchants stated different rates for one pair at one instant, or a
+    // rate row was asked to change. Both are conflicts over existing truth,
+    // not malformed requests.
+    code === 'accounting.fx_rate_conflict' ||
+    code === 'accounting.fx_rate_immutable' ||
+    // P2-S6. Every one of these is a refusal about the SHAPE OF THE BOOKS the
+    // merchant already has — a month that overlaps an existing one, a gap the
+    // topology will not take, a period already in the state asked for, or a
+    // posting whose date the existing periods refuse. The request itself is
+    // well formed, so 400 would tell the caller to fix a payload that is not
+    // wrong. A malformed period payload (`period_range_invalid`, a missing or
+    // oversized reopen reason) still falls through to 400 below, which is the
+    // distinction this list exists to keep.
+    code === 'accounting.period_overlap' ||
+    code === 'accounting.period_not_contiguous' ||
+    code === 'accounting.period_not_open' ||
+    code === 'accounting.period_not_closed' ||
+    code === 'accounting.period_closed' ||
+    code === 'accounting.period_missing_for_date' ||
+    // The closed-books topology refusals. Each one says the merchant's books
+    // are in a state that forbids the request, not that the request was
+    // malformed: close an earlier period first, reopen a later one first, or
+    // reopen the closed periods before writing behind them.
+    code === 'accounting.period_close_order' ||
+    code === 'accounting.period_reopen_order' ||
+    code === 'accounting.period_prepend_closed_history' ||
+    code === 'accounting.period_closed_history' ||
+    code === 'accounting.period_topology_invalid' ||
+    code === 'accounting.period_immutable' ||
+    // P2-S7. An unbalanced business-wide trial balance is not a malformed
+    // request and not an outage: the request was well formed and the server
+    // is working. It is the STATE OF THE BOOKS that forbids the answer, which
+    // is what 409 says. 500 would read as "try again"; 400 would tell the
+    // caller to fix a payload that is not wrong. The body carries the code, a
+    // request id and no amounts at all (§56) — the totals that disagree are
+    // exactly what must not reach a log line.
+    code === 'accounting.report_unbalanced'
+  ) {
+    return HttpStatus.CONFLICT;
+  }
+  return HttpStatus.BAD_REQUEST;
 }

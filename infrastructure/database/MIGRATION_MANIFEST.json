@@ -1,7 +1,7 @@
 {
-  "generatedAt": "2026-09-21T16:02:43.000Z",
-  "frozenThrough": "0039_catalog_identifiers_owner_integrity.sql",
-  "policy": "Migrations 0000–0039 are FROZEN at the Phase 1 release. A frozen migration is never edited or deleted; every schema correction is a NEW migration appended after 0039. Check: npm run check:migrations.",
+  "generatedAt": "2026-09-24T14:00:00.000Z",
+  "frozenThrough": "0052_accounting_journal_lines_rls_performance.sql",
+  "policy": "Migrations 0000–0052 are FROZEN. 0000–0039 froze at the Phase 1 release; 0040–0041 froze on Tech Lead acceptance of P2-S1 (docs/PHASE_2_S1_ACCEPTANCE.md); 0042–0043 froze on Tech Lead acceptance of P2-S2 (docs/PHASE_2_S2_ACCEPTANCE.md); 0044–0045 froze on Tech Lead acceptance of P2-S3 (docs/PHASE_2_S3_ACCEPTANCE.md); 0046–0047 froze on Tech Lead acceptance of P2-S4 (docs/PHASE_2_S4_ACCEPTANCE.md); 0048 froze on Tech Lead acceptance of P2-S5 (docs/PHASE_2_S5_ACCEPTANCE.md); 0049 froze on Tech Lead acceptance of P2-S6 (docs/PHASE_2_S6_ACCEPTANCE.md); 0050 froze on Tech Lead acceptance of P2-S7 (docs/PHASE_2_S7_ACCEPTANCE.md); 0051–0052 froze on Tech Lead acceptance of P2-S8 (docs/PHASE_2_S8_ACCEPTANCE.md). A frozen migration is never edited or deleted; every schema correction is a NEW migration appended after 0052, and only under an explicit Tech Lead directive authorizing it. Check: npm run check:migrations.",
   "migrations": [
     {
       "name": "0000_extensions.sql",
@@ -162,6 +162,58 @@
     {
       "name": "0039_catalog_identifiers_owner_integrity.sql",
       "sha256": "935fb8b767054f2c919ff48968af28df6abb823e564f8cee8b2284b42520d9cd"
+    },
+    {
+      "name": "0040_accounting_chart.sql",
+      "sha256": "535c8182a922a8363df2c791759c3e1eff2790757e402e6e28a41a5d113651db"
+    },
+    {
+      "name": "0041_accounting_permissions.sql",
+      "sha256": "3aea7eedfd6ccb9d8fd93ed827d84abaa9923ccd3b01497960237098c19b1f77"
+    },
+    {
+      "name": "0042_accounting_journal.sql",
+      "sha256": "78c852cd1f5888013a02244327a1eb606e3f0fd9582fbbed2018b9382cb92e33"
+    },
+    {
+      "name": "0043_accounting_invariants.sql",
+      "sha256": "9744da043d3c8b3fe68af30b135e5f5f36207ec5b457d115a3f5a465d268e70f"
+    },
+    {
+      "name": "0044_accounting_assertion_keys.sql",
+      "sha256": "cf49b196598e5dc829b56e656bc7883a2fed3a54f6631cf0bdf112c4521a0902"
+    },
+    {
+      "name": "0045_accounting_post_entry.sql",
+      "sha256": "84fa101e1c25e880b7850a96abd05a5efabd068cec56397c3b465ca11847cb2e"
+    },
+    {
+      "name": "0046_accounting_sources.sql",
+      "sha256": "6e4500dcc639149ac25d3e0736bbce77ff372aa06736c1211fe40725e7d196e6"
+    },
+    {
+      "name": "0047_accounting_opening_balances.sql",
+      "sha256": "0938d513c0bb844c5f36cbdb170612a08f9f52f828660ca88e2db00aeea1cabc"
+    },
+    {
+      "name": "0048_accounting_fx_rates.sql",
+      "sha256": "5438538a9f335c918b231db3faa94dd4eac7b71a1a688d1c62b5cda9f8ee4cc1"
+    },
+    {
+      "name": "0049_accounting_periods.sql",
+      "sha256": "454a52183f8666f88bbf17b87b4b44e6413114af069149d2eb2489854307d851"
+    },
+    {
+      "name": "0050_accounting_report_indexes.sql",
+      "sha256": "ef20a42788c503317c1e4b9bb69ada47e547faf42330bb1bc0d8e0a2f4c18356"
+    },
+    {
+      "name": "0051_accounting_reconciler_read.sql",
+      "sha256": "2086c87564f5f66243ab64753e7c4f5338f896a1e29984ddf8977be8ba7587cc"
+    },
+    {
+      "name": "0052_accounting_journal_lines_rls_performance.sql",
+      "sha256": "0acf165003c678f8d3017797e77033fadf2e9e791be54f98048031108c72ad84"
     }
   ]
 }
