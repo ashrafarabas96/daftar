@@ -156,6 +156,39 @@ add(
   );
 }
 
+// ── the checks whose evidence is a command's exit status ───────────────────
+//
+// Each of these RUNS the thing and records what it answered. Nothing here
+// interprets: a non-zero exit is FAIL, whatever this script thinks of it.
+//
+// THEY RUN BEFORE THE ARTEFACTS ARE READ, and that ordering is the fix for a
+// defect this document carried on its first CI run. `gate:phase2:s8` measures
+// the six budgets at Tier 1 and writes `release/phase2-s8-performance-tier1
+// .json` while it runs. Reading the artefacts first recorded that file as
+// "never produced" — a mandatory SKIPPED, and a FAIL verdict — in the very
+// invocation that was about to produce it. Run first, read after: the
+// dependency still points one way (this document may RUN the gate and READ
+// what it leaves behind; the gate reads nothing under `release/`), and the
+// rows now describe this invocation rather than the one before it (f §6,
+// §15, §16).
+const COMMANDS: { id: string; name: string; mandatory: boolean; argv: [string, string[]] }[] = [
+  {
+    id: 'GATE-S8',
+    name: 'the P2-S8 gate, including the outside-Vitest failure canary and every composed predecessor gate (f §3, g §38–§40)',
+    mandatory: true,
+    argv: ['npm', ['run', 'gate:phase2:s8']],
+  },
+  { id: 'SUPPLY-01', name: 'supply-chain hygiene (f §47)', mandatory: true, argv: ['npm', ['run', 'check:supply-chain']] },
+];
+const RUN_COMMANDS = !process.argv.slice(2).includes('--no-commands');
+const commandResults = COMMANDS.map((c) => {
+  const argv = `${c.argv[0]} ${c.argv[1].join(' ')}`;
+  if (!RUN_COMMANDS) return { id: c.id, name: c.name, mandatory: c.mandatory, argv, status: null, elapsedMs: 0 };
+  const started = Date.now();
+  const res = spawnSync(c.argv[0], c.argv[1], { cwd: ROOT, encoding: 'utf8', stdio: 'inherit', env: process.env });
+  return { id: c.id, name: c.name, mandatory: c.mandatory, argv, status: res.status ?? -1, elapsedMs: Date.now() - started };
+});
+
 // ── the artefacts other processes produced ─────────────────────────────────
 interface RehearsalEvidence {
   readonly verdict?: string;
@@ -254,34 +287,16 @@ interface EquivalenceEvidence {
   );
 }
 
-// ── the checks whose evidence is a command's exit status ───────────────────
+// ── what the commands answered ─────────────────────────────────────────────
 //
-// Each of these RUNS the thing and records what it answered. Nothing here
-// interprets: a non-zero exit is FAIL, whatever this script thinks of it.
-const COMMANDS: { id: string; name: string; mandatory: boolean; argv: [string, string[]] }[] = [
-  {
-    id: 'GATE-S8',
-    name: 'the P2-S8 gate, including the outside-Vitest failure canary and every composed predecessor gate (f §3, g §38–§40)',
-    mandatory: true,
-    argv: ['npm', ['run', 'gate:phase2:s8']],
-  },
-  { id: 'SUPPLY-01', name: 'supply-chain hygiene (f §47)', mandatory: true, argv: ['npm', ['run', 'check:supply-chain']] },
-];
-const RUN_COMMANDS = !process.argv.slice(2).includes('--no-commands');
-for (const c of COMMANDS) {
-  if (!RUN_COMMANDS) {
-    add(c.id, c.name, c.mandatory, 'SKIPPED', 'not run in this invocation — --no-commands was passed, so this document is not evidence');
+// The rows are added here, after the artefacts, so the document reads in the
+// order a reviewer expects; the commands themselves already ran, above.
+for (const r of commandResults) {
+  if (r.status === null) {
+    add(r.id, r.name, r.mandatory, 'SKIPPED', 'not run in this invocation — --no-commands was passed, so this document is not evidence');
     continue;
   }
-  const started = Date.now();
-  const res = spawnSync(c.argv[0], c.argv[1], { cwd: ROOT, encoding: 'utf8', stdio: 'inherit', env: process.env });
-  add(
-    c.id,
-    c.name,
-    c.mandatory,
-    res.status === 0 ? 'PASS' : 'FAIL',
-    `\`${c.argv[0]} ${c.argv[1].join(' ')}\` exited ${res.status ?? 'on a signal'} after ${Date.now() - started}ms`,
-  );
+  add(r.id, r.name, r.mandatory, r.status === 0 ? 'PASS' : 'FAIL', `\`${r.argv}\` exited ${r.status} after ${r.elapsedMs}ms`);
 }
 
 // ── the document ───────────────────────────────────────────────────────────
