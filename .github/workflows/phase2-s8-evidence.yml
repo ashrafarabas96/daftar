@@ -62,6 +62,15 @@ on:
       - 'tests/performance/**'
       - 'tests/security/**'
       - '.github/workflows/phase2-s8-evidence.yml'
+      # The two pages that state what this evidence says. They are here for a
+      # reason that only shows up at the end: f §26 requires a green run of
+      # this workflow on the SAME head as the green `ci.yml` run, and the last
+      # commit before a hand-off is usually the one that writes the run ids
+      # and the measured numbers into these pages. Without them in the list, a
+      # documentation-only commit becomes a head that this workflow never ran
+      # on, and the hand-off cannot be made truthfully.
+      - 'docs/PHASE_2_S8_ACCEPTANCE.md'
+      - 'docs/PHASE_2_PERFORMANCE_BASELINE.md'
 
 # `workflow_dispatch` can only be pointed at a branch or a tag, so the commit
 # is taken as an input and checked out explicitly. Every job below checks out
