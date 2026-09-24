@@ -27,11 +27,12 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { Pool } from 'pg';
+import { Client, Pool } from 'pg';
 import { reconcile } from '@daftar/accounting';
-import { createTestApp, ensurePostgres, ownerPool, reconcilerDbUrl, resetData, type TestApp } from '../helpers/test-app';
+import { appDbUrl, createTestApp, ensurePostgres, ownerPool, reconcilerDbUrl, resetData, type TestApp } from '../helpers/test-app';
 import { PoolReconciliationConnection } from '../helpers/accounting-reconciliation';
 import { DatabaseAccountingReconciliationReader } from '../../apps/api/src/modules/accounting/accounting-reconciliation.reader';
+import { accountTotalsSql } from '../../apps/api/src/modules/accounting/accounting-reports.reader';
 import { appClient, assertionFor, must, postAs, simpleCommand, todayIn } from '../helpers/accounting-posting';
 import { generateDataset, TIER1_SPEC, TIER2_RECONCILIATION_SPEC, TIER2_REPORTING_SPEC, type DatasetSpec } from './accounting-dataset';
 import { exactShaBinding } from '../../scripts/phase2-s8-binding';
@@ -116,6 +117,41 @@ async function measure(name: string, budgetMs: number, once: () => Promise<void>
   return summarise(name, budgetMs, samples);
 }
 
+/**
+ * WHAT THE C BUDGET'S READ ACTUALLY DID (§10, §11; f §11, §12).
+ *
+ * A millisecond figure says a query was slow. It does not say WHY, and the
+ * first thing anyone asks of a budget that misses on one machine and passes
+ * on another is "was it a different plan or a slower disk" — a question no
+ * timing can answer. So the trial balance, the one budget that has ever
+ * missed, records `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)` beside its
+ * numbers: the plan tree, the shared blocks hit and read, and the JIT block
+ * PostgreSQL adds when it compiled the query rather than interpreting it.
+ *
+ * It is captured through `accountTotalsSql`, which is the function the
+ * trial-balance reader itself calls, so this stays a recording of the query
+ * DAFTAR serves rather than of a copy that can drift away from it.
+ */
+let trialBalancePlan: Record<string, unknown> | null = null;
+
+async function captureTrialBalancePlan(): Promise<void> {
+  const sql = accountTotalsSql(['l.business_id = $1', 'e.entry_date >= $2::date', 'e.entry_date <= $3::date'], ['a.business_id = $1']);
+  const client = new Client({ connectionString: appDbUrl });
+  await client.connect();
+  try {
+    // The same principal and the same transaction-local scope the endpoint
+    // runs under: an EXPLAIN taken as the owner would plan without row level
+    // security and describe a query nobody serves.
+    await client.query('BEGIN');
+    await client.query(`SELECT set_config('app.tenant_id', $1, true), set_config('app.business_id', $2, true)`, [tenantId, businessId]);
+    const explained = await client.query<Record<string, unknown>>(`EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) ${sql}`, [businessId, '2000-01-01', spec.endDate]);
+    await client.query('ROLLBACK');
+    trialBalancePlan = ((explained.rows[0]?.['QUERY PLAN'] as Record<string, unknown>[] | undefined) ?? [])[0] ?? null;
+  } finally {
+    await client.end();
+  }
+}
+
 let t: TestApp;
 let token = '';
 let tenantId = '';
@@ -195,6 +231,12 @@ beforeAll(async () => {
 }, 21_600_000);
 
 afterAll(async () => {
+  // Before the app closes, and outside any measured iteration.
+  await captureTrialBalancePlan().catch((e: unknown) => {
+    // A failure to EXPLAIN is a gap in the evidence, never a reason to lose
+    // the measurements that were taken.
+    trialBalancePlan = { error: e instanceof Error ? e.message : String(e) };
+  });
   const { rows: version } = await ownerPool().query<{ v: string }>(`SELECT version() AS v`);
   const { rows: settings } = await ownerPool().query<{ name: string; setting: string; unit: string | null }>(
     `SELECT name, setting, unit FROM pg_settings
@@ -242,6 +284,8 @@ afterAll(async () => {
     dataset: { ...spec, seededLines, reportingLines, reconciliationLines },
     budgets: BUDGET,
     measurements,
+    /** §11: the plan behind budget C, recorded rather than described. */
+    plans: { C_TRIAL_BALANCE: trialBalancePlan },
   };
   const dir = join(__dirname, '../../release');
   mkdirSync(dir, { recursive: true });

@@ -123,7 +123,13 @@ jobs:
           PG_PORT: '5432'
           P2S8_PERF_TIER: '2'
           P2S8_EXPECTED_SHA: ${{ env.EXPECTED_SHA }}
+      # `always()`: a measurement that MISSED its budget is exactly the
+      # measurement a reviewer needs to read. Uploading only on success would
+      # leave a red job with nothing but a one-line assertion message, and the
+      # plan, the block counts and the machine record — the things that say
+      # WHY — discarded with it.
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: phase2-s8-performance-tier2
           path: release/phase2-s8-performance-tier2.json
@@ -176,7 +182,13 @@ jobs:
         env:
           PG_PORT: '5432'
           P2S8_EXPECTED_SHA: ${{ env.EXPECTED_SHA }}
+      # `always()`: a measurement that MISSED its budget is exactly the
+      # measurement a reviewer needs to read. Uploading only on success would
+      # leave a red job with nothing but a one-line assertion message, and the
+      # plan, the block counts and the machine record — the things that say
+      # WHY — discarded with it.
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: phase2-s8-rls-equivalence
           path: release/phase2-s8-rls-equivalence.json
@@ -225,7 +237,13 @@ jobs:
         run: npm run rehearse:phase2:rollback
         env:
           P2S8_EXPECTED_SHA: ${{ env.EXPECTED_SHA }}
+      # `always()`: a measurement that MISSED its budget is exactly the
+      # measurement a reviewer needs to read. Uploading only on success would
+      # leave a red job with nothing but a one-line assertion message, and the
+      # plan, the block counts and the machine record — the things that say
+      # WHY — discarded with it.
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: phase2-s8-rollback-rehearsal
           path: release/phase2-s8-rollback-rehearsal.json
