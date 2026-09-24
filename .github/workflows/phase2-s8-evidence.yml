@@ -304,13 +304,19 @@ jobs:
       # exit status directly, before any suite runs: a runner that exits 0
       # over a failing test would make every step below meaningless.
       - name: The test runner can still report failure (f §3)
+        # The transcript goes to RUNNER_TEMP, not to the working tree. Written
+        # beside the repository it was a `.log` file in the checkout, and
+        # P1-GOLD-33 — the Phase 1 golden that forbids dev debris in the tree —
+        # caught it and failed the whole composed gate two steps later. The
+        # golden was right: a workflow step is not allowed to leave litter in
+        # the tree it is about to make claims about.
         run: |
           set +e
-          npx vitest run --config tests/fixtures/runner-exit-code/vitest.config.ts failing > canary.log 2>&1
+          npx vitest run --config tests/fixtures/runner-exit-code/vitest.config.ts failing > "$RUNNER_TEMP/canary.log" 2>&1
           status=$?
           set -e
-          cat canary.log
-          grep -q "1 failed" canary.log || { echo "CANARY DID NOT RUN ITS FAILING TEST"; exit 1; }
+          cat "$RUNNER_TEMP/canary.log"
+          grep -q "1 failed" "$RUNNER_TEMP/canary.log" || { echo "CANARY DID NOT RUN ITS FAILING TEST"; exit 1; }
           test "$status" -ne 0 || { echo "THE RUNNER EXITED 0 OVER A FAILING TEST — no result in this run is evidence"; exit 1; }
         env:
           PG_PORT: '5432'
