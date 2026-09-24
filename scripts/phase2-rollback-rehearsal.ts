@@ -172,7 +172,38 @@ function startCluster(): void {
   }
   pgServer('initdb', ['-D', dataDir, '-U', PG_USER, '--auth-local=trust', '--auth-host=md5', `--pwfile=${pwFile}`]);
   rmSync(pwFile, { force: true });
-  pgServer('pg_ctl', ['-D', dataDir, '-o', `-p ${PG_PORT} -c listen_addresses=127.0.0.1 -c fsync=off`, '-w', '-l', join(dataDir, 'server.log'), 'start']);
+  // `unix_socket_directories` is set to the cluster's own data directory
+  // rather than left at the compiled-in default, which on a Debian-packaged
+  // PostgreSQL is `/var/run/postgresql`: a directory owned by the system
+  // `postgres` account. On a GitHub runner this script runs as `runner`,
+  // which cannot create a lock file there, and `pg_ctl` failed with nothing
+  // on stdout but "could not start server". The rehearsal's own connections
+  // are all TCP on 127.0.0.1, so the socket is only ever used by `pg_ctl`
+  // itself; putting it beside the data it belongs to also means a crashed
+  // rehearsal leaves no socket behind in a shared directory.
+  pgServer('pg_ctl', [
+    '-D',
+    dataDir,
+    '-o',
+    `-p ${PG_PORT} -c listen_addresses=127.0.0.1 -c fsync=off -c unix_socket_directories=${dataDir}`,
+    '-w',
+    '-l',
+    join(dataDir, 'server.log'),
+    'start',
+  ]);
+}
+
+/**
+ * `pg_ctl start` says "could not start server. Examine the log output." and
+ * means it: everything about WHY is in the server's own log file, which is
+ * not on any stream the caller sees. A rehearsal that fails on a machine
+ * nobody can attach to has to carry that log out with it.
+ */
+function serverLogTail(): string {
+  if (dataDir === '') return '';
+  const log = join(dataDir, 'server.log');
+  if (!existsSync(log)) return '\n(the server wrote no log at all)';
+  return `\n--- server.log ---\n${readFileSync(log, 'utf8').slice(-4000)}`;
 }
 
 function stopCluster(): void {
@@ -752,7 +783,7 @@ main()
     console.log('\nROLLBACK REHEARSAL: PASS');
   })
   .catch((e: unknown) => {
-    console.error(`\nROLLBACK REHEARSAL: ERROR — ${e instanceof Error ? e.message : String(e)}`);
+    console.error(`\nROLLBACK REHEARSAL: ERROR — ${e instanceof Error ? e.message : String(e)}${serverLogTail()}`);
     process.exitCode = 1;
   })
   .finally(() => {
