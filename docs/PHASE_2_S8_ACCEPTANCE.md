@@ -18,14 +18,16 @@ The first half is the Tech Lead's decision, taken as Option B: a seventh databas
 
 | migration | SHA-256 | state |
 |---|---|---|
-| `0051_accounting_reconciler_read.sql` | `2086c87564f5f66243ab64753e7c4f5338f896a1e29984ddf8977be8ba7587cc` | **CANDIDATE — NOT frozen, NOT in the manifest** |
-| `0052_accounting_journal_lines_rls_performance.sql` | `0acf165003c678f8d3017797e77033fadf2e9e791be54f98048031108c72ad84` | **CANDIDATE — NOT frozen, NOT in the manifest** |
+| `0051_accounting_reconciler_read.sql` | `2086c87564f5f66243ab64753e7c4f5338f896a1e29984ddf8977be8ba7587cc` | **ACCEPTED and FROZEN** at this digest |
+| `0052_accounting_journal_lines_rls_performance.sql` | `0acf165003c678f8d3017797e77033fadf2e9e791be54f98048031108c72ad84` | **ACCEPTED and FROZEN** at this digest |
 
-`MIGRATION_MANIFEST.json` is **unchanged**: 51 frozen migrations, `frozenThrough = 0050_accounting_report_indexes.sql`. P2-S8 froze nothing and created no `0053`. `gate:phase2:s8` enforces all of that as equalities rather than floors, because §44 is a hard stop and a gate that only checks a floor would let the stop be crossed quietly.
+`MIGRATION_MANIFEST.json` records **53 frozen migrations**, `frozenThrough = 0052_accounting_journal_lines_rls_performance.sql`. No `0053` exists.
+
+**While this slice was under review, both files were CANDIDATES** — present on disk, absent from the manifest — and `gate:phase2:s8` enforced that as an equality rather than a floor, because the hard stop had to be uncrossable rather than merely unlikely. That was the correct state then and it is no longer the state: the Tech Lead accepted P2-S8 at head `d4ec6c4f5be838e3c47d40719e44d3213727e566`, both files were frozen at the digests above, and the gate became permanent — it now requires each file to hash to its accepted digest on disk AND in the manifest, and it no longer forbids a later authorized migration, because a historical gate that blocks its successor is a gate that stops the project. See `docs/PHASE_2_S9_RELEASE.md` §2.
 
 `0052` was authorized separately, on 2026-09-24, after the performance evidence was re-measured at acceptance scale and the first diagnosis was refuted — see §11 and `docs/PHASE_2_PERFORMANCE_BASELINE.md` §5.3. It was corrected **in place** rather than superseded by a `0053`: a candidate under review is not history, and a review that answers a correction with a new number leaves the reviewer reading two files to learn one thing.
 
-`السجل لم يتغيّر: 51 ترحيلًا مجمَّدًا، والحدّ ما زال عند 0050. الترحيلان 0051 و0052 مرشَّحان فقط: موجودان على القرص، غائبان عن السجل. لم يُنشَأ 0053، والبوّابة تفرض ذلك كمساواة لا كحدٍّ أدنى.`
+`الحالة النهائية: 53 ترحيلًا مجمَّدًا والحدّ عند 0052، والترحيلان 0051 و0052 مجمَّدان ببصمتيهما المقبولتين. وأثناء المراجعة كانا مرشَّحَين فقط — موجودَين على القرص وغائبَين عن السجل — وكانت البوّابة تفرض ذلك كمساواة لا كحدٍّ أدنى؛ ذلك كان صحيحًا حينها ولم يعد هو الحال. لم يُنشَأ 0053.`
 
 - Branch: `phase/2-accounting-core` · Draft PR: **#2** (stays draft for all of Phase 2)
 
@@ -217,7 +219,7 @@ Tier 2 held **104 478** reporting lines and **1 042 966** reconciliation lines, 
 
 **Two defects in the measurement itself were found by running it there**, and both are recorded because either would have produced a number nobody could account for.
 
-The first: budget C missed at **2.9 s** on a runner while passing locally on the same commit. The plan named the cause — a nested loop whose outer side was the `accounts` index scan estimated at **one** row against twenty-one actual, and whose inner side, the whole parallel journal aggregate, was re-executed once per account. `accounts` is read by the trial balance, written by nothing in the dataset generator, and about twenty rows per business, which is under `autovacuum_analyze_threshold`: it entered the measurement with no statistics at all. On this workstation the same query took 327 ms without statistics and 125 ms with them; on a runner the re-executed side is a parallel `Gather Merge`, which cannot be reused between loops at all. The generator now analyzes every table a measured read touches, every evidence file records `planningStatistics`, and the budget suite fails if any of them was never analyzed.
+The first, since corrected: budget C originally missed at **2.9 s** on a runner while passing locally on the same commit. The plan named the cause — a nested loop whose outer side was the `accounts` index scan estimated at **one** row against twenty-one actual, and whose inner side, the whole parallel journal aggregate, was re-executed once per account. `accounts` is read by the trial balance, written by nothing in the dataset generator, and about twenty rows per business, which is under `autovacuum_analyze_threshold`: it entered the measurement with no statistics at all. On this workstation the same query took 327 ms without statistics and 125 ms with them; on a runner the re-executed side is a parallel `Gather Merge`, which cannot be reused between loops at all. The generator now analyzes every table a measured read touches, every evidence file records `planningStatistics`, and the budget suite fails if any of them was never analyzed.
 
 The second: budget A missed at **p95 32.9 ms** with p50 3.1, min 2.6 and max 208.2 — one stalled iteration in sixty, on an operation that takes three milliseconds. Tier 2 writes a million journal lines immediately before the first iteration and those pages were still being flushed underneath it. The flush is forced after seeding and before the clock starts, and every measurement now records each iteration in the order it was taken, so a stall can be located rather than argued from percentiles.
 

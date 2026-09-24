@@ -155,11 +155,87 @@ GRANT USAGE ON SCHEMA public TO daftar_accounting_internal;
 -- Separate from every runtime grant above, and loaded by no service.
 GRANT CONNECT ON DATABASE daftar TO daftar_migrator;
 GRANT USAGE, CREATE ON SCHEMA public TO daftar_migrator;
--- The one membership. SET TRUE is what lets a non-superuser migrator give the
--- seeding routines their final owner; INHERIT FALSE is what stops the
--- membership from being accounting authority in its own right. Any membership
--- beyond this one — above all a runtime role — fails the P2-S1 gate.
+
+-- ── The deployment principal owns the schema it migrates (P2-S9, RB-P2-01) ──
+--
+-- `public` belongs to `pg_database_owner` by default, so the migrator held
+-- CREATE without grant option. That is enough to CREATE an object and not
+-- enough to hand one over: migration 0040 and the eight files after it
+-- lend `CREATE ON SCHEMA public` to the role they are about to make owner
+-- and take it back in the same transaction, and a non-owner cannot issue
+-- that GRANT at all. A deployment as the real production authority failed
+-- here with `permission denied for schema public`; a superuser never does,
+-- which is why CI could not see it.
+--
+-- `tests/integration/migration-portability.test.ts` has always modelled the
+-- managed-PostgreSQL shape this way — it hands the schema and every object
+-- in it to `daftar_migrator` before applying anything — so this line makes
+-- the deployment contract say what the portability matrix already proves,
+-- rather than leaving the two disagreeing.
+--
+-- It is not a widening: the migrator already holds CREATE here, so it can
+-- already create an object in `public`. Ownership adds the ability to grant
+-- that same privilege onward, which is precisely what the frozen history
+-- requires of its deployer and nothing more. Every runtime role's CREATE on
+-- this schema is revoked at the bottom of this file and stays revoked.
+ALTER SCHEMA public OWNER TO daftar_migrator;
+-- ── The memberships, and why there are exactly two (P2-S9, RB-P2-01) ───────
+--
+-- PostgreSQL will not let a non-superuser run `ALTER ... OWNER TO r` unless it
+-- can `SET ROLE` to r. The accepted migration history hands ownership to
+-- exactly two roles, and the deployment principal therefore needs exactly two
+-- memberships. The set is not a judgement call: it is read off the frozen
+-- files, and `scripts/deployment-authority.ts` re-derives it from the history
+-- on every run so that a future migration naming a third owner is a red gate
+-- rather than a failed production deployment.
+--
+--   daftar_accounting_internal  0040, 0042–0049, 0051 — the accounting
+--                               routines' final owner (P2-S1).
+--   daftar_platform             0032, 0033, 0038 — the eight provisioning
+--                               functions whose bypass boundary exists only
+--                               inside them (Phase 1).
+--
+-- The second one was missing until P2-S9, and `daftar_migrator` could not
+-- apply the accepted history end to end: a fresh deployment died at
+-- `0032_provisioner_narrow_functions.sql` with `must be able to SET ROLE
+-- "daftar_platform"`. It was invisible because CI applies migrations as the
+-- superuser and the rollback rehearsal restores a Phase 1 backup whose
+-- 0032 had already been applied by one. That is release blocker RB-P2-01,
+-- and this line is its fix.
+--
+-- WHY A MEMBERSHIP IN A RUNTIME ROLE IS NOT A WIDENING HERE. The deployment
+-- principal owns every table and every function in the schema, so it can
+-- already `ALTER TABLE ... NO FORCE ROW LEVEL SECURITY` on anything it owns
+-- and read it. `SET ROLE daftar_platform` gives it no capability it did not
+-- have; it makes an existing one cheaper. The direction that WOULD be a
+-- widening — a runtime role gaining deployment or accounting authority — is
+-- the one that stays closed: no runtime role is a member of anything here,
+-- `daftar_accounting_internal`'s only member is still `daftar_migrator`, and
+-- the deployment credential appears in no runtime connection URL. The
+-- alternative — a second deployment credential holding the same two
+-- memberships — would add a credential without removing any authority.
+--
+-- WHY THE TWO MEMBERSHIPS ARE NOT THE SAME SHAPE. `INHERIT FALSE` is the
+-- preferred form and the accounting membership keeps it: the financial
+-- authority must be assumed deliberately, never held passively, and with
+-- SET TRUE the migrator can still perform 0040's handover. The platform
+-- membership cannot be that shape, and the reason is a property of
+-- PostgreSQL rather than a preference. `0038_provisioning_assertions.sql`
+-- issues `CREATE OR REPLACE FUNCTION` on eight functions that `0032` already
+-- made `daftar_platform`'s, and replacing an existing function is an
+-- OWNERSHIP check — `has_privs_of_role`, which reads the INHERIT bit and
+-- ignores SET. With `INHERIT FALSE` the accepted history stops at 0038 with
+-- `must be owner of function provision_replay_operation`. There is no
+-- narrower privilege to grant instead: PostgreSQL has no "may replace this
+-- function" permission, and the file mixes those statements with `CREATE
+-- TABLE`, so it cannot be run under `SET ROLE daftar_platform` either.
+--
+-- What inheriting `daftar_platform` actually adds is the ability to EXECUTE
+-- the eight provisioning functions without assuming the role first. It adds
+-- no reach over data: the migrator owns every table in the schema already.
+-- The alternative is a superuser deployment, which is strictly more.
 GRANT daftar_accounting_internal TO daftar_migrator WITH INHERIT FALSE, SET TRUE;
+GRANT daftar_platform TO daftar_migrator WITH INHERIT TRUE, SET TRUE;
 
 -- ── Default deny on every namespace a caller could write (P2-S3 correction) ─
 --
