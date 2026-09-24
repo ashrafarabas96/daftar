@@ -59,26 +59,52 @@ afterAll(() => {
 });
 
 /**
- * A copy of every TRACKED file, hard-linked.
+ * THE FILES THIS TREE CLAIMS TO CONSIST OF.
  *
- * Tracked or untracked-but-not-ignored, which is what a reviewer's checkout of
- * the branch will contain. `node_modules`, `dist/` and — importantly —
- * `release/` are gitignored and so are NOT in it: the copy is what a fresh
- * clone gives you, before anybody has produced any evidence.
- * Hard-linked, so the copy is essentially free and shares the original's
- * blocks; `rewrite` below unlinks before writing, which is what keeps a
- * tampered file from reaching back into this repository.
+ * In a git checkout that is `git ls-files --cached --others
+ * --exclude-standard`: tracked, or untracked and not ignored, which is what a
+ * reviewer's checkout of the branch contains. `node_modules`, `dist/` and —
+ * importantly — `release/` are gitignored and so are not in it.
+ *
+ * In an EXTRACTED RELEASE CANDIDATE there is no git, by design: f §28 requires
+ * the release gate to run from the archive with no `.git` in it, and this
+ * suite runs inside that gate. Asking git there produced
+ * `fatal: not a git repository` twenty-one times, which is this suite failing
+ * to run rather than any gate failing to refuse. The archive carries its own
+ * inventory — `DELIVERY_MANIFEST.json` — and there that is the better source
+ * anyway: it is what the archive says it contains and what the release gate
+ * has already checked the tree against, file by file. Walking the directory
+ * instead would copy whatever `npm ci` had just left behind.
  */
-function cleanCheckout(): string {
-  const root = mkdtempSync(join(tmpdir(), 'p2s8-tamper-'));
-  temporaries.push(root);
+function deliveredFiles(): string[] {
+  const manifest = join(REPO, 'DELIVERY_MANIFEST.json');
+  if (existsSync(manifest)) {
+    const parsed = JSON.parse(readFileSync(manifest, 'utf8')) as { inventory?: { path?: string }[] };
+    const paths = (parsed.inventory ?? []).map((entry) => entry.path).filter((path): path is string => typeof path === 'string' && path !== '');
+    if (paths.length === 0) throw new Error('DELIVERY_MANIFEST.json is present and carries no inventory');
+    return paths;
+  }
   const listed = execFileSync('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard'], {
     cwd: REPO,
     encoding: 'utf8',
     maxBuffer: 64 * 1024 * 1024,
   });
-  for (const rel of listed.split('\0')) {
-    if (rel === '') continue;
+  return listed.split('\0').filter((rel) => rel !== '');
+}
+
+/**
+ * A copy of every delivered file, hard-linked.
+ *
+ * The copy is what a fresh clone — or a fresh extraction — gives you, before
+ * anybody has produced any evidence. Hard-linked, so the copy is essentially
+ * free and shares the original's blocks; `rewrite` below unlinks before
+ * writing, which is what keeps a tampered file from reaching back into the
+ * tree this suite is running in.
+ */
+function cleanCheckout(): string {
+  const root = mkdtempSync(join(tmpdir(), 'p2s8-tamper-'));
+  temporaries.push(root);
+  for (const rel of deliveredFiles()) {
     const source = join(REPO, rel);
     if (!existsSync(source)) continue; // a tracked file deleted in the worktree
     const target = join(root, rel);
