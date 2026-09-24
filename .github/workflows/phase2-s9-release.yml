@@ -57,6 +57,12 @@ on:
       - 'packages/accounting/**'
       - 'apps/api/src/modules/accounting/**'
       - 'scripts/**'
+      # The suites the release gate runs, and therefore part of what a green
+      # release verdict is a statement about. Left out at first, and the
+      # omission showed at once: the commit that made the tamper suite work
+      # inside an extracted archive — the fix for the archive half of this
+      # very workflow — did not trigger it.
+      - 'tests/**'
       - 'package.json'
       - 'package-lock.json'
       - '.github/workflows/phase2-s9-release.yml'
