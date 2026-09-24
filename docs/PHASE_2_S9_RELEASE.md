@@ -172,12 +172,19 @@ off; the gate asserts that too.
 
 ## 4. RB-P2-02 — the documents agree with reality
 
-`npm run gate:phase2:release` reads the authoritative pages and fails on a line
-that still says P2-S8 is blocked, that `frozenThrough` is `0050`, that `0052`
-does not exist, that `0051`/`0052` are candidates, or that budget C is failing.
-The check is deliberately narrow: it looks for those specific claims, not for
-any sentence containing the word "candidate", and a line that says of itself
-that it is superseded, withdrawn, historical or refuted is not a finding.
+`npm run gate:phase2:release` reads the authoritative pages and fails on any
+line that still presents the pre-acceptance state as the current one: the
+slice reported as blocked, the manifest boundary left one migration short of
+where it now stands, the two accepted migrations described as absent or
+unfrozen, or the reporting budget reported as unmet. The check is deliberately
+narrow: it looks for those specific claims, not for any sentence containing the
+word "candidate", and a line that says of itself that it is superseded,
+withdrawn, historical or refuted is not a finding.
+
+**This page is inside the check, not outside it.** A release document that
+exempts itself from the consistency rule it describes is the first page to go
+stale, so `docs/PHASE_2_S9_RELEASE.md` is in the same list as the five pages
+it is about.
 Historical narrative is the point of these pages; a stale claim presented as
 current is the defect.
 
@@ -242,6 +249,35 @@ rather than take this page's word for it.
 
 All of them run inside `gate:phase1:release` and `gate:phase2:s8`, which this
 gate composes. Nothing in the list is restated here.
+
+### 5.2 What running the release gate on a clean runner found
+
+The first run of `.github/workflows/phase2-s9-release.yml` failed, and what it
+failed on is worth recording, because it is the same shape as RB-P2-01: a
+check that passed everywhere it had ever been run, and failed the first time
+it was run somewhere that had nothing lying around.
+
+`gate:phase1:release` deletes every build output first, so that it builds from
+source the way a fresh checkout does — and then it rebuilt three packages by
+name. `@daftar/accounting` arrived in Phase 2, long after that list was
+written, and was in neither the list of outputs to delete nor the list of
+packages to rebuild. On any machine that had built the tree before, its `dist`
+survived the delete and every type resolved. On a runner that had just cloned
+the repository there was nothing to resolve, and typed linting reported **695
+`type that cannot be resolved` errors** — none of them a defect in the code
+they were reported against.
+
+Neither list is written by hand any more. The set of library packages is
+**derived** from the workspaces under `packages/` that have a `build` script,
+and the order is a topological sort of their `@daftar/*` dependencies, so the
+next package added is deleted and rebuilt in the right place without anybody
+remembering to add it. The failure was reproduced locally first — the same 695
+errors, from the same clean state — and the same command was then shown green
+with the correction in place.
+
+A release gate that only passes in a working directory that had already built
+the tree is not a release gate, and nothing but running it somewhere clean
+would have said so.
 
 ---
 

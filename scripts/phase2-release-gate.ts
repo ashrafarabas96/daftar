@@ -201,6 +201,11 @@ const AUTHORITATIVE_DOCS = [
   'docs/PHASE_2_S8_ACCEPTANCE.md',
   'docs/PHASE_2_PERFORMANCE_BASELINE.md',
   'TECHNICAL_DEBT.md',
+  // The page that describes this very check. A release document that exempts
+  // itself from the consistency rule it states is the first one to go stale,
+  // and describing a forbidden claim is not licence to write one: §4 of that
+  // page names each claim without making it.
+  'docs/PHASE_2_S9_RELEASE.md',
 ];
 
 const STALE_CLAIMS: [RegExp, string][] = [

@@ -205,12 +205,18 @@ jobs:
             release/DAFTAR_PHASE_2_RC.zip.sha256
           if-no-files-found: error
 
+      # `ignore`, not `error`: a run that failed before the export has no
+      # archive to upload, and a second red X on a missing file says nothing
+      # the gate's own failure did not already say. The archive's existence is
+      # not taken on trust either way — `evidence:phase2:s9` reads it, checks
+      # it against its sidecar digest and against the manifest inside it, so a
+      # green run that produced no archive is impossible.
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: phase2-s9-release-candidate
           path: release/DAFTAR_PHASE_2_RC.zip
-          if-no-files-found: error
+          if-no-files-found: ignore
 
       - uses: actions/upload-artifact@v4
         if: failure()
