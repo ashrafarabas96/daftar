@@ -28,12 +28,23 @@ membership_branch_access (membership_id, branch_id)            — تقييد ب
 - **Source of Truth للصلاحيات:** `business_roles + role_permissions` مربوطة بـ`business_memberships` — الصلاحية تُقيَّم دائمًا في سياق (user × business × branch?). لا صلاحية بدون membership فعّالة.
 - Tenant Isolation لا يضعف: كل استعلام يُقيَّد بـ(tenant_id + business_id) المتحقق من membership الجلسة.
 
-## 3. الفروع والمستودعات (C) — محسومة
+## 3. الفروع والمستودعات (C) — مصحَّحة على التنفيذ الفعلي (P3-S0)
 
-- **Warehouse يتبع Business** (`warehouses.business_id`) — يدعم مستودعًا مركزيًا على مستوى النشاط.
-- **Branch يتبع Business** ويحمل `default_warehouse_id NULL` → اختياري يربط الفرع بمستودع افتراضي.
-- فرع واحد يمكن أن يبيع من أكثر من مستودع عبر اختيار المستودع في العملية (الافتراضي = default_warehouse).
-- قيد: `branches.default_warehouse_id` يجب أن يشير لمستودع **من نفس Business** (Composite FK: `(business_id, default_warehouse_id)` → `warehouses(business_id, id)`).
+> **تصحيح:** النص السابق وصف `warehouses.business_id` وحده و`branches.default_warehouse_id` — والتنفيذ المجمّد في `0003_tenancy.sql` يقول غير ذلك. **التنفيذ المقبول هو المرجع.**
+
+- **Warehouse يتبع Business ويتبع فرعًا واحدًا**: `warehouses (business_id, id)` مع `branch_id UUID NOT NULL` وقيد مركّب `(business_id, branch_id)` → `branches(business_id, id)`. الفرع المذكور هو **الفرع الأم (home branch)** للمستودع.
+- **`branches.default_warehouse_id` غير موجود** ولم يُنشأ قط. الافتراضي على مستوى النشاط: `warehouses.is_default` مع `UNIQUE (business_id) WHERE is_default` — **مستودع افتراضي واحد لكل Business**.
+- `is_default` **افتراض واجهة فقط ولا يمنح صلاحية** (P3-AL-15).
+- **الربط المتعدد للصلاحية (المرحلة 3، P3-AL-15):** جدول ارتباط جديد
+
+  ```
+  branch_warehouses (business_id, branch_id, warehouse_id)
+     PRIMARY KEY (business_id, branch_id, warehouse_id)
+     FK (business_id, branch_id)    → branches   (business_id, id)
+     FK (business_id, warehouse_id) → warehouses (business_id, id)
+  ```
+
+  يُزرع من `warehouses.branch_id` القائم، فلا تتغيّر صلاحية أي نشاط يوم الترحيل. مستودع مركزي يخدم عدة فروع، وفرع واحد يستخدم عدة مستودعات. **هذا الجدول وحده هو مرجع الصلاحية** في المرحلة 3؛ و`warehouses.branch_id` لا يُعدَّل ولا يُحذف.
 
 ## 4. استراتيجية العزل في الجداول (V) — محسومة
 
@@ -215,6 +226,7 @@ payment_reversal_allocations(
 - **كل الكميات `NUMERIC(18,4)`** مع **UoM** على المنتج: `unit_code` (piece/kg/meter/liter…) + `unit_decimals` (0 للقطعة، 3 للكيلو…) من سجل وحدات CLDR-متوافق.
 - الواجهة تفرض `unit_decimals` (منتج بالقطعة لا يقبل كسورًا)؛ القاعدة تُفرض Row CHECK على المنتج وتُتحقق في التطبيق على الحركات.
 - الـCore لا يمنع fractional quantities مستقبلًا.
+- **المرحلة 3 (P3-AL-04/P3-AL-05):** `products.unit` الحرّ **ليس** مرجعًا دلاليًا للكمية ولا يُفسَّر ولا يُستنتج منه شيء. تُضاف `products.track_inventory` (افتراضيًا `false` لكل منتج قائم)، و`unit_code`، و`unit_decimals`، مع `CHECK (track_inventory = false OR (unit_code IS NOT NULL AND unit_decimals IS NOT NULL))`. سجل الوحدات `units(unit_code, default_decimals, sort_order)` قابل للتوسّع بترحيل، وأسماؤه المترجمة في `unit_names(unit_code, locale, display_name)` خارج حقيقة المخزون. `unit_decimals` يُجمَّد على المنتج عند الاختيار. **لا تحويل وحدات في المرحلة 3** — لا عمود معامل تحويل ولا وحدة أساس.
 
 ## 10. تكلفة المخزون (N) — دقة عالية محسومة
 
@@ -226,6 +238,8 @@ payment_reversal_allocations(
 - **سياسة التقريب عند القيد المحاسبي:** يُحوَّل NUMERIC(28,10) → BIGINT minor بتقريب HALF_EVEN **عند توليد القيد فقط**، ثم يُوزَّع فرق التقريب على أسطر القيد (السطر الأكبر أولًا) بحيث **Σ COGS الأسطر = COGS المقيَّد تمامًا** — الفرق المتبقّي إن وجد يُقيد على 6100 Rounding Adjustment. الصيغ الكاملة في `DAFTAR_INVENTORY_RULES.md` §N و`DAFTAR_ACCOUNTING_RULES.md`.
 - `products.cost_minor` = **تكلفة مرجعية للعرض فقط** (تُستخدم أول مرة قبل أي شراء)، **ليست مصدر حقيقة**.
 - **Invariant جديد (INV-INV-06):** رصيد حساب المخزون في GL = Σ(qty × avg_cost) وفق السياسة — يُتحقق بـReconciliation job.
+- **المرحلة 3 (P3-AL-11):** لكل حركة مكوّنان صريحان — `qty_delta NUMERIC(18,4)` و`value_delta_base_minor NUMERIC(28,10)` — مع `unit_cost_base_minor NUMERIC(28,10)` يكون `NULL` في حركة القيمة الصرفة. `CHECK (NOT (qty_delta = 0 AND value_delta_base_minor = 0))` و`CHECK ((qty_delta = 0) = (unit_cost_base_minor IS NULL))`. بذلك تُعاد الكمية والتقييم كلاهما من الحركات وحدها: `on_hand = Σ qty_delta` و`valuation = Σ value_delta_base_minor` بترتيب `stock_seq`.
+- **المرحلة 3 (P3-AL-02/P3-AL-09):** مفتاح المخزون `(business_id, warehouse_id, variant_id)`؛ لكل حركة `stock_seq BIGINT` يُخصَّص تحت قفل صف `stock_levels` مع `UNIQUE (business_id, warehouse_id, variant_id, stock_seq)` — **الترتيب المرجعي، وليس `created_at`**. وهوية الحركة خماسية: `UNIQUE (business_id, source_type, source_id, source_line_id, movement_kind)` بلا أي FK متعدد الأشكال من `stock_movements` إلى جداول النطاقات. وأنواع الحركة سجل مغلق `stock_movement_kinds` يُوسَّع بترحيل.
 
 ## 10ب. Negative Inventory Deficit Entities (Pass#5) — كيانات فعلية
 
@@ -338,6 +352,7 @@ payment_method_names (payment_method_id, locale, display_name)   -- ترجمة �
 - `system_type` مغلق (يحدد السلوك المحاسبي العام)، لكن **الاسم والتفعيل بيانات Business-level**: التاجر يضيف "محفظة محلية/حوالة/شيك" دون تعديل كود.
 - **`posting_account_id` إلزامي (NOT NULL فعليًا) لكل طريقة دفع نشطة ماليًا**: يحدد حساب الترحيل في GL (نقدي→1000، بنك→1010، بطاقة→1020 Card Clearing، محفظة→1030 Wallet Clearing، شيك→1040 Cheques Clearing). **ممنوع إنشاء/تفعيل طريقة دفع دون حساب ترحيل صالح** — قاعدة التطبيق + اختبار تكامل GOLD-47 (Accounting §8). القيد يصبح: `Dr [posting_account] / Cr AR` — المحفظة تُقيَّد على حساب تسوية خاص بها وليس Cash.
 - payments.payment_method_id → payment_methods (composite بـbusiness_id).
+- **المرحلة 3 (P3-AL-27):** هذا الأساس المشترك **لم يُنشأ بعد** في المستودع، ويُنشئه P3-S6 بالحد الأدنى أعلاه ليخدم **مدفوعات الموردين الآن** ومدفوعات العملاء في المرحلة 4 لاحقًا. ممنوع حلّ مدفوعات المورّد بعمود `supplier_payment.cash_account_id` خاص. المرحلة 3 **لا تنفّذ مدفوعات العملاء** ولا تنشئ جدول `payments`.
 
 ## 14أ. ترقيم الفواتير — نطاق Business كحد أدنى (محسوم)
 

@@ -10,8 +10,11 @@
 | **رصيد العميل الدائن** | `customer_credits` + `customer_credit_allocations` + `refunds` | remaining = original − Σallocations.consumed − Σrefunds.consumed (بعملة المصدر) — ومعه remaining_carrying_base بالأساسية (§7ج) | لا يدوي — يتحرك بأوامر المجال فقط |
 | **ذمة المورّد (AP)** | `purchases` + `supplier_payment_allocations`(active) + `supplier_credit_allocations` | outstanding = purchase.total − Σsupplier_payment_allocations(active) − Σsupplier_credit_allocations | لا `supplier.balance` يدوي |
 | **رصيد المورّد الدائن (Supplier Credit)** | `supplier_credit_notes` + `supplier_credit_allocations` + `supplier_refunds` | remaining = original − Σallocations − Σrefunds (بعملة المصدر) + remaining_carrying_base | — |
-| **كمية المخزون** | `stock_movements` (append-only) | on_hand = Σqty حسب (variant × warehouse) | stock_levels (Cache، INV-INV-03) |
-| **تكلفة المخزون** | تقييم الحركات (`movement_unit_cost_base_minor` NUMERIC(28,10)) + `negative_deficit_coverages` | avg مرجّح متحرك لكل (variant × warehouse) وفق Inventory §5/§5أ | stock_levels.avg (Cache) |
+| **الشراء** (P3-S4) | `purchases` + `purchase_items` + `purchase_landed_costs` | القيد `Dr Inventory / Cr AP` دائمًا؛ المستحق مشتق — **لا مسار نقدي موازٍ** (P3-AL-24) | لا Cache: قراءة حية (P3-AL-26) |
+| **تهيئة المخزون الافتتاحي** (P3-S3) | مصدر `inventory_opening` + حركاته | الحالة A: قيد `Dr Inventory / Cr Opening Equity`. الحالة B: **لا قيد** — ربط بالمركز الافتتاحي القائم واشتراط المساواة التامة | — |
+| **الجرد** (P3-S3) | `stocktakes` + `stocktake_lines` | variance = counted − expected_at_capture؛ يُطبَّق مرة واحدة عند الإنهاء ويُقيَّم بمتوسط اللحظة | — |
+| **كمية المخزون** | `stock_movements` (append-only) | on_hand = Σ`qty_delta` لكل (business × warehouse × variant) بترتيب `stock_seq` | stock_levels (Cache، INV-INV-03) — **الاستثناء الوحيد المسمّى** من استراتيجية «القراءة الحية»، مُبرَّر بالتزامن التشغيلي لا بسرعة التقارير (P3-AL-44) |
+| **تكلفة المخزون** | تقييم الحركات: `value_delta_base_minor` NUMERIC(28,10) لكل حركة (بما فيها حركات القيمة الصرفة) + `negative_deficit_coverages` | valuation = Σ`value_delta_base_minor`؛ avg = valuation ÷ on_hand حيث on_hand > 0، وفق Inventory §5/§5أ | stock_levels.avg (Cache) |
 | **GL** | `journal_entries` + `journal_lines` (append-only) | أرصدة الحسابات = Σ أسطر القيود | **لا Read Model على الإطلاق (P2-S7)**: كل رقم يُحسب لحظة السؤال من القيود نفسها. لا رصيد مخزَّن، ولا Cache، ولا Materialized View. INV-ACC-11 GL Inventory = valuation |
 | **التسوية اليدوية** (P2-S4) | `accounting_manual_adjustments` + القيد المرتبط بها عبر `accounting_source_bindings` | القيد هو الواقعة؛ صف التفصيل يحمل السبب والفاعل فقط | — |
 | **عكس قيد** (P2-S4) | `accounting_reversals` + القيد الجديد `source_type='reversal'` | سطور العكس **مشتقة** من `journal_lines` للقيد الأصلي: مبادلة مدين/دائن وكل ما عداه منسوخ حرفيًا بما فيه سعر الصرف ووقته ومصدره | — |
@@ -32,6 +35,9 @@
 5. ممنوع تعديل أو حذف قيد مُرحَّل، وممنوع وضع علامة "معكوس" عليه — التصحيح واقعة محاسبية جديدة (P2-S4 §61).
 6. ممنوع تخزين أي رصيد محاسبي أو تجميعه مسبقًا: لا عمود رصيد، ولا جدول مُلخَّص (`accounting_balances`, `trial_balance_cache`, `ledger_cache`, `balance_snapshots`)، ولا Materialized View، ولا رصيد في Redis. الحارسان G-3 وG-6 يرفضان ذلك في الـCI (P2-S7 / AL-15).
 7. ممنوع أن تكتب أي قراءة مالية أي شيء: لا إصلاح متأخر، ولا ختم «آخر اطّلاع»، ولا إعادة حساب سعر صرف قديم، ولا إخفاء حساب أُوقف عن التاريخ. الحارس G-6 يرفض ذلك في الـCI (P2-S7).
+9. **(P3)** ممنوع أي عمود رصيد مرجعي على المورّد، وممنوع Cache لرصيد المورّد أو لمستحق الشراء في المرحلة 3 — قراءة حية مشتقة فقط. الحارس `scripts/guards/no-authoritative-balance.ts` يُوسَّع ليشمل جداول الموردين.
+10. **(P3)** ممنوع تصحيح يدوي لـ`stock_levels`: لا نقطة نهاية، ولا أمر إداري، ولا سكربت يضبط قيمة الـcache إلى رقم مُعطى. القيمة تتغيّر بحركة أو بإعادة بناء من الحركات فقط، واختلاف المطابقة **ينبّه ويرفض** ولا يكتب رأي الـGL في الـcache.
+11. **(P3)** ممنوع ترتيب أي شيء ماليّ الأثر بـ`created_at`: ترتيب الحركات `stock_seq`، وترتيب تغطية العجز `(deficit_seq, id)`.
 8. ممنوع أن يُعاد قيد موجود كـ"نجاح" لطلب مالي مختلف: نفس هوية المصدر مع **حمولة مالية مختلفة جوهريًا** (أي حقل من حقول `acctfp/1`) تُرفض بـ`accounting.idempotency_conflict`. الاختلاف السردي وحده (الوصف، معرّف الطلب) هو نفس الواقعة ويُعاد بـ`created=false`، والسرد المحفوظ لا يُعاد كتابته. أول واقعة مالية مُرحَّلة هي التي تفوز (P2-S4 §29).
 
 ## 3. الارتباط بالاختبارات
