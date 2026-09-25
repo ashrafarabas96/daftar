@@ -4,6 +4,8 @@
 >
 > **Baseline.** Accepted Phase 2 merge commit `0f2b09e7f2bd1015053ff2cb79ad1ceafc25bc6f` on `main` (accepted source head `bf2eeda1494b0333cfef26123d55bcf54134e402`), post-merge CI run `36028186854` SUCCESS on all five required jobs. Migrations `0000`–`0052` are frozen forever; the manifest holds 53 entries with `frozenThrough = 0052_accounting_journal_lines_rls_performance.sql`. Phase 3 begins at `0053`, which **does not exist yet and is not authorized by this document**.
 >
+> **Correction pass, Round 4 — 2026-09-25.** The Tech Lead reviewed head `fd963c130a0bf51a14b09e1de483bd3d69ab15be` (CI `36195847316`), accepted Round 3's resolutions, and returned CHANGES REQUIRED on one cross-layer **authority** defect found by reading the lock against the accepted Phase 1 privilege model: `0006_rls.sql:78` grants `daftar_app` table-level `SELECT, INSERT, UPDATE` on `products` and `product_variants`, and a table-level grant covers every column added later — so the day P3-S1 adds `track_inventory`, `unit_code` and `unit_decimals`, the merchant runtime could set them with a plain `UPDATE`, bypassing `inventory.adjust`, the configuration command and the unit rules. A `CHECK` that a tracked product has a unit proves shape, not authority. `daftar_inventory_internal` was also only a name. **P3-AL-54 (new)** is the complete physical authority model beneath P3-AL-04, -05, -15, -36, -52 and -53: the three kinds of authority, the internal role's full contract and its one deployment membership, the safe `SECURITY DEFINER` discipline, the three named runtime routines, the column guards and why they must run with **invoker** rights, trigger ordering against the P3-S2 history lock, the home-association maintainer's authority through the frozen onboarding writer, the `branch_warehouses` RLS and grant model, the live grant matrix and the managed-PostgreSQL proof. Repository inspection while closing it established two facts the review did not state and that decide the design: the frozen onboarding writer runs as **`daftar_platform`** (`0033_provisioner_atomic_authority.sql:308`), not as `daftar_provisioner`; and roles are created in `infrastructure/database/bootstrap.sql`, not in migrations. No Round 3 decision is reopened or weakened. Premortem extended to **PM-43**.
+>
 > **Correction pass, Round 3 — 2026-09-25.** The Tech Lead reviewed the closed lock at head `2ced8c1d2bed4f54e007ab6aac6d958436c11918` (CI `36190820912`), **accepted** the Round 2 corrections to P3-AL-49, P3-AL-51, P3-AL-32, P3-AL-38 and P3-AL-36, and returned CHANGES REQUIRED on two blockers found by cross-reading this lock against the **accepted Phase 1/2 implementation** rather than against itself. **(A)** `branch_warehouses` had a backfill but no lifecycle: a warehouse created *after* the migration would have had no authorization row, so an existing Phase 1 workflow would have produced a warehouse no assigned-scope actor could reach — a regression Phase 3 would have caused. Repository inspection while closing it found a **third** warehouse writer the review did not name, inside the frozen `provision_create_business`, which decides the mechanism (P3-AL-15, rewritten). **(B)** `products.unit_code` / `unit_decimals` were "frozen on the product" with no historical lifecycle, so changing them after movements exist would have silently reinterpreted every historical `qty_delta` — closed by a history lock that current zero stock does not unlock (P3-AL-05 §D). Two execution-closure requirements are also resolved: the hidden base variant must not leak through the catalog API that exists today, and may not be mutated by ordinary variant commands (**P3-AL-52**, new); and role seeding must be proved for businesses created **after** the migration, not only backfilled ones (**P3-AL-53**, new). P3-AL-38's "exactly three" is restated precisely: exactly three *Phase 3* permissions, **appended**, with the Manager's accepted Phase 1 authority untouched. Premortem extended to **PM-38**.
 >
 > **Correction pass, Round 2 — 2026-09-25.** The Tech Lead reviewed the corrected lock at head `fd7fceb99fc9550640973341ab56d746aa00b4a5` and returned CHANGES REQUIRED again, on four blockers found by **cross-reading the decisions against each other** rather than reading each alone. All four were real. **(A)** Movement valuation at `NUMERIC(28,10)` against a `BIGINT` journal meant two roundings, and rounding is not additive, so zero-tolerance reconciliation was arithmetically unreachable — resolved by making the movement value itself integer base minor units and the journal line that same integer (P3-AL-49, rewritten, with the equation and nine acceptance vectors). **(B)** A line-grained `stock_source_bindings` could not carry a reverse FK, because one transfer line has two movements, and the promised `ON DELETE RESTRICT` to a polymorphic source line cannot exist — resolved by a movement-grained binding and per-source bridge tables with real FKs, plus the binding-side trigger the first draft was missing (P3-AL-51, rewritten). **(C)** P3-S1's acceptance matrix required entities owned by P3-S2/S3/S4 — re-scoped to the transaction primitive, with the end-to-end proofs assigned to P3-S3 and P3-S4 (P3-AL-32). **(D)** The lock and the execution plan disagreed about Manager's permissions — the lock wins, and the assertions now separate ordinary visibility from sensitive authority (P3-AL-38). Two wordings were also corrected: "the average is never an input to a later write" was too absolute, and the claim that PostgreSQL refuses `CURRENT_DATE` in a `CHECK` was **factually wrong** (P3-AL-36). Premortem extended to **PM-35**.
@@ -84,6 +86,7 @@ Per the directive's §59, every decision carries exactly one status:
 | P3-AL-51 | Physical stock source completeness (movement-grained binding + per-source bridge) | TO BE ENFORCED IN P3 | P3-S2 (mechanism), per source thereafter |
 | P3-AL-52 | Hidden base variant boundary (catalog invisibility + mutation refusal) | TO BE ENFORCED IN P3 | P3-S1 |
 | P3-AL-53 | Role permission seeding for businesses created after the migration | TO BE ENFORCED IN P3 | P3-S1 |
+| P3-AL-54 | Physical database authority model for Phase 3 (internal role, routines, column guards, grants, RLS, managed PostgreSQL) | TO BE ENFORCED IN P3 | P3-S1 (P3-S2 for the history guard's placement) |
 
 ---
 
@@ -221,7 +224,7 @@ For a simple product with no merchant-defined variants, **enabling inventory tra
 
 1. The migration adds `products.track_inventory BOOLEAN NOT NULL DEFAULT false`, `products.unit_code TEXT NULL`, `products.unit_decimals SMALLINT NULL`. **Every existing product becomes inventory-untracked.** No stock row, no base variant and no movement is created because a migration ran.
 2. `products.unit` is **not** parsed, mapped, normalized or inferred. "kg", "كغم", "Kg." and "kilo" are a human label; guessing from it would be Zero Silent Errors violated in the one place where the guess becomes financial truth.
-3. Enabling tracking is an explicit merchant action requiring `inventory.adjust`, and it requires a canonical unit selection (P3-AL-05). The command creates the base variant (P3-AL-03) when the product has no variants.
+3. Enabling tracking is an explicit merchant action requiring `inventory.adjust`, and it requires a canonical unit selection (P3-AL-05). The command creates the base variant (P3-AL-03) when the product has no variants. **Physically (Round 4):** the three columns have exactly one writer, the routine `inventory_configure_product`, owned by `daftar_inventory_internal`; ordinary `daftar_app` DML that sets or changes any of them is refused with `inventory.configuration_authority_required` even though `daftar_app` keeps its table-level `UPDATE` on `products` (P3-AL-54 §E–§F).
 4. `CHECK (track_inventory = false OR (unit_code IS NOT NULL AND unit_decimals IS NOT NULL))` — a tracked product physically cannot exist without canonical units.
 5. `products.unit` is retained and shown as the merchant's own free label. It is never read by inventory.
 
@@ -305,7 +308,7 @@ For a simple product with no merchant-defined variants, **enabling inventory tra
 
 **Refusal:** `inventory.unit_identity_locked`, stable, carrying no quantities.
 
-**The mechanism and its owning slice.** A `BEFORE UPDATE ON products FOR EACH ROW` trigger that raises when `unit_code` or `unit_decimals` changes and any `stock_movements` row exists for any variant of that product.
+**The mechanism and its owning slice.** A `BEFORE UPDATE ON products FOR EACH ROW` trigger that raises when `unit_code` or `unit_decimals` changes and any `stock_movements` row exists for any variant of that product. **Name, rights and order are fixed by P3-AL-54 §G (Round 4):** `products_20_unit_history_lock`, `SECURITY DEFINER` owned by `daftar_inventory_internal` so that it sees every movement of the product whoever asks, firing **after** P3-S1's `products_10_inventory_config_authority`. The authority guard answers *who*; this lock answers *when*; neither replaces the other.
 
 - **P3-S1** creates `unit_code` / `unit_decimals`, the tracking-enablement and unit-configuration command, and the command-level refusal.
 - **P3-S2** installs the physical trigger, because a trigger body cannot reference `stock_movements` before that table exists, and P3-S2 is the slice that creates it.
@@ -591,6 +594,8 @@ The P3-S1 migration asserts its own model from the catalogues — `pg_trigger` m
 
 **Why not a `CHECK`, an FK, or a service-level `INSERT`.** A `CHECK` cannot read another table. An FK from `warehouses` to `branch_warehouses` would invert the dependency and still could not express "the row whose `branch_id` equals mine". A service-level `INSERT` cannot reach writer 3 at all.
 
+**Who these objects run as (Round 4).** Fixed in P3-AL-54 §I. The maintainer, the completeness proof and the keep-one trigger are `SECURITY DEFINER`, owned by `daftar_inventory_internal`; the immutability trigger is `SECURITY INVOKER`. Writer 3 runs as `daftar_platform`, so an invoker-rights maintainer would have required a platform grant on `branch_warehouses`; definer rights mean **neither `daftar_platform` nor `daftar_provisioner` receives any privilege on `branch_warehouses`**. The table has `ENABLE` + `FORCE` row-level security with the same two-policy layering as `warehouses` (`0006_rls.sql:28–49`), and `daftar_app` holds `SELECT` on it and nothing else.
+
 ### §B — Who may add or remove the other associations
 
 **The gap.** "One warehouse may serve many branches" was schema-only: nothing said who writes those extra rows, so the first implementer would have invented an authorization rule for an authorization table.
@@ -607,8 +612,10 @@ The P3-S1 migration asserts its own model from the catalogues — `pg_trigger` m
 - Both targets are resolved inside one business; the composite FKs make a cross-business pair physically impossible, and the command fails clean rather than relying on the constraint's message.
 - Adding refuses an **archived** branch or warehouse (`branch_archived` / `warehouse_archived`), the same way `createWarehouse` already refuses an archived branch (`structure.service.ts:91–94`).
 - Adding is **idempotent**: an association that already exists is a success with no second row and no second audit event (`ON CONFLICT DO NOTHING`, then report "already associated").
-- Removing refuses the home association while the warehouse exists — refused twice, by the command and by the keep-one trigger of §A. A command-level refusal alone would be a convention (`[[daftar-wrapper-is-not-an-invariant]]`).
+- Removing refuses the home association while the warehouse exists — refused twice, by the command and by the keep-one trigger of §A. A command-level refusal alone would be a convention (a rule only the wrapper enforces is not an invariant while a trusted primitive can still write the row).
 - Both are **audited** through the existing `AuditService.recordTx` in the same transaction, actions `structure.warehouse_branch_associated` / `structure.warehouse_branch_dissociated`.
+
+**The physical path (Round 4).** The two commands do their permission and scope checks in the application, then call `structure_associate_warehouse_branch` / `structure_dissociate_warehouse_branch` inside `withBusinessTransaction` (P3-AL-54 §E). `daftar_app` has no `INSERT` or `DELETE` on `branch_warehouses`, so raw DML cannot add or remove an association; the routines re-enforce every structural rule above (one business, both rows exist, neither archived, home not removable, idempotent) and take the business from `app.business_id`, never from an argument.
 
 **Ownership — stated, because "schema-only theory" was the review's objection.** **P3-S1 creates the real callable domain path**: the two commands on the existing Structure domain, their controller routes, their permission checks and their tests. **P3-S7 adds only the UI.** No later slice's authorization may depend on a capability that has no caller — and P3-S2 onward read `branch_warehouses` for authority, so the write path must exist before they do.
 
@@ -631,6 +638,8 @@ Each row is a permanent test, not a one-off check.
 | I | Deleting the home association while the warehouse exists | **REFUSED** by the keep-one trigger, tested as raw SQL as well as through the command |
 | J | Deleting a non-home association, authorized | allowed, and the home mapping is still present afterwards |
 | K | Existing Phase 1 warehouse list / create / archive behaviour | **no regression** — the accepted golden and integration suites still pass unchanged |
+| L | Maintainer forced to fail inside `provision_create_business` | the **whole onboarding** rolls back — no tenant, business, branch or warehouse survives (Round 4) |
+| M | `INSERT` or `DELETE` on `branch_warehouses` as raw SQL as `daftar_app` | **REFUSED** by privilege (`42501`), whatever the row (Round 4) |
 
 A new business created through the accepted provisioning flow **after** the migration is covered by B and C through writer 3, and is asserted explicitly: `provision_create_business` still succeeds, and its `'Main warehouse'` has its home association without that frozen routine being modified.
 
@@ -1085,6 +1094,7 @@ The debt register's suggestion of a CHECK is therefore declined on semantics and
 - The error message carries **no financial values**.
 - Precedent: `0049_accounting_periods.sql` already attaches `accounting_period_guard` to `journal_entries` the same way, and the permanent upgrade assertions query triggers by name rather than exhaustively (F-5), so nothing breaks and no frozen byte changes.
 - **The command-level checks remain.** This is defence in depth beneath every posting command, not a replacement for any of them.
+- **Authority (Round 4, P3-AL-54 §H).** The trigger function is `SECURITY DEFINER`, owned by **`daftar_accounting_internal`** — an accounting guard belongs to accounting authority, never to the inventory principal — with `SET search_path = pg_catalog, public, pg_temp` and no `EXECUTE` grant. It must read `businesses.timezone` whoever inserts, and `accounting_seeder_read` (`0040:213–214`) already admits that principal. The ownership transfer uses the same `GRANT CREATE ON SCHEMA public` bracket as `0040:247–263`/`0040:471`, and P3-S1 extends the named-owner assertions in `tests/integration/migration-portability.test.ts:232–252` with it.
 
 ---
 
@@ -1571,7 +1581,7 @@ Two of those three are already safe. Relying on that is the mistake: "safe becau
 
 1. `CHECK (is_base = false OR (sku IS NULL AND barcode IS NULL AND price_minor IS NULL AND attributes = '{}'::jsonb))` — a base variant physically cannot hold merchant identity, so it can never become visibly merchant-like even if a read is forgotten.
 2. `UNIQUE (business_id, product_id) WHERE is_base` (already in P3-AL-03) — repeated enablement cannot create a second base variant; the enablement command is idempotent against it.
-3. A `BEFORE INSERT OR UPDATE OR DELETE ON product_variants FOR EACH ROW` trigger that refuses any write touching a row with `is_base = true`, and any insert setting `is_base = true`, unless `current_user = 'daftar_inventory_internal'` — the Phase 3 twin of the accepted `daftar_accounting_internal` boundary (`0040_accounting_chart.sql:204–214`, `0045_accounting_post_entry.sql:373`). The tracking-enablement routine is the only writer that runs as that principal. Stable refusal: `catalog.base_variant_not_mutable`.
+3. A `BEFORE INSERT OR UPDATE OR DELETE ON product_variants FOR EACH ROW` trigger that refuses any write touching a row with `is_base = true`, and any insert setting `is_base = true`, unless `current_user = 'daftar_inventory_internal'` — the Phase 3 twin of the accepted `daftar_accounting_internal` boundary (`0040_accounting_chart.sql:204–214`, `0045_accounting_post_entry.sql:373`). The tracking-enablement routine is the only writer that runs as that principal. Stable refusal: `catalog.base_variant_not_mutable`. **Round 4 (P3-AL-54 §F):** the trigger is `product_variants_10_base_variant_authority`, it runs with **invoker** rights (a definer-rights guard would always see its own owner as `current_user`), it also refuses the converse — the internal principal inserting a row with `is_base = false` — and it fires on `INSERT OR UPDATE` only. **Deletion is closed by privilege, not by the trigger:** no runtime role holds `DELETE` on `product_variants` (`0006_rls.sql:77–78`, `0013_security_boundary.sql:48`) and the internal role is given none, while a trigger on `DELETE` would also refuse the owner-level `ON DELETE CASCADE` from `products`/`businesses`, which is not a merchant write.
 4. The catalog archive path already defers to the inventory check rather than duplicating it (P3-AL-41), so archiving a product cannot orphan a base variant that still has stock.
 
 **The permanent proofs (P3-S1 acceptance).**
@@ -1584,7 +1594,7 @@ Two of those three are already safe. Relying on that is the mistake: "safe becau
 | 4 | A base variant's NULL `sku`/`barcode` | cannot shadow the product's identifiers — asserted against the partial unique indexes, not assumed |
 | 5 | Enabling tracking twice on the same product | exactly one base variant, no error |
 | 6 | Every existing product in the accepted golden catalog fixtures | none becomes visibly multi-variant because inventory was enabled |
-| 7 | Ordinary variant update/archive/delete aimed at `is_base = true`, through the command **and** as raw SQL as `daftar_app` | **REFUSED**, `catalog.base_variant_not_mutable` |
+| 7 | Ordinary variant update/archive/delete aimed at `is_base = true`, through the command **and** as raw SQL as `daftar_app` | **REFUSED**: `catalog.base_variant_not_mutable` for the command and for raw `UPDATE`; raw `DELETE` by privilege (`42501`), since `daftar_app` holds no `DELETE` (Round 4) |
 | 8 | `INSERT` of a second `is_base = true` row, or of one carrying a SKU | refused by the unique index and the CHECK respectively |
 
 ---
@@ -1608,6 +1618,173 @@ Two of those three are already safe. Relying on that is the mistake: "safe becau
 **The proof, and why reading the registry is not the proof.** P3-S1's acceptance **creates a real Business through the accepted provisioning flow after applying the candidate migration** and reads the rows actually persisted in `business_roles` / `role_permissions`. A test that asserts the constant equals itself proves nothing about `provision_create_business`, which is the frozen routine that actually writes the rows.
 
 **Both populations, one assertion set.** The four migration assertions of P3-AL-38 are run again against the newly provisioned business, and a fifth compares the two populations directly: for every system role key, the Phase 3 permission set of a backfilled business equals that of a freshly provisioned one.
+
+---
+
+
+## P3-AL-54 — The physical database authority model for Phase 3
+
+**Status: TO BE ENFORCED IN P3 · P3-S1** (the unit-history guard's *placement* is P3-S2, per P3-AL-05 §D).
+
+This decision adds no rule. It fixes **who physically can** perform what P3-AL-04, -05, -15, -36, -52 and -53 already say **may** happen, so that no implementer chooses between direct table DML, a service-level transaction, an ad-hoc grant and a routine. Every mechanism named here has an accepted Phase 1/2 precedent, cited at the point it is used.
+
+### §A — The defect, proved against the accepted tree
+
+| Fact | Evidence | Consequence without this decision |
+|---|---|---|
+| `daftar_app` holds table-level `SELECT, INSERT, UPDATE` on `products` and `product_variants` | `infrastructure/database/migrations/0006_rls.sql:77–78` | A table-level privilege covers columns added later. `UPDATE products SET track_inventory = true, unit_code = 'kg'` as `daftar_app` would succeed the day P3-S1 ships, with no `inventory.adjust`, no base variant, and no unit rule. |
+| `daftar_app` holds **no** `DELETE` on either table | same line — the grant is `SELECT, INSERT, UPDATE` | Deleting a base variant as `daftar_app` is already impossible by grant; only insert and update need guarding. |
+| The frozen onboarding writer runs as **`daftar_platform`** | `0033_provisioner_atomic_authority.sql:308` — `ALTER FUNCTION … OWNER TO daftar_platform` on every provisioning function, including `provision_create_business` | An invoker-rights home-association maintainer would run as `daftar_platform` during onboarding and need `INSERT` on `branch_warehouses` — accidental **platform** mutation authority over inventory authorization. |
+| Onboarding runs with `app.bypass_rls = 'true'` and no business scope | `apps/api/src/infra/database.ts:143–160`, `withProvisionerTransaction` passes `bypass = true` | `app_bypass()` is true inside onboarding for every principal except `daftar_app` (`0010_db_roles.sql:8–11`). |
+| Roles are cluster objects created by **`bootstrap.sql`**, not by migrations | `infrastructure/database/bootstrap.sql:130–136` creates `daftar_accounting_internal`; `:237` grants the one membership | `daftar_inventory_internal` is created there too, never by `0053`+. |
+| A non-superuser may transfer function ownership only if it owns the function, can `SET ROLE` to the new owner, **and** the new owner has `CREATE` on the schema | `0040_accounting_chart.sql:247–263`, taken at the top of each accounting migration and revoked at the end (`0040:471`, `0042:471/499`, … `0051:64/206`) | The same bracket is required in every Phase 3 migration that hands ownership to `daftar_inventory_internal`. |
+| A migration that `CREATE OR REPLACE`s a function the internal role already owns is an **ownership** check that ignores `SET` | `bootstrap.sql:218–230` — the RB-P2-01 finding for `0038` | A later Phase 3 migration must replace such a function inside `SET LOCAL ROLE daftar_inventory_internal … RESET ROLE` (`0040:411–466`), never by widening the membership to `INHERIT TRUE`. |
+| `TEMPORARY` is revoked from every named role and a `SECURITY DEFINER` path that omits `pg_temp` still searches it **first** | `bootstrap.sql:240–283`; `tests/security/search-path-shadowing.test.ts` forged a journal entry from `daftar_app` before P2-S3 | The internal role must be added to that `REVOKE TEMPORARY` list, and every Phase 3 routine must name `pg_temp` last. |
+
+### §B — Three kinds of authority, never mixed
+
+| Kind | Principals | May it log in? | What it is for in Phase 3 |
+|---|---|---|---|
+| **Deployment** | `daftar_migrator` | Yes — but no service loads its credential and it appears in no runtime connection URL (`bootstrap.sql:71–76`) | Applies migrations; owns tables; hands routine ownership to the internal role. `rolsuper = false`, `rolbypassrls = false`. |
+| **Runtime** | `daftar_app`, `daftar_platform`, `daftar_worker`, `daftar_provisioner`, `daftar_identity`, `daftar_resolver`, `daftar_reconciler` | Yes | Hold `EXECUTE` on named routines and the `SELECT`s they need. **No runtime role receives any Phase 3 table DML that this decision does not list in §H, and no runtime role is a member of any internal role.** |
+| **Internal, NOLOGIN** | `daftar_accounting_internal` (Phase 2, unchanged), **`daftar_inventory_internal`** (new) | **No** — no password can exist | Owns `SECURITY DEFINER` routines and holds the narrow table privileges they need. Reachable only by calling a routine it owns. The two are **separate**: inventory never runs as the accounting principal and accounting never as the inventory one. |
+
+### §C — `daftar_inventory_internal`, completely
+
+**Created in `infrastructure/database/bootstrap.sql` by P3-S1**, idempotently, in exactly the shape of `daftar_accounting_internal` (`bootstrap.sql:130–136`):
+
+```
+CREATE ROLE daftar_inventory_internal
+  NOLOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+-- and on re-run:
+ALTER ROLE daftar_inventory_internal
+  NOLOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD NULL;
+GRANT USAGE ON SCHEMA public TO daftar_inventory_internal;
+-- added to the existing REVOKE TEMPORARY list (bootstrap.sql:274–282):
+REVOKE TEMPORARY ON DATABASE <current_database()> FROM daftar_inventory_internal;
+GRANT daftar_inventory_internal TO daftar_migrator WITH INHERIT FALSE, SET TRUE;
+```
+
+- **Its one membership.** `daftar_migrator`, `INHERIT FALSE, SET TRUE`. It is required, not optional: P3-S1 transfers routine ownership to this role, and PostgreSQL lets a non-superuser do that only when it can `SET ROLE` to the new owner. `INHERIT FALSE` means the migrator does not *hold* inventory authority passively; it can only assume it deliberately, and only a deployment credential can. **No runtime principal is a member**, directly or transitively.
+- **It is not** `daftar_app`, `daftar_platform`, `daftar_worker`, `daftar_provisioner` or `daftar_accounting_internal`, and holds no membership in any of them.
+- **What it may read and write** is exactly the §H column for it, and nothing else. In particular it has **no `UPDATE` and no `DELETE` on `product_variants`**, so it physically cannot mutate a merchant variant; and no privilege at all on any accounting table.
+- **`scripts/phase2-deployment-authority.ts`** re-derives the set of roles the history hands ownership to (`bootstrap.sql:185–192`). Adding a third owner turns that gate red until bootstrap grants the membership — which is the design; P3-S1 updates both in the same commit.
+- **Asserted by the P3-S1 migration from the catalogues**, on the `0040:510–534` pattern, prefix `inventory.authority_leak`: the role exists; `rolcanlogin`, `rolsuper`, `rolbypassrls`, `rolcreaterole`, `rolcreatedb`, `rolreplication` are all false; `rolinherit` is false; its only member is `daftar_migrator` with `inherit_option = false`; it does not hold `CREATE` on `public` at commit; it does not hold `TEMPORARY`.
+
+### §D — The safe `SECURITY DEFINER` contract (permanent)
+
+Every function owned by `daftar_inventory_internal` — trigger functions included — satisfies all of the following, and P3-S1 adds a **catalogue-discovered** check (every `pg_proc` row whose owner is that role, not a hand-written list) to `tests/security/search-path-shadowing.test.ts` and to the permanent static guards:
+
+1. `SECURITY DEFINER` with `SET search_path = pg_catalog, public, pg_temp` — the accepted form (`0045_accounting_post_entry.sql:163`), with **`pg_temp` named and last**. Omitting it does not exclude it; it puts it first.
+2. No caller-writable schema appears before a trusted one; `public` is not caller-writable (`bootstrap.sql:284` onward revokes `CREATE` from `PUBLIC`).
+3. `REVOKE EXECUTE … FROM PUBLIC` on every one; `EXECUTE` granted only as §H lists. Trigger functions get **no** `EXECUTE` grant at all — PostgreSQL does not check `EXECUTE` when a trigger fires, so a grant would only enable a direct call.
+4. No dependency on `TEMPORARY` objects; the role holds no `TEMPORARY`.
+5. No runtime role holds `CREATE` on `public`; the internal role holds it only inside the migration that transfers ownership, taken at the top and revoked at the end of the same file, and the file refuses to commit if it survived (`0040:514` pattern).
+6. No dynamic SQL built from caller input. Identifiers are fixed at authoring time; any `format()` uses `%I`/`%L` over constants only. No routine resolves a table, schema or function name from an argument or a GUC.
+7. The owner is `NOLOGIN` — asserted, not assumed (§C).
+
+### §E — The three runtime entry points, named
+
+The application **keeps** everything it does today: authentication, `MembershipContext` resolution, and the permission check. It then calls **one named routine** inside the non-posting seam `withBusinessTransaction` (P3-AL-32), so business scope comes from the `app.business_id` GUC the seam sets — never from an argument. There is no `trusted` flag, option or bypass parameter anywhere.
+
+| Routine | Owner | `EXECUTE` | Checked by the application first | Enforced by the routine |
+|---|---|---|---|---|
+| `inventory_configure_product(p_product_id uuid, p_track boolean, p_unit_code text, p_unit_decimals smallint)` | `daftar_inventory_internal` | `daftar_app` only | `inventory.adjust` | Product is in `app_business()`; `unit_code` exists in `units`; tracked ⇒ unit present (P3-AL-04); unit change refused after history (P3-AL-05 §D, by the P3-S2 trigger); disable refused at non-zero stock (P3-AL-41, from P3-S2); **creates the base variant** when enabling tracking on a product with no variants (P3-AL-03), idempotently. The **only** writer of `track_inventory`, `unit_code`, `unit_decimals` and of any `is_base = true` row. |
+| `structure_associate_warehouse_branch(p_warehouse_id uuid, p_branch_id uuid)` | `daftar_inventory_internal` | `daftar_app` only | `warehouse.manage` **and** `branch_scope_mode = 'all'` (P3-AL-15 §B) | Both rows exist in `app_business()`; neither is archived; duplicate is an idempotent success; the composite FKs make a cross-business pair impossible regardless. |
+| `structure_dissociate_warehouse_branch(p_warehouse_id uuid, p_branch_id uuid)` | `daftar_inventory_internal` | `daftar_app` only | same | Both in `app_business()`; the home association is refused (and refused again by `branch_warehouses_keep_home`); an absent association is an idempotent success. |
+
+The routines enforce **structure**, not scope mode. Branch authority in DAFTAR is application-resolved today (`member_branch_scopes` is read by `StructureService`), and this decision does **not** introduce a signed domain assertion for it — the accepted threat model does not require one. The honest boundary statement: a stolen `daftar_app` credential can already `INSERT`/`UPDATE` `branches` and `warehouses` for the business it scopes itself to (`0006:78`), so these routines give it no reach it lacked. What they remove is the ability to write the three configuration columns, the base variant, or an association **as raw DML** — which is the defect. Audit rows are written by the application through `AuditService.recordTx` in the same transaction, as every Phase 1 structure command does.
+
+**How RLS admits the routines.** They run as `daftar_inventory_internal` inside the transaction `daftar_app` opened, so `app.tenant_id` and `app.business_id` are already set and `app.bypass_rls` is false. The existing `tenant_membership` / `business_isolation` policies (`0006_rls.sql:28–49`) therefore admit the internal role to exactly that business's rows — the same rows `daftar_app` could see — with no new policy and no bypass. A call made without business scope sees zero rows and fails as "not found".
+
+### §F — The column guards, and why they must run with invoker rights
+
+**`products_10_inventory_config_authority`** — `BEFORE INSERT OR UPDATE ON products FOR EACH ROW`, function **`SECURITY INVOKER`**:
+
+- **INSERT**: if `current_user <> 'daftar_inventory_internal'` and (`NEW.track_inventory` or `NEW.unit_code IS NOT NULL` or `NEW.unit_decimals IS NOT NULL`) → raise.
+- **UPDATE**: if `current_user <> 'daftar_inventory_internal'` and any of the three is `IS DISTINCT FROM` its old value → raise.
+- Every other column — price, category, SKU, barcode, the free-text `products.unit`, status, version — is untouched by this guard. Translations keep their own path (`0036`).
+- Refusal: **`inventory.configuration_authority_required`**, one stable code for all three columns and both operations.
+
+**`product_variants_10_base_variant_authority`** — `BEFORE INSERT OR UPDATE ON product_variants FOR EACH ROW`, **`SECURITY INVOKER`**:
+
+- any operation touching a row with `is_base = true` (`OLD` or `NEW`) by a `current_user` other than `daftar_inventory_internal` → raise **`catalog.base_variant_not_mutable`** (P3-AL-52);
+- **and the converse**: an `INSERT` by `daftar_inventory_internal` with `is_base = false` → raise the same code. The internal role writes base variants only; the merchant runtime writes merchant variants only. With no `UPDATE`/`DELETE` grant (§H), the internal role cannot touch a merchant variant at all.
+- **`DELETE` is closed by privilege, deliberately not by this trigger.** No runtime role holds `DELETE` on `product_variants` (§A), and the internal role receives none (§H). A `DELETE` branch would also fire on the owner-level `ON DELETE CASCADE` from `products` and `businesses`, which runs as the table owner, and refuse a removal that is not a merchant write. Once stock history exists, the movement FK refuses the deletion anyway.
+- The P3-AL-52 `CHECK` (`is_base = false OR (sku IS NULL AND barcode IS NULL AND price_minor IS NULL AND attributes = '{}'::jsonb)`) stays exactly as written. No relaxation.
+
+**Why invoker rights are mandatory here, and definer rights would be a hole.** Inside a `SECURITY DEFINER` function, `current_user` **is the function's owner**. A definer-rights guard owned by `daftar_inventory_internal` would therefore see `current_user = 'daftar_inventory_internal'` on **every** call and admit every writer; one owned by anyone else would refuse the legitimate routine. The guard's whole job is to observe *who is writing*, so it must run as the writer. It needs no privilege of its own: it reads `current_user`, `OLD` and `NEW`. The static guard in §D therefore carries an explicit exception list containing exactly these two functions, each asserted to be `prosecdef = false`.
+
+**Why not column-level grants instead.** `REVOKE UPDATE (col)` does not remove a table-level `UPDATE`, so the only grant-based fix is to revoke table-level `UPDATE`/`INSERT` on `products` from `daftar_app` and re-grant them per column. That is a column list every future migration must remember to extend, where forgetting silently breaks the catalog or silently grants the wrong column; and it still produces a permission-denied error rather than a stable refusal code. The Tech Lead also ruled out revoking `UPDATE` on `products` outright. The trigger guards exactly the three new columns and nothing else, and is the single mechanism for both `INSERT` and `UPDATE`.
+
+`ALTER TABLE … ADD COLUMN … DEFAULT false` fires no row trigger, so the migration that adds the columns is unaffected, and every existing product starts untracked (P3-AL-04).
+
+### §G — Two guards on `products`, composed, never merged
+
+PostgreSQL fires triggers of the same timing and event **in name order**. The names are part of the contract:
+
+| Order | Trigger | Slice | Question it answers | Runs as | Refusal |
+|---|---|---|---|---|---|
+| 1 | `products_10_inventory_config_authority` | P3-S1 | **WHO** may change inventory configuration | `SECURITY INVOKER` (§F) | `inventory.configuration_authority_required` |
+| 2 | `products_20_unit_history_lock` | P3-S2 | **WHEN** the unit may no longer change | `SECURITY DEFINER`, owner `daftar_inventory_internal` | `inventory.unit_identity_locked` |
+
+The history lock is definer-rights for the opposite reason the authority guard is invoker-rights: it must **not** depend on who is asking. Its `EXISTS (SELECT 1 FROM stock_movements …)` for the product must see every movement of that product, not only those the caller's RLS scope admits; so it reads through a `FOR SELECT` policy on `stock_movements` admitting `current_user = 'daftar_inventory_internal'` — the pattern of `0042_accounting_journal.sql:390` for the accounting principal. It never inspects `current_user` to decide.
+
+| Writer | Stock history? | Change | Guard 1 | Guard 2 | Outcome |
+|---|---|---|---|---|---|
+| Ordinary catalog SQL as `daftar_app` | any | `track_inventory`, `unit_code` or `unit_decimals` | **refuses** | — | `inventory.configuration_authority_required` |
+| Ordinary catalog SQL | any | price, category, SKU, barcode, `products.unit` | passes | not fired (`WHEN` clause on unit columns) | **allowed** |
+| `inventory_configure_product` | none | unit | passes | passes | **allowed** |
+| `inventory_configure_product` | exists (any `on_hand`, including 0) | unit | passes | **refuses** | `inventory.unit_identity_locked` |
+| `inventory_configure_product` | exists | tracking only, unit unchanged | passes | not fired | governed by P3-AL-41 in the routine |
+
+Guard 2 is declared `WHEN (OLD.unit_code IS DISTINCT FROM NEW.unit_code OR OLD.unit_decimals IS DISTINCT FROM NEW.unit_decimals)`, so it costs nothing on ordinary catalog updates.
+
+### §H — The live grant matrix P3-S1 must produce
+
+Default deny. This is the **intended catalogue state**, and P3-S1's tests read `information_schema.role_table_grants`, `role_column_grants`, `role_routine_grants`, `pg_auth_members` and `pg_policy` — never the migration text. "—" means no privilege.
+
+| Object | `daftar_app` | `daftar_platform` | `daftar_worker` | `daftar_provisioner` | `daftar_identity` / `resolver` / `reconciler` | `daftar_inventory_internal` |
+|---|---|---|---|---|---|---|
+| `units` (registry) | `SELECT` | — | — | — | — | `SELECT` |
+| `unit_names` (registry) | `SELECT` | — | — | — | — | — |
+| `branch_warehouses` | `SELECT` | — | — | — | — | `SELECT, INSERT, DELETE` |
+| `products` | unchanged `SELECT, INSERT, UPDATE` (0006), three columns guarded by §F | unchanged | unchanged | unchanged | unchanged | `SELECT`; `UPDATE (track_inventory, unit_code, unit_decimals)` only |
+| `product_variants` | unchanged `SELECT, INSERT, UPDATE`, `is_base` rows guarded by §F | unchanged | unchanged | unchanged | unchanged | `SELECT`; `INSERT (business_id, id, product_id, is_base)` only; **no `UPDATE`, no `DELETE`** |
+| `businesses`, `branches`, `warehouses` | unchanged | unchanged | unchanged | unchanged | unchanged | `SELECT` (the RLS subquery and the structural checks need it) |
+| `journal_entries` | unchanged | unchanged | unchanged | unchanged | unchanged | **—** |
+| `inventory_configure_product`, `structure_associate_warehouse_branch`, `structure_dissociate_warehouse_branch` | `EXECUTE` | — | — | — | — | owner |
+| every Phase 3 trigger function | — | — | — | — | — | owner (definer ones) |
+| membership in `daftar_inventory_internal` | **none** | **none** | **none** | **none** | **none** | — (only `daftar_migrator`, `INHERIT FALSE`) |
+
+"Unchanged" is the accepted state and is itself asserted: `daftar_platform` holds only `SELECT` on `products` and `product_variants` (`0010_db_roles.sql:20–22` narrowed by `0013_security_boundary.sql:48`) and `SELECT, INSERT, UPDATE` on `warehouses` (`0010:20–22`, which is how the platform-owned `provision_create_business` writes its warehouse); `daftar_provisioner` holds no table privilege on any of these (`0032_provisioner_narrow_functions.sql:22–27`) and reaches them only through platform-owned routines. **From P3-S2** the internal role additionally holds `SELECT` on `stock_movements` (through a `FOR SELECT` policy admitting it, §G) and on `stock_levels` (for the P3-AL-41 disable rule); nothing else is added.
+
+No registry has runtime DML. The platform, worker and provisioner receive no inventory mutation authority; the only inventory row that onboarding produces is the home association, and it is produced by the internal role's maintainer (§I), not by the provisioner or the platform.
+
+**`journal_entries` and TD-09 (P3-AL-36).** P3-S1's future-date trigger on `journal_entries` is an **accounting** guard, so it belongs to **accounting** authority: its function is `SECURITY DEFINER`, owned by `daftar_accounting_internal`, with the §D discipline, because it must read `businesses.timezone` whatever principal inserts — the accounting routine, or the schema owner in the raw insert TD-09 exists to catch — and `accounting_seeder_read` (`0040:213–214`) already admits exactly that principal. No inventory principal touches `journal_entries`, and no grant on it changes.
+
+### §I — The home-association maintainer's authority, through all three writers
+
+P3-AL-15 §A's objects, with their authority fixed:
+
+| Object | Function rights | Owner | Why |
+|---|---|---|---|
+| `warehouses_home_branch_maintain` — `AFTER INSERT ON warehouses` | `SECURITY DEFINER` | `daftar_inventory_internal` | The three writers run as `daftar_app` (two Structure paths) and **`daftar_platform`** (frozen onboarding). Invoker rights would require `INSERT` on `branch_warehouses` for both, including the platform. Definer rights need it for the internal role only. |
+| `warehouses_require_home_branch` — deferred, `AFTER INSERT ON warehouses` | `SECURITY DEFINER` | `daftar_inventory_internal` | Must see `branch_warehouses` whatever the writer's grants. Remains **load-bearing**: it proves the maintainer did not silently fail, was not dropped, and was not bypassed. |
+| `branch_warehouses_keep_home` — deferred, `AFTER DELETE OR UPDATE ON branch_warehouses` | `SECURITY DEFINER` | `daftar_inventory_internal` | Must see `warehouses` whatever the writer's grants. |
+| `warehouses_home_branch_immutable` — `BEFORE UPDATE ON warehouses` | `SECURITY INVOKER` | migrator | Reads only `OLD`/`NEW`; needs no privilege. |
+
+**How RLS admits the maintainer, precisely.** `branch_warehouses` gets the accepted two-policy layering of `warehouses` itself (`0006_rls.sql:28–49`): `ENABLE` and **`FORCE`** row-level security, a permissive `tenant_membership` policy and a `RESTRICTIVE` `business_isolation` policy, both honouring `app_bypass()`. **No new policy names the internal role.** The maintainer is admitted by **exactly the predicate that admitted the warehouse row it derives from**: `app_business()` in the two Structure paths, and `app_bypass()` in onboarding — which is true there for every principal except `daftar_app` (`0010_db_roles.sql:8–11`), and is precisely what already admits `provision_create_business`'s own `INSERT INTO warehouses`. The maintainer writes only `(NEW.business_id, NEW.branch_id, NEW.id)`, and the composite FKs make any other pair impossible. **`daftar_provisioner` and `daftar_platform` receive no privilege on `branch_warehouses`.**
+
+### §J — Managed PostgreSQL: the P3-S1 portability proof
+
+P3-S1 **fails** if any of its objects work only because CI applies migrations as a superuser. Carrying forward RB-P2-01, the acceptance includes a real run:
+
+- `bootstrap.sql` (with the P3-S1 additions) applied by the deployment administrator;
+- migrations `0000 → 0052 → every P3-S1 candidate` applied as **`daftar_migrator` with `rolsuper = false` and `rolbypassrls = false`**, through the existing `tests/integration/migration-portability.test.ts` and `scripts/phase2-deployment-authority.ts`;
+- every ownership transfer to `daftar_inventory_internal` bracketed by `GRANT CREATE ON SCHEMA public TO daftar_inventory_internal` / `REVOKE …` in the same file, with the end-state asserted;
+- any later replacement of a function the internal role already owns done under `SET LOCAL ROLE daftar_inventory_internal` (`0040:411–466`), never by changing the membership to `INHERIT TRUE`;
+- the resulting catalogue — owners, `prosecdef`, `proconfig`, grants, policies, memberships — **diffed against a superuser build**, so a difference the superuser hid is a failure rather than a surprise in production.
 
 ---
 
@@ -1676,6 +1853,22 @@ The places where the answer was "yes" on the first pass, and what closed each:
 | **Does zero stock unlock a historical unit?** | **No**, and row 5 exists because that is the branch a reasonable implementer would allow. Archival and tracking-disable rules are about *current* quantity; the unit lock is about *history*, and P3-AL-41 now says so where the two meet. |
 | **Does the hidden base variant appear in today's Catalog API?** | **No** — but only because P3-S1 changes the read. `CatalogService.getProduct()` at `catalog.service.ts:148` returns every non-archived variant and knows nothing about `is_base`; P3-AL-52 excludes it there and in the search predicate, keeps its merchant fields empty by `CHECK`, and admits writes to it only as `daftar_inventory_internal`. |
 | **Does a Business created after P3-S1 get the same Phase 3 permissions as an older one?** | **Yes**, and it is proved rather than assumed. Onboarding seeds from `BUILTIN_ROLE_PERMISSIONS`, not from the migration, so P3-AL-53 evolves the registry in the same commit and acceptance **provisions a real business after the migration** and reads the persisted rows. A sixth check compares the two populations directly. |
+
+
+**Fifth pass — the Round 4 questions, answered by the physical model.** The Tech Lead's ten. If any answer were "implementation choice", P3-S0 would not be closed; none is.
+
+| Question | Answer |
+|---|---|
+| **Who owns the inventory trusted routines?** | **`daftar_inventory_internal`**, and nothing else. The three runtime entry points (`inventory_configure_product`, `structure_associate_warehouse_branch`, `structure_dissociate_warehouse_branch`), the home-association maintainer, completeness proof and keep-one trigger, P3-S2's movement primitive and `products_20_unit_history_lock`. The TD-09 guard is accounting's and is owned by `daftar_accounting_internal`. The two column guards are invoker-rights by design and own nothing. P3-AL-54 §C, §E, §G, §I. |
+| **Can that owner log in?** | **No.** `NOLOGIN`, `PASSWORD NULL`, and the P3-S1 migration refuses to commit unless `rolcanlogin`, `rolsuper`, `rolbypassrls`, `rolcreaterole`, `rolcreatedb`, `rolreplication` and `rolinherit` are all false. §C. |
+| **Who may `SET ROLE` to it?** | **Only `daftar_migrator`**, through `GRANT … WITH INHERIT FALSE, SET TRUE` in `bootstrap.sql` — required because PostgreSQL lets a non-superuser transfer ownership only to a role it can become. No runtime role, directly or transitively; asserted from `pg_auth_members` and `pg_has_role`. PM-42. |
+| **What may it read and write?** | Exactly the §H column: `SELECT` on `units`, `products`, `product_variants`, `businesses`, `branches`, `warehouses`; `UPDATE (track_inventory, unit_code, unit_decimals)` on `products`; `INSERT (business_id, id, product_id, is_base)` on `product_variants` with no `UPDATE`/`DELETE`; `SELECT, INSERT, DELETE` on `branch_warehouses`; from P3-S2, `SELECT` on `stock_movements` and `stock_levels`. Nothing on any accounting table. RLS admits it only to the rows the calling scope already admits. |
+| **Which runtime role has table DML?** | **None**, on any table Phase 3 creates. On the accepted tables the accepted grants are **unchanged** — `daftar_app` keeps `SELECT, INSERT, UPDATE` on `products` and `product_variants` (`0006:77–78`) and the three new columns and base rows are guarded by trigger instead; `daftar_platform` keeps `SELECT` only on them (`0013:48`); `daftar_app` holds `SELECT` only on `branch_warehouses`. §H. |
+| **How does the frozen onboarding writer produce the home association?** | `provision_create_business` (owned by `daftar_platform`, `0033:308`) inserts its warehouse unchanged; the `AFTER INSERT` maintainer, `SECURITY DEFINER` owned by the internal role, writes the home row; RLS admits it by `app_bypass()`, the same predicate that admitted the warehouse; the deferred completeness trigger refuses the commit if it is missing, so a failure rolls back the whole onboarding. Neither the platform nor the provisioner receives a grant. §I, matrix rows B, C, L. |
+| **Can `daftar_app` mutate the three inventory identity columns directly?** | **No.** `products_10_inventory_config_authority` refuses any `INSERT` setting them and any `UPDATE` changing them unless `current_user = 'daftar_inventory_internal'`, with `inventory.configuration_authority_required`. It is invoker-rights because a definer-rights guard would always see its own owner. §F, PM-39, PM-40. |
+| **Can the ordinary Catalog touch the base variant?** | **No.** Reads exclude it (P3-AL-52); `product_variants_10_base_variant_authority` refuses `INSERT`/`UPDATE` of an `is_base = true` row by anyone but the internal role; `DELETE` is refused by privilege, since no runtime role holds it; and the internal role cannot touch a merchant variant, having no `UPDATE`/`DELETE` and being refused any `is_base = false` insert. §F. |
+| **What RLS applies to `branch_warehouses`?** | `ENABLE` and `FORCE`, with the accepted two-policy layering of `warehouses` (`0006:28–49`): permissive `tenant_membership` and restrictive `business_isolation`, both honouring `app_bypass()`. No policy names a role. A `daftar_app` connection sees only its business's rows and can write none. §I. |
+| **Does a managed non-superuser migrator succeed?** | **It must, or P3-S1 fails.** The acceptance is a real `0052 → P3-S1` run as `daftar_migrator` with `rolsuper = false` and `rolbypassrls = false`, every ownership transfer bracketed by a same-file `CREATE ON SCHEMA public` grant and revoke, later replacements under `SET LOCAL ROLE`, and the resulting catalogue diffed against a superuser build. Every mechanism used has already run this way in Phase 2 (`0040`–`0051`). §J, PM-43. |
 
 ---
 

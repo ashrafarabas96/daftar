@@ -544,6 +544,86 @@ Two execution-level failures with one shape: a Phase 3 change that is correct in
 
 ---
 
+## PM-39 — An ordinary catalog `UPDATE` changes a product's canonical unit without `inventory.adjust`
+
+**What goes wrong.** P3-S1 adds `unit_code` and `unit_decimals` to `products`. `daftar_app` already holds table-level `UPDATE` on `products` (`0006_rls.sql:77–78`), and a table-level privilege covers columns added later. A catalog edit, a scripted fix, or a stolen application credential runs `UPDATE products SET unit_code = 'kg'` on a tracked product with no history. No permission is checked, because the only check lives in the inventory command the statement never went through.
+
+**Preventive invariant** (P3-AL-54 §F). `products_10_inventory_config_authority`, a `BEFORE INSERT OR UPDATE` trigger with **invoker** rights, refuses any change to `track_inventory`, `unit_code` or `unit_decimals` unless `current_user = 'daftar_inventory_internal'`. The only way to be that principal is to call `inventory_configure_product`, whose only `EXECUTE` grantee is `daftar_app`, and which the application calls only after `inventory.adjust` passes. Once history exists, `products_20_unit_history_lock` (P3-S2) refuses it for every writer, the routine included.
+
+**Detection.** The live grant matrix (P3-AL-54 §H), read from the catalogues; the migration's own `pg_trigger` assertion that both guards exist by name on `products`; and the static check that `products_10_inventory_config_authority` has `prosecdef = false`.
+
+**Test.** Raw SQL as `daftar_app`: `UPDATE products SET unit_code = …` and `SET unit_decimals = …` each refused with `inventory.configuration_authority_required`; the same statement setting price, category, SKU, barcode or `products.unit` succeeds; `inventory_configure_product` called by a member without `inventory.adjust` is refused by the application before the routine runs. The test is shown to fail when the trigger is dropped.
+
+**Failure mode without it.** Before history exists the damage is a unit chosen by the wrong person; after P3-S2 the history lock still holds, so the window is exactly the products with no movement yet. But the same hole is PM-40's, and the two together mean inventory configuration is only as protected as the least careful caller of a catalog `UPDATE`.
+
+**Recovery.** Restore the three columns from the product's last inventory-configuration audit event (the routine's caller writes one; a raw `UPDATE` writes none, which is itself the finding) before any movement is recorded; if a movement exists, PM-37's recovery applies.
+
+---
+
+## PM-40 — An ordinary catalog `UPDATE` turns inventory tracking on, with no base variant and no unit decision
+
+**What goes wrong.** The same table-level `UPDATE`, aimed at `track_inventory`. `UPDATE products SET track_inventory = true, unit_code = 'piece', unit_decimals = 0` satisfies the P3-AL-04 `CHECK`, because the `CHECK` proves a unit **exists**, not that anyone was **authorized** to choose it. No base variant is created, so a simple product is tracked with no stock identity; the first stock command then either invents the base variant in the wrong place or refuses a product the screen says is tracked.
+
+**Preventive invariant** (P3-AL-54 §E–§F). Tracking is enabled by one named routine, `inventory_configure_product`, owned by `daftar_inventory_internal`, which also creates the base variant idempotently. The authority guard refuses `track_inventory` changes by anyone else, on `INSERT` as well as `UPDATE`, so a new product cannot be *born* tracked by raw DML either. The `CHECK` stays exactly as written; it is not asked to prove authorization.
+
+**Detection.** Same guard, same catalogue assertions as PM-39; plus a data invariant queried by P3-S1's acceptance and kept in the rebuild checks: every product with `track_inventory = true` and no merchant variant has exactly one `is_base = true` variant.
+
+**Test.** Raw `INSERT … track_inventory = true` and raw `UPDATE … SET track_inventory = true` as `daftar_app`, each refused with `inventory.configuration_authority_required`; enablement through the command after `inventory.adjust` produces exactly one base variant, and a second enablement produces no second one.
+
+**Failure mode without it.** A tracked product with no stock identity, created by a path that recorded no inventory decision. Nothing fails until the first stock movement, which is the worst place to discover that the configuration step never ran.
+
+**Recovery.** Set `track_inventory` back to false through the routine for the affected products (none can have movements, since no stock identity existed), then enable them properly.
+
+---
+
+## PM-41 — Onboarding creates the first warehouse, but the maintainer has no authority to write its association
+
+**What goes wrong.** The home-association maintainer (P3-AL-15 §A) is written as an ordinary invoker-rights trigger. The two Structure paths run as `daftar_app`, so someone grants `daftar_app` `INSERT` on `branch_warehouses` and they pass. The third writer, frozen `provision_create_business`, is owned by and runs as **`daftar_platform`** (`0033_provisioner_atomic_authority.sql:308`). Its first `INSERT INTO warehouses` fires the maintainer as the platform, which has no privilege on `branch_warehouses`; onboarding fails for **every new business**. The obvious hot-fix is `GRANT INSERT ON branch_warehouses TO daftar_platform` — handing the platform principal write authority over inventory authorization, permanently, to fix one trigger.
+
+**Preventive invariant** (P3-AL-54 §I). The maintainer, the completeness proof and the keep-one trigger are `SECURITY DEFINER`, owned by `daftar_inventory_internal`, which alone holds `INSERT, DELETE` on `branch_warehouses`. RLS admits the maintainer by exactly the predicate that admitted the warehouse row it derives from — `app_business()` for Structure, `app_bypass()` during onboarding — with no new policy. Neither `daftar_platform` nor `daftar_provisioner` receives any privilege on the table, and the live grant matrix asserts that.
+
+**Detection.** Warehouse matrix row B/C through writer 3 (a business provisioned after the migration has its `'Main warehouse'` home association); row L (the maintainer forced to fail inside `provision_create_business` rolls back the whole onboarding); and the §H assertion that `daftar_platform` and `daftar_provisioner` have zero privileges on `branch_warehouses`.
+
+**Test.** Provision a business through the accepted flow on a database built by the non-superuser migrator (PM-43) — not only on the superuser CI build, where a missing grant never shows — and read the persisted association; then repeat with the maintainer replaced by one that raises, and assert that no tenant, business, branch or warehouse row survives.
+
+**Failure mode without it.** Either onboarding breaks for every new customer on the day P3-S1 ships, or it is repaired by a grant that quietly makes the platform an inventory authority. The second is worse, because it works.
+
+**Recovery.** Replace the maintainer with the definer-rights shape and revoke any grant added to the platform or the provisioner; businesses that failed onboarding were rolled back atomically and can simply retry.
+
+---
+
+## PM-42 — A runtime role becomes a member of `daftar_inventory_internal`
+
+**What goes wrong.** A migration that must replace a function the internal role already owns fails as the non-superuser migrator — `CREATE OR REPLACE` is an ownership check and ignores `SET` (the RB-P2-01 finding for `0038`, `bootstrap.sql:218–230`). The quick fix is `GRANT daftar_inventory_internal TO daftar_app`, or flipping the migrator's membership to `INHERIT TRUE`. The first makes every application connection able to `SET ROLE` into the principal the column guards trust, and the guards then admit raw DML from the application; the second gives the deployment credential passive inventory authority.
+
+**Preventive invariant** (P3-AL-54 §C, §J). The role's only member is `daftar_migrator`, `INHERIT FALSE, SET TRUE`, granted in `bootstrap.sql`. A later replacement runs inside `SET LOCAL ROLE daftar_inventory_internal … RESET ROLE` (`0040:411–466`), never by changing the membership. The role is `NOLOGIN` with no password, so no credential for it can exist.
+
+**Detection.** Every Phase 3 migration re-asserts from `pg_auth_members` that the role's member set is exactly `{daftar_migrator}` with `inherit_option = false` (prefix `inventory.authority_leak`), and refuses to commit otherwise; the P3-S1 live membership test asserts, transitively (`pg_has_role(r, 'daftar_inventory_internal', 'MEMBER')` for every runtime role), that runtime membership is **zero**; `scripts/phase2-deployment-authority.ts` checks the migrator's membership shape.
+
+**Test.** For each of `daftar_app`, `daftar_platform`, `daftar_worker`, `daftar_provisioner`, `daftar_identity`, `daftar_resolver`, `daftar_reconciler`: `pg_has_role(…, 'MEMBER')` and `pg_has_role(…, 'USAGE')` are false, and `SET ROLE daftar_inventory_internal` as that role fails. A negative control grants the membership in the test transaction and shows the assertion turn red.
+
+**Failure mode without it.** Every physical guard in P3-AL-54 reduces to a convention: a guard that trusts `current_user = 'daftar_inventory_internal'` is exactly as strong as the set of principals able to become it.
+
+**Recovery.** Revoke the membership, rotate the application credential if it could have been used, and review the audit trail and the three configuration columns for changes not preceded by an inventory configuration audit event.
+
+---
+
+## PM-43 — An inventory `SECURITY DEFINER` routine can be hijacked, or is owned by a role that can log in
+
+**What goes wrong.** A Phase 3 routine is written `SECURITY DEFINER` without `SET search_path`, or with a path that omits `pg_temp`. PostgreSQL then searches `pg_temp` **first**, so any caller able to create a temporary object can shadow an unqualified name the routine uses and run their own code as the owner — the exact attack `tests/security/search-path-shadowing.test.ts` reproduced against the journal before P2-S3. Or the routine's owner is left as `daftar_migrator` (a `LOGIN` role) because the ownership transfer failed as a non-superuser and someone removed it to get green, so compromising a deployment credential now compromises every inventory routine too.
+
+**Preventive invariant** (P3-AL-54 §D). Every function owned by `daftar_inventory_internal` is `SECURITY DEFINER` with `SET search_path = pg_catalog, public, pg_temp`; `EXECUTE` is revoked from `PUBLIC` and granted only per §H; the owner is `NOLOGIN`; no runtime role holds `TEMPORARY` or `CREATE` on `public`; no dynamic SQL is built from caller input. The two column guards are the only intended `SECURITY INVOKER` exceptions and are named.
+
+**Detection.** A **catalogue-discovered** check — every `pg_proc` row owned by the internal role, not a hand-written list — added to the shadowing test and to the permanent static guards: `prosecdef = true`, `proconfig` contains a `search_path` ending in `pg_temp`, no `PUBLIC` `EXECUTE`, owner `rolcanlogin = false`. A second check asserts that every Phase 3 routine the lock names has that owner, so a routine left owned by the migrator is caught by name.
+
+**Test.** The shadowing attack re-run against each inventory routine as `daftar_app` with `TEMPORARY` granted in the test transaction, proving the routine resolves the real object; a negative control removes `pg_temp` from one routine's path and shows the check turn red.
+
+**Failure mode without it.** A single forgotten `SET` clause turns a narrow routine into a general-purpose privilege escalation for any caller who can create a temporary table, and it is invisible in review because the routine's body is correct.
+
+**Recovery.** `ALTER FUNCTION … SET search_path = pg_catalog, public, pg_temp` and `ALTER FUNCTION … OWNER TO daftar_inventory_internal` in a new migration (under `SET LOCAL ROLE` per PM-42), then review writes made through the routine since it shipped.
+
+---
+
 ## Cross-cutting — what would make this premortem worthless
 
 1. **A test that only ever passes.** Every invariant above is proved by a test that is shown to FAIL when the invariant is removed. A green suite that never modelled the attack proves nothing about the attack.
