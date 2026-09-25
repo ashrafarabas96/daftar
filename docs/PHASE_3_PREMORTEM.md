@@ -360,7 +360,7 @@
 
 ## PM-26 — The rounded average drifts the cache away from the movement ledger
 
-**Preventive invariant** (P3-AL-01, P3-AL-49 §A). `stock_levels.valuation_base_minor` is cached as an **exact addition of stored movement values**; the average is derived from it and is never an input to a write. Deriving a key's valuation as `on_hand × avg` is forbidden by name, everywhere — command, rebuild, report, reconciliation, read model.
+**Preventive invariant** (P3-AL-01, P3-AL-49 §A). `stock_levels.valuation_base_minor` is cached as an **exact addition of stored movement integers**; the average is derived from it and never reconstructs it. The average may still be the locked costing input that prices a future outbound movement (P3-AL-49 §B) — what is forbidden by name, everywhere, is deriving a key's **current total** valuation as `on_hand × avg`: command, rebuild, report, reconciliation, read model.
 
 **Detection.** P3-AL-43's **second** comparison, `Σ movements = Σ stock_levels.valuation_base_minor` at zero tolerance, which exists specifically to observe this failure rather than assume its absence; plus a static guard over the inventory package and migration SQL forbidding the multiplication.
 

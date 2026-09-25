@@ -2,7 +2,7 @@
 
 ## 1. مصدر الحقيقة
 
-**Stock Ledger (stock_movements)** Append-only — مصدر الحقيقة الوحيد. كل حركة: `(tenant_id, business_id, warehouse_id, variant_id, stock_seq, qty_delta NUMERIC(18,4), unit_cost_base_minor NUMERIC(28,10) NULL, value_delta_base_minor NUMERIC(28,10), movement_kind, source_type, source_id, source_line_id, actor, business_transaction_id, created_at)`.
+**Stock Ledger (stock_movements)** Append-only — مصدر الحقيقة الوحيد. كل حركة: `(tenant_id, business_id, warehouse_id, variant_id, stock_seq, qty_delta NUMERIC(18,4), unit_cost_base_minor NUMERIC(28,10) NULL, value_delta_base_minor BIGINT, movement_kind, source_type, source_id, source_line_id, actor, business_transaction_id, created_at)`.
 
 الهوية **خماسية** ومانعة للتكرار: `UNIQUE (business_id, source_type, source_id, source_line_id, movement_kind)` — فإعادة محاولة أمر واحد لا تنتج حركة ثانية لسطر مصدر واحد، والتحويل ينتج حركتين لسطر واحد يفصل بينهما `movement_kind` (P3-AL-09). والترتيب المرجعي `stock_seq` المخصَّص تحت قفل مفتاح المخزون، لا `created_at` (P3-AL-02). و`stock_movements` **لا تحمل أي FK إلى جداول النطاقات**: العلاقة تُثبَت من الجهة الأخرى داخل نفس المعاملة، كما أثبتها AL-01 للقيد.
 
@@ -52,9 +52,13 @@ purchase (+) · sale (−) · return (+) · supplier_return (−) · adjustment 
 
 > **حدّ المرحلة 3 (P3-AL-01/P3-AL-49):** يُخزَّن التقييم في الـCache بوصفه **مجموعًا دقيقًا للقيم المخزَّنة** (`valuation_base_minor += value_delta_base_minor`)، والمتوسط **مشتقّ** منه: `avg = HALF_EVEN(valuation_base_minor / on_hand, 10)` حين `on_hand ≠ 0`. **ممنوع اشتقاق التقييم من `on_hand × avg`** في أمرٍ أو إعادة بناء أو تقرير أو مطابقة — المتوسط خارج قسمةٍ مقرَّبة، ومقيسًا على PostgreSQL 16: `on_hand = 3` مع `valuation = 1.0000000000` يعطي `avg = 0.3333333333` وحاصل ضرب `0.9999999999`. انحراف `10^-10` يتراكم في اتجاه واحد ويجعل مطابقة الصفر-هامش (INV-ACC-11) غير قابلة للتحقق.
 
-**تمثيل التكلفة:** كل الحسابات الداخلية بـ**`NUMERIC(28,10)`** (avg وحركة وsnapshot — انظر DATA_MODEL §10). ممنوع Float/Double مطلقًا، وممنوع التقريب المبكر إلى minor داخل الصيغ. التحويل إلى BIGINT minor يحدث **مرة واحدة فقط عند توليد القيد المحاسبي** (HALF_EVEN)، ويُوزَّع فرق التقريب على أسطر القيد (السطر الأكبر أولًا) بحيث **Σ COGS الأسطر = COGS المقيَّد تمامًا**، وأي فرق متبقٍّ ≤ عدد الأسطر minor يُقيد على 6100 Rounding Adjustment.
+**تمثيل التكلفة:** كل حسابات **تكلفة الوحدة والمتوسط** بـ**`NUMERIC(28,10)`** (avg وsnapshot ولقطة تكلفة الحركة — انظر DATA_MODEL §10). ممنوع Float/Double مطلقًا، وممنوع التقريب المبكر إلى minor داخل الصيغ.
 
-الصيغ (الحساب بدقة NUMERIC(28,10)؛ التحويل إلى minor عند القيد فقط):
+> **حدّ المرحلة 3 (P3-AL-49) — التقريب يقع مرة واحدة، عند الحركة:** قيمة الحركة `value_delta_base_minor` تُخزَّن **BIGINT** بالوحدة الصغرى، ومبلغ سطر المخزون في القيد **هو ذلك العدد الصحيح نفسه** منقولًا لا محسوبًا. فلا تحويل عند توليد القيد، ولا فرق تقريب، ولا سطر `6100` على قيد مخزون. السبب مقيس لا مُجادَل: التقريب **ليس تجميعيًّا** — حركتان قيمة كلٍّ منهما `0.6` بالوحدة الصغرى تعطيان في القيد `1 + 1 = 2` وفي التجميع `HALF_EVEN(1.2) = 1`، فما دام هناك تقريبان بحبيبتين مختلفتين يستحيل بلوغ مطابقة الصفر-هامش. الفقرة التالية هي عقد المرحلة 2 المقبول لبقية القيود، ولم يُمسَس.
+
+**سياسة المرحلة 2 المحتفَظ بها لبقية القيود:** التحويل إلى BIGINT minor يحدث **مرة واحدة فقط عند توليد القيد المحاسبي** (HALF_EVEN)، ويُوزَّع فرق التقريب على أسطر القيد (السطر الأكبر أولًا) بحيث **Σ COGS الأسطر = COGS المقيَّد تمامًا**، وأي فرق متبقٍّ ≤ عدد الأسطر minor يُقيد على 6100 Rounding Adjustment.
+
+الصيغ (حساب المتوسط وتكلفة الوحدة بدقة NUMERIC(28,10)؛ وقيمة الحركة تُقرَّب مرة واحدة HALF_EVEN إلى BIGINT minor عند كتابة الحركة، ثم لا تُحسب ثانيةً):
 
 | الحدث | الصيغة |
 |---|---|

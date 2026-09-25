@@ -120,7 +120,7 @@ TD-09's repayment (P3-AL-36) needs a `BEFORE INSERT` trigger on a table created 
 
 `docs/DAFTAR_ACCOUNTING_RULES.md` §invariants states INV-ACC-11 as "GL Inventory(1200) = valuation **within tolerance**, then exact posted reconciliation". `docs/PHASE_2_ACCOUNTING_EXECUTION_PLAN.md` §69 records that the invariant is designed as a reconciliation check and **activated in Phase 3** — so Phase 3 is the phase that decides what it means.
 
-**Decision: the tolerance is zero** (P3-AL-43). Every journal amount for an inventory movement is produced from the same movement, by the same command, in the same transaction, through the same HALF_EVEN conversion. An exact match is therefore achievable by construction, and a tolerance would be exactly where a real divergence hides. The older "within tolerance" wording is superseded for Phase 3 by this document; `DAFTAR_ACCOUNTING_RULES.md` is an accepted Phase 2 page and is **not** rewritten here, because rewriting a prior decision record is not how a later phase changes a rule — naming the supersession is.
+**Decision: the tolerance is zero** (P3-AL-43). An inventory journal amount is not *converted* from the movement at posting time; it **is** the movement's stored `value_delta_base_minor` integer, summed over the operation (P3-AL-49 §A equation (3)). The reconciliation therefore compares two integers that were produced by one rounding, at the movement, in the same command and the same transaction, and it performs no arithmetic of its own that could round. An exact match is achievable by construction, and a tolerance would be exactly where a real divergence hides. The older "within tolerance" wording is superseded for Phase 3 by this document; `DAFTAR_ACCOUNTING_RULES.md` is an accepted Phase 2 page and is **not** rewritten here, because rewriting a prior decision record is not how a later phase changes a rule — naming the supersession is.
 
 ### F-8 — There is no Purchase or Stocktake state machine yet
 
@@ -1062,12 +1062,12 @@ Default deny: an actor with `assigned` scope and no branch association reaches n
 
 ```
 on_hand              += qty_delta                 -- exact NUMERIC(18,4) addition
-valuation_base_minor += value_delta_base_minor    -- exact NUMERIC(28,10) addition of STORED values
+valuation_base_minor += value_delta_base_minor    -- exact BIGINT addition of STORED integers
 ```
 
 then derive `avg_unit_cost_base_minor = HALF_EVEN(valuation_base_minor / on_hand, 10)` when `on_hand <> 0`, carrying the last known average when `on_hand = 0` (so a key that empties and refills does not lose its cost reference). `last_stock_seq` is the final movement's sequence.
 
-**Both folds are additions of stored values, so the rebuild is exact.** No multiplication, no division and no rounding occurs anywhere in the fold; the only rounded quantity is the derived average, and the average is never an input to the fold. That is precisely why P3-AL-49 forbids the live path from deriving valuation through `on_hand × avg`: a rebuild that adds stored values and a live path that multiplies a rounded quotient would диverge, and the rebuild's verdict would be meaningless. Rebuilt `on_hand` and rebuilt `valuation_base_minor` must equal the live cache **exactly**, to the last of the ten decimals, with no tolerance — including for a key whose history contains repeating averages and full depletions (P3-AL-49 §D vector E).
+**Both folds are additions of stored values, so the rebuild is exact.** No multiplication, no division and no rounding occurs anywhere in the fold; the only rounded quantity is the derived average, and the average is never an input to the fold. That is precisely why P3-AL-49 forbids the live path from deriving valuation through `on_hand × avg`: a rebuild that adds stored values and a live path that multiplies a rounded quotient would diverge, and the rebuild's verdict would be meaningless. Rebuilt `on_hand` must equal the live cache to the last of its four decimals and rebuilt `valuation_base_minor` must equal it **to the unit**, with no tolerance — including for a key whose history contains repeating averages and full depletions (P3-AL-49 §D vector E).
 
 - **Ordering source:** `stock_seq`. Never `created_at`, never `id`.
 - **Concurrency:** a rebuild takes the stock key's row lock for the swap, so it cannot interleave with a live command on that key.
