@@ -80,11 +80,11 @@
 
 ## PM-06 — Unit precision allows half a "piece"
 
-**Preventive invariant** (P3-AL-05). `unit_decimals ∈ 0..4`, frozen on the product; the trusted command refuses `scale(qty) > unit_decimals` with `inventory.quantity_precision_invalid`. The refusal is in the database, not in a form validator.
+**Preventive invariant** (P3-AL-05). `unit_decimals ∈ 0..4`, frozen on the product; the trusted command refuses any quantity that is not exactly representable at that precision — `abs(qty) ≠ trunc(abs(qty), unit_decimals)` → `inventory.quantity_precision_invalid`. The refusal is in the database (the trusted command, under the stock key's lock), not in a form validator. It cannot be a row `CHECK`, because the permitted precision lives on the product row, and a `CHECK` may not read another table — stated rather than papered over.
 
-**Detection.** Any movement whose quantity scale exceeds its product's `unit_decimals` — a query that must return zero rows.
+**Detection.** Any movement whose quantity is not exactly representable at its product's frozen `unit_decimals` — a query that must return zero rows. The query uses `trunc`, never `scale`.
 
-**Test.** A `piece` product with `unit_decimals = 0` refuses `0.5` through every command: receive, adjust, transfer, stocktake, supplier return.
+**Test.** All ten bound vectors of P3-AL-05, through every command (receive, adjust, transfer, stocktake, supplier return): `unit_decimals = 0` accepts `1`, `1.0000` and `-3.0000`, refuses `0.5` and `1.0001`; `unit_decimals = 2` accepts `1.23` and `1.2300`, refuses `1.234` and `0.0001`; `unit_decimals = 4` accepts `1.2345`.
 
 **Failure mode without it.** Half a phone in stock, and an average cost divided by a quantity that cannot exist.
 
@@ -344,10 +344,94 @@
 
 ---
 
-## 25. Cross-cutting: what would make this premortem worthless
+## PM-25 — A whole-unit quantity is refused because the column pads it
+
+**Preventive invariant** (P3-AL-05). The precision law tests the **value**, not the storage scale: `abs(qty) = trunc(abs(qty), unit_decimals)`. `scale(qty)` is withdrawn by name and may not reappear in any command, guard, report or test. The reason is measured, not argued: in a `NUMERIC(18,4)` column PostgreSQL stores `1`, `1.0`, `1.00` and `1.0000` identically and reports `scale = 4` for all of them, so a `scale`-based rule refuses **every** quantity on a `unit_decimals = 0` product and refuses **nothing** on a `unit_decimals = 4` one.
+
+**Detection.** A static guard rejecting `scale(` applied to a quantity anywhere in the inventory SQL and package; plus the bound-vector suite, which fails loudly the moment the wrong test is reintroduced.
+
+**Test.** `unit_decimals = 0` accepts `1`, `1.0000` and `-3.0000` and refuses `0.5` and `1.0001`; the same suite asserts a `unit_decimals = 4` product still refuses a five-decimal quantity, which the withdrawn rule never could.
+
+**Failure mode without it.** Every piece-unit product is unusable — no receipt, no sale, no stocktake — and the defect looks like a validation bug rather than an arithmetic one, so it is "fixed" by loosening the check until fractions get through.
+
+**Recovery.** No data recovery is needed for a refusal: nothing was written. Correct the rule, re-run the bound vectors, and check no caller worked around it by rounding the quantity before submission — that workaround **is** the corruption.
+
+---
+
+## PM-26 — The rounded average drifts the cache away from the movement ledger
+
+**Preventive invariant** (P3-AL-01, P3-AL-49 §A). `stock_levels.valuation_base_minor` is cached as an **exact addition of stored movement values**; the average is derived from it and is never an input to a write. Deriving a key's valuation as `on_hand × avg` is forbidden by name, everywhere — command, rebuild, report, reconciliation, read model.
+
+**Detection.** P3-AL-43's **second** comparison, `Σ movements = Σ stock_levels.valuation_base_minor` at zero tolerance, which exists specifically to observe this failure rather than assume its absence; plus a static guard over the inventory package and migration SQL forbidding the multiplication.
+
+**Test.** Vector A of P3-AL-49 §E: `on_hand = 3`, `valuation = 1.0000000000`, average `0.3333333333`; remove one unit, then rebuild — live cache and rebuild identical to the tenth decimal. The same test with the forbidden formula substituted **must fail**, and is kept as the negative control.
+
+**Failure mode without it.** `10^-10` per operation, compounding, in the same direction: after a few hundred thousand movements the inventory asset and the GL disagree by a visible amount, with no single wrong transaction to point at.
+
+**Recovery.** Alert and refuse; fix the multiplying path; **then** rebuild from movements. Rebuilding first destroys the only evidence of which path was wrong.
+
+---
+
+## PM-27 — Empty stock still carries value
+
+**Preventive invariant** (P3-AL-49 §C). An outbound movement that empties a key does not price at the rounded average: its `value_delta_base_minor` is defined as the exact negation of the remaining cached valuation. The invariant `on_hand = 0 ⇒ valuation_base_minor = 0` is asserted inside the command, under the lock, before COMMIT, for every key the command touched. A zero-quantity key keeps its average as a **cost reference** only.
+
+**Detection.** `SELECT … WHERE on_hand = 0 AND valuation_base_minor <> 0` — a query that must return zero rows, run by reconciliation and asserted by the command itself.
+
+**Test.** Vector B of P3-AL-49 §E: remaining `on_hand = 2`, `valuation = 0.6666666667`, remove all 2 → `valuation = 0.0000000000` exactly, and specifically **not** `±0.0000000001`. Measured: `2 × HALF_EVEN(0.6666666667/2, 10) = 0.6666666668`, so the naive path leaves `−0.0000000001` and this test catches it.
+
+**Failure mode without it.** Phantom asset value (or phantom negative value) on an empty key that no future movement clears, that the balance sheet carries forever, and that makes the zero-tolerance reconciliation permanently red — inviting a tolerance, which is the real damage.
+
+**Recovery.** Investigate, then rebuild the affected keys from movements. **Never** write a plug entry: the flush is the fix, a plug is a second wrong number.
+
+---
+
+## PM-28 — A non-posting command mints a fake assertion or splits the commit
+
+**Preventive invariant** (P3-AL-32, P3-AL-33). Two typed seams. `withBusinessTransaction` exposes **no** posting capability and requires **no** assertion, so a transfer neither mints one nor needs one. `withBusinessAccountingTransaction` is the only way to obtain posting capability. The distinction is a type; `skipAccounting`, `requiresAccounting: false` and `trusted: true` are forbidden by name in any spelling.
+
+**Detection.** The capability case of the seam matrix (no posting port reachable from the non-posting handle, at compile time and at runtime); an assertion-minting counter asserted to be zero across a transfer; and the existing guard set, which discovers journal writers from the schema.
+
+**Test.** The six-case seam matrix of P3-AL-32: transfer through the non-posting seam creates the movement pair, audit and outbox in one commit, mints nothing, and leaves **zero** journal entries — counted before and after, not assumed. A mismatched scope/assertion refuses before any domain row exists.
+
+**Failure mode without it.** Either an accounting assertion minted for a posting that never happens — authority created to satisfy a function signature, which is how a bypass is born — or a second transaction for the stock half, so a crash between them leaves stock moved with no financial record. Two competent engineers would have chosen differently, and both would have believed they followed the lock.
+
+**Recovery.** For a split commit: the movements are truth, so reconcile and post the missing entry as an explicit correction with its own source identity. For a fake assertion: rotate the `kid` if one was minted outside a real posting, and treat it as a trust-boundary incident (TD-10).
+
+---
+
+## PM-29 — A stock movement exists with no real source
+
+**Preventive invariant** (P3-AL-50, P3-AL-51). `source_type` is an FK into the closed `stock_source_types` registry, so an unauthorized identity string cannot be written at all. `stock_source_bindings` carries deferred FKs in **both** directions, validated at COMMIT, so a movement cannot exist without its source detail and a source detail cannot exist without its movement. Each source-owning slice adds a deferred completeness trigger for its own finalized lines, plus deletion protection and post-finalization immutability.
+
+**Detection.** An anti-join of movements against bindings and of finalized source lines against movements — both must return zero rows — run as part of reconciliation. The COMMIT-time constraints are the prevention; these queries confirm the prevention was not disabled.
+
+**Test.** A movement written without its binding does not survive COMMIT; a binding without its movement does not survive COMMIT; a finalized purchase line with its movement deleted is refused; updating a finalized line's quantity, cost, variant or warehouse is refused; an unregistered `source_type` is refused by the FK.
+
+**Failure mode without it.** Inventory that no document explains, or a received purchase line whose stock never moved — both invisible until someone counts the shelf, and neither repairable without deciding which half to believe.
+
+**Recovery.** The movement ledger is operational truth, so a missing source is an investigation, never a synthesized document. A genuinely orphaned movement is corrected by an explicit adjustment with its own source identity; movements are never deleted.
+
+---
+
+## PM-30 — One purchase line covers several deficit layers and coverages are silently dropped
+
+**Preventive invariant** (P3-AL-13). Coverage identity is header/detail: one `negative_inventory_cost_adjustments` header per receipt operation, one immutable coverage detail per layer, and every coverage movement carries `source_id = header`, `source_line_id = coverage detail`. Each coverage therefore has a distinct P3-AL-09 identity tuple, so none can collide with another and none can be refused as a duplicate.
+
+**Detection.** A count comparison inside the command: coverage details written **=** coverage movements written, asserted before COMMIT; and, across the business, an anti-join of coverage details against their movements returning zero rows.
+
+**Test.** One purchase line covering **three** deficit layers writes three coverage details and three distinct movements, all accepted; the single catch-up journal entry's amount equals the sum of the three **stored** movement values; replaying the receipt writes nothing further. The same test run against the single-identity model **must fail**, and is kept as the negative control.
+
+**Failure mode without it.** The unique tuple admits the first coverage and refuses the rest — so either the receipt fails for a reason no merchant can act on, or, worse, the refusal is caught and swallowed and the catch-up posts for one layer while two remain silently uncorrected, leaving COGS understated forever.
+
+**Recovery.** The deficit layers and coverages are themselves the evidence of what was owed. Recompute the uncovered catch-up from the layers, post it as an explicit correction with its own source identity, and never edit the original entry.
+
+---
+
+## Cross-cutting — what would make this premortem worthless
 
 1. **A test that only ever passes.** Every invariant above is proved by a test that is shown to FAIL when the invariant is removed. A green suite that never modelled the attack proves nothing about the attack.
 2. **A gate that cannot say no.** Phase 2 found a runner that could exit 0 over failing tests. Phase 3 inherits the fix and the canary that proves the exit status can still carry a refusal.
 3. **A check only ever asked where it passes.** Phase 2's release gate failed three times the first time it ran on a clean runner and inside an extracted archive, and none of the three was a product defect. Every Phase 3 gate is run from a fresh clone before it is believed.
-4. **A tolerance.** Any non-zero tolerance in PM-16 would be the place real divergence hides.
+4. **A tolerance.** Any non-zero tolerance in PM-16, PM-26 or PM-27 would be the place real divergence hides. The `10^-10` failures are exactly the size a tolerance would be written to absorb.
 5. **A retry where a lock order belongs.** See PM-03.

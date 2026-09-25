@@ -4,6 +4,8 @@
 >
 > **Baseline.** Accepted Phase 2 merge commit `0f2b09e7f2bd1015053ff2cb79ad1ceafc25bc6f` on `main` (accepted source head `bf2eeda1494b0333cfef26123d55bcf54134e402`), post-merge CI run `36028186854` SUCCESS on all five required jobs. Migrations `0000`–`0052` are frozen forever; the manifest holds 53 entries with `frozenThrough = 0052_accounting_journal_lines_rls_performance.sql`. Phase 3 begins at `0053`, which **does not exist yet and is not authorized by this document**.
 >
+> **Correction pass — 2026-09-25.** This page was reviewed by the Tech Lead at head `5d28f18c3bad4d692fff0c41424d82fec8075fcd` and returned as CHANGES REQUIRED. Four architectural defects were proved against the real repository and against a live PostgreSQL 16, and are corrected here: the quantity-precision rule tested the storage scale instead of the value (P3-AL-05); an average-only cache could not be exactly rebuilt (P3-AL-01, P3-AL-49); a single assertion-requiring transaction seam contradicted the no-journal transfer (P3-AL-32); and stock source identity proved no-duplicates only (P3-AL-50, P3-AL-51). Multi-layer deficit coverage collided on the movement identity tuple and is re-modelled (P3-AL-13). Every withdrawn rule is named where it stood, so a reader who remembers the old wording finds the retraction rather than silence. Three decisions were added: **P3-AL-49**, **P3-AL-50**, **P3-AL-51**. The page remains DOCUMENTATION ONLY.
+>
 > **Why this exists.** Inventory is the first domain in DAFTAR that owns an *operational* ledger of its own and must stay exactly consistent with an *accounting* ledger it does not own. Two ledgers that can disagree are worse than one ledger that is wrong, because nobody can tell which half to believe. Every decision below is therefore written as what the database physically refuses, or as the exact seam that makes the refusal possible.
 
 ---
@@ -73,6 +75,9 @@ Per the directive's §59, every decision carries exactly one status:
 | P3-AL-46 | Lot / serial / expiry | DEFERRED BY SCOPE | Phase 11 |
 | P3-AL-47 | Web / Android boundary | DEFERRED BY SCOPE | Phase 7 |
 | P3-AL-48 | UX law | TO BE ENFORCED IN P3 | P3-S7 |
+| P3-AL-49 | Stock valuation exactness law | TO BE ENFORCED IN P3 | P3-S2 |
+| P3-AL-50 | Stock source-type registry | TO BE ENFORCED IN P3 | P3-S2 (registry), registered per slice |
+| P3-AL-51 | Physical stock source completeness | TO BE ENFORCED IN P3 | P3-S2 (mechanism), per source thereafter |
 
 ---
 
@@ -123,13 +128,30 @@ TD-09's repayment (P3-AL-36) needs a `BEFORE INSERT` trigger on a table created 
 
 `0040_accounting_chart.sql` seeds exactly 21 system identities and asserts the count. Phase 3 needs `inventory` (1200), `accounts_payable` (2000), `supplier_receivable` (1150), `cogs` (5000), `purchase_price_variance` (6200), `rounding` (6100), `fx_gain`/`fx_loss` (4900/6900) and `opening_equity` (3000) — **all present**. No system account #22 is required by any decision in this document (P3-AL-17).
 
+### F-9 — There is no `payment_methods` table
+
+`docs/DAFTAR_DATA_MODEL.md` §13 specifies `payment_methods` and `payment_method_names`, and `DAFTAR_ACCOUNTING_RULES.md` §291 binds `payment_methods.posting_account_id` to the settlement accounts, but **no migration creates either table** — the whole of §13 is still a specification. Supplier payments need it, so P3-S6 creates the minimal shared foundation and nothing beyond it (P3-AL-27). This finding is **F-9**; an earlier hand-off narrative called it "F-8", which is this document's *Purchase/Stocktake state machine* finding. Evidence identifiers are deterministic and are never reused: F-8 is the state-machine finding, here and everywhere.
+
 ---
 
 ## P3-AL-01 — Inventory source of truth
 
 **Status: TO BE ENFORCED IN P3 · P3-S2.**
 
-**Decision.** `stock_movements` is append-only operational truth. `stock_levels` is a **cache** of `(on_hand, avg_unit_cost_base_minor)` per stock key, and nothing else is truth about quantity or cost.
+**Decision.** `stock_movements` is append-only operational truth. `stock_levels` is a **cache** per stock key, and nothing else is truth about quantity, valuation or cost.
+
+The cache carries, at minimum:
+
+```
+on_hand                  NUMERIC(18,4)  NOT NULL   -- = Σ stock_movements.qty_delta
+valuation_base_minor     NUMERIC(28,10) NOT NULL   -- = Σ stock_movements.value_delta_base_minor
+avg_unit_cost_base_minor NUMERIC(28,10) NULL       -- DERIVED from the two above
+last_stock_seq           BIGINT         NOT NULL
+```
+
+`valuation_base_minor` is a **cache column, not a second source of truth** — the same status `on_hand` has. Truth for valuation remains `Σ stock_movements.value_delta_base_minor`, and the exactness law that makes the cache reconstructible byte-for-byte is **P3-AL-49**, which every writer and every rebuild obeys.
+
+**Why valuation is cached rather than re-derived from `on_hand × avg`.** `avg_unit_cost_base_minor` is a rounded quotient. Measured on PostgreSQL 16: with `valuation = 1.0000000000` and `on_hand = 3`, the average at `NUMERIC(28,10)` is `0.3333333333`, and `3 × 0.3333333333 = 0.9999999999` — not `1.0000000000`. A live command that reconstructed its opening valuation from `on_hand × avg` would therefore lose `0.0000000001` at that step and keep losing on every subsequent one, so the cache would drift from the movement ledger and P3-AL-42's exact rebuild and P3-AL-43's zero tolerance would both become unachievable. Caching the exact sum removes the quotient from the write path entirely.
 
 **What the database refuses.**
 
@@ -213,7 +235,50 @@ For a simple product with no merchant-defined variants, **enabling inventory tra
 
   Seeded with the units DAFTAR actually needs now (`piece`, `kg`, `gram`, `litre`, `millilitre`, `metre`, `centimetre`, `box`, `carton`, `dozen`, `hour`). Localized display names live **outside** inventory truth, in a `unit_names (unit_code, locale, display_name)` table, on the exact pattern `payment_method_names` uses in `DAFTAR_DATA_MODEL.md` §13 and `accounting.account.<system_key>` uses in AL-06. Persistence never depends on translated text.
   `products.unit_code` is a composite-free FK to `units(unit_code)`; `unit_decimals` defaults from the registry at selection time and is then **frozen on the product**, so changing a registry default never silently reinterprets existing stock.
-- **Fractional refusal is physical.** Every quantity that enters a movement passes the trusted command, which resolves the product's `unit_decimals` and refuses a quantity with more decimals than that: `scale(qty) > unit_decimals` → `inventory.quantity_precision_invalid`. A `piece` product with `unit_decimals = 0` therefore cannot receive `0.5`, at the database, not in a form validator.
+- **Fractional refusal is physical, and it tests the VALUE, not the storage scale.**
+
+  **The withdrawn rule.** An earlier draft of this decision wrote the refusal as `scale(qty) > unit_decimals`. That rule is **mathematically wrong and is withdrawn**; no Phase 3 artefact may reintroduce it. `scale()` reports a value's *declared* scale, and the canonical quantity type is `NUMERIC(18,4)`, so PostgreSQL pads every stored quantity to four decimals whatever the caller wrote. Measured on PostgreSQL 16, inserting into a `NUMERIC(18,4)` column:
+
+  | inserted | stored | `scale(q)` | `q = trunc(q,0)` | `q = trunc(q,2)` |
+  |---|---|---|---|---|
+  | `1` | `1.0000` | `4` | `t` | `t` |
+  | `1.0` | `1.0000` | `4` | `t` | `t` |
+  | `1.00` | `1.0000` | `4` | `t` | `t` |
+  | `1.0000` | `1.0000` | `4` | `t` | `t` |
+  | `-3.0000` | `-3.0000` | `4` | `t` | `t` |
+  | `0.5` | `0.5000` | `4` | `f` | `t` |
+  | `1.0001` | `1.0001` | `4` | `f` | `f` |
+
+  `scale(q)` is `4` on every row, including exactly one piece. The withdrawn rule would therefore have refused **every** quantity on a `piece` product with `unit_decimals = 0` — not just fractional ones — and would have refused nothing at all when `unit_decimals = 4`. It tests the column, not the number.
+
+  **The rule.** Quantity precision is **exact representability at the product's `unit_decimals`**, on the numeric value itself:
+
+  ```
+  abs(qty) = trunc(abs(qty), unit_decimals)
+  ```
+
+  — equivalently, `abs(qty) * 10^unit_decimals` is an exact integer. It is stated on the absolute value so that no implementer has to reason about which way `trunc` breaks for a negative movement quantity: the identical law governs `+3.0000` and `-3.0000`. `unit_decimals` is the value **frozen on the product** (P3-AL-04), never the registry's current default.
+
+  **Forbidden, permanently:** `scale(qty)` as the authority; any `FLOAT`, `REAL` or `DOUBLE PRECISION` step in the test; any `::text` / `to_char` / trailing-zero-stripping formatting test; any client-side-only check. The test is exact fixed-point arithmetic in `NUMERIC` in the database and exact `BigInt` arithmetic in `@daftar/inventory`, and the two are asserted against the same vectors (P3-AL-08).
+
+  **Bound vectors.** These are the locked acceptance vectors, not examples:
+
+  | `unit_decimals` | quantity | verdict |
+  |---|---|---|
+  | 0 | `1` | VALID |
+  | 0 | `1.0000` | VALID |
+  | 0 | `-3.0000` | VALID wherever a negative quantity is allowed by the movement's `qty_sign` (P3-AL-10) |
+  | 0 | `0.5` | INVALID |
+  | 0 | `1.0001` | INVALID |
+  | 2 | `1.23` | VALID |
+  | 2 | `1.2300` | VALID |
+  | 2 | `1.234` | INVALID |
+  | 2 | `0.0001` | INVALID |
+  | 4 | `1.2345` | VALID |
+
+  **Refusal:** `inventory.quantity_precision_invalid`, stable, carrying no financial values.
+
+  **Where it lives, and why not a row CHECK.** The refusal is in the trusted `SECURITY DEFINER` command, under the stock key's lock, alongside every other quantity law. It cannot be a row `CHECK` on `stock_movements`, because the permitted precision is a property of a **different row** — the product — and a `CHECK` may not read another table. The command is still the database: no application-layer or form validator is the authority, and a movement that reaches the command with an unrepresentable quantity is refused before any row is written. This is a real limit of the mechanism, stated rather than papered over, and it is exactly the class of gap P3-AL-51's completeness guards exist to close for source identity.
 - **No conversions in Phase 3.** 1 kg is never silently 1000 g. `units` carries no conversion factor and no base-unit column, because a column that exists is a column a later slice will populate and a later query will trust. UoM conversion is a future capability with its own decision.
 
 ---
@@ -224,13 +289,13 @@ For a simple product with no merchant-defined variants, **enabling inventory tra
 
 **Decision.** Exactly one `stock_levels` row per `(business_id, warehouse_id, variant_id)`, enforced by the primary key. Every command that touches a stock key runs the same three steps, in this order, inside the caller's transaction:
 
-1. `INSERT INTO stock_levels (…) VALUES (…, 0, NULL, 0) ON CONFLICT (business_id, warehouse_id, variant_id) DO NOTHING;`
+1. `INSERT INTO stock_levels (…) VALUES (…, 0, 0, NULL, 0) ON CONFLICT (business_id, warehouse_id, variant_id) DO NOTHING;` — `on_hand = 0`, `valuation_base_minor = 0`, `avg_unit_cost_base_minor = NULL`, `last_stock_seq = 0`;
 2. `SELECT … FROM stock_levels WHERE … FOR UPDATE;` — always, even when step 1 inserted the row;
 3. compute → append movement → update cache.
 
 `ON CONFLICT DO NOTHING` followed by an unconditional locking read is what makes the missing-row race safe: the loser of the insert race blocks on the winner's row lock and then reads the winner's state. A check-then-insert is forbidden, and so is `ON CONFLICT DO UPDATE` with a computed value, because that would perform arithmetic outside the lock.
 
-`stock_levels` rows are **never deleted**. A key that reaches zero keeps its row, its `last_stock_seq` and its `avg_unit_cost_base_minor`, because deleting it would restart the sequence and lose the cost that a later receipt's weighted average needs.
+`stock_levels` rows are **never deleted**. A key that reaches zero keeps its row, its `last_stock_seq` and its `avg_unit_cost_base_minor`, because deleting it would restart the sequence and lose the cost reference a later movement may need. A zero-quantity key's `valuation_base_minor` is **exactly `0`** — the retained average is a cost reference, never remaining asset value (P3-AL-49).
 
 ---
 
@@ -256,7 +321,8 @@ For a simple product with no merchant-defined variants, **enabling inventory tra
 - Authoritative cost: **`NUMERIC(28,10)`**. Authoritative quantity: **`NUMERIC(18,4)`**. `FLOAT`, `REAL` and `DOUBLE PRECISION` appear nowhere, and the existing guard `scripts/guards/no-float-rate.ts` is extended to the inventory tables.
 - A new framework-agnostic package **`@daftar/inventory`** owns the arithmetic, exactly as `@daftar/accounting` owns money and FX. It imports no web framework, no Nest symbol and no configuration. It owns: the weighted-average formulas, the landed-cost allocator, the deficit catch-up computation and the canonical rounding boundary.
 - **TypeScript arithmetic is fixed-point `BigInt`**, never binary floating point: cost is carried as an integer number of `10^-10` units and quantity as an integer number of `10^-4` units. A `number` never holds an authoritative cost or quantity anywhere in the package.
-- **One rounding boundary, one mode.** All intermediate arithmetic is exact. When an exact weighted-average result must be persisted to `NUMERIC(28,10)`, it is rounded **HALF_EVEN at that persistence boundary and nowhere else**. There is no intermediate rounding, at any step, for any reason.
+- **One rounding boundary, one mode.** All arithmetic *before* a value is persisted is exact. When an exact result must be persisted to `NUMERIC(28,10)`, it is rounded **HALF_EVEN at that persistence boundary and nowhere else**. There is no intermediate rounding, at any step, for any reason.
+- **“Exact” does not mean “unrounded on the way into the row.”** Quantity carries 4 decimals and unit cost 10, so the raw product `qty × unit_cost` can carry 14 — an exact product is therefore *not* representable in `NUMERIC(28,10)` in the general case, and an earlier draft's “the exact `qty × unit_cost` product” was, read literally, impossible. The persistence boundary for a movement's value is named exactly, once, in **P3-AL-49**: `value_delta_base_minor = HALF_EVEN(exact(qty × unit_cost), 10)`. After that row exists, the **stored** value is the authority and is never recomputed.
 - PostgreSQL agrees by construction: the trusted commands compute in `NUMERIC` and the one `round(x, 10)` call sits at the same boundary. PostgreSQL's `round(numeric, int)` is HALF_UP, not HALF_EVEN, so the commands use an explicit HALF_EVEN helper rather than `round()` — this is the exact tie-breaking trap the directive names, and it is closed by writing the helper, not by assuming.
 - Conversion to `BIGINT` minor units for a journal line remains the **accepted Phase 2 contract**: HALF_EVEN, once, at posting time, with the residue distributed largest-line-first and any remainder to `6100 Rounding Adjustment`. Phase 3 does not re-implement it and does not add a second money rounding.
 - **Shared vectors.** `@daftar/inventory` ships exact worked vectors, asserted identically in TypeScript and in SQL, for: moving weighted average on receipt; transfer (source average unchanged, destination recomputed, total valuation delta exactly zero); positive adjustment; negative adjustment; supplier-return PPV; negative-deficit catch-up. The bound examples already in `DAFTAR_INVENTORY_RULES.md` (GOLD-44, GOLD-54, GOLD-55, GOLD-72) are the first four vectors and are not restated with different numbers here.
@@ -277,9 +343,15 @@ UNIQUE (business_id, source_type, source_id, source_line_id, movement_kind)
 
 where `source_type` is the source document kind, `source_id` the document, `source_line_id` the document's own line (`NOT NULL`, always a real line — purchases, adjustments, transfers, stocktakes and supplier returns all have lines), and `movement_kind` the reason from the closed registry (P3-AL-10), which is what separates `transfer_out` from `transfer_in` for one logical line.
 
-**No polymorphic FK.** `stock_movements` holds **no** foreign key into any domain table. The relationship is proved in the other direction, exactly as AL-01 proved it for the journal: the domain command that creates the movement is the same command that creates the line, in one transaction, and the movement's identity tuple is derived from the line's own primary key. A future domain therefore adds a `source_type` value and its own line table and needs no change in `stock_movements`.
+**No polymorphic FK.** `stock_movements` holds **no** foreign key into any domain table. A future domain therefore adds a `source_type` value and its own line table and needs no change in `stock_movements`.
 
 **Idempotency.** A retried command cannot produce a second movement for one source line: the unique tuple refuses it. This is physical, not a cache lookup.
+
+**What this tuple does NOT prove, and where that is closed.** The unique tuple proves *at most one* movement per source line. It proves nothing about whether the movement's source is real. “The same command creates both rows in one transaction” is a statement about today's code, not a physical invariant — it is exactly the class of claim the withdrawn wording above made, and the class this document exists to replace with a refusal. Three properties are therefore **not** established here and are established by their own decisions:
+
+- `source_type` is an authorized identity → **P3-AL-50** (a closed `stock_source_types` registry; `source_type` is an FK into it and free-form text is physically impossible).
+- the source document and the source line exist, and the finalized source line has every movement it is required to have → **P3-AL-51** (generic source binding plus deferred completeness guards, on the AL-01 pattern, with no polymorphic FK).
+- the source's financial and stock identity is immutable after posting, and the source line cannot be deleted out from under its movement → **P3-AL-51**.
 
 ---
 
@@ -315,10 +387,10 @@ CHECK (NOT (qty_delta = 0 AND value_delta_base_minor = 0))
 CHECK ((qty_delta = 0) = (unit_cost_base_minor IS NULL))
 ```
 
-- A **quantity movement** states `qty_delta <> 0` and `unit_cost_base_minor`, and its `value_delta_base_minor` is the exact product, computed and stored by the command (never by the caller). An outbound movement's value uses the key's current average, an inbound movement's its own cost — that asymmetry is the weighted-average rule and is stated once, here.
+- A **quantity movement** states `qty_delta <> 0` and `unit_cost_base_minor`, and its `value_delta_base_minor` is `HALF_EVEN(exact(qty_delta × unit_cost_base_minor), 10)`, computed and stored by the command (never by the caller) — the single persistence boundary of P3-AL-49, **except** for a full-depletion outbound movement, whose value is the residual flush of P3-AL-49 §C, and for a `transfer_in`, whose value is the exact negation of its paired `transfer_out` (P3-AL-14). An outbound movement's `unit_cost_base_minor` snapshot is the key's current average, an inbound movement's its own cost — that asymmetry is the weighted-average rule and is stated once, here. The `unit_cost_base_minor` column is a **snapshot for trace and reporting**; `value_delta_base_minor` is the **authoritative valuation amount**, and the two are not interchangeable (P3-AL-49 §B).
 - A **value-only movement** states `qty_delta = 0`, `unit_cost_base_minor IS NULL` and a signed `value_delta_base_minor`.
 
-**Rebuild is defined for both ledgers.** For a stock key, `on_hand = Σ qty_delta` and `valuation = Σ value_delta_base_minor`, both ordered by `stock_seq`, and `avg_unit_cost = valuation / on_hand` where `on_hand > 0`. Quantity and valuation are therefore each reconstructable from the movements alone, which is what makes `stock_levels` a cache rather than a second truth.
+**Rebuild is defined for both ledgers.** For a stock key, `on_hand = Σ qty_delta` and `valuation_base_minor = Σ value_delta_base_minor`, both ordered by `stock_seq`, and `avg_unit_cost_base_minor = HALF_EVEN(valuation_base_minor / on_hand, 10)` where `on_hand <> 0`. Both sums are over **stored** values and involve no multiplication and no rounding, which is why they are exact; the average is the only rounded quantity and is never an input to a later write (P3-AL-49). Quantity and valuation are therefore each reconstructable from the movements alone, which is what makes `stock_levels` a cache rather than a second truth.
 
 ---
 
@@ -349,11 +421,37 @@ Coverage runs inside the purchase-receipt transaction, in this order, under the 
 
 1. lock the open deficit layers `FOR UPDATE` in FIFO order;
 2. cover `min(uncovered_qty, remaining receipt qty)` per layer, writing a `negative_deficit_coverages` row that snapshots the layer's `provisional_unit_cost_base_minor` and the receipt's `actual_unit_cost_base_minor`;
-3. append one value-only `negative_inventory_cost_adjustment` movement per coverage with `value_delta = qty_covered × (actual − provisional)`, signed;
-4. post the catch-up journal entry (`Dr COGS / Cr Inventory` when actual > provisional, reversed when actual < provisional) in the **same** transaction, through the composition seam of P3-AL-32;
+3. append one value-only `negative_inventory_cost_adjustment` movement per coverage, with `value_delta_base_minor = HALF_EVEN(exact(qty_covered × (actual − provisional)), 10)`, signed — the P3-AL-49 persistence boundary, applied per coverage and never to an aggregate that is then split;
+4. post **one** catch-up journal entry for the whole adjustment (`Dr COGS / Cr Inventory` when actual > provisional, reversed when actual < provisional) whose amount is the sum of the **stored** coverage movement values, in the **same** transaction, through the accounting-aware seam of P3-AL-32;
 5. apply the normal weighted average to whatever receipt quantity remains after the deficit reaches zero.
 
-Two concurrent receipts cannot cover the same quantity: both must hold the stock key's `stock_levels` row before they may read a deficit layer, so they are serialized by P3-AL-06's lock before FIFO is even consulted. The `FOR UPDATE` on the layers is the second line of defence, not the first.
+**Coverage identity — corrected, because one purchase line can cover many layers.** A single receipt line may cover two, three or twenty deficit layers, and every coverage is its own value-only movement (step 3). If all of them carried `source_id = purchase`, `source_line_id = purchase_line` and `movement_kind = negative_inventory_cost_adjustment`, then P3-AL-09's unique tuple would admit **exactly one** of them and refuse the rest — the identity that exists to prevent duplicates would silently cap a real financial correction. That collision is real and is closed here, not left to the implementer.
+
+**The model.** A receipt that covers deficits creates its own source document, with a header and one immutable detail row per coverage:
+
+```
+negative_inventory_cost_adjustments         -- header: one per receipt operation that covers anything
+  (business_id, id, warehouse_id, origin_source_type, origin_source_id, origin_source_line_id, …)
+
+negative_deficit_coverages                  -- detail: one per (deficit layer × covering line), immutable
+  (business_id, id, adjustment_id, deficit_id, variant_id, qty_covered,
+   provisional_unit_cost_base_minor, actual_unit_cost_base_minor, …)
+```
+
+Every coverage movement therefore carries:
+
+| component | value |
+|---|---|
+| `source_type` | `negative_inventory_cost_adjustment` (registered in `stock_source_types`, P3-AL-50) |
+| `source_id` | the **adjustment header** id |
+| `source_line_id` | the **coverage detail** id — the coverage *is* the line identity |
+| `movement_kind` | `negative_inventory_cost_adjustment` |
+
+Each coverage now has a distinct physical movement identity, so no coverage can collide with another and none can be dropped. Retry stays physical and idempotent: a replayed receipt reproduces the same header and the same detail ids from its own idempotency contract, and the unique tuple refuses the second movement per coverage.
+
+**The two completeness guards apply at different grains, deliberately.** The **accounting** source binding (AL-01) binds the one catch-up journal entry to the **header**, so the ledger has one comprehensible economic source for one economic event. The **stock** source completeness guard (P3-AL-51) binds **every detail** to **its** movement, so the operational trace is exact per deficit layer. One journal entry, N movements, both physically complete — and neither guard is weakened to accommodate the other.
+
+**Concurrency.** Two concurrent receipts cannot cover the same quantity: both must hold the stock key's `stock_levels` row before they may read a deficit layer, so they are serialized by P3-AL-06's lock before FIFO is even consulted. The `FOR UPDATE` on the layers is the second line of defence, not the first.
 
 ---
 
@@ -363,10 +461,18 @@ Two concurrent receipts cannot cover the same quantity: both must hold the stock
 
 **Decision.** A transfer line produces an **atomic pair** of movements sharing one `source_id` and one `source_line_id`, distinguished by `movement_kind`:
 
-- `transfer_out` at the **source** key: `on_hand -= qty`, `value_delta = -(qty × avg_source)`, and the source average is **unchanged** — an outbound quantity carries value away but creates no new cost.
-- `transfer_in` at the **destination** key: `on_hand += qty`, `unit_cost = avg_source snapshot`, destination average recomputed by the standard formula.
+- `transfer_out` at the **source** key: `on_hand -= qty`; its `value_delta_base_minor` is computed **once**, by the ordinary outbound rule of P3-AL-49 — which means the residual flush when the transfer empties the source key. The source average is **unchanged** — an outbound quantity carries value away but creates no new cost.
+- `transfer_in` at the **destination** key: `on_hand += qty`; its `value_delta_base_minor` is **defined as the exact negation of the stored `transfer_out` value**, not recomputed. `unit_cost_base_minor` carries the source-average snapshot for trace only. The destination then recomputes its own average from its new cached valuation (P3-AL-49 §A).
 
-`Σ value_delta` over the pair is **exactly zero**, in `NUMERIC(28,10)`, with no intermediate rounding. Total business inventory valuation is therefore provably unchanged, which is the invariant the test asserts (GOLD-44 is the bound vector).
+**The value is computed once and copied, never computed twice.** Computing `qty × avg_source` independently at both ends and rounding each would give two values that need not be negatives of each other, and the difference would be inventory created or destroyed by a warehouse move. So:
+
+```
+transfer_out.value_delta_base_minor  = V        (V < 0, by P3-AL-49)
+transfer_in.value_delta_base_minor   = -V       (exactly, by definition)
+Σ over the pair                      = 0        (exactly, by construction)
+```
+
+Total business inventory valuation is therefore provably unchanged — **by construction rather than by luck of rounding** — which is the invariant the test asserts (GOLD-44 is the bound vector, and P3-AL-49 §E vector C is the full-source-depletion case).
 
 **Accounting decision — locked.** A same-business warehouse-to-warehouse transfer creates **no journal entry**. `Inventory(1200) → Inventory(1200)` within one business at identical total valuation is a movement of a physical thing, not an economic event; a zero-effect entry would be noise in every report forever. The transfer still creates stock movements, an audit event and an outbox event, all in one transaction.
 
@@ -614,7 +720,13 @@ payment_method_names (business_id, payment_method_id, locale, display_name)
 ```
 
 - `posting_account_id` is a **composite FK** `(business_id, posting_account_id) → accounts (business_id, id)`, `NOT NULL`.
-- The posting account must belong to the same business, must be **active** for a NEW settlement, and must be an asset or clearing account — checked by the command against `accounts.account_type` and the system-key registry, not by a name.
+- The posting account must satisfy all three, checked by the command and not by a name:
+  1. **same business** — guaranteed physically by the composite FK above;
+  2. **`accounts.is_active = true`** for a NEW settlement — a historical settlement keeps the account it was posted to;
+  3. **`accounts.type = 'asset'`**.
+
+  The column is **`accounts.type`** (`0040_accounting_chart.sql:98`), whose closed CHECK admits exactly `asset`, `liability`, `equity`, `revenue`, `expense`. `account_type` is the column name on **`accounting_system_account_keys`** (`0040:31`), a different table; an earlier draft wrote `accounts.account_type`, which does not exist, and that wording is withdrawn. **“Clearing” is not an account type.** `card_clearing` (1020), `wallet_clearing` (1030) and `cheque_clearing` (1040) are *system keys* whose `account_type` is `asset`, exactly like `cash` (1000) and `bank` (1010) — so `accounts.type = 'asset'` already admits every one of them and the word “clearing” adds no rule.
+- Any narrower restriction — for example admitting only accounts whose `system_key` is one of the five settlement identities — is an **explicit command policy**, stated in the slice that implements it and tested, never an implied consequence of the account type. P3-S6 states which it implements; it may not leave the choice open.
 - **Historical identity is preserved**: a method that has been used is never deleted and its posting account never silently changes. Deactivation is a lifecycle flag; entries already posted keep the account they were posted to.
 - This is **infrastructure**, used by Supplier Payments now and Customer Payments in Phase 4. There is no one-off `supplier_payment.cash_account_id`, which is exactly the shape Phase 4 would have had to rip out.
 - Phase 3 implements **no** Customer Payments, and creates no `payments` table.
@@ -709,13 +821,33 @@ audit event
 outbox event
 ```
 
-**The seam — specified, not implemented in P3-S0.**
+**Not every atomic domain operation implies a posting.** An earlier draft wrote the seam as a single boundary that “carries an assertion or it does not open.” That is incompatible with two decisions of this same document: P3-AL-14 locks that a same-business warehouse transfer creates **no journal entry**, and P3-AL-33 locks that an assertion is minted for the posting a domain operation implies. A transfer implies no posting, so a single assertion-requiring seam would force its implementer to choose between minting a **fake assertion for a posting that never happens** and **opening a second transaction** for the stock half — the exact split-commit this decision exists to prevent. Two competent engineers would have chosen differently. The seam is therefore **two typed operations**, and the distinction is carried by the type, not by a value.
 
-1. **A unit-of-work boundary on `Database`**: `withBusinessTransaction(scope, fn)` which `BEGIN`s once, sets **both** the RLS scope GUCs (`app.tenant_id`, `app.business_id`, `app.actor_user_id`) **and** `app.accounting_assertion`, runs `fn(client)`, and `COMMIT`s once. Inventory tables need the scope GUCs for row-level security; the posting primitive ignores them and takes every identity from the verified assertion. Both are therefore set, and neither weakens the other.
-2. **A coherence check at the boundary**: the seam refuses to open if the assertion's `tenant_id`/`business_id` claims do not equal the scope's. Without it, a defect could write stock in one business under an assertion for another — two isolation systems that disagree, which is worse than either alone.
-3. **The accounting ports accept an existing transaction handle.** `AccountingPostingPort.postEntry()` and its siblings gain a variant that takes the caller's client instead of opening a connection. The existing single-operation methods remain, implemented in terms of the new one, so every accepted Phase 2 call site keeps working unchanged and no accepted behaviour is re-tested.
-4. **No nested independent commit anywhere.** No saga, no compensating transaction, no outbox-driven "eventually post". This is one local PostgreSQL database; distributed-transaction patterns here would buy nothing and lose atomicity.
-5. **No new bypass.** The seam carries an assertion or it does not open. There is no `skipAuthorization`, no `postTrusted()` and no `rawJournalInsert()`, and `accounting_post_entry` (with its P2-S4 siblings) remains the one physical journal writer. G-4 discovers journal writers from the schema, so a new one would have to satisfy the entire protection set on the same commit.
+**The seams — specified, not implemented in P3-S0.**
+
+```
+withBusinessTransaction(scope, fn)                        -- no posting is possible
+withBusinessAccountingTransaction(scope, assertion, fn)   -- posting is possible
+```
+
+1. **`withBusinessTransaction(scope, fn)`** — `BEGIN`s once, sets the RLS scope GUCs (`app.tenant_id`, `app.business_id`, `app.actor_user_id`), leaves `app.accounting_assertion` unset, runs `fn`, `COMMIT`s once. **No accounting posting capability is reachable from inside it**: the callback receives a handle type that carries no posting port and no raw client that a posting port would accept. Used by operations that create stock, audit and outbox facts and no journal — same-business transfer (P3-AL-14) is the Phase 3 example.
+2. **`withBusinessAccountingTransaction(scope, assertion, fn)`** — the same single `BEGIN`/`COMMIT` and the same scope GUCs, **plus** `app.accounting_assertion`, and the callback receives a handle that **does** expose the transaction-bound accounting port. Used by every financial inventory operation: adjustment, damage, stocktake, opening stock, purchase receipt, deficit catch-up, supplier return, supplier payment.
+3. **The distinction is a type, never a flag.** Forbidden permanently, in any spelling: `skipAccounting`, `requiresAccounting: false`, `trusted: true`, `postTrusted()`, `rawJournalInsert()`, or any boolean, option bag or string a caller could pass to turn one seam into the other. There is exactly one way to obtain posting capability, and it is to call the second function and supply an assertion. A code path that needs no posting cannot acquire one by argument.
+4. **A coherence check at the accounting boundary**: `withBusinessAccountingTransaction` refuses to open if the assertion's `tenant_id`/`business_id` claims do not equal the scope's, **before any domain mutation runs**. Without it, a defect could write stock in one business under an assertion for another — two isolation systems that disagree, which is worse than either alone.
+5. **The accounting ports accept an existing transaction handle.** `AccountingPostingPort.postEntry()` and its siblings gain a variant that takes the caller's client instead of opening a connection. The existing single-operation methods remain, implemented in terms of the new one, so every accepted Phase 2 call site keeps working unchanged and no accepted behaviour is re-tested.
+6. **No nested independent commit anywhere.** Neither seam may be opened inside the other, and neither issues a second `BEGIN`. No saga, no compensating transaction, no outbox-driven "eventually post". This is one local PostgreSQL database; distributed-transaction patterns here would buy nothing and lose atomicity.
+7. **No new bypass, and no new journal writer.** `accounting_post_entry` (with its P2-S4 siblings) remains the one physical journal writer. G-4 discovers journal writers from the schema, so a new one would have to satisfy the entire protection set on the same commit. `withBusinessTransaction` weakens nothing: it grants strictly **less** than the accounting seam, and the database's own refusals are unchanged — `daftar_app` still holds no journal DML, so even a defect inside the non-posting seam cannot write a journal row.
+
+**The required seam matrix.** P3-S1 is not complete until these are proved as tests (`docs/PHASE_3_EXECUTION_PLAN.md`, P3-S1):
+
+| case | seam | must prove |
+|---|---|---|
+| transfer | `withBusinessTransaction` | stock pair + audit + outbox in one commit; **no** assertion required; **no** journal entry exists afterwards |
+| adjustment | `withBusinessAccountingTransaction` | stock + journal + binding + audit + outbox in one commit |
+| purchase receipt | `withBusinessAccountingTransaction` | purchase + lines + movements + cache + journal + binding + audit + outbox in one commit |
+| mismatch | `withBusinessAccountingTransaction` | scope business A with assertion business B refuses **before** any domain row is written |
+| nesting | both | a nested `BEGIN`/`COMMIT` is unreachable through the public typed ports |
+| capability | `withBusinessTransaction` | no posting port is reachable from the callback's handle — a compile-time property, asserted additionally at runtime |
 
 **P3-S0 specifies this seam and implements none of it.**
 
@@ -727,7 +859,7 @@ outbox event
 
 A merchant who receives stock or pays a supplier does **not** need `accounting.post`. Accounting is a **consequence** of an authorized domain operation, not a second permission the merchant must hold.
 
-**How, exactly.** Authority is proven once, in the domain layer: the command checks its own permission (`purchases.receive`, `inventory.adjust`, `suppliers.pay` …) **and** the warehouse/branch scope (P3-AL-39). Only then does it mint the accounting assertion for the posting that its own success implies. The assertion minter is already a port that the engine never touches, so the typed internal seam is "a domain command that has proven its own authority may mint"; it is not a flag, not a boolean and not a parameter that could be passed `true`.
+**How, exactly.** Authority is proven once, in the domain layer: the command checks its own permission (`purchases.receive`, `inventory.adjust`, `suppliers.pay` …) **and** the warehouse/branch scope (P3-AL-39). Only then does it mint the accounting assertion for the posting that its own success implies — and a command whose success implies **no** posting, such as a transfer, mints **nothing** and opens the non-posting seam of P3-AL-32 instead. An assertion is never minted to satisfy a transaction boundary. The assertion minter is already a port that the engine never touches, so the typed internal seam is "a domain command that has proven its own authority may mint"; it is not a flag, not a boolean and not a parameter that could be passed `true`.
 
 **Forbidden permanently:** `skipAuthorization=true`, `postTrusted()`, `bypassAccountingPermission()`, or any variant that could be reached with a literal. Accounting remains the financial authority; Inventory and Purchases own business authorization.
 
@@ -754,6 +886,8 @@ A merchant who receives stock or pays a supplier does **not** need `accounting.p
 `upper_bound_policy` is `not_after_today` for every one of them, uniformly, as `0042` requires of every source.
 
 **Not registered:** any identity Phase 3 does not implement — `sale`, `invoice`, `payment`, `credit_note`, `period_close`. A registry entry is a claim that the ledger can receive that fact.
+
+`stock_source_types` (P3-AL-50) is the inventory-side twin of this registry and obeys the same predecessor law: the foundation is created by one slice, and each identity is registered by the slice that implements the workflow behind it. The two registries are **separate** and are not merged — they answer different questions (“what may post to the ledger” versus “what may move stock”), their memberships differ, and a shared table would force every future stock source to justify itself to the accounting engine.
 
 **For every new financial source type**, without exception, the P2 AL-01 contract holds and is re-proved by the slice that adds it: a real domain detail row, an immutable financial identity after posting, a **source-completeness guard at COMMIT** (the binding cannot exist without its source detail and vice versa), deletion protection, `accounting_source_bindings` integration, no polymorphic FK, idempotency, and audit plus outbox in the same transaction.
 
@@ -880,7 +1014,16 @@ Default deny: an actor with `assigned` scope and no branch association reaches n
 
 "`stock_levels` is a cache" is meaningful only if reconstruction is real and tested.
 
-**Algorithm.** For a stock key: read all movements ordered by `stock_seq ASC`; fold `on_hand += qty_delta` and `valuation += value_delta_base_minor` in exact `NUMERIC(28,10)`; derive `avg_unit_cost = valuation / on_hand` when `on_hand > 0`, carrying the last known average when `on_hand = 0` (so a key that empties and refills does not lose its history). `last_stock_seq` is the final movement's sequence.
+**Algorithm.** For a stock key: read all movements ordered by `stock_seq ASC`; fold
+
+```
+on_hand              += qty_delta                 -- exact NUMERIC(18,4) addition
+valuation_base_minor += value_delta_base_minor    -- exact NUMERIC(28,10) addition of STORED values
+```
+
+then derive `avg_unit_cost_base_minor = HALF_EVEN(valuation_base_minor / on_hand, 10)` when `on_hand <> 0`, carrying the last known average when `on_hand = 0` (so a key that empties and refills does not lose its cost reference). `last_stock_seq` is the final movement's sequence.
+
+**Both folds are additions of stored values, so the rebuild is exact.** No multiplication, no division and no rounding occurs anywhere in the fold; the only rounded quantity is the derived average, and the average is never an input to the fold. That is precisely why P3-AL-49 forbids the live path from deriving valuation through `on_hand × avg`: a rebuild that adds stored values and a live path that multiplies a rounded quotient would диverge, and the rebuild's verdict would be meaningless. Rebuilt `on_hand` and rebuilt `valuation_base_minor` must equal the live cache **exactly**, to the last of the ten decimals, with no tolerance — including for a key whose history contains repeating averages and full depletions (P3-AL-49 §E vector E).
 
 - **Ordering source:** `stock_seq`. Never `created_at`, never `id`.
 - **Concurrency:** a rebuild takes the stock key's row lock for the swap, so it cannot interleave with a live command on that key.
@@ -897,7 +1040,8 @@ Default deny: an actor with `assigned` scope and no branch association reaches n
 
 Phase 3 owns INV-INV-06 / INV-ACC-11: **`Inventory(1200)` GL balance = inventory valuation under the accepted policy.**
 
-- **Valuation formula:** `Σ value_delta_base_minor` over all movements of the business, in `NUMERIC(28,10)` — not `Σ(qty × avg)`, which re-derives from the cache and would compare the cache against the GL rather than the ledger against the GL. (The two agree whenever the cache is correct; using the movements makes the check independent of the thing it is checking.)
+- **Valuation formula:** `Σ value_delta_base_minor` over all movements of the business, in `NUMERIC(28,10)` — **never** `Σ(qty × avg)` and **never** `Σ valuation_base_minor`, both of which read the cache and would compare the cache against the GL rather than the ledger against the GL. (All three agree whenever the cache is correct; summing the movements makes the check independent of the thing it is checking. `Σ(qty × avg)` is additionally forbidden outright by P3-AL-49 §A.)
+- **Two comparisons, not one.** The reconciliation asserts `Σ movements = GL(1200)` **and** `Σ movements = Σ stock_levels.valuation_base_minor`, both at zero tolerance. The first catches a ledger/GL divergence; the second catches cache drift, which is the failure P3-AL-49 exists to make impossible and which must therefore be observed rather than assumed.
 - **Aggregation boundary:** per business, summed over every stock key.
 - **Rounding boundary:** the valuation is converted to base minor units **once**, HALF_EVEN, the same contract that produced the journal amounts.
 - **Tolerance: zero.** Every journal amount was produced from the same movements by the same rounding contract, so an exact match is achievable and anything else is a defect. A tolerance would be a place for real divergence to hide. This **supersedes** the older "within tolerance" wording of INV-ACC-11 in `docs/DAFTAR_ACCOUNTING_RULES.md` (see F-7), which Phase 2 explicitly left for Phase 3 to activate.
@@ -965,6 +1109,146 @@ The merchant never needs to understand journal entries, weighted-average equatio
 
 ---
 
+## P3-AL-49 — Stock valuation exactness law
+
+**Status: TO BE ENFORCED IN P3 · P3-S2.**
+
+**Why this decision exists.** P3-AL-42 promises an exact rebuild and P3-AL-43 promises a **zero-tolerance** Inventory ↔ GL reconciliation. Neither is achievable unless every step that writes a valuation is pinned, because the moving average is a **rounded quotient** and any path that multiplies it back out loses money. Measured on PostgreSQL 16 at the authoritative `NUMERIC(28,10)`:
+
+| state | average | `on_hand × avg` | exact valuation | drift |
+|---|---|---|---|---|
+| `on_hand = 3`, `valuation = 1.0000000000` | `0.3333333333` | `0.9999999999` | `1.0000000000` | `−0.0000000001` |
+| `on_hand = 2`, `valuation = 0.6666666667` | `0.3333333334` | `0.6666666668` | `0.6666666667` | `+0.0000000001` |
+
+A single unit of the tenth decimal is not a rounding nicety: it is a permanent, compounding disagreement between the movement ledger and its cache, and the reconciliation that would catch it has **no tolerance to absorb it**. This decision closes every such path.
+
+### §A — Where valuation comes from
+
+- **Truth:** `Σ stock_movements.value_delta_base_minor` per stock key, over **stored** values.
+- **Cache:** `stock_levels.valuation_base_minor` (P3-AL-01), maintained as `valuation_base_minor += value_delta_base_minor` of the movement just written — an **exact addition of a stored value**, never a recomputation.
+- **Derived:** `avg_unit_cost_base_minor = HALF_EVEN(valuation_base_minor / on_hand, 10)` when `on_hand <> 0`.
+
+**Forbidden, permanently:** deriving a key's current valuation as `on_hand × avg_unit_cost_base_minor` anywhere — in a command, a rebuild, a report, a reconciliation or a read model. The exact cached sum exists precisely so that the quotient is never an input. A reader who needs valuation reads `valuation_base_minor`, or sums the movements; there is no third way.
+
+When `on_hand = 0`, the key keeps its last known `avg_unit_cost_base_minor` as a **cost reference** (for the future negative-inventory provisional-cost policy, P3-AL-12) and its `valuation_base_minor` is **exactly `0`** (§C). A cost reference is not remaining value, and a zero-quantity key may never carry phantom asset value.
+
+### §B — The one persistence boundary for a movement's value
+
+Quantity carries 4 decimals and unit cost 10, so the raw product carries up to 14. "The exact product, persisted at ten decimals" is therefore impossible in the general case, and the contradiction is resolved by naming the boundary rather than by repeating the word *exact*:
+
+```
+raw_value                = exact(qty_delta × unit_cost_base_minor)      -- full precision, in memory
+value_delta_base_minor   = HALF_EVEN(raw_value, 10)                     -- the ONE rounding, at the row
+```
+
+- This is the **only** place a movement's valuation is rounded. Before it, arithmetic is exact (`NUMERIC` in the database, fixed-point `BigInt` in `@daftar/inventory`, P3-AL-08). After it, `value_delta_base_minor` **is** the authoritative amount for that movement, for all time.
+- **Every cache update uses the stored value. Every rebuild uses the stored value. Every journal amount is derived from stored values.** A historical movement's value is **never** recomputed from `qty × avg`, at any later date, for any reason — not in a rebuild, not in a report, not in a correction.
+- `unit_cost_base_minor` is a **snapshot for trace and reporting**; `value_delta_base_minor` is the **authoritative valuation**. They are not interchangeable, and after rounding they need not satisfy `value = qty × unit_cost` exactly. A test that asserts they do is asserting the wrong thing.
+- The three exceptions, each of which *replaces* the formula above rather than adjusting it afterwards: the **full-depletion flush** (§C), the **transfer pair** (P3-AL-14), and **value-only movements** (P3-AL-11), whose value is stated directly and involves no quantity at all.
+
+### §C — The full-depletion residual flush
+
+**The defect this closes.** When `valuation / on_hand` does not terminate within ten decimals, pricing the final outbound quantity at the rounded average leaves a residue: from row 2 of the table above, removing the last 2 units at `0.3333333334` removes `0.6666666668` from a valuation of `0.6666666667`, leaving `on_hand = 0` and `valuation = −0.0000000001`. Empty stock with a non-zero valuation is phantom asset value (or phantom negative value) that no future movement will ever clear, and it is forbidden.
+
+**The rule.** For an outbound movement where, under the stock key's row lock,
+
+```
+abs(qty_delta) = on_hand          (the movement empties the key)
+```
+
+the movement's `value_delta_base_minor` is **not** `qty × rounded_avg`. It is defined as
+
+```
+value_delta_base_minor = −(stock_levels.valuation_base_minor at the locked row)
+```
+
+— that is, it removes the **entire** remaining cached valuation, exactly. The movement's `unit_cost_base_minor` snapshot still carries the average, for trace.
+
+**The invariant, asserted at the end of every command:**
+
+```
+on_hand = 0  ⇒  valuation_base_minor = 0
+```
+
+exactly, with no tolerance, for every stock key the command touched. It is checked inside the command, under the lock, before `COMMIT` — not by a nightly job. The same invariant is re-asserted by every rebuild (P3-AL-42) and by reconciliation (P3-AL-43).
+
+This flush is **not** a plug and creates no journal difference: the journal amount for the movement is derived from the **stored** `value_delta_base_minor`, so the GL receives exactly what the ledger recorded. A residue would have been the plug.
+
+### §D — Where the residue goes when it is not a full depletion
+
+It does not go anywhere, because there is none: a partial outbound priced at the rounded average leaves the cache holding the exact remainder, which the next movement — or the eventual full depletion — carries forward. The flush is needed **only** at the boundary where there is no "next movement" to carry it.
+
+### §E — The locked valuation vectors
+
+These are acceptance vectors, not illustrations. P3-S2 does not pass without all five, asserted identically in TypeScript and in SQL (P3-AL-08):
+
+| # | scenario | must hold |
+|---|---|---|
+| **A** | repeating average: `on_hand = 3`, `valuation = 1.0000000000`, avg rounds to `0.3333333333`; remove 1 unit; then rebuild | live cache and rebuild identical, to the tenth decimal |
+| **B** | final depletion: remaining `on_hand = 2`, `valuation = 0.6666666667`; remove all 2 | `on_hand = 0` and `valuation_base_minor = 0.0000000000` — **not** `0.0000000001`, **not** `−0.0000000001` |
+| **C** | transfer of the final source quantity | source reaches `on_hand = 0, valuation = 0`; destination receives exactly the source's flushed value; **total business valuation unchanged, exactly** |
+| **D** | empty then refill | the zero key's retained average is a cost reference only; the refilled key's valuation is determined by the new inbound movement's stored value, with **no** contribution from the emptied key's old average |
+| **E** | long history rebuild | hundreds of movements including repeating averages, full depletions, transfers and value-only movements: rebuilt `on_hand`, `valuation_base_minor` and derived average equal the live cache **exactly** |
+
+---
+
+## P3-AL-50 — Stock source-type registry
+
+**Status: TO BE ENFORCED IN P3 · P3-S2 creates the registry; each identity is registered by the slice that implements it.**
+
+**Problem.** P3-AL-09's identity tuple contains `source_type`. If that column is free text, then "an authorized domain wrote this movement" is a convention, and a defect or a future careless migration can invent `'purchase '`, `'Purchase'` or `'sale'` and the database will accept all three.
+
+**Decision.** `source_type` is an FK into a **closed registry table**, `stock_source_types`, on exactly the pattern `accounting_source_types` established in `0042` and `stock_movement_kinds` uses in P3-AL-10. Free-form `source_type` text is **physically impossible**: an unregistered string is refused by the foreign key, not by a CHECK list a later migration could widen without review and not by application code.
+
+**The predecessor law applies, unchanged.** A registry entry is a claim that the domain implementation exists. Therefore:
+
+| Source type | Registered by |
+|---|---|
+| `inventory_opening` | P3-S3 |
+| `inventory_adjustment` | P3-S3 |
+| `stocktake` | P3-S3 |
+| `inventory_transfer` | P3-S3 |
+| `purchase` | P3-S4 |
+| `negative_inventory_cost_adjustment` | P3-S4 |
+| `purchase_reversal` | P3-S5 |
+| `supplier_return` | P3-S5 |
+
+**Not registered by Phase 3, and not reserved:** `sale`, `sales_return`, `pos_session`, `offline_oversell_exception`, or any other identity belonging to a phase that does not exist yet. Pre-registering them would advertise a capability that has no code, which is the mistake P2-S4 §45 named.
+
+**P3-S2 creates the registry foundation and registers nothing.** Its structural tests prove the FK refuses an unregistered string and that the completeness mechanism (P3-AL-51) works, using a source type inserted **by the deployment/test authority inside a rolled-back fixture** — never a permanently seeded fake identity. That is the same mechanism P3-AL-12 uses to test deficit coverage, and it is a test fixture, not a production failpoint.
+
+**Naming is fixed here, once.** The names in the table above are the final spellings, used identically in `stock_source_types`, in `accounting_source_types` where the same fact also posts, in every document and in every test. Note deliberately that the *stock* identity for a transfer is `inventory_transfer` while `stock_movement_kinds` distinguishes `transfer_out` from `transfer_in`: the source is one document, the kinds are the two legs, and P3-AL-09's tuple carries both.
+
+---
+
+## P3-AL-51 — Physical stock source completeness
+
+**Status: TO BE ENFORCED IN P3 · P3-S2 builds the mechanism; every later slice applies it to its own source.**
+
+**Problem.** P3-AL-09's unique tuple prevents duplicates and nothing else. Neither it nor "the same command creates both rows" prevents a movement whose source line does not exist, a finalized source line whose required movement is missing, or a source line deleted after its movement was written. Phase 2 met the identical problem on the accounting side and answered it with AL-01's `accounting_source_bindings` and deferred COMMIT-time guards — **not** with a polymorphic FK, and **not** with a promise about command code. Phase 3 answers it the same way, because the argument is the same argument.
+
+**Decision — the mechanism, stated precisely enough to build twice.**
+
+1. **A generic binding table**, `stock_source_bindings`, holding one row per `(business_id, source_type, source_id, source_line_id)` that has stock consequences. `stock_movements` gains a composite FK to it. `stock_movements` still holds **no** foreign key into any domain table, so a future domain adds its own tables and registers its own source type without touching the movement core.
+2. **Both directions are `DEFERRABLE INITIALLY DEFERRED`, validated at `COMMIT`**, exactly as AL-01 does: the binding cannot exist without its movement and the movement cannot exist without its binding. A half-written pair cannot survive a commit, and neither ordering inside the transaction is privileged.
+3. **Source-specific completeness guards.** Each source-owning slice adds a deferred constraint trigger, on its own line table, asserting at `COMMIT` that every **finalized** line has exactly the movements its kind requires: a received purchase line has its `purchase` movement; a transfer line has its `transfer_out` **and** its `transfer_in`; a coverage detail has its `negative_inventory_cost_adjustment` movement (P3-AL-13). A **draft** line requires nothing — completeness is a property of finalization, not of existence.
+4. **Deletion protection.** A source line bound to a movement cannot be deleted: the binding's FK is `ON DELETE RESTRICT` and the line table carries the same append-only trigger pattern `stock_movements` uses (P3-AL-01) once it is finalized.
+5. **Immutability after finalization.** Once a source line is received, posted or otherwise finalized, its stock-bearing and financial fields — quantity, unit cost, variant, warehouse — are immutable, enforced by a `BEFORE UPDATE` trigger on the line table, not by a service. A correction is a **new** document with its own source identity (P3-AL-20), never an edit.
+6. **Idempotency stays physical** and unchanged: P3-AL-09's unique tuple, plus the binding's own uniqueness.
+
+**Required properties, restated as what the database refuses at `COMMIT`:**
+
+- no movement without a real, registered source detail;
+- no finalized source detail missing a movement it is required to have;
+- no deletion of a bound source line;
+- no mutation of a finalized source line's stock or financial identity;
+- no polymorphic FK anywhere;
+- no change to `stock_movements`' core schema when a future domain adds a source.
+
+**Why a deferred constraint trigger and not a CHECK.** A `CHECK` states a timeless single-row invariant and cannot read another table; completeness is a statement about a *set* of rows at the moment a transaction commits. This is the same reasoning P3-AL-36 applies to the future-date defence, and the same mechanism `0049_accounting_periods.sql` already attaches to `journal_entries`, so the pattern is precedented in the accepted codebase.
+
+---
+
 ## 2. The self-review question
 
 > *Could two competent engineers implement materially different financial or data semantics while both claiming to follow this document?*
@@ -984,6 +1268,22 @@ The places where the answer was "yes" on the first pass, and what closed each:
 | Case B opening inventory when the GL already has 1200 | P3-AL-18 posts nothing and requires exact equality. |
 | Where the accounting transaction begins | P3-AL-32 specifies one unit-of-work boundary and forbids nested commits. |
 | What happens to the "exactly three source types" assertions | P3-AL-34 makes it a named P3-S3 work item with the exact evolution. |
+
+**Second pass — the Tech Lead's named attack surfaces.** Each was re-attacked directly, and each is now closed by a rule rather than by a convention:
+
+| Attack surface | Was it ambiguous? | Closed by |
+|---|---|---|
+| Quantity precision | **Yes — and the rule was wrong.** `scale(qty) > unit_decimals` refuses exactly one piece on a `unit_decimals = 0` product, measured. | P3-AL-05: exact representability `abs(qty) = trunc(abs(qty), unit_decimals)`, with ten bound vectors and `scale()` withdrawn by name. |
+| Movement rounding | **Yes.** "All intermediate arithmetic is exact" and "the exact `qty × unit_cost` product" contradicted each other at 14 decimals against a 10-decimal column. | P3-AL-49 §B: one boundary, `HALF_EVEN(exact(qty × unit_cost), 10)`, and the stored value is authoritative forever. |
+| Valuation cache | **Yes.** An `avg`-only cache forces `on_hand × avg`, which drifts by `10^-10` per operation. | P3-AL-01 + P3-AL-49 §A: `valuation_base_minor` cached exactly; deriving valuation from the quotient is forbidden by name. |
+| Zero-stock residual | **Yes.** `on_hand = 0` with `valuation = ±0.0000000001` was reachable and unaddressed. | P3-AL-49 §C: the full-depletion flush, and `on_hand = 0 ⇒ valuation = 0` asserted under the lock before COMMIT. |
+| Transfer valuation | **Yes.** "Σ = 0 with no intermediate rounding" was unachievable if both legs computed `qty × avg` independently. | P3-AL-14: the destination's value is the exact negation of the stored source value; the pair sums to zero by construction. |
+| Transaction composition | **Yes.** One assertion-requiring seam contradicted the no-journal transfer; two engineers would have split the commit or minted a fake assertion. | P3-AL-32: two typed seams, the distinction carried by the type, every boolean bypass forbidden by name, and a six-case proof matrix. |
+| Source completeness | **Yes.** The unique tuple proved no-duplicates only; the rest rested on "the same command writes both rows". | P3-AL-50 (closed registry) + P3-AL-51 (generic binding, deferred COMMIT guards, deletion protection, post-finalization immutability). |
+| Multiple deficit coverages | **Yes — a real collision.** One purchase line covering N layers produced N movements with one identity; the unique tuple would have admitted one and refused the rest. | P3-AL-13: an adjustment **header** per operation and an immutable **detail** per coverage; `source_line_id` is the coverage id, so every coverage has its own identity. |
+| Tax boundary | No, and it stays open **bounded**. | P3-AL-23: `tax_minor = 0` only, `purchase.tax_policy_absent` otherwise; OD-03 is not resolved here and does not block P3-S1/S2/S3. |
+| Warehouse authority | No. | P3-AL-15 + P3-AL-39: the **set** of affected warehouses, permission and scope together, refused in the command. |
+| Accounting source identity | No, and the stock twin now matches it. | P3-AL-34 (accounting registry, per-slice registration) and P3-AL-50 (stock registry, same law, separate table with the reason stated). |
 
 ---
 

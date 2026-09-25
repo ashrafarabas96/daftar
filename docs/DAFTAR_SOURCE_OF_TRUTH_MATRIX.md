@@ -14,7 +14,7 @@
 | **تهيئة المخزون الافتتاحي** (P3-S3) | مصدر `inventory_opening` + حركاته | الحالة A: قيد `Dr Inventory / Cr Opening Equity`. الحالة B: **لا قيد** — ربط بالمركز الافتتاحي القائم واشتراط المساواة التامة | — |
 | **الجرد** (P3-S3) | `stocktakes` + `stocktake_lines` | variance = counted − expected_at_capture؛ يُطبَّق مرة واحدة عند الإنهاء ويُقيَّم بمتوسط اللحظة | — |
 | **كمية المخزون** | `stock_movements` (append-only) | on_hand = Σ`qty_delta` لكل (business × warehouse × variant) بترتيب `stock_seq` | stock_levels (Cache، INV-INV-03) — **الاستثناء الوحيد المسمّى** من استراتيجية «القراءة الحية»، مُبرَّر بالتزامن التشغيلي لا بسرعة التقارير (P3-AL-44) |
-| **تكلفة المخزون** | تقييم الحركات: `value_delta_base_minor` NUMERIC(28,10) لكل حركة (بما فيها حركات القيمة الصرفة) + `negative_deficit_coverages` | valuation = Σ`value_delta_base_minor`؛ avg = valuation ÷ on_hand حيث on_hand > 0، وفق Inventory §5/§5أ | stock_levels.avg (Cache) |
+| **تكلفة المخزون** | تقييم الحركات: `value_delta_base_minor` NUMERIC(28,10) لكل حركة (بما فيها حركات القيمة الصرفة) + `negative_deficit_coverages` | valuation = Σ`value_delta_base_minor` (جمع قيمٍ مخزَّنة، بلا ضرب ولا قسمة ولا تقريب)؛ avg = `HALF_EVEN(valuation ÷ on_hand, 10)` حيث on_hand ≠ 0، وفق Inventory §5/§5أ | `stock_levels.valuation_base_minor` (Cache) و`stock_levels.avg_unit_cost_base_minor` (مشتقّ من الـCache) — **وممنوع اشتقاق التقييم من `on_hand × avg` في أي مسار** (P3-AL-49) |
 | **GL** | `journal_entries` + `journal_lines` (append-only) | أرصدة الحسابات = Σ أسطر القيود | **لا Read Model على الإطلاق (P2-S7)**: كل رقم يُحسب لحظة السؤال من القيود نفسها. لا رصيد مخزَّن، ولا Cache، ولا Materialized View. INV-ACC-11 GL Inventory = valuation |
 | **التسوية اليدوية** (P2-S4) | `accounting_manual_adjustments` + القيد المرتبط بها عبر `accounting_source_bindings` | القيد هو الواقعة؛ صف التفصيل يحمل السبب والفاعل فقط | — |
 | **عكس قيد** (P2-S4) | `accounting_reversals` + القيد الجديد `source_type='reversal'` | سطور العكس **مشتقة** من `journal_lines` للقيد الأصلي: مبادلة مدين/دائن وكل ما عداه منسوخ حرفيًا بما فيه سعر الصرف ووقته ومصدره | — |
@@ -38,6 +38,9 @@
 9. **(P3)** ممنوع أي عمود رصيد مرجعي على المورّد، وممنوع Cache لرصيد المورّد أو لمستحق الشراء في المرحلة 3 — قراءة حية مشتقة فقط. الحارس `scripts/guards/no-authoritative-balance.ts` يُوسَّع ليشمل جداول الموردين.
 10. **(P3)** ممنوع تصحيح يدوي لـ`stock_levels`: لا نقطة نهاية، ولا أمر إداري، ولا سكربت يضبط قيمة الـcache إلى رقم مُعطى. القيمة تتغيّر بحركة أو بإعادة بناء من الحركات فقط، واختلاف المطابقة **ينبّه ويرفض** ولا يكتب رأي الـGL في الـcache.
 11. **(P3)** ممنوع ترتيب أي شيء ماليّ الأثر بـ`created_at`: ترتيب الحركات `stock_seq`، وترتيب تغطية العجز `(deficit_seq, id)`.
+12. **(P3)** ممنوع حساب تقييم مخزون من `on_hand × avg_unit_cost` في أي أمر أو إعادة بناء أو تقرير أو مطابقة أو نموذج قراءة — المتوسط خارج قسمةٍ مقرَّبة، والتقييم مجموع قيمٍ مخزَّنة (P3-AL-49).
+13. **(P3)** ممنوع إعادة حساب قيمة حركة تاريخية بعد كتابتها: `value_delta_base_minor` يُقرَّب مرة واحدة عند الكتابة ثم يصبح هو المرجع (P3-AL-49 §B).
+14. **(P3)** ممنوع `source_type` نصًّا حرًّا في `stock_movements` — مفتاح أجنبي إلى سجل مغلق `stock_source_types`، واكتمال المصدر يُتحقَّق عند `COMMIT` لا بالاتفاق على أن الأمر يكتب الصفّين معًا (P3-AL-50/P3-AL-51).
 8. ممنوع أن يُعاد قيد موجود كـ"نجاح" لطلب مالي مختلف: نفس هوية المصدر مع **حمولة مالية مختلفة جوهريًا** (أي حقل من حقول `acctfp/1`) تُرفض بـ`accounting.idempotency_conflict`. الاختلاف السردي وحده (الوصف، معرّف الطلب) هو نفس الواقعة ويُعاد بـ`created=false`، والسرد المحفوظ لا يُعاد كتابته. أول واقعة مالية مُرحَّلة هي التي تفوز (P2-S4 §29).
 
 ## 3. الارتباط بالاختبارات

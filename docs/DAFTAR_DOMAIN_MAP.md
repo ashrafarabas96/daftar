@@ -11,7 +11,7 @@ Modular Monolith بحدود Domain واضحة. كل Module يملك بيانات
 | 1 | Identity & Access | هوية عالمية للمستخدم + عضويات | User(identity), memberships, membership_roles, business_roles, role_permissions, **`member_branch_scopes`** + `memberships.branch_scope_mode`, Session, MFA | Tenancy | user.created |
 | 2 | Tenancy | الحسابات والأنشطة والفروع والمستودعات | Tenant (اشتراك/عزل), **Business (country, base_currency, timezone, default_locale, storefront)**، Branch، Warehouse (يتبع Business؛ للفرع default_warehouse اختياري) | — | tenant.provisioned |
 | 3 | Catalog | المنتجات، المتغيرات، التصنيفات، الترجمات، الصور، الأسعار الحالية | Product, ProductVariant, ProductTranslation, Category, Media | Tenancy | product.created/updated |
-| 4 | Inventory | حركات المخزون، الجرد، التسويات، التحويلات، التنبيهات (والحجوزات لاحقًا) | StockMovement, Stocktake, cached quantity/valuation (قابل لإعادة البناء)، كيانات العجز | Catalog, Tenancy | stock.low, stock.movement.recorded |
+| 4 | Inventory | حركات المخزون، الجرد، التسويات، التحويلات، التنبيهات (والحجوزات لاحقًا) | StockMovement, Stocktake, cached quantity **+ valuation** (كلاهما قابل لإعادة البناء من الحركات وحدها)، سجل مصادر الحركة وربطها، كيانات العجز | Catalog, Tenancy | stock.low, stock.movement.recorded |
 | 5 | Sales | عمليات البيع، الفواتير، البنود، الخصومات، المرتجعات | Sale, SaleItem, Invoice, Return, CreditNote | Catalog, Inventory, Customers, Accounting | sale.completed, sale.returned |
 | 6 | Payments | الدفعات، طرق الدفع، التسويات | Payment, PaymentMethod | Sales (Receivable view), Accounting | payment.recorded, refund.completed |
 | 7 | Receivables & Debts | الذمم، الأرصدة المشتقة، كشوف الحساب | Receivable (مشتق: Invoice − Payments) | Sales, Payments | receivable.overdue |
@@ -34,7 +34,7 @@ Modular Monolith بحدود Domain واضحة. كل Module يملك بيانات
 
 0. **نموذج الملكية محسوم (A/B):** Business هو المالك التجاري (دولة/عملة أساسية/دفاتر)؛ Identity عالمية منفصلة عن الملكية عبر Memberships — **Source of Truth للصلاحيات = business_roles + role_permissions على business_memberships**، تُقيَّم في سياق (user × business × branch?) بلا أي إضعاف لعزل tenant_id+business_id.
 1. **Accounting لا يعتمد على أحد** — النطاقات المالية تنشر أحداثًا، وPosting Engine يترجمها لقيود عبر Transaction Map موثّق.
-2. **Inventory يعرف الكمية والتكلفة، ولا يعرف الحسابات.** تصحيح دقيق ضروري للمرحلة 3: دفتر الحركات يحمل مكوّن قيمة (`value_delta_base_minor`) لأن المتوسط المرجّح لا يُحسب بلا تكلفة — لكنه **لا يعرف أي حساب في دليل الحسابات ولا يكتب في دفتر القيود**. اختيار الحساب وتوليد القيد يبقيان في Accounting وحده، ويُستدعيان من أمر المجال داخل **نفس المعاملة** (P3-AL-32).
+2. **Inventory يعرف الكمية والتكلفة، ولا يعرف الحسابات.** تصحيح دقيق ضروري للمرحلة 3: دفتر الحركات يحمل مكوّن قيمة (`value_delta_base_minor`) لأن المتوسط المرجّح لا يُحسب بلا تكلفة — لكنه **لا يعرف أي حساب في دليل الحسابات ولا يكتب في دفتر القيود**. اختيار الحساب وتوليد القيد يبقيان في Accounting وحده، ويُستدعيان من أمر المجال داخل **نفس المعاملة** (P3-AL-32). و**ليست كل عملية مجال ذرّية عمليةً مُرحِّلة**: التحويل بين المستودعات لا يُنشئ قيدًا، فيُفتح بدرزٍ لا يتيح قدرة الترحيل أصلًا ولا يطلب تأكيدًا محاسبيًا — التمييز بين الدرزين يحمله **النوع**، لا راية ولا خيار يمرّره المستدعي.
 3. **Payments مستقل عن Revenue**: تسجيل دفعة على فاتورة قديمة يخفض Receivable ولا يرفع الإيراد.
 4. **Installments** مجدول سداد فوق Receivable واحد — ليس رصيدًا موازيًا.
 5. **AI وWhatsApp وAnalytics** نطاقات طرفية: تستهلك أحداثًا ولا تُكتب إليها الحقيقة المالية. فشلها لا يفشل العملية الأساسية.
