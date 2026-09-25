@@ -488,13 +488,59 @@
 
 **Preventive invariant** (P3-AL-38). One contract, in the lock: Owner all eleven; **Manager exactly `inventory.view`, `purchases.view`, `suppliers.view`**; Cashier none; existing custom roles untouched. The execution plan states the same thing, and the earlier "seeded to the owner system role only" / "no non-owner role gained one" wording is withdrawn by name.
 
-**Detection.** Four migration assertions, run in the migration's own transaction: owner completeness; manager **set equality** on the three ordinary keys; **no non-owner role of any kind holds any of the eight sensitive keys**, expressed over the sensitivity column rather than a copied list; and every pre-existing custom role's permission set byte-identical before and after.
+**Detection.** Five migration assertions, run in the migration's own transaction: owner completeness; manager set equality **restricted to the Phase 3 keys** (`manager ∩ PHASE_3_KEYS` exactly the three ordinary ones); **no non-owner role of any kind holds any of the eight sensitive keys**, expressed over the sensitivity column rather than a copied list; every pre-existing custom role's permission set byte-identical before and after; and — added in Round 3 — **manager preservation**, the Manager's seventeen accepted Phase 1 keys byte-identical before and after, which is the assertion that catches an implementation that replaces the whole set with three rows instead of appending three. All five are re-run against a business provisioned **after** the migration (PM-38).
 
 **Test.** After the migration, a manager can read stock, purchases and suppliers and is refused `inventory.adjust`, `inventory.transfer`, `inventory.stocktake`, `purchases.manage`, `purchases.receive`, `purchases.return`, `suppliers.manage` and `suppliers.pay` — each refusal asserted individually, not as a group.
 
 **Failure mode without it.** Two documents disagreed, so the implementer picked. Picking the plan's wording would have left managers unable to see inventory at all, which is visible immediately and gets fixed. Picking a relaxed reading of it — "managers should obviously be able to work" — could have granted a sensitive key to every manager in every business in production, in a migration, silently. The dangerous branch is the one that looks helpful.
 
 **Recovery.** Revoke the wrongly granted permission from the role and audit what was done with it, since an authority grant is not undone by removing it. The audit trail carries every stock and purchase command with its actor, which is why the revocation can be scoped rather than guessed.
+
+---
+
+## PM-36 — A warehouse created after P3-S1 is unreachable, or reachable by the wrong people
+
+**What goes wrong.** The migration backfills `branch_warehouses` from `warehouses.branch_id` and everything looks correct on day one. Tomorrow a merchant adds a branch, or a new business is onboarded, and the warehouse created by that flow has no association row. Every assigned-scope actor is refused on it, including the person who just created it. The merchant sees a warehouse in one list and "outside your assigned scope" in the next, with no way to act on either.
+
+**Preventive invariant** (P3-AL-15 §A). Every `warehouses` row must have its home association `(business_id, branch_id, id)` in `branch_warehouses` while it exists, whatever its status. Four schema objects hold it: a non-deferred `AFTER INSERT` maintainer that writes the home row for **every** writer; a deferred constraint trigger `warehouses_require_home_branch` that refuses the commit if the row is missing anyway; `branch_warehouses_keep_home`, which refuses removal of a home row while its warehouse exists; and a `BEFORE UPDATE` refusal of any change to `warehouses.branch_id`.
+
+**Why it cannot be a service rule.** There are **three** warehouse writers and the third — `provision_create_business` at `0033_provisioner_atomic_authority.sql:160–164` — is a `SECURITY DEFINER` routine inside a **frozen** migration that runs during onboarding, before any Phase 3 service code is on the call path. Every business ever created runs it. A rule that lives in `StructureService` would therefore be violated by the first warehouse of every new business, and the violation would look like a permissions bug, not like a missing row.
+
+**Detection.** P3-S1's warehouse matrix rows A–D and K: the pre-migration warehouse ends with exactly its home association; `createBranch()`, `createWarehouse()` and the provisioning flow each commit the association atomically; and row **D** removes the maintainer inside the test transaction to prove the completeness trigger actually refuses the commit — without D, objects 1 and 2 are indistinguishable from object 1 alone.
+
+**Failure mode without it.** Silent and delayed. Nothing fails at migration time; the first symptom arrives days later, in one business, as an authorization complaint. The natural "fix" under pressure is to widen the authority rule — to fall back to `warehouses.branch_id` when no association exists — which reintroduces the single-branch model the association table was created to replace, and does it in the authorization path.
+
+**Recovery.** Insert the missing home rows from `warehouses.branch_id` (the backfill statement, re-run — it is idempotent), then install the four objects. No stock truth is damaged, because authority governs who may act, not what was recorded.
+
+---
+
+## PM-37 — A product's unit changes after it has history, and every past quantity means something else
+
+**What goes wrong.** A product is sold by `piece` for a year, accumulating thousands of movements. Someone edits it to `kg`, or widens `unit_decimals` from `0` to `3`. Not one row is modified. `on_hand` is unchanged. Every report still balances. And every historical `qty_delta` now describes a different physical fact, because `stock_movements` stores the number and takes its meaning from the product's current canonical unit (P3-AL-11 deliberately does not snapshot the unit).
+
+**Preventive invariant** (P3-AL-05 §D). From the first stock movement of any variant of the product onward, `products.unit_code` and `products.unit_decimals` are immutable forever. Current stock reaching zero does not unlock them. Disabling tracking does not unlock them. Re-enabling reuses the historical unit and offers no choice. `products.unit`, the free-text label, stays changeable because inventory never reads it.
+
+**Mechanism and its slice.** A `BEFORE UPDATE ON products` trigger refusing the change when any movement exists for any variant, raising `inventory.unit_identity_locked`. **P3-S1** creates the columns, the configuration command and the command-level refusal; **P3-S2** installs the physical trigger, because a trigger body cannot reference `stock_movements` before that table exists. The window between them is empty rather than merely short — with no movements table, no product has history — and it closes before P3-S3, the first slice authorized to produce a real movement.
+
+**Detection.** The eight-row unit matrix in P3-AL-05 §D. Rows 3 and 4 attempt the change through the command **and** as raw SQL; row 5 is the zero-stock case, which is the one a reasonable person would allow; rows 6 and 8 cover re-enablement and a later registry default change.
+
+**Failure mode without it.** Unrecoverable in principle. Once a year of movements is ambiguous, no one can tell which rows were written under which unit, because nothing recorded it. Valuation, reorder points, stocktake variances and every historical report become unfalsifiable at once, and the corruption is invisible until someone counts a shelf.
+
+**Recovery.** There is none by computation. The unit must be restored from whatever external record exists, and every quantity written after the change re-examined by hand. This is why the guard is physical and installed before the first real producer, rather than left to the configuration screen.
+
+---
+
+## PM-38 — The hidden base variant becomes visible, or two populations of businesses diverge
+
+Two execution-level failures with one shape: a Phase 3 change that is correct in the lock and wrong in the system that already exists.
+
+**A — the base variant appears in the catalog.** `CatalogService.getProduct()` returns every non-archived row of `product_variants` and knows nothing about `is_base` (`apps/api/src/modules/catalog/catalog.service.ts:148`). Adding the column without changing that read would turn every simple product into a one-variant product the moment its merchant enables inventory — a visible regression in the oldest screen in the app, caused by a feature they did not ask for. **Preventive invariant** (P3-AL-52): every merchant-facing variant read excludes `is_base = true`, a `CHECK` keeps a base variant's `sku`, `barcode`, `price_minor` and `attributes` empty so it cannot become merchant-like even if a read is forgotten, and a trigger admits writes to it only as `daftar_inventory_internal`. **Detection:** eight proofs in P3-AL-52, including the accepted golden catalog fixtures, which must render identically after enablement.
+
+**B — new businesses get different authority from old ones.** The migration backfills roles; onboarding seeds from `BUILTIN_ROLE_PERMISSIONS` (`packages/domain-core/src/permissions.ts:96–118`) through `provision_create_business`. Evolving only one of the two produces two populations that diverge from the day P3-S1 ships and never converge, and the difference is invisible until a manager in a young business cannot see inventory that a manager in an old one can. **Preventive invariant** (P3-AL-53): the registry and the migration change in the same commit, and acceptance **provisions a real business after the migration** and reads the persisted rows — asserting the constant against itself proves nothing about the frozen routine that actually writes them. **Detection:** the five P3-AL-38 assertions re-run against the new business, plus a direct comparison of the two populations' Phase 3 permission sets per system role key.
+
+**Failure mode without either.** Both are quiet. A leaked variant is reported as a UI bug and worked around; a permission divergence is reported as "it works for my colleague". Neither is ever traced back to the migration that caused it.
+
+**Recovery.** A: exclude the row from the reads and re-issue; nothing is corrupted, because the base variant was correct all along, only visible. B: run the backfill against the businesses created in the gap — idempotent, and the audit trail shows exactly which businesses were provisioned between the two deployments.
 
 ---
 

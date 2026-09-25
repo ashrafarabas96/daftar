@@ -4,6 +4,8 @@
 >
 > **Baseline.** Accepted Phase 2 merge commit `0f2b09e7f2bd1015053ff2cb79ad1ceafc25bc6f` on `main` (accepted source head `bf2eeda1494b0333cfef26123d55bcf54134e402`), post-merge CI run `36028186854` SUCCESS on all five required jobs. Migrations `0000`–`0052` are frozen forever; the manifest holds 53 entries with `frozenThrough = 0052_accounting_journal_lines_rls_performance.sql`. Phase 3 begins at `0053`, which **does not exist yet and is not authorized by this document**.
 >
+> **Correction pass, Round 3 — 2026-09-25.** The Tech Lead reviewed the closed lock at head `2ced8c1d2bed4f54e007ab6aac6d958436c11918` (CI `36190820912`), **accepted** the Round 2 corrections to P3-AL-49, P3-AL-51, P3-AL-32, P3-AL-38 and P3-AL-36, and returned CHANGES REQUIRED on two blockers found by cross-reading this lock against the **accepted Phase 1/2 implementation** rather than against itself. **(A)** `branch_warehouses` had a backfill but no lifecycle: a warehouse created *after* the migration would have had no authorization row, so an existing Phase 1 workflow would have produced a warehouse no assigned-scope actor could reach — a regression Phase 3 would have caused. Repository inspection while closing it found a **third** warehouse writer the review did not name, inside the frozen `provision_create_business`, which decides the mechanism (P3-AL-15, rewritten). **(B)** `products.unit_code` / `unit_decimals` were "frozen on the product" with no historical lifecycle, so changing them after movements exist would have silently reinterpreted every historical `qty_delta` — closed by a history lock that current zero stock does not unlock (P3-AL-05 §D). Two execution-closure requirements are also resolved: the hidden base variant must not leak through the catalog API that exists today, and may not be mutated by ordinary variant commands (**P3-AL-52**, new); and role seeding must be proved for businesses created **after** the migration, not only backfilled ones (**P3-AL-53**, new). P3-AL-38's "exactly three" is restated precisely: exactly three *Phase 3* permissions, **appended**, with the Manager's accepted Phase 1 authority untouched. Premortem extended to **PM-38**.
+>
 > **Correction pass, Round 2 — 2026-09-25.** The Tech Lead reviewed the corrected lock at head `fd7fceb99fc9550640973341ab56d746aa00b4a5` and returned CHANGES REQUIRED again, on four blockers found by **cross-reading the decisions against each other** rather than reading each alone. All four were real. **(A)** Movement valuation at `NUMERIC(28,10)` against a `BIGINT` journal meant two roundings, and rounding is not additive, so zero-tolerance reconciliation was arithmetically unreachable — resolved by making the movement value itself integer base minor units and the journal line that same integer (P3-AL-49, rewritten, with the equation and nine acceptance vectors). **(B)** A line-grained `stock_source_bindings` could not carry a reverse FK, because one transfer line has two movements, and the promised `ON DELETE RESTRICT` to a polymorphic source line cannot exist — resolved by a movement-grained binding and per-source bridge tables with real FKs, plus the binding-side trigger the first draft was missing (P3-AL-51, rewritten). **(C)** P3-S1's acceptance matrix required entities owned by P3-S2/S3/S4 — re-scoped to the transaction primitive, with the end-to-end proofs assigned to P3-S3 and P3-S4 (P3-AL-32). **(D)** The lock and the execution plan disagreed about Manager's permissions — the lock wins, and the assertions now separate ordinary visibility from sensitive authority (P3-AL-38). Two wordings were also corrected: "the average is never an input to a later write" was too absolute, and the claim that PostgreSQL refuses `CURRENT_DATE` in a `CHECK` was **factually wrong** (P3-AL-36). Premortem extended to **PM-35**.
 >
 > **Correction pass, Round 1 — 2026-09-25.** This page was reviewed by the Tech Lead at head `5d28f18c3bad4d692fff0c41424d82fec8075fcd` and returned as CHANGES REQUIRED. Four architectural defects were proved against the real repository and against a live PostgreSQL 16, and are corrected here: the quantity-precision rule tested the storage scale instead of the value (P3-AL-05); an average-only cache could not be exactly rebuilt (P3-AL-01, P3-AL-49); a single assertion-requiring transaction seam contradicted the no-journal transfer (P3-AL-32); and stock source identity proved no-duplicates only (P3-AL-50, P3-AL-51). Multi-layer deficit coverage collided on the movement identity tuple and is re-modelled (P3-AL-13). Every withdrawn rule is named where it stood, so a reader who remembers the old wording finds the retraction rather than silence. Three decisions were added: **P3-AL-49**, **P3-AL-50**, **P3-AL-51**. The page remains DOCUMENTATION ONLY.
@@ -80,6 +82,8 @@ Per the directive's §59, every decision carries exactly one status:
 | P3-AL-49 | Stock valuation exactness law (integer minor, one rounding) | TO BE ENFORCED IN P3 | P3-S2 |
 | P3-AL-50 | Stock source-type registry | TO BE ENFORCED IN P3 | P3-S2 (registry), registered per slice |
 | P3-AL-51 | Physical stock source completeness (movement-grained binding + per-source bridge) | TO BE ENFORCED IN P3 | P3-S2 (mechanism), per source thereafter |
+| P3-AL-52 | Hidden base variant boundary (catalog invisibility + mutation refusal) | TO BE ENFORCED IN P3 | P3-S1 |
+| P3-AL-53 | Role permission seeding for businesses created after the migration | TO BE ENFORCED IN P3 | P3-S1 |
 
 ---
 
@@ -201,7 +205,7 @@ For a simple product with no merchant-defined variants, **enabling inventory tra
 - `is_base BOOLEAN NOT NULL DEFAULT false` with `UNIQUE (business_id, product_id) WHERE is_base` — at most one base variant per product, physically;
 - price inherited (`price_minor IS NULL`), which `0005` already defines as "inherit product price".
 
-**UI consequence.** A simple product keeps looking simple: the merchant never sees the base variant. Product identity stays catalog/presentation identity; stock identity is always variant identity (P3-AL-48).
+**UI consequence.** A simple product keeps looking simple: the merchant never sees the base variant. Product identity stays catalog/presentation identity; stock identity is always variant identity (P3-AL-48). **This is a promise about the catalog API that exists today, not about a future screen** — the accepted `CatalogService.getProduct()` returns every non-archived variant row and knows nothing about `is_base`, so adding the column without changing that read would publish the hidden variant the day P3-S1 ships. The reads, the mutation boundary and their proofs are **P3-AL-52**.
 
 **Forbidden.** `product_id OR variant_id` polymorphism in `stock_movements`; a second "simple stock" table; making `product_variants.sku` carry the product's SKU for a base variant.
 
@@ -284,6 +288,53 @@ For a simple product with no merchant-defined variants, **enabling inventory tra
 
   **Where it lives, and why not a row CHECK.** The refusal is in the trusted `SECURITY DEFINER` command, under the stock key's lock, alongside every other quantity law. It cannot be a row `CHECK` on `stock_movements`, because the permitted precision is a property of a **different row** — the product — and a `CHECK` may not read another table. The command is still the database: no application-layer or form validator is the authority, and a movement that reaches the command with an unrepresentable quantity is refused before any row is written. This is a real limit of the mechanism, stated rather than papered over, and it is exactly the class of gap P3-AL-51's completeness guards exist to close for source identity.
 - **No conversions in Phase 3.** 1 kg is never silently 1000 g. `units` carries no conversion factor and no base-unit column, because a column that exists is a column a later slice will populate and a later query will trust. UoM conversion is a future capability with its own decision.
+
+### §D — The canonical unit history lock (Round 3)
+
+**The defect.** "Frozen on the product" was a statement with no lifecycle behind it. `stock_movements` stores `qty_delta` and deliberately does **not** snapshot `unit_code` or `unit_decimals` (P3-AL-11), so a historical quantity takes its meaning from the product's *current* canonical unit. If a product with movement history is changed from `piece` to `kg`, or `unit_decimals` from `0` to `3`, then every historical row silently means something else — the same number, a different fact. No row is edited and no guard fires. That is historical corruption, and it is worse than an error because it leaves no trace.
+
+**Why snapshotting the unit is not the answer.** Copying `unit_code`/`unit_decimals` onto every movement would let two movements of one variant disagree about what a quantity *is*, and `on_hand = Σ qty_delta` would then be a sum over incommensurable units. The ledger must have one unit per stock identity, forever. So the unit is locked, not versioned.
+
+**The law — binding.**
+
+- **Before a product has any stock movement, for any of its variants**, its canonical unit configuration may be changed through the authorized inventory configuration command. This includes a product that is already `track_inventory = true`: enabling tracking is configuration, and nothing has been measured yet, so a merchant who picked the wrong unit a minute ago may fix it.
+- **From the first stock movement of any variant of that product onward**, `products.unit_code` and `products.unit_decimals` are **IMMUTABLE FOREVER**.
+- Current `on_hand` reaching zero does **not** unlock them. Disabling tracking does **not** unlock them. Re-enabling tracking reuses the same historical canonical unit and offers no choice.
+- `products.unit` — the Phase 1 free-text label at `0005_catalog.sql:23` — stays presentation-only and may keep changing, because inventory never reads it (P3-AL-04 §2/§5).
+- **Changing a historical product from `piece` to `kg` is not a conversion. It is forbidden.** Phase 3 invents no unit conversion (see the bullet above). The merchant's route is a new product.
+
+**Refusal:** `inventory.unit_identity_locked`, stable, carrying no quantities.
+
+**The mechanism and its owning slice.** A `BEFORE UPDATE ON products FOR EACH ROW` trigger that raises when `unit_code` or `unit_decimals` changes and any `stock_movements` row exists for any variant of that product.
+
+- **P3-S1** creates `unit_code` / `unit_decimals`, the tracking-enablement and unit-configuration command, and the command-level refusal.
+- **P3-S2** installs the physical trigger, because a trigger body cannot reference `stock_movements` before that table exists, and P3-S2 is the slice that creates it.
+- The window between them is provably empty, not merely short: before P3-S2 there is no `stock_movements` table, so the set of products with history is empty and there is nothing the guard could have refused. The window closes **before** P3-S3, which is the first slice authorized to produce a real movement, and P3-S2's acceptance asserts the trigger's presence from `pg_trigger` by name.
+- **Not the UI.** Hiding the field is not the mechanism; a runtime SQL defect, a future admin path or a later service must meet the same refusal.
+
+**Lifecycle, stated case by case so no implementer has to infer it.**
+
+| Situation | Canonical unit | Tracking flag |
+|---|---|---|
+| Untracked, no history | selectable when tracking is enabled | may be enabled |
+| Tracked, **no** movement yet | **may still be changed** deliberately, through the configuration command | may be disabled freely |
+| Tracked, movements exist, `on_hand > 0` | **locked** | cannot be disabled (P3-AL-41) |
+| Tracked, movements exist, `on_hand = 0` | **locked** — history is history | may be disabled (P3-AL-41 allows it at zero) |
+| Re-enabled after being disabled | the historical `unit_code` / `unit_decimals` are reused; no choice is offered | may be re-enabled |
+| `units.default_decimals` changed by a later migration | **no effect** — `unit_decimals` is persisted on the product at selection, and the registry default is only the initial suggestion | unaffected |
+
+**The permanent unit regression matrix.**
+
+| # | Case | Required outcome | Owning slice |
+|---|---|---|---|
+| 1 | Untracked, no history: select a canonical unit | allowed | P3-S1 |
+| 2 | Tracked, no movement: change `unit_code` | **allowed** — the chosen rule, tested so it is a decision and not an accident | P3-S1 |
+| 3 | After the first movement: change `unit_code` | **REFUSED**, `inventory.unit_identity_locked`, through the command **and** as raw SQL | P3-S2 |
+| 4 | After the first movement: change `unit_decimals` | **REFUSED**, same code, both paths | P3-S2 |
+| 5 | Stock returns to zero, movements remain: change either | **REFUSED** | P3-S2 |
+| 6 | Tracking disabled at zero, then re-enabled | the historical canonical unit is unchanged and is not re-asked | P3-S2 |
+| 7 | Change `products.unit` (free label) on a product with history | **allowed**, and no inventory number changes | P3-S1 |
+| 8 | A later migration changes `units.default_decimals` | existing products keep their persisted `unit_decimals` | P3-S2 |
 
 ---
 
@@ -485,7 +536,7 @@ Total business inventory valuation is therefore provably unchanged — **by cons
 
 ---
 
-## P3-AL-15 — Warehouse authorization and branch scope
+## P3-AL-15 — Warehouse authorization, and the lifecycle that keeps it true
 
 **Status: TO BE ENFORCED IN P3 · P3-S1.**
 
@@ -504,6 +555,84 @@ branch_warehouses (business_id, branch_id, warehouse_id,
 - `warehouses.is_default` (one per business) remains a **UX default only**. It is not authority, and no command infers permission from it. `branches.default_warehouse_id` does not exist and Phase 3 does not create it.
 
 **The rule.** For an actor whose membership is `branch_scope_mode = 'assigned'`, an inventory action on a warehouse is allowed only when that warehouse is associated, through `branch_warehouses`, with **at least one** branch in the actor's `member_branch_scopes` set. For `branch_scope_mode = 'all'`, any warehouse of the business is allowed.
+
+### §A — The home-branch association invariant, and why a backfill alone is a regression
+
+**The defect (Round 3).** The first draft specified only the backfill. A backfill is a statement about the day the migration runs; it says nothing about tomorrow. A warehouse created **after** P3-S1 would carry no `branch_warehouses` row, and the authority rule above reads that table and nothing else — so an assigned-scope actor would be unable to reach a warehouse that an existing, unchanged, successful Phase 1 workflow had just created for them. Phase 3 would have *caused* that. A capability that silently narrows on the next row written is not an authorization model.
+
+**What repository inspection found — there are three warehouse writers, not two.** The review named two. There is a third, and it is the one that decides the mechanism:
+
+| # | Writer | Evidence | Can a Phase 3 service `INSERT` be added to it? |
+|---|---|---|---|
+| 1 | `StructureService.createBranch()` — branch **plus** its default warehouse | `apps/api/src/modules/tenancy/structure.service.ts:54–61` | Yes |
+| 2 | `StructureService.createWarehouse()` | `apps/api/src/modules/tenancy/structure.service.ts:96` | Yes |
+| 3 | **`provision_create_business(...)`** — the business's first branch **and** `'Main warehouse'` | `infrastructure/database/migrations/0033_provisioner_atomic_authority.sql:160–164` | **No.** It is a `SECURITY DEFINER` routine inside a **frozen** migration, and it runs as the provisioning principal during onboarding, before any Phase 3 service code is on the call path. |
+
+Writer 3 settles the argument the review left open ("prefer physical database enforcement"). It is not a preference here, it is the only option that covers every writer: **every business ever created runs writer 3**, so a rule enforced in Phase 3 service code would be violated by the very first warehouse of every new business.
+
+**The invariant — binding.** For every row of `warehouses`, a row
+
+```
+(warehouses.business_id, warehouses.branch_id, warehouses.id)
+```
+
+MUST exist in `branch_warehouses`. This holds while the warehouse row exists, **whatever its `status`** — an archived warehouse keeps its history and its reports, so it keeps its authorization row. It is released only by deleting the warehouse itself, which today happens only through `ON DELETE CASCADE` from `businesses`; no command deletes a warehouse (`P3-AL-41`).
+
+**The mechanism — four objects, all in the P3-S1 migration, on the precedent already in the tree.**
+
+1. **Maintainer** — `AFTER INSERT ON warehouses FOR EACH ROW`, ordinary (non-deferred) trigger:
+   `INSERT INTO branch_warehouses (business_id, branch_id, warehouse_id) VALUES (NEW.business_id, NEW.branch_id, NEW.id) ON CONFLICT DO NOTHING`.
+   The home association is **derived data, not input**: it is `warehouses.branch_id` restated in the authorization relation, and no human decides it. So maintaining it in the schema is not "silent repair" of an error — it is keeping a projection true for every writer, present and future, including writer 3 and including any writer added after this document is forgotten. This is the same reasoning as G-4: discover the writers from the schema rather than naming them.
+2. **Completeness proof** — `CREATE CONSTRAINT TRIGGER warehouses_require_home_branch AFTER INSERT ON warehouses DEFERRABLE INITIALLY DEFERRED FOR EACH ROW`, raising when the home row is absent at `COMMIT`. This is what makes the invariant an invariant rather than a convenience: it still fails loudly if the maintainer is ever dropped, disabled or bypassed. Exact shape of `products_require_translation` in `0036_catalog_translations_normalized.sql:107–109`.
+3. **Keep-one** — `CREATE CONSTRAINT TRIGGER branch_warehouses_keep_home AFTER DELETE OR UPDATE ON branch_warehouses DEFERRABLE INITIALLY DEFERRED FOR EACH ROW`, raising when the row removed or changed was the home association of a warehouse that still exists. Exact shape of `product_translations_keep_one` in the same file, lines 110–112. Stable refusal: `inventory.home_branch_association_required`.
+4. **Home immutability** — `BEFORE UPDATE ON warehouses`, raising when `branch_id` changes. Stable refusal: `inventory.warehouse_home_branch_immutable`. A home-branch move would silently re-authorize the warehouse's whole history to a different branch, and Phase 3 offers no command that needs it. Moving authority is done by **adding** an association (§B), never by rewriting the home one.
+
+The P3-S1 migration asserts its own model from the catalogues — `pg_trigger` must show all four by name on the expected tables — in the same way `0040`/`0042` assert their privilege model, so a future migration cannot quietly drop one.
+
+**Why not a `CHECK`, an FK, or a service-level `INSERT`.** A `CHECK` cannot read another table. An FK from `warehouses` to `branch_warehouses` would invert the dependency and still could not express "the row whose `branch_id` equals mine". A service-level `INSERT` cannot reach writer 3 at all.
+
+### §B — Who may add or remove the other associations
+
+**The gap.** "One warehouse may serve many branches" was schema-only: nothing said who writes those extra rows, so the first implementer would have invented an authorization rule for an authorization table.
+
+**The contract — binding.** Adding or removing a **non-home** association requires **both**:
+
+- the existing `warehouse.manage` permission; **and**
+- `branch_scope_mode = 'all'` on the acting membership.
+
+**Why the scope condition is not redundant.** The tempting rule — "allow it if the actor can already reach both sides" — is a **self-escalation primitive**. An assigned-scope actor who holds `warehouse.manage` and is assigned to branch B could associate any warehouse of the business with B and thereby grant *themselves* reach over stock they were never scoped to. The check that would have to stop that is a check about the actor's own future authority, which is exactly the kind of reasoning that goes wrong once. Requiring business-wide scope removes the question: an actor who can already reach every warehouse gains nothing by writing an association. This mirrors `createBranch`, which already refuses an assigned-scope actor for the same reason (`structure.service.ts:45–47`).
+
+**The command contract.**
+
+- Both targets are resolved inside one business; the composite FKs make a cross-business pair physically impossible, and the command fails clean rather than relying on the constraint's message.
+- Adding refuses an **archived** branch or warehouse (`branch_archived` / `warehouse_archived`), the same way `createWarehouse` already refuses an archived branch (`structure.service.ts:91–94`).
+- Adding is **idempotent**: an association that already exists is a success with no second row and no second audit event (`ON CONFLICT DO NOTHING`, then report "already associated").
+- Removing refuses the home association while the warehouse exists — refused twice, by the command and by the keep-one trigger of §A. A command-level refusal alone would be a convention (`[[daftar-wrapper-is-not-an-invariant]]`).
+- Both are **audited** through the existing `AuditService.recordTx` in the same transaction, actions `structure.warehouse_branch_associated` / `structure.warehouse_branch_dissociated`.
+
+**Ownership — stated, because "schema-only theory" was the review's objection.** **P3-S1 creates the real callable domain path**: the two commands on the existing Structure domain, their controller routes, their permission checks and their tests. **P3-S7 adds only the UI.** No later slice's authorization may depend on a capability that has no caller — and P3-S2 onward read `branch_warehouses` for authority, so the write path must exist before they do.
+
+*This does not conflict with P3-AL-32's Round 2 re-scoping of P3-S1.* That re-scoping removed **inventory** entities (transfer, purchase, stock tables) from P3-S1's acceptance. `branch_warehouses` is a tenancy/authorization table that P3-S1 has owned since the first draft of the execution plan, and the transaction-seam proofs stay exactly as P3-AL-32 leaves them.
+
+### §C — The permanent warehouse regression matrix (P3-S1 acceptance)
+
+Each row is a permanent test, not a one-off check.
+
+| # | Case | Required outcome |
+|---|---|---|
+| A | A warehouse existing before the migration | after the migration it has **exactly** its home association and no other |
+| B | `createBranch()` | branch + default warehouse + the home association commit **atomically**; a failure anywhere leaves none of the three |
+| C | `createWarehouse()` | warehouse + home association commit atomically |
+| D | Home-association creation forced to fail (maintainer removed in the test transaction) | warehouse creation **rolls back** — this is the test that proves object 2 of §A is load-bearing rather than decorative |
+| E | Assigned-scope actor with no association to the warehouse | cannot reach it; stable `inventory.warehouse_out_of_scope` |
+| F | Assigned-scope actor with `warehouse.manage` attempts to associate a warehouse with a branch they are assigned to | **REFUSED** — the self-expansion case |
+| G | Business-wide actor with `warehouse.manage` adds a valid extra association | allowed, audited, idempotent on repeat |
+| H | Association naming a branch of business X and a warehouse of business Y | **refused by the database**, not only by the command |
+| I | Deleting the home association while the warehouse exists | **REFUSED** by the keep-one trigger, tested as raw SQL as well as through the command |
+| J | Deleting a non-home association, authorized | allowed, and the home mapping is still present afterwards |
+| K | Existing Phase 1 warehouse list / create / archive behaviour | **no regression** — the accepted golden and integration suites still pass unchanged |
+
+A new business created through the accepted provisioning flow **after** the migration is covered by B and C through writer 3, and is asserted explicitly: `provision_create_business` still succeeds, and its `'Main warehouse'` has its home association without that frozen routine being modified.
 
 ---
 
@@ -996,7 +1125,7 @@ Reading never corrupts anything, so the three `view` keys are ordinary. Everythi
 **Role seeding — deliberate, not convenient.**
 
 - **Owner**: all eleven, seeded by the migration for every existing business, on the exact `0041` pattern (set-wise, with a completeness assertion).
-- **Manager**: exactly `inventory.view`, `purchases.view`, `suppliers.view` — the three ordinary keys, and **nothing else**.
+- **Manager**: exactly `inventory.view`, `purchases.view`, `suppliers.view` — the three ordinary keys, and no fourth **Phase 3** key. See the precision note below: this is a statement about the Phase 3 subset, **appended** to the Manager's accepted authority, never a replacement of it.
 - **Cashier**: none.
 - **Existing custom roles**: untouched. Not one of them gains a Phase 3 permission.
 
@@ -1007,11 +1136,19 @@ Sensitive operational authority is assigned by the Owner, deliberately. A migrat
 **What the migration must assert**, in terms that distinguish ordinary visibility from sensitive authority:
 
 1. **completeness** — the owner system role holds all eleven, for every business;
-2. **manager exactness** — the manager system role holds exactly the three ordinary keys, as a set equality, so a fourth is a failure and a missing one is a failure;
+2. **manager exactness, restricted to the Phase 3 keys** — `manager_permissions ∩ PHASE_3_KEYS = {inventory.view, purchases.view, suppliers.view}` exactly, so a fourth Phase 3 key is a failure and a missing one is a failure. The intersection is what is compared: the assertion says nothing about, and may not disturb, the rest of the Manager's set;
 3. **no sensitive leak** — **no non-owner role of any kind**, system or custom, holds any of the eight **sensitive** keys. This is the assertion that protects production, and it is stated over the sensitivity column of the table above rather than over a hand-copied list;
 4. **custom roles unchanged** — the set of permissions on every pre-existing custom role is byte-identical before and after the migration.
 
 Assertion 3 is the one that would have failed silently under the old "no non-owner role gained one" wording: that wording is both too strong (it forbids the intended Manager view keys) and, once relaxed by an implementer, too vague to stop a sensitive key being included in the relaxation.
+
+**Precision note (Round 3) — "exactly three" means exactly three *Phase 3* permissions.** It does **not** mean the Manager role ends with three permissions. The accepted Manager set at `packages/domain-core/src/permissions.ts:98–116` holds seventeen Phase 1 keys — `business.view`, `branch.manage`, `warehouse.manage`, `catalog.*`, `member.invite`, `role.assign` and the rest — and **every one of them survives untouched**. P3-S1 **appends**; it never rewrites the row set. The accepted `0041` migration already demonstrates the only correct shape: `INSERT … ON CONFLICT (business_id, role_id, permission) DO NOTHING`, never a `DELETE` followed by an `INSERT`.
+
+So a fifth assertion is required, and it is the one that catches the dangerous implementation:
+
+5. **manager preservation** — for every manager system role, the set of permissions that are **not** Phase 3 keys is byte-identical before and after the migration. An implementation that replaced the Manager's whole set with three rows would satisfy assertions 1–4 and destroy seventeen accepted permissions in every business in production. This assertion is what makes that impossible.
+
+The same five assertions are re-run against a business provisioned **after** the migration (**P3-AL-53**), because the backfill and the provisioning registry are two different writers and only testing both proves they agree.
 
 ---
 
@@ -1048,6 +1185,7 @@ Default deny: an actor with `assigned` scope and no branch association reaches n
 - A warehouse or variant with stock history is **never** hard-deleted; its movements are business history and reports depend on them. `warehouses.status` and `product_variants.status` already carry `active|archived` from Phase 1 and are reused.
 - **A warehouse with non-zero `on_hand` on any key cannot be archived.** Stock must first be transferred out or adjusted to zero, deliberately and with an audit trail. Enforced by the archival command against the live cache, and re-checked against the movement ledger.
 - **A tracked variant with non-zero stock cannot have inventory tracking disabled**, and cannot be archived.
+- **Historical stock locks the canonical unit even when current stock is zero.** Disabling tracking at zero is allowed and does *not* unlock `unit_code` / `unit_decimals`; re-enabling reuses the historical unit. The archival and disable rules are about *current* quantity, the unit lock is about *history*, and the two are deliberately not the same test (P3-AL-05 §D).
 - Catalog lifecycle may not destroy stock truth: the archive path in Catalog calls the inventory check rather than duplicating it.
 
 ---
@@ -1411,6 +1549,69 @@ One `inventory_transfer_lines` row must produce at `COMMIT` exactly one `transfe
 ---
 
 
+## P3-AL-52 — The hidden base variant may not appear, and may not be touched
+
+**Status: TO BE ENFORCED IN P3 · P3-S1.**
+
+**The defect (Round 3).** P3-AL-03 said the merchant never sees the base variant. The accepted code makes that a claim P3-S1 must actively keep, not one it inherits:
+
+| Accepted read | What it does today | Effect of adding `is_base` alone |
+|---|---|---|
+| `CatalogService.getProduct()` variant list — `apps/api/src/modules/catalog/catalog.service.ts:148` | `SELECT … FROM product_variants WHERE business_id = $1 AND product_id = $2 AND status <> 'archived'` | **leaks**: enabling inventory on a simple product would make it render as a product with one variant |
+| `CatalogService.listProducts()` search — `catalog.service.ts:96` | `EXISTS (… v.sku ILIKE … OR v.barcode ILIKE …)` | does not leak *by accident*, because a base variant's `sku` and `barcode` are NULL and `NULL ILIKE …` is NULL |
+| `variants_sku_uq` / `variants_barcode_uq` — `0005_catalog.sql:51–52` | partial unique indexes `WHERE sku IS NOT NULL` / `WHERE barcode IS NOT NULL` | a NULL-identifier base variant **cannot** shadow a product identifier, by construction |
+
+Two of those three are already safe. Relying on that is the mistake: "safe because the column happens to be NULL" is a fact about today's shape, and the first person to give a base variant a SKU would silently turn three facts into one bug. So the rule is stated once and applied to **every** merchant-facing variant read, including the two that do not need it yet.
+
+**Decision — visibility.** Every merchant-facing catalog read excludes `is_base = true` from the **visible variant list** and from variant-identifier matching: `AND is_base = false` in `getProduct()`'s variant query and inside the `listProducts()` search `EXISTS`. The merchant-facing `VariantDto[]` never contains it. This is **P3-S1's** work, not P3-S7's: P3-S7 adds inventory UX, while P3-S1 must preserve the catalog UX that already exists.
+
+**Decision — mutation boundary.** The base variant is **system-created stock identity**, not a merchant object. Ordinary variant commands may **not** create, archive, delete, edit attributes on, or assign a SKU, barcode or price to a row with `is_base = true`. Answer to the review's question: **NO**, for all six.
+
+**The mechanism.**
+
+1. `CHECK (is_base = false OR (sku IS NULL AND barcode IS NULL AND price_minor IS NULL AND attributes = '{}'::jsonb))` — a base variant physically cannot hold merchant identity, so it can never become visibly merchant-like even if a read is forgotten.
+2. `UNIQUE (business_id, product_id) WHERE is_base` (already in P3-AL-03) — repeated enablement cannot create a second base variant; the enablement command is idempotent against it.
+3. A `BEFORE INSERT OR UPDATE OR DELETE ON product_variants FOR EACH ROW` trigger that refuses any write touching a row with `is_base = true`, and any insert setting `is_base = true`, unless `current_user = 'daftar_inventory_internal'` — the Phase 3 twin of the accepted `daftar_accounting_internal` boundary (`0040_accounting_chart.sql:204–214`, `0045_accounting_post_entry.sql:373`). The tracking-enablement routine is the only writer that runs as that principal. Stable refusal: `catalog.base_variant_not_mutable`.
+4. The catalog archive path already defers to the inventory check rather than duplicating it (P3-AL-41), so archiving a product cannot orphan a base variant that still has stock.
+
+**The permanent proofs (P3-S1 acceptance).**
+
+| # | Case | Required outcome |
+|---|---|---|
+| 1 | `getProduct()` on a simple product after enabling tracking | still renders as a **simple** product — no variant section appears |
+| 2 | The hidden base variant | is **not** present in `VariantDto[]` |
+| 3 | Search by name, SKU and barcode | byte-identical results to before enablement |
+| 4 | A base variant's NULL `sku`/`barcode` | cannot shadow the product's identifiers — asserted against the partial unique indexes, not assumed |
+| 5 | Enabling tracking twice on the same product | exactly one base variant, no error |
+| 6 | Every existing product in the accepted golden catalog fixtures | none becomes visibly multi-variant because inventory was enabled |
+| 7 | Ordinary variant update/archive/delete aimed at `is_base = true`, through the command **and** as raw SQL as `daftar_app` | **REFUSED**, `catalog.base_variant_not_mutable` |
+| 8 | `INSERT` of a second `is_base = true` row, or of one carrying a SKU | refused by the unique index and the CHECK respectively |
+
+---
+
+## P3-AL-53 — A business created after the migration gets the same authority as one created before it
+
+**Status: TO BE ENFORCED IN P3 · P3-S1.**
+
+**The defect (Round 3).** P3-AL-38 defined the backfill of existing roles. A migration backfill says nothing about the next business. The accepted onboarding path passes `BUILTIN_ROLE_PERMISSIONS` from `packages/domain-core/src/permissions.ts:96–118` into `provision_create_business(...)` (`apps/api/src/modules/tenancy/tenancy.service.ts`), so a business created **after** the migration is seeded from that TypeScript registry and not from the migration at all. Backfilling only the migration would have produced two populations of businesses with different Phase 3 authority, diverging silently from the day P3-S1 shipped.
+
+**Decision.** `BUILTIN_ROLE_PERMISSIONS` is the canonical registry and P3-S1 evolves it in the same commit as the migration, so both populations end identical:
+
+| Role | Phase 3 result for a business created after the migration |
+|---|---|
+| `owner` | all **11** Phase 3 permissions. Structural: the registry is `owner: PERMISSIONS` (`permissions.ts:97`), so registering the 11 keys grants them by construction — the test asserts it rather than trusting it |
+| `manager` | **exactly** `inventory.view`, `purchases.view`, `suppliers.view` — **appended** to the accepted Phase 1 list at `permissions.ts:98–116`, which is not altered, reordered or trimmed |
+| `cashier` | **none** |
+| a custom role created afterwards | **no automatic Phase 3 authority** |
+| sensitive delegation ceiling | **unchanged** |
+
+**The proof, and why reading the registry is not the proof.** P3-S1's acceptance **creates a real Business through the accepted provisioning flow after applying the candidate migration** and reads the rows actually persisted in `business_roles` / `role_permissions`. A test that asserts the constant equals itself proves nothing about `provision_create_business`, which is the frozen routine that actually writes the rows.
+
+**Both populations, one assertion set.** The four migration assertions of P3-AL-38 are run again against the newly provisioned business, and a fifth compares the two populations directly: for every system role key, the Phase 3 permission set of a backfilled business equals that of a freshly provisioned one.
+
+---
+
+
 ## 2. The self-review question
 
 > *Could two competent engineers implement materially different financial or data semantics while both claiming to follow this document?*
@@ -1461,6 +1662,20 @@ The places where the answer was "yes" on the first pass, and what closed each:
 | **Can a movement + binding commit while the alleged source row does not exist?** | **No.** P3-AL-51 §B adds the check the first draft was missing: a constraint trigger on `stock_source_bindings` itself, plus a per-source bridge whose FK to the domain line is real. A source-side trigger alone never fires when there is no source row — that was the hole. |
 | **Does P3-S1 require a table or command owned by P3-S2/S3/S4?** | **No.** P3-AL-32's matrix is re-scoped to the primitive, proved with accepted Phase 2 operations and test-owned fixtures; the real transfer, adjustment and purchase-receipt proofs are assigned to P3-S3 and P3-S4 in both pages. |
 | **Does every document give Manager the same exact permissions?** | **Yes.** `inventory.view`, `purchases.view`, `suppliers.view` and nothing else, in P3-AL-38 and in the execution plan, with set equality asserted and a separate assertion that no non-owner role holds any of the eight sensitive keys. |
+
+
+**Fourth pass — the Round 3 questions, answered against the accepted implementation.** These eight are the Tech Lead's, and each is answered by a mechanism in the tree, not by an intention in this page.
+
+| Question | Answer |
+|---|---|
+| **How does a warehouse created tomorrow get authorized?** | By the same schema object that authorizes one created today. P3-AL-15 §A: a non-deferred `AFTER INSERT` maintainer writes the home association for **every** writer, and a deferred constraint trigger refuses the commit if it is missing. There are three writers and the third is inside a frozen `SECURITY DEFINER` migration, so nothing short of a schema rule reaches all of them. |
+| **Can the home branch relation disappear?** | **No.** `branch_warehouses_keep_home` refuses the delete or update while the warehouse row exists, whatever its status, and `warehouses.branch_id` itself is refused any update. Row I of the matrix attempts it as raw SQL, not only through the command. |
+| **Who may add a second branch to a warehouse?** | An actor with `warehouse.manage` **and** `branch_scope_mode = 'all'`, through `structure.addWarehouseBranch`, which **P3-S1** creates — not P3-S7, which adds only the UI. |
+| **Can an assigned manager expand their own warehouse reach?** | **No**, and this is why the scope condition is not redundant. The "both sides reachable" rule would have been exactly that primitive. Row F of the matrix is the permanent proof. |
+| **Can a product's unit change after stock history exists?** | **No.** P3-AL-05 §D: from the first movement of any variant, `unit_code` and `unit_decimals` are immutable forever, refused by a `BEFORE UPDATE ON products` trigger installed by P3-S2 — before P3-S3 authorizes the first real movement producer — and by the configuration command. Rows 3 and 4 test both paths. |
+| **Does zero stock unlock a historical unit?** | **No**, and row 5 exists because that is the branch a reasonable implementer would allow. Archival and tracking-disable rules are about *current* quantity; the unit lock is about *history*, and P3-AL-41 now says so where the two meet. |
+| **Does the hidden base variant appear in today's Catalog API?** | **No** — but only because P3-S1 changes the read. `CatalogService.getProduct()` at `catalog.service.ts:148` returns every non-archived variant and knows nothing about `is_base`; P3-AL-52 excludes it there and in the search predicate, keeps its merchant fields empty by `CHECK`, and admits writes to it only as `daftar_inventory_internal`. |
+| **Does a Business created after P3-S1 get the same Phase 3 permissions as an older one?** | **Yes**, and it is proved rather than assumed. Onboarding seeds from `BUILTIN_ROLE_PERMISSIONS`, not from the migration, so P3-AL-53 evolves the registry in the same commit and acceptance **provisions a real business after the migration** and reads the persisted rows. A sixth check compares the two populations directly. |
 
 ---
 
