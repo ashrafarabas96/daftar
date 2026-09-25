@@ -59,7 +59,7 @@ Conceptual reservation, in slice order:
 2. **Product inventory columns** — `track_inventory` (default `false`), `unit_code`, `unit_decimals`, with the CHECK that a tracked product must carry canonical units. **No backfill guess** from `products.unit` (P3-AL-04).
 3. **Base variant** — `product_variants.is_base` with `UNIQUE (business_id, product_id) WHERE is_base`, and the enable-tracking command that creates one when a product has no variants (P3-AL-03).
 4. **`branch_warehouses`**, seeded from `warehouses.branch_id`; `warehouses.branch_id` unchanged (P3-AL-15).
-5. **Phase 3 permissions** — eleven keys in `packages/domain-core/src/permissions.ts`, seeded to the owner system role only, on the `0041` pattern, with the completeness assertion and the "no non-owner role gained one" assertion (P3-AL-38).
+5. **Phase 3 permissions** — eleven keys in `packages/domain-core/src/permissions.ts`, seeded on the `0041` pattern exactly as **P3-AL-38** states and nowhere otherwise: **Owner** all eleven; **Manager** exactly `inventory.view`, `purchases.view`, `suppliers.view`; **Cashier** none; **existing custom roles** untouched. (An earlier draft of this plan said "seeded to the owner system role only" with a "no non-owner role gained one" assertion; that contradicted P3-AL-38 and is **withdrawn** — the lock wins.) Four migration assertions: owner completeness; manager **set equality** on the three ordinary keys; **no non-owner role of any kind holds any of the eight sensitive keys**, expressed over the sensitivity column rather than a copied list; and every pre-existing custom role's permission set unchanged.
 6. **TD-09** — the `BEFORE INSERT` future-date trigger on `journal_entries`, business timezone, stable `accounting.entry_date_in_future` (P3-AL-36).
 7. **The two transaction seams** — `withBusinessTransaction(scope, fn)` (no posting capability reachable) and `withBusinessAccountingTransaction(scope, assertion, fn)` (posting capability, assertion/scope coherence checked before any domain mutation), plus the accounting ports' client-accepting variants (P3-AL-32). The distinction is carried by the handle type; **no boolean, option or string may turn one into the other.** The existing single-operation methods keep their signatures and are re-implemented in terms of the new ones.
 8. **The authorization seam** — domain permission + warehouse scope resolution, as a typed helper used by every later command (P3-AL-33, P3-AL-39).
@@ -74,13 +74,16 @@ Conceptual reservation, in slice order:
 - No existing product became tracked, and no stock row exists, after the migration.
 - Every existing warehouse is associated with exactly its previous branch; no business's authorization changed on migration day.
 - An `assigned`-scope actor with no branch association reaches no warehouse.
-- **The P3-AL-32 seam matrix, in full:**
-  - *transfer* — `withBusinessTransaction`: stock pair, audit and outbox in one commit; no assertion required; no journal entry exists afterwards, asserted by counting.
-  - *adjustment* — `withBusinessAccountingTransaction`: stock, journal, binding, audit and outbox in one commit.
-  - *purchase receipt* — `withBusinessAccountingTransaction`: purchase, lines, movements, cache, journal, binding, audit and outbox in one commit.
-  - *mismatch* — scope business A with an assertion for business B refuses **before** any domain row is written, proved by asserting the tables are empty after the refusal.
-  - *nesting* — a nested `BEGIN`/`COMMIT` is unreachable through the public typed ports.
-  - *capability* — no posting port is reachable from `withBusinessTransaction`'s handle: a compile-time property, asserted additionally at runtime.
+- **The P3-AL-32 seam matrix, in full — the primitive only, with no Phase 3 entity:**
+  1. `withBusinessTransaction` issues exactly one `BEGIN` and one `COMMIT` for the whole callback, observed from the server.
+  2. A failure anywhere in the callback rolls back **every** mutation made through it, including in a **test-owned fixture table**.
+  3. The callback's handle exposes **no** accounting posting port — a compile-time property, asserted additionally at runtime.
+  4. The raw transaction object cannot be passed into the accounting posting port: no signature accepts it, and the runtime port refuses a handle that did not come from the accounting seam.
+  5. Opening either seam inside either seam is rejected or unreachable through the public typed ports.
+  6. `withBusinessAccountingTransaction` refuses when the assertion's tenant/business claims differ from the scope's, **before the callback executes** — proved by asserting the fixture table is empty after the refusal.
+  7. An **existing accepted Phase 2 accounting operation** runs on the same transaction handle and commits once.
+  8. A failure injected **after** that accepted posting rolls back the posting **and** the companion fixture mutation.
+- **P3-S1 creates no production transfer, purchase or stock table**, and proves no transfer, adjustment or purchase-receipt path: those entities belong to P3-S2/S3/S4, and proving them here would mean implementing a future slice early or testing a stand-in that proves nothing about the real path. The real end-to-end proofs are owned by **P3-S3** (transfer, adjustment, damage, stocktake, opening) and **P3-S4** (purchase receipt), and are listed there.
 - Every accepted Phase 2 posting path still works unchanged through the re-implemented ports (the whole Phase 2 suite is the test).
 
 ---
@@ -89,12 +92,13 @@ Conceptual reservation, in slice order:
 
 **Delivers.**
 
-1. `stock_movements` — append-only by trigger, `stock_seq`, the five-part identity tuple, `qty_delta` / `unit_cost_base_minor` / `value_delta_base_minor` with their CHECKs (P3-AL-01, P3-AL-02, P3-AL-09, P3-AL-11).
-2. `stock_levels` — one row per stock key: `on_hand`, **`valuation_base_minor`**, `avg_unit_cost_base_minor` (derived, nullable), `last_stock_seq`; never deleted (P3-AL-01, P3-AL-06, P3-AL-49).
+1. `stock_movements` — append-only by trigger, `stock_seq`, the five-part identity tuple, `qty_delta NUMERIC(18,4)` / `unit_cost_base_minor NUMERIC(28,10)` (snapshot) / **`value_delta_base_minor BIGINT`** (authoritative, integer base minor units) with their CHECKs (P3-AL-01, P3-AL-02, P3-AL-09, P3-AL-11, P3-AL-49).
+2. `stock_levels` — one row per stock key: `on_hand NUMERIC(18,4)`, **`valuation_base_minor BIGINT`**, `avg_unit_cost_base_minor NUMERIC(28,10)` (derived, nullable), `last_stock_seq`; never deleted (P3-AL-01, P3-AL-06, P3-AL-49).
 3. `stock_movement_kinds` — the closed registry with `qty_sign` and `requires_reason` (P3-AL-10).
 4. `negative_inventory_deficits` and `negative_deficit_coverages` — tables and `deficit_seq` allocation, **no producer** (P3-AL-12, P3-AL-13).
 4ب. `stock_source_types` — the closed source registry, created and seeded with **nothing** (P3-AL-50).
-4ج. `stock_source_bindings` — the generic binding with deferred FKs in both directions, and the reusable completeness-guard mechanism (P3-AL-51).
+4ج. `stock_source_bindings` — **movement-grained**: primary key `(business_id, source_type, source_id, source_line_id, movement_kind)`, with `DEFERRABLE INITIALLY DEFERRED` composite FKs in **both** directions against the identical five-part key on `stock_movements`, so one transfer line's two movements each have their own binding (P3-AL-51 §A).
+4د. The **per-source bridge** pattern and the binding-side constraint-trigger mechanism that together prove a binding's source line really exists, plus the catalogue assertion that no registered source type may lack its bridge or its trigger (P3-AL-51 §B).
 5. `@daftar/inventory` — fixed-point `BigInt` arithmetic, the weighted-average formulas, the single HALF_EVEN persistence boundary, the exact-representability quantity test, the full-depletion flush and the five valuation vectors (P3-AL-05, P3-AL-08, P3-AL-49).
 6. The trusted `SECURITY DEFINER` movement primitive, owned by a `NOLOGIN` internal role, with `daftar_app` holding `SELECT` only.
 7. The rebuild algorithm and its verification mode (P3-AL-42).
@@ -106,14 +110,16 @@ Conceptual reservation, in slice order:
 - Two concurrent first-touches of the same stock key produce one row and two correctly ordered movements.
 - Two opposite multi-key commands do not deadlock, with two real connections.
 - The shared vectors produce byte-identical results in TypeScript and in SQL, including the HALF_EVEN tie cases that `round()` would get wrong.
-- A rebuild of a key with hundreds of movements — including value-only movements, repeating averages, full depletions and transfers — reproduces `on_hand`, `valuation_base_minor` and the derived average **exactly**, to the tenth decimal, with no tolerance (P3-AL-49 §E vector E).
+- A rebuild of a key with hundreds of movements — including value-only movements, repeating averages, full depletions and transfers — reproduces `on_hand`, `valuation_base_minor` and the derived average **exactly**, to the tenth decimal, with no tolerance (P3-AL-49 §D vector E).
 - A quantity movement with `qty_delta = 0` is refused; a value-only movement with a non-NULL unit cost is refused.
 - **Quantity precision (P3-AL-05):** all ten bound vectors, through every command. In particular a `unit_decimals = 0` product **accepts** `1`, `1.0000` and `-3.0000` where the kind allows a negative quantity, and **refuses** `0.5` and `1.0001` with `inventory.quantity_precision_invalid`; a `unit_decimals = 2` product accepts `1.2300` and refuses `0.0001`.
-- **The valuation vectors A–E of P3-AL-49 §E**, asserted identically in TypeScript and in SQL.
-- **Full depletion (P3-AL-49 §C):** emptying a key whose average does not terminate leaves `valuation_base_minor` exactly `0`, not `±0.0000000001`; the invariant `on_hand = 0 ⇒ valuation = 0` is asserted for every key a command touched, before COMMIT.
+- **The nine rounding and valuation vectors of P3-AL-49 §D**, asserted identically in TypeScript and in SQL, each showing the stored movement value, the cache valuation, the Inventory journal line, the rounding treatment, the GL total and the reconciliation equation. Vectors **B** and **C** are the ones that disprove the withdrawn model (`+0.6, +0.6` → GL `2` but aggregate rounding `1`; `+0.4, +0.4` → GL `0` but aggregate rounding `1`), and the suite keeps them as negative controls.
+- **Full depletion (P3-AL-49 §C):** emptying a key whose average does not terminate leaves `valuation_base_minor` exactly `0`; the invariant `on_hand = 0 ⇒ valuation = 0` is asserted for every key a command touched, before COMMIT. Over a receive-then-fully-deplete cycle, total outbound value equals total inbound value **to the minor unit** (vector G).
+- **No second conversion:** an inventory movement's journal amount **is** the stored `value_delta_base_minor`, so no inventory posting carries a `6100 Rounding Adjustment` line — asserted by querying the entries, not by reading the code.
 - **No path derives valuation from `on_hand × avg`** — a static guard over the inventory package and the migration SQL, so the prohibition is enforced in CI rather than remembered.
 - **Source registry (P3-AL-50):** an unregistered `source_type` string is refused by the foreign key; the registry is empty at the end of P3-S2, and the structural tests use a rolled-back fixture identity rather than a seeded one.
-- **Source completeness (P3-AL-51):** a movement without its binding does not survive COMMIT; a binding without its movement does not survive COMMIT; a bound source line cannot be deleted; a finalized source line's quantity, cost, variant and warehouse cannot be updated.
+- **Source completeness (P3-AL-51):** a movement without its binding does not survive COMMIT; a binding without its movement does not survive COMMIT; **a binding + movement pair whose source line does not exist does not survive COMMIT** (the binding-side trigger and the bridge's real FK, not a source-side trigger that would never fire); a bound source line cannot be deleted; a finalized source line's quantity, cost, variant and warehouse cannot be updated.
+- **Binding cardinality:** the movement-grained key admits **two** bindings for one transfer line and refuses a third, and both directional FKs resolve — the property the line-grained draft could not have had.
 
 ---
 
@@ -132,8 +138,10 @@ Conceptual reservation, in slice order:
 
 **Must prove.**
 
-- Transfer: total business valuation delta is exactly zero **by construction**, including when the transfer empties the source key (P3-AL-49 §E vector C); source average unchanged; destination average recomputed; GOLD-44's numbers reproduce.
+- Transfer: total business valuation delta is exactly zero **by construction**, including when the transfer empties the source key (P3-AL-49 §D vector C); source average unchanged; destination average recomputed; GOLD-44's numbers reproduce.
 - Transfer opens the **non-posting** seam and mints no accounting assertion at all — asserted, not assumed.
+- **The bound transfer completeness vector (P3-AL-51 §E)**, with each of its nine states refused **independently** and by the named mechanism: only `transfer_out`; only `transfer_in`; duplicate `transfer_out`; duplicate `transfer_in`; binding with no movement; movement with no binding; movement + binding with no transfer line; deleting the finalized line; editing the finalized line's quantity or warehouse.
+- **P3-S3 owns the first real end-to-end atomicity proofs** the seam was built for (P3-AL-32): transfer through the non-posting seam, and adjustment / damage / stocktake / opening through the accounting seam — stock + journal + binding + audit + outbox in one commit. P3-S1 proved the primitive; this slice proves the path.
 - Transfer creates no journal entry, and a test asserts the absence rather than assuming it.
 - A transfer whose destination the actor cannot reach is refused, even when the source is reachable.
 - Stocktake: movements between capture and finalization do not corrupt the variance; finalizing twice applies it once.
@@ -149,7 +157,7 @@ Conceptual reservation, in slice order:
 
 **Delivers.** Suppliers with lifecycle and snapshots (P3-AL-40); purchases `draft → received | cancelled` with immutable received content (P3-AL-19); one line per variant (P3-AL-21); landed cost `by_value` / `manual` with largest-remainder distribution (P3-AL-22); the receive command posting `Dr Inventory / Cr AP` always (P3-AL-24); the purchase FX snapshot (P3-AL-25); deficit coverage inside the receipt transaction through the **header/detail** identity model, so one receipt line may cover many layers without colliding on the movement identity tuple (P3-AL-13); live derived AP reads (P3-AL-26); registers `purchase` and `negative_inventory_cost_adjustment` in both registries.
 
-**Must additionally prove.** One purchase line covering **three** deficit layers writes three distinct coverage movements, each with its own `source_line_id`, none refused and none dropped; the single catch-up journal entry's amount equals the sum of the three **stored** movement values; a replay of the same receipt writes nothing further.
+**Must additionally prove.** One purchase line covering **three** deficit layers writes three distinct coverage movements, each with its own `source_line_id`, none refused and none dropped; the single catch-up journal entry's amount equals the sum of the three **stored** movement values; a replay of the same receipt writes nothing further. **P3-S4 owns the real purchase-receipt atomicity proof** (P3-AL-32): purchase + lines + movements + cache + coverage + journal + binding + audit + outbox in one commit, and a crash injected anywhere inside it leaves nothing. The receipt's per-line integer shares sum **exactly** to the purchase's integer base-currency total, so `Dr Inventory = Cr AP` with no plug and no `6100` line (P3-AL-49 §C).
 
 **Must prove.**
 

@@ -364,9 +364,9 @@
 
 **Detection.** P3-AL-43's **second** comparison, `Σ movements = Σ stock_levels.valuation_base_minor` at zero tolerance, which exists specifically to observe this failure rather than assume its absence; plus a static guard over the inventory package and migration SQL forbidding the multiplication.
 
-**Test.** Vector A of P3-AL-49 §E: `on_hand = 3`, `valuation = 1.0000000000`, average `0.3333333333`; remove one unit, then rebuild — live cache and rebuild identical to the tenth decimal. The same test with the forbidden formula substituted **must fail**, and is kept as the negative control.
+**Test.** Vectors F and G of P3-AL-49 §D: receive 3 at a total of `10`, issue 1, issue 1, issue the last — stored values `+10, −3, −4, −3`, cache `10 → 7 → 3 → 0`, and a rebuild identical to the live cache at every step. The same test with the forbidden `on_hand × avg` substituted **must fail**, and is kept as the negative control.
 
-**Failure mode without it.** `10^-10` per operation, compounding, in the same direction: after a few hundred thousand movements the inventory asset and the GL disagree by a visible amount, with no single wrong transaction to point at.
+**Failure mode without it.** A loss at every step that compounds in one direction: after enough movements the inventory asset and the GL disagree by a visible amount, with no single wrong transaction to point at.
 
 **Recovery.** Alert and refuse; fix the multiplying path; **then** rebuild from movements. Rebuilding first destroys the only evidence of which path was wrong.
 
@@ -376,11 +376,11 @@
 
 **Preventive invariant** (P3-AL-49 §C). An outbound movement that empties a key does not price at the rounded average: its `value_delta_base_minor` is defined as the exact negation of the remaining cached valuation. The invariant `on_hand = 0 ⇒ valuation_base_minor = 0` is asserted inside the command, under the lock, before COMMIT, for every key the command touched. A zero-quantity key keeps its average as a **cost reference** only.
 
-**Detection.** `SELECT … WHERE on_hand = 0 AND valuation_base_minor <> 0` — a query that must return zero rows, run by reconciliation and asserted by the command itself.
+**Detection.** `SELECT … WHERE on_hand = 0 AND valuation_base_minor <> 0` — a query that must return zero rows, run by reconciliation and asserted by the command itself before `COMMIT`.
 
-**Test.** Vector B of P3-AL-49 §E: remaining `on_hand = 2`, `valuation = 0.6666666667`, remove all 2 → `valuation = 0.0000000000` exactly, and specifically **not** `±0.0000000001`. Measured: `2 × HALF_EVEN(0.6666666667/2, 10) = 0.6666666668`, so the naive path leaves `−0.0000000001` and this test catches it.
+**Test.** Vector G of P3-AL-49 §D: a key whose average does not terminate is emptied and its `valuation_base_minor` is exactly `0`; and over the whole receive-then-deplete cycle total outbound equals total inbound to the minor unit (`3 + 4 + 3 = 10`). A variant that prices the last movement at `HALF_EVEN(qty × avg)` instead of the flush is kept as the negative control.
 
-**Failure mode without it.** Phantom asset value (or phantom negative value) on an empty key that no future movement clears, that the balance sheet carries forever, and that makes the zero-tolerance reconciliation permanently red — inviting a tolerance, which is the real damage.
+**Failure mode without it.** Phantom asset value (or phantom negative value) on an empty key that no future movement clears, that the balance sheet carries forever, and that makes the zero-tolerance reconciliation permanently red — inviting a tolerance, which is the real damage. Over a full cycle it also means COGS did not equal the cost actually received.
 
 **Recovery.** Investigate, then rebuild the affected keys from movements. **Never** write a plug entry: the flush is the fix, a plug is a second wrong number.
 
@@ -428,10 +428,80 @@
 
 ---
 
+## PM-31 — Every posting rounds correctly and the reconciliation still fails
+
+**Preventive invariant** (P3-AL-49 §A, P3-AL-43). A movement's financial value is an **integer number of base minor units** and the Inventory journal line **is that same integer**, so there is exactly one rounding in the whole system and it happens at the movement. The reconciliation therefore performs **no rounding at any aggregation level** — it compares `BIGINT` sums of stored integers. The withdrawn rule ("sum the business's valuation in `NUMERIC(28,10)`, then convert once") is forbidden by name.
+
+**Detection.** The two zero-tolerance integer comparisons of P3-AL-43 (`Σ movements = GL(1200)` and `Σ movements = Σ cache`); plus a guard that fails the build if any inventory path converts a valuation a second time, and an assertion that **no inventory posting carries a `6100 Rounding Adjustment` line** — a residue on an inventory leg means a second conversion happened.
+
+**Test.** Vectors B and C of P3-AL-49 §D, kept as permanent negative controls: two operations whose exact computed values are `+0.6` each give the GL `2`, while rounding their aggregate gives `1`; two of `+0.4` each give the GL `0`, while rounding their aggregate gives `1`. Measured on PostgreSQL 16, so the numbers in the test are the numbers the database produces. The suite asserts both that the model gives `2 = 2` and `0 = 0`, and that the withdrawn aggregate-rounding query would have disagreed.
+
+**Failure mode without it.** Every command is locally correct, every reviewer reads the document and agrees, and the nightly reconciliation is red with a difference nobody can attribute to a transaction — the exact condition under which someone proposes "a small tolerance", which permanently blinds the check that exists to catch real corruption.
+
+**Recovery.** None is needed for the ledger, which was never wrong: the movements and the journal always agreed. Correct the reconciliation's write-side contract, re-run it, and **never** add a tolerance — a difference that a tolerance would absorb is the same size as the corruption it would hide.
+
+---
+
+## PM-32 — One source line, two movements, and a binding that cannot reference either
+
+**Preventive invariant** (P3-AL-51 §A). `stock_source_bindings` is **movement-grained**: its primary key is the same five-part tuple `stock_movements` declares `UNIQUE`, so both directional FKs are ordinary composite foreign keys against declared unique keys, `DEFERRABLE INITIALLY DEFERRED`. A transfer line gets two bindings, one per leg.
+
+**Detection.** Not a runtime detector — a **schema** property. The migration that creates the tables asserts against `pg_constraint` that both FKs exist, are deferrable, and reference the five-part keys; and the transfer vector (P3-AL-51 §E) exercises the cardinality end to end.
+
+**Test.** One transfer line commits with exactly two bindings and two movements; a third binding for the same line and kind is refused by the primary key; each directional FK is shown to refuse its missing counterpart at `COMMIT`.
+
+**Failure mode without it.** The line-grained draft's reverse FK is **not creatable at all**, because the four-part movement tuple is deliberately not unique. The implementer discovers this in P3-S2 with the schema half-written, and the likely repairs are all bad: drop the reverse FK and keep the promise only in prose, make the transfer one movement and lose the two-warehouse truth, or give the two legs different source line ids and lose the fact that they are one line.
+
+**Recovery.** Not applicable if prevented; the defect is caught before any data exists, which is the point of settling it in P3-S0.
+
+---
+
+## PM-33 — A movement and its binding exist for a source line that never existed
+
+**Preventive invariant** (P3-AL-51 §B). For each registered source type there is a **bridge table carrying a real FK to the domain source line** and a real FK to the generic binding, plus a `DEFERRABLE INITIALLY DEFERRED` constraint trigger installed **on `stock_source_bindings` itself** requiring the bridge row at `COMMIT`. The chain `movement ⇄ binding → bridge → real source line` is closed by ordinary constraints in every link. Every migration that registers a source type asserts, from `pg_trigger` and `pg_constraint`, that no registered type lacks its bridge or its trigger.
+
+**Detection.** An anti-join of bindings against their bridges, and of bridges against their source lines — both must return zero rows. These confirm the constraints were not disabled; the constraints are the prevention.
+
+**Test.** A trusted command is made to write a movement and a binding for a `source_id`/`source_line_id` that does not exist: the transaction **fails at `COMMIT`**. The same test is repeated for each registered source type, since each has its own bridge and trigger.
+
+**Failure mode without it.** A source-side completeness trigger **never fires when there is no source row** — that is the whole defect. A fake pair commits, inventory exists that no document explains, and the architecture's own claim that this is impossible is what stops anyone from looking for it. An `ON DELETE RESTRICT` FK from the generic binding to a polymorphic source line cannot exist, so the first draft's deletion-protection claim was also unkeepable.
+
+**Recovery.** The movement ledger is operational truth, so a missing source is an investigation, never a synthesized document. A genuinely orphaned movement is corrected by an explicit adjustment with its own source identity; movements are never deleted.
+
+---
+
+## PM-34 — P3-S1 proves an atomicity it cannot honestly reach
+
+**Preventive invariant** (P3-AL-32 seam matrix, `PHASE_3_EXECUTION_PLAN.md` P3-S1). P3-S1 owns the **transaction primitive only**, and its nine proofs use existing accepted Phase 2 primitives and **test-owned fixture tables**. The real end-to-end proofs are assigned by name to **P3-S3** (transfer, adjustment, damage, stocktake, opening) and **P3-S4** (purchase receipt). The plan states that P3-S1 creates no production transfer, purchase or stock table.
+
+**Detection.** Slice review, plus the migration manifest: a P3-S1 migration that creates `stock_movements`, `inventory_transfer_lines` or `purchase_items` is visible in the diff and is a slice-scope violation, not a judgement call.
+
+**Test.** P3-S1's proof 8 — a failure injected after an **accepted Phase 2 posting** rolls back both the posting and a companion fixture mutation — demonstrates the seam's real property with no Phase 3 entity in existence. That test is the evidence that the re-scope lost nothing.
+
+**Failure mode without it.** One of three, all bad: future slices implemented early inside S1 so the slice boundary stops meaning anything; production tables created by a slice that does not own them and will not be reviewed for them; or tests written against stand-ins that pass while proving nothing about the path that will actually run. The third is the worst, because it produces a green gate.
+
+**Recovery.** Not applicable if prevented. If it is discovered after the fact, the entities move to their owning slice and the tests are rewritten there — a green suite from stand-ins is deleted rather than kept "for coverage".
+
+---
+
+## PM-35 — Manager silently becomes a stock and purchasing authority
+
+**Preventive invariant** (P3-AL-38). One contract, in the lock: Owner all eleven; **Manager exactly `inventory.view`, `purchases.view`, `suppliers.view`**; Cashier none; existing custom roles untouched. The execution plan states the same thing, and the earlier "seeded to the owner system role only" / "no non-owner role gained one" wording is withdrawn by name.
+
+**Detection.** Four migration assertions, run in the migration's own transaction: owner completeness; manager **set equality** on the three ordinary keys; **no non-owner role of any kind holds any of the eight sensitive keys**, expressed over the sensitivity column rather than a copied list; and every pre-existing custom role's permission set byte-identical before and after.
+
+**Test.** After the migration, a manager can read stock, purchases and suppliers and is refused `inventory.adjust`, `inventory.transfer`, `inventory.stocktake`, `purchases.manage`, `purchases.receive`, `purchases.return`, `suppliers.manage` and `suppliers.pay` — each refusal asserted individually, not as a group.
+
+**Failure mode without it.** Two documents disagreed, so the implementer picked. Picking the plan's wording would have left managers unable to see inventory at all, which is visible immediately and gets fixed. Picking a relaxed reading of it — "managers should obviously be able to work" — could have granted a sensitive key to every manager in every business in production, in a migration, silently. The dangerous branch is the one that looks helpful.
+
+**Recovery.** Revoke the wrongly granted permission from the role and audit what was done with it, since an authority grant is not undone by removing it. The audit trail carries every stock and purchase command with its actor, which is why the revocation can be scoped rather than guessed.
+
+---
+
 ## Cross-cutting — what would make this premortem worthless
 
 1. **A test that only ever passes.** Every invariant above is proved by a test that is shown to FAIL when the invariant is removed. A green suite that never modelled the attack proves nothing about the attack.
 2. **A gate that cannot say no.** Phase 2 found a runner that could exit 0 over failing tests. Phase 3 inherits the fix and the canary that proves the exit status can still carry a refusal.
 3. **A check only ever asked where it passes.** Phase 2's release gate failed three times the first time it ran on a clean runner and inside an extracted archive, and none of the three was a product defect. Every Phase 3 gate is run from a fresh clone before it is believed.
-4. **A tolerance.** Any non-zero tolerance in PM-16, PM-26 or PM-27 would be the place real divergence hides. The `10^-10` failures are exactly the size a tolerance would be written to absorb.
+4. **A tolerance.** Any non-zero tolerance in PM-16, PM-26, PM-27 or PM-31 would be the place real divergence hides. Those failures are exactly the size a tolerance would be written to absorb, which is why the model removes the second rounding instead of widening the comparison.
 5. **A retry where a lock order belongs.** See PM-03.
