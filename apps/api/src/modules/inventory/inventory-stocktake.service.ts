@@ -305,6 +305,14 @@ export class InventoryStocktakeService {
     // Resolution: every stored line (the document's own identity, frozen once
     // closed), with the explicit costs the request states against them.
     const stored = outcome === 'finalized' ? await readStocktakeLines(this.db, scope, stocktakeId) : [];
+    // A finalize of no line has no intent digest to prove (the digest needs a
+    // line), and none was ever recorded: the routine never finalizes an empty
+    // stocktake. So it is never a replay — a closed stocktake refuses it as
+    // any other different close, and a draft is `inventory.stocktake_empty`.
+    if (outcome === 'finalized' && stored.length === 0) {
+      if (header.status !== 'draft' || header.finalizeIntentSha256 !== null) throw inventoryRefusal('inventory.stocktake_state_invalid');
+      throw inventoryRefusal('inventory.stocktake_empty');
+    }
     const costs = await this.explicitCosts(scope, stored, input?.unitCosts ?? []);
     const base = { tenantId: m.tenantId, businessId: m.businessId, stocktakeId, warehouseId: header.warehouseId, outcome, occurredOn };
     const intentSha256 = stocktakeFinalizeIntentSha256({
@@ -319,7 +327,6 @@ export class InventoryStocktakeService {
       return this.closed(scope, stocktakeId, header.status, true);
     }
     if (header.status !== 'draft') throw inventoryRefusal('inventory.stocktake_state_invalid');
-    if (outcome === 'finalized' && stored.length === 0) throw inventoryRefusal('inventory.stocktake_empty');
 
     // Current state and the bound values (A-07, A-11).
     const warehouses = await readWarehouses(this.db, scope, [header.warehouseId]);

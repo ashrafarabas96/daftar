@@ -583,6 +583,16 @@ describe('T-17.6 typed refusals and their statuses (§3)', () => {
     expect(refusal(empty)).toEqual({ status: 400, inventoryCode: 'inventory.stocktake_empty' });
   });
 
+  it('finalizing a CANCELLED stocktake with no counted line is stocktake_state_invalid, never lines_required', async () => {
+    const draft = randomUUID();
+    expect((await send(owner, 'post', 'stocktakes', { stocktakeId: draft, warehouseId: A.w2 })).status).toBe(201);
+    expect((await send(owner, 'post', `stocktakes/${draft}/cancel`, {})).status).toBe(200);
+    const before = await counts(ownerPool(), A.businessId);
+    const late = await send(owner, 'post', `stocktakes/${draft}/finalize`, { occurredOn: day });
+    expect(delta(before, await counts(ownerPool(), A.businessId)), 'nothing written').toEqual({});
+    expect(refusal(late)).toEqual({ status: 409, inventoryCode: 'inventory.stocktake_state_invalid' });
+  });
+
   it('Case B: a stock total off the opening position is opening_valuation_mismatch (409) with both totals; the exact one binds (201)', async () => {
     const B = await onboardS3Business(t, owner, 'http-b');
     const c = await ownerClient();
