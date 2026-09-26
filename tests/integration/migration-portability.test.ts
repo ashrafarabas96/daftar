@@ -1139,6 +1139,7 @@ describe('managed PostgreSQL: 0039 → 0049 under a non-superuser migration prin
             internal('inventory_quantity_is_representable'),
             internal('inventory_stock_fold'),
             internal('inventory_stock_verify'),
+            internal('product_variants_20_stock_identity_lock'),
             internal('products_20_unit_history_lock'),
             internal('stock_levels_zero_on_hand_zero_value'),
             { proname: 'inventory_stock_source_guard_gaps', owner: 'daftar_migrator', definer: false, config: PIN },

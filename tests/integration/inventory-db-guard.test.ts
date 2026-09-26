@@ -65,6 +65,7 @@ describe('G-7 — the tree as it stands', () => {
       'inventory_stock_fold',
       'inventory_stock_verify',
       'product_variants_10_base_variant_authority',
+      'product_variants_20_stock_identity_lock',
       'products_10_inventory_config_authority',
       'products_20_unit_history_lock',
       'stock_levels_zero_on_hand_zero_value',
