@@ -19,6 +19,7 @@ import {
   discoverInventoryTables,
   findAuthoritativeBalanceColumns,
   findAuthoritativeInventoryColumns,
+  findForbiddenInventoryRelations,
   isAuthoritativeBalanceColumn,
   isAuthoritativeInventoryColumn,
   isForbiddenInventoryTable,
@@ -127,6 +128,95 @@ describe('rule 21 — inventory arithmetic (T-12)', () => {
     }
   });
 
+  describe('L-2: the same forbidden use behind a cast, a quote or a parenthesis', () => {
+    const sqlRules = (sql: string): string[] => [...new Set(rulesOf({ migrations: { '9999_inventory_x.sql': sql } }))];
+    const tsRules = (ts: string): string[] => [...new Set(rulesOf({ packageFiles: { 'packages/inventory/src/x.ts': ts } }))];
+
+    it('fires on HALF_UP rounding behind a quote, a parenthesis or a NUMERIC type-modifier cast', () => {
+      for (const planted of [
+        'SELECT round((v_value));',
+        'SELECT "round"(v_value);',
+        'SELECT pg_catalog."round"(v_value, 0);',
+        'SELECT (round)(v_value);',
+        'SELECT ( pg_catalog.round )(v_value);',
+        'SELECT v_value::numeric(18,4);',
+        'SELECT v_value :: NUMERIC ( 28 , 10 );',
+        'SELECT v_value::numeric(18);',
+        'SELECT v_value::pg_catalog.numeric(18,0);',
+        'SELECT CAST(v_value AS numeric(28,10));',
+        'SELECT CAST(v_value AS DECIMAL(18,4));',
+      ]) {
+        expect(sqlRules(planted), planted).toEqual(['no-sql-round']);
+      }
+      for (const planted of ['SELECT "scale"(q);', 'SELECT (scale)(q);', 'SELECT (pg_catalog.scale)(q);']) {
+        expect(sqlRules(planted), planted).toEqual(['no-sql-scale']);
+      }
+    });
+
+    it('fires on binary floating point in inventory SQL: a cast, a CAST, a function-style cast, a declaration, a result or a literal', () => {
+      for (const planted of [
+        'SELECT (q * c)::float8;',
+        'SELECT q::real;',
+        'SELECT q :: "float4";',
+        'SELECT q::pg_catalog.float8;',
+        'SELECT q::FLOAT;',
+        'SELECT CAST(q AS double precision);',
+        'SELECT CAST(q AS float);',
+        'SELECT CAST(q AS REAL);',
+        'SELECT float8(q);',
+        'SELECT "float8"(q);',
+        "SELECT real '1.5';",
+        'DECLARE v_ratio real; BEGIN NULL; END;',
+        'DECLARE v_ratio FLOAT := 0; BEGIN NULL; END;',
+        'CREATE FUNCTION f(p_q real) RETURNS numeric AS $$ SELECT 1 $$ LANGUAGE sql;',
+        'CREATE FUNCTION f() RETURNS real AS $$ SELECT 1 $$ LANGUAGE sql;',
+      ]) {
+        expect(sqlRules(planted), planted).toEqual(['no-sql-float']);
+      }
+    });
+
+    it('is still scoped: exact casts, words and identifiers that only contain the type names pass', () => {
+      for (const clean of [
+        'SELECT 10000000000::numeric, v_value::bigint, p_unit_decimals::integer;',
+        'SELECT v_real, real_cost, unreal FROM stock_levels;',
+        "RAISE EXCEPTION 'inventory.x: a real quantity is required' USING ERRCODE = 'P0001';",
+        'SELECT trunc(abs(q), 4), mod(q, 2::numeric);',
+      ]) {
+        expect(sqlRules(clean), clean).toEqual([]);
+      }
+    });
+
+    it('fires on binary floating point in the package however it is reached', () => {
+      for (const planted of [
+        "export const y = Math['round'](x);",
+        'export const y = Math?.round(x);',
+        'export const y = Math . round(x);',
+        'const { round } = Math;',
+        'const M = Math;',
+        'export const y = Number (q4);',
+        'export const y = (Number)(q4);',
+        'const N = Number;',
+        "export const y = Number.parseFloat('1');",
+        "export const y = Number['parseFloat']('1');",
+        "export const y = x['toFixed'](2);",
+        'export const y = x?.toFixed(2);',
+        "export const y = globalThis.parseFloat('1');",
+      ]) {
+        expect(tsRules(planted), planted).toEqual(['no-float-arithmetic']);
+      }
+      // A digit count may be a number: the Number predicates and a time stamp's Math.floor are not arithmetic on a quantity.
+      expect(tsRules('const ok = Number.isInteger(d) && Number.isSafeInteger(e) && !Number.isNaN(t) && Math.floor(t) > 0;')).toEqual([]);
+    });
+
+    it('reports a spelling both patterns match once', () => {
+      expect(rulesOf({ migrations: { '9999_inventory_x.sql': 'SELECT round(1.5);' } })).toEqual(['no-sql-round']);
+      expect(rulesOf({ packageFiles: { 'packages/inventory/src/x.ts': 'export const y = Math.round(x) + Number(q);' } })).toEqual([
+        'no-float-arithmetic',
+        'no-float-arithmetic',
+      ]);
+    });
+  });
+
   it('T-12.N: every rule has its own planted violation, and each carries a reason', () => {
     const planted = findInventoryArithmeticViolations({
       migrations: {
@@ -136,6 +226,7 @@ describe('rule 21 — inventory arithmetic (T-12)', () => {
           'SELECT scale(1.50);',
           'SELECT 1 FROM stock_movements ORDER BY created_at;',
           "SELECT '40P01';",
+          'SELECT q::float8;',
         ].join('\n'),
       },
       packageFiles: { 'packages/inventory/src/x.ts': 'export const y = Math.round(1);' },
@@ -222,6 +313,33 @@ describe('rule 16 extended — inventory storage is exact fixed point (G-2)', ()
     expect(findFloatRateColumns('CREATE TABLE stock_movements (fx_rate REAL);')).toEqual([]);
     // …and still watches its own.
     expect(findFloatRateColumns('CREATE TABLE journal_lines (fx_rate REAL);')).toHaveLength(1);
+  });
+
+  it('L-3: a type change re-declares the column — ALTER COLUMN … TYPE cannot undo a pin or bring a float in', () => {
+    for (const planted of [
+      'ALTER TABLE stock_movements ALTER COLUMN qty_delta TYPE double precision;',
+      'ALTER TABLE stock_levels ALTER on_hand SET DATA TYPE NUMERIC(18,2);',
+      'ALTER TABLE public.stock_levels ALTER COLUMN valuation_base_minor TYPE numeric USING valuation_base_minor::numeric;',
+      'ALTER TABLE "public"."stock_movements" ALTER COLUMN "unit_cost_base_minor" TYPE NUMERIC(28,4);',
+      'ALTER TABLE IF EXISTS ONLY negative_inventory_deficits ALTER COLUMN drift TYPE REAL;',
+      'ALTER TABLE stock_levels ADD COLUMN note TEXT, ALTER COLUMN avg_unit_cost_base_minor TYPE FLOAT8;',
+    ]) {
+      expect(findInventoryNumericViolations(planted), planted).toHaveLength(1);
+    }
+    expect(findInventoryNumericViolations('ALTER TABLE stock_movements ALTER COLUMN qty_delta TYPE NUMERIC(18,4);')).toEqual([]);
+    expect(findInventoryNumericViolations('ALTER TABLE products ALTER COLUMN weight TYPE REAL;')).toEqual([]);
+  });
+
+  it('L-3: a quoted or schema-qualified inventory table is read as that table', () => {
+    for (const planted of [
+      'CREATE TABLE public.stock_movements (id UUID, weight REAL);',
+      'CREATE TABLE "public"."stock_levels" (id UUID, on_hand NUMERIC(18,2));',
+      'CREATE TABLE IF NOT EXISTS public . "inventory_future_things" (ratio DOUBLE PRECISION);',
+      'ALTER TABLE public.stock_levels ADD COLUMN drift REAL;',
+      'ALTER TABLE IF EXISTS ONLY stock_levels ADD COLUMN drift REAL;',
+    ]) {
+      expect(findInventoryNumericViolations(planted), planted).toHaveLength(1);
+    }
   });
 });
 
@@ -311,6 +429,72 @@ describe('rule 15 extended — one stock cache, no second truth (G-3)', () => {
     expect(discoverInventoryTables('CREATE TABLE stock_summary (id UUID); CREATE TABLE products (id UUID);')).toEqual(['stock_summary']);
   });
 
+  describe('L-3: renames, quoted and schema-qualified names, and relations without the prefix', () => {
+    const CACHE =
+      'CREATE TABLE stock_levels (on_hand NUMERIC(18,4), valuation_base_minor BIGINT, avg_unit_cost_base_minor NUMERIC(28,10), last_stock_seq BIGINT);';
+
+    it('discovers quoted and schema-qualified tables, materialized views, SELECT … INTO and RENAME TO targets', () => {
+      expect(
+        discoverInventoryTables(
+          [
+            'CREATE TABLE public.stock_balances (id UUID);',
+            'CREATE TABLE "public"."stock_snapshots" (id UUID);',
+            'CREATE UNLOGGED TABLE IF NOT EXISTS public . "inventory_rollups" (id UUID);',
+            'CREATE MATERIALIZED VIEW public.stock_cache AS SELECT 1;',
+            'SELECT * INTO stock_summary FROM stock_levels;',
+            'ALTER TABLE products RENAME TO inventory_summaries;',
+            'CREATE TABLE products (id UUID);',
+          ].join('\n'),
+        ),
+      ).toEqual(['inventory_rollups', 'inventory_summaries', 'stock_balances', 'stock_cache', 'stock_snapshots', 'stock_summary']);
+      for (const t of ['inventory_rollups', 'inventory_summaries', 'stock_balances', 'stock_cache', 'stock_snapshots', 'stock_summary']) {
+        expect(isForbiddenInventoryTable(t), t).toBe(true);
+      }
+    });
+
+    it('a table RENAMEd into a stock balance is refused, prefix or not', () => {
+      expect(discoverInventoryTables('ALTER TABLE stock_levels RENAME TO stock_balances;')).toEqual(['stock_balances']);
+      expect(findForbiddenInventoryRelations('ALTER TABLE IF EXISTS public.stock_levels RENAME TO "warehouse_stock_balances";')).toEqual([
+        'warehouse_stock_balances',
+      ]);
+      expect(
+        findForbiddenInventoryRelations(
+          'CREATE TABLE warehouse_stock_balances (id UUID); CREATE TABLE products (id UUID); CREATE TABLE branch_inventory_cache (x INT);',
+        ),
+      ).toEqual(['branch_inventory_cache', 'warehouse_stock_balances']);
+      expect(findForbiddenInventoryRelations(schema())).toEqual([]);
+    });
+
+    it('a column RENAMEd to reserved / available or to a stored quantity is refused', () => {
+      expect(findAuthoritativeInventoryColumns('ALTER TABLE stock_levels RENAME COLUMN last_stock_seq TO reserved;', ['stock_levels'])).toEqual([
+        { table: 'stock_levels', column: 'reserved' },
+      ]);
+      expect(findAuthoritativeInventoryColumns('ALTER TABLE public.stock_movements RENAME qty_delta TO "available_qty";', ['stock_movements'])).toEqual([
+        { table: 'stock_movements', column: 'available_qty' },
+      ]);
+      expect(findAuthoritativeInventoryColumns('ALTER TABLE stock_movements RENAME COLUMN note TO on_hand;', ['stock_movements'])).toEqual([
+        { table: 'stock_movements', column: 'on_hand' },
+      ]);
+      // Renaming a constraint or the table itself is not a column.
+      expect(findAuthoritativeInventoryColumns('ALTER TABLE stock_levels RENAME CONSTRAINT c TO reserved;', ['stock_levels'])).toEqual([]);
+    });
+
+    it('the cache shape follows renames: a cache column renamed away is missing, and a reserved column is refused', () => {
+      const shape = checkStockCacheShape(`${CACHE}\nALTER TABLE "stock_levels" RENAME COLUMN last_stock_seq TO reserved;`);
+      expect(shape).toEqual([expect.stringContaining('last_stock_seq is missing'), expect.stringContaining('stock_levels.reserved')]);
+      expect(checkStockCacheShape(CACHE)).toEqual([]);
+    });
+
+    it('a quoted or schema-qualified cache or ledger declares its columns like any other', () => {
+      expect(findAuthoritativeInventoryColumns('CREATE TABLE public.stock_levels (id UUID, reserved NUMERIC(18,4));', ['stock_levels'])).toHaveLength(1);
+      expect(findAuthoritativeInventoryColumns('ALTER TABLE "public"."stock_levels" ADD COLUMN available NUMERIC(18,4);', ['stock_levels'])).toHaveLength(1);
+      expect(
+        findAuthoritativeInventoryColumns('ALTER TABLE IF EXISTS ONLY stock_movements ADD COLUMN on_hand NUMERIC(18,4);', ['stock_movements']),
+      ).toHaveLength(1);
+      expect(checkStockCacheShape(CACHE.replace('stock_levels', 'public.stock_levels'))).toEqual([]);
+    });
+  });
+
   it('a missing cache, or a cache missing a column, means the rule is watching nothing or the wrong thing', () => {
     expect(checkStockCacheShape('CREATE TABLE stock_movements (id UUID);')[0]).toMatch(/watching nothing/);
     expect(
@@ -363,6 +547,8 @@ describe('scripts/static-guards.ts wiring', () => {
     expect(guards).toMatch(/checkStockCacheShape/);
     expect(guards).toMatch(/findInventoryNumericViolations/);
     expect(guards).toMatch(/stock_movements does not exist/);
+    expect(guards).toMatch(/discoverInventoryTables\(schema\)\.includes\('stock_movements'\)/);
+    expect(guards).toMatch(/findForbiddenInventoryRelations\(schema\)/);
     expect(guards).toMatch(/findInventoryArithmeticViolations/);
     expect(guards).toMatch(/rule 21 is watching nothing/);
     expect(guards).toMatch(/checkInventoryWriterAuthority/);

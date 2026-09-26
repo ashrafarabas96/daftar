@@ -14,6 +14,7 @@ import {
   discoverInventoryTables,
   findAuthoritativeBalanceColumns,
   findAuthoritativeInventoryColumns,
+  findForbiddenInventoryRelations,
   isForbiddenBalanceTable,
   isForbiddenInventoryTable,
 } from './guards/no-authoritative-balance';
@@ -336,6 +337,15 @@ for (const dir of ['apps/api/src', 'apps/web/src', 'apps/admin/src', 'packages']
       );
     }
   }
+  // A stock balance under a name without the inventory prefix is the same second truth.
+  for (const table of findForbiddenInventoryRelations(schema)) {
+    if (inventoryWatched.includes(table)) continue; // already reported above
+    fail(
+      'no-authoritative-balance',
+      'infrastructure/database/migrations',
+      `relation \`${table}\` stores a derived stock balance — the ledger is the truth (G-3)`,
+    );
+  }
   if (!inventoryWatched.includes(STOCK_CACHE_EXCEPTION)) {
     fail(
       'no-authoritative-balance',
@@ -374,7 +384,7 @@ for (const dir of ['apps/api/src', 'apps/web/src', 'apps/admin/src', 'packages']
       fail('no-float-rate', f, `${hit.table}.${hit.column} ${hit.detail}`);
     }
   }
-  if (!/CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?stock_movements\b/i.test(schema)) {
+  if (!discoverInventoryTables(schema).includes('stock_movements')) {
     fail('no-float-rate', 'infrastructure/database/migrations', 'stock_movements does not exist — the inventory half of G-2 is watching nothing');
   }
 }

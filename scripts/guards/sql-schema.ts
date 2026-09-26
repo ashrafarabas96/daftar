@@ -117,6 +117,19 @@ export function topLevelItems(body: string): string[] {
 
 export const unquote = (ident: string): string => ident.replace(/^"(.*)"$/, '$1').toLowerCase();
 
+/**
+ * A relation name as a migration may write it: bare, quoted, or qualified by
+ * a schema that is itself bare or quoted, with optional space around the dot
+ * — `stock_levels`, `"stock_levels"`, `public.stock_levels`,
+ * `"public" . "stock_levels"`. Capture group 1 is the relation; `unquote` it.
+ * A reader that took the first identifier would read `public` and see
+ * nothing (P3-S2 security review, L-3).
+ */
+export const QUALIFIED_NAME = String.raw`(?:(?:"[^"]+"|[A-Za-z_][\w$]*)\s*\.\s*)?("[^"]+"|[A-Za-z_][\w$]*)`;
+
+/** `ALTER TABLE [IF EXISTS] [ONLY] <name> [*] <actions>;`, either modifier order. Group 1: the table; group 2: the actions. */
+const ALTER_TABLE = String.raw`ALTER\s+TABLE\s+(?:IF\s+EXISTS\s+)?(?:ONLY\s+)?(?:IF\s+EXISTS\s+)?${QUALIFIED_NAME}\s*\*?([\s\S]*?);`;
+
 /** Table-level constraint openers — these are never column definitions. */
 export const CONSTRAINT_OPENERS = /^(CONSTRAINT|PRIMARY|UNIQUE|FOREIGN|CHECK|EXCLUDE|LIKE|DEFERRABLE)\b/i;
 
@@ -136,7 +149,7 @@ export function findColumnDeclarations(sql: string, tables?: readonly string[]):
   const schema = stripNonSchema(sql);
   const out: ColumnDeclaration[] = [];
 
-  const create = /CREATE\s+(?:UNLOGGED\s+|TEMP\s+|TEMPORARY\s+)?TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?("[^"]+"|[A-Za-z_][\w$]*)\s*\(/gi;
+  const create = new RegExp(String.raw`CREATE\s+(?:UNLOGGED\s+|TEMP\s+|TEMPORARY\s+)?TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?${QUALIFIED_NAME}\s*\(`, 'gi');
   let m: RegExpExecArray | null;
   while ((m = create.exec(schema)) !== null) {
     const table = unquote(m[1] ?? '');
@@ -152,7 +165,7 @@ export function findColumnDeclarations(sql: string, tables?: readonly string[]):
     }
   }
 
-  const alter = /ALTER\s+TABLE\s+(?:ONLY\s+)?(?:IF\s+EXISTS\s+)?("[^"]+"|[A-Za-z_][\w$]*)([\s\S]*?);/gi;
+  const alter = new RegExp(ALTER_TABLE, 'gi');
   while ((m = alter.exec(schema)) !== null) {
     const table = unquote(m[1] ?? '');
     if (watched && !watched.has(table)) continue;
@@ -166,4 +179,90 @@ export function findColumnDeclarations(sql: string, tables?: readonly string[]):
   }
 
   return out;
+}
+
+/**
+ * Every column type change — `ALTER TABLE t ALTER [COLUMN] c [SET DATA] TYPE x`
+ * — as a declaration whose `rest` is the new type as written (with any
+ * `USING`). A type change re-declares the column, so a rule on declared types
+ * that did not read it could be undone one statement later (L-3).
+ */
+export function findColumnTypeChanges(sql: string, tables?: readonly string[]): ColumnDeclaration[] {
+  const watched = tables ? new Set(tables.map((t) => t.toLowerCase())) : null;
+  const out: ColumnDeclaration[] = [];
+  for (const m of stripNonSchema(sql).matchAll(new RegExp(ALTER_TABLE, 'gi'))) {
+    const table = unquote(m[1] ?? '');
+    if (watched && !watched.has(table)) continue;
+    const actions = m[2] ?? '';
+    const change = /\bALTER\s+(?:COLUMN\s+)?("[^"]+"|[A-Za-z_][\w$]*)\s+(?:SET\s+DATA\s+)?TYPE\s+/gi;
+    for (const a of actions.matchAll(change)) {
+      // The new type runs to the next top-level comma: `NUMERIC(18,4)` keeps its own.
+      const from = (a.index ?? 0) + a[0].length;
+      let depth = 0;
+      let to = from;
+      for (; to < actions.length; to += 1) {
+        const ch = actions[to];
+        if (ch === '(') depth += 1;
+        else if (ch === ')') depth -= 1;
+        else if (ch === ',' && depth === 0) break;
+      }
+      out.push({ table, column: unquote(a[1] ?? ''), rest: actions.slice(from, to).trim() });
+    }
+  }
+  return out;
+}
+
+export interface ColumnRename {
+  readonly table: string;
+  readonly from: string;
+  readonly to: string;
+}
+
+/** Every `ALTER TABLE t RENAME [COLUMN] a TO b` — never `RENAME CONSTRAINT`, never the table's own `RENAME TO`. */
+export function findColumnRenames(sql: string, tables?: readonly string[]): ColumnRename[] {
+  const watched = tables ? new Set(tables.map((t) => t.toLowerCase())) : null;
+  const out: ColumnRename[] = [];
+  for (const m of stripNonSchema(sql).matchAll(new RegExp(ALTER_TABLE, 'gi'))) {
+    const table = unquote(m[1] ?? '');
+    if (watched && !watched.has(table)) continue;
+    const actions = m[2] ?? '';
+    if (/^\s*RENAME\s+CONSTRAINT\b/i.test(actions)) continue;
+    const rename = /^\s*RENAME\s+(?:COLUMN\s+)?("[^"]+"|[A-Za-z_][\w$]*)\s+TO\s+("[^"]+"|[A-Za-z_][\w$]*)\s*$/i.exec(actions);
+    if (rename) out.push({ table, from: unquote(rename[1] ?? ''), to: unquote(rename[2] ?? '') });
+  }
+  return out;
+}
+
+export interface TableRename {
+  readonly from: string;
+  readonly to: string;
+}
+
+/** Every `ALTER TABLE t RENAME TO b`: a rename makes a table name that no `CREATE TABLE` ever wrote (L-3). */
+export function findTableRenames(sql: string): TableRename[] {
+  const out: TableRename[] = [];
+  for (const m of stripNonSchema(sql).matchAll(new RegExp(ALTER_TABLE, 'gi'))) {
+    const rename = /^\s*RENAME\s+TO\s+("[^"]+"|[A-Za-z_][\w$]*)\s*$/i.exec(m[2] ?? '');
+    if (rename) out.push({ from: unquote(m[1] ?? ''), to: unquote(rename[1] ?? '') });
+  }
+  return out;
+}
+
+/**
+ * Every relation name the SQL makes that STORES rows: `CREATE TABLE` (any
+ * modifier), `CREATE MATERIALIZED VIEW`, a top-level `SELECT … INTO`, and the
+ * target of `ALTER TABLE … RENAME TO` — each bare, quoted or
+ * schema-qualified. Sorted, unquoted, lower-case.
+ */
+export function discoverStoredRelations(sql: string): string[] {
+  const schema = stripNonSchema(sql);
+  const found = new Set<string>();
+  const creators = [
+    new RegExp(String.raw`CREATE\s+(?:(?:GLOBAL|LOCAL)\s+)?(?:UNLOGGED\s+|TEMP\s+|TEMPORARY\s+)?TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?${QUALIFIED_NAME}`, 'gi'),
+    new RegExp(String.raw`CREATE\s+MATERIALIZED\s+VIEW\s+(?:IF\s+NOT\s+EXISTS\s+)?${QUALIFIED_NAME}`, 'gi'),
+    new RegExp(String.raw`\bSELECT\b[^;]*?\bINTO\s+(?:(?:TEMP|TEMPORARY|UNLOGGED)\s+)?(?:TABLE\s+)?${QUALIFIED_NAME}`, 'gi'),
+  ];
+  for (const re of creators) for (const m of schema.matchAll(re)) found.add(unquote(m[1] ?? ''));
+  for (const r of findTableRenames(sql)) found.add(r.to);
+  return [...found].sort();
 }

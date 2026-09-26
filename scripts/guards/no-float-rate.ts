@@ -19,7 +19,7 @@
  * below is accounting storage only: the journal, the chart, and every
  * `accounting_*` table. P2-S5 adds the FX rate tables it introduces.
  */
-import { findColumnDeclarations } from './sql-schema';
+import { findColumnDeclarations, findColumnTypeChanges } from './sql-schema';
 
 /**
  * Tables whose rate columns are financial authority. `accounting_*` is
@@ -165,7 +165,8 @@ export function isInventoryTable(table: string): boolean {
  */
 export function findInventoryNumericViolations(sql: string): RateColumnFinding[] {
   const findings: RateColumnFinding[] = [];
-  for (const decl of findColumnDeclarations(sql)) {
+  // `ALTER COLUMN … TYPE` re-declares a column: read it like a declaration (L-3).
+  for (const decl of [...findColumnDeclarations(sql), ...findColumnTypeChanges(sql)]) {
     if (!isInventoryTable(decl.table)) continue;
     if (FLOAT_TYPES.test(decl.rest)) {
       findings.push({

@@ -56,6 +56,48 @@ export const LEDGER_TABLES = /\b(stock_movements|negative_inventory_deficits)\b/
 export const DEADLOCK_HANDLING = /40P01|deadlock_detected/i;
 export const FLOAT_ARITHMETIC = /Math\.round|toFixed|parseFloat|Number\(/;
 
+/**
+ * ── Hardened after the independent security review (L-2) ─────────────────
+ *
+ * The patterns above stay exactly as the contract wrote them; these catch
+ * the same forbidden use behind a cast, a quote or a parenthesis, and report
+ * under the same rule names (plus `no-sql-float`, which had no SQL half).
+ *
+ * - `"round"(x)`, `(round)(x)`: the same HALF_UP function, spelled so that
+ *   `round(` never appears. Likewise `scale`.
+ * - `x::numeric(18,4)`, `CAST(x AS numeric(28,10))`: a cast to a NUMERIC
+ *   type modifier rounds HALF_UP exactly as `round()` does.
+ * - `::float8`, `::real`, `CAST(… AS double precision)`, `float8(x)`, a
+ *   float-typed variable, argument, result or literal: binary floating point
+ *   in inventory SQL. `float4`, `float8` and `double precision` are refused
+ *   wherever they appear; `real` and `float`, which are also English words,
+ *   wherever they are used as a type.
+ * - In the package: `Math['round']`, `Math?.round`, `Math . round`, a bare
+ *   `Math` (an alias or a destructuring), `Number (x)`, `(Number)(x)`, any
+ *   `Number` other than its `is…` predicates, and `toFixed` / `parseFloat`
+ *   however they are reached.
+ */
+const SQL_FLOAT_TYPE = String.raw`(?:"?pg_catalog"?\s*\.\s*)?"?(?:float4|float8|float|real|double\s+precision)"?\b`;
+const SQL_NUMERIC_TYPMOD = String.raw`(?:"?pg_catalog"?\s*\.\s*)?"?(?:numeric|decimal)"?\s*\(\s*\d+\s*(?:,\s*\d+\s*)?\)`;
+export const SQL_ROUND_EVASIVE = new RegExp(
+  String.raw`"round"\s*\(|\(\s*(?:"?pg_catalog"?\s*\.\s*)?"?round"?\s*\)\s*\(|(?:::|\bAS)\s*${SQL_NUMERIC_TYPMOD}`,
+  'i',
+);
+export const SQL_SCALE_EVASIVE = /"scale"\s*\(|\(\s*(?:"?pg_catalog"?\s*\.\s*)?"?scale"?\s*\)\s*\(/i;
+export const SQL_FLOAT = new RegExp(
+  [
+    String.raw`\b(?:float4|float8|double\s+precision)\b`,
+    String.raw`::\s*${SQL_FLOAT_TYPE}`,
+    String.raw`\bAS\s+${SQL_FLOAT_TYPE}`,
+    String.raw`\bRETURNS\s+(?:SETOF\s+)?${SQL_FLOAT_TYPE}`,
+    String.raw`\b(?:real|float)\s+'`,
+    String.raw`\b[A-Za-z_][\w$]*\s+(?:CONSTANT\s+)?"?(?:real|float)"?\s*(?:\(\s*\d+\s*\)\s*)?(?:;|:=|=|,|\)|\[|\bDEFAULT\b|\bNOT\b)`,
+  ].join('|'),
+  'i',
+);
+export const FLOAT_ARITHMETIC_EVASIVE =
+  /\bMath\b\s*(?:\?\.|\.)\s*round\b|\bMath\b\s*\[|\bMath\b(?!\s*(?:\?\.|\.|\[))|\bNumber\b(?!\s*\??\.\s*is(?:Integer|SafeInteger|NaN|Finite)\b)|\btoFixed\b|\bparseFloat\b/;
+
 export function isInventoryMigration(path: string): boolean {
   return /inventory/i.test(path.split('/').pop() ?? path);
 }
@@ -78,10 +120,20 @@ function lineOf(text: string, index: number): number {
   return text.slice(0, index).split('\n').length;
 }
 
-function scan(file: string, text: string, rule: string, re: RegExp, out: InventoryArithmeticFinding[]): void {
-  const global = new RegExp(re.source, re.flags.includes('g') ? re.flags : `${re.flags}g`);
-  for (const m of text.matchAll(global)) {
-    out.push({ file, rule, evidence: `line ${lineOf(text, m.index ?? 0)}: ${m[0].replace(/\s+/g, ' ').slice(0, 80)}` });
+/**
+ * Every match of every pattern, reported once per position: a spelling both
+ * the contract pattern and its hardened twin match is one finding, not two.
+ */
+function scan(file: string, text: string, rule: string, re: RegExp | readonly RegExp[], out: InventoryArithmeticFinding[]): void {
+  const seen = new Set<number>();
+  for (const one of Array.isArray(re) ? re : [re]) {
+    const global = new RegExp(one.source, one.flags.includes('g') ? one.flags : `${one.flags}g`);
+    for (const m of text.matchAll(global)) {
+      const at = m.index ?? 0;
+      if (seen.has(at)) continue;
+      seen.add(at);
+      out.push({ file, rule, evidence: `line ${lineOf(text, at)}: ${m[0].replace(/\s+/g, ' ').slice(0, 80)}` });
+    }
   }
 }
 
@@ -92,8 +144,9 @@ export function findInventoryArithmeticViolations(src: InventoryArithmeticSource
     if (!isInventoryMigration(path)) continue;
     const sql = stripComments(raw);
     scan(path, sql, 'no-on-hand-times-avg', ON_HAND_TIMES_AVG, out);
-    scan(path, sql, 'no-sql-round', SQL_ROUND, out);
-    scan(path, sql, 'no-sql-scale', SQL_SCALE, out);
+    scan(path, sql, 'no-sql-round', [SQL_ROUND, SQL_ROUND_EVASIVE], out);
+    scan(path, sql, 'no-sql-scale', [SQL_SCALE, SQL_SCALE_EVASIVE], out);
+    scan(path, sql, 'no-sql-float', SQL_FLOAT, out);
     scan(path, sql, 'no-deadlock-handling', DEADLOCK_HANDLING, out);
     // One statement at a time: a created_at ordering is wrong only where the
     // statement reads the ledger or the deficits.
@@ -116,7 +169,7 @@ export function findInventoryArithmeticViolations(src: InventoryArithmeticSource
   for (const [path, raw] of Object.entries(src.packageFiles).sort(([a], [b]) => a.localeCompare(b))) {
     const ts = stripTsComments(raw);
     scan(path, ts, 'no-on-hand-times-avg', ON_HAND_TIMES_AVG, out);
-    scan(path, ts, 'no-float-arithmetic', FLOAT_ARITHMETIC, out);
+    scan(path, ts, 'no-float-arithmetic', [FLOAT_ARITHMETIC, FLOAT_ARITHMETIC_EVASIVE], out);
   }
 
   for (const [path, raw] of Object.entries(src.apiInventoryFiles).sort(([a], [b]) => a.localeCompare(b))) {
@@ -134,4 +187,5 @@ export const INVENTORY_ARITHMETIC_WHY: Readonly<Record<string, string>> = {
   'no-created-at-ordering': 'the ledger is ordered by stock_seq / deficit_seq, never created_at (P3-AL-06)',
   'no-deadlock-handling': 'the lock order is fixed, so a deadlock is a defect, not a retry (P3-AL-07)',
   'no-float-arithmetic': 'binary floating point never touches a quantity, cost or value (P3-AL-08)',
+  'no-sql-float': 'binary floating point never touches a quantity, cost or value — in inventory SQL either, cast or declared (P3-AL-08)',
 };

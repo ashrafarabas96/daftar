@@ -12,7 +12,16 @@
  * declared authoritative below. A report DTO, a query result or a TypeScript
  * field named `balance` is a read model and is none of this guard's business.
  */
-import { CONSTRAINT_OPENERS, balancedBody, findColumnDeclarations, stripNonSchema, topLevelItems, unquote } from './sql-schema';
+import {
+  CONSTRAINT_OPENERS,
+  balancedBody,
+  discoverStoredRelations,
+  findColumnDeclarations,
+  findColumnRenames,
+  stripNonSchema,
+  topLevelItems,
+  unquote,
+} from './sql-schema';
 
 /**
  * Accounting source-of-truth tables. The journal joined the list in P2-S2:
@@ -206,17 +215,25 @@ export const INVENTORY_NOT_A_QUANTITY = /_(id|ids|at|by|status|kind|type|code|na
 
 const INVENTORY_FORBIDDEN_TABLE = /(^|_)(stock|inventory)_(balances?|summar(y|ies)|snapshots?|rollups?|caches?)($|_)/;
 
-/** Every inventory-owned table the migrations create, sorted. */
+/**
+ * Every inventory-owned table the migrations make, sorted: by any
+ * `CREATE TABLE` — bare, quoted or schema-qualified, so
+ * `public.stock_movements` is `stock_movements` — a materialized view, a
+ * `SELECT … INTO`, or as the new name of `ALTER TABLE … RENAME TO`
+ * (security review L-3).
+ */
 export function discoverInventoryTables(sql: string): string[] {
-  const found = new Set<string>();
-  const create = /CREATE\s+(?:UNLOGGED\s+|TEMP\s+|TEMPORARY\s+)?TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?("[^"]+"|[A-Za-z_][\w$]*)/gi;
-  let m: RegExpExecArray | null;
-  const schema = stripNonSchema(sql);
-  while ((m = create.exec(schema)) !== null) {
-    const table = unquote(m[1] ?? '');
-    if (INVENTORY_TABLE_NAME.test(table)) found.add(table);
-  }
-  return [...found].sort();
+  return discoverStoredRelations(sql).filter((table) => INVENTORY_TABLE_NAME.test(table));
+}
+
+/**
+ * Every stored relation, under ANY name, whose name is a stock or inventory
+ * balance, summary, snapshot, rollup or cache. `warehouse_stock_balances`
+ * carries no inventory prefix, so discovery by prefix alone never asked
+ * (L-3). Sorted.
+ */
+export function findForbiddenInventoryRelations(sql: string): string[] {
+  return discoverStoredRelations(sql).filter((table) => INVENTORY_FORBIDDEN_TABLE.test(table));
 }
 
 /** A table whose NAME is a stored inventory balance, summary, snapshot, rollup or cache — or a stored accounting balance. */
@@ -241,9 +258,9 @@ export function isAuthoritativeInventoryColumn(table: string, column: string): b
  */
 export function findAuthoritativeInventoryColumns(sql: string, tables: readonly string[]): BalanceColumnFinding[] {
   const watched = new Set(tables.map((t) => t.toLowerCase()));
-  return findColumnDeclarations(sql)
-    .filter((d) => watched.has(d.table) && isAuthoritativeInventoryColumn(d.table, d.column))
-    .map((d) => ({ table: d.table, column: d.column }));
+  // A column RENAMEd to a stock quantity is declared by the rename (L-3).
+  const declared = [...findColumnDeclarations(sql), ...findColumnRenames(sql).map((r) => ({ table: r.table, column: r.to }))];
+  return declared.filter((d) => watched.has(d.table) && isAuthoritativeInventoryColumn(d.table, d.column)).map((d) => ({ table: d.table, column: d.column }));
 }
 
 /**
@@ -252,8 +269,15 @@ export function findAuthoritativeInventoryColumns(sql: string, tables: readonly 
  * named `reserved` / `available`. Returns problems as text; empty is a pass.
  */
 export function checkStockCacheShape(sql: string): string[] {
-  const columns = findColumnDeclarations(sql, [STOCK_CACHE_EXCEPTION]).map((d) => d.column);
-  if (columns.length === 0) return [`${STOCK_CACHE_EXCEPTION} does not exist — the inventory half of G-3 is watching nothing`];
+  const declared = findColumnDeclarations(sql, [STOCK_CACHE_EXCEPTION]).map((d) => d.column);
+  if (declared.length === 0) return [`${STOCK_CACHE_EXCEPTION} does not exist — the inventory half of G-3 is watching nothing`];
+  // Renames apply in order: a cache column renamed away is missing, and its new name is a column (L-3).
+  const renamed = new Set(declared);
+  for (const r of findColumnRenames(sql, [STOCK_CACHE_EXCEPTION])) {
+    renamed.delete(r.from);
+    renamed.add(r.to);
+  }
+  const columns = [...renamed];
   const problems: string[] = [];
   for (const c of STOCK_CACHE_COLUMNS) {
     if (!columns.includes(c)) problems.push(`${STOCK_CACHE_EXCEPTION}.${c} is missing — the cache must hold exactly ${STOCK_CACHE_COLUMNS.join(', ')}`);
