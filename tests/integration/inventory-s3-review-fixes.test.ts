@@ -7,6 +7,10 @@
  *     never meet — in either order, and while either is in flight.
  * F2 (0062 R-14): a concurrent identical opening replays; it is not refused
  *     inventory.opening_already_posted.
+ * F3 (0061 §2): inventory_stock_source_guard_gaps() reports a disabled,
+ *     conditional, narrowed or re-pointed per-type §2.3 guard, a bridge line
+ *     FK to the wrong table or unvalidated, and a guard function whose body
+ *     was replaced under the same oid and owner.
  */
 import { randomUUID } from 'node:crypto';
 import type { Client } from 'pg';
@@ -25,7 +29,17 @@ import {
   todayIn,
   type PostLine,
 } from '../helpers/accounting-posting';
-import { expectAccepted, expectRefused, ownerClient, pidOf, settle, waitUntilBlocked, seedStockBusiness, type StockBusiness } from '../helpers/stock-ledger';
+import {
+  expectAccepted,
+  expectRefused,
+  ownerClient,
+  pidOf,
+  scratch,
+  settle,
+  waitUntilBlocked,
+  seedStockBusiness,
+  type StockBusiness,
+} from '../helpers/stock-ledger';
 import { ensurePostgres, mintTestInventoryAssertion, ownerPool } from '../helpers/test-app';
 
 const AT = new Date('2026-03-14T09:15:00Z');
@@ -387,5 +401,141 @@ describe('F2 — a concurrent identical opening replays (0062 R-14)', () => {
       await first.end().catch(() => undefined);
       await second.end().catch(() => undefined);
     }
+  });
+});
+
+describe('F3 — the source-guard discovery sees the whole per-type §2.3 set (0061 §2)', () => {
+  /** Run `sabotage` in a rolled-back savepoint of a superuser transaction and return what the discovery reports. */
+  async function gapsAfter(sabotage: (c: Client) => Promise<unknown>): Promise<string[]> {
+    const c = await ownerClient();
+    try {
+      await c.query('BEGIN');
+      expect((await c.query(`SELECT 1 FROM inventory_stock_source_guard_gaps()`)).rowCount).toBe(0);
+      return await scratch(c, async () => {
+        await sabotage(c);
+        const r = await c.query<{ g: string }>(`SELECT source_type || ':' || missing AS g FROM inventory_stock_source_guard_gaps() ORDER BY 1`);
+        return r.rows.map((x) => x.g);
+      });
+    } finally {
+      await c.query('ROLLBACK').catch(() => undefined);
+      await c.end().catch(() => undefined);
+    }
+  }
+
+  const PER_TYPE: readonly (readonly [string, string, string, string])[] = [
+    ['inventory_transfer', 'source_complete', 'inventory_transfer_lines', 'stock_source_complete_inventory_transfer'],
+    ['inventory_transfer', 'source_freeze', 'inventory_transfer_lines', 'stock_source_freeze_inventory_transfer'],
+    ['inventory_transfer', 'header_immutable', 'inventory_transfers', 'inventory_transfers_immutable'],
+    ['inventory_adjustment', 'source_complete', 'inventory_adjustment_lines', 'stock_source_complete_inventory_adjustment'],
+    ['inventory_adjustment', 'source_freeze', 'inventory_adjustment_lines', 'stock_source_freeze_inventory_adjustment'],
+    ['inventory_adjustment', 'header_immutable', 'inventory_adjustments', 'inventory_adjustments_immutable'],
+    ['inventory_adjustment', 'value_complete', 'inventory_adjustments', 'inventory_adjustments_value_complete'],
+    ['stocktake', 'source_complete', 'stocktake_lines', 'stock_source_complete_stocktake'],
+    ['stocktake', 'header_complete', 'stocktakes', 'stocktakes_finalized_complete'],
+    ['stocktake', 'source_freeze', 'stocktake_lines', 'stock_source_freeze_stocktake'],
+    ['stocktake', 'header_immutable', 'stocktakes', 'stocktakes_immutable'],
+    ['stocktake', 'value_complete', 'stocktakes', 'stocktakes_value_complete'],
+    ['inventory_opening', 'source_complete', 'inventory_opening_lines', 'stock_source_complete_inventory_opening'],
+    ['inventory_opening', 'source_freeze', 'inventory_opening_lines', 'stock_source_freeze_inventory_opening'],
+    ['inventory_opening', 'header_immutable', 'inventory_openings', 'inventory_openings_immutable'],
+    ['inventory_opening', 'value_complete', 'inventory_openings', 'inventory_openings_value_complete'],
+  ];
+
+  beforeAll(async () => {
+    await ensurePostgres();
+  });
+
+  for (const [type, missing, table, trigger] of PER_TYPE) {
+    it(`${type}:${missing} — disabled, or replica-only, is reported`, async () => {
+      expect(await gapsAfter((c) => c.query(`ALTER TABLE ${table} DISABLE TRIGGER ${trigger}`))).toEqual([`${type}:${missing}`]);
+      expect(await gapsAfter((c) => c.query(`ALTER TABLE ${table} ENABLE REPLICA TRIGGER ${trigger}`))).toEqual([`${type}:${missing}`]);
+    });
+  }
+
+  it('a guard re-created with a WHEN, narrowed to one column, or on another function is reported', async () => {
+    expect(
+      await gapsAfter(async (c) => {
+        await c.query(`DROP TRIGGER stock_source_freeze_inventory_opening ON inventory_opening_lines`);
+        await c.query(`CREATE TRIGGER stock_source_freeze_inventory_opening BEFORE UPDATE OR DELETE ON inventory_opening_lines
+                         FOR EACH ROW WHEN (false) EXECUTE FUNCTION stock_source_freeze_inventory_opening()`);
+      }),
+    ).toEqual(['inventory_opening:source_freeze']);
+    expect(
+      await gapsAfter(async (c) => {
+        await c.query(`DROP TRIGGER inventory_openings_immutable ON inventory_openings`);
+        await c.query(`CREATE TRIGGER inventory_openings_immutable BEFORE UPDATE OF created_at OR DELETE ON inventory_openings
+                         FOR EACH ROW EXECUTE FUNCTION inventory_source_header_guard()`);
+      }),
+    ).toEqual(['inventory_opening:header_immutable']);
+    expect(
+      await gapsAfter(async (c) => {
+        await c.query(`DROP TRIGGER inventory_transfers_immutable ON inventory_transfers`);
+        await c.query(`CREATE TRIGGER inventory_transfers_immutable BEFORE UPDATE OR DELETE ON inventory_transfers
+                         FOR EACH ROW EXECUTE FUNCTION stock_source_freeze_inventory_opening()`);
+      }),
+    ).toEqual(['inventory_transfer:header_immutable']);
+    expect(
+      await gapsAfter(async (c) => {
+        await c.query(`DROP TRIGGER stock_bridge_immutable_stocktake ON stock_source_bridge_stocktake`);
+        await c.query(`CREATE TRIGGER stock_bridge_immutable_stocktake BEFORE UPDATE OF movement_kind OR DELETE ON stock_source_bridge_stocktake
+                         FOR EACH ROW EXECUTE FUNCTION stock_ledger_append_only()`);
+      }),
+    ).toEqual(['stocktake:bridge_immutable']);
+  });
+
+  it('a bridge line FK pointed at another document’s lines, or left unvalidated, is reported', async () => {
+    expect(
+      await gapsAfter(async (c) => {
+        await c.query(`ALTER TABLE stock_source_bridge_inventory_opening DROP CONSTRAINT stock_source_bridge_inventory_opening_line_fk`);
+        await c.query(`ALTER TABLE stock_source_bridge_inventory_opening ADD CONSTRAINT stock_source_bridge_inventory_opening_line_fk
+                         FOREIGN KEY (business_id, source_id, source_line_id) REFERENCES inventory_adjustment_lines (business_id, adjustment_id, id) ON DELETE RESTRICT NOT VALID`);
+        // Validated in the catalogue, so only the wrong table is left to report (earlier cases committed bridge rows).
+        await c.query(`UPDATE pg_constraint SET convalidated = true WHERE conname = 'stock_source_bridge_inventory_opening_line_fk'`);
+      }),
+    ).toEqual(['inventory_opening:bridge_line_fk']);
+    expect(
+      await gapsAfter(async (c) => {
+        await c.query(`ALTER TABLE stock_source_bridge_inventory_transfer DROP CONSTRAINT stock_source_bridge_inventory_transfer_line_fk`);
+        await c.query(`ALTER TABLE stock_source_bridge_inventory_transfer ADD CONSTRAINT stock_source_bridge_inventory_transfer_line_fk
+                         FOREIGN KEY (business_id, source_id, source_line_id) REFERENCES inventory_transfer_lines (business_id, transfer_id, id) ON DELETE RESTRICT NOT VALID`);
+      }),
+    ).toEqual(['inventory_transfer:bridge_line_fk']);
+  });
+
+  it('a guard function whose BODY was replaced under the same oid, owner, security and path is reported', async () => {
+    const neuter = (c: Client, fn: string, body: string): Promise<unknown> =>
+      c.query(`CREATE OR REPLACE FUNCTION ${fn}() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
+                 SET search_path = pg_catalog, public, pg_temp AS $fx$ BEGIN ${body} END; $fx$`);
+    const same = async (c: Client, fn: string): Promise<{ owner: string; definer: boolean }> =>
+      must(
+        (
+          await c.query<{ owner: string; definer: boolean }>(
+            `SELECT proowner::regrole::text AS owner, prosecdef AS definer FROM pg_proc WHERE oid = $1::regprocedure`,
+            [`${fn}()`],
+          )
+        ).rows[0],
+      );
+    expect(
+      await gapsAfter(async (c) => {
+        await neuter(c, 'stock_source_complete_inventory_opening', 'RETURN NULL;');
+        expect(await same(c, 'stock_source_complete_inventory_opening')).toEqual({ owner: 'daftar_inventory_internal', definer: true });
+      }),
+    ).toEqual(['inventory_opening:source_complete']);
+    expect(await gapsAfter((c) => neuter(c, 'stock_binding_requires_inventory_transfer', 'RETURN NULL;'))).toEqual(['inventory_transfer:binding_trigger']);
+    expect(await gapsAfter((c) => neuter(c, 'stock_source_freeze_stocktake', 'IF TG_OP = $q$DELETE$q$ THEN RETURN OLD; END IF; RETURN NEW;'))).toEqual([
+      'stocktake:source_freeze',
+    ]);
+    // A function shared by several types is reported for each of them.
+    expect(await gapsAfter((c) => neuter(c, 'inventory_source_value_complete', 'RETURN NULL;'))).toEqual([
+      'inventory_adjustment:value_complete',
+      'inventory_opening:value_complete',
+      'stocktake:value_complete',
+    ]);
+    expect(await gapsAfter((c) => neuter(c, 'inventory_source_header_guard', 'IF TG_OP = $q$DELETE$q$ THEN RETURN OLD; END IF; RETURN NEW;'))).toEqual([
+      'inventory_adjustment:header_immutable',
+      'inventory_opening:header_immutable',
+      'inventory_transfer:header_immutable',
+      'stocktake:header_immutable',
+    ]);
   });
 });

@@ -274,18 +274,60 @@ $$;
 -- with the wrong function, or enabled only for replica sessions ('R') passed.
 -- This body checks the SHAPE of every guard. Same owner (the migrator), same
 -- signature, still SECURITY INVOKER, STABLE and pinned; strictly stronger.
+--
+-- For the four P3-S3 types it also checks (review F3) the rest of each
+-- type's §2.3 set — line completeness, line freeze, header immutability,
+-- header value completeness and the stocktake header twin — by table, name,
+-- event, column list, WHEN, deferral, enabled state and function; the
+-- bridge's line FK against the exact line table and key columns; and every
+-- guard function's BODY: the SHA-256 of `pg_proc.prosrc` must equal the
+-- digest recorded below at migration time, so a same-oid, same-owner
+-- CREATE OR REPLACE that neuters a body is reported. The record is of THIS
+-- file's bodies: a digest that drifted from them fails 0061's own end state.
 -- ─────────────────────────────────────────────────────────────────────────
 CREATE OR REPLACE FUNCTION inventory_stock_source_guard_gaps()
 RETURNS TABLE (source_type TEXT, missing TEXT)
 LANGUAGE plpgsql STABLE SECURITY INVOKER SET search_path = pg_catalog, public, pg_temp AS $$
 #variable_conflict use_column
 DECLARE
-  v_type   TEXT;
-  v_bridge REGCLASS;
-  v_bind   REGCLASS := 'public.stock_source_bindings'::regclass;
-  v_fn     REGPROCEDURE;
+  v_type     TEXT;
+  v_bridge   REGCLASS;
+  v_bind     REGCLASS := 'public.stock_source_bindings'::regclass;
+  v_fn       REGPROCEDURE;
+  v_s3       BOOLEAN;
+  v_line_tbl REGCLASS;
+  v_line_key TEXT[];
+  v_g        RECORD;
+  -- SHA-256 (hex) of each S3 guard function's prosrc, recorded at migration time.
+  c_digest   CONSTANT JSONB := '{
+    "stock_ledger_append_only()": "2b6be55eba2569a34816d6ad4154ece7138500f58f0f58253c52d2a891e1f01a",
+    "stock_binding_requires_inventory_transfer()": "f8a0aaa2ba51e777ff3992750237601ebfb927636a55f1a1816a507ff2d2d430",
+    "stock_binding_requires_inventory_adjustment()": "3e54199bec0101135d4ea687c858dc514244a6cbd4f4e2aa7225f293b34dcdba",
+    "stock_binding_requires_stocktake()": "4695f38364e51b8f19fb97627b94123e41792fb9e0889b6613b3734e305ad4f9",
+    "stock_binding_requires_inventory_opening()": "7a8363f5b004f9853c935eca03339bfabc30c340cfbef93e7d56fe9d19b5b59d",
+    "stock_source_complete_inventory_transfer()": "d4ca51a9d61eb6fdba9be52f6c3e9fa2fc4b4f1da67fdc792ed5e889ac13d9bc",
+    "stock_source_complete_inventory_adjustment()": "893163f6bcfd133c4e5e270647870dec1c9ce9a017952e66a1c5aa9d767702af",
+    "stock_source_complete_stocktake()": "0e192f181e2512b74051c668ccfbaf4549ff2793008a8581ed992e0c65c602d5",
+    "stock_source_complete_stocktake_header()": "3bd8424be82ab8aa94707d3f1b2d04ad74abacaea8ae32f860ea16aaa4716c15",
+    "stock_source_complete_inventory_opening()": "71b4f35571d748bf76b7a9b2b8bfa407af755dc4420c39e26532f9905659686f",
+    "stock_source_freeze_inventory_transfer()": "e70ba4c9c0c87a4b76050f77afb9e36d8bfac7195439d2438871d2822f488d45",
+    "stock_source_freeze_inventory_adjustment()": "049e3e439c8d4e33a79bc932c937dc45b824b79718587604e627a1cfa2fb7c4a",
+    "stock_source_freeze_stocktake()": "2e29261988cc961a5c9a052709b78a32a6fd49509d263875b97527992b905717",
+    "stock_source_freeze_inventory_opening()": "507f40e4d0d472a6e787865b5a779c6f69ecfb651875ba14df57fe8fd8f54cbe",
+    "inventory_source_header_guard()": "a588bc217122ca6ac9ca074f965189cb450a1f3aab9c782661ed2aa50a4cd85c",
+    "inventory_source_value_complete()": "22a8a0b5f231771e2688dfbaa9cead3245eaaa85c46a6ebe989aa5b40933e89b"
+  }';
 BEGIN
   FOR v_type IN SELECT t.source_type FROM stock_source_types t ORDER BY t.source_type LOOP
+    v_s3 := v_type IN ('inventory_adjustment', 'inventory_opening', 'inventory_transfer', 'stocktake');
+    v_line_tbl := NULL;
+    v_line_key := NULL;
+    SELECT to_regclass('public.' || e.tbl), e.cols INTO v_line_tbl, v_line_key
+    FROM (VALUES ('inventory_transfer',   'inventory_transfer_lines',   ARRAY['business_id', 'transfer_id', 'id']),
+                 ('inventory_adjustment', 'inventory_adjustment_lines', ARRAY['business_id', 'adjustment_id', 'id']),
+                 ('stocktake',            'stocktake_lines',            ARRAY['business_id', 'stocktake_id', 'id']),
+                 ('inventory_opening',    'inventory_opening_lines',    ARRAY['business_id', 'opening_id', 'id'])) AS e(st, tbl, cols)
+    WHERE e.st = v_type;
     v_bridge := to_regclass('public.stock_source_bridge_' || v_type);
     IF v_bridge IS NULL OR NOT EXISTS (SELECT 1 FROM pg_class c WHERE c.oid = v_bridge AND c.relkind = 'r') THEN
       source_type := v_type; missing := 'bridge'; RETURN NEXT;
@@ -308,7 +350,7 @@ BEGIN
         source_type := v_type; missing := 'bridge_source_type'; RETURN NEXT;
       END IF;
       IF NOT EXISTS (SELECT 1 FROM pg_constraint c
-                      WHERE c.contype = 'f' AND c.conrelid = v_bridge AND c.confrelid = v_bind AND c.confdeltype = 'r'
+                      WHERE c.contype = 'f' AND c.conrelid = v_bridge AND c.confrelid = v_bind AND c.confdeltype = 'r' AND c.convalidated
                         AND (SELECT array_agg(a.attname::text ORDER BY k.ord)
                                FROM unnest(c.conkey) WITH ORDINALITY AS k(attnum, ord)
                                JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = k.attnum)
@@ -319,21 +361,33 @@ BEGIN
                             = ARRAY['business_id', 'source_type', 'source_id', 'source_line_id', 'movement_kind']) THEN
         source_type := v_type; missing := 'bridge_binding_fk'; RETURN NEXT;
       END IF;
+      -- The line FK: for an S3 type to exactly its line table and key, for
+      -- any other type to some third table (the S2 template).
       IF NOT EXISTS (SELECT 1 FROM pg_constraint c
                       WHERE c.contype = 'f' AND c.conrelid = v_bridge AND c.confrelid <> v_bind
-                        AND c.confrelid <> v_bridge AND c.confdeltype = 'r'
+                        AND c.confrelid <> v_bridge AND c.confdeltype = 'r' AND c.convalidated
+                        AND (NOT v_s3 OR c.confrelid = v_line_tbl)
                         AND (SELECT array_agg(a.attname::text ORDER BY k.ord)
                                FROM unnest(c.conkey) WITH ORDINALITY AS k(attnum, ord)
                                JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = k.attnum)
-                            = ARRAY['business_id', 'source_id', 'source_line_id']) THEN
+                            = ARRAY['business_id', 'source_id', 'source_line_id']
+                        AND (NOT v_s3
+                             OR (SELECT array_agg(a.attname::text ORDER BY k.ord)
+                                   FROM unnest(c.confkey) WITH ORDINALITY AS k(attnum, ord)
+                                   JOIN pg_attribute a ON a.attrelid = c.confrelid AND a.attnum = k.attnum)
+                                = v_line_key)) THEN
         source_type := v_type; missing := 'bridge_line_fk'; RETURN NEXT;
       END IF;
       IF NOT EXISTS (SELECT 1 FROM pg_trigger g
+                       JOIN pg_proc p ON p.oid = g.tgfoid
                       WHERE g.tgrelid = v_bridge AND NOT g.tgisinternal
                         AND g.tgname = 'stock_bridge_immutable_' || v_type
                         AND g.tgtype = 27                -- ROW | BEFORE | DELETE | UPDATE, nothing else
                         AND g.tgenabled IN ('O', 'A')
-                        AND g.tgfoid = 'public.stock_ledger_append_only()'::regprocedure) THEN
+                        AND g.tgqual IS NULL AND cardinality(g.tgattr::int2[]) = 0
+                        AND g.tgfoid = 'public.stock_ledger_append_only()'::regprocedure
+                        AND (NOT v_s3 OR encode(sha256(convert_to(p.prosrc, 'UTF8')), 'hex')
+                                         = c_digest ->> 'stock_ledger_append_only()')) THEN
         source_type := v_type; missing := 'bridge_immutable'; RETURN NEXT;
       END IF;
     END IF;
@@ -350,15 +404,61 @@ BEGIN
             AND g.tgfoid = v_fn
             AND r.rolname = 'daftar_inventory_internal' AND p.prosecdef
             AND p.proconfig = ARRAY['search_path=pg_catalog, public, pg_temp']
-            AND position('WHEN ((new.source_type = ' || quote_literal(v_type) || '::text))' IN pg_get_triggerdef(g.oid)) > 0) THEN
+            AND position('WHEN ((new.source_type = ' || quote_literal(v_type) || '::text))' IN pg_get_triggerdef(g.oid)) > 0
+            AND (NOT v_s3 OR encode(sha256(convert_to(p.prosrc, 'UTF8')), 'hex')
+                             = c_digest ->> ('stock_binding_requires_' || v_type || '()'))) THEN
       source_type := v_type; missing := 'binding_trigger'; RETURN NEXT;
+    END IF;
+
+    -- The rest of an S3 type's §2.3 set, on its own document tables: each
+    -- unconditional, on every column of its events, on its expected
+    -- internal DEFINER function with the pinned path and the recorded body.
+    IF v_s3 THEN
+      FOR v_g IN
+        SELECT e.missing, e.tbl, e.tg, e.typ, e.deferred, e.fn
+        FROM (VALUES
+          ('inventory_transfer',   'source_complete',  'inventory_transfer_lines',   'stock_source_complete_inventory_transfer',   5,  true,  'stock_source_complete_inventory_transfer()'),
+          ('inventory_transfer',   'source_freeze',    'inventory_transfer_lines',   'stock_source_freeze_inventory_transfer',     27, false, 'stock_source_freeze_inventory_transfer()'),
+          ('inventory_transfer',   'header_immutable', 'inventory_transfers',        'inventory_transfers_immutable',              27, false, 'inventory_source_header_guard()'),
+          ('inventory_adjustment', 'source_complete',  'inventory_adjustment_lines', 'stock_source_complete_inventory_adjustment', 5,  true,  'stock_source_complete_inventory_adjustment()'),
+          ('inventory_adjustment', 'source_freeze',    'inventory_adjustment_lines', 'stock_source_freeze_inventory_adjustment',   27, false, 'stock_source_freeze_inventory_adjustment()'),
+          ('inventory_adjustment', 'header_immutable', 'inventory_adjustments',      'inventory_adjustments_immutable',            27, false, 'inventory_source_header_guard()'),
+          ('inventory_adjustment', 'value_complete',   'inventory_adjustments',      'inventory_adjustments_value_complete',       21, true,  'inventory_source_value_complete()'),
+          ('stocktake',            'source_complete',  'stocktake_lines',            'stock_source_complete_stocktake',            21, true,  'stock_source_complete_stocktake()'),
+          ('stocktake',            'header_complete',  'stocktakes',                 'stocktakes_finalized_complete',              17, true,  'stock_source_complete_stocktake_header()'),
+          ('stocktake',            'source_freeze',    'stocktake_lines',            'stock_source_freeze_stocktake',              27, false, 'stock_source_freeze_stocktake()'),
+          ('stocktake',            'header_immutable', 'stocktakes',                 'stocktakes_immutable',                       27, false, 'inventory_source_header_guard()'),
+          ('stocktake',            'value_complete',   'stocktakes',                 'stocktakes_value_complete',                  21, true,  'inventory_source_value_complete()'),
+          ('inventory_opening',    'source_complete',  'inventory_opening_lines',    'stock_source_complete_inventory_opening',    5,  true,  'stock_source_complete_inventory_opening()'),
+          ('inventory_opening',    'source_freeze',    'inventory_opening_lines',    'stock_source_freeze_inventory_opening',      27, false, 'stock_source_freeze_inventory_opening()'),
+          ('inventory_opening',    'header_immutable', 'inventory_openings',         'inventory_openings_immutable',               27, false, 'inventory_source_header_guard()'),
+          ('inventory_opening',    'value_complete',   'inventory_openings',         'inventory_openings_value_complete',          21, true,  'inventory_source_value_complete()')
+        ) AS e(st, missing, tbl, tg, typ, deferred, fn)
+        WHERE e.st = v_type
+        ORDER BY e.missing
+      LOOP
+        IF to_regclass('public.' || v_g.tbl) IS NULL OR to_regprocedure('public.' || v_g.fn) IS NULL OR NOT EXISTS (
+             SELECT 1 FROM pg_trigger g
+               JOIN pg_proc p ON p.oid = g.tgfoid
+               JOIN pg_roles r ON r.oid = p.proowner
+              WHERE g.tgrelid = to_regclass('public.' || v_g.tbl) AND g.tgname = v_g.tg AND NOT g.tgisinternal
+                AND g.tgtype = v_g.typ AND g.tgenabled IN ('O', 'A')
+                AND g.tgqual IS NULL AND cardinality(g.tgattr::int2[]) = 0
+                AND (g.tgconstraint <> 0 AND g.tgdeferrable AND g.tginitdeferred) = v_g.deferred
+                AND g.tgfoid = to_regprocedure('public.' || v_g.fn)
+                AND r.rolname = 'daftar_inventory_internal' AND p.prosecdef
+                AND p.proconfig = ARRAY['search_path=pg_catalog, public, pg_temp']
+                AND encode(sha256(convert_to(p.prosrc, 'UTF8')), 'hex') = c_digest ->> v_g.fn) THEN
+          source_type := v_type; missing := v_g.missing; RETURN NEXT;
+        END IF;
+      END LOOP;
     END IF;
   END LOOP;
 END;
 $$;
 
 COMMENT ON FUNCTION inventory_stock_source_guard_gaps() IS
-  'P3-AL-51 §B, strengthened by P3-S3 (A-16). Catalogue-only discovery: for every stock_source_types row, reports each missing or mis-shaped guard — bridge (a plain table), bridge_rls (enabled and forced), bridge_pk (exactly business_id, source_id, source_line_id, movement_kind), bridge_source_type (a stored generated constant equal to the type), bridge_binding_fk (RESTRICT, five columns in order), bridge_line_fk (RESTRICT, business_id, source_id, source_line_id), bridge_immutable (ROW BEFORE UPDATE OR DELETE, enabled for origin sessions, on stock_ledger_append_only()), binding_trigger (ROW AFTER INSERT deferred constraint trigger on its own internal DEFINER function with the pinned path and the WHEN on the type). Every migration that registers a source type asserts it returns no row. Migrator-owned INVOKER; no EXECUTE grant.';
+  'P3-AL-51 §B, strengthened by P3-S3 (A-16, review F3). Catalogue-only discovery: for every stock_source_types row, reports each missing or mis-shaped guard — bridge (a plain table), bridge_rls (enabled and forced), bridge_pk (exactly business_id, source_id, source_line_id, movement_kind), bridge_source_type (a stored generated constant equal to the type), bridge_binding_fk (validated RESTRICT, five columns in order), bridge_line_fk (validated RESTRICT, business_id, source_id, source_line_id; for an S3 type to exactly its line table and key), bridge_immutable (ROW BEFORE UPDATE OR DELETE on every column, no WHEN, enabled for origin sessions, on stock_ledger_append_only()), binding_trigger (ROW AFTER INSERT deferred constraint trigger on its own internal DEFINER function with the pinned path and the WHEN on the type). For the four S3 types also source_complete, source_freeze, header_immutable, value_complete and (stocktake) header_complete, each by table, name, event, column list, WHEN, deferral, enabled state and expected internal DEFINER pinned function; and every S3 guard function''s body against the SHA-256 of its prosrc recorded at migration time. Every migration that registers a source type asserts it returns no row. Migrator-owned INVOKER; no EXECUTE grant.';
 
 REVOKE ALL ON FUNCTION inventory_stock_source_guard_gaps() FROM PUBLIC;
 
@@ -1757,6 +1857,35 @@ BEGIN
   END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_trigger g WHERE g.tgname = 'stock_bridge_immutable_inventory_transfer' AND g.tgenabled = 'O') THEN
     RAISE EXCEPTION 'inventory.migration_end_state_invalid: the discovery probe did not roll back';
+  END IF;
+  -- Review F3: a disabled per-type §2.3 guard, and a bridge line FK pointed
+  -- at another document's lines, are reported too.
+  BEGIN
+    ALTER TABLE inventory_opening_lines DISABLE TRIGGER stock_source_complete_inventory_opening;
+    SELECT string_agg(g.source_type || ':' || g.missing, ', ') INTO v_detail FROM inventory_stock_source_guard_gaps() g;
+    RAISE EXCEPTION 'inventory.probe_rollback: %', coalesce(v_detail, '');
+  EXCEPTION WHEN raise_exception THEN
+    GET STACKED DIAGNOSTICS v_detail = MESSAGE_TEXT;
+  END;
+  IF v_detail IS DISTINCT FROM 'inventory.probe_rollback: inventory_opening:source_complete' THEN
+    RAISE EXCEPTION 'inventory.source_guard_missing: the discovery did not report a disabled line completeness guard (%)', v_detail;
+  END IF;
+  BEGIN
+    ALTER TABLE stock_source_bridge_inventory_opening DROP CONSTRAINT stock_source_bridge_inventory_opening_line_fk;
+    ALTER TABLE stock_source_bridge_inventory_opening ADD CONSTRAINT stock_source_bridge_inventory_opening_line_fk
+      FOREIGN KEY (business_id, source_id, source_line_id) REFERENCES inventory_adjustment_lines (business_id, adjustment_id, id) ON DELETE RESTRICT;
+    SELECT string_agg(g.source_type || ':' || g.missing, ', ') INTO v_detail FROM inventory_stock_source_guard_gaps() g;
+    RAISE EXCEPTION 'inventory.probe_rollback: %', coalesce(v_detail, '');
+  EXCEPTION WHEN raise_exception THEN
+    GET STACKED DIAGNOSTICS v_detail = MESSAGE_TEXT;
+  END;
+  IF v_detail IS DISTINCT FROM 'inventory.probe_rollback: inventory_opening:bridge_line_fk' THEN
+    RAISE EXCEPTION 'inventory.source_guard_missing: the discovery did not report a bridge line FK to the wrong table (%)', v_detail;
+  END IF;
+  IF (SELECT c.confrelid FROM pg_constraint c WHERE c.conname = 'stock_source_bridge_inventory_opening_line_fk')
+     IS DISTINCT FROM 'public.inventory_opening_lines'::regclass
+     OR NOT EXISTS (SELECT 1 FROM pg_trigger g WHERE g.tgname = 'stock_source_complete_inventory_opening' AND g.tgenabled = 'O') THEN
+    RAISE EXCEPTION 'inventory.migration_end_state_invalid: a discovery probe did not roll back';
   END IF;
 
   -- (3) The accounting source registry: the three native rows unchanged,
