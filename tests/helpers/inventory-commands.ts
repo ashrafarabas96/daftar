@@ -960,18 +960,19 @@ export function asMember(a: HttpActor, businessId: string): Record<string, strin
 
 /**
  * A business onboarded through the real API by `owner` (so through
- * `provision_create_business`), given a second branch through the real API
+ * `provision_create_business`) — in a new tenant, or in `inTenant` (the
+ * same-owner A2 of H-3) — given a second branch through the real API
  * (its home warehouse is W2), and then the S3 product shapes, seeded the way
  * the other S3 suites seed them.
  */
-export async function onboardS3Business(t: TestApp, owner: HttpActor, label: string): Promise<S3Business> {
+export async function onboardS3Business(t: TestApp, owner: HttpActor, label: string, inTenant?: string): Promise<S3Business> {
   const on = await t.request
-    .post('/v1/onboarding/complete')
+    .post(inTenant === undefined ? '/v1/onboarding/complete' : `/v1/tenants/${inTenant}/businesses`)
     .set('Idempotency-Key', `s3-${randomUUID()}`)
     .set('Authorization', `Bearer ${owner.token}`)
     .send({ businessName: `S3 ${label}`, countryCode: 'PS', baseCurrency: 'ILS', storeSlug: `s3-${label}-${randomUUID().slice(0, 8)}`, preferredLocale: 'en' });
   expect(on.status, 'onboarding').toBe(201);
-  const tenantId = String(on.body.tenantId);
+  const tenantId = inTenant ?? String(on.body.tenantId);
   const businessId = String(on.body.businessId);
   const pool = ownerPool();
   await grantFeature(businessId, owner.userId, 'MULTI_BRANCH');

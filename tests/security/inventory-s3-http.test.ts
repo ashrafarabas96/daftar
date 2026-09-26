@@ -42,6 +42,7 @@ import {
   type S3Business,
 } from '../helpers/inventory-commands';
 import { position, postOpeningBalanceInTx } from '../helpers/inventory-posting';
+import { post as postManualAdjustment, simpleCommand } from '../helpers/accounting-posting';
 import { addMerchantVariant, addTrackedProduct } from '../helpers/stock-ledger';
 
 let t: TestApp;
@@ -267,6 +268,11 @@ describe('T-17.4 ALLOW: each holder succeeds on its own routes; 201 then 200 rep
       [A.w1, '-1.0000'],
       [A.w2, '1.0000'],
     ]);
+    // T-03.5: one inventory assertion, no accounting assertion, only the one-assertion seam.
+    expect(invMint).toHaveBeenCalledTimes(1);
+    expect(acctMint).not.toHaveBeenCalled();
+    expect(seam2).not.toHaveBeenCalled();
+    expect(seam1).toHaveBeenCalledTimes(1);
     const r2 = await send(mover, 'post', 'transfers', body);
     expect(r2.status).toBe(200);
     expect(r2.body).toEqual({ ...r1.body, replayed: true });
@@ -356,6 +362,10 @@ describe('T-17.4 ALLOW: each holder succeeds on its own routes; 201 then 200 rep
     const body = transferBody();
     const before = await counts(ownerPool(), A.businessId);
     expect(refusal(await send(narrow, 'post', 'transfers', body))).toEqual({ status: 403, inventoryCode: 'inventory.warehouse_out_of_scope' });
+    expect(refusal(await send(narrow, 'post', 'transfers', transferBody({ from: A.w2, to: A.w1 }))), 'the reverse direction').toEqual({
+      status: 403,
+      inventoryCode: 'inventory.warehouse_out_of_scope',
+    });
     await expectUntouched(before, 'out of scope');
     const widen = await t.request
       .patch(`/v1/businesses/current/members/${narrow.userId}/branch-scope`)
@@ -714,5 +724,68 @@ describe('A-06 AccountingEngine.post refuses inventory_adjustment and inventory_
     }
     expect(acctMint).not.toHaveBeenCalled();
     expect(delta(before, await counts(ownerPool(), A.businessId))).toEqual({});
+  });
+});
+
+// ── T-02 over HTTP: the same owner, two businesses of one tenant ──────────
+
+describe('T-02 HTTP: the same owner switching business reaches only the business the request names', () => {
+  it('a transfer in A naming A2’s warehouse is refused with nothing written in either; A’s document is not answered in A2; A2’s own is', async () => {
+    const A2 = await onboardS3Business(t, owner, 'http-a2', A.tenantId);
+    const inA2 = (body: Record<string, unknown>): Promise<Response> =>
+      t.request.post('/v1/inventory/adjustments').set(asMember(owner, A2.businessId)).send(body);
+    const beforeA = await counts(ownerPool(), A.businessId);
+    const beforeA2 = await counts(ownerPool(), A2.businessId);
+    expect(refusal(await send(owner, 'post', 'transfers', transferBody({ to: A2.w1 }))), 'A.W1 → A2.W1').toEqual({
+      status: 404,
+      inventoryCode: 'inventory.warehouse_not_found',
+    });
+    const inA = adjustmentBody([piece('1', { unitCost: '4' })]);
+    expect((await send(owner, 'post', 'adjustments', inA)).status, 'the document in A').toBe(201);
+    const afterA = await counts(ownerPool(), A.businessId);
+    expect(refusal(await inA2(inA)), 'A’s body replayed under A2: A’s stored answer is not disclosed').toEqual({
+      status: 404,
+      inventoryCode: 'inventory.product_not_found',
+    });
+    expect(delta(beforeA2, await counts(ownerPool(), A2.businessId)), 'A2 untouched by the refusals').toEqual({});
+
+    const own = await inA2({ ...inA, warehouseId: A2.w1, lines: [{ productId: A2.piece.productId, quantity: '1', unitCost: '4' }] });
+    expect(own.status, 'ALLOW: A2’s own ids under A2, even with the same document id').toBe(201);
+    expect(own.body.lines).toMatchObject([{ productId: A2.piece.productId, warehouseId: A2.w1 }]);
+    expect(delta(afterA, await counts(ownerPool(), A.businessId)), 'A untouched by A2’s request').toEqual({});
+    expect(delta(beforeA, afterA)['inventory_adjustments']).toBe(1);
+  });
+});
+
+// ── T-06.11 the reversal route refuses an inventory-owned entry ────────────
+
+describe('T-06.11 POST …/entries/:id/reversals of an inventory entry is reversal_source_domain_owned (409); an ordinary entry reverses', () => {
+  it('the adjustment’s entry is refused; a manual adjustment’s entry is reversed', async () => {
+    const adj = await send(owner, 'post', 'adjustments', adjustmentBody([piece('1', { unitCost: '6' })]));
+    expect(adj.status).toBe(201);
+    const entryId = String(adj.body.journalEntryId);
+    const reverse = (id: string): Promise<Response> =>
+      t.request
+        .post(`/v1/businesses/${A.businessId}/accounting/entries/${id}/reversals`)
+        .set(asMember(owner, A.businessId))
+        .send({ entryDate: day, reason: 'undo it' });
+    const before = await counts(ownerPool(), A.businessId);
+    const refused = await reverse(entryId);
+    expect({ status: refused.status, code: refused.body?.error?.details?.code }).toEqual({ status: 409, code: 'accounting.reversal_source_domain_owned' });
+    expect(delta(before, await counts(ownerPool(), A.businessId))).toEqual({});
+
+    const fixture = {
+      tenantId: A.tenantId,
+      businessId: A.businessId,
+      userId: owner.userId,
+      branchId: A.branchX,
+      otherBranchId: A.branchY,
+      warehouseId: A.w1,
+      otherTenantId: A.tenantId,
+      otherBusinessId: A.businessId,
+      otherUserId: owner.userId,
+    };
+    const manual = await postManualAdjustment(simpleCommand(fixture, randomUUID(), day, 700n), owner.userId);
+    expect((await reverse(manual.entryId)).status, 'ALLOW: an ordinary entry reverses').toBe(201);
   });
 });
