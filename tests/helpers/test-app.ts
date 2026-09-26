@@ -11,6 +11,7 @@ import type { CredentialPayloadEncryptor } from '../../apps/api/src/modules/deli
 import { CredentialDeliveryWorker } from '../../apps/api/src/modules/delivery/delivery-worker.service';
 import { mintProvisioningAssertion, type ProvisioningKind } from '../../apps/api/src/infra/provisioning-assertion';
 import { mintAccountingAssertion, type AccountingAssertionClaims, type AccountingAssertionKey } from '../../packages/accounting/src/assertion';
+import { mintInventoryAssertion, type InventoryAssertionClaims, type InventoryAssertionKey } from '@daftar/inventory';
 
 // The cluster's lifecycle lives in a framework-free module so that evidence
 // tooling can start the same PostgreSQL without importing the application.
@@ -96,6 +97,16 @@ export function mintTestAccountingAssertion(claims: AccountingAssertionClaims, n
  */
 export const INVENTORY_ASSERTION_KEY_B64 = Buffer.from('test-inventory-assertion-key-32b!!!!!!!!!').subarray(0, 32).toString('base64');
 export const INVENTORY_ASSERTION_KID = 'inv1';
+
+/** The inventory key as the minter holds it. */
+export function inventoryAssertionKey(): InventoryAssertionKey {
+  return { kid: INVENTORY_ASSERTION_KID, secret: Buffer.from(INVENTORY_ASSERTION_KEY_B64, 'base64') };
+}
+
+/** Mint an `invctl/1` assertion exactly as the merchant API would. */
+export function mintTestInventoryAssertion(claims: InventoryAssertionClaims, now: Date = new Date(), ttlSeconds = 60): string {
+  return mintInventoryAssertion(claims, inventoryAssertionKey(), now, ttlSeconds);
+}
 
 export const dbUrl = `postgresql://${PG_USER}:${PG_PASSWORD}@localhost:${PG_PORT}/daftar`;
 export const appDbUrl = `postgresql://daftar_app:${APP_DB_PASSWORD}@localhost:${PG_PORT}/daftar`;
