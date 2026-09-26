@@ -101,6 +101,13 @@ async function expectAllTogether(call: () => Promise<Response>, status: number, 
   expect(d['audit_events'], `${what}: the routine's audit row, and the entry's when there is one`).toBe(entry ? 2 : 1);
   expect(d['outbox_events'], `${what}: the routine's outbox row, and the entry's when there is one`).toBe(entry ? 2 : 1);
   expect(d['inventory_assertion_uses'], `${what}: one consumed jti`).toBe(1);
+  // T-04: one commit — the accounting jti was consumed by the very transaction that consumed the inventory jti.
+  const sameXact = await ownerPool().query<{ joined: boolean }>(
+    `SELECT EXISTS (SELECT 1 FROM accounting_assertion_uses a
+                     WHERE a.xact = (SELECT u.xact FROM inventory_assertion_uses u WHERE u.business_id = $1 ORDER BY u.consumed_at DESC LIMIT 1)) AS joined`,
+    [A.businessId],
+  );
+  expect(must(sameXact.rows[0]).joined, `${what}: the inventory and accounting assertions in one transaction`).toBe(entry);
   return res;
 }
 
