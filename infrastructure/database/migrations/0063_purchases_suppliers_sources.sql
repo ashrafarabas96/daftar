@@ -95,6 +95,68 @@
 --        SECURITY DEFINER with the pinned path and no grantee, uniformly
 --        (A-15, 0063-E (7)); none decides by `current_user`.
 --
+-- ── Security-review rulings (P3-S4 review, documented for the report) ───
+--
+--   R-34 NOTHING IS ADDED TO A RECEIVED OR CANCELLED PURCHASE (review M1).
+--        The three freeze triggers `stock_source_freeze_purchase`,
+--        `purchase_landed_costs_freeze` and
+--        `purchase_landed_cost_allocations_freeze` are BEFORE INSERT OR
+--        UPDATE OR DELETE (tgtype 31, not §2.3's 27): an INSERT is refused
+--        `inventory.source_line_frozen` unless the parent purchase is a
+--        draft (the draft replace of `purchase_save_draft` is the only
+--        legitimate inserter), and a line is never inserted carrying the
+--        receipt's base share or unit cost. At COMMIT, a line, landed cost
+--        or allocation written in a transaction that leaves its purchase
+--        cancelled is refused the same way: `stock_source_complete_purchase`
+--        no longer accepts a movement-less line of a cancelled purchase, and
+--        `purchase_allocations_consistent()` refuses a cancelled parent and
+--        now also runs on landed-cost INSERT (the new deferred trigger
+--        `purchase_landed_costs_consistent`, tgtype 5), so a landed cost
+--        cannot commit without its allocations either.
+--   R-35 THE INTERNAL PRINCIPAL WRITES ONLY IN ITS SCOPE (review L1). The
+--        restrictive business isolation of every S4 table is split per
+--        command: `business_isolation_read` (FOR SELECT) keeps the internal
+--        admission; `business_isolation_insert`, `_update` and `_delete`
+--        admit nobody but `app_bypass()` or the row whose `business_id` is
+--        `app.business_id`. The tenant is held for UPDATE and DELETE by
+--        `tenant_membership`, the only permissive policy those commands
+--        have for the internal principal (its admission is FOR SELECT). Every
+--        routine writes under its verified scope (the assertion binds
+--        `app.tenant_id` / `app.business_id`); every guard only reads.
+--   R-36 A COVERAGE IS WRITTEN ONLY WITH ITS HEADER (review L2).
+--        `negative_deficit_coverages_same_transaction` (BEFORE INSERT,
+--        tgtype 7, internal DEFINER) refuses
+--        `inventory.source_document_immutable` a coverage whose header
+--        exists but was not created in this transaction: the header's
+--        `created_at` (DEFAULT now(), insert-only) must be this
+--        transaction's `now()` AND its `business_transaction_id` this
+--        transaction's trace. A coverage naming no header passes to the
+--        immediate FK, so the S2 CHECK refusals keep their SQLSTATEs. The
+--        completeness function requires the covering line
+--        (`inventory.source_line_missing` when the variant is not a line of
+--        the origin purchase), and `purchase_source_value_complete()` also
+--        runs on coverage INSERT (the new deferred trigger
+--        `negative_deficit_coverages_value_complete`, tgtype 5), so the
+--        header total always equals Σ its movement values.
+--   R-37 THE FLUSH EXEMPTION FAILS CLOSED (review I2). The deficit and
+--        coverage reads it rests on are scoped by `app.tenant_id` /
+--        `app.business_id` (0059 RLS); unless both GUCs are set and equal
+--        the coverage's own tenant and business at COMMIT, no coverage is
+--        flush-eligible and the formula value is required.
+--   R-38 THE DISCOVERY SEES EVERY S4 GUARD (review I1). The purchase rows of
+--        `inventory_stock_source_guard_gaps()` also report the two
+--        landed-cost freeze triggers (`landed_cost_freeze`,
+--        `allocation_freeze`), `purchase_allocations_consistent`
+--        (`allocation_consistent`) and its landed-cost twin
+--        (`landed_cost_consistent`); the coverage rows also report the
+--        same-transaction guard (`coverage_same_transaction`), the coverage
+--        value check (`coverage_value_complete`) and the two A-16(g) deficit
+--        guards (`deficit_guard`, `deficit_consistent`). Each is checked for
+--        table, name, tgtype, WHEN, column list, deferral, enabled state
+--        ('O'/'A'), function, owner, DEFINER, path and the recorded body
+--        digest, so a disabled, replica-only, re-pointed or body-changed
+--        guard is reported. The sixteen S3 digests stay byte-identical.
+--
 -- Migrations 0000-0062 are FROZEN and untouched.
 
 -- ─────────────────────────────────────────────────────────────────────────
@@ -353,6 +415,9 @@ REVOKE ALL ON stock_source_bridge_negative_inventory_cost_adjustment FROM PUBLIC
 -- subquery, a restrictive business isolation that ADMITS the internal
 -- principals for reading only (USING, never WITH CHECK), and permissive
 -- FOR SELECT admissions for the principals whose triggers judge these rows.
+-- R-35: the restrictive isolation is one policy per command, so the
+-- internal admission exists on SELECT only; INSERT, UPDATE and DELETE hold
+-- every principal but app_bypass() to the row's own app.business_id.
 -- ─────────────────────────────────────────────────────────────────────────
 ALTER TABLE suppliers ENABLE ROW LEVEL SECURITY;
 ALTER TABLE suppliers FORCE ROW LEVEL SECURITY;
@@ -374,18 +439,30 @@ ALTER TABLE stock_source_bridge_negative_inventory_cost_adjustment FORCE ROW LEV
 CREATE POLICY tenant_membership ON suppliers
   USING      (app_bypass() OR (SELECT b.tenant_id FROM businesses b WHERE b.id = suppliers.business_id) = nullif(app_tenant(), '')::uuid)
   WITH CHECK (app_bypass() OR (SELECT b.tenant_id FROM businesses b WHERE b.id = suppliers.business_id) = nullif(app_tenant(), '')::uuid);
-CREATE POLICY business_isolation ON suppliers AS RESTRICTIVE
-  USING      (app_bypass() OR current_user = 'daftar_inventory_internal' OR business_id = nullif(app_business(), '')::uuid)
+CREATE POLICY business_isolation_read ON suppliers AS RESTRICTIVE FOR SELECT
+  USING      (app_bypass() OR current_user = 'daftar_inventory_internal' OR business_id = nullif(app_business(), '')::uuid);
+CREATE POLICY business_isolation_insert ON suppliers AS RESTRICTIVE FOR INSERT
   WITH CHECK (app_bypass() OR business_id = nullif(app_business(), '')::uuid);
+CREATE POLICY business_isolation_update ON suppliers AS RESTRICTIVE FOR UPDATE
+  USING      (app_bypass() OR business_id = nullif(app_business(), '')::uuid)
+  WITH CHECK (app_bypass() OR business_id = nullif(app_business(), '')::uuid);
+CREATE POLICY business_isolation_delete ON suppliers AS RESTRICTIVE FOR DELETE
+  USING      (app_bypass() OR business_id = nullif(app_business(), '')::uuid);
 CREATE POLICY inventory_internal_read ON suppliers
   FOR SELECT TO daftar_inventory_internal USING (true);
 
 CREATE POLICY tenant_membership ON purchases
   USING      (app_bypass() OR (SELECT b.tenant_id FROM businesses b WHERE b.id = purchases.business_id) = nullif(app_tenant(), '')::uuid)
   WITH CHECK (app_bypass() OR (SELECT b.tenant_id FROM businesses b WHERE b.id = purchases.business_id) = nullif(app_tenant(), '')::uuid);
-CREATE POLICY business_isolation ON purchases AS RESTRICTIVE
-  USING      (app_bypass() OR current_user IN ('daftar_inventory_internal', 'daftar_accounting_internal') OR business_id = nullif(app_business(), '')::uuid)
+CREATE POLICY business_isolation_read ON purchases AS RESTRICTIVE FOR SELECT
+  USING      (app_bypass() OR current_user IN ('daftar_inventory_internal', 'daftar_accounting_internal') OR business_id = nullif(app_business(), '')::uuid);
+CREATE POLICY business_isolation_insert ON purchases AS RESTRICTIVE FOR INSERT
   WITH CHECK (app_bypass() OR business_id = nullif(app_business(), '')::uuid);
+CREATE POLICY business_isolation_update ON purchases AS RESTRICTIVE FOR UPDATE
+  USING      (app_bypass() OR business_id = nullif(app_business(), '')::uuid)
+  WITH CHECK (app_bypass() OR business_id = nullif(app_business(), '')::uuid);
+CREATE POLICY business_isolation_delete ON purchases AS RESTRICTIVE FOR DELETE
+  USING      (app_bypass() OR business_id = nullif(app_business(), '')::uuid);
 CREATE POLICY inventory_internal_read ON purchases
   FOR SELECT TO daftar_inventory_internal USING (true);
 CREATE POLICY accounting_validator ON purchases
@@ -394,36 +471,60 @@ CREATE POLICY accounting_validator ON purchases
 CREATE POLICY tenant_membership ON purchase_lines
   USING      (app_bypass() OR (SELECT b.tenant_id FROM businesses b WHERE b.id = purchase_lines.business_id) = nullif(app_tenant(), '')::uuid)
   WITH CHECK (app_bypass() OR (SELECT b.tenant_id FROM businesses b WHERE b.id = purchase_lines.business_id) = nullif(app_tenant(), '')::uuid);
-CREATE POLICY business_isolation ON purchase_lines AS RESTRICTIVE
-  USING      (app_bypass() OR current_user = 'daftar_inventory_internal' OR business_id = nullif(app_business(), '')::uuid)
+CREATE POLICY business_isolation_read ON purchase_lines AS RESTRICTIVE FOR SELECT
+  USING      (app_bypass() OR current_user = 'daftar_inventory_internal' OR business_id = nullif(app_business(), '')::uuid);
+CREATE POLICY business_isolation_insert ON purchase_lines AS RESTRICTIVE FOR INSERT
   WITH CHECK (app_bypass() OR business_id = nullif(app_business(), '')::uuid);
+CREATE POLICY business_isolation_update ON purchase_lines AS RESTRICTIVE FOR UPDATE
+  USING      (app_bypass() OR business_id = nullif(app_business(), '')::uuid)
+  WITH CHECK (app_bypass() OR business_id = nullif(app_business(), '')::uuid);
+CREATE POLICY business_isolation_delete ON purchase_lines AS RESTRICTIVE FOR DELETE
+  USING      (app_bypass() OR business_id = nullif(app_business(), '')::uuid);
 CREATE POLICY inventory_internal_read ON purchase_lines
   FOR SELECT TO daftar_inventory_internal USING (true);
 
 CREATE POLICY tenant_membership ON purchase_landed_costs
   USING      (app_bypass() OR (SELECT b.tenant_id FROM businesses b WHERE b.id = purchase_landed_costs.business_id) = nullif(app_tenant(), '')::uuid)
   WITH CHECK (app_bypass() OR (SELECT b.tenant_id FROM businesses b WHERE b.id = purchase_landed_costs.business_id) = nullif(app_tenant(), '')::uuid);
-CREATE POLICY business_isolation ON purchase_landed_costs AS RESTRICTIVE
-  USING      (app_bypass() OR current_user = 'daftar_inventory_internal' OR business_id = nullif(app_business(), '')::uuid)
+CREATE POLICY business_isolation_read ON purchase_landed_costs AS RESTRICTIVE FOR SELECT
+  USING      (app_bypass() OR current_user = 'daftar_inventory_internal' OR business_id = nullif(app_business(), '')::uuid);
+CREATE POLICY business_isolation_insert ON purchase_landed_costs AS RESTRICTIVE FOR INSERT
   WITH CHECK (app_bypass() OR business_id = nullif(app_business(), '')::uuid);
+CREATE POLICY business_isolation_update ON purchase_landed_costs AS RESTRICTIVE FOR UPDATE
+  USING      (app_bypass() OR business_id = nullif(app_business(), '')::uuid)
+  WITH CHECK (app_bypass() OR business_id = nullif(app_business(), '')::uuid);
+CREATE POLICY business_isolation_delete ON purchase_landed_costs AS RESTRICTIVE FOR DELETE
+  USING      (app_bypass() OR business_id = nullif(app_business(), '')::uuid);
 CREATE POLICY inventory_internal_read ON purchase_landed_costs
   FOR SELECT TO daftar_inventory_internal USING (true);
 
 CREATE POLICY tenant_membership ON purchase_landed_cost_allocations
   USING      (app_bypass() OR (SELECT b.tenant_id FROM businesses b WHERE b.id = purchase_landed_cost_allocations.business_id) = nullif(app_tenant(), '')::uuid)
   WITH CHECK (app_bypass() OR (SELECT b.tenant_id FROM businesses b WHERE b.id = purchase_landed_cost_allocations.business_id) = nullif(app_tenant(), '')::uuid);
-CREATE POLICY business_isolation ON purchase_landed_cost_allocations AS RESTRICTIVE
-  USING      (app_bypass() OR current_user = 'daftar_inventory_internal' OR business_id = nullif(app_business(), '')::uuid)
+CREATE POLICY business_isolation_read ON purchase_landed_cost_allocations AS RESTRICTIVE FOR SELECT
+  USING      (app_bypass() OR current_user = 'daftar_inventory_internal' OR business_id = nullif(app_business(), '')::uuid);
+CREATE POLICY business_isolation_insert ON purchase_landed_cost_allocations AS RESTRICTIVE FOR INSERT
   WITH CHECK (app_bypass() OR business_id = nullif(app_business(), '')::uuid);
+CREATE POLICY business_isolation_update ON purchase_landed_cost_allocations AS RESTRICTIVE FOR UPDATE
+  USING      (app_bypass() OR business_id = nullif(app_business(), '')::uuid)
+  WITH CHECK (app_bypass() OR business_id = nullif(app_business(), '')::uuid);
+CREATE POLICY business_isolation_delete ON purchase_landed_cost_allocations AS RESTRICTIVE FOR DELETE
+  USING      (app_bypass() OR business_id = nullif(app_business(), '')::uuid);
 CREATE POLICY inventory_internal_read ON purchase_landed_cost_allocations
   FOR SELECT TO daftar_inventory_internal USING (true);
 
 CREATE POLICY tenant_membership ON negative_inventory_cost_adjustments
   USING      (app_bypass() OR (SELECT b.tenant_id FROM businesses b WHERE b.id = negative_inventory_cost_adjustments.business_id) = nullif(app_tenant(), '')::uuid)
   WITH CHECK (app_bypass() OR (SELECT b.tenant_id FROM businesses b WHERE b.id = negative_inventory_cost_adjustments.business_id) = nullif(app_tenant(), '')::uuid);
-CREATE POLICY business_isolation ON negative_inventory_cost_adjustments AS RESTRICTIVE
-  USING      (app_bypass() OR current_user IN ('daftar_inventory_internal', 'daftar_accounting_internal') OR business_id = nullif(app_business(), '')::uuid)
+CREATE POLICY business_isolation_read ON negative_inventory_cost_adjustments AS RESTRICTIVE FOR SELECT
+  USING      (app_bypass() OR current_user IN ('daftar_inventory_internal', 'daftar_accounting_internal') OR business_id = nullif(app_business(), '')::uuid);
+CREATE POLICY business_isolation_insert ON negative_inventory_cost_adjustments AS RESTRICTIVE FOR INSERT
   WITH CHECK (app_bypass() OR business_id = nullif(app_business(), '')::uuid);
+CREATE POLICY business_isolation_update ON negative_inventory_cost_adjustments AS RESTRICTIVE FOR UPDATE
+  USING      (app_bypass() OR business_id = nullif(app_business(), '')::uuid)
+  WITH CHECK (app_bypass() OR business_id = nullif(app_business(), '')::uuid);
+CREATE POLICY business_isolation_delete ON negative_inventory_cost_adjustments AS RESTRICTIVE FOR DELETE
+  USING      (app_bypass() OR business_id = nullif(app_business(), '')::uuid);
 CREATE POLICY inventory_internal_read ON negative_inventory_cost_adjustments
   FOR SELECT TO daftar_inventory_internal USING (true);
 CREATE POLICY accounting_validator ON negative_inventory_cost_adjustments
@@ -432,9 +533,15 @@ CREATE POLICY accounting_validator ON negative_inventory_cost_adjustments
 CREATE POLICY tenant_membership ON stock_source_bridge_purchase
   USING      (app_bypass() OR (SELECT b.tenant_id FROM businesses b WHERE b.id = stock_source_bridge_purchase.business_id) = nullif(app_tenant(), '')::uuid)
   WITH CHECK (app_bypass() OR (SELECT b.tenant_id FROM businesses b WHERE b.id = stock_source_bridge_purchase.business_id) = nullif(app_tenant(), '')::uuid);
-CREATE POLICY business_isolation ON stock_source_bridge_purchase AS RESTRICTIVE
-  USING      (app_bypass() OR current_user = 'daftar_inventory_internal' OR business_id = nullif(app_business(), '')::uuid)
+CREATE POLICY business_isolation_read ON stock_source_bridge_purchase AS RESTRICTIVE FOR SELECT
+  USING      (app_bypass() OR current_user = 'daftar_inventory_internal' OR business_id = nullif(app_business(), '')::uuid);
+CREATE POLICY business_isolation_insert ON stock_source_bridge_purchase AS RESTRICTIVE FOR INSERT
   WITH CHECK (app_bypass() OR business_id = nullif(app_business(), '')::uuid);
+CREATE POLICY business_isolation_update ON stock_source_bridge_purchase AS RESTRICTIVE FOR UPDATE
+  USING      (app_bypass() OR business_id = nullif(app_business(), '')::uuid)
+  WITH CHECK (app_bypass() OR business_id = nullif(app_business(), '')::uuid);
+CREATE POLICY business_isolation_delete ON stock_source_bridge_purchase AS RESTRICTIVE FOR DELETE
+  USING      (app_bypass() OR business_id = nullif(app_business(), '')::uuid);
 CREATE POLICY inventory_internal_read ON stock_source_bridge_purchase
   FOR SELECT TO daftar_inventory_internal USING (true);
 
@@ -443,9 +550,15 @@ CREATE POLICY tenant_membership ON stock_source_bridge_negative_inventory_cost_a
                                 WHERE b.id = stock_source_bridge_negative_inventory_cost_adjustment.business_id) = nullif(app_tenant(), '')::uuid)
   WITH CHECK (app_bypass() OR (SELECT b.tenant_id FROM businesses b
                                 WHERE b.id = stock_source_bridge_negative_inventory_cost_adjustment.business_id) = nullif(app_tenant(), '')::uuid);
-CREATE POLICY business_isolation ON stock_source_bridge_negative_inventory_cost_adjustment AS RESTRICTIVE
-  USING      (app_bypass() OR current_user = 'daftar_inventory_internal' OR business_id = nullif(app_business(), '')::uuid)
+CREATE POLICY business_isolation_read ON stock_source_bridge_negative_inventory_cost_adjustment AS RESTRICTIVE FOR SELECT
+  USING      (app_bypass() OR current_user = 'daftar_inventory_internal' OR business_id = nullif(app_business(), '')::uuid);
+CREATE POLICY business_isolation_insert ON stock_source_bridge_negative_inventory_cost_adjustment AS RESTRICTIVE FOR INSERT
   WITH CHECK (app_bypass() OR business_id = nullif(app_business(), '')::uuid);
+CREATE POLICY business_isolation_update ON stock_source_bridge_negative_inventory_cost_adjustment AS RESTRICTIVE FOR UPDATE
+  USING      (app_bypass() OR business_id = nullif(app_business(), '')::uuid)
+  WITH CHECK (app_bypass() OR business_id = nullif(app_business(), '')::uuid);
+CREATE POLICY business_isolation_delete ON stock_source_bridge_negative_inventory_cost_adjustment AS RESTRICTIVE FOR DELETE
+  USING      (app_bypass() OR business_id = nullif(app_business(), '')::uuid);
 CREATE POLICY inventory_internal_read ON stock_source_bridge_negative_inventory_cost_adjustment
   FOR SELECT TO daftar_inventory_internal USING (true);
 
@@ -548,6 +661,10 @@ BEGIN
     IF v_all <> 1 OR v_ok <> 1 THEN
       RAISE EXCEPTION 'inventory.source_movement_set_incomplete: a received purchase line needs exactly its one purchase movement' USING ERRCODE = 'P0001';
     END IF;
+  ELSIF v_status IS DISTINCT FROM 'draft' THEN
+    -- R-34: a line written in a transaction that leaves its purchase
+    -- cancelled (or without a purchase) is never accepted.
+    RAISE EXCEPTION 'inventory.source_line_frozen: a line is never written to a cancelled purchase' USING ERRCODE = 'P0001';
   ELSIF v_all <> 0 THEN
     RAISE EXCEPTION 'inventory.source_movement_set_incomplete: a purchase line that is not received carries no movement' USING ERRCODE = 'P0001';
   END IF;
@@ -609,10 +726,18 @@ DECLARE
   v_last    BOOLEAN;
   v_qty     NUMERIC;
   v_covered NUMERIC;
+  v_scoped  BOOLEAN;
   v_flush   BOOLEAN;
 BEGIN
   SELECT a.warehouse_id, a.origin_source_id INTO v_wh, v_origin
   FROM negative_inventory_cost_adjustments a WHERE a.business_id = NEW.business_id AND a.id = NEW.adjustment_id;
+  -- R-36: the covering line is (origin, variant); a coverage without one is
+  -- not a coverage of its receipt.
+  SELECT l.qty INTO v_qty FROM purchase_lines l
+   WHERE l.business_id = NEW.business_id AND l.purchase_id = v_origin AND l.variant_id = NEW.variant_id;
+  IF v_qty IS NULL THEN
+    RAISE EXCEPTION 'inventory.source_line_missing: a coverage covers only a variant its origin purchase receives' USING ERRCODE = 'P0001';
+  END IF;
   SELECT count(*),
          count(*) FILTER (WHERE m.movement_kind = 'negative_inventory_cost_adjustment' AND m.warehouse_id = v_wh
                             AND m.variant_id = NEW.variant_id AND m.qty_delta = 0),
@@ -631,11 +756,14 @@ BEGIN
       JOIN negative_inventory_deficits d ON d.business_id = c.business_id AND d.id = c.deficit_id
      WHERE c.business_id = NEW.business_id AND c.adjustment_id = NEW.adjustment_id AND c.variant_id = NEW.variant_id
        AND (d.deficit_seq, d.id) > (v_seq, NEW.deficit_id));
-  SELECT l.qty INTO v_qty FROM purchase_lines l
-   WHERE l.business_id = NEW.business_id AND l.purchase_id = v_origin AND l.variant_id = NEW.variant_id;
   SELECT sum(c.qty_covered) INTO v_covered FROM negative_deficit_coverages c
    WHERE c.business_id = NEW.business_id AND c.adjustment_id = NEW.adjustment_id AND c.variant_id = NEW.variant_id;
-  v_flush := v_last AND v_qty IS NOT NULL AND v_qty = v_covered
+  -- R-37: the deficit and coverage reads above are scoped by the session
+  -- GUCs (0059 RLS). Unless both name this coverage's own tenant and
+  -- business at COMMIT, they may have seen nothing, so nothing is exempt.
+  v_scoped := nullif(current_setting('app.tenant_id', true), '')::uuid IS NOT DISTINCT FROM NEW.tenant_id
+              AND nullif(current_setting('app.business_id', true), '')::uuid IS NOT DISTINCT FROM NEW.business_id;
+  v_flush := v_scoped AND v_seq IS NOT NULL AND v_last AND v_qty = v_covered
              AND NOT EXISTS (SELECT 1 FROM negative_inventory_deficits d
                               WHERE d.business_id = NEW.business_id AND d.warehouse_id = v_wh AND d.variant_id = NEW.variant_id
                                 AND d.status <> 'closed');
@@ -656,13 +784,24 @@ END;
 $$;
 
 -- (e) Freeze. A purchase line changes only while its purchase is a draft:
---     deleted by a replace, or given its base share and unit cost once, by
---     the receipt (which updates the lines BEFORE the header).
+--     inserted or deleted by a replace, or given its base share and unit
+--     cost once, by the receipt (which updates the lines BEFORE the header).
+--     R-34: the INSERT is judged too.
 CREATE OR REPLACE FUNCTION stock_source_freeze_purchase() RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $$
 DECLARE
   v_status TEXT;
 BEGIN
+  IF TG_OP = 'INSERT' THEN
+    SELECT p.status INTO v_status FROM purchases p WHERE p.business_id = NEW.business_id AND p.id = NEW.purchase_id;
+    IF v_status IS DISTINCT FROM 'draft' THEN
+      RAISE EXCEPTION 'inventory.source_line_frozen: a line is added only to a draft purchase, by its replace' USING ERRCODE = 'P0001';
+    END IF;
+    IF NEW.base_share_minor IS NOT NULL OR NEW.unit_cost_base_minor IS NOT NULL THEN
+      RAISE EXCEPTION 'inventory.source_line_frozen: a draft line carries no receipt amounts until its receipt' USING ERRCODE = 'P0001';
+    END IF;
+    RETURN NEW;
+  END IF;
   SELECT p.status INTO v_status FROM purchases p WHERE p.business_id = OLD.business_id AND p.id = OLD.purchase_id;
   IF v_status IS DISTINCT FROM 'draft' THEN
     RAISE EXCEPTION 'inventory.source_line_frozen: the lines of a received or cancelled purchase are final' USING ERRCODE = 'P0001';
@@ -683,13 +822,20 @@ BEGIN
 END;
 $$;
 
--- Landed costs and their allocations: deleted by a draft replace, never
--- updated.
+-- Landed costs and their allocations: inserted and deleted by a draft
+-- replace (R-34), never updated.
 CREATE OR REPLACE FUNCTION purchase_landed_cost_freeze() RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $$
 DECLARE
   v_status TEXT;
 BEGIN
+  IF TG_OP = 'INSERT' THEN
+    SELECT p.status INTO v_status FROM purchases p WHERE p.business_id = NEW.business_id AND p.id = NEW.purchase_id;
+    IF v_status IS DISTINCT FROM 'draft' THEN
+      RAISE EXCEPTION 'inventory.source_line_frozen: a landed cost or allocation is added only to a draft purchase, by its replace' USING ERRCODE = 'P0001';
+    END IF;
+    RETURN NEW;
+  END IF;
   SELECT p.status INTO v_status FROM purchases p WHERE p.business_id = OLD.business_id AND p.id = OLD.purchase_id;
   IF TG_OP <> 'DELETE' OR v_status IS DISTINCT FROM 'draft' THEN
     RAISE EXCEPTION 'inventory.source_line_frozen: a landed cost or allocation is replaced with its draft, never changed' USING ERRCODE = 'P0001';
@@ -737,7 +883,8 @@ $$;
 
 -- (f) Header value completeness, at COMMIT: a received purchase's bridged
 --     movement values sum to its base total and to its lines' shares; a
---     coverage header's total is the sum of its bridged movement values.
+--     coverage header's total is the sum of its bridged movement values,
+--     judged on the header's INSERT and on every coverage INSERT (R-36).
 CREATE OR REPLACE FUNCTION purchase_source_value_complete() RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $$
 DECLARE
@@ -747,6 +894,7 @@ DECLARE
   v_shares NUMERIC;
   v_nulls  INTEGER;
   v_n      INTEGER;
+  v_header UUID;
 BEGIN
   IF TG_TABLE_NAME = 'purchases' THEN
     SELECT p.status, p.total_base_minor INTO v_status, v_total FROM purchases p WHERE p.business_id = NEW.business_id AND p.id = NEW.id;
@@ -765,12 +913,17 @@ BEGIN
       RAISE EXCEPTION 'inventory.source_value_mismatch: a purchase that is not received carries no movement value' USING ERRCODE = 'P0001';
     END IF;
   ELSE
-    SELECT a.total_value_base_minor INTO v_total FROM negative_inventory_cost_adjustments a WHERE a.business_id = NEW.business_id AND a.id = NEW.id;
+    IF TG_TABLE_NAME = 'negative_deficit_coverages' THEN
+      v_header := NEW.adjustment_id;
+    ELSE
+      v_header := NEW.id;
+    END IF;
+    SELECT a.total_value_base_minor INTO v_total FROM negative_inventory_cost_adjustments a WHERE a.business_id = NEW.business_id AND a.id = v_header;
     SELECT coalesce(sum(m.value_delta_base_minor), 0) INTO v_sum
     FROM stock_source_bridge_negative_inventory_cost_adjustment b
     JOIN stock_movements m ON m.business_id = b.business_id AND m.source_type = b.source_type AND m.source_id = b.source_id
                           AND m.source_line_id = b.source_line_id AND m.movement_kind = b.movement_kind
-    WHERE b.business_id = NEW.business_id AND b.source_id = NEW.id;
+    WHERE b.business_id = NEW.business_id AND b.source_id = v_header;
     IF v_sum IS DISTINCT FROM v_total::numeric THEN
       RAISE EXCEPTION 'inventory.source_value_mismatch: a coverage header total is not the sum of its movement values' USING ERRCODE = 'P0001';
     END IF;
@@ -804,17 +957,21 @@ END;
 $$;
 
 -- (h) Allocation consistency (P:212 as a database fact), at COMMIT, over the
---     whole purchase of the inserted allocation.
+--     whole purchase of the inserted allocation or landed cost (R-34); never
+--     for a purchase the transaction leaves cancelled.
 CREATE OR REPLACE FUNCTION purchase_allocations_consistent() RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $$
 DECLARE
   v_p     RECORD;
   v_lines INTEGER;
 BEGIN
-  SELECT p.subtotal_txn_minor, p.landed_cost_txn_minor, p.tax_minor, p.total_txn_minor INTO v_p
+  SELECT p.status, p.subtotal_txn_minor, p.landed_cost_txn_minor, p.tax_minor, p.total_txn_minor INTO v_p
   FROM purchases p WHERE p.business_id = NEW.business_id AND p.id = NEW.purchase_id;
   IF NOT FOUND THEN
     RETURN NULL;
+  END IF;
+  IF v_p.status = 'cancelled' THEN
+    RAISE EXCEPTION 'inventory.source_line_frozen: a landed cost or allocation is never written to a cancelled purchase' USING ERRCODE = 'P0001';
   END IF;
   SELECT count(*) INTO v_lines FROM purchase_lines l WHERE l.business_id = NEW.business_id AND l.purchase_id = NEW.purchase_id;
   IF EXISTS (SELECT 1 FROM purchase_landed_costs c
@@ -880,6 +1037,28 @@ BEGIN
 END;
 $$;
 
+-- R-36: a coverage joins only a header created by this very transaction:
+-- the insert-only header's created_at is this transaction's now() and its
+-- business_transaction_id this transaction's trace. A coverage naming no
+-- header at all is left to the immediate FK (after the S2 CHECKs).
+CREATE OR REPLACE FUNCTION negative_deficit_coverage_same_transaction() RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $$
+DECLARE
+  v_created TIMESTAMPTZ;
+  v_trace   UUID;
+BEGIN
+  SELECT a.created_at, a.business_transaction_id INTO v_created, v_trace
+  FROM negative_inventory_cost_adjustments a WHERE a.business_id = NEW.business_id AND a.id = NEW.adjustment_id;
+  IF NOT FOUND THEN
+    RETURN NEW;
+  END IF;
+  IF v_created IS DISTINCT FROM now() OR v_trace IS DISTINCT FROM inventory_business_transaction_id() THEN
+    RAISE EXCEPTION 'inventory.source_document_immutable: a coverage is added to its header only by the transaction that created it' USING ERRCODE = 'P0001';
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
 REVOKE ALL ON FUNCTION stock_binding_requires_purchase() FROM PUBLIC;
 REVOKE ALL ON FUNCTION stock_binding_requires_negative_inventory_cost_adjustment() FROM PUBLIC;
 REVOKE ALL ON FUNCTION stock_source_complete_purchase() FROM PUBLIC;
@@ -894,6 +1073,7 @@ REVOKE ALL ON FUNCTION suppliers_revision_guard() FROM PUBLIC;
 REVOKE ALL ON FUNCTION purchase_allocations_consistent() FROM PUBLIC;
 REVOKE ALL ON FUNCTION negative_inventory_deficits_coverage_guard() FROM PUBLIC;
 REVOKE ALL ON FUNCTION negative_inventory_deficits_coverage_consistent() FROM PUBLIC;
+REVOKE ALL ON FUNCTION negative_deficit_coverage_same_transaction() FROM PUBLIC;
 
 -- ── The stock-side triggers (§2.3, A-15, A-16(g)) ───────────────────────
 CREATE CONSTRAINT TRIGGER stock_binding_requires_purchase
@@ -922,14 +1102,15 @@ CREATE CONSTRAINT TRIGGER stock_source_complete_negative_inventory_cost_adjustme
   AFTER INSERT ON negative_deficit_coverages DEFERRABLE INITIALLY DEFERRED
   FOR EACH ROW EXECUTE FUNCTION stock_source_complete_negative_inventory_cost_adjustment();
 
+-- R-34: the three freeze triggers judge INSERT too (tgtype 31).
 CREATE TRIGGER stock_source_freeze_purchase
-  BEFORE UPDATE OR DELETE ON purchase_lines
+  BEFORE INSERT OR UPDATE OR DELETE ON purchase_lines
   FOR EACH ROW EXECUTE FUNCTION stock_source_freeze_purchase();
 CREATE TRIGGER purchase_landed_costs_freeze
-  BEFORE UPDATE OR DELETE ON purchase_landed_costs
+  BEFORE INSERT OR UPDATE OR DELETE ON purchase_landed_costs
   FOR EACH ROW EXECUTE FUNCTION purchase_landed_cost_freeze();
 CREATE TRIGGER purchase_landed_cost_allocations_freeze
-  BEFORE UPDATE OR DELETE ON purchase_landed_cost_allocations
+  BEFORE INSERT OR UPDATE OR DELETE ON purchase_landed_cost_allocations
   FOR EACH ROW EXECUTE FUNCTION purchase_landed_cost_freeze();
 CREATE TRIGGER purchases_immutable
   BEFORE UPDATE OR DELETE ON purchases
@@ -944,6 +1125,14 @@ CREATE CONSTRAINT TRIGGER purchases_value_complete
 CREATE CONSTRAINT TRIGGER negative_inventory_cost_adjustments_value_complete
   AFTER INSERT ON negative_inventory_cost_adjustments DEFERRABLE INITIALLY DEFERRED
   FOR EACH ROW EXECUTE FUNCTION purchase_source_value_complete();
+-- R-36: the header's Σ is re-judged for every coverage written to it, and a
+-- coverage joins only a header of its own transaction.
+CREATE CONSTRAINT TRIGGER negative_deficit_coverages_value_complete
+  AFTER INSERT ON negative_deficit_coverages DEFERRABLE INITIALLY DEFERRED
+  FOR EACH ROW EXECUTE FUNCTION purchase_source_value_complete();
+CREATE TRIGGER negative_deficit_coverages_same_transaction
+  BEFORE INSERT ON negative_deficit_coverages
+  FOR EACH ROW EXECUTE FUNCTION negative_deficit_coverage_same_transaction();
 
 CREATE TRIGGER suppliers_no_delete
   BEFORE DELETE ON suppliers
@@ -954,6 +1143,10 @@ CREATE TRIGGER suppliers_revision_guard
 
 CREATE CONSTRAINT TRIGGER purchase_allocations_consistent
   AFTER INSERT ON purchase_landed_cost_allocations DEFERRABLE INITIALLY DEFERRED
+  FOR EACH ROW EXECUTE FUNCTION purchase_allocations_consistent();
+-- R-34: a landed cost written without its allocations cannot commit.
+CREATE CONSTRAINT TRIGGER purchase_landed_costs_consistent
+  AFTER INSERT ON purchase_landed_costs DEFERRABLE INITIALLY DEFERRED
   FOR EACH ROW EXECUTE FUNCTION purchase_allocations_consistent();
 
 CREATE TRIGGER negative_inventory_deficits_coverage_guard
@@ -978,6 +1171,7 @@ ALTER FUNCTION suppliers_revision_guard() OWNER TO daftar_inventory_internal;
 ALTER FUNCTION purchase_allocations_consistent() OWNER TO daftar_inventory_internal;
 ALTER FUNCTION negative_inventory_deficits_coverage_guard() OWNER TO daftar_inventory_internal;
 ALTER FUNCTION negative_inventory_deficits_coverage_consistent() OWNER TO daftar_inventory_internal;
+ALTER FUNCTION negative_deficit_coverage_same_transaction() OWNER TO daftar_inventory_internal;
 
 REVOKE CREATE ON SCHEMA public FROM daftar_inventory_internal;
 
@@ -992,6 +1186,10 @@ REVOKE CREATE ON SCHEMA public FROM daftar_inventory_internal;
 -- guards run on the migrator-owned INVOKER `stock_ledger_append_only()`,
 -- whose rows require an invoker function with the recorded body. Every S4
 -- guard function's body is recorded as the SHA-256 of its prosrc.
+-- R-38: the purchase set also covers the landed-cost freeze and
+-- consistency guards, the coverage set the same-transaction and coverage
+-- value guards and the two A-16(g) deficit guards; the three freeze
+-- triggers are tgtype 31 (R-34).
 --
 -- The 0061 description of the S3 strengthening follows unchanged:
 --
@@ -1046,12 +1244,17 @@ DECLARE
     "inventory_source_value_complete()": "908bc14db1094becba6402c0171237a5d91481874a55dd16eef17894cc59d5d4",
     "stock_binding_requires_purchase()": "2f4a78a635df4ea85a0eb9a898752c80860badd64a68ce4038a3c081d9075e3f",
     "stock_binding_requires_negative_inventory_cost_adjustment()": "bf707fa32e584fb9e01f88a4766f8788dc32f2b96b5d59fd50ed9861e8b75cfa",
-    "stock_source_complete_purchase()": "56a0195da247014576e6eedfa6c38686581c2d016faa0f27617d87dea4da512f",
+    "stock_source_complete_purchase()": "7a49c422e4e56c628ac1b4e6e45d8af0c9dcdc049bcc614e0f7829f80a050b58",
     "stock_source_complete_purchase_header()": "28f7f06240e62911f7b68efa3256e753443bf67c4ecf893ab174895a79582154",
-    "stock_source_complete_negative_inventory_cost_adjustment()": "b8deda27221c49a8a2716dcac6a58d314c34a0ba4e7caac8f7822912610946c0",
-    "stock_source_freeze_purchase()": "501ae02d97cb94fb1b44ea271b4d60e277bcd21ed6fef58194983d00593381cc",
+    "stock_source_complete_negative_inventory_cost_adjustment()": "5d7ecf37ab953d1409412aa8ce4f8896e9ae566272e5076f408bdbbc18b25c68",
+    "stock_source_freeze_purchase()": "97adaaaa95a5b2c18e80d34ea26a4eee5e397e1bf25dd727ddfc9a0cf86f31ab",
     "purchase_header_guard()": "8b9b92eaca2ff01327106ee8aee049b8bd2f9834f51bbb7f31128a66da3c6cef",
-    "purchase_source_value_complete()": "87c044cc7e62b62e0c7bc18ecc0f12a7b970f723ef8dd29f06cff066fba8a71b"
+    "purchase_source_value_complete()": "033535f199feae9d1747772d3cf32cfbe9f07979fa05f48471ac73475b4e7a9e",
+    "purchase_landed_cost_freeze()": "3eda69587e6a9a8046ff1d7852e1ac7d0dec0d05ae633d1b78663a091634379a",
+    "purchase_allocations_consistent()": "ac783691817646b8ac3528766a3203ec30c3f594a6f997b7f5779504ab625748",
+    "negative_deficit_coverage_same_transaction()": "77e09d0b7e15b2368ca2ace6f7de5933964777c5b3e5a1f58fb5723eb156b663",
+    "negative_inventory_deficits_coverage_guard()": "a6fb57abb419fea3eb0f75c1c81ee0189226c5354fca7fe6197fb0f1ae76a925",
+    "negative_inventory_deficits_coverage_consistent()": "883da444f892ddbb0ad16f5d77c124057f46304e966262b80a63c3bfc1867b6b"
   }';
 BEGIN
   FOR v_type IN SELECT t.source_type FROM stock_source_types t ORDER BY t.source_type LOOP
@@ -1202,9 +1405,18 @@ BEGIN
         FROM (VALUES
           ('purchase', 'source_complete',  'purchase_lines', 'stock_source_complete_purchase', 21, true,  'stock_source_complete_purchase()',        true),
           ('purchase', 'header_complete',  'purchases',      'purchases_received_complete',    17, true,  'stock_source_complete_purchase_header()', true),
-          ('purchase', 'source_freeze',    'purchase_lines', 'stock_source_freeze_purchase',   27, false, 'stock_source_freeze_purchase()',          true),
+          ('purchase', 'source_freeze',    'purchase_lines', 'stock_source_freeze_purchase',   31, false, 'stock_source_freeze_purchase()',          true),
           ('purchase', 'header_immutable', 'purchases',      'purchases_immutable',            27, false, 'purchase_header_guard()',                 true),
           ('purchase', 'value_complete',   'purchases',      'purchases_value_complete',       17, true,  'purchase_source_value_complete()',        true),
+          -- R-38: the landed-cost guards (R-34 events).
+          ('purchase', 'landed_cost_freeze',     'purchase_landed_costs',            'purchase_landed_costs_freeze',            31, false,
+           'purchase_landed_cost_freeze()', true),
+          ('purchase', 'allocation_freeze',      'purchase_landed_cost_allocations', 'purchase_landed_cost_allocations_freeze', 31, false,
+           'purchase_landed_cost_freeze()', true),
+          ('purchase', 'allocation_consistent',  'purchase_landed_cost_allocations', 'purchase_allocations_consistent',         5,  true,
+           'purchase_allocations_consistent()', true),
+          ('purchase', 'landed_cost_consistent', 'purchase_landed_costs',            'purchase_landed_costs_consistent',        5,  true,
+           'purchase_allocations_consistent()', true),
           ('negative_inventory_cost_adjustment', 'source_complete', 'negative_deficit_coverages',
            'stock_source_complete_negative_inventory_cost_adjustment', 5, true, 'stock_source_complete_negative_inventory_cost_adjustment()', true),
           ('negative_inventory_cost_adjustment', 'source_freeze', 'negative_deficit_coverages',
@@ -1212,7 +1424,16 @@ BEGIN
           ('negative_inventory_cost_adjustment', 'header_immutable', 'negative_inventory_cost_adjustments',
            'negative_inventory_cost_adjustments_immutable', 27, false, 'stock_ledger_append_only()', false),
           ('negative_inventory_cost_adjustment', 'value_complete', 'negative_inventory_cost_adjustments',
-           'negative_inventory_cost_adjustments_value_complete', 5, true, 'purchase_source_value_complete()', true)
+           'negative_inventory_cost_adjustments_value_complete', 5, true, 'purchase_source_value_complete()', true),
+          -- R-38: the coverage guards (R-36) and the A-16(g) deficit guards.
+          ('negative_inventory_cost_adjustment', 'coverage_same_transaction', 'negative_deficit_coverages',
+           'negative_deficit_coverages_same_transaction', 7, false, 'negative_deficit_coverage_same_transaction()', true),
+          ('negative_inventory_cost_adjustment', 'coverage_value_complete', 'negative_deficit_coverages',
+           'negative_deficit_coverages_value_complete', 5, true, 'purchase_source_value_complete()', true),
+          ('negative_inventory_cost_adjustment', 'deficit_guard', 'negative_inventory_deficits',
+           'negative_inventory_deficits_coverage_guard', 27, false, 'negative_inventory_deficits_coverage_guard()', true),
+          ('negative_inventory_cost_adjustment', 'deficit_consistent', 'negative_inventory_deficits',
+           'negative_inventory_deficits_coverage_consistent', 17, true, 'negative_inventory_deficits_coverage_consistent()', true)
         ) AS e(st, missing, tbl, tg, typ, deferred, fn, internal)
         WHERE e.st = v_type
         ORDER BY e.missing
@@ -1239,7 +1460,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION inventory_stock_source_guard_gaps() IS
-  'P3-AL-51 §B, strengthened by P3-S3 (A-16, review F3). Catalogue-only discovery: for every stock_source_types row, reports each missing or mis-shaped guard — bridge (a plain table), bridge_rls (enabled and forced), bridge_pk (exactly business_id, source_id, source_line_id, movement_kind), bridge_source_type (a stored generated constant equal to the type), bridge_binding_fk (validated RESTRICT, five columns in order), bridge_line_fk (validated RESTRICT, business_id, source_id, source_line_id; for an S3 type to exactly its line table and key), bridge_immutable (ROW BEFORE UPDATE OR DELETE on every column, no WHEN, enabled for origin sessions, on stock_ledger_append_only()), binding_trigger (ROW AFTER INSERT deferred constraint trigger on its own internal DEFINER function with the pinned path and the WHEN on the type). For the four S3 types also source_complete, source_freeze, header_immutable, value_complete and (stocktake) header_complete, each by table, name, event, column list, WHEN, deferral, enabled state and expected internal DEFINER pinned function; and every S3 guard function''s body against the SHA-256 of its prosrc recorded at migration time. Replaced by P3-S4 (0063, §2.3): the two S4 types (purchase, negative_inventory_cost_adjustment) get the S3 bridge_line_fk (purchase_lines / negative_deficit_coverages), bridge_immutable and binding_trigger checks, and their own set — source_complete, header_complete (purchase), source_freeze, header_immutable, value_complete — with every S4 guard function''s body recorded the same way (the two stock_ledger_append_only() guards as migrator-owned INVOKER). Every migration that registers a source type asserts it returns no row. Migrator-owned INVOKER; no EXECUTE grant.';
+  'P3-AL-51 §B, strengthened by P3-S3 (A-16, review F3). Catalogue-only discovery: for every stock_source_types row, reports each missing or mis-shaped guard — bridge (a plain table), bridge_rls (enabled and forced), bridge_pk (exactly business_id, source_id, source_line_id, movement_kind), bridge_source_type (a stored generated constant equal to the type), bridge_binding_fk (validated RESTRICT, five columns in order), bridge_line_fk (validated RESTRICT, business_id, source_id, source_line_id; for an S3 type to exactly its line table and key), bridge_immutable (ROW BEFORE UPDATE OR DELETE on every column, no WHEN, enabled for origin sessions, on stock_ledger_append_only()), binding_trigger (ROW AFTER INSERT deferred constraint trigger on its own internal DEFINER function with the pinned path and the WHEN on the type). For the four S3 types also source_complete, source_freeze, header_immutable, value_complete and (stocktake) header_complete, each by table, name, event, column list, WHEN, deferral, enabled state and expected internal DEFINER pinned function; and every S3 guard function''s body against the SHA-256 of its prosrc recorded at migration time. Replaced by P3-S4 (0063, §2.3): the two S4 types (purchase, negative_inventory_cost_adjustment) get the S3 bridge_line_fk (purchase_lines / negative_deficit_coverages), bridge_immutable and binding_trigger checks, and their own set — source_complete, header_complete (purchase), source_freeze, header_immutable, value_complete — with every S4 guard function''s body recorded the same way (the two stock_ledger_append_only() guards as migrator-owned INVOKER); per the P3-S4 review also landed_cost_freeze, allocation_freeze, allocation_consistent, landed_cost_consistent (purchase) and coverage_same_transaction, coverage_value_complete, deficit_guard, deficit_consistent (negative_inventory_cost_adjustment), the three freeze triggers judging INSERT too. Every migration that registers a source type asserts it returns no row. Migrator-owned INVOKER; no EXECUTE grant.';
 
 REVOKE ALL ON FUNCTION inventory_stock_source_guard_gaps() FROM PUBLIC;
 
@@ -1506,7 +1727,8 @@ DECLARE
     'suppliers_revision_guard()'::regprocedure,
     'purchase_allocations_consistent()'::regprocedure,
     'negative_inventory_deficits_coverage_guard()'::regprocedure,
-    'negative_inventory_deficits_coverage_consistent()'::regprocedure];
+    'negative_inventory_deficits_coverage_consistent()'::regprocedure,
+    'negative_deficit_coverage_same_transaction()'::regprocedure];
   c_acc_fns  CONSTANT REGPROCEDURE[] := ARRAY[
     'accounting_purchase_entry_complete()'::regprocedure,
     'accounting_negative_inventory_cost_adjustment_entry_complete()'::regprocedure,
@@ -1569,9 +1791,61 @@ BEGIN
   IF v_detail IS DISTINCT FROM 'inventory.probe_rollback: purchase:header_immutable' THEN
     RAISE EXCEPTION 'inventory.source_guard_missing: the replaced discovery did not report a header guard on another function (%)', v_detail;
   END IF;
+  -- R-38 (review I1): the added guards are seen disabled, replica-only,
+  -- re-pointed, back on the old events, or with a changed body.
+  BEGIN
+    ALTER TABLE purchase_landed_costs DISABLE TRIGGER purchase_landed_costs_freeze;
+    ALTER TABLE purchase_landed_cost_allocations ENABLE REPLICA TRIGGER purchase_allocations_consistent;
+    SELECT string_agg(g.source_type || ':' || g.missing, ', ' ORDER BY g.source_type, g.missing) INTO v_detail FROM inventory_stock_source_guard_gaps() g;
+    RAISE EXCEPTION 'inventory.probe_rollback: %', coalesce(v_detail, '');
+  EXCEPTION WHEN raise_exception THEN
+    GET STACKED DIAGNOSTICS v_detail = MESSAGE_TEXT;
+  END;
+  IF v_detail IS DISTINCT FROM 'inventory.probe_rollback: purchase:allocation_consistent, purchase:landed_cost_freeze' THEN
+    RAISE EXCEPTION 'inventory.source_guard_missing: the replaced discovery did not report a disabled or replica-only landed-cost guard (%)', v_detail;
+  END IF;
+  BEGIN
+    DROP TRIGGER stock_source_freeze_purchase ON purchase_lines;
+    CREATE TRIGGER stock_source_freeze_purchase BEFORE UPDATE OR DELETE ON purchase_lines
+      FOR EACH ROW EXECUTE FUNCTION stock_source_freeze_purchase();
+    DROP TRIGGER negative_deficit_coverages_value_complete ON negative_deficit_coverages;
+    CREATE CONSTRAINT TRIGGER negative_deficit_coverages_value_complete AFTER INSERT ON negative_deficit_coverages
+      DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION stock_source_complete_negative_inventory_cost_adjustment();
+    SELECT string_agg(g.source_type || ':' || g.missing, ', ' ORDER BY g.source_type, g.missing) INTO v_detail FROM inventory_stock_source_guard_gaps() g;
+    RAISE EXCEPTION 'inventory.probe_rollback: %', coalesce(v_detail, '');
+  EXCEPTION WHEN raise_exception THEN
+    GET STACKED DIAGNOSTICS v_detail = MESSAGE_TEXT;
+  END;
+  IF v_detail IS DISTINCT FROM 'inventory.probe_rollback: negative_inventory_cost_adjustment:coverage_value_complete, purchase:source_freeze' THEN
+    RAISE EXCEPTION 'inventory.source_guard_missing: the replaced discovery did not report a re-pointed or INSERT-blind guard (%)', v_detail;
+  END IF;
+  BEGIN
+    GRANT CREATE ON SCHEMA public TO daftar_inventory_internal;
+    SET LOCAL ROLE daftar_inventory_internal;
+    CREATE OR REPLACE FUNCTION negative_deficit_coverage_same_transaction() RETURNS trigger
+    LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $probe$
+    BEGIN
+      RETURN NEW;
+    END;
+    $probe$;
+    RESET ROLE;
+    REVOKE CREATE ON SCHEMA public FROM daftar_inventory_internal;
+    SELECT string_agg(g.source_type || ':' || g.missing, ', ' ORDER BY g.source_type, g.missing) INTO v_detail FROM inventory_stock_source_guard_gaps() g;
+    RAISE EXCEPTION 'inventory.probe_rollback: %', coalesce(v_detail, '');
+  EXCEPTION WHEN raise_exception THEN
+    GET STACKED DIAGNOSTICS v_detail = MESSAGE_TEXT;
+  END;
+  IF v_detail IS DISTINCT FROM 'inventory.probe_rollback: negative_inventory_cost_adjustment:coverage_same_transaction' THEN
+    RAISE EXCEPTION 'inventory.source_guard_missing: the replaced discovery did not report a neutered same-transaction guard body (%)', v_detail;
+  END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_trigger g WHERE g.tgname = 'stock_bridge_immutable_purchase' AND g.tgenabled = 'O')
      OR NOT EXISTS (SELECT 1 FROM pg_trigger g WHERE g.tgname = 'purchases_immutable'
                       AND g.tgfoid = 'purchase_header_guard()'::regprocedure)
+     OR NOT EXISTS (SELECT 1 FROM pg_trigger g WHERE g.tgname = 'purchase_landed_costs_freeze' AND g.tgenabled = 'O')
+     OR NOT EXISTS (SELECT 1 FROM pg_trigger g WHERE g.tgname = 'purchase_allocations_consistent' AND g.tgenabled = 'O')
+     OR NOT EXISTS (SELECT 1 FROM pg_trigger g WHERE g.tgname = 'stock_source_freeze_purchase' AND g.tgtype = 31)
+     OR NOT EXISTS (SELECT 1 FROM pg_trigger g WHERE g.tgname = 'negative_deficit_coverages_value_complete'
+                      AND g.tgfoid = 'purchase_source_value_complete()'::regprocedure)
      OR EXISTS (SELECT 1 FROM inventory_stock_source_guard_gaps())
      OR has_schema_privilege('daftar_inventory_internal', 'public', 'CREATE') THEN
     RAISE EXCEPTION 'inventory.migration_end_state_invalid: a discovery probe did not roll back';
@@ -1650,6 +1924,27 @@ BEGIN
     END IF;
   END LOOP;
 
+  -- R-35 (review L1): on every S4 table the restrictive isolation is exactly
+  -- one policy per command, and only the FOR SELECT one admits a principal
+  -- by name; no restrictive write policy admits anything but the row's own
+  -- business (or app_bypass()).
+  FOREACH v_table IN ARRAY c_docs || c_bridges LOOP
+    SELECT array_agg(p.polname::text || ':' || p.polcmd::text ORDER BY p.polname) INTO v_actual
+    FROM pg_policy p WHERE p.polrelid = ('public.' || v_table)::regclass AND NOT p.polpermissive;
+    IF v_actual IS DISTINCT FROM ARRAY['business_isolation_delete:d', 'business_isolation_insert:a',
+                                       'business_isolation_read:r', 'business_isolation_update:w'] THEN
+      RAISE EXCEPTION 'purchase.migration_end_state_invalid: % restrictive isolation is not one policy per command, found %', v_table, v_actual;
+    END IF;
+    IF EXISTS (SELECT 1 FROM pg_policy p
+                WHERE p.polrelid = ('public.' || v_table)::regclass AND NOT p.polpermissive AND p.polcmd <> 'r'
+                  AND (coalesce(pg_get_expr(p.polqual, p.polrelid), '(app_bypass() OR (business_id = (NULLIF(app_business(), ''''::text))::uuid))')
+                         <> '(app_bypass() OR (business_id = (NULLIF(app_business(), ''''::text))::uuid))'
+                       OR coalesce(pg_get_expr(p.polwithcheck, p.polrelid), '(app_bypass() OR (business_id = (NULLIF(app_business(), ''''::text))::uuid))')
+                         <> '(app_bypass() OR (business_id = (NULLIF(app_business(), ''''::text))::uuid))')) THEN
+      RAISE EXCEPTION 'purchase.migration_end_state_invalid: a restrictive write policy on % admits more than its own business', v_table;
+    END IF;
+  END LOOP;
+
   -- The internal principal: SELECT, INSERT on the six tables, the two
   -- bridges and the coverages; DELETE on the three draft-replaced tables;
   -- SELECT on the deficits; exactly the A-18 column UPDATEs.
@@ -1712,7 +2007,7 @@ BEGIN
   IF v_detail IS NOT NULL THEN
     RAISE EXCEPTION 'purchase.migration_end_state_invalid: function(s) with the wrong owner, security or path: %', v_detail;
   END IF;
-  IF (SELECT count(*) FROM pg_proc p WHERE p.oid = ANY (c_inv_fns) OR p.oid = ANY (c_acc_fns)) <> 18 THEN
+  IF (SELECT count(*) FROM pg_proc p WHERE p.oid = ANY (c_inv_fns) OR p.oid = ANY (c_acc_fns)) <> 19 THEN
     RAISE EXCEPTION 'purchase.migration_end_state_invalid: a P3-S4 source-side function is missing';
   END IF;
   FOREACH v_fn IN ARRAY c_inv_fns || c_acc_fns || ARRAY['inventory_stock_source_guard_gaps()'::regprocedure] LOOP
@@ -1746,10 +2041,16 @@ BEGIN
     ('negative_deficit_coverages', 'stock_source_complete_negative_inventory_cost_adjustment', 5,
      'stock_source_complete_negative_inventory_cost_adjustment()', 'daftar_inventory_internal', true, true),
     ('negative_deficit_coverages', 'negative_deficit_coverages_append_only', 27, 'stock_ledger_append_only()', NULL, false, false),
-    ('purchase_lines', 'stock_source_freeze_purchase', 27, 'stock_source_freeze_purchase()', 'daftar_inventory_internal', true, false),
-    ('purchase_landed_costs', 'purchase_landed_costs_freeze', 27, 'purchase_landed_cost_freeze()', 'daftar_inventory_internal', true, false),
-    ('purchase_landed_cost_allocations', 'purchase_landed_cost_allocations_freeze', 27, 'purchase_landed_cost_freeze()',
+    ('purchase_lines', 'stock_source_freeze_purchase', 31, 'stock_source_freeze_purchase()', 'daftar_inventory_internal', true, false),
+    ('purchase_landed_costs', 'purchase_landed_costs_freeze', 31, 'purchase_landed_cost_freeze()', 'daftar_inventory_internal', true, false),
+    ('purchase_landed_cost_allocations', 'purchase_landed_cost_allocations_freeze', 31, 'purchase_landed_cost_freeze()',
      'daftar_inventory_internal', true, false),
+    ('purchase_landed_costs', 'purchase_landed_costs_consistent', 5, 'purchase_allocations_consistent()',
+     'daftar_inventory_internal', true, true),
+    ('negative_deficit_coverages', 'negative_deficit_coverages_same_transaction', 7, 'negative_deficit_coverage_same_transaction()',
+     'daftar_inventory_internal', true, false),
+    ('negative_deficit_coverages', 'negative_deficit_coverages_value_complete', 5, 'purchase_source_value_complete()',
+     'daftar_inventory_internal', true, true),
     ('purchases', 'purchases_immutable', 27, 'purchase_header_guard()', 'daftar_inventory_internal', true, false),
     ('negative_inventory_cost_adjustments', 'negative_inventory_cost_adjustments_immutable', 27, 'stock_ledger_append_only()', NULL, false, false),
     ('purchases', 'purchases_value_complete', 17, 'purchase_source_value_complete()', 'daftar_inventory_internal', true, true),
