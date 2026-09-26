@@ -24,6 +24,8 @@ import {
   S2_ROUTINES,
   S3_BRIDGES,
   S3_OPERATION_MOVEMENT_KINDS,
+  S4_BRIDGES,
+  S4_OPERATION_MOVEMENT_KINDS,
   applyOne,
   assertMigrationState,
   attempt,
@@ -71,7 +73,13 @@ afterAll(async () => {
 const ROLES_AND_PUBLIC = [...RUNTIME_ROLES.map((r) => r.role), 'public'];
 const WRITE_PRIVS = ['INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER'] as const;
 const COLUMN_PRIVS = ['INSERT', 'UPDATE', 'REFERENCES'] as const;
-const APP_READABLE = new Set(['stock_movements', 'stock_levels']);
+const APP_READABLE = new Set([
+  'stock_movements',
+  'stock_levels',
+  // P3-S4 (0063/0064, contract A-18): daftar_app reads the deficits and the coverages (the replay and read models).
+  'negative_inventory_deficits',
+  'negative_deficit_coverages',
+]);
 const PINNED = ['search_path=pg_catalog, public, pg_temp'];
 
 /**
@@ -104,10 +112,13 @@ const A01: Record<string, readonly string[]> = {
   stock_movement_kinds: ['SELECT'],
   inventory_operation_movement_kinds: ['SELECT'],
   negative_inventory_deficits: ['SELECT'],
-  negative_deficit_coverages: [],
+  // P3-S4 (0063, contract A-18): the receipt's coverage writes the coverage detail (A-16).
+  negative_deficit_coverages: ['INSERT', 'SELECT'],
   stock_source_types: [],
 };
 const A01_UPDATE_COLUMNS = ['avg_unit_cost_base_minor', 'last_stock_seq', 'on_hand', 'valuation_base_minor'];
+/** P3-S4 (0063, contract A-18): the coverage decrements a deficit's two mutable columns, and nothing else. */
+const A01_S4_DEFICIT_UPDATE_COLUMNS = ['status', 'uncovered_qty'];
 
 async function internalDeviations(q: Queryable): Promise<string[]> {
   const r = await q.query<{ rel: string; priv: string; held: boolean }>(
@@ -127,7 +138,10 @@ async function internalDeviations(q: Queryable): Promise<string[]> {
     [INTERNAL, [...S2_RELATIONS]],
   );
   for (const x of cols.rows) {
-    const expected = x.rel === 'stock_levels' && A01_UPDATE_COLUMNS.includes(x.col);
+    const expected =
+      (x.rel === 'stock_levels' && A01_UPDATE_COLUMNS.includes(x.col)) ||
+      // P3-S4 (0063/0064)
+      (x.rel === 'negative_inventory_deficits' && A01_S4_DEFICIT_UPDATE_COLUMNS.includes(x.col));
     if (x.held !== expected) out.push(`${INTERNAL} UPDATE(${x.col}) ${x.rel}${expected ? ' MISSING' : ''}`);
   }
   return out.sort();
@@ -143,7 +157,7 @@ function endStateBlock(file: string): string {
 }
 
 describe('T-02 — the live grant matrix (P:154)', () => {
-  it('T-02.1: the ledger relations discovered from pg_class are exactly the eight S2 relations the contract names plus the four P3-S3 bridges', async () => {
+  it('T-02.1: the ledger relations discovered from pg_class are exactly the eight S2 relations the contract names plus the four P3-S3 bridges, the two P3-S4 bridges and the P3-S4 coverage header', async () => {
     const r = await ownerPool().query<{ relname: string }>(
       `SELECT relname::text FROM pg_class
         WHERE relnamespace = 'public'::regnamespace AND relkind IN ('r', 'p', 'v', 'm', 'f')
@@ -152,10 +166,12 @@ describe('T-02 — the live grant matrix (P:154)', () => {
     );
     // P3-S3 (0061, A-15(a)): the four bridges match the same `stock\_%`
     // discovery; nothing else does.
-    expect(r.rows.map((x) => x.relname)).toEqual([...S2_RELATIONS, ...S3_BRIDGES].sort());
+    // P3-S4 (0063/0064, A-15(a), A-16(a)): the two S4 bridges match `stock\_%`
+    // and the coverage header `negative\_%`; nothing else does.
+    expect(r.rows.map((x) => x.relname)).toEqual([...S2_RELATIONS, ...S3_BRIDGES, ...S4_BRIDGES, 'negative_inventory_cost_adjustments'].sort());
   });
 
-  it('T-02.1: for every runtime role and PUBLIC, every write privilege (table and column level) is absent; daftar_app reads exactly stock_movements and stock_levels', async () => {
+  it('T-02.1: for every runtime role and PUBLIC, every write privilege (table and column level) is absent; daftar_app reads exactly stock_movements and stock_levels (P3-S4: and the deficits and coverages)', async () => {
     expect(await runtimeMatrixDeviations(ownerPool())).toEqual([]);
   });
 
@@ -261,7 +277,7 @@ describe('T-02 — the live grant matrix (P:154)', () => {
     }
   });
 
-  it('T-02.5: the internal role holds exactly the A-01 set (no DELETE/TRUNCATE anywhere, UPDATE of exactly four cache columns) and no CREATE on public', async () => {
+  it('T-02.5: the internal role holds exactly the A-01 set (no DELETE/TRUNCATE anywhere, UPDATE of exactly four cache columns; P3-S4: and two deficit columns, coverage INSERT) and no CREATE on public', async () => {
     expect(await internalDeviations(ownerPool())).toEqual([]);
     const r = await ownerPool().query<{ create: boolean; login: boolean }>(
       `SELECT has_schema_privilege($1, 'public', 'CREATE') AS create, rolcanlogin AS login FROM pg_roles WHERE rolname = $1`,
@@ -282,7 +298,17 @@ describe('T-02 — the live grant matrix (P:154)', () => {
       await rewindToP3S2Checkpoint(c);
       expectAccepted(await attempt(c, () => c.query(endStateBlock('0059_inventory_stock_ledger.sql'))), '0059-E at the P3-S2 checkpoint');
       await c.query('GRANT INSERT ON stock_levels TO daftar_app');
-      expect(await runtimeMatrixDeviations(c)).toEqual(['daftar_app INSERT stock_levels', 'daftar_app INSERT(column) stock_levels']);
+      expect(await runtimeMatrixDeviations(c)).toEqual([
+        'daftar_app INSERT stock_levels',
+        'daftar_app INSERT(column) stock_levels',
+        // P3-S4 (0063/0064): the rewind revoked daftar_app's S4 reads of the
+        // deficits and coverages (0059-E (5) predates them), which the live
+        // checker reports as missing — exactly these four, nothing else.
+        'daftar_app SELECT negative_deficit_coverages MISSING',
+        'daftar_app SELECT negative_inventory_deficits MISSING',
+        'daftar_app SELECT(column) negative_deficit_coverages MISSING',
+        'daftar_app SELECT(column) negative_inventory_deficits MISSING',
+      ]);
       expectRefused(await attempt(c, () => c.query(endStateBlock('0059_inventory_stock_ledger.sql'))), 'P0001', 'inventory.authority_leak', '0059-E');
       // The reported leak is a real write path: daftar_app, in scope, inserts a cache row.
       await setScope(c, biz);
@@ -682,7 +708,7 @@ describe('T-16 — primitive authority (P:168)', () => {
     });
   });
 
-  it('T-16.9: with the fixture op’s mapping removed (the end-of-migration state: exactly the six P3-S3 rows, none for it), a consumed fixture op → inventory.assertion_wrong_operation', async () => {
+  it('T-16.9: with the fixture op’s mapping removed (the end-of-migration state: exactly the six P3-S3 rows and the two P3-S4 rows, none for it), a consumed fixture op → inventory.assertion_wrong_operation', async () => {
     await withRolledBackFixture(async (c) => {
       // Control first: with the mapping present the same call writes.
       expectAccepted(await tryApply(c, biz, [req(K1, 'purchase', '1', { unitCost: '1' })]), 'mapping present');
@@ -691,7 +717,11 @@ describe('T-16 — primitive authority (P:168)', () => {
         (
           await c.query<{ r: string }>(`SELECT op_code || ':' || movement_kind AS r FROM inventory_operation_movement_kinds ORDER BY op_code, movement_kind`)
         ).rows.map((x) => x.r),
-      ).toEqual(S3_OPERATION_MOVEMENT_KINDS.map(([op, kind]) => `${op}:${kind}`));
+      ).toEqual([
+        ...S3_OPERATION_MOVEMENT_KINDS.map(([op, kind]) => `${op}:${kind}`),
+        // P3-S4 (0063/0064)
+        ...S4_OPERATION_MOVEMENT_KINDS.map(([op, kind]) => `${op}:${kind}`),
+      ]);
       expectRefused(await tryApply(c, biz, [req(K1, 'purchase', '1', { unitCost: '1' })]), 'P0001', 'inventory.assertion_wrong_operation');
     });
   });
@@ -721,7 +751,7 @@ describe('T-16 — primitive authority (P:168)', () => {
 });
 
 describe('§2.4 — the complete S2 trigger set, from pg_trigger', () => {
-  it('the S2 tables carry exactly the four append/retain triggers and the deferred zero-value constraint trigger, plus the four P3-S3 binding-side guards on stock_source_bindings; products carries products_20_unit_history_lock and product_variants carries product_variants_20_stock_identity_lock', async () => {
+  it('the S2 tables carry exactly the four append/retain triggers and the deferred zero-value constraint trigger, plus the four P3-S3 binding-side guards on stock_source_bindings (P3-S4: plus the two S4 binding guards, the two deficit triggers and the coverage completeness trigger); products carries products_20_unit_history_lock and product_variants carries product_variants_20_stock_identity_lock', async () => {
     const r = await ownerPool().query<{
       tg: string;
       rel: string;
@@ -745,62 +775,117 @@ describe('§2.4 — the complete S2 trigger set, from pg_trigger', () => {
     expect(migratorOwner).not.toBe(INTERNAL);
     // tgtype bits: ROW 1, BEFORE 2, INSERT 4, DELETE 8, UPDATE 16.
     const invoker = { enabled: 'O', constraint: false, deferrable: false, deferred: false, owner: migratorOwner, secdef: false };
-    expect(r.rows).toEqual([
-      { tg: 'negative_deficit_coverages_append_only', rel: 'negative_deficit_coverages', fn: 'stock_ledger_append_only()', type: 1 + 2 + 8 + 16, ...invoker },
-      {
-        tg: 'product_variants_20_stock_identity_lock',
-        rel: 'product_variants',
-        fn: 'product_variants_20_stock_identity_lock()',
-        type: 1 + 2 + 16,
-        enabled: 'O',
-        constraint: false,
-        deferrable: false,
-        deferred: false,
-        owner: INTERNAL,
-        secdef: true,
-      },
-      {
-        tg: 'products_20_unit_history_lock',
-        rel: 'products',
-        fn: 'products_20_unit_history_lock()',
-        type: 1 + 2 + 16,
-        enabled: 'O',
-        constraint: false,
-        deferrable: false,
-        deferred: false,
-        owner: INTERNAL,
-        secdef: true,
-      },
-      // P3-S3 (0061, §2.3): one deferred binding → bridge guard per registered
-      // source type, AFTER INSERT, internal DEFINER.
-      ...['inventory_adjustment', 'inventory_opening', 'inventory_transfer', 'stocktake'].map((st) => ({
-        tg: `stock_binding_requires_${st}`,
-        rel: 'stock_source_bindings',
-        fn: `stock_binding_requires_${st}()`,
-        type: 1 + 4,
-        enabled: 'O',
-        constraint: true,
-        deferrable: true,
-        deferred: true,
-        owner: INTERNAL,
-        secdef: true,
-      })),
-      { tg: 'stock_levels_retain', rel: 'stock_levels', fn: 'stock_levels_retain()', type: 1 + 2 + 8, ...invoker },
-      {
-        tg: 'stock_levels_zero_on_hand_zero_value',
-        rel: 'stock_levels',
-        fn: 'stock_levels_zero_on_hand_zero_value()',
-        type: 1 + 4 + 16,
-        enabled: 'O',
-        constraint: true,
-        deferrable: true,
-        deferred: true,
-        owner: INTERNAL,
-        secdef: true,
-      },
-      { tg: 'stock_movements_append_only', rel: 'stock_movements', fn: 'stock_ledger_append_only()', type: 1 + 2 + 8 + 16, ...invoker },
-      { tg: 'stock_source_bindings_append_only', rel: 'stock_source_bindings', fn: 'stock_ledger_append_only()', type: 1 + 2 + 8 + 16, ...invoker },
-    ]);
+    expect(r.rows).toEqual(
+      [
+        { tg: 'negative_deficit_coverages_append_only', rel: 'negative_deficit_coverages', fn: 'stock_ledger_append_only()', type: 1 + 2 + 8 + 16, ...invoker },
+        {
+          tg: 'product_variants_20_stock_identity_lock',
+          rel: 'product_variants',
+          fn: 'product_variants_20_stock_identity_lock()',
+          type: 1 + 2 + 16,
+          enabled: 'O',
+          constraint: false,
+          deferrable: false,
+          deferred: false,
+          owner: INTERNAL,
+          secdef: true,
+        },
+        {
+          tg: 'products_20_unit_history_lock',
+          rel: 'products',
+          fn: 'products_20_unit_history_lock()',
+          type: 1 + 2 + 16,
+          enabled: 'O',
+          constraint: false,
+          deferrable: false,
+          deferred: false,
+          owner: INTERNAL,
+          secdef: true,
+        },
+        // P3-S3 (0061, §2.3): one deferred binding → bridge guard per registered
+        // source type, AFTER INSERT, internal DEFINER.
+        ...['inventory_adjustment', 'inventory_opening', 'inventory_transfer', 'stocktake'].map((st) => ({
+          tg: `stock_binding_requires_${st}`,
+          rel: 'stock_source_bindings',
+          fn: `stock_binding_requires_${st}()`,
+          type: 1 + 4,
+          enabled: 'O',
+          constraint: true,
+          deferrable: true,
+          deferred: true,
+          owner: INTERNAL,
+          secdef: true,
+        })),
+        { tg: 'stock_levels_retain', rel: 'stock_levels', fn: 'stock_levels_retain()', type: 1 + 2 + 8, ...invoker },
+        {
+          tg: 'stock_levels_zero_on_hand_zero_value',
+          rel: 'stock_levels',
+          fn: 'stock_levels_zero_on_hand_zero_value()',
+          type: 1 + 4 + 16,
+          enabled: 'O',
+          constraint: true,
+          deferrable: true,
+          deferred: true,
+          owner: INTERNAL,
+          secdef: true,
+        },
+        { tg: 'stock_movements_append_only', rel: 'stock_movements', fn: 'stock_ledger_append_only()', type: 1 + 2 + 8 + 16, ...invoker },
+        { tg: 'stock_source_bindings_append_only', rel: 'stock_source_bindings', fn: 'stock_ledger_append_only()', type: 1 + 2 + 8 + 16, ...invoker },
+        // P3-S4 (0063/0064, §2.3, A-15(b), A-16(g)): the two binding → bridge
+        // guards, AFTER INSERT, internal DEFINER; the deficit guard (BEFORE
+        // UPDATE OR DELETE) and its deferred consistency check (AFTER UPDATE);
+        // the coverage completeness check (deferred, AFTER INSERT on the
+        // coverages). Sorted into the tgname order of the query.
+        ...['negative_inventory_cost_adjustment', 'purchase'].map((st) => ({
+          tg: `stock_binding_requires_${st}`,
+          rel: 'stock_source_bindings',
+          fn: `stock_binding_requires_${st}()`,
+          type: 1 + 4,
+          enabled: 'O',
+          constraint: true,
+          deferrable: true,
+          deferred: true,
+          owner: INTERNAL,
+          secdef: true,
+        })),
+        {
+          tg: 'negative_inventory_deficits_coverage_guard',
+          rel: 'negative_inventory_deficits',
+          fn: 'negative_inventory_deficits_coverage_guard()',
+          type: 1 + 2 + 8 + 16,
+          enabled: 'O',
+          constraint: false,
+          deferrable: false,
+          deferred: false,
+          owner: INTERNAL,
+          secdef: true,
+        },
+        {
+          tg: 'negative_inventory_deficits_coverage_consistent',
+          rel: 'negative_inventory_deficits',
+          fn: 'negative_inventory_deficits_coverage_consistent()',
+          type: 1 + 16,
+          enabled: 'O',
+          constraint: true,
+          deferrable: true,
+          deferred: true,
+          owner: INTERNAL,
+          secdef: true,
+        },
+        {
+          tg: 'stock_source_complete_negative_inventory_cost_adjustment',
+          rel: 'negative_deficit_coverages',
+          fn: 'stock_source_complete_negative_inventory_cost_adjustment()',
+          type: 1 + 4,
+          enabled: 'O',
+          constraint: true,
+          deferrable: true,
+          deferred: true,
+          owner: INTERNAL,
+          secdef: true,
+        },
+      ].sort((a, b) => (a.tg < b.tg ? -1 : a.tg > b.tg ? 1 : 0)),
+    );
   });
 
   it('the 0060 end-state block passes at the P3-S2 checkpoint and refuses a zero-value trigger that is no longer deferred (control)', async () => {

@@ -136,6 +136,34 @@ export const S3_BRIDGES = [
   'stock_source_bridge_stocktake',
 ] as const;
 
+// P3-S4 (0063/0064) — the P3-S4 registrations (docs/PHASE_3_S4_CONTRACT.md
+// §2.1 step 7, §2.5, §7.3 row 17). 0063 registered the two stock source types
+// and 0064 the seven operation kinds with their two op→kind rows, each
+// `registered_by = 'P3-S4'`; the migration state is now exactly S1 + S3 + S4.
+
+/** P3-S4 (0063/0064): the two stock source types 0063 registers (§2.1 step 7), sorted. */
+export const S4_SOURCE_TYPES = ['negative_inventory_cost_adjustment', 'purchase'] as const;
+
+/** P3-S4 (0063/0064): the seven operation kinds 0064 registers (§2.5, A-03), sorted. */
+export const S4_OPERATION_KINDS = [
+  'purchase.cancel',
+  'purchase.draft',
+  'purchase.receive',
+  'supplier.archive',
+  'supplier.create',
+  'supplier.reactivate',
+  'supplier.update',
+] as const;
+
+/** P3-S4 (0063/0064): the two op→movement-kind rows 0064 registers (§2.5), sorted by (op, kind). */
+export const S4_OPERATION_MOVEMENT_KINDS: readonly (readonly [op: string, kind: string])[] = [
+  ['purchase.receive', 'negative_inventory_cost_adjustment'],
+  ['purchase.receive', 'purchase'],
+];
+
+/** P3-S4 (0063/0064): the two bridges 0063 creates (A-15(a)); each references `stock_source_bindings`. */
+export const S4_BRIDGES = ['stock_source_bridge_negative_inventory_cost_adjustment', 'stock_source_bridge_purchase'] as const;
+
 // ── small utilities ────────────────────────────────────────────────────────
 
 /** Narrow an optional to its value, loudly (the accounting-posting precedent). */
@@ -548,6 +576,10 @@ export async function withRolledBackFixture<T>(
  * fixture: exactly the P3-S3 registrations (none by P3-S2, whose own claim
  * "S2 registered nothing" stays exact), the three P3-S1 kinds plus the seven
  * P3-S3 kinds, and no trace of the fixture.
+ *
+ * P3-S4 (0063/0064): plus exactly the P3-S4 registrations — the two source
+ * types, the two op→kind rows and the seven kinds — so the state is exactly
+ * S1 + S3 + S4 and an unauthorized extra row in any registry fails it.
  */
 export async function assertMigrationState(q: Queryable = ownerPool()): Promise<void> {
   const r = await q.query<{ types: string[]; mapping: string[]; kinds: string[]; uses: number; rels: number; fns: number }>(
@@ -560,9 +592,22 @@ export async function assertMigrationState(q: Queryable = ownerPool()): Promise<
             (SELECT count(*)::int FROM pg_proc WHERE proname LIKE 'stock\\_fixture\\_%' OR proname = 'stock_binding_requires_fixture_line') AS fns`,
   );
   expect(r.rows[0]).toEqual({
-    types: S3_SOURCE_TYPES.map((t) => `${t}:P3-S3`),
-    mapping: S3_OPERATION_MOVEMENT_KINDS.map(([op, kind]) => `${op}:${kind}:P3-S3`),
-    kinds: [...S1_OPERATION_KINDS, ...S3_OPERATION_KINDS].sort(),
+    types: [
+      ...S3_SOURCE_TYPES.map((t) => `${t}:P3-S3`),
+      // P3-S4 (0063/0064)
+      ...S4_SOURCE_TYPES.map((t) => `${t}:P3-S4`),
+    ].sort(),
+    mapping: [
+      ...S3_OPERATION_MOVEMENT_KINDS.map(([op, kind]) => `${op}:${kind}:P3-S3`),
+      // P3-S4 (0063/0064)
+      ...S4_OPERATION_MOVEMENT_KINDS.map(([op, kind]) => `${op}:${kind}:P3-S4`),
+    ],
+    kinds: [
+      ...S1_OPERATION_KINDS,
+      ...S3_OPERATION_KINDS,
+      // P3-S4 (0063/0064)
+      ...S4_OPERATION_KINDS,
+    ].sort(),
     uses: 0,
     rels: 0,
     fns: 0,
@@ -582,8 +627,52 @@ export async function assertMigrationState(q: Queryable = ownerPool()): Promise<
  * Every step is counted, so a rewind that removed more or less than the
  * P3-S3 rows fails here rather than silently proving something else. Must be
  * called while no stock row of a P3-S3 source type exists (the FKs refuse).
+ *
+ * P3-S4 (0063/0064): 0063/0064 changed the same inspected state again, so the
+ * rewind first undoes them, each step counted the same way:
+ *
+ * - the two P3-S4 op→kind rows, then the two P3-S4 source types (0059-E (2),
+ *   0060-E (6));
+ * - the S4 grants 0059-E (5)/(6) inspect (A-18): daftar_app's SELECT on the
+ *   deficits and the coverages, the internal principal's column UPDATE
+ *   (uncovered_qty, status) on the deficits and its INSERT, SELECT on the
+ *   coverages. The exact S4 grant set is asserted present before it is
+ *   revoked and absent after, so a rewind can neither revoke a grant S4 did
+ *   not make nor leave one it did.
  */
 export async function rewindToP3S2Checkpoint(c: Queryable): Promise<void> {
+  // P3-S4 (0063/0064)
+  const s4Mapping = await c.query(`DELETE FROM inventory_operation_movement_kinds WHERE registered_by = 'P3-S4'`);
+  expect(s4Mapping.rowCount, 'the P3-S4 op→kind rows').toBe(S4_OPERATION_MOVEMENT_KINDS.length);
+  const s4Types = await c.query(`DELETE FROM stock_source_types WHERE registered_by = 'P3-S4'`);
+  expect(s4Types.rowCount, 'the P3-S4 stock source types').toBe(S4_SOURCE_TYPES.length);
+  const s4GrantsSql = `SELECT has_table_privilege('daftar_app', 'negative_inventory_deficits', 'SELECT') AS app_deficits_select,
+            has_table_privilege('daftar_app', 'negative_deficit_coverages', 'SELECT') AS app_coverages_select,
+            (SELECT array_agg(a.attname::text ORDER BY a.attname) FROM pg_attribute a
+              WHERE a.attrelid = 'negative_inventory_deficits'::regclass AND a.attnum > 0 AND NOT a.attisdropped
+                AND has_column_privilege($1, 'negative_inventory_deficits', a.attname, 'UPDATE')) AS internal_deficits_update,
+            has_table_privilege($1, 'negative_deficit_coverages', 'INSERT') AS internal_coverages_insert,
+            has_table_privilege($1, 'negative_deficit_coverages', 'SELECT') AS internal_coverages_select`;
+  const s4Before = await c.query(s4GrantsSql, [INTERNAL]);
+  expect(s4Before.rows[0], 'the P3-S4 grants the 0059 end-state block inspects').toEqual({
+    app_deficits_select: true,
+    app_coverages_select: true,
+    internal_deficits_update: ['status', 'uncovered_qty'],
+    internal_coverages_insert: true,
+    internal_coverages_select: true,
+  });
+  await c.query(`REVOKE SELECT ON negative_inventory_deficits, negative_deficit_coverages FROM daftar_app`);
+  await c.query(`REVOKE UPDATE (uncovered_qty, status) ON negative_inventory_deficits FROM ${INTERNAL}`);
+  await c.query(`REVOKE INSERT, SELECT ON negative_deficit_coverages FROM ${INTERNAL}`);
+  const s4After = await c.query(s4GrantsSql, [INTERNAL]);
+  expect(s4After.rows[0], 'the P3-S4 grants, revoked').toEqual({
+    app_deficits_select: false,
+    app_coverages_select: false,
+    internal_deficits_update: null,
+    internal_coverages_insert: false,
+    internal_coverages_select: false,
+  });
+
   const mapping = await c.query(`DELETE FROM inventory_operation_movement_kinds WHERE registered_by = 'P3-S3'`);
   expect(mapping.rowCount, 'the P3-S3 op→kind rows').toBe(S3_OPERATION_MOVEMENT_KINDS.length);
   const types = await c.query(`DELETE FROM stock_source_types WHERE registered_by = 'P3-S3'`);
@@ -604,7 +693,8 @@ export async function rewindToP3S2Checkpoint(c: Queryable): Promise<void> {
  * so the stock rows go by TRUNCATE (deliberately unguarded, E-24). Since 0061
  * the four P3-S3 bridges reference `stock_source_bindings`, and PostgreSQL
  * refuses to truncate a referenced table without its referencing ones
- * (0A000), so they are named in the same statement.
+ * (0A000), so they are named in the same statement. P3-S4 (0063/0064): so
+ * are the two P3-S4 bridges.
  */
 export async function removeCommittedFixture(): Promise<void> {
   const c = await ownerClient();
@@ -614,7 +704,8 @@ export async function removeCommittedFixture(): Promise<void> {
     const lines = must((await c.query<{ r: string | null }>(`SELECT to_regclass('public.stock_fixture_lines')::text AS r`)).rows[0]).r;
     const extra = [bridge, lines].filter((x): x is string => x !== null);
     await c.query(
-      `TRUNCATE ${['stock_source_bindings', 'stock_movements', 'stock_levels', 'negative_deficit_coverages', 'negative_inventory_deficits', ...S3_BRIDGES, ...extra].join(', ')}`,
+      // P3-S4 (0063/0064): the two S4 bridges reference stock_source_bindings too.
+      `TRUNCATE ${['stock_source_bindings', 'stock_movements', 'stock_levels', 'negative_deficit_coverages', 'negative_inventory_deficits', ...S3_BRIDGES, ...S4_BRIDGES, ...extra].join(', ')}`,
     );
     await c.query(`DROP TRIGGER IF EXISTS stock_binding_requires_${FIXTURE_SOURCE_TYPE} ON stock_source_bindings`);
     await c.query(`DROP TABLE IF EXISTS stock_source_bridge_fixture_line`);

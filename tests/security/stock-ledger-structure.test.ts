@@ -25,6 +25,9 @@ import {
   S3_BRIDGES,
   S3_OPERATION_MOVEMENT_KINDS,
   S3_SOURCE_TYPES,
+  S4_BRIDGES,
+  S4_OPERATION_MOVEMENT_KINDS,
+  S4_SOURCE_TYPES,
   SEEDED_KINDS,
   applyAsApp,
   applyOne,
@@ -154,6 +157,42 @@ async function ownerBridge(c: Queryable, sourceId: string, lineId: string, kind 
 }
 
 /**
+ * P3-S4 (0063/0064): a coverage names a REAL coverage header since 0063
+ * (`negative_deficit_coverages_adjustment_fk`, immediate). As the owner, in
+ * the caller's (rolled-back) transaction: a supplier, a draft purchase on the
+ * key's warehouse and a zero-valued `negative_inventory_cost_adjustments`
+ * header originating from it (one header per purchase, TL-7). A zero header
+ * owes no binding and no movement, so every COMMIT-time check it carries
+ * holds; returns the header id.
+ */
+async function ownerCoverageHeader(c: Queryable, key: Key = K1): Promise<string> {
+  const supplierId = randomUUID();
+  const purchaseId = randomUUID();
+  const adjustmentId = randomUUID();
+  const intent = 'a'.repeat(64);
+  await c.query(
+    `INSERT INTO suppliers (tenant_id, business_id, id, name, status, revision, create_intent_sha256, last_intent_sha256,
+                            business_transaction_id, created_by, updated_by)
+     VALUES ($1, $2, $3, 'Fixture supplier', 'active', 1, $4, $4, $5, $6, $6)`,
+    [biz.tenantId, biz.businessId, supplierId, intent, randomUUID(), biz.userId],
+  );
+  await c.query(
+    `INSERT INTO purchases (tenant_id, business_id, id, supplier_id, warehouse_id, currency_code, document_date, status, revision,
+                            draft_intent_sha256, subtotal_txn_minor, landed_cost_txn_minor, total_txn_minor, business_transaction_id, created_by)
+     SELECT $1, $2, $3, $4, $5, b.base_currency, DATE '2026-01-15', 'draft', 1, $6, 1, 0, 1, $7, $8
+       FROM businesses b WHERE b.id = $2`,
+    [biz.tenantId, biz.businessId, purchaseId, supplierId, key.warehouseId, intent, randomUUID(), biz.userId],
+  );
+  await c.query(
+    `INSERT INTO negative_inventory_cost_adjustments (tenant_id, business_id, id, warehouse_id, origin_source_type, origin_source_id,
+                                                      occurred_on, total_value_base_minor, actor_user_id, business_transaction_id)
+     VALUES ($1, $2, $3, $4, 'purchase', $5, DATE '2026-01-15', 0, $6, $7)`,
+    [biz.tenantId, biz.businessId, adjustmentId, key.warehouseId, purchaseId, biz.userId, randomUUID()],
+  );
+  return adjustmentId;
+}
+
+/**
  * A REAL COMMIT of a fixture transaction that must be refused at COMMIT. The
  * failed COMMIT rolls the fixture back with everything else (A-11). Should it
  * ever be accepted, the committed fixture is removed before the case fails,
@@ -228,11 +267,13 @@ describe('T-01 — the ledger is append-only for every writer, the owner include
       [biz.tenantId, biz.businessId, deficitId, K1.warehouseId, K1.variantId, row.movement_id],
     );
     const coverageId = randomUUID();
+    // P3-S4 (0063/0064): the coverage names a real header (negative_deficit_coverages_adjustment_fk).
+    const adjustmentId = await ownerCoverageHeader(c);
     await c.query(
       `INSERT INTO negative_deficit_coverages (tenant_id, business_id, id, adjustment_id, deficit_id, variant_id, qty_covered,
                                                provisional_unit_cost_base_minor, actual_unit_cost_base_minor)
        VALUES ($1, $2, $3, $4, $5, $6, 1, 0, 0)`,
-      [biz.tenantId, biz.businessId, coverageId, randomUUID(), deficitId, K1.variantId],
+      [biz.tenantId, biz.businessId, coverageId, adjustmentId, deficitId, K1.variantId],
     );
     return { movementId: row.movement_id, coverageId, deficitId, sourceId: src, lineId: line };
   }
@@ -361,10 +402,11 @@ describe('T-01 — the ledger is append-only for every writer, the owner include
       // run first; they pass — the rows are complete. Every table referencing
       // `stock_source_bindings` must be named with it (0A000 otherwise): the
       // fixture bridge and, since 0061, the four P3-S3 bridges.
+      // P3-S4 (0063/0064): and, since 0063, the two P3-S4 bridges.
       expectAccepted(await attempt(c, () => c.query('SET CONSTRAINTS ALL IMMEDIATE')), 'deferred checks');
       const o = await attempt(c, () =>
         c.query(
-          `TRUNCATE stock_source_bridge_fixture_line, ${S3_BRIDGES.join(', ')}, stock_source_bindings, negative_deficit_coverages, negative_inventory_deficits, stock_movements, stock_levels`,
+          `TRUNCATE stock_source_bridge_fixture_line, ${S3_BRIDGES.join(', ')}, ${S4_BRIDGES.join(', ')}, stock_source_bindings, negative_deficit_coverages, negative_inventory_deficits, stock_movements, stock_levels`,
         ),
       );
       expectAccepted(o, 'owner TRUNCATE');
@@ -434,14 +476,25 @@ describe('T-13 — the closed source registry (P:165)', () => {
     // P3-S2 registered nothing (L:1992); 0061 registered the four stock source
     // types and 0062 the six op→kind rows (docs/PHASE_3_S3_CONTRACT.md §2.1
     // step 7, §2.5), all by P3-S3.
+    // P3-S4 (0063/0064): 0063 registered the two stock source types and 0064
+    // the two op→kind rows (docs/PHASE_3_S4_CONTRACT.md §2.1 step 7, §2.5),
+    // all by P3-S4; nothing else.
     const r = await ownerPool().query<{ types: string[]; mapping: string[] }>(
       `SELECT (SELECT array_agg(source_type || ':' || registered_by ORDER BY source_type) FROM stock_source_types) AS types,
               (SELECT array_agg(op_code || ':' || movement_kind || ':' || registered_by ORDER BY op_code, movement_kind)
                  FROM inventory_operation_movement_kinds) AS mapping`,
     );
     expect(r.rows[0]).toEqual({
-      types: S3_SOURCE_TYPES.map((t) => `${t}:P3-S3`),
-      mapping: S3_OPERATION_MOVEMENT_KINDS.map(([op, kind]) => `${op}:${kind}:P3-S3`),
+      types: [
+        ...S3_SOURCE_TYPES.map((t) => `${t}:P3-S3`),
+        // P3-S4 (0063/0064)
+        ...S4_SOURCE_TYPES.map((t) => `${t}:P3-S4`),
+      ].sort(),
+      mapping: [
+        ...S3_OPERATION_MOVEMENT_KINDS.map(([op, kind]) => `${op}:${kind}:P3-S3`),
+        // P3-S4 (0063/0064)
+        ...S4_OPERATION_MOVEMENT_KINDS.map(([op, kind]) => `${op}:${kind}:P3-S4`),
+      ],
     });
     const k = await ownerPool().query<{ kind: string; qtySign: string; requiresReason: boolean; by: string }>(
       `SELECT movement_kind AS kind, qty_sign AS "qtySign", requires_reason AS "requiresReason", registered_by AS by FROM stock_movement_kinds ORDER BY movement_kind`,
@@ -829,15 +882,20 @@ describe('T-20 — deficit and coverage entities, ordering only', () => {
       const m = await movementOnK1(c);
       const d = randomUUID();
       await deficit(c, m, { id: d });
-      const coverage = (qty: string, prov = '0', actual = '0') =>
-        attempt(c, () =>
+      // P3-S4 (0063/0064): every coverage names a real header of its own (the
+      // adjustment FK is immediate and a header covers a deficit once). The
+      // CHECK refusals keep their 23514: a CHECK fires before the FK.
+      const coverage = async (qty: string, prov = '0', actual = '0') => {
+        const adjustmentId = await ownerCoverageHeader(c);
+        return attempt(c, () =>
           c.query(
             `INSERT INTO negative_deficit_coverages (tenant_id, business_id, adjustment_id, deficit_id, variant_id, qty_covered,
                                                      provisional_unit_cost_base_minor, actual_unit_cost_base_minor)
              VALUES ($1, $2, $3, $4, $5, $6::numeric, $7::numeric, $8::numeric)`,
-            [biz.tenantId, biz.businessId, randomUUID(), d, K1.variantId, qty, prov, actual],
+            [biz.tenantId, biz.businessId, adjustmentId, d, K1.variantId, qty, prov, actual],
           ),
         );
+      };
       for (const [q, p, a] of [
         ['0', '0', '0'],
         ['-1', '0', '0'],
@@ -847,6 +905,11 @@ describe('T-20 — deficit and coverage entities, ordering only', () => {
         expectRefused(await coverage(q, p, a), '23514', null, `coverage ${q} ${p} ${a}`);
       }
       expectAccepted(await coverage('1'));
+      // P3-S4 (0063/0064): a coverage now queues its deferred completeness
+      // check (stock_source_complete_negative_inventory_cost_adjustment), and
+      // PostgreSQL refuses the ALTER below while an event is pending (55006).
+      // Running the checks now also proves the accepted row survives them.
+      expectAccepted(await attempt(c, () => c.query('SET CONSTRAINTS ALL IMMEDIATE')), 'deferred checks');
       // Negative control: with the CHECK dropped, a zero coverage is accepted.
       await scratch(c, async () => {
         await c.query(`ALTER TABLE negative_deficit_coverages DROP CONSTRAINT ${await checkOn(c, 'negative_deficit_coverages', 'qty_covered')}`);
@@ -877,8 +940,12 @@ describe('PM-44 (M-2) — the live writer sweep over pg_proc', () => {
       });
   }
 
-  it('the only internal-owned stock writer is R3, and its first statement is inventory_assertion_current(', async () => {
-    expect(await writers(ownerPool())).toEqual([{ fn: 'inventory_apply_stock_movements(inventory_movement_request[])', assertedFirst: true }]);
+  it('the internal-owned stock writers are exactly R3 and (P3-S4) purchase_cover_deficits, and the first statement of each is inventory_assertion_current(', async () => {
+    expect(await writers(ownerPool())).toEqual([
+      { fn: 'inventory_apply_stock_movements(inventory_movement_request[])', assertedFirst: true },
+      // P3-S4 (0063/0064): the receipt's coverage writes deficits and coverages (A-16), assertion first.
+      { fn: 'purchase_cover_deficits(uuid,uuid)', assertedFirst: true },
+    ]);
   });
 
   it('control: an internal-owned writer without the assertion, or with it after the write, is flagged', async () => {
@@ -896,6 +963,8 @@ describe('PM-44 (M-2) — the live writer sweep over pg_proc', () => {
         { fn: 'inventory_apply_stock_movements(inventory_movement_request[])', assertedFirst: true },
         { fn: 'pm44_violator_a()', assertedFirst: false },
         { fn: 'pm44_violator_b()', assertedFirst: false },
+        // P3-S4 (0063/0064)
+        { fn: 'purchase_cover_deficits(uuid,uuid)', assertedFirst: true },
       ]);
     } finally {
       await c.query('ROLLBACK');
