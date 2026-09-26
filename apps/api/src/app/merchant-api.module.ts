@@ -31,6 +31,9 @@ import { InventoryAdjustmentService } from '../modules/inventory/inventory-adjus
 import { InventoryStocktakeService } from '../modules/inventory/inventory-stocktake.service';
 import { InventoryOpeningService } from '../modules/inventory/inventory-opening.service';
 import { InventoryMovementsController } from '../modules/inventory/inventory-movements.controller';
+import { SuppliersController } from '../modules/purchasing/suppliers.controller';
+import { PurchasesController } from '../modules/purchasing/purchases.controller';
+import { purchasingProviders } from '../modules/purchasing/purchasing.module';
 
 /**
  * MERCHANT PROCESS (Directive §16). Composes the merchant HTTP surface and
@@ -59,6 +62,8 @@ export class MerchantApiModule implements NestModule {
         AccountingController,
         InventoryConfigurationController,
         InventoryMovementsController,
+        SuppliersController,
+        PurchasesController,
       ],
       providers: [
         ...coreProviders(config, options),
@@ -78,6 +83,10 @@ export class MerchantApiModule implements NestModule {
         InventoryAdjustmentService,
         InventoryStocktakeService,
         InventoryOpeningService,
+        // P3-S4: suppliers, purchase drafts, receipts and the live AP reads. The
+        // receipt mints through the same accounting minter and posts through the
+        // same adapter, on the accounting-aware inventory seam.
+        ...purchasingProviders(),
         TenancyService,
         StructureService,
         InvitationsService,

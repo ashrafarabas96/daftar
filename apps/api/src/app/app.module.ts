@@ -33,6 +33,9 @@ import { InventoryAdjustmentService } from '../modules/inventory/inventory-adjus
 import { InventoryStocktakeService } from '../modules/inventory/inventory-stocktake.service';
 import { InventoryOpeningService } from '../modules/inventory/inventory-opening.service';
 import { InventoryMovementsController } from '../modules/inventory/inventory-movements.controller';
+import { SuppliersController } from '../modules/purchasing/suppliers.controller';
+import { PurchasesController } from '../modules/purchasing/purchases.controller';
+import { purchasingProviders } from '../modules/purchasing/purchasing.module';
 import { AdminService } from '../modules/admin/admin.service';
 import { AdminController } from '../modules/admin/admin.controller';
 import { OutboxPublisher } from '../modules/outbox/publisher';
@@ -69,6 +72,8 @@ export class AppModule implements NestModule {
         AccountingController,
         InventoryConfigurationController,
         InventoryMovementsController,
+        SuppliersController,
+        PurchasesController,
         AdminController,
       ],
       providers: [
@@ -89,6 +94,10 @@ export class AppModule implements NestModule {
         InventoryAdjustmentService,
         InventoryStocktakeService,
         InventoryOpeningService,
+        // P3-S4: suppliers, purchase drafts, receipts and the live AP reads. The
+        // receipt mints through the same accounting minter and posts through the
+        // same adapter, on the accounting-aware inventory seam.
+        ...purchasingProviders(),
         ...workerProviders(config, options),
         // Only PROCESS_MODE=all composes the reconciler beside the worker,
         // and only because this composition exists for dev and tests;
