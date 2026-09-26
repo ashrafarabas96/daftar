@@ -622,7 +622,7 @@ describe('T-17.6 typed refusals and their statuses (§3)', () => {
     expect(refusal(late)).toEqual({ status: 409, inventoryCode: 'inventory.stocktake_state_invalid' });
   });
 
-  it('Case B: a stock total off the opening position is opening_valuation_mismatch (409) with both totals; the exact one binds (201)', async () => {
+  it('Case B: a stock total off the opening position is opening_valuation_mismatch (409) carrying the code only, never an amount (review F4); the exact one binds (201)', async () => {
     const B = await onboardS3Business(t, owner, 'http-b');
     const c = await ownerClient();
     let openingBalanceId = '';
@@ -641,7 +641,8 @@ describe('T-17.6 typed refusals and their statuses (§3)', () => {
     const post = (body: Record<string, unknown>): Promise<Response> => t.request.post('/v1/inventory/openings').set(asMember(owner, B.businessId)).send(body);
     const off = await post(opening('1250.5'));
     expect(off.status).toBe(409);
-    expect(off.body.error.details).toEqual({ inventoryCode: 'inventory.opening_valuation_mismatch', stockTotalMinor: '5002', openingPositionMinor: '5000' });
+    expect(off.body.error.details).toEqual({ inventoryCode: 'inventory.opening_valuation_mismatch' });
+    expect(String(off.body.error.message)).not.toMatch(/5002|5000/);
     const exact = await post(opening('1250'));
     expect(exact.status).toBe(201);
     expect(exact.body).toMatchObject({ case: 'opening_balance_bound', openingBalanceId, matchedAmountMinor: '5000', journalEntryId: null });

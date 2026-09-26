@@ -451,10 +451,10 @@ describe('T-08.6 the A-14(c) double-count guard on the opening-balance workflow'
     });
   });
 
-  it('superseding the opening balance a Case B opening is bound to: opening_balance_inventory_bound; an unbound one supersedes', async () => {
-    const setup = async (bind: boolean): Promise<string> => {
-      const A = world.A;
-      const positions = [position('inventory', 'D', 5000n)];
+  it('a bound opening balance: its reversal is refused (R-13), and even past that the supersede is refused (A-14(c)); an unbound one reverses and supersedes', async () => {
+    const A = world.A;
+    const positions = [position('inventory', 'D', 5000n)];
+    const post = async (bind: boolean): Promise<{ openingBalanceId: string; entryId: string }> => {
       const ob = await postOpeningBalanceInTx(c, A, day, positions);
       if (bind) {
         await runOpening(
@@ -466,22 +466,38 @@ describe('T-08.6 the A-14(c) double-count guard on the opening-balance workflow'
           }),
         );
       }
-      // Supersession's own precondition (0047): the opening balance's entry is reversed first.
-      await reverseInTx(c, A, ob.entryId, day, openingBalanceReversalFingerprint(A, ob.entryId, day, positions, day));
-      return ob.openingBalanceId;
+      return ob;
     };
+    // Supersession's own precondition (0047): the opening balance's entry is reversed first.
+    const reverse = (entryId: string) => attempt(c, () => reverseInTx(c, A, entryId, day, openingBalanceReversalFingerprint(A, entryId, day, positions, day)));
     const supersede = (id: string) =>
       attempt(c, () => c.query(`UPDATE accounting_opening_balances SET status = 'superseded', superseded_at = now() WHERE id = $1`, [id]));
+
+    // First line: the reversal of a bound balance's entry is refused, so the ledger never stops holding the amount.
     await inTx(async () => {
-      refusedWith(await supersede(await setup(true)), 'P0001', 'accounting.opening_balance_inventory_bound');
+      const ob = await post(true);
+      refusedWith(await reverse(ob.entryId), 'P0001', 'accounting.opening_balance_inventory_bound');
     });
+    // Second line: with the reversal guard removed in-transaction, the supersede of the bound balance is still refused.
     await inTx(async () => {
-      expectAccepted(await supersede(await setup(false)), 'an opening balance no inventory opening is bound to');
+      const ob = await post(true);
+      await c.query('DROP TRIGGER accounting_reversals_20_domain_source_guard ON accounting_reversals');
+      expectAccepted(await reverse(ob.entryId), 'negative control: without the reversal guard the bound entry is reversed');
+      refusedWith(await supersede(ob.openingBalanceId), 'P0001', 'accounting.opening_balance_inventory_bound');
     });
+    // ALLOW: an opening balance no inventory opening is bound to reverses and supersedes.
     await inTx(async () => {
-      const id = await setup(true);
+      const ob = await post(false);
+      expectAccepted(await reverse(ob.entryId), 'an unbound opening balance reverses');
+      expectAccepted(await supersede(ob.openingBalanceId), 'an opening balance no inventory opening is bound to');
+    });
+    // Negative control: with both guards removed, the bound position is reversed and superseded.
+    await inTx(async () => {
+      const ob = await post(true);
+      await c.query('DROP TRIGGER accounting_reversals_20_domain_source_guard ON accounting_reversals');
       await c.query('DROP TRIGGER accounting_opening_balances_30_inventory_opening_guard ON accounting_opening_balances');
-      expectAccepted(await supersede(id), 'negative control: without the guard the bound position is superseded');
+      expectAccepted(await reverse(ob.entryId), 'negative control: reversal');
+      expectAccepted(await supersede(ob.openingBalanceId), 'negative control: without the guards the bound position is superseded');
     });
   });
 });
