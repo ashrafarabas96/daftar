@@ -53,7 +53,10 @@ const [SOURCES, COMMANDS] = S3_MIGRATIONS;
 const S3_BOUNDARY = COMMANDS;
 
 /** The two P3-S3 migrations at their accepted digests. Empty while P3-S3 is a candidate; filled in the freeze commit only. */
-const S3_ACCEPTED: Readonly<Record<string, string>> = {};
+const S3_ACCEPTED: Readonly<Record<string, string>> = {
+  '0061_inventory_movement_sources.sql': '7b785537a866606990ab2cfab2a783eb05fe7fb362a67f9ea127119d569f57ff',
+  '0062_inventory_movement_commands.sql': 'dc47df235cc563606705de2a3a991992e573486bfa8d6a8493eb744129bb4b91',
+};
 
 const ACCEPTED = Object.keys(S3_ACCEPTED).length > 0;
 
