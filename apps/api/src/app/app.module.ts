@@ -7,6 +7,7 @@ import {
   httpProviders,
   identityProviders,
   accountingProviders,
+  inventoryAuthorityProviders,
   merchantInfraProviders,
   workerProviders,
   reconcilerProviders,
@@ -66,6 +67,7 @@ export class AppModule implements NestModule {
         ...identityProviders(config, options),
         ...merchantInfraProviders(config, options),
         ...accountingProviders(),
+        ...inventoryAuthorityProviders(),
         ...workerProviders(config, options),
         // Only PROCESS_MODE=all composes the reconciler beside the worker,
         // and only because this composition exists for dev and tests;

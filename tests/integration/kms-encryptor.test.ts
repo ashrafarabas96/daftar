@@ -29,6 +29,10 @@ const PROD_BASE: NodeJS.ProcessEnv = {
   // and the ledger.
   ACCOUNTING_ASSERTION_KEY: Buffer.alloc(32, 11).toString('base64'),
   ACCOUNTING_ASSERTION_KID: 'acct1',
+  // P3-AL-55 §C: a third, distinct secret — equal bytes to either key above
+  // are a production startup failure.
+  INVENTORY_ASSERTION_KEY: Buffer.alloc(32, 13).toString('base64'),
+  INVENTORY_ASSERTION_KID: 'inv1',
   JWT_SECRET: 'production-secret-with-at-least-32-characters',
   MEDIA_STORAGE: 's3',
   S3_ENDPOINT: 'https://s3.example.com',

@@ -1,5 +1,8 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { Injectable, Inject, type OnModuleDestroy, type OnModuleInit } from '@nestjs/common';
 import { Pool, type PoolClient, type QueryResult, type QueryResultRow } from 'pg';
+import { splitAccountingAssertion, type AccountingPostingTransaction } from '@daftar/accounting';
+import { splitInventoryAssertion } from '@daftar/inventory';
 import type { AppConfig } from '../config';
 import { mintProvisioningAssertion, parseProvisioningAssertionKey, type ProvisioningAssertionKey, type ProvisioningKind } from './provisioning-assertion';
 
@@ -38,6 +41,175 @@ export interface Scope {
    * smuggle one into a posting workflow by reusing the connection's setting.
    */
   accountingControlAssertion?: string;
+  /**
+   * Inventory command assertion (P3-AL-55 §D): the `invctl/1` token an
+   * inventory routine verifies and consumes inside
+   * `inventory_assertion_consume`. A CARRIER only — whatever it holds is
+   * worthless unless its MAC verifies in the database. Set ONLY by the two
+   * business seams below.
+   */
+  inventoryAssertion?: string;
+}
+
+// ── P3-AL-32 / P3-AL-55 §I: the two business transaction seams ────────────
+
+/**
+ * The scope of one business transaction. Every member is required: the seams
+ * set all three as transaction-local GUCs for row level security, and a seam
+ * that could be opened without a business would be one whose isolation
+ * depended on whatever the connection happened to carry last.
+ *
+ * GUC scope is row isolation, never authorization (P3-AL-55 §A). Authority
+ * travels in the signed assertions each seam takes as its own argument.
+ */
+export interface BusinessScope {
+  readonly tenantId: string;
+  readonly businessId: string;
+  readonly actorUserId: string;
+}
+
+/**
+ * The one thing a seam callback may do with its transaction: run statements
+ * in it. It is not a `PoolClient` — it has no `release`, no connection events
+ * and nothing a posting port would accept — and it stops working the moment
+ * the seam's transaction ends.
+ */
+export interface TransactionSql {
+  query<R extends QueryResultRow = QueryResultRow>(text: string, params?: unknown[]): Promise<QueryResult<R>>;
+}
+
+/**
+ * The handle of `withBusinessInventoryTransaction` (P3-AL-32 seam 1).
+ *
+ * It carries NO posting capability, and that is a property of the type: there
+ * is no member through which one could be reached, and nothing on it is an
+ * `AccountingPostingTransaction`, which is the only thing a posting port
+ * accepts. A caller that needs to post cannot acquire the capability from
+ * here by argument, flag or cast — it must open the other seam and supply the
+ * accounting assertion the posting needs.
+ */
+export interface BusinessInventoryTransaction extends TransactionSql {
+  readonly scope: BusinessScope;
+}
+
+/**
+ * The handle of `withBusinessInventoryAccountingTransaction` (P3-AL-32 seam
+ * 2): the same transaction-bound SQL, plus the transaction-bound posting
+ * capability the accounting ports accept.
+ */
+export interface BusinessInventoryAccountingTransaction extends BusinessInventoryTransaction {
+  readonly accounting: AccountingPostingTransaction;
+}
+
+/** Stable machine codes of the seams' own refusals. Each is a defect, caught before any domain mutation. */
+export type TransactionSeamRefusal =
+  | 'seam.inventory_assertion_missing'
+  | 'seam.inventory_assertion_malformed'
+  | 'seam.inventory_assertion_scope_mismatch'
+  | 'seam.accounting_assertion_missing'
+  | 'seam.accounting_assertion_malformed'
+  | 'seam.accounting_assertion_scope_mismatch'
+  | 'seam.nested_transaction'
+  | 'seam.not_a_posting_transaction'
+  | 'seam.transaction_closed';
+
+export class TransactionSeamError extends Error {
+  readonly code: TransactionSeamRefusal;
+
+  constructor(code: TransactionSeamRefusal, message: string) {
+    super(`${code}: ${message}`);
+    this.name = 'TransactionSeamError';
+    this.code = code;
+  }
+}
+
+/**
+ * Which transaction the current async context is inside, if any.
+ *
+ * Every boundary of this class records itself here for the duration of its
+ * callback. A business seam refuses to open inside ANY of them, and no
+ * boundary opens inside a business seam: a second connection there would be
+ * an independent commit, which is exactly what P3-AL-32 item 6 forbids.
+ * Nesting of the Phase 1/2 boundaries among themselves is left exactly as it
+ * was accepted.
+ */
+type OpenTransactionKind = 'boundary' | 'business-seam';
+const openTransaction = new AsyncLocalStorage<OpenTransactionKind>();
+
+/**
+ * The posting transactions this process has issued and not yet closed, keyed
+ * by their opaque capability. A value that is not a key here was not issued by
+ * a posting boundary, and the posting ports refuse it (P3-AL-32 matrix row 4).
+ */
+const postingTransactions = new WeakMap<object, TransactionSql>();
+
+/** SQL bound to one open transaction, revoked when the transaction ends. */
+function bindTransactionSql(client: PoolClient): { sql: TransactionSql; close: () => void } {
+  let open = true;
+  const sql: TransactionSql = Object.freeze({
+    query: async <R extends QueryResultRow = QueryResultRow>(text: string, params?: unknown[]): Promise<QueryResult<R>> => {
+      if (!open) throw new TransactionSeamError('seam.transaction_closed', 'this transaction has already ended');
+      return client.query<R>(text, params);
+    },
+  });
+  return { sql, close: () => (open = false) };
+}
+
+/**
+ * Issue a posting capability for an open transaction. Only the two posting
+ * boundaries of `Database` call this, and only after they have set
+ * `app.accounting_assertion` on that transaction.
+ */
+function issuePostingTransaction(sql: TransactionSql): AccountingPostingTransaction {
+  // The brand is declared-only (packages/accounting/src/ports.ts), so no
+  // object can carry it structurally; this frozen, prototype-less object is
+  // one only because it is registered below, which the ports check.
+  const tx = Object.freeze(Object.create(null) as object) as AccountingPostingTransaction;
+  postingTransactions.set(tx, sql);
+  return tx;
+}
+
+/**
+ * The seams' application-side coherence check (P3-AL-32 item 4). STRUCTURE
+ * only: the tenant and business claims are read with the packages' split
+ * functions and never verified here — verification is the database's
+ * (P3-AL-55 §G), and this check exists so a defect fails before a connection
+ * is taken, not instead of the database's step 9.
+ */
+function assertInventoryAssertionCoheres(scope: BusinessScope, inventoryAssertion: string): void {
+  if (typeof inventoryAssertion !== 'string' || inventoryAssertion.length === 0) {
+    throw new TransactionSeamError('seam.inventory_assertion_missing', 'a business seam cannot be opened without an inventory assertion');
+  }
+  let parts: { tenantId: string; businessId: string };
+  try {
+    parts = splitInventoryAssertion(inventoryAssertion);
+  } catch {
+    // The split's own refusal carries nothing a caller needs beyond this code,
+    // and it must not be allowed to echo any part of the assertion.
+    throw new TransactionSeamError('seam.inventory_assertion_malformed', 'the inventory assertion is not an invctl/1 assertion');
+  }
+  if (parts.tenantId !== scope.tenantId || parts.businessId !== scope.businessId) {
+    throw new TransactionSeamError('seam.inventory_assertion_scope_mismatch', "the inventory assertion's tenant/business claims differ from the seam's scope");
+  }
+}
+
+function assertAccountingAssertionCoheres(scope: BusinessScope, accountingAssertion: string): void {
+  if (typeof accountingAssertion !== 'string' || accountingAssertion.length === 0) {
+    throw new TransactionSeamError('seam.accounting_assertion_missing', 'the accounting seam cannot be opened without an accounting assertion');
+  }
+  let parts: readonly string[];
+  try {
+    parts = splitAccountingAssertion(accountingAssertion);
+  } catch {
+    throw new TransactionSeamError('seam.accounting_assertion_malformed', 'the accounting assertion is not a posting assertion');
+  }
+  // v1.<kid>.<actor>.<tenant>.<business>.… (packages/accounting/src/assertion.ts)
+  if (parts[3] !== scope.tenantId || parts[4] !== scope.businessId) {
+    throw new TransactionSeamError(
+      'seam.accounting_assertion_scope_mismatch',
+      "the accounting assertion's tenant/business claims differ from the seam's scope",
+    );
+  }
 }
 
 /**
@@ -149,7 +321,8 @@ export class Database implements OnModuleDestroy, OnModuleInit {
       set_config('app.actor_user_id', $4, true),
       set_config('app.provisioning_assertion', $5, true),
       set_config('app.accounting_assertion', $6, true),
-      set_config('app.accounting_control_assertion', $7, true)`,
+      set_config('app.accounting_control_assertion', $7, true),
+      set_config('app.inventory_assertion', $8, true)`,
       [
         scope.tenantId ?? '',
         scope.businessId ?? '',
@@ -158,17 +331,29 @@ export class Database implements OnModuleDestroy, OnModuleInit {
         scope.provisioningAssertion ?? '',
         scope.accountingAssertion ?? '',
         scope.accountingControlAssertion ?? '',
+        scope.inventoryAssertion ?? '',
       ],
     );
   }
 
   private async run<T>(pool: Pool | null, scope: Scope, bypass: boolean, fn: (client: PoolClient) => Promise<T>): Promise<T> {
+    return this.transact(pool, scope, bypass, 'boundary', fn);
+  }
+
+  /**
+   * The one place a transaction begins and ends: one `BEGIN`, the scope, the
+   * callback, one `COMMIT` — or one `ROLLBACK`.
+   */
+  private async transact<T>(pool: Pool | null, scope: Scope, bypass: boolean, kind: OpenTransactionKind, fn: (client: PoolClient) => Promise<T>): Promise<T> {
+    if (openTransaction.getStore() === 'business-seam') {
+      throw new TransactionSeamError('seam.nested_transaction', 'no transaction may be opened inside a business seam (it would commit independently)');
+    }
     if (!pool) throw new Error('database role pool is not configured');
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
       await this.applyScope(client, scope, bypass);
-      const result = await fn(client);
+      const result = await openTransaction.run(kind, () => fn(client));
       await client.query('COMMIT');
       return result;
     } catch (e) {
@@ -177,6 +362,104 @@ export class Database implements OnModuleDestroy, OnModuleInit {
     } finally {
       client.release();
     }
+  }
+
+  /**
+   * The body shared by both business seams: refuse nesting, open ONE
+   * transaction on the app pool with the scope GUCs and the carriers, hand the
+   * callback a handle built for it, and revoke that handle when the
+   * transaction ends, whichever way it ends.
+   */
+  private async businessSeam<H, T>(
+    scope: BusinessScope,
+    carriers: Pick<Scope, 'inventoryAssertion' | 'accountingAssertion'>,
+    handleFor: (sql: TransactionSql, scope: BusinessScope) => H,
+    fn: (handle: H) => Promise<T>,
+  ): Promise<T> {
+    const gucs: Scope = { tenantId: scope.tenantId, businessId: scope.businessId, actorUserId: scope.actorUserId, ...carriers };
+    const frozenScope: BusinessScope = Object.freeze({ tenantId: scope.tenantId, businessId: scope.businessId, actorUserId: scope.actorUserId });
+    return this.transact(this.pool, gucs, false, 'business-seam', async (client) => {
+      const bound = bindTransactionSql(client);
+      try {
+        return await fn(Object.freeze(handleFor(bound.sql, frozenScope)));
+      } finally {
+        bound.close();
+      }
+    });
+  }
+
+  private refuseNestedSeam(): void {
+    if (openTransaction.getStore() !== undefined) {
+      throw new TransactionSeamError('seam.nested_transaction', 'a business seam cannot be opened inside another transaction (P3-AL-32 item 6)');
+    }
+  }
+
+  /**
+   * P3-AL-32 seam 1 — an inventory mutation that posts NO journal (a
+   * same-business transfer; the three P3-S1 commands).
+   *
+   * `BEGIN`s once on the app pool as `daftar_app`, sets `app.tenant_id`,
+   * `app.business_id`, `app.actor_user_id` and the carrier
+   * `app.inventory_assertion`, leaves `app.accounting_assertion` empty, runs
+   * `fn`, `COMMIT`s once. Before any connection is taken it refuses a missing
+   * or structurally impossible inventory assertion, one whose tenant/business
+   * claims differ from `scope`, and an attempt to open it inside any other
+   * transaction.
+   *
+   * The handle carries no posting capability (see `BusinessInventoryTransaction`).
+   */
+  async withBusinessInventoryTransaction<T>(
+    scope: BusinessScope,
+    inventoryAssertion: string,
+    fn: (tx: BusinessInventoryTransaction) => Promise<T>,
+  ): Promise<T> {
+    this.refuseNestedSeam();
+    assertInventoryAssertionCoheres(scope, inventoryAssertion);
+    return this.businessSeam(scope, { inventoryAssertion }, (sql, bound): BusinessInventoryTransaction => ({ scope: bound, query: sql.query }), fn);
+  }
+
+  /**
+   * P3-AL-32 seam 2 — a financial inventory operation: the domain mutation
+   * AND the posting its success implies, in one transaction.
+   *
+   * Everything seam 1 does, plus `app.accounting_assertion`, and the handle
+   * exposes the transaction-bound posting capability the accounting ports'
+   * `…InTransaction` variants accept. The inventory assertion authorizes the
+   * domain command, the accounting assertion authorizes the posting (P3-AL-33);
+   * neither stands in for the other, and both must cohere with `scope` before
+   * a connection is taken.
+   */
+  async withBusinessInventoryAccountingTransaction<T>(
+    scope: BusinessScope,
+    inventoryAssertion: string,
+    accountingAssertion: string,
+    fn: (tx: BusinessInventoryAccountingTransaction) => Promise<T>,
+  ): Promise<T> {
+    this.refuseNestedSeam();
+    assertInventoryAssertionCoheres(scope, inventoryAssertion);
+    assertAccountingAssertionCoheres(scope, accountingAssertion);
+    return this.businessSeam(
+      scope,
+      { inventoryAssertion, accountingAssertion },
+      (sql, bound): BusinessInventoryAccountingTransaction => ({ scope: bound, query: sql.query, accounting: issuePostingTransaction(sql) }),
+      fn,
+    );
+  }
+
+  /**
+   * The accounting ports' only way into a posting transaction.
+   *
+   * Refuses — at runtime, in addition to the type — any value this process
+   * did not issue from a posting boundary: a raw client, the non-posting
+   * seam's handle, a look-alike object. And it refuses a capability whose
+   * transaction has ended, so a handle that escaped its callback is inert.
+   */
+  postingTransactionSql(tx: AccountingPostingTransaction): TransactionSql {
+    const sql = typeof tx === 'object' && tx !== null ? postingTransactions.get(tx) : undefined;
+    if (!sql) {
+      throw new TransactionSeamError('seam.not_a_posting_transaction', 'the accounting posting port accepts only a transaction opened by a posting boundary');
+    }
+    return sql;
   }
 
   /** Merchant runtime: RLS-enforced business/tenant scope, daftar_app role. */
@@ -278,8 +561,19 @@ export class Database implements OnModuleDestroy, OnModuleInit {
    * uses comes from the verified assertion, and setting them here would
    * suggest they are load-bearing when they are not.
    */
-  async withAccountingTransaction<T>(accountingAssertion: string, fn: (client: PoolClient) => Promise<T>): Promise<T> {
-    return this.run(this.pool, { accountingAssertion }, false, fn);
+  async withAccountingTransaction<T>(accountingAssertion: string, fn: (tx: AccountingPostingTransaction) => Promise<T>): Promise<T> {
+    // P3-AL-32 item 5: the callback receives the same opaque posting
+    // capability the accounting-aware seam issues, so the accepted
+    // single-operation methods run through exactly the code path the Phase 3
+    // composition uses.
+    return this.run(this.pool, { accountingAssertion }, false, async (client) => {
+      const bound = bindTransactionSql(client);
+      try {
+        return await fn(issuePostingTransaction(bound.sql));
+      } finally {
+        bound.close();
+      }
+    });
   }
 
   /**

@@ -24,6 +24,10 @@ const PROD_ENV: NodeJS.ProcessEnv = {
   // and the ledger.
   ACCOUNTING_ASSERTION_KEY: Buffer.alloc(32, 11).toString('base64'),
   ACCOUNTING_ASSERTION_KID: 'acct1',
+  // P3-AL-55 §C: a third, distinct secret — equal bytes to either key above
+  // are a production startup failure.
+  INVENTORY_ASSERTION_KEY: Buffer.alloc(32, 13).toString('base64'),
+  INVENTORY_ASSERTION_KID: 'inv1',
   WORKER_DATABASE_URL: 'postgresql://daftar_worker:x@db/daftar',
   JWT_SECRET: 'production-secret-with-at-least-32-characters',
   MEDIA_STORAGE: 's3',
@@ -78,6 +82,8 @@ describe('production provider wiring (Gate A §20–32)', () => {
       // §19/§20: platform administration is not financial authority, so the
       // platform process must not carry the accounting signing key either.
       ACCOUNTING_ASSERTION_KEY: _ak,
+      // P3-AL-55 §C: nor the inventory command signing key.
+      INVENTORY_ASSERTION_KEY: _ik,
       CREDENTIAL_PAYLOAD_KEY: _k,
       SMTP_URL: _s,
       ...platformEnv
@@ -142,6 +148,8 @@ describe('process-level secret separation (§XXV–XXXI)', () => {
       // §19/§20: platform administration is not financial authority, so the
       // platform process must not carry the accounting signing key either.
       ACCOUNTING_ASSERTION_KEY: _ak,
+      // P3-AL-55 §C: nor the inventory command signing key.
+      INVENTORY_ASSERTION_KEY: _ik,
       CREDENTIAL_PAYLOAD_KEY: _k,
       SMTP_URL: _s,
       ...platformEnv

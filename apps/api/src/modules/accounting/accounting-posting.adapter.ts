@@ -1,5 +1,15 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { AccountingError, parseDatabaseAccountingError, type AccountingPostingPort, type PostEntryRequest, type PostingResult } from '@daftar/accounting';
+import {
+  AccountingError,
+  parseDatabaseAccountingError,
+  type AccountingPostingPort,
+  type AccountingPostingTransaction,
+  type AccountingPostingTransactionPort,
+  type PostEntryInTransactionRequest,
+  type PostEntryRequest,
+  type PostingCommand,
+  type PostingResult,
+} from '@daftar/accounting';
 import { Database } from '../../infra/database';
 
 /**
@@ -23,11 +33,29 @@ import { Database } from '../../infra/database';
  * order, escaping and whitespace in this payload therefore change nothing.
  */
 @Injectable()
-export class DatabaseAccountingPostingAdapter implements AccountingPostingPort {
+export class DatabaseAccountingPostingAdapter implements AccountingPostingPort, AccountingPostingTransactionPort {
   constructor(@Inject(Database) private readonly db: Database) {}
 
+  /**
+   * The accepted Phase 2 single-operation method: its own transaction, its
+   * own assertion. Implemented in terms of `postEntryInTransaction` (P3-AL-32
+   * item 5), so the Phase 2 path and the Phase 3 composition execute the same
+   * code; a refusal raised at COMMIT is translated here, where the COMMIT is.
+   */
   async postEntry(request: PostEntryRequest): Promise<PostingResult> {
     const { assertion, command } = request;
+    return refusedAs(command, () => this.db.withAccountingTransaction(assertion, (tx) => this.postEntryInTransaction(tx, { command })));
+  }
+
+  /**
+   * Call `accounting_post_entry` inside a transaction that is already open and
+   * already carries its accounting assertion — the one a posting boundary
+   * issued. Anything else is refused by `Database.postingTransactionSql`
+   * before a statement is sent.
+   */
+  async postEntryInTransaction(tx: AccountingPostingTransaction, request: PostEntryInTransactionRequest): Promise<PostingResult> {
+    const sql = this.db.postingTransactionSql(tx);
+    const { command } = request;
     const lines = command.lines.map((l) => ({
       account: l.account.kind === 'system' ? { kind: 'system', system_key: l.account.systemKey } : { kind: 'code', code: l.account.code },
       side: l.side,
@@ -43,30 +71,37 @@ export class DatabaseAccountingPostingAdapter implements AccountingPostingPort {
       memo: l.memo ?? null,
     }));
 
-    try {
-      return await this.db.withAccountingTransaction(assertion, async (c) => {
-        const r = await c.query<{ entry_id: string; created: boolean }>(`SELECT entry_id, created FROM accounting_post_entry($1::date, $2, $3, $4::jsonb)`, [
-          command.entryDate,
-          command.description ?? null,
-          command.requestId ?? null,
-          JSON.stringify(lines),
-        ]);
-        const row = r.rows[0];
-        if (!row) throw new Error('accounting_post_entry returned no row');
-        return { entryId: row.entry_id, created: row.created };
-      });
-    } catch (e) {
-      // A database refusal carries a stable `accounting.*` code; anything else
-      // is an infrastructure failure and is left to propagate untouched rather
-      // than dressed up as a financial refusal.
-      const code = parseDatabaseAccountingError(e instanceof Error ? e.message : String(e));
-      if (code === null) throw e;
-      throw new AccountingError(code, 'the posting was refused by the accounting authority', {
-        businessId: command.businessId,
-        sourceType: command.sourceType,
-        sourceId: command.sourceId,
-      });
-    }
+    return refusedAs(command, async () => {
+      const r = await sql.query<{ entry_id: string; created: boolean }>(`SELECT entry_id, created FROM accounting_post_entry($1::date, $2, $3, $4::jsonb)`, [
+        command.entryDate,
+        command.description ?? null,
+        command.requestId ?? null,
+        JSON.stringify(lines),
+      ]);
+      const row = r.rows[0];
+      if (!row) throw new Error('accounting_post_entry returned no row');
+      return { entryId: row.entry_id, created: row.created };
+    });
+  }
+}
+
+/**
+ * A database refusal carries a stable `accounting.*` code; anything else is an
+ * infrastructure failure and is left to propagate untouched rather than
+ * dressed up as a financial refusal. An error that is already an
+ * `AccountingError` carries no such prefix and passes through unchanged.
+ */
+async function refusedAs(command: PostingCommand, fn: () => Promise<PostingResult>): Promise<PostingResult> {
+  try {
+    return await fn();
+  } catch (e) {
+    const code = parseDatabaseAccountingError(e instanceof Error ? e.message : String(e));
+    if (code === null) throw e;
+    throw new AccountingError(code, 'the posting was refused by the accounting authority', {
+      businessId: command.businessId,
+      sourceType: command.sourceType,
+      sourceId: command.sourceId,
+    });
   }
 }
 
