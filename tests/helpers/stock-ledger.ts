@@ -1121,3 +1121,80 @@ export function tryConfigure(
 ): Promise<Outcome<{ unit_code: string | null; unit_decimals: number | null; track_inventory: boolean }>> {
   return attempt(c, () => configureAsApp(c, s, call));
 }
+
+// ── a second business of the SAME tenant, owned by the SAME person ───────
+
+/**
+ * Record `userId` as the owner of `businessId` the way the provisioner does
+ * (0032 `provision_business`): the tenant-level `tenant_owner` link, the
+ * system `owner` role of the business, the membership and its role. System
+ * roles are writable only by the bypass principal (0006
+ * `business_roles_protect_system`), so the rows are written as
+ * `daftar_platform`. The tenant link is idempotent; each business gets its
+ * owner role once.
+ */
+export async function recordBusinessOwner(pool: Pool, s: { tenantId: string; businessId: string }, userId: string): Promise<void> {
+  const c = await pool.connect();
+  try {
+    await c.query('BEGIN');
+    await c.query('SET LOCAL ROLE daftar_platform');
+    await c.query(`INSERT INTO tenant_memberships (tenant_id, user_id, role_key) VALUES ($1, $2, 'tenant_owner') ON CONFLICT DO NOTHING`, [s.tenantId, userId]);
+    const roleId = randomUUID();
+    await c.query(`INSERT INTO business_roles (business_id, id, key, name, is_system) VALUES ($1, $2, 'owner', 'owner', true)`, [s.businessId, roleId]);
+    await c.query(`INSERT INTO memberships (tenant_id, business_id, user_id, status, joined_at) VALUES ($1, $2, $3, 'active', now())`, [
+      s.tenantId,
+      s.businessId,
+      userId,
+    ]);
+    await c.query(`INSERT INTO membership_roles (business_id, user_id, role_id) VALUES ($1, $2, $3)`, [s.businessId, userId, roleId]);
+    await c.query('COMMIT');
+  } catch (e) {
+    await c.query('ROLLBACK').catch(() => undefined);
+    throw e;
+  } finally {
+    c.release();
+  }
+}
+
+/** Business A2: the same tenant as A, the same owner (and actor) as A, its own branch, warehouse and products. */
+export interface SameOwnerBusiness extends Scope {
+  readonly branchId: string;
+  readonly warehouseId: string;
+  /** Tracked `piece`/0 with its base variant. */
+  readonly piece: ProductRef;
+  /** A tracked variant product: two merchant variants, no base (for the R9 reparent cases). */
+  readonly variantProduct: { readonly productId: string; readonly variantIds: readonly [string, string] };
+}
+
+/**
+ * §5 seeding, extended for the same-owner isolation case: a second business
+ * A2 inside `biz`'s tenant, with `biz.userId` recorded as the owner of BOTH
+ * A and A2. The same raw seeding path as `seedStockBusiness`.
+ */
+export async function seedSameOwnerBusiness(pool: Pool, biz: StockBusiness, slug: string): Promise<SameOwnerBusiness> {
+  const businessId = await one(
+    pool,
+    `INSERT INTO businesses (tenant_id, name, store_slug, country_code, base_currency, timezone)
+     VALUES ($1, $2, $3, 'PS', 'ILS', 'Asia/Hebron') RETURNING id`,
+    [biz.tenantId, `Stock ${slug} a2`, `stock-${slug}-a2-${randomUUID().slice(0, 8)}`],
+  );
+  const branchId = await one(pool, `INSERT INTO branches (business_id, name, is_default) VALUES ($1, 'Main', true) RETURNING id`, [businessId]);
+  const warehouseId = await one(pool, `INSERT INTO warehouses (business_id, branch_id, name, is_default) VALUES ($1, $2, 'Main WH', true) RETURNING id`, [
+    businessId,
+    branchId,
+  ]);
+  const s = { tenantId: biz.tenantId, businessId };
+  await recordBusinessOwner(pool, biz, biz.userId);
+  await recordBusinessOwner(pool, s, biz.userId);
+  const piece = await addTrackedProduct(pool, s, 'piece', 0);
+  const vp = await addVariantProduct(pool, s, 2);
+  return {
+    tenantId: biz.tenantId,
+    businessId,
+    userId: biz.userId,
+    branchId,
+    warehouseId,
+    piece,
+    variantProduct: { productId: vp.productId, variantIds: [must(vp.variantIds[0]), must(vp.variantIds[1])] },
+  };
+}
