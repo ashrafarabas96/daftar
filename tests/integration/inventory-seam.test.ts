@@ -58,7 +58,7 @@ beforeAll(async () => {
   await resetData();
   fx = await seedPostingFixture(ownerPool(), 'seam');
   today = await todayIn(ownerPool(), 'Asia/Hebron');
-  scope = { tenantId: fx.tenantId, businessId: fx.businessId, actorUserId: fx.userId };
+  scope = { tenantId: fx.tenantId, businessId: fx.businessId, actorUserId: fx.userId, businessTransactionId: randomUUID() };
   // A test-owned table the merchant runtime may write — outside `public`, so
   // no catalogue-wide check of another suite can ever see it.
   await ownerPool().query(`DROP SCHEMA IF EXISTS p3s1_seam_fixture CASCADE`);
@@ -457,6 +457,35 @@ describe('row 6 — assertion/scope coherence is refused before the callback, an
     expect(callback).not.toHaveBeenCalled();
     expect(connect).not.toHaveBeenCalled();
     expect(await fixtureRows()).toEqual([]);
+  });
+});
+
+describe('P3-AL-35 — the business transaction trace travels with the seam, as observability only', () => {
+  it.each([
+    ['missing', undefined],
+    ['empty', ''],
+    ['uppercase', 'A0000000-0000-4000-8000-000000000000'],
+    ['not a uuid', 'trace-1'],
+  ] as const)('a %s trace id: both seams refuse before the callback', async (_name, value) => {
+    const connect = vi.spyOn(Pool.prototype, 'connect');
+    const callback = vi.fn(async (tx: BusinessInventoryTransaction) => insertFixture(tx, 'must-not-exist'));
+    const bad = { ...scope, businessTransactionId: value } as unknown as BusinessScope;
+    const acct = accountingAssertionFor(adjustment());
+    expect(await refusalCode(() => db.withBusinessInventoryTransaction(bad, inventoryAssertion(), callback))).toBe('seam.business_transaction_id_malformed');
+    expect(await refusalCode(() => db.withBusinessInventoryAccountingTransaction(bad, inventoryAssertion(), acct, callback))).toBe(
+      'seam.business_transaction_id_malformed',
+    );
+    expect(callback).not.toHaveBeenCalled();
+    expect(connect).not.toHaveBeenCalled();
+    expect(await fixtureRows()).toEqual([]);
+  });
+
+  it('the seam sets app.business_transaction_id transaction-locally, and the handle carries the same id', async () => {
+    const seen = await db.withBusinessInventoryTransaction(scope, inventoryAssertion(), async (tx) => {
+      const r = await tx.query<{ v: string }>("SELECT current_setting('app.business_transaction_id', true) AS v");
+      return { guc: r.rows[0]?.v, handle: tx.scope.businessTransactionId };
+    });
+    expect(seen).toEqual({ guc: scope.businessTransactionId, handle: scope.businessTransactionId });
   });
 });
 

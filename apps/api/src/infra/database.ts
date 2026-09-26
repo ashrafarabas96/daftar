@@ -49,6 +49,13 @@ export interface Scope {
    * business seams below.
    */
   inventoryAssertion?: string;
+  /**
+   * P3-AL-35 business transaction trace: a CARRIER for observability only.
+   * The inventory routines copy it into the metadata of the audit row they
+   * write; nothing reads it for a decision and it is not part of any signed
+   * payload. Set ONLY by the two business seams below.
+   */
+  businessTransactionId?: string;
 }
 
 // ── P3-AL-32 / P3-AL-55 §I: the two business transaction seams ────────────
@@ -66,7 +73,16 @@ export interface BusinessScope {
   readonly tenantId: string;
   readonly businessId: string;
   readonly actorUserId: string;
+  /**
+   * P3-AL-35: generated once per user operation at the API boundary
+   * (`newBusinessTransactionId()`), never derived from anything a client
+   * sends. Observability, not authority: the routines write it into the audit
+   * metadata of the operation and decide nothing by it.
+   */
+  readonly businessTransactionId: string;
 }
+
+const CANONICAL_TRACE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 /**
  * The one thing a seam callback may do with its transaction: run statements
@@ -111,7 +127,8 @@ export type TransactionSeamRefusal =
   | 'seam.accounting_assertion_scope_mismatch'
   | 'seam.nested_transaction'
   | 'seam.not_a_posting_transaction'
-  | 'seam.transaction_closed';
+  | 'seam.transaction_closed'
+  | 'seam.business_transaction_id_malformed';
 
 export class TransactionSeamError extends Error {
   readonly code: TransactionSeamRefusal;
@@ -177,6 +194,12 @@ function issuePostingTransaction(sql: TransactionSql): AccountingPostingTransact
  * is taken, not instead of the database's step 9.
  */
 function assertInventoryAssertionCoheres(scope: BusinessScope, inventoryAssertion: string): void {
+  if (typeof scope.businessTransactionId !== 'string' || !CANONICAL_TRACE_ID.test(scope.businessTransactionId)) {
+    throw new TransactionSeamError(
+      'seam.business_transaction_id_malformed',
+      'a business seam needs the canonical business transaction id of its operation (P3-AL-35)',
+    );
+  }
   if (typeof inventoryAssertion !== 'string' || inventoryAssertion.length === 0) {
     throw new TransactionSeamError('seam.inventory_assertion_missing', 'a business seam cannot be opened without an inventory assertion');
   }
@@ -322,7 +345,8 @@ export class Database implements OnModuleDestroy, OnModuleInit {
       set_config('app.provisioning_assertion', $5, true),
       set_config('app.accounting_assertion', $6, true),
       set_config('app.accounting_control_assertion', $7, true),
-      set_config('app.inventory_assertion', $8, true)`,
+      set_config('app.inventory_assertion', $8, true),
+      set_config('app.business_transaction_id', $9, true)`,
       [
         scope.tenantId ?? '',
         scope.businessId ?? '',
@@ -332,6 +356,7 @@ export class Database implements OnModuleDestroy, OnModuleInit {
         scope.accountingAssertion ?? '',
         scope.accountingControlAssertion ?? '',
         scope.inventoryAssertion ?? '',
+        scope.businessTransactionId ?? '',
       ],
     );
   }
@@ -376,8 +401,19 @@ export class Database implements OnModuleDestroy, OnModuleInit {
     handleFor: (sql: TransactionSql, scope: BusinessScope) => H,
     fn: (handle: H) => Promise<T>,
   ): Promise<T> {
-    const gucs: Scope = { tenantId: scope.tenantId, businessId: scope.businessId, actorUserId: scope.actorUserId, ...carriers };
-    const frozenScope: BusinessScope = Object.freeze({ tenantId: scope.tenantId, businessId: scope.businessId, actorUserId: scope.actorUserId });
+    const gucs: Scope = {
+      tenantId: scope.tenantId,
+      businessId: scope.businessId,
+      actorUserId: scope.actorUserId,
+      businessTransactionId: scope.businessTransactionId,
+      ...carriers,
+    };
+    const frozenScope: BusinessScope = Object.freeze({
+      tenantId: scope.tenantId,
+      businessId: scope.businessId,
+      actorUserId: scope.actorUserId,
+      businessTransactionId: scope.businessTransactionId,
+    });
     return this.transact(this.pool, gucs, false, 'business-seam', async (client) => {
       const bound = bindTransactionSql(client);
       try {

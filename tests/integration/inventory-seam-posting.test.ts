@@ -46,7 +46,7 @@ beforeAll(async () => {
   await resetData();
   fx = await seedPostingFixture(ownerPool(), 'seam-posting');
   today = await todayIn(ownerPool(), 'Asia/Hebron');
-  scope = { tenantId: fx.tenantId, businessId: fx.businessId, actorUserId: fx.userId };
+  scope = { tenantId: fx.tenantId, businessId: fx.businessId, actorUserId: fx.userId, businessTransactionId: randomUUID() };
   t = await createTestApp();
   db = t.app.get(Database);
   sources = t.app.get(DatabaseAccountingSourcesAdapter);
