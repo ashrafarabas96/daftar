@@ -884,6 +884,33 @@ describe('§2.4 — the complete S2 trigger set, from pg_trigger', () => {
           owner: INTERNAL,
           secdef: true,
         },
+        // P3-S4 (0063/0064, review L2, R-36): a coverage joins only a header
+        // created by its own transaction (BEFORE INSERT), and the header's Σ
+        // is re-judged for every coverage written to it (deferred, AFTER INSERT).
+        {
+          tg: 'negative_deficit_coverages_same_transaction',
+          rel: 'negative_deficit_coverages',
+          fn: 'negative_deficit_coverage_same_transaction()',
+          type: 1 + 2 + 4,
+          enabled: 'O',
+          constraint: false,
+          deferrable: false,
+          deferred: false,
+          owner: INTERNAL,
+          secdef: true,
+        },
+        {
+          tg: 'negative_deficit_coverages_value_complete',
+          rel: 'negative_deficit_coverages',
+          fn: 'purchase_source_value_complete()',
+          type: 1 + 4,
+          enabled: 'O',
+          constraint: true,
+          deferrable: true,
+          deferred: true,
+          owner: INTERNAL,
+          secdef: true,
+        },
       ].sort((a, b) => (a.tg < b.tg ? -1 : a.tg > b.tg ? 1 : 0)),
     );
   });

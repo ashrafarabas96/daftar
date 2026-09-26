@@ -53,8 +53,8 @@ describe('G-7 — the tree as it stands', () => {
     // P3-S3 appends thirty routines (0061: the bridge, completeness, freeze,
     // header, value and archive guards and the allocator; 0062: the seven
     // entry routines and their four helpers), all DEFINER — no new exception.
-    // P3-S4 appends twenty-four (0063: the binding, completeness, freeze,
-    // header, value, supplier, allocation and deficit guards; 0064: the seven
+    // P3-S4 appends twenty-five (0063: the binding, completeness, freeze,
+    // header, value, supplier, allocation, deficit and same-transaction coverage guards; 0064: the seven
     // entry routines and their three receipt helpers), all DEFINER — no new
     // exception. The list is the guard's sorted output.
     expect(transferred).toEqual(
@@ -139,6 +139,8 @@ describe('G-7 — the tree as it stands', () => {
         'supplier_update',
         'suppliers_no_delete',
         'suppliers_revision_guard',
+        // P3-S4 (0063/0064, review L2, R-36): the same-transaction coverage guard.
+        'negative_deficit_coverage_same_transaction',
       ].sort(),
     );
     expect([...INVENTORY_INVOKER_EXCEPTIONS].sort()).toEqual(['product_variants_10_base_variant_authority', 'products_10_inventory_config_authority']);

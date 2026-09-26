@@ -164,12 +164,29 @@ async function ownerBridge(c: Queryable, sourceId: string, lineId: string, kind 
  * header originating from it (one header per purchase, TL-7). A zero header
  * owes no binding and no movement, so every COMMIT-time check it carries
  * holds; returns the header id.
+ *
+ * P3-S4 (0063/0064, review L2, R-36): a coverage joins only a header created
+ * by its own transaction under that transaction's trace
+ * (`negative_deficit_coverages_same_transaction`), and its variant must be a
+ * line of the origin purchase (`inventory.stock_source_line_missing` at
+ * COMMIT). So the header carries the transaction's
+ * `app.business_transaction_id` (one is set here when the transaction has
+ * none) and the draft gets one line on the key's variant. The caller inserts its coverage in this same transaction.
  */
 async function ownerCoverageHeader(c: Queryable, key: Key = K1): Promise<string> {
   const supplierId = randomUUID();
   const purchaseId = randomUUID();
   const adjustmentId = randomUUID();
   const intent = 'a'.repeat(64);
+  // P3-S4 (0063/0064): the transaction's trace, which the header must carry.
+  const trace = must(
+    (
+      await c.query<{ t: string }>(
+        `SELECT coalesce(nullif(current_setting('app.business_transaction_id', true), ''),
+                         set_config('app.business_transaction_id', gen_random_uuid()::text, true)) AS t`,
+      )
+    ).rows[0],
+  ).t;
   await c.query(
     `INSERT INTO suppliers (tenant_id, business_id, id, name, status, revision, create_intent_sha256, last_intent_sha256,
                             business_transaction_id, created_by, updated_by)
@@ -183,11 +200,18 @@ async function ownerCoverageHeader(c: Queryable, key: Key = K1): Promise<string>
        FROM businesses b WHERE b.id = $2`,
     [biz.tenantId, biz.businessId, purchaseId, supplierId, key.warehouseId, intent, randomUUID(), biz.userId],
   );
+  // P3-S4 (0063/0064): the covering line (origin, variant) — qty 1 at 1, the draft's subtotal.
+  await c.query(
+    `INSERT INTO purchase_lines (tenant_id, business_id, purchase_id, id, line_no, variant_id, qty, unit_price_txn_minor, gross_txn_minor,
+                                 discount_txn_minor, net_txn_minor, landed_cost_txn_minor)
+     VALUES ($1, $2, $3, $4, 1, $5, 1, 1, 1, 0, 1, 0)`,
+    [biz.tenantId, biz.businessId, purchaseId, randomUUID(), key.variantId],
+  );
   await c.query(
     `INSERT INTO negative_inventory_cost_adjustments (tenant_id, business_id, id, warehouse_id, origin_source_type, origin_source_id,
                                                       occurred_on, total_value_base_minor, actor_user_id, business_transaction_id)
      VALUES ($1, $2, $3, $4, 'purchase', $5, DATE '2026-01-15', 0, $6, $7)`,
-    [biz.tenantId, biz.businessId, adjustmentId, key.warehouseId, purchaseId, biz.userId, randomUUID()],
+    [biz.tenantId, biz.businessId, adjustmentId, key.warehouseId, purchaseId, biz.userId, trace],
   );
   return adjustmentId;
 }

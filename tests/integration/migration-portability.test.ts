@@ -1204,6 +1204,8 @@ describe('managed PostgreSQL: 0039 → 0049 under a non-superuser migration prin
             internal('stock_source_freeze_purchase'),
             internal('suppliers_no_delete'),
             internal('suppliers_revision_guard'),
+            // P3-S4 (0063/0064, review L2, R-36): the same-transaction coverage guard.
+            internal('negative_deficit_coverage_same_transaction'),
             // …the two completeness triggers and the purchase FX read are the
             // accounting principal's (A-14; the replaced reversal guard is above)…
             ...['accounting_negative_inventory_cost_adjustment_entry_complete', 'accounting_purchase_entry_complete', 'accounting_purchase_fx_rate'].map(
