@@ -1,0 +1,1243 @@
+{
+  "version": "invval/1",
+  "precision": [
+    {
+      "id": "P-01",
+      "unitDecimals": 0,
+      "qty": "1",
+      "valid": true
+    },
+    {
+      "id": "P-02",
+      "unitDecimals": 0,
+      "qty": "1.0000",
+      "valid": true
+    },
+    {
+      "id": "P-03",
+      "unitDecimals": 0,
+      "qty": "-3.0000",
+      "valid": true
+    },
+    {
+      "id": "P-04",
+      "unitDecimals": 0,
+      "qty": "0.5",
+      "valid": false
+    },
+    {
+      "id": "P-05",
+      "unitDecimals": 0,
+      "qty": "1.0001",
+      "valid": false
+    },
+    {
+      "id": "P-06",
+      "unitDecimals": 2,
+      "qty": "1.23",
+      "valid": true
+    },
+    {
+      "id": "P-07",
+      "unitDecimals": 2,
+      "qty": "1.2300",
+      "valid": true
+    },
+    {
+      "id": "P-08",
+      "unitDecimals": 2,
+      "qty": "1.234",
+      "valid": false
+    },
+    {
+      "id": "P-09",
+      "unitDecimals": 2,
+      "qty": "0.0001",
+      "valid": false
+    },
+    {
+      "id": "P-10",
+      "unitDecimals": 4,
+      "qty": "1.2345",
+      "valid": true
+    }
+  ],
+  "rounding": [
+    {
+      "id": "R-01",
+      "numerator": "1",
+      "denominator": "2",
+      "scale": 0,
+      "halfEven": "0",
+      "halfUp": "1"
+    },
+    {
+      "id": "R-02",
+      "numerator": "3",
+      "denominator": "2",
+      "scale": 0,
+      "halfEven": "2",
+      "halfUp": "2"
+    },
+    {
+      "id": "R-03",
+      "numerator": "5",
+      "denominator": "2",
+      "scale": 0,
+      "halfEven": "2",
+      "halfUp": "3"
+    },
+    {
+      "id": "R-04",
+      "numerator": "-1",
+      "denominator": "2",
+      "scale": 0,
+      "halfEven": "0",
+      "halfUp": "-1"
+    },
+    {
+      "id": "R-05",
+      "numerator": "-3",
+      "denominator": "2",
+      "scale": 0,
+      "halfEven": "-2",
+      "halfUp": "-2"
+    },
+    {
+      "id": "R-06",
+      "numerator": "-5",
+      "denominator": "2",
+      "scale": 0,
+      "halfEven": "-2",
+      "halfUp": "-3"
+    },
+    {
+      "id": "R-07",
+      "numerator": "6",
+      "denominator": "10",
+      "scale": 0,
+      "halfEven": "1",
+      "halfUp": null
+    },
+    {
+      "id": "R-08",
+      "numerator": "4",
+      "denominator": "10",
+      "scale": 0,
+      "halfEven": "0",
+      "halfUp": null
+    },
+    {
+      "id": "R-09",
+      "numerator": "-6",
+      "denominator": "10",
+      "scale": 0,
+      "halfEven": "-1",
+      "halfUp": null
+    },
+    {
+      "id": "R-10",
+      "numerator": "10",
+      "denominator": "3",
+      "scale": 10,
+      "halfEven": "3.3333333333",
+      "halfUp": null
+    },
+    {
+      "id": "R-11",
+      "numerator": "20",
+      "denominator": "3",
+      "scale": 10,
+      "halfEven": "6.6666666667",
+      "halfUp": null
+    },
+    {
+      "id": "R-12",
+      "numerator": "2500",
+      "denominator": "15",
+      "scale": 10,
+      "halfEven": "166.6666666667",
+      "halfUp": null
+    },
+    {
+      "id": "R-13",
+      "numerator": "-520",
+      "denominator": "-6",
+      "scale": 10,
+      "halfEven": "86.6666666667",
+      "halfUp": null
+    },
+    {
+      "id": "R-14",
+      "numerator": "1",
+      "denominator": "20000000000",
+      "scale": 10,
+      "halfEven": "0.0000000000",
+      "halfUp": "0.0000000001"
+    },
+    {
+      "id": "R-15",
+      "numerator": "3",
+      "denominator": "20000000000",
+      "scale": 10,
+      "halfEven": "0.0000000002",
+      "halfUp": "0.0000000002"
+    },
+    {
+      "id": "R-16",
+      "numerator": "3315",
+      "denominator": "10",
+      "scale": 0,
+      "halfEven": "332",
+      "halfUp": "332"
+    },
+    {
+      "id": "R-17",
+      "numerator": "-3315",
+      "denominator": "10",
+      "scale": 0,
+      "halfEven": "-332",
+      "halfUp": "-332"
+    },
+    {
+      "id": "R-18",
+      "numerator": "7",
+      "denominator": "2",
+      "scale": 0,
+      "halfEven": "4",
+      "halfUp": "4"
+    },
+    {
+      "id": "R-19",
+      "numerator": "1",
+      "denominator": "30000000000",
+      "scale": 10,
+      "halfEven": "0.0000000000",
+      "halfUp": null
+    }
+  ],
+  "scenarios": [
+    {
+      "id": "A",
+      "group": "P3-AL-49-D",
+      "keys": ["K1"],
+      "steps": [
+        {
+          "key": "K1",
+          "kind": "purchase",
+          "qty": "1.0000",
+          "unitCost": "0.6000000000",
+          "value": null,
+          "expect": {
+            "value": "1",
+            "unitCostSnapshot": "0.6000000000",
+            "onHand": "1.0000",
+            "valuation": "1",
+            "avg": "1.0000000000",
+            "stockSeq": 1
+          }
+        }
+      ],
+      "journal": {
+        "inventoryLineAmounts": ["1"],
+        "postedLineCount": 1,
+        "rounding6100Lines": 0,
+        "glInventory": "1"
+      },
+      "reconciliation": {
+        "sumMovementValues": "1",
+        "sumCacheValuation": "1"
+      }
+    },
+    {
+      "id": "B",
+      "group": "P3-AL-49-D",
+      "keys": ["K1"],
+      "steps": [
+        {
+          "key": "K1",
+          "kind": "purchase",
+          "qty": "1.0000",
+          "unitCost": "0.6000000000",
+          "value": null,
+          "expect": {
+            "value": "1",
+            "unitCostSnapshot": "0.6000000000",
+            "onHand": "1.0000",
+            "valuation": "1",
+            "avg": "1.0000000000",
+            "stockSeq": 1
+          }
+        },
+        {
+          "key": "K1",
+          "kind": "purchase",
+          "qty": "1.0000",
+          "unitCost": "0.6000000000",
+          "value": null,
+          "expect": {
+            "value": "1",
+            "unitCostSnapshot": "0.6000000000",
+            "onHand": "2.0000",
+            "valuation": "2",
+            "avg": "1.0000000000",
+            "stockSeq": 2
+          }
+        }
+      ],
+      "journal": {
+        "inventoryLineAmounts": ["1", "1"],
+        "postedLineCount": 2,
+        "rounding6100Lines": 0,
+        "glInventory": "2"
+      },
+      "reconciliation": {
+        "sumMovementValues": "2",
+        "sumCacheValuation": "2"
+      },
+      "withdrawnAggregate": {
+        "exact": "1.2",
+        "roundedHalfEven": "1"
+      }
+    },
+    {
+      "id": "C",
+      "group": "P3-AL-49-D",
+      "keys": ["K1"],
+      "steps": [
+        {
+          "key": "K1",
+          "kind": "purchase",
+          "qty": "1.0000",
+          "unitCost": "0.4000000000",
+          "value": null,
+          "expect": {
+            "value": "0",
+            "unitCostSnapshot": "0.4000000000",
+            "onHand": "1.0000",
+            "valuation": "0",
+            "avg": "0.0000000000",
+            "stockSeq": 1
+          }
+        },
+        {
+          "key": "K1",
+          "kind": "purchase",
+          "qty": "1.0000",
+          "unitCost": "0.4000000000",
+          "value": null,
+          "expect": {
+            "value": "0",
+            "unitCostSnapshot": "0.4000000000",
+            "onHand": "2.0000",
+            "valuation": "0",
+            "avg": "0.0000000000",
+            "stockSeq": 2
+          }
+        }
+      ],
+      "journal": {
+        "inventoryLineAmounts": ["0", "0"],
+        "postedLineCount": 0,
+        "rounding6100Lines": 0,
+        "glInventory": "0"
+      },
+      "reconciliation": {
+        "sumMovementValues": "0",
+        "sumCacheValuation": "0"
+      },
+      "withdrawnAggregate": {
+        "exact": "0.8",
+        "roundedHalfEven": "1"
+      }
+    },
+    {
+      "id": "D",
+      "group": "P3-AL-49-D",
+      "keys": ["K1"],
+      "steps": [
+        {
+          "key": "K1",
+          "kind": "purchase",
+          "qty": "1.0000",
+          "unitCost": "0.5000000000",
+          "value": null,
+          "expect": {
+            "value": "0",
+            "unitCostSnapshot": "0.5000000000",
+            "onHand": "1.0000",
+            "valuation": "0",
+            "avg": "0.0000000000",
+            "stockSeq": 1
+          }
+        }
+      ],
+      "journal": {
+        "inventoryLineAmounts": ["0"],
+        "postedLineCount": 0,
+        "rounding6100Lines": 0,
+        "glInventory": "0"
+      },
+      "reconciliation": {
+        "sumMovementValues": "0",
+        "sumCacheValuation": "0"
+      }
+    },
+    {
+      "id": "E",
+      "group": "P3-AL-49-D",
+      "keys": ["K1"],
+      "steps": [
+        {
+          "key": "K1",
+          "kind": "purchase",
+          "qty": "1.0000",
+          "unitCost": "1.5000000000",
+          "value": null,
+          "expect": {
+            "value": "2",
+            "unitCostSnapshot": "1.5000000000",
+            "onHand": "1.0000",
+            "valuation": "2",
+            "avg": "2.0000000000",
+            "stockSeq": 1
+          }
+        }
+      ],
+      "journal": {
+        "inventoryLineAmounts": ["2"],
+        "postedLineCount": 1,
+        "rounding6100Lines": 0,
+        "glInventory": "2"
+      },
+      "reconciliation": {
+        "sumMovementValues": "2",
+        "sumCacheValuation": "2"
+      }
+    },
+    {
+      "id": "F",
+      "group": "P3-AL-49-D",
+      "keys": ["K1"],
+      "steps": [
+        {
+          "key": "K1",
+          "kind": "purchase",
+          "qty": "3.0000",
+          "unitCost": "3.3333333333",
+          "value": "10",
+          "expect": {
+            "value": "10",
+            "unitCostSnapshot": "3.3333333333",
+            "onHand": "3.0000",
+            "valuation": "10",
+            "avg": "3.3333333333",
+            "stockSeq": 1
+          }
+        },
+        {
+          "key": "K1",
+          "kind": "damage",
+          "qty": "-1.0000",
+          "unitCost": null,
+          "value": null,
+          "reason": "vector",
+          "expect": {
+            "value": "-3",
+            "unitCostSnapshot": "3.3333333333",
+            "onHand": "2.0000",
+            "valuation": "7",
+            "avg": "3.5000000000",
+            "stockSeq": 2
+          }
+        }
+      ],
+      "journal": {
+        "inventoryLineAmounts": ["10", "-3"],
+        "postedLineCount": 2,
+        "rounding6100Lines": 0,
+        "glInventory": "7"
+      },
+      "reconciliation": {
+        "sumMovementValues": "7",
+        "sumCacheValuation": "7"
+      }
+    },
+    {
+      "id": "G",
+      "group": "P3-AL-49-D",
+      "keys": ["K1"],
+      "steps": [
+        {
+          "key": "K1",
+          "kind": "purchase",
+          "qty": "3.0000",
+          "unitCost": "3.3333333333",
+          "value": "10",
+          "expect": {
+            "value": "10",
+            "unitCostSnapshot": "3.3333333333",
+            "onHand": "3.0000",
+            "valuation": "10",
+            "avg": "3.3333333333",
+            "stockSeq": 1
+          }
+        },
+        {
+          "key": "K1",
+          "kind": "damage",
+          "qty": "-1.0000",
+          "unitCost": null,
+          "value": null,
+          "reason": "vector",
+          "expect": {
+            "value": "-3",
+            "unitCostSnapshot": "3.3333333333",
+            "onHand": "2.0000",
+            "valuation": "7",
+            "avg": "3.5000000000",
+            "stockSeq": 2
+          }
+        },
+        {
+          "key": "K1",
+          "kind": "damage",
+          "qty": "-1.0000",
+          "unitCost": null,
+          "value": null,
+          "reason": "vector",
+          "expect": {
+            "value": "-4",
+            "unitCostSnapshot": "3.5000000000",
+            "onHand": "1.0000",
+            "valuation": "3",
+            "avg": "3.0000000000",
+            "stockSeq": 3
+          }
+        },
+        {
+          "key": "K1",
+          "kind": "damage",
+          "qty": "-1.0000",
+          "unitCost": null,
+          "value": null,
+          "reason": "vector",
+          "expect": {
+            "value": "-3",
+            "unitCostSnapshot": "3.0000000000",
+            "onHand": "0.0000",
+            "valuation": "0",
+            "avg": "3.0000000000",
+            "stockSeq": 4
+          }
+        }
+      ],
+      "journal": {
+        "inventoryLineAmounts": ["10", "-3", "-4", "-3"],
+        "postedLineCount": 4,
+        "rounding6100Lines": 0,
+        "glInventory": "0"
+      },
+      "reconciliation": {
+        "sumMovementValues": "0",
+        "sumCacheValuation": "0"
+      },
+      "cycle": {
+        "totalInbound": "10",
+        "totalOutbound": "10"
+      }
+    },
+    {
+      "id": "H",
+      "group": "P3-AL-49-D",
+      "keys": ["K1", "K2"],
+      "steps": [
+        {
+          "key": "K1",
+          "kind": "purchase",
+          "qty": "3.0000",
+          "unitCost": "3.3333333333",
+          "value": "10",
+          "expect": {
+            "value": "10",
+            "unitCostSnapshot": "3.3333333333",
+            "onHand": "3.0000",
+            "valuation": "10",
+            "avg": "3.3333333333",
+            "stockSeq": 1
+          }
+        },
+        {
+          "key": "K1",
+          "kind": "damage",
+          "qty": "-1.0000",
+          "unitCost": null,
+          "value": null,
+          "reason": "vector",
+          "expect": {
+            "value": "-3",
+            "unitCostSnapshot": "3.3333333333",
+            "onHand": "2.0000",
+            "valuation": "7",
+            "avg": "3.5000000000",
+            "stockSeq": 2
+          }
+        },
+        {
+          "key": "K1",
+          "kind": "transfer_out",
+          "qty": "-2.0000",
+          "unitCost": null,
+          "value": null,
+          "expect": {
+            "value": "-7",
+            "unitCostSnapshot": "3.5000000000",
+            "onHand": "0.0000",
+            "valuation": "0",
+            "avg": "3.5000000000",
+            "stockSeq": 3
+          }
+        },
+        {
+          "key": "K2",
+          "kind": "transfer_in",
+          "qty": "2.0000",
+          "unitCost": null,
+          "value": null,
+          "pairOf": 3,
+          "expect": {
+            "value": "7",
+            "unitCostSnapshot": "3.5000000000",
+            "onHand": "2.0000",
+            "valuation": "7",
+            "avg": "3.5000000000",
+            "stockSeq": 1
+          }
+        }
+      ],
+      "journal": {
+        "inventoryLineAmounts": ["10", "-3"],
+        "postedLineCount": 2,
+        "rounding6100Lines": 0,
+        "glInventory": "7"
+      },
+      "reconciliation": {
+        "sumMovementValues": "7",
+        "sumCacheValuation": "7"
+      }
+    },
+    {
+      "id": "I",
+      "group": "P3-AL-49-D",
+      "keys": ["K1"],
+      "steps": [
+        {
+          "key": "K1",
+          "kind": "purchase",
+          "qty": "1.0000",
+          "unitCost": "0.6000000000",
+          "value": null,
+          "expect": {
+            "value": "1",
+            "unitCostSnapshot": "0.6000000000",
+            "onHand": "1.0000",
+            "valuation": "1",
+            "avg": "1.0000000000",
+            "stockSeq": 1
+          }
+        },
+        {
+          "key": "K1",
+          "kind": "purchase",
+          "qty": "1.0000",
+          "unitCost": "0.6000000000",
+          "value": null,
+          "expect": {
+            "value": "1",
+            "unitCostSnapshot": "0.6000000000",
+            "onHand": "2.0000",
+            "valuation": "2",
+            "avg": "1.0000000000",
+            "stockSeq": 2
+          }
+        },
+        {
+          "key": "K1",
+          "kind": "purchase",
+          "qty": "1.0000",
+          "unitCost": "0.4000000000",
+          "value": null,
+          "expect": {
+            "value": "0",
+            "unitCostSnapshot": "0.4000000000",
+            "onHand": "3.0000",
+            "valuation": "2",
+            "avg": "0.6666666667",
+            "stockSeq": 3
+          }
+        },
+        {
+          "key": "K1",
+          "kind": "purchase",
+          "qty": "1.0000",
+          "unitCost": "0.4000000000",
+          "value": null,
+          "expect": {
+            "value": "0",
+            "unitCostSnapshot": "0.4000000000",
+            "onHand": "4.0000",
+            "valuation": "2",
+            "avg": "0.5000000000",
+            "stockSeq": 4
+          }
+        }
+      ],
+      "journal": {
+        "inventoryLineAmounts": ["1", "1", "0", "0"],
+        "postedLineCount": 2,
+        "rounding6100Lines": 0,
+        "glInventory": "2"
+      },
+      "reconciliation": {
+        "sumMovementValues": "2",
+        "sumCacheValuation": "2"
+      },
+      "withdrawnAggregate": {
+        "exact": "2.0",
+        "roundedHalfEven": "2"
+      }
+    },
+    {
+      "id": "AL08-RECEIPT",
+      "group": "P3-AL-08",
+      "keys": ["K1"],
+      "steps": [
+        {
+          "key": "K1",
+          "kind": "purchase",
+          "qty": "10.0000",
+          "unitCost": "200.0000000000",
+          "value": null,
+          "expect": {
+            "value": "2000",
+            "unitCostSnapshot": "200.0000000000",
+            "onHand": "10.0000",
+            "valuation": "2000",
+            "avg": "200.0000000000",
+            "stockSeq": 1
+          }
+        },
+        {
+          "key": "K1",
+          "kind": "purchase",
+          "qty": "5.0000",
+          "unitCost": "100.0000000000",
+          "value": null,
+          "expect": {
+            "value": "500",
+            "unitCostSnapshot": "100.0000000000",
+            "onHand": "15.0000",
+            "valuation": "2500",
+            "avg": "166.6666666667",
+            "stockSeq": 2
+          }
+        }
+      ],
+      "journal": {
+        "inventoryLineAmounts": ["2000", "500"],
+        "postedLineCount": 2,
+        "rounding6100Lines": 0,
+        "glInventory": "2500"
+      },
+      "reconciliation": {
+        "sumMovementValues": "2500",
+        "sumCacheValuation": "2500"
+      }
+    },
+    {
+      "id": "AL08-TRANSFER-GOLD44",
+      "group": "P3-AL-08",
+      "keys": ["K1", "K2"],
+      "steps": [
+        {
+          "key": "K1",
+          "kind": "purchase",
+          "qty": "10.0000",
+          "unitCost": "100.0000000000",
+          "value": null,
+          "expect": {
+            "value": "1000",
+            "unitCostSnapshot": "100.0000000000",
+            "onHand": "10.0000",
+            "valuation": "1000",
+            "avg": "100.0000000000",
+            "stockSeq": 1
+          }
+        },
+        {
+          "key": "K2",
+          "kind": "purchase",
+          "qty": "10.0000",
+          "unitCost": "200.0000000000",
+          "value": null,
+          "expect": {
+            "value": "2000",
+            "unitCostSnapshot": "200.0000000000",
+            "onHand": "10.0000",
+            "valuation": "2000",
+            "avg": "200.0000000000",
+            "stockSeq": 1
+          }
+        },
+        {
+          "key": "K1",
+          "kind": "transfer_out",
+          "qty": "-5.0000",
+          "unitCost": null,
+          "value": null,
+          "expect": {
+            "value": "-500",
+            "unitCostSnapshot": "100.0000000000",
+            "onHand": "5.0000",
+            "valuation": "500",
+            "avg": "100.0000000000",
+            "stockSeq": 2
+          }
+        },
+        {
+          "key": "K2",
+          "kind": "transfer_in",
+          "qty": "5.0000",
+          "unitCost": null,
+          "value": null,
+          "pairOf": 3,
+          "expect": {
+            "value": "500",
+            "unitCostSnapshot": "100.0000000000",
+            "onHand": "15.0000",
+            "valuation": "2500",
+            "avg": "166.6666666667",
+            "stockSeq": 2
+          }
+        }
+      ],
+      "journal": {
+        "inventoryLineAmounts": ["1000", "2000"],
+        "postedLineCount": 2,
+        "rounding6100Lines": 0,
+        "glInventory": "3000"
+      },
+      "reconciliation": {
+        "sumMovementValues": "3000",
+        "sumCacheValuation": "3000"
+      }
+    },
+    {
+      "id": "AL08-ADJ-POS",
+      "group": "P3-AL-08",
+      "keys": ["K1"],
+      "steps": [
+        {
+          "key": "K1",
+          "kind": "purchase",
+          "qty": "10.0000",
+          "unitCost": "100.0000000000",
+          "value": null,
+          "expect": {
+            "value": "1000",
+            "unitCostSnapshot": "100.0000000000",
+            "onHand": "10.0000",
+            "valuation": "1000",
+            "avg": "100.0000000000",
+            "stockSeq": 1
+          }
+        },
+        {
+          "key": "K1",
+          "kind": "adjustment",
+          "qty": "3.0000",
+          "unitCost": "110.5000000000",
+          "value": null,
+          "reason": "vector",
+          "expect": {
+            "value": "332",
+            "unitCostSnapshot": "110.5000000000",
+            "onHand": "13.0000",
+            "valuation": "1332",
+            "avg": "102.4615384615",
+            "stockSeq": 2
+          }
+        }
+      ],
+      "journal": {
+        "inventoryLineAmounts": ["1000", "332"],
+        "postedLineCount": 2,
+        "rounding6100Lines": 0,
+        "glInventory": "1332"
+      },
+      "reconciliation": {
+        "sumMovementValues": "1332",
+        "sumCacheValuation": "1332"
+      }
+    },
+    {
+      "id": "AL08-ADJ-NEG",
+      "group": "P3-AL-08",
+      "keys": ["K1"],
+      "steps": [
+        {
+          "key": "K1",
+          "kind": "purchase",
+          "qty": "10.0000",
+          "unitCost": "100.0000000000",
+          "value": null,
+          "expect": {
+            "value": "1000",
+            "unitCostSnapshot": "100.0000000000",
+            "onHand": "10.0000",
+            "valuation": "1000",
+            "avg": "100.0000000000",
+            "stockSeq": 1
+          }
+        },
+        {
+          "key": "K1",
+          "kind": "adjustment",
+          "qty": "3.0000",
+          "unitCost": "110.5000000000",
+          "value": null,
+          "reason": "vector",
+          "expect": {
+            "value": "332",
+            "unitCostSnapshot": "110.5000000000",
+            "onHand": "13.0000",
+            "valuation": "1332",
+            "avg": "102.4615384615",
+            "stockSeq": 2
+          }
+        },
+        {
+          "key": "K1",
+          "kind": "adjustment",
+          "qty": "-4.0000",
+          "unitCost": null,
+          "value": null,
+          "reason": "vector",
+          "expect": {
+            "value": "-410",
+            "unitCostSnapshot": "102.4615384615",
+            "onHand": "9.0000",
+            "valuation": "922",
+            "avg": "102.4444444444",
+            "stockSeq": 3
+          }
+        }
+      ],
+      "journal": {
+        "inventoryLineAmounts": ["1000", "332", "-410"],
+        "postedLineCount": 3,
+        "rounding6100Lines": 0,
+        "glInventory": "922"
+      },
+      "reconciliation": {
+        "sumMovementValues": "922",
+        "sumCacheValuation": "922"
+      }
+    },
+    {
+      "id": "AL08-CATCHUP-GOLD54",
+      "group": "P3-AL-08",
+      "keys": ["K1"],
+      "steps": [
+        {
+          "key": "K1",
+          "kind": "adjustment",
+          "qty": "-5.0000",
+          "unitCost": "100.0000000000",
+          "value": "-500",
+          "reason": "seed",
+          "seededByOwner": true,
+          "expect": {
+            "value": "-500",
+            "unitCostSnapshot": "100.0000000000",
+            "onHand": "-5.0000",
+            "valuation": "-500",
+            "avg": "100.0000000000",
+            "stockSeq": 1
+          }
+        },
+        {
+          "key": "K1",
+          "kind": "purchase",
+          "qty": "10.0000",
+          "unitCost": "120.0000000000",
+          "value": null,
+          "expect": {
+            "value": "1200",
+            "unitCostSnapshot": "120.0000000000",
+            "onHand": "5.0000",
+            "valuation": "700",
+            "avg": "140.0000000000",
+            "stockSeq": 2
+          }
+        },
+        {
+          "key": "K1",
+          "kind": "negative_inventory_cost_adjustment",
+          "qty": "0.0000",
+          "unitCost": null,
+          "value": "-100",
+          "catchUp": {
+            "qtyCovered": "5.0000",
+            "actual": "120.0000000000",
+            "provisional": "100.0000000000"
+          },
+          "expect": {
+            "value": "-100",
+            "unitCostSnapshot": null,
+            "onHand": "5.0000",
+            "valuation": "600",
+            "avg": "120.0000000000",
+            "stockSeq": 3
+          }
+        }
+      ],
+      "journal": {
+        "inventoryLineAmounts": ["-500", "1200", "-100"],
+        "postedLineCount": 3,
+        "rounding6100Lines": 0,
+        "glInventory": "600"
+      },
+      "reconciliation": {
+        "sumMovementValues": "600",
+        "sumCacheValuation": "600"
+      },
+      "cogs": "600"
+    },
+    {
+      "id": "AL08-CATCHUP-GOLD55",
+      "group": "P3-AL-08",
+      "keys": ["K1"],
+      "steps": [
+        {
+          "key": "K1",
+          "kind": "adjustment",
+          "qty": "-5.0000",
+          "unitCost": "0.0000000000",
+          "value": "0",
+          "reason": "seed",
+          "seededByOwner": true,
+          "expect": {
+            "value": "0",
+            "unitCostSnapshot": "0.0000000000",
+            "onHand": "-5.0000",
+            "valuation": "0",
+            "avg": "0.0000000000",
+            "stockSeq": 1
+          }
+        },
+        {
+          "key": "K1",
+          "kind": "purchase",
+          "qty": "10.0000",
+          "unitCost": "120.0000000000",
+          "value": null,
+          "expect": {
+            "value": "1200",
+            "unitCostSnapshot": "120.0000000000",
+            "onHand": "5.0000",
+            "valuation": "1200",
+            "avg": "240.0000000000",
+            "stockSeq": 2
+          }
+        },
+        {
+          "key": "K1",
+          "kind": "negative_inventory_cost_adjustment",
+          "qty": "0.0000",
+          "unitCost": null,
+          "value": "-600",
+          "catchUp": {
+            "qtyCovered": "5.0000",
+            "actual": "120.0000000000",
+            "provisional": "0.0000000000"
+          },
+          "expect": {
+            "value": "-600",
+            "unitCostSnapshot": null,
+            "onHand": "5.0000",
+            "valuation": "600",
+            "avg": "120.0000000000",
+            "stockSeq": 3
+          }
+        }
+      ],
+      "journal": {
+        "inventoryLineAmounts": ["0", "1200", "-600"],
+        "postedLineCount": 2,
+        "rounding6100Lines": 0,
+        "glInventory": "600"
+      },
+      "reconciliation": {
+        "sumMovementValues": "600",
+        "sumCacheValuation": "600"
+      },
+      "cogs": "600"
+    },
+    {
+      "id": "AL08-CATCHUP-GOLD72",
+      "group": "P3-AL-08",
+      "keys": ["K1"],
+      "steps": [
+        {
+          "key": "K1",
+          "kind": "adjustment",
+          "qty": "-10.0000",
+          "unitCost": "100.0000000000",
+          "value": "-1000",
+          "reason": "seed",
+          "seededByOwner": true,
+          "expect": {
+            "value": "-1000",
+            "unitCostSnapshot": "100.0000000000",
+            "onHand": "-10.0000",
+            "valuation": "-1000",
+            "avg": "100.0000000000",
+            "stockSeq": 1
+          }
+        },
+        {
+          "key": "K1",
+          "kind": "purchase",
+          "qty": "4.0000",
+          "unitCost": "120.0000000000",
+          "value": null,
+          "expect": {
+            "value": "480",
+            "unitCostSnapshot": "120.0000000000",
+            "onHand": "-6.0000",
+            "valuation": "-520",
+            "avg": "86.6666666667",
+            "stockSeq": 2
+          }
+        },
+        {
+          "key": "K1",
+          "kind": "negative_inventory_cost_adjustment",
+          "qty": "0.0000",
+          "unitCost": null,
+          "value": "-80",
+          "catchUp": {
+            "qtyCovered": "4.0000",
+            "actual": "120.0000000000",
+            "provisional": "100.0000000000"
+          },
+          "expect": {
+            "value": "-80",
+            "unitCostSnapshot": null,
+            "onHand": "-6.0000",
+            "valuation": "-600",
+            "avg": "100.0000000000",
+            "stockSeq": 3
+          }
+        },
+        {
+          "key": "K1",
+          "kind": "purchase",
+          "qty": "6.0000",
+          "unitCost": "130.0000000000",
+          "value": null,
+          "expect": {
+            "value": "780",
+            "unitCostSnapshot": "130.0000000000",
+            "onHand": "0.0000",
+            "valuation": "180",
+            "avg": "100.0000000000",
+            "stockSeq": 4
+          }
+        },
+        {
+          "key": "K1",
+          "kind": "negative_inventory_cost_adjustment",
+          "qty": "0.0000",
+          "unitCost": null,
+          "value": "-180",
+          "catchUp": {
+            "qtyCovered": "6.0000",
+            "actual": "130.0000000000",
+            "provisional": "100.0000000000"
+          },
+          "expect": {
+            "value": "-180",
+            "unitCostSnapshot": null,
+            "onHand": "0.0000",
+            "valuation": "0",
+            "avg": "100.0000000000",
+            "stockSeq": 5
+          }
+        }
+      ],
+      "journal": {
+        "inventoryLineAmounts": ["-1000", "480", "-80", "780", "-180"],
+        "postedLineCount": 5,
+        "rounding6100Lines": 0,
+        "glInventory": "0"
+      },
+      "reconciliation": {
+        "sumMovementValues": "0",
+        "sumCacheValuation": "0"
+      },
+      "cogs": "1260"
+    }
+  ],
+  "controls": [
+    {
+      "id": "CTRL-FLUSH",
+      "group": "P3-AL-49-D",
+      "keys": ["K1"],
+      "steps": [
+        {
+          "key": "K1",
+          "kind": "purchase",
+          "qty": "30000000000.0000",
+          "unitCost": "0.0000000000",
+          "value": "1",
+          "expect": {
+            "value": "1",
+            "unitCostSnapshot": "0.0000000000",
+            "onHand": "30000000000.0000",
+            "valuation": "1",
+            "avg": "0.0000000000",
+            "stockSeq": 1
+          }
+        },
+        {
+          "key": "K1",
+          "kind": "damage",
+          "qty": "-30000000000.0000",
+          "unitCost": null,
+          "value": null,
+          "reason": "vector",
+          "expect": {
+            "value": "-1",
+            "unitCostSnapshot": "0.0000000000",
+            "onHand": "0.0000",
+            "valuation": "0",
+            "avg": "0.0000000000",
+            "stockSeq": 2
+          }
+        }
+      ],
+      "journal": {
+        "inventoryLineAmounts": ["1", "-1"],
+        "postedLineCount": 2,
+        "rounding6100Lines": 0,
+        "glInventory": "0"
+      },
+      "reconciliation": {
+        "sumMovementValues": "0",
+        "sumCacheValuation": "0"
+      }
+    }
+  ]
+}

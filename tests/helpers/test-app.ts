@@ -11,6 +11,7 @@ import type { CredentialPayloadEncryptor } from '../../apps/api/src/modules/deli
 import { CredentialDeliveryWorker } from '../../apps/api/src/modules/delivery/delivery-worker.service';
 import { mintProvisioningAssertion, type ProvisioningKind } from '../../apps/api/src/infra/provisioning-assertion';
 import { mintAccountingAssertion, type AccountingAssertionClaims, type AccountingAssertionKey } from '../../packages/accounting/src/assertion';
+import { mintInventoryAssertion, type InventoryAssertionClaims, type InventoryAssertionKey } from '../../packages/inventory/src/assertion';
 
 // The cluster's lifecycle lives in a framework-free module so that evidence
 // tooling can start the same PostgreSQL without importing the application.
@@ -88,6 +89,25 @@ export function mintTestAccountingAssertion(claims: AccountingAssertionClaims, n
   return mintAccountingAssertion(accountingAssertionKey(), claims, now, ttlSeconds);
 }
 
+/**
+ * P3-AL-55 §C: the inventory command assertion key. A THIRD set of bytes,
+ * distinct from both the provisioning and the accounting key — production
+ * config refuses a match with either, and a fixture that shared one would
+ * quietly defeat the separation it is supposed to prove.
+ */
+export const INVENTORY_ASSERTION_KEY_B64 = Buffer.from('test-inventory-assertion-key-32b!!!!!!!!!').subarray(0, 32).toString('base64');
+export const INVENTORY_ASSERTION_KID = 'inv1';
+
+/** The inventory key as the minter holds it. */
+export function inventoryAssertionKey(): InventoryAssertionKey {
+  return { kid: INVENTORY_ASSERTION_KID, secret: Buffer.from(INVENTORY_ASSERTION_KEY_B64, 'base64') };
+}
+
+/** Mint an `invctl/1` assertion exactly as the merchant API would. */
+export function mintTestInventoryAssertion(claims: InventoryAssertionClaims, now: Date = new Date(), ttlSeconds = 60): string {
+  return mintInventoryAssertion(claims, inventoryAssertionKey(), now, ttlSeconds);
+}
+
 export const dbUrl = `postgresql://${PG_USER}:${PG_PASSWORD}@localhost:${PG_PORT}/daftar`;
 export const appDbUrl = `postgresql://daftar_app:${APP_DB_PASSWORD}@localhost:${PG_PORT}/daftar`;
 export const platformDbUrl = `postgresql://daftar_platform:${PLATFORM_DB_PASSWORD}@localhost:${PG_PORT}/daftar`;
@@ -119,6 +139,16 @@ async function installAccountingKey(): Promise<void> {
   }
 }
 
+/** The database side of the inventory assertion key (P3-AL-55 §C) — the platform-only ops command. */
+async function installInventoryKey(): Promise<void> {
+  const pool = new Pool({ connectionString: dbUrl, max: 1 });
+  try {
+    await pool.query(`SELECT inventory_assertion_key_install($1, decode($2, 'base64'))`, [INVENTORY_ASSERTION_KID, INVENTORY_ASSERTION_KEY_B64]);
+  } finally {
+    await pool.end();
+  }
+}
+
 export async function ensurePostgres(): Promise<void> {
   await startOrReuse();
   await ensureDatabase('daftar');
@@ -127,6 +157,7 @@ export async function ensurePostgres(): Promise<void> {
   await runMigrations(dbUrl);
   await installProvisioningKey();
   await installAccountingKey();
+  await installInventoryKey();
 }
 
 let ownerPoolInstance: Pool | null = null;
@@ -248,6 +279,8 @@ export async function createTestApp(options: TestAppOptions = {}): Promise<TestA
     PROVISIONING_ASSERTION_KID,
     ACCOUNTING_ASSERTION_KEY: ACCOUNTING_ASSERTION_KEY_B64,
     ACCOUNTING_ASSERTION_KID,
+    INVENTORY_ASSERTION_KEY: INVENTORY_ASSERTION_KEY_B64,
+    INVENTORY_ASSERTION_KID,
     JWT_SECRET: 'test-secret-key-with-at-least-32-characters!',
     MEDIA_ROOT: '/tmp/daftar-test-media',
     LOG_LEVEL: process.env['TEST_LOG_LEVEL'] ?? 'warn',

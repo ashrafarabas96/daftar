@@ -447,3 +447,174 @@ describe('the effective-state SECURITY DEFINER audit (§7, §9, §23)', () => {
     expect(r.rows[0]?.n).toBe('0');
   });
 });
+
+/**
+ * P3-S1 — THE §D CONTRACT FOR THE INVENTORY PRINCIPAL (P3-AL-54 §D).
+ *
+ * Discovered from the catalogue, not from a list: every routine
+ * `daftar_inventory_internal` owns, in any schema, is swept. A routine added
+ * by a later slice is covered the moment it exists, and one that breaks the
+ * shape fails here by name.
+ *
+ * The contract: SECURITY DEFINER, `search_path` exactly
+ * `pg_catalog, public, pg_temp`, no EXECUTE for PUBLIC, EXECUTE only for the
+ * roles the §H matrix names, no dynamic SQL, no session relation. The two
+ * column guards of 0053 are SECURITY INVOKER by design — they decide by
+ * `current_user` — and are ASSERTED as the only exceptions: the invoker set
+ * must be exactly those two, not "at most" those two.
+ *
+ * The static half of the same rule is guard G-7
+ * (scripts/guards/inventory-definer-contract.ts).
+ */
+describe('the §D inventory definer contract (P3-AL-54 §D)', () => {
+  const INVENTORY_OWNER = 'daftar_inventory_internal';
+  const PINNED = ['search_path=pg_catalog, public, pg_temp'];
+  const INVOKER_EXCEPTIONS = ['product_variants_10_base_variant_authority()', 'products_10_inventory_config_authority()'];
+
+  /** §H: who may EXECUTE each inventory routine. Everything not named here: nobody. */
+  const EXECUTE_MATRIX: Readonly<Record<string, readonly string[]>> = {
+    'inventory_configure_product(uuid,boolean,text,smallint)': ['daftar_app'],
+    'structure_associate_warehouse_branch(uuid,uuid)': ['daftar_app'],
+    'structure_dissociate_warehouse_branch(uuid,uuid)': ['daftar_app'],
+    'inventory_assertion_key_install(text,bytea)': ['daftar_platform'],
+    'inventory_assertion_key_retire(text)': ['daftar_platform'],
+  };
+
+  const INVENTORY_TRUSTED_RELATIONS = [
+    'inventory_assertion_keys',
+    'inventory_assertion_uses',
+    'inventory_operation_kinds',
+    'units',
+    'products',
+    'product_variants',
+    'branch_warehouses',
+    'warehouses',
+    'branches',
+    'audit_events',
+    // P3-S2 (0059/0060): the ledger the movement primitive writes and reads.
+    'stock_movements',
+    'stock_levels',
+    'stock_source_bindings',
+    'stock_movement_kinds',
+    'stock_source_types',
+    'inventory_operation_movement_kinds',
+    'negative_inventory_deficits',
+    'negative_deficit_coverages',
+  ] as const;
+
+  interface OwnedRoutine {
+    sig: string;
+    schema: string;
+    definer: boolean;
+    config: string[] | null;
+    trigger: boolean;
+    language: string;
+    src: string;
+    public_execute: boolean;
+    grantees: string[];
+  }
+
+  async function owned(): Promise<OwnedRoutine[]> {
+    const r = await ownerPool().query<OwnedRoutine>(
+      `SELECT regexp_replace(p.oid::regprocedure::text, '^public\\.', '') AS sig,
+              n.nspname                                             AS schema,
+              p.prosecdef                                           AS definer,
+              p.proconfig                                           AS config,
+              p.prorettype = 'trigger'::regtype                     AS trigger,
+              l.lanname                                             AS language,
+              p.prosrc                                              AS src,
+              has_function_privilege('public', p.oid, 'EXECUTE')    AS public_execute,
+              coalesce((SELECT array_agg(DISTINCT g.rolname ORDER BY g.rolname)
+                          FROM aclexplode(p.proacl) a
+                          JOIN pg_roles g ON g.oid = a.grantee
+                         WHERE a.privilege_type = 'EXECUTE' AND a.grantee <> p.proowner), ARRAY[]::name[])::text[] AS grantees
+       FROM pg_proc p
+       JOIN pg_namespace n ON n.oid = p.pronamespace
+       JOIN pg_language l  ON l.oid = p.prolang
+       JOIN pg_roles o     ON o.oid = p.proowner
+       WHERE o.rolname = $1
+       ORDER BY 1`,
+      [INVENTORY_OWNER],
+    );
+    return r.rows;
+  }
+
+  it('the principal owns routines, so the sweep means something', async () => {
+    const sigs = (await owned()).map((x) => x.sig);
+    expect(sigs.length).toBeGreaterThanOrEqual(16);
+    for (const required of [...Object.keys(EXECUTE_MATRIX), ...INVOKER_EXCEPTIONS, 'inventory_assertion_consume(text,text)']) {
+      expect(sigs, `${required} is not owned by ${INVENTORY_OWNER}`).toContain(required);
+    }
+  });
+
+  it('every routine lives in schema public', async () => {
+    expect((await owned()).filter((x) => x.schema !== 'public').map((x) => `${x.schema}.${x.sig}`)).toEqual([]);
+  });
+
+  it('every routine is SECURITY DEFINER except exactly the two asserted INVOKER column guards', async () => {
+    const invokers = (await owned()).filter((x) => !x.definer).map((x) => x.sig);
+    expect(invokers.sort()).toEqual([...INVOKER_EXCEPTIONS].sort());
+  });
+
+  it('every routine, the exceptions included, pins search_path = pg_catalog, public, pg_temp and nothing else', async () => {
+    const off = (await owned()).filter((x) => JSON.stringify(x.config) !== JSON.stringify(PINNED)).map((x) => `${x.sig} → ${JSON.stringify(x.config)}`);
+    expect(off).toEqual([]);
+  });
+
+  it('PUBLIC may execute none of them', async () => {
+    expect((await owned()).filter((x) => x.public_execute).map((x) => x.sig)).toEqual([]);
+  });
+
+  it('trigger functions are executable by nobody', async () => {
+    const triggers = (await owned()).filter((x) => x.trigger);
+    expect(triggers.length).toBeGreaterThanOrEqual(5);
+    expect(triggers.filter((x) => x.grantees.length > 0).map((x) => `${x.sig} → ${x.grantees.join(',')}`)).toEqual([]);
+  });
+
+  it('EXECUTE grantees are exactly the §H matrix, and nobody for every routine it does not name', async () => {
+    const actual = Object.fromEntries((await owned()).map((x) => [x.sig, x.grantees]));
+    const expected = Object.fromEntries(Object.keys(actual).map((sig) => [sig, [...(EXECUTE_MATRIX[sig] ?? [])]]));
+    expect(actual).toEqual(expected);
+  });
+
+  it('no runtime role holds EXECUTE through a membership either', async () => {
+    const leaks: string[] = [];
+    for (const x of await owned()) {
+      for (const role of RUNTIME_ROLES) {
+        const r = await ownerPool().query<{ e: boolean }>(`SELECT has_function_privilege($1, $2::regprocedure, 'EXECUTE') AS e`, [role, x.sig]);
+        const allowed = (EXECUTE_MATRIX[x.sig] ?? []).includes(role);
+        if (r.rows[0]?.e !== allowed) leaks.push(`${role} ${allowed ? 'lacks' : 'holds'} EXECUTE on ${x.sig}`);
+      }
+    }
+    expect(leaks).toEqual([]);
+  });
+
+  it('no body builds SQL at run time or creates a session relation', async () => {
+    const off = (await owned())
+      .filter((x) => /\bEXECUTE\b(?!\s+FUNCTION\b)/i.test(x.src) || /\bCREATE\s+(?:GLOBAL\s+|LOCAL\s+)?(?:TEMP|TEMPORARY)\b/i.test(x.src))
+      .map((x) => x.sig);
+    expect(off).toEqual([]);
+    expect(new Set((await owned()).map((x) => x.language))).toEqual(new Set(['plpgsql', 'sql']));
+  });
+
+  it('the owner cannot log in, create a session relation, create in public, or bypass row level security', async () => {
+    const r = await ownerPool().query<{ login: boolean; inherit: boolean; bypass: boolean; su: boolean; temp: boolean; create: boolean }>(
+      `SELECT rolcanlogin AS login, rolinherit AS inherit, rolbypassrls AS bypass, rolsuper AS su,
+              has_database_privilege(rolname, current_database(), 'TEMPORARY') AS temp,
+              has_schema_privilege(rolname, 'public', 'CREATE') AS create
+       FROM pg_roles WHERE rolname = $1`,
+      [INVENTORY_OWNER],
+    );
+    expect(r.rows[0]).toEqual({ login: false, inherit: false, bypass: false, su: false, temp: false, create: false });
+  });
+
+  it.each(INVENTORY_TRUSTED_RELATIONS)('daftar_app cannot create a temporary relation named %s', async (relation) => {
+    const message = await attempt('daftar_app', `CREATE TEMP TABLE ${relation} (shadow TEXT)`);
+    expect(message, `daftar_app created pg_temp.${relation}, which elevated inventory code would then read`).toMatch(/permission denied/i);
+  });
+
+  it('daftar_platform cannot create a temporary inventory key registry', async () => {
+    const message = await attempt('daftar_platform', `CREATE TEMP TABLE inventory_assertion_keys (kid TEXT, secret BYTEA, status TEXT)`);
+    expect(message).toMatch(/permission denied/i);
+  });
+});

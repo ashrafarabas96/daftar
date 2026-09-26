@@ -8,14 +8,23 @@ import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import {
   ACCOUNTING_AUTHORITY_TABLES,
+  STOCK_CACHE_EXCEPTION,
+  checkStockCacheShape,
   discoverAccountingTables,
+  discoverInventoryTables,
   findAuthoritativeBalanceColumns,
+  findAuthoritativeInventoryColumns,
+  findForbiddenInventoryRelations,
   isForbiddenBalanceTable,
+  isForbiddenInventoryTable,
 } from './guards/no-authoritative-balance';
-import { findFloatRateColumns } from './guards/no-float-rate';
+import { findFloatRateColumns, findInventoryNumericViolations } from './guards/no-float-rate';
 import { findDefinerSearchPathViolations } from './guards/definer-search-path';
 import { findReadSurfaceViolations, readSurfaceFiles } from './guards/read-surface';
 import { findPostingSurfaceViolations } from './guards/posting-surface';
+import { checkInventoryDefinerContract, INVENTORY_INVOKER_EXCEPTIONS } from './guards/inventory-definer-contract';
+import { findInventoryArithmeticViolations, INVENTORY_ARITHMETIC_WHY, isInventoryMigration } from './guards/inventory-arithmetic';
+import { checkInventoryWriterAuthority } from './guards/inventory-writer-authority';
 
 const ROOT = join(__dirname, '..');
 let failures = 0;
@@ -111,6 +120,9 @@ for (const dir of [
   'packages/design-system/src',
   'apps/web/src',
   'apps/admin/src',
+  // P3-S2: the inventory arithmetic package formats and parses quantities,
+  // costs and values, so it is a money surface like the contract packages.
+  'packages/inventory/src',
 ]) {
   for (const f of tsFiles(join(ROOT, dir))) {
     const src = readFileSync(f, 'utf8');
@@ -304,6 +316,44 @@ for (const dir of ['apps/api/src', 'apps/web/src', 'apps/admin/src', 'packages']
       );
     }
   }
+
+  // P3-S2: inventory storage. The stock ledger is the truth and
+  // `stock_levels` is its ONE cache, holding exactly its four columns; any
+  // other stored quantity, valuation, reservation or availability — or a
+  // table that is a stock balance/summary/snapshot/rollup/cache — is a second
+  // truth. The accounting checks above are untouched.
+  const inventoryWatched = discoverInventoryTables(schema);
+  for (const f of migrations) {
+    for (const hit of findAuthoritativeInventoryColumns(readFileSync(f, 'utf8'), inventoryWatched)) {
+      fail('no-authoritative-balance', f, `${hit.table}.${hit.column} claims storage authority over a derived stock quantity (G-3/P3-AL-49)`);
+    }
+  }
+  for (const table of inventoryWatched) {
+    if (isForbiddenInventoryTable(table)) {
+      fail(
+        'no-authoritative-balance',
+        'infrastructure/database/migrations',
+        `table \`${table}\` stores a derived stock balance — the ledger is the truth (G-3)`,
+      );
+    }
+  }
+  // A stock balance under a name without the inventory prefix is the same second truth.
+  for (const table of findForbiddenInventoryRelations(schema)) {
+    if (inventoryWatched.includes(table)) continue; // already reported above
+    fail(
+      'no-authoritative-balance',
+      'infrastructure/database/migrations',
+      `relation \`${table}\` stores a derived stock balance — the ledger is the truth (G-3)`,
+    );
+  }
+  if (!inventoryWatched.includes(STOCK_CACHE_EXCEPTION)) {
+    fail(
+      'no-authoritative-balance',
+      'infrastructure/database/migrations',
+      `${STOCK_CACHE_EXCEPTION} does not exist — the inventory half of G-3 is watching nothing`,
+    );
+  }
+  for (const problem of checkStockCacheShape(schema)) fail('no-authoritative-balance', 'infrastructure/database/migrations', problem);
 }
 
 // Rule 16 — GUARD G-2 (Architecture Lock, P2-S2): no floating-point financial
@@ -324,6 +374,18 @@ for (const dir of ['apps/api/src', 'apps/web/src', 'apps/admin/src', 'packages']
   const schema = migrations.map((f) => readFileSync(f, 'utf8')).join('\n');
   if (!/CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?journal_lines\b/i.test(schema)) {
     fail('no-float-rate', 'infrastructure/database/migrations', 'journal_lines does not exist — G-2 is watching nothing');
+  }
+
+  // P3-S2: inventory storage is exact fixed point — no float column on any
+  // inventory table, and quantities, costs and values pinned to
+  // NUMERIC(18,4), NUMERIC(28,10) and BIGINT.
+  for (const f of migrations) {
+    for (const hit of findInventoryNumericViolations(readFileSync(f, 'utf8'))) {
+      fail('no-float-rate', f, `${hit.table}.${hit.column} ${hit.detail}`);
+    }
+  }
+  if (!discoverInventoryTables(schema).includes('stock_movements')) {
+    fail('no-float-rate', 'infrastructure/database/migrations', 'stock_movements does not exist — the inventory half of G-2 is watching nothing');
   }
 }
 
@@ -401,8 +463,76 @@ for (const dir of ['apps/api/src', 'apps/web/src', 'apps/admin/src', 'packages']
   }
 }
 
+// Rule 20 — GUARD G-7 (P3-S1, P3-AL-54 §D): every routine handed to
+// daftar_inventory_internal is SECURITY DEFINER with the pinned path
+// `pg_catalog, public, pg_temp`, has PUBLIC's EXECUTE revoked in the same
+// file, runs no dynamic SQL, and is transferred inside a same-file
+// GRANT/REVOKE CREATE ON SCHEMA public bracket — except exactly the two
+// INVOKER column guards, which are asserted, not tolerated. The live half is
+// the catalogue sweep in tests/security/search-path-shadowing.test.ts.
+{
+  const migrations: Record<string, string> = {};
+  for (const f of walk(join(ROOT, 'infrastructure/database/migrations'), /\.sql$/).sort()) {
+    migrations[relative(ROOT, f)] = readFileSync(f, 'utf8');
+  }
+  const report = checkInventoryDefinerContract({ migrations });
+  for (const violation of report.violations) {
+    fail('inventory-definer-contract', 'infrastructure/database/migrations', violation);
+  }
+  // A guard watching nothing is decorative: the inventory authority exists
+  // from P3-S1 on, so an empty transfer set means the guard has gone blind.
+  if (report.transferred.length <= INVENTORY_INVOKER_EXCEPTIONS.length) {
+    fail(
+      'inventory-definer-contract',
+      'infrastructure/database/migrations',
+      'no SECURITY DEFINER routine is handed to daftar_inventory_internal — G-7 is watching nothing',
+    );
+  }
+}
+
+// Rule 21 — inventory arithmetic (P3-S2, contract §7.2): no `on_hand × avg`
+// valuation, no HALF_UP `round(` or declared-scale `scale(` in inventory SQL,
+// no created_at ordering over the ledger or the deficits, no deadlock retry,
+// and no binary floating point in the arithmetic package.
+{
+  const migrations: Record<string, string> = {};
+  for (const f of walk(join(ROOT, 'infrastructure/database/migrations'), /\.sql$/).sort()) {
+    migrations[relative(ROOT, f)] = readFileSync(f, 'utf8');
+  }
+  const read = (dir: string): Record<string, string> => {
+    const out: Record<string, string> = {};
+    for (const f of tsFiles(join(ROOT, dir))) out[relative(ROOT, f)] = readFileSync(f, 'utf8');
+    return out;
+  };
+  const packageFiles = read('packages/inventory/src');
+  for (const hit of findInventoryArithmeticViolations({ migrations, packageFiles, apiInventoryFiles: read('apps/api/src/modules/inventory') })) {
+    fail('inventory-arithmetic', join(ROOT, hit.file), `${hit.rule}: ${hit.evidence} — ${INVENTORY_ARITHMETIC_WHY[hit.rule] ?? ''}`);
+  }
+  // A guard watching nothing is decorative.
+  if (Object.keys(packageFiles).length === 0 || !Object.keys(migrations).some(isInventoryMigration)) {
+    fail('inventory-arithmetic', 'packages/inventory/src', 'no inventory package source or inventory migration found — rule 21 is watching nothing');
+  }
+}
+
+// Rule 22 — inventory writer authority (P3-S2, contract §7.2; PM-44 static
+// half): every definition of a routine handed to daftar_inventory_internal
+// that writes a stock table verifies invctl/1 as its FIRST statement. The
+// live half is the PM-44 catalogue sweep.
+{
+  const migrations: Record<string, string> = {};
+  for (const f of walk(join(ROOT, 'infrastructure/database/migrations'), /\.sql$/).sort()) {
+    migrations[relative(ROOT, f)] = readFileSync(f, 'utf8');
+  }
+  const report = checkInventoryWriterAuthority(migrations);
+  for (const violation of report.violations) fail('inventory-writer-authority', 'infrastructure/database/migrations', violation);
+  // The stock primitive exists from P3-S2 on; no writer at all means the guard went blind.
+  if (report.writers.length === 0) {
+    fail('inventory-writer-authority', 'infrastructure/database/migrations', 'no routine writes a stock table — rule 22 is watching nothing');
+  }
+}
+
 if (failures > 0) {
   console.error(`\nSTATIC GUARDS: FAIL (${failures})`);
   process.exit(1);
 }
-console.log('STATIC GUARDS: PASS (19 rules)');
+console.log('STATIC GUARDS: PASS (22 rules)');

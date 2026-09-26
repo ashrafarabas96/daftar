@@ -9,6 +9,8 @@ import type { MembershipContext as MC } from './tenancy.service';
 import { TenancyService } from './tenancy.service';
 import { StructureService } from './structure.service';
 import { InvitationsService } from './invitations.service';
+import { newBusinessTransactionId } from '../inventory/business-transaction';
+import { canonicalUuidParam } from '../inventory/canonical-id';
 
 const OnboardingSchema = z
   .object({
@@ -38,6 +40,7 @@ const SettingsSchema = z
 const CurrencySchema = z.object({ currency: z.string().min(3).max(3) }).strict();
 const NameSchema = z.object({ name: z.string().min(1).max(120) }).strict();
 const WarehouseSchema = z.object({ name: z.string().min(1).max(120), branchId: z.string().uuid() }).strict();
+const WarehouseBranchSchema = z.object({ branchId: z.string().uuid() }).strict();
 const MemberSchema = z.object({ email: z.string().email(), roleKey: z.string().min(1).max(64) }).strict();
 const InviteSchema = z.object({ email: z.string().email(), roleKey: z.string().min(1).max(64) }).strict();
 const AcceptInviteSchema = z.object({ token: z.string().min(10).max(200) }).strict();
@@ -169,6 +172,39 @@ export class TenancyController {
   async createWarehouse(@Membership() m: MC, @Body() body: unknown) {
     const b = body as z.infer<typeof WarehouseSchema>;
     return this.structure.createWarehouse(m, b.name, b.branchId);
+  }
+
+  /**
+   * Associate a warehouse with an additional branch (P3-AL-15 §B). The route
+   * requires `warehouse.manage`; the service additionally requires
+   * business-wide scope before anything is minted. Idempotent: an existing
+   * association answers 200 with `changed: false`.
+   */
+  @Post('businesses/current/warehouses/:warehouseId/branches')
+  @HttpCode(200)
+  @RequiresPermission('warehouse.manage')
+  @UsePipes(new ZodValidationPipe(WarehouseBranchSchema))
+  async addWarehouseBranch(@Membership() m: MC, @Param('warehouseId') warehouseId: string, @Body() body: unknown) {
+    const b = body as z.infer<typeof WarehouseBranchSchema>;
+    return this.structure.addWarehouseBranch(
+      m,
+      canonicalUuidParam(warehouseId, 'warehouseId'),
+      canonicalUuidParam(b.branchId, 'branchId'),
+      newBusinessTransactionId(),
+    );
+  }
+
+  /** Remove a non-home warehouse–branch association (P3-AL-15 §B). Idempotent. */
+  @Delete('businesses/current/warehouses/:warehouseId/branches/:branchId')
+  @HttpCode(200)
+  @RequiresPermission('warehouse.manage')
+  async removeWarehouseBranch(@Membership() m: MC, @Param('warehouseId') warehouseId: string, @Param('branchId') branchId: string) {
+    return this.structure.removeWarehouseBranch(
+      m,
+      canonicalUuidParam(warehouseId, 'warehouseId'),
+      canonicalUuidParam(branchId, 'branchId'),
+      newBusinessTransactionId(),
+    );
   }
 
   @Get('businesses/current/members')

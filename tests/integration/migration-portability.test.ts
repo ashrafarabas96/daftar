@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { mkdtempSync, rmSync, cpSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -910,6 +911,293 @@ describe('managed PostgreSQL: 0039 → 0049 under a non-superuser migration prin
     }
   }, 300_000);
 
+  /**
+   * P3-S1 — P3-AL-54 §J: the managed-PostgreSQL proof for the inventory slice.
+   *
+   * Two databases parked at the 0052 freeze, holding the same business, roles
+   * and warehouses. One receives the P3-S1 candidates from the deployment
+   * principal (non-superuser, no RLS bypass), the other from the superuser.
+   * The candidates must apply, re-run as a no-op, write the rows their
+   * backfills are responsible for EVEN THOUGH the migrator is subject to
+   * FORCE row security, and leave exactly the catalogue the superuser build
+   * leaves — owners, SECURITY DEFINER flags, configuration, ACLs, column
+   * ACLs, policies, triggers and constraints — with only the applying
+   * principal's own name normalised.
+   */
+  it('applies the P3-S1 candidates onto the frozen 0052 boundary as daftar_migrator, identical to a superuser build (P3-AL-54 §J)', async () => {
+    await ensurePostgres();
+    const FROZEN = '0052_accounting_journal_lines_rls_performance.sql';
+    const candidates = migrationsAfter(FROZEN);
+    expect(candidates.length).toBeGreaterThan(0);
+    const dbs = { migrator: 'daftar_portability_p3s1', superuser: 'daftar_portability_p3s1_su' } as const;
+    const adminUrlOf = (db: string): string => `postgresql://${PG_USER}:${PG_PASSWORD}@localhost:${PG_PORT}/${db}`;
+    const migratorUrl = `postgresql://daftar_migrator:${MIGRATOR_DB_PASSWORD}@localhost:${PG_PORT}/${dbs.migrator}`;
+    const ids = {
+      tenant: randomUUID(),
+      business: randomUUID(),
+      branchA: randomUUID(),
+      branchB: randomUUID(),
+      warehouseA: randomUUID(),
+      warehouseB: randomUUID(),
+      owner: randomUUID(),
+      manager: randomUUID(),
+      cashier: randomUUID(),
+      custom: randomUUID(),
+      product: randomUUID(),
+    };
+    const MANAGER_BEFORE = ['branch.manage', 'catalog.view', 'warehouse.manage'];
+
+    for (const db of Object.values(dbs)) {
+      await admin.query(`DROP DATABASE IF EXISTS ${db} WITH (FORCE)`);
+      await admin.query(`CREATE DATABASE ${db}`);
+      const setup = scratchPool(adminUrlOf(db));
+      try {
+        await setup.query(bootstrapSql());
+        await setup.query(`GRANT CONNECT ON DATABASE ${db} TO daftar_migrator`);
+        const preDir = migrationsUpTo(FROZEN);
+        await runMigrations(adminUrlOf(db), preDir);
+        rmSync(preDir, { recursive: true, force: true });
+        expect((await setup.query(`SELECT 1 FROM information_schema.tables WHERE table_name = 'branch_warehouses'`)).rows).toEqual([]);
+
+        // The same existing business in both, written as the platform
+        // principal — the only one that may write system roles.
+        await setup.query('BEGIN');
+        await setup.query('SET LOCAL ROLE daftar_platform');
+        await setup.query(`INSERT INTO tenants (id) VALUES ($1)`, [ids.tenant]);
+        await setup.query(
+          `INSERT INTO businesses (id, tenant_id, name, store_slug, country_code, base_currency, timezone)
+           VALUES ($1, $2, 'Before Inventory', 'portability-p3s1', 'JO', 'JOD', 'Asia/Amman')`,
+          [ids.business, ids.tenant],
+        );
+        await setup.query(`INSERT INTO branches (business_id, id, name, is_default) VALUES ($1, $2, 'A', true), ($1, $3, 'B', false)`, [
+          ids.business,
+          ids.branchA,
+          ids.branchB,
+        ]);
+        await setup.query(`INSERT INTO warehouses (business_id, id, branch_id, name, is_default) VALUES ($1, $2, $3, 'WA', true), ($1, $4, $5, 'WB', false)`, [
+          ids.business,
+          ids.warehouseA,
+          ids.branchA,
+          ids.warehouseB,
+          ids.branchB,
+        ]);
+        await setup.query(
+          `INSERT INTO business_roles (business_id, id, key, name, is_system) VALUES
+             ($1, $2, 'owner', 'Owner', true), ($1, $3, 'manager', 'Manager', false),
+             ($1, $4, 'cashier', 'Cashier', false), ($1, $5, 'clerk', 'Clerk', false)`,
+          [ids.business, ids.owner, ids.manager, ids.cashier, ids.custom],
+        );
+        await setup.query(
+          `INSERT INTO role_permissions (business_id, role_id, permission)
+           SELECT $1::uuid, $2::uuid, unnest($3::text[]) UNION ALL SELECT $1::uuid, $4::uuid, 'catalog.view' UNION ALL SELECT $1::uuid, $5::uuid, 'catalog.view'`,
+          [ids.business, ids.manager, MANAGER_BEFORE, ids.cashier, ids.custom],
+        );
+        await setup.query('COMMIT');
+        await setup.query(
+          `WITH p AS (INSERT INTO products (business_id, id, base_price_minor, price_currency) VALUES ($1, $2, 100, 'JOD') RETURNING business_id, id)
+           INSERT INTO product_translations (business_id, product_id, locale, name) SELECT business_id, id, 'en', 'Before' FROM p`,
+          [ids.business, ids.product],
+        );
+
+        if (db === dbs.migrator) {
+          await setup.query(`ALTER SCHEMA public OWNER TO daftar_migrator`);
+          await setup.query(`
+            DO $$
+            DECLARE r RECORD;
+            BEGIN
+              FOR r IN SELECT c.relname, c.relkind FROM pg_class c
+                         JOIN pg_namespace n ON n.oid = c.relnamespace
+                         JOIN pg_roles o ON o.oid = c.relowner
+                        WHERE n.nspname = 'public' AND o.rolname = 'postgres' AND c.relkind IN ('r','v','m','S','p')
+              LOOP
+                EXECUTE format('ALTER %s public.%I OWNER TO daftar_migrator',
+                               CASE r.relkind WHEN 'S' THEN 'SEQUENCE' WHEN 'v' THEN 'VIEW' WHEN 'm' THEN 'MATERIALIZED VIEW' ELSE 'TABLE' END,
+                               r.relname);
+              END LOOP;
+              FOR r IN SELECT p.oid::regprocedure AS sig FROM pg_proc p
+                         JOIN pg_namespace n ON n.oid = p.pronamespace
+                         JOIN pg_roles o ON o.oid = p.proowner
+                        WHERE n.nspname = 'public' AND o.rolname = 'postgres'
+              LOOP
+                EXECUTE format('ALTER FUNCTION %s OWNER TO daftar_migrator', r.sig);
+              END LOOP;
+            END $$;
+          `);
+        }
+      } finally {
+        await setup.end().catch(() => undefined);
+      }
+    }
+
+    try {
+      // The deployment principal is exactly that, asserted before it is used.
+      const who = scratchPool(migratorUrl);
+      try {
+        expect(
+          (await who.query<{ rolsuper: boolean; rolbypassrls: boolean }>(`SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user`)).rows[0],
+        ).toEqual({ rolsuper: false, rolbypassrls: false });
+      } finally {
+        await who.end().catch(() => undefined);
+      }
+
+      expect(await runMigrations(migratorUrl)).toEqual(candidates);
+      expect(await runMigrations(migratorUrl)).toEqual([]);
+      expect(await runMigrations(adminUrlOf(dbs.superuser))).toEqual(candidates);
+
+      // ── The rows the backfills owe, read with full visibility. ──────────
+      for (const db of Object.values(dbs)) {
+        const read = scratchPool(adminUrlOf(db));
+        try {
+          const assoc = (
+            await read.query<{ branch_id: string; warehouse_id: string }>(
+              `SELECT branch_id::text, warehouse_id::text FROM branch_warehouses WHERE business_id = $1 ORDER BY warehouse_id::text`,
+              [ids.business],
+            )
+          ).rows;
+          expect(assoc, `${db}: exactly the home associations`).toEqual(
+            [
+              { branch_id: ids.branchA, warehouse_id: ids.warehouseA },
+              { branch_id: ids.branchB, warehouse_id: ids.warehouseB },
+            ].sort((x, y) => x.warehouse_id.localeCompare(y.warehouse_id)),
+          );
+          const perms = async (role: string): Promise<string[]> =>
+            (await read.query<{ p: string }>(`SELECT permission AS p FROM role_permissions WHERE business_id = $1 AND role_id = $2`, [ids.business, role])).rows
+              .map((r) => r.p)
+              .sort();
+          const phase3 = (p: string): boolean => /^(inventory|purchases|suppliers)\./.test(p);
+          expect((await perms(ids.owner)).filter(phase3), `${db}: owner`).toHaveLength(11);
+          expect(await perms(ids.manager), `${db}: manager`).toEqual([...MANAGER_BEFORE, 'inventory.view', 'purchases.view', 'suppliers.view'].sort());
+          expect(await perms(ids.cashier), `${db}: cashier`).toEqual(['catalog.view']);
+          expect(await perms(ids.custom), `${db}: custom`).toEqual(['catalog.view']);
+          expect(
+            (
+              await read.query<{ n: number }>(
+                `SELECT count(*)::int AS n FROM products WHERE track_inventory OR unit_code IS NOT NULL OR unit_decimals IS NOT NULL`,
+              )
+            ).rows[0]?.n,
+            `${db}: no product configured by a migration`,
+          ).toBe(0);
+          expect((await read.query<{ n: number }>(`SELECT count(*)::int AS n FROM product_variants WHERE is_base`)).rows[0]?.n).toBe(0);
+          expect(
+            (
+              await read.query<{ rs: boolean; force: boolean }>(
+                `SELECT bool_and(relrowsecurity) AS rs, bool_and(relforcerowsecurity) AS force FROM pg_class
+                  WHERE relname IN ('warehouses', 'branch_warehouses', 'business_roles', 'role_permissions') AND relkind = 'r'`,
+              )
+            ).rows[0],
+            `${db}: the backfill windows closed`,
+          ).toEqual({ rs: true, force: true });
+        } finally {
+          await read.end().catch(() => undefined);
+        }
+      }
+
+      // ── The named owners (P3-AL-54 §D, §I; P3-AL-36). ───────────────────
+      const check = scratchPool(migratorUrl);
+      try {
+        const owners = (
+          await check.query<{ proname: string; owner: string; definer: boolean; config: string }>(
+            `SELECT p.proname, r.rolname AS owner, p.prosecdef AS definer, array_to_string(p.proconfig, ';') AS config
+               FROM pg_proc p JOIN pg_roles r ON r.oid = p.proowner JOIN pg_namespace n ON n.oid = p.pronamespace
+              WHERE n.nspname = 'public'
+                AND (r.rolname = 'daftar_inventory_internal'
+                     OR p.proname IN ('accounting_entry_date_guard', 'warehouses_home_branch_immutable',
+                                      'stock_ledger_append_only', 'stock_levels_retain', 'inventory_stock_source_guard_gaps'))
+              ORDER BY p.proname`,
+          )
+        ).rows;
+        const PIN = 'search_path=pg_catalog, public, pg_temp';
+        const internal = (proname: string, definer = true): { proname: string; owner: string; definer: boolean; config: string } => ({
+          proname,
+          owner: 'daftar_inventory_internal',
+          definer,
+          config: PIN,
+        });
+        expect(owners).toEqual(
+          [
+            { proname: 'accounting_entry_date_guard', owner: 'daftar_accounting_internal', definer: true, config: PIN },
+            internal('branch_warehouses_keep_home'),
+            internal('inventory_assertion_consume'),
+            internal('inventory_assertion_current'),
+            internal('inventory_assertion_key_install'),
+            internal('inventory_assertion_key_retire'),
+            internal('inventory_business_transaction_id'),
+            internal('inventory_claimed_payload_digest'),
+            internal('inventory_configure_product'),
+            internal('inventory_payload_digest'),
+            internal('inventory_payload_field_is_canonical'),
+            internal('product_variants_10_base_variant_authority', false),
+            internal('products_10_inventory_config_authority', false),
+            internal('structure_associate_warehouse_branch'),
+            internal('structure_dissociate_warehouse_branch'),
+            { proname: 'warehouses_home_branch_immutable', owner: 'daftar_migrator', definer: false, config: PIN },
+            // P3-S2 (0059/0060): R1–R8 are the internal principal's; the three
+            // invoker helpers of 0059 stay the migrator's.
+            internal('inventory_apply_stock_movements'),
+            internal('inventory_half_even'),
+            internal('inventory_next_deficit_seq'),
+            internal('inventory_quantity_is_representable'),
+            internal('inventory_stock_fold'),
+            internal('inventory_stock_verify'),
+            internal('product_variants_20_stock_identity_lock'),
+            internal('products_20_unit_history_lock'),
+            internal('stock_levels_zero_on_hand_zero_value'),
+            { proname: 'inventory_stock_source_guard_gaps', owner: 'daftar_migrator', definer: false, config: PIN },
+            { proname: 'stock_ledger_append_only', owner: 'daftar_migrator', definer: false, config: PIN },
+            { proname: 'stock_levels_retain', owner: 'daftar_migrator', definer: false, config: PIN },
+            internal('warehouses_home_branch_maintain'),
+            internal('warehouses_require_home_branch'),
+          ].sort((a, b) => (a.proname < b.proname ? -1 : 1)),
+        );
+        for (const role of ['daftar_inventory_internal', 'daftar_accounting_internal']) {
+          expect((await check.query<{ c: boolean }>(`SELECT has_schema_privilege($1, 'public', 'CREATE') AS c`, [role])).rows[0]?.c, role).toBe(false);
+        }
+      } finally {
+        await check.end().catch(() => undefined);
+      }
+
+      // ── The same catalogue a superuser builds (§J). ─────────────────────
+      const CATALOGUE: Record<string, string> = {
+        tables: `SELECT c.relname || ' | ' || pg_get_userbyid(c.relowner) || ' | ' || c.relrowsecurity || ' | ' || c.relforcerowsecurity || ' | ' || coalesce(c.relacl::text, '') AS row
+                   FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND c.relkind IN ('r', 'v', 'm', 'p')`,
+        functions: `SELECT p.proname || '(' || pg_get_function_identity_arguments(p.oid) || ') | ' || pg_get_userbyid(p.proowner) || ' | ' || p.prosecdef
+                           || ' | ' || coalesce(p.proacl::text, '') || ' | ' || coalesce(p.proconfig::text, '') AS row
+                      FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+                     WHERE n.nspname = 'public' AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.objid = p.oid AND d.deptype = 'e')`,
+        columns: `SELECT c.relname || '.' || a.attname || ' | ' || a.attacl::text AS row
+                    FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid JOIN pg_namespace n ON n.oid = c.relnamespace
+                   WHERE n.nspname = 'public' AND a.attacl IS NOT NULL AND a.attnum > 0 AND NOT a.attisdropped`,
+        policies: `SELECT c.relname || '.' || pol.polname || ' | ' || pol.polcmd::text || ' | ' || pol.polpermissive
+                          || ' | ' || coalesce(pg_get_expr(pol.polqual, pol.polrelid), '') || ' | ' || coalesce(pg_get_expr(pol.polwithcheck, pol.polrelid), '')
+                          || ' | ' || coalesce((SELECT string_agg(pg_get_userbyid(r), ',' ORDER BY r) FROM unnest(pol.polroles) r), '') AS row
+                     FROM pg_policy pol JOIN pg_class c ON c.oid = pol.polrelid`,
+        triggers: `SELECT c.relname || '.' || t.tgname || ' | ' || t.tgtype || ' | ' || t.tgenabled::text || ' | ' || t.tgdeferrable || ' | ' || t.tginitdeferred || ' | ' || p.proname AS row
+                     FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid JOIN pg_proc p ON p.oid = t.tgfoid WHERE NOT t.tgisinternal`,
+        constraints: `SELECT c.relname || '.' || con.conname || ' | ' || con.contype::text || ' | ' || pg_get_constraintdef(con.oid) AS row
+                        FROM pg_constraint con JOIN pg_class c ON c.oid = con.conrelid JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public'`,
+      };
+      const snapshot = async (db: string, applier: string): Promise<Record<string, string[]>> => {
+        const pool = scratchPool(adminUrlOf(db));
+        try {
+          const out: Record<string, string[]> = {};
+          for (const [name, query] of Object.entries(CATALOGUE)) {
+            out[name] = (await pool.query<{ row: string }>(query)).rows.map((r) => r.row.split(applier).join('<applier>')).sort();
+          }
+          return out;
+        } finally {
+          await pool.end().catch(() => undefined);
+        }
+      };
+      const deployed = await snapshot(dbs.migrator, 'daftar_migrator');
+      const superuserBuild = await snapshot(dbs.superuser, 'postgres');
+      for (const name of Object.keys(CATALOGUE)) {
+        expect(deployed[name], `catalogue: ${name}`).toEqual(superuserBuild[name]);
+      }
+    } finally {
+      for (const db of Object.values(dbs)) await admin.query(`DROP DATABASE IF EXISTS ${db} WITH (FORCE)`).catch(() => undefined);
+    }
+  }, 300_000);
+
   it('leaves no temporary privilege behind and no runtime principal with chart authority', async () => {
     // Read entirely through the non-superuser connection: if daftar_migrator
     // can see it, so can a deployment operator.
@@ -998,6 +1286,27 @@ describe('managed PostgreSQL: 0039 → 0049 under a non-superuser migration prin
         )
       ).rows[0];
       expect(internal).toEqual({ rolcanlogin: false, rolsuper: false, rolbypassrls: false, rolinherit: false });
+
+      // P3-AL-54 §C: the inventory principal has exactly the same shape — one
+      // member, the migrator, WITH INHERIT FALSE, SET TRUE; no CREATE left
+      // behind by any bracket; unreachable.
+      const inventoryGrant = (
+        await migrator.query<{ member: string; admin_option: boolean; inherit_option: boolean; set_option: boolean }>(
+          `SELECT m.rolname AS member, a.admin_option, a.inherit_option, a.set_option FROM pg_auth_members a
+             JOIN pg_roles g ON g.oid = a.roleid JOIN pg_roles m ON m.oid = a.member
+            WHERE g.rolname = 'daftar_inventory_internal'`,
+        )
+      ).rows;
+      expect(inventoryGrant).toEqual([{ member: 'daftar_migrator', admin_option: false, inherit_option: false, set_option: true }]);
+      expect((await migrator.query<{ c: boolean }>(`SELECT has_schema_privilege('daftar_inventory_internal', 'public', 'CREATE') AS c`)).rows[0]?.c).toBe(
+        false,
+      );
+      const inventoryInternal = (
+        await migrator.query<{ rolcanlogin: boolean; rolsuper: boolean; rolbypassrls: boolean; rolinherit: boolean }>(
+          `SELECT rolcanlogin, rolsuper, rolbypassrls, rolinherit FROM pg_roles WHERE rolname = 'daftar_inventory_internal'`,
+        )
+      ).rows[0];
+      expect(inventoryInternal).toEqual({ rolcanlogin: false, rolsuper: false, rolbypassrls: false, rolinherit: false });
     } finally {
       await migrator.end();
     }

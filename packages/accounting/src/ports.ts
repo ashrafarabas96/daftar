@@ -228,3 +228,62 @@ export interface AccountingPeriodPort {
    */
   listPeriods(scope: LedgerReadScope): Promise<readonly AccountingPeriodSnapshot[]>;
 }
+
+// ── P3-AL-32: posting inside a caller's transaction ───────────────────────
+
+/**
+ * Brand of an open posting transaction. Declared, never exported: no code
+ * outside this declaration can write an object literal that carries it, so
+ * the only values of `AccountingPostingTransaction` are the ones the database
+ * boundary hands out.
+ */
+declare const accountingPostingTransactionBrand: unique symbol;
+
+/**
+ * An OPEN database transaction that carries a posting authority — the
+ * `app.accounting_assertion` a minted assertion put there.
+ *
+ * It is an opaque capability, not a connection. It is issued only by the two
+ * boundaries that set the accounting assertion: the accepted Phase 2
+ * single-operation boundary and the Phase 3 accounting-aware business seam
+ * (P3-AL-32 seam 2). The non-posting business seam (seam 1) never issues one,
+ * so a callback inside it has nothing to pass to the methods below.
+ *
+ * Nothing structural converts a raw client, a query handle or the non-posting
+ * seam's handle into this type, and the runtime implementation refuses any
+ * value it did not issue itself, or one whose transaction has already ended.
+ */
+export interface AccountingPostingTransaction {
+  readonly [accountingPostingTransactionBrand]: 'accounting-posting-transaction';
+}
+
+/**
+ * A posting request inside an open posting transaction. It carries NO
+ * assertion: the assertion is a property of the transaction (P3-AL-32 seam 2
+ * takes it when it opens), and the database verifies this payload against the
+ * fingerprint signed into it exactly as it does for `postEntry`.
+ */
+export interface PostEntryInTransactionRequest {
+  readonly command: PostingCommand;
+}
+
+/**
+ * The client-accepting variants of the posting ports (P3-AL-32 item 5).
+ *
+ * Separate interfaces rather than extra members of the Phase 2 ports, so the
+ * accepted ports — and every implementation of them — keep their exact
+ * shape. The single-operation methods are implemented in terms of these.
+ */
+export interface AccountingPostingTransactionPort {
+  postEntryInTransaction(tx: AccountingPostingTransaction, request: PostEntryInTransactionRequest): Promise<PostingResult>;
+}
+
+export type PostAdjustmentInTransactionRequest = Omit<PostAdjustmentRequest, 'assertion'>;
+export type PostReversalInTransactionRequest = Omit<PostReversalRequest, 'assertion'>;
+export type PostOpeningBalanceInTransactionRequest = Omit<PostOpeningBalanceRequest, 'assertion'>;
+
+export interface AccountingSourcesTransactionPort {
+  postAdjustmentInTransaction(tx: AccountingPostingTransaction, request: PostAdjustmentInTransactionRequest): Promise<PostingResult>;
+  postReversalInTransaction(tx: AccountingPostingTransaction, request: PostReversalInTransactionRequest): Promise<PostingResult>;
+  postOpeningBalanceInTransaction(tx: AccountingPostingTransaction, request: PostOpeningBalanceInTransactionRequest): Promise<PostingResult>;
+}

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { hmacKeysEquivalent } from '@daftar/inventory';
 
 /**
  * Central validated config (§34). No module reads process.env directly; missing
@@ -52,6 +53,16 @@ const EnvSchema = z
     // general ledger, and either must be rotatable without the other.
     ACCOUNTING_ASSERTION_KEY: z.string().optional(),
     ACCOUNTING_ASSERTION_KID: z
+      .string()
+      .regex(/^[A-Za-z0-9_-]{1,32}$/)
+      .optional(),
+    // P3-AL-55 §C: the HMAC key the merchant API uses to MINT `invctl/1`
+    // inventory command assertions. A THIRD, separate secret: an inventory
+    // key compromise must not reach the ledger or onboarding, and the reverse.
+    // The database holds the same bytes in `inventory_assertion_keys`, a table
+    // no runtime role can read.
+    INVENTORY_ASSERTION_KEY: z.string().optional(),
+    INVENTORY_ASSERTION_KID: z
       .string()
       .regex(/^[A-Za-z0-9_-]{1,32}$/)
       .optional(),
@@ -137,6 +148,7 @@ const EnvSchema = z
         'WORKER_DATABASE_URL',
         'PROVISIONING_ASSERTION_KEY',
         'ACCOUNTING_ASSERTION_KEY',
+        'INVENTORY_ASSERTION_KEY',
         'CREDENTIAL_PAYLOAD_KEY',
         'CREDENTIAL_PAYLOAD_KEYS',
         'CREDENTIAL_KMS_ENDPOINT',
@@ -178,6 +190,7 @@ const EnvSchema = z
         'PROVISIONER_DATABASE_URL',
         'PROVISIONING_ASSERTION_KEY',
         'ACCOUNTING_ASSERTION_KEY',
+        'INVENTORY_ASSERTION_KEY',
         'CREDENTIAL_KMS_ENDPOINT',
       ] as const) {
         if (c[n]) fail(n, 'must NOT be set in PROCESS_MODE=worker (worker receives worker DB + key ring + SMTP only)');
@@ -193,6 +206,7 @@ const EnvSchema = z
         | 'PROVISIONER_DATABASE_URL'
         | 'PROVISIONING_ASSERTION_KEY'
         | 'ACCOUNTING_ASSERTION_KEY'
+        | 'INVENTORY_ASSERTION_KEY'
         | 'CREDENTIAL_PAYLOAD_KEY'
         | 'CREDENTIAL_PAYLOAD_KEYS'
         | 'SMTP_URL',
@@ -215,6 +229,10 @@ const EnvSchema = z
       // platform credential may install and retire accounting keys; holding
       // the signing secret would let it mint postings.
       forbid('ACCOUNTING_ASSERTION_KEY', 'only the merchant API mints accounting assertions');
+      // P3-AL-55 §C: the same rule for the inventory command key. The
+      // platform may install and retire inventory keys; holding the signing
+      // secret would let it mint an inventory command for any business.
+      forbid('INVENTORY_ASSERTION_KEY', 'only the merchant API mints inventory assertions');
       forbid('CREDENTIAL_PAYLOAD_KEY', 'no worker credential payload authority');
       forbid('CREDENTIAL_PAYLOAD_KEYS', 'no worker credential payload authority');
       forbid('SMTP_URL', 'delivery is the worker process');
@@ -295,6 +313,28 @@ const EnvSchema = z
         // one secret are still one secret, and sharing it would mean a single
         // compromise reaches both provisioning and the ledger.
         fail('ACCOUNTING_ASSERTION_KEY', 'must not be the same secret as PROVISIONING_ASSERTION_KEY (separate domains, rotated independently)');
+      }
+      // ── P3-AL-55 §C: the inventory command signing key ─────────────────
+      if (!c.INVENTORY_ASSERTION_KEY) {
+        fail('INVENTORY_ASSERTION_KEY', 'production inventory commands require the inventory assertion HMAC key (base64 ≥32 bytes) installed in the database');
+      } else {
+        const inventory = Buffer.from(c.INVENTORY_ASSERTION_KEY, 'base64');
+        if (inventory.length < 32) {
+          fail('INVENTORY_ASSERTION_KEY', 'must be base64 of at least 32 bytes');
+        } else {
+          // Compared as the EFFECTIVE HMAC-SHA-256 KEY of the decoded bytes,
+          // never as strings and not even as raw bytes: two base64 spellings
+          // of one secret are one secret, `K` and `K‖0x00` are one HMAC key,
+          // and different variable names are not separation. Either
+          // equivalence would let a single compromise reach inventory
+          // authority and provisioning or the ledger.
+          if (c.PROVISIONING_ASSERTION_KEY && hmacKeysEquivalent(inventory, Buffer.from(c.PROVISIONING_ASSERTION_KEY, 'base64'))) {
+            fail('INVENTORY_ASSERTION_KEY', 'must not be the same secret as PROVISIONING_ASSERTION_KEY (separate domains, rotated independently)');
+          }
+          if (c.ACCOUNTING_ASSERTION_KEY && hmacKeysEquivalent(inventory, Buffer.from(c.ACCOUNTING_ASSERTION_KEY, 'base64'))) {
+            fail('INVENTORY_ASSERTION_KEY', 'must not be the same secret as ACCOUNTING_ASSERTION_KEY (separate domains, rotated independently)');
+          }
+        }
       }
       if (c.MEDIA_STORAGE === 'local') {
         fail('MEDIA_STORAGE', 'production requires MEDIA_STORAGE=s3 (local disk is dev-only)');

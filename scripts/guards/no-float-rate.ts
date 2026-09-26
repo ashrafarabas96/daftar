@@ -19,7 +19,7 @@
  * below is accounting storage only: the journal, the chart, and every
  * `accounting_*` table. P2-S5 adds the FX rate tables it introduces.
  */
-import { findColumnDeclarations } from './sql-schema';
+import { findColumnDeclarations, findColumnTypeChanges } from './sql-schema';
 
 /**
  * Tables whose rate columns are financial authority. `accounting_*` is
@@ -95,6 +95,92 @@ export function findFloatRateColumns(sql: string): RateColumnFinding[] {
     }
     // Any other type (TEXT for a rate SOURCE, TIMESTAMPTZ for a rate TIME) is
     // not a stored rate and is none of this guard's business.
+  }
+  return findings;
+}
+
+/**
+ * ── P3-S2: the inventory half (P3-AL-08, P3-AL-49; contract §7.2) ─────────
+ *
+ * Inventory arithmetic is exact fixed point: a quantity is `NUMERIC(18,4)`, a
+ * unit cost or average is `NUMERIC(28,10)`, and a movement's value and a
+ * key's valuation are `BIGINT` base minor units — the integers the journal
+ * carries. A floating-point column anywhere in inventory storage, or a pinned
+ * column declared with any other type, reopens the two-rounding defect
+ * P3-AL-49 closed. The watched set is discovered by name, so a table written
+ * in a later slice is covered the day it exists.
+ *
+ * Everything above this line is unchanged: the accounting rule is neither
+ * widened nor narrowed by the inventory one.
+ */
+export const INVENTORY_TABLE_RE = /^(stock_[a-z0-9_]+|negative_[a-z0-9_]+|inventory_[a-z0-9_]+)$/;
+
+const QTY_TYPE = /^NUMERIC\s*\(\s*18\s*,\s*4\s*\)/i;
+const COST_TYPE = /^NUMERIC\s*\(\s*28\s*,\s*10\s*\)/i;
+const MINOR_TYPE = /^(BIGINT|INT8)\b/i;
+/**
+ * A `qty_*` name that classifies a quantity rather than storing one —
+ * `stock_movement_kinds.qty_sign` ('positive' | 'negative' | 'either' |
+ * 'zero', contract §2.2) is TEXT by design. Only the named classifier
+ * suffixes are exempt; any other `qty_*` column is a quantity.
+ */
+const QTY_CLASSIFIER = /_(sign|kind|type|code|status|name)$/;
+
+export interface InventoryTypePin {
+  readonly describe: string;
+  readonly column: (name: string) => boolean;
+  readonly type: RegExp;
+  readonly expected: string;
+}
+
+/** Which columns carry which exact type. A column matched by no pin is left to the float check alone. */
+export const INVENTORY_TYPE_PINS: readonly InventoryTypePin[] = [
+  {
+    describe: 'a quantity (qty_delta, on_hand, *_qty, qty_*)',
+    column: (c) => c === 'qty_delta' || c === 'on_hand' || c.endsWith('_qty') || (c.startsWith('qty_') && !QTY_CLASSIFIER.test(c)),
+    type: QTY_TYPE,
+    expected: 'NUMERIC(18,4)',
+  },
+  {
+    describe: 'a unit cost or average (*_cost_base_minor)',
+    column: (c) => c.endsWith('_cost_base_minor'),
+    type: COST_TYPE,
+    expected: 'NUMERIC(28,10)',
+  },
+  {
+    describe: 'a stored value (value_delta_base_minor, valuation_base_minor)',
+    column: (c) => c === 'value_delta_base_minor' || c === 'valuation_base_minor',
+    type: MINOR_TYPE,
+    expected: 'BIGINT',
+  },
+];
+
+export function isInventoryTable(table: string): boolean {
+  return INVENTORY_TABLE_RE.test(table.toLowerCase());
+}
+
+/**
+ * Floating-point columns, and pinned columns of the wrong type, on inventory
+ * tables in one SQL text. An empty array is a pass.
+ */
+export function findInventoryNumericViolations(sql: string): RateColumnFinding[] {
+  const findings: RateColumnFinding[] = [];
+  // `ALTER COLUMN … TYPE` re-declares a column: read it like a declaration (L-3).
+  for (const decl of [...findColumnDeclarations(sql), ...findColumnTypeChanges(sql)]) {
+    if (!isInventoryTable(decl.table)) continue;
+    if (FLOAT_TYPES.test(decl.rest)) {
+      findings.push({
+        table: decl.table,
+        column: decl.column,
+        detail: 'declared as a floating-point type — inventory arithmetic is exact fixed point (P3-AL-08)',
+      });
+      continue;
+    }
+    for (const pin of INVENTORY_TYPE_PINS) {
+      if (pin.column(decl.column) && !pin.type.test(decl.rest)) {
+        findings.push({ table: decl.table, column: decl.column, detail: `is ${pin.describe} and must be ${pin.expected} (P3-AL-08/P3-AL-49)` });
+      }
+    }
   }
   return findings;
 }

@@ -67,6 +67,13 @@ CREATE EXTENSION IF NOT EXISTS pgcrypto;
 --                     reachable only from the businesses trigger and the
 --                     migration. A platform administrator is not a financial
 --                     configuration authority.
+--   daftar_inventory_internal
+--                     (P3-S1, P3-AL-54 §C) the owner of the Phase 3 inventory
+--                     routines and column guards, and the only principal
+--                     that may write inventory configuration, base variants
+--                     and warehouse-branch associations. The same NOLOGIN,
+--                     NOINHERIT, passwordless shape, and a separate trust
+--                     boundary from the accounting principal.
 --
 -- DEPLOYMENT principal, NOT a runtime (P2-S1 managed-PostgreSQL correction):
 --   daftar_migrator   the schema-migration principal. It is a LOGIN role, but
@@ -82,7 +89,8 @@ CREATE EXTENSION IF NOT EXISTS pgcrypto;
 --   this a managed deployment could not run migration 0040 at all without a
 --   superuser. INHERIT FALSE means the membership is not accounting authority
 --   in itself: it has to be assumed deliberately, and only a deployment
---   credential can assume it.
+--   credential can assume it. daftar_inventory_internal is the same shape for
+--   the same reason (P3-AL-54 §C).
 --   NO RUNTIME PRINCIPAL MAY BE A MEMBER. The P2-S1 gate fails if one is.
 DO $$
 BEGIN
@@ -135,6 +143,15 @@ BEGIN
   ELSE
     ALTER ROLE daftar_accounting_internal NOLOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD NULL;
   END IF;
+  -- Internal inventory authority (P3-AL-54 §C). The exact shape of the
+  -- accounting principal above, and separate from it: inventory never runs as
+  -- the accounting principal and accounting never as this one. NOLOGIN,
+  -- NOINHERIT, never a password — re-asserted on every run.
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'daftar_inventory_internal') THEN
+    CREATE ROLE daftar_inventory_internal NOLOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+  ELSE
+    ALTER ROLE daftar_inventory_internal NOLOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD NULL;
+  END IF;
   -- Deployment migration authority. NOSUPERUSER and NOBYPASSRLS are re-asserted
   -- on every run: DAFTAR must never silently require a superuser to migrate.
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'daftar_migrator') THEN
@@ -150,6 +167,10 @@ GRANT USAGE ON SCHEMA public TO daftar_app, daftar_platform, daftar_worker, daft
 -- gets no CREATE here either — migration 0040 takes CREATE on public only for
 -- the one statement PostgreSQL requires it for, and revokes it in the same file.
 GRANT USAGE ON SCHEMA public TO daftar_accounting_internal;
+-- The internal inventory principal (P3-AL-54 §C): the same USAGE-only shape,
+-- no CONNECT, no CREATE. Migrations 0053 onward take CREATE for the ownership
+-- transfer and revoke it in the same file.
+GRANT USAGE ON SCHEMA public TO daftar_inventory_internal;
 
 -- ── Deployment migration authority ──────────────────────────────────────────
 -- Separate from every runtime grant above, and loaded by no service.
@@ -179,11 +200,11 @@ GRANT USAGE, CREATE ON SCHEMA public TO daftar_migrator;
 -- requires of its deployer and nothing more. Every runtime role's CREATE on
 -- this schema is revoked at the bottom of this file and stays revoked.
 ALTER SCHEMA public OWNER TO daftar_migrator;
--- ── The memberships, and why there are exactly two (P2-S9, RB-P2-01) ───────
+-- ── The memberships, and why there are exactly three (P2-S9, RB-P2-01, P3-S1)
 --
 -- PostgreSQL will not let a non-superuser run `ALTER ... OWNER TO r` unless it
--- can `SET ROLE` to r. The accepted migration history hands ownership to
--- exactly two roles, and the deployment principal therefore needs exactly two
+-- can `SET ROLE` to r. The migration history hands ownership to exactly three
+-- roles, and the deployment principal therefore needs exactly three
 -- memberships. The set is not a judgement call: it is read off the frozen
 -- files, and `scripts/deployment-authority.ts` re-derives it from the history
 -- on every run so that a future migration naming a third owner is a red gate
@@ -194,6 +215,8 @@ ALTER SCHEMA public OWNER TO daftar_migrator;
 --   daftar_platform             0032, 0033, 0038 — the eight provisioning
 --                               functions whose bypass boundary exists only
 --                               inside them (Phase 1).
+--   daftar_inventory_internal   0053 onward — the Phase 3 inventory routines'
+--                               and column guards' final owner (P3-AL-54 §C).
 --
 -- The second one was missing until P2-S9, and `daftar_migrator` could not
 -- apply the accepted history end to end: a fresh deployment died at
@@ -210,12 +233,12 @@ ALTER SCHEMA public OWNER TO daftar_migrator;
 -- have; it makes an existing one cheaper. The direction that WOULD be a
 -- widening — a runtime role gaining deployment or accounting authority — is
 -- the one that stays closed: no runtime role is a member of anything here,
--- `daftar_accounting_internal`'s only member is still `daftar_migrator`, and
--- the deployment credential appears in no runtime connection URL. The
--- alternative — a second deployment credential holding the same two
--- memberships — would add a credential without removing any authority.
+-- `daftar_accounting_internal`'s and `daftar_inventory_internal`'s only
+-- member is still `daftar_migrator`, and the deployment credential appears in
+-- no runtime connection URL. The alternative — a second deployment credential
+-- holding the same memberships — would add a credential without removing any authority.
 --
--- WHY THE TWO MEMBERSHIPS ARE NOT THE SAME SHAPE. `INHERIT FALSE` is the
+-- WHY THE MEMBERSHIPS ARE NOT ALL THE SAME SHAPE. `INHERIT FALSE` is the
 -- preferred form and the accounting membership keeps it: the financial
 -- authority must be assumed deliberately, never held passively, and with
 -- SET TRUE the migrator can still perform 0040's handover. The platform
@@ -236,6 +259,12 @@ ALTER SCHEMA public OWNER TO daftar_migrator;
 -- The alternative is a superuser deployment, which is strictly more.
 GRANT daftar_accounting_internal TO daftar_migrator WITH INHERIT FALSE, SET TRUE;
 GRANT daftar_platform TO daftar_migrator WITH INHERIT TRUE, SET TRUE;
+-- The third owner, in the accounting membership's shape and for the same
+-- reason: inventory authority is assumed deliberately, never held passively.
+-- SET TRUE is what lets the migrator hand routine ownership over; INHERIT
+-- FALSE means it holds none of the role's table privileges while it does.
+-- No runtime role is, or may become, a member (P3-AL-54 §C).
+GRANT daftar_inventory_internal TO daftar_migrator WITH INHERIT FALSE, SET TRUE;
 
 -- ── Default deny on every namespace a caller could write (P2-S3 correction) ─
 --
@@ -278,6 +307,7 @@ BEGIN
     'REVOKE TEMPORARY ON DATABASE %I FROM daftar_app, daftar_platform, daftar_worker, daftar_resolver, daftar_identity, daftar_provisioner, daftar_reconciler',
     v_db);
   EXECUTE format('REVOKE TEMPORARY ON DATABASE %I FROM daftar_accounting_internal', v_db);
+  EXECUTE format('REVOKE TEMPORARY ON DATABASE %I FROM daftar_inventory_internal', v_db);
 END $$;
 
 -- The other caller-writable namespace. PostgreSQL 15 and later no longer give

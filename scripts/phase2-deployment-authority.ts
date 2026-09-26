@@ -44,10 +44,13 @@
  *
  *   A  empty database  → bootstrap → 0000 … 0052
  *   B  a database at 0039 (the Phase 1 boundary) → 0040 … 0052
- *   C  a database at 0050 → 0051, 0052
+ *   C  a database at 0050 → 0051, 0052, then every unfrozen candidate
  *   D  a database at the latest migration → no-op
  *   E  a database whose applied history was tampered with → HARD FAIL
  *   F  a migration that fails half way → rollback, no history row, clean retry
+ *   G  a database at the 0052 freeze, holding a business → exactly the
+ *      unfrozen candidates (P3-S1: 0053 onward), whose backfills must see
+ *      that business although the deployer is not a superuser (P3-AL-54 §J)
  *
  * Then the question those six cases cannot answer on their own: is the
  * database the deployment principal produced the SAME database a superuser
@@ -63,7 +66,7 @@
  * that needs a cluster, for a machine that has no PostgreSQL binaries.
  */
 import { spawnSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -114,7 +117,12 @@ const RUNTIME_ROLES = [
   'daftar_provisioner',
   'daftar_reconciler',
 ] as const;
-const ALL_ROLES = [...RUNTIME_ROLES, 'daftar_accounting_internal', DEPLOYER] as const;
+/** The NOLOGIN owners of SECURITY DEFINER authority (P2-S1, P3-AL-54 §C). */
+const INTERNAL_ROLES = ['daftar_accounting_internal', 'daftar_inventory_internal'] as const;
+const ALL_ROLES = [...RUNTIME_ROLES, ...INTERNAL_ROLES, DEPLOYER] as const;
+
+/** The last frozen migration (MIGRATION_MANIFEST.json `frozenThrough`). */
+const FROZEN_THROUGH = '0052_accounting_journal_lines_rls_performance.sql';
 
 const findings: string[] = [];
 const steps: { step: string; ok: boolean; detail: string }[] = [];
@@ -513,13 +521,114 @@ async function caseC(db: string): Promise<void> {
     const before = await appliedCount(db);
     const applied = await runMigrations(deployerUrl(db), MIGRATIONS_DIR);
     const after = await appliedCount(db);
+    // The frozen names exactly and in order, then whatever unfrozen candidates
+    // the tree carries — appended to the expectation, never loosened out of it.
+    const expected = ['0051_accounting_reconciler_read.sql', FROZEN_THROUGH, ...migrationFiles().filter((f) => f > FROZEN_THROUGH)];
     record(
-      '5.1 exactly 0051 and 0052 are added',
-      applied.length === 2 && applied[0].startsWith('0051') && applied[1].startsWith('0052'),
+      '5.1 exactly 0051 and 0052 are added, then the unfrozen candidates',
+      applied.length === expected.length && applied.every((f, i) => f === expected[i]),
       `${before.n} → ${after.n}; applied ${applied.join(', ') || '(none)'}`,
     );
   } finally {
     rmSync(upTo50, { recursive: true, force: true });
+  }
+}
+
+/**
+ * CASE G — the P3-S1 candidates on top of the frozen history, applied to a
+ * database that already HOLDS a business.
+ *
+ * An empty database cannot tell a backfill that worked from one that saw
+ * nothing. The deployer owns the tables but is subject to their FORCE row
+ * security, so a backfill that forgot that would seed nothing in production
+ * and pass every set-wise assertion vacuously. The business below is written
+ * by the administrator (a superuser, which RLS does not restrict), then the
+ * candidates run as the deployer, and the rows they were required to write
+ * are read back.
+ */
+async function caseG(db: string): Promise<void> {
+  section('8b. CASE G — a database at the 0052 freeze with a business, upgraded to every candidate');
+  await freshDatabase(db);
+  const frozen = migrationsUpTo(FROZEN_THROUGH);
+  try {
+    await runMigrations(deployerUrl(db), frozen);
+    const seed = {
+      tenant: randomUUID(),
+      business: randomUUID(),
+      branch: randomUUID(),
+      warehouse: randomUUID(),
+      owner: randomUUID(),
+      manager: randomUUID(),
+      cashier: randomUUID(),
+      custom: randomUUID(),
+    };
+    // The shape the frozen provisioning writer produces (0033:137): only the
+    // owner is a system role; manager and cashier are the builtin template
+    // roles, identified by their unique key.
+    // System roles are system-managed (0006 business_roles_system_guard):
+    // only the platform principal, for which app_bypass() is true, may write
+    // them — so the seed is written AS daftar_platform, exactly the principal
+    // provisioning writes it as.
+    await exec(
+      ownerUrl(db),
+      `BEGIN;
+       SET LOCAL ROLE daftar_platform;
+       INSERT INTO tenants (id) VALUES ('${seed.tenant}');
+       INSERT INTO businesses (id, tenant_id, name, store_slug, country_code, base_currency, timezone)
+         VALUES ('${seed.business}', '${seed.tenant}', 'Deploy G', 'deploy-g', 'PS', 'ILS', 'Asia/Hebron');
+       INSERT INTO branches (business_id, id, name, is_default) VALUES ('${seed.business}', '${seed.branch}', 'Main', true);
+       INSERT INTO warehouses (business_id, id, branch_id, name, is_default) VALUES ('${seed.business}', '${seed.warehouse}', '${seed.branch}', 'Main WH', true);
+       INSERT INTO business_roles (business_id, id, key, name, is_system) VALUES
+         ('${seed.business}', '${seed.owner}', 'owner', 'Owner', true),
+         ('${seed.business}', '${seed.manager}', 'manager', 'Manager', false),
+         ('${seed.business}', '${seed.cashier}', 'cashier', 'Cashier', false),
+         ('${seed.business}', '${seed.custom}', 'clerk', 'Clerk', false);
+       INSERT INTO role_permissions (business_id, role_id, permission) VALUES
+         ('${seed.business}', '${seed.manager}', 'catalog.view'), ('${seed.business}', '${seed.manager}', 'warehouse.manage'),
+         ('${seed.business}', '${seed.cashier}', 'catalog.view'),
+         ('${seed.business}', '${seed.custom}', 'catalog.view');
+       COMMIT;`,
+    );
+    const applied = await runMigrations(deployerUrl(db), MIGRATIONS_DIR);
+    const candidates = migrationFiles().filter((f) => f > FROZEN_THROUGH);
+    record(
+      '8b.1 exactly the unfrozen candidates are added',
+      applied.length === candidates.length && applied.every((f, i) => f === candidates[i]),
+      `applied ${applied.join(', ') || '(none)'}`,
+    );
+    const [home] = await sql<{ n: string; home: string }>(
+      ownerUrl(db),
+      `SELECT count(*)::text AS n, count(*) FILTER (WHERE branch_id = $2 AND warehouse_id = $3)::text AS home
+         FROM branch_warehouses WHERE business_id = $1`,
+      [seed.business, seed.branch, seed.warehouse],
+    );
+    record(
+      '8b.2 the existing warehouse has exactly its home association',
+      home?.n === '1' && home.home === '1',
+      `${home?.n ?? '?'} row(s), ${home?.home ?? '?'} home`,
+    );
+    const perms = async (role: string): Promise<string[]> =>
+      (
+        await sql<{ p: string }>(ownerUrl(db), `SELECT permission AS p FROM role_permissions WHERE business_id = $1 AND role_id = $2 ORDER BY 1`, [
+          seed.business,
+          role,
+        ])
+      ).map((r) => r.p);
+    const owner = await perms(seed.owner);
+    const phase3 = ['inventory.', 'purchases.', 'suppliers.'];
+    record('8b.3 the owner holds all eleven Phase 3 permissions', owner.filter((p) => phase3.some((x) => p.startsWith(x))).length === 11, owner.join(', '));
+    const manager = await perms(seed.manager);
+    record(
+      '8b.4 the manager gained exactly the three view keys and kept what it had',
+      manager.join(',') === ['catalog.view', 'inventory.view', 'purchases.view', 'suppliers.view', 'warehouse.manage'].join(','),
+      manager.join(', '),
+    );
+    const cashier = await perms(seed.cashier);
+    record('8b.5 the cashier gained nothing', cashier.join(',') === 'catalog.view', cashier.join(', '));
+    const custom = await perms(seed.custom);
+    record('8b.6 the custom role is unchanged', custom.join(',') === 'catalog.view', custom.join(', '));
+  } finally {
+    rmSync(frozen, { recursive: true, force: true });
   }
 }
 
@@ -651,6 +760,13 @@ const CATALOGUE_QUERIES: Record<string, string> = {
                     || ' | ' || coalesce(pg_get_expr(pol.polwithcheck, pol.polrelid), '')
                     || ' | ' || coalesce((SELECT string_agg(pg_get_userbyid(r), ',' ORDER BY r) FROM unnest(pol.polroles) r), '') AS row
                FROM pg_policy pol JOIN pg_class c ON c.oid = pol.polrelid ORDER BY 1`,
+  triggers: `SELECT c.relname || '.' || t.tgname || ' | ' || t.tgtype || ' | ' || t.tgenabled::text || ' | ' || t.tgdeferrable || ' | ' || t.tginitdeferred
+                    || ' | ' || p.proname AS row
+               FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid JOIN pg_namespace n ON n.oid = c.relnamespace JOIN pg_proc p ON p.oid = t.tgfoid
+              WHERE n.nspname = 'public' AND NOT t.tgisinternal ORDER BY 1`,
+  columnAcls: `SELECT c.relname || '.' || a.attname || ' | ' || a.attacl::text AS row
+                 FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid JOIN pg_namespace n ON n.oid = c.relnamespace
+                WHERE n.nspname = 'public' AND a.attacl IS NOT NULL AND a.attnum > 0 AND NOT a.attisdropped ORDER BY 1`,
   constraints: `SELECT c.relname || '.' || con.conname || ' | ' || con.contype::text || ' | ' || pg_get_constraintdef(con.oid) AS row
                   FROM pg_constraint con JOIN pg_class c ON c.oid = con.conrelid JOIN pg_namespace n ON n.oid = c.relnamespace
                  WHERE n.nspname = 'public' ORDER BY 1`,
@@ -805,6 +921,20 @@ async function roleMatrix(db: string): Promise<RoleRow[]> {
   record('11.5 only the deployer may create in public', creators.length === 0, creators.map((r) => r.role).join(', ') || 'none');
   const loginInternal = rows.find((r) => r.role === 'daftar_accounting_internal');
   record('11.6 the posting authority has no credential', loginInternal?.login === false, `daftar_accounting_internal login = ${String(loginInternal?.login)}`);
+  const inventoryInternal = rows.find((r) => r.role === 'daftar_inventory_internal');
+  record(
+    '11.7 the inventory authority has no credential and inherits nothing',
+    inventoryInternal?.login === false && inventoryInternal.inherit === false && inventoryInternal.memberOf.length === 0,
+    `daftar_inventory_internal login = ${String(inventoryInternal?.login)}, inherit = ${String(inventoryInternal?.inherit)}, memberOf = [${inventoryInternal?.memberOf.join(',') ?? ''}]`,
+  );
+  const reachable = rows.filter(
+    (r) => (RUNTIME_ROLES as readonly string[]).includes(r.role) && r.memberOf.some((m) => (INTERNAL_ROLES as readonly string[]).includes(m)),
+  );
+  record(
+    '11.8 no runtime principal is a member of an internal authority',
+    reachable.length === 0,
+    reachable.map((r) => `${r.role} → ${r.memberOf.join(',')}`).join('; ') || 'none',
+  );
   return rows;
 }
 
@@ -830,6 +960,7 @@ async function main(): Promise<void> {
       await caseD(DEPLOYED);
       await caseE(DEPLOYED);
       await caseF('daftar_deploy_case_f');
+      await caseG('daftar_deploy_case_g');
       await checkHistoryAuthority(DEPLOYED);
 
       // The superuser control: the same bootstrap and the same history,

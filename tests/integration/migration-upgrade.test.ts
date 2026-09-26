@@ -934,4 +934,302 @@ describe('migration upgrade path: pre-encryption schema → latest (§13–16)',
       await admin.query(`DROP DATABASE IF EXISTS ${db3} WITH (FORCE)`).catch(() => undefined);
     }
   }, 180_000);
+  /**
+   * P3-S1 — the frozen 0052 boundary, holding a business with a catalog, a
+   * product variant, two warehouses and the seeded chart, upgraded to every
+   * P3-S1 candidate.
+   *
+   * What the candidates may change is narrow and stated exactly: they ADD the
+   * home association of each existing warehouse, the Phase 3 permissions of
+   * the owner (eleven) and manager (three view keys), and three nullable or
+   * false columns. They may not configure a product, create a base variant,
+   * move a warehouse, or touch a single accounting row. The digest below is
+   * everything they must not rewrite.
+   */
+  it('compatibility matrix (P3-S1): frozen 0052-checkpoint + existing business → the P3-S1 candidates, nothing configured, books untouched, rerun no-op', async () => {
+    await ensurePostgres();
+    const db8 = 'daftar_upgrade_0052';
+    await admin.query(`DROP DATABASE IF EXISTS ${db8} WITH (FORCE)`);
+    await admin.query(`CREATE DATABASE ${db8}`);
+    const url8 = `postgresql://${PG_USER}:${PG_PASSWORD}@localhost:${PG_PORT}/${db8}`;
+    const pool = scratchPool(url8);
+    try {
+      await pool.query(bootstrapSql());
+      const FROZEN = '0052_accounting_journal_lines_rls_performance.sql';
+      const preDir = migrationsUpTo(FROZEN);
+      await runMigrations(url8, preDir);
+      rmSync(preDir, { recursive: true, force: true });
+      for (const table of ['units', 'unit_names', 'branch_warehouses', 'inventory_assertion_keys', 'inventory_assertion_uses', 'inventory_operation_kinds']) {
+        expect((await pool.query(`SELECT 1 FROM information_schema.tables WHERE table_name = $1`, [table])).rows, table).toEqual([]);
+      }
+
+      const tenant = (await pool.query<{ id: string }>(`INSERT INTO tenants DEFAULT VALUES RETURNING id`)).rows[0];
+      const biz = (
+        await pool.query<{ id: string }>(
+          `INSERT INTO businesses (tenant_id, name, store_slug, country_code, base_currency, timezone)
+           VALUES ($1, 'Before Inventory', 'upgrade-inventory', 'PS', 'ILS', 'Asia/Hebron') RETURNING id`,
+          [tenant?.id],
+        )
+      ).rows[0];
+      const branches = (
+        await pool.query<{ id: string }>(`INSERT INTO branches (business_id, name, is_default) VALUES ($1, 'A', true), ($1, 'B', false) RETURNING id`, [
+          biz?.id,
+        ])
+      ).rows;
+      for (const [i, b] of branches.entries()) {
+        await pool.query(`INSERT INTO warehouses (business_id, branch_id, name, is_default) VALUES ($1, $2, $3, $4)`, [biz?.id, b.id, `W${i}`, i === 0]);
+      }
+      const product = (
+        await pool.query<{ id: string }>(
+          `WITH p AS (INSERT INTO products (business_id, sku, base_price_minor, price_currency, unit) VALUES ($1, 'INV-1', 500, 'ILS', 'kg') RETURNING business_id, id)
+           INSERT INTO product_translations (business_id, product_id, locale, name) SELECT business_id, id, 'en', 'Before' FROM p RETURNING product_id AS id`,
+          [biz?.id],
+        )
+      ).rows[0];
+      await pool.query(`INSERT INTO product_variants (business_id, product_id, sku) VALUES ($1, $2, 'INV-1-L')`, [biz?.id, product?.id]);
+
+      const protectedDigest = async (): Promise<string> => {
+        const r = await pool.query<{ d: string }>(
+          `SELECT md5(string_agg(t, '|' ORDER BY t)) AS d FROM (
+             SELECT concat_ws(':', 'acc', id, business_id, code, type, system_key, is_active) AS t FROM accounts
+             UNION ALL SELECT concat_ws(':', 'je', id, business_id, entry_date, source_type, source_id) FROM journal_entries
+             UNION ALL SELECT concat_ws(':', 'jl', id, journal_entry_id, account_id, debit_minor, credit_minor) FROM journal_lines
+             UNION ALL SELECT concat_ws(':', 'biz', id, tenant_id, base_currency, timezone, financial_started_at) FROM businesses
+             UNION ALL SELECT concat_ws(':', 'wh', business_id, id, branch_id, name, is_default, status) FROM warehouses
+             UNION ALL SELECT concat_ws(':', 'br', business_id, id, name, is_default, status) FROM branches
+             UNION ALL SELECT concat_ws(':', 'p', business_id, id, sku, barcode, base_price_minor, unit, version, status) FROM products
+             UNION ALL SELECT concat_ws(':', 'v', business_id, id, product_id, sku, barcode, price_minor, attributes, status) FROM product_variants
+             UNION ALL SELECT concat_ws(':', 'ci', business_id, kind, value_norm, owner_type, owner_id) FROM catalog_identifiers
+           ) x`,
+        );
+        return r.rows[0]?.d ?? '';
+      };
+      const before = await protectedDigest();
+
+      const applied = await runMigrations(url8);
+      expect(applied).toEqual(migrationsAfter(FROZEN));
+      expect(applied.length).toBeGreaterThan(0);
+      expect(await protectedDigest()).toBe(before);
+
+      // Nothing configured, no base variant, every variant a merchant one.
+      expect(
+        (
+          await pool.query<{ tracked: number; base: number; merchant: number }>(
+            `SELECT (SELECT count(*)::int FROM products WHERE track_inventory OR unit_code IS NOT NULL OR unit_decimals IS NOT NULL) AS tracked,
+                    (SELECT count(*)::int FROM product_variants WHERE is_base) AS base,
+                    (SELECT count(*)::int FROM product_variants WHERE NOT is_base) AS merchant`,
+          )
+        ).rows[0],
+      ).toEqual({ tracked: 0, base: 0, merchant: 1 });
+
+      // Row A: every existing warehouse, exactly its home association.
+      const assoc = (
+        await pool.query<{ ok: boolean; n: number }>(
+          `SELECT bool_and(EXISTS (SELECT 1 FROM warehouses w WHERE w.business_id = bw.business_id AND w.id = bw.warehouse_id AND w.branch_id = bw.branch_id)) AS ok,
+                  count(*)::int AS n FROM branch_warehouses bw`,
+        )
+      ).rows[0];
+      expect(assoc).toEqual({ ok: true, n: 2 });
+
+      // The four lifecycle triggers and the TD-09 guard arrived with the
+      // tables they protect — a protection installed later is a window.
+      const triggers = (
+        await pool.query<{ t: string }>(
+          `SELECT c.relname || '.' || t.tgname AS t FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid
+            WHERE NOT t.tgisinternal AND t.tgname IN ('warehouses_home_branch_maintain', 'warehouses_require_home_branch', 'branch_warehouses_keep_home',
+                                                      'warehouses_home_branch_immutable', 'products_10_inventory_config_authority',
+                                                      'product_variants_10_base_variant_authority', 'accounting_entry_date_guard')`,
+        )
+      ).rows
+        .map((r) => r.t)
+        .sort();
+      expect(triggers).toEqual(
+        [
+          'branch_warehouses.branch_warehouses_keep_home',
+          'journal_entries.accounting_entry_date_guard',
+          'product_variants.product_variants_10_base_variant_authority',
+          'products.products_10_inventory_config_authority',
+          'warehouses.warehouses_home_branch_immutable',
+          'warehouses.warehouses_home_branch_maintain',
+          'warehouses.warehouses_require_home_branch',
+        ].sort(),
+      );
+
+      // Every DML grant on the new tables, named exactly (P3-AL-54 §H).
+      const grants = (
+        await pool.query<{ t: string; g: string; p: string }>(
+          `SELECT c.relname AS t, coalesce(r.rolname, 'PUBLIC') AS g, a.privilege_type AS p
+             FROM pg_class c
+             JOIN pg_namespace n ON n.oid = c.relnamespace
+             CROSS JOIN LATERAL aclexplode(coalesce(c.relacl, acldefault('r', c.relowner))) a
+             LEFT JOIN pg_roles r ON r.oid = a.grantee
+            WHERE n.nspname = 'public'
+              AND c.relname IN ('units', 'unit_names', 'branch_warehouses', 'inventory_assertion_keys', 'inventory_assertion_uses', 'inventory_operation_kinds')
+              AND a.privilege_type IN ('SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER')
+              AND a.grantee <> c.relowner`,
+        )
+      ).rows
+        .map((g) => `${g.t}:${g.g}:${g.p}`)
+        .sort();
+      expect(grants).toEqual(
+        [
+          'branch_warehouses:daftar_app:SELECT',
+          'branch_warehouses:daftar_inventory_internal:DELETE',
+          'branch_warehouses:daftar_inventory_internal:INSERT',
+          'branch_warehouses:daftar_inventory_internal:SELECT',
+          'inventory_assertion_keys:daftar_inventory_internal:INSERT',
+          'inventory_assertion_keys:daftar_inventory_internal:SELECT',
+          'inventory_assertion_keys:daftar_inventory_internal:UPDATE',
+          'inventory_assertion_uses:daftar_inventory_internal:DELETE',
+          'inventory_assertion_uses:daftar_inventory_internal:INSERT',
+          'inventory_assertion_uses:daftar_inventory_internal:SELECT',
+          'inventory_operation_kinds:daftar_inventory_internal:SELECT',
+          'unit_names:daftar_app:SELECT',
+          'units:daftar_app:SELECT',
+          'units:daftar_inventory_internal:SELECT',
+        ].sort(),
+      );
+
+      // Second run does nothing.
+      expect(await runMigrations(url8)).toEqual([]);
+    } finally {
+      await pool.end();
+      await admin.query(`DROP DATABASE IF EXISTS ${db8} WITH (FORCE)`).catch(() => undefined);
+    }
+  }, 180_000);
+
+  it('compatibility matrix (P3-S2): frozen 0058-checkpoint + existing business → the P3-S2 ledger, empty, books and catalog untouched, rerun no-op', async () => {
+    await ensurePostgres();
+    const db9 = 'daftar_upgrade_0058';
+    await admin.query(`DROP DATABASE IF EXISTS ${db9} WITH (FORCE)`);
+    await admin.query(`CREATE DATABASE ${db9}`);
+    const url9 = `postgresql://${PG_USER}:${PG_PASSWORD}@localhost:${PG_PORT}/${db9}`;
+    const pool = scratchPool(url9);
+    const LEDGER = [
+      'stock_movement_kinds',
+      'stock_source_types',
+      'inventory_operation_movement_kinds',
+      'stock_levels',
+      'stock_movements',
+      'stock_source_bindings',
+      'negative_inventory_deficits',
+      'negative_deficit_coverages',
+    ];
+    try {
+      await pool.query(bootstrapSql());
+      const FROZEN = '0058_accounting_entry_date_guard.sql';
+      const preDir = migrationsUpTo(FROZEN);
+      await runMigrations(url9, preDir);
+      rmSync(preDir, { recursive: true, force: true });
+      for (const table of LEDGER) {
+        expect((await pool.query(`SELECT 1 FROM information_schema.tables WHERE table_name = $1`, [table])).rows, table).toEqual([]);
+      }
+
+      const tenant = (await pool.query<{ id: string }>(`INSERT INTO tenants DEFAULT VALUES RETURNING id`)).rows[0];
+      const biz = (
+        await pool.query<{ id: string }>(
+          `INSERT INTO businesses (tenant_id, name, store_slug, country_code, base_currency, timezone)
+           VALUES ($1, 'Before Ledger', 'upgrade-ledger', 'PS', 'ILS', 'Asia/Hebron') RETURNING id`,
+          [tenant?.id],
+        )
+      ).rows[0];
+      const branch = (await pool.query<{ id: string }>(`INSERT INTO branches (business_id, name, is_default) VALUES ($1, 'A', true) RETURNING id`, [biz?.id]))
+        .rows[0];
+      await pool.query(`INSERT INTO warehouses (business_id, branch_id, name, is_default) VALUES ($1, $2, 'W0', true)`, [biz?.id, branch?.id]);
+      const product = (
+        await pool.query<{ id: string }>(
+          `WITH p AS (INSERT INTO products (business_id, sku, base_price_minor, price_currency, unit) VALUES ($1, 'LED-1', 500, 'ILS', 'kg') RETURNING business_id, id)
+           INSERT INTO product_translations (business_id, product_id, locale, name) SELECT business_id, id, 'en', 'Before' FROM p RETURNING product_id AS id`,
+          [biz?.id],
+        )
+      ).rows[0];
+      await pool.query(`INSERT INTO product_variants (business_id, product_id, sku) VALUES ($1, $2, 'LED-1-L')`, [biz?.id, product?.id]);
+
+      const protectedDigest = async (): Promise<string> => {
+        const r = await pool.query<{ d: string }>(
+          `SELECT md5(string_agg(t, '|' ORDER BY t)) AS d FROM (
+             SELECT concat_ws(':', 'acc', id, business_id, code, type, system_key, is_active) AS t FROM accounts
+             UNION ALL SELECT concat_ws(':', 'je', id, business_id, entry_date, source_type, source_id) FROM journal_entries
+             UNION ALL SELECT concat_ws(':', 'jl', id, journal_entry_id, account_id, debit_minor, credit_minor) FROM journal_lines
+             UNION ALL SELECT concat_ws(':', 'biz', id, tenant_id, base_currency, timezone, financial_started_at) FROM businesses
+             UNION ALL SELECT concat_ws(':', 'wh', business_id, id, branch_id, name, is_default, status) FROM warehouses
+             UNION ALL SELECT concat_ws(':', 'bw', business_id, warehouse_id, branch_id) FROM branch_warehouses
+             UNION ALL SELECT concat_ws(':', 'p', business_id, id, sku, barcode, base_price_minor, unit, version, status, track_inventory, unit_code, unit_decimals) FROM products
+             UNION ALL SELECT concat_ws(':', 'v', business_id, id, product_id, sku, barcode, price_minor, attributes, status, is_base) FROM product_variants
+           ) x`,
+        );
+        return r.rows[0]?.d ?? '';
+      };
+      const before = await protectedDigest();
+
+      const applied = await runMigrations(url9);
+      expect(applied).toEqual(migrationsAfter(FROZEN));
+      expect(applied.length).toBeGreaterThan(0);
+      expect(await protectedDigest()).toBe(before);
+
+      // The ledger exists and is empty; only the closed movement-kind registry
+      // is seeded, and no operation may reach the primitive (P3-AL-50, L:1992).
+      const counts = (
+        await pool.query<{ t: string; n: number }>(LEDGER.map((t) => `SELECT '${t}' AS t, count(*)::int AS n FROM ${t}`).join(' UNION ALL '))
+      ).rows.reduce<Record<string, number>>((acc, r) => ({ ...acc, [r.t]: r.n }), {});
+      expect(counts).toEqual({
+        stock_movement_kinds: 10,
+        stock_source_types: 0,
+        inventory_operation_movement_kinds: 0,
+        stock_levels: 0,
+        stock_movements: 0,
+        stock_source_bindings: 0,
+        negative_inventory_deficits: 0,
+        negative_deficit_coverages: 0,
+      });
+
+      // The history lock and the ledger's own protections arrived with it.
+      const triggers = (
+        await pool.query<{ t: string }>(
+          `SELECT c.relname || '.' || t.tgname AS t FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid
+            WHERE NOT t.tgisinternal AND t.tgname IN ('products_10_inventory_config_authority', 'products_20_unit_history_lock',
+                                                      'stock_movements_append_only', 'stock_source_bindings_append_only',
+                                                      'negative_deficit_coverages_append_only', 'stock_levels_retain',
+                                                      'stock_levels_zero_on_hand_zero_value')`,
+        )
+      ).rows
+        .map((r) => r.t)
+        .sort();
+      expect(triggers).toEqual(
+        [
+          'negative_deficit_coverages.negative_deficit_coverages_append_only',
+          'products.products_10_inventory_config_authority',
+          'products.products_20_unit_history_lock',
+          'stock_levels.stock_levels_retain',
+          'stock_levels.stock_levels_zero_on_hand_zero_value',
+          'stock_movements.stock_movements_append_only',
+          'stock_source_bindings.stock_source_bindings_append_only',
+        ].sort(),
+      );
+
+      // No runtime role holds DML on any ledger table; daftar_app reads the
+      // movements and the cache only (P3-AL-54 §H, contract A-17).
+      const runtimeGrants = (
+        await pool.query<{ t: string; g: string; p: string }>(
+          `SELECT c.relname AS t, r.rolname AS g, a.privilege_type AS p
+             FROM pg_class c
+             JOIN pg_namespace n ON n.oid = c.relnamespace
+             CROSS JOIN LATERAL aclexplode(coalesce(c.relacl, acldefault('r', c.relowner))) a
+             JOIN pg_roles r ON r.oid = a.grantee
+            WHERE n.nspname = 'public' AND c.relname = ANY ($1::text[])
+              AND r.rolname IN ('daftar_app', 'daftar_platform', 'daftar_worker', 'daftar_provisioner', 'daftar_identity', 'daftar_resolver', 'daftar_reconciler')`,
+          [LEDGER],
+        )
+      ).rows
+        .map((g) => `${g.t}:${g.g}:${g.p}`)
+        .sort();
+      expect(runtimeGrants).toEqual(['stock_levels:daftar_app:SELECT', 'stock_movements:daftar_app:SELECT']);
+
+      // Second run does nothing.
+      expect(await runMigrations(url9)).toEqual([]);
+    } finally {
+      await pool.end();
+      await admin.query(`DROP DATABASE IF EXISTS ${db9} WITH (FORCE)`).catch(() => undefined);
+    }
+  }, 180_000);
 });

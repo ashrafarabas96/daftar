@@ -1,7 +1,7 @@
 {
-  "generatedAt": "2026-09-24T14:00:00.000Z",
-  "frozenThrough": "0052_accounting_journal_lines_rls_performance.sql",
-  "policy": "Migrations 0000–0052 are FROZEN. 0000–0039 froze at the Phase 1 release; 0040–0041 froze on Tech Lead acceptance of P2-S1 (docs/PHASE_2_S1_ACCEPTANCE.md); 0042–0043 froze on Tech Lead acceptance of P2-S2 (docs/PHASE_2_S2_ACCEPTANCE.md); 0044–0045 froze on Tech Lead acceptance of P2-S3 (docs/PHASE_2_S3_ACCEPTANCE.md); 0046–0047 froze on Tech Lead acceptance of P2-S4 (docs/PHASE_2_S4_ACCEPTANCE.md); 0048 froze on Tech Lead acceptance of P2-S5 (docs/PHASE_2_S5_ACCEPTANCE.md); 0049 froze on Tech Lead acceptance of P2-S6 (docs/PHASE_2_S6_ACCEPTANCE.md); 0050 froze on Tech Lead acceptance of P2-S7 (docs/PHASE_2_S7_ACCEPTANCE.md); 0051–0052 froze on Tech Lead acceptance of P2-S8 (docs/PHASE_2_S8_ACCEPTANCE.md). A frozen migration is never edited or deleted; every schema correction is a NEW migration appended after 0052, and only under an explicit Tech Lead directive authorizing it. Check: npm run check:migrations.",
+  "generatedAt": "2026-09-26T15:00:00.000Z",
+  "frozenThrough": "0060_inventory_stock_primitive.sql",
+  "policy": "Migrations 0000–0060 are FROZEN. 0000–0039 froze at the Phase 1 release; 0040–0041 froze on Tech Lead acceptance of P2-S1 (docs/PHASE_2_S1_ACCEPTANCE.md); 0042–0043 froze on Tech Lead acceptance of P2-S2 (docs/PHASE_2_S2_ACCEPTANCE.md); 0044–0045 froze on Tech Lead acceptance of P2-S3 (docs/PHASE_2_S3_ACCEPTANCE.md); 0046–0047 froze on Tech Lead acceptance of P2-S4 (docs/PHASE_2_S4_ACCEPTANCE.md); 0048 froze on Tech Lead acceptance of P2-S5 (docs/PHASE_2_S5_ACCEPTANCE.md); 0049 froze on Tech Lead acceptance of P2-S6 (docs/PHASE_2_S6_ACCEPTANCE.md); 0050 froze on Tech Lead acceptance of P2-S7 (docs/PHASE_2_S7_ACCEPTANCE.md); 0051–0052 froze on Tech Lead acceptance of P2-S8 (docs/PHASE_2_S8_ACCEPTANCE.md); 0053–0058 froze on Tech Lead acceptance of P3-S1 (docs/PHASE_3_S1_ACCEPTANCE.md); 0059–0060 froze on acceptance of P3-S2 under the Tech Lead's Phase 3 completion directive (docs/PHASE_3_S2_ACCEPTANCE.md). A frozen migration is never edited or deleted; every schema correction is a NEW migration appended after 0060, and only under an explicit Tech Lead directive authorizing it. Check: npm run check:migrations.",
   "migrations": [
     {
       "name": "0000_extensions.sql",
@@ -214,6 +214,38 @@
     {
       "name": "0052_accounting_journal_lines_rls_performance.sql",
       "sha256": "0acf165003c678f8d3017797e77033fadf2e9e791be54f98048031108c72ad84"
+    },
+    {
+      "name": "0053_inventory_units_and_product_configuration.sql",
+      "sha256": "63940fbcf2c5a3cd99a20280cd83fe53198a0e2d0e2dc0db7ed80d31c47bd3e6"
+    },
+    {
+      "name": "0054_inventory_assertion_authority.sql",
+      "sha256": "7205dea79f090ecf8ded122557d92b2b9669463ce3e5aefca466a968ef9aa450"
+    },
+    {
+      "name": "0055_inventory_configure_product.sql",
+      "sha256": "6652cd5949ad2d9bdda559e23174b850f3cf6bcc2a54d307c5fb9a0a1f5fa2b7"
+    },
+    {
+      "name": "0056_inventory_branch_warehouses.sql",
+      "sha256": "2de288c370e90df5c304ccf354638d178452798662d83054c6a8df8c6f7195a5"
+    },
+    {
+      "name": "0057_inventory_permissions.sql",
+      "sha256": "f6c7b56f920215cc8ba3e84d24e4f353329edab8dccb8d4e43a66712f7c1941d"
+    },
+    {
+      "name": "0058_accounting_entry_date_guard.sql",
+      "sha256": "455973c26bfdf0a185112a4e20a24676d54b5c4c7d4d1232f3e2dce3046b431a"
+    },
+    {
+      "name": "0059_inventory_stock_ledger.sql",
+      "sha256": "4d613225cf880c653918d7106f7fdcecbbda6adfa64d6c7dc2b991e49eb6494d"
+    },
+    {
+      "name": "0060_inventory_stock_primitive.sql",
+      "sha256": "be240e163a7894dc2de4a384a9a86e47addf0ea10c60fadc0e8c6341c278d66b"
     }
   ]
 }
