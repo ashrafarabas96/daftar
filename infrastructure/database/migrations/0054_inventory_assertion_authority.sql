@@ -456,7 +456,18 @@ BEGIN
   END IF;
 
   -- 11. Opportunistic hygiene: a use is worthless long after the TTL ceiling.
-  DELETE FROM inventory_assertion_uses WHERE consumed_at < clock_timestamp() - interval '1 hour';
+  --     It must NEVER make a consumer wait. A plain DELETE row-locks every
+  --     expired row it touches, so while one consuming transaction is open,
+  --     every other consume — in any tenant — would queue behind it on those
+  --     same rows. So only the one transaction that wins this transaction-scoped
+  --     advisory lock prunes; every other one skips hygiene without waiting.
+  --     The winner holds the lock until it ends, so no two deleters overlap and
+  --     the rows it deletes are locked by nobody else (no role UPDATEs a use,
+  --     and an uncommitted use is invisible to the DELETE). No privilege is
+  --     added: pg_try_advisory_xact_lock is executable by PUBLIC.
+  IF pg_try_advisory_xact_lock(hashtext('daftar.inventory_assertion_uses'), hashtext('hygiene')) THEN
+    DELETE FROM inventory_assertion_uses WHERE consumed_at < clock_timestamp() - interval '1 hour';
+  END IF;
 
   RETURN v_out;
 END;
