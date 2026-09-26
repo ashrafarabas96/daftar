@@ -17,7 +17,23 @@
  */
 import { mintDomainPostingAssertion, type AccountingAssertionMinter, type PostingCommand, type PostingLineCommand } from '@daftar/accounting';
 import { adjustmentPostingCommand, openingPostingCommand } from '../../apps/api/src/modules/inventory/inventory-posting';
-import { adjustCommand, type CommandRow, must, type Queryable, runCommand, type S3Business, type S3Command } from './inventory-commands';
+import {
+  adjustCommand,
+  countCommand,
+  damageCommand,
+  finalizeCommand,
+  must,
+  openingCommand,
+  runCommand,
+  stocktakeOpenCommand,
+  today,
+  transferCommand,
+  type CommandRow,
+  type Queryable,
+  type S3Business,
+  type S3Command,
+  type S3Kind,
+} from './inventory-commands';
 import { mintTestAccountingAssertion } from './test-app';
 import {
   openingBalanceFingerprintOf,
@@ -306,4 +322,130 @@ export function domainReversalFingerprint(command: PostingCommand, entryId: stri
     entryId,
     entryDate,
   );
+}
+
+// ── one honest command per entry routine (the authority, isolation and
+//    idempotency suites each start from these and depart in exactly one way) ─
+
+/**
+ * Prepare `kind` in `b` and return the honest command for it. Stock is seeded
+ * on W1 (piece: 5 @ 10), and the stocktake kinds get their draft (and count)
+ * first. The returned command succeeds when run next.
+ */
+export async function honestCommand(c: Queryable, b: S3Business, kind: S3Kind): Promise<S3Command> {
+  const day = await today(c);
+  const v = b.piece.variantId;
+  switch (kind) {
+    case 'transfer':
+      await stockUp(c, b, b.w1, [{ variantId: v, qty: '5', unitCost: '10' }]);
+      return transferCommand(b.w1, b.w2, [{ variantId: v, qty: '2' }]);
+    case 'adjust':
+      await stockUp(c, b, b.w1, [{ variantId: v, qty: '5', unitCost: '10' }]);
+      return adjustCommand(c, b, b.w1, [
+        { variantId: v, qty: '-1' },
+        { variantId: b.piece2.variantId, qty: '2', unitCost: '7.5' },
+      ]);
+    case 'damage':
+      await stockUp(c, b, b.w1, [{ variantId: v, qty: '5', unitCost: '10' }]);
+      return damageCommand(c, b, b.w1, [{ variantId: v, qty: '1' }]);
+    case 'stocktake_open':
+      return stocktakeOpenCommand(b.w1);
+    case 'stocktake_count': {
+      const open = stocktakeOpenCommand(b.w1);
+      await runCommand(c, b, open);
+      return countCommand(open.stocktakeId, b.w1, [
+        { variantId: v, counted: '3' },
+        { variantId: b.piece2.variantId, counted: '1' },
+      ]);
+    }
+    case 'stocktake_finalize': {
+      await stockUp(c, b, b.w1, [{ variantId: v, qty: '5', unitCost: '10' }]);
+      const open = stocktakeOpenCommand(b.w1);
+      await runCommand(c, b, open);
+      await runCommand(c, b, countCommand(open.stocktakeId, b.w1, [{ variantId: v, counted: '3' }]));
+      return finalizeCommand(c, b, open.stocktakeId, b.w1, { occurredOn: day });
+    }
+    case 'opening':
+      return openingCommand(day, [
+        { warehouseId: b.w1, variantId: v, qty: '4', unitCost: '25' },
+        { warehouseId: b.w2, variantId: b.dec2.variantId, qty: '1.5', unitCost: '10' },
+      ]);
+  }
+}
+
+/** Every single-field tamper of a command (the field name and the tampered command), for the PM-45 matrix. */
+export function tampers(cmd: S3Command, other: S3Business): readonly { field: string; cmd: S3Command }[] {
+  const out: { field: string; cmd: S3Command }[] = [];
+  switch (cmd.kind) {
+    case 'transfer': {
+      const l = cmd.lines[0];
+      if (l === undefined) break;
+      out.push({ field: 'source warehouse', cmd: { ...cmd, source: other.w1 } });
+      out.push({ field: 'destination warehouse', cmd: { ...cmd, destination: other.w2 } });
+      out.push({ field: 'variant', cmd: { ...cmd, lines: [{ ...l, variantId: other.piece.variantId }] } });
+      out.push({ field: 'qty', cmd: { ...cmd, lines: [{ ...l, qty: '3' }] } });
+      out.push({ field: 'document id', cmd: { ...cmd, transferId: randomUUID() } });
+      break;
+    }
+    case 'adjust': {
+      const [l1, l2] = cmd.lines;
+      if (l1 === undefined || l2 === undefined) break;
+      out.push({ field: 'warehouse', cmd: { ...cmd, warehouseId: other.w1 } });
+      out.push({ field: 'variant', cmd: { ...cmd, lines: [{ ...l1, variantId: other.piece.variantId }, l2] } });
+      out.push({ field: 'qty', cmd: { ...cmd, lines: [{ ...l1, qty: '-2' }, l2] } });
+      out.push({ field: 'cost', cmd: { ...cmd, lines: [l1, { ...l2, unitCost: '7.6' }] } });
+      out.push({ field: 'expected value', cmd: { ...cmd, lines: [{ ...l1, expected: l1.expected - 1n }, l2] } });
+      out.push({ field: 'date', cmd: { ...cmd, occurredOn: '2020-01-01' } });
+      out.push({ field: 'reason', cmd: { ...cmd, reason: `${cmd.reason}.` } });
+      out.push({ field: 'line order', cmd: { ...cmd, lines: [l2, l1] } });
+      break;
+    }
+    case 'damage': {
+      const l = cmd.lines[0];
+      if (l === undefined) break;
+      out.push({ field: 'warehouse', cmd: { ...cmd, warehouseId: other.w1 } });
+      out.push({ field: 'variant', cmd: { ...cmd, lines: [{ ...l, variantId: other.piece.variantId }] } });
+      out.push({ field: 'qty', cmd: { ...cmd, lines: [{ ...l, qty: '2' }] } });
+      out.push({ field: 'expected value', cmd: { ...cmd, lines: [{ ...l, expected: l.expected - 1n }] } });
+      out.push({ field: 'date', cmd: { ...cmd, occurredOn: '2020-01-01' } });
+      out.push({ field: 'reason', cmd: { ...cmd, reason: 'another reason' } });
+      break;
+    }
+    case 'stocktake_open':
+      out.push({ field: 'warehouse', cmd: { ...cmd, warehouseId: other.w1 } });
+      out.push({ field: 'document id', cmd: { ...cmd, stocktakeId: randomUUID() } });
+      break;
+    case 'stocktake_count': {
+      const [l1, l2] = cmd.lines;
+      if (l1 === undefined || l2 === undefined) break;
+      out.push({ field: 'warehouse', cmd: { ...cmd, warehouseId: other.w1 } });
+      out.push({ field: 'variant', cmd: { ...cmd, lines: [{ ...l1, variantId: other.piece.variantId }, l2] } });
+      out.push({ field: 'counted', cmd: { ...cmd, lines: [{ ...l1, counted: '4' }, l2] } });
+      out.push({ field: 'a line dropped', cmd: { ...cmd, lines: [l1] } });
+      break;
+    }
+    case 'stocktake_finalize': {
+      const l = cmd.lines[0];
+      if (l === undefined) break;
+      out.push({ field: 'warehouse', cmd: { ...cmd, warehouseId: other.w1 } });
+      out.push({ field: 'outcome', cmd: { ...cmd, outcome: 'cancelled' } });
+      out.push({ field: 'date', cmd: { ...cmd, occurredOn: '2020-01-01' } });
+      out.push({ field: 'variance', cmd: { ...cmd, lines: [{ ...l, variance: '-1.0000' }] } });
+      out.push({ field: 'cost', cmd: { ...cmd, lines: [{ ...l, unitCost: '1' }] } });
+      out.push({ field: 'expected value', cmd: { ...cmd, lines: [{ ...l, expected: l.expected - 1n }] } });
+      break;
+    }
+    case 'opening': {
+      const [l1, l2] = cmd.lines;
+      if (l1 === undefined || l2 === undefined) break;
+      out.push({ field: 'warehouse', cmd: { ...cmd, lines: [{ ...l1, warehouseId: other.w1 }, l2] } });
+      out.push({ field: 'variant', cmd: { ...cmd, lines: [{ ...l1, variantId: other.piece.variantId }, l2] } });
+      out.push({ field: 'qty', cmd: { ...cmd, lines: [{ ...l1, qty: '5' }, l2] } });
+      out.push({ field: 'cost', cmd: { ...cmd, lines: [l1, { ...l2, unitCost: '10.0000000001' }] } });
+      out.push({ field: 'date', cmd: { ...cmd, occurredOn: '2020-01-01' } });
+      out.push({ field: 'opening_balance_id', cmd: { ...cmd, openingBalanceId: randomUUID(), positionMinor: 115n } });
+      break;
+    }
+  }
+  return out;
 }
