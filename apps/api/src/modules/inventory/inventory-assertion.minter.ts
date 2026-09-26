@@ -3,7 +3,7 @@ import {
   INVENTORY_ASSERTION_TTL_SECONDS,
   mintInventoryAssertion,
   parseInventoryAssertionKey,
-  secretsAreIdentical,
+  hmacKeysEquivalent,
   type InventoryAssertionClaims,
   type InventoryAssertionKey,
 } from '@daftar/inventory';
@@ -33,8 +33,9 @@ export type InventoryMintClaims = Omit<InventoryAssertionClaims, 'jti'>;
  * an assigned-scope actor asking for an association assertion is refused
  * before this service is called (P3-AL-15 §B, matrix row L).
  *
- * The byte-separation check is repeated here, in constant time, at the point
- * where the key is actually loaded: config validation runs only in
+ * The key-separation check is repeated here, in constant time, at the point
+ * where the key is actually loaded — over the EFFECTIVE HMAC key, because
+ * `K` and `K‖0x00` sign identically (`hmacKeysEquivalent`): config validation runs only in
  * production, and a staging deployment that shared one secret between two
  * domains would otherwise look fine until the day one of them leaked
  * (the pattern of `accounting-assertion.minter.ts`).
@@ -48,10 +49,10 @@ export class InventoryAssertionMinterService {
       ? parseInventoryAssertionKey({ kid: config.INVENTORY_ASSERTION_KID ?? 'v1', keyBase64: config.INVENTORY_ASSERTION_KEY })
       : null;
     if (!this.key) return;
-    if (config.PROVISIONING_ASSERTION_KEY && secretsAreIdentical(this.key.secret, Buffer.from(config.PROVISIONING_ASSERTION_KEY, 'base64'))) {
+    if (config.PROVISIONING_ASSERTION_KEY && hmacKeysEquivalent(this.key.secret, Buffer.from(config.PROVISIONING_ASSERTION_KEY, 'base64'))) {
       throw new Error('INVENTORY_ASSERTION_KEY must not be the same secret as PROVISIONING_ASSERTION_KEY (separate domains, rotated independently)');
     }
-    if (config.ACCOUNTING_ASSERTION_KEY && secretsAreIdentical(this.key.secret, Buffer.from(config.ACCOUNTING_ASSERTION_KEY, 'base64'))) {
+    if (config.ACCOUNTING_ASSERTION_KEY && hmacKeysEquivalent(this.key.secret, Buffer.from(config.ACCOUNTING_ASSERTION_KEY, 'base64'))) {
       throw new Error('INVENTORY_ASSERTION_KEY must not be the same secret as ACCOUNTING_ASSERTION_KEY (separate domains, rotated independently)');
     }
   }

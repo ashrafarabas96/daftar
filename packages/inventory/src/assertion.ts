@@ -31,7 +31,7 @@
  * verifies — verification is the database's, and a second implementation of
  * it would be a second place for the two to disagree.
  */
-import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import { InventoryError } from './errors';
 import { CANONICAL_UUID_RE, isInventoryOperationCode, OPERATION_CODE_RE, type InventoryOperationCode } from './payload';
 
@@ -128,6 +128,40 @@ export function parseInventoryAssertionKey(input: { kid: string; keyBase64: stri
 export function secretsAreIdentical(a: Buffer, b: Buffer): boolean {
   if (a.length !== b.length) return false;
   return timingSafeEqual(a, b);
+}
+
+/** SHA-256's block size: the length HMAC-SHA-256 pads (or hashes) every key to. */
+const HMAC_SHA256_BLOCK_BYTES = 64;
+
+/**
+ * The key HMAC-SHA-256 actually uses (RFC 2104 §2): a key longer than the
+ * 64-byte block is replaced by its SHA-256 digest, and the result is padded
+ * with 0x00 up to the block. Two byte strings that differ only by trailing
+ * zero bytes — or a long key and its own digest — are therefore ONE key.
+ * Stripping the trailing zeros yields a canonical form in which exactly the
+ * equivalent keys compare equal.
+ */
+function effectiveHmacSha256Key(key: Buffer): Buffer {
+  const k = key.length > HMAC_SHA256_BLOCK_BYTES ? createHash('sha256').update(key).digest() : key;
+  let end = k.length;
+  while (end > 0 && k[end - 1] === 0) end -= 1;
+  return k.subarray(0, end);
+}
+
+/**
+ * True when two secrets are the SAME HMAC-SHA-256 key, even when their bytes
+ * differ (P3-AL-55 §C). Exact byte comparison is not enough for key
+ * separation: `K` and `K‖0x00` sign identically, as do a key over 64 bytes and
+ * its SHA-256 digest, so an inventory key "different" from the accounting key
+ * in that way would let one secret mint in both domains. Compared in constant
+ * time over the normalized forms; different normalized lengths are different
+ * keys.
+ */
+export function hmacKeysEquivalent(a: Buffer, b: Buffer): boolean {
+  const na = effectiveHmacSha256Key(a);
+  const nb = effectiveHmacSha256Key(b);
+  if (na.length !== nb.length) return false;
+  return timingSafeEqual(na, nb);
 }
 
 /** `inventory.configure_product` → `inventory:configure_product`. A bijection: `op_code` cannot contain `:`. */
