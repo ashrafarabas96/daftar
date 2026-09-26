@@ -384,6 +384,7 @@ export interface CurrencyDto {
 }
 
 export { formatMinor, minorUnitsOf, parseMajorToMinor } from './money';
+export * from './inventory';
 /** RBAC permission registry (contract primitive): the exact keys the API accepts in role definitions. */
 export { PERMISSIONS } from '@daftar/domain-core';
 export type { Permission } from '@daftar/domain-core';
