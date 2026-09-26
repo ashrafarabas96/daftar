@@ -60,7 +60,20 @@ import {
 } from './stock-ledger';
 
 export { attempt, must, ownerClient };
-export { atCommit, expectAccepted, expectRefused, pidOf, scratch, settle, waitUntilBlocked, withoutRefusal } from './stock-ledger';
+export {
+  atCommit,
+  expectAccepted,
+  expectConstraint,
+  expectRefused,
+  isBlocked,
+  pidOf,
+  roleClient,
+  RUNTIME_ROLES,
+  scratch,
+  settle,
+  waitUntilBlocked,
+  withoutRefusal,
+} from './stock-ledger';
 export type { Outcome, Queryable };
 
 // ── the world (H-3) ────────────────────────────────────────────────────────
@@ -889,4 +902,35 @@ export async function rolledBack<T>(fn: (c: Client) => Promise<T>): Promise<T> {
     await c.query('ROLLBACK');
     await c.end();
   }
+}
+
+/** A transfer command (lines in request order). */
+export function transferCommand(
+  source: string,
+  destination: string,
+  lines: readonly { variantId: string; qty: string }[],
+  transferId: string = randomUUID(),
+): TransferCommand {
+  return { kind: 'transfer', transferId, source, destination, lines };
+}
+
+/** An opening command; with no position it is Case A, with one it is Case B against that opening balance. */
+export function openingCommand(
+  occurredOn: string,
+  lines: readonly { warehouseId: string; variantId: string; qty: string; unitCost: string }[],
+  o: { openingId?: string; openingBalanceId?: string; positionMinor?: bigint } = {},
+): OpeningCommand {
+  return {
+    kind: 'opening',
+    openingId: o.openingId ?? randomUUID(),
+    occurredOn,
+    openingBalanceId: o.openingBalanceId ?? null,
+    positionMinor: o.positionMinor ?? null,
+    lines,
+  };
+}
+
+/** A stocktake-open command. */
+export function stocktakeOpenCommand(warehouseId: string, stocktakeId: string = randomUUID()): StocktakeOpenCommand {
+  return { kind: 'stocktake_open', stocktakeId, warehouseId };
 }
