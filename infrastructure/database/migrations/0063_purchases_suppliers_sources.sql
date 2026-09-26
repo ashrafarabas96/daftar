@@ -133,9 +133,9 @@
 --        transaction's trace. A coverage naming no header passes to the
 --        immediate FK, so the S2 CHECK refusals keep their SQLSTATEs. The
 --        completeness function requires the covering line
---        (`inventory.source_line_missing` when the variant is not a line of
---        the origin purchase), and `purchase_source_value_complete()` also
---        runs on coverage INSERT (the new deferred trigger
+--        (`inventory.stock_source_line_missing`, R-41, when the variant is
+--        not a line of the origin purchase), and
+--        `purchase_source_value_complete()` also runs on coverage INSERT (the new deferred trigger
 --        `negative_deficit_coverages_value_complete`, tgtype 5), so the
 --        header total always equals Σ its movement values.
 --   R-37 THE FLUSH EXEMPTION FAILS CLOSED (review I2). The deficit and
@@ -165,6 +165,19 @@
 --        received_* / cancelled_*, binding_source_id) NULL, so no row can
 --        enter already received or cancelled around its guards. The draft
 --        create of `purchase_save_draft` is the only legitimate inserter.
+--   R-40 THE 0063-E EVENT PROBES RUN UNDER A NON-SUPERUSER MIGRATOR. The
+--        probes that re-create a guard on its own internal function (the
+--        INSERT-blind header guard, the INSERT-blind line freeze, the
+--        re-pointed coverage value check) need EXECUTE on that function to
+--        CREATE TRIGGER, which the migrator does not hold. The migrator
+--        drops the trigger and lends the function's internal owner TRIGGER
+--        on the table, and the owner re-creates it, all inside the probe's
+--        rolled-back subtransaction: no EXECUTE is granted, the committed
+--        ACL is unchanged and the P3-AL-54 non-superuser build succeeds.
+--   R-41 NO NEW REFUSAL CODE. A coverage whose variant is not a line of its
+--        origin purchase (R-36) is refused with the classified
+--        `inventory.stock_source_line_missing` (a binding with no source
+--        line), not a new unclassified `inventory.source_line_missing`.
 --
 -- Migrations 0000-0062 are FROZEN and untouched.
 
@@ -745,7 +758,7 @@ BEGIN
   SELECT l.qty INTO v_qty FROM purchase_lines l
    WHERE l.business_id = NEW.business_id AND l.purchase_id = v_origin AND l.variant_id = NEW.variant_id;
   IF v_qty IS NULL THEN
-    RAISE EXCEPTION 'inventory.source_line_missing: a coverage covers only a variant its origin purchase receives' USING ERRCODE = 'P0001';
+    RAISE EXCEPTION 'inventory.stock_source_line_missing: a coverage covers only a variant its origin purchase receives' USING ERRCODE = 'P0001';
   END IF;
   SELECT count(*),
          count(*) FILTER (WHERE m.movement_kind = 'negative_inventory_cost_adjustment' AND m.warehouse_id = v_wh
@@ -1268,7 +1281,7 @@ DECLARE
     "stock_binding_requires_negative_inventory_cost_adjustment()": "bf707fa32e584fb9e01f88a4766f8788dc32f2b96b5d59fd50ed9861e8b75cfa",
     "stock_source_complete_purchase()": "7a49c422e4e56c628ac1b4e6e45d8af0c9dcdc049bcc614e0f7829f80a050b58",
     "stock_source_complete_purchase_header()": "28f7f06240e62911f7b68efa3256e753443bf67c4ecf893ab174895a79582154",
-    "stock_source_complete_negative_inventory_cost_adjustment()": "5d7ecf37ab953d1409412aa8ce4f8896e9ae566272e5076f408bdbbc18b25c68",
+    "stock_source_complete_negative_inventory_cost_adjustment()": "6c6522559afc458e9fd9ce230214372b5f95c65938ca869ce435f326dd4fd19f",
     "stock_source_freeze_purchase()": "97adaaaa95a5b2c18e80d34ea26a4eee5e397e1bf25dd727ddfc9a0cf86f31ab",
     "purchase_header_guard()": "09da86dc079e39ef7a60f1625c364b6e4644aad9b795b87245cc6d6749a3db4c",
     "purchase_source_value_complete()": "033535f199feae9d1747772d3cf32cfbe9f07979fa05f48471ac73475b4e7a9e",
@@ -1814,9 +1827,15 @@ BEGIN
     RAISE EXCEPTION 'inventory.source_guard_missing: the replaced discovery did not report a header guard on another function (%)', v_detail;
   END IF;
   -- R-39: the header guard back on its pre-review events (INSERT-blind).
+  -- R-40: CREATE TRIGGER needs EXECUTE on the function, so the internal
+  -- owner re-creates it under a TRIGGER privilege lent inside the
+  -- rolled-back probe only.
   BEGIN
     DROP TRIGGER purchases_immutable ON purchases;
+    GRANT TRIGGER ON purchases TO daftar_inventory_internal;
+    SET LOCAL ROLE daftar_inventory_internal;
     CREATE TRIGGER purchases_immutable BEFORE UPDATE OR DELETE ON purchases FOR EACH ROW EXECUTE FUNCTION purchase_header_guard();
+    RESET ROLE;
     SELECT string_agg(g.source_type || ':' || g.missing, ', ') INTO v_detail FROM inventory_stock_source_guard_gaps() g;
     RAISE EXCEPTION 'inventory.probe_rollback: %', coalesce(v_detail, '');
   EXCEPTION WHEN raise_exception THEN
@@ -1840,11 +1859,14 @@ BEGIN
   END IF;
   BEGIN
     DROP TRIGGER stock_source_freeze_purchase ON purchase_lines;
+    DROP TRIGGER negative_deficit_coverages_value_complete ON negative_deficit_coverages;
+    GRANT TRIGGER ON purchase_lines, negative_deficit_coverages TO daftar_inventory_internal;
+    SET LOCAL ROLE daftar_inventory_internal;
     CREATE TRIGGER stock_source_freeze_purchase BEFORE UPDATE OR DELETE ON purchase_lines
       FOR EACH ROW EXECUTE FUNCTION stock_source_freeze_purchase();
-    DROP TRIGGER negative_deficit_coverages_value_complete ON negative_deficit_coverages;
     CREATE CONSTRAINT TRIGGER negative_deficit_coverages_value_complete AFTER INSERT ON negative_deficit_coverages
       DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION stock_source_complete_negative_inventory_cost_adjustment();
+    RESET ROLE;
     SELECT string_agg(g.source_type || ':' || g.missing, ', ' ORDER BY g.source_type, g.missing) INTO v_detail FROM inventory_stock_source_guard_gaps() g;
     RAISE EXCEPTION 'inventory.probe_rollback: %', coalesce(v_detail, '');
   EXCEPTION WHEN raise_exception THEN
