@@ -96,6 +96,9 @@ export async function resolveVariants(db: Database, scope: ReadScope, lines: rea
     if (product === undefined) throw inventoryRefusal('inventory.product_not_found');
     const wanted = line.variantId ?? null;
     const row = wanted === null ? variants.find((r) => r.is_base) : variants.find((r) => r.variant_id === wanted && !r.is_base);
+    // A product of merchant variants only has no base variant (P3-AL-52): a
+    // line that names none of them has not said which one it means (A-23).
+    if (row === undefined && wanted === null && variants.some((r) => !r.is_base)) throw inventoryRefusal('inventory.variant_required');
     if (row === undefined) throw inventoryRefusal('inventory.variant_not_found');
     return {
       productId: line.productId,

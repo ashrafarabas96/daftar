@@ -11,7 +11,7 @@ import { ZodValidationPipe } from '../../common/validation';
 import { Membership, RequiresPermission } from '../../common/guards';
 import type { MembershipContext } from '../tenancy/tenancy.service';
 import { newBusinessTransactionId } from './business-transaction';
-import { canonicalUuidParam } from './canonical-id';
+import { strictUuidParam } from './canonical-id';
 import { InventoryAdjustmentService } from './inventory-adjustment.service';
 import {
   AdjustmentSchema,
@@ -130,7 +130,7 @@ export class InventoryMovementsController {
     @Param('stocktakeId') stocktakeId: string,
     @Body() body: StocktakeCountRequest,
   ): Promise<InventoryStocktakeCountDto> {
-    return this.stocktakes.count(m, canonicalUuidParam(stocktakeId, 'stocktakeId'), body, newBusinessTransactionId());
+    return this.stocktakes.count(m, strictUuidParam(stocktakeId, 'stocktakeId'), body, newBusinessTransactionId());
   }
 
   /** Closes the draft as `finalized`: the variances move and post (A-11). */
@@ -143,7 +143,7 @@ export class InventoryMovementsController {
     @Param('stocktakeId') stocktakeId: string,
     @Body() body: StocktakeFinalizeRequest,
   ): Promise<InventoryStocktakeCloseDto> {
-    return this.stocktakes.finalize(m, canonicalUuidParam(stocktakeId, 'stocktakeId'), body, newBusinessTransactionId());
+    return this.stocktakes.finalize(m, strictUuidParam(stocktakeId, 'stocktakeId'), body, newBusinessTransactionId());
   }
 
   /** Closes the draft as `cancelled`: nothing moves (A-11, TL-3). */
@@ -157,7 +157,7 @@ export class InventoryMovementsController {
     // Validated as empty (unknown keys are refused) and otherwise unused.
     @Body() _body: unknown,
   ): Promise<InventoryStocktakeCloseDto> {
-    return this.stocktakes.cancel(m, canonicalUuidParam(stocktakeId, 'stocktakeId'), newBusinessTransactionId());
+    return this.stocktakes.cancel(m, strictUuidParam(stocktakeId, 'stocktakeId'), newBusinessTransactionId());
   }
 
   /** Records the business's opening stock over every warehouse it names (A-13). */

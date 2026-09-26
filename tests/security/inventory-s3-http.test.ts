@@ -415,6 +415,9 @@ describe('T-17.5 strict DTOs: 400 before anything is minted', () => {
       ['counts: a JSON number', () => send(owner, 'put', `stocktakes/${st}/counts`, { lines: [{ productId: A.piece.productId, quantity: 3 }] })],
       ['counts: a path id that is not a UUID', () => send(owner, 'put', `stocktakes/${st.slice(0, 35)}/counts`, { lines: [piece('3')] })],
       ['finalize: a path id that is not a UUID', () => send(owner, 'post', 'stocktakes/not-a-uuid/finalize', { occurredOn: day })],
+      ['counts: an upper-case path id', () => send(owner, 'put', `stocktakes/${st.toUpperCase()}/counts`, { lines: [piece('3')] })],
+      ['finalize: an upper-case path id', () => send(owner, 'post', `stocktakes/${st.toUpperCase()}/finalize`, { occurredOn: day })],
+      ['cancel: an upper-case path id', () => send(owner, 'post', `stocktakes/${st.toUpperCase()}/cancel`, {})],
       ['finalize: no occurredOn', () => send(owner, 'post', `stocktakes/${st}/finalize`, {})],
       ['cancel: a body key', () => send(owner, 'post', `stocktakes/${st}/cancel`, { force: true })],
       [
@@ -439,6 +442,26 @@ describe('T-17.5 strict DTOs: 400 before anything is minted', () => {
     for (const [what, call] of cases) expect((await call()).status, what).toBe(400);
     await expectUntouched(before, 'DTO refusals');
     expect((await send(owner, 'post', 'transfers', transferBody())).status, 'ALLOW: the well-formed transfer').toBe(201);
+  });
+
+  it('an existing stocktake named by its upper-case id in the path is 400 on every route, never lower-cased into it', async () => {
+    const st = randomUUID();
+    expect((await send(owner, 'post', 'stocktakes', { stocktakeId: st, warehouseId: A.w2 })).status).toBe(201);
+    const upper = st.toUpperCase();
+    clearSpies();
+    const before = await counts(ownerPool(), A.businessId);
+    const calls: [string, () => Promise<Response>][] = [
+      ['counts', () => send(owner, 'put', `stocktakes/${upper}/counts`, { lines: [{ productId: A.piece2.productId, quantity: '0' }] })],
+      ['finalize', () => send(owner, 'post', `stocktakes/${upper}/finalize`, { occurredOn: day })],
+      ['cancel', () => send(owner, 'post', `stocktakes/${upper}/cancel`, {})],
+    ];
+    for (const [what, call] of calls) {
+      const r = await call();
+      expect(r.status, what).toBe(400);
+      expect(r.body.error.details, what).toEqual({ stocktakeId: ['invalid_uuid'] });
+    }
+    await expectUntouched(before, 'upper-case path ids');
+    expect((await send(owner, 'post', `stocktakes/${st}/cancel`, {})).status, 'ALLOW: the canonical id').toBe(200);
   });
 });
 
@@ -476,10 +499,16 @@ describe('T-17.6 typed refusals and their statuses (§3)', () => {
         'inventory.variant_required',
       ],
       [
-        'a variant-only product named without a variant (no base variant to resolve)',
+        'a variant-only product named without a variant (no base variant to resolve): the variant is required (A-23)',
         () => send(owner, 'post', 'adjustments', adjustmentBody([{ productId: A.variantProduct.productId, quantity: '1', unitCost: '1' }])),
-        404,
-        'inventory.variant_not_found',
+        400,
+        'inventory.variant_required',
+      ],
+      [
+        'the same on a stocktake count',
+        () => send(owner, 'put', `stocktakes/${draft}/counts`, { lines: [{ productId: A.variantProduct.productId, quantity: '1' }] }),
+        400,
+        'inventory.variant_required',
       ],
       [
         'an untracked product',
