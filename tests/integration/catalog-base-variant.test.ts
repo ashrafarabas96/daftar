@@ -147,8 +147,8 @@ describe('P3-AL-52: the hidden base variant (P3-S1)', () => {
       )
     ).rows;
     expect(indexes.map((i) => i.indexname)).toEqual(['variants_barcode_uq', 'variants_sku_uq']);
-    expect(indexes.find((i) => i.indexname === 'variants_sku_uq')?.indexdef).toMatch(/WHERE \(sku IS NOT NULL\)/);
-    expect(indexes.find((i) => i.indexname === 'variants_barcode_uq')?.indexdef).toMatch(/WHERE \(barcode IS NOT NULL\)/);
+    expect(indexes.find((i) => i.indexname === 'variants_sku_uq')?.indexdef).toMatch(/WHERE \(+sku IS NOT NULL\)/);
+    expect(indexes.find((i) => i.indexname === 'variants_barcode_uq')?.indexdef).toMatch(/WHERE \(+barcode IS NOT NULL\)/);
 
     // The product keeps its identifiers, and the business's identifier space is unchanged:
     // a new product may not reuse them, exactly as before enablement.

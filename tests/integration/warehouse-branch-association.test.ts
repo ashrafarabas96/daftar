@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 import { associateWarehouseBranchPayload, configureProductPayload } from '@daftar/inventory';
-import { createTestApp, grantFeature, ownerPool, resetData, uniqueEmail, type TestApp } from '../helpers/test-app';
+import { createTestApp, grantFeature, ownerPool, raiseLimit, resetData, uniqueEmail, type TestApp } from '../helpers/test-app';
 import { InventoryAssertionMinterService } from '../../apps/api/src/modules/inventory/inventory-assertion.minter';
 import { InventoryAuthorizationService, type InventoryCommandAuthority } from '../../apps/api/src/modules/inventory/inventory-authorization';
 import { TenancyService } from '../../apps/api/src/modules/tenancy/tenancy.service';
@@ -69,6 +69,8 @@ describe('warehouse–branch association (P3-S1)', () => {
       `INSERT INTO entitlement_overrides (business_id, limit_key, limit_value, reason, actor_user_id) VALUES ($1, 'MAX_BRANCHES', 10, 'assoc-test', $2)`,
       [businessId, owner.userId],
     );
+    // The free plan seats two users; the viewer case adds a third member.
+    await raiseLimit(businessId, owner.userId, 'MAX_USERS', 10);
 
     const b2 = await t.request.post('/v1/businesses/current/branches').set(auth(owner.token, businessId)).send({ name: 'Second' });
     expect(b2.status).toBe(201);
