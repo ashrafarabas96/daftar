@@ -3,26 +3,29 @@
  * PHASE 3 SLICE GATE — P3-S1, inventory and catalog primitives
  * (docs/PHASE_3_EXECUTION_PLAN.md §3 and §13).
  *
- * `npm run gate:phase3:s1` is the deterministic answer to "is the P3-S1
- * candidate what the architecture lock says it is, and did it stay inside its
- * boundary?". It is a CANDIDATE gate: P3-S1 is not accepted yet, so its
- * migrations must still be candidates, and nothing belonging to P3-S2 or later
- * may exist. When the Tech Lead accepts P3-S1 this gate changes tense the way
- * every Phase 2 gate did — the candidate-era rules (not frozen, nothing after
- * the slice's last migration) move out, the accepted digests move in — and it
- * must never forbid an authorized successor.
+ * `npm run gate:phase3:s1` is the deterministic answer to "is P3-S1 still
+ * exactly what the Tech Lead accepted, and did it stay inside its boundary?".
+ *
+ * P3-S1 was ACCEPTED at `f1cc4c4` and its six migrations FROZEN in the
+ * manifest (docs/PHASE_3_S1_ACCEPTANCE.md). This is now a PERMANENT regression
+ * gate, changed in tense the way every Phase 2 gate was at its own acceptance:
+ * the candidate-era rules ("none frozen", "nothing after 0058") went with the
+ * candidacy, and the accepted digests came in as an independent second source,
+ * so one commit cannot move a migration and its recorded hash together.
+ * `frozenThrough` is a floor, not an equality: a gate for an accepted slice must
+ * never be the reason a later authorized slice cannot land.
  *
  * What it checks before running anything, because each is instant and a tree
  * that fails one is not worth a test run:
  *
- *   — the frozen history 0000–0052 is untouched, and the manifest still says
- *     so (`check:migrations` verifies the bytes; this gate verifies the
- *     boundary did not move);
- *   — the P3-S1 migrations are exactly the six candidates, none frozen early,
- *     and no migration exists after them;
+ *   — the frozen boundary is at or beyond 0058, and each of the six P3-S1
+ *     migrations hashes to its accepted digest on disk AND in the manifest
+ *     (`check:migrations` verifies every frozen byte; this gate verifies the
+ *     accepted ones against its own copy);
+ *   — the range 0053–0058 holds exactly those six files, with no hole;
  *   — no P3-S2+ surface (stock ledger, stock cache, movement kinds, the unit
  *     history lock, the operation→movement map) and no P3-S3 operation kind
- *     appears anywhere in the candidates;
+ *     appears anywhere in the six P3-S1 migrations;
  *   — the physical authority model is present by name: the internal role in
  *     bootstrap with its one membership, the three runtime routines, the key
  *     domain, both verifiers, both column guards and the four home-association
@@ -38,6 +41,7 @@
  * Usage: npm run gate:phase3:s1 [-- --list]
  */
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { stripComments } from './guards/sql-schema';
@@ -47,18 +51,26 @@ const MIGRATIONS_DIR = join(ROOT, 'infrastructure/database/migrations');
 const LIST_ONLY = process.argv.slice(2).includes('--list');
 const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 
-/** Phase 2's accepted boundary. P3-S1 may not move it: its own files are candidates. */
-const FROZEN_THROUGH = '0052_accounting_journal_lines_rls_performance.sql';
+/** The P3-S1 acceptance boundary. A floor: later authorized slices move it forward. */
+const FROZEN_THROUGH_AT_LEAST = '0058_accounting_entry_date_guard.sql';
 
-/** The P3-S1 candidates, in order. Exactly these, nothing after them. */
-const S1_MIGRATIONS = [
-  '0053_inventory_units_and_product_configuration.sql',
-  '0054_inventory_assertion_authority.sql',
-  '0055_inventory_configure_product.sql',
-  '0056_inventory_branch_warehouses.sql',
-  '0057_inventory_permissions.sql',
-  '0058_accounting_entry_date_guard.sql',
-] as const;
+/**
+ * The six P3-S1 migrations at the digests the Tech Lead accepted (accepted head
+ * `f1cc4c47a43defa969d7beff7f1c795189eee1c1`). A second source independent of
+ * MIGRATION_MANIFEST.json: each file must hash to this on disk AND be recorded
+ * with it in the manifest.
+ */
+const S1_ACCEPTED: Readonly<Record<string, string>> = {
+  '0053_inventory_units_and_product_configuration.sql': '63940fbcf2c5a3cd99a20280cd83fe53198a0e2d0e2dc0db7ed80d31c47bd3e6',
+  '0054_inventory_assertion_authority.sql': '7205dea79f090ecf8ded122557d92b2b9669463ce3e5aefca466a968ef9aa450',
+  '0055_inventory_configure_product.sql': '6652cd5949ad2d9bdda559e23174b850f3cf6bcc2a54d307c5fb9a0a1f5fa2b7',
+  '0056_inventory_branch_warehouses.sql': '2de288c370e90df5c304ccf354638d178452798662d83054c6a8df8c6f7195a5',
+  '0057_inventory_permissions.sql': 'f6c7b56f920215cc8ba3e84d24e4f353329edab8dccb8d4e43a66712f7c1941d',
+  '0058_accounting_entry_date_guard.sql': '455973c26bfdf0a185112a4e20a24676d54b5c4c7d4d1232f3e2dce3046b431a',
+};
+
+/** The P3-S1 migrations, in order. */
+const S1_MIGRATIONS = Object.keys(S1_ACCEPTED).sort();
 
 /** Surfaces owned by P3-S2 and later (plan §4–§8). Their presence is a scope breach. */
 const FUTURE_SLICE_SURFACES = [
@@ -82,7 +94,7 @@ const LATER_OPERATION_KINDS = [
   'inventory.opening',
 ] as const;
 
-/** Named objects P3-AL-54 / P3-AL-55 require, and the candidate that must define each. */
+/** Named objects P3-AL-54 / P3-AL-55 require, and the P3-S1 migration that must define each. */
 const REQUIRED_OBJECTS: readonly (readonly [string, RegExp])[] = [
   ['units registry', /CREATE TABLE units\b/],
   ['unit_names registry', /CREATE TABLE unit_names\b/],
@@ -155,24 +167,38 @@ function checkMigrationBoundary(): void {
   console.log('P3-S1 GATE — migration boundary');
   const manifest = JSON.parse(read('infrastructure/database/MIGRATION_MANIFEST.json')) as {
     frozenThrough: string;
-    migrations: { name: string }[];
+    migrations: { name: string; sha256: string }[];
   };
-  if (manifest.frozenThrough !== FROZEN_THROUGH) {
-    fail('boundary', `frozenThrough is ${manifest.frozenThrough}; P3-S1 is a candidate and may not move the Phase 2 boundary (${FROZEN_THROUGH})`);
+  if (manifest.frozenThrough < FROZEN_THROUGH_AT_LEAST) {
+    fail('boundary', `frozenThrough is ${manifest.frozenThrough} — P3-S1 was accepted and frozen, so it must be at least ${FROZEN_THROUGH_AT_LEAST}`);
   } else {
-    ok(`frozenThrough = ${FROZEN_THROUGH} — the Phase 2 boundary is unmoved`);
+    ok(`frozenThrough = ${manifest.frozenThrough} — at or beyond the P3-S1 acceptance boundary`);
   }
-  const frozenEarly = manifest.migrations.filter((m) => (S1_MIGRATIONS as readonly string[]).includes(m.name));
-  if (frozenEarly.length > 0) fail('boundary', `${frozenEarly.map((m) => m.name).join(', ')} frozen before Tech Lead acceptance`);
-  else ok('no P3-S1 candidate is frozen');
 
-  const files = sqlFiles();
-  const beyond = files.filter((f) => f > FROZEN_THROUGH);
-  const expected = [...S1_MIGRATIONS];
-  if (JSON.stringify(beyond) !== JSON.stringify(expected)) {
-    fail('boundary', `migrations after 0052 must be exactly ${expected.join(', ')} — found ${beyond.join(', ') || 'none'}`);
+  const recorded = new Map(manifest.migrations.map((m) => [m.name, m.sha256]));
+  const before = failures;
+  for (const [name, accepted] of Object.entries(S1_ACCEPTED)) {
+    const path = join(MIGRATIONS_DIR, name);
+    if (!existsSync(path)) {
+      fail('boundary', `${name} was accepted and frozen but is missing`);
+      continue;
+    }
+    const onDisk = createHash('sha256').update(readFileSync(path)).digest('hex');
+    if (onDisk !== accepted) fail('boundary', `${name} hashes to ${onDisk.slice(0, 12)}… on disk but was accepted at ${accepted.slice(0, 12)}…`);
+    const inManifest = recorded.get(name);
+    if (inManifest === undefined) fail('boundary', `${name} was accepted but is not frozen in the manifest`);
+    else if (inManifest !== accepted)
+      fail('boundary', `${name} is recorded as ${inManifest.slice(0, 12)}… in the manifest but was accepted at ${accepted.slice(0, 12)}…`);
+  }
+  if (failures === before) ok(`the ${S1_MIGRATIONS.length} P3-S1 migrations hash to their accepted digests on disk and in the manifest`);
+
+  // No hole inside the accepted range, and nothing renumbered into it. A
+  // successor after 0058 is not this gate's business.
+  const inRange = sqlFiles().filter((f) => f >= '0053' && f <= FROZEN_THROUGH_AT_LEAST);
+  if (JSON.stringify(inRange) !== JSON.stringify(S1_MIGRATIONS)) {
+    fail('boundary', `0053–0058 must hold exactly ${S1_MIGRATIONS.join(', ')} — found ${inRange.join(', ') || 'none'}`);
   } else {
-    ok(`exactly the ${expected.length} P3-S1 candidates follow 0052, and nothing after them`);
+    ok('0053–0058 holds exactly the six accepted files');
   }
 }
 
@@ -326,8 +352,8 @@ function runSteps(): void {
 
 if (LIST_ONLY) {
   console.log('P3-S1 GATE plan:');
-  console.log(`  structural: frozenThrough stays ${FROZEN_THROUGH}; exactly ${S1_MIGRATIONS.join(', ')} follow it, none frozen`);
-  console.log('  structural: no P3-S2+ surface and no P3-S3 operation kind in the candidates');
+  console.log(`  structural: frozenThrough at or beyond ${FROZEN_THROUGH_AT_LEAST}; ${S1_MIGRATIONS.join(', ')} at their accepted digests`);
+  console.log('  structural: no P3-S2+ surface and no P3-S3 operation kind in the P3-S1 migrations');
   console.log(
     '  structural: internal role in bootstrap with its one membership; the routines, key domain, verifiers, guards and home-association objects exist',
   );
