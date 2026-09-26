@@ -277,7 +277,9 @@ function checkScope(): void {
   const before = failures;
   for (const [table, expected] of REGISTRATIONS) {
     const tuples = insertedTuples(sql, table);
-    const matched = expected.map((e) => tuples.filter((t) => t.startsWith(`(${e}`)).length);
+    // Compared without whitespace: a tuple may be written `('a','b')` or `('a', 'b')`.
+    const bare = (text: string): string => text.replace(/\s+/g, '');
+    const matched = expected.map((e) => tuples.filter((t) => bare(t).startsWith(`(${bare(e)}`)).length);
     if (tuples.length !== expected.length || matched.some((n) => n !== 1)) {
       fail('scope', `${table}: P3-S4 registers exactly ${expected.join(' | ')} — found ${tuples.join(' | ') || 'none'}`);
     }
@@ -286,7 +288,7 @@ function checkScope(): void {
   const table = LATER_TABLES.exec(sql);
   if (table) fail('scope', `a P3-S4 migration creates ${table[1]} — it belongs to a later slice`);
   if (/^\s*(reserved|available)\s+[A-Z]/im.test(sql)) fail('scope', 'a P3-S4 migration defines a reserved/available column');
-  const grants = [...sql.matchAll(/GRANT\s+EXECUTE\s+ON\s+FUNCTION\s+(\w+)\s*\([^)]*\)\s+TO\s+(\w+)/gi)].map((m) => `${m[1]}:${m[2]}`).sort();
+  const grants = [...sql.matchAll(/GRANT\s+EXECUTE\s+ON\s+FUNCTION\s+(\w+)\s*\((?:[^()]|\([^()]*\))*\)\s+TO\s+(\w+)/gi)].map((m) => `${m[1]}:${m[2]}`).sort();
   const grantStatements = (sql.match(/GRANT\s+EXECUTE\b/gi) ?? []).length;
   if (JSON.stringify(grants) !== JSON.stringify(ALLOWED_EXECUTE) || grantStatements !== ALLOWED_EXECUTE.length) {
     fail('scope', `EXECUTE grants must be exactly ${ALLOWED_EXECUTE.join(', ')} — found ${grants.join(', ') || 'none'} (${grantStatements} statements)`);
