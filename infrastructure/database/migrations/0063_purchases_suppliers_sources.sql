@@ -156,6 +156,15 @@
 --        ('O'/'A'), function, owner, DEFINER, path and the recorded body
 --        digest, so a disabled, replica-only, re-pointed or body-changed
 --        guard is reported. The sixteen S3 digests stay byte-identical.
+--   R-39 A PURCHASE IS BORN A DRAFT (review follow-up to M1). The header
+--        guard `purchases_immutable` is BEFORE INSERT OR UPDATE OR DELETE
+--        (tgtype 31, not §2.3's 27): an INSERT is refused
+--        `inventory.source_document_immutable` unless the row is
+--        `status = 'draft'` at `revision = 1` with every receive and cancel
+--        column (intents, FX snapshot, base total, supplier snapshots,
+--        received_* / cancelled_*, binding_source_id) NULL, so no row can
+--        enter already received or cancelled around its guards. The draft
+--        create of `purchase_save_draft` is the only legitimate inserter.
 --
 -- Migrations 0000-0062 are FROZEN and untouched.
 
@@ -844,12 +853,24 @@ BEGIN
 END;
 $$;
 
--- Header immutability: draft → draft (revision + 1), draft → received,
--- draft → cancelled; never a delete; a received or cancelled purchase
--- allows nothing.
+-- Header immutability: born a draft at revision 1 (R-39); draft → draft
+-- (revision + 1), draft → received, draft → cancelled; never a delete; a
+-- received or cancelled purchase allows nothing.
 CREATE OR REPLACE FUNCTION purchase_header_guard() RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $$
 BEGIN
+  IF TG_OP = 'INSERT' THEN
+    IF NEW.status IS DISTINCT FROM 'draft' OR NEW.revision IS DISTINCT FROM 1
+       OR NEW.receive_intent_sha256 IS NOT NULL OR NEW.cancel_intent_sha256 IS NOT NULL
+       OR NEW.source_to_base_rate IS NOT NULL OR NEW.rate_source IS NOT NULL OR NEW.rate_timestamp IS NOT NULL
+       OR NEW.fx_rate_id IS NOT NULL OR NEW.total_base_minor IS NOT NULL
+       OR NEW.supplier_name_snapshot IS NOT NULL OR NEW.supplier_tax_identifier_snapshot IS NOT NULL
+       OR NEW.supplier_phone_snapshot IS NOT NULL OR NEW.received_by IS NOT NULL OR NEW.received_at IS NOT NULL
+       OR NEW.cancelled_by IS NOT NULL OR NEW.cancelled_at IS NOT NULL OR NEW.binding_source_id IS NOT NULL THEN
+      RAISE EXCEPTION 'inventory.source_document_immutable: a purchase is created only as a draft at revision 1' USING ERRCODE = 'P0001';
+    END IF;
+    RETURN NEW;
+  END IF;
   IF TG_OP = 'DELETE' THEN
     RAISE EXCEPTION 'inventory.source_document_immutable: a purchase is never deleted' USING ERRCODE = 'P0001';
   END IF;
@@ -1112,8 +1133,9 @@ CREATE TRIGGER purchase_landed_costs_freeze
 CREATE TRIGGER purchase_landed_cost_allocations_freeze
   BEFORE INSERT OR UPDATE OR DELETE ON purchase_landed_cost_allocations
   FOR EACH ROW EXECUTE FUNCTION purchase_landed_cost_freeze();
+-- R-39: the header guard judges INSERT too (tgtype 31).
 CREATE TRIGGER purchases_immutable
-  BEFORE UPDATE OR DELETE ON purchases
+  BEFORE INSERT OR UPDATE OR DELETE ON purchases
   FOR EACH ROW EXECUTE FUNCTION purchase_header_guard();
 CREATE TRIGGER negative_inventory_cost_adjustments_immutable
   BEFORE UPDATE OR DELETE ON negative_inventory_cost_adjustments
@@ -1189,7 +1211,7 @@ REVOKE CREATE ON SCHEMA public FROM daftar_inventory_internal;
 -- R-38: the purchase set also covers the landed-cost freeze and
 -- consistency guards, the coverage set the same-transaction and coverage
 -- value guards and the two A-16(g) deficit guards; the three freeze
--- triggers are tgtype 31 (R-34).
+-- triggers and the header guard are tgtype 31 (R-34, R-39).
 --
 -- The 0061 description of the S3 strengthening follows unchanged:
 --
@@ -1248,7 +1270,7 @@ DECLARE
     "stock_source_complete_purchase_header()": "28f7f06240e62911f7b68efa3256e753443bf67c4ecf893ab174895a79582154",
     "stock_source_complete_negative_inventory_cost_adjustment()": "5d7ecf37ab953d1409412aa8ce4f8896e9ae566272e5076f408bdbbc18b25c68",
     "stock_source_freeze_purchase()": "97adaaaa95a5b2c18e80d34ea26a4eee5e397e1bf25dd727ddfc9a0cf86f31ab",
-    "purchase_header_guard()": "8b9b92eaca2ff01327106ee8aee049b8bd2f9834f51bbb7f31128a66da3c6cef",
+    "purchase_header_guard()": "09da86dc079e39ef7a60f1625c364b6e4644aad9b795b87245cc6d6749a3db4c",
     "purchase_source_value_complete()": "033535f199feae9d1747772d3cf32cfbe9f07979fa05f48471ac73475b4e7a9e",
     "purchase_landed_cost_freeze()": "3eda69587e6a9a8046ff1d7852e1ac7d0dec0d05ae633d1b78663a091634379a",
     "purchase_allocations_consistent()": "ac783691817646b8ac3528766a3203ec30c3f594a6f997b7f5779504ab625748",
@@ -1406,7 +1428,7 @@ BEGIN
           ('purchase', 'source_complete',  'purchase_lines', 'stock_source_complete_purchase', 21, true,  'stock_source_complete_purchase()',        true),
           ('purchase', 'header_complete',  'purchases',      'purchases_received_complete',    17, true,  'stock_source_complete_purchase_header()', true),
           ('purchase', 'source_freeze',    'purchase_lines', 'stock_source_freeze_purchase',   31, false, 'stock_source_freeze_purchase()',          true),
-          ('purchase', 'header_immutable', 'purchases',      'purchases_immutable',            27, false, 'purchase_header_guard()',                 true),
+          ('purchase', 'header_immutable', 'purchases',      'purchases_immutable',            31, false, 'purchase_header_guard()',                 true),
           ('purchase', 'value_complete',   'purchases',      'purchases_value_complete',       17, true,  'purchase_source_value_complete()',        true),
           -- R-38: the landed-cost guards (R-34 events).
           ('purchase', 'landed_cost_freeze',     'purchase_landed_costs',            'purchase_landed_costs_freeze',            31, false,
@@ -1460,7 +1482,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION inventory_stock_source_guard_gaps() IS
-  'P3-AL-51 §B, strengthened by P3-S3 (A-16, review F3). Catalogue-only discovery: for every stock_source_types row, reports each missing or mis-shaped guard — bridge (a plain table), bridge_rls (enabled and forced), bridge_pk (exactly business_id, source_id, source_line_id, movement_kind), bridge_source_type (a stored generated constant equal to the type), bridge_binding_fk (validated RESTRICT, five columns in order), bridge_line_fk (validated RESTRICT, business_id, source_id, source_line_id; for an S3 type to exactly its line table and key), bridge_immutable (ROW BEFORE UPDATE OR DELETE on every column, no WHEN, enabled for origin sessions, on stock_ledger_append_only()), binding_trigger (ROW AFTER INSERT deferred constraint trigger on its own internal DEFINER function with the pinned path and the WHEN on the type). For the four S3 types also source_complete, source_freeze, header_immutable, value_complete and (stocktake) header_complete, each by table, name, event, column list, WHEN, deferral, enabled state and expected internal DEFINER pinned function; and every S3 guard function''s body against the SHA-256 of its prosrc recorded at migration time. Replaced by P3-S4 (0063, §2.3): the two S4 types (purchase, negative_inventory_cost_adjustment) get the S3 bridge_line_fk (purchase_lines / negative_deficit_coverages), bridge_immutable and binding_trigger checks, and their own set — source_complete, header_complete (purchase), source_freeze, header_immutable, value_complete — with every S4 guard function''s body recorded the same way (the two stock_ledger_append_only() guards as migrator-owned INVOKER); per the P3-S4 review also landed_cost_freeze, allocation_freeze, allocation_consistent, landed_cost_consistent (purchase) and coverage_same_transaction, coverage_value_complete, deficit_guard, deficit_consistent (negative_inventory_cost_adjustment), the three freeze triggers judging INSERT too. Every migration that registers a source type asserts it returns no row. Migrator-owned INVOKER; no EXECUTE grant.';
+  'P3-AL-51 §B, strengthened by P3-S3 (A-16, review F3). Catalogue-only discovery: for every stock_source_types row, reports each missing or mis-shaped guard — bridge (a plain table), bridge_rls (enabled and forced), bridge_pk (exactly business_id, source_id, source_line_id, movement_kind), bridge_source_type (a stored generated constant equal to the type), bridge_binding_fk (validated RESTRICT, five columns in order), bridge_line_fk (validated RESTRICT, business_id, source_id, source_line_id; for an S3 type to exactly its line table and key), bridge_immutable (ROW BEFORE UPDATE OR DELETE on every column, no WHEN, enabled for origin sessions, on stock_ledger_append_only()), binding_trigger (ROW AFTER INSERT deferred constraint trigger on its own internal DEFINER function with the pinned path and the WHEN on the type). For the four S3 types also source_complete, source_freeze, header_immutable, value_complete and (stocktake) header_complete, each by table, name, event, column list, WHEN, deferral, enabled state and expected internal DEFINER pinned function; and every S3 guard function''s body against the SHA-256 of its prosrc recorded at migration time. Replaced by P3-S4 (0063, §2.3): the two S4 types (purchase, negative_inventory_cost_adjustment) get the S3 bridge_line_fk (purchase_lines / negative_deficit_coverages), bridge_immutable and binding_trigger checks, and their own set — source_complete, header_complete (purchase), source_freeze, header_immutable, value_complete — with every S4 guard function''s body recorded the same way (the two stock_ledger_append_only() guards as migrator-owned INVOKER); per the P3-S4 review also landed_cost_freeze, allocation_freeze, allocation_consistent, landed_cost_consistent (purchase) and coverage_same_transaction, coverage_value_complete, deficit_guard, deficit_consistent (negative_inventory_cost_adjustment), the three freeze triggers and the header guard judging INSERT too. Every migration that registers a source type asserts it returns no row. Migrator-owned INVOKER; no EXECUTE grant.';
 
 REVOKE ALL ON FUNCTION inventory_stock_source_guard_gaps() FROM PUBLIC;
 
@@ -1782,7 +1804,7 @@ BEGIN
   END IF;
   BEGIN
     DROP TRIGGER purchases_immutable ON purchases;
-    CREATE TRIGGER purchases_immutable BEFORE UPDATE OR DELETE ON purchases FOR EACH ROW EXECUTE FUNCTION stock_ledger_append_only();
+    CREATE TRIGGER purchases_immutable BEFORE INSERT OR UPDATE OR DELETE ON purchases FOR EACH ROW EXECUTE FUNCTION stock_ledger_append_only();
     SELECT string_agg(g.source_type || ':' || g.missing, ', ') INTO v_detail FROM inventory_stock_source_guard_gaps() g;
     RAISE EXCEPTION 'inventory.probe_rollback: %', coalesce(v_detail, '');
   EXCEPTION WHEN raise_exception THEN
@@ -1790,6 +1812,18 @@ BEGIN
   END;
   IF v_detail IS DISTINCT FROM 'inventory.probe_rollback: purchase:header_immutable' THEN
     RAISE EXCEPTION 'inventory.source_guard_missing: the replaced discovery did not report a header guard on another function (%)', v_detail;
+  END IF;
+  -- R-39: the header guard back on its pre-review events (INSERT-blind).
+  BEGIN
+    DROP TRIGGER purchases_immutable ON purchases;
+    CREATE TRIGGER purchases_immutable BEFORE UPDATE OR DELETE ON purchases FOR EACH ROW EXECUTE FUNCTION purchase_header_guard();
+    SELECT string_agg(g.source_type || ':' || g.missing, ', ') INTO v_detail FROM inventory_stock_source_guard_gaps() g;
+    RAISE EXCEPTION 'inventory.probe_rollback: %', coalesce(v_detail, '');
+  EXCEPTION WHEN raise_exception THEN
+    GET STACKED DIAGNOSTICS v_detail = MESSAGE_TEXT;
+  END;
+  IF v_detail IS DISTINCT FROM 'inventory.probe_rollback: purchase:header_immutable' THEN
+    RAISE EXCEPTION 'inventory.source_guard_missing: the replaced discovery did not report an INSERT-blind header guard (%)', v_detail;
   END IF;
   -- R-38 (review I1): the added guards are seen disabled, replica-only,
   -- re-pointed, back on the old events, or with a changed body.
@@ -1840,7 +1874,7 @@ BEGIN
   END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_trigger g WHERE g.tgname = 'stock_bridge_immutable_purchase' AND g.tgenabled = 'O')
      OR NOT EXISTS (SELECT 1 FROM pg_trigger g WHERE g.tgname = 'purchases_immutable'
-                      AND g.tgfoid = 'purchase_header_guard()'::regprocedure)
+                      AND g.tgfoid = 'purchase_header_guard()'::regprocedure AND g.tgtype = 31)
      OR NOT EXISTS (SELECT 1 FROM pg_trigger g WHERE g.tgname = 'purchase_landed_costs_freeze' AND g.tgenabled = 'O')
      OR NOT EXISTS (SELECT 1 FROM pg_trigger g WHERE g.tgname = 'purchase_allocations_consistent' AND g.tgenabled = 'O')
      OR NOT EXISTS (SELECT 1 FROM pg_trigger g WHERE g.tgname = 'stock_source_freeze_purchase' AND g.tgtype = 31)
@@ -2051,7 +2085,7 @@ BEGIN
      'daftar_inventory_internal', true, false),
     ('negative_deficit_coverages', 'negative_deficit_coverages_value_complete', 5, 'purchase_source_value_complete()',
      'daftar_inventory_internal', true, true),
-    ('purchases', 'purchases_immutable', 27, 'purchase_header_guard()', 'daftar_inventory_internal', true, false),
+    ('purchases', 'purchases_immutable', 31, 'purchase_header_guard()', 'daftar_inventory_internal', true, false),
     ('negative_inventory_cost_adjustments', 'negative_inventory_cost_adjustments_immutable', 27, 'stock_ledger_append_only()', NULL, false, false),
     ('purchases', 'purchases_value_complete', 17, 'purchase_source_value_complete()', 'daftar_inventory_internal', true, true),
     ('negative_inventory_cost_adjustments', 'negative_inventory_cost_adjustments_value_complete', 5, 'purchase_source_value_complete()',
