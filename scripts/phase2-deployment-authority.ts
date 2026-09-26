@@ -559,8 +559,12 @@ async function caseG(db: string): Promise<void> {
       warehouse: randomUUID(),
       owner: randomUUID(),
       manager: randomUUID(),
+      cashier: randomUUID(),
       custom: randomUUID(),
     };
+    // The shape the frozen provisioning writer produces (0033:137): only the
+    // owner is a system role; manager and cashier are the builtin template
+    // roles, identified by their unique key.
     // System roles are system-managed (0006 business_roles_system_guard):
     // only the platform principal, for which app_bypass() is true, may write
     // them — so the seed is written AS daftar_platform, exactly the principal
@@ -576,10 +580,12 @@ async function caseG(db: string): Promise<void> {
        INSERT INTO warehouses (business_id, id, branch_id, name, is_default) VALUES ('${seed.business}', '${seed.warehouse}', '${seed.branch}', 'Main WH', true);
        INSERT INTO business_roles (business_id, id, key, name, is_system) VALUES
          ('${seed.business}', '${seed.owner}', 'owner', 'Owner', true),
-         ('${seed.business}', '${seed.manager}', 'manager', 'Manager', true),
+         ('${seed.business}', '${seed.manager}', 'manager', 'Manager', false),
+         ('${seed.business}', '${seed.cashier}', 'cashier', 'Cashier', false),
          ('${seed.business}', '${seed.custom}', 'clerk', 'Clerk', false);
        INSERT INTO role_permissions (business_id, role_id, permission) VALUES
          ('${seed.business}', '${seed.manager}', 'catalog.view'), ('${seed.business}', '${seed.manager}', 'warehouse.manage'),
+         ('${seed.business}', '${seed.cashier}', 'catalog.view'),
          ('${seed.business}', '${seed.custom}', 'catalog.view');
        COMMIT;`,
     );
@@ -617,8 +623,10 @@ async function caseG(db: string): Promise<void> {
       manager.join(',') === ['catalog.view', 'inventory.view', 'purchases.view', 'suppliers.view', 'warehouse.manage'].join(','),
       manager.join(', '),
     );
+    const cashier = await perms(seed.cashier);
+    record('8b.5 the cashier gained nothing', cashier.join(',') === 'catalog.view', cashier.join(', '));
     const custom = await perms(seed.custom);
-    record('8b.5 the custom role is unchanged', custom.join(',') === 'catalog.view', custom.join(', '));
+    record('8b.6 the custom role is unchanged', custom.join(',') === 'catalog.view', custom.join(', '));
   } finally {
     rmSync(frozen, { recursive: true, force: true });
   }

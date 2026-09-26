@@ -26,6 +26,24 @@
 -- Manager's seventeen accepted Phase 1 permissions survive untouched; a
 -- custom role gains nothing.
 --
+-- ── Which rows are "the owner", "the manager", "the cashier" ─────────────
+--
+-- The lock says "manager/cashier system role". The accepted provisioning
+-- writer marks only the owner as a system role (`is_system = (key =
+-- 'owner')`, 0033:137 and 0038:233), so the manager and the cashier are the
+-- builtin TEMPLATE roles, identified by their UNIQUE (business_id, key)
+-- (0003:32). Hence, per business:
+--
+--   owner    is_system AND key = 'owner'   (the 0041 identity)
+--   manager  key = 'manager'
+--   cashier  key = 'cashier'
+--   custom   every other role
+--
+-- Caveat (accepted, Agent 0 ruling): the manager template is not a system
+-- role, so a merchant may have edited it, or deleted it and created a role
+-- keyed 'manager'. Either receives the three NON-sensitive view keys — the
+-- lock's intent for "the manager role". No sensitive key can reach it.
+--
 -- ── Why the file lifts FORCE for its own length ───────────────────────────
 --
 -- `business_roles` and `role_permissions` carry FORCE row level security
@@ -71,7 +89,7 @@ BEGIN
   FROM business_roles r
   LEFT JOIN LATERAL (SELECT string_agg(rp.permission, ',' ORDER BY rp.permission) AS perms
                        FROM role_permissions rp WHERE rp.business_id = r.business_id AND rp.role_id = r.id) p ON true
-  WHERE NOT r.is_system;
+  WHERE NOT (r.is_system AND r.key = 'owner') AND r.key NOT IN ('manager', 'cashier');
 
   SELECT md5(coalesce(string_agg(r.business_id::text || '/' || r.id::text || '=' || coalesce(p.perms, ''), ';'
                                  ORDER BY r.business_id::text, r.id::text), ''))
@@ -80,7 +98,7 @@ BEGIN
   LEFT JOIN LATERAL (SELECT string_agg(rp.permission, ',' ORDER BY rp.permission) AS perms
                        FROM role_permissions rp
                       WHERE rp.business_id = r.business_id AND rp.role_id = r.id AND NOT (rp.permission = ANY (v_keys))) p ON true
-  WHERE r.is_system AND r.key = 'manager';
+  WHERE r.key = 'manager';
 
   -- Owner: all eleven.
   INSERT INTO role_permissions (business_id, role_id, permission)
@@ -95,7 +113,7 @@ BEGIN
   SELECT r.business_id, r.id, k.permission
   FROM business_roles r
   CROSS JOIN unnest(v_ordinary) AS k(permission)
-  WHERE r.is_system AND r.key = 'manager'
+  WHERE r.key = 'manager'
   ON CONFLICT (business_id, role_id, permission) DO NOTHING;
 
   -- 1. Completeness: every system owner holds all eleven.
@@ -111,7 +129,7 @@ BEGIN
   -- 2. Manager exactness, restricted to the Phase 3 keys.
   SELECT string_agg(r.business_id::text, ', ' ORDER BY r.business_id::text) INTO v_bad
   FROM business_roles r
-  WHERE r.is_system AND r.key = 'manager'
+  WHERE r.key = 'manager'
     AND (SELECT coalesce(array_agg(rp.permission ORDER BY rp.permission), ARRAY[]::text[])
            FROM role_permissions rp
           WHERE rp.business_id = r.business_id AND rp.role_id = r.id AND rp.permission = ANY (v_keys)) IS DISTINCT FROM v_ordinary;
@@ -133,7 +151,7 @@ BEGIN
   SELECT string_agg(DISTINCT rp.permission, ', ') INTO v_bad
   FROM role_permissions rp
   JOIN business_roles r ON r.business_id = rp.business_id AND r.id = rp.role_id
-  WHERE r.is_system AND r.key = 'cashier' AND rp.permission = ANY (v_keys);
+  WHERE r.key = 'cashier' AND rp.permission = ANY (v_keys);
   IF v_bad IS NOT NULL THEN
     RAISE EXCEPTION 'inventory.permission_backfill_overreach: the cashier holds Phase 3 permissions: %', v_bad;
   END IF;
@@ -145,7 +163,7 @@ BEGIN
   FROM business_roles r
   LEFT JOIN LATERAL (SELECT string_agg(rp.permission, ',' ORDER BY rp.permission) AS perms
                        FROM role_permissions rp WHERE rp.business_id = r.business_id AND rp.role_id = r.id) p ON true
-  WHERE NOT r.is_system;
+  WHERE NOT (r.is_system AND r.key = 'owner') AND r.key NOT IN ('manager', 'cashier');
   IF v_custom_after IS DISTINCT FROM v_custom_before THEN
     RAISE EXCEPTION 'inventory.permission_backfill_overreach: a custom role''s permission set changed';
   END IF;
@@ -158,7 +176,7 @@ BEGIN
   LEFT JOIN LATERAL (SELECT string_agg(rp.permission, ',' ORDER BY rp.permission) AS perms
                        FROM role_permissions rp
                       WHERE rp.business_id = r.business_id AND rp.role_id = r.id AND NOT (rp.permission = ANY (v_keys))) p ON true
-  WHERE r.is_system AND r.key = 'manager';
+  WHERE r.key = 'manager';
   IF v_manager_after IS DISTINCT FROM v_manager_before THEN
     RAISE EXCEPTION 'inventory.permission_backfill_manager_mismatch: a manager''s accepted Phase 1 permissions changed';
   END IF;

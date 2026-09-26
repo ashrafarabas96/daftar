@@ -983,8 +983,8 @@ describe('managed PostgreSQL: 0039 → 0049 under a non-superuser migration prin
         ]);
         await setup.query(
           `INSERT INTO business_roles (business_id, id, key, name, is_system) VALUES
-             ($1, $2, 'owner', 'Owner', true), ($1, $3, 'manager', 'Manager', true),
-             ($1, $4, 'cashier', 'Cashier', true), ($1, $5, 'clerk', 'Clerk', false)`,
+             ($1, $2, 'owner', 'Owner', true), ($1, $3, 'manager', 'Manager', false),
+             ($1, $4, 'cashier', 'Cashier', false), ($1, $5, 'clerk', 'Clerk', false)`,
           [ids.business, ids.owner, ids.manager, ids.cashier, ids.custom],
         );
         await setup.query(
