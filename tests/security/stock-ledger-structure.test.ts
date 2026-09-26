@@ -22,6 +22,9 @@ import {
   FIXTURE_OP,
   FIXTURE_SOURCE_TYPE,
   INTERNAL,
+  S3_BRIDGES,
+  S3_OPERATION_MOVEMENT_KINDS,
+  S3_SOURCE_TYPES,
   SEEDED_KINDS,
   applyAsApp,
   applyOne,
@@ -355,11 +358,13 @@ describe('T-01 — the ledger is append-only for every writer, the owner include
     await withRolledBackFixture(async (c) => {
       await seedAll(c);
       // TRUNCATE refuses while deferred checks are pending (55006), so they are
-      // run first; they pass — the rows are complete.
+      // run first; they pass — the rows are complete. Every table referencing
+      // `stock_source_bindings` must be named with it (0A000 otherwise): the
+      // fixture bridge and, since 0061, the four P3-S3 bridges.
       expectAccepted(await attempt(c, () => c.query('SET CONSTRAINTS ALL IMMEDIATE')), 'deferred checks');
       const o = await attempt(c, () =>
         c.query(
-          `TRUNCATE stock_source_bridge_fixture_line, stock_source_bindings, negative_deficit_coverages, negative_inventory_deficits, stock_movements, stock_levels`,
+          `TRUNCATE stock_source_bridge_fixture_line, ${S3_BRIDGES.join(', ')}, stock_source_bindings, negative_deficit_coverages, negative_inventory_deficits, stock_movements, stock_levels`,
         ),
       );
       expectAccepted(o, 'owner TRUNCATE');
@@ -425,11 +430,19 @@ describe('T-13 — the closed source registry (P:165)', () => {
     });
   });
 
-  it('T-13.3: at the migration state the source registry and the op→kind mapping are empty, and the kinds are exactly the ten seeds', async () => {
-    const r = await ownerPool().query<{ types: number; mapping: number }>(
-      `SELECT (SELECT count(*)::int FROM stock_source_types) AS types, (SELECT count(*)::int FROM inventory_operation_movement_kinds) AS mapping`,
+  it('T-13.3: at the migration state the source registry and the op→kind mapping hold exactly the P3-S3 registrations (none by P3-S2), and the kinds are exactly the ten seeds', async () => {
+    // P3-S2 registered nothing (L:1992); 0061 registered the four stock source
+    // types and 0062 the six op→kind rows (docs/PHASE_3_S3_CONTRACT.md §2.1
+    // step 7, §2.5), all by P3-S3.
+    const r = await ownerPool().query<{ types: string[]; mapping: string[] }>(
+      `SELECT (SELECT array_agg(source_type || ':' || registered_by ORDER BY source_type) FROM stock_source_types) AS types,
+              (SELECT array_agg(op_code || ':' || movement_kind || ':' || registered_by ORDER BY op_code, movement_kind)
+                 FROM inventory_operation_movement_kinds) AS mapping`,
     );
-    expect(r.rows[0]).toEqual({ types: 0, mapping: 0 });
+    expect(r.rows[0]).toEqual({
+      types: S3_SOURCE_TYPES.map((t) => `${t}:P3-S3`),
+      mapping: S3_OPERATION_MOVEMENT_KINDS.map(([op, kind]) => `${op}:${kind}:P3-S3`),
+    });
     const k = await ownerPool().query<{ kind: string; qtySign: string; requiresReason: boolean; by: string }>(
       `SELECT movement_kind AS kind, qty_sign AS "qtySign", requires_reason AS "requiresReason", registered_by AS by FROM stock_movement_kinds ORDER BY movement_kind`,
     );

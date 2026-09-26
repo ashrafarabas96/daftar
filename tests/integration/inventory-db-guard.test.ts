@@ -27,6 +27,7 @@ const F53 = '0053_inventory_units_and_product_configuration.sql';
 const F54 = '0054_inventory_assertion_authority.sql';
 const F55 = '0055_inventory_configure_product.sql';
 const F60 = '0060_inventory_stock_primitive.sql';
+const F62 = '0062_inventory_movement_commands.sql';
 
 /** The real tree with one file's text rewritten; the rewrite must change something. */
 function mutate(file: string, from: string | RegExp, to: string): Record<string, string> {
@@ -47,30 +48,63 @@ describe('G-7 — the tree as it stands', () => {
 
   it('sees every routine the migrations hand to the inventory principal, including the two asserted exceptions', () => {
     const { transferred } = checkInventoryDefinerContract({ migrations: real() });
+    // P3-S3 appends thirty routines (0061: the bridge, completeness, freeze,
+    // header, value and archive guards and the allocator; 0062: the seven
+    // entry routines and their four helpers), all DEFINER — no new exception.
     expect(transferred).toEqual([
       'branch_warehouses_keep_home',
+      'inventory_adjust_stock',
       'inventory_apply_stock_movements',
       'inventory_assertion_consume',
       'inventory_assertion_current',
       'inventory_assertion_key_install',
       'inventory_assertion_key_retire',
+      'inventory_bridge_source_lines',
       'inventory_business_transaction_id',
       'inventory_claimed_payload_digest',
       'inventory_configure_product',
+      'inventory_fixed_text',
       'inventory_half_even',
+      'inventory_largest_remainder',
+      'inventory_lock_stock_targets',
       'inventory_next_deficit_seq',
       'inventory_payload_digest',
       'inventory_payload_field_is_canonical',
       'inventory_quantity_is_representable',
+      'inventory_reason_words',
+      'inventory_record_damage',
+      'inventory_record_opening',
+      'inventory_source_header_guard',
+      'inventory_source_value_complete',
       'inventory_stock_fold',
       'inventory_stock_verify',
+      'inventory_stocktake_count',
+      'inventory_stocktake_finalize',
+      'inventory_stocktake_open',
+      'inventory_transfer_stock',
       'product_variants_10_base_variant_authority',
       'product_variants_20_stock_identity_lock',
+      'product_variants_30_archive_requires_zero_stock',
       'products_10_inventory_config_authority',
       'products_20_unit_history_lock',
+      'products_30_archive_requires_zero_stock',
+      'stock_binding_requires_inventory_adjustment',
+      'stock_binding_requires_inventory_opening',
+      'stock_binding_requires_inventory_transfer',
+      'stock_binding_requires_stocktake',
       'stock_levels_zero_on_hand_zero_value',
+      'stock_source_complete_inventory_adjustment',
+      'stock_source_complete_inventory_opening',
+      'stock_source_complete_inventory_transfer',
+      'stock_source_complete_stocktake',
+      'stock_source_complete_stocktake_header',
+      'stock_source_freeze_inventory_adjustment',
+      'stock_source_freeze_inventory_opening',
+      'stock_source_freeze_inventory_transfer',
+      'stock_source_freeze_stocktake',
       'structure_associate_warehouse_branch',
       'structure_dissociate_warehouse_branch',
+      'warehouses_30_archive_requires_zero_stock',
       'warehouses_home_branch_maintain',
       'warehouses_require_home_branch',
     ]);
@@ -85,10 +119,14 @@ describe('G-7 — the tree as it stands', () => {
     ]);
   });
 
-  it('rule 22: the only stock writer is the primitive, and its first statement verifies the assertion', () => {
+  it('rule 22: the only stock writers are the primitive and the P3-S3 bridge writer, and the first statement of each verifies the assertion', () => {
     const report = checkInventoryWriterAuthority(real());
     expect(report.violations).toEqual([]);
-    expect(report.writers).toEqual([`${F60}: inventory_apply_stock_movements`]);
+    // 0062 R-5: the seven entry routines write no stock table themselves; the
+    // bridges are written by one helper that opens with
+    // inventory_assertion_current(...). The primitive stays the only writer of
+    // movements, levels and bindings.
+    expect(report.writers).toEqual([`${F60}: inventory_apply_stock_movements`, `${F62}: inventory_bridge_source_lines`]);
   });
 });
 

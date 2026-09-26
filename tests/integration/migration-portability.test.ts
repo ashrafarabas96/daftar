@@ -1102,7 +1102,10 @@ describe('managed PostgreSQL: 0039 → 0049 under a non-superuser migration prin
               WHERE n.nspname = 'public'
                 AND (r.rolname = 'daftar_inventory_internal'
                      OR p.proname IN ('accounting_entry_date_guard', 'warehouses_home_branch_immutable',
-                                      'stock_ledger_append_only', 'stock_levels_retain', 'inventory_stock_source_guard_gaps'))
+                                      'stock_ledger_append_only', 'stock_levels_retain', 'inventory_stock_source_guard_gaps',
+                                      'accounting_inventory_adjustment_entry_complete', 'accounting_inventory_opening_entry_complete',
+                                      'accounting_inventory_opening_position', 'accounting_opening_balances_30_inventory_opening_guard',
+                                      'accounting_reversals_20_domain_source_guard'))
               ORDER BY p.proname`,
           )
         ).rows;
@@ -1147,6 +1150,41 @@ describe('managed PostgreSQL: 0039 → 0049 under a non-superuser migration prin
             { proname: 'stock_levels_retain', owner: 'daftar_migrator', definer: false, config: PIN },
             internal('warehouses_home_branch_maintain'),
             internal('warehouses_require_home_branch'),
+            // P3-S3 (0061): the stock-side source guards, the archive rule and
+            // the opening allocator are the internal principal's, all DEFINER…
+            internal('inventory_largest_remainder'),
+            internal('inventory_source_header_guard'),
+            internal('inventory_source_value_complete'),
+            internal('product_variants_30_archive_requires_zero_stock'),
+            internal('products_30_archive_requires_zero_stock'),
+            internal('warehouses_30_archive_requires_zero_stock'),
+            ...['inventory_adjustment', 'inventory_opening', 'inventory_transfer', 'stocktake'].flatMap((st) => [
+              internal(`stock_binding_requires_${st}`),
+              internal(`stock_source_complete_${st}`),
+              internal(`stock_source_freeze_${st}`),
+            ]),
+            internal('stock_source_complete_stocktake_header'),
+            // …and the accounting-side guards and the opening-position read are
+            // the accounting principal's (A-14).
+            ...[
+              'accounting_inventory_adjustment_entry_complete',
+              'accounting_inventory_opening_entry_complete',
+              'accounting_inventory_opening_position',
+              'accounting_opening_balances_30_inventory_opening_guard',
+              'accounting_reversals_20_domain_source_guard',
+            ].map((proname) => ({ proname, owner: 'daftar_accounting_internal', definer: true, config: PIN })),
+            // P3-S3 (0062): the seven signed entry routines and their four helpers.
+            internal('inventory_adjust_stock'),
+            internal('inventory_bridge_source_lines'),
+            internal('inventory_fixed_text'),
+            internal('inventory_lock_stock_targets'),
+            internal('inventory_reason_words'),
+            internal('inventory_record_damage'),
+            internal('inventory_record_opening'),
+            internal('inventory_stocktake_count'),
+            internal('inventory_stocktake_finalize'),
+            internal('inventory_stocktake_open'),
+            internal('inventory_transfer_stock'),
           ].sort((a, b) => (a.proname < b.proname ? -1 : 1)),
         );
         for (const role of ['daftar_inventory_internal', 'daftar_accounting_internal']) {

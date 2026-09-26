@@ -239,11 +239,27 @@ describe('the §H grant matrix, from information_schema and pg_policy (P3-AL-54 
       stock_levels: 'INSERT,SELECT',
       stock_movement_kinds: 'SELECT',
       stock_movements: 'INSERT,SELECT',
-      stock_source_bindings: 'INSERT',
+      // P3-S3 (0061/0062, contract A-18): the eight source documents and the
+      // four bridges are written by the signed routines only; SELECT on the
+      // bindings for the completeness triggers; INSERT on the outbox.
+      stock_source_bindings: 'INSERT,SELECT',
+      inventory_adjustment_lines: 'INSERT,SELECT',
+      inventory_adjustments: 'INSERT,SELECT',
+      inventory_opening_lines: 'INSERT,SELECT',
+      inventory_openings: 'INSERT,SELECT',
+      inventory_transfer_lines: 'INSERT,SELECT',
+      inventory_transfers: 'INSERT,SELECT',
+      stocktake_lines: 'INSERT,SELECT',
+      stocktakes: 'INSERT,SELECT',
+      stock_source_bridge_inventory_adjustment: 'INSERT,SELECT',
+      stock_source_bridge_inventory_opening: 'INSERT,SELECT',
+      stock_source_bridge_inventory_transfer: 'INSERT,SELECT',
+      stock_source_bridge_stocktake: 'INSERT,SELECT',
+      outbox_events: 'INSERT',
     });
   });
 
-  it('and exactly these column privileges beyond them: three products columns to UPDATE, four product_variants columns to INSERT, four stock_levels columns to UPDATE (P3-S2)', async () => {
+  it('and exactly these column privileges beyond them: three products columns to UPDATE, four product_variants columns to INSERT, four stock_levels columns to UPDATE (P3-S2), six stocktake_lines and eight stocktakes columns to UPDATE (P3-S3)', async () => {
     const r = await ownerPool().query<{ t: string; p: string; cols: string }>(
       `SELECT c.table_name AS t, c.privilege_type AS p, string_agg(c.column_name, ',' ORDER BY c.column_name) AS cols
        FROM information_schema.column_privileges c
@@ -257,6 +273,18 @@ describe('the §H grant matrix, from information_schema and pg_policy (P3-AL-54 
       { t: 'product_variants', p: 'INSERT', cols: 'business_id,id,is_base,product_id' },
       { t: 'products', p: 'UPDATE', cols: 'track_inventory,unit_code,unit_decimals' },
       { t: 'stock_levels', p: 'UPDATE', cols: 'avg_unit_cost_base_minor,last_stock_seq,on_hand,valuation_base_minor' },
+      // P3-S3 (0061, contract A-18): the one document with a human interval —
+      // the count columns of a draft line, and the closing fields of its header.
+      {
+        t: 'stocktake_lines',
+        p: 'UPDATE',
+        cols: 'applied_value_base_minor,captured_at,captured_at_stock_seq,counted_qty,expected_qty_at_capture,unit_cost_base_minor',
+      },
+      {
+        t: 'stocktakes',
+        p: 'UPDATE',
+        cols: 'binding_source_id,cancelled_at,closed_by,finalize_intent_sha256,finalized_at,occurred_on,status,total_value_base_minor',
+      },
     ]);
   });
 
@@ -312,9 +340,17 @@ describe('the §H grant matrix, from information_schema and pg_policy (P3-AL-54 
       [INTERNAL],
     );
     expect(r.rows).toEqual([
+      // P3-S3 (0062, contract §2.4): the seven signed entry routines, daftar_app only.
+      { g: 'daftar_app', r: 'inventory_adjust_stock' },
       { g: 'daftar_platform', r: 'inventory_assertion_key_install' },
       { g: 'daftar_platform', r: 'inventory_assertion_key_retire' },
       { g: 'daftar_app', r: 'inventory_configure_product' },
+      { g: 'daftar_app', r: 'inventory_record_damage' },
+      { g: 'daftar_app', r: 'inventory_record_opening' },
+      { g: 'daftar_app', r: 'inventory_stocktake_count' },
+      { g: 'daftar_app', r: 'inventory_stocktake_finalize' },
+      { g: 'daftar_app', r: 'inventory_stocktake_open' },
+      { g: 'daftar_app', r: 'inventory_transfer_stock' },
       { g: 'daftar_app', r: 'structure_associate_warehouse_branch' },
       { g: 'daftar_app', r: 'structure_dissociate_warehouse_branch' },
     ]);

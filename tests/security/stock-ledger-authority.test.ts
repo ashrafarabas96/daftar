@@ -22,6 +22,8 @@ import {
   RUNTIME_ROLES,
   S2_RELATIONS,
   S2_ROUTINES,
+  S3_BRIDGES,
+  S3_OPERATION_MOVEMENT_KINDS,
   applyOne,
   assertMigrationState,
   attempt,
@@ -34,6 +36,7 @@ import {
   req,
   requestsJson,
   requestsParam,
+  rewindToP3S2Checkpoint,
   roleClient,
   scratch,
   seedStockBusiness,
@@ -96,7 +99,8 @@ async function runtimeMatrixDeviations(q: Queryable): Promise<string[]> {
 const A01: Record<string, readonly string[]> = {
   stock_movements: ['INSERT', 'SELECT'],
   stock_levels: ['INSERT', 'SELECT'],
-  stock_source_bindings: ['INSERT'],
+  // P3-S3 (0061, contract A-18): SELECT added for the completeness triggers.
+  stock_source_bindings: ['INSERT', 'SELECT'],
   stock_movement_kinds: ['SELECT'],
   inventory_operation_movement_kinds: ['SELECT'],
   negative_inventory_deficits: ['SELECT'],
@@ -139,14 +143,16 @@ function endStateBlock(file: string): string {
 }
 
 describe('T-02 — the live grant matrix (P:154)', () => {
-  it('T-02.1: the S2 relations discovered from pg_class are exactly the eight the contract names', async () => {
+  it('T-02.1: the ledger relations discovered from pg_class are exactly the eight S2 relations the contract names plus the four P3-S3 bridges', async () => {
     const r = await ownerPool().query<{ relname: string }>(
       `SELECT relname::text FROM pg_class
         WHERE relnamespace = 'public'::regnamespace AND relkind IN ('r', 'p', 'v', 'm', 'f')
           AND (relname LIKE 'stock\\_%' OR relname LIKE 'negative\\_%' OR relname = 'inventory_operation_movement_kinds')
         ORDER BY 1`,
     );
-    expect(r.rows.map((x) => x.relname)).toEqual([...S2_RELATIONS]);
+    // P3-S3 (0061, A-15(a)): the four bridges match the same `stock\_%`
+    // discovery; nothing else does.
+    expect(r.rows.map((x) => x.relname)).toEqual([...S2_RELATIONS, ...S3_BRIDGES].sort());
   });
 
   it('T-02.1: for every runtime role and PUBLIC, every write privilege (table and column level) is absent; daftar_app reads exactly stock_movements and stock_levels', async () => {
@@ -264,12 +270,17 @@ describe('T-02 — the live grant matrix (P:154)', () => {
     expect(r.rows).toEqual([{ create: false, login: false }]);
   });
 
-  it('T-02.N: an in-transaction GRANT INSERT ON stock_levels TO daftar_app is reported by the checker, the 0059 end-state block refuses it, and the grant really writes', async () => {
+  it('T-02.N: an in-transaction GRANT INSERT ON stock_levels TO daftar_app is reported by the checker, the 0059 end-state block (replayed at the P3-S2 checkpoint) refuses it, and the grant really writes', async () => {
     const c = await ownerClient();
     try {
       await c.query('BEGIN');
       expect(await runtimeMatrixDeviations(c)).toEqual([]);
-      expectAccepted(await attempt(c, () => c.query(endStateBlock('0059_inventory_stock_ledger.sql'))), '0059-E at the migration state');
+      // The frozen 0059-E describes the P3-S2 checkpoint: at the live state it
+      // refuses the P3-S3 registrations by design; rewound in-transaction to
+      // exactly that checkpoint it accepts, so the refusal below is the grant's.
+      expectRefused(await attempt(c, () => c.query(endStateBlock('0059_inventory_stock_ledger.sql'))), 'P0001', 'inventory.authority_leak', '0059-E, live');
+      await rewindToP3S2Checkpoint(c);
+      expectAccepted(await attempt(c, () => c.query(endStateBlock('0059_inventory_stock_ledger.sql'))), '0059-E at the P3-S2 checkpoint');
       await c.query('GRANT INSERT ON stock_levels TO daftar_app');
       expect(await runtimeMatrixDeviations(c)).toEqual(['daftar_app INSERT stock_levels', 'daftar_app INSERT(column) stock_levels']);
       expectRefused(await attempt(c, () => c.query(endStateBlock('0059_inventory_stock_ledger.sql'))), 'P0001', 'inventory.authority_leak', '0059-E');
@@ -298,6 +309,9 @@ describe('T-02 — the live grant matrix (P:154)', () => {
       await c.query(`GRANT DELETE ON stock_movements TO ${INTERNAL}`);
       await c.query(`GRANT UPDATE (tenant_id) ON stock_levels TO ${INTERNAL}`);
       expect(await internalDeviations(c)).toEqual([`${INTERNAL} DELETE stock_movements`, `${INTERNAL} UPDATE(tenant_id) stock_levels`]);
+      // Replayed at the P3-S2 checkpoint (where it accepts without the extra
+      // grants, as the case above proves), 0059-E refuses them.
+      await rewindToP3S2Checkpoint(c);
       expectRefused(await attempt(c, () => c.query(endStateBlock('0059_inventory_stock_ledger.sql'))), 'P0001', 'inventory.authority_leak', '0059-E');
     } finally {
       await c.query('ROLLBACK');
@@ -668,12 +682,16 @@ describe('T-16 — primitive authority (P:168)', () => {
     });
   });
 
-  it('T-16.9: with the op→kind mapping empty (the end-of-migration state), a consumed fixture op → inventory.assertion_wrong_operation', async () => {
+  it('T-16.9: with the fixture op’s mapping removed (the end-of-migration state: exactly the six P3-S3 rows, none for it), a consumed fixture op → inventory.assertion_wrong_operation', async () => {
     await withRolledBackFixture(async (c) => {
       // Control first: with the mapping present the same call writes.
       expectAccepted(await tryApply(c, biz, [req(K1, 'purchase', '1', { unitCost: '1' })]), 'mapping present');
       await c.query(`DELETE FROM inventory_operation_movement_kinds WHERE op_code LIKE 'fixture.%'`);
-      expect(must((await c.query<{ n: number }>(`SELECT count(*)::int AS n FROM inventory_operation_movement_kinds`)).rows[0]).n).toBe(0);
+      expect(
+        (
+          await c.query<{ r: string }>(`SELECT op_code || ':' || movement_kind AS r FROM inventory_operation_movement_kinds ORDER BY op_code, movement_kind`)
+        ).rows.map((x) => x.r),
+      ).toEqual(S3_OPERATION_MOVEMENT_KINDS.map(([op, kind]) => `${op}:${kind}`));
       expectRefused(await tryApply(c, biz, [req(K1, 'purchase', '1', { unitCost: '1' })]), 'P0001', 'inventory.assertion_wrong_operation');
     });
   });
@@ -703,7 +721,7 @@ describe('T-16 — primitive authority (P:168)', () => {
 });
 
 describe('§2.4 — the complete S2 trigger set, from pg_trigger', () => {
-  it('the S2 tables carry exactly the four append/retain triggers and the deferred zero-value constraint trigger; products carries products_20_unit_history_lock and product_variants carries product_variants_20_stock_identity_lock', async () => {
+  it('the S2 tables carry exactly the four append/retain triggers and the deferred zero-value constraint trigger, plus the four P3-S3 binding-side guards on stock_source_bindings; products carries products_20_unit_history_lock and product_variants carries product_variants_20_stock_identity_lock', async () => {
     const r = await ownerPool().query<{
       tg: string;
       rel: string;
@@ -753,6 +771,20 @@ describe('§2.4 — the complete S2 trigger set, from pg_trigger', () => {
         owner: INTERNAL,
         secdef: true,
       },
+      // P3-S3 (0061, §2.3): one deferred binding → bridge guard per registered
+      // source type, AFTER INSERT, internal DEFINER.
+      ...['inventory_adjustment', 'inventory_opening', 'inventory_transfer', 'stocktake'].map((st) => ({
+        tg: `stock_binding_requires_${st}`,
+        rel: 'stock_source_bindings',
+        fn: `stock_binding_requires_${st}()`,
+        type: 1 + 4,
+        enabled: 'O',
+        constraint: true,
+        deferrable: true,
+        deferred: true,
+        owner: INTERNAL,
+        secdef: true,
+      })),
       { tg: 'stock_levels_retain', rel: 'stock_levels', fn: 'stock_levels_retain()', type: 1 + 2 + 8, ...invoker },
       {
         tg: 'stock_levels_zero_on_hand_zero_value',
@@ -771,10 +803,14 @@ describe('§2.4 — the complete S2 trigger set, from pg_trigger', () => {
     ]);
   });
 
-  it('the 0060 end-state block passes at the migration state and refuses a zero-value trigger that is no longer deferred (control)', async () => {
+  it('the 0060 end-state block passes at the P3-S2 checkpoint and refuses a zero-value trigger that is no longer deferred (control)', async () => {
     const c = await ownerClient();
     try {
       await c.query('BEGIN');
+      // Live, the frozen block refuses the P3-S3 registrations by design;
+      // rewound in-transaction to the P3-S2 checkpoint it describes, it passes.
+      expectRefused(await attempt(c, () => c.query(endStateBlock('0060_inventory_stock_primitive.sql'))), 'P0001', 'inventory.authority_leak', '0060-E, live');
+      await rewindToP3S2Checkpoint(c);
       expectAccepted(await attempt(c, () => c.query(endStateBlock('0060_inventory_stock_primitive.sql'))), '0060-E');
       await c.query(`DROP TRIGGER stock_levels_zero_on_hand_zero_value ON stock_levels`);
       await c.query(

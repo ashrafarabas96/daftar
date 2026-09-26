@@ -7,6 +7,7 @@ import {
   canonicalInventoryPayload,
   inventoryAssertionPreimage,
   inventoryPayloadSha256,
+  isInventoryOperationCode,
   mintInventoryAssertion,
   InventoryError,
   type InventoryOperationCode,
@@ -338,7 +339,10 @@ describe('Row Q — non-canonical input is refused by BOTH canonicalizers, never
       }
     };
     expect(code(() => canonicalInventoryPayload(base.opCode, base.tenantId, base.businessId, fields.slice(0, 3)))).toBe('inventory.payload_invalid');
-    expect(code(() => canonicalInventoryPayload('inventory.transfer' as InventoryOperationCode, base.tenantId, base.businessId, fields))).toBe(
+    // 'inventory.transfer' served here until P3-S3 registered it; the kind
+    // below is unregistered, which the first line pins.
+    expect(isInventoryOperationCode('inventory.teleport')).toBe(false);
+    expect(code(() => canonicalInventoryPayload('inventory.teleport' as InventoryOperationCode, base.tenantId, base.businessId, fields))).toBe(
       'inventory.payload_invalid',
     );
     expect(code(() => canonicalInventoryPayload(base.opCode, base.tenantId, base.businessId, [{ kind: 'null' }, ...fields.slice(1)]))).toBe(

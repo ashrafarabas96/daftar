@@ -478,6 +478,14 @@ describe('the §D inventory definer contract (P3-AL-54 §D)', () => {
     'structure_dissociate_warehouse_branch(uuid,uuid)': ['daftar_app'],
     'inventory_assertion_key_install(text,bytea)': ['daftar_platform'],
     'inventory_assertion_key_retire(text)': ['daftar_platform'],
+    // P3-S3 (0062, contract §2.4): the seven signed entry routines, daftar_app only.
+    'inventory_adjust_stock(uuid,uuid,date,text,uuid[],numeric[],numeric[],bigint[])': ['daftar_app'],
+    'inventory_record_damage(uuid,uuid,date,text,uuid[],numeric[],bigint[])': ['daftar_app'],
+    'inventory_record_opening(uuid,date,uuid,bigint,uuid[],uuid[],numeric[],numeric[])': ['daftar_app'],
+    'inventory_stocktake_count(uuid,uuid,uuid[],numeric[])': ['daftar_app'],
+    'inventory_stocktake_finalize(uuid,uuid,text,date,uuid[],numeric[],numeric[],bigint[])': ['daftar_app'],
+    'inventory_stocktake_open(uuid,uuid)': ['daftar_app'],
+    'inventory_transfer_stock(uuid,uuid,uuid,uuid[],numeric[])': ['daftar_app'],
   };
 
   const INVENTORY_TRUSTED_RELATIONS = [

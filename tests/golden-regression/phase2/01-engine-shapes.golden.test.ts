@@ -546,9 +546,11 @@ describe('golden: engine shapes prove representability without creating the doma
     expect(present).toEqual([]);
   });
 
-  it('every shape used the generic internal source identity, and the source registry still holds exactly three', async () => {
+  it('every shape used the generic internal source identity, and the source registry holds exactly the three native types followed by the two P3-S3 inventory types', async () => {
+    // The engine shapes created no domain source type. The only additions
+    // after the native three are P3-S3's (0061, contract A-14(e)), in order.
     const types = (await ownerPool().query<{ t: string }>(`SELECT source_type AS t FROM accounting_source_types ORDER BY sort_order`)).rows.map((r) => r.t);
-    expect(types).toEqual(['opening_balance', 'manual_adjustment', 'reversal']);
+    expect(types).toEqual(['opening_balance', 'manual_adjustment', 'reversal', 'inventory_adjustment', 'inventory_opening']);
     const used = (
       await ownerPool().query<{ t: string }>(`SELECT DISTINCT source_type AS t FROM journal_entries WHERE business_id = $1`, [must(fx).businessId])
     ).rows.map((r) => r.t);

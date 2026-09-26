@@ -97,6 +97,45 @@ export const SEEDED_KINDS: readonly { kind: string; qtySign: string; requiresRea
 
 export const S1_OPERATION_KINDS = ['inventory.configure_product', 'structure.associate_warehouse_branch', 'structure.dissociate_warehouse_branch'] as const;
 
+// ── the P3-S3 registrations (docs/PHASE_3_S3_CONTRACT.md §2.1 step 7, §2.5) ──
+//
+// P3-S2 ended with both registries EMPTY (L:1992). 0061 registered the four
+// stock source types and 0062 the seven operation kinds with their six
+// op→kind rows, each `registered_by = 'P3-S3'`; the "migration state" every
+// suite returns to is therefore exactly these rows and nothing else.
+
+/** The four stock source types 0061 registers (§2.1 step 7), sorted. */
+export const S3_SOURCE_TYPES = ['inventory_adjustment', 'inventory_opening', 'inventory_transfer', 'stocktake'] as const;
+
+/** The seven operation kinds 0062 registers (§2.5), sorted. */
+export const S3_OPERATION_KINDS = [
+  'inventory.adjust',
+  'inventory.damage',
+  'inventory.opening',
+  'inventory.stocktake_count',
+  'inventory.stocktake_finalize',
+  'inventory.stocktake_open',
+  'inventory.transfer',
+] as const;
+
+/** The six op→movement-kind rows 0062 registers (§2.5; 0062 R-8), sorted by (op, kind). */
+export const S3_OPERATION_MOVEMENT_KINDS: readonly (readonly [op: string, kind: string])[] = [
+  ['inventory.adjust', 'adjustment'],
+  ['inventory.damage', 'damage'],
+  ['inventory.opening', 'inventory_opening'],
+  ['inventory.stocktake_finalize', 'stocktake'],
+  ['inventory.transfer', 'transfer_in'],
+  ['inventory.transfer', 'transfer_out'],
+];
+
+/** The four bridges 0061 creates (A-15(a)); each references `stock_source_bindings`. */
+export const S3_BRIDGES = [
+  'stock_source_bridge_inventory_adjustment',
+  'stock_source_bridge_inventory_opening',
+  'stock_source_bridge_inventory_transfer',
+  'stock_source_bridge_stocktake',
+] as const;
+
 // ── small utilities ────────────────────────────────────────────────────────
 
 /** Narrow an optional to its value, loudly (the accounting-posting precedent). */
@@ -504,23 +543,68 @@ export async function withRolledBackFixture<T>(
   }
 }
 
-/** The migration state the registries must be back to after any committed fixture. */
+/**
+ * The migration state the registries must be back to after any committed
+ * fixture: exactly the P3-S3 registrations (none by P3-S2, whose own claim
+ * "S2 registered nothing" stays exact), the three P3-S1 kinds plus the seven
+ * P3-S3 kinds, and no trace of the fixture.
+ */
 export async function assertMigrationState(q: Queryable = ownerPool()): Promise<void> {
-  const r = await q.query<{ types: number; mapping: number; kinds: string[]; uses: number; rels: number; fns: number }>(
-    `SELECT (SELECT count(*)::int FROM stock_source_types) AS types,
-            (SELECT count(*)::int FROM inventory_operation_movement_kinds) AS mapping,
+  const r = await q.query<{ types: string[]; mapping: string[]; kinds: string[]; uses: number; rels: number; fns: number }>(
+    `SELECT (SELECT array_agg(source_type || ':' || registered_by ORDER BY source_type) FROM stock_source_types) AS types,
+            (SELECT array_agg(op_code || ':' || movement_kind || ':' || registered_by ORDER BY op_code, movement_kind)
+               FROM inventory_operation_movement_kinds) AS mapping,
             (SELECT array_agg(op_code ORDER BY op_code) FROM inventory_operation_kinds) AS kinds,
             (SELECT count(*)::int FROM inventory_assertion_uses WHERE op_code LIKE 'fixture.%') AS uses,
             (SELECT count(*)::int FROM pg_class WHERE relname IN ('stock_fixture_lines', 'stock_source_bridge_fixture_line')) AS rels,
             (SELECT count(*)::int FROM pg_proc WHERE proname LIKE 'stock\\_fixture\\_%' OR proname = 'stock_binding_requires_fixture_line') AS fns`,
   );
-  expect(r.rows[0]).toEqual({ types: 0, mapping: 0, kinds: [...S1_OPERATION_KINDS], uses: 0, rels: 0, fns: 0 });
+  expect(r.rows[0]).toEqual({
+    types: S3_SOURCE_TYPES.map((t) => `${t}:P3-S3`),
+    mapping: S3_OPERATION_MOVEMENT_KINDS.map(([op, kind]) => `${op}:${kind}:P3-S3`),
+    kinds: [...S1_OPERATION_KINDS, ...S3_OPERATION_KINDS].sort(),
+    uses: 0,
+    rels: 0,
+    fns: 0,
+  });
+}
+
+/**
+ * Rewind, IN THE CALLER'S TRANSACTION (which must be rolled back), exactly
+ * what 0061/0062 changed that the frozen 0059/0060 end-state blocks inspect,
+ * so those blocks can be replayed against the P3-S2 checkpoint they describe:
+ *
+ * - the six P3-S3 op→kind rows and the four P3-S3 source types (0059-E (2),
+ *   0060-E (6): both registries empty after P3-S2);
+ * - the internal principal's SELECT on `stock_source_bindings` (0061, A-18;
+ *   0059-E (6) pins the A-01 set, which had INSERT only).
+ *
+ * Every step is counted, so a rewind that removed more or less than the
+ * P3-S3 rows fails here rather than silently proving something else. Must be
+ * called while no stock row of a P3-S3 source type exists (the FKs refuse).
+ */
+export async function rewindToP3S2Checkpoint(c: Queryable): Promise<void> {
+  const mapping = await c.query(`DELETE FROM inventory_operation_movement_kinds WHERE registered_by = 'P3-S3'`);
+  expect(mapping.rowCount, 'the P3-S3 op→kind rows').toBe(S3_OPERATION_MOVEMENT_KINDS.length);
+  const types = await c.query(`DELETE FROM stock_source_types WHERE registered_by = 'P3-S3'`);
+  expect(types.rowCount, 'the P3-S3 stock source types').toBe(S3_SOURCE_TYPES.length);
+  await c.query(`REVOKE SELECT ON stock_source_bindings FROM ${INTERNAL}`);
+  const left = await c.query<{ types: number; mapping: number; bindings: boolean }>(
+    `SELECT (SELECT count(*)::int FROM stock_source_types) AS types,
+            (SELECT count(*)::int FROM inventory_operation_movement_kinds) AS mapping,
+            has_table_privilege($1, 'stock_source_bindings', 'SELECT') AS bindings`,
+    [INTERNAL],
+  );
+  expect(left.rows[0], 'the P3-S2 checkpoint').toEqual({ types: 0, mapping: 0, bindings: false });
 }
 
 /**
  * Remove a committed fixture and everything it produced. Idempotent: every
  * step tolerates the fixture being absent. Append-only triggers refuse DELETE,
- * so the stock rows go by TRUNCATE (deliberately unguarded, E-24).
+ * so the stock rows go by TRUNCATE (deliberately unguarded, E-24). Since 0061
+ * the four P3-S3 bridges reference `stock_source_bindings`, and PostgreSQL
+ * refuses to truncate a referenced table without its referencing ones
+ * (0A000), so they are named in the same statement.
  */
 export async function removeCommittedFixture(): Promise<void> {
   const c = await ownerClient();
@@ -530,7 +614,7 @@ export async function removeCommittedFixture(): Promise<void> {
     const lines = must((await c.query<{ r: string | null }>(`SELECT to_regclass('public.stock_fixture_lines')::text AS r`)).rows[0]).r;
     const extra = [bridge, lines].filter((x): x is string => x !== null);
     await c.query(
-      `TRUNCATE ${['stock_source_bindings', 'stock_movements', 'stock_levels', 'negative_deficit_coverages', 'negative_inventory_deficits', ...extra].join(', ')}`,
+      `TRUNCATE ${['stock_source_bindings', 'stock_movements', 'stock_levels', 'negative_deficit_coverages', 'negative_inventory_deficits', ...S3_BRIDGES, ...extra].join(', ')}`,
     );
     await c.query(`DROP TRIGGER IF EXISTS stock_binding_requires_${FIXTURE_SOURCE_TYPE} ON stock_source_bindings`);
     await c.query(`DROP TABLE IF EXISTS stock_source_bridge_fixture_line`);

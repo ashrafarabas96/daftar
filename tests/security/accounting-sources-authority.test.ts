@@ -105,12 +105,16 @@ describe('an assertion is bound to every claim it names (§38, §39)', () => {
   });
 
   it('an operation kind is tightly paired with ONE source type, as data', async () => {
-    // `reverse` owns `reversal` and nothing else; `post` owns the other two.
-    // The pairing is a table, so it is provable by reading it.
+    // `reverse` owns `reversal` and nothing else; `post` owns the other two
+    // native types and, since 0061 (P3-S3, contract A-14(e)), the two
+    // inventory source types. The pairing is a table, so it is provable by
+    // reading it.
     const pairs = await ownerPool().query<{ operation_kind: string; source_type: string }>(
       `SELECT operation_kind, source_type FROM accounting_operation_kinds ORDER BY operation_kind, source_type`,
     );
     expect(pairs.rows).toEqual([
+      { operation_kind: 'post', source_type: 'inventory_adjustment' },
+      { operation_kind: 'post', source_type: 'inventory_opening' },
       { operation_kind: 'post', source_type: 'manual_adjustment' },
       { operation_kind: 'post', source_type: 'opening_balance' },
       { operation_kind: 'reverse', source_type: 'reversal' },

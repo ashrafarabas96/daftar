@@ -454,10 +454,14 @@ describe('migration upgrade path: pre-encryption schema → latest (§13–16)',
 
       // The closed registries came out with the shape the slice specifies:
       // three source types, and no system actor at all (AL-04 invents nobody).
+      // The upgrade runs to the latest migration, so the two inventory source
+      // types P3-S3 registers (0061, contract A-14(e)) follow them, in order.
       expect((await pool.query<{ t: string }>(`SELECT source_type AS t FROM accounting_source_types ORDER BY sort_order`)).rows.map((r) => r.t)).toEqual([
         'opening_balance',
         'manual_adjustment',
         'reversal',
+        'inventory_adjustment',
+        'inventory_opening',
       ]);
       expect((await pool.query<{ n: number }>(`SELECT count(*)::int AS n FROM accounting_system_actors`)).rows[0]?.n).toBe(0);
       // P2-S5 §28: entering a rate is not a journal fact, so it registers no
@@ -731,9 +735,9 @@ describe('migration upgrade path: pre-encryption schema → latest (§13–16)',
        * cluster holds real postings from every accounting suite and which
        * asserts there that 0049 created no period anywhere in it.
        */
-      const protectedDigest = async (): Promise<string> => {
-        const r = await pool.query<{ d: string }>(
-          `SELECT md5(string_agg(t, '|' ORDER BY t)) AS d FROM (
+      const protectedDigest = async (): Promise<string[]> => {
+        const r = await pool.query<{ t: string }>(
+          `SELECT t FROM (
              SELECT concat_ws(':', 'acc', id, business_id, code, type, system_key, is_active) AS t FROM accounts
              UNION ALL SELECT concat_ws(':', 'je', id, business_id, entry_date, source_type, source_id, status, posting_fingerprint) FROM journal_entries
              UNION ALL SELECT concat_ws(':', 'jl', id, journal_entry_id, account_id, debit_minor, credit_minor, base_amount_minor) FROM journal_lines
@@ -743,7 +747,9 @@ describe('migration upgrade path: pre-encryption schema → latest (§13–16)',
              UNION ALL SELECT concat_ws(':', 'biz', id, tenant_id, base_currency, timezone, financial_started_at) FROM businesses
            ) x`,
         );
-        return r.rows[0]?.d ?? '';
+        // Every protected row itself, not a hash of them: a successor's exact
+        // additions can then be named in the expectation instead of hidden.
+        return r.rows.map((x) => x.t).sort();
       };
       const before = await protectedDigest();
 
@@ -754,8 +760,10 @@ describe('migration upgrade path: pre-encryption schema → latest (§13–16)',
       expect(fromS5[0]).toBe('0049_accounting_periods.sql');
 
       // §28 — the books are exactly as they were, byte for byte, and no
-      // business was quietly given a financial start.
-      expect(await protectedDigest()).toBe(before);
+      // business was quietly given a financial start. The one protected
+      // change on the way to the latest migration is P3-S3's: 0061 appends
+      // two source types (contract A-14(e)) and touches no other row.
+      expect(await protectedDigest()).toEqual([...before, 'src:inventory_adjustment:4', 'src:inventory_opening:5'].sort());
       expect((await pool.query<{ n: number }>(`SELECT count(*)::int AS n FROM journal_entries`)).rows[0]?.n).toBe(0);
       expect((await pool.query(`SELECT 1 FROM businesses WHERE financial_started_at IS NOT NULL`)).rows).toEqual([]);
 
@@ -1098,7 +1106,7 @@ describe('migration upgrade path: pre-encryption schema → latest (§13–16)',
     }
   }, 180_000);
 
-  it('compatibility matrix (P3-S2): frozen 0058-checkpoint + existing business → the P3-S2 ledger, empty, books and catalog untouched, rerun no-op', async () => {
+  it('compatibility matrix (P3-S2): frozen 0058-checkpoint + existing business → the P3-S2 ledger, empty (registries exactly as P3-S3 left them), books and catalog untouched, rerun no-op', async () => {
     await ensurePostgres();
     const db9 = 'daftar_upgrade_0058';
     await admin.query(`DROP DATABASE IF EXISTS ${db9} WITH (FORCE)`);
@@ -1167,15 +1175,43 @@ describe('migration upgrade path: pre-encryption schema → latest (§13–16)',
       expect(applied.length).toBeGreaterThan(0);
       expect(await protectedDigest()).toBe(before);
 
-      // The ledger exists and is empty; only the closed movement-kind registry
-      // is seeded, and no operation may reach the primitive (P3-AL-50, L:1992).
+      // The ledger exists and is empty; the closed movement-kind registry is
+      // seeded, and P3-S2 itself registered no source type and no op→kind row
+      // (P3-AL-50, L:1992). The upgrade runs to the latest migration, so the
+      // two registries hold exactly what P3-S3 registered (0061 §2.1 step 7,
+      // 0062 §2.5) — every row by P3-S3, none by P3-S1 or P3-S2. The frozen
+      // 0060 checkpoint itself, with both registries empty, is proven by the
+      // P3-S3 case below.
       const counts = (
         await pool.query<{ t: string; n: number }>(LEDGER.map((t) => `SELECT '${t}' AS t, count(*)::int AS n FROM ${t}`).join(' UNION ALL '))
       ).rows.reduce<Record<string, number>>((acc, r) => ({ ...acc, [r.t]: r.n }), {});
+      expect(
+        (
+          await pool.query<{ r: string }>(
+            `SELECT 'type:' || source_type || ':' || registered_by AS r FROM stock_source_types
+             UNION ALL SELECT 'map:' || op_code || ':' || movement_kind || ':' || registered_by FROM inventory_operation_movement_kinds`,
+          )
+        ).rows
+          .map((x) => x.r)
+          .sort(),
+      ).toEqual(
+        [
+          'type:inventory_adjustment:P3-S3',
+          'type:inventory_opening:P3-S3',
+          'type:inventory_transfer:P3-S3',
+          'type:stocktake:P3-S3',
+          'map:inventory.adjust:adjustment:P3-S3',
+          'map:inventory.damage:damage:P3-S3',
+          'map:inventory.opening:inventory_opening:P3-S3',
+          'map:inventory.stocktake_finalize:stocktake:P3-S3',
+          'map:inventory.transfer:transfer_in:P3-S3',
+          'map:inventory.transfer:transfer_out:P3-S3',
+        ].sort(),
+      );
       expect(counts).toEqual({
         stock_movement_kinds: 10,
-        stock_source_types: 0,
-        inventory_operation_movement_kinds: 0,
+        stock_source_types: 4,
+        inventory_operation_movement_kinds: 6,
         stock_levels: 0,
         stock_movements: 0,
         stock_source_bindings: 0,
@@ -1230,6 +1266,221 @@ describe('migration upgrade path: pre-encryption schema → latest (§13–16)',
     } finally {
       await pool.end();
       await admin.query(`DROP DATABASE IF EXISTS ${db9} WITH (FORCE)`).catch(() => undefined);
+    }
+  }, 180_000);
+
+  it('compatibility matrix (P3-S3): frozen 0060-checkpoint + existing tracked business → 0061/0062, books and ledger untouched, registries exactly P3-S3, rerun no-op', async () => {
+    await ensurePostgres();
+    const db10 = 'daftar_upgrade_0060';
+    await admin.query(`DROP DATABASE IF EXISTS ${db10} WITH (FORCE)`);
+    await admin.query(`CREATE DATABASE ${db10}`);
+    const url10 = `postgresql://${PG_USER}:${PG_PASSWORD}@localhost:${PG_PORT}/${db10}`;
+    const pool = scratchPool(url10);
+    const LEDGER = ['stock_levels', 'stock_movements', 'stock_source_bindings', 'negative_inventory_deficits', 'negative_deficit_coverages'];
+    const S3_TABLES = [
+      'inventory_transfers',
+      'inventory_transfer_lines',
+      'inventory_adjustments',
+      'inventory_adjustment_lines',
+      'stocktakes',
+      'stocktake_lines',
+      'inventory_openings',
+      'inventory_opening_lines',
+      'stock_source_bridge_inventory_transfer',
+      'stock_source_bridge_inventory_adjustment',
+      'stock_source_bridge_stocktake',
+      'stock_source_bridge_inventory_opening',
+    ];
+    const CHECKPOINT_REGISTRIES = [
+      'op:inventory.configure_product:P3-S1',
+      'op:structure.associate_warehouse_branch:P3-S1',
+      'op:structure.dissociate_warehouse_branch:P3-S1',
+      'acct:post:manual_adjustment',
+      'acct:post:opening_balance',
+      'acct:reverse:reversal',
+    ];
+    const registries = async (): Promise<string[]> =>
+      (
+        await pool.query<{ r: string }>(
+          `SELECT 'type:' || source_type || ':' || registered_by AS r FROM stock_source_types
+           UNION ALL SELECT 'map:' || op_code || ':' || movement_kind || ':' || registered_by FROM inventory_operation_movement_kinds
+           UNION ALL SELECT 'op:' || op_code || ':' || registered_by FROM inventory_operation_kinds
+           UNION ALL SELECT 'acct:' || operation_kind || ':' || source_type FROM accounting_operation_kinds`,
+        )
+      ).rows
+        .map((x) => x.r)
+        .sort();
+    try {
+      await pool.query(bootstrapSql());
+      const FROZEN = '0060_inventory_stock_primitive.sql';
+      const preDir = migrationsUpTo(FROZEN);
+      await runMigrations(url10, preDir);
+      rmSync(preDir, { recursive: true, force: true });
+
+      // The checkpoint is honest in both directions: the P3-S2 ledger is
+      // there, the P3-S3 documents and bridges are not — and P3-S2's own
+      // claim holds exactly at its own boundary: no source type, no op→kind
+      // row, only the three P3-S1 operation kinds and the three native
+      // accounting pairs (0059-E (2), 0060-E (6), L:1992).
+      for (const table of LEDGER) {
+        expect((await pool.query(`SELECT 1 FROM information_schema.tables WHERE table_name = $1`, [table])).rows, table).toHaveLength(1);
+      }
+      for (const table of S3_TABLES) {
+        expect((await pool.query(`SELECT 1 FROM information_schema.tables WHERE table_name = $1`, [table])).rows, table).toEqual([]);
+      }
+      expect(await registries()).toEqual([...CHECKPOINT_REGISTRIES].sort());
+
+      // A business that existed before P3-S3, with everything that can exist
+      // at this checkpoint: two branches with their warehouses, a product
+      // TRACKED in stock with its base variant, and a tracked variant product.
+      // No movement can exist here — with both registries empty no binding
+      // (FK to stock_source_types) and so no movement can be written — which
+      // is exactly why the ledger below must still be empty afterwards.
+      const tenant = (await pool.query<{ id: string }>(`INSERT INTO tenants DEFAULT VALUES RETURNING id`)).rows[0];
+      const biz = (
+        await pool.query<{ id: string }>(
+          `INSERT INTO businesses (tenant_id, name, store_slug, country_code, base_currency, timezone)
+           VALUES ($1, 'Before Movements', 'upgrade-movements', 'PS', 'ILS', 'Asia/Hebron') RETURNING id`,
+          [tenant?.id],
+        )
+      ).rows[0];
+      const branches = (
+        await pool.query<{ id: string }>(`INSERT INTO branches (business_id, name, is_default) VALUES ($1, 'A', true), ($1, 'B', false) RETURNING id`, [
+          biz?.id,
+        ])
+      ).rows;
+      for (const [i, b] of branches.entries()) {
+        await pool.query(`INSERT INTO warehouses (business_id, branch_id, name, is_default) VALUES ($1, $2, $3, $4)`, [biz?.id, b.id, `W${i}`, i === 0]);
+      }
+      const newProduct = async (sku: string): Promise<string> =>
+        (
+          await pool.query<{ id: string }>(
+            `WITH p AS (INSERT INTO products (business_id, sku, base_price_minor, price_currency, unit) VALUES ($1, $2, 500, 'ILS', 'piece') RETURNING business_id, id)
+             INSERT INTO product_translations (business_id, product_id, locale, name) SELECT business_id, id, 'en', 'Before' FROM p RETURNING product_id AS id`,
+            [biz?.id, sku],
+          )
+        ).rows[0]?.id ?? '';
+      const simple = await newProduct('MOV-1');
+      const varied = await newProduct('MOV-2');
+      await pool.query(`INSERT INTO product_variants (business_id, product_id, sku) VALUES ($1, $2, 'MOV-2-A'), ($1, $2, 'MOV-2-B')`, [biz?.id, varied]);
+      // The configuration's own writes, as the principal the configure
+      // command runs as (the stock-ledger harness's configureRaw).
+      const cfg = await pool.connect();
+      try {
+        await cfg.query('BEGIN');
+        await cfg.query(`SELECT set_config('app.tenant_id', $1, true), set_config('app.business_id', $2, true)`, [tenant?.id, biz?.id]);
+        await cfg.query('SET LOCAL ROLE daftar_inventory_internal');
+        await cfg.query(`UPDATE products SET track_inventory = true, unit_code = 'piece', unit_decimals = 0 WHERE business_id = $1`, [biz?.id]);
+        await cfg.query(`INSERT INTO product_variants (business_id, product_id, is_base) VALUES ($1, $2, true)`, [biz?.id, simple]);
+        await cfg.query('COMMIT');
+      } finally {
+        cfg.release();
+      }
+
+      const protectedRows = async (): Promise<string[]> =>
+        (
+          await pool.query<{ t: string }>(
+            `SELECT concat_ws(':', 'acc', id, business_id, code, type, system_key, is_active) AS t FROM accounts
+             UNION ALL SELECT concat_ws(':', 'je', id, business_id, entry_date, source_type, source_id) FROM journal_entries
+             UNION ALL SELECT concat_ws(':', 'jl', id, journal_entry_id, account_id, debit_minor, credit_minor) FROM journal_lines
+             UNION ALL SELECT concat_ws(':', 'bind', business_id, source_type, source_id, journal_entry_id) FROM accounting_source_bindings
+             UNION ALL SELECT concat_ws(':', 'src', source_type, sort_order) FROM accounting_source_types
+             UNION ALL SELECT concat_ws(':', 'biz', id, tenant_id, base_currency, timezone, financial_started_at) FROM businesses
+             UNION ALL SELECT concat_ws(':', 'wh', business_id, id, branch_id, name, is_default, status) FROM warehouses
+             UNION ALL SELECT concat_ws(':', 'bw', business_id, warehouse_id, branch_id) FROM branch_warehouses
+             UNION ALL SELECT concat_ws(':', 'p', business_id, id, sku, base_price_minor, unit, version, status, track_inventory, unit_code, unit_decimals) FROM products
+             UNION ALL SELECT concat_ws(':', 'v', business_id, id, product_id, sku, price_minor, attributes, status, is_base) FROM product_variants
+             UNION ALL SELECT concat_ws(':', 'kind', movement_kind, qty_sign, requires_reason, registered_by) FROM stock_movement_kinds`,
+          )
+        ).rows
+          .map((x) => x.t)
+          .sort();
+      const before = await protectedRows();
+      expect(before.filter((t) => t.startsWith('p:') && t.endsWith(':t:piece:0'))).toHaveLength(2);
+      expect(before.filter((t) => t.startsWith('v:') && t.endsWith(':t'))).toHaveLength(1);
+      // The one protected change 0061 is authorized to make (contract A-14(e)).
+      const after = [...before, 'src:inventory_adjustment:4', 'src:inventory_opening:5'].sort();
+
+      const applied = await runMigrations(url10);
+      expect(applied).toEqual(migrationsAfter(FROZEN));
+      expect(applied.slice(0, 2)).toEqual(['0061_inventory_movement_sources.sql', '0062_inventory_movement_commands.sql']);
+
+      // Books, catalog, configuration and the movement-kind seed are exactly
+      // as they were, plus 0061's two accounting source types — named here
+      // rather than hashed away.
+      expect(await protectedRows()).toEqual(after);
+
+      // The ledger is still empty, and so is every new document table and
+      // bridge: an upgrade writes no movement and invents no document.
+      const counts = (
+        await pool.query<{ t: string; n: number }>([...LEDGER, ...S3_TABLES].map((t) => `SELECT '${t}' AS t, count(*)::int AS n FROM ${t}`).join(' UNION ALL '))
+      ).rows.reduce<Record<string, number>>((acc, r) => ({ ...acc, [r.t]: r.n }), {});
+      expect(counts).toEqual(Object.fromEntries([...LEDGER, ...S3_TABLES].map((t) => [t, 0])));
+
+      // The registries are exactly the checkpoint's rows plus P3-S3's
+      // (§2.1 step 7, §2.5, A-14(e)).
+      expect(await registries()).toEqual(
+        [
+          ...CHECKPOINT_REGISTRIES,
+          'type:inventory_adjustment:P3-S3',
+          'type:inventory_opening:P3-S3',
+          'type:inventory_transfer:P3-S3',
+          'type:stocktake:P3-S3',
+          'map:inventory.adjust:adjustment:P3-S3',
+          'map:inventory.damage:damage:P3-S3',
+          'map:inventory.opening:inventory_opening:P3-S3',
+          'map:inventory.stocktake_finalize:stocktake:P3-S3',
+          'map:inventory.transfer:transfer_in:P3-S3',
+          'map:inventory.transfer:transfer_out:P3-S3',
+          'op:inventory.adjust:P3-S3',
+          'op:inventory.damage:P3-S3',
+          'op:inventory.opening:P3-S3',
+          'op:inventory.stocktake_count:P3-S3',
+          'op:inventory.stocktake_finalize:P3-S3',
+          'op:inventory.stocktake_open:P3-S3',
+          'op:inventory.transfer:P3-S3',
+          'acct:post:inventory_adjustment',
+          'acct:post:inventory_opening',
+        ].sort(),
+      );
+
+      // Every new table and bridge arrived with row security ENABLED and
+      // FORCED — a protection installed later is a window (§2.6).
+      expect(
+        (
+          await pool.query<{ t: string }>(
+            `SELECT relname::text AS t FROM pg_class WHERE relname = ANY ($1::text[]) AND relkind = 'r' AND relrowsecurity AND relforcerowsecurity`,
+            [S3_TABLES],
+          )
+        ).rows
+          .map((x) => x.t)
+          .sort(),
+      ).toEqual([...S3_TABLES].sort());
+
+      // The existing business lives with the new rule: its zero-stock tracked
+      // product archives through the A-19 guard (rolled back — only the
+      // verdict is wanted).
+      const arch = await pool.connect();
+      try {
+        await arch.query('BEGIN');
+        const r = await arch.query(`UPDATE products SET status = 'archived' WHERE business_id = $1 AND id = $2`, [biz?.id, simple]);
+        expect(r.rowCount).toBe(1);
+      } finally {
+        await arch.query('ROLLBACK').catch(() => undefined);
+        arch.release();
+      }
+      expect(await protectedRows()).toEqual(after);
+
+      // Neither internal principal was left the ownership-transfer authority.
+      for (const role of ['daftar_inventory_internal', 'daftar_accounting_internal']) {
+        expect((await pool.query<{ c: boolean }>(`SELECT has_schema_privilege($1, 'public', 'CREATE') AS c`, [role])).rows[0]?.c, role).toBe(false);
+      }
+
+      // Second run does nothing.
+      expect(await runMigrations(url10)).toEqual([]);
+    } finally {
+      await pool.end();
+      await admin.query(`DROP DATABASE IF EXISTS ${db10} WITH (FORCE)`).catch(() => undefined);
     }
   }, 180_000);
 });
