@@ -15,6 +15,22 @@ function resolveName(translations: Record<string, string>, locale: LocaleCode): 
 }
 
 /**
+ * P3-AL-52: the database refuses any ordinary write that touches the hidden
+ * base variant (`product_variants_10_base_variant_authority`,
+ * `catalog.base_variant_not_mutable`). Such a refusal is a statement about
+ * existing truth, not an outage and not a permission problem, so it is
+ * reported as a stable 409 carrying the database's own code. Anything else is
+ * left untouched for the caller to handle.
+ */
+function refuseBaseVariantMutation(e: unknown): void {
+  if (e instanceof Error && /^catalog\.base_variant_not_mutable\b/.test(e.message)) {
+    throw AppError.conflict('CONFLICT', 'The base variant of a product is system stock identity and cannot be changed', {
+      catalogCode: 'catalog.base_variant_not_mutable',
+    });
+  }
+}
+
+/**
  * Catalog (§56–58): industry-neutral. No stock quantity fields, no COGS, no
  * dependency on Accounting/Ledger/Sales/Payments/Inventory (architecture guard
  * enforced by static CI checks §114). SKU/barcode uniqueness scope = business.
@@ -71,6 +87,8 @@ export class CatalogService {
       throw AppError.validation({ limit: ['must_be_1_to_100'] });
     }
     const search = typeof query.search === 'string' && query.search.trim().length > 0 ? query.search.trim() : null;
+    // P3-AL-52: variant-identifier matching never considers the hidden base
+    // variant — stated explicitly rather than relying on its NULL sku/barcode.
 
     const rows = (
       await this.db.scoped<{
@@ -94,7 +112,7 @@ export class CatalogService {
                 p.sku ILIKE '%' || $2 || '%' OR
                 p.barcode ILIKE '%' || $2 || '%' OR
                 EXISTS (SELECT 1 FROM product_variants v
-                        WHERE v.business_id = p.business_id AND v.product_id = p.id
+                        WHERE v.business_id = p.business_id AND v.product_id = p.id AND v.is_base = false
                           AND (v.sku ILIKE '%' || $2 || '%' OR v.barcode ILIKE '%' || $2 || '%')))
            AND ($3::text IS NULL OR (p.created_at, p.id) < (SELECT created_at, id FROM products WHERE business_id = $1 AND id = $3::uuid))
          ORDER BY p.created_at DESC, p.id DESC
@@ -141,11 +159,14 @@ export class CatalogService {
     ).rows[0];
     if (!p) throw AppError.notFound('Product not found');
 
+    // P3-AL-52: the hidden base variant is system stock identity, not a
+    // merchant variant. A simple product with tracking enabled still renders
+    // as a simple product — the base row never reaches `VariantDto[]`.
     const variants = (
       await this.db.scoped<{ id: string; attributes: Record<string, string>; sku: string | null; barcode: string | null; price_minor: string | null }>(
         this.scope(m),
         `SELECT id, attributes, sku, barcode, price_minor::text
-         FROM product_variants WHERE business_id = $1 AND product_id = $2 AND status <> 'archived' ORDER BY created_at`,
+         FROM product_variants WHERE business_id = $1 AND product_id = $2 AND status <> 'archived' AND is_base = false ORDER BY created_at`,
         [m.businessId, id],
       )
     ).rows;
@@ -259,6 +280,7 @@ export class CatalogService {
         await this.audit.recordTx(c, { action: 'catalog.product_created', entity: 'product', entityId: id });
       });
     } catch (e) {
+      refuseBaseVariantMutation(e);
       const pg = e as { code?: string; constraint?: string };
       if (pg.code === '23503') throw AppError.validation({ categoryId: ['category_not_in_business'] });
       if (pg.code === '23505') throw AppError.conflict('CONFLICT', 'SKU or barcode already exists in this business');
