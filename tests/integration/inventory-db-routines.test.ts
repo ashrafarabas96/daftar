@@ -491,6 +491,97 @@ describe('inventory_configure_product (P3-AL-04, P3-AL-03, P3-AL-55 §G)', () =>
   });
 });
 
+// ── replay-registry hygiene never makes a consumer wait ────────────────────
+
+/**
+ * Security review finding (availability): the opportunistic prune of expired
+ * uses in `inventory_assertion_consume` was a plain DELETE, which row-locks
+ * every expired row. While one consuming transaction stayed open, every other
+ * consume — in ANY tenant — queued behind it on those rows. Only the
+ * transaction that wins a transaction-scoped advisory lock prunes now; every
+ * other one skips hygiene and never waits.
+ */
+describe('assertion-use hygiene is non-blocking (P3-AL-55 §G step 11)', () => {
+  const expiredCount = async (): Promise<number> =>
+    Number(
+      (
+        await ownerPool().query<{ n: string }>(
+          `SELECT count(*)::text AS n FROM inventory_assertion_uses WHERE consumed_at < clock_timestamp() - interval '1 hour'`,
+        )
+      ).rows[0]?.n,
+    );
+
+  async function seedExpired(n: number): Promise<void> {
+    await ownerPool().query(
+      `INSERT INTO inventory_assertion_uses (jti, xact, op_code, business_id, consumed_at)
+       SELECT gen_random_uuid(), pg_current_xact_id(), 'inventory.configure_product', $1, clock_timestamp() - interval '2 hours'
+       FROM generate_series(1, $2)`,
+      [A.business, n],
+    );
+  }
+
+  /** An open daftar_app transaction that has consumed an assertion for `productId` in `biz`. Caller ends it. */
+  async function openConsumer(biz: Biz, productId: string, unit: string, timeouts = false): Promise<Client> {
+    const c = new Client({ connectionString: appDbUrl });
+    await c.connect();
+    await c.query('BEGIN');
+    if (timeouts) {
+      await c.query(`SET LOCAL lock_timeout = '2s'`);
+      await c.query(`SET LOCAL statement_timeout = '5s'`);
+    }
+    await c.query(`SELECT set_config('app.tenant_id', $1, true), set_config('app.business_id', $2, true)`, [biz.tenant, biz.business]);
+    const digest = invpl(CONFIGURE, biz.tenant, biz.business, configureFields(productId, true, unit, null));
+    await c.query(`SELECT set_config('app.inventory_assertion', $1, true)`, [
+      mint({ actor, tenant: biz.tenant, business: biz.business, op: CONFIGURE, digest }).assertion,
+    ]);
+    await c.query(`SELECT * FROM inventory_configure_product($1, true, $2, NULL)`, [productId, unit]);
+    return c;
+  }
+
+  it('with expired uses present and one consuming transaction left open, a consume in another tenant does not wait', async () => {
+    await seedExpired(5);
+    expect(await expiredCount()).toBeGreaterThanOrEqual(5);
+    const pA = await createProduct(A.business);
+    const pB = await createProduct(B.business);
+
+    const first = await openConsumer(A, pA, 'piece');
+    let second: Client | null = null;
+    try {
+      // The first transaction won the prune and holds row locks on the
+      // expired rows it deleted. The second, in another tenant, must neither
+      // wait for them nor fail: lock_timeout 2 s, statement_timeout 5 s.
+      const started = Date.now();
+      second = await openConsumer(B, pB, 'kg', true);
+      await second.query('COMMIT');
+      expect(Date.now() - started).toBeLessThan(2000);
+      const r = await ownerPool().query(`SELECT track_inventory, unit_code FROM products WHERE id = $1`, [pB]);
+      expect(r.rows).toEqual([{ track_inventory: true, unit_code: 'kg' }]);
+    } finally {
+      await second?.end().catch(() => undefined);
+      await first.query('ROLLBACK').catch(() => undefined);
+      await first.end().catch(() => undefined);
+    }
+  });
+
+  it('expired uses are still pruned by a later consume, and a live use is never pruned', async () => {
+    await seedExpired(3);
+    expect(await expiredCount()).toBeGreaterThanOrEqual(3);
+    const p = await createProduct(A.business);
+    const { jti } = await configure(A, p, true, 'box', null);
+    expect(await expiredCount()).toBe(0);
+    const live = await ownerPool().query(`SELECT 1 FROM inventory_assertion_uses WHERE jti = $1`, [jti]);
+    expect(live.rowCount).toBe(1);
+  });
+
+  it('the fix added no privilege: the internal principal still holds exactly SELECT, INSERT, DELETE on the uses registry', async () => {
+    const r = await ownerPool().query<{ p: string }>(
+      `SELECT string_agg(privilege_type, ',' ORDER BY privilege_type) AS p FROM information_schema.role_table_grants
+       WHERE grantee = 'daftar_inventory_internal' AND table_name = 'inventory_assertion_uses'`,
+    );
+    expect(r.rows[0]?.p).toBe('DELETE,INSERT,SELECT');
+  });
+});
+
 // ── the association routines and the warehouse lifecycle ──────────────────
 
 describe('structure_associate / structure_dissociate_warehouse_branch (P3-AL-15 §B)', () => {
