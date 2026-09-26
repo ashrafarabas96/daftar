@@ -1126,3 +1126,176 @@ export async function supplierIn(pool: Pool, biz: S3Business, fields: Partial<Su
 
 /** The pool the suites read with. */
 export const owner = ownerPool;
+
+// ── one honest command per entry routine (the authority, isolation and
+//    idempotency suites each start from these and depart in exactly one way) ─
+
+/** Full contacts for a supplier, so every text field is bound and can be tampered. */
+export const FULL_CONTACTS: SupplierFields = {
+  name: 'Nablus Paper Co.',
+  phone: '+970 9 234 5678',
+  email: 'orders@nablus-paper.ps',
+  taxIdentifier: 'PS-562-118',
+  notes: 'Delivers on Tuesdays',
+};
+
+/**
+ * The honest two-line draft of `biz` for `supplierId`: piece × 3 at 12.50
+ * with a 1.00 discount, piece2 × 2 at 7.00, a `by_value` landed cost of 2.00
+ * and a `manual` one of 1.00 split 0.60 / 0.40, a reference and notes.
+ */
+export async function honestDraft(
+  q: Queryable,
+  biz: S3Business,
+  supplierId: string,
+  o: Partial<Omit<DraftCommand, 'kind' | 'lines' | 'supplierId'>> = {},
+): Promise<DraftCommand> {
+  return draftCommand(
+    q,
+    supplierId,
+    o.warehouseId ?? biz.w1,
+    [
+      { lineId: randomUUID(), variantId: biz.piece.variantId, qty: '3', unitPriceMinor: '1250', discountMinor: 100n },
+      { lineId: randomUUID(), variantId: biz.piece2.variantId, qty: '2', unitPriceMinor: '700' },
+    ],
+    {
+      supplierReference: 'INV-2291',
+      notes: 'first delivery',
+      landedCosts: [
+        { landedCostId: randomUUID(), mode: 'by_value', amountMinor: 200n, description: 'freight', allocations: null },
+        { landedCostId: randomUUID(), mode: 'manual', amountMinor: 100n, description: 'customs', allocations: [60n, 40n] },
+      ],
+      ...o,
+    },
+  );
+}
+
+/**
+ * Prepare `kind` in `biz` and return the honest command for it; the command
+ * succeeds when run next. Suppliers are created (and archived) through the
+ * real routines; a cancel and a receipt get their draft first.
+ */
+export async function honestS4(c: Queryable, biz: S3Business, kind: S4Kind): Promise<S4Command> {
+  switch (kind) {
+    case 'supplier_create':
+      return supplierCreate(FULL_CONTACTS);
+    case 'supplier_update':
+      return supplierUpdate(await createSupplier(c, biz, FULL_CONTACTS), 1, { ...FULL_CONTACTS, name: 'Nablus Paper Company', notes: null });
+    case 'supplier_archive':
+      return supplierArchive(await createSupplier(c, biz, FULL_CONTACTS), 1);
+    case 'supplier_reactivate': {
+      const id = await createSupplier(c, biz, FULL_CONTACTS);
+      await runCommand(c, biz, supplierArchive(id, 1));
+      return supplierReactivate(id, 2);
+    }
+    case 'purchase_draft':
+      return honestDraft(c, biz, await createSupplier(c, biz, FULL_CONTACTS));
+    case 'purchase_cancel': {
+      const d = await honestDraft(c, biz, await createSupplier(c, biz, FULL_CONTACTS));
+      await runCommand(c, biz, d);
+      return cancelCommand(d.purchaseId, d.warehouseId, 1);
+    }
+    case 'purchase_receive': {
+      const d = await honestDraft(c, biz, await createSupplier(c, biz, FULL_CONTACTS));
+      await runCommand(c, biz, d);
+      return (await prepareReceipt(c, biz, d.purchaseId)).cmd;
+    }
+  }
+}
+
+/** Every single-field tamper of a command (the field name and the tampered command), for the T-02 matrix. */
+export function s4Tampers(cmd: S4Command, other: S3Business): readonly { field: string; cmd: S4Command }[] {
+  const out: { field: string; cmd: S4Command }[] = [];
+  const texts = (f: SupplierFields): { field: string; fields: SupplierFields }[] => [
+    { field: 'name', fields: { ...f, name: `${f.name}.` } },
+    { field: 'phone', fields: { ...f, phone: f.phone === null ? '+970 1' : null } },
+    { field: 'email', fields: { ...f, email: 'other@example.ps' } },
+    { field: 'tax identifier', fields: { ...f, taxIdentifier: 'PS-000' } },
+    { field: 'notes', fields: { ...f, notes: f.notes === null ? 'a note' : `${f.notes}!` } },
+  ];
+  switch (cmd.kind) {
+    case 'supplier_create':
+      out.push({ field: 'supplier id', cmd: { ...cmd, supplierId: randomUUID() } });
+      for (const t of texts(cmd.fields)) out.push({ field: t.field, cmd: { ...cmd, fields: t.fields } });
+      break;
+    case 'supplier_update':
+      out.push({ field: 'supplier id', cmd: { ...cmd, supplierId: randomUUID() } });
+      out.push({ field: 'expected revision', cmd: { ...cmd, expectedRevision: cmd.expectedRevision + 1 } });
+      for (const t of texts(cmd.fields)) out.push({ field: t.field, cmd: { ...cmd, fields: t.fields } });
+      break;
+    case 'supplier_archive':
+    case 'supplier_reactivate':
+      out.push({ field: 'supplier id', cmd: { ...cmd, supplierId: randomUUID() } });
+      out.push({ field: 'expected revision', cmd: { ...cmd, expectedRevision: cmd.expectedRevision + 1 } });
+      break;
+    case 'purchase_draft': {
+      const [l1, l2] = cmd.lines;
+      const [c1, c2] = cmd.landedCosts;
+      if (l1 === undefined || l2 === undefined || c1 === undefined || c2 === undefined) break;
+      out.push({ field: 'purchase id', cmd: { ...cmd, purchaseId: randomUUID() } });
+      out.push({ field: 'expected revision', cmd: { ...cmd, expectedRevision: cmd.expectedRevision + 1 } });
+      out.push({ field: 'supplier', cmd: { ...cmd, supplierId: randomUUID() } });
+      out.push({ field: 'warehouse', cmd: { ...cmd, warehouseId: other.w1 } });
+      out.push({ field: 'previous warehouse', cmd: { ...cmd, previousWarehouseId: other.w2 } });
+      out.push({ field: 'currency', cmd: { ...cmd, currency: 'USD' } });
+      out.push({ field: 'document date', cmd: { ...cmd, documentDate: '2020-01-01' } });
+      out.push({ field: 'supplier reference', cmd: { ...cmd, supplierReference: 'INV-2292' } });
+      out.push({ field: 'notes', cmd: { ...cmd, notes: null } });
+      out.push({ field: 'tax', cmd: { ...cmd, taxMinor: 1n } });
+      out.push({ field: 'line id', cmd: { ...cmd, lines: [{ ...l1, lineId: randomUUID() }, l2] } });
+      out.push({ field: 'variant', cmd: { ...cmd, lines: [{ ...l1, variantId: other.piece.variantId }, l2] } });
+      out.push({ field: 'qty', cmd: { ...cmd, lines: [{ ...l1, qty: '4' }, l2] } });
+      out.push({ field: 'unit price', cmd: { ...cmd, lines: [{ ...l1, unitPriceMinor: '1250.0000000001' }, l2] } });
+      out.push({ field: 'discount', cmd: { ...cmd, lines: [{ ...l1, discountMinor: l1.discountMinor + 1n }, l2] } });
+      out.push({ field: 'line order', cmd: { ...cmd, lines: [l2, l1] } });
+      out.push({ field: 'a line dropped', cmd: { ...cmd, lines: [l1] } });
+      out.push({ field: 'landed cost id', cmd: { ...cmd, landedCosts: [{ ...c1, landedCostId: randomUUID() }, c2] } });
+      out.push({ field: 'landed amount', cmd: { ...cmd, landedCosts: [{ ...c1, amountMinor: c1.amountMinor + 1n }, c2] } });
+      out.push({ field: 'landed description', cmd: { ...cmd, landedCosts: [{ ...c1, description: 'freight in' }, c2] } });
+      out.push({ field: 'landed mode', cmd: { ...cmd, landedCosts: [c1, { ...c2, mode: 'by_value', allocations: null }] } });
+      out.push({ field: 'manual allocation', cmd: { ...cmd, landedCosts: [c1, { ...c2, allocations: [59n, 41n] }] } });
+      out.push({ field: 'a landed cost dropped', cmd: { ...cmd, landedCosts: [c1] } });
+      break;
+    }
+    case 'purchase_cancel':
+      out.push({ field: 'purchase id', cmd: { ...cmd, purchaseId: randomUUID() } });
+      out.push({ field: 'warehouse', cmd: { ...cmd, warehouseId: other.w1 } });
+      out.push({ field: 'draft revision', cmd: { ...cmd, draftRevision: cmd.draftRevision + 1 } });
+      break;
+    case 'purchase_receive': {
+      const [l1, l2] = cmd.lines;
+      if (l1 === undefined || l2 === undefined) break;
+      out.push({ field: 'purchase id', cmd: { ...cmd, purchaseId: randomUUID() } });
+      out.push({ field: 'warehouse', cmd: { ...cmd, warehouseId: other.w1 } });
+      out.push({ field: 'draft revision', cmd: { ...cmd, draftRevision: cmd.draftRevision + 1 } });
+      out.push({ field: 'supplier', cmd: { ...cmd, supplierId: randomUUID() } });
+      out.push({ field: 'supplier revision', cmd: { ...cmd, supplierRevision: cmd.supplierRevision + 1 } });
+      out.push({ field: 'document date', cmd: { ...cmd, documentDate: '2020-01-01' } });
+      out.push({ field: 'currency', cmd: { ...cmd, currency: 'USD' } });
+      out.push({ field: 'rate id', cmd: { ...cmd, rate: { ...cmd.rate, rateId: randomUUID(), source: 'manual' } } });
+      out.push({ field: 'rate', cmd: { ...cmd, rate: { ...cmd.rate, rate: '1.0000000001' } } });
+      out.push({ field: 'rate instant', cmd: { ...cmd, rate: { ...cmd.rate, at: new Date(cmd.rate.at.getTime() + 1000) } } });
+      out.push({ field: 'total txn', cmd: { ...cmd, totalTxnMinor: cmd.totalTxnMinor + 1n } });
+      out.push({ field: 'total base', cmd: { ...cmd, totalBaseMinor: cmd.totalBaseMinor + 1n } });
+      out.push({ field: 'coverage header id', cmd: { ...cmd, coverageAdjustmentId: randomUUID() } });
+      out.push({ field: 'line id', cmd: { ...cmd, lines: [{ ...l1, lineId: randomUUID() }, l2] } });
+      out.push({ field: 'variant', cmd: { ...cmd, lines: [{ ...l1, variantId: other.piece.variantId }, l2] } });
+      out.push({ field: 'qty', cmd: { ...cmd, lines: [{ ...l1, qtyQ4: l1.qtyQ4 + 1n }, l2] } });
+      out.push({
+        field: 'base share',
+        cmd: {
+          ...cmd,
+          lines: [
+            { ...l1, baseShareMinor: l1.baseShareMinor - 1n },
+            { ...l2, baseShareMinor: l2.baseShareMinor + 1n },
+          ],
+        },
+      });
+      out.push({ field: 'covered', cmd: { ...cmd, lines: [{ ...l1, coveredQ4: 10000n }, l2] } });
+      out.push({ field: 'catch-up', cmd: { ...cmd, lines: [{ ...l1, catchUpMinor: -1n }, l2] } });
+      out.push({ field: 'line order', cmd: { ...cmd, lines: [l2, l1] } });
+      break;
+    }
+  }
+  return out;
+}
