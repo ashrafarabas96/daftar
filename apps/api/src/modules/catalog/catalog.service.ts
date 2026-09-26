@@ -6,6 +6,8 @@ import { AuditService, OutboxService, newId } from '../audit/audit.service';
 import { EntitlementService } from '../entitlements/entitlements.service';
 import { parsePagination, toPage } from '../../common/validation';
 import type { MembershipContext } from '../tenancy/tenancy.service';
+import { inventoryRefusal } from '../inventory/inventory-errors';
+import { productHoldsStock } from '../inventory/inventory-stock-read';
 import type { z } from 'zod';
 import type { CategoryCreateSchema, ProductCreateSchema, ProductUpdateSchema } from './catalog.schemas';
 
@@ -358,6 +360,10 @@ export class CatalogService {
 
   async archiveProduct(m: MembershipContext, id: string): Promise<void> {
     await this.db.withTransaction(this.scope(m), async (c) => {
+      // P3-AL-41 (PHASE_3_S3_CONTRACT A-19): the inventory check, so the
+      // refusal is typed. `products_30_archive_requires_zero_stock` stays the
+      // invariant for every writer.
+      if (await productHoldsStock(c, m.businessId, id)) throw inventoryRefusal('inventory.product_has_stock');
       const r = await c.query(
         `UPDATE products SET status = 'archived', updated_at = now()
          WHERE business_id = $1 AND id = $2 AND status <> 'archived'`,

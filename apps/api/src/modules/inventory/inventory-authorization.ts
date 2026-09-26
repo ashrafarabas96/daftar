@@ -25,6 +25,15 @@ const OPERATION_AUTHORITY: Readonly<Record<InventoryOperationCode, { readonly pe
   'inventory.configure_product': { permission: 'inventory.adjust', scope: 'warehouses' },
   'structure.associate_warehouse_branch': { permission: 'warehouse.manage', scope: 'business_wide' },
   'structure.dissociate_warehouse_branch': { permission: 'warehouse.manage', scope: 'business_wide' },
+  // P3-S3 (PHASE_3_S3_CONTRACT A-21): every movement command is scoped by the
+  // warehouses it affects — both of a transfer, each line's for an opening.
+  'inventory.transfer': { permission: 'inventory.transfer', scope: 'warehouses' },
+  'inventory.adjust': { permission: 'inventory.adjust', scope: 'warehouses' },
+  'inventory.damage': { permission: 'inventory.adjust', scope: 'warehouses' },
+  'inventory.stocktake_open': { permission: 'inventory.stocktake', scope: 'warehouses' },
+  'inventory.stocktake_count': { permission: 'inventory.stocktake', scope: 'warehouses' },
+  'inventory.stocktake_finalize': { permission: 'inventory.stocktake', scope: 'warehouses' },
+  'inventory.opening': { permission: 'inventory.adjust', scope: 'warehouses' },
 };
 
 /**
