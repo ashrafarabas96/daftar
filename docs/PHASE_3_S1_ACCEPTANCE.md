@@ -2,18 +2,31 @@
 
 > **What this is.** The evidence page for slice **P3-S1 — Inventory and catalog primitives** (`docs/PHASE_3_EXECUTION_PLAN.md` §3). It maps each "Must prove" item of the plan to the permanent test that proves it, records every place where the lock and the code disagreed and how the conflict was ruled, and lists what P3-S1 found and did not close. It authorizes nothing: P3-S2 begins only when the Tech Lead says so.
 >
-> **ما هذه الوثيقة.** سجل أدلة الشريحة P3-S1. الهجرات `0053`–`0058` ما زالت **مرشّحة** وغير مجمّدة؛ تُجمَّد فقط بعد قبول القائد التقني. لا يوجد في هذه الشريحة أي جدول مخزون أو حركة أو شراء.
+> **ما هذه الوثيقة.** سجل أدلة الشريحة P3-S1. قُبِلَت الشريحة وجُمِّدَت هجراتها `0053`–`0058`؛ من الآن لا تُعدَّل بايتاتها أبدًا وأي تصحيح يكون بهجرة جديدة. لا يوجد في هذه الشريحة أي جدول مخزون أو حركة أو شراء.
 
-## 0. Status: READY FOR TECH LEAD REVIEW
+## 0. Status: ACCEPTED / FROZEN — P3-S1 PASS / CLOSED
 
-- Branch: `phase/3-inventory-purchases-suppliers` · Draft PR **#4** into `main` (stays draft).
+- Tech Lead verdict: **P3-S1 — ACCEPTED, PASS**, at accepted head `f1cc4c47a43defa969d7beff7f1c795189eee1c1` (2026-09-26), on the evidence of `DAFTAR CI` **36223470804**, green on that exact SHA on all five jobs, attempt 1.
+- Freeze commit: `39e4ebc59d488b3d59b2136a38538e6de0d7b3b9` — `chore(phase3): freeze accepted P3-S1 migrations`, which appended `0053`–`0058` to `MIGRATION_MANIFEST.json` and moved `frozenThrough` to `0058_accounting_entry_date_guard.sql` (59 frozen migrations). The sealed head that carries this page and its exact-SHA CI run are recorded in PR #4 (a commit cannot contain its own hash).
+- Frozen hashes:
+
+| migration | SHA-256 | state |
+|---|---|---|
+| `0053_inventory_units_and_product_configuration.sql` | `63940fbcf2c5a3cd99a20280cd83fe53198a0e2d0e2dc0db7ed80d31c47bd3e6` | FROZEN |
+| `0054_inventory_assertion_authority.sql` | `7205dea79f090ecf8ded122557d92b2b9669463ce3e5aefca466a968ef9aa450` | FROZEN |
+| `0055_inventory_configure_product.sql` | `6652cd5949ad2d9bdda559e23174b850f3cf6bcc2a54d307c5fb9a0a1f5fa2b7` | FROZEN |
+| `0056_inventory_branch_warehouses.sql` | `2de288c370e90df5c304ccf354638d178452798662d83054c6a8df8c6f7195a5` | FROZEN |
+| `0057_inventory_permissions.sql` | `f6c7b56f920215cc8ba3e84d24e4f353329edab8dccb8d4e43a66712f7c1941d` | FROZEN |
+| `0058_accounting_entry_date_guard.sql` | `455973c26bfdf0a185112a4e20a24676d54b5c4c7d4d1232f3e2dce3046b431a` | FROZEN |
+
+- Branch: `phase/3-inventory-purchases-suppliers` · Draft PR **#4** into `main` (stays draft; Phase 3 merges into `main` only on the Tech Lead's closure directive, as Phase 2 did).
 - Base: accepted P3-S0 checkpoint `ec08307d95ab0a50f826624a4e848d2c53398e51`, on `main` at `0f2b09e7f2bd1015053ff2cb79ad1ceafc25bc6f`.
-- Candidate head and its exact-SHA CI run: recorded in the PR, not here (a commit cannot name its own hash).
-- `MIGRATION_MANIFEST.json` is unchanged: 53 entries, `frozenThrough = 0052_accounting_journal_lines_rls_performance.sql`. The six P3-S1 files are candidates; `npm run gate:phase3:s1` asserts that none of them is frozen and that nothing past `0058` exists.
 
-`READY FOR TECH LEAD REVIEW` means STOP. It does not freeze the candidates, create `0059`, or start P3-S2.
+`npm run gate:phase3:s1` is now a **permanent regression gate**: it holds its own copy of the six digests and requires each file to hash to it on disk and in the manifest, reads `frozenThrough` as a floor at `0058`, and no longer forbids a successor. Proven red before it was trusted: an edited byte in `0055`, the boundary moved back to `0052`, `0056` removed from the manifest, `0057` and its manifest entry moved together, and a hole at `0054` are each refused; a successor `0059` is accepted.
 
-## 1. Candidate migrations
+The next unopened slice is **P3-S2**. It is not started and not authorized.
+
+## 1. The P3-S1 migrations
 
 | migration | delivers | lock |
 |---|---|---|
@@ -118,4 +131,4 @@ No stock, movement, transfer, adjustment or purchase table, and no path that mov
 
 ## ملخص
 
-الشريحة P3-S1 جاهزة لمراجعة القائد التقني. الهجرات `0053`–`0058` مرشّحة وغير مجمّدة، والتجميد الحالي باقٍ عند `0052`. كل بند «يجب إثباته» في الخطة له اختبار دائم مذكور أعلاه. المراجعة الأمنية المستقلة لم تجد ثغرة حرجة أو عالية أو متوسطة، وأُصلحت الملاحظتان المنخفضتان في نطاق المخزون. المُشغِّل الجديد لا يسبب فشل ميزانية الأداء؛ كلفته مقيسة 0.13ms. الخطوة التالية الوحيدة المسموح بها هي قرار القائد التقني.
+قبل القائد التقني الشريحة P3-S1 (PASS) عند `f1cc4c4`، وجُمِّدَت هجراتها `0053`–`0058` فأصبح حد التجميد `0058` (59 هجرة). كل بند «يجب إثباته» في الخطة له اختبار دائم مذكور أعلاه، وبوابة `gate:phase3:s1` أصبحت بوابة انحدار دائمة لا تمنع الشريحة التالية. الديون TD-12 و TD-13 و TD-14 مفتوحة ومسجّلة، والقرار OD-03 (ضريبة الشراء) مفتوح. الشريحة التالية P3-S2 لم تبدأ وغير مصرّح بها.
