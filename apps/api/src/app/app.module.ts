@@ -25,6 +25,9 @@ import { MediaService } from '../modules/catalog/media.service';
 import { CatalogController } from '../modules/catalog/catalog.controller';
 import { PlatformController, HealthController } from '../modules/platform/platform.controller';
 import { AccountingController } from '../modules/accounting/accounting.controller';
+import { InventoryAuthorizationService } from '../modules/inventory/inventory-authorization';
+import { InventoryConfigurationService } from '../modules/inventory/inventory-configuration.service';
+import { InventoryConfigurationController } from '../modules/inventory/inventory-configuration.controller';
 import { AdminService } from '../modules/admin/admin.service';
 import { AdminController } from '../modules/admin/admin.controller';
 import { OutboxPublisher } from '../modules/outbox/publisher';
@@ -59,6 +62,7 @@ export class AppModule implements NestModule {
         HealthController,
         EntitlementsController,
         AccountingController,
+        InventoryConfigurationController,
         AdminController,
       ],
       providers: [
@@ -68,6 +72,10 @@ export class AppModule implements NestModule {
         ...merchantInfraProviders(config, options),
         ...accountingProviders(),
         ...inventoryAuthorityProviders(),
+        // P3-AL-33/39: the authorization seam every inventory command uses, and
+        // the first command on it. Composed wherever the minter is, and only there.
+        InventoryAuthorizationService,
+        InventoryConfigurationService,
         ...workerProviders(config, options),
         // Only PROCESS_MODE=all composes the reconciler beside the worker,
         // and only because this composition exists for dev and tests;
