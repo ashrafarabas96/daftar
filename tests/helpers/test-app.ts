@@ -139,6 +139,16 @@ async function installAccountingKey(): Promise<void> {
   }
 }
 
+/** The database side of the inventory assertion key (P3-AL-55 §C) — the platform-only ops command. */
+async function installInventoryKey(): Promise<void> {
+  const pool = new Pool({ connectionString: dbUrl, max: 1 });
+  try {
+    await pool.query(`SELECT inventory_assertion_key_install($1, decode($2, 'base64'))`, [INVENTORY_ASSERTION_KID, INVENTORY_ASSERTION_KEY_B64]);
+  } finally {
+    await pool.end();
+  }
+}
+
 export async function ensurePostgres(): Promise<void> {
   await startOrReuse();
   await ensureDatabase('daftar');
@@ -147,6 +157,7 @@ export async function ensurePostgres(): Promise<void> {
   await runMigrations(dbUrl);
   await installProvisioningKey();
   await installAccountingKey();
+  await installInventoryKey();
 }
 
 let ownerPoolInstance: Pool | null = null;
