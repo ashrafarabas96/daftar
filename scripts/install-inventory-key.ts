@@ -16,8 +16,9 @@
  * compromise does not reach inventory authority, business provisioning and
  * the general ledger at once, and so that each can be rotated without the
  * others. The checks below refuse the most likely operational mistake:
- * pointing two of them at one secret. They compare DECODED bytes, because two
- * base64 spellings of one secret are one secret.
+ * pointing two of them at one secret. They compare the EFFECTIVE HMAC-SHA-256
+ * key of the DECODED bytes, because two base64 spellings of one secret are one
+ * secret, and so are `K` and `K‖0x00` to HMAC.
  *
  * Usage:
  *   BOOTSTRAP_DATABASE_URL=postgres://daftar_platform:...@db/daftar \
@@ -30,6 +31,7 @@
  * key material is never printed, logged, or returned.
  */
 import { Pool } from 'pg';
+import { hmacKeysEquivalent } from '../packages/inventory/src/assertion';
 
 async function main(): Promise<void> {
   if (process.env['MIGRATION_DATABASE_URL'] && !process.env['BOOTSTRAP_DATABASE_URL']) {
@@ -41,11 +43,11 @@ async function main(): Promise<void> {
   if (!keyB64 || Buffer.from(keyB64, 'base64').length < 32) throw new Error('INVENTORY_ASSERTION_KEY must be base64 of at least 32 bytes');
   const secret = Buffer.from(keyB64, 'base64');
   const provisioning = process.env['PROVISIONING_ASSERTION_KEY'];
-  if (provisioning && secret.equals(Buffer.from(provisioning, 'base64'))) {
+  if (provisioning && hmacKeysEquivalent(secret, Buffer.from(provisioning, 'base64'))) {
     throw new Error('INVENTORY_ASSERTION_KEY must not be the same secret as PROVISIONING_ASSERTION_KEY (separate domains, rotated independently)');
   }
   const accounting = process.env['ACCOUNTING_ASSERTION_KEY'];
-  if (accounting && secret.equals(Buffer.from(accounting, 'base64'))) {
+  if (accounting && hmacKeysEquivalent(secret, Buffer.from(accounting, 'base64'))) {
     throw new Error('INVENTORY_ASSERTION_KEY must not be the same secret as ACCOUNTING_ASSERTION_KEY (separate domains, rotated independently)');
   }
   const kid = process.env['INVENTORY_ASSERTION_KID'] ?? 'v1';
