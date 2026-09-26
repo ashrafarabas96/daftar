@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
+import { INVENTORY_ASSERTION_TTL_SECONDS, splitInventoryAssertion } from '@daftar/inventory';
 import { loadConfig } from '../../apps/api/src/config';
+import { InventoryAssertionMinterService } from '../../apps/api/src/modules/inventory/inventory-assertion.minter';
+import { AppModule } from '../../apps/api/src/app/app.module';
+import { MerchantApiModule } from '../../apps/api/src/app/merchant-api.module';
+import { PlatformApiModule } from '../../apps/api/src/app/platform-api.module';
+import { WorkerModule } from '../../apps/api/src/app/worker.module';
+import { ReconcilerModule } from '../../apps/api/src/app/reconciler.module';
 
 /**
  * P3-AL-55 §C and signed-authority matrix row P: the inventory command key's
@@ -174,5 +181,101 @@ describe('INVENTORY_ASSERTION_KEY — forbidden outside the merchant API (P3-AL-
     expect(() => loadConfig({ ...RECONCILER, NODE_ENV: nodeEnv, INVENTORY_ASSERTION_KEY: INVENTORY })).toThrow(
       /INVENTORY_ASSERTION_KEY: must NOT be set in PROCESS_MODE=reconciler/,
     );
+  });
+});
+
+// ── the minter (P3-AL-55 §C, §D) ─────────────────────────────────────────
+
+const TEST_BASE: NodeJS.ProcessEnv = {
+  NODE_ENV: 'test',
+  PROCESS_MODE: 'all',
+  APP_DATABASE_URL: 'postgresql://daftar_app:x@localhost/daftar',
+  JWT_SECRET: 'dev-secret-with-at-least-32-characters!',
+};
+
+const ACTOR = '2b1f0c8e-6d0a-4c3e-9f4b-0a1b2c3d4e5f';
+const TENANT = '3c2e1d9f-7e1b-4d4f-8a5c-1b2c3d4e5f60';
+const BUSINESS = '4d3f2e0a-8f2c-4e50-9b6d-2c3d4e5f6071';
+
+describe('InventoryAssertionMinterService (P3-AL-55 §C, §D)', () => {
+  it('mints a ten-component invctl/1 assertion over exactly the claims it was given, living 60 seconds', () => {
+    const minter = new InventoryAssertionMinterService(loadConfig({ ...TEST_BASE, INVENTORY_ASSERTION_KEY: INVENTORY, INVENTORY_ASSERTION_KID: 'inv1' }));
+    expect(minter.configured).toBe(true);
+    const before = Math.floor(Date.now() / 1000);
+    const raw = minter.mint({
+      actorUserId: ACTOR,
+      tenantId: TENANT,
+      businessId: BUSINESS,
+      opCode: 'inventory.configure_product',
+      payloadSha256: 'b'.repeat(64),
+    });
+    const after = Math.floor(Date.now() / 1000);
+    const parts = splitInventoryAssertion(raw);
+    expect(parts.components).toHaveLength(10);
+    expect(parts).toMatchObject({
+      version: 'invctl1',
+      kid: 'inv1',
+      actorUserId: ACTOR,
+      tenantId: TENANT,
+      businessId: BUSINESS,
+      wireOperation: 'inventory:configure_product',
+      payloadSha256: 'b'.repeat(64),
+    });
+    expect(INVENTORY_ASSERTION_TTL_SECONDS).toBe(60);
+    expect(Number(parts.exp)).toBeGreaterThanOrEqual(before + 60);
+    expect(Number(parts.exp)).toBeLessThanOrEqual(after + 60);
+    // A fresh jti per assertion: the caller cannot choose one.
+    const again = splitInventoryAssertion(
+      minter.mint({ actorUserId: ACTOR, tenantId: TENANT, businessId: BUSINESS, opCode: 'inventory.configure_product', payloadSha256: 'b'.repeat(64) }),
+    );
+    expect(again.jti).not.toBe(parts.jti);
+  });
+
+  it('a process without the key cannot mint at all', () => {
+    const minter = new InventoryAssertionMinterService(loadConfig(TEST_BASE));
+    expect(minter.configured).toBe(false);
+    expect(() =>
+      minter.mint({ actorUserId: ACTOR, tenantId: TENANT, businessId: BUSINESS, opCode: 'inventory.configure_product', payloadSha256: 'b'.repeat(64) }),
+    ).toThrow(/INVENTORY_ASSERTION_KEY is not configured/);
+  });
+
+  it('repeats the byte-separation check in EVERY mode, against the provisioning key, under any spelling', () => {
+    // Outside production config validation does not run the comparison; the
+    // minter does, at the point the key is loaded.
+    expect(() => loadConfig({ ...TEST_BASE, INVENTORY_ASSERTION_KEY: AWKWARD, PROVISIONING_ASSERTION_KEY: respell(AWKWARD) })).not.toThrow();
+    expect(
+      () => new InventoryAssertionMinterService(loadConfig({ ...TEST_BASE, INVENTORY_ASSERTION_KEY: AWKWARD, PROVISIONING_ASSERTION_KEY: respell(AWKWARD) })),
+    ).toThrow(/must not be the same secret as PROVISIONING_ASSERTION_KEY/);
+  });
+
+  it('repeats the byte-separation check in EVERY mode, against the accounting key, under any spelling', () => {
+    expect(
+      () => new InventoryAssertionMinterService(loadConfig({ ...TEST_BASE, INVENTORY_ASSERTION_KEY: AWKWARD, ACCOUNTING_ASSERTION_KEY: respell(AWKWARD) })),
+    ).toThrow(/must not be the same secret as ACCOUNTING_ASSERTION_KEY/);
+    expect(
+      () => new InventoryAssertionMinterService(loadConfig({ ...TEST_BASE, INVENTORY_ASSERTION_KEY: INVENTORY, ACCOUNTING_ASSERTION_KEY: ACCOUNTING })),
+    ).not.toThrow();
+  });
+
+  it('refuses a key shorter than 32 bytes when it loads', () => {
+    expect(() => new InventoryAssertionMinterService(loadConfig({ ...TEST_BASE, INVENTORY_ASSERTION_KEY: Buffer.alloc(16, 1).toString('base64') }))).toThrow(
+      /at least 32 bytes/,
+    );
+  });
+});
+
+describe('only the merchant compositions hold the minter (P3-AL-55 §C)', () => {
+  const OPTIONS = { config: {} as never };
+  const holds = (dynamic: { providers?: unknown }): boolean => ((dynamic.providers ?? []) as unknown[]).includes(InventoryAssertionMinterService);
+
+  it('merchant-api and the single dev/test process compose it', () => {
+    expect(holds(MerchantApiModule.register(OPTIONS))).toBe(true);
+    expect(holds(AppModule.register(OPTIONS))).toBe(true);
+  });
+
+  it('platform-api, worker and reconciler do not', () => {
+    expect(holds(PlatformApiModule.register(OPTIONS))).toBe(false);
+    expect(holds(WorkerModule.register(OPTIONS))).toBe(false);
+    expect(holds(ReconcilerModule.register(OPTIONS))).toBe(false);
   });
 });

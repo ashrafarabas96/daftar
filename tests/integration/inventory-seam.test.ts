@@ -3,7 +3,8 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Client, Pool } from 'pg';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import type { AccountingPostingTransaction, PostingCommand } from '../../packages/accounting/src/ports';
+import type { AccountingPostingTransaction, PostingCommand } from '@daftar/accounting';
+import ts from 'typescript';
 import {
   Database,
   TransactionSeamError,
@@ -587,4 +588,141 @@ describe('no flag, option or bypass exists in the seam or the ports', () => {
     const src = code(readFileSync(join(ROOT, file), 'utf8'));
     for (const name of FORBIDDEN) expect(src, name).not.toMatch(new RegExp(`\\b${name}\\b`, 'i'));
   });
+});
+
+// ── rows 3, 4 and 6a — the compile-time half ─────────────────────────────
+
+/**
+ * The type system IS the first half of rows 3, 4 and 6a, so it is tested as
+ * one: each probe below is compiled by the real TypeScript compiler against
+ * the real modules, with the repository's compiler options, and must fail
+ * with the named diagnostic — while the positive control, the same calls
+ * written correctly, must compile with none. A probe that failed for an
+ * unrelated reason would fail with a different code, and this case says so.
+ */
+describe('rows 3, 4 and 6a — compile-time: the signatures admit no escape', () => {
+  const ROOT = join(__dirname, '../..');
+  const DIR = join(ROOT, 'tests/integration');
+  const HEADER = `
+import type { PoolClient } from 'pg';
+import type { AccountingPostingTransaction, PostingCommand } from '@daftar/accounting';
+import type { Database, BusinessScope, BusinessInventoryAccountingTransaction } from '../../apps/api/src/infra/database';
+import type { DatabaseAccountingSourcesAdapter } from '../../apps/api/src/modules/accounting/accounting-sources.adapter';
+import type { DatabaseAccountingPostingAdapter } from '../../apps/api/src/modules/accounting/accounting-posting.adapter';
+declare const db: Database;
+declare const scope: BusinessScope;
+declare const sources: DatabaseAccountingSourcesAdapter;
+declare const posting: DatabaseAccountingPostingAdapter;
+declare const command: PostingCommand;
+declare const client: PoolClient;
+declare const inv: string;
+declare const acct: string;
+export type Unused = [PoolClient, AccountingPostingTransaction, BusinessInventoryAccountingTransaction];
+void [db, scope, sources, posting, command, client, inv, acct];
+`;
+
+  /** [probe name, body, the diagnostic codes it must raise (empty = must compile)] */
+  const PROBES: ReadonlyArray<readonly [string, string, readonly number[]]> = [
+    [
+      'positive control: both seams, used as designed',
+      `export async function ok(): Promise<void> {
+         await db.withBusinessInventoryTransaction(scope, inv, async (tx) => { await tx.query('SELECT 1'); return tx.scope.businessId; });
+         await db.withBusinessInventoryAccountingTransaction(scope, inv, acct, async (tx) => {
+           await tx.query('SELECT 1');
+           await sources.postAdjustmentInTransaction(tx.accounting, { command, reason: 'r' });
+           await posting.postEntryInTransaction(tx.accounting, { command });
+         });
+       }`,
+      [],
+    ],
+    [
+      'row 3: the non-posting handle has no accounting member',
+      `export const p = db.withBusinessInventoryTransaction(scope, inv, async (tx) => sources.postAdjustmentInTransaction(tx.accounting, { command, reason: 'r' }));`,
+      [2339],
+    ],
+    [
+      'row 4: the non-posting handle is not a posting transaction',
+      `export const p = db.withBusinessInventoryTransaction(scope, inv, async (tx) => posting.postEntryInTransaction(tx, { command }));`,
+      [2345],
+    ],
+    [
+      'row 4: its SQL is not a posting transaction either',
+      `export const p = db.withBusinessInventoryTransaction(scope, inv, async (tx) => posting.postEntryInTransaction(tx.query, { command }));`,
+      [2345],
+    ],
+    ['row 4: a raw pg client is not a posting transaction', `export const p = sources.postAdjustmentInTransaction(client, { command, reason: 'r' });`, [2345]],
+    [
+      'row 4: nor is the posting seam handle itself — only its capability',
+      `export const p = db.withBusinessInventoryAccountingTransaction(scope, inv, acct, async (tx) => posting.postEntryInTransaction(tx, { command }));`,
+      [2345],
+    ],
+    ['row 4: a look-alike object cannot be written', `export const fake: AccountingPostingTransaction = {};`, [2741]],
+    [
+      'row 4: the Phase 2 boundary hands out the capability, not a client',
+      `export const p = db.withAccountingTransaction(acct, async (tx) => tx.query('SELECT 1'));`,
+      [2339],
+    ],
+    [
+      'row 3: annotating the non-posting callback as the posting handle does not convert it',
+      `export const p = db.withBusinessInventoryTransaction(scope, inv, async (tx: BusinessInventoryAccountingTransaction) => tx.accounting);`,
+      [2345],
+    ],
+    ['row 6a: seam 1 without an inventory assertion', `export const p = db.withBusinessInventoryTransaction(scope, async () => undefined);`, [2554]],
+    [
+      'row 6a: seam 2 without an inventory assertion',
+      `export const p = db.withBusinessInventoryAccountingTransaction(scope, acct, async () => undefined);`,
+      [2554],
+    ],
+    ['row 6a: an undefined inventory assertion', `export const p = db.withBusinessInventoryTransaction(scope, undefined, async () => undefined);`, [2345]],
+    [
+      'item 3: no option bag',
+      `export const p = db.withBusinessInventoryTransaction(scope, inv, async () => undefined, { skipInventoryAssertion: true });`,
+      [2554],
+    ],
+    ['item 3: no boolean', `export const p = db.withBusinessInventoryAccountingTransaction(scope, inv, acct, async () => undefined, true);`, [2554]],
+  ];
+
+  it('each probe raises exactly its diagnostic, and the positive control compiles clean', () => {
+    const files = new Map(PROBES.map(([, body], i) => [join(DIR, `__seam_probe_${i}__.ts`), `${HEADER}\n${body}\n`] as const));
+    const options: ts.CompilerOptions = {
+      target: ts.ScriptTarget.ES2022,
+      module: ts.ModuleKind.CommonJS,
+      moduleResolution: ts.ModuleResolutionKind.Node10,
+      lib: ['lib.es2022.d.ts'],
+      types: ['node'],
+      strict: true,
+      noUncheckedIndexedAccess: true,
+      esModuleInterop: true,
+      skipLibCheck: true,
+      experimentalDecorators: true,
+      emitDecoratorMetadata: true,
+      noEmit: true,
+    };
+    const host = ts.createCompilerHost(options);
+    const baseGet = host.getSourceFile.bind(host);
+    const baseExists = host.fileExists.bind(host);
+    const baseRead = host.readFile.bind(host);
+    host.fileExists = (f) => files.has(f) || baseExists(f);
+    host.readFile = (f) => files.get(f) ?? baseRead(f);
+    host.getSourceFile = (f, lang, onError, create) => {
+      const text = files.get(f);
+      return text === undefined ? baseGet(f, lang, onError, create) : ts.createSourceFile(f, text, lang);
+    };
+    const program = ts.createProgram([...files.keys()], options, host);
+
+    // Nothing OUTSIDE the probes may fail: an error in the real modules would
+    // make every negative probe pass for the wrong reason.
+    const elsewhere = ts
+      .getPreEmitDiagnostics(program)
+      .filter((d) => d.file === undefined || !files.has(d.file.fileName))
+      .map((d) => ts.flattenDiagnosticMessageText(d.messageText, '\n'));
+    expect(elsewhere).toEqual([]);
+
+    const results = PROBES.map(([name], i) => {
+      const sf = must(program.getSourceFile(join(DIR, `__seam_probe_${i}__.ts`)));
+      const codes = [...program.getSemanticDiagnostics(sf), ...program.getSyntacticDiagnostics(sf)].map((d) => d.code);
+      return [name, [...new Set(codes)].sort()] as const;
+    });
+    expect(results).toEqual(PROBES.map(([name, , codes]) => [name, [...codes].sort()]));
+  }, 120_000);
 });

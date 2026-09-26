@@ -11,7 +11,7 @@ import type { CredentialPayloadEncryptor } from '../../apps/api/src/modules/deli
 import { CredentialDeliveryWorker } from '../../apps/api/src/modules/delivery/delivery-worker.service';
 import { mintProvisioningAssertion, type ProvisioningKind } from '../../apps/api/src/infra/provisioning-assertion';
 import { mintAccountingAssertion, type AccountingAssertionClaims, type AccountingAssertionKey } from '../../packages/accounting/src/assertion';
-import { mintInventoryAssertion, type InventoryAssertionClaims, type InventoryAssertionKey } from '@daftar/inventory';
+import { mintInventoryAssertion, type InventoryAssertionClaims, type InventoryAssertionKey } from '../../packages/inventory/src/assertion';
 
 // The cluster's lifecycle lives in a framework-free module so that evidence
 // tooling can start the same PostgreSQL without importing the application.
