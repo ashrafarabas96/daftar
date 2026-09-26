@@ -1105,7 +1105,10 @@ describe('managed PostgreSQL: 0039 → 0049 under a non-superuser migration prin
                                       'stock_ledger_append_only', 'stock_levels_retain', 'inventory_stock_source_guard_gaps',
                                       'accounting_inventory_adjustment_entry_complete', 'accounting_inventory_opening_entry_complete',
                                       'accounting_inventory_opening_position', 'accounting_opening_balances_30_inventory_opening_guard',
-                                      'accounting_reversals_20_domain_source_guard'))
+                                      'accounting_reversals_20_domain_source_guard',
+                                      -- P3-S4 (0063/0064): the accounting-side completeness triggers and the FX read.
+                                      'accounting_purchase_entry_complete', 'accounting_negative_inventory_cost_adjustment_entry_complete',
+                                      'accounting_purchase_fx_rate'))
               ORDER BY p.proname`,
           )
         ).rows;
@@ -1185,6 +1188,38 @@ describe('managed PostgreSQL: 0039 → 0049 under a non-superuser migration prin
             internal('inventory_stocktake_finalize'),
             internal('inventory_stocktake_open'),
             internal('inventory_transfer_stock'),
+            // P3-S4 (0063): the stock-side source, supplier, allocation and
+            // deficit guards are the internal principal's, all DEFINER (R-24)…
+            internal('negative_inventory_deficits_coverage_consistent'),
+            internal('negative_inventory_deficits_coverage_guard'),
+            internal('purchase_allocations_consistent'),
+            internal('purchase_header_guard'),
+            internal('purchase_landed_cost_freeze'),
+            internal('purchase_source_value_complete'),
+            internal('stock_binding_requires_negative_inventory_cost_adjustment'),
+            internal('stock_binding_requires_purchase'),
+            internal('stock_source_complete_negative_inventory_cost_adjustment'),
+            internal('stock_source_complete_purchase'),
+            internal('stock_source_complete_purchase_header'),
+            internal('stock_source_freeze_purchase'),
+            internal('suppliers_no_delete'),
+            internal('suppliers_revision_guard'),
+            // …the two completeness triggers and the purchase FX read are the
+            // accounting principal's (A-14; the replaced reversal guard is above)…
+            ...['accounting_negative_inventory_cost_adjustment_entry_complete', 'accounting_purchase_entry_complete', 'accounting_purchase_fx_rate'].map(
+              (proname) => ({ proname, owner: 'daftar_accounting_internal', definer: true, config: PIN }),
+            ),
+            // …and (0064) the seven signed entry routines and their three receipt helpers.
+            internal('purchase_bridge_receipt'),
+            internal('purchase_cancel'),
+            internal('purchase_cover_deficits'),
+            internal('purchase_lock_receipt_targets'),
+            internal('purchase_receive'),
+            internal('purchase_save_draft'),
+            internal('supplier_archive'),
+            internal('supplier_create'),
+            internal('supplier_reactivate'),
+            internal('supplier_update'),
           ].sort((a, b) => (a.proname < b.proname ? -1 : 1)),
         );
         for (const role of ['daftar_inventory_internal', 'daftar_accounting_internal']) {

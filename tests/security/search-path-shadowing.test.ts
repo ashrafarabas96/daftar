@@ -486,6 +486,16 @@ describe('the §D inventory definer contract (P3-AL-54 §D)', () => {
     'inventory_stocktake_finalize(uuid,uuid,text,date,uuid[],numeric[],numeric[],bigint[])': ['daftar_app'],
     'inventory_stocktake_open(uuid,uuid)': ['daftar_app'],
     'inventory_transfer_stock(uuid,uuid,uuid,uuid[],numeric[])': ['daftar_app'],
+    // P3-S4 (0063/0064, contract §2.4): the seven signed entry routines, daftar_app only.
+    'supplier_create(uuid,text,text,text,text,text)': ['daftar_app'],
+    'supplier_update(uuid,integer,text,text,text,text,text)': ['daftar_app'],
+    'supplier_archive(uuid,integer)': ['daftar_app'],
+    'supplier_reactivate(uuid,integer)': ['daftar_app'],
+    'purchase_save_draft(uuid,integer,uuid,uuid,uuid,character,date,text,text,bigint,uuid[],uuid[],numeric[],numeric[],bigint[],uuid[],text[],bigint[],text[],bigint[])':
+      ['daftar_app'],
+    'purchase_cancel(uuid,uuid,integer)': ['daftar_app'],
+    'purchase_receive(uuid,uuid,integer,uuid,integer,date,character,uuid,numeric,text,timestamp with time zone,bigint,bigint,uuid,uuid[],uuid[],numeric[],bigint[],numeric[],bigint[])':
+      ['daftar_app'],
   };
 
   const INVENTORY_TRUSTED_RELATIONS = [

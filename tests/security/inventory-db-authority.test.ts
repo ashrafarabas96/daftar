@@ -256,10 +256,24 @@ describe('the §H grant matrix, from information_schema and pg_policy (P3-AL-54 
       stock_source_bridge_inventory_transfer: 'INSERT,SELECT',
       stock_source_bridge_stocktake: 'INSERT,SELECT',
       outbox_events: 'INSERT',
+      // P3-S4 (0063/0064, contract A-18): the six S4 tables and the two
+      // bridges are written by the signed routines only; DELETE on the three
+      // draft-replaced children (the freeze triggers refuse it past a draft);
+      // INSERT on the coverage detail; SELECT on currencies (minor units).
+      suppliers: 'INSERT,SELECT',
+      purchases: 'INSERT,SELECT',
+      purchase_lines: 'DELETE,INSERT,SELECT',
+      purchase_landed_costs: 'DELETE,INSERT,SELECT',
+      purchase_landed_cost_allocations: 'DELETE,INSERT,SELECT',
+      negative_inventory_cost_adjustments: 'INSERT,SELECT',
+      stock_source_bridge_purchase: 'INSERT,SELECT',
+      stock_source_bridge_negative_inventory_cost_adjustment: 'INSERT,SELECT',
+      negative_deficit_coverages: 'INSERT,SELECT',
+      currencies: 'SELECT',
     });
   });
 
-  it('and exactly these column privileges beyond them: three products columns to UPDATE, four product_variants columns to INSERT, four stock_levels columns to UPDATE (P3-S2), six stocktake_lines and nine stocktakes columns to UPDATE (P3-S3)', async () => {
+  it('and exactly these column privileges beyond them: three products columns to UPDATE, four product_variants columns to INSERT, four stock_levels columns to UPDATE (P3-S2), six stocktake_lines and nine stocktakes columns to UPDATE (P3-S3), two negative_inventory_deficits, two purchase_lines, thirty purchases and eleven suppliers columns to UPDATE (P3-S4)', async () => {
     const r = await ownerPool().query<{ t: string; p: string; cols: string }>(
       `SELECT c.table_name AS t, c.privilege_type AS p, string_agg(c.column_name, ',' ORDER BY c.column_name) AS cols
        FROM information_schema.column_privileges c
@@ -270,8 +284,22 @@ describe('the §H grant matrix, from information_schema and pg_policy (P3-AL-54 
       [INTERNAL],
     );
     expect(r.rows).toEqual([
+      // P3-S4 (0063, contract A-18): the coverage decrements a deficit layer.
+      { t: 'negative_inventory_deficits', p: 'UPDATE', cols: 'status,uncovered_qty' },
       { t: 'product_variants', p: 'INSERT', cols: 'business_id,id,is_base,product_id' },
       { t: 'products', p: 'UPDATE', cols: 'track_inventory,unit_code,unit_decimals' },
+      // P3-S4 (0063, contract A-18): a line's share and unit cost, set once by
+      // its receipt; the draft columns and the receive/cancel columns (§2.2).
+      { t: 'purchase_lines', p: 'UPDATE', cols: 'base_share_minor,unit_cost_base_minor' },
+      {
+        t: 'purchases',
+        p: 'UPDATE',
+        cols:
+          'binding_source_id,business_transaction_id,cancel_intent_sha256,cancelled_at,cancelled_by,currency_code,document_date,draft_intent_sha256,' +
+          'fx_rate_id,landed_cost_txn_minor,notes,rate_source,rate_timestamp,receive_intent_sha256,received_at,received_by,revision,source_to_base_rate,' +
+          'status,subtotal_txn_minor,supplier_id,supplier_name_snapshot,supplier_phone_snapshot,supplier_reference,supplier_tax_identifier_snapshot,' +
+          'tax_minor,total_base_minor,total_txn_minor,updated_at,warehouse_id',
+      },
       { t: 'stock_levels', p: 'UPDATE', cols: 'avg_unit_cost_base_minor,last_stock_seq,on_hand,valuation_base_minor' },
       // P3-S3 (0061, contract A-18): the one document with a human interval —
       // the count columns of a draft line, and the closing fields of its header.
@@ -285,6 +313,12 @@ describe('the §H grant matrix, from information_schema and pg_policy (P3-AL-54 
         p: 'UPDATE',
         // 0061 R-16: the closing routine also records the trace of the close.
         cols: 'binding_source_id,cancelled_at,closed_business_transaction_id,closed_by,finalize_intent_sha256,finalized_at,occurred_on,status,total_value_base_minor',
+      },
+      // P3-S4 (0063, contract A-18): identity and creation columns stay final (R-23).
+      {
+        t: 'suppliers',
+        p: 'UPDATE',
+        cols: 'business_transaction_id,email,last_intent_sha256,name,notes,phone,revision,status,tax_identifier,updated_at,updated_by',
       },
     ]);
   });
@@ -352,8 +386,17 @@ describe('the §H grant matrix, from information_schema and pg_policy (P3-AL-54 
       { g: 'daftar_app', r: 'inventory_stocktake_finalize' },
       { g: 'daftar_app', r: 'inventory_stocktake_open' },
       { g: 'daftar_app', r: 'inventory_transfer_stock' },
+      // P3-S4 (0064, contract §2.4): the seven signed entry routines, daftar_app only.
+      { g: 'daftar_app', r: 'purchase_cancel' },
+      { g: 'daftar_app', r: 'purchase_receive' },
+      { g: 'daftar_app', r: 'purchase_save_draft' },
       { g: 'daftar_app', r: 'structure_associate_warehouse_branch' },
       { g: 'daftar_app', r: 'structure_dissociate_warehouse_branch' },
+      // P3-S4 (0064, contract §2.4)
+      { g: 'daftar_app', r: 'supplier_archive' },
+      { g: 'daftar_app', r: 'supplier_create' },
+      { g: 'daftar_app', r: 'supplier_reactivate' },
+      { g: 'daftar_app', r: 'supplier_update' },
     ]);
   });
 
