@@ -194,16 +194,18 @@ describe('T-08.1 Case A: Dr Inventory per warehouse / Cr Opening equity, shares 
   });
 });
 
-describe('A-14(a)/A-05: a Case A entry debits each warehouse exactly its own share', () => {
+describe('A-14(a)/R-4: a Case A entry debits only the warehouses of its opening', () => {
   /**
-   * REAL-BUG PIN. A-05: "one Dr inventory line per warehouse (that warehouse's
-   * Σ line values)"; A-14(a): "warehouse_id = the header's warehouse(s)".
+   * REAL-BUG PIN. A-14(a): "warehouse_id = the header's warehouse(s)"; R-4
+   * (0061 header): the accounting-side check proves the per-warehouse split
+   * "for membership, home branch, distinctness and totals". The trigger
    * `accounting_inventory_opening_entry_complete()` (0061:1252-1303) checks
-   * only one debit per DISTINCT warehouse, each with its home branch, and
-   * Σ debits = T — never which warehouses the opening's lines hold nor each
-   * warehouse's amount. An entry that moves Inventory between warehouses (or
-   * onto one the opening never touched) commits, and GL Inventory by
-   * warehouse no longer equals the stock valuation by warehouse.
+   * one debit per DISTINCT warehouse, its home branch and Σ debits = T — but
+   * never that a debited warehouse belongs to the opening. An entry that puts
+   * part of the opening's value on a warehouse holding none of it commits, and
+   * GL Inventory by warehouse no longer equals the stock valuation.
+   * (Per-warehouse AMOUNTS over the right warehouses are, per R-4, proven on
+   * the inventory side only; that residual is not pinned here.)
    */
   it('a split onto a warehouse the opening never touched is refused inventory_entry_mismatch', async () => {
     await inTx(async () => {
@@ -219,7 +221,7 @@ describe('A-14(a)/A-05: a Case A entry debits each warehouse exactly its own sha
     });
   });
 
-  it('a misallocated split over the right warehouses is refused inventory_entry_mismatch', async () => {
+  it('ALLOW: the same opening split over the warehouses it holds commits', async () => {
     await inTx(async () => {
       const A = world.A;
       const cmd = openingCommand(day, [
@@ -228,11 +230,11 @@ describe('A-14(a)/A-05: a Case A entry debits each warehouse exactly its own sha
       ]);
       expectAccepted(await tryCommand(c, A, cmd));
       const perWarehouse = [
-        { warehouseId: A.w1, branchId: A.branchX, valueMinor: 400n },
-        { warehouseId: A.w2, branchId: A.branchY, valueMinor: 100n },
+        { warehouseId: A.w1, branchId: A.branchX, valueMinor: 300n },
+        { warehouseId: A.w2, branchId: A.branchY, valueMinor: 200n },
       ];
       await postEntryInTx(c, must(openingEntry(A, { sourceId: cmd.openingId, occurredOn: day, perWarehouse })), A.userId);
-      refusedWith(await atCommit(c), 'P0001', 'accounting.inventory_entry_mismatch', 'W1 400 / W2 100 for shares 300 / 200');
+      expectAccepted(await atCommit(c), 'W1 300 / W2 200 for shares 300 / 200');
     });
   });
 });
