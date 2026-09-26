@@ -8,6 +8,7 @@ import {
   formatQuantity,
   InventoryError,
   lineTotals,
+  parseDecimal,
   parseMinor,
   parseQuantity,
   parseUnitCost,
@@ -24,11 +25,10 @@ import { AccountingAssertionMinterService } from '../accounting/accounting-asser
 import { DatabaseAccountingPostingAdapter } from '../accounting/accounting-posting.adapter';
 import type { BusinessTransactionId } from '../inventory/business-transaction';
 import { InventoryAuthorizationService } from '../inventory/inventory-authorization';
-import { inventoryRefusal } from '../inventory/inventory-errors';
-import { readStockStates, readWarehouses, stockKey, type ReadScope } from '../inventory/inventory-stock-read';
+import { readWarehouses, type ReadScope } from '../inventory/inventory-stock-read';
 import type { MembershipContext } from '../tenancy/tenancy.service';
 import { catchUpPostingCommand, purchasePostingCommand, type ReceiptFx } from './purchase-posting';
-import { purchasingRefusal, rethrowPurchasingRefusal } from './purchasing-errors';
+import { purchasingInventoryRefusal, purchasingPackageRefusal, purchasingRefusal, rethrowPurchasingRefusal } from './purchasing-errors';
 import { findPurchaseHeader, findSupplier, readLandedCosts, readPurchaseLines, readReceipt, scopedRows, type PurchaseLineRow } from './purchasing-reads';
 import type { PurchaseTransitionRequest } from './purchasing.schemas';
 
@@ -39,6 +39,31 @@ const DOMESTIC_RATE_TEXT = '1.0000000000';
 interface BoundFx extends ReceiptFx {
   readonly rateId: string | null;
   readonly rateR10: bigint;
+}
+
+/** One `stock_levels` row of the coverage read, numerics as text (A-16). */
+interface CoverageLevelRow {
+  variant_id: string;
+  on_hand: string;
+  valuation: string;
+  avg: string | null;
+  last_stock_seq: string;
+}
+
+/** One open deficit layer of the coverage read, numerics as text (A-16(b)). */
+interface CoverageLayerRow {
+  id: string;
+  variant_id: string;
+  deficit_seq: string;
+  uncovered_qty: string;
+  provisional: string;
+}
+
+/** A signed `NUMERIC(28,10)` average cost as C10 (the `stock_levels` reading of `inventory-stock-read`). */
+function parseSignedC10(text: string): bigint {
+  const d = parseDecimal(text);
+  if (d.scale > 10) throw new Error('an average cost carries more than ten decimals');
+  return d.units * 10n ** BigInt(10 - d.scale);
 }
 
 /** The facts of a stored line's variant that a receipt re-checks (A-19 archive rules). */
@@ -162,20 +187,12 @@ export class PurchaseReceiptService {
       totals.lines.map((t) => t.totalMinor),
     );
 
-    // The coverage plan over the open layers and the stock levels (A-16).
-    const states = await readStockStates(
-      this.db,
-      m,
-      lines.map((l) => ({ warehouseId, variantId: l.variant_id })),
-    );
-    const keyStates = new Map<string, StockState>();
-    for (const l of lines) {
-      const state = states.get(stockKey(warehouseId, l.variant_id));
-      if (state !== undefined) keyStates.set(l.variant_id, state);
-    }
+    // The coverage plan over the stock levels and the open layers, read in ONE
+    // statement so both come from one snapshot (A-16; review L3).
+    const coverageState = await this.readCoverageState(m, warehouseId, lines);
     const plan = planCoverage(
-      await this.readOpenLayers(m, warehouseId, lines),
-      keyStates,
+      coverageState.layers,
+      coverageState.keyStates,
       lines.map((l, i) => ({ lineId: l.id, variantId: l.variant_id, qtyQ4: qtys[i] ?? 0n, baseShareMinor: shares[i] ?? 0n })),
     );
     const coverageAdjustmentId = plan.coveredQ4 > 0n ? randomUUID() : null;
@@ -342,36 +359,73 @@ export class PurchaseReceiptService {
     const byVariant = new Map(facts.map((f) => [f.variant_id, f]));
     for (const l of lines) {
       const f = byVariant.get(l.variant_id);
-      if (f === undefined) throw inventoryRefusal('inventory.variant_not_found');
-      if (!f.track_inventory || f.unit_decimals === null) throw inventoryRefusal('inventory.product_not_tracked');
-      if (f.product_status !== 'active') throw inventoryRefusal('inventory.product_archived');
-      if (f.variant_status !== 'active') throw inventoryRefusal('inventory.variant_archived');
+      if (f === undefined) throw purchasingInventoryRefusal('inventory.variant_not_found');
+      if (!f.track_inventory || f.unit_decimals === null) throw purchasingInventoryRefusal('inventory.product_not_tracked');
+      if (f.product_status !== 'active') throw purchasingInventoryRefusal('inventory.product_archived');
+      if (f.variant_status !== 'active') throw purchasingInventoryRefusal('inventory.variant_archived');
       try {
         assertQuantityRepresentable(parseQuantity(l.qty), f.unit_decimals);
       } catch (e) {
-        if (e instanceof InventoryError) throw inventoryRefusal(e.code);
+        if (e instanceof InventoryError) throw purchasingPackageRefusal(e);
         throw e;
       }
     }
   }
 
-  /** The open and partially covered deficit layers of the receipt's keys (A-16(b), read by `daftar_app`, A-18). */
-  private async readOpenLayers(scope: ReadScope, warehouseId: string, lines: readonly PurchaseLineRow[]): Promise<DeficitLayer[]> {
-    const rows = await scopedRows<{ id: string; variant_id: string; deficit_seq: string; uncovered_qty: string; provisional: string }>(
+  /**
+   * The `stock_levels` state and the open and partially covered deficit layers
+   * of the receipt's keys (A-16(b), read by `daftar_app`, A-18), in ONE
+   * statement: under READ COMMITTED a statement reads one snapshot, so the
+   * plan's `Σ uncovered = max(0, −on_hand)` precondition sees the levels and
+   * the layers of the same committed state. Two reads could straddle another
+   * receipt's COMMIT and turn a legitimate race into the defect code
+   * `inventory.deficit_state_invalid` (review L3). A change after this read is
+   * the routine's to refuse, under its locks, as `inventory.valuation_changed`
+   * — retryable by the client; there is no server retry (TL-5).
+   *
+   * A key with no `stock_levels` row is the empty state, as `planCoverage`
+   * reads a missing entry.
+   */
+  private async readCoverageState(
+    scope: ReadScope,
+    warehouseId: string,
+    lines: readonly PurchaseLineRow[],
+  ): Promise<{ readonly keyStates: ReadonlyMap<string, StockState>; readonly layers: readonly DeficitLayer[] }> {
+    const [row] = await scopedRows<{ levels: CoverageLevelRow[]; layers: CoverageLayerRow[] }>(
       this.db,
       scope,
-      `SELECT id, variant_id, deficit_seq::text AS deficit_seq, uncovered_qty::text AS uncovered_qty,
-              provisional_unit_cost_base_minor::text AS provisional
-         FROM negative_inventory_deficits
-        WHERE business_id = $1 AND warehouse_id = $2 AND variant_id = ANY($3::uuid[]) AND status <> 'closed'`,
+      `SELECT
+         (SELECT coalesce(json_agg(json_build_object(
+                   'variant_id', s.variant_id, 'on_hand', s.on_hand::text, 'valuation', s.valuation_base_minor::text,
+                   'avg', s.avg_unit_cost_base_minor::text, 'last_stock_seq', s.last_stock_seq::text)), '[]'::json)
+            FROM stock_levels s
+           WHERE s.business_id = $1 AND s.warehouse_id = $2 AND s.variant_id = ANY($3::uuid[])) AS levels,
+         (SELECT coalesce(json_agg(json_build_object(
+                   'id', d.id, 'variant_id', d.variant_id, 'deficit_seq', d.deficit_seq::text,
+                   'uncovered_qty', d.uncovered_qty::text, 'provisional', d.provisional_unit_cost_base_minor::text)), '[]'::json)
+            FROM negative_inventory_deficits d
+           WHERE d.business_id = $1 AND d.warehouse_id = $2 AND d.variant_id = ANY($3::uuid[]) AND d.status <> 'closed') AS layers`,
       [scope.businessId, warehouseId, lines.map((l) => l.variant_id)],
     );
-    return rows.map((r) => ({
-      deficitId: r.id,
-      variantId: r.variant_id,
-      deficitSeq: BigInt(r.deficit_seq),
-      uncoveredQ4: parseQuantity(r.uncovered_qty),
-      provisionalC10: parseUnitCost(r.provisional),
-    }));
+    if (row === undefined) throw new Error('the coverage state read returned no row');
+    const keyStates = new Map<string, StockState>();
+    for (const r of row.levels) {
+      keyStates.set(r.variant_id, {
+        onHand: parseQuantity(r.on_hand),
+        valuation: parseMinor(r.valuation),
+        avg: r.avg === null ? null : parseSignedC10(r.avg),
+        lastStockSeq: BigInt(r.last_stock_seq),
+      });
+    }
+    const layers = row.layers.map(
+      (r): DeficitLayer => ({
+        deficitId: r.id,
+        variantId: r.variant_id,
+        deficitSeq: BigInt(r.deficit_seq),
+        uncoveredQ4: parseQuantity(r.uncovered_qty),
+        provisionalC10: parseUnitCost(r.provisional),
+      }),
+    );
+    return { keyStates, layers };
   }
 }
