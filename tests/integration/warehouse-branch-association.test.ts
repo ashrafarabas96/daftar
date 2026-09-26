@@ -4,6 +4,7 @@ import { createTestApp, grantFeature, ownerPool, resetData, uniqueEmail, type Te
 import { InventoryAssertionMinterService } from '../../apps/api/src/modules/inventory/inventory-assertion.minter';
 import { InventoryAuthorizationService, type InventoryCommandAuthority } from '../../apps/api/src/modules/inventory/inventory-authorization';
 import { TenancyService } from '../../apps/api/src/modules/tenancy/tenancy.service';
+import { newBusinessTransactionId } from '../../apps/api/src/modules/inventory/business-transaction';
 
 /**
  * P3-S1 — the warehouse–branch association commands on the Structure domain
@@ -123,8 +124,9 @@ describe('warehouse–branch association (P3-S1)', () => {
 
   async function auditRows(businessId: string, action: string) {
     return (
-      await ownerPool().query<{ actor_user_id: string; entity_id: string | null }>(
-        'SELECT actor_user_id, entity_id FROM audit_events WHERE business_id = $1 AND action = $2 ORDER BY created_at',
+      await ownerPool().query<{ actor_user_id: string; entity_id: string | null; trace: string | null }>(
+        `SELECT actor_user_id, entity_id, metadata->>'business_transaction_id' AS trace
+           FROM audit_events WHERE business_id = $1 AND action = $2 ORDER BY created_at`,
         [businessId, action],
       )
     ).rows;
@@ -152,6 +154,8 @@ describe('warehouse–branch association (P3-S1)', () => {
     const audit = await auditRows(f.businessId, 'structure.warehouse_branch_associated');
     expect(audit).toHaveLength(1);
     expect(audit[0]?.actor_user_id).toBe(f.manager.userId);
+    // P3-AL-35: the routine-written row carries the trace id the boundary minted for this operation.
+    expect(audit[0]?.trace).toBe(res.body.businessTransactionId);
 
     const again = await associate(f.owner.token, f.businessId, f.w1, f.branch2);
     expect(again.status).toBe(200);
@@ -214,6 +218,7 @@ describe('warehouse–branch association (P3-S1)', () => {
     const audit = await auditRows(f.businessId, 'structure.warehouse_branch_dissociated');
     expect(audit).toHaveLength(1);
     expect(audit[0]?.actor_user_id).toBe(f.owner.userId);
+    expect(audit[0]?.trace).toBe(res.body.businessTransactionId);
 
     const again = await dissociate(f.owner.token, f.businessId, f.w1, f.branch2);
     expect(again.status).toBe(200);
@@ -228,13 +233,13 @@ describe('warehouse–branch association (P3-S1)', () => {
     const w3Id = w3.body.id as string;
     await ownerPool().query(`UPDATE warehouses SET status = 'archived' WHERE business_id = $1 AND id = $2`, [f.businessId, w3Id]);
     const archivedWarehouse = await associate(f.owner.token, f.businessId, w3Id, f.branch2);
-    expect(archivedWarehouse.status).toBe(400);
-    expect(archivedWarehouse.body.error.details.inventoryCode).toBe('inventory.warehouse_archived');
+    expect(archivedWarehouse.status).toBe(409);
+    expect(archivedWarehouse.body.error.details.inventoryCode).toBe('structure.warehouse_archived');
 
     await ownerPool().query(`UPDATE branches SET status = 'archived' WHERE business_id = $1 AND id = $2`, [f.businessId, f.branch2]);
     const archivedBranch = await associate(f.owner.token, f.businessId, f.w1, f.branch2);
-    expect(archivedBranch.status).toBe(400);
-    expect(archivedBranch.body.error.details.inventoryCode).toBe('inventory.branch_archived');
+    expect(archivedBranch.status).toBe(409);
+    expect(archivedBranch.body.error.details.inventoryCode).toBe('structure.branch_archived');
 
     expect(mint).not.toHaveBeenCalled();
     expect(await associations(f.businessId)).not.toContain(`${f.w1}>${f.branch2}`);
@@ -246,9 +251,13 @@ describe('warehouse–branch association (P3-S1)', () => {
     const bBefore = await associations(b.businessId);
 
     // Entirely foreign pair, in A's business context: invisible under RLS.
-    expect((await associate(a.owner.token, a.businessId, b.w1, b.branch2)).status).toBe(404);
+    const foreign = await associate(a.owner.token, a.businessId, b.w1, b.branch2);
+    expect(foreign.status).toBe(404);
+    expect(foreign.body.error.details.inventoryCode).toBe('structure.warehouse_not_found');
     // Mixed pairs: A's warehouse with B's branch, B's warehouse with A's branch.
-    expect((await associate(a.owner.token, a.businessId, a.w1, b.branch2)).status).toBe(404);
+    const foreignBranch = await associate(a.owner.token, a.businessId, a.w1, b.branch2);
+    expect(foreignBranch.status).toBe(404);
+    expect(foreignBranch.body.error.details.inventoryCode).toBe('structure.branch_not_found');
     expect((await associate(a.owner.token, a.businessId, b.w1, a.branch2)).status).toBe(404);
     expect((await dissociate(a.owner.token, a.businessId, b.w2, b.branch2)).status).toBe(404);
     // B's business context: A is not a member.
@@ -276,7 +285,7 @@ describe('warehouse–branch association (P3-S1)', () => {
       await setScope(f, 'assigned', [f.branch2]);
       let m = await tenancy.resolveMembership(f.manager.userId, f.businessId);
       // warehouse.manage does not carry inventory.adjust: the permission half refuses first.
-      await expect(authz.authorize(m, 'inventory.configure_product', [f.w2])).rejects.toMatchObject({ httpStatus: 403 });
+      await expect(authz.authorize(m, 'inventory.configure_product', newBusinessTransactionId(), [f.w2])).rejects.toMatchObject({ httpStatus: 403 });
 
       // An owner-granted inventory role, still assigned to branch2 only.
       await t.request
@@ -289,28 +298,28 @@ describe('warehouse–branch association (P3-S1)', () => {
         .send({ roleKeys: ['stock-adjuster'] });
       m = await tenancy.resolveMembership(f.manager.userId, f.businessId);
 
-      await expect(authz.authorize(m, 'inventory.configure_product', [f.w2])).resolves.toMatchObject({ warehouseIds: [f.w2] });
-      await expect(authz.authorize(m, 'inventory.configure_product', [f.w1])).rejects.toMatchObject({
+      await expect(authz.authorize(m, 'inventory.configure_product', newBusinessTransactionId(), [f.w2])).resolves.toMatchObject({ warehouseIds: [f.w2] });
+      await expect(authz.authorize(m, 'inventory.configure_product', newBusinessTransactionId(), [f.w1])).rejects.toMatchObject({
         httpStatus: 403,
         details: { inventoryCode: 'inventory.warehouse_out_of_scope' },
       });
       // A two-warehouse command: both must pass.
-      await expect(authz.authorize(m, 'inventory.configure_product', [f.w2, f.w1])).rejects.toMatchObject({ httpStatus: 403 });
+      await expect(authz.authorize(m, 'inventory.configure_product', newBusinessTransactionId(), [f.w2, f.w1])).rejects.toMatchObject({ httpStatus: 403 });
 
       // A business-wide actor associates w1 with branch2; now both are reachable.
       expect((await associate(f.owner.token, f.businessId, f.w1, f.branch2)).status).toBe(200);
-      await expect(authz.authorize(m, 'inventory.configure_product', [f.w2, f.w1])).resolves.toBeTruthy();
+      await expect(authz.authorize(m, 'inventory.configure_product', newBusinessTransactionId(), [f.w2, f.w1])).resolves.toBeTruthy();
 
       // An archived branch in the scope grants nothing.
       await ownerPool().query(`UPDATE branches SET status = 'archived' WHERE business_id = $1 AND id = $2`, [f.businessId, f.branch2]);
-      await expect(authz.authorize(m, 'inventory.configure_product', [f.w2])).rejects.toMatchObject({ httpStatus: 403 });
+      await expect(authz.authorize(m, 'inventory.configure_product', newBusinessTransactionId(), [f.w2])).rejects.toMatchObject({ httpStatus: 403 });
 
       // Default deny: assigned with no branch reaches no warehouse.
       await setScope(f, 'assigned', []);
       m = await tenancy.resolveMembership(f.manager.userId, f.businessId);
-      await expect(authz.authorize(m, 'inventory.configure_product', [f.w1])).rejects.toMatchObject({ httpStatus: 403 });
+      await expect(authz.authorize(m, 'inventory.configure_product', newBusinessTransactionId(), [f.w1])).rejects.toMatchObject({ httpStatus: 403 });
       // ...but a command that affects no warehouse needs only its permission.
-      await expect(authz.authorize(m, 'inventory.configure_product', [])).resolves.toBeTruthy();
+      await expect(authz.authorize(m, 'inventory.configure_product', newBusinessTransactionId(), [])).resolves.toBeTruthy();
     });
 
     it('a warehouse of another business is refused exactly like one out of scope', async () => {
@@ -327,7 +336,7 @@ describe('warehouse–branch association (P3-S1)', () => {
         .send({ roleKeys: ['stock-adjuster'] });
       await setScope(a, 'assigned', [a.branch1, a.branch2]);
       const m = await t.app.get(TenancyService).resolveMembership(a.manager.userId, a.businessId);
-      await expect(authz.authorize(m, 'inventory.configure_product', [b.w1])).rejects.toMatchObject({
+      await expect(authz.authorize(m, 'inventory.configure_product', newBusinessTransactionId(), [b.w1])).rejects.toMatchObject({
         details: { inventoryCode: 'inventory.warehouse_out_of_scope' },
       });
     });
@@ -346,17 +355,17 @@ describe('warehouse–branch association (P3-S1)', () => {
       });
 
       const forged: InventoryCommandAuthority = {
-        scope: { tenantId: f.tenantId, businessId: f.businessId, actorUserId: f.owner.userId },
+        scope: { tenantId: f.tenantId, businessId: f.businessId, actorUserId: f.owner.userId, businessTransactionId: newBusinessTransactionId() },
         opCode: 'inventory.configure_product',
         warehouseIds: [],
       };
       expect(() => authz.mint(forged, payload)).toThrow(/established by InventoryAuthorizationService/);
 
-      const association = await authz.authorize(m, 'structure.associate_warehouse_branch');
+      const association = await authz.authorize(m, 'structure.associate_warehouse_branch', newBusinessTransactionId());
       expect(() => authz.mint(association, payload)).toThrow(/cannot sign/);
       expect(mint).not.toHaveBeenCalled();
 
-      const genuine = await authz.authorize(m, 'inventory.configure_product');
+      const genuine = await authz.authorize(m, 'inventory.configure_product', newBusinessTransactionId());
       expect(typeof authz.mint(genuine, payload)).toBe('string');
       expect(mint).toHaveBeenCalledTimes(1);
     });

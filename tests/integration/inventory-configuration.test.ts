@@ -90,7 +90,7 @@ describe('inventory configuration command (P3-S1)', () => {
 
     const first = await configure(m.token, m.businessId, id, { trackInventory: true, unitCode: 'piece' });
     expect(first.status).toBe(200);
-    expect(first.body).toMatchObject({ productId: id, trackInventory: true, unitCode: 'piece', unitDecimals: 0 });
+    expect(first.body).toMatchObject({ productId: id, trackInventory: true, unitCode: 'piece', unitDecimals: 0, changed: true });
     expect(first.body.businessTransactionId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
     expect(mint).toHaveBeenCalledTimes(1);
     expect(mint.mock.calls[0]?.[0]).toMatchObject({
@@ -107,6 +107,7 @@ describe('inventory configuration command (P3-S1)', () => {
 
     const again = await configure(m.token, m.businessId, id, { trackInventory: true, unitCode: 'piece' });
     expect(again.status).toBe(200);
+    expect(again.body).toMatchObject({ trackInventory: true, unitCode: 'piece', unitDecimals: 0, changed: false });
     expect(mint).toHaveBeenCalledTimes(2);
     // One trace id per user operation, never reused.
     expect(again.body.businessTransactionId).not.toBe(first.body.businessTransactionId);
@@ -115,18 +116,23 @@ describe('inventory configuration command (P3-S1)', () => {
     expect(baseAgain[0]?.id).toBe(base[0]?.id);
   });
 
-  it('the routine writes the audit row with the actor; the application writes no second one', async () => {
+  it('the routine writes one audit row naming the actor and the operation trace id; the application writes none; a no-op writes none', async () => {
     const m = await merchant('Config Audit');
     const id = await product(m);
-    expect((await configure(m.token, m.businessId, id, { trackInventory: true, unitCode: 'kg' })).status).toBe(200);
+    const res = await configure(m.token, m.businessId, id, { trackInventory: true, unitCode: 'kg' });
+    expect(res.status).toBe(200);
+    // The idempotent repeat changes nothing and records nothing.
+    expect((await configure(m.token, m.businessId, id, { trackInventory: true, unitCode: 'kg' })).body.changed).toBe(false);
     const rows = (
-      await ownerPool().query<{ action: string; actor_user_id: string; business_id: string }>(
-        `SELECT action, actor_user_id, business_id FROM audit_events WHERE entity_id = $1 AND action NOT LIKE 'catalog.%'`,
+      await ownerPool().query<{ action: string; actor_user_id: string; business_id: string; trace: string | null }>(
+        `SELECT action, actor_user_id, business_id, metadata->>'business_transaction_id' AS trace
+           FROM audit_events WHERE entity_id = $1 AND action NOT LIKE 'catalog.%'`,
         [id],
       )
     ).rows;
-    expect(rows).toHaveLength(1);
-    expect(rows[0]).toMatchObject({ actor_user_id: m.userId, business_id: m.businessId });
+    expect(rows).toEqual([
+      { action: 'inventory.product_configured', actor_user_id: m.userId, business_id: m.businessId, trace: res.body.businessTransactionId },
+    ]);
   });
 
   it('a tracked product needs a canonical unit — refused before anything is minted', async () => {
@@ -149,6 +155,9 @@ describe('inventory configuration command (P3-S1)', () => {
       { trackInventory: true, unitCode: 'kg', unitDecimals: 5 },
       { trackInventory: true, unitCode: 'kg', unitDecimals: -1 },
       { trackInventory: true, unitCode: 'kg', unitDecimals: 1.5 },
+      // A canonical unit is never cleared (P3-AL-05 §D): null is not a value.
+      { trackInventory: false, unitCode: null },
+      { trackInventory: true, unitCode: 'kg', unitDecimals: null },
       { trackInventory: 'yes', unitCode: 'kg' },
       // No authority flag can be smuggled in: the schema is strict.
       { trackInventory: true, unitCode: 'kg', trusted: true },
@@ -160,6 +169,10 @@ describe('inventory configuration command (P3-S1)', () => {
     const unknown = await configure(m.token, m.businessId, id, { trackInventory: true, unitCode: 'furlong' });
     expect(unknown.status).toBe(400);
     expect(unknown.body.error.details.inventoryCode).toBe('inventory.unit_unknown');
+    // A precision without the unit it is for.
+    const precisionOnly = await configure(m.token, m.businessId, id, { trackInventory: false, unitDecimals: 2 });
+    expect(precisionOnly.status).toBe(400);
+    expect(precisionOnly.body.error.details.inventoryCode).toBe('inventory.unit_required');
     const badId = await t.request.put('/v1/inventory/products/not-a-uuid/configuration').set(auth(m.token, m.businessId)).send({ trackInventory: false });
     expect(badId.status).toBe(400);
     expect(mint).not.toHaveBeenCalled();
@@ -176,13 +189,17 @@ describe('inventory configuration command (P3-S1)', () => {
     // A newly selected unit takes the registry default at selection time.
     expect(toKg.body).toMatchObject({ trackInventory: true, unitCode: 'kg', unitDecimals: 3 });
 
-    const decimals = await configure(m.token, m.businessId, id, { trackInventory: true, unitDecimals: 2 });
+    const decimals = await configure(m.token, m.businessId, id, { trackInventory: true, unitCode: 'kg', unitDecimals: 2 });
     expect(decimals.status).toBe(200);
+    expect(decimals.body).toMatchObject({ unitCode: 'kg', unitDecimals: 2, changed: true });
     expect(await productRow(id)).toMatchObject({ track_inventory: true, unit_code: 'kg', unit_decimals: 2 });
 
     // Unchanged unit, decimals omitted: the persisted value is kept, not re-defaulted.
     const same = await configure(m.token, m.businessId, id, { trackInventory: true, unitCode: 'kg' });
-    expect(same.body).toMatchObject({ unitCode: 'kg', unitDecimals: 2 });
+    expect(same.body).toMatchObject({ unitCode: 'kg', unitDecimals: 2, changed: false });
+    // Omitting the unit entirely keeps it too.
+    const kept = await configure(m.token, m.businessId, id, { trackInventory: true });
+    expect(kept.body).toMatchObject({ unitCode: 'kg', unitDecimals: 2, changed: false });
     expect(await baseVariants(id)).toHaveLength(1);
   });
 
@@ -244,6 +261,7 @@ describe('inventory configuration command (P3-S1)', () => {
     // A's own business context, B's product id: invisible under RLS.
     const viaOwnBusiness = await configure(a.token, a.businessId, bProduct, { trackInventory: true, unitCode: 'piece' });
     expect(viaOwnBusiness.status).toBe(404);
+    expect(viaOwnBusiness.body.error.details.inventoryCode).toBe('inventory.product_not_found');
     // B's business context: A is not a member of it.
     const viaForeignBusiness = await configure(a.token, b.businessId, bProduct, { trackInventory: true, unitCode: 'piece' });
     expect(viaForeignBusiness.status).toBe(403);
