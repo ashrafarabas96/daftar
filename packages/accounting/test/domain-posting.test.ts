@@ -111,7 +111,8 @@ describe('mintDomainPostingAssertion (A-06)', () => {
       expect(codeOf(() => mintDomainPostingAssertion(minter, command({ sourceType }), ACTOR))).toBe('accounting.assertion_wrong_source');
       expect(claims).toHaveLength(0);
     }
-    expect(DOMAIN_SOURCE_TYPES).toEqual(['inventory_adjustment', 'inventory_opening']);
+    // P3-S4 (0063/0064): PHASE_3_S4_CONTRACT §7.3 row 22 appends the two S4 domain sources.
+    expect(DOMAIN_SOURCE_TYPES).toEqual(['inventory_adjustment', 'inventory_opening', 'purchase', 'negative_inventory_cost_adjustment']);
     expect(isDomainSourceType('inventory_adjustment')).toBe(true);
     expect(isDomainSourceType('manual_adjustment')).toBe(false);
   });

@@ -195,9 +195,11 @@ export const NATIVE_SOURCE_TYPES = ['manual_adjustment', 'reversal', 'opening_ba
  * TL-10). Each is posted only inside the domain's own transaction, next to
  * the source document its completeness trigger requires, through
  * `mintDomainPostingAssertion` (`domain-posting.ts`); none of them may be
- * posted through `post`. Later slices extend this list with their own.
+ * posted through `post`. Later slices extend this list with their own:
+ * P3-S4 adds `purchase` and `negative_inventory_cost_adjustment`
+ * (PHASE_3_S4_CONTRACT A-06, §4.2).
  */
-export const DOMAIN_SOURCE_TYPES = ['inventory_adjustment', 'inventory_opening'] as const;
+export const DOMAIN_SOURCE_TYPES = ['inventory_adjustment', 'inventory_opening', 'purchase', 'negative_inventory_cost_adjustment'] as const;
 
 export class AccountingEngine {
   constructor(
