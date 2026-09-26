@@ -43,7 +43,7 @@ import {
   type MovementPayload,
   type StockState,
 } from '../../packages/inventory/src';
-import { mintTestInventoryAssertion, ownerPool } from './test-app';
+import { grantFeature, mintTestInventoryAssertion, ownerPool, raiseLimit, uniqueEmail, type TestApp } from './test-app';
 import {
   addTrackedProduct,
   addVariantProduct,
@@ -933,4 +933,79 @@ export function openingCommand(
 /** A stocktake-open command. */
 export function stocktakeOpenCommand(warehouseId: string, stocktakeId: string = randomUUID()): StocktakeOpenCommand {
   return { kind: 'stocktake_open', stocktakeId, warehouseId };
+}
+
+// ── the HTTP world (§6 T-09, T-17): the same S3 shape behind the real API ──
+
+/** A registered user and the bearer token the API issued them. */
+export interface HttpActor {
+  readonly token: string;
+  readonly userId: string;
+  readonly email: string;
+}
+
+export async function registerActor(t: TestApp, name: string): Promise<HttpActor> {
+  const reg = await t.request.post('/v1/auth/register').send({ email: uniqueEmail(), password: 'Str0ng!Passw0rd', displayName: name, preferredLocale: 'en' });
+  expect(reg.status, `register ${name}`).toBe(201);
+  const token = String(reg.body.accessToken);
+  const me = await t.request.get('/v1/auth/me').set('Authorization', `Bearer ${token}`);
+  expect(me.status).toBe(200);
+  return { token, userId: String(me.body.userId), email: String(me.body.email) };
+}
+
+/** The headers of a request by `a` in business `businessId`. */
+export function asMember(a: HttpActor, businessId: string): Record<string, string> {
+  return { Authorization: `Bearer ${a.token}`, 'X-Business-Id': businessId };
+}
+
+/**
+ * A business onboarded through the real API by `owner` (so through
+ * `provision_create_business`), given a second branch through the real API
+ * (its home warehouse is W2), and then the S3 product shapes, seeded the way
+ * the other S3 suites seed them.
+ */
+export async function onboardS3Business(t: TestApp, owner: HttpActor, label: string): Promise<S3Business> {
+  const on = await t.request
+    .post('/v1/onboarding/complete')
+    .set('Idempotency-Key', `s3-${randomUUID()}`)
+    .set('Authorization', `Bearer ${owner.token}`)
+    .send({ businessName: `S3 ${label}`, countryCode: 'PS', baseCurrency: 'ILS', storeSlug: `s3-${label}-${randomUUID().slice(0, 8)}`, preferredLocale: 'en' });
+  expect(on.status, 'onboarding').toBe(201);
+  const tenantId = String(on.body.tenantId);
+  const businessId = String(on.body.businessId);
+  const pool = ownerPool();
+  await grantFeature(businessId, owner.userId, 'MULTI_BRANCH');
+  await grantFeature(businessId, owner.userId, 'CUSTOM_ROLES');
+  await raiseLimit(businessId, owner.userId, 'MAX_BRANCHES', 10);
+  await raiseLimit(businessId, owner.userId, 'MAX_USERS', 20);
+  const home = must(
+    (await pool.query<{ branch_id: string; id: string }>(`SELECT branch_id::text, id::text FROM warehouses WHERE business_id = $1`, [businessId])).rows[0],
+  );
+  const br = await t.request.post('/v1/businesses/current/branches').set(asMember(owner, businessId)).send({ name: 'Y' });
+  expect(br.status, 'second branch').toBe(201);
+  const branchY = String(br.body.id);
+  const w2 = must(
+    (await pool.query<{ id: string }>(`SELECT id::text FROM warehouses WHERE business_id = $1 AND branch_id = $2`, [businessId, branchY])).rows[0],
+  ).id;
+  const s = { tenantId, businessId };
+  const piece = await addTrackedProduct(pool, s, 'piece', 0);
+  const piece2 = await addTrackedProduct(pool, s, 'piece', 0);
+  const dec2 = await addTrackedProduct(pool, s, 'metre', 2);
+  const vp = await addVariantProduct(pool, s, 2);
+  const untrackedId = await createProduct(pool, businessId);
+  const untrackedVariant = await addMerchantVariant(pool, businessId, untrackedId);
+  return {
+    tenantId,
+    businessId,
+    userId: owner.userId,
+    branchX: home.branch_id,
+    branchY,
+    w1: home.id,
+    w2,
+    piece,
+    piece2,
+    dec2,
+    variantProduct: { productId: vp.productId, variantIds: [must(vp.variantIds[0]), must(vp.variantIds[1])] },
+    untracked: { productId: untrackedId, variantId: untrackedVariant },
+  };
 }
