@@ -16,6 +16,7 @@ import { findFloatRateColumns } from './guards/no-float-rate';
 import { findDefinerSearchPathViolations } from './guards/definer-search-path';
 import { findReadSurfaceViolations, readSurfaceFiles } from './guards/read-surface';
 import { findPostingSurfaceViolations } from './guards/posting-surface';
+import { checkInventoryDefinerContract, INVENTORY_INVOKER_EXCEPTIONS } from './guards/inventory-definer-contract';
 
 const ROOT = join(__dirname, '..');
 let failures = 0;
@@ -401,8 +402,35 @@ for (const dir of ['apps/api/src', 'apps/web/src', 'apps/admin/src', 'packages']
   }
 }
 
+// Rule 20 — GUARD G-7 (P3-S1, P3-AL-54 §D): every routine handed to
+// daftar_inventory_internal is SECURITY DEFINER with the pinned path
+// `pg_catalog, public, pg_temp`, has PUBLIC's EXECUTE revoked in the same
+// file, runs no dynamic SQL, and is transferred inside a same-file
+// GRANT/REVOKE CREATE ON SCHEMA public bracket — except exactly the two
+// INVOKER column guards, which are asserted, not tolerated. The live half is
+// the catalogue sweep in tests/security/search-path-shadowing.test.ts.
+{
+  const migrations: Record<string, string> = {};
+  for (const f of walk(join(ROOT, 'infrastructure/database/migrations'), /\.sql$/).sort()) {
+    migrations[relative(ROOT, f)] = readFileSync(f, 'utf8');
+  }
+  const report = checkInventoryDefinerContract({ migrations });
+  for (const violation of report.violations) {
+    fail('inventory-definer-contract', 'infrastructure/database/migrations', violation);
+  }
+  // A guard watching nothing is decorative: the inventory authority exists
+  // from P3-S1 on, so an empty transfer set means the guard has gone blind.
+  if (report.transferred.length <= INVENTORY_INVOKER_EXCEPTIONS.length) {
+    fail(
+      'inventory-definer-contract',
+      'infrastructure/database/migrations',
+      'no SECURITY DEFINER routine is handed to daftar_inventory_internal — G-7 is watching nothing',
+    );
+  }
+}
+
 if (failures > 0) {
   console.error(`\nSTATIC GUARDS: FAIL (${failures})`);
   process.exit(1);
 }
-console.log('STATIC GUARDS: PASS (19 rules)');
+console.log('STATIC GUARDS: PASS (20 rules)');
