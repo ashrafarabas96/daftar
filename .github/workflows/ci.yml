@@ -254,19 +254,18 @@ jobs:
         run: npm run gate:phase2:s8
         env:
           PG_PORT: '5432'
-      # P3-S1 — inventory and catalog primitives, a CANDIDATE gate. Proves the
-      # slice boundary (0053–0058 follow the frozen 0052, none frozen early,
-      # nothing after them, no P3-S2 surface, no P3-S3 operation kind); the
-      # physical authority model by name (the NOLOGIN internal role and its
-      # one membership, the three runtime routines, the invctl/1 key domain
-      # and both verifiers, the two invoker-rights column guards, the four
-      # home-association objects, every ownership transfer bracketed); both
-      # transaction seams with no bypass flag; @daftar/inventory with its
-      # shared vectors; then the signed-authority, seam, command, catalog,
-      # warehouse, permission, TD-09 and managed-PostgreSQL suites. It
-      # composes the P2-S8 gate, and through it the chain back to Phase 1.
-      - name: Phase 3 slice gate — P3-S1
-        run: npm run gate:phase3:s1
+      # P3-S2 — the immutable stock ledger, a PERMANENT gate since the P3-S2
+      # freeze. Proves 0059–0060 at their accepted digests (frozenThrough a
+      # floor at 0060), the slice scope (no source type, operation mapping or
+      # operation kind registered, no EXECUTE granted, no later-slice table),
+      # the ledger objects and trusted routines by name, the fixed-point
+      # package and its invval/1 vectors, then the ledger authority,
+      # structure, isolation, primitive, vector, rebuild, concurrency,
+      # unit-lock and guard suites. It composes the permanent P3-S1 gate
+      # (0053–0058 at their accepted digests, the physical authority model,
+      # both seams), and through it P2-S8 and the chain back to Phase 1.
+      - name: Phase 3 slice gate — P3-S2 (composes P3-S1)
+        run: npm run gate:phase3:s2
         env:
           PG_PORT: '5432'
       - name: Tampered-migration hard-fail proof

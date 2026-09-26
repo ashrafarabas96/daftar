@@ -63,7 +63,10 @@ const S2_BOUNDARY = S2_MIGRATIONS[S2_MIGRATIONS.length - 1];
  * candidate; filled in the freeze commit only, as a second source independent
  * of MIGRATION_MANIFEST.json.
  */
-const S2_ACCEPTED: Readonly<Record<string, string>> = {};
+const S2_ACCEPTED: Readonly<Record<string, string>> = {
+  '0059_inventory_stock_ledger.sql': '4d613225cf880c653918d7106f7fdcecbbda6adfa64d6c7dc2b991e49eb6494d',
+  '0060_inventory_stock_primitive.sql': 'be240e163a7894dc2de4a384a9a86e47addf0ea10c60fadc0e8c6341c278d66b',
+};
 
 const ACCEPTED = Object.keys(S2_ACCEPTED).length > 0;
 
