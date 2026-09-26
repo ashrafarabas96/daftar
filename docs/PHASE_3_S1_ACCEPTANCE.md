@@ -36,7 +36,7 @@ Suite names are file paths under `tests/` unless stated.
 |---|---|---|
 | 1 | raw `UPDATE`/`INSERT` of the three configuration columns as `daftar_app` → `inventory.configuration_authority_required` | `security/inventory-db-authority.test.ts` "the column guards"; `security/inventory-signed-authority.test.ts` row A |
 | 2 | catalog price, category, SKU, barcode and `products.unit` updates still work | `integration/catalog-base-variant.test.ts`; the accepted catalog suites, unchanged |
-| 3 | configure succeeds only after `inventory.adjust` and a consumed assertion | `integration/inventory-configuration.test.ts`; `integration/inventory-db-routines.test.ts` "inventory_configure_product" |
+| 3 | configure succeeds only after `inventory.adjust` and a consumed assertion; no body field, query flag or presented assertion skips either; revocation applies on the next request | `security/inventory-http-authority.test.ts` "P3-AL-54 item 3"; `integration/inventory-configuration.test.ts`; `integration/inventory-db-routines.test.ts` "inventory_configure_product" |
 | 4 | base-variant `INSERT`/`UPDATE` as `daftar_app` → `catalog.base_variant_not_mutable`; `DELETE` → `42501`; internal role inserting `is_base = false` → refused | `security/inventory-db-authority.test.ts` "the column guards" |
 | 5–6 | the internal role's attributes, membership and privileges | `security/inventory-db-authority.test.ts` "the inventory principal" |
 | 7 | no `PUBLIC` `EXECUTE`; every internal-owned function passes the §D check; the two guards are the only invokers | `security/search-path-shadowing.test.ts`; `integration/inventory-db-guard.test.ts` (G-7, each protection removed in turn) |
@@ -47,7 +47,11 @@ Suite names are file paths under `tests/` unless stated.
 
 ### 2.2 The signed-authority matrix of P3-AL-55 (rows A–R)
 
-Rows A–K, N and O run over a raw connection as `daftar_app` in `security/inventory-signed-authority.test.ts`, each paired with a negative control that removes verification and shows the row turning green for the attacker. Rows L and M go through HTTP in `integration/warehouse-branch-association.test.ts` and `integration/inventory-warehouse-matrix.test.ts` (minter call counter zero for the assigned-scope actor; audit row naming the all-scope actor). Row P: `integration/inventory-config.test.ts`, including an HMAC-equivalent key (`K‖0x00`) under a different base64 spelling. Row Q: `security/inventory-payload-parity.test.ts`, `integration/inventory-db-routines.test.ts` "invpl/1 and invctl/1 parity" and `packages/inventory/test/vectors.test.ts`. Row R: `integration/migration-portability.test.ts`.
+Rows A–K, N and O run over a raw connection as `daftar_app` in `security/inventory-signed-authority.test.ts`, each paired with a negative control that removes verification and shows the row turning green for the attacker. Rows L and M go through HTTP in `security/inventory-http-authority.test.ts`, `integration/warehouse-branch-association.test.ts` and `integration/inventory-warehouse-matrix.test.ts` (minter call counter zero for the assigned-scope actor, including one assigned to every branch; routine-written audit row naming the all-scope actor with its consumed jti and trace id). Row P: `integration/inventory-config.test.ts`, including an HMAC-equivalent key (`K‖0x00`) under a different base64 spelling. Row Q: `security/inventory-payload-parity.test.ts`, `integration/inventory-db-routines.test.ts` "invpl/1 and invctl/1 parity" and `packages/inventory/test/vectors.test.ts`. Row R: `integration/migration-portability.test.ts`.
+
+### 2.2a Tenant isolation, ALLOW and DENY (directive §19)
+
+`security/inventory-tenant-isolation.test.ts` pairs every DENY with the matching ALLOW in the same shape, against another tenant **and** a second business of the same tenant owned by the same person — the stronger case, since refusal then depends only on binding the command to the asserted business. It covers the three routines under a genuine assertion naming foreign ids, raw `SELECT`/`UPDATE` as `daftar_app`, the internal role under a business scope, and the HTTP routes and reads, with the minter call counter at zero on every refusal. The internal role's admission when **no** business scope is set is the documented onboarding exception (§3 ruling 1), not a DENY case.
 
 ### 2.3 TD-09 (P3-AL-36)
 
