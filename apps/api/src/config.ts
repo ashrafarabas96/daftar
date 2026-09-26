@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { hmacKeysEquivalent } from '@daftar/inventory';
 
 /**
  * Central validated config (§34). No module reads process.env directly; missing
@@ -321,14 +322,16 @@ const EnvSchema = z
         if (inventory.length < 32) {
           fail('INVENTORY_ASSERTION_KEY', 'must be base64 of at least 32 bytes');
         } else {
-          // Compared as DECODED BYTES, never as strings: two base64 spellings
-          // of one secret are one secret, and different variable names are
-          // not separation. Either equality would let a single compromise
-          // reach inventory authority and provisioning or the ledger.
-          if (c.PROVISIONING_ASSERTION_KEY && inventory.equals(Buffer.from(c.PROVISIONING_ASSERTION_KEY, 'base64'))) {
+          // Compared as the EFFECTIVE HMAC-SHA-256 KEY of the decoded bytes,
+          // never as strings and not even as raw bytes: two base64 spellings
+          // of one secret are one secret, `K` and `K‖0x00` are one HMAC key,
+          // and different variable names are not separation. Either
+          // equivalence would let a single compromise reach inventory
+          // authority and provisioning or the ledger.
+          if (c.PROVISIONING_ASSERTION_KEY && hmacKeysEquivalent(inventory, Buffer.from(c.PROVISIONING_ASSERTION_KEY, 'base64'))) {
             fail('INVENTORY_ASSERTION_KEY', 'must not be the same secret as PROVISIONING_ASSERTION_KEY (separate domains, rotated independently)');
           }
-          if (c.ACCOUNTING_ASSERTION_KEY && inventory.equals(Buffer.from(c.ACCOUNTING_ASSERTION_KEY, 'base64'))) {
+          if (c.ACCOUNTING_ASSERTION_KEY && hmacKeysEquivalent(inventory, Buffer.from(c.ACCOUNTING_ASSERTION_KEY, 'base64'))) {
             fail('INVENTORY_ASSERTION_KEY', 'must not be the same secret as ACCOUNTING_ASSERTION_KEY (separate domains, rotated independently)');
           }
         }

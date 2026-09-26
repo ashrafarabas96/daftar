@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { INVENTORY_ASSERTION_TTL_SECONDS, splitInventoryAssertion } from '@daftar/inventory';
 import { loadConfig } from '../../apps/api/src/config';
@@ -151,6 +152,38 @@ describe('INVENTORY_ASSERTION_KEY — the production merchant API (P3-AL-55 §C)
     );
   });
 
+  it('compares the EFFECTIVE HMAC key: K‖0x00 against an accounting key K is refused', () => {
+    // HMAC-SHA-256 zero-pads a key to the 64-byte block, so these two
+    // different byte strings sign identically: an invctl/1 minted with the
+    // accounting bytes would verify against the "separate" inventory key.
+    const k = Buffer.alloc(32, 11);
+    for (const extra of [1, 2, 32]) {
+      const padded = Buffer.concat([k, Buffer.alloc(extra, 0)]).toString('base64');
+      expect(() => loadConfig({ ...MERCHANT_PROD, ACCOUNTING_ASSERTION_KEY: k.toString('base64'), INVENTORY_ASSERTION_KEY: padded })).toThrow(
+        /INVENTORY_ASSERTION_KEY: must not be the same secret as ACCOUNTING_ASSERTION_KEY/,
+      );
+      expect(() => loadConfig({ ...MERCHANT_PROD, ACCOUNTING_ASSERTION_KEY: padded, INVENTORY_ASSERTION_KEY: k.toString('base64') })).toThrow(
+        /INVENTORY_ASSERTION_KEY: must not be the same secret as ACCOUNTING_ASSERTION_KEY/,
+      );
+    }
+  });
+
+  it('compares the EFFECTIVE HMAC key: K‖0x00 against a provisioning key K is refused', () => {
+    const k = Buffer.alloc(32, 9);
+    const padded = Buffer.concat([k, Buffer.alloc(1, 0)]).toString('base64');
+    expect(() => loadConfig({ ...MERCHANT_PROD, PROVISIONING_ASSERTION_KEY: k.toString('base64'), INVENTORY_ASSERTION_KEY: padded })).toThrow(
+      /INVENTORY_ASSERTION_KEY: must not be the same secret as PROVISIONING_ASSERTION_KEY/,
+    );
+  });
+
+  it('compares the EFFECTIVE HMAC key: a key over 64 bytes against its own SHA-256 is refused', () => {
+    const long = Buffer.from(Array.from({ length: 80 }, (_, i) => (i * 13 + 5) % 256));
+    const digest = createHash('sha256').update(long).digest();
+    expect(() =>
+      loadConfig({ ...MERCHANT_PROD, ACCOUNTING_ASSERTION_KEY: digest.toString('base64'), INVENTORY_ASSERTION_KEY: long.toString('base64') }),
+    ).toThrow(/INVENTORY_ASSERTION_KEY: must not be the same secret as ACCOUNTING_ASSERTION_KEY/);
+  });
+
   it('is not required outside production (dev/test supply it explicitly, like the accounting key)', () => {
     expect(() =>
       loadConfig({
@@ -255,6 +288,18 @@ describe('InventoryAssertionMinterService (P3-AL-55 §C, §D)', () => {
     expect(
       () => new InventoryAssertionMinterService(loadConfig({ ...TEST_BASE, INVENTORY_ASSERTION_KEY: INVENTORY, ACCOUNTING_ASSERTION_KEY: ACCOUNTING })),
     ).not.toThrow();
+  });
+
+  it('repeats the check over the EFFECTIVE HMAC key: K‖0x00 against the accounting or provisioning key K', () => {
+    const k = Buffer.alloc(32, 21);
+    const padded = Buffer.concat([k, Buffer.alloc(1, 0)]).toString('base64');
+    expect(
+      () => new InventoryAssertionMinterService(loadConfig({ ...TEST_BASE, INVENTORY_ASSERTION_KEY: padded, ACCOUNTING_ASSERTION_KEY: k.toString('base64') })),
+    ).toThrow(/must not be the same secret as ACCOUNTING_ASSERTION_KEY/);
+    expect(
+      () =>
+        new InventoryAssertionMinterService(loadConfig({ ...TEST_BASE, INVENTORY_ASSERTION_KEY: padded, PROVISIONING_ASSERTION_KEY: k.toString('base64') })),
+    ).toThrow(/must not be the same secret as PROVISIONING_ASSERTION_KEY/);
   });
 
   it('refuses a key shorter than 32 bytes when it loads', () => {
