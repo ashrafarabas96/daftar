@@ -314,7 +314,7 @@ export function buildInventoryVectors(): InventoryVectors {
       'One source for BOTH the TypeScript and PostgreSQL invpl/1 canonicalizers. canonicalHex is the exact stream: ' +
       '696e76706c2f310a is "invpl/1" LF, 0a terminates every line, and a line that is only 00 is SQL NULL. ' +
       'A field value of JSON null means SQL NULL of the declared type. The invctl cases fix the key, the clock and the jti; ' +
-      'they are for MAC and format parity only and are long expired, so a live verifier must refuse them as expired. ' +
+      'they are for MAC and format parity only, are never presented to a live verifier, and expire at 2026-09-26T08:01:00Z. ' +
       'The keys are low-entropy test material, never a deployed secret.',
     invpl: { cases: payloads },
     invctl: { cases: assertionCases.map((c) => buildAssertionVector(c, payloads)) },
