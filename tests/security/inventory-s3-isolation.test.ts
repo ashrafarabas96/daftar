@@ -15,6 +15,7 @@ import { ensurePostgres, ownerPool, resetData } from '../helpers/test-app';
 import {
   S3_KINDS,
   S3_TABLES,
+  countCommand,
   counts,
   delta,
   expectAccepted,
@@ -79,7 +80,12 @@ function reach(cmd: S3Command, from: S3Business, to: S3Business, what: 'warehous
     case 'stocktake_open':
       return { ...cmd, warehouseId: m(cmd.warehouseId) };
     case 'stocktake_count':
-      return { ...cmd, warehouseId: m(cmd.warehouseId), lines: cmd.lines.map((l) => ({ ...l, variantId: m(l.variantId) })) };
+      // Re-sorted into the canonical variant order (R-12), so the only departure is whose ids they are.
+      return countCommand(
+        cmd.stocktakeId,
+        m(cmd.warehouseId),
+        cmd.lines.map((l) => ({ ...l, variantId: m(l.variantId) })),
+      );
     case 'stocktake_finalize':
       return { ...cmd, warehouseId: m(cmd.warehouseId), lines: cmd.lines.map((l) => ({ ...l, variantId: m(l.variantId) })) };
     case 'opening':
