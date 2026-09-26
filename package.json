@@ -36,6 +36,7 @@
     "bootstrap:platform-owner": "tsx scripts/bootstrap-platform-owner.ts",
     "bootstrap:provisioning-key": "tsx scripts/install-provisioning-key.ts",
     "bootstrap:accounting-key": "tsx scripts/install-accounting-key.ts",
+    "bootstrap:inventory-key": "tsx scripts/install-inventory-key.ts",
     "check:key-retirement": "tsx scripts/check-key-retirement.ts",
     "check:deployment-authority": "tsx scripts/phase2-deployment-authority.ts",
     "gate:phase1": "tsx scripts/phase1-gate.ts",
