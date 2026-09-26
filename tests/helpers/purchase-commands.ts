@@ -1105,6 +1105,48 @@ export function landedCostVectors(): LandedCostVectors {
   return JSON.parse(readFileSync(join(__dirname, '../../packages/inventory/vectors/landed-cost-vectors.json'), 'utf8')) as LandedCostVectors;
 }
 
+/**
+ * A draft stating a landed-cost vector's lines and landed costs exactly. A
+ * fractional quantity goes to the two-decimal product (`dec2`); whole
+ * quantities to `piece`, `piece2` and the variant product's two variants, in
+ * line order. Each line and cost gets a fresh id.
+ */
+export async function vectorDraft(
+  q: Queryable,
+  biz: S3Business,
+  supplierId: string,
+  lines: readonly PurchaseVectorLine[],
+  landedCosts: RefusalVector['landedCosts'],
+  o: Partial<Omit<DraftCommand, 'kind' | 'lines' | 'supplierId' | 'landedCosts'>> = {},
+): Promise<DraftCommand> {
+  const whole = [biz.piece.variantId, biz.piece2.variantId, ...biz.variantProduct.variantIds];
+  let decimalUsed = false;
+  const variants = lines.map((l) => {
+    if (!/\.0+$/.test(l.qty) && l.qty.includes('.')) {
+      if (decimalUsed) throw new Error('vectorDraft: one fractional line per draft');
+      decimalUsed = true;
+      return biz.dec2.variantId;
+    }
+    return must(whole.shift(), 'vectorDraft: at most four whole-quantity lines');
+  });
+  return draftCommand(
+    q,
+    supplierId,
+    o.warehouseId ?? biz.w1,
+    lines.map((l, i) => ({ variantId: must(variants[i]), qty: l.qty, unitPriceMinor: l.unitPriceTxnMinor, discountMinor: BigInt(l.discountMinor) })),
+    {
+      ...o,
+      landedCosts: landedCosts.map((c) => ({
+        landedCostId: randomUUID(),
+        mode: c.mode,
+        amountMinor: BigInt(c.amountMinor),
+        description: null,
+        allocations: c.allocations === null ? null : c.allocations.map((a) => BigInt(a)),
+      })),
+    },
+  );
+}
+
 /** The domestic rate R10 (re-exported for suites asserting the snapshot). */
 export { DOMESTIC_RATE_R10 };
 
