@@ -27,6 +27,15 @@
  * `reason_required` (the database's own code for a missing reason). A message
  * never carries an amount, and `opening_valuation_mismatch` carries none in
  * its details either: it is the code alone (review F4).
+ *
+ * P3-S4 adds the codes the purchase arithmetic and the coverage plan can
+ * raise (PHASE_3_S4_CONTRACT §3), in the `purchase.*` domain where the
+ * database raises the same condition under that prefix:
+ * `purchase.landed_cost_denominator_zero`,
+ * `purchase.landed_cost_allocation_mismatch`, `purchase.landed_cost_invalid`
+ * (a landed amount that is not positive, or a manual allocation that is
+ * negative or not one per line), `purchase.discount_invalid`,
+ * `purchase.total_zero` and `inventory.deficit_state_invalid`.
  */
 export type InventoryErrorCode =
   | 'inventory.assertion_malformed'
@@ -47,7 +56,13 @@ export type InventoryErrorCode =
   | 'inventory.unit_cost_required'
   | 'inventory.opening_valuation_mismatch'
   | 'inventory.allocation_invalid'
-  | 'inventory.reason_required';
+  | 'inventory.reason_required'
+  | 'inventory.deficit_state_invalid'
+  | 'purchase.landed_cost_denominator_zero'
+  | 'purchase.landed_cost_allocation_mismatch'
+  | 'purchase.landed_cost_invalid'
+  | 'purchase.discount_invalid'
+  | 'purchase.total_zero';
 
 /** Typed, string-valued facts a refusal may carry beside its code (money as integer text). Never part of the message. */
 export type InventoryErrorDetails = Readonly<Record<string, string | readonly string[]>>;

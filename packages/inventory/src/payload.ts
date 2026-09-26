@@ -56,7 +56,21 @@ export type InventoryS3OperationCode =
   | 'inventory.stocktake_finalize'
   | 'inventory.opening';
 
-export type InventoryOperationCode = InventoryS1OperationCode | InventoryS3OperationCode;
+/**
+ * The seven operation kinds P3-S4 registers (PHASE_3_S4_CONTRACT A-03, §2.5),
+ * one per entry routine of `0064`, named for the command (L:1926). Supplier
+ * reactivation is its own kind rather than a direction flag (TL-3).
+ */
+export type InventoryS4OperationCode =
+  | 'supplier.create'
+  | 'supplier.update'
+  | 'supplier.archive'
+  | 'supplier.reactivate'
+  | 'purchase.draft'
+  | 'purchase.cancel'
+  | 'purchase.receive';
+
+export type InventoryOperationCode = InventoryS1OperationCode | InventoryS3OperationCode | InventoryS4OperationCode;
 
 export const INVENTORY_S1_OPERATION_CODES: readonly InventoryS1OperationCode[] = [
   'inventory.configure_product',
@@ -74,7 +88,21 @@ export const INVENTORY_S3_OPERATION_CODES: readonly InventoryS3OperationCode[] =
   'inventory.opening',
 ];
 
-export const INVENTORY_OPERATION_CODES: readonly InventoryOperationCode[] = [...INVENTORY_S1_OPERATION_CODES, ...INVENTORY_S3_OPERATION_CODES];
+export const INVENTORY_S4_OPERATION_CODES: readonly InventoryS4OperationCode[] = [
+  'supplier.create',
+  'supplier.update',
+  'supplier.archive',
+  'supplier.reactivate',
+  'purchase.draft',
+  'purchase.cancel',
+  'purchase.receive',
+];
+
+export const INVENTORY_OPERATION_CODES: readonly InventoryOperationCode[] = [
+  ...INVENTORY_S1_OPERATION_CODES,
+  ...INVENTORY_S3_OPERATION_CODES,
+  ...INVENTORY_S4_OPERATION_CODES,
+];
 
 /** The literal first line of every stream. */
 export const INVPL_DOMAIN = 'invpl/1';
@@ -121,12 +149,30 @@ export interface InventoryPayloadRepeat {
 }
 
 /**
+ * A second variable group after the lines (PHASE_3_S4_CONTRACT A-09, the
+ * landed costs of `purchase.draft`): the count field `countField` follows the
+ * last line, then the group `fields` repeats that many times. When `perLine`
+ * is set, each group ends with that field once per line of the first group —
+ * one row of a `count × line_count` matrix, in line order. Every width is
+ * fixed by counts already read, so the stream stays unambiguous.
+ */
+export interface InventoryPayloadTrailer {
+  readonly countField: InventoryPayloadFieldSpec;
+  readonly fields: readonly InventoryPayloadFieldSpec[];
+  readonly perLine?: InventoryPayloadFieldSpec;
+}
+
+/**
  * The schema of one operation kind: the fixed header field list, in stream
  * order, plus — for a P3-S3 kind that carries lines — the repeating group
- * that follows it. A P3-S1 schema is a header and nothing else, exactly as it
- * was accepted.
+ * that follows it, and — for `purchase.draft` only — the trailer group after
+ * the lines. A P3-S1 schema is a header and nothing else, exactly as it was
+ * accepted.
  */
-export type InventoryPayloadSchema = readonly InventoryPayloadFieldSpec[] & { readonly repeat?: InventoryPayloadRepeat };
+export type InventoryPayloadSchema = readonly InventoryPayloadFieldSpec[] & {
+  readonly repeat?: InventoryPayloadRepeat;
+  readonly trailer?: InventoryPayloadTrailer;
+};
 
 const spec = (name: string, type: InventoryPayloadFieldType, nullable = false): InventoryPayloadFieldSpec => Object.freeze({ name, type, nullable });
 
@@ -137,6 +183,28 @@ function withLines(header: readonly InventoryPayloadFieldSpec[], lineFields: rea
   const repeat: InventoryPayloadRepeat = Object.freeze({ countField: 'line_count', fields: Object.freeze([...lineFields]) });
   return Object.freeze(Object.assign([...header], { repeat }));
 }
+
+function withLinesAndTrailer(
+  header: readonly InventoryPayloadFieldSpec[],
+  lineFields: readonly InventoryPayloadFieldSpec[],
+  trailer: InventoryPayloadTrailer,
+): InventoryPayloadSchema {
+  const repeat: InventoryPayloadRepeat = Object.freeze({ countField: 'line_count', fields: Object.freeze([...lineFields]) });
+  return Object.freeze(Object.assign([...header], { repeat, trailer: Object.freeze({ ...trailer, fields: Object.freeze([...trailer.fields]) }) }));
+}
+
+/** Eight unsigned 32-bit words of a free text's SHA-256, `<prefix>_w1..w8`; eight NULLs for NULL text (PHASE_3_S4_CONTRACT A-09). */
+const textWordSpecs = (prefix: string, nullable: boolean): readonly InventoryPayloadFieldSpec[] =>
+  Array.from({ length: 8 }, (_, i) => spec(`${prefix}_w${i + 1}`, 'integer', nullable));
+
+/** The five supplier word groups (A-09): the name is required, the rest may be NULL. */
+const SUPPLIER_TEXT: readonly InventoryPayloadFieldSpec[] = [
+  ...textWordSpecs('name', false),
+  ...textWordSpecs('phone', true),
+  ...textWordSpecs('email', true),
+  ...textWordSpecs('tax_identifier', true),
+  ...textWordSpecs('notes', true),
+];
 
 /**
  * Field order per operation kind (P3-AL-55 §F, P3-S1 table; PHASE_3_S3_CONTRACT
@@ -194,6 +262,62 @@ export const INVENTORY_PAYLOAD_SCHEMAS: Readonly<Record<InventoryOperationCode, 
     ],
     [spec('warehouse_id', 'uuid'), spec('variant_id', 'uuid'), spec('qty_q4', 'integer'), spec('unit_cost_c10', 'integer')],
   ),
+  // P3-S4 (PHASE_3_S4_CONTRACT A-09). Money is integer txn minor units, a
+  // unit price the C10 of a txn minor unit, a currency its lowercase ISO
+  // code, a rate its R10 (rate x 10^10) and a rate instant epoch seconds.
+  'supplier.create': Object.freeze([spec('supplier_id', 'uuid'), ...SUPPLIER_TEXT]),
+  'supplier.update': Object.freeze([spec('supplier_id', 'uuid'), spec('expected_revision', 'integer'), ...SUPPLIER_TEXT]),
+  'supplier.archive': Object.freeze([spec('supplier_id', 'uuid'), spec('expected_revision', 'integer')]),
+  'supplier.reactivate': Object.freeze([spec('supplier_id', 'uuid'), spec('expected_revision', 'integer')]),
+  'purchase.draft': withLinesAndTrailer(
+    [
+      spec('purchase_id', 'uuid'),
+      spec('expected_revision', 'integer'),
+      spec('supplier_id', 'uuid'),
+      spec('warehouse_id', 'uuid'),
+      spec('previous_warehouse_id', 'uuid', true),
+      spec('currency', 'code'),
+      spec('document_date', 'integer'),
+      ...textWordSpecs('supplier_reference', true),
+      ...textWordSpecs('notes', true),
+      spec('tax_minor', 'integer'),
+      spec('line_count', 'integer'),
+    ],
+    [spec('line_id', 'uuid'), spec('variant_id', 'uuid'), spec('qty_q4', 'integer'), spec('unit_price_c10', 'integer'), spec('discount_minor', 'integer')],
+    {
+      countField: spec('landed_count', 'integer'),
+      fields: [spec('landed_cost_id', 'uuid'), spec('mode', 'code'), spec('amount_minor', 'integer'), ...textWordSpecs('description', true)],
+      perLine: spec('allocation_minor', 'integer', true),
+    },
+  ),
+  'purchase.cancel': Object.freeze([spec('purchase_id', 'uuid'), spec('warehouse_id', 'uuid'), spec('draft_revision', 'integer')]),
+  'purchase.receive': withLines(
+    [
+      spec('purchase_id', 'uuid'),
+      spec('warehouse_id', 'uuid'),
+      spec('draft_revision', 'integer'),
+      spec('supplier_id', 'uuid'),
+      spec('supplier_revision', 'integer'),
+      spec('document_date', 'integer'),
+      spec('currency', 'code'),
+      spec('rate_id', 'uuid', true),
+      spec('rate_r10', 'integer'),
+      spec('rate_source', 'code'),
+      spec('rate_at', 'integer'),
+      spec('total_txn_minor', 'integer'),
+      spec('total_base_minor', 'integer'),
+      spec('coverage_adjustment_id', 'uuid', true),
+      spec('line_count', 'integer'),
+    ],
+    [
+      spec('line_id', 'uuid'),
+      spec('variant_id', 'uuid'),
+      spec('qty_q4', 'integer'),
+      spec('base_share_minor', 'integer'),
+      spec('covered_q4', 'integer'),
+      spec('catch_up_minor', 'integer'),
+    ],
+  ),
 };
 
 /**
@@ -204,13 +328,36 @@ export const INVENTORY_PAYLOAD_SCHEMAS: Readonly<Record<InventoryOperationCode, 
  */
 export const INVENTORY_SERVER_DERIVED_FIELDS: readonly string[] = ['expected_value', 'opening_balance_id', 'position_minor', 'variance_q4'];
 
+/**
+ * The P3-S4 intents (PHASE_3_S4_CONTRACT A-10(b)). Every supplier and draft
+ * field is the client's, so those intents are their whole payloads. A receipt
+ * is the exception: its client intent is `purchase_id`, `warehouse_id` and
+ * `draft_revision` only, and every other field — the supplier revision, the
+ * FX snapshot, the totals, the coverage and every line — is server-derived.
+ * A group whose count field is derived is derived as a whole.
+ */
+export const INVENTORY_OPERATION_INTENT_FIELDS: Readonly<Partial<Record<InventoryOperationCode, readonly string[]>>> = Object.freeze({
+  'purchase.receive': Object.freeze(['purchase_id', 'warehouse_id', 'draft_revision']),
+});
+
 /** The intent schema of an operation kind: its schema with the server-derived fields removed, header and group alike. */
 export function inventoryIntentSchema(opCode: InventoryOperationCode): InventoryPayloadSchema {
   if (!isInventoryOperationCode(opCode)) refuse('names an unregistered operation kind');
   const schema = INVENTORY_PAYLOAD_SCHEMAS[opCode];
-  const keep = (s: InventoryPayloadFieldSpec): boolean => !INVENTORY_SERVER_DERIVED_FIELDS.includes(s.name);
+  const only = INVENTORY_OPERATION_INTENT_FIELDS[opCode];
+  const keep = (s: InventoryPayloadFieldSpec): boolean => !INVENTORY_SERVER_DERIVED_FIELDS.includes(s.name) && (only === undefined || only.includes(s.name));
   const header = schema.filter(keep);
-  return schema.repeat === undefined ? Object.freeze(header) : withLines(header, schema.repeat.fields.filter(keep));
+  const repeat = schema.repeat;
+  if (repeat === undefined || !header.some((s) => s.name === repeat.countField)) return Object.freeze(header);
+  const lineFields = repeat.fields.filter(keep);
+  const trailer = schema.trailer;
+  if (trailer === undefined || !keep(trailer.countField)) return withLines(header, lineFields);
+  const perLine = trailer.perLine !== undefined && keep(trailer.perLine) ? trailer.perLine : undefined;
+  return withLinesAndTrailer(header, lineFields, {
+    countField: trailer.countField,
+    fields: trailer.fields.filter(keep),
+    ...(perLine === undefined ? {} : { perLine }),
+  });
 }
 
 /** A canonicalized payload: the operation it is for, its exact bytes and their digest. */
@@ -225,7 +372,7 @@ const refuse = (what: string): never => {
   throw new InventoryError('inventory.payload_invalid', `invpl/1 payload ${what}`);
 };
 
-/** True for a registered P3-S1 operation code. Refuses anything else, including a wildcard. */
+/** True for a registered operation code (P3-S1, P3-S3 or P3-S4). Refuses anything else, including a wildcard. */
 export function isInventoryOperationCode(value: unknown): value is InventoryOperationCode {
   return typeof value === 'string' && (INVENTORY_OPERATION_CODES as readonly string[]).includes(value);
 }
@@ -325,6 +472,7 @@ function expandSchema(
 ): readonly InventoryPayloadFieldSpec[] {
   const repeat = schema.repeat;
   if (repeat === undefined) {
+    if (schema.trailer !== undefined) return refuse(`schema for ${opCode} has a trailer without lines`);
     if (fields.length !== schema.length) refuse(`for ${opCode} requires exactly ${schema.length} fields`);
     return schema;
   }
@@ -337,11 +485,50 @@ function expandSchema(
   if (countField === undefined || countField.kind !== 'integer') return refuse(`field ${at + 1} (${repeat.countField}) must be an integer`);
   const count = BigInt(encodeInteger(countField.value, `field ${at + 1} (${repeat.countField})`));
   if (count < 0n) refuse(`field ${at + 1} (${repeat.countField}) may not be negative`);
+  const trailer = schema.trailer;
+  if (trailer !== undefined) return expandTrailer(opCode, schema, repeat, trailer, count, fields);
   if (BigInt(fields.length) !== BigInt(schema.length) + count * BigInt(repeat.fields.length)) {
     refuse(`for ${opCode} requires ${schema.length} header fields plus ${repeat.fields.length} per line`);
   }
   const out: InventoryPayloadFieldSpec[] = [...schema];
   for (let i = 0n; i < count; i += 1n) out.push(...repeat.fields);
+  return out;
+}
+
+/**
+ * The stream of a schema with a trailer group (`purchase.draft`, A-09): the
+ * header, the lines, the trailer's count, then each trailer group followed —
+ * when the trailer has a per-line field — by one such field per line.
+ */
+function expandTrailer(
+  opCode: InventoryOperationCode,
+  schema: InventoryPayloadSchema,
+  repeat: InventoryPayloadRepeat,
+  trailer: InventoryPayloadTrailer,
+  lineCount: bigint,
+  fields: readonly InventoryPayloadField[],
+): readonly InventoryPayloadFieldSpec[] {
+  const tc = trailer.countField;
+  if (tc.type !== 'integer' || tc.nullable || trailer.fields.length === 0) return refuse(`schema for ${opCode} has a malformed trailer group`);
+  const before = BigInt(schema.length) + lineCount * BigInt(repeat.fields.length);
+  if (BigInt(fields.length) <= before) return refuse(`for ${opCode} requires the ${tc.name} field after the lines`);
+  const at = Number(before);
+  const countField = fields[at];
+  if (countField === undefined || countField.kind !== 'integer') return refuse(`field ${at + 1} (${tc.name}) must be an integer`);
+  const count = BigInt(encodeInteger(countField.value, `field ${at + 1} (${tc.name})`));
+  if (count < 0n) refuse(`field ${at + 1} (${tc.name}) may not be negative`);
+  const perLine = trailer.perLine;
+  const width = BigInt(trailer.fields.length) + (perLine === undefined ? 0n : lineCount);
+  if (BigInt(fields.length) !== before + 1n + count * width) {
+    refuse(`for ${opCode} requires ${trailer.fields.length} fields per ${tc.name} group${perLine === undefined ? '' : ' plus one per line'}`);
+  }
+  const out: InventoryPayloadFieldSpec[] = [...schema];
+  for (let i = 0n; i < lineCount; i += 1n) out.push(...repeat.fields);
+  out.push(tc);
+  for (let k = 0n; k < count; k += 1n) {
+    out.push(...trailer.fields);
+    if (perLine !== undefined) for (let i = 0n; i < lineCount; i += 1n) out.push(perLine);
+  }
   return out;
 }
 

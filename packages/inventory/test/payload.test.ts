@@ -217,7 +217,9 @@ describe('invpl/1 — refusals of non-canonical input (never normalized)', () =>
 
   // PHASE_3_S3_CONTRACT A-20 row 7: the three P3-S1 kinds with their accepted
   // schemas unchanged, plus exactly the seven P3-S3 kinds and nothing else.
-  it('registers exactly the three P3-S1 operation kinds and the seven P3-S3 kinds', () => {
+  // P3-S4 (0063/0064): PHASE_3_S4_CONTRACT §7.3 row 21 appends the seven
+  // P3-S4 kinds; the S1 and S3 rows stay verbatim.
+  it('registers exactly the three P3-S1 operation kinds, the seven P3-S3 kinds and the seven P3-S4 kinds', () => {
     expect([...INVENTORY_OPERATION_CODES].sort()).toEqual([
       'inventory.adjust',
       'inventory.configure_product',
@@ -227,8 +229,15 @@ describe('invpl/1 — refusals of non-canonical input (never normalized)', () =>
       'inventory.stocktake_finalize',
       'inventory.stocktake_open',
       'inventory.transfer',
+      'purchase.cancel',
+      'purchase.draft',
+      'purchase.receive',
       'structure.associate_warehouse_branch',
       'structure.dissociate_warehouse_branch',
+      'supplier.archive',
+      'supplier.create',
+      'supplier.reactivate',
+      'supplier.update',
     ]);
     expect(Object.keys(INVENTORY_PAYLOAD_SCHEMAS).sort()).toEqual([...INVENTORY_OPERATION_CODES].sort());
     const s1 = (op: InventoryOperationCode) => INVENTORY_PAYLOAD_SCHEMAS[op].map((f) => [f.name, f.type, f.nullable]);
