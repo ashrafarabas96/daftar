@@ -206,7 +206,7 @@ Note that `app_bypass()` is platform-only (`0052:244-246`).
   - `stock_levels` has no `DELETE` grant plus a `BEFORE DELETE` trigger `stock_levels_retain` raising `inventory.stock_level_not_deletable`.
   - Movements reference `stock_levels` by an immediate FK. A business, warehouse or variant with history therefore cannot be deleted (23503), which is exactly what L:1206 wants.
   - `TRUNCATE` is deliberately unguarded: E-24, and `resetData` uses it.
-  - **Scope (clarified at implementation).** This ruling covers the S2 ledger tables. Source bridges follow the H-2 template instead: their line and binding FKs are `ON DELETE RESTRICT`, so deleting a bound source line raises `23001` (restrict_violation) naming the bridge FK. S3–S5 bridges copy the template.
+  - **Scope (clarified at implementation).** This ruling covers the S2 ledger tables. Source bridges follow the H-2 template instead: their line and binding FKs are `ON DELETE RESTRICT`, which `inventory_stock_source_guard_gaps()` requires (`confdeltype = 'r'`). Deleting a bound source line is refused on the bridge FK with `23001` (restrict_violation) on PostgreSQL 18 and `23503` on PostgreSQL 16–17; CI runs 16, the local embedded server 18. S3–S5 bridges copy the template, and any API mapping of this refusal maps both codes.
 
 **A-21 · The binding-side mechanism and its naming.**
 - **Class:** ENG.
@@ -1240,7 +1240,7 @@ Every DENY group has a negative control, marked `.N`, that removes the invariant
 **T-14 · Completeness (structure test, C).**
 - **T-14.1 / T-14.2:** an owner-raw movement without a binding, and a binding without a movement → `23503` at COMMIT.
 - **T-14.3:** a fixture call with `p_bridge = false` → `inventory.stock_source_line_missing` at COMMIT.
-- **T-14.4:** deleting a bound fixture line → `23001` naming the bridge's line FK (the H-2 template is `ON DELETE RESTRICT`; see A-20, scope).
+- **T-14.4:** deleting a bound fixture line is refused on the bridge's line FK: `23001` from PostgreSQL 18, `23503` before (the H-2 template is `ON DELETE RESTRICT`; see A-20, scope). The test derives the expected code from `server_version_num`.
 - **T-14.5:** updating its qty, cost, variant or warehouse → `inventory.source_line_frozen`.
 - **T-14.6:** in-transaction, register `fixture_orphan` in `stock_source_types` without a bridge. The 0059-E gap check (`DO $$ … IF EXISTS (SELECT 1 FROM inventory_stock_source_guard_gaps()) THEN RAISE 'inventory.source_guard_missing …'`) refuses.
 - **T-14.N:** drop the binding trigger and add a source-side trigger only; T-14.3 then commits.

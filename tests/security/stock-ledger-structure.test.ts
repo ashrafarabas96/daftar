@@ -495,18 +495,20 @@ describe('T-14 — source completeness: movement ⇄ binding → bridge → real
     });
   });
 
-  // CONTRACT NOTE (reported): §6 T-14.4 names 23503, but §5 H-2 item 4 fixes the
-  // bridge's line FK as ON DELETE RESTRICT, and PostgreSQL reports a RESTRICT
-  // violation as 23001 (restrict_violation), not 23503 (which is NO ACTION's).
-  // The case asserts what the mandated template actually raises, on the named FK.
-  it('T-14.4: a bound source line cannot be deleted (23001 restrict_violation on bridge_fixture_line_line_fk, ON DELETE RESTRICT)', async () => {
+  // §5 H-2 item 4 fixes the bridge's line FK as ON DELETE RESTRICT, which the
+  // source-guard discovery requires (confdeltype 'r'). PostgreSQL 18 reports a
+  // RESTRICT violation as 23001 (restrict_violation); PostgreSQL 16 and 17
+  // report it as 23503, the same as NO ACTION. The expected code is derived from
+  // the server that answered, never widened to "either".
+  it('T-14.4: a bound source line cannot be deleted (RESTRICT on bridge_fixture_line_line_fk; 23001 from PostgreSQL 18, 23503 before)', async () => {
     await withRolledBackFixture(async (c) => {
       const src = randomUUID();
       const line = randomUUID();
       await applyOne(c, biz, req(K1, 'purchase', '1', { unitCost: '1', sourceId: src, sourceLineId: line }));
+      const version = Number(must((await c.query<{ v: string }>(`SELECT current_setting('server_version_num') AS v`)).rows[0]).v);
       expectConstraint(
         await attempt(c, () => c.query(`DELETE FROM stock_fixture_lines WHERE business_id = $1 AND source_id = $2 AND id = $3`, [biz.businessId, src, line])),
-        '23001',
+        version >= 180000 ? '23001' : '23503',
         'bridge_fixture_line_line_fk',
       );
       // The line is not held by some other reference: an unbound line deletes.
