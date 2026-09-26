@@ -44,6 +44,40 @@
 --        the headers only, so the per-warehouse split of a Case A entry is
 --        proven for membership, home branch, distinctness and totals; the
 --        per-line shares are proven on the inventory side (A-15(f)).
+--   R-13 A reversed opening balance and a Case B inventory opening never
+--        meet (review F1). The position read (A-14(d)) states no position
+--        for an opening balance whose entry appears in
+--        `accounting_reversals.original_entry_id`, and the reversal guard
+--        refuses reversing the entry of an opening balance a posted Case B
+--        opening is bound to (`accounting.opening_balance_inventory_bound`).
+--        The two serialize on the opening balance's ROW, not on the R-1
+--        key: `accounting_post_reversal` (0046, frozen) already holds
+--        `businesses` FOR SHARE when its INSERT fires the guard, so taking
+--        the key there would invert R-1's key → businesses order and
+--        deadlock with any opening-balance command. The guard takes the row
+--        FOR NO KEY UPDATE; the read, holding the R-1 key, takes it FOR
+--        SHARE (after the key, as the workflow's own step 4 does) and only
+--        then reads the reversals. THE GLOBAL ORDER (every S3 path, the
+--        opening-balance workflow and the reversal; a path skips the steps
+--        it has no use for, never reorders them):
+--          1. assertion consume / verify               (no lock)
+--          2. the per-document-id advisory key         (0062)
+--          3. accounting_opening_balance_lock_key       (R-1)
+--          4. `businesses`                              (the OB workflow
+--             FOR UPDATE; a posting or reversal FOR SHARE)
+--          5. the `accounting_opening_balances` row     (the OB workflow
+--             FOR UPDATE; the position read FOR SHARE; the reversal guard
+--             FOR NO KEY UPDATE)
+--          6. stock targets (shared), products (FOR SHARE), stock keys
+--          7. accounting_post_entry's own order (accounts, source identity)
+--        The position read skips 4; the reversal skips 2-3. One path meets
+--        4 after 5: a Case A opening whose opening balance was reversed
+--        holds the row FOR SHARE and then posts (7), taking `businesses`
+--        FOR SHARE. No cycle follows: FOR SHARE never waits for the
+--        reversal's FOR SHARE, the only `businesses` FOR UPDATE holder that
+--        wants the row (the opening-balance workflow) holds 3 first, and a
+--        business with a posted opening balance has financial history, so
+--        its posting never takes `businesses` FOR UPDATE.
 --
 -- Migrations 0000-0060 are FROZEN and untouched.
 
@@ -1303,14 +1337,32 @@ END;
 $$;
 
 -- (b) The reversal guard (TL-6): an entry a domain owns is reversed only by
---     that domain (B-1 for openings), never by the generic workflow.
+--     that domain (B-1 for openings), never by the generic workflow; and the
+--     entry of an opening balance a Case B inventory opening is decomposed
+--     against is never reversed at all (R-13): the stock would keep the
+--     value while the ledger lost it, and nothing could repair it.
 CREATE OR REPLACE FUNCTION accounting_reversals_20_domain_source_guard() RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $$
+DECLARE
+  v_ob UUID;
 BEGIN
   IF EXISTS (SELECT 1 FROM journal_entries je
               WHERE je.business_id = NEW.business_id AND je.id = NEW.original_entry_id
                 AND je.source_type IN ('inventory_adjustment', 'inventory_opening')) THEN
     RAISE EXCEPTION 'accounting.reversal_source_domain_owned: an entry owned by the inventory domain is not reversed by the generic reversal workflow'
+      USING ERRCODE = 'P0001';
+  END IF;
+  -- R-13: the opening balance's ROW, not the workflow key. The frozen
+  -- reversal routine already holds `businesses` FOR SHARE here; the advisory
+  -- key would invert R-1's key → businesses order.
+  SELECT ob.id INTO v_ob FROM accounting_opening_balances ob
+   WHERE ob.business_id = NEW.business_id AND ob.journal_entry_id = NEW.original_entry_id
+   FOR NO KEY UPDATE;
+  IF v_ob IS NOT NULL
+     AND EXISTS (SELECT 1 FROM inventory_openings o
+                  WHERE o.business_id = NEW.business_id AND o.status = 'posted'
+                    AND o.case_kind = 'opening_balance_bound' AND o.opening_balance_id = v_ob) THEN
+    RAISE EXCEPTION 'accounting.opening_balance_inventory_bound: the inventory opening is decomposed against this opening position, whose entry therefore cannot be reversed'
       USING ERRCODE = 'P0001';
   END IF;
   RETURN NEW;
@@ -1382,6 +1434,16 @@ BEGIN
   IF v_n = 0 THEN
     RETURN;
   END IF;
+  -- R-13: a reversed opening balance states no position. The row lock waits
+  -- for an in-flight reversal of its entry (whose guard holds the row), and
+  -- keeps one from starting until this transaction ends; the reversal is
+  -- then read by a later statement, so it is seen once committed.
+  PERFORM 1 FROM accounting_opening_balances ob WHERE ob.business_id = p_business_id AND ob.id = v_ob FOR SHARE;
+  IF EXISTS (SELECT 1 FROM accounting_opening_balances ob
+               JOIN accounting_reversals r ON r.business_id = ob.business_id AND r.original_entry_id = ob.journal_entry_id
+              WHERE ob.business_id = p_business_id AND ob.id = v_ob) THEN
+    RETURN;
+  END IF;
   opening_balance_id  := v_ob;
   inventory_net_minor := v_net::bigint;
   RETURN NEXT;
@@ -1389,7 +1451,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION accounting_inventory_opening_position(UUID) IS
-  'P3-S3 A-14(d). The posted opening balance of the transaction''s business and its net Σ debit − Σ credit on lines resolving to the business Inventory system account (by system key or by that account''s code); zero rows when there is no posted opening balance or no such line. Takes the opening-balance workflow lock. accounting.scope_mismatch for another business. EXECUTE: daftar_inventory_internal only (reachability for signed routines, not runtime reach).';
+  'P3-S3 A-14(d). The posted opening balance of the transaction''s business and its net Σ debit − Σ credit on lines resolving to the business Inventory system account (by system key or by that account''s code); zero rows when there is no posted opening balance, no such line, or its journal entry has been reversed (R-13). Takes the opening-balance workflow lock, then the balance row FOR SHARE (R-13). accounting.scope_mismatch for another business. EXECUTE: daftar_inventory_internal only (reachability for signed routines, not runtime reach).';
 
 REVOKE ALL ON FUNCTION accounting_inventory_adjustment_entry_complete() FROM PUBLIC;
 REVOKE ALL ON FUNCTION accounting_inventory_opening_entry_complete() FROM PUBLIC;
@@ -1781,6 +1843,23 @@ BEGIN
                           'products_30_archive_requires_zero_stock')
          AND g.tgqual IS NOT NULL) <> 9 THEN
     RAISE EXCEPTION 'inventory.migration_end_state_invalid: a conditional S3 trigger lost its WHEN clause';
+  END IF;
+
+  -- (5b) R-13: the reversal guard locks the opening balance's row and refuses
+  --      a bound one; the position read locks the row, then excludes a
+  --      reversed balance; neither takes the R-1 key in the guard.
+  SELECT p.prosrc INTO v_def FROM pg_proc p WHERE p.oid = 'accounting_reversals_20_domain_source_guard()'::regprocedure;
+  IF position('FROM accounting_opening_balances ob' IN v_def) = 0 OR position('FOR NO KEY UPDATE' IN v_def) = 0
+     OR position('accounting.opening_balance_inventory_bound:' IN v_def) = 0
+     OR position('pg_advisory_xact_lock' IN v_def) > 0
+     OR position('FOR NO KEY UPDATE' IN v_def) > position('FROM inventory_openings o' IN v_def) THEN
+    RAISE EXCEPTION 'inventory.migration_end_state_invalid: the reversal guard does not refuse reversing a bound opening balance under its row lock (R-13)';
+  END IF;
+  SELECT p.prosrc INTO v_def FROM pg_proc p WHERE p.oid = 'accounting_inventory_opening_position(uuid)'::regprocedure;
+  IF position('FOR SHARE' IN v_def) = 0 OR position('JOIN accounting_reversals r' IN v_def) = 0
+     OR position('FOR SHARE' IN v_def) > position('JOIN accounting_reversals r' IN v_def)
+     OR position('pg_advisory_xact_lock(accounting_opening_balance_lock_key(p_business_id))' IN v_def) NOT BETWEEN 1 AND position('FOR SHARE' IN v_def) THEN
+    RAISE EXCEPTION 'inventory.migration_end_state_invalid: the opening-position read does not exclude a reversed opening balance under its row lock (R-13)';
   END IF;
 
   -- (6) Every new function: owner, DEFINER, pinned path, and no EXECUTE for

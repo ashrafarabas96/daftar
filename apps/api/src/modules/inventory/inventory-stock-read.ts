@@ -233,7 +233,9 @@ export interface OpeningPosition {
  * `daftar_app`'s accepted SELECT on the opening-balance tables. Lines resolve
  * to the `inventory` system account by its system key or by that account's
  * own code, as `0047` lets a position name it. Null when no opening balance is
- * posted or it has no inventory line. The routine re-reads the same answer
+ * posted, it has no inventory line, or its journal entry has been reversed
+ * (0061 R-13: a reversed balance states no position, so Case B can never
+ * bind one). The routine re-reads the same answer
  * through `accounting_inventory_opening_position` under the shared advisory
  * lock and refuses a difference (`inventory.opening_case_changed`).
  */
@@ -246,6 +248,7 @@ export async function readOpeningPosition(db: Database, scope: ReadScope): Promi
        JOIN accounting_opening_balance_lines l ON l.business_id = ob.business_id AND l.opening_balance_id = ob.id
       WHERE ob.business_id = $1
         AND ob.status = 'posted'
+        AND NOT EXISTS (SELECT 1 FROM accounting_reversals r WHERE r.business_id = ob.business_id AND r.original_entry_id = ob.journal_entry_id)
         AND (   (l.account_ref_kind = 'system' AND l.account_system_key = 'inventory')
              OR (l.account_ref_kind = 'code' AND l.account_code = (SELECT a.code FROM accounts a WHERE a.business_id = $1 AND a.system_key = 'inventory')))
       GROUP BY ob.id`,
