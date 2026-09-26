@@ -28,6 +28,11 @@ import { AccountingController } from '../modules/accounting/accounting.controlle
 import { InventoryAuthorizationService } from '../modules/inventory/inventory-authorization';
 import { InventoryConfigurationService } from '../modules/inventory/inventory-configuration.service';
 import { InventoryConfigurationController } from '../modules/inventory/inventory-configuration.controller';
+import { InventoryTransferService } from '../modules/inventory/inventory-transfer.service';
+import { InventoryAdjustmentService } from '../modules/inventory/inventory-adjustment.service';
+import { InventoryStocktakeService } from '../modules/inventory/inventory-stocktake.service';
+import { InventoryOpeningService } from '../modules/inventory/inventory-opening.service';
+import { InventoryMovementsController } from '../modules/inventory/inventory-movements.controller';
 import { AdminService } from '../modules/admin/admin.service';
 import { AdminController } from '../modules/admin/admin.controller';
 import { OutboxPublisher } from '../modules/outbox/publisher';
@@ -63,6 +68,7 @@ export class AppModule implements NestModule {
         EntitlementsController,
         AccountingController,
         InventoryConfigurationController,
+        InventoryMovementsController,
         AdminController,
       ],
       providers: [
@@ -76,6 +82,13 @@ export class AppModule implements NestModule {
         // the first command on it. Composed wherever the minter is, and only there.
         InventoryAuthorizationService,
         InventoryConfigurationService,
+        // P3-S3: the stock movement commands. Each posting one mints through
+        // the accounting minter and posts through the accounting adapter
+        // composed above (accountingProviders), inside one transaction.
+        InventoryTransferService,
+        InventoryAdjustmentService,
+        InventoryStocktakeService,
+        InventoryOpeningService,
         ...workerProviders(config, options),
         // Only PROCESS_MODE=all composes the reconciler beside the worker,
         // and only because this composition exists for dev and tests;

@@ -26,6 +26,11 @@ import { AccountingController } from '../modules/accounting/accounting.controlle
 import { InventoryAuthorizationService } from '../modules/inventory/inventory-authorization';
 import { InventoryConfigurationService } from '../modules/inventory/inventory-configuration.service';
 import { InventoryConfigurationController } from '../modules/inventory/inventory-configuration.controller';
+import { InventoryTransferService } from '../modules/inventory/inventory-transfer.service';
+import { InventoryAdjustmentService } from '../modules/inventory/inventory-adjustment.service';
+import { InventoryStocktakeService } from '../modules/inventory/inventory-stocktake.service';
+import { InventoryOpeningService } from '../modules/inventory/inventory-opening.service';
+import { InventoryMovementsController } from '../modules/inventory/inventory-movements.controller';
 
 /**
  * MERCHANT PROCESS (Directive §16). Composes the merchant HTTP surface and
@@ -53,6 +58,7 @@ export class MerchantApiModule implements NestModule {
         EntitlementsController,
         AccountingController,
         InventoryConfigurationController,
+        InventoryMovementsController,
       ],
       providers: [
         ...coreProviders(config, options),
@@ -65,6 +71,13 @@ export class MerchantApiModule implements NestModule {
         // the first command on it. Composed wherever the minter is, and only there.
         InventoryAuthorizationService,
         InventoryConfigurationService,
+        // P3-S3: the stock movement commands. Each posting one mints through
+        // the accounting minter and posts through the accounting adapter
+        // composed above (accountingProviders), inside one transaction.
+        InventoryTransferService,
+        InventoryAdjustmentService,
+        InventoryStocktakeService,
+        InventoryOpeningService,
         TenancyService,
         StructureService,
         InvitationsService,
