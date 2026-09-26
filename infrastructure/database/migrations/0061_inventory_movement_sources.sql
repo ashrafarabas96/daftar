@@ -41,9 +41,20 @@
 --   R-3  `inventory_largest_remainder` is created HERE (not in 0062): the
 --        opening's value-completeness trigger in this file needs it.
 --   R-4  Accounting-side opening check. A-18 grants the accounting principal
---        the headers only, so the per-warehouse split of a Case A entry is
---        proven for membership, home branch, distinctness and totals; the
---        per-line shares are proven on the inventory side (A-15(f)).
+--        the headers only, so the per-line shares are proven on the
+--        inventory side (A-15(f)); the per-warehouse split of a Case A
+--        entry is proven through the header (R-15).
+--   R-15 The per-warehouse split lives on the opening HEADER (superseding
+--        R-4's residual: the old check proved distinctness, home branch and
+--        totals only, so an entry debiting a warehouse the opening never
+--        touched, or the right warehouses with a wrong split, committed).
+--        `inventory_openings.split_warehouse_ids` / `split_values_base_minor`
+--        hold, in ascending warehouse id, each warehouse whose Σ movement
+--        value is > 0 and that Σ (A-05 Case A). The routine writes them
+--        from its own shares; A-15(f) proves them equal to the movements
+--        per warehouse at COMMIT; A-14(a) requires the entry's Inventory
+--        debits to be exactly that set of (warehouse, amount) pairs. The
+--        accounting principal still reads the headers only (A-18).
 --   R-13 A reversed opening balance and a Case B inventory opening never
 --        meet (review F1). The position read (A-14(d)) states no position
 --        for an opening balance whose entry appears in
@@ -315,7 +326,7 @@ DECLARE
     "stock_source_freeze_stocktake()": "2e29261988cc961a5c9a052709b78a32a6fd49509d263875b97527992b905717",
     "stock_source_freeze_inventory_opening()": "507f40e4d0d472a6e787865b5a779c6f69ecfb651875ba14df57fe8fd8f54cbe",
     "inventory_source_header_guard()": "a588bc217122ca6ac9ca074f965189cb450a1f3aab9c782661ed2aa50a4cd85c",
-    "inventory_source_value_complete()": "22a8a0b5f231771e2688dfbaa9cead3245eaaa85c46a6ebe989aa5b40933e89b"
+    "inventory_source_value_complete()": "908bc14db1094becba6402c0171237a5d91481874a55dd16eef17894cc59d5d4"
   }';
 BEGIN
   FOR v_type IN SELECT t.source_type FROM stock_source_types t ORDER BY t.source_type LOOP
@@ -641,6 +652,11 @@ CREATE TABLE inventory_openings (
   opening_balance_id        UUID,
   matched_amount_base_minor BIGINT,
   total_value_base_minor    BIGINT NOT NULL CHECK (total_value_base_minor BETWEEN 0 AND 1000000000000000000),
+  -- R-15: the per-warehouse split of the total, canonical (ascending
+  -- warehouse id, only warehouses whose share sum is > 0, A-05 Case A).
+  -- Proven against the movements by A-15(f); read by A-14(a).
+  split_warehouse_ids       UUID[] NOT NULL,
+  split_values_base_minor   BIGINT[] NOT NULL,
   accounting_source_type    TEXT NOT NULL GENERATED ALWAYS AS ('inventory_opening') STORED,
   binding_source_id         UUID,
   intent_sha256             TEXT NOT NULL CHECK (intent_sha256 ~ '^[0-9a-f]{64}$'),
@@ -649,6 +665,12 @@ CREATE TABLE inventory_openings (
   created_at                TIMESTAMPTZ NOT NULL DEFAULT now(),
   PRIMARY KEY (business_id, id),
   CONSTRAINT inventory_openings_binding_identity_ck CHECK (binding_source_id IS NULL OR binding_source_id = id),
+  CONSTRAINT inventory_openings_split_shape_ck CHECK (
+    array_ndims(split_warehouse_ids) IS NOT DISTINCT FROM array_ndims(split_values_base_minor)
+    AND cardinality(split_warehouse_ids) = cardinality(split_values_base_minor)
+    AND array_position(split_warehouse_ids, NULL) IS NULL
+    AND array_position(split_values_base_minor, NULL) IS NULL
+    AND 0 < ALL (split_values_base_minor)),
   CONSTRAINT inventory_openings_case_ck CHECK (
     (case_kind = 'ledger_posting'
        AND opening_balance_id IS NULL AND matched_amount_base_minor IS NULL
@@ -1095,6 +1117,8 @@ DECLARE
   v_w      NUMERIC[];
   v_vals   BIGINT[];
   v_shares BIGINT[];
+  v_split_ids  UUID[];
+  v_split_vals BIGINT[];
 BEGIN
   IF TG_TABLE_NAME = 'inventory_adjustments' THEN
     SELECT a.total_value_base_minor INTO v_total FROM inventory_adjustments a WHERE a.business_id = NEW.business_id AND a.id = NEW.id;
@@ -1137,6 +1161,24 @@ BEGIN
     v_shares := inventory_largest_remainder(v_w, v_total);
     IF v_vals IS DISTINCT FROM v_shares THEN
       RAISE EXCEPTION 'inventory.source_value_mismatch: an opening movement does not carry its allocated share' USING ERRCODE = 'P0001';
+    END IF;
+    -- R-15: the header's per-warehouse split is exactly the Σ of the
+    -- movement values per warehouse, for the warehouses whose Σ is > 0.
+    SELECT coalesce(array_agg(w.warehouse_id ORDER BY w.warehouse_id), ARRAY[]::uuid[]),
+           coalesce(array_agg(w.v ORDER BY w.warehouse_id), ARRAY[]::bigint[])
+      INTO v_split_ids, v_split_vals
+    FROM (SELECT l.warehouse_id, sum(m.value_delta_base_minor)::bigint AS v
+            FROM inventory_opening_lines l
+            JOIN stock_source_bridge_inventory_opening b
+              ON b.business_id = l.business_id AND b.source_id = l.opening_id AND b.source_line_id = l.id
+            JOIN stock_movements m ON m.business_id = b.business_id AND m.source_type = b.source_type AND m.source_id = b.source_id
+                                  AND m.source_line_id = b.source_line_id AND m.movement_kind = b.movement_kind
+           WHERE l.business_id = NEW.business_id AND l.opening_id = NEW.id
+           GROUP BY l.warehouse_id
+          HAVING sum(m.value_delta_base_minor) > 0) w;
+    IF (SELECT o.split_warehouse_ids FROM inventory_openings o WHERE o.business_id = NEW.business_id AND o.id = NEW.id) IS DISTINCT FROM v_split_ids
+       OR (SELECT o.split_values_base_minor FROM inventory_openings o WHERE o.business_id = NEW.business_id AND o.id = NEW.id) IS DISTINCT FROM v_split_vals THEN
+      RAISE EXCEPTION 'inventory.source_value_mismatch: an opening''s per-warehouse split is not the sum of its movement values per warehouse' USING ERRCODE = 'P0001';
     END IF;
   END IF;
   RETURN NULL;
@@ -1397,6 +1439,9 @@ DECLARE
   v_eq_cr    NUMERIC;
   v_inv_ok   BOOLEAN;
   v_eq_ok    BOOLEAN;
+  v_split_w  UUID[];
+  v_split_v  BIGINT[];
+  v_split_ok BOOLEAN;
 BEGIN
   SELECT count(*) INTO v_n FROM inventory_openings o
    WHERE o.business_id = NEW.business_id AND o.binding_source_id = NEW.source_id
@@ -1405,7 +1450,8 @@ BEGIN
     RAISE EXCEPTION 'accounting.inventory_detail_missing: an inventory-opening entry must be registered by its inventory opening in the same transaction'
       USING ERRCODE = 'P0001';
   END IF;
-  SELECT o.occurred_on, o.total_value_base_minor INTO v_date, v_total FROM inventory_openings o
+  SELECT o.occurred_on, o.total_value_base_minor, o.split_warehouse_ids, o.split_values_base_minor
+    INTO v_date, v_total, v_split_w, v_split_v FROM inventory_openings o
    WHERE o.business_id = NEW.business_id AND o.binding_source_id = NEW.source_id
      AND o.case_kind = 'ledger_posting' AND o.status = 'posted';
 
@@ -1426,9 +1472,24 @@ BEGIN
   JOIN accounts a ON a.business_id = l.business_id AND a.id = l.account_id
   WHERE l.business_id = NEW.business_id AND l.journal_entry_id = NEW.id;
 
+  -- R-15: the Inventory debits are exactly the header's per-warehouse
+  -- split — one line per warehouse of the opening, each for that
+  -- warehouse's Σ movement value (proven against the movements by A-15(f)).
+  SELECT NOT EXISTS (
+           SELECT 1
+             FROM (SELECT l.warehouse_id, l.debit_minor::numeric AS v
+                     FROM journal_lines l
+                     JOIN accounts a ON a.business_id = l.business_id AND a.id = l.account_id
+                    WHERE l.business_id = NEW.business_id AND l.journal_entry_id = NEW.id AND a.system_key = 'inventory') e
+             FULL JOIN unnest(v_split_w, v_split_v) AS h(warehouse_id, v)
+               ON h.warehouse_id = e.warehouse_id AND h.v::numeric = e.v
+            WHERE e.warehouse_id IS NULL OR h.warehouse_id IS NULL)
+    INTO v_split_ok;
+
   IF NEW.entry_date IS DISTINCT FROM v_date OR v_total IS NULL OR v_total <= 0
      OR v_inv < 1 OR v_inv_wh <> v_inv OR v_eq <> 1 OR v_lines <> v_inv + 1
-     OR v_inv_dr <> v_total::numeric OR v_eq_cr <> v_total::numeric OR NOT v_inv_ok OR NOT v_eq_ok THEN
+     OR v_inv_dr <> v_total::numeric OR v_eq_cr <> v_total::numeric OR NOT v_inv_ok OR NOT v_eq_ok
+     OR v_split_ok IS NOT TRUE OR cardinality(v_split_w) <> v_inv THEN
     RAISE EXCEPTION 'accounting.inventory_entry_mismatch: an inventory-opening entry is not one Inventory debit per warehouse against one opening-equity credit for its total'
       USING ERRCODE = 'P0001';
   END IF;

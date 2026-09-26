@@ -1280,6 +1280,8 @@ DECLARE
   v_weights  NUMERIC[];
   v_total    NUMERIC;
   v_shares   BIGINT[];
+  v_split_w  UUID[];
+  v_split_v  BIGINT[];
   v_case     TEXT;
   v_line_ids UUID[];
   v_reqs     inventory_movement_request[];
@@ -1374,6 +1376,12 @@ BEGIN
       RAISE EXCEPTION 'inventory.value_out_of_range: the document value is outside the supported range' USING ERRCODE = 'P0001';
     END IF;
     v_shares := inventory_largest_remainder(v_weights, v_total::bigint);
+    -- 0061 R-15: the per-warehouse split of T the header carries (ascending
+    -- warehouse id; only warehouses whose shares sum to > 0).
+    SELECT coalesce(array_agg(w.wh ORDER BY w.wh), ARRAY[]::uuid[]), coalesce(array_agg(w.v ORDER BY w.wh), ARRAY[]::bigint[])
+      INTO v_split_w, v_split_v
+    FROM (SELECT l.wh, sum(l.share)::bigint AS v FROM unnest(p_warehouse_ids, v_shares) AS l(wh, share)
+           GROUP BY l.wh HAVING sum(l.share) > 0) w;
     IF p_opening_balance_id IS NOT NULL THEN
       IF v_total <> p_position_minor THEN
         RAISE EXCEPTION 'inventory.opening_valuation_mismatch: the stock total does not equal the Inventory opening position' USING ERRCODE = 'P0001';
@@ -1384,10 +1392,10 @@ BEGIN
     END IF;
 
     INSERT INTO inventory_openings (tenant_id, business_id, id, status, case_kind, occurred_on, opening_balance_id,
-                                    matched_amount_base_minor, total_value_base_minor, binding_source_id, intent_sha256,
-                                    actor_user_id, business_transaction_id)
+                                    matched_amount_base_minor, total_value_base_minor, split_warehouse_ids, split_values_base_minor,
+                                    binding_source_id, intent_sha256, actor_user_id, business_transaction_id)
     VALUES (v_tenant, v_business, p_opening_id, 'posted', v_case, p_occurred_on, p_opening_balance_id,
-            CASE WHEN v_case = 'opening_balance_bound' THEN v_total::bigint END, v_total::bigint,
+            CASE WHEN v_case = 'opening_balance_bound' THEN v_total::bigint END, v_total::bigint, v_split_w, v_split_v,
             CASE WHEN v_case = 'ledger_posting' AND v_total > 0 THEN p_opening_id END, v_intent,
             v_actor.actor_user_id, v_trace)
     ON CONFLICT (business_id, id) DO NOTHING;

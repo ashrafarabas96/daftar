@@ -237,6 +237,73 @@ describe('A-14(a)/R-4: a Case A entry debits only the warehouses of its opening'
       expectAccepted(await atCommit(c), 'W1 300 / W2 200 for shares 300 / 200');
     });
   });
+
+  /** R-15: the right total over the right warehouses, split wrongly, no longer commits. */
+  it('the right warehouses and total with a wrong per-warehouse split is refused inventory_entry_mismatch', async () => {
+    await inTx(async () => {
+      const A = world.A;
+      const cmd = openingCommand(day, [
+        { warehouseId: A.w1, variantId: A.piece.variantId, qty: '3', unitCost: '100' },
+        { warehouseId: A.w2, variantId: A.piece.variantId, qty: '2', unitCost: '100' },
+      ]);
+      expectAccepted(await tryCommand(c, A, cmd));
+      const perWarehouse = [
+        { warehouseId: A.w1, branchId: A.branchX, valueMinor: 400n },
+        { warehouseId: A.w2, branchId: A.branchY, valueMinor: 100n },
+      ];
+      await postEntryInTx(c, must(openingEntry(A, { sourceId: cmd.openingId, occurredOn: day, perWarehouse })), A.userId);
+      refusedWith(await atCommit(c), 'P0001', 'accounting.inventory_entry_mismatch', 'W1 400 / W2 100 for shares 300 / 200');
+    });
+  });
+
+  it('a split that omits a warehouse of the opening is refused inventory_entry_mismatch', async () => {
+    await inTx(async () => {
+      const A = world.A;
+      const cmd = openingCommand(day, [
+        { warehouseId: A.w1, variantId: A.piece.variantId, qty: '3', unitCost: '100' },
+        { warehouseId: A.w2, variantId: A.piece.variantId, qty: '2', unitCost: '100' },
+      ]);
+      expectAccepted(await tryCommand(c, A, cmd));
+      const perWarehouse = [{ warehouseId: A.w1, branchId: A.branchX, valueMinor: 500n }];
+      await postEntryInTx(c, must(openingEntry(A, { sourceId: cmd.openingId, occurredOn: day, perWarehouse })), A.userId);
+      refusedWith(await atCommit(c), 'P0001', 'accounting.inventory_entry_mismatch', 'all of T on W1 when W2 holds 200');
+    });
+  });
+
+  it('the header records the per-warehouse split the movements carry (only warehouses whose sum is > 0)', async () => {
+    await inTx(async () => {
+      const A = world.A;
+      const cmd = openingCommand(day, [
+        { warehouseId: A.w1, variantId: A.piece.variantId, qty: '3', unitCost: '100' },
+        { warehouseId: A.w1, variantId: A.piece2.variantId, qty: '2', unitCost: '100' },
+        { warehouseId: A.w2, variantId: A.piece2.variantId, qty: '1', unitCost: '0' },
+      ]);
+      expectAccepted(await tryCommand(c, A, cmd));
+      const h = must(
+        (
+          await c.query<{ ids: string[]; vals: string[] }>(
+            `SELECT split_warehouse_ids::text[] AS ids, split_values_base_minor::text[] AS vals FROM inventory_openings WHERE id = $1`,
+            [cmd.openingId],
+          )
+        ).rows[0],
+      );
+      expect(h, 'W2 holds a zero-valued line only, so it is not in the split').toEqual({ ids: [A.w1], vals: ['500'] });
+      const byWarehouse = (
+        await c.query<{ w: string; v: string }>(
+          `SELECT l.warehouse_id::text AS w, sum(m.value_delta_base_minor)::text AS v
+             FROM inventory_opening_lines l
+             JOIN stock_movements m ON m.business_id = l.business_id AND m.source_type = 'inventory_opening'
+                                   AND m.source_id = l.opening_id AND m.source_line_id = l.id
+            WHERE l.opening_id = $1 GROUP BY 1 ORDER BY 1`,
+          [cmd.openingId],
+        )
+      ).rows;
+      expect(Object.fromEntries(byWarehouse.map((r) => [r.w, r.v]))).toEqual({ [A.w1]: '500', [A.w2]: '0' });
+      const perWarehouse = [{ warehouseId: A.w1, branchId: A.branchX, valueMinor: 500n }];
+      await postEntryInTx(c, must(openingEntry(A, { sourceId: cmd.openingId, occurredOn: day, perWarehouse })), A.userId);
+      expectAccepted(await atCommit(c), 'W1 500 for the one warehouse of the split');
+    });
+  });
 });
 
 describe('T-08.2/3 Case B: decomposing the Inventory opening position', () => {
