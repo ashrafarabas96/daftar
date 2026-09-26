@@ -234,6 +234,8 @@ Note that `app_bypass()` is platform-only (`0052:244-246`).
   - `inventory_configure_product` holds `FOR UPDATE` on the product (`0055:156-160`); a raw internal `UPDATE` holds a no-key update lock. Both conflict with `FOR SHARE`.
   - Guard 2 and the disable rule are VOLATILE, so each statement sees what the other side committed.
   - This is deadlock-free, because no holder of an exclusive product lock takes a stock-key lock.
+  - **Amended after the independent security review (M-1).** The protocol holds only under READ COMMITTED: under REPEATABLE READ or SERIALIZABLE the guard reads a transaction snapshot and would not see the committing side. The primitive, `inventory_configure_product`, `products_20_unit_history_lock` and `product_variants_20_stock_identity_lock` therefore refuse any other isolation level with `inventory.isolation_unsupported` before they read anything.
+  - **Deviation (H-1).** The internal role has no UPDATE on `product_variants`, so the primitive cannot lock a variant row. A variant's product is instead frozen by `product_variants_20_stock_identity_lock` (BEFORE UPDATE OF `product_id`), which takes `FOR UPDATE` on the old product and refuses with `inventory.variant_stock_identity_locked` while any `stock_levels` row names the variant; and the primitive re-reads every variant→product mapping after its product locks (step 4b), refusing with `inventory.variant_stock_identity_changed` if one moved.
   - Accepted cost: a catalog `UPDATE` of a product waits for an in-flight stock command on that product.
 
 **A-24 · Re-verifying the payload digest.**
@@ -248,7 +250,7 @@ Note that `app_bypass()` is platform-only (`0052:244-246`).
 - **Class:** ENG.
 - **Ruling:**
   - `|value_delta_base_minor|` and `|valuation_base_minor|` ≤ 10^18: a CHECK plus `inventory.value_out_of_range`. This mirrors the journal cap (`0042:224-230`).
-  - `|on_hand|` and `|qty_delta|` < 10^14, the NUMERIC(18,4) domain: `inventory.quantity_out_of_range`.
+  - `|on_hand|` and `|qty_delta|` < 10^10: `inventory.quantity_out_of_range`. **Amended after the independent security review (M-3).** The first ruling used the NUMERIC(18,4) domain, 10^14. At that bound the reviewer reproduced a partial outbound at quantity ≥ 10^10 whose value exceeded the valuation it drew from. Below 10^10 the reproduction is refused and the bound-edge tests pass. The package's `QTY_LIMIT_Q4` follows the SQL bound (see §4).
   - Cost is ≥ 0 and < 10^18: `inventory.cost_invalid`.
 
 **A-27 · The inbound snapshot.**
@@ -488,6 +490,7 @@ Future bridges attach `stock_ledger_append_only()` as `stock_bridge_immutable_<s
 
 **0059 catalogue function:**
 - **Signature:** `inventory_stock_source_guard_gaps() RETURNS TABLE (source_type TEXT, missing TEXT)`, `LANGUAGE plpgsql STABLE SECURITY INVOKER`, pinned path, migrator-owned, `REVOKE ALL FROM PUBLIC`.
+- **Open for P3-S3.** The review found the discovery checks names only (a trigger with the right name on the wrong table, or disabled, passes). With `stock_source_types` empty at S2 nothing depends on it; the first slice that registers a source type strengthens it in its own migration (table, timing, enabled state, function) before registering.
 - **Missing items it reports**, for every row of `stock_source_types`:
   - `bridge`: no `to_regclass('public.stock_source_bridge_' || st)`.
   - `bridge_binding_fk`: no `pg_constraint` with `contype = 'f'` from the bridge to `stock_source_bindings` with `confdeltype = 'r'`.
@@ -769,7 +772,10 @@ Tests assert both the SQLSTATE and the code prefix.
 | `inventory.product_not_tracked` | R3 | `track_inventory = false` |
 | `inventory.variant_not_stock_identity` | R3 | A-29 |
 | `inventory.quantity_precision_invalid` | R3 (lock-named, L:293) | not representable |
-| `inventory.quantity_out_of_range` | R3 | `abs(qty)` or `abs(on_hand)` ≥ 10^14 |
+| `inventory.quantity_out_of_range` | R3 | `abs(qty)` or `abs(on_hand)` ≥ 10^10 (A-26, amended) |
+| `inventory.isolation_unsupported` | R3, R7, configure, variant lock | transaction isolation is not READ COMMITTED (A-23, amended) |
+| `inventory.variant_stock_identity_locked` | `product_variants_20_stock_identity_lock` | a variant with a stock key moved to another product (A-23, H-1) |
+| `inventory.variant_stock_identity_changed` | R3 step 4b | a variant's product changed between the request and the product lock (A-23, H-1) |
 | `inventory.quantity_sign_invalid` | R3 | `qty_sign` violated |
 | `inventory.reason_required` | R3 | `requires_reason` and no reason |
 | `inventory.movement_shape_invalid` | R3 | cost/value presence against class |
@@ -815,7 +821,7 @@ The class is unchanged.
 
 ```ts
 export const QTY_SCALE = 4; export const COST_SCALE = 10;
-export const QTY_LIMIT_Q4 = 10n ** 18n;          // |qty| < 10^14 units
+export const QTY_LIMIT_Q4 = 10n ** 14n;          // |qty| < 10^10 units (A-26, amended; mirrors the SQL bound)
 export const VALUE_LIMIT_MINOR = 10n ** 18n;     // |value| <= 10^18
 export const COST_LIMIT_C10 = 10n ** 28n;        // cost < 10^18
 export interface ExactDecimal { readonly units: bigint; readonly scale: number }

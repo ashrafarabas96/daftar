@@ -53,6 +53,7 @@
     "gate:phase2:s8:release": "tsx scripts/phase2-s8-release-gate.ts",
     "gate:phase2:release": "tsx scripts/phase2-release-gate.ts",
     "gate:phase3:s1": "tsx scripts/phase3-s1-gate.ts",
+    "gate:phase3:s2": "tsx scripts/phase3-s2-gate.ts",
     "export:release": "tsx scripts/export-release.ts",
     "export:release:phase2": "tsx scripts/export-release.ts --phase=2",
     "verify:history": "tsx scripts/verify-migration-history.ts",
