@@ -52,7 +52,7 @@ export interface StocktakeOpenResult {
   readonly warehouseId: string;
   readonly status: StocktakeHeader['status'];
   readonly replayed: boolean;
-  /** The trace id of THIS request: a stocktake header stores none (§2.2). */
+  /** The trace of the operation that opened the stocktake: a replay answers the stored one (A-10(f)). */
   readonly businessTransactionId: string;
 }
 
@@ -190,7 +190,13 @@ export class InventoryStocktakeService {
     const existing = await findStocktake(this.db, scope, input.stocktakeId);
     if (existing !== null) {
       if (existing.intentSha256 !== built.intentSha256) throw inventoryRefusal('inventory.idempotency_conflict');
-      return { id: existing.id, warehouseId: existing.warehouseId, status: existing.status, replayed: true, businessTransactionId };
+      return {
+        id: existing.id,
+        warehouseId: existing.warehouseId,
+        status: existing.status,
+        replayed: true,
+        businessTransactionId: existing.businessTransactionId,
+      };
     }
     if (await adjustmentSourceIdTaken(this.db, scope, input.stocktakeId, 'inventory_adjustments')) throw inventoryRefusal('inventory.document_id_conflict');
 
@@ -210,7 +216,13 @@ export class InventoryStocktakeService {
     });
     const stored = await findStocktake(this.db, scope, input.stocktakeId);
     if (stored === null) throw new Error('the opened stocktake is not readable');
-    return { id: stored.id, warehouseId: stored.warehouseId, status: stored.status, replayed, businessTransactionId };
+    return {
+      id: stored.id,
+      warehouseId: stored.warehouseId,
+      status: stored.status,
+      replayed,
+      businessTransactionId: stored.businessTransactionId,
+    };
   }
 
   private async runCount(
@@ -304,7 +316,7 @@ export class InventoryStocktakeService {
     // result; any other close of a closed stocktake is a state refusal.
     if (header.finalizeIntentSha256 !== null) {
       if (header.finalizeIntentSha256 !== intentSha256 || header.status === 'draft') throw inventoryRefusal('inventory.stocktake_state_invalid');
-      return this.closed(scope, stocktakeId, header.status, true, businessTransactionId);
+      return this.closed(scope, stocktakeId, header.status, true);
     }
     if (header.status !== 'draft') throw inventoryRefusal('inventory.stocktake_state_invalid');
     if (outcome === 'finalized' && stored.length === 0) throw inventoryRefusal('inventory.stocktake_empty');
@@ -369,7 +381,7 @@ export class InventoryStocktakeService {
       }
       return { replayed: first.replayed };
     });
-    return this.closed(scope, stocktakeId, outcome, result.replayed, businessTransactionId);
+    return this.closed(scope, stocktakeId, outcome, result.replayed);
   }
 
   /** The stocktake header, or `inventory.stocktake_not_found` (a row of another business is invisible under RLS). */
@@ -402,15 +414,14 @@ export class InventoryStocktakeService {
     return out;
   }
 
-  private async closed(
-    scope: ReadScope,
-    stocktakeId: string,
-    status: StocktakeHeader['status'],
-    replayed: boolean,
-    businessTransactionId: string,
-  ): Promise<StocktakeCloseResult> {
+  /** The stored close, answered with the trace of the operation that closed the stocktake (A-10(f)). */
+  private async closed(scope: ReadScope, stocktakeId: string, status: StocktakeHeader['status'], replayed: boolean): Promise<StocktakeCloseResult> {
     if (status === 'draft') throw new Error('a closed stocktake reads as a draft');
-    const result = await readStoredResult(this.db, scope, 'stocktake', stocktakeId, replayed, businessTransactionId);
+    const stored = await findStocktake(this.db, scope, stocktakeId);
+    if (stored === null || stored.status !== status || stored.closedBusinessTransactionId === null) {
+      throw new Error('the closed stocktake is not readable with its closing trace');
+    }
+    const result = await readStoredResult(this.db, scope, 'stocktake', stocktakeId, replayed, stored.closedBusinessTransactionId);
     return { ...result, status };
   }
 }

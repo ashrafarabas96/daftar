@@ -303,18 +303,40 @@ export interface StocktakeHeader {
   readonly status: 'draft' | 'finalized' | 'cancelled';
   readonly intentSha256: string;
   readonly finalizeIntentSha256: string | null;
+  /** The trace of the operation that opened the stocktake (A-10(f)). */
+  readonly businessTransactionId: string;
+  /** The trace of the operation that closed it (finalize or cancel); null while it is a draft. */
+  readonly closedBusinessTransactionId: string | null;
+}
+
+interface StocktakeHeaderRow {
+  warehouse_id: string;
+  status: 'draft' | 'finalized' | 'cancelled';
+  intent_sha256: string;
+  finalize_intent_sha256: string | null;
+  business_transaction_id: string;
+  closed_business_transaction_id: string | null;
 }
 
 export async function findStocktake(db: Database, scope: ReadScope, id: string): Promise<StocktakeHeader | null> {
-  const [r] = await rows<{ warehouse_id: string; status: 'draft' | 'finalized' | 'cancelled'; intent_sha256: string; finalize_intent_sha256: string | null }>(
+  const [r] = await rows<StocktakeHeaderRow>(
     db,
     scope,
-    'SELECT warehouse_id, status, intent_sha256, finalize_intent_sha256 FROM stocktakes WHERE business_id = $1 AND id = $2',
+    `SELECT warehouse_id, status, intent_sha256, finalize_intent_sha256, business_transaction_id, closed_business_transaction_id
+       FROM stocktakes WHERE business_id = $1 AND id = $2`,
     [scope.businessId, id],
   );
   return r === undefined
     ? null
-    : { id, warehouseId: r.warehouse_id, status: r.status, intentSha256: r.intent_sha256, finalizeIntentSha256: r.finalize_intent_sha256 };
+    : {
+        id,
+        warehouseId: r.warehouse_id,
+        status: r.status,
+        intentSha256: r.intent_sha256,
+        finalizeIntentSha256: r.finalize_intent_sha256,
+        businessTransactionId: r.business_transaction_id,
+        closedBusinessTransactionId: r.closed_business_transaction_id,
+      };
 }
 
 /** True when the warehouse already has a draft stocktake (A-11, `inventory.stocktake_already_open`). */

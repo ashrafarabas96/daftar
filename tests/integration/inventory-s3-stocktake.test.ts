@@ -528,3 +528,72 @@ describe('T-07.4..13 finalize valuation', () => {
     });
   });
 });
+
+describe('R-16 a stocktake stores the traces of its open and of its close (A-10(f))', () => {
+  const traces = async (id: string): Promise<{ open: string; close: string | null }> =>
+    must(
+      (
+        await c.query<{ open: string; close: string | null }>(
+          `SELECT business_transaction_id::text AS open, closed_business_transaction_id::text AS close FROM stocktakes WHERE id = $1`,
+          [id],
+        )
+      ).rows[0],
+    );
+
+  it('open and cancel record their own traces; replays of either leave them untouched', async () => {
+    await inTx(async () => {
+      const A = world.A;
+      const [t1, t2, t3, t4] = [randomUUID(), randomUUID(), randomUUID(), randomUUID()];
+      const open = stocktakeOpenCommand(A.w1);
+      expect(await runCommand(c, A, open, { trace: t1 })).toEqual([{ stocktake_id: open.stocktakeId, replayed: false }]);
+      expect(await traces(open.stocktakeId)).toEqual({ open: t1, close: null });
+      expect(await runCommand(c, A, open, { trace: t2 })).toEqual([{ stocktake_id: open.stocktakeId, replayed: true }]);
+      expect(await traces(open.stocktakeId), 'the replayed open').toEqual({ open: t1, close: null });
+      await runCommand(c, A, cancelCommand(open.stocktakeId, A.w1), { trace: t3 });
+      expect(await traces(open.stocktakeId)).toEqual({ open: t1, close: t3 });
+      const again = await runCommand(c, A, cancelCommand(open.stocktakeId, A.w1), { trace: t4 });
+      expect(must(again[0]).replayed).toBe(true);
+      expect(await traces(open.stocktakeId), 'the replayed cancel').toEqual({ open: t1, close: t3 });
+      expectAccepted(await atCommit(c));
+    });
+  });
+
+  it('finalize records its trace; open and close without the trace carrier are trace_missing', async () => {
+    await inTx(async () => {
+      const A = world.A;
+      refusedWith(await tryCommand(c, A, stocktakeOpenCommand(A.w1), { trace: '' }), 'P0001', 'inventory.trace_missing', 'open');
+      const id = await openAndCount(A, A.w1, [{ variantId: A.piece2.variantId, counted: '0' }]);
+      const fin = await finalizeCommand(c, A, id, A.w1);
+      refusedWith(await tryCommand(c, A, fin, { trace: '' }), 'P0001', 'inventory.trace_missing', 'finalize');
+      refusedWith(await tryCommand(c, A, cancelCommand(id, A.w1), { trace: '' }), 'P0001', 'inventory.trace_missing', 'cancel');
+      const t = randomUUID();
+      await runCommand(c, A, fin, { trace: t });
+      expect(await traces(id)).toEqual({ open: expect.any(String) as string, close: t });
+      expectAccepted(await atCommit(c));
+    });
+  });
+
+  it('closing may not rewrite the open trace, and a draft holds no closing trace', async () => {
+    await inTx(async () => {
+      const A = world.A;
+      const id = await openAndCount(A, A.w1, []);
+      refusedWith(
+        await attempt(c, () =>
+          c.query(
+            `UPDATE stocktakes SET status = 'cancelled', finalize_intent_sha256 = intent_sha256, cancelled_at = now(), closed_by = opened_by,
+                    business_transaction_id = gen_random_uuid() WHERE id = $1`,
+            [id],
+          ),
+        ),
+        'P0001',
+        'inventory.stocktake_state_invalid',
+      );
+      const forged = await attempt(c, async () => {
+        // Past the header guard (an origin-only trigger): the CHECK is the shape itself.
+        await c.query(`SET LOCAL session_replication_role = replica`);
+        return c.query(`UPDATE stocktakes SET closed_business_transaction_id = gen_random_uuid() WHERE id = $1`, [id]);
+      });
+      expectConstraint(forged, '23514', 'stocktakes_state_ck', 'a draft with a closing trace');
+    });
+  });
+});

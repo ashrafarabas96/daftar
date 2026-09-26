@@ -40,9 +40,10 @@
 --        discipline.
 --   R-8  A-03 says "seven rows"; its own table and §2.5 list SIX
 --        (2+1+1+1+1). The six rows of §2.5 are registered and asserted.
---   R-9  Every document except the stocktake stores a NOT NULL
---        business_transaction_id; a command without the trace carrier is
---        refused `inventory.trace_missing` rather than by a raw NOT NULL.
+--   R-9  Every document stores a NOT NULL business_transaction_id (a
+--        stocktake also the trace of its close, 0061 R-16); a command that
+--        writes one without the trace carrier is refused
+--        `inventory.trace_missing` rather than by a raw NOT NULL.
 --   R-10 A variant whose product is archived is refused
 --        `inventory.variant_archived` (§3 names no product_archived code).
 --   R-11 `inventory.opening_valuation_mismatch` carries no amount in its
@@ -785,6 +786,9 @@ BEGIN
   v_business := v_actor.business_id;
   v_tenant   := v_actor.tenant_id;
   v_trace    := inventory_business_transaction_id();
+  IF v_trace IS NULL THEN
+    RAISE EXCEPTION 'inventory.trace_missing: a stock document records its business transaction id' USING ERRCODE = 'P0001';
+  END IF;
   IF p_stocktake_id IS NULL OR p_warehouse_id IS NULL THEN
     RAISE EXCEPTION 'inventory.payload_invalid: a stocktake names its id and its warehouse' USING ERRCODE = 'P0001';
   END IF;
@@ -816,8 +820,8 @@ BEGIN
     RAISE EXCEPTION 'inventory.stocktake_already_open: the warehouse already has a stocktake in progress' USING ERRCODE = 'P0001';
   END IF;
 
-  INSERT INTO stocktakes (tenant_id, business_id, id, warehouse_id, status, intent_sha256, opened_by)
-  VALUES (v_tenant, v_business, p_stocktake_id, p_warehouse_id, 'draft', v_intent, v_actor.actor_user_id)
+  INSERT INTO stocktakes (tenant_id, business_id, id, warehouse_id, status, intent_sha256, opened_by, business_transaction_id)
+  VALUES (v_tenant, v_business, p_stocktake_id, p_warehouse_id, 'draft', v_intent, v_actor.actor_user_id, v_trace)
   ON CONFLICT (business_id, id) DO NOTHING;
   GET DIAGNOSTICS v_rows = ROW_COUNT;
   IF v_rows = 0 THEN
@@ -1061,6 +1065,9 @@ BEGIN
   v_tenant   := v_actor.tenant_id;
   v_trace    := inventory_business_transaction_id();
   v_replay   := false;
+  IF v_trace IS NULL THEN
+    RAISE EXCEPTION 'inventory.trace_missing: a stock document records its business transaction id' USING ERRCODE = 'P0001';
+  END IF;
   IF p_stocktake_id IS NULL OR p_warehouse_id IS NULL OR p_outcome IS NULL OR p_outcome NOT IN ('finalized', 'cancelled') THEN
     RAISE EXCEPTION 'inventory.payload_invalid: a stocktake is closed as finalized or cancelled' USING ERRCODE = 'P0001';
   END IF;
@@ -1093,7 +1100,8 @@ BEGIN
       RAISE EXCEPTION 'inventory.payload_invalid: a cancellation carries no date and no line' USING ERRCODE = 'P0001';
     END IF;
     UPDATE stocktakes s
-       SET status = 'cancelled', finalize_intent_sha256 = v_intent, cancelled_at = now(), closed_by = v_actor.actor_user_id
+       SET status = 'cancelled', finalize_intent_sha256 = v_intent, cancelled_at = now(), closed_by = v_actor.actor_user_id,
+           closed_business_transaction_id = v_trace
      WHERE s.business_id = v_business AND s.id = p_stocktake_id;
     INSERT INTO audit_events (tenant_id, business_id, actor_user_id, action, entity, entity_id, metadata)
     VALUES (v_tenant, v_business, v_actor.actor_user_id, 'inventory.stocktake_cancelled', 'stocktake', p_stocktake_id::text,
@@ -1206,7 +1214,8 @@ BEGIN
     UPDATE stocktakes s
        SET status = 'finalized', occurred_on = p_occurred_on, total_value_base_minor = v_total::bigint,
            binding_source_id = CASE WHEN v_total <> 0 THEN p_stocktake_id END,
-           finalize_intent_sha256 = v_intent, finalized_at = now(), closed_by = v_actor.actor_user_id
+           finalize_intent_sha256 = v_intent, finalized_at = now(), closed_by = v_actor.actor_user_id,
+           closed_business_transaction_id = v_trace
      WHERE s.business_id = v_business AND s.id = p_stocktake_id;
 
     INSERT INTO audit_events (tenant_id, business_id, actor_user_id, action, entity, entity_id, metadata)

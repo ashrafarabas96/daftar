@@ -259,7 +259,7 @@ describe('the §H grant matrix, from information_schema and pg_policy (P3-AL-54 
     });
   });
 
-  it('and exactly these column privileges beyond them: three products columns to UPDATE, four product_variants columns to INSERT, four stock_levels columns to UPDATE (P3-S2), six stocktake_lines and eight stocktakes columns to UPDATE (P3-S3)', async () => {
+  it('and exactly these column privileges beyond them: three products columns to UPDATE, four product_variants columns to INSERT, four stock_levels columns to UPDATE (P3-S2), six stocktake_lines and nine stocktakes columns to UPDATE (P3-S3)', async () => {
     const r = await ownerPool().query<{ t: string; p: string; cols: string }>(
       `SELECT c.table_name AS t, c.privilege_type AS p, string_agg(c.column_name, ',' ORDER BY c.column_name) AS cols
        FROM information_schema.column_privileges c
@@ -283,7 +283,8 @@ describe('the §H grant matrix, from information_schema and pg_policy (P3-AL-54 
       {
         t: 'stocktakes',
         p: 'UPDATE',
-        cols: 'binding_source_id,cancelled_at,closed_by,finalize_intent_sha256,finalized_at,occurred_on,status,total_value_base_minor',
+        // 0061 R-16: the closing routine also records the trace of the close.
+        cols: 'binding_source_id,cancelled_at,closed_business_transaction_id,closed_by,finalize_intent_sha256,finalized_at,occurred_on,status,total_value_base_minor',
       },
     ]);
   });

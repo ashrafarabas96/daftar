@@ -55,6 +55,15 @@
 --        per warehouse at COMMIT; A-14(a) requires the entry's Inventory
 --        debits to be exactly that set of (warehouse, amount) pairs. The
 --        accounting principal still reads the headers only (A-18).
+--   R-16 The stocktake stores its traces (A-10(f)). Every other document
+--        stores the business_transaction_id of the operation that produced
+--        it and a replay answers that one; a stocktake is produced by two
+--        operations, so it stores both: `business_transaction_id` (NOT
+--        NULL, the open; immutable, header guard) and
+--        `closed_business_transaction_id` (NULL while draft; the finalize
+--        or the cancel, written by the closing routine, the one extra
+--        UPDATE column of the internal principal). Both routines refuse a
+--        missing trace with `inventory.trace_missing` (0062 R-9).
 --   R-13 A reversed opening balance and a Case B inventory opening never
 --        meet (review F1). The position read (A-14(d)) states no position
 --        for an opening balance whose entry appears in
@@ -325,7 +334,7 @@ DECLARE
     "stock_source_freeze_inventory_adjustment()": "049e3e439c8d4e33a79bc932c937dc45b824b79718587604e627a1cfa2fb7c4a",
     "stock_source_freeze_stocktake()": "2e29261988cc961a5c9a052709b78a32a6fd49509d263875b97527992b905717",
     "stock_source_freeze_inventory_opening()": "507f40e4d0d472a6e787865b5a779c6f69ecfb651875ba14df57fe8fd8f54cbe",
-    "inventory_source_header_guard()": "a588bc217122ca6ac9ca074f965189cb450a1f3aab9c782661ed2aa50a4cd85c",
+    "inventory_source_header_guard()": "4d646c5d5db4aa49e544033d02cc24fd007899dab833637cb8020a49611c2828",
     "inventory_source_value_complete()": "908bc14db1094becba6402c0171237a5d91481874a55dd16eef17894cc59d5d4"
   }';
 BEGIN
@@ -590,6 +599,10 @@ CREATE TABLE stocktakes (
   binding_source_id      UUID,
   opened_by              UUID NOT NULL REFERENCES users (id),
   closed_by              UUID REFERENCES users (id),
+  -- R-16: the trace of the open, and of the close (finalize or cancel),
+  -- answered by a replay of either (A-10(f)).
+  business_transaction_id        UUID NOT NULL,
+  closed_business_transaction_id UUID,
   created_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
   finalized_at           TIMESTAMPTZ,
   cancelled_at           TIMESTAMPTZ,
@@ -599,7 +612,8 @@ CREATE TABLE stocktakes (
   CONSTRAINT stocktakes_state_ck CHECK (
     (status = 'draft'
        AND finalize_intent_sha256 IS NULL AND occurred_on IS NULL AND total_value_base_minor IS NULL
-       AND binding_source_id IS NULL AND closed_by IS NULL AND finalized_at IS NULL AND cancelled_at IS NULL)
+       AND binding_source_id IS NULL AND closed_by IS NULL AND finalized_at IS NULL AND cancelled_at IS NULL
+       AND closed_business_transaction_id IS NULL)
     OR (status = 'finalized'
        AND finalize_intent_sha256 IS NOT NULL AND occurred_on IS NOT NULL AND total_value_base_minor IS NOT NULL
        AND closed_by IS NOT NULL AND finalized_at IS NOT NULL AND cancelled_at IS NULL
@@ -1089,7 +1103,8 @@ BEGIN
     IF NEW.tenant_id IS DISTINCT FROM OLD.tenant_id OR NEW.business_id IS DISTINCT FROM OLD.business_id
        OR NEW.id IS DISTINCT FROM OLD.id OR NEW.warehouse_id IS DISTINCT FROM OLD.warehouse_id
        OR NEW.intent_sha256 IS DISTINCT FROM OLD.intent_sha256 OR NEW.opened_by IS DISTINCT FROM OLD.opened_by
-       OR NEW.created_at IS DISTINCT FROM OLD.created_at THEN
+       OR NEW.created_at IS DISTINCT FROM OLD.created_at
+       OR NEW.business_transaction_id IS DISTINCT FROM OLD.business_transaction_id THEN
       RAISE EXCEPTION 'inventory.stocktake_state_invalid: closing a stocktake changes its closing fields only' USING ERRCODE = 'P0001';
     END IF;
     RETURN NEW;
@@ -1803,7 +1818,8 @@ GRANT SELECT, INSERT ON inventory_transfers, inventory_transfer_lines, inventory
                         stock_source_bridge_inventory_transfer, stock_source_bridge_inventory_adjustment,
                         stock_source_bridge_stocktake, stock_source_bridge_inventory_opening
   TO daftar_inventory_internal;
-GRANT UPDATE (status, occurred_on, total_value_base_minor, binding_source_id, finalize_intent_sha256, finalized_at, cancelled_at, closed_by)
+GRANT UPDATE (status, occurred_on, total_value_base_minor, binding_source_id, finalize_intent_sha256, finalized_at, cancelled_at, closed_by,
+              closed_business_transaction_id)
   ON stocktakes TO daftar_inventory_internal;
 GRANT UPDATE (counted_qty, expected_qty_at_capture, captured_at_stock_seq, captured_at, unit_cost_base_minor, applied_value_base_minor)
   ON stocktake_lines TO daftar_inventory_internal;
@@ -2134,8 +2150,9 @@ BEGIN
   IF v_actual IS DISTINCT FROM ARRAY[
        'stocktake_lines.applied_value_base_minor', 'stocktake_lines.captured_at', 'stocktake_lines.captured_at_stock_seq',
        'stocktake_lines.counted_qty', 'stocktake_lines.expected_qty_at_capture', 'stocktake_lines.unit_cost_base_minor',
-       'stocktakes.binding_source_id', 'stocktakes.cancelled_at', 'stocktakes.closed_by', 'stocktakes.finalize_intent_sha256',
-       'stocktakes.finalized_at', 'stocktakes.occurred_on', 'stocktakes.status', 'stocktakes.total_value_base_minor'] THEN
+       'stocktakes.binding_source_id', 'stocktakes.cancelled_at', 'stocktakes.closed_business_transaction_id', 'stocktakes.closed_by',
+       'stocktakes.finalize_intent_sha256', 'stocktakes.finalized_at', 'stocktakes.occurred_on', 'stocktakes.status',
+       'stocktakes.total_value_base_minor'] THEN
     RAISE EXCEPTION 'inventory.migration_end_state_invalid: daftar_inventory_internal column UPDATE is not exactly the A-18 set, found %', v_actual;
   END IF;
   IF NOT has_table_privilege('daftar_inventory_internal', 'stock_source_bindings', 'SELECT')
