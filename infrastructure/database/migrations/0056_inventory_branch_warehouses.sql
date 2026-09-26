@@ -71,6 +71,16 @@
 -- P3-AL-54 §I, which cannot be implemented against the accepted app_bypass();
 -- the departure is reported with the P3-S1 slice.
 --
+-- Known limit of 3 (accepted, Agent 0 ruling): keep_home reads `warehouses`
+-- as the internal role under the DELETING transaction's scope, and this file
+-- adds no policy to `warehouses`. A SUPERUSER deleting a home row with no
+-- business scope (or another business's scope) bypasses RLS on this table
+-- while the trigger cannot see the warehouse, so it is not refused. Every
+-- non-superuser principal is: daftar_app holds no DML, the migrator is under
+-- FORCE and sees no row without a scope, the internal role's DELETE needs
+-- the scope, and a scoped superuser is refused. A superuser can disable
+-- triggers anyway, so no invariant binds it.
+--
 -- ── The two commands ─────────────────────────────────────────────────────
 --
 -- `structure_associate_warehouse_branch` / `structure_dissociate_warehouse_branch`
