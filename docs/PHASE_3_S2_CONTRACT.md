@@ -206,6 +206,7 @@ Note that `app_bypass()` is platform-only (`0052:244-246`).
   - `stock_levels` has no `DELETE` grant plus a `BEFORE DELETE` trigger `stock_levels_retain` raising `inventory.stock_level_not_deletable`.
   - Movements reference `stock_levels` by an immediate FK. A business, warehouse or variant with history therefore cannot be deleted (23503), which is exactly what L:1206 wants.
   - `TRUNCATE` is deliberately unguarded: E-24, and `resetData` uses it.
+  - **Scope (clarified at implementation).** This ruling covers the S2 ledger tables. Source bridges follow the H-2 template instead: their line and binding FKs are `ON DELETE RESTRICT`, so deleting a bound source line raises `23001` (restrict_violation) naming the bridge FK. S3–S5 bridges copy the template.
 
 **A-21 · The binding-side mechanism and its naming.**
 - **Class:** ENG.
@@ -858,7 +859,7 @@ export interface StockState { readonly onHand: bigint; readonly valuation: bigin
 export const EMPTY_STOCK_STATE: StockState;   // 0, 0, null, 0
 export function averageUnitCost(valuation: bigint, onHandQ4: bigint, carried: bigint | null): bigint | null;  // onHand ≠ 0 ? roundHalfEven(valuation * 10n**14n, onHandQ4) : carried
 export function inboundValue(qtyQ4: bigint, costC10: bigint): bigint;                                          // roundHalfEven(q*c, 10n**14n)
-export function outboundValue(state: StockState, qtyQ4: bigint): { value: bigint; unitCostSnapshot: bigint }; // qty<0; |q|>onHand => insufficient_stock; = => -valuation; else -roundHalfEven(|q|*avg, 10n**14n)
+export function outboundValue(state: StockState, qtyQ4: bigint): { value: bigint; unitCostSnapshot: bigint }; // qty<0; |q|>onHand => insufficient_stock; = => -valuation; avg < 0 => arithmetic_invalid (mirrors R3's defensive refusal); else -roundHalfEven(|q|*avg, 10n**14n)
 export function transferInValue(transferOutValue: bigint): bigint;                                             // -transferOutValue
 export function catchUpValue(qtyCoveredQ4: bigint, actualC10: bigint, provisionalC10: bigint): bigint;         // -roundHalfEven(q*(a-p), 10n**14n)  (sign: GOLD-54, IR:86-88)
 export function applyMovement(state: StockState, qtyQ4: bigint, value: bigint): StockState;                    // adds; derives avg; seq+1; bounds
@@ -1012,6 +1013,7 @@ Each step reads as: kind, quantity @ cost, then the resulting stored value → c
   - damage −30000000000.0000 → flush −1, cache val 0.
   - The withdrawn `HALF_EVEN(q × avg)` gives 0, leaving residual 1.
   - Used by T-10.N and T-06.N.
+  - **Amended after A-26 moved to 10^10.** Quantity 3·10^10 is outside the primitive's domain, so R3 refuses both steps with `inventory.quantity_out_of_range`, and the control is seeded raw into the ledger and cache by the tests. Inside |on_hand| < 10^10 the flush and `HALF_EVEN(q × avg)` cannot diverge on full depletion: the gap `|q·avg − V|` is at most `q·½·10^-10 < ½`. T-10.N therefore has three parts: the seeded control (the TS twin still predicts the residual), the domain refusal, and a bound test at q = 9999999999 proving the two rules agree. The flush stays: it is the rule, and the bound is what makes the withdrawn rule harmless, not a reason to restore it.
 
 ---
 
@@ -1238,7 +1240,7 @@ Every DENY group has a negative control, marked `.N`, that removes the invariant
 **T-14 · Completeness (structure test, C).**
 - **T-14.1 / T-14.2:** an owner-raw movement without a binding, and a binding without a movement → `23503` at COMMIT.
 - **T-14.3:** a fixture call with `p_bridge = false` → `inventory.stock_source_line_missing` at COMMIT.
-- **T-14.4:** deleting a bound fixture line → `23503`.
+- **T-14.4:** deleting a bound fixture line → `23001` naming the bridge's line FK (the H-2 template is `ON DELETE RESTRICT`; see A-20, scope).
 - **T-14.5:** updating its qty, cost, variant or warehouse → `inventory.source_line_frozen`.
 - **T-14.6:** in-transaction, register `fixture_orphan` in `stock_source_types` without a bridge. The 0059-E gap check (`DO $$ … IF EXISTS (SELECT 1 FROM inventory_stock_source_guard_gaps()) THEN RAISE 'inventory.source_guard_missing …'`) refuses.
 - **T-14.N:** drop the binding trigger and add a source-side trigger only; T-14.3 then commits.
