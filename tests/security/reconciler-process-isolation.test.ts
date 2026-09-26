@@ -62,6 +62,7 @@ const FORBIDDEN_FOR_RECONCILER: Record<string, string> = {
   WORKER_DATABASE_URL: workerDbUrl,
   PROVISIONING_ASSERTION_KEY: KEY,
   ACCOUNTING_ASSERTION_KEY: KEY,
+  INVENTORY_ASSERTION_KEY: KEY,
   CREDENTIAL_PAYLOAD_KEY: KEY,
   CREDENTIAL_PAYLOAD_KEYS: JSON.stringify([{ version: 1, key: KEY, status: 'active' }]),
   CREDENTIAL_KMS_ENDPOINT: 'https://kms.example.test',

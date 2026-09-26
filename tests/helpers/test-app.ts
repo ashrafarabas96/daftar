@@ -88,6 +88,15 @@ export function mintTestAccountingAssertion(claims: AccountingAssertionClaims, n
   return mintAccountingAssertion(accountingAssertionKey(), claims, now, ttlSeconds);
 }
 
+/**
+ * P3-AL-55 §C: the inventory command assertion key. A THIRD set of bytes,
+ * distinct from both the provisioning and the accounting key — production
+ * config refuses a match with either, and a fixture that shared one would
+ * quietly defeat the separation it is supposed to prove.
+ */
+export const INVENTORY_ASSERTION_KEY_B64 = Buffer.from('test-inventory-assertion-key-32b!!!!!!!!!').subarray(0, 32).toString('base64');
+export const INVENTORY_ASSERTION_KID = 'inv1';
+
 export const dbUrl = `postgresql://${PG_USER}:${PG_PASSWORD}@localhost:${PG_PORT}/daftar`;
 export const appDbUrl = `postgresql://daftar_app:${APP_DB_PASSWORD}@localhost:${PG_PORT}/daftar`;
 export const platformDbUrl = `postgresql://daftar_platform:${PLATFORM_DB_PASSWORD}@localhost:${PG_PORT}/daftar`;
@@ -248,6 +257,8 @@ export async function createTestApp(options: TestAppOptions = {}): Promise<TestA
     PROVISIONING_ASSERTION_KID,
     ACCOUNTING_ASSERTION_KEY: ACCOUNTING_ASSERTION_KEY_B64,
     ACCOUNTING_ASSERTION_KID,
+    INVENTORY_ASSERTION_KEY: INVENTORY_ASSERTION_KEY_B64,
+    INVENTORY_ASSERTION_KID,
     JWT_SECRET: 'test-secret-key-with-at-least-32-characters!',
     MEDIA_ROOT: '/tmp/daftar-test-media',
     LOG_LEVEL: process.env['TEST_LOG_LEVEL'] ?? 'warn',
