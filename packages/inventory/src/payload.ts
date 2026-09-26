@@ -512,7 +512,9 @@ function expandTrailer(
   if (tc.type !== 'integer' || tc.nullable || trailer.fields.length === 0) return refuse(`schema for ${opCode} has a malformed trailer group`);
   const before = BigInt(schema.length) + lineCount * BigInt(repeat.fields.length);
   if (BigInt(fields.length) <= before) return refuse(`for ${opCode} requires the ${tc.name} field after the lines`);
-  const at = Number(before);
+  // The index as an array position without a float conversion (P3-AL-08):
+  // `before < fields.length`, so exactly one position matches.
+  const at = fields.findIndex((_, i) => BigInt(i) === before);
   const countField = fields[at];
   if (countField === undefined || countField.kind !== 'integer') return refuse(`field ${at + 1} (${tc.name}) must be an integer`);
   const count = BigInt(encodeInteger(countField.value, `field ${at + 1} (${tc.name})`));
