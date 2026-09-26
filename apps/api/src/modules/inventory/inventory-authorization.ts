@@ -38,6 +38,18 @@ const OPERATION_AUTHORITY: Readonly<Record<InventoryOperationCode, { readonly pe
   // a business-wide act — never available to an actor limited to assigned
   // branches, whatever warehouses it names.
   'inventory.opening': { permission: 'inventory.adjust', scope: 'business_wide' },
+  // P3-S4 (PHASE_3_S4_CONTRACT A-03, TL-4): a supplier is business-wide master
+  // data shared by every branch, so its commands are permission-only — they
+  // name no warehouse, and `suppliers.manage` is assigned deliberately.
+  'supplier.create': { permission: 'suppliers.manage', scope: 'warehouses' },
+  'supplier.update': { permission: 'suppliers.manage', scope: 'warehouses' },
+  'supplier.archive': { permission: 'suppliers.manage', scope: 'warehouses' },
+  'supplier.reactivate': { permission: 'suppliers.manage', scope: 'warehouses' },
+  // A purchase is scoped by its warehouse — and, when a replace moves the
+  // draft, by the previous one too.
+  'purchase.draft': { permission: 'purchases.manage', scope: 'warehouses' },
+  'purchase.cancel': { permission: 'purchases.manage', scope: 'warehouses' },
+  'purchase.receive': { permission: 'purchases.receive', scope: 'warehouses' },
 };
 
 /**
