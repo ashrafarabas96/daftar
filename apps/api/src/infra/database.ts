@@ -125,6 +125,10 @@ export type TransactionSeamRefusal =
   | 'seam.accounting_assertion_missing'
   | 'seam.accounting_assertion_malformed'
   | 'seam.accounting_assertion_scope_mismatch'
+  | 'seam.accounting_assertion_source_mismatch'
+  | 'seam.accounting_assertion_exhausted'
+  | 'seam.accounting_assertion_unused'
+  | 'seam.accounting_assertion_sequence_required'
   | 'seam.nested_transaction'
   | 'seam.not_a_posting_transaction'
   | 'seam.transaction_closed'
@@ -160,6 +164,13 @@ const openTransaction = new AsyncLocalStorage<OpenTransactionKind>();
  */
 const postingTransactions = new WeakMap<object, TransactionSql>();
 
+/**
+ * The assertion sequence a multi-assertion posting capability presents
+ * (R-B1). Only a capability issued by seam 2 for two or more accounting
+ * assertions has one; every other capability is today's single-assertion one.
+ */
+const assertionSequences = new WeakMap<object, AccountingAssertionSequence>();
+
 /** SQL bound to one open transaction, revoked when the transaction ends. */
 function bindTransactionSql(client: PoolClient): { sql: TransactionSql; close: () => void } {
   let open = true;
@@ -177,12 +188,13 @@ function bindTransactionSql(client: PoolClient): { sql: TransactionSql; close: (
  * boundaries of `Database` call this, and only after they have set
  * `app.accounting_assertion` on that transaction.
  */
-function issuePostingTransaction(sql: TransactionSql): AccountingPostingTransaction {
+function issuePostingTransaction(sql: TransactionSql, sequence: AccountingAssertionSequence | null = null): AccountingPostingTransaction {
   // The brand is declared-only (packages/accounting/src/ports.ts), so no
   // object can carry it structurally; this frozen, prototype-less object is
   // one only because it is registered below, which the ports check.
   const tx = Object.freeze(Object.create(null) as object) as AccountingPostingTransaction;
   postingTransactions.set(tx, sql);
+  if (sequence !== null) assertionSequences.set(tx, sequence);
   return tx;
 }
 
@@ -216,7 +228,13 @@ function assertInventoryAssertionCoheres(scope: BusinessScope, inventoryAssertio
   }
 }
 
-function assertAccountingAssertionCoheres(scope: BusinessScope, accountingAssertion: string): void {
+/** The source claims of one accounting assertion (claims 7 and 8). */
+export interface AccountingAssertionSource {
+  readonly sourceType: string;
+  readonly sourceId: string;
+}
+
+function accountingAssertionParts(scope: BusinessScope, accountingAssertion: unknown): readonly string[] {
   if (typeof accountingAssertion !== 'string' || accountingAssertion.length === 0) {
     throw new TransactionSeamError('seam.accounting_assertion_missing', 'the accounting seam cannot be opened without an accounting assertion');
   }
@@ -232,6 +250,92 @@ function assertAccountingAssertionCoheres(scope: BusinessScope, accountingAssert
       'seam.accounting_assertion_scope_mismatch',
       "the accounting assertion's tenant/business claims differ from the seam's scope",
     );
+  }
+  return parts;
+}
+
+/**
+ * Seam 2's accounting authority (P3-AL-32 item 2 as amended by R-B1): one
+ * assertion per posting the operation implies, in posting order. A bare
+ * string is the single-element form, exactly today's seam.
+ */
+export type AccountingAssertions = string | readonly [string, ...string[]];
+
+/**
+ * R-B1: the ordered accounting assertions of one seam-2 transaction, each
+ * presented for exactly one posting.
+ *
+ * Pure state, no I/O, so its rules are testable without a database:
+ * - `next` hands out the next assertion only for a posting whose
+ *   `(sourceType, sourceId)` equals that assertion's claims, and never more
+ *   assertions than there are;
+ * - `assertComplete` refuses a commit that presented some but not all of
+ *   them. Presenting none is a commit that posted nothing — a replay inside
+ *   the routine, whose minted assertions expire unused (contract A-08) — and
+ *   is today's behaviour of the single-assertion seam.
+ */
+export class AccountingAssertionSequence {
+  private presented = 0;
+
+  private constructor(
+    private readonly assertions: readonly string[],
+    private readonly sources: readonly AccountingAssertionSource[],
+  ) {}
+
+  /**
+   * Coherence-check every element against `scope` (before any connection is
+   * taken) and build the sequence. A string or a one-element tuple is today's
+   * seam and has no sequence (`sequence: null`, `guc` = the assertion); two or
+   * more assertions have one, and the transaction starts with the GUC empty so
+   * nothing can post that was not presented.
+   */
+  static plan(scope: BusinessScope, accountingAssertions: AccountingAssertions): { guc: string; sequence: AccountingAssertionSequence | null } {
+    const list: readonly unknown[] = Array.isArray(accountingAssertions) ? accountingAssertions : [accountingAssertions];
+    if (list.length === 0) {
+      throw new TransactionSeamError('seam.accounting_assertion_missing', 'the accounting seam cannot be opened without an accounting assertion');
+    }
+    const assertions: string[] = [];
+    const sources: AccountingAssertionSource[] = [];
+    for (const raw of list) {
+      const parts = accountingAssertionParts(scope, raw);
+      const assertion = parts.join('.');
+      if (assertions.includes(assertion)) {
+        throw new TransactionSeamError('seam.accounting_assertion_malformed', 'each accounting assertion authorizes one posting and may appear only once');
+      }
+      assertions.push(assertion);
+      sources.push({ sourceType: parts[6] ?? '', sourceId: parts[7] ?? '' });
+    }
+    const [first, ...rest] = assertions;
+    if (first !== undefined && rest.length === 0) return { guc: first, sequence: null };
+    return { guc: '', sequence: new AccountingAssertionSequence(assertions, sources) };
+  }
+
+  /** The assertion for the next posting, refusing a source that is not its claim, or a posting beyond the last. */
+  next(source: AccountingAssertionSource): string {
+    const i = this.presented;
+    const assertion = this.assertions[i];
+    const claims = this.sources[i];
+    if (assertion === undefined || claims === undefined) {
+      throw new TransactionSeamError('seam.accounting_assertion_exhausted', 'every accounting assertion of this transaction has already been presented');
+    }
+    if (source.sourceType !== claims.sourceType || source.sourceId !== claims.sourceId) {
+      throw new TransactionSeamError(
+        'seam.accounting_assertion_source_mismatch',
+        "the posting's source differs from the claims of the next accounting assertion",
+      );
+    }
+    this.presented = i + 1;
+    return assertion;
+  }
+
+  /** Refuse a commit that left an assertion unpresented after presenting any. */
+  assertComplete(): void {
+    if (this.presented > 0 && this.presented < this.assertions.length) {
+      throw new TransactionSeamError(
+        'seam.accounting_assertion_unused',
+        `${this.assertions.length - this.presented} accounting assertion(s) of this transaction were never presented`,
+      );
+    }
   }
 }
 
@@ -400,6 +504,7 @@ export class Database implements OnModuleDestroy, OnModuleInit {
     carriers: Pick<Scope, 'inventoryAssertion' | 'accountingAssertion'>,
     handleFor: (sql: TransactionSql, scope: BusinessScope) => H,
     fn: (handle: H) => Promise<T>,
+    beforeCommit: () => void = () => undefined,
   ): Promise<T> {
     const gucs: Scope = {
       tenantId: scope.tenantId,
@@ -417,7 +522,9 @@ export class Database implements OnModuleDestroy, OnModuleInit {
     return this.transact(this.pool, gucs, false, 'business-seam', async (client) => {
       const bound = bindTransactionSql(client);
       try {
-        return await fn(Object.freeze(handleFor(bound.sql, frozenScope)));
+        const result = await fn(Object.freeze(handleFor(bound.sql, frozenScope)));
+        beforeCommit();
+        return result;
       } finally {
         bound.close();
       }
@@ -464,21 +571,31 @@ export class Database implements OnModuleDestroy, OnModuleInit {
    * domain command, the accounting assertion authorizes the posting (P3-AL-33);
    * neither stands in for the other, and both must cohere with `scope` before
    * a connection is taken.
+   *
+   * R-B1: `accountingAssertions` is one assertion per posting the operation
+   * implies, in posting order. A string (or a one-element tuple) is exactly
+   * today's seam: `app.accounting_assertion` is set at `BEGIN`. With two or
+   * more, EVERY element is coherence-checked here, the GUC starts empty, and
+   * the posting capability presents them one per posting through
+   * `presentAccountingAssertion` (the posting adapter does this before each
+   * `postEntryInTransaction`); a commit that presented some but not all is
+   * refused `seam.accounting_assertion_unused` and rolls back.
    */
   async withBusinessInventoryAccountingTransaction<T>(
     scope: BusinessScope,
     inventoryAssertion: string,
-    accountingAssertion: string,
+    accountingAssertions: AccountingAssertions,
     fn: (tx: BusinessInventoryAccountingTransaction) => Promise<T>,
   ): Promise<T> {
     this.refuseNestedSeam();
     assertInventoryAssertionCoheres(scope, inventoryAssertion);
-    assertAccountingAssertionCoheres(scope, accountingAssertion);
+    const { guc, sequence } = AccountingAssertionSequence.plan(scope, accountingAssertions);
     return this.businessSeam(
       scope,
-      { inventoryAssertion, accountingAssertion },
-      (sql, bound): BusinessInventoryAccountingTransaction => ({ scope: bound, query: sql.query, accounting: issuePostingTransaction(sql) }),
+      { inventoryAssertion, accountingAssertion: guc },
+      (sql, bound): BusinessInventoryAccountingTransaction => ({ scope: bound, query: sql.query, accounting: issuePostingTransaction(sql, sequence) }),
       fn,
+      () => sequence?.assertComplete(),
     );
   }
 
@@ -491,6 +608,39 @@ export class Database implements OnModuleDestroy, OnModuleInit {
    * transaction has ended, so a handle that escaped its callback is inert.
    */
   postingTransactionSql(tx: AccountingPostingTransaction): TransactionSql {
+    const sql = this.issuedPostingSql(tx);
+    if (assertionSequences.has(tx)) {
+      // A multi-assertion capability has no single authority to post under:
+      // each posting must present its own assertion (R-B1).
+      throw new TransactionSeamError(
+        'seam.accounting_assertion_sequence_required',
+        'a transaction carrying several accounting assertions posts only through presentAccountingAssertion',
+      );
+    }
+    return sql;
+  }
+
+  /**
+   * R-B1: the posting adapter's way into a posting transaction, for ONE
+   * posting of `source`.
+   *
+   * On today's single-assertion capability it is exactly
+   * `postingTransactionSql`. On a multi-assertion capability it takes the
+   * next assertion — refusing a source that differs from its claims
+   * (`seam.accounting_assertion_source_mismatch`) or a posting beyond the last
+   * (`seam.accounting_assertion_exhausted`) — and sets it as
+   * `app.accounting_assertion`, transaction-locally, for this posting.
+   */
+  async presentAccountingAssertion(tx: AccountingPostingTransaction, source: AccountingAssertionSource): Promise<TransactionSql> {
+    const sql = this.issuedPostingSql(tx);
+    const sequence = assertionSequences.get(tx);
+    if (sequence === undefined) return sql;
+    const assertion = sequence.next(source);
+    await sql.query(`SELECT set_config('app.accounting_assertion', $1, true)`, [assertion]);
+    return sql;
+  }
+
+  private issuedPostingSql(tx: AccountingPostingTransaction): TransactionSql {
     const sql = typeof tx === 'object' && tx !== null ? postingTransactions.get(tx) : undefined;
     if (!sql) {
       throw new TransactionSeamError('seam.not_a_posting_transaction', 'the accounting posting port accepts only a transaction opened by a posting boundary');

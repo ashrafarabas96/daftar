@@ -50,12 +50,17 @@ export class DatabaseAccountingPostingAdapter implements AccountingPostingPort, 
   /**
    * Call `accounting_post_entry` inside a transaction that is already open and
    * already carries its accounting assertion — the one a posting boundary
-   * issued. Anything else is refused by `Database.postingTransactionSql`
+   * issued. Anything else is refused by `Database.presentAccountingAssertion`
    * before a statement is sent.
+   *
+   * R-B1: on a capability carrying several assertions, the command's
+   * `(sourceType, sourceId)` must equal the claims of the next one, which is
+   * then set for this posting only; on every other capability this is
+   * exactly today's path.
    */
   async postEntryInTransaction(tx: AccountingPostingTransaction, request: PostEntryInTransactionRequest): Promise<PostingResult> {
-    const sql = this.db.postingTransactionSql(tx);
     const { command } = request;
+    const sql = await this.db.presentAccountingAssertion(tx, { sourceType: command.sourceType, sourceId: command.sourceId });
     const lines = command.lines.map((l) => ({
       account: l.account.kind === 'system' ? { kind: 'system', system_key: l.account.systemKey } : { kind: 'code', code: l.account.code },
       side: l.side,
