@@ -57,11 +57,26 @@ afterAll(async () => {
 });
 
 async function newProduct(): Promise<string> {
-  const r = await ownerPool().query<{ id: string }>(
-    `INSERT INTO products (business_id, sku, base_price_minor, price_currency) VALUES ($1, $2, 1, 'ILS') RETURNING id`,
-    [fx.businessId, `seam-${randomUUID().slice(0, 8)}`],
-  );
-  return must(r.rows[0]).id;
+  // A product needs its translation in the same transaction (the deferred
+  // completeness check of the accepted catalog), so it is created as one unit.
+  const c = await ownerPool().connect();
+  try {
+    await c.query('BEGIN');
+    const id = randomUUID();
+    await c.query(`INSERT INTO products (business_id, id, sku, base_price_minor, price_currency) VALUES ($1, $2, $3, 1, 'ILS')`, [
+      fx.businessId,
+      id,
+      `seam-${id.slice(0, 8)}`,
+    ]);
+    await c.query(`INSERT INTO product_translations (business_id, product_id, locale, name) VALUES ($1, $2, 'en', 'Seam test product')`, [fx.businessId, id]);
+    await c.query('COMMIT');
+    return id;
+  } catch (e) {
+    await c.query('ROLLBACK').catch(() => undefined);
+    throw e;
+  } finally {
+    c.release();
+  }
 }
 
 interface Configure {
