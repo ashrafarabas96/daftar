@@ -14,8 +14,27 @@
  *   refuses non-canonical input BEFORE hashing (§F) rather than normalizing
  *   it. The database never sees such a payload, because the application's
  *   payload validation runs before the minter (§I).
+ *
+ * P3-S2 adds the fixed-point and valuation codes (PHASE_3_S2_CONTRACT §4).
+ * Where the database primitive raises a code for the same condition (for
+ * example `inventory.insufficient_stock`), the package uses that code, so a
+ * simulation and the stored ledger refuse in one vocabulary. These refusals
+ * are pure arithmetic verdicts and never carry a quantity, cost or value.
  */
-export type InventoryErrorCode = 'inventory.assertion_malformed' | 'inventory.payload_invalid';
+export type InventoryErrorCode =
+  | 'inventory.assertion_malformed'
+  | 'inventory.payload_invalid'
+  | 'inventory.quantity_invalid'
+  | 'inventory.cost_invalid'
+  | 'inventory.unit_decimals_invalid'
+  | 'inventory.quantity_precision_invalid'
+  | 'inventory.insufficient_stock'
+  | 'inventory.arithmetic_invalid'
+  | 'inventory.value_out_of_range'
+  | 'inventory.quantity_out_of_range'
+  | 'inventory.movement_shape_invalid'
+  | 'inventory.transfer_pair_mismatch'
+  | 'inventory.rebuild_sequence_invalid';
 
 export class InventoryError extends Error {
   readonly code: InventoryErrorCode;
