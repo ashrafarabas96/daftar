@@ -4,6 +4,8 @@
 >
 > **Baseline.** Accepted Phase 2 merge commit `0f2b09e7f2bd1015053ff2cb79ad1ceafc25bc6f` on `main` (accepted source head `bf2eeda1494b0333cfef26123d55bcf54134e402`), post-merge CI run `36028186854` SUCCESS on all five required jobs. Migrations `0000`–`0052` are frozen forever; the manifest holds 53 entries with `frozenThrough = 0052_accounting_journal_lines_rls_performance.sql`. Phase 3 begins at `0053`, which **does not exist yet and is not authorized by this document**.
 >
+> **Correction pass, Round 5 — 2026-09-26.** The Tech Lead reviewed head `3081cac5fae08c888c0152a3913f060b2a685475` (CI `36201526746`), **accepted** Round 4's closure of raw inventory-column DML, base-variant write authority, home-association trigger authority, `branch_warehouses` RLS and grants, the internal role's ownership and the managed-PostgreSQL contract, and returned CHANGES REQUIRED on one remaining authority-class blocker: P3-AL-54 closed **raw DML** but not **direct routine execution**. `daftar_app` held `EXECUTE` on three `SECURITY DEFINER` routines whose only guard was the application's permission check, with business scope taken from caller-settable GUCs — the class of defect Phase 2 removed from onboarding (`0038`) and from the ledger (`0045`). **P3-AL-55 (new)** introduces the server-minted **`invctl/1` inventory command assertion** on its own key domain: a locked ten-component wire format, the `invpl/1` payload digest recomputed by the database from the routine's own arguments, a closed operation-kind registry with the P3-S1 kinds registered and the P3-S3 kinds locked, strict single consumption, scope coherence, byte-separated keys, and the honest compromised-process boundary. P3-AL-54 §E's claims that the application check makes `EXECUTE` safe, and that the routines give a stolen credential no new reach, are **withdrawn where they stood**. P3-AL-32's seams become `withBusinessInventoryTransaction` / `withBusinessInventoryAccountingTransaction`; P3-AL-33 gains its physical continuation; the P3-S2 movement primitive re-verifies a consumed assertion. Round 4's role, grant, RLS and `search_path` model is kept exactly. Premortem extended to **PM-46**; threat model TH-36 to TH-38.
+>
 > **Correction pass, Round 4 — 2026-09-25.** The Tech Lead reviewed head `fd963c130a0bf51a14b09e1de483bd3d69ab15be` (CI `36195847316`), accepted Round 3's resolutions, and returned CHANGES REQUIRED on one cross-layer **authority** defect found by reading the lock against the accepted Phase 1 privilege model: `0006_rls.sql:78` grants `daftar_app` table-level `SELECT, INSERT, UPDATE` on `products` and `product_variants`, and a table-level grant covers every column added later — so the day P3-S1 adds `track_inventory`, `unit_code` and `unit_decimals`, the merchant runtime could set them with a plain `UPDATE`, bypassing `inventory.adjust`, the configuration command and the unit rules. A `CHECK` that a tracked product has a unit proves shape, not authority. `daftar_inventory_internal` was also only a name. **P3-AL-54 (new)** is the complete physical authority model beneath P3-AL-04, -05, -15, -36, -52 and -53: the three kinds of authority, the internal role's full contract and its one deployment membership, the safe `SECURITY DEFINER` discipline, the three named runtime routines, the column guards and why they must run with **invoker** rights, trigger ordering against the P3-S2 history lock, the home-association maintainer's authority through the frozen onboarding writer, the `branch_warehouses` RLS and grant model, the live grant matrix and the managed-PostgreSQL proof. Repository inspection while closing it established two facts the review did not state and that decide the design: the frozen onboarding writer runs as **`daftar_platform`** (`0033_provisioner_atomic_authority.sql:308`), not as `daftar_provisioner`; and roles are created in `infrastructure/database/bootstrap.sql`, not in migrations. No Round 3 decision is reopened or weakened. Premortem extended to **PM-43**.
 >
 > **Correction pass, Round 3 — 2026-09-25.** The Tech Lead reviewed the closed lock at head `2ced8c1d2bed4f54e007ab6aac6d958436c11918` (CI `36190820912`), **accepted** the Round 2 corrections to P3-AL-49, P3-AL-51, P3-AL-32, P3-AL-38 and P3-AL-36, and returned CHANGES REQUIRED on two blockers found by cross-reading this lock against the **accepted Phase 1/2 implementation** rather than against itself. **(A)** `branch_warehouses` had a backfill but no lifecycle: a warehouse created *after* the migration would have had no authorization row, so an existing Phase 1 workflow would have produced a warehouse no assigned-scope actor could reach — a regression Phase 3 would have caused. Repository inspection while closing it found a **third** warehouse writer the review did not name, inside the frozen `provision_create_business`, which decides the mechanism (P3-AL-15, rewritten). **(B)** `products.unit_code` / `unit_decimals` were "frozen on the product" with no historical lifecycle, so changing them after movements exist would have silently reinterpreted every historical `qty_delta` — closed by a history lock that current zero stock does not unlock (P3-AL-05 §D). Two execution-closure requirements are also resolved: the hidden base variant must not leak through the catalog API that exists today, and may not be mutated by ordinary variant commands (**P3-AL-52**, new); and role seeding must be proved for businesses created **after** the migration, not only backfilled ones (**P3-AL-53**, new). P3-AL-38's "exactly three" is restated precisely: exactly three *Phase 3* permissions, **appended**, with the Manager's accepted Phase 1 authority untouched. Premortem extended to **PM-38**.
@@ -87,6 +89,7 @@ Per the directive's §59, every decision carries exactly one status:
 | P3-AL-52 | Hidden base variant boundary (catalog invisibility + mutation refusal) | TO BE ENFORCED IN P3 | P3-S1 |
 | P3-AL-53 | Role permission seeding for businesses created after the migration | TO BE ENFORCED IN P3 | P3-S1 |
 | P3-AL-54 | Physical database authority model for Phase 3 (internal role, routines, column guards, grants, RLS, managed PostgreSQL) | TO BE ENFORCED IN P3 | P3-S1 (P3-S2 for the history guard's placement) |
+| P3-AL-55 | Signed Phase 3 command authority — the `invctl/1` inventory command assertion (key domain, format, payload binding, operation registry, replay, seams) | TO BE ENFORCED IN P3 | P3-S1 (P3-S2 primitive re-verification; each later slice registers its own kinds) |
 
 ---
 
@@ -167,7 +170,7 @@ last_stock_seq           BIGINT         NOT NULL
 **What the database refuses.**
 
 - `stock_movements` carries a `BEFORE UPDATE OR DELETE` trigger that raises unconditionally, on the pattern `audit_append_only()` already uses (`0004_infra.sql`). Append-only is proved by the trigger, not by an ACL, because an ACL is a statement about today's grantees.
-- No runtime role holds `INSERT`, `UPDATE` or `DELETE` on `stock_movements` or `stock_levels`. `daftar_app` holds `SELECT` only. Every mutation is a `SECURITY DEFINER` command owned by a `NOLOGIN` internal role, exactly as `accounting_post_entry` is (P2-S3 G-4/G-5).
+- No runtime role holds `INSERT`, `UPDATE` or `DELETE` on `stock_movements` or `stock_levels`. `daftar_app` holds `SELECT` only. Every mutation is a `SECURITY DEFINER` command owned by `daftar_inventory_internal` (P3-AL-54), exactly as `accounting_post_entry` is owned by its internal role (P2-S3 G-4/G-5), and **every one of them verifies an `invctl/1` inventory command assertion before it writes** (P3-AL-55): the runtime entry routine consumes it, and the movement primitive, which no runtime role may execute, re-verifies it inside the consuming transaction.
 - `stock_levels` rows are written **only** by those commands, and every write is accompanied in the same statement by the movement that justifies it.
 
 **What is forbidden, permanently.** `stock_levels.on_hand += …` as independent truth; a merchant-facing endpoint that writes `stock_levels`; any "repair" command that sets a cache value to a number the movements do not produce. A divergence is an alert and an investigation (P3-AL-43), never a silent correction.
@@ -224,7 +227,7 @@ For a simple product with no merchant-defined variants, **enabling inventory tra
 
 1. The migration adds `products.track_inventory BOOLEAN NOT NULL DEFAULT false`, `products.unit_code TEXT NULL`, `products.unit_decimals SMALLINT NULL`. **Every existing product becomes inventory-untracked.** No stock row, no base variant and no movement is created because a migration ran.
 2. `products.unit` is **not** parsed, mapped, normalized or inferred. "kg", "كغم", "Kg." and "kilo" are a human label; guessing from it would be Zero Silent Errors violated in the one place where the guess becomes financial truth.
-3. Enabling tracking is an explicit merchant action requiring `inventory.adjust`, and it requires a canonical unit selection (P3-AL-05). The command creates the base variant (P3-AL-03) when the product has no variants. **Physically (Round 4):** the three columns have exactly one writer, the routine `inventory_configure_product`, owned by `daftar_inventory_internal`; ordinary `daftar_app` DML that sets or changes any of them is refused with `inventory.configuration_authority_required` even though `daftar_app` keeps its table-level `UPDATE` on `products` (P3-AL-54 §E–§F).
+3. Enabling tracking is an explicit merchant action requiring `inventory.adjust`, and it requires a canonical unit selection (P3-AL-05). The command creates the base variant (P3-AL-03) when the product has no variants. **Physically (Round 4):** the three columns have exactly one writer, the routine `inventory_configure_product`, owned by `daftar_inventory_internal`; ordinary `daftar_app` DML that sets or changes any of them is refused with `inventory.configuration_authority_required` even though `daftar_app` keeps its table-level `UPDATE` on `products` (P3-AL-54 §E–§F). **And calling the routine is not enough (Round 5):** it first consumes an `invctl/1` assertion of kind `inventory.configure_product` whose signed payload digest must equal the digest of its own `product_id`, `track_inventory`, `unit_code` and `unit_decimals` (P3-AL-55 §F–§G).
 4. `CHECK (track_inventory = false OR (unit_code IS NOT NULL AND unit_decimals IS NOT NULL))` — a tracked product physically cannot exist without canonical units.
 5. `products.unit` is retained and shown as the merchant's own free label. It is never read by inventory.
 
@@ -615,7 +618,7 @@ The P3-S1 migration asserts its own model from the catalogues — `pg_trigger` m
 - Removing refuses the home association while the warehouse exists — refused twice, by the command and by the keep-one trigger of §A. A command-level refusal alone would be a convention (a rule only the wrapper enforces is not an invariant while a trusted primitive can still write the row).
 - Both are **audited** through the existing `AuditService.recordTx` in the same transaction, actions `structure.warehouse_branch_associated` / `structure.warehouse_branch_dissociated`.
 
-**The physical path (Round 4).** The two commands do their permission and scope checks in the application, then call `structure_associate_warehouse_branch` / `structure_dissociate_warehouse_branch` inside `withBusinessTransaction` (P3-AL-54 §E). `daftar_app` has no `INSERT` or `DELETE` on `branch_warehouses`, so raw DML cannot add or remove an association; the routines re-enforce every structural rule above (one business, both rows exist, neither archived, home not removable, idempotent) and take the business from `app.business_id`, never from an argument.
+**The physical path (Round 4).** The two commands do their permission and scope checks in the application, then mint an `invctl/1` assertion of kind `structure.associate_warehouse_branch` / `structure.dissociate_warehouse_branch` over the exact `(warehouse_id, branch_id)` and call `structure_associate_warehouse_branch` / `structure_dissociate_warehouse_branch` inside `withBusinessInventoryTransaction` (P3-AL-54 §E, P3-AL-55). An assigned-scope actor never reaches the minter; a direct call without an assertion, or with one minted for another pair, is refused by the routine (Round 5). `daftar_app` has no `INSERT` or `DELETE` on `branch_warehouses`, so raw DML cannot add or remove an association; the routines re-enforce every structural rule above (one business, both rows exist, neither archived, home not removable, idempotent) and take the business from the verified assertion, requiring `app.business_id` to equal it — never from an argument, and never from the GUC alone.
 
 **Ownership — stated, because "schema-only theory" was the review's objection.** **P3-S1 creates the real callable domain path**: the two commands on the existing Structure domain, their controller routes, their permission checks and their tests. **P3-S7 adds only the UI.** No later slice's authorization may depend on a capability that has no caller — and P3-S2 onward read `branch_warehouses` for authority, so the write path must exist before they do.
 
@@ -964,22 +967,24 @@ audit event
 outbox event
 ```
 
-**Not every atomic domain operation implies a posting.** An earlier draft wrote the seam as a single boundary that “carries an assertion or it does not open.” That is incompatible with two decisions of this same document: P3-AL-14 locks that a same-business warehouse transfer creates **no journal entry**, and P3-AL-33 locks that an assertion is minted for the posting a domain operation implies. A transfer implies no posting, so a single assertion-requiring seam would force its implementer to choose between minting a **fake assertion for a posting that never happens** and **opening a second transaction** for the stock half — the exact split-commit this decision exists to prevent. Two competent engineers would have chosen differently. The seam is therefore **two typed operations**, and the distinction is carried by the type, not by a value.
+**Not every atomic domain operation implies a posting.** An earlier draft wrote the seam as a single boundary that “carries an [accounting] assertion or it does not open.” That is incompatible with two decisions of this same document: P3-AL-14 locks that a same-business warehouse transfer creates **no journal entry**, and P3-AL-33 locks that an assertion is minted for the posting a domain operation implies. A transfer implies no posting, so a single accounting-assertion-requiring seam would force its implementer to choose between minting a **fake accounting assertion for a posting that never happens** and **opening a second transaction** for the stock half — the exact split-commit this decision exists to prevent. Two competent engineers would have chosen differently. The seam is therefore **two typed operations**, and the distinction is carried by the type, not by a value. *(Round 5 keeps this distinction and adds what it left out: both seams now require an **inventory** assertion, because both mutate inventory — P3-AL-55.)*
 
-**The seams — specified, not implemented in P3-S0.**
+**The seams — specified, not implemented in P3-S0. Renamed and re-shaped in Round 5 (P3-AL-55):** every Phase 3 mutation now carries an **inventory** command assertion, and the posting distinction is kept exactly.
 
 ```
-withBusinessTransaction(scope, fn)                        -- no posting is possible
-withBusinessAccountingTransaction(scope, assertion, fn)   -- posting is possible
+withBusinessInventoryTransaction(scope, inventoryAssertion, fn)                                -- no posting is possible
+withBusinessInventoryAccountingTransaction(scope, inventoryAssertion, accountingAssertion, fn)  -- posting is possible
 ```
 
-1. **`withBusinessTransaction(scope, fn)`** — `BEGIN`s once, sets the RLS scope GUCs (`app.tenant_id`, `app.business_id`, `app.actor_user_id`), leaves `app.accounting_assertion` unset, runs `fn`, `COMMIT`s once. **No accounting posting capability is reachable from inside it**: the callback receives a handle type that carries no posting port and no raw client that a posting port would accept. Used by operations that create stock, audit and outbox facts and no journal — same-business transfer (P3-AL-14) is the Phase 3 example.
-2. **`withBusinessAccountingTransaction(scope, assertion, fn)`** — the same single `BEGIN`/`COMMIT` and the same scope GUCs, **plus** `app.accounting_assertion`, and the callback receives a handle that **does** expose the transaction-bound accounting port. Used by every financial inventory operation: adjustment, damage, stocktake, opening stock, purchase receipt, deficit catch-up, supplier return, supplier payment.
-3. **The distinction is a type, never a flag.** Forbidden permanently, in any spelling: `skipAccounting`, `requiresAccounting: false`, `trusted: true`, `postTrusted()`, `rawJournalInsert()`, or any boolean, option bag or string a caller could pass to turn one seam into the other. There is exactly one way to obtain posting capability, and it is to call the second function and supply an assertion. A code path that needs no posting cannot acquire one by argument.
-4. **A coherence check at the accounting boundary**: `withBusinessAccountingTransaction` refuses to open if the assertion's `tenant_id`/`business_id` claims do not equal the scope's, **before any domain mutation runs**. Without it, a defect could write stock in one business under an assertion for another — two isolation systems that disagree, which is worse than either alone.
+> **Superseded names.** Rounds 1–4 called these `withBusinessTransaction(scope, fn)` and `withBusinessAccountingTransaction(scope, assertion, fn)`. Those signatures are **withdrawn**: a Phase 3 seam without an inventory assertion would leave the stock writer unauthenticated (P3-AL-55 §A).
+
+1. **`withBusinessInventoryTransaction(scope, inventoryAssertion, fn)`** — `BEGIN`s once, sets the RLS scope GUCs (`app.tenant_id`, `app.business_id`, `app.actor_user_id`) and the carrier `app.inventory_assertion`, leaves `app.accounting_assertion` unset, runs `fn`, `COMMIT`s once. **No accounting posting capability is reachable from inside it**: the callback receives a handle type that carries no posting port and no raw client that a posting port would accept. Used by operations that mutate inventory, association, purchase-draft or supplier truth and post no journal — same-business transfer (P3-AL-14) and the three P3-S1 commands are the examples. **A transfer needs an inventory assertion and no accounting assertion.**
+2. **`withBusinessInventoryAccountingTransaction(scope, inventoryAssertion, accountingAssertion, fn)`** — the same single `BEGIN`/`COMMIT`, scope GUCs and inventory carrier, **plus** `app.accounting_assertion`, and the callback receives a handle that **does** expose the transaction-bound accounting port. Used by every financial inventory operation: adjustment, damage, stocktake finalization, opening stock, purchase receipt, deficit catch-up, supplier return, supplier payment. The inventory assertion authorizes the domain command; the accounting assertion authorizes the posting its success implies (P3-AL-33). Neither stands in for the other.
+3. **The distinction is a type, never a flag.** Forbidden permanently, in any spelling: `skipAccounting`, `requiresAccounting: false`, `trusted: true`, `skipAuthorization`, `skipInventoryAssertion`, `requiresAssertion: false`, `rawInventoryWrite`, `postTrusted()`, `rawJournalInsert()`, or any boolean, option bag or string a caller could pass to turn one seam into the other or to open either without its assertion. There is exactly one way to obtain posting capability, and it is to call the second function and supply both assertions. A code path that needs no posting cannot acquire one by argument, and no code path can reach an inventory routine without an inventory assertion.
+4. **A coherence check at both boundaries**: each seam refuses to open if the inventory assertion's — and, for the second, the accounting assertion's — `tenant_id`/`business_id` claims do not equal the scope's, **before any domain mutation runs**. The database repeats the inventory half as P3-AL-55 §G step 9; the application check exists so a defect fails before a connection is taken, not instead of the database's. Without it, a defect could write stock in one business under an assertion for another — two isolation systems that disagree, which is worse than either alone.
 5. **The accounting ports accept an existing transaction handle.** `AccountingPostingPort.postEntry()` and its siblings gain a variant that takes the caller's client instead of opening a connection. The existing single-operation methods remain, implemented in terms of the new one, so every accepted Phase 2 call site keeps working unchanged and no accepted behaviour is re-tested.
 6. **No nested independent commit anywhere.** Neither seam may be opened inside the other, and neither issues a second `BEGIN`. No saga, no compensating transaction, no outbox-driven "eventually post". This is one local PostgreSQL database; distributed-transaction patterns here would buy nothing and lose atomicity.
-7. **No new bypass, and no new journal writer.** `accounting_post_entry` (with its P2-S4 siblings) remains the one physical journal writer. G-4 discovers journal writers from the schema, so a new one would have to satisfy the entire protection set on the same commit. `withBusinessTransaction` weakens nothing: it grants strictly **less** than the accounting seam, and the database's own refusals are unchanged — `daftar_app` still holds no journal DML, so even a defect inside the non-posting seam cannot write a journal row.
+7. **No new bypass, and no new journal writer.** `accounting_post_entry` (with its P2-S4 siblings) remains the one physical journal writer. G-4 discovers journal writers from the schema, so a new one would have to satisfy the entire protection set on the same commit. `withBusinessInventoryTransaction` weakens nothing: it grants strictly **less** than the accounting seam, and the database's own refusals are unchanged — `daftar_app` still holds no journal DML, so even a defect inside the non-posting seam cannot write a journal row.
 
 **The required seam matrix — re-scoped in Round 2 so it does not require future slices.** The first draft asked P3-S1 to prove *transfer*, *adjustment* and *purchase receipt* atomicity. None of those entities exists in P3-S1: `stock_movements` and `stock_levels` arrive in P3-S2, transfers and adjustments in P3-S3, purchases in P3-S4. Proving them at S1 would have required implementing future slices early, creating production tables the slice does not own, or writing tests against stand-ins that prove nothing about the real path — all three break slice independence. **P3-S1 owns the transaction primitive and only the primitive**, and the end-to-end proofs belong to the slices that own the entities.
 
@@ -987,13 +992,14 @@ withBusinessAccountingTransaction(scope, assertion, fn)   -- posting is possible
 
 | # | case | must prove |
 |---|---|---|
-| 1 | `withBusinessTransaction` | exactly one `BEGIN` and one `COMMIT` for the whole callback, observed from the server |
+| 1 | `withBusinessInventoryTransaction` | exactly one `BEGIN` and one `COMMIT` for the whole callback, observed from the server |
 | 2 | rollback | a failure anywhere in the callback removes **every** mutation made through it, including in a test-owned fixture table |
 | 3 | capability by type | the callback's handle exposes **no** accounting posting port — a compile-time property, asserted additionally at runtime |
 | 4 | no accidental escape | the raw transaction object cannot be passed into the accounting posting port: there is no signature that accepts it, and the runtime port refuses a handle that did not come from the accounting seam |
 | 5 | nesting | opening either seam inside either seam is rejected or unreachable through the public typed ports |
-| 6 | `withBusinessAccountingTransaction` coherence | an assertion whose tenant/business claims differ from the scope's refuses **before the callback executes**, proved by asserting the fixture table is empty afterwards |
-| 7 | composition with accepted Phase 2 | an **existing, accepted Phase 2 accounting operation** runs on the same transaction handle and commits once |
+| 6 | coherence, both seams | an inventory or accounting assertion whose tenant/business claims differ from the scope's refuses **before the callback executes**, proved by asserting the fixture table is empty afterwards |
+| 6a | no seam without an inventory assertion *(Round 5)* | neither seam can be opened with a missing, empty or unparseable inventory assertion — a compile-time property of the signature, asserted additionally at runtime |
+| 7 | composition with accepted Phase 2 | inside `withBusinessInventoryAccountingTransaction`, carrying a real P3-S1 inventory assertion (`inventory.configure_product`) and an accounting assertion, an **existing, accepted Phase 2 accounting operation** runs on the same transaction handle and commits once with the P3-S1 command |
 | 8 | joint atomicity | a failure injected **after** that accepted posting rolls back the posting **and** the companion fixture mutation — the real property the seam exists for, proved without any Phase 3 entity |
 | 9 | backward compatibility | every existing Phase 2 single-operation method keeps its signature and behaviour; the whole accepted Phase 2 suite is the test |
 
@@ -1001,7 +1007,7 @@ withBusinessAccountingTransaction(scope, assertion, fn)   -- posting is possible
 
 | proof | owning slice |
 |---|---|
-| real transfer: stock pair + audit + outbox in one commit, through the **non-posting** seam, with **no** journal entry and **no** assertion minted | **P3-S3** |
+| real transfer: stock pair + audit + outbox in one commit, through the **non-posting** seam, with **no** journal entry, **no accounting** assertion and **one consumed inventory** assertion (`inventory.transfer`) | **P3-S3** |
 | real adjustment / damage / stocktake / opening: stock + journal + binding + audit + outbox in one commit | **P3-S3** |
 | real purchase receipt: purchase + lines + movements + cache + deficit coverage + journal + binding + audit + outbox in one commit | **P3-S4** |
 
@@ -1017,9 +1023,11 @@ withBusinessAccountingTransaction(scope, assertion, fn)   -- posting is possible
 
 A merchant who receives stock or pays a supplier does **not** need `accounting.post`. Accounting is a **consequence** of an authorized domain operation, not a second permission the merchant must hold.
 
-**How, exactly.** Authority is proven once, in the domain layer: the command checks its own permission (`purchases.receive`, `inventory.adjust`, `suppliers.pay` …) **and** the warehouse/branch scope (P3-AL-39). Only then does it mint the accounting assertion for the posting that its own success implies — and a command whose success implies **no** posting, such as a transfer, mints **nothing** and opens the non-posting seam of P3-AL-32 instead. An assertion is never minted to satisfy a transaction boundary. The assertion minter is already a port that the engine never touches, so the typed internal seam is "a domain command that has proven its own authority may mint"; it is not a flag, not a boolean and not a parameter that could be passed `true`.
+**How, exactly.** Authority is proven once, in the domain layer: the command checks its own permission (`purchases.receive`, `inventory.adjust`, `suppliers.pay` …) **and** the warehouse/branch scope (P3-AL-39). Only then does it mint the accounting assertion for the posting that its own success implies — and a command whose success implies **no** posting, such as a transfer, mints **no accounting assertion** and opens the non-posting seam of P3-AL-32 instead — carrying the inventory assertion it still needs, because it still mutates inventory (Round 5). An assertion is never minted to satisfy a transaction boundary. The assertion minter is already a port that the engine never touches, so the typed internal seam is "a domain command that has proven its own authority may mint"; it is not a flag, not a boolean and not a parameter that could be passed `true`.
 
-**Forbidden permanently:** `skipAuthorization=true`, `postTrusted()`, `bypassAccountingPermission()`, or any variant that could be reached with a literal. Accounting remains the financial authority; Inventory and Purchases own business authorization.
+**The physical continuation (Round 5, P3-AL-55).** Domain authorization is checked in the application — and that is no longer where it ends. After authorization the merchant API mints an **`invctl/1` domain assertion** over the exact payload, and the database command **verifies** it before any mutation. Domain permission is therefore not re-implemented in PostgreSQL, but neither is it an application convention a stolen database credential can step around. This holds for **inventory, purchase and supplier mutations** as Phase 3 expands: each slice registers the operation kinds of the commands it implements, and a financial command carries its inventory assertion **and** the accounting assertion its success implies.
+
+**Forbidden permanently:** `skipAuthorization=true`, `postTrusted()`, `bypassAccountingPermission()`, `skipInventoryAssertion`, or any variant that could be reached with a literal. Accounting remains the financial authority; Inventory and Purchases own business authorization, and prove it to the database by signature.
 
 ---
 
@@ -1106,6 +1114,7 @@ The debt register's suggestion of a CHECK is therefore declined on semantics and
 - **`ACCOUNTING_ASSERTION_KEY` remains exclusive to `merchant-api`.** Not the worker. Not `platform-api`. No second signer, no second process.
 - All Phase 3 financial posting happens inside `merchant-api`'s accepted trust boundary, which is why Phase 3 introduces no second signing process and therefore no new exposure.
 - The accepted database verifier is **not redesigned** during Phase 3.
+- **Round 5 (P3-AL-55).** The inventory command assertion follows the same boundary and adds no exposure TD-10 would have to re-review: it is the same symmetric HMAC construction on its **own** key domain, `INVENTORY_ASSERTION_KEY` is exclusive to `merchant-api` like the accounting key, and the accounting verifier is untouched — `invctl/1` has its own verifier and never reads `accounting_assertion_keys`.
 - TD-10 stays **open** as documented debt and a design boundary. It is **not** marked closed, because nothing about it was solved. Any future phase that would expose assertion signing to a second process must escalate TD-10 for architectural review **before** doing so.
 
 ---
@@ -1174,6 +1183,8 @@ The same five assertions are re-run against a business provisioned **after** the
 **A transfer has two warehouses and both must pass.** There is no "authorized source, unauthorized destination" transfer — the check runs over the set of affected warehouses, not over a single "the" warehouse, so a command that later grows a third warehouse inherits the rule instead of forgetting it.
 
 Default deny: an actor with `assigned` scope and no branch association reaches no warehouse at all.
+
+**The database sees the result, not the graph (Round 5, P3-AL-55 §F).** Every warehouse and branch id over which these two checks ran is a field of the `invpl/1` payload, so the signed assertion names exactly the set that was authorized. A transfer's assertion binds **both** warehouses; used with a different source or destination, the recomputed digest differs and the routine refuses.
 
 ---
 
@@ -1581,7 +1592,7 @@ Two of those three are already safe. Relying on that is the mistake: "safe becau
 
 1. `CHECK (is_base = false OR (sku IS NULL AND barcode IS NULL AND price_minor IS NULL AND attributes = '{}'::jsonb))` — a base variant physically cannot hold merchant identity, so it can never become visibly merchant-like even if a read is forgotten.
 2. `UNIQUE (business_id, product_id) WHERE is_base` (already in P3-AL-03) — repeated enablement cannot create a second base variant; the enablement command is idempotent against it.
-3. A `BEFORE INSERT OR UPDATE OR DELETE ON product_variants FOR EACH ROW` trigger that refuses any write touching a row with `is_base = true`, and any insert setting `is_base = true`, unless `current_user = 'daftar_inventory_internal'` — the Phase 3 twin of the accepted `daftar_accounting_internal` boundary (`0040_accounting_chart.sql:204–214`, `0045_accounting_post_entry.sql:373`). The tracking-enablement routine is the only writer that runs as that principal. Stable refusal: `catalog.base_variant_not_mutable`. **Round 4 (P3-AL-54 §F):** the trigger is `product_variants_10_base_variant_authority`, it runs with **invoker** rights (a definer-rights guard would always see its own owner as `current_user`), it also refuses the converse — the internal principal inserting a row with `is_base = false` — and it fires on `INSERT OR UPDATE` only. **Deletion is closed by privilege, not by the trigger:** no runtime role holds `DELETE` on `product_variants` (`0006_rls.sql:77–78`, `0013_security_boundary.sql:48`) and the internal role is given none, while a trigger on `DELETE` would also refuse the owner-level `ON DELETE CASCADE` from `products`/`businesses`, which is not a merchant write.
+3. A `BEFORE INSERT OR UPDATE OR DELETE ON product_variants FOR EACH ROW` trigger that refuses any write touching a row with `is_base = true`, and any insert setting `is_base = true`, unless `current_user = 'daftar_inventory_internal'` — the Phase 3 twin of the accepted `daftar_accounting_internal` boundary (`0040_accounting_chart.sql:204–214`, `0045_accounting_post_entry.sql:373`). The tracking-enablement routine is the only writer that runs as that principal, and it runs only after consuming an `inventory.configure_product` assertion (P3-AL-55). Stable refusal: `catalog.base_variant_not_mutable`. **Round 4 (P3-AL-54 §F):** the trigger is `product_variants_10_base_variant_authority`, it runs with **invoker** rights (a definer-rights guard would always see its own owner as `current_user`), it also refuses the converse — the internal principal inserting a row with `is_base = false` — and it fires on `INSERT OR UPDATE` only. **Deletion is closed by privilege, not by the trigger:** no runtime role holds `DELETE` on `product_variants` (`0006_rls.sql:77–78`, `0013_security_boundary.sql:48`) and the internal role is given none, while a trigger on `DELETE` would also refuse the owner-level `ON DELETE CASCADE` from `products`/`businesses`, which is not a merchant write.
 4. The catalog archive path already defers to the inventory check rather than duplicating it (P3-AL-41), so archiving a product cannot orphan a base variant that still has stock.
 
 **The permanent proofs (P3-S1 acceptance).**
@@ -1685,17 +1696,23 @@ Every function owned by `daftar_inventory_internal` — trigger functions includ
 
 ### §E — The three runtime entry points, named
 
-The application **keeps** everything it does today: authentication, `MembershipContext` resolution, and the permission check. It then calls **one named routine** inside the non-posting seam `withBusinessTransaction` (P3-AL-32), so business scope comes from the `app.business_id` GUC the seam sets — never from an argument. There is no `trusted` flag, option or bypass parameter anywhere.
+> **Round 5 correction.** This section originally made the application's permission check the security contract for these routines and took business scope from the `app.business_id` GUC. Both are **withdrawn** as authority (P3-AL-55 §A): `EXECUTE` is **transport reachability only**, and every routine below first consumes a server-minted `invctl/1` assertion bound to the actor, tenant, business, operation kind and the routine's actual arguments (P3-AL-55 §G). The GUC is now only row isolation, and must equal the asserted business.
+
+The application **keeps** everything it does today: authentication, `MembershipContext` resolution, and the permission check. It then mints an `invctl/1` assertion for the exact payload and calls **one named routine** inside `withBusinessInventoryTransaction` (P3-AL-32, P3-AL-55 §I). The routine's first act is `inventory_assertion_consume(<its op_code>, <digest of its own arguments>)`. There is no `trusted` flag, option or bypass parameter anywhere.
 
 | Routine | Owner | `EXECUTE` | Checked by the application first | Enforced by the routine |
 |---|---|---|---|---|
-| `inventory_configure_product(p_product_id uuid, p_track boolean, p_unit_code text, p_unit_decimals smallint)` | `daftar_inventory_internal` | `daftar_app` only | `inventory.adjust` | Product is in `app_business()`; `unit_code` exists in `units`; tracked ⇒ unit present (P3-AL-04); unit change refused after history (P3-AL-05 §D, by the P3-S2 trigger); disable refused at non-zero stock (P3-AL-41, from P3-S2); **creates the base variant** when enabling tracking on a product with no variants (P3-AL-03), idempotently. The **only** writer of `track_inventory`, `unit_code`, `unit_decimals` and of any `is_base = true` row. |
-| `structure_associate_warehouse_branch(p_warehouse_id uuid, p_branch_id uuid)` | `daftar_inventory_internal` | `daftar_app` only | `warehouse.manage` **and** `branch_scope_mode = 'all'` (P3-AL-15 §B) | Both rows exist in `app_business()`; neither is archived; duplicate is an idempotent success; the composite FKs make a cross-business pair impossible regardless. |
-| `structure_dissociate_warehouse_branch(p_warehouse_id uuid, p_branch_id uuid)` | `daftar_inventory_internal` | `daftar_app` only | same | Both in `app_business()`; the home association is refused (and refused again by `branch_warehouses_keep_home`); an absent association is an idempotent success. |
+| `inventory_configure_product(p_product_id uuid, p_track boolean, p_unit_code text, p_unit_decimals smallint)` | `daftar_inventory_internal` | `daftar_app` only — reachability, not authority | `inventory.adjust`, then mints `inventory.configure_product` | **First** consumes the assertion (P3-AL-55 §G); then: product is in the asserted business; `unit_code` exists in `units`; tracked ⇒ unit present (P3-AL-04); unit change refused after history (P3-AL-05 §D, by the P3-S2 trigger); disable refused at non-zero stock (P3-AL-41, from P3-S2); **creates the base variant** when enabling tracking on a product with no variants (P3-AL-03), idempotently. The **only** writer of `track_inventory`, `unit_code`, `unit_decimals` and of any `is_base = true` row. |
+| `structure_associate_warehouse_branch(p_warehouse_id uuid, p_branch_id uuid)` | `daftar_inventory_internal` | `daftar_app` only — reachability, not authority | `warehouse.manage` **and** `branch_scope_mode = 'all'` (P3-AL-15 §B), then mints `structure.associate_warehouse_branch` | **First** consumes the assertion; then: both rows exist in the asserted business; neither is archived; duplicate is an idempotent success; the composite FKs make a cross-business pair impossible regardless. |
+| `structure_dissociate_warehouse_branch(p_warehouse_id uuid, p_branch_id uuid)` | `daftar_inventory_internal` | `daftar_app` only — reachability, not authority | same, then mints `structure.dissociate_warehouse_branch` | **First** consumes the assertion; then: both in the asserted business; the home association is refused (and refused again by `branch_warehouses_keep_home`); an absent association is an idempotent success. |
 
-The routines enforce **structure**, not scope mode. Branch authority in DAFTAR is application-resolved today (`member_branch_scopes` is read by `StructureService`), and this decision does **not** introduce a signed domain assertion for it — the accepted threat model does not require one. The honest boundary statement: a stolen `daftar_app` credential can already `INSERT`/`UPDATE` `branches` and `warehouses` for the business it scopes itself to (`0006:78`), so these routines give it no reach it lacked. What they remove is the ability to write the three configuration columns, the base variant, or an association **as raw DML** — which is the defect. Audit rows are written by the application through `AuditService.recordTx` in the same transaction, as every Phase 1 structure command does.
+The routines enforce **structure** and **verify authority**; they do not re-resolve scope mode. Branch authority is resolved by the application from `member_branch_scopes`, and the database trusts the signed result of that decision — an assertion whose payload binds every warehouse and branch id that was checked (P3-AL-55 §F) — rather than rebuilding the `MembershipContext` graph.
 
-**How RLS admits the routines.** They run as `daftar_inventory_internal` inside the transaction `daftar_app` opened, so `app.tenant_id` and `app.business_id` are already set and `app.bypass_rls` is false. The existing `tenant_membership` / `business_isolation` policies (`0006_rls.sql:28–49`) therefore admit the internal role to exactly that business's rows — the same rows `daftar_app` could see — with no new policy and no bypass. A call made without business scope sees zero rows and fails as "not found".
+> **Withdrawn (Round 5).** This paragraph used to say that the routines needed no signed domain assertion and that, because a stolen `daftar_app` credential can already write `branches` and `warehouses` (`0006:78`), the routines gave it "no reach it lacked". That was false for inventory configuration and `branch_warehouses`: before Phase 3 the credential cannot write those at all, and `EXECUTE` on a definer routine **is** new authority. P3-AL-55 §J states the replacement contract.
+
+**Audit is written by the routine**, with the actor taken from the verified assertion — never from `app.actor_user_id` or an argument — so the audit trail of a sensitive inventory command cannot name a spoofed actor. `daftar_inventory_internal` therefore holds `INSERT` on `audit_events` (§H), as `daftar_accounting_internal` does (`0045:397`); the application does not write a second audit row for the same command.
+
+**How RLS admits the routines.** They run as `daftar_inventory_internal` inside the transaction `daftar_app` opened, so `app.tenant_id` and `app.business_id` are already set and `app.bypass_rls` is false — and, since Round 5, the routine has already refused unless those two GUCs **equal** the verified assertion's tenant and business (P3-AL-55 §G step 9). The existing `tenant_membership` / `business_isolation` policies (`0006_rls.sql:28–49`) therefore admit the internal role to exactly that business's rows — the same rows `daftar_app` could see — with no new policy and no bypass. A call made without business scope sees zero rows and fails as "not found".
 
 ### §F — The column guards, and why they must run with invoker rights
 
@@ -1753,8 +1770,14 @@ Default deny. This is the **intended catalogue state**, and P3-S1's tests read `
 | `product_variants` | unchanged `SELECT, INSERT, UPDATE`, `is_base` rows guarded by §F | unchanged | unchanged | unchanged | unchanged | `SELECT`; `INSERT (business_id, id, product_id, is_base)` only; **no `UPDATE`, no `DELETE`** |
 | `businesses`, `branches`, `warehouses` | unchanged | unchanged | unchanged | unchanged | unchanged | `SELECT` (the RLS subquery and the structural checks need it) |
 | `journal_entries` | unchanged | unchanged | unchanged | unchanged | unchanged | **—** |
-| `inventory_configure_product`, `structure_associate_warehouse_branch`, `structure_dissociate_warehouse_branch` | `EXECUTE` | — | — | — | — | owner |
+| `inventory_configure_product`, `structure_associate_warehouse_branch`, `structure_dissociate_warehouse_branch` | `EXECUTE` — reachability only; each call consumes an `invctl/1` assertion (P3-AL-55) | — | — | — | — | owner |
 | every Phase 3 trigger function | — | — | — | — | — | owner (definer ones) |
+| `inventory_assertion_keys` *(Round 5)* | — | — | — | — | — | `SELECT, INSERT, UPDATE` (no `DELETE`) |
+| `inventory_assertion_uses` *(Round 5)* | — | — | — | — | — | `SELECT, INSERT, DELETE` (no `UPDATE`) |
+| `inventory_operation_kinds` *(Round 5)* | — | — | — | — | — | `SELECT` |
+| `inventory_assertion_key_install`, `inventory_assertion_key_retire` *(Round 5)* | — | `EXECUTE` (install/retire only; cannot read) | — | — | — | owner |
+| `inventory_assertion_consume`, `inventory_assertion_current` *(Round 5)* | — | — | — | — | — | owner; no `EXECUTE` grant to anyone |
+| `audit_events` | unchanged | unchanged | unchanged | unchanged | unchanged | `INSERT` *(Round 5: the routine writes the audit row with the asserted actor)* |
 | membership in `daftar_inventory_internal` | **none** | **none** | **none** | **none** | **none** | — (only `daftar_migrator`, `INHERIT FALSE`) |
 
 "Unchanged" is the accepted state and is itself asserted: `daftar_platform` holds only `SELECT` on `products` and `product_variants` (`0010_db_roles.sql:20–22` narrowed by `0013_security_boundary.sql:48`) and `SELECT, INSERT, UPDATE` on `warehouses` (`0010:20–22`, which is how the platform-owned `provision_create_business` writes its warehouse); `daftar_provisioner` holds no table privilege on any of these (`0032_provisioner_narrow_functions.sql:22–27`) and reaches them only through platform-owned routines. **From P3-S2** the internal role additionally holds `SELECT` on `stock_movements` (through a `FOR SELECT` policy admitting it, §G) and on `stock_levels` (for the P3-AL-41 disable rule); nothing else is added.
@@ -1788,6 +1811,258 @@ P3-S1 **fails** if any of its objects work only because CI applies migrations as
 
 ---
 
+
+## P3-AL-55 — Signed Phase 3 command authority: the `invctl/1` inventory command assertion
+
+**Status: TO BE ENFORCED IN P3 · P3-S1** (key domain, verifier, the three P3-S1 operation kinds and both seams); **P3-S2** (the movement primitive's re-verification); **P3-S3 onward** (each slice registers its own operation kinds).
+
+### §A — The defect, and the claim it withdraws
+
+Round 4 closed **raw DML**: the column guards of P3-AL-54 §F refuse any write of the three configuration columns, a base variant or an association unless `current_user = 'daftar_inventory_internal'`. It did **not** close **direct routine execution**. `daftar_app` held `EXECUTE` on three `SECURITY DEFINER` routines that run as that principal, and the only thing standing between `EXECUTE` and the mutation was the application's permission check — a check the database could not see. Business scope came from `app.tenant_id` / `app.business_id`, which any holder of the `daftar_app` credential sets itself with `set_config()`.
+
+That is the exact class of defect Phase 2 removed. `0038_provisioning_assertions.sql:1–8` records it for onboarding ("a GUC is caller-controlled … The GUC was never authentication proof"), and `packages/accounting/src/assertion.ts:4–10` records it for the ledger ("A caller-settable GUC is not authorization"). **GUC scope is row isolation, never authorization.**
+
+**Withdrawn, and labelled so where they stood** (P3-AL-54 §E):
+
+1. *"The application checks the permission first and then calls the routine"* as the security contract. The application still checks first (§I), but that check is not a physical boundary; the database verifies a signed decision.
+2. *"A stolen `daftar_app` credential … gets no reach it lacked."* **False.** Before Phase 3 that credential cannot set `track_inventory`, `unit_code` or `unit_decimals`, cannot create a base variant, and cannot write `branch_warehouses` — the objects do not exist, and once they exist the guards refuse it. Granting `EXECUTE` on a definer routine **is** new authority. That the same credential can already write some Phase 1 structure rows justifies nothing.
+3. *"This decision does not introduce a signed domain assertion … the accepted threat model does not require one."* **Withdrawn.** This decision introduces it.
+
+**The replacement rule.** `EXECUTE` is **transport reachability only**. Authorization for every sensitive Phase 3 mutation is a **server-minted `invctl/1` assertion**, verified inside the routine against key material no runtime role can read, bound to the actor, tenant, business, operation kind and **the actual payload**, before any row is read for decision or written. The internal role of P3-AL-54 is kept exactly: the assertion says **who is authorized to do what**; the internal role is **the database authority the routine physically exercises**. Neither replaces the other.
+
+### §B — Scope of the rule
+
+Every Phase 3 command that mutates **inventory, warehouse-association, purchase or supplier truth** is a routine owned by `daftar_inventory_internal` that consumes one `invctl/1` assertion. This is the physical continuation of P3-AL-33: domain permission is not re-implemented in PostgreSQL, and it is no longer merely an application convention.
+
+**Excluded, deliberately:**
+
+- **The derived home-association maintainer** (P3-AL-15 §A, P3-AL-54 §I) and its completeness and keep-home triggers. They are not a user-requested authority expansion: the home row is `warehouses.branch_id` restated, and whoever may create the warehouse already decides it. Requiring an assertion there would break the frozen `provision_create_business`, which cannot mint one. A stolen `daftar_app` credential that creates a warehouse through its accepted Phase 1 grant gets exactly the home association its `branch_id` already implied — no reach it lacked, and here that sentence is true.
+- **Accounting postings.** They keep `acctctl/1` / the posting assertion of Phase 2, unchanged, on their own key. A financial inventory command presents **both** assertions (§H).
+- **Reads.** No assertion is needed to read; RLS governs reads as today.
+
+### §C — The key domain (P3-S1)
+
+A separate blast radius, on the exact pattern of `0044_accounting_assertion_keys.sql`:
+
+```
+inventory_assertion_keys (
+  kid        TEXT PRIMARY KEY CHECK (kid ~ '^[A-Za-z0-9_-]{1,32}$'),
+  secret     BYTEA NOT NULL CHECK (octet_length(secret) >= 32),
+  status     TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','retired')),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  retired_at TIMESTAMPTZ,
+  CHECK ((status = 'retired') = (retired_at IS NOT NULL)))
+
+inventory_assertion_uses (
+  jti          UUID PRIMARY KEY,
+  xact         XID8 NOT NULL,
+  op_code      TEXT NOT NULL REFERENCES inventory_operation_kinds (op_code),
+  business_id  UUID NOT NULL,
+  consumed_at  TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp())
+
+inventory_operation_kinds (
+  op_code        TEXT PRIMARY KEY CHECK (op_code ~ '^[a-z]+(\.[a-z_]+)+$'),
+  registered_by  TEXT NOT NULL)          -- the slice, e.g. 'P3-S1'
+```
+
+- `REVOKE ALL … FROM PUBLIC` on all three. **No runtime role** — `daftar_app`, `daftar_platform`, `daftar_worker`, `daftar_identity`, `daftar_resolver`, `daftar_provisioner`, `daftar_reconciler` — holds any privilege on `inventory_assertion_keys` or `inventory_assertion_uses`. `daftar_inventory_internal` holds `SELECT, INSERT, UPDATE` on the keys (no `DELETE`: it cannot destroy key material) and `SELECT, INSERT, DELETE` on the uses (no `UPDATE`: a use cannot be moved to another transaction), and `SELECT` on the registry. The registry has no runtime DML; it is extended only by migrations.
+- **Key management**, `0044:132–199` exactly: `inventory_assertion_key_install(p_kid TEXT, p_secret BYTEA)` and `inventory_assertion_key_retire(p_kid TEXT)`, `SECURITY DEFINER`, `SET search_path = pg_catalog, public, pg_temp`, owned by `daftar_inventory_internal`, `EXECUTE` to **`daftar_platform` only**, ACL set **before** the ownership transfer (`0044:177–183`). Same `kid` + same secret: idempotent. Same `kid` + different secret: **refused**, `inventory.assertion_key_conflict`. A retired `kid` is never reinstated. Rotation is install-new → deploy → retire-old. No secret is interpolated into any message. The platform can install and retire; it can never read.
+- **The ops script** `scripts/install-inventory-key.ts`, on the pattern of `scripts/install-accounting-key.ts`, runs under the platform credential.
+- **Configuration.** `INVENTORY_ASSERTION_KEY` (base64 of ≥ 32 bytes) and `INVENTORY_ASSERTION_KID` (`^[A-Za-z0-9_-]{1,32}$`). Required for `PROCESS_MODE=merchant-api` in production; **forbidden** in `platform-api`, `worker` and `reconciler` (`apps/api/src/config.ts:127–220` pattern). **Byte separation:** production config validation fails closed when the decoded bytes of `INVENTORY_ASSERTION_KEY` equal those of `PROVISIONING_ASSERTION_KEY` or of `ACCOUNTING_ASSERTION_KEY` — compared as decoded bytes, so two base64 spellings of one secret are one secret (`config.ts:284–299`) — and the minter repeats the comparison in every mode at the point the key is loaded, in constant time (`accounting-assertion.minter.ts:31–39`, `secretsAreIdentical`). Different variable names are not separation.
+
+### §D — The `invctl/1` wire format (locked)
+
+An assertion is **exactly ten ASCII components separated by `.` (0x2E)**. No component is empty and none contains `.`, whitespace or any byte outside its pattern. The verifier **refuses** a non-canonical component; it never lowercases, trims or normalizes one into acceptance.
+
+| # | Component | Exact pattern | Meaning |
+|---|---|---|---|
+| 1 | version | `invctl1` | literal; dot-free spelling of the domain `invctl/1` |
+| 2 | `kid` | `^[A-Za-z0-9_-]{1,32}$` | key id in `inventory_assertion_keys` |
+| 3 | actor | `^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$` | the authenticated user; **lowercase only** |
+| 4 | tenant | same UUID pattern | |
+| 5 | business | same UUID pattern | |
+| 6 | operation | `^[a-z]+(:[a-z_]+)+$` | the registry `op_code` with every `.` written as `:` (§E) |
+| 7 | payload digest | `^[0-9a-f]{64}$` | lowercase hex SHA-256 of the `invpl/1` stream (§F) |
+| 8 | expiry | `^[1-9][0-9]{0,18}$` | Unix epoch seconds, base 10, no sign, no leading zero |
+| 9 | `jti` | UUID pattern, lowercase | random, one per minted assertion |
+| 10 | MAC | `^[0-9a-f]{64}$` | lowercase hex HMAC-SHA-256 |
+
+**The MAC** is `HMAC-SHA-256(secret, preimage)` where
+
+```
+preimage = UTF-8 bytes of:  'invctl/1' || 0x0A || c1 || '.' || c2 || … || '.' || c9
+```
+
+— the literal domain `invctl/1`, one line feed, then components 1–9 joined by `.`. The MAC covers every claim, so none can be swapped after minting.
+
+**Domain separation is cryptographic, not structural.** No accepted preimage can equal an `invctl/1` preimage: the provisioning and posting preimages begin `v1.` (`0038:107`, `0045:193`), and the control preimage begins with the bytes `acctctl/1` + LF (`0048:282`). Only `invctl/1` preimages begin `invctl/1` + LF. The separate key (§C) already makes substitution fail; the prefix makes it fail even if a key were ever shared by mistake.
+
+**TTL.** Minted with `exp = floor(now_seconds) + 60`. The minter refuses any other TTL above 60 (the bounded, not defaulted, rule of `assertion.ts:137–149`). The database refuses `exp <= extract(epoch FROM clock_timestamp())` (`inventory.assertion_expired`) **and** `exp > extract(epoch FROM clock_timestamp()) + 65` (`inventory.assertion_ttl_exceeded`) — 60 seconds plus a fixed 5-second clock-skew allowance, so even a defective minter cannot issue a long-lived assertion the database accepts.
+
+**Transport.** The seam sets the assertion transaction-locally as `app.inventory_assertion` (`set_config(…, true)`), exactly as `app.accounting_assertion` is set (`apps/api/src/infra/database.ts:143–160`). The GUC is a **carrier**: whatever it holds is worthless unless its MAC verifies. No routine reads the actor, tenant or business from any other GUC.
+
+### §E — Operation kinds: a closed registry, least authority
+
+`op_code` is `domain.verb[_object]`, lowercase, dotted, and closed: a registry row exists only for a command whose routine exists. The wire form replaces each `.` with `:` (a bijection, since `op_code` cannot contain `:`), because `.` is the component separator. The verifier maps it back and requires the registry row.
+
+| `op_code` | Registered by | Routine that consumes it | Application check before minting |
+|---|---|---|---|
+| `inventory.configure_product` | **P3-S1** | `inventory_configure_product` | `inventory.adjust` + product in business |
+| `structure.associate_warehouse_branch` | **P3-S1** | `structure_associate_warehouse_branch` | `warehouse.manage` **and** `branch_scope_mode = 'all'` |
+| `structure.dissociate_warehouse_branch` | **P3-S1** | `structure_dissociate_warehouse_branch` | `warehouse.manage` **and** `branch_scope_mode = 'all'` |
+
+**Locked now for P3-S3, registered only by P3-S3's migration** — the operation kinds, not their routines:
+
+| `op_code` | Command | Permission (P3-AL-38) + scope (P3-AL-39) |
+|---|---|---|
+| `inventory.transfer` | same-business transfer (P3-AL-14) | `inventory.transfer`; **both** warehouses in scope |
+| `inventory.adjust` | adjustment (P3-AL-17) | `inventory.adjust`; the warehouse in scope |
+| `inventory.damage` | damage write-off (P3-AL-17) | `inventory.adjust`; the warehouse in scope |
+| `inventory.stocktake_open` | open a stocktake (P3-AL-16) | `inventory.stocktake`; the warehouse in scope |
+| `inventory.stocktake_count` | record counts (P3-AL-16) | `inventory.stocktake`; the warehouse in scope |
+| `inventory.stocktake_finalize` | finalize (P3-AL-16) | `inventory.stocktake`; the warehouse in scope |
+| `inventory.opening` | opening stock (P3-AL-18) | `inventory.adjust`; the warehouse in scope |
+
+**P3-S4, P3-S5 and P3-S6** register their own kinds in their own migrations under the same rule — one kind per command, named for the command, checked against that command's permission and scope — for supplier create/update/archive, purchase draft/receive/cancel, supplier return, purchase reversal, supplier payment, allocation and refund. They are **not** registered, and not fixed here beyond this rule, because a registry row is a claim that a routine exists to consume it.
+
+**Forbidden permanently:** `inventory.write`, `inventory.execute`, `trusted_inventory_command`, a wildcard, a kind list, free-form operation text, or any kind that one routine accepts on behalf of another. Each routine accepts **exactly one** `op_code`. An assertion for one kind therefore cannot drive another routine, even inside the same transaction.
+
+**Permission claims are not in the assertion.** It carries no `permission=…` string. The operation kind **is** the server-side decision: `inventory.configure_product` is minted only after `inventory.adjust` passed. A permission string supplied by a request would be a claim the database could not check.
+
+### §F — Payload binding: `invpl/1`
+
+The assertion authorizes **the payload the routine actually receives**. The routine recomputes the digest from its **own arguments** and compares it with component 7 **before** any decision-relevant read or write. A caller-supplied digest is never trusted by itself — the principle of `acctfp/1` (`packages/accounting/src/fingerprint.ts:1–31`, recomputed in `0045`, refused by `accounting.assertion_payload_mismatch`).
+
+**The stream** (built as `BYTEA` in PostgreSQL, like `acctfp/1`, because NULL is a byte):
+
+```
+'invpl/1' LF  op_code LF  tenant LF  business LF  field_1 LF  field_2 LF … field_n LF
+```
+
+`LF` is the single byte `0x0A` and terminates **every** line, including the last. `op_code` is the dotted registry form. The digest is `lowercase hex(SHA-256(stream))`.
+
+**Field encoding — no implementer choice:**
+
+| Type | Encoding |
+|---|---|
+| UUID | 36 bytes, lowercase hex, hyphenated `8-4-4-4-12` |
+| boolean | ASCII `true` or `false` |
+| integer (`smallint`, `integer`, `bigint`) | base-10 ASCII; `-` only for a negative value; no `+`, no leading zero, zero is `0` |
+| registry code (`unit_code`) | its bytes exactly; must already match the registry pattern `^[a-z][a-z0-9_]{0,31}$`, else refused **before** hashing; no case folding, trimming or Unicode normalization (`normalize()` is not used — it raises on a non-UTF8 server) |
+| NULL | the single byte `0x00`, and nothing else on that line |
+
+No field may contain `0x0A` or `0x00` other than the NULL encoding; every field type above makes that impossible, and the canonicalizer asserts it.
+
+**Field order, per operation kind — P3-S1:**
+
+| `op_code` | Fields, in order |
+|---|---|
+| `inventory.configure_product` | `product_id` (UUID), `track_inventory` (boolean), `unit_code` (code or NULL), `unit_decimals` (integer or NULL) |
+| `structure.associate_warehouse_branch` | `warehouse_id` (UUID), `branch_id` (UUID) |
+| `structure.dissociate_warehouse_branch` | `warehouse_id` (UUID), `branch_id` (UUID) |
+
+`op_code`, tenant and business are inside the stream as well as in the claims, so two kinds with the same field shape — associate and dissociate — never share a digest, and a digest cannot be carried to another business.
+
+**Warehouse and branch binding.** Every warehouse and branch identifier whose authorization the application checked is a payload field. An assertion minted for warehouse A + branch B fails for A + C and for D + B, because the recomputed digest differs. Later kinds follow the same rule: `inventory.transfer` binds **both** warehouse ids, and every line's variant, warehouse and quantity (P3-S3 locks the exact field list with the command, under this encoding).
+
+**One specification, two implementations, shared vectors.** P3-S1 creates the package `@daftar/inventory` with `assertion.ts` (mint, split — never verify, like `packages/accounting/src/assertion.ts:24–26`) and `payload.ts` (the `invpl/1` canonicalizer), plus `vectors/invpl-vectors.json`. The SQL canonicalizer and the TypeScript one are tested against the same vectors, including NULL `unit_code`, NULL `unit_decimals`, `unit_decimals = 0`, and associate/dissociate over identical ids. P3-S2 adds the fixed-point arithmetic to the same package.
+
+### §G — Verification inside the database
+
+Two internal functions, owned by `daftar_inventory_internal`, `SECURITY DEFINER`, `SET search_path = pg_catalog, public, pg_temp`, `REVOKE ALL … FROM PUBLIC`, **no `EXECUTE` grant to anyone** — callable only from other routines the same role owns:
+
+**`inventory_assertion_consume(p_op_code TEXT, p_payload_sha256 TEXT) RETURNS inventory_verified_actor`** — called first by every runtime entry routine, after it has computed the payload digest from its own arguments and before any other statement. In order:
+
+1. `current_setting('app.inventory_assertion', true)` present, else `inventory.assertion_missing`.
+2. Exactly ten components, `c1 = 'invctl1'`, each matching §D, else `inventory.assertion_malformed`.
+3. Active key for `c2`, else `inventory.assertion_key_unknown`.
+4. MAC recomputed over §D's preimage equals `c10`, else `inventory.assertion_invalid_signature`.
+5. Expiry and TTL ceiling (§D), else `inventory.assertion_expired` / `inventory.assertion_ttl_exceeded`.
+6. `replace(c6, ':', '.')` is a registry row **and equals `p_op_code`**, else `inventory.assertion_wrong_operation`.
+7. `c7 = p_payload_sha256`, else `inventory.assertion_payload_mismatch`.
+8. The business `c5` exists and belongs to tenant `c4`, else `inventory.forbidden`.
+9. **Scope coherence (defence in depth):** `app.tenant_id = c4` and `app.business_id = c5`, else `inventory.assertion_scope_mismatch`. RLS still isolates rows by those GUCs, and this check makes sure the rows RLS admits are the asserted business's. A valid GUC with a missing or invalid assertion never reaches this step.
+10. **Consumption:** `INSERT INTO inventory_assertion_uses (jti, xact, op_code, business_id) VALUES (c9, pg_current_xact_id(), …) ON CONFLICT (jti) DO NOTHING`; **no row inserted → `inventory.assertion_replayed`**, whether the earlier use was another transaction or this one.
+11. Opportunistic hygiene: delete uses older than one hour (`0044`/`0045` pattern).
+
+It returns `(actor_user_id, tenant_id, business_id, op_code, jti)`. `app.actor_user_id` is **never** read; the actor recorded anywhere comes from this record.
+
+**`inventory_assertion_current(p_allowed_op_codes TEXT[]) RETURNS inventory_verified_actor`** — non-consuming re-verification for **internal primitives** (the P3-S2 movement primitive and its successors), which are never runtime-executable and are reached only through an entry routine. It repeats steps 1–4, 6 (against the allowed list) and 9, and then requires an `inventory_assertion_uses` row for `c9` with `xact = pg_current_xact_id()`, else `inventory.assertion_not_consumed`. So a primitive runs only inside the transaction whose entry routine consumed a valid assertion of an allowed kind, for the asserted business.
+
+**Least authority below the entry routine (P3-S2).** The movement primitive additionally refuses a movement kind that the consumed operation kind does not map to, through `inventory_operation_movement_kinds (op_code, movement_kind)`, created **empty** by P3-S2 and filled only by the slice that registers each producing operation — so an `inventory.adjust` assertion can never drive a `transfer_in`, and at the end of P3-S2 no operation reaches the primitive at all. Every business id the primitive writes must equal the verified business. The rebuild swap of P3-AL-42 is likewise internal, has no runtime `EXECUTE`, and would need its own registered kind before any runtime path could reach it.
+
+### §H — Replay contract (locked and tested)
+
+**Strict single consumption per command.** One minted assertion authorizes **one** entry-routine invocation:
+
+| Case | Outcome |
+|---|---|
+| presented to an entry routine for the first time | consumed; proceeds |
+| presented again, **another** transaction (committed first use) | **refused**, `inventory.assertion_replayed` |
+| presented again, **same** transaction, to any entry routine | **refused**, `inventory.assertion_replayed` |
+| re-verified by an internal primitive, same transaction, after consumption | **allowed**, non-consuming (`inventory_assertion_current`) |
+| re-verified by an internal primitive with no consumption in this transaction | **refused**, `inventory.assertion_not_consumed` |
+| first use rolled back | the use row rolls back with it; the same assertion may be presented again **within its TTL**, and only for the identical payload, because operation and digest are signed. That is a retry of the same authorized decision, never a different one. |
+
+This is **stricter** than the Phase 2 accounting model, which binds a `jti` to its first transaction and lets several calls inside it present it (`0044:62–76`). Inventory does not need that for entry routines: every Phase 3 command is one entry call, and composition (a transfer's two movements, a receipt's many lines) happens **inside** that entry routine through primitives, which re-verify without consuming. A financial command presents its **accounting** assertion under the accounting contract unchanged.
+
+### §I — The application flow, and the transaction seams
+
+The merchant API performs, in this order and no other:
+
+```
+authentication
+→ MembershipContext resolution
+→ domain permission (P3-AL-38)
+→ branch/warehouse scope over every affected warehouse (P3-AL-39)
+→ payload validation
+→ mint the invctl/1 assertion over the exact payload
+→ open the typed seam (P3-AL-32)
+→ call the one routine for that operation kind
+```
+
+An assigned-scope actor **cannot obtain** an association assertion: the association command refuses before the minter is reached (P3-AL-15 §B). The minter is a port that only a domain command which has proved its own authority may call; it takes typed claims, never a permission string.
+
+**The seams (P3-AL-32, renamed in Round 5):**
+
+```
+withBusinessInventoryTransaction(scope, inventoryAssertion, fn)
+withBusinessInventoryAccountingTransaction(scope, inventoryAssertion, accountingAssertion, fn)
+```
+
+A transfer needs an **inventory** assertion, because it mutates inventory, and **no accounting** assertion, because it posts no journal (P3-AL-14). The old "fake accounting assertion" problem stays solved without leaving the stock writer unauthenticated.
+
+### §J — The stolen-credential contract (mandatory Phase 3 threat boundary)
+
+A stolen `daftar_app` **database credential alone** cannot — even knowing valid user, owner, product, warehouse and branch UUIDs, and even setting `app.tenant_id`, `app.business_id` and `app.actor_user_id` to a victim's values:
+
+- enable inventory tracking, or select or change a canonical unit — raw DML is refused by P3-AL-54 §F, the routine by §G step 1–4;
+- create a hidden base variant — only `inventory_configure_product` creates one, and it verifies first;
+- associate or dissociate a warehouse and a branch — raw DML is refused by privilege (P3-AL-54 §H), the routines by §G;
+- execute any future stock movement — the primitive has no runtime `EXECUTE`, and re-verifies a consumed assertion (§G);
+- replay a captured assertion — single consumption and a 60-second life (§H);
+- widen a captured assertion — every claim and the payload are under the MAC.
+
+**No valid inventory assertion: no sensitive inventory command.**
+
+**The honest boundary.** A **fully compromised `merchant-api` process** holds `INVENTORY_ASSERTION_KEY` and can mint assertions for any actor, business and registered operation kind. That is a different threat boundary, and this design does not claim to stop it — exactly the accepted Phase 2 statement for the accounting key (`docs/DAFTAR_THREAT_MODEL.md`, "الحد المقبول المُعلن (P2-S3)"; `PHASE_2_S3_ACCEPTANCE.md` §7). What the design does guarantee there is **blast-radius separation**: the inventory key cannot mint an accounting posting or a provisioning assertion, and the reverse, because the three secrets are distinct bytes, live in three tables, and sign three disjoint preimage languages.
+
+### §K — What stays exactly as Round 4 left it
+
+`daftar_inventory_internal` (P3-AL-54 §C) — `NOLOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS`, `PASSWORD NULL`, one member `daftar_migrator` `INHERIT FALSE, SET TRUE`, zero runtime membership; the safe definer contract (§D); the column guards `products_10_inventory_config_authority` and `product_variants_10_base_variant_authority` (§F), which still close raw DML; trigger ordering (§G); the home-association authority and `branch_warehouses` RLS (§I); the managed-PostgreSQL proof (§J), which now also covers the three new tables and five new functions, every ownership transfer bracketed in the same file, and the catalogue diff against a superuser build.
+
+**The final model:**
+
+```
+raw DML                                   → column guard or missing privilege refuses
+direct routine call without an assertion  → inventory_assertion_consume refuses
+authorized application call               → assertion verified and consumed
+                                            → daftar_inventory_internal performs the narrow mutation
+```
+
+Both doors are closed.
+
+---
 
 ## 2. The self-review question
 
@@ -1823,7 +2098,7 @@ The places where the answer was "yes" on the first pass, and what closed each:
 | Permission seeding *(Round 2)* | **Yes.** The lock and the plan disagreed about Manager. | P3-AL-38 wins; the plan restates it, and a separate assertion forbids any non-owner role holding a **sensitive** key. |
 | Zero-stock residual | **Yes.** `on_hand = 0` with `valuation = ±0.0000000001` was reachable and unaddressed. | P3-AL-49 §C: the full-depletion flush, and `on_hand = 0 ⇒ valuation = 0` asserted under the lock before COMMIT. |
 | Transfer valuation | **Yes.** "Σ = 0 with no intermediate rounding" was unachievable if both legs computed `qty × avg` independently. | P3-AL-14: the destination's value is the exact negation of the stored source value; the pair sums to zero by construction. |
-| Transaction composition | **Yes.** One assertion-requiring seam contradicted the no-journal transfer; two engineers would have split the commit or minted a fake assertion. | P3-AL-32: two typed seams, the distinction carried by the type, every boolean bypass forbidden by name, and a six-case proof matrix. |
+| Transaction composition | **Yes.** One assertion-requiring seam contradicted the no-journal transfer; two engineers would have split the commit or minted a fake assertion. | P3-AL-32: two typed seams, the distinction carried by the type, every boolean bypass forbidden by name, and a six-case proof matrix. *(Round 5: both seams also require an `invctl/1` inventory assertion — P3-AL-55.)* |
 | Source completeness | **Yes.** The unique tuple proved no-duplicates only; the rest rested on "the same command writes both rows". | P3-AL-50 (closed registry) + P3-AL-51 (generic binding, deferred COMMIT guards, deletion protection, post-finalization immutability). |
 | Multiple deficit coverages | **Yes — a real collision.** One purchase line covering N layers produced N movements with one identity; the unique tuple would have admitted one and refused the rest. | P3-AL-13: an adjustment **header** per operation and an immutable **detail** per coverage; `source_line_id` is the coverage id, so every coverage has its own identity. |
 | Tax boundary | No, and it stays open **bounded**. | P3-AL-23: `tax_minor = 0` only, `purchase.tax_policy_absent` otherwise; OD-03 is not resolved here and does not block P3-S1/S2/S3. |
@@ -1869,6 +2144,26 @@ The places where the answer was "yes" on the first pass, and what closed each:
 | **Can the ordinary Catalog touch the base variant?** | **No.** Reads exclude it (P3-AL-52); `product_variants_10_base_variant_authority` refuses `INSERT`/`UPDATE` of an `is_base = true` row by anyone but the internal role; `DELETE` is refused by privilege, since no runtime role holds it; and the internal role cannot touch a merchant variant, having no `UPDATE`/`DELETE` and being refused any `is_base = false` insert. §F. |
 | **What RLS applies to `branch_warehouses`?** | `ENABLE` and `FORCE`, with the accepted two-policy layering of `warehouses` (`0006:28–49`): permissive `tenant_membership` and restrictive `business_isolation`, both honouring `app_bypass()`. No policy names a role. A `daftar_app` connection sees only its business's rows and can write none. §I. |
 | **Does a managed non-superuser migrator succeed?** | **It must, or P3-S1 fails.** The acceptance is a real `0052 → P3-S1` run as `daftar_migrator` with `rolsuper = false` and `rolbypassrls = false`, every ownership transfer bracketed by a same-file `CREATE ON SCHEMA public` grant and revoke, later replacements under `SET LOCAL ROLE`, and the resulting catalogue diffed against a superuser build. Every mechanism used has already run this way in Phase 2 (`0040`–`0051`). §J, PM-43. |
+
+**Sixth pass — the Round 5 questions, answered against the signed authority model.** The Tech Lead's fifteen. Each answer names the mechanism; none is "implementation choice".
+
+| # | Question | Answer |
+|---|---|---|
+| 1 | **Can a stolen `daftar_app` DB credential enable inventory tracking?** | **No.** Raw DML: `products_10_inventory_config_authority` refuses (P3-AL-54 §F). Direct call: `inventory_configure_product` first consumes an `invctl/1` assertion whose key the credential cannot read (P3-AL-55 §C, §G). |
+| 2 | **Can it change `unit_code`?** | **No**, by the same two doors; and after history, `products_20_unit_history_lock` refuses every writer (P3-AL-05 §D). |
+| 3 | **Can it create a base variant through the command?** | **No.** Only `inventory_configure_product` creates one, after consuming a verified assertion; raw inserts are refused by `product_variants_10_base_variant_authority`. |
+| 4 | **Can it add a warehouse association?** | **No.** It holds no `INSERT`/`DELETE` on `branch_warehouses`, and `structure_associate_warehouse_branch` consumes an assertion whose payload binds the exact warehouse and branch. The **home** association a warehouse insert derives is not new reach — it restates `warehouses.branch_id` (P3-AL-55 §B). |
+| 5 | **Can spoofed GUCs replace the assertion?** | **No.** `app.tenant_id`, `app.business_id` and `app.actor_user_id` are row isolation only. Actor, tenant and business come from the verified assertion; the GUCs must **equal** it (§G step 9), and a valid GUC with a missing or invalid assertion is refused at step 1–4. |
+| 6 | **Can one signed assertion be replayed for a different payload?** | **No.** The routine recomputes the `invpl/1` digest from its own arguments (§F); any changed field changes the digest. Replay of the same payload in another transaction, or a second call in the same one, is `inventory.assertion_replayed` (§H). |
+| 7 | **Can one operation kind authorize another operation?** | **No.** Each routine accepts exactly one `op_code`; `op_code` is also inside the digest, so even associate and dissociate over identical ids never share one (§E–§F). No generic kind exists. |
+| 8 | **Does a transfer need an accounting assertion?** | **No.** It posts no journal (P3-AL-14) and runs in `withBusinessInventoryTransaction`, which exposes no posting port. |
+| 9 | **Does a transfer need an inventory assertion?** | **Yes** — `inventory.transfer`, binding both warehouses and every line, because it mutates inventory (P3-AL-32, P3-AL-55 §E). |
+| 10 | **Can the onboarding warehouse-home trigger still work with no inventory assertion?** | **Yes, by design.** `warehouses_home_branch_maintain` is a derived schema consequence, excluded from the assertion rule (§B), `SECURITY DEFINER` owned by the internal role and admitted by `app_bypass()` inside the frozen `provision_create_business` (P3-AL-54 §I). |
+| 11 | **Can the platform read the inventory signing secret?** | **No.** No runtime role holds any privilege on `inventory_assertion_keys`; `daftar_platform` may only `EXECUTE` install and retire, which return nothing; `INVENTORY_ASSERTION_KEY` is forbidden in the platform process (§C). |
+| 12 | **Is the inventory signing secret byte-distinct from the accounting and provisioning secrets?** | **Yes, enforced.** Production config fails closed on equal decoded bytes for either pair, and the minter repeats the check in constant time in every mode. The preimage language is disjoint as well (§C–§D). |
+| 13 | **Can a future stock movement primitive be safely called by a stolen `daftar_app` credential?** | **It cannot be called at all** — no runtime `EXECUTE`. It is reached only through an entry routine that consumed an assertion, and it re-verifies that consumption, the business and the operation-to-movement-kind mapping itself (§G). |
+| 14 | **Does any runtime role become a member of `daftar_inventory_internal`?** | **No.** Its only member is `daftar_migrator`, `INHERIT FALSE, SET TRUE`, asserted from `pg_auth_members` and `pg_has_role` by every Phase 3 migration (P3-AL-54 §C, PM-42). |
+| 15 | **Does managed PostgreSQL still work without superuser?** | **It must, or P3-S1 fails.** The key-domain tables and functions follow `0044` exactly — ACL before ownership transfer, a same-file `CREATE ON SCHEMA public` bracket, the catalogue diffed against a superuser build — the pattern that already runs this way in Phase 2 (P3-AL-54 §J, P3-S1 acceptance R). |
 
 ---
 

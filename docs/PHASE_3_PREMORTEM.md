@@ -388,11 +388,11 @@
 
 ## PM-28 — A non-posting command mints a fake assertion or splits the commit
 
-**Preventive invariant** (P3-AL-32, P3-AL-33). Two typed seams. `withBusinessTransaction` exposes **no** posting capability and requires **no** assertion, so a transfer neither mints one nor needs one. `withBusinessAccountingTransaction` is the only way to obtain posting capability. The distinction is a type; `skipAccounting`, `requiresAccounting: false` and `trusted: true` are forbidden by name in any spelling.
+**Preventive invariant** (P3-AL-32, P3-AL-33, renamed in Round 5). Two typed seams. `withBusinessInventoryTransaction` exposes **no** posting capability and requires **no accounting** assertion, so a transfer neither mints one nor needs one — it carries only the **inventory** assertion every inventory mutation needs (P3-AL-55). `withBusinessInventoryAccountingTransaction` is the only way to obtain posting capability. The distinction is a type; `skipAccounting`, `requiresAccounting: false` and `trusted: true` are forbidden by name in any spelling.
 
 **Detection.** The capability case of the seam matrix (no posting port reachable from the non-posting handle, at compile time and at runtime); an assertion-minting counter asserted to be zero across a transfer; and the existing guard set, which discovers journal writers from the schema.
 
-**Test.** The six-case seam matrix of P3-AL-32: transfer through the non-posting seam creates the movement pair, audit and outbox in one commit, mints nothing, and leaves **zero** journal entries — counted before and after, not assumed. A mismatched scope/assertion refuses before any domain row exists.
+**Test.** The six-case seam matrix of P3-AL-32: transfer through the non-posting seam creates the movement pair, audit and outbox in one commit, mints **no accounting** assertion (and consumes exactly one inventory assertion), and leaves **zero** journal entries — counted before and after, not assumed. A mismatched scope/assertion refuses before any domain row exists.
 
 **Failure mode without it.** Either an accounting assertion minted for a posting that never happens — authority created to satisfy a function signature, which is how a bypass is born — or a second transaction for the stock half, so a crash between them leaves stock moved with no financial record. Two competent engineers would have chosen differently, and both would have believed they followed the lock.
 
@@ -548,7 +548,7 @@ Two execution-level failures with one shape: a Phase 3 change that is correct in
 
 **What goes wrong.** P3-S1 adds `unit_code` and `unit_decimals` to `products`. `daftar_app` already holds table-level `UPDATE` on `products` (`0006_rls.sql:77–78`), and a table-level privilege covers columns added later. A catalog edit, a scripted fix, or a stolen application credential runs `UPDATE products SET unit_code = 'kg'` on a tracked product with no history. No permission is checked, because the only check lives in the inventory command the statement never went through.
 
-**Preventive invariant** (P3-AL-54 §F). `products_10_inventory_config_authority`, a `BEFORE INSERT OR UPDATE` trigger with **invoker** rights, refuses any change to `track_inventory`, `unit_code` or `unit_decimals` unless `current_user = 'daftar_inventory_internal'`. The only way to be that principal is to call `inventory_configure_product`, whose only `EXECUTE` grantee is `daftar_app`, and which the application calls only after `inventory.adjust` passes. Once history exists, `products_20_unit_history_lock` (P3-S2) refuses it for every writer, the routine included.
+**Preventive invariant** (P3-AL-54 §F). `products_10_inventory_config_authority`, a `BEFORE INSERT OR UPDATE` trigger with **invoker** rights, refuses any change to `track_inventory`, `unit_code` or `unit_decimals` unless `current_user = 'daftar_inventory_internal'`. The only way to be that principal is to call `inventory_configure_product`, whose only `EXECUTE` grantee is `daftar_app` — and, since Round 5, whose first act is to consume an `invctl/1` assertion that the merchant API mints only after `inventory.adjust` passes, bound to this exact payload (P3-AL-55; the direct-call attack is PM-44). Once history exists, `products_20_unit_history_lock` (P3-S2) refuses it for every writer, the routine included.
 
 **Detection.** The live grant matrix (P3-AL-54 §H), read from the catalogues; the migration's own `pg_trigger` assertion that both guards exist by name on `products`; and the static check that `products_10_inventory_config_authority` has `prosecdef = false`.
 
@@ -564,7 +564,7 @@ Two execution-level failures with one shape: a Phase 3 change that is correct in
 
 **What goes wrong.** The same table-level `UPDATE`, aimed at `track_inventory`. `UPDATE products SET track_inventory = true, unit_code = 'piece', unit_decimals = 0` satisfies the P3-AL-04 `CHECK`, because the `CHECK` proves a unit **exists**, not that anyone was **authorized** to choose it. No base variant is created, so a simple product is tracked with no stock identity; the first stock command then either invents the base variant in the wrong place or refuses a product the screen says is tracked.
 
-**Preventive invariant** (P3-AL-54 §E–§F). Tracking is enabled by one named routine, `inventory_configure_product`, owned by `daftar_inventory_internal`, which also creates the base variant idempotently. The authority guard refuses `track_inventory` changes by anyone else, on `INSERT` as well as `UPDATE`, so a new product cannot be *born* tracked by raw DML either. The `CHECK` stays exactly as written; it is not asked to prove authorization.
+**Preventive invariant** (P3-AL-54 §E–§F). Tracking is enabled by one named routine, `inventory_configure_product`, owned by `daftar_inventory_internal`, which also creates the base variant idempotently, and which runs only after consuming an `inventory.configure_product` assertion (P3-AL-55, PM-44). The authority guard refuses `track_inventory` changes by anyone else, on `INSERT` as well as `UPDATE`, so a new product cannot be *born* tracked by raw DML either. The `CHECK` stays exactly as written; it is not asked to prove authorization.
 
 **Detection.** Same guard, same catalogue assertions as PM-39; plus a data invariant queried by P3-S1's acceptance and kept in the rebuild checks: every product with `track_inventory = true` and no merchant variant has exactly one `is_base = true` variant.
 
@@ -621,6 +621,54 @@ Two execution-level failures with one shape: a Phase 3 change that is correct in
 **Failure mode without it.** A single forgotten `SET` clause turns a narrow routine into a general-purpose privilege escalation for any caller who can create a temporary table, and it is invisible in review because the routine's body is correct.
 
 **Recovery.** `ALTER FUNCTION … SET search_path = pg_catalog, public, pg_temp` and `ALTER FUNCTION … OWNER TO daftar_inventory_internal` in a new migration (under `SET LOCAL ROLE` per PM-42), then review writes made through the routine since it shipped.
+
+---
+
+## PM-44 — Direct `EXECUTE` bypasses the application permission check
+
+**What goes wrong.** The attacker holds the `daftar_app` database credential — leaked from a configuration file, a backup, a CI log or a compromised sidecar — but not the merchant-api process. They know a victim tenant, business and product UUID, and an owner's user UUID, from any support screenshot. They open a session, `set_config('app.tenant_id', …)`, `set_config('app.business_id', …)` and `set_config('app.actor_user_id', <owner>)`, and call `inventory_configure_product(<product>, true, 'kg', 3)` directly. The routine runs as `daftar_inventory_internal`, so the column guard admits it, and `inventory.adjust` — checked only in the application — was never asked. **Second variant:** the same session calls `structure_associate_warehouse_branch(<central warehouse>, <their own branch>)`, skipping `warehouse.manage` and the all-scope rule, and widens the warehouse authority of an assigned-scope account they also control. This is not an application bug: the stolen credential is explicitly in scope, and the application is never involved.
+
+**Preventive invariant** (P3-AL-55). `EXECUTE` is reachability, not authority. Each routine's first statement consumes an `invctl/1` assertion from `app.inventory_assertion`: HMAC-SHA-256 under a key in `inventory_assertion_keys`, which no runtime role can read; operation kind equal to the routine's own; payload digest recomputed from the routine's **own arguments** (`invpl/1`); business owned by the tenant; `app.tenant_id` / `app.business_id` equal to the signed claims; `jti` not yet consumed. Actor, tenant and business come from the verified record, never from a GUC. No assertion, no mutation.
+
+**Detection.** The P3-S1 acceptance matrix rows B–K run as `daftar_app` over a raw connection with no application in the path; the catalogue assertion that no runtime role holds any privilege on `inventory_assertion_keys`; and a static guard that every function owned by `daftar_inventory_internal` which writes a guarded column, a base variant, `branch_warehouses` or (from P3-S2) a stock table calls `inventory_assertion_consume` or `inventory_assertion_current` as its first statement — writers discovered from the catalogue, not named.
+
+**Test.** Both variants above, verbatim: raw connection as `daftar_app`, victim GUCs set, owner UUID as actor, no assertion → `inventory.assertion_missing`; a forged, expired, wrong-kind, wrong-payload or replayed assertion → its own refusal code; the product row, the variant table and `branch_warehouses` byte-identical before and after. **Negative control:** a test build whose routine skips `inventory_assertion_consume` lets both attacks succeed, and the test turns red — proving the test models the attack rather than the happy path.
+
+**Failure mode without it.** A credential that could never touch inventory configuration or warehouse authority gains both through three `GRANT EXECUTE` lines, and every column guard of Round 4 reduces to "whoever can call the routine". The audit trail would name the owner the attacker chose.
+
+**Recovery.** Rotate the `daftar_app` credential; compare the configuration columns and `branch_warehouses` against the routine-written audit rows — a change with no such row did not come through a verified command; revert unauthorized configuration on products without history (PM-39) and remove unauthorized associations through the authorized command.
+
+---
+
+## PM-45 — One signed assertion is stretched: another payload, another operation, another transaction
+
+**What goes wrong.** An attacker who can observe traffic between the API and the database, or a defect that logs `app.inventory_assertion`, captures a valid assertion. They present it again: for a different product, for `unit_decimals = 4` instead of `0`, for warehouse A with branch C instead of B, to the dissociate routine instead of the associate one, or in a second transaction thirty seconds later.
+
+**Preventive invariant** (P3-AL-55 §D–§H). Every claim and the payload digest are under the MAC. The digest covers `op_code`, tenant, business and every argument in a fixed order with a fixed encoding, so any change to any argument changes the digest (`inventory.assertion_payload_mismatch`); associate and dissociate never share a digest because `op_code` is in the stream. Each routine accepts exactly one `op_code` (`inventory.assertion_wrong_operation`). Consumption is strict: one assertion, one entry-routine call; a second presentation in any transaction is `inventory.assertion_replayed`. Life is 60 seconds, and the database refuses an expiry more than 65 seconds ahead.
+
+**Detection.** The P3-S1 matrix rows D–I and K; the `invpl/1` shared vectors, asserted byte-for-byte in TypeScript and SQL, including NULL fields and associate/dissociate over identical ids.
+
+**Test.** For each field of each P3-S1 kind, a genuine assertion presented with that one field altered → refused. A genuine association assertion presented to the configuration routine and to the dissociation routine → refused. A committed use followed by a second transaction → refused; a second call in the **same** transaction → refused; a rolled-back first use followed by a retry of the identical payload within the TTL → accepted, and the test says why that is a retry, not a replay.
+
+**Failure mode without it.** A signature over the actor alone — the shape of the provisioning assertion before it bound its kind — would authorize "this actor may do something", and the attacker chooses what.
+
+**Recovery.** Retire the `kid` (terminal), install a new one, redeploy the merchant API; find the logging defect that exposed the carrier. Assertions minted under the retired key stop verifying immediately.
+
+---
+
+## PM-46 — The inventory key domain collapses into another one
+
+**What goes wrong.** To save a deployment variable, an operator sets `INVENTORY_ASSERTION_KEY` to the same secret as `ACCOUNTING_ASSERTION_KEY`, perhaps re-encoded so the strings differ. Or a later migration grants `SELECT` on `inventory_assertion_keys` to `daftar_platform` "so the admin screen can show which keys are active". Or the platform process is given the signing key so a support tool can reconfigure products. Each turns a compromise of one authority into a compromise of another: a leaked accounting key would mint inventory commands, a stolen platform credential would read the inventory secret.
+
+**Preventive invariant** (P3-AL-55 §C–§D). Three secrets, three tables, three preimage languages. Production config fails closed when the **decoded bytes** of the inventory key equal the provisioning or accounting key's, and the minter repeats the comparison in constant time wherever the key is loaded. `INVENTORY_ASSERTION_KEY` is forbidden in the platform, worker and reconciler modes. No runtime role holds any privilege on `inventory_assertion_keys`; the platform can only `EXECUTE` install and retire, which never return key material. The `invctl/1` preimage begins with bytes no other protocol's preimage can begin with, so even an accidentally shared key could not turn an accounting or provisioning signature into an inventory one.
+
+**Detection.** Config tests over every mode, including two different base64 spellings of one secret; the live grant matrix over `inventory_assertion_keys` for all seven runtime roles; a cross-protocol test presenting a genuine `acctctl/1` and a genuine posting assertion, re-signed under the inventory key where the test controls it, to an inventory routine.
+
+**Test.** `config.ts` refuses production start with equal decoded secrets for each pair; each runtime role's `SELECT` on `inventory_assertion_keys` fails with `42501`; `daftar_platform` installs and retires a key and cannot read it back by any path; cross-protocol substitution is refused with `inventory.assertion_malformed` or `inventory.assertion_invalid_signature`.
+
+**Failure mode without it.** Blast-radius separation exists only in the variable names, and the first leak of any one key is a leak of all of them.
+
+**Recovery.** Generate three fresh, distinct secrets; install each under a new `kid`; redeploy; retire the old `kid`s; review the routine-written audit rows of the exposure window.
 
 ---
 
