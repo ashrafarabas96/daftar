@@ -296,10 +296,10 @@ export async function removeCommittedDeficitFixture(): Promise<void> {
     await c.query(`DELETE FROM inventory_operation_kinds WHERE op_code LIKE 'fixture.%'`);
     await c.query('COMMIT');
   } catch (e) {
-    await c.query('ROLLBACK').catch(() => undefined);
+    await c.query('ROLLBACK');
     throw e;
   } finally {
-    await c.end().catch(() => undefined);
+    await c.end();
   }
   await assertS4MigrationState();
 }
@@ -313,10 +313,10 @@ export async function installCommittedDeficitFixture(): Promise<void> {
     await installStockFixture(c);
     await c.query('COMMIT');
   } catch (e) {
-    await c.query('ROLLBACK').catch(() => undefined);
+    await c.query('ROLLBACK');
     throw e;
   } finally {
-    await c.end().catch(() => undefined);
+    await c.end();
   }
 }
 
@@ -328,9 +328,9 @@ export async function seedCommittedDeficitKey(biz: S3Business, warehouseId: stri
     await seedDeficitKey(c, biz, warehouseId, variantId, seed);
     await c.query('COMMIT');
   } catch (e) {
-    await c.query('ROLLBACK').catch(() => undefined);
+    await c.query('ROLLBACK');
     throw e;
   } finally {
-    await c.end().catch(() => undefined);
+    await c.end();
   }
 }

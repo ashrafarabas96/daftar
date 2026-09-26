@@ -84,7 +84,7 @@ function scratchPool(connectionString: string, max = 2): Pool {
 const admin = scratchPool(dbUrl, 1);
 
 afterAll(async () => {
-  await admin.query(`DROP DATABASE IF EXISTS ${SCRATCH} WITH (FORCE)`).catch(() => undefined);
+  await admin.query(`DROP DATABASE IF EXISTS ${SCRATCH} WITH (FORCE)`);
   await admin.end();
 });
 
@@ -245,7 +245,7 @@ describe('T-17 the P3-S4 upgrade matrix', () => {
         });
         await live.query('SET CONSTRAINTS ALL IMMEDIATE');
       } finally {
-        await live.query('ROLLBACK').catch(() => undefined);
+        await live.query('ROLLBACK');
         live.release();
       }
 
@@ -254,7 +254,7 @@ describe('T-17 the P3-S4 upgrade matrix', () => {
       expect(await protectedRows()).toEqual([...before, 'src:purchase:6', 'src:negative_inventory_cost_adjustment:7'].sort());
     } finally {
       await pool.end();
-      await admin.query(`DROP DATABASE IF EXISTS ${SCRATCH} WITH (FORCE)`).catch(() => undefined);
+      await admin.query(`DROP DATABASE IF EXISTS ${SCRATCH} WITH (FORCE)`);
     }
   }, 180_000);
 });
