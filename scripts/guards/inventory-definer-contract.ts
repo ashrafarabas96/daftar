@@ -38,6 +38,23 @@
  * tests/security/search-path-shadowing.test.ts, which reads `pg_proc` for
  * every function the role owns. This half fails on a pull request, before any
  * server exists, and names the file a reviewer must look at.
+ *
+ * ── Every definition, not the last one (P3-S2, contract §7.2) ────────────
+ *
+ * 0060 replaces `inventory_configure_product` with `CREATE OR REPLACE`
+ * issued under `SET LOCAL ROLE daftar_inventory_internal`. Reading only the
+ * LAST definition of each routine would have made every check of the 0055
+ * definition vacuous from that day on — a regression there would pass
+ * because a later file happens to be correct. So every `CREATE FUNCTION` of
+ * a transferred routine, in every file, must itself satisfy 1, 2 and 5.
+ *
+ * A routine CREATED while the migration runs as the principal (`SET [LOCAL]
+ * ROLE daftar_inventory_internal` … `RESET ROLE`) is owned by it exactly as
+ * if it had been transferred, so it is a handover too: it must sit inside
+ * the CREATE bracket, and it needs its own same-file `REVOKE … FROM PUBLIC`
+ * unless it is a `CREATE OR REPLACE` of a routine handed over in an EARLIER
+ * file and not dropped in this one — a replacement issued by the owner keeps
+ * the ACL it already had.
  */
 
 import { parseRoutines, pathSchemas } from './definer-search-path';
@@ -52,19 +69,99 @@ export const INVENTORY_SEARCH_PATH: readonly string[] = ['pg_catalog', 'public',
 
 const IDENT = '"?([A-Za-z_][A-Za-z0-9_]*)"?';
 
-/** `$tag$ … $tag$` string bodies of every `CREATE FUNCTION` in a file, by name, last wins. */
-function routineBodies(sql: string): Map<string, string> {
-  const out = new Map<string, string>();
-  const header = /CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+(?:public\.)?"?([A-Za-z_][A-Za-z0-9_]*)"?\s*\(/gi;
-  for (const m of sql.matchAll(header)) {
-    const from = m.index ?? 0;
-    const rest = sql.slice(from);
-    const open = /\$([A-Za-z_]*)\$/.exec(rest);
-    if (!open) continue;
-    const start = open.index + open[0].length;
-    const close = rest.indexOf(open[0], start);
-    if (close < 0) continue;
-    out.set((m[1] ?? '').toLowerCase(), rest.slice(start, close));
+const DEFINITION_HEADER = /CREATE\s+(OR\s+REPLACE\s+)?FUNCTION\s+(?:public\.)?"?([A-Za-z_][A-Za-z0-9_]*)"?\s*\(/gi;
+
+/** One `CREATE FUNCTION` in one file, with the options and body the guard reads. */
+export interface InventoryRoutineDefinition {
+  readonly name: string;
+  /** Base name of the migration file. */
+  readonly file: string;
+  /** Offset of the `CREATE` in the comment-stripped file text. */
+  readonly offset: number;
+  readonly orReplace: boolean;
+  readonly securityDefiner: boolean;
+  readonly searchPath: string | null;
+  /** The body text (string body, or the SQL-standard body), or null when none can be read. */
+  readonly body: string | null;
+  /** Offset just past the definition's body in the comment-stripped file text. */
+  readonly end: number;
+  /** True when the definition runs while the migration has assumed the principal's role. */
+  readonly createdAsInternal: boolean;
+}
+
+/** The body that starts at `from` (just after a routine header), and the offset where it ends; null when unreadable. */
+function readBody(sql: string, from: number): { body: string; end: number } | null {
+  const rest = sql.slice(from);
+  const start = /\$([A-Za-z_]*)\$|\bAS\s+'|\bRETURN\b|\bBEGIN\s+ATOMIC\b/i.exec(rest);
+  if (!start) return null;
+  const token = start[0];
+  const at = start.index + token.length;
+  if (token.startsWith('$')) {
+    const close = rest.indexOf(token, at);
+    return close < 0 ? null : { body: rest.slice(at, close), end: from + close + token.length };
+  }
+  if (/^AS/i.test(token)) {
+    let j = at;
+    while (j < rest.length) {
+      if (rest[j] === "'" && rest[j + 1] === "'") j += 2;
+      else if (rest[j] === "'") return { body: rest.slice(at, j), end: from + j + 1 };
+      else j += 1;
+    }
+    return null;
+  }
+  if (/^RETURN/i.test(token)) {
+    const end = rest.indexOf(';', at);
+    return end < 0 ? null : { body: rest.slice(start.index, end), end: from + end };
+  }
+  const end = /\bEND\s*;/i.exec(rest.slice(at));
+  return end ? { body: rest.slice(start.index, at + end.index), end: from + at + end.index + end[0].length } : null;
+}
+
+/** `[from, to)` windows of a file during which it runs as the inventory principal. */
+function internalRoleWindows(sql: string): [number, number][] {
+  const windows: [number, number][] = [];
+  const setRole = /\bSET\s+(?:LOCAL\s+|SESSION\s+)?ROLE\s+"?([A-Za-z_][A-Za-z0-9_]*)"?|\bRESET\s+ROLE\b/gi;
+  let open: number | null = null;
+  for (const m of sql.matchAll(setRole)) {
+    const at = m.index ?? 0;
+    const role = (m[1] ?? '').toLowerCase();
+    if (open !== null) {
+      windows.push([open, at]);
+      open = null;
+    }
+    if (role === INVENTORY_INTERNAL) open = at;
+  }
+  if (open !== null) windows.push([open, sql.length]);
+  return windows;
+}
+
+/** Every `CREATE FUNCTION` in every migration, in apply order. */
+export function inventoryRoutineDefinitions(migrations: Readonly<Record<string, string>>): InventoryRoutineDefinition[] {
+  const out: InventoryRoutineDefinition[] = [];
+  for (const path of Object.keys(migrations).sort()) {
+    const file = path.split('/').pop() ?? path;
+    const sql = stripComments(migrations[path] ?? '');
+    const windows = internalRoleWindows(sql);
+    for (const m of sql.matchAll(DEFINITION_HEADER)) {
+      const offset = m.index ?? 0;
+      const name = (m[2] ?? '').toLowerCase();
+      const afterHeader = offset + m[0].length;
+      // Re-read the options with the shared G-5 parser, on the header written
+      // unqualified so that parser sees this routine and not the next one.
+      const header = parseRoutines(`CREATE FUNCTION ${name}(${sql.slice(afterHeader)}`)[0];
+      const body = readBody(sql, afterHeader);
+      out.push({
+        name,
+        file,
+        offset,
+        orReplace: m[1] !== undefined,
+        securityDefiner: header?.securityDefiner ?? false,
+        searchPath: header?.searchPath ?? null,
+        body: body?.body ?? null,
+        end: body?.end ?? afterHeader,
+        createdAsInternal: windows.some(([from, to]) => offset > from && offset < to),
+      });
+    }
   }
   return out;
 }
@@ -83,23 +180,22 @@ export interface InventoryDefinerReport {
 export function checkInventoryDefinerContract(src: InventoryDefinerSources): InventoryDefinerReport {
   const v: string[] = [];
   const files = Object.keys(src.migrations).sort();
+  const definitions = inventoryRoutineDefinitions(src.migrations);
 
-  // Effective definition of each routine: the LAST `CREATE FUNCTION` of that
-  // name, in apply order.
-  const headers = new Map<string, { file: string; securityDefiner: boolean; searchPath: string | null }>();
-  const bodies = new Map<string, { file: string; body: string }>();
   // Every file that revokes PUBLIC's EXECUTE on a routine, by routine name.
   const revoked = new Map<string, Set<string>>();
-  const transferredIn = new Map<string, string>();
+  // Routine → the files that hand it over (by ALTER … OWNER TO, or by
+  // creating it as the principal), in apply order.
+  const handovers = new Map<string, string[]>();
+  const handOver = (name: string, file: string) => {
+    const list = handovers.get(name) ?? [];
+    if (!list.includes(file)) list.push(file);
+    handovers.set(name, list);
+  };
 
   for (const path of files) {
     const file = path.split('/').pop() ?? path;
-    const raw = src.migrations[path] ?? '';
-    const sql = stripComments(raw);
-    for (const r of parseRoutines(raw)) {
-      headers.set(r.name.toLowerCase(), { file, securityDefiner: r.securityDefiner, searchPath: r.searchPath });
-    }
-    for (const [name, body] of routineBodies(sql)) bodies.set(name, { file, body });
+    const sql = stripComments(src.migrations[path] ?? '');
 
     for (const m of sql.matchAll(new RegExp(`REVOKE\\s+ALL\\s+ON\\s+FUNCTION\\s+(?:public\\.)?${IDENT}\\s*\\([^;]*?FROM\\s+PUBLIC\\s*;`, 'gi'))) {
       const name = (m[1] ?? '').toLowerCase();
@@ -108,14 +204,21 @@ export function checkInventoryDefinerContract(src: InventoryDefinerSources): Inv
       revoked.set(name, set);
     }
 
-    // Ownership transfers, and the CREATE bracket around them.
+    // Ownership handovers, and the CREATE bracket around them.
     const transfer = new RegExp(`ALTER\\s+FUNCTION\\s+(?:public\\.)?${IDENT}\\s*\\([^;]*?\\)\\s*OWNER\\s+TO\\s+${INVENTORY_INTERNAL}\\s*;`, 'gi');
-    const transfers = [...sql.matchAll(transfer)];
-    for (const m of transfers) transferredIn.set((m[1] ?? '').toLowerCase(), file);
-    if (transfers.length > 0) {
-      const first = transfers[0]?.index ?? 0;
-      const lastMatch = transfers[transfers.length - 1];
-      const last = (lastMatch?.index ?? 0) + (lastMatch?.[0].length ?? 0);
+    const spans: [number, number][] = [];
+    for (const m of sql.matchAll(transfer)) {
+      handOver((m[1] ?? '').toLowerCase(), file);
+      spans.push([m.index ?? 0, (m.index ?? 0) + m[0].length]);
+    }
+    for (const d of definitions) {
+      if (d.file !== file || !d.createdAsInternal) continue;
+      handOver(d.name, file);
+      spans.push([d.offset, d.end]);
+    }
+    if (spans.length > 0) {
+      const first = Math.min(...spans.map((s) => s[0]));
+      const last = Math.max(...spans.map((s) => s[1]));
       const grant = new RegExp(`GRANT\\s+CREATE\\s+ON\\s+SCHEMA\\s+public\\s+TO\\s+${INVENTORY_INTERNAL}\\b`, 'i').exec(sql);
       const revokes = [...sql.matchAll(new RegExp(`REVOKE\\s+CREATE\\s+ON\\s+SCHEMA\\s+public\\s+FROM\\s+${INVENTORY_INTERNAL}\\b`, 'gi'))];
       if (!grant || (grant.index ?? 0) > first) {
@@ -135,7 +238,7 @@ export function checkInventoryDefinerContract(src: InventoryDefinerSources): Inv
     const sql = stripComments(src.migrations[path] ?? '');
     for (const m of sql.matchAll(new RegExp(`GRANT\\s+[^;]*?\\bON\\s+FUNCTION\\s+(?:public\\.)?${IDENT}\\s*\\([^;]*?\\)\\s*TO\\s+([^;]*);`, 'gi'))) {
       const name = (m[1] ?? '').toLowerCase();
-      if (transferredIn.has(name) && /\bPUBLIC\b/i.test(m[2] ?? '')) {
+      if (handovers.has(name) && /\bPUBLIC\b/i.test(m[2] ?? '')) {
         v.push(`${file}: grants ${name} to PUBLIC — no inventory routine may be callable by every role (§D)`);
       }
     }
@@ -148,7 +251,7 @@ export function checkInventoryDefinerContract(src: InventoryDefinerSources): Inv
     for (const m of sql.matchAll(new RegExp(`ALTER\\s+FUNCTION\\s+(?:public\\.)?${IDENT}\\s*\\([^;]*?\\)\\s*([^;]*);`, 'gi'))) {
       const name = (m[1] ?? '').toLowerCase();
       const action = m[2] ?? '';
-      if (!transferredIn.has(name)) continue;
+      if (!handovers.has(name)) continue;
       if (/\bRESET\b/i.test(action) || /\bSET\s+search_path\b/i.test(action)) {
         v.push(`${file}: ALTER FUNCTION ${name} changes its search_path after the fact — define it with the pinned path instead (§D)`);
       }
@@ -158,48 +261,66 @@ export function checkInventoryDefinerContract(src: InventoryDefinerSources): Inv
     }
   }
 
-  for (const [name, file] of transferredIn) {
-    const header = headers.get(name);
-    if (!header) {
-      v.push(`${file}: ${name} is handed to ${INVENTORY_INTERNAL} but no migration defines it`);
+  const dropped = (name: string, file: string, before: number): boolean => {
+    const path = files.find((p) => (p.split('/').pop() ?? p) === file);
+    const sql = stripComments(src.migrations[path ?? ''] ?? '').slice(0, before);
+    return new RegExp(`DROP\\s+FUNCTION\\s+(?:IF\\s+EXISTS\\s+)?(?:public\\.)?"?${name}"?\\b`, 'i').test(sql);
+  };
+
+  for (const [name, handedIn] of handovers) {
+    const defs = definitions.filter((d) => d.name === name);
+    if (defs.length === 0) {
+      v.push(`${handedIn[handedIn.length - 1] ?? '?'}: ${name} is handed to ${INVENTORY_INTERNAL} but no migration defines it`);
       continue;
     }
-    const invokerException = INVENTORY_INVOKER_EXCEPTIONS.includes(name);
-    if (invokerException && header.securityDefiner) {
-      v.push(`${header.file}: ${name} is an asserted INVOKER column guard (§F) and must not be SECURITY DEFINER — it decides by current_user`);
-    }
-    if (!invokerException && !header.securityDefiner) {
-      v.push(
-        `${header.file}: ${name} is owned by ${INVENTORY_INTERNAL} but is not SECURITY DEFINER — only ${INVENTORY_INVOKER_EXCEPTIONS.join(' and ')} may be (§D)`,
+
+    // PUBLIC's default EXECUTE is revoked where the routine is handed over.
+    for (const file of handedIn) {
+      const byOwnerChange = new RegExp(`ALTER\\s+FUNCTION\\s+(?:public\\.)?"?${name}"?\\s*\\([^;]*?\\)\\s*OWNER\\s+TO\\s+${INVENTORY_INTERNAL}\\b`, 'i').test(
+        stripComments(src.migrations[files.find((p) => (p.split('/').pop() ?? p) === file) ?? ''] ?? ''),
       );
-    }
-    const schemas = header.searchPath === null ? null : pathSchemas(header.searchPath);
-    if (schemas === null || schemas.join(',') !== INVENTORY_SEARCH_PATH.join(',')) {
-      v.push(`${header.file}: ${name} must pin search_path = ${INVENTORY_SEARCH_PATH.join(', ')} exactly, found ${header.searchPath ?? 'none'} (§D)`);
-    }
-    if (!revoked.get(name)?.has(file)) {
-      v.push(`${file}: ${name} is handed to ${INVENTORY_INTERNAL} without REVOKE ALL ON FUNCTION … FROM PUBLIC in the same file (§D)`);
-    }
-    const body = bodies.get(name);
-    if (!body) {
-      v.push(`${header.file}: ${name} has no dollar-quoted body the guard can read (§D)`);
-    } else {
-      const text = stripComments(body.body);
-      if (/\bEXECUTE\b(?!\s+FUNCTION\b)/i.test(text)) {
-        v.push(`${body.file}: ${name} runs dynamic SQL (EXECUTE) — an inventory routine's statements are fixed at CREATE time (§D)`);
+      const asInternal = defs.filter((d) => d.file === file && d.createdAsInternal);
+      const earlier = handedIn.indexOf(file) > 0;
+      const keepsAcl = !byOwnerChange && earlier && asInternal.every((d) => d.orReplace && !dropped(name, file, d.offset));
+      if (!keepsAcl && !revoked.get(name)?.has(file)) {
+        v.push(`${file}: ${name} is handed to ${INVENTORY_INTERNAL} without REVOKE ALL ON FUNCTION … FROM PUBLIC in the same file (§D)`);
       }
-      if (/\bCREATE\s+(?:GLOBAL\s+|LOCAL\s+)?(?:TEMP|TEMPORARY)\b/i.test(text)) {
-        v.push(`${body.file}: ${name} creates a session relation — the principal holds no TEMPORARY (§D)`);
+    }
+
+    // Every definition, in every file, has the shape (1, 2, 5).
+    const invokerException = INVENTORY_INVOKER_EXCEPTIONS.includes(name);
+    for (const d of defs) {
+      if (invokerException && d.securityDefiner) {
+        v.push(`${d.file}: ${name} is an asserted INVOKER column guard (§F) and must not be SECURITY DEFINER — it decides by current_user`);
+      }
+      if (!invokerException && !d.securityDefiner) {
+        v.push(
+          `${d.file}: ${name} is owned by ${INVENTORY_INTERNAL} but is not SECURITY DEFINER — only ${INVENTORY_INVOKER_EXCEPTIONS.join(' and ')} may be (§D)`,
+        );
+      }
+      const schemas = d.searchPath === null ? null : pathSchemas(d.searchPath);
+      if (schemas === null || schemas.join(',') !== INVENTORY_SEARCH_PATH.join(',')) {
+        v.push(`${d.file}: ${name} must pin search_path = ${INVENTORY_SEARCH_PATH.join(', ')} exactly, found ${d.searchPath ?? 'none'} (§D)`);
+      }
+      if (d.body === null) {
+        v.push(`${d.file}: ${name} has no body the guard can read (§D)`);
+        continue;
+      }
+      if (/\bEXECUTE\b(?!\s+FUNCTION\b)/i.test(d.body)) {
+        v.push(`${d.file}: ${name} runs dynamic SQL (EXECUTE) — an inventory routine's statements are fixed at CREATE time (§D)`);
+      }
+      if (/\bCREATE\s+(?:GLOBAL\s+|LOCAL\s+)?(?:TEMP|TEMPORARY)\b/i.test(d.body)) {
+        v.push(`${d.file}: ${name} creates a session relation — the principal holds no TEMPORARY (§D)`);
       }
     }
   }
 
   // The exceptions are asserted, not tolerated: each must still exist.
   for (const name of INVENTORY_INVOKER_EXCEPTIONS) {
-    if (!transferredIn.has(name)) {
+    if (!handovers.has(name)) {
       v.push(`asserted INVOKER exception ${name} is no longer handed to ${INVENTORY_INTERNAL} — update the guard and the live sweep together`);
     }
   }
 
-  return { violations: v, transferred: [...transferredIn.keys()].sort() };
+  return { violations: v, transferred: [...handovers.keys()].sort() };
 }

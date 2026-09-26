@@ -12,7 +12,7 @@
  * declared authoritative below. A report DTO, a query result or a TypeScript
  * field named `balance` is a read model and is none of this guard's business.
  */
-import { CONSTRAINT_OPENERS, balancedBody, stripNonSchema, topLevelItems, unquote } from './sql-schema';
+import { CONSTRAINT_OPENERS, balancedBody, findColumnDeclarations, stripNonSchema, topLevelItems, unquote } from './sql-schema';
 
 /**
  * Accounting source-of-truth tables. The journal joined the list in P2-S2:
@@ -173,4 +173,93 @@ export function findAuthoritativeBalanceColumns(sql: string, tables: readonly st
   }
 
   return findings;
+}
+
+/**
+ * ── P3-S2: inventory storage (P3-AL-01, P3-AL-49 §A; contract §7.2) ───────
+ *
+ * The stock ledger is the inventory truth: `on_hand = Σ qty_delta` and
+ * `valuation = Σ value_delta_base_minor`. Exactly ONE table may store those
+ * sums, `stock_levels`, and only as a cache the exact rebuild proves
+ * (P3-AL-42). Any other stored quantity, valuation, reservation or
+ * availability on an inventory table is a second truth that can drift.
+ *
+ * The accounting half above is unchanged: its tables, patterns and
+ * exemptions are exactly what they were. The inventory rules are separate
+ * functions over separately discovered tables, and the one exemption that
+ * differs — a `*_seq` column (`stock_seq`, `deficit_seq`) is an ordering, not
+ * a quantity — applies to inventory tables only.
+ */
+export const INVENTORY_TABLE_NAME = /^(stock_[a-z0-9_]+|negative_[a-z0-9_]+|inventory_[a-z0-9_]+)$/;
+
+/** The one cache the lock allows, and exactly the stock columns it may hold. */
+export const STOCK_CACHE_EXCEPTION = 'stock_levels';
+export const STOCK_CACHE_COLUMNS: readonly string[] = ['on_hand', 'valuation_base_minor', 'avg_unit_cost_base_minor', 'last_stock_seq'];
+
+/** Never stored anywhere in inventory, the cache included: Phase 3 has no reservation (L:1274). */
+const NEVER_STORED = /(^|_)(reserved|available)($|_)/;
+
+const INVENTORY_FORBIDDEN_COLUMN_PATTERNS: readonly RegExp[] = [...FORBIDDEN_COLUMN_PATTERNS, /(^|_)(on_hand|valuation|reserved|available)($|_)/];
+
+/** Inventory tables only: an identity, actor, instant, classifier or ORDERING is not a stored quantity. */
+export const INVENTORY_NOT_A_QUANTITY = /_(id|ids|at|by|status|kind|type|code|name|currency|seq)$/;
+
+const INVENTORY_FORBIDDEN_TABLE = /(^|_)(stock|inventory)_(balances?|summar(y|ies)|snapshots?|rollups?|caches?)($|_)/;
+
+/** Every inventory-owned table the migrations create, sorted. */
+export function discoverInventoryTables(sql: string): string[] {
+  const found = new Set<string>();
+  const create = /CREATE\s+(?:UNLOGGED\s+|TEMP\s+|TEMPORARY\s+)?TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?("[^"]+"|[A-Za-z_][\w$]*)/gi;
+  let m: RegExpExecArray | null;
+  const schema = stripNonSchema(sql);
+  while ((m = create.exec(schema)) !== null) {
+    const table = unquote(m[1] ?? '');
+    if (INVENTORY_TABLE_NAME.test(table)) found.add(table);
+  }
+  return [...found].sort();
+}
+
+/** A table whose NAME is a stored inventory balance, summary, snapshot, rollup or cache — or a stored accounting balance. */
+export function isForbiddenInventoryTable(table: string): boolean {
+  const name = table.toLowerCase();
+  return INVENTORY_FORBIDDEN_TABLE.test(name) || isForbiddenBalanceTable(name);
+}
+
+/** Whether `column` on inventory table `table` claims storage authority over a derived stock quantity. */
+export function isAuthoritativeInventoryColumn(table: string, column: string): boolean {
+  const name = column.toLowerCase();
+  if (NEVER_STORED.test(name) && !INVENTORY_NOT_A_QUANTITY.test(name)) return true;
+  if (table.toLowerCase() === STOCK_CACHE_EXCEPTION && STOCK_CACHE_COLUMNS.includes(name)) return false;
+  if (INVENTORY_NOT_A_QUANTITY.test(name)) return false;
+  return INVENTORY_FORBIDDEN_COLUMN_PATTERNS.some((re) => re.test(name));
+}
+
+/**
+ * Authoritative stock columns declared on any of `tables` in one SQL text,
+ * from CREATE TABLE bodies and ALTER TABLE … ADD COLUMN. An empty array is a
+ * pass.
+ */
+export function findAuthoritativeInventoryColumns(sql: string, tables: readonly string[]): BalanceColumnFinding[] {
+  const watched = new Set(tables.map((t) => t.toLowerCase()));
+  return findColumnDeclarations(sql)
+    .filter((d) => watched.has(d.table) && isAuthoritativeInventoryColumn(d.table, d.column))
+    .map((d) => ({ table: d.table, column: d.column }));
+}
+
+/**
+ * The cache's own shape: `stock_levels` must declare all four cache columns
+ * (a cache missing one is not the cache the rebuild verifies) and nothing
+ * named `reserved` / `available`. Returns problems as text; empty is a pass.
+ */
+export function checkStockCacheShape(sql: string): string[] {
+  const columns = findColumnDeclarations(sql, [STOCK_CACHE_EXCEPTION]).map((d) => d.column);
+  if (columns.length === 0) return [`${STOCK_CACHE_EXCEPTION} does not exist — the inventory half of G-3 is watching nothing`];
+  const problems: string[] = [];
+  for (const c of STOCK_CACHE_COLUMNS) {
+    if (!columns.includes(c)) problems.push(`${STOCK_CACHE_EXCEPTION}.${c} is missing — the cache must hold exactly ${STOCK_CACHE_COLUMNS.join(', ')}`);
+  }
+  for (const c of columns) {
+    if (/(^|_)(reserved|available)($|_)/.test(c)) problems.push(`${STOCK_CACHE_EXCEPTION}.${c} — Phase 3 stores no reservation or availability (P3-AL-01)`);
+  }
+  return problems;
 }
