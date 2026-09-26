@@ -154,17 +154,24 @@ async function snapshot(): Promise<{ counts: Counts; uses: number }> {
 }
 
 /**
- * The injected throw surfaces as 500. A refusal at COMMIT is a foreign-key
- * violation (23503), which the global error filter renders as its generic
- * 400 `VALIDATION_FAILED` — the existing mapping, unchanged by S4.
+ * The injected throw surfaces as 500. A refusal at COMMIT is the document's
+ * deferred binding FK (23503 on PG16, 23001 on PG18), which the purchasing
+ * mapping types as `accounting.inventory_detail_missing` (409, A-14(a), the
+ * reverse direction of the entry-completeness trigger).
  */
-async function expectNothingSurvives(inject: () => void, call: () => Promise<Response>, what: string, status: 400 | 500 = 500): Promise<void> {
+async function expectNothingSurvives(inject: () => void, call: () => Promise<Response>, what: string, unboundSource?: string): Promise<void> {
+  const status = unboundSource === undefined ? 500 : 409;
   const before = await snapshot();
   inject();
   const res = await call();
   vi.restoreAllMocks();
   expect(res.status, `${what}: the injected failure surfaces — ${JSON.stringify(res.body)}`).toBe(status);
-  if (status === 400) expect(res.body.error.code, `${what}: the COMMIT-time FK refusal`).toBe('VALIDATION_FAILED');
+  if (unboundSource !== undefined) {
+    expect(res.body.error, `${what}: the COMMIT-time binding refusal`).toMatchObject({
+      code: 'ACCOUNTING_REFUSED',
+      details: { code: 'accounting.inventory_detail_missing', sourceType: unboundSource },
+    });
+  }
   const after = await snapshot();
   expect(s4Delta(before.counts, after.counts), `${what}: nothing survives`).toEqual({});
   expect(after.uses, `${what}: no accounting assertion use survives`).toBe(before.uses);
@@ -179,7 +186,7 @@ describe('T-13 a receipt without coverage (one entry): a failure at each point l
       () => atCommit(1),
       () => receive(purchaseId),
       'deferred-triggers',
-      400,
+      'purchase',
     );
 
     const before = await snapshot();
@@ -223,7 +230,7 @@ describe('T-13 a receipt that covers a deficit (two entries): a failure after ea
       () => atCommit(2),
       () => receive(purchaseId),
       'deferred-triggers',
-      400,
+      'negative_inventory_cost_adjustment',
     );
 
     const before = await snapshot();
