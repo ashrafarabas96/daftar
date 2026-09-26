@@ -4,6 +4,7 @@ import type { InventoryOperationCode, InventoryPayload } from '@daftar/inventory
 import { Database, type BusinessScope } from '../../infra/database';
 import type { MembershipContext } from '../tenancy/tenancy.service';
 import { InventoryAssertionMinterService } from './inventory-assertion.minter';
+import type { BusinessTransactionId } from './business-transaction';
 
 /**
  * What each operation kind demands of the actor before an assertion for it
@@ -39,7 +40,10 @@ const OPERATION_AUTHORITY: Readonly<Record<InventoryOperationCode, { readonly pe
  * `true`.
  */
 export interface InventoryCommandAuthority {
-  /** The seam scope. The actor is the authenticated member; there is no other source for it. */
+  /**
+   * The seam scope. The actor is the authenticated member; there is no other
+   * source for it. The trace id is the one the boundary minted for this operation.
+   */
   readonly scope: BusinessScope;
   readonly opCode: InventoryOperationCode;
   /** Every warehouse whose scope was checked, de-duplicated. */
@@ -76,8 +80,18 @@ export class InventoryAuthorizationService {
    * Establish the authority for one command of kind `opCode` affecting
    * `warehouseIds` (lowercase canonical UUIDs; empty when the command affects
    * none). Refuses with 403 before anything is minted.
+   *
+   * `businessTransactionId` is the operation's trace id, minted once at the
+   * API boundary (P3-AL-35). It rides in the seam scope so the routine can
+   * copy it into its audit row; it is observability and plays no part in the
+   * decision made here.
    */
-  async authorize(m: MembershipContext, opCode: InventoryOperationCode, warehouseIds: readonly string[] = []): Promise<InventoryCommandAuthority> {
+  async authorize(
+    m: MembershipContext,
+    opCode: InventoryOperationCode,
+    businessTransactionId: BusinessTransactionId,
+    warehouseIds: readonly string[] = [],
+  ): Promise<InventoryCommandAuthority> {
     const rule = OPERATION_AUTHORITY[opCode];
     if (!hasPermission(m.roles, rule.permission)) {
       throw AppError.forbidden(`Missing permission: ${rule.permission}`);
@@ -93,7 +107,7 @@ export class InventoryAuthorizationService {
     }
 
     const authority: InventoryCommandAuthority = Object.freeze({
-      scope: Object.freeze({ tenantId: m.tenantId, businessId: m.businessId, actorUserId: m.userId }),
+      scope: Object.freeze({ tenantId: m.tenantId, businessId: m.businessId, actorUserId: m.userId, businessTransactionId }),
       opCode,
       warehouseIds: Object.freeze(affected),
     });

@@ -1,27 +1,31 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { AppError } from '@daftar/domain-core';
 import { configureProductPayload } from '@daftar/inventory';
 import { Database } from '../../infra/database';
 import type { MembershipContext } from '../tenancy/tenancy.service';
 import type { BusinessTransactionId } from './business-transaction';
 import { InventoryAuthorizationService } from './inventory-authorization';
 import type { InventoryConfigurationInput } from './inventory-configuration.schemas';
-import { rethrowInventoryRefusal } from './inventory-errors';
+import { inventoryRefusal, rethrowInventoryRefusal } from './inventory-errors';
 
-/** The configuration a product holds after the command, read back from the database. */
+/** The configuration a product holds after the command, as the routine reports it. */
 export interface InventoryConfigurationResult {
   readonly productId: string;
   readonly trackInventory: boolean;
   readonly unitCode: string | null;
   readonly unitDecimals: number | null;
+  /** False when the product already held exactly this configuration (idempotent success, no audit row). */
+  readonly changed: boolean;
   /** The trace id of this operation (P3-AL-35). Observability only. */
   readonly businessTransactionId: BusinessTransactionId;
 }
 
-interface ProductConfigurationRow {
+/** The row `inventory_configure_product` returns. */
+interface ConfigureProductRow {
+  product_id: string;
   track_inventory: boolean;
   unit_code: string | null;
   unit_decimals: number | null;
+  changed: boolean;
 }
 
 /**
@@ -59,47 +63,32 @@ export class InventoryConfigurationService {
   ): Promise<InventoryConfigurationResult> {
     // Product configuration affects no warehouse, so the scope half of
     // P3-AL-39 is empty; the permission half is `inventory.adjust`.
-    const authority = await this.authorization.authorize(m, 'inventory.configure_product');
+    const authority = await this.authorization.authorize(m, 'inventory.configure_product', businessTransactionId);
 
+    // ── Payload validation, before anything is signed ──────────────────────
     const scope = { tenantId: m.tenantId, businessId: m.businessId };
     // Row level security answers "not found" for another business's product,
     // so a foreign UUID is refused here, before anything is minted.
     const current = (
-      await this.db.scoped<ProductConfigurationRow>(
-        scope,
-        'SELECT track_inventory, unit_code, unit_decimals FROM products WHERE business_id = $1 AND id = $2',
-        [m.businessId, productId],
-      )
+      await this.db.scoped<{ unit_code: string | null }>(scope, 'SELECT unit_code FROM products WHERE business_id = $1 AND id = $2', [m.businessId, productId])
     ).rows[0];
-    if (!current) throw AppError.notFound('Product not found');
-
-    const unitCode = input.unitCode === undefined ? current.unit_code : input.unitCode;
-    // A code the registry does not hold is refused before anything is signed.
-    const registryDefault = unitCode === null ? null : await this.registryDefaultDecimals(scope, unitCode);
-    let unitDecimals: number | null;
-    if (input.unitDecimals !== undefined) {
-      unitDecimals = input.unitDecimals;
-    } else if (unitCode !== null && unitCode === current.unit_code && current.unit_decimals !== null) {
-      // The unit is unchanged: its decimals were frozen on the product at
-      // selection and are not re-derived from a registry default that may
-      // have moved since (P3-AL-05 §D, matrix row 8).
-      unitDecimals = current.unit_decimals;
-    } else {
-      // Selecting a unit: the registry default is the initial suggestion,
-      // persisted on the product from here on.
-      unitDecimals = registryDefault;
+    if (!current) throw inventoryRefusal('inventory.product_not_found');
+    if (input.unitCode !== undefined) {
+      const known = await this.db.scoped(scope, 'SELECT 1 FROM units WHERE unit_code = $1', [input.unitCode]);
+      if ((known.rowCount ?? 0) === 0) throw inventoryRefusal('inventory.unit_unknown');
     }
+    // P3-AL-04 §3/§4: a tracked product cannot exist without a canonical
+    // unit, and a precision means nothing without the unit it is for. The
+    // routine and the table's CHECK refuse both again; refusing here keeps an
+    // assertion from being minted for a command that cannot succeed.
+    if (input.unitDecimals !== undefined && input.unitCode === undefined) throw inventoryRefusal('inventory.unit_required');
+    if (input.trackInventory && input.unitCode === undefined && current.unit_code === null) throw inventoryRefusal('inventory.unit_required');
 
-    if (input.trackInventory && (unitCode === null || unitDecimals === null)) {
-      // P3-AL-04 §3/§4: a tracked product physically cannot exist without a
-      // canonical unit. Refused here with a stable code; the table's CHECK
-      // refuses it again.
-      throw AppError.validation({ unitCode: ['unit_required'], inventoryCode: 'inventory.unit_required' });
-    }
-    if (unitCode === null && unitDecimals !== null) {
-      throw AppError.validation({ unitDecimals: ['unit_decimals_without_unit'] });
-    }
-
+    // The exact arguments the routine will receive. NULL means "keep the
+    // current unit" / "registry default on a unit change, else the current
+    // precision" — resolved by the routine, under its own lock, not here.
+    const unitCode = input.unitCode ?? null;
+    const unitDecimals = input.unitDecimals ?? null;
     const payload = configureProductPayload({
       tenantId: m.tenantId,
       businessId: m.businessId,
@@ -110,39 +99,26 @@ export class InventoryConfigurationService {
     });
     const assertion = this.authorization.mint(authority, payload);
 
+    let row: ConfigureProductRow | undefined;
     try {
-      const after = await this.db.withBusinessInventoryTransaction(authority.scope, assertion, async (tx) => {
-        await tx.query('SELECT inventory_configure_product($1::uuid, $2::boolean, $3::text, $4::smallint)', [
-          productId,
-          input.trackInventory,
-          unitCode,
-          unitDecimals,
-        ]);
-        return (
-          await tx.query<ProductConfigurationRow>('SELECT track_inventory, unit_code, unit_decimals FROM products WHERE business_id = $1 AND id = $2', [
-            m.businessId,
-            productId,
-          ])
-        ).rows[0];
+      row = await this.db.withBusinessInventoryTransaction(authority.scope, assertion, async (tx) => {
+        const r = await tx.query<ConfigureProductRow>(
+          'SELECT product_id, track_inventory, unit_code, unit_decimals, changed FROM inventory_configure_product($1::uuid, $2::boolean, $3::text, $4::smallint)',
+          [productId, input.trackInventory, unitCode, unitDecimals],
+        );
+        return r.rows[0];
       });
-      if (!after) throw AppError.notFound('Product not found');
-      return {
-        productId,
-        trackInventory: after.track_inventory,
-        unitCode: after.unit_code,
-        unitDecimals: after.unit_decimals,
-        businessTransactionId,
-      };
     } catch (e) {
-      if (e instanceof AppError) throw e;
       return rethrowInventoryRefusal(e);
     }
-  }
-
-  /** The registry's suggested decimals for a unit; refuses a code the registry does not hold. */
-  private async registryDefaultDecimals(scope: { tenantId: string; businessId: string }, unitCode: string): Promise<number> {
-    const row = (await this.db.scoped<{ default_decimals: number }>(scope, 'SELECT default_decimals FROM units WHERE unit_code = $1', [unitCode])).rows[0];
-    if (!row) throw AppError.validation({ unitCode: ['unit_unknown'], inventoryCode: 'inventory.unit_unknown' });
-    return row.default_decimals;
+    if (!row) throw new Error('inventory_configure_product returned no row');
+    return {
+      productId: row.product_id,
+      trackInventory: row.track_inventory,
+      unitCode: row.unit_code,
+      unitDecimals: row.unit_decimals,
+      changed: row.changed,
+      businessTransactionId,
+    };
   }
 }

@@ -1,13 +1,13 @@
 import { Injectable, Inject } from '@nestjs/common';
 import { AppError, beyondGrantAuthority, isPermission, type Permission } from '@daftar/domain-core';
 import type { BranchDto, MemberDto, RoleDto, WarehouseDto } from '@daftar/shared-contracts';
-import { Database } from '../../infra/database';
+import { Database, type BusinessScope } from '../../infra/database';
 import { AuditService, newId } from '../audit/audit.service';
 import { EntitlementService } from '../entitlements/entitlements.service';
 import { associateWarehouseBranchPayload, dissociateWarehouseBranchPayload } from '@daftar/inventory';
 import type { BusinessTransactionId } from '../inventory/business-transaction';
 import { InventoryAuthorizationService } from '../inventory/inventory-authorization';
-import { rethrowInventoryRefusal } from '../inventory/inventory-errors';
+import { inventoryRefusal, rethrowInventoryRefusal } from '../inventory/inventory-errors';
 import type { MembershipContext } from './tenancy.service';
 
 /** The outcome of a warehouse–branch association command (P3-AL-15 §B). */
@@ -133,8 +133,8 @@ export class StructureService {
    * even obtain an assertion.
    *
    * Both targets must be in this business (row level security makes another
-   * business's ids invisible, so they fail as not found) and neither may be
-   * archived. Then the `structure.associate_warehouse_branch` assertion is
+   * business's ids invisible, so they fail as `structure.*_not_found`) and
+   * neither may be archived. Then the `structure.associate_warehouse_branch` assertion is
    * minted over exactly `(warehouse_id, branch_id)` and the routine — the only
    * writer of `branch_warehouses` — re-checks every structural rule, is
    * idempotent, and writes the audit row with the asserted actor. This
@@ -146,24 +146,18 @@ export class StructureService {
     branchId: string,
     businessTransactionId: BusinessTransactionId,
   ): Promise<WarehouseBranchAssociationResult> {
-    const authority = await this.inventoryAuthorization.authorize(m, 'structure.associate_warehouse_branch');
+    const authority = await this.inventoryAuthorization.authorize(m, 'structure.associate_warehouse_branch', businessTransactionId);
     const targets = await this.associationTargets(m, warehouseId, branchId);
-    if (targets.warehouseStatus !== 'active') throw AppError.validation({ warehouseId: ['warehouse_archived'], inventoryCode: 'inventory.warehouse_archived' });
-    if (targets.branchStatus !== 'active') throw AppError.validation({ branchId: ['branch_archived'], inventoryCode: 'inventory.branch_archived' });
+    // The routine's own codes, so a refusal reads the same whichever layer
+    // made it (P3-AL-15 §B).
+    if (targets.warehouseStatus !== 'active') throw inventoryRefusal('structure.warehouse_archived');
+    if (targets.branchStatus !== 'active') throw inventoryRefusal('structure.branch_archived');
 
     const assertion = this.inventoryAuthorization.mint(
       authority,
       associateWarehouseBranchPayload({ tenantId: m.tenantId, businessId: m.businessId, warehouseId, branchId }),
     );
-    const changed = await this.runAssociationRoutine(
-      authority.scope,
-      assertion,
-      'structure_associate_warehouse_branch',
-      m.businessId,
-      warehouseId,
-      branchId,
-      false,
-    );
+    const changed = await this.runAssociationRoutine(authority.scope, assertion, 'structure_associate_warehouse_branch', warehouseId, branchId);
     return { warehouseId, branchId, associated: true, changed, businessTransactionId };
   }
 
@@ -182,27 +176,17 @@ export class StructureService {
     branchId: string,
     businessTransactionId: BusinessTransactionId,
   ): Promise<WarehouseBranchAssociationResult> {
-    const authority = await this.inventoryAuthorization.authorize(m, 'structure.dissociate_warehouse_branch');
+    const authority = await this.inventoryAuthorization.authorize(m, 'structure.dissociate_warehouse_branch', businessTransactionId);
     const targets = await this.associationTargets(m, warehouseId, branchId);
     if (targets.homeBranchId === branchId) {
-      throw AppError.conflict('CONFLICT', 'The home branch association of a warehouse cannot be removed', {
-        inventoryCode: 'inventory.home_branch_association_required',
-      });
+      throw inventoryRefusal('inventory.home_branch_association_required');
     }
 
     const assertion = this.inventoryAuthorization.mint(
       authority,
       dissociateWarehouseBranchPayload({ tenantId: m.tenantId, businessId: m.businessId, warehouseId, branchId }),
     );
-    const changed = await this.runAssociationRoutine(
-      authority.scope,
-      assertion,
-      'structure_dissociate_warehouse_branch',
-      m.businessId,
-      warehouseId,
-      branchId,
-      true,
-    );
+    const changed = await this.runAssociationRoutine(authority.scope, assertion, 'structure_dissociate_warehouse_branch', warehouseId, branchId);
     return { warehouseId, branchId, associated: false, changed, businessTransactionId };
   }
 
@@ -221,43 +205,34 @@ export class StructureService {
         [m.businessId, warehouseId, branchId],
       )
     ).rows[0];
-    if (!row?.warehouse_status || !row.home_branch_id) throw AppError.notFound('Warehouse not found');
-    if (!row.branch_status) throw AppError.notFound('Branch not found');
+    if (!row?.warehouse_status || !row.home_branch_id) throw inventoryRefusal('structure.warehouse_not_found');
+    if (!row.branch_status) throw inventoryRefusal('structure.branch_not_found');
     return { warehouseStatus: row.warehouse_status, homeBranchId: row.home_branch_id, branchStatus: row.branch_status };
   }
 
   /**
-   * Call one association routine inside the non-posting business seam and
-   * report whether the association's state changed. The before/after reads
-   * are observations for the response only; the routine is the authority.
+   * Call one association routine inside the non-posting business seam. The
+   * routine answers whether it changed anything: false is the idempotent
+   * no-op, for which it writes no audit row.
    */
   private async runAssociationRoutine(
-    scope: { tenantId: string; businessId: string; actorUserId: string },
+    scope: BusinessScope,
     assertion: string,
     routine: 'structure_associate_warehouse_branch' | 'structure_dissociate_warehouse_branch',
-    businessId: string,
     warehouseId: string,
     branchId: string,
-    removing: boolean,
   ): Promise<boolean> {
+    let changed: boolean | undefined;
     try {
-      return await this.db.withBusinessInventoryTransaction(scope, assertion, async (tx) => {
-        const exists = async (): Promise<boolean> =>
-          ((
-            await tx.query('SELECT 1 FROM branch_warehouses WHERE business_id = $1 AND warehouse_id = $2 AND branch_id = $3', [
-              businessId,
-              warehouseId,
-              branchId,
-            ])
-          ).rowCount ?? 0) > 0;
-        const before = await exists();
-        await tx.query(`SELECT ${routine}($1::uuid, $2::uuid)`, [warehouseId, branchId]);
-        const after = await exists();
-        return removing ? before && !after : !before && after;
+      changed = await this.db.withBusinessInventoryTransaction(scope, assertion, async (tx) => {
+        const r = await tx.query<{ changed: boolean }>(`SELECT ${routine}($1::uuid, $2::uuid) AS changed`, [warehouseId, branchId]);
+        return r.rows[0]?.changed;
       });
     } catch (e) {
       return rethrowInventoryRefusal(e);
     }
+    if (typeof changed !== 'boolean') throw new Error(`${routine} returned no verdict`);
+    return changed;
   }
 
   /**
