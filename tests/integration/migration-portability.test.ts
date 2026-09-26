@@ -1101,7 +1101,8 @@ describe('managed PostgreSQL: 0039 → 0049 under a non-superuser migration prin
                FROM pg_proc p JOIN pg_roles r ON r.oid = p.proowner JOIN pg_namespace n ON n.oid = p.pronamespace
               WHERE n.nspname = 'public'
                 AND (r.rolname = 'daftar_inventory_internal'
-                     OR p.proname IN ('accounting_entry_date_guard', 'warehouses_home_branch_immutable'))
+                     OR p.proname IN ('accounting_entry_date_guard', 'warehouses_home_branch_immutable',
+                                      'stock_ledger_append_only', 'stock_levels_retain', 'inventory_stock_source_guard_gaps'))
               ORDER BY p.proname`,
           )
         ).rows;
@@ -1130,6 +1131,19 @@ describe('managed PostgreSQL: 0039 → 0049 under a non-superuser migration prin
             internal('structure_associate_warehouse_branch'),
             internal('structure_dissociate_warehouse_branch'),
             { proname: 'warehouses_home_branch_immutable', owner: 'daftar_migrator', definer: false, config: PIN },
+            // P3-S2 (0059/0060): R1–R8 are the internal principal's; the three
+            // invoker helpers of 0059 stay the migrator's.
+            internal('inventory_apply_stock_movements'),
+            internal('inventory_half_even'),
+            internal('inventory_next_deficit_seq'),
+            internal('inventory_quantity_is_representable'),
+            internal('inventory_stock_fold'),
+            internal('inventory_stock_verify'),
+            internal('products_20_unit_history_lock'),
+            internal('stock_levels_zero_on_hand_zero_value'),
+            { proname: 'inventory_stock_source_guard_gaps', owner: 'daftar_migrator', definer: false, config: PIN },
+            { proname: 'stock_ledger_append_only', owner: 'daftar_migrator', definer: false, config: PIN },
+            { proname: 'stock_levels_retain', owner: 'daftar_migrator', definer: false, config: PIN },
             internal('warehouses_home_branch_maintain'),
             internal('warehouses_require_home_branch'),
           ].sort((a, b) => (a.proname < b.proname ? -1 : 1)),

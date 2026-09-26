@@ -491,6 +491,15 @@ describe('the §D inventory definer contract (P3-AL-54 §D)', () => {
     'warehouses',
     'branches',
     'audit_events',
+    // P3-S2 (0059/0060): the ledger the movement primitive writes and reads.
+    'stock_movements',
+    'stock_levels',
+    'stock_source_bindings',
+    'stock_movement_kinds',
+    'stock_source_types',
+    'inventory_operation_movement_kinds',
+    'negative_inventory_deficits',
+    'negative_deficit_coverages',
   ] as const;
 
   interface OwnedRoutine {

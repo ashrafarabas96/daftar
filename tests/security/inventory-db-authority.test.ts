@@ -232,10 +232,18 @@ describe('the §H grant matrix, from information_schema and pg_policy (P3-AL-54 
       products: 'SELECT',
       units: 'SELECT',
       warehouses: 'SELECT',
+      // P3-S2 (0059, contract ruling A-01): the owner of the movement primitive
+      // holds exactly the writes that primitive performs, and reads the rest.
+      inventory_operation_movement_kinds: 'SELECT',
+      negative_inventory_deficits: 'SELECT',
+      stock_levels: 'INSERT,SELECT',
+      stock_movement_kinds: 'SELECT',
+      stock_movements: 'INSERT,SELECT',
+      stock_source_bindings: 'INSERT',
     });
   });
 
-  it('and exactly these column privileges beyond them: three products columns to UPDATE, four product_variants columns to INSERT', async () => {
+  it('and exactly these column privileges beyond them: three products columns to UPDATE, four product_variants columns to INSERT, four stock_levels columns to UPDATE (P3-S2)', async () => {
     const r = await ownerPool().query<{ t: string; p: string; cols: string }>(
       `SELECT c.table_name AS t, c.privilege_type AS p, string_agg(c.column_name, ',' ORDER BY c.column_name) AS cols
        FROM information_schema.column_privileges c
@@ -248,6 +256,7 @@ describe('the §H grant matrix, from information_schema and pg_policy (P3-AL-54 
     expect(r.rows).toEqual([
       { t: 'product_variants', p: 'INSERT', cols: 'business_id,id,is_base,product_id' },
       { t: 'products', p: 'UPDATE', cols: 'track_inventory,unit_code,unit_decimals' },
+      { t: 'stock_levels', p: 'UPDATE', cols: 'avg_unit_cost_base_minor,last_stock_seq,on_hand,valuation_base_minor' },
     ]);
   });
 
