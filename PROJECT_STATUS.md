@@ -13,7 +13,7 @@
 | P3-S2 — immutable stock ledger | **next unopened slice**: not started, not authorized; analysis only | `docs/PHASE_3_S2_PREPARATION.md` |
 
 - Migrations: 59 frozen, `frozenThrough = 0058_accounting_entry_date_guard.sql`. No `0059` exists.
-- Tests at P3-S1 acceptance: integration 2011/2011 (105 files), golden 73/73; `gate:phase3:s1` PASS, composing the Phase 1 gate and P2-S1…P2-S8.
+- Tests after the freeze (local, fresh PostgreSQL, at `648e1fb`, whose only later change is this status page): integration 2078/2078 (107 files), golden 73/73; `check:db-from-zero --release` 59 migrations applied, rerun applies 0, history clean, tamper refused; `gate:phase3:s1` PASS, composing the Phase 1 gate, P2-S1…P2-S8 and the deployment-authority proof; budget A p95 6.63 ms against 15 ms. (The 2011 integration tests counted before acceptance were at `4195f45`, before the tenant-isolation and HTTP-authority suites were added.)
 - Work branch: `phase/3-inventory-purchases-suppliers`, draft PR #4 into `main`. The sealed head and its exact-SHA CI run are recorded in the PR.
 
 ## Open decisions and debt
