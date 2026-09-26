@@ -121,6 +121,22 @@ const TRIGGERS = [
   'suppliers_revision_guard',
   'journal_entries_purchase_complete',
   'journal_entries_negative_inventory_cost_adjustment_complete',
+  // P3-S4 security review (0063 R-34, R-36): a landed cost commits only with its
+  // allocations; a coverage joins only its own transaction's header and re-judges its Σ.
+  'purchase_landed_costs_consistent',
+  'negative_deficit_coverages_same_transaction',
+  'negative_deficit_coverages_value_complete',
+];
+/**
+ * The document guards that must judge INSERT as well (0063 R-34, R-39): created
+ * BEFORE INSERT OR UPDATE OR DELETE on exactly this table, so nothing is added
+ * to — or born as — a received or cancelled purchase.
+ */
+const INSERT_GUARDS: readonly (readonly [trigger: string, table: string])[] = [
+  ['purchases_immutable', 'purchases'],
+  ['stock_source_freeze_purchase', 'purchase_lines'],
+  ['purchase_landed_costs_freeze', 'purchase_landed_costs'],
+  ['purchase_landed_cost_allocations_freeze', 'purchase_landed_cost_allocations'],
 ];
 
 const PACKAGE_FILES = [
@@ -321,6 +337,11 @@ function checkRequiredObjects(): void {
   for (const t of TRIGGERS) {
     if (!new RegExp(`CREATE (CONSTRAINT )?TRIGGER ${t}\\b`).test(sql)) fail('objects', `trigger ${t} is not created`);
   }
+  for (const [t, table] of INSERT_GUARDS) {
+    if (!new RegExp(`^CREATE TRIGGER ${t}\\s+BEFORE INSERT OR UPDATE OR DELETE ON ${table}\\s`, 'm').test(sources)) {
+      fail('objects', `trigger ${t} does not judge INSERT: it must be BEFORE INSERT OR UPDATE OR DELETE ON ${table}`);
+    }
+  }
   for (const r of ENTRY_ROUTINES) {
     if (!new RegExp(`FUNCTION ${r}\\(`).test(commands)) fail('objects', `entry routine ${r} is not created by ${COMMANDS}`);
   }
@@ -332,7 +353,7 @@ function checkRequiredObjects(): void {
   }
   if (failures === before)
     ok(
-      `${TABLES.length} tables, 2 bridges, ${TRIGGERS.length} triggers, ${ENTRY_ROUTINES.length} entry routines, ${HELPERS.length} helpers, ${ACCOUNTING_OBJECTS.length} accounting objects`,
+      `${TABLES.length} tables, 2 bridges, ${TRIGGERS.length} triggers (${INSERT_GUARDS.length} judging INSERT), ${ENTRY_ROUTINES.length} entry routines, ${HELPERS.length} helpers, ${ACCOUNTING_OBJECTS.length} accounting objects`,
     );
 
   // The replaced gaps function keeps every P3-S3 body digest verbatim (contract §2.3), so review F3 still holds.
