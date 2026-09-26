@@ -54,21 +54,22 @@
 -- invoker maintainer needs a platform grant (forbidden by §I), a
 -- platform-owned one the same, and a migrator-owned one is subject to FORCE.
 --
--- So the internal role is admitted by name, on this table only, in the
--- accepted accounting shape (0040:203-209 — `accounting_seeder` plus the
--- internal clause in the RESTRICTIVE policy): it may READ every association
--- and INSERT one. It gets no UPDATE, and DELETE still needs the ordinary
--- scope. This is safe for the reason 0040's is: the role cannot log in, no
--- runtime role is a member, and its only reachable code — the maintainer
--- (writes NEW's own triple, pinned by the composite FKs), the two proofs
--- (read by exact key) and the two routines (verified assertion, explicit
--- business filter, scope already equal to the asserted business) — never
--- takes a business from anything but a row or a signature. Runtime roles see
--- exactly what the two accepted policies give them.
+-- Resolution (Agent 0 ruling on the P3-S1 spec conflict; app_bypass() is
+-- `current_user = 'daftar_platform'` at 0032:17 and 0052:244): the internal
+-- role is admitted by name on this table only, in the accepted accounting
+-- shape (0040:203-209). Two permissive policies let it READ and INSERT, and
+-- the RESTRICTIVE business_isolation admits it across businesses ONLY while
+-- no business scope is set — onboarding through provision_create_business.
+-- Wherever `app.business_id` is set (the Structure paths, and the three entry
+-- routines, which already require it to equal the asserted business) row
+-- security still isolates it to that one business. It gets no UPDATE, and
+-- DELETE needs the ordinary scope. The role cannot log in, no runtime role
+-- is a member, and its only reachable code takes a business from a row or a
+-- signature, never from an argument.
 --
--- FLAGGED FOR TECH LEAD RATIFICATION in the P3-S1 report: it contradicts the
--- sentence "No new policy names the internal role" of P3-AL-54 §I, which
--- cannot be implemented against the accepted app_bypass().
+-- This departs from the sentence "No new policy names the internal role" of
+-- P3-AL-54 §I, which cannot be implemented against the accepted app_bypass();
+-- the departure is reported with the P3-S1 slice.
 --
 -- ── The two commands ─────────────────────────────────────────────────────
 --
@@ -117,10 +118,13 @@ CREATE POLICY tenant_membership ON branch_warehouses
     SELECT 1 FROM businesses b
     WHERE b.id = branch_warehouses.business_id AND b.tenant_id::text = app_tenant()));
 CREATE POLICY business_isolation ON branch_warehouses AS RESTRICTIVE
-  USING (app_bypass() OR current_user = 'daftar_inventory_internal' OR business_id::text = app_business())
-  WITH CHECK (app_bypass() OR current_user = 'daftar_inventory_internal' OR business_id::text = app_business());
--- The internal principal's admission (see the header): read everything,
--- insert — nothing else.
+  USING (app_bypass() OR business_id::text = app_business()
+         OR (current_user = 'daftar_inventory_internal' AND coalesce(app_business(), '') = ''))
+  WITH CHECK (app_bypass() OR business_id::text = app_business()
+              OR (current_user = 'daftar_inventory_internal' AND coalesce(app_business(), '') = ''));
+-- The internal principal's admission (see the header): read and insert —
+-- nothing else — bounded by business_isolation above whenever a business
+-- scope is set.
 CREATE POLICY inventory_internal_read ON branch_warehouses
   FOR SELECT TO daftar_inventory_internal USING (true);
 CREATE POLICY inventory_internal_insert ON branch_warehouses
@@ -191,9 +195,11 @@ $$;
 
 -- 4.2 Completeness proof, at COMMIT.
 --
--- It reads only `branch_warehouses`, which the internal role sees in full
--- (section 2), and not `warehouses`, which it sees only under the writer's
--- scope — onboarding has none. The home branch is NEW.branch_id and cannot
+-- It reads only `branch_warehouses` — which the internal role sees in full
+-- when no business scope is set and within the scoped business otherwise,
+-- the warehouse's own business in every accepted writer (section 2) — and
+-- not `warehouses`, which it sees only under the writer's scope, and
+-- onboarding has none. The home branch is NEW.branch_id and cannot
 -- change (4.4). A warehouse inserted and deleted in the same transaction
 -- would be refused here; no writer does that.
 CREATE OR REPLACE FUNCTION warehouses_require_home_branch() RETURNS trigger
