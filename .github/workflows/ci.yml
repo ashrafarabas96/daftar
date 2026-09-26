@@ -27,20 +27,20 @@ jobs:
       - name: Verify exact workspace set
         run: |
           set -e
-          for ws in apps/api apps/web apps/admin packages/domain-core packages/accounting packages/shared-contracts packages/design-system; do
+          for ws in apps/api apps/web apps/admin packages/domain-core packages/accounting packages/inventory packages/shared-contracts packages/design-system; do
             test -f "$ws/package.json" || { echo "MISSING WORKSPACE: $ws"; exit 1; }
           done
           test -f apps/android/settings.gradle.kts || { echo "MISSING: apps/android (Gradle)"; exit 1; }
           node -e "
             const pkg = require('./package.json');
-            const expected = ['apps/api','apps/web','apps/admin','packages/domain-core','packages/accounting','packages/shared-contracts','packages/design-system'].sort();
+            const expected = ['apps/api','apps/web','apps/admin','packages/domain-core','packages/accounting','packages/inventory','packages/shared-contracts','packages/design-system'].sort();
             const actual = [...pkg.workspaces].sort();
             if (JSON.stringify(expected) !== JSON.stringify(actual)) {
               console.error('workspace mismatch', { expected, actual });
               process.exit(1);
             }
           "
-          for ws in apps/api apps/web apps/admin packages/domain-core packages/accounting packages/shared-contracts packages/design-system; do
+          for ws in apps/api apps/web apps/admin packages/domain-core packages/accounting packages/inventory packages/shared-contracts packages/design-system; do
             name=$(node -p "require('./$ws/package.json').name")
             grep -q "\"node_modules/$name\"" package-lock.json || { echo "package-lock missing workspace $name"; exit 1; }
           done
@@ -76,9 +76,12 @@ jobs:
         # posting module imports it by package name, so the integration and
         # security suites cannot even load without its dist/.
         # domain-core must be built before accounting, which depends on it.
+        # @daftar/inventory joins them in P3-S1: the merchant API mints the
+        # invctl/1 inventory command assertion through it by package name.
         run: |
           npm run build -w packages/domain-core -w packages/shared-contracts -w packages/design-system
           npm run build -w packages/accounting
+          npm run build -w packages/inventory
       - name: Migration manifest check
         run: npm run check:migrations
       - name: Phase 1 machine gate
