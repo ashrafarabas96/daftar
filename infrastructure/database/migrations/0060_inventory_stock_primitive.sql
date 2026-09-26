@@ -2,8 +2,11 @@
 -- P3-S2, part 2 — the TRUSTED routines of the stock ledger: exact HALF_EVEN
 -- arithmetic, the precision test, the one batch stock-movement primitive,
 -- the deficit sequencer, the rebuild algorithm and its verification mode,
--- the unit-history lock, the zero-stock-zero-value COMMIT check, and the
--- P3-AL-41 disable rule inside `inventory_configure_product`
+-- the unit-history and variant stock-identity locks, the zero-stock-zero-value
+-- COMMIT check, and the P3-AL-41 disable rule inside
+-- `inventory_configure_product`. Every stock-relevant routine refuses to run
+-- outside READ COMMITTED (`inventory.isolation_unsupported`): the lock
+-- protocol relies on each statement taking a fresh snapshot
 -- (P3-AL-06, P3-AL-07, P3-AL-08, P3-AL-14, P3-AL-41, P3-AL-49, P3-AL-54 §G;
 -- docs/PHASE_3_S2_CONTRACT.md §2.1, §2.4, §2.5, §2.7, A-13, A-15, A-22, A-23).
 --
@@ -33,9 +36,9 @@
 --
 --   1. GRANT CREATE ON SCHEMA public TO the internal principal
 --   2. the request type
---   3. the eight routines
+--   3. the nine routines (R1-R8 of §2.5, and R9, the H-1 variant lock)
 --   4. REVOKE ALL … FROM PUBLIC while the migrator owns them
---   5. the two triggers
+--   5. the three triggers
 --   6. the ownership transfer
 --   7. the owner replaces inventory_configure_product (SET LOCAL ROLE)
 --   8. REVOKE CREATE
@@ -95,7 +98,7 @@ BEGIN
   v_d   := abs(p_denominator);
   v_q   := div(v_n, v_d);
   v_r   := v_n - v_q * v_d;
-  IF 2 * v_r > v_d OR (2 * v_r = v_d AND mod(v_q, 2::numeric) <> 0) THEN
+  IF 2::numeric * v_r > v_d OR (2::numeric * v_r = v_d AND mod(v_q, 2::numeric) <> 0) THEN
     v_q := v_q + 1;
   END IF;
   IF v_neg THEN
@@ -118,7 +121,7 @@ BEGIN
   IF p_qty IS NULL OR p_unit_decimals IS NULL OR p_unit_decimals < 0 OR p_unit_decimals > 4 THEN
     RAISE EXCEPTION 'inventory.arithmetic_invalid: a precision test needs a quantity and a unit precision between 0 and 4' USING ERRCODE = 'P0001';
   END IF;
-  RETURN abs(p_qty) = trunc(abs(p_qty), p_unit_decimals);
+  RETURN abs(p_qty) = trunc(abs(p_qty), p_unit_decimals::integer);
 END;
 $$;
 
@@ -146,7 +149,10 @@ LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = pg_catalog, public,
 #variable_conflict use_column
 DECLARE
   c_value_limit   CONSTANT NUMERIC := 1000000000000000000;
-  c_qty_limit     CONSTANT NUMERIC := 100000000000000;
+  -- |qty| and |on_hand| < 10^10 (A-26 as amended, M-3): the average is exact
+  -- to 0.5e-10 per unit, so below 10^10 units a partial outbound valued at
+  -- the average can never take more than the key holds.
+  c_qty_limit     CONSTANT NUMERIC := 10000000000;
   v_actor         inventory_verified_actor;
   v_business      UUID;
   v_tenant        UUID;
@@ -178,6 +184,10 @@ DECLARE
   v_rows          BIGINT;
 BEGIN
   v_actor := inventory_assertion_current(ARRAY(SELECT DISTINCT m.op_code FROM inventory_operation_movement_kinds m ORDER BY 1));
+  -- The lock protocol (A-23) relies on a fresh snapshot per statement (M-1).
+  IF current_setting('transaction_isolation') <> 'read committed' THEN
+    RAISE EXCEPTION 'inventory.isolation_unsupported: stock commands run only at READ COMMITTED' USING ERRCODE = 'P0001';
+  END IF;
   v_business := v_actor.business_id;
   v_tenant   := v_actor.tenant_id;
 
@@ -258,6 +268,22 @@ BEGIN
   FOR v_i IN 1 .. v_n LOOP
     IF v_decimals[v_i] IS NULL THEN
       RAISE EXCEPTION 'inventory.variant_not_found: the variant''s product does not exist in this business' USING ERRCODE = 'P0001';
+    END IF;
+  END LOOP;
+
+  -- 4b. The variant→product mapping, re-read now that the products are
+  --     locked (H-1). A reparent takes FOR UPDATE on the variant's current
+  --     product (product_variants_20_stock_identity_lock), which conflicts
+  --     with the FOR SHARE above, so from here on no requested variant can
+  --     change product until this command ends. A reparent that committed
+  --     between step 3 and the lock is seen here: this statement takes a fresh
+  --     READ COMMITTED snapshot. (The internal principal holds no UPDATE on
+  --     product_variants, so it cannot lock variant rows itself.)
+  FOR v_i IN 1 .. v_n LOOP
+    v_req := p_requests[v_lo + v_i - 1];
+    IF NOT EXISTS (SELECT 1 FROM product_variants pv
+                    WHERE pv.business_id = v_business AND pv.id = v_req.variant_id AND pv.product_id = v_products[v_i]) THEN
+      RAISE EXCEPTION 'inventory.variant_stock_identity_changed: the variant moved to another product while the command ran' USING ERRCODE = 'P0001';
     END IF;
   END LOOP;
 
@@ -605,6 +631,9 @@ COMMENT ON FUNCTION inventory_stock_verify(UUID, UUID, UUID) IS
 CREATE OR REPLACE FUNCTION products_20_unit_history_lock() RETURNS trigger
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $$
 BEGIN
+  IF current_setting('transaction_isolation') <> 'read committed' THEN
+    RAISE EXCEPTION 'inventory.isolation_unsupported: a product unit is changed only at READ COMMITTED' USING ERRCODE = 'P0001';
+  END IF;
   IF NEW.business_id IS DISTINCT FROM nullif(current_setting('app.business_id', true), '')::uuid
      OR (SELECT b.tenant_id FROM businesses b WHERE b.id = NEW.business_id)
         IS DISTINCT FROM nullif(current_setting('app.tenant_id', true), '')::uuid THEN
@@ -620,7 +649,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION products_20_unit_history_lock() IS
-  'P3-AL-54 §G guard 2. BEFORE UPDATE row trigger on products, fired only when unit_code or unit_decimals changes: inventory.scope_mismatch unless the writer''s scope is the product''s business and tenant, then inventory.unit_identity_locked when any movement of any variant of the product exists. Fires after products_10_inventory_config_authority. No EXECUTE grant.';
+  'P3-AL-54 §G guard 2. BEFORE UPDATE row trigger on products, fired only when unit_code or unit_decimals changes: inventory.isolation_unsupported outside READ COMMITTED, then inventory.scope_mismatch unless the writer''s scope is the product''s business and tenant, then inventory.unit_identity_locked when any movement of any variant of the product exists. Fires after products_10_inventory_config_authority. No EXECUTE grant.';
 
 -- R8. on_hand = 0 ⇒ valuation = 0, at COMMIT (A-22).
 CREATE OR REPLACE FUNCTION stock_levels_zero_on_hand_zero_value() RETURNS trigger
@@ -642,6 +671,43 @@ $$;
 COMMENT ON FUNCTION stock_levels_zero_on_hand_zero_value() IS
   'P3-S2 A-22 R8. Deferred constraint trigger on stock_levels: at COMMIT, re-reads the key and refuses on_hand = 0 with a non-zero valuation (inventory.zero_stock_residual_value). DEFINER so the writer''s row security cannot blind it. No EXECUTE grant.';
 
+-- R9. The variant stock-identity lock (H-1). `daftar_app` holds table-level
+--     UPDATE on product_variants (0006), product_id included. A variant that
+--     has a stock key is bound to its product for good: moving it would carry
+--     its history out from under the product's unit-history lock, its
+--     tracking-disable rule and its base-variant identity. DEFINER so the
+--     writer's row security cannot blind the check; it never decides by who
+--     is writing. It first takes FOR UPDATE on the variant's current product,
+--     which conflicts with the stock primitive's FOR SHARE: a reparent waits
+--     for an in-flight stock command on that product, then sees its key.
+CREATE OR REPLACE FUNCTION product_variants_20_stock_identity_lock() RETURNS trigger
+LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $$
+BEGIN
+  IF current_setting('transaction_isolation') <> 'read committed' THEN
+    RAISE EXCEPTION 'inventory.isolation_unsupported: a variant is moved to another product only at READ COMMITTED' USING ERRCODE = 'P0001';
+  END IF;
+  IF NEW.business_id IS DISTINCT FROM nullif(current_setting('app.business_id', true), '')::uuid
+     OR OLD.business_id IS DISTINCT FROM NEW.business_id
+     OR (SELECT b.tenant_id FROM businesses b WHERE b.id = NEW.business_id)
+        IS DISTINCT FROM nullif(current_setting('app.tenant_id', true), '')::uuid THEN
+    RAISE EXCEPTION 'inventory.scope_mismatch: a variant is moved only within its own business and tenant scope' USING ERRCODE = 'P0001';
+  END IF;
+  PERFORM 1 FROM products p
+   WHERE p.business_id = OLD.business_id AND p.id = OLD.product_id
+     FOR UPDATE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'inventory.scope_mismatch: the variant''s product is not visible in this scope' USING ERRCODE = 'P0001';
+  END IF;
+  IF EXISTS (SELECT 1 FROM stock_levels l WHERE l.business_id = OLD.business_id AND l.variant_id = OLD.id) THEN
+    RAISE EXCEPTION 'inventory.variant_stock_identity_locked: the variant has a stock key, so it can no longer move to another product' USING ERRCODE = 'P0001';
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+COMMENT ON FUNCTION product_variants_20_stock_identity_lock() IS
+  'P3-S2 H-1. BEFORE UPDATE OF product_id row trigger on product_variants, fired only when product_id changes: inventory.isolation_unsupported outside READ COMMITTED, inventory.scope_mismatch unless the writer''s scope is the variant''s business and tenant, then locks the current product FOR UPDATE (waiting for any in-flight stock command on it) and refuses with inventory.variant_stock_identity_locked when any stock_levels row exists for the variant. Fires after product_variants_10_base_variant_authority. No EXECUTE grant.';
+
 -- ─────────────────────────────────────────────────────────────────────────
 -- 4. The ACL while the MIGRATOR still owns every routine (0044:177-199 —
 --    do not reorder). No routine of this file is granted to anyone.
@@ -654,6 +720,7 @@ REVOKE ALL ON FUNCTION inventory_stock_fold(UUID, UUID, UUID) FROM PUBLIC;
 REVOKE ALL ON FUNCTION inventory_stock_verify(UUID, UUID, UUID) FROM PUBLIC;
 REVOKE ALL ON FUNCTION products_20_unit_history_lock() FROM PUBLIC;
 REVOKE ALL ON FUNCTION stock_levels_zero_on_hand_zero_value() FROM PUBLIC;
+REVOKE ALL ON FUNCTION product_variants_20_stock_identity_lock() FROM PUBLIC;
 
 -- ─────────────────────────────────────────────────────────────────────────
 -- 5. The triggers, installed while the migrator still owns the functions.
@@ -673,6 +740,13 @@ CREATE CONSTRAINT TRIGGER stock_levels_zero_on_hand_zero_value
   DEFERRABLE INITIALLY DEFERRED
   FOR EACH ROW EXECUTE FUNCTION stock_levels_zero_on_hand_zero_value();
 
+-- `product_variants_20_…` sorts after `product_variants_10_base_variant_authority`.
+CREATE TRIGGER product_variants_20_stock_identity_lock
+  BEFORE UPDATE OF product_id ON product_variants
+  FOR EACH ROW
+  WHEN (OLD.product_id IS DISTINCT FROM NEW.product_id)
+  EXECUTE FUNCTION product_variants_20_stock_identity_lock();
+
 -- ─────────────────────────────────────────────────────────────────────────
 -- 6. The ownership transfer.
 -- ─────────────────────────────────────────────────────────────────────────
@@ -684,6 +758,7 @@ ALTER FUNCTION inventory_stock_fold(UUID, UUID, UUID) OWNER TO daftar_inventory_
 ALTER FUNCTION inventory_stock_verify(UUID, UUID, UUID) OWNER TO daftar_inventory_internal;
 ALTER FUNCTION products_20_unit_history_lock() OWNER TO daftar_inventory_internal;
 ALTER FUNCTION stock_levels_zero_on_hand_zero_value() OWNER TO daftar_inventory_internal;
+ALTER FUNCTION product_variants_20_stock_identity_lock() OWNER TO daftar_inventory_internal;
 
 -- ─────────────────────────────────────────────────────────────────────────
 -- 7. The P3-AL-41 disable rule (A-13).
@@ -739,6 +814,9 @@ BEGIN
       ARRAY[p_product_id::text, p_track::text, p_unit_code, p_unit_decimals::text]
     )
   );
+  IF current_setting('transaction_isolation') <> 'read committed' THEN
+    RAISE EXCEPTION 'inventory.isolation_unsupported: inventory configuration runs only at READ COMMITTED' USING ERRCODE = 'P0001';
+  END IF;
   v_business := v_actor.business_id;
   v_trace    := inventory_business_transaction_id();
 
@@ -876,10 +954,11 @@ DECLARE
     'inventory_stock_fold(uuid,uuid,uuid)'::regprocedure,
     'inventory_stock_verify(uuid,uuid,uuid)'::regprocedure,
     'products_20_unit_history_lock()'::regprocedure,
-    'stock_levels_zero_on_hand_zero_value()'::regprocedure];
+    'stock_levels_zero_on_hand_zero_value()'::regprocedure,
+    'product_variants_20_stock_identity_lock()'::regprocedure];
   c_configure CONSTANT REGPROCEDURE := 'inventory_configure_product(uuid,boolean,text,smallint)'::regprocedure;
 BEGIN
-  -- (1) R1-R8 and the replaced configure routine: internal-owned, DEFINER,
+  -- (1) R1-R9 and the replaced configure routine: internal-owned, DEFINER,
   --     pinned path.
   SELECT string_agg(p.oid::regprocedure::text, ', ' ORDER BY p.oid::regprocedure::text) INTO v_detail
   FROM pg_proc p JOIN pg_roles r ON r.oid = p.proowner
@@ -889,11 +968,11 @@ BEGIN
   IF v_detail IS NOT NULL THEN
     RAISE EXCEPTION 'inventory.authority_leak: routine(s) not internal-owned SECURITY DEFINER with the pinned search_path: %', v_detail;
   END IF;
-  IF (SELECT count(*) FROM pg_proc p WHERE p.oid = ANY (c_routines || c_configure)) <> 9 THEN
+  IF (SELECT count(*) FROM pg_proc p WHERE p.oid = ANY (c_routines || c_configure)) <> 10 THEN
     RAISE EXCEPTION 'inventory.authority_leak: a P3-S2 routine is missing';
   END IF;
 
-  -- (2) Nobody may call R1-R8; only daftar_app may call the configure routine.
+  -- (2) Nobody may call R1-R9; only daftar_app may call the configure routine.
   FOREACH v_proc IN ARRAY c_routines LOOP
     FOREACH v_role IN ARRAY ARRAY['daftar_app','daftar_platform','daftar_worker','daftar_identity','daftar_resolver','daftar_provisioner','daftar_reconciler','public'] LOOP
       IF has_function_privilege(v_role, v_proc, 'EXECUTE') THEN
@@ -923,6 +1002,24 @@ BEGIN
                     AND r.rolname = 'daftar_inventory_internal' AND p.prosecdef
                     AND g.tgname > 'products_10_inventory_config_authority') THEN
     RAISE EXCEPTION 'inventory.authority_leak: products_20_unit_history_lock is missing or not a conditional BEFORE UPDATE row trigger on an internal DEFINER function';
+  END IF;
+
+  -- (3b) The variant stock-identity lock: BEFORE UPDATE OF product_id, row,
+  --      enabled, conditional, internal DEFINER, ordered after the
+  --      base-variant guard.
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger g
+                   JOIN pg_proc p ON p.oid = g.tgfoid
+                   JOIN pg_roles r ON r.oid = p.proowner
+                  WHERE g.tgrelid = 'product_variants'::regclass AND NOT g.tgisinternal
+                    AND g.tgname = 'product_variants_20_stock_identity_lock'
+                    AND g.tgfoid = 'product_variants_20_stock_identity_lock()'::regprocedure
+                    AND g.tgtype = 19            -- ROW (1) | BEFORE (2) | UPDATE (16)
+                    AND g.tgattr::text = (SELECT a.attnum::text FROM pg_attribute a
+                                           WHERE a.attrelid = 'product_variants'::regclass AND a.attname = 'product_id')
+                    AND g.tgenabled = 'O' AND g.tgqual IS NOT NULL
+                    AND r.rolname = 'daftar_inventory_internal' AND p.prosecdef
+                    AND g.tgname > 'product_variants_10_base_variant_authority') THEN
+    RAISE EXCEPTION 'inventory.authority_leak: product_variants_20_stock_identity_lock is missing or not a conditional BEFORE UPDATE OF product_id row trigger on an internal DEFINER function';
   END IF;
 
   -- (4) The zero-stock check is a deferred constraint trigger.
