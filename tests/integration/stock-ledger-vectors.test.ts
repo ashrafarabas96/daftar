@@ -21,6 +21,7 @@ import {
   EMPTY_STOCK_STATE,
   MOVEMENT_KIND_QTY_SIGN,
   applyMovement,
+  averageUnitCost,
   catchUpValue,
   formatMinor,
   formatQuantity,
@@ -29,6 +30,7 @@ import {
   parseMinor,
   parseQuantity,
   parseUnitCost,
+  roundHalfEven,
   roundHalfEvenDecimal,
   simulateMovement,
   type MovementKind,
@@ -158,6 +160,38 @@ interface StepResult {
   value: string;
 }
 
+/** Q4 quantity × C10 cost carries 14 fraction digits; dividing by this lands on minor units. */
+const Q4_TIMES_C10 = 10n ** 14n;
+
+/**
+ * The valuation rule without the 10^10 quantity bound, for a control vector
+ * only (the package, like R3, refuses CTRL-FLUSH's 3·10^10). Priced inbound
+ * and covered outbound only; anything else is not a control this suite knows.
+ * The same shape as `unboundedStep` in packages/inventory/test/valuation-vectors.test.ts.
+ */
+function unboundedControlStep(
+  state: StockState,
+  qtyQ4: bigint,
+  costC10: bigint | null,
+  supplied: bigint | null,
+): { value: bigint; snapshot: bigint; next: StockState } {
+  let value: bigint;
+  let snapshot: bigint;
+  if (qtyQ4 > 0n && costC10 !== null) {
+    value = supplied ?? roundHalfEven(qtyQ4 * costC10, Q4_TIMES_C10);
+    snapshot = costC10;
+  } else if (qtyQ4 < 0n && costC10 === null && supplied === null && state.avg !== null && -qtyQ4 <= state.onHand) {
+    const taken = -qtyQ4;
+    value = taken === state.onHand ? -state.valuation : -roundHalfEven(taken * state.avg, Q4_TIMES_C10);
+    snapshot = state.avg;
+  } else {
+    throw new Error('a control uses only priced inbound and covered outbound steps');
+  }
+  const onHand = state.onHand + qtyQ4;
+  const valuation = state.valuation + value;
+  return { value, snapshot, next: { onHand, valuation, avg: averageUnitCost(valuation, onHand, state.avg), lastStockSeq: state.lastStockSeq + 1n } };
+}
+
 /**
  * Run one scenario's steps in the caller's transaction: seeds owner-raw
  * (H-1), everything else through the fixture as daftar_app (H-2). Every
@@ -165,8 +199,9 @@ interface StepResult {
  *
  * `seedAll` writes EVERY step raw with the vector's stored values (H-1) —
  * only for a control vector that R3 can no longer produce (CTRL-FLUSH is
- * outside the 10^10 quantity bound); the TypeScript twin still predicts each
- * non-seed step from the state before it, so the rule is still checked.
+ * outside the 10^10 quantity bound); each non-seed step is still predicted
+ * from the state before it by the unbounded copy of the rule, so the flush
+ * is still checked.
  */
 async function runSteps(c: Client, s: Scenario, opts: { seedAll?: boolean } = {}): Promise<StepResult[]> {
   const state = new Map<string, StockState>();
@@ -205,14 +240,14 @@ async function runSteps(c: Client, s: Scenario, opts: { seedAll?: boolean } = {}
         tsSnapshot = step.unitCost === null ? null : parseUnitCost(step.unitCost);
         next = applyMovement(before, qtyQ4, tsValue);
       } else {
-        const sim = simulateMovement(before, {
-          kind,
+        const sim = unboundedControlStep(
+          before,
           qtyQ4,
-          costC10: step.unitCost === null ? null : parseUnitCost(step.unitCost),
-          value: step.value === null ? null : parseMinor(step.value),
-        });
+          step.unitCost === null ? null : parseUnitCost(step.unitCost),
+          step.value === null ? null : parseMinor(step.value),
+        );
         tsValue = sim.value;
-        tsSnapshot = sim.unitCostSnapshot;
+        tsSnapshot = sim.snapshot;
         next = sim.next;
       }
       const m = must(
