@@ -48,6 +48,7 @@ import {
   RECONCILIATION_READER,
 } from '../modules/accounting/accounting-reconciliation.service';
 import { AccountingReconciliationWorker } from '../modules/accounting/accounting-reconciliation.worker';
+import { InventoryAssertionMinterService } from '../modules/inventory/inventory-assertion.minter';
 
 /**
  * RUNTIME COMPOSITION (Phase 1 Completion Directive §15–20).
@@ -151,6 +152,19 @@ export function merchantInfraProviders(config: AppConfig, seams: RuntimeSeams): 
     { provide: 'OBJECT_STORAGE', useFactory: (): ObjectStorage => seams.storage ?? createObjectStorage(config) },
     { provide: 'MALWARE_SCANNER', useFactory: (): MalwareScanner => new DisabledDevelopmentMalwareScanner() },
   ];
+}
+
+/**
+ * Merchant-only inventory command authority (P3-AL-55 §C, §I).
+ *
+ * The inventory signing key lives here and only here. The platform, worker
+ * and reconciler runtimes never receive `INVENTORY_ASSERTION_KEY` (config
+ * validation refuses it) and never compose this provider, so they cannot mint
+ * an `invctl/1` assertion and therefore cannot drive any inventory routine,
+ * whatever code they happen to link.
+ */
+export function inventoryAuthorityProviders(): Provider[] {
+  return [InventoryAssertionMinterService];
 }
 
 /**
