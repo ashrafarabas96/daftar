@@ -7,7 +7,7 @@ import { formatMinor, formatQuantity, formatUnitCost, parseDecimal, parseMinor, 
 import { assertQuantityRepresentable, isQuantityRepresentable } from '../src/quantity';
 import { foldMovements, type StoredMovement } from '../src/rebuild';
 import { roundHalfEven, roundHalfEvenDecimal } from '../src/rounding';
-import { applyMovement, catchUpValue, EMPTY_STOCK_STATE, simulateMovement, type StockState } from '../src/valuation';
+import { applyMovement, averageUnitCost, catchUpValue, EMPTY_STOCK_STATE, simulateMovement, type MovementInput, type StockState } from '../src/valuation';
 
 const FILE = join(__dirname, '..', 'vectors', 'valuation-vectors.json');
 const committed = readFileSync(FILE, 'utf8');
@@ -125,6 +125,31 @@ describe('rounding vectors R-01…R-19 (HALF_EVEN, sign-symmetric)', () => {
   });
 });
 
+/**
+ * R3 step 6's arithmetic for a priced inbound or an outbound movement, with no
+ * A-26 quantity bound. CTRL-FLUSH lies outside the primitive's domain
+ * (|q| >= 10^10, A-26 as amended), so R3 refuses it and the database suites
+ * seed it raw; this is the twin of that raw seed, and it still predicts the
+ * residual the flush takes (§4, T-10.N).
+ */
+function unboundedStep(state: StockState, m: MovementInput): { value: bigint; unitCostSnapshot: bigint | null; next: StockState } {
+  let value: bigint;
+  let unitCostSnapshot: bigint;
+  if (m.qtyQ4 > 0n && m.costC10 !== null) {
+    value = m.value ?? roundHalfEven(m.qtyQ4 * m.costC10, Q4_TIMES_C10);
+    unitCostSnapshot = m.costC10;
+  } else if (m.qtyQ4 < 0n && m.costC10 === null && m.value === null && state.avg !== null && -m.qtyQ4 <= state.onHand) {
+    const taken = -m.qtyQ4;
+    value = taken === state.onHand ? -state.valuation : -roundHalfEven(taken * state.avg, Q4_TIMES_C10);
+    unitCostSnapshot = state.avg;
+  } else {
+    throw new Error('a control uses only priced inbound and covered outbound steps');
+  }
+  const onHand = state.onHand + m.qtyQ4;
+  const valuation = state.valuation + value;
+  return { value, unitCostSnapshot, next: { onHand, valuation, avg: averageUnitCost(valuation, onHand, state.avg), lastStockSeq: state.lastStockSeq + 1n } };
+}
+
 interface Replayed {
   readonly values: readonly bigint[];
   readonly finals: ReadonlyMap<string, StockState>;
@@ -132,8 +157,11 @@ interface Replayed {
   readonly before: readonly StockState[];
 }
 
-/** Replays a scenario through the package, asserting every step's expectation as text. */
-function replay(sc: Scenario): Replayed {
+/**
+ * Replays a scenario through the package, asserting every step's expectation
+ * as text. A control (`bounded = false`) goes through `unboundedStep`.
+ */
+function replay(sc: Scenario, bounded = true): Replayed {
   const states = new Map<string, StockState>(sc.keys.map((k) => [k, EMPTY_STOCK_STATE]));
   const stored = new Map<string, StoredMovement[]>(sc.keys.map((k) => [k, []]));
   const values: bigint[] = [];
@@ -179,7 +207,8 @@ function replay(sc: Scenario): Replayed {
         expect(out.key, where).not.toBe(s.key);
         pairedOut = { value: outValue, costC10: outSnapshot, qtyQ4: parseQuantity(out.qty) };
       }
-      const r = simulateMovement(state, { kind: s.kind, qtyQ4: qty, costC10: cost, value: supplied, pairedOut });
+      const input: MovementInput = { kind: s.kind, qtyQ4: qty, costC10: cost, value: supplied, pairedOut };
+      const r = bounded ? simulateMovement(state, input) : unboundedStep(state, input);
       value = r.value;
       snapshot = r.unitCostSnapshot;
       next = r.next;
@@ -210,77 +239,106 @@ function sum(xs: readonly bigint[]): bigint {
   return xs.reduce((a, b) => a + b, 0n);
 }
 
-describe.each([...vectors.scenarios, ...vectors.controls].map((sc) => [sc.id, sc] as const))('scenario %s', (_id, sc) => {
-  it('every stored value, snapshot, cache state and stock_seq equals the TypeScript simulation', () => {
-    replay(sc);
-  });
+describe.each([...vectors.scenarios.map((sc) => [sc.id, sc, true] as const), ...vectors.controls.map((sc) => [sc.id, sc, false] as const)])(
+  'scenario %s',
+  (_id, sc, bounded) => {
+    it(
+      bounded
+        ? 'every stored value, snapshot, cache state and stock_seq equals the TypeScript simulation'
+        : 'every stored value, snapshot, cache state and stock_seq equals the unbounded TypeScript twin of the raw seed',
+      () => {
+        replay(sc, bounded);
+      },
+    );
 
-  it('the rebuild (Σ stored values in stock_seq order) equals the cache of every key', () => {
-    const { finals, stored } = replay(sc);
-    for (const k of sc.keys) {
-      expect(foldMovements(stored.get(k) ?? []), `${sc.id} ${k}`).toEqual(finals.get(k));
+    if (bounded) {
+      it('the rebuild (Σ stored values in stock_seq order) equals the cache of every key', () => {
+        const { finals, stored } = replay(sc);
+        for (const k of sc.keys) {
+          expect(foldMovements(stored.get(k) ?? []), `${sc.id} ${k}`).toEqual(finals.get(k));
+        }
+      });
+    } else {
+      it('lies outside the A-26 domain: every step and the rebuild refuse with inventory.quantity_out_of_range, as R3 does', () => {
+        const { before, stored } = replay(sc, false);
+        sc.steps.forEach((s, i) => {
+          const state = before[i];
+          if (state === undefined) throw new Error('missing state');
+          const input: MovementInput = {
+            kind: s.kind,
+            qtyQ4: parseQuantity(s.qty),
+            costC10: s.unitCost === null ? null : parseUnitCost(s.unitCost),
+            value: s.value === null ? null : parseMinor(s.value),
+          };
+          expect(
+            codeOf(() => simulateMovement(state, input)),
+            `${sc.id} step ${i + 1}`,
+          ).toBe('inventory.quantity_out_of_range');
+        });
+        for (const k of sc.keys) expect(codeOf(() => foldMovements(stored.get(k) ?? []))).toBe('inventory.quantity_out_of_range');
+      });
     }
-  });
 
-  it('journal, GL and reconciliation are integer equalities with no rounding and no 6100 line', () => {
-    const { values, finals } = replay(sc);
-    const movementSum = sum(values);
-    const cacheSum = sum(sc.keys.map((k) => finals.get(k)?.valuation ?? 0n));
-    expect(formatMinor(movementSum)).toBe(sc.reconciliation.sumMovementValues);
-    expect(formatMinor(cacheSum)).toBe(sc.reconciliation.sumCacheValuation);
-    expect(movementSum).toBe(cacheSum);
+    it('journal, GL and reconciliation are integer equalities with no rounding and no 6100 line', () => {
+      const { values, finals } = replay(sc, bounded);
+      const movementSum = sum(values);
+      const cacheSum = sum(sc.keys.map((k) => finals.get(k)?.valuation ?? 0n));
+      expect(formatMinor(movementSum)).toBe(sc.reconciliation.sumMovementValues);
+      expect(formatMinor(cacheSum)).toBe(sc.reconciliation.sumCacheValuation);
+      expect(movementSum).toBe(cacheSum);
 
-    expect('none' in sc.journal).toBe(false);
-    if ('none' in sc.journal) return;
-    // A transfer posts no entry (P3-AL-14); every other movement's line IS its stored integer.
-    const posting = values.filter((_, i) => {
-      const kind = sc.steps[i]?.kind;
-      return kind !== 'transfer_out' && kind !== 'transfer_in';
+      expect('none' in sc.journal).toBe(false);
+      if ('none' in sc.journal) return;
+      // A transfer posts no entry (P3-AL-14); every other movement's line IS its stored integer.
+      const posting = values.filter((_, i) => {
+        const kind = sc.steps[i]?.kind;
+        return kind !== 'transfer_out' && kind !== 'transfer_in';
+      });
+      expect(sc.journal.inventoryLineAmounts).toEqual(posting.map(formatMinor));
+      expect(sc.journal.postedLineCount).toBe(posting.filter((v) => v !== 0n).length);
+      expect(sc.journal.rounding6100Lines).toBe(0);
+      expect(formatMinor(sum(posting))).toBe(sc.journal.glInventory);
+      // GL = Σ movements = Σ cache: transfer legs cancel exactly.
+      expect(sum(posting)).toBe(movementSum);
     });
-    expect(sc.journal.inventoryLineAmounts).toEqual(posting.map(formatMinor));
-    expect(sc.journal.postedLineCount).toBe(posting.filter((v) => v !== 0n).length);
-    expect(sc.journal.rounding6100Lines).toBe(0);
-    expect(formatMinor(sum(posting))).toBe(sc.journal.glInventory);
-    // GL = Σ movements = Σ cache: transfer legs cancel exactly.
-    expect(sum(posting)).toBe(movementSum);
-  });
 
-  if (sc.withdrawnAggregate !== undefined) {
-    const agg = sc.withdrawnAggregate;
-    it('the withdrawn aggregate rule rounds Σ exact values once, and is recorded, not used', () => {
-      let exact = 0n; // Σ qty × cost at scale 14
-      for (const s of sc.steps) {
-        if (s.unitCost === null || s.value !== null) throw new Error('aggregate scenarios are computed purchases only');
-        exact += parseQuantity(s.qty) * parseUnitCost(s.unitCost);
-      }
-      const recorded = parseDecimal(agg.exact);
-      expect(recorded.units * 10n ** BigInt(14 - recorded.scale)).toBe(exact);
-      expect(formatMinor(roundHalfEven(exact, Q4_TIMES_C10))).toBe(agg.roundedHalfEven);
-    });
-  }
+    if (sc.withdrawnAggregate !== undefined) {
+      const agg = sc.withdrawnAggregate;
+      it('the withdrawn aggregate rule rounds Σ exact values once, and is recorded, not used', () => {
+        let exact = 0n; // Σ qty × cost at scale 14
+        for (const s of sc.steps) {
+          if (s.unitCost === null || s.value !== null) throw new Error('aggregate scenarios are computed purchases only');
+          exact += parseQuantity(s.qty) * parseUnitCost(s.unitCost);
+        }
+        const recorded = parseDecimal(agg.exact);
+        expect(recorded.units * 10n ** BigInt(14 - recorded.scale)).toBe(exact);
+        expect(formatMinor(roundHalfEven(exact, Q4_TIMES_C10))).toBe(agg.roundedHalfEven);
+      });
+    }
 
-  if (sc.cycle !== undefined) {
-    const cycle = sc.cycle;
-    it('over a full receive-then-deplete cycle, total outbound equals total inbound', () => {
-      const { values, finals } = replay(sc);
-      const inbound = sum(values.filter((v) => v > 0n));
-      const outbound = -sum(values.filter((v) => v < 0n));
-      expect(formatMinor(inbound)).toBe(cycle.totalInbound);
-      expect(formatMinor(outbound)).toBe(cycle.totalOutbound);
-      expect(inbound).toBe(outbound);
-      for (const k of sc.keys) expect(finals.get(k)?.onHand).toBe(0n);
-    });
-  }
+    if (sc.cycle !== undefined) {
+      const cycle = sc.cycle;
+      it('over a full receive-then-deplete cycle, total outbound equals total inbound', () => {
+        const { values, finals } = replay(sc, bounded);
+        const inbound = sum(values.filter((v) => v > 0n));
+        const outbound = -sum(values.filter((v) => v < 0n));
+        expect(formatMinor(inbound)).toBe(cycle.totalInbound);
+        expect(formatMinor(outbound)).toBe(cycle.totalOutbound);
+        expect(inbound).toBe(outbound);
+        for (const k of sc.keys) expect(finals.get(k)?.onHand).toBe(0n);
+      });
+    }
 
-  if (sc.cogs !== undefined) {
-    const cogs = sc.cogs;
-    it('COGS is the provisional (seed) cost plus every catch-up', () => {
-      const { values } = replay(sc);
-      const cost = -sum(values.filter((_, i) => sc.steps[i]?.seededByOwner === true || sc.steps[i]?.catchUp !== undefined));
-      expect(formatMinor(cost)).toBe(cogs);
-    });
-  }
-});
+    if (sc.cogs !== undefined) {
+      const cogs = sc.cogs;
+      it('COGS is the provisional (seed) cost plus every catch-up', () => {
+        const { values } = replay(sc, bounded);
+        const cost = -sum(values.filter((_, i) => sc.steps[i]?.seededByOwner === true || sc.steps[i]?.catchUp !== undefined));
+        expect(formatMinor(cost)).toBe(cogs);
+      });
+    }
+  },
+);
 
 describe('what the vectors prove together (T-09, T-10, T-06.N)', () => {
   const byId = (id: string): Scenario => {
@@ -336,7 +394,7 @@ describe('what the vectors prove together (T-09, T-10, T-06.N)', () => {
 
   it('CTRL-FLUSH: the flush takes the residual 1 that HALF_EVEN(q × avg) cannot see — the forbidden reconstruction gives 0 ≠ 1', () => {
     const sc = byId('CTRL-FLUSH');
-    const { before, values } = replay(sc);
+    const { before, values } = replay(sc, false);
     const held = before[1];
     const damage = sc.steps[1];
     if (held === undefined || held.avg === null || damage === undefined) throw new Error('missing state');

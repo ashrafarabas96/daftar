@@ -102,6 +102,8 @@ export function inboundValue(qtyQ4: bigint, costC10: bigint): bigint {
 /**
  * An outbound movement (`qty < 0`) priced at the key's current average:
  * - more than on hand is `inventory.insufficient_stock`;
+ * - no average, or a negative one, is `inventory.arithmetic_invalid` (R3's
+ *   defensive refusal, before the flush exactly as in the database);
  * - exactly on hand is the flush, `−valuation` — the entire remaining value;
  * - otherwise `−HALF_EVEN(|qty| × avg, 0)`.
  * The snapshot is the current average in every case.
@@ -112,7 +114,8 @@ export function outboundValue(state: StockState, qtyQ4: bigint): { value: bigint
   const taken = -qtyQ4;
   if (taken > state.onHand) refuse('inventory.insufficient_stock', 'outbound quantity exceeds the quantity on hand');
   const avg = state.avg;
-  if (avg === null) refuse('inventory.arithmetic_invalid', 'no average to price an outbound movement');
+  // R3: `IF v_level_avg IS NULL OR v_level_avg < 0` — checked before the flush, as there.
+  if (avg === null || avg < 0n) refuse('inventory.arithmetic_invalid', 'no usable average to price an outbound movement');
   if (taken === state.onHand) return { value: -state.valuation, unitCostSnapshot: avg };
   return { value: -roundHalfEven(taken * avg, Q4_TIMES_C10), unitCostSnapshot: avg };
 }
@@ -139,7 +142,8 @@ export function catchUpValue(qtyCoveredQ4: bigint, actualC10: bigint, provisiona
 /**
  * Adds one stored movement to a key: `on_hand += qty`, `valuation += value`,
  * the average re-derived (or carried at zero), `last_stock_seq + 1`, with the
- * A-26 bounds. A movement with both quantity and value zero cannot exist
+ * A-26 bounds, the derived average's included (|avg| < 10^18, as R3). A
+ * movement with both quantity and value zero cannot exist
  * (`stock_movements_value_only_ck`).
  */
 export function applyMovement(state: StockState, qtyQ4: bigint, value: bigint): StockState {
@@ -150,7 +154,10 @@ export function applyMovement(state: StockState, qtyQ4: bigint, value: bigint): 
   const valuation = state.valuation + value;
   assertValueInRange(valuation);
   assertQuantityInRange(onHand);
-  return { onHand, valuation, avg: averageUnitCost(valuation, onHand, state.avg), lastStockSeq: state.lastStockSeq + 1n };
+  const avg = averageUnitCost(valuation, onHand, state.avg);
+  // R3: `abs(v_next_avg) >= c_value_limit` — an average of 10^18 or more is out of range.
+  if (avg !== null && absBig(avg) >= COST_LIMIT_C10) refuse('inventory.value_out_of_range', 'the resulting average cost is out of range');
+  return { onHand, valuation, avg, lastStockSeq: state.lastStockSeq + 1n };
 }
 
 export interface MovementInput {

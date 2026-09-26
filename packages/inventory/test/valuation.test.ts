@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { InventoryError } from '../src/errors';
-import { COST_LIMIT_C10, QTY_LIMIT_Q4, VALUE_LIMIT_MINOR } from '../src/fixed-point';
+import { COST_LIMIT_C10, parseQuantity, QTY_LIMIT_Q4, VALUE_LIMIT_MINOR } from '../src/fixed-point';
+import { roundHalfEven } from '../src/rounding';
 import {
   applyMovement,
   averageUnitCost,
@@ -115,6 +116,24 @@ describe('outboundValue', () => {
     expect(codeOf(() => outboundValue(held, 1n))).toBe('inventory.movement_shape_invalid');
     expect(codeOf(() => outboundValue(state(Q(2n), 7n, null), Q(-1n)))).toBe('inventory.arithmetic_invalid');
   });
+
+  it("refuses a negative average with inventory.arithmetic_invalid, before the flush, as R3's `v_level_avg < 0` does", () => {
+    const negative = state(Q(2n), -7n, -35000000000n);
+    expect(codeOf(() => outboundValue(negative, Q(-1n)))).toBe('inventory.arithmetic_invalid'); // partial
+    expect(codeOf(() => outboundValue(negative, Q(-2n)))).toBe('inventory.arithmetic_invalid'); // would be the flush
+    expect(codeOf(() => outboundValue(state(Q(2n), -1n, -1n), -1n))).toBe('inventory.arithmetic_invalid'); // the smallest negative average
+    // A zero average is usable: it prices at zero, and the flush takes what remains.
+    expect(outboundValue(state(Q(2n), 0n, 0n), Q(-1n))).toEqual({ value: 0n, unitCostSnapshot: 0n });
+    expect(outboundValue(state(Q(2n), 1n, 0n), Q(-2n))).toEqual({ value: -1n, unitCostSnapshot: 0n });
+  });
+
+  it('a value-only credit that drives the average negative makes every later issue refuse (reached through simulateMovement)', () => {
+    let s = simulateMovement(EMPTY_STOCK_STATE, { kind: 'purchase', qtyQ4: Q(2n), costC10: C(1n), value: null }).next;
+    s = simulateMovement(s, { kind: 'negative_inventory_cost_adjustment', qtyQ4: 0n, costC10: null, value: -3n }).next;
+    expect([s.onHand, s.valuation, s.avg]).toEqual([Q(2n), -1n, -5000000000n]);
+    expect(codeOf(() => simulateMovement(s, { kind: 'damage', qtyQ4: Q(-1n), costC10: null, value: null }))).toBe('inventory.arithmetic_invalid');
+    expect(codeOf(() => simulateMovement(s, { kind: 'damage', qtyQ4: Q(-2n), costC10: null, value: null }))).toBe('inventory.arithmetic_invalid');
+  });
 });
 
 describe('transferInValue and catchUpValue', () => {
@@ -156,13 +175,54 @@ describe('applyMovement', () => {
   });
 
   it('keeps the A-26 bounds', () => {
-    expect(applyMovement(EMPTY_STOCK_STATE, 1n, VALUE_LIMIT_MINOR).valuation).toBe(VALUE_LIMIT_MINOR);
+    expect(applyMovement(EMPTY_STOCK_STATE, Q(1n) + 1n, VALUE_LIMIT_MINOR).valuation).toBe(VALUE_LIMIT_MINOR);
     expect(codeOf(() => applyMovement(EMPTY_STOCK_STATE, 1n, VALUE_LIMIT_MINOR + 1n))).toBe('inventory.value_out_of_range');
     expect(codeOf(() => applyMovement(EMPTY_STOCK_STATE, 1n, -VALUE_LIMIT_MINOR - 1n))).toBe('inventory.value_out_of_range');
     expect(codeOf(() => applyMovement(state(1n, VALUE_LIMIT_MINOR, 0n), 1n, 1n))).toBe('inventory.value_out_of_range');
     expect(applyMovement(EMPTY_STOCK_STATE, QTY_LIMIT_Q4 - 1n, 1n).onHand).toBe(QTY_LIMIT_Q4 - 1n);
     expect(codeOf(() => applyMovement(EMPTY_STOCK_STATE, QTY_LIMIT_Q4, 1n))).toBe('inventory.quantity_out_of_range');
     expect(codeOf(() => applyMovement(state(QTY_LIMIT_Q4 - 1n, 1n, 0n), 1n, 0n))).toBe('inventory.quantity_out_of_range');
+  });
+
+  it('bounds |qty| and |on_hand| below 10^10 units, the SQL c_qty_limit: 9999999999.9999 is accepted, 10000000000 is refused', () => {
+    const edge = parseQuantity('9999999999.9999');
+    const over = parseQuantity('10000000000');
+    expect(edge).toBe(QTY_LIMIT_Q4 - 1n);
+    expect(over).toBe(QTY_LIMIT_Q4);
+    // The request quantity.
+    expect(simulateMovement(EMPTY_STOCK_STATE, { kind: 'purchase', qtyQ4: edge, costC10: 0n, value: null }).next.onHand).toBe(edge);
+    expect(codeOf(() => simulateMovement(EMPTY_STOCK_STATE, { kind: 'purchase', qtyQ4: over, costC10: 0n, value: null }))).toBe(
+      'inventory.quantity_out_of_range',
+    );
+    expect(codeOf(() => simulateMovement(state(over, 0n, 0n), { kind: 'damage', qtyQ4: -over, costC10: null, value: null }))).toBe(
+      'inventory.quantity_out_of_range',
+    );
+    expect(codeOf(() => inboundValue(over, 0n))).toBe('inventory.quantity_out_of_range');
+    expect(codeOf(() => catchUpValue(over, 0n, 0n))).toBe('inventory.quantity_out_of_range');
+    expect(codeOf(() => outboundValue(state(over, 0n, 0n), -over))).toBe('inventory.quantity_out_of_range');
+    // The resulting on_hand, both signs.
+    const held = simulateMovement(EMPTY_STOCK_STATE, { kind: 'purchase', qtyQ4: edge, costC10: 0n, value: null }).next;
+    expect(codeOf(() => simulateMovement(held, { kind: 'purchase', qtyQ4: 1n, costC10: 0n, value: null }))).toBe('inventory.quantity_out_of_range');
+    expect(applyMovement(EMPTY_STOCK_STATE, -edge, -1n).onHand).toBe(-edge);
+    expect(codeOf(() => applyMovement(state(-edge, 0n, 0n), -1n, 0n))).toBe('inventory.quantity_out_of_range');
+  });
+
+  it('at q = 9999999999 the flush and HALF_EVEN(q × avg) agree on full depletion (T-10.N bound)', () => {
+    const q = parseQuantity('9999999999');
+    const held = simulateMovement(EMPTY_STOCK_STATE, { kind: 'purchase', qtyQ4: q, costC10: 0n, value: 1n }).next;
+    expect(held.avg).toBe(1n); // 1 / 9999999999 = 0.00000000010000000001 → 0.0000000001
+    const flush = simulateMovement(held, { kind: 'damage', qtyQ4: -q, costC10: null, value: null });
+    expect(flush.value).toBe(-held.valuation);
+    expect(outboundValue(held, -q).value).toBe(-roundHalfEven(q * 1n, 10n ** 14n));
+  });
+
+  it("refuses a derived average of 10^18 or more with inventory.value_out_of_range, as R3's `abs(v_next_avg) >= c_value_limit`", () => {
+    expect(codeOf(() => applyMovement(EMPTY_STOCK_STATE, Q(1n), VALUE_LIMIT_MINOR))).toBe('inventory.value_out_of_range'); // avg = 10^18
+    expect(codeOf(() => applyMovement(EMPTY_STOCK_STATE, -Q(1n), -VALUE_LIMIT_MINOR))).toBe('inventory.value_out_of_range');
+    expect(applyMovement(EMPTY_STOCK_STATE, Q(1n), VALUE_LIMIT_MINOR - 1n).avg).toBe(COST_LIMIT_C10 - C(1n)); // avg = 10^18 − 1
+    expect(codeOf(() => simulateMovement(EMPTY_STOCK_STATE, { kind: 'purchase', qtyQ4: 1n, costC10: 0n, value: 10n ** 14n }))).toBe(
+      'inventory.value_out_of_range',
+    );
   });
 
   it('refuses a movement that changes neither quantity nor value', () => {

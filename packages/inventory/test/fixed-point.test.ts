@@ -54,7 +54,7 @@ describe('constants (A-26)', () => {
   it('fix the scales and the bounds', () => {
     expect(QTY_SCALE).toBe(4);
     expect(COST_SCALE).toBe(10);
-    expect(QTY_LIMIT_Q4).toBe(10n ** 18n);
+    expect(QTY_LIMIT_Q4).toBe(10n ** 14n); // |qty| < 10^10 units: R3's c_qty_limit (A-26 as amended)
     expect(VALUE_LIMIT_MINOR).toBe(10n ** 18n);
     expect(COST_LIMIT_C10).toBe(10n ** 28n);
   });
@@ -94,8 +94,10 @@ describe('parseQuantity / formatQuantity (Q4)', () => {
       ['0', 0n, '0.0000'],
       ['-0', 0n, '0.0000'],
       ['0.0001', 1n, '0.0001'],
-      ['99999999999999.9999', QTY_LIMIT_Q4 - 1n, '99999999999999.9999'],
-      ['-99999999999999.9999', -(QTY_LIMIT_Q4 - 1n), '-99999999999999.9999'],
+      ['9999999999.9999', QTY_LIMIT_Q4 - 1n, '9999999999.9999'],
+      ['10000000000', QTY_LIMIT_Q4, '10000000000.0000'],
+      ['99999999999999.9999', 10n ** 18n - 1n, '99999999999999.9999'],
+      ['-99999999999999.9999', -(10n ** 18n - 1n), '-99999999999999.9999'],
       ['30000000000.0000', 300000000000000n, '30000000000.0000'],
     ];
     for (const [text, q4, formatted] of cases) {
@@ -105,7 +107,13 @@ describe('parseQuantity / formatQuantity (Q4)', () => {
     }
   });
 
-  it('refuses more than four fraction digits, |q| >= 10^14 and non-decimal text with inventory.quantity_invalid', () => {
+  it("parses the whole NUMERIC(18,4) domain: the A-26 range is the valuation step's refusal, as it is R3's", () => {
+    expect(parseQuantity('9999999999.9999')).toBe(QTY_LIMIT_Q4 - 1n);
+    expect(parseQuantity('10000000000')).toBe(QTY_LIMIT_Q4);
+    expect(parseQuantity('-10000000000.0000')).toBe(-QTY_LIMIT_Q4);
+  });
+
+  it('refuses more than four fraction digits, |q| >= 10^14 units and non-decimal text with inventory.quantity_invalid', () => {
     for (const t of ['1.00000', '0.00001', '100000000000000', '-100000000000000.0000', '100000000000000.0001', ...NOT_DECIMAL]) {
       expect(
         codeOf(() => parseQuantity(t)),

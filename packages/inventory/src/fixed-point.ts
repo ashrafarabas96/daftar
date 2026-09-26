@@ -21,8 +21,20 @@ import { InventoryError, type InventoryErrorCode } from './errors';
 
 export const QTY_SCALE = 4;
 export const COST_SCALE = 10;
-/** Exclusive bound on |qty| and |on_hand| in Q4: |qty| < 10^14 units (A-26). */
-export const QTY_LIMIT_Q4 = 10n ** 18n;
+/**
+ * Exclusive bound on |qty| and |on_hand| in Q4: |qty| < 10^10 units — A-26 as
+ * amended after the security review (M-3), mirroring R3's `c_qty_limit`
+ * (`0060_inventory_stock_primitive.sql`). Refused as
+ * `inventory.quantity_out_of_range` by the valuation step, as R3 refuses it.
+ */
+export const QTY_LIMIT_Q4 = 10n ** 14n;
+/**
+ * Exclusive bound on quantity TEXT in Q4: the `NUMERIC(18,4)` column domain,
+ * |q| < 10^14 units. Parsing is the column's concern, the range is R3's: text
+ * inside the column domain but at or above `QTY_LIMIT_Q4` parses, and the
+ * valuation step then refuses it exactly where R3 does.
+ */
+const QTY_DOMAIN_Q4 = 10n ** 18n;
 /** Inclusive bound on |value| and |valuation| in minor units: <= 10^18 (A-26). */
 export const VALUE_LIMIT_MINOR = 10n ** 18n;
 /** Exclusive bound on a unit cost in C10: cost < 10^18 (A-26). */
@@ -73,10 +85,10 @@ function rescaleDecimal(text: string, scale: number): bigint | null {
   return parts.negative ? -magnitude : magnitude;
 }
 
-/** Quantity text to Q4: at most 4 fraction digits and |q| < 10^14, else `inventory.quantity_invalid`. */
+/** Quantity text to Q4: at most 4 fraction digits and |q| < 10^14 units (the `NUMERIC(18,4)` domain), else `inventory.quantity_invalid`. */
 export function parseQuantity(text: string): bigint {
   const q4 = rescaleDecimal(text, QTY_SCALE);
-  if (q4 === null || absBig(q4) >= QTY_LIMIT_Q4) refuse('inventory.quantity_invalid', 'quantity is not a four-decimal value within range');
+  if (q4 === null || absBig(q4) >= QTY_DOMAIN_Q4) refuse('inventory.quantity_invalid', 'quantity is not a four-decimal value within range');
   return q4;
 }
 

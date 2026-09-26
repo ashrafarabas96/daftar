@@ -97,8 +97,10 @@ function generate(seed: bigint, target: number): Stream {
       if (out.unitCostSnapshot === null) throw new Error('an outbound leg always has a snapshot');
       apply(other, { kind: 'transfer_in', qtyQ4: q, costC10: null, value: null, pairedOut: { value: out.value, costC10: out.unitCostSnapshot, qtyQ4: -q } });
     } else if (roll < 90n) {
+      // A value-only movement never drives the valuation of a held key negative:
+      // a negative average prices nothing, in R3 or here (arithmetic_invalid).
       const v = next(2000n) - 1000n;
-      if (v !== 0n) apply(key, { kind: 'negative_inventory_cost_adjustment', qtyQ4: 0n, costC10: null, value: v });
+      if (v !== 0n && s.valuation + v >= 0n) apply(key, { kind: 'negative_inventory_cost_adjustment', qtyQ4: 0n, costC10: null, value: v });
     } else {
       apply(key, { kind: 'stocktake', qtyQ4: qty2dp, costC10: cost10dp, value: null });
     }
