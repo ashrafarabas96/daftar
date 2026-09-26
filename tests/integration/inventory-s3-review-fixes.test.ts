@@ -5,6 +5,8 @@
  *
  * F1 (0061 R-13): a Case B inventory opening and a reversed opening balance
  *     never meet — in either order, and while either is in flight.
+ * F2 (0062 R-14): a concurrent identical opening replays; it is not refused
+ *     inventory.opening_already_posted.
  */
 import { randomUUID } from 'node:crypto';
 import type { Client } from 'pg';
@@ -74,7 +76,14 @@ async function postBalance(s: StockBusiness, day: string, positions: readonly Po
 
 /** `accounting_post_reversal` of the balance's entry, in `client`'s open transaction when given. */
 async function reverseBalance(s: StockBusiness, day: string, ob: PostedBalance, client?: Client): Promise<string> {
-  const snap = openingBalanceSnapshot({ entryId: ob.entryId, tenantId: s.tenantId, businessId: s.businessId, asOfDate: day, baseCurrency: 'ILS', positions: POSITIONS });
+  const snap = openingBalanceSnapshot({
+    entryId: ob.entryId,
+    tenantId: s.tenantId,
+    businessId: s.businessId,
+    asOfDate: day,
+    baseCurrency: 'ILS',
+    positions: POSITIONS,
+  });
   const r = await postReversalAs(
     sourceAssertion({
       actorUserId: s.userId,
@@ -159,7 +168,9 @@ async function glInventory(businessId: string): Promise<bigint> {
 }
 
 async function stockValue(businessId: string): Promise<bigint> {
-  const r = await ownerPool().query<{ n: string }>(`SELECT coalesce(sum(value_delta_base_minor), 0)::text AS n FROM stock_movements WHERE business_id = $1`, [businessId]);
+  const r = await ownerPool().query<{ n: string }>(`SELECT coalesce(sum(value_delta_base_minor), 0)::text AS n FROM stock_movements WHERE business_id = $1`, [
+    businessId,
+  ]);
   return BigInt(must(r.rows[0]).n);
 }
 
@@ -196,7 +207,9 @@ describe('F1 — a Case B inventory opening and a reversed opening balance never
   it('reversing the entry of an opening balance a posted Case B opening is bound to is refused, and the ledger still equals the stock', async () => {
     const { s, day } = await business('a');
     const ob = await postBalance(s, day);
-    const opened = await inOwnTransaction((c) => recordOpening(c, s, day, { openingId: randomUUID(), openingBalanceId: ob.openingBalanceId, positionMinor: 10000n }));
+    const opened = await inOwnTransaction((c) =>
+      recordOpening(c, s, day, { openingId: randomUUID(), openingBalanceId: ob.openingBalanceId, positionMinor: 10000n }),
+    );
     expect(opened.case_kind).toBe('opening_balance_bound');
 
     const refused = await settle(() => reverseBalance(s, day, ob));
@@ -305,7 +318,9 @@ describe('F1 — a Case B inventory opening and a reversed opening balance never
           postingFingerprint: '0'.repeat(64),
         }),
       ]);
-      const drafting = settle(() => workflow.query(`SELECT accounting_open_balance_draft($1::date, $2::jsonb)`, [day, JSON.stringify(positionPayload(POSITIONS))]));
+      const drafting = settle(() =>
+        workflow.query(`SELECT accounting_open_balance_draft($1::date, $2::jsonb)`, [day, JSON.stringify(positionPayload(POSITIONS))]),
+      );
       await waitUntilBlocked(workflowPid, 'the workflow command behind the reversal');
 
       // Released: the reversal runs its guard while the workflow holds the R-1
@@ -322,6 +337,55 @@ describe('F1 — a Case B inventory opening and a reversed opening balance never
       await holder.end().catch(() => undefined);
       await reversal.end().catch(() => undefined);
       await workflow.end().catch(() => undefined);
+    }
+  });
+});
+
+describe('F2 — a concurrent identical opening replays (0062 R-14)', () => {
+  it('the second identical call waits on the document key and replays the first once it commits', async () => {
+    const { s, day } = await business('f');
+    const openingId = randomUUID();
+    const zero = { openingId, openingBalanceId: null, positionMinor: null, unitCost: '0', unitCostC10: 0n } as const;
+    const first = await appClient();
+    const second = await appClient();
+    const secondPid = await pidOf(second);
+    try {
+      await first.query('BEGIN');
+      expect(await recordOpening(first, s, day, zero)).toEqual({ replayed: false, case_kind: 'ledger_posting' });
+      await second.query('BEGIN');
+      const pending = settle(() => recordOpening(second, s, day, zero));
+      await waitUntilBlocked(secondPid, 'the identical opening behind the first');
+      await first.query('COMMIT');
+      expect(expectAccepted(await pending, 'the identical opening replays')).toEqual({ replayed: true, case_kind: 'ledger_posting' });
+      await second.query('COMMIT');
+      const rows = await ownerPool().query(`SELECT id FROM inventory_openings WHERE business_id = $1`, [s.businessId]);
+      expect(rows.rows).toEqual([{ id: openingId }]);
+      expect(await stockValue(s.businessId)).toBe(0n);
+    } finally {
+      await first.end().catch(() => undefined);
+      await second.end().catch(() => undefined);
+    }
+  });
+
+  it('a concurrent DIFFERENT opening of the same business is still refused inventory.opening_already_posted', async () => {
+    const { s, day } = await business('g');
+    const first = await appClient();
+    const second = await appClient();
+    const secondPid = await pidOf(second);
+    try {
+      await first.query('BEGIN');
+      await recordOpening(first, s, day, { openingId: randomUUID(), openingBalanceId: null, positionMinor: null, unitCost: '0', unitCostC10: 0n });
+      await second.query('BEGIN');
+      const pending = settle(() =>
+        recordOpening(second, s, day, { openingId: randomUUID(), openingBalanceId: null, positionMinor: null, unitCost: '0', unitCostC10: 0n }),
+      );
+      await waitUntilBlocked(secondPid, 'the other opening behind the first (the R-1 key)');
+      await first.query('COMMIT');
+      expectRefused(await pending, 'P0001', 'inventory.opening_already_posted', 'a second opening');
+      await second.query('ROLLBACK');
+    } finally {
+      await first.end().catch(() => undefined);
+      await second.end().catch(() => undefined);
     }
   });
 });

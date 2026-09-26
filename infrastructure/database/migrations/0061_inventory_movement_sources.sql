@@ -61,7 +61,7 @@
 --        opening-balance workflow and the reversal; a path skips the steps
 --        it has no use for, never reorders them):
 --          1. assertion consume / verify               (no lock)
---          2. the per-document-id advisory key         (0062)
+--          2. the per-document-id advisory key         (0062, R-14)
 --          3. accounting_opening_balance_lock_key       (R-1)
 --          4. `businesses`                              (the OB workflow
 --             FOR UPDATE; a posting or reversal FOR SHARE)

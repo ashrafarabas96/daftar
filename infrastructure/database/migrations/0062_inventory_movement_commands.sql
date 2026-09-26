@@ -50,6 +50,16 @@
 --        returns the typed totals).
 --   R-12 Stocktake count lines must arrive in strictly ascending variant
 --        order (A-09's canonical order), else `inventory.payload_invalid`.
+--   R-14 Opening idempotency under concurrency (review F2). Like adjust,
+--        damage and stocktake_open, `inventory_record_opening` takes a
+--        per-document-id advisory key (`daftar.inventory_opening_id`)
+--        after consume and BEFORE the header SELECT, so a second identical
+--        call waits for the first and replays it instead of reading
+--        `inventory.opening_already_posted`. The key is step 2 of the one
+--        global order (0061 R-13): document key, then the R-1 opening-balance
+--        key (the position read), then the balance row, then the stock
+--        targets and the primitive's own order. Nothing takes the document
+--        key after the R-1 key, so the two cannot form a cycle.
 --
 -- Migrations 0000-0061 are untouched.
 
@@ -1308,6 +1318,10 @@ BEGIN
                CROSS JOIN LATERAL unnest(ARRAY[l.w::text, l.v::text, inventory_fixed_text(l.q, 4), inventory_fixed_text(l.c, 10)])
                  WITH ORDINALITY AS f(x, j) ORDER BY l.i, f.j));
 
+  -- R-14: a concurrent identical opening waits here and then replays; it
+  -- never reaches the one-posted-opening check ahead of the first's commit.
+  PERFORM pg_advisory_xact_lock(hashtext('daftar.inventory_opening_id'), hashtext(p_opening_id::text));
+
   SELECT o.intent_sha256 INTO v_stored FROM inventory_openings o WHERE o.business_id = v_business AND o.id = p_opening_id;
   IF FOUND THEN
     IF v_stored <> v_intent THEN
@@ -1436,7 +1450,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION inventory_record_opening(UUID, DATE, UUID, BIGINT, UUID[], UUID[], NUMERIC[], NUMERIC[]) IS
-  'P3-S3 §2.4, A-13. First consumes an invctl/1 assertion of kind inventory.opening over its own arguments (A-09: id, date, opening_balance_id and position or both NULL, line_count, per line warehouse, variant, Q4 quantity, C10 cost). Idempotency by the stored intent (position excluded). The bound case must equal accounting_inventory_opening_position (inventory.opening_case_changed); one posted opening per business (inventory.opening_already_posted). T = HALF_EVEN(sum qty x cost), shares by largest remainder; Case B requires T = the position (inventory.opening_valuation_mismatch) and owes no entry, Case A owes one iff T > 0. Audit and outbox inventory.opening_posted. EXECUTE: daftar_app only — reachability, not authority.';
+  'P3-S3 §2.4, A-13. First consumes an invctl/1 assertion of kind inventory.opening over its own arguments (A-09: id, date, opening_balance_id and position or both NULL, line_count, per line warehouse, variant, Q4 quantity, C10 cost). Idempotency by the stored intent (position excluded), serialized on the opening id before the proof so a concurrent identical call replays (R-14). The bound case must equal accounting_inventory_opening_position (inventory.opening_case_changed); one posted opening per business (inventory.opening_already_posted). T = HALF_EVEN(sum qty x cost), shares by largest remainder; Case B requires T = the position (inventory.opening_valuation_mismatch) and owes no entry, Case A owes one iff T > 0. Audit and outbox inventory.opening_posted. EXECUTE: daftar_app only — reachability, not authority.';
 
 -- ─────────────────────────────────────────────────────────────────────────
 -- 4. Privileges, then the ownership transfer.
@@ -1580,6 +1594,14 @@ BEGIN
       RAISE EXCEPTION 'inventory.migration_end_state_invalid: % does not consume its assertion as its first statement', v_proc;
     END IF;
   END LOOP;
+  -- (5b) R-14: the opening serializes on its document id before its
+  --      idempotency proof, and before the R-1 key its position read takes.
+  SELECT p.prosrc INTO v_src FROM pg_proc p WHERE p.oid = 'inventory_record_opening(uuid,date,uuid,bigint,uuid[],uuid[],numeric[],numeric[])'::regprocedure;
+  IF position('pg_advisory_xact_lock(hashtext(''daftar.inventory_opening_id''), hashtext(p_opening_id::text))' IN v_src) = 0
+     OR position('pg_advisory_xact_lock(hashtext(''daftar.inventory_opening_id'')' IN v_src) > position('SELECT o.intent_sha256 INTO v_stored' IN v_src)
+     OR position('SELECT o.intent_sha256 INTO v_stored' IN v_src) > position('accounting_inventory_opening_position(v_business)' IN v_src) THEN
+    RAISE EXCEPTION 'inventory.migration_end_state_invalid: inventory_record_opening does not take its document key before its idempotency proof (R-14)';
+  END IF;
   FOREACH v_proc IN ARRAY ARRAY['inventory_lock_stock_targets(uuid[],uuid[])'::regprocedure, 'inventory_bridge_source_lines(text,uuid)'::regprocedure] LOOP
     SELECT p.prosrc INTO v_src FROM pg_proc p WHERE p.oid = v_proc;
     v_first := btrim(split_part(substr(v_src, position(E'\nBEGIN\n' IN v_src) + 7), ';', 1));
