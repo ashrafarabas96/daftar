@@ -46,6 +46,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { arch, platform, release as osRelease } from 'node:os';
 import { join } from 'node:path';
+import { PHASE2_PREFIX, PHASE2_PREFIX_END, checkPhase2Prefix } from './phase2-prefix';
 
 const ROOT = join(__dirname, '..');
 const args = new Map(process.argv.slice(2).map((a) => a.replace(/^--/, '').split('=') as [string, string | undefined]));
@@ -174,15 +175,22 @@ function frozenHistoryIntact(): string[] {
 }
 
 /**
- * P2-S9 adds no migration. This is P2-S9's OWN hard stop, and it lives here
- * rather than in the P2-S8 gate, which is permanent and must never forbid an
- * authorized successor.
+ * The accepted Phase 2 prefix 0000–0052 stays complete, ordered, immutable and
+ * byte-identical (`scripts/phase2-prefix.ts`).
+ *
+ * CORRECTED 2026-09-26 (Tech Lead decision). This check was "P2-S9 creates no
+ * migration": it refused ANY file after 0052. That was true of the P2-S9
+ * closure slice but was written as a permanent property, so the first
+ * authorized successor migration (P3-S1's 0053) made this gate fail on every
+ * later tree. A release gate protects a historical invariant; it must not
+ * prohibit forward evolution. Migrations after 0052 are now permitted here and
+ * are protected by their own phase's gate and by the manifest.
  */
-function phase2s9AddsNoMigration(): string[] {
-  const beyond = readdirSync(MIGRATIONS_DIR)
-    .filter((f) => f.endsWith('.sql') && f > FROZEN_THROUGH_AT_LEAST)
-    .sort();
-  return beyond.length === 0 ? [] : [`P2-S9 is release closure and creates no migration, but ${beyond.join(', ')} exists`];
+function phase2PrefixIntact(): string[] {
+  const problems = checkPhase2Prefix(MIGRATIONS_DIR, join(ROOT, 'infrastructure/database/MIGRATION_MANIFEST.json'));
+  if (problems.length === 0)
+    console.log(`   ${PHASE2_PREFIX.length} accepted Phase 2 migrations intact through ${PHASE2_PREFIX_END}; later migrations permitted`);
+  return problems;
 }
 
 /**
@@ -373,7 +381,7 @@ function main(): void {
     () => inProcess('the gated tree carries no git working tree and no credential', treeCarriesNoWorkingTreeOrCredential),
     () => inProcess('the archive matches the inventory it carries', archiveMatchesItsManifest),
     () => inProcess('frozen history 0000–0052 byte-for-byte', frozenHistoryIntact),
-    () => inProcess('P2-S9 creates no migration', phase2s9AddsNoMigration),
+    () => inProcess('Phase 2 migration prefix 0000–0052 intact (P2-S9, corrected)', phase2PrefixIntact),
     () => inProcess('no authoritative document contradicts the accepted state (RB-P2-02)', documentsAgreeWithReality),
 
     // Everything the Phase 1 release gate already proves: toolchain, manifest,

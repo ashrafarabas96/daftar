@@ -4,7 +4,7 @@
 >
 > **ما هذه الوثيقة.** سجل أدلة الشريحة P3-S1. قُبِلَت الشريحة وجُمِّدَت هجراتها `0053`–`0058`؛ من الآن لا تُعدَّل بايتاتها أبدًا وأي تصحيح يكون بهجرة جديدة. لا يوجد في هذه الشريحة أي جدول مخزون أو حركة أو شراء.
 
-## 0. Status: ACCEPTED / FROZEN — seal BLOCKED on `gate:phase2:release` (§6)
+## 0. Status: ACCEPTED / FROZEN — `gate:phase2:release` corrected (§6)
 
 - Tech Lead verdict: **P3-S1 — ACCEPTED, PASS**, at accepted head `f1cc4c47a43defa969d7beff7f1c795189eee1c1` (2026-09-26), on the evidence of `DAFTAR CI` **36223470804**, green on that exact SHA on all five jobs, attempt 1.
 - Freeze commit: `39e4ebc59d488b3d59b2136a38538e6de0d7b3b9` — `chore(phase3): freeze accepted P3-S1 migrations`, which appended `0053`–`0058` to `MIGRATION_MANIFEST.json` and moved `frozenThrough` to `0058_accounting_entry_date_guard.sql` (59 frozen migrations). The sealed head that carries this page and its exact-SHA CI run are recorded in PR #4 (a commit cannot contain its own hash).
@@ -121,7 +121,7 @@ An independent review ran against a real database migrated to `0058` and HTTP pr
 | Observation — MAC compared with `<>` in SQL | not measurable through a database round trip; left as is |
 | Observation — a merchant variant can be inserted beside a base variant by raw SQL | unreachable through the API; P3-S2 ambiguity A-29 |
 
-## 6. Seal status: BLOCKED on `gate:phase2:release`
+## 6. Seal: `gate:phase2:release` was BLOCKED, and was corrected
 
 The Tech Lead's seal directive requires `gate:phase2:release` to pass once the candidates are frozen, and says to stop BLOCKED, without weakening the gate, if it does not.
 
@@ -134,7 +134,11 @@ It does not. After the freeze its frozen-history check passes (59 frozen migrati
 PHASE 2 RELEASE GATE: FAIL — 4 pass, 1 fail
 ```
 
-The gate stops at that check, so none of its later steps runs on a Phase 3 tree. The gate is unchanged. The earlier reading in this section — that the failure came from the candidates being unfrozen — was only half right and is corrected here: freezing removes the `db-from-zero --release` refusal, not this one. How the gate should apply to a tree after Phase 2 is a Tech Lead decision.
+The gate stopped at that check, so none of its later steps ran on a Phase 3 tree. An earlier reading in this section — that the failure came from the candidates being unfrozen — was only half right: freezing removed the `db-from-zero --release` refusal, not this one. The seal was reported BLOCKED and the gate was left unchanged until the Tech Lead decided.
+
+**Correction (Tech Lead decision, 2026-09-26).** The root cause was accepted: "no migration may exist after `0052`" was valid only while P2-S9 closed Phase 2. Exactly that one check was replaced, with the historical invariant that must survive: *Phase 2 migrations `0000`–`0052` remain complete, ordered, immutable and byte-identical to the accepted Phase 2 prefix; later forward migrations are permitted.* It lives in `scripts/phase2-prefix.ts`, holds its own literal copy of the 53 accepted digests from `0f2b09e7`, names no migration after `0052`, and is proved in both directions by `tests/security/phase2-release-prefix.test.ts` (PASS: the prefix alone, the prefix plus `0053`–`0058`, a fixture-only `0059`; FAIL: a changed byte, a deleted, renamed or inserted file, a reordered or re-identified prefix, a changed expected digest, `frozenThrough` moved back). It passes on the accepted Phase 2 checkpoints `bf2eeda` and `0f2b09e7` and on the accepted P3-S1 head `f1cc4c4`. The full account is `docs/PHASE_2_S9_RELEASE.md` §5.3.
+
+The two guarantees stay separate: `gate:phase2:release` protects the Phase 2 prefix; `gate:phase3:s1` and the manifest check protect the full chain `0000`–`0058`. No migration, manifest entry, schema, grant, policy, API or application file changed. The exact-SHA CI and release-evidence runs of the corrected head are recorded in PR #4.
 
 ## 7. Not in P3-S1
 
@@ -142,4 +146,4 @@ No stock, movement, transfer, adjustment or purchase table, and no path that mov
 
 ## ملخص
 
-قبل القائد التقني الشريحة P3-S1 (PASS) عند `f1cc4c4`، وجُمِّدَت هجراتها `0053`–`0058` فأصبح حد التجميد `0058` (59 هجرة). الختم متوقف (BLOCKED): بوابة `gate:phase2:release` ما زالت تفشل بعد التجميد لأن فحصها «P2-S9 لا تنشئ هجرة» يرفض أي هجرة بعد `0052` مجمّدة كانت أو لا (§6)، ولم تُعدَّل البوابة. كل بند «يجب إثباته» في الخطة له اختبار دائم مذكور أعلاه، وبوابة `gate:phase3:s1` أصبحت بوابة انحدار دائمة لا تمنع الشريحة التالية. الديون TD-12 و TD-13 و TD-14 مفتوحة ومسجّلة، والقرار OD-03 (ضريبة الشراء) مفتوح. الشريحة التالية P3-S2 لم تبدأ وغير مصرّح بها.
+قبل القائد التقني الشريحة P3-S1 (PASS) عند `f1cc4c4`، وجُمِّدَت هجراتها `0053`–`0058` فأصبح حد التجميد `0058` (59 هجرة). توقّف الختم أولًا (BLOCKED) لأن فحص «P2-S9 لا تنشئ هجرة» في بوابة `gate:phase2:release` كان يرفض أي هجرة بعد `0052`. بقرار القائد التقني استُبدل هذا الفحص وحده بقاعدة ثبات بادئة المرحلة الثانية: الهجرات `0000`–`0052` تبقى كاملة ومرتبة ومطابقة بايتًا ببايت، والهجرات اللاحقة مسموحة (§6). لم تتغير أي هجرة. كل بند «يجب إثباته» في الخطة له اختبار دائم مذكور أعلاه، وبوابة `gate:phase3:s1` أصبحت بوابة انحدار دائمة لا تمنع الشريحة التالية. الديون TD-12 و TD-13 و TD-14 مفتوحة ومسجّلة، والقرار OD-03 (ضريبة الشراء) مفتوح. الشريحة التالية P3-S2 لم تبدأ وغير مصرّح بها.
