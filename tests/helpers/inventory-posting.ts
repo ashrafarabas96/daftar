@@ -19,6 +19,16 @@ import { mintDomainPostingAssertion, type AccountingAssertionMinter, type Postin
 import { adjustmentPostingCommand, openingPostingCommand } from '../../apps/api/src/modules/inventory/inventory-posting';
 import { adjustCommand, type CommandRow, must, type Queryable, runCommand, type S3Business, type S3Command } from './inventory-commands';
 import { mintTestAccountingAssertion } from './test-app';
+import {
+  openingBalanceFingerprintOf,
+  openingBalanceSnapshot,
+  positionPayload,
+  reversalFingerprintOf,
+  reversalFingerprintOfSnapshot,
+  sourceAssertion,
+  type PostLine,
+} from './accounting-posting';
+import { randomUUID } from 'node:crypto';
 
 /** The accounting minter the services are wired with, holding the test key. */
 export const testMinter: AccountingAssertionMinter = { mint: (claims) => mintTestAccountingAssertion(claims) };
@@ -184,4 +194,116 @@ export async function stockUp(
   lines: readonly { variantId: string; qty: string; unitCost: string }[],
 ): Promise<{ rows: CommandRow[]; entry: { entryId: string; created: boolean } | null; command: PostingCommand | null }> {
   return runFinancial(c, biz, await adjustCommand(c, biz, warehouseId, lines, { reason: 'seed stock' }));
+}
+
+// ── the accounting side the opening interacts with (A-14(c), T-08) ─────────
+
+/** A domestic ILS opening position line. */
+export function position(systemKey: string, side: 'D' | 'C', amount: bigint): PostLine {
+  return {
+    account: { kind: 'system', systemKey },
+    side,
+    baseAmountMinor: amount,
+    baseCurrency: 'ILS',
+    txnAmountMinor: amount,
+    txnCurrency: 'ILS',
+    fxRate: '1',
+    fxRateSource: 'base',
+    fxRateAt: new Date('2026-01-01T00:00:00Z'),
+    memo: null,
+  };
+}
+
+/**
+ * The P2-S4 opening-balance workflow, draft then post, in the CALLER's
+ * transaction as `daftar_app` under a genuine `post` assertion for
+ * `opening_balance` — exactly `postOpeningBalanceAs`, without its own
+ * connection.
+ */
+export async function postOpeningBalanceInTx(
+  c: Queryable,
+  biz: S3Business,
+  asOfDate: string,
+  positions: readonly PostLine[],
+): Promise<{ openingBalanceId: string; entryId: string }> {
+  const openingBalanceId = randomUUID();
+  const assertion = sourceAssertion({
+    actorUserId: biz.userId,
+    tenantId: biz.tenantId,
+    businessId: biz.businessId,
+    operationKind: 'post',
+    sourceType: 'opening_balance',
+    sourceId: openingBalanceId,
+    postingFingerprint: openingBalanceFingerprintOf({
+      tenantId: biz.tenantId,
+      businessId: biz.businessId,
+      openingBalanceId,
+      asOfDate,
+      baseCurrency: 'ILS',
+      positions,
+    }),
+  });
+  await c.query(`SELECT set_config('app.accounting_assertion', $1, true)`, [assertion]);
+  await c.query('SET LOCAL ROLE daftar_app');
+  await c.query(`SELECT accounting_open_balance_draft($1::date, $2::jsonb)`, [asOfDate, JSON.stringify(positionPayload(positions))]);
+  const r = await c.query<{ entry_id: string }>(`SELECT entry_id FROM accounting_open_balance_post($1::uuid, $2, $3)`, [
+    openingBalanceId,
+    'opening position',
+    randomUUID(),
+  ]);
+  await c.query('RESET ROLE');
+  return { openingBalanceId, entryId: must(r.rows[0], 'opening balance entry').entry_id };
+}
+
+/** The generic reversal primitive, as `daftar_app` in the caller's transaction, under a `reverse` assertion over `fingerprint`. */
+export async function reverseInTx(c: Queryable, biz: S3Business, originalEntryId: string, entryDate: string, fingerprint: string): Promise<string> {
+  const assertion = sourceAssertion({
+    actorUserId: biz.userId,
+    tenantId: biz.tenantId,
+    businessId: biz.businessId,
+    operationKind: 'reverse',
+    sourceType: 'reversal',
+    sourceId: originalEntryId,
+    postingFingerprint: fingerprint,
+  });
+  await c.query(`SELECT set_config('app.accounting_assertion', $1, true)`, [assertion]);
+  await c.query('SET LOCAL ROLE daftar_app');
+  const r = await c.query<{ entry_id: string }>(`SELECT entry_id FROM accounting_post_reversal($1::uuid, $2::date, $3, $4)`, [
+    originalEntryId,
+    entryDate,
+    'a test reversal',
+    randomUUID(),
+  ]);
+  await c.query('RESET ROLE');
+  return must(r.rows[0], 'reversal entry').entry_id;
+}
+
+/** The fingerprint a reversal of an opening balance's entry signs. */
+export function openingBalanceReversalFingerprint(
+  biz: S3Business,
+  entryId: string,
+  asOfDate: string,
+  positions: readonly PostLine[],
+  entryDate: string,
+): string {
+  return reversalFingerprintOfSnapshot(
+    openingBalanceSnapshot({ entryId, tenantId: biz.tenantId, businessId: biz.businessId, asOfDate, baseCurrency: 'ILS', positions }),
+    entryDate,
+  );
+}
+
+/** The fingerprint a reversal of a domain entry posted from `command` would sign. */
+export function domainReversalFingerprint(command: PostingCommand, entryId: string, entryDate: string): string {
+  return reversalFingerprintOf(
+    {
+      tenantId: command.tenantId,
+      businessId: command.businessId,
+      sourceType: command.sourceType,
+      sourceId: command.sourceId,
+      entryDate: command.entryDate,
+      lines: command.lines.map((l) => ({ ...l, memo: l.memo ?? null })),
+    },
+    entryId,
+    entryDate,
+  );
 }
