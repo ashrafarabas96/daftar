@@ -521,6 +521,11 @@ describe('golden: engine shapes prove representability without creating the doma
    * authorized slice creates on purpose is not, and a permanent regression
    * that forbade its successor would stop the project. Nothing else moved,
    * and no shape above posts into a period.
+   *
+   * P3-S4 (0063/0064): `suppliers` came off the same way, when P3-S4 created
+   * it under its own contract (docs/PHASE_3_S4_CONTRACT.md §7.3 row 6, A-11).
+   * No shape above names a supplier. `supplier_credit_notes` and
+   * `supplier_refunds` stay forbidden: no slice has authorized them yet.
    */
   it('not one operational table was created to express any of the shapes above', async () => {
     const forbidden = [
@@ -531,7 +536,6 @@ describe('golden: engine shapes prove representability without creating the doma
       'refunds',
       'credit_notes',
       'customer_credits',
-      'suppliers',
       'supplier_credit_notes',
       'supplier_refunds',
       'inventory_movements',
@@ -546,11 +550,21 @@ describe('golden: engine shapes prove representability without creating the doma
     expect(present).toEqual([]);
   });
 
-  it('every shape used the generic internal source identity, and the source registry holds exactly the three native types followed by the two P3-S3 inventory types', async () => {
+  it('every shape used the generic internal source identity, and the source registry holds exactly the three native types followed by the two P3-S3 inventory types and the two P3-S4 purchase types', async () => {
     // The engine shapes created no domain source type. The only additions
     // after the native three are P3-S3's (0061, contract A-14(e)), in order.
+    // P3-S4 (0063/0064): then P3-S4's two (0063, contract A-05), in order.
     const types = (await ownerPool().query<{ t: string }>(`SELECT source_type AS t FROM accounting_source_types ORDER BY sort_order`)).rows.map((r) => r.t);
-    expect(types).toEqual(['opening_balance', 'manual_adjustment', 'reversal', 'inventory_adjustment', 'inventory_opening']);
+    expect(types).toEqual([
+      'opening_balance',
+      'manual_adjustment',
+      'reversal',
+      'inventory_adjustment',
+      'inventory_opening',
+      // P3-S4 (0063/0064)
+      'purchase',
+      'negative_inventory_cost_adjustment',
+    ]);
     const used = (
       await ownerPool().query<{ t: string }>(`SELECT DISTINCT source_type AS t FROM journal_entries WHERE business_id = $1`, [must(fx).businessId])
     ).rows.map((r) => r.t);

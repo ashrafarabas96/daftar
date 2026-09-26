@@ -331,7 +331,8 @@ describe('RLS is real on the ledger', () => {
     // headers the accounting completeness triggers read (0061, contract A-18:
     // SELECT on inventory_adjustments, stocktakes and inventory_openings). The
     // list is asserted whole so a policy appearing on a table nobody reviewed
-    // fails here.
+    // fails here. P3-S4 (0063/0064, contract A-14(d)): plus the two S4 posting
+    // headers, purchases and negative_inventory_cost_adjustments.
     expect(rows.map((r) => r.tablename)).toEqual([
       'accounting_fx_rates',
       'accounting_manual_adjustments',
@@ -343,13 +344,23 @@ describe('RLS is real on the ledger', () => {
       'inventory_openings',
       'journal_entries',
       'journal_lines',
+      // P3-S4 (0063/0064)
+      'negative_inventory_cost_adjustments',
+      'purchases',
       'stocktakes',
     ]);
     // The accounting tables name the one identity in the predicate; the three
     // P3-S3 headers name it as the policy's only role (0061 uses the
     // stock_movements layering, `FOR SELECT TO daftar_accounting_internal
     // USING (true)`). Either way exactly one identity is admitted, read-only.
-    const S3_HEADERS = ['inventory_adjustments', 'inventory_openings', 'stocktakes'];
+    const S3_HEADERS = [
+      'inventory_adjustments',
+      'inventory_openings',
+      'stocktakes',
+      // P3-S4 (0063/0064): the two S4 headers use the same layering.
+      'negative_inventory_cost_adjustments',
+      'purchases',
+    ];
     for (const row of rows) {
       expect(row.cmd, row.tablename).toBe('SELECT');
       if (S3_HEADERS.includes(row.tablename)) {

@@ -377,7 +377,7 @@ describe('T-01.6/7/9 the grant matrix (A-18)', () => {
 });
 
 describe('the migration end state holds', () => {
-  it('the source-guard gap report is empty and the registries are exactly S1 + S3', async () => {
+  it('the source-guard gap report is empty and the registries are exactly S1 + S3 (P3-S4: + S4)', async () => {
     const q = ownerPool();
     expect((await q.query(`SELECT * FROM inventory_stock_source_guard_gaps()`)).rows).toEqual([]);
     const kinds = (await q.query<{ op_code: string }>(`SELECT op_code FROM inventory_operation_kinds ORDER BY op_code`)).rows.map((r) => r.op_code);
@@ -387,6 +387,14 @@ describe('the migration end state holds', () => {
         'inventory.configure_product',
         'structure.associate_warehouse_branch',
         'structure.dissociate_warehouse_branch',
+        // P3-S4 (0063/0064): the seven S4 operation kinds (0064, contract A-03).
+        'supplier.create',
+        'supplier.update',
+        'supplier.archive',
+        'supplier.reactivate',
+        'purchase.draft',
+        'purchase.cancel',
+        'purchase.receive',
       ].sort(),
     );
     const maps = (await q.query<{ m: string }>(`SELECT op_code || '→' || movement_kind AS m FROM inventory_operation_movement_kinds ORDER BY 1`)).rows.map(
@@ -400,6 +408,9 @@ describe('the migration end state holds', () => {
         'inventory.stocktake_finalize→stocktake',
         'inventory.transfer→transfer_in',
         'inventory.transfer→transfer_out',
+        // P3-S4 (0063/0064): the receipt's two op→kind rows (0064, contract §2.5).
+        'purchase.receive→purchase',
+        'purchase.receive→negative_inventory_cost_adjustment',
       ].sort(),
     );
   });
