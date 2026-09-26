@@ -336,7 +336,7 @@ It never recomputes a value (L:1370).
   - It then calls the accounting-owned read `accounting_inventory_opening_position(v_business)` (A-14(d)). That returns the **posted** opening balance's id and the net `Σ debit − Σ credit` over its lines that resolve to the business's `inventory` system account, whether referenced by `system` key or by the `code` of that account (`0047:131-196`). It returns zero rows when there is no posted row or no such line.
   - The result must equal the bound `(opening_balance_id, position_minor)`, else `inventory.opening_case_changed` (409, retryable).
 - **Case A** (no position): the opening posts `Dr inventory` per warehouse / `Cr opening_equity` through seam 2 when T > 0 (A-05), or through seam 1 with no entry when T = 0. `binding_source_id = id` iff T > 0.
-- **Case B** (a position P exists): T must equal P, else `inventory.opening_valuation_mismatch`.
+- **Case B** (a position P exists): T must equal P, else `inventory.opening_valuation_mismatch`. **Amended (review F4):** the refusal carries the code only, never P or T. **Amended (review F1):** an opening balance whose entry appears in `accounting_reversals` has no position, so a Case B opening can never bind a reversed balance (`inventory.opening_case_changed` when it would).
   - The message carries both totals, and the service pre-check returns them as typed details `{ stockTotalMinor, openingPositionMinor }` (L:716-719).
   - Movements are written only after equality holds (L:719).
   - No entry is written (L:720). `opening_balance_id` and `matched_amount_base_minor = P` are recorded on the header and in the audit row (L:720).
@@ -366,6 +366,7 @@ Refusals: `accounting.inventory_detail_missing` and `accounting.inventory_entry_
 **(c) Opening-balance guard.** `accounting_opening_balances_30_inventory_opening_guard` is `BEFORE UPDATE OF status ON accounting_opening_balances`. It takes the same advisory lock as A-13, then:
 - on `draft → posted`, when the new position has an `inventory` line **and** a posted Case A inventory opening exists, it refuses with `accounting.opening_balance_inventory_conflict`. Otherwise Inventory would be counted twice: once by the Case A entry and once by the opening balance.
 - on `posted → superseded`, when a posted Case B inventory opening is bound to this row, it refuses with `accounting.opening_balance_inventory_bound`. Otherwise the stock would stay decomposed against an amount the ledger no longer holds.
+- **Amended (review F1, R-13).** The reversal guard also refuses reversing the entry of an opening balance that a posted Case B inventory opening is bound to (`accounting.opening_balance_inventory_bound`), since the reversal, not the supersede, is where the ledger stops holding the amount. Both sides lock the opening-balance row (the guard `FOR NO KEY UPDATE`, the position read `FOR SHARE` after the R-1 key); the advisory key is not taken inside the guard because the frozen reversal path already holds `businesses` and that order would deadlock (proven). The global lock order is written in the 0061 R-13 header.
 
 No state it guards can exist before S3.
 
@@ -574,7 +575,7 @@ Permissions come from the one registry, `packages/domain-core/src/permissions.ts
 | `PUT stocktakes/:stocktakeId/counts` | `inventory.stocktake` | `inventory.stocktake_count` | 1 | 200 |
 | `POST stocktakes/:stocktakeId/finalize` | `inventory.stocktake` | `inventory.stocktake_finalize` (`outcome: finalized`) | 2 or 1 | 200 |
 | `POST stocktakes/:stocktakeId/cancel` | `inventory.stocktake` | `inventory.stocktake_finalize` (`outcome: cancelled`) | 1 | 200 |
-| `POST openings` | `inventory.adjust` | `inventory.opening` | Case A (T > 0): 2; else 1 | 201; 200 replay |
+| `POST openings` | `inventory.adjust`, **business-wide scope** (review F4: an opening posts to opening equity and reads an accounting position; an assigned-scope actor gets 403 `inventory.business_wide_scope_required`) | `inventory.opening` | Case A (T > 0): 2; else 1 | 201; 200 replay |
 
 - **The route guard** refuses before the body is parsed, as in `inventory-configuration.controller.ts:22-31`. The service then runs `InventoryAuthorizationService.authorize` (`inventory-authorization.ts:89-116`) with the op code and **every** affected warehouse. `OPERATION_AUTHORITY` (`:24-28`) gains the seven entries, all `scope: 'warehouses'`.
 - **The trace id** is minted once at the controller (`newBusinessTransactionId()`, P3-AL-35).
@@ -792,7 +793,7 @@ Everything else keeps its current class.
 | `inventory.insufficient_stock` | primitive (`0060:376-393`) | 409 | no |
 | `inventory.unit_cost_required` | adjust (qty > 0), finalize (no average); the service pre-check lists `variantId`s | 400 | no |
 | `inventory.unit_cost_not_applicable` | finalize (an average exists) | 400 | no |
-| `inventory.opening_valuation_mismatch` | opening Case B; the service pre-check adds `{stockTotalMinor, openingPositionMinor}` | 409 | no |
+| `inventory.opening_valuation_mismatch` | opening Case B; code only, no amounts in details (review F4) | 409 | no |
 | `inventory.opening_already_posted` | opening; partial unique index | 409 | no |
 | `inventory.opening_state_invalid` | header guard (supersede, B-1) | 409 | no |
 | `inventory.stocktake_already_open` / `_state_invalid` / `_empty` / `_not_found` | stocktake routines | 409/409/400/404 | no |
@@ -923,7 +924,7 @@ All test files are **new**. The only exceptions are the evolved predecessor test
 - **T-08 · Opening, `tests/integration/inventory-opening.test.ts`.**
   1. **Case A:** entry `Dr 1200` per warehouse / `Cr 3000`, and shares Σ = T. The allocation vectors are reproduced in SQL.
   2. **Case B exact:** no entry (**counted before and after**, P:198), `opening_balance_id` and the matched amount recorded in the header and audit.
-  3. **Case B off by ±1 minor:** `opening_valuation_mismatch` with both totals in the details, and **no** movement, header or entry (counted, P:197).
+  3. **Case B off by ±1 minor:** `opening_valuation_mismatch` with the code only and no amounts in the details (review F4), and **no** movement, header or entry (counted, P:197).
   4. A second posted opening is refused.
   5. A race: the opening balance is posted with an inventory line between the service read and the routine, giving `opening_case_changed`.
   6. The A-14(c) guard: an opening balance with an inventory line posted after Case A gives `accounting.opening_balance_inventory_conflict`. Superseding a Case-B-bound opening balance gives `accounting.opening_balance_inventory_bound`.
