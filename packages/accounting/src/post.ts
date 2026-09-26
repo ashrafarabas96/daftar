@@ -190,6 +190,15 @@ export interface AuthorizedPostingContext {
  */
 export const NATIVE_SOURCE_TYPES = ['manual_adjustment', 'reversal', 'opening_balance'] as const;
 
+/**
+ * The source types a DOMAIN command owns (P3-AL-33; PHASE_3_S3_CONTRACT A-05,
+ * TL-10). Each is posted only inside the domain's own transaction, next to
+ * the source document its completeness trigger requires, through
+ * `mintDomainPostingAssertion` (`domain-posting.ts`); none of them may be
+ * posted through `post`. Later slices extend this list with their own.
+ */
+export const DOMAIN_SOURCE_TYPES = ['inventory_adjustment', 'inventory_opening'] as const;
+
 export class AccountingEngine {
   constructor(
     private readonly minter: AccountingAssertionMinter,
@@ -219,6 +228,22 @@ export class AccountingEngine {
       throw new AccountingError(
         'accounting.assertion_wrong_source',
         `${command.sourceType} entries are posted through their own command, not the generic posting entry point`,
+        {
+          businessId: command.businessId,
+          sourceType: command.sourceType,
+          sourceId: command.sourceId,
+        },
+      );
+    }
+    // The same reasoning for a domain-owned source (TL-10): an inventory
+    // adjustment's entry exists only beside the inventory document that
+    // produced it, in the inventory command's own transaction. The deferred
+    // completeness trigger refuses an orphan at COMMIT whoever wrote it; this
+    // turns that into a typed refusal before anything is minted.
+    if ((DOMAIN_SOURCE_TYPES as readonly string[]).includes(command.sourceType)) {
+      throw new AccountingError(
+        'accounting.assertion_wrong_source',
+        `${command.sourceType} entries are posted by their domain command, not the generic posting entry point`,
         {
           businessId: command.businessId,
           sourceType: command.sourceType,

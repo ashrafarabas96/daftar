@@ -207,7 +207,7 @@ describe('invpl/1 — refusals of non-canonical input (never normalized)', () =>
     expectRefused(() => canonicalInventoryPayload('structure.associate_warehouse_branch', T, B, [{ kind: 'uuid', value: W }, { kind: 'null' }]));
   });
 
-  it.each(['inventory.transfer', 'inventory.write', 'inventory.execute', '*', 'inventory:configure_product', 'INVENTORY.CONFIGURE_PRODUCT', ''])(
+  it.each(['inventory.teleport', 'inventory.write', 'inventory.execute', '*', 'inventory:configure_product', 'INVENTORY.CONFIGURE_PRODUCT', ''])(
     'refuses the unregistered operation code %j',
     (opCode) => {
       expect(isInventoryOperationCode(opCode)).toBe(false);
@@ -215,13 +215,37 @@ describe('invpl/1 — refusals of non-canonical input (never normalized)', () =>
     },
   );
 
-  it('registers exactly the three P3-S1 operation kinds', () => {
+  // PHASE_3_S3_CONTRACT A-20 row 7: the three P3-S1 kinds with their accepted
+  // schemas unchanged, plus exactly the seven P3-S3 kinds and nothing else.
+  it('registers exactly the three P3-S1 operation kinds and the seven P3-S3 kinds', () => {
     expect([...INVENTORY_OPERATION_CODES].sort()).toEqual([
+      'inventory.adjust',
       'inventory.configure_product',
+      'inventory.damage',
+      'inventory.opening',
+      'inventory.stocktake_count',
+      'inventory.stocktake_finalize',
+      'inventory.stocktake_open',
+      'inventory.transfer',
       'structure.associate_warehouse_branch',
       'structure.dissociate_warehouse_branch',
     ]);
     expect(Object.keys(INVENTORY_PAYLOAD_SCHEMAS).sort()).toEqual([...INVENTORY_OPERATION_CODES].sort());
+    const s1 = (op: InventoryOperationCode) => INVENTORY_PAYLOAD_SCHEMAS[op].map((f) => [f.name, f.type, f.nullable]);
+    expect(s1('inventory.configure_product')).toEqual([
+      ['product_id', 'uuid', false],
+      ['track_inventory', 'boolean', false],
+      ['unit_code', 'code', true],
+      ['unit_decimals', 'integer', true],
+    ]);
+    for (const op of ['structure.associate_warehouse_branch', 'structure.dissociate_warehouse_branch'] as const) {
+      expect(s1(op)).toEqual([
+        ['warehouse_id', 'uuid', false],
+        ['branch_id', 'uuid', false],
+      ]);
+      expect(INVENTORY_PAYLOAD_SCHEMAS[op].repeat).toBeUndefined();
+    }
+    expect(INVENTORY_PAYLOAD_SCHEMAS['inventory.configure_product'].repeat).toBeUndefined();
   });
 });
 

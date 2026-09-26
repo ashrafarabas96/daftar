@@ -172,7 +172,7 @@ describe('invctl/1 — the minter refuses non-canonical claims instead of normal
     ['short digest', { payloadSha256: 'a'.repeat(63) }],
     ['uppercase jti', { jti: JTI.toUpperCase() }],
     ['malformed jti', { jti: 'jti' }],
-    ['unregistered op', { opCode: 'inventory.transfer' as InventoryOperationCode }],
+    ['unregistered op', { opCode: 'inventory.teleport' as InventoryOperationCode }],
     ['wildcard op', { opCode: '*' as InventoryOperationCode }],
     ['wire-form op', { opCode: 'inventory:configure_product' as InventoryOperationCode }],
   ])('refuses a %s', (_label, patch) => {
@@ -200,7 +200,7 @@ describe('invctl/1 — operation codes on the wire (§E)', () => {
   });
 
   it.each([
-    'inventory:transfer',
+    'inventory:teleport',
     'inventory:write',
     'Inventory:configure_product',
     'inventory.configure_product',
@@ -212,7 +212,7 @@ describe('invctl/1 — operation codes on the wire (§E)', () => {
   });
 
   it('refuses to put an unregistered op_code on the wire', () => {
-    expectMalformed(() => wireOperationCode('inventory.transfer' as InventoryOperationCode));
+    expectMalformed(() => wireOperationCode('inventory.teleport' as InventoryOperationCode));
   });
 });
 

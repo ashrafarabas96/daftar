@@ -39,13 +39,42 @@ import { InventoryError } from './errors';
  * their own kinds together with the routine that consumes them; a kind listed
  * here without a routine would be an authority nothing refuses.
  */
-export type InventoryOperationCode = 'inventory.configure_product' | 'structure.associate_warehouse_branch' | 'structure.dissociate_warehouse_branch';
+export type InventoryS1OperationCode = 'inventory.configure_product' | 'structure.associate_warehouse_branch' | 'structure.dissociate_warehouse_branch';
 
-export const INVENTORY_OPERATION_CODES: readonly InventoryOperationCode[] = [
+/**
+ * The seven operation kinds P3-S3 registers (L:1912-1922; PHASE_3_S3_CONTRACT
+ * A-01, §2.5), one per entry routine of `0062`. Stocktake cancel is the
+ * `cancelled` outcome of `inventory.stocktake_finalize`, never an eighth kind
+ * (A-11, TL-3).
+ */
+export type InventoryS3OperationCode =
+  | 'inventory.transfer'
+  | 'inventory.adjust'
+  | 'inventory.damage'
+  | 'inventory.stocktake_open'
+  | 'inventory.stocktake_count'
+  | 'inventory.stocktake_finalize'
+  | 'inventory.opening';
+
+export type InventoryOperationCode = InventoryS1OperationCode | InventoryS3OperationCode;
+
+export const INVENTORY_S1_OPERATION_CODES: readonly InventoryS1OperationCode[] = [
   'inventory.configure_product',
   'structure.associate_warehouse_branch',
   'structure.dissociate_warehouse_branch',
 ];
+
+export const INVENTORY_S3_OPERATION_CODES: readonly InventoryS3OperationCode[] = [
+  'inventory.transfer',
+  'inventory.adjust',
+  'inventory.damage',
+  'inventory.stocktake_open',
+  'inventory.stocktake_count',
+  'inventory.stocktake_finalize',
+  'inventory.opening',
+];
+
+export const INVENTORY_OPERATION_CODES: readonly InventoryOperationCode[] = [...INVENTORY_S1_OPERATION_CODES, ...INVENTORY_S3_OPERATION_CODES];
 
 /** The literal first line of every stream. */
 export const INVPL_DOMAIN = 'invpl/1';
@@ -81,10 +110,45 @@ export interface InventoryPayloadFieldSpec {
 }
 
 /**
- * Field order per operation kind (P3-AL-55 §F, P3-S1 table). The SQL
- * canonicalizer takes the routine's arguments in exactly this order.
+ * A variable number of lines (PHASE_3_S3_CONTRACT A-09): the group of
+ * `fields` repeats once per line, AFTER the whole header, as many times as
+ * the header field `countField` says. Every group has a fixed width, so the
+ * stream stays unambiguous under the locked four-type grammar.
  */
-export const INVENTORY_PAYLOAD_SCHEMAS: Readonly<Record<InventoryOperationCode, readonly InventoryPayloadFieldSpec[]>> = {
+export interface InventoryPayloadRepeat {
+  readonly countField: string;
+  readonly fields: readonly InventoryPayloadFieldSpec[];
+}
+
+/**
+ * The schema of one operation kind: the fixed header field list, in stream
+ * order, plus — for a P3-S3 kind that carries lines — the repeating group
+ * that follows it. A P3-S1 schema is a header and nothing else, exactly as it
+ * was accepted.
+ */
+export type InventoryPayloadSchema = readonly InventoryPayloadFieldSpec[] & { readonly repeat?: InventoryPayloadRepeat };
+
+const spec = (name: string, type: InventoryPayloadFieldType, nullable = false): InventoryPayloadFieldSpec => Object.freeze({ name, type, nullable });
+
+/** Eight unsigned 32-bit words of the reason's SHA-256 (A-09, TL-4). */
+const REASON_WORDS: readonly InventoryPayloadFieldSpec[] = Array.from({ length: 8 }, (_, i) => spec(`reason_w${i + 1}`, 'integer'));
+
+function withLines(header: readonly InventoryPayloadFieldSpec[], lineFields: readonly InventoryPayloadFieldSpec[]): InventoryPayloadSchema {
+  const repeat: InventoryPayloadRepeat = Object.freeze({ countField: 'line_count', fields: Object.freeze([...lineFields]) });
+  return Object.freeze(Object.assign([...header], { repeat }));
+}
+
+/**
+ * Field order per operation kind (P3-AL-55 §F, P3-S1 table; PHASE_3_S3_CONTRACT
+ * A-09 for the seven P3-S3 kinds). The SQL canonicalizer takes the routine's
+ * arguments in exactly this order.
+ *
+ * A P3-S3 quantity or cost travels as its exact fixed-point integer — `_q4`
+ * is a quantity × 10^4, `_c10` a unit cost × 10^10 — a value as signed minor
+ * units, a date as the integer `YYYYMMDD` and a reason as the eight words of
+ * its SHA-256. The grammar keeps its four types; no new type exists.
+ */
+export const INVENTORY_PAYLOAD_SCHEMAS: Readonly<Record<InventoryOperationCode, InventoryPayloadSchema>> = {
   'inventory.configure_product': [
     { name: 'product_id', type: 'uuid', nullable: false },
     { name: 'track_inventory', type: 'boolean', nullable: false },
@@ -99,7 +163,55 @@ export const INVENTORY_PAYLOAD_SCHEMAS: Readonly<Record<InventoryOperationCode, 
     { name: 'warehouse_id', type: 'uuid', nullable: false },
     { name: 'branch_id', type: 'uuid', nullable: false },
   ],
+  'inventory.transfer': withLines(
+    [spec('transfer_id', 'uuid'), spec('source_warehouse_id', 'uuid'), spec('destination_warehouse_id', 'uuid'), spec('line_count', 'integer')],
+    [spec('variant_id', 'uuid'), spec('qty_q4', 'integer')],
+  ),
+  'inventory.adjust': withLines(
+    [spec('adjustment_id', 'uuid'), spec('warehouse_id', 'uuid'), spec('occurred_on', 'integer'), ...REASON_WORDS, spec('line_count', 'integer')],
+    [spec('variant_id', 'uuid'), spec('qty_delta_q4', 'integer'), spec('unit_cost_c10', 'integer', true), spec('expected_value', 'integer')],
+  ),
+  'inventory.damage': withLines(
+    [spec('adjustment_id', 'uuid'), spec('warehouse_id', 'uuid'), spec('occurred_on', 'integer'), ...REASON_WORDS, spec('line_count', 'integer')],
+    [spec('variant_id', 'uuid'), spec('qty_q4', 'integer'), spec('expected_value', 'integer')],
+  ),
+  'inventory.stocktake_open': Object.freeze([spec('stocktake_id', 'uuid'), spec('warehouse_id', 'uuid')]),
+  'inventory.stocktake_count': withLines(
+    [spec('stocktake_id', 'uuid'), spec('warehouse_id', 'uuid'), spec('line_count', 'integer')],
+    [spec('variant_id', 'uuid'), spec('counted_q4', 'integer')],
+  ),
+  'inventory.stocktake_finalize': withLines(
+    [spec('stocktake_id', 'uuid'), spec('warehouse_id', 'uuid'), spec('outcome', 'code'), spec('occurred_on', 'integer', true), spec('line_count', 'integer')],
+    [spec('variant_id', 'uuid'), spec('variance_q4', 'integer'), spec('unit_cost_c10', 'integer', true), spec('expected_value', 'integer')],
+  ),
+  'inventory.opening': withLines(
+    [
+      spec('opening_id', 'uuid'),
+      spec('occurred_on', 'integer'),
+      spec('opening_balance_id', 'uuid', true),
+      spec('position_minor', 'integer', true),
+      spec('line_count', 'integer'),
+    ],
+    [spec('warehouse_id', 'uuid'), spec('variant_id', 'uuid'), spec('qty_q4', 'integer'), spec('unit_cost_c10', 'integer')],
+  ),
 };
+
+/**
+ * The server-derived fields (PHASE_3_S3_CONTRACT A-10(b)). The intent digest
+ * — the idempotency proof a document header stores — is the `invpl/1` digest
+ * of every OTHER field: what the client asked for, never what the server
+ * computed from current state, and never a clock value.
+ */
+export const INVENTORY_SERVER_DERIVED_FIELDS: readonly string[] = ['expected_value', 'opening_balance_id', 'position_minor', 'variance_q4'];
+
+/** The intent schema of an operation kind: its schema with the server-derived fields removed, header and group alike. */
+export function inventoryIntentSchema(opCode: InventoryOperationCode): InventoryPayloadSchema {
+  if (!isInventoryOperationCode(opCode)) refuse('names an unregistered operation kind');
+  const schema = INVENTORY_PAYLOAD_SCHEMAS[opCode];
+  const keep = (s: InventoryPayloadFieldSpec): boolean => !INVENTORY_SERVER_DERIVED_FIELDS.includes(s.name);
+  const header = schema.filter(keep);
+  return schema.repeat === undefined ? Object.freeze(header) : withLines(header, schema.repeat.fields.filter(keep));
+}
 
 /** A canonicalized payload: the operation it is for, its exact bytes and their digest. */
 export interface InventoryPayload {
@@ -144,14 +256,17 @@ function encodeCode(value: unknown, what: string): string {
   return value as string;
 }
 
-/** The bytes of one field line, without its terminating LF. */
-function encodeField(field: InventoryPayloadField, spec: InventoryPayloadFieldSpec, index: number): Buffer {
-  const what = `field ${index + 1} (${spec.name})`;
+/**
+ * The bytes of one field line, without its terminating LF. Exported for the
+ * P3-S3 builders, so every stream has exactly one encoder.
+ */
+export function encodeInventoryField(field: InventoryPayloadField, fieldSpec: InventoryPayloadFieldSpec, index: number): Buffer {
+  const what = `field ${index + 1} (${fieldSpec.name})`;
   if (field.kind === 'null') {
-    if (!spec.nullable) refuse(`${what} may not be NULL`);
+    if (!fieldSpec.nullable) refuse(`${what} may not be NULL`);
     return Buffer.from([NUL]);
   }
-  if (field.kind !== spec.type) refuse(`${what} must be of type ${spec.type}`);
+  if (field.kind !== fieldSpec.type) refuse(`${what} must be of type ${fieldSpec.type}`);
   switch (field.kind) {
     case 'uuid':
       return Buffer.from(encodeUuid(field.value, what), 'ascii');
@@ -179,8 +294,65 @@ export function canonicalInventoryPayload(
   fields: readonly InventoryPayloadField[],
 ): Buffer {
   if (!isInventoryOperationCode(opCode) || !OPERATION_CODE_RE.test(opCode)) refuse('names an unregistered operation kind');
-  const schema = INVENTORY_PAYLOAD_SCHEMAS[opCode];
-  if (fields.length !== schema.length) refuse(`for ${opCode} requires exactly ${schema.length} fields`);
+  return canonicalStream(opCode, tenantId, businessId, INVENTORY_PAYLOAD_SCHEMAS[opCode], fields);
+}
+
+/**
+ * The `invpl/1` stream of a command's INTENT (PHASE_3_S3_CONTRACT A-10(b)):
+ * the same encoder, op code, tenant and business, over the fields of
+ * `inventoryIntentSchema(opCode)`. It is the idempotency proof a document
+ * header stores, and never an assertion digest.
+ */
+export function canonicalInventoryIntent(
+  opCode: InventoryOperationCode,
+  tenantId: string,
+  businessId: string,
+  fields: readonly InventoryPayloadField[],
+): Buffer {
+  if (!isInventoryOperationCode(opCode) || !OPERATION_CODE_RE.test(opCode)) refuse('names an unregistered operation kind');
+  return canonicalStream(opCode, tenantId, businessId, inventoryIntentSchema(opCode), fields);
+}
+
+/**
+ * The spec of every field of the stream, in order: the header, then the
+ * repeating group as many times as its count field says. A count that does
+ * not match the number of fields supplied is refused, never trusted.
+ */
+function expandSchema(
+  opCode: InventoryOperationCode,
+  schema: InventoryPayloadSchema,
+  fields: readonly InventoryPayloadField[],
+): readonly InventoryPayloadFieldSpec[] {
+  const repeat = schema.repeat;
+  if (repeat === undefined) {
+    if (fields.length !== schema.length) refuse(`for ${opCode} requires exactly ${schema.length} fields`);
+    return schema;
+  }
+  const at = schema.findIndex((s) => s.name === repeat.countField);
+  const countSpec = schema[at];
+  if (countSpec === undefined || countSpec.type !== 'integer' || countSpec.nullable || repeat.fields.length === 0) {
+    return refuse(`schema for ${opCode} has a malformed repeating group`);
+  }
+  const countField = fields[at];
+  if (countField === undefined || countField.kind !== 'integer') return refuse(`field ${at + 1} (${repeat.countField}) must be an integer`);
+  const count = BigInt(encodeInteger(countField.value, `field ${at + 1} (${repeat.countField})`));
+  if (count < 0n) refuse(`field ${at + 1} (${repeat.countField}) may not be negative`);
+  if (BigInt(fields.length) !== BigInt(schema.length) + count * BigInt(repeat.fields.length)) {
+    refuse(`for ${opCode} requires ${schema.length} header fields plus ${repeat.fields.length} per line`);
+  }
+  const out: InventoryPayloadFieldSpec[] = [...schema];
+  for (let i = 0n; i < count; i += 1n) out.push(...repeat.fields);
+  return out;
+}
+
+function canonicalStream(
+  opCode: InventoryOperationCode,
+  tenantId: string,
+  businessId: string,
+  schema: InventoryPayloadSchema,
+  fields: readonly InventoryPayloadField[],
+): Buffer {
+  const specs = expandSchema(opCode, schema, fields);
 
   const lines: Buffer[] = [
     Buffer.from(INVPL_DOMAIN, 'ascii'),
@@ -188,9 +360,9 @@ export function canonicalInventoryPayload(
     Buffer.from(encodeUuid(tenantId, 'tenant'), 'ascii'),
     Buffer.from(encodeUuid(businessId, 'business'), 'ascii'),
   ];
-  schema.forEach((spec, i) => {
+  specs.forEach((s, i) => {
     const field = fields[i] ?? refuse(`field ${i + 1} is missing`);
-    lines.push(encodeField(field, spec, i));
+    lines.push(encodeInventoryField(field, s, i));
   });
 
   // §F: no line may contain LF, and only a NULL line may contain NUL — and
@@ -214,7 +386,20 @@ export function inventoryPayloadSha256(opCode: InventoryOperationCode, tenantId:
     .digest('hex');
 }
 
-function build(opCode: InventoryOperationCode, tenantId: string, businessId: string, fields: readonly InventoryPayloadField[]): InventoryPayload {
+/** Lowercase hex SHA-256 of the intent stream (`canonicalInventoryIntent`): the value a document header stores as `intent_sha256`. */
+export function inventoryIntentSha256(opCode: InventoryOperationCode, tenantId: string, businessId: string, fields: readonly InventoryPayloadField[]): string {
+  return createHash('sha256')
+    .update(canonicalInventoryIntent(opCode, tenantId, businessId, fields))
+    .digest('hex');
+}
+
+/** The canonical bytes and digest of one command (`canonicalInventoryPayload` then SHA-256). */
+export function buildInventoryPayload(
+  opCode: InventoryOperationCode,
+  tenantId: string,
+  businessId: string,
+  fields: readonly InventoryPayloadField[],
+): InventoryPayload {
   const bytes = canonicalInventoryPayload(opCode, tenantId, businessId, fields);
   return { opCode, bytes, sha256: createHash('sha256').update(bytes).digest('hex') };
 }
@@ -239,7 +424,7 @@ export interface WarehouseBranchPayloadInput {
 
 /** `inventory.configure_product`: product_id, track_inventory, unit_code, unit_decimals. */
 export function configureProductPayload(input: ConfigureProductPayloadInput): InventoryPayload {
-  return build('inventory.configure_product', input.tenantId, input.businessId, [
+  return buildInventoryPayload('inventory.configure_product', input.tenantId, input.businessId, [
     { kind: 'uuid', value: input.productId },
     { kind: 'boolean', value: input.trackInventory },
     input.unitCode === null ? { kind: 'null' } : { kind: 'code', value: input.unitCode },
@@ -249,7 +434,7 @@ export function configureProductPayload(input: ConfigureProductPayloadInput): In
 
 /** `structure.associate_warehouse_branch`: warehouse_id, branch_id. */
 export function associateWarehouseBranchPayload(input: WarehouseBranchPayloadInput): InventoryPayload {
-  return build('structure.associate_warehouse_branch', input.tenantId, input.businessId, [
+  return buildInventoryPayload('structure.associate_warehouse_branch', input.tenantId, input.businessId, [
     { kind: 'uuid', value: input.warehouseId },
     { kind: 'uuid', value: input.branchId },
   ]);
@@ -260,7 +445,7 @@ export function associateWarehouseBranchPayload(input: WarehouseBranchPayloadInp
  * field shape as associate; the op_code line keeps the digests apart.
  */
 export function dissociateWarehouseBranchPayload(input: WarehouseBranchPayloadInput): InventoryPayload {
-  return build('structure.dissociate_warehouse_branch', input.tenantId, input.businessId, [
+  return buildInventoryPayload('structure.dissociate_warehouse_branch', input.tenantId, input.businessId, [
     { kind: 'uuid', value: input.warehouseId },
     { kind: 'uuid', value: input.branchId },
   ]);

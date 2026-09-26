@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { renderInventoryVectors, toPayloadField, type InventoryVectors } from '../scripts/vector-cases';
 import { mintInventoryAssertion, parseInventoryAssertionKey, splitInventoryAssertion } from '../src/assertion';
-import { canonicalInventoryPayload, INVENTORY_PAYLOAD_SCHEMAS, inventoryPayloadSha256 } from '../src/payload';
+import { canonicalInventoryPayload, INVENTORY_PAYLOAD_SCHEMAS, INVENTORY_S1_OPERATION_CODES, inventoryPayloadSha256 } from '../src/payload';
 
 const FILE = join(__dirname, '..', 'vectors', 'invpl-vectors.json');
 const committed = readFileSync(FILE, 'utf8');
@@ -20,7 +20,8 @@ describe('invpl/1 — the shared vectors', () => {
   const cases = vectors.invpl.cases;
 
   it('covers every P3-S1 operation kind, and every case the lock names', () => {
-    for (const op of Object.keys(INVENTORY_PAYLOAD_SCHEMAS)) {
+    // The P3-S3 kinds are covered by vectors/invpl-s3-vectors.json (test/movement-payloads.test.ts); this file stays P3-S1's.
+    for (const op of INVENTORY_S1_OPERATION_CODES) {
       expect(cases.filter((c) => c.opCode === op).length).toBeGreaterThanOrEqual(2);
     }
     const configure = cases.filter((c) => c.opCode === 'inventory.configure_product');
