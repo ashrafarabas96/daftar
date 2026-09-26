@@ -9,7 +9,7 @@
 | Phase 1 | accepted, released | `docs/PHASE_1_ACCEPTANCE_REPORT.md` |
 | Phase 2 — accounting core | **merged and closed** into `main` at `0f2b09e7f2bd1015053ff2cb79ad1ceafc25bc6f` | `docs/PHASE_2_S9_RELEASE.md` |
 | P3-S0 — architecture lock | accepted at `ec08307d95ab0a50f826624a4e848d2c53398e51` (55 decisions) | `docs/PHASE_3_ARCHITECTURE_LOCK.md` |
-| **P3-S1 — inventory and catalog primitives** | **PASS / CLOSED**: accepted at `f1cc4c47a43defa969d7beff7f1c795189eee1c1` (CI 36223470804); migrations `0053`–`0058` **frozen** in `39e4ebc59d488b3d59b2136a38538e6de0d7b3b9` | `docs/PHASE_3_S1_ACCEPTANCE.md` |
+| **P3-S1 — inventory and catalog primitives** | **ACCEPTED (PASS)** at `f1cc4c47a43defa969d7beff7f1c795189eee1c1` (CI 36223470804); migrations `0053`–`0058` **frozen** in `39e4ebc59d488b3d59b2136a38538e6de0d7b3b9`. **Seal BLOCKED**: `gate:phase2:release` still fails after the freeze (acceptance page §6) | `docs/PHASE_3_S1_ACCEPTANCE.md` |
 | P3-S2 — immutable stock ledger | **next unopened slice**: not started, not authorized; analysis only | `docs/PHASE_3_S2_PREPARATION.md` |
 
 - Migrations: 59 frozen, `frozenThrough = 0058_accounting_entry_date_guard.sql`. No `0059` exists.
@@ -29,8 +29,8 @@
 
 ## Next allowed step
 
-Submit P3-S2 to the owner for authorization. Nothing else: no `0059`, no P3-S2 code.
+BLOCKED — `gate:phase2:release` refuses every migration after `0052` (its "P2-S9 creates no migration" check), frozen or not, so it cannot pass on any Phase 3 tree. The Tech Lead decides how that gate applies after Phase 2. No `0059`, no P3-S2 code.
 
 ## ملخص
 
-المرحلة الثانية مدموجة ومغلقة. الشريحة P3-S1 (أساسيات المخزون) مقبولة ومغلقة، وهجراتها `0053`–`0058` مجمّدة. الشريحة التالية P3-S2 لم تبدأ وتنتظر تصريح المالك. القرار OD-03 (ضريبة الشراء) مفتوح.
+المرحلة الثانية مدموجة ومغلقة. الشريحة P3-S1 (أساسيات المخزون) مقبولة، وهجراتها `0053`–`0058` مجمّدة، لكن الختم متوقف لأن بوابة `gate:phase2:release` ما زالت تفشل بعد التجميد. الشريحة التالية P3-S2 لم تبدأ وتنتظر تصريح المالك. القرار OD-03 (ضريبة الشراء) مفتوح.
