@@ -69,7 +69,40 @@ export const INVENTORY_SEARCH_PATH: readonly string[] = ['pg_catalog', 'public',
 
 const IDENT = '"?([A-Za-z_][A-Za-z0-9_]*)"?';
 
-const DEFINITION_HEADER = /CREATE\s+(OR\s+REPLACE\s+)?FUNCTION\s+(?:public\.)?"?([A-Za-z_][A-Za-z0-9_]*)"?\s*\(/gi;
+/**
+ * Security review L-1: a routine is a FUNCTION or a PROCEDURE, `ALTER ROUTINE`
+ * names either, a name may be quoted or schema-qualified (either part
+ * quoted), the argument list of an `ALTER` is optional, and a role name may
+ * be quoted. Each reader below accepts every spelling, so no spelling hands a
+ * routine over unseen.
+ */
+const ROUTINE_KIND = '(?:FUNCTION|PROCEDURE|ROUTINE)';
+/** Any schema, so that a qualified spelling is never missed where missing it would hide a handover or a grant. */
+const ANY_SCHEMA = '(?:(?:"[^"]+"|[A-Za-z_][\\w$]*)\\s*\\.\\s*)?';
+/** Only `public`, where accepting another schema would credit a protection to the wrong object. */
+const PUBLIC_SCHEMA = '(?:"?public"?\\s*\\.\\s*)?';
+/** An optional argument list: `ALTER FUNCTION f OWNER TO …` is valid when `f` is unique. */
+const OPTIONAL_ARGS = '(?:\\s*\\([^;]*?\\))?';
+const INTERNAL = `"?${INVENTORY_INTERNAL}"?`;
+
+const DEFINITION_HEADER = /CREATE\s+(OR\s+REPLACE\s+)?(?:FUNCTION|PROCEDURE)\s+(?:(?:"[^"]+"|[A-Za-z_][\w$]*)\s*\.\s*)?"?([A-Za-z_][A-Za-z0-9_]*)"?\s*\(/gi;
+
+/** The routine names in a `ON FUNCTION a(…), b(…)` list, argument lists removed. */
+function routineNames(list: string, schema: string): string[] {
+  let flat = '';
+  let depth = 0;
+  for (const ch of list) {
+    if (ch === '(') depth += 1;
+    else if (ch === ')') depth -= 1;
+    else if (depth === 0) flat += ch;
+  }
+  const names: string[] = [];
+  for (const item of flat.split(',')) {
+    const m = new RegExp(`^\\s*${schema}${IDENT}\\s*$`).exec(item);
+    if (m) names.push((m[1] ?? '').toLowerCase());
+  }
+  return names;
+}
 
 /** One `CREATE FUNCTION` in one file, with the options and body the guard reads. */
 export interface InventoryRoutineDefinition {
@@ -120,11 +153,14 @@ function readBody(sql: string, from: number): { body: string; end: number } | nu
 /** `[from, to)` windows of a file during which it runs as the inventory principal. */
 function internalRoleWindows(sql: string): [number, number][] {
   const windows: [number, number][] = [];
-  const setRole = /\bSET\s+(?:LOCAL\s+|SESSION\s+)?ROLE\s+"?([A-Za-z_][A-Za-z0-9_]*)"?|\bRESET\s+ROLE\b/gi;
+  // SET ROLE and SET SESSION AUTHORIZATION, the role quoted or as a literal,
+  // and `set_config('role', …)`: each makes the migration run as that role.
+  const setRole =
+    /\bSET\s+(?:LOCAL\s+|SESSION\s+)?(?:ROLE|SESSION\s+AUTHORIZATION)\s+["']?([A-Za-z_][A-Za-z0-9_]*)["']?|\bset_config\s*\(\s*'role'\s*,\s*'([A-Za-z_][A-Za-z0-9_]*)'|\bRESET\s+(?:ROLE|SESSION\s+AUTHORIZATION)\b/gi;
   let open: number | null = null;
   for (const m of sql.matchAll(setRole)) {
     const at = m.index ?? 0;
-    const role = (m[1] ?? '').toLowerCase();
+    const role = (m[1] ?? m[2] ?? '').toLowerCase();
     if (open !== null) {
       windows.push([open, at]);
       open = null;
@@ -197,15 +233,21 @@ export function checkInventoryDefinerContract(src: InventoryDefinerSources): Inv
     const file = path.split('/').pop() ?? path;
     const sql = stripComments(src.migrations[path] ?? '');
 
-    for (const m of sql.matchAll(new RegExp(`REVOKE\\s+ALL\\s+ON\\s+FUNCTION\\s+(?:public\\.)?${IDENT}\\s*\\([^;]*?FROM\\s+PUBLIC\\s*;`, 'gi'))) {
-      const name = (m[1] ?? '').toLowerCase();
-      const set = revoked.get(name) ?? new Set<string>();
-      set.add(file);
-      revoked.set(name, set);
+    for (const m of sql.matchAll(new RegExp(`REVOKE\\s+ALL\\s+ON\\s+${ROUTINE_KIND}\\s+([^;]*?)\\s+FROM\\s+PUBLIC\\s*;`, 'gi'))) {
+      for (const name of routineNames(m[1] ?? '', PUBLIC_SCHEMA)) {
+        const set = revoked.get(name) ?? new Set<string>();
+        set.add(file);
+        revoked.set(name, set);
+      }
+    }
+
+    // A bulk reassignment hands over routines no statement names (L-1).
+    if (new RegExp(`\\bREASSIGN\\s+OWNED\\s+BY\\s+[^;]*?\\bTO\\s+${INTERNAL}`, 'i').test(sql)) {
+      v.push(`${file}: REASSIGN OWNED … TO ${INVENTORY_INTERNAL} hands over routines no statement names — transfer each one explicitly (§D)`);
     }
 
     // Ownership handovers, and the CREATE bracket around them.
-    const transfer = new RegExp(`ALTER\\s+FUNCTION\\s+(?:public\\.)?${IDENT}\\s*\\([^;]*?\\)\\s*OWNER\\s+TO\\s+${INVENTORY_INTERNAL}\\s*;`, 'gi');
+    const transfer = new RegExp(`ALTER\\s+${ROUTINE_KIND}\\s+${ANY_SCHEMA}${IDENT}${OPTIONAL_ARGS}\\s*OWNER\\s+TO\\s+${INTERNAL}\\s*;`, 'gi');
     const spans: [number, number][] = [];
     for (const m of sql.matchAll(transfer)) {
       handOver((m[1] ?? '').toLowerCase(), file);
@@ -219,8 +261,8 @@ export function checkInventoryDefinerContract(src: InventoryDefinerSources): Inv
     if (spans.length > 0) {
       const first = Math.min(...spans.map((s) => s[0]));
       const last = Math.max(...spans.map((s) => s[1]));
-      const grant = new RegExp(`GRANT\\s+CREATE\\s+ON\\s+SCHEMA\\s+public\\s+TO\\s+${INVENTORY_INTERNAL}\\b`, 'i').exec(sql);
-      const revokes = [...sql.matchAll(new RegExp(`REVOKE\\s+CREATE\\s+ON\\s+SCHEMA\\s+public\\s+FROM\\s+${INVENTORY_INTERNAL}\\b`, 'gi'))];
+      const grant = new RegExp(`GRANT\\s+CREATE\\s+ON\\s+SCHEMA\\s+"?public"?\\s+TO\\s+${INTERNAL}(?![\\w$])`, 'i').exec(sql);
+      const revokes = [...sql.matchAll(new RegExp(`REVOKE\\s+CREATE\\s+ON\\s+SCHEMA\\s+"?public"?\\s+FROM\\s+${INTERNAL}(?![\\w$])`, 'gi'))];
       if (!grant || (grant.index ?? 0) > first) {
         v.push(`${file}: hands a routine to ${INVENTORY_INTERNAL} without first granting it CREATE on schema public in the same file (§D bracket)`);
       }
@@ -236,10 +278,18 @@ export function checkInventoryDefinerContract(src: InventoryDefinerSources): Inv
   for (const path of files) {
     const file = path.split('/').pop() ?? path;
     const sql = stripComments(src.migrations[path] ?? '');
-    for (const m of sql.matchAll(new RegExp(`GRANT\\s+[^;]*?\\bON\\s+FUNCTION\\s+(?:public\\.)?${IDENT}\\s*\\([^;]*?\\)\\s*TO\\s+([^;]*);`, 'gi'))) {
-      const name = (m[1] ?? '').toLowerCase();
-      if (handovers.has(name) && /\bPUBLIC\b/i.test(m[2] ?? '')) {
-        v.push(`${file}: grants ${name} to PUBLIC — no inventory routine may be callable by every role (§D)`);
+    for (const m of sql.matchAll(new RegExp(`GRANT\\s+[^;]*?\\bON\\s+${ROUTINE_KIND}\\s+([^;]*?)\\s+TO\\s+([^;]*);`, 'gi'))) {
+      if (!/\bPUBLIC\b/i.test(m[2] ?? '')) continue;
+      for (const name of routineNames(m[1] ?? '', ANY_SCHEMA)) {
+        if (handovers.has(name)) v.push(`${file}: grants ${name} to PUBLIC — no inventory routine may be callable by every role (§D)`);
+      }
+    }
+    // `ON ALL FUNCTIONS IN SCHEMA` names no routine, and grants every one (L-1).
+    if (handovers.size > 0) {
+      for (const m of sql.matchAll(/GRANT\s+[^;]*?\bON\s+ALL\s+(?:FUNCTIONS|PROCEDURES|ROUTINES)\s+IN\s+SCHEMA\s+[^;]*?\bTO\s+([^;]*);/gi)) {
+        if (/\bPUBLIC\b/i.test(m[1] ?? '')) {
+          v.push(`${file}: grants ALL routines in a schema to PUBLIC — that includes every inventory routine (§D)`);
+        }
       }
     }
   }
@@ -248,7 +298,7 @@ export function checkInventoryDefinerContract(src: InventoryDefinerSources): Inv
   for (const path of files) {
     const file = path.split('/').pop() ?? path;
     const sql = stripComments(src.migrations[path] ?? '');
-    for (const m of sql.matchAll(new RegExp(`ALTER\\s+FUNCTION\\s+(?:public\\.)?${IDENT}\\s*\\([^;]*?\\)\\s*([^;]*);`, 'gi'))) {
+    for (const m of sql.matchAll(new RegExp(`ALTER\\s+${ROUTINE_KIND}\\s+${ANY_SCHEMA}${IDENT}${OPTIONAL_ARGS}\\s*([^;]*);`, 'gi'))) {
       const name = (m[1] ?? '').toLowerCase();
       const action = m[2] ?? '';
       if (!handovers.has(name)) continue;
@@ -264,7 +314,7 @@ export function checkInventoryDefinerContract(src: InventoryDefinerSources): Inv
   const dropped = (name: string, file: string, before: number): boolean => {
     const path = files.find((p) => (p.split('/').pop() ?? p) === file);
     const sql = stripComments(src.migrations[path ?? ''] ?? '').slice(0, before);
-    return new RegExp(`DROP\\s+FUNCTION\\s+(?:IF\\s+EXISTS\\s+)?(?:public\\.)?"?${name}"?\\b`, 'i').test(sql);
+    return new RegExp(`DROP\\s+${ROUTINE_KIND}\\s+(?:IF\\s+EXISTS\\s+)?${ANY_SCHEMA}"?${name}"?\\b`, 'i').test(sql);
   };
 
   for (const [name, handedIn] of handovers) {
@@ -276,9 +326,10 @@ export function checkInventoryDefinerContract(src: InventoryDefinerSources): Inv
 
     // PUBLIC's default EXECUTE is revoked where the routine is handed over.
     for (const file of handedIn) {
-      const byOwnerChange = new RegExp(`ALTER\\s+FUNCTION\\s+(?:public\\.)?"?${name}"?\\s*\\([^;]*?\\)\\s*OWNER\\s+TO\\s+${INVENTORY_INTERNAL}\\b`, 'i').test(
-        stripComments(src.migrations[files.find((p) => (p.split('/').pop() ?? p) === file) ?? ''] ?? ''),
-      );
+      const byOwnerChange = new RegExp(
+        `ALTER\\s+${ROUTINE_KIND}\\s+${ANY_SCHEMA}"?${name}"?${OPTIONAL_ARGS}\\s*OWNER\\s+TO\\s+${INTERNAL}(?![\\w$])`,
+        'i',
+      ).test(stripComments(src.migrations[files.find((p) => (p.split('/').pop() ?? p) === file) ?? ''] ?? ''));
       const asInternal = defs.filter((d) => d.file === file && d.createdAsInternal);
       const earlier = handedIn.indexOf(file) > 0;
       const keepsAcl = !byOwnerChange && earlier && asInternal.every((d) => d.orReplace && !dropped(name, file, d.offset));

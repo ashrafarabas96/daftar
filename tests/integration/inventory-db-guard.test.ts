@@ -2,7 +2,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { INVENTORY_INVOKER_EXCEPTIONS, checkInventoryDefinerContract, inventoryRoutineDefinitions } from '../../scripts/guards/inventory-definer-contract';
-import { checkInventoryWriterAuthority } from '../../scripts/guards/inventory-writer-authority';
+import { checkInventoryWriterAuthority, stockTablesWritten } from '../../scripts/guards/inventory-writer-authority';
 
 /**
  * GUARD G-7 — the §D definer contract for daftar_inventory_internal
@@ -229,6 +229,48 @@ describe('G-7 — each protection, removed in turn, is noticed', () => {
     expect(v.some((m) => m.includes('inventory_assertion_current') && m.includes('security mode after the fact'))).toBe(true);
   });
 
+  it('L-1: a grant to PUBLIC hidden in a list, in ALL FUNCTIONS IN SCHEMA, or under ALTER ROUTINE', () => {
+    const tree = real();
+    tree['9999_regression.sql'] = [
+      'GRANT EXECUTE ON FUNCTION products_touch(), "public"."inventory_stock_verify"(UUID, UUID, UUID) TO daftar_app, PUBLIC;',
+      'GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO PUBLIC;',
+      'ALTER ROUTINE inventory_assertion_consume RESET search_path;',
+    ].join('\n');
+    const v = violations(tree);
+    expect(v.some((m) => m.includes('grants inventory_stock_verify to PUBLIC'))).toBe(true);
+    expect(v.some((m) => m.includes('grants ALL routines in a schema to PUBLIC'))).toBe(true);
+    expect(v.some((m) => m.includes('inventory_assertion_consume') && m.includes('search_path after the fact'))).toBe(true);
+  });
+
+  it('L-1: REASSIGN OWNED … TO the principal hands over routines no statement names', () => {
+    const tree = real();
+    tree['9999_regression.sql'] = 'REASSIGN OWNED BY daftar_migrator TO "daftar_inventory_internal";\n';
+    expect(violations(tree).some((m) => m.includes('REASSIGN OWNED'))).toBe(true);
+  });
+
+  it('L-1: SET SESSION AUTHORIZATION, a literal role and set_config(role) all make a routine created as the principal', () => {
+    for (const [open, close] of [
+      ['SET SESSION AUTHORIZATION daftar_inventory_internal;', 'RESET SESSION AUTHORIZATION;'],
+      ["SET ROLE 'daftar_inventory_internal';", 'RESET ROLE;'],
+      ["SELECT set_config('role', 'daftar_inventory_internal', true);", 'RESET ROLE;'],
+    ] as const) {
+      const tree = real();
+      tree['9999_regression.sql'] = [
+        'GRANT CREATE ON SCHEMA public TO daftar_inventory_internal;',
+        open,
+        'CREATE FUNCTION inventory_session_made() RETURNS int LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $$ BEGIN RETURN 1; END; $$;',
+        close,
+        'REVOKE CREATE ON SCHEMA public FROM daftar_inventory_internal;',
+      ].join('\n');
+      const report = checkInventoryDefinerContract({ migrations: tree });
+      expect(report.transferred, open).toContain('inventory_session_made');
+      expect(
+        report.violations.some((m) => m.includes('inventory_session_made') && m.includes('FROM PUBLIC')),
+        open,
+      ).toBe(true);
+    }
+  });
+
   it('an asserted exception that has disappeared', () => {
     const v = violations(mutate(F53, 'ALTER FUNCTION products_10_inventory_config_authority() OWNER TO daftar_inventory_internal;', ''));
     expect(v.some((m) => m.includes('asserted INVOKER exception products_10_inventory_config_authority'))).toBe(true);
@@ -284,6 +326,144 @@ describe('rule 22 — a stock writer verifies invctl/1 first (PM-44 static half)
     expect(v).toHaveLength(1);
     expect(v[0]).toContain('inventory_sneaky_writer');
     expect(v[0]).toContain('negative_deficit_coverages');
+  });
+
+  describe('L-1: writer evasions', () => {
+    const PATH = 'SET search_path = pg_catalog, public, pg_temp';
+    /** The real tree plus one file that creates `name` with `body` and hands it over with `handover`. */
+    const planted = (name: string, body: string, handover = `ALTER FUNCTION ${name}() OWNER TO daftar_inventory_internal;`, kind = 'FUNCTION') => {
+      const tree = real();
+      tree['9999_regression.sql'] = [
+        'GRANT CREATE ON SCHEMA public TO daftar_inventory_internal;',
+        `CREATE ${kind} ${name}() ${kind === 'FUNCTION' ? 'RETURNS void ' : ''}LANGUAGE plpgsql SECURITY DEFINER ${PATH} AS $$`,
+        body,
+        '$$;',
+        `REVOKE ALL ON ${kind} ${name.replace(/^(?:"?public"?\s*\.\s*)/, '')}() FROM PUBLIC;`,
+        handover,
+        'REVOKE CREATE ON SCHEMA public FROM daftar_inventory_internal;',
+      ].join('\n');
+      return tree;
+    };
+    const CHECK = "v_actor := inventory_assertion_current(ARRAY['op']);";
+
+    it('MERGE INTO, TRUNCATE and COPY … FROM are writes', () => {
+      expect(stockTablesWritten('MERGE INTO stock_levels l USING (SELECT 1 AS k) s ON false WHEN NOT MATCHED THEN DO NOTHING;')).toEqual(['stock_levels']);
+      expect(stockTablesWritten('MERGE INTO ONLY public.stock_movements m USING x ON false WHEN MATCHED THEN DELETE;')).toEqual(['stock_movements']);
+      expect(stockTablesWritten('TRUNCATE TABLE products, ONLY "stock_source_bindings", public.negative_deficit_coverages;')).toEqual([
+        'negative_deficit_coverages',
+        'stock_source_bindings',
+      ]);
+      expect(stockTablesWritten("COPY stock_movements (id) FROM '/tmp/x';")).toEqual(['stock_movements']);
+      const v = writer(
+        planted('inventory_merge_writer', 'BEGIN\n  MERGE INTO stock_levels l USING (SELECT 1 AS k) s ON false WHEN NOT MATCHED THEN DO NOTHING;\nEND;'),
+      );
+      expect(v).toHaveLength(1);
+      expect(v[0]).toContain('inventory_merge_writer writes stock_levels');
+    });
+
+    it('a quoted or schema-qualified stock table is still that table', () => {
+      expect(stockTablesWritten('INSERT INTO "stock_movements" DEFAULT VALUES;')).toEqual(['stock_movements']);
+      expect(stockTablesWritten('UPDATE "public"."stock_levels" SET on_hand = 0;')).toEqual(['stock_levels']);
+      expect(stockTablesWritten('DELETE FROM public . "negative_inventory_deficits" WHERE false;')).toEqual(['negative_inventory_deficits']);
+      expect(stockTablesWritten('UPDATE ONLY "public".stock_source_bridge_purchase SET x = 1;')).toEqual(['stock_source_bridge_purchase']);
+      const v = writer(planted('inventory_quoted_writer', 'BEGIN\n  UPDATE "public"."stock_levels" SET on_hand = 0 WHERE false;\nEND;'));
+      expect(v).toHaveLength(1);
+      expect(v[0]).toContain('inventory_quoted_writer writes stock_levels');
+    });
+
+    it('a PROCEDURE handed over is a writer like a function', () => {
+      const tree = planted(
+        'inventory_proc_writer',
+        'BEGIN\n  DELETE FROM stock_levels WHERE false;\nEND;',
+        'ALTER PROCEDURE inventory_proc_writer() OWNER TO daftar_inventory_internal;',
+        'PROCEDURE',
+      );
+      expect(checkInventoryDefinerContract({ migrations: tree }).transferred).toContain('inventory_proc_writer');
+      expect(checkInventoryDefinerContract({ migrations: tree }).violations).toEqual([]);
+      const v = writer(tree);
+      expect(v).toHaveLength(1);
+      expect(v[0]).toContain('inventory_proc_writer writes stock_levels');
+    });
+
+    it('ALTER ROUTINE, an ALTER without its argument list, a quoted owner and a quoted, qualified name all hand a writer over', () => {
+      const body = 'BEGIN\n  INSERT INTO stock_movements DEFAULT VALUES;\nEND;';
+      for (const [name, handover] of [
+        ['inventory_routine_writer', 'ALTER ROUTINE inventory_routine_writer() OWNER TO daftar_inventory_internal;'],
+        ['inventory_bare_writer', 'ALTER FUNCTION inventory_bare_writer OWNER TO daftar_inventory_internal;'],
+        ['inventory_owner_writer', 'ALTER FUNCTION inventory_owner_writer() OWNER TO "daftar_inventory_internal";'],
+        ['"public"."inventory_named_writer"', 'ALTER FUNCTION "public"."inventory_named_writer"() OWNER TO daftar_inventory_internal;'],
+      ] as const) {
+        const tree = planted(name, body, handover);
+        const bare = name.replace(/"/g, '').replace(/^public\./, '');
+        expect(checkInventoryDefinerContract({ migrations: tree }).transferred, handover).toContain(bare);
+        const v = writer(tree);
+        expect(v, handover).toHaveLength(1);
+        expect(v[0], handover).toContain(`${bare} writes stock_movements`);
+      }
+    });
+
+    it('a DECLARE initialiser that calls a writer (or anything) runs before the assertion', () => {
+      const v = writer(mutate(F60, /v_rows {10}BIGINT;/, 'v_rows          BIGINT := inventory_next_deficit_seq(NULL, NULL, NULL);'));
+      expect(v).toHaveLength(1);
+      expect(v[0]).toContain('inventory_apply_stock_movements');
+      expect(v[0]).toContain('DECLARE initialiser calls inventory_next_deficit_seq');
+      const w = writer(
+        planted(
+          'inventory_declare_writer',
+          `DECLARE\n  v_actor inventory_verified_actor;\n  v_seen BIGINT := (SELECT count(1) FROM stock_levels);\nBEGIN\n  ${CHECK}\n  INSERT INTO stock_levels DEFAULT VALUES;\nEND;`,
+        ),
+      );
+      expect(w.some((m) => m.includes('inventory_declare_writer') && m.includes('DECLARE initialiser calls count'))).toBe(true);
+      expect(w.some((m) => m.includes('inventory_declare_writer') && m.includes('DECLARE initialiser runs a query'))).toBe(true);
+    });
+
+    it('the first statement is the assertion call and nothing else: no call in its arguments, nothing after it', () => {
+      const v = writer(mutate(F60, ASSERT, ASSERT.replace('ORDER BY 1)', 'ORDER BY 1) || inventory_evil()')));
+      expect(v).toHaveLength(1);
+      expect(v[0]).toContain("assertion call's arguments call inventory_evil");
+      for (const first of [
+        "PERFORM inventory_assertion_current(ARRAY['op']), inventory_apply_stock_movements(NULL);",
+        "SELECT inventory_assertion_current(ARRAY['op']) INTO v_actor FROM inventory_evil();",
+        "v_actor := inventory_assertion_current(ARRAY['op']) OR inventory_evil();",
+      ]) {
+        const w = writer(
+          planted(
+            'inventory_trailing_writer',
+            `DECLARE\n  v_actor inventory_verified_actor;\nBEGIN\n  ${first}\n  INSERT INTO stock_levels DEFAULT VALUES;\nEND;`,
+          ),
+        );
+        expect(w, first).toHaveLength(1);
+        expect(w[0], first).toMatch(/does more than call the assertion|arguments call/);
+      }
+      // The shapes the rule accepts: an assignment, PERFORM, SELECT … INTO, a quoted or qualified name.
+      for (const first of [
+        CHECK,
+        "PERFORM inventory_assertion_current(ARRAY['op']);",
+        "SELECT inventory_assertion_current(ARRAY['op']) INTO v_actor;",
+        'v_actor := public."inventory_assertion_current"(ARRAY(SELECT DISTINCT m.op_code FROM inventory_operation_movement_kinds m ORDER BY 1));',
+      ]) {
+        expect(
+          writer(
+            planted(
+              'inventory_good_writer',
+              `DECLARE\n  v_actor inventory_verified_actor;\nBEGIN\n  ${first}\n  INSERT INTO stock_levels DEFAULT VALUES;\nEND;`,
+            ),
+          ),
+          first,
+        ).toEqual([]);
+      }
+    });
+
+    it('an EXCEPTION WHEN handler could swallow the refusal and write anyway', () => {
+      const v = writer(
+        planted(
+          'inventory_handler_writer',
+          `DECLARE\n  v_actor inventory_verified_actor;\nBEGIN\n  ${CHECK}\nEXCEPTION WHEN others THEN\n  INSERT INTO stock_levels DEFAULT VALUES;\nEND;`,
+        ),
+      );
+      expect(v).toHaveLength(1);
+      expect(v[0]).toContain('EXCEPTION WHEN handler');
+    });
   });
 
   it('a read, a FOR UPDATE lock or a table named in a message is not a write', () => {
