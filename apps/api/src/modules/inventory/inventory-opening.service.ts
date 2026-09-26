@@ -75,8 +75,13 @@ interface OpeningRow {
  * - Case A (no position): `Dr inventory` per warehouse / `Cr opening_equity`
  *   on seam 2 when T > 0; seam 1 and no entry when T = 0;
  * - Case B (a position P): T must equal P, else
- *   `inventory.opening_valuation_mismatch` with both totals in its details;
- *   the stock decomposes P and no entry is written (seam 1).
+ *   `inventory.opening_valuation_mismatch` (the code alone, no amount); the
+ *   stock decomposes P and no entry is written (seam 1).
+ *
+ * Only a business-wide actor may record an opening (review F4): it posts to
+ * opening equity and reveals the accounting position, so `authorize` refuses
+ * an assigned-scope actor (`inventory.business_wide_scope_required`) before
+ * anything is read, and `matchedAmountMinor` is only ever returned to one.
  *
  * The routine re-reads the position under the shared advisory lock and
  * refuses a difference (`inventory.opening_case_changed`, retryable).
@@ -99,7 +104,8 @@ export class InventoryOpeningService {
   }
 
   private async run(m: MembershipContext, input: OpeningInput, businessTransactionId: BusinessTransactionId): Promise<OpeningResult> {
-    // 1–4. Permission and the scope of every warehouse the document names.
+    // 1–4. Permission and business-wide scope (review F4); the warehouses are
+    // still recorded on the authority the assertion is minted from.
     const warehouseIds = [...new Set(input.lines.map((l) => l.warehouseId))];
     const authority = await this.authorization.authorize(m, 'inventory.opening', businessTransactionId, warehouseIds);
     const scope: ReadScope = { tenantId: m.tenantId, businessId: m.businessId };

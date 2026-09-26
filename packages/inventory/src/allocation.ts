@@ -106,14 +106,12 @@ export function allocateOpening(lines: readonly OpeningLineValue[]): { readonly 
 
 /**
  * Case B (A-13): stock may only be decomposed against an opening position
- * that holds exactly its total. Refused with both totals in the typed
- * details — never in the message.
+ * that holds exactly its total. Refused with the code alone: neither total
+ * travels in the message or in the details, so the refusal never discloses
+ * the opening balance's Inventory amount (review F4).
  */
 export function assertOpeningMatchesPosition(stockTotalMinor: bigint, openingPositionMinor: bigint): void {
   if (stockTotalMinor !== openingPositionMinor) {
-    throw new InventoryError('inventory.opening_valuation_mismatch', 'the opening stock total does not equal the opening position', {
-      stockTotalMinor: stockTotalMinor.toString(10),
-      openingPositionMinor: openingPositionMinor.toString(10),
-    });
+    throw new InventoryError('inventory.opening_valuation_mismatch', 'the opening stock total does not equal the opening position');
   }
 }

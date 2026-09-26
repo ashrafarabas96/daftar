@@ -61,8 +61,10 @@ describe('opening valuation — the vectors', () => {
         const e = refusal(() => assertOpeningMatchesPosition(total, BigInt(o.caseB?.positionMinor ?? '')));
         expect(e?.code ?? 'match').toBe(o.caseB.outcome);
         if (e !== null) {
-          // Both totals travel in typed details, never in the message.
-          expect(e.details).toEqual({ stockTotalMinor: o.total, openingPositionMinor: o.caseB.positionMinor });
+          // The code alone (review F4): neither total in the message, and no
+          // details at all, so the refusal never discloses the position.
+          expect(e.details).toBeUndefined();
+          expect(e.toSafeJSON()).toEqual({ code: 'inventory.opening_valuation_mismatch' });
           expect(e.message).not.toContain(o.total);
           expect(e.message).not.toContain(o.caseB.positionMinor);
         }

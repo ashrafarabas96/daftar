@@ -48,10 +48,10 @@ export function parseDatabaseInventoryCode(error: unknown): string | null {
  *   home association, a locked unit, the hidden base variant) → 409;
  * - anything else is a refusal of the request itself → 400.
  *
- * `extra` carries typed, amount-free-by-default facts the contract names for a
- * specific refusal — the two totals of `inventory.opening_valuation_mismatch`,
- * the variants of `inventory.unit_cost_required` — beside the code. A message
- * never carries them.
+ * `extra` carries typed, amount-free facts the contract names for a specific
+ * refusal — the variants of `inventory.unit_cost_required` — beside the code.
+ * A message never carries them. `inventory.opening_valuation_mismatch` is the
+ * code alone: its totals would disclose the opening balance (review F4).
  */
 export function inventoryRefusal(code: string, extra: Readonly<Record<string, unknown>> = {}): AppError {
   const details = { ...extra, inventoryCode: code };

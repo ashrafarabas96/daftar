@@ -25,8 +25,8 @@
  * `duplicate_line`, `lines_required`, `unit_cost_required`,
  * `opening_valuation_mismatch` and `allocation_invalid`, plus
  * `reason_required` (the database's own code for a missing reason). A message
- * still never carries an amount; where the contract requires totals, as for
- * `opening_valuation_mismatch`, they travel in the typed `details` only.
+ * never carries an amount, and `opening_valuation_mismatch` carries none in
+ * its details either: it is the code alone (review F4).
  */
 export type InventoryErrorCode =
   | 'inventory.assertion_malformed'

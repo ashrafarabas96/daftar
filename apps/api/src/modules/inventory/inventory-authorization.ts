@@ -26,14 +26,18 @@ const OPERATION_AUTHORITY: Readonly<Record<InventoryOperationCode, { readonly pe
   'structure.associate_warehouse_branch': { permission: 'warehouse.manage', scope: 'business_wide' },
   'structure.dissociate_warehouse_branch': { permission: 'warehouse.manage', scope: 'business_wide' },
   // P3-S3 (PHASE_3_S3_CONTRACT A-21): every movement command is scoped by the
-  // warehouses it affects — both of a transfer, each line's for an opening.
+  // warehouses it affects — both of a transfer, the document's for the rest.
   'inventory.transfer': { permission: 'inventory.transfer', scope: 'warehouses' },
   'inventory.adjust': { permission: 'inventory.adjust', scope: 'warehouses' },
   'inventory.damage': { permission: 'inventory.adjust', scope: 'warehouses' },
   'inventory.stocktake_open': { permission: 'inventory.stocktake', scope: 'warehouses' },
   'inventory.stocktake_count': { permission: 'inventory.stocktake', scope: 'warehouses' },
   'inventory.stocktake_finalize': { permission: 'inventory.stocktake', scope: 'warehouses' },
-  'inventory.opening': { permission: 'inventory.adjust', scope: 'warehouses' },
+  // Review F4 (coordinator ruling): an opening posts to opening equity and
+  // reveals the business's accounting position (its Inventory line), so it is
+  // a business-wide act — never available to an actor limited to assigned
+  // branches, whatever warehouses it names.
+  'inventory.opening': { permission: 'inventory.adjust', scope: 'business_wide' },
 };
 
 /**
