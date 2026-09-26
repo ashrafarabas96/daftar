@@ -5,7 +5,11 @@ import { describe, expect, it } from 'vitest';
 import { renderInvplS3Vectors, type InvplS3Vectors } from '../scripts/s3-vector-cases';
 import { InventoryError } from '../src/errors';
 import {
+  adjustIntentSha256,
   adjustPayload,
+  damageIntentSha256,
+  openingIntentSha256,
+  stocktakeFinalizeIntentSha256,
   compareUuid,
   damagePayload,
   MAX_DOCUMENT_LINES,
@@ -380,6 +384,63 @@ describe('invpl/1 P3-S3 — builders refuse what the database would refuse', () 
       ),
     ).toBe('inventory.duplicate_line');
     expect(codeOf(open(null, null, [{ warehouseId: W1, variantId: V1, qtyQ4: 1n, unitCostC10: -1n }]))).toBe('inventory.payload_invalid');
+  });
+});
+
+describe('intent digests before any state read (A-10(c))', () => {
+  it('equal the builders’ intentSha256 on every shared vector, whatever the derived fields hold', () => {
+    for (const v of vectors.cases) {
+      const input = v.input;
+      const big = (x: unknown): bigint => BigInt(String(x));
+      const lines = (input['lines'] ?? []) as Record<string, unknown>[];
+      const base = { tenantId: T, businessId: B };
+      let got: string | null = null;
+      if (v.opCode === 'inventory.adjust') {
+        got = adjustIntentSha256({
+          ...base,
+          adjustmentId: String(input['adjustmentId']),
+          warehouseId: String(input['warehouseId']),
+          occurredOn: String(input['occurredOn']),
+          reason: String(input['reason']),
+          lines: lines.map((l) => ({
+            variantId: String(l['variantId']),
+            qtyDeltaQ4: big(l['qtyDeltaQ4']),
+            unitCostC10: l['unitCostC10'] === null ? null : big(l['unitCostC10']),
+          })),
+        });
+      } else if (v.opCode === 'inventory.damage') {
+        got = damageIntentSha256({
+          ...base,
+          adjustmentId: String(input['adjustmentId']),
+          warehouseId: String(input['warehouseId']),
+          occurredOn: String(input['occurredOn']),
+          reason: String(input['reason']),
+          lines: lines.map((l) => ({ variantId: String(l['variantId']), qtyQ4: big(l['qtyQ4']) })),
+        });
+      } else if (v.opCode === 'inventory.stocktake_finalize') {
+        got = stocktakeFinalizeIntentSha256({
+          ...base,
+          stocktakeId: String(input['stocktakeId']),
+          warehouseId: String(input['warehouseId']),
+          outcome: input['outcome'] === 'cancelled' ? 'cancelled' : 'finalized',
+          occurredOn: input['occurredOn'] === null ? null : String(input['occurredOn']),
+          lines: lines.map((l) => ({ variantId: String(l['variantId']), unitCostC10: l['unitCostC10'] === null ? null : big(l['unitCostC10']) })),
+        });
+      } else if (v.opCode === 'inventory.opening') {
+        got = openingIntentSha256({
+          ...base,
+          openingId: String(input['openingId']),
+          occurredOn: String(input['occurredOn']),
+          lines: lines.map((l) => ({
+            warehouseId: String(l['warehouseId']),
+            variantId: String(l['variantId']),
+            qtyQ4: big(l['qtyQ4']),
+            unitCostC10: big(l['unitCostC10']),
+          })),
+        });
+      }
+      if (got !== null) expect(got).toBe(v.intent.sha256);
+    }
   });
 });
 

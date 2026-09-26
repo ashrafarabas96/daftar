@@ -398,3 +398,42 @@ export function openingPayload(input: OpeningPayloadInput): MovementPayload {
   });
   return finish('inventory.opening', input.tenantId, input.businessId, entries);
 }
+
+// ── Intent digests before any state read (A-10(c) step 6) ────────────────
+//
+// The idempotency proof runs BEFORE the service reads stock, so it cannot
+// know the server-derived fields yet. These compute the intent digest from
+// the client-intent fields alone. They are the builders above with the
+// derived fields held at a neutral placeholder — the intent stream never
+// contains them, so the placeholder cannot reach a digest; the tests pin each
+// one to its builder's `intentSha256`.
+
+type WithoutExpected<L> = Omit<L, 'expectedValue'>;
+
+/** The intent digest of an `inventory.adjust` command, before its values are known. */
+export function adjustIntentSha256(
+  input: Omit<AdjustPayloadInput, 'lines'> & { readonly lines: readonly WithoutExpected<AdjustPayloadInput['lines'][number]>[] },
+): string {
+  return adjustPayload({ ...input, lines: input.lines.map((l) => ({ ...l, expectedValue: 0n })) }).intentSha256;
+}
+
+/** The intent digest of an `inventory.damage` command, before its values are known. */
+export function damageIntentSha256(
+  input: Omit<DamagePayloadInput, 'lines'> & { readonly lines: readonly WithoutExpected<DamagePayloadInput['lines'][number]>[] },
+): string {
+  return damagePayload({ ...input, lines: input.lines.map((l) => ({ ...l, expectedValue: 0n })) }).intentSha256;
+}
+
+/** The intent digest of an `inventory.stocktake_finalize` command: every line's variant and explicit cost, without variance or value. */
+export function stocktakeFinalizeIntentSha256(
+  input: Omit<StocktakeFinalizePayloadInput, 'lines'> & { readonly lines: readonly Pick<StocktakeFinalizeLine, 'variantId' | 'unitCostC10'>[] },
+): string {
+  // A stated cost belongs to a positive variance; the placeholder keeps that shape.
+  const lines = input.lines.map((l) => ({ ...l, varianceQ4: l.unitCostC10 === null ? 0n : 1n, expectedValue: 0n }));
+  return stocktakeFinalizePayload({ ...input, lines }).intentSha256;
+}
+
+/** The intent digest of an `inventory.opening` command, before the opening position is read. */
+export function openingIntentSha256(input: Omit<OpeningPayloadInput, 'openingBalanceId' | 'positionMinor'>): string {
+  return openingPayload({ ...input, openingBalanceId: null, positionMinor: null }).intentSha256;
+}
