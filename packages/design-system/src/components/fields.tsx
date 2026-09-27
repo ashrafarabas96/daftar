@@ -28,6 +28,8 @@ const inputBase: CSSProperties = {
   background: colors.neutral[0],
   color: colors.neutral[900],
   width: '100%',
+  // The padding and border sit inside the 100% width, so a field never pokes past its container on a phone.
+  boxSizing: 'border-box',
 };
 
 const labelStyle: CSSProperties = { fontSize: typography.size.sm, fontWeight: typography.weight.medium, color: colors.neutral[700] };

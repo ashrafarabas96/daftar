@@ -72,6 +72,10 @@ export function phoneWidthViolations(r: Rendered, locale: Locale): string[] {
       if (value !== undefined && !widthFits(value)) out.push(`${describe(el)} ${prop}: ${value} is wider than 20rem`);
     }
     if (/100vw/.test(el.attrs['style'] ?? '')) out.push(`${describe(el)} uses 100vw`);
+    // A text field at 100% width with padding or a border is wider than its box unless the padding sits inside it (M-2).
+    if ((el.tag === 'input' || el.tag === 'textarea') && style['width'] === '100%' && style['box-sizing'] !== 'border-box') {
+      out.push(`${describe(el)} width: 100% without box-sizing: border-box overflows its container`);
+    }
     if (el.tag === 'table') out.push(`${describe(el)} design-system table markup scrolls sideways on a phone`);
     if (['button', 'input', 'select', 'textarea'].includes(el.tag) && el.attrs['type'] !== 'hidden') {
       const type = el.attrs['type'] ?? '';

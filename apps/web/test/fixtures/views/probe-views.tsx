@@ -70,6 +70,7 @@ export const ViewportProbe = ({ t }: Props) => <div style={{ width: '100vw' }}>{
 export const TableProbe = ({ row }: Props) => <Table columns={[{ key: 'n', header: 'n', render: (r: { id: string }) => r.id }]} rows={[{ id: row.name }]} />;
 export const SmallButtonProbe = ({ t }: Props) => <Button size="sm">{t('common.done')}</Button>;
 export const RawButtonProbe = ({ t }: Props) => <button type="button">{t('common.done')}</button>;
+export const ContentBoxProbe = ({ t }: Props) => <input aria-label={t('common.done')} style={{ width: '100%', padding: '0 0.75rem', minHeight: '2.75rem' }} />;
 export const DigitsProbe = ({ row, t }: Props) => (
   <p>
     {t('common.quantity')} {row.onHand}
@@ -91,6 +92,7 @@ export const BAD_PROBES = {
   table: defineView('TableProbe', TableProbe, fixtures),
   smallButton: defineView('SmallButtonProbe', SmallButtonProbe, fixtures),
   rawButton: defineView('RawButtonProbe', RawButtonProbe, fixtures),
+  contentBox: defineView('ContentBoxProbe', ContentBoxProbe, fixtures),
   digits: defineView('DigitsProbe', DigitsProbe, fixtures),
   missingKey: defineView('MissingKeyProbe', MissingKeyProbe, fixtures),
   physical: defineView('PhysicalProbe', PhysicalProbe, fixtures),

@@ -25,6 +25,7 @@ describe('T-15 — the rules fire (planted views)', () => {
     ['table', /table markup scrolls sideways/],
     ['smallButton', /min-height calc\(2\.75rem - 0\.5rem\) is under the 2\.75rem touch target/],
     ['rawButton', /<button> min-height absent is under the 2\.75rem touch target/],
+    ['contentBox', /width: 100% without box-sizing: border-box overflows its container/],
     ['digits', /a number outside <bdi>/],
     ['missingKey', /missing catalog keys: stock\.no_such_key_in_any_catalog/],
   ] as const)('the %s probe is refused', (probe, message) => {
