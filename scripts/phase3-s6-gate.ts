@@ -64,7 +64,7 @@ const OPERATION_KINDS = [
   'payment.activate_method',
   'supplier.pay',
   'supplier.allocate_credit',
-  'supplier.refund',
+  'supplier.receive_refund',
 ];
 
 /** The exact registrations P3-S6 makes (contract §7.1-2). */
@@ -90,7 +90,7 @@ const ENTRY_ROUTINES = [
   'payment_method_activate',
   'supplier_pay',
   'supplier_allocate_credit',
-  'supplier_refund',
+  'supplier_receive_refund',
 ];
 
 /** EXECUTE grants P3-S6 may make, exactly (contract A-17, §7.1-2). */
