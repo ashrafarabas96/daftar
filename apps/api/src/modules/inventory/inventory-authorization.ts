@@ -55,6 +55,19 @@ const OPERATION_AUTHORITY: Readonly<Record<InventoryOperationCode, { readonly pe
   // authority over the purchase's warehouse (TL-4).
   'purchase.return': { permission: 'purchases.return', scope: 'warehouses' },
   'purchase.reverse': { permission: 'purchases.receive', scope: 'warehouses' },
+  // P3-S6 (PHASE_3_S6_CONTRACT A-03): a payment method is business-wide
+  // master data naming an account of the chart, so its commands are
+  // permission-only (the S4 supplier precedent) under the chart authority.
+  'payment.create_method': { permission: 'accounting.chart.manage', scope: 'warehouses' },
+  'payment.update_method': { permission: 'accounting.chart.manage', scope: 'warehouses' },
+  'payment.deactivate_method': { permission: 'accounting.chart.manage', scope: 'warehouses' },
+  'payment.activate_method': { permission: 'accounting.chart.manage', scope: 'warehouses' },
+  // A payment is scoped by every allocated purchase's warehouse (AL-39); a
+  // credit allocation and a refund move a supplier-wide credit, so they are
+  // business-wide acts (TL-5).
+  'supplier.pay': { permission: 'suppliers.pay', scope: 'warehouses' },
+  'supplier.allocate_credit': { permission: 'suppliers.pay', scope: 'business_wide' },
+  'supplier.receive_refund': { permission: 'suppliers.pay', scope: 'business_wide' },
 };
 
 /**
