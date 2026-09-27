@@ -1,7 +1,8 @@
+import { randomUUID } from 'node:crypto';
 import { mkdtempSync, rmSync, cpSync, readdirSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { Pool } from 'pg';
+import { Client, Pool } from 'pg';
 import { describe, it, expect, afterAll } from 'vitest';
 import { MIGRATIONS_DIR, runMigrations } from '../../apps/api/src/infra/migrate';
 import {
@@ -21,13 +22,27 @@ import {
   INVENTORY_ASSERTION_KEY_B64,
   INVENTORY_ASSERTION_KID,
 } from '../helpers/test-app';
-import { must, runCommand, seedS3Business, transferCommand } from '../helpers/inventory-commands';
+import { must, runCommand, seedS3Business, today, transferCommand } from '../helpers/inventory-commands';
 import { stockUp } from '../helpers/inventory-posting';
 // P3-S5 (0065/0066): the T-17 case receives a real purchase at the 0064 checkpoint.
 import { createSupplier, draftAndReceive, draftCommand } from '../helpers/purchase-commands';
 // P3-S6 (0067/0068): the P3-S6 case returns goods for a credit note at the 0066 checkpoint.
 import { returnGoods } from '../helpers/purchase-returns';
 import { installSettlementFixture } from '../helpers/purchase-settlement-fixture';
+// P3-S8 (0069, pin 13): the S7-head checkpoint posts a manual Inventory line,
+// reads every table's rows, and runs R-INV-01..05 as the reconciler.
+import {
+  assertionFor as accountingAssertionFor,
+  postAs,
+  postReversalAs,
+  reversalFingerprintOf,
+  sourceAssertion,
+  type PostCommand,
+} from '../helpers/accounting-posting';
+import { resultOf, runChecks, statuses } from '../helpers/inventory-reconciliation';
+import { createScratchDb } from '../helpers/scratch-db';
+import { expectAccepted, expectRefused, settle, type Outcome } from '../helpers/stock-ledger';
+import { changedTables, tableDigest, type TableDigest } from '../helpers/table-digest';
 
 /**
  * Terminal Closure §13–16: the upgrade path from the PRE-ENCRYPTION schema
@@ -2564,6 +2579,260 @@ describe('migration upgrade path: pre-encryption schema → latest (§13–16)',
     } finally {
       await pool.end();
       await admin.query(`DROP DATABASE IF EXISTS ${db13} WITH (FORCE)`).catch(() => undefined);
+    }
+  }, 180_000);
+
+  /**
+   * P3-S8 (pin 13, T-17; docs/PHASE_3_S8_CONTRACT.md §2.5, §7.3 #13, Annex R §2).
+   *
+   * A database parked at the S7 head (0068; S7 shipped no migration) holding a
+   * business with books, stock, a transfer, a received purchase — and a
+   * manual adjustment on the Inventory system account posted AFTER its first
+   * movement, which the S7 head admits. That is exactly the pre-foundation
+   * residue R-B1a leaves to reconciliation (Annex R §2.6, §2.10).
+   *
+   * 0069 must then: change no row of any table; register nothing; grant the
+   * reconciler exactly the §2.2 columns (and nothing at table level); add the
+   * three R-B1a objects; be a no-op on rerun. On the upgraded data the guard
+   * is live (a new manual Inventory line is refused at COMMIT), R-INV-01 names
+   * the business for the residue while R-INV-02..05 are ok, and reversing the
+   * residue — the correction path — turns R-INV-01 ok.
+   */
+  it('compatibility matrix (P3-S8): frozen 0068-checkpoint + existing business with books, stock, a purchase and a manual Inventory line → 0069 alone, no row changed, registries unchanged, reconciler columns exact, R-B1a live, rerun no-op', async () => {
+    const S7_HEAD = '0068_supplier_settlement_commands.sql';
+    const S8M = '0069_inventory_reconciliation_read_and_account_domain.sql';
+    const CODE = 'accounting.inventory_account_domain_owned';
+    const scratch = await createScratchDb('daftar_upgrade_0068', { upTo: S7_HEAD });
+    const pool = scratch.pool;
+    // The §2.2 columns, and the 0051 accounts columns the reconciler held before.
+    const RECONCILER_0051 = { accounts: ['business_id', 'id', 'tenant_id', 'type'] };
+    const RECONCILER_0069 = {
+      accounts: ['business_id', 'id', 'system_key', 'tenant_id', 'type'],
+      stock_levels: ['business_id', 'last_stock_seq', 'on_hand', 'tenant_id', 'valuation_base_minor', 'variant_id', 'warehouse_id'],
+      stock_movements: [
+        'business_id',
+        'id',
+        'movement_kind',
+        'qty_delta',
+        'source_id',
+        'source_line_id',
+        'source_type',
+        'stock_seq',
+        'tenant_id',
+        'value_delta_base_minor',
+        'variant_id',
+        'warehouse_id',
+      ],
+      stock_source_bindings: ['business_id', 'movement_kind', 'source_id', 'source_line_id', 'source_type', 'tenant_id'],
+    };
+    const reconcilerColumns = async (): Promise<Record<string, string[]>> => {
+      const r = await pool.query<{ t: string; c: string }>(
+        `SELECT c.relname::text AS t, a.attname::text AS c
+           FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid, aclexplode(a.attacl) x
+          WHERE c.relname = ANY ($1::text[]) AND c.relnamespace = 'public'::regnamespace AND a.attnum > 0 AND NOT a.attisdropped
+            AND x.grantee = 'daftar_reconciler'::regrole AND x.privilege_type = 'SELECT'
+          ORDER BY 1, 2`,
+        [Object.keys(RECONCILER_0069)],
+      );
+      const out: Record<string, string[]> = {};
+      for (const x of r.rows) (out[x.t] ??= []).push(x.c);
+      return out;
+    };
+    const reconcilerTableSelect = async (): Promise<string[]> =>
+      (
+        await pool.query<{ t: string }>(
+          `SELECT t::text AS t FROM unnest($1::text[]) t WHERE has_table_privilege('daftar_reconciler', 'public.' || t, 'SELECT') ORDER BY 1`,
+          [Object.keys(RECONCILER_0069)],
+        )
+      ).rows.map((x) => x.t);
+    const rB1aObjects = async (): Promise<string[]> =>
+      (
+        await pool.query<{ o: string }>(
+          `SELECT 'fn:' || p.proname || ':' || pg_get_userbyid(p.proowner) || ':' || p.prosecdef || ':' || array_to_string(p.proconfig, ';')
+                  || ':' || coalesce((SELECT string_agg(pg_get_userbyid(x.grantee), ',' ORDER BY 1) FROM aclexplode(p.proacl) x
+                                        WHERE x.privilege_type = 'EXECUTE' AND x.grantee <> p.proowner), '-') AS o
+             FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace
+              AND p.proname IN ('inventory_business_has_stock_movements', 'accounting_inventory_account_domain_guard')
+           UNION ALL
+           SELECT 'tg:' || t.tgname || ':' || t.tgdeferrable || ':' || t.tginitdeferred || ':' || t.tgenabled::text FROM pg_trigger t
+            WHERE t.tgrelid = 'public.journal_entries'::regclass AND t.tgname = 'journal_entries_inventory_account_domain'
+           ORDER BY 1`,
+        )
+      ).rows.map((x) => x.o);
+    const registries = async (): Promise<string[]> =>
+      (
+        await pool.query<{ r: string }>(
+          `SELECT 'type:' || source_type || ':' || registered_by AS r FROM stock_source_types
+           UNION ALL SELECT 'map:' || op_code || ':' || movement_kind || ':' || registered_by FROM inventory_operation_movement_kinds
+           UNION ALL SELECT 'op:' || op_code || ':' || registered_by FROM inventory_operation_kinds
+           UNION ALL SELECT 'acct:' || operation_kind || ':' || source_type FROM accounting_operation_kinds
+           UNION ALL SELECT 'src:' || source_type || ':' || sort_order FROM accounting_source_types`,
+        )
+      ).rows
+        .map((x) => x.r)
+        .sort();
+    // Every row of every table (schema_migrations aside, which the runner
+    // writes): 0069 writes no row anywhere, so the whole database is the
+    // protected set, discovered rather than listed.
+    const everyTable = async (): Promise<string[]> =>
+      (
+        await pool.query<{ t: string }>(
+          `SELECT relname::text AS t FROM pg_class WHERE relnamespace = 'public'::regnamespace AND relkind IN ('r', 'p') AND relname <> 'schema_migrations' ORDER BY 1`,
+        )
+      ).rows.map((x) => x.t);
+    const rows = async (): Promise<TableDigest> => tableDigest(pool, await everyTable());
+    const appUrl = scratch.url('daftar_app');
+    const inApp = async <T>(fn: (c: Client) => Promise<T>): Promise<Outcome<T>> => {
+      const c = new Client({ connectionString: appUrl });
+      await c.connect();
+      try {
+        return await settle(async () => {
+          await c.query('BEGIN');
+          const v = await fn(c);
+          await c.query('COMMIT');
+          return v;
+        });
+      } finally {
+        await c.query('ROLLBACK').catch(() => undefined);
+        await c.end();
+      }
+    };
+    try {
+      expect(scratch.applied[scratch.applied.length - 1]).toBe(S7_HEAD);
+      const day = await today(pool);
+
+      // A business that existed at the S7 head, with books, stock, a transfer
+      // and a received purchase, all committed.
+      const tenantId = must((await pool.query<{ id: string }>(`INSERT INTO tenants DEFAULT VALUES RETURNING id`)).rows[0]).id;
+      const userId = must(
+        (
+          await pool.query<{ id: string }>(
+            `INSERT INTO users (email, password_hash, display_name) VALUES ('upgrade-s8-owner@test.daftar.local', 'x', 'Upgrade S8') RETURNING id`,
+          )
+        ).rows[0],
+      ).id;
+      const biz = await seedS3Business(pool, tenantId, userId, 'upgrade-s8');
+      const c = await pool.connect();
+      try {
+        await c.query('BEGIN');
+        const gain = await stockUp(c, biz, biz.w1, [{ variantId: biz.piece.variantId, qty: '10', unitCost: '2.5' }]);
+        expect(gain.entry?.created).toBe(true);
+        await runCommand(c, biz, transferCommand(biz.w1, biz.w2, [{ variantId: biz.piece.variantId, qty: '4' }]));
+        const supplierId = await createSupplier(c, biz, { name: 'Before reconciliation' });
+        const draft = await draftCommand(c, supplierId, biz.w1, [{ variantId: biz.piece.variantId, qty: '3', unitPriceMinor: '1200' }]);
+        expect((await draftAndReceive(c, biz, draft)).purchaseEntry?.created).toBe(true);
+        await c.query('COMMIT');
+      } catch (e) {
+        await c.query('ROLLBACK').catch(() => undefined);
+        throw e;
+      } finally {
+        c.release();
+      }
+      // The S7 head admits a manual Inventory line after the first movement:
+      // the residue R-B1a leaves to reconciliation.
+      const line = (systemKey: string, side: 'D' | 'C', amount: bigint): PostCommand['lines'][number] => ({
+        account: { kind: 'system', systemKey },
+        side,
+        baseAmountMinor: amount,
+        baseCurrency: 'ILS',
+        txnAmountMinor: amount,
+        txnCurrency: 'ILS',
+        fxRate: '1',
+        fxRateSource: 'base',
+        fxRateAt: new Date('2026-03-14T09:15:00Z'),
+        branchId: null,
+        warehouseId: null,
+      });
+      const manual = (amount: bigint): PostCommand => ({
+        tenantId,
+        businessId: biz.businessId,
+        sourceType: 'manual_adjustment',
+        sourceId: randomUUID(),
+        entryDate: day,
+        description: 'manual Inventory line at the S7 head',
+        requestId: randomUUID(),
+        lines: [line('inventory', 'D', amount), line('opening_equity', 'C', amount)],
+      });
+      const residue = manual(700n);
+      const residueEntry = expectAccepted(
+        await inApp((a) => postAs(accountingAssertionFor(residue, userId), residue, {}, a)),
+        'the S7 head admits a manual Inventory line after movements',
+      );
+
+      // The checkpoint is honest: no reconciler stock read, no system_key, no
+      // R-B1a object; R-INV-01..05 cannot be inspected ("unavailable", never ok).
+      expect(await reconcilerColumns()).toEqual(RECONCILER_0051);
+      expect(await reconcilerTableSelect()).toEqual([]);
+      expect(await rB1aObjects()).toEqual([]);
+      const target = { tenantId, businessId: biz.businessId };
+      expect(statuses(await runChecks(scratch.poolAs('daftar_reconciler'), target))).toEqual({
+        'R-INV-01': 'unavailable',
+        'R-INV-02': 'unavailable',
+        'R-INV-03': 'unavailable',
+        'R-INV-04': 'unavailable',
+        'R-INV-05': 'unavailable',
+      });
+      const before = await rows();
+      const registriesBefore = await registries();
+      expect(registriesBefore.filter((r) => r.startsWith('op:'))).toHaveLength(26);
+
+      const applied = await scratch.migrateRest();
+      expect(applied).toEqual(migrationsAfter(S7_HEAD));
+      expect(applied[0]).toBe(S8M);
+
+      // No row of any table changed; nothing was registered.
+      expect(changedTables(before, await rows())).toEqual([]);
+      expect(await registries()).toEqual(registriesBefore);
+      // The reconciler reads exactly the §2.2 columns, never a whole table.
+      expect(await reconcilerColumns()).toEqual(RECONCILER_0069);
+      expect(await reconcilerTableSelect()).toEqual([]);
+      // The three R-B1a objects, in their shape (Annex R §2.4, §2.5).
+      const PIN = 'search_path=pg_catalog, public, pg_temp';
+      expect(await rB1aObjects()).toEqual([
+        `fn:accounting_inventory_account_domain_guard:daftar_accounting_internal:true:${PIN}:-`,
+        `fn:inventory_business_has_stock_movements:daftar_inventory_internal:true:${PIN}:daftar_accounting_internal`,
+        'tg:journal_entries_inventory_account_domain:true:true:O',
+      ]);
+      // Neither internal principal was left the ownership-transfer authority.
+      for (const role of ['daftar_inventory_internal', 'daftar_accounting_internal']) {
+        expect((await pool.query<{ c: boolean }>(`SELECT has_schema_privilege($1, 'public', 'CREATE') AS c`, [role])).rows[0]?.c, role).toBe(false);
+      }
+
+      // Second run does nothing, and still changes no row.
+      expect(await scratch.migrateRest()).toEqual([]);
+      expect(changedTables(before, await rows())).toEqual([]);
+
+      // On the upgraded data: the residue is reported, by business, and only by R-INV-01.
+      const upgraded = await runChecks(scratch.poolAs('daftar_reconciler'), target);
+      expect(statuses(upgraded)).toEqual({ 'R-INV-01': 'discrepancy', 'R-INV-02': 'ok', 'R-INV-03': 'ok', 'R-INV-04': 'ok', 'R-INV-05': 'ok' });
+      expect({ n: resultOf(upgraded, 'R-INV-01').offendingCount, ids: resultOf(upgraded, 'R-INV-01').offendingIds }).toEqual({ n: 1, ids: [biz.businessId] });
+      // The guard is live: a new manual Inventory line is refused at COMMIT …
+      const again = manual(300n);
+      expectRefused(await inApp((a) => postAs(accountingAssertionFor(again, userId), again, {}, a)), 'P0001', CODE, 'a manual Inventory line after 0069');
+      // … and the correction path is open: reversing the residue is accepted
+      // and R-INV-01 is then ok.
+      const assertion = sourceAssertion({
+        actorUserId: userId,
+        tenantId,
+        businessId: biz.businessId,
+        operationKind: 'reverse',
+        sourceType: 'reversal',
+        sourceId: residueEntry.entryId,
+        postingFingerprint: reversalFingerprintOf(residue, residueEntry.entryId, day),
+      });
+      expectAccepted(
+        await inApp((a) => postReversalAs(assertion, residueEntry.entryId, day, 'pre-foundation residue', randomUUID(), a)),
+        'the reversal of the residue',
+      );
+      expect(statuses(await runChecks(scratch.poolAs('daftar_reconciler'), target))).toEqual({
+        'R-INV-01': 'ok',
+        'R-INV-02': 'ok',
+        'R-INV-03': 'ok',
+        'R-INV-04': 'ok',
+        'R-INV-05': 'ok',
+      });
+    } finally {
+      await scratch.drop();
     }
   }, 180_000);
 });
