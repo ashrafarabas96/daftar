@@ -122,6 +122,9 @@ export type TransactionSeamRefusal =
   | 'seam.inventory_assertion_missing'
   | 'seam.inventory_assertion_malformed'
   | 'seam.inventory_assertion_scope_mismatch'
+  | 'seam.inventory_assertion_operation_mismatch'
+  | 'seam.inventory_assertion_exhausted'
+  | 'seam.inventory_assertion_unused'
   | 'seam.accounting_assertion_missing'
   | 'seam.accounting_assertion_malformed'
   | 'seam.accounting_assertion_scope_mismatch'
@@ -205,7 +208,7 @@ function issuePostingTransaction(sql: TransactionSql, sequence: AccountingAssert
  * (P3-AL-55 §G), and this check exists so a defect fails before a connection
  * is taken, not instead of the database's step 9.
  */
-function assertInventoryAssertionCoheres(scope: BusinessScope, inventoryAssertion: string): void {
+function assertInventoryAssertionCoheres(scope: BusinessScope, inventoryAssertion: unknown): { assertion: string; operation: string } {
   if (typeof scope.businessTransactionId !== 'string' || !CANONICAL_TRACE_ID.test(scope.businessTransactionId)) {
     throw new TransactionSeamError(
       'seam.business_transaction_id_malformed',
@@ -215,7 +218,7 @@ function assertInventoryAssertionCoheres(scope: BusinessScope, inventoryAssertio
   if (typeof inventoryAssertion !== 'string' || inventoryAssertion.length === 0) {
     throw new TransactionSeamError('seam.inventory_assertion_missing', 'a business seam cannot be opened without an inventory assertion');
   }
-  let parts: { tenantId: string; businessId: string };
+  let parts: { tenantId: string; businessId: string; wireOperation: string };
   try {
     parts = splitInventoryAssertion(inventoryAssertion);
   } catch {
@@ -226,6 +229,155 @@ function assertInventoryAssertionCoheres(scope: BusinessScope, inventoryAssertio
   if (parts.tenantId !== scope.tenantId || parts.businessId !== scope.businessId) {
     throw new TransactionSeamError('seam.inventory_assertion_scope_mismatch', "the inventory assertion's tenant/business claims differ from the seam's scope");
   }
+  // Component 6 carries the operation code with `.` written as `:` (invctl/1).
+  return { assertion: inventoryAssertion, operation: parts.wireOperation.replaceAll(':', '.') };
+}
+
+/**
+ * Seam 2's inventory authority (PHASE_3_S6_CONTRACT A-19): one invctl/1
+ * assertion per entry routine the operation calls, in call order. A bare
+ * string (or a one-element tuple) is exactly the seam as it was before.
+ */
+export type InventoryAssertions = string | readonly [string, ...string[]];
+
+/** What `InventoryAssertionSequence.plan` decides for one seam-2 transaction. */
+export interface InventoryAssertionPlan {
+  /** `app.inventory_assertion` at `BEGIN`: the single assertion, or empty for a sequence. */
+  readonly guc: string;
+  /** The sequence of two or more assertions, or null for the single-assertion seam. */
+  readonly sequence: InventoryAssertionSequence | null;
+  /** The operation claim of the single assertion, or null for a sequence. */
+  readonly singleOperation: string | null;
+}
+
+/**
+ * A-19: the ordered inventory assertions of one seam-2 transaction, each
+ * presented for exactly one entry routine — the sibling of R-B1's
+ * `AccountingAssertionSequence`.
+ *
+ * Pure state, no I/O, so its rules are testable without a database:
+ * - `next` hands out the next assertion only for the routine whose operation
+ *   code equals that assertion's operation claim
+ *   (`seam.inventory_assertion_operation_mismatch`), and never more
+ *   assertions than there are (`seam.inventory_assertion_exhausted`);
+ * - `assertComplete` is STRICT: a commit that left any assertion unpresented
+ *   is refused `seam.inventory_assertion_unused`. Unlike a posting, every
+ *   entry routine consumes its assertion even on replay, so presenting fewer
+ *   than all is never legitimate.
+ *
+ * Why swapping `app.inventory_assertion` inside one transaction is safe: it is
+ * read only by `inventory_assertion_current`, which only the helpers INSIDE an
+ * entry routine call; no deferred guard reads it (A-19).
+ */
+export class InventoryAssertionSequence {
+  private presented = 0;
+
+  private constructor(
+    private readonly assertions: readonly string[],
+    private readonly operations: readonly string[],
+  ) {}
+
+  /**
+   * Coherence-check every element against `scope` (before any connection is
+   * taken) and build the sequence. A string or a one-element tuple is the
+   * single-assertion seam (`sequence: null`, `guc` = the assertion); two or
+   * more have a sequence, and the transaction starts with the GUC EMPTY, so a
+   * routine that was not presented its assertion is refused by the database
+   * (`inventory.assertion_missing` / `inventory.assertion_wrong_operation`).
+   * A duplicate element is `seam.inventory_assertion_malformed`; an empty
+   * tuple is `seam.inventory_assertion_missing`.
+   */
+  static plan(scope: BusinessScope, inventoryAssertions: InventoryAssertions): InventoryAssertionPlan {
+    const list: readonly unknown[] = Array.isArray(inventoryAssertions) ? inventoryAssertions : [inventoryAssertions];
+    if (list.length === 0) {
+      throw new TransactionSeamError('seam.inventory_assertion_missing', 'a business seam cannot be opened without an inventory assertion');
+    }
+    const assertions: string[] = [];
+    const operations: string[] = [];
+    for (const raw of list) {
+      const { assertion, operation } = assertInventoryAssertionCoheres(scope, raw);
+      if (assertions.includes(assertion)) {
+        throw new TransactionSeamError('seam.inventory_assertion_malformed', 'each inventory assertion authorizes one routine call and may appear only once');
+      }
+      assertions.push(assertion);
+      operations.push(operation);
+    }
+    const [first, ...rest] = assertions;
+    const [firstOperation] = operations;
+    if (first !== undefined && firstOperation !== undefined && rest.length === 0) return { guc: first, sequence: null, singleOperation: firstOperation };
+    return { guc: '', sequence: new InventoryAssertionSequence(assertions, operations), singleOperation: null };
+  }
+
+  /** The assertion for the next routine call, refusing an operation that is not its claim, or a call beyond the last. */
+  next(opCode: string): string {
+    const i = this.presented;
+    const assertion = this.assertions[i];
+    const operation = this.operations[i];
+    if (assertion === undefined || operation === undefined) {
+      throw new TransactionSeamError('seam.inventory_assertion_exhausted', 'every inventory assertion of this transaction has already been presented');
+    }
+    if (opCode !== operation) {
+      throw new TransactionSeamError(
+        'seam.inventory_assertion_operation_mismatch',
+        "the routine's operation differs from the claim of the next inventory assertion",
+      );
+    }
+    this.presented = i + 1;
+    return assertion;
+  }
+
+  /** Refuse a commit that left any inventory assertion unpresented. */
+  assertComplete(): void {
+    if (this.presented < this.assertions.length) {
+      throw new TransactionSeamError(
+        'seam.inventory_assertion_unused',
+        `${this.assertions.length - this.presented} inventory assertion(s) of this transaction were never presented`,
+      );
+    }
+  }
+}
+
+/**
+ * The inventory authority of each seam-2 handle: its transaction-bound SQL,
+ * and either the sequence it presents or the operation claim of its single
+ * assertion (already set at `BEGIN`).
+ */
+interface InventoryAuthority {
+  readonly sql: TransactionSql;
+  readonly plan: InventoryAssertionPlan;
+}
+const inventoryAuthorities = new WeakMap<object, InventoryAuthority>();
+
+/**
+ * A-19: set `app.inventory_assertion`, transaction-locally, to the next
+ * assertion of `tx`'s sequence, for ONE call of the entry routine of
+ * `opCode`. Call it immediately before that routine.
+ *
+ * On a single-assertion handle the GUC was set at `BEGIN`, and this only
+ * checks that `opCode` is that assertion's claim. It refuses anything that is
+ * not a seam-2 handle (`seam.inventory_assertion_missing`); a handle whose
+ * transaction has ended cannot set the GUC (`seam.transaction_closed`).
+ */
+export async function presentInventoryAssertion(tx: BusinessInventoryAccountingTransaction, opCode: string): Promise<void> {
+  const authority = typeof tx === 'object' && tx !== null ? inventoryAuthorities.get(tx) : undefined;
+  if (authority === undefined) {
+    throw new TransactionSeamError(
+      'seam.inventory_assertion_missing',
+      'only a handle of withBusinessInventoryAccountingTransaction presents inventory assertions',
+    );
+  }
+  const { sequence, singleOperation } = authority.plan;
+  if (sequence === null) {
+    if (singleOperation !== opCode) {
+      throw new TransactionSeamError(
+        'seam.inventory_assertion_operation_mismatch',
+        "the routine's operation differs from the claim of the inventory assertion",
+      );
+    }
+    return;
+  }
+  const assertion = sequence.next(opCode);
+  await authority.sql.query(`SELECT set_config('app.inventory_assertion', $1, true)`, [assertion]);
 }
 
 /** The source claims of one accounting assertion (claims 7 and 8). */
@@ -580,22 +732,37 @@ export class Database implements OnModuleDestroy, OnModuleInit {
    * `presentAccountingAssertion` (the posting adapter does this before each
    * `postEntryInTransaction`); a commit that presented some but not all is
    * refused `seam.accounting_assertion_unused` and rolls back.
+   *
+   * A-19 (PHASE_3_S6_CONTRACT): `inventoryAssertions` is likewise one
+   * assertion per entry routine the operation calls, in call order. A string
+   * (or a one-element tuple) is exactly the seam as before. With two or more,
+   * every element is coherence-checked here, `app.inventory_assertion` starts
+   * EMPTY, the callback presents each through `presentInventoryAssertion`
+   * immediately before its routine, and a commit that left any unpresented is
+   * refused `seam.inventory_assertion_unused` and rolls back.
    */
   async withBusinessInventoryAccountingTransaction<T>(
     scope: BusinessScope,
-    inventoryAssertion: string,
+    inventoryAssertions: InventoryAssertions,
     accountingAssertions: AccountingAssertions,
     fn: (tx: BusinessInventoryAccountingTransaction) => Promise<T>,
   ): Promise<T> {
     this.refuseNestedSeam();
-    assertInventoryAssertionCoheres(scope, inventoryAssertion);
+    const inventory = InventoryAssertionSequence.plan(scope, inventoryAssertions);
     const { guc, sequence } = AccountingAssertionSequence.plan(scope, accountingAssertions);
     return this.businessSeam(
       scope,
-      { inventoryAssertion, accountingAssertion: guc },
-      (sql, bound): BusinessInventoryAccountingTransaction => ({ scope: bound, query: sql.query, accounting: issuePostingTransaction(sql, sequence) }),
+      { inventoryAssertion: inventory.guc, accountingAssertion: guc },
+      (sql, bound): BusinessInventoryAccountingTransaction => {
+        const handle: BusinessInventoryAccountingTransaction = { scope: bound, query: sql.query, accounting: issuePostingTransaction(sql, sequence) };
+        inventoryAuthorities.set(handle, { sql, plan: inventory });
+        return handle;
+      },
       fn,
-      () => sequence?.assertComplete(),
+      () => {
+        inventory.sequence?.assertComplete();
+        sequence?.assertComplete();
+      },
     );
   }
 
