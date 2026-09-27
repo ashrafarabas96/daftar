@@ -7,26 +7,36 @@
  */
 import { Pool } from 'pg';
 
-const version = process.argv[2];
-const url = process.env['WORKER_DATABASE_URL'];
-if (!version || !url) {
-  console.error('usage: WORKER_DATABASE_URL=... tsx scripts/check-key-retirement.ts <keyVersion>');
-  process.exit(2);
-}
-const pool = new Pool({ connectionString: url, max: 1 });
-try {
-  const { rows } = await pool.query<{ n: number }>(
-    `SELECT count(*)::int AS n FROM credential_deliveries
-     WHERE key_version = $1 AND secret_ciphertext IS NOT NULL`,
-    [version],
-  );
-  const n = rows[0]?.n ?? 0;
-  if (n > 0) {
-    console.log(`NO — key version '${version}' is still referenced by ${n} non-terminal deliver${n === 1 ? 'y' : 'ies'}.`);
-    process.exit(1);
+async function main(): Promise<void> {
+  const version = process.argv[2];
+  const url = process.env['WORKER_DATABASE_URL'];
+  if (!version || !url) {
+    console.error('usage: WORKER_DATABASE_URL=... tsx scripts/check-key-retirement.ts <keyVersion>');
+    process.exit(2);
   }
-  console.log(`YES — key version '${version}' is not referenced by any non-terminal delivery.`);
-  process.exit(0);
-} finally {
-  await pool.end();
+  const pool = new Pool({ connectionString: url, max: 1 });
+  try {
+    const { rows } = await pool.query<{ n: number }>(
+      `SELECT count(*)::int AS n FROM credential_deliveries
+       WHERE key_version = $1 AND secret_ciphertext IS NOT NULL`,
+      [version],
+    );
+    const n = rows[0]?.n ?? 0;
+    if (n > 0) {
+      console.log(`NO — key version '${version}' is still referenced by ${n} non-terminal deliver${n === 1 ? 'y' : 'ies'}.`);
+      process.exit(1);
+    }
+    console.log(`YES — key version '${version}' is not referenced by any non-terminal delivery.`);
+    process.exit(0);
+  } finally {
+    await pool.end();
+  }
 }
+
+// A function, not top-level await: `tsx` compiles this repo's scripts as
+// CommonJS, where top-level await does not compile, so the check never ran
+// (found by the P3-S9 deployed rehearsal).
+main().catch((e: unknown) => {
+  console.error(e);
+  process.exit(1);
+});

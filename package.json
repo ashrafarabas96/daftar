@@ -23,7 +23,7 @@
     "perf:phase2:s8": "vitest run tests/performance",
     "lint": "eslint . --max-warnings 0",
     "format": "prettier --check .",
-    "typecheck": "npm run typecheck --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present && tsc -p tsconfig.json",
     "migrate": "npm run migrate -w @daftar/api",
     "bootstrap:db-roles": "tsx scripts/bootstrap-db-roles.ts",
     "check:localization": "tsx scripts/check-localization.ts",
