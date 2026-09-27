@@ -51,7 +51,9 @@ export function SupplierDetailView(props: SupplierDetailViewProps & ViewBaseProp
   return (
     <Stack>
       <Inline gap={2}>
-        <Title>{supplier.name}</Title>
+        <Title>
+          <bdi>{supplier.name}</bdi>
+        </Title>
         <SupplierStatusBadge t={t} status={supplier.status} />
       </Inline>
       {supplier.phone ? (

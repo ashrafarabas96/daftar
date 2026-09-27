@@ -2,7 +2,7 @@
 import { useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import type { BusinessSummaryDto } from '@daftar/shared-contracts';
-import { Button, Card, Dropdown, colors, spacing, typography } from '@daftar/design-system';
+import { Button, Card, Dropdown, TOUCH_TARGET, colors, radius, spacing, typography } from '@daftar/design-system';
 import { makeT, type Locale } from '@/lib/i18n';
 import { currentBusinessId, logout, setCurrentBusinessId } from '@/lib/client';
 import { getMyBusinesses } from '@/lib/merchant-api';
@@ -75,8 +75,11 @@ export function AppHeader({ locale, active }: { locale: Locale; active: string }
             href={`/${locale}/${item.path}`}
             aria-current={active === item.key ? 'page' : undefined}
             style={{
-              padding: `${spacing[2]} ${spacing[3]}`,
-              borderRadius: '0.5rem',
+              display: 'inline-flex',
+              alignItems: 'center',
+              minHeight: TOUCH_TARGET,
+              padding: `0 ${spacing[3]}`,
+              borderRadius: radius.md,
               textDecoration: 'none',
               color: active === item.key ? colors.brand.primary : colors.neutral[600],
               fontWeight: active === item.key ? 600 : 400,
@@ -126,7 +129,7 @@ export function PageShell(props: { locale: Locale; active: string; children: Rea
   return (
     <>
       <AppHeader locale={props.locale} active={props.active} />
-      <main style={{ maxWidth: '64rem', margin: '0 auto', padding: spacing[6] }}>
+      <main style={{ maxWidth: '64rem', margin: '0 auto', padding: `${spacing[6]} ${spacing[4]}` }}>
         <Card>{props.children}</Card>
       </main>
     </>

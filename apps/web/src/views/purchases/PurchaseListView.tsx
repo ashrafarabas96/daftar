@@ -2,7 +2,7 @@
  * Purchases (P3-S7 contract A-11): the purchase list as List rows — supplier,
  * date, warehouse and the server's total — never a sideways-scrolling table.
  */
-import { Badge, Button, EmptyState, List, Tabs } from '@daftar/design-system';
+import { Badge, Button, EmptyState, List, Select } from '@daftar/design-system';
 import type { PurchaseStatusDto } from '@daftar/shared-contracts';
 import type { ViewBaseProps } from '@/lib/phase3-format';
 import { RefusalNotice } from '../common/feedback';
@@ -45,10 +45,11 @@ export function PurchaseListView(props: PurchaseListViewProps & ViewBaseProps) {
           {t('purchasing.receive.title')}
         </Button>
       ) : null}
-      <Tabs
-        tabs={FILTERS.map((f) => ({ key: f, label: t(`purchasing.list.filter.${f}`) }))}
-        active={props.filter}
-        onChange={(key) => props.onFilter(toFilter(key))}
+      <Select
+        label={t('stock.levels.show')}
+        value={props.filter}
+        options={FILTERS.map((f) => ({ value: f, label: t(`purchasing.list.filter.${f}`) }))}
+        onChange={(value) => props.onFilter(toFilter(value))}
       />
       <RefusalNotice t={t} locale={locale} errorKey={props.errorKey} />
       {props.rows.length === 0 ? (
@@ -58,7 +59,7 @@ export function PurchaseListView(props: PurchaseListViewProps & ViewBaseProps) {
           items={props.rows.map((row) => ({
             key: row.purchaseId,
             onClick: () => props.onOpen(row),
-            primary: row.supplierName,
+            primary: <bdi>{row.supplierName}</bdi>,
             secondary: (
               <Inline gap={2}>
                 <CivilDate iso={row.documentDate} locale={locale} />

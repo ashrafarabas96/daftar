@@ -63,6 +63,22 @@ export function formatQty(value: string, decimals: number, locale: Locale = 'en'
   return `${sign}${grouped}${digits.length > 0 ? `${decimalSep}${digits}` : ''}`;
 }
 
+/**
+ * A decimal the server returned as text — a unit price, an exchange rate — in
+ * the locale's separators (M-4: Turkish "3.200" reads as three thousand two
+ * hundred, so "3.200 USD" must be spelled "3,200"). Pure text: trailing
+ * fraction zeros beyond `minDecimals` are dropped, never rounded, and the rest
+ * is re-spelled by `formatQty`.
+ */
+export function formatDecimalText(value: string, locale: Locale, minDecimals = 0): string {
+  const m = DECIMAL_TEXT.exec(value.trim());
+  if (!m) return value;
+  const [, sign = '', whole = '0', fraction = ''] = m;
+  let digits = fraction;
+  while (digits.length > minDecimals && digits.endsWith('0')) digits = digits.slice(0, -1);
+  return formatQty(`${sign}${whole}${digits.length > 0 ? `.${digits}` : ''}`, Math.max(digits.length, minDecimals), locale);
+}
+
 /** Magnitude of a signed decimal string, by text (the "Short by {qty}" label of a negative on-hand). */
 export function unsignedQty(value: string): string {
   return value.trim().replace(/^-/, '');

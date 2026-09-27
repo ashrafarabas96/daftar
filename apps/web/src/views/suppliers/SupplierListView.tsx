@@ -49,7 +49,7 @@ export function SupplierListView(props: SupplierListViewProps & ViewBaseProps) {
             onClick: () => on.onOpen(row.supplierId),
             primary: (
               <Inline gap={2}>
-                <span>{row.name}</span>
+                <bdi>{row.name}</bdi>
                 <SupplierStatusBadge t={t} status={row.status} />
               </Inline>
             ),

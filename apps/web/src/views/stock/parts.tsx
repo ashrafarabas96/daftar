@@ -91,7 +91,11 @@ export function Qty(props: { value: string; decimals: number; locale: Locale }) 
 export function OnHand(props: { t: Translate; locale: Locale; value: string; decimals: number }) {
   const { t, value, decimals, locale } = props;
   if (isNegativeText(value)) {
-    return <Badge tone="danger">{rich(t('stock.levels.shortBy'), { qty: <Qty value={unsignedQty(value)} decimals={decimals} locale={locale} /> })}</Badge>;
+    return (
+      <Badge tone="danger">
+        <span>{rich(t('stock.levels.shortBy'), { qty: <Qty value={unsignedQty(value)} decimals={decimals} locale={locale} /> })}</span>
+      </Badge>
+    );
   }
   if (isZeroQuantityText(value.trim())) return <Badge tone="neutral">{t('stock.levels.outOfStock')}</Badge>;
   return (

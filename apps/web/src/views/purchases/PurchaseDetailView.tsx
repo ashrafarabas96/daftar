@@ -8,7 +8,8 @@
  * disabled. The merchant never reads a trace, entry or movement id here.
  */
 import { Button, List, Textarea } from '@daftar/design-system';
-import { Ltr, rich, type ViewBaseProps } from '@/lib/phase3-format';
+import { Ltr, formatDecimalText, rich, type ViewBaseProps } from '@/lib/phase3-format';
+import { minorUnitsOf } from '@daftar/shared-contracts';
 import { isNonZeroMinor } from '../common/amount-text';
 import { RefusalNotice } from '../common/feedback';
 import { CivilDate, Fact, Heading, Inline, Money, Muted, Notice, Panel, Quantity, Stack, Text, Title } from '../common/primitives';
@@ -45,7 +46,9 @@ export function PurchaseDetailView(props: PurchaseDetailViewProps & ViewBaseProp
   const money = (amountMinor: string) => <Money amountMinor={amountMinor} currency={purchase.currency} locale={locale} />;
   return (
     <Stack>
-      <Title>{purchase.supplierName}</Title>
+      <Title>
+        <bdi>{purchase.supplierName}</bdi>
+      </Title>
       <Inline gap={2}>
         <CivilDate iso={purchase.documentDate} locale={locale} />
         <span>{purchase.warehouseName}</span>
@@ -67,7 +70,7 @@ export function PurchaseDetailView(props: PurchaseDetailViewProps & ViewBaseProp
             <Inline gap={2}>
               <Quantity value={line.qty} decimals={line.unitDecimals} locale={locale} />
               <span>×</span>
-              <Ltr>{`${line.unitPrice} ${purchase.currency}`}</Ltr>
+              <Ltr>{`${formatDecimalText(line.unitPrice, locale, minorUnitsOf(purchase.currency))} ${purchase.currency}`}</Ltr>
               {isNonZeroMinor(line.discountTxnMinor) ? (
                 <span>{rich(t('purchasing.receive.discountApplied'), { amount: money(line.discountTxnMinor) })}</span>
               ) : null}
@@ -83,7 +86,7 @@ export function PurchaseDetailView(props: PurchaseDetailViewProps & ViewBaseProp
         <Muted>
           {rich(t('purchasing.receive.rateUsed'), {
             from: <Ltr>{`1 ${purchase.currency}`}</Ltr>,
-            to: <Ltr>{`${purchase.rate} ${purchase.baseCurrency}`}</Ltr>,
+            to: <Ltr>{`${formatDecimalText(purchase.rate, locale)} ${purchase.baseCurrency}`}</Ltr>,
           })}
         </Muted>
       ) : null}

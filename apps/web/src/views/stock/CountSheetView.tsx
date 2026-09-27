@@ -9,7 +9,7 @@
  * "Cost per unit" appears only on the lines the server asked about
  * (`inventory.unit_cost_required`).
  */
-import { Badge, Button, Card, ConfirmationDialog, List, TextField } from '@daftar/design-system';
+import { Badge, Button, Card, ConfirmationDialog, List, TextField, spacing } from '@daftar/design-system';
 import type { InventoryStocktakeDetailDto, InventoryStocktakeDetailLineDto } from '@/lib/phase3-api';
 import { Ltr, isZeroQuantityText, rich, unsignedQty, type ViewBaseProps } from '@/lib/phase3-format';
 import { formatDateText, identityKey, isNegativeText, trimQtyText, type DraftLine, type PickOption } from './model';
@@ -62,9 +62,13 @@ function Comparison(props: ViewBaseProps & { line: InventoryStocktakeDetailLineD
   if (isZeroQuantityText(line.varianceQty.trim())) return <Badge tone="success">{t('stock.count.matches')}</Badge>;
   const qty = <Qty value={unsignedQty(line.varianceQty)} decimals={line.unitDecimals} locale={locale} />;
   return isNegativeText(line.varianceQty) ? (
-    <Badge tone="danger">{rich(t('stock.count.fewer'), { qty })}</Badge>
+    <Badge tone="danger">
+      <span>{rich(t('stock.count.fewer'), { qty })}</span>
+    </Badge>
   ) : (
-    <Badge tone="info">{rich(t('stock.count.more'), { qty })}</Badge>
+    <Badge tone="info">
+      <span>{rich(t('stock.count.more'), { qty })}</span>
+    </Badge>
   );
 }
 
@@ -76,7 +80,7 @@ export function CountSheetView(props: CountSheetViewProps & ViewBaseProps) {
   return (
     <div style={STACK}>
       <ScreenTitle>{t('stock.count.title')}</ScreenTitle>
-      <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+      <div style={{ display: 'flex', gap: spacing[2], alignItems: 'center', flexWrap: 'wrap' }}>
         <strong>
           <bdi>{props.warehouseName}</bdi>
         </strong>
@@ -96,7 +100,7 @@ export function CountSheetView(props: CountSheetViewProps & ViewBaseProps) {
                 key: line.lineId,
                 primary: <ItemName name={line.name} variantName={line.variantName} />,
                 secondary: (
-                  <span style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                  <span style={{ display: 'flex', flexDirection: 'column', gap: spacing[2] }}>
                     {editable ? (
                       <TextField
                         label={t('stock.count.counted')}

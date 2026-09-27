@@ -12,7 +12,8 @@
  * No tax or duty field, option or preset exists here: BLOCKED BY OD-03.
  */
 import { Button, Checkbox, List, Select, Switch, TextField, Textarea } from '@daftar/design-system';
-import { Ltr, rich, type ViewBaseProps } from '@/lib/phase3-format';
+import { minorUnitsOf } from '@daftar/shared-contracts';
+import { Ltr, formatDecimalText, rich, type ViewBaseProps } from '@/lib/phase3-format';
 import { isNonZeroMinor } from '../common/amount-text';
 import { activeMethodChoices } from '../common/payment-methods';
 import { ExchangeRatePrompt, RefusalNotice, type ExchangeRatePromptProps } from '../common/feedback';
@@ -173,7 +174,9 @@ function SupplierPicker(props: ReceivePurchaseViewProps & ViewBaseProps) {
     return (
       <Panel>
         <Muted>{t('purchasing.receive.supplier')}</Muted>
-        <Text strong>{form.supplier.name}</Text>
+        <Text strong>
+          <bdi>{form.supplier.name}</bdi>
+        </Text>
         <Button variant="secondary" fullWidth onClick={on.onClearSupplier}>
           {t('purchasing.receive.changeSupplier')}
         </Button>
@@ -334,7 +337,11 @@ function ReviewStep(props: ReceivePurchaseViewProps & ViewBaseProps & { review: 
   return (
     <Stack>
       <Heading>{t('purchasing.receive.reviewTitle')}</Heading>
-      {props.form.supplier ? <Text strong>{props.form.supplier.name}</Text> : null}
+      {props.form.supplier ? (
+        <Text strong>
+          <bdi>{props.form.supplier.name}</bdi>
+        </Text>
+      ) : null}
       <List
         items={review.lines.map((line) => ({
           key: line.lineId,
@@ -343,7 +350,7 @@ function ReviewStep(props: ReceivePurchaseViewProps & ViewBaseProps & { review: 
             <Inline gap={2}>
               <Quantity value={line.qty} decimals={line.unitDecimals} locale={locale} />
               <span>×</span>
-              <Ltr>{`${line.unitPrice} ${review.currency}`}</Ltr>
+              <Ltr>{`${formatDecimalText(line.unitPrice, locale, minorUnitsOf(review.currency))} ${review.currency}`}</Ltr>
               {isNonZeroMinor(line.discountTxnMinor) ? (
                 <span>
                   {rich(t('purchasing.receive.discountApplied'), {
@@ -455,7 +462,7 @@ function ReceiptResult(props: ReceivePurchaseViewProps & ViewBaseProps & { resul
             <Muted>
               {rich(t('purchasing.receive.rateUsed'), {
                 from: <Ltr>{`1 ${receipt.currency}`}</Ltr>,
-                to: <Ltr>{`${receipt.rate.rate} ${baseCurrency}`}</Ltr>,
+                to: <Ltr>{`${formatDecimalText(receipt.rate.rate, locale)} ${baseCurrency}`}</Ltr>,
               })}
             </Muted>
           ) : null}

@@ -46,7 +46,9 @@ export function ReturnToSupplierView(props: ReturnToSupplierViewProps & ViewBase
     <>
       <Title>{t('purchasing.return.title')}</Title>
       <Inline gap={2}>
-        <Text strong>{props.supplierName}</Text>
+        <Text strong>
+          <bdi>{props.supplierName}</bdi>
+        </Text>
         <CivilDate iso={props.documentDateOfPurchase} locale={locale} />
       </Inline>
     </>

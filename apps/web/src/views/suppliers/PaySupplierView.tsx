@@ -71,7 +71,7 @@ export function PaySupplierView(props: PaySupplierViewProps & ViewBaseProps) {
             <Text>
               {rich(t('payments.doneDetail'), {
                 amount: <Money amountMinor={props.result.amountMinor} currency={props.result.currency} locale={locale} />,
-                name: props.supplier.name,
+                name: <bdi>{props.supplier.name}</bdi>,
                 n: <Ltr>{props.result.allocations.length}</Ltr>,
               })}
             </Text>
@@ -87,7 +87,9 @@ export function PaySupplierView(props: PaySupplierViewProps & ViewBaseProps) {
     <Stack>
       <Title>{t('payments.title')}</Title>
       <Inline gap={2}>
-        <Text strong>{props.supplier.name}</Text>
+        <Text strong>
+          <bdi>{props.supplier.name}</bdi>
+        </Text>
         <SupplierStatusBadge t={t} status={props.supplier.status} />
       </Inline>
       {props.supplier.status === 'inactive' ? <Notice tone="warning">{t('payments.supplierInactive')}</Notice> : null}
