@@ -6,17 +6,22 @@ import { Button, Card, Dropdown, colors, spacing, typography } from '@daftar/des
 import { makeT, type Locale } from '@/lib/i18n';
 import { currentBusinessId, logout, setCurrentBusinessId } from '@/lib/client';
 import { getMyBusinesses } from '@/lib/merchant-api';
+import { getInventoryAccess, type Phase3Permission } from '@/lib/phase3-api';
 
 const NAV = [
   { key: 'dashboard', path: 'dashboard' },
   { key: 'catalog', path: 'catalog' },
+  // P3-S7 (A-11): shown only to a member holding the matching view permission.
+  { key: 'stock', path: 'stock', requires: 'inventory.view' },
+  { key: 'purchases', path: 'purchases', requires: 'purchases.view' },
+  { key: 'suppliers', path: 'suppliers', requires: 'suppliers.view' },
   { key: 'team', path: 'team' },
   { key: 'structure', path: 'structure' },
   { key: 'roles', path: 'roles' },
   { key: 'plan', path: 'plan' },
   { key: 'settings', path: 'settings' },
   { key: 'security', path: 'security' },
-] as const;
+] as const satisfies readonly { key: string; path: string; requires?: Phase3Permission }[];
 
 /**
  * App header with the BUSINESS SWITCHER (Directive §62 "Business switch"):
@@ -29,13 +34,22 @@ export function AppHeader({ locale, active }: { locale: Locale; active: string }
   const [busy, setBusy] = useState(false);
   const [businesses, setBusinesses] = useState<BusinessSummaryDto[]>([]);
   const [current, setCurrent] = useState<string | null>(null);
+  // The caller's own Phase 3 grants (GET /v1/inventory/access). Advisory: it
+  // only hides links a member could not use; every read still enforces its own
+  // authority. Until it answers, and when it fails, no Phase 3 link is shown.
+  const [granted, setGranted] = useState<ReadonlySet<string>>(new Set());
 
   useEffect(() => {
     setCurrent(currentBusinessId());
     getMyBusinesses()
       .then((r) => setBusinesses(r.items))
       .catch(() => setBusinesses([]));
+    getInventoryAccess()
+      .then((a) => setGranted(new Set(a.permissions)))
+      .catch(() => setGranted(new Set()));
   }, []);
+
+  const visibleNav = NAV.filter((item) => !('requires' in item) || granted.has(item.requires));
 
   const currentName = businesses.find((b) => b.businessId === current)?.name ?? t('nav.switchBusiness');
 
@@ -55,7 +69,7 @@ export function AppHeader({ locale, active }: { locale: Locale; active: string }
     >
       <strong style={{ color: colors.brand.primary, fontSize: typography.size.lg }}>{t('app.name')}</strong>
       <nav style={{ display: 'flex', gap: spacing[1], flex: 1, flexWrap: 'wrap' }}>
-        {NAV.map((item) => (
+        {visibleNav.map((item) => (
           <a
             key={item.key}
             href={`/${locale}/${item.path}`}
