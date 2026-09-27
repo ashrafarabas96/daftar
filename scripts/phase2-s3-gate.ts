@@ -414,7 +414,7 @@ function checkKeySeparation(): void {
   // `K‖0x00` differ as bytes and are one HMAC-SHA-256 key — so `.equals(`
   // anywhere in the configuration fails the check, and the comparison must be
   // a `hmacKeysEquivalent(` call whose arguments name both keys.
-  const pairCompared = hmacKeysEquivalentCallArguments(config).some((args) => /ACCOUNTING_ASSERTION_KEY/.test(args) && /PROVISIONING_ASSERTION_KEY/.test(args));
+  const pairCompared = keyComparisonCallArguments(config).some((args) => /ACCOUNTING_ASSERTION_KEY/.test(args) && /PROVISIONING_ASSERTION_KEY/.test(args));
   if (pairCompared) {
     ok('the configuration refuses to start when the accounting key is HMAC-equivalent to the provisioning key');
   } else {
@@ -429,7 +429,7 @@ function checkKeySeparation(): void {
 }
 
 /** The argument text of every `hmacKeysEquivalent(` call in `source`, read up to its balanced closing parenthesis. */
-function hmacKeysEquivalentCallArguments(source: string): string[] {
+function keyComparisonCallArguments(source: string): string[] {
   const found: string[] = [];
   const marker = 'hmacKeysEquivalent(';
   for (let at = source.indexOf(marker); at !== -1; at = source.indexOf(marker, at + marker.length)) {
