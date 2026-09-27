@@ -99,8 +99,13 @@ export const S5_ROUTINE_OF: Readonly<Record<S5Kind, string>> = {
   purchase_reverse: 'purchase_reverse(uuid,uuid,date,text,uuid,bigint,uuid[],uuid[],numeric[],bigint[])',
 };
 
-/** The three internal helpers (no grant). */
-export const S5_HELPERS = ['purchase_lock_stock_keys(uuid,uuid[])', 'purchase_bridge_return(uuid)', 'purchase_bridge_reversal(uuid)'] as const;
+/** The four internal helpers (no grant): the key lock, the two bridge writers and the credit-note writer (R-55). */
+export const S5_HELPERS = [
+  'purchase_lock_stock_keys(uuid,uuid[])',
+  'purchase_bridge_return(uuid)',
+  'purchase_bridge_credit_note(uuid)',
+  'purchase_bridge_reversal(uuid)',
+] as const;
 
 /** The two INVOKER read functions: the S6 extension points (A-16). */
 export const S5_READ_FUNCTIONS = ['purchase_ap_outstanding(uuid,uuid)', 'purchase_settlement_state(uuid,uuid)'] as const;

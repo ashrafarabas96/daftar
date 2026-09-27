@@ -12,8 +12,12 @@
  *
  * A `purchase.return` assertion cannot write a `purchase_reversal` movement,
  * nor a `purchase.reverse` one a `supplier_return` movement
- * (`inventory.movement_kind_not_authorized`); the three helpers re-verify
- * their operation. The `invpl-s5` vectors are reproduced by the TS builders
+ * (`inventory.movement_kind_not_authorized`); the four helpers re-verify
+ * their operation, and the credit note is written only by its own helper
+ * for its own stored return with a credit (R-55). The released-before AP a
+ * return records (X) is cross-checked at COMMIT against the returns other
+ * transactions committed: a forged X is `inventory.source_value_mismatch`
+ * and nothing is written (R-54). The `invpl-s5` vectors are reproduced by the TS builders
  * and by the SQL canonicalizer, and the stored intent digests are the TS ones.
  */
 import { createHmac, randomUUID } from 'node:crypto';
@@ -33,7 +37,8 @@ import {
   type S3World,
 } from '../helpers/inventory-commands';
 import { runCommand, supplierCreate } from '../helpers/purchase-commands';
-import { requestsJson, requestsParam, type MovementRequest } from '../helpers/stock-ledger';
+import { requestsJson, requestsParam, settle, type MovementRequest } from '../helpers/stock-ledger';
+import { functionFacts } from '../helpers/purchase-settlement-fixture';
 import {
   S5_HELPERS,
   S5_KINDS,
@@ -47,9 +52,11 @@ import {
   prepareReversal,
   rawPayloadSha256,
   receivedPurchase,
+  runReturn,
   runReversal,
   runS5,
   s5Counts,
+  tryReturn,
   tryS5,
   type PreparedReversal,
   type ReceivedPurchase,
@@ -316,6 +323,7 @@ describe('T-02 a verified operation writes only its own movement kind', () => {
     const expected: Record<(typeof S5_HELPERS)[number], string> = {
       'purchase_lock_stock_keys(uuid,uuid[])': `ARRAY['purchase.return', 'purchase.reverse']`,
       'purchase_bridge_return(uuid)': `ARRAY['purchase.return']`,
+      'purchase_bridge_credit_note(uuid)': `ARRAY['purchase.return']`,
       'purchase_bridge_reversal(uuid)': `ARRAY['purchase.reverse']`,
     };
     for (const helper of S5_HELPERS) {
@@ -331,6 +339,12 @@ describe('T-02 a verified operation writes only its own movement kind', () => {
       const A = world.A;
       const calls = [
         { name: 'purchase_bridge_return', sql: `SELECT purchase_bridge_return($1::uuid)`, params: [randomUUID()], wrong: 'purchase_reverse' as const },
+        {
+          name: 'purchase_bridge_credit_note',
+          sql: `SELECT purchase_bridge_credit_note($1::uuid)`,
+          params: [randomUUID()],
+          wrong: 'purchase_reverse' as const,
+        },
         { name: 'purchase_bridge_reversal', sql: `SELECT purchase_bridge_reversal($1::uuid)`, params: [randomUUID()], wrong: 'purchase_return' as const },
         { name: 'purchase_lock_stock_keys', sql: `SELECT purchase_lock_stock_keys($1::uuid, ARRAY[$2::uuid])`, params: [A.w1, A.piece.variantId], wrong: null },
       ];
@@ -362,6 +376,116 @@ describe('T-02 a verified operation writes only its own movement kind', () => {
         });
       }
     });
+  });
+});
+
+describe('T-02 R-55: the credit note has its own asserted writer', () => {
+  it('catalogue: purchase_return writes the credit note only through purchase_bridge_credit_note, which no role may call', async () => {
+    const q = ownerPool();
+    const def = must((await q.query<{ d: string }>(`SELECT pg_get_functiondef($1::regprocedure) AS d`, [S5_ROUTINE_OF.purchase_return])).rows[0]).d;
+    expect(def, 'the routine calls the helper').toContain('PERFORM purchase_bridge_credit_note(p_return_id);');
+    expect(def, 'the routine inserts no credit note itself').not.toMatch(/INSERT\s+INTO\s+supplier_credit_notes/i);
+    const helper = must(
+      (
+        await q.query<{ owner: string; secdef: boolean; grantees: string[] | null }>(
+          `SELECT pg_get_userbyid(p.proowner) AS owner, p.prosecdef AS secdef,
+                  (SELECT array_agg(DISTINCT pg_get_userbyid(a.grantee)::text) FROM aclexplode(p.proacl) a
+                    WHERE a.privilege_type = 'EXECUTE' AND a.grantee <> p.proowner) AS grantees
+             FROM pg_proc p WHERE p.oid = 'purchase_bridge_credit_note(uuid)'::regprocedure`,
+        )
+      ).rows[0],
+    );
+    expect(helper).toEqual({ owner: 'daftar_inventory_internal', secdef: true, grantees: null });
+  });
+
+  it('under a consumed purchase.return it writes nothing for a return with no credit, nor for an unknown return', async () => {
+    await inTx(async (c) => {
+      const A = world.A;
+      const cmd = await honestReturn(c, A);
+      await runS5(c, A, cmd);
+      expect(cmd.creditNoteId, 'the honest return issues no credit').toBeNull();
+      const before = await s5Counts(c, A.businessId);
+      for (const id of [cmd.returnId, randomUUID()]) {
+        refusedWith(
+          await attempt(c, () => c.query(`SELECT purchase_bridge_credit_note($1::uuid)`, [id])),
+          'P0001',
+          'inventory.source_type_not_authorized',
+          id === cmd.returnId ? 'its own return, no credit' : 'an unknown return',
+        );
+      }
+      expect(await s5Counts(c, A.businessId), 'nothing written').toEqual(before);
+    });
+  });
+});
+
+describe('T-02 R-54: the released-before AP (X) is cross-checked at COMMIT', () => {
+  async function committed<T>(fn: (c: Client) => Promise<T>): Promise<T> {
+    const c = await ownerClient();
+    try {
+      await c.query('BEGIN');
+      const v = await fn(c);
+      await c.query('COMMIT');
+      return v;
+    } finally {
+      await c.end();
+    }
+  }
+
+  /** `purchase_ap_outstanding` answering T whatever was returned — a forged O, so X = T − O = 0 — in the caller's transaction only. */
+  async function forgeOutstanding(c: Client): Promise<void> {
+    await c.query(`CREATE OR REPLACE FUNCTION purchase_ap_outstanding(p_business_id UUID, p_purchase_id UUID) RETURNS BIGINT
+                   LANGUAGE plpgsql STABLE SECURITY INVOKER SET search_path = pg_catalog, public, pg_temp AS $$
+                   BEGIN RETURN (SELECT p.total_txn_minor FROM purchases p WHERE p.business_id = p_business_id AND p.id = p_purchase_id); END; $$`);
+  }
+
+  async function storedX(q: Client, businessId: string, returnId: string): Promise<string | null> {
+    const r = await q.query<{ x: string }>(`SELECT ap_released_before_txn_minor::text AS x FROM supplier_returns WHERE business_id = $1 AND id = $2`, [
+      businessId,
+      returnId,
+    ]);
+    return r.rows[0]?.x ?? null;
+  }
+
+  it('a return whose X forgets a return another transaction committed fails COMMIT with source_value_mismatch, writing nothing; the honest X commits', async () => {
+    const A = world.A;
+    const honestFacts = await functionFacts(ownerPool(), 'purchase_ap_outstanding(uuid,uuid)');
+    // Committed on W2, so the rolled-back cases on W1 keep starting from empty keys.
+    const p = await committed((c) => receivedPurchase(c, A, [{ variantId: A.piece.variantId, qty: '4', unitPriceMinor: '100' }], { warehouseId: A.w2 }));
+    const lines = [{ purchaseLineId: must(p.lines[0]).lineId, qty: '1' }];
+    const first = await committed(async (c) => {
+      const prep = await prepareReturn(c, A, p.purchaseId, { lines });
+      await runReturn(c, A, prep);
+      return prep;
+    });
+    const released = first.cmd.apTxnMinor;
+    expect(released, 'the first return released AP').toBeGreaterThan(0n);
+    const before = await s5Counts(ownerPool(), A.businessId);
+    const c = await ownerClient();
+    try {
+      await c.query('BEGIN');
+      await forgeOutstanding(c);
+      const prep = await prepareReturn(c, A, p.purchaseId, { lines });
+      // Signed, routine-accepted and posted: every immediate check holds, because the forged O is consistent with itself.
+      expectAccepted(await tryReturn(c, A, prep), 'the forged return is taken by the routine');
+      expect(await storedX(c, A.businessId, prep.cmd.returnId), 'X = T − forged O = 0').toBe('0');
+      refusedWith(await settle(() => c.query('COMMIT')), 'P0001', 'inventory.source_value_mismatch', `X = 0 < ${released} released by the committed return`);
+    } finally {
+      await c.end();
+    }
+    expect(await s5Counts(ownerPool(), A.businessId), 'nothing written').toEqual(before);
+    expect(await functionFacts(ownerPool(), 'purchase_ap_outstanding(uuid,uuid)'), 'the forge went with its transaction').toEqual(honestFacts);
+    // The honest second return records X = the AP the first released, and commits.
+    const honest = await committed(async (h) => {
+      const prep = await prepareReturn(h, A, p.purchaseId, { lines });
+      await runReturn(h, A, prep);
+      return prep;
+    });
+    const r = await ownerClient();
+    try {
+      expect(await storedX(r, A.businessId, honest.cmd.returnId)).toBe(released.toString(10));
+    } finally {
+      await r.end();
+    }
   });
 });
 
