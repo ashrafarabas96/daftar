@@ -47,10 +47,11 @@ const DECIMAL_TEXT = /^(-?)(\d+)(?:\.(\d+))?$/;
 /**
  * A decimal quantity string, re-spelled at `decimals` fraction digits with the
  * locale's separators. Pure text: the integer part is grouped by Intl from a
- * BigInt and the fraction is padded, never rounded (the server returns
- * quantities at the product's `unitDecimals`). Anything that is not a decimal
- * string is returned as it came, so a malformed value is visible rather than
- * silently "fixed".
+ * BigInt; the fraction is padded to `decimals`, and zeros beyond `decimals`
+ * are dropped — insignificant, so a piece item the server sends as "8.0000"
+ * reads "8" (D-5) — never rounded: a non-zero digit beyond `decimals` stays.
+ * Anything that is not a decimal string is returned as it came, so a malformed
+ * value is visible rather than silently "fixed".
  */
 export function formatQty(value: string, decimals: number, locale: Locale = 'en'): string {
   const m = DECIMAL_TEXT.exec(value.trim());
@@ -59,7 +60,9 @@ export function formatQty(value: string, decimals: number, locale: Locale = 'en'
   const nf = new Intl.NumberFormat(`${locale}-u-nu-latn`, { minimumFractionDigits: 1 });
   const decimalSep = nf.formatToParts(0.5).find((p) => p.type === 'decimal')?.value ?? '.';
   const grouped = westernDigits(new Intl.NumberFormat(`${locale}-u-nu-latn`).format(BigInt(whole)));
-  const digits = fraction.length >= decimals ? fraction : fraction.padEnd(decimals, '0');
+  let digits = fraction;
+  while (digits.length > decimals && digits.endsWith('0')) digits = digits.slice(0, -1);
+  digits = digits.padEnd(decimals, '0');
   return `${sign}${grouped}${digits.length > 0 ? `${decimalSep}${digits}` : ''}`;
 }
 
@@ -100,6 +103,37 @@ export function isZeroQuantityText(input: string): boolean {
 /** A minor-unit integer string as the locale shows money, in Western digits. */
 export function formatMoney(amountMinor: string, currency: string, locale: Locale): string {
   return westernDigits(formatMinor(amountMinor, currency, locale));
+}
+
+/**
+ * A unit price the server returned as decimal text, spelled the way `formatMoney`
+ * spells the line totals beside it — the same symbol, position and separators
+ * (D-5: never "31.50 ILS" next to "₪252.00"). Pure text: the fraction keeps
+ * every significant digit (a unit price may be finer than the currency's minor
+ * unit), drops the zeros beyond it, and is padded to it; the whole part is
+ * laid out by Intl from a BigInt. Text that is not a decimal comes back with
+ * its currency code, as it was.
+ */
+export function formatUnitPrice(value: string, currency: string, locale: Locale): string {
+  const m = DECIMAL_TEXT.exec(value.trim());
+  if (!m) return `${value} ${currency}`;
+  const [, sign = '', whole = '0', fraction = ''] = m;
+  const units = minorUnitsOf(currency);
+  let digits = fraction;
+  while (digits.length > units && digits.endsWith('0')) digits = digits.slice(0, -1);
+  digits = digits.padEnd(units, '0');
+  const format = new Intl.NumberFormat(locale, {
+    style: 'currency',
+    currency,
+    currencyDisplay: 'narrowSymbol',
+    minimumFractionDigits: digits.length,
+    maximumFractionDigits: digits.length,
+  });
+  const text = format
+    .formatToParts(BigInt(whole))
+    .map((part) => (part.type === 'fraction' ? digits : part.value))
+    .join('');
+  return westernDigits(`${sign}${text}`);
 }
 
 /**

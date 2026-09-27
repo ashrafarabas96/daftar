@@ -12,8 +12,7 @@
  * No tax or duty field, option or preset exists here: BLOCKED BY OD-03.
  */
 import { Button, Checkbox, ConfirmationDialog, List, Select, Switch, TextField, Textarea } from '@daftar/design-system';
-import { minorUnitsOf } from '@daftar/shared-contracts';
-import { Ltr, formatDecimalText, rich, type ViewBaseProps } from '@/lib/phase3-format';
+import { Ltr, formatDecimalText, formatUnitPrice, rich, type ViewBaseProps } from '@/lib/phase3-format';
 import { isNonZeroMinor } from '../common/amount-text';
 import { activeMethodChoices } from '../common/payment-methods';
 import { ExchangeRatePrompt, RefusalNotice, type ExchangeRatePromptProps } from '../common/feedback';
@@ -379,7 +378,7 @@ function ReviewStep(props: ReceivePurchaseViewProps & ViewBaseProps & { review: 
             <Inline gap={2}>
               <Quantity value={line.qty} decimals={line.unitDecimals} locale={locale} />
               <span>×</span>
-              <Ltr>{`${formatDecimalText(line.unitPrice, locale, minorUnitsOf(review.currency))} ${review.currency}`}</Ltr>
+              <Ltr>{formatUnitPrice(line.unitPrice, review.currency, locale)}</Ltr>
               {isNonZeroMinor(line.discountTxnMinor) ? (
                 <span>
                   {rich(t('purchasing.receive.discountApplied'), {

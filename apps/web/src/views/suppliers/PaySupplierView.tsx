@@ -59,6 +59,12 @@ export interface PaySupplierViewProps {
   };
 }
 
+/** The done sentence for how many purchases the payment settled: none, one, or a count (D-6). */
+function settledKey(count: number): 'payments.doneDetailNone' | 'payments.doneDetailOne' | 'payments.doneDetail' {
+  if (count === 0) return 'payments.doneDetailNone';
+  return count === 1 ? 'payments.doneDetailOne' : 'payments.doneDetail';
+}
+
 export function PaySupplierView(props: PaySupplierViewProps & ViewBaseProps) {
   const { t, locale } = props;
   if (props.result) {
@@ -69,7 +75,7 @@ export function PaySupplierView(props: PaySupplierViewProps & ViewBaseProps) {
           <Stack gap={2}>
             <Text strong>{t('payments.done')}</Text>
             <Text>
-              {rich(t('payments.doneDetail'), {
+              {rich(t(settledKey(props.result.allocations.length)), {
                 amount: <Money amountMinor={props.result.amountMinor} currency={props.result.currency} locale={locale} />,
                 name: <bdi>{props.supplier.name}</bdi>,
                 n: <Ltr>{props.result.allocations.length}</Ltr>,

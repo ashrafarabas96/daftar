@@ -79,7 +79,9 @@ describe('M-4 — a unit price and a rate in the locale’s separators', () => {
 
   it('Turkish never shows the raw "3.200 USD" price or the raw rate', () => {
     const review = render('ReceivePurchaseView', 'review, paid now in the purchase currency', 'tr');
-    expect(text(review)).toContain('3,20 USD');
+    // D-5: the unit price is spelled as the totals beside it are ("$3,20"), never with the code as well.
+    expect(text(review)).toContain('×$3,20');
+    expect(text(review)).not.toContain('3,20 USD');
     expect(text(review)).not.toContain('3.200 USD');
     const done = render('ReceivePurchaseView', 'received and paid, foreign, covered short stock', 'tr');
     expect(text(done)).toContain('0,709 JOD');

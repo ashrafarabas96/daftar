@@ -8,8 +8,7 @@
  * disabled. The merchant never reads a trace, entry or movement id here.
  */
 import { Button, List, Textarea } from '@daftar/design-system';
-import { Ltr, formatDecimalText, rich, type ViewBaseProps } from '@/lib/phase3-format';
-import { minorUnitsOf } from '@daftar/shared-contracts';
+import { Ltr, formatDecimalText, formatUnitPrice, rich, type ViewBaseProps } from '@/lib/phase3-format';
 import { isNonZeroMinor } from '../common/amount-text';
 import { RefusalNotice } from '../common/feedback';
 import { CivilDate, Fact, Heading, Inline, Money, Muted, Notice, Panel, Quantity, Stack, Text, Title } from '../common/primitives';
@@ -70,7 +69,7 @@ export function PurchaseDetailView(props: PurchaseDetailViewProps & ViewBaseProp
             <Inline gap={2}>
               <Quantity value={line.qty} decimals={line.unitDecimals} locale={locale} />
               <span>×</span>
-              <Ltr>{`${formatDecimalText(line.unitPrice, locale, minorUnitsOf(purchase.currency))} ${purchase.currency}`}</Ltr>
+              <Ltr>{formatUnitPrice(line.unitPrice, purchase.currency, locale)}</Ltr>
               {isNonZeroMinor(line.discountTxnMinor) ? (
                 <span>{rich(t('purchasing.receive.discountApplied'), { amount: money(line.discountTxnMinor) })}</span>
               ) : null}

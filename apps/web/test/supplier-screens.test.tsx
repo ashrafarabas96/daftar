@@ -115,8 +115,29 @@ describe('Pay Supplier', () => {
 
   it('the result names the supplier and how many purchases the payment settled', () => {
     const r = render('PaySupplierView', 'inactive supplier, paid');
-    expect(text(r)).toMatch(/paid to Al-Noor Trading, settling 1 purchases/);
+    expect(text(r)).toMatch(/paid to Al-Noor Trading, settling one purchase\./);
     expect(buttons(r)).toEqual([tr('en', 'payments.backToSupplier')]);
+  });
+
+  it('D-6: the settled count agrees in number — one, several, none — in every locale', () => {
+    expect(text(render('PaySupplierView', 'paid, settling two purchases'))).toMatch(/paid to Al-Noor Trading, settling 2 purchases\./);
+    expect(text(render('PaySupplierView', 'paid, nothing settled'))).toContain('paid to Al-Noor Trading.');
+    for (const locale of ['ar', 'en', 'tr'] as const) {
+      const one = text(render('PaySupplierView', 'inactive supplier, paid', locale));
+      const two = text(render('PaySupplierView', 'paid, settling two purchases', locale));
+      const none = text(render('PaySupplierView', 'paid, nothing settled', locale));
+      expect(one, locale).not.toMatch(/\b1\b/);
+      expect(two, locale).toMatch(/\b2\b/);
+      for (const [r, key] of [
+        [one, 'payments.doneDetailOne'],
+        [two, 'payments.doneDetail'],
+        [none, 'payments.doneDetailNone'],
+      ] as const) {
+        // The template's fixed words (around the placeholders) are what renders.
+        for (const piece of tr(locale, key).split(/\{\w+\}/)) expect(r, `${locale} ${key}`).toContain(piece.trim());
+      }
+    }
+    expect(text(render('PaySupplierView', 'paid, settling two purchases'))).not.toMatch(/settling 1 purchases|settling one purchase/);
   });
 });
 

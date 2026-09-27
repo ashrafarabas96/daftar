@@ -391,5 +391,16 @@ export const VIEW_REGISTRY: readonly ViewEntry[] = [
       favour: { notes: NOTES, use: { creditNoteId: NOTES[1]?.creditNoteId ?? '', currency: 'JOD', rows: [], unallocatedMinor: '0', busy: false, done: true } },
     }),
     'inactive supplier, paid': payProps({ supplier: { name: 'Al-Noor Trading', status: 'inactive' }, result: PAY_RESULT }),
+    // D-6: the done sentence agrees with how many purchases were settled.
+    'paid, settling two purchases': payProps({
+      result: {
+        ...PAY_RESULT,
+        allocations: PAY_RESULT.allocations.flatMap((a) => [
+          a,
+          { ...a, allocationId: '1718e6ea-000e-4a7b-8c9d-0000000al002', lineNo: 2, purchaseId: '7d1e3c40-0003-4a7b-8c9d-00000000p002' },
+        ]),
+      },
+    }),
+    'paid, nothing settled': payProps({ result: { ...PAY_RESULT, allocations: [] } }),
   }),
 ];
