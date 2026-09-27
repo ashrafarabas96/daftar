@@ -153,7 +153,7 @@ export interface InventoryStockRowDto {
   variantId: string | null;
   name: string;
   variantName: string | null;
-  unitCode: string | null;
+  unitCode: string;
   unitDecimals: number;
   onHand: string;
 }
@@ -175,6 +175,8 @@ export interface InventoryStocktakeDetailLineDto {
   variantId: string | null;
   name: string;
   variantName: string | null;
+  unitCode: string | null;
+  unitDecimals: number;
   countedQty: string;
   expectedQty: string | null;
   varianceQty: string | null;
@@ -209,15 +211,28 @@ export interface SupplierOpenPurchaseDto {
   currency: string;
   totalTxnMinor: string;
   outstandingTxnMinor: string;
-  /** Present only when a proposal was asked for; null for another currency. */
-  proposedMinor?: string | null;
+  /** The advisory allocation of the asked amount; null when no proposal was asked or the purchase is in another currency. */
+  proposedMinor: string | null;
 }
 
 /** `GET /v1/suppliers/:supplierId/open-purchases` (A-09(b)). */
 export interface SupplierOpenPurchasesDto extends Page<SupplierOpenPurchaseDto> {
-  /** Present only when a proposal was asked for: the part no reachable open purchase can take. */
-  unallocatedMinor?: string;
+  /** The part of the asked amount no open purchase can take (R-77, 50 allocations); null when no proposal was asked. */
+  unallocatedMinor: string | null;
 }
+
+/** Why nothing can be returned: mirrors the S5 refusals. */
+export type PurchaseReturnBlockDto = 'not_received' | 'reversed' | 'supplier_inactive' | 'nothing_left';
+
+/** Why the receipt cannot be undone: mirrors the S5/S6 reversal refusals. */
+export type PurchaseReversalBlockDto =
+  | 'not_received'
+  | 'reversed'
+  | 'payment_allocated'
+  | 'credit_allocated'
+  | 'returned'
+  | 'deficit_coverage_present'
+  | 'insufficient_stock';
 
 /** One line of `GET /v1/purchases/:purchaseId/return-options` (A-09(c)). */
 export interface PurchaseReturnOptionLineDto {
@@ -226,6 +241,8 @@ export interface PurchaseReturnOptionLineDto {
   variantId: string | null;
   name: string;
   variantName: string | null;
+  unitCode: string | null;
+  unitDecimals: number;
   purchasedQty: string;
   returnedQty: string;
   returnableQty: string;
@@ -239,9 +256,10 @@ export interface PurchaseReturnOptionsDto {
   reversed: boolean;
   supplierActive: boolean;
   returnable: boolean;
-  reason: null | 'not_received' | 'reversed' | 'supplier_inactive' | 'nothing_left';
+  reason: PurchaseReturnBlockDto | null;
   /** Whether "Undo receipt" would be accepted now, from `purchase_settlement_state()` (Annex R #21). */
   reversible: boolean;
+  reversalReason: PurchaseReversalBlockDto | null;
   lines: PurchaseReturnOptionLineDto[];
 }
 
