@@ -6,13 +6,15 @@ import { inventoryRefusal, parseDatabaseInventoryCode } from '../inventory/inven
 
 /**
  * The stable refusal vocabulary of suppliers and purchases (PHASE_3_S4_CONTRACT
- * §3), as the merchant API reports it.
+ * §3), of supplier returns, supplier credit notes and purchase reversals
+ * (PHASE_3_S5_CONTRACT §3), as the merchant API reports it.
  *
  * Every code a supplier or purchase path can raise is CLASSIFIED here, by an
  * explicit table and never by the shape of its name:
  *
- * - `purchase.*` / `supplier.*` → `PURCHASING_STATUS`, the §3 table word for
- *   word; the code travels in `details.purchasingCode`;
+ * - `purchase.*` / `supplier.*` / `supplier_return.*` / `purchase_reversal.*`
+ *   / `supplier_credit_note.*` → `PURCHASING_STATUS`, the two §3 tables word
+ *   for word; the code travels in `details.purchasingCode`;
  * - `inventory.*` → the codes §3 names for S4 (`S4_INVENTORY_STATUS`), and
  *   every other code of the inventory vocabulary a purchasing path can meet
  *   (`S3_MAPPED_INVENTORY_CODES`) through `inventoryRefusal`, the accepted
@@ -28,7 +30,14 @@ import { inventoryRefusal, parseDatabaseInventoryCode } from '../inventory/inven
  * is never forwarded.
  */
 
-/** The §3 table: every `purchase.*` and `supplier.*` code a service, a DTO, a routine, a trigger or the package raises. */
+/** The refusal domains this module owns (S4 §3 and S5 §3). */
+type PurchasingDomain = 'purchase' | 'supplier' | 'supplier_return' | 'purchase_reversal' | 'supplier_credit_note';
+
+/**
+ * The §3 tables: every `purchase.*`, `supplier.*` (S4), `supplier_return.*`,
+ * `purchase_reversal.*` and `supplier_credit_note.*` (S5) code a service, a
+ * DTO, a routine, a trigger or the package raises.
+ */
 const PURCHASING_STATUS = {
   'purchase.tax_policy_absent': 422,
   'purchase.not_found': 404,
@@ -55,9 +64,35 @@ const PURCHASING_STATUS = {
   'supplier.state_invalid': 409,
   // A trigger refusal; no route deletes a supplier (§3: 409-class).
   'supplier.not_deletable': 409,
-} as const satisfies Readonly<Record<`${'purchase' | 'supplier'}.${string}`, 400 | 404 | 409 | 422>>;
+  // P3-S5 (PHASE_3_S5_CONTRACT §3): the supplier return.
+  'supplier_return.lines_invalid': 400,
+  'supplier_return.quantity_exceeds_purchased': 422,
+  'supplier_return.purchase_state_invalid': 409,
+  'supplier_return.purchase_reversed': 409,
+  'supplier_return.supplier_inactive': 409,
+  'supplier_return.date_before_purchase': 422,
+  'supplier_return.document_date_in_future': 422,
+  'supplier_return.value_zero': 422,
+  'supplier_return.amount_below_base_unit': 422,
+  'supplier_return.idempotency_conflict': 409,
+  // The credit-note guard: no route edits a credit note, so reaching it is a
+  // defect (§3: 500-class from a routine), reported with its typed code.
+  'supplier_credit_note.immutable': 500,
+  // P3-S5 (PHASE_3_S5_CONTRACT §3): the purchase reversal.
+  'purchase_reversal.payment_allocated': 409,
+  'purchase_reversal.credit_allocated': 409,
+  'purchase_reversal.returned': 409,
+  'purchase_reversal.insufficient_stock': 409,
+  'purchase_reversal.deficit_coverage_present': 409,
+  'purchase_reversal.valuation_residue': 409,
+  'purchase_reversal.already_reversed': 409,
+  'purchase_reversal.purchase_changed': 409,
+  'purchase_reversal.reason_required': 422,
+  'purchase_reversal.date_before_purchase': 422,
+  'purchase_reversal.date_in_future': 422,
+} as const satisfies Readonly<Record<`${PurchasingDomain}.${string}`, 400 | 404 | 409 | 422 | 500>>;
 
-/** A classified `purchase.*` / `supplier.*` refusal code. */
+/** A classified `purchase.*` / `supplier.*` / `supplier_return.*` / `purchase_reversal.*` / `supplier_credit_note.*` refusal code. */
 export type PurchasingCode = keyof typeof PURCHASING_STATUS;
 
 /**
@@ -81,6 +116,14 @@ const S4_INVENTORY_STATUS: Readonly<Record<string, 409 | 500>> = {
   'inventory.source_value_mismatch': 500,
   'inventory.ledger_immutable': 500,
   'inventory.stock_source_line_missing': 500,
+  // P3-S5 (PHASE_3_S5_CONTRACT §3, §2.4): the replaced primitive's R-B1a
+  // branch. A reversal the routine built from its purchase is always paired,
+  // so a missing or mismatched pair is a defect; the residue is the
+  // primitive's form of `purchase_reversal.valuation_residue` (TL-8), which
+  // the reversal service reports under that code.
+  'inventory.reversal_pair_missing': 500,
+  'inventory.reversal_pair_mismatch': 500,
+  'inventory.reversal_valuation_residue': 409,
 };
 
 /**
@@ -195,24 +238,25 @@ export class UnclassifiedRefusalError extends Error {
   }
 }
 
-const DATABASE_CODE_RE = /^((?:purchase|supplier)\.[a-z_]+)\b/;
+const DATABASE_CODE_RE = /^((?:purchase|supplier|supplier_return|purchase_reversal|supplier_credit_note)\.[a-z_]+)\b/;
 
-/** The `purchase.*` / `supplier.*` code a database refusal carries, or null. */
+/** The `purchase.*` / `supplier.*` / `supplier_return.*` / `purchase_reversal.*` / `supplier_credit_note.*` code a database refusal carries, or null. */
 export function parseDatabasePurchasingCode(error: unknown): string | null {
   const message = error instanceof Error ? error.message : typeof error === 'string' ? error : null;
   if (message === null) return null;
   return DATABASE_CODE_RE.exec(message)?.[1] ?? null;
 }
 
-/** True iff `code` is a classified `purchase.*` / `supplier.*` code. */
+/** True iff `code` is a classified code of a purchasing domain. */
 export function isPurchasingCode(code: string): code is PurchasingCode {
   return Object.hasOwn(PURCHASING_STATUS, code);
 }
 
 /**
- * A classified `purchase.*` / `supplier.*` code → its §3 HTTP contract.
- * `extra` carries typed, amount-free facts beside the code; the message is
- * generic.
+ * A classified purchasing code → its §3 HTTP contract. `extra` carries
+ * typed, amount-free facts beside the code; the message is generic. A
+ * 500-class code is a defect reported with its typed code, never a refusal
+ * the client could fix.
  */
 export function purchasingRefusal(code: PurchasingCode, extra: Readonly<Record<string, unknown>> = {}): AppError {
   const details = { ...extra, purchasingCode: code };
@@ -226,6 +270,8 @@ export function purchasingRefusal(code: PurchasingCode, extra: Readonly<Record<s
       return new AppError('VALIDATION_FAILED', 'The command cannot be processed', 422, details);
     case 400:
       return new AppError('VALIDATION_FAILED', 'Validation failed', 400, details);
+    case 500:
+      return new AppError('INTERNAL_ERROR', 'Internal error', 500, details);
   }
 }
 
@@ -271,17 +317,22 @@ function refusedForeignKey(error: unknown): string | null {
 }
 
 /**
- * The two deferred binding FKs of 0063 (A-14(a), A-15): a received purchase,
- * and a coverage header whose catch-up is non-zero, reference the
- * `accounting_source_bindings` row their journal entry creates. A refusal at
+ * The deferred binding FKs of 0063 (A-14(a), A-15) and 0065 (S5 §2.2): a
+ * received purchase, a coverage header whose catch-up is non-zero, a supplier
+ * return and a purchase reversal reference the `accounting_source_bindings`
+ * row their journal entry creates. A refusal at
  * COMMIT means the document owes an entry the transaction did not post: the
  * reverse direction of the entry-completeness trigger, so it carries that
  * trigger's code for the accepted accounting mapping, with the source type as
  * its only context.
  */
-const BINDING_FOREIGN_KEYS: Readonly<Record<string, 'purchase' | 'negative_inventory_cost_adjustment'>> = {
+const BINDING_FOREIGN_KEYS: Readonly<Record<string, 'purchase' | 'negative_inventory_cost_adjustment' | 'supplier_return' | 'reversal'>> = {
   purchases_binding_fk: 'purchase',
   negative_inventory_cost_adjustments_binding_fk: 'negative_inventory_cost_adjustment',
+  // P3-S5 (PHASE_3_S5_CONTRACT §2.2): a return owes its `supplier_return`
+  // entry, and a purchase reversal its Phase 2 `reversal` entry (R-B2a).
+  supplier_returns_binding_fk: 'supplier_return',
+  purchase_reversals_binding_fk: 'reversal',
 };
 
 /** The `accounting.inventory_detail_missing` refusal of a document whose binding FK was refused at COMMIT. */
@@ -295,8 +346,10 @@ function bindingRefusal(sourceType: string): AccountingError | null {
  * its stable code, and nothing else is touched:
  *
  * - a package refusal → its code;
- * - a `purchase.*` / `supplier.*` / `inventory.*` database refusal, raised by
- *   a routine or by a deferred guard at COMMIT → its code (§3);
+ * - a database refusal of a purchasing domain (`purchase.*`, `supplier.*`,
+ *   `supplier_return.*`, `purchase_reversal.*`, `supplier_credit_note.*`) or
+ *   an `inventory.*` one, raised by a routine or by a deferred guard at
+ *   COMMIT → its code (§3);
  * - a deferred binding FK refused at COMMIT (`23001` or `23503`) →
  *   `accounting.inventory_detail_missing` (A-14(a));
  * - a stock-source bridge's foreign key (`23001` or `23503`) →
