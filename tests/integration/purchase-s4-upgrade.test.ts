@@ -45,7 +45,8 @@ import { stockUp } from '../helpers/inventory-posting';
 import { createSupplier, draftAndReceive, draftCommand, entryOf, S4_BRIDGES, S4_TABLES } from '../helpers/purchase-commands';
 import { S4_OPERATION_KINDS, S4_OPERATION_MOVEMENT_KINDS, S4_SOURCE_TYPES } from '../helpers/purchase-deficits';
 // P3-S5 (0065/0066)
-import { S5_OPERATION_KINDS, S5_OPERATION_MOVEMENT_KINDS, S5_SOURCE_TYPES } from '../helpers/stock-ledger';
+// P3-S6 (0067/0068): and the S6 kinds and accounting source types.
+import { S5_OPERATION_KINDS, S5_OPERATION_MOVEMENT_KINDS, S5_SOURCE_TYPES, S6_ACCOUNTING_SOURCE_TYPES, S6_OPERATION_KINDS } from '../helpers/stock-ledger';
 
 const SCRATCH = 'daftar_upgrade_0062';
 const scratchUrl = `postgresql://${PG_USER}:${PG_PASSWORD}@localhost:${PG_PORT}/${SCRATCH}`;
@@ -178,6 +179,7 @@ describe('T-17 the P3-S4 upgrade matrix', () => {
 
       // Everything as it was, plus the two accounting source types 0063 adds (§2.1, A-14).
       // P3-S5 (0065/0066): and the one 0065 adds (docs/PHASE_3_S5_CONTRACT.md A-05).
+      // P3-S6 (0067/0068): and the three 0067 adds (docs/PHASE_3_S6_CONTRACT.md A-05).
       expect(await protectedRows()).toEqual(
         [
           ...before,
@@ -185,6 +187,10 @@ describe('T-17 the P3-S4 upgrade matrix', () => {
           'src:negative_inventory_cost_adjustment:7',
           // P3-S5 (0065/0066)
           'src:supplier_return:8',
+          // P3-S6 (0067/0068)
+          'src:supplier_payment:9',
+          'src:supplier_credit_allocation:10',
+          'src:supplier_refund:11',
         ].sort(),
       );
 
@@ -203,6 +209,10 @@ describe('T-17 the P3-S4 upgrade matrix', () => {
           ...S5_OPERATION_MOVEMENT_KINDS.map(([op, kind]) => `map:${op}:${kind}:P3-S5`),
           ...S5_OPERATION_KINDS.map((op) => `op:${op}:P3-S5`),
           'acct:post:supplier_return',
+          // P3-S6 (0067/0068): then S6's (docs/PHASE_3_S6_CONTRACT.md §2.8, A-03,
+          // A-05, §7.3 row 5) — seven op kinds, three accounting pairs, no stock row.
+          ...S6_OPERATION_KINDS.map((op) => `op:${op}:P3-S6`),
+          ...S6_ACCOUNTING_SOURCE_TYPES.map((t) => `acct:post:${t}`),
         ].sort(),
       );
 
@@ -275,6 +285,10 @@ describe('T-17 the P3-S4 upgrade matrix', () => {
           'src:negative_inventory_cost_adjustment:7',
           // P3-S5 (0065/0066)
           'src:supplier_return:8',
+          // P3-S6 (0067/0068)
+          'src:supplier_payment:9',
+          'src:supplier_credit_allocation:10',
+          'src:supplier_refund:11',
         ].sort(),
       );
     } finally {

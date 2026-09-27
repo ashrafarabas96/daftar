@@ -58,11 +58,15 @@ import {
   runReversal,
   type ReceivedPurchase,
 } from '../helpers/purchase-returns';
+// P3-S6 (0067/0068)
+import { S6_ACCOUNTING_SOURCE_TYPES, S6_OPERATION_KINDS } from '../helpers/stock-ledger';
 
 const SCRATCH = 'daftar_upgrade_0064';
 const scratchUrl = `postgresql://${PG_USER}:${PG_PASSWORD}@localhost:${PG_PORT}/${SCRATCH}`;
 const FROZEN = '0064_purchase_commands.sql';
 const S5_MIGRATIONS = ['0065_supplier_returns_reversals_sources.sql', '0066_supplier_return_reversal_commands.sql'];
+// P3-S6 (0067/0068): the upgrade runs to the latest migration, so the two S6 files follow.
+const S6_MIGRATIONS = ['0067_payment_methods_supplier_settlement_sources.sql', '0068_supplier_settlement_commands.sql'];
 
 function bootstrapSql(): string {
   return readFileSync(join(__dirname, '../../infrastructure/database/bootstrap.sql'), 'utf8')
@@ -205,10 +209,24 @@ describe('T-17 the P3-S5 upgrade matrix', () => {
 
       const applied = await runMigrations(scratchUrl);
       expect(applied, 'exactly the S5 migrations apply').toEqual(migrationsAfter(FROZEN));
-      expect(applied).toEqual(S5_MIGRATIONS);
+      expect(applied).toEqual([
+        ...S5_MIGRATIONS,
+        // P3-S6 (0067/0068)
+        ...S6_MIGRATIONS,
+      ]);
 
       // Everything as it was, plus the one accounting source type 0065 adds (A-05, A-15(e)).
-      expect(await protectedRows()).toEqual([...before, 'src:supplier_return:8'].sort());
+      // P3-S6 (0067/0068): and the three 0067 adds (docs/PHASE_3_S6_CONTRACT.md A-05).
+      expect(await protectedRows()).toEqual(
+        [
+          ...before,
+          'src:supplier_return:8',
+          // P3-S6 (0067/0068)
+          'src:supplier_payment:9',
+          'src:supplier_credit_allocation:10',
+          'src:supplier_refund:11',
+        ].sort(),
+      );
 
       // The registries: the checkpoint's rows plus exactly S5's (§2.5).
       expect(await registries()).toEqual(
@@ -218,6 +236,10 @@ describe('T-17 the P3-S5 upgrade matrix', () => {
           ...S5_OPERATION_MOVEMENT_KINDS.map(([op, kind]) => `map:${op}:${kind}:P3-S5`),
           ...S5_OPERATION_KINDS.map((op) => `op:${op}:P3-S5`),
           'acct:post:supplier_return',
+          // P3-S6 (0067/0068): then exactly S6's (docs/PHASE_3_S6_CONTRACT.md §2.8,
+          // A-03, A-05, §7.3 row 21) — seven op kinds, three accounting pairs, no stock row.
+          ...S6_OPERATION_KINDS.map((op) => `op:${op}:P3-S6`),
+          ...S6_ACCOUNTING_SOURCE_TYPES.map((t) => `acct:post:${t}`),
         ].sort(),
       );
 
@@ -257,7 +279,16 @@ describe('T-17 the P3-S5 upgrade matrix', () => {
 
       // A second run applies nothing.
       expect(await runMigrations(scratchUrl)).toEqual([]);
-      expect(await protectedRows()).toEqual([...before, 'src:supplier_return:8'].sort());
+      expect(await protectedRows()).toEqual(
+        [
+          ...before,
+          'src:supplier_return:8',
+          // P3-S6 (0067/0068)
+          'src:supplier_payment:9',
+          'src:supplier_credit_allocation:10',
+          'src:supplier_refund:11',
+        ].sort(),
+      );
     } finally {
       await pool.end();
       await admin.query(`DROP DATABASE IF EXISTS ${SCRATCH} WITH (FORCE)`);
