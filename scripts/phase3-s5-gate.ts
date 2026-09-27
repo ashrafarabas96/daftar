@@ -52,7 +52,10 @@ const [SOURCES, COMMANDS] = S5_MIGRATIONS;
 const S5_BOUNDARY = COMMANDS;
 
 /** The two P3-S5 migrations at their accepted digests. Empty while P3-S5 is a candidate; filled in the freeze commit only. */
-const S5_ACCEPTED: Readonly<Record<string, string>> = {};
+const S5_ACCEPTED: Readonly<Record<string, string>> = {
+  '0065_supplier_returns_reversals_sources.sql': 'fbf674d2663854da31024932df428ec9d16ccdbda15d3c83a10dbcf554b95e68',
+  '0066_supplier_return_reversal_commands.sql': 'a9d5e6175a99677db33ebbadfac6ac41310fbc97cbc8390ac669534679eeef9e',
+};
 
 const ACCEPTED = Object.keys(S5_ACCEPTED).length > 0;
 
