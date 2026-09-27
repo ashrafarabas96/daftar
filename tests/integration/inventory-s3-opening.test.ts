@@ -308,9 +308,31 @@ describe('A-14(a)/R-4: a Case A entry debits only the warehouses of its opening'
 
 describe('T-08.2/3 Case B: decomposing the Inventory opening position', () => {
   it('exact: no entry (counted), the header and audit record the opening balance and the matched amount', async () => {
+    // P3-S8 R-B1a (docs/PHASE_3_S8_CONTRACT.md Annex R §2.7, coordinator
+    // ruling): since 0069 an `opening_balance` entry with an Inventory line is
+    // refused at COMMIT once its business has a stock movement — including a
+    // movement written earlier in the SAME transaction. Production never posts
+    // the opening balance and decomposes it in one transaction: they are two
+    // requests, the opening balance committed before the first movement (Case
+    // B's order). So the opening balance is committed first, in its own
+    // transaction, on a business of this case's own (the commit is never
+    // rolled back, and no other case may see it); then the decomposition runs
+    // in the rolled-back transaction with every original assertion.
+    const own = await seedS3World(ownerPool(), 'open-caseb');
+    const A = own.A;
+    const committer = await ownerClient();
+    let ob: { openingBalanceId: string; entryId: string };
+    try {
+      await committer.query('BEGIN');
+      ob = await postOpeningBalanceInTx(committer, A, day, [position('inventory', 'D', 5000n), position('cash', 'D', 1000n)]);
+      await committer.query('COMMIT');
+    } catch (e) {
+      await committer.query('ROLLBACK');
+      throw e;
+    } finally {
+      await committer.end();
+    }
     await inTx(async () => {
-      const A = world.A;
-      const ob = await postOpeningBalanceInTx(c, A, day, [position('inventory', 'D', 5000n), position('cash', 'D', 1000n)]);
       const glAfterOb = await glInventory(c, A.businessId);
       expect(glAfterOb).toBe(5000n);
       const before = await counts(c, A.businessId);
