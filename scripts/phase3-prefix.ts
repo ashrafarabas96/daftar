@@ -66,8 +66,14 @@ export const PHASE3_PREFIX: readonly (readonly [name: string, sha256: string])[]
   ['0069_inventory_reconciliation_read_and_account_domain.sql', '912299e90a937b684b1829df4be90d5815ee61bcee79d9a01c5e47c4d6fe3084'],
 ];
 
-export const PHASE3_PREFIX_START = PHASE3_PREFIX[0][0];
-export const PHASE3_PREFIX_END = PHASE3_PREFIX[PHASE3_PREFIX.length - 1][0];
+function nameAt(i: number): string {
+  const pair = PHASE3_PREFIX[i];
+  if (pair === undefined) throw new Error(`the Phase 3 prefix literal has no entry ${i}`);
+  return pair[0];
+}
+
+export const PHASE3_PREFIX_START = nameAt(0);
+export const PHASE3_PREFIX_END = nameAt(PHASE3_PREFIX.length - 1);
 const START_NUMBER = Number(PHASE3_PREFIX_START.slice(0, 4));
 const END_NUMBER = Number(PHASE3_PREFIX_END.slice(0, 4));
 
