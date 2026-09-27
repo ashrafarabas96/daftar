@@ -114,7 +114,17 @@ describe('mintDomainPostingAssertion (A-06)', () => {
     }
     // P3-S4 (0063/0064): PHASE_3_S4_CONTRACT §7.3 row 22 appends the two S4 domain sources.
     // P3-S5 (0065/0066): PHASE_3_S5_CONTRACT §7.3 row 22 appends `supplier_return`.
-    expect(DOMAIN_SOURCE_TYPES).toEqual(['inventory_adjustment', 'inventory_opening', 'purchase', 'negative_inventory_cost_adjustment', 'supplier_return']);
+    // P3-S6 (0067/0068): PHASE_3_S6_CONTRACT §7.3 row 20 appends the three settlement sources.
+    expect(DOMAIN_SOURCE_TYPES).toEqual([
+      'inventory_adjustment',
+      'inventory_opening',
+      'purchase',
+      'negative_inventory_cost_adjustment',
+      'supplier_return',
+      'supplier_payment', // P3-S6 (0067/0068)
+      'supplier_credit_allocation', // P3-S6 (0067/0068)
+      'supplier_refund', // P3-S6 (0067/0068)
+    ]);
     expect(isDomainSourceType('inventory_adjustment')).toBe(true);
     expect(isDomainSourceType('manual_adjustment')).toBe(false);
   });
@@ -294,6 +304,9 @@ describe('mintDomainReversalAssertion (A-06, R-B2a)', () => {
       'manual_adjustment',
       'opening_balance',
       'sale',
+      'supplier_payment', // P3-S6 (0067/0068): §7.3 row 20, not reversible (TL-2)
+      'supplier_credit_allocation', // P3-S6 (0067/0068)
+      'supplier_refund', // P3-S6 (0067/0068)
     ]) {
       const { minter, claims } = minterSpy();
       expect(codeOf(() => mintDomainReversalAssertion(minter, purchaseEntry({ sourceType }), '2026-09-27', ACTOR))).toBe('accounting.assertion_wrong_source');

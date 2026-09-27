@@ -198,9 +198,20 @@ export const NATIVE_SOURCE_TYPES = ['manual_adjustment', 'reversal', 'opening_ba
  * posted through `post`. Later slices extend this list with their own:
  * P3-S4 adds `purchase` and `negative_inventory_cost_adjustment`
  * (PHASE_3_S4_CONTRACT A-06, §4.2); P3-S5 adds `supplier_return`
- * (PHASE_3_S5_CONTRACT A-06, §4.2).
+ * (PHASE_3_S5_CONTRACT A-06, §4.2); P3-S6 adds `supplier_payment`,
+ * `supplier_credit_allocation` and `supplier_refund` (PHASE_3_S6_CONTRACT
+ * A-05, §4.2), none of them reversible (TL-2).
  */
-export const DOMAIN_SOURCE_TYPES = ['inventory_adjustment', 'inventory_opening', 'purchase', 'negative_inventory_cost_adjustment', 'supplier_return'] as const;
+export const DOMAIN_SOURCE_TYPES = [
+  'inventory_adjustment',
+  'inventory_opening',
+  'purchase',
+  'negative_inventory_cost_adjustment',
+  'supplier_return',
+  'supplier_payment',
+  'supplier_credit_allocation',
+  'supplier_refund',
+] as const;
 
 /**
  * The domain sources whose entry a DOMAIN command may reverse through the
