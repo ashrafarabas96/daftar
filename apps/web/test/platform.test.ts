@@ -1,0 +1,148 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { NextRequest } from 'next/server';
+import { ApiError, apiFetch, setAccessToken } from '@/lib/client';
+import { DELETE, GET, PATCH, POST, PUT } from '@/app/api/proxy/[...path]/route';
+
+/**
+ * The four web platform fixes of P3-S7 (contract A-12(1)(2), Annex R web
+ * notes a–d), proved on the real modules with a stubbed network.
+ */
+
+interface Call {
+  url: string;
+  init: RequestInit;
+}
+
+function stubFetch(responses: (() => Response)[]): Call[] {
+  const calls: Call[] = [];
+  vi.stubGlobal('fetch', (input: string | URL | Request, init: RequestInit = {}) => {
+    calls.push({ url: String(input), init });
+    const next = responses.shift();
+    if (!next) throw new Error(`unexpected fetch ${String(input)}`);
+    return Promise.resolve(next());
+  });
+  return calls;
+}
+
+const json = (status: number, body: unknown, headers: Record<string, string> = {}) =>
+  new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json', ...headers } });
+
+const header = (call: Call | undefined, name: string): string | null => new Headers(call?.init.headers).get(name);
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+  setAccessToken(null);
+});
+
+describe('BFF proxy (A-12(1))', () => {
+  const ctx = (path: string[]) => ({ params: Promise.resolve({ path }) });
+
+  it('exports PUT beside GET, POST, PATCH and DELETE', () => {
+    for (const handler of [GET, POST, PUT, PATCH, DELETE]) expect(typeof handler).toBe('function');
+  });
+
+  it('forwards a PUT with its body, accept-language and idempotency key, and returns the upstream cache-control', async () => {
+    const calls = stubFetch([() => json(200, { ok: true }, { 'cache-control': 'no-store, private' })]);
+    const req = new NextRequest('http://web.test/api/proxy/purchases/p-1?x=1', {
+      method: 'PUT',
+      headers: {
+        authorization: 'Bearer t',
+        'content-type': 'application/json',
+        'x-business-id': 'b-1',
+        'idempotency-key': 'k-1',
+        'accept-language': 'tr',
+        cookie: 'daftar_refresh=secret',
+      },
+      body: JSON.stringify({ expectedRevision: 0 }),
+    });
+    const res = await PUT(req, ctx(['purchases', 'p-1']));
+    expect(res.status).toBe(200);
+    expect(res.headers.get('cache-control')).toBe('no-store, private');
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.url).toMatch(/\/v1\/purchases\/p-1\?x=1$/);
+    expect(calls[0]?.init.method).toBe('PUT');
+    expect(Buffer.from(calls[0]?.init.body as Buffer).toString('utf8')).toBe('{"expectedRevision":0}');
+    expect(header(calls[0], 'accept-language')).toBe('tr');
+    expect(header(calls[0], 'idempotency-key')).toBe('k-1');
+    expect(header(calls[0], 'x-business-id')).toBe('b-1');
+    // The refresh cookie never leaves the BFF.
+    expect(header(calls[0], 'cookie')).toBeNull();
+  });
+
+  it('answers cache-control: no-store when the upstream sent none', async () => {
+    stubFetch([() => new Response('{"items":[]}', { status: 200, headers: { 'content-type': 'application/json' } })]);
+    const res = await GET(new NextRequest('http://web.test/api/proxy/inventory/stock'), ctx(['inventory', 'stock']));
+    expect(res.headers.get('cache-control')).toBe('no-store');
+    expect(await res.text()).toBe('{"items":[]}');
+  });
+});
+
+describe('apiFetch (A-12(2))', () => {
+  beforeEach(() => {
+    vi.stubGlobal('document', { cookie: 'daftar_csrf=c', documentElement: { lang: 'ar' } });
+    vi.stubGlobal('crypto', { randomUUID: () => `minted-${Math.random().toString(16).slice(2)}` });
+  });
+
+  it('keeps a caller-owned idempotency key, and the 401 retry re-sends it', async () => {
+    const calls = stubFetch([() => json(401, {}), () => json(200, { accessToken: 'fresh' }), () => json(201, { rateId: 'r', created: true })]);
+    await apiFetch('/api/proxy/x', { method: 'POST', body: '{}', headers: { 'idempotency-key': 'form-key' } });
+    const sent = calls.filter((c) => c.url === '/api/proxy/x');
+    expect(sent).toHaveLength(2);
+    expect(sent.map((c) => header(c, 'idempotency-key'))).toEqual(['form-key', 'form-key']);
+    expect(header(sent[1], 'authorization')).toBe('Bearer fresh');
+  });
+
+  it('mints ONE key when the caller set none, and the 401 retry re-sends that same key', async () => {
+    const calls = stubFetch([() => json(401, {}), () => json(200, { accessToken: 'fresh' }), () => json(200, { ok: true })]);
+    await apiFetch('/api/proxy/y', { method: 'POST', body: '{}' });
+    const keys = calls.filter((c) => c.url === '/api/proxy/y').map((c) => header(c, 'idempotency-key'));
+    expect(keys).toHaveLength(2);
+    expect(keys[0]).toMatch(/^minted-/);
+    expect(keys[1]).toBe(keys[0]);
+  });
+
+  it('sends no idempotency key on a GET, and sends the page language', async () => {
+    const calls = stubFetch([() => json(200, { items: [] })]);
+    await apiFetch('/api/proxy/z');
+    expect(header(calls[0], 'idempotency-key')).toBeNull();
+    expect(header(calls[0], 'accept-language')).toBe('ar');
+  });
+
+  it('keeps the error details, and domainCode reads the domain fields in contract order', async () => {
+    const refuse = (body: unknown, status = 409) => {
+      stubFetch([() => json(status, body)]);
+      return apiFetch('/api/proxy/r', { method: 'POST', body: '{}' }).then(
+        () => {
+          throw new Error('expected a refusal');
+        },
+        (e: unknown) => {
+          if (!(e instanceof ApiError)) throw e;
+          return e;
+        },
+      );
+    };
+    const inv = await refuse({
+      error: { code: 'CONFLICT', message: 'm', requestId: 'q', details: { inventoryCode: 'inventory.insufficient_stock', lines: [1] } },
+    });
+    expect(inv.details).toEqual({ inventoryCode: 'inventory.insufficient_stock', lines: [1] });
+    expect(inv.domainCode).toBe('inventory.insufficient_stock');
+    const pur = await refuse({ error: { code: 'CONFLICT', message: 'm', requestId: 'q', details: { purchasingCode: 'supplier_payment.settlement_changed' } } });
+    expect(pur.domainCode).toBe('supplier_payment.settlement_changed');
+    const pm = await refuse({ error: { code: 'CONFLICT', message: 'm', requestId: 'q', details: { paymentMethodCode: 'payment_method.inactive' } } });
+    expect(pm.domainCode).toBe('payment_method.inactive');
+    const cat = await refuse({ error: { code: 'CONFLICT', message: 'm', requestId: 'q', details: { catalogCode: 'catalog.sku_taken' } } });
+    expect(cat.domainCode).toBe('catalog.sku_taken');
+    const acc = await refuse({ error: { code: 'ACCOUNTING_REFUSED', message: 'm', requestId: 'q', details: { code: 'accounting.fx_rate_missing' } } }, 422);
+    expect(acc.domainCode).toBe('accounting.fx_rate_missing');
+    // `details.code` counts ONLY under ACCOUNTING_REFUSED; there is no accountingCode on the wire.
+    const other = await refuse(
+      { error: { code: 'VALIDATION_FAILED', message: 'm', requestId: 'q', details: { code: 'too_small', accountingCode: 'x' } } },
+      400,
+    );
+    expect(other.domainCode).toBeNull();
+    expect(other.code).toBe('VALIDATION_FAILED');
+    const bare = await refuse({ error: { code: 'NOT_FOUND', message: 'm', requestId: 'q' } }, 404);
+    expect(bare.details).toBeUndefined();
+    expect(bare.domainCode).toBeNull();
+  });
+});
