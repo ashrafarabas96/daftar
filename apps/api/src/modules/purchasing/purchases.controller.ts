@@ -8,6 +8,7 @@ import type {
   PurchaseReceiptDto,
   PurchaseReversalResultDto,
   PurchaseSummaryDto,
+  ReceiveAndPayResultDto,
   SupplierReturnDto,
   SupplierReturnResultDto,
 } from '@daftar/shared-contracts';
@@ -21,15 +22,18 @@ import {
   PurchaseListQuerySchema,
   PurchaseReversalValidationPipe,
   PurchaseTransitionSchema,
+  ReceiveAndPaySchema,
   SupplierReturnListQuerySchema,
   SupplierReturnValidationPipe,
   type PurchaseDraftRequest,
   type PurchaseReversalRequest,
   type PurchaseTransitionRequest,
+  type ReceiveAndPayRequest,
   type SupplierReturnRequest,
 } from './purchasing.schemas';
 import { PurchaseDraftService } from './purchase-draft.service';
 import { PurchaseReceiptService } from './purchase-receipt.service';
+import { PurchaseReceiveAndPayService } from './purchase-receive-and-pay.service';
 import { PurchaseReturnService } from './purchase-return.service';
 import { PurchaseReversalService } from './purchase-reversal.service';
 import { PurchasingReadService } from './purchasing-reads';
@@ -71,6 +75,12 @@ import { PurchasingReadService } from './purchasing-reads';
  * - neither request carries an amount, a rate or a tax field (A-07, A-14:
  *   BLOCKED BY OD-03); a stated one is an unknown key.
  *
+ * P3-S6 adds receive-and-pay (PHASE_3_S6_CONTRACT A-19): the receipt and a
+ * one-allocation supplier payment as one operation. The route requires
+ * `purchases.receive`; the service then authorizes `purchase.receive` AND
+ * `supplier.pay` over the purchase's warehouse. Like the receipt, its
+ * identity is the purchase, so it answers 200.
+ *
  * Refusals leave the services already typed and the global error filter
  * renders them. Nothing is caught here.
  */
@@ -79,6 +89,7 @@ export class PurchasesController {
   constructor(
     @Inject(PurchaseDraftService) private readonly drafts: PurchaseDraftService,
     @Inject(PurchaseReceiptService) private readonly receipts: PurchaseReceiptService,
+    @Inject(PurchaseReceiveAndPayService) private readonly receiveAndPayService: PurchaseReceiveAndPayService,
     @Inject(PurchaseReturnService) private readonly returns: PurchaseReturnService,
     @Inject(PurchaseReversalService) private readonly reversals: PurchaseReversalService,
     @Inject(PurchasingReadService) private readonly reads: PurchasingReadService,
@@ -110,6 +121,19 @@ export class PurchasesController {
     @Body() body: PurchaseTransitionRequest,
   ): Promise<PurchaseReceiptDto> {
     return this.receipts.receive(m, strictUuidParam(purchaseId, 'purchaseId'), body, newBusinessTransactionId());
+  }
+
+  /** `draft → received` and a supplier payment of this purchase, in one transaction (A-19). */
+  @Post(':purchaseId/receive-and-pay')
+  @HttpCode(200)
+  @RequiresPermission('purchases.receive')
+  @UsePipes(new ZodValidationPipe(ReceiveAndPaySchema))
+  async receiveAndPay(
+    @Membership() m: MembershipContext,
+    @Param('purchaseId') purchaseId: string,
+    @Body() body: ReceiveAndPayRequest,
+  ): Promise<ReceiveAndPayResultDto> {
+    return this.receiveAndPayService.receiveAndPay(m, strictUuidParam(purchaseId, 'purchaseId'), body, newBusinessTransactionId());
   }
 
   /** `draft → cancelled`. Nothing moves and nothing posts. */

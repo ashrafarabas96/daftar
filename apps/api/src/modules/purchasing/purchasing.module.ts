@@ -1,9 +1,13 @@
 import type { Provider } from '@nestjs/common';
 import { PurchaseDraftService } from './purchase-draft.service';
 import { PurchaseReceiptService } from './purchase-receipt.service';
+import { PurchaseReceiveAndPayService } from './purchase-receive-and-pay.service';
 import { PurchaseReturnService } from './purchase-return.service';
 import { PurchaseReversalService } from './purchase-reversal.service';
 import { PurchasingReadService } from './purchasing-reads';
+import { SupplierCreditAllocationService } from './supplier-credit-allocation.service';
+import { SupplierPaymentService } from './supplier-payment.service';
+import { SupplierRefundService } from './supplier-refund.service';
 import { SupplierService } from './supplier.service';
 
 /**
@@ -22,7 +26,22 @@ import { SupplierService } from './supplier.service';
  * `SupplierReturnsController` and `SupplierCreditNotesController` directly,
  * exactly as they do the P3-S3 inventory controllers, and spread these
  * providers beside the inventory ones.
+ *
+ * P3-S6 (PHASE_3_S6_CONTRACT §4.3) adds the three settlement services and
+ * receive-and-pay; both compositions also name `SupplierSettlementsController`
+ * (and the payment-methods controller with `paymentMethodProviders()`).
  */
 export function purchasingProviders(): Provider[] {
-  return [SupplierService, PurchaseDraftService, PurchaseReceiptService, PurchaseReturnService, PurchaseReversalService, PurchasingReadService];
+  return [
+    SupplierService,
+    PurchaseDraftService,
+    PurchaseReceiptService,
+    PurchaseReturnService,
+    PurchaseReversalService,
+    PurchasingReadService,
+    SupplierPaymentService,
+    SupplierCreditAllocationService,
+    SupplierRefundService,
+    PurchaseReceiveAndPayService,
+  ];
 }
