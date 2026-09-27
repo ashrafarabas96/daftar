@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { formatDecimalText } from '@/lib/phase3-format';
 import { translate, type Locale } from '@/lib/i18n';
+import ar from '@/messages/ar.json';
+import en from '@/messages/en.json';
+import trCatalog from '@/messages/tr.json';
 import type { ViewEntry, ViewFixture } from '@/lib/phase3-format';
 import { VIEW_REGISTRY as COMMON } from '@/views/common/registry';
 import { VIEW_REGISTRY as PURCHASES } from '@/views/purchases/registry';
@@ -13,6 +16,7 @@ import { elements, LOCALES, renderFixture, styleOf, textOf, type ElementNode, ty
  * items of the security review), each on the registry fixtures the SSR suites
  * already render: one describe per finding id.
  */
+const catalogs: Readonly<Record<Locale, Readonly<Record<string, string>>>> = { ar, en, tr: trCatalog };
 const AREAS: readonly ViewEntry[] = [...PURCHASES, ...SUPPLIERS, ...STOCK, ...COMMON];
 
 function fixture(view: string, name: string): ViewFixture {
@@ -93,5 +97,41 @@ describe('N-6 — merchant-typed supplier names are isolated', () => {
   ])('%s wraps the supplier name in <bdi>', (view, name) => {
     const r = render(view, name);
     expect(all(r, 'bdi').some((b) => b.attrs['dir'] === undefined && textOf(b) === 'Al-Noor Trading')).toBe(true);
+  });
+});
+
+describe('catalog wording (M-6, M-7, m-11, m-13, m-14, m-15)', () => {
+  const values = (locale: Locale): string[] => Object.values(catalogs[locale]);
+
+  it('M-6: Arabic uses one word for "item" — the glossary’s «منتج», never «صنف»', () => {
+    expect(values('ar').filter((v) => /صنف|أصناف/.test(v))).toEqual([]);
+    expect(tr('ar', 'purchasing.receive.addLine')).toBe('إضافة منتج آخر');
+  });
+
+  it('M-7: the Arabic and Turkish return result say the balance is in your favour', () => {
+    expect(tr('ar', 'purchasing.return.supplierOwesYou')).toBe('أصبح لك عند المورّد {amount}.');
+    expect(tr('tr', 'purchasing.return.supplierOwesYou')).toBe('Lehinize {amount} bakiye oluştu.');
+  });
+
+  it('m-11: Turkish spells stok with ğ before a vowel suffix', () => {
+    expect(values('tr').filter((v) => /(^|[^a-zçğıöşü])[Ss]tok(u|unu|unuz)(?![a-zçğıöşü])/.test(v))).toEqual([]);
+  });
+
+  it('m-14: the supplier and purchase balances use the glossary’s "outstanding balance"', () => {
+    for (const locale of LOCALES) expect(tr(locale, 'suppliers.balance.youOwe')).toBe(tr(locale, 'purchasing.detail.stillToPay'));
+    expect(tr('ar', 'suppliers.balance.youOwe')).toBe('الرصيد المستحق');
+    expect(tr('tr', 'suppliers.balance.youOwe')).toBe('Kalan bakiye');
+  });
+
+  it('m-15: Arabic purchase statuses agree with the masculine «مشترى»', () => {
+    expect(tr('ar', 'purchasing.status.received')).toBe('مُستلَم');
+    expect(tr('ar', 'purchasing.status.cancelled')).toBe('ملغى');
+    expect(tr('ar', 'purchasing.list.filter.draft')).toBe('لم يُستلَم بعد');
+  });
+
+  it('m-13: the covered-stock line trims the fraction and names the purchase', () => {
+    const r = render('ReceivePurchaseView', 'received and paid, foreign, covered short stock', 'ar');
+    expect(text(r)).toContain('غطّى هذا المشترى');
+    expect(formatDecimalText('2.5000', 'tr')).toBe('2,5');
   });
 });

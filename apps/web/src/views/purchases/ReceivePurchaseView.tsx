@@ -472,9 +472,7 @@ function ReceiptResult(props: ReceivePurchaseViewProps & ViewBaseProps & { resul
             </Fact>
           ) : null}
           {(receipt.coverage?.coverages ?? []).map((c) => (
-            <Muted key={c.coverageId}>
-              {rich(t('purchasing.receive.coveredShort'), { qty: <Quantity value={c.qtyCovered} decimals={0} locale={locale} /> })}
-            </Muted>
+            <Muted key={c.coverageId}>{rich(t('purchasing.receive.coveredShort'), { qty: <Ltr>{formatDecimalText(c.qtyCovered, locale)}</Ltr> })}</Muted>
           ))}
         </Stack>
       </Notice>

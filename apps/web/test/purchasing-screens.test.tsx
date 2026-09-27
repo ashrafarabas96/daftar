@@ -89,7 +89,7 @@ describe('Receive Purchase', () => {
   it('the result shows the rate only for a foreign purchase, and the stock it covered', () => {
     const foreign = render('ReceivePurchaseView', 'received and paid, foreign, covered short stock');
     expect(text(foreign)).toContain('1 USD = 0.709 JOD');
-    expect(text(foreign)).toContain('Covered 2.5 that was short');
+    expect(text(foreign)).toContain('2.5 of this purchase filled stock that was below zero');
     expect(text(foreign)).toContain(tr('en', 'purchasing.receive.paid'));
     const local = render('ReceivePurchaseView', 'received in the business currency');
     expect(text(local)).not.toContain('Exchange rate used');
