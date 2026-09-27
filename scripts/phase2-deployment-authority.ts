@@ -39,26 +39,39 @@
  *
  * WHAT IT PROVES, AND HOW
  *
- * Six deployment cases (§17), each executed by `runMigrations` over a
+ * Eight deployment cases (§17), each executed by `runMigrations` over a
  * connection authenticated as the deployment principal and nothing else:
  *
- *   A  empty database  → bootstrap → 0000 … 0052
- *   B  a database at 0039 (the Phase 1 boundary) → 0040 … 0052
- *   C  a database at 0050 → 0051, 0052, then every unfrozen candidate
+ *   A  empty database  → bootstrap → every migration on disk
+ *   B  a database at 0039 (the Phase 1 boundary) → every later migration
+ *   C  a database at 0050 → 0051, 0052, then every later migration
  *   D  a database at the latest migration → no-op
  *   E  a database whose applied history was tampered with → HARD FAIL
  *   F  a migration that fails half way → rollback, no history row, clean retry
- *   G  a database at the 0052 freeze, holding a business → exactly the
- *      unfrozen candidates (P3-S1: 0053 onward), whose backfills must see
- *      that business although the deployer is not a superuser (P3-AL-54 §J)
+ *   G  a database at the 0052 freeze, holding a business → exactly every
+ *      later migration (P3-S1: 0053 onward), whose backfills must see that
+ *      business although the deployer is not a superuser (P3-AL-54 §J)
+ *   H  a database at the 0052 freeze → each accepted Phase 3 slice head in
+ *      turn (`PHASE3_SLICE_HEADS`), then every later migration; each step
+ *      applies exactly the files between two boundaries, and the result is
+ *      Case A's catalogue (P3-S9 A-09 4)
  *
- * Then the question those six cases cannot answer on their own: is the
- * database the deployment principal produced the SAME database a superuser
- * produces? Section 10 compares both catalogues — every table's owner, RLS
- * flags and ACL, every function's owner, SECURITY DEFINER flag, ACL and
- * configuration, and every policy's expression and roles — with the applying
+ * Then the question those cases cannot answer on their own: is the database
+ * the deployment principal produced the SAME database a superuser produces?
+ * Section 10 compares both catalogues — every table's owner, RLS flags and
+ * ACL, every function's owner, SECURITY DEFINER flag, ACL, configuration and
+ * body digest, every policy, trigger, column ACL and constraint, and (since
+ * P3-S9) every sequence, index and column definition, the schema's own owner
+ * and ACL, the default ACLs and the extension versions — with the applying
  * principal's own name normalised, because the one difference a deployment is
  * ALLOWED to have is who owns what it created.
+ *
+ * P3-S9 (A-09) strengthened this predecessor script without loosening any
+ * record it already made: 2.11 asserts the deployer's memberships are exactly
+ * the accepted three; 11.9 / 11.10 ask TEMPORARY and CREATE on `public` of
+ * both builds and of PUBLIC; Case H walks the Phase 3 slice heads; and the
+ * decisions are exported pure functions (`tests/security/
+ * deployment-authority-model.test.ts`). Importing this module runs nothing.
  *
  * Usage: npm run check:deployment-authority [-- --static-only]
  *
@@ -73,6 +86,8 @@ import { join } from 'node:path';
 import { Client } from 'pg';
 import { runMigrations } from '../apps/api/src/infra/migrate';
 import { stripComments } from './guards/sql-schema';
+import { PHASE2_PREFIX_END } from './phase2-prefix';
+import { PHASE3_SLICE_HEADS } from './phase3-prefix';
 
 const ROOT = join(__dirname, '..');
 const MIGRATIONS_DIR = join(ROOT, 'infrastructure/database/migrations');
@@ -121,8 +136,184 @@ const RUNTIME_ROLES = [
 const INTERNAL_ROLES = ['daftar_accounting_internal', 'daftar_inventory_internal'] as const;
 const ALL_ROLES = [...RUNTIME_ROLES, ...INTERNAL_ROLES, DEPLOYER] as const;
 
-/** The last frozen migration (MIGRATION_MANIFEST.json `frozenThrough`). */
-const FROZEN_THROUGH = '0052_accounting_journal_lines_rls_performance.sql';
+// The Phase 2 freeze boundary, `0052`, where Cases C, G and H start their
+// upgrades, is `PHASE2_PREFIX_END` (`scripts/phase2-prefix.ts`). It is not
+// "the last frozen migration": at P3-S9 every file on disk is frozen.
+
+// ─────────────────────────────────────────────────────────────────────────
+// THE DECISIONS, AS PURE FUNCTIONS (P3-S9 A-09 6)
+// ─────────────────────────────────────────────────────────────────────────
+//
+// Each live section below reads the catalogue and hands the rows to one of
+// these. They take rows and return problems, so
+// `tests/security/deployment-authority-model.test.ts` proves each of them red
+// on a planted defect without a cluster.
+
+/** One membership the deployer holds, as `pg_auth_members` describes it. */
+export interface MembershipRow {
+  readonly role: string;
+  readonly inherit: boolean;
+  readonly set: boolean;
+  readonly admin: boolean;
+}
+
+/**
+ * The deployer's accepted memberships, exactly (`bootstrap.sql`, R2:120-143).
+ * `daftar_platform` is inherited because replacing a provisioning function is
+ * an OWNERSHIP check that reads INHERIT (cause 3 of RB-P2-01). The two
+ * internal authorities are SET only: assumed deliberately, never held
+ * passively. None carries ADMIN.
+ */
+export const ACCEPTED_DEPLOYER_MEMBERSHIPS: readonly MembershipRow[] = [
+  { role: 'daftar_accounting_internal', inherit: false, set: true, admin: false },
+  { role: 'daftar_inventory_internal', inherit: false, set: true, admin: false },
+  { role: 'daftar_platform', inherit: true, set: true, admin: false },
+];
+
+/** 2.11 — every way the deployer's memberships differ from the accepted three. */
+export function deployerMembershipProblems(rows: readonly MembershipRow[]): string[] {
+  const problems: string[] = [];
+  const accepted = new Map(ACCEPTED_DEPLOYER_MEMBERSHIPS.map((m) => [m.role, m] as const));
+  for (const want of ACCEPTED_DEPLOYER_MEMBERSHIPS) {
+    const held = rows.filter((r) => r.role === want.role);
+    if (held.length === 0) {
+      problems.push(`${want.role} is missing: a deployment would stop at the first handover to it`);
+      continue;
+    }
+    if (held.length > 1) problems.push(`${want.role} is granted ${held.length} times; its effective options are the union of all of them`);
+    for (const r of held) {
+      if (r.inherit !== want.inherit)
+        problems.push(`${want.role} has INHERIT ${String(r.inherit).toUpperCase()}; accepted is ${String(want.inherit).toUpperCase()}`);
+      if (r.set !== want.set) problems.push(`${want.role} has SET ${String(r.set).toUpperCase()}; accepted is ${String(want.set).toUpperCase()}`);
+      if (r.admin) problems.push(`${want.role} carries ADMIN OPTION`);
+    }
+  }
+  for (const r of rows)
+    if (!accepted.has(r.role)) problems.push(`${r.role} is a membership the accepted deployer does not hold: a widened migration principal`);
+  return problems;
+}
+
+/** A catalogue, family by family, each row already normalised for comparison. */
+export type CatalogueSnapshot = Readonly<Record<string, readonly string[]>>;
+
+export interface CatalogueDifference {
+  readonly family: string;
+  readonly onlyFirst: readonly string[];
+  readonly onlySecond: readonly string[];
+}
+
+/**
+ * Every family whose rows are not the same in two catalogues. A family one of
+ * them does not carry at all is a difference too: a comparison that silently
+ * skipped a family would report equality it never checked.
+ */
+export function catalogueDifferences(first: CatalogueSnapshot, second: CatalogueSnapshot, families: readonly string[]): CatalogueDifference[] {
+  const out: CatalogueDifference[] = [];
+  for (const family of families) {
+    const a = first[family];
+    const b = second[family];
+    if (a === undefined || b === undefined) {
+      out.push({
+        family,
+        onlyFirst: a === undefined ? [] : ['<family missing from the second catalogue>'],
+        onlySecond: b === undefined ? [] : ['<family missing from the first catalogue>'],
+      });
+      continue;
+    }
+    const setA = new Set(a);
+    const setB = new Set(b);
+    const onlyFirst = a.filter((x) => !setB.has(x));
+    const onlySecond = b.filter((x) => !setA.has(x));
+    if (onlyFirst.length === 0 && onlySecond.length === 0 && a.length !== b.length) {
+      out.push({ family, onlyFirst: [`<${a.length} rows>`], onlySecond: [`<${b.length} rows>`] });
+    } else if (onlyFirst.length > 0 || onlySecond.length > 0) {
+      out.push({ family, onlyFirst, onlySecond });
+    }
+  }
+  return out;
+}
+
+const LITERAL_FAMILIES: ReadonlySet<string> = new Set(['schema', 'extensions']);
+
+/**
+ * The one difference a deployment is ALLOWED to have is who owns what it
+ * created, so the applying principal's own name is normalised away — except
+ * in a family whose rows the history does not create. The schema `public` and
+ * the extensions are made by the deployment administrator's bootstrap on both
+ * builds, and the schema belongs to the deployer on both, so those rows are
+ * compared literally.
+ */
+export function normaliseCatalogueRows(family: string, rows: readonly string[], applier: string): string[] {
+  if (LITERAL_FAMILIES.has(family)) return [...rows];
+  return rows.map((r) => r.split(applier).join('<applier>'));
+}
+
+/** TEMPORARY on the database and CREATE on `public`, for one grantee. */
+export interface NamespacePrivilegeRow {
+  readonly role: string;
+  readonly temporaryOnDatabase: boolean;
+  readonly createOnPublic: boolean;
+}
+
+/** The pseudo-role every role belongs to. `has_*_privilege` answers for it by the name `public`. */
+export const PUBLIC_GRANTEE = 'PUBLIC';
+
+/**
+ * 11.9 / 11.10 — no role but the deployer, and not PUBLIC, may hold TEMPORARY
+ * or CREATE on `public` (bootstrap's revokes). The rows must include PUBLIC:
+ * a check that never asked it cannot say PUBLIC holds nothing.
+ */
+export function namespacePrivilegeProblems(rows: readonly NamespacePrivilegeRow[], build: string): string[] {
+  const problems: string[] = [];
+  if (!rows.some((r) => r.role === PUBLIC_GRANTEE)) problems.push(`${build}: PUBLIC was not asked`);
+  for (const r of rows) {
+    if (r.role === DEPLOYER) continue;
+    if (r.temporaryOnDatabase) problems.push(`${build}: ${r.role} holds TEMPORARY on the database`);
+    if (r.createOnPublic) problems.push(`${build}: ${r.role} holds CREATE on schema public`);
+  }
+  return problems;
+}
+
+/** One upgrade of Case H: to `through` (every file on disk when null), applying exactly `expected`. */
+export interface UpgradeStep {
+  readonly label: string;
+  readonly through: string | null;
+  readonly expected: readonly string[];
+}
+
+/**
+ * Case H's plan: the files through `base`, then each slice head in the order
+ * given, then every later file. A step applies exactly the files after the
+ * previous boundary and up to its own. A head that is not on disk, sorts at
+ * or before `base`, or goes backwards is a problem, never a skipped step.
+ */
+export function sliceUpgradePlan(
+  files: readonly string[],
+  base: string,
+  heads: Readonly<Record<string, string>>,
+): { readonly base: readonly string[]; readonly steps: readonly UpgradeStep[]; readonly problems: readonly string[] } {
+  const sorted = [...files].sort();
+  const problems: string[] = [];
+  if (!sorted.includes(base)) problems.push(`the base ${base} is not on disk`);
+  const steps: UpgradeStep[] = [];
+  let previous = base;
+  for (const [slice, head] of Object.entries(heads)) {
+    if (!sorted.includes(head)) problems.push(`${slice}'s head ${head} is not on disk`);
+    if (head <= base) problems.push(`${slice}'s head ${head} is not after the base ${base}`);
+    if (head < previous) problems.push(`${slice}'s head ${head} sorts before the previous boundary ${previous}`);
+    const from = previous;
+    steps.push({ label: `${slice} (${head.slice(0, 4)})`, through: head, expected: sorted.filter((f) => f > from && f <= head) });
+    if (head > previous) previous = head;
+  }
+  const last = previous;
+  steps.push({ label: 'every later migration', through: null, expected: sorted.filter((f) => f > last) });
+  return { base: sorted.filter((f) => f <= base), steps, problems };
+}
+
+/** The runner applied exactly `expected`, in order. */
+export function appliedExactly(expected: readonly string[], applied: readonly string[]): boolean {
+  return applied.length === expected.length && applied.every((f, i) => f === expected[i]);
+}
 
 const findings: string[] = [];
 const steps: { step: string; ok: boolean; detail: string }[] = [];
@@ -159,6 +350,34 @@ async function sql<T extends Record<string, unknown>>(connectionString: string, 
   } finally {
     await client.end();
   }
+}
+
+/** A catalogue query that must answer exactly one row did not: the cluster is not the one this script built. */
+class MissingRowError extends Error {
+  constructor(what: string) {
+    super(`the catalogue returned no row for ${what}`);
+    this.name = 'MissingRowError';
+  }
+}
+
+/** A query whose first row the caller relies on; an empty answer throws `MissingRowError` rather than reading undefined. */
+async function sqlOne<T extends Record<string, unknown>>(connectionString: string, what: string, text: string, params: unknown[] = []): Promise<T> {
+  const [row] = await sql<T>(connectionString, text, params);
+  if (row === undefined) throw new MissingRowError(what);
+  return row;
+}
+
+/** A capture group the pattern makes mandatory; its absence is an impossible match and throws. */
+class MissingGroupError extends Error {
+  constructor(pattern: RegExp) {
+    super(`a match of ${String(pattern)} has no first capture group`);
+    this.name = 'MissingGroupError';
+  }
+}
+function group1(m: RegExpMatchArray, pattern: RegExp): string {
+  const g = m[1];
+  if (g === undefined) throw new MissingGroupError(pattern);
+  return g;
 }
 
 async function exec(connectionString: string, text: string): Promise<void> {
@@ -266,6 +485,11 @@ interface Inventory {
   readonly touchesSchemaMigrations: string[];
 }
 
+const OWNER_TO = /\bOWNER\s+TO\s+(daftar_[a-z_]+)/gi;
+const CREATE_EXTENSION = /CREATE\s+EXTENSION\s+(?:IF\s+NOT\s+EXISTS\s+)?"?([a-z_]+)"?/gi;
+const GRANT_TO = /\bGRANT\b[\s\S]{0,400}?\bTO\s+([a-z_,\s]+?)[;\n]/gi;
+const REVOKE_FROM = /\bREVOKE\b[\s\S]{0,400}?\bFROM\s+([a-z_,\s]+?)[;\n]/gi;
+
 function buildInventory(): Inventory {
   const ownershipTargets = new Set<string>();
   const extensions = new Set<string>();
@@ -278,13 +502,13 @@ function buildInventory(): Inventory {
 
   for (const file of migrationFiles()) {
     const code = stripComments(readFileSync(join(MIGRATIONS_DIR, file), 'utf8'));
-    for (const m of code.matchAll(/\bOWNER\s+TO\s+(daftar_[a-z_]+)/gi)) ownershipTargets.add(m[1]);
-    for (const m of code.matchAll(/CREATE\s+EXTENSION\s+(?:IF\s+NOT\s+EXISTS\s+)?"?([a-z_]+)"?/gi)) extensions.add(m[1]);
-    for (const m of code.matchAll(/\bGRANT\b[\s\S]{0,400}?\bTO\s+([a-z_,\s]+?)[;\n]/gi)) {
-      for (const r of m[1].split(',')) if (/^daftar_[a-z_]+$/.test(r.trim())) grantees.add(r.trim());
+    for (const m of code.matchAll(OWNER_TO)) ownershipTargets.add(group1(m, OWNER_TO));
+    for (const m of code.matchAll(CREATE_EXTENSION)) extensions.add(group1(m, CREATE_EXTENSION));
+    for (const m of code.matchAll(GRANT_TO)) {
+      for (const r of group1(m, GRANT_TO).split(',')) if (/^daftar_[a-z_]+$/.test(r.trim())) grantees.add(r.trim());
     }
-    for (const m of code.matchAll(/\bREVOKE\b[\s\S]{0,400}?\bFROM\s+([a-z_,\s]+?)[;\n]/gi)) {
-      for (const r of m[1].split(',')) if (/^daftar_[a-z_]+$/.test(r.trim())) revokees.add(r.trim());
+    for (const m of code.matchAll(REVOKE_FROM)) {
+      for (const r of group1(m, REVOKE_FROM).split(',')) if (/^daftar_[a-z_]+$/.test(r.trim())) revokees.add(r.trim());
     }
     if (/DISABLE\s+TRIGGER/i.test(code)) disableTrigger.push(file);
     if (/\bschema_migrations\b/i.test(code)) touchesSchemaMigrations.push(file);
@@ -416,7 +640,7 @@ function checkDeployerIsNotARuntime(): void {
 
 async function checkLiveDeployerShape(db: string): Promise<Record<string, unknown>> {
   section('2b. the deployment principal, as the live catalogue describes it');
-  const [role] = await sql<{
+  const role = await sqlOne<{
     rolcanlogin: boolean;
     rolsuper: boolean;
     rolbypassrls: boolean;
@@ -426,6 +650,7 @@ async function checkLiveDeployerShape(db: string): Promise<Record<string, unknow
     rolinherit: boolean;
   }>(
     ownerUrl(db),
+    `the role ${DEPLOYER}`,
     `SELECT rolcanlogin, rolsuper, rolbypassrls, rolcreatedb, rolcreaterole, rolreplication, rolinherit
        FROM pg_roles WHERE rolname = $1`,
     [DEPLOYER],
@@ -467,6 +692,19 @@ async function checkLiveDeployerShape(db: string): Promise<Record<string, unknow
     reverse.length === 0 ? 'no role can assume the deployment authority' : reverse.map((r) => r.member).join(', '),
   );
 
+  // 2.8 records; 2.11 decides. A fourth membership, INHERIT on an internal
+  // authority, or a missing one is a changed migration principal (A-09 1).
+  const membershipProblems = deployerMembershipProblems(
+    memberships.map((m) => ({ role: m.grantor_role, inherit: m.inherit_option, set: m.set_option, admin: m.admin_option })),
+  );
+  record(
+    '2.11 the memberships are exactly the accepted three',
+    membershipProblems.length === 0,
+    membershipProblems.length === 0
+      ? ACCEPTED_DEPLOYER_MEMBERSHIPS.map((m) => `${m.role} (inherit=${String(m.inherit)}, set=${String(m.set)}, admin=false)`).join('; ')
+      : membershipProblems.join('; '),
+  );
+
   return { attributes: role, memberships, membersOfDeployer: reverse.map((r) => r.member) };
 }
 
@@ -475,7 +713,11 @@ async function checkLiveDeployerShape(db: string): Promise<Record<string, unknow
 // ─────────────────────────────────────────────────────────────────────────
 
 async function appliedCount(db: string): Promise<{ n: number; last: string | null }> {
-  const [row] = await sql<{ n: string; last: string | null }>(ownerUrl(db), `SELECT count(*)::text AS n, max(name) AS last FROM schema_migrations`);
+  const row = await sqlOne<{ n: string; last: string | null }>(
+    ownerUrl(db),
+    `the history of ${db}`,
+    `SELECT count(*)::text AS n, max(name) AS last FROM schema_migrations`,
+  );
   return { n: Number(row.n), last: row.last };
 }
 
@@ -521,11 +763,11 @@ async function caseC(db: string): Promise<void> {
     const before = await appliedCount(db);
     const applied = await runMigrations(deployerUrl(db), MIGRATIONS_DIR);
     const after = await appliedCount(db);
-    // The frozen names exactly and in order, then whatever unfrozen candidates
+    // The two Phase 2 names exactly and in order, then every later migration
     // the tree carries — appended to the expectation, never loosened out of it.
-    const expected = ['0051_accounting_reconciler_read.sql', FROZEN_THROUGH, ...migrationFiles().filter((f) => f > FROZEN_THROUGH)];
+    const expected = ['0051_accounting_reconciler_read.sql', PHASE2_PREFIX_END, ...migrationFiles().filter((f) => f > PHASE2_PREFIX_END)];
     record(
-      '5.1 exactly 0051 and 0052 are added, then the unfrozen candidates',
+      '5.1 exactly 0051 and 0052 are added, then every later migration',
       applied.length === expected.length && applied.every((f, i) => f === expected[i]),
       `${before.n} → ${after.n}; applied ${applied.join(', ') || '(none)'}`,
     );
@@ -535,7 +777,7 @@ async function caseC(db: string): Promise<void> {
 }
 
 /**
- * CASE G — the P3-S1 candidates on top of the frozen history, applied to a
+ * CASE G — the migrations after the Phase 2 freeze (P3-S1 onward), applied to a
  * database that already HOLDS a business.
  *
  * An empty database cannot tell a backfill that worked from one that saw
@@ -543,13 +785,13 @@ async function caseC(db: string): Promise<void> {
  * security, so a backfill that forgot that would seed nothing in production
  * and pass every set-wise assertion vacuously. The business below is written
  * by the administrator (a superuser, which RLS does not restrict), then the
- * candidates run as the deployer, and the rows they were required to write
+ * later migrations run as the deployer, and the rows they were required to write
  * are read back.
  */
 async function caseG(db: string): Promise<void> {
-  section('8b. CASE G — a database at the 0052 freeze with a business, upgraded to every candidate');
+  section('8b. CASE G — a database at the 0052 freeze with a business, upgraded to every later migration');
   await freshDatabase(db);
-  const frozen = migrationsUpTo(FROZEN_THROUGH);
+  const frozen = migrationsUpTo(PHASE2_PREFIX_END);
   try {
     await runMigrations(deployerUrl(db), frozen);
     const seed = {
@@ -590,9 +832,9 @@ async function caseG(db: string): Promise<void> {
        COMMIT;`,
     );
     const applied = await runMigrations(deployerUrl(db), MIGRATIONS_DIR);
-    const candidates = migrationFiles().filter((f) => f > FROZEN_THROUGH);
+    const candidates = migrationFiles().filter((f) => f > PHASE2_PREFIX_END);
     record(
-      '8b.1 exactly the unfrozen candidates are added',
+      '8b.1 exactly every later migration is added',
       applied.length === candidates.length && applied.every((f, i) => f === candidates[i]),
       `applied ${applied.join(', ') || '(none)'}`,
     );
@@ -630,6 +872,66 @@ async function caseG(db: string): Promise<void> {
   } finally {
     rmSync(frozen, { recursive: true, force: true });
   }
+}
+
+/**
+ * CASE H — the Phase 3 slice boundaries, one upgrade at a time (P3-S9 A-09 4).
+ *
+ * Case G proves 0052 → head in one step. A production database is not
+ * upgraded in one step: it sat at each accepted slice head for as long as that
+ * slice was the release, and was carried forward from there. So one fresh
+ * database is taken to the Phase 2 freeze, then to each `PHASE3_SLICE_HEADS`
+ * value in order, then to every file on disk, each step as the deployer and
+ * each applying exactly the files between its two boundaries. The database it
+ * ends with must be Case A's, family by family under the §10 queries.
+ */
+async function caseH(db: string, reference: string): Promise<void> {
+  section('8c. CASE H — a database at the 0052 freeze, upgraded one Phase 3 slice head at a time');
+  await freshDatabase(db);
+  const plan = sliceUpgradePlan(migrationFiles(), PHASE2_PREFIX_END, PHASE3_SLICE_HEADS);
+  record(
+    '8c.0 every accepted slice head is on disk, after the freeze, in order',
+    plan.problems.length === 0,
+    plan.problems.length === 0
+      ? Object.entries(PHASE3_SLICE_HEADS)
+          .map(([k, v]) => `${k} → ${v.slice(0, 4)}`)
+          .join(', ')
+      : plan.problems.join('; '),
+  );
+  const base = migrationsUpTo(PHASE2_PREFIX_END);
+  try {
+    const applied = await runMigrations(deployerUrl(db), base);
+    record(
+      '8c.1 the Phase 2 prefix applies as the deployer',
+      appliedExactly(plan.base, applied),
+      `${applied.length} of ${plan.base.length} through ${PHASE2_PREFIX_END.slice(0, 4)}`,
+    );
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
+  for (const [i, step] of plan.steps.entries()) {
+    const dir = step.through === null ? MIGRATIONS_DIR : migrationsUpTo(step.through);
+    try {
+      const applied = await runMigrations(deployerUrl(db), dir);
+      record(
+        `8c.${i + 2} ${step.label}: exactly the files since the previous boundary`,
+        appliedExactly(step.expected, applied),
+        `applied ${applied.join(', ') || '(none)'}${appliedExactly(step.expected, applied) ? '' : `; expected ${step.expected.join(', ') || '(none)'}`}`,
+      );
+    } finally {
+      if (dir !== MIGRATIONS_DIR) rmSync(dir, { recursive: true, force: true });
+    }
+  }
+  const differences = catalogueDifferences(await catalogueSnapshot(db, DEPLOYER), await catalogueSnapshot(reference, DEPLOYER), CATALOGUE_FAMILIES);
+  record(
+    `8c.${plan.steps.length + 2} the slice-by-slice database is Case A's, under every §10 family`,
+    differences.length === 0,
+    differences.length === 0
+      ? `${CATALOGUE_FAMILIES.length} families identical`
+      : differences
+          .map((d) => `${d.family}: ${d.onlyFirst.length}/${d.onlySecond.length} — e.g. ${(d.onlyFirst[0] ?? d.onlySecond[0] ?? '').slice(0, 160)}`)
+          .join('; '),
+  );
 }
 
 async function caseD(db: string): Promise<void> {
@@ -684,14 +986,23 @@ async function caseF(db: string): Promise<void> {
     }
     record('8.1 the failure is reported, not swallowed', /division by zero/i.test(message), message || 'the run reported success');
 
-    const [probe] = await sql<{ exists: boolean }>(ownerUrl(db), `SELECT to_regclass('public.deployment_failure_probe') IS NOT NULL AS exists`);
+    const probe = await sqlOne<{ exists: boolean }>(
+      ownerUrl(db),
+      'the failure probe',
+      `SELECT to_regclass('public.deployment_failure_probe') IS NOT NULL AS exists`,
+    );
     record(
       '8.2 the failed migration rolled back completely',
       probe.exists === false,
       `the table it created before failing ${probe.exists ? 'SURVIVED' : 'is gone'}`,
     );
 
-    const [row] = await sql<{ n: string }>(ownerUrl(db), `SELECT count(*)::text AS n FROM schema_migrations WHERE name = $1`, [broken]);
+    const row = await sqlOne<{ n: string }>(
+      ownerUrl(db),
+      `the history row count of ${broken}`,
+      `SELECT count(*)::text AS n FROM schema_migrations WHERE name = $1`,
+      [broken],
+    );
     record('8.3 no false history row', Number(row.n) === 0, `schema_migrations has ${row.n} row(s) for the failed file`);
 
     // The failure really was mid-history: what ran before it is committed,
@@ -723,8 +1034,9 @@ async function caseF(db: string): Promise<void> {
 
 async function checkHistoryAuthority(db: string): Promise<void> {
   section('9. the deployment principal owns its own history table (§15)');
-  const [owner] = await sql<{ owner: string; acl: string }>(
+  const owner = await sqlOne<{ owner: string; acl: string }>(
     ownerUrl(db),
+    'the history table',
     `SELECT pg_get_userbyid(relowner) AS owner, coalesce(relacl::text, '') AS acl FROM pg_class WHERE relname = 'schema_migrations'`,
   );
   record('9.1 the history table belongs to the deployer', owner.owner === DEPLOYER, `owner = ${owner.owner}`);
@@ -747,12 +1059,12 @@ async function checkHistoryAuthority(db: string): Promise<void> {
 // 10. THE SAME DATABASE A SUPERUSER WOULD HAVE BUILT
 // ─────────────────────────────────────────────────────────────────────────
 
-const CATALOGUE_QUERIES: Record<string, string> = {
+export const CATALOGUE_QUERIES: Readonly<Record<string, string>> = {
   tables: `SELECT c.relname || ' | ' || pg_get_userbyid(c.relowner) || ' | ' || c.relrowsecurity || ' | ' || c.relforcerowsecurity || ' | ' || coalesce(c.relacl::text, '') AS row
              FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
             WHERE n.nspname = 'public' AND c.relkind IN ('r', 'v', 'm', 'p') ORDER BY 1`,
   functions: `SELECT p.proname || '(' || pg_get_function_identity_arguments(p.oid) || ') | ' || pg_get_userbyid(p.proowner) || ' | ' || p.prosecdef
-                     || ' | ' || coalesce(p.proacl::text, '') || ' | ' || coalesce(p.proconfig::text, '') AS row
+                     || ' | ' || coalesce(p.proacl::text, '') || ' | ' || coalesce(p.proconfig::text, '') || ' | ' || md5(p.prosrc) AS row
                 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
                WHERE n.nspname = 'public' AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.objid = p.oid AND d.deptype = 'e') ORDER BY 1`,
   policies: `SELECT c.relname || '.' || pol.polname || ' | ' || pol.polcmd::text || ' | ' || pol.polpermissive
@@ -770,7 +1082,25 @@ const CATALOGUE_QUERIES: Record<string, string> = {
   constraints: `SELECT c.relname || '.' || con.conname || ' | ' || con.contype::text || ' | ' || pg_get_constraintdef(con.oid) AS row
                   FROM pg_constraint con JOIN pg_class c ON c.oid = con.conrelid JOIN pg_namespace n ON n.oid = c.relnamespace
                  WHERE n.nspname = 'public' ORDER BY 1`,
+  // ── added by P3-S9 (A-09 2, finding F-8) ──────────────────────────────────
+  sequences: `SELECT c.relname || ' | ' || pg_get_userbyid(c.relowner) || ' | ' || coalesce(c.relacl::text, '') AS row
+                FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+               WHERE n.nspname = 'public' AND c.relkind = 'S' ORDER BY 1`,
+  indexes: `SELECT tablename || '.' || indexname || ' | ' || indexdef AS row FROM pg_indexes WHERE schemaname = 'public' ORDER BY 1`,
+  columns: `SELECT c.relname || '.' || a.attname || ' | ' || format_type(a.atttypid, a.atttypmod) || ' | ' || a.attnotnull
+                   || ' | ' || coalesce(pg_get_expr(d.adbin, d.adrelid), '') || ' | ' || a.attidentity::text || ' | ' || a.attgenerated::text AS row
+              FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid JOIN pg_namespace n ON n.oid = c.relnamespace
+              LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
+             WHERE n.nspname = 'public' AND c.relkind IN ('r', 'v', 'm', 'p') AND a.attnum > 0 AND NOT a.attisdropped ORDER BY 1`,
+  schema: `SELECT n.nspname || ' | ' || pg_get_userbyid(n.nspowner) || ' | ' || coalesce(n.nspacl::text, '') AS row
+             FROM pg_namespace n WHERE n.nspname = 'public'`,
+  defaultAcls: `SELECT pg_get_userbyid(d.defaclrole) || ' | ' || coalesce(n.nspname, '') || ' | ' || d.defaclobjtype::text || ' | ' || d.defaclacl::text AS row
+                  FROM pg_default_acl d LEFT JOIN pg_namespace n ON n.oid = d.defaclnamespace ORDER BY 1`,
+  extensions: `SELECT e.extname || ' | ' || e.extversion AS row FROM pg_extension e ORDER BY 1`,
 };
+
+/** The §10 families, in the order their steps are numbered (10.1 …). */
+export const CATALOGUE_FAMILIES: readonly string[] = Object.keys(CATALOGUE_QUERIES);
 
 async function catalogueSnapshot(db: string, applier: string): Promise<Record<string, string[]>> {
   const out: Record<string, string[]> = {};
@@ -780,7 +1110,11 @@ async function catalogueSnapshot(db: string, applier: string): Promise<Record<st
     // created, so the applying principal's own name is normalised away. Every
     // OTHER owner — the two delegated ones — is compared literally, which is
     // the point: a handover that silently did not happen shows up here.
-    out[name] = rows.map((r) => r.row.split(applier).join('<applier>'));
+    out[name] = normaliseCatalogueRows(
+      name,
+      rows.map((r) => r.row),
+      applier,
+    );
   }
   return out;
 }
@@ -789,21 +1123,20 @@ async function checkCatalogueEquivalence(deployed: string, superuser: string): P
   section('10. the deployment authority builds the database a superuser builds');
   const a = await catalogueSnapshot(deployed, DEPLOYER);
   const b = await catalogueSnapshot(superuser, PG_USER);
+  const differences = new Map(catalogueDifferences(a, b, CATALOGUE_FAMILIES).map((d) => [d.family, d] as const));
   const counts: Record<string, number> = {};
-  for (const name of Object.keys(CATALOGUE_QUERIES)) {
-    const setB = new Set(b[name]);
-    const setA = new Set(a[name]);
-    const onlyA = a[name].filter((x) => !setB.has(x));
-    const onlyB = b[name].filter((x) => !setA.has(x));
-    counts[name] = a[name].length;
+  CATALOGUE_FAMILIES.forEach((name, i) => {
+    const rows = a[name] ?? [];
+    const d = differences.get(name);
+    counts[name] = rows.length;
     record(
-      `10.${Object.keys(CATALOGUE_QUERIES).indexOf(name) + 1} ${name}`,
-      onlyA.length === 0 && onlyB.length === 0,
-      onlyA.length === 0 && onlyB.length === 0
-        ? `${a[name].length} identical`
-        : `${onlyA.length} differ under the deployer, ${onlyB.length} under the superuser — e.g. ${(onlyA[0] ?? onlyB[0] ?? '').slice(0, 200)}`,
+      `10.${i + 1} ${name}`,
+      d === undefined,
+      d === undefined
+        ? `${rows.length} identical`
+        : `${d.onlyFirst.length} differ under the deployer, ${d.onlySecond.length} under the superuser — e.g. ${(d.onlyFirst[0] ?? d.onlySecond[0] ?? '').slice(0, 200)}`,
     );
-  }
+  });
   return counts;
 }
 
@@ -833,7 +1166,7 @@ async function roleMatrix(db: string): Promise<RoleRow[]> {
   section('11. the final role matrix (§32)');
   const rows: RoleRow[] = [];
   for (const role of ALL_ROLES) {
-    const [attrs] = await sql<{
+    const attrs = await sqlOne<{
       rolcanlogin: boolean;
       rolsuper: boolean;
       rolbypassrls: boolean;
@@ -841,9 +1174,12 @@ async function roleMatrix(db: string): Promise<RoleRow[]> {
       rolcreaterole: boolean;
       rolreplication: boolean;
       rolinherit: boolean;
-    }>(ownerUrl(db), `SELECT rolcanlogin, rolsuper, rolbypassrls, rolcreatedb, rolcreaterole, rolreplication, rolinherit FROM pg_roles WHERE rolname = $1`, [
-      role,
-    ]);
+    }>(
+      ownerUrl(db),
+      `the role ${role}`,
+      `SELECT rolcanlogin, rolsuper, rolbypassrls, rolcreatedb, rolcreaterole, rolreplication, rolinherit FROM pg_roles WHERE rolname = $1`,
+      [role],
+    );
     const memberOf = (
       await sql<{ r: string }>(
         ownerUrl(db),
@@ -851,8 +1187,9 @@ async function roleMatrix(db: string): Promise<RoleRow[]> {
         [role],
       )
     ).map((x) => x.r);
-    const [priv] = await sql<{ temp: boolean; create_public: boolean; reads_journal: boolean; reads_accounts: boolean }>(
+    const priv = await sqlOne<{ temp: boolean; create_public: boolean; reads_journal: boolean; reads_accounts: boolean }>(
       ownerUrl(db),
+      `the privileges of ${role}`,
       `SELECT has_database_privilege($1, current_database(), 'TEMPORARY') AS temp,
               has_schema_privilege($1, 'public', 'CREATE')                AS create_public,
               has_table_privilege($1, 'journal_lines', 'SELECT')          AS reads_journal,
@@ -938,6 +1275,47 @@ async function roleMatrix(db: string): Promise<RoleRow[]> {
   return rows;
 }
 
+/**
+ * 11.9 / 11.10 — TEMPORARY and CREATE on `public` for every role the schema
+ * knows and for PUBLIC, on one build. Asked of the deployer's database AND the
+ * superuser control (P3-S9 A-09 3): bootstrap's revokes are the boundary, and
+ * the history must not have handed either privilege back on either build.
+ */
+async function namespacePrivileges(db: string): Promise<NamespacePrivilegeRow[]> {
+  const rows: NamespacePrivilegeRow[] = [];
+  for (const role of [...ALL_ROLES, PUBLIC_GRANTEE]) {
+    const priv = await sqlOne<{ temp: boolean; create_public: boolean }>(
+      ownerUrl(db),
+      `TEMPORARY and CREATE of ${role} in ${db}`,
+      `SELECT has_database_privilege($1, current_database(), 'TEMPORARY') AS temp,
+              has_schema_privilege($1, 'public', 'CREATE')                AS create_public`,
+      [role === PUBLIC_GRANTEE ? 'public' : role],
+    );
+    rows.push({ role, temporaryOnDatabase: priv.temp, createOnPublic: priv.create_public });
+  }
+  return rows;
+}
+
+async function checkNamespacePrivileges(deployed: string, superuser: string): Promise<Record<string, NamespacePrivilegeRow[]>> {
+  section('11b. TEMPORARY and CREATE on public, on both builds and for PUBLIC');
+  const out: Record<string, NamespacePrivilegeRow[]> = {};
+  const builds: readonly (readonly [label: string, db: string])[] = [
+    ['the deployer-built database', deployed],
+    ['the superuser-built control', superuser],
+  ];
+  for (const [n, [label, db]] of builds.entries()) {
+    const rows = await namespacePrivileges(db);
+    out[db] = rows;
+    const problems = namespacePrivilegeProblems(rows, label);
+    record(
+      `11.${9 + n} ${label}: no role but the deployer, and not PUBLIC, holds TEMPORARY or CREATE on public`,
+      problems.length === 0,
+      problems.length === 0 ? `${rows.length} grantees asked, PUBLIC included` : problems.join('; '),
+    );
+  }
+  return out;
+}
+
 // ─────────────────────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
@@ -948,6 +1326,7 @@ async function main(): Promise<void> {
   let deployerShape: Record<string, unknown> = {};
   let matrix: RoleRow[] = [];
   let catalogue: Record<string, number> = {};
+  let namespace: Record<string, NamespacePrivilegeRow[]> = {};
 
   if (!STATIC_ONLY) {
     startCluster();
@@ -961,6 +1340,7 @@ async function main(): Promise<void> {
       await caseE(DEPLOYED);
       await caseF('daftar_deploy_case_f');
       await caseG('daftar_deploy_case_g');
+      await caseH('daftar_deploy_case_h', DEPLOYED);
       await checkHistoryAuthority(DEPLOYED);
 
       // The superuser control: the same bootstrap and the same history,
@@ -971,6 +1351,7 @@ async function main(): Promise<void> {
       catalogue = await checkCatalogueEquivalence(DEPLOYED, SUPER_DB);
 
       matrix = await roleMatrix(DEPLOYED);
+      namespace = await checkNamespacePrivileges(DEPLOYED, SUPER_DB);
     } finally {
       stopCluster();
     }
@@ -995,6 +1376,8 @@ async function main(): Promise<void> {
     deployerShape,
     catalogueRowCounts: catalogue,
     roleMatrix: matrix,
+    namespacePrivileges: namespace,
+    phase3SliceHeads: PHASE3_SLICE_HEADS,
     steps,
     verdict: findings.length === 0 ? 'PASS' : 'FAIL',
     findings,
@@ -1010,8 +1393,12 @@ async function main(): Promise<void> {
   }
 }
 
-void main().catch((e: unknown) => {
-  stopCluster();
-  console.error(e instanceof Error ? e.stack : e);
-  process.exit(1);
-});
+// Importing this module runs nothing: `tests/security/deployment-authority-
+// model.test.ts` imports the decisions above and must not start a cluster.
+if (require.main === module) {
+  void main().catch((e: unknown) => {
+    stopCluster();
+    console.error(e instanceof Error ? e.stack : e);
+    process.exit(1);
+  });
+}
