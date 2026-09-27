@@ -197,9 +197,23 @@ export const NATIVE_SOURCE_TYPES = ['manual_adjustment', 'reversal', 'opening_ba
  * `mintDomainPostingAssertion` (`domain-posting.ts`); none of them may be
  * posted through `post`. Later slices extend this list with their own:
  * P3-S4 adds `purchase` and `negative_inventory_cost_adjustment`
- * (PHASE_3_S4_CONTRACT A-06, §4.2).
+ * (PHASE_3_S4_CONTRACT A-06, §4.2); P3-S5 adds `supplier_return`
+ * (PHASE_3_S5_CONTRACT A-06, §4.2).
  */
-export const DOMAIN_SOURCE_TYPES = ['inventory_adjustment', 'inventory_opening', 'purchase', 'negative_inventory_cost_adjustment'] as const;
+export const DOMAIN_SOURCE_TYPES = ['inventory_adjustment', 'inventory_opening', 'purchase', 'negative_inventory_cost_adjustment', 'supplier_return'] as const;
+
+/**
+ * The domain sources whose entry a DOMAIN command may reverse through the
+ * Phase 2 reversal workflow (PHASE_3_S5_CONTRACT A-06, R-B2a): a purchase,
+ * by `purchase.reverse`, which writes the inverse stock movements and the
+ * paired `purchase_reversals` row in the same transaction before
+ * `accounting_post_reversal` runs. The reversal is minted by
+ * `mintDomainReversalAssertion` (`domain-posting.ts`) and posted as a
+ * `reversal` entry: `purchase_reversal` is a stock source only and never an
+ * accounting one. `AccountingEngine.reverse` stays the merchant path, and the
+ * database still refuses it for every domain entry (A-15(b)).
+ */
+export const DOMAIN_REVERSIBLE_SOURCE_TYPES = ['purchase'] as const;
 
 export class AccountingEngine {
   constructor(

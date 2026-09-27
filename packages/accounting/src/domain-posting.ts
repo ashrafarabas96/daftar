@@ -34,8 +34,10 @@
  * source document, whoever minted the assertion.
  */
 import { AccountingError } from './errors';
+import { canonicalDate } from './fingerprint';
 import type { AccountingAssertionMinter } from './ports';
-import { computeCommandFingerprint, DOMAIN_SOURCE_TYPES, NATIVE_SOURCE_TYPES, validatePostingCommand } from './post';
+import { computeCommandFingerprint, DOMAIN_REVERSIBLE_SOURCE_TYPES, DOMAIN_SOURCE_TYPES, NATIVE_SOURCE_TYPES, validatePostingCommand } from './post';
+import { computeReversalFingerprint, mirrorReversalLines, type PostedEntrySnapshot } from './sources';
 import type { PostingCommand } from './types';
 
 export type DomainSourceType = (typeof DOMAIN_SOURCE_TYPES)[number];
@@ -66,6 +68,60 @@ export function mintDomainPostingAssertion(minter: AccountingAssertionMinter, co
     operationKind: 'post',
     sourceType: command.sourceType,
     sourceId: command.sourceId,
+    postingFingerprint,
+  });
+}
+
+export type DomainReversibleSourceType = (typeof DOMAIN_REVERSIBLE_SOURCE_TYPES)[number];
+
+/** True for a domain source whose entry a domain command may reverse (R-B2a). */
+export function isDomainReversibleSourceType(sourceType: string): sourceType is DomainReversibleSourceType {
+  return (DOMAIN_REVERSIBLE_SOURCE_TYPES as readonly string[]).includes(sourceType);
+}
+
+/**
+ * Mint the `reverse` assertion for a domain command's Phase 2 reversal of a
+ * domain entry (PHASE_3_S5_CONTRACT A-06, R-B2a): `purchase.reverse` reverses
+ * the purchase's journal entry through `accounting_post_reversal`, on seam 2's
+ * handle, in the transaction that wrote the inverse stock movements.
+ *
+ * `original` is the persisted entry as `AccountingLedgerReader.readEntry` read
+ * it in the command's business scope; `entryDate` is the command's bound
+ * `reversal_date`, never a clock. What it checks, in order:
+ *
+ * 1. The original is an entry of a domain-reversible source
+ *    (`DOMAIN_REVERSIBLE_SOURCE_TYPES`), else `accounting.assertion_wrong_source`.
+ * 2. `entryDate` is a real civil date not before the original's, else
+ *    `accounting.entry_date_before_original` (the database checks it again,
+ *    with the period and "not in the future").
+ * 3. The mirror (`mirrorReversalLines`) and `computeReversalFingerprint` —
+ *    exactly the derivation `AccountingEngine.reverse` signs and the database
+ *    recomputes from its own rows.
+ *
+ * Like `mintDomainPostingAssertion`, it does NOT run `validateBranchScope`:
+ * the domain authority is the warehouse scope bound in the inventory
+ * assertion (L:1024). There is no flag and no trusted parameter; the database
+ * admits the reversal of a purchase entry only when the paired
+ * `purchase_reversals` row exists in the same transaction (A-15(b)).
+ */
+export function mintDomainReversalAssertion(minter: AccountingAssertionMinter, original: PostedEntrySnapshot, entryDate: string, actorUserId: string): string {
+  const context = { businessId: original.businessId, sourceType: original.sourceType, originalEntryId: original.entryId };
+  if (!isDomainReversibleSourceType(original.sourceType)) {
+    throw new AccountingError('accounting.assertion_wrong_source', `${original.sourceType} entries are not reversed by a domain command`, context);
+  }
+  const date = canonicalDate(entryDate);
+  if (date < canonicalDate(original.entryDate)) {
+    throw new AccountingError('accounting.entry_date_before_original', 'a reversal may not precede the entry it reverses', context);
+  }
+  const mirrored = mirrorReversalLines(original);
+  const postingFingerprint = computeReversalFingerprint(original, date, mirrored);
+  return minter.mint({
+    actorUserId,
+    tenantId: original.tenantId,
+    businessId: original.businessId,
+    operationKind: 'reverse',
+    sourceType: 'reversal',
+    sourceId: original.entryId,
     postingFingerprint,
   });
 }
