@@ -127,8 +127,8 @@
 -- ── Engineering rulings taken here (documented for the report) ──────────
 --
 --   R-69 L2 · HOW AN ALLOCATION MEETS A TXN-ONLY AP RESIDUE (coordinator
---        header, S5 TL-3). Two cases, both decided here and proven by 0067-E
---        arithmetic and the S6 suites:
+--        header, S5 TL-3; case (b) rewritten by R-77). Two cases, both
+--        decided here and proven by 0067-E arithmetic and the S6 suites:
 --        (a) ABSORBED. The remaining AP base B − HALF_EVEN(B·X, T) is 0 while
 --            the txn residue O > 0 and conv_R(O) ≥ 1. The final allocation
 --            a = O is lawful: rel = 0, its AP line carries conv_R(a) at the
@@ -136,25 +136,46 @@
 --            and the whole payment (or credit) base is realized FX. AP txn
 --            and AP base both reach exactly 0 — the DM §7ج "the final
 --            consumption releases the entire residue" rule, with nothing left.
---        (b) STABLE REFUSAL. conv_R(O) = 0, i.e. 0 < O and
+--        (b) A SUB-UNIT RESIDUE: 0 < O and conv_R(O) = 0, i.e.
 --            2·O·R·10^max(0,e_b−e_t) ≤ 10^max(0,e_t−e_b) (HALF_EVEN sends the
---            tie to 0). No allocation can clear it: a = O needs an AP line of
---            base 0, which 0042's journal_lines_money_cap_ck (base > 0) and
---            the 0043 per-line law forbid, and a > O is over-allocation
---            (MP-3). Every attempt is refused `supplier_payment.amount_below_base_unit`
---            / `supplier_credit_allocation.amount_below_base_unit` (422),
---            routine and COMMIT guard alike — the S5 TL-3 and S6 TL-9 rule.
---            Recorded as debt with exactly that boundary: the residue stays
---            open until a write-off command (not in Phase 3) exists. It is
---            unreachable for the pilot currencies (no rate/exponent pair makes
---            one minor unit of a purchase currency convert below half a base
---            unit), as TL-9.
+--            tie to 0). It IS reachable with the seeded pilot currencies:
+--            0001 seeds TRY, LBP and SYP at exponent 2, and in an ILS-base
+--            business one kurus at 0.11 converts to 0.11 agora → 0. No
+--            allocation can clear it: a = O needs an AP line of base 0,
+--            which 0042's journal_lines_money_cap_ck (base > 0) and the 0043
+--            per-line law forbid, and a > O is over-allocation (MP-3).
+--            S6 NEVER CREATES ONE (R-77): every allocation leaves O − a = 0
+--            or conv_R(O − a) ≥ 1, in the routine and at COMMIT. One can
+--            still ARISE from a frozen S5 partial return: 0066 releases
+--            ap = least(C, O) and leaves O − ap under no such rule (S5 review
+--            L2) — e.g. T = 5000 TRY at 0.11, a return carrying C = 4999
+--            leaves O = 1 (or S6 leaves O = 10, conv 1, and a return of 9
+--            leaves 1). Such a purchase then stays open, and:
+--              · supplier.pay / supplier.allocate_credit applying any
+--                0 < a ≤ O (conv is monotone, so conv_R(a) = 0) are 422
+--                `supplier_payment.amount_below_base_unit` /
+--                `supplier_credit_allocation.amount_below_base_unit`; a > O
+--                is 422 `…amount_exceeds_outstanding`;
+--              · purchase.return of any remaining goods with a carrying
+--                amount C > 0 is 422 `supplier_return.amount_below_base_unit`
+--                (0066: ap = least(C, O) > 0 converts to 0);
+--              · purchase.reverse is 409 `purchase_reversal.returned` (the
+--                return that left the residue exists), preceded by
+--                `purchase_reversal.payment_allocated` / `…credit_allocated`
+--                when an S6 allocation exists (0066 step 6 order).
+--            That boundary — reachable only through S5's least(C, O) split —
+--            is recorded as debt: the residue stays open until a write-off
+--            command (not in Phase 3) exists. A credit note never carries
+--            one: it is born with conv_Rn(OA) = OB ≥ 1 (0066 refuses a
+--            credit converting to 0), and R-78 keeps every remaining r at
+--            0 or conv_Rn(r) ≥ 1.
 --   R-70 THE DISCOVERIES. (a) `supplier_settlement_guard_gaps()` records the
 --        SHA-256 of prosrc (the 0063/0065 digest, not the contract's md5) of
 --        eighteen functions: the thirteen trigger functions, the two verify
 --        helpers AND the three arithmetic functions the guards compute with —
 --        a neutered arithmetic body would weaken every guard at once, so it
---        is reported too. (b) Coordinator ruling (overrides §7.1): the owner
+--        is reported too — and, since R-79, the two extension points (twenty
+--        here, twenty-one with 0068's writer). (b) Coordinator ruling (overrides §7.1): the owner
 --        replacement of `supplier_credit_note_guard()` makes 0065's
 --        `inventory_stock_source_guard_gaps()` report its recorded digest, so
 --        that function is replaced here by the migrator, same signature,
@@ -169,6 +190,44 @@
 --   R-72 0067-E(5)'s "arbitrary non-member probe role" is PUBLIC: a
 --        non-superuser migrator holds no CREATEROLE (R-40), so the block reads
 --        `has_table_privilege('public', …)` instead of creating a role.
+--
+-- ── Review rulings (S6 independent review, M1 and I1) ───────────────────
+--
+--   R-77 NO SUB-UNIT AP RESIDUE (review M1, coordinator ruling; supersedes
+--        the contract's TL-9 reading "unreachable for the pilot
+--        currencies", which is false: see R-69(b)). An allocation of a to a
+--        purchase with outstanding O is lawful only if O − a = 0 or
+--        conv_R(O − a) ≥ 1, at the purchase's snapshot R (the conversion
+--        the AP line uses). Otherwise it is refused, before any write, by
+--        422 `supplier_payment.residue_below_base_unit` (supplier.pay,
+--        receive-and-pay) or `supplier_credit_allocation.residue_below_base_unit`
+--        (supplier.allocate_credit), judged after `…amount_below_base_unit`.
+--        The COMMIT guards `supplier_payment_allocation_value_complete` and
+--        `supplier_credit_allocation_value_complete` judge the same on the
+--        stored row (O − a = T − X − a), so a forged row cannot create one.
+--        Repro closed: T = 5000 TRY, B = 550; paying 4999 is refused, 4995
+--        (O − a = 5, conv 1) and 5000 are accepted.
+--   R-78 NO SUB-UNIT NOTE RESIDUE (the note-side twin of R-77). A
+--        consumption of c from a note at remaining rb is lawful only if
+--        rb − c = 0 or conv_Rn(rb − c) ≥ 1 at the note's snapshot Rn (the
+--        conversion its receivable line uses); otherwise 422
+--        `supplier_credit_allocation.residue_below_base_unit` /
+--        `supplier_refund.residue_below_base_unit`, per command as every
+--        other S6 amount code, in the routine and in the COMMIT guards
+--        `supplier_credit_allocation_value_complete` and
+--        `supplier_refund_value_complete`. Without it a note left at a
+--        remaining r with conv_Rn(r) = 0 could never be consumed again
+--        (every c ≤ r converts to 0: `…amount_below_base_unit`).
+--   R-79 THE DISCOVERY SEES THE EXTENSION POINTS AND THE WRITER (review I1).
+--        `supplier_settlement_guard_gaps()` also records the prosrc SHA-256
+--        of `purchase_ap_outstanding` and `purchase_settlement_state`
+--        (migrator-owned INVOKER: reported `function_owner` unless owned
+--        by the discovery's own owner, `function_not_invoker` if DEFINER,
+--        `function_search_path`, `function_body`), so replacing either is
+--        reported. `supplier_credit_note_consume` is created by 0068, so
+--        0068 re-creates the discovery (same signature, owner, INVOKER
+--        STABLE, pinned path, no grantee) with every row here verbatim and
+--        the writer's row added; 0067-E and 0068-E probe the new rows.
 --
 -- Migrations 0000-0066 are FROZEN and untouched.
 
@@ -886,7 +945,8 @@ $$;
 -- At COMMIT (A-05(a), A-08, A-09): the purchase is received and not
 -- reversed; the allocation carries the purchase and payment snapshots; the
 -- release, the dust, the payment base and the realized FX are recomputed;
--- conv_R(a) > 0 (R-69(b)); then the purchase chain (R-62).
+-- conv_R(a) > 0 (R-69(b)); the residue T − X − a is 0 or converts to at
+-- least one base unit (R-77); then the purchase chain (R-62).
 CREATE OR REPLACE FUNCTION supplier_payment_allocation_value_complete() RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $$
 DECLARE
@@ -925,6 +985,11 @@ BEGIN
   IF v_conv = 0 OR v_pb = 0 THEN
     RAISE EXCEPTION 'supplier_payment.amount_below_base_unit: an allocated amount converts to at least one base unit' USING ERRCODE = 'P0001';
   END IF;
+  IF NEW.ap_released_before_txn_minor + NEW.purchase_amount_applied_minor < v_p.total_txn_minor
+     AND supplier_convert_base(v_p.total_txn_minor - NEW.ap_released_before_txn_minor - NEW.purchase_amount_applied_minor,
+                               v_p.source_to_base_rate, v_et, v_eb) = 0 THEN
+    RAISE EXCEPTION 'supplier_payment.residue_below_base_unit: an allocation leaves its purchase nothing outstanding or an amount converting to at least one base unit' USING ERRCODE = 'P0001';
+  END IF;
   IF NEW.purchase_currency IS DISTINCT FROM v_p.currency_code
      OR NEW.purchase_historical_to_base_rate IS DISTINCT FROM v_p.source_to_base_rate
      OR NEW.payment_currency IS DISTINCT FROM v_h.currency_code
@@ -956,8 +1021,8 @@ END;
 $$;
 
 -- At COMMIT (A-05(b), A-08, A-10): the AP side as for a payment; the credit
--- side against the note's snapshot and g; the realized FX cr_rel − rel;
--- then both chains.
+-- side against the note's snapshot and g; neither residue below one base
+-- unit (R-77, R-78); the realized FX cr_rel − rel; then both chains.
 CREATE OR REPLACE FUNCTION supplier_credit_allocation_value_complete() RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $$
 DECLARE
@@ -999,6 +1064,13 @@ BEGIN
   v_cr_conv := supplier_convert_base(NEW.credit_amount_consumed_minor, v_n.source_to_base_rate, v_en, v_eb);
   IF v_conv = 0 OR v_cr_conv = 0 THEN
     RAISE EXCEPTION 'supplier_credit_allocation.amount_below_base_unit: an applied or consumed amount converts to at least one base unit' USING ERRCODE = 'P0001';
+  END IF;
+  IF (NEW.ap_released_before_txn_minor + NEW.purchase_amount_applied_minor < v_p.total_txn_minor
+      AND supplier_convert_base(v_p.total_txn_minor - NEW.ap_released_before_txn_minor - NEW.purchase_amount_applied_minor,
+                                v_p.source_to_base_rate, v_et, v_eb) = 0)
+     OR (NEW.credit_amount_consumed_minor < NEW.credit_remaining_before_minor
+         AND supplier_convert_base(NEW.credit_remaining_before_minor - NEW.credit_amount_consumed_minor, v_n.source_to_base_rate, v_en, v_eb) = 0) THEN
+    RAISE EXCEPTION 'supplier_credit_allocation.residue_below_base_unit: an allocation leaves its purchase and its note each nothing outstanding or an amount converting to at least one base unit' USING ERRCODE = 'P0001';
   END IF;
   IF NEW.purchase_currency IS DISTINCT FROM v_p.currency_code
      OR NEW.purchase_historical_to_base_rate IS DISTINCT FROM v_p.source_to_base_rate
@@ -1056,7 +1128,8 @@ END;
 $$;
 
 -- At COMMIT (A-05(c), A-10): the credit side against the note; the receipt
--- base conv(m, Rr); the realized FX mb − cr_rel; then the note chain.
+-- base conv(m, Rr); no note residue below one base unit (R-78); the
+-- realized FX mb − cr_rel; then the note chain.
 CREATE OR REPLACE FUNCTION supplier_refund_value_complete() RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $$
 DECLARE
@@ -1083,6 +1156,10 @@ BEGIN
   v_mb      := supplier_convert_base(NEW.receipt_amount_minor, NEW.receipt_to_base_rate, v_er, v_eb);
   IF v_cr_conv = 0 OR v_mb = 0 THEN
     RAISE EXCEPTION 'supplier_refund.amount_below_base_unit: a consumed or received amount converts to at least one base unit' USING ERRCODE = 'P0001';
+  END IF;
+  IF NEW.source_amount_consumed_minor < NEW.credit_remaining_before_minor
+     AND supplier_convert_base(NEW.credit_remaining_before_minor - NEW.source_amount_consumed_minor, v_n.source_to_base_rate, v_en, v_eb) = 0 THEN
+    RAISE EXCEPTION 'supplier_refund.residue_below_base_unit: a refund leaves its note nothing or an amount converting to at least one base unit' USING ERRCODE = 'P0001';
   END IF;
   v_cr_rel := supplier_credit_remaining_carrying(v_n.original_amount_minor, v_n.original_carrying_base_amount_minor, NEW.credit_remaining_before_minor)
               - supplier_credit_remaining_carrying(v_n.original_amount_minor, v_n.original_carrying_base_amount_minor,
@@ -1635,12 +1712,17 @@ REVOKE ALL ON FUNCTION inventory_stock_source_guard_gaps() FROM PUBLIC;
 --    per gap: the thirteen §2.3 triggers by table, name, tgtype, deferral,
 --    enabled state ('O'), no WHEN and no column list, and their functions;
 --    then the two verification helpers and the three arithmetic functions
---    the guards compute with (table_name '-', trigger_name the function's
---    signature). Every function is checked for its owner (the internal
---    principal), DEFINER, the pinned path and the SHA-256 of its prosrc
---    recorded at migration time (0063/0065's digest, R-70(a)).
+--    the guards compute with, and the two replaced S5 extension points
+--    (R-79) (table_name '-', trigger_name the function's signature). Every
+--    guard, helper and arithmetic function is checked for its owner (the
+--    internal principal), DEFINER, the pinned path and the SHA-256 of its
+--    prosrc recorded at migration time (0063/0065's digest, R-70(a)); each
+--    extension point for the discovery's own (migrator) owner, INVOKER, the
+--    pinned path and its digest. 0068 re-creates this function with the
+--    R-73 writer's row added (R-79).
 --    Codes: trigger_missing, trigger_disabled, trigger_shape, function_owner,
---    function_not_definer, function_search_path, function_body.
+--    function_not_definer, function_not_invoker, function_search_path,
+--    function_body.
 -- ─────────────────────────────────────────────────────────────────────────
 CREATE OR REPLACE FUNCTION supplier_settlement_guard_gaps()
 RETURNS TABLE (table_name TEXT, trigger_name TEXT, missing TEXT)
@@ -1651,8 +1733,10 @@ DECLARE
   v_tg  RECORD;
   v_p   RECORD;
   v_fn  REGPROCEDURE;
+  v_me  TEXT;
   -- SHA-256 (hex) of each S6 guard, helper and arithmetic function's prosrc,
-  -- recorded at migration time (0067), the replaced credit-note guard included.
+  -- recorded at migration time (0067), the replaced credit-note guard and
+  -- the two replaced extension points included (R-79).
   c_digest CONSTANT JSONB := '{
     "payment_method_guard()": "e1ebd743f99dae8e059d903d8fb73c65858cabb70ffc5dcb2fbd45407dadb162",
     "payment_method_named()": "07cdc55fa3181e6b4de214ff4a34a72674d2802de1c045c51662dcf6c2637390",
@@ -1660,22 +1744,28 @@ DECLARE
     "supplier_payment_guard()": "f373f9ef42dbf417253913300ec96a53523b33ef9282c4fbdd9e6ef44ca62fca",
     "supplier_payment_complete()": "0c409912d2936944253c5f08534a4e8108eed0283ffead0e8f567c6f3dcfad54",
     "supplier_payment_allocation_guard()": "aaf2efe1e56207a406fb4ef956ee427ec26cc26a6d92db8a0a22286425e09b8d",
-    "supplier_payment_allocation_value_complete()": "7d6b34809ae16a86d0a7c52ebd4d540cee00951206fb9643ef041f1f2d3c8d7c",
+    "supplier_payment_allocation_value_complete()": "75116b059a15e70a6c34583a4802912eed0f36cdad6b9fe26e62a4790a3054ad",
     "supplier_credit_allocation_guard()": "0120e79f3e7be686632df65199bf46d65742d43094d5ab5d026810d8774c5886",
-    "supplier_credit_allocation_value_complete()": "8dcd16c43368b7b2e19966e45762e5845da1f7d8b23a46d378cb2d3ded20fdf6",
+    "supplier_credit_allocation_value_complete()": "184a467ce6d59945f0c49fcaa16685722fbadb582f0a30f9adea04690aadc054",
     "supplier_refund_guard()": "72cb27729e52a82547bf70cd83f57e9d5abfd104890fe98bd64f339173630f15",
-    "supplier_refund_value_complete()": "81e12e61ee1192cda78cab2d651aa99535351ee4efc84ff7fe8625ec28cd2114",
+    "supplier_refund_value_complete()": "a82873ddad98bd9946c4d3c2213c998933487a8cc928bb966c724c3e121e4307",
     "supplier_credit_note_guard()": "a21031b39170a8cec024de3947b8de6ee70c7def674235fcdbff01f27d99177e",
     "purchase_reversal_unsettled()": "d84f8b51c5033fb47ceb4c03fccd41a7576faf4ed5529dc4a1c31a64bc9508bf",
     "purchase_settlement_verify(uuid,uuid)": "4fcbb7931c06fbf9cf11fc2ede6e4b97357d24b038ed412329c55a48cbafe8ba",
     "supplier_credit_note_verify(uuid,uuid)": "9d18ee17cfdd5f778ee3a767351506d6bbd2209c15d839ed6a295d601abbf76e",
     "supplier_convert_base(bigint,numeric,integer,integer)": "38d765449e2844c1d84971f09277b5857bbddbf741b62a3d8b4c1d4e532e39cf",
     "supplier_ap_release(bigint,bigint,bigint,bigint)": "47eb15a7fc56e1871b5c521ca189782bfbafb8dca3e7bd0bb3adc417016236a9",
-    "supplier_credit_remaining_carrying(bigint,bigint,bigint)": "941082099606f825336b0249a76658e65e592df6bbe06f3081576a5be0205144"
+    "supplier_credit_remaining_carrying(bigint,bigint,bigint)": "941082099606f825336b0249a76658e65e592df6bbe06f3081576a5be0205144",
+    "purchase_ap_outstanding(uuid,uuid)": "74091f5ea48dd4873664692bb06cf1d9de025d1b98093c3d2b39bbd300d3b036",
+    "purchase_settlement_state(uuid,uuid)": "b236cda5fe48a2b00c818e0f88f8e9b8de9a3c5b61d04c5cf677e56960d7037b"
   }';
 BEGIN
+  -- The extension points' expected owner: the migrator, who owns this discovery.
+  SELECT r.rolname::text INTO v_me
+  FROM pg_proc p JOIN pg_roles r ON r.oid = p.proowner
+  WHERE p.oid = 'public.supplier_settlement_guard_gaps()'::regprocedure;
   FOR v_g IN
-    SELECT e.tbl, e.tg, e.typ, e.deferred, e.fn
+    SELECT e.tbl, e.tg, e.typ, e.deferred, e.fn, (e.ord IN (19, 20)) AS invoker
     FROM (VALUES
       (1,  'payment_methods',              'payment_methods_guard',                       31,   false, 'payment_method_guard()'),
       (2,  'payment_methods',              'payment_methods_named',                       21,   true,  'payment_method_named()'),
@@ -1694,7 +1784,9 @@ BEGIN
       (15, '-', 'supplier_credit_note_verify(uuid,uuid)',                   NULL, NULL, 'supplier_credit_note_verify(uuid,uuid)'),
       (16, '-', 'supplier_convert_base(bigint,numeric,integer,integer)',    NULL, NULL, 'supplier_convert_base(bigint,numeric,integer,integer)'),
       (17, '-', 'supplier_ap_release(bigint,bigint,bigint,bigint)',         NULL, NULL, 'supplier_ap_release(bigint,bigint,bigint,bigint)'),
-      (18, '-', 'supplier_credit_remaining_carrying(bigint,bigint,bigint)', NULL, NULL, 'supplier_credit_remaining_carrying(bigint,bigint,bigint)')
+      (18, '-', 'supplier_credit_remaining_carrying(bigint,bigint,bigint)', NULL, NULL, 'supplier_credit_remaining_carrying(bigint,bigint,bigint)'),
+      (19, '-', 'purchase_ap_outstanding(uuid,uuid)',                       NULL, NULL, 'purchase_ap_outstanding(uuid,uuid)'),
+      (20, '-', 'purchase_settlement_state(uuid,uuid)',                     NULL, NULL, 'purchase_settlement_state(uuid,uuid)')
     ) AS e(ord, tbl, tg, typ, deferred, fn)
     ORDER BY e.ord
   LOOP
@@ -1725,11 +1817,14 @@ BEGIN
       table_name := v_g.tbl; trigger_name := v_g.tg; missing := 'function_body'; RETURN NEXT;
       CONTINUE;
     END IF;
-    IF v_p.owner <> 'daftar_inventory_internal' THEN
+    IF v_p.owner IS DISTINCT FROM (CASE WHEN v_g.invoker THEN v_me ELSE 'daftar_inventory_internal' END) THEN
       table_name := v_g.tbl; trigger_name := v_g.tg; missing := 'function_owner'; RETURN NEXT;
     END IF;
-    IF NOT v_p.prosecdef THEN
+    IF NOT v_g.invoker AND NOT v_p.prosecdef THEN
       table_name := v_g.tbl; trigger_name := v_g.tg; missing := 'function_not_definer'; RETURN NEXT;
+    END IF;
+    IF v_g.invoker AND v_p.prosecdef THEN
+      table_name := v_g.tbl; trigger_name := v_g.tg; missing := 'function_not_invoker'; RETURN NEXT;
     END IF;
     IF v_p.proconfig IS DISTINCT FROM ARRAY['search_path=pg_catalog, public, pg_temp'] THEN
       table_name := v_g.tbl; trigger_name := v_g.tg; missing := 'function_search_path'; RETURN NEXT;
@@ -1742,7 +1837,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION supplier_settlement_guard_gaps() IS
-  'P3-S6 §2.3 (0067, R-70(a)). Catalogue-only discovery of the S6 guards: for each of the thirteen §2.3 triggers (payment_methods_guard, payment_methods_named, payment_method_names_guard, supplier_payments_guard, supplier_payments_complete, supplier_payment_allocations_guard, supplier_payment_allocations_value_complete, supplier_credit_allocations_guard, supplier_credit_allocations_value_complete, supplier_refunds_guard, supplier_refunds_value_complete, the S5 supplier_credit_notes_immutable on its replaced function, purchase_reversals_unsettled) reports trigger_missing, trigger_disabled (tgenabled other than O) and trigger_shape (tgtype, deferral, WHEN, column list, function); for each trigger function, the two verification helpers and the three arithmetic functions (table_name -, trigger_name the signature) reports function_owner (not daftar_inventory_internal), function_not_definer, function_search_path and function_body (the SHA-256 of prosrc recorded at migration time). Migrator-owned INVOKER; no EXECUTE grant.';
+  'P3-S6 §2.3 (0067, R-70(a)). Catalogue-only discovery of the S6 guards: for each of the thirteen §2.3 triggers (payment_methods_guard, payment_methods_named, payment_method_names_guard, supplier_payments_guard, supplier_payments_complete, supplier_payment_allocations_guard, supplier_payment_allocations_value_complete, supplier_credit_allocations_guard, supplier_credit_allocations_value_complete, supplier_refunds_guard, supplier_refunds_value_complete, the S5 supplier_credit_notes_immutable on its replaced function, purchase_reversals_unsettled) reports trigger_missing, trigger_disabled (tgenabled other than O) and trigger_shape (tgtype, deferral, WHEN, column list, function); for each trigger function, the two verification helpers and the three arithmetic functions (table_name -, trigger_name the signature) reports function_owner (not daftar_inventory_internal), function_not_definer, function_search_path and function_body (the SHA-256 of prosrc recorded at migration time); for the two replaced extension points purchase_ap_outstanding and purchase_settlement_state (R-79) reports function_owner (not this discovery''s migrator owner), function_not_invoker, function_search_path and function_body. Migrator-owned INVOKER; no EXECUTE grant. 0068 re-creates it with the credit-note writer''s row (R-79).';
 
 REVOKE ALL ON FUNCTION supplier_settlement_guard_gaps() FROM PUBLIC;
 
@@ -2531,6 +2626,53 @@ BEGIN
   IF v_detail IS DISTINCT FROM
      'inventory.probe_rollback: supplier_return:credit_note_immutable / supplier_credit_notes:supplier_credit_notes_immutable:function_body' THEN
     RAISE EXCEPTION 'inventory.source_guard_missing: the discoveries did not both report a neutered credit-note guard (%)', v_detail;
+  END IF;
+  -- R-79: a replaced extension point is reported, by its body and by its
+  -- security; the migrator owns them, so no CREATE is lent.
+  BEGIN
+    CREATE OR REPLACE FUNCTION purchase_ap_outstanding(p_business_id UUID, p_purchase_id UUID) RETURNS BIGINT
+    LANGUAGE plpgsql STABLE SECURITY INVOKER SET search_path = pg_catalog, public, pg_temp AS $probe$
+    BEGIN
+      RETURN 0;
+    END;
+    $probe$;
+    SELECT string_agg(g.table_name || ':' || g.trigger_name || ':' || g.missing, ', ' ORDER BY g.table_name, g.trigger_name, g.missing)
+      INTO v_detail FROM supplier_settlement_guard_gaps() g;
+    RAISE EXCEPTION 'inventory.probe_rollback: %', coalesce(v_detail, '');
+  EXCEPTION WHEN raise_exception THEN
+    GET STACKED DIAGNOSTICS v_detail = MESSAGE_TEXT;
+  END;
+  IF v_detail IS DISTINCT FROM 'inventory.probe_rollback: -:purchase_ap_outstanding(uuid,uuid):function_body' THEN
+    RAISE EXCEPTION 'inventory.source_guard_missing: the S6 discovery did not report a replaced purchase_ap_outstanding (%)', v_detail;
+  END IF;
+  BEGIN
+    CREATE OR REPLACE FUNCTION purchase_settlement_state(p_business_id UUID, p_purchase_id UUID,
+                                                         OUT payment_allocated BOOLEAN, OUT credit_allocated BOOLEAN)
+    LANGUAGE plpgsql STABLE SECURITY INVOKER SET search_path = pg_catalog, public, pg_temp AS $probe$
+    BEGIN
+      payment_allocated := false;
+      credit_allocated := false;
+    END;
+    $probe$;
+    SELECT string_agg(g.table_name || ':' || g.trigger_name || ':' || g.missing, ', ' ORDER BY g.table_name, g.trigger_name, g.missing)
+      INTO v_detail FROM supplier_settlement_guard_gaps() g;
+    RAISE EXCEPTION 'inventory.probe_rollback: %', coalesce(v_detail, '');
+  EXCEPTION WHEN raise_exception THEN
+    GET STACKED DIAGNOSTICS v_detail = MESSAGE_TEXT;
+  END;
+  IF v_detail IS DISTINCT FROM 'inventory.probe_rollback: -:purchase_settlement_state(uuid,uuid):function_body' THEN
+    RAISE EXCEPTION 'inventory.source_guard_missing: the S6 discovery did not report a replaced purchase_settlement_state (%)', v_detail;
+  END IF;
+  BEGIN
+    ALTER FUNCTION purchase_settlement_state(UUID, UUID) SECURITY DEFINER;
+    SELECT string_agg(g.table_name || ':' || g.trigger_name || ':' || g.missing, ', ' ORDER BY g.table_name, g.trigger_name, g.missing)
+      INTO v_detail FROM supplier_settlement_guard_gaps() g;
+    RAISE EXCEPTION 'inventory.probe_rollback: %', coalesce(v_detail, '');
+  EXCEPTION WHEN raise_exception THEN
+    GET STACKED DIAGNOSTICS v_detail = MESSAGE_TEXT;
+  END;
+  IF v_detail IS DISTINCT FROM 'inventory.probe_rollback: -:purchase_settlement_state(uuid,uuid):function_not_invoker' THEN
+    RAISE EXCEPTION 'inventory.source_guard_missing: the S6 discovery did not report a DEFINER purchase_settlement_state (%)', v_detail;
   END IF;
   IF EXISTS (SELECT 1 FROM supplier_settlement_guard_gaps()) OR EXISTS (SELECT 1 FROM inventory_stock_source_guard_gaps())
      OR has_schema_privilege('daftar_inventory_internal', 'public', 'CREATE') THEN

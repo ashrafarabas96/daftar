@@ -38,7 +38,27 @@
 --        (§2.6 step 10); no case folding (the payload carries it lower-case,
 --        the row stores the registered code).
 --
--- Migrations 0000-0067 are untouched.
+-- ── Review rulings (S6 independent review; the rules are stated in 0067) ─
+--
+--   R-77 supplier_pay (step 11) and supplier_allocate_credit (step 10) refuse
+--        an allocation that leaves its purchase an outstanding O − a > 0
+--        with conv_R(O − a) = 0: 422 `supplier_payment.residue_below_base_unit`
+--        / `supplier_credit_allocation.residue_below_base_unit`, judged right
+--        after `…amount_below_base_unit` and before any write.
+--   R-78 supplier_allocate_credit (step 10) and supplier_receive_refund (step
+--        11) refuse a consumption that leaves its note a remaining
+--        rb − c > 0 with conv_Rn(rb − c) = 0: 422
+--        `supplier_credit_allocation.residue_below_base_unit` /
+--        `supplier_refund.residue_below_base_unit`, at the same point.
+--   R-79 `supplier_settlement_guard_gaps()` is re-created here (section 6a),
+--        by the migrator, same signature, owner, INVOKER STABLE, pinned path
+--        and no grantee, with every 0067 row and digest verbatim and one
+--        more row: the R-73 writer `supplier_credit_note_consume`
+--        (internal-owned DEFINER, pinned, its prosrc SHA-256). 0068-E(8)
+--        probes it.
+--
+-- Migrations 0000-0067 are untouched; this file replaces one 0067 object,
+-- the S6 discovery (R-79).
 
 -- ─────────────────────────────────────────────────────────────────────────
 -- 1. The four payment-method routines (A-06; the S4 supplier pattern,
@@ -732,6 +752,10 @@ BEGIN
       IF v_conv = 0 OR v_pb = 0 THEN
         RAISE EXCEPTION 'supplier_payment.amount_below_base_unit: an allocated amount converts to less than one base minor unit' USING ERRCODE = 'P0001';
       END IF;
+      -- R-77: never a sub-unit residue — O − a is 0 or converts to ≥ 1.
+      IF p_applied[v_i] < v_o AND supplier_convert_base(v_o - p_applied[v_i], v_q.source_to_base_rate, v_et, v_eb) = 0 THEN
+        RAISE EXCEPTION 'supplier_payment.residue_below_base_unit: an allocation would leave the purchase an outstanding amount converting to less than one base minor unit' USING ERRCODE = 'P0001';
+      END IF;
       IF p_released_before[v_i] <> v_x OR p_carrying_released[v_i] <> v_rel OR p_ap_dusts[v_i] <> v_rel - v_conv
          OR p_payment_bases[v_i] <> v_pb OR p_realized[v_i] <> v_pb - v_rel THEN
         RAISE EXCEPTION 'supplier_payment.settlement_changed: a purchase''s outstanding amount changed since the payment was prepared' USING ERRCODE = 'P0001';
@@ -785,7 +809,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION supplier_pay(UUID, UUID, UUID, UUID, DATE, CHAR(3), BIGINT, UUID, NUMERIC, TEXT, TIMESTAMPTZ, BIGINT, TEXT, UUID[], UUID[], UUID[], TEXT[], BIGINT[], BIGINT[], BIGINT[], BIGINT[], BIGINT[], BIGINT[], BIGINT[]) IS
-  'P3-S6 §2.6, A-07-A-09, A-11, A-15, A-16. First consumes an invctl/1 assertion of kind supplier.pay over its own arguments. Under the daftar.supplier_payment_id key, with the intent (id, supplier, method, date, currency, amount, reference, per allocation id, purchase, paid and applied amounts): an equal stored intent returns the stored rows (replayed), another is supplier_payment.idempotency_conflict. Then the shape (inventory.payload_invalid; supplier_payment.allocations_invalid, R-74), the purchases FOR UPDATE in id order (purchase.not_found, purchase_supplier_mismatch, purchase_state_invalid, purchase_reversed, settlement_changed), the supplier FOR SHARE (supplier_inactive), the method FOR SHARE (payment_method.not_found, inactive, posting_account_ineligible; settlement_changed; reference_required), the dates (date_before_purchase, date_in_future), the FX snapshot (purchase.currency_unknown, fx_rate_changed), per allocation O, X, the release, dust, base and FX recomputed (amount_exceeds_outstanding, amount_mismatch, amount_below_base_unit, settlement_changed). Inserts the payment and its allocations; audit supplier.paid and its outbox row. The caller posts one supplier_payment entry per allocation in line order. EXECUTE: daftar_app only.';
+  'P3-S6 §2.6, A-07-A-09, A-11, A-15, A-16. First consumes an invctl/1 assertion of kind supplier.pay over its own arguments. Under the daftar.supplier_payment_id key, with the intent (id, supplier, method, date, currency, amount, reference, per allocation id, purchase, paid and applied amounts): an equal stored intent returns the stored rows (replayed), another is supplier_payment.idempotency_conflict. Then the shape (inventory.payload_invalid; supplier_payment.allocations_invalid, R-74), the purchases FOR UPDATE in id order (purchase.not_found, purchase_supplier_mismatch, purchase_state_invalid, purchase_reversed, settlement_changed), the supplier FOR SHARE (supplier_inactive), the method FOR SHARE (payment_method.not_found, inactive, posting_account_ineligible; settlement_changed; reference_required), the dates (date_before_purchase, date_in_future), the FX snapshot (purchase.currency_unknown, fx_rate_changed), per allocation O, X, the release, dust, base and FX recomputed (amount_exceeds_outstanding, amount_mismatch, amount_below_base_unit, residue_below_base_unit R-77, settlement_changed). Inserts the payment and its allocations; audit supplier.paid and its outbox row. The caller posts one supplier_payment entry per allocation in line order. EXECUTE: daftar_app only.';
 
 -- ─────────────────────────────────────────────────────────────────────────
 -- 4. supplier.allocate_credit (§2.6, A-08, A-10, AL-31). A supplier credit
@@ -961,6 +985,12 @@ BEGIN
     IF v_conv = 0 OR v_cr_conv = 0 THEN
       RAISE EXCEPTION 'supplier_credit_allocation.amount_below_base_unit: an applied or consumed amount converts to less than one base minor unit' USING ERRCODE = 'P0001';
     END IF;
+    -- R-77 / R-78: never a sub-unit residue on the purchase or on the note.
+    IF (p_applied_minor < v_o AND supplier_convert_base(v_o - p_applied_minor, v_p.source_to_base_rate, v_et, v_eb) = 0)
+       OR (p_consumed_minor < v_note.remaining_amount_minor
+           AND supplier_convert_base(v_note.remaining_amount_minor - p_consumed_minor, v_note.source_to_base_rate, v_en, v_eb) = 0) THEN
+      RAISE EXCEPTION 'supplier_credit_allocation.residue_below_base_unit: an allocation would leave the purchase or the note a remaining amount converting to less than one base minor unit' USING ERRCODE = 'P0001';
+    END IF;
     IF p_ap_released_before_minor <> v_x OR p_ap_released_minor <> v_rel OR p_ap_dust_minor <> v_rel - v_conv
        OR p_credit_released_minor <> v_cr_rel OR p_credit_dust_minor <> v_cr_rel - v_cr_conv OR p_realized_minor <> v_cr_rel - v_rel THEN
       RAISE EXCEPTION 'supplier_credit_allocation.settlement_changed: the purchase''s outstanding amount or the note changed since the allocation was prepared' USING ERRCODE = 'P0001';
@@ -1000,7 +1030,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION supplier_allocate_credit(UUID, UUID, UUID, UUID, DATE, CHAR(3), BIGINT, BIGINT, BIGINT, BIGINT, CHAR(3), BIGINT, BIGINT, BIGINT, BIGINT, BIGINT) IS
-  'P3-S6 §2.6, A-08, A-10, A-11, A-16. First consumes an invctl/1 assertion of kind supplier.allocate_credit over its own arguments. Under the daftar.supplier_credit_allocation_id key, with the intent (id, note, purchase, date, consumed, applied): an equal stored intent replays, another is supplier_credit_allocation.idempotency_conflict. Then the shape (inventory.payload_invalid), the purchase FOR UPDATE (purchase.not_found, purchase_state_invalid, purchase_reversed, settlement_changed), the note FOR UPDATE (supplier_credit_note.not_found, supplier_mismatch, credit_exhausted, amount_exceeds_credit, settlement_changed), the supplier FOR SHARE (inactive allowed), the dates (date_before_source, date_in_future), the AP and credit sides recomputed at their stored snapshots (amount_exceeds_outstanding, amount_mismatch, amount_below_base_unit, settlement_changed). Inserts the allocation, then decrements the note through supplier_credit_note_consume (R-73); audit supplier.credit_allocated and its outbox row. The caller posts the supplier_credit_allocation entry. EXECUTE: daftar_app only.';
+  'P3-S6 §2.6, A-08, A-10, A-11, A-16. First consumes an invctl/1 assertion of kind supplier.allocate_credit over its own arguments. Under the daftar.supplier_credit_allocation_id key, with the intent (id, note, purchase, date, consumed, applied): an equal stored intent replays, another is supplier_credit_allocation.idempotency_conflict. Then the shape (inventory.payload_invalid), the purchase FOR UPDATE (purchase.not_found, purchase_state_invalid, purchase_reversed, settlement_changed), the note FOR UPDATE (supplier_credit_note.not_found, supplier_mismatch, credit_exhausted, amount_exceeds_credit, settlement_changed), the supplier FOR SHARE (inactive allowed), the dates (date_before_source, date_in_future), the AP and credit sides recomputed at their stored snapshots (amount_exceeds_outstanding, amount_mismatch, amount_below_base_unit, residue_below_base_unit R-77/R-78, settlement_changed). Inserts the allocation, then decrements the note through supplier_credit_note_consume (R-73); audit supplier.credit_allocated and its outbox row. The caller posts the supplier_credit_allocation entry. EXECUTE: daftar_app only.';
 
 -- ─────────────────────────────────────────────────────────────────────────
 -- 5. supplier.receive_refund (§2.6, A-10, A-15, AL-31). A supplier credit
@@ -1199,6 +1229,11 @@ BEGIN
     IF v_cr_conv = 0 OR v_mb = 0 THEN
       RAISE EXCEPTION 'supplier_refund.amount_below_base_unit: a consumed or received amount converts to less than one base minor unit' USING ERRCODE = 'P0001';
     END IF;
+    -- R-78: never a sub-unit residue on the note.
+    IF p_consumed_minor < v_note.remaining_amount_minor
+       AND supplier_convert_base(v_note.remaining_amount_minor - p_consumed_minor, v_note.source_to_base_rate, v_en, v_eb) = 0 THEN
+      RAISE EXCEPTION 'supplier_refund.residue_below_base_unit: a refund would leave the note a remaining amount converting to less than one base minor unit' USING ERRCODE = 'P0001';
+    END IF;
     IF p_source_released_minor <> v_cr_rel OR p_source_dust_minor <> v_cr_rel - v_cr_conv OR p_receipt_base_minor <> v_mb
        OR p_realized_minor <> v_mb - v_cr_rel THEN
       RAISE EXCEPTION 'supplier_refund.settlement_changed: the credit note changed since the refund was prepared' USING ERRCODE = 'P0001';
@@ -1235,7 +1270,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION supplier_receive_refund(UUID, UUID, UUID, UUID, DATE, CHAR(3), BIGINT, BIGINT, BIGINT, BIGINT, CHAR(3), BIGINT, UUID, NUMERIC, TEXT, TIMESTAMPTZ, BIGINT, BIGINT, TEXT) IS
-  'P3-S6 §2.6, A-10, A-11, A-15, A-16. First consumes an invctl/1 assertion of kind supplier.receive_refund over its own arguments. Under the daftar.supplier_refund_id key, with the intent (id, note, method, date, consumed, receipt currency and amount, reference): an equal stored intent replays, another is supplier_refund.idempotency_conflict. Then the shape (inventory.payload_invalid), the note FOR UPDATE (supplier_credit_note.not_found, credit_exhausted, amount_exceeds_credit, settlement_changed), the supplier FOR SHARE (inactive allowed), the method FOR SHARE (payment_method.not_found, inactive, posting_account_ineligible; settlement_changed; reference_required), the dates (date_before_credit, date_in_future), the receipt FX snapshot (purchase.currency_unknown, fx_rate_changed), the credit side, receipt base and FX recomputed (amount_mismatch, amount_below_base_unit, settlement_changed). Inserts the refund, then decrements the note through supplier_credit_note_consume (R-73); audit supplier.refund_received and its outbox row. The caller posts the supplier_refund entry. EXECUTE: daftar_app only.';
+  'P3-S6 §2.6, A-10, A-11, A-15, A-16. First consumes an invctl/1 assertion of kind supplier.receive_refund over its own arguments. Under the daftar.supplier_refund_id key, with the intent (id, note, method, date, consumed, receipt currency and amount, reference): an equal stored intent replays, another is supplier_refund.idempotency_conflict. Then the shape (inventory.payload_invalid), the note FOR UPDATE (supplier_credit_note.not_found, credit_exhausted, amount_exceeds_credit, settlement_changed), the supplier FOR SHARE (inactive allowed), the method FOR SHARE (payment_method.not_found, inactive, posting_account_ineligible; settlement_changed; reference_required), the dates (date_before_credit, date_in_future), the receipt FX snapshot (purchase.currency_unknown, fx_rate_changed), the credit side, receipt base and FX recomputed (amount_mismatch, amount_below_base_unit, residue_below_base_unit R-78, settlement_changed). Inserts the refund, then decrements the note through supplier_credit_note_consume (R-73); audit supplier.refund_received and its outbox row. The caller posts the supplier_refund entry. EXECUTE: daftar_app only.';
 
 -- ─────────────────────────────────────────────────────────────────────────
 -- 6. Privileges, then the ownership transfer (the 0062/0064/0066 order).
@@ -1269,6 +1304,133 @@ ALTER FUNCTION supplier_allocate_credit(UUID, UUID, UUID, UUID, DATE, CHAR(3), B
 ALTER FUNCTION supplier_receive_refund(UUID, UUID, UUID, UUID, DATE, CHAR(3), BIGINT, BIGINT, BIGINT, BIGINT, CHAR(3), BIGINT, UUID, NUMERIC, TEXT, TIMESTAMPTZ, BIGINT, BIGINT, TEXT) OWNER TO daftar_inventory_internal;
 
 REVOKE CREATE ON SCHEMA public FROM daftar_inventory_internal;
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- 6a. The S6 guard discovery, re-created by the migrator (R-79): the 0067
+--     function with every row and digest verbatim and one more row, the R-73
+--     writer (internal-owned DEFINER, pinned, its prosrc SHA-256), which
+--     0067 could not record because it is created here. Same signature,
+--     owner, INVOKER STABLE, pinned path, no grantee.
+-- ─────────────────────────────────────────────────────────────────────────
+CREATE OR REPLACE FUNCTION supplier_settlement_guard_gaps()
+RETURNS TABLE (table_name TEXT, trigger_name TEXT, missing TEXT)
+LANGUAGE plpgsql STABLE SECURITY INVOKER SET search_path = pg_catalog, public, pg_temp AS $$
+#variable_conflict use_column
+DECLARE
+  v_g   RECORD;
+  v_tg  RECORD;
+  v_p   RECORD;
+  v_fn  REGPROCEDURE;
+  v_me  TEXT;
+  -- SHA-256 (hex) of each S6 guard, helper and arithmetic function's prosrc,
+  -- recorded at migration time (0067), the replaced credit-note guard and
+  -- the two replaced extension points included (R-79), and of the R-73
+  -- credit-note writer (0068).
+  c_digest CONSTANT JSONB := '{
+    "payment_method_guard()": "e1ebd743f99dae8e059d903d8fb73c65858cabb70ffc5dcb2fbd45407dadb162",
+    "payment_method_named()": "07cdc55fa3181e6b4de214ff4a34a72674d2802de1c045c51662dcf6c2637390",
+    "payment_method_name_guard()": "d0414ced4449ddb1cad3b312aa9674174a4a3df9717e2cdaddca794d050628fa",
+    "supplier_payment_guard()": "f373f9ef42dbf417253913300ec96a53523b33ef9282c4fbdd9e6ef44ca62fca",
+    "supplier_payment_complete()": "0c409912d2936944253c5f08534a4e8108eed0283ffead0e8f567c6f3dcfad54",
+    "supplier_payment_allocation_guard()": "aaf2efe1e56207a406fb4ef956ee427ec26cc26a6d92db8a0a22286425e09b8d",
+    "supplier_payment_allocation_value_complete()": "75116b059a15e70a6c34583a4802912eed0f36cdad6b9fe26e62a4790a3054ad",
+    "supplier_credit_allocation_guard()": "0120e79f3e7be686632df65199bf46d65742d43094d5ab5d026810d8774c5886",
+    "supplier_credit_allocation_value_complete()": "184a467ce6d59945f0c49fcaa16685722fbadb582f0a30f9adea04690aadc054",
+    "supplier_refund_guard()": "72cb27729e52a82547bf70cd83f57e9d5abfd104890fe98bd64f339173630f15",
+    "supplier_refund_value_complete()": "a82873ddad98bd9946c4d3c2213c998933487a8cc928bb966c724c3e121e4307",
+    "supplier_credit_note_guard()": "a21031b39170a8cec024de3947b8de6ee70c7def674235fcdbff01f27d99177e",
+    "purchase_reversal_unsettled()": "d84f8b51c5033fb47ceb4c03fccd41a7576faf4ed5529dc4a1c31a64bc9508bf",
+    "purchase_settlement_verify(uuid,uuid)": "4fcbb7931c06fbf9cf11fc2ede6e4b97357d24b038ed412329c55a48cbafe8ba",
+    "supplier_credit_note_verify(uuid,uuid)": "9d18ee17cfdd5f778ee3a767351506d6bbd2209c15d839ed6a295d601abbf76e",
+    "supplier_convert_base(bigint,numeric,integer,integer)": "38d765449e2844c1d84971f09277b5857bbddbf741b62a3d8b4c1d4e532e39cf",
+    "supplier_ap_release(bigint,bigint,bigint,bigint)": "47eb15a7fc56e1871b5c521ca189782bfbafb8dca3e7bd0bb3adc417016236a9",
+    "supplier_credit_remaining_carrying(bigint,bigint,bigint)": "941082099606f825336b0249a76658e65e592df6bbe06f3081576a5be0205144",
+    "purchase_ap_outstanding(uuid,uuid)": "74091f5ea48dd4873664692bb06cf1d9de025d1b98093c3d2b39bbd300d3b036",
+    "purchase_settlement_state(uuid,uuid)": "b236cda5fe48a2b00c818e0f88f8e9b8de9a3c5b61d04c5cf677e56960d7037b",
+    "supplier_credit_note_consume(uuid,bigint,bigint)": "1754d8ac0581a8738c4d0e088671180e9b681ed7fb42575283b1c21d00b98c5b"
+  }';
+BEGIN
+  -- The extension points' expected owner: the migrator, who owns this discovery.
+  SELECT r.rolname::text INTO v_me
+  FROM pg_proc p JOIN pg_roles r ON r.oid = p.proowner
+  WHERE p.oid = 'public.supplier_settlement_guard_gaps()'::regprocedure;
+  FOR v_g IN
+    SELECT e.tbl, e.tg, e.typ, e.deferred, e.fn, (e.ord IN (19, 20)) AS invoker
+    FROM (VALUES
+      (1,  'payment_methods',              'payment_methods_guard',                       31,   false, 'payment_method_guard()'),
+      (2,  'payment_methods',              'payment_methods_named',                       21,   true,  'payment_method_named()'),
+      (3,  'payment_method_names',         'payment_method_names_guard',                  31,   false, 'payment_method_name_guard()'),
+      (4,  'supplier_payments',            'supplier_payments_guard',                     31,   false, 'supplier_payment_guard()'),
+      (5,  'supplier_payments',            'supplier_payments_complete',                  5,    true,  'supplier_payment_complete()'),
+      (6,  'supplier_payment_allocations', 'supplier_payment_allocations_guard',          31,   false, 'supplier_payment_allocation_guard()'),
+      (7,  'supplier_payment_allocations', 'supplier_payment_allocations_value_complete', 5,    true,  'supplier_payment_allocation_value_complete()'),
+      (8,  'supplier_credit_allocations',  'supplier_credit_allocations_guard',           31,   false, 'supplier_credit_allocation_guard()'),
+      (9,  'supplier_credit_allocations',  'supplier_credit_allocations_value_complete',  5,    true,  'supplier_credit_allocation_value_complete()'),
+      (10, 'supplier_refunds',             'supplier_refunds_guard',                      31,   false, 'supplier_refund_guard()'),
+      (11, 'supplier_refunds',             'supplier_refunds_value_complete',             5,    true,  'supplier_refund_value_complete()'),
+      (12, 'supplier_credit_notes',        'supplier_credit_notes_immutable',             27,   false, 'supplier_credit_note_guard()'),
+      (13, 'purchase_reversals',           'purchase_reversals_unsettled',                5,    true,  'purchase_reversal_unsettled()'),
+      (14, '-', 'purchase_settlement_verify(uuid,uuid)',                    NULL, NULL, 'purchase_settlement_verify(uuid,uuid)'),
+      (15, '-', 'supplier_credit_note_verify(uuid,uuid)',                   NULL, NULL, 'supplier_credit_note_verify(uuid,uuid)'),
+      (16, '-', 'supplier_convert_base(bigint,numeric,integer,integer)',    NULL, NULL, 'supplier_convert_base(bigint,numeric,integer,integer)'),
+      (17, '-', 'supplier_ap_release(bigint,bigint,bigint,bigint)',         NULL, NULL, 'supplier_ap_release(bigint,bigint,bigint,bigint)'),
+      (18, '-', 'supplier_credit_remaining_carrying(bigint,bigint,bigint)', NULL, NULL, 'supplier_credit_remaining_carrying(bigint,bigint,bigint)'),
+      (19, '-', 'purchase_ap_outstanding(uuid,uuid)',                       NULL, NULL, 'purchase_ap_outstanding(uuid,uuid)'),
+      (20, '-', 'purchase_settlement_state(uuid,uuid)',                     NULL, NULL, 'purchase_settlement_state(uuid,uuid)'),
+      (21, '-', 'supplier_credit_note_consume(uuid,bigint,bigint)',         NULL, NULL, 'supplier_credit_note_consume(uuid,bigint,bigint)')
+    ) AS e(ord, tbl, tg, typ, deferred, fn)
+    ORDER BY e.ord
+  LOOP
+    v_fn := to_regprocedure('public.' || v_g.fn);
+    IF v_g.tbl <> '-' THEN
+      SELECT g.tgenabled::text AS enabled, g.tgtype::integer AS typ, g.tgfoid,
+             (g.tgqual IS NULL AND cardinality(g.tgattr::int2[]) = 0) AS plain,
+             (g.tgconstraint <> 0 AND g.tgdeferrable AND g.tginitdeferred) AS deferred
+        INTO v_tg
+      FROM pg_trigger g
+      WHERE g.tgrelid = to_regclass('public.' || v_g.tbl) AND g.tgname = v_g.tg AND NOT g.tgisinternal;
+      IF NOT FOUND THEN
+        table_name := v_g.tbl; trigger_name := v_g.tg; missing := 'trigger_missing'; RETURN NEXT;
+        CONTINUE;
+      END IF;
+      IF v_tg.enabled <> 'O' THEN
+        table_name := v_g.tbl; trigger_name := v_g.tg; missing := 'trigger_disabled'; RETURN NEXT;
+      END IF;
+      IF v_tg.typ <> v_g.typ OR v_tg.deferred <> v_g.deferred OR NOT v_tg.plain OR v_fn IS NULL OR v_tg.tgfoid <> v_fn THEN
+        table_name := v_g.tbl; trigger_name := v_g.tg; missing := 'trigger_shape'; RETURN NEXT;
+      END IF;
+    END IF;
+    SELECT r.rolname::text AS owner, p.prosecdef, p.proconfig, encode(sha256(convert_to(p.prosrc, 'UTF8')), 'hex') AS digest
+      INTO v_p
+    FROM pg_proc p JOIN pg_roles r ON r.oid = p.proowner
+    WHERE p.oid = v_fn;
+    IF NOT FOUND THEN
+      table_name := v_g.tbl; trigger_name := v_g.tg; missing := 'function_body'; RETURN NEXT;
+      CONTINUE;
+    END IF;
+    IF v_p.owner IS DISTINCT FROM (CASE WHEN v_g.invoker THEN v_me ELSE 'daftar_inventory_internal' END) THEN
+      table_name := v_g.tbl; trigger_name := v_g.tg; missing := 'function_owner'; RETURN NEXT;
+    END IF;
+    IF NOT v_g.invoker AND NOT v_p.prosecdef THEN
+      table_name := v_g.tbl; trigger_name := v_g.tg; missing := 'function_not_definer'; RETURN NEXT;
+    END IF;
+    IF v_g.invoker AND v_p.prosecdef THEN
+      table_name := v_g.tbl; trigger_name := v_g.tg; missing := 'function_not_invoker'; RETURN NEXT;
+    END IF;
+    IF v_p.proconfig IS DISTINCT FROM ARRAY['search_path=pg_catalog, public, pg_temp'] THEN
+      table_name := v_g.tbl; trigger_name := v_g.tg; missing := 'function_search_path'; RETURN NEXT;
+    END IF;
+    IF v_p.digest IS DISTINCT FROM c_digest ->> v_g.fn THEN
+      table_name := v_g.tbl; trigger_name := v_g.tg; missing := 'function_body'; RETURN NEXT;
+    END IF;
+  END LOOP;
+END;
+$$;
+
+COMMENT ON FUNCTION supplier_settlement_guard_gaps() IS
+  'P3-S6 §2.3 (0067, R-70(a); re-created by 0068, R-79). Catalogue-only discovery of the S6 guards: for each of the thirteen §2.3 triggers (payment_methods_guard, payment_methods_named, payment_method_names_guard, supplier_payments_guard, supplier_payments_complete, supplier_payment_allocations_guard, supplier_payment_allocations_value_complete, supplier_credit_allocations_guard, supplier_credit_allocations_value_complete, supplier_refunds_guard, supplier_refunds_value_complete, the S5 supplier_credit_notes_immutable on its replaced function, purchase_reversals_unsettled) reports trigger_missing, trigger_disabled (tgenabled other than O) and trigger_shape (tgtype, deferral, WHEN, column list, function); for each trigger function, the two verification helpers, the three arithmetic functions and the credit-note writer supplier_credit_note_consume (table_name -, trigger_name the signature) reports function_owner (not daftar_inventory_internal), function_not_definer, function_search_path and function_body (the SHA-256 of prosrc recorded at migration time); for the two replaced extension points purchase_ap_outstanding and purchase_settlement_state reports function_owner (not this discovery''s migrator owner), function_not_invoker, function_search_path and function_body. Migrator-owned INVOKER; no EXECUTE grant.';
+
+REVOKE ALL ON FUNCTION supplier_settlement_guard_gaps() FROM PUBLIC;
 
 -- ─────────────────────────────────────────────────────────────────────────
 -- 7. Registrations (§2.8), LAST: the seven kinds. No op→movement pair: no
@@ -1447,6 +1609,57 @@ BEGIN
   END IF;
   IF (SELECT count(*) FROM inventory_stock_source_guard_gaps()) <> 0 THEN
     RAISE EXCEPTION 'inventory.source_guard_missing: a registered stock source type lacks a guard';
+  END IF;
+  -- R-79: the re-created discovery keeps its 0067 shape, and it reports a
+  -- neutered credit-note writer and a replaced extension point, each inside
+  -- a rolled-back block (0063 R-40: CREATE is lent inside the block only).
+  IF EXISTS (SELECT 1 FROM pg_proc p
+              WHERE p.oid = 'supplier_settlement_guard_gaps()'::regprocedure
+                AND (p.prosecdef OR p.provolatile <> 's' OR p.proconfig IS DISTINCT FROM ARRAY['search_path=pg_catalog, public, pg_temp']
+                     OR p.proowner::regrole::text <> current_user))
+     OR EXISTS (SELECT 1 FROM pg_proc p, aclexplode(p.proacl) x
+                 WHERE p.oid = 'supplier_settlement_guard_gaps()'::regprocedure AND x.privilege_type = 'EXECUTE' AND x.grantee <> p.proowner)
+     OR pg_get_function_result('supplier_settlement_guard_gaps()'::regprocedure) <> 'TABLE(table_name text, trigger_name text, missing text)' THEN
+    RAISE EXCEPTION 'supplier_payment.migration_end_state_invalid: the re-created S6 discovery is not migrator-owned INVOKER STABLE pinned without a grantee';
+  END IF;
+  BEGIN
+    GRANT CREATE ON SCHEMA public TO daftar_inventory_internal;
+    SET LOCAL ROLE daftar_inventory_internal;
+    CREATE OR REPLACE FUNCTION supplier_credit_note_consume(p_credit_note_id UUID, p_remaining_before BIGINT, p_consumed BIGINT) RETURNS INTEGER
+    LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $probe$
+    BEGIN
+      RETURN 1;
+    END;
+    $probe$;
+    RESET ROLE;
+    REVOKE CREATE ON SCHEMA public FROM daftar_inventory_internal;
+    SELECT string_agg(g.table_name || ':' || g.trigger_name || ':' || g.missing, ', ' ORDER BY g.table_name, g.trigger_name, g.missing)
+      INTO v_detail FROM supplier_settlement_guard_gaps() g;
+    RAISE EXCEPTION 'inventory.probe_rollback: %', coalesce(v_detail, '');
+  EXCEPTION WHEN raise_exception THEN
+    GET STACKED DIAGNOSTICS v_detail = MESSAGE_TEXT;
+  END;
+  IF v_detail IS DISTINCT FROM 'inventory.probe_rollback: -:supplier_credit_note_consume(uuid,bigint,bigint):function_body' THEN
+    RAISE EXCEPTION 'inventory.source_guard_missing: the S6 discovery did not report a neutered credit-note writer (%)', v_detail;
+  END IF;
+  BEGIN
+    CREATE OR REPLACE FUNCTION purchase_ap_outstanding(p_business_id UUID, p_purchase_id UUID) RETURNS BIGINT
+    LANGUAGE plpgsql STABLE SECURITY INVOKER SET search_path = pg_catalog, public, pg_temp AS $probe$
+    BEGIN
+      RETURN 0;
+    END;
+    $probe$;
+    SELECT string_agg(g.table_name || ':' || g.trigger_name || ':' || g.missing, ', ' ORDER BY g.table_name, g.trigger_name, g.missing)
+      INTO v_detail FROM supplier_settlement_guard_gaps() g;
+    RAISE EXCEPTION 'inventory.probe_rollback: %', coalesce(v_detail, '');
+  EXCEPTION WHEN raise_exception THEN
+    GET STACKED DIAGNOSTICS v_detail = MESSAGE_TEXT;
+  END;
+  IF v_detail IS DISTINCT FROM 'inventory.probe_rollback: -:purchase_ap_outstanding(uuid,uuid):function_body' THEN
+    RAISE EXCEPTION 'inventory.source_guard_missing: the S6 discovery did not report a replaced purchase_ap_outstanding (%)', v_detail;
+  END IF;
+  IF (SELECT count(*) FROM supplier_settlement_guard_gaps()) <> 0 THEN
+    RAISE EXCEPTION 'supplier_payment.migration_end_state_invalid: a discovery probe did not roll back';
   END IF;
 
   -- (9) No CREATE left on public for either internal principal.
