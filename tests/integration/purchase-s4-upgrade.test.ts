@@ -44,6 +44,8 @@ import { must, runCommand as runS3, seedS3Business, today, transferCommand } fro
 import { stockUp } from '../helpers/inventory-posting';
 import { createSupplier, draftAndReceive, draftCommand, entryOf, S4_BRIDGES, S4_TABLES } from '../helpers/purchase-commands';
 import { S4_OPERATION_KINDS, S4_OPERATION_MOVEMENT_KINDS, S4_SOURCE_TYPES } from '../helpers/purchase-deficits';
+// P3-S5 (0065/0066)
+import { S5_OPERATION_KINDS, S5_OPERATION_MOVEMENT_KINDS, S5_SOURCE_TYPES } from '../helpers/stock-ledger';
 
 const SCRATCH = 'daftar_upgrade_0062';
 const scratchUrl = `postgresql://${PG_USER}:${PG_PASSWORD}@localhost:${PG_PORT}/${SCRATCH}`;
@@ -89,7 +91,7 @@ afterAll(async () => {
 });
 
 describe('T-17 the P3-S4 upgrade matrix', () => {
-  it('frozen 0062-checkpoint + a business with stock and books → 0063/0064, everything untouched, registries exactly S3 + S4, rerun no-op', async () => {
+  it('frozen 0062-checkpoint + a business with stock and books → 0063/0064, everything untouched, registries exactly S3 + S4 (P3-S5: + S5), rerun no-op', async () => {
     await ensurePostgres();
     await admin.query(`DROP DATABASE IF EXISTS ${SCRATCH} WITH (FORCE)`);
     await admin.query(`CREATE DATABASE ${SCRATCH}`);
@@ -175,7 +177,16 @@ describe('T-17 the P3-S4 upgrade matrix', () => {
       expect(applied.slice(0, 2)).toEqual(['0063_purchases_suppliers_sources.sql', '0064_purchase_commands.sql']);
 
       // Everything as it was, plus the two accounting source types 0063 adds (§2.1, A-14).
-      expect(await protectedRows()).toEqual([...before, 'src:purchase:6', 'src:negative_inventory_cost_adjustment:7'].sort());
+      // P3-S5 (0065/0066): and the one 0065 adds (docs/PHASE_3_S5_CONTRACT.md A-05).
+      expect(await protectedRows()).toEqual(
+        [
+          ...before,
+          'src:purchase:6',
+          'src:negative_inventory_cost_adjustment:7',
+          // P3-S5 (0065/0066)
+          'src:supplier_return:8',
+        ].sort(),
+      );
 
       // The registries: the checkpoint's rows plus exactly S4's (§2.5).
       expect(await registries()).toEqual(
@@ -186,6 +197,12 @@ describe('T-17 the P3-S4 upgrade matrix', () => {
           ...S4_OPERATION_KINDS.map((op) => `op:${op}:P3-S4`),
           'acct:post:purchase',
           'acct:post:negative_inventory_cost_adjustment',
+          // P3-S5 (0065/0066): the upgrade runs to the latest migration, so S5's
+          // rows follow (docs/PHASE_3_S5_CONTRACT.md §2.1, §2.6, §7.3 row 24) — and only they.
+          ...S5_SOURCE_TYPES.map((t) => `type:${t}:P3-S5`),
+          ...S5_OPERATION_MOVEMENT_KINDS.map(([op, kind]) => `map:${op}:${kind}:P3-S5`),
+          ...S5_OPERATION_KINDS.map((op) => `op:${op}:P3-S5`),
+          'acct:post:supplier_return',
         ].sort(),
       );
 
@@ -251,7 +268,15 @@ describe('T-17 the P3-S4 upgrade matrix', () => {
 
       // A second run applies nothing.
       expect(await runMigrations(scratchUrl)).toEqual([]);
-      expect(await protectedRows()).toEqual([...before, 'src:purchase:6', 'src:negative_inventory_cost_adjustment:7'].sort());
+      expect(await protectedRows()).toEqual(
+        [
+          ...before,
+          'src:purchase:6',
+          'src:negative_inventory_cost_adjustment:7',
+          // P3-S5 (0065/0066)
+          'src:supplier_return:8',
+        ].sort(),
+      );
     } finally {
       await pool.end();
       await admin.query(`DROP DATABASE IF EXISTS ${SCRATCH} WITH (FORCE)`);

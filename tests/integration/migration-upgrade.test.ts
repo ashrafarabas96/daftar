@@ -23,6 +23,8 @@ import {
 } from '../helpers/test-app';
 import { must, runCommand, seedS3Business, transferCommand } from '../helpers/inventory-commands';
 import { stockUp } from '../helpers/inventory-posting';
+// P3-S5 (0065/0066): the T-17 case receives a real purchase at the 0064 checkpoint.
+import { createSupplier, draftAndReceive, draftCommand } from '../helpers/purchase-commands';
 
 /**
  * Terminal Closure §13–16: the upgrade path from the PRE-ENCRYPTION schema
@@ -464,6 +466,8 @@ describe('migration upgrade path: pre-encryption schema → latest (§13–16)',
       // The upgrade runs to the latest migration, so the two inventory source
       // types P3-S3 registers (0061, contract A-14(e)) follow them, in order.
       // P3-S4 (0063/0064): then the two P3-S4 registers (0063, contract A-05), in order.
+      // P3-S5 (0065/0066): then the one P3-S5 registers (0065, contract A-05;
+      // R-B2a: `purchase_reversal` is a stock source type only).
       expect((await pool.query<{ t: string }>(`SELECT source_type AS t FROM accounting_source_types ORDER BY sort_order`)).rows.map((r) => r.t)).toEqual([
         'opening_balance',
         'manual_adjustment',
@@ -473,6 +477,8 @@ describe('migration upgrade path: pre-encryption schema → latest (§13–16)',
         // P3-S4 (0063/0064)
         'purchase',
         'negative_inventory_cost_adjustment',
+        // P3-S5 (0065/0066)
+        'supplier_return',
       ]);
       expect((await pool.query<{ n: number }>(`SELECT count(*)::int AS n FROM accounting_system_actors`)).rows[0]?.n).toBe(0);
       // P2-S5 §28: entering a rate is not a journal fact, so it registers no
@@ -776,8 +782,18 @@ describe('migration upgrade path: pre-encryption schema → latest (§13–16)',
       // two source types (contract A-14(e)) and touches no other row.
       // P3-S4 (0063/0064): and P3-S4's — 0063 appends two more (contract A-05)
       // and likewise touches no other row.
+      // P3-S5 (0065/0066): and P3-S5's — 0065 appends one more (contract A-05)
+      // and likewise touches no other row.
       expect(await protectedDigest()).toEqual(
-        [...before, 'src:inventory_adjustment:4', 'src:inventory_opening:5', 'src:purchase:6', 'src:negative_inventory_cost_adjustment:7'].sort(),
+        [
+          ...before,
+          'src:inventory_adjustment:4',
+          'src:inventory_opening:5',
+          'src:purchase:6',
+          'src:negative_inventory_cost_adjustment:7',
+          // P3-S5 (0065/0066)
+          'src:supplier_return:8',
+        ].sort(),
       );
       expect((await pool.query<{ n: number }>(`SELECT count(*)::int AS n FROM journal_entries`)).rows[0]?.n).toBe(0);
       expect((await pool.query(`SELECT 1 FROM businesses WHERE financial_started_at IS NOT NULL`)).rows).toEqual([]);
@@ -1121,7 +1137,7 @@ describe('migration upgrade path: pre-encryption schema → latest (§13–16)',
     }
   }, 180_000);
 
-  it('compatibility matrix (P3-S2): frozen 0058-checkpoint + existing business → the P3-S2 ledger, empty (registries exactly as P3-S3 and P3-S4 left them), books and catalog untouched, rerun no-op', async () => {
+  it('compatibility matrix (P3-S2): frozen 0058-checkpoint + existing business → the P3-S2 ledger, empty (registries exactly as P3-S3, P3-S4 and P3-S5 left them), books and catalog untouched, rerun no-op', async () => {
     await ensurePostgres();
     const db9 = 'daftar_upgrade_0058';
     await admin.query(`DROP DATABASE IF EXISTS ${db9} WITH (FORCE)`);
@@ -1199,6 +1215,8 @@ describe('migration upgrade path: pre-encryption schema → latest (§13–16)',
       // P3-S3 case below.
       // P3-S4 (0063/0064): plus exactly what P3-S4 registered (0063 §2.1 step
       // 7, 0064 §2.5), every such row by P3-S4; the ledger stays empty.
+      // P3-S5 (0065/0066): plus exactly what P3-S5 registered (0065 §2.1, 0066
+      // §2.6), every such row by P3-S5; the ledger stays empty.
       const counts = (
         await pool.query<{ t: string; n: number }>(LEDGER.map((t) => `SELECT '${t}' AS t, count(*)::int AS n FROM ${t}`).join(' UNION ALL '))
       ).rows.reduce<Record<string, number>>((acc, r) => ({ ...acc, [r.t]: r.n }), {});
@@ -1228,13 +1246,19 @@ describe('migration upgrade path: pre-encryption schema → latest (§13–16)',
           'type:negative_inventory_cost_adjustment:P3-S4',
           'map:purchase.receive:purchase:P3-S4',
           'map:purchase.receive:negative_inventory_cost_adjustment:P3-S4',
+          // P3-S5 (0065/0066)
+          'type:purchase_reversal:P3-S5',
+          'type:supplier_return:P3-S5',
+          'map:purchase.return:supplier_return:P3-S5',
+          'map:purchase.reverse:purchase_reversal:P3-S5',
         ].sort(),
       );
       expect(counts).toEqual({
         stock_movement_kinds: 10,
         // P3-S4 (0063/0064): 4 + 2 source types, 6 + 2 op→kind rows.
-        stock_source_types: 6,
-        inventory_operation_movement_kinds: 8,
+        // P3-S5 (0065/0066): 4 + 2 + 2 source types, 6 + 2 + 2 op→kind rows.
+        stock_source_types: 8,
+        inventory_operation_movement_kinds: 10,
         stock_levels: 0,
         stock_movements: 0,
         stock_source_bindings: 0,
@@ -1298,7 +1322,7 @@ describe('migration upgrade path: pre-encryption schema → latest (§13–16)',
     }
   }, 180_000);
 
-  it('compatibility matrix (P3-S3): frozen 0060-checkpoint + existing tracked business → 0061/0062, books and ledger untouched, registries exactly P3-S3 (P3-S4: + P3-S4), rerun no-op', async () => {
+  it('compatibility matrix (P3-S3): frozen 0060-checkpoint + existing tracked business → 0061/0062, books and ledger untouched, registries exactly P3-S3 (P3-S4: + P3-S4; P3-S5: + P3-S5), rerun no-op', async () => {
     await ensurePostgres();
     const db10 = 'daftar_upgrade_0060';
     await admin.query(`DROP DATABASE IF EXISTS ${db10} WITH (FORCE)`);
@@ -1429,7 +1453,16 @@ describe('migration upgrade path: pre-encryption schema → latest (§13–16)',
       expect(before.filter((t) => t.startsWith('v:') && t.endsWith(':t'))).toHaveLength(1);
       // The one protected change 0061 is authorized to make (contract A-14(e)).
       // P3-S4 (0063/0064): and the one 0063 is authorized to make (contract A-05).
-      const after = [...before, 'src:inventory_adjustment:4', 'src:inventory_opening:5', 'src:purchase:6', 'src:negative_inventory_cost_adjustment:7'].sort();
+      // P3-S5 (0065/0066): and the one 0065 is authorized to make (contract A-05).
+      const after = [
+        ...before,
+        'src:inventory_adjustment:4',
+        'src:inventory_opening:5',
+        'src:purchase:6',
+        'src:negative_inventory_cost_adjustment:7',
+        // P3-S5 (0065/0066)
+        'src:supplier_return:8',
+      ].sort();
 
       const applied = await runMigrations(url10);
       expect(applied).toEqual(migrationsAfter(FROZEN));
@@ -1486,6 +1519,14 @@ describe('migration upgrade path: pre-encryption schema → latest (§13–16)',
           'op:purchase.receive:P3-S4',
           'acct:post:purchase',
           'acct:post:negative_inventory_cost_adjustment',
+          // P3-S5 (0065/0066): then P3-S5's rows (§2.1, §2.6, A-03, A-05) — and only they.
+          'type:purchase_reversal:P3-S5',
+          'type:supplier_return:P3-S5',
+          'map:purchase.return:supplier_return:P3-S5',
+          'map:purchase.reverse:purchase_reversal:P3-S5',
+          'op:purchase.return:P3-S5',
+          'op:purchase.reverse:P3-S5',
+          'acct:post:supplier_return',
         ].sort(),
       );
 
@@ -1540,7 +1581,7 @@ describe('migration upgrade path: pre-encryption schema → latest (§13–16)',
    * exactly the P3-S4 rows on top of the checkpoint's, create the S4 tables
    * empty, and do nothing on a rerun.
    */
-  it('compatibility matrix (P3-S4): frozen 0062-checkpoint + existing business with books and stock → 0063/0064, books, ledger and catalogue untouched, registries exactly S3 + S4, rerun no-op', async () => {
+  it('compatibility matrix (P3-S4): frozen 0062-checkpoint + existing business with books and stock → 0063/0064, books, ledger and catalogue untouched, registries exactly S3 + S4 (P3-S5: + S5), rerun no-op', async () => {
     await ensurePostgres();
     const db11 = 'daftar_upgrade_0062';
     await admin.query(`DROP DATABASE IF EXISTS ${db11} WITH (FORCE)`);
@@ -1707,7 +1748,14 @@ describe('migration upgrade path: pre-encryption schema → latest (§13–16)',
         levels: await n('stock_levels'),
       }).toEqual({ entries: 1, bindings: 1, movements: 4, levels: 3 });
       // The one protected change 0063 is authorized to make (contract A-05).
-      const after = [...before, 'src:purchase:6', 'src:negative_inventory_cost_adjustment:7'].sort();
+      // P3-S5 (0065/0066): and the one 0065 is authorized to make (contract A-05).
+      const after = [
+        ...before,
+        'src:purchase:6',
+        'src:negative_inventory_cost_adjustment:7',
+        // P3-S5 (0065/0066)
+        'src:supplier_return:8',
+      ].sort();
 
       const applied = await runMigrations(url11);
       expect(applied).toEqual(migrationsAfter(FROZEN));
@@ -1715,6 +1763,7 @@ describe('migration upgrade path: pre-encryption schema → latest (§13–16)',
 
       // Books, ledger, S3 documents and catalogue are exactly as they were,
       // plus 0063's two accounting source types — named, not hashed away.
+      // P3-S5 (0065/0066): and 0065's one.
       expect(await protectedRows()).toEqual(after);
 
       // Every S4 table and bridge exists, arrived with row security ENABLED
@@ -1738,6 +1787,8 @@ describe('migration upgrade path: pre-encryption schema → latest (§13–16)',
 
       // The registries are exactly the checkpoint's S1 + S3 rows plus P3-S4's
       // (§2.1 step 7, §2.5, A-03, A-05), and nothing else.
+      // P3-S5 (0065/0066): the upgrade runs to the latest migration, so
+      // P3-S5's rows follow (§2.1, §2.6, A-03, A-05) — and only they.
       expect(await registries()).toEqual(
         [
           ...CHECKPOINT_REGISTRIES,
@@ -1754,9 +1805,18 @@ describe('migration upgrade path: pre-encryption schema → latest (§13–16)',
           'op:purchase.receive:P3-S4',
           'acct:post:purchase',
           'acct:post:negative_inventory_cost_adjustment',
+          // P3-S5 (0065/0066)
+          'type:purchase_reversal:P3-S5',
+          'type:supplier_return:P3-S5',
+          'map:purchase.return:supplier_return:P3-S5',
+          'map:purchase.reverse:purchase_reversal:P3-S5',
+          'op:purchase.return:P3-S5',
+          'op:purchase.reverse:P3-S5',
+          'acct:post:supplier_return',
         ].sort(),
       );
       // The replaced discovery reports no gap over the six registered types.
+      // P3-S5 (0065/0066): nor over the eight, once 0065 replaced it again.
       expect((await pool.query(`SELECT * FROM inventory_stock_source_guard_gaps()`)).rows).toEqual([]);
 
       // Neither internal principal was left the ownership-transfer authority.
@@ -1770,6 +1830,307 @@ describe('migration upgrade path: pre-encryption schema → latest (§13–16)',
     } finally {
       await pool.end();
       await admin.query(`DROP DATABASE IF EXISTS ${db11} WITH (FORCE)`).catch(() => undefined);
+    }
+  }, 180_000);
+
+  /**
+   * P3-S5 (0065/0066) — T-17 (docs/PHASE_3_S5_CONTRACT.md §6, §7.3 row 4).
+   *
+   * A frozen 0064 checkpoint holding a business that already has BOOKS,
+   * STOCK, a SUPPLIER and a RECEIVED PURCHASE — each written the only way it
+   * can be at that checkpoint: an S3 stock gain with its journal entry, a
+   * transfer, then an S4 supplier, draft and receipt with the purchase entry.
+   * The upgrade to 0065/0066 must touch none of it (0065 adds two candidate
+   * keys to the S4 tables, and no row), register exactly the P3-S5 rows on
+   * top of the checkpoint's S1 + S3 + S4 ones, create the five S5 documents
+   * and two bridges empty and forced under row security, answer the received
+   * purchase's outstanding AP as its total (no return, no reversal), and do
+   * nothing on a rerun.
+   */
+  it('compatibility matrix (P3-S5): frozen 0064-checkpoint + existing business with books, stock, a supplier and a received purchase → 0065/0066, books, ledger and catalogue untouched, registries exactly S1 + S3 + S4 + S5, rerun no-op', async () => {
+    await ensurePostgres();
+    const db12 = 'daftar_upgrade_0064';
+    await admin.query(`DROP DATABASE IF EXISTS ${db12} WITH (FORCE)`);
+    await admin.query(`CREATE DATABASE ${db12}`);
+    const url12 = `postgresql://${PG_USER}:${PG_PASSWORD}@localhost:${PG_PORT}/${db12}`;
+    const pool = scratchPool(url12);
+    const S5_TABLES = [
+      'supplier_returns',
+      'supplier_return_lines',
+      'supplier_credit_notes',
+      'purchase_reversals',
+      'purchase_reversal_lines',
+      'stock_source_bridge_supplier_return',
+      'stock_source_bridge_purchase_reversal',
+    ];
+    // Every table whose rows the upgrade must leave exactly as they were: the
+    // books, the catalogue and structure, the S2 ledger, the S3 documents and
+    // bridges, the S4 suppliers, purchases and bridges, and the trail of the
+    // commands that wrote them. Whole rows (to_jsonb), so a rewritten column
+    // fails and an addition is named.
+    const PROTECTED = [
+      'accounts',
+      'journal_entries',
+      'journal_lines',
+      'accounting_source_bindings',
+      'accounting_reversals',
+      'businesses',
+      'branches',
+      'warehouses',
+      'branch_warehouses',
+      'products',
+      'product_variants',
+      'product_translations',
+      'stock_movement_kinds',
+      'stock_movements',
+      'stock_levels',
+      'stock_source_bindings',
+      'negative_inventory_deficits',
+      'negative_deficit_coverages',
+      'inventory_adjustments',
+      'inventory_adjustment_lines',
+      'inventory_transfers',
+      'inventory_transfer_lines',
+      'stocktakes',
+      'stocktake_lines',
+      'inventory_openings',
+      'inventory_opening_lines',
+      'stock_source_bridge_inventory_adjustment',
+      'stock_source_bridge_inventory_opening',
+      'stock_source_bridge_inventory_transfer',
+      'stock_source_bridge_stocktake',
+      'suppliers',
+      'purchases',
+      'purchase_lines',
+      'purchase_landed_costs',
+      'purchase_landed_cost_allocations',
+      'negative_inventory_cost_adjustments',
+      'stock_source_bridge_purchase',
+      'stock_source_bridge_negative_inventory_cost_adjustment',
+      'inventory_assertion_uses',
+      'audit_events',
+      'outbox_events',
+    ];
+    const CHECKPOINT_REGISTRIES = [
+      'op:inventory.configure_product:P3-S1',
+      'op:structure.associate_warehouse_branch:P3-S1',
+      'op:structure.dissociate_warehouse_branch:P3-S1',
+      'acct:post:manual_adjustment',
+      'acct:post:opening_balance',
+      'acct:reverse:reversal',
+      // P3-S3 (0061/0062), frozen at this checkpoint.
+      'type:inventory_adjustment:P3-S3',
+      'type:inventory_opening:P3-S3',
+      'type:inventory_transfer:P3-S3',
+      'type:stocktake:P3-S3',
+      'map:inventory.adjust:adjustment:P3-S3',
+      'map:inventory.damage:damage:P3-S3',
+      'map:inventory.opening:inventory_opening:P3-S3',
+      'map:inventory.stocktake_finalize:stocktake:P3-S3',
+      'map:inventory.transfer:transfer_in:P3-S3',
+      'map:inventory.transfer:transfer_out:P3-S3',
+      'op:inventory.adjust:P3-S3',
+      'op:inventory.damage:P3-S3',
+      'op:inventory.opening:P3-S3',
+      'op:inventory.stocktake_count:P3-S3',
+      'op:inventory.stocktake_finalize:P3-S3',
+      'op:inventory.stocktake_open:P3-S3',
+      'op:inventory.transfer:P3-S3',
+      'acct:post:inventory_adjustment',
+      'acct:post:inventory_opening',
+      // P3-S4 (0063/0064), frozen at this checkpoint.
+      'type:purchase:P3-S4',
+      'type:negative_inventory_cost_adjustment:P3-S4',
+      'map:purchase.receive:purchase:P3-S4',
+      'map:purchase.receive:negative_inventory_cost_adjustment:P3-S4',
+      'op:supplier.create:P3-S4',
+      'op:supplier.update:P3-S4',
+      'op:supplier.archive:P3-S4',
+      'op:supplier.reactivate:P3-S4',
+      'op:purchase.draft:P3-S4',
+      'op:purchase.cancel:P3-S4',
+      'op:purchase.receive:P3-S4',
+      'acct:post:purchase',
+      'acct:post:negative_inventory_cost_adjustment',
+    ];
+    // What 0065/0066 are authorized to register, and nothing else.
+    const S5_REGISTRIES = [
+      'type:purchase_reversal:P3-S5',
+      'type:supplier_return:P3-S5',
+      'map:purchase.return:supplier_return:P3-S5',
+      'map:purchase.reverse:purchase_reversal:P3-S5',
+      'op:purchase.return:P3-S5',
+      'op:purchase.reverse:P3-S5',
+      'acct:post:supplier_return',
+    ];
+    const registries = async (): Promise<string[]> =>
+      (
+        await pool.query<{ r: string }>(
+          `SELECT 'type:' || source_type || ':' || registered_by AS r FROM stock_source_types
+           UNION ALL SELECT 'map:' || op_code || ':' || movement_kind || ':' || registered_by FROM inventory_operation_movement_kinds
+           UNION ALL SELECT 'op:' || op_code || ':' || registered_by FROM inventory_operation_kinds
+           UNION ALL SELECT 'acct:' || operation_kind || ':' || source_type FROM accounting_operation_kinds`,
+        )
+      ).rows
+        .map((x) => x.r)
+        .sort();
+    const tablesPresent = async (tables: readonly string[]): Promise<string[]> =>
+      (
+        await pool.query<{ t: string }>(
+          `SELECT table_name::text AS t FROM information_schema.tables WHERE table_schema = 'public' AND table_name = ANY ($1::text[])`,
+          [[...tables]],
+        )
+      ).rows
+        .map((x) => x.t)
+        .sort();
+    try {
+      await pool.query(bootstrapSql());
+      const FROZEN = '0064_purchase_commands.sql';
+      const preDir = migrationsUpTo(FROZEN);
+      await runMigrations(url12, preDir);
+      rmSync(preDir, { recursive: true, force: true });
+
+      // The checkpoint is honest in both directions: every protected table is
+      // there, no S5 table is, and the registries are exactly S1 + S3 + S4.
+      expect(await tablesPresent(PROTECTED)).toEqual([...PROTECTED].sort());
+      expect(await tablesPresent(S5_TABLES)).toEqual([]);
+      expect(await registries()).toEqual([...CHECKPOINT_REGISTRIES].sort());
+
+      // The keys the checkpoint's own signed commands verify.
+      await pool.query(`SELECT inventory_assertion_key_install($1, decode($2, 'base64'))`, [INVENTORY_ASSERTION_KID, INVENTORY_ASSERTION_KEY_B64]);
+      await pool.query(`SELECT accounting_assertion_key_install($1, decode($2, 'base64'))`, [ACCOUNTING_ASSERTION_KID, ACCOUNTING_ASSERTION_KEY_B64]);
+
+      // A business that existed before P3-S5, with books, stock, a supplier and
+      // a received purchase of its own, all committed.
+      const tenantId = must((await pool.query<{ id: string }>(`INSERT INTO tenants DEFAULT VALUES RETURNING id`)).rows[0]).id;
+      const userId = must(
+        (
+          await pool.query<{ id: string }>(
+            `INSERT INTO users (email, password_hash, display_name) VALUES ('upgrade-s5-owner@test.daftar.local', 'x', 'Upgrade S5') RETURNING id`,
+          )
+        ).rows[0],
+      ).id;
+      const biz = await seedS3Business(pool, tenantId, userId, 'upgrade-s5');
+      const c = await pool.connect();
+      let purchaseId = '';
+      let purchaseTotal = '';
+      try {
+        await c.query('BEGIN');
+        const gain = await stockUp(c, biz, biz.w1, [{ variantId: biz.piece.variantId, qty: '10', unitCost: '2.5' }]);
+        expect(gain.entry?.created).toBe(true);
+        await runCommand(c, biz, transferCommand(biz.w1, biz.w2, [{ variantId: biz.piece.variantId, qty: '4' }]));
+        const supplierId = await createSupplier(c, biz, { name: 'Before returns' });
+        const run = await draftAndReceive(
+          c,
+          biz,
+          await draftCommand(c, supplierId, biz.w1, [
+            { variantId: biz.piece.variantId, qty: '3', unitPriceMinor: '1200' },
+            { variantId: biz.dec2.variantId, qty: '1.5', unitPriceMinor: '400' },
+          ]),
+        );
+        expect(run.purchaseEntry?.created).toBe(true);
+        purchaseId = run.prepared.cmd.purchaseId;
+        purchaseTotal = run.prepared.cmd.totalBaseMinor.toString(10);
+        await c.query('COMMIT');
+      } catch (e) {
+        await c.query('ROLLBACK').catch(() => undefined);
+        throw e;
+      } finally {
+        c.release();
+      }
+
+      const protectedRows = async (): Promise<string[]> =>
+        (
+          await pool.query<{ t: string }>(
+            [
+              ...PROTECTED.map((t) => `SELECT '${t}:' || to_jsonb(x)::text AS t FROM ${t} x`),
+              `SELECT concat_ws(':', 'src', source_type, sort_order) FROM accounting_source_types`,
+            ].join(' UNION ALL '),
+          )
+        ).rows
+          .map((x) => x.t)
+          .sort();
+      const before = await protectedRows();
+      // The books, the stock and the purchase really exist: the gain's entry and
+      // the purchase's, each with its binding; the gain, both transfer legs and
+      // the two receipt movements; one supplier, one received purchase with two
+      // lines, each bridged.
+      const n = async (table: string): Promise<number> => must((await pool.query<{ n: number }>(`SELECT count(*)::int AS n FROM ${table}`)).rows[0]).n;
+      expect({
+        entries: await n('journal_entries'),
+        bindings: await n('accounting_source_bindings'),
+        movements: await n('stock_movements'),
+        levels: await n('stock_levels'),
+        suppliers: await n('suppliers'),
+        received: must((await pool.query<{ n: number }>(`SELECT count(*)::int AS n FROM purchases WHERE status = 'received'`)).rows[0]).n,
+        lines: await n('purchase_lines'),
+        purchaseBridges: await n('stock_source_bridge_purchase'),
+      }).toEqual({ entries: 2, bindings: 2, movements: 5, levels: 3, suppliers: 1, received: 1, lines: 2, purchaseBridges: 2 });
+      // The one protected change 0065 is authorized to make (contract A-05).
+      const after = [...before, 'src:supplier_return:8'].sort();
+
+      const applied = await runMigrations(url12);
+      expect(applied).toEqual(migrationsAfter(FROZEN));
+      expect(applied.slice(0, 2)).toEqual(['0065_supplier_returns_reversals_sources.sql', '0066_supplier_return_reversal_commands.sql']);
+
+      // Books, ledger, S3 and S4 documents and catalogue are exactly as they
+      // were, plus 0065's one accounting source type — named, not hashed away.
+      expect(await protectedRows()).toEqual(after);
+
+      // Every S5 table and bridge exists, arrived with row security ENABLED and
+      // FORCED (§2.7), and is empty: an upgrade invents no return, no credit
+      // note and no reversal.
+      expect(await tablesPresent(S5_TABLES)).toEqual([...S5_TABLES].sort());
+      expect(
+        (
+          await pool.query<{ t: string }>(
+            `SELECT relname::text AS t FROM pg_class WHERE relname = ANY ($1::text[]) AND relkind = 'r' AND relrowsecurity AND relforcerowsecurity`,
+            [S5_TABLES],
+          )
+        ).rows
+          .map((x) => x.t)
+          .sort(),
+      ).toEqual([...S5_TABLES].sort());
+      const s5Counts = (
+        await pool.query<{ t: string; n: number }>(S5_TABLES.map((t) => `SELECT '${t}' AS t, count(*)::int AS n FROM ${t}`).join(' UNION ALL '))
+      ).rows.reduce<Record<string, number>>((acc, r) => ({ ...acc, [r.t]: r.n }), {});
+      expect(s5Counts).toEqual(Object.fromEntries(S5_TABLES.map((t) => [t, 0])));
+
+      // The registries are exactly the checkpoint's S1 + S3 + S4 rows plus
+      // P3-S5's (§2.1, §2.6, A-03, A-05; R-B2a: `purchase_reversal` is a stock
+      // source type only), and nothing else.
+      expect(await registries()).toEqual([...CHECKPOINT_REGISTRIES, ...S5_REGISTRIES].sort());
+      // The replaced discovery reports no gap over the eight registered types.
+      expect((await pool.query(`SELECT * FROM inventory_stock_source_guard_gaps()`)).rows).toEqual([]);
+
+      // The checkpoint's received purchase under the new reads (A-16, R-52):
+      // nothing returned and nothing reversed, so its outstanding AP is its
+      // whole total and nothing is allocated against it.
+      expect(
+        must(
+          (
+            await pool.query<{ ap: string; payment: boolean; credit: boolean }>(
+              `SELECT purchase_ap_outstanding($1, $2)::text AS ap, s.payment_allocated AS payment, s.credit_allocated AS credit
+                 FROM purchase_settlement_state($1, $2) s`,
+              [biz.businessId, purchaseId],
+            )
+          ).rows[0],
+        ),
+      ).toEqual({ ap: purchaseTotal, payment: false, credit: false });
+
+      // Neither internal principal was left the ownership-transfer authority.
+      for (const role of ['daftar_inventory_internal', 'daftar_accounting_internal']) {
+        expect((await pool.query<{ c: boolean }>(`SELECT has_schema_privilege($1, 'public', 'CREATE') AS c`, [role])).rows[0]?.c, role).toBe(false);
+      }
+
+      // Second run does nothing, and still leaves every protected row and every
+      // registry as it was.
+      expect(await runMigrations(url12)).toEqual([]);
+      expect(await protectedRows()).toEqual(after);
+      expect(await registries()).toEqual([...CHECKPOINT_REGISTRIES, ...S5_REGISTRIES].sort());
+    } finally {
+      await pool.end();
+      await admin.query(`DROP DATABASE IF EXISTS ${db12} WITH (FORCE)`).catch(() => undefined);
     }
   }, 180_000);
 });
