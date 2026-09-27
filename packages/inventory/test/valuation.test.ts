@@ -10,6 +10,7 @@ import {
   inboundValue,
   MOVEMENT_KIND_QTY_SIGN,
   outboundValue,
+  purchaseReversalValue,
   simulateMovement,
   transferInValue,
   type MovementInput,
@@ -323,5 +324,64 @@ describe('simulateMovement — R3 step 6 b–d', () => {
     }
     expect(out).toBe(-10n);
     expect(s).toEqual({ onHand: 0n, valuation: 0n, avg: C(3n), lastStockSeq: 4n });
+  });
+});
+
+describe('simulateMovement — purchase_reversal is the exact negation of its paired purchase (R-B1a, PHASE_3_S5_CONTRACT §2.4)', () => {
+  // 10 received holding 1000 (the pair), then 10 more holding 1400: the key's average is 120 per unit.
+  const pair = { value: 1000n, costC10: C(100n), qtyQ4: Q(10n) };
+  const held = state(Q(20n), 2400n, C(120n), 2n);
+  const reversal = (over: Partial<MovementInput> = {}): MovementInput => ({
+    kind: 'purchase_reversal',
+    qtyQ4: Q(-10n),
+    costC10: null,
+    value: null,
+    pairedPurchase: pair,
+    ...over,
+  });
+
+  it('removes exactly s_i with the receipt snapshot, not the average; every other outbound kind stays at the average', () => {
+    expect(simulateMovement(held, reversal())).toEqual({ value: -1000n, unitCostSnapshot: C(100n), next: state(Q(10n), 1400n, C(140n), 3n) });
+    expect(purchaseReversalValue(held, Q(-10n), pair)).toEqual({ value: -1000n, unitCostSnapshot: C(100n) });
+    for (const kind of ['supplier_return', 'damage', 'transfer_out'] as const) {
+      expect(simulateMovement(held, { kind, qtyQ4: Q(-10n), costC10: null, value: null }), kind).toEqual({
+        value: -1200n,
+        unitCostSnapshot: C(120n),
+        next: state(Q(10n), 1200n, C(120n), 3n),
+      });
+    }
+  });
+
+  it('a receipt into an empty key reverses to exactly zero, even at a non-terminating average', () => {
+    const received = simulateMovement(EMPTY_STOCK_STATE, { kind: 'purchase', qtyQ4: Q(3n), costC10: 33333333333n, value: 10n });
+    const r = simulateMovement(received.next, reversal({ qtyQ4: Q(-3n), pairedPurchase: { value: 10n, costC10: 33333333333n, qtyQ4: Q(3n) } }));
+    expect(r.value).toBe(-10n);
+    expect(r.unitCostSnapshot).toBe(33333333333n);
+    expect([r.next.onHand, r.next.valuation, r.next.lastStockSeq]).toEqual([0n, 0n, 2n]);
+  });
+
+  it('refuses, in the primitive order: shape, then insufficiency, then the pair', () => {
+    expect(codeOf(() => simulateMovement(held, reversal({ costC10: C(100n) })))).toBe('inventory.movement_shape_invalid');
+    expect(codeOf(() => simulateMovement(held, reversal({ value: -1000n })))).toBe('inventory.movement_shape_invalid');
+    // Shape before insufficiency, insufficiency before the pair.
+    expect(codeOf(() => simulateMovement(state(Q(1n), 10n, C(10n)), reversal({ value: -1000n })))).toBe('inventory.movement_shape_invalid');
+    expect(codeOf(() => simulateMovement(state(Q(1n), 10n, C(10n)), reversal({ pairedPurchase: undefined })))).toBe('inventory.insufficient_stock');
+    expect(codeOf(() => simulateMovement(held, reversal({ pairedPurchase: undefined })))).toBe('inventory.movement_shape_invalid');
+    expect(codeOf(() => simulateMovement(held, reversal({ pairedPurchase: { ...pair, qtyQ4: Q(9n) } })))).toBe('inventory.movement_shape_invalid');
+    expect(codeOf(() => simulateMovement(held, reversal({ pairedPurchase: { ...pair, value: -1n } })))).toBe('inventory.movement_shape_invalid');
+    expect(codeOf(() => simulateMovement(held, reversal({ pairedPurchase: { ...pair, costC10: -1n } })))).toBe('inventory.cost_invalid');
+    expect(codeOf(() => simulateMovement(held, reversal({ qtyQ4: Q(10n) })))).toBe('inventory.movement_shape_invalid');
+    expect(codeOf(() => simulateMovement(held, reversal({ qtyQ4: 0n })))).toBe('inventory.movement_shape_invalid');
+  });
+
+  it('refuses a residue (TL-8): zero on hand with value left, or a negative valuation on a positive key', () => {
+    // 20 holding 1500 after other stock left at the average; removing 1000 from 10 leaves 10 holding 500: lawful.
+    expect(simulateMovement(state(Q(20n), 1500n, C(75n)), reversal()).next.valuation).toBe(500n);
+    // 10 holding 999: removing 1000 would leave 0 units holding −1.
+    expect(codeOf(() => simulateMovement(state(Q(10n), 999n, 999000000000n), reversal()))).toBe('inventory.arithmetic_invalid');
+    // 10 holding 1001: removing 1000 would leave 0 units holding 1.
+    expect(codeOf(() => simulateMovement(state(Q(10n), 1001n, 1001000000000n), reversal()))).toBe('inventory.arithmetic_invalid');
+    // 15 holding 900: removing 1000 would leave 5 units holding −100.
+    expect(codeOf(() => simulateMovement(state(Q(15n), 900n, C(60n)), reversal()))).toBe('inventory.arithmetic_invalid');
   });
 });

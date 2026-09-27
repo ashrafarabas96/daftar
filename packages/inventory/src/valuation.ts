@@ -8,8 +8,10 @@
  * are C10 (see `fixed-point.ts`).
  *
  * - A movement's value is an INTEGER, produced by one HALF_EVEN at that
- *   movement, by a supplied document share, by the depletion flush, or by
- *   negating a paired `transfer_out` (§C).
+ *   movement, by a supplied document share, by the depletion flush, by
+ *   negating a paired `transfer_out` (§C), or — R-B1a (PHASE_3_S5_CONTRACT
+ *   §2.4) — by negating the paired `purchase` movement of the same source
+ *   line: a `purchase_reversal` removes exactly what its receipt added.
  * - The cached valuation is only ever the SUM of stored values. The average
  *   is derived from (valuation, on_hand) and may price a later outbound
  *   movement, but it is never used to rebuild valuation (§B). Consequently,
@@ -125,6 +127,55 @@ export function transferInValue(transferOutValue: bigint): bigint {
   return -transferOutValue;
 }
 
+/** The stored `purchase` movement a `purchase_reversal` negates (R-B1a): the same source line's receipt. */
+export interface PairedPurchaseMovement {
+  /** The receipt's stored value `s_i` (≥ 0). */
+  readonly value: bigint;
+  /** The receipt's stored unit-cost snapshot, C10. */
+  readonly costC10: bigint;
+  /** The receipt's quantity (> 0). */
+  readonly qtyQ4: bigint;
+}
+
+/**
+ * A `purchase_reversal` (`qty < 0`), the TypeScript twin of the replaced
+ * primitive's R-B1a branch (PHASE_3_S5_CONTRACT §2.4), in its check order:
+ *
+ * 1. shape — the request carries no cost and no value of its own;
+ * 2. insufficiency — more than on hand is `inventory.insufficient_stock`;
+ * 3. the pair — a missing paired `purchase` movement, or one whose quantity
+ *    is not the exact opposite, is refused as `inventory.movement_shape_invalid`
+ *    (the package's code for the primitive's `inventory.reversal_pair_missing`
+ *    / `…_mismatch`, as for a transfer pair);
+ * 4. the value is `−s_i` and the snapshot the receipt's, copied, never
+ *    recomputed — NOT the key's average;
+ * 5. the residue guard (TL-8) — a key left at `on_hand = 0` with a non-zero
+ *    valuation, or at `on_hand > 0` with a negative one, is refused as
+ *    `inventory.arithmetic_invalid` (the package's code for the primitive's
+ *    `inventory.reversal_valuation_residue`).
+ */
+export function purchaseReversalValue(
+  state: StockState,
+  qtyQ4: bigint,
+  paired: PairedPurchaseMovement | undefined,
+): { value: bigint; unitCostSnapshot: bigint } {
+  if (qtyQ4 >= 0n) refuse('inventory.movement_shape_invalid', 'a purchase reversal quantity must be negative');
+  assertQuantityInRange(qtyQ4);
+  if (-qtyQ4 > state.onHand) refuse('inventory.insufficient_stock', 'outbound quantity exceeds the quantity on hand');
+  if (paired === undefined) refuse('inventory.movement_shape_invalid', 'a purchase_reversal needs the purchase movement of the same line');
+  if (paired.qtyQ4 !== -qtyQ4) refuse('inventory.movement_shape_invalid', 'a reversal removes exactly the quantity its purchase movement added');
+  if (paired.value < 0n) refuse('inventory.movement_shape_invalid', 'a purchase movement value is never negative');
+  assertValueInRange(paired.value);
+  assertCost(paired.costC10);
+  const value = -paired.value;
+  const onHandAfter = state.onHand + qtyQ4;
+  const valuationAfter = state.valuation + value;
+  if ((onHandAfter === 0n && valuationAfter !== 0n) || (onHandAfter > 0n && valuationAfter < 0n)) {
+    refuse('inventory.arithmetic_invalid', 'removing the receipt value would leave an unlawful key valuation');
+  }
+  return { value, unitCostSnapshot: paired.costC10 };
+}
+
 /**
  * The value-only deficit catch-up, per coverage:
  * `−HALF_EVEN(qty_covered × (actual − provisional), 0)`. An actual cost above
@@ -169,6 +220,8 @@ export interface MovementInput {
   value: bigint | null;
   /** For `transfer_in` only: the stored `transfer_out` leg it negates. */
   pairedOut?: { value: bigint; costC10: bigint; qtyQ4: bigint };
+  /** For `purchase_reversal` only: the stored `purchase` movement of the same source line it negates (R-B1a). */
+  pairedPurchase?: PairedPurchaseMovement;
 }
 
 /**
@@ -179,6 +232,10 @@ export interface MovementInput {
  * The package has no `quantity_sign_invalid` / `transfer_pair_missing` code;
  * a sign violation and a missing pair are refused as
  * `inventory.movement_shape_invalid`.
+ *
+ * A `purchase_reversal` is valued by `purchaseReversalValue` — the exact
+ * negation of its paired `purchase` movement (R-B1a) — and never at the
+ * key's average; every other outbound kind is priced at the average.
  */
 export function simulateMovement(state: StockState, m: MovementInput): { value: bigint; unitCostSnapshot: bigint | null; next: StockState } {
   const q = m.qtyQ4;
@@ -201,6 +258,11 @@ export function simulateMovement(state: StockState, m: MovementInput): { value: 
     if (out.qtyQ4 !== -q) refuse('inventory.transfer_pair_mismatch', 'transfer legs do not carry opposite quantities');
     value = transferInValue(out.value);
     unitCostSnapshot = out.costC10;
+  } else if (m.kind === 'purchase_reversal') {
+    if (m.costC10 !== null || m.value !== null) {
+      refuse('inventory.movement_shape_invalid', 'a purchase_reversal movement takes its cost and value from its purchase movement');
+    }
+    ({ value, unitCostSnapshot } = purchaseReversalValue(state, q, m.pairedPurchase));
   } else if (q < 0n) {
     if (m.costC10 !== null || m.value !== null) refuse('inventory.movement_shape_invalid', 'an outbound movement is priced at the average');
     ({ value, unitCostSnapshot } = outboundValue(state, q));
