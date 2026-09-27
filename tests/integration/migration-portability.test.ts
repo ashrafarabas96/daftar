@@ -1285,6 +1285,7 @@ describe('managed PostgreSQL: 0039 → 0049 under a non-superuser migration prin
             internal('supplier_payment_guard'),
             internal('supplier_refund_guard'),
             internal('supplier_refund_value_complete'),
+            internal('supplier_return_value_settled'),
             // …the eligibility read and the three completeness triggers are the
             // accounting principal's (A-14; the replaced reversal guard is above)…
             ...[

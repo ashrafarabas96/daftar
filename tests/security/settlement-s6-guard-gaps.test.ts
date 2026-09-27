@@ -6,10 +6,10 @@
  * `supplier_settlement_guard_gaps()` returns no row at rest and, inside a
  * rolled-back savepoint of a superuser transaction, reports exactly what was
  * sabotaged:
- *   - each of the thirteen §2.3 triggers dropped (`trigger_missing`),
+ *   - each of the fourteen triggers (the thirteen §2.3 ones and R-80) dropped (`trigger_missing`),
  *     disabled or enabled for replica sessions only (`trigger_disabled`),
  *     re-created on another function or with a WHEN clause (`trigger_shape`);
- *   - each of the twenty-one digested functions (the thirteen trigger
+ *   - each of the twenty-two digested functions (the fourteen trigger
  *     functions, the two verify helpers, the three arithmetic functions, the
  *     two replaced S5 extension points `purchase_ap_outstanding` and
  *     `purchase_settlement_state` (R-79), and the R-73 credit-note writer
@@ -99,10 +99,13 @@ async function recreate(c: Client, table: string, trigger: string, edit: (def: s
 }
 
 describe('T-21 at rest', () => {
-  it('both discoveries report nothing; the S6 discovery watches 13 triggers and 21 functions', async () => {
+  it('both discoveries report nothing; the S6 discovery watches 14 triggers and 22 functions', async () => {
     expect(await gapsAfter(async () => undefined)).toEqual({ s6: [], source: [] });
-    expect(S6_TRIGGERS.length).toBe(13);
-    expect(DEFINER_ROWS.length + INVOKER_ROWS.length, 'thirteen trigger functions, two helpers, three arithmetic, two extension points, the writer').toBe(21);
+    expect(S6_TRIGGERS.length).toBe(14);
+    expect(
+      DEFINER_ROWS.length + INVOKER_ROWS.length,
+      'fourteen trigger functions (R-80 included), two helpers, three arithmetic, two extension points, the writer',
+    ).toBe(22);
   });
 
   it('the recorded digests are exactly the bodies installed now, one per watched function', async () => {
@@ -119,7 +122,7 @@ describe('T-21 at rest', () => {
         (await c.query<{ s: string }>(`SELECT prosrc AS s FROM pg_proc WHERE oid = 'supplier_settlement_guard_gaps()'::regprocedure`)).rows[0],
       ).s;
       for (const row of r.rows) expect(src, `${row.f} is recorded at its installed body`).toContain(`"${row.f}": "${row.sha}"`);
-      expect(src.match(/"[a-z_]+\([a-z,]*\)": "[0-9a-f]{64}"/g)?.length, 'exactly 21 recorded digests').toBe(21);
+      expect(src.match(/"[a-z_]+\([a-z,]*\)": "[0-9a-f]{64}"/g)?.length, 'exactly 22 recorded digests').toBe(22);
       const source = must(
         (await c.query<{ s: string }>(`SELECT prosrc AS s FROM pg_proc WHERE oid = 'inventory_stock_source_guard_gaps()'::regprocedure`)).rows[0],
       ).s;

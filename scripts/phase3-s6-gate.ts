@@ -133,6 +133,8 @@ const GUARDS: readonly (readonly [trigger: string, fn: string])[] = [
   ['supplier_refunds_guard', 'supplier_refund_guard'],
   ['supplier_refunds_value_complete', 'supplier_refund_value_complete'],
   ['purchase_reversals_unsettled', 'purchase_reversal_unsettled'],
+  // 0067 R-80: an S5 return's X is proven against the S6 purchase chain at COMMIT.
+  ['supplier_returns_value_settled', 'supplier_return_value_settled'],
 ];
 /** The guards that judge INSERT as well as UPDATE and DELETE (tgtype 31, the 0063 R-34/R-39 hardening). */
 const INSERT_GUARDS: readonly (readonly [trigger: string, table: string])[] = [

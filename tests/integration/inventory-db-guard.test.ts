@@ -203,6 +203,8 @@ describe('G-7 — the tree as it stands', () => {
         'supplier_receive_refund',
         'supplier_refund_guard',
         'supplier_refund_value_complete',
+        // 0067 R-80
+        'supplier_return_value_settled',
       ].sort(),
     );
     expect([...INVENTORY_INVOKER_EXCEPTIONS].sort()).toEqual(['product_variants_10_base_variant_authority', 'products_10_inventory_config_authority']);

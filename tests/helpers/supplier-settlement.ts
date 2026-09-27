@@ -169,6 +169,8 @@ export const S6_TRIGGERS: readonly (readonly [table: string, trigger: string, tg
   ['supplier_refunds', 'supplier_refunds_value_complete', 5, true, 'supplier_refund_value_complete()'],
   ['supplier_credit_notes', 'supplier_credit_notes_immutable', 27, false, 'supplier_credit_note_guard()'],
   ['purchase_reversals', 'purchase_reversals_unsettled', 5, true, 'purchase_reversal_unsettled()'],
+  // 0067 R-80: an S5 return's X is proven against the S6 purchase chain at COMMIT.
+  ['supplier_returns', 'supplier_returns_value_settled', 5, true, 'supplier_return_value_settled()'],
 ];
 
 /** The accounting-owned S6 functions (A-14): the eligibility and the three completeness functions. */
