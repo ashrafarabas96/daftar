@@ -11,7 +11,7 @@
  *
  * No tax or duty field, option or preset exists here: BLOCKED BY OD-03.
  */
-import { Button, Checkbox, List, Select, Switch, TextField, Textarea } from '@daftar/design-system';
+import { Button, Checkbox, ConfirmationDialog, List, Select, Switch, TextField, Textarea } from '@daftar/design-system';
 import { minorUnitsOf } from '@daftar/shared-contracts';
 import { Ltr, formatDecimalText, rich, type ViewBaseProps } from '@/lib/phase3-format';
 import { isNonZeroMinor } from '../common/amount-text';
@@ -68,6 +68,9 @@ export interface ReceiveHandlers {
   onTogglePayNow: () => void;
   onPayField: (field: PayField, value: string) => void;
   onReceive: () => void;
+  /** Opens "Cancel this purchase?" (m-7); `onCancelDraft` is the confirmed act. */
+  onAskCancelDraft: () => void;
+  onDismissCancelDraft: () => void;
   onCancelDraft: () => void;
   onNewPurchase: () => void;
 }
@@ -84,6 +87,8 @@ export interface ReceivePurchaseViewProps {
   canReceive: boolean;
   /** True once the draft exists on the server (revision ≥ 1), so it can be cancelled. */
   savedDraft: boolean;
+  /** "Cancel this purchase?" is open (m-7). */
+  confirmCancelDraft?: boolean;
   review: ReceiveReviewModel | null;
   /** Null without `suppliers.pay` (Annex R #6). */
   payNow: PayNowForm | null;
@@ -160,10 +165,21 @@ function EditStep(props: ReceivePurchaseViewProps & ViewBaseProps) {
         {t('common.review')}
       </Button>
       {props.savedDraft ? (
-        <Button variant="danger" fullWidth disabled={props.busy} onClick={on.onCancelDraft}>
+        <Button variant="danger" fullWidth disabled={props.busy} onClick={on.onAskCancelDraft}>
           {t('purchasing.receive.cancelDraft')}
         </Button>
       ) : null}
+      <ConfirmationDialog
+        open={props.confirmCancelDraft === true}
+        title={t('purchasing.receive.cancelDraftTitle')}
+        message={t('purchasing.receive.cancelDraftMessage')}
+        confirmLabel={t('purchasing.receive.cancelDraft')}
+        cancelLabel={t('purchasing.receive.keepDraft')}
+        danger
+        loading={props.busy}
+        onConfirm={on.onCancelDraft}
+        onCancel={on.onDismissCancelDraft}
+      />
     </Stack>
   );
 }
@@ -208,8 +224,9 @@ function SupplierPicker(props: ReceivePurchaseViewProps & ViewBaseProps) {
         onChange={on.onSupplierSearch}
       />
       {form.supplierResults.length > 0 ? (
-        <List items={form.supplierResults.map((s) => ({ key: s.supplierId, primary: s.name, onClick: () => on.onPickSupplier(s) }))} />
+        <List items={form.supplierResults.map((s) => ({ key: s.supplierId, primary: <bdi>{s.name}</bdi>, onClick: () => on.onPickSupplier(s) }))} />
       ) : null}
+      {form.supplierNoMatch === true ? <Muted>{t('common.noResults')}</Muted> : null}
       {props.canCreateSupplier ? (
         <Button variant="ghost" fullWidth onClick={on.onStartNewSupplier}>
           {t('purchasing.receive.newSupplier')}
@@ -243,7 +260,19 @@ function LineEditor(props: ReceivePurchaseViewProps & ViewBaseProps & { line: Re
             onChange={(v) => on.onLineItemSearch(line.lineId, v)}
           />
           {line.itemResults.length > 0 ? (
-            <List items={line.itemResults.map((item) => ({ key: item.productId, primary: item.name, onClick: () => on.onPickItem(line.lineId, item) }))} />
+            <List
+              items={line.itemResults.map((item) => ({
+                key: item.productId,
+                primary: <bdi>{item.name}</bdi>,
+                onClick: () => on.onPickItem(line.lineId, item),
+              }))}
+            />
+          ) : null}
+          {line.itemNoMatch === true ? (
+            <Stack gap={1}>
+              <Muted>{t('common.noResults')}</Muted>
+              <Muted>{t('purchasing.receive.trackedOnly')}</Muted>
+            </Stack>
           ) : null}
         </Stack>
       )}
@@ -377,7 +406,7 @@ function ReviewStep(props: ReceivePurchaseViewProps & ViewBaseProps & { review: 
       {props.payNow ? <PayNowEditor {...props} payNow={props.payNow} /> : null}
       {props.canReceive ? (
         <Button fullWidth loading={props.busy} onClick={on.onReceive}>
-          {props.payNow?.on ? t('purchasing.receive.receiveAndPay') : t('purchasing.receive.receive')}
+          {paying(props) ? t('purchasing.receive.receiveAndPay') : t('purchasing.receive.receive')}
         </Button>
       ) : (
         <Notice tone="info">{t('purchasing.receive.savedNoReceive')}</Notice>
@@ -389,16 +418,29 @@ function ReviewStep(props: ReceivePurchaseViewProps & ViewBaseProps & { review: 
   );
 }
 
+/** "Receive and pay" only when "Paid now" is on AND there is a way to pay (M-5). */
+function paying(props: ReceivePurchaseViewProps & ViewBaseProps): boolean {
+  const payNow = props.payNow;
+  return payNow !== null && payNow.on && activeMethodChoices(payNow.methods, props.locale, props.t).length > 0;
+}
+
 function PayNowEditor(props: ReceivePurchaseViewProps & ViewBaseProps & { payNow: PayNowForm }) {
   const { t, locale, payNow, on } = props;
   const methods = activeMethodChoices(payNow.methods, locale, t);
   const method = methods.find((m) => m.paymentMethodId === payNow.methodId);
   const purchaseCurrency = props.review?.currency ?? props.form.currency;
+  // M-5: with no way to pay set up, "Paid now" cannot be switched on — the notice says why instead.
+  if (methods.length === 0) {
+    return (
+      <Panel>
+        <Notice tone="info">{t('payments.noMethodYet')}</Notice>
+      </Panel>
+    );
+  }
   return (
     <Panel>
       <Switch label={t('purchasing.receive.paidNow')} checked={payNow.on} onChange={on.onTogglePayNow} />
-      {payNow.on && methods.length === 0 ? <Notice tone="info">{t('payments.noMethodYet')}</Notice> : null}
-      {payNow.on && methods.length > 0 ? (
+      {payNow.on ? (
         <Stack gap={3}>
           <Select
             label={t('payments.method')}

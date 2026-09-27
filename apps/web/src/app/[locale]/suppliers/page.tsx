@@ -92,6 +92,7 @@ export default function SuppliersPage({ params }: { params: Promise<{ locale: Lo
           rows={rows}
           search={search}
           owedOnly={owedOnly}
+          canReceive={context.can('purchases.manage')}
           hasMore={cursor !== null}
           loadingMore={loadingMore}
           errorKey={errorKey}
@@ -100,6 +101,7 @@ export default function SuppliersPage({ params }: { params: Promise<{ locale: Lo
             onOwedOnly: setOwedOnly,
             onOpen: (supplierId) => router.push(`/${locale}/suppliers/${supplierId}`),
             onLoadMore: () => void loadMore(),
+            onReceive: () => router.push(`/${locale}/purchases/receive`),
           }}
         />
       )}

@@ -168,6 +168,8 @@ const RECEIVE_HANDLERS: ReceiveHandlers = {
   onTogglePayNow: noop,
   onPayField: noop,
   onReceive: noop,
+  onAskCancelDraft: noop,
+  onDismissCancelDraft: noop,
   onCancelDraft: noop,
   onNewPurchase: noop,
 };
@@ -431,30 +433,31 @@ const detailProps = (over: Partial<PurchaseDetailViewProps>): PurchaseDetailView
 
 // ── Return to Supplier ───────────────────────────────────────────────────
 
-const RETURN_LINES: ReturnLineForm[] = [
-  {
-    purchaseLineId: LINE_ID_1,
-    name: 'Olive oil',
-    variantName: null,
-    unitDecimals: 2,
-    purchasedQty: '12.5',
-    returnedQty: '2',
-    returnableQty: '10.5',
-    quantity: '3',
-    invalid: false,
-  },
-  {
-    purchaseLineId: LINE_ID_2,
-    name: 'Cotton shirt',
-    variantName: 'Large',
-    unitDecimals: 0,
-    purchasedQty: '4',
-    returnedQty: '0',
-    returnableQty: '1',
-    quantity: '1.5',
-    invalid: true,
-  },
-];
+const RETURN_OIL: ReturnLineForm = {
+  purchaseLineId: LINE_ID_1,
+  name: 'Olive oil',
+  variantName: null,
+  unitDecimals: 2,
+  purchasedQty: '12.5',
+  returnedQty: '2',
+  returnableQty: '10.5',
+  quantity: '3',
+  invalid: false,
+};
+
+const RETURN_SHIRT: ReturnLineForm = {
+  purchaseLineId: LINE_ID_2,
+  name: 'Cotton shirt',
+  variantName: 'Large',
+  unitDecimals: 0,
+  purchasedQty: '4',
+  returnedQty: '0',
+  returnableQty: '1',
+  quantity: '1.5',
+  invalid: true,
+};
+
+const RETURN_LINES: ReturnLineForm[] = [RETURN_OIL, RETURN_SHIRT];
 
 const RETURN_RESULT: SupplierReturnResultDto = {
   returnId: '3930a80c-0010-4a7b-8c9d-0000000rt002',
@@ -531,6 +534,22 @@ export const VIEW_REGISTRY: readonly ViewEntry[] = [
       form: { ...NEW_FORM, newSupplierName: 'Al-Noor Trading', duplicateOf: 'Al-Noor Trading', errors: { lines: true } },
     }),
     'foreign currency, discount, extra costs split manually, field errors': receiveProps({ form: FILLED_FORM, savedDraft: true }),
+    'cancelling the purchase asks first': receiveProps({ form: FILLED_FORM, savedDraft: true, confirmCancelDraft: true }),
+    'searches that found nothing': receiveProps({
+      form: {
+        ...NEW_FORM,
+        supplierSearch: 'Zeta',
+        supplierResults: [],
+        supplierNoMatch: true,
+        lines: [{ ...emptyLine(LINE_ID_1), itemSearch: 'honey', itemNoMatch: true }],
+      },
+    }),
+    'review, no way to pay set up yet': receiveProps({
+      step: 'review',
+      form: FILLED_FORM,
+      review: REVIEW,
+      payNow: { on: false, methods: [], methodId: '', currencyOptions: ['USD'], payCurrency: 'USD', amount: '', applied: '', reference: '', errors: {} },
+    }),
     'review, paid now in the purchase currency': receiveProps({
       step: 'review',
       form: FILLED_FORM,
@@ -620,6 +639,9 @@ export const VIEW_REGISTRY: readonly ViewEntry[] = [
   }),
   defineView('ReturnToSupplierView', ReturnToSupplierView, {
     'quantities, one invalid': returnProps({ nothingChosen: true, errorKey: 'error.supplier_return.quantity_exceeds_purchased' }),
+    'one line has nothing left to return': returnProps({
+      lines: [RETURN_OIL, { ...RETURN_SHIRT, returnedQty: '4', returnableQty: '0.0000', quantity: '', invalid: false }],
+    }),
     'blocked: supplier inactive': returnProps({ blocked: 'supplier_inactive' }),
     'blocked: nothing left': returnProps({ blocked: 'nothing_left' }),
     'blocked: not received': returnProps({ blocked: 'not_received' }),

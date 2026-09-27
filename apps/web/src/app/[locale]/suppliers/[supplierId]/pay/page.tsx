@@ -54,6 +54,9 @@ const SETTLEMENT_ACCOUNT_KEY: Readonly<Record<PaymentMethodDefaultDto['systemTyp
 /** At most fifty purchases per payment (S6 A-07), and the open-purchases read pages at fifty. */
 const MAX_ROWS = 50;
 
+/** How long a typed amount stands still before the proposal is asked for. */
+const PROPOSAL_DELAY_MS = 400;
+
 const emptyForm = (currency: string, currencyOptions: string[]): PayFormModel => ({
   methodId: '',
   currency,
@@ -89,6 +92,7 @@ export default function PaySupplierPage({ params }: { params: Promise<{ locale: 
   // Ids minted once per form and kept across retries (A-12(4)).
   const ids = useRef({ paymentId: crypto.randomUUID(), fxKey: crypto.randomUUID(), methodId: crypto.randomUUID() });
   const allocationIds = useRef(new Map<string, string>());
+  const proposalTicket = useRef(0);
   const allocationIdFor = (key: string): string => {
     const known = allocationIds.current.get(key);
     if (known) return known;
@@ -154,32 +158,58 @@ export default function PaySupplierPage({ params }: { params: Promise<{ locale: 
   }, [status, context, supplierId, locale, loadOpen, loadNotes, setupFor]);
 
   // ── The server's proposal ───────────────────────────────────────────────
-  async function propose() {
+  /**
+   * Ask the server how the amount splits over the open purchases. A newer
+   * amount or currency bumps the ticket, so an older answer is dropped. When
+   * no open purchase is in the payment's currency the automatic split places
+   * nothing, so the manual split opens with its hint (m-10).
+   */
+  const requestProposal = useCallback(
+    async (amountMinor: string, currency: string) => {
+      const mine = ++proposalTicket.current;
+      setBusy(true);
+      setErrorKey(null);
+      try {
+        const answer = await listOpenPurchases(supplierId, { currency, amount: amountMinor, limit: MAX_ROWS });
+        if (mine !== proposalTicket.current) return;
+        setRows(
+          answer.items.map((p) => ({
+            ...p,
+            amount: p.proposedMinor !== null && isNonZeroMinor(p.proposedMinor) ? minorToMajorText(p.proposedMinor, currency) : '',
+            applied: '',
+            invalid: false,
+          })),
+        );
+        setUnallocatedMinor(answer.unallocatedMinor);
+        setProposed(true);
+        if (answer.items.length > 0 && answer.items.every((p) => p.currency !== currency)) setForm((f) => ({ ...f, manual: true }));
+      } catch (error) {
+        if (mine === proposalTicket.current) setErrorKey(refusalKey(error));
+      } finally {
+        if (mine === proposalTicket.current) setBusy(false);
+      }
+    },
+    [supplierId],
+  );
+
+  /** "Show which purchases this pays": the same proposal, on demand, with the amount checked. */
+  function propose() {
     const amountMinor = amountInputToMinor(form.amount, form.currency);
     if (amountMinor === null || !isNonZeroMinor(amountMinor)) {
       setForm((f) => ({ ...f, errors: { ...f.errors, amount: true } }));
       return;
     }
-    setBusy(true);
-    setErrorKey(null);
-    try {
-      const answer = await listOpenPurchases(supplierId, { currency: form.currency, amount: amountMinor, limit: MAX_ROWS });
-      setRows(
-        answer.items.map((p) => ({
-          ...p,
-          amount: p.proposedMinor !== null && isNonZeroMinor(p.proposedMinor) ? minorToMajorText(p.proposedMinor, form.currency) : '',
-          applied: '',
-          invalid: false,
-        })),
-      );
-      setUnallocatedMinor(answer.unallocatedMinor);
-      setProposed(true);
-    } catch (error) {
-      setErrorKey(refusalKey(error));
-    } finally {
-      setBusy(false);
-    }
+    void requestProposal(amountMinor, form.currency);
   }
+
+  // A-13: the split is pre-filled by the server's proposal as soon as a valid amount stands still (m-10: no extra tap).
+  useEffect(() => {
+    if (loadStatus !== 'ready' || setup !== null || result !== null || proposed) return;
+    const amountMinor = amountInputToMinor(form.amount, form.currency);
+    if (amountMinor === null || !isNonZeroMinor(amountMinor)) return;
+    const timer = setTimeout(() => void requestProposal(amountMinor, form.currency), PROPOSAL_DELAY_MS);
+    return () => clearTimeout(timer);
+  }, [form.amount, form.currency, loadStatus, setup, result, proposed, requestProposal]);
 
   // ── Pay ────────────────────────────────────────────────────────────────
   async function submit() {
@@ -242,7 +272,8 @@ export default function PaySupplierPage({ params }: { params: Promise<{ locale: 
       setFx(null);
       setResult(answer);
     } catch (error) {
-      setErrorKey(refusalKey(error));
+      // A missing rate is answered by the inline prompt alone, not also by the refusal text (m-1).
+      setErrorKey(isMissingExchangeRate(error) ? null : refusalKey(error));
       if (isMissingExchangeRate(error)) {
         const foreignRow = rows.find((r) => r.currency !== baseCurrency);
         setFx({
@@ -272,6 +303,8 @@ export default function PaySupplierPage({ params }: { params: Promise<{ locale: 
         { fromCurrency: fx.currency, toCurrency: baseCurrency, rate, effectiveAt: `${form.date}T00:00:00Z` },
         ids.current.fxKey,
       );
+      // The rate is saved: a second, different rate in this form gets its own key (L-4, m-2).
+      ids.current.fxKey = crypto.randomUUID();
       setFx(null);
       await submit();
     } catch (error) {
@@ -396,8 +429,10 @@ export default function PaySupplierPage({ params }: { params: Promise<{ locale: 
       reference: 'reference',
     };
     setForm((f) => ({ ...f, [field]: value, errors: { ...f.errors, [errorOf[field]]: false } }));
-    // A new amount or currency needs a new proposal from the server.
+    // A new amount or currency needs a new proposal from the server; an answer still on its way is for the old one.
     if (field === 'amount' || field === 'currency') {
+      proposalTicket.current++;
+      setBusy(false);
       setProposed(false);
       setUnallocatedMinor(null);
       setRows((rs) => rs.map((r) => ({ ...r, proposedMinor: null })));
@@ -452,7 +487,7 @@ export default function PaySupplierPage({ params }: { params: Promise<{ locale: 
         favour={mayUseFavour && notes !== null && notes.length > 0 ? { notes, use: favourUse } : null}
         on={{
           onField,
-          onPropose: () => void propose(),
+          onPropose: propose,
           onToggleManual: () => setForm((f) => ({ ...f, manual: !f.manual, errors: { ...f.errors, rows: false } })),
           onRowAmount: (purchaseId, value) => setRows((rs) => rs.map((r) => (r.purchaseId === purchaseId ? { ...r, amount: value, invalid: false } : r))),
           onRowApplied: (purchaseId, value) => setRows((rs) => rs.map((r) => (r.purchaseId === purchaseId ? { ...r, applied: value, invalid: false } : r))),

@@ -134,6 +134,7 @@ export default function ReceivePurchasePage({ params, searchParams }: { params: 
   const [payNow, setPayNow] = useState<PayNowForm | null>(null);
   const [result, setResult] = useState<ReceiveResultModel | null>(null);
   const [busy, setBusy] = useState(false);
+  const [confirmCancelDraft, setConfirmCancelDraft] = useState(false);
   const [errorKey, setErrorKey] = useState<string | null>(null);
   const [fx, setFx] = useState<{ currency: string; rateText: string; rateInvalid: boolean; busy: boolean } | null>(null);
   const [loadStatus, setLoadStatus] = useState<'loading' | 'ready' | 'denied' | 'failed'>('loading');
@@ -141,6 +142,8 @@ export default function ReceivePurchasePage({ params, searchParams }: { params: 
 
   const baseCurrency = context?.business.baseCurrency ?? '';
   const canPay = context?.can('suppliers.pay') ?? false;
+  // N-7: "Paid now" changes only the receive command, so it is offered only to a member who may receive.
+  const canReceive = context?.can('purchases.receive') ?? false;
 
   // ── Load the pickers, and the draft when continuing one ─────────────────
   useEffect(() => {
@@ -233,7 +236,7 @@ export default function ReceivePurchasePage({ params, searchParams }: { params: 
     setForm((f) => ({ ...f, extraCosts: f.extraCosts.map((c) => (c.landedCostId === landedCostId ? patch(c) : c)) }));
 
   async function searchSuppliers(text: string) {
-    setForm((f) => ({ ...f, supplierSearch: text, errors: { ...f.errors, supplier: false } }));
+    setForm((f) => ({ ...f, supplierSearch: text, supplierNoMatch: false, errors: { ...f.errors, supplier: false } }));
     const ticket = ++search.current.supplier;
     const term = text.trim();
     if (term.length === 0) {
@@ -243,7 +246,11 @@ export default function ReceivePurchasePage({ params, searchParams }: { params: 
     try {
       const page = await listSuppliers({ search: term, status: 'active', limit: SEARCH_LIMIT });
       if (ticket !== search.current.supplier) return;
-      setForm((f) => ({ ...f, supplierResults: page.items.map((s) => ({ supplierId: s.id, name: s.name })) }));
+      setForm((f) => ({
+        ...f,
+        supplierResults: page.items.map((s) => ({ supplierId: s.id, name: s.name })),
+        supplierNoMatch: page.items.length === 0,
+      }));
     } catch (error) {
       if (ticket === search.current.supplier) setErrorKey(refusalKey(error));
     }
@@ -281,7 +288,7 @@ export default function ReceivePurchasePage({ params, searchParams }: { params: 
   }
 
   async function searchItems(lineId: string, text: string) {
-    patchLine(lineId, (l) => ({ ...l, itemSearch: text, errors: { ...l.errors, item: false } }));
+    patchLine(lineId, (l) => ({ ...l, itemSearch: text, itemNoMatch: false, errors: { ...l.errors, item: false } }));
     const ticket = ++search.current.item;
     const term = text.trim();
     if (term.length === 0) {
@@ -292,7 +299,7 @@ export default function ReceivePurchasePage({ params, searchParams }: { params: 
       const page = await listInventoryItems({ search: term, trackedOnly: true, limit: SEARCH_LIMIT });
       if (ticket !== search.current.item) return;
       const options = page.items.filter((i) => i.status === 'active').map(toItemOption);
-      patchLine(lineId, (l) => ({ ...l, itemResults: options }));
+      patchLine(lineId, (l) => ({ ...l, itemResults: options, itemNoMatch: options.length === 0 }));
     } catch (error) {
       if (ticket === search.current.item) setErrorKey(refusalKey(error));
     }
@@ -404,10 +411,11 @@ export default function ReceivePurchasePage({ params, searchParams }: { params: 
       const saved = await putPurchaseDraft(docId, checked.body);
       setRevision(saved.revision);
       setReview(toReview(saved));
+      const payable = activeMethodChoices(methods, locale, t).length > 0;
       setPayNow((prev) =>
-        canPay
+        canPay && canReceive
           ? {
-              on: prev?.on ?? false,
+              on: payable && (prev?.on ?? false),
               methods,
               methodId: prev?.methodId ?? activeMethodChoices(methods, locale, t)[0]?.paymentMethodId ?? '',
               currencyOptions: [...new Set([saved.currency, baseCurrency])],
@@ -474,7 +482,8 @@ export default function ReceivePurchasePage({ params, searchParams }: { params: 
       setFx(null);
       setStep('done');
     } catch (error) {
-      setErrorKey(refusalKey(error));
+      // A missing rate is answered by the inline prompt alone, not also by the refusal text (m-1).
+      setErrorKey(isMissingExchangeRate(error) ? null : refusalKey(error));
       if (isMissingExchangeRate(error)) {
         const paymentForeign = paying && payNow !== null && payNow.payCurrency !== baseCurrency;
         const currency = refusalCode(error) === 'accounting.fx_rate_missing' && paymentForeign && payNow ? payNow.payCurrency : review.currency;
@@ -500,6 +509,8 @@ export default function ReceivePurchasePage({ params, searchParams }: { params: 
         { fromCurrency: fx.currency, toCurrency: baseCurrency, rate, effectiveAt: `${form.documentDate}T00:00:00Z` },
         paymentIds.fxKey,
       );
+      // The rate is saved: a second, different rate in this form gets its own key (L-4, m-2).
+      setPaymentIds((ids) => ({ ...ids, fxKey: newId() }));
       setFx(null);
       await receive();
     } catch (error) {
@@ -517,6 +528,7 @@ export default function ReceivePurchasePage({ params, searchParams }: { params: 
     } catch (error) {
       setErrorKey(refusalKey(error));
     } finally {
+      setConfirmCancelDraft(false);
       setBusy(false);
     }
   }
@@ -582,10 +594,12 @@ export default function ReceivePurchasePage({ params, searchParams }: { params: 
       setFx(null);
       setErrorKey(null);
     },
-    onTogglePayNow: () => setPayNow((p) => (p ? { ...p, on: !p.on } : p)),
+    onTogglePayNow: () => setPayNow((p) => (p && activeMethodChoices(p.methods, locale, t).length > 0 ? { ...p, on: !p.on } : p)),
     onPayField: (field: PayField, value) =>
       setPayNow((p) => (p ? { ...p, [field]: value, errors: { ...p.errors, [field === 'methodId' ? 'method' : field]: false } } : p)),
     onReceive: () => void receive(),
+    onAskCancelDraft: () => setConfirmCancelDraft(true),
+    onDismissCancelDraft: () => setConfirmCancelDraft(false),
     onCancelDraft: () => void cancelDraft(),
     onNewPurchase: startAnother,
   };
@@ -626,8 +640,9 @@ export default function ReceivePurchasePage({ params, searchParams }: { params: 
           currencies={currencies}
           baseCurrency={baseCurrency}
           canCreateSupplier={context.can('suppliers.manage')}
-          canReceive={context.can('purchases.receive')}
+          canReceive={canReceive}
           savedDraft={revision > 0}
+          confirmCancelDraft={confirmCancelDraft}
           review={review}
           payNow={payNow}
           result={result}

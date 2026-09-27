@@ -42,6 +42,8 @@ export interface ReceiveLineForm {
   item: ItemOption | null;
   itemSearch: string;
   itemResults: ItemOption[];
+  /** True once a search for the typed text answered with nothing (m-21). */
+  itemNoMatch?: boolean;
   variantId: string | null;
   quantity: string;
   unitPrice: string;
@@ -69,6 +71,8 @@ export interface ReceiveForm {
   supplier: SupplierOption | null;
   supplierSearch: string;
   supplierResults: SupplierOption[];
+  /** True once a search for the typed text answered with nothing (m-21). */
+  supplierNoMatch?: boolean;
   /** Non-null while "Add a new supplier" is open. */
   newSupplierName: string | null;
   /** The name of an existing supplier the new name matches — a hint, never a block (A-15(c)). */

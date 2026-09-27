@@ -10,7 +10,7 @@
  * down — both figures are the server's.
  */
 import { Button, List, TextField, Textarea } from '@daftar/design-system';
-import { rich, type ViewBaseProps } from '@/lib/phase3-format';
+import { isZeroQuantityText, rich, type ViewBaseProps } from '@/lib/phase3-format';
 import { RefusalNotice } from '../common/feedback';
 import { CivilDate, Inline, Money, Muted, Notice, Panel, Quantity, Stack, Text, Title } from '../common/primitives';
 import type { SupplierReturnResultDto } from '@daftar/shared-contracts';
@@ -114,16 +114,22 @@ export function ReturnToSupplierView(props: ReturnToSupplierViewProps & ViewBase
               },
             ]}
           />
-          <TextField
-            label={t('purchasing.return.quantityToReturn')}
-            inputMode="decimal"
-            value={line.quantity}
-            error={line.invalid ? t('purchasing.receive.quantityInvalid') : undefined}
-            onChange={(v) => on.onQuantity(line.purchaseLineId, v)}
-          />
-          <Button variant="ghost" fullWidth onClick={() => on.onReturnAll(line.purchaseLineId)}>
-            {t('purchasing.return.returnAll')}
-          </Button>
+          {isZeroQuantityText(line.returnableQty.trim()) ? (
+            <Muted>{t('purchasing.return.nothingLeftOnLine')}</Muted>
+          ) : (
+            <>
+              <TextField
+                label={t('purchasing.return.quantityToReturn')}
+                inputMode="decimal"
+                value={line.quantity}
+                error={line.invalid ? t('purchasing.receive.quantityInvalid') : undefined}
+                onChange={(v) => on.onQuantity(line.purchaseLineId, v)}
+              />
+              <Button variant="ghost" fullWidth onClick={() => on.onReturnAll(line.purchaseLineId)}>
+                {t('purchasing.return.returnAll')}
+              </Button>
+            </>
+          )}
         </Panel>
       ))}
       {props.nothingChosen ? <Notice tone="danger">{t('purchasing.return.nothingChosen')}</Notice> : null}

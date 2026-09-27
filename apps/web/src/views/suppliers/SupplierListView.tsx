@@ -17,6 +17,8 @@ export interface SupplierListViewProps {
   rows: SupplierRowModel[];
   search: string;
   owedOnly: boolean;
+  /** True with `purchases.manage`: an empty list offers "Receive a purchase to add a supplier" (SIM-12). */
+  canReceive?: boolean;
   hasMore: boolean;
   loadingMore: boolean;
   errorKey: string | null;
@@ -25,6 +27,7 @@ export interface SupplierListViewProps {
     onOwedOnly: (value: boolean) => void;
     onOpen: (supplierId: string) => void;
     onLoadMore: () => void;
+    onReceive?: () => void;
   };
 }
 
@@ -41,7 +44,13 @@ export function SupplierListView(props: SupplierListViewProps & ViewBaseProps) {
       {props.withBalances ? <Checkbox label={t('suppliers.list.owedOnly')} checked={props.owedOnly} onChange={on.onOwedOnly} /> : null}
       <RefusalNotice t={t} locale={locale} errorKey={props.errorKey} />
       {props.rows.length === 0 ? (
-        <EmptyState title={props.search.length > 0 ? t('common.noResults') : t('suppliers.list.empty')} />
+        props.search.length > 0 || props.owedOnly ? (
+          <EmptyState title={t('common.noResults')} />
+        ) : props.canReceive === true && on.onReceive ? (
+          <EmptyState title={t('suppliers.list.empty')} actionLabel={t('suppliers.list.receiveToAdd')} onAction={on.onReceive} />
+        ) : (
+          <EmptyState title={t('suppliers.list.empty')} />
+        )
       ) : (
         <List
           items={props.rows.map((row) => ({

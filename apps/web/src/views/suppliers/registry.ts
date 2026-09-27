@@ -87,7 +87,7 @@ const listProps = (over: Partial<SupplierListViewProps>): SupplierListViewProps 
   hasMore: true,
   loadingMore: false,
   errorKey: null,
-  on: { onSearch: noop, onOwedOnly: noop, onOpen: noop, onLoadMore: noop },
+  on: { onSearch: noop, onOwedOnly: noop, onOpen: noop, onLoadMore: noop, onReceive: noop },
   ...over,
 });
 
@@ -294,6 +294,7 @@ export const VIEW_REGISTRY: readonly ViewEntry[] = [
     }),
     'search finds nothing': listProps({ rows: [], search: 'zz', hasMore: false, owedOnly: true }),
     'no suppliers yet, load refused': listProps({ rows: [], hasMore: false, errorKey: 'error.inventory.business_wide_scope_required' }),
+    'no suppliers yet, may receive': listProps({ rows: [], hasMore: false, canReceive: true }),
   }),
   defineView('SupplierDetailView', SupplierDetailView, {
     'business-wide, owes and in your favour': detailProps({}),
@@ -315,6 +316,20 @@ export const VIEW_REGISTRY: readonly ViewEntry[] = [
     'proposal, other-currency purchase not paid': payProps({}),
     'before the proposal': payProps({ proposed: false, unallocatedMinor: null, rows: PROPOSED_ROWS.map((r) => ({ ...r, proposedMinor: null })) }),
     'amount larger than what is owed': payProps({ unallocatedMinor: '2500' }),
+    'every open purchase in another currency: the split is entered': payProps({
+      form: {
+        methodId: METHODS[0]?.paymentMethodId ?? '',
+        currency: 'USD',
+        currencyOptions: ['JOD', 'USD'],
+        amount: '700',
+        date: '2026-09-27',
+        reference: '',
+        manual: true,
+        errors: {},
+      },
+      rows: PROPOSED_ROWS.filter((r) => r.currency !== 'USD').map((r) => ({ ...r, proposedMinor: null, amount: '' })),
+      unallocatedMinor: '70000',
+    }),
     'split changed, another currency': payProps({
       form: {
         methodId: METHODS[0]?.paymentMethodId ?? '',

@@ -263,3 +263,94 @@ describe('holdsStock may be null for a member the server does not tell (I-2)', (
     expect(r.missingKeys).toEqual([]);
   });
 });
+
+describe('M-5 — "Paid now" needs a way to pay', () => {
+  it('with no way to pay set up, the notice replaces the switch and the button only receives', () => {
+    for (const name of ['review, no way to pay set up yet', 'review without permission to receive, no method yet']) {
+      const r = render('ReceivePurchaseView', name);
+      expect(text(r)).toContain(tr('en', 'payments.noMethodYet'));
+      expect(all(r, 'button').some((b) => b.attrs['role'] === 'switch')).toBe(false);
+      expect(all(r, 'button').map(textOf)).not.toContain(tr('en', 'purchasing.receive.receiveAndPay'));
+    }
+    expect(all(render('ReceivePurchaseView', 'review, no way to pay set up yet'), 'button').map(textOf)).toContain(tr('en', 'purchasing.receive.receive'));
+  });
+
+  it('with a way to pay, the switch is there and "Receive and pay" follows it', () => {
+    const r = render('ReceivePurchaseView', 'review, paid now in the purchase currency');
+    expect(all(r, 'button').some((b) => b.attrs['role'] === 'switch')).toBe(true);
+    expect(all(r, 'button').map(textOf)).toContain(tr('en', 'purchasing.receive.receiveAndPay'));
+  });
+});
+
+describe('m-7 — cancelling a purchase asks first', () => {
+  it('opens "Cancel this purchase?" with what it means', () => {
+    const closed = render('ReceivePurchaseView', 'foreign currency, discount, extra costs split manually, field errors');
+    expect(text(closed)).not.toContain(tr('en', 'purchasing.receive.cancelDraftTitle'));
+    for (const locale of LOCALES) {
+      const open = render('ReceivePurchaseView', 'cancelling the purchase asks first', locale);
+      const dialog = [...elements(open.frame)].find((e) => e.attrs['role'] === 'dialog');
+      expect(dialog).toBeDefined();
+      const said = textOf(dialog ?? open.frame);
+      expect(said).toContain(tr(locale, 'purchasing.receive.cancelDraftTitle'));
+      expect(said).toContain(tr(locale, 'purchasing.receive.cancelDraftMessage'));
+      expect(said).toContain(tr(locale, 'purchasing.receive.keepDraft'));
+    }
+  });
+});
+
+describe('m-21 — a search that finds nothing says so', () => {
+  it('for suppliers, and for items with why an item may be missing', () => {
+    const r = render('ReceivePurchaseView', 'searches that found nothing');
+    expect(text(r).split(tr('en', 'common.noResults')).length).toBe(3);
+    expect(text(r)).toContain(tr('en', 'purchasing.receive.trackedOnly'));
+    expect(text(render('ReceivePurchaseView', 'new form, supplier and item search'))).not.toContain(tr('en', 'common.noResults'));
+  });
+});
+
+describe('m-19 — a line with nothing left to return offers no quantity', () => {
+  it('says "Nothing left to return" instead of the field and "Return all"', () => {
+    const r = render('ReturnToSupplierView', 'one line has nothing left to return');
+    expect(text(r)).toContain(tr('en', 'purchasing.return.nothingLeftOnLine'));
+    expect(all(r, 'label').filter((l) => textOf(l) === tr('en', 'purchasing.return.quantityToReturn'))).toHaveLength(1);
+    expect(all(r, 'button').filter((b) => textOf(b) === tr('en', 'purchasing.return.returnAll'))).toHaveLength(1);
+  });
+});
+
+describe('m-16 — an empty supplier list leads to Receive Purchase', () => {
+  it('offers "Receive a purchase to add a supplier" to a member who may receive', () => {
+    expect(all(render('SupplierListView', 'no suppliers yet, may receive'), 'button').map(textOf)).toContain(tr('en', 'suppliers.list.receiveToAdd'));
+    expect(all(render('SupplierListView', 'no suppliers yet, load refused'), 'button').map(textOf)).not.toContain(tr('en', 'suppliers.list.receiveToAdd'));
+  });
+});
+
+describe('m-10 — a payment in another currency than every open purchase', () => {
+  it('opens the manual split and says what to enter, and Pay is not blocked', () => {
+    const r = render('PaySupplierView', 'every open purchase in another currency: the split is entered');
+    expect(text(r)).toContain(tr('en', 'payments.otherCurrencyHint'));
+    expect(all(r, 'label').map(textOf)).toContain(tr('en', 'payments.amountSettles', { currency: 'JOD' }));
+    const pay = all(r, 'button').find((b) => textOf(b) === tr('en', 'payments.submit'));
+    expect(pay?.attrs['disabled']).toBeUndefined();
+    expect(text(r)).not.toContain('more than you still owe');
+  });
+
+  it('says nothing extra when a purchase shares the payment currency', () => {
+    expect(text(render('PaySupplierView', 'proposal, other-currency purchase not paid'))).not.toContain(tr('en', 'payments.otherCurrencyHint'));
+  });
+});
+
+describe('L-4, m-1 — the exchange-rate entry on Receive and Pay (page source)', () => {
+  const page = (path: string): string => readFileSync(join(__dirname, '../src/app/[locale]', path), 'utf8');
+  const pages = { receive: page('purchases/receive/page.tsx'), pay: page('suppliers/[supplierId]/pay/page.tsx') };
+
+  it.each(Object.entries(pages))('%s mints a new rate key after a successful rate entry, before retrying the command', (_name, source) => {
+    const afterEntry = source.slice(source.indexOf('await enterExchangeRate('));
+    const retry = afterEntry.search(/await (receive|submit)\(\);/);
+    const remint = afterEntry.search(/fxKey(: newId\(\)| = crypto\.randomUUID\(\))/);
+    expect(remint).toBeGreaterThan(0);
+    expect(remint).toBeLessThan(retry);
+  });
+
+  it.each(Object.entries(pages))('%s lets the missing-rate prompt speak alone', (_name, source) => {
+    expect(source).toMatch(/setErrorKey\(isMissingExchangeRate\(error\) \? null : refusalKey\(error\)\)/);
+  });
+});

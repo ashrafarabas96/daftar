@@ -135,6 +135,8 @@ function PaymentForm(props: PaySupplierViewProps & ViewBaseProps) {
   const method = methods.find((m) => m.paymentMethodId === form.methodId);
   // An amount no open purchase can take blocks the payment (no advances); a split the merchant typed is judged by the server.
   const blocked = props.proposed && !form.manual && isNonZeroMinor(props.unallocatedMinor);
+  // No open purchase is in the payment's currency: the automatic split cannot place it, so the merchant enters it (m-10).
+  const otherCurrency = props.rows.length > 0 && props.rows.every((r) => r.currency !== form.currency);
   return (
     <Stack>
       <Select
@@ -181,6 +183,7 @@ function PaymentForm(props: PaySupplierViewProps & ViewBaseProps) {
       <Heading>{t('payments.settles')}</Heading>
       {props.rows.length === 0 ? <Muted>{t('suppliers.detail.noOpenPurchases')}</Muted> : null}
       {props.proposed && props.rows.length > 0 ? <Checkbox label={t('payments.changeSplit')} checked={form.manual} onChange={on.onToggleManual} /> : null}
+      {props.proposed && otherCurrency ? <Notice tone="info">{t('payments.otherCurrencyHint')}</Notice> : null}
       {form.errors.rows ? <Notice tone="danger">{t('payments.rowsInvalid')}</Notice> : null}
       {props.rows.map((row) => (
         <PayRow key={row.purchaseId} {...props} row={row} />
