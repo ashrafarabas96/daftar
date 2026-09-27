@@ -206,6 +206,68 @@ export async function runtimePrincipals(q: Queryable = ownerPool()): Promise<str
   return r.rows.map((x) => x.r);
 }
 
+/**
+ * A routine body as code: `--` and `/* *\/` comments removed and every
+ * single-quoted literal replaced by the placeholder `'#<n>'`, its text kept in
+ * `literals[n]` (with `''` unescaped). The laws that read a body (A-04, A-05,
+ * A-08 clause 6) read THIS, so text inside a comment or an error message can
+ * neither satisfy nor break them.
+ */
+export interface LexedBody {
+  readonly code: string;
+  readonly literals: readonly string[];
+}
+
+export function lexBody(src: string): LexedBody {
+  let code = '';
+  const literals: string[] = [];
+  let i = 0;
+  while (i < src.length) {
+    const ch = src[i];
+    const next = src[i + 1];
+    if (ch === '-' && next === '-') {
+      while (i < src.length && src[i] !== '\n') i += 1;
+    } else if (ch === '/' && next === '*') {
+      const end = src.indexOf('*/', i + 2);
+      i = end === -1 ? src.length : end + 2;
+    } else if (ch === "'") {
+      let j = i + 1;
+      let text = '';
+      while (j < src.length) {
+        if (src[j] === "'" && src[j + 1] === "'") {
+          text += "'";
+          j += 2;
+        } else if (src[j] === "'") {
+          break;
+        } else {
+          text += src[j];
+          j += 1;
+        }
+      }
+      literals.push(text);
+      code += `'#${literals.length - 1}'`;
+      i = j + 1;
+    } else {
+      code += ch;
+      i += 1;
+    }
+  }
+  return { code, literals };
+}
+
+/** The text from the `(` at `open` to its matching `)`, inclusive (or to the end). */
+export function balanced(code: string, open: number): string {
+  let depth = 0;
+  for (let i = open; i < code.length; i += 1) {
+    if (code[i] === '(') depth += 1;
+    else if (code[i] === ')') {
+      depth -= 1;
+      if (depth === 0) return code.slice(open, i + 1);
+    }
+  }
+  return code.slice(open);
+}
+
 /** The registered operation kinds, in code order. */
 export async function registeredOpKinds(q: Queryable = ownerPool()): Promise<string[]> {
   const r = await q.query<{ op: string }>(`SELECT op_code::text AS op FROM inventory_operation_kinds ORDER BY op_code`);
