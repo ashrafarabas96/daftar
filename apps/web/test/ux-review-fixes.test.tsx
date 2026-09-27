@@ -7,6 +7,7 @@ import ar from '@/messages/ar.json';
 import en from '@/messages/en.json';
 import trCatalog from '@/messages/tr.json';
 import type { ViewEntry, ViewFixture } from '@/lib/phase3-format';
+import { VIEW_REGISTRY as CATALOG } from '@/views/catalog/registry';
 import { VIEW_REGISTRY as COMMON } from '@/views/common/registry';
 import { VIEW_REGISTRY as PURCHASES } from '@/views/purchases/registry';
 import { VIEW_REGISTRY as STOCK } from '@/views/stock/registry';
@@ -19,7 +20,7 @@ import { elements, LOCALES, renderFixture, styleOf, textOf, type ElementNode, ty
  * already render: one describe per finding id.
  */
 const catalogs: Readonly<Record<Locale, Readonly<Record<string, string>>>> = { ar, en, tr: trCatalog };
-const AREAS: readonly ViewEntry[] = [...PURCHASES, ...SUPPLIERS, ...STOCK, ...COMMON];
+const AREAS: readonly ViewEntry[] = [...PURCHASES, ...SUPPLIERS, ...STOCK, ...COMMON, ...CATALOG];
 
 function fixture(view: string, name: string): ViewFixture {
   const found = AREAS.find((e) => e.name === view)?.fixtures.find((f) => f.name === name);
@@ -191,5 +192,74 @@ describe('m-9 — the S7 pages work for a role without business.view', () => {
     const source = readFileSync(join(pagesDir, 'purchases/_shared/merchant-context.ts'), 'utf8');
     expect(source).toMatch(/getMyBusinesses\(\)/);
     expect(source).toMatch(/currentBusinessId\(\)/);
+  });
+});
+
+/** The error text under the field whose label is `label`, or null. */
+function fieldError(r: Rendered, label: string): string | null {
+  const labelEl = all(r, 'label').find((l) => textOf(l) === label);
+  const field = labelEl?.parent;
+  if (!field) throw new Error(`no field labelled ${label}`);
+  const alert = [...elements(field)].find((e) => e.attrs['role'] === 'alert');
+  return alert ? textOf(alert) : null;
+}
+
+describe('m-4 — a cost error sits under the cost field', () => {
+  it('on Count Stock', () => {
+    const r = render('CountSheetView', 'a cost that is not an amount');
+    expect(fieldError(r, tr('en', 'stock.line.costPerUnit', { currency: 'SAR' }))).toBe(tr('en', 'stock.line.costInvalid'));
+    for (const counted of all(r, 'label').filter((l) => textOf(l) === tr('en', 'stock.count.counted'))) {
+      const alert = [...elements(counted.parent ?? counted)].find((e) => e.attrs['role'] === 'alert');
+      expect(alert).toBeUndefined();
+    }
+  });
+
+  it('on Adjust Stock', () => {
+    const r = render('AdjustStockView', 'a cost that is not an amount');
+    expect(fieldError(r, tr('en', 'stock.line.costPerUnit', { currency: 'SAR' }))).toBe(tr('en', 'stock.line.costInvalid'));
+    expect(text(r).split(tr('en', 'stock.line.costInvalid')).length).toBe(2);
+  });
+});
+
+describe('m-6, N-4 — finishing a count asks first; only the running act shows progress', () => {
+  it('"Finish the count" opens a confirmation that says it cannot be undone', () => {
+    const closed = render('CountSheetView', 'blind count in progress');
+    expect(text(closed)).not.toContain(tr('en', 'stock.count.finishTitle'));
+    const open = render('CountSheetView', 'finishing asks first');
+    expect(text(open)).toContain(tr('en', 'stock.count.finishTitle'));
+    const dialog = [...elements(open.frame)].find((e) => e.attrs['role'] === 'dialog' && textOf(e).includes(tr('en', 'stock.count.finishTitle')));
+    expect(dialog).toBeDefined();
+    expect(textOf(dialog ?? open.frame)).toContain(tr('en', 'stock.count.finishHint'));
+  });
+
+  it('while saving, Finish does not spin', () => {
+    const r = render('CountSheetView', 'saving: only Save shows progress');
+    // A busy design-system button shows "…" in place of its label: exactly one does, and Finish keeps its words.
+    expect(all(r, 'button').filter((b) => b.attrs['aria-busy'] === 'true')).toHaveLength(1);
+    expect(all(r, 'button').map(textOf)).not.toContain(tr('en', 'stock.count.save'));
+    const finish = all(r, 'button').find((b) => textOf(b) === tr('en', 'stock.count.finish'));
+    expect(finish).toBeDefined();
+    expect(finish?.attrs['aria-busy']).toBeUndefined();
+  });
+});
+
+describe('N-3 — the Adjust note is always labelled optional', () => {
+  it.each(['found extra: the server asked a cost on one line', 'damaged', 'starting stock asks a cost on every line'])('%s', (name) => {
+    expect(all(render('AdjustStockView', name), 'label').map(textOf)).toContain(tr('en', 'stock.adjust.noteOptional'));
+  });
+});
+
+describe('m-16 — an empty warehouse leads to the catalog', () => {
+  it('offers "Turn on stock tracking for a product"', () => {
+    const r = render('StockLevelsView', 'empty warehouse, more pages, a refusal');
+    expect(all(r, 'button').map(textOf)).toContain(tr('en', 'stock.levels.trackProduct'));
+  });
+});
+
+describe('holdsStock may be null for a member the server does not tell (I-2)', () => {
+  it('null is unknown: no "has stock" warning, and nothing breaks', () => {
+    const r = render('TrackingCard', 'whether it holds stock is not told to this member');
+    expect(text(r)).not.toContain(tr('en', 'stock.tracking.holdsStock'));
+    expect(r.missingKeys).toEqual([]);
   });
 });

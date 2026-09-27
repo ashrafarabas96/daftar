@@ -32,6 +32,8 @@ export interface StockLevelsViewProps {
   onStatus: (status: StockStatusFilter) => void;
   onLoadMore: () => void;
   onAction: (action: StockAction) => void;
+  /** Opens the catalog, where stock tracking is turned on for a product (SIM-12: an empty state leads somewhere). */
+  onTrackProduct: () => void;
 }
 
 const STATUS_VALUES: readonly StockStatusFilter[] = ['', 'in_stock', 'out_of_stock', 'negative'];
@@ -83,7 +85,11 @@ export function StockLevelsView(props: StockLevelsViewProps & ViewBaseProps) {
       ) : props.rows === null ? (
         <Spinner label={t('common.loading')} />
       ) : props.rows.length === 0 ? (
-        <EmptyState title={props.search.length > 0 || props.status !== '' ? t('common.noResults') : t('stock.levels.empty')} />
+        props.search.length > 0 || props.status !== '' ? (
+          <EmptyState title={t('common.noResults')} />
+        ) : (
+          <EmptyState title={t('stock.levels.empty')} actionLabel={t('stock.levels.trackProduct')} onAction={props.onTrackProduct} />
+        )
       ) : (
         <List
           items={props.rows.map((r) => ({

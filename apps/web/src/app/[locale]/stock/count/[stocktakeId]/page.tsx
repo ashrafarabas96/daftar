@@ -5,9 +5,9 @@ import type { InventoryStocktakeCountRequestDto } from '@daftar/shared-contracts
 import { makeT, type Locale } from '@/lib/i18n';
 import { isUuid } from '@/lib/route-ids';
 import { cancelStocktake, finalizeStocktake, getStocktake, putStocktakeCounts, type InventoryStocktakeDetailDto } from '@/lib/phase3-api';
-import { isPermissionRefusal, refusalCode, refusalKey, withConflictRetry } from '@/lib/phase3-errors';
+import { SAVED_REFRESH_KEY, isPermissionRefusal, refusalCode, refusalKey, withConflictRetry } from '@/lib/phase3-errors';
 import { amountInputToMinor, isQuantityText, localDateIso } from '@/lib/phase3-format';
-import { CountSheetView } from '@/views/stock/CountSheetView';
+import { CountSheetView, type CountAction } from '@/views/stock/CountSheetView';
 import { draftLineOf, identityKey, lineQuantityErrors, quantityText, type DraftLine, type PickOption } from '@/views/stock/model';
 import { ScreenState } from '@/views/stock/parts';
 import { PageShell } from '../../../AppHeader';
@@ -42,10 +42,13 @@ export default function CountSheetPage({ params }: { params: Promise<{ locale: L
   const [costs, setCosts] = useState<Record<string, string>>({});
   const [occurredOn, setOccurredOn] = useState(() => localDateIso());
   const [lineErrors, setLineErrors] = useState<Record<string, string>>({});
+  const [costErrors, setCostErrors] = useState<Record<string, string>>({});
   const [errorKey, setErrorKey] = useState<string | null>(null);
   const [noticeKey, setNoticeKey] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const [running, setRunning] = useState<CountAction | null>(null);
   const [confirmCancel, setConfirmCancel] = useState(false);
+  const [confirmFinish, setConfirmFinish] = useState(false);
+  const busy = running !== null;
   const editable = stocktake?.status === 'draft' && screen.can('inventory.stocktake');
   const picker = usePickOptions('items', '', search, screen.phase === 'ready' && editable);
 
@@ -95,58 +98,81 @@ export default function CountSheetPage({ params }: { params: Promise<{ locale: L
    * Run one act on the count. On success the typed values are dropped and the
    * count is read again, so the sheet shows what the server holds; on a
    * refusal the typed values stay, and a retry sends them again (the counts
-   * command is an idempotent upsert; finish and cancel replay on the id).
+   * command is an idempotent upsert; finish and cancel replay on the id). A
+   * failed re-read after a success says "Saved. Refresh the page", never the
+   * refusal text (m-3).
    */
-  async function run(action: (detail: InventoryStocktakeDetailDto) => Promise<string | 'invalid'>) {
+  async function run(kind: CountAction, action: (detail: InventoryStocktakeDetailDto) => Promise<string | 'invalid'>) {
     if (stocktake === null) return;
-    setBusy(true);
+    setRunning(kind);
     setErrorKey(null);
     setNoticeKey(null);
+    let outcome: string;
     try {
-      const outcome = await action(stocktake);
-      if (outcome === 'invalid') return;
-      setCounts({});
-      setNewLines([]);
-      setLineErrors({});
+      outcome = await action(stocktake);
+    } catch (error) {
+      setErrorKey(refusalKey(error));
+      setRunning(null);
+      return;
+    }
+    if (outcome === 'invalid') {
+      setRunning(null);
+      return;
+    }
+    setCounts({});
+    setNewLines([]);
+    setLineErrors({});
+    try {
       await reread();
       setNoticeKey(outcome);
-    } catch (error) {
-      if (refusalCode(error) === 'inventory.unit_cost_required') {
-        const named = refusedLines(error);
-        if (named !== null) setCostLines(named.map((l) => identityKey(l.productId, l.variantId)));
-      }
-      setErrorKey(refusalKey(error));
+    } catch {
+      setErrorKey(SAVED_REFRESH_KEY);
     } finally {
-      setBusy(false);
+      setRunning(null);
     }
   }
 
-  const save = () => run(async (detail) => ((await savePending(detail)) ? 'stock.count.saved' : 'invalid'));
+  const save = () => run('save', async (detail) => ((await savePending(detail)) ? 'stock.count.saved' : 'invalid'));
 
   const finish = () =>
-    run(async (detail) => {
+    run('finish', async (detail) => {
+      setConfirmFinish(false);
       const unitCosts: { productId: string; variantId: string | null; unitCost: string }[] = [];
-      const costErrors: Record<string, string> = {};
+      const invalidCosts: Record<string, string> = {};
       for (const key of costLines) {
         const line = detail.lines.find((l) => identityKey(l.productId, l.variantId) === key);
         if (line === undefined) continue;
         const minor = screen.currency === null ? null : amountInputToMinor(costs[key] ?? '', screen.currency);
-        if (minor === null) costErrors[key] = 'stock.line.costInvalid';
+        if (minor === null) invalidCosts[key] = 'stock.line.costInvalid';
         else unitCosts.push({ productId: line.productId, variantId: line.variantId, unitCost: minor });
       }
-      if (Object.keys(costErrors).length > 0) {
-        setLineErrors(costErrors);
-        return 'invalid';
-      }
+      // A cost error sits under the cost field, not the count (m-4).
+      setCostErrors(invalidCosts);
+      if (Object.keys(invalidCosts).length > 0) return 'invalid';
       if (!(await savePending(detail))) return 'invalid';
-      await withConflictRetry(() => finalizeStocktake(stocktakeId, { occurredOn, unitCosts: unitCosts.length > 0 ? unitCosts : null }));
+      // The counts are saved: show the sheet as the server holds it before finishing,
+      // so a cost refusal can mark any of its lines — the new ones included (m-5).
+      setCounts({});
+      setNewLines([]);
+      const saved = await getStocktake(stocktakeId);
+      setStocktake(saved);
+      try {
+        await withConflictRetry(() => finalizeStocktake(stocktakeId, { occurredOn, unitCosts: unitCosts.length > 0 ? unitCosts : null }));
+      } catch (error) {
+        if (refusalCode(error) === 'inventory.unit_cost_required') {
+          // The server names the lines that need a cost when it can; otherwise every counted line may (m-5).
+          const named = refusedLines(error);
+          setCostLines((named !== null && named.length > 0 ? named : saved.lines).map((l) => identityKey(l.productId, l.variantId)));
+        }
+        throw error;
+      }
       setCostLines([]);
       setCosts({});
       return 'stock.count.finished';
     });
 
   const cancel = () =>
-    run(async () => {
+    run('cancel', async () => {
       await cancelStocktake(stocktakeId);
       setConfirmCancel(false);
       return 'stock.count.cancelled';
@@ -185,10 +211,13 @@ export default function CountSheetPage({ params }: { params: Promise<{ locale: L
           currency={screen.currency}
           unitNames={screen.unitNames}
           lineErrors={lineErrors}
+          costErrors={costErrors}
           errorKey={errorKey ?? picker.errorKey}
           noticeKey={noticeKey}
           busy={busy}
+          running={running}
           confirmCancel={confirmCancel}
+          confirmFinish={confirmFinish}
           onCount={(key, value) => setCounts((current) => ({ ...current, [key]: value }))}
           onSearch={setSearch}
           onPick={pick}
@@ -197,7 +226,9 @@ export default function CountSheetPage({ params }: { params: Promise<{ locale: L
           onCost={(key, value) => setCosts((current) => ({ ...current, [key]: value }))}
           onDate={setOccurredOn}
           onSave={() => void save()}
+          onAskFinish={() => setConfirmFinish(true)}
           onFinish={() => void finish()}
+          onDismissFinish={() => setConfirmFinish(false)}
           onAskCancel={() => setConfirmCancel(true)}
           onConfirmCancel={() => void cancel()}
           onDismissCancel={() => setConfirmCancel(false)}

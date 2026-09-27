@@ -21,7 +21,7 @@ export interface PickOption {
   readonly variantName: string | null;
   readonly unitCode: string | null;
   readonly unitDecimals: number;
-  /** The on-hand quantity in the chosen warehouse, or null where the screen must not show it (a blind count, TL-8). */
+  /** The on-hand quantity in the chosen warehouse, or null where the screen must not show it (a blind count, TL-8) — null is never zero. */
   readonly onHand: string | null;
 }
 

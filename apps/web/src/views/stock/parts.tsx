@@ -193,6 +193,8 @@ export function LineCard(
     showCost: boolean;
     currency: string | null;
     errorKey?: string | null;
+    /** A catalog key for the cost field, shown under it — not under the quantity (m-4). */
+    costErrorKey?: string | null;
     disabled?: boolean;
     onQuantity: (value: string) => void;
     onCost: (value: string) => void;
@@ -237,6 +239,7 @@ export function LineCard(
             inputMode="decimal"
             value={line.unitCost}
             disabled={props.disabled}
+            error={props.costErrorKey ? t(props.costErrorKey) : undefined}
             onChange={props.onCost}
           />
         ) : null}

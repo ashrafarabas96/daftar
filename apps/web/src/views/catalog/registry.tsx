@@ -66,6 +66,7 @@ export const VIEW_REGISTRY: readonly ViewEntry[] = [
       errorKey: 'error.inventory.unit_identity_locked',
     }),
     saved: card({ item: TRACKED, track: true, unitCode: 'piece', decimals: '0', noticeKey: 'stock.tracking.saved' }),
+    'whether it holds stock is not told to this member': card({ item: { ...TRACKED, holdsStock: null }, track: true, unitCode: 'piece', decimals: '0' }),
     loading: card({ item: null }),
     'failed to load': card({ item: null, errorKey: 'error.fallback' }),
   }),

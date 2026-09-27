@@ -43,6 +43,7 @@ export default function AdjustStockPage({ params }: { params: Promise<{ locale: 
   const [search, setSearch] = useState('');
   const [lines, setLines] = useState<DraftLine[]>([]);
   const [lineErrors, setLineErrors] = useState<Record<string, string>>({});
+  const [costErrors, setCostErrors] = useState<Record<string, string>>({});
   const [errorKey, setErrorKey] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<InventoryMovementDocumentDto | null>(null);
@@ -90,9 +91,9 @@ export default function AdjustStockPage({ params }: { params: Promise<{ locale: 
     const invalid = lineQuantityErrors(lines, false);
     const costed = lines.filter((l) => reason === 'starting' || (reason === 'found' && l.needsCost));
     const cost = costs(costed);
-    const allInvalid = { ...cost.invalid, ...invalid };
-    setLineErrors(allInvalid);
-    if (Object.keys(allInvalid).length > 0) return;
+    setLineErrors(invalid);
+    setCostErrors(cost.invalid);
+    if (Object.keys(invalid).length > 0 || Object.keys(cost.invalid).length > 0) return;
     const reasonText = note.trim().length > 0 ? note.trim() : t(REASON_TEXT[reason]);
     const identity = (l: DraftLine) => ({ productId: l.productId, variantId: l.variantId });
     setBusy(true);
@@ -149,6 +150,7 @@ export default function AdjustStockPage({ params }: { params: Promise<{ locale: 
     renewDocumentId();
     setLines([]);
     setLineErrors({});
+    setCostErrors({});
     setNote('');
     setSearch('');
     setErrorKey(null);
@@ -174,6 +176,7 @@ export default function AdjustStockPage({ params }: { params: Promise<{ locale: 
           options={picker.options}
           lines={lines}
           lineErrors={lineErrors}
+          costErrors={costErrors}
           unitNames={screen.unitNames}
           errorKey={errorKey ?? picker.errorKey}
           busy={busy}

@@ -7,7 +7,8 @@
  * is on the shelf, not towards a number. After finishing, each line says how
  * the count compared: "{n} more than expected" / "{n} fewer than expected".
  * "Cost per unit" appears only on the lines the server asked about
- * (`inventory.unit_cost_required`).
+ * (`inventory.unit_cost_required`), with its own error under it (m-4).
+ * Finishing cannot be undone, so it asks first, as cancelling does (m-6).
  */
 import { Badge, Button, Card, ConfirmationDialog, List, TextField, spacing } from '@daftar/design-system';
 import type { InventoryStocktakeDetailDto, InventoryStocktakeDetailLineDto } from '@/lib/phase3-api';
@@ -36,10 +37,16 @@ export interface CountSheetViewProps {
   unitNames: Readonly<Record<string, string>>;
   /** A catalog key per line (identity or new-line key) whose typed quantity is not valid. */
   lineErrors: Readonly<Record<string, string>>;
+  /** A catalog key per line identity whose typed cost is not valid — shown under the cost field (m-4). */
+  costErrors: Readonly<Record<string, string>>;
   errorKey: string | null;
   noticeKey: string | null;
   busy: boolean;
+  /** The act that is running, so only its button shows progress (N-4). */
+  running: CountAction | null;
   confirmCancel: boolean;
+  /** "Finish the count?" is open (m-6). */
+  confirmFinish: boolean;
   onCount: (key: string, value: string) => void;
   onSearch: (text: string) => void;
   onPick: (option: PickOption) => void;
@@ -48,12 +55,17 @@ export interface CountSheetViewProps {
   onCost: (key: string, value: string) => void;
   onDate: (value: string) => void;
   onSave: () => void;
+  onAskFinish: () => void;
   onFinish: () => void;
+  onDismissFinish: () => void;
   onAskCancel: () => void;
   onConfirmCancel: () => void;
   onDismissCancel: () => void;
   onBack: () => void;
 }
+
+/** The acts on an open count. */
+export type CountAction = 'save' | 'finish' | 'cancel';
 
 /** How a finished line compared with what was expected, from the server's variance. */
 function Comparison(props: ViewBaseProps & { line: InventoryStocktakeDetailLineDto }) {
@@ -128,6 +140,7 @@ export function CountSheetView(props: CountSheetViewProps & ViewBaseProps) {
                         inputMode="decimal"
                         value={props.costs[key] ?? ''}
                         disabled={props.busy}
+                        error={props.costErrors[key] ? t(props.costErrors[key]) : undefined}
                         onChange={(v) => props.onCost(key, v)}
                       />
                     ) : null}
@@ -172,10 +185,10 @@ export function CountSheetView(props: CountSheetViewProps & ViewBaseProps) {
           />
           <TextField label={t('stock.count.date')} type="date" value={props.occurredOn} disabled={props.busy} onChange={props.onDate} />
           {props.errorKey !== null ? <Notice tone="error">{t(props.errorKey)}</Notice> : null}
-          <Button variant="secondary" fullWidth loading={props.busy} onClick={props.onSave}>
+          <Button variant="secondary" fullWidth loading={props.running === 'save'} disabled={props.busy} onClick={props.onSave}>
             {t('stock.count.save')}
           </Button>
-          <Button fullWidth loading={props.busy} onClick={props.onFinish}>
+          <Button fullWidth loading={props.running === 'finish'} disabled={props.busy} onClick={props.onAskFinish}>
             {t('stock.count.finish')}
           </Button>
           <Hint>{t('stock.count.finishHint')}</Hint>
@@ -203,9 +216,19 @@ export function CountSheetView(props: CountSheetViewProps & ViewBaseProps) {
         confirmLabel={t('stock.count.cancelConfirm')}
         cancelLabel={t('stock.count.cancelKeep')}
         danger
-        loading={props.busy}
+        loading={props.running === 'cancel'}
         onConfirm={props.onConfirmCancel}
         onCancel={props.onDismissCancel}
+      />
+      <ConfirmationDialog
+        open={props.confirmFinish}
+        title={t('stock.count.finishTitle')}
+        message={t('stock.count.finishHint')}
+        confirmLabel={t('stock.count.finish')}
+        cancelLabel={t('stock.count.cancelKeep')}
+        loading={props.running === 'finish'}
+        onConfirm={props.onFinish}
+        onCancel={props.onDismissFinish}
       />
     </div>
   );

@@ -64,7 +64,8 @@ export function TrackingCard(props: TrackingCardProps & ViewBaseProps) {
             />
           </>
         ) : null}
-        {item.holdsStock ? <Hint>{t('stock.tracking.holdsStock')}</Hint> : null}
+        {/* Only a known "true" warns ahead of time; unknown (null) says nothing and the server still decides. */}
+        {item.holdsStock === true ? <Hint>{t('stock.tracking.holdsStock')}</Hint> : null}
         {props.errorKey !== null ? <Notice tone="error">{t(props.errorKey)}</Notice> : null}
         {props.noticeKey !== null ? <Notice tone="success">{t(props.noticeKey)}</Notice> : null}
         <Button fullWidth loading={props.busy} disabled={props.track && props.unitCode === ''} onClick={props.onSave}>

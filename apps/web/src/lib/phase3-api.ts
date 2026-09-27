@@ -136,7 +136,12 @@ export interface InventoryItemDto {
   trackInventory: boolean;
   unitCode: string | null;
   unitDecimals: number | null;
-  holdsStock: boolean;
+  /**
+   * Whether the item holds stock anywhere, or null when the server does not
+   * tell this caller (a member without `inventory.adjust`/`inventory.view`,
+   * security review I-2). Null means UNKNOWN — never "no stock".
+   */
+  holdsStock: boolean | null;
   variants: InventoryItemVariantDto[];
 }
 

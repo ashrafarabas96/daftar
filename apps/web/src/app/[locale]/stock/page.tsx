@@ -100,6 +100,7 @@ export default function StockPage({ params }: { params: Promise<{ locale: Locale
           onStatus={setStatus}
           onLoadMore={() => void loadMore()}
           onAction={go}
+          onTrackProduct={() => router.push(`/${locale}/catalog`)}
         />
       )}
     </PageShell>

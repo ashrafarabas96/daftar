@@ -31,6 +31,8 @@ export interface AdjustStockViewProps {
   options: readonly PickOption[] | null;
   lines: readonly DraftLine[];
   lineErrors: Readonly<Record<string, string>>;
+  /** A catalog key per line key whose typed cost is not an amount, shown under the cost field (m-4). */
+  costErrors: Readonly<Record<string, string>>;
   unitNames: Readonly<Record<string, string>>;
   errorKey: string | null;
   busy: boolean;
@@ -117,13 +119,7 @@ export function AdjustStockView(props: AdjustStockViewProps & ViewBaseProps) {
         />
         <TextField label={t('common.date')} type="date" value={props.occurredOn} disabled={props.busy} onChange={props.onDate} />
       </div>
-      <Textarea
-        label={props.reason === 'starting' ? t('stock.adjust.noteOptional') : t('stock.adjust.note')}
-        hint={t('stock.adjust.noteHint')}
-        value={props.note}
-        disabled={props.busy}
-        onChange={props.onNote}
-      />
+      <Textarea label={t('stock.adjust.noteOptional')} hint={t('stock.adjust.noteHint')} value={props.note} disabled={props.busy} onChange={props.onNote} />
       <SectionTitle>{t('stock.common.items')}</SectionTitle>
       {props.warehouseId === '' ? (
         <Hint>{t('stock.adjust.pickWarehouseFirst')}</Hint>
@@ -151,6 +147,7 @@ export function AdjustStockView(props: AdjustStockViewProps & ViewBaseProps) {
           showCost={props.reason === 'starting' || (props.reason === 'found' && line.needsCost)}
           currency={props.currency}
           errorKey={props.lineErrors[line.lineKey] ?? null}
+          costErrorKey={props.costErrors[line.lineKey] ?? null}
           disabled={props.busy}
           onQuantity={(v) => props.onQuantity(line.lineKey, v)}
           onCost={(v) => props.onCost(line.lineKey, v)}
