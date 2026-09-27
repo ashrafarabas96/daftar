@@ -109,7 +109,9 @@ describe('an assertion is bound to every claim it names (§38, §39)', () => {
     // native types and, since 0061 (P3-S3, contract A-14(e)), the two
     // inventory source types. The pairing is a table, so it is provable by
     // reading it. P3-S4 (0063/0064, contract A-05): `post` also owns the two
-    // purchase-side source types, and nothing else was added.
+    // purchase-side source types, and nothing else was added. P3-S5
+    // (0065/0066, contract A-05): `post` also owns `supplier_return`; R-B2a
+    // registers no accounting `purchase_reversal` (its fact is a `reversal`).
     const pairs = await ownerPool().query<{ operation_kind: string; source_type: string }>(
       `SELECT operation_kind, source_type FROM accounting_operation_kinds ORDER BY operation_kind, source_type`,
     );
@@ -122,6 +124,8 @@ describe('an assertion is bound to every claim it names (§38, §39)', () => {
       { operation_kind: 'post', source_type: 'opening_balance' },
       // P3-S4 (0063/0064)
       { operation_kind: 'post', source_type: 'purchase' },
+      // P3-S5 (0065/0066)
+      { operation_kind: 'post', source_type: 'supplier_return' },
       { operation_kind: 'reverse', source_type: 'reversal' },
     ]);
 

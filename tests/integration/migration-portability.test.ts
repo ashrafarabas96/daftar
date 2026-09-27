@@ -1108,7 +1108,11 @@ describe('managed PostgreSQL: 0039 → 0049 under a non-superuser migration prin
                                       'accounting_reversals_20_domain_source_guard',
                                       -- P3-S4 (0063/0064): the accounting-side completeness triggers and the FX read.
                                       'accounting_purchase_entry_complete', 'accounting_negative_inventory_cost_adjustment_entry_complete',
-                                      'accounting_purchase_fx_rate'))
+                                      'accounting_purchase_fx_rate',
+                                      -- P3-S5 (0065/0066): the accounting-side completeness trigger and the
+                                      -- purchase entry read; the two INVOKER read functions (A-16).
+                                      'accounting_supplier_return_entry_complete', 'accounting_purchase_entry_id',
+                                      'purchase_ap_outstanding', 'purchase_settlement_state'))
               ORDER BY p.proname`,
           )
         ).rows;
@@ -1222,6 +1226,38 @@ describe('managed PostgreSQL: 0039 → 0049 under a non-superuser migration prin
             internal('supplier_create'),
             internal('supplier_reactivate'),
             internal('supplier_update'),
+            // P3-S5 (0065): the stock-side source, value, quantity, credit-note
+            // and same-transaction guards are the internal principal's, all
+            // DEFINER (the primitive, replaced by its owner under R-B1a, keeps
+            // its row above)…
+            internal('purchase_reversal_detail_same_transaction'),
+            internal('purchase_reversal_value_complete'),
+            internal('stock_binding_requires_purchase_reversal'),
+            internal('stock_binding_requires_supplier_return'),
+            internal('stock_source_complete_purchase_reversal'),
+            internal('stock_source_complete_purchase_reversal_header'),
+            internal('stock_source_complete_supplier_return'),
+            internal('stock_source_complete_supplier_return_header'),
+            internal('supplier_credit_note_guard'),
+            internal('supplier_return_detail_same_transaction'),
+            internal('supplier_return_quantity_bound'),
+            internal('supplier_return_value_complete'),
+            // …the return entry's completeness trigger and the purchase entry read
+            // are the accounting principal's (A-15; the replaced reversal guard is above)…
+            ...['accounting_purchase_entry_id', 'accounting_supplier_return_entry_complete'].map((proname) => ({
+              proname,
+              owner: 'daftar_accounting_internal',
+              definer: true,
+              config: PIN,
+            })),
+            // …(0066) the two signed entry routines and their three helpers…
+            internal('purchase_bridge_return'),
+            internal('purchase_bridge_reversal'),
+            internal('purchase_lock_stock_keys'),
+            internal('purchase_return'),
+            internal('purchase_reverse'),
+            // …and the two S6 extension points, migrator-owned INVOKER (A-16).
+            ...['purchase_ap_outstanding', 'purchase_settlement_state'].map((proname) => ({ proname, owner: 'daftar_migrator', definer: false, config: PIN })),
           ].sort((a, b) => (a.proname < b.proname ? -1 : 1)),
         );
         for (const role of ['daftar_inventory_internal', 'daftar_accounting_internal']) {

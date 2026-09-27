@@ -377,7 +377,7 @@ describe('T-01.6/7/9 the grant matrix (A-18)', () => {
 });
 
 describe('the migration end state holds', () => {
-  it('the source-guard gap report is empty and the registries are exactly S1 + S3 (P3-S4: + S4)', async () => {
+  it('the source-guard gap report is empty and the registries are exactly S1 + S3 (P3-S4: + S4; P3-S5: + S5)', async () => {
     const q = ownerPool();
     expect((await q.query(`SELECT * FROM inventory_stock_source_guard_gaps()`)).rows).toEqual([]);
     const kinds = (await q.query<{ op_code: string }>(`SELECT op_code FROM inventory_operation_kinds ORDER BY op_code`)).rows.map((r) => r.op_code);
@@ -395,6 +395,9 @@ describe('the migration end state holds', () => {
         'purchase.draft',
         'purchase.cancel',
         'purchase.receive',
+        // P3-S5 (0065/0066): the two S5 operation kinds (0066, contract A-03).
+        'purchase.return',
+        'purchase.reverse',
       ].sort(),
     );
     const maps = (await q.query<{ m: string }>(`SELECT op_code || '→' || movement_kind AS m FROM inventory_operation_movement_kinds ORDER BY 1`)).rows.map(
@@ -411,6 +414,9 @@ describe('the migration end state holds', () => {
         // P3-S4 (0063/0064): the receipt's two op→kind rows (0064, contract §2.5).
         'purchase.receive→purchase',
         'purchase.receive→negative_inventory_cost_adjustment',
+        // P3-S5 (0065/0066): the two S5 op→kind rows (0066, contract §2.6).
+        'purchase.return→supplier_return',
+        'purchase.reverse→purchase_reversal',
       ].sort(),
     );
   });

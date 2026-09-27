@@ -270,6 +270,16 @@ describe('the §H grant matrix, from information_schema and pg_policy (P3-AL-54 
       stock_source_bridge_negative_inventory_cost_adjustment: 'INSERT,SELECT',
       negative_deficit_coverages: 'INSERT,SELECT',
       currencies: 'SELECT',
+      // P3-S5 (0065/0066, contract A-18): the five S5 documents and the two
+      // bridges are written by the signed routines only, insert-only: no
+      // UPDATE and no DELETE anywhere.
+      supplier_returns: 'INSERT,SELECT',
+      supplier_return_lines: 'INSERT,SELECT',
+      supplier_credit_notes: 'INSERT,SELECT',
+      purchase_reversals: 'INSERT,SELECT',
+      purchase_reversal_lines: 'INSERT,SELECT',
+      stock_source_bridge_supplier_return: 'INSERT,SELECT',
+      stock_source_bridge_purchase_reversal: 'INSERT,SELECT',
     });
   });
 
@@ -389,6 +399,10 @@ describe('the §H grant matrix, from information_schema and pg_policy (P3-AL-54 
       // P3-S4 (0064, contract §2.4): the seven signed entry routines, daftar_app only.
       { g: 'daftar_app', r: 'purchase_cancel' },
       { g: 'daftar_app', r: 'purchase_receive' },
+      // P3-S5 (0066, contract §2.5, A-18): the two signed entry routines, daftar_app only.
+      { g: 'daftar_app', r: 'purchase_return' },
+      { g: 'daftar_app', r: 'purchase_reverse' },
+      // P3-S4 (0064, contract §2.4)
       { g: 'daftar_app', r: 'purchase_save_draft' },
       { g: 'daftar_app', r: 'structure_associate_warehouse_branch' },
       { g: 'daftar_app', r: 'structure_dissociate_warehouse_branch' },

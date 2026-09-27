@@ -332,7 +332,9 @@ describe('RLS is real on the ledger', () => {
     // SELECT on inventory_adjustments, stocktakes and inventory_openings). The
     // list is asserted whole so a policy appearing on a table nobody reviewed
     // fails here. P3-S4 (0063/0064, contract A-14(d)): plus the two S4 posting
-    // headers, purchases and negative_inventory_cost_adjustments.
+    // headers, purchases and negative_inventory_cost_adjustments. P3-S5
+    // (0065/0066, contract A-15(d)): plus the two S5 posting headers,
+    // purchase_reversals and supplier_returns.
     expect(rows.map((r) => r.tablename)).toEqual([
       'accounting_fx_rates',
       'accounting_manual_adjustments',
@@ -346,8 +348,13 @@ describe('RLS is real on the ledger', () => {
       'journal_lines',
       // P3-S4 (0063/0064)
       'negative_inventory_cost_adjustments',
+      // P3-S5 (0065/0066)
+      'purchase_reversals',
+      // P3-S4 (0063/0064)
       'purchases',
       'stocktakes',
+      // P3-S5 (0065/0066)
+      'supplier_returns',
     ]);
     // The accounting tables name the one identity in the predicate; the three
     // P3-S3 headers name it as the policy's only role (0061 uses the
@@ -360,6 +367,9 @@ describe('RLS is real on the ledger', () => {
       // P3-S4 (0063/0064): the two S4 headers use the same layering.
       'negative_inventory_cost_adjustments',
       'purchases',
+      // P3-S5 (0065/0066): and so do the two S5 headers.
+      'purchase_reversals',
+      'supplier_returns',
     ];
     for (const row of rows) {
       expect(row.cmd, row.tablename).toBe('SELECT');

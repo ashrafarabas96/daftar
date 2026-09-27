@@ -60,6 +60,12 @@ describe('G-7 — the tree as it stands', () => {
     // header, value, supplier, allocation, deficit and same-transaction coverage guards; 0064: the seven
     // entry routines and their three receipt helpers), all DEFINER — no new
     // exception. The list is the guard's sorted output.
+    // P3-S5 appends seventeen (0065: the two binding guards, the return and
+    // reversal completeness and header guards, the return value and quantity
+    // guards, the reversal value guard, the credit-note guard and the two
+    // same-transaction detail guards; 0066: the two entry routines and their
+    // three helpers), all DEFINER — no new exception. 0065's owner replacement
+    // of the primitive (R-B1a) adds a definition, not a name.
     expect(transferred).toEqual(
       [
         'branch_warehouses_keep_home',
@@ -144,6 +150,24 @@ describe('G-7 — the tree as it stands', () => {
         'suppliers_revision_guard',
         // P3-S4 (0063/0064, review L2, R-36): the same-transaction coverage guard.
         'negative_deficit_coverage_same_transaction',
+        // P3-S5 (0065/0066)
+        'purchase_bridge_return',
+        'purchase_bridge_reversal',
+        'purchase_lock_stock_keys',
+        'purchase_return',
+        'purchase_reversal_detail_same_transaction',
+        'purchase_reversal_value_complete',
+        'purchase_reverse',
+        'stock_binding_requires_purchase_reversal',
+        'stock_binding_requires_supplier_return',
+        'stock_source_complete_purchase_reversal',
+        'stock_source_complete_purchase_reversal_header',
+        'stock_source_complete_supplier_return',
+        'stock_source_complete_supplier_return_header',
+        'supplier_credit_note_guard',
+        'supplier_return_detail_same_transaction',
+        'supplier_return_quantity_bound',
+        'supplier_return_value_complete',
       ].sort(),
     );
     expect([...INVENTORY_INVOKER_EXCEPTIONS].sort()).toEqual(['product_variants_10_base_variant_authority', 'products_10_inventory_config_authority']);
@@ -166,6 +190,10 @@ describe('G-7 — the tree as it stands', () => {
     // movements, levels and bindings.
     // P3-S4 (0064, R-25): the receipt's coverage writes deficits and
     // coverages, and its bridge writer the two S4 bridges; each opens with
+    // inventory_assertion_current(...).
+    // P3-S5 (0065/0066): 0065 replaces the primitive by its owner (R-B1a), a
+    // second definition of the same writer that is checked the same way; the
+    // two 0066 bridge writers write the two S5 bridges and each opens with
     // inventory_assertion_current(...).
     expect(report.writers).toEqual([
       `${F60}: inventory_apply_stock_movements`,

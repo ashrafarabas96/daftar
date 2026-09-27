@@ -496,6 +496,11 @@ describe('the §D inventory definer contract (P3-AL-54 §D)', () => {
     'purchase_cancel(uuid,uuid,integer)': ['daftar_app'],
     'purchase_receive(uuid,uuid,integer,uuid,integer,date,character,uuid,numeric,text,timestamp with time zone,bigint,bigint,uuid,uuid[],uuid[],numeric[],bigint[],numeric[],bigint[])':
       ['daftar_app'],
+    // P3-S5 (0065/0066, contract §2.5, A-18): the two signed entry routines, daftar_app only.
+    'purchase_return(uuid,uuid,uuid,date,text,uuid,bigint,bigint,bigint,bigint,bigint,bigint,bigint,uuid[],uuid[],uuid[],numeric[],bigint[],bigint[])': [
+      'daftar_app',
+    ],
+    'purchase_reverse(uuid,uuid,date,text,uuid,bigint,uuid[],uuid[],numeric[],bigint[])': ['daftar_app'],
   };
 
   const INVENTORY_TRUSTED_RELATIONS = [
