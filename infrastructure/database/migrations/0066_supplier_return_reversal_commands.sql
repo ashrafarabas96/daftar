@@ -1,6 +1,6 @@
 -- 0066_supplier_return_reversal_commands.sql
 -- P3-S5, part 2 — the COMMAND side: the two INVOKER read functions that are
--- the S6 extension points, the three internal helpers, the two signed entry
+-- the S6 extension points, the four internal helpers, the two signed entry
 -- routines `purchase_return` and `purchase_reverse`, and the two operation
 -- kinds with their two op→movement mappings, LAST
 -- (docs/PHASE_3_S5_CONTRACT.md §2.5, §2.6, §2.8, A-03, A-07-A-13, A-16,
@@ -48,6 +48,17 @@
 --   R-52 `purchase_ap_outstanding` answers 0 for a purchase that is not
 --        received OR is reversed: a reversed purchase's AP is cleared by the
 --        Phase 2 mirror of its entry, so the ledger AP of T-12 is 0 too.
+--   R-55 THE CREDIT NOTE HAS ITS OWN WRITER (§7.2 rule 22). §7.2 puts
+--        `supplier_credit_notes` in rule 22's stock write tables, and rule
+--        22 (L-1) requires a writer's first statement to be an assertion
+--        call whose arguments call nothing; `purchase_return`'s consume
+--        computes its digest in its arguments. So the insert moves to the
+--        helper `purchase_bridge_credit_note(return_id)` — the
+--        `purchase_bridge_return` shape: internal-owned DEFINER, pinned,
+--        no grantee, first statement `inventory_assertion_current` — called
+--        at the same point (after the lines, before the movements) with the
+--        same values, read back from the stored header and the locked
+--        purchase. No lock is taken or reordered.
 --
 -- Migrations 0000-0065 are untouched.
 
@@ -191,6 +202,42 @@ $$;
 
 COMMENT ON FUNCTION purchase_bridge_return(UUID) IS
   'P3-S5 §2.5, 0062 R-5. The one writer of stock_source_bridge_supplier_return. Re-verifies the transaction''s consumed purchase.return assertion; p_return_id must be a stored return of the verified business (inventory.source_type_not_authorized otherwise). Inserts one bridge row per supplier_return stock binding of the return. Internal-owned, no grant.';
+
+-- The one writer of a supplier credit note (R-55): rule 22 counts
+-- supplier_credit_notes as a stock write table, so it is written only by a
+-- routine whose first statement re-reads the verified assertion. Every
+-- value is the stored return header's (the routine's own values) and the
+-- purchase's rate source and timestamp (the purchase row is locked).
+CREATE OR REPLACE FUNCTION purchase_bridge_credit_note(p_return_id UUID) RETURNS INTEGER
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $$
+DECLARE
+  v_actor inventory_verified_actor;
+  v_rows  INTEGER;
+BEGIN
+  v_actor := inventory_assertion_current(ARRAY['purchase.return']);
+  IF p_return_id IS NULL
+     OR NOT EXISTS (SELECT 1 FROM supplier_returns r
+                     WHERE r.business_id = v_actor.business_id AND r.id = p_return_id
+                       AND r.credit_note_id IS NOT NULL AND r.credit_txn_minor > 0) THEN
+    RAISE EXCEPTION 'inventory.source_type_not_authorized: a credit note is written only for its own stored return with a credit' USING ERRCODE = 'P0001';
+  END IF;
+  INSERT INTO supplier_credit_notes (tenant_id, business_id, id, supplier_id, supplier_return_id, currency_code,
+                                     original_amount_minor, remaining_amount_minor,
+                                     original_carrying_base_amount_minor, remaining_carrying_base_amount_minor,
+                                     source_to_base_rate, rate_source, rate_timestamp, issued_on, business_transaction_id, created_by)
+  SELECT r.tenant_id, r.business_id, r.credit_note_id, r.supplier_id, r.id, r.currency_code,
+         r.credit_txn_minor, r.credit_txn_minor, r.credit_base_minor, r.credit_base_minor,
+         r.source_to_base_rate, p.rate_source, p.rate_timestamp, r.document_date, r.business_transaction_id, r.created_by
+  FROM supplier_returns r
+  JOIN purchases p ON p.business_id = r.business_id AND p.id = r.purchase_id
+  WHERE r.business_id = v_actor.business_id AND r.id = p_return_id;
+  GET DIAGNOSTICS v_rows = ROW_COUNT;
+  RETURN v_rows;
+END;
+$$;
+
+COMMENT ON FUNCTION purchase_bridge_credit_note(UUID) IS
+  'P3-S5 §2.5, A-11, R-55. The one writer of supplier_credit_notes. Re-verifies the transaction''s consumed purchase.return assertion; p_return_id must be a stored return of the verified business with a credit note id and a positive credit (inventory.source_type_not_authorized otherwise). Inserts the return''s credit note from the stored header (credit_txn, credit_base, supplier, currency, rate, date, trace, actor) and its purchase''s rate source and timestamp. Internal-owned, no grant.';
 
 -- The one writer of the purchase-reversal bridge.
 CREATE OR REPLACE FUNCTION purchase_bridge_reversal(p_purchase_id UUID) RETURNS INTEGER
@@ -513,13 +560,7 @@ BEGIN
     SELECT v_tenant, v_business, p_return_id, x.li, x.i::integer, p_purchase_id, x.pl, x.v, x.q, x.c, v_snap[x.i], x.o
     FROM unnest(p_line_ids, p_purchase_line_ids, p_variant_ids, p_qtys, p_carrying_txns, p_values_out) WITH ORDINALITY AS x(li, pl, v, q, c, o, i);
     IF v_credit > 0 THEN
-      INSERT INTO supplier_credit_notes (tenant_id, business_id, id, supplier_id, supplier_return_id, currency_code,
-                                         original_amount_minor, remaining_amount_minor,
-                                         original_carrying_base_amount_minor, remaining_carrying_base_amount_minor,
-                                         source_to_base_rate, rate_source, rate_timestamp, issued_on, business_transaction_id, created_by)
-      VALUES (v_tenant, v_business, p_credit_note_id, v_p.supplier_id, p_return_id, v_p.currency_code,
-              v_credit::bigint, v_credit::bigint, v_cr_base::bigint, v_cr_base::bigint,
-              v_p.source_to_base_rate, v_p.rate_source, v_p.rate_timestamp, p_document_date, v_trace, v_actor.actor_user_id);
+      PERFORM purchase_bridge_credit_note(p_return_id);
     END IF;
 
     -- 13. The movements: each line leaves the return key at its average (or
@@ -819,6 +860,7 @@ COMMENT ON FUNCTION purchase_reverse(UUID, UUID, DATE, TEXT, UUID, BIGINT, UUID[
 -- ─────────────────────────────────────────────────────────────────────────
 REVOKE ALL ON FUNCTION purchase_lock_stock_keys(UUID, UUID[]) FROM PUBLIC;
 REVOKE ALL ON FUNCTION purchase_bridge_return(UUID) FROM PUBLIC;
+REVOKE ALL ON FUNCTION purchase_bridge_credit_note(UUID) FROM PUBLIC;
 REVOKE ALL ON FUNCTION purchase_bridge_reversal(UUID) FROM PUBLIC;
 REVOKE ALL ON FUNCTION purchase_return(UUID, UUID, UUID, DATE, TEXT, UUID, BIGINT, BIGINT, BIGINT, BIGINT, BIGINT, BIGINT, BIGINT, UUID[], UUID[], UUID[], NUMERIC[], BIGINT[], BIGINT[]) FROM PUBLIC;
 REVOKE ALL ON FUNCTION purchase_reverse(UUID, UUID, DATE, TEXT, UUID, BIGINT, UUID[], UUID[], NUMERIC[], BIGINT[]) FROM PUBLIC;
@@ -830,6 +872,7 @@ GRANT CREATE ON SCHEMA public TO daftar_inventory_internal;
 
 ALTER FUNCTION purchase_lock_stock_keys(UUID, UUID[]) OWNER TO daftar_inventory_internal;
 ALTER FUNCTION purchase_bridge_return(UUID) OWNER TO daftar_inventory_internal;
+ALTER FUNCTION purchase_bridge_credit_note(UUID) OWNER TO daftar_inventory_internal;
 ALTER FUNCTION purchase_bridge_reversal(UUID) OWNER TO daftar_inventory_internal;
 ALTER FUNCTION purchase_return(UUID, UUID, UUID, DATE, TEXT, UUID, BIGINT, BIGINT, BIGINT, BIGINT, BIGINT, BIGINT, BIGINT, UUID[], UUID[], UUID[], NUMERIC[], BIGINT[], BIGINT[]) OWNER TO daftar_inventory_internal;
 ALTER FUNCTION purchase_reverse(UUID, UUID, DATE, TEXT, UUID, BIGINT, UUID[], UUID[], NUMERIC[], BIGINT[]) OWNER TO daftar_inventory_internal;
@@ -865,6 +908,7 @@ DECLARE
   c_helpers CONSTANT REGPROCEDURE[] := ARRAY[
     'purchase_lock_stock_keys(uuid,uuid[])'::regprocedure,
     'purchase_bridge_return(uuid)'::regprocedure,
+    'purchase_bridge_credit_note(uuid)'::regprocedure,
     'purchase_bridge_reversal(uuid)'::regprocedure];
   c_reads   CONSTANT REGPROCEDURE[] := ARRAY[
     'purchase_ap_outstanding(uuid,uuid)'::regprocedure,
@@ -892,8 +936,8 @@ BEGIN
     RAISE EXCEPTION 'supplier_return.migration_end_state_invalid: inventory_operation_movement_kinds is not exactly the S3, S4 and S5 mappings, found %', v_detail;
   END IF;
 
-  -- (3) The two entry routines and three helpers: internal-owned DEFINER
-  --     with the pinned path, exactly five S5 internal routines.
+  -- (3) The two entry routines and four helpers: internal-owned DEFINER
+  --     with the pinned path, exactly six S5 internal routines.
   SELECT string_agg(p.oid::regprocedure::text, ', ' ORDER BY p.oid::regprocedure::text) INTO v_detail
   FROM pg_proc p JOIN pg_roles r ON r.oid = p.proowner
   WHERE p.oid = ANY (c_entry || c_helpers)
@@ -902,10 +946,11 @@ BEGIN
   IF v_detail IS NOT NULL THEN
     RAISE EXCEPTION 'supplier_return.migration_end_state_invalid: routine(s) not internal-owned SECURITY DEFINER with the pinned path: %', v_detail;
   END IF;
-  IF (SELECT count(*) FROM pg_proc p WHERE p.oid = ANY (c_entry || c_helpers)) <> 5
+  IF (SELECT count(*) FROM pg_proc p WHERE p.oid = ANY (c_entry || c_helpers)) <> 6
      OR (SELECT count(*) FROM pg_proc p WHERE p.proname IN ('purchase_return', 'purchase_reverse', 'purchase_lock_stock_keys',
-                                                            'purchase_bridge_return', 'purchase_bridge_reversal')) <> 5 THEN
-    RAISE EXCEPTION 'supplier_return.migration_end_state_invalid: the S5 routines are not exactly the two entry routines and three helpers';
+                                                            'purchase_bridge_return', 'purchase_bridge_credit_note',
+                                                            'purchase_bridge_reversal')) <> 6 THEN
+    RAISE EXCEPTION 'supplier_return.migration_end_state_invalid: the S5 routines are not exactly the two entry routines and four helpers';
   END IF;
 
   -- (4) daftar_app reaches each entry routine, nobody else does; nobody
