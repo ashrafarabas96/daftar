@@ -1409,16 +1409,38 @@ export async function createProduct(pool: Pool, businessId: string): Promise<str
   }
 }
 
-/** A merchant variant, written the way S1 lets `daftar_app`-class writers do it (not a base variant). */
+/**
+ * A merchant variant, written the way S1 lets `daftar_app`-class writers do it (not a base variant).
+ *
+ * The write carries the business context a real one carries (P3-S9): the
+ * variant's SKU is registered by `catalog_identifiers_sync`, a SECURITY
+ * DEFINER trigger owned by whoever applied the history. On a superuser-built
+ * database that owner bypasses row-level security; on a database the deployer
+ * built it is `daftar_migrator`, which does not, so a write with no tenant and
+ * business context is refused there — as it would be for every runtime writer.
+ */
 export async function addMerchantVariant(pool: Pool, businessId: string, productId: string): Promise<string> {
   const id = randomUUID();
-  await pool.query(`INSERT INTO product_variants (business_id, id, product_id, sku) VALUES ($1, $2, $3, $4)`, [
-    businessId,
-    id,
-    productId,
-    `SKU-${id.slice(0, 12)}`,
-  ]);
-  return id;
+  const c = await pool.connect();
+  try {
+    await c.query('BEGIN');
+    const tenant = (await c.query<{ tenant_id: string }>(`SELECT tenant_id::text FROM businesses WHERE id = $1`, [businessId])).rows[0];
+    if (tenant === undefined) throw new Error(`addMerchantVariant: business ${businessId} does not exist`);
+    await setScope(c, { tenantId: tenant.tenant_id, businessId });
+    await c.query(`INSERT INTO product_variants (business_id, id, product_id, sku) VALUES ($1, $2, $3, $4)`, [
+      businessId,
+      id,
+      productId,
+      `SKU-${id.slice(0, 12)}`,
+    ]);
+    await c.query('COMMIT');
+    return id;
+  } catch (e) {
+    await c.query('ROLLBACK').catch(() => undefined);
+    throw e;
+  } finally {
+    c.release();
+  }
 }
 
 /**
