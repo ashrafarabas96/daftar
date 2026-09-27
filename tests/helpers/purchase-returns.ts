@@ -229,7 +229,28 @@ export function rawPayloadSha256(biz: Biz, cmd: S5Command): string {
       ...cmd.lines.flatMap((l) => [u(l.lineId), u(l.variantId), i(l.qtyQ4), i(l.valueMinor)]),
     ];
   }
-  return inventoryPayloadSha256(S5_OP_OF[cmd.kind], biz.tenantId, biz.businessId, fields);
+  return claimedStreamSha256(S5_OP_OF[cmd.kind], biz.tenantId, biz.businessId, fields);
+}
+
+/**
+ * The `invpl/1` digest exactly as the SQL canonicalizer (`inventory_payload_digest`,
+ * 0054) builds it from the claimed arguments: the header lines, then each
+ * field's canonical text — or a single NUL for NULL, whatever the schema's
+ * nullability, which only the TS builders enforce — each ending in LF.
+ */
+function claimedStreamSha256(op: InventoryOperationCode, tenantId: string, businessId: string, fields: readonly InventoryPayloadField[]): string {
+  const parts: Buffer[] = [Buffer.from(`invpl/1\n${op}\n${tenantId.toLowerCase()}\n${businessId.toLowerCase()}\n`, 'utf8')];
+  for (const f of fields) {
+    if (f.kind === 'null') parts.push(Buffer.from([0x00, 0x0a]));
+    else if (f.kind === 'integer') parts.push(Buffer.from(`${BigInt(f.value).toString(10)}\n`, 'utf8'));
+    else if (f.kind === 'uuid') parts.push(Buffer.from(`${f.value}\n`, 'utf8'));
+    else throw new Error(`claimed stream: no ${f.kind} field in an S5 payload`);
+  }
+  const sha = createHash('sha256').update(Buffer.concat(parts)).digest('hex');
+  // Wherever the package encoder accepts the fields, both encoders agree.
+  if (fields.every((f) => f.kind !== 'null'))
+    expect(sha, 'the claimed stream and the package encoder').toBe(inventoryPayloadSha256(op, tenantId, businessId, fields));
+  return sha;
 }
 
 /** The routine call — SQL and parameters — for a command, exactly as the services issue it. */

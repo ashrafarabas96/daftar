@@ -114,16 +114,19 @@ const FIXTURE_SETTLEMENT_STATE = `
 CREATE OR REPLACE FUNCTION public.purchase_settlement_state(p_business_id uuid, p_purchase_id uuid,
                                                             OUT payment_allocated boolean, OUT credit_allocated boolean)
 LANGUAGE plpgsql STABLE SECURITY INVOKER SET search_path = pg_catalog, public, pg_temp AS $fixture$
+DECLARE
+  v_s5_payment  BOOLEAN;
+  v_s5_credit   BOOLEAN;
+  v_fix_payment BOOLEAN;
+  v_fix_credit  BOOLEAN;
 BEGIN
-  SELECT s.payment_allocated, s.credit_allocated INTO payment_allocated, credit_allocated
+  -- The S5 answer, then what the fixture says S6 allocated.
+  SELECT s.payment_allocated, s.credit_allocated INTO v_s5_payment, v_s5_credit
     FROM test_s5_purchase_settlement_state(p_business_id, p_purchase_id) AS s;
-  SELECT payment_allocated OR coalesce(f.payment_allocated, false), credit_allocated OR coalesce(f.credit_allocated, false)
-    INTO payment_allocated, credit_allocated
+  SELECT f.payment_allocated, f.credit_allocated INTO v_fix_payment, v_fix_credit
     FROM test_settlement_fixture f WHERE f.business_id = p_business_id AND f.purchase_id = p_purchase_id;
-  IF NOT FOUND THEN
-    SELECT s.payment_allocated, s.credit_allocated INTO payment_allocated, credit_allocated
-      FROM test_s5_purchase_settlement_state(p_business_id, p_purchase_id) AS s;
-  END IF;
+  payment_allocated := v_s5_payment OR coalesce(v_fix_payment, false);
+  credit_allocated  := v_s5_credit OR coalesce(v_fix_credit, false);
 END;
 $fixture$`;
 
