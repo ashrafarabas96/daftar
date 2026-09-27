@@ -27,6 +27,8 @@
  * master data).
  */
 import { createHash, randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import type { Client, Pool } from 'pg';
 import { expect } from 'vitest';
 import type { Response } from 'supertest';
@@ -1325,6 +1327,121 @@ export async function s6SystemKeys(q: Queryable, businessId: string): Promise<st
   return r.rows.map((x) => x.k ?? '(custom)').sort();
 }
 
+// ── the shared vectors (§4.1, T-07) ───────────────────────────────────────
+
+/** One primitive of a vector step: the SQL arithmetic function, its arguments and the package's answer. */
+export interface VectorPrimitive {
+  readonly fn: 'supplier_convert_base' | 'supplier_ap_release' | 'supplier_credit_remaining_carrying';
+  readonly args: readonly (string | number)[];
+  readonly result: string;
+}
+
+/** One A-05 line of a vector step, amounts as decimal text. */
+export interface VectorEntryLine {
+  readonly account: string;
+  readonly side: 'D' | 'C';
+  readonly currency: 'purchase' | 'note' | 'payment' | 'receipt' | 'base';
+  readonly txnAmountMinor: string;
+  readonly baseAmountMinor: string;
+  readonly dimension: 'purchase' | 'origin';
+}
+
+export interface VectorStep {
+  readonly step: Readonly<Record<string, unknown>>;
+  readonly outcome: string;
+  readonly plan: Readonly<Record<string, string>> | null;
+  readonly entry: readonly VectorEntryLine[] | null;
+  readonly primitives: readonly VectorPrimitive[];
+  readonly after: Readonly<Record<string, string>>;
+}
+
+export interface SettlementVectorCase {
+  readonly id: string;
+  readonly why: string;
+  readonly base: { readonly code: string; readonly exponent: number };
+  readonly steps: readonly VectorStep[];
+}
+
+/** `packages/inventory/vectors/supplier-settlement-vectors.json`, the package's own vectors. */
+export function settlementVectors(): readonly SettlementVectorCase[] {
+  const file = join(__dirname, '../../packages/inventory/vectors/supplier-settlement-vectors.json');
+  return (JSON.parse(readFileSync(file, 'utf8')) as { cases: SettlementVectorCase[] }).cases;
+}
+
+export function settlementVector(id: string): SettlementVectorCase {
+  return must(
+    settlementVectors().find((v) => v.id === id),
+    `vector ${id}`,
+  );
+}
+
+/** A line in concrete terms: the account (a system key, or `posting_account`), side, currency code, amounts and branch. */
+export interface ConcreteLine {
+  readonly account: string;
+  readonly side: 'D' | 'C';
+  readonly currency: string;
+  readonly txn: string;
+  readonly base: string;
+  readonly branchId: string | null;
+}
+
+export interface LineContext {
+  /** Currency codes of the vector's currency roles. */
+  readonly currencies: Readonly<Partial<Record<VectorEntryLine['currency'], string>>>;
+  /** Branch of the (target) purchase and of the note's origin purchase. */
+  readonly branches: { readonly purchase: string | null; readonly origin: string | null };
+}
+
+/** A vector's entry lines in concrete terms. */
+export function vectorLines(lines: readonly VectorEntryLine[], ctx: LineContext): ConcreteLine[] {
+  return lines.map((l) => ({
+    account: l.account,
+    side: l.side,
+    currency: must(ctx.currencies[l.currency], `the ${l.currency} currency`),
+    txn: l.txnAmountMinor,
+    base: l.baseAmountMinor,
+    branchId: ctx.branches[l.dimension],
+  }));
+}
+
+/** A posted entry's lines in the same terms: the method's account is `posting_account`. */
+export function concreteLines(lines: readonly SettlementLine[], postingAccountId: string | null): ConcreteLine[] {
+  return lines.map((l) => ({
+    account: l.accountId === postingAccountId ? 'posting_account' : must(l.systemKey, `the system key of ${l.accountId}`),
+    side: l.side,
+    currency: l.currency,
+    txn: l.txnAmountMinor,
+    base: l.baseAmountMinor,
+    branchId: l.branchId,
+  }));
+}
+
+const PRIMITIVE_CASTS: Readonly<Record<VectorPrimitive['fn'], readonly string[]>> = {
+  supplier_convert_base: ['bigint', 'numeric', 'integer', 'integer'],
+  supplier_ap_release: ['bigint', 'bigint', 'bigint', 'bigint'],
+  supplier_credit_remaining_carrying: ['bigint', 'bigint', 'bigint'],
+};
+
+/** Every primitive of `v`, evaluated by the SQL arithmetic functions (as the owner). */
+export async function sqlPrimitives(q: Queryable, v: SettlementVectorCase): Promise<{ call: string; expected: string; actual: string }[]> {
+  const out: { call: string; expected: string; actual: string }[] = [];
+  for (const step of v.steps) {
+    for (const p of step.primitives) {
+      const sql = `SELECT ${p.fn}(${PRIMITIVE_CASTS[p.fn].map((cast, i) => `$${i + 1}::${cast}`).join(', ')})::text AS r`;
+      const r = must(
+        (
+          await q.query<{ r: string }>(
+            sql,
+            p.args.map((a) => String(a)),
+          )
+        ).rows[0],
+      );
+      out.push({ call: `${p.fn}(${p.args.join(', ')})`, expected: p.result, actual: r.r });
+    }
+  }
+  return out;
+}
+
 // ── the SQL world: committed setups ───────────────────────────────────────
 
 /** BEGIN on a fresh owner connection, run, COMMIT (ROLLBACK and rethrow on a refusal). */
@@ -1341,6 +1458,15 @@ export async function committed<T>(fn: (c: Client) => Promise<T>): Promise<T> {
   } finally {
     await c.end();
   }
+}
+
+/**
+ * Run every pending deferred check NOW, as a COMMIT would, and keep the
+ * transaction open (later statements are deferred again). A refusal throws.
+ */
+export async function flushDeferred(c: Queryable): Promise<void> {
+  await c.query('SET CONSTRAINTS ALL IMMEDIATE');
+  await c.query('SET CONSTRAINTS ALL DEFERRED');
 }
 
 /** Pay every open purchase amount of `purchaseId` with `paymentMethodId`, in the purchase currency, in the caller's transaction. */
@@ -1370,6 +1496,9 @@ export async function sqlReturnToCredit(
   await payInFull(c, biz, purchase.purchaseId, purchase.supplierId, paymentMethodId);
   const ret = await returnGoods(c, biz, purchase.purchaseId, { lines: [{ purchaseLineId: must(purchase.lines[0]).lineId, qty: o.returnQty ?? '1' }] });
   const returnId = ret.prepared.cmd.returnId;
+  // The return is its own command: its deferred guards judge the note as issued, so they
+  // run now, as its COMMIT would, before anything in this transaction consumes the note.
+  await flushDeferred(c);
   return { purchase, creditNoteId: must(await creditNoteIdOf(c, biz.businessId, returnId), 'the return after a full payment issues a credit note'), returnId };
 }
 
@@ -1593,6 +1722,20 @@ export async function returnToCredit(
   const returnId = String(ret.returnId);
   const creditNoteId = must(await creditNoteIdOf(ownerPool(), biz.businessId, returnId), 'the return after a full payment issues a credit note');
   return { purchase, creditNoteId, returnId };
+}
+
+/**
+ * The stable code of a package refusal (`InventoryError`), read structurally:
+ * the application and the suites may load the package through two module paths.
+ */
+export async function bindingRefusal(bind: () => Promise<unknown>): Promise<string> {
+  try {
+    await bind();
+  } catch (e) {
+    if (e instanceof Error && 'code' in e && typeof e.code === 'string') return e.code;
+    throw e;
+  }
+  return 'accepted';
 }
 
 /** The error code a refused response carries, whichever table classified it. */
