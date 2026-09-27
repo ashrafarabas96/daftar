@@ -8,6 +8,7 @@ import {
   ownerPool,
   platformDbUrl,
   provisionerDbUrl,
+  reconcilerDbUrl,
   resetData,
   resolverDbUrl,
   workerDbUrl,
@@ -54,7 +55,21 @@ import {
  * that read the migration text would be asking the wrong source.
  */
 
-const RUNTIME_ROLES = ['daftar_app', 'daftar_platform', 'daftar_worker', 'daftar_identity', 'daftar_resolver', 'daftar_provisioner'] as const;
+/**
+ * Every runtime login role. P3-S8 (contract A-09, §7.3 pin 5): the
+ * reconciler is a runtime principal too (L:1660 names seven); its TEMPORARY
+ * and CREATE on public were proved only by the reconciler matrix before, and
+ * are proved here with the other six from now on.
+ */
+const RUNTIME_ROLES = [
+  'daftar_app',
+  'daftar_platform',
+  'daftar_worker',
+  'daftar_identity',
+  'daftar_resolver',
+  'daftar_provisioner',
+  'daftar_reconciler',
+] as const;
 
 const RUNTIME_URLS: Readonly<Record<(typeof RUNTIME_ROLES)[number], string>> = {
   daftar_app: appDbUrl,
@@ -63,6 +78,7 @@ const RUNTIME_URLS: Readonly<Record<(typeof RUNTIME_ROLES)[number], string>> = {
   daftar_identity: identityDbUrl,
   daftar_resolver: resolverDbUrl,
   daftar_provisioner: provisionerDbUrl,
+  daftar_reconciler: reconcilerDbUrl,
 };
 
 /**
@@ -513,6 +529,10 @@ describe('the §D inventory definer contract (P3-AL-54 §D)', () => {
     'supplier_allocate_credit(uuid,uuid,uuid,uuid,date,character,bigint,bigint,bigint,bigint,character,bigint,bigint,bigint,bigint,bigint)': ['daftar_app'],
     'supplier_receive_refund(uuid,uuid,uuid,uuid,date,character,bigint,bigint,bigint,bigint,character,bigint,uuid,numeric,text,timestamp with time zone,bigint,bigint,text)':
       ['daftar_app'],
+    // P3-S8 (0069, R-B1a, Annex R §2.4): the "has stock movements" boolean is
+    // asked by the accounting domain guard only — the accounting principal is
+    // its one grantee, no runtime role.
+    'inventory_business_has_stock_movements(uuid)': ['daftar_accounting_internal'],
   };
 
   const INVENTORY_TRUSTED_RELATIONS = [

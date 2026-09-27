@@ -1117,7 +1117,9 @@ describe('managed PostgreSQL: 0039 → 0049 under a non-superuser migration prin
                                       -- accounting-side completeness triggers and the S6 discovery.
                                       'accounting_settlement_account_eligibility', 'accounting_supplier_payment_entry_complete',
                                       'accounting_supplier_credit_allocation_entry_complete', 'accounting_supplier_refund_entry_complete',
-                                      'supplier_settlement_guard_gaps'))
+                                      'supplier_settlement_guard_gaps',
+                                      -- P3-S8 (0069, R-B1a): the accounting-side domain guard.
+                                      'accounting_inventory_account_domain_guard'))
               ORDER BY p.proname`,
           )
         ).rows;
@@ -1305,6 +1307,11 @@ describe('managed PostgreSQL: 0039 → 0049 under a non-superuser migration prin
             internal('supplier_credit_note_consume'),
             internal('supplier_pay'),
             internal('supplier_receive_refund'),
+            // P3-S8 (0069, R-B1a, Annex R §2.4-§2.5): the inventory-owned
+            // "has stock movements" boolean, and the accounting-owned domain
+            // guard, both DEFINER with the pinned path.
+            internal('inventory_business_has_stock_movements'),
+            { proname: 'accounting_inventory_account_domain_guard', owner: 'daftar_accounting_internal', definer: true, config: PIN },
           ].sort((a, b) => (a.proname < b.proname ? -1 : 1)),
         );
         for (const role of ['daftar_inventory_internal', 'daftar_accounting_internal']) {
