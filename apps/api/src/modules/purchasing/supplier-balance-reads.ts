@@ -216,6 +216,62 @@ export function proposeAllocation(
 
 // ── Rows ─────────────────────────────────────────────────────────────────
 
+interface SupplierScanRow {
+  id: string;
+  name: string;
+  status: 'active' | 'inactive';
+}
+
+/** A statement and its values. */
+export interface ReadQuery {
+  readonly text: string;
+  readonly values: unknown[];
+}
+
+/** The supplier page of `GET /v1/supplier-balances`: newest first, `limit + 1` rows. */
+export function supplierBalancesQuery(businessId: string, q: SupplierBalancesQuery): ReadQuery {
+  const size = q.limit ?? DEFAULT_LIMIT;
+  return {
+    text: `SELECT s.id, s.name, s.status
+         FROM suppliers s
+        WHERE s.business_id = $1
+          AND ($2::text IS NULL OR s.status = $2::text)
+          AND ($3::text IS NULL OR s.name ILIKE '%' || $3 || '%' ESCAPE '\\')
+          AND (NOT $4::boolean
+               OR EXISTS (SELECT 1 FROM purchases p
+                           WHERE p.business_id = s.business_id AND p.supplier_id = s.id AND p.status = 'received'
+                             AND NOT EXISTS (SELECT 1 FROM purchase_reversals r WHERE r.business_id = p.business_id AND r.id = p.id)
+                             AND purchase_ap_outstanding(p.business_id, p.id) <> 0))
+          AND ($5::uuid IS NULL OR (s.created_at, s.id) < (SELECT c.created_at, c.id FROM suppliers c WHERE c.business_id = $1 AND c.id = $5::uuid))
+        ORDER BY s.created_at DESC, s.id DESC
+        LIMIT $6`,
+    values: [businessId, q.status ?? null, q.search === undefined ? null : likeEscaped(q.search), q.owedOnly ?? false, q.cursor ?? null, size + 1],
+  };
+}
+
+/**
+ * The open purchases of `GET /v1/suppliers/:id/open-purchases` (`reachable`
+ * null for a business-wide caller), oldest first, each with its outstanding
+ * and whether it follows the cursor.
+ */
+export function openPurchasesQuery(businessId: string, supplierId: string, reachable: ReadonlySet<string> | null, q: SupplierOpenPurchasesQuery): ReadQuery {
+  return {
+    text: `SELECT p.id, p.document_date::text AS document_date, p.supplier_reference, p.warehouse_id, p.currency_code::text AS currency_code,
+              p.total_txn_minor::text AS total_txn_minor, p.source_to_base_rate::text AS source_to_base_rate, o.outstanding::text AS outstanding,
+              ($4::uuid IS NULL
+               OR (p.document_date, p.created_at, p.id)
+                  > (SELECT c.document_date, c.created_at, c.id FROM purchases c WHERE c.business_id = $1 AND c.id = $4::uuid)) AS on_page
+         FROM purchases p
+        CROSS JOIN LATERAL (SELECT purchase_ap_outstanding(p.business_id, p.id) AS outstanding) o
+        WHERE p.business_id = $1 AND p.supplier_id = $2 AND p.status = 'received'
+          AND NOT EXISTS (SELECT 1 FROM purchase_reversals r WHERE r.business_id = p.business_id AND r.id = p.id)
+          AND ($3::uuid[] IS NULL OR p.warehouse_id = ANY($3::uuid[]))
+          AND o.outstanding > 0
+        ORDER BY p.document_date, p.created_at, p.id`,
+    values: [businessId, supplierId, reachable === null ? null : [...reachable], q.cursor ?? null],
+  };
+}
+
 interface OpenPurchaseRow {
   id: string;
   document_date: string;
@@ -256,23 +312,8 @@ export class SupplierBalanceReadService {
     requireAnyPermission(m, ['suppliers.view']);
     assertBusinessWide(m);
     const size = q.limit ?? DEFAULT_LIMIT;
-    const suppliers = await this.rows<{ id: string; name: string; status: 'active' | 'inactive' }>(
-      m,
-      `SELECT s.id, s.name, s.status
-         FROM suppliers s
-        WHERE s.business_id = $1
-          AND ($2::text IS NULL OR s.status = $2::text)
-          AND ($3::text IS NULL OR s.name ILIKE '%' || $3 || '%' ESCAPE '\\')
-          AND (NOT $4::boolean
-               OR EXISTS (SELECT 1 FROM purchases p
-                           WHERE p.business_id = s.business_id AND p.supplier_id = s.id AND p.status = 'received'
-                             AND NOT EXISTS (SELECT 1 FROM purchase_reversals r WHERE r.business_id = p.business_id AND r.id = p.id)
-                             AND purchase_ap_outstanding(p.business_id, p.id) <> 0))
-          AND ($5::uuid IS NULL OR (s.created_at, s.id) < (SELECT c.created_at, c.id FROM suppliers c WHERE c.business_id = $1 AND c.id = $5::uuid))
-        ORDER BY s.created_at DESC, s.id DESC
-        LIMIT $6`,
-      [m.businessId, q.status ?? null, q.search === undefined ? null : likeEscaped(q.search), q.owedOnly ?? false, q.cursor ?? null, size + 1],
-    );
+    const query = supplierBalancesQuery(m.businessId, q);
+    const suppliers = await this.rows<SupplierScanRow>(m, query.text, query.values);
     const page = suppliers.slice(0, size);
     const ids = page.map((s) => s.id);
     const owed =
@@ -325,22 +366,8 @@ export class SupplierBalanceReadService {
     const [supplier] = await this.rows<{ id: string }>(m, 'SELECT id FROM suppliers WHERE business_id = $1 AND id = $2', [m.businessId, supplierId]);
     if (supplier === undefined) throw purchasingRefusal('supplier.not_found');
     const reachable = await reachableWarehouses(this.db, m);
-    const open = await this.rows<OpenPurchaseRow>(
-      m,
-      `SELECT p.id, p.document_date::text AS document_date, p.supplier_reference, p.warehouse_id, p.currency_code::text AS currency_code,
-              p.total_txn_minor::text AS total_txn_minor, p.source_to_base_rate::text AS source_to_base_rate, o.outstanding::text AS outstanding,
-              ($4::uuid IS NULL
-               OR (p.document_date, p.created_at, p.id)
-                  > (SELECT c.document_date, c.created_at, c.id FROM purchases c WHERE c.business_id = $1 AND c.id = $4::uuid)) AS on_page
-         FROM purchases p
-        CROSS JOIN LATERAL (SELECT purchase_ap_outstanding(p.business_id, p.id) AS outstanding) o
-        WHERE p.business_id = $1 AND p.supplier_id = $2 AND p.status = 'received'
-          AND NOT EXISTS (SELECT 1 FROM purchase_reversals r WHERE r.business_id = p.business_id AND r.id = p.id)
-          AND ($3::uuid[] IS NULL OR p.warehouse_id = ANY($3::uuid[]))
-          AND o.outstanding > 0
-        ORDER BY p.document_date, p.created_at, p.id`,
-      [m.businessId, supplierId, reachable === null ? null : [...reachable], q.cursor ?? null],
-    );
+    const query = openPurchasesQuery(m.businessId, supplierId, reachable, q);
+    const open = await this.rows<OpenPurchaseRow>(m, query.text, query.values);
     let proposed: (bigint | null)[] = open.map(() => null);
     let unallocated: bigint | null = null;
     if (q.currency !== undefined && q.amount !== undefined) {
