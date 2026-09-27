@@ -37,6 +37,9 @@ import { SuppliersController } from '../modules/purchasing/suppliers.controller'
 import { PurchasesController } from '../modules/purchasing/purchases.controller';
 import { SupplierCreditNotesController, SupplierReturnsController } from '../modules/purchasing/supplier-returns.controller';
 import { purchasingProviders } from '../modules/purchasing/purchasing.module';
+import { SupplierSettlementsController } from '../modules/purchasing/supplier-settlements.controller';
+import { PaymentMethodsController } from '../modules/payment-methods/payment-methods.controller';
+import { paymentMethodProviders } from '../modules/payment-methods/payment-methods.module';
 import { AdminService } from '../modules/admin/admin.service';
 import { AdminController } from '../modules/admin/admin.controller';
 import { OutboxPublisher } from '../modules/outbox/publisher';
@@ -77,6 +80,9 @@ export class AppModule implements NestModule {
         PurchasesController,
         SupplierReturnsController,
         SupplierCreditNotesController,
+        // P3-S6: payment methods, supplier payments, credit allocations and refunds.
+        PaymentMethodsController,
+        SupplierSettlementsController,
         AdminController,
       ],
       providers: [
@@ -102,6 +108,7 @@ export class AppModule implements NestModule {
         // return and the reversal mint through the same accounting minter and
         // post through the same adapters, on the accounting-aware inventory seam.
         ...purchasingProviders(),
+        ...paymentMethodProviders(),
         ...workerProviders(config, options),
         // Only PROCESS_MODE=all composes the reconciler beside the worker,
         // and only because this composition exists for dev and tests;

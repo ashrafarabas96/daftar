@@ -35,6 +35,9 @@ import { SuppliersController } from '../modules/purchasing/suppliers.controller'
 import { PurchasesController } from '../modules/purchasing/purchases.controller';
 import { SupplierCreditNotesController, SupplierReturnsController } from '../modules/purchasing/supplier-returns.controller';
 import { purchasingProviders } from '../modules/purchasing/purchasing.module';
+import { SupplierSettlementsController } from '../modules/purchasing/supplier-settlements.controller';
+import { PaymentMethodsController } from '../modules/payment-methods/payment-methods.controller';
+import { paymentMethodProviders } from '../modules/payment-methods/payment-methods.module';
 
 /**
  * MERCHANT PROCESS (Directive §16). Composes the merchant HTTP surface and
@@ -67,6 +70,9 @@ export class MerchantApiModule implements NestModule {
         PurchasesController,
         SupplierReturnsController,
         SupplierCreditNotesController,
+        // P3-S6: payment methods, supplier payments, credit allocations and refunds.
+        PaymentMethodsController,
+        SupplierSettlementsController,
       ],
       providers: [
         ...coreProviders(config, options),
@@ -91,6 +97,7 @@ export class MerchantApiModule implements NestModule {
         // return and the reversal mint through the same accounting minter and
         // post through the same adapters, on the accounting-aware inventory seam.
         ...purchasingProviders(),
+        ...paymentMethodProviders(),
         TenancyService,
         StructureService,
         InvitationsService,
