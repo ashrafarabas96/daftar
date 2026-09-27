@@ -21,6 +21,14 @@
 >
 > **TL-6 answers S6 A-04's deferral.** S6 A-04 defers display numbering to S7. S7 ships no stored or derived document number, and the matter is recorded for the Tech Lead (numbering policy, possible legal rule) as a Phase 3 closure item.
 >
+> **Review rulings (2026-09-27, after the independent security and UX reviews).** These amend the body.
+> - **R-S7-1, blind counting is enforced by the server (TL-8, review M-1).** The `PUT …/counts` answer carries `expectedQtyAtCapture`, `varianceQty` and `capturedAtStockSeq` as `null` unless the caller holds `inventory.view`. The stocktake detail (A-08) hides them for every stocktake that is not finalized (draft or cancelled) unless the caller holds `inventory.adjust`. The fields stay in the shape and are nullable.
+> - **Single-permission pickers (review item 6).** The warehouses read (A-05) also admits `inventory.transfer`, `inventory.stocktake`, `inventory.adjust`, `purchases.manage` and `purchases.receive`; it still lists only warehouses the caller reaches, with no quantity or value. The items read (A-06) also admits `inventory.transfer`, `inventory.stocktake` and `purchases.receive`; its `holdsStock` is `boolean | null`, computed only for `inventory.adjust` or `inventory.view` holders. `GET /v1/suppliers/:id` also admits `suppliers.pay`. The stock read is not widened.
+> - **Bounded work (review L-3).** `open-purchases` pre-filters settled purchases in SQL and calls `purchase_ap_outstanding` only for the page and for a proposal window of the 500 oldest open purchases; `supplier-balances?owedOnly=true` examines at most 500 suppliers per page. Past the window a purchase proposes 0 and the remainder shows as unallocated.
+> - **Search (review L-2).** A NUL byte in any `search` parameter is `VALIDATION_FAILED`.
+> - **Web platform (review L-1, L-4, I-7).** The BFF proxy refuses a decoded path segment containing `/`, `\`, `?`, `#`, a control character, or equal to `.`/`..`, re-encodes every segment and keeps the target under `/v1/`; page ids taken from the URL must be UUIDs. Every proxied response is `cache-control: no-store`. A new exchange-rate idempotency key is minted after each successful rate entry.
+> - **Stable order.** The stock read orders a product's variants by display name, then id.
+>
 > **Adopted as engineering rulings:** TL-2 … TL-12, with TL-3 (defaults read) as amended above. OD-03 stays bounded: every tax element is BLOCKED BY OD-03.
 
 > **Summary (Arabic).** عقد تنفيذ الشريحة P3-S7 (القراءات وتجربة التاجر على الويب):
