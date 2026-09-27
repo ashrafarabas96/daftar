@@ -9,14 +9,18 @@ import { join, relative } from 'node:path';
 import {
   ACCOUNTING_AUTHORITY_TABLES,
   STOCK_CACHE_EXCEPTION,
+  SUPPLIER_AUTHORITY_TABLES,
   checkStockCacheShape,
   discoverAccountingTables,
   discoverInventoryTables,
+  discoverSupplierTables,
   findAuthoritativeBalanceColumns,
   findAuthoritativeInventoryColumns,
+  findAuthoritativeSupplierColumns,
   findForbiddenInventoryRelations,
   isForbiddenBalanceTable,
   isForbiddenInventoryTable,
+  isForbiddenSupplierTable,
 } from './guards/no-authoritative-balance';
 import { findFloatRateColumns, findInventoryNumericViolations } from './guards/no-float-rate';
 import { findDefinerSearchPathViolations } from './guards/definer-search-path';
@@ -354,6 +358,31 @@ for (const dir of ['apps/api/src', 'apps/web/src', 'apps/admin/src', 'packages']
     );
   }
   for (const problem of checkStockCacheShape(schema)) fail('no-authoritative-balance', 'infrastructure/database/migrations', problem);
+
+  // P3-S4 (L:847-852, S4 contract §7.2): supplier and purchase storage. AP
+  // and supplier credit are derived live from their source documents; a
+  // stored payable/outstanding/paid/due amount, or a table that is a supplier
+  // balance or a cache of one, is a second truth.
+  const supplierWatched = discoverSupplierTables(schema);
+  for (const f of migrations) {
+    for (const hit of findAuthoritativeSupplierColumns(readFileSync(f, 'utf8'), supplierWatched)) {
+      fail('no-authoritative-balance', f, `${hit.table}.${hit.column} claims storage authority over a derived AP or supplier balance (G-3/P3-AL-26)`);
+    }
+  }
+  for (const table of supplierWatched) {
+    if (isForbiddenSupplierTable(table)) {
+      fail(
+        'no-authoritative-balance',
+        'infrastructure/database/migrations',
+        `table \`${table}\` stores a derived AP or supplier balance — supplier AP is derived live (G-3/P3-AL-26)`,
+      );
+    }
+  }
+  for (const table of SUPPLIER_AUTHORITY_TABLES) {
+    if (!supplierWatched.includes(table)) {
+      fail('no-authoritative-balance', 'infrastructure/database/migrations', `${table} does not exist — the supplier half of G-3 is watching nothing`);
+    }
+  }
 }
 
 // Rule 16 — GUARD G-2 (Architecture Lock, P2-S2): no floating-point financial

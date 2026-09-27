@@ -287,3 +287,91 @@ export function checkStockCacheShape(sql: string): string[] {
   }
   return problems;
 }
+
+/**
+ * ── P3-S4: supplier and purchase storage (P3-AL-26 L:843-854, P3-AL-44 L:1261; S4 contract §7.2) ──
+ *
+ * "`suppliers.balance` does not exist and may never be added" (L:847).
+ * Supplier AP and supplier credit are DERIVED live from their source
+ * documents — received purchases, returns, credit notes, allocations — and
+ * Phase 3 ships no cache, projection or summary table for them (L:851-852,
+ * L:1261). A stored payable, outstanding, paid or due amount on a supplier or
+ * purchase table is a second truth beside the journal, and this half of G-3
+ * is how L:852 is "enforced in CI rather than remembered".
+ *
+ * The watched set is DISCOVERED, like the inventory half: every stored
+ * relation the migrations make whose name is a supplier or purchase table —
+ * `supplier_returns`, `supplier_credit_notes` and `purchase_reversals` are
+ * covered because of their names, not because anybody listed them.
+ *
+ * The column rule is the accounting one plus the AP vocabulary. Its only
+ * exemption is the accounting one: a column that names an identity, an actor
+ * or an instant (`NOT_A_QUANTITY`) is not a stored number. The inventory
+ * `_seq` exemption does NOT apply here.
+ *
+ * What is deliberately NOT forbidden, and why:
+ * - `remaining_*` (`supplier_credit_notes.remaining_amount_minor`,
+ *   `remaining_carrying_base_amount_minor`). A credit note is a SOURCE
+ *   DOCUMENT whose remaining value is part of the document itself, moved
+ *   only under the row lock of P3-AL-31 (L:938-947) and insert-only in S5
+ *   (S5 contract A-11(e), TL-13). DM §7ج names it; the S5 contract (§2.2
+ *   Naming) records that it is not forbidden. It needs no exemption: no
+ *   pattern below matches it.
+ * - `ap_*` (`supplier_returns.ap_txn_minor`, `ap_base_minor`,
+ *   `ap_released_before_txn_minor`). These are the AP EFFECT of one return,
+ *   frozen on an append-only row (`supplier_returns_immutable`, no UPDATE
+ *   grant) and posted to the journal by that return — a fact of the
+ *   document, not a running total of the supplier. `ap_released_before_*`
+ *   is the X = T − O snapshot that lets the COMMIT-time value guard verify
+ *   the base release (0065 R-43); nothing ever rewrites it.
+ */
+export const SUPPLIER_TABLE_NAME = /^(suppliers|supplier_[a-z0-9_]+|purchases|purchase_[a-z0-9_]+)$/;
+
+/** The AP words: a column carrying one claims to be what the supplier is owed or has been paid (L:847-850). */
+const AP_BALANCE_COLUMN = /(^|_)(outstanding|paid|unpaid|due|owed|payable)($|_)/;
+
+const SUPPLIER_FORBIDDEN_COLUMN_PATTERNS: readonly RegExp[] = [...FORBIDDEN_COLUMN_PATTERNS, AP_BALANCE_COLUMN];
+
+/** The two tables every other supplier or purchase table hangs from: if either is missing, this half is watching nothing. */
+export const SUPPLIER_AUTHORITY_TABLES = ['suppliers', 'purchases'] as const;
+
+/**
+ * A supplier or purchase table whose NAME is a stored AP or supplier
+ * balance, or a cache, projection, summary, snapshot or rollup of one
+ * (L:851, L:1261). `supplier_balances` with an innocent `amount_minor` column
+ * is the same second truth as `suppliers.balance`.
+ */
+const SUPPLIER_FORBIDDEN_TABLE = /(^|_)(balances?|outstanding|payables?|caches?|projections?|summar(y|ies)|snapshots?|rollups?)($|_)/;
+
+/**
+ * Every supplier- or purchase-owned relation the migrations make, sorted: by
+ * any `CREATE TABLE` (bare, quoted or schema-qualified), a materialized
+ * view, a `SELECT … INTO`, or as the new name of `ALTER TABLE … RENAME TO`.
+ */
+export function discoverSupplierTables(sql: string): string[] {
+  return discoverStoredRelations(sql).filter((table) => SUPPLIER_TABLE_NAME.test(table));
+}
+
+/** A supplier or purchase table whose name is a stored balance or a cache of one — or a stored accounting balance. */
+export function isForbiddenSupplierTable(table: string): boolean {
+  const name = table.toLowerCase();
+  return SUPPLIER_FORBIDDEN_TABLE.test(name) || isForbiddenBalanceTable(name);
+}
+
+/** Whether `column` on a supplier or purchase table claims storage authority over a derived AP or supplier quantity. */
+export function isAuthoritativeSupplierColumn(column: string): boolean {
+  const name = column.toLowerCase();
+  if (NOT_A_QUANTITY.test(name)) return false;
+  return SUPPLIER_FORBIDDEN_COLUMN_PATTERNS.some((re) => re.test(name));
+}
+
+/**
+ * Authoritative AP or supplier-balance columns declared on any of `tables` in
+ * one SQL text — CREATE TABLE bodies, ALTER TABLE … ADD COLUMN, and a column
+ * RENAMEd to such a name. An empty array is a pass.
+ */
+export function findAuthoritativeSupplierColumns(sql: string, tables: readonly string[]): BalanceColumnFinding[] {
+  const watched = new Set(tables.map((t) => t.toLowerCase()));
+  const declared = [...findColumnDeclarations(sql), ...findColumnRenames(sql).map((r) => ({ table: r.table, column: r.to }))];
+  return declared.filter((d) => watched.has(d.table) && isAuthoritativeSupplierColumn(d.column)).map((d) => ({ table: d.table, column: d.column }));
+}

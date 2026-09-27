@@ -4,10 +4,15 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   ACCOUNTING_AUTHORITY_TABLES,
+  SUPPLIER_AUTHORITY_TABLES,
   discoverAccountingTables,
+  discoverSupplierTables,
   findAuthoritativeBalanceColumns,
+  findAuthoritativeSupplierColumns,
   isAuthoritativeBalanceColumn,
+  isAuthoritativeSupplierColumn,
   isForbiddenBalanceTable,
+  isForbiddenSupplierTable,
 } from '../../scripts/guards/no-authoritative-balance';
 import { findReadSurfaceViolations, readSurfaceFiles } from '../../scripts/guards/read-surface';
 import { LOGIN_ROLES, findAuthorityViolations, parseTableGrants } from '../../scripts/guards/authority-isolation';
@@ -166,6 +171,152 @@ describe('guard G-3 — the watched set is discovered, not listed (§60)', () =>
     expect(watched.length).toBeGreaterThan(ACCOUNTING_AUTHORITY_TABLES.length);
     for (const table of watched) expect(isForbiddenBalanceTable(table)).toBe(false);
     for (const f of files) expect(findAuthoritativeBalanceColumns(readFileSync(join(MIGRATIONS, f), 'utf8'), watched)).toEqual([]);
+  });
+});
+
+/**
+ * P3-S4 §7.2 — G-3 extended to the supplier and purchase tables (P3-AL-26,
+ * L:847-852). Supplier AP and supplier credit are derived live from their
+ * source documents; `suppliers.balance` may never be added.
+ */
+describe('guard G-3 — supplier and purchase storage (P3-S4 §7.2)', () => {
+  const schema = (): string =>
+    readdirSync(MIGRATIONS)
+      .filter((f) => f.endsWith('.sql'))
+      .sort()
+      .map((f) => readFileSync(join(MIGRATIONS, f), 'utf8'))
+      .join('\n');
+
+  it('discovers every supplier and purchase table by name, the S5 documents included', () => {
+    expect(
+      discoverSupplierTables(
+        [
+          'CREATE TABLE suppliers (id UUID);',
+          'CREATE TABLE public.purchases (id UUID);',
+          'CREATE TABLE "supplier_credit_notes" (id UUID);',
+          'CREATE TABLE purchase_reversal_lines (id UUID);',
+          'CREATE TABLE products (id UUID);',
+          'CREATE TABLE purchaser_notes (id UUID);',
+        ].join('\n'),
+      ),
+    ).toEqual(['purchase_reversal_lines', 'purchases', 'supplier_credit_notes', 'suppliers']);
+    expect(discoverSupplierTables(schema())).toEqual(
+      expect.arrayContaining([
+        'suppliers',
+        'purchases',
+        'purchase_lines',
+        'purchase_landed_costs',
+        'purchase_landed_cost_allocations',
+        'supplier_returns',
+        'supplier_return_lines',
+        'supplier_credit_notes',
+        'purchase_reversals',
+        'purchase_reversal_lines',
+      ]),
+    );
+    for (const table of SUPPLIER_AUTHORITY_TABLES) expect(discoverSupplierTables(schema())).toContain(table);
+  });
+
+  it('refuses a stored supplier balance or AP amount: suppliers.balance, purchases.amount_paid and the AP vocabulary', () => {
+    expect(findAuthoritativeSupplierColumns('CREATE TABLE suppliers (id UUID, name TEXT, balance BIGINT NOT NULL DEFAULT 0);', ['suppliers'])).toEqual([
+      { table: 'suppliers', column: 'balance' },
+    ]);
+    expect(findAuthoritativeSupplierColumns('ALTER TABLE purchases ADD COLUMN amount_paid BIGINT NOT NULL DEFAULT 0;', ['purchases'])).toEqual([
+      { table: 'purchases', column: 'amount_paid' },
+    ]);
+    expect(findAuthoritativeSupplierColumns('ALTER TABLE public.purchases RENAME COLUMN notes TO outstanding_minor;', ['purchases'])).toEqual([
+      { table: 'purchases', column: 'outstanding_minor' },
+    ]);
+    // S5 contract §7.2's negative case.
+    expect(findAuthoritativeSupplierColumns('CREATE TABLE supplier_credit_notes (id UUID, outstanding_minor BIGINT);', ['supplier_credit_notes'])).toEqual([
+      { table: 'supplier_credit_notes', column: 'outstanding_minor' },
+    ]);
+    for (const column of [
+      'balance',
+      'balance_minor',
+      'current_balance',
+      'outstanding',
+      'outstanding_txn_minor',
+      'paid',
+      'amount_paid',
+      'paid_minor',
+      'unpaid_minor',
+      'due',
+      'amount_due',
+      'owed_minor',
+      'payable',
+      'payable_base_minor',
+      'credit_total',
+      'debit_sum',
+      'stock',
+    ]) {
+      expect(isAuthoritativeSupplierColumn(column), column).toBe(true);
+    }
+  });
+
+  it('allows identities, actors, instants and the source-document amounts the contracts name', () => {
+    for (const column of [
+      'id',
+      'supplier_id',
+      'paid_by',
+      'paid_at',
+      'payable_account_id',
+      'due_status',
+      'total_txn_minor',
+      'total_base_minor',
+      'subtotal_txn_minor',
+      'landed_cost_txn_minor',
+      'net_txn_minor',
+      // S5 A-11(c): a credit note's remaining values are part of the source document (DM §7ج, P3-AL-31).
+      'original_amount_minor',
+      'remaining_amount_minor',
+      'original_carrying_base_amount_minor',
+      'remaining_carrying_base_amount_minor',
+      // S5 §2.2: `ap_*` is one return's frozen AP effect, not a supplier total (0065 R-43).
+      'ap_txn_minor',
+      'ap_base_minor',
+      'ap_dust_base_minor',
+      'ap_released_before_txn_minor',
+      'credit_txn_minor',
+      'credit_base_minor',
+      // Words that merely contain an AP word are not that word.
+      'repaid_flag_text',
+      'overdueish',
+      'subpayables',
+    ]) {
+      expect(isAuthoritativeSupplierColumn(column), column).toBe(false);
+    }
+    // The inventory `_seq` exemption is not the supplier rule's: a stored stock sequence is still refused here.
+    expect(isAuthoritativeSupplierColumn('stock_seq')).toBe(true);
+    // A table outside the watched set is none of this rule's business.
+    expect(findAuthoritativeSupplierColumns('CREATE TABLE customer_statement_view (balance BIGINT);', ['suppliers'])).toEqual([]);
+  });
+
+  it('refuses a supplier or purchase table that IS a stored balance or a cache of one', () => {
+    for (const table of [
+      'supplier_balances',
+      'supplier_balance',
+      'supplier_outstanding',
+      'supplier_payables',
+      'purchase_payable_cache',
+      'purchase_outstanding_summary',
+      'supplier_ap_projection',
+      'supplier_ap_snapshots',
+      'purchase_rollups',
+    ]) {
+      expect(isForbiddenSupplierTable(table), table).toBe(true);
+    }
+    for (const table of ['suppliers', 'purchases', 'supplier_credit_notes', 'purchase_landed_cost_allocations', 'supplier_returns']) {
+      expect(isForbiddenSupplierTable(table), table).toBe(false);
+    }
+  });
+
+  it('the real migration tree stores no AP or supplier balance', () => {
+    const watched = discoverSupplierTables(schema());
+    for (const table of watched) expect(isForbiddenSupplierTable(table), table).toBe(false);
+    for (const f of readdirSync(MIGRATIONS).filter((n) => n.endsWith('.sql'))) {
+      expect(findAuthoritativeSupplierColumns(readFileSync(join(MIGRATIONS, f), 'utf8'), watched), f).toEqual([]);
+    }
   });
 });
 
