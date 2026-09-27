@@ -254,18 +254,16 @@ jobs:
         run: npm run gate:phase2:s8
         env:
           PG_PORT: '5432'
-      # P3-S6 — payment methods and supplier settlement, a PERMANENT gate
-      # since the P3-S6 freeze. Proves 0067–0068 at their accepted digests
-      # (frozenThrough a floor at 0068), the seven operation kinds and entry
-      # routines, the EXECUTE matrix and write grants, OD-03 bounded, every
-      # INSERT-judging guard by name (the R-80 return settlement trigger
-      # included), the replaced gaps function keeping every P3-S5 digest but
-      # the credit-note guard's, and supplier_settlement_guard_gaps(); then
-      # both package suites, the seam unit tests, every settlement-s6 suite and
-      # Budget A in isolation. It composes the permanent P3-S5 gate, and
-      # through it P3-S4 … P3-S1, P2-S8 and the chain back to Phase 1.
-      - name: Phase 3 slice gate — P3-S6 (composes P3-S5)
-        run: npm run gate:phase3:s6
+      # P3-S7 — reads and merchant web UX, a PERMANENT gate since the P3-S7
+      # freeze. S7 has no migration: frozenThrough is a floor at 0068 and
+      # 0069 on belongs to P3-S8. Proves no cache after 0068, the eleven read
+      # routes in both process modules, the Phase 3 client and the S7 pages,
+      # Rule 23 and the jargon pass, the S7 suites and both runner canaries;
+      # then the web suites, the Phase 1 web contract golden and T-17 Tier 1
+      # (scale 0.1) last. It composes the permanent P3-S6 gate, and through it
+      # P3-S5 … P3-S1, P2-S8 and the chain back to Phase 1.
+      - name: Phase 3 slice gate — P3-S7 (composes P3-S6)
+        run: npm run gate:phase3:s7
         env:
           PG_PORT: '5432'
       - name: Tampered-migration hard-fail proof

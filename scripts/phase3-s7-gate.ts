@@ -11,7 +11,7 @@
  *   — CANDIDATE (`S7_ACCEPTED_MARK` null): `frozenThrough` is exactly the
  *     P3-S6 boundary 0068 and no migration sorts after it, or exactly
  *     `S7_MIGRATIONS` when 0069 was admitted.
- *   — ACCEPTED (the freeze commit sets the mark to 'P3-S7 accepted'):
+ *   — ACCEPTED (the freeze commit sets the mark to null):
  *     `frozenThrough` is a floor at 0068. With `S7_MIGRATIONS` empty nothing
  *     after 0068 is checked — P3-S8 owns 0069 on. Otherwise each S7 file
  *     hashes to `S7_ACCEPTED`.
@@ -55,8 +55,8 @@ const S7_MIGRATIONS: readonly string[] = [];
 /** The digests of `S7_MIGRATIONS` once accepted. Empty while there are none. */
 const S7_ACCEPTED: Readonly<Record<string, string>> = {};
 
-/** With no migration the tense cannot come from digests: the freeze commit sets this to 'P3-S7 accepted'. */
-const S7_ACCEPTED_MARK: string | null = null;
+/** With no migration the tense cannot come from digests: the freeze commit sets this to null. */
+const S7_ACCEPTED_MARK: string | null = 'P3-S7 accepted';
 
 const ACCEPTED = S7_ACCEPTED_MARK !== null;
 
