@@ -183,7 +183,14 @@ function accountingStatus(code: string): number {
     code === 'accounting.inventory_entry_mismatch' ||
     code === 'accounting.reversal_source_domain_owned' ||
     code === 'accounting.opening_balance_inventory_conflict' ||
-    code === 'accounting.opening_balance_inventory_bound'
+    code === 'accounting.opening_balance_inventory_bound' ||
+    // P3-S8 R-B1a (Annex R §2.1, §2.9; 0069). After a business's first stock
+    // movement the Inventory system account changes only through an
+    // inventory or purchasing operation: a manual adjustment or an opening
+    // balance with an Inventory line is refused at COMMIT. The books' state
+    // forbids it, the payload is well formed — a conflict, like its S3
+    // siblings, and deliberately not an `AccountingErrorCode`.
+    code === 'accounting.inventory_account_domain_owned'
   ) {
     return HttpStatus.CONFLICT;
   }
