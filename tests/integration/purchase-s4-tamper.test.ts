@@ -15,7 +15,12 @@
  *   4. a deficit decremented without a coverage (`inventory.deficit_coverage_mismatch`);
  *   5. a purchase entry with a third line (`accounting.inventory_entry_mismatch`);
  *   6. the generic reversal of a purchase entry, and of a catch-up entry
- *      (`accounting.reversal_source_domain_owned`).
+ *      (`accounting.reversal_source_domain_owned`);
+ *   7. a coverage of a variant its origin purchase does not receive
+ *      (`inventory.stock_source_line_missing`, R-36/R-41);
+ *   8. a coverage added to its header by another operation — refused at
+ *      once by the BEFORE INSERT same-transaction guard
+ *      (`inventory.source_document_immutable`, R-36).
  * Each case first shows the honest state passes the same probe.
  */
 import { randomUUID } from 'node:crypto';
@@ -23,7 +28,7 @@ import type { Client } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { PostingCommand } from '@daftar/accounting';
 import { ensurePostgres, ownerPool, resetData } from '../helpers/test-app';
-import { atCommit, attempt, must, ownerClient, refusedWith, seedS3World, today, type S3World } from '../helpers/inventory-commands';
+import { atCommit, attempt, expectAccepted, must, ownerClient, refusedWith, seedS3World, today, type S3World } from '../helpers/inventory-commands';
 import { domainReversalFingerprint, reverseInTx } from '../helpers/inventory-posting';
 import { installStockFixture } from '../helpers/stock-ledger';
 import {
@@ -219,6 +224,76 @@ describe('T-15 each deferred guard refuses its forged fact at COMMIT', () => {
         'accounting.reversal_source_domain_owned',
         'negative_inventory_cost_adjustment',
       );
+    });
+  });
+
+  it('7. a coverage of a variant its origin purchase does not receive → stock_source_line_missing (R-36)', async () => {
+    await inTx(async () => {
+      const A = world.A;
+      // A real receipt of piece2 at w1 gives that key a movement a deficit layer can name; the GOLD-54 purchase receives only piece.
+      // It runs first: the coverage below is then written by the coverage receipt's own operation, as R-36 requires.
+      // Only piece2: the piece key stays empty for the GOLD-54 seed.
+      await draftAndReceive(
+        c,
+        A,
+        await draftCommand(c, await createSupplier(c, A, FULL_CONTACTS), A.w1, [{ variantId: A.piece2.variantId, qty: '2', unitPriceMinor: '700' }]),
+      );
+      const run = await coverageReceipt();
+      await honestProbe();
+      const adj = must(run.prepared.cmd.coverageAdjustmentId);
+      const movement = must(
+        (
+          await c.query<{ id: string }>(`SELECT id::text FROM stock_movements WHERE business_id = $1 AND warehouse_id = $2 AND variant_id = $3 LIMIT 1`, [
+            A.businessId,
+            A.w1,
+            A.piece2.variantId,
+          ])
+        ).rows[0],
+      ).id;
+      const layer = randomUUID();
+      await c.query(
+        `INSERT INTO negative_inventory_deficits (tenant_id, business_id, id, warehouse_id, variant_id, source_stock_movement_id, deficit_seq,
+                                                  original_deficit_qty, uncovered_qty, provisional_unit_cost_base_minor, status)
+         VALUES ($1, $2, $3, $4, $5, $6, 99, 1, 1, 100, 'open')`,
+        [A.tenantId, A.businessId, layer, A.w1, A.piece2.variantId, movement],
+      );
+      await c.query(
+        `INSERT INTO negative_deficit_coverages (tenant_id, business_id, adjustment_id, deficit_id, variant_id, qty_covered,
+                                                 provisional_unit_cost_base_minor, actual_unit_cost_base_minor)
+         VALUES ($1, $2, $3, $4, $5, 1, 100, 100)`,
+        [A.tenantId, A.businessId, adj, layer, A.piece2.variantId],
+      );
+      refusedWith(await atCommit(c), 'P0001', 'inventory.stock_source_line_missing');
+    });
+  });
+
+  it('8. a coverage added to its header by another operation → source_document_immutable at once (R-36); the creating operation may add it', async () => {
+    await inTx(async () => {
+      const A = world.A;
+      const run = await coverageReceipt();
+      await honestProbe();
+      const adj = must(run.prepared.cmd.coverageAdjustmentId);
+      const trace = must((await c.query<{ t: string }>(`SELECT current_setting('app.business_transaction_id', true) AS t`)).rows[0]).t;
+      // A fresh open layer of the covered key, so the added coverage is unique on (adjustment, deficit).
+      const layer = randomUUID();
+      await c.query(
+        `INSERT INTO negative_inventory_deficits (tenant_id, business_id, id, warehouse_id, variant_id, source_stock_movement_id, deficit_seq,
+                                                  original_deficit_qty, uncovered_qty, provisional_unit_cost_base_minor, status)
+         SELECT tenant_id, business_id, $2, warehouse_id, variant_id, source_stock_movement_id, 99, 1, 1, 100, 'open'
+           FROM negative_inventory_deficits WHERE business_id = $1 LIMIT 1`,
+        [A.businessId, layer],
+      );
+      const add = (): Promise<unknown> =>
+        c.query(
+          `INSERT INTO negative_deficit_coverages (tenant_id, business_id, adjustment_id, deficit_id, variant_id, qty_covered,
+                                                   provisional_unit_cost_base_minor, actual_unit_cost_base_minor)
+           VALUES ($1, $2, $3, $4, $5, 1, 100, 120)`,
+          [A.tenantId, A.businessId, adj, layer, A.piece.variantId],
+        );
+      await c.query(`SELECT set_config('app.business_transaction_id', $1, true)`, [randomUUID()]);
+      refusedWith(await attempt(c, add), 'P0001', 'inventory.source_document_immutable', 'another operation');
+      await c.query(`SELECT set_config('app.business_transaction_id', $1, true)`, [trace]);
+      expectAccepted(await attempt(c, add), 'the creating operation passes the immediate guard');
     });
   });
 });
