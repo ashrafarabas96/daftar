@@ -2,12 +2,12 @@ import { Body, Controller, Get, HttpCode, Inject, Param, Post, Put, Query, Res, 
 import type { Response } from 'express';
 import { AppError } from '@daftar/domain-core';
 import type { Page, SupplierCommandResultDto, SupplierDto, SupplierOpenPurchasesDto, SupplierPayableDto } from '@daftar/shared-contracts';
-import { z } from 'zod';
 import { ZodValidationPipe } from '../../common/validation';
 import { Membership, RequiresPermission } from '../../common/guards';
 import type { MembershipContext } from '../tenancy/tenancy.service';
 import { newBusinessTransactionId } from '../inventory/business-transaction';
 import { strictUuidParam } from '../inventory/canonical-id';
+import { searchQueryParam } from '../inventory/read-scope';
 import {
   SupplierCreateSchema,
   SupplierLifecycleSchema,
@@ -24,14 +24,10 @@ import { SupplierService } from './supplier.service';
 /**
  * `GET /v1/suppliers` with the P3-S7 `search` (PHASE_3_S7_CONTRACT A-09(d),
  * Annex R #25): the strict S4 schema, `limit` 1..100 unchanged, plus a name
- * substring of 1..100 characters after trimming.
+ * substring of 1..100 characters after trimming, holding no NUL (L-2).
  */
 const SupplierSearchQuerySchema = SupplierListQuerySchema.extend({
-  search: z
-    .string()
-    .transform((s) => s.trim())
-    .pipe(z.string().min(1).max(100))
-    .optional(),
+  search: searchQueryParam.optional(),
 });
 
 /**

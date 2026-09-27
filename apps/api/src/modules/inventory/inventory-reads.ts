@@ -19,7 +19,7 @@ import type { QueryResultRow } from 'pg';
 import { Database } from '../../infra/database';
 import type { MembershipContext } from '../tenancy/tenancy.service';
 import { inventoryRefusal } from './inventory-errors';
-import { assertWarehouseReachable, likeEscaped, quantityText, reachableWarehouses, requireAnyPermission } from './read-scope';
+import { assertWarehouseReachable, likeEscaped, quantityText, reachableWarehouses, requireAnyPermission, searchQueryParam } from './read-scope';
 
 /**
  * The inventory READS of P3-S7 (PHASE_3_S7_CONTRACT A-05 … A-08): access,
@@ -49,10 +49,7 @@ const limit = z
   .regex(/^\d{1,2}$/, 'a limit is 1..50')
   .transform((s) => Number.parseInt(s, 10))
   .pipe(z.number().int().min(1).max(50));
-const search = z
-  .string()
-  .transform((s) => s.trim())
-  .pipe(z.string().min(1).max(100));
+const search = searchQueryParam;
 const flag = z.enum(['true', 'false']).transform((s) => s === 'true');
 /** `ids=a,b,c` (or the parameter repeated): 1..200 distinct canonical product ids. */
 const idList = z

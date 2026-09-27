@@ -1,4 +1,5 @@
 import { AppError, hasPermission, type Permission } from '@daftar/domain-core';
+import { z } from 'zod';
 import type { Database } from '../../infra/database';
 import type { MembershipContext } from '../tenancy/tenancy.service';
 import { inventoryRefusal } from './inventory-errors';
@@ -52,6 +53,23 @@ export function requireAnyPermission(m: MembershipContext, permissions: readonly
 export function assertWarehouseReachable(reachable: ReadonlySet<string> | null, warehouseId: string): void {
   if (reachable !== null && !reachable.has(warehouseId)) throw inventoryRefusal('inventory.warehouse_out_of_scope');
 }
+
+/**
+ * The `search` query parameter of every S7 read: 1..100 characters after
+ * trimming, and no NUL. PostgreSQL refuses a NUL in text (SQLSTATE 22021),
+ * which would surface as a 500; it is a validation refusal here instead
+ * (review finding L-2).
+ */
+export const searchQueryParam = z
+  .string()
+  .transform((s) => s.trim())
+  .pipe(
+    z
+      .string()
+      .min(1)
+      .max(100)
+      .refine((s) => !s.includes('\u0000'), 'a search holds no NUL character'),
+  );
 
 /** `%`, `_` and `\` escaped for an `ILIKE … ESCAPE '\'` substring pattern. */
 export function likeEscaped(text: string): string {

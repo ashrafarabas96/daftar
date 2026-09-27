@@ -12,7 +12,7 @@ import type {
 import type { QueryResultRow } from 'pg';
 import { Database } from '../../infra/database';
 import { readBaseCurrency } from '../inventory/inventory-stock-read';
-import { assertBusinessWide, likeEscaped, reachableWarehouses, requireAnyPermission } from '../inventory/read-scope';
+import { assertBusinessWide, likeEscaped, reachableWarehouses, requireAnyPermission, searchQueryParam } from '../inventory/read-scope';
 import type { MembershipContext } from '../tenancy/tenancy.service';
 import { purchasingRefusal } from './purchasing-errors';
 
@@ -125,11 +125,7 @@ const limit = z
 export const SupplierBalancesQuerySchema = z
   .object({
     status: z.enum(['active', 'inactive']).optional(),
-    search: z
-      .string()
-      .transform((s) => s.trim())
-      .pipe(z.string().min(1).max(100))
-      .optional(),
+    search: searchQueryParam.optional(),
     owedOnly: z
       .enum(['true', 'false'])
       .transform((s) => s === 'true')

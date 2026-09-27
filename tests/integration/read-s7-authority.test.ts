@@ -319,3 +319,22 @@ describe('T-11 R-S7-1 the blind count is enforced by the server (TL-8)', () => {
     expect(d.lines.map((l) => [l.countedQty, l.expectedQty, l.varianceQty])).toEqual([['3', '3', '0']]);
   });
 });
+
+describe('T-11 input: a NUL byte in any search is a validation refusal, never a 500 (review L-2)', () => {
+  it('items, stock, suppliers and supplier balances answer 400 VALIDATION_FAILED', async () => {
+    const paths = [
+      '/v1/inventory/items?search=%00',
+      '/v1/inventory/items?search=a%00b',
+      `/v1/inventory/stock?warehouseId=${w.A.w1}&search=%00`,
+      `/v1/inventory/stock?warehouseId=${w.A.w1}&search=a%00b`,
+      '/v1/suppliers?search=%00',
+      '/v1/suppliers?search=a%00b',
+      '/v1/supplier-balances?search=%00',
+      '/v1/supplier-balances?search=a%00b',
+    ];
+    for (const path of paths) {
+      const r = await readAs(t, w.owner, w.A.businessId, path);
+      expect({ path, status: r.status, code: (r.body as { error?: { code?: string } }).error?.code }).toEqual({ path, status: 400, code: 'VALIDATION_FAILED' });
+    }
+  });
+});
