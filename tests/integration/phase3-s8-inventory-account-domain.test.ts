@@ -1,7 +1,7 @@
 /**
  * P3-S8 T-19 — THE INVENTORY ACCOUNT BELONGS TO THE INVENTORY DOMAIN ONCE THE
  * BUSINESS HAS A STOCK LEDGER (docs/PHASE_3_S8_CONTRACT.md Annex R §2, R-B1a,
- * the working default while B-1 is with the Tech Lead; 0069 R-91 … R-93).
+ * B-1 as the Tech Lead ruled it on 2026-09-27; 0069 R-91 … R-93).
  *
  * After a business's first stock movement, a journal entry of source type
  * `manual_adjustment` or `opening_balance` that carries a line on the
