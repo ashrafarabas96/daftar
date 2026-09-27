@@ -7,6 +7,16 @@ import { Badge, Button, Select, Table, TextField, colors, spacing, typography } 
 import { makeT, type Locale } from '@/lib/i18n';
 import { ApiError, refreshSession } from '@/lib/client';
 import { archiveProduct, attachMedia, getMediaAccessUrl, getProduct, listCategories, updateProduct, uploadMedia } from '@/lib/merchant-api';
+import {
+  getInventoryAccess,
+  listInventoryItems,
+  listInventoryUnits,
+  putProductConfiguration,
+  type InventoryItemDto,
+  type InventoryUnitDto,
+} from '@/lib/phase3-api';
+import { refusalKey } from '@/lib/phase3-errors';
+import { TrackingCard } from '@/views/catalog/TrackingCard';
 import { PageShell } from '../../AppHeader';
 
 const LOCALES: LocaleCode[] = ['ar', 'en', 'tr'];
@@ -284,6 +294,107 @@ export default function ProductEditPage({ params }: { params: Promise<{ locale: 
       ) : (
         <p>{error ?? t('common.loading')}</p>
       )}
+      {product ? <TrackingSection locale={locale} productId={product.id} /> : null}
     </PageShell>
+  );
+}
+
+/**
+ * "Track stock" (P3-S7 A-11, A-06): shown only to a member who may configure
+ * stock (`inventory.adjust`, from `GET /v1/inventory/access`). The product's
+ * tracking, unit and decimal places come from `GET /v1/inventory/items?ids=`;
+ * saving states the wanted end state with
+ * `PUT /v1/inventory/products/:id/configuration`, which answers
+ * `changed: false` when it already held. It sits outside the product form, so
+ * its button never submits the product.
+ */
+function TrackingSection({ locale, productId }: { locale: Locale; productId: string }) {
+  const t = makeT(locale);
+  const [allowed, setAllowed] = useState(false);
+  const [item, setItem] = useState<InventoryItemDto | null>(null);
+  const [units, setUnits] = useState<InventoryUnitDto[]>([]);
+  const [track, setTrack] = useState(false);
+  const [unitCode, setUnitCode] = useState('');
+  const [decimals, setDecimals] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [errorKey, setErrorKey] = useState<string | null>(null);
+  const [noticeKey, setNoticeKey] = useState<string | null>(null);
+
+  const show = (found: InventoryItemDto) => {
+    setItem(found);
+    setTrack(found.trackInventory);
+    setUnitCode(found.unitCode ?? '');
+    setDecimals(found.unitDecimals === null ? '' : String(found.unitDecimals));
+  };
+
+  useEffect(() => {
+    let live = true;
+    void (async () => {
+      try {
+        const access = await getInventoryAccess();
+        if (!live || !access.permissions.includes('inventory.adjust')) return;
+        setAllowed(true);
+        const [items, unitList] = await Promise.all([listInventoryItems({ ids: [productId], trackedOnly: false }), listInventoryUnits()]);
+        if (!live) return;
+        setUnits(unitList.items);
+        const found = items.items.find((i) => i.productId === productId);
+        if (found) show(found);
+      } catch (e) {
+        if (live) setErrorKey(refusalKey(e));
+      }
+    })();
+    return () => {
+      live = false;
+    };
+  }, [productId]);
+
+  async function save() {
+    setBusy(true);
+    setErrorKey(null);
+    setNoticeKey(null);
+    try {
+      const answer = await putProductConfiguration(productId, {
+        trackInventory: track,
+        ...(track && unitCode !== '' ? { unitCode } : {}),
+        ...(track && decimals !== '' ? { unitDecimals: Number.parseInt(decimals, 10) } : {}),
+      });
+      setNoticeKey(answer.changed ? 'stock.tracking.saved' : 'stock.tracking.unchanged');
+      const again = await listInventoryItems({ ids: [productId], trackedOnly: false });
+      const found = again.items.find((i) => i.productId === productId);
+      if (found) show(found);
+    } catch (e) {
+      setErrorKey(refusalKey(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (!allowed) {
+    // The grants could not be read: say so, rather than hide the card in silence.
+    return errorKey !== null ? (
+      <p role="alert" style={{ color: colors.semantic.danger, marginTop: spacing[6] }}>
+        {t(errorKey)}
+      </p>
+    ) : null;
+  }
+  return (
+    <div style={{ marginTop: spacing[6], maxWidth: '36rem' }}>
+      <TrackingCard
+        t={t}
+        locale={locale}
+        item={item}
+        units={units}
+        track={track}
+        unitCode={unitCode}
+        decimals={decimals}
+        busy={busy}
+        errorKey={errorKey}
+        noticeKey={noticeKey}
+        onTrack={setTrack}
+        onUnit={setUnitCode}
+        onDecimals={setDecimals}
+        onSave={() => void save()}
+      />
+    </div>
   );
 }
