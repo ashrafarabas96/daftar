@@ -1,6 +1,6 @@
 import { Injectable, type ArgumentMetadata, type PipeTransform } from '@nestjs/common';
 import { z } from 'zod';
-import { purchasingRefusal } from './purchasing-errors';
+import { classifiedRefusal, purchasingRefusal } from './purchasing-errors';
 
 /**
  * The P3-S4 supplier and purchase requests (PHASE_3_S4_CONTRACT A-11, A-12, A-19).
@@ -216,6 +216,104 @@ export class PurchaseDraftValidationPipe implements PipeTransform {
   }
 }
 
+// ── Supplier returns and purchase reversal (P3-S5) ───────────────────────
+//
+// PHASE_3_S5_CONTRACT A-19. The same rules as above: strict objects, exact
+// decimal strings, canonical lowercase ids, dates the client states (never a
+// server default: "no clock in a fingerprinted command"). Neither request has
+// an amount, a rate or a tax field: every stored amount is the server's (A-07,
+// A-10), and a tax element is BLOCKED BY OD-03 (A-14), so `taxAmount` is
+// refused as an unknown key like any other.
+//
+// Judged by the service or the routine, not here, so their typed codes reach
+// the client: a date before the purchase or in the business's future (both
+// need the business timezone), a purchase line of another purchase, the
+// purchased and the stock bounds, and every state refusal.
+
+/** A reason: at most 500 characters after trimming, counted as the routine counts them (`char_length`). */
+const reasonText = z.string().refine((v) => [...v.trim()].length <= 500, 'a reason is at most 500 characters');
+
+/** One return line: one purchase line and the quantity of it that leaves (A-12). */
+const supplierReturnLine = z
+  .object({
+    lineId: uuid,
+    purchaseLineId: uuid,
+    quantity: positiveQuantity,
+  })
+  .strict();
+
+/**
+ * `POST /v1/purchases/:purchaseId/returns` (A-19). The return id is the
+ * idempotency key (A-17); the warehouse is the one the goods leave, and the
+ * only scope target (TL-5). The reason is optional.
+ */
+export const SupplierReturnSchema = z
+  .object({
+    returnId: uuid,
+    warehouseId: uuid,
+    documentDate: civilDate,
+    reason: optionalText(1, 500),
+    lines: z.array(supplierReturnLine).min(1).max(MAX_PURCHASE_LINES),
+  })
+  .strict();
+
+/**
+ * `POST /v1/purchases/:purchaseId/reversal` (A-19). The reason is REQUIRED
+ * (`accounting_post_reversal` needs one); its absence is typed by the pipe
+ * below, so it is admitted here as nullable text only to reach that check.
+ */
+const PurchaseReversalBodySchema = z
+  .object({
+    reversalDate: civilDate,
+    reason: reasonText.nullish(),
+  })
+  .strict();
+
+/** The reversal request after its pipe: the reason is present and not blank. */
+export interface PurchaseReversalRequest {
+  readonly reversalDate: string;
+  readonly reason: string;
+}
+
+/**
+ * The return's body pipe: the strict schema, then the one line rule the
+ * request alone decides. A return line id, or a purchase line, named twice is
+ * refused with `supplier_return.lines_invalid` (A-12: one line per purchase
+ * line per return) before the service — and so the minter — is reached.
+ */
+@Injectable()
+export class SupplierReturnValidationPipe implements PipeTransform {
+  transform(value: unknown, metadata: ArgumentMetadata): unknown {
+    if (metadata.type !== 'body') return value;
+    const request = SupplierReturnSchema.parse(value);
+    const lineIds = new Set(request.lines.map((l) => l.lineId));
+    const purchaseLineIds = new Set(request.lines.map((l) => l.purchaseLineId));
+    if (lineIds.size !== request.lines.length || purchaseLineIds.size !== request.lines.length) {
+      throw classifiedRefusal('supplier_return.lines_invalid');
+    }
+    return request;
+  }
+}
+
+/**
+ * The reversal's body pipe: the strict schema, then the mandatory reason. An
+ * omitted, null or blank reason is refused with the typed
+ * `purchase_reversal.reason_required` (§3: 422) here, at the DTO, so no
+ * payload is built and no assertion is minted for it. The routine refuses it
+ * again behind this.
+ */
+@Injectable()
+export class PurchaseReversalValidationPipe implements PipeTransform {
+  transform(value: unknown, metadata: ArgumentMetadata): unknown {
+    if (metadata.type !== 'body') return value;
+    const body = PurchaseReversalBodySchema.parse(value);
+    const reason = body.reason ?? '';
+    if (reason.trim().length === 0) throw classifiedRefusal('purchase_reversal.reason_required');
+    const request: PurchaseReversalRequest = { reversalDate: body.reversalDate, reason };
+    return request;
+  }
+}
+
 // ── Reads ────────────────────────────────────────────────────────────────
 
 /** `limit` 1..100 (default chosen by the read), as query text. */
@@ -247,6 +345,22 @@ export const PurchaseListQuerySchema = z
   })
   .strict();
 
+/** `GET /v1/purchases/:purchaseId/returns`: the purchase's returns, newest first. */
+export const SupplierReturnListQuerySchema = z
+  .object({
+    limit: limit.optional(),
+    cursor: cursor.optional(),
+  })
+  .strict();
+
+/** `GET /v1/suppliers/:supplierId/credit-notes`: the supplier's credit notes, newest first. */
+export const SupplierCreditNoteListQuerySchema = z
+  .object({
+    limit: limit.optional(),
+    cursor: cursor.optional(),
+  })
+  .strict();
+
 export type SupplierCreateRequest = z.infer<typeof SupplierCreateSchema>;
 export type SupplierUpdateRequest = z.infer<typeof SupplierUpdateSchema>;
 export type SupplierLifecycleRequest = z.infer<typeof SupplierLifecycleSchema>;
@@ -254,3 +368,6 @@ export type PurchaseDraftRequest = z.infer<typeof PurchaseDraftSchema>;
 export type PurchaseTransitionRequest = z.infer<typeof PurchaseTransitionSchema>;
 export type SupplierListQuery = z.infer<typeof SupplierListQuerySchema>;
 export type PurchaseListQuery = z.infer<typeof PurchaseListQuerySchema>;
+export type SupplierReturnRequest = z.infer<typeof SupplierReturnSchema>;
+export type SupplierReturnListQuery = z.infer<typeof SupplierReturnListQuerySchema>;
+export type SupplierCreditNoteListQuery = z.infer<typeof SupplierCreditNoteListQuerySchema>;

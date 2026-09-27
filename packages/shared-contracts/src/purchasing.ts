@@ -1,5 +1,7 @@
 /**
- * Suppliers, purchases, receiving and landed cost — P3-S4 (PHASE_3_S4_CONTRACT A-19, A-20).
+ * Suppliers, purchases, receiving and landed cost — P3-S4 (PHASE_3_S4_CONTRACT
+ * A-19, A-20); supplier returns, supplier credit notes and the purchase
+ * reversal — P3-S5 (PHASE_3_S5_CONTRACT A-19).
  *
  * The conventions of the P3-S3 inventory contracts hold unchanged:
  *
@@ -23,7 +25,8 @@
  *
  * Tax is BLOCKED BY OD-03 (A-12): `taxAmount` exists only so that the day a
  * tax policy is decided it is already a signed input. Any non-zero value is
- * refused with `purchase.tax_policy_absent` before anything is minted.
+ * refused with `purchase.tax_policy_absent` before anything is minted. No S5
+ * request has a tax field at all (S5 A-14).
  */
 
 // ── Suppliers: requests ──────────────────────────────────────────────────
@@ -166,7 +169,12 @@ export interface PurchaseTransitionRequestDto {
 
 // ── Purchases: responses ─────────────────────────────────────────────────
 
-export type PurchaseStatusDto = 'draft' | 'received' | 'cancelled';
+/**
+ * `reversed` is DERIVED (PHASE_3_S5_CONTRACT A-04, TL-2): the stored status of
+ * a reversed purchase stays `received`, and a purchase reads as `reversed`
+ * exactly when its purchase reversal exists.
+ */
+export type PurchaseStatusDto = 'draft' | 'received' | 'cancelled' | 'reversed';
 
 /** The FX snapshot a receipt took (A-17). Domestic purchases carry `source: 'base'`, rate `"1"` and no rate id. */
 export interface PurchaseRateDto {
@@ -306,4 +314,176 @@ export interface PurchasePayableDto {
   /** Integer strings; credit − debit over the purchase's `accounts_payable` lines. */
   outstandingBaseMinor: string;
   outstandingTxnMinor: string;
+}
+
+// ── Supplier returns and purchase reversal: requests (P3-S5) ─────────────
+//
+// PHASE_3_S5_CONTRACT A-19. The P3-S4 conventions above hold unchanged. No S5
+// request carries tax: every S5 document descends from a purchase with no tax,
+// and a tax element is BLOCKED BY OD-03 (A-14), so a tax field is refused as
+// an unknown key. No request carries an amount either: every stored amount is
+// computed by the server from the purchase and the stock (A-07, A-10).
+
+/** One line of a supplier return: how much of one purchase line leaves (A-12). */
+export interface SupplierReturnLineRequestDto {
+  /** Client-chosen canonical lowercase uuid: the return line's id. */
+  lineId: string;
+  /** The purchase line returned from; at most one return line per purchase line (`supplier_return.lines_invalid`). */
+  purchaseLineId: string;
+  /**
+   * > 0, at most 4 fraction digits. With earlier returns it never exceeds the
+   * purchased quantity (`supplier_return.quantity_exceeds_purchased`, 422), and
+   * never the stock of the return warehouse (`inventory.insufficient_stock`, 409).
+   */
+  quantity: string;
+}
+
+/**
+ * `POST /v1/purchases/:purchaseId/returns` — requires `purchases.return` and
+ * the scope of `warehouseId`, the warehouse the goods leave (TL-5). 201 on
+ * create, 200 on replay. Insert-only: a return is never edited, cancelled or
+ * deleted (A-04).
+ */
+export interface SupplierReturnRequestDto {
+  /** Client-chosen canonical lowercase uuid: the idempotency key. */
+  returnId: string;
+  /** The warehouse the goods leave; it may differ from the purchase's (A-13). One warehouse per return (TL-6). */
+  warehouseId: string;
+  /** `YYYY-MM-DD`: the journal entry date. Not before the purchase date, not in the future. */
+  documentDate: string;
+  /** 1..500 characters after trimming. Optional. */
+  reason?: string | null;
+  /** 1..200 lines. */
+  lines: SupplierReturnLineRequestDto[];
+}
+
+/**
+ * `POST /v1/purchases/:purchaseId/reversal` — requires `purchases.receive` and
+ * the purchase warehouse's scope (TL-4). Refused unless all four
+ * preconditions hold, each with its own `purchase_reversal.*` code (A-09).
+ */
+export interface PurchaseReversalRequestDto {
+  /** `YYYY-MM-DD`: the reversal entry date. Not before the purchase date, not in the future. */
+  reversalDate: string;
+  /** REQUIRED, 1..500 characters after trimming (`purchase_reversal.reason_required`, 422). */
+  reason: string;
+}
+
+// ── Supplier returns and purchase reversal: responses (P3-S5) ────────────
+
+/**
+ * A supplier credit note (A-11): the part of a return's value the purchase's
+ * outstanding AP could not absorb. Written only inside its return and
+ * insert-only in S5. There is no stored status: a note is settled exactly
+ * when its remaining amount is `"0"`. Amounts are integer minor-unit strings.
+ *
+ * `GET /v1/suppliers/:supplierId/credit-notes` lists them; it requires
+ * `suppliers.view` AND business-wide branch scope (the S4 TL-4 precedent).
+ */
+export interface SupplierCreditNoteDto {
+  creditNoteId: string;
+  supplierId: string;
+  returnId: string;
+  purchaseId: string;
+  /** The purchase currency. */
+  currency: string;
+  originalTxnMinor: string;
+  remainingTxnMinor: string;
+  originalCarryingBaseMinor: string;
+  remainingCarryingBaseMinor: string;
+  /** The purchase's FX snapshot (A-11(c)). */
+  rate: PurchaseRateDto;
+  /** `YYYY-MM-DD`: the return's document date. */
+  issuedOn: string;
+  createdAt: string;
+}
+
+/** One stored line of a supplier return. */
+export interface SupplierReturnLineDto {
+  lineId: string;
+  lineNo: number;
+  purchaseLineId: string;
+  productId: string;
+  /** The merchant variant, or null for a simple product. */
+  variantId: string | null;
+  qty: string;
+  /** The line's frozen share of the purchase line's carrying value, in the purchase currency (A-10(a)). */
+  carryingTxnMinor: string;
+  /** The stock value that left, at the return warehouse's average, in base minor units (A-10(e)). */
+  valueOutBaseMinor: string;
+  /** The movement that took the goods out. */
+  movementId: string;
+}
+
+/**
+ * A supplier return as stored (A-10): `GET /v1/supplier-returns/:returnId` and
+ * each item of `GET /v1/purchases/:purchaseId/returns`, both requiring
+ * `purchases.view` and the return (or purchase) warehouse in scope.
+ * `carryingTxnMinor` splits into AP first and any excess credit;
+ * `purchasePriceVarianceBaseMinor` is signed (positive: a credit to purchase
+ * price variance).
+ */
+export interface SupplierReturnDto {
+  returnId: string;
+  purchaseId: string;
+  supplierId: string;
+  warehouseId: string;
+  documentDate: string;
+  reason: string | null;
+  /** The purchase currency. */
+  currency: string;
+  carryingTxnMinor: string;
+  apTxnMinor: string;
+  apBaseMinor: string;
+  creditTxnMinor: string;
+  creditBaseMinor: string;
+  inventoryValueBaseMinor: string;
+  purchasePriceVarianceBaseMinor: string;
+  lines: SupplierReturnLineDto[];
+  /** Null unless the return's value exceeded the purchase's outstanding AP. */
+  creditNote: SupplierCreditNoteDto | null;
+  /** The `supplier_return` journal entry. */
+  entryId: string;
+  createdAt: string;
+}
+
+/** The answer of `POST /v1/purchases/:purchaseId/returns` — always read from stored rows. */
+export interface SupplierReturnResultDto extends SupplierReturnDto {
+  /** True when this is the stored result of an earlier identical command. */
+  replayed: boolean;
+  businessTransactionId: string;
+}
+
+/** One line of a purchase reversal: the exact negation of that purchase line's receipt (A-09). */
+export interface PurchaseReversalLineDto {
+  /** The purchase line's id: a reversal line's identity is its purchase line. */
+  lineId: string;
+  productId: string;
+  variantId: string | null;
+  qty: string;
+  /** The stored value of the line's receipt movement, removed exactly, in base minor units. */
+  valueBaseMinor: string;
+  /** The `purchase_reversal` movement. */
+  movementId: string;
+}
+
+/**
+ * The answer of `POST /v1/purchases/:purchaseId/reversal` — always read from
+ * stored rows. The purchase then reads as `status: 'reversed'`.
+ */
+export interface PurchaseReversalResultDto {
+  purchaseId: string;
+  warehouseId: string;
+  reversalDate: string;
+  reason: string;
+  /** Σ of the lines' values: the base total the receipt added. */
+  totalValueBaseMinor: string;
+  lines: PurchaseReversalLineDto[];
+  /** The purchase's journal entry, which this reversal mirrors. */
+  originalEntryId: string;
+  /** The Phase 2 `reversal` journal entry. */
+  reversalEntryId: string;
+  createdAt: string;
+  replayed: boolean;
+  businessTransactionId: string;
 }
