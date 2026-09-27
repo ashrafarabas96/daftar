@@ -114,6 +114,8 @@ if (!existsSync(ARCHIVE)) {
   const sidecar = `${ARCHIVE}.sha256`;
   if (existsSync(sidecar)) {
     const recorded = readFileSync(sidecar, 'utf8').trim().split(/\s+/)[0];
+    // String.prototype.split always returns at least one element; the guard only narrows the type.
+    if (recorded === undefined) throw new Error(`${sidecar} could not be split into fields`);
     if (recorded !== archiveSha256)
       problems.push(`${sidecar.replace(`${ROOT}/`, '')} records ${recorded.slice(0, 12)}… but the archive hashes to ${archiveSha256.slice(0, 12)}…`);
   } else {

@@ -101,7 +101,9 @@ export const PHASE2_PREFIX: readonly (readonly [name: string, sha256: string])[]
   ['0052_accounting_journal_lines_rls_performance.sql', '0acf165003c678f8d3017797e77033fadf2e9e791be54f98048031108c72ad84'],
 ];
 
-export const PHASE2_PREFIX_END = PHASE2_PREFIX[PHASE2_PREFIX.length - 1][0];
+const LAST_PREFIX_ENTRY = PHASE2_PREFIX[PHASE2_PREFIX.length - 1];
+if (LAST_PREFIX_ENTRY === undefined) throw new Error('PHASE2_PREFIX is empty: the accepted Phase 2 prefix has no last migration');
+export const PHASE2_PREFIX_END = LAST_PREFIX_ENTRY[0];
 const PREFIX_END_NUMBER = Number(PHASE2_PREFIX_END.slice(0, 4));
 
 function inPrefixRange(file: string): boolean {
