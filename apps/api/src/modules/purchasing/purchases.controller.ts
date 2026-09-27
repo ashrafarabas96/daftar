@@ -1,11 +1,12 @@
-import { Body, Controller, Get, HttpCode, Inject, Param, Post, Put, Query, Res, UsePipes } from '@nestjs/common';
-import type { Response } from 'express';
+import { Body, Controller, Get, HttpCode, Inject, Param, Post, Put, Query, Req, Res, UsePipes } from '@nestjs/common';
+import type { Request, Response } from 'express';
 import type {
   Page,
   PurchaseCommandResultDto,
   PurchaseDto,
   PurchasePayableDto,
   PurchaseReceiptDto,
+  PurchaseReturnOptionsDto,
   PurchaseReversalResultDto,
   PurchaseSummaryDto,
   ReceiveAndPayResultDto,
@@ -14,6 +15,7 @@ import type {
 } from '@daftar/shared-contracts';
 import { ZodValidationPipe } from '../../common/validation';
 import { Membership, RequiresPermission } from '../../common/guards';
+import { localeOf } from '../../common/locale';
 import type { MembershipContext } from '../tenancy/tenancy.service';
 import { newBusinessTransactionId } from '../inventory/business-transaction';
 import { strictUuidParam } from '../inventory/canonical-id';
@@ -191,6 +193,17 @@ export class PurchasesController {
   async listReturns(@Membership() m: MembershipContext, @Param('purchaseId') purchaseId: string, @Query() query: unknown): Promise<Page<SupplierReturnDto>> {
     const id = strictUuidParam(purchaseId, 'purchaseId');
     return this.reads.listPurchaseReturns(m, id, SupplierReturnListQuerySchema.parse(query));
+  }
+
+  /**
+   * What can still be returned, per line, and whether the receipt can be
+   * undone (PHASE_3_S7_CONTRACT A-09(c), Annex R #21). Names in the
+   * `Accept-Language` locale.
+   */
+  @Get(':purchaseId/return-options')
+  @RequiresPermission('purchases.view')
+  async returnOptions(@Membership() m: MembershipContext, @Param('purchaseId') purchaseId: string, @Req() req: Request): Promise<PurchaseReturnOptionsDto> {
+    return this.reads.returnOptions(m, strictUuidParam(purchaseId, 'purchaseId'), localeOf(req));
   }
 
   @Get()

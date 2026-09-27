@@ -42,6 +42,13 @@ export function isPaymentMethodCode(code: string): code is PaymentMethodCode {
   return Object.hasOwn(PAYMENT_METHOD_STATUS, code);
 }
 
+/**
+ * Every classified `payment_method.*` code, in table order — the list the
+ * web's error-key test enumerates (PHASE_3_S7_CONTRACT T-10, Annex R #10).
+ * Additive: the table itself is unchanged.
+ */
+export const PAYMENT_METHOD_CODES: readonly PaymentMethodCode[] = Object.keys(PAYMENT_METHOD_STATUS).filter(isPaymentMethodCode);
+
 const DATABASE_CODE_RE = /^(payment_method\.[a-z_]+)\b/;
 
 /** The `payment_method.*` code a database refusal carries, or null. */

@@ -1,7 +1,8 @@
 import { Body, Controller, Get, HttpCode, Inject, Param, Post, Put, Query, Res, UsePipes } from '@nestjs/common';
 import type { Response } from 'express';
 import { AppError } from '@daftar/domain-core';
-import type { Page, SupplierCommandResultDto, SupplierDto, SupplierPayableDto } from '@daftar/shared-contracts';
+import type { Page, SupplierCommandResultDto, SupplierDto, SupplierOpenPurchasesDto, SupplierPayableDto } from '@daftar/shared-contracts';
+import { z } from 'zod';
 import { ZodValidationPipe } from '../../common/validation';
 import { Membership, RequiresPermission } from '../../common/guards';
 import type { MembershipContext } from '../tenancy/tenancy.service';
@@ -17,7 +18,21 @@ import {
   type SupplierUpdateRequest,
 } from './purchasing.schemas';
 import { PurchasingReadService } from './purchasing-reads';
+import { SupplierBalanceReadService, SupplierOpenPurchasesQuerySchema } from './supplier-balance-reads';
 import { SupplierService } from './supplier.service';
+
+/**
+ * `GET /v1/suppliers` with the P3-S7 `search` (PHASE_3_S7_CONTRACT A-09(d),
+ * Annex R #25): the strict S4 schema, `limit` 1..100 unchanged, plus a name
+ * substring of 1..100 characters after trimming.
+ */
+const SupplierSearchQuerySchema = SupplierListQuerySchema.extend({
+  search: z
+    .string()
+    .transform((s) => s.trim())
+    .pipe(z.string().min(1).max(100))
+    .optional(),
+});
 
 /**
  * Suppliers (PHASE_3_S4_CONTRACT A-04, A-11, A-19, A-20).
@@ -44,6 +59,7 @@ export class SuppliersController {
   constructor(
     @Inject(SupplierService) private readonly suppliers: SupplierService,
     @Inject(PurchasingReadService) private readonly reads: PurchasingReadService,
+    @Inject(SupplierBalanceReadService) private readonly balances: SupplierBalanceReadService,
   ) {}
 
   /** Creates an active supplier at revision 1. */
@@ -101,7 +117,7 @@ export class SuppliersController {
   @Get()
   @RequiresPermission('suppliers.view')
   async list(@Membership() m: MembershipContext, @Query() query: unknown): Promise<Page<SupplierDto>> {
-    return this.reads.listSuppliers(m, SupplierListQuerySchema.parse(query));
+    return this.reads.listSuppliers(m, SupplierSearchQuerySchema.parse(query));
   }
 
   @Get(':supplierId')
@@ -124,5 +140,17 @@ export class SuppliersController {
       throw new AppError('FORBIDDEN', 'This read requires business-wide branch scope', 403, { inventoryCode: 'inventory.business_wide_scope_required' });
     }
     return this.reads.supplierPayable(m, id);
+  }
+
+  /**
+   * The supplier's open purchases in reachable warehouses, oldest first, and
+   * with `currency` + `amount` the server's oldest-first payment proposal
+   * (PHASE_3_S7_CONTRACT A-09(b)). `suppliers.view` or `suppliers.pay`, which
+   * the service checks; the route requires only membership.
+   */
+  @Get(':supplierId/open-purchases')
+  async openPurchases(@Membership() m: MembershipContext, @Param('supplierId') supplierId: string, @Query() query: unknown): Promise<SupplierOpenPurchasesDto> {
+    const id = strictUuidParam(supplierId, 'supplierId');
+    return this.balances.openPurchases(m, id, SupplierOpenPurchasesQuerySchema.parse(query));
   }
 }

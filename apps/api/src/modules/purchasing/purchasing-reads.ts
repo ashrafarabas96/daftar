@@ -3,6 +3,7 @@ import { AccountingError, parseDatabaseAccountingError } from '@daftar/accountin
 import { AppError, hasPermission, minorUnitsOf } from '@daftar/domain-core';
 import { DOMESTIC_RATE_R10, parseUnitCost } from '@daftar/inventory';
 import type {
+  LocaleCode,
   Page,
   PurchaseDeficitCoverageDto,
   PurchaseDto,
@@ -11,6 +12,10 @@ import type {
   PurchasePayableDto,
   PurchaseRateDto,
   PurchaseReceiptDto,
+  PurchaseReturnBlockDto,
+  PurchaseReturnOptionLineDto,
+  PurchaseReturnOptionsDto,
+  PurchaseReversalBlockDto,
   PurchaseReversalLineDto,
   PurchaseReversalResultDto,
   PurchaseSettlementsDto,
@@ -34,8 +39,11 @@ import type {
 import type { QueryResultRow } from 'pg';
 import { Database } from '../../infra/database';
 import type { ReadScope } from '../inventory/inventory-stock-read';
+import { assertBusinessWide, likeEscaped, quantityText, reachableWarehouses } from '../inventory/read-scope';
+import { productNameSql, variantNameSql } from '../inventory/inventory-reads';
 import type { MembershipContext } from '../tenancy/tenancy.service';
 import { purchasingRefusal } from './purchasing-errors';
+import { payableSql, type PayableRow } from './supplier-balance-reads';
 import type {
   PurchaseListQuery,
   SupplierCreditNoteListQuery,
@@ -93,31 +101,11 @@ function rateText(stored: string): string {
 // ── Scope ────────────────────────────────────────────────────────────────
 
 /**
- * The warehouses an assigned-scope member reaches (P3-AL-15/39: through
- * `branch_warehouses`, from an ACTIVE branch in their set), or null for a
- * business-wide member. The same rule the command authority applies.
+ * The warehouse reach and the business-wide rule live in the shared read
+ * scope (PHASE_3_S7_CONTRACT §4.2); `reachableWarehouses` is re-exported so
+ * every S4/S5/S6 import keeps working.
  */
-export async function reachableWarehouses(db: Database, m: MembershipContext): Promise<ReadonlySet<string> | null> {
-  if (m.branchScopeMode === 'all') return null;
-  const branches = [...m.allowedBranchIds];
-  if (branches.length === 0) return new Set();
-  const found = await scopedRows<{ warehouse_id: string }>(
-    db,
-    m,
-    `SELECT DISTINCT bw.warehouse_id
-       FROM branch_warehouses bw
-       JOIN branches b ON b.business_id = bw.business_id AND b.id = bw.branch_id AND b.status = 'active'
-      WHERE bw.business_id = $1 AND bw.branch_id = ANY($2::uuid[])`,
-    [m.businessId, branches],
-  );
-  return new Set(found.map((r) => r.warehouse_id));
-}
-
-function assertBusinessWide(m: MembershipContext): void {
-  if (m.branchScopeMode !== 'all') {
-    throw new AppError('FORBIDDEN', 'This read requires business-wide branch scope', 403, { inventoryCode: 'inventory.business_wide_scope_required' });
-  }
-}
+export { reachableWarehouses };
 
 function requirePermission(m: MembershipContext, permission: 'suppliers.view' | 'purchases.view'): void {
   if (!hasPermission(m.roles, permission)) throw AppError.forbidden(`Missing permission: ${permission}`);
@@ -819,62 +807,13 @@ export async function readPurchaseReversalResult(db: Database, scope: ReadScope,
 }
 
 /**
- * The ledger AP of received purchases as S5 extends it (A-19, extending S4
- * A-20): the AP lines of each purchase's `purchase` entry, of its
- * `supplier_return` entries (joined through `supplier_returns.purchase_id`),
- * and of the `reversal` entry whose `accounting_reversals.original_entry_id`
- * is the purchase entry.
- *
- * P3-S6 (PHASE_3_S6_CONTRACT A-18): the entries of the purchase's supplier
- * payment allocations and supplier-credit allocations join the set, through
- * their row's `purchase_id` (A-05: one entry per row, so every AP line of
- * such an entry is this purchase's). A credit allocation's 1150 lines are not
- * AP and fall out at the account join.
- *
- * Per purchase currency: `base_minor` is `Σ credit − Σ debit` over every AP
- * line, the base-only dust lines included (TL-3); `txn_minor` is the signed
- * txn over the AP lines IN the purchase currency only, because a dust line
- * moves base only. For a domestic purchase the two currencies coincide and
- * no dust line exists (A-10(d)).
+ * The ledger AP of received purchases (S4 A-20, S5 A-19, S6 A-18) is
+ * `payableSql` (`supplier-balance-reads.ts`, PHASE_3_S7_CONTRACT A-09(a)):
+ * one text for the per-supplier and per-purchase payables, the settlement
+ * read and the supplier-balance list, so they cannot diverge (T-05).
  */
-const S5_PAYABLE_SQL = `WITH ap AS (
-         SELECT p.currency_code::text AS currency_code, jl.txn_currency, jl.credit_minor, jl.debit_minor, jl.txn_amount_minor
-           FROM purchases p
-           JOIN accounting_source_bindings pb ON pb.business_id = p.business_id AND pb.source_type = 'purchase' AND pb.source_id = p.id
-           JOIN LATERAL (
-                  SELECT pb.journal_entry_id
-                  UNION ALL
-                  SELECT rb.journal_entry_id
-                    FROM supplier_returns r
-                    JOIN accounting_source_bindings rb
-                      ON rb.business_id = r.business_id AND rb.source_type = 'supplier_return' AND rb.source_id = r.id
-                   WHERE r.business_id = p.business_id AND r.purchase_id = p.id
-                  UNION ALL
-                  SELECT ar.journal_entry_id
-                    FROM accounting_reversals ar
-                   WHERE ar.business_id = p.business_id AND ar.original_entry_id = pb.journal_entry_id
-                  UNION ALL
-                  SELECT ab.journal_entry_id
-                    FROM supplier_payment_allocations a
-                    JOIN accounting_source_bindings ab
-                      ON ab.business_id = a.business_id AND ab.source_type = 'supplier_payment' AND ab.source_id = a.id
-                   WHERE a.business_id = p.business_id AND a.purchase_id = p.id
-                  UNION ALL
-                  SELECT cb.journal_entry_id
-                    FROM supplier_credit_allocations c
-                    JOIN accounting_source_bindings cb
-                      ON cb.business_id = c.business_id AND cb.source_type = 'supplier_credit_allocation' AND cb.source_id = c.id
-                   WHERE c.business_id = p.business_id AND c.purchase_id = p.id
-                ) e ON true
-           JOIN journal_lines jl ON jl.business_id = p.business_id AND jl.journal_entry_id = e.journal_entry_id
-           JOIN accounts a ON a.business_id = jl.business_id AND a.id = jl.account_id AND a.system_key = 'accounts_payable'
-          WHERE p.business_id = $1 AND p.status = 'received' AND %FILTER%)
-     SELECT currency_code, sum(credit_minor - debit_minor)::text AS base_minor,
-            coalesce(sum(CASE WHEN txn_currency = currency_code
-                              THEN CASE WHEN credit_minor > 0 THEN txn_amount_minor ELSE -txn_amount_minor END END), 0)::text AS txn_minor
-       FROM ap
-      GROUP BY currency_code
-      ORDER BY currency_code`;
+const SUPPLIER_PAYABLE_SQL = payableSql({ groupBy: 'currency', filter: 'p.supplier_id = $2' });
+const PURCHASE_PAYABLE_SQL = payableSql({ groupBy: 'currency', filter: 'p.id = $2' });
 
 // ── Supplier settlement (P3-S6) ──────────────────────────────────────────
 //
@@ -1237,6 +1176,44 @@ export async function readRefundResult(db: Database, scope: ReadScope, refundId:
   return { ...dto, replayed, businessTransactionId: r.business_transaction_id };
 }
 
+// ── Return options (P3-S7) ───────────────────────────────────────────────
+
+/** Whether anything can go back to the supplier, and if not why: the S5 refusals in their order. */
+function returnVerdict(
+  header: PurchaseHeaderRow,
+  supplierActive: boolean,
+  nothingLeft: boolean,
+): { readonly returnable: boolean; readonly reason: PurchaseReturnBlockDto | null } {
+  let reason: PurchaseReturnBlockDto | null = null;
+  if (header.status !== 'received') reason = 'not_received';
+  else if (header.reversed) reason = 'reversed';
+  else if (!supplierActive) reason = 'supplier_inactive';
+  else if (nothingLeft) reason = 'nothing_left';
+  return { returnable: reason === null, reason };
+}
+
+/** Whether the receipt can be undone, and if not why: the reversal's pre-checks in the service's order. */
+function reversalVerdict(
+  header: PurchaseHeaderRow,
+  state: {
+    readonly payment_allocated: boolean;
+    readonly credit_allocated: boolean;
+    readonly returned: boolean;
+    readonly coverage_present: boolean;
+    readonly short: boolean;
+  },
+): { readonly reversible: boolean; readonly reversalReason: PurchaseReversalBlockDto | null } {
+  let reason: PurchaseReversalBlockDto | null = null;
+  if (header.status !== 'received') reason = 'not_received';
+  else if (header.reversed) reason = 'reversed';
+  else if (state.payment_allocated) reason = 'payment_allocated';
+  else if (state.credit_allocated) reason = 'credit_allocated';
+  else if (state.returned) reason = 'returned';
+  else if (state.coverage_present) reason = 'deficit_coverage_present';
+  else if (state.short) reason = 'insufficient_stock';
+  return { reversible: reason === null, reversalReason: reason };
+}
+
 // ── The read service ─────────────────────────────────────────────────────
 
 /**
@@ -1254,7 +1231,12 @@ export async function readRefundResult(db: Database, scope: ReadScope, refundId:
 export class PurchasingReadService {
   constructor(@Inject(Database) private readonly db: Database) {}
 
-  async listSuppliers(m: MembershipContext, q: SupplierListQuery): Promise<Page<SupplierDto>> {
+  /**
+   * `GET /v1/suppliers`. P3-S7 (PHASE_3_S7_CONTRACT A-09(d)) adds an optional
+   * `search`: an escaped case-insensitive substring of the name, for the
+   * supplier picker and the duplicate-name hint. The keyset is unchanged.
+   */
+  async listSuppliers(m: MembershipContext, q: SupplierListQuery & { readonly search?: string }): Promise<Page<SupplierDto>> {
     requirePermission(m, 'suppliers.view');
     const limit = q.limit ?? DEFAULT_PAGE_SIZE;
     const rows = await scopedRows<SupplierRow>(
@@ -1264,9 +1246,10 @@ export class PurchasingReadService {
         WHERE s.business_id = $1
           AND ($2::text IS NULL OR s.status = $2)
           AND ($3::uuid IS NULL OR (s.created_at, s.id) < (SELECT c.created_at, c.id FROM suppliers c WHERE c.business_id = $1 AND c.id = $3::uuid))
+          AND ($5::text IS NULL OR s.name ILIKE '%' || $5 || '%' ESCAPE '\\')
         ORDER BY s.created_at DESC, s.id DESC
         LIMIT $4`,
-      [m.businessId, q.status ?? null, cursorOf(q.cursor), limit + 1],
+      [m.businessId, q.status ?? null, cursorOf(q.cursor), limit + 1, q.search === undefined ? null : likeEscaped(q.search)],
     );
     return page(rows, limit, (r) => r.id, supplierDto);
   }
@@ -1282,12 +1265,7 @@ export class PurchasingReadService {
     requirePermission(m, 'suppliers.view');
     assertBusinessWide(m);
     if ((await findSupplier(this.db, m, id)) === null) throw purchasingRefusal('supplier.not_found');
-    const rows = await scopedRows<{ currency_code: string; base_minor: string; txn_minor: string }>(
-      this.db,
-      m,
-      S5_PAYABLE_SQL.replace('%FILTER%', 'p.supplier_id = $2'),
-      [m.businessId, id],
-    );
+    const rows = await scopedRows<PayableRow>(this.db, m, SUPPLIER_PAYABLE_SQL, [m.businessId, id]);
     const base = rows.reduce((a, r) => a + BigInt(r.base_minor), 0n);
     return { supplierId: id, baseMinor: base.toString(10), byCurrency: rows.map((r) => ({ currency: r.currency_code, txnMinor: r.txn_minor })) };
   }
@@ -1324,12 +1302,7 @@ export class PurchasingReadService {
     requirePermission(m, 'purchases.view');
     const header = await findPurchaseHeader(this.db, m, id);
     if (header === null || !(await this.inScope(m, header.warehouse_id))) throw purchasingRefusal('purchase.not_found');
-    const rows = await scopedRows<{ currency_code: string; base_minor: string; txn_minor: string }>(
-      this.db,
-      m,
-      S5_PAYABLE_SQL.replace('%FILTER%', 'p.id = $2'),
-      [m.businessId, id],
-    );
+    const rows = await scopedRows<PayableRow>(this.db, m, PURCHASE_PAYABLE_SQL, [m.businessId, id]);
     const [row] = rows;
     if (rows.length > 1 || (row !== undefined && row.currency_code !== header.currency_code)) {
       throw new Error("a purchase's payable was not read in the purchase currency");
@@ -1426,12 +1399,7 @@ export class PurchasingReadService {
       [m.businessId, purchaseId],
     );
     if (state === undefined) throw new Error('the settlement state read returned no row');
-    const ledger = await scopedRows<{ currency_code: string; base_minor: string; txn_minor: string }>(
-      this.db,
-      m,
-      S5_PAYABLE_SQL.replace('%FILTER%', 'p.id = $2'),
-      [m.businessId, purchaseId],
-    );
+    const ledger = await scopedRows<PayableRow>(this.db, m, PURCHASE_PAYABLE_SQL, [m.businessId, purchaseId]);
     const [row] = ledger;
     if (ledger.length > 1 || (row !== undefined && row.currency_code !== header.currency_code)) {
       throw new Error("a purchase's payable was not read in the purchase currency");
@@ -1528,6 +1496,127 @@ export class PurchasingReadService {
         if (c.journal_entry_id === null) throw new Error('a committed supplier credit allocation has no journal entry');
         return creditAllocationDto(c, c.journal_entry_id);
       }),
+    };
+  }
+
+  // ── P3-S7 (PHASE_3_S7_CONTRACT A-09(c), Annex R #21) ──────────────────
+
+  /**
+   * `GET /v1/purchases/:purchaseId/return-options`: what can still go back to
+   * the supplier, per line, and whether the receipt can be undone, so the
+   * screen can say why before the merchant fills anything in.
+   * `purchases.view` and the purchase's warehouse in scope; an out-of-scope
+   * purchase reads as `purchase.not_found`. Everything is derived live, in
+   * SQL numeric:
+   *
+   * - `returnedQty` = Σ the line's supplier return lines;
+   * - `returnableQty` = `max(0, min(purchased − returned, on hand))`, on hand
+   *   in the purchase's warehouse: the two S5 bounds (S5 A-12). A purchase
+   *   that is not received, or is reversed, returns nothing: every line reads 0;
+   * - `reason` mirrors the S5 refusals in their order: not received,
+   *   reversed, supplier inactive, then nothing left on any line;
+   * - `reversalReason` mirrors the reversal's pre-checks in the service's
+   *   order (S5 A-09, S6 `purchase_settlement_state()`): not received,
+   *   reversed, a payment or a credit allocated, returned, a deficit
+   *   coverage, then stock short of the purchase in its warehouse. The
+   *   reversal command stays the authority; its valuation-residue check is
+   *   not anticipated here.
+   */
+  async returnOptions(m: MembershipContext, purchaseId: string, locale: LocaleCode): Promise<PurchaseReturnOptionsDto> {
+    requirePermission(m, 'purchases.view');
+    const header = await findPurchaseHeader(this.db, m, purchaseId);
+    if (header === null || !(await this.inScope(m, header.warehouse_id))) throw purchasingRefusal('purchase.not_found');
+    const [state] = await scopedRows<{
+      supplier_active: boolean;
+      payment_allocated: boolean;
+      credit_allocated: boolean;
+      returned: boolean;
+      coverage_present: boolean;
+      short: boolean;
+    }>(
+      this.db,
+      m,
+      `SELECT s.status = 'active' AS supplier_active, st.payment_allocated, st.credit_allocated,
+              EXISTS (SELECT 1 FROM supplier_return_lines rl WHERE rl.business_id = p.business_id AND rl.purchase_id = p.id) AS returned,
+              EXISTS (SELECT 1 FROM negative_inventory_cost_adjustments a
+                       WHERE a.business_id = p.business_id AND a.origin_source_type = 'purchase' AND a.origin_source_id = p.id) AS coverage_present,
+              EXISTS (SELECT 1
+                        FROM (SELECT l.variant_id, sum(l.qty) AS qty FROM purchase_lines l
+                               WHERE l.business_id = p.business_id AND l.purchase_id = p.id GROUP BY l.variant_id) q
+                        LEFT JOIN stock_levels sl ON sl.business_id = p.business_id AND sl.warehouse_id = p.warehouse_id AND sl.variant_id = q.variant_id
+                       WHERE coalesce(sl.on_hand, 0) < q.qty) AS short
+         FROM purchases p
+         JOIN suppliers s ON s.business_id = p.business_id AND s.id = p.supplier_id
+        CROSS JOIN LATERAL purchase_settlement_state(p.business_id, p.id) st
+        WHERE p.business_id = $1 AND p.id = $2`,
+      [m.businessId, purchaseId],
+    );
+    if (state === undefined) throw purchasingRefusal('purchase.not_found');
+    const open = header.status === 'received' && !header.reversed;
+    const lines = await scopedRows<{
+      id: string;
+      product_id: string;
+      variant_id: string;
+      is_base: boolean;
+      name: string;
+      variant_name: string | null;
+      unit_code: string | null;
+      unit_decimals: number | null;
+      purchased: string;
+      returned: string;
+      returnable: string;
+      on_hand: string;
+      nothing: boolean;
+    }>(
+      this.db,
+      m,
+      `SELECT x.id, x.product_id, x.variant_id, x.is_base, x.name, x.variant_name, x.unit_code, x.unit_decimals,
+              x.purchased::text AS purchased, x.returned::text AS returned, x.on_hand::text AS on_hand,
+              greatest(0, least(x.purchased - x.returned, x.on_hand))::text AS returnable,
+              greatest(0, least(x.purchased - x.returned, x.on_hand)) = 0 AS nothing
+         FROM (SELECT l.id, v.product_id, v.id AS variant_id, v.is_base, l.line_no,
+                      ${productNameSql('pr', '$4::text')} AS name,
+                      CASE WHEN v.is_base THEN NULL ELSE ${variantNameSql('v')} END AS variant_name,
+                      pr.unit_code, pr.unit_decimals, l.qty AS purchased,
+                      coalesce((SELECT sum(rl.qty) FROM supplier_return_lines rl
+                                 WHERE rl.business_id = l.business_id AND rl.purchase_line_id = l.id), 0) AS returned,
+                      coalesce(sl.on_hand, 0) AS on_hand
+                 FROM purchase_lines l
+                 JOIN product_variants v ON v.business_id = l.business_id AND v.id = l.variant_id
+                 JOIN products pr ON pr.business_id = v.business_id AND pr.id = v.product_id
+                 LEFT JOIN stock_levels sl ON sl.business_id = l.business_id AND sl.warehouse_id = $3 AND sl.variant_id = l.variant_id
+                WHERE l.business_id = $1 AND l.purchase_id = $2) x
+        ORDER BY x.line_no`,
+      [m.businessId, purchaseId, header.warehouse_id, locale],
+    );
+    const lineDtos = lines.map((l): PurchaseReturnOptionLineDto => {
+      const decimals = l.unit_decimals ?? 0;
+      return {
+        lineId: l.id,
+        productId: l.product_id,
+        variantId: l.is_base ? null : l.variant_id,
+        name: l.name,
+        variantName: l.variant_name,
+        unitCode: l.unit_code,
+        unitDecimals: decimals,
+        purchasedQty: quantityText(l.purchased, decimals),
+        returnedQty: quantityText(l.returned, decimals),
+        returnableQty: quantityText(open ? l.returnable : '0', decimals),
+        onHandQty: quantityText(l.on_hand, decimals),
+      };
+    });
+    return {
+      purchaseId,
+      status: reportedStatus(header),
+      reversed: header.reversed,
+      supplierActive: state.supplier_active,
+      ...returnVerdict(
+        header,
+        state.supplier_active,
+        lines.every((l) => l.nothing),
+      ),
+      ...reversalVerdict(header, state),
+      lines: lineDtos,
     };
   }
 

@@ -38,6 +38,11 @@ import { purchasingProviders } from '../modules/purchasing/purchasing.module';
 import { SupplierSettlementsController } from '../modules/purchasing/supplier-settlements.controller';
 import { PaymentMethodsController } from '../modules/payment-methods/payment-methods.controller';
 import { paymentMethodProviders } from '../modules/payment-methods/payment-methods.module';
+import { InventoryReadService } from '../modules/inventory/inventory-reads';
+import { InventoryReadsController } from '../modules/inventory/inventory-reads.controller';
+import { SupplierBalanceReadService } from '../modules/purchasing/supplier-balance-reads';
+import { SupplierBalancesController } from '../modules/purchasing/supplier-balances.controller';
+import { PaymentMethodDefaultsController, PaymentMethodDefaultsReadService } from '../modules/payment-methods/payment-method-defaults.controller';
 
 /**
  * MERCHANT PROCESS (Directive §16). Composes the merchant HTTP surface and
@@ -73,6 +78,10 @@ export class MerchantApiModule implements NestModule {
         // P3-S6: payment methods, supplier payments, credit allocations and refunds.
         PaymentMethodsController,
         SupplierSettlementsController,
+        // P3-S7: the merchant reads (live, GET only).
+        InventoryReadsController,
+        SupplierBalancesController,
+        PaymentMethodDefaultsController,
       ],
       providers: [
         ...coreProviders(config, options),
@@ -98,6 +107,10 @@ export class MerchantApiModule implements NestModule {
         // post through the same adapters, on the accounting-aware inventory seam.
         ...purchasingProviders(),
         ...paymentMethodProviders(),
+        // P3-S7: the read services of the three S7 controllers.
+        InventoryReadService,
+        SupplierBalanceReadService,
+        PaymentMethodDefaultsReadService,
         TenancyService,
         StructureService,
         InvitationsService,

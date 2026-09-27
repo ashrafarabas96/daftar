@@ -40,6 +40,11 @@ import { purchasingProviders } from '../modules/purchasing/purchasing.module';
 import { SupplierSettlementsController } from '../modules/purchasing/supplier-settlements.controller';
 import { PaymentMethodsController } from '../modules/payment-methods/payment-methods.controller';
 import { paymentMethodProviders } from '../modules/payment-methods/payment-methods.module';
+import { InventoryReadService } from '../modules/inventory/inventory-reads';
+import { InventoryReadsController } from '../modules/inventory/inventory-reads.controller';
+import { SupplierBalanceReadService } from '../modules/purchasing/supplier-balance-reads';
+import { SupplierBalancesController } from '../modules/purchasing/supplier-balances.controller';
+import { PaymentMethodDefaultsController, PaymentMethodDefaultsReadService } from '../modules/payment-methods/payment-method-defaults.controller';
 import { AdminService } from '../modules/admin/admin.service';
 import { AdminController } from '../modules/admin/admin.controller';
 import { OutboxPublisher } from '../modules/outbox/publisher';
@@ -83,6 +88,10 @@ export class AppModule implements NestModule {
         // P3-S6: payment methods, supplier payments, credit allocations and refunds.
         PaymentMethodsController,
         SupplierSettlementsController,
+        // P3-S7: the merchant reads (live, GET only).
+        InventoryReadsController,
+        SupplierBalancesController,
+        PaymentMethodDefaultsController,
         AdminController,
       ],
       providers: [
@@ -109,6 +118,10 @@ export class AppModule implements NestModule {
         // post through the same adapters, on the accounting-aware inventory seam.
         ...purchasingProviders(),
         ...paymentMethodProviders(),
+        // P3-S7: the read services of the three S7 controllers.
+        InventoryReadService,
+        SupplierBalanceReadService,
+        PaymentMethodDefaultsReadService,
         ...workerProviders(config, options),
         // Only PROCESS_MODE=all composes the reconciler beside the worker,
         // and only because this composition exists for dev and tests;

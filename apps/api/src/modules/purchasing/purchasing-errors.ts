@@ -324,6 +324,13 @@ export function isPurchasingCode(code: string): code is PurchasingCode {
 }
 
 /**
+ * Every classified purchasing code, in table order — the list the web's
+ * error-key test enumerates (PHASE_3_S7_CONTRACT T-10, Annex R #10). Additive:
+ * the table itself is unchanged.
+ */
+export const PURCHASING_CODES: readonly PurchasingCode[] = Object.keys(PURCHASING_STATUS).filter(isPurchasingCode);
+
+/**
  * A classified purchasing code → its §3 HTTP contract. `extra` carries
  * typed, amount-free facts beside the code; the message is generic. A
  * 500-class code is a defect reported with its typed code, never a refusal
