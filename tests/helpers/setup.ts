@@ -21,6 +21,12 @@ beforeEach(() => {
 
 afterEach(async () => {
   await closeTestApps((app) => !openedBefore.has(app));
+  // Yield one macrotask so the fork can answer the runner's RPC between tests.
+  // A file of synchronous tests (the static-guard suites re-parse every
+  // migration per case) otherwise never lets the event loop run, and once the
+  // file passes 60 s the pending "onTaskUpdate" call times out and aborts the
+  // whole run. No test's own budget or timeout changes.
+  await new Promise<void>((resolve) => setImmediate(resolve));
 });
 
 afterAll(async () => {
