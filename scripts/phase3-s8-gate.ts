@@ -156,6 +156,8 @@ export interface SqlStatement {
   readonly skeleton: string;
   /** The dollar-quoted bodies, verbatim. */
   readonly bodies: readonly string[];
+  /** The statement exactly as written, up to (not including) its `;`. */
+  readonly raw: string;
 }
 
 /**
@@ -169,9 +171,9 @@ export function splitSqlStatements(sql: string): SqlStatement[] {
   let bodies: string[] = [];
   let start = -1;
   let i = 0;
-  const flush = (): void => {
+  const flush = (end: number): void => {
     const text = skeleton.replace(/\s+/g, ' ').trim();
-    if (text !== '') out.push({ start, skeleton: text, bodies });
+    if (text !== '') out.push({ start, skeleton: text, bodies, raw: sql.slice(start, end) });
     skeleton = '';
     bodies = [];
     start = -1;
@@ -211,14 +213,14 @@ export function splitSqlStatements(sql: string): SqlStatement[] {
       continue;
     }
     if (c === ';') {
-      flush();
+      flush(i);
       i += 1;
       continue;
     }
     skeleton += c;
     i += 1;
   }
-  flush();
+  flush(sql.length);
   return out;
 }
 
@@ -230,12 +232,103 @@ function bodyCode(body: string): string {
     .replace(/'(?:[^']|'')*'/g, "''");
 }
 
-/** What a DO block may not do: it states preconditions and end states, it changes nothing. */
-const DO_BLOCK_FORBIDDEN = /\b(GRANT|REVOKE|CREATE|ALTER|DROP|INSERT|UPDATE|DELETE|TRUNCATE|MERGE|COPY|EXECUTE|COMMENT|SECURITY|set_config)\b/i;
+/**
+ * What a DO block of the S8 migration may call (review L-1: an allow-list, not
+ * a denylist): catalogue probes, privilege probes, aggregates, and the R-B1a
+ * helper the end-state block asks as the accounting principal. Exactly the
+ * routines 0069 calls; anything else — a writing routine, set_config, a lock,
+ * a sequence — is refused wherever it hides (a PERFORM, a SELECT … INTO, an
+ * assignment, a condition).
+ */
+export const DO_BLOCK_CALLS: ReadonlySet<string> = new Set([
+  'aclexplode',
+  'array_agg',
+  'cardinality',
+  'count',
+  'current_database',
+  'has_any_column_privilege',
+  'has_column_privilege',
+  'has_database_privilege',
+  'has_function_privilege',
+  'has_schema_privilege',
+  'has_table_privilege',
+  'inventory_business_has_stock_movements',
+  'pg_get_triggerdef',
+  'position',
+  'string_agg',
+  'to_regclass',
+  'to_regprocedure',
+  'unnest',
+]);
+
+/** SQL and PL/pgSQL words that may stand before a parenthesis without calling anything. */
+const NOT_A_CALL = new Set(['and', 'any', 'array', 'elsif', 'exists', 'from', 'if', 'in', 'join', 'not', 'on', 'or', 'select', 'then', 'values', 'where']);
+
+/** A role switch a DO block may make: to one of the two internal principals, and only in the R-B1a end-state block. */
+const DO_ROLE_SWITCH = /^SET LOCAL ROLE (daftar_inventory_internal|daftar_accounting_internal)$/i;
+
+/** The read-only statement forms a DO block may hold once its control prefixes (DECLARE, BEGIN, IF … THEN, FOREACH … LOOP) are read. */
+const DO_FORMS: readonly RegExp[] = [
+  /^END(?: IF| LOOP)?$/i,
+  /^RAISE EXCEPTION ''(?:\s*,\s*[\s\S]*)?$/i,
+  /^SELECT\b[\s\S]*\bINTO\s+[a-z_][a-z0-9_]*(?:\s*,\s*[a-z_][a-z0-9_]*)*\b[\s\S]*$/i,
+  /^[a-z_][a-z0-9_]* := [\s\S]+$/i,
+  /^RESET ROLE$/i,
+];
+const DO_DECLARATION = /^[a-z_][a-z0-9_]*(?: CONSTANT)? [a-z_][a-z0-9_]*(?:\[\])?(?: := [\s\S]+)?$/i;
+const DO_PREFIX = /^(?:DECLARE\b|BEGIN\b|ELSE\b|(?:IF|ELSIF)\b[\s\S]*?\bTHEN\b|FOREACH [a-z_][a-z0-9_]* IN ARRAY [a-z_][a-z0-9_]* LOOP\b)\s*/i;
+/** Words that make a SELECT something other than a read: a data-modifying CTE or a row lock. */
+const DO_SELECT_WRITES = /\b(?:INSERT|UPDATE|DELETE|MERGE|FOR\s+(?:NO\s+KEY\s+)?UPDATE|FOR\s+(?:KEY\s+)?SHARE)\b/i;
+
+/** The problems of one DO block's code (comments and literals already out), empty when it only states and asserts. */
+export function doBlockProblems(code: string, inRB1aSection: boolean): string[] {
+  const problems: string[] = [];
+  if (code.includes('"')) problems.push('a quoted identifier — a DO block here names every object plainly');
+  let inDeclare = false;
+  for (const piece of code.split(';')) {
+    let rest = piece.replace(/\s+/g, ' ').trim();
+    for (let m = DO_PREFIX.exec(rest); m !== null && rest !== ''; m = DO_PREFIX.exec(rest)) {
+      const word = (m[0].trim().split(' ')[0] ?? '').toUpperCase();
+      if (word === 'DECLARE') inDeclare = true;
+      if (word === 'BEGIN') inDeclare = false;
+      rest = rest.slice(m[0].length);
+    }
+    if (rest === '') continue;
+    if (DO_ROLE_SWITCH.test(rest)) {
+      if (!inRB1aSection)
+        problems.push(
+          `${rest} — a role switch to an internal principal is admitted only in the R-B1a end-state block, and this block is outside the R-B1a section`,
+        );
+      continue;
+    }
+    const allowed = inDeclare ? DO_DECLARATION.test(rest) : DO_FORMS.some((f) => f.test(rest)) && !(/^SELECT\b/i.test(rest) && DO_SELECT_WRITES.test(rest));
+    if (!allowed)
+      problems.push(
+        `${rest.slice(0, 90)}${rest.length > 90 ? '…' : ''} — not a read-only assertion form (SELECT … INTO, :=, IF, FOREACH, RAISE EXCEPTION, SET LOCAL ROLE/RESET ROLE)`,
+      );
+  }
+  for (const m of code.matchAll(/(\bAS\s+)?\b([A-Za-z_][A-Za-z0-9_]*)\s*\(/gi)) {
+    const name = (m[2] ?? '').toLowerCase();
+    if (m[1] !== undefined || NOT_A_CALL.has(name) || DO_BLOCK_CALLS.has(name)) continue;
+    problems.push(`calls ${name}( — a DO block here calls only ${[...DO_BLOCK_CALLS].join(', ')}`);
+  }
+  return problems;
+}
 
 const R_B1A_HELPER = 'inventory_business_has_stock_movements';
 const R_B1A_GUARD = 'accounting_inventory_account_domain_guard';
 const R_B1A_TRIGGER = 'journal_entries_inventory_account_domain';
+/**
+ * The R-B1a trigger exactly as 0069 writes it (review L-2): the WHEN clause is
+ * the rule's scope, so any other filter — `WHEN (false)`, one type — is a
+ * different rule. 0069-E (3) and T-19 pin its deparsed form.
+ */
+export const R_B1A_TRIGGER_SQL =
+  "CREATE CONSTRAINT TRIGGER journal_entries_inventory_account_domain AFTER INSERT ON journal_entries DEFERRABLE INITIALLY DEFERRED FOR EACH ROW WHEN (NEW.source_type IN ('manual_adjustment', 'opening_balance')) EXECUTE FUNCTION accounting_inventory_account_domain_guard()";
+/** md5 of each R-B1a body as written — equal to md5(pg_proc.prosrc), which T-19 pins on the live catalogue. */
+export const R_B1A_GUARD_BODY_MD5 = 'c6254815e09d55cf6072c3a465519183';
+export const R_B1A_HELPER_BODY_MD5 = '4f3b6dd09d6ac5084051891072e1c9f7';
+const md5 = (text: string): string => createHash('md5').update(text, 'utf8').digest('hex');
 const PINNED_PATH =
   /\bSECURITY DEFINER\b[\s\S]*\bSET search_path = pg_catalog, public, pg_temp\b|\bSET search_path = pg_catalog, public, pg_temp\b[\s\S]*\bSECURITY DEFINER\b/i;
 
@@ -261,7 +354,8 @@ const Q = String.raw`(?:public\.)?`;
 const FN_ARGS = String.raw`\s?\([^()]*\)`;
 
 /** Classify one R-B1a statement, or return null when it is not one of §2.11's. */
-function classifyRB1a(s: string): string | null {
+function classifyRB1a(st: SqlStatement): string | null {
+  const s = st.skeleton;
   let m = new RegExp(String.raw`^GRANT CREATE ON SCHEMA public TO (daftar_inventory_internal|daftar_accounting_internal)$`, 'i').exec(s);
   if (m) return `grant-create:${(m[1] ?? '').toLowerCase()}`;
   m = new RegExp(String.raw`^REVOKE CREATE ON SCHEMA public FROM (daftar_inventory_internal|daftar_accounting_internal)$`, 'i').exec(s);
@@ -270,7 +364,8 @@ function classifyRB1a(s: string): string | null {
   if (m) {
     const name = (m[1] ?? '').toLowerCase();
     const returns = name === R_B1A_HELPER ? /\bRETURNS BOOLEAN LANGUAGE sql STABLE\b/i : /\bRETURNS trigger LANGUAGE plpgsql\b/i;
-    return PINNED_PATH.test(s) && returns.test(s) ? `create-function:${name}` : null;
+    const pinned = name === R_B1A_HELPER ? R_B1A_HELPER_BODY_MD5 : R_B1A_GUARD_BODY_MD5;
+    return PINNED_PATH.test(s) && returns.test(s) && st.bodies.length === 1 && md5(st.bodies[0] ?? '') === pinned ? `create-function:${name}` : null;
   }
   m = new RegExp(String.raw`^COMMENT ON FUNCTION ${Q}(${R_B1A_HELPER}|${R_B1A_GUARD})${FN_ARGS} IS ''$`, 'i').exec(s);
   if (m) return `comment:${(m[1] ?? '').toLowerCase()}`;
@@ -281,10 +376,10 @@ function classifyRB1a(s: string): string | null {
   if (new RegExp(String.raw`^ALTER FUNCTION ${Q}${R_B1A_HELPER}${FN_ARGS} OWNER TO daftar_inventory_internal$`, 'i').test(s)) return `owner:${R_B1A_HELPER}`;
   if (new RegExp(String.raw`^ALTER FUNCTION ${Q}${R_B1A_GUARD}${FN_ARGS} OWNER TO daftar_accounting_internal$`, 'i').test(s)) return `owner:${R_B1A_GUARD}`;
   if (
-    new RegExp(
-      String.raw`^CREATE CONSTRAINT TRIGGER ${R_B1A_TRIGGER} AFTER INSERT ON ${Q}journal_entries DEFERRABLE INITIALLY DEFERRED FOR EACH ROW WHEN \(.*\) EXECUTE (?:FUNCTION|PROCEDURE) ${Q}${R_B1A_GUARD}\s?\(\s?\)$`,
-      'i',
-    ).test(s)
+    st.raw
+      .replace(/--[^\n]*/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim() === R_B1A_TRIGGER_SQL
   )
     return `trigger:${R_B1A_TRIGGER}`;
   return null;
@@ -294,8 +389,9 @@ const RECONCILER_GRANT = new RegExp(String.raw`^GRANT SELECT\s?\(([^()]*)\) ON (
 
 /**
  * §7.1(1) and Annex R §2.11: the S8 migration admits exactly
- *   — `DO` blocks that change nothing (no GRANT, REVOKE, CREATE, ALTER, DROP,
- *     DML, dynamic EXECUTE or COMMENT in their code);
+ *   — `DO` blocks that change nothing: only the read-only assertion forms and
+ *     the `DO_BLOCK_CALLS` routines (`doBlockProblems`), a role switch to an
+ *     internal principal only inside the R-B1a section;
  *   — the four column-level `GRANT SELECT (…) … TO daftar_reconciler`, with
  *     exactly `RECONCILER_S8_COLUMNS`;
  *   — under R-B1a, and only between its BEGIN/END markers, exactly the
@@ -325,8 +421,8 @@ export function s8MigrationContentProblems(raw: string, ruling: string = B1_RULI
     const where = `statement at offset ${st.start} (${s.slice(0, 90)}${s.length > 90 ? '…' : ''})`;
     if (/^DO(?: LANGUAGE plpgsql)? \$BODY\$(?: LANGUAGE plpgsql)?$/i.test(s)) {
       const code = st.bodies.map(bodyCode).join('\n');
-      const bad = DO_BLOCK_FORBIDDEN.exec(code);
-      if (bad) problems.push(`a DO block ${where} contains ${bad[0]} — a DO block here states a precondition or an end state and changes nothing`);
+      const inSection = section !== null && st.start >= section[0] && st.start <= section[1];
+      for (const p of doBlockProblems(code, inSection)) problems.push(`a DO block ${where} ${p.startsWith('calls ') ? p : `contains ${p}`}`);
       continue;
     }
     const grant = RECONCILER_GRANT.exec(s);
@@ -342,7 +438,7 @@ export function s8MigrationContentProblems(raw: string, ruling: string = B1_RULI
       );
       continue;
     }
-    const kind = rb1a ? classifyRB1a(s) : null;
+    const kind = rb1a ? classifyRB1a(st) : null;
     if (kind !== null) {
       if (section === null || st.start < section[0] || st.start > section[1]) problems.push(`${kind} ${where} is outside the delimited R-B1a section`);
       rb1aSeen.set(kind, (rb1aSeen.get(kind) ?? 0) + 1);

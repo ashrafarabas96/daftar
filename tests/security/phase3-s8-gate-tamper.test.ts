@@ -10,6 +10,10 @@
  *       `gate:phase2:s3` fails `key-separation` (A-19, pin 6);
  *   (2) one column added to a reconciler grant of the S8 migration: the S8
  *       gate fails `migration`;
+ *   (2b) a planted DO block that switches to an internal principal and runs
+ *       a writing routine: the S8 gate fails `migration` (review L-1);
+ *   (2c) the R-B1a trigger neutered with `WHEN (false)`: the S8 gate fails
+ *       `migration` (review L-2);
  *   (3) one PM row removed from the premortem matrix: the S8 gate fails
  *       `premortem`;
  *   pin 2: the P2-S8 gate's model check fails `s8-model` both ways — a table
@@ -82,6 +86,47 @@ describe('T-15c (in memory): the §2.11 content check of the S8 migration', () =
   it('refuses a DO block that changes something, even through dynamic SQL', () => {
     const tampered = `${realS8}\nDO $$ BEGIN EXECUTE 'GRANT SELECT ON suppliers TO daftar_reconciler'; END $$;\n`;
     expect(s8MigrationContentProblems(tampered)).toEqual([expect.stringMatching(/^a DO block .* contains EXECUTE/)]);
+  });
+
+  it('refuses a planted DO block that borrows an internal role and runs a writing routine (review L-1: an allow-list, not a denylist)', () => {
+    const planted = `DO $$ BEGIN SET LOCAL ROLE daftar_accounting_internal;\n  PERFORM accounting_post_entry(current_date, 'x', NULL, '[]'::jsonb); RESET ROLE; END $$;`;
+    const outside = s8MigrationContentProblems(`${realS8}\n${planted}\n`);
+    expect(outside).toEqual([
+      expect.stringMatching(/^a DO block .* contains SET LOCAL ROLE daftar_accounting_internal — .*outside the R-B1a section/),
+      expect.stringMatching(/^a DO block .* contains PERFORM accounting_post_entry\(/),
+      expect.stringMatching(/^a DO block .* calls accounting_post_entry\(/),
+    ]);
+    // Inside the R-B1a section the role switch is admitted, the writing call never is.
+    const inside = s8MigrationContentProblems(once(realS8, '-- ══ END R-B1a', `${planted}\n-- ══ END R-B1a`));
+    expect(inside).toEqual([
+      expect.stringMatching(/^a DO block .* contains PERFORM accounting_post_entry\(/),
+      expect.stringMatching(/^a DO block .* calls accounting_post_entry\(/),
+    ]);
+    // A call hidden in an assignment or a SELECT … INTO is a call all the same.
+    const assigned = s8MigrationContentProblems(
+      `${realS8}\nDO $$ DECLARE v UUID; BEGIN v := gen_random_uuid(); SELECT pg_advisory_xact_lock(1) INTO v; END $$;\n`,
+    );
+    expect(assigned).toEqual([
+      expect.stringMatching(/^a DO block .* calls gen_random_uuid\(/),
+      expect.stringMatching(/^a DO block .* calls pg_advisory_xact_lock\(/),
+    ]);
+  });
+
+  it('refuses the R-B1a trigger with any WHEN other than the two merchant-stated types, and a guard or helper body other than the pinned one (review L-2)', () => {
+    const whenFalse = once(realS8, "FOR EACH ROW WHEN (NEW.source_type IN ('manual_adjustment', 'opening_balance'))", 'FOR EACH ROW WHEN (false)');
+    expect(s8MigrationContentProblems(whenFalse)).toEqual([
+      expect.stringMatching(/^statement at offset \d+ \(CREATE CONSTRAINT TRIGGER journal_entries_inventory_account_domain .* is not admitted by §2\.11$/),
+      'R-B1a needs exactly 1 × trigger:journal_entries_inventory_account_domain, found 0',
+    ]);
+    const oneType = once(realS8, "WHEN (NEW.source_type IN ('manual_adjustment', 'opening_balance'))", "WHEN (NEW.source_type IN ('manual_adjustment'))");
+    expect(s8MigrationContentProblems(oneType)).toContain('R-B1a needs exactly 1 × trigger:journal_entries_inventory_account_domain, found 0');
+    const guard = once(realS8, "a.system_key = 'inventory')", "a.system_key = 'inventory' AND false)");
+    expect(s8MigrationContentProblems(guard)).toEqual([
+      expect.stringMatching(/^statement at offset \d+ \(CREATE FUNCTION accounting_inventory_account_domain_guard\(\) .* is not admitted by §2\.11$/),
+      'R-B1a needs exactly 1 × create-function:accounting_inventory_account_domain_guard, found 0',
+    ]);
+    const helper = once(realS8, 'WHERE m.business_id = p_business_id)', 'WHERE m.business_id = p_business_id AND false)');
+    expect(s8MigrationContentProblems(helper)).toContain('R-B1a needs exactly 1 × create-function:inventory_business_has_stock_movements, found 0');
   });
 
   it('refuses an R-B1a statement moved outside its delimited section', () => {
@@ -212,6 +257,30 @@ describe('T-15c (2), (3): the S8 gate refuses a widened migration and an incompl
     expect(failLines(r, 'migration'), r.output.slice(-3000)).toContainEqual(
       expect.stringMatching(new RegExp(`${S8_MIGRATION_NAME.replace(/\./g, '\\.')}: stock_movements grants daftar_reconciler \\(.*\\breason\\b`)),
     );
+    expect(r.status).not.toBe(0);
+  }, 700_000);
+
+  it('(2b) a planted DO block that borrows an internal role and runs accounting_post_entry → FAIL [migration] (review L-1)', () => {
+    const root = cleanCheckout();
+    rewrite(
+      root,
+      S8M,
+      `${realS8}\nDO $$ BEGIN SET LOCAL ROLE daftar_accounting_internal;\n  PERFORM accounting_post_entry(current_date, 'x', NULL, '[]'::jsonb); RESET ROLE; END $$;\n`,
+    );
+    const r = s8Gate(root);
+    expect(failLines(r, 'migration'), r.output.slice(-3000)).toContainEqual(expect.stringMatching(/a DO block .* calls accounting_post_entry\(/));
+    expect(r.output).not.toContain('P3-S8 GATE: PASS');
+    expect(r.status).not.toBe(0);
+  }, 700_000);
+
+  it('(2c) the R-B1a trigger neutered with WHEN (false) → FAIL [migration] (review L-2)', () => {
+    const root = cleanCheckout();
+    rewrite(root, S8M, once(realS8, "FOR EACH ROW WHEN (NEW.source_type IN ('manual_adjustment', 'opening_balance'))", 'FOR EACH ROW WHEN (false)'));
+    const r = s8Gate(root);
+    expect(failLines(r, 'migration'), r.output.slice(-3000)).toContainEqual(
+      expect.stringContaining('R-B1a needs exactly 1 × trigger:journal_entries_inventory_account_domain, found 0'),
+    );
+    expect(r.output).not.toContain('P3-S8 GATE: PASS');
     expect(r.status).not.toBe(0);
   }, 700_000);
 

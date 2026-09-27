@@ -54,6 +54,7 @@ import { appDbUrl, createTestApp, dbUrl, ensurePostgres, ownerPool, resetData, t
 import { changedTables, tableDigest } from '../helpers/table-digest';
 import { createScratchDb, type ScratchDb } from '../helpers/scratch-db';
 import { resultOf, runChecks, statuses } from '../helpers/inventory-reconciliation';
+import { R_B1A_GUARD_BODY_MD5, R_B1A_HELPER_BODY_MD5 } from '../../scripts/phase3-s8-gate';
 
 const CODE = 'accounting.inventory_account_domain_owned';
 const TRIGGER = 'journal_entries_inventory_account_domain';
@@ -403,6 +404,7 @@ describe('T-19 (g) — the catalogue shape of R-B1a (Annex R §2.4, §2.5; 0069 
       md5: undefined,
     });
     expect(r.md5, 'the helper body digest (a changed body is a changed rule)').toBe(HELPER_BODY_MD5);
+    expect(HELPER_BODY_MD5, 'the S8 gate pins the same helper body (review L-2)').toBe(R_B1A_HELPER_BODY_MD5);
   });
 
   it('the guard: accounting-owned plpgsql DEFINER trigger function, pinned path, no EXECUTE grantee at all, body digest recorded', async () => {
@@ -427,6 +429,7 @@ describe('T-19 (g) — the catalogue shape of R-B1a (Annex R §2.4, §2.5; 0069 
       md5: undefined,
     });
     expect(r.md5, 'the guard body digest (a changed body is a changed rule)').toBe(GUARD_BODY_MD5);
+    expect(GUARD_BODY_MD5, 'the S8 gate pins the same guard body (review L-2)').toBe(R_B1A_GUARD_BODY_MD5);
     const exec = await ownerPool().query<{ r: string }>(
       `SELECT r.rolname::text AS r FROM pg_roles r WHERE r.rolcanlogin AND NOT r.rolsuper AND has_function_privilege(r.oid, $1::regprocedure, 'EXECUTE')`,
       [GUARD],
