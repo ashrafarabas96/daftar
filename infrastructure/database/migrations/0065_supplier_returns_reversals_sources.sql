@@ -137,6 +137,24 @@
 --        body are both reported. S6, which replaces the function as its owner
 --        to admit the AL-31 decrement, re-records the digest in the same
 --        migration.
+--   R-54 X IS CROSS-CHECKED AT COMMIT (security review I5; qualifies R-43,
+--        which still never recomputes O). `supplier_return_value_complete`
+--        also requires X ≥ Σ ap_txn over the purchase's returns written by
+--        OTHER transactions (a return of this transaction is one with this
+--        return's created_at and business_transaction_id, 0063 R-36), and
+--        Σ ap_txn over ALL the purchase's returns ≤ T; either failure is
+--        `inventory.source_value_mismatch`, the guard's existing code.
+--        Why ≥ and not =: in S5, with one return per transaction, equality
+--        holds — the routine reads O after the purchase row FOR UPDATE, every
+--        return is written under that lock held to COMMIT, so the other
+--        transactions' returns this COMMIT-time guard sees are exactly those
+--        O subtracted, whichever lines they name. It fails for two lawful
+--        paths: two returns of one purchase in one transaction (the second
+--        X also counts the first, which is excluded here because the two
+--        cannot be ordered at COMMIT), and the A-16 extension point — S6's
+--        O and the §5 settlement fixture also subtract payments and credit
+--        allocations, so X = Σ returns + Σ settled. The Σ ≤ T bound keeps
+--        the same-transaction case from releasing the AP twice.
 --
 -- Migrations 0000-0064 are FROZEN and untouched.
 
@@ -610,7 +628,7 @@ BEGIN
 END;
 $$;
 
--- The header value, at COMMIT (A-10, R-35, R-43): Σ carrying; Σ value out
+-- The header value, at COMMIT (A-10, R-35, R-43, R-54): Σ carrying; Σ value out
 -- = −Σ bridged movement values; AP first against the txn AP released
 -- before the return; the cumulative base release; the conversions and the
 -- dust, recomputed from the purchase snapshot.
@@ -628,6 +646,8 @@ DECLARE
   v_ap_base  NUMERIC;
   v_ap_conv  NUMERIC;
   v_cr_conv  NUMERIC;
+  v_prior    NUMERIC;
+  v_released NUMERIC;
 BEGIN
   SELECT coalesce(sum(l.carrying_txn_minor), 0), coalesce(sum(l.value_out_base_minor), 0) INTO v_carrying, v_out
   FROM supplier_return_lines l WHERE l.business_id = NEW.business_id AND l.return_id = NEW.id;
@@ -660,6 +680,17 @@ BEGIN
      OR v_cr_conv <> NEW.credit_base_minor::numeric
      OR (NEW.ap_txn_minor > 0 AND v_ap_conv = 0) THEN
     RAISE EXCEPTION 'inventory.source_value_mismatch: a supplier return''s amounts are not the A-10 amounts of its lines, movements and purchase' USING ERRCODE = 'P0001';
+  END IF;
+  -- R-54: X is never below the txn AP the purchase's returns committed by
+  -- other transactions released, and the purchase's returns never release
+  -- more than its total.
+  SELECT coalesce(sum(r.ap_txn_minor) FILTER (WHERE r.id <> NEW.id AND (r.created_at, r.business_transaction_id)
+                                                    IS DISTINCT FROM (NEW.created_at, NEW.business_transaction_id)), 0),
+         coalesce(sum(r.ap_txn_minor), 0)
+    INTO v_prior, v_released
+  FROM supplier_returns r WHERE r.business_id = NEW.business_id AND r.purchase_id = NEW.purchase_id;
+  IF v_x < v_prior OR v_released > v_p.total_txn_minor THEN
+    RAISE EXCEPTION 'inventory.source_value_mismatch: a supplier return''s released-before AP is not the AP its purchase''s earlier returns released' USING ERRCODE = 'P0001';
   END IF;
   RETURN NULL;
 END;
@@ -1414,7 +1445,7 @@ DECLARE
     "stock_binding_requires_purchase_reversal()": "945338f56ba61ec93b980a7053b10478eec00da32a2bdcecb80cac87b3b7b40e",
     "stock_source_complete_supplier_return()": "bfbcfd7696131c5222a277a7cdcffedfa221b1dd69b9036614d5a00ece553679",
     "stock_source_complete_supplier_return_header()": "0257473d6c4e53e3ffb415905cdf499e41bf29bc8fa34b1d1be9a9c18185aea4",
-    "supplier_return_value_complete()": "825986a1357e35d3aa5ee3fd7a7e17b46a4d0a49cfc93e98ce27085bb79f3ab7",
+    "supplier_return_value_complete()": "851cbdf05fdacd8ca2277e9b7aedcb76fc9cdb1d6cf6aa62b0100bc3a5776fe2",
     "supplier_return_quantity_bound()": "1ac8224efb6b2f7c036d57207afcbfd08c7e469d745b3657271a0eb2cbadbe26",
     "stock_source_complete_purchase_reversal()": "61d96c8dfe2c30fb6d7689bf771bd677ce03a2541beb33c48b4d1476b1efdcba",
     "stock_source_complete_purchase_reversal_header()": "24b99c06756f9acd5190d12d1f693cb90c9ab023480a4172c382ccd98e6686e1",
