@@ -30,6 +30,13 @@
 | report | تقرير | Report | Rapor |
 | settings | الإعدادات | Settings | Ayarlar |
 | subscription | الاشتراك | Subscription | Abonelik |
+| receive purchase (screen, P3-S7) | استلام مشتريات | Receive Purchase | Satın Alma Teslim Al |
+| move stock (screen, P3-S7) | نقل مخزون | Move Stock | Stok Taşı |
+| count stock (screen, P3-S7) | جرد المخزون | Count Stock | Stok Say |
+| adjust stock (screen, P3-S7) | تعديل المخزون | Adjust Stock | Stoğu Düzelt |
+| return to supplier (screen, P3-S7) | إرجاع إلى المورّد | Return to Supplier | Tedarikçiye İade |
+| pay supplier (screen, P3-S7) | الدفع للمورّد | Pay Supplier | Tedarikçiye Öde |
+| supplier credit (UI للتاجر، P3-S7؛ never "credit") | رصيد لك عند المورّد | Balance in your favour | Lehinize bakiye |
 
 ## 2. أفعال (تُستخدم بثبات — Master §155)
 
