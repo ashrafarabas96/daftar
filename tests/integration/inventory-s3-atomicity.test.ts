@@ -47,8 +47,19 @@ afterAll(async () => {
 const send = (method: 'post' | 'put', path: string, body: object): Promise<Response> =>
   t.request[method](`/v1/inventory/${path}`).set(asMember(owner, A.businessId)).send(body);
 
-async function accountingUses(): Promise<number> {
-  return must((await ownerPool().query<{ n: number }>(`SELECT count(*)::int AS n FROM accounting_assertion_uses`)).rows[0]).n;
+/**
+ * The accounting jtis consumed so far — a set, not a count. The 0061 prune
+ * deletes uses older than an hour, so on a long run another test's uses can
+ * disappear between two reads and a count difference goes negative. What a
+ * case asserts is which jtis ITS command consumed.
+ */
+async function accountingUses(): Promise<ReadonlySet<string>> {
+  return new Set((await ownerPool().query<{ jti: string }>(`SELECT jti::text FROM accounting_assertion_uses`)).rows.map((r) => r.jti));
+}
+
+/** The jtis in `after` that were not in `before`. */
+function consumedSince(before: ReadonlySet<string>, after: ReadonlySet<string>): number {
+  return [...after].filter((jti) => !before.has(jti)).length;
 }
 
 /** (a) The posting port throws: the routine has run in the seam, nothing is posted. */
@@ -86,7 +97,7 @@ async function expectNothingSurvives(inject: () => void, call: () => Promise<Res
   const res = await call();
   expect(res.status, `${what}: the injected failure surfaces`).toBe(500);
   expect(delta(before, await counts(ownerPool(), A.businessId)), `${what}: nothing survives`).toEqual({});
-  expect(await accountingUses(), `${what}: no accounting assertion use survives`).toBe(uses);
+  expect(consumedSince(uses, await accountingUses()), `${what}: no accounting assertion use survives`).toBe(0);
 }
 
 /** The uninjected request: it writes the document, its stock, its entry and both audit and outbox rows together. */

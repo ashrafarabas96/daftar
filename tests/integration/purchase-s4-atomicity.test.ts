@@ -65,8 +65,19 @@ afterAll(async () => {
 
 const headers = (): Record<string, string> => asMember(owner, H.businessId);
 
-async function accountingUses(): Promise<number> {
-  return must((await ownerPool().query<{ n: number }>(`SELECT count(*)::int AS n FROM accounting_assertion_uses`)).rows[0]).n;
+/**
+ * The accounting jtis consumed so far — a set, not a count. The 0061 prune
+ * deletes uses older than an hour, so on a long run another test's uses can
+ * disappear between two reads and a count difference goes negative. What a
+ * case asserts is which jtis ITS command consumed.
+ */
+async function accountingUses(): Promise<ReadonlySet<string>> {
+  return new Set((await ownerPool().query<{ jti: string }>(`SELECT jti::text FROM accounting_assertion_uses`)).rows.map((r) => r.jti));
+}
+
+/** The jtis in `after` that were not in `before`. */
+function consumedSince(before: ReadonlySet<string>, after: ReadonlySet<string>): number {
+  return [...after].filter((jti) => !before.has(jti)).length;
 }
 
 /** A one-line domestic draft through the real API; returns its id. */
@@ -149,7 +160,7 @@ function afterSeam1Routine(): void {
   );
 }
 
-async function snapshot(): Promise<{ counts: Counts; uses: number }> {
+async function snapshot(): Promise<{ counts: Counts; uses: ReadonlySet<string> }> {
   return { counts: await s4Counts(ownerPool(), H.businessId), uses: await accountingUses() };
 }
 
@@ -174,7 +185,7 @@ async function expectNothingSurvives(inject: () => void, call: () => Promise<Res
   }
   const after = await snapshot();
   expect(s4Delta(before.counts, after.counts), `${what}: nothing survives`).toEqual({});
-  expect(after.uses, `${what}: no accounting assertion use survives`).toBe(before.uses);
+  expect(consumedSince(before.uses, after.uses), `${what}: no accounting assertion use survives`).toBe(0);
 }
 
 describe('T-13 a receipt without coverage (one entry): a failure at each point leaves nothing; then it commits', () => {
@@ -209,7 +220,7 @@ describe('T-13 a receipt without coverage (one entry): a failure at each point l
       purchases_state: 'changed',
       purchase_lines_state: 'changed',
     });
-    expect((await snapshot()).uses - before.uses, 'one accounting jti consumed').toBe(1);
+    expect(consumedSince(before.uses, (await snapshot()).uses), 'one accounting jti consumed').toBe(1);
   });
 });
 
@@ -254,7 +265,7 @@ describe('T-13 a receipt that covers a deficit (two entries): a failure after ea
       outbox_events: 4,
       inventory_assertion_uses: 1,
     });
-    expect((await snapshot()).uses - before.uses, 'two accounting jtis consumed, in one transaction').toBe(2);
+    expect(consumedSince(before.uses, (await snapshot()).uses), 'two accounting jtis consumed, in one transaction').toBe(2);
   });
 });
 

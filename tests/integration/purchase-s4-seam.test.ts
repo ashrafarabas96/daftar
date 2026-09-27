@@ -257,7 +257,8 @@ describe('R-B1 ordered accounting assertions on seam 2', () => {
     const s = scope();
     const postings = receiptPostings(A, prepared, s.businessTransactionId);
     const catchUp = must(postings.catchUp, 'N ≠ 0: a catch-up');
-    const usesBefore = must((await ownerPool().query<{ n: number }>(`SELECT count(*)::int AS n FROM accounting_assertion_uses`)).rows[0]).n;
+    // The jtis, not a count: the 0061 prune deletes uses older than an hour, so another test's uses can vanish between the two reads on a long run.
+    const usesBefore = new Set((await ownerPool().query<{ jti: string }>(`SELECT jti::text FROM accounting_assertion_uses`)).rows.map((r) => r.jti));
     const entries = await db.withBusinessInventoryAccountingTransaction(
       s,
       assertionFor(A, prepared.cmd),
@@ -279,8 +280,8 @@ describe('R-B1 ordered accounting assertions on seam 2', () => {
       { source_type: 'negative_inventory_cost_adjustment', journal_entry_id: entries[1] },
       { source_type: 'purchase', journal_entry_id: entries[0] },
     ]);
-    const usesAfter = must((await ownerPool().query<{ n: number }>(`SELECT count(*)::int AS n FROM accounting_assertion_uses`)).rows[0]).n;
-    expect(usesAfter - usesBefore, 'both jtis consumed').toBe(2);
+    const usesAfter = (await ownerPool().query<{ jti: string }>(`SELECT jti::text FROM accounting_assertion_uses`)).rows.map((r) => r.jti);
+    expect(usesAfter.filter((jti) => !usesBefore.has(jti)).length, 'both jtis consumed').toBe(2);
     const inXact = await ownerPool().query<{ n: number }>(`SELECT count(*)::int AS n FROM accounting_assertion_uses WHERE xact = $1::xid8`, [entries[2]]);
     expect(must(inXact.rows[0]).n, 'both jtis consumed by the one transaction').toBe(2);
   });

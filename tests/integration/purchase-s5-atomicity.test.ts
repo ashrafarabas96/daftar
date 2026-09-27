@@ -32,7 +32,7 @@ import { Database } from '../../apps/api/src/infra/database';
 import { DatabaseAccountingPostingAdapter } from '../../apps/api/src/modules/accounting/accounting-posting.adapter';
 import { DatabaseAccountingSourcesAdapter } from '../../apps/api/src/modules/accounting/accounting-sources.adapter';
 import { createTestApp, ensurePostgres, ownerPool, resetData, type TestApp } from '../helpers/test-app';
-import { asMember, must, onboardS3Business, registerActor, today, type HttpActor, type S3Business } from '../helpers/inventory-commands';
+import { asMember, onboardS3Business, registerActor, today, type HttpActor, type S3Business } from '../helpers/inventory-commands';
 import { s4Delta, type Counts } from '../helpers/purchase-commands';
 import { s5Counts } from '../helpers/purchase-returns';
 import { installSettlementFixture, type SettlementFixture } from '../helpers/purchase-settlement-fixture';
@@ -100,11 +100,22 @@ async function received(productId: string): Promise<HttpPurchase> {
   return { purchaseId, lineId };
 }
 
-async function accountingUses(): Promise<number> {
-  return must((await ownerPool().query<{ n: number }>(`SELECT count(*)::int AS n FROM accounting_assertion_uses`)).rows[0]).n;
+/**
+ * The accounting jtis consumed so far — a set, not a count. The 0061 prune
+ * deletes uses older than an hour, so on a long run another test's uses can
+ * disappear between two reads and a count difference goes negative. What a
+ * case asserts is which jtis ITS command consumed.
+ */
+async function accountingUses(): Promise<ReadonlySet<string>> {
+  return new Set((await ownerPool().query<{ jti: string }>(`SELECT jti::text FROM accounting_assertion_uses`)).rows.map((r) => r.jti));
 }
 
-async function snapshot(): Promise<{ counts: Counts; uses: number }> {
+/** The jtis in `after` that were not in `before`. */
+function consumedSince(before: ReadonlySet<string>, after: ReadonlySet<string>): number {
+  return [...after].filter((jti) => !before.has(jti)).length;
+}
+
+async function snapshot(): Promise<{ counts: Counts; uses: ReadonlySet<string> }> {
   return { counts: await s5Counts(ownerPool(), H.businessId), uses: await accountingUses() };
 }
 
@@ -165,7 +176,7 @@ async function expectNothingSurvives(inject: () => void, call: () => Promise<Res
   }
   const after = await snapshot();
   expect(s4Delta(before.counts, after.counts), `${what}: nothing survives`).toEqual({});
-  expect(after.uses, `${what}: no accounting assertion use survives`).toBe(before.uses);
+  expect(consumedSince(before.uses, after.uses), `${what}: no accounting assertion use survives`).toBe(0);
 }
 
 function returnRequest(p: HttpPurchase): () => Promise<Response> {
@@ -206,7 +217,7 @@ describe('T-13 a return: a failure after each step leaves nothing; then it commi
       inventory_assertion_uses: 1,
     });
     expect(d.supplier_credit_notes ?? 0, 'AP covers the whole carrying value: no credit note').toBe(0);
-    expect((await snapshot()).uses - before.uses, 'one accounting jti consumed').toBe(1);
+    expect(consumedSince(before.uses, (await snapshot()).uses), 'one accounting jti consumed').toBe(1);
   });
 
   it('with a supplier credit note (the fixture states O = 0): the same failpoints leave no credit note; then it commits with one', async () => {
@@ -254,6 +265,6 @@ describe('T-13 a reversal: a failure after each step leaves nothing; then it com
       outbox_events: 2,
       inventory_assertion_uses: 1,
     });
-    expect((await snapshot()).uses - before.uses, 'one accounting jti consumed').toBe(1);
+    expect(consumedSince(before.uses, (await snapshot()).uses), 'one accounting jti consumed').toBe(1);
   });
 });
