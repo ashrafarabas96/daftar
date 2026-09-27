@@ -1,7 +1,7 @@
 #!/usr/bin/env tsx
 /**
  * §XXI: "can credential key version X be retired?" — operational check.
- * Usage: MIGRATION_DATABASE_URL=... tsx scripts/check-key-retirement.ts <version>
+ * Usage: WORKER_DATABASE_URL=... tsx scripts/check-key-retirement.ts <version>
  * Exit 0 (YES) only if NO non-terminal credential delivery references the
  * version. Never silently retire an in-use key.
  */

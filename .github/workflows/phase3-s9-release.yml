@@ -83,6 +83,10 @@ env:
   NODE_VERSION: '24.12.x'
   EXPECTED_SHA: ${{ inputs.sha || github.sha }}
 
+# Read-only: nothing in this job writes to GitHub (P3-S9 security review SR-2).
+permissions:
+  contents: read
+
 concurrency:
   group: p3s9-release-${{ inputs.sha || github.sha }}
   cancel-in-progress: false
@@ -115,6 +119,9 @@ jobs:
           # object store, and the release gate's secret scan reads a commit
           # range; a depth-1 checkout has none of them.
           fetch-depth: 0
+          # No token is left in .git/config while `npm ci` runs third-party
+          # install scripts; every later git command reads local objects only.
+          persist-credentials: false
 
       - name: Assert the checkout is the commit under release
         run: |
@@ -202,6 +209,10 @@ jobs:
 
       # ── 6. the evidence, assembled from what actually happened ───────────
       - name: Assemble the release evidence
+        # The dispatch input reaches the shell through the environment, never
+        # through the script text (P3-S9 security review SR-1).
+        env:
+          CI_RUN: ${{ inputs.ci_run }}
         run: |
           npm run evidence:phase3:s9 -- \
             --expected-sha="$EXPECTED_SHA" \
@@ -209,7 +220,7 @@ jobs:
             --archive-gate=release/phase3-s9-release-gate-archive.json \
             --archive=release/DAFTAR_PHASE_3_RC.zip \
             --git-archive="$RUNNER_TEMP/git-archive.tar" \
-            --ci-run='${{ inputs.ci_run }}'
+            --ci-run="$CI_RUN"
 
       - name: Summary
         if: always()
