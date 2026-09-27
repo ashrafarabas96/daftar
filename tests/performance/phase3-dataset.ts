@@ -51,6 +51,7 @@ import {
   type HttpActor,
   type S3Business,
 } from '../helpers/inventory-commands';
+import { MAX_DOCUMENT_LINES } from '../../packages/inventory/src/movement-payloads';
 import { runFinancial } from '../helpers/inventory-posting';
 import { createSupplier, draftAndReceive, draftCommand, type DraftCommand } from '../helpers/purchase-commands';
 import { foreignRate, prepareReversal, returnGoods, runReversal } from '../helpers/purchase-returns';
@@ -337,7 +338,10 @@ export async function buildGlDataset(t: TestApp, owner: HttpActor): Promise<GlDa
   const stocktakeId = randomUUID();
   await committed(async (c: Client) => {
     await runS3(c, A, stocktakeOpenCommand(w0, stocktakeId));
-    await runS3(c, A, countCommand(stocktakeId, w0, counted));
+    // A count request carries at most MAX_DOCUMENT_LINES lines; the stocktake holds up to MAX_STOCKTAKE_LINES across requests (S3 §606).
+    for (let from = 0; from < counted.length; from += MAX_DOCUMENT_LINES) {
+      await runS3(c, A, countCommand(stocktakeId, w0, counted.slice(from, from + MAX_DOCUMENT_LINES)));
+    }
   });
   await committed(async (c: Client) => {
     await runFinancial(c, A, await finalizeCommand(c, A, stocktakeId, w0));
