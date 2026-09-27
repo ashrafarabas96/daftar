@@ -53,6 +53,7 @@ import {
   type Key,
   type MovementRequest,
   type MovementRow,
+  type Outcome,
   type Queryable,
   type StockBusiness,
 } from '../helpers/stock-ledger';
@@ -84,6 +85,32 @@ const APP_READABLE = new Set([
   'negative_deficit_coverages',
 ]);
 const PINNED = ['search_path=pg_catalog, public, pg_temp'];
+/**
+ * P3-S8 (0069, contract A-02/§2.2, pin 4): the reconciler reads three S2
+ * relations at COLUMN level — exactly these columns, never the table. Not
+ * `reason`, `actor_user_id`, `unit_cost_base_minor`, `created_at` of the
+ * movements, nor `avg_unit_cost_base_minor` of the cache.
+ */
+const RECONCILER = 'daftar_reconciler';
+const RECONCILER_COLUMN_READABLE: Readonly<Record<string, readonly string[]>> = {
+  stock_movements: [
+    'business_id',
+    'id',
+    'movement_kind',
+    'qty_delta',
+    'source_id',
+    'source_line_id',
+    'source_type',
+    'stock_seq',
+    'tenant_id',
+    'value_delta_base_minor',
+    'variant_id',
+    'warehouse_id',
+  ],
+  stock_levels: ['business_id', 'last_stock_seq', 'on_hand', 'tenant_id', 'valuation_base_minor', 'variant_id', 'warehouse_id'],
+  stock_source_bindings: ['business_id', 'movement_kind', 'source_id', 'source_line_id', 'source_type', 'tenant_id'],
+};
+const reconcilerReadsColumnsOf = (rel: string): boolean => Object.prototype.hasOwnProperty.call(RECONCILER_COLUMN_READABLE, rel);
 
 /**
  * THE CHECKER (T-02.1): every deviation of the live runtime matrix from the
@@ -100,8 +127,25 @@ async function runtimeMatrixDeviations(q: Queryable): Promise<string[]> {
   );
   const out: string[] = [];
   for (const x of r.rows) {
-    const expected = x.priv === 'SELECT' && x.role === 'daftar_app' && APP_READABLE.has(x.rel);
+    const expected =
+      x.priv === 'SELECT' &&
+      ((x.role === 'daftar_app' && APP_READABLE.has(x.rel)) ||
+        // P3-S8 (0069, pin 4): column level only — has_table_privilege(SELECT) stays false.
+        (x.role === RECONCILER && x.level === 'column' && reconcilerReadsColumnsOf(x.rel)));
     if (x.held !== expected) out.push(`${x.role} ${x.priv}${x.level === 'column' ? '(column)' : ''} ${x.rel}${expected ? ' MISSING' : ''}`);
+  }
+  // P3-S8 (0069, pin 4): the reconciler's column set on every S2 relation is
+  // exact in both directions — each 0069 column readable (ALLOW), every other
+  // column of every S2 relation not (DENY).
+  const cols = await q.query<{ rel: string; col: string; held: boolean }>(
+    `SELECT c.relname::text AS rel, a.attname::text AS col, has_column_privilege($1, c.oid, a.attnum, 'SELECT') AS held
+       FROM pg_class c JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped
+      WHERE c.relnamespace = 'public'::regnamespace AND c.relname = ANY ($2::text[])`,
+    [RECONCILER, [...S2_RELATIONS]],
+  );
+  for (const x of cols.rows) {
+    const expected = (RECONCILER_COLUMN_READABLE[x.rel] ?? []).includes(x.col);
+    if (x.held !== expected) out.push(`${RECONCILER} SELECT(${x.col}) ${x.rel}${expected ? ' MISSING' : ''}`);
   }
   return out.sort();
 }
@@ -159,6 +203,47 @@ function endStateBlock(file: string): string {
   return sql.slice(start + 1, end + 'END $$;'.length);
 }
 
+/**
+ * P3-S8 (0069, pin 4): the reconciler's real reads of one S2 relation it may
+ * read at column level. Under business scope (the P2-S8 reader's scoped
+ * transaction): `count(*)` and every 0069 column are accepted; `SELECT *` and
+ * every other column are refused by the ACL (42501).
+ */
+async function reconcilerColumnReads(c: Client, rel: string): Promise<void> {
+  const allowed = must(RECONCILER_COLUMN_READABLE[rel], rel);
+  const all = (
+    await ownerPool().query<{ a: string }>(
+      `SELECT attname::text AS a FROM pg_attribute WHERE attrelid = $1::regclass AND attnum > 0 AND NOT attisdropped ORDER BY attnum`,
+      [rel],
+    )
+  ).rows.map((x) => x.a);
+  const denied = all.filter((a) => !allowed.includes(a));
+  await c.query('BEGIN');
+  try {
+    await setScope(c, biz);
+    const probe = async (sql: string): Promise<Outcome<unknown>> => {
+      await c.query('SAVEPOINT reconciler_read');
+      const o = await settle(() => c.query(sql));
+      await c.query('ROLLBACK TO SAVEPOINT reconciler_read');
+      return o;
+    };
+    expectAccepted(await probe(`SELECT count(*) FROM ${rel}`), `${RECONCILER} count(*) ${rel} under business scope`);
+    expectAccepted(await probe(`SELECT ${allowed.join(', ')} FROM ${rel}`), `${RECONCILER} reads the 0069 columns of ${rel}`);
+    for (const col of allowed) expectAccepted(await probe(`SELECT ${col} FROM ${rel}`), `${RECONCILER} reads ${rel}.${col}`);
+    for (const col of denied) expectRefused(await probe(`SELECT ${col} FROM ${rel}`), '42501', null, `${RECONCILER}: SELECT ${rel}.${col}`);
+    if (denied.length > 0) expectRefused(await probe(`SELECT * FROM ${rel}`), '42501', null, `${RECONCILER}: SELECT * FROM ${rel}`);
+    for (const w of [
+      `INSERT INTO ${rel} DEFAULT VALUES`,
+      `UPDATE ${rel} SET ${must(allowed[0])} = ${must(allowed[0])} WHERE false`,
+      `DELETE FROM ${rel} WHERE false`,
+    ]) {
+      expectRefused(await probe(w), '42501', null, `${RECONCILER}: ${w} under business scope`);
+    }
+  } finally {
+    await c.query('ROLLBACK');
+  }
+}
+
 describe('T-02 — the live grant matrix (P:154)', () => {
   it('T-02.1: the ledger relations discovered from pg_class are exactly the eight S2 relations the contract names plus the four P3-S3 bridges, the two P3-S4 bridges and the P3-S4 coverage header (P3-S5: plus the two P3-S5 bridges)', async () => {
     const r = await ownerPool().query<{ relname: string }>(
@@ -204,6 +289,10 @@ describe('T-02 — the live grant matrix (P:154)', () => {
             `TRUNCATE ${rel}`,
           ]) {
             expectRefused(await settle(() => c.query(sql)), '42501', null, `${role}: ${sql}`);
+          }
+          if (role === RECONCILER && reconcilerReadsColumnsOf(rel)) {
+            await reconcilerColumnReads(c, rel);
+            continue;
           }
           const read = await settle(() => c.query(`SELECT count(*) FROM ${rel}`));
           if (role === 'daftar_app' && APP_READABLE.has(rel)) expectAccepted(read, `${role} reads ${rel}`);
@@ -312,17 +401,24 @@ describe('T-02 — the live grant matrix (P:154)', () => {
       await rewindToP3S2Checkpoint(c);
       expectAccepted(await attempt(c, () => c.query(endStateBlock('0059_inventory_stock_ledger.sql'))), '0059-E at the P3-S2 checkpoint');
       await c.query('GRANT INSERT ON stock_levels TO daftar_app');
-      expect(await runtimeMatrixDeviations(c)).toEqual([
-        'daftar_app INSERT stock_levels',
-        'daftar_app INSERT(column) stock_levels',
-        // P3-S4 (0063/0064): the rewind revoked daftar_app's S4 reads of the
-        // deficits and coverages (0059-E (5) predates them), which the live
-        // checker reports as missing — exactly these four, nothing else.
-        'daftar_app SELECT negative_deficit_coverages MISSING',
-        'daftar_app SELECT negative_inventory_deficits MISSING',
-        'daftar_app SELECT(column) negative_deficit_coverages MISSING',
-        'daftar_app SELECT(column) negative_inventory_deficits MISSING',
-      ]);
+      expect(await runtimeMatrixDeviations(c)).toEqual(
+        [
+          'daftar_app INSERT stock_levels',
+          'daftar_app INSERT(column) stock_levels',
+          // P3-S4 (0063/0064): the rewind revoked daftar_app's S4 reads of the
+          // deficits and coverages (0059-E (5) predates them), which the live
+          // checker reports as missing — exactly these four, nothing else.
+          'daftar_app SELECT negative_deficit_coverages MISSING',
+          'daftar_app SELECT negative_inventory_deficits MISSING',
+          'daftar_app SELECT(column) negative_deficit_coverages MISSING',
+          'daftar_app SELECT(column) negative_inventory_deficits MISSING',
+          // P3-S8 (0069, pin 4): the rewind revoked the reconciler's column
+          // reads (0059-E (5) predates them) — exactly the 0069 columns of the
+          // three stock tables and their column-level SELECT, nothing else.
+          ...Object.keys(RECONCILER_COLUMN_READABLE).map((rel) => `${RECONCILER} SELECT(column) ${rel} MISSING`),
+          ...Object.entries(RECONCILER_COLUMN_READABLE).flatMap(([rel, cols]) => cols.map((col) => `${RECONCILER} SELECT(${col}) ${rel} MISSING`)),
+        ].sort(),
+      );
       expectRefused(await attempt(c, () => c.query(endStateBlock('0059_inventory_stock_ledger.sql'))), 'P0001', 'inventory.authority_leak', '0059-E');
       // The reported leak is a real write path: daftar_app, in scope, inserts a cache row.
       await setScope(c, biz);

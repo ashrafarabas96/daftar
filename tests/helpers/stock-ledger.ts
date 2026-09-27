@@ -748,6 +748,51 @@ export async function assertMigrationState(q: Queryable = ownerPool()): Promise<
  * included) — is asserted present before it is revoked and absent after.
  */
 export async function rewindToP3S2Checkpoint(c: Queryable): Promise<void> {
+  // P3-S8 (0069, contract A-02/§2.2): the reconciler's column reads of the
+  // three stock tables and of `accounts.system_key` — 0059-E asserts the
+  // reconciler reads no stock table, which was the P3-S2 checkpoint. The exact
+  // 0069 set is asserted present before it is revoked and absent after. The
+  // R-B1a helper's one EXECUTE grant (to the accounting principal) is on a
+  // routine neither block inspects, and stays.
+  const s8GrantsSql = `SELECT array_agg(a.attrelid::regclass::text || '.' || a.attname ORDER BY a.attrelid::regclass::text, a.attname) AS columns
+                         FROM pg_attribute a
+                        WHERE a.attrelid = ANY (ARRAY['stock_movements', 'stock_levels', 'stock_source_bindings', 'accounts']::regclass[])
+                          AND a.attnum > 0 AND NOT a.attisdropped
+                          AND has_column_privilege('daftar_reconciler', a.attrelid, a.attname, 'SELECT')`;
+  const s8Movements = [
+    'business_id',
+    'id',
+    'movement_kind',
+    'qty_delta',
+    'source_id',
+    'source_line_id',
+    'source_type',
+    'stock_seq',
+    'tenant_id',
+    'value_delta_base_minor',
+    'variant_id',
+    'warehouse_id',
+  ];
+  const s8Levels = ['business_id', 'last_stock_seq', 'on_hand', 'tenant_id', 'valuation_base_minor', 'variant_id', 'warehouse_id'];
+  const s8Bindings = ['business_id', 'movement_kind', 'source_id', 'source_line_id', 'source_type', 'tenant_id'];
+  const s8Before = await c.query(s8GrantsSql);
+  expect(s8Before.rows[0], 'the P3-S8 reconciler column reads (0069)').toEqual({
+    columns: [
+      ...['business_id', 'id', 'system_key', 'tenant_id', 'type'].map((x) => `accounts.${x}`),
+      ...s8Levels.map((x) => `stock_levels.${x}`),
+      ...s8Movements.map((x) => `stock_movements.${x}`),
+      ...s8Bindings.map((x) => `stock_source_bindings.${x}`),
+    ],
+  });
+  await c.query(`REVOKE SELECT (${s8Movements.join(', ')}) ON stock_movements FROM daftar_reconciler`);
+  await c.query(`REVOKE SELECT (${s8Levels.join(', ')}) ON stock_levels FROM daftar_reconciler`);
+  await c.query(`REVOKE SELECT (${s8Bindings.join(', ')}) ON stock_source_bindings FROM daftar_reconciler`);
+  await c.query(`REVOKE SELECT (system_key) ON accounts FROM daftar_reconciler`);
+  const s8After = await c.query(s8GrantsSql);
+  expect(s8After.rows[0], 'the P3-S8 reconciler column reads, revoked (the 0051 accounts columns stay)').toEqual({
+    columns: ['business_id', 'id', 'tenant_id', 'type'].map((x) => `accounts.${x}`),
+  });
+
   // P3-S6 (0067/0068)
   const s6Routines = [
     'payment_method_create(uuid,text,uuid,boolean,integer,text,text,text)',
