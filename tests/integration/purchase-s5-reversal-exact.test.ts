@@ -21,7 +21,7 @@
 import type { Client } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { ensurePostgres, ownerPool, resetData } from '../helpers/test-app';
-import { must, ownerClient, seedS3World, stockState, type S3World } from '../helpers/inventory-commands';
+import { atCommit, expectAccepted, must, ownerClient, seedS3World, stockState, type S3World } from '../helpers/inventory-commands';
 import { stockUp } from '../helpers/inventory-posting';
 import {
   entryLinesOf,
@@ -102,6 +102,7 @@ describe('T-09 the reversal at the original receipt cost (R-B1a)', () => {
 
       const prep = await prepareReversal(c, A, p.purchaseId);
       const run = await runReversal(c, A, prep);
+      expectAccepted(await atCommit(c), 'every deferred guard holds at COMMIT');
       const entry = must(run.entry, 'the Phase 2 reversal');
       expect(entry.created).toBe(true);
 
@@ -155,6 +156,7 @@ describe('T-09 the Phase 2 reversal of the purchase entry (R-B2a)', () => {
       });
       const prep = await prepareReversal(c, A, p.purchaseId);
       await runReversal(c, A, prep);
+      expectAccepted(await atCommit(c), 'every deferred guard holds at COMMIT');
       const rev = must(await reversalOf(c, A.businessId, p.entryId), 'the reversal of the purchase entry');
       expect(rev.entryDate).toBe(prep.cmd.reversalDate);
       const original = await entryLinesOf(c, A.businessId, p.entryId);
@@ -191,6 +193,7 @@ describe('T-09 the Phase 2 reversal of the purchase entry (R-B2a)', () => {
       const p = await receivedPurchase(c, A, [{ variantId: A.piece.variantId, qty: '2', unitPriceMinor: '100' }]);
       const prep = await prepareReversal(c, A, p.purchaseId);
       await runReversal(c, A, prep);
+      expectAccepted(await atCommit(c), 'every deferred guard holds at COMMIT');
       const audit = await c.query<{ metadata: Record<string, unknown>; entity: string; entity_id: string }>(
         `SELECT metadata, entity, entity_id FROM audit_events WHERE business_id = $1 AND action = 'purchase.reversed'`,
         [A.businessId],
@@ -216,6 +219,7 @@ describe('T-09 the Phase 2 reversal of the purchase entry (R-B2a)', () => {
       const A = world.A;
       const p = await receivedPurchase(c, A, [{ variantId: A.piece2.variantId, qty: '3', unitPriceMinor: '333' }]);
       await runReversal(c, A, await prepareReversal(c, A, p.purchaseId));
+      expectAccepted(await atCommit(c), 'every deferred guard holds at COMMIT');
       const s = await stockState(c, A.businessId, { warehouseId: A.w1, variantId: A.piece2.variantId });
       expect([s.onHand, s.valuation, s.avg]).toEqual([0n, 0n, 3_330_000_000_000n]);
       const three = await threeWay(c, A.businessId);

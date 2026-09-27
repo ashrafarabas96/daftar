@@ -20,6 +20,7 @@ import type { Client } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { ensurePostgres, ownerPool, resetData } from '../helpers/test-app';
 import {
+  atCommit,
   damageCommand,
   expectAccepted,
   must,
@@ -88,6 +89,7 @@ async function refusedAlone(c: Client, A: S3Business, p: PreparedReversal, code:
 async function accepted(c: Client, A: S3Business, p: PreparedReversal, why: string): Promise<void> {
   const run = expectAccepted(await tryReversal(c, A, p), why);
   expect(must(run.entry, `${why}: the Phase 2 reversal`).created).toBe(true);
+  expectAccepted(await atCommit(c), `${why}: every deferred guard holds at COMMIT`);
 }
 
 describe('T-08 A-09 (a)/(b): the settlement fixture (TL-9)', () => {

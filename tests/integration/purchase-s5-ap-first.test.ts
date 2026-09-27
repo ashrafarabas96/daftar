@@ -20,7 +20,7 @@
 import type { Client } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { ensurePostgres, ownerPool, resetData } from '../helpers/test-app';
-import { must, ownerClient, refusedWith, seedS3World, today, type S3World } from '../helpers/inventory-commands';
+import { atCommit, expectAccepted, must, ownerClient, refusedWith, seedS3World, today, type S3World } from '../helpers/inventory-commands';
 import {
   RETURN_ACCOUNTS,
   creditNoteOf,
@@ -102,6 +102,7 @@ async function playVector(c: Client, v: SupplierReturnVector, fixture: Settlemen
     expect(planAmounts(prep.plan), `${label}: the TS plan is the vector`).toEqual(vectorAmounts(e));
     expect(prep.plan.apConvertedMinor.toString(10), `${label}: convert(ap_txn)`).toBe(e.apConvertedMinor);
     const run = await runReturn(c, A, prep);
+    expectAccepted(await atCommit(c), `${label}: every deferred guard holds at COMMIT`);
     expect(must(run.entry).created).toBe(true);
     expect(await storedAmounts(c, A.businessId, prep.cmd.returnId), `${label}: the stored return is the vector (SQL parity)`).toEqual(vectorAmounts(e));
     const entry = must(await entryBySource(c, A.businessId, 'supplier_return', prep.cmd.returnId), `${label}: the entry`);
