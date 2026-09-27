@@ -254,18 +254,18 @@ jobs:
         run: npm run gate:phase2:s8
         env:
           PG_PORT: '5432'
-      # P3-S5 — supplier returns, PPV, supplier credit notes and purchase
-      # reversal, a PERMANENT gate since the P3-S5 freeze. Proves 0065–0066 at
-      # their accepted digests (frozenThrough a floor at 0066), the exact
-      # registrations and EXECUTE matrix, OD-03 bounded with no tax object,
-      # every table, bridge, INSERT-judging guard and routine by name, the
-      # replaced gaps function keeping every P3-S4 digest, the primitive's
-      # owner replacement (R-B1a) and the reversal guard, then both package
-      # suites, every purchase-s5 suite and Budget A in isolation. It composes
-      # the permanent P3-S4 gate, and through it P3-S3, P3-S2, P3-S1, P2-S8
-      # and the chain back to Phase 1.
-      - name: Phase 3 slice gate — P3-S5 (composes P3-S4)
-        run: npm run gate:phase3:s5
+      # P3-S6 — payment methods and supplier settlement, a PERMANENT gate
+      # since the P3-S6 freeze. Proves 0067–0068 at their accepted digests
+      # (frozenThrough a floor at 0068), the seven operation kinds and entry
+      # routines, the EXECUTE matrix and write grants, OD-03 bounded, every
+      # INSERT-judging guard by name (the R-80 return settlement trigger
+      # included), the replaced gaps function keeping every P3-S5 digest but
+      # the credit-note guard's, and supplier_settlement_guard_gaps(); then
+      # both package suites, the seam unit tests, every settlement-s6 suite and
+      # Budget A in isolation. It composes the permanent P3-S5 gate, and
+      # through it P3-S4 … P3-S1, P2-S8 and the chain back to Phase 1.
+      - name: Phase 3 slice gate — P3-S6 (composes P3-S5)
+        run: npm run gate:phase3:s6
         env:
           PG_PORT: '5432'
       - name: Tampered-migration hard-fail proof

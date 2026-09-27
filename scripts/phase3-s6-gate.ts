@@ -52,7 +52,10 @@ const [SOURCES, COMMANDS] = S6_MIGRATIONS;
 const S6_BOUNDARY = COMMANDS;
 
 /** The two P3-S6 migrations at their accepted digests. Empty while P3-S6 is a candidate; filled in the freeze commit only. */
-const S6_ACCEPTED: Readonly<Record<string, string>> = {};
+const S6_ACCEPTED: Readonly<Record<string, string>> = {
+  '0067_payment_methods_supplier_settlement_sources.sql': '81363f1adf8a296b94690baee4766bcacfa72520477b26f8044cccda398fe660',
+  '0068_supplier_settlement_commands.sql': 'dafad8c698b8668eef24b38315117b3813ceeeaad7cc84b9089ab66b3be89a04',
+};
 
 const ACCEPTED = Object.keys(S6_ACCEPTED).length > 0;
 
