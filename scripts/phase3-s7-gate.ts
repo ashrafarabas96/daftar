@@ -114,6 +114,15 @@ const LOCALES: readonly CatalogLocale[] = ['ar', 'en', 'tr'];
 
 /** T-17, run alone and last (§6 T-17; SM:36). */
 const BUDGET_SUITE = 'tests/performance/phase3-s7-read-budgets.test.ts';
+
+/**
+ * T-17 Tier 1 (the P2-S8 §35 pattern): every push measures the unchanged
+ * budgets at a tenth of the contract volume, because the contract-volume seed
+ * takes about two hours through the real routines. An explicit
+ * P3S7_PERF_SCALE in the environment wins. Tier 2 (scale 1) is the acceptance
+ * evidence, run once and recorded in docs/PHASE_3_S7_ACCEPTANCE.md.
+ */
+const TIER1_SCALE = process.env['P3S7_PERF_SCALE'] ?? '0.1';
 /** The guard proofs of Rule 23 and the widened G-6 (§7.2(b), (c)). */
 const GUARD_SUITE = 'tests/integration/static-guards-s7.test.ts';
 
@@ -363,7 +372,7 @@ function checkRunnersReportFailure(): void {
   canary('web', ['--config', 'apps/web/test/fixtures/runner-exit-code/vitest.config.mts', 'failing']);
 }
 
-const STEPS = (): { name: string; cmd: string; args: string[] }[] => [
+const STEPS = (): { name: string; cmd: string; args: string[]; env?: Record<string, string> }[] => [
   { name: 'P3-S6 gate (permanent predecessor, composes P3-S5 … P3-S1, P2 and Phase 1)', cmd: npm, args: ['run', 'gate:phase3:s6'] },
   { name: 'localization, with the S7 jargon and source pass', cmd: npm, args: ['run', 'check:localization'] },
   { name: 'static guards, with Rules 19 (G-6 widened) and 23', cmd: npm, args: ['run', 'check:guards'] },
@@ -375,7 +384,12 @@ const STEPS = (): { name: string; cmd: string; args: string[] }[] => [
     cmd: 'npx',
     args: ['vitest', 'run', 'tests/golden-regression/phase1/06-web-contract.golden.test.ts', 'tests/integration/process-composition.test.ts'],
   },
-  { name: 'T-17 read budgets, in isolation and last', cmd: 'npx', args: ['vitest', 'run', BUDGET_SUITE] },
+  {
+    name: `T-17 read budgets (Tier 1, scale ${TIER1_SCALE}), in isolation and last`,
+    cmd: 'npx',
+    args: ['vitest', 'run', BUDGET_SUITE],
+    env: { P3S7_PERF_SCALE: TIER1_SCALE },
+  },
 ];
 
 function runSteps(): void {
@@ -387,7 +401,7 @@ function runSteps(): void {
   }
   for (const step of STEPS()) {
     const started = Date.now();
-    const res = spawnSync(step.cmd, [...step.args], { cwd: ROOT, encoding: 'utf8', stdio: 'inherit', env: process.env });
+    const res = spawnSync(step.cmd, [...step.args], { cwd: ROOT, encoding: 'utf8', stdio: 'inherit', env: { ...process.env, ...step.env } });
     const ms = Date.now() - started;
     if (res.status !== 0) fail('regression', `${step.name} failed (exit ${res.status ?? 'signal'}) after ${ms}ms`);
     else ok(`${step.name} (${ms}ms)`);

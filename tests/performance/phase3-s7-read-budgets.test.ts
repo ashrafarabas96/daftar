@@ -32,10 +32,13 @@
  * `journal_lines` sequentially.
  *
  * RUNNING IT: alone, after the other S7 suites, never beside another
- * `PG_DIR` user (§7.1 #4). The seed at contract volume takes tens of minutes.
- * `P3S7_PERF_SCALE` (default 1, the contract volume) scales every count for a
- * smoke run of the harness; only scale 1 is evidence, and the budgets are
- * asserted unchanged at every scale.
+ * `PG_DIR` user (§7.1 #4). The seed at contract volume takes about two hours
+ * through the real routines. `P3S7_PERF_SCALE` (default 1, the contract
+ * volume) scales every count. TWO TIERS, as P2-S8 §35: the permanent gate runs
+ * Tier 1 on every push at scale 0.1 — the same budgets on less data, the
+ * weaker claim, and the output says which scale produced it; the acceptance
+ * evidence is Tier 2, one run at scale 1 recorded in the acceptance page.
+ * The budgets are asserted unchanged at every scale.
  */
 import type { Client } from 'pg';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -318,6 +321,11 @@ beforeAll(
     owner = await registerActor(t, 'S7 budgets owner');
     A = await onboardS3Business(t, owner, 's7perf');
     await seed();
+    // The seed at contract volume outlives an access token: sign in again, so
+    // the measured reads are authenticated as the same owner.
+    const login = await t.request.post('/v1/auth/login').send({ email: owner.email, password: 'Str0ng!Passw0rd' });
+    expect(login.status, 'the owner signs in again after the seed').toBe(201);
+    owner = { ...owner, token: String(login.body.accessToken) };
   },
   4 * 60 * 60 * 1000,
 );
