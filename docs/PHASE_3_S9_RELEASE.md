@@ -1,7 +1,7 @@
 # PHASE 3 — P3-S9 RELEASE CLOSURE
 
 **Status: PHASE 3 RELEASE — closed under the Tech Lead's 2026-09-26 directive to complete Phase 3. PR #4 stays a draft and is not merged.**
-**Scope: release closure only. Zero migrations, and no change under `apps/`, `packages/` or `infrastructure/`.**
+**Scope: release closure. Zero migrations and no change under `packages/` or `infrastructure/`. One change under `apps/`: the R-ACC-06 correction the Tech Lead authorized on 2026-09-27 (§6).**
 
 This page states what P3-S9 establishes and the mechanism that proves it. It carries no workflow run id, no timing and no archive digest, for the reason `docs/PHASE_2_S9_RELEASE.md` gives: a page that has to be edited to carry a run changes the head that the run described. Everything a run produces lives in `release/phase3-s9-release-evidence.json`, assembled by `scripts/phase3-s9-evidence.ts` from artefacts. The run ids are named in PR #4 and in the hand-off to the Tech Lead.
 
@@ -102,7 +102,11 @@ What failed was a test fixture that wrote a variant as a superuser with no tenan
 
 ## 6. Defects the release work found
 
-None is a defect in Phase 3 product code.
+One is a defect in Phase 3 product code, and the Tech Lead authorized its correction in P3-S9 on 2026-09-27 (decision card, "fix it now"). This deviates from the contract's A-15, which said S9 changes no product code.
+
+- **R-ACC-06 answered `discrepancy` for every business with a Phase 3 posting.** The check requires every posted source type to be one the running application knows. It compared against the three Phase 2 native types only, and P3-S3 … P3-S6 never added the eight domain types (inventory adjustment and opening, purchase, negative-inventory cost adjustment, supplier return, payment, credit allocation and refund). So the daily reconciliation raised a false alarm for every business that used inventory, purchases or supplier settlement. The data was never wrong. The reader now compares against both lists (`apps/api/src/modules/accounting/accounting-reconciliation.reader.ts`). The gap existed because no suite ran the nine Phase 2 checks over a business with Phase 3 postings. T-06 now runs all fourteen checks over every business the reader enumerates. It was red on the old reader, reporting R-ACC-06 with 16 and 1 offending entries in two businesses, and it is green on the new one. Because T-06 is one of the deployed rehearsal's pinned suites, the same assertion runs again on the database `daftar_migrator` built.
+
+The other defects are not in Phase 3 product code:
 
 - `npm run check:key-retirement` (Phase 1) never ran: top-level await does not compile for this repository's CommonJS scripts. It now runs, and `tests/integration/check-key-retirement.test.ts` runs the real script for its three answers, all red on the old script.
 - The root TypeScript project (`tests/**`, `scripts/**`) was compiled by no CI step and carried 57 errors. They are fixed, and `npm run typecheck` now compiles it; a planted type error fails it.
@@ -111,7 +115,7 @@ None is a defect in Phase 3 product code.
 
 ## 7. Performance at scale
 
-S9 changes no product code, so the Tier 2 evidence of the slices describes this head (`git diff --stat` of `apps/`, `packages/` and `infrastructure/` from the P3-S8 freeze is empty).
+The Tier 2 evidence of the slices still describes this head. From the P3-S8 freeze, `packages/` and `infrastructure/` are unchanged. Under `apps/` the only change is the list R-ACC-06 compares against, a check neither Tier 2 run measures.
 
 - **S7 T-17 Tier 2** (scale 1): the four read budgets passed, with the largest p95 at 78 ms against 250 ms (`docs/PHASE_3_S7_ACCEPTANCE.md`).
 - **S8 T-13 Tier 2** (`P3S8_PERF_TIER=2`, local, fresh embedded PostgreSQL; supporting evidence): 7 of 7 passed. D-GL was built by the real commands at ×10: 137,000 movements and 42,904 journal lines. R-INV-01 … 05 over it took 1.3 s against 120 s (S8-R1). D-LEDGER held 1,000,020 movements over 50,001 keys. R-INV-02/03/05 took 6.7 s against 300 s (S8-R2), and fold and verify of every key took 10.9 s against 600 s, with 0 mismatched keys and 0 gaps (S8-V). The build took 27 minutes (S8-B, recorded, not bounded). The first Tier 2 run stopped building D-GL, because ×10 made one stocktake of 5,000 lines and the product bounds a stocktake at 2,000. The dataset now counts them in stocktakes of at most 2,000.
@@ -120,7 +124,7 @@ S9 changes no product code, so the Tier 2 evidence of the slices describes this 
 ## 8. Final reviews
 
 - **Security:** no High and no Medium finding; S-1 … S-12 pass. The reviewer ran the deployment matrix (exit 0) and `npm audit --audit-level=high` (0 high or critical; 2 moderate in dev dependencies), and confirmed that the S9 diff adds no runtime surface. Three Low findings are fixed: the release workflow took its `ci_run` dispatch input into the script text (SR-1), and it now reads it from the environment; the job is now `permissions: contents: read` without a persisted checkout token (SR-2); a usage line named the wrong credential (SR-7). Two Low findings are TD-18 (SR-3, SR-4). Two are information: the rehearsal compares the migration history rather than the whole catalogue before and after the suites (SR-5), and the evidence assembler does not re-derive the eight step names (SR-6); the gate cannot write PASS with a step missing.
-- **Data integrity:** {{DATA_INTEGRITY_REVIEW}}
+- **Data integrity:** D-2 … D-8 pass: exact integer comparisons with no rounding and no stored balance; each R-INV check red on its planted defect; the rebuild rehearsal exact; both prefixes and 70 frozen migrations verified; results carry identifiers, counts and timings only. D-1 found one defect, R-ACC-06 (§6), now corrected: the five S8 reconciliation suites and T-06's fourteen-check case pass, and the deployed rehearsal passes on the deployer's database. The reviewer confirmed that the S8 residue I-1 and TD-16 can only be reported and cannot corrupt data, and that no S8/S9 test edit can turn a failure into a pass: the jti-set counting is stricter than the row count it replaced, and the chunked stocktake still asserts every planned movement.
 - **UX, in a real browser:** clean. The harness was first proven red: a planted 400-px element and a planted missing key on `/stock` were reported in all four locale and width combinations. Then the header and thirteen flows covering the twelve S7 routes ran in ar and en at 360×640 and 1280×800, in headless Chromium against `next start` and the real API, with the business seeded through the API: 56 runs, 126 screenshots, 0 issues. No page is wider than its viewport, nothing is clipped, and there is no raw key, no U+FFFD, no API error, no CSP violation, no tax field and no accounting word. `dir` is `rtl` in ar, the menu toggles on phones, and rows are reachable by keyboard. The pass found one Phase 1 defect outside the Phase 3 screens, TD-19: the web server's calls to the API share one per-IP refresh allowance, and a 429 logs the user out. It also found two cosmetic items, TD-20.
 
 ## 9. What stays open
