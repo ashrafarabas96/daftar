@@ -520,7 +520,9 @@ export function runReconciliationCheck(c: PoolClient, businessId: string, checkI
     // (warehouse, variant) — the key of `stock_movements_key_seq_uq` — the
     // level row must carry exactly Σ qty_delta, Σ value_delta_base_minor and
     // the last sequence, and the sequence must be gapless from 1
-    // (max(stock_seq) = count(*), L:191). A movement with no level row and a
+    // (max(stock_seq) = count(*), L:191) — and duplicate-free from 1
+    // (min = 1, count(DISTINCT) = count(*)): {1, 3, 3} has max = count, so
+    // max = count alone would call a duplicate plus a gap ok. A movement with no level row and a
     // level row that states anything without a movement are both offences;
     // a never-moved zero row is not. The two totals of L:1245 are ALSO
     // compared literally, and a difference there names the business.
@@ -532,6 +534,8 @@ export function runReconciliationCheck(c: PoolClient, businessId: string, checkI
                       sum(m.qty_delta) AS qty,
                       sum(m.value_delta_base_minor::numeric) AS value,
                       max(m.stock_seq) AS last_seq,
+                      min(m.stock_seq) AS first_seq,
+                      count(DISTINCT m.stock_seq) AS distinct_seqs,
                       count(*) AS movements
                  FROM stock_movements m
                 WHERE m.business_id = $1::uuid
@@ -550,6 +554,8 @@ export function runReconciliationCheck(c: PoolClient, businessId: string, checkI
                OR k.value <> g.value
                OR k.last_stock_seq <> g.last_seq
                OR g.last_seq <> g.movements
+               OR g.first_seq <> 1
+               OR g.distinct_seqs <> g.movements
             UNION
            SELECT $1::uuid AS id
             WHERE (SELECT coalesce(sum(s.valuation_base_minor::numeric), 0) FROM stock_levels s WHERE s.business_id = $1::uuid)

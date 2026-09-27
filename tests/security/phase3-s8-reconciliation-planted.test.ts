@@ -10,6 +10,9 @@
  * of the scratch database off for that transaction, the "deferred FKs dropped
  * in scratch" of A-10 — and R-INV-01..05 run as `daftar_reconciler`:
  *   - a level row's valuation nudged by one minor unit → R-INV-02 only;
+ *   - a key's sequence made {1, 3, 3} (max = count, the cache consistent;
+ *     the key-sequence constraint dropped in the scratch database for the
+ *     plant and restored after) → R-INV-02 only (review L-3);
  *   - one Inventory (1200) line and its counterpart raised by one unit (the
  *     entry still balances) → R-INV-01 only;
  *   - an emptied key made to carry value 1, consistently in the movement,
@@ -239,6 +242,74 @@ describe('T-07 each planted defect fires exactly its own check, naming identifie
       }
     }, true);
     await firesExactly(biz, 'R-INV-04', [entry]);
+  });
+
+  it('R-INV-02: a key whose sequence is {1, 3, 3} — max = count, cache consistent — names its variant (review L-3: min = 1 and distinct = count)', async () => {
+    const biz = await stocked();
+    const original = must(
+      (
+        await scratch.pool.query<{ def: string }>(
+          `SELECT pg_get_constraintdef(oid) AS def FROM pg_constraint WHERE conrelid = 'stock_movements'::regclass AND conname = 'stock_movements_key_seq_uq'`,
+        )
+      ).rows[0],
+      'the key-sequence constraint',
+    ).def;
+    const planted = [randomUUID(), randomUUID()];
+    try {
+      await committed(async (c) => {
+        // The one constraint that keeps a sequence number unique per key, dropped in the scratch database only.
+        await c.query('ALTER TABLE stock_movements DROP CONSTRAINT stock_movements_key_seq_uq');
+        // Two movements at seq 3 with their own bindings: +1 and −1 of the key's own unit value, so Σ qty and
+        // Σ value are unchanged (R-INV-01, -03 stay ok) and every movement has its binding (R-INV-05 stays ok).
+        for (const [k, sourceId] of planted.entries()) {
+          const sign = k === 0 ? 1 : -1;
+          await c.query(
+            `INSERT INTO stock_source_bindings
+             SELECT (jsonb_populate_record(b, jsonb_build_object('source_id', $3::uuid, 'source_line_id', $3::uuid))).*
+               FROM stock_source_bindings b JOIN stock_movements m
+                 ON m.business_id = b.business_id AND m.source_type = b.source_type AND m.source_id = b.source_id
+                AND m.source_line_id = b.source_line_id AND m.movement_kind = b.movement_kind
+              WHERE m.business_id = $1 AND m.variant_id = $2 AND m.stock_seq = 1`,
+            [biz.businessId, biz.piece.variantId, sourceId],
+          );
+          await c.query(
+            `INSERT INTO stock_movements
+             SELECT (jsonb_populate_record(m, jsonb_build_object(
+                       'id', gen_random_uuid(), 'source_id', $3::uuid, 'source_line_id', $3::uuid, 'stock_seq', 3,
+                       'qty_delta', $4::int, 'value_delta_base_minor', ($4::int * m.unit_cost_base_minor)::bigint))).*
+               FROM stock_movements m WHERE m.business_id = $1 AND m.variant_id = $2 AND m.stock_seq = 1`,
+            [biz.businessId, biz.piece.variantId, sourceId, sign],
+          );
+        }
+        await c.query(`UPDATE stock_levels SET last_stock_seq = 3 WHERE business_id = $1 AND warehouse_id = $2 AND variant_id = $3`, [
+          biz.businessId,
+          biz.w1,
+          biz.piece.variantId,
+        ]);
+        const seqs = await c.query<{ s: string }>(`SELECT stock_seq::text AS s FROM stock_movements WHERE business_id = $1 AND variant_id = $2 ORDER BY 1`, [
+          biz.businessId,
+          biz.piece.variantId,
+        ]);
+        expect(
+          seqs.rows.map((r) => r.s),
+          'the planted sequence: max = count = 3',
+        ).toEqual(['1', '3', '3']);
+      }, true);
+      await firesExactly(biz, 'R-INV-02', [biz.piece.variantId]);
+    } finally {
+      await committed(async (c) => {
+        await c.query(`DELETE FROM stock_movements WHERE business_id = $1 AND source_id = ANY ($2::uuid[])`, [biz.businessId, planted]);
+        await c.query(`DELETE FROM stock_source_bindings WHERE business_id = $1 AND source_id = ANY ($2::uuid[])`, [biz.businessId, planted]);
+        await c.query(`UPDATE stock_levels SET last_stock_seq = 1 WHERE business_id = $1 AND warehouse_id = $2 AND variant_id = $3`, [
+          biz.businessId,
+          biz.w1,
+          biz.piece.variantId,
+        ]);
+        const present = await c.query(`SELECT 1 FROM pg_constraint WHERE conrelid = 'stock_movements'::regclass AND conname = 'stock_movements_key_seq_uq'`);
+        if (present.rowCount === 0) await c.query(`ALTER TABLE stock_movements ADD CONSTRAINT stock_movements_key_seq_uq ${original}`);
+      }, true);
+    }
+    expect(statuses(await runChecks(reconciler, target(biz))), 'restored: every check ok').toEqual(ALL_OK);
   });
 
   it('R-INV-05: a binding deleted orphans its movement, which is named', async () => {
