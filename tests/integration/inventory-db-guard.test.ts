@@ -150,7 +150,8 @@ describe('G-7 — the tree as it stands', () => {
         'suppliers_revision_guard',
         // P3-S4 (0063/0064, review L2, R-36): the same-transaction coverage guard.
         'negative_deficit_coverage_same_transaction',
-        // P3-S5 (0065/0066)
+        // P3-S5 (0065/0066; 0066 R-55: the credit note's own asserted writer)
+        'purchase_bridge_credit_note',
         'purchase_bridge_return',
         'purchase_bridge_reversal',
         'purchase_lock_stock_keys',
@@ -181,7 +182,7 @@ describe('G-7 — the tree as it stands', () => {
     ]);
   });
 
-  it('rule 22: the only stock writers are the primitive, the P3-S3 bridge writer and the two P3-S4 receipt helpers, the P3-S5 primitive replacement and its two bridge writers, and the first statement of each verifies the assertion', () => {
+  it('rule 22: the only stock writers are the primitive, the P3-S3 bridge writer and the two P3-S4 receipt helpers, the P3-S5 primitive replacement and its three bridge writers (credit note included), and the first statement of each verifies the assertion', () => {
     const report = checkInventoryWriterAuthority(real());
     expect(report.violations).toEqual([]);
     // 0062 R-5: the seven entry routines write no stock table themselves; the
@@ -202,9 +203,11 @@ describe('G-7 — the tree as it stands', () => {
       `${F64}: purchase_cover_deficits`,
       `${F64}: purchase_bridge_receipt`,
       // P3-S5 (0065/0066, R-B1a and S5 contract §7.2): the primitive replaced
-      // by its owner, and the two bridge writers; each opens with the assertion.
+      // by its owner, the two bridge writers and (0066 R-55) the credit-note
+      // writer; each opens with the assertion.
       `${F65}: inventory_apply_stock_movements`,
       `${F66}: purchase_bridge_return`,
+      `${F66}: purchase_bridge_credit_note`,
       `${F66}: purchase_bridge_reversal`,
     ]);
   });

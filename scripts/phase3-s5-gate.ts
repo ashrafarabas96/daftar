@@ -83,7 +83,14 @@ const LATER_TABLES =
 const TABLES = ['supplier_returns', 'supplier_return_lines', 'supplier_credit_notes', 'purchase_reversals', 'purchase_reversal_lines'];
 const STOCK_SOURCE_TYPES = ['supplier_return', 'purchase_reversal'];
 const ENTRY_ROUTINES = ['purchase_return', 'purchase_reverse'];
-const HELPERS = ['purchase_lock_stock_keys', 'purchase_bridge_return', 'purchase_bridge_reversal', 'purchase_ap_outstanding', 'purchase_settlement_state'];
+const HELPERS = [
+  'purchase_lock_stock_keys',
+  'purchase_bridge_return',
+  'purchase_bridge_reversal',
+  'purchase_bridge_credit_note',
+  'purchase_ap_outstanding',
+  'purchase_settlement_state',
+];
 const ACCOUNTING_OBJECTS = ['accounting_supplier_return_entry_complete', 'accounting_purchase_entry_id'];
 const TRIGGERS = [
   ...STOCK_SOURCE_TYPES.flatMap((st) => [

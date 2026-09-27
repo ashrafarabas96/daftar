@@ -1250,7 +1250,8 @@ describe('managed PostgreSQL: 0039 → 0049 under a non-superuser migration prin
               definer: true,
               config: PIN,
             })),
-            // …(0066) the two signed entry routines and their three helpers…
+            // …(0066) the two signed entry routines and their four helpers (R-55)…
+            internal('purchase_bridge_credit_note'),
             internal('purchase_bridge_return'),
             internal('purchase_bridge_reversal'),
             internal('purchase_lock_stock_keys'),
