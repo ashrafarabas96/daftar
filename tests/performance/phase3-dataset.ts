@@ -12,7 +12,8 @@
  *     in ordinary committed transactions (the S7 T-17 method): receipts of
  *     ten lines (10 % in USD, a by-value landed cost on 5 %), supplier
  *     returns, transfers, adjustments (gains at a stated cost and losses),
- *     damage, one stocktake of 500 lines, supplier payments, and purchase
+ *     damage, stocktakes of 500 counted lines (at most 2,000 per stocktake,
+ *     the product bound), supplier payments, and purchase
  *     reversals. No trigger, constraint or row security is bypassed.
  *     Every consuming command takes one unit from a distinct received line,
  *     so the plan never asks a key for stock it does not hold.
@@ -51,7 +52,7 @@ import {
   type HttpActor,
   type S3Business,
 } from '../helpers/inventory-commands';
-import { MAX_DOCUMENT_LINES } from '../../packages/inventory/src/movement-payloads';
+import { MAX_DOCUMENT_LINES, MAX_STOCKTAKE_LINES } from '../../packages/inventory/src/movement-payloads';
 import { runFinancial } from '../helpers/inventory-posting';
 import { createSupplier, draftAndReceive, draftCommand, type DraftCommand } from '../helpers/purchase-commands';
 import { foreignRate, prepareReversal, returnGoods, runReversal } from '../helpers/purchase-returns';
@@ -327,7 +328,7 @@ export async function buildGlDataset(t: TestApp, owner: HttpActor): Promise<GlDa
     planned += 1;
   });
 
-  // 6. One stocktake of the first warehouse: every counted key one unit above its on-hand.
+  // 6. Stocktakes of the first warehouse: every counted key one unit above its on-hand.
   const w0 = must(warehouses[0]);
   const counted: { variantId: string; counted: string }[] = [];
   for (const variantId of variants) {
@@ -335,17 +336,23 @@ export async function buildGlDataset(t: TestApp, owner: HttpActor): Promise<GlDa
     const state = await stockState(pool, A.businessId, { warehouseId: w0, variantId });
     if (state.onHand > 0n) counted.push({ variantId, counted: String(state.onHand / 10_000n + 1n) });
   }
-  const stocktakeId = randomUUID();
-  await committed(async (c: Client) => {
-    await runS3(c, A, stocktakeOpenCommand(w0, stocktakeId));
-    // A count request carries at most MAX_DOCUMENT_LINES lines; the stocktake holds up to MAX_STOCKTAKE_LINES across requests (S3 §606).
-    for (let from = 0; from < counted.length; from += MAX_DOCUMENT_LINES) {
-      await runS3(c, A, countCommand(stocktakeId, w0, counted.slice(from, from + MAX_DOCUMENT_LINES)));
-    }
-  });
-  await committed(async (c: Client) => {
-    await runFinancial(c, A, await finalizeCommand(c, A, stocktakeId, w0));
-  });
+  // A stocktake holds at most MAX_STOCKTAKE_LINES lines (the product bound),
+  // so Tier 2's 5,000 counted lines run as consecutive stocktakes of at most
+  // that many, over disjoint variants; Tier 1's 500 remain one stocktake.
+  for (let start = 0; start < counted.length; start += MAX_STOCKTAKE_LINES) {
+    const sheet = counted.slice(start, start + MAX_STOCKTAKE_LINES);
+    const stocktakeId = randomUUID();
+    await committed(async (c: Client) => {
+      await runS3(c, A, stocktakeOpenCommand(w0, stocktakeId));
+      // A count request carries at most MAX_DOCUMENT_LINES lines; the stocktake holds up to MAX_STOCKTAKE_LINES across requests (S3 §606).
+      for (let from = 0; from < sheet.length; from += MAX_DOCUMENT_LINES) {
+        await runS3(c, A, countCommand(stocktakeId, w0, sheet.slice(from, from + MAX_DOCUMENT_LINES)));
+      }
+    });
+    await committed(async (c: Client) => {
+      await runFinancial(c, A, await finalizeCommand(c, A, stocktakeId, w0));
+    });
+  }
   planned += counted.length;
 
   // 7. Payments: one instalment of an ILS receipt each, from the start.
