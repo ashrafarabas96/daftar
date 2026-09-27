@@ -213,6 +213,8 @@ describe('T-17 the P3-S5 upgrade matrix', () => {
         ...S5_MIGRATIONS,
         // P3-S6 (0067/0068)
         ...S6_MIGRATIONS,
+        // P3-S8 (0069): reconciler column grants and the R-B1a guard; no registry row
+        '0069_inventory_reconciliation_read_and_account_domain.sql',
       ]);
 
       // Everything as it was, plus the one accounting source type 0065 adds (A-05, A-15(e)).

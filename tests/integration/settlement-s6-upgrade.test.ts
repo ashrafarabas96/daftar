@@ -207,7 +207,11 @@ describe('T-17 the P3-S6 upgrade matrix', () => {
 
       const applied = await runMigrations(scratchUrl);
       expect(applied, 'exactly the S6 migrations apply').toEqual(migrationsAfter(FROZEN));
-      expect(applied).toEqual(S6_MIGRATIONS);
+      expect(applied).toEqual([
+        ...S6_MIGRATIONS,
+        // P3-S8 (0069): reconciler column grants and the R-B1a guard; no registry row
+        '0069_inventory_reconciliation_read_and_account_domain.sql',
+      ]);
 
       // Everything as it was, plus the three accounting source types 0067 adds (A-05).
       expect(await protectedRows()).toEqual([...before, 'src:supplier_payment:9', 'src:supplier_credit_allocation:10', 'src:supplier_refund:11'].sort());
