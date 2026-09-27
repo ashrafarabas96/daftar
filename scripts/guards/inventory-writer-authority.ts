@@ -44,9 +44,13 @@ import { QUALIFIED_NAME, balancedBody, unquote } from './sql-schema';
  * and coverages and opens with `inventory_assertion_current(...)`, so the
  * writer list is unchanged; a new routine that inserted a header without
  * that check would not be.
+ *
+ * P3-S5 (S5 contract §7.2, TL-13, 0066 R-55): `supplier_credit_notes` joins
+ * the set; its one writer is `purchase_bridge_credit_note`, which opens with
+ * `inventory_assertion_current(...)`.
  */
 export const STOCK_WRITE_TABLES =
-  /^(stock_movements|stock_levels|stock_source_bindings|negative_inventory_deficits|negative_deficit_coverages|negative_inventory_cost_adjustments|stock_source_bridge_\w+)$/;
+  /^(stock_movements|stock_levels|stock_source_bindings|negative_inventory_deficits|negative_deficit_coverages|negative_inventory_cost_adjustments|supplier_credit_notes|stock_source_bridge_\w+)$/;
 
 /** Single-quoted literals out, so a message that names a table is not a write. */
 function stripLiterals(body: string): string {
