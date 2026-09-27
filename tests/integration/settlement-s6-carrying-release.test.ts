@@ -22,9 +22,11 @@
  *         residue (R-69(a) ABSORBED: rel 0, AP line conv(a), dust −conv(a),
  *         the whole base realized); the same absorption by a payment;
  *       · BELOW-BASE-UNIT (R-69(b)): a txn-only residue of 0.10 LBP whose
- *         base is 0 cannot be cleared — every payment, credit allocation and
- *         refund that converts to 0 is refused `…amount_below_base_unit` by
- *         the binder AND by the routine, and the residue stays open;
+ *         base is 0 — left by a frozen S5 partial return, the one origin S6
+ *         cannot prevent — cannot be cleared: every payment, credit
+ *         allocation and refund that converts to 0 is refused
+ *         `…amount_below_base_unit` by the binder AND by the routine, and the
+ *         residue stays open;
  *   - the SQL arithmetic functions answer every primitive of every vector
  *     exactly as the package does.
  */
@@ -46,13 +48,14 @@ import {
   type Queryable,
   type S3Business,
 } from '../helpers/inventory-commands';
-import { receivedPurchase } from '../helpers/purchase-returns';
+import { receivedPurchase, returnGoods } from '../helpers/purchase-returns';
 import {
   bindingRefusal,
   concreteLines,
   createMethod,
   creditNoteIdOf,
   expectRefusal,
+  flushDeferred,
   httpMethod,
   httpPay,
   httpReceived,
@@ -350,22 +353,18 @@ describe('T-07 the strong base (JOD, LBP @ 0.0000024900) through the real routin
     });
   });
 
-  it('BELOW-BASE-UNIT (R-69(b)): a 0.10 LBP residue of base 0 is refused amount_below_base_unit by the binder and by the routine, every way', async () => {
-    const v = settlementVector('BELOW-BASE-UNIT');
+  it('BELOW-BASE-UNIT (R-69(b)): an S5-origin residue of 0.10 LBP whose base is 0 is refused amount_below_base_unit by the binder and by the routine, every way', async () => {
     await rolledBack(async (c) => {
       const jMethod = await createMethod(c, J, { postingAccountId: accJ.settlement.cash });
       const { supplierId, creditNoteId } = await lbpNote(c, jMethod);
-      const p1 = await lbpPurchase(c, supplierId);
-      const first = must(v.steps[0]);
-      const honest = await preparePay(c, J, {
-        supplierId,
-        paymentMethodId: jMethod,
-        currency: 'JOD',
-        allocations: [{ purchaseId: p1, paymentAmountMinor: 2n, appliedMinor: 99990n }],
-      });
-      await runS6(c, J, honest);
-      expectAccepted(await atCommit(c), 'step 1 at COMMIT');
-      expect(await outstandingOf(c, J.businessId, p1)).toMatchObject({ o: BigInt(must(first.after.outstandingTxnMinor)) });
+      // 10000 × 0.10 LBP: T = 100000, B = 2. A frozen S5 partial return of 9999 leaves the only
+      // residue S6 cannot prevent (M1): O = 10 LBP with a remaining AP base of 0.
+      const origin = await receivedPurchase(c, J, [{ variantId: J.piece.variantId, qty: '10000', unitPriceMinor: '10' }], { ...LBP, supplierId });
+      const p1 = origin.purchaseId;
+      expect(await outstandingOf(c, J.businessId, p1)).toEqual({ o: 100000n, t: 100000n, b: 2n });
+      await returnGoods(c, J, p1, { lines: [{ purchaseLineId: must(origin.lines[0]).lineId, qty: '9999' }] });
+      await flushDeferred(c);
+      expect(await outstandingOf(c, J.businessId, p1)).toMatchObject({ o: 10n });
       expect(await settlementLedgerAp(c, J.businessId, p1), 'a txn-only residue: base 0, txn 10').toEqual({ base: 0n, txn: 10n });
 
       const date = await today(c);
@@ -490,13 +489,8 @@ describe('T-07 the strong base (JOD, LBP @ 0.0000024900) through the real routin
         'supplier_refund.amount_below_base_unit',
         'refund 100 LBP as 0.001 JOD',
       );
-      const last = must(v.steps[v.steps.length - 1]);
       expect(await outstandingOf(c, J.businessId, p1), 'the residue stays open').toMatchObject({ o: 10n });
-      const n = await noteOf(c, J.businessId, creditNoteId);
-      expect({ r: n.remaining.toString(10), g: n.remainingCarrying.toString(10) }, 'the note is untouched').toEqual({
-        r: last.after.remainingMinor,
-        g: last.after.remainingCarryingMinor,
-      });
+      expect(await noteOf(c, J.businessId, creditNoteId), 'the note is untouched').toMatchObject({ remaining: 100000n, remainingCarrying: 2n });
     });
   });
 });
