@@ -168,8 +168,8 @@ END $$;
 -- ─────────────────────────────────────────────────────────────────────────
 
 -- stock_movements — R-INV-01 (Σ value_delta_base_minor), R-INV-02 (per-key
--- Σ qty_delta / value, max(stock_seq) = count(*)), R-INV-05 (the five-part
--- identity), and the ownership pair for the scoped read.
+-- Σ qty_delta / value, a sequence gapless and duplicate-free from 1),
+-- R-INV-05 (the five-part identity), and the ownership pair for the scoped read.
 GRANT SELECT (tenant_id, business_id, id, warehouse_id, variant_id, stock_seq, movement_kind, source_type, source_id, source_line_id,
               qty_delta, value_delta_base_minor)
   ON stock_movements TO daftar_reconciler;
