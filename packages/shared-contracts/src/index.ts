@@ -388,6 +388,7 @@ export * from './inventory';
 export * from './purchasing';
 export * from './payment-methods';
 export * from './supplier-settlement';
+export * from './merchant-reads';
 /** RBAC permission registry (contract primitive): the exact keys the API accepts in role definitions. */
 export { PERMISSIONS } from '@daftar/domain-core';
 export type { Permission } from '@daftar/domain-core';
