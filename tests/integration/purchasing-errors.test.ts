@@ -1,6 +1,8 @@
+import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import type { Response } from 'supertest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { AccountingError } from '@daftar/accounting';
 import { AppError } from '@daftar/domain-core';
 import { InventoryError } from '@daftar/inventory';
@@ -14,12 +16,16 @@ import {
   rethrowPurchasingRefusal,
   UnclassifiedRefusalError,
 } from '../../apps/api/src/modules/purchasing/purchasing-errors';
+import { asMember, must, onboardS3Business, ownerClient, registerActor, today, type HttpActor, type S3Business } from '../helpers/inventory-commands';
+import { createTestApp, ensurePostgres, ownerPool, resetData, type TestApp } from '../helpers/test-app';
 
 /**
  * The purchasing error model (PHASE_3_S4_CONTRACT §3; review M2, I3): an
  * explicit code → status table, the §3 statuses of the `inventory.*` codes
  * the purchasing paths meet, a typed failure for an unclassified code, and
- * the deferred refusals raised at COMMIT. Pure: no database, no app.
+ * the deferred refusals raised at COMMIT. Pure: no database, no app — but
+ * for the last block, the unique-key race (review L3), which is proven on the
+ * real API against the real database.
  */
 
 const ROOT = join(__dirname, '..', '..');
@@ -259,5 +265,158 @@ describe('purchasing error model — refusals raised by the database, at the rou
   it('an unclassified database code is a typed failure', () => {
     expect(caught(pgError('P0001', 'purchase.bogus_refusal: x'))).toBeInstanceOf(UnclassifiedRefusalError);
     expect(caught(pgError('P0001', 'inventory.bogus_refusal: x'))).toBeInstanceOf(UnclassifiedRefusalError);
+  });
+});
+
+describe('purchasing error model — a unique key a client-chosen id lost a race on (review L3, R-50)', () => {
+  it.each([
+    ['supplier_return_lines_pkey', 400, { purchasingCode: 'supplier_return.lines_invalid' }],
+    ['supplier_credit_notes_pkey', 400, { inventoryCode: 'inventory.payload_invalid' }],
+  ])('a 23505 on %s is the routine’s own refusal (%i), and names no constraint', (constraint, status, details) => {
+    const e = caught(pgError('23505', `duplicate key value violates unique constraint "${constraint}"`, constraint));
+    expect(e).toBeInstanceOf(AppError);
+    expect(e).toMatchObject({ code: 'VALIDATION_FAILED', httpStatus: status, details });
+    expect(JSON.stringify(e instanceof AppError ? e.details : null)).not.toContain(constraint);
+  });
+
+  it('any other unique key, and a 23505 without its constraint, is re-thrown untouched', () => {
+    for (const e of [
+      pgError('23505', 'duplicate key value violates unique constraint "purchase_lines_pkey"', 'purchase_lines_pkey'),
+      pgError('23505', 'duplicate key value violates unique constraint "supplier_returns_pkey"', 'supplier_returns_pkey'),
+      pgError('23505', 'duplicate key value'),
+      pgError('23503', 'violates foreign key constraint "supplier_return_lines_pkey"', 'supplier_return_lines_pkey'),
+    ]) {
+      expect(caught(e)).toBe(e);
+    }
+  });
+});
+
+describe('purchasing error model — two concurrent returns sharing one line id, on the real API (review L3)', () => {
+  let t: TestApp;
+  let day: string;
+  let owner: HttpActor;
+  let A: S3Business;
+
+  beforeAll(async () => {
+    await ensurePostgres();
+    await resetData();
+    day = await today();
+    t = await createTestApp();
+    owner = await registerActor(t, 'L3 unique race owner');
+    A = await onboardS3Business(t, owner, 'l3race');
+  });
+
+  afterAll(async () => {
+    await t.close();
+    await resetData();
+  });
+
+  const as = (): Record<string, string> => asMember(owner, A.businessId);
+
+  /** A received purchase of one line of `productId`; its purchase line id. */
+  async function received(supplierId: string, productId: string): Promise<{ purchaseId: string; purchaseLineId: string }> {
+    const purchaseId = randomUUID();
+    const purchaseLineId = randomUUID();
+    const d = await t.request
+      .put(`/v1/purchases/${purchaseId}`)
+      .set(as())
+      .send({
+        expectedRevision: 0,
+        supplierId,
+        warehouseId: A.w1,
+        currency: 'ILS',
+        documentDate: day,
+        lines: [{ lineId: purchaseLineId, productId, quantity: '2', unitPrice: '12.50' }],
+        landedCosts: [],
+      });
+    expect(d.status, JSON.stringify(d.body)).toBe(201);
+    const r = await t.request.post(`/v1/purchases/${purchaseId}/receive`).set(as()).send({ draftRevision: 1 });
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    const line = await ownerPool().query<{ id: string }>(`SELECT id::text FROM purchase_lines WHERE business_id = $1 AND purchase_id = $2`, [
+      A.businessId,
+      purchaseId,
+    ]);
+    expect(line.rows.map((l) => l.id)).toEqual([purchaseLineId]);
+    return { purchaseId, purchaseLineId };
+  }
+
+  /** Start a return now (supertest is lazy) and settle it later. */
+  function startedReturn(purchaseId: string, body: Record<string, unknown>): Promise<Response> {
+    return new Promise((resolve, reject) => {
+      t.request
+        .post(`/v1/purchases/${purchaseId}/returns`)
+        .set(as())
+        .send(body)
+        .end((err: Error | null, res: Response) => (err === null ? resolve(res) : reject(err)));
+    });
+  }
+
+  /** Waits until one `purchase_return` statement waits on a lock of `waitEvent`; the wait is bounded, never retried. */
+  async function returnWaitingOn(waitEvent: 'relation' | 'transactionid', what: string): Promise<void> {
+    let n = 0;
+    for (let i = 0; i < 600 && n < 1; i += 1) {
+      const r = await ownerPool().query<{ n: number }>(
+        `SELECT count(*)::int AS n FROM pg_stat_activity
+          WHERE wait_event_type = 'Lock' AND wait_event = $1 AND query LIKE '%purchase_return(%'`,
+        [waitEvent],
+      );
+      n = must(r.rows[0]).n;
+      if (n < 1) await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    expect(n, what).toBe(1);
+  }
+
+  it('the loser of the uncommitted line key is supplier_return.lines_invalid (400), never a duplicate naming the constraint', async () => {
+    const sup = randomUUID();
+    const s = await t.request.post('/v1/suppliers').set(as()).send({ supplierId: sup, name: 'L3 supplier' });
+    expect(s.status, JSON.stringify(s.body)).toBe(201);
+    // Two purchases of different products: the two returns share no purchase, no stock key.
+    const p1 = await received(sup, A.piece.productId);
+    const p2 = await received(sup, A.piece2.productId);
+    const sharedLineId = randomUUID();
+    const body = (p: { purchaseLineId: string }): Record<string, unknown> => ({
+      returnId: randomUUID(),
+      warehouseId: A.w1,
+      documentDate: day,
+      lines: [{ lineId: sharedLineId, purchaseLineId: p.purchaseLineId, quantity: '1' }],
+    });
+    const b1 = body(p1);
+    const b2 = body(p2);
+
+    // Hold the outbox, which the routine writes only after its lines: the first return inserts
+    // its line and waits there, uncommitted; the second passes the routine's unlocked line-id
+    // pre-check and waits on the first's uncommitted key.
+    const gate = await ownerClient();
+    let first: Response;
+    let second: Response;
+    try {
+      await gate.query('BEGIN');
+      await gate.query('LOCK TABLE outbox_events IN SHARE MODE');
+      const winner = startedReturn(p1.purchaseId, b1);
+      await returnWaitingOn('relation', 'the first return holds its line key, uncommitted, behind the outbox');
+      const loser = startedReturn(p2.purchaseId, b2);
+      await returnWaitingOn('transactionid', 'the second return waits on the first return’s line key');
+      await gate.query('COMMIT');
+      [first, second] = await Promise.all([winner, loser]);
+    } finally {
+      await gate.end();
+    }
+
+    expect(first.status, JSON.stringify(first.body)).toBe(201);
+    expect(second.status, JSON.stringify(second.body)).toBe(400);
+    expect(second.body.error).toMatchObject({ code: 'VALIDATION_FAILED', details: { purchasingCode: 'supplier_return.lines_invalid' } });
+    expect(JSON.stringify(second.body), 'the response names no constraint').not.toContain('pkey');
+    expect(second.body.error.details?.constraint).toBeUndefined();
+
+    const stored = await ownerPool().query<{ id: string }>(`SELECT id::text FROM supplier_returns WHERE business_id = $1 ORDER BY id`, [A.businessId]);
+    expect(
+      stored.rows.map((r) => r.id),
+      'only the winner is stored',
+    ).toEqual([b1.returnId]);
+    const lines = await ownerPool().query<{ return_id: string }>(`SELECT return_id::text FROM supplier_return_lines WHERE business_id = $1 AND id = $2`, [
+      A.businessId,
+      sharedLineId,
+    ]);
+    expect(lines.rows.map((r) => r.return_id)).toEqual([b1.returnId]);
   });
 });

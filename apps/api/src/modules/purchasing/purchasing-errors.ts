@@ -342,6 +342,41 @@ function bindingRefusal(sourceType: string): AccountingError | null {
 }
 
 /**
+ * The unique keys a client-chosen id can collide on in a race, each with the
+ * refusal the routine raises for the same collision when it sees it
+ * committed (PHASE_3_S5_CONTRACT §2.5 step 9, R-50). The routine's pre-check
+ * reads without a lock: two concurrent returns of different purchases that
+ * name one return line id both pass it, and the loser's INSERT meets the
+ * winner's key (`23505`) once the winner commits. The loser must see the
+ * refusal it would have seen a moment later, never a generic duplicate that
+ * names the constraint.
+ *
+ * - `supplier_return_lines_pkey` — a return line id is the client's, and
+ *   business-wide (not scoped by the return, whose advisory key serialises
+ *   every other key of the return);
+ * - `supplier_credit_notes_pkey` — the credit note id the service draws,
+ *   checked by the routine with the same unlocked read.
+ *
+ * The reversal has no such key: its header and line ids are the purchase's
+ * and its purchase lines', and its original-entry key is the purchase's own
+ * entry, all taken under the purchase's advisory key and row lock (§2.5), so
+ * no concurrent reversal reaches them uncommitted. Every other unique
+ * refusal is re-thrown untouched.
+ */
+const UNIQUE_KEY_REFUSALS: Readonly<Record<string, PurchasingCode | `inventory.${string}`>> = {
+  supplier_return_lines_pkey: 'supplier_return.lines_invalid',
+  supplier_credit_notes_pkey: 'inventory.payload_invalid',
+};
+
+/** The constraint a unique-key refusal (`23505`) names, or null for any other error. */
+function refusedUniqueKey(error: unknown): string | null {
+  if (typeof error !== 'object' || error === null) return null;
+  const code = 'code' in error ? error.code : undefined;
+  const constraint = 'constraint' in error ? error.constraint : undefined;
+  return code === '23505' && typeof constraint === 'string' ? constraint : null;
+}
+
+/**
  * The catch of every supplier and purchase command. Every refusal leaves with
  * its stable code, and nothing else is touched:
  *
@@ -354,6 +389,9 @@ function bindingRefusal(sourceType: string): AccountingError | null {
  *   `accounting.inventory_detail_missing` (A-14(a));
  * - a stock-source bridge's foreign key (`23001` or `23503`) →
  *   `inventory.source_line_frozen`: a received line is bound to its movement;
+ * - a unique key a client-chosen id lost a race on (`23505`,
+ *   `UNIQUE_KEY_REFUSALS`) → the code the routine raises for the same
+ *   collision, through the same table as every other code;
  * - an `AccountingError`, an `AppError` or a seam refusal → unchanged;
  * - an `accounting.*` database refusal raised at COMMIT (the deferred
  *   completeness triggers) → the `AccountingError` the posting port would
@@ -376,6 +414,9 @@ export function rethrowPurchasingRefusal(error: unknown): never {
     if (binding !== null) throw binding;
     if (foreignKey.startsWith('stock_source_bridge_')) throw purchasingInventoryRefusal('inventory.source_line_frozen');
   }
+  const uniqueKey = refusedUniqueKey(error);
+  const uniqueCode = uniqueKey !== null && Object.hasOwn(UNIQUE_KEY_REFUSALS, uniqueKey) ? UNIQUE_KEY_REFUSALS[uniqueKey] : undefined;
+  if (uniqueCode !== undefined) throw classifiedRefusal(uniqueCode);
   const accountingCode = error instanceof Error ? parseDatabaseAccountingError(error.message) : null;
   if (accountingCode !== null) throw new AccountingError(accountingCode, 'the posting was refused by the accounting authority');
   throw error;
