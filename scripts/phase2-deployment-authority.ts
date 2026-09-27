@@ -274,6 +274,45 @@ export function namespacePrivilegeProblems(rows: readonly NamespacePrivilegeRow[
   return problems;
 }
 
+/**
+ * The SECURITY DEFINER routines the history leaves owned by WHOEVER APPLIED
+ * IT (P3-S9, pinned). Every other definer is handed to a named owner
+ * (`daftar_platform`, `daftar_accounting_internal`, `daftar_inventory_internal`).
+ * These four are not: 0038 and 0039 create them and never say `OWNER TO`, so
+ * on a superuser-built database they run as `postgres`, which bypasses row-
+ * level security, and on the deployed database they run as `daftar_migrator`,
+ * which does not. §10 cannot see the difference, because it normalises the
+ * applier's name by design. The deployed rehearsal found it: fixture writes
+ * with no tenant context that relied on the superuser owner were refused on the
+ * deployer's build, while every production path (the scoped catalogue writes,
+ * provisioning, the key installs and retirements as `daftar_platform`) passes
+ * there. A fifth applier-owned definer is a new instance of the same
+ * difference and is red until it is looked at.
+ */
+export const APPLIER_OWNED_DEFINERS: readonly string[] = [
+  'catalog_identifiers_sync()',
+  'provision_actor(p_allowed_kinds text[])',
+  'provision_assertion_key_install(p_kid text, p_secret bytea)',
+  'provision_assertion_key_retire(p_kid text)',
+];
+
+/** The query that lists the SECURITY DEFINER routines in `public` owned by the role `$1`. */
+export const APPLIER_OWNED_DEFINERS_QUERY = `SELECT p.proname || '(' || pg_get_function_identity_arguments(p.oid) || ')' AS f
+    FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+   WHERE n.nspname = 'public' AND p.prosecdef AND pg_get_userbyid(p.proowner) = $1
+     AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.objid = p.oid AND d.deptype = 'e')
+   ORDER BY 1`;
+
+/** Every way the applier-owned SECURITY DEFINER routines differ from the pinned four. */
+export function applierOwnedDefinerProblems(owned: readonly string[], applier: string): string[] {
+  const problems: string[] = [];
+  for (const f of owned)
+    if (!APPLIER_OWNED_DEFINERS.includes(f))
+      problems.push(`${f} is a SECURITY DEFINER routine owned by the applier ${applier}, and is not one of the pinned four`);
+  for (const f of APPLIER_OWNED_DEFINERS) if (!owned.includes(f)) problems.push(`${f} is no longer owned by the applier ${applier}`);
+  return problems;
+}
+
 /** One upgrade of Case H: to `through` (every file on disk when null), applying exactly `expected`. */
 export interface UpgradeStep {
   readonly label: string;
@@ -1140,6 +1179,31 @@ async function checkCatalogueEquivalence(deployed: string, superuser: string): P
   return counts;
 }
 
+/**
+ * 10b — the applier-owned SECURITY DEFINER routines, on both builds: exactly
+ * the pinned four, owned by `daftar_migrator` on the deployer's database and by
+ * `postgres` on the superuser control.
+ */
+async function checkApplierOwnedDefiners(deployed: string, superuser: string): Promise<Record<string, string[]>> {
+  section('10b. the SECURITY DEFINER routines the applier owns, pinned');
+  const out: Record<string, string[]> = {};
+  const builds: readonly (readonly [label: string, db: string, applier: string])[] = [
+    ['the deployer-built database', deployed, DEPLOYER],
+    ['the superuser-built control', superuser, PG_USER],
+  ];
+  for (const [n, [label, db, applier]] of builds.entries()) {
+    const owned = (await sql<{ f: string }>(ownerUrl(db), APPLIER_OWNED_DEFINERS_QUERY, [applier])).map((r) => r.f);
+    out[db] = owned;
+    const problems = applierOwnedDefinerProblems(owned, applier);
+    record(
+      `10b.${n + 1} ${label}: the applier ${applier} owns exactly the pinned SECURITY DEFINER routines`,
+      problems.length === 0,
+      problems.length === 0 ? owned.join(', ') : problems.join('; '),
+    );
+  }
+  return out;
+}
+
 // ─────────────────────────────────────────────────────────────────────────
 // 11. THE ROLE MATRIX (§32)
 // ─────────────────────────────────────────────────────────────────────────
@@ -1327,6 +1391,7 @@ async function main(): Promise<void> {
   let matrix: RoleRow[] = [];
   let catalogue: Record<string, number> = {};
   let namespace: Record<string, NamespacePrivilegeRow[]> = {};
+  let applierOwned: Record<string, string[]> = {};
 
   if (!STATIC_ONLY) {
     startCluster();
@@ -1349,6 +1414,7 @@ async function main(): Promise<void> {
       await freshDatabase(SUPER_DB);
       await runMigrations(ownerUrl(SUPER_DB), MIGRATIONS_DIR);
       catalogue = await checkCatalogueEquivalence(DEPLOYED, SUPER_DB);
+      applierOwned = await checkApplierOwnedDefiners(DEPLOYED, SUPER_DB);
 
       matrix = await roleMatrix(DEPLOYED);
       namespace = await checkNamespacePrivileges(DEPLOYED, SUPER_DB);
@@ -1377,6 +1443,7 @@ async function main(): Promise<void> {
     catalogueRowCounts: catalogue,
     roleMatrix: matrix,
     namespacePrivileges: namespace,
+    applierOwnedDefiners: { pinned: APPLIER_OWNED_DEFINERS, observed: applierOwned },
     phase3SliceHeads: PHASE3_SLICE_HEADS,
     steps,
     verdict: findings.length === 0 ? 'PASS' : 'FAIL',

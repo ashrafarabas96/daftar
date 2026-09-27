@@ -199,11 +199,22 @@ describe('the script', () => {
     expect(code()).not.toMatch(/process\.env\['PG_PORT'\] \?\?/);
   });
 
+  it('records the applier-owned SECURITY DEFINER routines and holds them to the pinned four', () => {
+    expect(code()).toMatch(/APPLIER_OWNED_DEFINERS_QUERY, \[DEPLOYER\]/);
+    expect(code()).toMatch(/artefact\['applierOwnedDefiners'\] = \{ pinned: APPLIER_OWNED_DEFINERS, observed: owned \}/);
+    expect(code()).toMatch(/record\('7\.3 the deployer owns exactly the pinned SECURITY DEFINER routines', ownership\.length === 0/);
+  });
+
   it('can report its own failure: the exit guard is installed before main runs', () => {
     // embedded-postgres exits through a hook with a hard-coded 0. Without the
     // guard, the first live run wrote verdict FAIL and exited 0.
     expect(code()).toMatch(/if \(require\.main === module\) \{\s*protectFailingExitCode\(\);\s*void main\(\)/);
     expect(code()).toMatch(/process\.exitCode = 1;/);
+  });
+
+  it('never blocks its own event loop while the suites run: the server log pipe must keep draining', () => {
+    expect(code()).not.toMatch(/\bspawnSync\b|\bexecSync\b|\bexecFileSync\b/);
+    expect(code()).toMatch(/await new Promise<\{ status: number \| null; signal: NodeJS\.Signals \| null \}>/);
   });
 
   it('importing it runs nothing', () => {

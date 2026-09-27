@@ -46,13 +46,20 @@
  * Importing this module runs nothing; the decisions are exported for
  * `tests/security/phase3-deployed-rehearsal.test.ts`.
  */
-import { spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { Client } from 'pg';
-import { namespacePrivilegeProblems, PUBLIC_GRANTEE, type NamespacePrivilegeRow } from './phase2-deployment-authority';
+import {
+  APPLIER_OWNED_DEFINERS,
+  APPLIER_OWNED_DEFINERS_QUERY,
+  applierOwnedDefinerProblems,
+  namespacePrivilegeProblems,
+  PUBLIC_GRANTEE,
+  type NamespacePrivilegeRow,
+} from './phase2-deployment-authority';
 import { PHASE2_PREFIX } from './phase2-prefix';
 import { PHASE3_PREFIX } from './phase3-prefix';
 import { protectFailingExitCode } from '../tests/helpers/exit-code';
@@ -354,10 +361,19 @@ async function main(): Promise<void> {
     const reportFile = join(pgDir, '..', `daftar-deployed-rehearsal-${randomUUID()}.json`);
     console.log(`\nDEPLOYED REHEARSAL — ${DEPLOYED_SUITES.length} suites on the deployer's database`);
     const env: NodeJS.ProcessEnv = { ...process.env, PG_DIR: pgDir, PG_PORT: String(port) };
-    const vitest = spawnSync('npx', ['vitest', 'run', ...DEPLOYED_SUITES, '--reporter=default', '--reporter=json', `--outputFile.json=${reportFile}`], {
-      cwd: ROOT,
-      env,
-      stdio: 'inherit',
+    // Asynchronous, never `spawnSync`: the embedded server writes its log to a
+    // pipe this process reads. Blocking the event loop until vitest exits
+    // stops that pipe being drained; once it fills, every backend that logs an
+    // error (the suites provoke hundreds, by design) blocks on the write, and
+    // the run hangs with sessions "active" on nothing.
+    const vitest = await new Promise<{ status: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => {
+      const child = spawn('npx', ['vitest', 'run', ...DEPLOYED_SUITES, '--reporter=default', '--reporter=json', `--outputFile.json=${reportFile}`], {
+        cwd: ROOT,
+        env,
+        stdio: 'inherit',
+      });
+      child.on('error', reject);
+      child.on('exit', (status, signal) => resolve({ status, signal }));
     });
     let report: VitestReport | undefined;
     if (existsSync(reportFile)) {
@@ -393,6 +409,14 @@ async function main(): Promise<void> {
       leaked.length === 0,
       leaked.join('; ') || `${privileges.length} grantees asked`,
     );
+
+    // 7.3 — the ownership fact this rehearsal found, pinned (see
+    // APPLIER_OWNED_DEFINERS): on this database these routines run as the
+    // deployer, which row-level security binds, not as a superuser.
+    const owned = (await query<{ f: string }>(ownerUrl, APPLIER_OWNED_DEFINERS_QUERY, [DEPLOYER])).map((r) => r.f);
+    artefact['applierOwnedDefiners'] = { pinned: APPLIER_OWNED_DEFINERS, observed: owned };
+    const ownership = applierOwnedDefinerProblems(owned, DEPLOYER);
+    record('7.3 the deployer owns exactly the pinned SECURITY DEFINER routines', ownership.length === 0, ownership.join('; ') || owned.join(', '));
   } catch (e) {
     record('the rehearsal stopped', false, e instanceof Error ? e.message : String(e));
   } finally {

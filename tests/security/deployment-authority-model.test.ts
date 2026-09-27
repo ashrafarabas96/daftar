@@ -16,6 +16,9 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   ACCEPTED_DEPLOYER_MEMBERSHIPS,
+  APPLIER_OWNED_DEFINERS,
+  APPLIER_OWNED_DEFINERS_QUERY,
+  applierOwnedDefinerProblems,
   CATALOGUE_FAMILIES,
   CATALOGUE_QUERIES,
   PUBLIC_GRANTEE,
@@ -292,6 +295,56 @@ describe('Case H — the Phase 3 slice heads, one upgrade at a time', () => {
     expect(appliedExactly(['a', 'b'], ['a'])).toBe(false);
     expect(appliedExactly(['a'], ['a', 'b'])).toBe(false);
     expect(appliedExactly([], ['a'])).toBe(false);
+  });
+});
+
+describe('the SECURITY DEFINER routines the applier owns are pinned', () => {
+  const FOUR = [
+    'catalog_identifiers_sync()',
+    'provision_actor(p_allowed_kinds text[])',
+    'provision_assertion_key_install(p_kid text, p_secret bytea)',
+    'provision_assertion_key_retire(p_kid text)',
+  ];
+
+  it('the pinned set is exactly the four the deployed rehearsal found', () => {
+    expect(APPLIER_OWNED_DEFINERS).toEqual(FOUR);
+  });
+
+  it('passes on exactly the four, in any order', () => {
+    expect(applierOwnedDefinerProblems(FOUR, 'daftar_migrator')).toEqual([]);
+    expect(applierOwnedDefinerProblems([...FOUR].reverse(), 'postgres')).toEqual([]);
+  });
+
+  it('a fifth applier-owned definer is red', () => {
+    expect(applierOwnedDefinerProblems([...FOUR, 'supplier_pay(p uuid)'], 'daftar_migrator')).toEqual([
+      'supplier_pay(p uuid) is a SECURITY DEFINER routine owned by the applier daftar_migrator, and is not one of the pinned four',
+    ]);
+  });
+
+  it('one of the four handed away is red too, so the pin is revisited rather than left stale', () => {
+    expect(applierOwnedDefinerProblems(FOUR.slice(1), 'daftar_migrator')).toEqual([
+      'catalog_identifiers_sync() is no longer owned by the applier daftar_migrator',
+    ]);
+  });
+
+  it('the query asks for SECURITY DEFINER routines in public owned by the given role, extensions excluded', () => {
+    expect(APPLIER_OWNED_DEFINERS_QUERY).toMatch(/p\.prosecdef/);
+    expect(APPLIER_OWNED_DEFINERS_QUERY).toMatch(/pg_get_userbyid\(p\.proowner\) = \$1/);
+    expect(APPLIER_OWNED_DEFINERS_QUERY).toMatch(/nspname = 'public'/);
+    expect(APPLIER_OWNED_DEFINERS_QUERY).toMatch(/deptype = 'e'/);
+  });
+
+  it('no migration issues ALTER FUNCTION … OWNER TO for any of the four, which is why they stay with the applier', () => {
+    const dir = join(REPO, 'infrastructure/database/migrations');
+    const all = readdirSync(dir)
+      .filter((f) => f.endsWith('.sql'))
+      .map((f) => readFileSync(join(dir, f), 'utf8'))
+      .join('\n');
+    for (const f of FOUR) {
+      const name = f.slice(0, f.indexOf('('));
+      expect(all, name).toMatch(new RegExp(`CREATE\\s+OR\\s+REPLACE\\s+FUNCTION\\s+${name}\\s*\\(`, 'i'));
+      expect(all, name).not.toMatch(new RegExp(`ALTER\\s+FUNCTION\\s+${name}\\b[^;]*OWNER\\s+TO`, 'i'));
+    }
   });
 });
 
