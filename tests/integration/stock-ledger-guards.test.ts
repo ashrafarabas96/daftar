@@ -553,12 +553,12 @@ describe('scripts/static-guards.ts wiring', () => {
     expect(guards).toMatch(/rule 21 is watching nothing/);
     expect(guards).toMatch(/checkInventoryWriterAuthority/);
     expect(guards).toMatch(/rule 22 is watching nothing/);
-    expect(guards).toMatch(/STATIC GUARDS: PASS \(22 rules\)/);
+    expect(guards).toMatch(/STATIC GUARDS: PASS \(23 rules\)/);
   });
 
-  it('passes all 22 rules on the real tree', () => {
+  it('passes all 23 rules on the real tree', () => {
     const tsx = join(ROOT, 'node_modules/.bin/tsx');
     const out = execFileSync(tsx, [join(ROOT, 'scripts/static-guards.ts')], { cwd: ROOT, encoding: 'utf8' });
-    expect(out.trim().split('\n').pop()).toBe('STATIC GUARDS: PASS (22 rules)');
+    expect(out.trim().split('\n').pop()).toBe('STATIC GUARDS: PASS (23 rules)');
   });
 });
