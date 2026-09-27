@@ -314,6 +314,135 @@ export class PurchaseReversalValidationPipe implements PipeTransform {
   }
 }
 
+// ── Supplier settlement (P3-S6) ──────────────────────────────────────────
+//
+// PHASE_3_S6_CONTRACT A-07, A-10, A-18, A-19. The same rules as above, with
+// one difference: every settlement amount is an integer string of MINOR
+// units (`"12500"`), never major units and never a JSON number — the payload
+// signs the minor units exactly, and the service parses them exactly. No
+// request states a rate, a base amount, a release or FX: every one of them is
+// the server's, bound before minting (A-15), so a stated one is an unknown key.
+//
+// Judged by the service or the routine, not here, so their typed codes reach
+// the client: the dates against the purchase or the note and the business's
+// "today", the outstanding AP and the remaining credit, a registered currency,
+// the method's reference rule and every state refusal.
+
+/** The value bound of every S6 amount (`BIGINT` 1..10^18, §0). */
+const MAX_AMOUNT_MINOR = 10n ** 18n;
+
+/** A positive integer amount of minor units, at most 10^18. */
+const amountMinor = z
+  .string()
+  .regex(/^[1-9]\d{0,18}$/, 'an amount is a positive integer of minor units')
+  .refine((v) => BigInt(v) <= MAX_AMOUNT_MINOR, 'an amount is at most 10^18 minor units');
+
+/** A settlement reference: 1..100 characters after trimming, or none. */
+const reference = optionalText(1, 100);
+
+/** Allocations admitted by the grammar before the typed count rule (1..50) below: bounded so no body is unbounded. */
+const MAX_ALLOCATIONS_PARSED = 100;
+/** Allocations per payment (A-07). */
+export const MAX_SUPPLIER_PAYMENT_ALLOCATIONS = 50;
+
+const paymentAllocation = z
+  .object({
+    allocationId: uuid,
+    purchaseId: uuid,
+    paymentAmountMinor: amountMinor,
+    purchaseAmountAppliedMinor: amountMinor,
+  })
+  .strict();
+
+/** `POST /v1/supplier-payments` (A-07, A-18). The payment id is the idempotency key (A-16). */
+export const SupplierPaymentSchema = z
+  .object({
+    paymentId: uuid,
+    supplierId: uuid,
+    paymentMethodId: uuid,
+    currencyCode: currency,
+    amountMinor,
+    paymentDate: civilDate,
+    reference,
+    allocations: z.array(paymentAllocation).max(MAX_ALLOCATIONS_PARSED),
+  })
+  .strict();
+
+/**
+ * The payment's body pipe: the strict schema, then the allocation rules the
+ * request alone decides (§2.6 step 5) — 1..50 allocations, distinct
+ * allocation and purchase ids, and `Σ paymentAmountMinor = amountMinor`
+ * (fully allocated, TL-3) — refused with `supplier_payment.allocations_invalid`
+ * before the service, and so the minter, is reached.
+ */
+@Injectable()
+export class SupplierPaymentValidationPipe implements PipeTransform {
+  transform(value: unknown, metadata: ArgumentMetadata): unknown {
+    if (metadata.type !== 'body') return value;
+    const request = SupplierPaymentSchema.parse(value);
+    const n = request.allocations.length;
+    const sum = request.allocations.reduce((a, l) => a + BigInt(l.paymentAmountMinor), 0n);
+    if (
+      n === 0 ||
+      n > MAX_SUPPLIER_PAYMENT_ALLOCATIONS ||
+      new Set(request.allocations.map((l) => l.allocationId)).size !== n ||
+      new Set(request.allocations.map((l) => l.purchaseId)).size !== n ||
+      sum !== BigInt(request.amountMinor)
+    ) {
+      throw classifiedRefusal('supplier_payment.allocations_invalid');
+    }
+    return request;
+  }
+}
+
+/** `POST /v1/supplier-credit-allocations` (A-10, A-18). The allocation id is the idempotency key. */
+export const SupplierCreditAllocationSchema = z
+  .object({
+    allocationId: uuid,
+    creditNoteId: uuid,
+    purchaseId: uuid,
+    allocationDate: civilDate,
+    creditAmountMinor: amountMinor,
+    purchaseAmountAppliedMinor: amountMinor,
+  })
+  .strict();
+
+/** `POST /v1/supplier-refunds` (A-10, A-18). The refund id is the idempotency key. */
+export const SupplierRefundSchema = z
+  .object({
+    refundId: uuid,
+    creditNoteId: uuid,
+    paymentMethodId: uuid,
+    refundDate: civilDate,
+    creditAmountMinor: amountMinor,
+    receiptCurrencyCode: currency,
+    receiptAmountMinor: amountMinor,
+    reference,
+  })
+  .strict();
+
+/**
+ * `POST /v1/purchases/:purchaseId/receive-and-pay` (A-19): the S4 receive
+ * body plus the payment half. There is no payment date: it is the purchase's
+ * document date. An omitted applied amount equals `amountMinor`.
+ */
+export const ReceiveAndPaySchema = z
+  .object({
+    draftRevision: revision(1),
+    payment: z
+      .object({
+        paymentId: uuid,
+        allocationId: uuid,
+        paymentMethodId: uuid,
+        currencyCode: currency,
+        amountMinor,
+        purchaseAmountAppliedMinor: amountMinor.nullish(),
+        reference,
+      })
+      .strict(),
+  })
+  .strict();
+
 // ── Reads ────────────────────────────────────────────────────────────────
 
 /** `limit` 1..100 (default chosen by the read), as query text. */
@@ -353,6 +482,14 @@ export const SupplierReturnListQuerySchema = z
   })
   .strict();
 
+/** `GET /v1/suppliers/:supplierId/payments`: the supplier's payments, newest first (P3-S6 A-18). */
+export const SupplierPaymentListQuerySchema = z
+  .object({
+    limit: limit.optional(),
+    cursor: cursor.optional(),
+  })
+  .strict();
+
 /** `GET /v1/suppliers/:supplierId/credit-notes`: the supplier's credit notes, newest first. */
 export const SupplierCreditNoteListQuerySchema = z
   .object({
@@ -371,3 +508,8 @@ export type PurchaseListQuery = z.infer<typeof PurchaseListQuerySchema>;
 export type SupplierReturnRequest = z.infer<typeof SupplierReturnSchema>;
 export type SupplierReturnListQuery = z.infer<typeof SupplierReturnListQuerySchema>;
 export type SupplierCreditNoteListQuery = z.infer<typeof SupplierCreditNoteListQuerySchema>;
+export type SupplierPaymentRequest = z.infer<typeof SupplierPaymentSchema>;
+export type SupplierCreditAllocationRequest = z.infer<typeof SupplierCreditAllocationSchema>;
+export type SupplierRefundRequest = z.infer<typeof SupplierRefundSchema>;
+export type ReceiveAndPayRequest = z.infer<typeof ReceiveAndPaySchema>;
+export type SupplierPaymentListQuery = z.infer<typeof SupplierPaymentListQuerySchema>;

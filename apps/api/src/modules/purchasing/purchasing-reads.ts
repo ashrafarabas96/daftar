@@ -1,5 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common';
+import { AccountingError, parseDatabaseAccountingError } from '@daftar/accounting';
 import { AppError, hasPermission, minorUnitsOf } from '@daftar/domain-core';
+import { DOMESTIC_RATE_R10, parseUnitCost } from '@daftar/inventory';
 import type {
   Page,
   PurchaseDeficitCoverageDto,
@@ -11,11 +13,20 @@ import type {
   PurchaseReceiptDto,
   PurchaseReversalLineDto,
   PurchaseReversalResultDto,
+  PurchaseSettlementsDto,
   PurchaseStatusDto,
   PurchaseSummaryDto,
+  SettlementRateDto,
+  SupplierCreditAllocationDto,
+  SupplierCreditAllocationResultDto,
   SupplierCreditNoteDto,
   SupplierDto,
   SupplierPayableDto,
+  SupplierPaymentAllocationDto,
+  SupplierPaymentDto,
+  SupplierPaymentResultDto,
+  SupplierRefundDto,
+  SupplierRefundResultDto,
   SupplierReturnDto,
   SupplierReturnLineDto,
   SupplierReturnResultDto,
@@ -25,7 +36,13 @@ import { Database } from '../../infra/database';
 import type { ReadScope } from '../inventory/inventory-stock-read';
 import type { MembershipContext } from '../tenancy/tenancy.service';
 import { purchasingRefusal } from './purchasing-errors';
-import type { PurchaseListQuery, SupplierCreditNoteListQuery, SupplierListQuery, SupplierReturnListQuery } from './purchasing.schemas';
+import type {
+  PurchaseListQuery,
+  SupplierCreditNoteListQuery,
+  SupplierListQuery,
+  SupplierPaymentListQuery,
+  SupplierReturnListQuery,
+} from './purchasing.schemas';
 
 /**
  * The READS of suppliers and purchases (PHASE_3_S4_CONTRACT A-10(e), A-19,
@@ -521,7 +538,11 @@ export interface PurchaseSettlementResult {
   outstandingTxnMinor: string;
   totalTxnMinor: string;
   totalBaseMinor: string;
-  /** `Σ ap_base_minor` of the purchase's returns. */
+  /**
+   * `Σ rel` over every AP reducer of the purchase: `ap_base_minor` of its
+   * returns and `purchase_carrying_base_released_minor` of its S6 payment and
+   * credit allocations (A-08, T-19: ledger base AP = `B − Σ rel`).
+   */
   releasedBaseMinor: string;
   /** Ledger AP of the purchase in the purchase currency (purchase-currency AP lines only). */
   ledgerOutstandingTxnMinor: string;
@@ -804,6 +825,12 @@ export async function readPurchaseReversalResult(db: Database, scope: ReadScope,
  * and of the `reversal` entry whose `accounting_reversals.original_entry_id`
  * is the purchase entry.
  *
+ * P3-S6 (PHASE_3_S6_CONTRACT A-18): the entries of the purchase's supplier
+ * payment allocations and supplier-credit allocations join the set, through
+ * their row's `purchase_id` (A-05: one entry per row, so every AP line of
+ * such an entry is this purchase's). A credit allocation's 1150 lines are not
+ * AP and fall out at the account join.
+ *
  * Per purchase currency: `base_minor` is `Σ credit − Σ debit` over every AP
  * line, the base-only dust lines included (TL-3); `txn_minor` is the signed
  * txn over the AP lines IN the purchase currency only, because a dust line
@@ -826,6 +853,18 @@ const S5_PAYABLE_SQL = `WITH ap AS (
                   SELECT ar.journal_entry_id
                     FROM accounting_reversals ar
                    WHERE ar.business_id = p.business_id AND ar.original_entry_id = pb.journal_entry_id
+                  UNION ALL
+                  SELECT ab.journal_entry_id
+                    FROM supplier_payment_allocations a
+                    JOIN accounting_source_bindings ab
+                      ON ab.business_id = a.business_id AND ab.source_type = 'supplier_payment' AND ab.source_id = a.id
+                   WHERE a.business_id = p.business_id AND a.purchase_id = p.id
+                  UNION ALL
+                  SELECT cb.journal_entry_id
+                    FROM supplier_credit_allocations c
+                    JOIN accounting_source_bindings cb
+                      ON cb.business_id = c.business_id AND cb.source_type = 'supplier_credit_allocation' AND cb.source_id = c.id
+                   WHERE c.business_id = p.business_id AND c.purchase_id = p.id
                 ) e ON true
            JOIN journal_lines jl ON jl.business_id = p.business_id AND jl.journal_entry_id = e.journal_entry_id
            JOIN accounts a ON a.business_id = jl.business_id AND a.id = jl.account_id AND a.system_key = 'accounts_payable'
@@ -836,6 +875,367 @@ const S5_PAYABLE_SQL = `WITH ap AS (
        FROM ap
       GROUP BY currency_code
       ORDER BY currency_code`;
+
+// ── Supplier settlement (P3-S6) ──────────────────────────────────────────
+//
+// PHASE_3_S6_CONTRACT A-16, A-18. Stored rows only: a first answer, a replay
+// and a read are built the same way, and each entry id comes through
+// `accounting_source_bindings` (one entry per allocation, credit allocation
+// and refund, A-05).
+
+/** `NUMERIC(20,10)` text of a rate of exactly 1: the domestic snapshot. */
+const DOMESTIC_RATE_TEXT = '1.0000000000';
+
+/** The FX snapshot a payment or refund binds (A-15), in the payload's and the posting's forms. */
+export interface SettlementFx {
+  readonly rateId: string | null;
+  /** `NUMERIC(20,10)` text. */
+  readonly rate: string;
+  readonly rateR10: bigint;
+  readonly source: 'base' | 'manual';
+  /** Second precision: `<date>T00:00:00Z` when domestic, the registry row's `effective_at` otherwise. */
+  readonly at: Date;
+}
+
+/**
+ * The FX snapshot of a payment or a refund at its date (A-15, the S4 A-17
+ * rule). Domestic: `(NULL, 1, 'base', <date>T00:00:00Z)`, and the registry is
+ * never consulted. Foreign: the registry row `accounting_fx_rate_lookup`
+ * returns for `(currency → base)` at the last second of the date in the
+ * business's timezone — computed in SQL from the date alone, the instant the
+ * routine's `accounting_purchase_fx_rate` reads. An unregistered currency is
+ * `purchase.currency_unknown` (§2.6 step 10); a missing rate keeps its
+ * accepted accounting code (`accounting.fx_rate_missing`, §3).
+ */
+export async function readSettlementFx(db: Database, scope: ReadScope, currency: string, baseCurrency: string, date: string): Promise<SettlementFx> {
+  if (currency.toUpperCase() === baseCurrency.toUpperCase()) {
+    return { rateId: null, rate: DOMESTIC_RATE_TEXT, rateR10: DOMESTIC_RATE_R10, source: 'base', at: new Date(`${date}T00:00:00Z`) };
+  }
+  let row: { rate_id: string; rate: string; source: string; effective_at: Date } | undefined;
+  try {
+    [row] = await scopedRows<{ rate_id: string; rate: string; source: string; effective_at: Date }>(
+      db,
+      scope,
+      `SELECT r.rate_id, r.rate::text AS rate, r.source, r.effective_at
+         FROM businesses b
+        CROSS JOIN LATERAL accounting_fx_rate_lookup(
+                b.id, $2, b.base_currency, ((($3::date + 1)::timestamp AT TIME ZONE b.timezone) - interval '1 second')) r
+        WHERE b.id = $1`,
+      [scope.businessId, currency, date],
+    );
+  } catch (e) {
+    const code = parseDatabaseAccountingError(e instanceof Error ? e.message : String(e));
+    if (code === 'accounting.fx_currency_unknown') throw purchasingRefusal('purchase.currency_unknown');
+    if (code !== null) throw new AccountingError(code, 'the accounting authority refused this rate lookup', { businessId: scope.businessId });
+    throw e;
+  }
+  if (row === undefined) throw new Error('the FX rate lookup returned no row');
+  if (row.source !== 'manual' && row.source !== 'base') throw new Error('a registry rate has a source a settlement cannot snapshot');
+  if (row.effective_at.getTime() % 1000 !== 0) throw new Error('a registry rate instant is not at second precision');
+  return { rateId: row.rate_id, rate: row.rate, rateR10: parseUnitCost(row.rate), source: row.source, at: row.effective_at };
+}
+
+/** A stored `payment_to_base_rate` / `…_to_base_rate` snapshot as the API reports it. */
+function settlementRateDto(rate: string, source: 'base' | 'manual', at: Date, rateId: string | null): SettlementRateDto {
+  return { rateId, rate: rateText(rate), source, at: isoSeconds(at) };
+}
+
+/** The entry of one settlement row, which the completeness trigger guarantees exists once committed. */
+async function requiredEntryOf(db: Database, scope: ReadScope, sourceType: string, sourceId: string): Promise<string> {
+  const entryId = await entryOf(db, scope, sourceType, sourceId);
+  if (entryId === null) throw new Error(`a committed ${sourceType} row has no journal entry`);
+  return entryId;
+}
+
+interface PaymentAllocationRow {
+  id: string;
+  payment_id: string;
+  line_no: number;
+  purchase_id: string;
+  warehouse_id: string;
+  payment_currency: string;
+  payment_amount_minor: string;
+  payment_base_amount_minor: string;
+  purchase_currency: string;
+  purchase_amount_applied_minor: string;
+  ap_released_before_txn_minor: string;
+  purchase_carrying_base_released_minor: string;
+  ap_dust_base_minor: string;
+  realized_fx_gain_loss_minor: string;
+  payment_date: string;
+  journal_entry_id: string | null;
+}
+
+const PAYMENT_ALLOCATION_SELECT = `SELECT a.id, a.payment_id, a.line_no, a.purchase_id, p.warehouse_id, a.payment_currency::text AS payment_currency,
+            a.payment_amount_minor::text AS payment_amount_minor, a.payment_base_amount_minor::text AS payment_base_amount_minor,
+            a.purchase_currency::text AS purchase_currency, a.purchase_amount_applied_minor::text AS purchase_amount_applied_minor,
+            a.ap_released_before_txn_minor::text AS ap_released_before_txn_minor,
+            a.purchase_carrying_base_released_minor::text AS purchase_carrying_base_released_minor,
+            a.ap_dust_base_minor::text AS ap_dust_base_minor, a.realized_fx_gain_loss_minor::text AS realized_fx_gain_loss_minor,
+            sp.payment_date::text AS payment_date, b.journal_entry_id
+       FROM supplier_payment_allocations a
+       JOIN supplier_payments sp ON sp.business_id = a.business_id AND sp.id = a.payment_id
+       JOIN purchases p ON p.business_id = a.business_id AND p.id = a.purchase_id
+       LEFT JOIN accounting_source_bindings b ON b.business_id = a.business_id AND b.source_type = 'supplier_payment' AND b.source_id = a.id`;
+
+function paymentAllocationDto(a: PaymentAllocationRow): SupplierPaymentAllocationDto {
+  if (a.journal_entry_id === null) throw new Error('a committed supplier payment allocation has no journal entry');
+  return {
+    allocationId: a.id,
+    lineNo: a.line_no,
+    purchaseId: a.purchase_id,
+    paymentCurrency: a.payment_currency,
+    paymentAmountMinor: a.payment_amount_minor,
+    paymentBaseMinor: a.payment_base_amount_minor,
+    purchaseCurrency: a.purchase_currency,
+    purchaseAmountAppliedMinor: a.purchase_amount_applied_minor,
+    apReleasedBeforeTxnMinor: a.ap_released_before_txn_minor,
+    carryingBaseReleasedMinor: a.purchase_carrying_base_released_minor,
+    apDustBaseMinor: a.ap_dust_base_minor,
+    realizedFxMinor: a.realized_fx_gain_loss_minor,
+    entryId: a.journal_entry_id,
+  };
+}
+
+interface PaymentHeaderRow {
+  id: string;
+  supplier_id: string;
+  payment_method_id: string;
+  currency_code: string;
+  amount_minor: string;
+  base_amount_minor: string;
+  payment_to_base_rate: string;
+  rate_source: 'base' | 'manual';
+  rate_timestamp: Date;
+  fx_rate_id: string | null;
+  payment_date: string;
+  reference: string | null;
+  intent_sha256: string;
+  business_transaction_id: string;
+  created_at: Date;
+}
+
+const PAYMENT_HEADER_SELECT = `SELECT sp.id, sp.supplier_id, sp.payment_method_id, sp.currency_code::text AS currency_code, sp.amount_minor::text AS amount_minor,
+            sp.base_amount_minor::text AS base_amount_minor, sp.payment_to_base_rate::text AS payment_to_base_rate, sp.rate_source,
+            sp.rate_timestamp, sp.fx_rate_id, sp.payment_date::text AS payment_date, sp.reference, sp.intent_sha256,
+            sp.business_transaction_id, sp.created_at
+       FROM supplier_payments sp`;
+
+/** The stored payment's intent and the warehouses of its purchases (the scope targets, AL-39), or null. */
+export async function findSupplierPayment(
+  db: Database,
+  scope: ReadScope,
+  paymentId: string,
+): Promise<{ readonly intentSha256: string; readonly warehouseIds: readonly string[] } | null> {
+  const [row] = await scopedRows<{ intent_sha256: string; warehouse_ids: string[] }>(
+    db,
+    scope,
+    `SELECT sp.intent_sha256,
+            ARRAY(SELECT DISTINCT p.warehouse_id FROM supplier_payment_allocations a
+                    JOIN purchases p ON p.business_id = a.business_id AND p.id = a.purchase_id
+                   WHERE a.business_id = sp.business_id AND a.payment_id = sp.id)::text[] AS warehouse_ids
+       FROM supplier_payments sp
+      WHERE sp.business_id = $1 AND sp.id = $2`,
+    [scope.businessId, paymentId],
+  );
+  return row === undefined ? null : { intentSha256: row.intent_sha256, warehouseIds: row.warehouse_ids };
+}
+
+/** A stored supplier payment with its allocations in `line_no` order, and its trace id; null when not visible. */
+async function readSupplierPaymentRows(
+  db: Database,
+  scope: ReadScope,
+  paymentId: string,
+): Promise<{ readonly dto: SupplierPaymentDto; readonly btx: string; readonly warehouseIds: readonly string[] } | null> {
+  const [h] = await scopedRows<PaymentHeaderRow>(db, scope, `${PAYMENT_HEADER_SELECT} WHERE sp.business_id = $1 AND sp.id = $2`, [scope.businessId, paymentId]);
+  if (h === undefined) return null;
+  const allocations = await scopedRows<PaymentAllocationRow>(
+    db,
+    scope,
+    `${PAYMENT_ALLOCATION_SELECT} WHERE a.business_id = $1 AND a.payment_id = $2 ORDER BY a.line_no`,
+    [scope.businessId, paymentId],
+  );
+  const dto: SupplierPaymentDto = {
+    paymentId: h.id,
+    supplierId: h.supplier_id,
+    paymentMethodId: h.payment_method_id,
+    currency: h.currency_code,
+    amountMinor: h.amount_minor,
+    baseAmountMinor: h.base_amount_minor,
+    rate: settlementRateDto(h.payment_to_base_rate, h.rate_source, h.rate_timestamp, h.fx_rate_id),
+    paymentDate: h.payment_date,
+    reference: h.reference,
+    allocations: allocations.map(paymentAllocationDto),
+    createdAt: iso(h.created_at),
+  };
+  return { dto, btx: h.business_transaction_id, warehouseIds: [...new Set(allocations.map((a) => a.warehouse_id))] };
+}
+
+/** The answer of `POST /v1/supplier-payments` (and of the payment half of receive-and-pay): stored rows only. */
+export async function readSupplierPaymentResult(db: Database, scope: ReadScope, paymentId: string, replayed: boolean): Promise<SupplierPaymentResultDto> {
+  const found = await readSupplierPaymentRows(db, scope, paymentId);
+  if (found === null) throw new Error('a supplier payment the routine wrote is not readable');
+  return { ...found.dto, replayed, businessTransactionId: found.btx };
+}
+
+interface CreditAllocationRow {
+  id: string;
+  supplier_id: string;
+  credit_note_id: string;
+  purchase_id: string;
+  allocation_date: string;
+  credit_currency: string;
+  credit_amount_consumed_minor: string;
+  credit_remaining_before_minor: string;
+  credit_carrying_base_released_minor: string;
+  credit_dust_base_minor: string;
+  purchase_currency: string;
+  purchase_amount_applied_minor: string;
+  ap_released_before_txn_minor: string;
+  purchase_carrying_base_released_minor: string;
+  ap_dust_base_minor: string;
+  realized_fx_gain_loss_minor: string;
+  intent_sha256: string;
+  business_transaction_id: string;
+  created_at: Date;
+}
+
+const CREDIT_ALLOCATION_SELECT = `SELECT c.id, c.supplier_id, c.credit_note_id, c.purchase_id, c.allocation_date::text AS allocation_date,
+            c.credit_currency::text AS credit_currency, c.credit_amount_consumed_minor::text AS credit_amount_consumed_minor,
+            c.credit_remaining_before_minor::text AS credit_remaining_before_minor,
+            c.credit_carrying_base_released_minor::text AS credit_carrying_base_released_minor,
+            c.credit_dust_base_minor::text AS credit_dust_base_minor, c.purchase_currency::text AS purchase_currency,
+            c.purchase_amount_applied_minor::text AS purchase_amount_applied_minor,
+            c.ap_released_before_txn_minor::text AS ap_released_before_txn_minor,
+            c.purchase_carrying_base_released_minor::text AS purchase_carrying_base_released_minor,
+            c.ap_dust_base_minor::text AS ap_dust_base_minor, c.realized_fx_gain_loss_minor::text AS realized_fx_gain_loss_minor,
+            c.intent_sha256, c.business_transaction_id, c.created_at
+       FROM supplier_credit_allocations c`;
+
+function creditAllocationDto(c: CreditAllocationRow, entryId: string): SupplierCreditAllocationDto {
+  return {
+    allocationId: c.id,
+    supplierId: c.supplier_id,
+    creditNoteId: c.credit_note_id,
+    purchaseId: c.purchase_id,
+    allocationDate: c.allocation_date,
+    creditCurrency: c.credit_currency,
+    creditAmountConsumedMinor: c.credit_amount_consumed_minor,
+    creditRemainingBeforeMinor: c.credit_remaining_before_minor,
+    creditCarryingBaseReleasedMinor: c.credit_carrying_base_released_minor,
+    creditDustBaseMinor: c.credit_dust_base_minor,
+    purchaseCurrency: c.purchase_currency,
+    purchaseAmountAppliedMinor: c.purchase_amount_applied_minor,
+    apReleasedBeforeTxnMinor: c.ap_released_before_txn_minor,
+    carryingBaseReleasedMinor: c.purchase_carrying_base_released_minor,
+    apDustBaseMinor: c.ap_dust_base_minor,
+    realizedFxMinor: c.realized_fx_gain_loss_minor,
+    entryId,
+    createdAt: iso(c.created_at),
+  };
+}
+
+/** The stored credit allocation's intent, or null. */
+export async function findCreditAllocationIntent(db: Database, scope: ReadScope, allocationId: string): Promise<string | null> {
+  const [row] = await scopedRows<{ intent_sha256: string }>(
+    db,
+    scope,
+    'SELECT intent_sha256 FROM supplier_credit_allocations WHERE business_id = $1 AND id = $2',
+    [scope.businessId, allocationId],
+  );
+  return row?.intent_sha256 ?? null;
+}
+
+/** The answer of `POST /v1/supplier-credit-allocations`: stored rows only. */
+export async function readCreditAllocationResult(
+  db: Database,
+  scope: ReadScope,
+  allocationId: string,
+  replayed: boolean,
+): Promise<SupplierCreditAllocationResultDto> {
+  const [row] = await scopedRows<CreditAllocationRow>(db, scope, `${CREDIT_ALLOCATION_SELECT} WHERE c.business_id = $1 AND c.id = $2`, [
+    scope.businessId,
+    allocationId,
+  ]);
+  if (row === undefined) throw new Error('a supplier credit allocation the routine wrote is not readable');
+  const entryId = await requiredEntryOf(db, scope, 'supplier_credit_allocation', allocationId);
+  return { ...creditAllocationDto(row, entryId), replayed, businessTransactionId: row.business_transaction_id };
+}
+
+interface RefundRow {
+  id: string;
+  supplier_id: string;
+  credit_note_id: string;
+  payment_method_id: string;
+  refund_date: string;
+  reference: string | null;
+  source_currency: string;
+  source_amount_consumed_minor: string;
+  credit_remaining_before_minor: string;
+  source_carrying_base_released_minor: string;
+  source_dust_base_minor: string;
+  receipt_currency: string;
+  receipt_amount_minor: string;
+  receipt_to_base_rate: string;
+  receipt_base_amount_minor: string;
+  rate_source: 'base' | 'manual';
+  rate_timestamp: Date;
+  fx_rate_id: string | null;
+  realized_fx_gain_loss_minor: string;
+  intent_sha256: string;
+  business_transaction_id: string;
+  created_at: Date;
+}
+
+/** The stored refund's intent, or null. */
+export async function findRefundIntent(db: Database, scope: ReadScope, refundId: string): Promise<string | null> {
+  const [row] = await scopedRows<{ intent_sha256: string }>(db, scope, 'SELECT intent_sha256 FROM supplier_refunds WHERE business_id = $1 AND id = $2', [
+    scope.businessId,
+    refundId,
+  ]);
+  return row?.intent_sha256 ?? null;
+}
+
+/** The answer of `POST /v1/supplier-refunds`: stored rows only. */
+export async function readRefundResult(db: Database, scope: ReadScope, refundId: string, replayed: boolean): Promise<SupplierRefundResultDto> {
+  const [r] = await scopedRows<RefundRow>(
+    db,
+    scope,
+    `SELECT f.id, f.supplier_id, f.credit_note_id, f.payment_method_id, f.refund_date::text AS refund_date, f.reference,
+            f.source_currency::text AS source_currency, f.source_amount_consumed_minor::text AS source_amount_consumed_minor,
+            f.credit_remaining_before_minor::text AS credit_remaining_before_minor,
+            f.source_carrying_base_released_minor::text AS source_carrying_base_released_minor,
+            f.source_dust_base_minor::text AS source_dust_base_minor, f.receipt_currency::text AS receipt_currency,
+            f.receipt_amount_minor::text AS receipt_amount_minor, f.receipt_to_base_rate::text AS receipt_to_base_rate,
+            f.receipt_base_amount_minor::text AS receipt_base_amount_minor, f.rate_source, f.rate_timestamp, f.fx_rate_id,
+            f.realized_fx_gain_loss_minor::text AS realized_fx_gain_loss_minor, f.intent_sha256, f.business_transaction_id, f.created_at
+       FROM supplier_refunds f
+      WHERE f.business_id = $1 AND f.id = $2`,
+    [scope.businessId, refundId],
+  );
+  if (r === undefined) throw new Error('a supplier refund the routine wrote is not readable');
+  const dto: SupplierRefundDto = {
+    refundId: r.id,
+    supplierId: r.supplier_id,
+    creditNoteId: r.credit_note_id,
+    paymentMethodId: r.payment_method_id,
+    refundDate: r.refund_date,
+    reference: r.reference,
+    sourceCurrency: r.source_currency,
+    sourceAmountConsumedMinor: r.source_amount_consumed_minor,
+    creditRemainingBeforeMinor: r.credit_remaining_before_minor,
+    sourceCarryingBaseReleasedMinor: r.source_carrying_base_released_minor,
+    sourceDustBaseMinor: r.source_dust_base_minor,
+    receiptCurrency: r.receipt_currency,
+    receiptAmountMinor: r.receipt_amount_minor,
+    receiptBaseMinor: r.receipt_base_amount_minor,
+    rate: settlementRateDto(r.receipt_to_base_rate, r.rate_source, r.rate_timestamp, r.fx_rate_id),
+    realizedFxMinor: r.realized_fx_gain_loss_minor,
+    entryId: await requiredEntryOf(db, scope, 'supplier_refund', refundId),
+    createdAt: iso(r.created_at),
+  };
+  return { ...dto, replayed, businessTransactionId: r.business_transaction_id };
+}
 
 // ── The read service ─────────────────────────────────────────────────────
 
@@ -1017,7 +1417,11 @@ export class PurchasingReadService {
       this.db,
       m,
       `SELECT purchase_ap_outstanding($1, $2)::text AS outstanding, s.payment_allocated, s.credit_allocated,
-              (SELECT coalesce(sum(r.ap_base_minor), 0) FROM supplier_returns r WHERE r.business_id = $1 AND r.purchase_id = $2)::text AS released_base
+              ((SELECT coalesce(sum(r.ap_base_minor), 0) FROM supplier_returns r WHERE r.business_id = $1 AND r.purchase_id = $2)
+               + (SELECT coalesce(sum(a.purchase_carrying_base_released_minor), 0) FROM supplier_payment_allocations a
+                   WHERE a.business_id = $1 AND a.purchase_id = $2)
+               + (SELECT coalesce(sum(c.purchase_carrying_base_released_minor), 0) FROM supplier_credit_allocations c
+                   WHERE c.business_id = $1 AND c.purchase_id = $2))::text AS released_base
          FROM purchase_settlement_state($1, $2) s`,
       [m.businessId, purchaseId],
     );
@@ -1044,6 +1448,86 @@ export class PurchasingReadService {
       releasedBaseMinor: state.released_base,
       ledgerOutstandingTxnMinor: row?.txn_minor ?? '0',
       ledgerOutstandingBaseMinor: row?.base_minor ?? '0',
+    };
+  }
+
+  // ── P3-S6 (PHASE_3_S6_CONTRACT A-18) ─────────────────────────────────
+
+  /**
+   * `GET /v1/supplier-payments/:paymentId`: `suppliers.view` and EVERY
+   * allocated purchase's warehouse in scope (AL-39). An unknown or partly
+   * out-of-scope payment reads as not found, so the answer does not reveal it.
+   */
+  async getSupplierPayment(m: MembershipContext, paymentId: string): Promise<SupplierPaymentDto> {
+    requirePermission(m, 'suppliers.view');
+    const found = await readSupplierPaymentRows(this.db, m, paymentId);
+    const reachable = found === null ? null : await reachableWarehouses(this.db, m);
+    if (found === null || (reachable !== null && found.warehouseIds.some((w) => !reachable.has(w)))) throw AppError.notFound();
+    return found.dto;
+  }
+
+  /**
+   * `GET /v1/suppliers/:supplierId/payments`: the supplier's payments as
+   * stored, newest first. They span every warehouse, so `suppliers.view` AND
+   * business-wide branch scope (the S5 credit-note precedent).
+   */
+  async listSupplierPayments(m: MembershipContext, supplierId: string, q: SupplierPaymentListQuery): Promise<Page<SupplierPaymentDto>> {
+    requirePermission(m, 'suppliers.view');
+    assertBusinessWide(m);
+    if ((await findSupplier(this.db, m, supplierId)) === null) throw purchasingRefusal('supplier.not_found');
+    const limit = q.limit ?? DEFAULT_PAGE_SIZE;
+    const rows = await scopedRows<{ id: string }>(
+      this.db,
+      m,
+      `SELECT sp.id FROM supplier_payments sp
+        WHERE sp.business_id = $1 AND sp.supplier_id = $2
+          AND ($3::uuid IS NULL OR (sp.created_at, sp.id) < (SELECT c.created_at, c.id FROM supplier_payments c WHERE c.business_id = $1 AND c.id = $3::uuid))
+        ORDER BY sp.created_at DESC, sp.id DESC
+        LIMIT $4`,
+      [m.businessId, supplierId, cursorOf(q.cursor), limit + 1],
+    );
+    const items: SupplierPaymentDto[] = [];
+    for (const r of rows.slice(0, limit)) {
+      const found = await readSupplierPaymentRows(this.db, m, r.id);
+      if (found === null) throw new Error('a listed supplier payment is not readable');
+      items.push(found.dto);
+    }
+    const last = rows.slice(0, limit).at(-1);
+    return { items, nextCursor: rows.length > limit && last !== undefined ? last.id : null };
+  }
+
+  /**
+   * `GET /v1/purchases/:purchaseId/settlements`: the payment allocations and
+   * credit allocations applied to the purchase, oldest first (the order of
+   * the R-62 chain). `suppliers.view` and the purchase's warehouse in scope.
+   */
+  async purchaseSettlements(m: MembershipContext, purchaseId: string): Promise<PurchaseSettlementsDto> {
+    requirePermission(m, 'suppliers.view');
+    const header = await findPurchaseHeader(this.db, m, purchaseId);
+    if (header === null || !(await this.inScope(m, header.warehouse_id))) throw purchasingRefusal('purchase.not_found');
+    const payments = await scopedRows<PaymentAllocationRow>(
+      this.db,
+      m,
+      `${PAYMENT_ALLOCATION_SELECT} WHERE a.business_id = $1 AND a.purchase_id = $2 ORDER BY a.ap_released_before_txn_minor, a.id`,
+      [m.businessId, purchaseId],
+    );
+    const credits = await scopedRows<CreditAllocationRow & { journal_entry_id: string | null }>(
+      this.db,
+      m,
+      `SELECT x.*, b.journal_entry_id
+         FROM (${CREDIT_ALLOCATION_SELECT} WHERE c.business_id = $1 AND c.purchase_id = $2) x
+         LEFT JOIN accounting_source_bindings b ON b.business_id = $1 AND b.source_type = 'supplier_credit_allocation' AND b.source_id = x.id
+        ORDER BY x.ap_released_before_txn_minor::numeric, x.id`,
+      [m.businessId, purchaseId],
+    );
+    return {
+      purchaseId,
+      currency: header.currency_code,
+      payments: payments.map((a) => ({ ...paymentAllocationDto(a), paymentId: a.payment_id, paymentDate: a.payment_date })),
+      creditAllocations: credits.map((c) => {
+        if (c.journal_entry_id === null) throw new Error('a committed supplier credit allocation has no journal entry');
+        return creditAllocationDto(c, c.journal_entry_id);
+      }),
     };
   }
 
