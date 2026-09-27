@@ -1,9 +1,9 @@
 import { Inject, Injectable } from '@nestjs/common';
+import { hmacKeysEquivalent } from '@daftar/accounting';
 import {
   INVENTORY_ASSERTION_TTL_SECONDS,
   mintInventoryAssertion,
   parseInventoryAssertionKey,
-  hmacKeysEquivalent,
   type InventoryAssertionClaims,
   type InventoryAssertionKey,
 } from '@daftar/inventory';

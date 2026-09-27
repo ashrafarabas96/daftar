@@ -3,6 +3,7 @@ export * from './types';
 export * from './fingerprint';
 export * from './fx';
 export * from './assertion';
+export * from './assertion-keys';
 export * from './control-assertion';
 export * from './ports';
 export * from './post';

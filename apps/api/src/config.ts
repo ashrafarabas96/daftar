@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { hmacKeysEquivalent } from '@daftar/inventory';
+import { hmacKeysEquivalent } from '@daftar/accounting';
 
 /**
  * Central validated config (§34). No module reads process.env directly; missing
@@ -307,11 +307,13 @@ const EnvSchema = z
         fail('ACCOUNTING_ASSERTION_KEY', 'must be base64 of at least 32 bytes');
       } else if (
         c.PROVISIONING_ASSERTION_KEY &&
-        Buffer.from(c.ACCOUNTING_ASSERTION_KEY, 'base64').equals(Buffer.from(c.PROVISIONING_ASSERTION_KEY, 'base64'))
+        hmacKeysEquivalent(Buffer.from(c.ACCOUNTING_ASSERTION_KEY, 'base64'), Buffer.from(c.PROVISIONING_ASSERTION_KEY, 'base64'))
       ) {
-        // Compared as BYTES, not as strings: two different base64 spellings of
-        // one secret are still one secret, and sharing it would mean a single
-        // compromise reaches both provisioning and the ledger.
+        // Compared as the EFFECTIVE HMAC-SHA-256 KEY of the decoded bytes
+        // (P3-S8 A-19, TD-12), not as strings and not as raw bytes: two base64
+        // spellings of one secret are one secret, and `K` and `K‖0x00` are one
+        // HMAC-SHA-256 key. Sharing either would mean a single compromise
+        // reaches both provisioning and the ledger.
         fail('ACCOUNTING_ASSERTION_KEY', 'must not be the same secret as PROVISIONING_ASSERTION_KEY (separate domains, rotated independently)');
       }
       // ── P3-AL-55 §C: the inventory command signing key ─────────────────

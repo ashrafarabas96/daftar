@@ -31,7 +31,7 @@
  * key material is never printed, logged, or returned.
  */
 import { Pool } from 'pg';
-import { hmacKeysEquivalent } from '../packages/inventory/src/assertion';
+import { hmacKeysEquivalent } from '../packages/accounting/src/assertion-keys';
 
 async function main(): Promise<void> {
   if (process.env['MIGRATION_DATABASE_URL'] && !process.env['BOOTSTRAP_DATABASE_URL']) {
