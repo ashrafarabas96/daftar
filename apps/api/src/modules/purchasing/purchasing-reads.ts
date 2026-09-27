@@ -837,17 +837,6 @@ const S5_PAYABLE_SQL = `WITH ap AS (
       GROUP BY currency_code
       ORDER BY currency_code`;
 
-/** `Σ credit − Σ debit` in base, and signed txn per currency, over the AP lines of the purchases' `purchase` entries (A-20). */
-const PAYABLE_SQL = `SELECT jl.txn_currency, sum(jl.credit_minor - jl.debit_minor)::text AS base_minor,
-            sum(CASE WHEN jl.credit_minor > 0 THEN jl.txn_amount_minor ELSE -jl.txn_amount_minor END)::text AS txn_minor
-       FROM purchases p
-       JOIN accounting_source_bindings b ON b.business_id = p.business_id AND b.source_type = 'purchase' AND b.source_id = p.id
-       JOIN journal_lines jl ON jl.business_id = b.business_id AND jl.journal_entry_id = b.journal_entry_id
-       JOIN accounts a ON a.business_id = jl.business_id AND a.id = jl.account_id AND a.system_key = 'accounts_payable'
-      WHERE p.business_id = $1 AND p.status = 'received' AND %FILTER%
-      GROUP BY jl.txn_currency
-      ORDER BY jl.txn_currency`;
-
 // ── The read service ─────────────────────────────────────────────────────
 
 /**
@@ -893,14 +882,14 @@ export class PurchasingReadService {
     requirePermission(m, 'suppliers.view');
     assertBusinessWide(m);
     if ((await findSupplier(this.db, m, id)) === null) throw purchasingRefusal('supplier.not_found');
-    const rows = await scopedRows<{ txn_currency: string; base_minor: string; txn_minor: string }>(
+    const rows = await scopedRows<{ currency_code: string; base_minor: string; txn_minor: string }>(
       this.db,
       m,
-      PAYABLE_SQL.replace('%FILTER%', 'p.supplier_id = $2'),
+      S5_PAYABLE_SQL.replace('%FILTER%', 'p.supplier_id = $2'),
       [m.businessId, id],
     );
     const base = rows.reduce((a, r) => a + BigInt(r.base_minor), 0n);
-    return { supplierId: id, baseMinor: base.toString(10), byCurrency: rows.map((r) => ({ currency: r.txn_currency, txnMinor: r.txn_minor })) };
+    return { supplierId: id, baseMinor: base.toString(10), byCurrency: rows.map((r) => ({ currency: r.currency_code, txnMinor: r.txn_minor })) };
   }
 
   async listPurchases(m: MembershipContext, q: PurchaseListQuery): Promise<Page<PurchaseSummaryDto>> {
@@ -935,13 +924,15 @@ export class PurchasingReadService {
     requirePermission(m, 'purchases.view');
     const header = await findPurchaseHeader(this.db, m, id);
     if (header === null || !(await this.inScope(m, header.warehouse_id))) throw purchasingRefusal('purchase.not_found');
-    const rows = await scopedRows<{ txn_currency: string; base_minor: string; txn_minor: string }>(this.db, m, PAYABLE_SQL.replace('%FILTER%', 'p.id = $2'), [
-      m.businessId,
-      id,
-    ]);
+    const rows = await scopedRows<{ currency_code: string; base_minor: string; txn_minor: string }>(
+      this.db,
+      m,
+      S5_PAYABLE_SQL.replace('%FILTER%', 'p.id = $2'),
+      [m.businessId, id],
+    );
     const [row] = rows;
-    if (rows.length > 1 || (row !== undefined && row.txn_currency !== header.currency_code)) {
-      throw new Error("a purchase's payable lines are not in the purchase currency");
+    if (rows.length > 1 || (row !== undefined && row.currency_code !== header.currency_code)) {
+      throw new Error("a purchase's payable was not read in the purchase currency");
     }
     return { purchaseId: id, currency: header.currency_code, outstandingBaseMinor: row?.base_minor ?? '0', outstandingTxnMinor: row?.txn_minor ?? '0' };
   }
