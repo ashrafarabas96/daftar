@@ -26,6 +26,9 @@ import {
   S3_OPERATION_MOVEMENT_KINDS,
   S4_BRIDGES,
   S4_OPERATION_MOVEMENT_KINDS,
+  // P3-S5 (0065/0066)
+  S5_BRIDGES,
+  S5_OPERATION_MOVEMENT_KINDS,
   applyOne,
   assertMigrationState,
   attempt,
@@ -157,7 +160,7 @@ function endStateBlock(file: string): string {
 }
 
 describe('T-02 — the live grant matrix (P:154)', () => {
-  it('T-02.1: the ledger relations discovered from pg_class are exactly the eight S2 relations the contract names plus the four P3-S3 bridges, the two P3-S4 bridges and the P3-S4 coverage header', async () => {
+  it('T-02.1: the ledger relations discovered from pg_class are exactly the eight S2 relations the contract names plus the four P3-S3 bridges, the two P3-S4 bridges and the P3-S4 coverage header (P3-S5: plus the two P3-S5 bridges)', async () => {
     const r = await ownerPool().query<{ relname: string }>(
       `SELECT relname::text FROM pg_class
         WHERE relnamespace = 'public'::regnamespace AND relkind IN ('r', 'p', 'v', 'm', 'f')
@@ -168,7 +171,18 @@ describe('T-02 — the live grant matrix (P:154)', () => {
     // discovery; nothing else does.
     // P3-S4 (0063/0064, A-15(a), A-16(a)): the two S4 bridges match `stock\_%`
     // and the coverage header `negative\_%`; nothing else does.
-    expect(r.rows.map((x) => x.relname)).toEqual([...S2_RELATIONS, ...S3_BRIDGES, ...S4_BRIDGES, 'negative_inventory_cost_adjustments'].sort());
+    // P3-S5 (0065/0066, §2.2): the two S5 bridges match `stock\_%`; the five S5
+    // documents (`supplier_%`, `purchase_%`) match neither pattern.
+    expect(r.rows.map((x) => x.relname)).toEqual(
+      [
+        ...S2_RELATIONS,
+        ...S3_BRIDGES,
+        ...S4_BRIDGES,
+        'negative_inventory_cost_adjustments',
+        // P3-S5 (0065/0066)
+        ...S5_BRIDGES,
+      ].sort(),
+    );
   });
 
   it('T-02.1: for every runtime role and PUBLIC, every write privilege (table and column level) is absent; daftar_app reads exactly stock_movements and stock_levels (P3-S4: and the deficits and coverages)', async () => {
@@ -608,8 +622,42 @@ describe('T-16 — primitive authority (P:168)', () => {
       expectRefused(await tryApply(c, biz, [req(K1, 'purchase', '1', { unitCost: '1' })], { other: true }), 'P0001', 'inventory.movement_kind_not_authorized');
       // Its own mapped kind passes the authority step (and is then judged on stock).
       await applyOne(c, biz, req(K1, 'purchase', '2', { unitCost: '1' }));
-      const row = await applyOne(c, biz, req(K1, 'purchase_reversal', '-1'), { other: true });
+      // P3-S5 (0065/0066) — R-B1a, decided by the Tech Lead on 2026-09-26
+      // (docs/PHASE_3_S5_CONTRACT.md §9.1 B-1, §2.4, §7.3 row 15): the primitive,
+      // replaced by its owner in 0065, values a purchase_reversal as the exact
+      // negation of its paired `purchase` movement (same source_id and
+      // source_line_id), never at the average. Past the authority step the kind
+      // is therefore judged on its source, exactly: from a source that is not a
+      // purchase reversal it is inventory.movement_shape_invalid; without its
+      // paired purchase movement, inventory.reversal_pair_missing; paired, the
+      // row is written and carries exactly the receipt's negated value and its
+      // snapshot. (The fixture bridge only admits fixture-source bindings, so
+      // the purchase-source rows go without it; the rolled-back transaction
+      // never reaches the deferred binding guards.)
+      expectRefused(
+        await tryApply(c, biz, [req(K1, 'purchase_reversal', '-1')], { other: true }),
+        'P0001',
+        'inventory.movement_shape_invalid',
+        'a fixture source',
+      );
+      const pair = { sourceId: randomUUID(), sourceLineId: randomUUID() };
+      expectRefused(
+        await tryApply(c, biz, [req(K1, 'purchase_reversal', '-1', { sourceType: 'purchase_reversal', ...pair })], { other: true, bridge: false }),
+        'P0001',
+        'inventory.reversal_pair_missing',
+        'no paired purchase movement',
+      );
+      const receipt = await applyOne(c, biz, req(K1, 'purchase', '1', { unitCost: '3', sourceType: 'purchase', ...pair }), { bridge: false });
+      expect({ value: receipt.value_delta_base_minor, snapshot: receipt.unit_cost_base_minor }).toEqual({ value: '3', snapshot: '3.0000000000' });
+      const row = await applyOne(c, biz, req(K1, 'purchase_reversal', '-1', { sourceType: 'purchase_reversal', ...pair }), { other: true, bridge: false });
       expect(row.movement_kind).toBe('purchase_reversal');
+      // The key's average is (2 + 3) / 3, not 3: the value is the receipt's, negated.
+      expect({ value: row.value_delta_base_minor, snapshot: row.unit_cost_base_minor, onHand: row.on_hand, valuation: row.valuation_base_minor }).toEqual({
+        value: '-3',
+        snapshot: '3.0000000000',
+        onHand: '2.0000',
+        valuation: '2',
+      });
       // And the main fixture op is not mapped to purchase_reversal.
       expectRefused(await tryApply(c, biz, [req(K1, 'purchase_reversal', '-1')]), 'P0001', 'inventory.movement_kind_not_authorized');
     });
@@ -708,7 +756,7 @@ describe('T-16 — primitive authority (P:168)', () => {
     });
   });
 
-  it('T-16.9: with the fixture op’s mapping removed (the end-of-migration state: exactly the six P3-S3 rows and the two P3-S4 rows, none for it), a consumed fixture op → inventory.assertion_wrong_operation', async () => {
+  it('T-16.9: with the fixture op’s mapping removed (the end-of-migration state: exactly the six P3-S3 rows and the two P3-S4 rows (P3-S5: and the two P3-S5 rows), none for it), a consumed fixture op → inventory.assertion_wrong_operation', async () => {
     await withRolledBackFixture(async (c) => {
       // Control first: with the mapping present the same call writes.
       expectAccepted(await tryApply(c, biz, [req(K1, 'purchase', '1', { unitCost: '1' })]), 'mapping present');
@@ -721,6 +769,8 @@ describe('T-16 — primitive authority (P:168)', () => {
         ...S3_OPERATION_MOVEMENT_KINDS.map(([op, kind]) => `${op}:${kind}`),
         // P3-S4 (0063/0064)
         ...S4_OPERATION_MOVEMENT_KINDS.map(([op, kind]) => `${op}:${kind}`),
+        // P3-S5 (0065/0066)
+        ...S5_OPERATION_MOVEMENT_KINDS.map(([op, kind]) => `${op}:${kind}`),
       ]);
       expectRefused(await tryApply(c, biz, [req(K1, 'purchase', '1', { unitCost: '1' })]), 'P0001', 'inventory.assertion_wrong_operation');
     });
@@ -751,7 +801,7 @@ describe('T-16 — primitive authority (P:168)', () => {
 });
 
 describe('§2.4 — the complete S2 trigger set, from pg_trigger', () => {
-  it('the S2 tables carry exactly the four append/retain triggers and the deferred zero-value constraint trigger, plus the four P3-S3 binding-side guards on stock_source_bindings (P3-S4: plus the two S4 binding guards, the two deficit triggers and the coverage completeness trigger); products carries products_20_unit_history_lock and product_variants carries product_variants_20_stock_identity_lock', async () => {
+  it('the S2 tables carry exactly the four append/retain triggers and the deferred zero-value constraint trigger, plus the four P3-S3 binding-side guards on stock_source_bindings (P3-S4: plus the two S4 binding guards, the two deficit triggers and the coverage completeness trigger; P3-S5: plus the two S5 binding guards); products carries products_20_unit_history_lock and product_variants carries product_variants_20_stock_identity_lock', async () => {
     const r = await ownerPool().query<{
       tg: string;
       rel: string;
@@ -911,6 +961,21 @@ describe('§2.4 — the complete S2 trigger set, from pg_trigger', () => {
           owner: INTERNAL,
           secdef: true,
         },
+        // P3-S5 (0065/0066, §2.3): the two binding → bridge guards, AFTER
+        // INSERT, deferred, internal DEFINER. Every other S5 trigger is on an
+        // S5 document or bridge, not on an S2 relation.
+        ...['purchase_reversal', 'supplier_return'].map((st) => ({
+          tg: `stock_binding_requires_${st}`,
+          rel: 'stock_source_bindings',
+          fn: `stock_binding_requires_${st}()`,
+          type: 1 + 4,
+          enabled: 'O',
+          constraint: true,
+          deferrable: true,
+          deferred: true,
+          owner: INTERNAL,
+          secdef: true,
+        })),
       ].sort((a, b) => (a.tg < b.tg ? -1 : a.tg > b.tg ? 1 : 0)),
     );
   });

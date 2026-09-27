@@ -28,6 +28,10 @@ import {
   S4_BRIDGES,
   S4_OPERATION_MOVEMENT_KINDS,
   S4_SOURCE_TYPES,
+  // P3-S5 (0065/0066)
+  S5_BRIDGES,
+  S5_OPERATION_MOVEMENT_KINDS,
+  S5_SOURCE_TYPES,
   SEEDED_KINDS,
   applyAsApp,
   applyOne,
@@ -427,10 +431,11 @@ describe('T-01 — the ledger is append-only for every writer, the owner include
       // `stock_source_bindings` must be named with it (0A000 otherwise): the
       // fixture bridge and, since 0061, the four P3-S3 bridges.
       // P3-S4 (0063/0064): and, since 0063, the two P3-S4 bridges.
+      // P3-S5 (0065/0066): and, since 0065, the two P3-S5 bridges.
       expectAccepted(await attempt(c, () => c.query('SET CONSTRAINTS ALL IMMEDIATE')), 'deferred checks');
       const o = await attempt(c, () =>
         c.query(
-          `TRUNCATE stock_source_bridge_fixture_line, ${S3_BRIDGES.join(', ')}, ${S4_BRIDGES.join(', ')}, stock_source_bindings, negative_deficit_coverages, negative_inventory_deficits, stock_movements, stock_levels`,
+          `TRUNCATE stock_source_bridge_fixture_line, ${S3_BRIDGES.join(', ')}, ${S4_BRIDGES.join(', ')}, ${S5_BRIDGES.join(', ')}, stock_source_bindings, negative_deficit_coverages, negative_inventory_deficits, stock_movements, stock_levels`,
         ),
       );
       expectAccepted(o, 'owner TRUNCATE');
@@ -503,6 +508,9 @@ describe('T-13 — the closed source registry (P:165)', () => {
     // P3-S4 (0063/0064): 0063 registered the two stock source types and 0064
     // the two op→kind rows (docs/PHASE_3_S4_CONTRACT.md §2.1 step 7, §2.5),
     // all by P3-S4; nothing else.
+    // P3-S5 (0065/0066): 0065 registered the two stock source types and 0066
+    // the two op→kind rows (docs/PHASE_3_S5_CONTRACT.md §2.1, §2.6), all by
+    // P3-S5; nothing else.
     const r = await ownerPool().query<{ types: string[]; mapping: string[] }>(
       `SELECT (SELECT array_agg(source_type || ':' || registered_by ORDER BY source_type) FROM stock_source_types) AS types,
               (SELECT array_agg(op_code || ':' || movement_kind || ':' || registered_by ORDER BY op_code, movement_kind)
@@ -513,11 +521,15 @@ describe('T-13 — the closed source registry (P:165)', () => {
         ...S3_SOURCE_TYPES.map((t) => `${t}:P3-S3`),
         // P3-S4 (0063/0064)
         ...S4_SOURCE_TYPES.map((t) => `${t}:P3-S4`),
+        // P3-S5 (0065/0066)
+        ...S5_SOURCE_TYPES.map((t) => `${t}:P3-S5`),
       ].sort(),
       mapping: [
         ...S3_OPERATION_MOVEMENT_KINDS.map(([op, kind]) => `${op}:${kind}:P3-S3`),
         // P3-S4 (0063/0064)
         ...S4_OPERATION_MOVEMENT_KINDS.map(([op, kind]) => `${op}:${kind}:P3-S4`),
+        // P3-S5 (0065/0066)
+        ...S5_OPERATION_MOVEMENT_KINDS.map(([op, kind]) => `${op}:${kind}:P3-S5`),
       ],
     });
     const k = await ownerPool().query<{ kind: string; qtySign: string; requiresReason: boolean; by: string }>(

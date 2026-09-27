@@ -515,9 +515,30 @@ describe('T-21 — insufficient stock', () => {
     await withRolledBackFixture(async (c) => {
       for (const n of NEGATIVE) {
         await scratch(c, async () => {
+          // P3-S5 (0065/0066) — R-B1a, decided by the Tech Lead on 2026-09-26
+          // (docs/PHASE_3_S5_CONTRACT.md §9.1 B-1, §2.4, §7.3 row 15): a
+          // purchase_reversal belongs to a purchase reversal and carries exactly
+          // the negation of its paired `purchase` movement, so its receipt is that
+          // paired movement (source_type 'purchase', same source_id and
+          // source_line_id) and the reversal names it. The fixture bridge only
+          // admits fixture-source bindings, so both rows go without it (the
+          // rolled-back transaction never reaches the deferred binding guards).
+          // Every other kind keeps the fixture source.
+          const pair = n.kind === 'purchase_reversal' ? { sourceId: randomUUID(), sourceLineId: randomUUID() } : null;
+          const bridge: ApplyOptions = pair === null ? {} : { bridge: false };
           // 7 units bought for a supplied share of 1: average 0.1428571429.
-          await applyOne(c, biz, req(K1, 'purchase', '7', { unitCost: '0', value: '1' }));
-          const row = await applyOne(c, biz, req(K1, n.kind, '-7', { reason: n.reason ?? null }), n.other ? { other: true } : {});
+          await applyOne(
+            c,
+            biz,
+            req(K1, 'purchase', '7', { unitCost: '0', value: '1', ...(pair === null ? {} : { sourceType: 'purchase', ...pair }) }),
+            bridge,
+          );
+          const row = await applyOne(
+            c,
+            biz,
+            req(K1, n.kind, '-7', { reason: n.reason ?? null, ...(pair === null ? {} : { sourceType: 'purchase_reversal', ...pair }) }),
+            n.other ? { other: true, ...bridge } : bridge,
+          );
           expect(
             {
               value: row.value_delta_base_minor,
@@ -527,9 +548,46 @@ describe('T-21 — insufficient stock', () => {
               avg: row.avg_unit_cost_base_minor,
             },
             n.kind,
-          ).toEqual({ value: '-1', snapshot: '0.1428571429', onHand: '0.0000', valuation: '0', avg: '0.1428571429' });
+          ).toEqual({
+            value: '-1',
+            // P3-S5 (0065/0066), R-B1a: a purchase_reversal carries its paired
+            // receipt's stored snapshot (0, as the receipt supplied it), not the
+            // average; every other kind carries the average.
+            snapshot: n.kind === 'purchase_reversal' ? '0.0000000000' : '0.1428571429',
+            onHand: '0.0000',
+            valuation: '0',
+            avg: '0.1428571429',
+          });
         });
       }
+    });
+  });
+
+  // P3-S5 (0065/0066) — the negative control of §7.3 row 15 (R-B1a, the Tech
+  // Lead's 2026-09-26 decision, contract §9.1 B-1, §2.4): the flush above is
+  // the paired receipt's value, and without that receipt there is nothing to
+  // negate. A purchase_reversal with no paired `purchase` movement is refused
+  // inventory.reversal_pair_missing, and one from a source that is not a
+  // purchase reversal inventory.movement_shape_invalid — on a stocked key, so
+  // neither is the insufficiency refusal of T-21.1.
+  it('T-21.2 (P3-S5, R-B1a): a purchase_reversal without its paired purchase → inventory.reversal_pair_missing; from a fixture source → inventory.movement_shape_invalid', async () => {
+    await withRolledBackFixture(async (c) => {
+      await applyOne(c, biz, req(K1, 'purchase', '7', { unitCost: '0', value: '1' }));
+      const unpaired = { sourceType: 'purchase_reversal', sourceId: randomUUID(), sourceLineId: randomUUID() };
+      expectRefused(
+        await tryApply(c, biz, [req(K1, 'purchase_reversal', '-7', unpaired)], { other: true, bridge: false }),
+        'P0001',
+        'inventory.reversal_pair_missing',
+        'no paired purchase',
+      );
+      expectRefused(
+        await tryApply(c, biz, [req(K1, 'purchase_reversal', '-7')], { other: true }),
+        'P0001',
+        'inventory.movement_shape_invalid',
+        'a fixture source',
+      );
+      const level = must(await levelOf(c, biz.businessId, K1));
+      expect({ onHand: level.on_hand, valuation: level.valuation_base_minor }, 'nothing was written').toEqual({ onHand: '7.0000', valuation: '1' });
     });
   });
 });

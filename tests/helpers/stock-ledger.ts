@@ -164,6 +164,35 @@ export const S4_OPERATION_MOVEMENT_KINDS: readonly (readonly [op: string, kind: 
 /** P3-S4 (0063/0064): the two bridges 0063 creates (A-15(a)); each references `stock_source_bindings`. */
 export const S4_BRIDGES = ['stock_source_bridge_negative_inventory_cost_adjustment', 'stock_source_bridge_purchase'] as const;
 
+// P3-S5 (0065/0066) — the P3-S5 registrations (docs/PHASE_3_S5_CONTRACT.md
+// §2.1, §2.6, §7.3 row 16). 0065 registered the two stock source types
+// (`purchase_reversal` is a STOCK source type only, R-B2a) and 0066 the two
+// operation kinds with their two op→kind rows, each `registered_by = 'P3-S5'`;
+// the migration state is now exactly S1 + S3 + S4 + S5.
+
+/** P3-S5 (0065/0066): the two stock source types 0065 registers (§2.1), sorted. */
+export const S5_SOURCE_TYPES = ['purchase_reversal', 'supplier_return'] as const;
+
+/** P3-S5 (0065/0066): the two operation kinds 0066 registers (§2.6, A-03), sorted. */
+export const S5_OPERATION_KINDS = ['purchase.return', 'purchase.reverse'] as const;
+
+/** P3-S5 (0065/0066): the two op→movement-kind rows 0066 registers (§2.6), sorted by (op, kind). */
+export const S5_OPERATION_MOVEMENT_KINDS: readonly (readonly [op: string, kind: string])[] = [
+  ['purchase.return', 'supplier_return'],
+  ['purchase.reverse', 'purchase_reversal'],
+];
+
+/** P3-S5 (0065/0066): the two bridges 0065 creates (§2.2); each references `stock_source_bindings`. */
+export const S5_BRIDGES = ['stock_source_bridge_purchase_reversal', 'stock_source_bridge_supplier_return'] as const;
+
+/**
+ * P3-S5 (0065/0066): the five S5 document tables, children first — the order
+ * a TRUNCATE names them in (§7.3 row 16). The bridges reference the return
+ * and reversal lines, the lines their headers, the credit note its return
+ * (and the return its credit note, deferred), and every header a purchase.
+ */
+export const S5_TABLES = ['purchase_reversal_lines', 'purchase_reversals', 'supplier_credit_notes', 'supplier_return_lines', 'supplier_returns'] as const;
+
 // ── small utilities ────────────────────────────────────────────────────────
 
 /** Narrow an optional to its value, loudly (the accounting-posting precedent). */
@@ -580,6 +609,10 @@ export async function withRolledBackFixture<T>(
  * P3-S4 (0063/0064): plus exactly the P3-S4 registrations — the two source
  * types, the two op→kind rows and the seven kinds — so the state is exactly
  * S1 + S3 + S4 and an unauthorized extra row in any registry fails it.
+ *
+ * P3-S5 (0065/0066): plus exactly the P3-S5 registrations — the two source
+ * types, the two op→kind rows and the two kinds — so the state is exactly
+ * S1 + S3 + S4 + S5.
  */
 export async function assertMigrationState(q: Queryable = ownerPool()): Promise<void> {
   const r = await q.query<{ types: string[]; mapping: string[]; kinds: string[]; uses: number; rels: number; fns: number }>(
@@ -596,17 +629,23 @@ export async function assertMigrationState(q: Queryable = ownerPool()): Promise<
       ...S3_SOURCE_TYPES.map((t) => `${t}:P3-S3`),
       // P3-S4 (0063/0064)
       ...S4_SOURCE_TYPES.map((t) => `${t}:P3-S4`),
+      // P3-S5 (0065/0066)
+      ...S5_SOURCE_TYPES.map((t) => `${t}:P3-S5`),
     ].sort(),
     mapping: [
       ...S3_OPERATION_MOVEMENT_KINDS.map(([op, kind]) => `${op}:${kind}:P3-S3`),
       // P3-S4 (0063/0064)
       ...S4_OPERATION_MOVEMENT_KINDS.map(([op, kind]) => `${op}:${kind}:P3-S4`),
+      // P3-S5 (0065/0066)
+      ...S5_OPERATION_MOVEMENT_KINDS.map(([op, kind]) => `${op}:${kind}:P3-S5`),
     ],
     kinds: [
       ...S1_OPERATION_KINDS,
       ...S3_OPERATION_KINDS,
       // P3-S4 (0063/0064)
       ...S4_OPERATION_KINDS,
+      // P3-S5 (0065/0066)
+      ...S5_OPERATION_KINDS,
     ].sort(),
     uses: 0,
     rels: 0,
@@ -639,8 +678,71 @@ export async function assertMigrationState(q: Queryable = ownerPool()): Promise<
  *   coverages. The exact S4 grant set is asserted present before it is
  *   revoked and absent after, so a rewind can neither revoke a grant S4 did
  *   not make nor leave one it did.
+ *
+ * P3-S5 (0065/0066): 0065/0066 changed the inspected registries once more,
+ * so the rewind first undoes them, each step counted the same way:
+ *
+ * - the two P3-S5 op→kind rows, then the two P3-S5 source types (0059-E (2),
+ *   0060-E (6));
+ * - the S5 grants (contract A-18): none of them is on a relation or routine
+ *   0059-E/0060-E inspects (§7.3 row 16), and they are revoked anyway so the
+ *   replayed blocks run against a checkpoint that carries no S5 authority at
+ *   all. The exact S5 grant set — the five documents and two bridges, and
+ *   every EXECUTE grantee other than its owner of the five S5 routines that
+ *   have one (PUBLIC included) — is asserted present before it is revoked
+ *   and absent after, as the S4 set is.
  */
 export async function rewindToP3S2Checkpoint(c: Queryable): Promise<void> {
+  // P3-S5 (0065/0066)
+  const s5Mapping = await c.query(`DELETE FROM inventory_operation_movement_kinds WHERE registered_by = 'P3-S5'`);
+  expect(s5Mapping.rowCount, 'the P3-S5 op→kind rows').toBe(S5_OPERATION_MOVEMENT_KINDS.length);
+  const s5Types = await c.query(`DELETE FROM stock_source_types WHERE registered_by = 'P3-S5'`);
+  expect(s5Types.rowCount, 'the P3-S5 stock source types').toBe(S5_SOURCE_TYPES.length);
+  const s5Relations = [...S5_TABLES, ...S5_BRIDGES];
+  const s5Routines = [
+    'purchase_return(uuid,uuid,uuid,date,text,uuid,bigint,bigint,bigint,bigint,bigint,bigint,bigint,uuid[],uuid[],uuid[],numeric[],bigint[],bigint[])',
+    'purchase_reverse(uuid,uuid,date,text,uuid,bigint,uuid[],uuid[],numeric[],bigint[])',
+    'purchase_ap_outstanding(uuid,uuid)',
+    'purchase_settlement_state(uuid,uuid)',
+    'accounting_purchase_entry_id(uuid,uuid)',
+  ];
+  const s5GrantsSql = `SELECT (SELECT array_agg(r.rolname || ':' || t || ':' || p ORDER BY r.rolname, t, p)
+                                FROM unnest($1::text[]) AS t
+                                CROSS JOIN unnest(ARRAY['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER']) AS p
+                                CROSS JOIN pg_roles r
+                               WHERE r.rolname IN ('daftar_app', 'daftar_inventory_internal', 'daftar_accounting_internal')
+                                 AND has_table_privilege(r.rolname, t, p)) AS tables,
+                              (SELECT array_agg(coalesce(r.rolname, 'PUBLIC') || ':' || p.proname ORDER BY coalesce(r.rolname, 'PUBLIC'), p.proname)
+                                FROM pg_proc p
+                                CROSS JOIN LATERAL aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) a
+                                LEFT JOIN pg_roles r ON r.oid = a.grantee
+                               WHERE p.oid = ANY ($2::text[]::regprocedure[])
+                                 AND a.privilege_type = 'EXECUTE' AND a.grantee <> p.proowner) AS routines`;
+  const s5Before = await c.query(s5GrantsSql, [s5Relations, s5Routines]);
+  expect(s5Before.rows[0], 'the P3-S5 grants (A-18)').toEqual({
+    tables: [
+      'daftar_accounting_internal:purchase_reversals:SELECT',
+      'daftar_accounting_internal:supplier_returns:SELECT',
+      ...S5_TABLES.map((t) => `daftar_app:${t}:SELECT`).sort(),
+      ...s5Relations.flatMap((t) => [`${INTERNAL}:${t}:INSERT`, `${INTERNAL}:${t}:SELECT`]).sort(),
+    ],
+    routines: [
+      'daftar_app:purchase_ap_outstanding',
+      'daftar_app:purchase_return',
+      'daftar_app:purchase_reverse',
+      'daftar_app:purchase_settlement_state',
+      `${INTERNAL}:accounting_purchase_entry_id`,
+      `${INTERNAL}:purchase_ap_outstanding`,
+      `${INTERNAL}:purchase_settlement_state`,
+    ],
+  });
+  await c.query(`REVOKE SELECT ON ${S5_TABLES.join(', ')} FROM daftar_app`);
+  await c.query(`REVOKE INSERT, SELECT ON ${s5Relations.join(', ')} FROM ${INTERNAL}`);
+  await c.query(`REVOKE SELECT ON supplier_returns, purchase_reversals FROM daftar_accounting_internal`);
+  for (const f of s5Routines) await c.query(`REVOKE EXECUTE ON FUNCTION ${f} FROM daftar_app, ${INTERNAL}`);
+  const s5After = await c.query(s5GrantsSql, [s5Relations, s5Routines]);
+  expect(s5After.rows[0], 'the P3-S5 grants, revoked').toEqual({ tables: null, routines: null });
+
   // P3-S4 (0063/0064)
   const s4Mapping = await c.query(`DELETE FROM inventory_operation_movement_kinds WHERE registered_by = 'P3-S4'`);
   expect(s4Mapping.rowCount, 'the P3-S4 op→kind rows').toBe(S4_OPERATION_MOVEMENT_KINDS.length);
@@ -694,7 +796,8 @@ export async function rewindToP3S2Checkpoint(c: Queryable): Promise<void> {
  * the four P3-S3 bridges reference `stock_source_bindings`, and PostgreSQL
  * refuses to truncate a referenced table without its referencing ones
  * (0A000), so they are named in the same statement. P3-S4 (0063/0064): so
- * are the two P3-S4 bridges.
+ * are the two P3-S4 bridges. P3-S5 (0065/0066): so are the two P3-S5
+ * bridges, and the five S5 documents with them, children first (§7.3 row 16).
  */
 export async function removeCommittedFixture(): Promise<void> {
   const c = await ownerClient();
@@ -705,7 +808,8 @@ export async function removeCommittedFixture(): Promise<void> {
     const extra = [bridge, lines].filter((x): x is string => x !== null);
     await c.query(
       // P3-S4 (0063/0064): the two S4 bridges reference stock_source_bindings too.
-      `TRUNCATE ${['stock_source_bindings', 'stock_movements', 'stock_levels', 'negative_deficit_coverages', 'negative_inventory_deficits', ...S3_BRIDGES, ...S4_BRIDGES, ...extra].join(', ')}`,
+      // P3-S5 (0065/0066): so do the two S5 bridges; the S5 documents follow them.
+      `TRUNCATE ${['stock_source_bindings', 'stock_movements', 'stock_levels', 'negative_deficit_coverages', 'negative_inventory_deficits', ...S3_BRIDGES, ...S4_BRIDGES, ...S5_BRIDGES, ...S5_TABLES, ...extra].join(', ')}`,
     );
     await c.query(`DROP TRIGGER IF EXISTS stock_binding_requires_${FIXTURE_SOURCE_TYPE} ON stock_source_bindings`);
     await c.query(`DROP TABLE IF EXISTS stock_source_bridge_fixture_line`);

@@ -33,6 +33,12 @@ import {
   S3_OPERATION_KINDS,
   S3_OPERATION_MOVEMENT_KINDS,
   S3_SOURCE_TYPES,
+  // P3-S5 (0065/0066)
+  S5_BRIDGES,
+  S5_OPERATION_KINDS,
+  S5_OPERATION_MOVEMENT_KINDS,
+  S5_SOURCE_TYPES,
+  S5_TABLES,
   installStockFixture,
   must,
   ownerClient,
@@ -218,6 +224,10 @@ export const S4_OPERATION_MOVEMENT_KINDS: readonly (readonly [op: string, kind: 
  * The registries after 0064 with no fixture trace: the S3 source types plus
  * the two S4 ones (`P3-S4`), the S3 op→kind rows plus the two S4 ones, the
  * S1 + S3 + S4 kinds, and no fixture use, relation or function.
+ *
+ * P3-S5 (0065/0066): plus exactly the P3-S5 rows (docs/PHASE_3_S5_CONTRACT.md
+ * §7.3 row 16) — the two source types, the two op→kind rows and the two kinds
+ * — so the state is exactly S1 + S3 + S4 + S5.
  */
 export async function assertS4MigrationState(q: Queryable = ownerPool()): Promise<void> {
   const r = await q.query<{ types: string[]; mapping: string[]; kinds: string[]; uses: number; rels: number; fns: number }>(
@@ -229,15 +239,28 @@ export async function assertS4MigrationState(q: Queryable = ownerPool()): Promis
             (SELECT count(*)::int FROM pg_class WHERE relname IN ('stock_fixture_lines', 'stock_source_bridge_fixture_line')) AS rels,
             (SELECT count(*)::int FROM pg_proc WHERE proname LIKE 'stock\\_fixture\\_%' OR proname = 'stock_binding_requires_fixture_line') AS fns`,
   );
-  const types = [...S3_SOURCE_TYPES.map((t) => `${t}:P3-S3`), ...S4_SOURCE_TYPES.map((t) => `${t}:P3-S4`)].sort();
+  const types = [
+    ...S3_SOURCE_TYPES.map((t) => `${t}:P3-S3`),
+    ...S4_SOURCE_TYPES.map((t) => `${t}:P3-S4`),
+    // P3-S5 (0065/0066)
+    ...S5_SOURCE_TYPES.map((t) => `${t}:P3-S5`),
+  ].sort();
   const mapping = [
     ...S3_OPERATION_MOVEMENT_KINDS.map(([op, kind]) => `${op}:${kind}:P3-S3`),
     ...S4_OPERATION_MOVEMENT_KINDS.map(([op, kind]) => `${op}:${kind}:P3-S4`),
+    // P3-S5 (0065/0066)
+    ...S5_OPERATION_MOVEMENT_KINDS.map(([op, kind]) => `${op}:${kind}:P3-S5`),
   ].sort();
   expect(r.rows[0]).toEqual({
     types,
     mapping,
-    kinds: [...S1_OPERATION_KINDS, ...S3_OPERATION_KINDS, ...S4_OPERATION_KINDS].sort(),
+    kinds: [
+      ...S1_OPERATION_KINDS,
+      ...S3_OPERATION_KINDS,
+      ...S4_OPERATION_KINDS,
+      // P3-S5 (0065/0066)
+      ...S5_OPERATION_KINDS,
+    ].sort(),
     uses: 0,
     rels: 0,
     fns: 0,
@@ -251,6 +274,12 @@ export async function assertS4MigrationState(q: Queryable = ownerPool()): Promis
  * tables — the S3 and S4 bridges, the S4 documents and the coverage header —
  * then the fixture's objects and registrations, then the S4 end state.
  * Idempotent.
+ *
+ * P3-S5 (0065/0066): the two S5 bridges reference `stock_source_bindings`, and
+ * the five S5 documents reference the purchases and purchase lines truncated
+ * here, so all seven are named too (bridges first, then the documents,
+ * children first); without them PostgreSQL refuses the whole statement
+ * (0A000, "cannot truncate a table referenced in a foreign key constraint").
  */
 export async function removeCommittedDeficitFixture(): Promise<void> {
   const c = await ownerClient();
@@ -274,6 +303,9 @@ export async function removeCommittedDeficitFixture(): Promise<void> {
         'purchase_landed_costs',
         'purchase_lines',
         'purchases',
+        // P3-S5 (0065/0066)
+        ...S5_BRIDGES,
+        ...S5_TABLES,
         ...extra,
       ].join(', ')}`,
     );
