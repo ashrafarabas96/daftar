@@ -4,15 +4,15 @@
  *
  * `inventory_stock_source_guard_gaps()` returns no row at rest, and inside a
  * rolled-back savepoint reports exactly the §2.3 row that was sabotaged:
- *   - each of the nine S4 guards disabled, or enabled for replica sessions
- *     only;
+ *   - each of the seventeen S4 guards (the nine of §2.3 and the eight
+ *     R-38 additions: the landed-cost freezes and consistency triggers, the
+ *     coverage same-transaction and value guards, the deficit guards)
+ *     disabled, or enabled for replica sessions only;
  *   - each re-created under its own name, table and events on another
  *     function (the definition is read back from the catalogue, so the test
  *     follows the trigger's current event list);
  *   - each S4 guard function's body replaced by a no-op (the recorded
  *     SHA-256 of its `prosrc`), the two binding guards included;
- *   - the M2 additions: the landed-cost freezes, the allocation consistency
- *     trigger and the deficit coverage guard;
  * and the S3 rows are reported exactly as before.
  */
 import type { Client } from 'pg';
@@ -41,7 +41,7 @@ async function gapsAfter(sabotage: (c: Client) => Promise<unknown>): Promise<str
   }
 }
 
-/** The §2.3 table: type, missing, table, trigger, function. */
+/** The §2.3 table with the R-38 rows: type, missing, table, trigger, function. */
 const S4_ROWS: readonly (readonly [type: string, missing: string, table: string, trigger: string, fn: string])[] = [
   ['purchase', 'source_complete', 'purchase_lines', 'stock_source_complete_purchase', 'stock_source_complete_purchase()'],
   ['purchase', 'header_complete', 'purchases', 'purchases_received_complete', 'stock_source_complete_purchase_header()'],
@@ -69,6 +69,39 @@ const S4_ROWS: readonly (readonly [type: string, missing: string, table: string,
     'negative_inventory_cost_adjustments',
     'negative_inventory_cost_adjustments_value_complete',
     'purchase_source_value_complete()',
+  ],
+  // R-38: the landed-cost guards, the coverage guards and the A-16(g) deficit guards.
+  ['purchase', 'landed_cost_freeze', 'purchase_landed_costs', 'purchase_landed_costs_freeze', 'purchase_landed_cost_freeze()'],
+  ['purchase', 'allocation_freeze', 'purchase_landed_cost_allocations', 'purchase_landed_cost_allocations_freeze', 'purchase_landed_cost_freeze()'],
+  ['purchase', 'allocation_consistent', 'purchase_landed_cost_allocations', 'purchase_allocations_consistent', 'purchase_allocations_consistent()'],
+  ['purchase', 'landed_cost_consistent', 'purchase_landed_costs', 'purchase_landed_costs_consistent', 'purchase_allocations_consistent()'],
+  [
+    'negative_inventory_cost_adjustment',
+    'coverage_same_transaction',
+    'negative_deficit_coverages',
+    'negative_deficit_coverages_same_transaction',
+    'negative_deficit_coverage_same_transaction()',
+  ],
+  [
+    'negative_inventory_cost_adjustment',
+    'coverage_value_complete',
+    'negative_deficit_coverages',
+    'negative_deficit_coverages_value_complete',
+    'purchase_source_value_complete()',
+  ],
+  [
+    'negative_inventory_cost_adjustment',
+    'deficit_guard',
+    'negative_inventory_deficits',
+    'negative_inventory_deficits_coverage_guard',
+    'negative_inventory_deficits_coverage_guard()',
+  ],
+  [
+    'negative_inventory_cost_adjustment',
+    'deficit_consistent',
+    'negative_inventory_deficits',
+    'negative_inventory_deficits_coverage_consistent',
+    'negative_inventory_deficits_coverage_consistent()',
   ],
 ];
 
@@ -130,21 +163,6 @@ describe('T-16 a guard function whose body changed is reported', () => {
   ] as const) {
     it(`${fn} (the binding guard)`, async () => {
       expect(await gapsAfter((c) => neuter(c, fn))).toEqual([`${type}:binding_trigger`]);
-    });
-  }
-});
-
-describe('T-16 the M2 additions: the landed-cost freezes, the allocation consistency and the coverage guard', () => {
-  for (const [type, table, trigger] of [
-    ['purchase', 'purchase_landed_costs', 'purchase_landed_costs_freeze'],
-    ['purchase', 'purchase_landed_cost_allocations', 'purchase_landed_cost_allocations_freeze'],
-    ['purchase', 'purchase_landed_cost_allocations', 'purchase_allocations_consistent'],
-    ['negative_inventory_cost_adjustment', 'negative_inventory_deficits', 'negative_inventory_deficits_coverage_guard'],
-  ] as const) {
-    it(`${table}.${trigger} disabled → one ${type} gap`, async () => {
-      const gaps = await gapsAfter((c) => c.query(`ALTER TABLE ${table} DISABLE TRIGGER ${trigger}`));
-      expect(gaps, `${trigger} is watched`).toHaveLength(1);
-      expect(must(gaps[0]).startsWith(`${type}:`), must(gaps[0])).toBe(true);
     });
   }
 });
