@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { NextRequest } from 'next/server';
-import { ApiError, apiFetch, setAccessToken } from '@/lib/client';
+import { ApiError, apiFetch, ensureSession, getAccessToken, setAccessToken } from '@/lib/client';
 import { DELETE, GET, PATCH, POST, PUT } from '@/app/api/proxy/[...path]/route';
 import { isUuid } from '@/lib/route-ids';
 
@@ -125,6 +125,9 @@ describe('apiFetch (A-12(2))', () => {
   beforeEach(() => {
     vi.stubGlobal('document', { cookie: 'daftar_csrf=c', documentElement: { lang: 'ar' } });
     vi.stubGlobal('crypto', { randomUUID: () => `minted-${Math.random().toString(16).slice(2)}` });
+    // The page already holds a token (one that may have expired): the first
+    // request goes out at once, and a 401 is what triggers the refresh.
+    setAccessToken('stale');
   });
 
   it('keeps a caller-owned idempotency key, and the 401 retry re-sends it', async () => {
@@ -188,5 +191,42 @@ describe('apiFetch (A-12(2))', () => {
     const bare = await refuse({ error: { code: 'NOT_FOUND', message: 'm', requestId: 'q' } }, 404);
     expect(bare.details).toBeUndefined();
     expect(bare.domainCode).toBeNull();
+  });
+});
+
+describe('one refresh per page (real-browser findings D-2, D-7)', () => {
+  beforeEach(() => {
+    vi.stubGlobal('document', { cookie: 'daftar_csrf=c', documentElement: { lang: 'en' } });
+  });
+
+  it('a call made before the page holds a token waits for ONE refresh, and every concurrent call shares it — no bare 401 first', async () => {
+    const calls = stubFetch([() => json(200, { accessToken: 'fresh' }), () => json(200, { items: [] }), () => json(200, { permissions: [] })]);
+    await Promise.all([apiFetch('/api/proxy/me/businesses'), apiFetch('/api/proxy/inventory/access')]);
+    expect(calls.map((c) => c.url)).toEqual(['/api/auth/refresh', '/api/proxy/me/businesses', '/api/proxy/inventory/access']);
+    expect(header(calls[0], 'x-daftar-csrf')).toBe('c');
+    expect(calls[0]?.init.keepalive).toBe(true);
+    for (const call of calls.slice(1)) expect(header(call, 'authorization')).toBe('Bearer fresh');
+  });
+
+  it('the page mount, the header and a call share one refresh; a page that holds a token refreshes nothing', async () => {
+    const calls = stubFetch([() => json(200, { accessToken: 'fresh' }), () => json(200, { items: [] })]);
+    const [mounted] = await Promise.all([ensureSession(), apiFetch('/api/proxy/me/businesses'), ensureSession()]);
+    expect(mounted).toBe(true);
+    expect(calls.filter((c) => c.url === '/api/auth/refresh')).toHaveLength(1);
+    // A client-side navigation keeps the token in memory: the next page's mount spends no refresh token.
+    expect(await ensureSession()).toBe(true);
+    expect(calls.filter((c) => c.url === '/api/auth/refresh')).toHaveLength(1);
+    expect(getAccessToken()).toBe('fresh');
+  });
+
+  it('without a session the call still goes, bare, and its 401 is not refreshed a second time', async () => {
+    const calls = stubFetch([() => json(401, { error: 'NO_SESSION' }), () => json(401, { error: { code: 'UNAUTHORIZED' } })]);
+    const error = await apiFetch('/api/proxy/me/businesses').then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(error).toBeInstanceOf(ApiError);
+    expect(calls.map((c) => c.url)).toEqual(['/api/auth/refresh', '/api/proxy/me/businesses']);
+    expect(header(calls[1], 'authorization')).toBeNull();
   });
 });

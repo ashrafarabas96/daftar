@@ -25,12 +25,23 @@ function readCsrfCookie(): string | null {
   return m?.[1] ?? null;
 }
 
+/**
+ * Trade the refresh cookie for a fresh access token, through the BFF.
+ *
+ * The refresh token is single-use (the API rotates it, and a second use of the
+ * same token revokes the whole session). So every caller in this page that
+ * asks while a refresh is in flight shares that ONE request: the header, the
+ * page and a 401 retry never send the same token twice.
+ */
 export async function refreshSession(): Promise<boolean> {
   refreshing ??= (async () => {
     csrfToken = readCsrfCookie();
     const res = await fetch('/api/auth/refresh', {
       method: 'POST',
       headers: { 'x-daftar-csrf': csrfToken ?? '' },
+      // Should the page be left while the rotation is in flight, the browser
+      // still completes it and keeps the rotated cookie (D-2).
+      keepalive: true,
     });
     if (!res.ok) {
       accessToken = null;
@@ -43,6 +54,17 @@ export async function refreshSession(): Promise<boolean> {
     refreshing = null;
   });
   return refreshing;
+}
+
+/**
+ * The page's session: true at once when this page already holds an access
+ * token (a client-side navigation keeps it in memory), otherwise one shared
+ * refresh. Every page calls this on mount instead of refreshing again, so
+ * moving between pages spends no refresh token (D-2).
+ */
+export async function ensureSession(): Promise<boolean> {
+  if (accessToken) return true;
+  return refreshSession();
 }
 
 /**
@@ -113,6 +135,12 @@ function plainObject(value: unknown): Readonly<Record<string, unknown>> | undefi
  * expired is answered as a replay, never applied twice.
  */
 export async function apiFetch<T>(path: string, init: RequestInit = {}, retry = true): Promise<T> {
+  // A call made before the page holds a token waits for the page's one
+  // refresh instead of going out bare and coming back 401 (D-7). When there
+  // is no session, the call still goes (a public endpoint needs none), and a
+  // 401 is not refreshed a second time.
+  let mayRefresh = retry;
+  if (!accessToken && retry) mayRefresh = await refreshSession();
   const headers = new Headers(init.headers);
   // FormData (media upload) sets its own multipart boundary; everything else is JSON.
   if (!(init.body instanceof FormData)) headers.set('content-type', 'application/json');
@@ -125,7 +153,7 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}, retry = 
     headers.set('idempotency-key', crypto.randomUUID());
   }
   const res = await fetch(path, { ...init, headers });
-  if (res.status === 401 && retry) {
+  if (res.status === 401 && mayRefresh) {
     const ok = await refreshSession();
     // The retry carries these headers — and therefore this key — unchanged;
     // only the authorization is re-stamped with the refreshed token.

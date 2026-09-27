@@ -3,7 +3,7 @@ import { use, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Button, Card, Combobox, TextField, colors, spacing, typography } from '@daftar/design-system';
 import { makeT, type Locale } from '@/lib/i18n';
-import { refreshSession, setCurrentBusinessId } from '@/lib/client';
+import { ensureSession, setCurrentBusinessId } from '@/lib/client';
 import { checkSlugAvailability, completeOnboarding, getCountries, getCurrencies } from '@/lib/merchant-api';
 import type { CountryDto, CurrencyDto } from '@daftar/shared-contracts';
 
@@ -28,7 +28,7 @@ export default function OnboardingPage({ params }: { params: Promise<{ locale: L
 
   useEffect(() => {
     void (async () => {
-      if (!(await refreshSession())) {
+      if (!(await ensureSession())) {
         router.push(`/${locale}/login`);
         return;
       }

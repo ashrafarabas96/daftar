@@ -17,7 +17,7 @@
  */
 import { useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { currentBusinessId, refreshSession } from '@/lib/client';
+import { currentBusinessId, ensureSession } from '@/lib/client';
 import type { Locale } from '@/lib/i18n';
 import { getMyBusinesses } from '@/lib/merchant-api';
 import { getInventoryAccess, type InventoryAccessDto, type Phase3Permission } from '@/lib/phase3-api';
@@ -58,7 +58,7 @@ export function useMerchantContext(locale: Locale): MerchantContextState {
     let live = true;
     setStatus('loading');
     void (async () => {
-      if (!(await refreshSession())) {
+      if (!(await ensureSession())) {
         router.push(`/${locale}/login`);
         return;
       }

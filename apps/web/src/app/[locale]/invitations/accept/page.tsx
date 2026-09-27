@@ -3,7 +3,7 @@ import { Suspense, use, useEffect, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Button, Card, PasswordField, TextField, colors, spacing, typography } from '@daftar/design-system';
 import { makeT, type Locale } from '@/lib/i18n';
-import { ApiError, refreshSession, setAccessToken, setCurrentBusinessId } from '@/lib/client';
+import { ApiError, ensureSession, setAccessToken, setCurrentBusinessId } from '@/lib/client';
 import { acceptInvitation, acceptInvitationRegister } from '@/lib/merchant-api';
 
 /**
@@ -23,7 +23,7 @@ function AcceptInvitationForm({ locale }: { locale: Locale }) {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    void refreshSession().then(setSignedIn);
+    void ensureSession().then(setSignedIn);
   }, []);
 
   function fail(e: unknown) {

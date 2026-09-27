@@ -1,5 +1,6 @@
 'use client';
 import { use, useEffect, useState } from 'react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import type { CategoryDto, LocaleCode, ProductListItemDto } from '@daftar/shared-contracts';
 import { formatMinor, minorUnitsOf, parseMajorToMinor } from '@daftar/shared-contracts';
@@ -19,7 +20,7 @@ import {
   typography,
 } from '@daftar/design-system';
 import { makeT, type Locale } from '@/lib/i18n';
-import { ApiError, refreshSession } from '@/lib/client';
+import { ApiError, ensureSession } from '@/lib/client';
 import { createCategory, createProduct, getCurrentBusiness, listCategories, listProducts } from '@/lib/merchant-api';
 import { PageShell } from '../AppHeader';
 
@@ -61,7 +62,7 @@ export default function CatalogPage({ params }: { params: Promise<{ locale: Loca
 
   useEffect(() => {
     void (async () => {
-      if (!(await refreshSession())) {
+      if (!(await ensureSession())) {
         router.push(`/${locale}/login`);
         return;
       }
@@ -188,7 +189,7 @@ export default function CatalogPage({ params }: { params: Promise<{ locale: Loca
             <Table
               rows={products}
               columns={[
-                { key: 'name', header: t('catalog.productName'), render: (p) => <a href={`/${locale}/catalog/${p.id}`}>{p.name}</a> },
+                { key: 'name', header: t('catalog.productName'), render: (p) => <Link href={`/${locale}/catalog/${p.id}`}>{p.name}</Link> },
                 { key: 'sku', header: t('catalog.sku'), render: (p) => p.sku ?? '—' },
                 // §39: formatted major value via Intl/CLDR — never the raw minor integer.
                 { key: 'price', header: t('catalog.price'), align: 'end', render: (p) => formatMinor(p.basePriceMinor, p.priceCurrency, locale) },

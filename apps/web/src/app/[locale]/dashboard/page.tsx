@@ -3,7 +3,7 @@ import { use, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Card, ErrorState, colors, spacing, typography } from '@daftar/design-system';
 import { makeT, type Locale } from '@/lib/i18n';
-import { currentBusinessId, refreshSession } from '@/lib/client';
+import { currentBusinessId, ensureSession } from '@/lib/client';
 import { getEntitlement, listMembers, listProducts } from '@/lib/merchant-api';
 import { PageShell } from '../AppHeader';
 
@@ -22,7 +22,7 @@ export default function DashboardPage({ params }: { params: Promise<{ locale: Lo
 
   useEffect(() => {
     void (async () => {
-      if (!(await refreshSession())) {
+      if (!(await ensureSession())) {
         router.push(`/${locale}/login`);
         return;
       }

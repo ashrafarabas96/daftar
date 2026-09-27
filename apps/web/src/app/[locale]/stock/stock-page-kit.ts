@@ -1,7 +1,7 @@
 'use client';
 /**
  * What every stock page does before it shows its screen (P3-S7 A-11): the
- * Phase 1 page pattern — `refreshSession()` on mount, else to login — then
+ * Phase 1 page pattern — `ensureSession()` on mount, else to login — then
  * the caller's own grants (`GET /v1/inventory/access`, advisory), the
  * warehouses it reaches, the unit names and the business currency.
  *
@@ -11,7 +11,7 @@
  */
 import { useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { ApiError, currentBusinessId, refreshSession } from '@/lib/client';
+import { ApiError, currentBusinessId, ensureSession } from '@/lib/client';
 import type { Locale } from '@/lib/i18n';
 import { getMyBusinesses } from '@/lib/merchant-api';
 import {
@@ -56,7 +56,7 @@ export function useInventoryScreen(locale: Locale, anyOf: readonly Phase3Permiss
     let live = true;
     void (async () => {
       setPhase('loading');
-      if (!(await refreshSession())) {
+      if (!(await ensureSession())) {
         router.push(`/${locale}/login`);
         return;
       }

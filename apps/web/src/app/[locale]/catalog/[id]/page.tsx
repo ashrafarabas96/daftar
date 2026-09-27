@@ -5,7 +5,7 @@ import type { CategoryDto, LocaleCode, ProductDto } from '@daftar/shared-contrac
 import { formatMinor, minorUnitsOf, parseMajorToMinor } from '@daftar/shared-contracts';
 import { Badge, Button, Select, Table, TextField, colors, spacing, typography } from '@daftar/design-system';
 import { makeT, type Locale } from '@/lib/i18n';
-import { ApiError, refreshSession } from '@/lib/client';
+import { ApiError, ensureSession } from '@/lib/client';
 import { archiveProduct, attachMedia, getMediaAccessUrl, getProduct, listCategories, updateProduct, uploadMedia } from '@/lib/merchant-api';
 import {
   getInventoryAccess,
@@ -75,7 +75,7 @@ export default function ProductEditPage({ params }: { params: Promise<{ locale: 
 
   useEffect(() => {
     void (async () => {
-      if (!(await refreshSession())) {
+      if (!(await ensureSession())) {
         router.push(`/${locale}/login`);
         return;
       }

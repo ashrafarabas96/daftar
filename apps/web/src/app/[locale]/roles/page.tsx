@@ -4,7 +4,7 @@ import { useRouter } from 'next/navigation';
 import { PERMISSIONS, type RoleDto } from '@daftar/shared-contracts';
 import { Badge, Button, Checkbox, Dialog, FeatureLockedState, Select, Table, TextField, colors, spacing, typography } from '@daftar/design-system';
 import { makeT, type Locale } from '@/lib/i18n';
-import { ApiError, refreshSession } from '@/lib/client';
+import { ApiError, ensureSession } from '@/lib/client';
 import { createRole, deleteRole, listRoles, updateRole } from '@/lib/merchant-api';
 import { PageShell } from '../AppHeader';
 
@@ -29,7 +29,7 @@ export default function RolesPage({ params }: { params: Promise<{ locale: Locale
   }
   useEffect(() => {
     void (async () => {
-      if (!(await refreshSession())) {
+      if (!(await ensureSession())) {
         router.push(`/${locale}/login`);
         return;
       }

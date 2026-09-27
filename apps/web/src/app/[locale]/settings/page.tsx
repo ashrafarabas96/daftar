@@ -4,7 +4,7 @@ import { useRouter } from 'next/navigation';
 import type { BusinessSettingsDto, LocaleCode } from '@daftar/shared-contracts';
 import { Button, Checkbox, Combobox, Select, TextField, colors, spacing, typography } from '@daftar/design-system';
 import { makeT, type Locale } from '@/lib/i18n';
-import { ApiError, refreshSession } from '@/lib/client';
+import { ApiError, ensureSession } from '@/lib/client';
 import { getCurrentBusiness, updateCurrentBusiness } from '@/lib/merchant-api';
 import { PageShell } from '../AppHeader';
 
@@ -32,7 +32,7 @@ export default function SettingsPage({ params }: { params: Promise<{ locale: Loc
 
   useEffect(() => {
     void (async () => {
-      if (!(await refreshSession())) {
+      if (!(await ensureSession())) {
         router.push(`/${locale}/login`);
         return;
       }

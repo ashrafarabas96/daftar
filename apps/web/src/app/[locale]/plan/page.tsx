@@ -4,7 +4,7 @@ import { useRouter } from 'next/navigation';
 import type { EntitlementSummaryDto } from '@daftar/shared-contracts';
 import { Badge, ErrorState, Table, spacing, typography } from '@daftar/design-system';
 import { makeT, type Locale } from '@/lib/i18n';
-import { refreshSession } from '@/lib/client';
+import { ensureSession } from '@/lib/client';
 import { getEntitlement } from '@/lib/merchant-api';
 import { PageShell } from '../AppHeader';
 
@@ -17,7 +17,7 @@ export default function PlanPage({ params }: { params: Promise<{ locale: Locale 
 
   useEffect(() => {
     void (async () => {
-      if (!(await refreshSession())) {
+      if (!(await ensureSession())) {
         router.push(`/${locale}/login`);
         return;
       }

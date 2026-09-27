@@ -4,7 +4,7 @@ import { useRouter } from 'next/navigation';
 import type { BranchDto, WarehouseDto } from '@daftar/shared-contracts';
 import { Badge, Button, Dialog, FeatureLockedState, PlanLimitState, Select, Table, Tabs, TextField, spacing, typography } from '@daftar/design-system';
 import { makeT, type Locale } from '@/lib/i18n';
-import { ApiError, refreshSession } from '@/lib/client';
+import { ApiError, ensureSession } from '@/lib/client';
 import { createBranch, createWarehouse, listBranches, listWarehouses } from '@/lib/merchant-api';
 import { addWarehouseBranch, getInventoryAccess, listInventoryWarehouses, removeWarehouseBranch, type InventoryWarehouseDto } from '@/lib/phase3-api';
 import { refusalKey } from '@/lib/phase3-errors';
@@ -35,7 +35,7 @@ export default function StructurePage({ params }: { params: Promise<{ locale: Lo
 
   useEffect(() => {
     void (async () => {
-      if (!(await refreshSession())) {
+      if (!(await ensureSession())) {
         router.push(`/${locale}/login`);
         return;
       }
