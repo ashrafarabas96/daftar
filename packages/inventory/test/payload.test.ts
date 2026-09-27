@@ -221,7 +221,9 @@ describe('invpl/1 — refusals of non-canonical input (never normalized)', () =>
   // P3-S4 kinds; the S1 and S3 rows stay verbatim.
   // P3-S5 (0065/0066): PHASE_3_S5_CONTRACT §7.3 row 21 appends the two P3-S5
   // kinds; the S1, S3 and S4 rows stay verbatim.
-  it('registers exactly the three P3-S1 operation kinds, the seven P3-S3 kinds, the seven P3-S4 kinds and the two P3-S5 kinds', () => {
+  // P3-S6 (0067/0068): PHASE_3_S6_CONTRACT §7.3 row 19 appends the seven
+  // P3-S6 kinds; the S1, S3, S4 and S5 rows stay verbatim.
+  it('registers exactly the three P3-S1 operation kinds, the seven P3-S3 kinds, the seven P3-S4 kinds, the two P3-S5 kinds and the seven P3-S6 kinds', () => {
     expect([...INVENTORY_OPERATION_CODES].sort()).toEqual([
       'inventory.adjust',
       'inventory.configure_product',
@@ -231,6 +233,10 @@ describe('invpl/1 — refusals of non-canonical input (never normalized)', () =>
       'inventory.stocktake_finalize',
       'inventory.stocktake_open',
       'inventory.transfer',
+      'payment.activate_method', // P3-S6 (0067/0068)
+      'payment.create_method', // P3-S6 (0067/0068)
+      'payment.deactivate_method', // P3-S6 (0067/0068)
+      'payment.update_method', // P3-S6 (0067/0068)
       'purchase.cancel',
       'purchase.draft',
       'purchase.receive',
@@ -238,9 +244,12 @@ describe('invpl/1 — refusals of non-canonical input (never normalized)', () =>
       'purchase.reverse', // P3-S5 (0065/0066)
       'structure.associate_warehouse_branch',
       'structure.dissociate_warehouse_branch',
+      'supplier.allocate_credit', // P3-S6 (0067/0068)
       'supplier.archive',
       'supplier.create',
+      'supplier.pay', // P3-S6 (0067/0068)
       'supplier.reactivate',
+      'supplier.receive_refund', // P3-S6 (0067/0068)
       'supplier.update',
     ]);
     expect(Object.keys(INVENTORY_PAYLOAD_SCHEMAS).sort()).toEqual([...INVENTORY_OPERATION_CODES].sort());

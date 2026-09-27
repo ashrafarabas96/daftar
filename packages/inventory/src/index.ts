@@ -17,3 +17,6 @@ export * from './deficit-coverage';
 export * from './supplier-return';
 export * from './supplier-return-payloads';
 export * from './purchase-reversal-payloads';
+export * from './supplier-settlement';
+export * from './supplier-settlement-payloads';
+export * from './payment-method-payloads';

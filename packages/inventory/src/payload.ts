@@ -76,7 +76,27 @@ export type InventoryS4OperationCode =
  */
 export type InventoryS5OperationCode = 'purchase.return' | 'purchase.reverse';
 
-export type InventoryOperationCode = InventoryS1OperationCode | InventoryS3OperationCode | InventoryS4OperationCode | InventoryS5OperationCode;
+/**
+ * The seven operation kinds P3-S6 registers (PHASE_3_S6_CONTRACT A-03, §2.6),
+ * one per entry routine of `0068`. The payment-method kinds are
+ * `payment.<verb>_method`: the registry grammar admits no underscore in the
+ * first segment, so `payment_method.create` could not be registered.
+ */
+export type InventoryS6OperationCode =
+  | 'payment.create_method'
+  | 'payment.update_method'
+  | 'payment.deactivate_method'
+  | 'payment.activate_method'
+  | 'supplier.pay'
+  | 'supplier.allocate_credit'
+  | 'supplier.receive_refund';
+
+export type InventoryOperationCode =
+  | InventoryS1OperationCode
+  | InventoryS3OperationCode
+  | InventoryS4OperationCode
+  | InventoryS5OperationCode
+  | InventoryS6OperationCode;
 
 export const INVENTORY_S1_OPERATION_CODES: readonly InventoryS1OperationCode[] = [
   'inventory.configure_product',
@@ -106,11 +126,22 @@ export const INVENTORY_S4_OPERATION_CODES: readonly InventoryS4OperationCode[] =
 
 export const INVENTORY_S5_OPERATION_CODES: readonly InventoryS5OperationCode[] = ['purchase.return', 'purchase.reverse'];
 
+export const INVENTORY_S6_OPERATION_CODES: readonly InventoryS6OperationCode[] = [
+  'payment.create_method',
+  'payment.update_method',
+  'payment.deactivate_method',
+  'payment.activate_method',
+  'supplier.pay',
+  'supplier.allocate_credit',
+  'supplier.receive_refund',
+];
+
 export const INVENTORY_OPERATION_CODES: readonly InventoryOperationCode[] = [
   ...INVENTORY_S1_OPERATION_CODES,
   ...INVENTORY_S3_OPERATION_CODES,
   ...INVENTORY_S4_OPERATION_CODES,
   ...INVENTORY_S5_OPERATION_CODES,
+  ...INVENTORY_S6_OPERATION_CODES,
 ];
 
 /** The literal first line of every stream. */
@@ -189,7 +220,20 @@ const spec = (name: string, type: InventoryPayloadFieldType, nullable = false): 
 const REASON_WORDS: readonly InventoryPayloadFieldSpec[] = Array.from({ length: 8 }, (_, i) => spec(`reason_w${i + 1}`, 'integer'));
 
 function withLines(header: readonly InventoryPayloadFieldSpec[], lineFields: readonly InventoryPayloadFieldSpec[]): InventoryPayloadSchema {
-  const repeat: InventoryPayloadRepeat = Object.freeze({ countField: 'line_count', fields: Object.freeze([...lineFields]) });
+  return withGroup(header, 'line_count', lineFields);
+}
+
+/**
+ * A header and one repeating group counted by `countField` (P3-S6: the
+ * allocations of `supplier.pay`, counted by `allocation_count`). `withLines`
+ * is this group under the S3 name `line_count`.
+ */
+function withGroup(
+  header: readonly InventoryPayloadFieldSpec[],
+  countField: string,
+  groupFields: readonly InventoryPayloadFieldSpec[],
+): InventoryPayloadSchema {
+  const repeat: InventoryPayloadRepeat = Object.freeze({ countField, fields: Object.freeze([...groupFields]) });
   return Object.freeze(Object.assign([...header], { repeat }));
 }
 
@@ -213,6 +257,13 @@ const SUPPLIER_TEXT: readonly InventoryPayloadFieldSpec[] = [
   ...textWordSpecs('email', true),
   ...textWordSpecs('tax_identifier', true),
   ...textWordSpecs('notes', true),
+];
+
+/** The three optional payment-method name word groups (PHASE_3_S6_CONTRACT A-16): each NULL when that locale has no name. */
+const PAYMENT_METHOD_NAMES: readonly InventoryPayloadFieldSpec[] = [
+  ...textWordSpecs('name_ar', true),
+  ...textWordSpecs('name_en', true),
+  ...textWordSpecs('name_tr', true),
 ];
 
 /**
@@ -368,6 +419,100 @@ export const INVENTORY_PAYLOAD_SCHEMAS: Readonly<Record<InventoryOperationCode, 
     ],
     [spec('line_id', 'uuid'), spec('variant_id', 'uuid'), spec('qty_q4', 'integer'), spec('value', 'integer')],
   ),
+  // P3-S6 (PHASE_3_S6_CONTRACT A-16). Every amount is an integer minor unit
+  // of the currency its row names (`*_dust` and `realized` in base, signed);
+  // a currency is its lowercase ISO code, a rate its R10, a rate instant epoch
+  // seconds, a date `YYYYMMDD`, a text the eight words of its SHA-256 (eight
+  // NULLs for NULL).
+  'payment.create_method': Object.freeze([
+    spec('payment_method_id', 'uuid'),
+    spec('system_type', 'code'),
+    spec('posting_account_id', 'uuid'),
+    spec('requires_reference', 'boolean'),
+    spec('sort_order', 'integer'),
+    ...PAYMENT_METHOD_NAMES,
+  ]),
+  'payment.update_method': Object.freeze([
+    spec('payment_method_id', 'uuid'),
+    spec('expected_revision', 'integer'),
+    spec('posting_account_id', 'uuid'),
+    spec('requires_reference', 'boolean'),
+    spec('sort_order', 'integer'),
+    ...PAYMENT_METHOD_NAMES,
+  ]),
+  'payment.deactivate_method': Object.freeze([spec('payment_method_id', 'uuid'), spec('expected_revision', 'integer')]),
+  'payment.activate_method': Object.freeze([spec('payment_method_id', 'uuid'), spec('expected_revision', 'integer')]),
+  'supplier.pay': withGroup(
+    [
+      spec('payment_id', 'uuid'),
+      spec('supplier_id', 'uuid'),
+      spec('payment_method_id', 'uuid'),
+      spec('posting_account_id', 'uuid'),
+      spec('payment_date', 'integer'),
+      spec('currency', 'code'),
+      spec('amount', 'integer'),
+      spec('rate_id', 'uuid', true),
+      spec('rate', 'integer'),
+      spec('rate_source', 'code'),
+      spec('rate_at', 'integer'),
+      spec('base_amount', 'integer'),
+      ...textWordSpecs('reference', true),
+      spec('allocation_count', 'integer'),
+    ],
+    'allocation_count',
+    [
+      spec('allocation_id', 'uuid'),
+      spec('purchase_id', 'uuid'),
+      spec('warehouse_id', 'uuid'),
+      spec('purchase_currency', 'code'),
+      spec('payment_amount', 'integer'),
+      spec('payment_base', 'integer'),
+      spec('applied', 'integer'),
+      spec('released_before', 'integer'),
+      spec('carrying_released', 'integer'),
+      spec('ap_dust', 'integer'),
+      spec('realized', 'integer'),
+    ],
+  ),
+  'supplier.allocate_credit': Object.freeze([
+    spec('allocation_id', 'uuid'),
+    spec('credit_note_id', 'uuid'),
+    spec('purchase_id', 'uuid'),
+    spec('warehouse_id', 'uuid'),
+    spec('allocation_date', 'integer'),
+    spec('credit_currency', 'code'),
+    spec('consumed', 'integer'),
+    spec('remaining_before', 'integer'),
+    spec('credit_released', 'integer'),
+    spec('credit_dust', 'integer'),
+    spec('purchase_currency', 'code'),
+    spec('applied', 'integer'),
+    spec('ap_released_before', 'integer'),
+    spec('ap_released', 'integer'),
+    spec('ap_dust', 'integer'),
+    spec('realized', 'integer'),
+  ]),
+  'supplier.receive_refund': Object.freeze([
+    spec('refund_id', 'uuid'),
+    spec('credit_note_id', 'uuid'),
+    spec('payment_method_id', 'uuid'),
+    spec('posting_account_id', 'uuid'),
+    spec('refund_date', 'integer'),
+    spec('source_currency', 'code'),
+    spec('consumed', 'integer'),
+    spec('remaining_before', 'integer'),
+    spec('source_released', 'integer'),
+    spec('source_dust', 'integer'),
+    spec('receipt_currency', 'code'),
+    spec('receipt_amount', 'integer'),
+    spec('rate_id', 'uuid', true),
+    spec('rate', 'integer'),
+    spec('rate_source', 'code'),
+    spec('rate_at', 'integer'),
+    spec('receipt_base', 'integer'),
+    spec('realized', 'integer'),
+    ...textWordSpecs('reference', true),
+  ]),
 };
 
 /**
@@ -405,6 +550,37 @@ export const INVENTORY_OPERATION_INTENT_FIELDS: Readonly<Partial<Record<Inventor
     'qty_q4',
   ]),
   'purchase.reverse': Object.freeze(['purchase_id', 'warehouse_id', 'reversal_date', ...Array.from({ length: 8 }, (_, i) => `reason_w${i + 1}`)]),
+  // P3-S6 (PHASE_3_S6_CONTRACT A-16): the three settlement intents are their
+  // client-stated fields only; every FX snapshot, base, release, dust and
+  // realized amount — and a payment's posting account and allocation
+  // warehouses — is derived. The four payment-method kinds have no entry:
+  // every field is intent, so their intent is the payload itself (the S4
+  // supplier pattern).
+  'supplier.pay': Object.freeze([
+    'payment_id',
+    'supplier_id',
+    'payment_method_id',
+    'payment_date',
+    'currency',
+    'amount',
+    ...Array.from({ length: 8 }, (_, i) => `reference_w${i + 1}`),
+    'allocation_count',
+    'allocation_id',
+    'purchase_id',
+    'payment_amount',
+    'applied',
+  ]),
+  'supplier.allocate_credit': Object.freeze(['allocation_id', 'credit_note_id', 'purchase_id', 'allocation_date', 'consumed', 'applied']),
+  'supplier.receive_refund': Object.freeze([
+    'refund_id',
+    'credit_note_id',
+    'payment_method_id',
+    'refund_date',
+    'consumed',
+    'receipt_currency',
+    'receipt_amount',
+    ...Array.from({ length: 8 }, (_, i) => `reference_w${i + 1}`),
+  ]),
 });
 
 /** The intent schema of an operation kind: its schema with the server-derived fields removed, header and group alike. */
@@ -418,7 +594,7 @@ export function inventoryIntentSchema(opCode: InventoryOperationCode): Inventory
   if (repeat === undefined || !header.some((s) => s.name === repeat.countField)) return Object.freeze(header);
   const lineFields = repeat.fields.filter(keep);
   const trailer = schema.trailer;
-  if (trailer === undefined || !keep(trailer.countField)) return withLines(header, lineFields);
+  if (trailer === undefined || !keep(trailer.countField)) return withGroup(header, repeat.countField, lineFields);
   const perLine = trailer.perLine !== undefined && keep(trailer.perLine) ? trailer.perLine : undefined;
   return withLinesAndTrailer(header, lineFields, {
     countField: trailer.countField,
@@ -439,7 +615,7 @@ const refuse = (what: string): never => {
   throw new InventoryError('inventory.payload_invalid', `invpl/1 payload ${what}`);
 };
 
-/** True for a registered operation code (P3-S1, P3-S3, P3-S4 or P3-S5). Refuses anything else, including a wildcard. */
+/** True for a registered operation code (P3-S1, P3-S3, P3-S4, P3-S5 or P3-S6). Refuses anything else, including a wildcard. */
 export function isInventoryOperationCode(value: unknown): value is InventoryOperationCode {
   return typeof value === 'string' && (INVENTORY_OPERATION_CODES as readonly string[]).includes(value);
 }

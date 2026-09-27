@@ -42,6 +42,13 @@
  * raises them under: `supplier_return.quantity_exceeds_purchased` (Must-prove
  * 1), `supplier_return.value_zero` (TL-12) and
  * `supplier_return.amount_below_base_unit` (TL-3).
+ *
+ * P3-S6 adds the codes the settlement arithmetic (`supplier-settlement.ts`)
+ * and the payment-method builders can raise (PHASE_3_S6_CONTRACT §3), each in
+ * the domain its routine raises it under: the over-allocation and
+ * over-consumption bounds (MP-3, MP-6), the same-currency amount rule, the
+ * base-unit rule (A-08, TL-9), the chain verdicts of the two verify helpers
+ * (R-62, R-63) and the method name rules (A-06).
  */
 export type InventoryErrorCode =
   | 'inventory.assertion_malformed'
@@ -71,7 +78,24 @@ export type InventoryErrorCode =
   | 'purchase.total_zero'
   | 'supplier_return.quantity_exceeds_purchased'
   | 'supplier_return.value_zero'
-  | 'supplier_return.amount_below_base_unit';
+  | 'supplier_return.amount_below_base_unit'
+  | 'payment_method.name_required'
+  | 'payment_method.name_invalid'
+  | 'supplier_payment.allocations_invalid'
+  | 'supplier_payment.amount_exceeds_outstanding'
+  | 'supplier_payment.amount_mismatch'
+  | 'supplier_payment.amount_below_base_unit'
+  | 'supplier_payment.settlement_inconsistent'
+  | 'supplier_credit_allocation.amount_exceeds_outstanding'
+  | 'supplier_credit_allocation.amount_exceeds_credit'
+  | 'supplier_credit_allocation.credit_exhausted'
+  | 'supplier_credit_allocation.amount_mismatch'
+  | 'supplier_credit_allocation.amount_below_base_unit'
+  | 'supplier_refund.amount_exceeds_credit'
+  | 'supplier_refund.credit_exhausted'
+  | 'supplier_refund.amount_mismatch'
+  | 'supplier_refund.amount_below_base_unit'
+  | 'supplier_credit_note.consumption_inconsistent';
 
 /** Typed, string-valued facts a refusal may carry beside its code (money as integer text). Never part of the message. */
 export type InventoryErrorDetails = Readonly<Record<string, string | readonly string[]>>;
