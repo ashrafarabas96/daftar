@@ -434,10 +434,30 @@ async function sums(q: Queryable): Promise<{ movements: string; cache: string }>
 
 const isTransfer = (k: string): boolean => k === 'transfer_in' || k === 'transfer_out';
 
+/**
+ * P3-S8 R-B1a (docs/PHASE_3_S8_CONTRACT.md Annex R §2.8, pin 16). Since 0069 a
+ * `manual_adjustment` entry with a line on the Inventory system account is
+ * refused at COMMIT once the business has a stock movement — and H-5 posts
+ * exactly that, after the movements, as its way of putting the stored values
+ * through the real journal. Production never does this (the Inventory account
+ * belongs to the inventory domain after the first movement); the composite
+ * does it only to read the stored values back through the GL. So, inside the
+ * composite's own rolled-back transaction and nowhere else, the R-B1a trigger
+ * is disabled before the postings. The case "the undisabled composite is
+ * refused" below keeps the guard's refusal of this very shape observable.
+ */
+const R_B1A_TRIGGER = 'journal_entries_inventory_account_domain';
+
+async function disableInventoryAccountDomainGuard(c: Client): Promise<void> {
+  await c.query(`ALTER TABLE journal_entries DISABLE TRIGGER ${R_B1A_TRIGGER}`);
+}
+
 /** The full H-5 composite for one scenario, in the caller's rolled-back transaction. */
 async function composite(c: Client, s: Scenario, opts: { seedAll?: boolean } = {}): Promise<{ results: StepResult[]; ledger: Ledger }> {
   const results = await runSteps(c, s, opts);
   const nonTransfer = results.filter((r) => !isTransfer(r.step.kind));
+  // R-B1a (Annex R §2.8): rolled back with the transaction; see the note above.
+  await disableInventoryAccountDomainGuard(c);
   for (const r of nonTransfer) {
     const v = parseMinor(r.value);
     if (v !== 0n) await postInventoryValue(c, v);
@@ -573,6 +593,30 @@ describe('T-09 / T-11 — the vectors through R3, the journal and the GL (P:161,
       });
     });
   }
+
+  it('R-B1a (pin 16): the same composite WITHOUT disabling the domain guard is refused at COMMIT with accounting.inventory_account_domain_owned', async () => {
+    await withRolledBackFixture(async (c) => {
+      const scenario = must(SCENARIOS.find((s) => s.id === 'A'));
+      const results = await runSteps(c, scenario);
+      const posted = results
+        .filter((r) => !isTransfer(r.step.kind))
+        .map((r) => parseMinor(r.value))
+        .filter((v) => v !== 0n);
+      expect(posted.length, 'scenario A posts at least one Inventory line').toBeGreaterThan(0);
+      const enabled = must(
+        (
+          await c.query<{ tgenabled: string }>(`SELECT tgenabled FROM pg_trigger WHERE tgrelid = 'public.journal_entries'::regclass AND tgname = $1`, [
+            R_B1A_TRIGGER,
+          ])
+        ).rows[0],
+      ).tgenabled;
+      expect(enabled, 'the R-B1a trigger is enabled in this transaction').toBe('O');
+      // The guard is deferred: every posting is accepted at its statement ...
+      for (const v of posted) await postInventoryValue(c, v);
+      // ... and the transaction would not COMMIT.
+      expectRefused(await atCommit(c), 'P0001', 'accounting.inventory_account_domain_owned', 'A: COMMIT-time checks with the R-B1a guard on');
+    });
+  });
 
   it('T-11.N: a 6100 rounding line planted in-transaction is found by the same query (goes red)', async () => {
     await withRolledBackFixture(async (c) => {
