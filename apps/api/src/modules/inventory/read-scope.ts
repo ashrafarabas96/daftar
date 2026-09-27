@@ -65,7 +65,7 @@ export function likeEscaped(text: string): string {
  */
 export function quantityText(stored: string, decimals: number): string {
   const m = /^(-?)(\d+)(?:\.(\d+))?$/.exec(stored);
-  if (m === null) throw new Error('a stored quantity is not a decimal');
+  if (m === null) throw new AppError('INTERNAL_ERROR', 'Internal error', 500, { defect: 'a stored quantity is not a decimal' });
   const whole = m[2] ?? '0';
   const fraction = (m[3] ?? '').replace(/0+$/, '').padEnd(decimals, '0');
   const isZero = /^0+$/.test(whole) && /^0*$/.test(fraction);

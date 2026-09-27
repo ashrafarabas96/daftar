@@ -1,6 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { z } from 'zod';
-import { minorUnitsOf } from '@daftar/domain-core';
+import { AppError, minorUnitsOf } from '@daftar/domain-core';
 import { convertToBase, parseUnitCost } from '@daftar/inventory';
 import type {
   CurrencyAmountDto,
@@ -351,7 +351,8 @@ export class SupplierBalanceReadService {
       const baseExponent = minorUnitsOf(await readBaseCurrency(this.db, m));
       const proposal = proposeAllocation(
         open.map((r) => {
-          if (r.source_to_base_rate === null) throw new Error('a received purchase has no snapshot rate');
+          if (r.source_to_base_rate === null)
+            throw new AppError('INTERNAL_ERROR', 'Internal error', 500, { defect: 'a received purchase has no snapshot rate' });
           return { currency: r.currency_code, outstandingMinor: BigInt(r.outstanding), rateR10: parseUnitCost(r.source_to_base_rate) };
         }),
         q.currency,
