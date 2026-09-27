@@ -394,6 +394,19 @@ export function assertionFor(biz: Biz & { readonly userId: string }, cmd: S5Comm
 }
 
 /**
+ * The trace a command prepared on `q` runs under. One API request is one
+ * database transaction under one `app.business_transaction_id` (AL-35), and
+ * the S5 guards identify "this transaction" as (`created_at = now()`, trace)
+ * (0063 R-36, 0065 R-54). A harness transaction that runs several commands
+ * therefore keeps the trace its first command set; outside a transaction
+ * (or before any command set one) a fresh trace is minted.
+ */
+export async function transactionTrace(q: Queryable): Promise<string> {
+  const r = await q.query<{ t: string | null }>(`SELECT nullif(current_setting('app.business_transaction_id', true), '') AS t`);
+  return r.rows[0]?.t ?? randomUUID();
+}
+
+/**
  * The H-1 calling convention in the CALLER's transaction: scope GUCs, trace
  * and carrier, `SET LOCAL ROLE daftar_app`, the entry routine, `RESET ROLE`.
  */
@@ -593,7 +606,7 @@ export async function prepareReturn(q: Queryable, biz: S3Business, purchaseId: s
       stock: must(stocks[i]),
     })),
   });
-  const trace = input.trace ?? randomUUID();
+  const trace = input.trace ?? (await transactionTrace(q));
   const returnId = input.returnId ?? randomUUID();
   const documentDate = input.documentDate ?? (await today(q));
   const cmd: ReturnCommand = {
@@ -786,7 +799,7 @@ export async function prepareReversal(
     totalValueMinor: parseMinor(p.total_base_minor),
     lines,
   };
-  return { cmd, original: await entrySnapshot(q, biz.businessId, originalEntryId), trace: o.trace ?? randomUUID() };
+  return { cmd, original: await entrySnapshot(q, biz.businessId, originalEntryId), trace: o.trace ?? (await transactionTrace(q)) };
 }
 
 /** The Phase 2 reversal assertion `purchase.reverse` mints (the real `mintDomainReversalAssertion`, R-B2a). */
