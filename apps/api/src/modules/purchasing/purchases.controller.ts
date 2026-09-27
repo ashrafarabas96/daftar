@@ -33,7 +33,6 @@ import { PurchaseReceiptService } from './purchase-receipt.service';
 import { PurchaseReturnService } from './purchase-return.service';
 import { PurchaseReversalService } from './purchase-reversal.service';
 import { PurchasingReadService } from './purchasing-reads';
-import type { SupplierReturnReadPort } from './supplier-returns.controller';
 
 /**
  * Purchases: draft → received | cancelled (PHASE_3_S4_CONTRACT A-04, A-12,
@@ -82,7 +81,7 @@ export class PurchasesController {
     @Inject(PurchaseReceiptService) private readonly receipts: PurchaseReceiptService,
     @Inject(PurchaseReturnService) private readonly returns: PurchaseReturnService,
     @Inject(PurchaseReversalService) private readonly reversals: PurchaseReversalService,
-    @Inject(PurchasingReadService) private readonly reads: PurchasingReadService & SupplierReturnReadPort,
+    @Inject(PurchasingReadService) private readonly reads: PurchasingReadService,
   ) {}
 
   /** Creates (`expectedRevision: 0`) or replaces in full a draft. A draft moves no stock and posts nothing (L:737). */

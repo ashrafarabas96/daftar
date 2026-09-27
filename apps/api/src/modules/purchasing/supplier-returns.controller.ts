@@ -4,28 +4,8 @@ import type { Page, SupplierCreditNoteDto, SupplierReturnDto } from '@daftar/sha
 import { Membership, RequiresPermission } from '../../common/guards';
 import type { MembershipContext } from '../tenancy/tenancy.service';
 import { strictUuidParam } from '../inventory/canonical-id';
-import { SupplierCreditNoteListQuerySchema, type SupplierCreditNoteListQuery, type SupplierReturnListQuery } from './purchasing.schemas';
+import { SupplierCreditNoteListQuerySchema } from './purchasing.schemas';
 import { PurchasingReadService } from './purchasing-reads';
-
-/**
- * The P3-S5 reads the controllers need from `PurchasingReadService`
- * (PHASE_3_S5_CONTRACT A-19, §4.3: `purchasing-reads.ts` owns them). Each
- * re-checks its view permission and applies its own scope rule, as the S4
- * reads do:
- *
- * - `listPurchaseReturns`: `purchases.view` and the purchase's warehouse in
- *   scope; an out-of-scope purchase reads as `purchase.not_found`;
- * - `getSupplierReturn`: `purchases.view` and the return's warehouse (or the
- *   purchase's) in scope; an out-of-scope return reads as not found, so the
- *   answer does not reveal it;
- * - `listSupplierCreditNotes`: `suppliers.view` and business-wide branch scope
- *   (the S4 TL-4 precedent), re-checked whatever the caller did.
- */
-export interface SupplierReturnReadPort {
-  listPurchaseReturns(m: MembershipContext, purchaseId: string, q: SupplierReturnListQuery): Promise<Page<SupplierReturnDto>>;
-  getSupplierReturn(m: MembershipContext, returnId: string): Promise<SupplierReturnDto>;
-  listSupplierCreditNotes(m: MembershipContext, supplierId: string, q: SupplierCreditNoteListQuery): Promise<Page<SupplierCreditNoteDto>>;
-}
 
 /**
  * Supplier returns read by their own id (PHASE_3_S5_CONTRACT A-19). A return
@@ -40,7 +20,7 @@ export interface SupplierReturnReadPort {
  */
 @Controller('/v1/supplier-returns')
 export class SupplierReturnsController {
-  constructor(@Inject(PurchasingReadService) private readonly reads: SupplierReturnReadPort) {}
+  constructor(@Inject(PurchasingReadService) private readonly reads: PurchasingReadService) {}
 
   @Get(':returnId')
   @RequiresPermission('purchases.view')
@@ -63,7 +43,7 @@ export class SupplierReturnsController {
  */
 @Controller('/v1/suppliers')
 export class SupplierCreditNotesController {
-  constructor(@Inject(PurchasingReadService) private readonly reads: SupplierReturnReadPort) {}
+  constructor(@Inject(PurchasingReadService) private readonly reads: PurchasingReadService) {}
 
   @Get(':supplierId/credit-notes')
   @RequiresPermission('suppliers.view')
