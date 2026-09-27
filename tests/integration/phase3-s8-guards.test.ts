@@ -1,4 +1,4 @@
-import { execFileSync, spawnSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative } from 'node:path';
@@ -27,6 +27,7 @@ import {
   truthTables,
 } from '../../scripts/guards/inventory-writer-authority';
 import { PHASE2_PREFIX_END } from '../../scripts/phase2-prefix';
+import { deliveredFiles } from '../helpers/delivered-files';
 
 /**
  * T-14 — P3-S8 contract A-18 (a)–(e): every widened guard FIRES on a planted
@@ -414,11 +415,9 @@ describe('end to end: check:guards refuses each planted violation, and passes th
     for (const dir of temporaries) rmSync(dir, { recursive: true, force: true });
   });
   const files = (): string[] =>
-    execFileSync('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard'], { cwd: ROOT, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 })
-      .split('\0')
-      .filter(
-        (rel) => rel !== '' && (rel.startsWith('scripts/') || rel.startsWith('infrastructure/') || rel.startsWith('apps/') || rel.startsWith('packages/')),
-      );
+    deliveredFiles(ROOT).filter(
+      (rel) => rel !== '' && (rel.startsWith('scripts/') || rel.startsWith('infrastructure/') || rel.startsWith('apps/') || rel.startsWith('packages/')),
+    );
   const copy = (): string => {
     const root = mkdtempSync(join(tmpdir(), 'p3s8-guards-'));
     temporaries.push(root);

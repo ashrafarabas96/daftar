@@ -32,11 +32,12 @@
  * The in-memory cases first prove the §2.11 statement reader itself, on the
  * real S8 migration and on single-edit variants of it.
  */
-import { execFileSync, spawnSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
+import { deliveredFiles as deliveredFilesOf } from '../helpers/delivered-files';
 import { PREMORTEM_MATRIX, S8_MIGRATION_NAME, s8MigrationContentProblems, splitSqlStatements } from '../../scripts/phase3-s8-gate';
 
 const REPO = join(__dirname, '../..');
@@ -168,12 +169,8 @@ afterAll(() => {
   for (const dir of temporaries) rmSync(dir, { recursive: true, force: true });
 });
 
-/** What a checkout of this branch contains: tracked, or untracked and not ignored. */
-function deliveredFiles(): string[] {
-  return execFileSync('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard'], { cwd: REPO, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 })
-    .split('\0')
-    .filter((rel) => rel !== '');
-}
+/** What a checkout of this branch, or an extracted release candidate, contains. */
+const deliveredFiles = (): string[] => deliveredFilesOf(REPO);
 
 /** A hard-linked copy of every delivered file. */
 function cleanCheckout(): string {
