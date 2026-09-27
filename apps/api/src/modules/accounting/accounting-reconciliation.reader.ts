@@ -2,6 +2,7 @@ import { Inject, Injectable } from '@nestjs/common';
 import type { PoolClient } from 'pg';
 import {
   ALL_RECONCILIATION_CHECKS,
+  DOMAIN_SOURCE_TYPES,
   NATIVE_SOURCE_TYPES,
   ReconciliationEnumerationError,
   ReconciliationUnavailableError,
@@ -417,6 +418,11 @@ export function runReconciliationCheck(c: PoolClient, businessId: string, checkI
     // that can actually drift — that the journal holds no source type the
     // running application no longer recognises. A type deleted from the
     // code while history still carries it is found here.
+    //
+    // The system knows the Phase 2 native types AND the Phase 3 domain types
+    // (P3-S9 data-integrity review F-1: the domain types were never added
+    // here, so every business with an inventory, purchase or supplier
+    // posting answered `discrepancy`).
     case 'R-ACC-06':
       return countAndSample(
         c,
@@ -424,7 +430,7 @@ export function runReconciliationCheck(c: PoolClient, businessId: string, checkI
              FROM journal_entries e
             WHERE e.business_id = $1
               AND e.source_type <> ALL ($2::text[])`,
-        [businessId, [...NATIVE_SOURCE_TYPES]],
+        [businessId, [...NATIVE_SOURCE_TYPES, ...DOMAIN_SOURCE_TYPES]],
       );
 
     // ── R-ACC-07 ────────────────────────────────────────────────────────

@@ -16,7 +16,7 @@
  *     `unavailable` and say so — the checks cannot pass by reading nothing.
  */
 import { Pool, type Client } from 'pg';
-import { NO_CORRECTION_NOTICE } from '@daftar/accounting';
+import { ALL_RECONCILIATION_CHECK_IDS, NO_CORRECTION_NOTICE } from '@daftar/accounting';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { ensurePostgres, ownerPool, reconcilerDbUrl, resetData } from '../helpers/test-app';
 import { damageCommand, must, ownerClient, seedS3World, today, type Queryable, type S3Business } from '../helpers/inventory-commands';
@@ -143,6 +143,18 @@ describe('T-06 R-INV-01..05 over the long mixed sequence', () => {
     expect(run.businessCount).toBe(seen.size);
     expect(run.results.length).toBe(seen.size * R_INV.length);
     const bad = run.results.filter((r) => r.status !== 'ok').map((r) => `${r.businessId} ${r.checkId} ${r.status} ${r.errorCode ?? ''}`);
+    expect(bad).toEqual([]);
+  });
+
+  it('all fourteen checks, the nine Phase 2 ones included, are ok for every business the reader enumerates', async () => {
+    // P3-S9 data-integrity review F-1: R-ACC-06 knew only the Phase 2 native
+    // source types, so every business carrying a Phase 3 posting answered
+    // `discrepancy`. The production service runs all fourteen in one pass.
+    const run = await runAll(reconciler, ALL_RECONCILIATION_CHECK_IDS);
+    const seen = new Set(run.results.map((r) => r.businessId));
+    for (const biz of [A, A2, B]) expect(seen.has(biz.businessId), biz.businessId).toBe(true);
+    expect(run.results.length).toBe(seen.size * ALL_RECONCILIATION_CHECK_IDS.length);
+    const bad = run.results.filter((r) => r.status !== 'ok').map((r) => `${r.businessId} ${r.checkId} ${r.status} ${r.offendingCount} ${r.errorCode ?? ''}`);
     expect(bad).toEqual([]);
   });
 
