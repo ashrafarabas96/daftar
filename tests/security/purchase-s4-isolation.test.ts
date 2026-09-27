@@ -15,8 +15,9 @@
  *     per-business key: creating it in X makes X's own supplier and leaves
  *     A's untouched).
  * Each DENY leaves both businesses' S4 state unchanged. Row security then
- * shows `daftar_app` only its own business's S4 rows. Every case is rolled
- * back.
+ * shows `daftar_app` only its own business's S4 rows, and the restrictive
+ * isolation is the four per-command `business_isolation_{read,insert,update,
+ * delete}` policies of R-35. Every case is rolled back.
  */
 import type { Client } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -195,6 +196,30 @@ describe('row security on the S4 tables and the two S2 coverage tables', () => {
     );
     expect(r.rows).toHaveLength(8);
     for (const row of r.rows) expect({ on: row.on, forced: row.forced }, row.t).toEqual({ on: true, forced: true });
+  });
+
+  it('the restrictive business isolation is split per command (R-35): only the read policy admits the internal principal', async () => {
+    const tables = [...S4_TABLES, 'stock_source_bridge_purchase', 'stock_source_bridge_negative_inventory_cost_adjustment'];
+    const r = await ownerPool().query<{ t: string; name: string; cmd: string; restrictive: boolean; text: string }>(
+      `SELECT tablename::text AS t, policyname::text AS name, cmd::text AS cmd, permissive = 'RESTRICTIVE' AS restrictive,
+              coalesce(qual, '') || ' ' || coalesce(with_check, '') AS text
+         FROM pg_policies WHERE schemaname = 'public' AND tablename = ANY($1::text[]) AND policyname LIKE 'business_isolation%'
+        ORDER BY 1, 2`,
+      [tables],
+    );
+    for (const t of tables) {
+      const mine = r.rows.filter((x) => x.t === t);
+      expect(
+        mine.map((x) => [x.name, x.cmd, x.restrictive]),
+        t,
+      ).toEqual([
+        ['business_isolation_delete', 'DELETE', true],
+        ['business_isolation_insert', 'INSERT', true],
+        ['business_isolation_read', 'SELECT', true],
+        ['business_isolation_update', 'UPDATE', true],
+      ]);
+      for (const p of mine) expect(p.text.includes('daftar_inventory_internal'), `${t}.${p.name} admits the internal principal`).toBe(p.cmd === 'SELECT');
+    }
   });
 
   it('with no business GUC, daftar_app sees no S4 row at all', async () => {
