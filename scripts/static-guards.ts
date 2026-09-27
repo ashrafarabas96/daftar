@@ -29,6 +29,7 @@ import { findPostingSurfaceViolations } from './guards/posting-surface';
 import { checkInventoryDefinerContract, INVENTORY_INVOKER_EXCEPTIONS } from './guards/inventory-definer-contract';
 import { findInventoryArithmeticViolations, INVENTORY_ARITHMETIC_WHY, isInventoryMigration } from './guards/inventory-arithmetic';
 import { checkInventoryWriterAuthority } from './guards/inventory-writer-authority';
+import { findResponsiveViolations, responsiveSurface } from './guards/web-responsive';
 
 const ROOT = join(__dirname, '..');
 let failures = 0;
@@ -474,7 +475,10 @@ for (const dir of ['apps/api/src', 'apps/web/src', 'apps/admin/src', 'packages']
 // history on `is_active`, and never turns an amount into a double. G-4 says
 // "application code must not write the journal" repository-wide; this says
 // the narrower things that are only wrong in a report, and says them where a
-// report is.
+// report is. P3-S7 (contract §7.2(b)) widens the surface to the two merchant
+// read modules, inventory-reads.ts and supplier-balance-reads.ts — not
+// purchasing-reads.ts, which holds S6's command-side FX binding — and adds
+// the no-module-level-result-cache rule.
 {
   const reportFiles: Record<string, string> = {};
   for (const surface of ['apps/api/src', 'packages']) {
@@ -489,6 +493,13 @@ for (const dir of ['apps/api/src', 'apps/web/src', 'apps/admin/src', 'packages']
   // A guard watching nothing is decorative.
   if (readSurfaceFiles(reportFiles).length === 0) {
     fail('read-surface', 'apps/api/src', 'no accounting reporting module found — G-6 is watching nothing');
+  }
+  // A merchant read module that exists must be one G-6 watches.
+  const surface = new Set(readSurfaceFiles(reportFiles));
+  for (const path of Object.keys(reportFiles)) {
+    if (/(^|[\\/])(inventory-reads|supplier-balance-reads)\.ts$/.test(path) && !surface.has(path)) {
+      fail('read-surface', path, 'a P3-S7 merchant read module is not on the G-6 surface');
+    }
   }
 }
 
@@ -560,8 +571,25 @@ for (const dir of ['apps/api/src', 'apps/web/src', 'apps/admin/src', 'packages']
   }
 }
 
+// Rule 23 — the P3-S7 responsive law (contract §7.2(c), A-16): over the S7
+// web files, no physical-direction style, no fixed width above 20rem, no
+// 100vw, no design-system Table, no raw clickable element, no small Button
+// and no Number()/parseFloat on a quantity or amount. The rendered half is
+// the SSR phone-width suite (apps/web/test, T-15/T-16).
+{
+  const webFiles: Record<string, string> = {};
+  for (const f of tsFiles(join(ROOT, 'apps/web/src'))) webFiles[relative(ROOT, f).split('\\').join('/')] = readFileSync(f, 'utf8');
+  for (const v of findResponsiveViolations(webFiles)) {
+    fail('web-responsive', join(ROOT, v.file), `line ${v.line}: ${v.rule}: found \`${v.evidence}\` — ${v.why} (Rule 23)`);
+  }
+  // A guard watching nothing is decorative: the Phase 3 client libraries exist from P3-S7 on.
+  if (responsiveSurface(webFiles).length === 0) {
+    fail('web-responsive', 'apps/web/src', 'no S7 web file found — rule 23 is watching nothing');
+  }
+}
+
 if (failures > 0) {
   console.error(`\nSTATIC GUARDS: FAIL (${failures})`);
   process.exit(1);
 }
-console.log('STATIC GUARDS: PASS (22 rules)');
+console.log('STATIC GUARDS: PASS (23 rules)');

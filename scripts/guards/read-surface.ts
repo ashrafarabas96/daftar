@@ -32,10 +32,20 @@
  * use OFFSET, the FX module exists to look up current rates, and the chart
  * editor must filter on `is_active` precisely because it decides what may be
  * posted to next.
+ *
+ * P3-S7 (contract §7.2(b), coordinator ruling on G-6): the surface is widened
+ * to the two merchant read modules — `inventory-reads.ts` (live stock,
+ * stocktakes, items) and `supplier-balance-reads.ts` (supplier AP, balance in
+ * the merchant's favour, open purchases and the payable SQL builder). Each
+ * rule's reason gains its stock and supplier counterpart, and one rule is
+ * added: no module-level result cache. `purchasing-reads.ts` is NOT on the
+ * surface: it holds S6's command-side FX binding (`readSettlementFx`), which
+ * must look the current rate up.
  */
 
-/** Anything matching this is a reporting module and is held to the rules below. */
-export const READ_SURFACE = /(accounting-reports\.|accounting[/\\]reports\.|packages[/\\]accounting[/\\]src[/\\]reports\.ts$)/;
+/** Anything matching this is a reporting module and is held to the rules below. The accounting alternatives are unchanged since P2-S7. */
+export const READ_SURFACE =
+  /(accounting-reports\.|accounting[/\\]reports\.|packages[/\\]accounting[/\\]src[/\\]reports\.ts$|inventory[/\\]inventory-reads\.ts$|purchasing[/\\]supplier-balance-reads\.ts$)/;
 
 /** Every table inside the accounting perimeter that a report must not write. */
 export const ACCOUNTING_TABLES = [
@@ -50,6 +60,41 @@ export const ACCOUNTING_TABLES = [
   'accounting_periods',
   'accounting_fx_rates',
 ] as const;
+
+/**
+ * Every stock and supplier table a merchant read (P3-S7) must not write: the
+ * stock ledger and its cache, the movement and purchase documents, and the
+ * settlement records. A GET that "repairs" `stock_levels` or stamps a
+ * purchase is a mutation nobody asked for.
+ */
+export const MERCHANT_READ_TABLES = [
+  'stock_levels',
+  'stock_movements',
+  'stock_deficits',
+  'stocktakes',
+  'stocktake_lines',
+  'suppliers',
+  'purchases',
+  'purchase_lines',
+  'purchase_landed_costs',
+  'supplier_returns',
+  'supplier_return_lines',
+  'supplier_credit_notes',
+  'purchase_reversals',
+  'supplier_payments',
+  'supplier_payment_allocations',
+  'supplier_credit_allocations',
+  'supplier_refunds',
+  'payment_methods',
+] as const;
+
+/**
+ * A module-level result cache (P3-S7 T-02): a top-level `Map`/`Set`/
+ * `WeakMap`/`WeakSet`, an import of `redis`, `ioredis` or `lru-cache`, or a
+ * memoize decorator or helper. Exported so T-02 applies the very same pattern.
+ */
+export const MODULE_CACHE =
+  /^(?:export\s+)?(?:const|let|var)\s+\w+(?:\s*:[^=\n]+)?\s*=\s*new\s+(?:Map|Set|WeakMap|WeakSet)\b|\bfrom\s+['"](?:redis|ioredis|lru-cache)['"]|\brequire\(\s*['"](?:redis|ioredis|lru-cache)['"]\s*\)|@Memoize\b|\bmemoize\s*\(/m;
 
 export interface ReadSurfaceRule {
   readonly name: string;
@@ -88,7 +133,13 @@ function historicalSql(source: string): string[] {
   const out: string[] = [];
   for (const m of source.matchAll(/`([^`]*)`/g)) {
     const text = m[1] ?? '';
-    if (/\bjournal_(entries|lines)\b/i.test(text)) out.push(text);
+    // P3-S7: the stock ledger and the supplier settlement records are history too.
+    if (
+      /\b(journal_(entries|lines)|stock_movements|purchase_ap_outstanding|supplier_credit_notes|supplier_payment_allocations|supplier_credit_allocations)\b/i.test(
+        text,
+      )
+    )
+      out.push(text);
   }
   return out;
 }
@@ -98,23 +149,29 @@ const first = (source: string, re: RegExp): string | null => re.exec(source)?.[0
 export const READ_SURFACE_RULES: readonly ReadSurfaceRule[] = [
   {
     name: 'no write to an accounting table',
-    why: 'a GET that writes is a mutation the merchant did not ask for and cannot audit (§39, §54)',
+    why: 'a GET that writes is a mutation the merchant did not ask for and cannot audit (§39, §54); the same holds for a stock or supplier read that repairs stock_levels or stamps a purchase (P3-S7 A-03)',
     offends: (source) =>
-      first(source, new RegExp(`\\b(INSERT\\s+INTO|UPDATE|DELETE\\s+FROM|TRUNCATE(?:\\s+TABLE)?)\\s+(?:public\\.)?(${ACCOUNTING_TABLES.join('|')})\\b`, 'i')),
+      first(
+        source,
+        new RegExp(
+          `\\b(INSERT\\s+INTO|UPDATE|DELETE\\s+FROM|TRUNCATE(?:\\s+TABLE)?)\\s+(?:public\\.)?(${[...ACCOUNTING_TABLES, ...MERCHANT_READ_TABLES].join('|')})\\b`,
+          'i',
+        ),
+      ),
   },
   {
     name: 'no OFFSET pagination',
-    why: 'OFFSET reads and discards what it skips, and a row appended mid-walk shifts every later page — in a ledger that is a line nobody sees (§28)',
+    why: 'OFFSET reads and discards what it skips, and a row appended mid-walk shifts every later page — in a ledger that is a line nobody sees (§28); in a stock or supplier list it is an item or a supplier nobody sees (P3-S7 §2(3))',
     offends: (source) => first(source, /\bOFFSET\s+[$\d]/i),
   },
   {
     name: 'no current exchange-rate lookup',
-    why: 'the rate is frozen on the line; looking one up now would let a rate entered today rewrite a posting from March (§30, §52)',
+    why: "the rate is frozen on the line; looking one up now would let a rate entered today rewrite a posting from March (§30, §52); a supplier balance is read in each purchase currency, never re-converted at today's rate (P3-S7 §2(3))",
     offends: (source) => first(source, /accounting_fx_rate_lookup\s*\(/i),
   },
   {
     name: 'no historical filter on accounts.is_active',
-    why: '`is_active` decides what may be posted to NEXT; filtering history on it deletes a closed shop from the books (§33)',
+    why: '`is_active` decides what may be posted to NEXT; filtering history on it deletes a closed shop from the books (§33), and a closed payment method or an inactive supplier from what is still owed (P3-S7 §2(3))',
     // Scoped to HISTORICAL sql — a query that reads the journal. The chart
     // list legitimately filters on `is_active`, because a caller asking
     // "what may I post to" is asking exactly that question; a query that
@@ -133,20 +190,26 @@ export const READ_SURFACE_RULES: readonly ReadSurfaceRule[] = [
   },
   {
     name: 'no floating-point parse of an amount',
-    why: 'a cumulative total passes 2^53 long before it passes what a merchant can earn, and a double rounds it in silence (§41)',
+    why: 'a cumulative total passes 2^53 long before it passes what a merchant can earn, and a double rounds it in silence (§41); a four-decimal quantity loses its last digit the same way (P3-S7 §2(3))',
     // Keyed on what is being parsed, not on the function. A page size and a
     // line number are small bounded integers and `number` is the right type
     // for them; money is not, ever.
-    offends: (source) => first(source, /\b(?:Number|parseInt|parseFloat)\s*\(\s*[^),]*(?:minor|amount|debit|credit|balance|total|net|sum|rate)[^),]*[),]/i),
+    offends: (source) =>
+      first(source, /\b(?:Number|parseInt|parseFloat)\s*\(\s*[^),]*(?:minor|amount|debit|credit|balance|total|net|sum|rate|qty|quantity|on_?hand)[^),]*[),]/i),
   },
   {
     name: 'no persisted or materialized balance source',
-    why: 'AL-15: every figure is aggregated from the journal at the moment it is asked for; a stored one is a second truth that can drift (§11)',
+    why: 'AL-15: every figure is aggregated from the journal at the moment it is asked for; a stored one is a second truth that can drift (§11). Stock is read from stock_levels, the one named cache, and supplier figures from the ledger and purchase_ap_outstanding at request time (P3-S7 A-03)',
     offends: (source) =>
       first(
         source,
-        /\b(accounting_balances|account_balances|running_balances|trial_balance_cache|ledger_cache|balance_snapshots|CREATE\s+MATERIALIZED\s+VIEW)\b/i,
+        /\b(accounting_balances|account_balances|running_balances|trial_balance_cache|ledger_cache|balance_snapshots|stock_snapshots|stock_level_snapshots|supplier_balance_cache|supplier_balance_snapshots|CREATE\s+MATERIALIZED\s+VIEW)\b/i,
       ),
+  },
+  {
+    name: 'no module-level result cache',
+    why: 'a Map, Set or LRU held by the module, or a redis/memoize layer, answers the next request from a copy that a commit has already made stale (P3-S7 A-03(4), T-02)',
+    offends: (source) => first(source, MODULE_CACHE),
   },
 ];
 
