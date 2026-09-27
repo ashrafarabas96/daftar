@@ -254,18 +254,18 @@ jobs:
         run: npm run gate:phase2:s8
         env:
           PG_PORT: '5432'
-      # P3-S3 — transfers, adjustments, damage, stocktake and inventory
-      # opening, a PERMANENT gate since the P3-S3 freeze. Proves 0061–0062 at
-      # their accepted digests (frozenThrough a floor at 0062), the exact
-      # source-type, operation-kind and mapping registrations, EXECUTE on the
-      # seven entry routines only, the document tables, bridges, guards and
-      # TD-13 try-lock prunes by name, then the accounting package and the
-      # transfer, adjustment, stocktake, opening, atomicity, idempotency,
-      # concurrency, isolation, authority, source-guard and prune suites. It
-      # composes the permanent P3-S2 gate (0059–0060, the stock ledger), and
-      # through it P3-S1, P2-S8 and the chain back to Phase 1.
-      - name: Phase 3 slice gate — P3-S3 (composes P3-S2)
-        run: npm run gate:phase3:s3
+      # P3-S4 — suppliers, purchases, receiving, landed cost and deficit
+      # coverage, a PERMANENT gate since the P3-S4 freeze. Proves 0063–0064 at
+      # their accepted digests (frozenThrough a floor at 0064), the exact
+      # registrations and EXECUTE matrix, OD-03 bounded by a CHECK with no tax
+      # object, every table, bridge, INSERT-judging guard and routine by name,
+      # the replaced gaps function keeping every P3-S3 digest, the reversal
+      # guard naming the four domain types, then both package suites, every
+      # purchase-s4 suite and Budget A in isolation. It composes the permanent
+      # P3-S3 gate, and through it P3-S2, P3-S1, P2-S8 and the chain back to
+      # Phase 1.
+      - name: Phase 3 slice gate — P3-S4 (composes P3-S3)
+        run: npm run gate:phase3:s4
         env:
           PG_PORT: '5432'
       - name: Tampered-migration hard-fail proof

@@ -57,7 +57,10 @@ const [SOURCES, COMMANDS] = S4_MIGRATIONS;
 const S4_BOUNDARY = COMMANDS;
 
 /** The two P3-S4 migrations at their accepted digests. Empty while P3-S4 is a candidate; filled in the freeze commit only. */
-const S4_ACCEPTED: Readonly<Record<string, string>> = {};
+const S4_ACCEPTED: Readonly<Record<string, string>> = {
+  '0063_purchases_suppliers_sources.sql': 'bf505fbad5ac4b32d1de2dba729fcd61f7a0651b3b99c8f38e5c2c4980c0a5fe',
+  '0064_purchase_commands.sql': 'b82e01810568390d21156ae555a7fbd35a990e33d8b280361bc85eaa6c7074ad',
+};
 
 const ACCEPTED = Object.keys(S4_ACCEPTED).length > 0;
 
