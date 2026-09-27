@@ -27,7 +27,7 @@
  * master data).
  */
 import { createHash, randomUUID } from 'node:crypto';
-import type { Pool } from 'pg';
+import type { Client, Pool } from 'pg';
 import { expect } from 'vitest';
 import type { Response } from 'supertest';
 import { mintDomainPostingAssertion, type PostingCommand } from '@daftar/accounting';
@@ -69,10 +69,10 @@ import {
 } from '../../apps/api/src/modules/purchasing/supplier-settlement-posting';
 import type { SettlementFx } from '../../apps/api/src/modules/purchasing/purchasing-reads';
 import { grantFeature, mintTestInventoryAssertion, ownerPool, raiseLimit, type TestApp } from './test-app';
-import { attempt, asMember, must, today, type HttpActor, type Outcome, type Queryable, type S3Business } from './inventory-commands';
+import { attempt, asMember, must, ownerClient, today, type HttpActor, type Outcome, type Queryable, type S3Business } from './inventory-commands';
 import { testMinter } from './inventory-posting';
 import { postInTx, s4Counts, type Counts } from './purchase-commands';
-import { S5_BRIDGES, S5_TABLES } from './purchase-returns';
+import { receivedPurchase, returnGoods, S5_BRIDGES, S5_TABLES, type ReceivedPurchase, type ReceiveOptions } from './purchase-returns';
 import { enterRate, rateIdFor } from './accounting-fx';
 import { addMerchantVariant, addTrackedProduct, addVariantProduct, addWarehouse, createProduct, recordBusinessOwner, settle } from './stock-ledger';
 
@@ -1323,6 +1323,54 @@ export async function s6SystemKeys(q: Queryable, businessId: string): Promise<st
     [businessId, [...S6_SOURCE_TYPES]],
   );
   return r.rows.map((x) => x.k ?? '(custom)').sort();
+}
+
+// ── the SQL world: committed setups ───────────────────────────────────────
+
+/** BEGIN on a fresh owner connection, run, COMMIT (ROLLBACK and rethrow on a refusal). */
+export async function committed<T>(fn: (c: Client) => Promise<T>): Promise<T> {
+  const c = await ownerClient();
+  try {
+    await c.query('BEGIN');
+    const value = await fn(c);
+    await c.query('COMMIT');
+    return value;
+  } catch (e) {
+    await c.query('ROLLBACK');
+    throw e;
+  } finally {
+    await c.end();
+  }
+}
+
+/** Pay every open purchase amount of `purchaseId` with `paymentMethodId`, in the purchase currency, in the caller's transaction. */
+export async function payInFull(c: Queryable, biz: S3Business, purchaseId: string, supplierId: string, paymentMethodId: string): Promise<S6Call> {
+  const o = await outstandingOf(c, biz.businessId, purchaseId);
+  const currency = must(
+    (await c.query<{ c: string }>(`SELECT currency_code::text AS c FROM purchases WHERE business_id = $1 AND id = $2`, [biz.businessId, purchaseId])).rows[0],
+  ).c;
+  const call = await preparePay(c, biz, { supplierId, paymentMethodId, currency, allocations: [{ purchaseId, paymentAmountMinor: o.o }] });
+  await runS6(c, biz, call);
+  return call;
+}
+
+/**
+ * §5 `returnToCredit`, in SQL: a received purchase of `qty` pieces at
+ * `unitPriceMinor`, paid in full through `supplier_pay`, then `returnQty`
+ * returned through `purchase_return` — which, AP being settled, issues a real
+ * supplier credit note. In the caller's transaction.
+ */
+export async function sqlReturnToCredit(
+  c: Queryable,
+  biz: S3Business,
+  paymentMethodId: string,
+  o: ReceiveOptions & { readonly qty?: string; readonly unitPriceMinor?: string; readonly returnQty?: string } = {},
+): Promise<{ readonly purchase: ReceivedPurchase; readonly creditNoteId: string; readonly returnId: string }> {
+  const purchase = await receivedPurchase(c, biz, [{ variantId: biz.piece.variantId, qty: o.qty ?? '2', unitPriceMinor: o.unitPriceMinor ?? '1000' }], o);
+  await payInFull(c, biz, purchase.purchaseId, purchase.supplierId, paymentMethodId);
+  const ret = await returnGoods(c, biz, purchase.purchaseId, { lines: [{ purchaseLineId: must(purchase.lines[0]).lineId, qty: o.returnQty ?? '1' }] });
+  const returnId = ret.prepared.cmd.returnId;
+  return { purchase, creditNoteId: must(await creditNoteIdOf(c, biz.businessId, returnId), 'the return after a full payment issues a credit note'), returnId };
 }
 
 // ── concurrency (§5 settleConcurrently) ───────────────────────────────────
