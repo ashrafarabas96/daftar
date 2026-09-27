@@ -33,6 +33,7 @@ import { InventoryOpeningService } from '../modules/inventory/inventory-opening.
 import { InventoryMovementsController } from '../modules/inventory/inventory-movements.controller';
 import { SuppliersController } from '../modules/purchasing/suppliers.controller';
 import { PurchasesController } from '../modules/purchasing/purchases.controller';
+import { SupplierCreditNotesController, SupplierReturnsController } from '../modules/purchasing/supplier-returns.controller';
 import { purchasingProviders } from '../modules/purchasing/purchasing.module';
 
 /**
@@ -64,6 +65,8 @@ export class MerchantApiModule implements NestModule {
         InventoryMovementsController,
         SuppliersController,
         PurchasesController,
+        SupplierReturnsController,
+        SupplierCreditNotesController,
       ],
       providers: [
         ...coreProviders(config, options),
@@ -83,9 +86,10 @@ export class MerchantApiModule implements NestModule {
         InventoryAdjustmentService,
         InventoryStocktakeService,
         InventoryOpeningService,
-        // P3-S4: suppliers, purchase drafts, receipts and the live AP reads. The
-        // receipt mints through the same accounting minter and posts through the
-        // same adapter, on the accounting-aware inventory seam.
+        // P3-S4: suppliers, purchase drafts, receipts and the live AP reads;
+        // P3-S5: supplier returns and the purchase reversal. The receipt, the
+        // return and the reversal mint through the same accounting minter and
+        // post through the same adapters, on the accounting-aware inventory seam.
         ...purchasingProviders(),
         TenancyService,
         StructureService,

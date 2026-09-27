@@ -1,6 +1,16 @@
 import { Body, Controller, Get, HttpCode, Inject, Param, Post, Put, Query, Res, UsePipes } from '@nestjs/common';
 import type { Response } from 'express';
-import type { Page, PurchaseCommandResultDto, PurchaseDto, PurchasePayableDto, PurchaseReceiptDto, PurchaseSummaryDto } from '@daftar/shared-contracts';
+import type {
+  Page,
+  PurchaseCommandResultDto,
+  PurchaseDto,
+  PurchasePayableDto,
+  PurchaseReceiptDto,
+  PurchaseReversalResultDto,
+  PurchaseSummaryDto,
+  SupplierReturnDto,
+  SupplierReturnResultDto,
+} from '@daftar/shared-contracts';
 import { ZodValidationPipe } from '../../common/validation';
 import { Membership, RequiresPermission } from '../../common/guards';
 import type { MembershipContext } from '../tenancy/tenancy.service';
@@ -9,17 +19,25 @@ import { strictUuidParam } from '../inventory/canonical-id';
 import {
   PurchaseDraftValidationPipe,
   PurchaseListQuerySchema,
+  PurchaseReversalValidationPipe,
   PurchaseTransitionSchema,
+  SupplierReturnListQuerySchema,
+  SupplierReturnValidationPipe,
   type PurchaseDraftRequest,
+  type PurchaseReversalRequest,
   type PurchaseTransitionRequest,
+  type SupplierReturnRequest,
 } from './purchasing.schemas';
 import { PurchaseDraftService } from './purchase-draft.service';
 import { PurchaseReceiptService } from './purchase-receipt.service';
+import { PurchaseReturnService } from './purchase-return.service';
+import { PurchaseReversalService } from './purchase-reversal.service';
 import { PurchasingReadService } from './purchasing-reads';
+import type { SupplierReturnReadPort } from './supplier-returns.controller';
 
 /**
  * Purchases: draft → received | cancelled (PHASE_3_S4_CONTRACT A-04, A-12,
- * A-19, A-20).
+ * A-19, A-20), and received → reversed (PHASE_3_S5_CONTRACT A-04, A-09).
  *
  * The controller holds no business logic, exactly as the P3-S3 movement
  * controller (`inventory-movements.controller.ts`):
@@ -37,6 +55,23 @@ import { PurchasingReadService } from './purchasing-reads';
  *   untouched. Only a first save of a new draft is a creation (201); a
  *   replace or a replay answers 200.
  *
+ * P3-S5 adds the two commands on a received purchase and the purchase's
+ * returns (PHASE_3_S5_CONTRACT A-03, A-19), on the same rules:
+ *
+ * - a supplier return requires `purchases.return` at the route; the service
+ *   then authorizes `purchase.return` over the body's `warehouseId`, the
+ *   warehouse the goods leave, and over that warehouse only (TL-5). The
+ *   client-chosen return id is the idempotency key: 201 on create, 200 on
+ *   replay;
+ * - a purchase reversal requires `purchases.receive` at the route (undoing a
+ *   receipt is receipt authority, TL-4); the service then authorizes
+ *   `purchase.reverse` over the purchase's warehouse. Its identity is the
+ *   purchase, so it answers 200 like the receipt it undoes. The reason is
+ *   mandatory, refused at the DTO when absent or blank
+ *   (`purchase_reversal.reason_required`);
+ * - neither request carries an amount, a rate or a tax field (A-07, A-14:
+ *   BLOCKED BY OD-03); a stated one is an unknown key.
+ *
  * Refusals leave the services already typed and the global error filter
  * renders them. Nothing is caught here.
  */
@@ -45,7 +80,9 @@ export class PurchasesController {
   constructor(
     @Inject(PurchaseDraftService) private readonly drafts: PurchaseDraftService,
     @Inject(PurchaseReceiptService) private readonly receipts: PurchaseReceiptService,
-    @Inject(PurchasingReadService) private readonly reads: PurchasingReadService,
+    @Inject(PurchaseReturnService) private readonly returns: PurchaseReturnService,
+    @Inject(PurchaseReversalService) private readonly reversals: PurchaseReversalService,
+    @Inject(PurchasingReadService) private readonly reads: PurchasingReadService & SupplierReturnReadPort,
   ) {}
 
   /** Creates (`expectedRevision: 0`) or replaces in full a draft. A draft moves no stock and posts nothing (L:737). */
@@ -87,6 +124,50 @@ export class PurchasesController {
     @Body() body: PurchaseTransitionRequest,
   ): Promise<PurchaseCommandResultDto> {
     return this.drafts.cancel(m, strictUuidParam(purchaseId, 'purchaseId'), body, newBusinessTransactionId());
+  }
+
+  /**
+   * A supplier return of a received purchase: the goods leave the named
+   * warehouse at its current average, AP first and any excess as a supplier
+   * credit note, in one `supplier_return` entry (S5 A-10 – A-13).
+   */
+  @Post(':purchaseId/returns')
+  @RequiresPermission('purchases.return')
+  @UsePipes(new SupplierReturnValidationPipe())
+  async createReturn(
+    @Membership() m: MembershipContext,
+    @Param('purchaseId') purchaseId: string,
+    @Body() body: SupplierReturnRequest,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<SupplierReturnResultDto> {
+    const result = await this.returns.createReturn(m, strictUuidParam(purchaseId, 'purchaseId'), body, newBusinessTransactionId());
+    res.status(result.replayed ? 200 : 201);
+    return result;
+  }
+
+  /**
+   * `received → reversed`: the inverse movements at the original receipt cost
+   * and the Phase 2 reversal of the purchase entry, atomically, only when all
+   * four preconditions hold (S5 A-09).
+   */
+  @Post(':purchaseId/reversal')
+  @HttpCode(200)
+  @RequiresPermission('purchases.receive')
+  @UsePipes(new PurchaseReversalValidationPipe())
+  async reverse(
+    @Membership() m: MembershipContext,
+    @Param('purchaseId') purchaseId: string,
+    @Body() body: PurchaseReversalRequest,
+  ): Promise<PurchaseReversalResultDto> {
+    return this.reversals.reverse(m, strictUuidParam(purchaseId, 'purchaseId'), body, newBusinessTransactionId());
+  }
+
+  /** The purchase's supplier returns, as stored (S5 A-19). */
+  @Get(':purchaseId/returns')
+  @RequiresPermission('purchases.view')
+  async listReturns(@Membership() m: MembershipContext, @Param('purchaseId') purchaseId: string, @Query() query: unknown): Promise<Page<SupplierReturnDto>> {
+    const id = strictUuidParam(purchaseId, 'purchaseId');
+    return this.reads.listPurchaseReturns(m, id, SupplierReturnListQuerySchema.parse(query));
   }
 
   @Get()
