@@ -439,6 +439,11 @@ export function sqlOf(kind: S6Kind): string {
   return `SELECT ${RETURNING[kind]} FROM ${routineName(kind)}(${args})`;
 }
 
+/** The SQL type of each argument of a kind, in the routine's order. */
+export function castsOf(kind: S6Kind): readonly string[] {
+  return CASTS[kind];
+}
+
 /** The eight words `inventory_reason_words` derives from a text (eight NULLs for NULL). */
 export function reasonWords(text: string | null): InventoryPayloadField[] {
   if (text === null) return Array.from({ length: 8 }, (): InventoryPayloadField => ({ kind: 'null' }));
