@@ -70,7 +70,13 @@ export type InventoryS4OperationCode =
   | 'purchase.cancel'
   | 'purchase.receive';
 
-export type InventoryOperationCode = InventoryS1OperationCode | InventoryS3OperationCode | InventoryS4OperationCode;
+/**
+ * The two operation kinds P3-S5 registers (PHASE_3_S5_CONTRACT A-03, §2.6),
+ * one per entry routine of `0066`, named for the command (L:1926).
+ */
+export type InventoryS5OperationCode = 'purchase.return' | 'purchase.reverse';
+
+export type InventoryOperationCode = InventoryS1OperationCode | InventoryS3OperationCode | InventoryS4OperationCode | InventoryS5OperationCode;
 
 export const INVENTORY_S1_OPERATION_CODES: readonly InventoryS1OperationCode[] = [
   'inventory.configure_product',
@@ -98,10 +104,13 @@ export const INVENTORY_S4_OPERATION_CODES: readonly InventoryS4OperationCode[] =
   'purchase.receive',
 ];
 
+export const INVENTORY_S5_OPERATION_CODES: readonly InventoryS5OperationCode[] = ['purchase.return', 'purchase.reverse'];
+
 export const INVENTORY_OPERATION_CODES: readonly InventoryOperationCode[] = [
   ...INVENTORY_S1_OPERATION_CODES,
   ...INVENTORY_S3_OPERATION_CODES,
   ...INVENTORY_S4_OPERATION_CODES,
+  ...INVENTORY_S5_OPERATION_CODES,
 ];
 
 /** The literal first line of every stream. */
@@ -318,6 +327,47 @@ export const INVENTORY_PAYLOAD_SCHEMAS: Readonly<Record<InventoryOperationCode, 
       spec('catch_up_minor', 'integer'),
     ],
   ),
+  // P3-S5 (PHASE_3_S5_CONTRACT A-17). Every amount is an integer minor unit:
+  // `*_txn` in the purchase currency, the rest in base; `ppv` is signed. The
+  // return's reason is optional (eight NULL words), the reversal's required.
+  'purchase.return': withLines(
+    [
+      spec('return_id', 'uuid'),
+      spec('purchase_id', 'uuid'),
+      spec('warehouse_id', 'uuid'),
+      spec('document_date', 'integer'),
+      ...textWordSpecs('reason', true),
+      spec('credit_note_id', 'uuid', true),
+      spec('carrying_txn', 'integer'),
+      spec('ap_txn', 'integer'),
+      spec('ap_base', 'integer'),
+      spec('credit_txn', 'integer'),
+      spec('credit_base', 'integer'),
+      spec('inventory_value', 'integer'),
+      spec('ppv', 'integer'),
+      spec('line_count', 'integer'),
+    ],
+    [
+      spec('return_line_id', 'uuid'),
+      spec('purchase_line_id', 'uuid'),
+      spec('variant_id', 'uuid'),
+      spec('qty_q4', 'integer'),
+      spec('carrying_txn', 'integer'),
+      spec('value_out', 'integer'),
+    ],
+  ),
+  'purchase.reverse': withLines(
+    [
+      spec('purchase_id', 'uuid'),
+      spec('warehouse_id', 'uuid'),
+      spec('reversal_date', 'integer'),
+      ...textWordSpecs('reason', false),
+      spec('original_entry_id', 'uuid'),
+      spec('total_value', 'integer'),
+      spec('line_count', 'integer'),
+    ],
+    [spec('line_id', 'uuid'), spec('variant_id', 'uuid'), spec('qty_q4', 'integer'), spec('value', 'integer')],
+  ),
 };
 
 /**
@@ -338,6 +388,23 @@ export const INVENTORY_SERVER_DERIVED_FIELDS: readonly string[] = ['expected_val
  */
 export const INVENTORY_OPERATION_INTENT_FIELDS: Readonly<Partial<Record<InventoryOperationCode, readonly string[]>>> = Object.freeze({
   'purchase.receive': Object.freeze(['purchase_id', 'warehouse_id', 'draft_revision']),
+  // P3-S5 (PHASE_3_S5_CONTRACT A-17): a return's intent is its header
+  // identity, date and reason, and per line its id, purchase line and
+  // quantity; every amount, the credit note id and the variant are derived.
+  // A reversal's intent is the purchase, its warehouse, the date and the
+  // reason; its lines are the purchase's, so the whole group is derived.
+  'purchase.return': Object.freeze([
+    'return_id',
+    'purchase_id',
+    'warehouse_id',
+    'document_date',
+    ...Array.from({ length: 8 }, (_, i) => `reason_w${i + 1}`),
+    'line_count',
+    'return_line_id',
+    'purchase_line_id',
+    'qty_q4',
+  ]),
+  'purchase.reverse': Object.freeze(['purchase_id', 'warehouse_id', 'reversal_date', ...Array.from({ length: 8 }, (_, i) => `reason_w${i + 1}`)]),
 });
 
 /** The intent schema of an operation kind: its schema with the server-derived fields removed, header and group alike. */
@@ -372,7 +439,7 @@ const refuse = (what: string): never => {
   throw new InventoryError('inventory.payload_invalid', `invpl/1 payload ${what}`);
 };
 
-/** True for a registered operation code (P3-S1, P3-S3 or P3-S4). Refuses anything else, including a wildcard. */
+/** True for a registered operation code (P3-S1, P3-S3, P3-S4 or P3-S5). Refuses anything else, including a wildcard. */
 export function isInventoryOperationCode(value: unknown): value is InventoryOperationCode {
   return typeof value === 'string' && (INVENTORY_OPERATION_CODES as readonly string[]).includes(value);
 }

@@ -36,6 +36,12 @@
  * (a landed amount that is not positive, or a manual allocation that is
  * negative or not one per line), `purchase.discount_invalid`,
  * `purchase.total_zero` and `inventory.deficit_state_invalid`.
+ *
+ * P3-S5 adds the three codes the supplier-return arithmetic can raise
+ * (PHASE_3_S5_CONTRACT §3), in the `supplier_return.*` domain the routine
+ * raises them under: `supplier_return.quantity_exceeds_purchased` (Must-prove
+ * 1), `supplier_return.value_zero` (TL-12) and
+ * `supplier_return.amount_below_base_unit` (TL-3).
  */
 export type InventoryErrorCode =
   | 'inventory.assertion_malformed'
@@ -62,7 +68,10 @@ export type InventoryErrorCode =
   | 'purchase.landed_cost_allocation_mismatch'
   | 'purchase.landed_cost_invalid'
   | 'purchase.discount_invalid'
-  | 'purchase.total_zero';
+  | 'purchase.total_zero'
+  | 'supplier_return.quantity_exceeds_purchased'
+  | 'supplier_return.value_zero'
+  | 'supplier_return.amount_below_base_unit';
 
 /** Typed, string-valued facts a refusal may carry beside its code (money as integer text). Never part of the message. */
 export type InventoryErrorDetails = Readonly<Record<string, string | readonly string[]>>;

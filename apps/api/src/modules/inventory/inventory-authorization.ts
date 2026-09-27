@@ -50,6 +50,11 @@ const OPERATION_AUTHORITY: Readonly<Record<InventoryOperationCode, { readonly pe
   'purchase.draft': { permission: 'purchases.manage', scope: 'warehouses' },
   'purchase.cancel': { permission: 'purchases.manage', scope: 'warehouses' },
   'purchase.receive': { permission: 'purchases.receive', scope: 'warehouses' },
+  // P3-S5 (PHASE_3_S5_CONTRACT A-03): a return is scoped by the warehouse the
+  // goods leave (TL-5); a reversal undoes a receipt, so it needs receipt
+  // authority over the purchase's warehouse (TL-4).
+  'purchase.return': { permission: 'purchases.return', scope: 'warehouses' },
+  'purchase.reverse': { permission: 'purchases.receive', scope: 'warehouses' },
 };
 
 /**
