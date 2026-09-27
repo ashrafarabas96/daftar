@@ -1,0 +1,258 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# P3-S9 RELEASE EVIDENCE — the Phase 3 release candidate, proved on GitHub, at
+# one exact commit (docs/PHASE_3_S9_CONTRACT.md §5.2).
+#
+# WHAT THIS PRODUCES, AND WHY IT IS ONE JOB
+#
+# The Phase 3 release claim is a chain, and every link has to be the SAME
+# tree:
+#
+#   1. the commit checked out IS the commit under release (asserted)
+#   2. `gate:phase3:release` passes on the repository checkout
+#   3. an archive is built FROM that checkout, and git archives the same
+#      commit from its object store
+#   4. the archive is extracted into a clean directory with NO .git, onto a
+#      NEW embedded PostgreSQL cluster no earlier step touched
+#   5. `gate:phase3:release` passes AGAIN, inside the extraction
+#   6. the evidence is assembled from what 1–5 produced, and refuses unless
+#      the archive's commit is the commit under release and git's archive of
+#      it carries the same tree
+#
+# One job, one working directory, one commit.
+#
+# WHY THE ARCHIVE RUN HAS ITS OWN CLUSTER (finding F-2)
+#
+# In P2-S9 the job-level `PG_PORT: '5432'` applied to the extraction step too,
+# so the archive run tested on the repository run's already-migrated service
+# database. Here the extraction step sets `PG_DIR` and `PG_PORT` itself: the
+# harness starts an embedded cluster with no roles, no databases and no data,
+# and migrates the history from zero. The repository run uses the
+# `postgres:16` service; the archive run uses the embedded server; the
+# evidence records both.
+#
+# WHAT A GREEN RUN HERE MEANS, EXACTLY
+#
+#   for EXPECTED_SHA: both gate runs PASS with 0 failures and 0 mandatory
+#   skips, each with its nested `gate:phase2:release` PASS; the archive
+#   carries no working tree / dependency tree / secret / build output; its
+#   delivery manifest names EXPECTED_SHA and the tree git archives for it;
+#   the migrations shipped are exactly the Phase 2 and Phase 3 prefixes; and
+#   the deployment matrix and the deployed-database rehearsal PASS in both
+#   runs.
+#
+# It does NOT stand in for `ci.yml`, which still has to be green on the same
+# commit, and `ci.yml` does not stand in for this.
+# ─────────────────────────────────────────────────────────────────────────────
+name: DAFTAR P3-S9 release evidence
+
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: 'The EXACT commit to produce release evidence for. Leave empty to use the head of the ref this was dispatched on.'
+        required: false
+        type: string
+      ci_run:
+        description: 'The DAFTAR CI run id for the same commit, recorded in the evidence.'
+        required: false
+        type: string
+  # The release candidate is invalidated by a change to anything it is a
+  # statement about: product code, the schema, the gates and their suites,
+  # the release tooling, and the pages the gate reads. A head this workflow
+  # never ran on is a head no hand-off can honestly name.
+  push:
+    branches: ['phase/3-inventory-purchases-suppliers']
+    paths:
+      - 'apps/**'
+      - 'packages/**'
+      - 'infrastructure/**'
+      - 'scripts/**'
+      - 'tests/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/ci.yml'
+      - '.github/workflows/phase3-s9-release.yml'
+      - 'PROJECT_STATUS.md'
+      - 'TECHNICAL_DEBT.md'
+      - 'docs/PHASE_3_*.md'
+      - 'docs/PHASE_2_*.md'
+      - 'docs/PHASE_1_MIGRATION_HISTORY_DECISION.md'
+      - 'docs/DAFTAR_OPEN_DECISIONS.md'
+
+env:
+  NODE_VERSION: '24.12.x'
+  EXPECTED_SHA: ${{ inputs.sha || github.sha }}
+
+concurrency:
+  group: p3s9-release-${{ inputs.sha || github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Phase 3 release gate, RC archive, and the gate again from the extraction
+    runs-on: ubuntu-latest
+    # The GitHub-hosted ceiling is 360 minutes; see contract TL-10 for the
+    # measured fallback if a run approaches it.
+    timeout-minutes: 350
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      PG_PORT: '5432'
+    steps:
+      # ── 1. the commit under release, and nothing else ─────────────────────
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.EXPECTED_SHA }}
+          # The export's inventory is `git ls-files`, `git archive` reads the
+          # object store, and the release gate's secret scan reads a commit
+          # range; a depth-1 checkout has none of them.
+          fetch-depth: 0
+
+      - name: Assert the checkout is the commit under release
+        run: |
+          set -euo pipefail
+          HEAD_SHA="$(git rev-parse HEAD)"
+          echo "producing P3-S9 release evidence for $EXPECTED_SHA (checked out $HEAD_SHA)"
+          test "$HEAD_SHA" = "$EXPECTED_SHA" || { echo "FAIL: checked out $HEAD_SHA, not the commit under release $EXPECTED_SHA"; exit 1; }
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      # Same packages as ci.yml's android job: the action's default installs
+      # the obsolete `tools` package, which no longer exists in the SDK
+      # repository and fails before Gradle runs.
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools platforms;android-35 build-tools;35.0.0'
+
+      - name: PostgreSQL 16 server binaries for the deployment matrix, and zip
+        # The deployment-authority matrix starts its OWN cluster, because it
+        # has to bootstrap roles and databases and then destroy them.
+        run: |
+          sudo sh -c 'echo "deb http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
+          curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo gpg --dearmor -o /usr/share/keyrings/pgdg.gpg
+          sudo sed -i 's|deb http|deb [signed-by=/usr/share/keyrings/pgdg.gpg] http|' /etc/apt/sources.list.d/pgdg.list
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-16 zip unzip
+          /usr/lib/postgresql/16/bin/postgres --version
+
+      - run: npm ci
+
+      # ── 2. the gate, on the repository checkout ───────────────────────────
+      - name: Release gate — repository checkout
+        run: npm run gate:phase3:release -- --evidence=release/phase3-s9-release-gate.json
+
+      # ── 3. the archive, by the export and by git ─────────────────────────
+      - name: Build the Phase 3 release candidate archive, and git's archive of the same commit
+        run: |
+          set -euo pipefail
+          npm run export:release:phase3
+          git archive --format=tar --prefix=DAFTAR/ "$EXPECTED_SHA" > "$RUNNER_TEMP/git-archive.tar"
+
+      # ── 4+5. extract somewhere with no repository, and gate it again ─────
+      #
+      # `$RUNNER_TEMP` is outside the checkout on purpose: extracting inside
+      # the working directory would leave the extraction able to reach the
+      # repository's `.git` by walking upwards.
+      - name: Extract the archive into a clean directory and gate it again, on a new cluster
+        env:
+          PG_DIR: ${{ runner.temp }}/pg-archive
+          PG_PORT: '55432'
+        run: |
+          set -euo pipefail
+          EXTRACT="$RUNNER_TEMP/rc"
+          rm -rf "$EXTRACT" "$PG_DIR"
+          mkdir -p "$EXTRACT"
+          unzip -q "$GITHUB_WORKSPACE/release/DAFTAR_PHASE_3_RC.zip" -d "$EXTRACT"
+          cd "$EXTRACT/DAFTAR"
+          test ! -e .git
+          git -C . rev-parse --is-inside-work-tree 2>/dev/null && { echo "FAIL: the extraction is inside a git work tree"; exit 1; } || true
+          ARCHIVE_SHA="$(cut -d' ' -f1 < "$GITHUB_WORKSPACE/release/DAFTAR_PHASE_3_RC.zip.sha256")"
+          npm ci
+          npm run gate:phase3:release -- \
+            --evidence="$EXTRACT/DAFTAR/release/phase3-s9-release-gate-archive.json" \
+            --archive-sha256="$ARCHIVE_SHA"
+
+      # Copied back whether the archive run passed or not: a failed run is the
+      # run whose artefacts a reviewer needs.
+      - name: Copy the archive run's artefacts back
+        if: always()
+        run: |
+          RC="$RUNNER_TEMP/rc/DAFTAR/release"
+          cp "$RC/phase3-s9-release-gate-archive.json" release/ 2>/dev/null || echo "(no archive gate artefact)"
+          cp "$RC/phase2-s9-deployment-authority.json" release/phase2-s9-deployment-authority-archive.json 2>/dev/null || echo "(no archive deployment artefact)"
+          cp "$RC/phase3-s9-deployed-rehearsal.json" release/phase3-s9-deployed-rehearsal-archive.json 2>/dev/null || echo "(no archive rehearsal artefact)"
+          mkdir -p release/archive-run-logs
+          cp -r "$RC"/phase3-gate-logs-* release/archive-run-logs/ 2>/dev/null || echo "(no archive gate logs)"
+
+      # ── 6. the evidence, assembled from what actually happened ───────────
+      - name: Assemble the release evidence
+        run: |
+          npm run evidence:phase3:s9 -- \
+            --expected-sha="$EXPECTED_SHA" \
+            --repo-gate=release/phase3-s9-release-gate.json \
+            --archive-gate=release/phase3-s9-release-gate-archive.json \
+            --archive=release/DAFTAR_PHASE_3_RC.zip \
+            --git-archive="$RUNNER_TEMP/git-archive.tar" \
+            --ci-run='${{ inputs.ci_run }}'
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo '## P3-S9 release evidence'
+            echo
+            echo "commit: \`$EXPECTED_SHA\`"
+            echo
+            echo '```json'
+            node -e "const e=require('./release/phase3-s9-release-evidence.json');console.log(JSON.stringify({verdict:e.verdict,source:e.source,archive:{sha256:e.archive.sha256,entryCount:e.archive.entryCount},gitArchive:e.gitArchive,migrations:{count:e.migrations.count,frozenThrough:e.migrations.frozenThrough},gates:{repository:{verdict:e.gates.repository.verdict,fail:e.gates.repository.fail,mandatorySkipped:e.gates.repository.mandatorySkipped},extractedArchive:{verdict:e.gates.extractedArchive.verdict,fail:e.gates.extractedArchive.fail,mandatorySkipped:e.gates.extractedArchive.mandatorySkipped}},problems:e.problems},null,2))" 2>/dev/null || echo '(no evidence file was produced)'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: phase3-s9-release-evidence
+          path: |
+            release/phase3-s9-release-evidence.json
+            release/phase3-s9-release-gate.json
+            release/phase3-s9-release-gate-archive.json
+            release/phase2-s9-deployment-authority.json
+            release/phase2-s9-deployment-authority-archive.json
+            release/phase3-s9-deployed-rehearsal.json
+            release/phase3-s9-deployed-rehearsal-archive.json
+            release/DAFTAR_PHASE_3_RC.zip.sha256
+          if-no-files-found: error
+
+      # `ignore`: a run that failed before the export has no archive, and the
+      # evidence step already refuses a green run without one.
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: phase3-s9-release-candidate
+          path: release/DAFTAR_PHASE_3_RC.zip
+          if-no-files-found: ignore
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: phase3-s9-release-gate-logs
+          path: |
+            release/phase3-gate-logs-*
+            release/archive-run-logs
+          if-no-files-found: ignore
