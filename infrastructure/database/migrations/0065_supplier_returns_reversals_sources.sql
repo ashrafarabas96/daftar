@@ -89,9 +89,10 @@
 --   0063 R-38 (the discovery sees every guard): the S5 rows of
 --        `inventory_stock_source_guard_gaps()` include the three
 --        same-transaction triggers (`line_same_transaction` for each type,
---        `credit_note_same_transaction` for a return), and the eleven S5
---        guard function bodies are recorded as digests: the nine of §2.3
---        and the two same-transaction functions.
+--        `credit_note_same_transaction` for a return) and the credit-note
+--        immutability trigger (R-53), and the twelve S5 guard function
+--        bodies are recorded as digests: the nine of §2.3, the two
+--        same-transaction functions and `supplier_credit_note_guard()`.
 --   0063 R-40 (probes as a non-superuser): every 0065-E probe that
 --        re-creates a trigger on an internal function lends the function's
 --        owner TRIGGER on the table inside the rolled-back probe; a probe
@@ -126,6 +127,16 @@
 --        dust, inventory, PPV) carries rate 1, source 'base', txn = base, at
 --        the return's document_date 00:00 UTC (the S3 domestic line).
 --   R-47 Every S5 amount column is bounded by ±10^18, as every S4 amount.
+--   R-53 THE DISCOVERY SEES THE CREDIT-NOTE GUARD (0063 R-38 over the §2.3
+--        list, security review L1). The S5 rows of
+--        `inventory_stock_source_guard_gaps()` also carry
+--        `credit_note_immutable` (`supplier_credit_notes_immutable`, ROW
+--        BEFORE UPDATE OR DELETE, on the internal DEFINER
+--        `supplier_credit_note_guard()`), and its body is the twelfth
+--        recorded S5 digest; 0065-E proves a disabled trigger and a no-op
+--        body are both reported. S6, which replaces the function as its owner
+--        to admit the AL-31 decrement, re-records the digest in the same
+--        migration.
 --
 -- Migrations 0000-0064 are FROZEN and untouched.
 
@@ -1346,9 +1357,10 @@ REVOKE CREATE ON SCHEMA public FROM daftar_inventory_internal;
 -- "twenty-four" counts the tree before the P3-S4 review added five). The
 -- S5 types get the S4 treatment (`NOT (v_s3 OR v_s4 OR v_s5)`), their two
 -- line-table rows and their own per-type set, checked in the S4 loop's
--- shape; four of its guards run on the migrator-owned INVOKER
--- `stock_ledger_append_only()`. Every S5 guard function's body is recorded
--- as the SHA-256 of its prosrc, of THIS file's bodies.
+-- shape, plus the credit-note immutability guard (R-53); four of its
+-- guards run on the migrator-owned INVOKER `stock_ledger_append_only()`.
+-- Every S5 guard function's body is recorded as the SHA-256 of its prosrc,
+-- of THIS file's bodies.
 -- ─────────────────────────────────────────────────────────────────────────
 CREATE OR REPLACE FUNCTION inventory_stock_source_guard_gaps()
 RETURNS TABLE (source_type TEXT, missing TEXT)
@@ -1408,7 +1420,8 @@ DECLARE
     "stock_source_complete_purchase_reversal_header()": "24b99c06756f9acd5190d12d1f693cb90c9ab023480a4172c382ccd98e6686e1",
     "purchase_reversal_value_complete()": "55d5d4f779fe497263a70445a869aa8f9fc1e235fc350f389c07ceccab72e3e0",
     "supplier_return_detail_same_transaction()": "68a8c04daa668ef1574f6e7109ca1756a33310005d82455118047f328717aa49",
-    "purchase_reversal_detail_same_transaction()": "e408924187c911f6b1d61f46ce1ae7e6ff965f2807562c9cfaa176508c5838bf"
+    "purchase_reversal_detail_same_transaction()": "e408924187c911f6b1d61f46ce1ae7e6ff965f2807562c9cfaa176508c5838bf",
+    "supplier_credit_note_guard()": "525fa8bb231953d84bff524a8eb1a636bdebf7c1ba13d20043d585dbdbee2e78"
   }';
 BEGIN
   FOR v_type IN SELECT t.source_type FROM stock_source_types t ORDER BY t.source_type LOOP
@@ -1634,6 +1647,9 @@ BEGIN
            'supplier_return_detail_same_transaction()', true),
           ('supplier_return', 'credit_note_same_transaction', 'supplier_credit_notes', 'supplier_credit_notes_same_transaction', 7, false,
            'supplier_return_detail_same_transaction()', true),
+          -- R-53: the A-11(e) credit-note immutability guard.
+          ('supplier_return', 'credit_note_immutable', 'supplier_credit_notes', 'supplier_credit_notes_immutable', 27, false,
+           'supplier_credit_note_guard()', true),
           ('purchase_reversal', 'source_complete',  'purchase_reversal_lines', 'stock_source_complete_purchase_reversal', 5, true,
            'stock_source_complete_purchase_reversal()', true),
           ('purchase_reversal', 'header_complete',  'purchase_reversals',      'purchase_reversals_complete',             5, true,
@@ -1672,7 +1688,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION inventory_stock_source_guard_gaps() IS
-  'P3-AL-51 §B, strengthened by P3-S3 (A-16, review F3). Catalogue-only discovery: for every stock_source_types row, reports each missing or mis-shaped guard — bridge (a plain table), bridge_rls (enabled and forced), bridge_pk (exactly business_id, source_id, source_line_id, movement_kind), bridge_source_type (a stored generated constant equal to the type), bridge_binding_fk (validated RESTRICT, five columns in order), bridge_line_fk (validated RESTRICT, business_id, source_id, source_line_id; for an S3 type to exactly its line table and key), bridge_immutable (ROW BEFORE UPDATE OR DELETE on every column, no WHEN, enabled for origin sessions, on stock_ledger_append_only()), binding_trigger (ROW AFTER INSERT deferred constraint trigger on its own internal DEFINER function with the pinned path and the WHEN on the type). For the four S3 types also source_complete, source_freeze, header_immutable, value_complete and (stocktake) header_complete, each by table, name, event, column list, WHEN, deferral, enabled state and expected internal DEFINER pinned function; and every S3 guard function''s body against the SHA-256 of its prosrc recorded at migration time. Replaced by P3-S4 (0063, §2.3): the two S4 types (purchase, negative_inventory_cost_adjustment) get the S3 bridge_line_fk (purchase_lines / negative_deficit_coverages), bridge_immutable and binding_trigger checks, and their own set — source_complete, header_complete (purchase), source_freeze, header_immutable, value_complete — with every S4 guard function''s body recorded the same way (the two stock_ledger_append_only() guards as migrator-owned INVOKER); per the P3-S4 review also landed_cost_freeze, allocation_freeze, allocation_consistent, landed_cost_consistent (purchase) and coverage_same_transaction, coverage_value_complete, deficit_guard, deficit_consistent (negative_inventory_cost_adjustment), the three freeze triggers and the header guard judging INSERT too. Replaced by P3-S5 (0065, §2.3): the two S5 types (supplier_return, purchase_reversal) get the same bridge_line_fk (supplier_return_lines / purchase_reversal_lines), bridge_immutable and binding_trigger checks and their own set — source_complete, header_complete, source_freeze, header_immutable, value_complete, line_same_transaction, and (supplier_return) quantity_bound and credit_note_same_transaction — with every S5 guard function''s body recorded the same way; the S3 and S4 parts are unchanged. Every migration that registers a source type asserts it returns no row. Migrator-owned INVOKER; no EXECUTE grant.';
+  'P3-AL-51 §B, strengthened by P3-S3 (A-16, review F3). Catalogue-only discovery: for every stock_source_types row, reports each missing or mis-shaped guard — bridge (a plain table), bridge_rls (enabled and forced), bridge_pk (exactly business_id, source_id, source_line_id, movement_kind), bridge_source_type (a stored generated constant equal to the type), bridge_binding_fk (validated RESTRICT, five columns in order), bridge_line_fk (validated RESTRICT, business_id, source_id, source_line_id; for an S3 type to exactly its line table and key), bridge_immutable (ROW BEFORE UPDATE OR DELETE on every column, no WHEN, enabled for origin sessions, on stock_ledger_append_only()), binding_trigger (ROW AFTER INSERT deferred constraint trigger on its own internal DEFINER function with the pinned path and the WHEN on the type). For the four S3 types also source_complete, source_freeze, header_immutable, value_complete and (stocktake) header_complete, each by table, name, event, column list, WHEN, deferral, enabled state and expected internal DEFINER pinned function; and every S3 guard function''s body against the SHA-256 of its prosrc recorded at migration time. Replaced by P3-S4 (0063, §2.3): the two S4 types (purchase, negative_inventory_cost_adjustment) get the S3 bridge_line_fk (purchase_lines / negative_deficit_coverages), bridge_immutable and binding_trigger checks, and their own set — source_complete, header_complete (purchase), source_freeze, header_immutable, value_complete — with every S4 guard function''s body recorded the same way (the two stock_ledger_append_only() guards as migrator-owned INVOKER); per the P3-S4 review also landed_cost_freeze, allocation_freeze, allocation_consistent, landed_cost_consistent (purchase) and coverage_same_transaction, coverage_value_complete, deficit_guard, deficit_consistent (negative_inventory_cost_adjustment), the three freeze triggers and the header guard judging INSERT too. Replaced by P3-S5 (0065, §2.3): the two S5 types (supplier_return, purchase_reversal) get the same bridge_line_fk (supplier_return_lines / purchase_reversal_lines), bridge_immutable and binding_trigger checks and their own set — source_complete, header_complete, source_freeze, header_immutable, value_complete, line_same_transaction, and (supplier_return) quantity_bound, credit_note_same_transaction and credit_note_immutable — with every S5 guard function''s body recorded the same way; the S3 and S4 parts are unchanged. Every migration that registers a source type asserts it returns no row. Migrator-owned INVOKER; no EXECUTE grant.';
 
 REVOKE ALL ON FUNCTION inventory_stock_source_guard_gaps() FROM PUBLIC;
 
@@ -2055,7 +2071,39 @@ BEGIN
   IF v_detail IS DISTINCT FROM 'inventory.probe_rollback: supplier_return:credit_note_same_transaction' THEN
     RAISE EXCEPTION 'inventory.source_guard_missing: the replaced discovery did not report an INSERT-blind credit-note guard (%)', v_detail;
   END IF;
+  -- R-53: the credit-note immutability guard is seen disabled, and with a
+  -- body its owner replaced by a no-op.
+  BEGIN
+    ALTER TABLE supplier_credit_notes DISABLE TRIGGER supplier_credit_notes_immutable;
+    SELECT string_agg(g.source_type || ':' || g.missing, ', ' ORDER BY g.source_type, g.missing) INTO v_detail FROM inventory_stock_source_guard_gaps() g;
+    RAISE EXCEPTION 'inventory.probe_rollback: %', coalesce(v_detail, '');
+  EXCEPTION WHEN raise_exception THEN
+    GET STACKED DIAGNOSTICS v_detail = MESSAGE_TEXT;
+  END;
+  IF v_detail IS DISTINCT FROM 'inventory.probe_rollback: supplier_return:credit_note_immutable' THEN
+    RAISE EXCEPTION 'inventory.source_guard_missing: the replaced discovery did not report a disabled credit-note immutability guard (%)', v_detail;
+  END IF;
+  BEGIN
+    GRANT CREATE ON SCHEMA public TO daftar_inventory_internal;
+    SET LOCAL ROLE daftar_inventory_internal;
+    CREATE OR REPLACE FUNCTION supplier_credit_note_guard() RETURNS trigger
+    LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $probe$
+    BEGIN
+      RETURN NEW;
+    END;
+    $probe$;
+    RESET ROLE;
+    REVOKE CREATE ON SCHEMA public FROM daftar_inventory_internal;
+    SELECT string_agg(g.source_type || ':' || g.missing, ', ' ORDER BY g.source_type, g.missing) INTO v_detail FROM inventory_stock_source_guard_gaps() g;
+    RAISE EXCEPTION 'inventory.probe_rollback: %', coalesce(v_detail, '');
+  EXCEPTION WHEN raise_exception THEN
+    GET STACKED DIAGNOSTICS v_detail = MESSAGE_TEXT;
+  END;
+  IF v_detail IS DISTINCT FROM 'inventory.probe_rollback: supplier_return:credit_note_immutable' THEN
+    RAISE EXCEPTION 'inventory.source_guard_missing: the replaced discovery did not report a neutered credit-note immutability body (%)', v_detail;
+  END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_trigger g WHERE g.tgname = 'stock_bridge_immutable_supplier_return' AND g.tgenabled = 'O')
+     OR NOT EXISTS (SELECT 1 FROM pg_trigger g WHERE g.tgname = 'supplier_credit_notes_immutable' AND g.tgenabled = 'O')
      OR NOT EXISTS (SELECT 1 FROM pg_trigger g WHERE g.tgname = 'supplier_returns_value_complete' AND g.tgenabled = 'O')
      OR NOT EXISTS (SELECT 1 FROM pg_trigger g WHERE g.tgname = 'supplier_return_lines_quantity_bound'
                       AND g.tgfoid = 'supplier_return_quantity_bound()'::regprocedure)
