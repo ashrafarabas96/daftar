@@ -121,30 +121,59 @@ export function Table<T extends { id?: string }>(props: { columns: Column<T>[]; 
   );
 }
 
+const listRowStyle: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: spacing[3],
+  padding: `${spacing[3]} ${spacing[2]}`,
+  minHeight: '2.75rem',
+};
+
+/**
+ * A list. A row with `onClick` is a button to every user: it takes focus in
+ * tab order and Enter or Space activates it, as a mouse click does. The row
+ * stays a list item; the button is the element inside it (its content may be
+ * block-level, so it is `role="button"` rather than a `<button>`).
+ */
 export function List(props: { items: { key: string; primary: ReactNode; secondary?: ReactNode; trailing?: ReactNode; onClick?: () => void }[] }) {
   return (
     <ul style={{ listStyle: 'none', margin: 0, padding: 0, fontFamily: typography.fontFamily.base }}>
-      {props.items.map((it) => (
-        <li
-          key={it.key}
-          onClick={it.onClick}
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: spacing[3],
-            padding: `${spacing[3]} ${spacing[2]}`,
-            borderBottom: `1px solid ${colors.neutral[100]}`,
-            cursor: it.onClick ? 'pointer' : undefined,
-            minHeight: '2.75rem',
-          }}
-        >
-          <span style={{ flex: 1 }}>
-            <span style={{ display: 'block', fontSize: typography.size.md, color: colors.neutral[900] }}>{it.primary}</span>
-            {it.secondary ? <span style={{ display: 'block', fontSize: typography.size.sm, color: colors.neutral[500] }}>{it.secondary}</span> : null}
-          </span>
-          {it.trailing}
-        </li>
-      ))}
+      {props.items.map((it) => {
+        const content = (
+          <>
+            <span style={{ flex: 1 }}>
+              <span style={{ display: 'block', fontSize: typography.size.md, color: colors.neutral[900] }}>{it.primary}</span>
+              {it.secondary ? <span style={{ display: 'block', fontSize: typography.size.sm, color: colors.neutral[500] }}>{it.secondary}</span> : null}
+            </span>
+            {it.trailing}
+          </>
+        );
+        const activate = it.onClick;
+        return (
+          <li key={it.key} style={{ borderBottom: `1px solid ${colors.neutral[100]}`, ...(activate ? {} : listRowStyle) }}>
+            {activate ? (
+              <div
+                role="button"
+                tabIndex={0}
+                onClick={activate}
+                onKeyDown={(event) => {
+                  // Keys pressed on something focusable inside the row are that element's own.
+                  if (event.target !== event.currentTarget) return;
+                  if (event.key !== 'Enter' && event.key !== ' ') return;
+                  // Space would otherwise scroll the page.
+                  event.preventDefault();
+                  activate();
+                }}
+                style={{ ...listRowStyle, cursor: 'pointer', borderRadius: radius.sm }}
+              >
+                {content}
+              </div>
+            ) : (
+              content
+            )}
+          </li>
+        );
+      })}
     </ul>
   );
 }
