@@ -14,3 +14,6 @@ export * from './purchase-payloads';
 export * from './landed-cost';
 export * from './purchase-shares';
 export * from './deficit-coverage';
+export * from './supplier-return';
+export * from './supplier-return-payloads';
+export * from './purchase-reversal-payloads';
