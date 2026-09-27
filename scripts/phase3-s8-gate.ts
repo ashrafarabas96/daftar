@@ -50,9 +50,9 @@ export const S7_BOUNDARY = '0068_supplier_settlement_commands.sql';
 const S6_MIGRATIONS = ['0067_payment_methods_supplier_settlement_sources.sql', '0068_supplier_settlement_commands.sql'] as const;
 
 /**
- * B-1 (contract §9.1) is with the Tech Lead; R-B1a is the working default. An
- * R-B1b/c answer before the freeze deletes the delimited section of the S8
- * migration, renames it, and changes this one constant.
+ * B-1 (contract §9.1): the Tech Lead chose R-B1a on 2026-09-27 (refuse manual
+ * and opening-balance lines on the Inventory account once the business has
+ * stock movements). R-B1b/c remain only as the gate's shape for comparison.
  */
 export const B1_RULING: 'R-B1a' | 'R-B1b' | 'R-B1c' = 'R-B1a';
 

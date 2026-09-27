@@ -13,7 +13,7 @@
 --      and the reconciler is still the 0051 principal.
 --   2. Four column-level SELECT grants to daftar_reconciler, each column in
 --      infrastructure/database/reconciler-privilege-model.json.
---   3. R-B1a (the working default while B-1 is with the Tech Lead), in ONE
+--   3. R-B1a (B-1 as the Tech Lead ruled it on 2026-09-27), in ONE
 --      delimited section: an inventory-owned boolean helper, an
 --      accounting-owned guard and one deferred constraint trigger on
 --      journal_entries, with that section's own end-state block.
@@ -189,9 +189,9 @@ GRANT SELECT (system_key) ON accounts TO daftar_reconciler;
 
 
 -- ═════════════════════════════════════════════════════════════════════════
--- ══ BEGIN R-B1a (B-1 working default; Annex R §2) ════════════════════════
--- ══ An R-B1b/c ruling before freeze deletes everything from this line to
--- ══ the matching END line, and sets the S8 gate's B1_RULING constant.
+-- ══ BEGIN R-B1a (B-1, the Tech Lead's ruling of 2026-09-27; Annex R §2) ══
+-- ══ The Tech Lead chose R-B1a: manual and opening-balance lines on the
+-- ══ Inventory account are refused once the business has stock movements.
 -- ═════════════════════════════════════════════════════════════════════════
 
 -- 3a. The inventory side (R-92, Annex R §2.4): the boolean helper. Created by

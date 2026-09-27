@@ -4,7 +4,7 @@
 >
 > **Migration.** Exactly one: `0069_inventory_reconciliation_read_and_account_domain.sql` (0070 only if S7 admitted its index-only 0069). The gate derives it from the manifest.
 >
-> **B-1 is still with the Tech Lead; R-B1a is the working default** (§2.4 as amended): refuse `manual_adjustment`/`opening_balance` entries with a line on `system_key = 'inventory'` once the business has any stock movement, read through an inventory-owned boolean helper (no accounting grant on `stock_movements`), deferred to COMMIT, reversals admitted, error 409, not in `AccountingErrorCode`. The R-B1a block is delimited so an R-B1b/c answer before freeze is a deletion.
+> **B-1 was decided by the Tech Lead on 2026-09-27: R-B1a** (§2.4 as amended): refuse `manual_adjustment`/`opening_balance` entries with a line on `system_key = 'inventory'` once the business has any stock movement, read through an inventory-owned boolean helper (no accounting grant on `stock_movements`), deferred to COMMIT, reversals admitted, error 409, not in `AccountingErrorCode`. The R-B1a block is delimited so an R-B1b/c answer before freeze is a deletion.
 >
 > **S6/S7 facts S8 must honour.** 26 kinds (S6 at 0068:1442-1445). No Phase 3 routine posts: "financial" = the builder's accounting source types, equal by set to the 8 types registered after 0052 plus `reversal` (purchase.reverse); T-10 drives the composed command. `daftar_app` executes 28 Phase 3 routines (26 + `purchase_ap_outstanding`, `purchase_settlement_state`); S7 adds none. G-3 already covers payment methods and `settled`; the widening concerns 5 tables. Static guards stay at 23.
 >
@@ -1015,7 +1015,7 @@ R-INV-01..05 column names verified against 0059 (`stock_movements` 16 cols, `sto
 >
 > **Migration.** Exactly one: `0069_inventory_reconciliation_read_and_account_domain.sql` (0070 only if S7 admitted its index-only 0069). The gate derives it from the manifest.
 >
-> **B-1 is still with the Tech Lead; R-B1a is the working default** (§2.4 as amended): refuse `manual_adjustment`/`opening_balance` entries with a line on `system_key = 'inventory'` once the business has any stock movement, read through an inventory-owned boolean helper (no accounting grant on `stock_movements`), deferred to COMMIT, reversals admitted, error 409, not in `AccountingErrorCode`. The R-B1a block is delimited so an R-B1b/c answer before freeze is a deletion.
+> **B-1 was decided by the Tech Lead on 2026-09-27: R-B1a** (§2.4 as amended): refuse `manual_adjustment`/`opening_balance` entries with a line on `system_key = 'inventory'` once the business has any stock movement, read through an inventory-owned boolean helper (no accounting grant on `stock_movements`), deferred to COMMIT, reversals admitted, error 409, not in `AccountingErrorCode`. The R-B1a block is delimited so an R-B1b/c answer before freeze is a deletion.
 >
 > **S6/S7 facts S8 must honour.** 26 kinds (S6 at 0068:1442-1445). No Phase 3 routine posts: "financial" = the builder's accounting source types, equal by set to the 8 types registered after 0052 plus `reversal` (purchase.reverse); T-10 drives the composed command. `daftar_app` executes 28 Phase 3 routines (26 + `purchase_ap_outstanding`, `purchase_settlement_state`); S7 adds none. G-3 already covers payment methods and `settled`; the widening concerns 5 tables. Static guards stay at 23.
 >
