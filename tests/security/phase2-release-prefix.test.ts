@@ -50,13 +50,27 @@ function tree(through?: string): { root: string; dir: string; manifestPath: stri
 }
 
 const check = (t: ReturnType<typeof tree>) => checkPhase2Prefix(t.dir, t.manifestPath);
-const M0017 = PHASE2_PREFIX[17][0];
-const M0051 = PHASE2_PREFIX[51][0];
+/** The name of the accepted prefix entry at `index`; a missing entry is an error, not `undefined`. */
+function prefixName(index: number): string {
+  const entry = PHASE2_PREFIX[index];
+  if (entry === undefined) throw new Error(`PHASE2_PREFIX has no entry ${index}`);
+  return entry[0];
+}
+
+/** Flip the low bit of the byte at `index`, in place. */
+function flipByte(bytes: Buffer, index: number): void {
+  const byte = bytes[index];
+  if (byte === undefined) throw new Error(`the buffer has no byte at ${index} (length ${bytes.length})`);
+  bytes[index] = byte ^ 0x01;
+}
+
+const M0017 = prefixName(17);
+const M0051 = prefixName(51);
 
 describe('the accepted Phase 2 prefix literal', () => {
   it('is 53 migrations, 0000 through 0052, in order, and is the prefix of the checked-in manifest', () => {
     expect(PHASE2_PREFIX).toHaveLength(53);
-    expect(PHASE2_PREFIX[0][0]).toBe('0000_extensions.sql');
+    expect(prefixName(0)).toBe('0000_extensions.sql');
     expect(PHASE2_PREFIX_END).toBe('0052_accounting_journal_lines_rls_performance.sql');
     const names = PHASE2_PREFIX.map(([n]) => n);
     expect([...names].sort()).toEqual(names);
@@ -94,10 +108,10 @@ describe('must PASS', () => {
 
 describe('must FAIL', () => {
   it('one byte modified in a Phase 2 migration', () => {
-    for (const name of [PHASE2_PREFIX[0][0], M0017, PHASE2_PREFIX_END]) {
+    for (const name of [prefixName(0), M0017, PHASE2_PREFIX_END]) {
       const t = tree();
       const bytes = readFileSync(join(t.dir, name));
-      bytes[bytes.length - 1] ^= 0x01;
+      flipByte(bytes, bytes.length - 1);
       writeFileSync(join(t.dir, name), bytes);
       expect(check(t).join('\n')).toContain(`${name} hashes to`);
     }
@@ -106,7 +120,7 @@ describe('must FAIL', () => {
   it('one byte modified AND its manifest digest updated to match', () => {
     const t = tree();
     const bytes = readFileSync(join(t.dir, M0051));
-    bytes[0] ^= 0x01;
+    flipByte(bytes, 0);
     writeFileSync(join(t.dir, M0051), bytes);
     const digest = createHash('sha256').update(bytes).digest('hex');
     const m = t.manifest();
@@ -147,7 +161,11 @@ describe('must FAIL', () => {
     const t = tree();
     const m = t.manifest();
     const migrations = [...m.migrations];
-    [migrations[16], migrations[17]] = [migrations[17], migrations[16]];
+    const sixteenth = migrations[16];
+    const seventeenth = migrations[17];
+    if (sixteenth === undefined || seventeenth === undefined) throw new Error('the manifest has fewer than 18 entries');
+    migrations[16] = seventeenth;
+    migrations[17] = sixteenth;
     t.write({ ...m, migrations });
     expect(check(t).join('\n')).toContain(`manifest entry 16 is ${M0017}`);
   });

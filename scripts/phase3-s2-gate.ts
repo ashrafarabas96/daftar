@@ -56,7 +56,9 @@ const S1_BOUNDARY = '0058_accounting_entry_date_guard.sql';
 const S2_MIGRATIONS = ['0059_inventory_stock_ledger.sql', '0060_inventory_stock_primitive.sql'] as const;
 
 /** The P3-S2 acceptance boundary. A floor once accepted. */
-const S2_BOUNDARY = S2_MIGRATIONS[S2_MIGRATIONS.length - 1];
+const S2_BOUNDARY_ENTRY = S2_MIGRATIONS[S2_MIGRATIONS.length - 1];
+if (S2_BOUNDARY_ENTRY === undefined) throw new Error('S2_MIGRATIONS is empty: the P3-S2 acceptance boundary has no migration');
+const S2_BOUNDARY: string = S2_BOUNDARY_ENTRY;
 
 /**
  * The two P3-S2 migrations at their accepted digests. Empty while P3-S2 is a

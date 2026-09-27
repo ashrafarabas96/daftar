@@ -29,7 +29,7 @@ const execFileP = promisify(execFile);
 describe('provisioner boundary (§15–21): no bypass, EXECUTE-only authority', () => {
   let t: TestApp;
 
-  async function asProvisioner(fn: (c: Client) => Promise<unknown>): Promise<unknown> {
+  async function asProvisioner<T>(fn: (c: Client) => Promise<T>): Promise<T> {
     const c = new Client({ connectionString: provisionerDbUrl });
     await c.connect();
     try {

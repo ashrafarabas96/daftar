@@ -165,13 +165,12 @@ async function post(entry: EntrySpec, lines: LineSpec[], opts: { binding?: boole
         [entry.tenantId ?? fx.tenantId, entry.businessId ?? fx.businessId, sourceType, sourceId, entryId],
       );
       if (sourceType === 'manual_adjustment') {
-        await adjustmentDetail(
-          client,
-          entry.tenantId ?? fx.tenantId,
-          entry.businessId ?? fx.businessId,
-          sourceId,
-          entry.actorUserId === undefined ? fx.userId : entry.actorUserId,
-        );
+        // The detail row's actor is NOT NULL (0046). An entry with no user actor
+        // is refused by the journal's own actor checks at INSERT, before this
+        // line; reaching it with none means the journal accepted such an entry.
+        const detailActor = entry.actorUserId === undefined ? fx.userId : entry.actorUserId;
+        if (detailActor === null) throw new Error('a manual_adjustment entry with no user actor reached its detail row: the journal did not refuse it');
+        await adjustmentDetail(client, entry.tenantId ?? fx.tenantId, entry.businessId ?? fx.businessId, sourceId, detailActor);
       }
     }
     await client.query('COMMIT');
