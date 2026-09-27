@@ -298,3 +298,41 @@ export async function seedReadsWorld(t: TestApp, label: string): Promise<ReadsWo
     creditNoteId: must(credit.creditNoteId),
   };
 }
+
+/** One stock line of a movement command: the product, and a merchant variant only when it has them. */
+export interface StockLine {
+  readonly productId: string;
+  readonly variantId?: string;
+  readonly quantity: string;
+}
+
+/** Moves stock between two warehouses through the API. */
+export async function httpTransfer(
+  t: TestApp,
+  by: HttpActor,
+  biz: S3Business,
+  sourceWarehouseId: string,
+  destinationWarehouseId: string,
+  lines: readonly StockLine[],
+): Promise<void> {
+  const r = await t.request
+    .post('/v1/inventory/transfers')
+    .set(asMember(by, biz.businessId))
+    .send({ transferId: randomUUID(), sourceWarehouseId, destinationWarehouseId, lines });
+  expect(r.status, JSON.stringify(r.body)).toBe(201);
+}
+
+/** A signed stock adjustment through the API (a gain states `unitCost`). */
+export async function httpAdjust(
+  t: TestApp,
+  by: HttpActor,
+  biz: S3Business,
+  warehouseId: string,
+  lines: readonly (StockLine & { readonly unitCost?: string })[],
+): Promise<void> {
+  const r = await t.request
+    .post('/v1/inventory/adjustments')
+    .set(asMember(by, biz.businessId))
+    .send({ adjustmentId: randomUUID(), warehouseId, occurredOn: await today(), reason: 'counted by hand', lines });
+  expect(r.status, JSON.stringify(r.body)).toBe(201);
+}
