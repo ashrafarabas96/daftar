@@ -596,6 +596,36 @@ export function claimedSha256(biz: Biz, call: Pick<S6Call, 'kind' | 'params'>): 
   return inventoryPayloadSha256(S6_OP_OF[call.kind], biz.tenantId, biz.businessId, claimedFields(call));
 }
 
+/**
+ * The digest the routine computes over a call's arguments when one of them
+ * is NULL where the minter's canonicalizer refuses it: the raw `invpl/1`
+ * stream (a NULL field is the single byte 0x00), as
+ * `inventory_payload_digest` builds it. The service can never mint this; a
+ * test signs it to reach the routine's own shape checks (R-75).
+ */
+export function rawClaimedSha256(biz: Biz, call: Pick<S6Call, 'kind' | 'params'>): string {
+  const line = (f: InventoryPayloadField): Buffer => {
+    if (f.kind === 'null') return Buffer.from([0x00, 0x0a]);
+    const v = f.kind === 'uuid' ? f.value.toLowerCase() : f.kind === 'boolean' ? (f.value ? 'true' : 'false') : String(f.value);
+    return Buffer.from(`${v}\n`, 'utf8');
+  };
+  const head = Buffer.from(`invpl/1\n${S6_OP_OF[call.kind]}\n${biz.tenantId.toLowerCase()}\n${biz.businessId.toLowerCase()}\n`, 'utf8');
+  return createHash('sha256')
+    .update(Buffer.concat([head, ...claimedFields(call).map(line)]))
+    .digest('hex');
+}
+
+/** An honest assertion over the raw stream of `call` (see `rawClaimedSha256`). */
+export function s6RawAssertionFor(biz: Biz & { readonly userId: string }, call: S6Call): string {
+  return mintTestInventoryAssertion({
+    actorUserId: biz.userId,
+    tenantId: biz.tenantId,
+    businessId: biz.businessId,
+    opCode: S6_OP_OF[call.kind],
+    payloadSha256: rawClaimedSha256(biz, call),
+  });
+}
+
 export interface S6RunOptions {
   /** Present exactly this assertion (a replay, a forgery); nothing is minted. `null` presents none. */
   readonly assertion?: string | null;
