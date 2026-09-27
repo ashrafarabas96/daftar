@@ -327,6 +327,11 @@ for (const dir of ['apps/api/src', 'apps/web/src', 'apps/admin/src', 'packages']
   // other stored quantity, valuation, reservation or availability — or a
   // table that is a stock balance/summary/snapshot/rollup/cache — is a second
   // truth. The accounting checks above are untouched.
+  // P3-S8 (A-18(a)): `discoverInventoryTables` also returns every other
+  // Phase 3 relation — every relation the accepted Phase 2 prefix did not
+  // create — that is not a supplier/purchase/payment-method table, so
+  // `units`, `unit_names`, `branch_warehouses`, `stocktakes` and
+  // `stocktake_lines` are watched too. The wiring below is unchanged.
   const inventoryWatched = discoverInventoryTables(schema);
   for (const f of migrations) {
     for (const hit of findAuthoritativeInventoryColumns(readFileSync(f, 'utf8'), inventoryWatched)) {
@@ -408,7 +413,8 @@ for (const dir of ['apps/api/src', 'apps/web/src', 'apps/admin/src', 'packages']
 
   // P3-S2: inventory storage is exact fixed point — no float column on any
   // inventory table, and quantities, costs and values pinned to
-  // NUMERIC(18,4), NUMERIC(28,10) and BIGINT.
+  // NUMERIC(18,4), NUMERIC(28,10) and BIGINT. P3-S8 (A-18(b)): "inventory
+  // table" includes every Phase 3 relation, by the same discovery as G-3.
   for (const f of migrations) {
     for (const hit of findInventoryNumericViolations(readFileSync(f, 'utf8'))) {
       fail('no-float-rate', f, `${hit.table}.${hit.column} ${hit.detail}`);
@@ -424,6 +430,9 @@ for (const dir of ['apps/api/src', 'apps/web/src', 'apps/admin/src', 'packages']
 // but the merchant one, and may not be bypassed by application code writing
 // the journal directly. Stated as an implication, so a repository with no
 // writer passes and a repository with a half-dismantled one does not.
+// P3-S8 (A-18(c)): its inventory counterpart, INVENTORY_PERIMETER — no
+// application DML on a Phase 3 table, and no migration granting a runtime
+// role or PUBLIC write privileges on one — is reported by the same call.
 {
   const migrations = walk(join(ROOT, 'infrastructure/database/migrations'), /\.sql$/)
     .sort()
@@ -457,6 +466,8 @@ for (const dir of ['apps/api/src', 'apps/web/src', 'apps/admin/src', 'packages']
   // Frozen files are reported only for the one shape no ALTER can repair (no
   // pinned path at all). Their ordering is corrected in the effective state by
   // a candidate migration, because their bytes may never change.
+  // P3-S8 (A-18(d)): the frozen skip ends at PHASE2_PREFIX_END — every file
+  // after the Phase 2 prefix is checked forever, frozen or not.
   const manifest = JSON.parse(readFileSync(join(ROOT, 'infrastructure/database/MIGRATION_MANIFEST.json'), 'utf8')) as {
     migrations: { name: string }[];
   };
@@ -557,7 +568,12 @@ for (const dir of ['apps/api/src', 'apps/web/src', 'apps/admin/src', 'packages']
 // Rule 22 — inventory writer authority (P3-S2, contract §7.2; PM-44 static
 // half): every definition of a routine handed to daftar_inventory_internal
 // that writes a stock table verifies invctl/1 as its FIRST statement. The
-// live half is the PM-44 catalogue sweep.
+// live half is the PM-44 catalogue sweep. P3-S8 (A-04, A-18(e)): the table
+// set is the truth set (every table granted to the principal for writing
+// after PHASE2_PREFIX_END, minus the key domain and the logs), the routines
+// are every handed-over routine and every Phase 3 routine of any owner, the
+// assertion's arguments may call only pure helpers, and the one exception
+// is warehouses_home_branch_maintain; the live half is T-02.
 {
   const migrations: Record<string, string> = {};
   for (const f of walk(join(ROOT, 'infrastructure/database/migrations'), /\.sql$/).sort()) {

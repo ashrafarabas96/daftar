@@ -205,6 +205,10 @@ describe('G-7 — the tree as it stands', () => {
         'supplier_refund_value_complete',
         // 0067 R-80
         'supplier_return_value_settled',
+        // P3-S8 (0069 R-92, Annex R §2.4; pin 8): the R-B1a boolean helper,
+        // DEFINER, handed over inside the inventory CREATE bracket — no new
+        // exception.
+        'inventory_business_has_stock_movements',
       ].sort(),
     );
     expect([...INVENTORY_INVOKER_EXCEPTIONS].sort()).toEqual(['product_variants_10_base_variant_authority', 'products_10_inventory_config_authority']);
@@ -236,7 +240,14 @@ describe('G-7 — the tree as it stands', () => {
     // values are decremented by one writer, supplier_credit_note_consume,
     // which opens with inventory_assertion_current(...); the allocation and
     // refund routines call it and write no stock table themselves.
-    expect(report.writers).toEqual([
+    // P3-S8 (pin 8): rule 22 now watches the whole truth set (next case); the
+    // writers of the STOCK tables among them are still exactly these.
+    const stockWriters = new Set(
+      inventoryRoutineDefinitions(real())
+        .filter((d) => stockTablesWritten(d.body ?? '').length > 0)
+        .map((d) => `${d.file}: ${d.name}`),
+    );
+    expect(report.writers.filter((w) => stockWriters.has(w))).toEqual([
       `${F60}: inventory_apply_stock_movements`,
       `${F62}: inventory_bridge_source_lines`,
       // P3-S4 (0063/0064)
@@ -251,6 +262,57 @@ describe('G-7 — the tree as it stands', () => {
       `${F66}: purchase_bridge_reversal`,
       // P3-S6 (0067/0068)
       `${F68}: supplier_credit_note_consume`,
+    ]);
+  });
+
+  it('rule 22 (P3-S8 A-04, pin 8): the writers of the truth set are every entry routine and asserted helper, each opening with the assertion, and the one exception is the home-branch maintainer', () => {
+    const report = checkInventoryWriterAuthority(real());
+    expect(report.violations).toEqual([]);
+    // The truth set is read from the grants to the principal after 0052, minus
+    // the key domain and the logs; it includes every stock table.
+    for (const t of ['stock_movements', 'stock_levels', 'stock_source_bindings', 'supplier_credit_notes', 'suppliers', 'purchases', 'supplier_payments']) {
+      expect(report.truthTables, t).toContain(t);
+    }
+    for (const t of ['inventory_assertion_keys', 'inventory_assertion_uses', 'audit_events', 'outbox_events']) expect(report.truthTables, t).not.toContain(t);
+    expect(report.exempt).toEqual(['0056_inventory_branch_warehouses.sql: warehouses_home_branch_maintain']);
+    const F56 = '0056_inventory_branch_warehouses.sql';
+    expect(report.writers).toEqual([
+      `${F55}: inventory_configure_product`,
+      `${F56}: structure_associate_warehouse_branch`,
+      `${F56}: structure_dissociate_warehouse_branch`,
+      `${F60}: inventory_apply_stock_movements`,
+      `${F60}: inventory_configure_product`,
+      `${F62}: inventory_bridge_source_lines`,
+      `${F62}: inventory_transfer_stock`,
+      `${F62}: inventory_adjust_stock`,
+      `${F62}: inventory_record_damage`,
+      `${F62}: inventory_stocktake_open`,
+      `${F62}: inventory_stocktake_count`,
+      `${F62}: inventory_stocktake_finalize`,
+      `${F62}: inventory_record_opening`,
+      `${F64}: purchase_cover_deficits`,
+      `${F64}: purchase_bridge_receipt`,
+      `${F64}: supplier_create`,
+      `${F64}: supplier_update`,
+      `${F64}: supplier_archive`,
+      `${F64}: supplier_reactivate`,
+      `${F64}: purchase_save_draft`,
+      `${F64}: purchase_cancel`,
+      `${F64}: purchase_receive`,
+      `${F65}: inventory_apply_stock_movements`,
+      `${F66}: purchase_bridge_return`,
+      `${F66}: purchase_bridge_credit_note`,
+      `${F66}: purchase_bridge_reversal`,
+      `${F66}: purchase_return`,
+      `${F66}: purchase_reverse`,
+      `${F68}: payment_method_create`,
+      `${F68}: payment_method_update`,
+      `${F68}: payment_method_deactivate`,
+      `${F68}: payment_method_activate`,
+      `${F68}: supplier_credit_note_consume`,
+      `${F68}: supplier_pay`,
+      `${F68}: supplier_allocate_credit`,
+      `${F68}: supplier_receive_refund`,
     ]);
   });
 });

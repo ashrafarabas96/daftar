@@ -20,6 +20,7 @@
  * rule below catches it in the repository, before anyone runs it.
  */
 
+import { discoverPhase3Relations } from './no-authoritative-balance';
 import { stripComments } from './sql-schema';
 
 /** The tables that hold posted financial truth. */
@@ -255,6 +256,101 @@ export function postingPrimitiveGrantees(schema: string): string[] {
   return functionGrantees(schema, POSTING_PRIMITIVE);
 }
 
+/**
+ * ── P3-S8: the inventory perimeter (A-18(c)) ─────────────────────────────
+ *
+ * The ledger perimeter above has an inventory twin that nothing enforced: the
+ * database refuses a runtime role's DML on a Phase 3 table (no runtime role
+ * holds any, A-07), but a service that tried, or a migration that granted it,
+ * would only be caught by a live suite. So, statically:
+ *
+ *   1. no `INSERT INTO`, `UPDATE`, `DELETE FROM`, `MERGE INTO` or `TRUNCATE`
+ *      of a perimeter table in application code — `apps/**` and
+ *      `packages/<name>/src/**` — which may only CALL the inventory commands;
+ *   2. no migration grants INSERT, UPDATE, DELETE or TRUNCATE (or ALL) on a
+ *      perimeter table — or on ALL TABLES IN SCHEMA — to any `daftar_*` role
+ *      but the two internal principals, or to PUBLIC.
+ *
+ * The perimeter is the G-3 discovery: every relation the accepted Phase 2
+ * prefix did not create (`discoverPhase3Relations`). A perimeter table can
+ * only be granted after it exists, so (2) reads the whole schema.
+ */
+export const INVENTORY_PERIMETER = {
+  /** The perimeter tables of one schema text, sorted. */
+  tables: (schema: string): string[] => discoverPhase3Relations(schema),
+  /** The only roles a migration may give DML inside the perimeter. */
+  writers: ['daftar_inventory_internal', 'daftar_accounting_internal'] as readonly string[],
+  /** Application code, by repository-relative path. */
+  appCode: /^(?:apps\/|packages\/[^/]+\/src\/)/,
+} as const;
+
+const escapeRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/** A TypeScript/JavaScript source with its comments blanked, so prose that names a table is not a statement. */
+function stripCodeComments(source: string): string {
+  return source.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/(^|[^:'"`\\])\/\/[^\n]*/g, '$1');
+}
+
+/** The inventory-perimeter violations of one schema and one set of application files (A-18(c)). */
+export function findInventoryPerimeterViolations(src: PostingSurfaceSources): string[] {
+  const v: string[] = [];
+  const schema = stripComments(src.schema);
+  const perimeter = INVENTORY_PERIMETER.tables(src.schema);
+  if (perimeter.length === 0) return v;
+  const tables = new Set(perimeter);
+
+  for (const m of schema.matchAll(/\bGRANT\s+([^;]+?)\s+ON\s+([^;]+?)\s+TO\s+([^;]+);/gi)) {
+    const [, privText = '', objText = '', granteeText = ''] = m;
+    const allTables = /^\s*ALL\s+TABLES\s+IN\s+SCHEMA\b/i.test(objText);
+    if (!allTables && /^\s*(FUNCTION|PROCEDURE|ROUTINE|SCHEMA|DATABASE|SEQUENCE|ALL|LANGUAGE|TYPE|DOMAIN)\b/i.test(objText)) continue;
+    const named = objText
+      .replace(/^\s*TABLE\s+/i, '')
+      .split(',')
+      .map((t) =>
+        t
+          .trim()
+          .replace(/^ONLY\s+/i, '')
+          .replace(/^"?public"?\s*\.\s*/i, '')
+          .replace(/^"(.*)"$/, '$1')
+          .toLowerCase(),
+      );
+    const hit = allTables ? ['ALL TABLES IN SCHEMA'] : named.filter((t) => tables.has(t));
+    if (hit.length === 0) continue;
+    const privileges = privText
+      .replace(/\([^)]*\)/g, ' ')
+      .split(',')
+      .map((p) => p.trim().toUpperCase());
+    if (!privileges.some((p) => ['INSERT', 'UPDATE', 'DELETE', 'TRUNCATE'].includes(p) || p.startsWith('ALL'))) continue;
+    for (const grantee of granteeText
+      .replace(/\s+WITH\s+GRANT\s+OPTION\s*$/i, '')
+      .split(',')
+      .map((g) => g.trim().replace(/^"(.*)"$/, '$1'))) {
+      const runtime = grantee.toUpperCase() === 'PUBLIC' || grantee.startsWith('daftar_');
+      if (runtime && !INVENTORY_PERIMETER.writers.includes(grantee)) {
+        v.push(
+          `a migration grants ${grantee} direct DML on ${hit.join(', ')} inside the inventory perimeter — only the internal principals write Phase 3 truth, through asserted routines (G-4, A-18(c))`,
+        );
+      }
+    }
+  }
+
+  const dml = new RegExp(
+    String.raw`(?<!\bFOR\s+(?:NO\s+KEY\s+)?)\b(INSERT\s+INTO|UPDATE|DELETE\s+FROM|MERGE\s+INTO|TRUNCATE(?:\s+TABLE)?)\s+(?:ONLY\s+)?(?:"?public"?\s*\.\s*)?"?(${perimeter.map(escapeRe).join('|')})"?\b`,
+    'i',
+  );
+  for (const [path, source] of Object.entries(src.appFiles)) {
+    const rel = path.split('\\').join('/');
+    if (!INVENTORY_PERIMETER.appCode.test(rel)) continue;
+    const match = dml.exec(stripCodeComments(source));
+    if (match) {
+      v.push(
+        `${rel} issues \`${match[1]?.toUpperCase().replace(/\s+/g, ' ')} ${match[2]}\` — application code may only CALL the inventory commands (G-4, A-18(c))`,
+      );
+    }
+  }
+  return v;
+}
+
 const LEDGER_DML = new RegExp(
   `\\b(INSERT\\s+INTO|UPDATE|DELETE\\s+FROM|TRUNCATE(?:\\s+TABLE)?)\\s+(?:public\\.)?(${[...LEDGER_TABLES, ...SOURCE_DETAIL_TABLES].join('|')})\\b`,
   'i',
@@ -356,6 +452,9 @@ export function findPostingSurfaceViolations(src: PostingSurfaceSources): string
       v.push(`${path} issues \`${match[1]?.toUpperCase()} ${match[2]}\` — application code may only CALL the accounting commands (G-4)`);
     }
   }
+
+  // P3-S8 (A-18(c)): the inventory perimeter, whether or not the ledger writer exists.
+  v.push(...findInventoryPerimeterViolations(src));
 
   return v;
 }

@@ -19,6 +19,7 @@
  * below is accounting storage only: the journal, the chart, and every
  * `accounting_*` table. P2-S5 adds the FX rate tables it introduces.
  */
+import { isPhase3Relation } from './no-authoritative-balance';
 import { findColumnDeclarations, findColumnTypeChanges } from './sql-schema';
 
 /**
@@ -110,6 +111,13 @@ export function findFloatRateColumns(sql: string): RateColumnFinding[] {
  * P3-AL-49 closed. The watched set is discovered by name, so a table written
  * in a later slice is covered the day it exists.
  *
+ * P3-S8 (A-18(b), TL-10): and by migration position. Every Phase 3 relation
+ * — every stored relation the accepted Phase 2 prefix did not create
+ * (`isPhase3Relation`, shared with G-3) — is held to the same exact types.
+ * `units`, `unit_names`, `branch_warehouses`, `stocktakes`,
+ * `stocktake_lines` and the supplier, purchase and settlement tables escaped
+ * the prefix match; all of them are clean.
+ *
  * Everything above this line is unchanged: the accounting rule is neither
  * widened nor narrowed by the inventory one.
  */
@@ -167,7 +175,9 @@ export function findInventoryNumericViolations(sql: string): RateColumnFinding[]
   const findings: RateColumnFinding[] = [];
   // `ALTER COLUMN … TYPE` re-declares a column: read it like a declaration (L-3).
   for (const decl of [...findColumnDeclarations(sql), ...findColumnTypeChanges(sql)]) {
-    if (!isInventoryTable(decl.table)) continue;
+    // P3-S8 (A-18(b)): every Phase 3 relation, by migration position — the
+    // same discovery as G-3 — not only the prefixed names.
+    if (!isInventoryTable(decl.table) && !isPhase3Relation(decl.table)) continue;
     if (FLOAT_TYPES.test(decl.rest)) {
       findings.push({
         table: decl.table,

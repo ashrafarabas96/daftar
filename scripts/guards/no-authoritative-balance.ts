@@ -12,6 +12,10 @@
  * declared authoritative below. A report DTO, a query result or a TypeScript
  * field named `balance` is a read model and is none of this guard's business.
  */
+import { createHash } from 'node:crypto';
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { PHASE2_PREFIX, PHASE2_PREFIX_END } from '../phase2-prefix';
 import {
   CONSTRAINT_OPENERS,
   balancedBody,
@@ -22,6 +26,69 @@ import {
   topLevelItems,
   unquote,
 } from './sql-schema';
+
+/**
+ * ── P3-S8: the Phase 3 surface, discovered by migration position (A-18(a), TL-10) ──
+ *
+ * Until P3-S8 the inventory half below found its tables by NAME
+ * (`INVENTORY_TABLE_NAME`, `SUPPLIER_TABLE_NAME`), and five Phase 3 tables
+ * carry neither prefix: `units`, `unit_names`, `branch_warehouses`,
+ * `stocktakes`, `stocktake_lines`. A rule keyed on a name protects a name.
+ *
+ * So the Phase 3 set is now "every stored relation that the accepted Phase 2
+ * prefix (`0000`–`PHASE2_PREFIX_END`) did not create" — the static form of the
+ * contract's catalogue definition (§0), and equal on the real tree to "every
+ * relation a migration after `PHASE2_PREFIX_END` creates" (T-14 proves the
+ * two agree). The prefix is frozen and digest-pinned
+ * (`scripts/phase2-prefix.ts`), so its relation set is read once, from those
+ * files, and verified against their accepted digests first. A prefix file
+ * that is missing or differs yields an EMPTY prefix set: every relation is
+ * then treated as Phase 3, which can only make the guards stricter.
+ *
+ * The names still choose the column VOCABULARY: supplier, purchase and
+ * payment-method tables keep the AP words; every other Phase 3 relation gets
+ * the inventory words (`STOCK_CACHE_EXCEPTION` stays the one named exception).
+ */
+const MIGRATIONS_DIR = join(__dirname, '../../infrastructure/database/migrations');
+
+let prefixRelations: ReadonlySet<string> | null = null;
+
+/** Every stored relation the accepted Phase 2 prefix creates, read from its digest-verified files. */
+export function phase2PrefixRelations(): ReadonlySet<string> {
+  if (prefixRelations !== null) return prefixRelations;
+  const found = new Set<string>();
+  for (const [name, sha256] of PHASE2_PREFIX) {
+    const path = join(MIGRATIONS_DIR, name);
+    const bytes = existsSync(path) ? readFileSync(path) : null;
+    if (bytes === null || createHash('sha256').update(bytes).digest('hex') !== sha256) {
+      prefixRelations = new Set();
+      return prefixRelations;
+    }
+    for (const relation of discoverStoredRelations(bytes.toString('utf8'))) found.add(relation);
+  }
+  prefixRelations = found;
+  return prefixRelations;
+}
+
+/** Whether a relation belongs to the Phase 3 surface: the accepted Phase 2 prefix did not create it. */
+export function isPhase3Relation(table: string): boolean {
+  return !phase2PrefixRelations().has(table.toLowerCase());
+}
+
+/** Every Phase 3 relation one SQL text makes, sorted. */
+export function discoverPhase3Relations(sql: string): string[] {
+  return discoverStoredRelations(sql).filter(isPhase3Relation);
+}
+
+/** The positional form, over named migrations: every relation a file after `PHASE2_PREFIX_END` makes, sorted. */
+export function discoverPhase3RelationsByPosition(migrations: Readonly<Record<string, string>>): string[] {
+  const found = new Set<string>();
+  for (const [path, sql] of Object.entries(migrations)) {
+    if ((path.split('/').pop() ?? path) <= PHASE2_PREFIX_END) continue;
+    for (const relation of discoverStoredRelations(sql)) found.add(relation);
+  }
+  return [...found].sort();
+}
 
 /**
  * Accounting source-of-truth tables. The journal joined the list in P2-S2:
@@ -221,9 +288,14 @@ const INVENTORY_FORBIDDEN_TABLE = /(^|_)(stock|inventory)_(balances?|summar(y|ie
  * `public.stock_movements` is `stock_movements` — a materialized view, a
  * `SELECT … INTO`, or as the new name of `ALTER TABLE … RENAME TO`
  * (security review L-3).
+ *
+ * P3-S8 (A-18(a)): and every other Phase 3 relation that is not a supplier,
+ * purchase or payment-method table — `units`, `unit_names`,
+ * `branch_warehouses`, `stocktakes`, `stocktake_lines` and whatever a later
+ * slice adds under a name without the prefix.
  */
 export function discoverInventoryTables(sql: string): string[] {
-  return discoverStoredRelations(sql).filter((table) => INVENTORY_TABLE_NAME.test(table));
+  return discoverStoredRelations(sql).filter((table) => INVENTORY_TABLE_NAME.test(table) || (isPhase3Relation(table) && !SUPPLIER_TABLE_NAME.test(table)));
 }
 
 /**

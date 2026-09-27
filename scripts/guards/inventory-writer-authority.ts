@@ -31,9 +31,35 @@
  * - A PROCEDURE, an `ALTER ROUTINE … OWNER TO` and a quoted owner are
  *   handovers like any other; G-7 (`inventory-definer-contract.ts`) reads
  *   them, and this rule watches what G-7 reports as transferred.
+ *
+ * ── Widened in P3-S8 (contract A-04, A-18(e); the static analogue of T-02) ──
+ *
+ * - The table set is no longer a name list. It is the TRUTH SET: every table
+ *   a migration after `PHASE2_PREFIX_END` grants INSERT, UPDATE or DELETE to
+ *   `daftar_inventory_internal` (table or column level), minus the key
+ *   domain and the side-effect logs (`TRUTH_TABLE_EXCLUSIONS`, L:1868) — and
+ *   still every table `STOCK_WRITE_TABLES` names. A new Phase 3 table the
+ *   principal may write is watched the day its grant is written.
+ * - The routines watched are every routine handed to the principal (as
+ *   before) AND every routine a migration after the prefix defines, of any
+ *   owner: a migrator-owned definer that wrote a truth table would be a
+ *   writer nobody authorized just the same.
+ * - "Its arguments call no function" becomes "its arguments call only PURE
+ *   functions" (A-04 clause 2): a routine handed to the principal whose every
+ *   definition is declared IMMUTABLE or STABLE and whose body writes nothing
+ *   (the digest helpers `inventory_claimed_payload_digest`,
+ *   `inventory_fixed_text`, `inventory_reason_words`), or one of the exact
+ *   built-ins `PURE_BUILTINS`, whose volatility T-02 proves live. Anything
+ *   else — a VOLATILE helper, a writer, an unknown name — is still refused.
+ * - The exception set is exact: `WRITER_AUTHORITY_EXCEPTIONS` =
+ *   { warehouses_home_branch_maintain }, the derived home-association
+ *   maintainer the frozen `provision_create_business` reaches (L:1837-1839,
+ *   L:2161). An exception that no longer writes a truth table is reported,
+ *   so the set cannot silently outlive its reason.
  */
-import { checkInventoryDefinerContract, inventoryRoutineDefinitions } from './inventory-definer-contract';
-import { QUALIFIED_NAME, balancedBody, unquote } from './sql-schema';
+import { PHASE2_PREFIX_END } from '../phase2-prefix';
+import { checkInventoryDefinerContract, inventoryRoutineDefinitions, type InventoryRoutineDefinition } from './inventory-definer-contract';
+import { QUALIFIED_NAME, balancedBody, stripComments, stripNonSchema, unquote } from './sql-schema';
 
 /**
  * The stock tables whose writes need a verified assertion, bridges included.
@@ -52,6 +78,63 @@ import { QUALIFIED_NAME, balancedBody, unquote } from './sql-schema';
 export const STOCK_WRITE_TABLES =
   /^(stock_movements|stock_levels|stock_source_bindings|negative_inventory_deficits|negative_deficit_coverages|negative_inventory_cost_adjustments|supplier_credit_notes|stock_source_bridge_\w+)$/;
 
+/**
+ * P3-S8 (A-04, §0): tables the principal may write that are NOT domain truth
+ * — the assertion key domain and the side-effect logs. Their writers are
+ * governed by the key-domain contract (L:1868), not by this rule.
+ */
+export const TRUTH_TABLE_EXCLUSIONS: readonly string[] = ['inventory_assertion_keys', 'inventory_assertion_uses', 'audit_events', 'outbox_events'];
+
+/** P3-S8 (A-04): the one routine that writes a truth table without an assertion, asserted exactly. */
+export const WRITER_AUTHORITY_EXCEPTIONS: readonly string[] = ['warehouses_home_branch_maintain'];
+
+/** P3-S8 (A-04 clause 2): the built-ins an assertion call's arguments may use; T-02 proves each is IMMUTABLE or STABLE live. */
+export const PURE_BUILTINS: readonly string[] = ['unnest', 'cardinality', 'to_char', 'lower', 'extract', 'trunc', 'generate_series', 'array_fill'];
+
+const INVENTORY_PRINCIPAL = 'daftar_inventory_internal';
+
+/** Whether a migration path is after the Phase 2 prefix, i.e. a Phase 3 (or later) file. */
+export function isAfterPhase2Prefix(path: string): boolean {
+  return (path.split('/').pop() ?? path) > PHASE2_PREFIX_END;
+}
+
+/** Objects a GRANT can name that are not tables. */
+const NOT_A_TABLE_GRANT = /^\s*(?:FUNCTION|PROCEDURE|ROUTINE|SCHEMA|DATABASE|SEQUENCE|LANGUAGE|TYPE|DOMAIN|FOREIGN|LARGE|TABLESPACE|PARAMETER|ALL\s)/i;
+
+/**
+ * The truth set of A-04, read statically: every table a migration after the
+ * Phase 2 prefix grants INSERT, UPDATE or DELETE (or ALL) to the inventory
+ * principal, at table or column level, minus `TRUTH_TABLE_EXCLUSIONS`.
+ * Sorted.
+ */
+export function truthTables(migrations: Readonly<Record<string, string>>): string[] {
+  const found = new Set<string>();
+  const tableItem = new RegExp(String.raw`^\s*(?:ONLY\s+)?${QUALIFIED_NAME}\s*$`, 'i');
+  for (const [path, sql] of Object.entries(migrations)) {
+    if (!isAfterPhase2Prefix(path)) continue;
+    for (const m of stripNonSchema(sql).matchAll(/\bGRANT\s+([^;]+?)\s+ON\s+([^;]+?)\s+TO\s+([^;]+?)\s*;/gi)) {
+      const [, privText = '', objText = '', granteeText = ''] = m;
+      if (NOT_A_TABLE_GRANT.test(objText)) continue;
+      const grantees = granteeText
+        .replace(/\s+WITH\s+GRANT\s+OPTION\s*$/i, '')
+        .split(',')
+        .map((g) => unquote(g.trim()));
+      if (!grantees.includes(INVENTORY_PRINCIPAL)) continue;
+      const privileges = privText
+        .replace(/\([^)]*\)/g, ' ')
+        .split(',')
+        .map((p) => p.trim().toUpperCase());
+      if (!privileges.some((p) => p === 'INSERT' || p === 'UPDATE' || p === 'DELETE' || p.startsWith('ALL'))) continue;
+      for (const item of objText.replace(/^\s*TABLE\s+/i, '').split(',')) {
+        const name = tableItem.exec(item);
+        if (name) found.add(unquote(name[1] ?? ''));
+      }
+    }
+  }
+  for (const excluded of TRUTH_TABLE_EXCLUSIONS) found.delete(excluded);
+  return [...found].sort();
+}
+
 /** Single-quoted literals out, so a message that names a table is not a write. */
 function stripLiterals(body: string): string {
   return body.replace(/'(?:[^']|'')*'/g, "''");
@@ -62,12 +145,12 @@ function stripLiterals(body: string): string {
  * `FOR [NO KEY] UPDATE`), `DELETE FROM t`, `MERGE INTO t`, `TRUNCATE t, …`
  * and `COPY t FROM`, with `t` bare, quoted or schema-qualified.
  */
-export function stockTablesWritten(body: string): string[] {
+export function stockTablesWritten(body: string, watched: (table: string) => boolean = (t) => STOCK_WRITE_TABLES.test(t)): string[] {
   const text = stripLiterals(body);
   const found = new Set<string>();
   const add = (name: string) => {
     const t = unquote(name);
-    if (STOCK_WRITE_TABLES.test(t)) found.add(t);
+    if (watched(t)) found.add(t);
   };
   const patterns = [
     new RegExp(String.raw`\bINSERT\s+INTO\s+${QUALIFIED_NAME}`, 'gi'),
@@ -172,13 +255,14 @@ const ASSERTION_CALL = /^(?:[A-Za-z_][A-Za-z0-9_.]*\s*:?=\s*|SELECT\s+|PERFORM\s
  * is: the call must open the statement, its arguments must call nothing, and
  * nothing may follow it but `INTO <target>`.
  */
-export function assertionFirstProblem(first: string): string | null {
+export function assertionFirstProblem(first: string, isPure: (name: string) => boolean = () => false): string | null {
   const m = ASSERTION_CALL.exec(first);
   if (!m) return 'its first statement is not inventory_assertion_consume( / inventory_assertion_current(';
   const open = m.index + m[0].length - 1;
   const args = balancedBody(first, open);
   if (args === null) return 'its first statement is not a complete assertion call';
-  const calls = functionCalls(args);
+  // P3-S8 (A-04 clause 2): a pure call computes the claimed digest; anything else could act before the assertion runs.
+  const calls = functionCalls(args).filter((name) => !isPure(name));
   if (calls.length > 0) return `its assertion call's arguments call ${calls.join(', ')} before the assertion runs`;
   const tail = first.slice(open + args.length + 2);
   if (!/^\s*(?:INTO\s+(?:STRICT\s+)?[A-Za-z_][\w$.]*(?:\s*,\s*[A-Za-z_][\w$.]*)*)?\s*$/i.test(tail)) {
@@ -209,23 +293,87 @@ export function declareInitialiserProblems(body: string): string[] {
   return problems;
 }
 
+/** Any write to any table: the "writes nothing" half of purity. */
+const ANY_WRITE =
+  /\bINSERT\s+INTO\b|(?<!\bFOR\s+(?:NO\s+KEY\s+)?)\bUPDATE\s+(?:ONLY\s+)?(?:"[^"]+"|[A-Za-z_][\w$.]*)\s+(?:(?:AS\s+)?[A-Za-z_]\w*\s+)?SET\b|\bDELETE\s+FROM\b|\bMERGE\s+INTO\b|\bTRUNCATE\b|\bCOPY\b[^;]*\bFROM\b/i;
+
+/**
+ * The options of one definition: the text from its `CREATE` to its body
+ * delimiter, in the comment-stripped file (`stripped`: file → text, filled
+ * lazily so each file is stripped once).
+ */
+function definitionHeader(migrations: Readonly<Record<string, string>>, stripped: Map<string, string>, d: InventoryRoutineDefinition): string {
+  let text = stripped.get(d.file);
+  if (text === undefined) {
+    const path = Object.keys(migrations).find((p) => (p.split('/').pop() ?? p) === d.file) ?? d.file;
+    text = stripComments(migrations[path] ?? '');
+    stripped.set(d.file, text);
+  }
+  const rest = text.slice(d.offset, d.end);
+  const start = /\$[A-Za-z_]*\$|\bAS\s+'|\bRETURN\b|\bBEGIN\s+ATOMIC\b/i.exec(rest);
+  return rest.slice(0, start?.index ?? rest.length);
+}
+
+/**
+ * The routines an assertion call's arguments may call (A-04 clause 2): every
+ * routine handed to the principal whose EVERY definition is declared
+ * IMMUTABLE or STABLE and writes nothing, plus `PURE_BUILTINS`. Sorted.
+ * `definitions` and `transferred` default to a fresh parse of `migrations`.
+ */
+export function pureAssertionHelpers(
+  migrations: Readonly<Record<string, string>>,
+  definitions: readonly InventoryRoutineDefinition[] = inventoryRoutineDefinitions(migrations),
+  transferred: ReadonlySet<string> = new Set(checkInventoryDefinerContract({ migrations }).transferred),
+): string[] {
+  const byName = new Map<string, InventoryRoutineDefinition[]>();
+  for (const d of definitions) byName.set(d.name, [...(byName.get(d.name) ?? []), d]);
+  const stripped = new Map<string, string>();
+  const pure: string[] = [];
+  for (const [name, defs] of byName) {
+    if (!transferred.has(name)) continue;
+    const everyDefinitionPure = defs.every((d) => {
+      const header = definitionHeader(migrations, stripped, d);
+      const declared = /\b(IMMUTABLE|STABLE)\b/i.test(header) && !/\bVOLATILE\b/i.test(header);
+      return declared && d.body !== null && !ANY_WRITE.test(stripLiterals(d.body));
+    });
+    if (everyDefinitionPure) pure.push(name);
+  }
+  return [...pure, ...PURE_BUILTINS].sort();
+}
+
 export interface InventoryWriterReport {
   readonly violations: string[];
-  /** `file: routine` for every definition that writes a stock table — the set the rule is watching. */
+  /** `file: routine` for every definition that writes a stock or truth table — the set the rule is watching. */
   readonly writers: string[];
+  /** `file: routine` for the definitions `WRITER_AUTHORITY_EXCEPTIONS` exempts (P3-S8, A-04). */
+  readonly exempt: string[];
+  /** The truth set watched beside the `STOCK_WRITE_TABLES` names (P3-S8, A-04). */
+  readonly truthTables: string[];
 }
 
 export function checkInventoryWriterAuthority(migrations: Readonly<Record<string, string>>): InventoryWriterReport {
   const transferred = new Set(checkInventoryDefinerContract({ migrations }).transferred);
+  const definitions = inventoryRoutineDefinitions(migrations);
+  const truth = truthTables(migrations);
+  const truthSet = new Set(truth);
+  const watched = (t: string): boolean => STOCK_WRITE_TABLES.test(t) || truthSet.has(t);
+  const pure = new Set(pureAssertionHelpers(migrations, definitions, transferred));
   const violations: string[] = [];
   const writers: string[] = [];
-  for (const d of inventoryRoutineDefinitions(migrations)) {
-    if (!transferred.has(d.name) || d.body === null) continue;
-    const tables = stockTablesWritten(d.body);
+  const exempt: string[] = [];
+  for (const d of definitions) {
+    if (d.body === null) continue;
+    // Handed to the principal (in any file), or defined after the prefix (of any owner): P3-S8, A-04.
+    if (!transferred.has(d.name) && !isAfterPhase2Prefix(d.file)) continue;
+    const tables = stockTablesWritten(d.body, watched);
     if (tables.length === 0) continue;
+    if (WRITER_AUTHORITY_EXCEPTIONS.includes(d.name)) {
+      exempt.push(`${d.file}: ${d.name}`);
+      continue;
+    }
     writers.push(`${d.file}: ${d.name}`);
     const problems: string[] = [];
-    const first = assertionFirstProblem(firstStatement(d.body));
+    const first = assertionFirstProblem(firstStatement(d.body), (name) => pure.has(name));
     if (first !== null) problems.push(first);
     problems.push(...declareInitialiserProblems(d.body));
     if (/\bEXCEPTION\s+WHEN\b/i.test(stripLiterals(d.body))) {
@@ -237,5 +385,11 @@ export function checkInventoryWriterAuthority(migrations: Readonly<Record<string
       );
     }
   }
-  return { violations, writers };
+  // The exception set is exact (A-04): an exception that writes no truth table any more has outlived its reason.
+  for (const name of WRITER_AUTHORITY_EXCEPTIONS) {
+    if (truth.length > 0 && !exempt.some((e) => e.endsWith(`: ${name}`))) {
+      violations.push(`${name} is a rule-22 exception but writes no truth table — the exception set is exact and must shrink with it (A-04)`);
+    }
+  }
+  return { violations, writers, exempt, truthTables: truth };
 }
