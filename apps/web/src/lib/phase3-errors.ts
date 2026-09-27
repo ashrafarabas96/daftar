@@ -16,6 +16,9 @@ import { ApiError } from './client';
 
 const CATALOG: Readonly<Record<string, string>> = en;
 
+/** The key a page shows when a command succeeded but reading its result back failed (m-3): "Saved. Refresh the page…". */
+export const SAVED_REFRESH_KEY = 'common.savedRefresh';
+
 /** The key a refusal renders under when nothing more specific exists (GL "data safe" error). */
 export const FALLBACK_ERROR_KEY = 'error.fallback';
 

@@ -232,6 +232,8 @@
   "common.empty": "Nothing here yet",
   "common.noResults": "No results",
   "common.saved": "Saved",
+  "common.savedRefresh": "Saved. Refresh the page to see the latest.",
+  "common.loadFailed": "We couldn't load this. Your data is safe — try again.",
   "error.fallback": "Nothing was saved. Your data is safe — try again",
   "error.NOT_FOUND": "We couldn't find this. Nothing was saved. Go back and open it again from the list.",
   "error.VALIDATION_FAILED": "Some details are missing or not valid. Nothing was saved. Check the form and try again.",

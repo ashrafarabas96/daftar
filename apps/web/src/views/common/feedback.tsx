@@ -6,7 +6,12 @@ import { Button, ErrorState, PermissionDeniedState, Spinner, TextField } from '@
 import { Ltr, rich, type ViewBaseProps } from '@/lib/phase3-format';
 import { CivilDate, Notice, Stack, Text } from './primitives';
 
-/** What a page shows before its data: loading, a 403 on load (`PermissionDeniedState`, §3(b)), or a failed load. */
+/**
+ * What a page shows before its data: loading, a 403 on load (`PermissionDeniedState`
+ * with `common.noPermission`, §3(b), A-04), or a failed load. A failed LOAD says
+ * the data is safe — never "nothing was saved", which is about a command (m-8).
+ * The purchasing, supplier and stock pages all use this one component (N-1).
+ */
 export type PageStatus = 'loading' | 'denied' | 'failed';
 
 export interface PageStateProps {
@@ -16,17 +21,19 @@ export interface PageStateProps {
 
 export function PageStateView({ t, status, onRetry }: PageStateProps & ViewBaseProps) {
   if (status === 'loading') return <Spinner label={t('common.loading')} />;
-  if (status === 'denied') return <PermissionDeniedState title={t('error.FORBIDDEN')} />;
-  return <ErrorState title={t('error.fallback')} retryLabel={t('common.tryAgain')} onRetry={onRetry} />;
+  if (status === 'denied') return <PermissionDeniedState title={t('common.noPermission')} description={t('stock.common.askOwner')} />;
+  return <ErrorState title={t('common.loadFailed')} retryLabel={t('common.tryAgain')} onRetry={onRetry} />;
 }
 
 /**
  * A refusal, as the catalog says it (A-15(d)): the key comes from
  * `refusalKey(error)` in the page, never from the server's message (A-15(e)).
+ * A non-refusal key — `common.savedRefresh`, when a command succeeded but the
+ * page could not read the result back (m-3) — is a warning, not an alert.
  */
 export function RefusalNotice({ t, errorKey }: { errorKey: string | null } & ViewBaseProps) {
   if (errorKey === null) return null;
-  return <Notice tone="danger">{t(errorKey)}</Notice>;
+  return <Notice tone={errorKey.startsWith('error.') ? 'danger' : 'warning'}>{t(errorKey)}</Notice>;
 }
 
 export interface ExchangeRatePromptProps {

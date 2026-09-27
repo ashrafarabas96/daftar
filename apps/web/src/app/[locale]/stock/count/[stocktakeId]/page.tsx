@@ -34,7 +34,7 @@ export default function CountSheetPage({ params }: { params: Promise<{ locale: L
   const router = useRouter();
   const screen = useInventoryScreen(locale, ['inventory.view', 'inventory.stocktake']);
   const [stocktake, setStocktake] = useState<InventoryStocktakeDetailDto | null>(null);
-  const [loadError, setLoadError] = useState<{ denied: boolean; key: string } | null>(null);
+  const [loadError, setLoadError] = useState<{ denied: boolean } | null>(null);
   const [counts, setCounts] = useState<Record<string, string>>({});
   const [newLines, setNewLines] = useState<DraftLine[]>([]);
   const [search, setSearch] = useState('');
@@ -56,7 +56,7 @@ export default function CountSheetPage({ params }: { params: Promise<{ locale: L
 
   const load = useCallback(() => {
     setLoadError(null);
-    reread().catch((error: unknown) => setLoadError({ denied: isPermissionRefusal(error), key: refusalKey(error) }));
+    reread().catch((error: unknown) => setLoadError({ denied: isPermissionRefusal(error) }));
   }, [reread]);
 
   useEffect(() => {
@@ -163,9 +163,9 @@ export default function CountSheetPage({ params }: { params: Promise<{ locale: L
   return (
     <PageShell locale={locale} active="stock">
       {screen.phase !== 'ready' ? (
-        <ScreenState t={t} locale={locale} state={screen.phase} errorKey={screen.errorKey} onRetry={screen.reload} />
+        <ScreenState t={t} locale={locale} state={screen.phase} onRetry={screen.reload} />
       ) : loadError !== null ? (
-        <ScreenState t={t} locale={locale} state={loadError.denied ? 'denied' : 'failed'} errorKey={loadError.key} onRetry={load} />
+        <ScreenState t={t} locale={locale} state={loadError.denied ? 'denied' : 'failed'} onRetry={load} />
       ) : stocktake === null ? (
         <ScreenState t={t} locale={locale} state="loading" />
       ) : (

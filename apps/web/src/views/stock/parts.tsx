@@ -7,24 +7,12 @@
  * every number inside `<bdi dir="ltr">`.
  */
 import type { CSSProperties, ReactNode } from 'react';
-import {
-  Badge,
-  Button,
-  Card,
-  ErrorState,
-  List,
-  PermissionDeniedState,
-  SearchField,
-  Select,
-  Spinner,
-  TextField,
-  colors,
-  spacing,
-  typography,
-} from '@daftar/design-system';
+import { Badge, Button, Card, List, SearchField, Select, TextField, colors, spacing, typography } from '@daftar/design-system';
 import type { InventoryWarehouseDto } from '@/lib/phase3-api';
 import { Ltr, formatQty, isZeroQuantityText, rich, unsignedQty, type Translate, type ViewBaseProps } from '@/lib/phase3-format';
 import type { Locale } from '@/lib/i18n';
+import { PageStateView, type PageStatus } from '../common/feedback';
+import { Notice as SharedNotice } from '../common/primitives';
 import { isNegativeText, trimQtyText, type DraftLine, type PickOption } from './model';
 
 /** A grid that is one column at phone width and more when there is room (A-16(1)). */
@@ -50,14 +38,11 @@ export function Hint(props: { children: ReactNode }) {
   return <p style={{ margin: 0, color: colors.neutral[500], fontFamily: typography.fontFamily.base, fontSize: typography.size.sm }}>{props.children}</p>;
 }
 
-/** A server answer or a refusal, as text the catalog holds (A-15(d)). */
-export function Notice(props: { tone: 'error' | 'success' | 'info'; children: ReactNode }) {
-  const color = props.tone === 'error' ? colors.semantic.danger : props.tone === 'success' ? colors.semantic.success : colors.neutral[700];
-  return (
-    <p role={props.tone === 'error' ? 'alert' : 'status'} style={{ margin: 0, color, fontFamily: typography.fontFamily.base, fontSize: typography.size.md }}>
-      {props.children}
-    </p>
-  );
+const NOTICE_TONE = { error: 'danger', success: 'success', info: 'info' } as const;
+
+/** A server answer or a refusal, as text the catalog holds (A-15(d)) — the one Notice of every S7 screen (N-1). */
+export function Notice(props: { tone: keyof typeof NOTICE_TONE; children: ReactNode }) {
+  return <SharedNotice tone={NOTICE_TONE[props.tone]}>{props.children}</SharedNotice>;
 }
 
 /** A wrapping row of actions; on a phone each action takes its own row. */
@@ -65,12 +50,9 @@ export function ActionRow(props: { children: ReactNode }) {
   return <div style={{ display: 'flex', flexWrap: 'wrap', gap: spacing[2] }}>{props.children}</div>;
 }
 
-/** A page that cannot show its screen: loading, no permission, or a failed load (§3(b)). */
-export function ScreenState(props: ViewBaseProps & { state: 'loading' | 'denied' | 'failed'; errorKey?: string | null; onRetry?: () => void }) {
-  const { t } = props;
-  if (props.state === 'loading') return <Spinner label={t('common.loading')} />;
-  if (props.state === 'denied') return <PermissionDeniedState title={t('common.noPermission')} description={t('stock.common.askOwner')} />;
-  return <ErrorState title={t(props.errorKey ?? 'error.fallback')} retryLabel={t('common.tryAgain')} onRetry={props.onRetry} />;
+/** A page that cannot show its screen: loading, no permission, or a failed load (§3(b)) — the shared page state (N-1, m-8). */
+export function ScreenState(props: ViewBaseProps & { state: PageStatus; onRetry?: () => void }) {
+  return <PageStateView t={props.t} locale={props.locale} status={props.state} onRetry={props.onRetry ?? (() => undefined)} />;
 }
 
 /** The unit's name in the merchant's language, or its code. */

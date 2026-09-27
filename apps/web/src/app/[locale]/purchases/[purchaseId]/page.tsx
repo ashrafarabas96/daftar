@@ -23,7 +23,7 @@ import {
   undoPurchaseReceipt,
   type PurchaseReturnOptionsDto,
 } from '@/lib/phase3-api';
-import { refusalKey, withConflictRetry } from '@/lib/phase3-errors';
+import { SAVED_REFRESH_KEY, refusalKey, withConflictRetry } from '@/lib/phase3-errors';
 import { localDateIso } from '@/lib/phase3-format';
 import { isNonZeroMinor } from '@/views/common/amount-text';
 import { PageStateView, type PageStatus } from '@/views/common/feedback';
@@ -108,6 +108,7 @@ export default function PurchaseDetailPage({ params }: { params: Promise<{ local
   useEffect(() => {
     if (status !== 'ready') return;
     let live = true;
+    setLoadStatus('loading');
     load()
       .then((data) => {
         if (!live || !data) return;
@@ -131,22 +132,33 @@ export default function PurchaseDetailPage({ params }: { params: Promise<{ local
     setUndo({ ...undo, busy: true });
     setErrorKey(null);
     try {
-      const answer = await withConflictRetry(() => undoPurchaseReceipt(purchaseId, { reversalDate: localDateIso(), reason }));
-      setUndone(answer);
-      setUndo({ open: false, reason: '', reasonMissing: false, busy: false });
-      const fresh = await load();
-      if (fresh) setLoaded(fresh);
+      setUndone(await withConflictRetry(() => undoPurchaseReceipt(purchaseId, { reversalDate: localDateIso(), reason })));
     } catch (error) {
       setErrorKey(refusalKey(error));
       setUndo((u) => ({ ...u, busy: false }));
+      return;
+    }
+    setUndo({ open: false, reason: '', reasonMissing: false, busy: false });
+    // The receipt is undone; a failed re-read must not say otherwise (m-3).
+    try {
+      const fresh = await load();
+      if (fresh) setLoaded(fresh);
+    } catch {
+      setErrorKey(SAVED_REFRESH_KEY);
     }
   }
+
+  // "Try again" shows the spinner at once, not the failed state again until the data arrives (N-9).
+  const retryLoad = () => {
+    setLoadStatus('loading');
+    retry();
+  };
 
   const pageStatus = status !== 'ready' ? status : loadStatus;
   if (pageStatus !== 'ready' || !context || !loaded) {
     return (
       <PageShell locale={locale} active="purchases">
-        <PageStateView t={t} locale={locale} status={pageStatus === 'ready' ? 'loading' : pageStatus} onRetry={retry} />
+        <PageStateView t={t} locale={locale} status={pageStatus === 'ready' ? 'loading' : pageStatus} onRetry={retryLoad} />
       </PageShell>
     );
   }

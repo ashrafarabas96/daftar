@@ -29,6 +29,7 @@ export const VIEW_REGISTRY: readonly ViewEntry[] = [
     'a stable refusal key': { errorKey: 'error.supplier_payment.residue_below_base_unit' },
     'the data-safe fallback': { errorKey: 'error.fallback' },
     'nothing to say': { errorKey: null },
+    'saved, but the re-read failed': { errorKey: 'common.savedRefresh' },
   }),
   defineView('ExchangeRatePrompt', ExchangeRatePrompt, {
     'owner enters the rate': FX_PROMPT,

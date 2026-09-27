@@ -86,7 +86,7 @@ export default function MoveStockPage({ params }: { params: Promise<{ locale: Lo
   return (
     <PageShell locale={locale} active="stock">
       {screen.phase !== 'ready' ? (
-        <ScreenState t={t} locale={locale} state={screen.phase} errorKey={screen.errorKey} onRetry={screen.reload} />
+        <ScreenState t={t} locale={locale} state={screen.phase} onRetry={screen.reload} />
       ) : (
         <MoveStockView
           t={t}

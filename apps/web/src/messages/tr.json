@@ -232,6 +232,8 @@
   "common.empty": "Henüz burada bir şey yok",
   "common.noResults": "Sonuç yok",
   "common.saved": "Kaydedildi",
+  "common.savedRefresh": "Kaydedildi. Güncel hâli görmek için sayfayı yenileyin.",
+  "common.loadFailed": "Yüklenemedi. Verileriniz güvende — tekrar deneyin.",
   "error.fallback": "İşlem kaydedilmedi. Verileriniz güvende — tekrar deneyin",
   "error.NOT_FOUND": "Bu bulunamadı. Hiçbir şey kaydedilmedi. Geri dönüp listeden yeniden açın.",
   "error.VALIDATION_FAILED": "Bazı bilgiler eksik veya geçersiz. Hiçbir şey kaydedilmedi. Formu kontrol edip tekrar deneyin.",

@@ -9,7 +9,7 @@
  */
 import { use, useCallback, useEffect, useState } from 'react';
 import { notFound, useRouter } from 'next/navigation';
-import type { PaymentMethodDto, SupplierDto, SupplierPaymentDto } from '@daftar/shared-contracts';
+import type { PaymentMethodDto, SupplierDto, SupplierPaymentDto, SupplierRefundResultDto } from '@daftar/shared-contracts';
 import { makeT, type Locale } from '@/lib/i18n';
 import { isUuid } from '@/lib/route-ids';
 import {
@@ -22,7 +22,7 @@ import {
   listSupplierCreditNotes,
   listSupplierPayments,
 } from '@/lib/phase3-api';
-import { refusalKey, withConflictRetry } from '@/lib/phase3-errors';
+import { SAVED_REFRESH_KEY, refusalKey, withConflictRetry } from '@/lib/phase3-errors';
 import { amountInputToMinor, localDateIso } from '@/lib/phase3-format';
 import { isNonZeroMinor } from '@/views/common/amount-text';
 import { PageStateView, type PageStatus } from '@/views/common/feedback';
@@ -120,6 +120,7 @@ export default function SupplierDetailPage({ params }: { params: Promise<{ local
   useEffect(() => {
     if (status !== 'ready') return;
     let live = true;
+    setLoadStatus('loading');
     load()
       .then((data) => {
         if (!live) return;
@@ -155,8 +156,9 @@ export default function SupplierDetailPage({ params }: { params: Promise<{ local
     if (Object.values(errors).some(Boolean) || !note || !method || creditAmountMinor === null || receiptAmountMinor === null) return;
     setMoney((m) => ({ ...m, busy: true }));
     setErrorKey(null);
+    let done: SupplierRefundResultDto;
     try {
-      const done = await withConflictRetry(() =>
+      done = await withConflictRetry(() =>
         getMoneyBack({
           refundId,
           creditNoteId: note.creditNoteId,
@@ -168,20 +170,32 @@ export default function SupplierDetailPage({ params }: { params: Promise<{ local
           reference: money.reference.trim() || null,
         }),
       );
-      setRefundId(crypto.randomUUID());
-      setMoney({ ...closedMoneyBack(localDateIso()), done });
-      setLoaded(await load());
     } catch (error) {
       setErrorKey(refusalKey(error));
       setMoney((m) => ({ ...m, busy: false }));
+      return;
+    }
+    setRefundId(crypto.randomUUID());
+    setMoney({ ...closedMoneyBack(localDateIso()), done });
+    // The refund is recorded; a failed re-read must not say otherwise (m-3).
+    try {
+      setLoaded(await load());
+    } catch {
+      setErrorKey(SAVED_REFRESH_KEY);
     }
   }
+
+  // "Try again" shows the spinner at once, not the failed state again until the data arrives (N-9).
+  const retryLoad = () => {
+    setLoadStatus('loading');
+    retry();
+  };
 
   const pageStatus = status !== 'ready' ? status : loadStatus;
   if (pageStatus !== 'ready' || !context || !loaded) {
     return (
       <PageShell locale={locale} active="suppliers">
-        <PageStateView t={t} locale={locale} status={pageStatus === 'ready' ? 'loading' : pageStatus} onRetry={retry} />
+        <PageStateView t={t} locale={locale} status={pageStatus === 'ready' ? 'loading' : pageStatus} onRetry={retryLoad} />
       </PageShell>
     );
   }

@@ -605,11 +605,17 @@ export default function ReceivePurchasePage({ params, searchParams }: { params: 
         }
       : null;
 
+  // "Try again" shows the spinner at once, not the failed state again until the data arrives (N-9).
+  const retryLoad = () => {
+    setLoadStatus('loading');
+    retry();
+  };
+
   const pageStatus = status !== 'ready' ? status : loadStatus;
   return (
     <PageShell locale={locale} active="purchases">
       {pageStatus !== 'ready' || !context ? (
-        <PageStateView t={t} locale={locale} status={pageStatus === 'ready' ? 'loading' : pageStatus} onRetry={retry} />
+        <PageStateView t={t} locale={locale} status={pageStatus === 'ready' ? 'loading' : pageStatus} onRetry={retryLoad} />
       ) : (
         <ReceivePurchaseView
           t={t}

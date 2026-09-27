@@ -1,3 +1,5 @@
+import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { formatDecimalText } from '@/lib/phase3-format';
 import { translate, type Locale } from '@/lib/i18n';
@@ -133,5 +135,61 @@ describe('catalog wording (M-6, M-7, m-11, m-13, m-14, m-15)', () => {
     const r = render('ReceivePurchaseView', 'received and paid, foreign, covered short stock', 'ar');
     expect(text(r)).toContain('غطّى هذا المشترى');
     expect(formatDecimalText('2.5000', 'tr')).toBe('2,5');
+  });
+});
+
+describe('m-8, N-1 — one page state, worded for a page load', () => {
+  it('no permission reads common.noPermission and who to ask, on every area', () => {
+    for (const locale of LOCALES) {
+      for (const r of [render('PageStateView', 'denied', locale), render('ScreenState', 'no permission', locale)]) {
+        expect(text(r)).toContain(tr(locale, 'common.noPermission'));
+        expect(text(r)).toContain(tr(locale, 'stock.common.askOwner'));
+        expect(text(r)).not.toContain(tr(locale, 'error.FORBIDDEN'));
+      }
+    }
+  });
+
+  it('a failed load says the data is safe and never that nothing was saved', () => {
+    for (const locale of LOCALES) {
+      const purchases = render('PageStateView', 'failed', locale);
+      const stock = render('ScreenState', 'failed to load', locale);
+      for (const r of [purchases, stock]) {
+        expect(text(r)).toContain(tr(locale, 'common.loadFailed'));
+        expect(text(r)).not.toContain(tr(locale, 'error.fallback'));
+      }
+      expect(purchases.html).toBe(stock.html);
+    }
+  });
+});
+
+describe('m-3 — a success whose re-read failed is not reported as a refusal', () => {
+  it('"Saved. Refresh the page" is a status, not an alert', () => {
+    const r = render('RefusalNotice', 'saved, but the re-read failed');
+    expect(text(r)).toBe(tr('en', 'common.savedRefresh'));
+    expect([...elements(r.frame)].some((e) => e.attrs['role'] === 'alert')).toBe(false);
+    const refusal = render('RefusalNotice', 'a stable refusal key');
+    expect([...elements(refusal.frame)].some((e) => e.attrs['role'] === 'alert')).toBe(true);
+  });
+});
+
+describe('m-9 — the S7 pages work for a role without business.view', () => {
+  const pagesDir = join(__dirname, '../src/app/[locale]');
+  const files = (dir: string): string[] =>
+    readdirSync(dir).flatMap((entry) => {
+      const full = join(dir, entry);
+      return statSync(full).isDirectory() ? files(full) : /\.tsx?$/.test(entry) ? [full] : [];
+    });
+
+  it('no purchasing, supplier or stock page reads GET /businesses/current (it needs business.view)', () => {
+    const readers = ['purchases', 'suppliers', 'stock']
+      .flatMap((area) => files(join(pagesDir, area)))
+      .filter((file) => /\bgetCurrentBusiness\b/.test(readFileSync(file, 'utf8')));
+    expect(readers).toEqual([]);
+  });
+
+  it('the purchasing and supplier context reads the caller’s own memberships instead', () => {
+    const source = readFileSync(join(pagesDir, 'purchases/_shared/merchant-context.ts'), 'utf8');
+    expect(source).toMatch(/getMyBusinesses\(\)/);
+    expect(source).toMatch(/currentBusinessId\(\)/);
   });
 });

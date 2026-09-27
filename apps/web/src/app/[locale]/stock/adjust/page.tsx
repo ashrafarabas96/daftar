@@ -158,7 +158,7 @@ export default function AdjustStockPage({ params }: { params: Promise<{ locale: 
   return (
     <PageShell locale={locale} active="stock">
       {screen.phase !== 'ready' ? (
-        <ScreenState t={t} locale={locale} state={screen.phase} errorKey={screen.errorKey} onRetry={screen.reload} />
+        <ScreenState t={t} locale={locale} state={screen.phase} onRetry={screen.reload} />
       ) : (
         <AdjustStockView
           t={t}

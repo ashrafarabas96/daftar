@@ -7,7 +7,7 @@
  *
  * A member without the screen's permission gets `common.noPermission`
  * without a single command being tried; a refused load renders the
- * permission state on a 403 and the mapped text otherwise (§3(b)).
+ * permission state on a 403 and the data-safe load failure otherwise (§3(b)).
  */
 import { useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
@@ -31,7 +31,6 @@ export type ScreenPhase = 'loading' | 'ready' | 'denied' | 'failed';
 
 export interface InventoryScreen {
   readonly phase: ScreenPhase;
-  readonly errorKey: string | null;
   readonly access: InventoryAccessDto | null;
   readonly warehouses: readonly InventoryWarehouseDto[];
   readonly unitNames: Readonly<Record<string, string>>;
@@ -46,7 +45,6 @@ export interface InventoryScreen {
 export function useInventoryScreen(locale: Locale, anyOf: readonly Phase3Permission[]): InventoryScreen {
   const router = useRouter();
   const [phase, setPhase] = useState<ScreenPhase>('loading');
-  const [errorKey, setErrorKey] = useState<string | null>(null);
   const [access, setAccess] = useState<InventoryAccessDto | null>(null);
   const [warehouses, setWarehouses] = useState<readonly InventoryWarehouseDto[]>([]);
   const [unitNames, setUnitNames] = useState<Readonly<Record<string, string>>>({});
@@ -82,7 +80,6 @@ export function useInventoryScreen(locale: Locale, anyOf: readonly Phase3Permiss
           setPhase('denied');
           return;
         }
-        setErrorKey(refusalKey(error));
         setPhase('failed');
       }
     })();
@@ -97,7 +94,7 @@ export function useInventoryScreen(locale: Locale, anyOf: readonly Phase3Permiss
     const w = await listInventoryWarehouses();
     setWarehouses(w.items);
   }, []);
-  return { phase, errorKey, access, warehouses, unitNames, currency, can, reload, reloadWarehouses };
+  return { phase, access, warehouses, unitNames, currency, can, reload, reloadWarehouses };
 }
 
 /** The first active warehouse, for a screen that must show one. */

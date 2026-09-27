@@ -86,7 +86,7 @@ export default function CountStockListPage({ params }: { params: Promise<{ local
   return (
     <PageShell locale={locale} active="stock">
       {screen.phase !== 'ready' ? (
-        <ScreenState t={t} locale={locale} state={screen.phase} errorKey={screen.errorKey} onRetry={screen.reload} />
+        <ScreenState t={t} locale={locale} state={screen.phase} onRetry={screen.reload} />
       ) : (
         <CountListView
           t={t}

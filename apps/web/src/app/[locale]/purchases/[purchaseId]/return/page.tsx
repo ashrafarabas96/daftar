@@ -126,11 +126,17 @@ export default function ReturnToSupplierPage({ params }: { params: Promise<{ loc
     }
   }
 
+  // "Try again" shows the spinner at once, not the failed state again until the data arrives (N-9).
+  const retryLoad = () => {
+    setLoadStatus('loading');
+    retry();
+  };
+
   const pageStatus = status !== 'ready' ? status : loadStatus;
   return (
     <PageShell locale={locale} active="purchases">
       {pageStatus !== 'ready' || !loaded ? (
-        <PageStateView t={t} locale={locale} status={pageStatus === 'ready' ? 'loading' : pageStatus} onRetry={retry} />
+        <PageStateView t={t} locale={locale} status={pageStatus === 'ready' ? 'loading' : pageStatus} onRetry={retryLoad} />
       ) : (
         <ReturnToSupplierView
           t={t}

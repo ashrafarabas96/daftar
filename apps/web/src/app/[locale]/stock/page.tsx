@@ -80,7 +80,7 @@ export default function StockPage({ params }: { params: Promise<{ locale: Locale
   return (
     <PageShell locale={locale} active="stock">
       {screen.phase !== 'ready' ? (
-        <ScreenState t={t} locale={locale} state={screen.phase} errorKey={screen.errorKey} onRetry={screen.reload} />
+        <ScreenState t={t} locale={locale} state={screen.phase} onRetry={screen.reload} />
       ) : (
         <StockLevelsView
           t={t}

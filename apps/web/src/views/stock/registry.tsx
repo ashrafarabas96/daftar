@@ -406,6 +406,6 @@ export const VIEW_REGISTRY: readonly ViewEntry[] = [
   defineView('ScreenState', ScreenState, {
     loading: { state: 'loading' as const },
     'no permission': { state: 'denied' as const },
-    'failed to load': { state: 'failed' as const, errorKey: 'error.fallback' },
+    'failed to load': { state: 'failed' as const },
   }),
 ];

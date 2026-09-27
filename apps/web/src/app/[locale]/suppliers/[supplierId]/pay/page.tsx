@@ -32,7 +32,7 @@ import {
   paySupplier,
   type PaymentMethodDefaultDto,
 } from '@/lib/phase3-api';
-import { isMissingExchangeRate, refusalKey, withConflictRetry } from '@/lib/phase3-errors';
+import { SAVED_REFRESH_KEY, isMissingExchangeRate, refusalKey, withConflictRetry } from '@/lib/phase3-errors';
 import { amountInputToMinor, localDateIso, normaliseDigits } from '@/lib/phase3-format';
 import { isNonZeroMinor, minorToMajorText } from '@/views/common/amount-text';
 import { PageStateView, type ExchangeRatePromptProps, type PageStatus } from '@/views/common/feedback';
@@ -306,14 +306,21 @@ export default function PaySupplierPage({ params }: { params: Promise<{ locale: 
           tr: translate('tr', `payments.kind.${systemType}`),
         },
       });
+    } catch (error) {
+      setErrorKey(refusalKey(error));
+      setSetup((s) => (s ? { ...s, busy: false } : s));
+      return;
+    }
+    // The way to pay is set up; a failed re-read must not say otherwise (m-3).
+    try {
       const pm = await listPaymentMethods();
       const active = activeMethodChoices(pm.items, locale, t);
       setMethods(pm.items);
       setSetup(null);
       setForm((f) => ({ ...f, methodId: active[0]?.paymentMethodId ?? '' }));
-    } catch (error) {
-      setErrorKey(refusalKey(error));
+    } catch {
       setSetup((s) => (s ? { ...s, busy: false } : s));
+      setErrorKey(SAVED_REFRESH_KEY);
     }
   }
 
@@ -363,14 +370,20 @@ export default function PaySupplierPage({ params }: { params: Promise<{ locale: 
           }),
         );
       }
+    } catch (error) {
+      setErrorKey(refusalKey(error));
+      setFavourUse({ ...pending, busy: false });
+      return;
+    }
+    setFavourUse({ ...pending, busy: false, done: true });
+    // The balance is used; a failed re-read must not say otherwise (m-3).
+    try {
       const [open, favour] = await Promise.all([loadOpen(), loadNotes()]);
       setRows(open);
       setProposed(false);
       setNotes(favour);
-      setFavourUse({ ...pending, busy: false, done: true });
-    } catch (error) {
-      setErrorKey(refusalKey(error));
-      setFavourUse({ ...pending, busy: false });
+    } catch {
+      setErrorKey(SAVED_REFRESH_KEY);
     }
   }
 
@@ -391,11 +404,17 @@ export default function PaySupplierPage({ params }: { params: Promise<{ locale: 
     }
   };
 
+  // "Try again" shows the spinner at once, not the failed state again until the data arrives (N-9).
+  const retryLoad = () => {
+    setLoadStatus('loading');
+    retry();
+  };
+
   const pageStatus = status !== 'ready' ? status : loadStatus;
   if (pageStatus !== 'ready' || !context || !supplier) {
     return (
       <PageShell locale={locale} active="suppliers">
-        <PageStateView t={t} locale={locale} status={pageStatus === 'ready' ? 'loading' : pageStatus} onRetry={retry} />
+        <PageStateView t={t} locale={locale} status={pageStatus === 'ready' ? 'loading' : pageStatus} onRetry={retryLoad} />
       </PageShell>
     );
   }
