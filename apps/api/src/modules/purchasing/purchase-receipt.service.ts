@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { Inject, Injectable } from '@nestjs/common';
-import { AccountingError, convertToBaseMinor, mintDomainPostingAssertion, parseDatabaseAccountingError } from '@daftar/accounting';
+import { AccountingError, convertToBaseMinor, mintDomainPostingAssertion, parseDatabaseAccountingError, type PostingCommand } from '@daftar/accounting';
 import {
   assertQuantityRepresentable,
   baseShares,
@@ -17,14 +17,15 @@ import {
   purchaseReceivePayload,
   type DeficitLayer,
   type LandedCostInput,
+  type MovementPayload,
   type StockState,
 } from '@daftar/inventory';
 import type { PurchaseReceiptDto } from '@daftar/shared-contracts';
-import { Database, type AccountingAssertions } from '../../infra/database';
+import { Database, presentInventoryAssertion, type AccountingAssertions, type BusinessInventoryAccountingTransaction } from '../../infra/database';
 import { AccountingAssertionMinterService } from '../accounting/accounting-assertion.minter';
 import { DatabaseAccountingPostingAdapter } from '../accounting/accounting-posting.adapter';
 import type { BusinessTransactionId } from '../inventory/business-transaction';
-import { InventoryAuthorizationService } from '../inventory/inventory-authorization';
+import { InventoryAuthorizationService, type InventoryCommandAuthority } from '../inventory/inventory-authorization';
 import { readWarehouses, type ReadScope } from '../inventory/inventory-stock-read';
 import type { MembershipContext } from '../tenancy/tenancy.service';
 import { catchUpPostingCommand, purchasePostingCommand, type ReceiptFx } from './purchase-posting';
@@ -36,7 +37,7 @@ import type { PurchaseTransitionRequest } from './purchasing.schemas';
 const DOMESTIC_RATE_TEXT = '1.0000000000';
 
 /** The FX snapshot the receipt binds (A-17), in both the payload's and the posting's forms. */
-interface BoundFx extends ReceiptFx {
+export interface BoundFx extends ReceiptFx {
   readonly rateId: string | null;
   readonly rateR10: bigint;
 }
@@ -76,6 +77,57 @@ interface VariantFacts {
 }
 
 /**
+ * A receipt with every value the database will store computed and bound, and
+ * its commands built — everything `execute` needs, before anything is minted
+ * (PHASE_3_S6_CONTRACT A-19: the combined receive-and-pay binds the payment
+ * half's `T`, `B` and `R` from this without a second read).
+ */
+export interface ReceiptPlan {
+  readonly authority: InventoryCommandAuthority;
+  readonly purchaseId: string;
+  readonly warehouseId: string;
+  /** The warehouse's branch: the dimension of the receipt's lines. */
+  readonly branchId: string | null;
+  readonly supplierId: string;
+  readonly documentDate: string;
+  /** The purchase currency, as stored on the draft. */
+  readonly currency: string;
+  readonly baseCurrency: string;
+  readonly fx: BoundFx;
+  /** `T`. */
+  readonly totalTxnMinor: bigint;
+  /** `B = convertToBaseMinor(T)`. */
+  readonly totalBaseMinor: bigint;
+  readonly built: MovementPayload;
+  readonly purchaseCommand: PostingCommand;
+  /** The catch-up entry iff the bound N ≠ 0. */
+  readonly catchUpCommand: PostingCommand | null;
+  /** The `purchase_receive` arguments, in its signature's order. */
+  readonly params: readonly unknown[];
+}
+
+/**
+ * What `plan` found: a received purchase whose receive intent equals this
+ * request's (the idempotent replay, answered from stored rows), or a draft's
+ * bound receipt.
+ */
+export type ReceiptPlanOutcome =
+  | {
+      readonly kind: 'replay';
+      readonly authority: InventoryCommandAuthority;
+      readonly warehouseId: string;
+      readonly supplierId: string;
+      readonly documentDate: string;
+      readonly currency: string;
+    }
+  | { readonly kind: 'plan'; readonly plan: ReceiptPlan };
+
+const PURCHASE_RECEIVE_SQL = `SELECT replayed FROM purchase_receive(
+   $1::uuid, $2::uuid, $3::integer, $4::uuid, $5::integer, $6::date, $7::char(3), $8::uuid, $9::numeric, $10::text,
+   $11::timestamptz, $12::bigint, $13::bigint, $14::uuid, $15::uuid[], $16::uuid[], $17::numeric[], $18::bigint[],
+   $19::numeric[], $20::bigint[])`;
+
+/**
  * `POST /v1/purchases/:purchaseId/receive` (PHASE_3_S4_CONTRACT A-05 – A-10,
  * A-13, A-16, A-17; R-B1).
  *
@@ -105,6 +157,10 @@ interface VariantFacts {
  * or a deficit layer moved between the reads and the routine's locks, the
  * routine refuses with its typed 409 and nothing commits. There is no server
  * retry (S3 TL-5).
+ *
+ * Steps 1–5 are `plan` and step 7's routine and postings are `execute`
+ * (PHASE_3_S6_CONTRACT A-19), so the combined receive-and-pay reuses both
+ * unchanged; `receive` is exactly `plan` → mint → seam → `execute`.
  */
 @Injectable()
 export class PurchaseReceiptService {
@@ -124,6 +180,31 @@ export class PurchaseReceiptService {
   }
 
   private async run(m: MembershipContext, purchaseId: string, input: PurchaseTransitionRequest, btx: BusinessTransactionId): Promise<PurchaseReceiptDto> {
+    const outcome = await this.plan(m, purchaseId, input, btx);
+    if (outcome.kind === 'replay') return readReceipt(this.db, m, purchaseId, true);
+    const plan = outcome.plan;
+
+    // 6. Mint everything before the seam opens (A-07, A-08).
+    const inventoryAssertion = this.authorization.mint(plan.authority, plan.built.payload);
+    const purchaseAssertion = mintDomainPostingAssertion(this.accountingMinter, plan.purchaseCommand, m.userId);
+    const accountingAssertions: AccountingAssertions =
+      plan.catchUpCommand === null
+        ? [purchaseAssertion]
+        : [purchaseAssertion, mintDomainPostingAssertion(this.accountingMinter, plan.catchUpCommand, m.userId)];
+
+    // 7. One transaction: the routine, the purchase entry, the catch-up entry, COMMIT.
+    const replayed = await this.db.withBusinessInventoryAccountingTransaction(plan.authority.scope, inventoryAssertion, accountingAssertions, (tx) =>
+      this.execute(tx, plan),
+    );
+    return readReceipt(this.db, m, purchaseId, replayed);
+  }
+
+  /**
+   * Steps 1–5: the document, authority over its warehouse, the idempotency
+   * proof, current state, and every amount bound, with the commands built.
+   * It opens no transaction and mints nothing.
+   */
+  async plan(m: MembershipContext, purchaseId: string, input: PurchaseTransitionRequest, btx: BusinessTransactionId): Promise<ReceiptPlanOutcome> {
     // 1–2. The document, then authority over its warehouse.
     const header = await findPurchaseHeader(this.db, m, purchaseId);
     if (header === null) throw purchasingRefusal('purchase.not_found');
@@ -139,7 +220,9 @@ export class PurchaseReceiptService {
       draftRevision: input.draftRevision,
     });
     if (header.status === 'received') {
-      if (header.receive_intent_sha256 === intentSha256) return readReceipt(this.db, m, purchaseId, true);
+      if (header.receive_intent_sha256 === intentSha256) {
+        return { kind: 'replay', authority, warehouseId, supplierId: header.supplier_id, documentDate: header.document_date, currency: header.currency_code };
+      }
       throw purchasingRefusal('purchase.state_invalid');
     }
     if (header.status !== 'draft') throw purchasingRefusal('purchase.state_invalid');
@@ -222,7 +305,6 @@ export class PurchaseReceiptService {
     });
     if (built.intentSha256 !== intentSha256) throw new Error('the bound receipt payload does not carry the proven intent');
 
-    // 6. Mint everything before the seam opens (A-07, A-08).
     const postingBase = { tenantId: m.tenantId, businessId: m.businessId, documentDate: header.document_date, businessTransactionId: btx };
     const purchaseCommand = purchasePostingCommand({
       ...postingBase,
@@ -246,51 +328,69 @@ export class PurchaseReceiptService {
             branchId: warehouse.branchId,
             netValueMinor: plan.totalValueMinor,
           });
-    const inventoryAssertion = this.authorization.mint(authority, built.payload);
-    const purchaseAssertion = mintDomainPostingAssertion(this.accountingMinter, purchaseCommand, m.userId);
-    const accountingAssertions: AccountingAssertions =
-      catchUpCommand === null ? [purchaseAssertion] : [purchaseAssertion, mintDomainPostingAssertion(this.accountingMinter, catchUpCommand, m.userId)];
+    const params: unknown[] = [
+      purchaseId,
+      warehouseId,
+      input.draftRevision,
+      supplier.id,
+      supplier.revision,
+      header.document_date,
+      header.currency_code,
+      fx.rateId,
+      fx.rate,
+      fx.source,
+      `${fx.at.toISOString().slice(0, 19)}Z`,
+      totals.totalMinor.toString(10),
+      totalBaseMinor.toString(10),
+      coverageAdjustmentId,
+      plan.lines.map((l) => l.lineId),
+      plan.lines.map((l) => l.variantId),
+      plan.lines.map((l) => formatQuantity(l.qtyQ4)),
+      plan.lines.map((l) => l.baseShareMinor.toString(10)),
+      plan.lines.map((l) => formatQuantity(l.coveredQ4)),
+      plan.lines.map((l) => l.catchUpMinor.toString(10)),
+    ];
+    return {
+      kind: 'plan',
+      plan: {
+        authority,
+        purchaseId,
+        warehouseId,
+        branchId: warehouse.branchId,
+        supplierId: supplier.id,
+        documentDate: header.document_date,
+        currency: header.currency_code,
+        baseCurrency: business.baseCurrency,
+        fx,
+        totalTxnMinor: totals.totalMinor,
+        totalBaseMinor,
+        built,
+        purchaseCommand,
+        catchUpCommand,
+        params,
+      },
+    };
+  }
 
-    // 7. One transaction: the routine, the purchase entry, the catch-up entry, COMMIT.
-    const replayed = await this.db.withBusinessInventoryAccountingTransaction(authority.scope, inventoryAssertion, accountingAssertions, async (tx) => {
-      const r = await tx.query<{ replayed: boolean }>(
-        `SELECT replayed FROM purchase_receive(
-           $1::uuid, $2::uuid, $3::integer, $4::uuid, $5::integer, $6::date, $7::char(3), $8::uuid, $9::numeric, $10::text,
-           $11::timestamptz, $12::bigint, $13::bigint, $14::uuid, $15::uuid[], $16::uuid[], $17::numeric[], $18::bigint[],
-           $19::numeric[], $20::bigint[])`,
-        [
-          purchaseId,
-          warehouseId,
-          input.draftRevision,
-          supplier.id,
-          supplier.revision,
-          header.document_date,
-          header.currency_code,
-          fx.rateId,
-          fx.rate,
-          fx.source,
-          `${fx.at.toISOString().slice(0, 19)}Z`,
-          totals.totalMinor.toString(10),
-          totalBaseMinor.toString(10),
-          coverageAdjustmentId,
-          plan.lines.map((l) => l.lineId),
-          plan.lines.map((l) => l.variantId),
-          plan.lines.map((l) => formatQuantity(l.qtyQ4)),
-          plan.lines.map((l) => l.baseShareMinor.toString(10)),
-          plan.lines.map((l) => formatQuantity(l.coveredQ4)),
-          plan.lines.map((l) => l.catchUpMinor.toString(10)),
-        ],
-      );
-      const [first] = r.rows;
-      if (first === undefined) throw new Error('purchase_receive returned no row');
-      // A replay inside the routine (a concurrent identical receipt won the
-      // key) commits no entry; its minted assertions expire unused (A-08).
-      if (first.replayed) return true;
-      await this.posting.postEntryInTransaction(tx.accounting, { command: purchaseCommand });
-      if (catchUpCommand !== null) await this.posting.postEntryInTransaction(tx.accounting, { command: catchUpCommand });
-      return false;
-    });
-    return readReceipt(this.db, m, purchaseId, replayed);
+  /**
+   * Step 7 on an open seam-2 transaction: present the `purchase.receive`
+   * assertion (a no-op check on the single-assertion seam, the next element
+   * of a sequence otherwise), run `purchase_receive`, and — unless the
+   * routine answered a replay — post the `purchase` entry and the catch-up
+   * entry, each presented its own accounting assertion by the adapter.
+   * Returns whether the routine answered a replay.
+   */
+  async execute(tx: BusinessInventoryAccountingTransaction, plan: ReceiptPlan): Promise<boolean> {
+    await presentInventoryAssertion(tx, 'purchase.receive');
+    const r = await tx.query<{ replayed: boolean }>(PURCHASE_RECEIVE_SQL, [...plan.params]);
+    const [first] = r.rows;
+    if (first === undefined) throw new Error('purchase_receive returned no row');
+    // A replay inside the routine (a concurrent identical receipt won the
+    // key) commits no entry; its minted assertions expire unused (A-08).
+    if (first.replayed) return true;
+    await this.posting.postEntryInTransaction(tx.accounting, { command: plan.purchaseCommand });
+    if (plan.catchUpCommand !== null) await this.posting.postEntryInTransaction(tx.accounting, { command: plan.catchUpCommand });
+    return false;
   }
 
   /** The business's base currency, and whether the document date is after today in its timezone (0058 rule, early). */
