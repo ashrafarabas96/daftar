@@ -14,7 +14,14 @@
  */
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { NO_CORRECTION_NOTICE, RECONCILIATION_CHECKS, RECONCILIATION_CHECK_IDS, assertSafeCheckResult, type ReconciliationRunResult } from '@daftar/accounting';
+import {
+  ALL_RECONCILIATION_CHECK_IDS,
+  NO_CORRECTION_NOTICE,
+  RECONCILIATION_CHECKS,
+  RECONCILIATION_CHECK_IDS,
+  assertSafeCheckResult,
+  type ReconciliationRunResult,
+} from '@daftar/accounting';
 import { createTestApp, ensurePostgres, ownerPool, reconcilerDbUrl, resetData, workerDbUrl, type TestApp } from '../helpers/test-app';
 import { PoolReconciliationConnection } from '../helpers/accounting-reconciliation';
 import { DatabaseAccountingReconciliationReader } from '../../apps/api/src/modules/accounting/accounting-reconciliation.reader';
@@ -128,9 +135,11 @@ describe('the nine checks, through the production reconciliation authority (§17
    */
   it('visits every business and reaches a verdict on every check', () => {
     expect(run.enumeration).toBe('complete');
-    expect(run.checkCount).toBe(RECONCILIATION_CHECK_IDS.length);
+    // P3-S8 (pin 10, A-10): the service runs the nine R-ACC checks and the
+    // five R-INV checks in one pass — ALL_RECONCILIATION_CHECK_IDS, fourteen.
+    expect(run.checkCount).toBe(ALL_RECONCILIATION_CHECK_IDS.length);
     expect(run.businessCount).toBeGreaterThanOrEqual(2);
-    expect(run.results.length).toBe(run.businessCount * RECONCILIATION_CHECK_IDS.length);
+    expect(run.results.length).toBe(run.businessCount * ALL_RECONCILIATION_CHECK_IDS.length);
     expect(run.unavailableCount).toBe(0);
     expect(run.errorCount).toBe(0);
   });
@@ -148,7 +157,7 @@ describe('the nine checks, through the production reconciliation authority (§17
 
   it('reports OK for a business with no journal at all', () => {
     const empty = run.results.filter((r) => r.businessId === fx.otherBusinessId);
-    expect(empty.length).toBe(RECONCILIATION_CHECK_IDS.length);
+    expect(empty.length).toBe(ALL_RECONCILIATION_CHECK_IDS.length);
     expect(empty.every((r) => r.status === 'ok')).toBe(true);
   });
 
