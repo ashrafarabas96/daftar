@@ -58,7 +58,7 @@ Each digest is also carried by its slice gate's accepted tense (`S2_ACCEPTED` �
 
 ## 3. The release gate
 
-`npm run gate:phase3:release` runs eight mandatory steps in order and stops at the first failure. A `RELEASE_GATE_SKIP_*` variable is refused before anything runs, and the refusal still writes a FAIL artefact.
+`npm run gate:phase3:release` first builds the library packages from source in dependency order, then runs eight mandatory steps in order and stops at the first failure. A `RELEASE_GATE_SKIP_*` variable is refused before anything runs, and the refusal still writes a FAIL artefact.
 
 1. The runner failure canaries, root and web, outside Vitest (`scripts/runner-canary.ts`).
 2. Tree identity; a delivery manifest, if present, says phase 3.
@@ -110,6 +110,7 @@ The other defects are not in Phase 3 product code:
 
 - `npm run check:key-retirement` (Phase 1) never ran: top-level await does not compile for this repository's CommonJS scripts. It now runs, and `tests/integration/check-key-retirement.test.ts` runs the real script for its three answers, all red on the old script.
 - The root TypeScript project (`tests/**`, `scripts/**`) was compiled by no CI step and carried 57 errors. They are fixed, and `npm run typecheck` now compiles it; a planted type error fails it.
+- The first release-workflow run at an exact SHA stopped at the runner canary on the clean runner: the canary runs the root test setup, which imports the `@daftar/*` packages through their built entry points, and nothing was built yet. Every earlier run had used a tree where they were built. The gate now builds them first, in dependency order, as the Phase 1 release gate does. With every `packages/*/dist` removed, the canary alone fails the same way, and the gate builds the packages and the canary passes.
 - The rehearsal first reported FAIL with exit 0, because `embedded-postgres` forces status 0 on exit, and then hung, because a synchronous child stopped the server's log pipe from draining. Both are fixed and pinned by T-10.
 - In a composed run over an hour long, four P3-S3 … P3-S5 atomicity and seam suites counted accounting-assertion rows that the frozen consumers prune after an hour. They now count the uses a case added (P3-S8, `docs/PHASE_3_S8_ACCEPTANCE.md` §3).
 

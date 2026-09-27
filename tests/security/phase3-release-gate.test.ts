@@ -4,7 +4,10 @@
  *
  *   (a) any `RELEASE_GATE_SKIP_*` fails the gate before a single step runs,
  *       and the artefact it writes says so;
- *   (b) `--list` plans exactly the eight steps of §2, all mandatory, in order;
+ *   (b) `--list` plans the library build and then exactly the eight steps of
+ *       §2, all mandatory, in order (the build first: the first release run
+ *       at an exact SHA stopped at the canary on a clean runner, because the
+ *       canary's setup imports the built packages);
  *   (c) statically, the gate spawns no git, reads no repository directory and
  *       names no migration after the Phase 3 prefix;
  *   (d) `--root <copy> --structural-only` refuses a tampered Phase 3 file, a
@@ -23,12 +26,12 @@
  */
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { PHASE3_PREFIX, PHASE3_PREFIX_END } from '../../scripts/phase3-prefix';
-import { PHASE3_AUTHORITATIVE_DOCS } from '../../scripts/phase3-release-gate';
+import { PHASE3_AUTHORITATIVE_DOCS, libraryBuildOrder } from '../../scripts/phase3-release-gate';
 
 const REPO = join(__dirname, '../..');
 const GATE = join(REPO, 'scripts/phase3-release-gate.ts');
@@ -107,30 +110,53 @@ describe('(a) a mandatory skip fails the gate before anything runs', () => {
   });
 });
 
-describe('(b) --list plans exactly the eight steps of §2', () => {
-  it('in order, all mandatory, canary first, the Phase 2 release gate before the P3-S8 gate with the restore between', () => {
+describe('(b) --list plans the library build, then exactly the eight steps of §2', () => {
+  it('in order, all mandatory, the build then the canary first, the Phase 2 release gate before the P3-S8 gate with the restore between', () => {
     const run = gate(['--list']);
     expect(run.status, run.output).toBe(0);
     expect(run.artefact.verdict).toBe('LISTED');
     const steps = run.artefact.steps ?? [];
-    expect(steps).toHaveLength(8);
+    expect(steps).toHaveLength(9);
     expect(steps.every((s) => s.mandatory && s.status === 'skipped')).toBe(true);
     const commands = steps.map((s) => s.command);
-    expect(commands[0]).toBe('npx tsx scripts/runner-canary.ts');
-    expect(steps[1]?.name).toMatch(/tree identity.*phase 3/);
-    expect(steps[2]?.name).toMatch(/Phase 3 migration prefix 0053–0069 intact; later migrations permitted/);
-    expect(steps[3]?.name).toMatch(/no authoritative Phase 3 document contradicts the accepted state/);
-    expect(commands.slice(1, 4)).toEqual(['(in process)', '(in process)', '(in process)']);
-    expect(commands[4]).toMatch(/^npm run -s gate:phase2:release -- --evidence=\S+\/phase2-release-gate\.json --log-dir=\S+\/phase2$/);
-    expect(steps[5]?.name).toMatch(/apps\/api|API build output is removed/);
-    expect(commands[5]).toBe('(in process)');
-    expect(commands[6]).toBe('npm run -s gate:phase3:s8');
-    expect(commands[7]).toBe('npm run -s rehearse:phase3:deployed');
+    expect(steps[0]?.name).toMatch(/library packages are built from source, in dependency order/);
+    expect(commands[0]).toBe('(in process)');
+    expect(commands[1]).toBe('npx tsx scripts/runner-canary.ts');
+    expect(steps[2]?.name).toMatch(/tree identity.*phase 3/);
+    expect(steps[3]?.name).toMatch(/Phase 3 migration prefix 0053–0069 intact; later migrations permitted/);
+    expect(steps[4]?.name).toMatch(/no authoritative Phase 3 document contradicts the accepted state/);
+    expect(commands.slice(2, 5)).toEqual(['(in process)', '(in process)', '(in process)']);
+    expect(commands[5]).toMatch(/^npm run -s gate:phase2:release -- --evidence=\S+\/phase2-release-gate\.json --log-dir=\S+\/phase2$/);
+    expect(steps[6]?.name).toMatch(/apps\/api|API build output is removed/);
+    expect(commands[6]).toBe('(in process)');
+    expect(commands[7]).toBe('npm run -s gate:phase3:s8');
+    expect(commands[8]).toBe('npm run -s rehearse:phase3:deployed');
+  });
+
+  it('builds every library package after the packages it depends on', () => {
+    const { order, problems } = libraryBuildOrder(REPO);
+    expect(problems).toEqual([]);
+    const dirs = readdirSync(join(REPO, 'packages')).filter((d) => existsSync(join(REPO, 'packages', d, 'package.json')));
+    for (const d of dirs) {
+      const manifest = JSON.parse(readFileSync(join(REPO, 'packages', d, 'package.json'), 'utf8')) as {
+        scripts?: Record<string, string>;
+        dependencies?: Record<string, string>;
+        devDependencies?: Record<string, string>;
+        peerDependencies?: Record<string, string>;
+      };
+      if (typeof manifest.scripts?.['build'] !== 'string') continue;
+      expect(order, d).toContain(`packages/${d}`);
+      const deps = Object.keys({ ...manifest.dependencies, ...manifest.devDependencies, ...manifest.peerDependencies }).filter((n) => n.startsWith('@daftar/'));
+      for (const dep of deps) {
+        const depDir = `packages/${dep.slice('@daftar/'.length)}`;
+        if (order.includes(depDir)) expect(order.indexOf(depDir), `${depDir} before packages/${d}`).toBeLessThan(order.indexOf(`packages/${d}`));
+      }
+    }
   });
 
   it('forwards --archive-sha256 to the Phase 2 release gate verbatim', () => {
     const run = gate(['--list', '--archive-sha256=abc123']);
-    expect(run.artefact.steps?.[4]?.command).toMatch(/ --archive-sha256=abc123$/);
+    expect(run.artefact.steps?.[5]?.command).toMatch(/ --archive-sha256=abc123$/);
   });
 });
 

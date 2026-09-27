@@ -157,11 +157,11 @@ function gateInCopy(root: string): GateRun {
   return { status: res.status, output: `${res.stdout ?? ''}${res.stderr ?? ''}`, steps: artefact.steps, nestedSteps: nested };
 }
 
-/** Stopped red at step 5, inside the composed Phase 2 gate, before the Phase 1 release gate. */
+/** Stopped red at step 5 (the sixth, after the library build), inside the composed Phase 2 gate, before the Phase 1 release gate. */
 function expectStoppedInTheComposedTreeChecks(run: GateRun, message: string | RegExp): void {
   expect(run.status, run.output).toBe(1);
-  expect(run.steps.map((s) => s.status)).toEqual(['pass', 'pass', 'pass', 'pass', 'fail']);
-  expect(run.steps[4]?.name).toMatch(/Phase 2 release gate/);
+  expect(run.steps.map((s) => s.status)).toEqual(['pass', 'pass', 'pass', 'pass', 'pass', 'fail']);
+  expect(run.steps[5]?.name).toMatch(/Phase 2 release gate/);
   if (typeof message === 'string') expect(run.output).toContain(message);
   else expect(run.output).toMatch(message);
   expect(run.nestedSteps).not.toBeNull();
@@ -201,7 +201,7 @@ describe('gate:phase3:release, run inside an extracted release-state copy, stops
     rewrite(root, 'DELIVERY_MANIFEST.json', `${JSON.stringify({ ...delivery, phase: 2 }, null, 2)}\n`);
     const run = gateInCopy(root);
     expect(run.status, run.output).toBe(1);
-    expect(run.steps.map((s) => s.status)).toEqual(['pass', 'fail']);
+    expect(run.steps.map((s) => s.status)).toEqual(['pass', 'pass', 'fail']);
     expect(run.output).toContain('DELIVERY_MANIFEST.json says phase 2; the Phase 3 release gate gates a Phase 3 candidate only');
     expect(run.nestedSteps).toBeNull();
   });

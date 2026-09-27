@@ -276,11 +276,89 @@ type Step =
   | { readonly kind: 'command'; readonly name: string; readonly cmd: string; readonly args: readonly string[] }
   | { readonly kind: 'in-process'; readonly name: string; readonly structural: boolean; readonly fn: () => string[] };
 
+/**
+ * Step 0 — the library packages, built from source in dependency order.
+ *
+ * The root runner canary runs the root configuration's global setup and setup
+ * files, which import the application, which imports the `@daftar/*` library
+ * packages through their built entry points. On a clean runner or in an
+ * extracted archive nothing is built yet, so the canary could not load and
+ * the first release run at the exact SHA stopped there ("Failed to resolve
+ * entry for package @daftar/domain-core"). The set is every workspace under
+ * `packages/` with a `build` script, and the order is a topological sort of
+ * their `@daftar/*` dependencies: the rule `scripts/phase1-release-gate.ts`
+ * uses, copied because that module runs its gate at load. The Phase 1 release
+ * gate inside step 5 deletes these outputs and rebuilds them again.
+ */
+export function libraryBuildOrder(root: string): { order: string[]; problems: string[] } {
+  const base = join(root, 'packages');
+  const packages = existsSync(base)
+    ? readdirSync(base, { withFileTypes: true })
+        .filter((entry) => entry.isDirectory() && existsSync(join(base, entry.name, 'package.json')))
+        .map((entry) => {
+          const manifest = JSON.parse(readFileSync(join(base, entry.name, 'package.json'), 'utf8')) as {
+            name?: string;
+            scripts?: Record<string, string>;
+            dependencies?: Record<string, string>;
+            peerDependencies?: Record<string, string>;
+            devDependencies?: Record<string, string>;
+          };
+          const deps = [
+            ...Object.keys(manifest.dependencies ?? {}),
+            ...Object.keys(manifest.peerDependencies ?? {}),
+            ...Object.keys(manifest.devDependencies ?? {}),
+          ].filter((dep) => dep.startsWith('@daftar/'));
+          return { name: manifest.name ?? '', dir: `packages/${entry.name}`, build: typeof manifest.scripts?.['build'] === 'string', deps };
+        })
+        .filter((pkg) => pkg.name !== '' && pkg.build)
+        .sort((a, b) => a.name.localeCompare(b.name))
+    : [];
+  const byName = new Map(packages.map((pkg) => [pkg.name, pkg]));
+  const state = new Map<string, 'visiting' | 'built'>();
+  const order: string[] = [];
+  const problems: string[] = [];
+  const visit = (name: string, trail: readonly string[]): void => {
+    const pkg = byName.get(name);
+    if (pkg === undefined) return;
+    if (state.get(name) === 'built') return;
+    if (state.get(name) === 'visiting') {
+      problems.push(`the library packages depend on each other in a cycle: ${[...trail, name].join(' -> ')}`);
+      return;
+    }
+    state.set(name, 'visiting');
+    for (const dep of [...new Set(pkg.deps)].sort()) visit(dep, [...trail, name]);
+    state.set(name, 'built');
+    order.push(pkg.dir);
+  };
+  for (const pkg of packages) visit(pkg.name, []);
+  if (order.length === 0) problems.push('no library package with a build script was found under packages/');
+  return { order, problems };
+}
+
+function buildLibraryPackages(root: string): string[] {
+  const { order, problems } = libraryBuildOrder(root);
+  if (problems.length > 0) return problems;
+  for (const dir of order) {
+    const res = spawnSync(npm, ['run', 'build', '-w', dir], { cwd: root, encoding: 'utf8', env: process.env });
+    if (res.status !== 0)
+      return [`npm run build -w ${dir} exited ${res.status ?? `on ${res.signal ?? 'an error'}`}:\n${`${res.stdout ?? ''}${res.stderr ?? ''}`.slice(-2000)}`];
+  }
+  console.log(`   built ${order.join(', ')}`);
+  return [];
+}
+
 /** §2: the plan, all mandatory, in order. */
 export function releasePlan(o: Options): readonly Step[] {
   const phase2Evidence = join(o.logDir, 'phase2-release-gate.json');
   return [
-    // The canary comes first, and nothing below means anything without it.
+    // The canary's setup imports the built library packages, so they are
+    // built first; then the canary, and nothing below means anything without it.
+    {
+      kind: 'in-process',
+      name: 'the library packages are built from source, in dependency order (the canary imports them)',
+      structural: false,
+      fn: () => buildLibraryPackages(o.root),
+    },
     { kind: 'command', name: 'runner failure canaries, root and web (outside Vitest)', cmd: 'npx', args: ['tsx', 'scripts/runner-canary.ts'] },
     { kind: 'in-process', name: 'tree identity; a delivery manifest, if present, says phase 3', structural: true, fn: () => treeIsAPhase3Candidate(o.root) },
     {
