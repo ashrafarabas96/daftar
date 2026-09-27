@@ -13,6 +13,9 @@
  *     append-only (`inventory.ledger_immutable`);
  *   - a cancelled purchase refuses the same, and a receipt
  *     (`purchase.state_invalid`);
+ *   - a header is inserted only as a bare draft at revision 1 (R-39): a
+ *     copied received or cancelled header, a draft at revision 2 or one
+ *     carrying a receipt field → `inventory.source_document_immutable`;
  *   - the internal principal's UPDATE/DELETE is business-isolated (M2): run
  *     under A's scope it reaches no row of A2 or B.
  */
@@ -64,12 +67,18 @@ async function inTx(fn: () => Promise<void>): Promise<void> {
 
 const sql = (text: string, params: unknown[]): Promise<Outcome> => attempt(c, () => c.query(text, params));
 
-/** As the internal principal under A's scope. */
+/**
+ * As the internal principal under A's scope. An accepted statement resets the
+ * role itself; a refused one is undone, role included, by `attempt`'s
+ * ROLLBACK TO SAVEPOINT — so the owner is back either way.
+ */
 const asInternal = (text: string, params: unknown[]): Promise<Outcome<QueryResult>> =>
   attempt(c, async () => {
     await c.query(`SELECT set_config('app.tenant_id', $1, true), set_config('app.business_id', $2, true)`, [world.A.tenantId, world.A.businessId]);
     await c.query('SET LOCAL ROLE daftar_inventory_internal');
-    return c.query(text, params);
+    const r = await c.query(text, params);
+    await c.query('RESET ROLE');
+    return r;
   });
 
 interface Doc {
@@ -228,6 +237,54 @@ describe('T-07 a cancelled purchase is final', () => {
       await runCommand(c, A, cancelCommand(draft.purchaseId, draft.warehouseId, 1));
       const d = await docOf(draft.purchaseId);
       for (const i of inserts(d)) refusedWith(await sql(i.text, []), 'P0001', 'inventory.source_line_frozen', i.what);
+    });
+  });
+});
+
+describe('T-07 a purchase is born only as a draft at revision 1 (R-39)', () => {
+  /** INSERT a copy of purchase `from` under a new id, with `patch` over its columns. */
+  const copy = async (from: string, patch: Record<string, unknown>): Promise<Outcome> => {
+    // Every stored column except the generated ones, which an INSERT cannot name.
+    const cols = must(
+      (
+        await c.query<{ cols: string }>(
+          `SELECT string_agg(quote_ident(attname), ', ' ORDER BY attnum) AS cols FROM pg_attribute
+            WHERE attrelid = 'purchases'::regclass AND attnum > 0 AND NOT attisdropped AND attgenerated = ''`,
+        )
+      ).rows[0],
+    ).cols;
+    return sql(
+      `INSERT INTO purchases (${cols})
+       SELECT ${cols} FROM jsonb_populate_record(NULL::purchases,
+                (SELECT to_jsonb(p) FROM purchases p WHERE p.business_id = $1 AND p.id = $2) || jsonb_build_object('id', $3::uuid) || $4::jsonb)`,
+      [world.A.businessId, from, randomUUID(), JSON.stringify(patch)],
+    );
+  };
+
+  it('as owner: a copied received or cancelled header, a draft at revision 2, or a draft carrying a receipt field → source_document_immutable; a bare draft at revision 1 is accepted', async () => {
+    await inTx(async () => {
+      const A = world.A;
+      const supplierId = await createSupplier(c, A, FULL_CONTACTS);
+      const received = (await draftAndReceive(c, A, await honestDraft(c, A, supplierId))).prepared.cmd.purchaseId;
+      const draft = await honestDraft(c, A, supplierId);
+      await runCommand(c, A, draft);
+      const cancelled = await honestDraft(c, A, supplierId);
+      await runCommand(c, A, cancelled);
+      await runCommand(c, A, cancelCommand(cancelled.purchaseId, cancelled.warehouseId, 1));
+      const before = await s4Counts(c, A.businessId);
+      for (const [what, from, patch] of [
+        ['a received header', received, {}],
+        ['a received header relabelled draft', received, { status: 'draft', revision: 1 }],
+        ['a cancelled header', cancelled.purchaseId, {}],
+        ['a draft at revision 2', draft.purchaseId, { revision: 2 }],
+        ['a draft with a supplier snapshot', draft.purchaseId, { supplier_name_snapshot: 'Forged' }],
+        ['a draft with a total', draft.purchaseId, { total_base_minor: 1 }],
+        ['a draft with a receive intent', draft.purchaseId, { receive_intent_sha256: 'a'.repeat(64) }],
+      ] as const) {
+        refusedWith(await copy(from, patch), 'P0001', 'inventory.source_document_immutable', what);
+      }
+      expect(s4Delta(before, await s4Counts(c, A.businessId)), 'no header was inserted').toEqual({});
+      expectAccepted(await copy(draft.purchaseId, {}), 'ALLOW: a bare draft at revision 1');
     });
   });
 });
