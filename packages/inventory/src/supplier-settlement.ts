@@ -34,6 +34,14 @@
  *   releases a cumulative proportional share; the final one (`c = rb`)
  *   releases `g(rb)`, the entire residue.
  *
+ * No consumer leaves a SUB-UNIT RESIDUE (0067 R-77, R-78): what remains of
+ * the purchase's outstanding AP (`O − a`) and of the note (`rb − c`) is 0 or
+ * converts, at the snapshot its line would use, to at least one base minor
+ * unit — else `…residue_below_base_unit`, judged after every
+ * `…amount_below_base_unit`, as the SQL routines and COMMIT guards judge it.
+ * A residue can still come from a P3-S5 partial return (0067 R-69(b)); such
+ * a purchase is then refused `…amount_below_base_unit` here.
+ *
  * The chain verdicts (`verifyPurchaseChain`, `verifyCreditChain`) are the
  * TypeScript twins of `purchase_settlement_verify` and
  * `supplier_credit_note_verify`: consumption is applied OLDEST FIRST, each
@@ -124,6 +132,9 @@ export interface SettlementConversion {
 }
 
 const convert = (x: bigint, c: SettlementConversion): bigint => convertToBase(x, c.rateR10, c.txnExponent, c.baseExponent);
+
+/** R-77 / R-78: a remaining amount of 0, or one converting to at least one base minor unit, is lawful; a sub-unit residue is not. */
+const strands = (remainingMinor: bigint, c: SettlementConversion): boolean => remainingMinor > 0n && convert(remainingMinor, c) === 0n;
 
 /** The AP side of a purchase at the moment a reducer computes from it (A-08). */
 export interface PurchaseApState {
@@ -307,6 +318,11 @@ export function planPaymentAllocation(input: PaymentAllocationInput): PaymentAll
   const ap = apSide('supplier_payment', input.purchase, input.appliedMinor);
   const paymentBaseMinor = convert(p, input.payment);
   if (paymentBaseMinor === 0n) refuse('supplier_payment.amount_below_base_unit', 'the payment amount converts to less than one base minor unit');
+  if (strands(input.purchase.outstandingTxnMinor - ap.appliedMinor, input.purchase.conversion))
+    refuse(
+      'supplier_payment.residue_below_base_unit',
+      'the allocation would leave the purchase an outstanding amount converting to less than one base minor unit',
+    );
   const realizedMinor = paymentBaseMinor - ap.carryingReleasedMinor;
   const lines = apLines(ap);
   lines.push({ account: 'posting_account', side: 'C', currency: 'payment', txnAmountMinor: p, baseAmountMinor: paymentBaseMinor, dimension: 'purchase' });
@@ -340,6 +356,11 @@ export function planCreditAllocation(input: CreditAllocationInput): CreditAlloca
     refuse('supplier_credit_allocation.amount_mismatch', 'a credit in the purchase currency applies exactly what it consumes');
   }
   const ap = apSide('supplier_credit_allocation', input.purchase, input.appliedMinor);
+  if (strands(input.purchase.outstandingTxnMinor - ap.appliedMinor, input.purchase.conversion) || strands(cr.remainingAfterMinor, input.note.conversion))
+    refuse(
+      'supplier_credit_allocation.residue_below_base_unit',
+      'the allocation would leave the purchase or the note a remaining amount converting to less than one base minor unit',
+    );
   const realizedMinor = cr.creditReleasedMinor - ap.carryingReleasedMinor;
   const lines = [...apLines(ap), ...creditLines(cr)];
   if (realizedMinor !== 0n) lines.push(baseLine(realizedMinor > 0n ? 'fx_loss' : 'fx_gain', realizedMinor > 0n ? 'D' : 'C', abs(realizedMinor), 'purchase'));
@@ -378,6 +399,8 @@ export function planRefund(input: RefundInput): RefundPlan {
     refuse('supplier_refund.amount_mismatch', 'a refund in the note currency receives exactly what it consumes');
   const receiptBaseMinor = convert(m, input.receipt);
   if (receiptBaseMinor === 0n) refuse('supplier_refund.amount_below_base_unit', 'the receipt amount converts to less than one base minor unit');
+  if (strands(cr.remainingAfterMinor, input.note.conversion))
+    refuse('supplier_refund.residue_below_base_unit', 'the refund would leave the note a remaining amount converting to less than one base minor unit');
   const realizedMinor = receiptBaseMinor - cr.creditReleasedMinor;
   const lines: SettlementEntryLine[] = [
     { account: 'posting_account', side: 'D', currency: 'receipt', txnAmountMinor: m, baseAmountMinor: receiptBaseMinor, dimension: 'origin' },

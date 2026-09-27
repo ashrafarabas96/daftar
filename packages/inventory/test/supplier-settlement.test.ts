@@ -406,17 +406,59 @@ describe('the refusals, in the domain the routine raises them under', () => {
     );
   });
 
-  it('S5 L2: a txn-only AP residue (base 0) is a stable amount_below_base_unit refusal, and stays outstanding', () => {
+  it('R-77 (review M1): T = 5000 TRY at 0.11 into ILS — paying 4999 or 4996 would leave a residue converting to 0 and is refused; 4995 and 5000 are accepted', () => {
+    const tryAt = { rateR10: 1_100_000_000n, txnExponent: 2, baseExponent: 2 };
+    const p = (outstandingTxnMinor: bigint): PurchaseApState => ({ totalTxnMinor: 5000n, totalBaseMinor: 550n, outstandingTxnMinor, conversion: tryAt });
+    const payTry = (o: bigint, a: bigint): string =>
+      codeOf(() => planPaymentAllocation({ purchase: p(o), sameCurrency: true, paymentAmountMinor: a, payment: tryAt, appliedMinor: a }));
+    expect(payTry(5000n, 4999n)).toBe('supplier_payment.residue_below_base_unit');
+    expect(codeOf(() => planPaymentAllocation({ purchase: p(5000n), sameCurrency: false, paymentAmountMinor: 550n, payment: ILS, appliedMinor: 4999n }))).toBe(
+      'supplier_payment.residue_below_base_unit',
+    );
+    expect(payTry(5000n, 4996n)).toBe('supplier_payment.residue_below_base_unit');
+    expect(payTry(5000n, 4995n)).toBe('accepted');
+    expect(payTry(5000n, 5000n)).toBe('accepted');
+    expect(payTry(10n, 10n)).toBe('accepted');
+  });
+
+  it('R-78: neither a refund nor a credit allocation leaves a note a remaining amount converting to 0', () => {
     const lbp: SettlementConversion = { rateR10: 24900n, txnExponent: 2, baseExponent: 3 };
+    const lbpNote: CreditNoteState = { originalMinor: 100000n, originalCarryingMinor: 2n, remainingMinor: 100000n, conversion: lbp };
+    const lbpPurchase: PurchaseApState = { totalTxnMinor: 200000n, totalBaseMinor: 5n, outstandingTxnMinor: 200000n, conversion: lbp };
+    expect(codeOf(() => planRefund({ note: lbpNote, sameCurrency: true, consumedMinor: 99990n, receiptAmountMinor: 99990n, receipt: lbp }))).toBe(
+      'supplier_refund.residue_below_base_unit',
+    );
+    expect(codeOf(() => planCreditAllocation({ purchase: lbpPurchase, note: lbpNote, sameCurrency: true, consumedMinor: 99990n, appliedMinor: 99990n }))).toBe(
+      'supplier_credit_allocation.residue_below_base_unit',
+    );
+    expect(codeOf(() => planRefund({ note: lbpNote, sameCurrency: true, consumedMinor: 100000n, receiptAmountMinor: 100000n, receipt: lbp }))).toBe('accepted');
+    expect(codeOf(() => planRefund({ note: lbpNote, sameCurrency: true, consumedMinor: 79000n, receiptAmountMinor: 79000n, receipt: lbp }))).toBe('accepted');
+  });
+
+  it('S5 L2: S6 refuses to leave a txn-only AP residue (base 0); one an S5 return left is a stable amount_below_base_unit refusal, and stays outstanding', () => {
+    const lbp: SettlementConversion = { rateR10: 24900n, txnExponent: 2, baseExponent: 3 };
+    expect(
+      codeOf(() =>
+        planPaymentAllocation({
+          purchase: { totalTxnMinor: 100000n, totalBaseMinor: 2n, outstandingTxnMinor: 100000n, conversion: lbp },
+          sameCurrency: true,
+          paymentAmountMinor: 99990n,
+          payment: lbp,
+          appliedMinor: 99990n,
+        }),
+      ),
+    ).toBe('supplier_payment.residue_below_base_unit');
     const first = planPaymentAllocation({
       purchase: { totalTxnMinor: 100000n, totalBaseMinor: 2n, outstandingTxnMinor: 100000n, conversion: lbp },
       sameCurrency: true,
-      paymentAmountMinor: 99990n,
+      paymentAmountMinor: 79000n,
       payment: lbp,
-      appliedMinor: 99990n,
+      appliedMinor: 79000n,
     });
     expect(first.carryingReleasedMinor).toBe(2n);
+    // An S5 return released 99990 (least(C, O)): the residue O = 10 carries base 0.
     const residue: PurchaseApState = { totalTxnMinor: 100000n, totalBaseMinor: 2n, outstandingTxnMinor: 10n, conversion: lbp };
+    expect(apRelease(2n, 100000n, 0n, 99990n)).toBe(2n);
     expect(apRelease(2n, 100000n, 99990n, 10n)).toBe(0n);
     for (let attemptNo = 0; attemptNo < 3; attemptNo += 1) {
       expect(codeOf(() => planPaymentAllocation({ purchase: residue, sameCurrency: true, paymentAmountMinor: 10n, payment: lbp, appliedMinor: 10n }))).toBe(

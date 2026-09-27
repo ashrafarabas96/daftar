@@ -661,6 +661,13 @@ interface PurchaseSpec {
   /** Ten-decimal text. */
   readonly rate: string;
   readonly totalTxnMinor: bigint;
+  /**
+   * The AP a P3-S5 return released before the case's steps (0066's
+   * ap = least(C, O)): the purchase starts at O = T − this, its carrying
+   * base released by `apRelease(B, T, 0, this)`. The one way a sub-unit AP
+   * residue can still exist (0067 R-69(b)).
+   */
+  readonly returnedApTxnMinor?: bigint;
 }
 
 interface NoteSpec {
@@ -751,8 +758,15 @@ function runCase(c: CaseSpec): { vector: SettlementVectorCase; result: CaseResul
   const purchaseOut: Record<string, unknown> = {};
   for (const [name, p] of Object.entries(c.purchases)) {
     const totalBase = convertToBase(p.totalTxnMinor, r10(p.rate), p.currency.exponent, c.base.exponent);
-    purchases.set(name, { spec: p, totalBase, outstanding: p.totalTxnMinor, releasedBase: 0n });
-    purchaseOut[name] = { currency: p.currency, rate: p.rate, totalTxnMinor: p.totalTxnMinor, totalBaseMinor: totalBase };
+    const returned = p.returnedApTxnMinor ?? 0n;
+    purchases.set(name, { spec: p, totalBase, outstanding: p.totalTxnMinor - returned, releasedBase: apRelease(totalBase, p.totalTxnMinor, 0n, returned) });
+    purchaseOut[name] = {
+      currency: p.currency,
+      rate: p.rate,
+      totalTxnMinor: p.totalTxnMinor,
+      totalBaseMinor: totalBase,
+      ...(p.returnedApTxnMinor === undefined ? {} : { returnedApTxnMinor: p.returnedApTxnMinor }),
+    };
   }
   const notes = new Map<string, { spec: NoteSpec; originalCarrying: bigint; remaining: bigint; remainingCarrying: bigint }>();
   const noteOut: Record<string, unknown> = {};
@@ -1100,30 +1114,44 @@ const CASES: readonly CaseSpec[] = [
   },
   {
     id: 'BELOW-BASE-UNIT',
-    why: 'the same JOD base and LBP purchase: 999.90 LBP paid in JOD leave a txn-only AP residue of 0.10 LBP whose base is 0 (S5 L2); paying it converts to 0 and is a stable amount_below_base_unit refusal, as is a JOD payment converting to 0, and a credit whose consumption converts to 0 (TL-9)',
+    why: 'the same JOD base and LBP purchases (B = 0.002 JOD): S6 never leaves a sub-unit residue (0067 R-77, R-78) — paying 999.90 LBP of P1 would leave 0.10 LBP whose base is 0 and is refused, 790.00 (leaving 210.00, base 0.001) is accepted; P2 carries 0.10 LBP left by an S5 return (least(C, O), R-69(b)), which every payment and credit allocation refuses as amount_below_base_unit, and stays outstanding; a refund leaving the note 0.10 LBP, and a credit allocation leaving P1 0.10 LBP, are residue refusals; the final 210.00 of P1 is absorbed (rel 0, dust -1)',
     base: JOD,
-    purchases: { P1: { currency: LBP, rate: '0.0000024900', totalTxnMinor: 100000n } },
+    purchases: {
+      P1: { currency: LBP, rate: '0.0000024900', totalTxnMinor: 100000n },
+      P2: { currency: LBP, rate: '0.0000024900', totalTxnMinor: 100000n, returnedApTxnMinor: 99990n },
+    },
     notes: { N1: { currency: LBP, rate: '0.0000024900', originalMinor: 100000n } },
     steps: [
       { kind: 'payment', purchase: 'P1', currency: JOD, rate: '1.0000000000', paymentAmountMinor: 2n, appliedMinor: 99990n },
-      { kind: 'payment', purchase: 'P1', currency: JOD, rate: '1.0000000000', paymentAmountMinor: 1n, appliedMinor: 10n },
-      { kind: 'payment', purchase: 'P1', currency: LBP, rate: '0.0000024900', paymentAmountMinor: 10n, appliedMinor: 10n },
-      { kind: 'credit_allocation', purchase: 'P1', note: 'N1', consumedMinor: 10n, appliedMinor: 10n },
+      { kind: 'payment', purchase: 'P1', currency: JOD, rate: '1.0000000000', paymentAmountMinor: 2n, appliedMinor: 79000n },
+      { kind: 'payment', purchase: 'P2', currency: JOD, rate: '1.0000000000', paymentAmountMinor: 1n, appliedMinor: 10n },
+      { kind: 'payment', purchase: 'P2', currency: LBP, rate: '0.0000024900', paymentAmountMinor: 10n, appliedMinor: 10n },
+      { kind: 'credit_allocation', purchase: 'P2', note: 'N1', consumedMinor: 10n, appliedMinor: 10n },
       { kind: 'refund', note: 'N1', currency: JOD, rate: '1.0000000000', consumedMinor: 100n, receiptAmountMinor: 1n },
+      { kind: 'refund', note: 'N1', currency: JOD, rate: '1.0000000000', consumedMinor: 99990n, receiptAmountMinor: 3n },
+      { kind: 'credit_allocation', purchase: 'P1', note: 'N1', consumedMinor: 20990n, appliedMinor: 20990n },
+      { kind: 'payment', purchase: 'P1', currency: JOD, rate: '1.0000000000', paymentAmountMinor: 1n, appliedMinor: 21000n },
     ],
     expect: (r) => {
-      check(r.steps[0]?.outcome === 'accepted' && r.steps[0]?.after['remainingBaseMinor'] === 0n, 'the residue carries base 0');
       check(
-        JSON.stringify(outcomes(r).slice(1)) ===
+        JSON.stringify(outcomes(r)) ===
           JSON.stringify([
+            'supplier_payment.residue_below_base_unit',
+            'accepted',
             'supplier_payment.amount_below_base_unit',
             'supplier_payment.amount_below_base_unit',
             'supplier_credit_allocation.amount_below_base_unit',
             'supplier_refund.amount_below_base_unit',
+            'supplier_refund.residue_below_base_unit',
+            'supplier_credit_allocation.residue_below_base_unit',
+            'accepted',
           ]),
-        'each sub-unit settlement is a stable refusal',
+        'S6 never creates a sub-unit residue; an S5 one is a stable refusal',
       );
-      check(r.purchases.get('P1')?.outstanding === 10n, 'the residue stays outstanding');
+      check(r.steps[1]?.after['outstandingTxnMinor'] === 21000n && r.steps[1]?.after['remainingBaseMinor'] === 0n, 'a residue converting to 1 is lawful');
+      check(planOf(r, 8)['carryingReleasedMinor'] === 0n && planOf(r, 8)['apDustBaseMinor'] === -1n, 'the absorbed final allocation (R-69(a))');
+      check(r.purchases.get('P2')?.outstanding === 10n && r.purchases.get('P2')?.releasedBase === 2n, 'the S5 residue stays outstanding, base 0');
+      check(r.purchases.get('P1')?.outstanding === 0n && r.notes.get('N1')?.remaining === 100000n, 'P1 cleared; N1 untouched');
     },
   },
   {
@@ -1151,7 +1179,7 @@ const CASES: readonly CaseSpec[] = [
 export function buildSupplierSettlementVectors(): SupplierSettlementVectors {
   return {
     version: 'invsupset/1',
-    note: 'Generated by packages/inventory/scripts/generate-s6-vectors.ts and verified by packages/inventory/test/supplier-settlement.test.ts (PHASE_3_S6_CONTRACT A-05, A-08 - A-10). conv(x, rate, e_t, e_b) = HALF_EVEN(x x rate x 10^max(0, e_b - e_t) / 10^max(0, e_t - e_b)); a purchase: B = conv(T); a note: OB = conv(OA). Per step, in order, each starting from what the previous accepted one stored: X = T - O; rel = HALF_EVEN(B x (X + a), T) - HALF_EVEN(B x X, T); ap_dust = rel - conv(a); g(r) = 0 if r = 0 else max(1, OB - HALF_EVEN(OB x (OA - r), OA)); cr_rel = g(rb) - g(rb - c); cr_dust = cr_rel - conv(c); a payment realizes pb - rel (> 0 Dr fx_loss), a credit allocation cr_rel - rel (> 0 Dr fx_loss), a refund mb - cr_rel (> 0 Cr fx_gain). Refusals: credit_exhausted, amount_exceeds_credit, amount_exceeds_outstanding, amount_mismatch (same currency, different amounts), amount_below_base_unit (a positive amount converting to 0). entry: the A-05 lines in order, each only when non-zero (currency purchase | note | payment | receipt | base; dimension purchase = the target purchase branch, origin = the note origin purchase branch). primitives: every SQL primitive call the step made, with its result.',
+    note: 'Generated by packages/inventory/scripts/generate-s6-vectors.ts and verified by packages/inventory/test/supplier-settlement.test.ts (PHASE_3_S6_CONTRACT A-05, A-08 - A-10). conv(x, rate, e_t, e_b) = HALF_EVEN(x x rate x 10^max(0, e_b - e_t) / 10^max(0, e_t - e_b)); a purchase: B = conv(T); a note: OB = conv(OA). Per step, in order, each starting from what the previous accepted one stored: X = T - O; rel = HALF_EVEN(B x (X + a), T) - HALF_EVEN(B x X, T); ap_dust = rel - conv(a); g(r) = 0 if r = 0 else max(1, OB - HALF_EVEN(OB x (OA - r), OA)); cr_rel = g(rb) - g(rb - c); cr_dust = cr_rel - conv(c); a payment realizes pb - rel (> 0 Dr fx_loss), a credit allocation cr_rel - rel (> 0 Dr fx_loss), a refund mb - cr_rel (> 0 Cr fx_gain). Refusals: credit_exhausted, amount_exceeds_credit, amount_exceeds_outstanding, amount_mismatch (same currency, different amounts), amount_below_base_unit (a positive amount converting to 0), residue_below_base_unit (a purchase outstanding O - a or a note remaining rb - c that is > 0 and converts to 0: 0067 R-77, R-78). The returnedApTxnMinor of a purchase is AP a P3-S5 return released before the steps: O starts at T - it, its base released by the release formula at X = 0. entry: the A-05 lines in order, each only when non-zero (currency purchase | note | payment | receipt | base; dimension purchase = the target purchase branch, origin = the note origin purchase branch). primitives: every SQL primitive call the step made, with its result.',
     cases: CASES.map((c) => runCase(c).vector),
   };
 }

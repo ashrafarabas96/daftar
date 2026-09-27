@@ -85,16 +85,19 @@ export type InventoryErrorCode =
   | 'supplier_payment.amount_exceeds_outstanding'
   | 'supplier_payment.amount_mismatch'
   | 'supplier_payment.amount_below_base_unit'
+  | 'supplier_payment.residue_below_base_unit'
   | 'supplier_payment.settlement_inconsistent'
   | 'supplier_credit_allocation.amount_exceeds_outstanding'
   | 'supplier_credit_allocation.amount_exceeds_credit'
   | 'supplier_credit_allocation.credit_exhausted'
   | 'supplier_credit_allocation.amount_mismatch'
   | 'supplier_credit_allocation.amount_below_base_unit'
+  | 'supplier_credit_allocation.residue_below_base_unit'
   | 'supplier_refund.amount_exceeds_credit'
   | 'supplier_refund.credit_exhausted'
   | 'supplier_refund.amount_mismatch'
   | 'supplier_refund.amount_below_base_unit'
+  | 'supplier_refund.residue_below_base_unit'
   | 'supplier_credit_note.consumption_inconsistent';
 
 /** Typed, string-valued facts a refusal may carry beside its code (money as integer text). Never part of the message. */

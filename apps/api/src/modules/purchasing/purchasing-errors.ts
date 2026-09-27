@@ -117,6 +117,8 @@ const PURCHASING_STATUS = {
   'supplier_payment.date_before_purchase': 422,
   'supplier_payment.date_in_future': 422,
   'supplier_payment.amount_below_base_unit': 422,
+  // 0067 R-77: an allocation never leaves a sub-unit AP residue.
+  'supplier_payment.residue_below_base_unit': 422,
   // Retryable: a concurrent settlement moved O, or a rate was stated (A-15).
   'supplier_payment.settlement_changed': 409,
   'supplier_payment.fx_rate_changed': 409,
@@ -136,6 +138,8 @@ const PURCHASING_STATUS = {
   'supplier_credit_allocation.date_before_source': 422,
   'supplier_credit_allocation.date_in_future': 422,
   'supplier_credit_allocation.amount_below_base_unit': 422,
+  // 0067 R-77 / R-78: neither the purchase nor the note is left a sub-unit residue.
+  'supplier_credit_allocation.residue_below_base_unit': 422,
   'supplier_credit_allocation.settlement_changed': 409,
   'supplier_credit_allocation.idempotency_conflict': 409,
   'supplier_credit_allocation.immutable': 500,
@@ -147,6 +151,8 @@ const PURCHASING_STATUS = {
   'supplier_refund.date_before_credit': 422,
   'supplier_refund.date_in_future': 422,
   'supplier_refund.amount_below_base_unit': 422,
+  // 0067 R-78: a refund never leaves the note a sub-unit residue.
+  'supplier_refund.residue_below_base_unit': 422,
   'supplier_refund.settlement_changed': 409,
   'supplier_refund.fx_rate_changed': 409,
   'supplier_refund.idempotency_conflict': 409,

@@ -179,6 +179,20 @@ describe('purchasing error model — the §3 table (M2)', () => {
       details: { reason: 'r', inventoryCode: 'inventory.unit_cost_required' },
     });
   });
+
+  it.each([
+    'supplier_payment.residue_below_base_unit',
+    'supplier_credit_allocation.residue_below_base_unit',
+    'supplier_refund.residue_below_base_unit',
+  ] as const)('%s (0067 R-77 / R-78, review M1) is 422 from the package, the routine and the COMMIT guard alike', (code) => {
+    const sql = ['0067_payment_methods_supplier_settlement_sources.sql', '0068_supplier_settlement_commands.sql'].map((f) =>
+      readFileSync(join(MIGRATIONS, f), 'utf8'),
+    );
+    for (const text of sql) expect(codesRaisedIn(text, 'supplier_payment|supplier_credit_allocation|supplier_refund').has(code), code).toBe(true);
+    expect(statusOf(code)).toBe(422);
+    expect(purchasingPackageRefusal(new InventoryError(code, 'x'))).toMatchObject({ httpStatus: 422, details: { purchasingCode: code } });
+    expect(caught(pgError('P0001', `${code}: a sub-unit residue`))).toMatchObject({ httpStatus: 422, details: { purchasingCode: code } });
+  });
 });
 
 /** Every inventory migration's text, concatenated. */
