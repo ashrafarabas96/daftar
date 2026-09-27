@@ -521,7 +521,7 @@
   "stock.count.continue": "Continue the open count",
   "stock.count.empty": "No count in this warehouse yet",
   "stock.count.startedOn": "Started {date}",
-  "stock.count.lineCount": "{count} items counted",
+  "stock.count.lineCount": "Items counted: {count}",
   "stock.count.statusOpen": "Open",
   "stock.count.statusFinished": "Finished",
   "stock.count.statusCancelled": "Cancelled",
