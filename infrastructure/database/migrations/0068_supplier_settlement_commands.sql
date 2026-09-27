@@ -54,8 +54,9 @@
 --        by the migrator, same signature, owner, INVOKER STABLE, pinned path
 --        and no grantee, with every 0067 row and digest verbatim and one
 --        more row: the R-73 writer `supplier_credit_note_consume`
---        (internal-owned DEFINER, pinned, its prosrc SHA-256). 0068-E(8)
---        probes it.
+--        (internal-owned DEFINER, pinned, its prosrc SHA-256), after 0067
+--        R-80's supplier_returns_value_settled row. 0068-E(8) probes the
+--        writer and the R-80 trigger.
 --
 -- Migrations 0000-0067 are untouched; this file replaces one 0067 object,
 -- the S6 discovery (R-79).
@@ -1340,6 +1341,7 @@ DECLARE
     "supplier_refund_value_complete()": "a82873ddad98bd9946c4d3c2213c998933487a8cc928bb966c724c3e121e4307",
     "supplier_credit_note_guard()": "a21031b39170a8cec024de3947b8de6ee70c7def674235fcdbff01f27d99177e",
     "purchase_reversal_unsettled()": "d84f8b51c5033fb47ceb4c03fccd41a7576faf4ed5529dc4a1c31a64bc9508bf",
+    "supplier_return_value_settled()": "4912571c347258ae4aa66ceb9666c5a0f448a462382c9a9905422d5706f0d2ac",
     "purchase_settlement_verify(uuid,uuid)": "4fcbb7931c06fbf9cf11fc2ede6e4b97357d24b038ed412329c55a48cbafe8ba",
     "supplier_credit_note_verify(uuid,uuid)": "9d18ee17cfdd5f778ee3a767351506d6bbd2209c15d839ed6a295d601abbf76e",
     "supplier_convert_base(bigint,numeric,integer,integer)": "38d765449e2844c1d84971f09277b5857bbddbf741b62a3d8b4c1d4e532e39cf",
@@ -1355,7 +1357,7 @@ BEGIN
   FROM pg_proc p JOIN pg_roles r ON r.oid = p.proowner
   WHERE p.oid = 'public.supplier_settlement_guard_gaps()'::regprocedure;
   FOR v_g IN
-    SELECT e.tbl, e.tg, e.typ, e.deferred, e.fn, (e.ord IN (19, 20)) AS invoker
+    SELECT e.tbl, e.tg, e.typ, e.deferred, e.fn, (e.ord IN (20, 21)) AS invoker
     FROM (VALUES
       (1,  'payment_methods',              'payment_methods_guard',                       31,   false, 'payment_method_guard()'),
       (2,  'payment_methods',              'payment_methods_named',                       21,   true,  'payment_method_named()'),
@@ -1370,14 +1372,15 @@ BEGIN
       (11, 'supplier_refunds',             'supplier_refunds_value_complete',             5,    true,  'supplier_refund_value_complete()'),
       (12, 'supplier_credit_notes',        'supplier_credit_notes_immutable',             27,   false, 'supplier_credit_note_guard()'),
       (13, 'purchase_reversals',           'purchase_reversals_unsettled',                5,    true,  'purchase_reversal_unsettled()'),
-      (14, '-', 'purchase_settlement_verify(uuid,uuid)',                    NULL, NULL, 'purchase_settlement_verify(uuid,uuid)'),
-      (15, '-', 'supplier_credit_note_verify(uuid,uuid)',                   NULL, NULL, 'supplier_credit_note_verify(uuid,uuid)'),
-      (16, '-', 'supplier_convert_base(bigint,numeric,integer,integer)',    NULL, NULL, 'supplier_convert_base(bigint,numeric,integer,integer)'),
-      (17, '-', 'supplier_ap_release(bigint,bigint,bigint,bigint)',         NULL, NULL, 'supplier_ap_release(bigint,bigint,bigint,bigint)'),
-      (18, '-', 'supplier_credit_remaining_carrying(bigint,bigint,bigint)', NULL, NULL, 'supplier_credit_remaining_carrying(bigint,bigint,bigint)'),
-      (19, '-', 'purchase_ap_outstanding(uuid,uuid)',                       NULL, NULL, 'purchase_ap_outstanding(uuid,uuid)'),
-      (20, '-', 'purchase_settlement_state(uuid,uuid)',                     NULL, NULL, 'purchase_settlement_state(uuid,uuid)'),
-      (21, '-', 'supplier_credit_note_consume(uuid,bigint,bigint)',         NULL, NULL, 'supplier_credit_note_consume(uuid,bigint,bigint)')
+      (14, 'supplier_returns',             'supplier_returns_value_settled',              5,    true,  'supplier_return_value_settled()'),
+      (15, '-', 'purchase_settlement_verify(uuid,uuid)',                    NULL, NULL, 'purchase_settlement_verify(uuid,uuid)'),
+      (16, '-', 'supplier_credit_note_verify(uuid,uuid)',                   NULL, NULL, 'supplier_credit_note_verify(uuid,uuid)'),
+      (17, '-', 'supplier_convert_base(bigint,numeric,integer,integer)',    NULL, NULL, 'supplier_convert_base(bigint,numeric,integer,integer)'),
+      (18, '-', 'supplier_ap_release(bigint,bigint,bigint,bigint)',         NULL, NULL, 'supplier_ap_release(bigint,bigint,bigint,bigint)'),
+      (19, '-', 'supplier_credit_remaining_carrying(bigint,bigint,bigint)', NULL, NULL, 'supplier_credit_remaining_carrying(bigint,bigint,bigint)'),
+      (20, '-', 'purchase_ap_outstanding(uuid,uuid)',                       NULL, NULL, 'purchase_ap_outstanding(uuid,uuid)'),
+      (21, '-', 'purchase_settlement_state(uuid,uuid)',                     NULL, NULL, 'purchase_settlement_state(uuid,uuid)'),
+      (22, '-', 'supplier_credit_note_consume(uuid,bigint,bigint)',         NULL, NULL, 'supplier_credit_note_consume(uuid,bigint,bigint)')
     ) AS e(ord, tbl, tg, typ, deferred, fn)
     ORDER BY e.ord
   LOOP
@@ -1428,7 +1431,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION supplier_settlement_guard_gaps() IS
-  'P3-S6 §2.3 (0067, R-70(a); re-created by 0068, R-79). Catalogue-only discovery of the S6 guards: for each of the thirteen §2.3 triggers (payment_methods_guard, payment_methods_named, payment_method_names_guard, supplier_payments_guard, supplier_payments_complete, supplier_payment_allocations_guard, supplier_payment_allocations_value_complete, supplier_credit_allocations_guard, supplier_credit_allocations_value_complete, supplier_refunds_guard, supplier_refunds_value_complete, the S5 supplier_credit_notes_immutable on its replaced function, purchase_reversals_unsettled) reports trigger_missing, trigger_disabled (tgenabled other than O) and trigger_shape (tgtype, deferral, WHEN, column list, function); for each trigger function, the two verification helpers, the three arithmetic functions and the credit-note writer supplier_credit_note_consume (table_name -, trigger_name the signature) reports function_owner (not daftar_inventory_internal), function_not_definer, function_search_path and function_body (the SHA-256 of prosrc recorded at migration time); for the two replaced extension points purchase_ap_outstanding and purchase_settlement_state reports function_owner (not this discovery''s migrator owner), function_not_invoker, function_search_path and function_body. Migrator-owned INVOKER; no EXECUTE grant.';
+  'P3-S6 §2.3 (0067, R-70(a); re-created by 0068, R-79). Catalogue-only discovery of the S6 guards: for each of the fourteen triggers (the thirteen of §2.3 and R-80''s) (payment_methods_guard, payment_methods_named, payment_method_names_guard, supplier_payments_guard, supplier_payments_complete, supplier_payment_allocations_guard, supplier_payment_allocations_value_complete, supplier_credit_allocations_guard, supplier_credit_allocations_value_complete, supplier_refunds_guard, supplier_refunds_value_complete, the S5 supplier_credit_notes_immutable on its replaced function, purchase_reversals_unsettled, and supplier_returns_value_settled on the S5 table (R-80)) reports trigger_missing, trigger_disabled (tgenabled other than O) and trigger_shape (tgtype, deferral, WHEN, column list, function); for each trigger function, the two verification helpers, the three arithmetic functions and the credit-note writer supplier_credit_note_consume (table_name -, trigger_name the signature) reports function_owner (not daftar_inventory_internal), function_not_definer, function_search_path and function_body (the SHA-256 of prosrc recorded at migration time); for the two replaced extension points purchase_ap_outstanding and purchase_settlement_state reports function_owner (not this discovery''s migrator owner), function_not_invoker, function_search_path and function_body. Migrator-owned INVOKER; no EXECUTE grant.';
 
 REVOKE ALL ON FUNCTION supplier_settlement_guard_gaps() FROM PUBLIC;
 
@@ -1641,6 +1644,17 @@ BEGIN
   END;
   IF v_detail IS DISTINCT FROM 'inventory.probe_rollback: -:supplier_credit_note_consume(uuid,bigint,bigint):function_body' THEN
     RAISE EXCEPTION 'inventory.source_guard_missing: the S6 discovery did not report a neutered credit-note writer (%)', v_detail;
+  END IF;
+  BEGIN
+    DROP TRIGGER supplier_returns_value_settled ON supplier_returns;
+    SELECT string_agg(g.table_name || ':' || g.trigger_name || ':' || g.missing, ', ' ORDER BY g.table_name, g.trigger_name, g.missing)
+      INTO v_detail FROM supplier_settlement_guard_gaps() g;
+    RAISE EXCEPTION 'inventory.probe_rollback: %', coalesce(v_detail, '');
+  EXCEPTION WHEN raise_exception THEN
+    GET STACKED DIAGNOSTICS v_detail = MESSAGE_TEXT;
+  END;
+  IF v_detail IS DISTINCT FROM 'inventory.probe_rollback: supplier_returns:supplier_returns_value_settled:trigger_missing' THEN
+    RAISE EXCEPTION 'inventory.source_guard_missing: the S6 discovery did not report a dropped return chain guard (0067 R-80) (%)', v_detail;
   END IF;
   BEGIN
     CREATE OR REPLACE FUNCTION purchase_ap_outstanding(p_business_id UUID, p_purchase_id UUID) RETURNS BIGINT
