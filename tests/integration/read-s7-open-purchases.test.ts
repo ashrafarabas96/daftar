@@ -18,14 +18,30 @@
  *     reaches, and the proposal spans only those;
  *   - BigInt at 10^17: the answer is exact where a float would drift;
  *   - the proposal never names more than 50 allocations and never leaves
- *     less than one base unit outstanding (pure, on `proposeAllocation`).
+ *     less than one base unit outstanding (pure, on `proposeAllocation`);
+ *   - bounded work (review finding L-3): the open-purchases and the
+ *     `owedOnly` supplier-balances statements pre-filter settled purchases
+ *     in SQL, so `purchase_ap_outstanding` runs only for purchases that can
+ *     be open, and at most for a page (plus the proposal window) of them —
+ *     counted with the function-call statistics of the very statement the
+ *     service runs.
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createTestApp, ensurePostgres, ownerPool, resetData, type TestApp } from '../helpers/test-app';
-import { must } from '../helpers/inventory-commands';
+import { must, type HttpActor } from '../helpers/inventory-commands';
 import { expectRefusal, outstandingOf } from '../helpers/supplier-settlement';
-import { namedSupplier, ok, readAs, seedReadsWorld, type ReadsWorld } from '../helpers/merchant-reads';
-import { proposeAllocation, type ProposalPurchase } from '../../apps/api/src/modules/purchasing/supplier-balance-reads';
+import { daysBefore, httpPayPart, namedSupplier, ok, readAs, receive, seedReadsWorld, type ReadsWorld } from '../helpers/merchant-reads';
+import {
+  openPurchasesQuery,
+  PROPOSAL_WINDOW,
+  proposeAllocation,
+  SUPPLIER_SCAN_CAP,
+  supplierBalancesQuery,
+  SupplierBalancesQuerySchema,
+  SupplierOpenPurchasesQuerySchema,
+  type ProposalPurchase,
+  type ReadQuery,
+} from '../../apps/api/src/modules/purchasing/supplier-balance-reads';
 import { parseUnitCost } from '@daftar/inventory';
 
 interface OpenRow {
@@ -208,5 +224,113 @@ describe('T-06 proposeAllocation (pure)', () => {
     const big = 10n ** 17n + 1n;
     const p = proposeAllocation([ils(big), ils(3n)], 'ILS', big + 1n, 2);
     expect(p).toEqual({ proposed: [big, 1n], unallocatedMinor: 0n });
+  });
+});
+
+describe('T-06 bounded work: settled purchases are pre-filtered in SQL (review L-3)', () => {
+  /** A supplier with two fully paid purchases (the oldest) and three open ones. */
+  let busy: { supplierId: string; name: string; open: string[] };
+  /** A supplier whose every purchase is fully paid. */
+  let settled: { supplierId: string; name: string };
+
+  const tenFor = (supplierId: string, documentDate: string) =>
+    receive(w, { supplierId, warehouseId: w.A.w1, documentDate, lines: [{ productId: w.A.piece.productId, quantity: '1', unitPrice: '10.00' }] });
+  const payAll = async (by: HttpActor, supplierId: string, dates: readonly string[]): Promise<void> => {
+    for (const d of dates) await httpPayPart(t, by, w.A, w.method, await tenFor(supplierId, d), '1000');
+  };
+
+  beforeAll(async () => {
+    const busyName = `Busy ${w.supplierName}`;
+    const busyId = await namedSupplier(t, w.owner, w.A, busyName);
+    await payAll(w.owner, busyId, [daysBefore(w.day, 9), daysBefore(w.day, 8)]);
+    const open: string[] = [];
+    for (const n of [7, 6, 5]) open.push((await tenFor(busyId, daysBefore(w.day, n))).purchaseId);
+    busy = { supplierId: busyId, name: busyName, open };
+    const settledName = `Settled ${w.supplierName}`;
+    const settledId = await namedSupplier(t, w.owner, w.A, settledName);
+    await payAll(w.owner, settledId, [daysBefore(w.day, 9), daysBefore(w.day, 8), daysBefore(w.day, 7)]);
+    settled = { supplierId: settledId, name: settledName };
+  });
+
+  /**
+   * Runs `q` exactly as the read does — as `daftar_app`, under row level
+   * security for business A — and counts the `purchase_ap_outstanding` calls
+   * it made: the backend's function statistics before and after it, in one
+   * transaction (a pooled backend may still hold the unflushed counts of an
+   * earlier transaction).
+   */
+  async function run(q: ReadQuery): Promise<{ rows: Record<string, unknown>[]; calls: number }> {
+    const c = await ownerPool().connect();
+    const callsSoFar = async (): Promise<number> => {
+      const r = await c.query<{ n: string }>(
+        `SELECT coalesce(pg_stat_get_xact_function_calls('public.purchase_ap_outstanding(uuid,uuid)'::regprocedure), 0)::text AS n`,
+      );
+      return Number(must(r.rows[0]).n);
+    };
+    try {
+      await c.query('BEGIN');
+      await c.query("SET LOCAL track_functions = 'pl'");
+      await c.query(`SELECT set_config('app.tenant_id', $1, true), set_config('app.business_id', $2, true)`, [w.A.tenantId, w.A.businessId]);
+      const before = await callsSoFar();
+      await c.query('SET LOCAL ROLE daftar_app');
+      const r = await c.query<Record<string, unknown>>(q.text, q.values);
+      await c.query('RESET ROLE');
+      return { rows: r.rows, calls: (await callsSoFar()) - before };
+    } finally {
+      await c.query('ROLLBACK');
+      c.release();
+    }
+  }
+  const openQuery = (query: Record<string, string>): ReadQuery =>
+    openPurchasesQuery(w.A.businessId, busy.supplierId, null, SupplierOpenPurchasesQuerySchema.parse(query));
+  const balancesQuery = (query: Record<string, string>): ReadQuery => supplierBalancesQuery(w.A.businessId, SupplierBalancesQuerySchema.parse(query));
+
+  it('the results: only the open purchases, oldest first; owedOnly keeps the supplier with something open', async () => {
+    const page = await ok<OpenPage>(readAs(t, w.owner, w.A.businessId, `/v1/suppliers/${busy.supplierId}/open-purchases?currency=ILS&amount=2500`));
+    expect(page.items.map((r) => [r.purchaseId, r.outstandingTxnMinor, r.proposedMinor])).toEqual([
+      [busy.open[0], '1000', '1000'],
+      [busy.open[1], '1000', '1000'],
+      [busy.open[2], '1000', '500'],
+    ]);
+    expect(page.unallocatedMinor).toBe('0');
+    const walked: string[] = [];
+    let cursor: string | null = null;
+    for (let i = 0; i < 5; i += 1) {
+      const p: OpenPage = await ok<OpenPage>(
+        readAs(t, w.owner, w.A.businessId, `/v1/suppliers/${busy.supplierId}/open-purchases?limit=1${cursor === null ? '' : `&cursor=${cursor}`}`),
+      );
+      walked.push(...p.items.map((r) => r.purchaseId));
+      if (p.nextCursor === null) break;
+      cursor = p.nextCursor;
+    }
+    expect(walked).toEqual(busy.open);
+    for (const [name, owed] of [
+      [busy.name, true],
+      [settled.name, false],
+    ] as const) {
+      const b = await ok<{ items: { supplierId: string }[] }>(
+        readAs(t, w.owner, w.A.businessId, `/v1/supplier-balances?owedOnly=true&search=${encodeURIComponent(name)}`),
+      );
+      expect({ name, listed: b.items.length }).toEqual({ name, listed: owed ? 1 : 0 });
+    }
+  });
+
+  it('open purchases: the function runs for the page’s open candidates only, never for a settled purchase', async () => {
+    expect((await run(openQuery({}))).calls, 'the three open ones').toBe(3);
+    expect((await run(openQuery({ limit: '1' }))).calls, 'a page of one reads at most two candidates').toBeLessThanOrEqual(2);
+    expect((await run(openQuery({ currency: 'ILS', amount: '2500' }))).calls, 'the proposal window holds the three open ones').toBe(3);
+  });
+
+  it('supplier balances owedOnly: the function never runs for a settled purchase, and at most once per supplier', async () => {
+    expect((await run(balancesQuery({ owedOnly: 'true', search: settled.name }))).calls).toBe(0);
+    expect((await run(balancesQuery({ owedOnly: 'true', search: busy.name }))).calls).toBe(1);
+  });
+
+  it('the caps: the proposal considers the 500 oldest candidates, and an owedOnly page examines at most 500 suppliers', () => {
+    expect({ window: PROPOSAL_WINDOW, scan: SUPPLIER_SCAN_CAP }).toEqual({ window: 500, scan: 500 });
+    expect(openQuery({ currency: 'ILS', amount: '1' }).values.slice(4)).toEqual([PROPOSAL_WINDOW, 21]);
+    expect(openQuery({ limit: '5' }).values.slice(4), 'no proposal, no window').toEqual([0, 6]);
+    expect(balancesQuery({ owedOnly: 'true', limit: '5' }).values.slice(5)).toEqual([6, SUPPLIER_SCAN_CAP]);
+    expect(balancesQuery({ limit: '5' }).values.slice(5), 'without owedOnly the scan is the page').toEqual([6, 6]);
   });
 });

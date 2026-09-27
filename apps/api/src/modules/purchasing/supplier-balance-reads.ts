@@ -214,62 +214,16 @@ export function proposeAllocation(
   return { proposed, unallocatedMinor: remaining };
 }
 
-// ── Rows ─────────────────────────────────────────────────────────────────
+// ── Rows and statements ──────────────────────────────────────────────────
 
 interface SupplierScanRow {
   id: string;
-  name: string;
-  status: 'active' | 'inactive';
-}
-
-/** A statement and its values. */
-export interface ReadQuery {
-  readonly text: string;
-  readonly values: unknown[];
-}
-
-/** The supplier page of `GET /v1/supplier-balances`: newest first, `limit + 1` rows. */
-export function supplierBalancesQuery(businessId: string, q: SupplierBalancesQuery): ReadQuery {
-  const size = q.limit ?? DEFAULT_LIMIT;
-  return {
-    text: `SELECT s.id, s.name, s.status
-         FROM suppliers s
-        WHERE s.business_id = $1
-          AND ($2::text IS NULL OR s.status = $2::text)
-          AND ($3::text IS NULL OR s.name ILIKE '%' || $3 || '%' ESCAPE '\\')
-          AND (NOT $4::boolean
-               OR EXISTS (SELECT 1 FROM purchases p
-                           WHERE p.business_id = s.business_id AND p.supplier_id = s.id AND p.status = 'received'
-                             AND NOT EXISTS (SELECT 1 FROM purchase_reversals r WHERE r.business_id = p.business_id AND r.id = p.id)
-                             AND purchase_ap_outstanding(p.business_id, p.id) <> 0))
-          AND ($5::uuid IS NULL OR (s.created_at, s.id) < (SELECT c.created_at, c.id FROM suppliers c WHERE c.business_id = $1 AND c.id = $5::uuid))
-        ORDER BY s.created_at DESC, s.id DESC
-        LIMIT $6`,
-    values: [businessId, q.status ?? null, q.search === undefined ? null : likeEscaped(q.search), q.owedOnly ?? false, q.cursor ?? null, size + 1],
-  };
-}
-
-/**
- * The open purchases of `GET /v1/suppliers/:id/open-purchases` (`reachable`
- * null for a business-wide caller), oldest first, each with its outstanding
- * and whether it follows the cursor.
- */
-export function openPurchasesQuery(businessId: string, supplierId: string, reachable: ReadonlySet<string> | null, q: SupplierOpenPurchasesQuery): ReadQuery {
-  return {
-    text: `SELECT p.id, p.document_date::text AS document_date, p.supplier_reference, p.warehouse_id, p.currency_code::text AS currency_code,
-              p.total_txn_minor::text AS total_txn_minor, p.source_to_base_rate::text AS source_to_base_rate, o.outstanding::text AS outstanding,
-              ($4::uuid IS NULL
-               OR (p.document_date, p.created_at, p.id)
-                  > (SELECT c.document_date, c.created_at, c.id FROM purchases c WHERE c.business_id = $1 AND c.id = $4::uuid)) AS on_page
-         FROM purchases p
-        CROSS JOIN LATERAL (SELECT purchase_ap_outstanding(p.business_id, p.id) AS outstanding) o
-        WHERE p.business_id = $1 AND p.supplier_id = $2 AND p.status = 'received'
-          AND NOT EXISTS (SELECT 1 FROM purchase_reversals r WHERE r.business_id = p.business_id AND r.id = p.id)
-          AND ($3::uuid[] IS NULL OR p.warehouse_id = ANY($3::uuid[]))
-          AND o.outstanding > 0
-        ORDER BY p.document_date, p.created_at, p.id`,
-    values: [businessId, supplierId, reachable === null ? null : [...reachable], q.cursor ?? null],
-  };
+  name: string | null;
+  status: 'active' | 'inactive' | null;
+  /** True on the one extra row naming the last supplier the scan examined. */
+  tail: boolean;
+  /** How many suppliers the scan examined (on the tail row only). */
+  scanned: string | null;
 }
 
 interface OpenPurchaseRow {
@@ -281,7 +235,148 @@ interface OpenPurchaseRow {
   total_txn_minor: string;
   source_to_base_rate: string | null;
   outstanding: string;
-  on_page: boolean | null;
+  in_head: boolean;
+  on_page: boolean;
+}
+
+/** A statement and its values. */
+export interface ReadQuery {
+  readonly text: string;
+  readonly values: unknown[];
+}
+
+/**
+ * How many suppliers one `owedOnly` page examines at most (review L-3). A
+ * page that reaches the cap before it is full ends there, and its
+ * `nextCursor` continues after the last supplier examined.
+ */
+export const SUPPLIER_SCAN_CAP = 500;
+
+/**
+ * How many open purchases, oldest first, the payment proposal considers
+ * (review L-3; the T-17 budget of 500 open purchases). Like the
+ * 50-allocation cap it bounds the proposal: a younger open purchase in the
+ * proposal currency proposes 0, and what is left of the amount stays
+ * unallocated.
+ */
+export const PROPOSAL_WINDOW = 500;
+
+/**
+ * A NECESSARY condition, in plain SQL, for `purchase_ap_outstanding(p) op 0`
+ * (`op` is `>` or `<>`) on a received, unreversed purchase `p`. The function
+ * is the total less three sums of stored amounts (0067 §5); the same sums,
+ * read through their purchase indexes, rule a settled purchase out without
+ * the function call (review L-3). The function stays the authority: it runs
+ * on every purchase this admits, and only its answer is returned.
+ */
+function mayBeOutstandingSql(p: string, op: '>' | '<>'): string {
+  return `${p}.total_txn_minor ${op} coalesce((SELECT sum(r.ap_txn_minor) FROM supplier_returns r
+                                           WHERE r.business_id = ${p}.business_id AND r.purchase_id = ${p}.id), 0)
+                               + coalesce((SELECT sum(a.purchase_amount_applied_minor) FROM supplier_payment_allocations a
+                                           WHERE a.business_id = ${p}.business_id AND a.purchase_id = ${p}.id), 0)
+                               + coalesce((SELECT sum(c.purchase_amount_applied_minor) FROM supplier_credit_allocations c
+                                           WHERE c.business_id = ${p}.business_id AND c.purchase_id = ${p}.id), 0)`;
+}
+
+/**
+ * The supplier page of `GET /v1/supplier-balances`: newest first, at most
+ * `limit + 1` rows, then one `tail` row naming the last supplier the scan
+ * examined and how many it examined.
+ *
+ * Bounded work (review L-3): the scan examines at most `SUPPLIER_SCAN_CAP`
+ * suppliers (`limit + 1` without `owedOnly`), and `owedOnly` calls
+ * `purchase_ap_outstanding` only on a purchase the pre-filter admits (the
+ * CASE fixes that order) and at most once per supplier: the test is a
+ * correlated scalar subquery with LIMIT 1, which stops at the first open
+ * purchase. (An EXISTS under OR may be planned as one hashed subplan over
+ * every purchase of the business, which is exactly the unbounded work.)
+ */
+export function supplierBalancesQuery(businessId: string, q: SupplierBalancesQuery): ReadQuery {
+  const size = q.limit ?? DEFAULT_LIMIT;
+  const owedOnly = q.owedOnly ?? false;
+  const scan = `SELECT s.id, s.name, s.status, s.created_at
+                  FROM suppliers s
+                 WHERE s.business_id = $1
+                   AND ($2::text IS NULL OR s.status = $2::text)
+                   AND ($3::text IS NULL OR s.name ILIKE '%' || $3 || '%' ESCAPE '\\')
+                   AND ($5::uuid IS NULL OR (s.created_at, s.id) < (SELECT c.created_at, c.id FROM suppliers c WHERE c.business_id = $1 AND c.id = $5::uuid))
+                 ORDER BY s.created_at DESC, s.id DESC
+                 LIMIT $7`;
+  return {
+    text: `SELECT x.id, x.name, x.status, x.tail, x.scanned::text AS scanned
+         FROM ((SELECT sc.id, sc.name, sc.status, false AS tail, NULL::bigint AS scanned, sc.created_at
+                  FROM (${scan}) sc
+                 WHERE NOT $4::boolean
+                    OR (SELECT true FROM purchases p
+                         WHERE p.business_id = $1 AND p.supplier_id = sc.id AND p.status = 'received'
+                           AND NOT EXISTS (SELECT 1 FROM purchase_reversals r WHERE r.business_id = p.business_id AND r.id = p.id)
+                           AND CASE WHEN ${mayBeOutstandingSql('p', '<>')}
+                                    THEN purchase_ap_outstanding(p.business_id, p.id) <> 0
+                                    ELSE false END
+                         LIMIT 1)
+                 ORDER BY sc.created_at DESC, sc.id DESC
+                 LIMIT $6)
+               UNION ALL
+               (SELECT sc.id, NULL, NULL, true, count(*) OVER (), sc.created_at
+                  FROM (${scan}) sc
+                 ORDER BY sc.created_at, sc.id
+                 LIMIT 1)) x
+        ORDER BY x.tail, x.created_at DESC, x.id DESC`,
+    values: [
+      businessId,
+      q.status ?? null,
+      q.search === undefined ? null : likeEscaped(q.search),
+      owedOnly,
+      q.cursor ?? null,
+      size + 1,
+      owedOnly ? SUPPLIER_SCAN_CAP : size + 1,
+    ],
+  };
+}
+
+/**
+ * The open purchases of `GET /v1/suppliers/:id/open-purchases` (`reachable`
+ * null for a business-wide caller), oldest first, each with its outstanding,
+ * whether it is in the proposal window and whether it is on the page.
+ *
+ * Bounded work (review L-3): `cand` pre-filters the supplier's received,
+ * unreversed, reachable purchases in plain SQL (`mayBeOutstandingSql`);
+ * `purchase_ap_outstanding` then runs only on the page (the first
+ * `limit + 1` candidates after the cursor) and, when a proposal is asked,
+ * on the proposal window (the first `PROPOSAL_WINDOW` candidates).
+ */
+export function openPurchasesQuery(businessId: string, supplierId: string, reachable: ReadonlySet<string> | null, q: SupplierOpenPurchasesQuery): ReadQuery {
+  const size = q.limit ?? DEFAULT_LIMIT;
+  const proposal = q.currency !== undefined && q.amount !== undefined;
+  return {
+    text: `WITH cand AS (
+         SELECT p.id, p.document_date, p.created_at, p.supplier_reference, p.warehouse_id, p.currency_code, p.total_txn_minor, p.source_to_base_rate
+           FROM purchases p
+          WHERE p.business_id = $1 AND p.supplier_id = $2 AND p.status = 'received'
+            AND NOT EXISTS (SELECT 1 FROM purchase_reversals r WHERE r.business_id = p.business_id AND r.id = p.id)
+            AND ($3::uuid[] IS NULL OR p.warehouse_id = ANY($3::uuid[]))
+            AND ${mayBeOutstandingSql('p', '>')}
+       ), head AS (
+         SELECT c.id FROM cand c ORDER BY c.document_date, c.created_at, c.id LIMIT $5
+       ), page AS (
+         SELECT c.id FROM cand c
+          WHERE $4::uuid IS NULL
+             OR (c.document_date, c.created_at, c.id)
+                > (SELECT k.document_date, k.created_at, k.id FROM purchases k WHERE k.business_id = $1 AND k.id = $4::uuid)
+          ORDER BY c.document_date, c.created_at, c.id LIMIT $6
+       ), scanned AS (
+         SELECT h.id FROM head h UNION SELECT g.id FROM page g
+       )
+       SELECT c.id, c.document_date::text AS document_date, c.supplier_reference, c.warehouse_id, c.currency_code::text AS currency_code,
+              c.total_txn_minor::text AS total_txn_minor, c.source_to_base_rate::text AS source_to_base_rate,
+              purchase_ap_outstanding($1::uuid, c.id)::text AS outstanding,
+              c.id IN (SELECT h.id FROM head h) AS in_head,
+              c.id IN (SELECT g.id FROM page g) AS on_page
+         FROM cand c
+         JOIN scanned x ON x.id = c.id
+        ORDER BY c.document_date, c.created_at, c.id`,
+    values: [businessId, supplierId, reachable === null ? null : [...reachable], q.cursor ?? null, proposal ? PROPOSAL_WINDOW : 0, size + 1],
+  };
 }
 
 /**
@@ -313,7 +408,9 @@ export class SupplierBalanceReadService {
     assertBusinessWide(m);
     const size = q.limit ?? DEFAULT_LIMIT;
     const query = supplierBalancesQuery(m.businessId, q);
-    const suppliers = await this.rows<SupplierScanRow>(m, query.text, query.values);
+    const scan = await this.rows<SupplierScanRow>(m, query.text, query.values);
+    const suppliers = scan.filter((r) => !r.tail);
+    const tail = scan.find((r) => r.tail);
     const page = suppliers.slice(0, size);
     const ids = page.map((s) => s.id);
     const owed =
@@ -341,15 +438,15 @@ export class SupplierBalanceReadService {
       items: page.map(
         (s): SupplierBalanceRowDto => ({
           supplierId: s.id,
-          name: s.name,
-          status: s.status,
+          name: scanned(s.name),
+          status: scanned(s.status),
           owed: owed
             .filter((r) => r.supplier_id === s.id && r.txn_minor !== '0')
             .map((r): CurrencyAmountDto => ({ currency: r.currency_code, amountMinor: r.txn_minor })),
           inYourFavour: favour.filter((r) => r.supplier_id === s.id).map((r): CurrencyAmountDto => ({ currency: r.currency_code, amountMinor: r.remaining })),
         }),
       ),
-      nextCursor: suppliers.length > size && last !== undefined ? last.id : null,
+      nextCursor: nextSupplierCursor(suppliers.length > size ? last : undefined, tail, q.owedOnly ?? false),
     };
   }
 
@@ -358,8 +455,10 @@ export class SupplierBalanceReadService {
    * with something outstanding (`purchase_ap_outstanding > 0`), OLDEST first
    * on (document date, created, id), keyset-paged. With `currency` and
    * `amount`, every row in that currency carries its share of the
-   * oldest-first proposal (`proposeAllocation`), computed over ALL the open
-   * purchases, not only the page, so a page never contradicts the next.
+   * oldest-first proposal (`proposeAllocation`), computed over the open
+   * purchases of the proposal window (the oldest `PROPOSAL_WINDOW`), not
+   * only the page, so a page never contradicts the next. The work is bounded
+   * (review L-3): see `openPurchasesQuery`.
    */
   async openPurchases(m: MembershipContext, supplierId: string, q: SupplierOpenPurchasesQuery): Promise<SupplierOpenPurchasesDto> {
     requireAnyPermission(m, ['suppliers.view', 'suppliers.pay']);
@@ -367,13 +466,16 @@ export class SupplierBalanceReadService {
     if (supplier === undefined) throw purchasingRefusal('supplier.not_found');
     const reachable = await reachableWarehouses(this.db, m);
     const query = openPurchasesQuery(m.businessId, supplierId, reachable, q);
-    const open = await this.rows<OpenPurchaseRow>(m, query.text, query.values);
-    let proposed: (bigint | null)[] = open.map(() => null);
+    const rows = await this.rows<OpenPurchaseRow>(m, query.text, query.values);
+    // `purchase_ap_outstanding` is the authority: a candidate it answers 0 for is not open.
+    const isOpen = (r: OpenPurchaseRow): boolean => BigInt(r.outstanding) > 0n;
+    const proposed = new Map<string, bigint | null>();
     let unallocated: bigint | null = null;
     if (q.currency !== undefined && q.amount !== undefined) {
+      const window = rows.filter((r) => r.in_head && isOpen(r));
       const baseExponent = minorUnitsOf(await readBaseCurrency(this.db, m));
       const proposal = proposeAllocation(
-        open.map((r) => {
+        window.map((r) => {
           if (r.source_to_base_rate === null)
             throw new AppError('INTERNAL_ERROR', 'Internal error', 500, { defect: 'a received purchase has no snapshot rate' });
           return { currency: r.currency_code, outstandingMinor: BigInt(r.outstanding), rateR10: parseUnitCost(r.source_to_base_rate) };
@@ -382,13 +484,19 @@ export class SupplierBalanceReadService {
         BigInt(q.amount),
         baseExponent,
       );
-      proposed = proposal.proposed;
+      window.forEach((r, i) => proposed.set(r.id, proposal.proposed[i] ?? null));
       unallocated = proposal.unallocatedMinor;
     }
+    // Past the proposal window a purchase in the proposal currency proposes 0 (PROPOSAL_WINDOW).
+    const proposalOf = (r: OpenPurchaseRow): bigint | null => proposed.get(r.id) ?? (q.currency !== undefined && r.currency_code === q.currency ? 0n : null);
     const size = q.limit ?? DEFAULT_LIMIT;
-    const onPage = open.map((r, i) => ({ r, proposal: proposed[i] ?? null })).filter((x) => x.r.on_page === true);
-    const items = onPage.slice(0, size);
-    const last = items.at(-1);
+    // The page is the first `limit` candidates after the cursor; one more means another page follows.
+    const candidates = rows.filter((r) => r.on_page);
+    const items = candidates
+      .slice(0, size)
+      .filter(isOpen)
+      .map((r) => ({ r, proposal: proposalOf(r) }));
+    const last = candidates.length > size ? candidates[size - 1] : undefined;
     return {
       items: items.map(
         ({ r, proposal }): SupplierOpenPurchaseDto => ({
@@ -402,8 +510,25 @@ export class SupplierBalanceReadService {
           proposedMinor: proposal === null ? null : proposal.toString(10),
         }),
       ),
-      nextCursor: onPage.length > size && last !== undefined ? last.r.id : null,
+      nextCursor: last === undefined ? null : last.id,
       unallocatedMinor: unallocated === null ? null : unallocated.toString(10),
     };
   }
+}
+
+/** A listed supplier row always carries its name and status; only the tail row does not. */
+function scanned<T>(value: T | null): T {
+  if (value === null) throw new AppError('INTERNAL_ERROR', 'Internal error', 500, { defect: 'a listed supplier row has no name or status' });
+  return value;
+}
+
+/**
+ * The supplier-balances cursor: the last supplier of a full page; else, when
+ * an `owedOnly` scan stopped at `SUPPLIER_SCAN_CAP`, the last supplier it
+ * examined, so the next page continues after it; else none.
+ */
+function nextSupplierCursor(lastOfFullPage: SupplierScanRow | undefined, tail: SupplierScanRow | undefined, owedOnly: boolean): string | null {
+  if (lastOfFullPage !== undefined) return lastOfFullPage.id;
+  if (owedOnly && tail !== undefined && tail.scanned === String(SUPPLIER_SCAN_CAP)) return tail.id;
+  return null;
 }
