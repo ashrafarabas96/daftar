@@ -9,7 +9,7 @@
  */
 import type { InventoryItemDto, InventoryStockRowDto } from '@/lib/phase3-api';
 import type { Locale } from '@/lib/i18n';
-import { isQuantityText, isZeroQuantityText, normaliseDigits } from '@/lib/phase3-format';
+import { formatMomentDate, isQuantityText, isZeroQuantityText, normaliseDigits } from '@/lib/phase3-format';
 
 /** One pickable stock identity: a product, and its merchant variant when it has them (never the base variant). */
 export interface PickOption {
@@ -99,11 +99,9 @@ export function trimQtyText(value: string, decimals: number): string {
   return fraction.length > 0 ? `${whole}.${fraction}` : whole;
 }
 
-/** A calendar date of an ISO timestamp in the locale's numeric form, Western digits (A-16(5)). */
+/** A calendar date of an ISO timestamp, in the one date style every S7 screen uses (A-16(5); `formatMomentDate`). */
 export function formatDateText(iso: string, locale: Locale): string {
-  const at = new Date(iso);
-  if (Number.isNaN(at.getTime())) return iso;
-  return new Intl.DateTimeFormat(`${locale}-u-nu-latn`, { year: 'numeric', month: '2-digit', day: '2-digit' }).format(at).replace(/[‎‏؜]/g, '');
+  return formatMomentDate(iso, locale);
 }
 
 /** The reason the merchant picks on Adjust Stock (A-13; "Starting stock" is TL-4). */

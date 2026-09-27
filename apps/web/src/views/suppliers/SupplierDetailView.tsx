@@ -9,7 +9,7 @@
  * `suppliers.pay`). No statement or ageing is built here (TL-5).
  */
 import { Button, Checkbox, List, Select, TextField } from '@daftar/design-system';
-import { rich, type ViewBaseProps } from '@/lib/phase3-format';
+import { formatCivilDate, formatMoney, rich, type ViewBaseProps } from '@/lib/phase3-format';
 import { RefusalNotice } from '../common/feedback';
 import { activeMethodChoices } from '../common/payment-methods';
 import { Amounts, CivilDate, Heading, Inline, Money, Muted, Notice, Panel, Stack, Text, Title } from '../common/primitives';
@@ -188,7 +188,10 @@ function MoneyBack(props: SupplierDetailViewProps & ViewBaseProps & { form: Mone
           error={form.errors.note ? t('suppliers.moneyBack.noteRequired') : undefined}
           options={[
             { value: '', label: t('suppliers.moneyBack.chooseBalance') },
-            ...form.notes.map((n) => ({ value: n.creditNoteId, label: `${n.currency} · ${n.issuedOn}` })),
+            ...form.notes.map((n) => ({
+              value: n.creditNoteId,
+              label: `${formatMoney(n.remainingTxnMinor, n.currency, locale)} · ${formatCivilDate(n.issuedOn, locale)}`,
+            })),
           ]}
           onChange={(v) => on.onMoneyBackField('creditNoteId', v)}
         />

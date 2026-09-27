@@ -9,7 +9,7 @@
 import type { ReactNode } from 'react';
 import { colors, radius, spacing, typography } from '@daftar/design-system';
 import type { Locale } from '@/lib/i18n';
-import { Ltr, formatMoney, formatQty } from '@/lib/phase3-format';
+import { Ltr, formatCivilDate, formatMoney, formatQty } from '@/lib/phase3-format';
 
 type Gap = 1 | 2 | 3 | 4 | 6;
 
@@ -23,13 +23,9 @@ export function Quantity(props: { value: string; decimals: number; locale: Local
   return <Ltr>{formatQty(props.value, props.decimals, props.locale)}</Ltr>;
 }
 
-/** A civil date (`YYYY-MM-DD`) in the locale's words, Western digits. */
+/** A civil date (`YYYY-MM-DD`) in the locale's words, Western digits, without the bidi marks that scramble it in Arabic (B-1). */
 export function CivilDate(props: { iso: string; locale: Locale }) {
-  const at = new Date(`${props.iso.slice(0, 10)}T00:00:00Z`);
-  const text = Number.isNaN(at.getTime())
-    ? props.iso
-    : new Intl.DateTimeFormat(`${props.locale}-u-nu-latn`, { dateStyle: 'medium', timeZone: 'UTC' }).format(at);
-  return <Ltr>{text}</Ltr>;
+  return <Ltr>{formatCivilDate(props.iso, props.locale)}</Ltr>;
 }
 
 /** A currency code, isolated left-to-right. */

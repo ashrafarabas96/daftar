@@ -104,6 +104,34 @@ export function amountInputToMinor(input: string, currency: string): string | nu
 
 // ── Dates and names ──────────────────────────────────────────────────────
 
+/**
+ * The bidi marks CLDR puts inside a formatted date (Arabic "14‏/08‏/2026"
+ * carries U+200F after each part). Inside `<bdi dir="ltr">` they reorder the
+ * runs, so "14/08/2026" would render as "142026/08/": they are dropped.
+ */
+const DATE_BIDI_MARKS = /[‎‏؜]/g;
+
+function dateText(at: Date, locale: Locale, timeZone: 'UTC' | undefined): string {
+  const format = new Intl.DateTimeFormat(`${locale}-u-nu-latn`, { dateStyle: 'medium', ...(timeZone ? { timeZone } : {}) });
+  return westernDigits(format.format(at)).replace(DATE_BIDI_MARKS, '');
+}
+
+/**
+ * A civil date (`YYYY-MM-DD`, or the date part of an ISO text) in the locale's
+ * words, Western digits and no bidi marks — the ONE date style of every S7
+ * screen (A-16(5)). Text that is not a date comes back as it was.
+ */
+export function formatCivilDate(iso: string, locale: Locale): string {
+  const at = new Date(`${iso.slice(0, 10)}T00:00:00Z`);
+  return Number.isNaN(at.getTime()) ? iso : dateText(at, locale, 'UTC');
+}
+
+/** The calendar day of a moment (an ISO timestamp) in the browser's time zone, in the same style as `formatCivilDate`. */
+export function formatMomentDate(iso: string, locale: Locale): string {
+  const at = new Date(iso);
+  return Number.isNaN(at.getTime()) ? iso : dateText(at, locale, undefined);
+}
+
 /** `YYYY-MM-DD` of the given moment in the browser's calendar day — the default document date. */
 export function localDateIso(at: Date = new Date()): string {
   const pad = (n: number): string => String(n).padStart(2, '0');
