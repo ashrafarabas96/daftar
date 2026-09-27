@@ -30,6 +30,9 @@ const F60 = '0060_inventory_stock_primitive.sql';
 const F62 = '0062_inventory_movement_commands.sql';
 // P3-S4 (0063/0064)
 const F64 = '0064_purchase_commands.sql';
+// P3-S5 (0065/0066)
+const F65 = '0065_supplier_returns_reversals_sources.sql';
+const F66 = '0066_supplier_return_reversal_commands.sql';
 
 /** The real tree with one file's text rewritten; the rewrite must change something. */
 function mutate(file: string, from: string | RegExp, to: string): Record<string, string> {
@@ -154,7 +157,7 @@ describe('G-7 — the tree as it stands', () => {
     ]);
   });
 
-  it('rule 22: the only stock writers are the primitive, the P3-S3 bridge writer and the two P3-S4 receipt helpers, and the first statement of each verifies the assertion', () => {
+  it('rule 22: the only stock writers are the primitive, the P3-S3 bridge writer and the two P3-S4 receipt helpers, the P3-S5 primitive replacement and its two bridge writers, and the first statement of each verifies the assertion', () => {
     const report = checkInventoryWriterAuthority(real());
     expect(report.violations).toEqual([]);
     // 0062 R-5: the seven entry routines write no stock table themselves; the
@@ -170,6 +173,11 @@ describe('G-7 — the tree as it stands', () => {
       // P3-S4 (0063/0064)
       `${F64}: purchase_cover_deficits`,
       `${F64}: purchase_bridge_receipt`,
+      // P3-S5 (0065/0066, R-B1a and S5 contract §7.2): the primitive replaced
+      // by its owner, and the two bridge writers; each opens with the assertion.
+      `${F65}: inventory_apply_stock_movements`,
+      `${F66}: purchase_bridge_return`,
+      `${F66}: purchase_bridge_reversal`,
     ]);
   });
 });
@@ -545,6 +553,53 @@ describe('rule 22 — a stock writer verifies invctl/1 first (PM-44 static half)
       );
       expect(v).toHaveLength(1);
       expect(v[0]).toContain('EXCEPTION WHEN handler');
+    });
+  });
+
+  describe('P3-S4 §7.2: the coverage header negative_inventory_cost_adjustments is a stock table', () => {
+    /** The real tree plus one internal DEFINER routine `name` whose body is `body`. */
+    const plantedWriter = (name: string, body: string): Record<string, string> => {
+      const tree = real();
+      tree['9999_regression.sql'] = [
+        'GRANT CREATE ON SCHEMA public TO daftar_inventory_internal;',
+        `CREATE FUNCTION ${name}() RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $$`,
+        body,
+        '$$;',
+        `REVOKE ALL ON FUNCTION ${name}() FROM PUBLIC;`,
+        `ALTER FUNCTION ${name}() OWNER TO daftar_inventory_internal;`,
+        'REVOKE CREATE ON SCHEMA public FROM daftar_inventory_internal;',
+      ].join('\n');
+      return tree;
+    };
+
+    it('a write of the header is a stock write, and its real writer is purchase_cover_deficits', () => {
+      expect(stockTablesWritten('INSERT INTO negative_inventory_cost_adjustments DEFAULT VALUES;')).toEqual(['negative_inventory_cost_adjustments']);
+      expect(stockTablesWritten('UPDATE "public"."negative_inventory_cost_adjustments" SET x = 1;')).toEqual(['negative_inventory_cost_adjustments']);
+      expect(stockTablesWritten('SELECT 1 FROM negative_inventory_cost_adjustments a WHERE false;')).toEqual([]);
+      const cover = inventoryRoutineDefinitions(real()).filter((d) => d.name === 'purchase_cover_deficits');
+      expect(cover.map((d) => d.file)).toEqual([F64]);
+      expect(stockTablesWritten(cover[0]?.body ?? '')).toContain('negative_inventory_cost_adjustments');
+    });
+
+    it('positive: a header writer that verifies invctl/1 first passes', () => {
+      const tree = plantedWriter(
+        'inventory_header_writer',
+        "DECLARE\n  v_actor inventory_verified_actor;\nBEGIN\n  v_actor := inventory_assertion_current(ARRAY['purchase.receive']);\n  INSERT INTO negative_inventory_cost_adjustments DEFAULT VALUES;\nEND;",
+      );
+      expect(checkInventoryDefinerContract({ migrations: tree }).violations).toEqual([]);
+      const report = checkInventoryWriterAuthority(tree);
+      expect(report.violations).toEqual([]);
+      expect(report.writers).toContain('9999_regression.sql: inventory_header_writer');
+    });
+
+    it('negative: a header writer without the assertion first is refused', () => {
+      const tree = plantedWriter('inventory_header_sneak', 'BEGIN\n  INSERT INTO public.negative_inventory_cost_adjustments DEFAULT VALUES;\nEND;');
+      // G-7 alone is satisfied: the shape is right. Only rule 22 sees the missing authority.
+      expect(checkInventoryDefinerContract({ migrations: tree }).violations).toEqual([]);
+      const v = writer(tree);
+      expect(v).toHaveLength(1);
+      expect(v[0]).toContain('inventory_header_sneak writes negative_inventory_cost_adjustments');
+      expect(v[0]).toContain('first statement');
     });
   });
 

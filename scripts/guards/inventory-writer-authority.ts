@@ -35,9 +35,18 @@
 import { checkInventoryDefinerContract, inventoryRoutineDefinitions } from './inventory-definer-contract';
 import { QUALIFIED_NAME, balancedBody, unquote } from './sql-schema';
 
-/** The stock tables whose writes need a verified assertion, bridges included. */
+/**
+ * The stock tables whose writes need a verified assertion, bridges included.
+ *
+ * P3-S4 (S4 contract §7.2): `negative_inventory_cost_adjustments`, the
+ * coverage header whose value N the receipt posts against COGS, joins the
+ * set. Its one writer, `purchase_cover_deficits`, already writes the deficits
+ * and coverages and opens with `inventory_assertion_current(...)`, so the
+ * writer list is unchanged; a new routine that inserted a header without
+ * that check would not be.
+ */
 export const STOCK_WRITE_TABLES =
-  /^(stock_movements|stock_levels|stock_source_bindings|negative_inventory_deficits|negative_deficit_coverages|stock_source_bridge_\w+)$/;
+  /^(stock_movements|stock_levels|stock_source_bindings|negative_inventory_deficits|negative_deficit_coverages|negative_inventory_cost_adjustments|stock_source_bridge_\w+)$/;
 
 /** Single-quoted literals out, so a message that names a table is not a write. */
 function stripLiterals(body: string): string {
