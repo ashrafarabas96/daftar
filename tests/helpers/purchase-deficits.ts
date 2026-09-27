@@ -39,6 +39,9 @@ import {
   S5_OPERATION_MOVEMENT_KINDS,
   S5_SOURCE_TYPES,
   S5_TABLES,
+  // P3-S6 (0067/0068)
+  S6_OPERATION_KINDS,
+  S6_TABLES,
   installStockFixture,
   must,
   ownerClient,
@@ -228,6 +231,10 @@ export const S4_OPERATION_MOVEMENT_KINDS: readonly (readonly [op: string, kind: 
  * P3-S5 (0065/0066): plus exactly the P3-S5 rows (docs/PHASE_3_S5_CONTRACT.md
  * §7.3 row 16) — the two source types, the two op→kind rows and the two kinds
  * — so the state is exactly S1 + S3 + S4 + S5.
+ *
+ * P3-S6 (0067/0068): plus exactly the seven P3-S6 kinds (§7.3 row 17; S6
+ * registers no stock source type and no op→kind row) — so the state is
+ * exactly S1 + S3 + S4 + S5 + S6.
  */
 export async function assertS4MigrationState(q: Queryable = ownerPool()): Promise<void> {
   const r = await q.query<{ types: string[]; mapping: string[]; kinds: string[]; uses: number; rels: number; fns: number }>(
@@ -260,6 +267,8 @@ export async function assertS4MigrationState(q: Queryable = ownerPool()): Promis
       ...S4_OPERATION_KINDS,
       // P3-S5 (0065/0066)
       ...S5_OPERATION_KINDS,
+      // P3-S6 (0067/0068)
+      ...S6_OPERATION_KINDS,
     ].sort(),
     uses: 0,
     rels: 0,
@@ -280,6 +289,11 @@ export async function assertS4MigrationState(q: Queryable = ownerPool()): Promis
  * here, so all seven are named too (bridges first, then the documents,
  * children first); without them PostgreSQL refuses the whole statement
  * (0A000, "cannot truncate a table referenced in a foreign key constraint").
+ *
+ * P3-S6 (0067/0068): the six S6 tables reference the purchases and the S5
+ * credit notes truncated here, so they are named too, children first and
+ * before the S5 documents (§7.3 row 17); without them the same 0A000 refuses
+ * the statement and every suite using this fixture fails in its beforeAll.
  */
 export async function removeCommittedDeficitFixture(): Promise<void> {
   const c = await ownerClient();
@@ -305,6 +319,8 @@ export async function removeCommittedDeficitFixture(): Promise<void> {
         'purchases',
         // P3-S5 (0065/0066)
         ...S5_BRIDGES,
+        // P3-S6 (0067/0068)
+        ...S6_TABLES,
         ...S5_TABLES,
         ...extra,
       ].join(', ')}`,

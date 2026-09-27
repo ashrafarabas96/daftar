@@ -193,6 +193,42 @@ export const S5_BRIDGES = ['stock_source_bridge_purchase_reversal', 'stock_sourc
  */
 export const S5_TABLES = ['purchase_reversal_lines', 'purchase_reversals', 'supplier_credit_notes', 'supplier_return_lines', 'supplier_returns'] as const;
 
+// P3-S6 (0067/0068) — the P3-S6 registrations (docs/PHASE_3_S6_CONTRACT.md
+// §2.8, A-03, A-05, §7.3 row 17). 0067 registered the three ACCOUNTING source
+// types (no stock source type: no S6 command moves stock) and 0068 the seven
+// operation kinds, each `registered_by = 'P3-S6'`, with no op→kind row; the
+// migration state is now exactly S1 + S3 + S4 + S5 + S6.
+
+/** P3-S6 (0067/0068): the seven operation kinds 0068 registers (§2.8, A-03), sorted. */
+export const S6_OPERATION_KINDS = [
+  'payment.activate_method',
+  'payment.create_method',
+  'payment.deactivate_method',
+  'payment.update_method',
+  'supplier.allocate_credit',
+  'supplier.pay',
+  'supplier.receive_refund',
+] as const;
+
+/** P3-S6 (0067/0068): the three accounting source types 0067 registers (A-05), in `sort_order` (9, 10, 11). */
+export const S6_ACCOUNTING_SOURCE_TYPES = ['supplier_payment', 'supplier_credit_allocation', 'supplier_refund'] as const;
+
+/**
+ * P3-S6 (0067/0068): the six S6 tables, children first — the order a TRUNCATE
+ * names them in (§7.3 row 17), all before S5's `supplier_credit_notes`, which
+ * the credit allocations and refunds reference. The refunds and credit
+ * allocations reference the notes, the payment allocations their payment, the
+ * payments and refunds a method, and the names their method.
+ */
+export const S6_TABLES = [
+  'supplier_refunds',
+  'supplier_credit_allocations',
+  'supplier_payment_allocations',
+  'supplier_payments',
+  'payment_method_names',
+  'payment_methods',
+] as const;
+
 // ── small utilities ────────────────────────────────────────────────────────
 
 /** Narrow an optional to its value, loudly (the accounting-posting precedent). */
@@ -613,6 +649,10 @@ export async function withRolledBackFixture<T>(
  * P3-S5 (0065/0066): plus exactly the P3-S5 registrations — the two source
  * types, the two op→kind rows and the two kinds — so the state is exactly
  * S1 + S3 + S4 + S5.
+ *
+ * P3-S6 (0067/0068): plus exactly the seven P3-S6 kinds (S6 registers no stock
+ * source type and no op→kind row, §2.8) — so the state is exactly
+ * S1 + S3 + S4 + S5 + S6.
  */
 export async function assertMigrationState(q: Queryable = ownerPool()): Promise<void> {
   const r = await q.query<{ types: string[]; mapping: string[]; kinds: string[]; uses: number; rels: number; fns: number }>(
@@ -646,6 +686,8 @@ export async function assertMigrationState(q: Queryable = ownerPool()): Promise<
       ...S4_OPERATION_KINDS,
       // P3-S5 (0065/0066)
       ...S5_OPERATION_KINDS,
+      // P3-S6 (0067/0068)
+      ...S6_OPERATION_KINDS,
     ].sort(),
     uses: 0,
     rels: 0,
@@ -691,8 +733,108 @@ export async function assertMigrationState(q: Queryable = ownerPool()): Promise<
  *   every EXECUTE grantee other than its owner of the five S5 routines that
  *   have one (PUBLIC included) — is asserted present before it is revoked
  *   and absent after, as the S4 set is.
+ *
+ * P3-S6 (0067/0068): 0067/0068 registered no stock source type and no op→kind
+ * row (§2.8), so the inspected registries need nothing undone; the seven
+ * P3-S6 operation kinds stay, as the S1/S3/S4/S5 kinds do (neither block
+ * inspects `inventory_operation_kinds`, and `inventory_assertion_uses` rows of
+ * a committed S6 command reference them). The S6 grants (contract A-17) are
+ * revoked FIRST, because one of them — the accounting principal's SELECT on
+ * `supplier_credit_notes` — lands on an S5 table and would otherwise break
+ * the exact S5 grant set below. The exact S6 set — every table-level privilege
+ * of the three principals on the six S6 tables, every column UPDATE on the
+ * two S6 tables and the credit notes, the accounting SELECT on the notes, and
+ * every EXECUTE grantee other than its owner of every S6 routine (PUBLIC
+ * included) — is asserted present before it is revoked and absent after.
  */
 export async function rewindToP3S2Checkpoint(c: Queryable): Promise<void> {
+  // P3-S6 (0067/0068)
+  const s6Routines = [
+    'payment_method_create(uuid,text,uuid,boolean,integer,text,text,text)',
+    'payment_method_update(uuid,integer,uuid,boolean,integer,text,text,text)',
+    'payment_method_deactivate(uuid,integer)',
+    'payment_method_activate(uuid,integer)',
+    'supplier_pay(uuid,uuid,uuid,uuid,date,character,bigint,uuid,numeric,text,timestamp with time zone,bigint,text,uuid[],uuid[],uuid[],text[],bigint[],bigint[],bigint[],bigint[],bigint[],bigint[],bigint[])',
+    'supplier_allocate_credit(uuid,uuid,uuid,uuid,date,character,bigint,bigint,bigint,bigint,character,bigint,bigint,bigint,bigint,bigint)',
+    'supplier_receive_refund(uuid,uuid,uuid,uuid,date,character,bigint,bigint,bigint,bigint,character,bigint,uuid,numeric,text,timestamp with time zone,bigint,bigint,text)',
+    'supplier_credit_note_consume(uuid,bigint,bigint)',
+    'supplier_convert_base(bigint,numeric,integer,integer)',
+    'supplier_ap_release(bigint,bigint,bigint,bigint)',
+    'supplier_credit_remaining_carrying(bigint,bigint,bigint)',
+    'purchase_settlement_verify(uuid,uuid)',
+    'supplier_credit_note_verify(uuid,uuid)',
+    'supplier_settlement_guard_gaps()',
+    'accounting_settlement_account_eligibility(uuid,uuid)',
+  ];
+  const s6GrantsSql = `SELECT (SELECT array_agg(r.rolname || ':' || t || ':' || p ORDER BY r.rolname, t, p)
+                                FROM unnest($1::text[]) AS t
+                                CROSS JOIN unnest(ARRAY['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER']) AS p
+                                CROSS JOIN pg_roles r
+                               WHERE r.rolname IN ('daftar_app', 'daftar_inventory_internal', 'daftar_accounting_internal')
+                                 AND has_table_privilege(r.rolname, t, p)) AS tables,
+                              (SELECT array_agg(r.rolname || ':' || a.attrelid::regclass::text || '.' || a.attname ORDER BY r.rolname, a.attrelid::regclass::text, a.attname)
+                                FROM pg_attribute a
+                                CROSS JOIN pg_roles r
+                               WHERE a.attrelid = ANY (ARRAY['payment_methods', 'payment_method_names', 'supplier_credit_notes']::regclass[])
+                                 AND a.attnum > 0 AND NOT a.attisdropped
+                                 AND r.rolname IN ('daftar_app', 'daftar_inventory_internal', 'daftar_accounting_internal')
+                                 AND has_column_privilege(r.rolname, a.attrelid, a.attname, 'UPDATE')) AS columns,
+                              has_table_privilege('daftar_accounting_internal', 'supplier_credit_notes', 'SELECT') AS accounting_notes,
+                              (SELECT array_agg(coalesce(r.rolname, 'PUBLIC') || ':' || p.proname ORDER BY coalesce(r.rolname, 'PUBLIC'), p.proname)
+                                FROM pg_proc p
+                                CROSS JOIN LATERAL aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) a
+                                LEFT JOIN pg_roles r ON r.oid = a.grantee
+                               WHERE p.oid = ANY ($2::text[]::regprocedure[])
+                                 AND a.privilege_type = 'EXECUTE' AND a.grantee <> p.proowner) AS routines`;
+  const s6Accounting = ['supplier_credit_allocations', 'supplier_payment_allocations', 'supplier_payments', 'supplier_refunds'];
+  const s6MethodColumns = [
+    'business_transaction_id',
+    'is_active',
+    'last_intent_sha256',
+    'posting_account_id',
+    'requires_reference',
+    'revision',
+    'sort_order',
+    'updated_at',
+    'updated_by',
+  ];
+  const s6Before = await c.query(s6GrantsSql, [S6_TABLES, s6Routines]);
+  expect(s6Before.rows[0], 'the P3-S6 grants (A-17)').toEqual({
+    tables: [
+      ...s6Accounting.map((t) => `daftar_accounting_internal:${t}:SELECT`),
+      ...S6_TABLES.map((t) => `daftar_app:${t}:SELECT`),
+      ...S6_TABLES.flatMap((t) => [`${INTERNAL}:${t}:INSERT`, `${INTERNAL}:${t}:SELECT`]),
+      `${INTERNAL}:payment_method_names:DELETE`,
+    ].sort(),
+    columns: [
+      `${INTERNAL}:payment_method_names.display_name`,
+      ...s6MethodColumns.map((a) => `${INTERNAL}:payment_methods.${a}`),
+      `${INTERNAL}:supplier_credit_notes.remaining_amount_minor`,
+      `${INTERNAL}:supplier_credit_notes.remaining_carrying_base_amount_minor`,
+    ],
+    accounting_notes: true,
+    routines: [
+      'daftar_app:payment_method_activate',
+      'daftar_app:payment_method_create',
+      'daftar_app:payment_method_deactivate',
+      'daftar_app:payment_method_update',
+      'daftar_app:supplier_allocate_credit',
+      'daftar_app:supplier_pay',
+      'daftar_app:supplier_receive_refund',
+      `${INTERNAL}:accounting_settlement_account_eligibility`,
+    ],
+  });
+  await c.query(`REVOKE SELECT ON ${S6_TABLES.join(', ')} FROM daftar_app`);
+  await c.query(`REVOKE INSERT, SELECT ON ${S6_TABLES.join(', ')} FROM ${INTERNAL}`);
+  await c.query(`REVOKE DELETE, UPDATE (display_name) ON payment_method_names FROM ${INTERNAL}`);
+  await c.query(`REVOKE UPDATE (${s6MethodColumns.join(', ')}) ON payment_methods FROM ${INTERNAL}`);
+  await c.query(`REVOKE UPDATE (remaining_amount_minor, remaining_carrying_base_amount_minor) ON supplier_credit_notes FROM ${INTERNAL}`);
+  await c.query(`REVOKE SELECT ON ${[...s6Accounting, 'supplier_credit_notes'].join(', ')} FROM daftar_accounting_internal`);
+  for (const f of s6Routines.slice(0, 7)) await c.query(`REVOKE EXECUTE ON FUNCTION ${f} FROM daftar_app`);
+  await c.query(`REVOKE EXECUTE ON FUNCTION accounting_settlement_account_eligibility(uuid,uuid) FROM ${INTERNAL}`);
+  const s6After = await c.query(s6GrantsSql, [S6_TABLES, s6Routines]);
+  expect(s6After.rows[0], 'the P3-S6 grants, revoked').toEqual({ tables: null, columns: null, accounting_notes: false, routines: null });
+
   // P3-S5 (0065/0066)
   const s5Mapping = await c.query(`DELETE FROM inventory_operation_movement_kinds WHERE registered_by = 'P3-S5'`);
   expect(s5Mapping.rowCount, 'the P3-S5 op→kind rows').toBe(S5_OPERATION_MOVEMENT_KINDS.length);
@@ -798,6 +940,8 @@ export async function rewindToP3S2Checkpoint(c: Queryable): Promise<void> {
  * (0A000), so they are named in the same statement. P3-S4 (0063/0064): so
  * are the two P3-S4 bridges. P3-S5 (0065/0066): so are the two P3-S5
  * bridges, and the five S5 documents with them, children first (§7.3 row 16).
+ * P3-S6 (0067/0068): the six S6 tables, children first and before the S5
+ * credit notes they reference (§7.3 row 17).
  */
 export async function removeCommittedFixture(): Promise<void> {
   const c = await ownerClient();
@@ -809,7 +953,8 @@ export async function removeCommittedFixture(): Promise<void> {
     await c.query(
       // P3-S4 (0063/0064): the two S4 bridges reference stock_source_bindings too.
       // P3-S5 (0065/0066): so do the two S5 bridges; the S5 documents follow them.
-      `TRUNCATE ${['stock_source_bindings', 'stock_movements', 'stock_levels', 'negative_deficit_coverages', 'negative_inventory_deficits', ...S3_BRIDGES, ...S4_BRIDGES, ...S5_BRIDGES, ...S5_TABLES, ...extra].join(', ')}`,
+      // P3-S6 (0067/0068): the six S6 tables reference the purchases and the credit notes, so they precede the S5 documents.
+      `TRUNCATE ${['stock_source_bindings', 'stock_movements', 'stock_levels', 'negative_deficit_coverages', 'negative_inventory_deficits', ...S3_BRIDGES, ...S4_BRIDGES, ...S5_BRIDGES, ...S6_TABLES, ...S5_TABLES, ...extra].join(', ')}`,
     );
     await c.query(`DROP TRIGGER IF EXISTS stock_binding_requires_${FIXTURE_SOURCE_TYPE} ON stock_source_bindings`);
     await c.query(`DROP TABLE IF EXISTS stock_source_bridge_fixture_line`);
