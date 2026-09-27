@@ -334,7 +334,9 @@ describe('RLS is real on the ledger', () => {
     // fails here. P3-S4 (0063/0064, contract A-14(d)): plus the two S4 posting
     // headers, purchases and negative_inventory_cost_adjustments. P3-S5
     // (0065/0066, contract A-15(d)): plus the two S5 posting headers,
-    // purchase_reversals and supplier_returns.
+    // purchase_reversals and supplier_returns. P3-S6 (0067/0068, contract
+    // A-14(d)): plus the four S6 settlement tables and the S5 credit notes the
+    // three S6 completeness triggers read.
     expect(rows.map((r) => r.tablename)).toEqual([
       'accounting_fx_rates',
       'accounting_manual_adjustments',
@@ -353,6 +355,12 @@ describe('RLS is real on the ledger', () => {
       // P3-S4 (0063/0064)
       'purchases',
       'stocktakes',
+      // P3-S6 (0067/0068)
+      'supplier_credit_allocations',
+      'supplier_credit_notes',
+      'supplier_payment_allocations',
+      'supplier_payments',
+      'supplier_refunds',
       // P3-S5 (0065/0066)
       'supplier_returns',
     ]);
@@ -370,6 +378,13 @@ describe('RLS is real on the ledger', () => {
       // P3-S5 (0065/0066): and so do the two S5 headers.
       'purchase_reversals',
       'supplier_returns',
+      // P3-S6 (0067/0068): and so do the three S6 posting tables, the payment
+      // allocations and the credit notes.
+      'supplier_payments',
+      'supplier_credit_allocations',
+      'supplier_refunds',
+      'supplier_payment_allocations',
+      'supplier_credit_notes',
     ];
     for (const row of rows) {
       expect(row.cmd, row.tablename).toBe('SELECT');

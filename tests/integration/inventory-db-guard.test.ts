@@ -33,6 +33,8 @@ const F64 = '0064_purchase_commands.sql';
 // P3-S5 (0065/0066)
 const F65 = '0065_supplier_returns_reversals_sources.sql';
 const F66 = '0066_supplier_return_reversal_commands.sql';
+// P3-S6 (0067/0068)
+const F68 = '0068_supplier_settlement_commands.sql';
 
 /** The real tree with one file's text rewritten; the rewrite must change something. */
 function mutate(file: string, from: string | RegExp, to: string): Record<string, string> {
@@ -66,6 +68,12 @@ describe('G-7 — the tree as it stands', () => {
     // same-transaction detail guards; 0066: the two entry routines and their
     // three helpers), all DEFINER — no new exception. 0065's owner replacement
     // of the primitive (R-B1a) adds a definition, not a name.
+    // P3-S6 appends twenty-five (0067: the three arithmetic helpers, the two
+    // verifiers, the method, method-name, payment, payment-allocation,
+    // credit-allocation and refund guards and completeness/value triggers, and
+    // the reversal's unsettled guard; 0068: the seven entry routines and the
+    // credit-note writer, R-73), all DEFINER — no new exception. 0067's owner
+    // replacement of the credit-note guard (A-12) adds a definition, not a name.
     expect(transferred).toEqual(
       [
         'branch_warehouses_keep_home',
@@ -169,6 +177,32 @@ describe('G-7 — the tree as it stands', () => {
         'supplier_return_detail_same_transaction',
         'supplier_return_quantity_bound',
         'supplier_return_value_complete',
+        // P3-S6 (0067/0068)
+        'payment_method_activate',
+        'payment_method_create',
+        'payment_method_deactivate',
+        'payment_method_guard',
+        'payment_method_name_guard',
+        'payment_method_named',
+        'payment_method_update',
+        'purchase_reversal_unsettled',
+        'purchase_settlement_verify',
+        'supplier_allocate_credit',
+        'supplier_ap_release',
+        'supplier_convert_base',
+        'supplier_credit_allocation_guard',
+        'supplier_credit_allocation_value_complete',
+        'supplier_credit_note_consume',
+        'supplier_credit_note_verify',
+        'supplier_credit_remaining_carrying',
+        'supplier_pay',
+        'supplier_payment_allocation_guard',
+        'supplier_payment_allocation_value_complete',
+        'supplier_payment_complete',
+        'supplier_payment_guard',
+        'supplier_receive_refund',
+        'supplier_refund_guard',
+        'supplier_refund_value_complete',
       ].sort(),
     );
     expect([...INVENTORY_INVOKER_EXCEPTIONS].sort()).toEqual(['product_variants_10_base_variant_authority', 'products_10_inventory_config_authority']);
@@ -182,7 +216,7 @@ describe('G-7 — the tree as it stands', () => {
     ]);
   });
 
-  it('rule 22: the only stock writers are the primitive, the P3-S3 bridge writer and the two P3-S4 receipt helpers, the P3-S5 primitive replacement and its three bridge writers (credit note included), and the first statement of each verifies the assertion', () => {
+  it('rule 22: the only stock writers are the primitive, the P3-S3 bridge writer and the two P3-S4 receipt helpers, the P3-S5 primitive replacement and its three bridge writers (credit note included), the P3-S6 credit-note writer, and the first statement of each verifies the assertion', () => {
     const report = checkInventoryWriterAuthority(real());
     expect(report.violations).toEqual([]);
     // 0062 R-5: the seven entry routines write no stock table themselves; the
@@ -196,6 +230,10 @@ describe('G-7 — the tree as it stands', () => {
     // second definition of the same writer that is checked the same way; the
     // two 0066 bridge writers write the two S5 bridges and each opens with
     // inventory_assertion_current(...).
+    // P3-S6 (0067/0068, R-73 and S6 contract §7.2): the note's remaining
+    // values are decremented by one writer, supplier_credit_note_consume,
+    // which opens with inventory_assertion_current(...); the allocation and
+    // refund routines call it and write no stock table themselves.
     expect(report.writers).toEqual([
       `${F60}: inventory_apply_stock_movements`,
       `${F62}: inventory_bridge_source_lines`,
@@ -209,6 +247,8 @@ describe('G-7 — the tree as it stands', () => {
       `${F66}: purchase_bridge_return`,
       `${F66}: purchase_bridge_credit_note`,
       `${F66}: purchase_bridge_reversal`,
+      // P3-S6 (0067/0068)
+      `${F68}: supplier_credit_note_consume`,
     ]);
   });
 });

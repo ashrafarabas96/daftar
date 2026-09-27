@@ -1112,7 +1112,12 @@ describe('managed PostgreSQL: 0039 → 0049 under a non-superuser migration prin
                                       -- P3-S5 (0065/0066): the accounting-side completeness trigger and the
                                       -- purchase entry read; the two INVOKER read functions (A-16).
                                       'accounting_supplier_return_entry_complete', 'accounting_purchase_entry_id',
-                                      'purchase_ap_outstanding', 'purchase_settlement_state'))
+                                      'purchase_ap_outstanding', 'purchase_settlement_state',
+                                      -- P3-S6 (0067/0068): the account-eligibility read, the three
+                                      -- accounting-side completeness triggers and the S6 discovery.
+                                      'accounting_settlement_account_eligibility', 'accounting_supplier_payment_entry_complete',
+                                      'accounting_supplier_credit_allocation_entry_complete', 'accounting_supplier_refund_entry_complete',
+                                      'supplier_settlement_guard_gaps'))
               ORDER BY p.proname`,
           )
         ).rows;
@@ -1259,6 +1264,46 @@ describe('managed PostgreSQL: 0039 → 0049 under a non-superuser migration prin
             internal('purchase_reverse'),
             // …and the two S6 extension points, migrator-owned INVOKER (A-16).
             ...['purchase_ap_outstanding', 'purchase_settlement_state'].map((proname) => ({ proname, owner: 'daftar_migrator', definer: false, config: PIN })),
+            // P3-S6 (0067): the arithmetic, the verifiers and the stock-side
+            // guards are the internal principal's, all DEFINER (the replaced
+            // credit-note guard keeps its row above; the two replaced
+            // extension points keep theirs)…
+            internal('payment_method_guard'),
+            internal('payment_method_name_guard'),
+            internal('payment_method_named'),
+            internal('purchase_reversal_unsettled'),
+            internal('purchase_settlement_verify'),
+            internal('supplier_ap_release'),
+            internal('supplier_convert_base'),
+            internal('supplier_credit_allocation_guard'),
+            internal('supplier_credit_allocation_value_complete'),
+            internal('supplier_credit_note_verify'),
+            internal('supplier_credit_remaining_carrying'),
+            internal('supplier_payment_allocation_guard'),
+            internal('supplier_payment_allocation_value_complete'),
+            internal('supplier_payment_complete'),
+            internal('supplier_payment_guard'),
+            internal('supplier_refund_guard'),
+            internal('supplier_refund_value_complete'),
+            // …the eligibility read and the three completeness triggers are the
+            // accounting principal's (A-14; the replaced reversal guard is above)…
+            ...[
+              'accounting_settlement_account_eligibility',
+              'accounting_supplier_credit_allocation_entry_complete',
+              'accounting_supplier_payment_entry_complete',
+              'accounting_supplier_refund_entry_complete',
+            ].map((proname) => ({ proname, owner: 'daftar_accounting_internal', definer: true, config: PIN })),
+            // …the S6 discovery is the migrator's, INVOKER (§2.3)…
+            { proname: 'supplier_settlement_guard_gaps', owner: 'daftar_migrator', definer: false, config: PIN },
+            // …and (0068) the seven signed entry routines and the credit-note writer (R-73).
+            internal('payment_method_activate'),
+            internal('payment_method_create'),
+            internal('payment_method_deactivate'),
+            internal('payment_method_update'),
+            internal('supplier_allocate_credit'),
+            internal('supplier_credit_note_consume'),
+            internal('supplier_pay'),
+            internal('supplier_receive_refund'),
           ].sort((a, b) => (a.proname < b.proname ? -1 : 1)),
         );
         for (const role of ['daftar_inventory_internal', 'daftar_accounting_internal']) {

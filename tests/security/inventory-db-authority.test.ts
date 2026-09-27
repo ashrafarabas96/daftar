@@ -280,10 +280,19 @@ describe('the §H grant matrix, from information_schema and pg_policy (P3-AL-54 
       purchase_reversal_lines: 'INSERT,SELECT',
       stock_source_bridge_supplier_return: 'INSERT,SELECT',
       stock_source_bridge_purchase_reversal: 'INSERT,SELECT',
+      // P3-S6 (0067/0068, contract A-17): the six S6 tables are written by the
+      // signed routines only, insert-only, except DELETE on the method names
+      // (a name removed by an update); the column UPDATEs follow below.
+      payment_methods: 'INSERT,SELECT',
+      payment_method_names: 'DELETE,INSERT,SELECT',
+      supplier_payments: 'INSERT,SELECT',
+      supplier_payment_allocations: 'INSERT,SELECT',
+      supplier_credit_allocations: 'INSERT,SELECT',
+      supplier_refunds: 'INSERT,SELECT',
     });
   });
 
-  it('and exactly these column privileges beyond them: three products columns to UPDATE, four product_variants columns to INSERT, four stock_levels columns to UPDATE (P3-S2), six stocktake_lines and nine stocktakes columns to UPDATE (P3-S3), two negative_inventory_deficits, two purchase_lines, thirty purchases and eleven suppliers columns to UPDATE (P3-S4)', async () => {
+  it('and exactly these column privileges beyond them: three products columns to UPDATE, four product_variants columns to INSERT, four stock_levels columns to UPDATE (P3-S2), six stocktake_lines and nine stocktakes columns to UPDATE (P3-S3), two negative_inventory_deficits, two purchase_lines, thirty purchases and eleven suppliers columns to UPDATE (P3-S4), nine payment_methods, one payment_method_names and two supplier_credit_notes columns to UPDATE (P3-S6)', async () => {
     const r = await ownerPool().query<{ t: string; p: string; cols: string }>(
       `SELECT c.table_name AS t, c.privilege_type AS p, string_agg(c.column_name, ',' ORDER BY c.column_name) AS cols
        FROM information_schema.column_privileges c
@@ -296,6 +305,14 @@ describe('the §H grant matrix, from information_schema and pg_policy (P3-AL-54 
     expect(r.rows).toEqual([
       // P3-S4 (0063, contract A-18): the coverage decrements a deficit layer.
       { t: 'negative_inventory_deficits', p: 'UPDATE', cols: 'status,uncovered_qty' },
+      // P3-S6 (0067, contract A-17): a method's mutable fields and its names'
+      // display text, rewritten by the update/deactivate/activate routines.
+      { t: 'payment_method_names', p: 'UPDATE', cols: 'display_name' },
+      {
+        t: 'payment_methods',
+        p: 'UPDATE',
+        cols: 'business_transaction_id,is_active,last_intent_sha256,posting_account_id,requires_reference,revision,sort_order,updated_at,updated_by',
+      },
       { t: 'product_variants', p: 'INSERT', cols: 'business_id,id,is_base,product_id' },
       { t: 'products', p: 'UPDATE', cols: 'track_inventory,unit_code,unit_decimals' },
       // P3-S4 (0063, contract A-18): a line's share and unit cost, set once by
@@ -324,6 +341,9 @@ describe('the §H grant matrix, from information_schema and pg_policy (P3-AL-54 
         // 0061 R-16: the closing routine also records the trace of the close.
         cols: 'binding_source_id,cancelled_at,closed_business_transaction_id,closed_by,finalize_intent_sha256,finalized_at,occurred_on,status,total_value_base_minor',
       },
+      // P3-S6 (0067, contract A-12, A-17): the credit note's two remaining
+      // values, decremented by supplier_credit_note_consume only (R-73).
+      { t: 'supplier_credit_notes', p: 'UPDATE', cols: 'remaining_amount_minor,remaining_carrying_base_amount_minor' },
       // P3-S4 (0063, contract A-18): identity and creation columns stay final (R-23).
       {
         t: 'suppliers',
@@ -396,6 +416,13 @@ describe('the §H grant matrix, from information_schema and pg_policy (P3-AL-54 
       { g: 'daftar_app', r: 'inventory_stocktake_finalize' },
       { g: 'daftar_app', r: 'inventory_stocktake_open' },
       { g: 'daftar_app', r: 'inventory_transfer_stock' },
+      // P3-S6 (0068, contract §2.6, A-17): the seven signed entry routines,
+      // daftar_app only; the credit-note writer, the §2.3 helpers and the
+      // arithmetic have no grantee.
+      { g: 'daftar_app', r: 'payment_method_activate' },
+      { g: 'daftar_app', r: 'payment_method_create' },
+      { g: 'daftar_app', r: 'payment_method_deactivate' },
+      { g: 'daftar_app', r: 'payment_method_update' },
       // P3-S4 (0064, contract §2.4): the seven signed entry routines, daftar_app only.
       { g: 'daftar_app', r: 'purchase_cancel' },
       { g: 'daftar_app', r: 'purchase_receive' },
@@ -406,10 +433,18 @@ describe('the §H grant matrix, from information_schema and pg_policy (P3-AL-54 
       { g: 'daftar_app', r: 'purchase_save_draft' },
       { g: 'daftar_app', r: 'structure_associate_warehouse_branch' },
       { g: 'daftar_app', r: 'structure_dissociate_warehouse_branch' },
+      // P3-S6 (0068)
+      { g: 'daftar_app', r: 'supplier_allocate_credit' },
       // P3-S4 (0064, contract §2.4)
       { g: 'daftar_app', r: 'supplier_archive' },
       { g: 'daftar_app', r: 'supplier_create' },
+      // P3-S6 (0068)
+      { g: 'daftar_app', r: 'supplier_pay' },
+      // P3-S4 (0064, contract §2.4)
       { g: 'daftar_app', r: 'supplier_reactivate' },
+      // P3-S6 (0068)
+      { g: 'daftar_app', r: 'supplier_receive_refund' },
+      // P3-S4 (0064, contract §2.4)
       { g: 'daftar_app', r: 'supplier_update' },
     ]);
   });

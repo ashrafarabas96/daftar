@@ -377,9 +377,11 @@ describe('T-01.6/7/9 the grant matrix (A-18)', () => {
 });
 
 describe('the migration end state holds', () => {
-  it('the source-guard gap report is empty and the registries are exactly S1 + S3 (P3-S4: + S4; P3-S5: + S5)', async () => {
+  it('the source-guard gap report is empty and the registries are exactly S1 + S3 (P3-S4: + S4; P3-S5: + S5; P3-S6: + S6)', async () => {
     const q = ownerPool();
     expect((await q.query(`SELECT * FROM inventory_stock_source_guard_gaps()`)).rows).toEqual([]);
+    // P3-S6 (0067/0068): the S6 guard discovery is empty too (§2.3).
+    expect((await q.query(`SELECT * FROM supplier_settlement_guard_gaps()`)).rows).toEqual([]);
     const kinds = (await q.query<{ op_code: string }>(`SELECT op_code FROM inventory_operation_kinds ORDER BY op_code`)).rows.map((r) => r.op_code);
     expect(kinds).toEqual(
       [
@@ -398,6 +400,15 @@ describe('the migration end state holds', () => {
         // P3-S5 (0065/0066): the two S5 operation kinds (0066, contract A-03).
         'purchase.return',
         'purchase.reverse',
+        // P3-S6 (0067/0068): the seven S6 operation kinds (0068, contract A-03);
+        // no op→kind row (no S6 command moves stock).
+        'payment.create_method',
+        'payment.update_method',
+        'payment.deactivate_method',
+        'payment.activate_method',
+        'supplier.pay',
+        'supplier.allocate_credit',
+        'supplier.receive_refund',
       ].sort(),
     );
     const maps = (await q.query<{ m: string }>(`SELECT op_code || '→' || movement_kind AS m FROM inventory_operation_movement_kinds ORDER BY 1`)).rows.map(

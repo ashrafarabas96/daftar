@@ -501,6 +501,18 @@ describe('the §D inventory definer contract (P3-AL-54 §D)', () => {
       'daftar_app',
     ],
     'purchase_reverse(uuid,uuid,date,text,uuid,bigint,uuid[],uuid[],numeric[],bigint[])': ['daftar_app'],
+    // P3-S6 (0067/0068, contract §2.6, A-17): the seven signed entry routines,
+    // daftar_app only; the credit-note writer (R-73), the §2.3 helpers and the
+    // arithmetic are named nowhere, so nobody.
+    'payment_method_create(uuid,text,uuid,boolean,integer,text,text,text)': ['daftar_app'],
+    'payment_method_update(uuid,integer,uuid,boolean,integer,text,text,text)': ['daftar_app'],
+    'payment_method_deactivate(uuid,integer)': ['daftar_app'],
+    'payment_method_activate(uuid,integer)': ['daftar_app'],
+    'supplier_pay(uuid,uuid,uuid,uuid,date,character,bigint,uuid,numeric,text,timestamp with time zone,bigint,text,uuid[],uuid[],uuid[],text[],bigint[],bigint[],bigint[],bigint[],bigint[],bigint[],bigint[])':
+      ['daftar_app'],
+    'supplier_allocate_credit(uuid,uuid,uuid,uuid,date,character,bigint,bigint,bigint,bigint,character,bigint,bigint,bigint,bigint,bigint)': ['daftar_app'],
+    'supplier_receive_refund(uuid,uuid,uuid,uuid,date,character,bigint,bigint,bigint,bigint,character,bigint,uuid,numeric,text,timestamp with time zone,bigint,bigint,text)':
+      ['daftar_app'],
   };
 
   const INVENTORY_TRUSTED_RELATIONS = [

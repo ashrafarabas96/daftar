@@ -214,17 +214,24 @@ describe('T-01 every other runtime role holds nothing', () => {
 });
 
 describe('T-01 the internal principals: the exact A-18 grant', () => {
-  it('daftar_inventory_internal: INSERT and SELECT on the five tables and the two bridges; no UPDATE, no DELETE, no TRUNCATE', async () => {
+  it('daftar_inventory_internal: INSERT and SELECT on the five tables and the two bridges; no UPDATE, no DELETE, no TRUNCATE (P3-S6: but the two remaining columns of the credit note)', async () => {
     for (const t of ALL_S5) {
       expect(await tablePrivileges('daftar_inventory_internal', t), t).toEqual({ s: true, i: true, u: false, d: false, tr: false });
-      expect(await updatableColumns('daftar_inventory_internal', t), `${t} column UPDATE`).toEqual([]);
+      expect(await updatableColumns('daftar_inventory_internal', t), `${t} column UPDATE`).toEqual(
+        // P3-S6 (0067, docs/PHASE_3_S6_CONTRACT.md A-12, A-17): the credit note's
+        // two remaining values, decremented by supplier_credit_note_consume only
+        // (R-73); every other S5 relation still has no column UPDATE.
+        t === 'supplier_credit_notes' ? ['remaining_amount_minor', 'remaining_carrying_base_amount_minor'] : [],
+      );
     }
   });
 
-  it('daftar_accounting_internal reads the two posting headers only (A-15(d))', async () => {
+  it('daftar_accounting_internal reads the two posting headers only (A-15(d); P3-S6: and the credit notes)', async () => {
     for (const t of ALL_S5) {
       expect(await tablePrivileges('daftar_accounting_internal', t), t).toEqual({
-        s: t === 'supplier_returns' || t === 'purchase_reversals',
+        // P3-S6 (0067, docs/PHASE_3_S6_CONTRACT.md A-14(d)): and the credit
+        // notes, which the S6 completeness triggers read.
+        s: t === 'supplier_returns' || t === 'purchase_reversals' || t === 'supplier_credit_notes',
         i: false,
         u: false,
         d: false,
