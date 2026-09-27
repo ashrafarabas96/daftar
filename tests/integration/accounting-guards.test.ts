@@ -212,6 +212,13 @@ describe('guard G-3 — supplier and purchase storage (P3-S4 §7.2)', () => {
         'supplier_credit_notes',
         'purchase_reversals',
         'purchase_reversal_lines',
+        // P3-S6 (S6 contract §7.2): the payment methods and the settlement documents.
+        'payment_methods',
+        'payment_method_names',
+        'supplier_payments',
+        'supplier_payment_allocations',
+        'supplier_credit_allocations',
+        'supplier_refunds',
       ]),
     );
     for (const table of SUPPLIER_AUTHORITY_TABLES) expect(discoverSupplierTables(schema())).toContain(table);
@@ -246,6 +253,9 @@ describe('guard G-3 — supplier and purchase storage (P3-S4 §7.2)', () => {
       'owed_minor',
       'payable',
       'payable_base_minor',
+      'settled',
+      'settled_minor',
+      'amount_settled_base_minor',
       'credit_total',
       'debit_sum',
       'stock',
@@ -279,7 +289,13 @@ describe('guard G-3 — supplier and purchase storage (P3-S4 §7.2)', () => {
       'ap_released_before_txn_minor',
       'credit_txn_minor',
       'credit_base_minor',
+      // S6 §7.2: one allocation's own amounts are the source document, not a settled total.
+      'purchase_amount_applied_minor',
+      'payment_amount_minor',
+      'realized_fx_base_minor',
+      'posting_account_id',
       // Words that merely contain an AP word are not that word.
+      'unsettled_note_text',
       'repaid_flag_text',
       'overdueish',
       'subpayables',

@@ -324,11 +324,19 @@ export function checkStockCacheShape(sql: string): string[] {
  *   document, not a running total of the supplier. `ap_released_before_*`
  *   is the X = T − O snapshot that lets the COMMIT-time value guard verify
  *   the base release (0065 R-43); nothing ever rewrites it.
+ *
+ * P3-S6 (S6 contract §7.2): the discovery also covers `payment_methods` and
+ * `payment_method_*`, and `settled` joins the AP words. A payment method or a
+ * settlement row never stores how much has been settled: the allocations are
+ * the source documents, and the settled amount is their live sum.
+ * `purchase_amount_applied_minor` (one allocation's own amount) and the
+ * credit note's `remaining_*` pair (moved only under the P3-AL-31 row lock)
+ * match no pattern.
  */
-export const SUPPLIER_TABLE_NAME = /^(suppliers|supplier_[a-z0-9_]+|purchases|purchase_[a-z0-9_]+)$/;
+export const SUPPLIER_TABLE_NAME = /^(suppliers|supplier_[a-z0-9_]+|purchases|purchase_[a-z0-9_]+|payment_methods|payment_method_[a-z0-9_]+)$/;
 
 /** The AP words: a column carrying one claims to be what the supplier is owed or has been paid (L:847-850). */
-const AP_BALANCE_COLUMN = /(^|_)(outstanding|paid|unpaid|due|owed|payable)($|_)/;
+const AP_BALANCE_COLUMN = /(^|_)(outstanding|paid|unpaid|due|owed|payable|settled)($|_)/;
 
 const SUPPLIER_FORBIDDEN_COLUMN_PATTERNS: readonly RegExp[] = [...FORBIDDEN_COLUMN_PATTERNS, AP_BALANCE_COLUMN];
 
