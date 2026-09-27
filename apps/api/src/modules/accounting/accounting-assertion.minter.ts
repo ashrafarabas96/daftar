@@ -1,9 +1,9 @@
 import { Inject, Injectable } from '@nestjs/common';
 import {
+  hmacKeysEquivalent,
   mintAccountingAssertion,
   mintAccountingControlAssertion,
   parseAccountingAssertionKey,
-  secretsAreIdentical,
   type AccountingAssertionClaims,
   type AccountingAssertionKey,
   type AccountingAssertionMinter,
@@ -23,7 +23,10 @@ import type { AppConfig } from '../../config';
  * The provisioning-secret comparison is repeated here, at the point where the
  * key is actually loaded, because config validation only runs in production
  * and a staging deployment that shared one secret would otherwise look fine
- * until the day one of them leaked.
+ * until the day one of them leaked. It compares the EFFECTIVE HMAC-SHA-256
+ * key (P3-S8 A-19, TD-12): `K` and `K‖0x00` are one key although their bytes
+ * differ, so a byte comparison would admit exactly the pair it exists to
+ * refuse.
  */
 @Injectable()
 export class AccountingAssertionMinterService implements AccountingAssertionMinter, AccountingControlAssertionMinter {
@@ -33,7 +36,7 @@ export class AccountingAssertionMinterService implements AccountingAssertionMint
     this.key = parseAccountingAssertionKey(config);
     if (this.key && config.PROVISIONING_ASSERTION_KEY) {
       const provisioning = Buffer.from(config.PROVISIONING_ASSERTION_KEY, 'base64');
-      if (secretsAreIdentical(this.key.secret, provisioning)) {
+      if (hmacKeysEquivalent(this.key.secret, provisioning)) {
         throw new Error('ACCOUNTING_ASSERTION_KEY must not be the same secret as PROVISIONING_ASSERTION_KEY (separate domains, rotated independently)');
       }
     }

@@ -13,12 +13,18 @@
  * This is deliberately NOT the provisioning key job. The two domains have
  * separate registries and separate secrets so that one compromise does not
  * reach both business provisioning and the general ledger, and so that either
- * can be rotated without the other (§13, §19). The check below refuses the
- * single most likely operational mistake: pointing both at one secret.
+ * can be rotated without the other (§13, §19). The checks below refuse the
+ * single most likely operational mistake: pointing two domains at one secret.
+ * They compare the EFFECTIVE HMAC-SHA-256 key of the DECODED bytes (P3-S8
+ * A-19, TD-12): two base64 spellings of one secret are one secret, and so are
+ * `K` and `K‖0x00` to HMAC. The inventory key (Phase 3) is checked too when it
+ * is set; it is never installed by this job. The checks run before any
+ * connection is opened.
  *
  * Usage:
  *   BOOTSTRAP_DATABASE_URL=postgres://daftar_platform:...@db/daftar \
  *   ACCOUNTING_ASSERTION_KEY=<base64 ≥32 bytes> [ACCOUNTING_ASSERTION_KID=v2] \
+ *   [PROVISIONING_ASSERTION_KEY=… INVENTORY_ASSERTION_KEY=…  (checked, never installed)] \
  *     tsx scripts/install-accounting-key.ts [--retire=<old kid>]
  *
  * Rotation: install the new kid on the database FIRST, deploy the merchant API
@@ -26,6 +32,7 @@
  * key material is never printed, logged, or returned.
  */
 import { Pool } from 'pg';
+import { hmacKeysEquivalent } from '../packages/accounting/src/assertion-keys';
 
 async function main(): Promise<void> {
   if (process.env['MIGRATION_DATABASE_URL'] && !process.env['BOOTSTRAP_DATABASE_URL']) {
@@ -35,9 +42,14 @@ async function main(): Promise<void> {
   if (!url) throw new Error('BOOTSTRAP_DATABASE_URL is required (daftar_platform principal)');
   const keyB64 = process.env['ACCOUNTING_ASSERTION_KEY'];
   if (!keyB64 || Buffer.from(keyB64, 'base64').length < 32) throw new Error('ACCOUNTING_ASSERTION_KEY must be base64 of at least 32 bytes');
+  const secret = Buffer.from(keyB64, 'base64');
   const provisioning = process.env['PROVISIONING_ASSERTION_KEY'];
-  if (provisioning && Buffer.from(keyB64, 'base64').equals(Buffer.from(provisioning, 'base64'))) {
+  if (provisioning && hmacKeysEquivalent(secret, Buffer.from(provisioning, 'base64'))) {
     throw new Error('ACCOUNTING_ASSERTION_KEY must not be the same secret as PROVISIONING_ASSERTION_KEY (separate domains, rotated independently)');
+  }
+  const inventory = process.env['INVENTORY_ASSERTION_KEY'];
+  if (inventory && hmacKeysEquivalent(secret, Buffer.from(inventory, 'base64'))) {
+    throw new Error('ACCOUNTING_ASSERTION_KEY must not be the same secret as INVENTORY_ASSERTION_KEY (separate domains, rotated independently)');
   }
   const kid = process.env['ACCOUNTING_ASSERTION_KID'] ?? 'v1';
   if (!/^[A-Za-z0-9_-]{1,32}$/.test(kid)) throw new Error('ACCOUNTING_ASSERTION_KID must match ^[A-Za-z0-9_-]{1,32}$');
