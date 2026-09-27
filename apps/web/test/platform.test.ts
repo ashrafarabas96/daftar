@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { NextRequest } from 'next/server';
 import { ApiError, apiFetch, setAccessToken } from '@/lib/client';
 import { DELETE, GET, PATCH, POST, PUT } from '@/app/api/proxy/[...path]/route';
+import { isUuid } from '@/lib/route-ids';
 
 /**
  * The four web platform fixes of P3-S7 (contract A-12(1)(2), Annex R web
@@ -41,8 +42,8 @@ describe('BFF proxy (A-12(1))', () => {
     for (const handler of [GET, POST, PUT, PATCH, DELETE]) expect(typeof handler).toBe('function');
   });
 
-  it('forwards a PUT with its body, accept-language and idempotency key, and returns the upstream cache-control', async () => {
-    const calls = stubFetch([() => json(200, { ok: true }, { 'cache-control': 'no-store, private' })]);
+  it('forwards a PUT with its body, accept-language and idempotency key, and answers no-store whatever the upstream sent', async () => {
+    const calls = stubFetch([() => json(200, { ok: true }, { 'cache-control': 'public, max-age=600' })]);
     const req = new NextRequest('http://web.test/api/proxy/purchases/p-1?x=1', {
       method: 'PUT',
       headers: {
@@ -57,7 +58,7 @@ describe('BFF proxy (A-12(1))', () => {
     });
     const res = await PUT(req, ctx(['purchases', 'p-1']));
     expect(res.status).toBe(200);
-    expect(res.headers.get('cache-control')).toBe('no-store, private');
+    expect(res.headers.get('cache-control')).toBe('no-store');
     expect(calls).toHaveLength(1);
     expect(calls[0]?.url).toMatch(/\/v1\/purchases\/p-1\?x=1$/);
     expect(calls[0]?.init.method).toBe('PUT');
@@ -74,6 +75,49 @@ describe('BFF proxy (A-12(1))', () => {
     const res = await GET(new NextRequest('http://web.test/api/proxy/inventory/stock'), ctx(['inventory', 'stock']));
     expect(res.headers.get('cache-control')).toBe('no-store');
     expect(await res.text()).toBe('{"items":[]}');
+  });
+
+  // Security review L-1: Next decodes each catch-all segment, so `%2F`, `%3F`, `%23`, `%5C` and `..` must not steer the call.
+  it.each([
+    ['an encoded slash with ..', ['purchases', '../suppliers/x', 'return-options']],
+    ['a path that climbs out of /v1 and swallows the suffix into a query', ['purchases', '../../admin/businesses?z=', 'return-options']],
+    ['an encoded question mark', ['purchases', 'x?status=draft', 'cancel']],
+    ['an encoded fragment', ['purchases', 'x#frag', 'y']],
+    ['an encoded backslash', ['purchases', '..\\admin', 'y']],
+    ['a lone ..', ['purchases', '..', 'admin']],
+    ['a lone .', ['purchases', '.', 'receive']],
+    ['an empty segment', ['purchases', '', 'receive']],
+    ['a control character', ['purchases', 'x\u0000', 'receive']],
+  ])('refuses %s with 400 and sends nothing upstream', async (_name, path) => {
+    const calls = stubFetch([]);
+    const res = await POST(new NextRequest('http://web.test/api/proxy/x', { method: 'POST', body: '{}' }), ctx(path));
+    expect(res.status).toBe(400);
+    expect(res.headers.get('cache-control')).toBe('no-store');
+    expect(calls).toHaveLength(0);
+  });
+
+  it('re-encodes an ordinary segment, so it stays one segment under /v1', async () => {
+    const calls = stubFetch([() => json(200, {})]);
+    const res = await GET(new NextRequest('http://web.test/api/proxy/purchases/a%20b?x=1'), ctx(['purchases', 'a b', 'payable']));
+    expect(res.status).toBe(200);
+    expect(new URL(calls[0]?.url ?? '').pathname).toBe('/v1/purchases/a%20b/payable');
+    expect(new URL(calls[0]?.url ?? '').search).toBe('?x=1');
+  });
+});
+
+describe('ids from the page URL (L-1)', () => {
+  it('accepts a UUID and nothing else', () => {
+    expect(isUuid('0b9e1c52-3f7a-4c1e-9d2b-6a8f0e4d2c11')).toBe(true);
+    for (const bad of [
+      '',
+      'x',
+      '../suppliers/x',
+      '0b9e1c52-3f7a-4c1e-9d2b-6a8f0e4d2c11/cancel',
+      '0b9e1c52-3f7a-4c1e-9d2b-6a8f0e4d2c11?z=',
+      ' 0b9e1c52-3f7a-4c1e-9d2b-6a8f0e4d2c11',
+    ]) {
+      expect(isUuid(bad)).toBe(false);
+    }
   });
 });
 

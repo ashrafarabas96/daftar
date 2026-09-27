@@ -13,9 +13,10 @@
  * BLOCKED BY OD-03: the draft never carries a purchase-tax amount.
  */
 import { use, useEffect, useRef, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { notFound, useRouter } from 'next/navigation';
 import type { PaymentMethodDto, PurchaseCommandResultDto, PurchaseDraftRequestDto, PurchaseDto, PurchaseLandedCostRequestDto } from '@daftar/shared-contracts';
 import { makeT, translate, LOCALES, type Locale } from '@/lib/i18n';
+import { isUuid } from '@/lib/route-ids';
 import { getCurrencies } from '@/lib/merchant-api';
 import {
   cancelPurchase,
@@ -115,6 +116,8 @@ function majorText(input: string, currency: string, allowZero: boolean): string 
 export default function ReceivePurchasePage({ params, searchParams }: { params: Promise<{ locale: Locale }>; searchParams: Promise<{ draft?: string }> }) {
   const { locale } = use(params);
   const { draft } = use(searchParams);
+  // A draft id from the URL reaches no API path unless it is a UUID (L-1).
+  if (draft !== undefined && !isUuid(draft)) notFound();
   const t = makeT(locale);
   const router = useRouter();
   const { status, context, retry } = useMerchantContext(locale);

@@ -8,9 +8,10 @@
  * id is minted once per form, so a retry is a replay.
  */
 import { use, useCallback, useEffect, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { notFound, useRouter } from 'next/navigation';
 import type { PaymentMethodDto, SupplierDto, SupplierPaymentDto } from '@daftar/shared-contracts';
 import { makeT, type Locale } from '@/lib/i18n';
+import { isUuid } from '@/lib/route-ids';
 import {
   getMoneyBack,
   getSupplier,
@@ -60,6 +61,8 @@ const closedMoneyBack = (date: string): Omit<MoneyBackForm, 'notes' | 'methods' 
 
 export default function SupplierDetailPage({ params }: { params: Promise<{ locale: Locale; supplierId: string }> }) {
   const { locale, supplierId } = use(params);
+  // An id from the URL reaches no API path unless it is a UUID (L-1).
+  if (!isUuid(supplierId)) notFound();
   const t = makeT(locale);
   const router = useRouter();
   const { status, context, retry } = useMerchantContext(locale);

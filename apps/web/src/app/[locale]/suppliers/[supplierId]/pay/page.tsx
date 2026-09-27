@@ -15,9 +15,10 @@
  * the kind (TL-3): the merchant never sees or chooses an account.
  */
 import { use, useCallback, useEffect, useRef, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { notFound, useRouter } from 'next/navigation';
 import type { PaymentMethodDto, SupplierDto, SupplierPaymentAllocationRequestDto, SupplierPaymentResultDto } from '@daftar/shared-contracts';
 import { makeT, translate, type Locale } from '@/lib/i18n';
+import { isUuid } from '@/lib/route-ids';
 import {
   allocateBalanceInYourFavour,
   createPaymentMethod,
@@ -66,6 +67,8 @@ const emptyForm = (currency: string, currencyOptions: string[]): PayFormModel =>
 
 export default function PaySupplierPage({ params }: { params: Promise<{ locale: Locale; supplierId: string }> }) {
   const { locale, supplierId } = use(params);
+  // An id from the URL reaches no API path unless it is a UUID (L-1).
+  if (!isUuid(supplierId)) notFound();
   const t = makeT(locale);
   const router = useRouter();
   const { status, context, retry } = useMerchantContext(locale);

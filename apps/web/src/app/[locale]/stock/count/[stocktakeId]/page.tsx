@@ -1,8 +1,9 @@
 'use client';
 import { use, useCallback, useEffect, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { notFound, useRouter } from 'next/navigation';
 import type { InventoryStocktakeCountRequestDto } from '@daftar/shared-contracts';
 import { makeT, type Locale } from '@/lib/i18n';
+import { isUuid } from '@/lib/route-ids';
 import { cancelStocktake, finalizeStocktake, getStocktake, putStocktakeCounts, type InventoryStocktakeDetailDto } from '@/lib/phase3-api';
 import { isPermissionRefusal, refusalCode, refusalKey, withConflictRetry } from '@/lib/phase3-errors';
 import { amountInputToMinor, isQuantityText, localDateIso } from '@/lib/phase3-format';
@@ -27,6 +28,8 @@ const COUNT_BATCH = 200;
  */
 export default function CountSheetPage({ params }: { params: Promise<{ locale: Locale; stocktakeId: string }> }) {
   const { locale, stocktakeId } = use(params);
+  // An id from the URL reaches no API path unless it is a UUID (L-1).
+  if (!isUuid(stocktakeId)) notFound();
   const t = makeT(locale);
   const router = useRouter();
   const screen = useInventoryScreen(locale, ['inventory.view', 'inventory.stocktake']);

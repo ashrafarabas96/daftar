@@ -9,9 +9,10 @@
  * the settlements route.
  */
 import { use, useCallback, useEffect, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { notFound, useRouter } from 'next/navigation';
 import type { PurchaseReversalResultDto, PurchaseSettlementsDto } from '@daftar/shared-contracts';
 import { makeT, type Locale } from '@/lib/i18n';
+import { isUuid } from '@/lib/route-ids';
 import {
   getPurchase,
   getPurchasePayable,
@@ -43,6 +44,8 @@ interface Loaded {
 
 export default function PurchaseDetailPage({ params }: { params: Promise<{ locale: Locale; purchaseId: string }> }) {
   const { locale, purchaseId } = use(params);
+  // An id from the URL reaches no API path unless it is a UUID (L-1).
+  if (!isUuid(purchaseId)) notFound();
   const t = makeT(locale);
   const router = useRouter();
   const { status, context, retry } = useMerchantContext(locale);
