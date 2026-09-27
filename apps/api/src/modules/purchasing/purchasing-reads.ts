@@ -39,7 +39,7 @@ import type {
 import type { QueryResultRow } from 'pg';
 import { Database } from '../../infra/database';
 import type { ReadScope } from '../inventory/inventory-stock-read';
-import { assertBusinessWide, likeEscaped, quantityText, reachableWarehouses } from '../inventory/read-scope';
+import { assertBusinessWide, likeEscaped, quantityText, reachableWarehouses, requireAnyPermission } from '../inventory/read-scope';
 import { productNameSql, variantNameSql } from '../inventory/inventory-reads';
 import type { MembershipContext } from '../tenancy/tenancy.service';
 import { purchasingRefusal } from './purchasing-errors';
@@ -1254,8 +1254,13 @@ export class PurchasingReadService {
     return page(rows, limit, (r) => r.id, supplierDto);
   }
 
+  /**
+   * One supplier: `suppliers.view`, or `suppliers.pay` so a pay-only member
+   * can open Pay Supplier (the coordinator's ruling on P3-S7 review item 6).
+   * A supplier is business-wide master data and carries no amount.
+   */
   async getSupplier(m: MembershipContext, id: string): Promise<SupplierDto> {
-    requirePermission(m, 'suppliers.view');
+    requireAnyPermission(m, ['suppliers.view', 'suppliers.pay']);
     const row = await findSupplier(this.db, m, id);
     if (row === null) throw purchasingRefusal('supplier.not_found');
     return supplierDto(row);

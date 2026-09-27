@@ -125,7 +125,7 @@ interface ItemRow {
   unit_code: string | null;
   unit_decimals: number | null;
   name: string;
-  holds_stock: boolean;
+  holds_stock: boolean | null;
   variants: InventoryItemVariantDto[];
 }
 
@@ -186,9 +186,24 @@ export class InventoryReadService {
     return { businessWide: m.branchScopeMode === 'all', permissions: PHASE3_PERMISSIONS.filter((p) => hasPermission(m.roles, p)) };
   }
 
-  /** The warehouses the caller reaches (P3-AL-15), each with the branches it serves, by name. */
+  /**
+   * The warehouses the caller reaches (P3-AL-15), each with the branches it
+   * serves, by name. Beyond the viewers, every permission whose command names
+   * a warehouse reads it, so its screen can offer the picker (the
+   * coordinator's ruling on review item 6): the answer holds no quantity and
+   * no value, and only warehouses the caller already reaches.
+   */
   async warehouses(m: MembershipContext): Promise<{ items: InventoryWarehouseDto[] }> {
-    requireAnyPermission(m, ['warehouse.view', 'inventory.view', 'purchases.view']);
+    requireAnyPermission(m, [
+      'warehouse.view',
+      'inventory.view',
+      'purchases.view',
+      'inventory.transfer',
+      'inventory.stocktake',
+      'inventory.adjust',
+      'purchases.manage',
+      'purchases.receive',
+    ]);
     const reachable = await reachableWarehouses(this.db, m);
     const found = await this.rows<{ id: string; name: string; status: 'active' | 'archived'; branch_id: string; branch_ids: string[] }>(
       m,
@@ -210,9 +225,24 @@ export class InventoryReadService {
    * `ids` resolves names of any product of the business, archived and
    * untracked included, and refuses an unknown id; otherwise active products
    * only, keyset-paged on (resolved name, id).
+   *
+   * Items are master data, so the movement and receiving permissions read
+   * them too (review item 6). `holdsStock` is a fact about stock in ANY
+   * warehouse: it is answered only to a caller who holds `inventory.adjust`
+   * (the tracking card that uses it) or `inventory.view`, and is null for
+   * every other caller.
    */
   async items(m: MembershipContext, q: InventoryItemsQuery, locale: LocaleCode): Promise<Page<InventoryItemDto>> {
-    requireAnyPermission(m, ['inventory.view', 'purchases.view', 'purchases.manage', 'inventory.adjust']);
+    requireAnyPermission(m, [
+      'inventory.view',
+      'purchases.view',
+      'purchases.manage',
+      'inventory.adjust',
+      'inventory.transfer',
+      'inventory.stocktake',
+      'purchases.receive',
+    ]);
+    const holdsStockDisclosed = hasPermission(m.roles, 'inventory.adjust') || hasPermission(m.roles, 'inventory.view');
     const ids = q.ids ?? null;
     const size = ids === null ? (q.limit ?? DEFAULT_LIMIT) : ids.length;
     const trackedOnly = q.trackedOnly ?? ids === null;
@@ -240,14 +270,15 @@ export class InventoryReadService {
           LIMIT $8
        )
        SELECT pg.id, pg.status, pg.track_inventory, pg.unit_code, pg.unit_decimals, pg.name,
-              (EXISTS (SELECT 1 FROM stock_levels s
-                         JOIN product_variants v ON v.business_id = s.business_id AND v.id = s.variant_id
-                        WHERE s.business_id = pg.business_id AND v.product_id = pg.id AND s.on_hand <> 0)
-               OR EXISTS (SELECT 1 FROM stock_movements mv
-                            JOIN product_variants v ON v.business_id = mv.business_id AND v.id = mv.variant_id
-                           WHERE mv.business_id = pg.business_id AND v.product_id = pg.id
-                           GROUP BY mv.warehouse_id, mv.variant_id
-                          HAVING sum(mv.qty_delta) <> 0)) AS holds_stock,
+              CASE WHEN $9::boolean THEN
+                (EXISTS (SELECT 1 FROM stock_levels s
+                           JOIN product_variants v ON v.business_id = s.business_id AND v.id = s.variant_id
+                          WHERE s.business_id = pg.business_id AND v.product_id = pg.id AND s.on_hand <> 0)
+                 OR EXISTS (SELECT 1 FROM stock_movements mv
+                              JOIN product_variants v ON v.business_id = mv.business_id AND v.id = mv.variant_id
+                             WHERE mv.business_id = pg.business_id AND v.product_id = pg.id
+                             GROUP BY mv.warehouse_id, mv.variant_id
+                            HAVING sum(mv.qty_delta) <> 0)) END AS holds_stock,
               coalesce((SELECT json_agg(json_build_object('variantId', v.id, 'name', ${variantNameSql('v')}, 'status', v.status)
                                         ORDER BY v.created_at, v.id)
                           FROM product_variants v
@@ -263,6 +294,7 @@ export class InventoryReadService {
         q.search ?? null,
         ids === null ? (q.cursor ?? null) : null,
         size + 1,
+        holdsStockDisclosed,
       ],
     );
     if (ids !== null && found.length !== ids.length) throw inventoryRefusal('inventory.product_not_found');
@@ -276,7 +308,7 @@ export class InventoryReadService {
         trackInventory: r.track_inventory,
         unitCode: r.unit_code,
         unitDecimals: r.unit_decimals,
-        holdsStock: r.holds_stock,
+        holdsStock: holdsStockDisclosed ? r.holds_stock : null,
         variants: r.variants,
       })),
       nextCursor: found.length > size && last !== undefined ? last.id : null,

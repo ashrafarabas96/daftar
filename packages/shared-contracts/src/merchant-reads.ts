@@ -126,8 +126,11 @@ export interface InventoryItemDto {
   /** Null while the product has never been tracked. */
   unitCode: string | null;
   unitDecimals: number | null;
-  /** A non-zero on-hand, or movements that do not sum to zero, in any warehouse. */
-  holdsStock: boolean;
+  /**
+   * A non-zero on-hand, or movements that do not sum to zero, in any warehouse.
+   * Null unless the caller holds `inventory.adjust` or `inventory.view`.
+   */
+  holdsStock: boolean | null;
   /** Merchant variants only; `[]` for a simple product. */
   variants: InventoryItemVariantDto[];
 }

@@ -116,8 +116,11 @@ export class SuppliersController {
     return this.reads.listSuppliers(m, SupplierSearchQuerySchema.parse(query));
   }
 
+  /**
+   * One supplier: `suppliers.view` or `suppliers.pay` (P3-S7 review item 6),
+   * which the service checks; the route requires only membership.
+   */
   @Get(':supplierId')
-  @RequiresPermission('suppliers.view')
   async get(@Membership() m: MembershipContext, @Param('supplierId') supplierId: string): Promise<SupplierDto> {
     return this.reads.getSupplier(m, strictUuidParam(supplierId, 'supplierId'));
   }

@@ -17,6 +17,11 @@
  *   - `GET /v1/inventory/access` returns exactly the caller's subset;
  *   - isolation: a member of A naming B in `X-Business-Id` is 403; the owner
  *     of A reading A's ids under its OTHER business A2 finds nothing;
+ *   - the pickers of the movement and purchase screens (the coordinator's
+ *     ruling on review item 6): single-permission roles reach the warehouse
+ *     and item pickers their screens need, `holdsStock` only with
+ *     `inventory.adjust` or `inventory.view`, `GET /v1/suppliers/:id` with
+ *     `suppliers.pay`; none of them reaches the stock read;
  *   - R-S7-1 (the coordinator's ruling on review finding M-1): the blind
  *     count (TL-8) is enforced by the SERVER. The S3 count answer carries
  *     the expected quantity, the variance and the capture's stock sequence
@@ -46,6 +51,12 @@ const ROLES = {
   counter: ['inventory.stocktake'],
   counterView: ['inventory.stocktake', 'inventory.view'],
   counterAdjust: ['inventory.stocktake', 'inventory.adjust'],
+  mover: ['inventory.transfer'],
+  moverY: ['inventory.transfer'],
+  adjuster: ['inventory.adjust'],
+  purchaser: ['purchases.manage'],
+  receiver: ['purchases.receive'],
+  payer: ['suppliers.pay'],
 } as const;
 type RoleName = keyof typeof ROLES;
 let role: Record<RoleName, HttpActor>;
@@ -65,6 +76,12 @@ beforeAll(async () => {
     counter: await customMember('counter', ROLES.counter),
     counterView: await customMember('counterView', ROLES.counterView),
     counterAdjust: await customMember('counterAdjust', ROLES.counterAdjust),
+    mover: await customMember('mover', ROLES.mover),
+    moverY: await customMember('moverY', ROLES.moverY, [w.A.branchY]),
+    adjuster: await customMember('adjuster', ROLES.adjuster),
+    purchaser: await customMember('purchaser', ROLES.purchaser),
+    receiver: await customMember('receiver', ROLES.receiver),
+    payer: await customMember('payer', ROLES.payer),
   };
   stub.mockRestore();
 });
@@ -336,5 +353,59 @@ describe('T-11 input: a NUL byte in any search is a validation refusal, never a 
       const r = await readAs(t, w.owner, w.A.businessId, path);
       expect({ path, status: r.status, code: (r.body as { error?: { code?: string } }).error?.code }).toEqual({ path, status: 400, code: 'VALIDATION_FAILED' });
     }
+  });
+});
+
+describe('T-11 the pickers: single-permission roles (review item 6)', () => {
+  interface Access {
+    readonly warehouses: number;
+    readonly items: number;
+    /** `holdsStock` of a product that holds stock, when the items read answers. */
+    readonly holdsStock?: boolean | null;
+    readonly stock: number;
+    readonly supplier: number;
+    readonly openPurchases: number;
+  }
+  const accessOf = async (by: HttpActor): Promise<Access> => {
+    const read = (path: string): Promise<Response> => readAs(t, by, w.A.businessId, path);
+    const items = await read(`/v1/inventory/items?ids=${w.A.piece.productId}`);
+    const holds = items.status === 200 ? (items.body as { items: { holdsStock: boolean | null }[] }).items.map((i) => i.holdsStock) : [];
+    return {
+      warehouses: (await read('/v1/inventory/warehouses')).status,
+      items: items.status,
+      ...(items.status === 200 ? { holdsStock: holds.length === 1 ? holds[0] : undefined } : {}),
+      stock: (await read(`/v1/inventory/stock?warehouseId=${w.A.w2}`)).status,
+      supplier: (await read(`/v1/suppliers/${w.supplierId}`)).status,
+      openPurchases: (await read(`/v1/suppliers/${w.supplierId}/open-purchases`)).status,
+    };
+  };
+  const picker = { warehouses: 200, items: 200, holdsStock: null, stock: 403, supplier: 403, openPurchases: 403 } as const;
+
+  it('each widened permission reaches the warehouse and item pickers, never the stock read', async () => {
+    expect({
+      'inventory.stocktake': await accessOf(role.counter),
+      'inventory.transfer': await accessOf(role.mover),
+      'inventory.adjust': await accessOf(role.adjuster),
+      'purchases.manage': await accessOf(role.purchaser),
+      'purchases.receive': await accessOf(role.receiver),
+      'suppliers.pay': await accessOf(role.payer),
+      'inventory.stocktake + inventory.view': await accessOf(role.counterView),
+    }).toEqual({
+      'inventory.stocktake': picker,
+      'inventory.transfer': picker,
+      'inventory.adjust': { ...picker, holdsStock: true },
+      'purchases.manage': picker,
+      'purchases.receive': picker,
+      'suppliers.pay': { warehouses: 403, items: 403, stock: 403, supplier: 200, openPurchases: 200 },
+      'inventory.stocktake + inventory.view': { ...picker, holdsStock: true, stock: 200 },
+    });
+  });
+
+  it('a widened picker still lists only the warehouses the caller reaches, with no quantity or value', async () => {
+    const mine = await ok<{ items: Record<string, unknown>[] }>(readAs(t, role.moverY, w.A.businessId, '/v1/inventory/warehouses'));
+    expect(mine.items.map((x) => x['warehouseId']).sort()).toEqual([w.A.w2, w.w3].sort());
+    for (const x of mine.items) expect(Object.keys(x).sort()).toEqual(['branchIds', 'homeBranchId', 'name', 'status', 'warehouseId']);
+    const stock = await readAs(t, role.moverY, w.A.businessId, `/v1/inventory/stock?warehouseId=${w.A.w2}`);
+    expect(stock.status).toBe(403);
   });
 });
