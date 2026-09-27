@@ -72,6 +72,19 @@
 --        "manual entry first": pre-foundation residue R-INV-01 reports. A
 --        lock would invert the existing opening-balance → account order
 --        (0047, 0061 R-1) and is not taken.
+--   R-94 FORCED EARLY, THE GUARD FAILS CLOSED (review H-1). SET CONSTRAINTS
+--        needs no privilege, so a session may make the trigger IMMEDIATE.
+--        It then fires at the end of the header INSERT, before the one
+--        set-wise lines INSERT that follows it in accounting_post_entry
+--        (0045:776-793), and never again. An entry with no visible line is
+--        therefore refused like one with an Inventory line (a committed entry
+--        always has at least two lines: 0043:172). No path fires it with SOME
+--        lines visible: journal_lines is written only by the two INSERT …
+--        SELECT statements of 0045 and 0046, each directly after its own
+--        header INSERT, under a non-deferrable FK to the header
+--        (journal_lines_entry_fk, 0042:206), and no stored routine issues
+--        SET CONSTRAINTS. SET CONSTRAINTS issued after the posting fires the
+--        pending event with every line visible.
 --
 -- ── The carried hardenings ──────────────────────────────────────────────
 --
@@ -212,11 +225,15 @@ GRANT CREATE ON SCHEMA public TO daftar_accounting_internal;
 CREATE FUNCTION accounting_inventory_account_domain_guard() RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $$
 BEGIN
+  -- R-94: no line visible means the trigger was forced to fire early (SET
+  -- CONSTRAINTS … IMMEDIATE, before the lines statement); refuse, never pass.
   IF NEW.source_type IN ('manual_adjustment', 'opening_balance')
-     AND EXISTS (SELECT 1 FROM journal_lines l
-                   JOIN accounts a ON a.business_id = l.business_id AND a.id = l.account_id
-                  WHERE l.business_id = NEW.business_id AND l.journal_entry_id = NEW.id
-                    AND a.system_key = 'inventory')
+     AND (EXISTS (SELECT 1 FROM journal_lines l
+                    JOIN accounts a ON a.business_id = l.business_id AND a.id = l.account_id
+                   WHERE l.business_id = NEW.business_id AND l.journal_entry_id = NEW.id
+                     AND a.system_key = 'inventory')
+          OR NOT EXISTS (SELECT 1 FROM journal_lines l
+                          WHERE l.business_id = NEW.business_id AND l.journal_entry_id = NEW.id))
      AND inventory_business_has_stock_movements(NEW.business_id) THEN
     RAISE EXCEPTION 'accounting.inventory_account_domain_owned: after a business''s first stock movement, the Inventory account changes only through an inventory or purchasing operation'
       USING ERRCODE = 'P0001';
@@ -226,7 +243,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION accounting_inventory_account_domain_guard() IS
-  'P3-S8 R-B1a (Annex R §2.1-§2.5, 0069 R-91/R-93). Deferred AFTER INSERT on journal_entries for manual_adjustment and opening_balance entries: when the entry has a line on the business''s Inventory system account (system_key = inventory; opening lines stated by code resolve to the same account) and inventory_business_has_stock_movements is true, refuses with accounting.inventory_account_domain_owned (P0001, no amount). Reversals and every inventory, purchasing and settlement type are not judged. Owned by daftar_accounting_internal (reads lines and accounts through the 0045 identity policies); no EXECUTE grantee.';
+  'P3-S8 R-B1a (Annex R §2.1-§2.5, 0069 R-91/R-93). Deferred AFTER INSERT on journal_entries for manual_adjustment and opening_balance entries: when the entry has a line on the business''s Inventory system account (system_key = inventory; opening lines stated by code resolve to the same account) and inventory_business_has_stock_movements is true, refuses with accounting.inventory_account_domain_owned (P0001, no amount). Fired before any line is visible (SET CONSTRAINTS … IMMEDIATE), it refuses too: fail closed (R-94). Reversals and every inventory, purchasing and settlement type are not judged. Owned by daftar_accounting_internal (reads lines and accounts through the 0045 identity policies); no EXECUTE grantee.';
 
 REVOKE ALL ON FUNCTION accounting_inventory_account_domain_guard() FROM PUBLIC;
 

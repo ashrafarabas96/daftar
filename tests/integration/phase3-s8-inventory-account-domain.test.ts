@@ -27,6 +27,8 @@
  *     pinned);
  *   - the race "manual entry ∥ first receipt" ends in one of the two serial
  *     outcomes (§2.6);
+ *   - `SET CONSTRAINTS <trigger> | ALL IMMEDIATE` cannot switch the guard off:
+ *     forced early, before any line is visible, it refuses (0069 R-94);
  *   - NEGATIVE CONTROL: in a scratch database built from the real migrations,
  *     with the trigger dropped, the same manual Inventory line commits and
  *     R-INV-01 reports the business as a discrepancy.
@@ -64,7 +66,7 @@ const PINNED = ['search_path=pg_catalog, public, pg_temp'];
  * change to the rule and must be reviewed here (the gaps discoveries of
  * 0061/0067 enumerate stock-source and settlement guards, not this one).
  */
-const GUARD_BODY_MD5 = 'a9e1457ba7010ff347848fe0011e3f0b';
+const GUARD_BODY_MD5 = 'c6254815e09d55cf6072c3a465519183';
 const HELPER_BODY_MD5 = '4f3b6dd09d6ac5084051891072e1c9f7';
 
 /** Every business-scoped table a refused posting must leave byte-identical. */
@@ -560,6 +562,127 @@ describe('T-19 (h) — the race "manual Inventory line ∥ first receipt" ends i
       expectAccepted(o.receipt, `receipt, round ${i}`);
       if (!o.manual.ok) expectRefused(o.manual, 'P0001', CODE, `manual, round ${i}`);
     }
+  });
+});
+
+describe('T-19 (i) — SET CONSTRAINTS … IMMEDIATE cannot switch the guard off (0069 R-94, review H-1)', () => {
+  /**
+   * `SET CONSTRAINTS` needs no privilege. Forced IMMEDIATE, the header
+   * trigger fires at the end of the header INSERT inside
+   * accounting_post_entry, BEFORE the one set-wise lines INSERT (0045:776-793),
+   * so the guard sees no line at all. It must refuse then (fail closed), not
+   * pass: a committed entry always has lines, so "no line visible" can only
+   * mean the trigger was fired early.
+   */
+  const MODES = [
+    ['named', `SET CONSTRAINTS ${TRIGGER} IMMEDIATE`],
+    ['ALL', 'SET CONSTRAINTS ALL IMMEDIATE'],
+  ] as const;
+
+  for (const [mode, stmt] of MODES) {
+    it(`${mode}: a manual Inventory line after the first movement is refused, nothing written`, async () => {
+      const A = await fresh();
+      await firstMovement(A);
+      const glBefore = await glInventory(ownerPool(), A.businessId);
+      const before = await digest(A.businessId);
+      const cmd = manual(A, 'inventory', 'opening_equity', 777n);
+      const c = await appClient();
+      let outcome: Outcome<unknown>;
+      try {
+        outcome = await settle(async () => {
+          await c.query('BEGIN');
+          await c.query(stmt);
+          await postAs(accountingAssertionFor(cmd, A.userId), cmd, {}, c);
+          return c.query('COMMIT');
+        });
+      } finally {
+        await c.query('ROLLBACK').catch(() => undefined);
+        await c.end();
+      }
+      if (mode === 'named') expectRefused(outcome, 'P0001', CODE, stmt);
+      else expect(outcome.ok, `${stmt} must not commit`).toBe(false);
+      expect(changedTables(before, await digest(A.businessId)), 'nothing survives').toEqual([]);
+      expect(await glInventory(ownerPool(), A.businessId)).toBe(glBefore);
+    });
+
+    it(`${mode}: an opening balance with an Inventory position after the first movement is refused, nothing written`, async () => {
+      const A = await fresh();
+      await firstMovement(A);
+      const glBefore = await glInventory(ownerPool(), A.businessId);
+      const before = await digest(A.businessId);
+      const outcome = await settle(() =>
+        committed(async (c) => {
+          await c.query(stmt);
+          return postOpeningBalanceInTx(c, A, day, [position('inventory', 'D', 4321n), position('cash', 'D', 100n)]);
+        }),
+      );
+      if (mode === 'named') expectRefused(outcome, 'P0001', CODE, stmt);
+      else expect(outcome.ok, `${stmt} must not commit`).toBe(false);
+      expect(changedTables(before, await digest(A.businessId)), 'nothing survives').toEqual([]);
+      expect(await glInventory(ownerPool(), A.businessId)).toBe(glBefore);
+    });
+  }
+
+  it('named, a business with no movement: Phase 2 behaviour is unchanged (the Inventory line is accepted)', async () => {
+    const A = await fresh();
+    const cmd = manual(A, 'inventory', 'opening_equity', 600n);
+    const c = await appClient();
+    try {
+      await c.query('BEGIN');
+      await c.query(`SET CONSTRAINTS ${TRIGGER} IMMEDIATE`);
+      expectAccepted(await settle(() => postAs(accountingAssertionFor(cmd, A.userId), cmd, {}, c)), 'the statement');
+      expectAccepted(await settle(() => c.query('COMMIT')), 'COMMIT');
+    } finally {
+      await c.query('ROLLBACK').catch(() => undefined);
+      await c.end();
+    }
+    expect(await glInventory(ownerPool(), A.businessId)).toBe(600n);
+  });
+
+  it('named, after movements, a manual line that does not touch Inventory: refused too (fail closed: the lines are not visible yet)', async () => {
+    const A = await fresh();
+    await firstMovement(A);
+    const before = await digest(A.businessId);
+    const cmd = manual(A, 'cash', 'opening_equity', 250n);
+    const c = await appClient();
+    let outcome: Outcome<unknown>;
+    try {
+      outcome = await settle(async () => {
+        await c.query('BEGIN');
+        await c.query(`SET CONSTRAINTS ${TRIGGER} IMMEDIATE`);
+        await postAs(accountingAssertionFor(cmd, A.userId), cmd, {}, c);
+        return c.query('COMMIT');
+      });
+    } finally {
+      await c.query('ROLLBACK').catch(() => undefined);
+      await c.end();
+    }
+    expectRefused(outcome, 'P0001', CODE, 'early firing');
+    expect(changedTables(before, await digest(A.businessId))).toEqual([]);
+    // The same line on the default (deferred) path is accepted.
+    expectAccepted(await postManual(cmd, A), 'deferred path');
+  });
+
+  it('SET CONSTRAINTS … IMMEDIATE issued AFTER the posting fires the guard with every line visible: refused', async () => {
+    const A = await fresh();
+    await firstMovement(A);
+    const before = await digest(A.businessId);
+    const cmd = manual(A, 'inventory', 'opening_equity');
+    const c = await appClient();
+    let outcome: Outcome<unknown>;
+    try {
+      outcome = await settle(async () => {
+        await c.query('BEGIN');
+        await postAs(accountingAssertionFor(cmd, A.userId), cmd, {}, c);
+        await c.query(`SET CONSTRAINTS ${TRIGGER} IMMEDIATE`);
+        return c.query('COMMIT');
+      });
+    } finally {
+      await c.query('ROLLBACK').catch(() => undefined);
+      await c.end();
+    }
+    expectRefused(outcome, 'P0001', CODE, 'late SET CONSTRAINTS');
+    expect(changedTables(before, await digest(A.businessId))).toEqual([]);
   });
 });
 
