@@ -30,13 +30,13 @@ const FORWARDED = ['authorization', 'content-type', 'x-business-id', 'idempotenc
 // eslint-disable-next-line no-control-regex -- control characters are exactly what this refuses.
 const UNSAFE_SEGMENT = /[/\\?#\u0000-\u001f\u007f]/;
 
-/** The upstream path for the decoded segments, re-encoded, or null when a segment could leave its place. */
-function upstreamPath(segments: readonly string[]): string | null {
+/** The decoded segments, each re-encoded, or null when a segment could leave its place. */
+function encodedSegments(segments: readonly string[]): string[] | null {
   if (segments.length === 0) return null;
   for (const segment of segments) {
     if (segment.length === 0 || segment === '.' || segment === '..' || UNSAFE_SEGMENT.test(segment)) return null;
   }
-  return segments.map((segment) => encodeURIComponent(segment)).join('/');
+  return segments.map((segment) => encodeURIComponent(segment));
 }
 
 const refused = () =>
@@ -46,13 +46,13 @@ const refused = () =>
   });
 
 async function handler(req: NextRequest, ctx: { params: Promise<{ path: string[] }> }) {
-  const { path } = await ctx.params;
+  const { path: decoded } = await ctx.params;
   const url = new URL(req.url);
-  const safe = upstreamPath(path);
-  if (safe === null) return refused();
-  const base = `${API_URL}/v1/`;
-  const target = `${base}${safe}${url.search}`;
-  if (!new URL(target).pathname.startsWith(new URL(base).pathname)) return refused();
+  const path = encodedSegments(decoded);
+  if (path === null) return refused();
+  // /v1 is prepended here, exactly once (P1-GOLD-37).
+  const target = `${API_URL}/v1/${path.join('/')}${url.search}`;
+  if (!new URL(target).pathname.startsWith(new URL(`${API_URL}/v1/`).pathname)) return refused();
   const headers = new Headers();
   for (const name of FORWARDED) {
     const v = req.headers.get(name);
