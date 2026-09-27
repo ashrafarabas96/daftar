@@ -354,6 +354,7 @@ export class InventoryReadService {
                 CASE WHEN v.is_base THEN NULL ELSE ${variantNameSql('v')} END AS variant_name,
                 coalesce(s.on_hand, 0) AS on_hand,
                 CASE WHEN v.is_base THEN 0 ELSE 1 END AS ord,
+                CASE WHEN v.is_base THEN '' ELSE ${variantNameSql('v')} END AS vname,
                 CASE WHEN v.is_base THEN '${NIL_UUID}'::uuid ELSE v.id END AS vkey
            FROM prod pr
            JOIN product_variants v ON v.business_id = pr.business_id AND v.product_id = pr.id
@@ -376,11 +377,14 @@ export class InventoryReadService {
                OR ($6 = 'out_of_stock' AND st.on_hand = 0)
                OR ($6 = 'negative' AND st.on_hand < 0))
           AND ($7::uuid IS NULL
-               OR (st.name, st.product_id, st.ord, st.vkey)
+               OR (st.name, st.product_id, st.ord, st.vname, st.vkey)
                   > (SELECT ${productNameSql('c', '$3::text')}, c.id,
-                            CASE WHEN $8::uuid IS NULL THEN 0 ELSE 1 END, coalesce($8::uuid, '${NIL_UUID}'::uuid)
+                            CASE WHEN $8::uuid IS NULL THEN 0 ELSE 1 END,
+                            coalesce((SELECT ${variantNameSql('cv')} FROM product_variants cv
+                                       WHERE cv.business_id = c.business_id AND cv.product_id = c.id AND cv.id = $8::uuid), ''),
+                            coalesce($8::uuid, '${NIL_UUID}'::uuid)
                        FROM products c WHERE c.business_id = $1 AND c.id = $7::uuid))
-        ORDER BY st.name, st.product_id, st.ord, st.vkey
+        ORDER BY st.name, st.product_id, st.ord, st.vname, st.vkey
         LIMIT $9`,
       [
         m.businessId,

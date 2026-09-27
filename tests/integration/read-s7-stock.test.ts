@@ -158,6 +158,7 @@ describe('T-04 the stock read', () => {
   it('keyset paging walks every row once, and a product inserted mid-walk neither repeats nor skips a row', async () => {
     const all = (await stock(`warehouseId=${w.A.w1}&limit=50`)).items;
     expect((await walk(w.A.w1, 2)).map(key)).toEqual(all.map(key));
+    expect((await walk(w.A.w1, 1)).map(key), 'a page boundary between two variants of one product').toEqual(all.map(key));
     const first = await stock(`warehouseId=${w.A.w1}&limit=3`);
     // Two products appear mid-walk: one sorting before the cursor, one after it.
     for (const name of ['AAA before', 'zzz after']) {
