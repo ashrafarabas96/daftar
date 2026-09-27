@@ -1464,3 +1464,62 @@ export function vectorDocumentDate(v: SupplierReturnVector): string {
   if (v.purchase.txnCurrency === 'JOD' && v.purchase.rate === '4.9000000000') return '2026-03-15';
   throw new Error(`no rate is entered for ${v.id} (${v.purchase.txnCurrency} at ${v.purchase.rate})`);
 }
+
+/** The command an `invpl-s5` vector's routine arguments describe. */
+export function commandOfVector(v: InvplS5Vector): S5Command {
+  const a = v.routine.args;
+  const text = (k: string): string | null => {
+    const x = a[k];
+    if (x !== null && typeof x !== 'string') throw new Error(`${v.id}: ${k} is not a scalar`);
+    return x ?? null;
+  };
+  const req = (k: string): string => must(text(k), `${v.id}: ${k}`);
+  const list = (k: string): readonly string[] => {
+    const x = a[k];
+    if (x === undefined || x === null || typeof x === 'string') throw new Error(`${v.id}: ${k} is not a list`);
+    return x;
+  };
+  if (v.opCode === 'purchase.return') {
+    const ids = list('p_line_ids');
+    return {
+      kind: 'purchase_return',
+      returnId: req('p_return_id'),
+      purchaseId: req('p_purchase_id'),
+      warehouseId: req('p_warehouse_id'),
+      documentDate: req('p_document_date'),
+      reason: text('p_reason'),
+      creditNoteId: text('p_credit_note_id'),
+      carryingTxnMinor: BigInt(req('p_carrying_txn_minor')),
+      apTxnMinor: BigInt(req('p_ap_txn_minor')),
+      apBaseMinor: BigInt(req('p_ap_base_minor')),
+      creditTxnMinor: BigInt(req('p_credit_txn_minor')),
+      creditBaseMinor: BigInt(req('p_credit_base_minor')),
+      inventoryValueMinor: BigInt(req('p_inventory_value_base_minor')),
+      ppvMinor: BigInt(req('p_ppv_base_minor')),
+      lines: ids.map((id, i) => ({
+        returnLineId: id,
+        purchaseLineId: must(list('p_purchase_line_ids')[i]),
+        variantId: must(list('p_variant_ids')[i]),
+        qtyQ4: toQ4(must(list('p_qtys')[i])),
+        carryingTxnMinor: BigInt(must(list('p_carrying_txns')[i])),
+        valueOutMinor: BigInt(must(list('p_values_out')[i])),
+      })),
+    };
+  }
+  const ids = list('p_line_ids');
+  return {
+    kind: 'purchase_reverse',
+    purchaseId: req('p_purchase_id'),
+    warehouseId: req('p_warehouse_id'),
+    reversalDate: req('p_reversal_date'),
+    reason: text('p_reason'),
+    originalEntryId: text('p_original_entry_id'),
+    totalValueMinor: BigInt(req('p_total_value_base_minor')),
+    lines: ids.map((id, i) => ({
+      lineId: id,
+      variantId: must(list('p_variant_ids')[i]),
+      qtyQ4: toQ4(must(list('p_qtys')[i])),
+      valueMinor: BigInt(must(list('p_values')[i])),
+    })),
+  };
+}
