@@ -1,7 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common';
 import {
+  ALL_RECONCILIATION_CHECK_IDS,
   NO_CORRECTION_NOTICE,
-  RECONCILIATION_CHECKS,
   reconcile,
   type AccountingReconciliationReader,
   type ReconciliationClock,
@@ -70,11 +70,16 @@ export class AccountingReconciliationService {
    * because a read that changes nothing cannot race with another read that
    * changes nothing. That is also the whole of the §24 restart story — a
    * worker that dies halfway through simply starts again.
+   *
+   * ONE PASS, BOTH LISTS (P3-S8 A-10, TL-5). The pass runs the nine Phase 2
+   * checks and the five inventory ↔ GL checks R-INV-01..05 together, and the
+   * count it logs and reports is the combined one. `reconcile()` itself keeps
+   * the Phase 2 list as its default, so every other caller is unchanged.
    */
   async runOnce(): Promise<ReconciliationRunResult> {
-    this.logger.info({ command: 'accounting.reconciliation', event: 'started', checkCount: RECONCILIATION_CHECKS.length }, 'reconciliation started');
+    this.logger.info({ command: 'accounting.reconciliation', event: 'started', checkCount: ALL_RECONCILIATION_CHECK_IDS.length }, 'reconciliation started');
 
-    const result = await reconcile(this.reader, this.clock);
+    const result = await reconcile(this.reader, this.clock, { checks: ALL_RECONCILIATION_CHECK_IDS });
     this.lastRunAt = result.completedAt;
 
     // The loudest case first. A pass that could not list the businesses has

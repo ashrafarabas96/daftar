@@ -33,8 +33,29 @@ export const RECONCILIATION_CHECK_IDS = ['R-ACC-01', 'R-ACC-02', 'R-ACC-03', 'R-
 
 export type ReconciliationCheckId = (typeof RECONCILIATION_CHECK_IDS)[number];
 
-export interface ReconciliationCheckDefinition {
-  readonly id: ReconciliationCheckId;
+/**
+ * The Phase 3 inventory ↔ GL checks (P3-S8 A-10, L:1240-1252) — a SECOND,
+ * SEPARATE id list (TL-5).
+ *
+ * They are not appended to `RECONCILIATION_CHECK_IDS`: `reconcile()` keeps the
+ * nine Phase 2 checks as its default, so every accepted Phase 2 caller and
+ * fixture is unchanged, and a Phase 2 fixture that states a manual line on
+ * Inventory (legitimate before a business's first stock movement) is not
+ * turned red by a check about a domain it never entered. The reconciler
+ * SERVICE runs both lists in one pass (`ALL_RECONCILIATION_CHECK_IDS`).
+ */
+export const INVENTORY_RECONCILIATION_CHECK_IDS = ['R-INV-01', 'R-INV-02', 'R-INV-03', 'R-INV-04', 'R-INV-05'] as const;
+
+export type InventoryReconciliationCheckId = (typeof INVENTORY_RECONCILIATION_CHECK_IDS)[number];
+
+/** Every check the reconciler service runs in one pass: the nine Phase 2 checks, then the five inventory checks. */
+export const ALL_RECONCILIATION_CHECK_IDS = [...RECONCILIATION_CHECK_IDS, ...INVENTORY_RECONCILIATION_CHECK_IDS] as const;
+
+/** Any check id of either list. */
+export type AnyReconciliationCheckId = ReconciliationCheckId | InventoryReconciliationCheckId;
+
+export interface ReconciliationCheckDefinition<Id extends AnyReconciliationCheckId = AnyReconciliationCheckId> {
+  readonly id: Id;
   /** A stable, non-financial description. Safe to log, safe to alert on. */
   readonly title: string;
   /** The accepted invariant this check re-derives from the journal. */
@@ -45,6 +66,16 @@ export interface ReconciliationCheckDefinition {
    * driver error that a caller might mistake for a clean result.
    */
   readonly requires: readonly string[];
+  /**
+   * The exact columns the check reads, as `table.column`, when a table-level
+   * probe is too weak to tell (P3-S8 §3). `accounts` is readable by the
+   * reconciler since `0051`, but its `system_key` only since `0069`: a check
+   * that names the Inventory account by `system_key` on a deployment without
+   * `0069` must be `unavailable`, never a driver error and never `ok`. Every
+   * inventory check declares its columns; the Phase 2 checks, whose grants
+   * are exactly their tables' `0051` columns, do not need to.
+   */
+  readonly requiresColumns?: readonly string[];
 }
 
 /**
@@ -55,7 +86,7 @@ export interface ReconciliationCheckDefinition {
  * R-ACC-03 — the accounting identity — comes after the arithmetic ones it
  * depends on.
  */
-export const RECONCILIATION_CHECKS: readonly ReconciliationCheckDefinition[] = [
+export const RECONCILIATION_CHECKS: readonly ReconciliationCheckDefinition<ReconciliationCheckId>[] = [
   {
     id: 'R-ACC-01',
     title: 'entry balance',
@@ -113,6 +144,108 @@ export const RECONCILIATION_CHECKS: readonly ReconciliationCheckDefinition[] = [
 ];
 
 /**
+ * The inventory ↔ GL checks (P3-S8 A-10), in the order a run executes them.
+ *
+ * ZERO TOLERANCE. Every comparison is an integer equality — `BIGINT` sums
+ * taken as `numeric`, with no division and no rounding (L:1242-1247) — so a
+ * difference of one minor unit is a discrepancy. A reconciler that compared
+ * "within ±1" would call a planted `+1` clean, which is exactly the false
+ * green PM cross-cutting 4 forbids.
+ *
+ * The result contract is the Phase 2 one, unchanged: identifiers and counts,
+ * never an amount, a quantity or a currency (`assertSafeCheckResult`).
+ * Offending ids (TL-6): R-INV-01 names the business; R-INV-02 and R-INV-03
+ * name the variant (R-INV-02 also names the business when the two totals
+ * disagree); R-INV-04 names the journal entry; R-INV-05 names the movement,
+ * or the binding's `source_line_id`.
+ */
+export const INVENTORY_RECONCILIATION_CHECKS: readonly ReconciliationCheckDefinition<InventoryReconciliationCheckId>[] = [
+  {
+    id: 'R-INV-01',
+    title: 'inventory ledger equals the Inventory account',
+    invariant:
+      'per business, the sum of stock_movements.value_delta_base_minor equals the GL balance (debit − credit) of the account whose system_key is inventory, exactly',
+    requires: ['stock_movements', 'journal_lines', 'accounts'],
+    requiresColumns: [
+      'stock_movements.business_id',
+      'stock_movements.value_delta_base_minor',
+      'journal_lines.business_id',
+      'journal_lines.account_id',
+      'journal_lines.debit_minor',
+      'journal_lines.credit_minor',
+      'accounts.business_id',
+      'accounts.id',
+      'accounts.system_key',
+    ],
+  },
+  {
+    id: 'R-INV-02',
+    title: 'stock cache equals the stock ledger',
+    invariant:
+      'for every (warehouse, variant): on_hand = Σ qty_delta, valuation_base_minor = Σ value_delta_base_minor, last_stock_seq = max(stock_seq) = count(*); no movement without a level row, no non-zero level row without movements; and Σ stock_levels.valuation_base_minor = Σ stock_movements.value_delta_base_minor',
+    requires: ['stock_movements', 'stock_levels'],
+    requiresColumns: [
+      'stock_movements.business_id',
+      'stock_movements.warehouse_id',
+      'stock_movements.variant_id',
+      'stock_movements.stock_seq',
+      'stock_movements.qty_delta',
+      'stock_movements.value_delta_base_minor',
+      'stock_levels.business_id',
+      'stock_levels.warehouse_id',
+      'stock_levels.variant_id',
+      'stock_levels.on_hand',
+      'stock_levels.valuation_base_minor',
+      'stock_levels.last_stock_seq',
+    ],
+  },
+  {
+    id: 'R-INV-03',
+    title: 'empty stock carries no value',
+    invariant: 'no stock level with on_hand = 0 carries a non-zero valuation_base_minor',
+    requires: ['stock_levels'],
+    requiresColumns: ['stock_levels.business_id', 'stock_levels.variant_id', 'stock_levels.on_hand', 'stock_levels.valuation_base_minor'],
+  },
+  {
+    id: 'R-INV-04',
+    title: 'no second rounding on inventory',
+    invariant: 'no journal entry with a line on the inventory system account also has a line on the rounding system account',
+    requires: ['journal_lines', 'accounts'],
+    requiresColumns: [
+      'journal_lines.business_id',
+      'journal_lines.journal_entry_id',
+      'journal_lines.account_id',
+      'accounts.business_id',
+      'accounts.id',
+      'accounts.system_key',
+    ],
+  },
+  {
+    id: 'R-INV-05',
+    title: 'movement/source binding',
+    invariant:
+      'every stock movement has its source binding and every source binding its movement, on (business_id, source_type, source_id, source_line_id, movement_kind)',
+    requires: ['stock_movements', 'stock_source_bindings'],
+    requiresColumns: [
+      'stock_movements.business_id',
+      'stock_movements.id',
+      'stock_movements.source_type',
+      'stock_movements.source_id',
+      'stock_movements.source_line_id',
+      'stock_movements.movement_kind',
+      'stock_source_bindings.business_id',
+      'stock_source_bindings.source_type',
+      'stock_source_bindings.source_id',
+      'stock_source_bindings.source_line_id',
+      'stock_source_bindings.movement_kind',
+    ],
+  },
+];
+
+/** Every check definition the reconciler service runs, in run order. */
+export const ALL_RECONCILIATION_CHECKS: readonly ReconciliationCheckDefinition[] = [...RECONCILIATION_CHECKS, ...INVENTORY_RECONCILIATION_CHECKS];
+
+/**
  * What a reconciliation domain is NOT reconciled here, and why.
  *
  * Recorded as data rather than prose so the acceptance evidence can print it
@@ -126,8 +259,13 @@ export interface DeferredReconciliationDomain {
 }
 
 export const DEFERRED_RECONCILIATION_DOMAINS: readonly DeferredReconciliationDomain[] = [
-  { id: 'inventory-valuation', reason: 'the inventory domain does not exist yet', owningPhase: 'Phase 3' },
-  { id: 'ar-ap-operational', reason: 'customers and suppliers do not exist yet', owningPhase: 'Phase 3' },
+  // `inventory-valuation` is no longer deferred: R-INV-01..05 check it (P3-S8 A-12).
+  { id: 'ar-operational', reason: 'customers do not exist yet', owningPhase: 'Phase 4' },
+  {
+    id: 'ap-operational',
+    reason: 'the supplier subledger ↔ Accounts Payable (2000) reconciliation is not in the Phase 3 plan (P:263 names inventory↔GL only)',
+    owningPhase: 'production pass',
+  },
   { id: 'sales-payment', reason: 'sales and payments do not exist yet', owningPhase: 'Phase 4' },
   {
     id: 'read-model-drift',
@@ -155,9 +293,9 @@ export type ReconciliationStatus = 'ok' | 'discrepancy' | 'error' | 'unavailable
  * missing grant ends up reported as a clean book.
  */
 export class ReconciliationUnavailableError extends Error {
-  readonly checkId: ReconciliationCheckId;
+  readonly checkId: AnyReconciliationCheckId;
   readonly missingTables: readonly string[];
-  constructor(checkId: ReconciliationCheckId, missingTables: readonly string[]) {
+  constructor(checkId: AnyReconciliationCheckId, missingTables: readonly string[]) {
     super(`reconciliation check ${checkId} cannot run: the reconciliation credential cannot read ${missingTables.join(', ')}`);
     this.name = 'ReconciliationUnavailableError';
     this.checkId = checkId;
@@ -193,7 +331,7 @@ export interface ReconciliationTarget {
  */
 export interface ReconciliationCheckResult {
   readonly businessId: string;
-  readonly checkId: ReconciliationCheckId;
+  readonly checkId: AnyReconciliationCheckId;
   readonly status: ReconciliationStatus;
   readonly offendingCount: number;
   readonly offendingIds: readonly string[];
@@ -257,7 +395,7 @@ export interface AccountingReconciliationReader {
   /** Every business the run should visit, in a stable order. */
   targets(): Promise<readonly ReconciliationTarget[]>;
   /** Run one check against one business and return what offended. */
-  check(target: ReconciliationTarget, checkId: ReconciliationCheckId): Promise<ReconciliationFinding>;
+  check(target: ReconciliationTarget, checkId: AnyReconciliationCheckId): Promise<ReconciliationFinding>;
 }
 
 /** Monotonic-enough clock seam so scheduling and durations are testable (§25). */
@@ -348,8 +486,10 @@ export function assertSafeCheckResult(result: ReconciliationCheckResult): void {
 export async function reconcile(
   reader: AccountingReconciliationReader,
   clock: ReconciliationClock,
-  options: { readonly checks?: readonly ReconciliationCheckId[] } = {},
+  options: { readonly checks?: readonly AnyReconciliationCheckId[] } = {},
 ): Promise<ReconciliationRunResult> {
+  // The default stays the nine Phase 2 checks (P3-S8 A-10, TL-5): the
+  // reconciler service passes `ALL_RECONCILIATION_CHECK_IDS` explicitly.
   const checkIds = options.checks ?? RECONCILIATION_CHECK_IDS;
   const runStarted = clock.now();
   let targets: readonly ReconciliationTarget[] = [];

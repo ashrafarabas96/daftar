@@ -1,12 +1,12 @@
 import { Inject, Injectable } from '@nestjs/common';
 import type { PoolClient } from 'pg';
 import {
+  ALL_RECONCILIATION_CHECKS,
   NATIVE_SOURCE_TYPES,
-  RECONCILIATION_CHECKS,
   ReconciliationEnumerationError,
   ReconciliationUnavailableError,
   type AccountingReconciliationReader,
-  type ReconciliationCheckId,
+  type AnyReconciliationCheckId,
   type ReconciliationFinding,
   type ReconciliationTarget,
 } from '@daftar/accounting';
@@ -43,6 +43,14 @@ import { Database } from '../../infra/database';
  * empty finding, because an empty finding is indistinguishable from a clean
  * book and that is the single most dangerous lie a reconciliation pass can
  * tell (§16).
+ *
+ * THE INVENTORY CHECKS (P3-S8 A-10, R-INV-01..05) read the stock ledger, the
+ * stock cache, the source bindings and `accounts.system_key` through the
+ * column grants of `0069` and nothing else — never `reason`, `actor_user_id`,
+ * `unit_cost_base_minor`, `created_at` or `avg_unit_cost_base_minor`. They
+ * run in the same per-business scoped transaction, under the same statement
+ * timeout, behind the same privilege probe, which for them is COLUMN-exact:
+ * a deployment without `0069` reports every one of them `unavailable`.
  */
 /**
  * How a reconciliation pass reaches the database.
@@ -134,13 +142,37 @@ export class DatabaseAccountingReconciliationReader implements AccountingReconci
    */
   private async readableTables(client: PoolClient): Promise<Set<string>> {
     if (this.readable) return this.readable;
-    const names = [...new Set(RECONCILIATION_CHECKS.flatMap((c) => c.requires))];
+    const names = [...new Set(ALL_RECONCILIATION_CHECKS.flatMap((c) => c.requires))];
     const { rows } = await client.query<{ name: string; allowed: boolean }>(
       `SELECT t.name, has_any_column_privilege(current_user, t.name, 'SELECT') AS allowed
          FROM unnest($1::text[]) AS t(name)`,
       [names],
     );
-    this.readable = new Set(rows.filter((r) => r.allowed).map((r) => r.name));
+    const readable = new Set(rows.filter((r) => r.allowed).map((r) => r.name));
+    // P3-S8 §3: the inventory checks are probed column by column, because a
+    // table-level answer cannot tell `accounts` (readable since `0051`) from
+    // `accounts.system_key` (readable since `0069`). Only columns of a table
+    // this credential can partly read are probed; a column of an unreadable
+    // table is already reported through its table. The probed columns —
+    // `stock_movements`, `stock_levels`, `stock_source_bindings` and
+    // `accounts.system_key` among them — are exactly those the statements
+    // below read.
+    const columns = [...new Set(ALL_RECONCILIATION_CHECKS.flatMap((c) => c.requiresColumns ?? []))].filter((qualified) => readable.has(tableOf(qualified)));
+    if (columns.length > 0) {
+      const { rows: columnRows } = await client.query<{ name: string; allowed: boolean }>(
+        `SELECT q.name,
+                coalesce((SELECT has_column_privilege(current_user, a.attrelid, a.attnum, 'SELECT')
+                            FROM pg_catalog.pg_attribute a
+                           WHERE a.attrelid = to_regclass(split_part(q.name, '.', 1))
+                             AND a.attname = split_part(q.name, '.', 2)
+                             AND a.attnum > 0
+                             AND NOT a.attisdropped), false) AS allowed
+           FROM unnest($1::text[]) AS q(name)`,
+        [columns],
+      );
+      for (const r of columnRows) if (r.allowed) readable.add(r.name);
+    }
+    this.readable = readable;
     return this.readable;
   }
 
@@ -213,18 +245,28 @@ export class DatabaseAccountingReconciliationReader implements AccountingReconci
     });
   }
 
-  async check(target: ReconciliationTarget, checkId: ReconciliationCheckId): Promise<ReconciliationFinding> {
+  async check(target: ReconciliationTarget, checkId: AnyReconciliationCheckId): Promise<ReconciliationFinding> {
     return this.connection.scoped(target.tenantId, target.businessId, async (c) => {
-      const definition = RECONCILIATION_CHECKS.find((d) => d.id === checkId);
+      const definition = ALL_RECONCILIATION_CHECKS.find((d) => d.id === checkId);
       if (!definition) throw new Error(`unknown reconciliation check ${checkId}`);
       // §25. Transaction-local, so it binds this check and nothing after it.
       await c.query(`SET LOCAL statement_timeout = ${Math.max(1, Math.trunc(this.timeoutMs))}`);
       const readable = await this.readableTables(c);
-      const missing = definition.requires.filter((t) => !readable.has(t));
+      const missingTables = definition.requires.filter((t) => !readable.has(t));
+      // A column is reported only when its table is otherwise readable: an
+      // unreadable table already names what is missing.
+      const missingColumns = (definition.requiresColumns ?? []).filter((q) => readable.has(tableOf(q)) && !readable.has(q));
+      const missing = [...missingTables, ...missingColumns];
       if (missing.length > 0) throw new ReconciliationUnavailableError(checkId, missing);
       return runReconciliationCheck(c, target.businessId, checkId);
     });
   }
+}
+
+/** `stock_movements.qty_delta` → `stock_movements`. */
+function tableOf(qualified: string): string {
+  const dot = qualified.indexOf('.');
+  return dot === -1 ? qualified : qualified.slice(0, dot);
 }
 
 /**
@@ -247,14 +289,15 @@ async function countAndSample(c: PoolClient, offending: string, params: unknown[
 }
 
 /**
- * The nine statements, as one function.
+ * The fourteen statements — the nine Phase 2 checks and the five inventory
+ * checks of P3-S8 — as one function.
  *
  * It is exported because the planted-discrepancy tests (§23) must run these
  * EXACT statements against a throwaway database where the constraints have
  * been dropped by the schema owner. A test that re-implemented the SQL would
  * prove that the test's SQL detects corruption, which is not the claim.
  */
-export function runReconciliationCheck(c: PoolClient, businessId: string, checkId: ReconciliationCheckId): Promise<ReconciliationFinding> {
+export function runReconciliationCheck(c: PoolClient, businessId: string, checkId: AnyReconciliationCheckId): Promise<ReconciliationFinding> {
   switch (checkId) {
     // ── R-ACC-01 ────────────────────────────────────────────────────────
     // An entry is balanced when its base debit total equals its base credit
@@ -445,6 +488,139 @@ export function runReconciliationCheck(c: PoolClient, businessId: string, checkI
              FROM businesses b
             WHERE b.id = $1
               AND (EXISTS (SELECT 1 FROM journal_entries e WHERE e.business_id = b.id)) <> (b.financial_started_at IS NOT NULL)`,
+        [businessId],
+      );
+
+    // ── R-INV-01 ────────────────────────────────────────────────────────
+    // L:1244, PM-16, PM-31: the stock ledger's value and the GL balance of
+    // the Inventory system account are one number. GL(Inventory) is the
+    // exact expression of `0061:1425` — Σ (debit_minor − credit_minor) over
+    // the lines on the account whose `system_key` is 'inventory' — and the
+    // account is named by its identity, never by the presentation code 1200.
+    // Both sides are BIGINT sums taken as numeric and compared for equality:
+    // no division, no rounding, no tolerance. The offending object is the
+    // business; the two totals never leave PostgreSQL.
+    case 'R-INV-01':
+      return countAndSample(
+        c,
+        `SELECT $1::uuid AS id
+            WHERE (SELECT coalesce(sum(m.value_delta_base_minor::numeric), 0)
+                     FROM stock_movements m
+                    WHERE m.business_id = $1::uuid)
+               <> (SELECT coalesce(sum(l.debit_minor::numeric - l.credit_minor::numeric), 0)
+                     FROM journal_lines l
+                     JOIN accounts a ON a.business_id = l.business_id AND a.id = l.account_id
+                    WHERE l.business_id = $1::uuid
+                      AND a.system_key = 'inventory')`,
+        [businessId],
+      );
+
+    // ── R-INV-02 ────────────────────────────────────────────────────────
+    // L:1245, PM-01, PM-26: the cache is a pure function of the ledger. Per
+    // (warehouse, variant) — the key of `stock_movements_key_seq_uq` — the
+    // level row must carry exactly Σ qty_delta, Σ value_delta_base_minor and
+    // the last sequence, and the sequence must be gapless from 1
+    // (max(stock_seq) = count(*), L:191). A movement with no level row and a
+    // level row that states anything without a movement are both offences;
+    // a never-moved zero row is not. The two totals of L:1245 are ALSO
+    // compared literally, and a difference there names the business.
+    case 'R-INV-02':
+      return countAndSample(
+        c,
+        `WITH ledger AS (
+               SELECT m.warehouse_id, m.variant_id,
+                      sum(m.qty_delta) AS qty,
+                      sum(m.value_delta_base_minor::numeric) AS value,
+                      max(m.stock_seq) AS last_seq,
+                      count(*) AS movements
+                 FROM stock_movements m
+                WHERE m.business_id = $1::uuid
+                GROUP BY m.warehouse_id, m.variant_id
+             ), cache AS (
+               SELECT s.warehouse_id, s.variant_id, s.on_hand, s.valuation_base_minor::numeric AS value, s.last_stock_seq
+                 FROM stock_levels s
+                WHERE s.business_id = $1::uuid
+             )
+           SELECT coalesce(k.variant_id, g.variant_id) AS id
+             FROM cache k
+             FULL JOIN ledger g ON g.warehouse_id = k.warehouse_id AND g.variant_id = k.variant_id
+            WHERE (g.variant_id IS NULL AND (k.on_hand <> 0 OR k.value <> 0 OR k.last_stock_seq <> 0))
+               OR k.variant_id IS NULL
+               OR k.on_hand <> g.qty
+               OR k.value <> g.value
+               OR k.last_stock_seq <> g.last_seq
+               OR g.last_seq <> g.movements
+            UNION
+           SELECT $1::uuid AS id
+            WHERE (SELECT coalesce(sum(s.valuation_base_minor::numeric), 0) FROM stock_levels s WHERE s.business_id = $1::uuid)
+               <> (SELECT coalesce(sum(m.value_delta_base_minor::numeric), 0) FROM stock_movements m WHERE m.business_id = $1::uuid)`,
+        [businessId],
+      );
+
+    // ── R-INV-03 ────────────────────────────────────────────────────────
+    // PM-27: stock that is gone carries no value. A key at zero on hand with
+    // a non-zero valuation is value the books hold for nothing, and it names
+    // its variant.
+    case 'R-INV-03':
+      return countAndSample(
+        c,
+        `SELECT s.variant_id AS id
+             FROM stock_levels s
+            WHERE s.business_id = $1::uuid
+              AND s.on_hand = 0
+              AND s.valuation_base_minor <> 0
+            GROUP BY s.variant_id`,
+        [businessId],
+      );
+
+    // ── R-INV-04 ────────────────────────────────────────────────────────
+    // PM-31 (PM:437): no second rounding. An inventory-valued entry is exact
+    // by construction, so an entry that touches the Inventory account AND
+    // the rounding account is an entry in which somebody absorbed a
+    // difference the ledger never had. Both accounts are named by
+    // `system_key`, and the offending object is the entry.
+    case 'R-INV-04':
+      return countAndSample(
+        c,
+        `SELECT l.journal_entry_id AS id
+             FROM journal_lines l
+             JOIN accounts a ON a.business_id = l.business_id AND a.id = l.account_id
+            WHERE l.business_id = $1::uuid
+            GROUP BY l.journal_entry_id
+           HAVING bool_or(a.system_key = 'inventory') AND bool_or(a.system_key = 'rounding')`,
+        [businessId],
+      );
+
+    // ── R-INV-05 ────────────────────────────────────────────────────────
+    // PM-29 (PM:407): every movement has its binding and every binding its
+    // movement, on the full five-part identity. Two anti-joins, because
+    // either direction alone misses half the ways the two can disagree. A
+    // movement names itself; a binding without a movement names its
+    // `source_line_id` (a binding has no id of its own). The source-line →
+    // movement half of PM-29 is a catalogue discovery elsewhere
+    // (`inventory_stock_source_guard_gaps()`) and is not re-derived here.
+    case 'R-INV-05':
+      return countAndSample(
+        c,
+        `SELECT m.id
+             FROM stock_movements m
+            WHERE m.business_id = $1::uuid
+              AND NOT EXISTS (SELECT 1 FROM stock_source_bindings b
+                               WHERE b.business_id = m.business_id
+                                 AND b.source_type = m.source_type
+                                 AND b.source_id = m.source_id
+                                 AND b.source_line_id = m.source_line_id
+                                 AND b.movement_kind = m.movement_kind)
+            UNION
+           SELECT b.source_line_id AS id
+             FROM stock_source_bindings b
+            WHERE b.business_id = $1::uuid
+              AND NOT EXISTS (SELECT 1 FROM stock_movements m
+                               WHERE m.business_id = b.business_id
+                                 AND m.source_type = b.source_type
+                                 AND m.source_id = b.source_id
+                                 AND m.source_line_id = b.source_line_id
+                                 AND m.movement_kind = b.movement_kind)`,
         [businessId],
       );
   }
