@@ -139,16 +139,21 @@ export interface InventoryStocktakeDto {
   businessTransactionId: string;
 }
 
-/** One captured stocktake line. Quantities are decimal strings. */
+/**
+ * One captured stocktake line. Quantities are decimal strings.
+ * `expectedQtyAtCapture`, `capturedAtStockSeq` and `varianceQty` are null
+ * unless the caller holds `inventory.view` (R-S7-1: the blind count is
+ * enforced by the server).
+ */
 export interface InventoryStocktakeCountLineDto {
   lineId: string;
   productId: string;
   variantId: string | null;
-  expectedQtyAtCapture: string;
+  expectedQtyAtCapture: string | null;
   /** The stock sequence the capture measured, integer string. */
-  capturedAtStockSeq: string;
+  capturedAtStockSeq: string | null;
   countedQty: string;
-  varianceQty: string;
+  varianceQty: string | null;
   /** False when the same counted quantity was recorded again and the capture was left untouched. */
   changed: boolean;
 }

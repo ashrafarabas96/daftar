@@ -406,16 +406,18 @@ export class InventoryReadService {
 
   /**
    * One stocktake with its lines and names (A-08). An unknown or unreachable
-   * stocktake is `inventory.stocktake_not_found`. While it is a draft, the
+   * stocktake is `inventory.stocktake_not_found`. Until it is finalized, the
    * expected and variance quantities are withheld unless the caller holds
-   * `inventory.adjust` (blind count, TL-8).
+   * `inventory.adjust` (blind count, TL-8). R-S7-1: "until finalized"
+   * includes a CANCELLED stocktake — a counter who could cancel a draft and
+   * read it back would otherwise see what the draft withheld.
    */
   async stocktake(m: MembershipContext, stocktakeId: string, locale: LocaleCode): Promise<InventoryStocktakeDetailDto> {
     requireAnyPermission(m, ['inventory.view', 'inventory.stocktake']);
     const [header] = await this.rows<StocktakeRow>(m, `${STOCKTAKE_SELECT} WHERE st.business_id = $1 AND st.id = $2`, [m.businessId, stocktakeId]);
     const reachable = header === undefined ? null : await reachableWarehouses(this.db, m);
     if (header === undefined || (reachable !== null && !reachable.has(header.warehouse_id))) throw inventoryRefusal('inventory.stocktake_not_found');
-    const blind = header.status === 'draft' && !hasPermission(m.roles, 'inventory.adjust');
+    const blind = header.status !== 'finalized' && !hasPermission(m.roles, 'inventory.adjust');
     const lines = await this.rows<{
       id: string;
       product_id: string;

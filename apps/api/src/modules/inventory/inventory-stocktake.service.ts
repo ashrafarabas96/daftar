@@ -1,4 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
+import { hasPermission } from '@daftar/domain-core';
 import {
   compareUuid,
   formatQuantity,
@@ -61,16 +62,20 @@ export interface StocktakeCountInput {
   readonly lines: readonly (VariantReference & { readonly quantity: string })[];
 }
 
-/** One captured line (A-11): the count, and the stock it was measured against. Quantities are strings. */
+/**
+ * One captured line (A-11): the count, and the stock it was measured against. Quantities are strings.
+ * The capture (`expectedQtyAtCapture`, `varianceQty`, `capturedAtStockSeq`) is null for a caller who
+ * does not hold `inventory.view` (R-S7-1, the blind count).
+ */
 export interface StocktakeCountLine {
   readonly lineId: string;
   readonly productId: string;
   /** The merchant variant, or null for a simple product (P3-AL-52). */
   readonly variantId: string | null;
-  readonly expectedQtyAtCapture: string;
-  readonly capturedAtStockSeq: string;
+  readonly expectedQtyAtCapture: string | null;
+  readonly capturedAtStockSeq: string | null;
   readonly countedQty: string;
-  readonly varianceQty: string;
+  readonly varianceQty: string | null;
   /** False when the same counted quantity was recorded again and the capture was left untouched (A-10(g)). */
   readonly changed: boolean;
 }
@@ -270,6 +275,14 @@ export class InventoryStocktakeService {
       return r.rows;
     });
     const byVariant = new Map(lines.map((l) => [l.variant.variantId, l.variant]));
+    // R-S7-1 (the coordinator's ruling on the P3-S7 review finding M-1): the
+    // blind count (PHASE_3_S7_CONTRACT A-08, TL-8) is enforced here, not only
+    // on the screen. What the count was measured against — the expected
+    // quantity, hence the variance, and the stock sequence of the capture —
+    // is on-hand information, so it is answered only to a caller who may read
+    // on-hand anyway (`inventory.view`, the stock read's permission); every
+    // other counter gets the same shape with those three fields null.
+    const disclosed = hasPermission(m.roles, 'inventory.view');
     return {
       id: stocktakeId,
       businessTransactionId,
@@ -280,10 +293,10 @@ export class InventoryStocktakeService {
           lineId: row.line_id,
           productId: variant.productId,
           variantId: variant.merchantVariantId,
-          expectedQtyAtCapture: row.expected_qty_at_capture,
-          capturedAtStockSeq: row.captured_at_stock_seq,
+          expectedQtyAtCapture: disclosed ? row.expected_qty_at_capture : null,
+          capturedAtStockSeq: disclosed ? row.captured_at_stock_seq : null,
           countedQty: row.counted_qty,
-          varianceQty: row.variance_qty,
+          varianceQty: disclosed ? row.variance_qty : null,
           changed: row.changed,
         };
       }),

@@ -16,13 +16,19 @@
  *   - the owner gets 200 on every read;
  *   - `GET /v1/inventory/access` returns exactly the caller's subset;
  *   - isolation: a member of A naming B in `X-Business-Id` is 403; the owner
- *     of A reading A's ids under its OTHER business A2 finds nothing.
+ *     of A reading A's ids under its OTHER business A2 finds nothing;
+ *   - R-S7-1 (the coordinator's ruling on review finding M-1): the blind
+ *     count (TL-8) is enforced by the SERVER. The S3 count answer carries
+ *     the expected quantity, the variance and the capture's stock sequence
+ *     only to a caller holding `inventory.view`, and the stocktake detail
+ *     withholds the figures of every stocktake that is not finalized (a
+ *     cancelled one included) unless the caller holds `inventory.adjust`.
  */
 import { randomUUID } from 'node:crypto';
 import type { Response } from 'supertest';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { createTestApp, ensurePostgres, resetData, type TestApp } from '../helpers/test-app';
-import { asMember, type HttpActor } from '../helpers/inventory-commands';
+import { asMember, registerActor, type HttpActor } from '../helpers/inventory-commands';
 import { refusalCode } from '../helpers/supplier-settlement';
 import { ok, readAs, seedReadsWorld, type ReadsWorld } from '../helpers/merchant-reads';
 import { PHASE3_PERMISSIONS } from '@daftar/shared-contracts';
@@ -32,6 +38,18 @@ let w: ReadsWorld;
 let stocktakeW1: string;
 let stocktakeW2: string;
 
+/**
+ * Custom roles of exactly the permissions named, one member each, all
+ * business-wide except `transferY` (assigned to branch Y: W2 and W3).
+ */
+const ROLES = {
+  counter: ['inventory.stocktake'],
+  counterView: ['inventory.stocktake', 'inventory.view'],
+  counterAdjust: ['inventory.stocktake', 'inventory.adjust'],
+} as const;
+type RoleName = keyof typeof ROLES;
+let role: Record<RoleName, HttpActor>;
+
 beforeAll(async () => {
   await ensurePostgres();
   await resetData();
@@ -39,6 +57,16 @@ beforeAll(async () => {
   w = await seedReadsWorld(t, 'auth');
   stocktakeW1 = await openStocktake(w.A.w1);
   stocktakeW2 = await openStocktake(w.A.w2);
+  // More registrations than the per-IP register limit admits: the limiter is
+  // not what this suite tests, so it is stubbed while the members are made.
+  const limiter = t.app.get<{ take: (...args: unknown[]) => Promise<unknown> }>('RATE_LIMITER');
+  const stub = vi.spyOn(limiter, 'take').mockResolvedValue(undefined);
+  role = {
+    counter: await customMember('counter', ROLES.counter),
+    counterView: await customMember('counterView', ROLES.counterView),
+    counterAdjust: await customMember('counterAdjust', ROLES.counterAdjust),
+  };
+  stub.mockRestore();
 });
 
 afterAll(async () => {
@@ -51,6 +79,24 @@ async function openStocktake(warehouseId: string): Promise<string> {
   const r = await t.request.post('/v1/inventory/stocktakes').set(asMember(w.owner, w.A.businessId)).send({ stocktakeId, warehouseId });
   expect(r.status, JSON.stringify(r.body)).toBe(201);
   return stocktakeId;
+}
+
+/** A member of A under a new custom role holding exactly `permissions`. */
+async function customMember(name: string, permissions: readonly string[], branchIds?: readonly string[]): Promise<HttpActor> {
+  const key = `t11-${name.toLowerCase()}`;
+  const r = await t.request.post('/v1/businesses/current/roles').set(asMember(w.owner, w.A.businessId)).send({ key, name: key, permissions });
+  expect(r.status, JSON.stringify(r.body)).toBe(201);
+  const actor = await registerActor(t, `T-11 ${name}`);
+  const m = await t.request.post('/v1/businesses/current/members').set(asMember(w.owner, w.A.businessId)).send({ email: actor.email, roleKey: key });
+  expect(m.status, JSON.stringify(m.body)).toBe(201);
+  if (branchIds !== undefined) {
+    const s = await t.request
+      .patch(`/v1/businesses/current/members/${actor.userId}/branch-scope`)
+      .set(asMember(w.owner, w.A.businessId))
+      .send({ mode: 'assigned', branchIds });
+    expect(s.status, JSON.stringify(s.body)).toBe(200);
+  }
+  return actor;
 }
 
 /** The answer a role gets: a status, and for a refusal its domain code (none for a plain permission refusal). */
@@ -183,5 +229,93 @@ describe('T-11 isolation', () => {
     expect(stocktakeList.items).toEqual([]);
     const suppliers = await ok<{ items: { id: string }[] }>(underA2(`/v1/suppliers?search=${encodeURIComponent(w.supplierName)}`));
     expect(suppliers.items).toEqual([]);
+  });
+});
+
+describe('T-11 R-S7-1 the blind count is enforced by the server (TL-8)', () => {
+  interface CountLine {
+    productId: string;
+    countedQty: string;
+    expectedQtyAtCapture: string | null;
+    varianceQty: string | null;
+    capturedAtStockSeq: string | null;
+  }
+  interface DetailLine {
+    productId: string;
+    countedQty: string;
+    expectedQty: string | null;
+    varianceQty: string | null;
+  }
+  const count = async (by: HttpActor, stocktakeId: string, quantity: string): Promise<CountLine> => {
+    const r = await t.request
+      .put(`/v1/inventory/stocktakes/${stocktakeId}/counts`)
+      .set(asMember(by, w.A.businessId))
+      .send({ lines: [{ productId: w.A.piece2.productId, variantId: null, quantity }] });
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    const lines = (r.body as { lines: CountLine[] }).lines;
+    expect(lines).toHaveLength(1);
+    return lines[0] as CountLine;
+  };
+  const detail = async (by: HttpActor, stocktakeId: string): Promise<{ status: string; lines: DetailLine[] }> =>
+    ok(readAs(t, by, w.A.businessId, `/v1/inventory/stocktakes/${stocktakeId}`));
+  const close = async (by: HttpActor, stocktakeId: string, outcome: 'cancel' | 'finalize'): Promise<void> => {
+    const r = await t.request
+      .post(`/v1/inventory/stocktakes/${stocktakeId}/${outcome}`)
+      .set(asMember(by, w.A.businessId))
+      .send(outcome === 'finalize' ? { occurredOn: w.day } : {});
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+  };
+
+  // piece2 in W2: 5 received, 2 returned — 3 on hand.
+  it('PUT counts: a counter without inventory.view gets the count only; a counter holding it gets the capture', async () => {
+    const blind = await count(role.counter, stocktakeW2, '0');
+    expect(blind).toMatchObject({ productId: w.A.piece2.productId, countedQty: '0.0000' });
+    expect({ expected: blind.expectedQtyAtCapture, variance: blind.varianceQty, seq: blind.capturedAtStockSeq }).toEqual({
+      expected: null,
+      variance: null,
+      seq: null,
+    });
+    const blindAdjust = await count(role.counterAdjust, stocktakeW2, '0');
+    expect({ expected: blindAdjust.expectedQtyAtCapture, variance: blindAdjust.varianceQty, seq: blindAdjust.capturedAtStockSeq }).toEqual({
+      expected: null,
+      variance: null,
+      seq: null,
+    });
+
+    const seen = await count(role.counterView, stocktakeW2, '1');
+    expect(seen).toMatchObject({ countedQty: '1.0000', expectedQtyAtCapture: '3.0000', varianceQty: '-2.0000' });
+    expect(seen.capturedAtStockSeq).toMatch(/^\d+$/);
+    const owner = await count(w.owner, stocktakeW2, '1');
+    expect(owner).toMatchObject({ countedQty: '1.0000', expectedQtyAtCapture: '3.0000', varianceQty: '-2.0000' });
+    expect(owner.capturedAtStockSeq).toMatch(/^\d+$/);
+  });
+
+  it('GET detail of a draft: the figures only to inventory.adjust (A-08)', async () => {
+    for (const by of [role.counter, role.counterView]) {
+      const d = await detail(by, stocktakeW2);
+      expect(d.lines.map((l) => [l.expectedQty, l.varianceQty])).toEqual([[null, null]]);
+    }
+    const seen = await detail(role.counterAdjust, stocktakeW2);
+    expect(seen.lines.map((l) => [l.countedQty, l.expectedQty, l.varianceQty])).toEqual([['1', '3', '-2']]);
+  });
+
+  it('GET detail of a CANCELLED stocktake stays blind: counting, cancelling and reading back discloses nothing', async () => {
+    await close(role.counter, stocktakeW2, 'cancel');
+    const d = await detail(role.counter, stocktakeW2);
+    expect(d.status).toBe('cancelled');
+    expect(d.lines.map((l) => [l.countedQty, l.expectedQty, l.varianceQty])).toEqual([['1', null, null]]);
+    const seen = await detail(role.counterAdjust, stocktakeW2);
+    expect(seen.lines.map((l) => [l.expectedQty, l.varianceQty])).toEqual([['3', '-2']]);
+  });
+
+  it('GET detail of a FINALIZED stocktake: the figures to every caller who may read it (A-08)', async () => {
+    const stocktakeId = randomUUID();
+    const opened = await t.request.post('/v1/inventory/stocktakes').set(asMember(role.counter, w.A.businessId)).send({ stocktakeId, warehouseId: w.A.w2 });
+    expect(opened.status, JSON.stringify(opened.body)).toBe(201);
+    await count(role.counter, stocktakeId, '3');
+    await close(role.counter, stocktakeId, 'finalize');
+    const d = await detail(role.counter, stocktakeId);
+    expect(d.status).toBe('finalized');
+    expect(d.lines.map((l) => [l.countedQty, l.expectedQty, l.varianceQty])).toEqual([['3', '3', '0']]);
   });
 });
