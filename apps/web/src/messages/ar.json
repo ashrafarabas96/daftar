@@ -747,5 +747,8 @@
   "payments.exchangeRate.rateLabel": "{base} مقابل {currency} واحد",
   "payments.exchangeRate.rateInvalid": "أدخل سعرًا أكبر من الصفر",
   "payments.exchangeRate.saveAndContinue": "احفظ السعر وتابع",
-  "payments.exchangeRate.askOwner": "سعر الصرف لتاريخ {date} غير موجود. اطلب من صاحب النشاط إضافته. لم يُحفظ شيء."
+  "payments.exchangeRate.askOwner": "سعر الصرف لتاريخ {date} غير موجود. اطلب من صاحب النشاط إضافته. لم يُحفظ شيء.",
+  "nav.menu": "القائمة",
+  "payments.doneDetailOne": "دُفع {amount} إلى {name}، وسُدِّدت عملية شراء واحدة.",
+  "payments.doneDetailNone": "دُفع {amount} إلى {name}."
 }

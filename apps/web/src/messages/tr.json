@@ -747,5 +747,8 @@
   "payments.exchangeRate.rateLabel": "Bir {currency} için {base}",
   "payments.exchangeRate.rateInvalid": "Sıfırdan büyük bir kur girin",
   "payments.exchangeRate.saveAndContinue": "Kuru kaydet ve devam et",
-  "payments.exchangeRate.askOwner": "{date} için döviz kuru eksik. İşletme sahibinden eklemesini isteyin. Hiçbir şey kaydedilmedi."
+  "payments.exchangeRate.askOwner": "{date} için döviz kuru eksik. İşletme sahibinden eklemesini isteyin. Hiçbir şey kaydedilmedi.",
+  "nav.menu": "Menü",
+  "payments.doneDetailOne": "{name} tedarikçisine {amount} ödendi, bir satın alma kapatıldı.",
+  "payments.doneDetailNone": "{name} tedarikçisine {amount} ödendi."
 }

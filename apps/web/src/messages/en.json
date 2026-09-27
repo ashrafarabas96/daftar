@@ -747,5 +747,8 @@
   "payments.exchangeRate.rateLabel": "{base} for one {currency}",
   "payments.exchangeRate.rateInvalid": "Enter a rate greater than zero",
   "payments.exchangeRate.saveAndContinue": "Save the rate and continue",
-  "payments.exchangeRate.askOwner": "The exchange rate for {date} is missing. Ask the business owner to add it. Nothing was saved."
+  "payments.exchangeRate.askOwner": "The exchange rate for {date} is missing. Ask the business owner to add it. Nothing was saved.",
+  "nav.menu": "Menu",
+  "payments.doneDetailOne": "{amount} paid to {name}, settling one purchase.",
+  "payments.doneDetailNone": "{amount} paid to {name}."
 }
