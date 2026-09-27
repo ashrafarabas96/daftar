@@ -511,7 +511,7 @@ describe('T-01 NEGATIVE CONTROL — the verifier stubbed, rows a–i succeed', (
     await db.drop();
   });
 
-  it.each(CONTROL_KINDS.map((k) => [k]))('%s: rows a–i are accepted once the verifier verifies nothing', async (op) => {
+  it.each(CONTROL_KINDS.map((k) => [k]))('PM-44 %s: rows a–i are accepted once the verifier verifies nothing', async (op) => {
     expect(KINDS).toContain(op);
     const b = builderOf(op);
     const s = await prepareKind(db.pool, open, op, `t01nc-${CONTROL_KINDS.indexOf(op)}`, w.A2, w.A);

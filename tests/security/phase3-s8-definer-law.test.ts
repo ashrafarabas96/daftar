@@ -203,21 +203,21 @@ describe('T-05 NEGATIVE CONTROLS — each removed invariant is named by its clau
     expect(await definerLawViolations(scratch.pool)).toEqual(SHIPPED);
   });
 
-  it('path order reversed on supplier_pay → clause 1 names it', async () => {
+  it('PM-43 path order reversed on supplier_pay → clause 1 names it', async () => {
     await scratch.pool.query(`ALTER FUNCTION ${supplierPay} SET search_path = public, pg_temp, pg_catalog`);
     expect((await definerLawViolations(scratch.pool)).c1).toEqual([...TL3_EXCEPTIONS, supplierPay].sort());
     await scratch.pool.query(`ALTER FUNCTION ${supplierPay} SET search_path = pg_catalog, public, pg_temp`);
     expect(await definerLawViolations(scratch.pool)).toEqual(SHIPPED);
   });
 
-  it('supplier_pay handed to the migrator → clauses 2 and 7 name it', async () => {
+  it('PM-43 supplier_pay handed to the migrator → clauses 2 and 7 name it', async () => {
     await scratch.pool.query(`ALTER FUNCTION ${supplierPay} OWNER TO daftar_migrator`);
     const v = await definerLawViolations(scratch.pool);
     expect({ c2: v.c2, c7: v.c7 }).toEqual({ c2: [...TL3_EXCEPTIONS, supplierPay].sort(), c7: [...TL3_EXCEPTIONS, supplierPay].sort() });
     await scratch.pool.query(`ALTER FUNCTION ${supplierPay} OWNER TO ${INVENTORY_INTERNAL}`);
   });
 
-  it('EXECUTE granted to PUBLIC on a trigger function → clauses 3 and 4 name it', async () => {
+  it('PM-43 EXECUTE granted to PUBLIC on a trigger function → clauses 3 and 4 name it', async () => {
     await scratch.pool.query(`GRANT EXECUTE ON FUNCTION ${guard} TO PUBLIC`);
     const v = await definerLawViolations(scratch.pool);
     expect({ c3: v.c3, c4: v.c4 }).toEqual({ c3: [guard], c4: [guard] });

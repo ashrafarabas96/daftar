@@ -90,7 +90,7 @@ afterAll(async () => {
 });
 
 describe('T-08 the long mixed sequence: GL(Inventory) = Σ movements after every step', () => {
-  it('every step commits, and after each one the two figures are equal to the minor unit and R-INV-01 is ok', async () => {
+  it('PM-16: every step commits, and after each one the two figures are equal to the minor unit and R-INV-01 is ok', async () => {
     const rateDay = await dayBefore();
     const steps = mixedSequence(A, await cashOf(ownerPool(), A.businessId), () => stateRate(A, 'USD', 'ILS', '3.6000000000', `${rateDay}T00:00:00Z`));
     expect(steps.length).toBe(18);
@@ -173,7 +173,7 @@ describe('T-08 NEGATIVE CONTROL — the split seam: an adjustment committed with
     await runCommand(c, S, await adjustCommand(c, S, S.w1, [{ variantId: S.piece.variantId, qty: '-2' }], { adjustmentId: randomUUID() }));
   };
 
-  it('as shipped every R-INV check is ok, and the stock half alone is refused at COMMIT by the binding key', async () => {
+  it('PM-16 NC: as shipped every R-INV check is ok, and the stock half alone is refused at COMMIT by the binding key', async () => {
     const target = { tenantId: S.tenantId, businessId: S.businessId };
     expect(statuses(await runChecks(scratch.poolAs('daftar_reconciler'), target))).toEqual({
       'R-INV-01': 'ok',
@@ -191,7 +191,7 @@ describe('T-08 NEGATIVE CONTROL — the split seam: an adjustment committed with
     expect(await inventoryFigures(scratch.pool, S.businessId)).toEqual(before);
   });
 
-  it('with the binding key dropped the split seam commits, the figures part, and exactly R-INV-01 reports the business by id alone', async () => {
+  it('PM-16 NC: with the binding key dropped the split seam commits, the figures part, and exactly R-INV-01 reports the business by id alone', async () => {
     await scratch.pool.query(`ALTER TABLE inventory_adjustments DROP CONSTRAINT inventory_adjustments_binding_fk`);
     await committed(scratchClient, stockHalfOnly);
     const f = await inventoryFigures(scratch.pool, S.businessId);
