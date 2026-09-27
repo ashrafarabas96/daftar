@@ -32,6 +32,7 @@
     "check:supply-chain": "tsx scripts/check-supply-chain.ts",
     "evidence:phase2:s8": "tsx scripts/phase2-s8-evidence.ts",
     "evidence:phase2:s9": "tsx scripts/phase2-s9-evidence.ts",
+    "evidence:phase3:s9": "tsx scripts/phase3-s9-evidence.ts",
     "check:db-from-zero": "tsx scripts/db-from-zero.ts",
     "bootstrap:platform-owner": "tsx scripts/bootstrap-platform-owner.ts",
     "bootstrap:provisioning-key": "tsx scripts/install-provisioning-key.ts",
@@ -60,10 +61,13 @@
     "gate:phase3:s6": "tsx scripts/phase3-s6-gate.ts",
     "gate:phase3:s7": "tsx scripts/phase3-s7-gate.ts",
     "gate:phase3:s8": "tsx scripts/phase3-s8-gate.ts",
+    "gate:phase3:release": "tsx scripts/phase3-release-gate.ts",
     "export:release": "tsx scripts/export-release.ts",
     "export:release:phase2": "tsx scripts/export-release.ts --phase=2",
+    "export:release:phase3": "tsx scripts/export-release.ts --phase=3",
     "verify:history": "tsx scripts/verify-migration-history.ts",
-    "rehearse:phase2:rollback": "tsx scripts/phase2-rollback-rehearsal.ts"
+    "rehearse:phase2:rollback": "tsx scripts/phase2-rollback-rehearsal.ts",
+    "rehearse:phase3:deployed": "tsx scripts/phase3-deployed-rehearsal.ts"
   },
   "engines": {
     "node": ">=24 <25"

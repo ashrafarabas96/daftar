@@ -84,6 +84,15 @@ jobs:
           npm run build -w packages/inventory
       - name: Migration manifest check
         run: npm run check:migrations
+      # The two historical invariants, on every push: the accepted Phase 2
+      # prefix 0000–0052 and the accepted Phase 3 prefix 0053–0069 stay
+      # byte-identical, and later migrations are permitted. Both run in
+      # seconds with no database. Until P3-S9 the Phase 2 one ran only inside
+      # `gate:phase2:release`, which no workflow on the Phase 3 branch runs.
+      - name: Phase 2 migration prefix
+        run: npx tsx scripts/phase2-prefix.ts
+      - name: Phase 3 migration prefix
+        run: npx tsx scripts/phase3-prefix.ts
       - name: Phase 1 machine gate
         run: npm run gate:phase1
       - name: Static guards
