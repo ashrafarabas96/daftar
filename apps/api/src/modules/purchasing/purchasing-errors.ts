@@ -3,18 +3,24 @@ import { AppError } from '@daftar/domain-core';
 import { InventoryError } from '@daftar/inventory';
 import { TransactionSeamError } from '../../infra/database';
 import { inventoryRefusal, parseDatabaseInventoryCode } from '../inventory/inventory-errors';
+import { isPaymentMethodCode, paymentMethodRefusal, parseDatabasePaymentMethodCode, type PaymentMethodCode } from '../payment-methods/payment-method-errors';
 
 /**
  * The stable refusal vocabulary of suppliers and purchases (PHASE_3_S4_CONTRACT
  * §3), of supplier returns, supplier credit notes and purchase reversals
- * (PHASE_3_S5_CONTRACT §3), as the merchant API reports it.
+ * (PHASE_3_S5_CONTRACT §3), and of supplier payments, credit allocations and
+ * refunds (PHASE_3_S6_CONTRACT §3), as the merchant API reports it.
  *
  * Every code a supplier or purchase path can raise is CLASSIFIED here, by an
  * explicit table and never by the shape of its name:
  *
  * - `purchase.*` / `supplier.*` / `supplier_return.*` / `purchase_reversal.*`
- *   / `supplier_credit_note.*` → `PURCHASING_STATUS`, the two §3 tables word
- *   for word; the code travels in `details.purchasingCode`;
+ *   / `supplier_credit_note.*` / `supplier_payment.*` /
+ *   `supplier_credit_allocation.*` / `supplier_refund.*` →
+ *   `PURCHASING_STATUS`, the three §3 tables word for word; the code travels
+ *   in `details.purchasingCode`;
+ * - `payment_method.*` → delegated to `paymentMethodRefusal`, which owns that
+ *   table (S6 §3); the code travels in `details.paymentMethodCode`;
  * - `inventory.*` → the codes §3 names for S4 (`S4_INVENTORY_STATUS`), and
  *   every other code of the inventory vocabulary a purchasing path can meet
  *   (`S3_MAPPED_INVENTORY_CODES`) through `inventoryRefusal`, the accepted
@@ -30,8 +36,16 @@ import { inventoryRefusal, parseDatabaseInventoryCode } from '../inventory/inven
  * is never forwarded.
  */
 
-/** The refusal domains this module owns (S4 §3 and S5 §3). */
-type PurchasingDomain = 'purchase' | 'supplier' | 'supplier_return' | 'purchase_reversal' | 'supplier_credit_note';
+/** The refusal domains this module owns (S4 §3, S5 §3 and S6 §3). */
+type PurchasingDomain =
+  | 'purchase'
+  | 'supplier'
+  | 'supplier_return'
+  | 'purchase_reversal'
+  | 'supplier_credit_note'
+  | 'supplier_payment'
+  | 'supplier_credit_allocation'
+  | 'supplier_refund';
 
 /**
  * The §3 tables: every `purchase.*`, `supplier.*` (S4), `supplier_return.*`,
@@ -90,9 +104,59 @@ const PURCHASING_STATUS = {
   'purchase_reversal.reason_required': 422,
   'purchase_reversal.date_before_purchase': 422,
   'purchase_reversal.date_in_future': 422,
+  // P3-S6 (PHASE_3_S6_CONTRACT §3): the supplier payment.
+  'supplier_payment.allocations_invalid': 400,
+  'supplier_payment.amount_mismatch': 400,
+  // MP-3: checked by the service, and again by the routine under 2a.
+  'supplier_payment.amount_exceeds_outstanding': 422,
+  'supplier_payment.purchase_supplier_mismatch': 409,
+  'supplier_payment.purchase_state_invalid': 409,
+  'supplier_payment.purchase_reversed': 409,
+  'supplier_payment.supplier_inactive': 409,
+  'supplier_payment.reference_required': 422,
+  'supplier_payment.date_before_purchase': 422,
+  'supplier_payment.date_in_future': 422,
+  'supplier_payment.amount_below_base_unit': 422,
+  // Retryable: a concurrent settlement moved O, or a rate was stated (A-15).
+  'supplier_payment.settlement_changed': 409,
+  'supplier_payment.fx_rate_changed': 409,
+  'supplier_payment.idempotency_conflict': 409,
+  // The COMMIT guard (R-62) and the row guard: no correct command reaches them.
+  'supplier_payment.settlement_inconsistent': 500,
+  'supplier_payment.immutable': 500,
+  // P3-S6 §3: the supplier-credit allocation, the parallel codes.
+  'supplier_credit_allocation.amount_exceeds_outstanding': 422,
+  // MP-6.
+  'supplier_credit_allocation.amount_exceeds_credit': 422,
+  'supplier_credit_allocation.credit_exhausted': 409,
+  'supplier_credit_allocation.supplier_mismatch': 409,
+  'supplier_credit_allocation.purchase_state_invalid': 409,
+  'supplier_credit_allocation.purchase_reversed': 409,
+  'supplier_credit_allocation.amount_mismatch': 400,
+  'supplier_credit_allocation.date_before_source': 422,
+  'supplier_credit_allocation.date_in_future': 422,
+  'supplier_credit_allocation.amount_below_base_unit': 422,
+  'supplier_credit_allocation.settlement_changed': 409,
+  'supplier_credit_allocation.idempotency_conflict': 409,
+  'supplier_credit_allocation.immutable': 500,
+  // P3-S6 §3: the supplier refund, the parallel codes.
+  'supplier_refund.amount_exceeds_credit': 422,
+  'supplier_refund.credit_exhausted': 409,
+  'supplier_refund.amount_mismatch': 400,
+  'supplier_refund.reference_required': 422,
+  'supplier_refund.date_before_credit': 422,
+  'supplier_refund.date_in_future': 422,
+  'supplier_refund.amount_below_base_unit': 422,
+  'supplier_refund.settlement_changed': 409,
+  'supplier_refund.fx_rate_changed': 409,
+  'supplier_refund.idempotency_conflict': 409,
+  'supplier_refund.immutable': 500,
+  // P3-S6 §3: the credit note a settlement consumes, and its COMMIT guard (R-63).
+  'supplier_credit_note.not_found': 404,
+  'supplier_credit_note.consumption_inconsistent': 500,
 } as const satisfies Readonly<Record<`${PurchasingDomain}.${string}`, 400 | 404 | 409 | 422 | 500>>;
 
-/** A classified `purchase.*` / `supplier.*` / `supplier_return.*` / `purchase_reversal.*` / `supplier_credit_note.*` refusal code. */
+/** A classified refusal code of a purchasing domain (S4, S5 and S6 §3). */
 export type PurchasingCode = keyof typeof PURCHASING_STATUS;
 
 /**
@@ -238,9 +302,10 @@ export class UnclassifiedRefusalError extends Error {
   }
 }
 
-const DATABASE_CODE_RE = /^((?:purchase|supplier|supplier_return|purchase_reversal|supplier_credit_note)\.[a-z_]+)\b/;
+const DATABASE_CODE_RE =
+  /^((?:purchase|supplier|supplier_return|purchase_reversal|supplier_credit_note|supplier_payment|supplier_credit_allocation|supplier_refund)\.[a-z_]+)\b/;
 
-/** The `purchase.*` / `supplier.*` / `supplier_return.*` / `purchase_reversal.*` / `supplier_credit_note.*` code a database refusal carries, or null. */
+/** The code of a purchasing domain a database refusal carries, or null. */
 export function parseDatabasePurchasingCode(error: unknown): string | null {
   const message = error instanceof Error ? error.message : typeof error === 'string' ? error : null;
   if (message === null) return null;
@@ -288,9 +353,14 @@ export function purchasingInventoryRefusal(code: string, extra: Readonly<Record<
   throw new UnclassifiedRefusalError(code);
 }
 
-/** Any refusal code a purchasing path can meet → its API error; an unclassified code is an `UnclassifiedRefusalError`. */
+/**
+ * Any refusal code a purchasing path can meet → its API error; an
+ * unclassified code is an `UnclassifiedRefusalError`. A `payment_method.*`
+ * code is delegated to the payment-method table (S6 §3), which owns it.
+ */
 export function classifiedRefusal(code: string, extra: Readonly<Record<string, unknown>> = {}): AppError {
   if (isPurchasingCode(code)) return purchasingRefusal(code, extra);
+  if (isPaymentMethodCode(code)) return paymentMethodRefusal(code, extra);
   if (code.startsWith('inventory.')) return purchasingInventoryRefusal(code, extra);
   throw new UnclassifiedRefusalError(code);
 }
@@ -326,13 +396,35 @@ function refusedForeignKey(error: unknown): string | null {
  * trigger's code for the accepted accounting mapping, with the source type as
  * its only context.
  */
-const BINDING_FOREIGN_KEYS: Readonly<Record<string, 'purchase' | 'negative_inventory_cost_adjustment' | 'supplier_return' | 'reversal'>> = {
+const BINDING_FOREIGN_KEYS: Readonly<Record<string, string>> = {
   purchases_binding_fk: 'purchase',
   negative_inventory_cost_adjustments_binding_fk: 'negative_inventory_cost_adjustment',
   // P3-S5 (PHASE_3_S5_CONTRACT §2.2): a return owes its `supplier_return`
   // entry, and a purchase reversal its Phase 2 `reversal` entry (R-B2a).
   supplier_returns_binding_fk: 'supplier_return',
   purchase_reversals_binding_fk: 'reversal',
+  // P3-S6 (PHASE_3_S6_CONTRACT §2.2): each allocation, credit allocation and
+  // refund owes its own entry (A-05: one entry per row).
+  supplier_payment_allocations_binding_fk: 'supplier_payment',
+  supplier_credit_allocations_binding_fk: 'supplier_credit_allocation',
+  supplier_refunds_binding_fk: 'supplier_refund',
+};
+
+/**
+ * P3-S6 (A-06, MP-2): the composite foreign keys that fix a USED method's
+ * posting account. An `UPDATE` of `payment_methods.posting_account_id` that a
+ * payment or refund row still names is refused by them — the physical half
+ * of `payment_method.posting_account_locked`, which the routine raises first
+ * under its lock. The same keys refuse, in the other direction, a settlement
+ * row whose account is not its method's; the routine checks that before its
+ * insert (`….settlement_changed`), so only the update reaches them.
+ */
+const METHOD_ACCOUNT_FOREIGN_KEYS: Readonly<Record<string, PaymentMethodCode>> = {
+  supplier_payments_method_fk: 'payment_method.posting_account_locked',
+  supplier_refunds_method_fk: 'payment_method.posting_account_locked',
+  // Another business's account: the eligibility check refuses it first as
+  // not found (it is invisible to the business), and the FK behind it too.
+  payment_methods_account_fk: 'payment_method.posting_account_not_found',
 };
 
 /** The `accounting.inventory_detail_missing` refusal of a document whose binding FK was refused at COMMIT. */
@@ -366,6 +458,17 @@ function bindingRefusal(sourceType: string): AccountingError | null {
 const UNIQUE_KEY_REFUSALS: Readonly<Record<string, PurchasingCode | `inventory.${string}`>> = {
   supplier_return_lines_pkey: 'supplier_return.lines_invalid',
   supplier_credit_notes_pkey: 'inventory.payload_invalid',
+  // P3-S6 (§2.2, §2.6): an allocation id is the client's and business-wide,
+  // while the payment's advisory key serialises only its own payment: two
+  // payments naming one allocation id race on it. The routine refuses the
+  // same collision, committed, as a malformed allocation set.
+  supplier_payment_allocations_pkey: 'supplier_payment.allocations_invalid',
+  // One consumer per remaining level of a note (R-63). The note row lock
+  // serialises every consumer, so a loser re-reads a moved level and is
+  // refused `….settlement_changed` by the routine; the key is the physical
+  // form of the same refusal.
+  supplier_credit_allocations_level_uq: 'supplier_credit_allocation.settlement_changed',
+  supplier_refunds_level_uq: 'supplier_refund.settlement_changed',
 };
 
 /** The constraint a unique-key refusal (`23505`) names, or null for any other error. */
@@ -381,14 +484,15 @@ function refusedUniqueKey(error: unknown): string | null {
  * its stable code, and nothing else is touched:
  *
  * - a package refusal → its code;
- * - a database refusal of a purchasing domain (`purchase.*`, `supplier.*`,
- *   `supplier_return.*`, `purchase_reversal.*`, `supplier_credit_note.*`) or
- *   an `inventory.*` one, raised by a routine or by a deferred guard at
- *   COMMIT → its code (§3);
+ * - a database refusal of a purchasing domain (S4, S5 and S6 §3), a
+ *   `payment_method.*` one (delegated) or an `inventory.*` one, raised by a
+ *   routine or by a deferred guard at COMMIT → its code (§3);
  * - a deferred binding FK refused at COMMIT (`23001` or `23503`) →
  *   `accounting.inventory_detail_missing` (A-14(a));
  * - a stock-source bridge's foreign key (`23001` or `23503`) →
  *   `inventory.source_line_frozen`: a received line is bound to its movement;
+ * - a method-account foreign key (`METHOD_ACCOUNT_FOREIGN_KEYS`) → its
+ *   `payment_method.*` code (A-06, MP-2);
  * - a unique key a client-chosen id lost a race on (`23505`,
  *   `UNIQUE_KEY_REFUSALS`) → the code the routine raises for the same
  *   collision, through the same table as every other code;
@@ -403,7 +507,7 @@ export function rethrowPurchasingRefusal(error: unknown): never {
   if (error instanceof AccountingError || error instanceof AppError || error instanceof TransactionSeamError || error instanceof UnclassifiedRefusalError) {
     throw error;
   }
-  const purchasingCode = parseDatabasePurchasingCode(error);
+  const purchasingCode = parseDatabasePurchasingCode(error) ?? parseDatabasePaymentMethodCode(error);
   if (purchasingCode !== null) throw classifiedRefusal(purchasingCode);
   const inventoryCode = parseDatabaseInventoryCode(error);
   if (inventoryCode !== null) throw classifiedRefusal(inventoryCode);
@@ -413,6 +517,8 @@ export function rethrowPurchasingRefusal(error: unknown): never {
     const binding = sourceType === undefined ? null : bindingRefusal(sourceType);
     if (binding !== null) throw binding;
     if (foreignKey.startsWith('stock_source_bridge_')) throw purchasingInventoryRefusal('inventory.source_line_frozen');
+    const methodCode = Object.hasOwn(METHOD_ACCOUNT_FOREIGN_KEYS, foreignKey) ? METHOD_ACCOUNT_FOREIGN_KEYS[foreignKey] : undefined;
+    if (methodCode !== undefined) throw paymentMethodRefusal(methodCode);
   }
   const uniqueKey = refusedUniqueKey(error);
   const uniqueCode = uniqueKey !== null && Object.hasOwn(UNIQUE_KEY_REFUSALS, uniqueKey) ? UNIQUE_KEY_REFUSALS[uniqueKey] : undefined;
