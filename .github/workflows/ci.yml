@@ -254,16 +254,15 @@ jobs:
         run: npm run gate:phase2:s8
         env:
           PG_PORT: '5432'
-      # P3-S7 — reads and merchant web UX, a PERMANENT gate since the P3-S7
-      # freeze. S7 has no migration: frozenThrough is a floor at 0068 and
-      # 0069 on belongs to P3-S8. Proves no cache after 0068, the eleven read
-      # routes in both process modules, the Phase 3 client and the S7 pages,
-      # Rule 23 and the jargon pass, the S7 suites and both runner canaries;
-      # then the web suites, the Phase 1 web contract golden and T-17 Tier 1
-      # (scale 0.1) last. It composes the permanent P3-S6 gate, and through it
-      # P3-S5 … P3-S1, P2-S8 and the chain back to Phase 1.
-      - name: Phase 3 slice gate — P3-S7 (composes P3-S6)
-        run: npm run gate:phase3:s7
+      # P3-S8 — inventory reconciliation and the account-domain guard, a
+      # PERMANENT gate since the P3-S8 freeze. 0069 is frozen at its accepted
+      # digest (S8_ACCEPTED) and frozenThrough is a floor at 0069. Proves the
+      # reconciler's column grants and the R-B1a guard (B-1, the Tech Lead's
+      # ruling of 2026-09-27), the definer law, the reconciliation reads and the
+      # S8 suites, then T-13 Tier 1 last. It composes the permanent P3-S7 gate,
+      # and through it P3-S6 … P3-S1, P2-S8 and the chain back to Phase 1.
+      - name: Phase 3 slice gate — P3-S8 (composes P3-S7)
+        run: npm run gate:phase3:s8
         env:
           PG_PORT: '5432'
       - name: Tampered-migration hard-fail proof

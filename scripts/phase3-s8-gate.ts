@@ -59,8 +59,10 @@ export const B1_RULING: 'R-B1a' | 'R-B1b' | 'R-B1c' = 'R-B1a';
 /** The S8 migration's name under each ruling (rulings header, "Migration"). */
 export const S8_MIGRATION_NAME = B1_RULING === 'R-B1a' ? '0069_inventory_reconciliation_read_and_account_domain.sql' : '0069_inventory_reconciliation_read.sql';
 
-/** The S8 migration's digest, recorded at the freeze. Empty while a candidate. */
-const S8_ACCEPTED: Readonly<Record<string, string>> = {};
+/** The S8 migration's digest, recorded at the freeze (P3-S8 accepted, 2026-09-27). */
+const S8_ACCEPTED: Readonly<Record<string, string>> = {
+  '0069_inventory_reconciliation_read_and_account_domain.sql': '912299e90a937b684b1829df4be90d5815ee61bcee79d9a01c5e47c4d6fe3084',
+};
 
 const ACCEPTED = Object.keys(S8_ACCEPTED).length > 0;
 
