@@ -157,8 +157,11 @@ export const SECURITY_RULES: readonly { readonly reason: string; readonly rule: 
   },
 ];
 
+/** This tool's own files state every rule's words; they are rated by their path alone. */
+export const SELF: readonly string[] = ['scripts/phase3-review-index.ts', 'tests/security/p3c-review-index.test.ts'];
+
 export function securityOf(path: string, text: string): string {
-  const reasons = SECURITY_RULES.filter((r) => r.test(path, text)).map((r) => r.reason);
+  const reasons = SECURITY_RULES.filter((r) => r.test(path, SELF.includes(path) ? '' : text)).map((r) => r.reason);
   return reasons.length === 0 ? 'standard' : `high: ${reasons.join(', ')}`;
 }
 
@@ -307,7 +310,8 @@ export interface Protection {
 /** For each production path: the tests that protect it. Tree only, no git. */
 export function protectionOf(tree: Tree, paths: readonly string[]): Map<string, Protection> {
   const all = [...tree.files];
-  const testFiles = all.filter(isTestFile).sort();
+  // The index's own suite names paths as fixtures, not as coverage.
+  const testFiles = all.filter((f) => isTestFile(f) && !SELF.includes(f)).sort();
   const supportFiles = all.filter(isTestSupport).sort();
   const basenameCount = new Map<string, number>();
   for (const f of all) basenameCount.set(basename(f), (basenameCount.get(basename(f)) ?? 0) + 1);
@@ -734,10 +738,10 @@ export function renderIndex(rows: readonly Row[]): string {
     "- **Purpose** — the curated purpose if there is one, else the first paragraph of the file's leading comment (the first `#` heading of a document), else the subject of the first non-merge commit that touched it. One sentence, clipped.",
   );
   out.push(
-    `- **Security** — \`high\` when any rule matches, naming each: ${SECURITY_RULES.map((r) => `**${r.reason}** (${r.rule})`).join('; ')}. Otherwise \`standard\`. The rules are coarse by design: \`standard\` is not a finding that a file is harmless.`,
+    `- **Security** — \`high\` when any rule matches, naming each: ${SECURITY_RULES.map((r) => `**${r.reason}** (${r.rule})`).join('; ')}. Otherwise \`standard\`. The index's own generator and suite, which spell out every rule, are rated by path alone. The rules are coarse by design: \`standard\` is not a finding that a file is harmless.`,
   );
   out.push(
-    `- **Protected by** — the test files that import the path or name it (its repository path; its file name when unique; for a migration its name or any routine it creates; for a script the \`npm run\` name that runs it; for a controller its route prefix, or \`/v1/<segment>\` of each handler under a bare \`/v1\`), directly or through a test helper that does — not through the shared harness (${HARNESS.map((h) => `\`${h}\``).join(', ')}), which every suite loads. When none does, the tests of the production file that imports it and has the most tests, marked \`via\`. The first ${SHOWN_TESTS} are named, sorted by path. "none found by reference" is a prompt to look, not a proof of no coverage.`,
+    `- **Protected by** — the test files that import the path or name it (its repository path; its file name when unique; for a migration its name or any routine it creates; for a script the \`npm run\` name that runs it; for a controller its route prefix, or \`/v1/<segment>\` of each handler under a bare \`/v1\`), directly or through a test helper that does — not through the shared harness (${HARNESS.map((h) => `\`${h}\``).join(', ')}), which every suite loads, and not through this index's own suite, whose fixtures name paths. When none does, the tests of the production file that imports it and has the most tests, marked \`via\`. The first ${SHOWN_TESTS} are named, sorted by path. "none found by reference" is a prompt to look, not a proof of no coverage.`,
   );
   out.push(
     `- **Group** — first matching rule: ${GROUP_RULES.map((r) => `**${GROUP_TITLES[r.group]}** ${r.rule}`).join('; ')}; anything else is **${GROUP_TITLES.other}**.`,
