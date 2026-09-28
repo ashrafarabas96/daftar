@@ -70,7 +70,7 @@ export const CORRECTIVE_MIGRATIONS: readonly string[] = [
   '0070_definer_ownership_hardening.sql', // TD-18 (directive §6)
   '0071_reversal_inventory_account_domain.sql', // S8 I-1 (directive §4)
   '0072_purchase_sub_unit_residue.sql', // TD-16 (directive §3)
-  '0073_default_warehouse_name.sql', // TD-20 default warehouse name (directive §10) — name to be confirmed by the DB stream
+  '0073_default_warehouse_locale_name.sql', // TD-20 default warehouse name (directive §10)
 ];
 
 /** The accepted digests, recorded at the corrective freeze. Empty while a candidate. */
@@ -106,9 +106,9 @@ export const isPending = (entry: object): entry is Pending => 'pending' in entry
 /** Every corrective suite, by id. Exact: nothing is discovered, and every `p3c-*` suite on disk must be listed. */
 export const CORRECTIVE_SUITES: readonly (SuiteEntry | Pending)[] = [
   // A — TD-16 (DB stream)
-  { id: 'A-01', blocker: 'A TD-16', pending: 'the DB stream’s TD-16 residue suite (reported as tests/integration/p3c-td16-residue-closure.test.ts)' },
+  { id: 'A-01', blocker: 'A TD-16', runner: 'root', file: 'tests/integration/p3c-td16-residue-closure.test.ts' },
   // B — S8 I-1 (DB stream)
-  { id: 'B-01', blocker: 'B I-1', pending: 'the DB stream’s I-1 reversal suite (reported as tests/integration/p3c-reversal-inventory-domain.test.ts)' },
+  { id: 'B-01', blocker: 'B I-1', runner: 'root', file: 'tests/integration/p3c-reversal-inventory-domain.test.ts' },
   // C — TD-19, BFF client address and refresh 429
   { id: 'C-01', blocker: 'C TD-19', runner: 'root', file: 'tests/integration/p3c-bff-client-ip.test.ts' },
   { id: 'C-02', blocker: 'C TD-19', runner: 'root', file: 'tests/integration/p3c-bff-admin-client-ip.test.ts' },
@@ -124,16 +124,16 @@ export const CORRECTIVE_SUITES: readonly (SuiteEntry | Pending)[] = [
   { id: 'C-12', blocker: 'C TD-19', runner: 'web', file: 'apps/web/test/bff-session-notice.test.tsx' },
   { id: 'C-13', blocker: 'C TD-19', runner: 'web', file: 'apps/web/test/bff-session-retry.test.ts' },
   // D — TD-18 (DB stream)
-  { id: 'D-01', blocker: 'D TD-18', pending: 'the DB stream’s TD-18 definer suite (reported as tests/security/p3c-td18-definer-ownership.test.ts)' },
-  { id: 'D-02', blocker: 'D TD-18', pending: 'the DB stream’s key install/retire suite (reported as tests/security/p3c-provisioning-key-install.test.ts)' },
+  { id: 'D-01', blocker: 'D TD-18', runner: 'root', file: 'tests/security/p3c-td18-definer-ownership.test.ts' },
+  { id: 'D-02', blocker: 'D TD-18', runner: 'root', file: 'tests/security/p3c-provisioning-key-install.test.ts' },
   // E — the release's secret scans
   { id: 'E-01', blocker: 'E secret scan', runner: 'root', file: 'tests/security/p3c-export-content-scan.test.ts' },
   { id: 'E-02', blocker: 'E secret scan', runner: 'root', file: 'tests/security/p3c-phase1-gate-secret-scope.test.ts' },
   { id: 'E-03', blocker: 'E secret scan', runner: 'root', file: 'tests/security/p3c-secret-scan.test.ts' },
   // H — TD-20
   { id: 'H-01', blocker: 'H TD-20', runner: 'web', file: 'apps/web/test/starting-stock.test.tsx' },
-  { id: 'H-02', blocker: 'H TD-20', pending: 'the DB stream’s openingPosted read suite (reported as tests/integration/p3c-inventory-access-opening.test.ts)' },
-  { id: 'H-03', blocker: 'H TD-20', pending: 'the DB stream’s default-warehouse-name suite, ar/en/tr (0073)' },
+  { id: 'H-02', blocker: 'H TD-20', runner: 'root', file: 'tests/integration/p3c-inventory-access-opening.test.ts' },
+  { id: 'H-03', blocker: 'H TD-20', runner: 'root', file: 'tests/integration/p3c-td20-default-warehouse-name.test.ts' },
   // K — TD-14
   { id: 'K-01', blocker: 'K TD-14', runner: 'root', file: 'tests/security/p3c-td14-platform-credential.test.ts' },
   // N — the review index
@@ -212,10 +212,10 @@ const TAMPER = 'tests/security/p3c-corrective-gate-tamper.test.ts';
 
 /** One row per old defect the directive names. A pending row is a FAIL. */
 export const RED_PROOFS: readonly (RedProof | Pending)[] = [
-  { id: 'RP-TD16', blocker: 'A TD-16', pending: 'TD-16 historical reproduction RED on the frozen S5 behaviour (DB stream)' },
-  { id: 'RP-I1', blocker: 'B I-1', pending: 'I-1 reversal discrepancy RED without 0071 (DB stream)' },
+  { id: 'RP-TD16', defect: 'TD-16 sub-unit AP residue from a partial return', proof: 'tests/integration/p3c-td16-residue-closure.test.ts::the exact 0.11 reproduction through the API' },
+  { id: 'RP-I1', defect: 'S8 I-1 reversal turns R-INV-01 red', proof: 'tests/integration/p3c-reversal-inventory-domain.test.ts::trigger dropped:' },
   { id: 'RP-TD19', defect: 'TD-19 shared BFF client address', proof: `${TAMPER}::TD-19 red:` },
-  { id: 'RP-TD18', blocker: 'D TD-18', pending: 'TD-18 insecure definer ownership / search path RED without 0070 (DB stream)' },
+  { id: 'RP-TD18', defect: 'TD-18 applier-owned definers without pg_temp last', proof: 'tests/security/p3c-td18-definer-ownership.test.ts::an owner reverted to the applier is named' },
   { id: 'RP-SCAN', defect: 'partial secret-history scan', proof: `${TAMPER}::E red:` },
   { id: 'RP-TR', defect: 'missing Turkish real-browser coverage', proof: `${TAMPER}::F red:` },
   { id: 'RP-TD20', defect: 'TD-20 impossible Starting stock action', proof: `${TAMPER}::TD-20 red:` },
