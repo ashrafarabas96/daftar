@@ -201,6 +201,7 @@ const EnvSchema = z
     // A process must not even RECEIVE secrets outside its authority.
     const forbid = (
       name:
+        | 'APP_DATABASE_URL'
         | 'PLATFORM_DATABASE_URL'
         | 'WORKER_DATABASE_URL'
         | 'PROVISIONER_DATABASE_URL'
@@ -222,6 +223,13 @@ const EnvSchema = z
       forbid('SMTP_URL', 'delivery is the worker process');
     }
     if (mode === 'platform-api') {
+      // TD-14 (Phase 3 corrective §13): the platform process opens no app
+      // pool (`Database` owns it only in merchant-api and all), so the
+      // merchant credential is one it cannot use. Beside the platform's
+      // key-install authority it would complete a signing authority in one
+      // environment (install a key, then act as daftar_app): refused, not
+      // silently ignored.
+      forbid('APP_DATABASE_URL', 'the platform process has no merchant (daftar_app) authority');
       forbid('WORKER_DATABASE_URL', 'platform API has no worker authority');
       forbid('PROVISIONER_DATABASE_URL', 'provisioning is a merchant-surface boundary');
       forbid('PROVISIONING_ASSERTION_KEY', 'only the merchant API mints provisioning assertions');

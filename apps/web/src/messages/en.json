@@ -93,6 +93,7 @@
   "common.back": "Back",
   "common.noPermission": "You don't have permission for this action",
   "common.offline": "You're offline — check your connection",
+  "session.retrying": "The connection is busy right now. You're still signed in — we'll try again in a moment.",
   "error.generic": "Unexpected error",
   "error.rateLimited": "Too many attempts — wait a moment and retry",
   "team.resend": "Resend",

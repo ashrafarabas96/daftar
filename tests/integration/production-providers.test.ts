@@ -76,6 +76,8 @@ describe('production provider wiring (Gate A §20–32)', () => {
   it('NODE_ENV=production + REDIS_URL → distributed Redis limiter', () => {
     // HTTP surface (platform-api) — strip worker/provisioner/credential secrets
     const {
+      // TD-14 (Phase 3 corrective §13): nor the merchant database credential.
+      APP_DATABASE_URL: _app,
       WORKER_DATABASE_URL: _w,
       PROVISIONER_DATABASE_URL: _pv,
       PROVISIONING_ASSERTION_KEY: _pa,
@@ -142,6 +144,8 @@ describe('process-level secret separation (§XXV–XXXI)', () => {
   it('platform-api REJECTS worker secrets and credential keys', () => {
     expect(() => loadConfig({ ...PROD_ENV, PROCESS_MODE: 'platform-api' })).toThrow(/must NOT be set in PROCESS_MODE=platform-api/);
     const {
+      // TD-14 (Phase 3 corrective §13): nor the merchant database credential.
+      APP_DATABASE_URL: _app,
       WORKER_DATABASE_URL: _w,
       PROVISIONER_DATABASE_URL: _pv,
       PROVISIONING_ASSERTION_KEY: _pa,

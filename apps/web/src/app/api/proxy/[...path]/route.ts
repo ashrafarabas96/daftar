@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server';
-import { API_URL } from '@/lib/api';
+import { API_URL } from '../../../../lib/api';
+import { clientAddressHeaders, retryAfterHeaders } from '../../../../lib/bff-upstream';
 
 /**
  * BFF catch-all proxy (ADR-001): the browser only ever talks to its own
@@ -24,6 +25,12 @@ import { API_URL } from '@/lib/api';
  * token. So a segment that is empty, `.` or `..`, or holds `/`, `\`, `?`, `#`
  * or a control character is refused with 400 before anything is sent; every
  * other segment is re-encoded, and the target must still sit under `/v1/`.
+ *
+ * TD-19: the password-reset request and completion reach the API through this
+ * proxy and are limited per client address, so the address chain travels too
+ * (`clientAddressHeaders`, only for a request the production entry stamped),
+ * and a 429 or 503 keeps the API's `Retry-After` on the way back. Nothing the
+ * browser sends as `X-Forwarded-For` is passed on as a header of its own.
  */
 const FORWARDED = ['authorization', 'content-type', 'x-business-id', 'idempotency-key', 'accept-language'];
 
@@ -58,6 +65,7 @@ async function handler(req: NextRequest, ctx: { params: Promise<{ path: string[]
     const v = req.headers.get(name);
     if (v) headers.set(name, v);
   }
+  for (const [name, value] of Object.entries(clientAddressHeaders(req))) headers.set(name, value);
   // Bodies are forwarded as raw bytes so multipart uploads (media) survive intact.
   const body = req.method === 'GET' || req.method === 'HEAD' ? undefined : Buffer.from(await req.arrayBuffer());
   const res = await fetch(target, { method: req.method, headers, body });
@@ -67,6 +75,7 @@ async function handler(req: NextRequest, ctx: { params: Promise<{ path: string[]
     headers: {
       'content-type': res.headers.get('content-type') ?? 'application/json',
       'cache-control': 'no-store',
+      ...retryAfterHeaders(res),
     },
   });
 }

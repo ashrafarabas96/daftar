@@ -14,6 +14,7 @@ import { isLocale, dirOf } from '@/lib/i18n';
 import '@fontsource/tajawal/400.css';
 import '@fontsource/tajawal/500.css';
 import '@fontsource/tajawal/700.css';
+import { SessionNotice } from './SessionNotice';
 
 // Every page carries a per-request CSP nonce (src/middleware.ts), and Next can
 // stamp its scripts with it only on a page rendered for that request: no page
@@ -30,7 +31,11 @@ export default async function LocaleLayout(props: { children: ReactNode; params:
   return (
     <html lang={locale} dir={dirOf(locale)}>
       <body style={{ margin: 0, background: colors.neutral[50], color: colors.neutral[900], fontFamily: typography.fontFamily.base }}>
-        <DaftarProvider locale={locale}>{props.children}</DaftarProvider>
+        <DaftarProvider locale={locale}>
+          {/* TD-19: shown only while a refresh waits out a rate limit or an outage. */}
+          <SessionNotice locale={locale} />
+          {props.children}
+        </DaftarProvider>
       </body>
     </html>
   );

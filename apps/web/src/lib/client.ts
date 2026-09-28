@@ -26,30 +26,118 @@ function readCsrfCookie(): string | null {
 }
 
 /**
- * Trade the refresh cookie for a fresh access token, through the BFF.
+ * Whether the page can currently reach its session (TD-19), for the retry
+ * notice every page shows (`SessionNotice` in the locale layout).
  *
- * The refresh token is single-use (the API rotates it, and a second use of the
- * same token revokes the whole session). So every caller in this page that
- * asks while a refresh is in flight shares that ONE request: the header, the
- * page and a 401 retry never send the same token twice.
+ * `retrying` means the refresh was rate-limited (429), the BFF or the API was
+ * unavailable (5xx), or the network failed: the refresh cookie is intact and
+ * the user is still signed in, so the refresh is tried again at `retryAt`.
  */
-export async function refreshSession(): Promise<boolean> {
-  refreshing ??= (async () => {
-    csrfToken = readCsrfCookie();
-    const res = await fetch('/api/auth/refresh', {
+export type SessionState = { readonly kind: 'ok' } | { readonly kind: 'retrying'; readonly retryAt: number };
+
+const SESSION_OK: SessionState = { kind: 'ok' };
+let session: SessionState = SESSION_OK;
+const sessionListeners = new Set<() => void>();
+let wakeRefresh: (() => void) | null = null;
+
+/** Seconds to wait when a retryable answer carries no usable Retry-After. */
+const DEFAULT_RETRY_SECONDS = 5;
+/** The longest wait honoured: the API's limit windows are five minutes. */
+const MAX_RETRY_SECONDS = 300;
+
+export function sessionState(): SessionState {
+  return session;
+}
+
+export function subscribeSession(listener: () => void): () => void {
+  sessionListeners.add(listener);
+  return () => {
+    sessionListeners.delete(listener);
+  };
+}
+
+/** The notice's "Try again": end the current wait and refresh now. */
+export function retrySessionNow(): void {
+  wakeRefresh?.();
+}
+
+function setSession(next: SessionState): void {
+  if (next.kind === 'ok' && session.kind === 'ok') return;
+  session = next;
+  for (const listener of [...sessionListeners]) listener();
+}
+
+function retryDelaySeconds(res: Response | null): number {
+  const header = res?.headers.get('retry-after') ?? null;
+  const seconds = header !== null && /^\d{1,6}$/.test(header) ? Number(header) : DEFAULT_RETRY_SECONDS;
+  return Math.min(Math.max(seconds, 1), MAX_RETRY_SECONDS);
+}
+
+/** Wait `ms`, or less if the notice's "Try again" is pressed. */
+function pause(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    const done = (): void => {
+      clearTimeout(timer);
+      wakeRefresh = null;
+      resolve();
+    };
+    const timer = setTimeout(done, ms);
+    wakeRefresh = done;
+  });
+}
+
+/** One refresh request; null when it never reached the BFF (offline, connection reset). */
+async function refreshOnce(): Promise<Response | null> {
+  csrfToken = readCsrfCookie();
+  try {
+    return await fetch('/api/auth/refresh', {
       method: 'POST',
       headers: { 'x-daftar-csrf': csrfToken ?? '' },
       // Should the page be left while the rotation is in flight, the browser
       // still completes it and keeps the rotated cookie (D-2).
       keepalive: true,
     });
-    if (!res.ok) {
-      accessToken = null;
-      return false;
+  } catch (e: unknown) {
+    // fetch rejects with a TypeError when the request could not be made.
+    if (e instanceof TypeError) return null;
+    throw e;
+  }
+}
+
+/**
+ * Trade the refresh cookie for a fresh access token, through the BFF.
+ *
+ * The refresh token is single-use (the API rotates it, and a second use of the
+ * same token revokes the whole session). So every caller in this page that
+ * asks while a refresh is in flight shares that ONE request: the header, the
+ * page and a 401 retry never send the same token twice.
+ *
+ * TD-19: a 429, a 5xx or a failed network is not a lost session — the BFF
+ * kept the cookie. The refresh waits (the answer's Retry-After, at most five
+ * minutes; the notice lets the user try sooner) and tries again, so a page
+ * never sends a signed-in user to the login screen because of a rate limit or
+ * an outage. Only a refused credential (401, or 403 when the CSRF pair is
+ * missing) resolves `false`.
+ */
+export async function refreshSession(): Promise<boolean> {
+  refreshing ??= (async () => {
+    for (;;) {
+      const res = await refreshOnce();
+      if (res === null || res.status === 429 || res.status >= 500) {
+        const seconds = retryDelaySeconds(res);
+        setSession({ kind: 'retrying', retryAt: Date.now() + seconds * 1000 });
+        await pause(seconds * 1000);
+        continue;
+      }
+      setSession(SESSION_OK);
+      if (!res.ok) {
+        accessToken = null;
+        return false;
+      }
+      const data = (await res.json()) as { accessToken: string };
+      accessToken = data.accessToken;
+      return true;
     }
-    const data = (await res.json()) as { accessToken: string };
-    accessToken = data.accessToken;
-    return true;
   })().finally(() => {
     refreshing = null;
   });
