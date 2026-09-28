@@ -5,8 +5,9 @@
  *   npm run gate:browser [-- options]
  *
  * Starts the real stack from nothing (tests/browser/stack.ts: fresh embedded
- * PostgreSQL, migrations from 0000, the built merchant API, `next start` of
- * the production web build), seeds every business through the API
+ * PostgreSQL, migrations from 0000, the built merchant API, and the
+ * production web build served by its production entry `node server.mts`,
+ * which is what `npm start` runs), seeds every business through the API
  * (seed.ts), then drives the Phase 3 merchant routes and command flows
  * (flows.ts) in headless Chromium in ar, en and tr at 360×640, 768×1024 and
  * 1280×800, checking the functional visual invariants (invariants.ts) at
@@ -33,6 +34,11 @@
  * Ports: BROWSER_PG_PORT, BROWSER_API_PORT, BROWSER_WEB_PORT. The database
  * directory: BROWSER_PG_DIR (default /tmp/daftar-browser-pg-<pg port>).
  */
+// FIRST: `embedded-postgres` (imported through ./stack) registers a shutdown
+// hook that exits with a hardcoded 0 when the event loop drains, which would
+// erase the failing exit code this gate records — the gate printed
+// "BROWSER GATE FAIL" and exited 0 before this line. See tests/helpers/exit-code.ts.
+import { protectFailingExitCode } from '../helpers/exit-code';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -43,6 +49,8 @@ import {
   LOGIN_BUDGET,
   LOGIN_PER_ACCOUNT_BUDGET,
   REFRESH_BUDGET,
+  ROUTE_BUDGET,
+  ROUTE_WINDOW_MS,
   TOUCH_MIN_PX,
   VIEWPORTS,
   comboTag,
@@ -52,10 +60,12 @@ import {
 } from './config';
 import { runFlows } from './flows';
 import { catalogFacts, type IssueKind } from './invariants';
-import { SlidingBudget } from './pacer';
+import { RouteBudgets, SlidingBudget } from './pacer';
 import { PLANTS, Run, type Plant, type StepRecord } from './run-context';
 import { seedLocale, type LocaleSeed } from './seed';
 import { ROOT, startStack } from './stack';
+
+protectFailingExitCode();
 
 interface Options {
   locales: Locale[];
@@ -152,6 +162,7 @@ async function main(): Promise<void> {
     const shared = {
       refresh: new SlidingBudget('refresh', REFRESH_BUDGET, AUTH_WINDOW_MS),
       login: new SlidingBudget('login', LOGIN_BUDGET, AUTH_WINDOW_MS),
+      route: new RouteBudgets(ROUTE_BUDGET, ROUTE_WINDOW_MS),
     };
     const browser = await chromium.launch();
     try {

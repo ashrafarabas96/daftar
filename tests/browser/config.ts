@@ -58,3 +58,14 @@ export const AUTH_WINDOW_MS = 300_000;
 export const REFRESH_BUDGET = 55; // API: 60 per address per 5 minutes
 export const LOGIN_BUDGET = 27; // API: 30 per address per 5 minutes
 export const LOGIN_PER_ACCOUNT_BUDGET = 9; // API: 10 per address and account per 5 minutes
+
+/**
+ * The API's general allowance (`ThrottlerModule`, apps/api/src/app/runtime.ts):
+ * 300 requests per minute for each route handler and client, on every HTTP
+ * route. Every request a page makes through the BFF proxy counts, and the
+ * gate's three locales drive the same pages at once from one machine, so the
+ * busiest reads (the header's own `me/businesses` and `inventory/access`)
+ * reach that allowance in a fast run. The gate paces each route below it.
+ */
+export const ROUTE_WINDOW_MS = 60_000;
+export const ROUTE_BUDGET = 270; // API: 300 per client and route handler per minute
