@@ -9,16 +9,17 @@
  *   `apps/admin/server.mts`, are required inputs: an export without them is
  *   refused as not self-contained, because `npm start` in either app runs them.
  *
- * Each case runs the REAL `scripts/export-release.ts` (the working tree's
- * copy) in a throw-away clone of the committed tree with exactly one planted
- * defect, and reads the export's own verdict. The clone's `node_modules` is a
- * symlink to this repository's; nothing is written here.
+ * Each case runs the REAL `scripts/export-release.ts` in a throw-away
+ * repository holding the delivered tree with exactly one planted defect, and
+ * reads the export's own verdict. Its `node_modules` is a symlink to this
+ * tree's; nothing is written here.
  */
 import { spawnSync } from 'node:child_process';
-import { appendFileSync, copyFileSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { appendFileSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
+import { deliveredFiles } from '../helpers/delivered-files';
 
 const REPO = join(__dirname, '../..');
 const temporaries: string[] = [];
@@ -26,25 +27,35 @@ afterAll(() => {
   for (const dir of temporaries) rmSync(dir, { recursive: true, force: true });
 });
 
-function git(cwd: string, args: string[]): string {
-  const res = spawnSync('git', args, { cwd, encoding: 'utf8' });
-  if (res.status !== 0) throw new Error(`git ${args.join(' ')} failed: ${res.stderr}`);
-  return res.stdout;
-}
-
-/** A clone of HEAD carrying the working tree's export script, with `plant` applied and committed. */
-function cloneWith(plant: (root: string) => void): string {
+/**
+ * A throw-away repository holding the delivered tree with `plant` applied and
+ * committed, so the export sees a clean checkout of exactly that tree.
+ */
+function repositoryWith(plant: (root: string) => void): string {
   const root = mkdtempSync(join(tmpdir(), 'daftar-export-scan-'));
   temporaries.push(root);
-  git(REPO, ['clone', '--quiet', '--no-hardlinks', REPO, root]);
-  git(root, ['config', 'user.email', 'export-scan@test.daftar.local']);
-  git(root, ['config', 'user.name', 'export scan test']);
-  copyFileSync(join(REPO, 'scripts/export-release.ts'), join(root, 'scripts/export-release.ts'));
-  plant(root);
-  git(root, ['add', '-A']);
-  git(root, ['commit', '--quiet', '--allow-empty', '-m', 'plant']);
+  // The delivered inventory: DELIVERY_MANIFEST.json in an extracted archive,
+  // `git ls-files` in a checkout (tests/helpers/delivered-files.ts). Built
+  // into a repository of its own, so this runs the same from either.
+  for (const rel of deliveredFiles(REPO)) {
+    if (rel === 'DELIVERY_MANIFEST.json' || !existsSync(join(REPO, rel))) continue;
+    mkdirSync(dirname(join(root, rel)), { recursive: true });
+    copyFileSync(join(REPO, rel), join(root, rel));
+  }
+  const commit = (message: string): string[][] => [
+    ['add', '-A'],
+    ['-c', 'user.email=export-scan@test.daftar.local', '-c', 'user.name=export scan test', 'commit', '--quiet', '--allow-empty', '-m', message],
+  ];
+  const steps = (phase: 'tree' | 'plant'): string[][] => (phase === 'tree' ? [['init', '--quiet'], ...commit('delivered tree')] : commit('plant'));
+  for (const phase of ['tree', 'plant'] as const) {
+    if (phase === 'plant') plant(root);
+    for (const args of steps(phase)) {
+      const res = spawnSync('git', args, { cwd: root, encoding: 'utf8' });
+      if (res.status !== 0) throw new Error(`git ${args.join(' ')} failed: ${res.stderr}`);
+    }
+  }
   symlinkSync(join(REPO, 'node_modules'), join(root, 'node_modules'), 'dir');
-  // A symlink is not the directory `.gitignore` names: keep the clone clean.
+  // A symlink is not the directory `.gitignore` names: keep the checkout clean.
   appendFileSync(join(root, '.git/info/exclude'), '/node_modules\n');
   return root;
 }
@@ -64,7 +75,7 @@ const PRIVATE_KEY = ['-----BEGIN', 'RSA PRIVATE KEY-----'].join(' ');
 
 describe('the release export refuses what it must', () => {
   it('control: an unplanted clone passes the required-input and content checks', () => {
-    const run = exportIn(cloneWith(() => undefined));
+    const run = exportIn(repositoryWith(() => undefined));
     expect(run.output).toMatch(/ok \d+ required inputs tracked/);
     expect(run.output).not.toMatch(/raw credential material in export/);
   }, 180_000);
@@ -73,7 +84,7 @@ describe('the release export refuses what it must', () => {
     'a private key planted in %s stops the export',
     (rel) => {
       const run = exportIn(
-        cloneWith((root) => {
+        repositoryWith((root) => {
           writeFileSync(join(root, rel), `export const planted = \`${PRIVATE_KEY}\nMIIB\`;\n`);
         }),
       );
@@ -87,8 +98,8 @@ describe('the release export refuses what it must', () => {
     'an export without %s is refused as not self-contained',
     (rel) => {
       const run = exportIn(
-        cloneWith((root) => {
-          git(root, ['rm', '--quiet', rel]);
+        repositoryWith((root) => {
+          rmSync(join(root, rel));
         }),
       );
       expect(run.status, run.output).toBe(1);
