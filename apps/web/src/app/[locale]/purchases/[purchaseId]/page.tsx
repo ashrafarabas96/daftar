@@ -10,10 +10,11 @@
  */
 import { use, useCallback, useEffect, useState } from 'react';
 import { notFound, useRouter } from 'next/navigation';
-import type { PurchaseReversalResultDto, PurchaseSettlementsDto } from '@daftar/shared-contracts';
+import type { PurchaseResidueWriteOffResultDto, PurchaseReversalResultDto, PurchaseSettlementsDto } from '@daftar/shared-contracts';
 import { makeT, type Locale } from '@/lib/i18n';
 import { isUuid } from '@/lib/route-ids';
 import {
+  closePurchaseLeftover,
   getPurchase,
   getPurchasePayable,
   getPurchaseSettlements,
@@ -24,10 +25,10 @@ import {
   type PurchaseReturnOptionsDto,
 } from '@/lib/phase3-api';
 import { SAVED_REFRESH_KEY, refusalKey, withConflictRetry } from '@/lib/phase3-errors';
-import { localDateIso } from '@/lib/phase3-format';
-import { isNonZeroMinor } from '@/views/common/amount-text';
+import { localDateIso, useFormDocumentId } from '@/lib/phase3-format';
 import { PageStateView, type PageStatus } from '@/views/common/feedback';
 import { PurchaseDetailView } from '@/views/purchases/PurchaseDetailView';
+import { purchaseDetailActions } from '@/views/purchases/detail-actions';
 import type { PurchaseDetailModel, PurchaseReturnRow, UndoReceiptForm } from '@/views/purchases/types';
 import { PageShell } from '../../AppHeader';
 import { itemsById, lineNames, warehouseNames } from '../_shared/lookups';
@@ -37,10 +38,14 @@ interface Loaded {
   purchase: PurchaseDetailModel;
   supplierId: string;
   outstandingTxnMinor: string | null;
+  /** The purchase's payable as the server read it; null when it is not received. */
+  payable: { outstandingTxnMinor: string; outstandingBaseMinor: string } | null;
   returns: PurchaseReturnRow[];
   settlements: PurchaseSettlementsDto | null;
   options: PurchaseReturnOptionsDto;
 }
+
+const CLOSED_FORM: UndoReceiptForm = { open: false, reason: '', reasonMissing: false, busy: false };
 
 export default function PurchaseDetailPage({ params }: { params: Promise<{ locale: Locale; purchaseId: string }> }) {
   const { locale, purchaseId } = use(params);
@@ -53,6 +58,10 @@ export default function PurchaseDetailPage({ params }: { params: Promise<{ local
   const [loadStatus, setLoadStatus] = useState<PageStatus | 'ready'>('loading');
   const [undo, setUndo] = useState<UndoReceiptForm>({ open: false, reason: '', reasonMissing: false, busy: false });
   const [undone, setUndone] = useState<PurchaseReversalResultDto | null>(null);
+  const [leftover, setLeftover] = useState<UndoReceiptForm>(CLOSED_FORM);
+  const [leftoverClosed, setLeftoverClosed] = useState<PurchaseResidueWriteOffResultDto | null>(null);
+  // One idempotency key per confirmation, reused if the same close is sent again.
+  const [leftoverKey, renewLeftoverKey] = useFormDocumentId();
   const [errorKey, setErrorKey] = useState<string | null>(null);
 
   const load = useCallback(async (): Promise<Loaded | null> => {
@@ -77,6 +86,7 @@ export default function PurchaseDetailPage({ params }: { params: Promise<{ local
       supplierId: purchase.supplierId,
       options,
       outstandingTxnMinor: payable ? payable.outstandingTxnMinor : null,
+      payable: payable ? { outstandingTxnMinor: payable.outstandingTxnMinor, outstandingBaseMinor: payable.outstandingBaseMinor } : null,
       settlements,
       returns: returns.items.map((r) => ({ returnId: r.returnId, documentDate: r.documentDate, currency: r.currency, carryingTxnMinor: r.carryingTxnMinor })),
       purchase: {
@@ -148,6 +158,39 @@ export default function PurchaseDetailPage({ params }: { params: Promise<{ local
     }
   }
 
+  /**
+   * TD-16: close the leftover the server reported, exactly as read — the
+   * server refuses it if the amount changed (`purchase_residue.amount_mismatch`)
+   * or can still be paid (`purchase_residue.not_below_base_unit`).
+   */
+  async function confirmLeftover() {
+    const reason = leftover.reason.trim();
+    if (reason.length === 0) {
+      setLeftover({ ...leftover, reasonMissing: true });
+      return;
+    }
+    const residue = loaded?.payable?.outstandingTxnMinor;
+    if (residue === undefined) return;
+    setLeftover({ ...leftover, busy: true });
+    setErrorKey(null);
+    try {
+      setLeftoverClosed(await closePurchaseLeftover(purchaseId, { writeOffDate: localDateIso(), residueAmountMinor: residue, reason }, leftoverKey));
+    } catch (error) {
+      setErrorKey(refusalKey(error));
+      setLeftover((f) => ({ ...f, busy: false }));
+      return;
+    }
+    setLeftover(CLOSED_FORM);
+    renewLeftoverKey();
+    // The leftover is closed; a failed re-read must not say otherwise (m-3).
+    try {
+      const fresh = await load();
+      if (fresh) setLoaded(fresh);
+    } catch {
+      setErrorKey(SAVED_REFRESH_KEY);
+    }
+  }
+
   // "Try again" shows the spinner at once, not the failed state again until the data arrives (N-9).
   const retryLoad = () => {
     setLoadStatus('loading');
@@ -172,14 +215,18 @@ export default function PurchaseDetailPage({ params }: { params: Promise<{ local
         outstandingTxnMinor={loaded.outstandingTxnMinor}
         returns={loaded.returns}
         settlements={loaded.settlements}
-        actions={{
-          continueDraft: purchase.status === 'draft' && context.can('purchases.manage'),
-          returnToSupplier: options.returnable && context.can('purchases.return'),
-          undoReceipt: options.reversible && context.can('purchases.receive'),
-          paySupplier: purchase.status === 'received' && isNonZeroMinor(loaded.outstandingTxnMinor) && context.can('suppliers.pay'),
-        }}
+        actions={purchaseDetailActions({
+          status: purchase.status,
+          returnable: options.returnable,
+          reversible: options.reversible,
+          payable: loaded.payable,
+          businessWide: context.access.businessWide,
+          can: context.can,
+        })}
         undo={undo}
         undone={undone}
+        leftover={leftover}
+        leftoverClosed={leftoverClosed}
         errorKey={errorKey}
         on={{
           onContinueDraft: () => router.push(`/${locale}/purchases/receive?draft=${purchaseId}`),
@@ -189,6 +236,10 @@ export default function PurchaseDetailPage({ params }: { params: Promise<{ local
           onUndoReason: (reason) => setUndo((u) => ({ ...u, reason, reasonMissing: false })),
           onConfirmUndo: () => void confirmUndo(),
           onCancelUndo: () => setUndo({ open: false, reason: '', reasonMissing: false, busy: false }),
+          onStartLeftover: () => setLeftover({ open: true, reason: t('purchasing.detail.leftoverReasonDefault'), reasonMissing: false, busy: false }),
+          onLeftoverReason: (reason) => setLeftover((f) => ({ ...f, reason, reasonMissing: false })),
+          onConfirmLeftover: () => void confirmLeftover(),
+          onCancelLeftover: () => setLeftover(CLOSED_FORM),
           onBack: () => router.push(`/${locale}/purchases`),
         }}
       />

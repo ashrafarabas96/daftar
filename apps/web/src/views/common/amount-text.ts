@@ -26,3 +26,15 @@ export function trimFractionZeros(quantity: string): string {
 export function isNonZeroMinor(amountMinor: string | null | undefined): boolean {
   return typeof amountMinor === 'string' && /^-?\d+$/.test(amountMinor) && /[1-9]/.test(amountMinor);
 }
+
+/**
+ * TD-16: the purchase's remaining amount is a leftover smaller than the
+ * smallest coin of the business's currency — something is still owed in the
+ * purchase's currency (`outstandingTxnMinor` > 0) and nothing in the
+ * business's (`outstandingBaseMinor` = 0). It can be neither paid nor
+ * returned against; the server offers only its write-off. Answered by text.
+ */
+export function isLeftoverOnly(payable: { outstandingTxnMinor: string; outstandingBaseMinor: string } | null): boolean {
+  if (payable === null) return false;
+  return /^\d+$/.test(payable.outstandingTxnMinor) && isNonZeroMinor(payable.outstandingTxnMinor) && /^0+$/.test(payable.outstandingBaseMinor);
+}

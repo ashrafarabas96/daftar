@@ -179,6 +179,8 @@ export interface PurchaseActions {
   /** "Undo receipt" (TL-4): present only when the S7 read says S5/S6 would accept it — absent, not disabled. */
   undoReceipt: boolean;
   paySupplier: boolean;
+  /** TD-16: close a leftover smaller than the smallest coin (the payable read says so); never beside "Pay". */
+  closeLeftover: boolean;
 }
 
 export interface UndoReceiptForm {

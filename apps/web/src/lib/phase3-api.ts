@@ -47,6 +47,8 @@ import type {
   PurchaseDto,
   PurchasePayableDto,
   PurchaseReceiptDto,
+  PurchaseResidueWriteOffRequestDto,
+  PurchaseResidueWriteOffResultDto,
   PurchaseReversalRequestDto,
   PurchaseReversalResultDto,
   PurchaseSettlementsDto,
@@ -464,6 +466,9 @@ export const returnToSupplier = (purchaseId: string, body: SupplierReturnRequest
   send<SupplierReturnResultDto>('POST', `${BFF}/purchases/${seg(purchaseId)}/returns`, body);
 export const undoPurchaseReceipt = (purchaseId: string, body: PurchaseReversalRequestDto) =>
   send<PurchaseReversalResultDto>('POST', `${BFF}/purchases/${seg(purchaseId)}/reversal`, body);
+/** TD-16 (0072): close a leftover smaller than the smallest coin. The key is the form's own, kept across a retry. */
+export const closePurchaseLeftover = (purchaseId: string, body: PurchaseResidueWriteOffRequestDto, idempotencyKey: string) =>
+  send<PurchaseResidueWriteOffResultDto>('POST', `${BFF}/purchases/${seg(purchaseId)}/residue-write-off`, body, idempotencyKey);
 
 // ── Supplier settlement (P3-S6; document-id retry kind) ──────────────────
 export const paySupplier = (body: SupplierPaymentRequestDto) => send<SupplierPaymentResultDto>('POST', `${BFF}/supplier-payments`, body);

@@ -11,6 +11,7 @@
 import type {
   PaymentMethodDto,
   PurchaseReceiptDto,
+  PurchaseResidueWriteOffResultDto,
   PurchaseReversalResultDto,
   PurchaseSettlementsDto,
   SupplierPaymentDto,
@@ -409,14 +410,31 @@ const REVERSAL: PurchaseReversalResultDto = {
   businessTransactionId: 'd374a2a6-000a-4a7b-8c9d-0000000bt002',
 };
 
+const LEFTOVER_CLOSED: PurchaseResidueWriteOffResultDto = {
+  purchaseId: PURCHASE_ID,
+  supplierId: SUPPLIER.supplierId,
+  currency: 'USD',
+  writeOffDate: '2026-09-28',
+  reason: 'Too small to pay',
+  residueTxnMinor: '11',
+  releasedBeforeTxnMinor: '4789',
+  residueBaseMinor: '0',
+  journalEntryId: null,
+  createdAt: '2026-09-28T09:00:00Z',
+  replayed: false,
+  businessTransactionId: 'd374a2a6-000a-4a7b-8c9d-0000000bt003',
+};
+
 const detailProps = (over: Partial<PurchaseDetailViewProps>): PurchaseDetailViewProps => ({
   purchase: DETAIL,
   outstandingTxnMinor: '4800',
   returns: [{ returnId: '3930a80c-0010-4a7b-8c9d-0000000rt001', documentDate: '2026-09-22', currency: 'USD', carryingTxnMinor: '640' }],
   settlements: SETTLEMENTS,
-  actions: { continueDraft: false, returnToSupplier: true, undoReceipt: false, paySupplier: true },
+  actions: { continueDraft: false, returnToSupplier: true, undoReceipt: false, paySupplier: true, closeLeftover: false },
   undo: { open: false, reason: '', reasonMissing: false, busy: false },
   undone: null,
+  leftover: { open: false, reason: '', reasonMissing: false, busy: false },
+  leftoverClosed: null,
   errorKey: null,
   on: {
     onContinueDraft: noop,
@@ -426,6 +444,10 @@ const detailProps = (over: Partial<PurchaseDetailViewProps>): PurchaseDetailView
     onUndoReason: noop,
     onConfirmUndo: noop,
     onCancelUndo: noop,
+    onStartLeftover: noop,
+    onLeftoverReason: noop,
+    onConfirmLeftover: noop,
+    onCancelLeftover: noop,
     onBack: noop,
   },
   ...over,
@@ -618,7 +640,7 @@ export const VIEW_REGISTRY: readonly ViewEntry[] = [
   defineView('PurchaseDetailView', PurchaseDetailView, {
     'received, part paid, returns and settlements': detailProps({}),
     'received, undo receipt offered and open': detailProps({
-      actions: { continueDraft: false, returnToSupplier: true, undoReceipt: true, paySupplier: false },
+      actions: { continueDraft: false, returnToSupplier: true, undoReceipt: true, paySupplier: false, closeLeftover: false },
       undo: { open: true, reason: '', reasonMissing: true, busy: false },
       settlements: null,
       returns: [],
@@ -628,13 +650,27 @@ export const VIEW_REGISTRY: readonly ViewEntry[] = [
       outstandingTxnMinor: null,
       returns: [],
       settlements: null,
-      actions: { continueDraft: true, returnToSupplier: false, undoReceipt: false, paySupplier: false },
+      actions: { continueDraft: true, returnToSupplier: false, undoReceipt: false, paySupplier: false, closeLeftover: false },
+    }),
+    'received, a leftover smaller than the smallest coin': detailProps({
+      outstandingTxnMinor: '11',
+      actions: { continueDraft: false, returnToSupplier: false, undoReceipt: false, paySupplier: false, closeLeftover: true },
+    }),
+    'received, closing the leftover': detailProps({
+      outstandingTxnMinor: '11',
+      actions: { continueDraft: false, returnToSupplier: false, undoReceipt: false, paySupplier: false, closeLeftover: true },
+      leftover: { open: true, reason: '', reasonMissing: true, busy: false },
+    }),
+    'leftover closed': detailProps({
+      outstandingTxnMinor: '0',
+      leftoverClosed: LEFTOVER_CLOSED,
+      actions: { continueDraft: false, returnToSupplier: false, undoReceipt: false, paySupplier: false, closeLeftover: false },
     }),
     'receipt undone': detailProps({
       purchase: { ...DETAIL, status: 'reversed' },
       outstandingTxnMinor: null,
       undone: REVERSAL,
-      actions: { continueDraft: false, returnToSupplier: false, undoReceipt: false, paySupplier: false },
+      actions: { continueDraft: false, returnToSupplier: false, undoReceipt: false, paySupplier: false, closeLeftover: false },
     }),
   }),
   defineView('ReturnToSupplierView', ReturnToSupplierView, {

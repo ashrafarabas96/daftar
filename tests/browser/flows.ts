@@ -219,6 +219,9 @@ export async function runFlows(run: Run): Promise<void> {
     await tabToRow(run, 'INV-2090');
     await page.waitForURL(new RegExp(`/purchases/${UUID_PATH}$`));
     await run.button(T('common.back')).waitFor();
+    // TD-16: an ordinary purchase with a payable amount offers Pay, never the leftover close.
+    if ((await run.button(T('purchasing.detail.leftoverClose')).count()) > 0)
+      run.fail('flow', 'the leftover close is offered on a purchase whose amount can be paid');
     await run.shot('purchase-detail');
   });
 

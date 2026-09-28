@@ -13,7 +13,7 @@ import { isNonZeroMinor } from '../common/amount-text';
 import { RefusalNotice } from '../common/feedback';
 import { CivilDate, Fact, Heading, Inline, Money, Muted, Notice, Panel, Quantity, Stack, Text, Title } from '../common/primitives';
 import { PurchaseStatusBadge } from './PurchaseListView';
-import type { PurchaseReversalResultDto, PurchaseSettlementsDto } from '@daftar/shared-contracts';
+import type { PurchaseResidueWriteOffResultDto, PurchaseReversalResultDto, PurchaseSettlementsDto } from '@daftar/shared-contracts';
 import type { PurchaseActions, PurchaseDetailModel, PurchaseReturnRow, UndoReceiptForm } from './types';
 
 export interface PurchaseDetailViewProps {
@@ -27,6 +27,10 @@ export interface PurchaseDetailViewProps {
   undo: UndoReceiptForm;
   /** The server's answer once "Undo receipt" succeeded (its entry and movement ids are never rendered). */
   undone: PurchaseReversalResultDto | null;
+  /** TD-16: the "close the leftover" confirmation, the same shape as Undo receipt's. */
+  leftover: UndoReceiptForm;
+  /** The server's answer once the leftover was closed (its entry and trace ids are never rendered). */
+  leftoverClosed: PurchaseResidueWriteOffResultDto | null;
   errorKey: string | null;
   on: {
     onContinueDraft: () => void;
@@ -36,6 +40,10 @@ export interface PurchaseDetailViewProps {
     onUndoReason: (value: string) => void;
     onConfirmUndo: () => void;
     onCancelUndo: () => void;
+    onStartLeftover: () => void;
+    onLeftoverReason: (value: string) => void;
+    onConfirmLeftover: () => void;
+    onCancelLeftover: () => void;
     onBack: () => void;
   };
 }
@@ -59,6 +67,7 @@ export function PurchaseDetailView(props: PurchaseDetailViewProps & ViewBaseProp
         </Fact>
       ) : null}
       {props.undone !== null ? <Notice tone="success">{t('purchasing.detail.undone')}</Notice> : null}
+      {props.leftoverClosed !== null ? <Notice tone="success">{t('purchasing.detail.leftoverClosed')}</Notice> : null}
       <RefusalNotice t={t} locale={locale} errorKey={props.errorKey} />
 
       <List
@@ -102,6 +111,7 @@ export function PurchaseDetailView(props: PurchaseDetailViewProps & ViewBaseProp
           {t('payments.title')}
         </Button>
       ) : null}
+      {props.actions.closeLeftover ? <CloseLeftover {...props} /> : null}
       {props.actions.returnToSupplier ? (
         <Button variant="secondary" fullWidth onClick={on.onReturn}>
           {t('purchasing.return.title')}
@@ -178,6 +188,43 @@ function UndoReceipt(props: PurchaseDetailViewProps & ViewBaseProps) {
         {t('purchasing.detail.undoConfirm')}
       </Button>
       <Button variant="ghost" fullWidth disabled={undo.busy} onClick={on.onCancelUndo}>
+        {t('common.cancel')}
+      </Button>
+    </Panel>
+  );
+}
+
+/**
+ * TD-16: a leftover smaller than the smallest coin, which no payment can
+ * carry, closed with a reason behind a confirmation (0072). One action; the
+ * hint says why "Pay" is not offered.
+ */
+function CloseLeftover(props: PurchaseDetailViewProps & ViewBaseProps) {
+  const { t, leftover, on } = props;
+  if (!leftover.open) {
+    return (
+      <>
+        <Muted>{t('purchasing.detail.leftoverHint')}</Muted>
+        <Button fullWidth onClick={on.onStartLeftover}>
+          {t('purchasing.detail.leftoverClose')}
+        </Button>
+      </>
+    );
+  }
+  return (
+    <Panel>
+      <Text strong>{t('purchasing.detail.leftoverTitle')}</Text>
+      <Muted>{t('purchasing.detail.leftoverExplain')}</Muted>
+      <Textarea
+        label={t('purchasing.detail.leftoverReason')}
+        value={leftover.reason}
+        error={leftover.reasonMissing ? t('purchasing.detail.leftoverReasonRequired') : undefined}
+        onChange={on.onLeftoverReason}
+      />
+      <Button fullWidth loading={leftover.busy} onClick={on.onConfirmLeftover}>
+        {t('purchasing.detail.leftoverConfirm')}
+      </Button>
+      <Button variant="ghost" fullWidth disabled={leftover.busy} onClick={on.onCancelLeftover}>
         {t('common.cancel')}
       </Button>
     </Panel>
