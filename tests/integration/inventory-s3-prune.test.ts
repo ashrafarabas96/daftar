@@ -161,8 +161,8 @@ async function definition(r: Registry): Promise<string> {
 /** The body 0061 replaced: the same function with the try-lock guard removed, a plain DELETE. */
 function plainDeleteBody(def: string, r: Registry): string {
   const guarded = new RegExp(
-    // TD-18 (0070) schema-qualifies the provisioning body's table.
-    `IF pg_try_advisory_xact_lock\\(hashtext\\('${r.lockKey.replace('.', '\\.')}'\\), hashtext\\('hygiene'\\)\\) THEN\\s*(DELETE FROM (?:public\\.)?${r.table} WHERE [^;]+;)\\s*END IF;`,
+    // TD-18 (0070) schema-qualifies the provisioning body's table and (review I2) its built-ins.
+    `IF (?:pg_catalog\\.)?pg_try_advisory_xact_lock\\((?:pg_catalog\\.)?hashtext\\('${r.lockKey.replace('.', '\\.')}'\\), (?:pg_catalog\\.)?hashtext\\('hygiene'\\)\\) THEN\\s*(DELETE FROM (?:public\\.)?${r.table} WHERE [^;]+;)\\s*END IF;`,
   );
   const plain = def.replace(guarded, '$1');
   expect(plain, 'the installed body carries the guarded prune').not.toBe(def);

@@ -21,6 +21,9 @@ import {
   applierOwnedDefinerProblems,
   CATALOGUE_FAMILIES,
   CATALOGUE_QUERIES,
+  DEFINER_PATHS_QUERY,
+  definerPathProblems,
+  type DefinerPathRow,
   PUBLIC_GRANTEE,
   appliedExactly,
   catalogueDifferences,
@@ -404,6 +407,34 @@ describe('TD-18 (0070): the applier owns no SECURITY DEFINER routine; the four h
       ).toBe(true);
       expect(create < grant && grant < bracket && bracket < alter && alter < close, name).toBe(true);
     }
+  });
+
+  it('review I3: every definer path lists pg_catalog before public and pg_temp last; each departure is named', () => {
+    const row = (f: string, ...paths: string[]): DefinerPathRow => ({ f, paths });
+    expect(definerPathProblems([row('public.a()', `search_path=${PINNED_PATH}`), row('public.b()', 'search_path=pg_catalog, pg_temp')])).toEqual([]);
+    expect(
+      definerPathProblems([
+        row('public.provision_create_tenant(p_tenant_id uuid)', 'search_path=public, pg_catalog'),
+        row('public.accounting_seed_chart(p_business_id uuid)', 'search_path=public, pg_catalog, pg_temp'),
+        row('public.c()'),
+        row('public.d()', 'search_path=pg_temp, pg_catalog, public'),
+        row('public.e()', 'search_path=public, pg_temp'),
+        row('public.f()', `search_path=${PINNED_PATH}`, 'search_path=public'),
+        row('public.g()', 'search_path="pg_catalog", "public", "pg_temp"'),
+      ]),
+    ).toEqual([
+      'public.provision_create_tenant(p_tenant_id uuid) lists public before pg_catalog',
+      'public.provision_create_tenant(p_tenant_id uuid) does not name pg_temp last',
+      'public.accounting_seed_chart(p_business_id uuid) lists public before pg_catalog',
+      'public.c() sets no search_path',
+      'public.d() does not name pg_temp last',
+      'public.e() does not name pg_catalog',
+      'public.f() sets 2 search_path values',
+    ]);
+    expect(definerPathProblems([])).toEqual(['no SECURITY DEFINER routine was read']);
+    expect(DEFINER_PATHS_QUERY).toMatch(/p\.prosecdef/);
+    expect(DEFINER_PATHS_QUERY).toMatch(/deptype = 'e'/);
+    expect(DEFINER_PATHS_QUERY).not.toMatch(/nspname = 'public'/);
   });
 });
 

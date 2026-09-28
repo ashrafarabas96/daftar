@@ -416,7 +416,7 @@ describe('TD-20 (4) the upgrade: 0073 renames exactly the provably system-writte
 // ── (5) the routine and the trigger ────────────────────────────────────────
 
 describe('TD-20 (5) provision_create_business is untouched; the name is given by one narrow INVOKER trigger', () => {
-  it('the routine keeps 0038’s body, owner, definer, path and grant (re-creating it would make it a Phase 3 routine the definer law refuses)', async () => {
+  it('the routine keeps 0038’s body, owner, definer and grant (re-creating it would make it a Phase 3 routine the definer law refuses); only 0070 re-pins its path', async () => {
     const file = readFileSync(join(__dirname, '../../infrastructure/database/migrations/0038_provisioning_assertions.sql'), 'utf8');
     const start = file.indexOf('CREATE OR REPLACE FUNCTION provision_create_business(');
     expect(start).toBeGreaterThan(0);
@@ -439,7 +439,8 @@ describe('TD-20 (5) provision_create_business is untouched; the name is given by
       src: frozen,
       definer: true,
       owner: 'daftar_platform',
-      config: ['search_path=public, pg_catalog'],
+      // 0038 said `public, pg_catalog`; 0070 (review I3) pins pg_temp last.
+      config: ['search_path=pg_catalog, public, pg_temp'],
       grantees: ['daftar_provisioner'],
       public_execute: false,
     });

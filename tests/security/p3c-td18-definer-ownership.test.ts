@@ -35,6 +35,9 @@ import {
   APPLIER_OWNED_DEFINERS,
   APPLIER_OWNED_DEFINERS_QUERY,
   applierOwnedDefinerProblems,
+  DEFINER_PATHS_QUERY,
+  definerPathProblems,
+  type DefinerPathRow,
   TD18_DEFINER_OWNERS,
   TD18_DEFINER_OWNERS_QUERY,
   td18DefinerProblems,
@@ -57,6 +60,7 @@ import {
   workerDbUrl,
   type TestApp,
 } from '../helpers/test-app';
+import { createScratchDb, migrationFiles } from '../helpers/scratch-db';
 
 const PINNED = 'search_path=pg_catalog, public, pg_temp';
 const CATALOG = 'daftar_catalog_internal';
@@ -555,4 +559,88 @@ describe('TD-18 flows through the four routines: onboarding, second business, ca
       'tenant_membership:*:true:public',
     ]);
   });
+});
+
+// ── Review I3: every SECURITY DEFINER routine, not only the four ────────────
+
+/** The thirteen older definers 0070 §5b re-pins (their frozen paths put public first or left pg_temp unnamed). */
+const REPINNED = [
+  'public.accounting_assert_entry_valid',
+  'public.accounting_seed_chart',
+  'public.accounting_seed_chart_trg',
+  'public.accounting_validate_entry',
+  'public.accounting_validate_entry_of_line',
+  'public.businesses_base_currency_lock',
+  'public.provision_accept_invitation',
+  'public.provision_create_business',
+  'public.provision_create_tenant',
+  'public.provision_expire_invitation',
+  'public.provision_peek_invitation',
+  'public.provision_persist_operation',
+  'public.provision_replay_operation',
+];
+
+async function definerPaths(q: { query: Client['query'] } | ReturnType<typeof ownerPool> = ownerPool()): Promise<DefinerPathRow[]> {
+  return (await q.query<DefinerPathRow>(DEFINER_PATHS_QUERY)).rows;
+}
+
+describe('review I3: every SECURITY DEFINER routine lists pg_catalog before public and pg_temp last (0070 §5b)', () => {
+  it('the superuser build: the whole catalogue, the thirteen re-pinned routines included, exactly pinned', async () => {
+    const rows = await definerPaths();
+    expect(rows.length).toBeGreaterThan(100);
+    expect(definerPathProblems(rows)).toEqual([]);
+    const repinned = rows.filter((r) => REPINNED.includes(r.f.slice(0, r.f.indexOf('('))));
+    expect(repinned.map((r) => r.f.slice(0, r.f.indexOf('(')))).toEqual(REPINNED);
+    for (const r of repinned) expect(r.paths, r.f).toEqual([PINNED]);
+  });
+
+  it('a public-first path, an unnamed pg_temp and a lost path are each named (rolled back)', async () => {
+    await rolledBack(async (c) => {
+      await c.query(`ALTER FUNCTION provision_create_tenant(uuid) SET search_path = public, pg_catalog`);
+      await c.query(`ALTER FUNCTION accounting_seed_chart(uuid) SET search_path = public, pg_catalog, pg_temp`);
+      await c.query(`ALTER FUNCTION accounting_post_entry(date, text, text, jsonb) RESET search_path`);
+      expect(definerPathProblems(await definerPaths(c))).toEqual([
+        'public.accounting_post_entry(p_entry_date date, p_description text, p_request_id text, p_lines jsonb) sets no search_path',
+        'public.accounting_seed_chart(p_business_id uuid) lists public before pg_catalog',
+        'public.provision_create_tenant(p_tenant_id uuid) lists public before pg_catalog',
+        'public.provision_create_tenant(p_tenant_id uuid) does not name pg_temp last',
+      ]);
+    });
+  });
+
+  it('the migrator build: red on the frozen history through 0069, green once daftar_migrator applies 0070 onward', async () => {
+    const frozenHead = migrationFiles().find((f) => f.startsWith('0069_'));
+    expect(frozenHead).toBeDefined();
+    const db = await createScratchDb('daftar_p3c_td18_i3', { upTo: frozenHead, migratorOwned: true });
+    try {
+      const before = definerPathProblems(await definerPaths(db.pool));
+      const named = [...new Set(before.map((p) => p.slice(0, p.indexOf('('))))].sort();
+      // The four TD-18 routines (public first) and the thirteen older ones.
+      expect(named).toEqual(
+        [
+          ...REPINNED,
+          'public.catalog_identifiers_sync',
+          'public.provision_actor',
+          'public.provision_assertion_key_install',
+          'public.provision_assertion_key_retire',
+        ].sort(),
+      );
+      const applied = await db.migrateRest('daftar_migrator');
+      expect(applied[0]).toMatch(/^0070_/);
+      const after = await definerPaths(db.pool);
+      expect(definerPathProblems(after)).toEqual([]);
+      for (const r of after.filter((x) => REPINNED.includes(x.f.slice(0, x.f.indexOf('('))))) expect(r.paths, r.f).toEqual([PINNED]);
+      const owners = await db.pool.query<{ f: string; owner: string }>(
+        `SELECT p.proname::text AS f, pg_get_userbyid(p.proowner)::text AS owner FROM pg_proc p
+          WHERE p.pronamespace = 'public'::regnamespace AND ('public.' || p.proname) = ANY($1::text[]) ORDER BY 1`,
+        [REPINNED],
+      );
+      // The path changed; the owners did not.
+      expect(owners.rows.map((r) => `${r.f}:${r.owner}`)).toEqual(
+        REPINNED.map((f) => `${f.slice('public.'.length)}:${f.includes('provision_') ? 'daftar_platform' : 'daftar_accounting_internal'}`),
+      );
+    } finally {
+      await db.drop();
+    }
+  }, 300_000);
 });
