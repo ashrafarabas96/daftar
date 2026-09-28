@@ -67,7 +67,8 @@
     "export:release:phase3": "tsx scripts/export-release.ts --phase=3",
     "verify:history": "tsx scripts/verify-migration-history.ts",
     "rehearse:phase2:rollback": "tsx scripts/phase2-rollback-rehearsal.ts",
-    "rehearse:phase3:deployed": "tsx scripts/phase3-deployed-rehearsal.ts"
+    "rehearse:phase3:deployed": "tsx scripts/phase3-deployed-rehearsal.ts",
+    "gate:browser": "tsx tests/browser/gate.ts"
   },
   "engines": {
     "node": ">=24 <25"
@@ -82,6 +83,7 @@
     "@typescript-eslint/parser": "8.48.0",
     "embedded-postgres": "^18.4.0-beta.17",
     "eslint": "9.39.1",
+    "playwright-core": "1.56.1",
     "prettier": "3.7.1",
     "supertest": "^7.1.4",
     "tsx": "4.23.13",
