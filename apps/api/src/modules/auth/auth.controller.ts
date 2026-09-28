@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { LOCALES, type MeDto } from '@daftar/shared-contracts';
 import { ZodValidationPipe } from '../../common/validation';
 import { Principal, Public, type PrincipalInfo } from '../../common/guards';
-import { clientIp } from '../../common/client-ip';
+import { clientLimiterKey } from '../../common/client-ip';
 import type { AppConfig } from '../../config';
 import { AuthService } from './auth.service';
 
@@ -33,7 +33,7 @@ export class AuthController {
   @Post('register')
   @UsePipes(new ZodValidationPipe(RegisterSchema))
   async register(@Body() body: unknown, @Req() req: Request) {
-    return this.auth.register(body as z.infer<typeof RegisterSchema>, clientIp(req, this.config));
+    return this.auth.register(body as z.infer<typeof RegisterSchema>, clientLimiterKey(req, this.config));
   }
 
   @Public()
@@ -41,21 +41,21 @@ export class AuthController {
   @UsePipes(new ZodValidationPipe(LoginSchema))
   async login(@Body() body: unknown, @Req() req: Request) {
     const b = body as z.infer<typeof LoginSchema>;
-    return this.auth.login(b.email, b.password, clientIp(req, this.config));
+    return this.auth.login(b.email, b.password, clientLimiterKey(req, this.config));
   }
 
   @Public()
   @Post('refresh')
   @UsePipes(new ZodValidationPipe(RefreshSchema))
   async refresh(@Body() body: unknown, @Req() req: Request) {
-    return this.auth.refresh((body as z.infer<typeof RefreshSchema>).refreshToken, clientIp(req, this.config));
+    return this.auth.refresh((body as z.infer<typeof RefreshSchema>).refreshToken, clientLimiterKey(req, this.config));
   }
 
   @Public()
   @Post('password-reset/request')
   @UsePipes(new ZodValidationPipe(ResetRequestSchema))
   async requestReset(@Body() body: unknown, @Req() req: Request) {
-    await this.auth.requestPasswordReset((body as z.infer<typeof ResetRequestSchema>).email, clientIp(req, this.config));
+    await this.auth.requestPasswordReset((body as z.infer<typeof ResetRequestSchema>).email, clientLimiterKey(req, this.config));
     // Identical response whether or not the email exists — no enumeration.
     return { ok: true };
   }
@@ -65,7 +65,7 @@ export class AuthController {
   @UsePipes(new ZodValidationPipe(ResetSchema))
   async completeReset(@Body() body: unknown, @Req() req: Request) {
     const b = body as z.infer<typeof ResetSchema>;
-    await this.auth.resetPassword(b.token, b.password, clientIp(req, this.config));
+    await this.auth.resetPassword(b.token, b.password, clientLimiterKey(req, this.config));
     return { ok: true };
   }
 

@@ -4,7 +4,7 @@ import { AppError } from '@daftar/domain-core';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import type { Request } from 'express';
 import type { AppConfig } from '../config';
-import { clientIp } from '../common/client-ip';
+import { clientLimiterKey } from '../common/client-ip';
 import { createLogger } from '../infra/logger';
 import { Database } from '../infra/database';
 import { InMemoryMetrics, METRICS, type Metrics } from '../infra/metrics';
@@ -106,13 +106,14 @@ export interface RuntimeSeams {
  * limits (TD-19) — not the TCP peer: behind the web server the peer is the
  * web server, and keyed on it every merchant behind one web instance would
  * share one allowance per route. An untrusted peer is its own client, so a
- * forged X-Forwarded-For buys nothing.
+ * forged X-Forwarded-For buys nothing. An IPv6 client counts per /64
+ * (`limiterKey`, review L-3).
  */
 export function httpImports(config: Pick<AppConfig, 'TRUST_PROXY' | 'TRUSTED_PROXIES'>) {
   return [
     ThrottlerModule.forRoot({
       throttlers: [{ ttl: 60_000, limit: 300 }],
-      getTracker: (_req: unknown, context: ExecutionContext) => clientIp(context.switchToHttp().getRequest<Request>(), config),
+      getTracker: (_req: unknown, context: ExecutionContext) => clientLimiterKey(context.switchToHttp().getRequest<Request>(), config),
     }),
   ];
 }
