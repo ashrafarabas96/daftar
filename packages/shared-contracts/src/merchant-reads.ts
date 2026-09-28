@@ -62,6 +62,12 @@ export interface InventoryAccessDto {
   businessWide: boolean;
   /** The caller's effective subset of `PHASE3_PERMISSIONS`, in that list's order. */
   permissions: Phase3Permission[];
+  /**
+   * True when this business already holds a posted inventory opening (the
+   * predicate of `inventory.opening_already_posted`). A flag only: no
+   * quantity, value or id.
+   */
+  openingPosted: boolean;
 }
 
 // ── Warehouses (A-05) ─────────────────────────────────────────────────────

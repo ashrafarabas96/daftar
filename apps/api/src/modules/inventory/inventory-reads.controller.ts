@@ -38,7 +38,7 @@ export class InventoryReadsController {
   constructor(@Inject(InventoryReadService) private readonly reads: InventoryReadService) {}
 
   @Get('access')
-  access(@Membership() m: MembershipContext): InventoryAccessDto {
+  access(@Membership() m: MembershipContext): Promise<InventoryAccessDto> {
     return this.reads.access(m);
   }
 

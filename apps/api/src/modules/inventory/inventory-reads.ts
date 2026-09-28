@@ -19,6 +19,7 @@ import type { QueryResultRow } from 'pg';
 import { Database } from '../../infra/database';
 import type { MembershipContext } from '../tenancy/tenancy.service';
 import { inventoryRefusal } from './inventory-errors';
+import { postedOpeningExists } from './inventory-stock-read';
 import { assertWarehouseReachable, likeEscaped, quantityText, reachableWarehouses, requireAnyPermission, searchQueryParam } from './read-scope';
 
 /**
@@ -181,9 +182,18 @@ export class InventoryReadService {
     return (await this.db.scoped<T>({ tenantId: m.tenantId, businessId: m.businessId }, text, params)).rows;
   }
 
-  /** The caller's own Phase 3 grants and scope (A-05). Advisory: every command still enforces its own authority. */
-  access(m: MembershipContext): InventoryAccessDto {
-    return { businessWide: m.branchScopeMode === 'all', permissions: PHASE3_PERMISSIONS.filter((p) => hasPermission(m.roles, p)) };
+  /**
+   * The caller's own Phase 3 grants and scope (A-05). Advisory: every command
+   * still enforces its own authority. `openingPosted` is the predicate the
+   * opening command refuses on (`inventory.opening_already_posted`), read
+   * under the caller's business scope; it reveals no quantity or value.
+   */
+  async access(m: MembershipContext): Promise<InventoryAccessDto> {
+    return {
+      businessWide: m.branchScopeMode === 'all',
+      permissions: PHASE3_PERMISSIONS.filter((p) => hasPermission(m.roles, p)),
+      openingPosted: await postedOpeningExists(this.db, { tenantId: m.tenantId, businessId: m.businessId }),
+    };
   }
 
   /**
