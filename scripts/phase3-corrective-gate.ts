@@ -212,10 +212,18 @@ const TAMPER = 'tests/security/p3c-corrective-gate-tamper.test.ts';
 
 /** One row per old defect the directive names. A pending row is a FAIL. */
 export const RED_PROOFS: readonly (RedProof | Pending)[] = [
-  { id: 'RP-TD16', defect: 'TD-16 sub-unit AP residue from a partial return', proof: 'tests/integration/p3c-td16-residue-closure.test.ts::the exact 0.11 reproduction through the API' },
+  {
+    id: 'RP-TD16',
+    defect: 'TD-16 sub-unit AP residue from a partial return',
+    proof: 'tests/integration/p3c-td16-residue-closure.test.ts::the exact 0.11 reproduction through the API',
+  },
   { id: 'RP-I1', defect: 'S8 I-1 reversal turns R-INV-01 red', proof: 'tests/integration/p3c-reversal-inventory-domain.test.ts::trigger dropped:' },
   { id: 'RP-TD19', defect: 'TD-19 shared BFF client address', proof: `${TAMPER}::TD-19 red:` },
-  { id: 'RP-TD18', defect: 'TD-18 applier-owned definers without pg_temp last', proof: 'tests/security/p3c-td18-definer-ownership.test.ts::an owner reverted to the applier is named' },
+  {
+    id: 'RP-TD18',
+    defect: 'TD-18 applier-owned definers without pg_temp last',
+    proof: 'tests/security/p3c-td18-definer-ownership.test.ts::an owner reverted to the applier is named',
+  },
   { id: 'RP-SCAN', defect: 'partial secret-history scan', proof: `${TAMPER}::E red:` },
   { id: 'RP-TR', defect: 'missing Turkish real-browser coverage', proof: `${TAMPER}::F red:` },
   { id: 'RP-TD20', defect: 'TD-20 impossible Starting stock action', proof: `${TAMPER}::TD-20 red:` },

@@ -300,6 +300,7 @@
   "error.purchase_residue.reason_required": "Write a reason for closing the leftover amount. Nothing was saved.",
   "error.purchase_residue.date_before_purchase": "The date is before the purchase date. Nothing was saved. Choose a later date.",
   "error.purchase_residue.date_in_future": "The date is in the future. Nothing was saved. Choose today or an earlier date.",
+  "error.purchase_residue.date_before_settlement": "The date is before the last return or payment of this purchase. Nothing was saved. Choose a later date.",
   "error.purchase_residue.not_below_base_unit": "The amount still owed can be paid, so it cannot be closed as a leftover. Nothing was saved. Pay it instead.",
   "error.purchase_residue.nothing_outstanding": "Nothing is owed on this purchase any more. Nothing was saved.",
   "error.purchase_residue.amount_mismatch": "The amount owed changed since you opened this. Nothing was saved. Refresh and try again.",

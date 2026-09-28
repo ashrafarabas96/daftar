@@ -300,6 +300,7 @@
   "error.purchase_residue.reason_required": "Kalan tutarı kapatmak için bir neden yazın. Hiçbir şey kaydedilmedi.",
   "error.purchase_residue.date_before_purchase": "Tarih, alış tarihinden önce. Hiçbir şey kaydedilmedi. Daha sonraki bir tarih seçin.",
   "error.purchase_residue.date_in_future": "Tarih ileride. Hiçbir şey kaydedilmedi. Bugünü veya daha önceki bir tarihi seçin.",
+  "error.purchase_residue.date_before_settlement": "Tarih, bu alışın son iadesinden veya ödemesinden önce. Hiçbir şey kaydedilmedi. Daha sonraki bir tarih seçin.",
   "error.purchase_residue.not_below_base_unit": "Kalan borç ödenebilir, bu yüzden küçük kalan olarak kapatılamaz. Hiçbir şey kaydedilmedi. Bunun yerine ödeyin.",
   "error.purchase_residue.nothing_outstanding": "Bu alışta artık borç kalmadı. Hiçbir şey kaydedilmedi.",
   "error.purchase_residue.amount_mismatch": "Bu sayfayı açtığınızdan beri borç tutarı değişti. Hiçbir şey kaydedilmedi. Yenileyip tekrar deneyin.",

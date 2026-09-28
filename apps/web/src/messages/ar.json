@@ -300,6 +300,7 @@
   "error.purchase_residue.reason_required": "اكتب سببًا لإقفال المبلغ المتبقي. لم يُحفظ شيء.",
   "error.purchase_residue.date_before_purchase": "التاريخ يسبق تاريخ المشترى. لم يُحفظ شيء. اختر تاريخًا لاحقًا.",
   "error.purchase_residue.date_in_future": "التاريخ في المستقبل. لم يُحفظ شيء. اختر اليوم أو تاريخًا سابقًا.",
+  "error.purchase_residue.date_before_settlement": "التاريخ يسبق آخر إرجاع أو دفعة لهذا المشترى. لم يُحفظ شيء. اختر تاريخًا لاحقًا.",
   "error.purchase_residue.not_below_base_unit": "المبلغ المتبقي يمكن دفعه، فلا يُقفَل كمتبقٍّ صغير. لم يُحفظ شيء. ادفعه بدلًا من ذلك.",
   "error.purchase_residue.nothing_outstanding": "لم يعد على هذا المشترى أي مبلغ مستحق. لم يُحفظ شيء.",
   "error.purchase_residue.amount_mismatch": "تغيّر المبلغ المستحق منذ فتحت هذه الصفحة. لم يُحفظ شيء. حدّث الصفحة وحاول مجددًا.",
