@@ -57,6 +57,9 @@ import {
   APPLIER_OWNED_DEFINERS_QUERY,
   applierOwnedDefinerProblems,
   namespacePrivilegeProblems,
+  TD18_DEFINER_OWNERS_QUERY,
+  td18DefinerProblems,
+  type Td18DefinerRow,
   PUBLIC_GRANTEE,
   type NamespacePrivilegeRow,
 } from './phase2-deployment-authority';
@@ -410,13 +413,25 @@ async function main(): Promise<void> {
       leaked.join('; ') || `${privileges.length} grantees asked`,
     );
 
-    // 7.3 — the ownership fact this rehearsal found, pinned (see
-    // APPLIER_OWNED_DEFINERS): on this database these routines run as the
-    // deployer, which row-level security binds, not as a superuser.
+    // 7.3 — the ownership fact this rehearsal found (P3-S9), now closed
+    // (TD-18, 0070): the deployer owns NO SECURITY DEFINER routine, so no
+    // routine runs as a principal that exists only because of who applied
+    // the history.
     const owned = (await query<{ f: string }>(ownerUrl, APPLIER_OWNED_DEFINERS_QUERY, [DEPLOYER])).map((r) => r.f);
     artefact['applierOwnedDefiners'] = { pinned: APPLIER_OWNED_DEFINERS, observed: owned };
     const ownership = applierOwnedDefinerProblems(owned, DEPLOYER);
-    record('7.3 the deployer owns exactly the pinned SECURITY DEFINER routines', ownership.length === 0, ownership.join('; ') || owned.join(', '));
+    record('7.3 the deployer owns no SECURITY DEFINER routine', ownership.length === 0, ownership.join('; ') || 'none');
+
+    // 7.4 — the four routines 0037-0039 left to the applier are owned by
+    // their internal principals, with the pinned path, on this build too.
+    const td18Rows = await query<Td18DefinerRow>(ownerUrl, TD18_DEFINER_OWNERS_QUERY);
+    artefact['td18Definers'] = td18Rows;
+    const td18 = td18DefinerProblems(td18Rows);
+    record(
+      '7.4 the TD-18 routines have their internal owners and the pinned path',
+      td18.length === 0,
+      td18.join('; ') || td18Rows.map((r) => `${r.f} → ${r.owner}`).join('; '),
+    );
   } catch (e) {
     record('the rehearsal stopped', false, e instanceof Error ? e.message : String(e));
   } finally {
