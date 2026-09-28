@@ -182,7 +182,7 @@ const EnvSchema = z
     if (c.TRUST_PROXY === 'true') {
       fail(
         'TRUST_PROXY',
-        'TRUST_PROXY=true is refused in production: it lets a caller choose its client address with X-Forwarded-For; list the deployment\'s proxies in TRUSTED_PROXIES',
+        "TRUST_PROXY=true is refused in production: it lets a caller choose its client address with X-Forwarded-For; list the deployment's proxies in TRUSTED_PROXIES",
       );
     }
     if (mode !== 'worker' && mode !== 'reconciler') {
