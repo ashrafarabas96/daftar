@@ -66,7 +66,14 @@ Each digest is also carried by its slice gate's accepted tense (`S2_ACCEPTED` �
 4. No authoritative Phase 3 document contradicts the accepted state, and no acceptance or release page carries a placeholder. This page is one of the pages checked.
 5. `gate:phase2:release`, verbatim: toolchain, manifest, `db-from-zero --release`, guards, localization, format, lint, typecheck, unit, integration and security (every Phase 3 suite), golden, the API, web and admin builds, Android, audit, artefact and secret scans, the Phase 2 prefix and the deployment-authority matrix.
 6. The source tree is a source tree again (the API build output removed).
-7. `gate:phase3:s8`, composing every Phase 3 and Phase 2 slice gate and Phase 1: structural checks, suites and the Tier 1 budgets.
+7. `gate:phase3:corrective` (the corrective directive §19). It composes `gate:phase3:s8` first, and through it every Phase 3 and Phase 2 slice gate and Phase 1: structural checks, suites and the Tier 1 budgets. Then it proves each corrected blocker:
+   - the corrective migration boundary: the Phase 3 prefix stays intact, and the files after `0069` are exactly the declared corrective list, each called "Phase 3 corrective hardening". While a candidate, none of them is in the manifest. Once accepted, each hashes to its recorded digest;
+   - the corrective suites, root and web, as an exact named list. A listed suite that is missing or skips fails the gate, and so does a `p3c-*` suite that no entry lists;
+   - the review-index check and the explicit Phase 3 secret range scan from `0f2b09e7…`;
+   - the real-browser red proof, then the full ar/en/tr × 360×640, 768×1024, 1280×800 matrix on the production build. The gate declares this matrix, and dropping a locale, a viewport or a planted-defect kind fails it before anything runs;
+   - Budget A and B in isolation, last.
+
+   Any entry the coordinator has not filled yet is a FAIL, never a skip. Every red proof it names must resolve to a test (`tests/security/p3c-corrective-gate-tamper.test.ts` and the DB stream's suites).
 8. The deployed-database rehearsal.
 
 Where each closure claim is proved is tabled in `docs/PHASE_3_S9_CONTRACT.md` §2 and §4.

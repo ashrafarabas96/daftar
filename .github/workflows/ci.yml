@@ -67,7 +67,12 @@ jobs:
           --health-cmd "pg_isready -U postgres"
           --health-interval 5s --health-timeout 5s --health-retries 20
     steps:
+      # Full history: the corrective gate runs the explicit Phase 3 secret
+      # range scan from 0f2b09e7… and the full review-index check, and
+      # neither can reach the Phase 3 base from a depth-1 checkout.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
@@ -267,17 +272,35 @@ jobs:
         run: npm run gate:phase2:s8
         env:
           PG_PORT: '5432'
-      # P3-S8 — inventory reconciliation and the account-domain guard, a
-      # PERMANENT gate since the P3-S8 freeze. 0069 is frozen at its accepted
-      # digest (S8_ACCEPTED) and frozenThrough is a floor at 0069. Proves the
-      # reconciler's column grants and the R-B1a guard (B-1, the Tech Lead's
-      # ruling of 2026-09-27), the definer law, the reconciliation reads and the
-      # S8 suites, then T-13 Tier 1 last. It composes the permanent P3-S7 gate,
-      # and through it P3-S6 … P3-S1, P2-S8 and the chain back to Phase 1.
-      - name: Phase 3 slice gate — P3-S8 (composes P3-S7)
-        run: npm run gate:phase3:s8
+      # The Phase 3 corrective gate (the Tech Lead's corrective directive §19),
+      # which replaces the P3-S8 step here and composes it FIRST: the permanent
+      # P3-S8 gate (0069 frozen at S8_ACCEPTED; the reconciler grants, the
+      # R-B1a guard, the definer law, the reconciliation reads, the S8 suites
+      # and T-13) and through it P3-S7 … P3-S1, P2-S8 and the chain back to
+      # Phase 1. Then every corrected blocker: the corrective migration
+      # boundary (0070 on, Phase 3 corrective hardening, frozen only after this
+      # gate passes), the corrective suites, the review-index check, the full
+      # Phase 3 secret range scan, the real-browser red proof and the full
+      # ar/en/tr × phone/tablet/desktop matrix on the production build, and
+      # Budget A last. An entry the coordinator has not filled is a FAIL, not
+      # a skip, so this step is red until every corrective stream has landed.
+      - name: Install Chromium for the corrective gate's real-browser matrix
+        run: npx playwright-core install --with-deps chromium
+      - name: Phase 3 corrective gate (composes P3-S8)
+        run: npm run gate:phase3:corrective
         env:
           PG_PORT: '5432'
+          BROWSER_PG_DIR: ${{ runner.temp }}/corrective-browser-pg
+      - name: Keep the corrective gate's browser screenshots and results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: corrective-gate-browser-evidence
+          path: |
+            release/browser
+            release/browser-red-proof
+          if-no-files-found: ignore
+          retention-days: 30
       - name: Tampered-migration hard-fail proof
         run: |
           set -e

@@ -10,8 +10,10 @@
  * handed over (docs/PHASE_3_S9_CONTRACT.md §2). It COMPOSES what already
  * exists and restates nothing: the Phase 2 release gate verbatim (which
  * composes the Phase 1 release gate, the P2-S8 gate chain, the deployment
- * matrix and the supply-chain check), the permanent P3-S8 gate verbatim
- * (which composes P3-S7 … P3-S1, P2-S8 … P2-S1 and Phase 1), and the
+ * matrix and the supply-chain check), the permanent Phase 3 corrective gate
+ * verbatim (which composes the permanent P3-S8 gate, and through it P3-S7 …
+ * P3-S1, P2-S8 … P2-S1 and Phase 1, then proves every corrected blocker and
+ * runs the real-browser matrix; the corrective directive §19), and the
  * deployed-database rehearsal. What it adds itself is only what belongs to
  * the Phase 3 closure: the Phase 3 migration prefix, the Phase 3 documents'
  * agreement with the accepted state, and the tree's identity as a Phase 3
@@ -386,8 +388,8 @@ export function releasePlan(o: Options): readonly Step[] {
       ],
     },
     // A new composition boundary: the Phase 1 release gate inside step 5 ends
-    // by building the API, and the machine gate the P3-S8 chain composes
-    // refuses a source tree that carries a build output.
+    // by building the API, and the machine gate the P3-S8 chain (inside the
+    // corrective gate) composes refuses a source tree that carries a build output.
     {
       kind: 'in-process',
       name: 'the source tree is a source tree again (the API build output is removed)',
@@ -397,7 +399,14 @@ export function releasePlan(o: Options): readonly Step[] {
         return existsSync(join(o.root, 'apps/api/dist')) ? ['apps/api/dist is still present after being removed'] : [];
       },
     },
-    { kind: 'command', name: 'Phase 3 slice gate — P3-S8 (composes S7…S1, P2-S8…S1 and Phase 1)', cmd: npm, args: ['run', '-s', 'gate:phase3:s8'] },
+    // Directive §19: the corrective gate replaces the P3-S8 gate here and
+    // composes it first, so nothing the P3-S8 chain proved is dropped.
+    {
+      kind: 'command',
+      name: 'Phase 3 corrective gate (composes P3-S8 → S7…S1, P2-S8…S1 and Phase 1; the corrected blockers; the real-browser matrix)',
+      cmd: npm,
+      args: ['run', '-s', 'gate:phase3:corrective'],
+    },
     {
       kind: 'command',
       name: 'the deployed-database rehearsal (the business, on the database daftar_migrator built)',

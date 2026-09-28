@@ -7,7 +7,8 @@
  *   (b) `--list` plans the library build and then exactly the eight steps of
  *       §2, all mandatory, in order (the build first: the first release run
  *       at an exact SHA stopped at the canary on a clean runner, because the
- *       canary's setup imports the built packages);
+ *       canary's setup imports the built packages), step 7 being the Phase 3
+ *       corrective gate, which composes the P3-S8 gate (directive §19);
  *   (c) statically, the gate spawns no git, reads no repository directory and
  *       names no migration after the Phase 3 prefix;
  *   (d) `--root <copy> --structural-only` refuses a tampered Phase 3 file, a
@@ -111,7 +112,7 @@ describe('(a) a mandatory skip fails the gate before anything runs', () => {
 });
 
 describe('(b) --list plans the library build, then exactly the eight steps of §2', () => {
-  it('in order, all mandatory, the build then the canary first, the Phase 2 release gate before the P3-S8 gate with the restore between', () => {
+  it('in order, all mandatory, the build then the canary first, the Phase 2 release gate before the corrective gate with the restore between', () => {
     const run = gate(['--list']);
     expect(run.status, run.output).toBe(0);
     expect(run.artefact.verdict).toBe('LISTED');
@@ -129,7 +130,8 @@ describe('(b) --list plans the library build, then exactly the eight steps of §
     expect(commands[5]).toMatch(/^npm run -s gate:phase2:release -- --evidence=\S+\/phase2-release-gate\.json --log-dir=\S+\/phase2$/);
     expect(steps[6]?.name).toMatch(/apps\/api|API build output is removed/);
     expect(commands[6]).toBe('(in process)');
-    expect(commands[7]).toBe('npm run -s gate:phase3:s8');
+    expect(steps[7]?.name).toMatch(/Phase 3 corrective gate \(composes P3-S8/);
+    expect(commands[7]).toBe('npm run -s gate:phase3:corrective');
     expect(commands[8]).toBe('npm run -s rehearse:phase3:deployed');
   });
 
@@ -177,7 +179,9 @@ describe('(c) statically: no git, no repository directory, no migration after th
 
   it('the plan is the one §2 names: it composes the predecessor gates by name', () => {
     expect(code).toContain("'gate:phase2:release'");
-    expect(code).toContain("'gate:phase3:s8'");
+    expect(code).toContain("'gate:phase3:corrective'");
+    // The corrective gate composes P3-S8; the release gate does not run it a second time.
+    expect(code).not.toContain("'gate:phase3:s8'");
     expect(code).toContain("'rehearse:phase3:deployed'");
     expect(code).toContain('checkPhase3Prefix(');
   });
