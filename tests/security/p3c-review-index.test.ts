@@ -287,11 +287,26 @@ describe('a pull_request checkout: the mainline is the PR head, not the merge co
   /** A tiny repository shaped like GitHub's `refs/pull/N/merge`: main A, phase B (checkpoint) → C, merge M = A + C. */
   function prMergeRepo(): { dir: string; sha: (ref: string) => string; git: (...args: string[]) => string } {
     const dir = mkdtempSync(join(tmpdir(), 'p3c-index-pr-'));
-    const git = (...args: string[]): string =>
-      execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.invalid', '-c', 'commit.gpgsign=false', ...args], {
-        cwd: dir,
-        encoding: 'utf8',
-      }).trim();
+    // A throwaway repository of its own, so it runs the same in the release
+    // archive; a failed git call is returned as a reason, then thrown.
+    const attempt = (args: readonly string[]): { ok: true; out: string } | { ok: false; reason: string } => {
+      try {
+        return {
+          ok: true,
+          out: execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.invalid', '-c', 'commit.gpgsign=false', ...args], {
+            cwd: dir,
+            encoding: 'utf8',
+          }).trim(),
+        };
+      } catch (e) {
+        return { ok: false, reason: e instanceof Error ? e.message : String(e) };
+      }
+    };
+    const git = (...args: string[]): string => {
+      const r = attempt(args);
+      if (!r.ok) throw new Error(`git ${args.join(' ')} failed in the throwaway repository: ${r.reason}`);
+      return r.out;
+    };
     const commit = (file: string, message: string): void => {
       writeFileSync(join(dir, file), `${message}\n`);
       git('add', file);
