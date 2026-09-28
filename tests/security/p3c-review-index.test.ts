@@ -32,6 +32,7 @@ import {
   securityOf,
   treeColumns,
 } from '../../scripts/phase3-review-index';
+import { ESTATES, assignEstates, countJvmTests, totals } from '../../scripts/test-census';
 
 const ROOT = join(__dirname, '../..');
 const committed = (): string => readFileSync(join(ROOT, INDEX_PATH), 'utf8');
@@ -234,5 +235,47 @@ describe('the derivation rules', () => {
     expect(resolveSpecifier(files, 'tests/integration/x.test.ts', '@daftar/inventory')).toBe('packages/inventory/src/index.ts');
     expect(resolveSpecifier(files, 'tests/integration/x.test.ts', '../../apps/api/src/config')).toBe('apps/api/src/config.ts');
     expect(resolveSpecifier(files, 'tests/integration/x.test.ts', 'vitest')).toBeNull();
+  });
+});
+
+describe('the test census (§16) — the parts that decide a number', () => {
+  const collected = (project: string, files: readonly [string, number, number?][]) =>
+    new Map([[project, files.map(([file, run, skip]) => ({ file, modes: { run, skip: skip ?? 0, todo: 0, only: 0 } }))]]);
+
+  it('every root test file lands in exactly one top-level estate; subsets are not added twice', () => {
+    const { estates, unclaimed } = assignEstates(
+      collected('root', [
+        ['tests/integration/migration-upgrade.test.ts', 10],
+        ['tests/integration/other.test.ts', 5],
+        ['tests/security/phase3-s8-premortem-matrix.test.ts', 8],
+        ['tests/performance/accounting-budgets.test.ts', 4, 2],
+      ]),
+    );
+    expect(unclaimed).toEqual([]);
+    const byId = new Map(estates.map((e) => [e.id, e]));
+    expect(byId.get('integration')?.tests).toBe(15);
+    expect(byId.get('migration')?.tests).toBe(10);
+    expect(byId.get('premortem')?.tests).toBe(8);
+    expect(byId.get('performance-tier1')?.modes.skip).toBe(2);
+    expect(totals(estates)).toEqual({ files: 4, tests: 29, skipped: 2 });
+  });
+
+  it('red: a root test file no estate claims is reported, never dropped', () => {
+    const { unclaimed } = assignEstates(collected('root', [['tests/planted-census/x.test.ts', 1]]));
+    expect(unclaimed).toEqual(['root:tests/planted-census/x.test.ts']);
+  });
+
+  it('every estate id is unique and each subset names a top-level estate', () => {
+    const ids = ESTATES.map((e) => e.id);
+    expect(new Set(ids).size).toBe(ids.length);
+    for (const e of ESTATES) if (e.subsetOf !== null) expect(ids).toContain(e.subsetOf);
+  });
+
+  it('Android @Test annotations are counted outside comments only', () => {
+    expect(
+      countJvmTests(
+        'class A {\n  @Test fun a() {}\n  // @Test fun b() {}\n  /* @Test fun c() {} */\n  @org.junit.Test fun d() {}\n  @TestFactory fun e() {}\n}\n',
+      ),
+    ).toBe(2);
   });
 });
