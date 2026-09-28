@@ -83,6 +83,7 @@
  *
  * Usage:
  *   npm run scan:secrets:phase3 -- [--mode=auto|range|tree] [--head=<rev>]
+ *   (without --head: $PHASE3_SCAN_HEAD if set, else HEAD)
  *     [--base=<sha>|derive] [--main-ref=<ref>] [--repo=<dir>]
  *     [--gitleaks=<path>] [--evidence=<file>]
  *
@@ -708,6 +709,19 @@ export function secretScanEvidenceProblems(e: Partial<ScanResult> | null, expect
 
 // ── CLI ───────────────────────────────────────────────────────────────────
 
+/**
+ * The head when `--head` is not given: `PHASE3_SCAN_HEAD` if set, else HEAD.
+ * A `pull_request` run checks out GitHub's merge commit, whose first-parent
+ * diff is the whole pull request, so every finding would be charged to that
+ * synthesized commit and no exact fingerprint could match it. The CI job that
+ * runs the corrective gate therefore names the PR head here, as the hygiene
+ * job names it with `--head`; a push run names the pushed SHA itself.
+ */
+function defaultHead(): string {
+  const named = process.env['PHASE3_SCAN_HEAD'];
+  return named === undefined || named.trim() === '' ? 'HEAD' : named.trim();
+}
+
 function main(): void {
   const argv = process.argv.slice(2);
   const arg = (name: string): string | undefined => {
@@ -728,7 +742,7 @@ function main(): void {
     result =
       mode === 'tree'
         ? scanTree({ root: repo, gitleaks })
-        : scan({ repo, head: arg('head') ?? 'HEAD', base: arg('base') ?? PHASE3_BASE, mainRef: arg('main-ref'), gitleaks });
+        : scan({ repo, head: arg('head') ?? defaultHead(), base: arg('base') ?? PHASE3_BASE, mainRef: arg('main-ref'), gitleaks });
   } catch (e) {
     if (!(e instanceof SecretScanError)) throw e;
     console.log(`PHASE 3 SECRET SCAN: FAIL\n  mode: ${mode === 'tree' ? 'tree (no git history)' : 'range'}\n  - ${e.message}`);

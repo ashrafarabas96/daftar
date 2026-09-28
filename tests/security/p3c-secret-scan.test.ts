@@ -439,6 +439,27 @@ describe('Phase 3 secret history range scan', () => {
       expect(runScan(repo, base, head).result).toBe('FAIL');
     });
 
+    it('the CLI takes its head from --head, else PHASE3_SCAN_HEAD (the PR head a pull_request run names), else HEAD', () => {
+      const { repo, base, head } = buildRepo({});
+      const run = (extra: readonly string[], env: Record<string, string | undefined>): string => {
+        const res = spawnSync(
+          TSX,
+          [join(REPO, 'scripts/phase3-secret-scan.ts'), `--repo=${repo}`, `--gitleaks=${gitleaks}`, `--base=${base}`, '--main-ref=main', ...extra],
+          {
+            cwd: REPO,
+            encoding: 'utf8',
+            env: { ...process.env, PHASE3_SCAN_HEAD: undefined, ...env },
+          },
+        );
+        return `${res.stdout}${res.stderr}`;
+      };
+      const named = run([], { PHASE3_SCAN_HEAD: head });
+      expect(named).toContain(`head: ${head}`);
+      expect(named).toContain('result: PASS');
+      expect(run([], {})).toContain(`head: ${base}`);
+      expect(run([`--head=${base}`], { PHASE3_SCAN_HEAD: head })).toContain(`head: ${base}`);
+    });
+
     it('the CLI picks tree mode by itself inside an archive and says so', () => {
       const run = (root: string): { status: number | null; out: string } => {
         const res = spawnSync(TSX, [join(REPO, 'scripts/phase3-secret-scan.ts'), `--repo=${root}`, `--gitleaks=${gitleaks}`], { cwd: REPO, encoding: 'utf8' });

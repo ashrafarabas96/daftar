@@ -291,6 +291,9 @@ jobs:
         env:
           PG_PORT: '5432'
           BROWSER_PG_DIR: ${{ runner.temp }}/corrective-browser-pg
+          # The range scan's head: the PR head on a pull_request run (the
+          # checkout is GitHub's merge commit), the pushed SHA on a push run.
+          PHASE3_SCAN_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
       - name: Keep the corrective gate's browser screenshots and results
         if: always()
         uses: actions/upload-artifact@v4
