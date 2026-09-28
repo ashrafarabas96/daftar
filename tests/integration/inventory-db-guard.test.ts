@@ -221,6 +221,10 @@ describe('G-7 — the tree as it stands', () => {
         'purchase_residue_write_off_value_complete',
         'purchase_write_off_residue',
         'supplier_return_residue_bound',
+        // Phase 3 corrective (0071 R-B1c): the stock side of the account
+        // domain lock, DEFINER, handed over inside the inventory CREATE
+        // bracket — no new exception.
+        'stock_movements_account_domain_lock',
       ].sort(),
     );
     expect([...INVENTORY_INVOKER_EXCEPTIONS].sort()).toEqual(['product_variants_10_base_variant_authority', 'products_10_inventory_config_authority']);

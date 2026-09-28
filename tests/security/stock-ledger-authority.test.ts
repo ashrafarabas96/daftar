@@ -1072,6 +1072,20 @@ describe('§2.4 — the complete S2 trigger set, from pg_trigger', () => {
           owner: INTERNAL,
           secdef: true,
         })),
+        // Phase 3 corrective (0071 R-B1c): the stock side of the account
+        // domain lock, AFTER INSERT on the movements, deferred, internal DEFINER.
+        {
+          tg: 'stock_movements_account_domain_lock',
+          rel: 'stock_movements',
+          fn: 'stock_movements_account_domain_lock()',
+          type: 1 + 4,
+          enabled: 'O',
+          constraint: true,
+          deferrable: true,
+          deferred: true,
+          owner: INTERNAL,
+          secdef: true,
+        },
       ].sort((a, b) => (a.tg < b.tg ? -1 : a.tg > b.tg ? 1 : 0)),
     );
   });

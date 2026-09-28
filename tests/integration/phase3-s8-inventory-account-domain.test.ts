@@ -713,6 +713,16 @@ describe('T-19 NEGATIVE CONTROL — with the trigger dropped, the manual Invento
 
   it('trigger dropped: the same line commits, and R-INV-01 — and only R-INV-01 — reports exactly the business, with no amount', async () => {
     await scratch.pool.query(`DROP TRIGGER ${TRIGGER} ON journal_entries`);
+    // Phase 3 corrective (0071 R-B1c): the serial re-check under the account
+    // domain lock is a second, independent enforcer of the same rule; with
+    // only R-B1a's trigger dropped the line is still refused, by it.
+    expectRefused(
+      await postManual(manual(A, 'inventory', 'opening_equity'), A, {}, scratch.url('daftar_app')),
+      'P0001',
+      CODE,
+      'scratch, R-B1a dropped, the R-B1c serial re-check still refuses',
+    );
+    await scratch.pool.query(`DROP TRIGGER journal_entries_inventory_account_domain_serial ON journal_entries`);
     expectAccepted(await postManual(manual(A, 'inventory', 'opening_equity'), A, {}, scratch.url('daftar_app')), 'scratch, trigger dropped');
     const run = await runChecks(scratch.poolAs('daftar_reconciler'), target());
     expect(statuses(run)).toEqual({ 'R-INV-01': 'discrepancy', 'R-INV-02': 'ok', 'R-INV-03': 'ok', 'R-INV-04': 'ok', 'R-INV-05': 'ok' });
