@@ -1,6 +1,6 @@
 import { Injectable, Inject } from '@nestjs/common';
 import { AppError, beyondGrantAuthority, isPermission, type Permission } from '@daftar/domain-core';
-import type { BranchDto, MemberDto, RoleDto, WarehouseDto } from '@daftar/shared-contracts';
+import { LOCALES, type BranchDto, type LocaleCode, type MemberDto, type RoleDto, type WarehouseDto } from '@daftar/shared-contracts';
 import { Database, type BusinessScope } from '../../infra/database';
 import { AuditService, newId } from '../audit/audit.service';
 import { EntitlementService } from '../entitlements/entitlements.service';
@@ -8,7 +8,12 @@ import { associateWarehouseBranchPayload, dissociateWarehouseBranchPayload } fro
 import type { BusinessTransactionId } from '../inventory/business-transaction';
 import { InventoryAuthorizationService } from '../inventory/inventory-authorization';
 import { inventoryRefusal, rethrowInventoryRefusal } from '../inventory/inventory-errors';
+import { branchDefaultWarehouseName, serverLengthOf } from './default-warehouse-name';
 import type { MembershipContext } from './tenancy.service';
+
+function isLocaleCode(value: string): value is LocaleCode {
+  return (LOCALES as readonly string[]).includes(value);
+}
 
 /** The outcome of a warehouse–branch association command (P3-AL-15 §B). */
 export interface WarehouseBranchAssociationResult {
@@ -69,12 +74,21 @@ export class StructureService {
       await this.entitlements.assertFeature(c, m.businessId, 'MULTI_BRANCH');
       await this.entitlements.assertCanConsume(c, m.businessId, 'MAX_BRANCHES');
       await c.query('INSERT INTO branches (business_id, id, name) VALUES ($1, $2, $3)', [m.businessId, id, name]);
-      // §68: every branch has a default warehouse from birth.
+      // §68: every branch has a default warehouse from birth. TD-20: named in
+      // the business's locale, fitting the column as this server counts it.
+      const business = (
+        await c.query<{ locale: string; encoding: string }>(
+          `SELECT default_locale AS locale, current_setting('server_encoding') AS encoding FROM businesses WHERE id = $1`,
+          [m.businessId],
+        )
+      ).rows[0];
+      if (business === undefined) throw new Error('the business of a branch being created is not readable');
+      if (!isLocaleCode(business.locale)) throw new Error(`the business default locale ${business.locale} is not a supported locale`);
       await c.query('INSERT INTO warehouses (business_id, id, branch_id, name, is_default) VALUES ($1, $2, $3, $4, true)', [
         m.businessId,
         newId(),
         id,
-        `${name} — default warehouse`,
+        branchDefaultWarehouseName(business.locale, name, serverLengthOf(business.encoding)),
       ]);
       await this.audit.recordTx(c, { action: 'structure.branch_created', entity: 'branch', entityId: id });
     });

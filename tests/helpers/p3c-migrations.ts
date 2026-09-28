@@ -12,6 +12,8 @@ export const P3_CORRECTIVE_MIGRATIONS = [
   '0071_reversal_inventory_account_domain.sql',
   // TD-16: no return leaves a sub-unit AP residue; one already left is written off (R-95, R-96).
   '0072_purchase_sub_unit_residue.sql',
+  // TD-20: the system-named default warehouse in the business's locale (onboarding trigger and backfill).
+  '0073_default_warehouse_locale_name.sql',
 ] as const;
 
 /**
