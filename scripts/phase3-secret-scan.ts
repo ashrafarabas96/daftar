@@ -94,16 +94,42 @@ export class SecretScanError extends Error {
 
 const sha256 = (buf: Buffer | string): string => createHash('sha256').update(buf).digest('hex');
 
-function git(repo: string, args: readonly string[]): string {
-  return execFileSync('git', ['-C', repo, ...args], { encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 }).trim();
+/**
+ * Every git process this scan starts — and the canary suite, for its
+ * throwaway repositories — goes through here. An extracted release archive
+ * carries `DELIVERY_MANIFEST.json` and no `.git`: there is no history in it
+ * to scan, so it is refused with that reason instead of git's "not a git
+ * repository" (tests/security/archive-portability.test.ts). The range scan
+ * runs on the repository checkout, before the archive is built.
+ */
+export function gitRun(
+  repo: string,
+  args: readonly string[],
+  input?: string,
+): { readonly status: number | null; readonly stdout: Buffer; readonly stderr: string } {
+  if (existsSync(join(repo, 'DELIVERY_MANIFEST.json'))) {
+    throw new SecretScanError(
+      `${repo} is an extracted release archive (DELIVERY_MANIFEST.json): it has no git history; the range scan runs on the repository checkout`,
+    );
+  }
+  const res = spawnSync('git', ['-C', repo, ...args], { input, maxBuffer: 256 * 1024 * 1024 });
+  if (res.error !== undefined) throw new SecretScanError(`git could not be started: ${res.error.message}`);
+  return { status: res.status, stdout: res.stdout, stderr: res.stderr.toString('utf8') };
 }
 
-function gitBuffer(repo: string, args: readonly string[]): Buffer {
-  return execFileSync('git', ['-C', repo, ...args], { maxBuffer: 256 * 1024 * 1024 });
+function gitBuffer(repo: string, args: readonly string[], input?: string): Buffer {
+  const res = gitRun(repo, args, input);
+  if (res.status !== 0) throw new SecretScanError(`git ${args.join(' ')} failed (${String(res.status)}): ${res.stderr.trim()}`);
+  return res.stdout;
+}
+
+/** git's standard output as trimmed text; a non-zero exit is a SecretScanError. */
+export function git(repo: string, args: readonly string[], input?: string): string {
+  return gitBuffer(repo, args, input).toString('utf8').trim();
 }
 
 function gitOk(repo: string, args: readonly string[]): boolean {
-  return spawnSync('git', ['-C', repo, ...args], { stdio: 'ignore' }).status === 0;
+  return gitRun(repo, args).status === 0;
 }
 
 // ── gitleaks: pinned, checksum-verified ───────────────────────────────────
@@ -321,12 +347,12 @@ export function scan(opts: ScanOptions): ScanResult {
     problems.push(`no main ref (${opts.mainRef ?? 'origin/main or main'}) to verify the base against`);
     return finish();
   }
-  const mb = spawnSync('git', ['-C', repo, 'merge-base', head, mainRef], { encoding: 'utf8' });
+  const mb = gitRun(repo, ['merge-base', head, mainRef]);
   if (mb.status !== 0) {
     problems.push(`${head} and ${mainRef} share no history`);
     return finish();
   }
-  mergeBase = mb.stdout.trim();
+  mergeBase = mb.stdout.toString('utf8').trim();
   if (derive) {
     base = mergeBase;
   } else {
@@ -358,7 +384,7 @@ export function scan(opts: ScanOptions): ScanResult {
     const noIgnore = join(work, 'no-ignore');
     mkdirSync(noIgnore);
     const bare = join(work, 'objects.git');
-    execFileSync('git', ['clone', '--bare', '--shared', '--quiet', repo, bare], { stdio: ['ignore', 'ignore', 'inherit'] });
+    git(repo, ['clone', '--bare', '--shared', '--quiet', repo, bare]);
     const report = join(work, 'report.json');
     const env = { ...process.env };
     delete env['GITLEAKS_CONFIG'];

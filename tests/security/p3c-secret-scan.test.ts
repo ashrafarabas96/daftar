@@ -29,7 +29,7 @@
  * commit that arrived through a merge, however early.
  */
 import { createHash, randomInt } from 'node:crypto';
-import { execFileSync, spawnSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -39,6 +39,7 @@ import {
   GITLEAKS_VERSION,
   PHASE3_BASE,
   ensureGitleaks,
+  git,
   parseIgnoreFile,
   scan,
   secretScanEvidenceProblems,
@@ -72,10 +73,6 @@ interface Plan {
 const workDirs: string[] = [];
 let gitleaks = '';
 
-function git(repo: string, args: readonly string[]): string {
-  return execFileSync('git', ['-C', repo, ...args], { encoding: 'utf8' }).trim();
-}
-
 /**
  * Build the throwaway history with `git fast-import`: `main` holds one base
  * commit; `phase` holds HISTORY first-parent commits on top of it, one of
@@ -86,7 +83,7 @@ function git(repo: string, args: readonly string[]): string {
 function buildRepo(plan: Plan): { repo: string; base: string; head: string } {
   const repo = mkdtempSync(join(tmpdir(), 'p3c-secret-scan-'));
   workDirs.push(repo);
-  execFileSync('git', ['init', '--quiet', '--initial-branch=main', repo]);
+  git(repo, ['init', '--quiet', '--initial-branch=main']);
   let t = 1_790_000_000;
   let stream = '';
   const data = (s: string): string => `data ${Buffer.byteLength(s)}\n${s}\n`;
@@ -121,7 +118,7 @@ function buildRepo(plan: Plan): { repo: string; base: string; head: string } {
     }
     prev = mark;
   }
-  execFileSync('git', ['-C', repo, 'fast-import', '--quiet'], { input: stream });
+  git(repo, ['fast-import', '--quiet'], stream);
   return { repo, base: git(repo, ['rev-parse', 'main']), head: git(repo, ['rev-parse', 'phase']) };
 }
 
@@ -263,6 +260,13 @@ describe('Phase 3 secret history range scan', () => {
     const r = runScan(repo, notTheBase, head);
     expect(r.result).toBe('FAIL');
     expect(r.problems.join('\n')).toContain(`is ${base}, not the declared base ${notTheBase}`);
+  });
+
+  it('an extracted release archive (DELIVERY_MANIFEST.json, no history) is refused with that reason, not scanned', () => {
+    const archive = mkdtempSync(join(tmpdir(), 'p3c-secret-scan-archive-'));
+    workDirs.push(archive);
+    writeFileSync(join(archive, 'DELIVERY_MANIFEST.json'), '{}\n');
+    expect(() => runScan(archive, PHASE3_BASE, 'HEAD')).toThrow(/extracted release archive/);
   });
 
   describe('the allowlist accepts exact fingerprints of migration digests only', () => {
