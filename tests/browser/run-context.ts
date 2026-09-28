@@ -195,6 +195,7 @@ export class Run {
   /** Keep a full-page screenshot and check every layout/text invariant on the page as it is now. */
   async shot(name: string): Promise<void> {
     await this.page.waitForTimeout(250);
+    await this.page.evaluate('document.fonts.ready.then(() => true)');
     const file = `${this.tag}/${name}.png`;
     await this.page.screenshot({ path: join(this.outDir, `${name}.png`), fullPage: true });
     const result = await inspect(this.page, this.locale, this.o.facts, TOUCH_MIN_PX);

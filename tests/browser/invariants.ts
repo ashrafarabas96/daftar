@@ -16,6 +16,7 @@ import type { Locale } from './config';
 
 export type IssueKind =
   | 'hydration'
+  | 'typography'
   | 'dir'
   | 'lang'
   | 'overflow'
@@ -91,6 +92,23 @@ const INSPECT = String.raw`(args) => {
   const roots = [...document.querySelectorAll('header, main, form, [data-daftar-root]')];
   const hydrated = roots.some((el) => Object.keys(el).some((k) => k.startsWith('__reactFiber$')));
   if (!hydrated) add('hydration', 'no React fiber on the page roots: the server markup was never hydrated');
+
+  // The approved typography (DAFTAR_DESIGN_SYSTEM §3): the Tajawal face is
+  // really loaded, not merely named first in a font stack the browser falls
+  // through.
+  const tajawal = [...document.fonts].filter((f) => f.family.replace(/["']/g, '') === 'Tajawal');
+  if (!tajawal.some((f) => f.status === 'loaded')) add('typography', 'no Tajawal face is loaded: the text renders in a fallback font');
+  const offFont = [];
+  for (const el of document.querySelectorAll('body *')) {
+    if (el.closest('script, style, svg') || !visible(el)) continue;
+    const ownText = [...el.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim() !== '');
+    const type = (el.getAttribute('type') || '').toLowerCase();
+    const control = /^(SELECT|TEXTAREA)$/.test(el.tagName) || (el.tagName === 'INPUT' && !/^(checkbox|radio|hidden|range|color)$/.test(type));
+    if (!ownText && !control) continue;
+    const family = getComputedStyle(el).fontFamily;
+    if (!/^\s*["']?Tajawal/.test(family)) offFont.push(el.tagName.toLowerCase() + ' "' + label(el) + '" in ' + family.split(',')[0]);
+  }
+  if (offFont.length) add('typography', 'text not set in Tajawal: ' + [...new Set(offFont)].slice(0, 5).join(' | '));
 
   // Direction and language of the document.
   const wantDir = locale === 'ar' ? 'rtl' : 'ltr';
