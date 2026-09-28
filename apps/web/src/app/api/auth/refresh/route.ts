@@ -42,8 +42,14 @@ export async function POST(req: Request) {
       body: JSON.stringify({ refreshToken: rt }),
     });
   } catch (e: unknown) {
-    // undici rejects an unreachable upstream with a TypeError; nothing was
-    // consumed, so the cookie is still the session.
+    // fetch rejects with a TypeError whenever no response arrived: an
+    // unreachable API, which consumed nothing — or a connection lost AFTER
+    // the API rotated the token, whose answer never came back. The BFF
+    // cannot tell the two apart, so it keeps the cookie: in the first case
+    // it is the session; in the second it is already consumed, and the next
+    // refresh presents it again, trips reuse detection and ends the session
+    // (the lost-answer case, a recorded technical debt; the API's refresh
+    // semantics are unchanged here).
     if (e instanceof TypeError) return retryable(503, 'REFRESH_UNAVAILABLE', {});
     throw e;
   }

@@ -36,7 +36,10 @@ export async function POST(req: Request) {
       body: JSON.stringify({ refreshToken: rt }),
     });
   } catch (e: unknown) {
-    // undici rejects an unreachable upstream with a TypeError; nothing was consumed.
+    // No response arrived: an unreachable API (nothing consumed) or a
+    // connection lost after the API rotated the token (the cookie is then
+    // consumed and the next refresh trips reuse detection) — the web
+    // route's lost-answer case, a recorded technical debt.
     if (e instanceof TypeError) return retryable(503, 'REFRESH_UNAVAILABLE', {});
     throw e;
   }
