@@ -63,7 +63,7 @@ interface Registry {
   /** Consume one jti inside the open transaction of `c` (which may be an owner connection that switches role). */
   readonly consume: (c: Client, fx: PostingFixture) => Promise<void>;
   readonly runtimeRole: 'daftar_app' | 'daftar_provisioner';
-  /** The owner 0061-E keeps: accounting's internal principal, or whoever ran the migrations (the migrator; the superuser in tests). */
+  /** The owner: accounting's internal principal (0061-E), and since TD-18 (0070) the provisioning internal principal. */
   readonly owner: () => Promise<string>;
   readonly proconfig: readonly string[];
   readonly executors: readonly string[];
@@ -119,12 +119,11 @@ const REGISTRIES: readonly Registry[] = [
     },
     consume: consumeProvisioning,
     runtimeRole: 'daftar_provisioner',
-    owner: async () =>
-      must(
-        (await ownerPool().query<{ o: string }>(`SELECT tableowner AS o FROM pg_tables WHERE schemaname = 'public' AND tablename = 'schema_migrations'`))
-          .rows[0],
-      ).o,
-    proconfig: ['search_path=public, pg_catalog, pg_temp'],
+    // Phase 3 corrective TD-18 (0070): no longer whoever applied the history,
+    // and no longer a public-first path — the provisioning internal owner and
+    // the pinned path, like the accounting registry.
+    owner: () => Promise.resolve('daftar_provisioning_internal'),
+    proconfig: ['search_path=pg_catalog, public, pg_temp'],
     executors: ['daftar_platform'],
   },
 ];
@@ -162,7 +161,8 @@ async function definition(r: Registry): Promise<string> {
 /** The body 0061 replaced: the same function with the try-lock guard removed, a plain DELETE. */
 function plainDeleteBody(def: string, r: Registry): string {
   const guarded = new RegExp(
-    `IF pg_try_advisory_xact_lock\\(hashtext\\('${r.lockKey.replace('.', '\\.')}'\\), hashtext\\('hygiene'\\)\\) THEN\\s*(DELETE FROM ${r.table} WHERE [^;]+;)\\s*END IF;`,
+    // TD-18 (0070) schema-qualifies the provisioning body's table.
+    `IF pg_try_advisory_xact_lock\\(hashtext\\('${r.lockKey.replace('.', '\\.')}'\\), hashtext\\('hygiene'\\)\\) THEN\\s*(DELETE FROM (?:public\\.)?${r.table} WHERE [^;]+;)\\s*END IF;`,
   );
   const plain = def.replace(guarded, '$1');
   expect(plain, 'the installed body carries the guarded prune').not.toBe(def);
