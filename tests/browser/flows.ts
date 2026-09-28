@@ -354,7 +354,7 @@ export async function runFlows(run: Run): Promise<void> {
     });
     await page.route(read, async (route) => {
       await held;
-      await route.continue();
+      await route.fallback(); // on to the context's pacer (run-context.ts), then the network
     });
     await nav(run, 'suppliers');
     await page.getByRole('status').first().waitFor();

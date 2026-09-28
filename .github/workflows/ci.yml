@@ -344,7 +344,7 @@ jobs:
 
   # -------------------------------------------------------------------------
   # 4b. Real-browser gate (Phase 3 corrective §8, TD-06). The production web
-  #     build (`next start`, CSP enforced), the built merchant API and a fresh
+  #     build (`node server.mts`, CSP enforced), the built merchant API and a fresh
   #     embedded PostgreSQL migrated from 0000, every business seeded through
   #     the API; the Phase 3 merchant routes and command flows driven in
   #     headless Chromium in ar/en/tr at 360x640, 768x1024 and 1280x800,

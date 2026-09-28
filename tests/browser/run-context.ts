@@ -10,7 +10,7 @@ import { join } from 'node:path';
 import type { Browser, BrowserContext, Locator, Page } from 'playwright-core';
 import { TOUCH_MIN_PX, comboTag, type Locale, type Viewport } from './config';
 import { inspect, type CatalogFacts, type Issue, type IssueKind } from './invariants';
-import type { SlidingBudget } from './pacer';
+import type { RouteBudgets, SlidingBudget } from './pacer';
 import { NAMES, type LocaleNames, type LocaleSeed } from './seed';
 
 export type Plant = 'overflow' | 'raw-key' | 'console-error' | 'missing-string';
@@ -35,6 +35,8 @@ export interface Budgets {
   readonly refresh: SlidingBudget;
   readonly login: SlidingBudget;
   readonly loginPerAccount: SlidingBudget;
+  /** Every request a page sends through the BFF proxy, per API route. */
+  readonly route: RouteBudgets;
 }
 
 export interface RunOptions {
@@ -131,9 +133,20 @@ export class Run {
       `document.addEventListener('securitypolicyviolation', (e) => console.error('CSP-VIOLATION ' + e.violatedDirective + ' ' + e.blockedURI));` +
         plantSource(this.o.plants, this.locale, this.o.dicts),
     );
+    const base = this.o.webUrl;
+    // Every API read and command a page makes goes through the BFF proxy; each
+    // waits for its route's budget first. A step's own `page.route` handler
+    // hands a request on with `route.fallback()`, so it is paced here too.
+    await this.context.route(
+      (url) => url.href.startsWith(`${base}/api/proxy/`),
+      async (route) => {
+        const request = route.request();
+        await this.o.budgets.route.take(request.method(), new URL(request.url()).pathname);
+        await route.fallback();
+      },
+    );
     const page = await this.context.newPage();
     page.setDefaultTimeout(20_000);
-    const base = this.o.webUrl;
     page.on('console', (m) => {
       const text = m.text();
       if (/CSP-VIOLATION|Content Security Policy/i.test(text)) this.record('csp', text);

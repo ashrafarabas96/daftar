@@ -67,6 +67,12 @@ const REPRODUCTION =
 const FORBIDDEN_NAME =
   /(^|\/)(node_modules|dist|\.next|var|coverage|\.gradle|build)(\/|$)|(^|\/)\.env($|\.)|\.log$|\.tsbuildinfo$|\.zip$|\.pem$|\.key$|\.dump$|\.sql\.gz$|dev-mailbox|local\.properties$/i;
 const FORBIDDEN_CONTENT = /DEV_TEST_KEY(?!\w)|argon2id\$[A-Za-z0-9+/=]{20,}|-----BEGIN [A-Z ]*PRIVATE KEY-----/;
+/**
+ * Which files the content scan reads: every JavaScript/TypeScript spelling a
+ * release can execute (`.ts .tsx .mts .cts .js .jsx .mjs .cjs` — the web and
+ * admin production entries are `.mts`), and the config and data formats.
+ */
+const CONTENT_SCANNED = /\.(?:[cm]?[jt]s|[jt]sx|sql|kt|kts|json|yml|yaml|xml|properties)$/;
 /** Files with a documented reason to mention the dev-only key constant or scan patterns. */
 const CONTENT_SCAN_EXEMPT = /static-guards|export-release|phase1-release-gate|credential-protector\.ts$|\.test\.|^docs\//;
 
@@ -106,6 +112,9 @@ function requiredFiles(): string[] {
     'infrastructure/database/MIGRATION_MANIFEST.json',
     'apps/web/next.config.mjs',
     'apps/admin/next.config.mjs',
+    // TD-19: `npm start` in either app runs its production entry.
+    'apps/web/server.mts',
+    'apps/admin/server.mts',
     'apps/android/settings.gradle.kts',
     'apps/android/build.gradle.kts',
     'apps/android/gradle.properties',
@@ -164,7 +173,7 @@ for (const rel of tracked) {
   cpSync(src, dst);
   const buf = readFileSync(src);
   inventory.push({ path: rel, sha256: sha(buf), bytes: buf.byteLength });
-  if (/\.(ts|tsx|sql|kt|kts|json|mjs|yml|yaml|xml|properties)$/.test(rel) && FORBIDDEN_CONTENT.test(buf.toString('utf8')) && !CONTENT_SCAN_EXEMPT.test(rel)) {
+  if (CONTENT_SCANNED.test(rel) && FORBIDDEN_CONTENT.test(buf.toString('utf8')) && !CONTENT_SCAN_EXEMPT.test(rel)) {
     console.error(`  FAIL raw credential material in export: ${rel}`);
     process.exit(1);
   }

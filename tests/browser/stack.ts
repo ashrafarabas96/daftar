@@ -6,8 +6,13 @@
  * every migration is applied from `0000`, and the three assertion keys are
  * installed the way the operator's commands install them. Then the BUILT
  * merchant API (`apps/api/dist/main.js`, merchant-api mode, the real runtime
- * roles) and the PRODUCTION web build (`next start`, CSP enforced, nonces per
- * request) are started as child processes. The gate talks to them over HTTP
+ * roles) and the PRODUCTION web build are started as child processes. The
+ * web build is served through its production entry, `node server.mts` (what
+ * `npm start` runs and what ships, TD-19), never `next start`: CSP enforced,
+ * nonces per request, and every request's TCP peer appended to
+ * `X-Forwarded-For`. The API lists the loopback addresses the web server
+ * calls it from in `TRUSTED_PROXIES`, as a deployment lists its web tier, so
+ * the API identifies each request by the browser's own (loopback) address. The gate talks to them over HTTP
  * only, the browser included.
  *
  * `embedded-cluster.ts` reads PG_DIR / PG_PORT when it is first imported, so
@@ -70,6 +75,22 @@ async function waitForHttp(url: string, child: ChildProcess, what: string, timeo
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
   throw new Error(`${what} did not answer ${url} within ${timeoutMs / 1000}s`);
+}
+
+/**
+ * Refuse to start on a port something already answers on: `waitForHttp`
+ * would otherwise be satisfied by that stranger (a stale server from an
+ * earlier run) while the process under test dies on EADDRINUSE, and the gate
+ * would check the wrong build.
+ */
+async function assertNothingAnswers(url: string, what: string): Promise<void> {
+  try {
+    await fetch(url);
+  } catch (error) {
+    if (error instanceof TypeError) return; // connection refused: the port is free
+    throw error;
+  }
+  throw new Error(`something already answers ${url}; refusing to start ${what} behind it`);
 }
 
 function startProcess(cmd: string, args: string[], cwd: string, env: NodeJS.ProcessEnv, logFile: string): ChildProcess {
@@ -150,8 +171,11 @@ export async function startStack(ports: StackPorts, pgDir: string, logDir: strin
       MEDIA_ROOT: join(logDir, 'media'),
       DEV_MAILBOX_FILE: join(logDir, 'mailbox.log'),
       CORS_ORIGINS: webUrl,
+      // TD-19: the web server is this deployment's trusted proxy.
+      TRUSTED_PROXIES: '127.0.0.1,::1',
       LOG_LEVEL: 'warn',
     };
+    await assertNothingAnswers(apiUrl, 'the merchant API');
     const api = startProcess(process.execPath, ['dist/main.js'], join(ROOT, 'apps/api'), apiEnv, join(logDir, 'api.log'));
     children.push(api);
     await waitForHttp(`${apiUrl}/v1/health/ready`, api, 'the merchant API');
@@ -160,13 +184,16 @@ export async function startStack(ports: StackPorts, pgDir: string, logDir: strin
       PATH: process.env['PATH'],
       HOME: process.env['HOME'],
       NODE_ENV: 'production',
+      PORT: String(ports.web),
       API_URL: apiUrl,
       NEXT_TELEMETRY_DISABLED: '1',
     };
-    const nextBin = join(ROOT, 'node_modules/next/dist/bin/next');
-    const web = startProcess(process.execPath, [nextBin, 'start', '-p', String(ports.web)], join(ROOT, 'apps/web'), webEnv, join(logDir, 'web.log'));
+    // The production entry, exactly as `npm start` runs it: Node's own type
+    // stripping, no flags, no loader.
+    await assertNothingAnswers(webUrl, 'the web server');
+    const web = startProcess(process.execPath, ['server.mts'], join(ROOT, 'apps/web'), webEnv, join(logDir, 'web.log'));
     children.push(web);
-    await waitForHttp(`${webUrl}/en/login`, web, 'the web server (next start)');
+    await waitForHttp(`${webUrl}/en/login`, web, 'the web server (node server.mts)');
     return { apiUrl, webUrl, migrations: applied.length, stop };
   } catch (error) {
     await stop();
