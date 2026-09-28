@@ -1,5 +1,5 @@
 'use client';
-import { useState, type CSSProperties, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { colors, elevation, radius, spacing, typography, zIndex } from '../tokens';
 
 export function Card(props: { children: ReactNode; padded?: boolean; style?: CSSProperties }) {
@@ -224,10 +224,37 @@ export function Breadcrumb(props: { items: { label: string; href?: string }[] })
   );
 }
 
+/**
+ * A menu under its trigger. It closes the way a menu is expected to: on a
+ * choice, on Escape (focus goes back to the trigger) and on a press outside
+ * it — a menu that only its own trigger can close traps a keyboard user and
+ * covers the page on a phone.
+ */
 export function Dropdown(props: { trigger: ReactNode; items: { key: string; label: string; danger?: boolean; onSelect: () => void }[] }) {
   const [open, setOpen] = useState(false);
+  const box = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      setOpen(false);
+      box.current?.querySelector<HTMLElement>('button, [href], [tabindex]')?.focus();
+    };
+    const onPress = (event: PointerEvent) => {
+      if (event.target instanceof Node && box.current?.contains(event.target)) return;
+      setOpen(false);
+    };
+    document.addEventListener('keydown', onKey);
+    document.addEventListener('pointerdown', onPress);
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      document.removeEventListener('pointerdown', onPress);
+    };
+  }, [open]);
+
   return (
-    <div style={{ position: 'relative', display: 'inline-block', fontFamily: typography.fontFamily.base }}>
+    <div ref={box} style={{ position: 'relative', display: 'inline-block', fontFamily: typography.fontFamily.base }}>
       <span onClick={() => setOpen((o) => !o)}>{props.trigger}</span>
       {open ? (
         <div
@@ -263,6 +290,7 @@ export function Dropdown(props: { trigger: ReactNode; items: { key: string; labe
                 cursor: 'pointer',
                 borderRadius: radius.sm,
                 color: it.danger ? colors.semantic.danger : colors.neutral[800],
+                fontFamily: typography.fontFamily.base,
                 fontSize: typography.size.sm,
                 minHeight: '2.75rem',
               }}
