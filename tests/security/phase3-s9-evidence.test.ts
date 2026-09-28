@@ -17,7 +17,16 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { PHASE2_PREFIX } from '../../scripts/phase2-prefix';
+import { CORRECTIVE_ACCEPTED, CORRECTIVE_MIGRATIONS } from '../../scripts/phase3-corrective-gate';
 import { PHASE3_PREFIX, PHASE3_PREFIX_END } from '../../scripts/phase3-prefix';
+
+/** What the Phase 3 release ships once the corrective pass is frozen: both prefixes, then the accepted corrective migrations in order. */
+const ACCEPTED_CORRECTIVE: readonly (readonly [string, string])[] = CORRECTIVE_MIGRATIONS.filter((n) => CORRECTIVE_ACCEPTED[n] !== undefined).map((n) => [
+  n,
+  CORRECTIVE_ACCEPTED[n] ?? '',
+]);
+const RELEASED: readonly (readonly [string, string])[] = [...PHASE2_PREFIX, ...PHASE3_PREFIX, ...ACCEPTED_CORRECTIVE];
+const RELEASED_END = ACCEPTED_CORRECTIVE.at(-1)?.[0] ?? PHASE3_PREFIX_END;
 
 const REPO = join(__dirname, '../..');
 const TSX = join(REPO, 'node_modules/.bin/tsx');
@@ -157,9 +166,9 @@ function assemble(f: Fixture = {}): { status: number | null; output: string; evi
     fileCount: inventory.length,
     gitDirty: false,
     inventory,
-    migrationHashes: [...PHASE2_PREFIX, ...PHASE3_PREFIX].map(([name, digest]) => ({ name, sha256: digest })),
-    migrationCount: PHASE2_PREFIX.length + PHASE3_PREFIX.length,
-    frozenThrough: PHASE3_PREFIX_END,
+    migrationHashes: RELEASED.map(([name, digest]) => ({ name, sha256: digest })),
+    migrationCount: RELEASED.length,
+    frozenThrough: RELEASED_END,
     migrationManifestSha256: sha256('{}\n'),
     environment: { node: 'v24.12.0' },
   };
@@ -214,14 +223,14 @@ const withNested = (g: Json, change: Json): Json => {
 };
 
 describe('the consistent set', () => {
-  it('PASS, with the commit, both routes to the content, and the 70 migrations recorded', () => {
+  it('PASS, with the commit, both routes to the content, and the 74 migrations recorded', () => {
     const run = assemble();
     expect(run.evidence.problems).toEqual([]);
     expect(run.status, run.output).toBe(0);
     expect(run.evidence.verdict).toBe('PASS');
     expect(run.evidence['source']).toMatchObject({ expectedCommit: SHA, commit: SHA });
     expect(run.evidence['gitArchive']).toMatchObject({ commit: SHA, fileCount: Object.keys(FILES).length });
-    expect((run.evidence['migrations'] as { count: number }).count).toBe(70);
+    expect(run.evidence['migrations']).toMatchObject({ count: 74, frozenThrough: '0073_default_warehouse_locale_name.sql' });
   });
 });
 
@@ -265,10 +274,26 @@ describe('each inconsistency is refused with its own problem', () => {
   it('a git archive with a different path set', () =>
     expectRefused({ tarFiles: { ...FILES, 'extra.txt': 'x\n' } }, 'the git archive and the export list different files: only in git [extra.txt]'));
   it('a delivery manifest that says phase 2', () => expectRefused({ delivery: (d) => ({ ...d, phase: 2 }) }, 'the delivery manifest says phase 2'));
-  it('a migration list with an extra 0070', () =>
+  it('the corrective freeze is what makes 0070–0073 releasable', () => {
+    expect(ACCEPTED_CORRECTIVE.map(([n]) => n)).toEqual([...CORRECTIVE_MIGRATIONS]);
+    expect(RELEASED_END).toBe('0073_default_warehouse_locale_name.sql');
+  });
+  it('a migration list with an extra, unaccepted 0074', () =>
     expectRefused(
-      { delivery: (d) => ({ ...d, migrationHashes: [...(d['migrationHashes'] as Json[]), { name: '0070_later.sql', sha256: '0'.repeat(64) }] }) },
-      /are not exactly the Phase 2 and Phase 3 prefixes \(P3-S9 adds none\): extra \[0070_later\.sql\]/,
+      { delivery: (d) => ({ ...d, migrationHashes: [...(d['migrationHashes'] as Json[]), { name: '0074_later.sql', sha256: '0'.repeat(64) }] }) },
+      /are not exactly the Phase 2 prefix, the Phase 3 prefix and the accepted corrective migrations: extra \[0074_later\.sql\]/,
+    ));
+  it('a release that leaves out the accepted corrective migrations', () =>
+    expectRefused(
+      {
+        delivery: (d) => ({
+          ...d,
+          migrationHashes: [...PHASE2_PREFIX, ...PHASE3_PREFIX].map(([name, digest]) => ({ name, sha256: digest })),
+          migrationCount: PHASE2_PREFIX.length + PHASE3_PREFIX.length,
+          frozenThrough: PHASE3_PREFIX_END,
+        }),
+      },
+      `missing [${CORRECTIVE_MIGRATIONS.join(', ')}]`,
     ));
   it('a migration list with a changed digest', () =>
     expectRefused(
@@ -282,8 +307,28 @@ describe('each inconsistency is refused with its own problem', () => {
       },
       `changed [${PHASE3_PREFIX_END}]`,
     ));
-  it('a frozenThrough that is not the Phase 3 prefix end', () =>
-    expectRefused({ delivery: (d) => ({ ...d, frozenThrough: '0068_supplier_settlement_commands.sql' }) }, 'the delivery manifest says frozenThrough 0068'));
+  it('a corrective migration shipped at a digest other than its accepted one', () =>
+    expectRefused(
+      {
+        delivery: (d) => ({
+          ...d,
+          migrationHashes: (d['migrationHashes'] as { name: string; sha256: string }[]).map((m) =>
+            m.name === RELEASED_END ? { ...m, sha256: '0'.repeat(64) } : m,
+          ),
+        }),
+      },
+      `changed [${RELEASED_END}]`,
+    ));
+  it('a migration count that is not the released list', () =>
+    expectRefused(
+      { delivery: (d) => ({ ...d, migrationCount: RELEASED.length - 1 }) },
+      `the delivery manifest counts ${RELEASED.length - 1} migrations, not ${RELEASED.length}`,
+    ));
+  it('a frozenThrough that is not the last accepted corrective migration', () =>
+    expectRefused(
+      { delivery: (d) => ({ ...d, frozenThrough: PHASE3_PREFIX_END }) },
+      `the delivery manifest says frozenThrough ${PHASE3_PREFIX_END}, not ${RELEASED_END}`,
+    ));
   it('a deployment matrix verdict FAIL', () =>
     expectRefused({ deployment: (d) => ({ ...d, verdict: 'FAIL' }) }, 'the repository deployment-authority matrix verdict is FAIL'));
   it("the archive run's deployment matrix verdict FAIL", () =>
