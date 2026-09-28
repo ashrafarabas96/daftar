@@ -98,8 +98,8 @@ BEGIN
     FROM public.businesses b
     JOIN public.branches br ON br.business_id = b.id AND br.id = NEW.branch_id
    WHERE b.id = NEW.business_id
-     AND b.created_at = now()
-     AND br.is_default AND br.created_at = now();
+     AND b.created_at = pg_catalog.now()
+     AND br.is_default AND br.created_at = pg_catalog.now();
   IF v_locale = 'ar' THEN
     NEW.name := 'المستودع الرئيسي';
   ELSIF v_locale = 'tr' THEN
@@ -122,40 +122,44 @@ CREATE TRIGGER warehouses_default_name_locale
 -- ─────────────────────────────────────────────────────────────────────────
 -- 2. The provably system-written default warehouse names, localized
 -- ─────────────────────────────────────────────────────────────────────────
-ALTER TABLE businesses NO FORCE ROW LEVEL SECURITY;
-ALTER TABLE branches NO FORCE ROW LEVEL SECURITY;
-ALTER TABLE warehouses NO FORCE ROW LEVEL SECURITY;
-
--- (a) the onboarding default.
-UPDATE warehouses w
-   SET name = CASE biz.default_locale WHEN 'ar' THEN 'المستودع الرئيسي' ELSE 'Ana depo' END
-  FROM branches br, businesses biz
- WHERE br.business_id = w.business_id AND br.id = w.branch_id
-   AND biz.id = w.business_id
-   AND biz.default_locale IN ('ar', 'tr')
-   AND w.is_default AND br.is_default
-   AND w.created_at = biz.created_at AND br.created_at = biz.created_at
-   AND w.name = 'Main warehouse';
-
--- (b) a further branch's default.
-UPDATE warehouses w
-   SET name = br.name || ' — ' || s.suffix
-  FROM branches br, businesses biz,
-       LATERAL (SELECT CASE biz.default_locale WHEN 'ar' THEN 'المستودع الافتراضي' ELSE 'varsayılan depo' END AS suffix) s
- WHERE br.business_id = w.business_id AND br.id = w.branch_id
-   AND biz.id = w.business_id
-   AND biz.default_locale IN ('ar', 'tr')
-   AND w.is_default AND NOT br.is_default
-   AND w.created_at = br.created_at
-   AND w.name = br.name || ' — default warehouse'
-   AND char_length(br.name || ' — ' || s.suffix) <= 120;
-
--- Checked while FORCE is still lifted: under FORCE a non-superuser applier
--- would see no row and the count would pass vacuously.
+-- ONE statement (review I4): the lift, both renames, the completeness
+-- check and the restore run inside a single DO block, so they are atomic
+-- even when the file is applied outside a transaction block (psql -f,
+-- autocommit): FORCE is never left lifted by a failure halfway.
 DO $$
 DECLARE
   v_n bigint;
 BEGIN
+  ALTER TABLE businesses NO FORCE ROW LEVEL SECURITY;
+  ALTER TABLE branches NO FORCE ROW LEVEL SECURITY;
+  ALTER TABLE warehouses NO FORCE ROW LEVEL SECURITY;
+
+  -- (a) the onboarding default.
+  UPDATE warehouses w
+     SET name = CASE biz.default_locale WHEN 'ar' THEN 'المستودع الرئيسي' ELSE 'Ana depo' END
+    FROM branches br, businesses biz
+   WHERE br.business_id = w.business_id AND br.id = w.branch_id
+     AND biz.id = w.business_id
+     AND biz.default_locale IN ('ar', 'tr')
+     AND w.is_default AND br.is_default
+     AND w.created_at = biz.created_at AND br.created_at = biz.created_at
+     AND w.name = 'Main warehouse';
+
+  -- (b) a further branch's default.
+  UPDATE warehouses w
+     SET name = br.name || ' — ' || s.suffix
+    FROM branches br, businesses biz,
+         LATERAL (SELECT CASE biz.default_locale WHEN 'ar' THEN 'المستودع الافتراضي' ELSE 'varsayılan depo' END AS suffix) s
+   WHERE br.business_id = w.business_id AND br.id = w.branch_id
+     AND biz.id = w.business_id
+     AND biz.default_locale IN ('ar', 'tr')
+     AND w.is_default AND NOT br.is_default
+     AND w.created_at = br.created_at
+     AND w.name = br.name || ' — default warehouse'
+     AND char_length(br.name || ' — ' || s.suffix) <= 120;
+
+  -- Checked while FORCE is still lifted: under FORCE a non-superuser applier
+  -- would see no row and the count would pass vacuously.
   SELECT count(*) INTO v_n
     FROM warehouses w
     JOIN branches br ON br.business_id = w.business_id AND br.id = w.branch_id
@@ -167,11 +171,10 @@ BEGIN
   IF v_n <> 0 THEN
     RAISE EXCEPTION 'tenancy.migration_invariant: % system-written default warehouse name(s) left in English', v_n;
   END IF;
+  ALTER TABLE businesses FORCE ROW LEVEL SECURITY;
+  ALTER TABLE branches FORCE ROW LEVEL SECURITY;
+  ALTER TABLE warehouses FORCE ROW LEVEL SECURITY;
 END $$;
-
-ALTER TABLE businesses FORCE ROW LEVEL SECURITY;
-ALTER TABLE branches FORCE ROW LEVEL SECURITY;
-ALTER TABLE warehouses FORCE ROW LEVEL SECURITY;
 
 -- ─────────────────────────────────────────────────────────────────────────
 -- 3. 0073-E — the end state
