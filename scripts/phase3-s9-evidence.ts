@@ -40,12 +40,24 @@
  *      runs, and no role but the deployer holds TEMP or CREATE on `public`.
  *   6. The nested `gate:phase2:release` artefact PASS in both runs, on the
  *      same tree as its parent.
+ *   7. The full Phase 3 secret history scan (corrective directive §7):
+ *      `scripts/phase3-secret-scan.ts` over base `0f2b09e…` — verified as the
+ *      merge-base with main — through exactly the commit under release, every
+ *      commit in the range read, nothing remaining. The evidence records base,
+ *      head, commits in range, commits scanned, findings, allowlisted
+ *      fingerprints and the result. The archive run has no `.git` and cannot
+ *      scan history (the release gate scans its files in tree mode there), so
+ *      the repository checkout's range scan is the one recorded, and a
+ *      tree-mode artefact is refused in its place.
+ *      Required when `--secret-scan=<file>` is passed (the release workflow
+ *      passes it); judged whenever the file is present.
  *
  * Usage:
  *   npm run evidence:phase3:s9 -- --expected-sha=<40-hex> --repo-gate=<file>
  *     --archive-gate=<file> --archive=<zip> --git-archive=<tar> [--ci-run=<id>]
  *     [--release-dir=<dir>] [--deployment=<file>] [--archive-deployment=<file>]
- *     [--rehearsal=<file>] [--archive-rehearsal=<file>] [--out=<file>]
+ *     [--rehearsal=<file>] [--archive-rehearsal=<file>] [--secret-scan=<file>]
+ *     [--out=<file>]
  */
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
@@ -53,6 +65,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { PHASE2_PREFIX } from './phase2-prefix';
 import { PHASE3_PREFIX, PHASE3_PREFIX_END } from './phase3-prefix';
+import { secretScanEvidenceProblems, type ScanResult } from './phase3-secret-scan';
 
 const ROOT = join(__dirname, '..');
 const argv = process.argv.slice(2);
@@ -71,6 +84,7 @@ const DEPLOYMENT = inRelease('deployment', 'phase2-s9-deployment-authority.json'
 const ARCHIVE_DEPLOYMENT = inRelease('archive-deployment', 'phase2-s9-deployment-authority-archive.json');
 const REHEARSAL = inRelease('rehearsal', 'phase3-s9-deployed-rehearsal.json');
 const ARCHIVE_REHEARSAL = inRelease('archive-rehearsal', 'phase3-s9-deployed-rehearsal-archive.json');
+const SECRET_SCAN = inRelease('secret-scan', 'phase3-secret-scan.json');
 const OUT = inRelease('out', 'phase3-s9-release-evidence.json');
 const EXPECTED_SHA = arg('expected-sha') ?? null;
 const DEPLOYER = 'daftar_migrator';
@@ -404,6 +418,15 @@ for (const [label, r] of [
   if (r && r.verdict !== 'PASS') problems.push(`the ${label} deployed-database rehearsal verdict is ${String(r.verdict)}`);
 }
 
+// ── 7. the full Phase 3 secret history scan ──────────────────────────────
+
+// Required when the workflow names it (`--secret-scan=`, as
+// phase3-s9-release.yml does); judged whenever it is present, so a failed or
+// partial scan sitting in the release directory is never ignored.
+const secretScanRequired = arg('secret-scan') !== undefined;
+const secretScan = secretScanRequired || existsSync(SECRET_SCAN) ? readJson<Partial<ScanResult>>(SECRET_SCAN, 'the Phase 3 secret history scan') : null;
+if (secretScan) problems.push(...secretScanEvidenceProblems(secretScan, EXPECTED_SHA));
+
 // ─────────────────────────────────────────────────────────────────────────
 
 const gateSummary = (g: GateArtefact | null): Record<string, unknown> => ({
@@ -462,6 +485,21 @@ const evidence = {
     },
   },
   deployedRehearsal: { repository: rehearsal, extractedArchive: archiveRehearsal },
+  secretHistoryScan: {
+    base: secretScan?.base ?? null,
+    head: secretScan?.head ?? null,
+    mergeBase: secretScan?.mergeBase ?? null,
+    mainRef: secretScan?.mainRef ?? null,
+    gitleaks: secretScan?.tool ?? null,
+    logOpts: secretScan?.logOpts ?? null,
+    commitsInRange: secretScan?.commitsInRange ?? null,
+    mergesInRange: secretScan?.mergesInRange ?? null,
+    commitsScanned: secretScan?.commitsScanned ?? null,
+    findings: secretScan?.findings ?? null,
+    allowlisted: secretScan?.allowlisted ?? null,
+    remaining: secretScan?.remaining ?? null,
+    result: secretScan?.result ?? null,
+  },
   verdict: problems.length === 0 ? 'PASS' : 'FAIL',
   problems,
 };
@@ -478,6 +516,11 @@ console.log(`  archive sha256       ${String(archiveSha256)}`);
 console.log(`  migrations           ${String(evidence.migrations.count)} frozen through ${String(evidence.migrations.frozenThrough)}`);
 console.log(`  repository gate      ${String(repoGate?.verdict ?? null)}`);
 console.log(`  archive gate         ${String(archiveGate?.verdict ?? null)}`);
+console.log(
+  `  secret history scan  ${String(secretScan?.result ?? null)}: ${String(secretScan?.base ?? null)}..${String(secretScan?.head ?? null)}, ` +
+    `${String(secretScan?.commitsScanned ?? null)}/${String(secretScan?.commitsInRange ?? null)} commits, ` +
+    `${String(secretScan?.findings ?? null)} findings, ${String(secretScan?.remaining?.length ?? null)} remaining`,
+);
 console.log(`\nP3-S9 RELEASE EVIDENCE: ${evidence.verdict}`);
 console.log(`  ${shown(OUT)}`);
 if (problems.length > 0) {
