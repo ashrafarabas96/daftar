@@ -76,7 +76,8 @@ const EnvSchema = z
     // Exactly one active key signs; active+previous verify (rotation without mass logout).
     // When unset, JWT_SECRET is used as a single legacy key.
     JWT_KEYS: z.string().optional(),
-    // §52–55: only trust X-Forwarded-For when explicitly behind a known proxy.
+    // §52–55: legacy single-proxy mode, dev/test only (refused in production,
+    // TD-19 review M-1): the client is the RIGHTMOST X-Forwarded-For entry.
     TRUST_PROXY: z.enum(['true', 'false']).default('false'),
     // §XXXIX–XL: known proxies of this deployment — comma-separated exact IPs
     // (v4/v6) and/or IPv4 CIDR ranges. When set, XFF is walked right-to-left
@@ -174,6 +175,16 @@ const EnvSchema = z
     // §10 (Stabilization): PROCESS_MODE=all is a dev/test convenience ONLY —
     // production must deploy the separated runtimes.
     if (mode === 'all') fail('PROCESS_MODE', 'PROCESS_MODE=all is forbidden in production (dev/test only)');
+    // TD-19 review M-1: the legacy proxy mode trusts whatever socket peer
+    // connects as "the one proxy", so a caller that reaches the API directly
+    // chooses its own address — and with it a fresh allowance of every
+    // per-client limit. A deployment names its proxies instead.
+    if (c.TRUST_PROXY === 'true') {
+      fail(
+        'TRUST_PROXY',
+        'TRUST_PROXY=true is refused in production: it lets a caller choose its client address with X-Forwarded-For; list the deployment\'s proxies in TRUSTED_PROXIES',
+      );
+    }
     if (mode !== 'worker' && mode !== 'reconciler') {
       if (!c.JWT_SECRET && !c.JWT_KEYS) fail('JWT_SECRET', `${mode} requires JWT_SECRET or JWT_KEYS`);
     }

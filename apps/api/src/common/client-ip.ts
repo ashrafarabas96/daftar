@@ -11,9 +11,13 @@ import type { AppConfig } from '../config';
  * immediate socket peer is not trusted, XFF is ignored entirely (a direct
  * client can never spoof).
  *
- * Legacy: TRUST_PROXY=true (no list configured) trusts the first XFF entry —
- * accepted only for simple single-LB deployments; TRUSTED_PROXIES is the
- * serious-production knob.
+ * Legacy: TRUST_PROXY=true (no list configured) — dev/test only; production
+ * refuses it at startup (config.ts, TD-19 review M-1). It means "exactly one
+ * proxy in front, whatever the socket peer is": the client is the RIGHTMOST
+ * XFF entry, the one that proxy appended. Entries to its left are the
+ * caller's own writing and are never an identity (the leftmost entry once
+ * was, and a caller rotating it had an unlimited allowance of every
+ * per-client limit).
  */
 function ipv4ToInt(ip: string): number | null {
   const parts = ip.split('.');
@@ -71,7 +75,7 @@ export function clientIp(req: Request, config: Pick<AppConfig, 'TRUST_PROXY' | '
     return chain[0] ?? remote; // entire chain trusted (e.g. internal) — leftmost
   }
   if (config.TRUST_PROXY === 'true') {
-    return chain[0] ?? remote; // legacy single-proxy mode
+    return chain[chain.length - 1] ?? remote; // legacy single-proxy mode: the hop that proxy appended
   }
   return remote;
 }
