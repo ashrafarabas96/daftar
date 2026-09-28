@@ -204,6 +204,7 @@ const adjust = (over: Partial<AdjustStockViewProps>): AdjustStockViewProps => ({
   warehouses: WAREHOUSES,
   warehouseId: MAIN,
   reasons: ['found', 'missing', 'damaged', 'starting'],
+  startingRecorded: false,
   reason: 'found',
   occurredOn: '2026-09-27',
   note: '',
@@ -381,6 +382,7 @@ export const VIEW_REGISTRY: readonly ViewEntry[] = [
   defineView('AdjustStockView', AdjustStockView, {
     'found extra: the server asked a cost on one line': adjust({ errorKey: 'error.inventory.unit_cost_required', options: OPTIONS }),
     'missing, member without starting stock': adjust({ reason: 'missing', reasons: ['found', 'missing', 'damaged'], lines: [lineOf(2, '1')] }),
+    'starting stock already recorded for the business': adjust({ reasons: ['found', 'missing', 'damaged'], startingRecorded: true, lines: [] }),
     damaged: adjust({ reason: 'damaged', note: 'Broken in delivery', lines: [lineOf(1, '1')] }),
     'starting stock asks a cost on every line': adjust({ reason: 'starting', lines: [lineOf(0, '40', { unitCost: '2.50' })] }),
     'a cost that is not an amount': adjust({

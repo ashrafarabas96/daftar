@@ -343,6 +343,57 @@ jobs:
           ./gradlew lint testDebugUnitTest assembleDebug --no-daemon --stacktrace
 
   # -------------------------------------------------------------------------
+  # 4b. Real-browser gate (Phase 3 corrective §8, TD-06). The production web
+  #     build (`next start`, CSP enforced), the built merchant API and a fresh
+  #     embedded PostgreSQL migrated from 0000, every business seeded through
+  #     the API; the Phase 3 merchant routes and command flows driven in
+  #     headless Chromium in ar/en/tr at 360x640, 768x1024 and 1280x800,
+  #     checked for functional visual invariants (no pixel comparison).
+  #     The red proof runs first: defects planted in every locale x viewport
+  #     must all be reported, or the step fails. Screenshots are kept.
+  #     Chromium comes from the pinned playwright-core's own installer.
+  # -------------------------------------------------------------------------
+  browser:
+    needs: workspaces
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - name: Build the library packages
+        run: |
+          npm run build -w packages/domain-core -w packages/shared-contracts -w packages/design-system
+          npm run build -w packages/accounting
+          npm run build -w packages/inventory
+      - name: Build the merchant API and the production web app
+        run: |
+          npm run build -w @daftar/api
+          npm run build -w @daftar/web
+      - name: Install Chromium for the pinned playwright-core
+        run: npx playwright-core install --with-deps chromium
+      - name: Browser gate red proof (planted overflow, raw key, console error, missing string)
+        run: npm run gate:browser -- --plant=all --steps=header,stock --out=release/browser-red-proof
+        env:
+          BROWSER_PG_DIR: ${{ runner.temp }}/browser-pg-red
+      - name: Browser gate (ar/en/tr x phone/tablet/desktop)
+        run: npm run gate:browser
+        env:
+          BROWSER_PG_DIR: ${{ runner.temp }}/browser-pg
+      - name: Keep the screenshots and results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-gate-evidence
+          path: |
+            release/browser
+            release/browser-red-proof
+          retention-days: 30
+
+  # -------------------------------------------------------------------------
   # 5. Secret / dependency / artifact hygiene scans.
   # -------------------------------------------------------------------------
   hygiene:

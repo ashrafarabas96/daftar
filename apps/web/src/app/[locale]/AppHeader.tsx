@@ -149,11 +149,7 @@ export function AppHeader({ locale, active }: { locale: Locale; active: string }
       </nav>
       <div className="daftar-header-actions">
         <Dropdown
-          trigger={
-            <Button variant="secondary" size="sm">
-              {currentName}
-            </Button>
-          }
+          trigger={<Button variant="secondary">{currentName}</Button>}
           items={[
             ...businesses.map((b) => ({
               key: b.businessId,
@@ -169,7 +165,6 @@ export function AppHeader({ locale, active }: { locale: Locale; active: string }
         />
         <Button
           variant="ghost"
-          size="sm"
           loading={busy}
           onClick={async () => {
             setBusy(true);

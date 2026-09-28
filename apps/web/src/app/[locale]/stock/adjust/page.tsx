@@ -7,7 +7,17 @@ import { postAdjustment, postDamage, postOpening } from '@/lib/phase3-api';
 import { refusalCode, refusalKey, withConflictRetry } from '@/lib/phase3-errors';
 import { amountInputToMinor, localDateIso, useFormDocumentId } from '@/lib/phase3-format';
 import { AdjustStockView } from '@/views/stock/AdjustStockView';
-import { draftLineOf, identityKey, lineQuantityErrors, quantityText, type AdjustReason, type DraftLine, type PickOption } from '@/views/stock/model';
+import {
+  adjustReasons,
+  draftLineOf,
+  identityKey,
+  lineQuantityErrors,
+  openingPostedOf,
+  quantityText,
+  type AdjustReason,
+  type DraftLine,
+  type PickOption,
+} from '@/views/stock/model';
 import { ScreenState } from '@/views/stock/parts';
 import { PageShell } from '../../AppHeader';
 import { onlyActiveWarehouse, refusedLines, usePickOptions, useInventoryScreen } from '../stock-page-kit';
@@ -53,8 +63,12 @@ export default function AdjustStockPage({ params }: { params: Promise<{ locale: 
     search,
     screen.phase === 'ready' && warehouseId !== '' && result === null,
   );
-  // Starting stock is recorded for the whole business, so it needs access to every branch (TL-4).
-  const reasons: AdjustReason[] = screen.access?.businessWide ? ['found', 'missing', 'damaged', 'starting'] : ['found', 'missing', 'damaged'];
+  // Starting stock is recorded for the whole business, so it needs access to
+  // every branch (TL-4), and only once per business (TD-20): the server says
+  // whether the opening is posted (`openingPosted`), and a success or an
+  // `inventory.opening_already_posted` refusal on this screen says it too.
+  const [openingPostedHere, setOpeningPostedHere] = useState(false);
+  const { reasons, startingRecorded } = adjustReasons(screen.access?.businessWide ?? false, openingPostedHere || openingPostedOf(screen.access));
 
   useEffect(() => {
     if (screen.phase === 'ready' && warehouseId === '') setWarehouseId(onlyActiveWarehouse(screen.warehouses));
@@ -133,7 +147,13 @@ export default function AdjustStockPage({ params }: { params: Promise<{ locale: 
         }
       });
       setResult(answer);
+      if (reason === 'starting') setOpeningPostedHere(true);
     } catch (error) {
+      if (refusalCode(error) === 'inventory.opening_already_posted') {
+        // Recorded meanwhile (another member, another tab): the choice goes, and the message says what to use instead.
+        setOpeningPostedHere(true);
+        setReason('found');
+      }
       if (refusalCode(error) === 'inventory.unit_cost_required') {
         // The server names the lines that need a cost when it can; otherwise every line of extra stock does.
         const named = refusedLines(error);
@@ -148,6 +168,7 @@ export default function AdjustStockPage({ params }: { params: Promise<{ locale: 
 
   function startAnother() {
     renewDocumentId();
+    if (reason === 'starting') setReason('found');
     setLines([]);
     setLineErrors({});
     setCostErrors({});
@@ -168,6 +189,7 @@ export default function AdjustStockPage({ params }: { params: Promise<{ locale: 
           warehouses={screen.warehouses}
           warehouseId={warehouseId}
           reasons={reasons}
+          startingRecorded={startingRecorded}
           reason={reason}
           occurredOn={occurredOn}
           note={note}
