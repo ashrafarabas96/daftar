@@ -160,6 +160,12 @@ jobs:
 
       - run: npm ci
 
+      # The release gate composes the corrective gate, whose real-browser
+      # matrix (directive §8) drives Chromium from the pinned playwright-core;
+      # the same command as ci.yml's browser job.
+      - name: Install Chromium for the release gate's real-browser matrix
+        run: npx playwright-core install --with-deps chromium
+
       # ── 1b. the full Phase 3 secret history, base through this exact commit
       #
       # Corrective directive §7. Not the gitleaks-action PR window (the first
@@ -168,14 +174,18 @@ jobs:
       # origin/main, merged agent branches and merge commits included.
       # gitleaks 8.24.3 is fetched by the script and checked against the
       # published archive digest and the binary digest. It runs here, on the
-      # repository checkout, because the extracted archive has no history.
-      # The evidence step below requires its artefact.
+      # repository checkout, because the extracted archive has no history:
+      # there the release gate runs the same script in tree mode (the
+      # delivered files, `mode: tree (no git history)`), which cannot stand
+      # in for this. The evidence step below requires this artefact.
       - name: Phase 3 secret history range scan (base 0f2b09e through the commit under release)
         run: npm run scan:secrets:phase3 -- --head="$EXPECTED_SHA" --main-ref=origin/main --evidence=release/phase3-secret-scan.json
 
       # ── 2. the gate, on the repository checkout ───────────────────────────
       - name: Release gate — repository checkout
         run: npm run gate:phase3:release -- --evidence=release/phase3-s9-release-gate.json
+        env:
+          BROWSER_PG_DIR: ${{ runner.temp }}/release-browser-pg
 
       # ── 3. the archive, by the export and by git ─────────────────────────
       - name: Build the Phase 3 release candidate archive, and git's archive of the same commit
@@ -193,6 +203,7 @@ jobs:
         env:
           PG_DIR: ${{ runner.temp }}/pg-archive
           PG_PORT: '55432'
+          BROWSER_PG_DIR: ${{ runner.temp }}/archive-browser-pg
         run: |
           set -euo pipefail
           EXTRACT="$RUNNER_TEMP/rc"
@@ -204,6 +215,9 @@ jobs:
           git -C . rev-parse --is-inside-work-tree 2>/dev/null && { echo "FAIL: the extraction is inside a git work tree"; exit 1; } || true
           ARCHIVE_SHA="$(cut -d' ' -f1 < "$GITHUB_WORKSPACE/release/DAFTAR_PHASE_3_RC.zip.sha256")"
           npm ci
+          # Its own dependency tree: Chromium for the pinned playwright-core
+          # is installed from here too, as in the repository phase.
+          npx playwright-core install --with-deps chromium
           npm run gate:phase3:release -- \
             --evidence="$EXTRACT/DAFTAR/release/phase3-s9-release-gate-archive.json" \
             --archive-sha256="$ARCHIVE_SHA"

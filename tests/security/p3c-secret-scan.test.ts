@@ -30,9 +30,9 @@
  */
 import { createHash, randomInt } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   GITLEAKS_BINARY_SHA256,
@@ -42,6 +42,7 @@ import {
   git,
   parseIgnoreFile,
   scan,
+  scanTree,
   secretScanEvidenceProblems,
   type ScanResult,
 } from '../../scripts/phase3-secret-scan';
@@ -262,7 +263,7 @@ describe('Phase 3 secret history range scan', () => {
     expect(r.problems.join('\n')).toContain(`is ${base}, not the declared base ${notTheBase}`);
   });
 
-  it('an extracted release archive (DELIVERY_MANIFEST.json, no history) is refused with that reason, not scanned', () => {
+  it('the RANGE scan refuses an extracted release archive (DELIVERY_MANIFEST.json, no history) with that reason', () => {
     const archive = mkdtempSync(join(tmpdir(), 'p3c-secret-scan-archive-'));
     workDirs.push(archive);
     writeFileSync(join(archive, 'DELIVERY_MANIFEST.json'), '{}\n');
@@ -297,7 +298,7 @@ describe('Phase 3 secret history range scan', () => {
       const r = runScan(repo, base, head);
       expect(r.result).toBe('FAIL');
       expect(r.remaining.map((f) => f.fingerprint)).toEqual([fp]);
-      expect(r.problems.join('\n')).toMatch(/only generic-api-key findings on migration digests may be allowlisted/);
+      expect(r.problems.join('\n')).toMatch(/only generic-api-key findings may be allowlisted/);
     });
 
     it('a digest line whose hex is not the migration’s SHA-256 is still a failure', () => {
@@ -318,9 +319,138 @@ describe('Phase 3 secret history range scan', () => {
       expect(parseIgnoreFile(`${sha}:scripts/p.ts:generic-api-key:60\n`).problems).toHaveLength(1);
       expect(parseIgnoreFile(`# r\n\n${sha}:scripts/p.ts:generic-api-key:60\n`).problems).toHaveLength(1);
       expect(parseIgnoreFile(`# r\n${sha}:scripts/p.ts:generic-api-key:60\n`)).toEqual({
-        entries: [{ fingerprint: `${sha}:scripts/p.ts:generic-api-key:60`, reason: 'r', commit: sha, path: 'scripts/p.ts', rule: 'generic-api-key', line: 60 }],
+        entries: [
+          {
+            fingerprint: `${sha}:scripts/p.ts:generic-api-key:60`,
+            reason: 'r',
+            kind: 'commit',
+            commit: sha,
+            path: 'scripts/p.ts',
+            rule: 'generic-api-key',
+            line: 60,
+            lineSha256: null,
+          },
+        ],
         problems: [],
       });
+    });
+  });
+
+  describe('tree mode: the extracted archive has no history, so its files are scanned, never skipped', () => {
+    const REPO = join(__dirname, '../..');
+    const TSX = join(REPO, 'node_modules/.bin/tsx');
+    const SOURCE_COMMIT = 'f'.repeat(40);
+    const digest = createHash('sha256').update(MIGRATION_TEXT).digest('hex');
+    /** A rehearsal-style throwaway password, never written literally in this file. */
+    const fixtureValue = ['rehearsal', 'migrator', 'pw', '123456'].join('_');
+    const fixtureLine = `  __MIGRATOR_DB_PASSWORD__: '${fixtureValue}',`;
+    const lineSha = (text: string): string => createHash('sha256').update(text).digest('hex');
+    const sha = (text: string): string => createHash('sha256').update(text).digest('hex');
+
+    /** An extracted archive: the files, and a DELIVERY_MANIFEST.json whose inventory lists them; `extra` is on disk but not delivered. */
+    function buildArchive(files: Readonly<Record<string, string>>, extra: Readonly<Record<string, string>> = {}, inventory?: Record<string, string>): string {
+      const root = mkdtempSync(join(tmpdir(), 'p3c-secret-tree-'));
+      workDirs.push(root);
+      for (const [path, text] of Object.entries({ ...files, ...extra })) {
+        mkdirSync(dirname(join(root, path)), { recursive: true });
+        writeFileSync(join(root, path), text);
+      }
+      const listed = Object.entries(files).map(([path, text]) => ({ path, sha256: inventory?.[path] ?? sha(text) }));
+      writeFileSync(join(root, 'DELIVERY_MANIFEST.json'), JSON.stringify({ sourceCommit: SOURCE_COMMIT, inventory: listed }));
+      return root;
+    }
+    const baseFiles = (): Record<string, string> => ({ 'README.md': '# canary\n', [MIGRATION]: MIGRATION_TEXT, 'notes/a.txt': 'a\n' });
+    const treeScan = (root: string): ScanResult => scanTree({ root, gitleaks });
+
+    it('CONTROL: a clean archive passes in tree mode, every delivered file counted, and no range is claimed', () => {
+      const r = treeScan(buildArchive(baseFiles()));
+      expect(r.problems).toEqual([]);
+      expect(r).toMatchObject({ mode: 'tree', result: 'PASS', head: SOURCE_COMMIT, base: null, commitsScanned: null, filesScanned: 3, findings: 0 });
+    });
+
+    it('a credential in a delivered file fails the tree scan', () => {
+      const r = treeScan(buildArchive({ ...baseFiles(), 'config/leak.ts': `export const githubToken = '${plantedToken()}';\n` }));
+      expect(r.result).toBe('FAIL');
+      expect(r.remaining.map((f) => `${f.file}:${f.rule}`)).toEqual(['config/leak.ts:github-pat']);
+    });
+
+    it('a credential behind gitleaks:allow still fails the tree scan', () => {
+      const r = treeScan(buildArchive({ ...baseFiles(), 'config/leak.ts': `export const githubToken = '${plantedToken()}'; // gitleaks:allow\n` }));
+      expect(r.result).toBe('FAIL');
+    });
+
+    it('the .gitleaksignore file is itself scanned as data, not obeyed by gitleaks', () => {
+      const r = treeScan(buildArchive({ ...baseFiles(), '.gitleaksignore': `# ${plantedToken()}\n` }));
+      expect(r.result).toBe('FAIL');
+      expect(r.remaining.map((f) => f.file)).toEqual(['.gitleaksignore']);
+    });
+
+    it('only the delivered inventory is the tree: a file on disk outside it is not read, a changed file is refused', () => {
+      expect(treeScan(buildArchive(baseFiles(), { 'stray/leftover.ts': `export const githubToken = '${plantedToken()}';\n` })).result).toBe('PASS');
+      const tampered = treeScan(buildArchive(baseFiles(), {}, { 'notes/a.txt': sha('not a\n') }));
+      expect(tampered.result).toBe('FAIL');
+      expect(tampered.problems.join('\n')).toMatch(/notes\/a\.txt does not match its inventory digest/);
+    });
+
+    it('tree entries: a migration digest proved against the tree, and a fixture line pinned by line-sha256, are allowlisted', () => {
+      const prefix = `export const P = [\n  ['0044_accounting_assertion_keys.sql', '${digest}'],\n];\n`;
+      const rehearsal = `export const V = {\n${fixtureLine}\n};\n`;
+      const files = { ...baseFiles(), 'scripts/prefix.ts': prefix, 'scripts/rehearsal.ts': rehearsal };
+      const before = treeScan(buildArchive(files));
+      expect(before.remaining.map((f) => f.fingerprint).sort()).toEqual(['scripts/prefix.ts:generic-api-key:2', 'scripts/rehearsal.ts:generic-api-key:2']);
+      const ignore = [
+        '# migration digest, not a credential',
+        'tree:scripts/prefix.ts:generic-api-key:2',
+        '',
+        `# rehearsal fixture, not a credential. line-sha256 ${lineSha(fixtureLine)}`,
+        'tree:scripts/rehearsal.ts:generic-api-key:2',
+        '',
+      ].join('\n');
+      const after = treeScan(buildArchive({ ...files, '.gitleaksignore': ignore }));
+      expect(after.problems).toEqual([]);
+      expect(after.result).toBe('PASS');
+      expect(after.allowlisted).toHaveLength(2);
+    });
+
+    it('tree entries: a pin that is not the line, a missing pin, or a provider-specific rule is still a failure', () => {
+      const rehearsal = `export const V = {\n${fixtureLine}\n};\n`;
+      const wrongPin = `# fixture. line-sha256 ${lineSha('something else')}\ntree:scripts/rehearsal.ts:generic-api-key:2\n`;
+      const noPin = '# fixture\ntree:scripts/rehearsal.ts:generic-api-key:2\n';
+      for (const ignore of [wrongPin, noPin]) {
+        const r = treeScan(buildArchive({ ...baseFiles(), 'scripts/rehearsal.ts': rehearsal, '.gitleaksignore': ignore }));
+        expect(r.result).toBe('FAIL');
+        expect(r.remaining.map((f) => f.fingerprint)).toEqual(['scripts/rehearsal.ts:generic-api-key:2']);
+      }
+      const tokenLine = `export const githubToken = '${plantedToken()}';`;
+      const pat = treeScan(
+        buildArchive({
+          ...baseFiles(),
+          'config/leak.ts': `${tokenLine}\n`,
+          '.gitleaksignore': `# "a test token". line-sha256 ${lineSha(tokenLine)}\ntree:config/leak.ts:github-pat:1\n`,
+        }),
+      );
+      expect(pat.result).toBe('FAIL');
+      expect(pat.problems.join('\n')).toMatch(/only generic-api-key findings may be allowlisted, not github-pat/);
+    });
+
+    it('tree entries are inert for gitleaks itself: a range finding at the same path and line is not hidden', () => {
+      const { repo, base, head } = buildRepo({ onBranch: { 10: [leak(plantedToken())], 11: [unleak] } });
+      writeFileSync(join(repo, '.gitleaksignore'), '# a tree entry\ntree:config/leak.ts:github-pat:1\n');
+      expect(runScan(repo, base, head).result).toBe('FAIL');
+    });
+
+    it('the CLI picks tree mode by itself inside an archive and says so', () => {
+      const run = (root: string): { status: number | null; out: string } => {
+        const res = spawnSync(TSX, [join(REPO, 'scripts/phase3-secret-scan.ts'), `--repo=${root}`, `--gitleaks=${gitleaks}`], { cwd: REPO, encoding: 'utf8' });
+        return { status: res.status, out: `${res.stdout}${res.stderr}` };
+      };
+      const clean = run(buildArchive(baseFiles()));
+      expect(clean.out).toContain('mode: tree (no git history)');
+      expect(clean.status).toBe(0);
+      const dirty = run(buildArchive({ ...baseFiles(), 'config/leak.ts': `export const githubToken = '${plantedToken()}';\n` }));
+      expect(dirty.out).toContain('mode: tree (no git history)');
+      expect(dirty.out).toContain('result: FAIL');
+      expect(dirty.status).toBe(1);
     });
   });
 
@@ -391,6 +521,7 @@ describe('Phase 3 secret history range scan', () => {
       findings: 3,
       allowlisted: [],
       remaining: [],
+      filesScanned: null,
       ignoreFile: { present: true, sha256: null, entries: 3, unused: 0 },
       problems: [],
       result: 'PASS',
@@ -404,6 +535,10 @@ describe('Phase 3 secret history range scan', () => {
       ['a missing artefact', null],
       ['a failed scan', { ...good, result: 'FAIL' as const }],
       ['a derived base', { ...good, mode: 'derived-merge-base' as const }],
+      [
+        'the archive run’s tree scan in place of the range',
+        { ...good, mode: 'tree' as const, base: null, mergeBase: null, commitsInRange: null, commitsScanned: null, filesScanned: 968 },
+      ],
       ['another base', { ...good, base: 'c'.repeat(40) }],
       ['another head', { ...good, head: 'd'.repeat(40) }],
       ['the 30-commit window', { ...good, commitsScanned: 30 }],

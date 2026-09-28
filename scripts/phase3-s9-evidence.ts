@@ -46,7 +46,9 @@
  *      commit in the range read, nothing remaining. The evidence records base,
  *      head, commits in range, commits scanned, findings, allowlisted
  *      fingerprints and the result. The archive run has no `.git` and cannot
- *      scan history, so the repository checkout's scan is the one recorded.
+ *      scan history (the release gate scans its files in tree mode there), so
+ *      the repository checkout's range scan is the one recorded, and a
+ *      tree-mode artefact is refused in its place.
  *      Required when `--secret-scan=<file>` is passed (the release workflow
  *      passes it); judged whenever the file is present.
  *

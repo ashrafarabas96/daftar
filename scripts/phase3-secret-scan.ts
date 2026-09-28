@@ -54,6 +54,26 @@
  *      commit. A line holding anything else — a real credential included —
  *      fails the scan even if its fingerprint is listed.
  *
+ * THE EXTRACTED RELEASE ARCHIVE: TREE MODE
+ *
+ * The release gate runs a second time inside the extracted archive, which has
+ * no `.git`. There this script does not pretend to scan a range and does not
+ * skip: it copies exactly the files the archive's `DELIVERY_MANIFEST.json`
+ * lists (each checked against its recorded SHA-256) into a scratch directory
+ * and runs `gitleaks dir` over them with the same default rules and the same
+ * `--ignore-gitleaks-allow`, printing `mode: tree (no git history)`. Any
+ * finding fails it. Tree findings carry fingerprints without a commit
+ * (`<path>:<rule>:<line>`), and `.gitleaksignore` may list those too, as
+ * `tree:<path>:<rule>:<line>` (inert for gitleaks itself), under
+ * the same three conditions with condition 3 read from the tree: a migration
+ * digest line proved against the tree's migration file, or — for a
+ * `generic-api-key` test fixture that predates Phase 3 — the SHA-256 of the
+ * exact line, pinned in the reason as `line-sha256 <64 hex>`, so the entry
+ * covers that one line of text and nothing else. A provider-specific rule
+ * (a GitHub token, a private key, …) can never be allowlisted. `--mode=tree`
+ * runs the same over `git ls-files` in a checkout. The release evidence
+ * records the REPOSITORY run's range result; a tree run cannot stand in for it.
+ *
  * WHAT IT PRINTS, AND WHAT THE RELEASE EVIDENCE RECORDS
  *
  * base, head, merge-base, commits in range (and merges), commits gitleaks
@@ -62,14 +82,18 @@
  * writes the same as JSON for `scripts/phase3-s9-evidence.ts`.
  *
  * Usage:
- *   npm run scan:secrets:phase3 -- [--head=<rev>] [--base=<sha>|derive]
- *     [--main-ref=<ref>] [--repo=<dir>] [--gitleaks=<path>] [--evidence=<file>]
+ *   npm run scan:secrets:phase3 -- [--mode=auto|range|tree] [--head=<rev>]
+ *     [--base=<sha>|derive] [--main-ref=<ref>] [--repo=<dir>]
+ *     [--gitleaks=<path>] [--evidence=<file>]
+ *
+ * `auto` (the default) is tree mode where `DELIVERY_MANIFEST.json` exists
+ * (an extracted archive) and range mode everywhere else.
  *
  * Exit 0 = PASS, 1 = FAIL (a finding, or any precondition not met).
  */
 import { createHash } from 'node:crypto';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 
@@ -85,7 +109,24 @@ const GITLEAKS_TARBALL_URL = `https://github.com/gitleaks/gitleaks/releases/down
 
 const ROOT = join(__dirname, '..');
 const MIGRATIONS_DIR = 'infrastructure/database/migrations';
-const FINGERPRINT = /^([0-9a-f]{40}):(.+):([a-z0-9-]+):([1-9][0-9]*)$/;
+const COMMIT_FINGERPRINT = /^([0-9a-f]{40}):([^:]+):([a-z0-9-]+):([1-9][0-9]*)$/;
+/**
+ * `tree:<path>:<rule>:<line>`. gitleaks itself reads a three-part line as a
+ * global, any-commit ignore; the `tree:` prefix makes it a four-part line
+ * naming a commit called "tree", which never matches, so these entries stay
+ * inert for the gitleaks-action step and apply only here, to tree findings.
+ */
+const TREE_FINGERPRINT = /^tree:([^:]+):([a-z0-9-]+):([1-9][0-9]*)$/;
+/**
+ * The pin a tree fixture entry carries in its reason: `line-sha256 <64 hex>`.
+ * A space, not `=`: `<keyword> … =<hex>` in a comment is itself what the
+ * generic-api-key rule matches, and the ignore file is scanned as data.
+ */
+const LINE_PIN = /\bline-sha256 ([0-9a-f]{64})\b/;
+/** The one gitleaks rule whose findings may be allowlisted at all: the generic high-entropy heuristic. */
+const ALLOWLISTABLE_RULE = 'generic-api-key';
+/** In tree mode the scanned copy holds `.gitleaksignore` under this name, so gitleaks reads it as data and not as its ignore list. */
+const IGNORE_FILE_AS_DATA = 'gitleaksignore.scanned-as-data';
 const DIGEST_LINE = /^\s*\['(\d{4}_[a-z0-9_]+\.sql)',\s*'([0-9a-f]{64})'\],?\s*$/;
 
 export class SecretScanError extends Error {
@@ -181,10 +222,14 @@ export function ensureGitleaks(explicit: string | undefined, root: string = ROOT
 export interface IgnoreEntry {
   readonly fingerprint: string;
   readonly reason: string;
-  readonly commit: string;
+  /** `commit`: a range finding (`<commit>:<path>:<rule>:<line>`); `tree`: a tree finding (`<path>:<rule>:<line>`). */
+  readonly kind: 'commit' | 'tree';
+  readonly commit: string | null;
   readonly path: string;
   readonly rule: string;
   readonly line: number;
+  /** `line-sha256 <hex>` in the reason: the exact line a tree entry covers. */
+  readonly lineSha256: string | null;
 }
 
 /** Parse `.gitleaksignore`; every problem is returned, none is thrown. */
@@ -202,40 +247,69 @@ export function parseIgnoreFile(text: string): { entries: IgnoreEntry[]; problem
       comment.push(line.replace(/^#+\s*/, ''));
       return;
     }
-    const m = FINGERPRINT.exec(line);
-    if (!m || m[1] === undefined || m[2] === undefined || m[3] === undefined || m[4] === undefined) {
-      problems.push(`.gitleaksignore line ${i + 1} is not one exact fingerprint <40-hex commit>:<path>:<rule>:<line>: "${line}"`);
-    } else if (/[*?[\]]/.test(line)) {
-      problems.push(`.gitleaksignore line ${i + 1} carries a wildcard: "${line}"`);
-    } else if (comment.join(' ').trim() === '') {
-      problems.push(`.gitleaksignore line ${i + 1} has no reason comment directly above it: "${line}"`);
-    } else {
-      entries.push({ fingerprint: line, reason: comment.join(' '), commit: m[1], path: m[2], rule: m[3], line: Number(m[4]) });
-    }
+    const reason = comment.join(' ').trim();
     comment = [];
+    const c = COMMIT_FINGERPRINT.exec(line);
+    const t = c === null ? TREE_FINGERPRINT.exec(line) : null;
+    if (/[*?[\]]/.test(line)) {
+      problems.push(`.gitleaksignore line ${i + 1} carries a wildcard: "${line}"`);
+    } else if (reason === '') {
+      problems.push(`.gitleaksignore line ${i + 1} has no reason comment directly above it: "${line}"`);
+    } else if (c !== null && c[1] !== undefined && c[2] !== undefined && c[3] !== undefined && c[4] !== undefined) {
+      entries.push({ fingerprint: line, reason, kind: 'commit', commit: c[1], path: c[2], rule: c[3], line: Number(c[4]), lineSha256: null });
+    } else if (t !== null && t[1] !== undefined && t[2] !== undefined && t[3] !== undefined) {
+      const pin = LINE_PIN.exec(reason)?.[1] ?? null;
+      entries.push({ fingerprint: `${t[1]}:${t[2]}:${t[3]}`, reason, kind: 'tree', commit: null, path: t[1], rule: t[2], line: Number(t[3]), lineSha256: pin });
+    } else {
+      problems.push(`.gitleaksignore line ${i + 1} is not one exact fingerprint <commit>:<path>:<rule>:<line> or tree:<path>:<rule>:<line>: "${line}"`);
+    }
   });
   return { entries, problems };
 }
 
 /**
- * Condition 3: the fingerprinted line is a migration name and its true
- * SHA-256, both read from git at the fingerprint's own commit.
+ * Condition 3, over a reader of file content (`null` = absent): the
+ * fingerprinted line is a migration name and its true SHA-256; or, in tree
+ * mode only, a line whose SHA-256 is pinned in the entry's reason.
  */
+function verifyEntry(e: IgnoreEntry, read: (path: string) => Buffer | null, where: string): string | null {
+  if (e.rule !== ALLOWLISTABLE_RULE) return `${e.fingerprint}: only ${ALLOWLISTABLE_RULE} findings may be allowlisted, not ${e.rule}`;
+  const content = read(e.path);
+  if (content === null) return `${e.fingerprint}: ${e.path} does not exist ${where}`;
+  const text = content.toString('utf8').split('\n')[e.line - 1];
+  if (text === undefined) return `${e.fingerprint}: ${e.path} has no line ${e.line} ${where}`;
+  const m = DIGEST_LINE.exec(text);
+  if (m && m[1] !== undefined && m[2] !== undefined) {
+    const migrationPath = `${MIGRATIONS_DIR}/${m[1]}`;
+    const migration = read(migrationPath);
+    if (migration === null) return `${e.fingerprint}: ${migrationPath} does not exist ${where}`;
+    const actual = sha256(migration);
+    if (actual !== m[2]) return `${e.fingerprint}: ${m[1]} hashes to ${actual} ${where}, not the ${m[2]} on the line`;
+    return null;
+  }
+  if (e.kind === 'tree' && e.lineSha256 !== null) {
+    const actual = sha256(text);
+    if (actual !== e.lineSha256)
+      return `${e.fingerprint}: line ${e.line} of ${e.path} ${where} hashes to ${actual}, not the pinned line-sha256 ${e.lineSha256}`;
+    return null;
+  }
+  return `${e.fingerprint}: line ${e.line} of ${e.path} ${where} is not a ['<migration>.sql', '<sha256>'] pair${e.kind === 'tree' ? ' and the entry pins no line-sha256' : ''}`;
+}
+
+/** Condition 3 for a range entry, read from git at the fingerprint's own commit. */
 export function verifyDigestEntry(repo: string, e: IgnoreEntry): string | null {
-  if (e.rule !== 'generic-api-key') return `${e.fingerprint}: only generic-api-key findings on migration digests may be allowlisted, not ${e.rule}`;
-  if (!gitOk(repo, ['cat-file', '-e', `${e.commit}^{commit}`])) return `${e.fingerprint}: commit ${e.commit} is not in this repository`;
-  if (!gitOk(repo, ['cat-file', '-e', `${e.commit}:${e.path}`])) return `${e.fingerprint}: ${e.path} does not exist at ${e.commit}`;
-  const text = git(repo, ['show', `${e.commit}:${e.path}`]).split('\n')[e.line - 1];
-  const m = text === undefined ? null : DIGEST_LINE.exec(text);
-  if (!m || m[1] === undefined || m[2] === undefined)
-    return `${e.fingerprint}: line ${e.line} of ${e.path} at ${e.commit.slice(0, 12)} is not a ['<migration>.sql', '<sha256>'] pair`;
-  const [name, digest] = [m[1], m[2]];
-  const migrationPath = `${MIGRATIONS_DIR}/${name}`;
-  if (!gitOk(repo, ['cat-file', '-e', `${e.commit}:${migrationPath}`])) return `${e.fingerprint}: ${migrationPath} does not exist at ${e.commit.slice(0, 12)}`;
-  const migration = gitBuffer(repo, ['show', `${e.commit}:${migrationPath}`]);
-  const actual = sha256(migration);
-  if (actual !== digest) return `${e.fingerprint}: ${name} hashes to ${actual} at ${e.commit.slice(0, 12)}, not the ${digest} on the line`;
-  return null;
+  const commit = e.commit ?? '';
+  if (!gitOk(repo, ['cat-file', '-e', `${commit}^{commit}`])) return `${e.fingerprint}: commit ${commit} is not in this repository`;
+  return verifyEntry(
+    e,
+    (path) => (gitOk(repo, ['cat-file', '-e', `${commit}:${path}`]) ? gitBuffer(repo, ['show', `${commit}:${path}`]) : null),
+    `at ${commit.slice(0, 12)}`,
+  );
+}
+
+/** Condition 3 for a tree entry, read from the scanned tree. */
+export function verifyTreeEntry(root: string, e: IgnoreEntry): string | null {
+  return verifyEntry(e, (path) => (existsSync(join(root, path)) ? readFileSync(join(root, path)) : null), 'in the tree');
 }
 
 // ── the scan ──────────────────────────────────────────────────────────────
@@ -260,7 +334,8 @@ interface GitleaksFinding {
 export interface ScanResult {
   readonly produced: 'scripts/phase3-secret-scan.ts';
   readonly tool: { readonly name: 'gitleaks'; readonly version: string; readonly binarySha256: string };
-  readonly mode: 'phase3-base' | 'derived-merge-base';
+  /** `phase3-base` / `derived-merge-base`: a range scan of git history; `tree`: the files of an extracted archive (no history). */
+  readonly mode: 'phase3-base' | 'derived-merge-base' | 'tree';
   readonly base: string | null;
   readonly head: string | null;
   readonly mainRef: string | null;
@@ -269,9 +344,11 @@ export interface ScanResult {
   readonly commitsInRange: number | null;
   readonly mergesInRange: number | null;
   readonly commitsScanned: number | null;
+  /** tree mode: the files scanned */
+  readonly filesScanned: number | null;
   readonly findings: number | null;
   readonly allowlisted: readonly { fingerprint: string; reason: string }[];
-  readonly remaining: readonly { fingerprint: string; rule: string; file: string; line: number; commit: string }[];
+  readonly remaining: readonly { fingerprint: string; rule: string; file: string; line: number; commit: string | null }[];
   readonly ignoreFile: { readonly present: boolean; readonly sha256: string | null; readonly entries: number; readonly unused: number };
   readonly problems: readonly string[];
   readonly result: 'PASS' | 'FAIL';
@@ -301,8 +378,10 @@ export function scan(opts: ScanOptions): ScanResult {
 
   const ignorePath = join(repo, '.gitleaksignore');
   const ignoreText = existsSync(ignorePath) ? readFileSync(ignorePath, 'utf8') : null;
-  const parsed = ignoreText === null ? { entries: [], problems: [] } : parseIgnoreFile(ignoreText);
-  problems.push(...parsed.problems);
+  const parsedAll = ignoreText === null ? { entries: [], problems: [] } : parseIgnoreFile(ignoreText);
+  problems.push(...parsedAll.problems);
+  // A range finding is fingerprinted with its commit; tree entries are for tree mode.
+  const parsed = { entries: parsedAll.entries.filter((e) => e.kind === 'commit') };
   let unused = 0;
 
   const finish = (): ScanResult => ({
@@ -317,6 +396,7 @@ export function scan(opts: ScanOptions): ScanResult {
     commitsInRange,
     mergesInRange,
     commitsScanned,
+    filesScanned: null,
     findings: findings === null ? null : findings.length,
     allowlisted,
     remaining,
@@ -431,7 +511,7 @@ export function scan(opts: ScanOptions): ScanResult {
   for (const e of parsed.entries) verified.set(e.fingerprint, verifyDigestEntry(repo, e));
   for (const problem of verified.values()) if (problem !== null) problems.push(`.gitleaksignore: ${problem}`);
 
-  const left: { fingerprint: string; rule: string; file: string; line: number; commit: string }[] = [];
+  const left: { fingerprint: string; rule: string; file: string; line: number; commit: string | null }[] = [];
   const seen = new Set<string>();
   for (const f of findings) {
     seen.add(f.Fingerprint);
@@ -444,8 +524,161 @@ export function scan(opts: ScanOptions): ScanResult {
   }
   remaining = left;
   unused = parsed.entries.filter((e) => !seen.has(e.fingerprint)).length;
-  for (const r of remaining) problems.push(`finding ${r.rule} in ${r.file}:${r.line} at ${r.commit.slice(0, 12)} (${r.fingerprint})`);
+  for (const r of remaining) problems.push(`finding ${r.rule} in ${r.file}:${r.line} at ${String(r.commit).slice(0, 12)} (${r.fingerprint})`);
   return finish();
+}
+
+// ── tree mode: the extracted archive ─────────────────────────────────────
+
+export interface TreeScanOptions {
+  /** an extracted archive (with DELIVERY_MANIFEST.json), or a checkout, whose `git ls-files` is then the inventory */
+  readonly root: string;
+  readonly gitleaks: string;
+}
+
+interface DeliveryInventory {
+  readonly sourceCommit?: string;
+  readonly inventory?: readonly { readonly path: string; readonly sha256: string }[];
+}
+
+/**
+ * The files of the tree, as the archive itself lists them: the delivery
+ * manifest's inventory in an extracted archive, `git ls-files` in a checkout.
+ */
+function treeInventory(root: string, problems: string[]): { head: string | null; files: { path: string; sha256: string | null }[] } {
+  const manifestPath = join(root, 'DELIVERY_MANIFEST.json');
+  if (existsSync(manifestPath)) {
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as DeliveryInventory;
+    if (!Array.isArray(manifest.inventory) || manifest.inventory.length === 0) {
+      problems.push('DELIVERY_MANIFEST.json lists no inventory: there is nothing to say the scanned tree is the archive');
+      return { head: manifest.sourceCommit ?? null, files: [] };
+    }
+    return { head: manifest.sourceCommit ?? null, files: manifest.inventory.map((i) => ({ path: i.path, sha256: i.sha256 })) };
+  }
+  const listed = git(root, ['ls-files', '-z'])
+    .split('\0')
+    .filter((f) => f.length > 0 && existsSync(join(root, f)));
+  return { head: git(root, ['rev-parse', 'HEAD']), files: listed.map((path) => ({ path, sha256: null })) };
+}
+
+export function scanTree(opts: TreeScanOptions): ScanResult {
+  const problems: string[] = [];
+  const root = resolve(opts.root);
+  const binarySha256 = sha256(readFileSync(opts.gitleaks));
+  const ignorePath = join(root, '.gitleaksignore');
+  const ignoreText = existsSync(ignorePath) ? readFileSync(ignorePath, 'utf8') : null;
+  const parsedAll = ignoreText === null ? { entries: [], problems: [] } : parseIgnoreFile(ignoreText);
+  problems.push(...parsedAll.problems);
+  const entries = parsedAll.entries.filter((e) => e.kind === 'tree');
+  let findings: GitleaksFinding[] | null = null;
+  const allowlisted: { fingerprint: string; reason: string }[] = [];
+  const remaining: { fingerprint: string; rule: string; file: string; line: number; commit: string | null }[] = [];
+  let unused = 0;
+  let filesScanned: number | null = null;
+
+  if (existsSync(join(root, '.gitleaks.toml')))
+    problems.push('.gitleaks.toml is present: this scan runs the default gitleaks rule set and refuses a config that could replace or allowlist it');
+  for (const name of ['GITLEAKS_CONFIG', 'GITLEAKS_CONFIG_TOML']) {
+    if ((process.env[name] ?? '') !== '')
+      problems.push(`${name} is set: this scan runs the default gitleaks rule set and refuses a config that could replace or allowlist it`);
+  }
+  const version = spawnSync(opts.gitleaks, ['version'], { encoding: 'utf8' });
+  if (version.status !== 0 || version.stdout.trim() !== GITLEAKS_VERSION)
+    problems.push(`gitleaks reports version "${String(version.stdout).trim()}", not the pinned ${GITLEAKS_VERSION}`);
+  if (binarySha256 !== GITLEAKS_BINARY_SHA256) problems.push(`the gitleaks binary has SHA-256 ${binarySha256}, not the pinned ${GITLEAKS_BINARY_SHA256}`);
+
+  const { head, files } = treeInventory(root, problems);
+  const work = mkdtempSync(join(tmpdir(), 'daftar-secret-tree-'));
+  try {
+    // Exactly the inventory, each file checked against its recorded digest,
+    // copied where no node_modules, build output or ignore file can be read
+    // as part of the tree.
+    const copy = join(work, 'tree');
+    for (const f of files) {
+      const src = join(root, f.path);
+      if (!existsSync(src)) {
+        problems.push(`${f.path} is in the inventory but not in the tree`);
+        continue;
+      }
+      if (f.sha256 !== null && sha256(readFileSync(src)) !== f.sha256) problems.push(`${f.path} does not match its inventory digest`);
+      const dst = join(copy, f.path === '.gitleaksignore' ? IGNORE_FILE_AS_DATA : f.path);
+      mkdirSync(dirname(dst), { recursive: true });
+      copyFileSync(src, dst);
+    }
+    filesScanned = files.length;
+    const noIgnore = join(work, 'no-ignore');
+    mkdirSync(noIgnore);
+    mkdirSync(copy, { recursive: true });
+    const report = join(work, 'report.json');
+    const env = { ...process.env };
+    delete env['GITLEAKS_CONFIG'];
+    delete env['GITLEAKS_CONFIG_TOML'];
+    const run = spawnSync(
+      opts.gitleaks,
+      [
+        'dir',
+        '--no-banner',
+        '--no-color',
+        '--redact',
+        '--ignore-gitleaks-allow',
+        '--gitleaks-ignore-path',
+        noIgnore,
+        '--exit-code',
+        '0',
+        '--report-format',
+        'json',
+        '--report-path',
+        report,
+        '.',
+      ],
+      { cwd: copy, encoding: 'utf8', env, maxBuffer: 64 * 1024 * 1024 },
+    );
+    if (run.status !== 0) {
+      problems.push(`gitleaks exited ${String(run.status)}: ${`${run.stdout}\n${run.stderr}`.trim().split('\n').slice(-3).join(' | ')}`);
+    } else {
+      findings = (JSON.parse(readFileSync(report, 'utf8')) as GitleaksFinding[]).map((f) => {
+        const file = f.File.replace(/^\.\//, '') === IGNORE_FILE_AS_DATA ? '.gitleaksignore' : f.File.replace(/^\.\//, '');
+        return { ...f, File: file, Fingerprint: `${file}:${f.RuleID}:${f.StartLine}` };
+      });
+    }
+  } finally {
+    rmSync(work, { recursive: true, force: true });
+  }
+
+  const verified = new Map<string, string | null>();
+  for (const e of entries) verified.set(e.fingerprint, verifyTreeEntry(root, e));
+  for (const problem of verified.values()) if (problem !== null) problems.push(`.gitleaksignore: ${problem}`);
+  const byFingerprint = new Map(entries.map((e) => [e.fingerprint, e]));
+  const seen = new Set<string>();
+  for (const f of findings ?? []) {
+    seen.add(f.Fingerprint);
+    const entry = byFingerprint.get(f.Fingerprint);
+    if (entry !== undefined && verified.get(f.Fingerprint) === null) allowlisted.push({ fingerprint: f.Fingerprint, reason: entry.reason });
+    else remaining.push({ fingerprint: f.Fingerprint, rule: f.RuleID, file: f.File, line: f.StartLine, commit: null });
+  }
+  unused = entries.filter((e) => !seen.has(e.fingerprint)).length;
+  for (const r of remaining) problems.push(`finding ${r.rule} in ${r.file}:${r.line} (${r.fingerprint})`);
+
+  return {
+    produced: 'scripts/phase3-secret-scan.ts',
+    tool: { name: 'gitleaks', version: GITLEAKS_VERSION, binarySha256 },
+    mode: 'tree',
+    base: null,
+    head,
+    mainRef: null,
+    mergeBase: null,
+    logOpts: null,
+    commitsInRange: null,
+    mergesInRange: null,
+    commitsScanned: null,
+    filesScanned,
+    findings: findings === null ? null : findings.length,
+    allowlisted,
+    remaining,
+    ignoreFile: { present: ignoreText !== null, sha256: ignoreText === null ? null : sha256(ignoreText), entries: entries.length, unused },
+    problems,
+    result: problems.length === 0 && findings !== null && remaining.length === 0 ? 'PASS' : 'FAIL',
+  };
 }
 
 // ── the evidence check, shared with the release evidence ─────────────────
@@ -483,13 +716,22 @@ function main(): void {
   };
   const repo = resolve(arg('repo') ?? ROOT);
   const evidencePath = arg('evidence');
+  const requested = arg('mode') ?? 'auto';
+  if (!['auto', 'range', 'tree'].includes(requested)) {
+    console.log(`PHASE 3 SECRET SCAN: FAIL\n  - --mode must be auto, range or tree, not "${requested}"`);
+    process.exit(1);
+  }
+  const mode = requested === 'auto' ? (existsSync(join(repo, 'DELIVERY_MANIFEST.json')) ? 'tree' : 'range') : requested;
   let result: ScanResult | null = null;
   try {
     const gitleaks = ensureGitleaks(arg('gitleaks') ?? process.env['GITLEAKS_BIN'], ROOT);
-    result = scan({ repo, head: arg('head') ?? 'HEAD', base: arg('base') ?? PHASE3_BASE, mainRef: arg('main-ref'), gitleaks });
+    result =
+      mode === 'tree'
+        ? scanTree({ root: repo, gitleaks })
+        : scan({ repo, head: arg('head') ?? 'HEAD', base: arg('base') ?? PHASE3_BASE, mainRef: arg('main-ref'), gitleaks });
   } catch (e) {
     if (!(e instanceof SecretScanError)) throw e;
-    console.log(`PHASE 3 SECRET HISTORY SCAN: FAIL\n  - ${e.message}`);
+    console.log(`PHASE 3 SECRET SCAN: FAIL\n  mode: ${mode === 'tree' ? 'tree (no git history)' : 'range'}\n  - ${e.message}`);
     process.exit(1);
   }
   if (evidencePath !== undefined) {
@@ -497,22 +739,30 @@ function main(): void {
     mkdirSync(dirname(out), { recursive: true });
     writeFileSync(out, `${JSON.stringify(result, null, 2)}\n`);
   }
-  console.log('PHASE 3 SECRET HISTORY SCAN');
-  console.log(`  gitleaks          ${result.tool.version} (sha256 ${result.tool.binarySha256.slice(0, 16)}…)`);
-  console.log(`  mode              ${result.mode}`);
-  console.log(`  base              ${String(result.base)}`);
-  console.log(`  head              ${String(result.head)}`);
-  console.log(`  merge-base        ${String(result.mergeBase)} (with ${String(result.mainRef)})`);
-  console.log(`  log options       ${String(result.logOpts)}`);
-  console.log(`  commits in range  ${String(result.commitsInRange)} (${String(result.mergesInRange)} merges)`);
-  console.log(`  commits scanned   ${String(result.commitsScanned)}`);
-  console.log(`  findings          ${String(result.findings)}`);
-  console.log(`  allowlisted       ${result.allowlisted.length} (exact fingerprints, each proved a migration digest)`);
-  for (const a of result.allowlisted) console.log(`    ${a.fingerprint}`);
-  console.log(`  remaining         ${result.remaining.length}`);
-  console.log(`\nPHASE 3 SECRET HISTORY SCAN: ${result.result}`);
-  for (const p of result.problems) console.log(`  - ${p}`);
-  process.exit(result.result === 'PASS' ? 0 : 1);
+  const r = result;
+  console.log('PHASE 3 SECRET SCAN');
+  console.log(`  gitleaks: ${r.tool.version} (sha256 ${r.tool.binarySha256.slice(0, 16)}…)`);
+  if (r.mode === 'tree') {
+    console.log('  mode: tree (no git history)');
+    console.log(`  tree of commit: ${String(r.head)}`);
+    console.log(`  files scanned: ${String(r.filesScanned)}`);
+  } else {
+    console.log(`  mode: range (${r.mode})`);
+    console.log(`  base: ${String(r.base)}`);
+    console.log(`  head: ${String(r.head)}`);
+    console.log(`  merge-base: ${String(r.mergeBase)} (with ${String(r.mainRef)})`);
+    console.log(`  log options: ${String(r.logOpts)}`);
+    console.log(`  commits in range: ${String(r.commitsInRange)} (${String(r.mergesInRange)} merges)`);
+    console.log(`  commits scanned: ${String(r.commitsScanned)}`);
+  }
+  console.log(`  findings: ${String(r.findings)}`);
+  console.log(`  allowlisted: ${r.allowlisted.length} (exact fingerprints, each proved against its content)`);
+  for (const a of r.allowlisted) console.log(`    ${a.fingerprint}`);
+  console.log(`  remaining: ${r.remaining.length}`);
+  console.log(`  result: ${r.result}`);
+  console.log(`\nPHASE 3 SECRET SCAN: ${r.result}`);
+  for (const p of r.problems) console.log(`  - ${p}`);
+  process.exit(r.result === 'PASS' ? 0 : 1);
 }
 
 if (require.main === module) main();

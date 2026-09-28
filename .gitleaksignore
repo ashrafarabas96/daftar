@@ -1,12 +1,17 @@
 # DAFTAR secret-scan allowlist: exact gitleaks fingerprints only.
 #
-# Format: <commit>:<path>:<rule>:<line>, one finding each, with its reason
-# directly above. No wildcard, no path-wide or rule-wide entry, no regex.
+# Format: <commit>:<path>:<rule>:<line> (range) or tree:<path>:<rule>:<line>
+# (the extracted-archive tree), one finding each, with its reason directly
+# above. No wildcard, no path-wide or rule-wide entry, no regex.
 # scripts/phase3-secret-scan.ts reads this file itself and accepts an entry
-# only if the named line, read from git at that commit, is a
-# ['<migration>.sql', '<sha256>'] pair whose hex IS the SHA-256 of that
-# migration file at that commit. A listed fingerprint on anything else,
-# including a real credential, still fails the scan.
+# only if the named line, read from git at that commit (range) or from the
+# tree (tree), is a ['<migration>.sql', '<sha256>'] pair whose hex IS the
+# SHA-256 of that migration file there, or (tree only, generic-api-key only)
+# a line whose SHA-256 equals the `line-sha256 <hex>` pinned in its reason. A listed
+# fingerprint on anything else, including a real credential, still fails.
+# The `tree:` prefix keeps tree entries inert for gitleaks itself (it reads
+# them as a commit named "tree"), so the gitleaks-action step is not widened
+# to a path-wide, any-commit ignore.
 
 # Migration digest, not a credential: SHA-256 of 0011_auth_lineage.sql in the Phase 2 prefix table (accepted commit 61b89d6, generic-api-key false positive).
 61b89d6511ff06164b511e4f0598806306acd5f4:scripts/phase2-prefix.ts:generic-api-key:60
@@ -16,3 +21,35 @@
 
 # Migration digest, not a credential: SHA-256 of 0044_accounting_assertion_keys.sql in the Phase 2 prefix table (accepted commit 61b89d6, generic-api-key false positive).
 61b89d6511ff06164b511e4f0598806306acd5f4:scripts/phase2-prefix.ts:generic-api-key:93
+
+# ── Tree fingerprints (tree:<path>:<rule>:<line>): the extracted-archive run ──
+# gitleaks dir mode over the archive's files reads the current tree, not
+# history. A digest entry is proved against the tree's migration file; a
+# fixture entry covers exactly one line, pinned by line-sha256. All eight
+# lines predate Phase 3 (they were in the tree at 0f2b09e or earlier and
+# never appear in the Phase 3 range scan). Refresh an entry (fingerprint and
+# pin) only when the line itself is reviewed, never to silence a new finding.
+
+# Migration digest, not a credential: SHA-256 of 0011_auth_lineage.sql in the Phase 2 prefix table.
+tree:scripts/phase2-prefix.ts:generic-api-key:60
+
+# Migration digest, not a credential: SHA-256 of 0020_credential_delivery_outbox.sql in the Phase 2 prefix table.
+tree:scripts/phase2-prefix.ts:generic-api-key:69
+
+# Migration digest, not a credential: SHA-256 of 0044_accounting_assertion_keys.sql in the Phase 2 prefix table.
+tree:scripts/phase2-prefix.ts:generic-api-key:93
+
+# Test fixture, not a credential: the throwaway reconciler password of the local rollback rehearsal's disposable cluster. line-sha256 fa6a4a74d0b066567a5f79d7493983e88490409da61f799488fa3eeeb210198c
+tree:scripts/phase2-rollback-rehearsal.ts:generic-api-key:71
+
+# Test fixture, not a credential: the throwaway migrator password of the local rollback rehearsal's disposable cluster. line-sha256 5c025a8b857c250bd682759548dd995b5a1cea19a85a20f71d07108607025bde
+tree:scripts/phase2-rollback-rehearsal.ts:generic-api-key:72
+
+# Test fixture, not a credential: an onboarding idempotency key ('slug-stability-key-01'). line-sha256 a8ad5dcd11ee88b7fc495609e39d83182d43c8071818480e0c5d5fec70b64d92
+tree:tests/integration/onboarding.test.ts:generic-api-key:116
+
+# Test fixture, not a credential: the redaction suite's sentinel string, planted so the suite can prove it never reaches a log. line-sha256 92dfdd9fd216eb948efaace7771fa7a921c471e23fceec0fc2dfb79614edb197
+tree:tests/security/accounting-observability-redaction.test.ts:generic-api-key:45
+
+# Test fixture, not a credential: a forged onboarding idempotency key ('forged-key-12345'). line-sha256 84b4c0a10c251ad5103d067551682b6d2f2fb91a661487f99863720c6bdcd4b1
+tree:tests/security/provisioner-boundary.test.ts:generic-api-key:336
