@@ -95,7 +95,7 @@ The review ran on the integrated candidate with its own probes. It found **no Hi
 ## 4. Rulings and deviations for the Tech Lead
 
 - **TL-2 … TL-17 were adopted as engineering rulings** (the contract's header). TL-2, no payment, allocation or refund reversal in Phase 3, is **TD-15**.
-- **TL-11**, the inventory-assertion sequence (A-19), is a sibling of the S4 R-B1 seam and is recorded for the Tech Lead's confirmation in the Phase 3 final report.
+- **TL-11**, the inventory-assertion sequence (A-19), is a sibling of the S4 R-B1 seam. **CONFIRMED** (Tech Lead corrective directive §12, 2026-09-28): the seam, atomicity and concurrency suites (`purchase-s4-seam`, the S4 atomicity suite, `settlement-s6-seam`, the S6 atomicity suite, receive-and-pay concurrency) stay green at the corrected candidate of the Phase 3 corrective pass.
 - **The S5 L2 residue.** A txn-only AP residue that converts to ≥ 1 base unit is absorbed by the final allocation, and AP reaches exactly 0 in txn and base (R-69 (a)). A sub-unit residue cannot be cleared by any allocation under the base > 0 journal law. S6 never creates one (R-77); one left by a frozen S5 partial return is recorded as **TD-16** with its exact boundary.
 - **R-80 is conditional.** It verifies a return only when its purchase carries an S6 allocation. An unconditional check would re-judge S5 fixtures that are lawful in S5's own terms.
 - **OD-03 stays bounded.** No settlement carries tax; tax rates and tax posting are **BLOCKED BY OD-03**.

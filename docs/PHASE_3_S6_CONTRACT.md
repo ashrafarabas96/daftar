@@ -23,7 +23,7 @@
 > **R-numbers.** S6 headers use R-60 onward (TL-15). The S5 headers cite the S4 carry-forward rules as 0063 R-34 … R-41 and their own as R-42 … R-55.
 >
 > **Other rulings.**
-> - **TL-11** (the inventory-assertion sequence) is a sibling of the S4 R-B1 seam. Like R-B1, it is recorded for the Tech Lead's confirmation in the Phase 3 final report.
+> - **TL-11** (the inventory-assertion sequence) is a sibling of the S4 R-B1 seam. Like R-B1, it was recorded for the Tech Lead's confirmation; **CONFIRMED** by the Phase 3 corrective directive §12 (2026-09-28), with its seam suites green at the corrected candidate.
 > - **OD-03** stays bounded: every tax element is BLOCKED BY OD-03.
 
 > **Summary (Arabic).** عقد تنفيذ الشريحة P3-S6:
