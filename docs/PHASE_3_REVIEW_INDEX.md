@@ -439,7 +439,7 @@ It lists every path in `git diff --name-only 0f2b09e HEAD` except this page itse
 | `tests/browser/seed.ts` | corrective | SEEDING THROUGH THE API ONLY (directive §8: "business seeded through the API"). | not yet (corrective candidate) |
 | `tests/browser/stack.ts` | corrective | THE REAL STACK THE BROWSER GATE DRIVES (directive §8). | not yet (corrective candidate) |
 | `tests/fixtures/runner-exit-code/vitest.config.ts` | corrective | The canary configuration. | not yet (corrective candidate) |
-| `tests/golden-regression/phase2/01-engine-shapes.golden.test.ts` | P3-S3 (+S4, S5, S6) | evolve predecessor pins to the exact 0061/0062 end state; add the P3-S3 upgrade case | fecbecb (S3 freeze) |
+| `tests/golden-regression/phase2/01-engine-shapes.golden.test.ts` | P3-S3 (+S4, S5, S6, corrective) | evolve predecessor pins to the exact 0061/0062 end state; add the P3-S3 upgrade case | fecbecb (S3 freeze) |
 | `tests/helpers/delivered-files.ts` | P3-S8 | The files a tree claims to consist of, relative to `root`. | 5fcab76 (S8 freeze) |
 | `tests/helpers/inventory-commands.ts` | P3-S3 | P3-S3 — THE MOVEMENT-COMMAND HARNESS (docs/PHASE_3_S3_CONTRACT.md §5, H-1, H-3, H-4, H-5, H-7). | fecbecb (S3 freeze) |
 | `tests/helpers/inventory-posting.ts` | P3-S3 | P3-S3 — THE JOURNAL SIDE OF THE FINANCIAL COMMANDS (docs/PHASE_3_S3_CONTRACT.md §5, H-2). | fecbecb (S3 freeze) |
@@ -655,7 +655,7 @@ It lists every path in `git diff --name-only 0f2b09e HEAD` except this page itse
 
 | Path | Slice | Purpose | First checkpoint |
 | --- | --- | --- | --- |
-| `PROJECT_STATUS.md` | P3-S1 (+S2, S3, S4, S5, S6, S7, S8, S9) | DAFTAR — Project Status / حالة المشروع | 61b89d6 (S1 closure) |
+| `PROJECT_STATUS.md` | P3-S1 (+S2, S3, S4, S5, S6, S7, S8, S9, corrective) | DAFTAR — Project Status / حالة المشروع | 61b89d6 (S1 closure) |
 | `TECHNICAL_DEBT.md` | P3-S0 (+S1, S3, S5, S6, S7, S8, S9, corrective) | DAFTAR — Technical Debt Register / سجل الديون التقنية | 61b89d6 (S1 closure) |
 | `docs/DAFTAR_AWS_REFERENCE_ARCHITECTURE.md` | corrective | DAFTAR — AWS Reference Architecture / المعمارية المرجعية على AWS | not yet (corrective candidate) |
 | `docs/DAFTAR_DATA_MODEL.md` | P3-S0 (+S1) | DAFTAR — Data Model / نموذج البيانات (v2 — بعد Correction & Hardening Pass) | 61b89d6 (S1 closure) |
@@ -677,12 +677,12 @@ It lists every path in `git diff --name-only 0f2b09e HEAD` except this page itse
 | `docs/PHASE_3_S2_PREPARATION.md` | P3-S2 (+S1) | DAFTAR — Phase 3 Slice 2 Preparation (Immutable Stock Ledger) / تحضير الشريحة P3-S2 | 61b89d6 (S1 closure) |
 | `docs/PHASE_3_S3_ACCEPTANCE.md` | P3-S3 | DAFTAR — P3-S3 Acceptance / قبول الشريحة الثالثة من المرحلة الثالثة | fecbecb (S3 freeze) |
 | `docs/PHASE_3_S3_CONTRACT.md` | P3-S3 (+S2) | DAFTAR — P3-S3 Contract / عقد الشريحة P3-S3 | 57a5a7f (S2 freeze) |
-| `docs/PHASE_3_S4_ACCEPTANCE.md` | P3-S4 | DAFTAR — P3-S4 Acceptance / قبول الشريحة الرابعة من المرحلة الثالثة | 43b8370 (S4 freeze) |
+| `docs/PHASE_3_S4_ACCEPTANCE.md` | P3-S4 (+corrective) | DAFTAR — P3-S4 Acceptance / قبول الشريحة الرابعة من المرحلة الثالثة | 43b8370 (S4 freeze) |
 | `docs/PHASE_3_S4_CONTRACT.md` | P3-S4 | DAFTAR — P3-S4 Contract / عقد الشريحة P3-S4 | 43b8370 (S4 freeze) |
 | `docs/PHASE_3_S5_ACCEPTANCE.md` | P3-S5 | DAFTAR — P3-S5 Acceptance / قبول الشريحة الخامسة من المرحلة الثالثة | 5ff7b8b (S5 freeze) |
 | `docs/PHASE_3_S5_CONTRACT.md` | P3-S5 (+S4) | DAFTAR — P3-S5 Contract / عقد الشريحة P3-S5 | 43b8370 (S4 freeze) |
-| `docs/PHASE_3_S6_ACCEPTANCE.md` | P3-S6 | DAFTAR — P3-S6 Acceptance / قبول الشريحة السادسة من المرحلة الثالثة | 01dae04 (S6 freeze) |
-| `docs/PHASE_3_S6_CONTRACT.md` | P3-S6 (+S5) | DAFTAR — P3-S6 Contract / عقد الشريحة P3-S6 | 5ff7b8b (S5 freeze) |
+| `docs/PHASE_3_S6_ACCEPTANCE.md` | P3-S6 (+corrective) | DAFTAR — P3-S6 Acceptance / قبول الشريحة السادسة من المرحلة الثالثة | 01dae04 (S6 freeze) |
+| `docs/PHASE_3_S6_CONTRACT.md` | P3-S6 (+S5, corrective) | DAFTAR — P3-S6 Contract / عقد الشريحة P3-S6 | 5ff7b8b (S5 freeze) |
 | `docs/PHASE_3_S7_ACCEPTANCE.md` | P3-S7 | DAFTAR — P3-S7 Acceptance / قبول الشريحة السابعة من المرحلة الثالثة | a0aee73 (S7 freeze) |
 | `docs/PHASE_3_S7_CONTRACT.md` | P3-S7 (+S6) | DAFTAR — P3-S7 Contract / عقد الشريحة P3-S7 | 01dae04 (S6 freeze) |
 | `docs/PHASE_3_S8_ACCEPTANCE.md` | P3-S8 | DAFTAR — P3-S8 Acceptance / قبول الشريحة الثامنة من المرحلة الثالثة | 5fcab76 (S8 freeze) |
