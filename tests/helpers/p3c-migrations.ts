@@ -10,4 +10,38 @@ export const P3_CORRECTIVE_MIGRATIONS = [
   '0070_definer_ownership_hardening.sql',
   // S8 I-1: after the first stock movement, a generic reversal may not change the Inventory account (R-B1b).
   '0071_reversal_inventory_account_domain.sql',
+  // TD-16: no return leaves a sub-unit AP residue; one already left is written off (R-95, R-96).
+  '0072_purchase_sub_unit_residue.sql',
 ] as const;
+
+/**
+ * The operation kinds the corrective migrations register — each with
+ * `registered_by = 'P3-C'` (0072 §8 widens the registry's CHECK to admit
+ * exactly that literal). Registry pins that enumerate the kinds append this
+ * list, so a corrective kind is a reviewed change, never a silent widening.
+ */
+export const P3C_OPERATION_KINDS = [
+  // TD-16 (0072 R-96): the write-off of a purchase's sub-unit AP residue.
+  'purchase.write_off_residue',
+] as const;
+
+/** The relations the corrective migrations create (each a reviewed addition to the Phase 3 surface). */
+export const P3C_RELATIONS = [
+  // TD-16 (0072 R-96): the residue write-offs.
+  'purchase_residue_write_offs',
+] as const;
+
+/** The accounting source types the corrective migrations register, with their sort order; each is owned by `post`. */
+export const P3C_ACCOUNTING_SOURCE_TYPES = [
+  // TD-16 (0072 R-96): the write-off entry, Dr Accounts Payable / Cr FX gain.
+  ['purchase_residue_write_off', 12],
+] as const;
+
+/** The `concat_ws(':', 'src', source_type, sort_order)` rows the upgrade matrices protect, for the corrective source types. */
+export const P3C_SOURCE_TYPE_ROWS: readonly string[] = P3C_ACCOUNTING_SOURCE_TYPES.map(([t, n]) => `src:${t}:${n}`);
+
+/** The registry rows the corrective migrations add, in the upgrade matrices' `registries()` spelling. */
+export const P3C_REGISTRY_ROWS: readonly string[] = [
+  ...P3C_OPERATION_KINDS.map((op) => `op:${op}:P3-C`),
+  ...P3C_ACCOUNTING_SOURCE_TYPES.map(([t]) => `acct:post:${t}`),
+];

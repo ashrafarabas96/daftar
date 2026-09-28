@@ -183,10 +183,31 @@ describe('T-17 — 0069 onto the S7 head as daftar_migrator, identical to a supe
     }
   }, 300_000);
 
-  it('refuses to apply 0069 twice: with its record removed, the rerun is refused as an unreviewable widening and changes nothing', async () => {
+  it('refuses to apply 0069 twice: on its own head, with its record removed, the rerun is refused as an unreviewable widening and changes nothing', async () => {
+    const own = await createScratchDb('daftar_p3s8_t17_twice', { upTo: S8M });
+    const dir = migrationsUpTo(S8M);
+    try {
+      expect(own.applied[own.applied.length - 1]).toBe(S8M);
+      await own.pool.query(`DELETE FROM schema_migrations WHERE name = $1`, [S8M]);
+      const before = await snapshot(own.pool, 'postgres');
+      await expect(runMigrations(own.url(), dir)).rejects.toThrow(/inventory\.authority_leak: daftar_reconciler already reads a column 0069 grants/);
+      expect(await snapshot(own.pool, 'postgres')).toEqual(before);
+      expect(await appliedNames(own.pool)).not.toContain(S8M);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      await own.drop();
+    }
+  }, 300_000);
+
+  // Phase 3 corrective (0072) registers a further operation kind after 0069, so on
+  // the head 0069's own head precondition (exactly the S7 head's twenty-six kinds)
+  // refuses the rerun first — still recording nothing and changing nothing.
+  it('refuses to apply 0069 twice: on the head, with its record removed, the rerun is refused by its S7-head precondition and changes nothing', async () => {
     await superuser.pool.query(`DELETE FROM schema_migrations WHERE name = $1`, [S8M]);
     const before = await snapshot(superuser.pool, 'postgres');
-    await expect(runMigrations(superuser.url())).rejects.toThrow(/inventory\.authority_leak: daftar_reconciler already reads a column 0069 grants/);
+    await expect(runMigrations(superuser.url())).rejects.toThrow(
+      /^inventory\.migration_end_state_invalid: 0069 applies on the S7 head \(0068 and its twenty-six operation kinds\) only$/,
+    );
     expect(await snapshot(superuser.pool, 'postgres')).toEqual(before);
     expect(await appliedNames(superuser.pool)).not.toContain(S8M);
   });

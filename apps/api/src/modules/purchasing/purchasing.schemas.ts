@@ -331,11 +331,19 @@ export class PurchaseReversalValidationPipe implements PipeTransform {
 /** The value bound of every S6 amount (`BIGINT` 1..10^18, §0). */
 const MAX_AMOUNT_MINOR = 10n ** 18n;
 
-/** A positive integer amount of minor units, at most 10^18. */
+/** The grammar of an amount of minor units: a positive integer of at most 19 digits. */
+const AMOUNT_MINOR_RE = /^[1-9]\d{0,18}$/;
+
+/**
+ * A positive integer amount of minor units, at most 10^18. The bound is
+ * judged only on text the grammar admits: zod runs a refinement even after
+ * the regex failed, and `BigInt` of a decimal such as `"0.01"` throws, which
+ * answered 500 for a malformed amount (found by the corrective TD-16 suite).
+ */
 const amountMinor = z
   .string()
-  .regex(/^[1-9]\d{0,18}$/, 'an amount is a positive integer of minor units')
-  .refine((v) => BigInt(v) <= MAX_AMOUNT_MINOR, 'an amount is at most 10^18 minor units');
+  .regex(AMOUNT_MINOR_RE, 'an amount is a positive integer of minor units')
+  .refine((v) => !AMOUNT_MINOR_RE.test(v) || BigInt(v) <= MAX_AMOUNT_MINOR, 'an amount is at most 10^18 minor units');
 
 /** A settlement reference: 1..100 characters after trimming, or none. */
 const reference = optionalText(1, 100);
@@ -442,6 +450,48 @@ export const ReceiveAndPaySchema = z
       .strict(),
   })
   .strict();
+
+// ── The residue write-off (Phase 3 corrective, 0072 R-96) ────────────────
+
+/**
+ * `POST /v1/purchases/:purchaseId/residue-write-off`: the date, the residue
+ * the client saw (the purchase's outstanding amount, integer minor units of
+ * the purchase currency) and a REQUIRED reason. No base, rate or chain point
+ * is stated: each is the server's. An absent reason is typed by the pipe
+ * below, so it is admitted here as nullable text only to reach that check.
+ */
+const PurchaseResidueWriteOffBodySchema = z
+  .object({
+    writeOffDate: civilDate,
+    residueAmountMinor: amountMinor,
+    reason: reasonText.nullish(),
+  })
+  .strict();
+
+/** The write-off request after its pipe: the reason is present and not blank. */
+export interface PurchaseResidueWriteOffRequest {
+  readonly writeOffDate: string;
+  readonly residueAmountMinor: string;
+  readonly reason: string;
+}
+
+/**
+ * The write-off's body pipe: the strict schema, then the mandatory reason —
+ * an omitted, null or blank reason is `purchase_residue.reason_required`
+ * (422) here, before any payload is built or assertion minted. The routine
+ * refuses it again behind this.
+ */
+@Injectable()
+export class PurchaseResidueWriteOffValidationPipe implements PipeTransform {
+  transform(value: unknown, metadata: ArgumentMetadata): unknown {
+    if (metadata.type !== 'body') return value;
+    const body = PurchaseResidueWriteOffBodySchema.parse(value);
+    const reason = body.reason ?? '';
+    if (reason.trim().length === 0) throw classifiedRefusal('purchase_residue.reason_required');
+    const request: PurchaseResidueWriteOffRequest = { writeOffDate: body.writeOffDate, residueAmountMinor: body.residueAmountMinor, reason };
+    return request;
+  }
+}
 
 // ── Reads ────────────────────────────────────────────────────────────────
 

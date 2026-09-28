@@ -223,7 +223,9 @@ describe('invpl/1 — refusals of non-canonical input (never normalized)', () =>
   // kinds; the S1, S3 and S4 rows stay verbatim.
   // P3-S6 (0067/0068): PHASE_3_S6_CONTRACT §7.3 row 19 appends the seven
   // P3-S6 kinds; the S1, S3, S4 and S5 rows stay verbatim.
-  it('registers exactly the three P3-S1 operation kinds, the seven P3-S3 kinds, the seven P3-S4 kinds, the two P3-S5 kinds and the seven P3-S6 kinds', () => {
+  // Phase 3 corrective (0072, TD-16) appends the one corrective kind,
+  // `purchase.write_off_residue`; every slice row stays verbatim.
+  it('registers exactly the three P3-S1 operation kinds, the seven P3-S3 kinds, the seven P3-S4 kinds, the two P3-S5 kinds, the seven P3-S6 kinds and the one corrective kind', () => {
     expect([...INVENTORY_OPERATION_CODES].sort()).toEqual([
       'inventory.adjust',
       'inventory.configure_product',
@@ -242,6 +244,7 @@ describe('invpl/1 — refusals of non-canonical input (never normalized)', () =>
       'purchase.receive',
       'purchase.return', // P3-S5 (0065/0066)
       'purchase.reverse', // P3-S5 (0065/0066)
+      'purchase.write_off_residue', // Phase 3 corrective (0072, TD-16)
       'structure.associate_warehouse_branch',
       'structure.dissociate_warehouse_branch',
       'supplier.allocate_credit', // P3-S6 (0067/0068)

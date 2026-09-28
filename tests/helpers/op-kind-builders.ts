@@ -41,8 +41,13 @@ import {
   configureProductPayload,
   dissociateWarehouseBranchPayload,
   parseUnitCost,
+  planResidueWriteOff,
+  purchaseResidueWriteOffPayload,
   type InventoryOperationCode,
 } from '../../packages/inventory/src';
+import { settlementPostingCommand } from '../../apps/api/src/modules/purchasing/supplier-settlement-posting';
+import { assertionFor as fxAssertionFor, enterRateAs, rateIdFor } from './accounting-fx';
+import { historicalReturnInTx } from './p3c-residue';
 import {
   OP_OF as S3_OP_OF,
   ROUTINE_OF as S3_ROUTINE_OF,
@@ -114,7 +119,7 @@ import { mintTestInventoryAssertion } from './test-app';
 
 export type Biz = { readonly tenantId: string; readonly businessId: string };
 
-export type RegisteringSlice = 'P3-S1' | 'P3-S3' | 'P3-S4' | 'P3-S5' | 'P3-S6';
+export type RegisteringSlice = 'P3-S1' | 'P3-S3' | 'P3-S4' | 'P3-S5' | 'P3-S6' | 'P3-C';
 
 /** One signed payload field, altered: the digest the altered arguments carry under a claimed business. */
 export interface SignedField {
@@ -593,6 +598,112 @@ function s6Builder(kind: S6Kind): OpKindBuilder {
   });
 }
 
+// ── Phase 3 corrective (0072, TD-16) ───────────────────────────────────────
+
+const WRITE_OFF_SQL = `SELECT purchase_id::text, replayed FROM purchase_write_off_residue($1::uuid, $2::date, $3::text, $4::bigint, $5::bigint, $6::bigint)`;
+
+/**
+ * `purchase.write_off_residue` with a base residue (rb = 1, so the composed
+ * command posts its entry): a TRY purchase at 0.11 into the ILS business —
+ * 0.10 + 0.04, T 14 kurus, B 2 agora — whose 0.10 line was returned with the
+ * frozen S5 behaviour (`historicalReturnInTx`), leaving O = 4 kurus, which
+ * converts to 0. The rate is entered through the real FX command in the
+ * caller's transaction.
+ */
+async function prepareResidueWriteOff(c: Client, fx: OpKindFixture): Promise<PreparedKind> {
+  const biz = fx.biz;
+  const day = must((await c.query<{ d: string }>(`SELECT to_char((now() AT TIME ZONE 'Asia/Hebron')::date, 'YYYY-MM-DD') AS d`)).rows[0]).d;
+  const facts = {
+    tenantId: biz.tenantId,
+    businessId: biz.businessId,
+    rateId: rateIdFor(biz.businessId, randomUUID()),
+    fromCurrency: 'TRY',
+    toCurrency: 'ILS',
+    rate: '0.1100000000',
+    effectiveAt: new Date(Date.parse(`${day}T00:00:00Z`) - 10 * 86_400_000).toISOString(),
+  };
+  await c.query('SET LOCAL ROLE daftar_app');
+  await enterRateAs(fxAssertionFor(facts, biz.userId), facts, {}, c);
+  await c.query('RESET ROLE');
+  const p = await receivedPurchase(
+    c,
+    biz,
+    [
+      { variantId: biz.piece.variantId, qty: '1', unitPriceMinor: '10' },
+      { variantId: biz.piece2.variantId, qty: '1', unitPriceMinor: '4' },
+    ],
+    { currency: 'TRY' },
+  );
+  await historicalReturnInTx(c, biz, p.purchaseId, [{ purchaseLineId: must(p.lines[0]).lineId, qty: '1' }]);
+  const st = must(
+    (
+      await c.query<{ o: string; t: string; b: string; rate: string; branch: string }>(
+        `SELECT purchase_ap_outstanding(p.business_id, p.id)::text AS o, p.total_txn_minor::text AS t, p.total_base_minor::text AS b,
+                p.source_to_base_rate::text AS rate, w.branch_id::text AS branch
+           FROM purchases p JOIN warehouses w ON w.business_id = p.business_id AND w.id = p.warehouse_id
+          WHERE p.business_id = $1 AND p.id = $2`,
+        [biz.businessId, p.purchaseId],
+      )
+    ).rows[0],
+    'the residue purchase',
+  );
+  const plan = planResidueWriteOff({
+    totalTxnMinor: BigInt(st.t),
+    totalBaseMinor: BigInt(st.b),
+    outstandingTxnMinor: BigInt(st.o),
+    rateR10: parseUnitCost(st.rate),
+    txnExponent: 2,
+    baseExponent: 2,
+  });
+  if (plan.verdict !== 'write_off' || plan.residueBaseMinor !== 1n)
+    throw new Error(`the fixture is not a base residue: ${JSON.stringify(plan, (_k, v: unknown) => (typeof v === 'bigint' ? v.toString(10) : v))}`);
+  const reason = 'Sub-unit residue left by a return';
+  const honest = {
+    purchaseId: p.purchaseId,
+    writeOffDate: day,
+    reason,
+    residueTxnMinor: plan.residueTxnMinor,
+    releasedBeforeTxnMinor: plan.releasedBeforeTxnMinor,
+    residueBaseMinor: plan.residueBaseMinor,
+  };
+  type Args = typeof honest;
+  const shaOf = (a: Args) => (b: Biz) => purchaseResidueWriteOffPayload({ ...b, ...a }).payload.sha256;
+  const trace = randomUUID();
+  const command = settlementPostingCommand({
+    tenantId: biz.tenantId,
+    businessId: biz.businessId,
+    sourceType: 'purchase_residue_write_off',
+    sourceId: p.purchaseId,
+    entryDate: day,
+    baseCurrency: 'ILS',
+    snapshots: {},
+    postingAccountCode: null,
+    branches: { purchase: st.branch, origin: null },
+    lines: plan.entryLines,
+    businessTransactionId: trace,
+  });
+  const dayBefore = new Date(Date.parse(`${day}T00:00:00Z`) - 86_400_000).toISOString().slice(0, 10);
+  return {
+    sql: WRITE_OFF_SQL,
+    params: [p.purchaseId, day, reason, plan.residueTxnMinor.toString(10), plan.releasedBeforeTxnMinor.toString(10), plan.residueBaseMinor.toString(10)],
+    trace,
+    sha256: shaOf(honest),
+    fields: [
+      { field: 'purchase_id', sha256: shaOf({ ...honest, purchaseId: fx.other.w1 }) },
+      { field: 'write_off_date', sha256: shaOf({ ...honest, writeOffDate: dayBefore }) },
+      { field: 'reason', sha256: shaOf({ ...honest, reason: `${reason}.` }) },
+      { field: 'residue', sha256: shaOf({ ...honest, residueTxnMinor: honest.residueTxnMinor + 1n }) },
+      { field: 'released_before', sha256: shaOf({ ...honest, releasedBeforeTxnMinor: honest.releasedBeforeTxnMinor + 1n }) },
+      { field: 'residue_base', sha256: shaOf({ ...honest, residueBaseMinor: honest.residueBaseMinor + 1n }) },
+    ],
+    post: async (q, rows, carrier) => {
+      if (rows[0]?.['replayed'] === true) return 0;
+      await postInTx(q, command, biz.userId, carrier);
+      return 1;
+    },
+  };
+}
+
 // ── the registry of builders ───────────────────────────────────────────────
 
 const ALL: readonly OpKindBuilder[] = [
@@ -605,6 +716,13 @@ const ALL: readonly OpKindBuilder[] = [
   ),
   ...(['purchase_return', 'purchase_reverse'] as const).map(s5Builder),
   ...(['method_create', 'method_update', 'method_deactivate', 'method_activate', 'pay', 'allocate_credit', 'receive_refund'] as const).map(s6Builder),
+  builder(
+    'purchase.write_off_residue',
+    'P3-C',
+    'purchase_write_off_residue(uuid,date,text,bigint,bigint,bigint)',
+    ['purchase_residue_write_off'],
+    prepareResidueWriteOff,
+  ),
 ];
 
 export const OP_KIND_BUILDERS: Readonly<Record<string, OpKindBuilder>> = Object.fromEntries(ALL.map((b) => [b.op, b]));

@@ -56,6 +56,16 @@ export type PayableGrouping = 'currency' | 'supplier_currency';
  * only. For a domestic purchase the two currencies coincide and no dust line
  * exists.
  *
+ * Phase 3 corrective (0072 R-96): a purchase's residue write-off counts
+ * twice, as what it is. Its `purchase_residue_write_off` entry, when the
+ * write-off released a base unit, is one more entry of the purchase (its AP
+ * line is a base line, so it moves `base_minor` only). And its written-off
+ * txn residue is one memo row of the purchase — no journal line, credit and
+ * debit 0 — subtracting `residue_txn_minor` from `txn_minor`: the residue
+ * converts to 0 base minor units, so no line can carry it (a line's base is
+ * positive), and the AP lines' txn memo keeps it as posted. A written-off
+ * purchase therefore reads 0 / 0, as `purchase_ap_outstanding` does.
+ *
  * This is the S6 `S5_PAYABLE_SQL` moved here unchanged but for the
  * `supplier_id` the `ap` CTE now projects, so one text serves the per-supplier
  * and per-purchase payables, the settlement read and the supplier-balance
@@ -93,9 +103,20 @@ export function payableSql(o: { readonly groupBy: PayableGrouping; readonly filt
                     JOIN accounting_source_bindings cb
                       ON cb.business_id = c.business_id AND cb.source_type = 'supplier_credit_allocation' AND cb.source_id = c.id
                    WHERE c.business_id = p.business_id AND c.purchase_id = p.id
+                  UNION ALL
+                  SELECT wb.journal_entry_id
+                    FROM purchase_residue_write_offs w
+                    JOIN accounting_source_bindings wb
+                      ON wb.business_id = w.business_id AND wb.source_type = 'purchase_residue_write_off' AND wb.source_id = w.binding_source_id
+                   WHERE w.business_id = p.business_id AND w.purchase_id = p.id
                 ) e ON true
            JOIN journal_lines jl ON jl.business_id = p.business_id AND jl.journal_entry_id = e.journal_entry_id
            JOIN accounts a ON a.business_id = jl.business_id AND a.id = jl.account_id AND a.system_key = 'accounts_payable'
+          WHERE p.business_id = $1 AND p.status = 'received' AND ${o.filter}
+         UNION ALL
+         SELECT p.supplier_id, p.currency_code::text, p.currency_code::text, 0::bigint, 0::bigint, w.residue_txn_minor
+           FROM purchases p
+           JOIN purchase_residue_write_offs w ON w.business_id = p.business_id AND w.purchase_id = p.id
           WHERE p.business_id = $1 AND p.status = 'received' AND ${o.filter})
      SELECT ${key}, sum(credit_minor - debit_minor)::text AS base_minor,
             coalesce(sum(CASE WHEN txn_currency = currency_code

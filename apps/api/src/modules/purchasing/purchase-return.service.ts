@@ -12,6 +12,7 @@ import {
   parseMinor,
   parseQuantity,
   planSupplierReturn,
+  supplierReturnLeavesSubUnitResidue,
   supplierReturnIntentSha256,
   supplierReturnPayload,
   type StockState,
@@ -190,11 +191,13 @@ export class PurchaseReturnService {
     const currency = state.currency_code;
     const baseCurrency = state.base_currency;
     const rate = state.rate;
+    const convert = (txnAmountMinor: bigint): bigint => convertToBaseMinor({ txnAmountMinor, txnCurrency: currency, baseCurrency, fxRate: rate });
+    const outstandingTxnMinor = parseMinor(state.outstanding);
     const plan = planSupplierReturn({
       totalTxnMinor: parseMinor(state.total_txn_minor),
       totalBaseMinor: parseMinor(state.total_base_minor),
-      outstandingTxnMinor: parseMinor(state.outstanding),
-      convert: (txnAmountMinor) => convertToBaseMinor({ txnAmountMinor, txnCurrency: currency, baseCurrency, fxRate: rate }),
+      outstandingTxnMinor,
+      convert,
       lines: lines.map(({ intent, line }) => ({
         lineTotalTxnMinor: parseMinor(line.net) + parseMinor(line.landed),
         purchasedQ4: parseQuantity(line.qty),
@@ -205,6 +208,11 @@ export class PurchaseReturnService {
     });
     // TL-14: an inactive supplier may take goods back against AP, never a new credit (AL-40).
     if (state.supplier_status !== 'active' && plan.creditTxnMinor > 0n) throw purchasingRefusal('supplier_return.supplier_inactive');
+    // Phase 3 corrective (0072 R-95): the return may not leave the purchase a
+    // positive outstanding amount converting to 0 base minor units, which no
+    // settlement could clear. The twin of the COMMIT guard
+    // `supplier_returns_residue_bound`; refused here before anything is minted.
+    if (supplierReturnLeavesSubUnitResidue(outstandingTxnMinor, plan.apTxnMinor, convert)) throw purchasingRefusal('supplier_return.residue_below_base_unit');
     const creditNoteId = plan.creditNote ? randomUUID() : null;
     const payloadLines = lines.map(({ intent, line }, i) => {
       const planned = plan.lines[i];

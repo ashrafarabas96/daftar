@@ -36,7 +36,7 @@ import { isPaymentMethodCode, paymentMethodRefusal, parseDatabasePaymentMethodCo
  * is never forwarded.
  */
 
-/** The refusal domains this module owns (S4 §3, S5 §3 and S6 §3). */
+/** The refusal domains this module owns (S4 §3, S5 §3 and S6 §3, and the corrective 0072's residue write-off). */
 type PurchasingDomain =
   | 'purchase'
   | 'supplier'
@@ -45,7 +45,8 @@ type PurchasingDomain =
   | 'supplier_credit_note'
   | 'supplier_payment'
   | 'supplier_credit_allocation'
-  | 'supplier_refund';
+  | 'supplier_refund'
+  | 'purchase_residue';
 
 /**
  * The §3 tables: every `purchase.*`, `supplier.*` (S4), `supplier_return.*`,
@@ -88,6 +89,9 @@ const PURCHASING_STATUS = {
   'supplier_return.document_date_in_future': 422,
   'supplier_return.value_zero': 422,
   'supplier_return.amount_below_base_unit': 422,
+  // Phase 3 corrective (0072 R-95): a return never leaves its purchase a
+  // positive outstanding amount converting to 0 base minor units.
+  'supplier_return.residue_below_base_unit': 422,
   'supplier_return.idempotency_conflict': 409,
   // The credit-note guard: no route edits a credit note, so reaching it is a
   // defect (§3: 500-class from a routine), reported with its typed code.
@@ -160,6 +164,19 @@ const PURCHASING_STATUS = {
   // P3-S6 §3: the credit note a settlement consumes, and its COMMIT guard (R-63).
   'supplier_credit_note.not_found': 404,
   'supplier_credit_note.consumption_inconsistent': 500,
+  // Phase 3 corrective (0072 R-96): the write-off of a purchase's sub-unit AP
+  // residue. The client states the residue it saw; a moved or repeated one is
+  // a conflict. The row guard and the COMMIT guard are reached by no correct
+  // command (500-class).
+  'purchase_residue.reason_required': 422,
+  'purchase_residue.date_before_purchase': 422,
+  'purchase_residue.date_in_future': 422,
+  'purchase_residue.not_below_base_unit': 422,
+  'purchase_residue.nothing_outstanding': 409,
+  'purchase_residue.amount_mismatch': 409,
+  'purchase_residue.already_written_off': 409,
+  'purchase_residue.settlement_inconsistent': 500,
+  'purchase_residue.immutable': 500,
 } as const satisfies Readonly<Record<`${PurchasingDomain}.${string}`, 400 | 404 | 409 | 422 | 500>>;
 
 /** A classified refusal code of a purchasing domain (S4, S5 and S6 §3). */
@@ -309,7 +326,7 @@ export class UnclassifiedRefusalError extends Error {
 }
 
 const DATABASE_CODE_RE =
-  /^((?:purchase|supplier|supplier_return|purchase_reversal|supplier_credit_note|supplier_payment|supplier_credit_allocation|supplier_refund)\.[a-z_]+)\b/;
+  /^((?:purchase|supplier|supplier_return|purchase_reversal|supplier_credit_note|supplier_payment|supplier_credit_allocation|supplier_refund|purchase_residue)\.[a-z_]+)\b/;
 
 /** The code of a purchasing domain a database refusal carries, or null. */
 export function parseDatabasePurchasingCode(error: unknown): string | null {
@@ -421,6 +438,9 @@ const BINDING_FOREIGN_KEYS: Readonly<Record<string, string>> = {
   supplier_payment_allocations_binding_fk: 'supplier_payment',
   supplier_credit_allocations_binding_fk: 'supplier_credit_allocation',
   supplier_refunds_binding_fk: 'supplier_refund',
+  // Phase 3 corrective (0072 R-96): a write-off whose ledger still carried a
+  // base unit owes its `purchase_residue_write_off` entry.
+  purchase_residue_write_offs_binding_fk: 'purchase_residue_write_off',
 };
 
 /**

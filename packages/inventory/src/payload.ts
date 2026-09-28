@@ -91,12 +91,20 @@ export type InventoryS6OperationCode =
   | 'supplier.allocate_credit'
   | 'supplier.receive_refund';
 
+/**
+ * The one operation kind the Phase 3 corrective pass registers (0072, TD-16:
+ * `registered_by = 'P3-C'`): the write-off of a purchase's sub-unit AP
+ * residue, routine `purchase_write_off_residue`.
+ */
+export type InventoryCorrectiveOperationCode = 'purchase.write_off_residue';
+
 export type InventoryOperationCode =
   | InventoryS1OperationCode
   | InventoryS3OperationCode
   | InventoryS4OperationCode
   | InventoryS5OperationCode
-  | InventoryS6OperationCode;
+  | InventoryS6OperationCode
+  | InventoryCorrectiveOperationCode;
 
 export const INVENTORY_S1_OPERATION_CODES: readonly InventoryS1OperationCode[] = [
   'inventory.configure_product',
@@ -136,12 +144,15 @@ export const INVENTORY_S6_OPERATION_CODES: readonly InventoryS6OperationCode[] =
   'supplier.receive_refund',
 ];
 
+export const INVENTORY_CORRECTIVE_OPERATION_CODES: readonly InventoryCorrectiveOperationCode[] = ['purchase.write_off_residue'];
+
 export const INVENTORY_OPERATION_CODES: readonly InventoryOperationCode[] = [
   ...INVENTORY_S1_OPERATION_CODES,
   ...INVENTORY_S3_OPERATION_CODES,
   ...INVENTORY_S4_OPERATION_CODES,
   ...INVENTORY_S5_OPERATION_CODES,
   ...INVENTORY_S6_OPERATION_CODES,
+  ...INVENTORY_CORRECTIVE_OPERATION_CODES,
 ];
 
 /** The literal first line of every stream. */
@@ -513,6 +524,17 @@ export const INVENTORY_PAYLOAD_SCHEMAS: Readonly<Record<InventoryOperationCode, 
     spec('realized', 'integer'),
     ...textWordSpecs('reference', true),
   ]),
+  // Phase 3 corrective (0072, TD-16): the write-off's own arguments. The
+  // residue is the client's statement of O; the chain point and the base it
+  // releases are derived.
+  'purchase.write_off_residue': Object.freeze([
+    spec('purchase_id', 'uuid'),
+    spec('write_off_date', 'integer'),
+    ...textWordSpecs('reason', false),
+    spec('residue', 'integer'),
+    spec('released_before', 'integer'),
+    spec('residue_base', 'integer'),
+  ]),
 };
 
 /**
@@ -581,6 +603,9 @@ export const INVENTORY_OPERATION_INTENT_FIELDS: Readonly<Partial<Record<Inventor
     'receipt_amount',
     ...Array.from({ length: 8 }, (_, i) => `reference_w${i + 1}`),
   ]),
+  // Phase 3 corrective (0072, TD-16): the purchase, the date, the reason and
+  // the stated residue; the chain point and the released base are derived.
+  'purchase.write_off_residue': Object.freeze(['purchase_id', 'write_off_date', ...Array.from({ length: 8 }, (_, i) => `reason_w${i + 1}`), 'residue']),
 });
 
 /** The intent schema of an operation kind: its schema with the server-derived fields removed, header and group alike. */
@@ -615,7 +640,7 @@ const refuse = (what: string): never => {
   throw new InventoryError('inventory.payload_invalid', `invpl/1 payload ${what}`);
 };
 
-/** True for a registered operation code (P3-S1, P3-S3, P3-S4, P3-S5 or P3-S6). Refuses anything else, including a wildcard. */
+/** True for a registered operation code (P3-S1, P3-S3, P3-S4, P3-S5, P3-S6 or the corrective pass). Refuses anything else, including a wildcard. */
 export function isInventoryOperationCode(value: unknown): value is InventoryOperationCode {
   return typeof value === 'string' && (INVENTORY_OPERATION_CODES as readonly string[]).includes(value);
 }

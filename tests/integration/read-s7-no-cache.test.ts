@@ -105,6 +105,17 @@ function digest(lines: readonly string[]): { readonly lines: number; readonly sh
  */
 const S6_END_STATE = { lines: 174, sha256: '3a93790f2cdf58aec4bc286a2639e14513bf8ef04642e3efb59f8791f534c1c4' } as const;
 
+/**
+ * Phase 3 corrective (0072, TD-16): the two grants the residue write-off adds
+ * to `daftar_app` — read its rows, execute its one signed routine. Named
+ * line for line, so the S6 end state stays pinned by its digest and nothing
+ * else may appear.
+ */
+const P3C_APP_GRANTS = [
+  'relation public.purchase_residue_write_offs SELECT',
+  'routine purchase_write_off_residue(uuid,date,text,bigint,bigint,bigint) EXECUTE',
+] as const;
+
 beforeAll(async () => {
   await ensurePostgres();
   await resetData();
@@ -121,8 +132,10 @@ describe('T-01 the catalogue end state', () => {
     expect(stock.rowCount, 'the named exception exists and is a plain table').toBe(1);
   });
 
-  it('the daftar_app privilege matrix is the S6 end state: S7 adds no grant', async () => {
-    const matrix = await appPrivilegeMatrix(ownerPool());
+  it('the daftar_app privilege matrix is the S6 end state: S7 adds no grant (the corrective pass adds exactly its two)', async () => {
+    const all = await appPrivilegeMatrix(ownerPool());
+    for (const g of P3C_APP_GRANTS) expect(all, g).toContain(g);
+    const matrix = all.filter((l) => !(P3C_APP_GRANTS as readonly string[]).includes(l));
     expect(
       matrix.some((l) => l.startsWith('relation public.stock_levels SELECT')),
       'the matrix reads real grants',

@@ -28,6 +28,7 @@
     "purchase_landed_cost_allocations",
     "purchase_landed_costs",
     "purchase_lines",
+    "purchase_residue_write_offs",
     "purchase_reversal_lines",
     "purchase_reversals",
     "purchases",
@@ -77,6 +78,7 @@
         "purchase_landed_cost_allocations",
         "purchase_landed_costs",
         "purchase_lines",
+        "purchase_residue_write_offs",
         "purchase_reversal_lines",
         "purchase_reversals",
         "purchases",
@@ -164,6 +166,7 @@
       "purchase_reverse(uuid,uuid,date,text,uuid,bigint,uuid[],uuid[],numeric[],bigint[])",
       "purchase_save_draft(uuid,integer,uuid,uuid,uuid,character,date,text,text,bigint,uuid[],uuid[],numeric[],numeric[],bigint[],uuid[],text[],bigint[],text[],bigint[])",
       "purchase_settlement_state(uuid,uuid)",
+      "purchase_write_off_residue(uuid,date,text,bigint,bigint,bigint)",
       "structure_associate_warehouse_branch(uuid,uuid)",
       "structure_dissociate_warehouse_branch(uuid,uuid)",
       "supplier_allocate_credit(uuid,uuid,uuid,uuid,date,character,bigint,bigint,bigint,bigint,character,bigint,bigint,bigint,bigint,bigint)",
@@ -189,7 +192,7 @@
     "public": []
   },
   "executeNotes": {
-    "daftar_app": "The 26 signed entry routines (one per registered operation kind) plus the two INVOKER read functions purchase_ap_outstanding and purchase_settlement_state (0065, replaced in 0067). S7 adds none; S8 adds none.",
+    "daftar_app": "The 27 signed entry routines (one per registered operation kind) plus the two INVOKER read functions purchase_ap_outstanding and purchase_settlement_state (0065, replaced in 0067 and, purchase_ap_outstanding, in 0072). S7 adds none; S8 adds none; the Phase 3 corrective 0072 (TD-16) adds purchase_write_off_residue, the routine of its one operation kind.",
     "daftar_platform": "The two inventory key-domain routines (L:1868) plus the three provisioning routines 0070 (TD-18) re-created and handed to daftar_provisioning_internal: provision_actor(text[]) and the provisioning key install/retire commands. Each keeps its accepted Phase 1 grant to the platform alone; TD-18 closed the TL-3 exception set (no replaced routine is owned by the applier or pins a public-first path any more).",
     "public": "No Phase 3 routine, definer or invoker, is executable by PUBLIC."
   },

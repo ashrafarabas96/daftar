@@ -289,6 +289,9 @@ describe('the §H grant matrix, from information_schema and pg_policy (P3-AL-54 
       supplier_payment_allocations: 'INSERT,SELECT',
       supplier_credit_allocations: 'INSERT,SELECT',
       supplier_refunds: 'INSERT,SELECT',
+      // Phase 3 corrective (0072, TD-16 R-96): the residue write-off is written
+      // by its signed routine only, insert-only: no UPDATE and no DELETE.
+      purchase_residue_write_offs: 'INSERT,SELECT',
     });
   });
 
@@ -437,6 +440,8 @@ describe('the §H grant matrix, from information_schema and pg_policy (P3-AL-54 
       { g: 'daftar_app', r: 'purchase_reverse' },
       // P3-S4 (0064, contract §2.4)
       { g: 'daftar_app', r: 'purchase_save_draft' },
+      // Phase 3 corrective (0072, TD-16 R-96): the one signed entry routine, daftar_app only.
+      { g: 'daftar_app', r: 'purchase_write_off_residue' },
       { g: 'daftar_app', r: 'structure_associate_warehouse_branch' },
       { g: 'daftar_app', r: 'structure_dissociate_warehouse_branch' },
       // P3-S6 (0068)

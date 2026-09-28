@@ -536,6 +536,9 @@ describe('the §D inventory definer contract (P3-AL-54 §D)', () => {
     // Phase 3 corrective (0071 R-B1b): the stock-value equality boolean, asked
     // by the accounting reversal guard only — same single grantee.
     'inventory_business_stock_value_equals(uuid,numeric)': ['daftar_accounting_internal'],
+    // Phase 3 corrective (0072, TD-16 R-96): the one signed entry routine,
+    // daftar_app only; its three guards are named nowhere, so nobody.
+    'purchase_write_off_residue(uuid,date,text,bigint,bigint,bigint)': ['daftar_app'],
   };
 
   const INVENTORY_TRUSTED_RELATIONS = [

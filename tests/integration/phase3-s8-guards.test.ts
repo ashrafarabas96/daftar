@@ -28,6 +28,7 @@ import {
 } from '../../scripts/guards/inventory-writer-authority';
 import { PHASE2_PREFIX_END } from '../../scripts/phase2-prefix';
 import { deliveredFiles } from '../helpers/delivered-files';
+import { P3C_RELATIONS } from '../helpers/p3c-migrations';
 
 /**
  * T-14 — P3-S8 contract A-18 (a)–(e): every widened guard FIRES on a planted
@@ -74,11 +75,13 @@ function appFiles(): Record<string, string> {
 
 // ── The shared discovery ─────────────────────────────────────────────────────
 describe('the Phase 3 surface, discovered by migration position (A-18(a), TL-10)', () => {
-  it('the prefix complement equals "created by a file after 0052" on the real tree: 47 relations, the five escapees among them', () => {
+  it('the prefix complement equals "created by a file after 0052" on the real tree: 47 relations (plus the corrective ones), the five escapees among them', () => {
     const byComplement = discoverPhase3Relations(schema());
     const byPosition = discoverPhase3RelationsByPosition(migrations());
     expect(byComplement).toEqual(byPosition);
-    expect(byComplement).toHaveLength(47);
+    // Phase 3 corrective (0072, TD-16): plus exactly purchase_residue_write_offs.
+    expect(byComplement).toHaveLength(47 + P3C_RELATIONS.length);
+    for (const t of P3C_RELATIONS) expect(byComplement, t).toContain(t);
     for (const t of ESCAPED) {
       expect(byComplement, t).toContain(t);
       // …and the pre-S8 name discovery missed each of them:

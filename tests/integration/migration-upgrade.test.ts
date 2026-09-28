@@ -40,9 +40,10 @@ import {
   type PostCommand,
 } from '../helpers/accounting-posting';
 import { resultOf, runChecks, statuses } from '../helpers/inventory-reconciliation';
+import { P3C_ACCOUNTING_SOURCE_TYPES, P3C_REGISTRY_ROWS, P3C_RELATIONS, P3C_SOURCE_TYPE_ROWS } from '../helpers/p3c-migrations';
 import { createScratchDb } from '../helpers/scratch-db';
 import { expectAccepted, expectRefused, settle, type Outcome } from '../helpers/stock-ledger';
-import { changedTables, tableDigest, type TableDigest } from '../helpers/table-digest';
+import { changedTables, rowCounts, tableDigest, type TableDigest } from '../helpers/table-digest';
 
 /**
  * Terminal Closure §13–16: the upgrade path from the PRE-ENCRYPTION schema
@@ -502,6 +503,8 @@ describe('migration upgrade path: pre-encryption schema → latest (§13–16)',
         'supplier_payment',
         'supplier_credit_allocation',
         'supplier_refund',
+        // Phase 3 corrective (0072 TD-16, R-96)
+        ...P3C_ACCOUNTING_SOURCE_TYPES.map(([t]) => t),
       ]);
       expect((await pool.query<{ n: number }>(`SELECT count(*)::int AS n FROM accounting_system_actors`)).rows[0]?.n).toBe(0);
       // P2-S5 §28: entering a rate is not a journal fact, so it registers no
@@ -822,6 +825,8 @@ describe('migration upgrade path: pre-encryption schema → latest (§13–16)',
           'src:supplier_payment:9',
           'src:supplier_credit_allocation:10',
           'src:supplier_refund:11',
+          // Phase 3 corrective (0072 TD-16, R-96)
+          ...P3C_SOURCE_TYPE_ROWS,
         ].sort(),
       );
       expect((await pool.query<{ n: number }>(`SELECT count(*)::int AS n FROM journal_entries`)).rows[0]?.n).toBe(0);
@@ -1496,6 +1501,8 @@ describe('migration upgrade path: pre-encryption schema → latest (§13–16)',
         'src:supplier_payment:9',
         'src:supplier_credit_allocation:10',
         'src:supplier_refund:11',
+        // Phase 3 corrective (0072 TD-16, R-96)
+        ...P3C_SOURCE_TYPE_ROWS,
       ].sort();
 
       const applied = await runMigrations(url10);
@@ -1573,6 +1580,8 @@ describe('migration upgrade path: pre-encryption schema → latest (§13–16)',
           'acct:post:supplier_payment',
           'acct:post:supplier_credit_allocation',
           'acct:post:supplier_refund',
+          // Phase 3 corrective (0072 TD-16, R-96)
+          ...P3C_REGISTRY_ROWS,
         ].sort(),
       );
 
@@ -1806,6 +1815,8 @@ describe('migration upgrade path: pre-encryption schema → latest (§13–16)',
         'src:supplier_payment:9',
         'src:supplier_credit_allocation:10',
         'src:supplier_refund:11',
+        // Phase 3 corrective (0072 TD-16, R-96)
+        ...P3C_SOURCE_TYPE_ROWS,
       ].sort();
 
       const applied = await runMigrations(url11);
@@ -1875,6 +1886,8 @@ describe('migration upgrade path: pre-encryption schema → latest (§13–16)',
           'acct:post:supplier_payment',
           'acct:post:supplier_credit_allocation',
           'acct:post:supplier_refund',
+          // Phase 3 corrective (0072 TD-16, R-96)
+          ...P3C_REGISTRY_ROWS,
         ].sort(),
       );
       // The replaced discovery reports no gap over the six registered types.
@@ -2145,7 +2158,15 @@ describe('migration upgrade path: pre-encryption schema → latest (§13–16)',
       }).toEqual({ entries: 2, bindings: 2, movements: 5, levels: 3, suppliers: 1, received: 1, lines: 2, purchaseBridges: 2 });
       // The one protected change 0065 is authorized to make (contract A-05).
       // P3-S6 (0067/0068): and the three 0067 is authorized to make (contract A-05).
-      const after = [...before, 'src:supplier_return:8', 'src:supplier_payment:9', 'src:supplier_credit_allocation:10', 'src:supplier_refund:11'].sort();
+      // Phase 3 corrective (0072 TD-16, R-96): and the one 0072 is authorized to make.
+      const after = [
+        ...before,
+        'src:supplier_return:8',
+        'src:supplier_payment:9',
+        'src:supplier_credit_allocation:10',
+        'src:supplier_refund:11',
+        ...P3C_SOURCE_TYPE_ROWS,
+      ].sort();
 
       const applied = await runMigrations(url12);
       expect(applied).toEqual(migrationsAfter(FROZEN));
@@ -2177,7 +2198,7 @@ describe('migration upgrade path: pre-encryption schema → latest (§13–16)',
       // The registries are exactly the checkpoint's S1 + S3 + S4 rows plus
       // P3-S5's (§2.1, §2.6, A-03, A-05; R-B2a: `purchase_reversal` is a stock
       // source type only), and nothing else.
-      expect(await registries()).toEqual([...CHECKPOINT_REGISTRIES, ...S5_REGISTRIES, ...S6_REGISTRIES].sort());
+      expect(await registries()).toEqual([...CHECKPOINT_REGISTRIES, ...S5_REGISTRIES, ...S6_REGISTRIES, ...P3C_REGISTRY_ROWS].sort());
       // The replaced discovery reports no gap over the eight registered types.
       expect((await pool.query(`SELECT * FROM inventory_stock_source_guard_gaps()`)).rows).toEqual([]);
 
@@ -2205,7 +2226,7 @@ describe('migration upgrade path: pre-encryption schema → latest (§13–16)',
       // registry as it was.
       expect(await runMigrations(url12)).toEqual([]);
       expect(await protectedRows()).toEqual(after);
-      expect(await registries()).toEqual([...CHECKPOINT_REGISTRIES, ...S5_REGISTRIES, ...S6_REGISTRIES].sort());
+      expect(await registries()).toEqual([...CHECKPOINT_REGISTRIES, ...S5_REGISTRIES, ...S6_REGISTRIES, ...P3C_REGISTRY_ROWS].sort());
     } finally {
       await pool.end();
       await admin.query(`DROP DATABASE IF EXISTS ${db12} WITH (FORCE)`).catch(() => undefined);
@@ -2513,7 +2534,8 @@ describe('migration upgrade path: pre-encryption schema → latest (§13–16)',
         );
       expect(await note()).toEqual({ original: '1200', remaining: '1200', original_base: '1200', remaining_base: '1200' });
       // The three protected changes 0067 is authorized to make (contract A-05).
-      const after = [...before, 'src:supplier_payment:9', 'src:supplier_credit_allocation:10', 'src:supplier_refund:11'].sort();
+      // Phase 3 corrective (0072 TD-16, R-96): and the one 0072 is authorized to make.
+      const after = [...before, 'src:supplier_payment:9', 'src:supplier_credit_allocation:10', 'src:supplier_refund:11', ...P3C_SOURCE_TYPE_ROWS].sort();
 
       const applied = await runMigrations(url13);
       expect(applied).toEqual(migrationsAfter(FROZEN));
@@ -2547,7 +2569,7 @@ describe('migration upgrade path: pre-encryption schema → latest (§13–16)',
 
       // The registries are exactly the checkpoint's S1 + S3 + S4 + S5 rows plus
       // P3-S6's (§2.8, A-03, A-05), and nothing else.
-      expect(await registries()).toEqual([...CHECKPOINT_REGISTRIES, ...S6_REGISTRIES].sort());
+      expect(await registries()).toEqual([...CHECKPOINT_REGISTRIES, ...S6_REGISTRIES, ...P3C_REGISTRY_ROWS].sort());
       // Both discoveries report no gap.
       expect((await pool.query(`SELECT * FROM inventory_stock_source_guard_gaps()`)).rows).toEqual([]);
       expect((await pool.query(`SELECT * FROM supplier_settlement_guard_gaps()`)).rows).toEqual([]);
@@ -2575,7 +2597,7 @@ describe('migration upgrade path: pre-encryption schema → latest (§13–16)',
       // registry as it was.
       expect(await runMigrations(url13)).toEqual([]);
       expect(await protectedRows()).toEqual(after);
-      expect(await registries()).toEqual([...CHECKPOINT_REGISTRIES, ...S6_REGISTRIES].sort());
+      expect(await registries()).toEqual([...CHECKPOINT_REGISTRIES, ...S6_REGISTRIES, ...P3C_REGISTRY_ROWS].sort());
     } finally {
       await pool.end();
       await admin.query(`DROP DATABASE IF EXISTS ${db13} WITH (FORCE)`).catch(() => undefined);
@@ -2776,9 +2798,14 @@ describe('migration upgrade path: pre-encryption schema → latest (§13–16)',
       const registriesBefore = await registries();
       expect(registriesBefore.filter((r) => r.startsWith('op:'))).toHaveLength(26);
 
-      const applied = await scratch.migrateRest();
-      expect(applied).toEqual(migrationsAfter(S7_HEAD));
-      expect(applied[0]).toBe(S8M);
+      // 0069 alone first: the corrective migrations that follow it on disk
+      // (0070+) are applied, and judged, after this.
+      const toS8 = migrationsUpTo(S8M);
+      try {
+        expect(await runMigrations(scratch.url(), toS8)).toEqual([S8M]);
+      } finally {
+        rmSync(toS8, { recursive: true, force: true });
+      }
 
       // No row of any table changed; nothing was registered.
       expect(changedTables(before, await rows())).toEqual([]);
@@ -2798,9 +2825,24 @@ describe('migration upgrade path: pre-encryption schema → latest (§13–16)',
         expect((await pool.query<{ c: boolean }>(`SELECT has_schema_privilege($1, 'public', 'CREATE') AS c`, [role])).rows[0]?.c, role).toBe(false);
       }
 
+      // Phase 3 corrective: the rest (0070+) changes no existing row; it
+      // registers exactly its own rows (0072 TD-16: one operation kind and one
+      // accounting source type with its posting pair) and adds one empty table.
+      const applied = await scratch.migrateRest();
+      expect(applied).toEqual(migrationsAfter(S8M));
+      const corrected = await rows();
+      expect(changedTables(before, corrected)).toEqual([
+        'accounting_operation_kinds',
+        'accounting_source_types',
+        'inventory_operation_kinds',
+        ...P3C_RELATIONS,
+      ]);
+      for (const rel of P3C_RELATIONS) expect(rowCounts(corrected)[rel], rel).toBe(0);
+      expect(await registries()).toEqual([...registriesBefore, ...P3C_REGISTRY_ROWS, ...P3C_SOURCE_TYPE_ROWS].sort());
+
       // Second run does nothing, and still changes no row.
       expect(await scratch.migrateRest()).toEqual([]);
-      expect(changedTables(before, await rows())).toEqual([]);
+      expect(changedTables(corrected, await rows())).toEqual([]);
 
       // On the upgraded data: the residue is reported, by business, and only by R-INV-01.
       const upgraded = await runChecks(scratch.poolAs('daftar_reconciler'), target);

@@ -336,7 +336,9 @@ describe('RLS is real on the ledger', () => {
     // (0065/0066, contract A-15(d)): plus the two S5 posting headers,
     // purchase_reversals and supplier_returns. P3-S6 (0067/0068, contract
     // A-14(d)): plus the four S6 settlement tables and the S5 credit notes the
-    // three S6 completeness triggers read.
+    // three S6 completeness triggers read. Phase 3 corrective (0072, TD-16):
+    // plus purchase_residue_write_offs, which the write-off entry's
+    // completeness trigger reads.
     expect(rows.map((r) => r.tablename)).toEqual([
       'accounting_fx_rates',
       'accounting_manual_adjustments',
@@ -350,6 +352,8 @@ describe('RLS is real on the ledger', () => {
       'journal_lines',
       // P3-S4 (0063/0064)
       'negative_inventory_cost_adjustments',
+      // Phase 3 corrective (0072)
+      'purchase_residue_write_offs',
       // P3-S5 (0065/0066)
       'purchase_reversals',
       // P3-S4 (0063/0064)
@@ -385,6 +389,8 @@ describe('RLS is real on the ledger', () => {
       'supplier_refunds',
       'supplier_payment_allocations',
       'supplier_credit_notes',
+      // Phase 3 corrective (0072): and so does the residue write-off.
+      'purchase_residue_write_offs',
     ];
     for (const row of rows) {
       expect(row.cmd, row.tablename).toBe('SELECT');

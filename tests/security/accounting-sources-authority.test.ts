@@ -114,6 +114,8 @@ describe('an assertion is bound to every claim it names (§38, §39)', () => {
     // registers no accounting `purchase_reversal` (its fact is a `reversal`).
     // P3-S6 (0067/0068, contract A-05): `post` also owns the three supplier
     // settlement source types, in sort position; nothing else was added.
+    // Phase 3 corrective (0072, TD-16): `post` also owns
+    // `purchase_residue_write_off`, in sort position; nothing else was added.
     const pairs = await ownerPool().query<{ operation_kind: string; source_type: string }>(
       `SELECT operation_kind, source_type FROM accounting_operation_kinds ORDER BY operation_kind, source_type`,
     );
@@ -126,6 +128,8 @@ describe('an assertion is bound to every claim it names (§38, §39)', () => {
       { operation_kind: 'post', source_type: 'opening_balance' },
       // P3-S4 (0063/0064)
       { operation_kind: 'post', source_type: 'purchase' },
+      // Phase 3 corrective (0072)
+      { operation_kind: 'post', source_type: 'purchase_residue_write_off' },
       // P3-S6 (0067/0068)
       { operation_kind: 'post', source_type: 'supplier_credit_allocation' },
       { operation_kind: 'post', source_type: 'supplier_payment' },

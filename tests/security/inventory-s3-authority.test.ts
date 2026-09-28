@@ -40,6 +40,7 @@ import {
   type S3World,
 } from '../helpers/inventory-commands';
 import { honestCommand, tampers } from '../helpers/inventory-posting';
+import { P3C_OPERATION_KINDS } from '../helpers/p3c-migrations';
 
 let world: S3World;
 let c: Client;
@@ -409,6 +410,8 @@ describe('the migration end state holds', () => {
         'supplier.pay',
         'supplier.allocate_credit',
         'supplier.receive_refund',
+        // Phase 3 corrective (0072): the corrective kinds; no op→kind row.
+        ...P3C_OPERATION_KINDS,
       ].sort(),
     );
     const maps = (await q.query<{ m: string }>(`SELECT op_code || '→' || movement_kind AS m FROM inventory_operation_movement_kinds ORDER BY 1`)).rows.map(

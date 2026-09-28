@@ -1121,7 +1121,9 @@ describe('managed PostgreSQL: 0039 → 0049 under a non-superuser migration prin
                                       -- P3-S8 (0069, R-B1a): the accounting-side domain guard.
                                       'accounting_inventory_account_domain_guard',
                                       -- Phase 3 corrective (0071, R-B1b): the accounting-side reversal guard.
-                                      'accounting_inventory_reversal_domain_guard'))
+                                      'accounting_inventory_reversal_domain_guard',
+                                      -- Phase 3 corrective (0072, R-96): the write-off's entry completeness.
+                                      'accounting_purchase_residue_write_off_entry_complete'))
               ORDER BY p.proname`,
           )
         ).rows;
@@ -1318,6 +1320,14 @@ describe('managed PostgreSQL: 0039 → 0049 under a non-superuser migration prin
             // and the accounting reversal guard, both DEFINER with the pinned path.
             internal('inventory_business_stock_value_equals'),
             { proname: 'accounting_inventory_reversal_domain_guard', owner: 'daftar_accounting_internal', definer: true, config: PIN },
+            // Phase 3 corrective (0072 TD-16, R-95/R-96): the residue bound on
+            // a supplier return, the write-off's header and value guards and
+            // its signed entry routine, all DEFINER with the pinned path.
+            internal('purchase_residue_write_off_guard'),
+            internal('purchase_residue_write_off_value_complete'),
+            internal('purchase_write_off_residue'),
+            internal('supplier_return_residue_bound'),
+            { proname: 'accounting_purchase_residue_write_off_entry_complete', owner: 'daftar_accounting_internal', definer: true, config: PIN },
           ].sort((a, b) => (a.proname < b.proname ? -1 : 1)),
         );
         for (const role of ['daftar_inventory_internal', 'daftar_accounting_internal']) {

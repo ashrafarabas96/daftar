@@ -22,6 +22,7 @@
 import { createHash, createHmac, randomUUID } from 'node:crypto';
 import { Client, DatabaseError, type Pool } from 'pg';
 import { expect } from 'vitest';
+import { P3C_OPERATION_KINDS } from './p3c-migrations';
 import { INVCTL_VERSION, configureProductPayload, inventoryAssertionPreimage } from '../../packages/inventory/src';
 import {
   INVENTORY_ASSERTION_KID,
@@ -653,6 +654,9 @@ export async function withRolledBackFixture<T>(
  * P3-S6 (0067/0068): plus exactly the seven P3-S6 kinds (S6 registers no stock
  * source type and no op→kind row, §2.8) — so the state is exactly
  * S1 + S3 + S4 + S5 + S6.
+ *
+ * Phase 3 corrective (0072): plus exactly the corrective kinds
+ * (`P3C_OPERATION_KINDS`; no source type, no op→kind row).
  */
 export async function assertMigrationState(q: Queryable = ownerPool()): Promise<void> {
   const r = await q.query<{ types: string[]; mapping: string[]; kinds: string[]; uses: number; rels: number; fns: number }>(
@@ -688,6 +692,8 @@ export async function assertMigrationState(q: Queryable = ownerPool()): Promise<
       ...S5_OPERATION_KINDS,
       // P3-S6 (0067/0068)
       ...S6_OPERATION_KINDS,
+      // Phase 3 corrective (0072)
+      ...P3C_OPERATION_KINDS,
     ].sort(),
     uses: 0,
     rels: 0,

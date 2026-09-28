@@ -35,6 +35,7 @@ const F65 = '0065_supplier_returns_reversals_sources.sql';
 const F66 = '0066_supplier_return_reversal_commands.sql';
 // P3-S6 (0067/0068)
 const F68 = '0068_supplier_settlement_commands.sql';
+const F72 = '0072_purchase_sub_unit_residue.sql';
 
 /** The real tree with one file's text rewritten; the rewrite must change something. */
 function mutate(file: string, from: string | RegExp, to: string): Record<string, string> {
@@ -212,6 +213,14 @@ describe('G-7 — the tree as it stands', () => {
         // Phase 3 corrective (0071 R-B1b): the stock-value equality boolean,
         // same shape and same bracket — no new exception.
         'inventory_business_stock_value_equals',
+        // Phase 3 corrective (0072 TD-16, R-95/R-96): the residue bound on a
+        // supplier return, the write-off's header and value guards and its
+        // entry routine, all DEFINER, handed over inside the inventory CREATE
+        // bracket — no new exception.
+        'purchase_residue_write_off_guard',
+        'purchase_residue_write_off_value_complete',
+        'purchase_write_off_residue',
+        'supplier_return_residue_bound',
       ].sort(),
     );
     expect([...INVENTORY_INVOKER_EXCEPTIONS].sort()).toEqual(['product_variants_10_base_variant_authority', 'products_10_inventory_config_authority']);
@@ -316,6 +325,9 @@ describe('G-7 — the tree as it stands', () => {
       `${F68}: supplier_pay`,
       `${F68}: supplier_allocate_credit`,
       `${F68}: supplier_receive_refund`,
+      // Phase 3 corrective (0072 TD-16, R-96): the residue write-off opens
+      // with the assertion; it writes its own document, no stock table.
+      `${F72}: purchase_write_off_residue`,
     ]);
   });
 });

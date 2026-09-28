@@ -59,6 +59,8 @@ const REFUSES_EARLY: Readonly<Record<string, string>> = {
   journal_entries_negative_inventory_cost_adjustment_complete: 'accounting.inventory_entry_mismatch',
   journal_entries_opening_balance_complete: 'accounting.opening_balance_detail_missing',
   journal_entries_purchase_complete: 'accounting.inventory_entry_mismatch',
+  // Phase 3 corrective (0072, TD-16 R-96): fired at the entry header, before its two lines.
+  journal_entries_purchase_residue_write_off_complete: 'accounting.inventory_entry_mismatch',
   journal_entries_reversal_complete: 'accounting.reversal_detail_missing',
   journal_entries_supplier_credit_allocation_complete: 'accounting.inventory_entry_mismatch',
   journal_entries_supplier_payment_complete: 'accounting.inventory_entry_mismatch',
@@ -116,6 +118,10 @@ const JUDGES_COMPLETE: Readonly<Record<string, string>> = {
   supplier_return_lines_quantity_bound: 'reads its own table and the frozen purchase line quantity; every returned line re-queues it',
   journal_entries_inventory_reversal_domain:
     '0071 R-B1b: judges the REVERSED entry’s committed lines, visible however early it fires (its own lines are a second witness); proved forced early, refusing and not over-refusing, in p3c-reversal-inventory-domain',
+  supplier_returns_residue_bound:
+    '0072 R-95: reads only its own return header (the AP it releases and the chain point before it, both written by the INSERT it fires on) and the frozen received purchase and currencies',
+  purchase_residue_write_offs_value_complete:
+    '0072 R-96: fires at the write-off INSERT, the routine’s only write, after every reducer it sums; a reducer written later in the transaction reads purchase_ap_outstanding, which counts the write-off (0072 §4), so it finds nothing outstanding',
 };
 
 /** Per scenario, the triggers that must refuse it when forced early. */
@@ -187,6 +193,8 @@ const OP_KIND_EXPECTED: Readonly<Record<string, readonly string[]>> = {
   ],
   'supplier.pay': ['journal_entries_supplier_payment_complete', 'journal_entry_validate', 'journal_line_validate', 'supplier_payments_complete'],
   'supplier.receive_refund': ['journal_entries_supplier_refund_complete', 'journal_entry_validate', 'journal_line_validate', 'supplier_refunds_value_complete'],
+  // Phase 3 corrective (0072, TD-16): the write-off with a base residue (rb = 1) posts its entry.
+  'purchase.write_off_residue': ['journal_entries_purchase_residue_write_off_complete', 'journal_entry_validate', 'journal_line_validate'],
 };
 
 const ACCOUNTING_EXPECTED: Readonly<Record<string, readonly string[]>> = {

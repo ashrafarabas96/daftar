@@ -200,7 +200,10 @@ export const NATIVE_SOURCE_TYPES = ['manual_adjustment', 'reversal', 'opening_ba
  * (PHASE_3_S4_CONTRACT A-06, §4.2); P3-S5 adds `supplier_return`
  * (PHASE_3_S5_CONTRACT A-06, §4.2); P3-S6 adds `supplier_payment`,
  * `supplier_credit_allocation` and `supplier_refund` (PHASE_3_S6_CONTRACT
- * A-05, §4.2), none of them reversible (TL-2).
+ * A-05, §4.2), none of them reversible (TL-2). The Phase 3 corrective pass
+ * (migration 0072, TD-16) adds `purchase_residue_write_off`: the base-only
+ * release of a purchase's sub-unit AP residue, posted by
+ * `purchase.write_off_residue` and not reversible.
  */
 export const DOMAIN_SOURCE_TYPES = [
   'inventory_adjustment',
@@ -211,6 +214,7 @@ export const DOMAIN_SOURCE_TYPES = [
   'supplier_payment',
   'supplier_credit_allocation',
   'supplier_refund',
+  'purchase_residue_write_off',
 ] as const;
 
 /**
