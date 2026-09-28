@@ -60,7 +60,7 @@ export class MerchantApiModule implements NestModule {
     const { config } = options;
     return {
       module: MerchantApiModule,
-      imports: httpImports(),
+      imports: httpImports(config),
       controllers: [
         AuthController,
         TenancyController,

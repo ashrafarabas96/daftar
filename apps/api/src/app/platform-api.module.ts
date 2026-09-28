@@ -22,7 +22,7 @@ export class PlatformApiModule implements NestModule {
     const { config } = options;
     return {
       module: PlatformApiModule,
-      imports: httpImports(),
+      imports: httpImports(config),
       controllers: [AuthController, AdminController, HealthController],
       providers: [
         ...coreProviders(config, options),

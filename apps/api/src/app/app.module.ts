@@ -70,7 +70,7 @@ export class AppModule implements NestModule {
     const { config } = options;
     return {
       module: AppModule,
-      imports: httpImports(),
+      imports: httpImports(config),
       controllers: [
         AuthController,
         TenancyController,

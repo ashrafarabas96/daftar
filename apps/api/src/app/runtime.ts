@@ -1,8 +1,10 @@
-import type { Provider, Type } from '@nestjs/common';
+import type { ExecutionContext, Provider, Type } from '@nestjs/common';
 import { APP_FILTER, APP_GUARD } from '@nestjs/core';
 import { AppError } from '@daftar/domain-core';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
+import type { Request } from 'express';
 import type { AppConfig } from '../config';
+import { clientIp } from '../common/client-ip';
 import { createLogger } from '../infra/logger';
 import { Database } from '../infra/database';
 import { InMemoryMetrics, METRICS, type Metrics } from '../infra/metrics';
@@ -97,9 +99,22 @@ export interface RuntimeSeams {
   reconciliationClock?: { now(): Date };
 }
 
-/** Throttler module import shared by every HTTP surface. */
-export function httpImports() {
-  return [ThrottlerModule.forRoot([{ ttl: 60_000, limit: 300 }])];
+/**
+ * Throttler module import shared by every HTTP surface: 300 requests per
+ * minute for each route handler and CLIENT. The client is the address
+ * `clientIp()` resolves — the same TRUSTED_PROXIES authority as the auth
+ * limits (TD-19) — not the TCP peer: behind the web server the peer is the
+ * web server, and keyed on it every merchant behind one web instance would
+ * share one allowance per route. An untrusted peer is its own client, so a
+ * forged X-Forwarded-For buys nothing.
+ */
+export function httpImports(config: Pick<AppConfig, 'TRUST_PROXY' | 'TRUSTED_PROXIES'>) {
+  return [
+    ThrottlerModule.forRoot({
+      throttlers: [{ ttl: 60_000, limit: 300 }],
+      getTracker: (_req: unknown, context: ExecutionContext) => clientIp(context.switchToHttp().getRequest<Request>(), config),
+    }),
+  ];
 }
 
 /** Config + logger + Database (pools opened per PROCESS_MODE inside Database). */
