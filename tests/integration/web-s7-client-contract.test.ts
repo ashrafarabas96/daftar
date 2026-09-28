@@ -43,6 +43,7 @@ import {
   type HttpPurchase,
   type SettlementAccounts,
 } from '../helpers/supplier-settlement';
+import { historicalReturn, writeOffBody } from '../helpers/p3c-residue';
 
 const CLIENT = readFileSync(join(__dirname, '../../apps/web/src/lib/phase3-api.ts'), 'utf8');
 
@@ -67,6 +68,11 @@ interface World {
   payLater: string;
   cancelLater: string;
   undoLater: string;
+  /** A received TRY purchase in the ILS business holding a historical sub-unit residue. */
+  residuePurchaseId: string;
+  /** Its outstanding amount as the payable read states it: what the client writes off. */
+  residueMinor: string;
+  residueKey: string;
   fxKey: string;
   fxBody: Record<string, unknown>;
 }
@@ -117,6 +123,9 @@ const world: World = {
   payLater: '',
   cancelLater: '',
   undoLater: '',
+  residuePurchaseId: '',
+  residueMinor: '',
+  residueKey: `s7-audit-residue-${randomUUID()}`,
   fxKey: `s7-audit-fx-${randomUUID()}`,
   fxBody: {},
 };
@@ -763,6 +772,64 @@ const ROWS: readonly AuditRow[] = [
     replay: { status: 200, answer: 'replayed' },
     before: async (w) => {
       w.undoLater = (await httpReceived(t, owner, A, { supplierId: w.supplierId })).purchaseId;
+    },
+  },
+
+  // ── The sub-unit leftover (TD-16, 0072 R-96) ───────────────────────────
+  // The client sends its per-confirmation key; the write-off's identity is
+  // the purchase itself, so the same close sent again answers the stored
+  // write-off: 200, replayed: true.
+  {
+    client: 'closePurchaseLeftover',
+    method: 'POST',
+    path: (w) => `purchases/${w.residuePurchaseId}/residue-write-off`,
+    permission: 'suppliers.pay',
+    scope: 'business-wide',
+    kind: 'header',
+    dto: 'PurchaseResidueWriteOffResultDto',
+    key: (w) => w.residueKey,
+    body: (w) => writeOffBody({ date: w.day, amount: w.residueMinor }),
+    status: 201,
+    shape: [
+      'purchaseId',
+      'supplierId',
+      'currency',
+      'writeOffDate',
+      'reason',
+      'residueTxnMinor',
+      'releasedBeforeTxnMinor',
+      'residueBaseMinor',
+      'journalEntryId',
+      'createdAt',
+      'replayed',
+      'businessTransactionId',
+    ],
+    replay: { status: 200, answer: 'replayed' },
+    before: async (w) => {
+      // TRY at 0.11 into ILS: one kurus converts to 0 agora. Lines 49.99 +
+      // 0.01, the 49.99 returned with the frozen S5 behaviour (the only way
+      // a residue exists now that 0072 R-95 refuses new ones) → 0.01 left.
+      const rate = await call(
+        'POST',
+        `businesses/${A.businessId}/accounting/fx-rates`,
+        { fromCurrency: 'TRY', toCurrency: 'ILS', rate: '0.1100000000', effectiveAt: `${w.day}T00:00:00Z` },
+        `s7-audit-try-${randomUUID()}`,
+      );
+      expect(rate.status, JSON.stringify(rate.body)).toBe(201);
+      const p = await httpReceived(t, owner, A, {
+        currency: 'TRY',
+        lines: [
+          { productId: A.piece.productId, quantity: '1', unitPrice: '49.99' },
+          { productId: A.piece2.productId, quantity: '1', unitPrice: '0.01' },
+        ],
+      });
+      await historicalReturn(A, p, 0, '1');
+      w.residuePurchaseId = p.purchaseId;
+      const payable = await call('GET', `purchases/${p.purchaseId}/payable`);
+      expect(payable.status, JSON.stringify(payable.body)).toBe(200);
+      const read = payable.body as { outstandingTxnMinor: string; outstandingBaseMinor: string };
+      expect(read, 'a sub-unit residue: owed in TRY, nothing in ILS').toMatchObject({ outstandingTxnMinor: '1', outstandingBaseMinor: '0' });
+      w.residueMinor = read.outstandingTxnMinor;
     },
   },
 
