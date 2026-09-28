@@ -7,7 +7,7 @@
  * checked by shape, re-spelled, or its sign read from its text. The server
  * decides every outcome; the views show its answer.
  */
-import type { InventoryItemDto, InventoryStockRowDto } from '@/lib/phase3-api';
+import type { InventoryAccessDto, InventoryItemDto, InventoryStockRowDto } from '@/lib/phase3-api';
 import type { Locale } from '@/lib/i18n';
 import { formatMomentDate, isQuantityText, isZeroQuantityText, normaliseDigits } from '@/lib/phase3-format';
 
@@ -106,6 +106,30 @@ export function formatDateText(iso: string, locale: Locale): string {
 
 /** The reason the merchant picks on Adjust Stock (A-13; "Starting stock" is TL-4). */
 export type AdjustReason = 'found' | 'missing' | 'damaged' | 'starting';
+
+/**
+ * TD-20: the reasons Adjust Stock offers, from the server's two answers.
+ * "Starting stock" is the business's one opening (0062 refuses a second,
+ * `inventory.opening_already_posted`), recorded for the whole business, so it
+ * needs a business-wide member (TL-4) AND a business whose opening is not
+ * posted yet. `startingRecorded` asks the screen to say why it is gone and
+ * what to use instead; a member who could never record it is not told.
+ */
+export function adjustReasons(businessWide: boolean, openingPosted: boolean): { reasons: AdjustReason[]; startingRecorded: boolean } {
+  if (!businessWide) return { reasons: ['found', 'missing', 'damaged'], startingRecorded: false };
+  if (openingPosted) return { reasons: ['found', 'missing', 'damaged'], startingRecorded: true };
+  return { reasons: ['found', 'missing', 'damaged', 'starting'], startingRecorded: false };
+}
+
+/**
+ * The server's answer to "is this business's opening posted?" — the
+ * `openingPosted` field of `GET /v1/inventory/access`. Only a literal `true`
+ * closes the option: the server stays the authority, and refuses a second
+ * opening whatever the screen shows.
+ */
+export function openingPostedOf(access: InventoryAccessDto | null): boolean {
+  return access?.openingPosted === true;
+}
 
 /** A typed quantity as the command receives it: Western digits, `.` as the separator (A-17). */
 export const quantityText = (typed: string): string => normaliseDigits(typed);

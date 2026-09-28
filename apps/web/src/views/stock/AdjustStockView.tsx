@@ -20,8 +20,10 @@ import { AUTO_GRID, Hint, ItemName, ItemPicker, LineCard, Notice, Qty, STACK, Sc
 export interface AdjustStockViewProps {
   warehouses: readonly InventoryWarehouseDto[];
   warehouseId: string;
-  /** The reasons this member may use, in order ("starting" only when business-wide, TL-4). */
+  /** The reasons this member may use, in order ("starting" only when business-wide, TL-4, and not yet recorded, TD-20). */
   reasons: readonly AdjustReason[];
+  /** TD-20: the business's starting stock is already recorded, so the screen says why it is not offered and what to use. */
+  startingRecorded: boolean;
   reason: AdjustReason;
   occurredOn: string;
   note: string;
@@ -108,6 +110,7 @@ export function AdjustStockView(props: AdjustStockViewProps & ViewBaseProps) {
           />
         ))}
       </div>
+      {props.startingRecorded ? <Hint>{t('stock.adjust.startingRecorded')}</Hint> : null}
       <div style={AUTO_GRID}>
         <WarehouseSelect
           t={t}

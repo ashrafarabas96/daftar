@@ -110,6 +110,12 @@ export type Phase3Permission =
 export interface InventoryAccessDto {
   businessWide: boolean;
   permissions: Phase3Permission[];
+  /**
+   * TD-20: true once the business's single inventory opening ("Starting
+   * stock") is posted. Absent from an API that predates the field, which the
+   * screen reads as "not posted" — the server still refuses a second opening.
+   */
+  openingPosted?: boolean;
 }
 
 /** `GET /v1/inventory/warehouses` — the warehouses the caller can reach (A-05). */
