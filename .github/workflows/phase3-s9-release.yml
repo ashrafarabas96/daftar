@@ -160,6 +160,19 @@ jobs:
 
       - run: npm ci
 
+      # ── 1b. the full Phase 3 secret history, base through this exact commit
+      #
+      # Corrective directive §7. Not the gitleaks-action PR window (the first
+      # 30 PR commits): every commit reachable from EXPECTED_SHA and not from
+      # the Phase 3 base 0f2b09e…, which must equal the merge-base with
+      # origin/main, merged agent branches and merge commits included.
+      # gitleaks 8.24.3 is fetched by the script and checked against the
+      # published archive digest and the binary digest. It runs here, on the
+      # repository checkout, because the extracted archive has no history.
+      # The evidence step below requires its artefact.
+      - name: Phase 3 secret history range scan (base 0f2b09e through the commit under release)
+        run: npm run scan:secrets:phase3 -- --head="$EXPECTED_SHA" --main-ref=origin/main --evidence=release/phase3-secret-scan.json
+
       # ── 2. the gate, on the repository checkout ───────────────────────────
       - name: Release gate — repository checkout
         run: npm run gate:phase3:release -- --evidence=release/phase3-s9-release-gate.json
@@ -220,6 +233,7 @@ jobs:
             --archive-gate=release/phase3-s9-release-gate-archive.json \
             --archive=release/DAFTAR_PHASE_3_RC.zip \
             --git-archive="$RUNNER_TEMP/git-archive.tar" \
+            --secret-scan=release/phase3-secret-scan.json \
             --ci-run="$CI_RUN"
 
       - name: Summary
@@ -231,7 +245,7 @@ jobs:
             echo "commit: \`$EXPECTED_SHA\`"
             echo
             echo '```json'
-            node -e "const e=require('./release/phase3-s9-release-evidence.json');console.log(JSON.stringify({verdict:e.verdict,source:e.source,archive:{sha256:e.archive.sha256,entryCount:e.archive.entryCount},gitArchive:e.gitArchive,migrations:{count:e.migrations.count,frozenThrough:e.migrations.frozenThrough},gates:{repository:{verdict:e.gates.repository.verdict,fail:e.gates.repository.fail,mandatorySkipped:e.gates.repository.mandatorySkipped},extractedArchive:{verdict:e.gates.extractedArchive.verdict,fail:e.gates.extractedArchive.fail,mandatorySkipped:e.gates.extractedArchive.mandatorySkipped}},problems:e.problems},null,2))" 2>/dev/null || echo '(no evidence file was produced)'
+            node -e "const e=require('./release/phase3-s9-release-evidence.json');console.log(JSON.stringify({verdict:e.verdict,source:e.source,archive:{sha256:e.archive.sha256,entryCount:e.archive.entryCount},gitArchive:e.gitArchive,migrations:{count:e.migrations.count,frozenThrough:e.migrations.frozenThrough},secretHistoryScan:{base:e.secretHistoryScan.base,head:e.secretHistoryScan.head,commitsInRange:e.secretHistoryScan.commitsInRange,commitsScanned:e.secretHistoryScan.commitsScanned,findings:e.secretHistoryScan.findings,remaining:(e.secretHistoryScan.remaining||[]).length,result:e.secretHistoryScan.result},gates:{repository:{verdict:e.gates.repository.verdict,fail:e.gates.repository.fail,mandatorySkipped:e.gates.repository.mandatorySkipped},extractedArchive:{verdict:e.gates.extractedArchive.verdict,fail:e.gates.extractedArchive.fail,mandatorySkipped:e.gates.extractedArchive.mandatorySkipped}},problems:e.problems},null,2))" 2>/dev/null || echo '(no evidence file was produced)'
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -241,6 +255,7 @@ jobs:
           name: phase3-s9-release-evidence
           path: |
             release/phase3-s9-release-evidence.json
+            release/phase3-secret-scan.json
             release/phase3-s9-release-gate.json
             release/phase3-s9-release-gate-archive.json
             release/phase2-s9-deployment-authority.json

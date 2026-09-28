@@ -320,6 +320,56 @@ describe('Phase 3 secret history range scan', () => {
     });
   });
 
+  describe('scripts/phase3-s9-evidence.ts carries and requires the scan', () => {
+    const REPO = join(__dirname, '../..');
+    const TSX = join(REPO, 'node_modules/.bin/tsx');
+    const SHA = 'e5'.repeat(20);
+
+    /** Runs the evidence assembler over a release directory holding only the secret-scan artefact (if any). */
+    function evidence(artefact: unknown, flag: boolean): { problems: string[]; secretHistoryScan: Record<string, unknown> } {
+      const dir = mkdtempSync(join(tmpdir(), 'p3c-secret-scan-evidence-'));
+      workDirs.push(dir);
+      if (artefact !== undefined) writeFileSync(join(dir, 'phase3-secret-scan.json'), JSON.stringify(artefact));
+      const args = [join(REPO, 'scripts/phase3-s9-evidence.ts'), `--release-dir=${dir}`, `--expected-sha=${SHA}`];
+      if (flag) args.push(`--secret-scan=${join(dir, 'phase3-secret-scan.json')}`);
+      spawnSync(TSX, args, { cwd: REPO, encoding: 'utf8', env: { ...process.env, GITHUB_SHA: '' } });
+      return JSON.parse(readFileSync(join(dir, 'phase3-s9-release-evidence.json'), 'utf8')) as {
+        problems: string[];
+        secretHistoryScan: Record<string, unknown>;
+      };
+    }
+    const scanProblems = (problems: string[]): string[] => problems.filter((p) => /secret (history )?scan/.test(p));
+    const passing = (): Record<string, unknown> => ({
+      produced: 'scripts/phase3-secret-scan.ts',
+      tool: { name: 'gitleaks', version: GITLEAKS_VERSION, binarySha256: GITLEAKS_BINARY_SHA256 },
+      mode: 'phase3-base',
+      base: PHASE3_BASE,
+      head: SHA,
+      mergeBase: PHASE3_BASE,
+      commitsInRange: 401,
+      commitsScanned: 401,
+      findings: 3,
+      remaining: [],
+      result: 'PASS',
+    });
+
+    it('records base, head, commit count, findings and result, and raises nothing about a passing scan', () => {
+      const e = evidence(passing(), true);
+      expect(scanProblems(e.problems)).toEqual([]);
+      expect(e.secretHistoryScan).toMatchObject({ base: PHASE3_BASE, head: SHA, commitsInRange: 401, commitsScanned: 401, findings: 3, result: 'PASS' });
+    });
+
+    it('refuses a missing scan when the workflow requires it', () => {
+      expect(scanProblems(evidence(undefined, true).problems)).toEqual([expect.stringMatching(/the Phase 3 secret history scan is missing/)]);
+    });
+
+    it('refuses a failed or partial scan found in the release directory even when not required', () => {
+      const problems = scanProblems(evidence({ ...passing(), result: 'FAIL', commitsScanned: 30 }, false).problems);
+      expect(problems.join('\n')).toMatch(/result is FAIL/);
+      expect(problems.join('\n')).toMatch(/read 30 of 401 commits/);
+    });
+  });
+
   describe('the release evidence accepts only a full Phase 3 range scan at the exact head', () => {
     const head = 'b'.repeat(40);
     const good: ScanResult = {

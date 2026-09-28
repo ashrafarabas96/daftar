@@ -377,7 +377,40 @@ jobs:
           fi
       # GITHUB_TOKEN is REQUIRED by gitleaks-action v2 to scan a pull request;
       # without it the action exits non-zero before scanning anything.
+      #
+      # WHAT THIS STEP DOES NOT COVER: on a pull request the action asks the
+      # GitHub API for the PR's commits without paging, gets the first page
+      # (the 30 OLDEST commits) and scans `--no-merges --first-parent
+      # <1st>^..<30th>`. Every later commit, the head included, and every
+      # commit that arrived through a merge, is outside that window — on PR #4
+      # the log said "30 commits scanned" of about 400. It is kept, not
+      # removed; the explicit range scan below is the one that covers history.
       - name: Secret scan (gitleaks)
         uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # The explicit range scan (Phase 3 corrective directive §7): every commit
+      # reachable from the PR head and not from its merge-base with the base
+      # branch, merged agent branches and merge commits included, with
+      # gitleaks 8.24.3 downloaded by the script and checked against the
+      # published archive digest and the binary digest. On the Phase 3 branch
+      # the base is not derived but DECLARED (0f2b09e…, the script's default)
+      # and must equal the merge-base, or the step fails. The branch name
+      # reaches the shell through the environment, never the script text.
+      - name: Secret history range scan (every commit of the pull request)
+        if: github.event_name == 'pull_request'
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          HEAD_REF: ${{ github.head_ref }}
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+          base_arg='--base=derive'
+          if [ "$HEAD_REF" = 'phase/3-inventory-purchases-suppliers' ]; then base_arg=''; fi
+          npm run scan:secrets:phase3 -- --head="$HEAD_SHA" --main-ref="origin/$BASE_REF" $base_arg --evidence=release/secret-history-scan.json
+      - uses: actions/upload-artifact@v4
+        if: always() && github.event_name == 'pull_request'
+        with:
+          name: secret-history-scan
+          path: release/secret-history-scan.json
+          if-no-files-found: ignore
