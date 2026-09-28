@@ -180,8 +180,22 @@ export interface Tree {
   readonly text: (path: string) => string;
 }
 
+/**
+ * The files a tree consists of: the delivery manifest's inventory in an
+ * extracted archive; `git ls-files --cached --others --exclude-standard` in a
+ * checkout (so build output, logs and local artefacts never change a cell);
+ * otherwise a walk of the directory.
+ */
 export function readTree(root: string): Tree {
   const files = new Set<string>();
+  const manifest = join(root, 'DELIVERY_MANIFEST.json');
+  const listed: string[] | null = existsSync(manifest)
+    ? ((JSON.parse(readFileSync(manifest, 'utf8')) as { inventory?: { path?: unknown }[] }).inventory
+        ?.map((entry) => entry.path)
+        .filter((p): p is string => typeof p === 'string' && p !== '') ?? null)
+    : null;
+  const tracked = listed === null ? git(root, ['ls-files', '-z', '--cached', '--others', '--exclude-standard']) : null;
+  const inventory = listed ?? (tracked?.ok === true ? tracked.out.split('\0').filter((p) => p !== '') : null);
   const walk = (dir: string): void => {
     for (const name of readdirSync(dir)) {
       if (SKIP_DIRS.has(name)) continue;
@@ -191,7 +205,8 @@ export function readTree(root: string): Tree {
       else if (stat.isFile()) files.add(relative(root, path).split(sep).join('/'));
     }
   };
-  walk(root);
+  if (inventory === null) walk(root);
+  else for (const path of inventory) if (existsSync(join(root, path))) files.add(path);
   const cache = new Map<string, string>();
   const text = (path: string): string => {
     const hit = cache.get(path);
