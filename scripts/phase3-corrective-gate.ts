@@ -74,7 +74,12 @@ export const CORRECTIVE_MIGRATIONS: readonly string[] = [
 ];
 
 /** The accepted digests, recorded at the corrective freeze. Empty while a candidate. */
-export const CORRECTIVE_ACCEPTED: Readonly<Record<string, string>> = {};
+export const CORRECTIVE_ACCEPTED: Readonly<Record<string, string>> = {
+  '0070_definer_ownership_hardening.sql': 'add1fdea23051887900f33fb1a5ab30257656350807b58e479363231b2d432be',
+  '0071_reversal_inventory_account_domain.sql': 'da36cae26c8c51847217e0e3654b5934f2f12ccbef824fc15222454d6a2ad14f',
+  '0072_purchase_sub_unit_residue.sql': '19ade4bf5b2e6d3960b73bf5834f78bcf862da59ba229f936208bb3b5a3ab1d0',
+  '0073_default_warehouse_locale_name.sql': 'c47d4acbc94314ff68d043fcc0356274a2996492de9b6c10e4f52e5f05228ed7',
+};
 
 /** The phrase every corrective migration's leading comment carries (directive §18). */
 export const CORRECTIVE_MIGRATION_HEADER = 'Phase 3 corrective hardening';

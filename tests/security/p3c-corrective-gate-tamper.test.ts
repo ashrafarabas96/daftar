@@ -43,6 +43,7 @@ import { afterAll, describe, expect, it } from 'vitest';
 import { deliveredFiles } from '../helpers/delivered-files';
 import {
   BROWSER_MATRIX,
+  CORRECTIVE_ACCEPTED,
   CORRECTIVE_COMMANDS,
   CORRECTIVE_MIGRATIONS,
   CORRECTIVE_MIGRATION_HEADER,
@@ -50,6 +51,7 @@ import {
   PHASE3_BASE,
   RED_PROOFS,
   SECRET_RANGE_SCAN,
+  boundaryProblems,
   browserMatrixProblems,
   correctivePlan,
   isPending,
@@ -388,16 +390,34 @@ describe('§18: the corrective migration boundary is exact', () => {
     ]);
   }, 700_000);
 
-  it('a corrective migration recorded in the manifest before the gate passed → FAIL [boundary] (premature freeze)', () => {
+  // The candidate tense is asked of boundaryProblems directly, with an empty
+  // accepted set, so the premature-freeze refusal stays proven after the
+  // corrective freeze fills CORRECTIVE_ACCEPTED.
+  it('candidate tense: a corrective migration recorded in the manifest before the gate passed → a boundary problem (premature freeze)', () => {
     const root = withCorrectiveFiles();
     const first = CORRECTIVE_MIGRATIONS[0] ?? '';
     const manifest = JSON.parse(readFileSync(join(REPO, MANIFEST), 'utf8')) as { migrations: { name: string; sha256: string }[] };
+    if (!manifest.migrations.some((m) => m.name === first)) manifest.migrations.push({ name: first, sha256: '0'.repeat(64) });
+    rewrite(root, MANIFEST, `${JSON.stringify(manifest, null, 2)}\n`);
+    expect(boundaryProblems(root, {})).toContainEqual(expect.stringContaining(`${first} is in the manifest before the corrective gate passed`));
+  });
+
+  it('accepted tense: a corrective migration recorded at a digest other than its accepted one → FAIL [boundary]', () => {
+    const root = withCorrectiveFiles();
+    const first = CORRECTIVE_MIGRATIONS[0] ?? '';
+    const accepted: Readonly<Record<string, string>> =
+      Object.keys(CORRECTIVE_ACCEPTED).length > 0 ? CORRECTIVE_ACCEPTED : Object.fromEntries(CORRECTIVE_MIGRATIONS.map((n) => [n, '1'.repeat(64)]));
+    const manifest = JSON.parse(readFileSync(join(REPO, MANIFEST), 'utf8')) as { migrations: { name: string; sha256: string }[] };
+    manifest.migrations = manifest.migrations.filter((m) => m.name !== first);
     manifest.migrations.push({ name: first, sha256: '0'.repeat(64) });
     rewrite(root, MANIFEST, `${JSON.stringify(manifest, null, 2)}\n`);
-    const r = gate(root);
-    expect(failLines(r, 'boundary'), r.output.slice(-3000)).toContainEqual(
-      expect.stringContaining(`${first} is in the manifest before the corrective gate passed`),
-    );
+    expect(boundaryProblems(root, accepted)).toContainEqual(`${first} is not frozen in the manifest at its accepted digest`);
+    if (Object.keys(CORRECTIVE_ACCEPTED).length > 0) {
+      const r = gate(root);
+      expect(failLines(r, 'boundary'), r.output.slice(-3000)).toContainEqual(
+        expect.stringContaining(`${first} is not frozen in the manifest at its accepted digest`),
+      );
+    }
   }, 700_000);
 
   it('a corrective migration that does not call itself Phase 3 corrective hardening → FAIL [migration]', () => {
