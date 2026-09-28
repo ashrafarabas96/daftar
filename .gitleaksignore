@@ -1,0 +1,18 @@
+# DAFTAR secret-scan allowlist: exact gitleaks fingerprints only.
+#
+# Format: <commit>:<path>:<rule>:<line>, one finding each, with its reason
+# directly above. No wildcard, no path-wide or rule-wide entry, no regex.
+# scripts/phase3-secret-scan.ts reads this file itself and accepts an entry
+# only if the named line, read from git at that commit, is a
+# ['<migration>.sql', '<sha256>'] pair whose hex IS the SHA-256 of that
+# migration file at that commit. A listed fingerprint on anything else,
+# including a real credential, still fails the scan.
+
+# Migration digest, not a credential: SHA-256 of 0011_auth_lineage.sql in the Phase 2 prefix table (accepted commit 61b89d6, generic-api-key false positive).
+61b89d6511ff06164b511e4f0598806306acd5f4:scripts/phase2-prefix.ts:generic-api-key:60
+
+# Migration digest, not a credential: SHA-256 of 0020_credential_delivery_outbox.sql in the Phase 2 prefix table (accepted commit 61b89d6, generic-api-key false positive).
+61b89d6511ff06164b511e4f0598806306acd5f4:scripts/phase2-prefix.ts:generic-api-key:69
+
+# Migration digest, not a credential: SHA-256 of 0044_accounting_assertion_keys.sql in the Phase 2 prefix table (accepted commit 61b89d6, generic-api-key false positive).
+61b89d6511ff06164b511e4f0598806306acd5f4:scripts/phase2-prefix.ts:generic-api-key:93
