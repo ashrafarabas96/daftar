@@ -560,13 +560,14 @@ describe('golden: engine shapes prove representability without creating the doma
     expect(present).toEqual([]);
   });
 
-  it('every shape used the generic internal source identity, and the source registry holds exactly the three native types followed by the two P3-S3 inventory types and the two P3-S4 purchase types (P3-S5: and the P3-S5 supplier-return type; P3-S6: and the three P3-S6 supplier-settlement types)', async () => {
+  it('every shape used the generic internal source identity, and the source registry holds exactly the three native types followed by the two P3-S3 inventory types and the two P3-S4 purchase types (P3-S5: and the P3-S5 supplier-return type; P3-S6: and the three P3-S6 supplier-settlement types; Phase 3 corrective hardening: and the 0072 residue write-off type)', async () => {
     // The engine shapes created no domain source type. The only additions
     // after the native three are P3-S3's (0061, contract A-14(e)), in order.
     // P3-S4 (0063/0064): then P3-S4's two (0063, contract A-05), in order.
     // P3-S5 (0065/0066): then P3-S5's one (0065, contract A-05; R-B2a: no
     // `purchase_reversal`, whose accounting fact is a Phase 2 `reversal`).
     // P3-S6 (0067/0068): then P3-S6's three (0067, contract A-05), in order.
+    // Phase 3 corrective hardening (0072, TD-16): then the residue write-off.
     const types = (await ownerPool().query<{ t: string }>(`SELECT source_type AS t FROM accounting_source_types ORDER BY sort_order`)).rows.map((r) => r.t);
     expect(types).toEqual([
       'opening_balance',
@@ -583,6 +584,8 @@ describe('golden: engine shapes prove representability without creating the doma
       'supplier_payment',
       'supplier_credit_allocation',
       'supplier_refund',
+      // Phase 3 corrective hardening (0072)
+      'purchase_residue_write_off',
     ]);
     const used = (
       await ownerPool().query<{ t: string }>(`SELECT DISTINCT source_type AS t FROM journal_entries WHERE business_id = $1`, [must(fx).businessId])
