@@ -12,7 +12,9 @@
  *
  * Regenerate with `npm run index:phase3:review` after committing.
  */
-import { readFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
@@ -24,6 +26,7 @@ import {
   compareTreeOnly,
   groupOf,
   headerPurpose,
+  mainlineHead,
   namedSlice,
   parseRows,
   readTree,
@@ -277,5 +280,76 @@ describe('the test census (§16) — the parts that decide a number', () => {
         'class A {\n  @Test fun a() {}\n  // @Test fun b() {}\n  /* @Test fun c() {} */\n  @org.junit.Test fun d() {}\n  @TestFactory fun e() {}\n}\n',
       ),
     ).toBe(2);
+  });
+});
+
+describe('a pull_request checkout: the mainline is the PR head, not the merge commit', () => {
+  /** A tiny repository shaped like GitHub's `refs/pull/N/merge`: main A, phase B (checkpoint) → C, merge M = A + C. */
+  function prMergeRepo(): { dir: string; sha: (ref: string) => string; git: (...args: string[]) => string } {
+    const dir = mkdtempSync(join(tmpdir(), 'p3c-index-pr-'));
+    const git = (...args: string[]): string =>
+      execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.invalid', '-c', 'commit.gpgsign=false', ...args], {
+        cwd: dir,
+        encoding: 'utf8',
+      }).trim();
+    const commit = (file: string, message: string): void => {
+      writeFileSync(join(dir, file), `${message}\n`);
+      git('add', file);
+      git('commit', '-q', '-m', message);
+    };
+    git('init', '-q', '--initial-branch=main');
+    commit('a.txt', 'A base');
+    git('checkout', '-q', '-b', 'phase');
+    commit('b.txt', 'B checkpoint');
+    commit('c.txt', 'C head');
+    git('checkout', '-q', 'main');
+    git('merge', '-q', '--no-ff', '-m', 'M merge', 'phase');
+    return { dir, sha: (ref) => git('rev-parse', ref), git };
+  }
+
+  it('RED without it: the merge commit’s first-parent line holds no checkpoint', () => {
+    const r = prMergeRepo();
+    try {
+      const firstParentLine = r.git('rev-list', '--first-parent', 'HEAD').split('\n');
+      expect(firstParentLine).not.toContain(r.sha('phase~1'));
+    } finally {
+      rmSync(r.dir, { recursive: true, force: true });
+    }
+  });
+
+  it('on the merge commit the mainline head is its second parent, the PR head', () => {
+    const r = prMergeRepo();
+    try {
+      expect(mainlineHead(r.dir, r.sha('phase~1'))).toEqual({ ok: true, out: r.sha('phase') });
+    } finally {
+      rmSync(r.dir, { recursive: true, force: true });
+    }
+  });
+
+  it('on the branch itself, and on a merge whose first parent carries the checkpoint, the mainline head is HEAD', () => {
+    const r = prMergeRepo();
+    try {
+      const checkpoint = r.sha('phase~1');
+      r.git('checkout', '-q', 'phase');
+      expect(mainlineHead(r.dir, checkpoint)).toEqual({ ok: true, out: r.sha('phase') });
+      r.git('checkout', '-q', '-b', 'side', 'main~1');
+      writeFileSync(join(r.dir, 'd.txt'), 'D\n');
+      r.git('add', 'd.txt');
+      r.git('commit', '-q', '-m', 'D side');
+      r.git('checkout', '-q', 'phase');
+      r.git('merge', '-q', '--no-ff', '-m', 'agent merge', 'side');
+      expect(mainlineHead(r.dir, checkpoint)).toEqual({ ok: true, out: r.sha('HEAD') });
+    } finally {
+      rmSync(r.dir, { recursive: true, force: true });
+    }
+  });
+
+  it('a merge where neither parent carries the checkpoint stays HEAD, so a lost checkpoint still fails loudly', () => {
+    const r = prMergeRepo();
+    try {
+      expect(mainlineHead(r.dir, '0'.repeat(40))).toEqual({ ok: true, out: r.sha('HEAD') });
+    } finally {
+      rmSync(r.dir, { recursive: true, force: true });
+    }
   });
 });

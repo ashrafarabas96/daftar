@@ -531,6 +531,25 @@ function git(root: string, args: readonly string[]): GitResult {
   }
 }
 
+/**
+ * The commit whose first-parent line is the Phase 3 mainline. Normally HEAD.
+ * A `pull_request` run checks out GitHub's merge commit instead: its FIRST
+ * parent is the base branch and its SECOND parent is the PR head, so HEAD's
+ * first-parent line holds none of the slice checkpoints. When HEAD is a merge
+ * whose first parent does not contain `checkpoint` and whose second parent
+ * does, the second parent is that mainline. Anything else stays HEAD, so a
+ * history that truly lost a checkpoint still fails loudly.
+ */
+export function mainlineHead(root: string, checkpoint: string = CHECKPOINTS[0]?.sha ?? ''): GitResult {
+  const parents = git(root, ['rev-list', '--parents', '-n', '1', 'HEAD']);
+  if (!parents.ok) return parents;
+  const [head = '', first, second, ...more] = parents.out.trim().split(' ');
+  if (first === undefined || second === undefined || more.length > 0) return { ok: true, out: head };
+  const inFirst = git(root, ['merge-base', '--is-ancestor', checkpoint, first]).ok;
+  const inSecond = git(root, ['merge-base', '--is-ancestor', checkpoint, second]).ok;
+  return { ok: true, out: !inFirst && inSecond ? second : head };
+}
+
 export function readHistory(root: string): HistoryResult {
   if (existsSync(join(root, 'DELIVERY_MANIFEST.json')))
     return { ok: false, reason: 'an extracted release archive (DELIVERY_MANIFEST.json present) carries no git history' };
@@ -551,7 +570,17 @@ export function readHistory(root: string): HistoryResult {
 
   const RS = '\x1e';
   const US = '\x1f';
-  const log = git(root, ['log', '--first-parent', '--diff-merges=first-parent', '--reverse', `--format=${RS}%H${US}%s`, '--name-only', `${PHASE3_BASE}..HEAD`]);
+  const subject = mainlineHead(root);
+  if (!subject.ok) return subject;
+  const log = git(root, [
+    'log',
+    '--first-parent',
+    '--diff-merges=first-parent',
+    '--reverse',
+    `--format=${RS}%H${US}%s`,
+    '--name-only',
+    `${PHASE3_BASE}..${subject.out}`,
+  ]);
   if (!log.ok) return log;
   const mainline = log.out
     .split(RS)
@@ -562,7 +591,7 @@ export function readHistory(root: string): HistoryResult {
       return { sha, subject, files: rest.map((l) => l.trim()).filter((l) => l !== '') };
     });
 
-  const all = git(root, ['log', '--no-merges', '--topo-order', '--reverse', `--format=${RS}%s`, '--name-only', `${PHASE3_BASE}..HEAD`]);
+  const all = git(root, ['log', '--no-merges', '--topo-order', '--reverse', `--format=${RS}%s`, '--name-only', `${PHASE3_BASE}..${subject.out}`]);
   if (!all.ok) return all;
   const introducedBy = new Map<string, string>();
   for (const record of all.out.split(RS)) {
