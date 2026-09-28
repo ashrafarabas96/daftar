@@ -49,6 +49,7 @@ import {
   setScope,
   type Queryable,
 } from './stock-ledger';
+import { P3C_OPERATION_KINDS } from './p3c-migrations';
 import { ownerPool } from './test-app';
 import type { S3Business } from './inventory-commands';
 
@@ -235,6 +236,9 @@ export const S4_OPERATION_MOVEMENT_KINDS: readonly (readonly [op: string, kind: 
  * P3-S6 (0067/0068): plus exactly the seven P3-S6 kinds (§7.3 row 17; S6
  * registers no stock source type and no op→kind row) — so the state is
  * exactly S1 + S3 + S4 + S5 + S6.
+ *
+ * Phase 3 corrective (0072): plus exactly the corrective kind
+ * (`P3C_OPERATION_KINDS`; no stock source type, no op→kind row).
  */
 export async function assertS4MigrationState(q: Queryable = ownerPool()): Promise<void> {
   const r = await q.query<{ types: string[]; mapping: string[]; kinds: string[]; uses: number; rels: number; fns: number }>(
@@ -269,6 +273,8 @@ export async function assertS4MigrationState(q: Queryable = ownerPool()): Promis
       ...S5_OPERATION_KINDS,
       // P3-S6 (0067/0068)
       ...S6_OPERATION_KINDS,
+      // Phase 3 corrective (0072)
+      ...P3C_OPERATION_KINDS,
     ].sort(),
     uses: 0,
     rels: 0,
@@ -294,6 +300,9 @@ export async function assertS4MigrationState(q: Queryable = ownerPool()): Promis
  * credit notes truncated here, so they are named too, children first and
  * before the S5 documents (§7.3 row 17); without them the same 0A000 refuses
  * the statement and every suite using this fixture fails in its beforeAll.
+ *
+ * Phase 3 corrective (0072, TD-16): `purchase_residue_write_offs` references
+ * the purchases, so it is named too.
  */
 export async function removeCommittedDeficitFixture(): Promise<void> {
   const c = await ownerClient();
@@ -319,6 +328,8 @@ export async function removeCommittedDeficitFixture(): Promise<void> {
         'purchases',
         // P3-S5 (0065/0066)
         ...S5_BRIDGES,
+        // Phase 3 corrective (0072, TD-16): the write-offs reference the purchases.
+        'purchase_residue_write_offs',
         // P3-S6 (0067/0068)
         ...S6_TABLES,
         ...S5_TABLES,

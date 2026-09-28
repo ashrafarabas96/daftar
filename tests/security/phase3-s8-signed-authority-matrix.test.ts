@@ -44,6 +44,7 @@ import { expectAccepted, expectRefused } from '../helpers/stock-ledger';
 import { sourceAssertion } from '../helpers/accounting-posting';
 import { OP_KIND_BUILDERS, mintHonest, type Biz, type OpKindBuilder, type PreparedKind, type ResultRow } from '../helpers/op-kind-builders';
 import { PREFIX_DB, prefixCatalogue, registeredOpKinds, runtimePrincipals, truthTables } from '../helpers/phase3-surface';
+import { P3C_OPERATION_KINDS } from '../helpers/p3c-migrations';
 import { JOURNAL_AND_LOGS, changedTables, tableDigest, type TableDigest } from '../helpers/table-digest';
 import { createScratchDb, scratchPool, urlOf, type ScratchDb } from '../helpers/scratch-db';
 
@@ -193,7 +194,9 @@ afterAll(async () => {
 describe('T-01 the matrix is driven by the registry', () => {
   it('the builders are exactly the registered kinds; each builder names its consuming routine, which posts nothing; financial = the accounting source types, whose union is the eight post-0052 types plus reversal', async () => {
     expect(KINDS, 'builders = registry, both ways').toEqual(await registeredOpKinds());
-    expect(KINDS).toHaveLength(26);
+    // Phase 3 corrective (0072): the 26 S8-head kinds plus exactly the corrective kinds.
+    expect(KINDS).toHaveLength(26 + P3C_OPERATION_KINDS.length);
+    for (const k of P3C_OPERATION_KINDS) expect(builderOf(k).slice, `${k} is registered by the corrective pass`).toBe('P3-C');
 
     const r = await ownerPool().query<{ sig: string | null; src: string | null; op: string }>(
       `SELECT k.op AS op, to_regprocedure(k.routine)::text AS sig, p.prosrc AS src
@@ -217,13 +220,15 @@ describe('T-01 the matrix is driven by the registry', () => {
         (await q.query<{ t: string }>(`SELECT source_type AS t FROM accounting_source_types ORDER BY 1`)).rows.map((x) => x.t);
       const before = new Set(await types(prefix));
       const added = (await types(ownerPool())).filter((t) => !before.has(t));
-      expect(added, 'eight source types registered after 0052').toHaveLength(8);
+      // Phase 3 corrective (0072, TD-16): plus `purchase_residue_write_off`.
+      expect(added, 'eight source types registered after 0052, plus the corrective one').toHaveLength(9);
+      expect(added).toContain('purchase_residue_write_off');
       const union = [...new Set(KINDS.flatMap((k) => builderOf(k).accountingSourceTypes))].sort();
       expect(union).toEqual([...added, 'reversal'].sort());
     } finally {
       await prefix.end();
     }
-    expect(new Set(KINDS.map((k) => builderOf(k).slice))).toEqual(new Set(['P3-S1', 'P3-S3', 'P3-S4', 'P3-S5', 'P3-S6']));
+    expect(new Set(KINDS.map((k) => builderOf(k).slice))).toEqual(new Set(['P3-S1', 'P3-S3', 'P3-S4', 'P3-S5', 'P3-S6', 'P3-C']));
   });
 });
 
@@ -294,11 +299,11 @@ describe.each(KINDS.map((op, i) => [op, i] as const))('T-01 %s', (op, i) => {
     });
   });
 
-  it('f: an assertion minted for each of the other 25 kinds → assertion_wrong_operation', async () => {
+  it('f: an assertion minted for each of the other kinds (25, plus the corrective ones) → assertion_wrong_operation', async () => {
     await inTx(async (c) => {
       const before = await tableDigest(c, tables);
       const others = KINDS.filter((k) => k !== op);
-      expect(others).toHaveLength(25);
+      expect(others).toHaveLength(25 + P3C_OPERATION_KINDS.length);
       for (const other of others) {
         const carrier = mintHonest(s.biz, builderOf(other).op, s.prepared.sha256(s.biz));
         await refusedIdentical(
@@ -470,8 +475,15 @@ END;
 $stub$;
 `;
 
-/** One kind of every registering slice. */
-const CONTROL_KINDS = ['inventory.configure_product', 'inventory.stocktake_open', 'supplier.create', 'purchase.reverse', 'payment.create_method'] as const;
+/** One kind of every registering slice (Phase 3 corrective: plus the write-off). */
+const CONTROL_KINDS = [
+  'inventory.configure_product',
+  'inventory.stocktake_open',
+  'supplier.create',
+  'purchase.reverse',
+  'payment.create_method',
+  'purchase.write_off_residue',
+] as const;
 
 /**
  * The rows the stub cannot carry past the routine: `supplier_create` and

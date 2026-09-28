@@ -34,8 +34,19 @@ import type { SettlementEntryLine } from '@daftar/inventory';
 export const SUPPLIER_PAYMENT_SOURCE = 'supplier_payment';
 export const SUPPLIER_CREDIT_ALLOCATION_SOURCE = 'supplier_credit_allocation';
 export const SUPPLIER_REFUND_SOURCE = 'supplier_refund';
+/**
+ * Phase 3 corrective (0072 R-96): the base-only release of a purchase's
+ * sub-unit AP residue — Dr Accounts Payable / Cr FX gain, both `base` lines on
+ * the purchase's branch — built by this same function from
+ * `planResidueWriteOff`'s lines. `source_id` is the purchase.
+ */
+export const PURCHASE_RESIDUE_WRITE_OFF_SOURCE = 'purchase_residue_write_off';
 
-export type SettlementSourceType = typeof SUPPLIER_PAYMENT_SOURCE | typeof SUPPLIER_CREDIT_ALLOCATION_SOURCE | typeof SUPPLIER_REFUND_SOURCE;
+export type SettlementSourceType =
+  | typeof SUPPLIER_PAYMENT_SOURCE
+  | typeof SUPPLIER_CREDIT_ALLOCATION_SOURCE
+  | typeof SUPPLIER_REFUND_SOURCE
+  | typeof PURCHASE_RESIDUE_WRITE_OFF_SOURCE;
 
 /** `NUMERIC(20,10)` text of rate 1: every base line. */
 const BASE_RATE = '1.0000000000';

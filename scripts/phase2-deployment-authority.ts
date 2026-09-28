@@ -133,7 +133,7 @@ const RUNTIME_ROLES = [
   'daftar_reconciler',
 ] as const;
 /** The NOLOGIN owners of SECURITY DEFINER authority (P2-S1, P3-AL-54 §C). */
-const INTERNAL_ROLES = ['daftar_accounting_internal', 'daftar_inventory_internal'] as const;
+const INTERNAL_ROLES = ['daftar_accounting_internal', 'daftar_inventory_internal', 'daftar_catalog_internal', 'daftar_provisioning_internal'] as const;
 const ALL_ROLES = [...RUNTIME_ROLES, ...INTERNAL_ROLES, DEPLOYER] as const;
 
 // The Phase 2 freeze boundary, `0052`, where Cases C, G and H start their
@@ -160,17 +160,19 @@ export interface MembershipRow {
 /**
  * The deployer's accepted memberships, exactly (`bootstrap.sql`, R2:120-143).
  * `daftar_platform` is inherited because replacing a provisioning function is
- * an OWNERSHIP check that reads INHERIT (cause 3 of RB-P2-01). The two
+ * an OWNERSHIP check that reads INHERIT (cause 3 of RB-P2-01). The four
  * internal authorities are SET only: assumed deliberately, never held
  * passively. None carries ADMIN.
  */
 export const ACCEPTED_DEPLOYER_MEMBERSHIPS: readonly MembershipRow[] = [
   { role: 'daftar_accounting_internal', inherit: false, set: true, admin: false },
+  { role: 'daftar_catalog_internal', inherit: false, set: true, admin: false },
   { role: 'daftar_inventory_internal', inherit: false, set: true, admin: false },
   { role: 'daftar_platform', inherit: true, set: true, admin: false },
+  { role: 'daftar_provisioning_internal', inherit: false, set: true, admin: false },
 ];
 
-/** 2.11 — every way the deployer's memberships differ from the accepted three. */
+/** 2.11 — every way the deployer's memberships differ from the accepted five (three until TD-18's two owners, 0070). */
 export function deployerMembershipProblems(rows: readonly MembershipRow[]): string[] {
   const problems: string[] = [];
   const accepted = new Map(ACCEPTED_DEPLOYER_MEMBERSHIPS.map((m) => [m.role, m] as const));
@@ -276,25 +278,20 @@ export function namespacePrivilegeProblems(rows: readonly NamespacePrivilegeRow[
 
 /**
  * The SECURITY DEFINER routines the history leaves owned by WHOEVER APPLIED
- * IT (P3-S9, pinned). Every other definer is handed to a named owner
- * (`daftar_platform`, `daftar_accounting_internal`, `daftar_inventory_internal`).
- * These four are not: 0038 and 0039 create them and never say `OWNER TO`, so
- * on a superuser-built database they run as `postgres`, which bypasses row-
- * level security, and on the deployed database they run as `daftar_migrator`,
- * which does not. §10 cannot see the difference, because it normalises the
- * applier's name by design. The deployed rehearsal found it: fixture writes
- * with no tenant context that relied on the superuser owner were refused on the
- * deployer's build, while every production path (the scoped catalogue writes,
- * provisioning, the key installs and retirements as `daftar_platform`) passes
- * there. A fifth applier-owned definer is a new instance of the same
- * difference and is red until it is looked at.
+ * IT: none (Phase 3 corrective hardening, TD-18, migration 0070).
+ *
+ * Until 0070 there were four — `catalog_identifiers_sync()`,
+ * `provision_actor(text[])`, `provision_assertion_key_install(text, bytea)`
+ * and `provision_assertion_key_retire(text)` — created by 0037-0039 without
+ * `OWNER TO`, so on a superuser-built database they ran as `postgres`, which
+ * bypasses row-level security, and on the deployed database as
+ * `daftar_migrator`, which does not. §10 cannot see such a difference,
+ * because it normalises the applier's name by design; the P3-S9 deployed
+ * rehearsal found it. 0070 hands the four to NOLOGIN internal owners
+ * (`TD18_DEFINER_OWNERS`), so the pinned set is now EMPTY and any definer the
+ * applier owns — one of the four reverted, or a new one — is red.
  */
-export const APPLIER_OWNED_DEFINERS: readonly string[] = [
-  'catalog_identifiers_sync()',
-  'provision_actor(p_allowed_kinds text[])',
-  'provision_assertion_key_install(p_kid text, p_secret bytea)',
-  'provision_assertion_key_retire(p_kid text)',
-];
+export const APPLIER_OWNED_DEFINERS: readonly string[] = [];
 
 /** The query that lists the SECURITY DEFINER routines in `public` owned by the role `$1`. */
 export const APPLIER_OWNED_DEFINERS_QUERY = `SELECT p.proname || '(' || pg_get_function_identity_arguments(p.oid) || ')' AS f
@@ -303,13 +300,67 @@ export const APPLIER_OWNED_DEFINERS_QUERY = `SELECT p.proname || '(' || pg_get_f
      AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.objid = p.oid AND d.deptype = 'e')
    ORDER BY 1`;
 
-/** Every way the applier-owned SECURITY DEFINER routines differ from the pinned four. */
+/** Every SECURITY DEFINER routine the applier owns is a problem (TD-18: none may be). */
 export function applierOwnedDefinerProblems(owned: readonly string[], applier: string): string[] {
   const problems: string[] = [];
   for (const f of owned)
-    if (!APPLIER_OWNED_DEFINERS.includes(f))
-      problems.push(`${f} is a SECURITY DEFINER routine owned by the applier ${applier}, and is not one of the pinned four`);
+    if (!APPLIER_OWNED_DEFINERS.includes(f)) problems.push(`${f} is a SECURITY DEFINER routine owned by the applier ${applier}, and none may be`);
   for (const f of APPLIER_OWNED_DEFINERS) if (!owned.includes(f)) problems.push(`${f} is no longer owned by the applier ${applier}`);
+  return problems;
+}
+
+/**
+ * TD-18's intended model (0070): each of the four formerly applier-owned
+ * routines is owned by its NOLOGIN internal principal, whoever applied the
+ * history, is SECURITY DEFINER, pins `pg_catalog, public, pg_temp` and is not
+ * executable by PUBLIC. Read on BOTH builds (10b) and on the deployed
+ * rehearsal (7.4); a reverted owner, a lost path or a PUBLIC grant is red.
+ */
+export const TD18_DEFINER_OWNERS: Readonly<Record<string, string>> = {
+  'catalog_identifiers_sync()': 'daftar_catalog_internal',
+  'provision_actor(p_allowed_kinds text[])': 'daftar_provisioning_internal',
+  'provision_assertion_key_install(p_kid text, p_secret bytea)': 'daftar_provisioning_internal',
+  'provision_assertion_key_retire(p_kid text)': 'daftar_provisioning_internal',
+};
+
+/** The pinned path of every TD-18 routine (P3-AL-54 §D). */
+export const TD18_PINNED_PATH = 'search_path=pg_catalog, public, pg_temp';
+
+/** One TD-18 routine as the catalogue describes it. */
+export type Td18DefinerRow = {
+  readonly f: string;
+  readonly owner: string;
+  readonly definer: boolean;
+  readonly config: string[] | null;
+  readonly public_execute: boolean;
+};
+
+/** The rows `td18DefinerProblems` judges: the four routines by name, whoever owns them. */
+export const TD18_DEFINER_OWNERS_QUERY = `SELECT p.proname || '(' || pg_get_function_identity_arguments(p.oid) || ')' AS f,
+         pg_get_userbyid(p.proowner) AS owner, p.prosecdef AS definer, p.proconfig AS config,
+         has_function_privilege('public', p.oid, 'EXECUTE') AS public_execute
+    FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+   WHERE n.nspname = 'public'
+     AND p.proname IN ('catalog_identifiers_sync', 'provision_actor', 'provision_assertion_key_install', 'provision_assertion_key_retire')
+   ORDER BY 1`;
+
+/** Every way the four TD-18 routines differ from the intended model. */
+export function td18DefinerProblems(rows: readonly Td18DefinerRow[]): string[] {
+  const problems: string[] = [];
+  const byName = new Map(rows.map((r) => [r.f, r] as const));
+  for (const [f, owner] of Object.entries(TD18_DEFINER_OWNERS)) {
+    const r = byName.get(f);
+    if (r === undefined) {
+      problems.push(`${f} is missing`);
+      continue;
+    }
+    if (r.owner !== owner) problems.push(`${f} is owned by ${r.owner}, not ${owner}`);
+    if (!r.definer) problems.push(`${f} is not SECURITY DEFINER`);
+    const path = (r.config ?? []).filter((c) => c.startsWith('search_path='));
+    if (path.length !== 1 || path[0] !== TD18_PINNED_PATH) problems.push(`${f} pins ${path.join(', ') || 'no search_path'}, not ${TD18_PINNED_PATH}`);
+    if (r.public_execute) problems.push(`${f} is executable by PUBLIC`);
+  }
+  for (const r of rows) if (!(r.f in TD18_DEFINER_OWNERS)) problems.push(`${r.f} is an unexpected overload`);
   return problems;
 }
 
@@ -737,7 +788,7 @@ async function checkLiveDeployerShape(db: string): Promise<Record<string, unknow
     memberships.map((m) => ({ role: m.grantor_role, inherit: m.inherit_option, set: m.set_option, admin: m.admin_option })),
   );
   record(
-    '2.11 the memberships are exactly the accepted three',
+    '2.11 the memberships are exactly the accepted five',
     membershipProblems.length === 0,
     membershipProblems.length === 0
       ? ACCEPTED_DEPLOYER_MEMBERSHIPS.map((m) => `${m.role} (inherit=${String(m.inherit)}, set=${String(m.set)}, admin=false)`).join('; ')
@@ -1180,12 +1231,14 @@ async function checkCatalogueEquivalence(deployed: string, superuser: string): P
 }
 
 /**
- * 10b — the applier-owned SECURITY DEFINER routines, on both builds: exactly
- * the pinned four, owned by `daftar_migrator` on the deployer's database and by
- * `postgres` on the superuser control.
+ * 10b — the SECURITY DEFINER routines, on both builds (TD-18, 0070): the
+ * applier owns NONE — not `daftar_migrator` on the deployer's database, not
+ * `postgres` on the superuser control — and the four routines 0037-0039 left
+ * to the applier are owned by their internal principals with the pinned path
+ * on BOTH builds. Before 0070 this section pinned the four as applier-owned.
  */
 async function checkApplierOwnedDefiners(deployed: string, superuser: string): Promise<Record<string, string[]>> {
-  section('10b. the SECURITY DEFINER routines the applier owns, pinned');
+  section('10b. the SECURITY DEFINER routines: none owned by the applier, the TD-18 four owned alike on both builds');
   const out: Record<string, string[]> = {};
   const builds: readonly (readonly [label: string, db: string, applier: string])[] = [
     ['the deployer-built database', deployed, DEPLOYER],
@@ -1196,9 +1249,17 @@ async function checkApplierOwnedDefiners(deployed: string, superuser: string): P
     out[db] = owned;
     const problems = applierOwnedDefinerProblems(owned, applier);
     record(
-      `10b.${n + 1} ${label}: the applier ${applier} owns exactly the pinned SECURITY DEFINER routines`,
+      `10b.${n + 1} ${label}: the applier ${applier} owns no SECURITY DEFINER routine`,
       problems.length === 0,
-      problems.length === 0 ? owned.join(', ') : problems.join('; '),
+      problems.length === 0 ? 'none' : problems.join('; '),
+    );
+    const rows = await sql<Td18DefinerRow>(ownerUrl(db), TD18_DEFINER_OWNERS_QUERY);
+    const td18 = td18DefinerProblems(rows);
+    out[`${db}:td18`] = rows.map((r) => `${r.f} ${r.owner}`);
+    record(
+      `10b.${n + 3} ${label}: the TD-18 routines have their internal owners and the pinned path`,
+      td18.length === 0,
+      td18.length === 0 ? rows.map((r) => `${r.f} → ${r.owner}`).join('; ') : td18.join('; '),
     );
   }
   return out;

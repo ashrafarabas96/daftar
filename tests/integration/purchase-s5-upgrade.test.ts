@@ -60,6 +60,7 @@ import {
 } from '../helpers/purchase-returns';
 // P3-S6 (0067/0068)
 import { S6_ACCOUNTING_SOURCE_TYPES, S6_OPERATION_KINDS } from '../helpers/stock-ledger';
+import { P3C_REGISTRY_ROWS, P3C_SOURCE_TYPE_ROWS, P3_CORRECTIVE_MIGRATIONS } from '../helpers/p3c-migrations';
 
 const SCRATCH = 'daftar_upgrade_0064';
 const scratchUrl = `postgresql://${PG_USER}:${PG_PASSWORD}@localhost:${PG_PORT}/${SCRATCH}`;
@@ -215,6 +216,8 @@ describe('T-17 the P3-S5 upgrade matrix', () => {
         ...S6_MIGRATIONS,
         // P3-S8 (0069): reconciler column grants and the R-B1a guard; no registry row
         '0069_inventory_reconciliation_read_and_account_domain.sql',
+        // The Phase 3 corrective pass (0070+)
+        ...P3_CORRECTIVE_MIGRATIONS,
       ]);
 
       // Everything as it was, plus the one accounting source type 0065 adds (A-05, A-15(e)).
@@ -227,6 +230,8 @@ describe('T-17 the P3-S5 upgrade matrix', () => {
           'src:supplier_payment:9',
           'src:supplier_credit_allocation:10',
           'src:supplier_refund:11',
+          // Phase 3 corrective (0072)
+          ...P3C_SOURCE_TYPE_ROWS,
         ].sort(),
       );
 
@@ -242,6 +247,8 @@ describe('T-17 the P3-S5 upgrade matrix', () => {
           // A-03, A-05, §7.3 row 21) — seven op kinds, three accounting pairs, no stock row.
           ...S6_OPERATION_KINDS.map((op) => `op:${op}:P3-S6`),
           ...S6_ACCOUNTING_SOURCE_TYPES.map((t) => `acct:post:${t}`),
+          // Phase 3 corrective (0072, TD-16): the write-off kind and its accounting pair.
+          ...P3C_REGISTRY_ROWS,
         ].sort(),
       );
 
@@ -289,6 +296,8 @@ describe('T-17 the P3-S5 upgrade matrix', () => {
           'src:supplier_payment:9',
           'src:supplier_credit_allocation:10',
           'src:supplier_refund:11',
+          // Phase 3 corrective (0072)
+          ...P3C_SOURCE_TYPE_ROWS,
         ].sort(),
       );
     } finally {

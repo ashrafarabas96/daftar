@@ -145,7 +145,7 @@ const ROWS: readonly AuditRow[] = [
     kind: 'read',
     dto: 'InventoryAccessDto',
     status: 200,
-    shape: ['businessWide', 'permissions'],
+    shape: ['businessWide', 'permissions', 'openingPosted'],
   },
   {
     client: 'listInventoryWarehouses',

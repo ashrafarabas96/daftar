@@ -20,7 +20,10 @@
  *     past the binder) and the COMMIT value guards (a forged row, fired
  *     alone) refuse alike;
  *   - the one origin left, a frozen S5 partial return (least(C, O)): lines
- *     49.99 + 0.01 TRY, the 49.99 returned → O = 0.01 whose base is 0. Paying
+ *     49.99 + 0.01 TRY, the 49.99 returned → O = 0.01 whose base is 0 (since
+ *     the corrective 0072 the API refuses that return,
+ *     `supplier_return.residue_below_base_unit`, and the state is rebuilt with
+ *     the frozen S5 return, `historicalReturn`). Paying
  *     or allocating 0.01 is `…amount_below_base_unit`; paying 0.02 or allocating 0.10 is
  *     `…amount_exceeds_outstanding`, returning the rest is
  *     `supplier_return.amount_below_base_unit`, and the reversal is
@@ -46,6 +49,7 @@ import {
   type Outcome,
   type S3Business,
 } from '../helpers/inventory-commands';
+import { historicalReturn } from '../helpers/p3c-residue';
 import { receivedPurchase } from '../helpers/purchase-returns';
 import {
   allocateBody,
@@ -56,7 +60,6 @@ import {
   httpMethod,
   httpPay,
   httpReceived,
-  httpReturn,
   noteOf,
   outstandingOf,
   payBody,
@@ -524,7 +527,24 @@ describe('R-69(b): the one origin left — a frozen S5 partial return — and th
         { productId: A.piece2.productId, quantity: '1', unitPrice: '0.01' },
       ],
     });
-    await httpReturn(t, owner, A, p, '1', 0);
+    // Phase 3 corrective (0072 R-95): a return may no longer CREATE this state — the API refuses it and
+    // writes nothing. The residue a deployed database already holds is rebuilt with the frozen S5 return.
+    await refusedNothingWritten(
+      () =>
+        t.request
+          .post(`/v1/purchases/${p.purchaseId}/returns`)
+          .set(headers())
+          .send({
+            returnId: randomUUID(),
+            warehouseId: p.warehouseId,
+            documentDate: day,
+            lines: [{ lineId: randomUUID(), purchaseLineId: must(p.lineIds[0]), quantity: '1' }],
+          }),
+      422,
+      'supplier_return.residue_below_base_unit',
+      'the 49.99 return would leave 0.01 (0072 R-95)',
+    );
+    await historicalReturn(A, p, 0, '1');
     expect(await outstandingOf(ownerPool(), A.businessId, p.purchaseId), 'S5 released least(C, O) = 49.99').toMatchObject({ o: 1n });
     expect(await settlementLedgerAp(ownerPool(), A.businessId, p.purchaseId), 'a txn-only residue').toEqual({ base: 0n, txn: 1n });
 
@@ -563,7 +583,8 @@ describe('R-69(b): the one origin left — a frozen S5 partial return — and th
       'purchase_reversal.returned',
       'reverse the returned purchase',
     );
-    expect(await outstandingOf(ownerPool(), A.businessId, p.purchaseId), 'the residue stays open (R-69(b) debt)').toMatchObject({ o: 1n });
+    // Every merchant settlement path still refuses it; its closure is the 0072 write-off (p3c-td16-residue-closure).
+    expect(await outstandingOf(ownerPool(), A.businessId, p.purchaseId), 'the residue stays open to settlement (R-69(b))').toMatchObject({ o: 1n });
     expect(await noteOf(ownerPool(), A.businessId, note.creditNoteId), 'the note is untouched').toMatchObject({ remaining: 5000n });
   });
 });

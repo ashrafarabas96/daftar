@@ -202,15 +202,17 @@ describe('T-11 the authority matrix', () => {
 });
 
 describe('T-11 GET /v1/inventory/access', () => {
-  const access = (by: HttpActor): Promise<{ businessWide: boolean; permissions: string[] }> => ok(readAs(t, by, w.A.businessId, '/v1/inventory/access'));
+  const access = (by: HttpActor): Promise<{ businessWide: boolean; permissions: string[]; openingPosted: boolean }> =>
+    ok(readAs(t, by, w.A.businessId, '/v1/inventory/access'));
 
   it('returns exactly the caller’s subset, in the list’s order', async () => {
-    expect(await access(w.owner)).toEqual({ businessWide: true, permissions: [...PHASE3_PERMISSIONS] });
+    expect(await access(w.owner)).toEqual({ businessWide: true, permissions: [...PHASE3_PERMISSIONS], openingPosted: false });
     expect(await access(w.manager)).toEqual({
       businessWide: false,
       permissions: ['inventory.view', 'purchases.view', 'suppliers.view', 'warehouse.view', 'warehouse.manage'],
+      openingPosted: false,
     });
-    expect(await access(w.cashier)).toEqual({ businessWide: true, permissions: [] });
+    expect(await access(w.cashier)).toEqual({ businessWide: true, permissions: [], openingPosted: false });
   });
 });
 

@@ -48,14 +48,14 @@ import {
   type Queryable,
   type S3Business,
 } from '../helpers/inventory-commands';
-import { receivedPurchase, returnGoods } from '../helpers/purchase-returns';
+import { historicalReturnInTx } from '../helpers/p3c-residue';
+import { receivedPurchase } from '../helpers/purchase-returns';
 import {
   bindingRefusal,
   concreteLines,
   createMethod,
   creditNoteIdOf,
   expectRefusal,
-  flushDeferred,
   httpMethod,
   httpPay,
   httpReceived,
@@ -359,11 +359,13 @@ describe('T-07 the strong base (JOD, LBP @ 0.0000024900) through the real routin
       const { supplierId, creditNoteId } = await lbpNote(c, jMethod);
       // 10000 × 0.10 LBP: T = 100000, B = 2. A frozen S5 partial return of 9999 leaves the only
       // residue S6 cannot prevent (M1): O = 10 LBP with a remaining AP base of 0.
+      // Phase 3 corrective (0072 R-95): such a return is refused now, so the
+      // residue a deployed database already holds is rebuilt with the frozen
+      // S5 behaviour (the prevention trigger off for that one return).
       const origin = await receivedPurchase(c, J, [{ variantId: J.piece.variantId, qty: '10000', unitPriceMinor: '10' }], { ...LBP, supplierId });
       const p1 = origin.purchaseId;
       expect(await outstandingOf(c, J.businessId, p1)).toEqual({ o: 100000n, t: 100000n, b: 2n });
-      await returnGoods(c, J, p1, { lines: [{ purchaseLineId: must(origin.lines[0]).lineId, qty: '9999' }] });
-      await flushDeferred(c);
+      await historicalReturnInTx(c, J, p1, [{ purchaseLineId: must(origin.lines[0]).lineId, qty: '9999' }]);
       expect(await outstandingOf(c, J.businessId, p1)).toMatchObject({ o: 10n });
       expect(await settlementLedgerAp(c, J.businessId, p1), 'a txn-only residue: base 0, txn 10').toEqual({ base: 0n, txn: 10n });
 

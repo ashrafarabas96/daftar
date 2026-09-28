@@ -311,7 +311,11 @@ export interface PurchaseReceiptDto {
 export interface PurchasePayableDto {
   purchaseId: string;
   currency: string;
-  /** Integer strings; credit − debit over the purchase's `accounts_payable` lines. */
+  /**
+   * Integer strings; credit − debit over the purchase's `accounts_payable`
+   * lines. The txn amount is net of a residue write-off (0072), whose
+   * sub-unit txn residue no journal line can carry.
+   */
   outstandingBaseMinor: string;
   outstandingTxnMinor: string;
 }
@@ -483,6 +487,45 @@ export interface PurchaseReversalResultDto {
   originalEntryId: string;
   /** The Phase 2 `reversal` journal entry. */
   reversalEntryId: string;
+  createdAt: string;
+  replayed: boolean;
+  businessTransactionId: string;
+}
+
+/**
+ * `POST /v1/purchases/:purchaseId/residue-write-off` (Phase 3 corrective,
+ * TD-16, migration 0072): the request. `residueAmountMinor` is the purchase's
+ * outstanding amount in its own currency, as integer minor units text — the
+ * client states exactly what it saw (`purchase_residue.amount_mismatch`
+ * otherwise). The reason is required.
+ */
+export interface PurchaseResidueWriteOffRequestDto {
+  /** `YYYY-MM-DD`: on or after the purchase, not after today in the business timezone. */
+  writeOffDate: string;
+  residueAmountMinor: string;
+  reason: string;
+}
+
+/**
+ * The stored residue write-off (0072 R-96): the purchase's sub-unit AP
+ * residue (0 < O whose conversion is 0 base minor units) closed. The
+ * purchase is its identity; `journalEntryId` is the `purchase_residue_write_off`
+ * entry (Dr Accounts Payable / Cr FX gain, base only) when the ledger still
+ * carried a base unit for it, null otherwise.
+ */
+export interface PurchaseResidueWriteOffResultDto {
+  purchaseId: string;
+  supplierId: string;
+  currency: string;
+  writeOffDate: string;
+  reason: string;
+  /** The residue written off, in the purchase currency's minor units. */
+  residueTxnMinor: string;
+  /** The purchase's AP released before the write-off (`T − residue`). */
+  releasedBeforeTxnMinor: string;
+  /** The base the write-off released from Accounts Payable: 0 or 1. */
+  residueBaseMinor: string;
+  journalEntryId: string | null;
   createdAt: string;
   replayed: boolean;
   businessTransactionId: string;

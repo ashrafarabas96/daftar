@@ -51,6 +51,9 @@ export const TRUTH_TABLE_EXCLUSIONS = ['audit_events', 'inventory_assertion_keys
 
 export const INVENTORY_INTERNAL = 'daftar_inventory_internal';
 export const ACCOUNTING_INTERNAL = 'daftar_accounting_internal';
+/** TD-18 (0070): the owners of the four routines 0037-0039 used to leave to whoever applied the history. */
+export const CATALOG_INTERNAL = 'daftar_catalog_internal';
+export const PROVISIONING_INTERNAL = 'daftar_provisioning_internal';
 
 export interface CatalogueSnapshot {
   /** public relations of kind r/p/v/m/f → relkind */

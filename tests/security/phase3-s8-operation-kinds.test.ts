@@ -28,6 +28,7 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { balanced, INVENTORY_INTERNAL, lexBody, registeredOpKinds } from '../helpers/phase3-surface';
+import { P3C_OPERATION_KINDS } from '../helpers/p3c-migrations';
 import { createScratchDb, type ScratchDb } from '../helpers/scratch-db';
 import type { Queryable } from '../helpers/stock-ledger';
 import { ensurePostgres, ownerPool } from '../helpers/test-app';
@@ -145,20 +146,26 @@ beforeAll(async () => {
 }, 300_000);
 
 describe('T-03 — the operation-kind law over the catalogue (A-05)', () => {
-  it('26 kinds are registered at the S8 head (S8 registers none), each with exactly one consuming routine', async () => {
+  it('26 kinds are registered at the S8 head (S8 registers none) plus exactly the corrective kinds (P3-C), each with exactly one consuming routine', async () => {
     const law = await operationKindLaw(ownerPool());
-    expect(Object.keys(law.consumers)).toHaveLength(26);
+    expect(Object.keys(law.consumers)).toHaveLength(26 + P3C_OPERATION_KINDS.length);
     for (const [kind, sigs] of Object.entries(law.consumers)) expect(sigs, kind).toHaveLength(1);
+    // Phase 3 corrective (0072): the kinds registered after the S8 head are
+    // exactly the reviewed corrective list, each registered by 'P3-C'.
+    const corrective = await ownerPool().query<{ op: string }>(
+      `SELECT op_code::text AS op FROM inventory_operation_kinds WHERE registered_by = 'P3-C' ORDER BY 1`,
+    );
+    expect(corrective.rows.map((r) => r.op)).toEqual([...P3C_OPERATION_KINDS].sort());
   });
 
   it('no violation of clauses 1–6', async () => {
     expect((await operationKindLaw(ownerPool())).violations).toEqual([]);
   });
 
-  it('the consumers are 26 distinct routines, and no other routine calls inventory_assertion_consume', async () => {
+  it('the consumers are 26 distinct routines (plus one per corrective kind), and no other routine calls inventory_assertion_consume', async () => {
     const law = await operationKindLaw(ownerPool());
     const sigs = Object.values(law.consumers).flat();
-    expect(new Set(sigs).size).toBe(26);
+    expect(new Set(sigs).size).toBe(26 + P3C_OPERATION_KINDS.length);
     const consumers = (await consumptions(ownerPool())).filter((c) => c.ops.length > 0).map((c) => c.sig);
     expect([...consumers].sort()).toEqual([...sigs].sort());
   });

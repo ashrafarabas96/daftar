@@ -3,7 +3,7 @@
  *
  * `scripts/phase2-deployment-authority.ts` (A-09) decides four things from
  * catalogue rows: whether the deployer's memberships are exactly the accepted
- * three (2.11), whether two catalogues differ in any §10 family, whether any
+ * five (2.11), whether two catalogues differ in any §10 family, whether any
  * role but the deployer — or PUBLIC — holds TEMPORARY or CREATE on `public`
  * (11.9 / 11.10), and which files each Case H upgrade must apply. Each is an
  * exported pure function, so each is proved here red on a planted defect and
@@ -31,22 +31,31 @@ import {
   type CatalogueSnapshot,
   type MembershipRow,
   type NamespacePrivilegeRow,
+  TD18_DEFINER_OWNERS,
+  TD18_PINNED_PATH,
+  td18DefinerProblems,
+  type Td18DefinerRow,
 } from '../../scripts/phase2-deployment-authority';
 import { PHASE2_PREFIX_END } from '../../scripts/phase2-prefix';
 import { PHASE3_SLICE_HEADS } from '../../scripts/phase3-prefix';
 
 const REPO = join(__dirname, '../..');
 
-/** The accepted three, written out here rather than imported, so a change to the script's list is a change this file sees. */
+/**
+ * The accepted five, written out here rather than imported, so a change to the script's list is a change this file sees.
+ * TD-18 (0070) added the two NOLOGIN owners of the four routines the history used to leave to the applier.
+ */
 const ACCEPTED: readonly MembershipRow[] = [
   { role: 'daftar_accounting_internal', inherit: false, set: true, admin: false },
+  { role: 'daftar_catalog_internal', inherit: false, set: true, admin: false },
   { role: 'daftar_inventory_internal', inherit: false, set: true, admin: false },
   { role: 'daftar_platform', inherit: true, set: true, admin: false },
+  { role: 'daftar_provisioning_internal', inherit: false, set: true, admin: false },
 ];
 const replace = (role: string, patch: Partial<MembershipRow>): MembershipRow[] => ACCEPTED.map((m) => (m.role === role ? { ...m, ...patch } : m));
 
-describe('2.11 — the deployer holds exactly the accepted three memberships', () => {
-  it('the script accepts exactly the three bootstrap.sql grants', () => {
+describe('2.11 — the deployer holds exactly the accepted five memberships', () => {
+  it('the script accepts exactly the five bootstrap.sql grants', () => {
     expect(ACCEPTED_DEPLOYER_MEMBERSHIPS).toEqual(ACCEPTED);
     const bootstrap = readFileSync(join(REPO, 'infrastructure/database/bootstrap.sql'), 'utf8');
     const grants = [...bootstrap.matchAll(/^GRANT\s+(daftar_[a-z_]+)\s+TO\s+daftar_migrator\s+WITH\s+INHERIT\s+(TRUE|FALSE),\s*SET\s+(TRUE|FALSE)\s*;/gim)]
@@ -72,6 +81,15 @@ describe('2.11 — the deployer holds exactly the accepted three memberships', (
     ]);
   });
 
+  it('fails on INHERIT TRUE for either TD-18 owner (0070)', () => {
+    expect(deployerMembershipProblems(replace('daftar_catalog_internal', { inherit: true }))).toEqual([
+      'daftar_catalog_internal has INHERIT TRUE; accepted is FALSE',
+    ]);
+    expect(deployerMembershipProblems(replace('daftar_provisioning_internal', { inherit: true }))).toEqual([
+      'daftar_provisioning_internal has INHERIT TRUE; accepted is FALSE',
+    ]);
+  });
+
   it('fails on INHERIT FALSE for the platform membership, and on SET FALSE for an internal one', () => {
     expect(deployerMembershipProblems(replace('daftar_platform', { inherit: false }))).toEqual(['daftar_platform has INHERIT FALSE; accepted is TRUE']);
     expect(deployerMembershipProblems(replace('daftar_inventory_internal', { set: false }))).toEqual([
@@ -93,7 +111,7 @@ describe('2.11 — the deployer holds exactly the accepted three memberships', (
     const problems = deployerMembershipProblems(ACCEPTED.filter((m) => m.role !== 'daftar_inventory_internal'));
     expect(problems).toHaveLength(1);
     expect(problems[0]).toMatch(/^daftar_inventory_internal is missing/);
-    expect(deployerMembershipProblems([])).toHaveLength(3);
+    expect(deployerMembershipProblems([])).toHaveLength(5);
   });
 
   it('fails on the same membership granted twice, even with identical options', () => {
@@ -270,9 +288,14 @@ describe('Case H — the Phase 3 slice heads, one upgrade at a time', () => {
   });
 
   it('a later forward migration lands in the last step, never in a slice step', () => {
-    const plan = sliceUpgradePlan([...files, '0070_a_later_forward_migration.sql'], PHASE2_PREFIX_END, PHASE3_SLICE_HEADS);
+    // Named to sort after every real file: the corrective forward migrations
+    // (0070+) are on disk now, and they belong to the same last step.
+    const later = '9999_a_later_forward_migration.sql';
+    const lastHead = Object.values(PHASE3_SLICE_HEADS).sort().at(-1) ?? '';
+    const plan = sliceUpgradePlan([...files, later], PHASE2_PREFIX_END, PHASE3_SLICE_HEADS);
     expect(plan.problems).toEqual([]);
-    expect(plan.steps.at(-1)?.expected).toEqual(['0070_a_later_forward_migration.sql']);
+    expect(plan.steps.at(-1)?.expected).toEqual([...files.filter((f) => f > lastHead), later]);
+    expect(plan.steps.slice(0, -1).flatMap((st) => st.expected)).not.toContain(later);
   });
 
   it('refuses a head that is not on disk, one that goes backwards, and one at or before the base', () => {
@@ -298,33 +321,65 @@ describe('Case H — the Phase 3 slice heads, one upgrade at a time', () => {
   });
 });
 
-describe('the SECURITY DEFINER routines the applier owns are pinned', () => {
+describe('TD-18 (0070): the applier owns no SECURITY DEFINER routine; the four have internal owners', () => {
+  /** The four 0037-0039 left to whoever applied the history, until 0070. */
   const FOUR = [
     'catalog_identifiers_sync()',
     'provision_actor(p_allowed_kinds text[])',
     'provision_assertion_key_install(p_kid text, p_secret bytea)',
     'provision_assertion_key_retire(p_kid text)',
   ];
+  const PINNED_PATH = 'pg_catalog, public, pg_temp';
+  const modelRows = (): Td18DefinerRow[] =>
+    FOUR.map((f) => ({
+      f,
+      owner: f.startsWith('catalog') ? 'daftar_catalog_internal' : 'daftar_provisioning_internal',
+      definer: true,
+      config: [`search_path=${PINNED_PATH}`],
+      public_execute: false,
+    }));
 
-  it('the pinned set is exactly the four the deployed rehearsal found', () => {
-    expect(APPLIER_OWNED_DEFINERS).toEqual(FOUR);
+  it('the pin is now empty: no applier-owned definer is accepted', () => {
+    expect(APPLIER_OWNED_DEFINERS).toEqual([]);
   });
 
-  it('passes on exactly the four, in any order', () => {
-    expect(applierOwnedDefinerProblems(FOUR, 'daftar_migrator')).toEqual([]);
-    expect(applierOwnedDefinerProblems([...FOUR].reverse(), 'postgres')).toEqual([]);
+  it('passes on none, for either applier', () => {
+    expect(applierOwnedDefinerProblems([], 'daftar_migrator')).toEqual([]);
+    expect(applierOwnedDefinerProblems([], 'postgres')).toEqual([]);
   });
 
-  it('a fifth applier-owned definer is red', () => {
-    expect(applierOwnedDefinerProblems([...FOUR, 'supplier_pay(p uuid)'], 'daftar_migrator')).toEqual([
-      'supplier_pay(p uuid) is a SECURITY DEFINER routine owned by the applier daftar_migrator, and is not one of the pinned four',
+  it('an owner reverted to the applier is red, on either build', () => {
+    expect(applierOwnedDefinerProblems(['catalog_identifiers_sync()'], 'daftar_migrator')).toEqual([
+      'catalog_identifiers_sync() is a SECURITY DEFINER routine owned by the applier daftar_migrator, and none may be',
+    ]);
+    expect(applierOwnedDefinerProblems(['provision_actor(p_allowed_kinds text[])'], 'postgres')).toEqual([
+      'provision_actor(p_allowed_kinds text[]) is a SECURITY DEFINER routine owned by the applier postgres, and none may be',
     ]);
   });
 
-  it('one of the four handed away is red too, so the pin is revisited rather than left stale', () => {
-    expect(applierOwnedDefinerProblems(FOUR.slice(1), 'daftar_migrator')).toEqual([
-      'catalog_identifiers_sync() is no longer owned by the applier daftar_migrator',
+  it('the TD-18 model names each routine and its owner', () => {
+    expect(TD18_DEFINER_OWNERS).toEqual({
+      'catalog_identifiers_sync()': 'daftar_catalog_internal',
+      'provision_actor(p_allowed_kinds text[])': 'daftar_provisioning_internal',
+      'provision_assertion_key_install(p_kid text, p_secret bytea)': 'daftar_provisioning_internal',
+      'provision_assertion_key_retire(p_kid text)': 'daftar_provisioning_internal',
+    });
+    expect(TD18_PINNED_PATH).toBe(`search_path=${PINNED_PATH}`);
+    expect(td18DefinerProblems(modelRows())).toEqual([]);
+    expect(td18DefinerProblems([...modelRows()].reverse())).toEqual([]);
+  });
+
+  it('the TD-18 model is red on a reverted owner, a lost DEFINER flag, a public-first path, PUBLIC EXECUTE, and a missing routine', () => {
+    const patch = (i: number, p: Partial<Td18DefinerRow>): Td18DefinerRow[] => modelRows().map((r, j) => (j === i ? { ...r, ...p } : r));
+    expect(td18DefinerProblems(patch(0, { owner: 'daftar_migrator' }))).toEqual([
+      'catalog_identifiers_sync() is owned by daftar_migrator, not daftar_catalog_internal',
     ]);
+    expect(td18DefinerProblems(patch(1, { definer: false }))).toEqual(['provision_actor(p_allowed_kinds text[]) is not SECURITY DEFINER']);
+    expect(td18DefinerProblems(patch(2, { config: ['search_path=public, pg_catalog, pg_temp'] }))).toEqual([
+      `provision_assertion_key_install(p_kid text, p_secret bytea) pins search_path=public, pg_catalog, pg_temp, not search_path=${PINNED_PATH}`,
+    ]);
+    expect(td18DefinerProblems(patch(3, { public_execute: true }))).toEqual(['provision_assertion_key_retire(p_kid text) is executable by PUBLIC']);
+    expect(td18DefinerProblems(modelRows().slice(1))).toEqual(['catalog_identifiers_sync() is missing']);
   });
 
   it('the query asks for SECURITY DEFINER routines in public owned by the given role, extensions excluded', () => {
@@ -334,16 +389,20 @@ describe('the SECURITY DEFINER routines the applier owns are pinned', () => {
     expect(APPLIER_OWNED_DEFINERS_QUERY).toMatch(/deptype = 'e'/);
   });
 
-  it('no migration issues ALTER FUNCTION … OWNER TO for any of the four, which is why they stay with the applier', () => {
-    const dir = join(REPO, 'infrastructure/database/migrations');
-    const all = readdirSync(dir)
-      .filter((f) => f.endsWith('.sql'))
-      .map((f) => readFileSync(join(dir, f), 'utf8'))
-      .join('\n');
-    for (const f of FOUR) {
+  it('0070 hands each of the four to its internal owner inside the CREATE bracket, after its grants', () => {
+    const sql = readFileSync(join(REPO, 'infrastructure/database/migrations/0070_definer_ownership_hardening.sql'), 'utf8');
+    for (const [f, owner] of Object.entries(TD18_DEFINER_OWNERS)) {
       const name = f.slice(0, f.indexOf('('));
-      expect(all, name).toMatch(new RegExp(`CREATE\\s+OR\\s+REPLACE\\s+FUNCTION\\s+${name}\\s*\\(`, 'i'));
-      expect(all, name).not.toMatch(new RegExp(`ALTER\\s+FUNCTION\\s+${name}\\b[^;]*OWNER\\s+TO`, 'i'));
+      const create = sql.search(new RegExp(`CREATE\\s+OR\\s+REPLACE\\s+FUNCTION\\s+${name}\\s*\\(`, 'i'));
+      const grant = sql.search(new RegExp(`REVOKE\\s+ALL\\s+ON\\s+FUNCTION\\s+${name}\\s*\\(`, 'i'));
+      const bracket = sql.search(new RegExp(`GRANT\\s+CREATE\\s+ON\\s+SCHEMA\\s+public\\s+TO\\s+${owner};`, 'i'));
+      const alter = sql.search(new RegExp(`ALTER\\s+FUNCTION\\s+${name}\\b[^;]*OWNER\\s+TO\\s+${owner};`, 'i'));
+      const close = sql.search(new RegExp(`REVOKE\\s+CREATE\\s+ON\\s+SCHEMA\\s+public\\s+FROM\\s+${owner};`, 'i'));
+      expect(
+        [create, grant, bracket, alter, close].every((i) => i >= 0),
+        name,
+      ).toBe(true);
+      expect(create < grant && grant < bracket && bracket < alter && alter < close, name).toBe(true);
     }
   });
 });

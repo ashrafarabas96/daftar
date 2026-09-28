@@ -47,6 +47,8 @@ type Point = (typeof POINTS)[number];
 
 /** The settlement document each S6 kind inserts first (it moves no stock). */
 const S6_DOCUMENT_TABLES = ['supplier_payments', 'supplier_credit_allocations', 'supplier_refunds'] as const;
+/** Phase 3 corrective (0072, TD-16): the write-off's own row, the domain half of purchase.write_off_residue (it moves no stock). */
+const P3C_DOCUMENT_TABLES = ['purchase_residue_write_offs'] as const;
 
 const FAULTS_SQL = `
 CREATE FUNCTION t10_fault() RETURNS trigger LANGUAGE plpgsql SET search_path = pg_catalog, public, pg_temp AS $f$
@@ -58,7 +60,7 @@ BEGIN
 END;
 $f$;
 CREATE TRIGGER t10_fault_domain AFTER INSERT ON stock_movements FOR EACH ROW EXECUTE FUNCTION t10_fault('domain');
-${S6_DOCUMENT_TABLES.map((t) => `CREATE TRIGGER t10_fault_domain AFTER INSERT ON ${t} FOR EACH ROW EXECUTE FUNCTION t10_fault('domain');`).join('\n')}
+${[...S6_DOCUMENT_TABLES, ...P3C_DOCUMENT_TABLES].map((t) => `CREATE TRIGGER t10_fault_domain AFTER INSERT ON ${t} FOR EACH ROW EXECUTE FUNCTION t10_fault('domain');`).join('\n')}
 CREATE TRIGGER t10_fault_posting AFTER INSERT ON journal_lines FOR EACH ROW EXECUTE FUNCTION t10_fault('posting');
 CREATE CONSTRAINT TRIGGER t10_fault_commit AFTER INSERT ON journal_entries DEFERRABLE INITIALLY DEFERRED
   FOR EACH ROW EXECUTE FUNCTION t10_fault('commit');
@@ -143,7 +145,7 @@ afterAll(async () => {
 });
 
 describe('T-10 the financial kinds are the builders’ own', () => {
-  it('ten kinds post: every S3 posting kind, receipt, return, reversal and the three settlements', () => {
+  it('ten kinds post: every S3 posting kind, receipt, return, reversal and the three settlements — and the corrective residue write-off', () => {
     expect(FINANCIAL).toEqual([
       'inventory.adjust',
       'inventory.damage',
@@ -152,6 +154,8 @@ describe('T-10 the financial kinds are the builders’ own', () => {
       'purchase.receive',
       'purchase.return',
       'purchase.reverse',
+      // Phase 3 corrective (0072, TD-16)
+      'purchase.write_off_residue',
       'supplier.allocate_credit',
       'supplier.pay',
       'supplier.receive_refund',

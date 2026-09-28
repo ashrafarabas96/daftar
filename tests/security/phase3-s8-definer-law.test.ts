@@ -19,12 +19,14 @@
  *      superuser that stands in for it when the harness applies the
  *      migrations).
  *
- * The exception set is `{provision_actor(text[])}` for clauses 1, 2 and 7
+ * The exception set was `{provision_actor(text[])}` for clauses 1, 2 and 7
  * (TL-3 as amended: re-created by its owner, the migrator, in 0061 for TD-13,
- * keeping its accepted Phase 1 owner and path). It is asserted by EQUALITY: a
- * clause's violators must be exactly the exception set, so a new violator
- * fails, and so does the exception disappearing unreviewed. `accounting_actor`
- * is internal-owned and passes every clause.
+ * keeping its accepted Phase 1 owner and path). TD-18 (0070) closed it:
+ * provision_actor and the three other routines 0037-0039 left to the applier
+ * now have NOLOGIN internal owners and the pinned path, so the set is EMPTY.
+ * It is asserted by EQUALITY: a clause's violators must be exactly the
+ * exception set, so a new violator fails, and so does an owner reverted to
+ * the applier. `accounting_actor` is internal-owned and passes every clause.
  *
  * NEGATIVE CONTROLS in a scratch database built from the real migrations: the
  * path order of `supplier_pay` reversed (clause 1 names it), a routine handed
@@ -32,14 +34,22 @@
  * (clause 3 names it).
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { ACCOUNTING_INTERNAL, INVENTORY_INTERNAL, lexBody, phase3Routines, prefixCatalogue } from '../helpers/phase3-surface';
+import {
+  ACCOUNTING_INTERNAL,
+  CATALOG_INTERNAL,
+  INVENTORY_INTERNAL,
+  lexBody,
+  phase3Routines,
+  prefixCatalogue,
+  PROVISIONING_INTERNAL,
+} from '../helpers/phase3-surface';
 import { createScratchDb, type ScratchDb } from '../helpers/scratch-db';
 import type { Queryable } from '../helpers/stock-ledger';
 import { ensurePostgres, ownerPool } from '../helpers/test-app';
 
 const PINNED = 'search_path=pg_catalog, public, pg_temp';
-/** TL-3 as amended: the one replaced pre-Phase-3 routine that keeps its Phase 1 owner and path. */
-const TL3_EXCEPTIONS = ['provision_actor(text[])'];
+/** TL-3 as amended, closed by TD-18 (0070): no replaced pre-Phase-3 routine keeps an applier owner or a public-first path. */
+const TL3_EXCEPTIONS: string[] = [];
 
 interface ClauseViolations {
   readonly c1: string[];
@@ -104,7 +114,7 @@ async function definerLawViolations(q: Queryable): Promise<ClauseViolations> {
     [sigs],
   );
   if (r.rows.length !== sigs.length) throw new Error(`resolved ${r.rows.length} of ${sigs.length} Phase 3 routines`);
-  const internal = new Set([INVENTORY_INTERNAL, ACCOUNTING_INTERNAL]);
+  const internal = new Set([INVENTORY_INTERNAL, ACCOUNTING_INTERNAL, CATALOG_INTERNAL, PROVISIONING_INTERNAL]);
   const pick = (f: (x: RoutineRow) => boolean): string[] =>
     r.rows
       .filter(f)
@@ -129,9 +139,16 @@ beforeAll(async () => {
 }, 300_000);
 
 describe('T-05 — the seven clauses over phase3Routines(), with exactly the TL-3 exception set (A-08)', () => {
-  it('the surface is real: definers of both internal principals, trigger functions, and the two replaced pre-Phase-3 routines', async () => {
+  it('the surface is real: definers of the internal principals, trigger functions, and the replaced pre-Phase-3 routines', async () => {
     const routines = await phase3Routines();
-    expect(routines.filter((r) => r.replaced).map((r) => r.sig)).toEqual(['accounting_actor(text[])', 'provision_actor(text[])']);
+    expect(routines.filter((r) => r.replaced).map((r) => r.sig)).toEqual([
+      'accounting_actor(text[])',
+      'catalog_identifier_norm(text,text)',
+      'catalog_identifiers_sync()',
+      'provision_actor(text[])',
+      'provision_assertion_key_install(text,bytea)',
+      'provision_assertion_key_retire(text)',
+    ]);
     const owners = await ownerPool().query<{ o: string; n: number }>(
       `SELECT pg_get_userbyid(p.proowner) AS o, count(*)::int AS n FROM pg_proc p
         WHERE p.prosecdef AND p.oid = ANY (SELECT to_regprocedure('public.' || s) FROM unnest($1::text[]) s) GROUP BY 1 ORDER BY 1`,
@@ -142,7 +159,7 @@ describe('T-05 — the seven clauses over phase3Routines(), with exactly the TL-
     expect(byOwner[ACCOUNTING_INTERNAL]).toBeGreaterThan(10);
   });
 
-  it('every clause’s violators are exactly its exception set: {provision_actor(text[])} for 1, 2 and 7, none elsewhere', async () => {
+  it('every clause’s violators are exactly its exception set: none, for every clause (TD-18 closed TL-3)', async () => {
     expect(await definerLawViolations(ownerPool())).toEqual(SHIPPED);
   });
 
@@ -152,17 +169,22 @@ describe('T-05 — the seven clauses over phase3Routines(), with exactly the TL-
    * is built by the superuser). Both are reported as `<deployment principal>`;
    * clause 7 treats them alike for the same reason.
    */
-  it('the exception is what TL-3 says it is: owned by the deployment principal, DEFINER, its accepted Phase 1 path; accounting_actor passes every clause', async () => {
+  it('the former exception is closed: provision_actor and the three other 0037-0039 definers have internal owners and the pinned path; accounting_actor passes every clause', async () => {
     const r = await ownerPool().query<{ sig: string; owner: string; definer: boolean; config: string[] | null }>(
       `SELECT regexp_replace(p.oid::regprocedure::text, '^public\\.', '') AS sig,
               CASE WHEN o.rolsuper OR o.rolname = 'daftar_migrator' THEN '<deployment principal>' ELSE o.rolname::text END AS owner,
               p.prosecdef AS definer, p.proconfig AS config
          FROM pg_proc p JOIN pg_roles o ON o.oid = p.proowner
-        WHERE p.oid IN (to_regprocedure('public.provision_actor(text[])'), to_regprocedure('public.accounting_actor(text[])')) ORDER BY 1`,
+        WHERE p.oid IN (to_regprocedure('public.provision_actor(text[])'), to_regprocedure('public.accounting_actor(text[])'),
+                        to_regprocedure('public.catalog_identifiers_sync()'), to_regprocedure('public.provision_assertion_key_install(text,bytea)'),
+                        to_regprocedure('public.provision_assertion_key_retire(text)')) ORDER BY 1`,
     );
     expect(r.rows).toEqual([
       { sig: 'accounting_actor(text[])', owner: ACCOUNTING_INTERNAL, definer: true, config: [PINNED] },
-      { sig: 'provision_actor(text[])', owner: '<deployment principal>', definer: true, config: ['search_path=public, pg_catalog, pg_temp'] },
+      { sig: 'catalog_identifiers_sync()', owner: CATALOG_INTERNAL, definer: true, config: [PINNED] },
+      { sig: 'provision_actor(text[])', owner: PROVISIONING_INTERNAL, definer: true, config: [PINNED] },
+      { sig: 'provision_assertion_key_install(text,bytea)', owner: PROVISIONING_INTERNAL, definer: true, config: [PINNED] },
+      { sig: 'provision_assertion_key_retire(text)', owner: PROVISIONING_INTERNAL, definer: true, config: [PINNED] },
     ]);
   });
 
@@ -215,6 +237,17 @@ describe('T-05 NEGATIVE CONTROLS — each removed invariant is named by its clau
     const v = await definerLawViolations(scratch.pool);
     expect({ c2: v.c2, c7: v.c7 }).toEqual({ c2: [...TL3_EXCEPTIONS, supplierPay].sort(), c7: [...TL3_EXCEPTIONS, supplierPay].sort() });
     await scratch.pool.query(`ALTER FUNCTION ${supplierPay} OWNER TO ${INVENTORY_INTERNAL}`);
+  });
+
+  it('TD-18 provision_actor handed back to the migrator → clauses 2 and 7 name it; the old public-first path → clause 1', async () => {
+    await scratch.pool.query(`ALTER FUNCTION provision_actor(text[]) OWNER TO daftar_migrator`);
+    const v = await definerLawViolations(scratch.pool);
+    expect({ c2: v.c2, c7: v.c7 }).toEqual({ c2: ['provision_actor(text[])'], c7: ['provision_actor(text[])'] });
+    await scratch.pool.query(`ALTER FUNCTION provision_actor(text[]) OWNER TO ${PROVISIONING_INTERNAL}`);
+    await scratch.pool.query(`ALTER FUNCTION catalog_identifiers_sync() SET search_path = public, pg_catalog, pg_temp`);
+    expect((await definerLawViolations(scratch.pool)).c1).toEqual(['catalog_identifiers_sync()']);
+    await scratch.pool.query(`ALTER FUNCTION catalog_identifiers_sync() SET search_path = pg_catalog, public, pg_temp`);
+    expect(await definerLawViolations(scratch.pool)).toEqual(SHIPPED);
   });
 
   it('PM-43 EXECUTE granted to PUBLIC on a trigger function → clauses 3 and 4 name it', async () => {

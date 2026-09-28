@@ -66,6 +66,7 @@ import {
   runS6,
   seedSettlementAccounts,
 } from '../helpers/supplier-settlement';
+import { P3C_OPERATION_KINDS, P3C_REGISTRY_ROWS, P3C_SOURCE_TYPE_ROWS, P3_CORRECTIVE_MIGRATIONS } from '../helpers/p3c-migrations';
 
 const SCRATCH = 'daftar_upgrade_0066';
 const scratchUrl = `postgresql://${PG_USER}:${PG_PASSWORD}@localhost:${PG_PORT}/${SCRATCH}`;
@@ -211,15 +212,30 @@ describe('T-17 the P3-S6 upgrade matrix', () => {
         ...S6_MIGRATIONS,
         // P3-S8 (0069): reconciler column grants and the R-B1a guard; no registry row
         '0069_inventory_reconciliation_read_and_account_domain.sql',
+        // The Phase 3 corrective pass (0070+)
+        ...P3_CORRECTIVE_MIGRATIONS,
       ]);
 
       // Everything as it was, plus the three accounting source types 0067 adds (A-05).
-      expect(await protectedRows()).toEqual([...before, 'src:supplier_payment:9', 'src:supplier_credit_allocation:10', 'src:supplier_refund:11'].sort());
+      // Phase 3 corrective (0072): and the one the TD-16 write-off adds.
+      expect(await protectedRows()).toEqual(
+        [...before, 'src:supplier_payment:9', 'src:supplier_credit_allocation:10', 'src:supplier_refund:11', ...P3C_SOURCE_TYPE_ROWS].sort(),
+      );
 
       // The registries: the checkpoint's rows plus exactly S6's (§2.8, A-05): no stock source type, no mapping.
       const after = await registries();
-      expect(after).toEqual([...registriesBefore, ...S6_OPERATION_KINDS.map((op) => `op:${op}:P3-S6`), ...S6_SOURCE_TYPES.map((t) => `acct:post:${t}`)].sort());
-      expect(after.filter((r) => r.startsWith('op:')).length, 'S1 3 + S3 7 + S4 7 + S5 2 + S6 7').toBe(26);
+      // Phase 3 corrective (0072, TD-16): plus the write-off kind and its accounting pair.
+      expect(after).toEqual(
+        [
+          ...registriesBefore,
+          ...S6_OPERATION_KINDS.map((op) => `op:${op}:P3-S6`),
+          ...S6_SOURCE_TYPES.map((t) => `acct:post:${t}`),
+          ...P3C_REGISTRY_ROWS,
+        ].sort(),
+      );
+      expect(after.filter((r) => r.startsWith('op:')).length, 'S1 3 + S3 7 + S4 7 + S5 2 + S6 7, plus the corrective kinds').toBe(
+        26 + P3C_OPERATION_KINDS.length,
+      );
 
       // Every S6 table is empty and arrived with row security enabled and forced.
       const counts = (await pool.query<{ t: string; n: number }>(S6_TABLES.map((t) => `SELECT '${t}' AS t, count(*)::int AS n FROM ${t}`).join(' UNION ALL ')))
@@ -272,7 +288,10 @@ describe('T-17 the P3-S6 upgrade matrix', () => {
 
       // A second run applies nothing.
       expect(await runMigrations(scratchUrl)).toEqual([]);
-      expect(await protectedRows()).toEqual([...before, 'src:supplier_payment:9', 'src:supplier_credit_allocation:10', 'src:supplier_refund:11'].sort());
+      // Phase 3 corrective (0072): and the one the TD-16 write-off adds.
+      expect(await protectedRows()).toEqual(
+        [...before, 'src:supplier_payment:9', 'src:supplier_credit_allocation:10', 'src:supplier_refund:11', ...P3C_SOURCE_TYPE_ROWS].sort(),
+      );
     } finally {
       await pool.end();
       await admin.query(`DROP DATABASE IF EXISTS ${SCRATCH} WITH (FORCE)`);

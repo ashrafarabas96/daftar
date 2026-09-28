@@ -68,6 +68,10 @@ const OPERATION_AUTHORITY: Readonly<Record<InventoryOperationCode, { readonly pe
   'supplier.pay': { permission: 'suppliers.pay', scope: 'warehouses' },
   'supplier.allocate_credit': { permission: 'suppliers.pay', scope: 'business_wide' },
   'supplier.receive_refund': { permission: 'suppliers.pay', scope: 'business_wide' },
+  // Phase 3 corrective (0072 R-96): writing off a purchase's sub-unit AP
+  // residue settles supplier AP, so it is the settlement permission, and
+  // business-wide like every settlement (S6 TL-5).
+  'purchase.write_off_residue': { permission: 'suppliers.pay', scope: 'business_wide' },
 };
 
 /**

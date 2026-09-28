@@ -74,6 +74,21 @@ CREATE EXTENSION IF NOT EXISTS pgcrypto;
 --                     and warehouse-branch associations. The same NOLOGIN,
 --                     NOINHERIT, passwordless shape, and a separate trust
 --                     boundary from the accounting principal.
+--   daftar_catalog_internal
+--                     (Phase 3 corrective hardening, TD-18) the owner of the
+--                     catalogue identifier registry's sync trigger,
+--                     `catalog_identifiers_sync()`, and the only principal
+--                     that writes `catalog_identifiers`. It reads nothing
+--                     else but the two `businesses` columns the registry's
+--                     row security compares.
+--   daftar_provisioning_internal
+--                     (Phase 3 corrective hardening, TD-18) the owner of the
+--                     provisioning assertion verifier `provision_actor` and
+--                     of the two key-registry commands, and the only principal
+--                     that reads the provisioning key registry. Before 0070
+--                     the four were owned by whoever applied the history.
+--                     Both have the same NOLOGIN, NOINHERIT, passwordless
+--                     shape, and neither is a member of anything.
 --
 -- DEPLOYMENT principal, NOT a runtime (P2-S1 managed-PostgreSQL correction):
 --   daftar_migrator   the schema-migration principal. It is a LOGIN role, but
@@ -152,6 +167,20 @@ BEGIN
   ELSE
     ALTER ROLE daftar_inventory_internal NOLOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD NULL;
   END IF;
+  -- Internal catalogue and provisioning authorities (Phase 3 corrective
+  -- hardening, TD-18). The same shape again, each its own boundary: the
+  -- catalogue principal never reads a key, and the provisioning principal
+  -- never writes the catalogue.
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'daftar_catalog_internal') THEN
+    CREATE ROLE daftar_catalog_internal NOLOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+  ELSE
+    ALTER ROLE daftar_catalog_internal NOLOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD NULL;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'daftar_provisioning_internal') THEN
+    CREATE ROLE daftar_provisioning_internal NOLOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+  ELSE
+    ALTER ROLE daftar_provisioning_internal NOLOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD NULL;
+  END IF;
   -- Deployment migration authority. NOSUPERUSER and NOBYPASSRLS are re-asserted
   -- on every run: DAFTAR must never silently require a superuser to migrate.
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'daftar_migrator') THEN
@@ -171,6 +200,9 @@ GRANT USAGE ON SCHEMA public TO daftar_accounting_internal;
 -- no CONNECT, no CREATE. Migrations 0053 onward take CREATE for the ownership
 -- transfer and revoke it in the same file.
 GRANT USAGE ON SCHEMA public TO daftar_inventory_internal;
+-- The catalogue and provisioning principals (TD-18): USAGE only. Migration
+-- 0070 takes CREATE for the ownership transfer and revokes it in the same file.
+GRANT USAGE ON SCHEMA public TO daftar_catalog_internal, daftar_provisioning_internal;
 
 -- ── Deployment migration authority ──────────────────────────────────────────
 -- Separate from every runtime grant above, and loaded by no service.
@@ -200,11 +232,12 @@ GRANT USAGE, CREATE ON SCHEMA public TO daftar_migrator;
 -- requires of its deployer and nothing more. Every runtime role's CREATE on
 -- this schema is revoked at the bottom of this file and stays revoked.
 ALTER SCHEMA public OWNER TO daftar_migrator;
--- ── The memberships, and why there are exactly three (P2-S9, RB-P2-01, P3-S1)
+-- ── The memberships, and why there are exactly five (P2-S9, RB-P2-01, P3-S1,
+--    Phase 3 corrective hardening TD-18)
 --
 -- PostgreSQL will not let a non-superuser run `ALTER ... OWNER TO r` unless it
--- can `SET ROLE` to r. The migration history hands ownership to exactly three
--- roles, and the deployment principal therefore needs exactly three
+-- can `SET ROLE` to r. The migration history hands ownership to exactly five
+-- roles, and the deployment principal therefore needs exactly five
 -- memberships. The set is not a judgement call: it is read off the frozen
 -- files, and `scripts/deployment-authority.ts` re-derives it from the history
 -- on every run so that a future migration naming a third owner is a red gate
@@ -217,6 +250,10 @@ ALTER SCHEMA public OWNER TO daftar_migrator;
 --                               inside them (Phase 1).
 --   daftar_inventory_internal   0053 onward — the Phase 3 inventory routines'
 --                               and column guards' final owner (P3-AL-54 §C).
+--   daftar_catalog_internal     0070 — catalog_identifiers_sync() (TD-18).
+--   daftar_provisioning_internal
+--                               0070 — provision_actor and the two
+--                               provisioning key commands (TD-18).
 --
 -- The second one was missing until P2-S9, and `daftar_migrator` could not
 -- apply the accepted history end to end: a fresh deployment died at
@@ -265,6 +302,17 @@ GRANT daftar_platform TO daftar_migrator WITH INHERIT TRUE, SET TRUE;
 -- FALSE means it holds none of the role's table privileges while it does.
 -- No runtime role is, or may become, a member (P3-AL-54 §C).
 GRANT daftar_inventory_internal TO daftar_migrator WITH INHERIT FALSE, SET TRUE;
+-- The fourth and fifth owners (Phase 3 corrective hardening, TD-18): before
+-- 0070 the history left four SECURITY DEFINER routines owned by WHOEVER
+-- APPLIED IT — a superuser that bypasses row-level security on CI, the
+-- deployer that does not in production. 0070 hands them to these two NOLOGIN
+-- owners, so the owner no longer depends on the applier. The memberships are
+-- the inventory one's shape and exist for the same PostgreSQL reason: a
+-- non-superuser hands ownership only to a role it may SET ROLE to. They add
+-- no reach: before 0070 the deployer owned the four routines and still owns
+-- every table they touch.
+GRANT daftar_catalog_internal TO daftar_migrator WITH INHERIT FALSE, SET TRUE;
+GRANT daftar_provisioning_internal TO daftar_migrator WITH INHERIT FALSE, SET TRUE;
 
 -- ── Default deny on every namespace a caller could write (P2-S3 correction) ─
 --
@@ -308,6 +356,7 @@ BEGIN
     v_db);
   EXECUTE format('REVOKE TEMPORARY ON DATABASE %I FROM daftar_accounting_internal', v_db);
   EXECUTE format('REVOKE TEMPORARY ON DATABASE %I FROM daftar_inventory_internal', v_db);
+  EXECUTE format('REVOKE TEMPORARY ON DATABASE %I FROM daftar_catalog_internal, daftar_provisioning_internal', v_db);
 END $$;
 
 -- The other caller-writable namespace. PostgreSQL 15 and later no longer give

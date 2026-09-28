@@ -3,6 +3,7 @@ import { PurchaseDraftService } from './purchase-draft.service';
 import { PurchaseReceiptService } from './purchase-receipt.service';
 import { PurchaseReceiveAndPayService } from './purchase-receive-and-pay.service';
 import { PurchaseReturnService } from './purchase-return.service';
+import { PurchaseResidueWriteOffService } from './purchase-residue-write-off.service';
 import { PurchaseReversalService } from './purchase-reversal.service';
 import { PurchasingReadService } from './purchasing-reads';
 import { SupplierCreditAllocationService } from './supplier-credit-allocation.service';
@@ -38,6 +39,7 @@ export function purchasingProviders(): Provider[] {
     PurchaseReceiptService,
     PurchaseReturnService,
     PurchaseReversalService,
+    PurchaseResidueWriteOffService,
     PurchasingReadService,
     SupplierPaymentService,
     SupplierCreditAllocationService,

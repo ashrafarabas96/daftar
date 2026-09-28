@@ -80,7 +80,8 @@ describe('step 4 — every file on disk is applied, and the history holds both a
   });
 
   it('permits a later forward migration', () => {
-    const later = '0070_a_later_forward_migration.sql';
+    // Named to sort after every real file: the corrective 0070+ are on disk.
+    const later = '9999_a_later_forward_migration.sql';
     expect(appliedSetProblems([...onDisk, later], [...onDisk, later], [...history, { name: later, sha256: 'f'.repeat(64) }], PREFIX)).toEqual([]);
   });
 
@@ -199,10 +200,16 @@ describe('the script', () => {
     expect(code()).not.toMatch(/process\.env\['PG_PORT'\] \?\?/);
   });
 
-  it('records the applier-owned SECURITY DEFINER routines and holds them to the pinned four', () => {
+  it('records the applier-owned SECURITY DEFINER routines and holds them to none (TD-18, 0070)', () => {
     expect(code()).toMatch(/APPLIER_OWNED_DEFINERS_QUERY, \[DEPLOYER\]/);
     expect(code()).toMatch(/artefact\['applierOwnedDefiners'\] = \{ pinned: APPLIER_OWNED_DEFINERS, observed: owned \}/);
-    expect(code()).toMatch(/record\('7\.3 the deployer owns exactly the pinned SECURITY DEFINER routines', ownership\.length === 0/);
+    expect(code()).toMatch(/record\('7\.3 the deployer owns no SECURITY DEFINER routine', ownership\.length === 0/);
+  });
+
+  it('records the four TD-18 routines with their internal owners and the pinned path (7.4)', () => {
+    expect(code()).toMatch(/query<Td18DefinerRow>\(ownerUrl, TD18_DEFINER_OWNERS_QUERY\)/);
+    expect(code()).toMatch(/artefact\['td18Definers'\] = td18Rows/);
+    expect(code()).toMatch(/'7\.4 the TD-18 routines have their internal owners and the pinned path',\s*td18\.length === 0/);
   });
 
   it('can report its own failure: the exit guard is installed before main runs', () => {

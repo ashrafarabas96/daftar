@@ -17,6 +17,7 @@ import type {
   PurchaseReturnOptionsDto,
   PurchaseReversalBlockDto,
   PurchaseReversalLineDto,
+  PurchaseResidueWriteOffResultDto,
   PurchaseReversalResultDto,
   PurchaseSettlementsDto,
   PurchaseStatusDto,
@@ -731,6 +732,71 @@ export async function findPurchaseReversalIntent(db: Database, scope: ReadScope,
   return row?.intent_sha256 ?? null;
 }
 
+/** The stored intent of a purchase's residue write-off (0072 R-96), or null: the purchase is its identity. */
+export async function findResidueWriteOffIntent(db: Database, scope: ReadScope, purchaseId: string): Promise<string | null> {
+  const [row] = await scopedRows<{ intent_sha256: string }>(
+    db,
+    scope,
+    'SELECT intent_sha256 FROM purchase_residue_write_offs WHERE business_id = $1 AND id = $2',
+    [scope.businessId, purchaseId],
+  );
+  return row?.intent_sha256 ?? null;
+}
+
+/**
+ * The answer of `POST /v1/purchases/:purchaseId/residue-write-off`: the stored
+ * row, and its `purchase_residue_write_off` entry through the source binding
+ * when the write-off released a base unit (null otherwise).
+ */
+export async function readResidueWriteOffResult(
+  db: Database,
+  scope: ReadScope,
+  purchaseId: string,
+  replayed: boolean,
+): Promise<PurchaseResidueWriteOffResultDto> {
+  const [r] = await scopedRows<{
+    supplier_id: string;
+    currency_code: string;
+    write_off_date: string;
+    reason: string;
+    residue_txn_minor: string;
+    released_before_txn_minor: string;
+    residue_base_minor: string;
+    binding_source_id: string | null;
+    business_transaction_id: string;
+    created_at: Date;
+    journal_entry_id: string | null;
+  }>(
+    db,
+    scope,
+    `SELECT w.supplier_id, w.currency_code::text AS currency_code, w.write_off_date::text AS write_off_date, w.reason,
+            w.residue_txn_minor::text AS residue_txn_minor, w.released_before_txn_minor::text AS released_before_txn_minor,
+            w.residue_base_minor::text AS residue_base_minor, w.binding_source_id, w.business_transaction_id, w.created_at,
+            b.journal_entry_id
+       FROM purchase_residue_write_offs w
+       LEFT JOIN accounting_source_bindings b
+         ON b.business_id = w.business_id AND b.source_type = w.accounting_source_type AND b.source_id = w.binding_source_id
+      WHERE w.business_id = $1 AND w.id = $2`,
+    [scope.businessId, purchaseId],
+  );
+  if (r === undefined) throw new Error('a residue write-off was read back that is not stored');
+  if ((r.binding_source_id === null) !== (r.journal_entry_id === null)) throw new Error("a residue write-off's entry does not match its base");
+  return {
+    purchaseId,
+    supplierId: r.supplier_id,
+    currency: r.currency_code,
+    writeOffDate: r.write_off_date,
+    reason: r.reason,
+    residueTxnMinor: r.residue_txn_minor,
+    releasedBeforeTxnMinor: r.released_before_txn_minor,
+    residueBaseMinor: r.residue_base_minor,
+    journalEntryId: r.journal_entry_id,
+    createdAt: iso(r.created_at),
+    replayed,
+    businessTransactionId: r.business_transaction_id,
+  };
+}
+
 /**
  * The stored result of a purchase reversal (A-17): the header, the lines with
  * their `purchase_reversal` movements in purchase `line_no` order, and the
@@ -1399,7 +1465,9 @@ export class PurchasingReadService {
                + (SELECT coalesce(sum(a.purchase_carrying_base_released_minor), 0) FROM supplier_payment_allocations a
                    WHERE a.business_id = $1 AND a.purchase_id = $2)
                + (SELECT coalesce(sum(c.purchase_carrying_base_released_minor), 0) FROM supplier_credit_allocations c
-                   WHERE c.business_id = $1 AND c.purchase_id = $2))::text AS released_base
+                   WHERE c.business_id = $1 AND c.purchase_id = $2)
+               + (SELECT coalesce(sum(w.residue_base_minor), 0) FROM purchase_residue_write_offs w
+                   WHERE w.business_id = $1 AND w.purchase_id = $2))::text AS released_base
          FROM purchase_settlement_state($1, $2) s`,
       [m.businessId, purchaseId],
     );

@@ -22,6 +22,10 @@
  * `inventory_stock_source_guard_gaps()` reports the credit-note guard at its
  * S6 body (R-70(b)) — sabotaged, both discoveries report it — and every
  * S3/S4/S5 row as before.
+ *
+ * Phase 3 corrective (0072, TD-16): the discovery also watches the three
+ * TD-16 triggers and their three DEFINER functions (25 recorded digests);
+ * each is sabotaged in turn below, like the S6 ones.
  */
 import type { Client } from 'pg';
 import { beforeAll, describe, expect, it } from 'vitest';
@@ -70,6 +74,13 @@ const DEFINER_ROWS: readonly (readonly [row: string, fn: string])[] = [
 
 const INVOKER_ROWS: readonly (readonly [row: string, fn: string])[] = EXTENSION_POINTS.map((fn) => [`-:${fn}`, fn] as const);
 
+/** Phase 3 corrective (0072, TD-16): R-95's trigger on the S5 table and R-96's two, each on its DEFINER function. */
+const TD16_TRIGGERS: readonly (readonly [table: string, trigger: string, fn: string])[] = [
+  ['supplier_returns', 'supplier_returns_residue_bound', 'supplier_return_residue_bound()'],
+  ['purchase_residue_write_offs', 'purchase_residue_write_offs_guard', 'purchase_residue_write_off_guard()'],
+  ['purchase_residue_write_offs', 'purchase_residue_write_offs_value_complete', 'purchase_residue_write_off_value_complete()'],
+];
+
 /** The S5 source rows the credit-note guard is reported under by `inventory_stock_source_guard_gaps()`. */
 const CREDIT_NOTE_SOURCE_ROW = 'supplier_return:credit_note_immutable';
 
@@ -111,7 +122,7 @@ describe('T-21 at rest', () => {
   it('the recorded digests are exactly the bodies installed now, one per watched function', async () => {
     const c = await ownerClient();
     try {
-      const fns = [...DEFINER_ROWS, ...INVOKER_ROWS].map(([, fn]) => fn);
+      const fns = [...DEFINER_ROWS, ...INVOKER_ROWS].map(([, fn]) => fn).concat(TD16_TRIGGERS.map(([, , fn]) => fn));
       const r = await c.query<{ f: string; sha: string }>(
         `SELECT p.oid::regprocedure::text AS f, encode(sha256(convert_to(p.prosrc, 'UTF8')), 'hex') AS sha
            FROM pg_proc p WHERE p.oid = ANY ($1::regprocedure[]) ORDER BY 1`,
@@ -122,7 +133,9 @@ describe('T-21 at rest', () => {
         (await c.query<{ s: string }>(`SELECT prosrc AS s FROM pg_proc WHERE oid = 'supplier_settlement_guard_gaps()'::regprocedure`)).rows[0],
       ).s;
       for (const row of r.rows) expect(src, `${row.f} is recorded at its installed body`).toContain(`"${row.f}": "${row.sha}"`);
-      expect(src.match(/"[a-z_]+\([a-z,]*\)": "[0-9a-f]{64}"/g)?.length, 'exactly 22 recorded digests').toBe(22);
+      expect(src.match(/"[a-z_]+\([a-z,]*\)": "[0-9a-f]{64}"/g)?.length, 'exactly 22 recorded digests, plus the three TD-16 functions (0072)').toBe(
+        22 + TD16_TRIGGERS.length,
+      );
       const source = must(
         (await c.query<{ s: string }>(`SELECT prosrc AS s FROM pg_proc WHERE oid = 'inventory_stock_source_guard_gaps()'::regprocedure`)).rows[0],
       ).s;
@@ -164,6 +177,40 @@ describe('T-21 each trigger dropped, disabled, replica-only, re-created on anoth
         await gapsAfter((c) => recreate(c, table, trigger, (d) => d.replace(/ FOR EACH ROW /, ' FOR EACH ROW WHEN (true) '))),
         'with a WHEN clause',
       ).toEqual({ s6: [`${row}:trigger_shape`], source });
+    });
+  }
+});
+
+describe('T-21 (Phase 3 corrective, 0072) each TD-16 trigger and its function: dropped, disabled, re-shaped; body, owner, path, security', () => {
+  for (const [table, trigger, fn] of TD16_TRIGGERS) {
+    it(`${table}.${trigger}`, async () => {
+      const row = `${table}:${trigger}`;
+      expect(await gapsAfter((c) => c.query(`DROP TRIGGER ${trigger} ON ${table}`)), 'dropped').toEqual({ s6: [`${row}:trigger_missing`], source: [] });
+      expect(await gapsAfter((c) => c.query(`ALTER TABLE ${table} DISABLE TRIGGER ${trigger}`)), 'disabled').toEqual({
+        s6: [`${row}:trigger_disabled`],
+        source: [],
+      });
+      expect(await gapsAfter((c) => c.query(`ALTER TABLE ${table} ENABLE REPLICA TRIGGER ${trigger}`)), 'replica only').toEqual({
+        s6: [`${row}:trigger_disabled`],
+        source: [],
+      });
+      expect(
+        await gapsAfter((c) => recreate(c, table, trigger, (d) => d.replace(/EXECUTE FUNCTION \S+\(\)$/, 'EXECUTE FUNCTION payment_method_guard()'))),
+        'on another function',
+      ).toEqual({ s6: [`${row}:trigger_shape`], source: [] });
+      expect(
+        await gapsAfter((c) => recreate(c, table, trigger, (d) => d.replace(/ FOR EACH ROW /, ' FOR EACH ROW WHEN (true) '))),
+        'with a WHEN clause',
+      ).toEqual({ s6: [`${row}:trigger_shape`], source: [] });
+      expect(await gapsAfter((c) => replaceBody(c, fn)), 'a replaced body').toEqual({ s6: [`${row}:function_body`], source: [] });
+      expect(await gapsAfter((c) => c.query(`ALTER FUNCTION ${fn} OWNER TO daftar_accounting_internal`)), 'another owner').toEqual({
+        s6: [`${row}:function_owner`],
+        source: [],
+      });
+      expect((await gapsAfter((c) => c.query(`ALTER FUNCTION ${fn} SET search_path = public, pg_temp`))).s6, 'another search_path').toEqual([
+        `${row}:function_search_path`,
+      ]);
+      expect((await gapsAfter((c) => c.query(`ALTER FUNCTION ${fn} SECURITY INVOKER`))).s6, 'INVOKER').toEqual([`${row}:function_not_definer`]);
     });
   }
 });
