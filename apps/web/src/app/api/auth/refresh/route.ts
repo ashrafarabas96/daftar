@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
-import { API_URL } from '@/lib/api';
-import { CSRF_COOKIE, RT_COOKIE, rtCookieOptions } from '@/lib/cookies';
+import { API_URL } from '../../../../lib/api';
+import { CSRF_COOKIE, RT_COOKIE, rtCookieOptions } from '../../../../lib/cookies';
 
 export async function POST(req: Request) {
   const jar = await cookies();

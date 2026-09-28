@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from 'next/server';
-import { API_URL } from '@/lib/api';
+import { API_URL } from '../../../../lib/api';
 
 /**
  * BFF catch-all proxy (ADR-001): the browser only ever talks to its own

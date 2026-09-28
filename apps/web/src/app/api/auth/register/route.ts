@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
-import { API_URL } from '@/lib/api';
-import { CSRF_COOKIE, RT_COOKIE, csrfCookieOptions, rtCookieOptions } from '@/lib/cookies';
+import { API_URL } from '../../../../lib/api';
+import { CSRF_COOKIE, RT_COOKIE, csrfCookieOptions, rtCookieOptions } from '../../../../lib/cookies';
 import { randomBytes } from 'node:crypto';
 
 export async function POST(req: Request) {
