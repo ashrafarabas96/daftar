@@ -15,6 +15,7 @@
     "packages/inventory/package.json": "The `@daftar/inventory` package manifest: its build and test scripts.",
     "packages/inventory/tsconfig.json": "The `@daftar/inventory` TypeScript configuration for type-checking source and tests.",
     "packages/inventory/tsconfig.build.json": "The `@daftar/inventory` TypeScript configuration for the published build.",
-    "infrastructure/database/MIGRATION_MANIFEST.json": "The migration manifest: the SHA-256 of every frozen migration and the frozen boundary the gates check."
+    "infrastructure/database/MIGRATION_MANIFEST.json": "The migration manifest: the SHA-256 of every frozen migration and the frozen boundary the gates check.",
+    "scripts/phase3-review-index.curated.json": "The hand-curated purposes the review index generator reads for files whose header and commit subject say too little."
   }
 }
