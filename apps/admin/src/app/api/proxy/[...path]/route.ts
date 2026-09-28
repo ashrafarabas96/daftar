@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from 'next/server';
-import { API_URL } from '@/lib/api';
+import { API_URL } from '../../../../lib/api';
 
 /** BFF proxy to the PLATFORM API only (browser stays same-origin; CSP 'self'). */
 async function handler(req: NextRequest, ctx: { params: Promise<{ path: string[] }> }) {

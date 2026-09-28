@@ -1,8 +1,8 @@
 import { NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 import { randomBytes } from 'node:crypto';
-import { API_URL } from '@/lib/api';
-import { CSRF_COOKIE, RT_COOKIE, csrfCookieOptions, rtCookieOptions } from '@/lib/cookies';
+import { API_URL } from '../../../../lib/api';
+import { CSRF_COOKIE, RT_COOKIE, csrfCookieOptions, rtCookieOptions } from '../../../../lib/cookies';
 
 export async function POST(req: Request) {
   const body = (await req.json()) as { email?: string; password?: string };
