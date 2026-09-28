@@ -19,6 +19,7 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, write
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
+import { credentialFinding } from './secret-scan';
 
 const ROOT = join(__dirname, '..');
 const sha = (buf: Buffer | string) => createHash('sha256').update(buf).digest('hex');
@@ -66,15 +67,7 @@ const REPRODUCTION =
 
 const FORBIDDEN_NAME =
   /(^|\/)(node_modules|dist|\.next|var|coverage|\.gradle|build)(\/|$)|(^|\/)\.env($|\.)|\.log$|\.tsbuildinfo$|\.zip$|\.pem$|\.key$|\.dump$|\.sql\.gz$|dev-mailbox|local\.properties$/i;
-const FORBIDDEN_CONTENT = /DEV_TEST_KEY(?!\w)|argon2id\$[A-Za-z0-9+/=]{20,}|-----BEGIN [A-Z ]*PRIVATE KEY-----/;
-/**
- * Which files the content scan reads: every JavaScript/TypeScript spelling a
- * release can execute (`.ts .tsx .mts .cts .js .jsx .mjs .cjs` — the web and
- * admin production entries are `.mts`), and the config and data formats.
- */
-const CONTENT_SCANNED = /\.(?:[cm]?[jt]s|[jt]sx|sql|kt|kts|json|yml|yaml|xml|properties)$/;
-/** Files with a documented reason to mention the dev-only key constant or scan patterns. */
-const CONTENT_SCAN_EXEMPT = /static-guards|export-release|phase1-release-gate|credential-protector\.ts$|\.test\.|^docs\//;
+/** The content scan is scripts/secret-scan.ts: every tracked file that is not binary, raw key material and the dev/test key name. */
 
 function npmVersion(): string {
   const out = spawnSync(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['--version'], { encoding: 'utf8' });
@@ -173,8 +166,9 @@ for (const rel of tracked) {
   cpSync(src, dst);
   const buf = readFileSync(src);
   inventory.push({ path: rel, sha256: sha(buf), bytes: buf.byteLength });
-  if (CONTENT_SCANNED.test(rel) && FORBIDDEN_CONTENT.test(buf.toString('utf8')) && !CONTENT_SCAN_EXEMPT.test(rel)) {
-    console.error(`  FAIL raw credential material in export: ${rel}`);
+  const finding = credentialFinding(rel, buf, { devKeyName: true });
+  if (finding !== null) {
+    console.error(`  FAIL raw credential material in export: ${rel} (${finding})`);
     process.exit(1);
   }
 }

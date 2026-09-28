@@ -1,77 +1,118 @@
 /**
- * The Phase 1 release gate's raw-credential scan covers every source spelling
- * a release can execute or configure with — `.mts` (the web and admin
- * production entries), `.cts`, `.mjs`, `.cjs`, `.js`, `.jsx` beside `.ts` and
- * `.tsx` — and the same spellings as the release export's own content scan
- * (scripts/export-release.ts), so a secret the export would refuse cannot pass
- * the gate. Phase 3 corrective follow-up to TD-19.
+ * The raw-credential scans of the release (review L-4): the Phase 1 release
+ * gate and the release export read EVERY shipped file that is not binary —
+ * scripts, templates, config of any spelling, `.github/**`, `tests/**`,
+ * `docs/**` and the root files — through one scanner, `scripts/secret-scan.ts`,
+ * with no extension list and no path exemption. The only allowance is for the
+ * dev/test key's constant NAME, in the exact files that define, guard or
+ * document it; raw key material is refused everywhere.
  *
  * The gate runs every release step in order and cannot be run for one step
- * alone, so this reads the scan's scope from the gate's own source — the
- * regular expressions its `secret scan` step filters with — and applies them
- * to planted paths. A scope that cannot be found fails; it never passes.
+ * alone, so its wiring is read from its source: the `secret scan` step hands
+ * `shippedFiles()` to the shared scanner with nothing filtered out on the way.
+ * The scanner itself is exercised here with planted files.
  */
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 const ROOT = join(__dirname, '../..');
 
-function regexLiteral(source: string): RegExp {
-  const match = /^\/(.+)\/([a-z]*)$/.exec(source.trim());
-  if (match === null || match[1] === undefined) throw new Error(`not a regular expression literal: ${source}`);
-  return new RegExp(match[1], match[2]);
+// Assembled so that this file itself never carries the patterns it plants.
+const PRIVATE_KEY = ['-----BEGIN', 'EC PRIVATE KEY-----'].join(' ');
+const ARGON_HASH = `${['argon2id', ''].join('$')}${'Q'.repeat(24)}`;
+const DEV_KEY_NAME = ['DEV', 'TEST', 'KEY'].join('_');
+
+type Finding = (rel: string, content: Buffer, rules: { devKeyName: boolean }) => string | null;
+const isObject = (m: unknown): m is Record<string, unknown> => typeof m === 'object' && m !== null;
+/** Loaded by path so that a missing scanner is a failing case, not a file that does not compile. */
+async function scanner(): Promise<{ finding: Finding; allowed: ReadonlyMap<string, string> }> {
+  const m: unknown = await import(fileURLToPath(new URL('../../scripts/secret-scan.ts', import.meta.url))).catch(() => null);
+  const fn = isObject(m) ? m['credentialFinding'] : undefined;
+  const allowed = isObject(m) ? m['DEV_KEY_NAME_ALLOWED'] : undefined;
+  if (typeof fn !== 'function' || !(allowed instanceof Map)) throw new Error('scripts/secret-scan.ts exports no credentialFinding and DEV_KEY_NAME_ALLOWED');
+  const entries: [string, string][] = [];
+  for (const [k, v] of allowed) if (typeof k === 'string' && typeof v === 'string') entries.push([k, v]);
+  return {
+    finding: (rel, content, rules) => {
+      const out: unknown = fn(rel, content, rules);
+      if (out !== null && typeof out !== 'string') throw new Error('credentialFinding answered neither a string nor null');
+      return out;
+    },
+    allowed: new Map(entries),
+  };
 }
 
-/** The directory and extension filters of the gate's `secret scan` step. */
-function gateScope(): { dirs: RegExp; ext: RegExp } {
+function secretScanStep(): string {
   const text = readFileSync(join(ROOT, 'scripts/phase1-release-gate.ts'), 'utf8');
   const start = text.indexOf("name: 'secret scan'");
   if (start < 0) throw new Error("the gate has no 'secret scan' step");
-  const block = text.slice(start, text.indexOf("name: '", start + 1));
-  const filter = /\.filter\(\(rel\) => (\/\^[^\n]+?\/)\.test\(rel\) && ([A-Z_]+|\/[^\n]+?\/)\.test\(rel\)\)/.exec(block);
-  if (filter === null || filter[1] === undefined || filter[2] === undefined) throw new Error('the secret scan step has no directory-and-extension filter');
-  const ext = filter[2].startsWith('/') ? filter[2] : constantIn(text, filter[2]);
-  return { dirs: regexLiteral(filter[1]), ext: regexLiteral(ext) };
+  return text.slice(start, text.indexOf("name: '", start + 1));
 }
 
-function constantIn(text: string, name: string): string {
-  const match = new RegExp(`const ${name} = (/[^\\n]+/[a-z]*);`).exec(text);
-  if (match === null || match[1] === undefined) throw new Error(`no regular expression constant ${name}`);
-  return match[1];
-}
-
-/** The release export's content-scan scope (scripts/export-release.ts). */
-function exportScope(): RegExp {
-  const text = readFileSync(join(ROOT, 'scripts/export-release.ts'), 'utf8');
-  return regexLiteral(constantIn(text, 'CONTENT_SCANNED'));
-}
-
-const EXECUTABLE = [
+const PLANTED = [
   'apps/web/server.mts',
-  'apps/admin/server.mts',
   'scripts/planted.cts',
-  'scripts/planted.mjs',
-  'scripts/planted.cjs',
-  'apps/web/planted.js',
-  'apps/web/planted.jsx',
-  'packages/domain-core/src/planted.ts',
-  'apps/web/src/planted.tsx',
+  'scripts/planted.sh',
+  'infrastructure/database/procedures/planted.sql.template',
+  'planted.toml',
+  '.github/workflows/planted.yml',
+  'tests/security/planted.test.ts',
+  'docs/planted.md',
+  'apps/android/planted.pro',
+  'apps/api/src/modules/delivery/credential-protector.ts',
 ];
 
-describe('the Phase 1 release gate scans what the release runs', () => {
-  it.each(EXECUTABLE)('its secret scan reads %s', (rel) => {
-    const { dirs, ext } = gateScope();
-    expect(dirs.test(rel)).toBe(true);
-    expect(ext.test(rel), `${ext} does not cover ${rel}`).toBe(true);
+describe('the Phase 1 release gate scans every shipped file', () => {
+  it('its secret scan hands every shipped file to the shared scanner, filtering none out by path', () => {
+    const step = secretScanStep();
+    expect(step).toMatch(/credentialFinding\(/);
+    expect(step).toContain('shippedFiles()');
+    expect(step).not.toMatch(/\.filter\(\(rel\) =>[^\n]*\.test\(rel\)/);
   });
 
-  it('scans every spelling the release export scans', () => {
-    const { ext } = gateScope();
-    const spellings = ['ts', 'mts', 'cts', 'js', 'mjs', 'cjs', 'tsx', 'jsx', 'sql', 'kt', 'kts', 'json', 'yml', 'yaml', 'xml', 'properties', 'md', 'svg', 'png'];
-    const exported = spellings.filter((s) => exportScope().test(`scripts/x.${s}`));
-    const gated = spellings.filter((s) => ext.test(`scripts/x.${s}`));
-    expect(exported).toContain('mts');
-    expect(gated).toEqual(exported);
+  it('the release export uses the same scanner', () => {
+    const text = readFileSync(join(ROOT, 'scripts/export-release.ts'), 'utf8');
+    expect(text).toMatch(/import \{[^}]*credentialFinding[^}]*\} from '\.\/secret-scan'/);
+    expect(text).not.toMatch(/CONTENT_SCANNED|CONTENT_SCAN_EXEMPT/);
+  });
+});
+
+describe('the shared scanner', () => {
+  it.each(PLANTED)('refuses a private key in %s', async (rel) => {
+    const { finding } = await scanner();
+    expect(finding(rel, Buffer.from(`x\n${PRIVATE_KEY}\nMIIB\n`), { devKeyName: false })).not.toBeNull();
+    expect(finding(rel, Buffer.from(`x\n${PRIVATE_KEY}\nMIIB\n`), { devKeyName: true })).not.toBeNull();
+  });
+
+  it.each(PLANTED)('refuses an argon2id hash in %s', async (rel) => {
+    const { finding } = await scanner();
+    expect(finding(rel, Buffer.from(`const h = '${ARGON_HASH}';\n`), { devKeyName: false })).not.toBeNull();
+  });
+
+  it('refuses the dev/test key name outside the exact files allowed to hold it, when asked to', async () => {
+    const { finding, allowed } = await scanner();
+    const text = Buffer.from(`export const k = '${DEV_KEY_NAME}';\n`);
+    expect(finding('tests/security/planted.test.ts', text, { devKeyName: true })).not.toBeNull();
+    expect(finding('apps/web/src/lib/planted.ts', text, { devKeyName: true })).not.toBeNull();
+    expect(finding('tests/security/planted.test.ts', text, { devKeyName: false })).toBeNull();
+    for (const rel of allowed.keys()) expect(finding(rel, text, { devKeyName: true }), rel).toBeNull();
+  });
+
+  it('allows the dev/test key name only in exact paths, each with a reason, each holding it today', async () => {
+    const { allowed } = await scanner();
+    expect(allowed.size).toBeGreaterThan(0);
+    for (const [rel, reason] of allowed) {
+      expect(rel).not.toMatch(/[*?[\]]|\/$/);
+      expect(reason.length, rel).toBeGreaterThan(20);
+      expect(readFileSync(join(ROOT, rel), 'utf8'), rel).toContain(DEV_KEY_NAME);
+    }
+  });
+
+  it('does not read a binary file as text, and reads clean text as clean', async () => {
+    const { finding } = await scanner();
+    expect(finding('apps/web/public/logo.png', Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0x2d, 0x2d]), { devKeyName: true })).toBeNull();
+    expect(finding('scripts/clean.sh', Buffer.from('#!/bin/sh\necho ok\n'), { devKeyName: true })).toBeNull();
   });
 });
