@@ -253,14 +253,14 @@ BEGIN
      OR EXISTS (SELECT 1 FROM purchase_reversals r WHERE r.business_id = p_business_id AND r.id = p_purchase_id) THEN
     RETURN 0;
   END IF;
-  SELECT coalesce(sum(r.ap_txn_minor), 0) INTO v_released
+  SELECT coalesce(pg_catalog.sum(r.ap_txn_minor), 0) INTO v_released
   FROM supplier_returns r WHERE r.business_id = p_business_id AND r.purchase_id = p_purchase_id;
   RETURN (v_total - v_released
-          - coalesce((SELECT sum(a.purchase_amount_applied_minor) FROM supplier_payment_allocations a
+          - coalesce((SELECT pg_catalog.sum(a.purchase_amount_applied_minor) FROM supplier_payment_allocations a
                        WHERE a.business_id = p_business_id AND a.purchase_id = p_purchase_id), 0)
-          - coalesce((SELECT sum(c.purchase_amount_applied_minor) FROM supplier_credit_allocations c
+          - coalesce((SELECT pg_catalog.sum(c.purchase_amount_applied_minor) FROM supplier_credit_allocations c
                        WHERE c.business_id = p_business_id AND c.purchase_id = p_purchase_id), 0)
-          - coalesce((SELECT sum(w.residue_txn_minor) FROM purchase_residue_write_offs w
+          - coalesce((SELECT pg_catalog.sum(w.residue_txn_minor) FROM purchase_residue_write_offs w
                        WHERE w.business_id = p_business_id AND w.purchase_id = p_purchase_id), 0))::bigint;
 END;
 $$;
@@ -319,7 +319,7 @@ BEGIN
   IF TG_OP <> 'INSERT' THEN
     RAISE EXCEPTION 'purchase_residue.immutable: a residue write-off is never changed or deleted' USING ERRCODE = 'P0001';
   END IF;
-  IF NEW.created_at IS DISTINCT FROM now() OR NEW.business_transaction_id IS DISTINCT FROM inventory_business_transaction_id() THEN
+  IF NEW.created_at IS DISTINCT FROM pg_catalog.now() OR NEW.business_transaction_id IS DISTINCT FROM inventory_business_transaction_id() THEN
     RAISE EXCEPTION 'purchase_residue.immutable: a residue write-off is written only by its own command''s transaction' USING ERRCODE = 'P0001';
   END IF;
   RETURN NEW;
@@ -339,20 +339,30 @@ DECLARE
   v_et       INTEGER;
   v_eb       INTEGER;
   v_others   NUMERIC;
+  v_floor    DATE;
 BEGIN
   SELECT p.status, p.supplier_id, p.currency_code, p.total_txn_minor, p.total_base_minor, p.source_to_base_rate INTO v_p
   FROM purchases p WHERE p.business_id = NEW.business_id AND p.id = NEW.purchase_id;
   SELECT b.base_currency INTO v_base_ccy FROM businesses b WHERE b.id = NEW.business_id;
   SELECT c.minor_units INTO v_et FROM currencies c WHERE c.code = v_p.currency_code::text;
   SELECT c.minor_units INTO v_eb FROM currencies c WHERE c.code = v_base_ccy;
-  SELECT coalesce((SELECT sum(r.ap_txn_minor) FROM supplier_returns r
+  SELECT coalesce((SELECT pg_catalog.sum(r.ap_txn_minor) FROM supplier_returns r
                     WHERE r.business_id = NEW.business_id AND r.purchase_id = NEW.purchase_id), 0)
-       + coalesce((SELECT sum(a.purchase_amount_applied_minor) FROM supplier_payment_allocations a
+       + coalesce((SELECT pg_catalog.sum(a.purchase_amount_applied_minor) FROM supplier_payment_allocations a
                     WHERE a.business_id = NEW.business_id AND a.purchase_id = NEW.purchase_id), 0)
-       + coalesce((SELECT sum(c.purchase_amount_applied_minor) FROM supplier_credit_allocations c
+       + coalesce((SELECT pg_catalog.sum(c.purchase_amount_applied_minor) FROM supplier_credit_allocations c
                     WHERE c.business_id = NEW.business_id AND c.purchase_id = NEW.purchase_id), 0)
     INTO v_others;
+  SELECT greatest(
+           (SELECT pg_catalog.max(r.document_date) FROM supplier_returns r
+             WHERE r.business_id = NEW.business_id AND r.purchase_id = NEW.purchase_id AND r.ap_txn_minor > 0),
+           (SELECT pg_catalog.max(sp.payment_date) FROM supplier_payment_allocations a
+              JOIN supplier_payments sp ON sp.business_id = a.business_id AND sp.id = a.payment_id
+             WHERE a.business_id = NEW.business_id AND a.purchase_id = NEW.purchase_id),
+           (SELECT pg_catalog.max(c.allocation_date) FROM supplier_credit_allocations c
+             WHERE c.business_id = NEW.business_id AND c.purchase_id = NEW.purchase_id)) INTO v_floor;
   IF v_p.status IS DISTINCT FROM 'received'
+     OR NEW.write_off_date < v_floor
      OR EXISTS (SELECT 1 FROM purchase_reversals r WHERE r.business_id = NEW.business_id AND r.id = NEW.purchase_id)
      OR NOT EXISTS (SELECT 1 FROM supplier_returns r
                      WHERE r.business_id = NEW.business_id AND r.purchase_id = NEW.purchase_id AND r.ap_txn_minor > 0)
@@ -373,7 +383,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION purchase_residue_write_off_value_complete() IS
-  'Phase 3 corrective (TD-16, 0072 R-96). At COMMIT, for a residue write-off: its purchase is received, not reversed, of the row''s supplier, currency and rate, and a supplier return released part of its AP; the row''s X equals the sum of every other reducer (returns'' ap, payment and credit allocations) and X + residue = T; the residue converts to 0 base minor units; residue_base_minor = supplier_ap_release(B, T, X, residue). Otherwise purchase_residue.settlement_inconsistent. Internal-owned DEFINER, pinned, no grant; reads only.';
+  'Phase 3 corrective (TD-16, 0072 R-96). At COMMIT, for a residue write-off: its purchase is received, not reversed, of the row''s supplier, currency and rate, and a supplier return released part of its AP; the row is dated on or after the latest return with AP, payment and credit allocation of the purchase; the row''s X equals the sum of every other reducer (returns'' ap, payment and credit allocations) and X + residue = T; the residue converts to 0 base minor units; residue_base_minor = supplier_ap_release(B, T, X, residue). Otherwise purchase_residue.settlement_inconsistent. Internal-owned DEFINER, pinned, no grant; reads only.';
 
 REVOKE ALL ON FUNCTION supplier_return_residue_bound() FROM PUBLIC;
 REVOKE ALL ON FUNCTION purchase_residue_write_off_guard() FROM PUBLIC;
@@ -404,6 +414,7 @@ CREATE FUNCTION purchase_write_off_residue(
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $$
 #variable_conflict use_column
 DECLARE
+  v_floor    DATE;
   v_actor    inventory_verified_actor;
   v_business UUID;
   v_tenant   UUID;
@@ -423,12 +434,12 @@ BEGIN
   -- 1. The consume, over the routine's own arguments: purchase_id,
   --    write_off_date, reason_w1..w8, residue, released_before, residue_base.
   v_actor := inventory_assertion_consume('purchase.write_off_residue', inventory_claimed_payload_digest('purchase.write_off_residue',
-    ARRAY['uuid', 'integer'] || array_fill('integer'::text, ARRAY[8]) || ARRAY['integer', 'integer', 'integer'],
-    ARRAY[p_purchase_id::text, to_char(p_write_off_date, 'YYYYMMDD')]
+    ARRAY['uuid', 'integer'] || pg_catalog.array_fill('integer'::text, ARRAY[8]) || ARRAY['integer', 'integer', 'integer'],
+    ARRAY[p_purchase_id::text, pg_catalog.to_char(p_write_off_date, 'YYYYMMDD')]
       || inventory_reason_words(p_reason)
       || ARRAY[p_residue_txn_minor::text, p_released_before_txn_minor::text, p_residue_base_minor::text]));
   -- 2. Isolation, trace and shape before any state read.
-  IF current_setting('transaction_isolation') <> 'read committed' THEN
+  IF pg_catalog.current_setting('transaction_isolation') <> 'read committed' THEN
     RAISE EXCEPTION 'inventory.isolation_unsupported: inventory commands run only at READ COMMITTED' USING ERRCODE = 'P0001';
   END IF;
   v_business := v_actor.business_id;
@@ -445,10 +456,10 @@ BEGIN
 
   -- 3. The S4 purchase key (the receipt's and the reversal's), then the
   --    intent: purchase, date, reason, residue.
-  PERFORM pg_advisory_xact_lock(hashtext('daftar.purchase_id'), hashtext(p_purchase_id::text));
+  PERFORM pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtext('daftar.purchase_id'), pg_catalog.hashtext(p_purchase_id::text));
   v_intent := inventory_payload_digest('purchase.write_off_residue', v_tenant, v_business,
-    ARRAY['uuid', 'integer'] || array_fill('integer'::text, ARRAY[8]) || ARRAY['integer'],
-    ARRAY[p_purchase_id::text, to_char(p_write_off_date, 'YYYYMMDD')] || inventory_reason_words(p_reason) || ARRAY[p_residue_txn_minor::text]);
+    ARRAY['uuid', 'integer'] || pg_catalog.array_fill('integer'::text, ARRAY[8]) || ARRAY['integer'],
+    ARRAY[p_purchase_id::text, pg_catalog.to_char(p_write_off_date, 'YYYYMMDD')] || inventory_reason_words(p_reason) || ARRAY[p_residue_txn_minor::text]);
 
   -- 4. The purchase FOR UPDATE, then the replay read.
   SELECT p.status, p.supplier_id, p.currency_code, p.document_date, p.total_txn_minor, p.total_base_minor, p.source_to_base_rate
@@ -469,14 +480,27 @@ BEGIN
     END IF;
 
     -- 5. The reason (the audit trail's why) and the dates.
-    IF p_reason IS NULL OR p_reason <> btrim(p_reason) OR char_length(p_reason) NOT BETWEEN 1 AND 500 THEN
+    IF p_reason IS NULL OR p_reason <> pg_catalog.btrim(p_reason) OR pg_catalog.char_length(p_reason) NOT BETWEEN 1 AND 500 THEN
       RAISE EXCEPTION 'purchase_residue.reason_required: a write-off states a trimmed reason of 1..500 characters' USING ERRCODE = 'P0001';
     END IF;
     SELECT b.timezone, b.base_currency INTO v_tz, v_base_ccy FROM businesses b WHERE b.id = v_business;
     IF p_write_off_date < v_p.document_date THEN
       RAISE EXCEPTION 'purchase_residue.date_before_purchase: a write-off is dated on or after its purchase' USING ERRCODE = 'P0001';
     END IF;
-    IF p_write_off_date > (now() AT TIME ZONE v_tz)::date THEN
+    -- Review L1: never before the last release of the purchase's AP (the
+    -- return that left the residue, or a later payment or credit allocation).
+    SELECT greatest(
+           (SELECT pg_catalog.max(r.document_date) FROM supplier_returns r
+             WHERE r.business_id = v_business AND r.purchase_id = p_purchase_id AND r.ap_txn_minor > 0),
+           (SELECT pg_catalog.max(sp.payment_date) FROM supplier_payment_allocations a
+              JOIN supplier_payments sp ON sp.business_id = a.business_id AND sp.id = a.payment_id
+             WHERE a.business_id = v_business AND a.purchase_id = p_purchase_id),
+           (SELECT pg_catalog.max(c.allocation_date) FROM supplier_credit_allocations c
+             WHERE c.business_id = v_business AND c.purchase_id = p_purchase_id)) INTO v_floor;
+    IF p_write_off_date < v_floor THEN
+      RAISE EXCEPTION 'purchase_residue.date_before_settlement: a write-off is dated on or after the last return, payment or credit allocation of its purchase' USING ERRCODE = 'P0001';
+    END IF;
+    IF p_write_off_date > (pg_catalog.now() AT TIME ZONE v_tz)::date THEN
       RAISE EXCEPTION 'purchase_residue.date_in_future: a write-off is dated on or before today in the business timezone' USING ERRCODE = 'P0001';
     END IF;
 
@@ -510,11 +534,11 @@ BEGIN
             CASE WHEN v_rb > 0 THEN p_purchase_id END);
     INSERT INTO audit_events (tenant_id, business_id, actor_user_id, action, entity, entity_id, metadata)
     VALUES (v_tenant, v_business, v_actor.actor_user_id, 'purchase.residue_written_off', 'purchase', p_purchase_id::text,
-            jsonb_build_object('purchaseId', p_purchase_id, 'supplierId', v_p.supplier_id, 'posted', v_rb > 0,
+            pg_catalog.jsonb_build_object('purchaseId', p_purchase_id, 'supplierId', v_p.supplier_id, 'posted', v_rb > 0,
                                'assertionJti', v_actor.jti, 'business_transaction_id', v_trace));
     INSERT INTO outbox_events (tenant_id, business_id, type, payload)
     VALUES (v_tenant, v_business, 'purchase.residue_written_off.v1',
-            jsonb_build_object('businessId', v_business, 'purchaseId', p_purchase_id, 'supplierId', v_p.supplier_id,
+            pg_catalog.jsonb_build_object('businessId', v_business, 'purchaseId', p_purchase_id, 'supplierId', v_p.supplier_id,
                                'businessTransactionId', v_trace));
   END IF;
 
@@ -523,7 +547,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION purchase_write_off_residue(UUID, DATE, TEXT, BIGINT, BIGINT, BIGINT) IS
-  'Phase 3 corrective (TD-16, 0072 R-96). First consumes an invctl/1 assertion of kind purchase.write_off_residue over its own arguments. Under the daftar.purchase_id key, with the intent (purchase, date, reason, residue): the purchase FOR UPDATE (purchase.not_found); a stored write-off with an equal intent is replayed, another is purchase_residue.already_written_off; purchase.state_invalid; purchase_residue.reason_required, date_before_purchase, date_in_future; O = purchase_ap_outstanding: nothing_outstanding (O = 0), not_below_base_unit (conv_R(O) >= 1), amount_mismatch (stated residue, X or rb moved); settlement_inconsistent without a return that released AP. Inserts the row (the purchase is its id; binding_source_id iff rb > 0), audit purchase.residue_written_off and its outbox row. The caller posts the purchase_residue_write_off entry iff rb > 0. EXECUTE: daftar_app only.';
+  'Phase 3 corrective (TD-16, 0072 R-96). First consumes an invctl/1 assertion of kind purchase.write_off_residue over its own arguments. Under the daftar.purchase_id key, with the intent (purchase, date, reason, residue): the purchase FOR UPDATE (purchase.not_found); a stored write-off with an equal intent is replayed, another is purchase_residue.already_written_off; purchase.state_invalid; purchase_residue.reason_required, date_before_purchase, date_before_settlement (before the latest return with AP, payment or credit allocation of the purchase), date_in_future; O = purchase_ap_outstanding: nothing_outstanding (O = 0), not_below_base_unit (conv_R(O) >= 1), amount_mismatch (stated residue, X or rb moved); settlement_inconsistent without a return that released AP. Inserts the row (the purchase is its id; binding_source_id iff rb > 0), audit purchase.residue_written_off and its outbox row. The caller posts the purchase_residue_write_off entry iff rb > 0. EXECUTE: daftar_app only.';
 
 REVOKE ALL ON FUNCTION purchase_write_off_residue(UUID, DATE, TEXT, BIGINT, BIGINT, BIGINT) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION purchase_write_off_residue(UUID, DATE, TEXT, BIGINT, BIGINT, BIGINT) TO daftar_app;
@@ -563,19 +587,19 @@ BEGIN
   SELECT w.branch_id INTO v_branch
   FROM purchases p JOIN warehouses w ON w.business_id = p.business_id AND w.id = p.warehouse_id
   WHERE p.business_id = NEW.business_id AND p.id = v_w.purchase_id;
-  v_base := concat_ws('|', (1::numeric(20,10))::text, 'base', extract(epoch FROM (v_w.write_off_date::timestamp AT TIME ZONE 'UTC'))::text);
+  v_base := pg_catalog.concat_ws('|', (1::numeric(20,10))::text, 'base', extract(epoch FROM (v_w.write_off_date::timestamp AT TIME ZONE 'UTC'))::text);
 
   -- Exactly two base lines: Dr Accounts Payable rb, Cr FX gain rb.
   v_expected := ARRAY[
-    concat_ws('|', 'accounts_payable', 'D', v_w.residue_base_minor::text, v_base_ccy, v_w.residue_base_minor::text, v_base, '-',
+    pg_catalog.concat_ws('|', 'accounts_payable', 'D', v_w.residue_base_minor::text, v_base_ccy, v_w.residue_base_minor::text, v_base, '-',
               coalesce(v_branch::text, '-')),
-    concat_ws('|', 'fx_gain', 'C', v_w.residue_base_minor::text, v_base_ccy, v_w.residue_base_minor::text, v_base, '-',
+    pg_catalog.concat_ws('|', 'fx_gain', 'C', v_w.residue_base_minor::text, v_base_ccy, v_w.residue_base_minor::text, v_base, '-',
               coalesce(v_branch::text, '-'))];
-  SELECT array_agg(x ORDER BY x) INTO v_expected FROM unnest(v_expected) AS x;
+  SELECT pg_catalog.array_agg(x ORDER BY x) INTO v_expected FROM pg_catalog.unnest(v_expected) AS x;
 
-  SELECT array_agg(s ORDER BY s) INTO v_actual
+  SELECT pg_catalog.array_agg(s ORDER BY s) INTO v_actual
   FROM (
-    SELECT concat_ws('|', coalesce(a.system_key, '-'),
+    SELECT pg_catalog.concat_ws('|', coalesce(a.system_key, '-'),
              CASE WHEN l.debit_minor > 0 AND l.credit_minor = 0 THEN 'D' WHEN l.credit_minor > 0 AND l.debit_minor = 0 THEN 'C' ELSE '?' END,
              greatest(l.debit_minor, l.credit_minor)::text, l.txn_currency, l.txn_amount_minor::text, l.fx_rate::text, l.fx_rate_source,
              extract(epoch FROM l.fx_rate_at)::text,
@@ -686,12 +710,12 @@ DECLARE
     "supplier_convert_base(bigint,numeric,integer,integer)": "38d765449e2844c1d84971f09277b5857bbddbf741b62a3d8b4c1d4e532e39cf",
     "supplier_ap_release(bigint,bigint,bigint,bigint)": "47eb15a7fc56e1871b5c521ca189782bfbafb8dca3e7bd0bb3adc417016236a9",
     "supplier_credit_remaining_carrying(bigint,bigint,bigint)": "941082099606f825336b0249a76658e65e592df6bbe06f3081576a5be0205144",
-    "purchase_ap_outstanding(uuid,uuid)": "c535660a65896a04a2021b74f1bf852f0b0662e6377360d2fd9c5ffccd0926b8",
+    "purchase_ap_outstanding(uuid,uuid)": "e595436066e320ee57cbae16e0da8cbdd391791753c46513228f8cd21279443a",
     "purchase_settlement_state(uuid,uuid)": "b236cda5fe48a2b00c818e0f88f8e9b8de9a3c5b61d04c5cf677e56960d7037b",
     "supplier_credit_note_consume(uuid,bigint,bigint)": "1754d8ac0581a8738c4d0e088671180e9b681ed7fb42575283b1c21d00b98c5b",
     "supplier_return_residue_bound()": "bad7df09dced23b2471c71426c27bb7e750a65e4511cce7255307ef1137574f5",
-    "purchase_residue_write_off_guard()": "2a956711b17c4b3d4db44101a818b7705cddf5bcef55be178e3320f2c8646a45",
-    "purchase_residue_write_off_value_complete()": "12af7c49c2329fd161fc6d681ff6ba629b263d6b4b28ab6aa36e66c9b43db51b"
+    "purchase_residue_write_off_guard()": "badf76c0475f6a96cedb5b707307424ebb98b758797d4828289b8b0df98ad1b9",
+    "purchase_residue_write_off_value_complete()": "3f75eac6e394c1a438c7887418a2430b4a1a6ca7471a22baf1ad3d288d5caff5"
   }';
 BEGIN
   -- The extension points' expected owner: the migrator, who owns this discovery.
@@ -729,14 +753,14 @@ BEGIN
     ) AS e(ord, tbl, tg, typ, deferred, fn)
     ORDER BY e.ord
   LOOP
-    v_fn := to_regprocedure('public.' || v_g.fn);
+    v_fn := pg_catalog.to_regprocedure('public.' || v_g.fn);
     IF v_g.tbl <> '-' THEN
       SELECT g.tgenabled::text AS enabled, g.tgtype::integer AS typ, g.tgfoid,
-             (g.tgqual IS NULL AND cardinality(g.tgattr::int2[]) = 0) AS plain,
+             (g.tgqual IS NULL AND pg_catalog.cardinality(g.tgattr::int2[]) = 0) AS plain,
              (g.tgconstraint <> 0 AND g.tgdeferrable AND g.tginitdeferred) AS deferred
         INTO v_tg
       FROM pg_trigger g
-      WHERE g.tgrelid = to_regclass('public.' || v_g.tbl) AND g.tgname = v_g.tg AND NOT g.tgisinternal;
+      WHERE g.tgrelid = pg_catalog.to_regclass('public.' || v_g.tbl) AND g.tgname = v_g.tg AND NOT g.tgisinternal;
       IF NOT FOUND THEN
         table_name := v_g.tbl; trigger_name := v_g.tg; missing := 'trigger_missing'; RETURN NEXT;
         CONTINUE;
@@ -748,7 +772,7 @@ BEGIN
         table_name := v_g.tbl; trigger_name := v_g.tg; missing := 'trigger_shape'; RETURN NEXT;
       END IF;
     END IF;
-    SELECT r.rolname::text AS owner, p.prosecdef, p.proconfig, encode(sha256(convert_to(p.prosrc, 'UTF8')), 'hex') AS digest
+    SELECT r.rolname::text AS owner, p.prosecdef, p.proconfig, pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(p.prosrc, 'UTF8')), 'hex') AS digest
       INTO v_p
     FROM pg_proc p JOIN pg_roles r ON r.oid = p.proowner
     WHERE p.oid = v_fn;

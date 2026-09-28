@@ -364,6 +364,49 @@ export function td18DefinerProblems(rows: readonly Td18DefinerRow[]): string[] {
   return problems;
 }
 
+/**
+ * Review I3 (0070 §5b): every SECURITY DEFINER routine outside the system
+ * schemas (extensions' own aside), whoever owns it, with its search_path
+ * settings.
+ */
+export const DEFINER_PATHS_QUERY = `SELECT n.nspname || '.' || p.proname || '(' || pg_get_function_identity_arguments(p.oid) || ')' AS f,
+         coalesce((SELECT array_agg(c ORDER BY c) FROM unnest(p.proconfig) AS c WHERE strpos(c, 'search_path=') = 1), ARRAY[]::text[]) AS paths
+    FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+   WHERE p.prosecdef
+     AND n.nspname NOT IN ('pg_catalog', 'information_schema') AND n.nspname NOT LIKE 'pg\\_%'
+     AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid = 'pg_proc'::regclass AND d.objid = p.oid AND d.deptype = 'e')
+   ORDER BY 1`;
+
+/** One SECURITY DEFINER routine and its search_path settings. */
+export type DefinerPathRow = { readonly f: string; readonly paths: string[] };
+
+/**
+ * Every definer whose path could be shadowed: it must set exactly one
+ * search_path, name pg_catalog, list pg_catalog before public when it names
+ * public, and name pg_temp LAST (an unnamed pg_temp is searched first for
+ * relations). An empty catalogue is itself a problem: the query read nothing.
+ */
+export function definerPathProblems(rows: readonly DefinerPathRow[]): string[] {
+  if (rows.length === 0) return ['no SECURITY DEFINER routine was read'];
+  const problems: string[] = [];
+  for (const r of rows) {
+    if (r.paths.length !== 1) {
+      problems.push(`${r.f} sets ${r.paths.length === 0 ? 'no search_path' : `${r.paths.length} search_path values`}`);
+      continue;
+    }
+    const entries = (r.paths[0] ?? '')
+      .slice('search_path='.length)
+      .split(',')
+      .map((e) => e.trim().replace(/^"(.*)"$/, '$1'));
+    const catalog = entries.indexOf('pg_catalog');
+    const pub = entries.indexOf('public');
+    if (catalog < 0) problems.push(`${r.f} does not name pg_catalog`);
+    else if (pub >= 0 && pub < catalog) problems.push(`${r.f} lists public before pg_catalog`);
+    if (entries.at(-1) !== 'pg_temp' || entries.indexOf('pg_temp') !== entries.length - 1) problems.push(`${r.f} does not name pg_temp last`);
+  }
+  return problems;
+}
+
 /** One upgrade of Case H: to `through` (every file on disk when null), applying exactly `expected`. */
 export interface UpgradeStep {
   readonly label: string;
@@ -1238,7 +1281,7 @@ async function checkCatalogueEquivalence(deployed: string, superuser: string): P
  * on BOTH builds. Before 0070 this section pinned the four as applier-owned.
  */
 async function checkApplierOwnedDefiners(deployed: string, superuser: string): Promise<Record<string, string[]>> {
-  section('10b. the SECURITY DEFINER routines: none owned by the applier, the TD-18 four owned alike on both builds');
+  section('10b. the SECURITY DEFINER routines: none owned by the applier, the TD-18 four owned alike, every path pinned, on both builds');
   const out: Record<string, string[]> = {};
   const builds: readonly (readonly [label: string, db: string, applier: string])[] = [
     ['the deployer-built database', deployed, DEPLOYER],
@@ -1260,6 +1303,14 @@ async function checkApplierOwnedDefiners(deployed: string, superuser: string): P
       `10b.${n + 3} ${label}: the TD-18 routines have their internal owners and the pinned path`,
       td18.length === 0,
       td18.length === 0 ? rows.map((r) => `${r.f} → ${r.owner}`).join('; ') : td18.join('; '),
+    );
+    const paths = await sql<DefinerPathRow>(ownerUrl(db), DEFINER_PATHS_QUERY);
+    const pathProblems = definerPathProblems(paths);
+    out[`${db}:paths`] = paths.map((r) => `${r.f} ${r.paths.join(';')}`);
+    record(
+      `10b.${n + 5} ${label}: every SECURITY DEFINER routine lists pg_catalog before public and pg_temp last`,
+      pathProblems.length === 0,
+      pathProblems.length === 0 ? `${paths.length} routines` : pathProblems.join('; '),
     );
   }
   return out;

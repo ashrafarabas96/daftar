@@ -447,9 +447,12 @@ const isTransfer = (k: string): boolean => k === 'transfer_in' || k === 'transfe
  * refused" below keeps the guard's refusal of this very shape observable.
  */
 const R_B1A_TRIGGER = 'journal_entries_inventory_account_domain';
+/** Phase 3 corrective (0071 R-B1c): the serial re-check of the same rule under the account domain lock. */
+const R_B1C_TRIGGER = 'journal_entries_inventory_account_domain_serial';
 
 async function disableInventoryAccountDomainGuard(c: Client): Promise<void> {
   await c.query(`ALTER TABLE journal_entries DISABLE TRIGGER ${R_B1A_TRIGGER}`);
+  await c.query(`ALTER TABLE journal_entries DISABLE TRIGGER ${R_B1C_TRIGGER}`);
 }
 
 /** The full H-5 composite for one scenario, in the caller's rolled-back transaction. */
@@ -611,6 +614,12 @@ describe('T-09 / T-11 — the vectors through R3, the journal and the GL (P:161,
         ).rows[0],
       ).tgenabled;
       expect(enabled, 'the R-B1a trigger is enabled in this transaction').toBe('O');
+      // With the R-B1a trigger alone disabled, the R-B1c serial re-check still refuses the same composite.
+      await c.query('SAVEPOINT r_b1c');
+      await c.query(`ALTER TABLE journal_entries DISABLE TRIGGER ${R_B1A_TRIGGER}`);
+      for (const v of posted) await postInventoryValue(c, v);
+      expectRefused(await atCommit(c), 'P0001', 'accounting.inventory_account_domain_owned', 'A: COMMIT-time checks with the R-B1c re-check on');
+      await c.query('ROLLBACK TO SAVEPOINT r_b1c');
       // The guard is deferred: every posting is accepted at its statement ...
       for (const v of posted) await postInventoryValue(c, v);
       // ... and the transaction would not COMMIT.

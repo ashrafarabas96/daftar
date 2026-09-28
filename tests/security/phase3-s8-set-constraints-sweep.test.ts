@@ -53,6 +53,9 @@ const REFUSES_EARLY: Readonly<Record<string, string>> = {
   inventory_adjustments_value_complete: 'inventory.source_value_mismatch',
   inventory_openings_value_complete: 'inventory.source_value_mismatch',
   journal_entries_inventory_account_domain: 'accounting.inventory_account_domain_owned',
+  // 0071 R-B1c: the serial re-check of R-B1a under the account domain lock. Forced early it sees no
+  // line of its entry yet and judges the entry as touching Inventory, so it refuses as R-B1a does.
+  journal_entries_inventory_account_domain_serial: 'accounting.inventory_account_domain_owned',
   journal_entries_inventory_adjustment_complete: 'accounting.inventory_entry_mismatch',
   journal_entries_inventory_opening_complete: 'accounting.inventory_entry_mismatch',
   journal_entries_manual_adjustment_complete: 'accounting.adjustment_detail_missing',
@@ -120,6 +123,8 @@ const JUDGES_COMPLETE: Readonly<Record<string, string>> = {
     '0071 R-B1b: judges the REVERSED entry’s committed lines, visible however early it fires (its own lines are a second witness); proved forced early, refusing and not over-refusing, in p3c-reversal-inventory-domain',
   supplier_returns_residue_bound:
     '0072 R-95: reads only its own return header (the AP it releases and the chain point before it, both written by the INSERT it fires on) and the frozen received purchase and currencies',
+  stock_movements_account_domain_lock:
+    '0071 R-B1c: judges and refuses nothing; it only takes the account domain lock SHARED, so forced early the session takes that lock earlier, its own lock order (0069 R-94); proved under forced checks in p3c-reversal-inventory-domain',
   purchase_residue_write_offs_value_complete:
     '0072 R-96: fires at the write-off INSERT, the routine’s only write, after every reducer it sums; a reducer written later in the transaction reads purchase_ap_outstanding, which counts the write-off (0072 §4), so it finds nothing outstanding',
 };
@@ -258,6 +263,7 @@ describe('the catalogue: every Phase 2/3 deferred guard is classified', () => {
     expect([...early, ...complete].sort(), 'every deferred guard is classified, and nothing else').toEqual(live);
     const proved = new Set([...Object.values(OP_KIND_EXPECTED).flat(), ...Object.values(ACCOUNTING_EXPECTED).flat(), ...DEFICIT_EXPECTED]);
     proved.add('journal_entries_inventory_account_domain');
+    proved.add('journal_entries_inventory_account_domain_serial');
     expect(
       early.filter((t) => !proved.has(t)),
       'every REFUSES_EARLY trigger is proved by a scenario below',
@@ -447,22 +453,24 @@ describe('forced early: the Phase 2 accounting commands', () => {
     const setup = await asOwner('SELECT 1', (c) => stockUp(c, biz, biz.w1, [{ variantId: biz.piece.variantId, qty: '2', unitCost: '5' }]));
     expect(setup.ok, 'the first movement').toBe(true);
     const before = await tableDigest(ownerPool(), tables, { businessId: biz.businessId });
-    const t = 'journal_entries_inventory_account_domain';
-    const cmd = manual(biz, 'inventory', 'opening_equity', 777n);
-    expectRefused(
-      await asApp(`SET CONSTRAINTS ${t} IMMEDIATE`, (c) => postAs(assertionFor(cmd, biz.userId), cmd, {}, c)),
-      P,
-      codeOf(t),
-      'manual Inventory line',
-    );
-    expectRefused(
-      await asOwner(`SET CONSTRAINTS ${t} IMMEDIATE`, (c) =>
-        postOpeningBalanceInTx(c, biz, day, [position('inventory', 'D', 4321n), position('cash', 'D', 100n)]),
-      ),
-      P,
-      codeOf(t),
-      'Inventory opening position',
-    );
+    // 0071 R-B1c adds the serial re-check: each of the two, forced early alone, refuses both.
+    for (const t of ['journal_entries_inventory_account_domain', 'journal_entries_inventory_account_domain_serial']) {
+      const cmd = manual(biz, 'inventory', 'opening_equity', 777n);
+      expectRefused(
+        await asApp(`SET CONSTRAINTS ${t} IMMEDIATE`, (c) => postAs(assertionFor(cmd, biz.userId), cmd, {}, c)),
+        P,
+        codeOf(t),
+        `manual Inventory line, ${t}`,
+      );
+      expectRefused(
+        await asOwner(`SET CONSTRAINTS ${t} IMMEDIATE`, (c) =>
+          postOpeningBalanceInTx(c, biz, day, [position('inventory', 'D', 4321n), position('cash', 'D', 100n)]),
+        ),
+        P,
+        codeOf(t),
+        `Inventory opening position, ${t}`,
+      );
+    }
     expect(changedTables(before, await tableDigest(ownerPool(), tables, { businessId: biz.businessId })), 'nothing written').toEqual([]);
   });
 });

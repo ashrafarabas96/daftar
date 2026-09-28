@@ -26,6 +26,8 @@ import { PURCHASE_RESIDUE_WRITE_OFF_SOURCE, settlementPostingCommand } from './s
 /** Everything the write-off binds beyond the header, read in ONE statement. */
 interface WriteOffState {
   future: boolean;
+  /** Review L1: dated before the purchase's last return with AP, payment or credit allocation. */
+  before_settlement: boolean;
   base_currency: string;
   base_exponent: number;
   txn_exponent: number;
@@ -61,7 +63,8 @@ function rethrowWriteOffRefusal(error: unknown): never {
  *    stored intent answers the stored write-off and another one is
  *    `purchase_residue.already_written_off` — BEFORE any state read;
  * 3. the routine's refusals in its order, over one snapshot: received
- *    (`purchase.state_invalid`), the dates, O = 0 (`nothing_outstanding`), O
+ *    (`purchase.state_invalid`), the dates (never before the purchase, nor
+ *    before its last AP release: `date_before_settlement`), O = 0 (`nothing_outstanding`), O
  *    converting to a base unit or more (`not_below_base_unit`: pay or
  *    allocate it), the stated residue not O (`amount_mismatch`, 409: it
  *    moved), no return that released AP (`settlement_inconsistent`,
@@ -134,6 +137,7 @@ export class PurchaseResidueWriteOffService {
     }
     if (writeOffDate < header.document_date) throw purchasingRefusal('purchase_residue.date_before_purchase');
     const state = await this.readState(m, purchaseId, header.warehouse_id, header.currency_code, writeOffDate);
+    if (state.before_settlement) throw purchasingRefusal('purchase_residue.date_before_settlement');
     if (state.future) throw purchasingRefusal('purchase_residue.date_in_future');
 
     // 4. The bound write-off.
@@ -227,6 +231,13 @@ export class PurchaseResidueWriteOffService {
       this.db,
       scope,
       `SELECT ($2::date > (now() AT TIME ZONE b.timezone)::date) AS future,
+              coalesce($2::date < greatest(
+                (SELECT max(r.document_date) FROM supplier_returns r WHERE r.business_id = $1 AND r.purchase_id = $3 AND r.ap_txn_minor > 0),
+                (SELECT max(sp.payment_date) FROM supplier_payment_allocations a
+                   JOIN supplier_payments sp ON sp.business_id = a.business_id AND sp.id = a.payment_id
+                  WHERE a.business_id = $1 AND a.purchase_id = $3),
+                (SELECT max(c.allocation_date) FROM supplier_credit_allocations c WHERE c.business_id = $1 AND c.purchase_id = $3)), false)
+                AS before_settlement,
               b.base_currency::text AS base_currency, bc.minor_units AS base_exponent, tc.minor_units AS txn_exponent,
               purchase_ap_outstanding($1, $3)::text AS outstanding,
               EXISTS (SELECT 1 FROM supplier_returns r WHERE r.business_id = $1 AND r.purchase_id = $3 AND r.ap_txn_minor > 0) AS returned,

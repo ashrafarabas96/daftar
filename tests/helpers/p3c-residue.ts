@@ -55,11 +55,15 @@ export async function historicalReturnInTx(
   biz: S3Business,
   purchaseId: string,
   lines: readonly { readonly purchaseLineId: string; readonly qty: string }[],
-  o: { readonly warehouseId?: string } = {},
+  o: { readonly warehouseId?: string; readonly documentDate?: string } = {},
 ): Promise<string> {
   const installed = await residueBoundInstalled(c);
   if (installed) await c.query(`ALTER TABLE supplier_returns DISABLE TRIGGER ${RESIDUE_BOUND_TRIGGER}`);
-  const prepared = await prepareReturn(c, biz, purchaseId, { ...(o.warehouseId === undefined ? {} : { warehouseId: o.warehouseId }), lines: [...lines] });
+  const prepared = await prepareReturn(c, biz, purchaseId, {
+    ...(o.warehouseId === undefined ? {} : { warehouseId: o.warehouseId }),
+    ...(o.documentDate === undefined ? {} : { documentDate: o.documentDate }),
+    lines: [...lines],
+  });
   await runReturn(c, biz, prepared);
   await c.query('SET CONSTRAINTS ALL IMMEDIATE');
   if (installed) await c.query(`ALTER TABLE supplier_returns ENABLE TRIGGER ${RESIDUE_BOUND_TRIGGER}`);
@@ -71,12 +75,13 @@ export async function historicalReturnInTx(
  * One return of `qty` of the purchase's line `lineIndex`, committed with the
  * frozen S5 behaviour (0066 without 0072's prevention). Returns the return id.
  */
-export async function historicalReturn(biz: S3Business, p: HttpPurchase, lineIndex: number, qty: string): Promise<string> {
+export async function historicalReturn(biz: S3Business, p: HttpPurchase, lineIndex: number, qty: string, documentDate?: string): Promise<string> {
   const c = await ownerClient();
   try {
     await c.query('BEGIN');
     const returnId = await historicalReturnInTx(c, biz, p.purchaseId, [{ purchaseLineId: must(p.lineIds[lineIndex], `line ${lineIndex}`), qty }], {
       warehouseId: p.warehouseId,
+      ...(documentDate === undefined ? {} : { documentDate }),
     });
     await c.query('COMMIT');
     return returnId;

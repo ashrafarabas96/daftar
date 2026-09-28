@@ -60,6 +60,19 @@
 --      directive's own question — the applier owns NO SECURITY DEFINER
 --      routine in `public` any more — so the owner is the same whether a
 --      superuser or `daftar_migrator` applied the history.
+--   5b. Every OTHER SECURITY DEFINER routine in `public` gets the same
+--      pinned path (review I3). Thirteen older definers did not put pg_temp
+--      last: the seven provisioning commands of 0006-0026 pin
+--      `public, pg_catalog` (pg_temp is then searched FIRST for relations),
+--      and six accounting routines of 0040-0047 pin
+--      `public, pg_catalog, pg_temp` (public before pg_catalog). Only the
+--      path changes (ALTER FUNCTION … SET search_path; bodies, owners and
+--      grants untouched), each by a principal holding its owner's
+--      privileges. Every one already carried a SET clause, so no function
+--      loses inlining; no RLS helper is a definer. The one name `public`
+--      and pg_catalog share is gen_random_uuid() (pgcrypto and the core
+--      function, the same behaviour), so pg_catalog first changes nothing a
+--      body calls. The discovered set must be exactly those thirteen.
 --
 -- ── Row security: the 0056 internal-principal admission ─────────────────
 --
@@ -155,8 +168,8 @@ $$;
 CREATE OR REPLACE FUNCTION catalog_identifiers_sync() RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $$
 DECLARE
-  v_new        JSONB := CASE WHEN TG_OP = 'DELETE' THEN NULL ELSE to_jsonb(NEW) END;
-  v_old        JSONB := CASE WHEN TG_OP = 'INSERT' THEN NULL ELSE to_jsonb(OLD) END;
+  v_new        JSONB := CASE WHEN TG_OP = 'DELETE' THEN NULL ELSE pg_catalog.to_jsonb(NEW) END;
+  v_old        JSONB := CASE WHEN TG_OP = 'INSERT' THEN NULL ELSE pg_catalog.to_jsonb(OLD) END;
   v_owner_type TEXT := CASE WHEN TG_TABLE_NAME = 'products' THEN 'product' ELSE 'variant' END;
   v_owner_id   UUID := COALESCE((v_new ->> 'id')::uuid, (v_old ->> 'id')::uuid);
   v_business   UUID := COALESCE((v_new ->> 'business_id')::uuid, (v_old ->> 'business_id')::uuid);
@@ -170,11 +183,11 @@ BEGIN
   DELETE FROM public.catalog_identifiers
    WHERE business_id = v_business AND owner_type = v_owner_type AND owner_id = v_owner_id;
   IF v_live THEN
-    IF v_sku IS NOT NULL AND btrim(v_sku) <> '' THEN
+    IF v_sku IS NOT NULL AND pg_catalog.btrim(v_sku) <> '' THEN
       INSERT INTO public.catalog_identifiers (business_id, kind, value_norm, owner_type, owner_id, product_id, variant_id)
       VALUES (v_business, 'sku', public.catalog_identifier_norm('sku', v_sku), v_owner_type, v_owner_id, v_product, v_variant);
     END IF;
-    IF v_barcode IS NOT NULL AND btrim(v_barcode) <> '' THEN
+    IF v_barcode IS NOT NULL AND pg_catalog.btrim(v_barcode) <> '' THEN
       INSERT INTO public.catalog_identifiers (business_id, kind, value_norm, owner_type, owner_id, product_id, variant_id)
       VALUES (v_business, 'barcode', public.catalog_identifier_norm('barcode', v_barcode), v_owner_type, v_owner_id, v_product, v_variant);
     END IF;
@@ -201,7 +214,7 @@ BEGIN
   IF p_kid IS NULL OR p_kid !~ '^[A-Za-z0-9_-]{1,32}$' THEN
     RAISE EXCEPTION 'PROV:INVALID_KEY:the provisioning assertion key id is malformed';
   END IF;
-  IF p_secret IS NULL OR octet_length(p_secret) < 32 THEN
+  IF p_secret IS NULL OR pg_catalog.octet_length(p_secret) < 32 THEN
     RAISE EXCEPTION 'PROV:INVALID_KEY:provisioning assertion key must be at least 32 bytes';
   END IF;
 
@@ -243,12 +256,12 @@ DECLARE
   v_jti      UUID;
   v_xact     XID8;
 BEGIN
-  v_raw := current_setting('app.provisioning_assertion', true);
+  v_raw := pg_catalog.current_setting('app.provisioning_assertion', true);
   IF v_raw IS NULL OR v_raw = '' THEN
     RAISE EXCEPTION 'PROV:FORBIDDEN:Provisioning requires a server-minted assertion';
   END IF;
-  v_parts := string_to_array(v_raw, '.');
-  IF array_length(v_parts, 1) <> 7 OR v_parts[1] <> 'v1' THEN
+  v_parts := pg_catalog.string_to_array(v_raw, '.');
+  IF pg_catalog.array_length(v_parts, 1) <> 7 OR v_parts[1] <> 'v1' THEN
     RAISE EXCEPTION 'PROV:FORBIDDEN:Provisioning assertion is malformed';
   END IF;
 
@@ -258,8 +271,8 @@ BEGIN
   END IF;
 
   -- Signature over every claim (version, kid, actor, kind, exp, jti).
-  v_expected := encode(public.hmac(convert_to(array_to_string(v_parts[1:6], '.'), 'UTF8'), v_secret, 'sha256'), 'hex');
-  IF length(v_parts[7]) <> 64 OR v_expected <> lower(v_parts[7]) THEN
+  v_expected := pg_catalog.encode(public.hmac(pg_catalog.convert_to(pg_catalog.array_to_string(v_parts[1:6], '.'), 'UTF8'), v_secret, 'sha256'), 'hex');
+  IF pg_catalog.length(v_parts[7]) <> 64 OR v_expected <> pg_catalog.lower(v_parts[7]) THEN
     RAISE EXCEPTION 'PROV:FORBIDDEN:Provisioning assertion signature is invalid';
   END IF;
 
@@ -271,7 +284,7 @@ BEGIN
     RAISE EXCEPTION 'PROV:FORBIDDEN:Provisioning assertion claims are malformed';
   END;
 
-  IF v_exp <= extract(epoch FROM now())::bigint THEN
+  IF v_exp <= extract(epoch FROM pg_catalog.now())::bigint THEN
     RAISE EXCEPTION 'PROV:FORBIDDEN:Provisioning assertion has expired';
   END IF;
   IF NOT (v_parts[4] = ANY (p_allowed_kinds)) THEN
@@ -279,16 +292,16 @@ BEGIN
   END IF;
 
   -- Single use: the jti belongs to the first transaction that presents it.
-  INSERT INTO public.provisioning_assertion_uses (jti, xact) VALUES (v_jti, pg_current_xact_id())
+  INSERT INTO public.provisioning_assertion_uses (jti, xact) VALUES (v_jti, pg_catalog.pg_current_xact_id())
   ON CONFLICT (jti) DO NOTHING;
   SELECT u.xact INTO v_xact FROM public.provisioning_assertion_uses u WHERE u.jti = v_jti;
-  IF v_xact <> pg_current_xact_id() THEN
+  IF v_xact <> pg_catalog.pg_current_xact_id() THEN
     RAISE EXCEPTION 'PROV:FORBIDDEN:Provisioning assertion was already used';
   END IF;
   -- Opportunistic hygiene: expired jtis are useless after the longest TTL.
   -- TD-13 (P3-S3): never make a consumer wait on another's row locks.
-  IF pg_try_advisory_xact_lock(hashtext('daftar.provisioning_assertion_uses'), hashtext('hygiene')) THEN
-    DELETE FROM public.provisioning_assertion_uses WHERE used_at < now() - interval '1 hour';
+  IF pg_catalog.pg_try_advisory_xact_lock(pg_catalog.hashtext('daftar.provisioning_assertion_uses'), pg_catalog.hashtext('hygiene')) THEN
+    DELETE FROM public.provisioning_assertion_uses WHERE used_at < pg_catalog.now() - interval '1 hour';
   END IF;
 
   RETURN v_actor;
@@ -323,6 +336,62 @@ ALTER FUNCTION provision_actor(TEXT[]) OWNER TO daftar_provisioning_internal;
 ALTER FUNCTION provision_assertion_key_install(TEXT, BYTEA) OWNER TO daftar_provisioning_internal;
 ALTER FUNCTION provision_assertion_key_retire(TEXT) OWNER TO daftar_provisioning_internal;
 REVOKE CREATE ON SCHEMA public FROM daftar_provisioning_internal;
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- 5b. Every other SECURITY DEFINER routine in public: the same pinned path
+--     (review I3). One DO block, so the set is discovered and altered
+--     atomically; the accounting routines are altered AS their owner (the
+--     deployer's membership there is INHERIT FALSE, SET TRUE), the platform
+--     commands by the deployer's inherited platform membership.
+-- ─────────────────────────────────────────────────────────────────────────
+DO $$
+DECLARE
+  r        RECORD;
+  v_found  TEXT[];
+  c_expect CONSTANT TEXT[] := ARRAY[
+    'accounting_assert_entry_valid(uuid,uuid):daftar_accounting_internal',
+    'accounting_seed_chart(uuid):daftar_accounting_internal',
+    'accounting_seed_chart_trg():daftar_accounting_internal',
+    'accounting_validate_entry():daftar_accounting_internal',
+    'accounting_validate_entry_of_line():daftar_accounting_internal',
+    'businesses_base_currency_lock():daftar_accounting_internal',
+    'provision_accept_invitation(text):daftar_platform',
+    'provision_create_business(uuid,uuid,text,text,text,text,text,text,text[],text,jsonb,text):daftar_platform',
+    'provision_create_tenant(uuid):daftar_platform',
+    'provision_expire_invitation(uuid):daftar_platform',
+    'provision_peek_invitation(text):daftar_platform',
+    'provision_persist_operation(text,text,text,uuid,uuid):daftar_platform',
+    'provision_replay_operation(text):daftar_platform'];
+BEGIN
+  SELECT pg_catalog.array_agg(pg_catalog.format('%s(%s):%s', p.proname, pg_catalog.replace(pg_catalog.oidvectortypes(p.proargtypes), ', ', ','),
+                                                pg_catalog.pg_get_userbyid(p.proowner))
+                              ORDER BY p.proname COLLATE "C")
+    INTO v_found
+    FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace AND n.nspname = 'public'
+   WHERE p.prosecdef
+     AND p.proconfig IS DISTINCT FROM ARRAY['search_path=pg_catalog, public, pg_temp']
+     AND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_depend d WHERE d.classid = 'pg_catalog.pg_proc'::pg_catalog.regclass
+                       AND d.objid = p.oid AND d.deptype = 'e');
+  IF v_found IS DISTINCT FROM c_expect THEN
+    RAISE EXCEPTION 'authority.migration_precondition: the SECURITY DEFINER routines without the pinned path are %, not the thirteen 0070 re-pins', v_found;
+  END IF;
+  FOR r IN
+    SELECT p.oid::pg_catalog.regprocedure AS fn, pg_catalog.pg_get_userbyid(p.proowner) AS owner
+      FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace AND n.nspname = 'public'
+     WHERE p.prosecdef
+       AND p.proconfig IS DISTINCT FROM ARRAY['search_path=pg_catalog, public, pg_temp']
+       AND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_depend d WHERE d.classid = 'pg_catalog.pg_proc'::pg_catalog.regclass
+                         AND d.objid = p.oid AND d.deptype = 'e')
+  LOOP
+    IF r.owner = 'daftar_accounting_internal' THEN
+      SET LOCAL ROLE daftar_accounting_internal;
+      EXECUTE pg_catalog.format('ALTER FUNCTION %s SET search_path = pg_catalog, public, pg_temp', r.fn);
+      RESET ROLE;
+    ELSE
+      EXECUTE pg_catalog.format('ALTER FUNCTION %s SET search_path = pg_catalog, public, pg_temp', r.fn);
+    END IF;
+  END LOOP;
+END $$;
 
 -- ─────────────────────────────────────────────────────────────────────────
 -- 6. 0070-E: refuse to commit unless the end state is exactly right.
@@ -461,5 +530,16 @@ BEGIN
     AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.objid = p.oid AND d.deptype = 'e');
   IF v_actual IS NOT NULL THEN
     RAISE EXCEPTION 'authority.definer_invalid: the applier % still owns SECURITY DEFINER routine(s): %', current_user, v_actual;
+  END IF;
+
+  -- (7) Review I3: EVERY SECURITY DEFINER routine in public (extensions'
+  --     own aside) pins exactly pg_catalog, public, pg_temp — pg_catalog
+  --     before public, pg_temp named and last — and no other setting.
+  SELECT array_agg(p.oid::regprocedure::text || ' ' || coalesce(p.proconfig::text, 'no path') ORDER BY 1) INTO v_actual
+  FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace AND n.nspname = 'public'
+  WHERE p.prosecdef AND p.proconfig IS DISTINCT FROM c_pinned
+    AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid = 'pg_proc'::regclass AND d.objid = p.oid AND d.deptype = 'e');
+  IF v_actual IS NOT NULL THEN
+    RAISE EXCEPTION 'authority.definer_invalid: SECURITY DEFINER routine(s) without the pinned path pg_catalog, public, pg_temp: %', v_actual;
   END IF;
 END $$;

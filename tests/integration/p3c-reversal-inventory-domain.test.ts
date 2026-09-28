@@ -54,7 +54,7 @@ import {
   type S3Business,
   type S3World,
 } from '../helpers/inventory-commands';
-import { domainReversalFingerprint, reverseInTx, stockUp } from '../helpers/inventory-posting';
+import { domainReversalFingerprint, position, postOpeningBalanceInTx, reverseInTx, stockUp } from '../helpers/inventory-posting';
 import { resultOf, runChecks, statuses } from '../helpers/inventory-reconciliation';
 import { prepareReversal, receivedPurchase, runReversal } from '../helpers/purchase-returns';
 import { createScratchDb, type ScratchDb } from '../helpers/scratch-db';
@@ -570,6 +570,307 @@ describe('I-1 over HTTP: 409 ACCOUNTING_REFUSED with details.code', () => {
     const ok = await reverseHttp(cash);
     expect([200, 201], JSON.stringify(ok.body)).toContain(ok.status);
     expect(await recon(A)).toEqual(ALL_OK);
+  });
+});
+
+// ── concurrency (directive §4, "concurrency safety") ──────────────────────
+
+/** A transaction held open on its own connection, with its backend pid. */
+interface Open {
+  readonly c: Client;
+  readonly pid: number;
+}
+
+async function begin(url: string): Promise<Open> {
+  const c = new Client({ connectionString: url });
+  await c.connect();
+  const pid = must((await c.query<{ pid: number }>('SELECT pg_backend_pid() AS pid')).rows[0]).pid;
+  await c.query('BEGIN');
+  return { c, pid };
+}
+
+async function end(t: Open): Promise<void> {
+  await t.c.query('ROLLBACK').catch(() => undefined);
+  await t.c.end();
+}
+
+/** A statement that either completes or is observed waiting on a lock. */
+interface Issued {
+  readonly state: 'done' | 'blocked';
+  readonly wait: string | null;
+  readonly result: Promise<Outcome<unknown>>;
+}
+
+/**
+ * Run the transaction's deferred checks now (`SET CONSTRAINTS ALL IMMEDIATE`,
+ * the barrier: every check runs before either side commits) and report
+ * whether they completed or are waiting on a lock, read from pg_stat_activity.
+ */
+async function checkNow(t: Open): Promise<Issued> {
+  let done = false;
+  const result = settle(() => t.c.query('SET CONSTRAINTS ALL IMMEDIATE')).finally(() => {
+    done = true;
+  });
+  for (;;) {
+    if (done) return { state: 'done', wait: null, result };
+    const w = await ownerPool().query<{ e: string }>(`SELECT wait_event AS e FROM pg_stat_activity WHERE pid = $1 AND wait_event_type = 'Lock'`, [t.pid]);
+    const [row] = w.rows;
+    if (row !== undefined) return { state: 'blocked', wait: row.e, result };
+    await new Promise<void>((resolve) => setTimeout(resolve, 5));
+  }
+}
+
+/** COMMIT; a transaction a check already aborted answers ROLLBACK, which is reported as not committed. */
+async function commit(t: Open): Promise<Outcome<boolean>> {
+  return settle(async () => (await t.c.query('COMMIT')).command === 'COMMIT');
+}
+
+/** The business's first stock movement, open on its own connection, its statement done. */
+async function movementOpen(biz: S3Business): Promise<Open> {
+  const t = await begin(dbUrl);
+  const r = await stockUp(t.c, biz, biz.w1, [{ variantId: biz.piece.variantId, qty: '2', unitCost: '5' }]);
+  expect(r.entry?.created).toBe(true);
+  return t;
+}
+
+/** The generic reversal of `p`, open as daftar_app, its statement done. */
+async function reversalOpen(biz: S3Business, p: Posted): Promise<Open> {
+  const t = await begin(appDbUrl);
+  expectAccepted(await settle(() => postReversalAs(reverseAssertion(biz, p), p.entryId, day, 'I-1 race', randomUUID(), t.c)), 'the reversal statement');
+  return t;
+}
+
+/** A manual Inventory line (R-B1a), open as daftar_app, its statement done. */
+async function manualOpen(biz: S3Business): Promise<Open> {
+  const t = await begin(appDbUrl);
+  const cmd = manual(biz, 'inventory', 'opening_equity', 600n);
+  expectAccepted(await settle(() => postAs(accountingAssertionFor(cmd, biz.userId), cmd, {}, t.c)), 'the manual line statement');
+  return t;
+}
+
+/** The accounting side's final outcome: refused at its check or at COMMIT, or committed. */
+async function finalOutcome(check: Issued, t: Open): Promise<Outcome<unknown>> {
+  const o = await check.result;
+  if (!o.ok) return o;
+  const c = await commit(t);
+  if (!c.ok) return c;
+  expect(c.value, 'a check that passed commits').toBe(true);
+  return c;
+}
+
+const noDeadlock = (o: Outcome<unknown>, why: string): void => {
+  if (!o.ok) expect(o.sqlstate, `${why}: never a deadlock (40P01) — ${o.message}`).not.toBe('40P01');
+};
+
+describe('I-1 concurrency: a generic reversal and the business’s first stock movement, on two connections', () => {
+  it('movement checked first: the reversal’s check waits for it and, once it commits, sees it — refused; R-INV-01..05 stay ok', async () => {
+    const { A } = await world();
+    const [plus] = await offsettingPair(A);
+    const mv = await movementOpen(A);
+    const rv = await reversalOpen(A, plus);
+    try {
+      expectAccepted(await (await checkNow(mv)).result, 'the movement’s checks');
+      const rvCheck = await checkNow(rv);
+      expect({ state: rvCheck.state, wait: rvCheck.wait }, 'the reversal’s check waits on the domain lock the movement holds').toEqual({
+        state: 'blocked',
+        wait: 'advisory',
+      });
+      const mvCommit = await commit(mv);
+      expect(expectAccepted(mvCommit, 'the movement commits'), 'the movement committed').toBe(true);
+      const o = await finalOutcome(rvCheck, rv);
+      noDeadlock(o, 'reversal');
+      expectRefused(o, 'P0001', CODE, 'the reversal, judged after the first movement committed');
+    } finally {
+      await end(rv);
+      await end(mv);
+    }
+    expect(await recon(A)).toEqual(ALL_OK);
+  });
+
+  it('reversal checked first: the movement’s check waits until the reversal has committed, so the movement can never commit first; both commit (the serial order “reversal, then first movement”, pre-foundation residue), and the 0069 correction path makes R-INV-01 ok', async () => {
+    const { A } = await world();
+    const [plus, minus] = await offsettingPair(A);
+    const rv = await reversalOpen(A, plus);
+    const mv = await movementOpen(A);
+    try {
+      expectAccepted(await (await checkNow(rv)).result, 'the reversal’s check (no movement committed)');
+      const mvCheck = await checkNow(mv);
+      if (mvCheck.state === 'done') {
+        // Nothing orders them: the movement can commit first — and the
+        // reversal, committing after it, would have to be refused.
+        expect(expectAccepted(await commit(mv), 'the movement commits first'), 'the movement committed').toBe(true);
+        const o = await commit(rv);
+        noDeadlock(o, 'reversal');
+        expectRefused(o, 'P0001', CODE, 'the reversal committed after the first movement');
+        return;
+      }
+      expect(mvCheck.wait, 'the movement waits on the domain lock the reversal holds').toBe('advisory');
+      expect(expectAccepted(await commit(rv), 'the reversal commits'), 'the reversal committed').toBe(true);
+      const o = await finalOutcome(mvCheck, mv);
+      noDeadlock(o, 'movement');
+      expectAccepted(o, 'the movement commits after the reversal');
+    } finally {
+      await end(mv);
+      await end(rv);
+    }
+    expect((await recon(A))['R-INV-01'], 'pre-foundation residue, reported').toBe('discrepancy');
+    expectAccepted(await reverse(A, minus), 'the correction path: the other entry reversed');
+    expect(await recon(A)).toEqual(ALL_OK);
+  });
+
+  it('no check forced: twenty rounds of the two commands racing to COMMIT never deadlock, and every outcome is a serial one', async () => {
+    for (let round = 0; round < 20; round += 1) {
+      const { A } = await world();
+      const [plus] = await offsettingPair(A);
+      const mv = await movementOpen(A);
+      const rv = await reversalOpen(A, plus);
+      try {
+        const [m, r] = await Promise.all([commit(mv), commit(rv)]);
+        noDeadlock(m, `round ${round} movement`);
+        noDeadlock(r, `round ${round} reversal`);
+        expect(expectAccepted(m, `round ${round}: the movement is never refused`)).toBe(true);
+        const status = (await recon(A))['R-INV-01'];
+        if (r.ok) expect(status, `round ${round}: admitted only as “reversal first” (residue)`).toBe('discrepancy');
+        else {
+          expectRefused(r, 'P0001', CODE, `round ${round}`);
+          expect(status, `round ${round}: refused, reconciled`).toBe('ok');
+        }
+      } finally {
+        await end(mv);
+        await end(rv);
+      }
+    }
+  }, 120_000);
+});
+
+/** A business with financial history but no Inventory line and no movement (its first posting is behind it, so postings hold it FOR SHARE). */
+async function startedWorld(): Promise<S3Business> {
+  const { A } = await world();
+  await post(manual(A, 'cash', 'opening_equity', 100n), A);
+  return A;
+}
+
+describe('R-B1a concurrency: a manual Inventory line and the business’s first stock movement, on two connections', () => {
+  it('movement checked first: the manual line’s check waits for it and, once it commits, sees it — refused; R-INV-01..05 stay ok', async () => {
+    const A = await startedWorld();
+    const mv = await movementOpen(A);
+    const ml = await manualOpen(A);
+    try {
+      expectAccepted(await (await checkNow(mv)).result, 'the movement’s checks');
+      const mlCheck = await checkNow(ml);
+      expect({ state: mlCheck.state, wait: mlCheck.wait }, 'the manual line’s check waits on the domain lock the movement holds').toEqual({
+        state: 'blocked',
+        wait: 'advisory',
+      });
+      expect(expectAccepted(await commit(mv), 'the movement commits'), 'the movement committed').toBe(true);
+      const o = await finalOutcome(mlCheck, ml);
+      noDeadlock(o, 'manual line');
+      expectRefused(o, 'P0001', CODE, 'the manual Inventory line, judged after the first movement committed');
+    } finally {
+      await end(ml);
+      await end(mv);
+    }
+    expect(await recon(A)).toEqual(ALL_OK);
+  });
+
+  it('manual line checked first: the movement’s check waits until the line has committed; both commit (pre-foundation residue, R-93)', async () => {
+    const A = await startedWorld();
+    const ml = await manualOpen(A);
+    const mv = await movementOpen(A);
+    try {
+      expectAccepted(await (await checkNow(ml)).result, 'the manual line’s check (no movement committed)');
+      const mvCheck = await checkNow(mv);
+      if (mvCheck.state === 'done') {
+        expect(expectAccepted(await commit(mv), 'the movement commits first'), 'the movement committed').toBe(true);
+        const o = await commit(ml);
+        noDeadlock(o, 'manual line');
+        expectRefused(o, 'P0001', CODE, 'the manual line committed after the first movement');
+        return;
+      }
+      expect(mvCheck.wait, 'the movement waits on the domain lock the manual line holds').toBe('advisory');
+      expect(expectAccepted(await commit(ml), 'the manual line commits'), 'the manual line committed').toBe(true);
+      const o = await finalOutcome(mvCheck, mv);
+      noDeadlock(o, 'movement');
+      expectAccepted(o, 'the movement commits after the manual line');
+    } finally {
+      await end(mv);
+      await end(ml);
+    }
+    expect((await recon(A))['R-INV-01'], 'pre-foundation residue, reported').toBe('discrepancy');
+  });
+
+  it('an opening balance with an Inventory position racing the first movement: ten rounds, each committing as soon as its statement is done, never deadlock (the 0047 business lock is taken in the body, the domain lock only at the checks)', async () => {
+    for (let round = 0; round < 10; round += 1) {
+      const { A } = await world();
+      const ob = await begin(dbUrl);
+      const mv = await begin(dbUrl);
+      try {
+        const obRun = settle(() => postOpeningBalanceInTx(ob.c, A, day, [position('inventory', 'D', 800n), position('accounts_payable', 'C', 800n)])).then(
+          (o): Promise<Outcome<unknown>> => (o.ok ? commit(ob) : Promise.resolve(o)),
+        );
+        const mvRun = settle(() => stockUp(mv.c, A, A.w1, [{ variantId: A.piece.variantId, qty: '2', unitCost: '5' }])).then(
+          (o): Promise<Outcome<unknown>> => (o.ok ? commit(mv) : Promise.resolve(o)),
+        );
+        const [o, m] = await Promise.all([obRun, mvRun]);
+        noDeadlock(o, `round ${round} opening balance`);
+        noDeadlock(m, `round ${round} movement`);
+        expectAccepted(m, `round ${round}: the movement is never refused`);
+        if (!o.ok) expectRefused(o, 'P0001', CODE, `round ${round}: the opening balance, after the first movement`);
+      } finally {
+        await end(ob);
+        await end(mv);
+      }
+    }
+  }, 120_000);
+});
+
+/**
+ * Review L2 is a READ COMMITTED read skew INSIDE one trigger call: the GL
+ * figure in one statement and the stock value in the next could straddle a
+ * purchase that commits between them. No test can place a commit between two
+ * statements of a trigger body deterministically (there is no wait point
+ * there to hold it on), so the fix is pinned structurally: after the domain
+ * lock, ONE statement reads the stock ledger's existence, both value
+ * comparisons and the GL Inventory figure, and the two helpers it calls are
+ * STABLE (they run in that statement's snapshot, not one of their own).
+ */
+describe('I-1 review L2: the guard reads the GL figure and the stock value in ONE statement, after the lock', () => {
+  const src = async (fn: string): Promise<string> =>
+    must((await ownerPool().query<{ src: string }>(`SELECT prosrc AS src FROM pg_proc WHERE oid = $1::regprocedure`, [fn])).rows[0], fn).src;
+
+  it('accounting_inventory_reversal_domain_guard: lock, then a single SELECT of has_stock_movements, both stock_value_equals and the GL sum', async () => {
+    const body = await src('accounting_inventory_reversal_domain_guard()');
+    expect(body).not.toMatch(/v_gl/);
+    const lock = body.indexOf("pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtext('daftar.inventory_account_domain')");
+    const read = body.search(
+      /SELECT public\.inventory_business_has_stock_movements\(NEW\.business_id\),\s+public\.inventory_business_stock_value_equals\(NEW\.business_id, g\.before\),\s+public\.inventory_business_stock_value_equals\(NEW\.business_id, g\.before \+ v_effect\)\s+INTO v_moved, v_was, v_will\s+FROM \(SELECT coalesce\(pg_catalog\.sum\([^;]*FROM public\.journal_lines l[^;]*a\.system_key = 'inventory'\) g;/,
+    );
+    expect(lock, 'the lock').toBeGreaterThan(0);
+    expect(read, 'the single statement').toBeGreaterThan(lock);
+    // Nothing else reads the stock ledger: each helper is named exactly where the one statement names it.
+    expect(body.split('inventory_business_has_stock_movements').length - 1).toBe(1);
+    expect(body.split('inventory_business_stock_value_equals').length - 1).toBe(2);
+    expect(body.split('pg_advisory_xact_lock').length - 1).toBe(1);
+  });
+
+  it('accounting_inventory_account_domain_serial_guard: the lock precedes its only stock-ledger read', async () => {
+    const body = await src('accounting_inventory_account_domain_serial_guard()');
+    const lock = body.indexOf("pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtext('daftar.inventory_account_domain')");
+    expect(lock).toBeGreaterThan(0);
+    expect(body.indexOf('inventory_business_has_stock_movements')).toBeGreaterThan(lock);
+    expect(body.split('inventory_business_has_stock_movements').length - 1).toBe(1);
+  });
+
+  it('the two helpers are STABLE, so they read the calling statement’s snapshot', async () => {
+    const r = await ownerPool().query<{ f: string; v: string }>(
+      `SELECT p.oid::regprocedure::text AS f, p.provolatile::text AS v FROM pg_proc p
+        WHERE p.oid IN ('inventory_business_has_stock_movements(uuid)'::regprocedure, 'inventory_business_stock_value_equals(uuid,numeric)'::regprocedure)
+        ORDER BY 1`,
+    );
+    expect(r.rows).toEqual([
+      { f: 'inventory_business_has_stock_movements(uuid)', v: 's' },
+      { f: 'inventory_business_stock_value_equals(uuid,numeric)', v: 's' },
+    ]);
   });
 });
 
