@@ -25,7 +25,7 @@ import {
   type PurchaseReturnOptionsDto,
 } from '@/lib/phase3-api';
 import { SAVED_REFRESH_KEY, refusalKey, withConflictRetry } from '@/lib/phase3-errors';
-import { localDateIso, useFormDocumentId } from '@/lib/phase3-format';
+import { localDateIso } from '@/lib/phase3-format';
 import { PageStateView, type PageStatus } from '@/views/common/feedback';
 import { PurchaseDetailView } from '@/views/purchases/PurchaseDetailView';
 import { purchaseDetailActions } from '@/views/purchases/detail-actions';
@@ -60,8 +60,6 @@ export default function PurchaseDetailPage({ params }: { params: Promise<{ local
   const [undone, setUndone] = useState<PurchaseReversalResultDto | null>(null);
   const [leftover, setLeftover] = useState<UndoReceiptForm>(CLOSED_FORM);
   const [leftoverClosed, setLeftoverClosed] = useState<PurchaseResidueWriteOffResultDto | null>(null);
-  // One idempotency key per confirmation, reused if the same close is sent again.
-  const [leftoverKey, renewLeftoverKey] = useFormDocumentId();
   const [errorKey, setErrorKey] = useState<string | null>(null);
 
   const load = useCallback(async (): Promise<Loaded | null> => {
@@ -174,14 +172,13 @@ export default function PurchaseDetailPage({ params }: { params: Promise<{ local
     setLeftover({ ...leftover, busy: true });
     setErrorKey(null);
     try {
-      setLeftoverClosed(await closePurchaseLeftover(purchaseId, { writeOffDate: localDateIso(), residueAmountMinor: residue, reason }, leftoverKey));
+      setLeftoverClosed(await closePurchaseLeftover(purchaseId, { writeOffDate: localDateIso(), residueAmountMinor: residue, reason }));
     } catch (error) {
       setErrorKey(refusalKey(error));
       setLeftover((f) => ({ ...f, busy: false }));
       return;
     }
     setLeftover(CLOSED_FORM);
-    renewLeftoverKey();
     // The leftover is closed; a failed re-read must not say otherwise (m-3).
     try {
       const fresh = await load();

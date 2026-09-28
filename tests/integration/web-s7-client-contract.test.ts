@@ -72,7 +72,6 @@ interface World {
   residuePurchaseId: string;
   /** Its outstanding amount as the payable read states it: what the client writes off. */
   residueMinor: string;
-  residueKey: string;
   fxKey: string;
   fxBody: Record<string, unknown>;
 }
@@ -125,7 +124,6 @@ const world: World = {
   undoLater: '',
   residuePurchaseId: '',
   residueMinor: '',
-  residueKey: `s7-audit-residue-${randomUUID()}`,
   fxKey: `s7-audit-fx-${randomUUID()}`,
   fxBody: {},
 };
@@ -776,18 +774,17 @@ const ROWS: readonly AuditRow[] = [
   },
 
   // ── The sub-unit leftover (TD-16, 0072 R-96) ───────────────────────────
-  // The client sends its per-confirmation key; the write-off's identity is
-  // the purchase itself, so the same close sent again answers the stored
-  // write-off: 200, replayed: true.
+  // State kind: the write-off's identity is the purchase itself (the API
+  // reads no Idempotency-Key here), so the same close sent again answers the
+  // stored write-off: 200, replayed: true.
   {
     client: 'closePurchaseLeftover',
     method: 'POST',
     path: (w) => `purchases/${w.residuePurchaseId}/residue-write-off`,
     permission: 'suppliers.pay',
     scope: 'business-wide',
-    kind: 'header',
+    kind: 'state',
     dto: 'PurchaseResidueWriteOffResultDto',
-    key: (w) => w.residueKey,
     body: (w) => writeOffBody({ date: w.day, amount: w.residueMinor }),
     status: 201,
     shape: [
