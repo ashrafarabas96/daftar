@@ -40,6 +40,8 @@
     "bootstrap:inventory-key": "tsx scripts/install-inventory-key.ts",
     "check:key-retirement": "tsx scripts/check-key-retirement.ts",
     "check:deployment-authority": "tsx scripts/phase2-deployment-authority.ts",
+    "index:phase3:review": "tsx scripts/phase3-review-index.ts",
+    "check:phase3:review-index": "tsx scripts/phase3-review-index.ts --check",
     "gate:phase1": "tsx scripts/phase1-gate.ts",
     "gate:phase1:release": "tsx scripts/phase1-release-gate.ts",
     "gate:phase1:dev": "tsx scripts/phase1-release-gate.ts --dev",
