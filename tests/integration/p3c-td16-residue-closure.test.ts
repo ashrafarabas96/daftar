@@ -159,10 +159,10 @@ async function residuePurchase(
   biz: S3Business,
   prices: readonly string[],
   lineIndex: number,
-  o: { documentDate?: string; by?: HttpActor } = {},
+  o: { documentDate?: string; returnDate?: string; by?: HttpActor } = {},
 ): Promise<HttpPurchase> {
   const p = await tryPurchase(biz, prices, o);
-  await historicalReturn(biz, p, lineIndex, '1');
+  await historicalReturn(biz, p, lineIndex, '1', o.returnDate);
   return p;
 }
 
@@ -439,7 +439,7 @@ describe('R-96: a historical sub-unit residue is written off', () => {
   });
 
   it('invalid requests: 400 malformed, 422 reason and dates, 409 amount / state, 404 unknown — each writes nothing', async () => {
-    const p = await residuePurchase(A, ['49.99', '0.01'], 0, { documentDate: shift(-5) });
+    const p = await residuePurchase(A, ['49.99', '0.01'], 0, { documentDate: shift(-5), returnDate: shift(-5) });
     for (const [why, body] of [
       ['a zero amount', writeOffBody({ date: day, amount: '0' })],
       ['a negative amount', writeOffBody({ date: day, amount: '-1' })],
@@ -511,6 +511,31 @@ describe('R-96: a historical sub-unit residue is written off', () => {
     // The residue is still there, and still closes.
     expect(await outstandingOf(ownerPool(), A.businessId, p.purchaseId)).toMatchObject({ o: 1n });
     expect((await writeOff(p, writeOffBody({ date: shift(-5), amount: '1' }))).status).toBe(201);
+  });
+
+  it('the write-off is dated on or after the last release of its purchase’s AP, never before the return that left the residue (review L1)', async () => {
+    const p = await residuePurchase(A, ['49.99', '0.01'], 0, { documentDate: shift(-10), returnDate: shift(-3) });
+    for (const date of [shift(-10), shift(-4)]) {
+      await refusedNothingWritten(
+        () => writeOff(p, writeOffBody({ date, amount: '1' })),
+        422,
+        'purchase_residue.date_before_settlement',
+        `dated ${date}, before the return of ${shift(-3)}`,
+      );
+    }
+    // The database alone refuses it too, in the routine and at COMMIT.
+    await rolledBack(async (c) => {
+      refusedWith(
+        await attempt(c, () =>
+          sqlWriteOff(c, A, { purchaseId: p.purchaseId, date: shift(-4), reason: REASON, residue: 1n, releasedBefore: 4999n, residueBase: 0n }),
+        ),
+        'P0001',
+        'purchase_residue.date_before_settlement',
+        'the routine',
+      );
+    });
+    const r = await writeOff(p, writeOffBody({ date: shift(-3), amount: '1' }));
+    expect(r.status, JSON.stringify(r.body)).toBe(201);
   });
 
   it('the permission: without suppliers.pay 403 and nothing written; a member holding only suppliers.pay writes off (201)', async () => {
@@ -767,7 +792,7 @@ describe('R-96 in the database: the routine and the guards refuse what the API n
   it('the row is immutable: UPDATE and DELETE refused; an INSERT outside the command refused; a forged row with the trace refused at COMMIT', async () => {
     const done = await residuePurchase(A, ['49.99', '0.01'], 0);
     expect((await writeOff(done, writeOffBody({ date: day, amount: '1' }))).status).toBe(201);
-    const open = await residuePurchase(A, ['49.99', '0.01'], 0);
+    const open = await residuePurchase(A, ['49.99', '0.01'], 0, { documentDate: shift(-9), returnDate: shift(-2) });
     await rolledBack(async (c) => {
       refusedWith(
         await attempt(c, () =>
@@ -783,7 +808,7 @@ describe('R-96 in the database: the routine and the guards refuse what the API n
         'purchase_residue.immutable',
         'DELETE',
       );
-      const forge = (residue: string, before: string) =>
+      const forge = (residue: string, before: string, date: string = day) =>
         c.query(
           `INSERT INTO purchase_residue_write_offs (tenant_id, business_id, id, purchase_id, supplier_id, currency_code, source_to_base_rate, write_off_date,
                                                     reason, residue_txn_minor, released_before_txn_minor, residue_base_minor, intent_sha256,
@@ -791,7 +816,7 @@ describe('R-96 in the database: the routine and the guards refuse what the API n
            SELECT p.tenant_id, p.business_id, p.id, p.id, p.supplier_id, p.currency_code, p.source_to_base_rate, $3::date,
                   'Forged', $4::bigint, $5::bigint, 0, repeat('a', 64), coalesce(nullif(current_setting('app.business_transaction_id', true), '')::uuid, gen_random_uuid()), $6
              FROM purchases p WHERE p.business_id = $1 AND p.id = $2`,
-          [A.businessId, open.purchaseId, day, residue, before, A.userId],
+          [A.businessId, open.purchaseId, date, residue, before, A.userId],
         );
       refusedWith(await attempt(c, () => forge('1', '4999')), 'P0001', 'purchase_residue.immutable', 'an INSERT without the command’s trace');
       // The command's scope and trace, as a command's transaction carries them: the value guard then judges the row alone.
@@ -807,6 +832,15 @@ describe('R-96 in the database: the routine and the guards refuse what the API n
         'P0001',
         'purchase_residue.settlement_inconsistent',
         'a forged amount, fired at COMMIT',
+      );
+      refusedWith(
+        await scratch(c, async () => {
+          await forge('1', '4999', shift(-8));
+          return fire(c, 'purchase_residue_write_offs_value_complete');
+        }),
+        'P0001',
+        'purchase_residue.settlement_inconsistent',
+        'a forged row dated before the return that left the residue, fired at COMMIT',
       );
       const honestShape = await scratch(c, async () => {
         await forge('1', '4999');

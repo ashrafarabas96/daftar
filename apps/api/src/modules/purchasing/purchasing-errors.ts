@@ -170,6 +170,7 @@ const PURCHASING_STATUS = {
   // command (500-class).
   'purchase_residue.reason_required': 422,
   'purchase_residue.date_before_purchase': 422,
+  'purchase_residue.date_before_settlement': 422,
   'purchase_residue.date_in_future': 422,
   'purchase_residue.not_below_base_unit': 422,
   'purchase_residue.nothing_outstanding': 409,
