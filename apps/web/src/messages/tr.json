@@ -93,6 +93,7 @@
   "common.back": "Geri",
   "common.noPermission": "Bu işlem için yetkiniz yok",
   "common.offline": "Çevrimdışısınız — bağlantınızı kontrol edin",
+  "session.retrying": "Bağlantı şu anda yoğun. Oturumunuz hâlâ açık; birazdan yeniden deneyeceğiz.",
   "error.generic": "Beklenmeyen hata",
   "error.rateLimited": "Çok fazla deneme — biraz bekleyip tekrar deneyin",
   "team.resend": "Yeniden gönder",
