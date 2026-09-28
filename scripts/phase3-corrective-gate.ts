@@ -129,7 +129,7 @@ export const CORRECTIVE_SUITES: readonly (SuiteEntry | Pending)[] = [
   // E — the release's secret scans
   { id: 'E-01', blocker: 'E secret scan', runner: 'root', file: 'tests/security/p3c-export-content-scan.test.ts' },
   { id: 'E-02', blocker: 'E secret scan', runner: 'root', file: 'tests/security/p3c-phase1-gate-secret-scope.test.ts' },
-  { id: 'E-03', blocker: 'E secret scan', pending: 'the hygiene stream’s range-scan canary suite (reported as tests/security/p3c-secret-scan.test.ts)' },
+  { id: 'E-03', blocker: 'E secret scan', runner: 'root', file: 'tests/security/p3c-secret-scan.test.ts' },
   // H — TD-20
   { id: 'H-01', blocker: 'H TD-20', runner: 'web', file: 'apps/web/test/starting-stock.test.tsx' },
   { id: 'H-02', blocker: 'H TD-20', pending: 'the DB stream’s openingPosted read suite (reported as tests/integration/p3c-inventory-access-opening.test.ts)' },
@@ -158,7 +158,8 @@ export const PHASE3_BASE = '0f2b09e7f2bd1015053ff2cb79ad1ceafc25bc6f';
 export const SECRET_RANGE_SCAN: CommandEntry | Pending = {
   id: 'E-SCAN',
   blocker: 'E secret scan',
-  pending: 'the hygiene stream’s full Phase 3 range scan (reported as npm run scan:secrets:phase3)',
+  npmScript: 'scan:secrets:phase3',
+  args: [],
 };
 
 /** Corrective performance budgets, each run alone after the suites. None yet; Budget A (and B) run last in any case. */
