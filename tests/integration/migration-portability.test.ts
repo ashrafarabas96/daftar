@@ -1119,7 +1119,9 @@ describe('managed PostgreSQL: 0039 → 0049 under a non-superuser migration prin
                                       'accounting_supplier_credit_allocation_entry_complete', 'accounting_supplier_refund_entry_complete',
                                       'supplier_settlement_guard_gaps',
                                       -- P3-S8 (0069, R-B1a): the accounting-side domain guard.
-                                      'accounting_inventory_account_domain_guard'))
+                                      'accounting_inventory_account_domain_guard',
+                                      -- Phase 3 corrective (0071, R-B1b): the accounting-side reversal guard.
+                                      'accounting_inventory_reversal_domain_guard'))
               ORDER BY p.proname`,
           )
         ).rows;
@@ -1312,6 +1314,10 @@ describe('managed PostgreSQL: 0039 → 0049 under a non-superuser migration prin
             // guard, both DEFINER with the pinned path.
             internal('inventory_business_has_stock_movements'),
             { proname: 'accounting_inventory_account_domain_guard', owner: 'daftar_accounting_internal', definer: true, config: PIN },
+            // Phase 3 corrective (0071 R-B1b): the stock-value equality boolean
+            // and the accounting reversal guard, both DEFINER with the pinned path.
+            internal('inventory_business_stock_value_equals'),
+            { proname: 'accounting_inventory_reversal_domain_guard', owner: 'daftar_accounting_internal', definer: true, config: PIN },
           ].sort((a, b) => (a.proname < b.proname ? -1 : 1)),
         );
         for (const role of ['daftar_inventory_internal', 'daftar_accounting_internal']) {

@@ -114,6 +114,8 @@ const JUDGES_COMPLETE: Readonly<Record<string, string>> = {
   stocktakes_value_complete: 'fires at the finalizing UPDATE, after every movement of the stocktake',
   supplier_payment_allocations_value_complete: 'reads the received purchase (frozen), the payment header written before, and its own rows',
   supplier_return_lines_quantity_bound: 'reads its own table and the frozen purchase line quantity; every returned line re-queues it',
+  journal_entries_inventory_reversal_domain:
+    '0071 R-B1b: judges the REVERSED entry’s committed lines, visible however early it fires (its own lines are a second witness); proved forced early, refusing and not over-refusing, in p3c-reversal-inventory-domain',
 };
 
 /** Per scenario, the triggers that must refuse it when forced early. */

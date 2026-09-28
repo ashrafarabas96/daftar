@@ -66,6 +66,7 @@ import {
   runS6,
   seedSettlementAccounts,
 } from '../helpers/supplier-settlement';
+import { P3_CORRECTIVE_MIGRATIONS } from '../helpers/p3c-migrations';
 
 const SCRATCH = 'daftar_upgrade_0066';
 const scratchUrl = `postgresql://${PG_USER}:${PG_PASSWORD}@localhost:${PG_PORT}/${SCRATCH}`;
@@ -211,6 +212,8 @@ describe('T-17 the P3-S6 upgrade matrix', () => {
         ...S6_MIGRATIONS,
         // P3-S8 (0069): reconciler column grants and the R-B1a guard; no registry row
         '0069_inventory_reconciliation_read_and_account_domain.sql',
+        // The Phase 3 corrective pass (0070+)
+        ...P3_CORRECTIVE_MIGRATIONS,
       ]);
 
       // Everything as it was, plus the three accounting source types 0067 adds (A-05).

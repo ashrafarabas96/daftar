@@ -412,6 +412,9 @@ describe('the §H grant matrix, from information_schema and pg_policy (P3-AL-54 
       // P3-S8 (0069, R-B1a, Annex R §2.4): the "has stock movements" boolean,
       // asked by the accounting domain guard only — no runtime role.
       { g: 'daftar_accounting_internal', r: 'inventory_business_has_stock_movements' },
+      // Phase 3 corrective (0071 R-B1b): the stock-value equality boolean, asked
+      // by the accounting reversal guard only — no runtime role.
+      { g: 'daftar_accounting_internal', r: 'inventory_business_stock_value_equals' },
       { g: 'daftar_app', r: 'inventory_configure_product' },
       { g: 'daftar_app', r: 'inventory_record_damage' },
       { g: 'daftar_app', r: 'inventory_record_opening' },

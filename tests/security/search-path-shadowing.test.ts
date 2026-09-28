@@ -533,6 +533,9 @@ describe('the §D inventory definer contract (P3-AL-54 §D)', () => {
     // asked by the accounting domain guard only — the accounting principal is
     // its one grantee, no runtime role.
     'inventory_business_has_stock_movements(uuid)': ['daftar_accounting_internal'],
+    // Phase 3 corrective (0071 R-B1b): the stock-value equality boolean, asked
+    // by the accounting reversal guard only — same single grantee.
+    'inventory_business_stock_value_equals(uuid,numeric)': ['daftar_accounting_internal'],
   };
 
   const INVENTORY_TRUSTED_RELATIONS = [

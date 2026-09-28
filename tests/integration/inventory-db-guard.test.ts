@@ -209,6 +209,9 @@ describe('G-7 — the tree as it stands', () => {
         // DEFINER, handed over inside the inventory CREATE bracket — no new
         // exception.
         'inventory_business_has_stock_movements',
+        // Phase 3 corrective (0071 R-B1b): the stock-value equality boolean,
+        // same shape and same bracket — no new exception.
+        'inventory_business_stock_value_equals',
       ].sort(),
     );
     expect([...INVENTORY_INVOKER_EXCEPTIONS].sort()).toEqual(['product_variants_10_base_variant_authority', 'products_10_inventory_config_authority']);
