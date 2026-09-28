@@ -7,9 +7,13 @@
 # required-checks configuration matches on.
 name: DAFTAR CI
 
+# A pull_request run checks out the PR merge commit (refs/pull/N/merge), not
+# the branch head, so it is equivalent-tree evidence only. The push trigger on
+# the long-lived phase branches gives every pushed head a run whose checkout is
+# that exact SHA (Phase 3 corrective audit, E-1).
 on:
   push:
-    branches: [main]
+    branches: [main, 'phase/**']
   pull_request:
 
 env:
