@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 import { API_URL } from '../../../../lib/api';
 import { CSRF_COOKIE, RT_COOKIE } from '../../../../lib/cookies';
+import { clientAddressHeaders } from '../../../../lib/bff-upstream';
 
 export async function POST(req: Request) {
   const jar = await cookies();
@@ -15,7 +16,7 @@ export async function POST(req: Request) {
     const auth = req.headers.get('authorization');
     await fetch(`${API_URL}/v1/auth/logout`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', ...(auth ? { authorization: auth } : {}) },
+      headers: { 'content-type': 'application/json', ...clientAddressHeaders(req), ...(auth ? { authorization: auth } : {}) },
       body: JSON.stringify({ refreshToken: rt }),
     }).catch(() => undefined);
   }
