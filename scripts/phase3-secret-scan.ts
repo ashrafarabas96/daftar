@@ -27,6 +27,12 @@
  *         agent/worktree branches included — `git log base..head`, with
  *         `--diff-merges=first-parent` so a merge commit's own content (a
  *         conflict resolution, an "evil merge") is read as well.
+ *   after the merge  once a head already contains the sealed Phase 3 head
+ *         (`PHASE3_HEAD`), whether it is main or a branch cut from main,
+ *         `base..head` is no longer the Phase 3 history. The scan then covers `PHASE3_BASE..PHASE3_HEAD`, the
+ *         history as sealed. It proves the base from the merge that brought
+ *         the sealed head into main (that merge's first parent) and records
+ *         the requested commit as `mergedInto`.
  *
  * gitleaks is pinned (8.24.3, the version the CI action ran) and checksum-
  * verified: a downloaded release archive must match the digest published in
@@ -100,6 +106,14 @@ import { dirname, join, resolve } from 'node:path';
 
 /** The first commit NOT in Phase 3: `main` at the time the Phase 3 branch was cut. */
 export const PHASE3_BASE = '0f2b09e7f2bd1015053ff2cb79ad1ceafc25bc6f';
+
+/**
+ * The last Phase 3 commit: the sealed head that PR #4 merged into `main` as
+ * `042f5d43d2edefd35eadab1cf8243b385aca9514`. Once a head on `main` contains
+ * it, the Phase 3 history is closed, and a scan run there scans
+ * `PHASE3_BASE..PHASE3_HEAD` exactly as it was sealed (see `scan`).
+ */
+export const PHASE3_HEAD = 'dd59962c2e53119d5cd5dea0d44df5d2f207a512';
 
 export const GITLEAKS_VERSION = '8.24.3';
 /** `gitleaks_8.24.3_linux_x64.tar.gz`, as published in `gitleaks_8.24.3_checksums.txt`. */
@@ -322,6 +336,8 @@ export interface ScanOptions {
   readonly base: string;
   readonly mainRef?: string;
   readonly gitleaks: string;
+  /** the sealed Phase 3 head a head already on main must have merged (default `PHASE3_HEAD`) */
+  readonly phase3Head?: string;
 }
 
 interface GitleaksFinding {
@@ -341,6 +357,13 @@ export interface ScanResult {
   readonly head: string | null;
   readonly mainRef: string | null;
   readonly mergeBase: string | null;
+  /**
+   * Set only when the requested head already contained the merged Phase 3
+   * history (main after the merge, or a branch cut from it). It names that
+   * requested commit, and `head` is then the sealed Phase 3 head the scan
+   * actually covered.
+   */
+  readonly mergedInto?: string;
   readonly logOpts: string | null;
   readonly commitsInRange: number | null;
   readonly mergesInRange: number | null;
@@ -367,6 +390,7 @@ export function scan(opts: ScanOptions): ScanResult {
   let head: string | null = null;
   let base: string | null = null;
   let mergeBase: string | null = null;
+  let mergedInto: string | null = null;
   let logOpts: string | null = null;
   let commitsInRange: number | null = null;
   let mergesInRange: number | null = null;
@@ -393,6 +417,7 @@ export function scan(opts: ScanOptions): ScanResult {
     head,
     mainRef,
     mergeBase,
+    ...(mergedInto === null ? {} : { mergedInto }),
     logOpts,
     commitsInRange,
     mergesInRange,
@@ -442,7 +467,36 @@ export function scan(opts: ScanOptions): ScanResult {
       return finish();
     }
     base = opts.base;
-    if (mergeBase !== base) problems.push(`the merge-base of ${head} and ${mainRef} is ${mergeBase}, not the declared base ${base}`);
+    const sealedRef = opts.phase3Head ?? PHASE3_HEAD;
+    const sealed = gitOk(repo, ['rev-parse', '--verify', '--quiet', `${sealedRef}^{commit}`])
+      ? git(repo, ['rev-parse', '--verify', `${sealedRef}^{commit}`])
+      : null;
+    if (mergeBase !== base && sealed !== null && sealed !== head && gitOk(repo, ['merge-base', '--is-ancestor', sealed, head])) {
+      // The head already contains the sealed Phase 3 head: Phase 3 has been
+      // merged, and this is main after the merge or a branch cut from it.
+      // The range from the base to this head is then no longer the Phase 3
+      // history. Its first-parent diff would charge the merge commit with the
+      // whole pull request, so every allowlisted finding would reappear under
+      // the merge's SHA and no exact fingerprint could match it. So the closed
+      // Phase 3 history is scanned instead, exactly as it was sealed. The base
+      // is proved by the merge itself: the commit on this head's first-parent
+      // line whose second parent is the sealed head must have the declared
+      // base as its first parent.
+      const merge = git(repo, ['rev-list', '--first-parent', '--merges', '--parents', head])
+        .split('\n')
+        .map((line) => line.split(' '))
+        .find((ids) => ids[2] === sealed);
+      if (merge === undefined) {
+        problems.push(`${head} contains ${sealed}, but no merge on its first-parent line brings in the sealed Phase 3 head ${sealed}`);
+        return finish();
+      }
+      if (merge[1] !== base)
+        problems.push(`the merge ${String(merge[0])} brought the sealed Phase 3 head onto ${String(merge[1])}, not onto the declared base ${base}`);
+      mergedInto = head;
+      head = sealed;
+      mergeBase = git(repo, ['merge-base', head, String(merge[1])]);
+      if (mergeBase !== base) problems.push(`the merge-base of ${head} and ${String(merge[1])} is ${mergeBase}, not the declared base ${base}`);
+    } else if (mergeBase !== base) problems.push(`the merge-base of ${head} and ${mainRef} is ${mergeBase}, not the declared base ${base}`);
   }
   if (!gitOk(repo, ['merge-base', '--is-ancestor', base, head])) {
     problems.push(`base ${base} is not an ancestor of head ${head}`);
@@ -765,6 +819,7 @@ function main(): void {
     console.log(`  base: ${String(r.base)}`);
     console.log(`  head: ${String(r.head)}`);
     console.log(`  merge-base: ${String(r.mergeBase)} (with ${String(r.mainRef)})`);
+    if (r.mergedInto !== undefined) console.log(`  merged into: ${r.mergedInto} (the closed Phase 3 history is scanned, not the range to that commit)`);
     console.log(`  log options: ${String(r.logOpts)}`);
     console.log(`  commits in range: ${String(r.commitsInRange)} (${String(r.mergesInRange)} merges)`);
     console.log(`  commits scanned: ${String(r.commitsScanned)}`);

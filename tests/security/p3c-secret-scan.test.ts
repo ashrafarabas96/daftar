@@ -336,6 +336,120 @@ describe('Phase 3 secret history range scan', () => {
     });
   });
 
+  describe('after the merge: a head that contains it scans the closed Phase 3 history, not the range to the merge', () => {
+    // main CI 36600878331, on PR #4's merge commit: the merge-base of a head
+    // on main is the head itself, and the merge's first-parent diff charges
+    // it with the whole pull request, so the three allowlisted digest lines
+    // came back under the merge's SHA and no exact fingerprint matched.
+    const ID = ['-c', 'user.name=Canary', '-c', 'user.email=canary@example.invalid'];
+    const digest = createHash('sha256').update(MIGRATION_TEXT).digest('hex');
+    const digestFile: FileOp = {
+      op: 'M',
+      path: 'scripts/prefix.ts',
+      content: `export const P = [\n  ['0044_accounting_assertion_keys.sql', '${digest}'],\n];\n`,
+    };
+
+    /** Commit one file on the checked-out branch. */
+    function commitFile(repo: string, path: string, content: string, msg: string): void {
+      mkdirSync(dirname(join(repo, path)), { recursive: true });
+      writeFileSync(join(repo, path), content);
+      git(repo, ['add', path]);
+      git(repo, [...ID, 'commit', '--quiet', '-m', msg]);
+    }
+
+    /** Merge `phase` into `main` the way PR #4 was merged (a merge commit, main first). Returns the merge. */
+    function mergeIntoMain(repo: string, opts: { mainMovedFirst?: boolean; after?: boolean } = {}): string {
+      git(repo, ['reset', '--quiet', '--hard', 'main']);
+      if (opts.mainMovedFirst === true) commitFile(repo, 'main-only.txt', 'moved\n', 'main moved on');
+      git(repo, [...ID, 'merge', '--no-ff', '--quiet', '-m', 'Merge pull request #4', 'phase']);
+      const merge = git(repo, ['rev-parse', 'HEAD']);
+      if (opts.after === true) commitFile(repo, 'later.txt', 'a later commit on main\n', 'later');
+      return merge;
+    }
+
+    /** The sealed-and-allowlisted history: a flagged migration digest, allowlisted by its exact fingerprint. */
+    function sealedWithDigest(): { repo: string; base: string; head: string; fp: string } {
+      const built = buildRepo({ onBranch: { 10: [digestFile] } });
+      const fp = String(runScan(built.repo, built.base, built.head).remaining[0]?.fingerprint);
+      writeFileSync(join(built.repo, '.gitleaksignore'), `# migration digest, not a credential\n${fp}\n`);
+      expect(runScan(built.repo, built.base, built.head).result).toBe('PASS');
+      return { ...built, fp };
+    }
+
+    const scanOnMain = (repo: string, base: string, sealed: string, head = 'main'): ScanResult =>
+      scan({ repo, head, base, mainRef: 'main', gitleaks, phase3Head: sealed });
+
+    it('CONTROL: on main after the merge, and after a later commit, the sealed history is scanned as it was sealed and passes', () => {
+      const { repo, base, head, fp } = sealedWithDigest();
+      const sealedScan = runScan(repo, base, head);
+      const merge = mergeIntoMain(repo, { after: true });
+      const r = scanOnMain(repo, base, head);
+      expect(r.problems).toEqual([]);
+      expect(r.result).toBe('PASS');
+      expect(r.head).toBe(head);
+      expect(r.mergedInto).toBe(git(repo, ['rev-parse', 'main']));
+      expect(git(repo, ['rev-parse', 'main~1'])).toBe(merge);
+      expect(r.base).toBe(base);
+      expect(r.mergeBase).toBe(base);
+      expect(r.commitsInRange).toBe(sealedScan.commitsInRange);
+      expect(r.commitsScanned).toBe(r.commitsInRange);
+      expect(r.allowlisted.map((a) => a.fingerprint)).toEqual([fp]);
+    });
+
+    it('a branch cut from main after the merge (a follow-up pull request) scans the same sealed history and passes', () => {
+      const { repo, base, head, fp } = sealedWithDigest();
+      const merge = mergeIntoMain(repo);
+      git(repo, ['checkout', '--quiet', '-b', 'follow-up']);
+      commitFile(repo, 'follow-up.txt', 'a follow-up change\n', 'follow-up');
+      const tip = git(repo, ['rev-parse', 'follow-up']);
+      const r = scanOnMain(repo, base, head, tip);
+      expect(r.problems).toEqual([]);
+      expect(r.result).toBe('PASS');
+      expect(r.head).toBe(head);
+      expect(r.mergedInto).toBe(tip);
+      expect(git(repo, ['rev-parse', 'follow-up~1'])).toBe(merge);
+      expect(r.allowlisted.map((a) => a.fingerprint)).toEqual([fp]);
+    });
+
+    it('a credential planted and removed inside the Phase 3 history still fails the scan run on main', () => {
+      const { repo, base, head } = buildRepo({ onBranch: { 40: [leak(plantedToken())], 41: [unleak] } });
+      mergeIntoMain(repo);
+      const r = scanOnMain(repo, base, head);
+      expect(r.result).toBe('FAIL');
+      expect(r.remaining.map((f) => f.rule)).toEqual(['github-pat']);
+      expect(r.remaining[0]?.commit).toBe(git(repo, ['rev-parse', 'phase~80']));
+    });
+
+    it('a merge that brought the sealed head onto anything but the declared base is refused', () => {
+      const { repo, base, head } = sealedWithDigest();
+      const merge = mergeIntoMain(repo, { mainMovedFirst: true });
+      const r = scanOnMain(repo, base, head);
+      expect(r.result).toBe('FAIL');
+      expect(r.problems.join('\n')).toContain(
+        `the merge ${merge} brought the sealed Phase 3 head onto ${git(repo, ['rev-parse', `${merge}^1`])}, not onto the declared base ${base}`,
+      );
+    });
+
+    it('a head on main that never merged the sealed head is refused, not scanned as some other range', () => {
+      const { repo, base, head } = sealedWithDigest();
+      mergeIntoMain(repo);
+      const notSealed = git(repo, ['rev-parse', 'phase~1']);
+      const r = scanOnMain(repo, base, notSealed);
+      expect(r.result).toBe('FAIL');
+      expect(r.problems.join('\n')).toContain(`but no merge on its first-parent line brings in the sealed Phase 3 head ${notSealed}`);
+      expect(r.findings).toBeNull();
+      expect(head).not.toBe(notSealed);
+    });
+
+    it('before the merge nothing changes: the branch head is scanned as itself, with no mergedInto', () => {
+      const { repo, base, head } = sealedWithDigest();
+      const r = runScan(repo, base, head);
+      expect(r.result).toBe('PASS');
+      expect(r.head).toBe(head);
+      expect(r.mergedInto).toBeUndefined();
+    });
+  });
+
   describe('tree mode: the extracted archive has no history, so its files are scanned, never skipped', () => {
     const REPO = join(__dirname, '../..');
     const TSX = join(REPO, 'node_modules/.bin/tsx');

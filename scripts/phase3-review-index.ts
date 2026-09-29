@@ -47,6 +47,12 @@ const ROOT = join(__dirname, '..');
 
 /** The Phase 2 merge into main: Phase 3 is everything after it. */
 export const PHASE3_BASE = '0f2b09e7f2bd1015053ff2cb79ad1ceafc25bc6f';
+/**
+ * The sealed Phase 3 head that PR #4 merged into main, the same commit as
+ * `PHASE3_HEAD` in scripts/phase3-secret-scan.ts. Once HEAD contains it, the
+ * Phase 3 history ends there (see `mainlineHead`).
+ */
+export const PHASE3_HEAD = 'dd59962c2e53119d5cd5dea0d44df5d2f207a512';
 export const INDEX_PATH = 'docs/PHASE_3_REVIEW_INDEX.md';
 export const CURATED_PATH = 'scripts/phase3-review-index.curated.json';
 export const REGENERATE_COMMAND = 'npm run index:phase3:review';
@@ -533,17 +539,22 @@ function git(root: string, args: readonly string[]): GitResult {
 
 /**
  * The commit whose first-parent line is the Phase 3 mainline. Normally HEAD.
- * A `pull_request` run checks out GitHub's merge commit instead: its FIRST
+ * Once HEAD contains the sealed head `sealed` (main after the merge, or a
+ * branch cut from it), Phase 3 is closed and its mainline ends at `sealed`.
+ * HEAD's own first-parent line then runs through main, past every slice
+ * checkpoint. A `pull_request` run checks out GitHub's merge commit instead: its FIRST
  * parent is the base branch and its SECOND parent is the PR head, so HEAD's
  * first-parent line holds none of the slice checkpoints. When HEAD is a merge
  * whose first parent does not contain `checkpoint` and whose second parent
  * does, the second parent is that mainline. Anything else stays HEAD, so a
  * history that truly lost a checkpoint still fails loudly.
  */
-export function mainlineHead(root: string, checkpoint: string = CHECKPOINTS[0]?.sha ?? ''): GitResult {
+export function mainlineHead(root: string, checkpoint: string = CHECKPOINTS[0]?.sha ?? '', sealed: string = PHASE3_HEAD): GitResult {
   const parents = git(root, ['rev-list', '--parents', '-n', '1', 'HEAD']);
   if (!parents.ok) return parents;
   const [head = '', first, second, ...more] = parents.out.trim().split(' ');
+  if (head !== sealed && git(root, ['cat-file', '-e', `${sealed}^{commit}`]).ok && git(root, ['merge-base', '--is-ancestor', sealed, head]).ok)
+    return { ok: true, out: sealed };
   if (first === undefined || second === undefined || more.length > 0) return { ok: true, out: head };
   const inFirst = git(root, ['merge-base', '--is-ancestor', checkpoint, first]).ok;
   const inSecond = git(root, ['merge-base', '--is-ancestor', checkpoint, second]).ok;
@@ -561,7 +572,9 @@ export function readHistory(root: string): HistoryResult {
   const base = git(root, ['cat-file', '-e', `${PHASE3_BASE}^{commit}`]);
   if (!base.ok) return { ok: false, reason: `the Phase 3 base ${PHASE3_BASE.slice(0, 7)} is not in this repository` };
 
-  const diff = git(root, ['diff', '--name-only', '-z', PHASE3_BASE, 'HEAD']);
+  const subject = mainlineHead(root);
+  if (!subject.ok) return subject;
+  const diff = git(root, ['diff', '--name-only', '-z', PHASE3_BASE, subject.out]);
   if (!diff.ok) return diff;
   const changed = diff.out
     .split('\0')
@@ -570,8 +583,6 @@ export function readHistory(root: string): HistoryResult {
 
   const RS = '\x1e';
   const US = '\x1f';
-  const subject = mainlineHead(root);
-  if (!subject.ok) return subject;
   const log = git(root, [
     'log',
     '--first-parent',
