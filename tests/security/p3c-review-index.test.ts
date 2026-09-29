@@ -20,6 +20,7 @@ import { describe, expect, it } from 'vitest';
 import {
   CHECK_COMMAND,
   INDEX_PATH,
+  PHASE3_HEAD,
   type Row,
   checkIndex,
   compareIndex,
@@ -35,6 +36,7 @@ import {
   securityOf,
   treeColumns,
 } from '../../scripts/phase3-review-index';
+import { PHASE3_HEAD as SCAN_PHASE3_HEAD } from '../../scripts/phase3-secret-scan';
 import { ESTATES, assignEstates, countJvmTests, totals } from '../../scripts/test-census';
 
 const ROOT = join(__dirname, '../..');
@@ -357,6 +359,40 @@ describe('a pull_request checkout: the mainline is the PR head, not the merge co
     } finally {
       rmSync(r.dir, { recursive: true, force: true });
     }
+  });
+
+  it('after Phase 3 is merged, a later commit on main ends the mainline at the sealed head', () => {
+    const r = prMergeRepo();
+    try {
+      const checkpoint = r.sha('phase~1');
+      writeFileSync(join(r.dir, 'later.txt'), 'later\n');
+      r.git('add', 'later.txt');
+      r.git('commit', '-q', '-m', 'later on main');
+      expect(mainlineHead(r.dir, checkpoint), 'without the sealed head').toEqual({ ok: true, out: r.sha('HEAD') });
+      expect(mainlineHead(r.dir, checkpoint, r.sha('phase'))).toEqual({ ok: true, out: r.sha('phase') });
+    } finally {
+      rmSync(r.dir, { recursive: true, force: true });
+    }
+  });
+
+  it('a branch cut from main after the merge ends the mainline at the sealed head; the sealed head itself stays HEAD', () => {
+    const r = prMergeRepo();
+    try {
+      const checkpoint = r.sha('phase~1');
+      r.git('checkout', '-q', '-b', 'follow-up', 'main');
+      writeFileSync(join(r.dir, 'f.txt'), 'F\n');
+      r.git('add', 'f.txt');
+      r.git('commit', '-q', '-m', 'F follow-up');
+      expect(mainlineHead(r.dir, checkpoint, r.sha('phase'))).toEqual({ ok: true, out: r.sha('phase') });
+      r.git('checkout', '-q', 'phase');
+      expect(mainlineHead(r.dir, checkpoint, r.sha('phase'))).toEqual({ ok: true, out: r.sha('phase') });
+    } finally {
+      rmSync(r.dir, { recursive: true, force: true });
+    }
+  });
+
+  it('the sealed head is the one the secret scan names', () => {
+    expect(PHASE3_HEAD).toBe(SCAN_PHASE3_HEAD);
   });
 
   it('a merge where neither parent carries the checkpoint stays HEAD, so a lost checkpoint still fails loudly', () => {
