@@ -17,8 +17,8 @@
 import { randomUUID } from 'node:crypto';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
-import type { Client } from 'pg';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import type { Client, PoolClient } from 'pg';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { EMPTY_STOCK_STATE, formatMinor, formatQuantity, formatUnitCost, parseQuantity, parseUnitCost, simulateMovement } from '../../packages/inventory/src';
 import { ensurePostgres, ownerPool, resetData } from '../helpers/test-app';
 import {
@@ -552,6 +552,29 @@ describe('M-1 — READ COMMITTED only: the reviewer’s REPEATABLE READ reproduc
     must((await c.query<{ n: number }>(`SELECT count(*)::int AS n FROM stock_movements WHERE variant_id = $1`, [variantId])).rows[0]).n;
   const unitOf = async (productId: string): Promise<string> =>
     must((await ownerPool().query<{ u: string }>(`SELECT unit_code AS u FROM products WHERE id = $1`, [productId])).rows[0]).u;
+
+  // Every configure and purchase here consumes an inventory assertion, and the
+  // consume ends with the one-hour prune of old uses (0054, step 11) for
+  // whichever transaction wins its try-lock. At REPEATABLE READ that prune
+  // turns into a race unrelated to what this block is about. T1 takes its
+  // snapshot, then T2's consume prunes uses that expired meanwhile and commits.
+  // T1's own prune then deletes the same rows from its snapshot and fails
+  // 40001 "concurrent delete" instead of reaching the unit-history check. This
+  // needs uses to cross the one-hour mark mid-run, which only a long composed
+  // run produces (main CI 36600878331). So the hygiene lock is held from a
+  // third session for each case: neither consume prunes, and each case
+  // exercises only the isolation behaviour it names.
+  let hygiene: PoolClient | null = null;
+  beforeEach(async () => {
+    hygiene = await ownerPool().connect();
+    await hygiene.query(`SELECT pg_advisory_lock(hashtext('daftar.inventory_assertion_uses'), hashtext('hygiene'))`);
+  });
+  afterEach(async () => {
+    if (hygiene === null) return;
+    await hygiene.query(`SELECT pg_advisory_unlock(hashtext('daftar.inventory_assertion_uses'), hashtext('hygiene'))`);
+    hygiene.release();
+    hygiene = null;
+  });
 
   it('T1 at REPEATABLE READ takes its snapshot, T2 at READ COMMITTED commits the first purchase, T1’s unit change → inventory.isolation_unsupported', async () => {
     const p = await addTrackedProduct(ownerPool(), biz, 'piece', 0);
