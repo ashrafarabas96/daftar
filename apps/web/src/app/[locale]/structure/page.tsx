@@ -4,8 +4,11 @@ import { useRouter } from 'next/navigation';
 import type { BranchDto, WarehouseDto } from '@daftar/shared-contracts';
 import { Badge, Button, Dialog, FeatureLockedState, PlanLimitState, Select, Table, Tabs, TextField, spacing, typography } from '@daftar/design-system';
 import { makeT, type Locale } from '@/lib/i18n';
-import { ApiError, refreshSession } from '@/lib/client';
+import { ApiError, ensureSession } from '@/lib/client';
 import { createBranch, createWarehouse, listBranches, listWarehouses } from '@/lib/merchant-api';
+import { addWarehouseBranch, getInventoryAccess, listInventoryWarehouses, removeWarehouseBranch, type InventoryWarehouseDto } from '@/lib/phase3-api';
+import { refusalKey } from '@/lib/phase3-errors';
+import { WarehouseBranches } from '@/views/structure/WarehouseBranches';
 import { PageShell } from '../AppHeader';
 
 /** Branches & warehouses (Directive §62). Feature/limit gates surface as honest states, never silent failures. */
@@ -32,7 +35,7 @@ export default function StructurePage({ params }: { params: Promise<{ locale: Lo
 
   useEffect(() => {
     void (async () => {
-      if (!(await refreshSession())) {
+      if (!(await ensureSession())) {
         router.push(`/${locale}/login`);
         return;
       }
@@ -99,14 +102,17 @@ export default function StructurePage({ params }: { params: Promise<{ locale: Lo
             ]}
           />
         ) : (
-          <Table
-            rows={warehouses}
-            columns={[
-              { key: 'name', header: t('structure.name'), render: (w) => w.name },
-              { key: 'branch', header: t('structure.branch'), render: (w) => branchName(w.branchId) },
-              { key: 'default', header: '', render: (w) => (w.isDefault ? <Badge tone="brand">{t('structure.default')}</Badge> : null) },
-            ]}
-          />
+          <>
+            <Table
+              rows={warehouses}
+              columns={[
+                { key: 'name', header: t('structure.name'), render: (w) => w.name },
+                { key: 'branch', header: t('structure.branch'), render: (w) => branchName(w.branchId) },
+                { key: 'default', header: '', render: (w) => (w.isDefault ? <Badge tone="brand">{t('structure.default')}</Badge> : null) },
+              ]}
+            />
+            <WarehouseReach locale={locale} branches={branches} warehouseCount={warehouses.length} />
+          </>
         )}
       </div>
       <Dialog
@@ -132,5 +138,77 @@ export default function StructurePage({ params }: { params: Promise<{ locale: Lo
         </div>
       </Dialog>
     </PageShell>
+  );
+}
+
+/**
+ * "Also serves branches" (P3-S7 A-11, A-05): which branches each warehouse
+ * serves, from `GET /v1/inventory/warehouses`, changed with
+ * `POST`/`DELETE …/warehouses/:id/branches` (each states its end state and
+ * answers `changed: false` on a repeat). Shown only to a member with
+ * `warehouse.manage` and access to every branch, the authority the command
+ * itself requires. The Phase 1 table above stays as it was.
+ */
+function WarehouseReach({ locale, branches, warehouseCount }: { locale: Locale; branches: readonly BranchDto[]; warehouseCount: number }) {
+  const t = makeT(locale);
+  const [allowed, setAllowed] = useState(false);
+  const [reach, setReach] = useState<InventoryWarehouseDto[]>([]);
+  const [busyKey, setBusyKey] = useState<string | null>(null);
+  const [errorKey, setErrorKey] = useState<string | null>(null);
+
+  useEffect(() => {
+    let live = true;
+    void (async () => {
+      try {
+        const access = await getInventoryAccess();
+        if (!live || !access.businessWide || !access.permissions.includes('warehouse.manage')) return;
+        const w = await listInventoryWarehouses();
+        if (!live) return;
+        setReach(w.items);
+        setAllowed(true);
+      } catch (e) {
+        if (live) setErrorKey(refusalKey(e));
+      }
+    })();
+    return () => {
+      live = false;
+    };
+  }, [warehouseCount]);
+
+  async function change(warehouseId: string, branchId: string, serve: boolean) {
+    setBusyKey(`${warehouseId}:${branchId}`);
+    setErrorKey(null);
+    try {
+      if (serve) await addWarehouseBranch(warehouseId, branchId);
+      else await removeWarehouseBranch(warehouseId, branchId);
+      setReach((await listInventoryWarehouses()).items);
+    } catch (e) {
+      setErrorKey(refusalKey(e));
+    } finally {
+      setBusyKey(null);
+    }
+  }
+
+  if (!allowed) {
+    // The grants or the warehouses could not be read: say so, rather than hide the section in silence.
+    return errorKey !== null ? (
+      <p role="alert" style={{ fontFamily: typography.fontFamily.base, marginTop: spacing[6] }}>
+        {t(errorKey)}
+      </p>
+    ) : null;
+  }
+  return (
+    <div style={{ marginTop: spacing[6] }}>
+      <WarehouseBranches
+        t={t}
+        locale={locale}
+        warehouses={reach}
+        branches={branches}
+        busyKey={busyKey}
+        errorKey={errorKey}
+        onAdd={(warehouseId, branchId) => void change(warehouseId, branchId, true)}
+        onRemove={(warehouseId, branchId) => void change(warehouseId, branchId, false)}
+      />
+    </div>
   );
 }

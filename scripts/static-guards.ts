@@ -8,14 +8,28 @@ import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import {
   ACCOUNTING_AUTHORITY_TABLES,
+  STOCK_CACHE_EXCEPTION,
+  SUPPLIER_AUTHORITY_TABLES,
+  checkStockCacheShape,
   discoverAccountingTables,
+  discoverInventoryTables,
+  discoverSupplierTables,
   findAuthoritativeBalanceColumns,
+  findAuthoritativeInventoryColumns,
+  findAuthoritativeSupplierColumns,
+  findForbiddenInventoryRelations,
   isForbiddenBalanceTable,
+  isForbiddenInventoryTable,
+  isForbiddenSupplierTable,
 } from './guards/no-authoritative-balance';
-import { findFloatRateColumns } from './guards/no-float-rate';
+import { findFloatRateColumns, findInventoryNumericViolations } from './guards/no-float-rate';
 import { findDefinerSearchPathViolations } from './guards/definer-search-path';
 import { findReadSurfaceViolations, readSurfaceFiles } from './guards/read-surface';
 import { findPostingSurfaceViolations } from './guards/posting-surface';
+import { checkInventoryDefinerContract, INVENTORY_INVOKER_EXCEPTIONS } from './guards/inventory-definer-contract';
+import { findInventoryArithmeticViolations, INVENTORY_ARITHMETIC_WHY, isInventoryMigration } from './guards/inventory-arithmetic';
+import { checkInventoryWriterAuthority } from './guards/inventory-writer-authority';
+import { findResponsiveViolations, responsiveSurface } from './guards/web-responsive';
 
 const ROOT = join(__dirname, '..');
 let failures = 0;
@@ -111,6 +125,9 @@ for (const dir of [
   'packages/design-system/src',
   'apps/web/src',
   'apps/admin/src',
+  // P3-S2: the inventory arithmetic package formats and parses quantities,
+  // costs and values, so it is a money surface like the contract packages.
+  'packages/inventory/src',
 ]) {
   for (const f of tsFiles(join(ROOT, dir))) {
     const src = readFileSync(f, 'utf8');
@@ -304,6 +321,74 @@ for (const dir of ['apps/api/src', 'apps/web/src', 'apps/admin/src', 'packages']
       );
     }
   }
+
+  // P3-S2: inventory storage. The stock ledger is the truth and
+  // `stock_levels` is its ONE cache, holding exactly its four columns; any
+  // other stored quantity, valuation, reservation or availability — or a
+  // table that is a stock balance/summary/snapshot/rollup/cache — is a second
+  // truth. The accounting checks above are untouched.
+  // P3-S8 (A-18(a)): `discoverInventoryTables` also returns every other
+  // Phase 3 relation — every relation the accepted Phase 2 prefix did not
+  // create — that is not a supplier/purchase/payment-method table, so
+  // `units`, `unit_names`, `branch_warehouses`, `stocktakes` and
+  // `stocktake_lines` are watched too. The wiring below is unchanged.
+  const inventoryWatched = discoverInventoryTables(schema);
+  for (const f of migrations) {
+    for (const hit of findAuthoritativeInventoryColumns(readFileSync(f, 'utf8'), inventoryWatched)) {
+      fail('no-authoritative-balance', f, `${hit.table}.${hit.column} claims storage authority over a derived stock quantity (G-3/P3-AL-49)`);
+    }
+  }
+  for (const table of inventoryWatched) {
+    if (isForbiddenInventoryTable(table)) {
+      fail(
+        'no-authoritative-balance',
+        'infrastructure/database/migrations',
+        `table \`${table}\` stores a derived stock balance — the ledger is the truth (G-3)`,
+      );
+    }
+  }
+  // A stock balance under a name without the inventory prefix is the same second truth.
+  for (const table of findForbiddenInventoryRelations(schema)) {
+    if (inventoryWatched.includes(table)) continue; // already reported above
+    fail(
+      'no-authoritative-balance',
+      'infrastructure/database/migrations',
+      `relation \`${table}\` stores a derived stock balance — the ledger is the truth (G-3)`,
+    );
+  }
+  if (!inventoryWatched.includes(STOCK_CACHE_EXCEPTION)) {
+    fail(
+      'no-authoritative-balance',
+      'infrastructure/database/migrations',
+      `${STOCK_CACHE_EXCEPTION} does not exist — the inventory half of G-3 is watching nothing`,
+    );
+  }
+  for (const problem of checkStockCacheShape(schema)) fail('no-authoritative-balance', 'infrastructure/database/migrations', problem);
+
+  // P3-S4 (L:847-852, S4 contract §7.2): supplier and purchase storage. AP
+  // and supplier credit are derived live from their source documents; a
+  // stored payable/outstanding/paid/due amount, or a table that is a supplier
+  // balance or a cache of one, is a second truth.
+  const supplierWatched = discoverSupplierTables(schema);
+  for (const f of migrations) {
+    for (const hit of findAuthoritativeSupplierColumns(readFileSync(f, 'utf8'), supplierWatched)) {
+      fail('no-authoritative-balance', f, `${hit.table}.${hit.column} claims storage authority over a derived AP or supplier balance (G-3/P3-AL-26)`);
+    }
+  }
+  for (const table of supplierWatched) {
+    if (isForbiddenSupplierTable(table)) {
+      fail(
+        'no-authoritative-balance',
+        'infrastructure/database/migrations',
+        `table \`${table}\` stores a derived AP or supplier balance — supplier AP is derived live (G-3/P3-AL-26)`,
+      );
+    }
+  }
+  for (const table of SUPPLIER_AUTHORITY_TABLES) {
+    if (!supplierWatched.includes(table)) {
+      fail('no-authoritative-balance', 'infrastructure/database/migrations', `${table} does not exist — the supplier half of G-3 is watching nothing`);
+    }
+  }
 }
 
 // Rule 16 — GUARD G-2 (Architecture Lock, P2-S2): no floating-point financial
@@ -325,6 +410,19 @@ for (const dir of ['apps/api/src', 'apps/web/src', 'apps/admin/src', 'packages']
   if (!/CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?journal_lines\b/i.test(schema)) {
     fail('no-float-rate', 'infrastructure/database/migrations', 'journal_lines does not exist — G-2 is watching nothing');
   }
+
+  // P3-S2: inventory storage is exact fixed point — no float column on any
+  // inventory table, and quantities, costs and values pinned to
+  // NUMERIC(18,4), NUMERIC(28,10) and BIGINT. P3-S8 (A-18(b)): "inventory
+  // table" includes every Phase 3 relation, by the same discovery as G-3.
+  for (const f of migrations) {
+    for (const hit of findInventoryNumericViolations(readFileSync(f, 'utf8'))) {
+      fail('no-float-rate', f, `${hit.table}.${hit.column} ${hit.detail}`);
+    }
+  }
+  if (!discoverInventoryTables(schema).includes('stock_movements')) {
+    fail('no-float-rate', 'infrastructure/database/migrations', 'stock_movements does not exist — the inventory half of G-2 is watching nothing');
+  }
 }
 
 // Rule 17 — GUARD G-4 (P2-S3, §67): the ledger writer may not exist without
@@ -332,6 +430,9 @@ for (const dir of ['apps/api/src', 'apps/web/src', 'apps/admin/src', 'packages']
 // but the merchant one, and may not be bypassed by application code writing
 // the journal directly. Stated as an implication, so a repository with no
 // writer passes and a repository with a half-dismantled one does not.
+// P3-S8 (A-18(c)): its inventory counterpart, INVENTORY_PERIMETER — no
+// application DML on a Phase 3 table, and no migration granting a runtime
+// role or PUBLIC write privileges on one — is reported by the same call.
 {
   const migrations = walk(join(ROOT, 'infrastructure/database/migrations'), /\.sql$/)
     .sort()
@@ -365,6 +466,8 @@ for (const dir of ['apps/api/src', 'apps/web/src', 'apps/admin/src', 'packages']
   // Frozen files are reported only for the one shape no ALTER can repair (no
   // pinned path at all). Their ordering is corrected in the effective state by
   // a candidate migration, because their bytes may never change.
+  // P3-S8 (A-18(d)): the frozen skip ends at PHASE2_PREFIX_END — every file
+  // after the Phase 2 prefix is checked forever, frozen or not.
   const manifest = JSON.parse(readFileSync(join(ROOT, 'infrastructure/database/MIGRATION_MANIFEST.json'), 'utf8')) as {
     migrations: { name: string }[];
   };
@@ -383,7 +486,10 @@ for (const dir of ['apps/api/src', 'apps/web/src', 'apps/admin/src', 'packages']
 // history on `is_active`, and never turns an amount into a double. G-4 says
 // "application code must not write the journal" repository-wide; this says
 // the narrower things that are only wrong in a report, and says them where a
-// report is.
+// report is. P3-S7 (contract §7.2(b)) widens the surface to the two merchant
+// read modules, inventory-reads.ts and supplier-balance-reads.ts — not
+// purchasing-reads.ts, which holds S6's command-side FX binding — and adds
+// the no-module-level-result-cache rule.
 {
   const reportFiles: Record<string, string> = {};
   for (const surface of ['apps/api/src', 'packages']) {
@@ -399,10 +505,107 @@ for (const dir of ['apps/api/src', 'apps/web/src', 'apps/admin/src', 'packages']
   if (readSurfaceFiles(reportFiles).length === 0) {
     fail('read-surface', 'apps/api/src', 'no accounting reporting module found — G-6 is watching nothing');
   }
+  // A merchant read module that exists must be one G-6 watches.
+  const surface = new Set(readSurfaceFiles(reportFiles));
+  for (const path of Object.keys(reportFiles)) {
+    if (/(^|[\\/])(inventory-reads|supplier-balance-reads)\.ts$/.test(path) && !surface.has(path)) {
+      fail('read-surface', path, 'a P3-S7 merchant read module is not on the G-6 surface');
+    }
+  }
+}
+
+// Rule 20 — GUARD G-7 (P3-S1, P3-AL-54 §D): every routine handed to
+// daftar_inventory_internal is SECURITY DEFINER with the pinned path
+// `pg_catalog, public, pg_temp`, has PUBLIC's EXECUTE revoked in the same
+// file, runs no dynamic SQL, and is transferred inside a same-file
+// GRANT/REVOKE CREATE ON SCHEMA public bracket — except exactly the two
+// INVOKER column guards, which are asserted, not tolerated. The live half is
+// the catalogue sweep in tests/security/search-path-shadowing.test.ts.
+{
+  const migrations: Record<string, string> = {};
+  for (const f of walk(join(ROOT, 'infrastructure/database/migrations'), /\.sql$/).sort()) {
+    migrations[relative(ROOT, f)] = readFileSync(f, 'utf8');
+  }
+  const report = checkInventoryDefinerContract({ migrations });
+  for (const violation of report.violations) {
+    fail('inventory-definer-contract', 'infrastructure/database/migrations', violation);
+  }
+  // A guard watching nothing is decorative: the inventory authority exists
+  // from P3-S1 on, so an empty transfer set means the guard has gone blind.
+  if (report.transferred.length <= INVENTORY_INVOKER_EXCEPTIONS.length) {
+    fail(
+      'inventory-definer-contract',
+      'infrastructure/database/migrations',
+      'no SECURITY DEFINER routine is handed to daftar_inventory_internal — G-7 is watching nothing',
+    );
+  }
+}
+
+// Rule 21 — inventory arithmetic (P3-S2, contract §7.2): no `on_hand × avg`
+// valuation, no HALF_UP `round(` or declared-scale `scale(` in inventory SQL,
+// no created_at ordering over the ledger or the deficits, no deadlock retry,
+// and no binary floating point in the arithmetic package.
+{
+  const migrations: Record<string, string> = {};
+  for (const f of walk(join(ROOT, 'infrastructure/database/migrations'), /\.sql$/).sort()) {
+    migrations[relative(ROOT, f)] = readFileSync(f, 'utf8');
+  }
+  const read = (dir: string): Record<string, string> => {
+    const out: Record<string, string> = {};
+    for (const f of tsFiles(join(ROOT, dir))) out[relative(ROOT, f)] = readFileSync(f, 'utf8');
+    return out;
+  };
+  const packageFiles = read('packages/inventory/src');
+  for (const hit of findInventoryArithmeticViolations({ migrations, packageFiles, apiInventoryFiles: read('apps/api/src/modules/inventory') })) {
+    fail('inventory-arithmetic', join(ROOT, hit.file), `${hit.rule}: ${hit.evidence} — ${INVENTORY_ARITHMETIC_WHY[hit.rule] ?? ''}`);
+  }
+  // A guard watching nothing is decorative.
+  if (Object.keys(packageFiles).length === 0 || !Object.keys(migrations).some(isInventoryMigration)) {
+    fail('inventory-arithmetic', 'packages/inventory/src', 'no inventory package source or inventory migration found — rule 21 is watching nothing');
+  }
+}
+
+// Rule 22 — inventory writer authority (P3-S2, contract §7.2; PM-44 static
+// half): every definition of a routine handed to daftar_inventory_internal
+// that writes a stock table verifies invctl/1 as its FIRST statement. The
+// live half is the PM-44 catalogue sweep. P3-S8 (A-04, A-18(e)): the table
+// set is the truth set (every table granted to the principal for writing
+// after PHASE2_PREFIX_END, minus the key domain and the logs), the routines
+// are every handed-over routine and every Phase 3 routine of any owner, the
+// assertion's arguments may call only pure helpers, and the one exception
+// is warehouses_home_branch_maintain; the live half is T-02.
+{
+  const migrations: Record<string, string> = {};
+  for (const f of walk(join(ROOT, 'infrastructure/database/migrations'), /\.sql$/).sort()) {
+    migrations[relative(ROOT, f)] = readFileSync(f, 'utf8');
+  }
+  const report = checkInventoryWriterAuthority(migrations);
+  for (const violation of report.violations) fail('inventory-writer-authority', 'infrastructure/database/migrations', violation);
+  // The stock primitive exists from P3-S2 on; no writer at all means the guard went blind.
+  if (report.writers.length === 0) {
+    fail('inventory-writer-authority', 'infrastructure/database/migrations', 'no routine writes a stock table — rule 22 is watching nothing');
+  }
+}
+
+// Rule 23 — the P3-S7 responsive law (contract §7.2(c), A-16): over the S7
+// web files, no physical-direction style, no fixed width above 20rem, no
+// 100vw, no design-system Table, no raw clickable element, no small Button
+// and no Number()/parseFloat on a quantity or amount. The rendered half is
+// the SSR phone-width suite (apps/web/test, T-15/T-16).
+{
+  const webFiles: Record<string, string> = {};
+  for (const f of tsFiles(join(ROOT, 'apps/web/src'))) webFiles[relative(ROOT, f).split('\\').join('/')] = readFileSync(f, 'utf8');
+  for (const v of findResponsiveViolations(webFiles)) {
+    fail('web-responsive', join(ROOT, v.file), `line ${v.line}: ${v.rule}: found \`${v.evidence}\` — ${v.why} (Rule 23)`);
+  }
+  // A guard watching nothing is decorative: the Phase 3 client libraries exist from P3-S7 on.
+  if (responsiveSurface(webFiles).length === 0) {
+    fail('web-responsive', 'apps/web/src', 'no S7 web file found — rule 23 is watching nothing');
+  }
 }
 
 if (failures > 0) {
   console.error(`\nSTATIC GUARDS: FAIL (${failures})`);
   process.exit(1);
 }
-console.log('STATIC GUARDS: PASS (19 rules)');
+console.log('STATIC GUARDS: PASS (23 rules)');

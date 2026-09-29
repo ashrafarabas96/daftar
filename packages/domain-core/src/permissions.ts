@@ -52,6 +52,20 @@ export const PERMISSIONS = [
   // not express "this person closes the books, that person may undo it".
   'accounting.period.manage',
   'accounting.period.reopen',
+  // Phase 3 — inventory, purchasing and suppliers (P3-AL-38). A closed set of
+  // eleven, persisted for existing businesses by migration 0057 and for new
+  // ones through BUILTIN_ROLE_PERMISSIONS below (P3-AL-53).
+  'inventory.view',
+  'inventory.adjust',
+  'inventory.transfer',
+  'inventory.stocktake',
+  'purchases.view',
+  'purchases.manage',
+  'purchases.receive',
+  'purchases.return',
+  'suppliers.view',
+  'suppliers.manage',
+  'suppliers.pay',
 ] as const;
 
 export type Permission = (typeof PERMISSIONS)[number];
@@ -82,6 +96,17 @@ export const SENSITIVE_PERMISSIONS = [
   // that decision. Both move accounting truth, so both are sensitive (AL-16).
   'accounting.period.manage',
   'accounting.period.reopen',
+  // Phase 3 (P3-AL-38): everything that moves stock, receives or returns
+  // goods, or settles a supplier moves real value. The three `view` keys are
+  // ordinary — reading never corrupts anything.
+  'inventory.adjust',
+  'inventory.transfer',
+  'inventory.stocktake',
+  'purchases.manage',
+  'purchases.receive',
+  'purchases.return',
+  'suppliers.manage',
+  'suppliers.pay',
 ] as const satisfies readonly Permission[];
 export function isSensitivePermission(p: Permission): boolean {
   return (SENSITIVE_PERMISSIONS as readonly string[]).includes(p);
@@ -113,7 +138,14 @@ export const BUILTIN_ROLE_PERMISSIONS: Record<BuiltinRoleKey, readonly Permissio
     'media.manage',
     'settings.view',
     'subscription.view',
+    // Phase 3 (P3-AL-38, P3-AL-53): APPENDED — exactly the three ordinary view
+    // keys, and no sensitive Phase 3 key. The list above is the accepted
+    // Phase 1 set and is not altered, reordered or trimmed.
+    'inventory.view',
+    'purchases.view',
+    'suppliers.view',
   ],
+  // P3-AL-38: the cashier gains no Phase 3 permission.
   cashier: ['catalog.view'],
 };
 

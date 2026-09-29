@@ -246,30 +246,27 @@ describe('INVARIANT — the journal refuses the fact, not merely the caller (§1
 
   /**
    * A FINDING, recorded as an assertion rather than as a sentence in a
-   * document (P2-S8 §14).
+   * document (P2-S8 §14) — and now REPAID (TD-09, P3-AL-36).
    *
-   * "An entry may not be dated after today in the business timezone" is
-   * enforced by every journal WRITER — `accounting_post_entry`,
+   * P2-S8 found that "an entry may not be dated after today in the business
+   * timezone" was enforced by every journal WRITER — `accounting_post_entry`,
    * `accounting_post_reversal` and the opening-balance commands each raise
-   * `accounting.entry_date_in_future` — and by NO schema constraint. So it is
-   * an invariant of the commands, not of the table, and this case says so
-   * out loud in both directions: the raw insert is accepted, and the command
-   * refuses.
-   *
-   * It is not a live exposure. No runtime credential holds INSERT on
-   * `journal_entries` — its companion file proves that against the live
-   * ACLs — so the only principal that can reach this is the schema owner,
-   * which is a deployment credential rather than a runtime one. It is a
-   * defense-in-depth gap, carried in TECHNICAL_DEBT.md, and it is NOT closed
-   * here: `0000`–`0050` are frozen, and `0051` is authorized to carry the
-   * reconciler authority and nothing else (§33, §37).
+   * `accounting.entry_date_in_future` — and by NO schema object, and this
+   * case asserted that gap in both directions. P3-S1's
+   * `0058_accounting_entry_date_guard.sql` closes it with a `BEFORE INSERT`
+   * trigger on `journal_entries` that resolves the BUSINESS's timezone, so
+   * both halves now refuse: the raw insert by the schema owner is refused at
+   * the statement with the same stable code, and the command still refuses
+   * first. The command-level check remains; the trigger is defence in depth
+   * beneath it, not a replacement.
    */
-  it('a FUTURE-dated entry is refused by every journal writer, but NOT by the schema', async () => {
+  it('a FUTURE-dated entry is refused by every journal writer AND by the schema (TD-09 repaid by 0058)', async () => {
     const { rows } = await ownerPool().query<{ d: string }>(`SELECT to_char(current_date + 5, 'YYYY-MM-DD') AS d`);
     const future = must(rows[0]).d;
 
     const raw = await attempt({ entryDate: future });
-    expect(raw.at, 'the schema does not carry this rule — see the comment above').toBe('accepted');
+    expect(raw.at, raw.message).toBe('statement');
+    expect(raw.message).toMatch(/accounting\.entry_date_in_future/);
 
     await expect(post(simpleCommand(fx, randomUUID(), future, 5000n), fx.userId)).rejects.toThrow(/accounting\.entry_date_in_future/);
   });

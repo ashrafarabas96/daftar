@@ -322,13 +322,23 @@ describe('RLS is real on the ledger', () => {
   });
 
   it('the validator policy admits ONE identity, it is not a login role, and it is read-only', async () => {
-    const { rows } = await ownerPool().query<{ tablename: string; cmd: string; qual: string; withcheck: string | null }>(
-      `SELECT tablename, cmd, qual, with_check AS withcheck FROM pg_policies
+    const { rows } = await ownerPool().query<{ tablename: string; cmd: string; qual: string; withcheck: string | null; roles: string[] }>(
+      `SELECT tablename, cmd, qual, with_check AS withcheck, roles::text[] AS roles FROM pg_policies
         WHERE schemaname = 'public' AND policyname = 'accounting_validator' ORDER BY tablename`,
     );
     // Three journal tables, the two P2-S4 detail tables, the P2-S5 rate
-    // history and the two P2-S6 period tables. The list is asserted whole so
-    // a policy appearing on a table nobody reviewed fails here.
+    // history and the two P2-S6 period tables, then the three P3-S3 posting
+    // headers the accounting completeness triggers read (0061, contract A-18:
+    // SELECT on inventory_adjustments, stocktakes and inventory_openings). The
+    // list is asserted whole so a policy appearing on a table nobody reviewed
+    // fails here. P3-S4 (0063/0064, contract A-14(d)): plus the two S4 posting
+    // headers, purchases and negative_inventory_cost_adjustments. P3-S5
+    // (0065/0066, contract A-15(d)): plus the two S5 posting headers,
+    // purchase_reversals and supplier_returns. P3-S6 (0067/0068, contract
+    // A-14(d)): plus the four S6 settlement tables and the S5 credit notes the
+    // three S6 completeness triggers read. Phase 3 corrective (0072, TD-16):
+    // plus purchase_residue_write_offs, which the write-off entry's
+    // completeness trigger reads.
     expect(rows.map((r) => r.tablename)).toEqual([
       'accounting_fx_rates',
       'accounting_manual_adjustments',
@@ -336,13 +346,61 @@ describe('RLS is real on the ledger', () => {
       'accounting_periods',
       'accounting_reversals',
       'accounting_source_bindings',
+      'inventory_adjustments',
+      'inventory_openings',
       'journal_entries',
       'journal_lines',
+      // P3-S4 (0063/0064)
+      'negative_inventory_cost_adjustments',
+      // Phase 3 corrective (0072)
+      'purchase_residue_write_offs',
+      // P3-S5 (0065/0066)
+      'purchase_reversals',
+      // P3-S4 (0063/0064)
+      'purchases',
+      'stocktakes',
+      // P3-S6 (0067/0068)
+      'supplier_credit_allocations',
+      'supplier_credit_notes',
+      'supplier_payment_allocations',
+      'supplier_payments',
+      'supplier_refunds',
+      // P3-S5 (0065/0066)
+      'supplier_returns',
     ]);
+    // The accounting tables name the one identity in the predicate; the three
+    // P3-S3 headers name it as the policy's only role (0061 uses the
+    // stock_movements layering, `FOR SELECT TO daftar_accounting_internal
+    // USING (true)`). Either way exactly one identity is admitted, read-only.
+    const S3_HEADERS = [
+      'inventory_adjustments',
+      'inventory_openings',
+      'stocktakes',
+      // P3-S4 (0063/0064): the two S4 headers use the same layering.
+      'negative_inventory_cost_adjustments',
+      'purchases',
+      // P3-S5 (0065/0066): and so do the two S5 headers.
+      'purchase_reversals',
+      'supplier_returns',
+      // P3-S6 (0067/0068): and so do the three S6 posting tables, the payment
+      // allocations and the credit notes.
+      'supplier_payments',
+      'supplier_credit_allocations',
+      'supplier_refunds',
+      'supplier_payment_allocations',
+      'supplier_credit_notes',
+      // Phase 3 corrective (0072): and so does the residue write-off.
+      'purchase_residue_write_offs',
+    ];
     for (const row of rows) {
-      expect(row.cmd).toBe('SELECT');
-      expect(row.qual).toMatch(/daftar_accounting_internal/);
-      expect(row.withcheck).toBeNull();
+      expect(row.cmd, row.tablename).toBe('SELECT');
+      if (S3_HEADERS.includes(row.tablename)) {
+        expect({ roles: row.roles, qual: row.qual }, row.tablename).toEqual({ roles: ['daftar_accounting_internal'], qual: 'true' });
+      } else {
+        expect(row.roles, row.tablename).toEqual(['public']);
+        expect(row.qual, row.tablename).toMatch(/daftar_accounting_internal/);
+      }
+      expect(row.withcheck, row.tablename).toBeNull();
     }
     const { rows: role } = await ownerPool().query<{ login: boolean; bypass: boolean }>(
       `SELECT rolcanlogin AS login, rolbypassrls AS bypass FROM pg_roles WHERE rolname = 'daftar_accounting_internal'`,

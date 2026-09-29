@@ -26,7 +26,13 @@ import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { beforeAll, describe, expect, it } from 'vitest';
 import type { Pool } from 'pg';
-import { computeFxRateFingerprint, fxRateCanonicalStream, canonicalEnteredRate } from '../../packages/accounting/src/fx-rate';
+import {
+  computeFxRateFingerprint,
+  fxRateCanonicalStream,
+  canonicalEnteredRate,
+  FX_RATE_SOURCE,
+  type FxRateEntrySource,
+} from '../../packages/accounting/src/fx-rate';
 import { convertToBaseMinor } from '../../packages/accounting/src/fx';
 import { MAX_MONEY_MINOR } from '../../packages/accounting/src/types';
 import { ensurePostgres, ownerPool, resetData } from '../helpers/test-app';
@@ -119,6 +125,12 @@ const sqlFingerprint = async (f: VectorFacts): Promise<string> => {
   return must(r.rows[0]).fp;
 };
 
+/** The vector file is data: its `source` must be the one FX rate entry source the domain knows, or the vector is refused. */
+const entrySource = (source: string): FxRateEntrySource => {
+  if (source !== FX_RATE_SOURCE) throw new Error(`an fxrate/1 vector names source '${source}', which is not an FX rate entry source`);
+  return FX_RATE_SOURCE;
+};
+
 const tsFacts = (f: VectorFacts): Parameters<typeof computeFxRateFingerprint>[0] => ({
   tenantId: f.tenantId,
   businessId: f.businessId,
@@ -127,7 +139,7 @@ const tsFacts = (f: VectorFacts): Parameters<typeof computeFxRateFingerprint>[0]
   toCurrency: f.toCurrency,
   rate: f.rate,
   effectiveAt: new Date(f.effectiveAt),
-  source: f.source,
+  source: entrySource(f.source),
 });
 
 describe('fxrate/1 — TypeScript and PostgreSQL agree (§32)', () => {

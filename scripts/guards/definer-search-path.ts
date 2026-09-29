@@ -28,6 +28,7 @@
  * Position is the whole rule.
  */
 
+import { PHASE2_PREFIX_END } from '../phase2-prefix';
 import { stripComments } from './sql-schema';
 
 /**
@@ -121,12 +122,27 @@ export interface DefinerSearchPathSources {
   /** `bootstrap.sql`, which is where the privilege half of the rule lives. */
   readonly bootstrap: string;
   /**
-   * Migrations whose bytes are frozen. They are skipped entirely: the fix for
-   * a frozen routine is `ALTER FUNCTION` in a candidate migration plus the
-   * privilege revocation in `bootstrap.sql`, never an edit here, so reporting
-   * one would be reporting something nobody may act on.
+   * Migrations whose bytes are frozen. Those up to `PHASE2_PREFIX_END` are
+   * skipped entirely: the fix for a frozen routine is `ALTER FUNCTION` in a
+   * candidate migration plus the privilege revocation in `bootstrap.sql`,
+   * never an edit here, so reporting one would be reporting something nobody
+   * may act on. Frozen files after the prefix are checked (P3-S8, below).
    */
   readonly frozen: ReadonlySet<string>;
+}
+
+/**
+ * P3-S8 (A-18(d), TL-10): the frozen skip ends at `PHASE2_PREFIX_END`.
+ *
+ * The skip exists for the Phase 1/2 routines whose EFFECTIVE paths were
+ * corrected by `ALTER FUNCTION` after the fact. No Phase 3 file needed that:
+ * with the skip lifted every file after the prefix reports nothing (A-08,
+ * measured). So a Phase 3 file is checked forever, frozen or not — its bytes
+ * cannot change (the manifest check), so this costs nothing, and it makes the
+ * static half of P:265 true for every frozen Phase 3 slice.
+ */
+export function skippedAsFrozen(frozen: ReadonlySet<string>, file: string): boolean {
+  return frozen.has(file) && file <= PHASE2_PREFIX_END;
 }
 
 export function findDefinerSearchPathViolations(src: DefinerSearchPathSources): string[] {
@@ -153,7 +169,7 @@ export function findDefinerSearchPathViolations(src: DefinerSearchPathSources): 
   // ── Half two: the paths themselves. ───────────────────────────────────
   for (const [path, sql] of Object.entries(src.migrations)) {
     const file = path.split('/').pop() ?? path;
-    const frozen = src.frozen.has(file);
+    const frozen = skippedAsFrozen(src.frozen, file);
     for (const routine of parseRoutines(sql)) {
       // A frozen file's bytes may never change, so reporting one here would
       // be reporting something nobody is allowed to fix. Their EFFECTIVE
@@ -210,7 +226,7 @@ export function findDefinerSearchPathViolations(src: DefinerSearchPathSources): 
   // exactly that before this guard existed.
   for (const [path, sql] of Object.entries(src.migrations)) {
     const file = path.split('/').pop() ?? path;
-    if (src.frozen.has(file)) continue;
+    if (skippedAsFrozen(src.frozen, file)) continue;
     const schema = stripComments(sql);
     const match = /\bCREATE\s+(?:GLOBAL\s+|LOCAL\s+)?(TEMP|TEMPORARY)\b/i.exec(schema);
     if (match) {

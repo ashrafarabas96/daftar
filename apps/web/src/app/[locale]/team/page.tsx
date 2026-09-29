@@ -18,7 +18,7 @@ import {
   typography,
 } from '@daftar/design-system';
 import { makeT, type Locale } from '@/lib/i18n';
-import { ApiError, refreshSession } from '@/lib/client';
+import { ApiError, ensureSession } from '@/lib/client';
 import {
   cancelInvitation,
   inviteMember,
@@ -68,7 +68,7 @@ export default function TeamPage({ params }: { params: Promise<{ locale: Locale 
 
   useEffect(() => {
     void (async () => {
-      if (!(await refreshSession())) {
+      if (!(await ensureSession())) {
         router.push(`/${locale}/login`);
         return;
       }

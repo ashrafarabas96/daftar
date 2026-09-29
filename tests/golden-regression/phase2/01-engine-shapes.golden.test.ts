@@ -521,6 +521,23 @@ describe('golden: engine shapes prove representability without creating the doma
    * authorized slice creates on purpose is not, and a permanent regression
    * that forbade its successor would stop the project. Nothing else moved,
    * and no shape above posts into a period.
+   *
+   * P3-S4 (0063/0064): `suppliers` came off the same way, when P3-S4 created
+   * it under its own contract (docs/PHASE_3_S4_CONTRACT.md §7.3 row 6, A-11).
+   * No shape above names a supplier. `supplier_credit_notes` and
+   * `supplier_refunds` stay forbidden: no slice has authorized them yet.
+   *
+   * P3-S5 (0065/0066): `supplier_credit_notes` came off the same way, when
+   * P3-S5 created it under its own contract (docs/PHASE_3_S5_CONTRACT.md §7.3
+   * row 6, A-11). No shape above names a credit note. `supplier_refunds` stays
+   * forbidden until the slice that authorizes it (S6).
+   *
+   * P3-S6 (0067/0068): `supplier_refunds` came off the same way, when P3-S6
+   * created it under its own contract (docs/PHASE_3_S6_CONTRACT.md §7.3 row 6,
+   * A-01). No shape above names a refund. `payments`, `payment_allocations`,
+   * `payment_reversals`, `refunds`, `credit_notes` and `customer_credits` stay
+   * forbidden: S6's tables are supplier-scoped (`supplier_payments`, …), and
+   * no generic payment or customer-credit table is authorized (MP-7).
    */
   it('not one operational table was created to express any of the shapes above', async () => {
     const forbidden = [
@@ -531,9 +548,6 @@ describe('golden: engine shapes prove representability without creating the doma
       'refunds',
       'credit_notes',
       'customer_credits',
-      'suppliers',
-      'supplier_credit_notes',
-      'supplier_refunds',
       'inventory_movements',
       'fx_rates',
     ];
@@ -546,9 +560,33 @@ describe('golden: engine shapes prove representability without creating the doma
     expect(present).toEqual([]);
   });
 
-  it('every shape used the generic internal source identity, and the source registry still holds exactly three', async () => {
+  it('every shape used the generic internal source identity, and the source registry holds exactly the three native types followed by the two P3-S3 inventory types and the two P3-S4 purchase types (P3-S5: and the P3-S5 supplier-return type; P3-S6: and the three P3-S6 supplier-settlement types; Phase 3 corrective hardening: and the 0072 residue write-off type)', async () => {
+    // The engine shapes created no domain source type. The only additions
+    // after the native three are P3-S3's (0061, contract A-14(e)), in order.
+    // P3-S4 (0063/0064): then P3-S4's two (0063, contract A-05), in order.
+    // P3-S5 (0065/0066): then P3-S5's one (0065, contract A-05; R-B2a: no
+    // `purchase_reversal`, whose accounting fact is a Phase 2 `reversal`).
+    // P3-S6 (0067/0068): then P3-S6's three (0067, contract A-05), in order.
+    // Phase 3 corrective hardening (0072, TD-16): then the residue write-off.
     const types = (await ownerPool().query<{ t: string }>(`SELECT source_type AS t FROM accounting_source_types ORDER BY sort_order`)).rows.map((r) => r.t);
-    expect(types).toEqual(['opening_balance', 'manual_adjustment', 'reversal']);
+    expect(types).toEqual([
+      'opening_balance',
+      'manual_adjustment',
+      'reversal',
+      'inventory_adjustment',
+      'inventory_opening',
+      // P3-S4 (0063/0064)
+      'purchase',
+      'negative_inventory_cost_adjustment',
+      // P3-S5 (0065/0066)
+      'supplier_return',
+      // P3-S6 (0067/0068)
+      'supplier_payment',
+      'supplier_credit_allocation',
+      'supplier_refund',
+      // Phase 3 corrective hardening (0072)
+      'purchase_residue_write_off',
+    ]);
     const used = (
       await ownerPool().query<{ t: string }>(`SELECT DISTINCT source_type AS t FROM journal_entries WHERE business_id = $1`, [must(fx).businessId])
     ).rows.map((r) => r.t);

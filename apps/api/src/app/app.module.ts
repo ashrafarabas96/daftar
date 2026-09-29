@@ -7,6 +7,7 @@ import {
   httpProviders,
   identityProviders,
   accountingProviders,
+  inventoryAuthorityProviders,
   merchantInfraProviders,
   workerProviders,
   reconcilerProviders,
@@ -24,6 +25,26 @@ import { MediaService } from '../modules/catalog/media.service';
 import { CatalogController } from '../modules/catalog/catalog.controller';
 import { PlatformController, HealthController } from '../modules/platform/platform.controller';
 import { AccountingController } from '../modules/accounting/accounting.controller';
+import { InventoryAuthorizationService } from '../modules/inventory/inventory-authorization';
+import { InventoryConfigurationService } from '../modules/inventory/inventory-configuration.service';
+import { InventoryConfigurationController } from '../modules/inventory/inventory-configuration.controller';
+import { InventoryTransferService } from '../modules/inventory/inventory-transfer.service';
+import { InventoryAdjustmentService } from '../modules/inventory/inventory-adjustment.service';
+import { InventoryStocktakeService } from '../modules/inventory/inventory-stocktake.service';
+import { InventoryOpeningService } from '../modules/inventory/inventory-opening.service';
+import { InventoryMovementsController } from '../modules/inventory/inventory-movements.controller';
+import { SuppliersController } from '../modules/purchasing/suppliers.controller';
+import { PurchasesController } from '../modules/purchasing/purchases.controller';
+import { SupplierCreditNotesController, SupplierReturnsController } from '../modules/purchasing/supplier-returns.controller';
+import { purchasingProviders } from '../modules/purchasing/purchasing.module';
+import { SupplierSettlementsController } from '../modules/purchasing/supplier-settlements.controller';
+import { PaymentMethodsController } from '../modules/payment-methods/payment-methods.controller';
+import { paymentMethodProviders } from '../modules/payment-methods/payment-methods.module';
+import { InventoryReadService } from '../modules/inventory/inventory-reads';
+import { InventoryReadsController } from '../modules/inventory/inventory-reads.controller';
+import { SupplierBalanceReadService } from '../modules/purchasing/supplier-balance-reads';
+import { SupplierBalancesController } from '../modules/purchasing/supplier-balances.controller';
+import { PaymentMethodDefaultsController, PaymentMethodDefaultsReadService } from '../modules/payment-methods/payment-method-defaults.controller';
 import { AdminService } from '../modules/admin/admin.service';
 import { AdminController } from '../modules/admin/admin.controller';
 import { OutboxPublisher } from '../modules/outbox/publisher';
@@ -49,7 +70,7 @@ export class AppModule implements NestModule {
     const { config } = options;
     return {
       module: AppModule,
-      imports: httpImports(),
+      imports: httpImports(config),
       controllers: [
         AuthController,
         TenancyController,
@@ -58,6 +79,19 @@ export class AppModule implements NestModule {
         HealthController,
         EntitlementsController,
         AccountingController,
+        InventoryConfigurationController,
+        InventoryMovementsController,
+        SuppliersController,
+        PurchasesController,
+        SupplierReturnsController,
+        SupplierCreditNotesController,
+        // P3-S6: payment methods, supplier payments, credit allocations and refunds.
+        PaymentMethodsController,
+        SupplierSettlementsController,
+        // P3-S7: the merchant reads (live, GET only).
+        InventoryReadsController,
+        SupplierBalancesController,
+        PaymentMethodDefaultsController,
         AdminController,
       ],
       providers: [
@@ -66,6 +100,28 @@ export class AppModule implements NestModule {
         ...identityProviders(config, options),
         ...merchantInfraProviders(config, options),
         ...accountingProviders(),
+        ...inventoryAuthorityProviders(),
+        // P3-AL-33/39: the authorization seam every inventory command uses, and
+        // the first command on it. Composed wherever the minter is, and only there.
+        InventoryAuthorizationService,
+        InventoryConfigurationService,
+        // P3-S3: the stock movement commands. Each posting one mints through
+        // the accounting minter and posts through the accounting adapter
+        // composed above (accountingProviders), inside one transaction.
+        InventoryTransferService,
+        InventoryAdjustmentService,
+        InventoryStocktakeService,
+        InventoryOpeningService,
+        // P3-S4: suppliers, purchase drafts, receipts and the live AP reads;
+        // P3-S5: supplier returns and the purchase reversal. The receipt, the
+        // return and the reversal mint through the same accounting minter and
+        // post through the same adapters, on the accounting-aware inventory seam.
+        ...purchasingProviders(),
+        ...paymentMethodProviders(),
+        // P3-S7: the read services of the three S7 controllers.
+        InventoryReadService,
+        SupplierBalanceReadService,
+        PaymentMethodDefaultsReadService,
         ...workerProviders(config, options),
         // Only PROCESS_MODE=all composes the reconciler beside the worker,
         // and only because this composition exists for dev and tests;

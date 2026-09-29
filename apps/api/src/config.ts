@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { hmacKeysEquivalent } from '@daftar/accounting';
 
 /**
  * Central validated config (§34). No module reads process.env directly; missing
@@ -55,6 +56,16 @@ const EnvSchema = z
       .string()
       .regex(/^[A-Za-z0-9_-]{1,32}$/)
       .optional(),
+    // P3-AL-55 §C: the HMAC key the merchant API uses to MINT `invctl/1`
+    // inventory command assertions. A THIRD, separate secret: an inventory
+    // key compromise must not reach the ledger or onboarding, and the reverse.
+    // The database holds the same bytes in `inventory_assertion_keys`, a table
+    // no runtime role can read.
+    INVENTORY_ASSERTION_KEY: z.string().optional(),
+    INVENTORY_ASSERTION_KID: z
+      .string()
+      .regex(/^[A-Za-z0-9_-]{1,32}$/)
+      .optional(),
     WORKER_DATABASE_URL: z.string().min(1).optional(),
     // P2-S8 §6: the reconciliation principal (daftar_reconciler). Read-only by
     // grant, and the ONLY database authority the reconciler process receives.
@@ -65,7 +76,8 @@ const EnvSchema = z
     // Exactly one active key signs; active+previous verify (rotation without mass logout).
     // When unset, JWT_SECRET is used as a single legacy key.
     JWT_KEYS: z.string().optional(),
-    // §52–55: only trust X-Forwarded-For when explicitly behind a known proxy.
+    // §52–55: legacy single-proxy mode, dev/test only (refused in production,
+    // TD-19 review M-1): the client is the RIGHTMOST X-Forwarded-For entry.
     TRUST_PROXY: z.enum(['true', 'false']).default('false'),
     // §XXXIX–XL: known proxies of this deployment — comma-separated exact IPs
     // (v4/v6) and/or IPv4 CIDR ranges. When set, XFF is walked right-to-left
@@ -137,6 +149,7 @@ const EnvSchema = z
         'WORKER_DATABASE_URL',
         'PROVISIONING_ASSERTION_KEY',
         'ACCOUNTING_ASSERTION_KEY',
+        'INVENTORY_ASSERTION_KEY',
         'CREDENTIAL_PAYLOAD_KEY',
         'CREDENTIAL_PAYLOAD_KEYS',
         'CREDENTIAL_KMS_ENDPOINT',
@@ -162,6 +175,16 @@ const EnvSchema = z
     // §10 (Stabilization): PROCESS_MODE=all is a dev/test convenience ONLY —
     // production must deploy the separated runtimes.
     if (mode === 'all') fail('PROCESS_MODE', 'PROCESS_MODE=all is forbidden in production (dev/test only)');
+    // TD-19 review M-1: the legacy proxy mode trusts whatever socket peer
+    // connects as "the one proxy", so a caller that reaches the API directly
+    // chooses its own address — and with it a fresh allowance of every
+    // per-client limit. A deployment names its proxies instead.
+    if (c.TRUST_PROXY === 'true') {
+      fail(
+        'TRUST_PROXY',
+        "TRUST_PROXY=true is refused in production: it lets a caller choose its client address with X-Forwarded-For; list the deployment's proxies in TRUSTED_PROXIES",
+      );
+    }
     if (mode !== 'worker' && mode !== 'reconciler') {
       if (!c.JWT_SECRET && !c.JWT_KEYS) fail('JWT_SECRET', `${mode} requires JWT_SECRET or JWT_KEYS`);
     }
@@ -178,6 +201,7 @@ const EnvSchema = z
         'PROVISIONER_DATABASE_URL',
         'PROVISIONING_ASSERTION_KEY',
         'ACCOUNTING_ASSERTION_KEY',
+        'INVENTORY_ASSERTION_KEY',
         'CREDENTIAL_KMS_ENDPOINT',
       ] as const) {
         if (c[n]) fail(n, 'must NOT be set in PROCESS_MODE=worker (worker receives worker DB + key ring + SMTP only)');
@@ -188,11 +212,13 @@ const EnvSchema = z
     // A process must not even RECEIVE secrets outside its authority.
     const forbid = (
       name:
+        | 'APP_DATABASE_URL'
         | 'PLATFORM_DATABASE_URL'
         | 'WORKER_DATABASE_URL'
         | 'PROVISIONER_DATABASE_URL'
         | 'PROVISIONING_ASSERTION_KEY'
         | 'ACCOUNTING_ASSERTION_KEY'
+        | 'INVENTORY_ASSERTION_KEY'
         | 'CREDENTIAL_PAYLOAD_KEY'
         | 'CREDENTIAL_PAYLOAD_KEYS'
         | 'SMTP_URL',
@@ -208,6 +234,13 @@ const EnvSchema = z
       forbid('SMTP_URL', 'delivery is the worker process');
     }
     if (mode === 'platform-api') {
+      // TD-14 (Phase 3 corrective §13): the platform process opens no app
+      // pool (`Database` owns it only in merchant-api and all), so the
+      // merchant credential is one it cannot use. Beside the platform's
+      // key-install authority it would complete a signing authority in one
+      // environment (install a key, then act as daftar_app): refused, not
+      // silently ignored.
+      forbid('APP_DATABASE_URL', 'the platform process has no merchant (daftar_app) authority');
       forbid('WORKER_DATABASE_URL', 'platform API has no worker authority');
       forbid('PROVISIONER_DATABASE_URL', 'provisioning is a merchant-surface boundary');
       forbid('PROVISIONING_ASSERTION_KEY', 'only the merchant API mints provisioning assertions');
@@ -215,6 +248,10 @@ const EnvSchema = z
       // platform credential may install and retire accounting keys; holding
       // the signing secret would let it mint postings.
       forbid('ACCOUNTING_ASSERTION_KEY', 'only the merchant API mints accounting assertions');
+      // P3-AL-55 §C: the same rule for the inventory command key. The
+      // platform may install and retire inventory keys; holding the signing
+      // secret would let it mint an inventory command for any business.
+      forbid('INVENTORY_ASSERTION_KEY', 'only the merchant API mints inventory assertions');
       forbid('CREDENTIAL_PAYLOAD_KEY', 'no worker credential payload authority');
       forbid('CREDENTIAL_PAYLOAD_KEYS', 'no worker credential payload authority');
       forbid('SMTP_URL', 'delivery is the worker process');
@@ -289,12 +326,36 @@ const EnvSchema = z
         fail('ACCOUNTING_ASSERTION_KEY', 'must be base64 of at least 32 bytes');
       } else if (
         c.PROVISIONING_ASSERTION_KEY &&
-        Buffer.from(c.ACCOUNTING_ASSERTION_KEY, 'base64').equals(Buffer.from(c.PROVISIONING_ASSERTION_KEY, 'base64'))
+        hmacKeysEquivalent(Buffer.from(c.ACCOUNTING_ASSERTION_KEY, 'base64'), Buffer.from(c.PROVISIONING_ASSERTION_KEY, 'base64'))
       ) {
-        // Compared as BYTES, not as strings: two different base64 spellings of
-        // one secret are still one secret, and sharing it would mean a single
-        // compromise reaches both provisioning and the ledger.
+        // Compared as the EFFECTIVE HMAC-SHA-256 KEY of the decoded bytes
+        // (P3-S8 A-19, TD-12), not as strings and not as raw bytes: two base64
+        // spellings of one secret are one secret, and `K` and `K‖0x00` are one
+        // HMAC-SHA-256 key. Sharing either would mean a single compromise
+        // reaches both provisioning and the ledger.
         fail('ACCOUNTING_ASSERTION_KEY', 'must not be the same secret as PROVISIONING_ASSERTION_KEY (separate domains, rotated independently)');
+      }
+      // ── P3-AL-55 §C: the inventory command signing key ─────────────────
+      if (!c.INVENTORY_ASSERTION_KEY) {
+        fail('INVENTORY_ASSERTION_KEY', 'production inventory commands require the inventory assertion HMAC key (base64 ≥32 bytes) installed in the database');
+      } else {
+        const inventory = Buffer.from(c.INVENTORY_ASSERTION_KEY, 'base64');
+        if (inventory.length < 32) {
+          fail('INVENTORY_ASSERTION_KEY', 'must be base64 of at least 32 bytes');
+        } else {
+          // Compared as the EFFECTIVE HMAC-SHA-256 KEY of the decoded bytes,
+          // never as strings and not even as raw bytes: two base64 spellings
+          // of one secret are one secret, `K` and `K‖0x00` are one HMAC key,
+          // and different variable names are not separation. Either
+          // equivalence would let a single compromise reach inventory
+          // authority and provisioning or the ledger.
+          if (c.PROVISIONING_ASSERTION_KEY && hmacKeysEquivalent(inventory, Buffer.from(c.PROVISIONING_ASSERTION_KEY, 'base64'))) {
+            fail('INVENTORY_ASSERTION_KEY', 'must not be the same secret as PROVISIONING_ASSERTION_KEY (separate domains, rotated independently)');
+          }
+          if (c.ACCOUNTING_ASSERTION_KEY && hmacKeysEquivalent(inventory, Buffer.from(c.ACCOUNTING_ASSERTION_KEY, 'base64'))) {
+            fail('INVENTORY_ASSERTION_KEY', 'must not be the same secret as ACCOUNTING_ASSERTION_KEY (separate domains, rotated independently)');
+          }
+        }
       }
       if (c.MEDIA_STORAGE === 'local') {
         fail('MEDIA_STORAGE', 'production requires MEDIA_STORAGE=s3 (local disk is dev-only)');

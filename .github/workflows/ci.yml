@@ -7,9 +7,13 @@
 # required-checks configuration matches on.
 name: DAFTAR CI
 
+# A pull_request run checks out the PR merge commit (refs/pull/N/merge), not
+# the branch head, so it is equivalent-tree evidence only. The push trigger on
+# the long-lived phase branches gives every pushed head a run whose checkout is
+# that exact SHA (Phase 3 corrective audit, E-1).
 on:
   push:
-    branches: [main]
+    branches: [main, 'phase/**']
   pull_request:
 
 env:
@@ -27,20 +31,20 @@ jobs:
       - name: Verify exact workspace set
         run: |
           set -e
-          for ws in apps/api apps/web apps/admin packages/domain-core packages/accounting packages/shared-contracts packages/design-system; do
+          for ws in apps/api apps/web apps/admin packages/domain-core packages/accounting packages/inventory packages/shared-contracts packages/design-system; do
             test -f "$ws/package.json" || { echo "MISSING WORKSPACE: $ws"; exit 1; }
           done
           test -f apps/android/settings.gradle.kts || { echo "MISSING: apps/android (Gradle)"; exit 1; }
           node -e "
             const pkg = require('./package.json');
-            const expected = ['apps/api','apps/web','apps/admin','packages/domain-core','packages/accounting','packages/shared-contracts','packages/design-system'].sort();
+            const expected = ['apps/api','apps/web','apps/admin','packages/domain-core','packages/accounting','packages/inventory','packages/shared-contracts','packages/design-system'].sort();
             const actual = [...pkg.workspaces].sort();
             if (JSON.stringify(expected) !== JSON.stringify(actual)) {
               console.error('workspace mismatch', { expected, actual });
               process.exit(1);
             }
           "
-          for ws in apps/api apps/web apps/admin packages/domain-core packages/accounting packages/shared-contracts packages/design-system; do
+          for ws in apps/api apps/web apps/admin packages/domain-core packages/accounting packages/inventory packages/shared-contracts packages/design-system; do
             name=$(node -p "require('./$ws/package.json').name")
             grep -q "\"node_modules/$name\"" package-lock.json || { echo "package-lock missing workspace $name"; exit 1; }
           done
@@ -63,7 +67,12 @@ jobs:
           --health-cmd "pg_isready -U postgres"
           --health-interval 5s --health-timeout 5s --health-retries 20
     steps:
+      # Full history: the corrective gate runs the explicit Phase 3 secret
+      # range scan from 0f2b09e7… and the full review-index check, and
+      # neither can reach the Phase 3 base from a depth-1 checkout.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
@@ -76,11 +85,23 @@ jobs:
         # posting module imports it by package name, so the integration and
         # security suites cannot even load without its dist/.
         # domain-core must be built before accounting, which depends on it.
+        # @daftar/inventory joins them in P3-S1: the merchant API mints the
+        # invctl/1 inventory command assertion through it by package name.
         run: |
           npm run build -w packages/domain-core -w packages/shared-contracts -w packages/design-system
           npm run build -w packages/accounting
+          npm run build -w packages/inventory
       - name: Migration manifest check
         run: npm run check:migrations
+      # The two historical invariants, on every push: the accepted Phase 2
+      # prefix 0000–0052 and the accepted Phase 3 prefix 0053–0069 stay
+      # byte-identical, and later migrations are permitted. Both run in
+      # seconds with no database. Until P3-S9 the Phase 2 one ran only inside
+      # `gate:phase2:release`, which no workflow on the Phase 3 branch runs.
+      - name: Phase 2 migration prefix
+        run: npx tsx scripts/phase2-prefix.ts
+      - name: Phase 3 migration prefix
+        run: npx tsx scripts/phase3-prefix.ts
       - name: Phase 1 machine gate
         run: npm run gate:phase1
       - name: Static guards
@@ -251,6 +272,38 @@ jobs:
         run: npm run gate:phase2:s8
         env:
           PG_PORT: '5432'
+      # The Phase 3 corrective gate (the Tech Lead's corrective directive §19),
+      # which replaces the P3-S8 step here and composes it FIRST: the permanent
+      # P3-S8 gate (0069 frozen at S8_ACCEPTED; the reconciler grants, the
+      # R-B1a guard, the definer law, the reconciliation reads, the S8 suites
+      # and T-13) and through it P3-S7 … P3-S1, P2-S8 and the chain back to
+      # Phase 1. Then every corrected blocker: the corrective migration
+      # boundary (0070 on, Phase 3 corrective hardening, frozen only after this
+      # gate passes), the corrective suites, the review-index check, the full
+      # Phase 3 secret range scan, the real-browser red proof and the full
+      # ar/en/tr × phone/tablet/desktop matrix on the production build, and
+      # Budget A last. An entry the coordinator has not filled is a FAIL, not
+      # a skip, so this step is red until every corrective stream has landed.
+      - name: Install Chromium for the corrective gate's real-browser matrix
+        run: npx playwright-core install --with-deps chromium
+      - name: Phase 3 corrective gate (composes P3-S8)
+        run: npm run gate:phase3:corrective
+        env:
+          PG_PORT: '5432'
+          BROWSER_PG_DIR: ${{ runner.temp }}/corrective-browser-pg
+          # The range scan's head: the PR head on a pull_request run (the
+          # checkout is GitHub's merge commit), the pushed SHA on a push run.
+          PHASE3_SCAN_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Keep the corrective gate's browser screenshots and results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: corrective-gate-browser-evidence
+          path: |
+            release/browser
+            release/browser-red-proof
+          if-no-files-found: ignore
+          retention-days: 30
       - name: Tampered-migration hard-fail proof
         run: |
           set -e
@@ -316,6 +369,57 @@ jobs:
           ./gradlew lint testDebugUnitTest assembleDebug --no-daemon --stacktrace
 
   # -------------------------------------------------------------------------
+  # 4b. Real-browser gate (Phase 3 corrective §8, TD-06). The production web
+  #     build (`node server.mts`, CSP enforced), the built merchant API and a fresh
+  #     embedded PostgreSQL migrated from 0000, every business seeded through
+  #     the API; the Phase 3 merchant routes and command flows driven in
+  #     headless Chromium in ar/en/tr at 360x640, 768x1024 and 1280x800,
+  #     checked for functional visual invariants (no pixel comparison).
+  #     The red proof runs first: defects planted in every locale x viewport
+  #     must all be reported, or the step fails. Screenshots are kept.
+  #     Chromium comes from the pinned playwright-core's own installer.
+  # -------------------------------------------------------------------------
+  browser:
+    needs: workspaces
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - name: Build the library packages
+        run: |
+          npm run build -w packages/domain-core -w packages/shared-contracts -w packages/design-system
+          npm run build -w packages/accounting
+          npm run build -w packages/inventory
+      - name: Build the merchant API and the production web app
+        run: |
+          npm run build -w @daftar/api
+          npm run build -w @daftar/web
+      - name: Install Chromium for the pinned playwright-core
+        run: npx playwright-core install --with-deps chromium
+      - name: Browser gate red proof (planted overflow, raw key, console error, missing string)
+        run: npm run gate:browser -- --plant=all --steps=header,stock --out=release/browser-red-proof
+        env:
+          BROWSER_PG_DIR: ${{ runner.temp }}/browser-pg-red
+      - name: Browser gate (ar/en/tr x phone/tablet/desktop)
+        run: npm run gate:browser
+        env:
+          BROWSER_PG_DIR: ${{ runner.temp }}/browser-pg
+      - name: Keep the screenshots and results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-gate-evidence
+          path: |
+            release/browser
+            release/browser-red-proof
+          retention-days: 30
+
+  # -------------------------------------------------------------------------
   # 5. Secret / dependency / artifact hygiene scans.
   # -------------------------------------------------------------------------
   hygiene:
@@ -354,7 +458,40 @@ jobs:
           fi
       # GITHUB_TOKEN is REQUIRED by gitleaks-action v2 to scan a pull request;
       # without it the action exits non-zero before scanning anything.
+      #
+      # WHAT THIS STEP DOES NOT COVER: on a pull request the action asks the
+      # GitHub API for the PR's commits without paging, gets the first page
+      # (the 30 OLDEST commits) and scans `--no-merges --first-parent
+      # <1st>^..<30th>`. Every later commit, the head included, and every
+      # commit that arrived through a merge, is outside that window — on PR #4
+      # the log said "30 commits scanned" of about 400. It is kept, not
+      # removed; the explicit range scan below is the one that covers history.
       - name: Secret scan (gitleaks)
         uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # The explicit range scan (Phase 3 corrective directive §7): every commit
+      # reachable from the PR head and not from its merge-base with the base
+      # branch, merged agent branches and merge commits included, with
+      # gitleaks 8.24.3 downloaded by the script and checked against the
+      # published archive digest and the binary digest. On the Phase 3 branch
+      # the base is not derived but DECLARED (0f2b09e…, the script's default)
+      # and must equal the merge-base, or the step fails. The branch name
+      # reaches the shell through the environment, never the script text.
+      - name: Secret history range scan (every commit of the pull request)
+        if: github.event_name == 'pull_request'
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          HEAD_REF: ${{ github.head_ref }}
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+          base_arg='--base=derive'
+          if [ "$HEAD_REF" = 'phase/3-inventory-purchases-suppliers' ]; then base_arg=''; fi
+          npm run scan:secrets:phase3 -- --head="$HEAD_SHA" --main-ref="origin/$BASE_REF" $base_arg --evidence=release/secret-history-scan.json
+      - uses: actions/upload-artifact@v4
+        if: always() && github.event_name == 'pull_request'
+        with:
+          name: secret-history-scan
+          path: release/secret-history-scan.json
+          if-no-files-found: ignore

@@ -16,8 +16,10 @@ lives in `release/phase2-s9-release-evidence.json`, assembled by
 
 ## 1. What P2-S9 is, and what it is not
 
-P2-S9 is the closure of Phase 2. It **changes no schema**: there is no `0053`,
-and `npm run gate:phase2:release` fails if one appears. It adds no accounting
+P2-S9 is the closure of Phase 2. It **changes no schema**: it added no `0053`,
+and at closure `npm run gate:phase2:release` failed if one appeared (corrected
+2026-09-26, §5.3: the gate now protects the Phase 2 prefix `0000`–`0052` and
+permits later migrations). It adds no accounting
 feature, no financial source, no report, no API capability and no UI. Phase 3
 does not start here.
 
@@ -53,6 +55,8 @@ an equality at `0050` to a floor at `0052`, and the "no `0053` may exist"
 clause was removed, because an accepted historical gate that forbids its
 successor is a gate that stops the project. That prohibition now lives in
 P2-S9's own release gate, where it belongs while P2-S9 is the current slice.
+It then stayed there after P2-S9 stopped being the current slice, which is the
+same defect one slice later; §5.3 records how it was corrected.
 `tests/security/phase2-s8-gate-tamper.test.ts` proves the transition in both
 directions: the gate refuses an unfrozen `0051`/`0052`, refuses either one
 re-frozen at a digest nobody accepted, refuses a boundary that moved back
@@ -226,8 +230,10 @@ remains zero.
    tests, and every green number is worth exactly what that proof is worth;
 2. what the gated tree IS: no git working tree or credential in an extracted
    archive, the archive matches the inventory it carries, frozen history
-   `0000`–`0052` byte-for-byte, P2-S9 creates no migration, no authoritative
-   document contradicts the accepted state;
+   `0000`–`0052` byte-for-byte, the accepted Phase 2 migration prefix
+   `0000`–`0052` intact (until 2026-09-26 this check was "P2-S9 creates no
+   migration"; corrected in §5.3), no authoritative document contradicts the
+   accepted state;
 3. `gate:phase1:release` — the whole Phase 1 release command matrix: toolchain,
    manifest, db-from-zero, static guards, localization, format, lint,
    typecheck, unit, integration + security + database contract + upgrade
@@ -315,6 +321,70 @@ built, and passes again once the build output is removed.
 
 Both findings are the same shape, and it is the shape RB-P2-01 has: a check
 that had only ever been asked in the state that made it pass.
+
+### 5.3 Correction after Phase 2 closed: the prefix, not "nothing after 0052"
+
+Phase release gates protect **historical invariants**. They must not prohibit
+forward evolution. The P2-S9 release gate broke that rule, and it is recorded
+here as it happened rather than written out of the history.
+
+**The defect.** Step 2 of the gate carried the check "P2-S9 creates no
+migration" (`phase2s9AddsNoMigration` in `scripts/phase2-release-gate.ts`),
+whose exact assertion was: *no `.sql` file may exist in
+`infrastructure/database/migrations` whose name sorts after
+`0052_accounting_journal_lines_rls_performance.sql`*. That was true of the
+P2-S9 closure slice, which added no migration. But it was written as a
+permanent property of any tree, and `gate:phase2:release` is run on every
+later release. When P3-S1's migrations `0053`–`0058` were accepted and frozen,
+the gate failed on them — frozen or not — and stopped before any of its later
+steps ran, so no Phase 3 tree could ever pass it. It is the same mistake §2
+removed from the P2-S8 gate: a predecessor's gate that forbids its authorized
+successor. It survived P2-S9 because a closure-time rule was never separated
+from the invariant that outlives the closure.
+
+**The correction** (Tech Lead decision, 2026-09-26). Only that one check was
+replaced. The invariant the gate now asserts is:
+
+> Phase 2 migrations `0000` through `0052` remain complete, ordered, immutable
+> and byte-identical to the accepted Phase 2 migration prefix. Later forward
+> migrations are permitted.
+
+It lives in `scripts/phase2-prefix.ts` and proves, against a literal copy of
+the 53 accepted (name, SHA-256) pairs taken from the manifest at `0f2b09e7`
+(identical at `bf2eeda`) — not against today's manifest, so a file and its
+manifest entry changed together are still refused:
+
+- every accepted file exists under its accepted name and hashes to its
+  accepted digest;
+- the `.sql` files in the Phase 2 range (numbered `0000`–`0052`, or sorting at
+  or before `0052`'s name) are exactly the accepted names in order, so a
+  rename, deletion or insertion is refused;
+- the manifest's first 53 entries are exactly the accepted pairs in order, and
+  no later entry sorts into the range;
+- `frozenThrough` is at least `0052`.
+
+The module names no migration after `0052` and knows nothing about Phase 3, so
+it needs no edit for Phase 4 or any later phase. It can be run on any tree:
+`npx tsx scripts/phase2-prefix.ts --root=<dir>`.
+
+**Two guarantees, kept separate.** `gate:phase2:release` protects the immutable
+Phase 2 prefix. The full current chain (`0000`–`0058` at P3-S1) is protected by
+the current phase's gate (`gate:phase3:s1`, which pins `0053`–`0058` by digest)
+and by the manifest check (`check:migrations`). Neither depends on the
+other.
+
+**Proof.** `tests/security/phase2-release-prefix.test.ts` runs the check on
+throwaway copies of the migrations and manifest. It PASSES on exactly the
+prefix through `0052`, on the prefix plus `0053`–`0058`, and on a synthetic
+`0059` added to the copy only (no production `0059` exists). It FAILS on one
+byte changed in a Phase 2 migration (also with the manifest digest changed to
+match), a deleted, renamed or moved Phase 2 migration, a file inserted into
+the range, the prefix reordered or an entry's identity changed in the
+manifest, a Phase 2 entry removed from the manifest, a changed expected
+digest, and `frozenThrough` moved back inside the prefix; and the standalone
+check exits 0 on an intact tree and 1 on a tampered one. Run against the
+accepted Phase 2 checkpoints themselves (`bf2eeda`, `0f2b09e7`) and the
+accepted P3-S1 head (`f1cc4c4`), the check passes on each.
 
 ---
 
@@ -408,6 +478,12 @@ pushes and deletions, and leave admin bypass enabled for emergency recovery.
 الهجرة فقط — **لم تُمسّ أي هجرة مجمّدة، ولم تُوسَّع صلاحية أي دور تشغيلي** —
 وصار النشر يطبّق الهجرات الـ53 كاملة بصلاحية النشر وحدها، وأثبتنا بالمقارنة
 أن قاعدة البيانات الناتجة مطابقة تمامًا لتلك التي ينتجها المستخدم الخارق.
+
+**تصحيح لاحق (2026-09-26).** كان في بوابة الإصدار فحص «P2-S9 لا تنشئ هجرة»
+يرفض أي هجرة بعد `0052`. كان صحيحًا وقت الإغلاق، لكنه كُتب كقاعدة دائمة، فمنع
+هجرات المرحلة الثالثة المصرّح بها. بقرار القائد التقني استُبدل بالقاعدة
+الصحيحة: هجرات المرحلة الثانية `0000`–`0052` تبقى كاملة ومرتبة وثابتة ومطابقة
+بايتًا ببايت للبادئة المقبولة، والهجرات اللاحقة مسموحة (القسم 5.3).
 
 **ما الذي يحتاج منك يا أشرف؟** حماية الفرع `main` لا يمكن ضبطها من هنا
 (`MAIN_PROTECTION_EXTERNAL_BLOCKER`) — تُضبط مرة واحدة من إعدادات GitHub كما

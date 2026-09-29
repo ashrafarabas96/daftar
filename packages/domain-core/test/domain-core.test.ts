@@ -407,6 +407,89 @@ describe('P2-S1 accounting permissions (directive §17, §18, §23)', () => {
   });
 });
 
+describe('P3-S1 Phase 3 permissions (P3-AL-38, P3-AL-53)', () => {
+  const ORDINARY = ['inventory.view', 'purchases.view', 'suppliers.view'] as const;
+  const SENSITIVE = [
+    'inventory.adjust',
+    'inventory.transfer',
+    'inventory.stocktake',
+    'purchases.manage',
+    'purchases.receive',
+    'purchases.return',
+    'suppliers.manage',
+    'suppliers.pay',
+  ] as const;
+  const PHASE_3: readonly string[] = [...ORDINARY, ...SENSITIVE];
+  const isPhase3 = (p: string): boolean => PHASE_3.includes(p);
+
+  /** The Manager's accepted Phase 1 set, byte for byte and in order (P3-AL-38 precision note). */
+  const MANAGER_PHASE_1 = [
+    'business.view',
+    'branch.view',
+    'branch.manage',
+    'warehouse.view',
+    'warehouse.manage',
+    'member.view',
+    'member.invite',
+    'role.view',
+    'role.assign',
+    'catalog.view',
+    'catalog.create',
+    'catalog.update',
+    'catalog.archive',
+    'category.manage',
+    'media.manage',
+    'settings.view',
+    'subscription.view',
+  ];
+
+  it('registers exactly the eleven Phase 3 keys, and no other key under their prefixes', () => {
+    for (const key of PHASE_3) expect(isPermission(key)).toBe(true);
+    expect(PERMISSIONS.filter((p) => /^(inventory|purchases|suppliers)\./.test(p)).sort()).toEqual([...PHASE_3].sort());
+  });
+
+  it('the three view keys are ordinary and the other eight are sensitive', () => {
+    for (const key of ORDINARY) expect(isSensitivePermission(key)).toBe(false);
+    for (const key of SENSITIVE) expect(isSensitivePermission(key)).toBe(true);
+    expect(SENSITIVE_PERMISSIONS.filter((p) => isPhase3(p)).sort()).toEqual([...SENSITIVE].sort());
+  });
+
+  it('owner: all eleven, by construction of the registry and by identity', () => {
+    for (const key of PHASE_3) expect(BUILTIN_ROLE_PERMISSIONS.owner).toContain(key);
+    const owner = TrustedRoleSet.fromPersistence([{ key: 'owner', isSystem: true, permissions: new Set() }]);
+    for (const key of [...ORDINARY, ...SENSITIVE]) expect(hasPermission(owner, key)).toBe(true);
+  });
+
+  it('manager: exactly the three view keys among the Phase 3 keys', () => {
+    expect(BUILTIN_ROLE_PERMISSIONS.manager.filter((p) => isPhase3(p)).sort()).toEqual([...ORDINARY].sort());
+  });
+
+  it('manager: the accepted Phase 1 set survives untouched, in order, with the Phase 3 keys appended', () => {
+    expect(BUILTIN_ROLE_PERMISSIONS.manager.filter((p) => !isPhase3(p))).toEqual(MANAGER_PHASE_1);
+    expect(BUILTIN_ROLE_PERMISSIONS.manager.slice(0, MANAGER_PHASE_1.length)).toEqual(MANAGER_PHASE_1);
+  });
+
+  it('cashier: no Phase 3 key', () => {
+    expect(BUILTIN_ROLE_PERMISSIONS.cashier.some((p) => isPhase3(p))).toBe(false);
+    expect(BUILTIN_ROLE_PERMISSIONS.cashier).toEqual(['catalog.view']);
+  });
+
+  it('no non-owner built-in role holds a sensitive Phase 3 key', () => {
+    for (const roleKey of ['manager', 'cashier'] as const) {
+      const set = TrustedRoleSet.fromPersistence([{ key: roleKey, isSystem: true, permissions: new Set(BUILTIN_ROLE_PERMISSIONS[roleKey]) }]);
+      for (const key of SENSITIVE) expect(hasPermission(set, key)).toBe(false);
+    }
+  });
+
+  it('an existing custom role gains nothing, and the delegation ceiling holds for the new keys', () => {
+    const custom = TrustedRoleSet.fromPersistence([{ key: 'stock-clerk', isSystem: false, permissions: new Set(['catalog.view', 'catalog.update']) }]);
+    for (const key of [...ORDINARY, ...SENSITIVE]) expect(hasPermission(custom, key)).toBe(false);
+    const manager = TrustedRoleSet.fromPersistence([{ key: 'manager', isSystem: true, permissions: new Set(BUILTIN_ROLE_PERMISSIONS.manager) }]);
+    expect(beyondGrantAuthority(manager, ['inventory.view'])).toEqual([]);
+    expect(beyondGrantAuthority(manager, ['inventory.adjust', 'suppliers.pay'])).toEqual(['inventory.adjust', 'suppliers.pay']);
+  });
+});
+
 describe('industry profiles (§46–48)', () => {
   it('generic profile exists and resolves unknown activities', async () => {
     const { resolveIndustryProfile, normalizeIndustryProfileKey, GENERIC_INDUSTRY_PROFILE } = await import('../src');

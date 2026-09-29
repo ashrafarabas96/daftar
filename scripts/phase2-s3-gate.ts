@@ -409,11 +409,41 @@ function checkKeySeparation(): void {
   } else {
     ok('ACCOUNTING_ASSERTION_KEY and ACCOUNTING_ASSERTION_KID are configured separately from provisioning');
   }
-  if (/PROVISIONING_ASSERTION_KEY/.test(config) && /equals\(|timingSafeEqual|compare\(/.test(config)) {
-    ok('the configuration refuses to start when the accounting key equals the provisioning key');
+  // P3-S8 A-19 (TD-12, pin 6): the pair is judged by the one effective-key
+  // comparison. A byte comparison is the defect TD-12 names — `K` and
+  // `K‖0x00` differ as bytes and are one HMAC-SHA-256 key — so `.equals(`
+  // anywhere in the configuration fails the check, and the comparison must be
+  // a `hmacKeysEquivalent(` call whose arguments name both keys.
+  const pairCompared = keyComparisonCallArguments(config).some((args) => /ACCOUNTING_ASSERTION_KEY/.test(args) && /PROVISIONING_ASSERTION_KEY/.test(args));
+  if (pairCompared) {
+    ok('the configuration refuses to start when the accounting key is HMAC-equivalent to the provisioning key');
   } else {
     fail('key-separation', 'nothing refuses an accounting key byte-equal to the provisioning key — one leaked secret would forge both authorities (§16)');
   }
+  if (/\.equals\(/.test(config)) {
+    fail(
+      'key-separation',
+      'apps/api/src/config.ts compares key material with .equals( — a byte comparison admits K and K‖0x00, which are one HMAC-SHA-256 key (TD-12)',
+    );
+  }
+}
+
+/** The argument text of every `hmacKeysEquivalent(` call in `source`, read up to its balanced closing parenthesis. */
+function keyComparisonCallArguments(source: string): string[] {
+  const found: string[] = [];
+  const marker = 'hmacKeysEquivalent(';
+  for (let at = source.indexOf(marker); at !== -1; at = source.indexOf(marker, at + marker.length)) {
+    let depth = 1;
+    let end = at + marker.length;
+    while (end < source.length && depth > 0) {
+      const ch = source[end];
+      if (ch === '(') depth += 1;
+      else if (ch === ')') depth -= 1;
+      end += 1;
+    }
+    if (depth === 0) found.push(source.slice(at + marker.length, end - 1));
+  }
+  return found;
 }
 
 // ── 6. Composed command matrix ──────────────────────────────────────────────

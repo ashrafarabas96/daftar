@@ -24,6 +24,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { arch, cpus, platform, release, totalmem } from 'node:os';
 import { join, relative } from 'node:path';
+import { credentialFinding } from './secret-scan';
 
 const ROOT = join(__dirname, '..');
 
@@ -342,7 +343,6 @@ const REQUIRED_SOURCE_FILES = [
 ];
 
 const FORBIDDEN_ARTIFACT = /(^|\/)(\.env|.*\.log|dev-mailbox.*|.*\.tsbuildinfo|.*\.pem|.*\.key|.*\.zip|.*\.dump|.*\.sql\.gz)$/;
-const RAW_CREDENTIAL = /argon2id\$[A-Za-z0-9+/=]{20,}|-----BEGIN [A-Z ]*PRIVATE KEY-----/;
 const IGNORED_DIRS = new Set(['node_modules', '.git', '.next', 'dist', 'build', '.gradle', 'coverage', 'release', 'var', '.pgdata']);
 
 const IS_GIT = spawnSync('git', ['rev-parse', '--is-inside-work-tree'], { cwd: ROOT, encoding: 'utf8' }).status === 0;
@@ -563,12 +563,12 @@ const steps: { name: string; fn: () => boolean }[] = [
   {
     name: 'secret scan',
     fn: () =>
+      // Every shipped file that is not binary, with no path exemption (scripts/secret-scan.ts, review L-4).
       inProcess('raw credential scan', () =>
-        shippedFiles()
-          .filter((rel) => /^(apps|packages|infrastructure|scripts)\//.test(rel) && /\.(ts|tsx|sql|kt|kts|json|xml|mjs)$/.test(rel))
-          .filter((rel) => !/static-guards|export-release|phase1-release-gate/.test(rel))
-          .filter((rel) => RAW_CREDENTIAL.test(readFileSync(join(ROOT, rel), 'utf8')))
-          .map((rel) => `raw credential material: ${rel}`),
+        shippedFiles().flatMap((rel) => {
+          const finding = credentialFinding(rel, readFileSync(join(ROOT, rel)), { devKeyName: false });
+          return finding === null ? [] : [`raw credential material: ${rel} (${finding})`];
+        }),
       ),
   },
   {

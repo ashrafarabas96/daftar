@@ -105,14 +105,37 @@ describe('an assertion is bound to every claim it names (§38, §39)', () => {
   });
 
   it('an operation kind is tightly paired with ONE source type, as data', async () => {
-    // `reverse` owns `reversal` and nothing else; `post` owns the other two.
-    // The pairing is a table, so it is provable by reading it.
+    // `reverse` owns `reversal` and nothing else; `post` owns the other two
+    // native types and, since 0061 (P3-S3, contract A-14(e)), the two
+    // inventory source types. The pairing is a table, so it is provable by
+    // reading it. P3-S4 (0063/0064, contract A-05): `post` also owns the two
+    // purchase-side source types, and nothing else was added. P3-S5
+    // (0065/0066, contract A-05): `post` also owns `supplier_return`; R-B2a
+    // registers no accounting `purchase_reversal` (its fact is a `reversal`).
+    // P3-S6 (0067/0068, contract A-05): `post` also owns the three supplier
+    // settlement source types, in sort position; nothing else was added.
+    // Phase 3 corrective (0072, TD-16): `post` also owns
+    // `purchase_residue_write_off`, in sort position; nothing else was added.
     const pairs = await ownerPool().query<{ operation_kind: string; source_type: string }>(
       `SELECT operation_kind, source_type FROM accounting_operation_kinds ORDER BY operation_kind, source_type`,
     );
     expect(pairs.rows).toEqual([
+      { operation_kind: 'post', source_type: 'inventory_adjustment' },
+      { operation_kind: 'post', source_type: 'inventory_opening' },
       { operation_kind: 'post', source_type: 'manual_adjustment' },
+      // P3-S4 (0063/0064)
+      { operation_kind: 'post', source_type: 'negative_inventory_cost_adjustment' },
       { operation_kind: 'post', source_type: 'opening_balance' },
+      // P3-S4 (0063/0064)
+      { operation_kind: 'post', source_type: 'purchase' },
+      // Phase 3 corrective (0072)
+      { operation_kind: 'post', source_type: 'purchase_residue_write_off' },
+      // P3-S6 (0067/0068)
+      { operation_kind: 'post', source_type: 'supplier_credit_allocation' },
+      { operation_kind: 'post', source_type: 'supplier_payment' },
+      { operation_kind: 'post', source_type: 'supplier_refund' },
+      // P3-S5 (0065/0066)
+      { operation_kind: 'post', source_type: 'supplier_return' },
       { operation_kind: 'reverse', source_type: 'reversal' },
     ]);
 

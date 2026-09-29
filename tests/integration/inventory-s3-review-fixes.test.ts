@@ -1,0 +1,541 @@
+/**
+ * P3-S3 — the independent security review's findings, proven against the
+ * live migrations 0061/0062 (SQL smoke proofs, two connections where the
+ * finding is a race).
+ *
+ * F1 (0061 R-13): a Case B inventory opening and a reversed opening balance
+ *     never meet — in either order, and while either is in flight.
+ * F2 (0062 R-14): a concurrent identical opening replays; it is not refused
+ *     inventory.opening_already_posted.
+ * F3 (0061 §2): inventory_stock_source_guard_gaps() reports a disabled,
+ *     conditional, narrowed or re-pointed per-type §2.3 guard, a bridge line
+ *     FK to the wrong table or unvalidated, and a guard function whose body
+ *     was replaced under the same oid and owner.
+ */
+import { randomUUID } from 'node:crypto';
+import type { Client } from 'pg';
+import { beforeAll, describe, expect, it } from 'vitest';
+import { openingPayload } from '../../packages/inventory/src/movement-payloads';
+import {
+  appClient,
+  must,
+  openingBalanceFingerprintOf,
+  openingBalanceSnapshot,
+  postOpeningBalanceAs,
+  positionPayload,
+  postReversalAs,
+  reversalFingerprintOfSnapshot,
+  sourceAssertion,
+  todayIn,
+  type PostLine,
+} from '../helpers/accounting-posting';
+import {
+  expectAccepted,
+  expectRefused,
+  ownerClient,
+  pidOf,
+  scratch,
+  settle,
+  waitUntilBlocked,
+  seedStockBusiness,
+  type StockBusiness,
+} from '../helpers/stock-ledger';
+import { ensurePostgres, mintTestInventoryAssertion, ownerPool } from '../helpers/test-app';
+
+const AT = new Date('2026-03-14T09:15:00Z');
+const line = (systemKey: string, side: 'D' | 'C', amount: bigint): PostLine => ({
+  account: { kind: 'system', systemKey },
+  side,
+  baseAmountMinor: amount,
+  baseCurrency: 'ILS',
+  txnAmountMinor: amount,
+  txnCurrency: 'ILS',
+  fxRate: '1',
+  fxRateSource: 'base',
+  fxRateAt: AT,
+  memo: null,
+});
+
+/** An opening position holding Inventory 10000 (and cash, so it is not only Inventory). */
+const POSITIONS = [line('inventory', 'D', 10000n), line('cash', 'D', 5000n)];
+
+interface PostedBalance {
+  readonly openingBalanceId: string;
+  readonly entryId: string;
+}
+
+async function postBalance(s: StockBusiness, day: string, positions: readonly PostLine[] = POSITIONS): Promise<PostedBalance> {
+  const openingBalanceId = randomUUID();
+  const ob = await postOpeningBalanceAs(
+    sourceAssertion({
+      actorUserId: s.userId,
+      tenantId: s.tenantId,
+      businessId: s.businessId,
+      operationKind: 'post',
+      sourceType: 'opening_balance',
+      sourceId: openingBalanceId,
+      postingFingerprint: openingBalanceFingerprintOf({
+        tenantId: s.tenantId,
+        businessId: s.businessId,
+        openingBalanceId,
+        asOfDate: day,
+        baseCurrency: 'ILS',
+        positions,
+      }),
+    }),
+    { asOfDate: day, positions, openingBalanceId },
+  );
+  return { openingBalanceId, entryId: ob.entryId };
+}
+
+/** `accounting_post_reversal` of the balance's entry, in `client`'s open transaction when given. */
+async function reverseBalance(s: StockBusiness, day: string, ob: PostedBalance, client?: Client): Promise<string> {
+  const snap = openingBalanceSnapshot({
+    entryId: ob.entryId,
+    tenantId: s.tenantId,
+    businessId: s.businessId,
+    asOfDate: day,
+    baseCurrency: 'ILS',
+    positions: POSITIONS,
+  });
+  const r = await postReversalAs(
+    sourceAssertion({
+      actorUserId: s.userId,
+      tenantId: s.tenantId,
+      businessId: s.businessId,
+      operationKind: 'reverse',
+      sourceType: 'reversal',
+      sourceId: ob.entryId,
+      postingFingerprint: reversalFingerprintOfSnapshot(snap, day),
+    }),
+    ob.entryId,
+    day,
+    'reverse the opening balance',
+    'req-reversal',
+    client,
+  );
+  return r.entryId;
+}
+
+interface OpeningCall {
+  readonly openingId: string;
+  readonly openingBalanceId: string | null;
+  readonly positionMinor: bigint | null;
+  /** 10 units at 1000.0000000000 = 10000 minor unless overridden. */
+  readonly unitCost?: string;
+  readonly unitCostC10?: bigint;
+}
+
+/** `inventory_record_opening` as `daftar_app` in `c`'s OPEN transaction (the caller commits or rolls back). */
+async function recordOpening(c: Client, s: StockBusiness, day: string, o: OpeningCall): Promise<{ replayed: boolean; case_kind: string }> {
+  const built = openingPayload({
+    tenantId: s.tenantId,
+    businessId: s.businessId,
+    openingId: o.openingId,
+    occurredOn: day,
+    openingBalanceId: o.openingBalanceId,
+    positionMinor: o.positionMinor,
+    lines: [{ warehouseId: s.warehouse1, variantId: s.piece.variantId, qtyQ4: 100000n, unitCostC10: o.unitCostC10 ?? 10000000000000n }],
+  });
+  const assertion = mintTestInventoryAssertion({
+    actorUserId: s.userId,
+    tenantId: s.tenantId,
+    businessId: s.businessId,
+    opCode: 'inventory.opening',
+    payloadSha256: built.payload.sha256,
+  });
+  await c.query(
+    `SELECT set_config('app.tenant_id', $1, true), set_config('app.business_id', $2, true),
+            set_config('app.inventory_assertion', $3, true), set_config('app.business_transaction_id', $4, true)`,
+    [s.tenantId, s.businessId, assertion, randomUUID()],
+  );
+  const r = await c.query<{ replayed: boolean; case_kind: string }>(
+    `SELECT replayed, case_kind FROM inventory_record_opening($1, $2::date, $3, $4::bigint, ARRAY[$5]::uuid[], ARRAY[$6]::uuid[], ARRAY['10']::numeric[], ARRAY[$7]::numeric[])`,
+    [o.openingId, day, o.openingBalanceId, o.positionMinor === null ? null : o.positionMinor.toString(), s.warehouse1, s.piece.variantId, o.unitCost ?? '1000'],
+  );
+  return must(r.rows[0]);
+}
+
+async function inOwnTransaction<T>(run: (c: Client) => Promise<T>): Promise<T> {
+  const c = await appClient();
+  try {
+    await c.query('BEGIN');
+    const v = await run(c);
+    await c.query('COMMIT');
+    return v;
+  } catch (e) {
+    await c.query('ROLLBACK').catch(() => undefined);
+    throw e;
+  } finally {
+    await c.end().catch(() => undefined);
+  }
+}
+
+async function glInventory(businessId: string): Promise<bigint> {
+  const r = await ownerPool().query<{ n: string }>(
+    `SELECT coalesce(sum(l.debit_minor - l.credit_minor), 0)::text AS n
+       FROM journal_lines l JOIN accounts a ON a.business_id = l.business_id AND a.id = l.account_id
+      WHERE l.business_id = $1 AND a.system_key = 'inventory'`,
+    [businessId],
+  );
+  return BigInt(must(r.rows[0]).n);
+}
+
+async function stockValue(businessId: string): Promise<bigint> {
+  const r = await ownerPool().query<{ n: string }>(`SELECT coalesce(sum(value_delta_base_minor), 0)::text AS n FROM stock_movements WHERE business_id = $1`, [
+    businessId,
+  ]);
+  return BigInt(must(r.rows[0]).n);
+}
+
+/** The accounting-owned position read, as the one principal that may call it. */
+async function positionRead(s: StockBusiness): Promise<{ opening_balance_id: string; inventory_net_minor: string }[]> {
+  const c = await ownerClient();
+  try {
+    await c.query('BEGIN');
+    await c.query(`SELECT set_config('app.tenant_id', $1, true), set_config('app.business_id', $2, true)`, [s.tenantId, s.businessId]);
+    await c.query('SET LOCAL ROLE daftar_inventory_internal');
+    const r = await c.query<{ opening_balance_id: string; inventory_net_minor: string }>(
+      `SELECT opening_balance_id, inventory_net_minor::text AS inventory_net_minor FROM accounting_inventory_opening_position($1)`,
+      [s.businessId],
+    );
+    return r.rows;
+  } finally {
+    await c.query('ROLLBACK').catch(() => undefined);
+    await c.end().catch(() => undefined);
+  }
+}
+
+let seq = 0;
+async function business(tag: string): Promise<{ s: StockBusiness; day: string }> {
+  seq += 1;
+  const s = await seedStockBusiness(ownerPool(), `rv${tag}${seq}${Date.now().toString(36)}`);
+  return { s, day: await todayIn(ownerPool(), 'Asia/Hebron') };
+}
+
+beforeAll(async () => {
+  await ensurePostgres();
+});
+
+describe('F1 — a Case B inventory opening and a reversed opening balance never meet (0061 R-13)', () => {
+  it('reversing the entry of an opening balance a posted Case B opening is bound to is refused, and the ledger still equals the stock', async () => {
+    const { s, day } = await business('a');
+    const ob = await postBalance(s, day);
+    const opened = await inOwnTransaction((c) =>
+      recordOpening(c, s, day, { openingId: randomUUID(), openingBalanceId: ob.openingBalanceId, positionMinor: 10000n }),
+    );
+    expect(opened.case_kind).toBe('opening_balance_bound');
+
+    const refused = await settle(() => reverseBalance(s, day, ob));
+    expectRefused(refused, 'P0001', 'accounting.opening_balance_inventory_bound', 'reverse after bind');
+    expect(await glInventory(s.businessId)).toBe(10000n);
+    expect(await stockValue(s.businessId)).toBe(10000n);
+    const reversals = await ownerPool().query(`SELECT 1 FROM accounting_reversals WHERE business_id = $1`, [s.businessId]);
+    expect(reversals.rowCount).toBe(0);
+  });
+
+  it('a reversed opening balance states no position: Case B cannot bind it (inventory.opening_case_changed)', async () => {
+    const { s, day } = await business('b');
+    const ob = await postBalance(s, day);
+    expect((await positionRead(s)).map((r) => r.inventory_net_minor)).toEqual(['10000']);
+    await reverseBalance(s, day, ob);
+    expect(await positionRead(s)).toEqual([]);
+
+    const refused = await settle(() =>
+      inOwnTransaction((c) => recordOpening(c, s, day, { openingId: randomUUID(), openingBalanceId: ob.openingBalanceId, positionMinor: 10000n })),
+    );
+    expectRefused(refused, 'P0001', 'inventory.opening_case_changed', 'bind after reversal');
+    expect(await stockValue(s.businessId)).toBe(0n);
+    expect(await glInventory(s.businessId)).toBe(0n);
+    // Case A is what remains: a zero-value opening (no entry owed) records.
+    const caseA = await inOwnTransaction((c) =>
+      recordOpening(c, s, day, { openingId: randomUUID(), openingBalanceId: null, positionMinor: null, unitCost: '0', unitCostC10: 0n }),
+    );
+    expect(caseA.case_kind).toBe('ledger_posting');
+  });
+
+  it('opening in flight first: the reversal waits on the balance row, then is refused once the opening commits', async () => {
+    const { s, day } = await business('c');
+    const ob = await postBalance(s, day);
+    const opening = await appClient();
+    const reversal = await appClient();
+    const reversalPid = await pidOf(reversal);
+    try {
+      await opening.query('BEGIN');
+      expect((await recordOpening(opening, s, day, { openingId: randomUUID(), openingBalanceId: ob.openingBalanceId, positionMinor: 10000n })).case_kind).toBe(
+        'opening_balance_bound',
+      );
+      await reversal.query('BEGIN');
+      const pending = settle(() => reverseBalance(s, day, ob, reversal));
+      await waitUntilBlocked(reversalPid, 'the reversal behind the in-flight opening');
+      await opening.query('COMMIT');
+      expectRefused(await pending, 'P0001', 'accounting.opening_balance_inventory_bound', 'reversal after the opening committed');
+      await reversal.query('ROLLBACK');
+      expect(await glInventory(s.businessId)).toBe(await stockValue(s.businessId));
+    } finally {
+      await opening.end().catch(() => undefined);
+      await reversal.end().catch(() => undefined);
+    }
+  });
+
+  it('reversal in flight first: the opening waits on the balance row, then sees the reversal (inventory.opening_case_changed)', async () => {
+    const { s, day } = await business('d');
+    const ob = await postBalance(s, day);
+    const opening = await appClient();
+    const reversal = await appClient();
+    const openingPid = await pidOf(opening);
+    try {
+      await reversal.query('BEGIN');
+      await reverseBalance(s, day, ob, reversal);
+      await opening.query('BEGIN');
+      const pending = settle(() => recordOpening(opening, s, day, { openingId: randomUUID(), openingBalanceId: ob.openingBalanceId, positionMinor: 10000n }));
+      await waitUntilBlocked(openingPid, 'the opening behind the in-flight reversal');
+      await reversal.query('COMMIT');
+      expectRefused(await pending, 'P0001', 'inventory.opening_case_changed', 'opening after the reversal committed');
+      await opening.query('ROLLBACK');
+      expect(await stockValue(s.businessId)).toBe(0n);
+      expect(await glInventory(s.businessId)).toBe(0n);
+    } finally {
+      await opening.end().catch(() => undefined);
+      await reversal.end().catch(() => undefined);
+    }
+  });
+
+  it('no deadlock with the opening-balance workflow: a reversal holding businesses FOR SHARE never needs the R-1 key a waiting workflow command holds', async () => {
+    const { s, day } = await business('e');
+    const ob = await postBalance(s, day);
+    const holder = await ownerClient();
+    const reversal = await appClient();
+    const workflow = await appClient();
+    const reversalPid = await pidOf(reversal);
+    const workflowPid = await pidOf(workflow);
+    try {
+      // Park the reversal AFTER it took `businesses` FOR SHARE (0046 step 2)
+      // and BEFORE its guard: someone else holds its source-identity key (step 3).
+      await holder.query('BEGIN');
+      await holder.query(`SELECT pg_advisory_xact_lock(hashtextextended($1::text || '|reversal|' || $2::text, 0))`, [s.businessId, ob.entryId]);
+      await reversal.query('BEGIN');
+      const reversing = settle(() => reverseBalance(s, day, ob, reversal));
+      await waitUntilBlocked(reversalPid, 'the reversal holding businesses FOR SHARE');
+
+      // A workflow command takes the R-1 key, then queues for businesses FOR UPDATE behind the reversal's FOR SHARE.
+      const draftId = randomUUID();
+      await workflow.query('BEGIN');
+      await workflow.query(`SELECT set_config('app.accounting_assertion', $1, true)`, [
+        sourceAssertion({
+          actorUserId: s.userId,
+          tenantId: s.tenantId,
+          businessId: s.businessId,
+          operationKind: 'post',
+          sourceType: 'opening_balance',
+          sourceId: draftId,
+          postingFingerprint: '0'.repeat(64),
+        }),
+      ]);
+      const drafting = settle(() =>
+        workflow.query(`SELECT accounting_open_balance_draft($1::date, $2::jsonb)`, [day, JSON.stringify(positionPayload(POSITIONS))]),
+      );
+      await waitUntilBlocked(workflowPid, 'the workflow command behind the reversal');
+
+      // Released: the reversal runs its guard while the workflow holds the R-1
+      // key and waits for the reversal's FOR SHARE. A guard that asked for the
+      // key would close the cycle (40P01); the row lock does not.
+      await holder.query('COMMIT');
+      const reversed = await reversing;
+      expectAccepted(reversed, 'the reversal completes: its guard never asks for the R-1 key');
+      await reversal.query('COMMIT');
+      const drafted = await drafting;
+      expect(drafted.ok ? 'ok' : drafted.sqlstate).not.toBe('40P01');
+      await workflow.query('ROLLBACK');
+    } finally {
+      await holder.end().catch(() => undefined);
+      await reversal.end().catch(() => undefined);
+      await workflow.end().catch(() => undefined);
+    }
+  });
+});
+
+describe('F2 — a concurrent identical opening replays (0062 R-14)', () => {
+  it('the second identical call waits on the document key and replays the first once it commits', async () => {
+    const { s, day } = await business('f');
+    const openingId = randomUUID();
+    const zero = { openingId, openingBalanceId: null, positionMinor: null, unitCost: '0', unitCostC10: 0n } as const;
+    const first = await appClient();
+    const second = await appClient();
+    const secondPid = await pidOf(second);
+    try {
+      await first.query('BEGIN');
+      expect(await recordOpening(first, s, day, zero)).toEqual({ replayed: false, case_kind: 'ledger_posting' });
+      await second.query('BEGIN');
+      const pending = settle(() => recordOpening(second, s, day, zero));
+      await waitUntilBlocked(secondPid, 'the identical opening behind the first');
+      await first.query('COMMIT');
+      expect(expectAccepted(await pending, 'the identical opening replays')).toEqual({ replayed: true, case_kind: 'ledger_posting' });
+      await second.query('COMMIT');
+      const rows = await ownerPool().query(`SELECT id FROM inventory_openings WHERE business_id = $1`, [s.businessId]);
+      expect(rows.rows).toEqual([{ id: openingId }]);
+      expect(await stockValue(s.businessId)).toBe(0n);
+    } finally {
+      await first.end().catch(() => undefined);
+      await second.end().catch(() => undefined);
+    }
+  });
+
+  it('a concurrent DIFFERENT opening of the same business is still refused inventory.opening_already_posted', async () => {
+    const { s, day } = await business('g');
+    const first = await appClient();
+    const second = await appClient();
+    const secondPid = await pidOf(second);
+    try {
+      await first.query('BEGIN');
+      await recordOpening(first, s, day, { openingId: randomUUID(), openingBalanceId: null, positionMinor: null, unitCost: '0', unitCostC10: 0n });
+      await second.query('BEGIN');
+      const pending = settle(() =>
+        recordOpening(second, s, day, { openingId: randomUUID(), openingBalanceId: null, positionMinor: null, unitCost: '0', unitCostC10: 0n }),
+      );
+      await waitUntilBlocked(secondPid, 'the other opening behind the first (the R-1 key)');
+      await first.query('COMMIT');
+      expectRefused(await pending, 'P0001', 'inventory.opening_already_posted', 'a second opening');
+      await second.query('ROLLBACK');
+    } finally {
+      await first.end().catch(() => undefined);
+      await second.end().catch(() => undefined);
+    }
+  });
+});
+
+describe('F3 — the source-guard discovery sees the whole per-type §2.3 set (0061 §2)', () => {
+  /** Run `sabotage` in a rolled-back savepoint of a superuser transaction and return what the discovery reports. */
+  async function gapsAfter(sabotage: (c: Client) => Promise<unknown>): Promise<string[]> {
+    const c = await ownerClient();
+    try {
+      await c.query('BEGIN');
+      expect((await c.query(`SELECT 1 FROM inventory_stock_source_guard_gaps()`)).rowCount).toBe(0);
+      return await scratch(c, async () => {
+        await sabotage(c);
+        const r = await c.query<{ g: string }>(`SELECT source_type || ':' || missing AS g FROM inventory_stock_source_guard_gaps() ORDER BY 1`);
+        return r.rows.map((x) => x.g);
+      });
+    } finally {
+      await c.query('ROLLBACK').catch(() => undefined);
+      await c.end().catch(() => undefined);
+    }
+  }
+
+  const PER_TYPE: readonly (readonly [string, string, string, string])[] = [
+    ['inventory_transfer', 'source_complete', 'inventory_transfer_lines', 'stock_source_complete_inventory_transfer'],
+    ['inventory_transfer', 'source_freeze', 'inventory_transfer_lines', 'stock_source_freeze_inventory_transfer'],
+    ['inventory_transfer', 'header_immutable', 'inventory_transfers', 'inventory_transfers_immutable'],
+    ['inventory_adjustment', 'source_complete', 'inventory_adjustment_lines', 'stock_source_complete_inventory_adjustment'],
+    ['inventory_adjustment', 'source_freeze', 'inventory_adjustment_lines', 'stock_source_freeze_inventory_adjustment'],
+    ['inventory_adjustment', 'header_immutable', 'inventory_adjustments', 'inventory_adjustments_immutable'],
+    ['inventory_adjustment', 'value_complete', 'inventory_adjustments', 'inventory_adjustments_value_complete'],
+    ['stocktake', 'source_complete', 'stocktake_lines', 'stock_source_complete_stocktake'],
+    ['stocktake', 'header_complete', 'stocktakes', 'stocktakes_finalized_complete'],
+    ['stocktake', 'source_freeze', 'stocktake_lines', 'stock_source_freeze_stocktake'],
+    ['stocktake', 'header_immutable', 'stocktakes', 'stocktakes_immutable'],
+    ['stocktake', 'value_complete', 'stocktakes', 'stocktakes_value_complete'],
+    ['inventory_opening', 'source_complete', 'inventory_opening_lines', 'stock_source_complete_inventory_opening'],
+    ['inventory_opening', 'source_freeze', 'inventory_opening_lines', 'stock_source_freeze_inventory_opening'],
+    ['inventory_opening', 'header_immutable', 'inventory_openings', 'inventory_openings_immutable'],
+    ['inventory_opening', 'value_complete', 'inventory_openings', 'inventory_openings_value_complete'],
+  ];
+
+  beforeAll(async () => {
+    await ensurePostgres();
+  });
+
+  for (const [type, missing, table, trigger] of PER_TYPE) {
+    it(`${type}:${missing} — disabled, or replica-only, is reported`, async () => {
+      expect(await gapsAfter((c) => c.query(`ALTER TABLE ${table} DISABLE TRIGGER ${trigger}`))).toEqual([`${type}:${missing}`]);
+      expect(await gapsAfter((c) => c.query(`ALTER TABLE ${table} ENABLE REPLICA TRIGGER ${trigger}`))).toEqual([`${type}:${missing}`]);
+    });
+  }
+
+  it('a guard re-created with a WHEN, narrowed to one column, or on another function is reported', async () => {
+    expect(
+      await gapsAfter(async (c) => {
+        await c.query(`DROP TRIGGER stock_source_freeze_inventory_opening ON inventory_opening_lines`);
+        await c.query(`CREATE TRIGGER stock_source_freeze_inventory_opening BEFORE UPDATE OR DELETE ON inventory_opening_lines
+                         FOR EACH ROW WHEN (false) EXECUTE FUNCTION stock_source_freeze_inventory_opening()`);
+      }),
+    ).toEqual(['inventory_opening:source_freeze']);
+    expect(
+      await gapsAfter(async (c) => {
+        await c.query(`DROP TRIGGER inventory_openings_immutable ON inventory_openings`);
+        await c.query(`CREATE TRIGGER inventory_openings_immutable BEFORE UPDATE OF created_at OR DELETE ON inventory_openings
+                         FOR EACH ROW EXECUTE FUNCTION inventory_source_header_guard()`);
+      }),
+    ).toEqual(['inventory_opening:header_immutable']);
+    expect(
+      await gapsAfter(async (c) => {
+        await c.query(`DROP TRIGGER inventory_transfers_immutable ON inventory_transfers`);
+        await c.query(`CREATE TRIGGER inventory_transfers_immutable BEFORE UPDATE OR DELETE ON inventory_transfers
+                         FOR EACH ROW EXECUTE FUNCTION stock_source_freeze_inventory_opening()`);
+      }),
+    ).toEqual(['inventory_transfer:header_immutable']);
+    expect(
+      await gapsAfter(async (c) => {
+        await c.query(`DROP TRIGGER stock_bridge_immutable_stocktake ON stock_source_bridge_stocktake`);
+        await c.query(`CREATE TRIGGER stock_bridge_immutable_stocktake BEFORE UPDATE OF movement_kind OR DELETE ON stock_source_bridge_stocktake
+                         FOR EACH ROW EXECUTE FUNCTION stock_ledger_append_only()`);
+      }),
+    ).toEqual(['stocktake:bridge_immutable']);
+  });
+
+  it('a bridge line FK pointed at another document’s lines, or left unvalidated, is reported', async () => {
+    expect(
+      await gapsAfter(async (c) => {
+        await c.query(`ALTER TABLE stock_source_bridge_inventory_opening DROP CONSTRAINT stock_source_bridge_inventory_opening_line_fk`);
+        await c.query(`ALTER TABLE stock_source_bridge_inventory_opening ADD CONSTRAINT stock_source_bridge_inventory_opening_line_fk
+                         FOREIGN KEY (business_id, source_id, source_line_id) REFERENCES inventory_adjustment_lines (business_id, adjustment_id, id) ON DELETE RESTRICT NOT VALID`);
+        // Validated in the catalogue, so only the wrong table is left to report (earlier cases committed bridge rows).
+        await c.query(`UPDATE pg_constraint SET convalidated = true WHERE conname = 'stock_source_bridge_inventory_opening_line_fk'`);
+      }),
+    ).toEqual(['inventory_opening:bridge_line_fk']);
+    expect(
+      await gapsAfter(async (c) => {
+        await c.query(`ALTER TABLE stock_source_bridge_inventory_transfer DROP CONSTRAINT stock_source_bridge_inventory_transfer_line_fk`);
+        await c.query(`ALTER TABLE stock_source_bridge_inventory_transfer ADD CONSTRAINT stock_source_bridge_inventory_transfer_line_fk
+                         FOREIGN KEY (business_id, source_id, source_line_id) REFERENCES inventory_transfer_lines (business_id, transfer_id, id) ON DELETE RESTRICT NOT VALID`);
+      }),
+    ).toEqual(['inventory_transfer:bridge_line_fk']);
+  });
+
+  it('a guard function whose BODY was replaced under the same oid, owner, security and path is reported', async () => {
+    const neuter = (c: Client, fn: string, body: string): Promise<unknown> =>
+      c.query(`CREATE OR REPLACE FUNCTION ${fn}() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
+                 SET search_path = pg_catalog, public, pg_temp AS $fx$ BEGIN ${body} END; $fx$`);
+    const same = async (c: Client, fn: string): Promise<{ owner: string; definer: boolean }> =>
+      must(
+        (
+          await c.query<{ owner: string; definer: boolean }>(
+            `SELECT proowner::regrole::text AS owner, prosecdef AS definer FROM pg_proc WHERE oid = $1::regprocedure`,
+            [`${fn}()`],
+          )
+        ).rows[0],
+      );
+    expect(
+      await gapsAfter(async (c) => {
+        await neuter(c, 'stock_source_complete_inventory_opening', 'RETURN NULL;');
+        expect(await same(c, 'stock_source_complete_inventory_opening')).toEqual({ owner: 'daftar_inventory_internal', definer: true });
+      }),
+    ).toEqual(['inventory_opening:source_complete']);
+    expect(await gapsAfter((c) => neuter(c, 'stock_binding_requires_inventory_transfer', 'RETURN NULL;'))).toEqual(['inventory_transfer:binding_trigger']);
+    expect(await gapsAfter((c) => neuter(c, 'stock_source_freeze_stocktake', 'IF TG_OP = $q$DELETE$q$ THEN RETURN OLD; END IF; RETURN NEW;'))).toEqual([
+      'stocktake:source_freeze',
+    ]);
+    // A function shared by several types is reported for each of them.
+    expect(await gapsAfter((c) => neuter(c, 'inventory_source_value_complete', 'RETURN NULL;'))).toEqual([
+      'inventory_adjustment:value_complete',
+      'inventory_opening:value_complete',
+      'stocktake:value_complete',
+    ]);
+    expect(await gapsAfter((c) => neuter(c, 'inventory_source_header_guard', 'IF TG_OP = $q$DELETE$q$ THEN RETURN OLD; END IF; RETURN NEW;'))).toEqual([
+      'inventory_adjustment:header_immutable',
+      'inventory_opening:header_immutable',
+      'inventory_transfer:header_immutable',
+      'stocktake:header_immutable',
+    ]);
+  });
+});

@@ -102,7 +102,7 @@ const REVIEWED_INSTALL_SCRIPTS: Record<string, string> = {
  * pure: no transport, no configuration, no connection. A runtime dependency
  * is how that erodes, one convenience at a time.
  */
-const PURE_WORKSPACES = ['packages/accounting', 'packages/domain-core', 'packages/shared-contracts'];
+const PURE_WORKSPACES = ['packages/accounting', 'packages/domain-core', 'packages/inventory', 'packages/shared-contracts'];
 
 let failures = 0;
 const fail = (check: string, detail: string): void => {

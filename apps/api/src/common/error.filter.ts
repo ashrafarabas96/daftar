@@ -6,6 +6,7 @@ import { AppError, CountryPackError, CurrencyError, type ApiErrorBody, type ApiE
 import { RateLimitError, RateLimiterUnavailableError } from '../infra/redis';
 import { getContext } from '../infra/request-context';
 import type { Logger } from '../infra/logger';
+import { inventoryRefusal, parseDatabaseInventoryCode } from '../modules/inventory/inventory-errors';
 
 /**
  * Error architecture (§29): the backend returns a STABLE ERROR CODE + requestId
@@ -94,6 +95,20 @@ export class GlobalExceptionFilter implements ExceptionFilter {
       body('CONFLICT', 'Duplicate value', HttpStatus.CONFLICT, { constraint: c.replace(/_?\d*$/, '') });
       return;
     }
+    // P3-S3 (PHASE_3_S3_CONTRACT §3). The movement services translate every
+    // refusal themselves; this catches the ones a database trigger raises on
+    // a path that does not — an archive that races a stock movement
+    // (`*_has_stock`, A-19) — so the typed code and its status still reach
+    // the client. Only the codes P3-S3 introduced are matched: every refusal
+    // that existed before keeps its accepted rendering below.
+    if (pg.code === 'P0001') {
+      const code = parseDatabaseInventoryCode(exception);
+      if (code !== null && P3_S3_INVENTORY_CODES.has(code)) {
+        const e = inventoryRefusal(code);
+        body(e.code, e.message, e.httpStatus, e.details);
+        return;
+      }
+    }
     if (pg.code === '42501' || pg.code === 'P0001') {
       body('FORBIDDEN', 'Access denied', HttpStatus.FORBIDDEN);
       return;
@@ -157,9 +172,59 @@ function accountingStatus(code: string): number {
     // caller to fix a payload that is not wrong. The body carries the code, a
     // request id and no amounts at all (§56) — the totals that disagree are
     // exactly what must not reach a log line.
-    code === 'accounting.report_unbalanced'
+    code === 'accounting.report_unbalanced' ||
+    // P3-S3 (PHASE_3_S3_CONTRACT §3, A-14). The books already hold an
+    // inventory-sourced entry or an opening balance an inventory opening is
+    // bound to, and that state forbids the command: a posting whose
+    // inventory detail does not match its entry (at COMMIT), reversing an
+    // entry only its inventory document may own, or superseding / posting
+    // over an opening balance the stock decomposes. Conflicts, not payloads.
+    code === 'accounting.inventory_detail_missing' ||
+    code === 'accounting.inventory_entry_mismatch' ||
+    code === 'accounting.reversal_source_domain_owned' ||
+    code === 'accounting.opening_balance_inventory_conflict' ||
+    code === 'accounting.opening_balance_inventory_bound' ||
+    // P3-S8 R-B1a (Annex R §2.1, §2.9; 0069). After a business's first stock
+    // movement the Inventory system account changes only through an
+    // inventory or purchasing operation: a manual adjustment or an opening
+    // balance with an Inventory line is refused at COMMIT. The books' state
+    // forbids it, the payload is well formed — a conflict, like its S3
+    // siblings, and deliberately not an `AccountingErrorCode`.
+    code === 'accounting.inventory_account_domain_owned'
   ) {
     return HttpStatus.CONFLICT;
   }
   return HttpStatus.BAD_REQUEST;
 }
+
+/**
+ * The refusals P3-S3 added to the inventory vocabulary (PHASE_3_S3_CONTRACT
+ * §3), rendered through `inventoryRefusal` — the one inventory mapping — when
+ * a database trigger raises one on a path that did not translate it. The set
+ * is closed on purpose: a code that existed before P3-S3 is not in it, so no
+ * accepted status changes.
+ */
+const P3_S3_INVENTORY_CODES: ReadonlySet<string> = new Set([
+  // 409: a conflict with a document or with stock that already exists.
+  'inventory.idempotency_conflict',
+  'inventory.document_id_conflict',
+  'inventory.valuation_changed',
+  'inventory.stocktake_changed',
+  'inventory.opening_case_changed',
+  'inventory.opening_valuation_mismatch',
+  'inventory.opening_already_posted',
+  'inventory.opening_state_invalid',
+  'inventory.stocktake_already_open',
+  'inventory.stocktake_state_invalid',
+  'inventory.warehouse_has_stock',
+  'inventory.variant_has_stock',
+  'inventory.product_has_stock',
+  // 404 / 400: the request names nothing, or cannot be applied as stated.
+  'inventory.stocktake_not_found',
+  'inventory.stocktake_empty',
+  'inventory.unit_cost_required',
+  'inventory.unit_cost_not_applicable',
+  'inventory.transfer_same_warehouse',
+  'inventory.duplicate_line',
+  'inventory.lines_required',
+]);

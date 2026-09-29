@@ -84,8 +84,10 @@ External penetration test · load testing · disaster-recovery drill · final au
 ## Status
 
 - **Phase 0: PASS** (`PHASE_0_ACCEPTANCE_REPORT.md`).
-- **Phase 1: PASS** (`PHASE_1_ACCEPTANCE_REPORT.md`, 2026-09-21). Nothing from Phase 2 exists: no accounting, inventory, sales or POS table, endpoint or screen.
-- **Phase 2: planned, not started.** Entry conditions in `PHASE_2_PREMORTEM.md`; the execution plan is `PHASE_2_ACCOUNTING_EXECUTION_PLAN.md`. Implementation begins only after the Tech Lead approves the Phase 1 pull request.
+- **Phase 1: CLOSED / PASS** (`PHASE_1_ACCEPTANCE_REPORT.md`, 2026-09-21).
+- **Phase 2: CLOSED / PASS**, merged into `main` at `0f2b09e7f2bd1015053ff2cb79ad1ceafc25bc6f` (2026-09-24; `PHASE_2_S9_RELEASE.md`). Migrations `0000`–`0052`, protected permanently by `gate:phase2:release` (`scripts/phase2-prefix.ts`).
+- **Phase 3: final seal candidate.** The Tech Lead passed the corrected technical candidate `95adda94cb25a6568cabacb2cc462e9e861e0b6a` on 2026-09-29 (PHASE 3 — TECHNICAL PASS / FINAL SEAL REQUIRED). The final Phase 3 database history is `0053`–`0073` (74 migrations through Phase 3): `0053`–`0069` from the slices P3-S1 … P3-S8, `0070`–`0073` Phase 3 corrective hardening, protected permanently by `gate:phase3:release` (`scripts/phase3-prefix.ts`). Phase 3 is CLOSED only once the seal commit's own gates pass on its exact SHA (`PHASE_3_S9_RELEASE.md` §10, `PHASE_3_FINAL_CORRECTIVE_AUDIT.md` §6); work branch `phase/3-inventory-purchases-suppliers`, draft PR #4, not merged. Open: OD-03 (purchase tax; a non-zero tax is refused) and the debt in `TECHNICAL_DEBT.md`.
+- **Phase 4: NOT STARTED / NEXT.** It starts only on an explicit Tech Lead directive after Phase 3 is closed.
 
 ---
 

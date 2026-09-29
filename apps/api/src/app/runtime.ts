@@ -1,8 +1,10 @@
-import type { Provider, Type } from '@nestjs/common';
+import type { ExecutionContext, Provider, Type } from '@nestjs/common';
 import { APP_FILTER, APP_GUARD } from '@nestjs/core';
 import { AppError } from '@daftar/domain-core';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
+import type { Request } from 'express';
 import type { AppConfig } from '../config';
+import { clientLimiterKey } from '../common/client-ip';
 import { createLogger } from '../infra/logger';
 import { Database } from '../infra/database';
 import { InMemoryMetrics, METRICS, type Metrics } from '../infra/metrics';
@@ -48,6 +50,7 @@ import {
   RECONCILIATION_READER,
 } from '../modules/accounting/accounting-reconciliation.service';
 import { AccountingReconciliationWorker } from '../modules/accounting/accounting-reconciliation.worker';
+import { InventoryAssertionMinterService } from '../modules/inventory/inventory-assertion.minter';
 
 /**
  * RUNTIME COMPOSITION (Phase 1 Completion Directive §15–20).
@@ -96,9 +99,23 @@ export interface RuntimeSeams {
   reconciliationClock?: { now(): Date };
 }
 
-/** Throttler module import shared by every HTTP surface. */
-export function httpImports() {
-  return [ThrottlerModule.forRoot([{ ttl: 60_000, limit: 300 }])];
+/**
+ * Throttler module import shared by every HTTP surface: 300 requests per
+ * minute for each route handler and CLIENT. The client is the address
+ * `clientIp()` resolves — the same TRUSTED_PROXIES authority as the auth
+ * limits (TD-19) — not the TCP peer: behind the web server the peer is the
+ * web server, and keyed on it every merchant behind one web instance would
+ * share one allowance per route. An untrusted peer is its own client, so a
+ * forged X-Forwarded-For buys nothing. An IPv6 client counts per /64
+ * (`limiterKey`, review L-3).
+ */
+export function httpImports(config: Pick<AppConfig, 'TRUST_PROXY' | 'TRUSTED_PROXIES'>) {
+  return [
+    ThrottlerModule.forRoot({
+      throttlers: [{ ttl: 60_000, limit: 300 }],
+      getTracker: (_req: unknown, context: ExecutionContext) => clientLimiterKey(context.switchToHttp().getRequest<Request>(), config),
+    }),
+  ];
 }
 
 /** Config + logger + Database (pools opened per PROCESS_MODE inside Database). */
@@ -151,6 +168,19 @@ export function merchantInfraProviders(config: AppConfig, seams: RuntimeSeams): 
     { provide: 'OBJECT_STORAGE', useFactory: (): ObjectStorage => seams.storage ?? createObjectStorage(config) },
     { provide: 'MALWARE_SCANNER', useFactory: (): MalwareScanner => new DisabledDevelopmentMalwareScanner() },
   ];
+}
+
+/**
+ * Merchant-only inventory command authority (P3-AL-55 §C, §I).
+ *
+ * The inventory signing key lives here and only here. The platform, worker
+ * and reconciler runtimes never receive `INVENTORY_ASSERTION_KEY` (config
+ * validation refuses it) and never compose this provider, so they cannot mint
+ * an `invctl/1` assertion and therefore cannot drive any inventory routine,
+ * whatever code they happen to link.
+ */
+export function inventoryAuthorityProviders(): Provider[] {
+  return [InventoryAssertionMinterService];
 }
 
 /**

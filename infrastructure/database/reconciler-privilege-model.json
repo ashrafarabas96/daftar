@@ -2,6 +2,12 @@
   "role": "daftar_reconciler",
   "purpose": "P2-S8 reconciliation: a read-only accounting inspection authority, held by PROCESS_MODE=reconciler and by nothing else.",
   "source": "infrastructure/database/migrations/0051_accounting_reconciler_read.sql",
+  "widenedBy": [
+    {
+      "migration": "infrastructure/database/migrations/0069_inventory_reconciliation_read_and_account_domain.sql",
+      "why": "P3-S8 A-02 / A-11: R-INV-01..05 compare the stock ledger, the stock cache and the GL balance of the Inventory system account (L:1240-1252). Column reads of stock_movements, stock_levels and stock_source_bindings, and accounts.system_key; never reason, actor_user_id, unit_cost_base_minor, created_at or avg_unit_cost_base_minor."
+    }
+  ],
   "note": "This file is the INTENDED model. tests/security/reconciler-authority-matrix.test.ts compares it against the live PostgreSQL catalogues, in both directions: an entry here that the database does not grant is a broken deployment, and a grant the database holds that is absent here is an unreviewed privilege. Editing this file does not widen anything — the migration does — but editing it to match a widening is exactly the change a reviewer must see.",
   "attributes": {
     "rolcanlogin": true,
@@ -17,7 +23,7 @@
   "owns": { "tables": 0, "routines": 0, "schemas": 0 },
   "selectColumns": {
     "businesses": ["base_currency", "financial_started_at", "id", "tenant_id"],
-    "accounts": ["business_id", "id", "tenant_id", "type"],
+    "accounts": ["business_id", "id", "system_key", "tenant_id", "type"],
     "journal_entries": ["business_id", "created_at", "entry_date", "id", "source_id", "source_type", "tenant_id"],
     "journal_lines": [
       "account_id",
@@ -35,7 +41,23 @@
       "txn_currency"
     ],
     "accounting_periods": ["business_id", "closed_at", "end_date", "id", "start_date", "status", "tenant_id"],
-    "accounting_source_bindings": ["business_id", "journal_entry_id", "source_id", "source_type", "tenant_id"]
+    "accounting_source_bindings": ["business_id", "journal_entry_id", "source_id", "source_type", "tenant_id"],
+    "stock_movements": [
+      "business_id",
+      "id",
+      "movement_kind",
+      "qty_delta",
+      "source_id",
+      "source_line_id",
+      "source_type",
+      "stock_seq",
+      "tenant_id",
+      "value_delta_base_minor",
+      "variant_id",
+      "warehouse_id"
+    ],
+    "stock_levels": ["business_id", "last_stock_seq", "on_hand", "tenant_id", "valuation_base_minor", "variant_id", "warehouse_id"],
+    "stock_source_bindings": ["business_id", "movement_kind", "source_id", "source_line_id", "source_type", "tenant_id"]
   },
   "writePrivileges": [],
   "executableRoutines": ["accounting_reconcile_businesses(uuid, uuid, integer)"],
@@ -57,6 +79,9 @@
     "audit_events",
     "accounting_fx_rates",
     "accounting_manual_adjustments",
-    "accounting_reversals"
+    "accounting_reversals",
+    "inventory_assertion_keys",
+    "inventory_assertion_uses",
+    "suppliers"
   ]
 }

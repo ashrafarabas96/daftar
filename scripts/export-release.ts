@@ -19,6 +19,7 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, write
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
+import { credentialFinding } from './secret-scan';
 
 const ROOT = join(__dirname, '..');
 const sha = (buf: Buffer | string) => createHash('sha256').update(buf).digest('hex');
@@ -26,37 +27,47 @@ const sha = (buf: Buffer | string) => createHash('sha256').update(buf).digest('h
 /**
  * ── Which release this export is ───────────────────────────────────────────
  *
- * `--phase=2` produces the Phase 2 release candidate. Everything about the
- * export is the same — the inventory is still every tracked file, the hygiene
- * refusals are still the same refusals, the tree hash is still computed the
- * same way — because an archive built by a different procedure is an archive
- * that proves something about the procedure rather than about the tree. What
- * changes is the archive's name, the phase recorded in the manifest, and the
- * reproduction commands a reader is told to run.
+ * `--phase=2` produces the Phase 2 release candidate and `--phase=3` the
+ * Phase 3 one. Everything about the export is the same — the inventory is
+ * still every tracked file, the hygiene refusals are still the same refusals,
+ * the tree hash is still computed the same way — because an archive built by
+ * a different procedure is an archive that proves something about the
+ * procedure rather than about the tree. What changes is the archive's name,
+ * the phase recorded in the manifest, and the reproduction commands a reader
+ * is told to run.
  */
-const PHASE = process.argv.slice(2).includes('--phase=2') ? 2 : 1;
-const ARCHIVE_NAME = PHASE === 2 ? 'DAFTAR_PHASE_2_RC.zip' : 'DAFTAR_PHASE_1_RC.zip';
+const ARGS = process.argv.slice(2);
+const PHASE = ARGS.includes('--phase=3') ? 3 : ARGS.includes('--phase=2') ? 2 : 1;
+const ARCHIVE_NAME = `DAFTAR_PHASE_${PHASE}_RC.zip`;
 const REPRODUCTION =
-  PHASE === 2
+  PHASE === 3
     ? [
         'npm ci',
-        'npm run gate:phase2:release -- --evidence=release/phase2-s9-release-gate.json',
+        'npm run gate:phase3:release -- --evidence=release/phase3-s9-release-gate.json',
         'npm run check:deployment-authority',
+        'npm run rehearse:phase3:deployed',
         'PROVISIONING_ASSERTION_KEY=<base64 >=32B> BOOTSTRAP_DATABASE_URL=<daftar_platform url> npm run bootstrap:provisioning-key',
         'ACCOUNTING_ASSERTION_KEY=<base64 >=32B> BOOTSTRAP_DATABASE_URL=<daftar_platform url> npm run bootstrap:accounting-key',
+        'INVENTORY_ASSERTION_KEY=<base64 >=32B> BOOTSTRAP_DATABASE_URL=<daftar_platform url> npm run bootstrap:inventory-key',
       ]
-    : [
-        'npm ci',
-        'npm run gate:phase1:release -- --evidence=release/evidence.json',
-        'npm run perf:baseline',
-        'PROVISIONING_ASSERTION_KEY=<base64 >=32B> BOOTSTRAP_DATABASE_URL=<daftar_platform url> npm run bootstrap:provisioning-key',
-      ];
+    : PHASE === 2
+      ? [
+          'npm ci',
+          'npm run gate:phase2:release -- --evidence=release/phase2-s9-release-gate.json',
+          'npm run check:deployment-authority',
+          'PROVISIONING_ASSERTION_KEY=<base64 >=32B> BOOTSTRAP_DATABASE_URL=<daftar_platform url> npm run bootstrap:provisioning-key',
+          'ACCOUNTING_ASSERTION_KEY=<base64 >=32B> BOOTSTRAP_DATABASE_URL=<daftar_platform url> npm run bootstrap:accounting-key',
+        ]
+      : [
+          'npm ci',
+          'npm run gate:phase1:release -- --evidence=release/evidence.json',
+          'npm run perf:baseline',
+          'PROVISIONING_ASSERTION_KEY=<base64 >=32B> BOOTSTRAP_DATABASE_URL=<daftar_platform url> npm run bootstrap:provisioning-key',
+        ];
 
 const FORBIDDEN_NAME =
   /(^|\/)(node_modules|dist|\.next|var|coverage|\.gradle|build)(\/|$)|(^|\/)\.env($|\.)|\.log$|\.tsbuildinfo$|\.zip$|\.pem$|\.key$|\.dump$|\.sql\.gz$|dev-mailbox|local\.properties$/i;
-const FORBIDDEN_CONTENT = /DEV_TEST_KEY(?!\w)|argon2id\$[A-Za-z0-9+/=]{20,}|-----BEGIN [A-Z ]*PRIVATE KEY-----/;
-/** Files with a documented reason to mention the dev-only key constant or scan patterns. */
-const CONTENT_SCAN_EXEMPT = /static-guards|export-release|phase1-release-gate|credential-protector\.ts$|\.test\.|^docs\//;
+/** The content scan is scripts/secret-scan.ts: every tracked file that is not binary, raw key material and the dev/test key name. */
 
 function npmVersion(): string {
   const out = spawnSync(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['--version'], { encoding: 'utf8' });
@@ -94,6 +105,9 @@ function requiredFiles(): string[] {
     'infrastructure/database/MIGRATION_MANIFEST.json',
     'apps/web/next.config.mjs',
     'apps/admin/next.config.mjs',
+    // TD-19: `npm start` in either app runs its production entry.
+    'apps/web/server.mts',
+    'apps/admin/server.mts',
     'apps/android/settings.gradle.kts',
     'apps/android/build.gradle.kts',
     'apps/android/gradle.properties',
@@ -152,8 +166,9 @@ for (const rel of tracked) {
   cpSync(src, dst);
   const buf = readFileSync(src);
   inventory.push({ path: rel, sha256: sha(buf), bytes: buf.byteLength });
-  if (/\.(ts|tsx|sql|kt|kts|json|mjs|yml|yaml|xml|properties)$/.test(rel) && FORBIDDEN_CONTENT.test(buf.toString('utf8')) && !CONTENT_SCAN_EXEMPT.test(rel)) {
-    console.error(`  FAIL raw credential material in export: ${rel}`);
+  const finding = credentialFinding(rel, buf, { devKeyName: true });
+  if (finding !== null) {
+    console.error(`  FAIL raw credential material in export: ${rel} (${finding})`);
     process.exit(1);
   }
 }

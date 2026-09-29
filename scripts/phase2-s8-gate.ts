@@ -74,6 +74,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 import { stripComments } from './guards/sql-schema';
+import { PHASE2_PREFIX_END } from './phase2-prefix';
 import { canaryRefusal } from './runner-canary';
 
 const ARGV = process.argv.slice(2);
@@ -907,6 +908,21 @@ function checkNoTestSeamInProduction(): void {
 }
 
 // ── 8. The intended privilege model is machine-readable (§27) ──────────────
+/**
+ * The tables a migration AFTER the Phase 2 prefix grants to the reconciler
+ * (P3-S8 pin 2), read with the grant regex of §12. Sorted, deduplicated.
+ */
+function reconcilerTablesGrantedAfterPhase2(): string[] {
+  const tables = new Set<string>();
+  for (const name of sqlFiles().filter((f) => f > PHASE2_PREFIX_END)) {
+    const sql = stripComments(readFileSync(join(MIGRATIONS_DIR, name), 'utf8'));
+    for (const [, , , , table = '', grantee = ''] of sql.matchAll(/GRANT\s+([A-Z ,]+?)(\(([^)]*)\))?\s+ON\s+(?:TABLE\s+)?(\w+)\s+TO\s+(\w+)/gi)) {
+      if (grantee === RECONCILER) tables.add(table);
+    }
+  }
+  return [...tables].sort();
+}
+
 function checkPrivilegeModel(): void {
   console.log('P2-S8 GATE — the intended privilege model');
   const raw = readIfPresent(S8_MODEL);
@@ -929,14 +945,30 @@ function checkPrivilegeModel(): void {
     fail('s8-model', `the model lists ${(model.executableRoutines ?? []).length} executable routines — §9 authorizes exactly one`);
   if ((model.mustNotRead ?? []).length === 0) fail('s8-model', 'the model names nothing the reconciler must not read — §13 is the point of column grants');
 
-  // The model and the migration must name the same tables. Two sources that
+  // The model and the migrations must name the same tables. Two sources that
   // can drift are two sources that will.
+  //
+  // P3-S8 (contract §7.3 pin 2, the P2-S4 §45 form): a later phase may widen
+  // the reconciler's reads, by a reviewed migration after the Phase 2 prefix
+  // and the model together. The expected set is 0051's six UNION the tables a
+  // migration after PHASE2_PREFIX_END grants to the reconciler, parsed with
+  // the regex of §12 above. 0051's own checks (§12, §13) are unchanged, and a
+  // model table no migration grants — or a granted table the model omits —
+  // still fails.
   const modelled = Object.keys(model.selectColumns ?? {}).sort();
-  const expected = [...GRANTED_TABLES].sort();
+  const later = reconcilerTablesGrantedAfterPhase2().filter((t) => !(GRANTED_TABLES as readonly string[]).includes(t));
+  const expected = [...GRANTED_TABLES, ...later].sort();
   if (modelled.join(',') !== expected.join(',')) {
-    fail('s8-model', `the model grants SELECT on [${modelled.join(', ')}] but 0051 grants it on [${expected.join(', ')}]`);
+    fail(
+      's8-model',
+      `the model grants SELECT on [${modelled.join(', ')}] but 0051 and the migrations after ${PHASE2_PREFIX_END} grant it on [${expected.join(', ')}]`,
+    );
   } else {
-    ok('the intended model and 0051 name the same six tables');
+    ok(
+      later.length === 0
+        ? 'the intended model and 0051 name the same six tables'
+        : `the intended model names 0051's six tables and the ${later.length} granted after ${PHASE2_PREFIX_END.slice(0, 4)} (${later.join(', ')}) — nothing else`,
+    );
   }
 
   const suite = readIfPresent('tests/security/reconciler-authority-matrix.test.ts');

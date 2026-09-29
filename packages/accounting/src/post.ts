@@ -190,6 +190,46 @@ export interface AuthorizedPostingContext {
  */
 export const NATIVE_SOURCE_TYPES = ['manual_adjustment', 'reversal', 'opening_balance'] as const;
 
+/**
+ * The source types a DOMAIN command owns (P3-AL-33; PHASE_3_S3_CONTRACT A-05,
+ * TL-10). Each is posted only inside the domain's own transaction, next to
+ * the source document its completeness trigger requires, through
+ * `mintDomainPostingAssertion` (`domain-posting.ts`); none of them may be
+ * posted through `post`. Later slices extend this list with their own:
+ * P3-S4 adds `purchase` and `negative_inventory_cost_adjustment`
+ * (PHASE_3_S4_CONTRACT A-06, §4.2); P3-S5 adds `supplier_return`
+ * (PHASE_3_S5_CONTRACT A-06, §4.2); P3-S6 adds `supplier_payment`,
+ * `supplier_credit_allocation` and `supplier_refund` (PHASE_3_S6_CONTRACT
+ * A-05, §4.2), none of them reversible (TL-2). The Phase 3 corrective pass
+ * (migration 0072, TD-16) adds `purchase_residue_write_off`: the base-only
+ * release of a purchase's sub-unit AP residue, posted by
+ * `purchase.write_off_residue` and not reversible.
+ */
+export const DOMAIN_SOURCE_TYPES = [
+  'inventory_adjustment',
+  'inventory_opening',
+  'purchase',
+  'negative_inventory_cost_adjustment',
+  'supplier_return',
+  'supplier_payment',
+  'supplier_credit_allocation',
+  'supplier_refund',
+  'purchase_residue_write_off',
+] as const;
+
+/**
+ * The domain sources whose entry a DOMAIN command may reverse through the
+ * Phase 2 reversal workflow (PHASE_3_S5_CONTRACT A-06, R-B2a): a purchase,
+ * by `purchase.reverse`, which writes the inverse stock movements and the
+ * paired `purchase_reversals` row in the same transaction before
+ * `accounting_post_reversal` runs. The reversal is minted by
+ * `mintDomainReversalAssertion` (`domain-posting.ts`) and posted as a
+ * `reversal` entry: `purchase_reversal` is a stock source only and never an
+ * accounting one. `AccountingEngine.reverse` stays the merchant path, and the
+ * database still refuses it for every domain entry (A-15(b)).
+ */
+export const DOMAIN_REVERSIBLE_SOURCE_TYPES = ['purchase'] as const;
+
 export class AccountingEngine {
   constructor(
     private readonly minter: AccountingAssertionMinter,
@@ -219,6 +259,22 @@ export class AccountingEngine {
       throw new AccountingError(
         'accounting.assertion_wrong_source',
         `${command.sourceType} entries are posted through their own command, not the generic posting entry point`,
+        {
+          businessId: command.businessId,
+          sourceType: command.sourceType,
+          sourceId: command.sourceId,
+        },
+      );
+    }
+    // The same reasoning for a domain-owned source (TL-10): an inventory
+    // adjustment's entry exists only beside the inventory document that
+    // produced it, in the inventory command's own transaction. The deferred
+    // completeness trigger refuses an orphan at COMMIT whoever wrote it; this
+    // turns that into a typed refusal before anything is minted.
+    if ((DOMAIN_SOURCE_TYPES as readonly string[]).includes(command.sourceType)) {
+      throw new AccountingError(
+        'accounting.assertion_wrong_source',
+        `${command.sourceType} entries are posted by their domain command, not the generic posting entry point`,
         {
           businessId: command.businessId,
           sourceType: command.sourceType,

@@ -1,0 +1,122 @@
+-- stock-rebuild-swap.sql.template
+-- P3-S8 A-13 / TL-1 — the stock-cache rebuild SWAP, as a rehearsed incident
+-- procedure. This file is NOT a migration and is never applied as it stands:
+-- it lives outside infrastructure/database/migrations/, it defines no
+-- function, registers no operation kind, and grants nothing. The debt that it
+-- is a procedure rather than a stored routine is TD-17 ("the rebuild swap is a
+-- rehearsed incident migration, not a stored routine; a runtime rebuild would
+-- need its own kind", L:1992).
+--
+-- ── When it is used ─────────────────────────────────────────────────────
+--
+--   1. DETECT.  R-INV-02 (the reconciler pass) or inventory_stock_verify
+--               reports a stock key whose cache row differs from its ledger.
+--   2. INVESTIGATE.  Name the cause. The movements are the truth (L:1237);
+--               the cache is a derived row (L:1234-1236). A ledger defect (a
+--               gap in stock_seq, a missing binding) is NOT repaired here:
+--               this procedure refuses a key whose sequence is not gapless.
+--   3. AUTHORIZE a migration, reviewed like any other, made from this
+--               template by replacing the one placeholder below with the
+--               named keys, and applied by the deployment principal
+--               (daftar_migrator) through the normal migration runner.
+--   4. RE-RUN R-INV-01..05. Every one must answer `ok`.
+--
+-- ── What it does, per named key (L:1232-1236) ───────────────────────────
+--
+--   * It runs as daftar_inventory_internal (SET LOCAL ROLE): the only
+--     principal holding UPDATE on the four cache columns (0059:376), reached
+--     by the migrator's SET-only membership (INHERIT FALSE, L:1809, P:283).
+--     The migrator itself holds no privilege on stock_levels.
+--   * It scopes the transaction to the key's business and tenant
+--     (set_config(..., true)): the fold and verify helpers refuse any other
+--     business, and the cache's restrictive write policy admits only it.
+--   * It takes the key row FOR UPDATE — the lock of L:1232, the lock the
+--     stock primitive takes — so a concurrent movement of that key waits.
+--   * It folds the key from its movements (inventory_stock_fold, 0060 R5),
+--     refuses unless the sequence is gapless, and writes the four folded
+--     values in ONE UPDATE statement.
+--   * It re-verifies (inventory_stock_verify, 0060 R6) and raises unless the
+--     cache now equals the rebuild.
+--
+-- It never takes a supplied number: the only inputs are key identities.
+-- Keys are processed in (business, warehouse, variant) order, so two
+-- instantiations can never lock each other in a cycle. Any refusal rolls
+-- the whole migration back, and the runner records nothing.
+--
+-- ── Instantiation ───────────────────────────────────────────────────────
+--
+-- Replace the one placeholder line inside VALUES below (the block comment
+-- holding the marker @STOCK_KEYS@, which occurs nowhere else in this file)
+-- with one row per key:
+--
+--     ('<business uuid>', '<warehouse uuid>', '<variant uuid>'),
+--     ('<business uuid>', '<warehouse uuid>', '<variant uuid>')
+--
+-- (comma-separated, no trailing comma). Nothing else in the file changes.
+-- An instantiation that still contains the placeholder, or names no key,
+-- does not parse or refuses.
+-- ─────────────────────────────────────────────────────────────────────────
+DO $swap$
+DECLARE
+  v_key    RECORD;
+  v_tenant UUID;
+  v_fold   RECORD;
+  v_check  RECORD;
+  v_done   INTEGER := 0;
+BEGIN
+  SET LOCAL ROLE daftar_inventory_internal;
+
+  FOR v_key IN
+    SELECT DISTINCT k.business_id::uuid AS business_id, k.warehouse_id::uuid AS warehouse_id, k.variant_id::uuid AS variant_id
+      FROM (VALUES
+/*@STOCK_KEYS@*/
+           ) AS k(business_id, warehouse_id, variant_id)
+     ORDER BY 1, 2, 3
+  LOOP
+    -- The key's tenant, read through the internal principal's read-only
+    -- admission; then the transaction is scoped to exactly that business.
+    SELECT l.tenant_id INTO v_tenant
+      FROM stock_levels l
+     WHERE l.business_id = v_key.business_id AND l.warehouse_id = v_key.warehouse_id AND l.variant_id = v_key.variant_id;
+    IF NOT FOUND THEN
+      RAISE EXCEPTION 'inventory.stock_key_missing: a stock key named by the rebuild swap has no cache row' USING ERRCODE = 'P0001';
+    END IF;
+    PERFORM set_config('app.tenant_id', v_tenant::text, true);
+    PERFORM set_config('app.business_id', v_key.business_id::text, true);
+
+    -- L:1232: the key's own lock, the one every writer of the key takes.
+    PERFORM 1 FROM stock_levels l
+     WHERE l.business_id = v_key.business_id AND l.warehouse_id = v_key.warehouse_id AND l.variant_id = v_key.variant_id
+       FOR UPDATE;
+    IF NOT FOUND THEN
+      RAISE EXCEPTION 'inventory.stock_key_missing: a stock key named by the rebuild swap cannot be locked in its own scope' USING ERRCODE = 'P0001';
+    END IF;
+
+    SELECT f.on_hand, f.valuation_base_minor, f.avg_unit_cost_base_minor, f.last_stock_seq, f.sequence_gapless INTO v_fold
+      FROM inventory_stock_fold(v_key.business_id, v_key.warehouse_id, v_key.variant_id) f;
+    IF v_fold.sequence_gapless IS DISTINCT FROM true THEN
+      RAISE EXCEPTION 'inventory.migration_end_state_invalid: the ledger of a named stock key is not gapless; the rebuild swap repairs a cache, never a ledger'
+        USING ERRCODE = 'P0001';
+    END IF;
+
+    -- L:1234: the rebuilt values replace the cache row in ONE statement.
+    UPDATE stock_levels l
+       SET on_hand                  = v_fold.on_hand,
+           valuation_base_minor     = v_fold.valuation_base_minor,
+           avg_unit_cost_base_minor = v_fold.avg_unit_cost_base_minor,
+           last_stock_seq           = v_fold.last_stock_seq
+     WHERE l.business_id = v_key.business_id AND l.warehouse_id = v_key.warehouse_id AND l.variant_id = v_key.variant_id;
+
+    SELECT v.matches INTO v_check
+      FROM inventory_stock_verify(v_key.business_id, v_key.warehouse_id, v_key.variant_id) v;
+    IF v_check.matches IS DISTINCT FROM true THEN
+      RAISE EXCEPTION 'inventory.migration_end_state_invalid: a stock key still differs from its ledger after the rebuild swap' USING ERRCODE = 'P0001';
+    END IF;
+    v_done := v_done + 1;
+  END LOOP;
+
+  RESET ROLE;
+  IF v_done = 0 THEN
+    RAISE EXCEPTION 'inventory.migration_end_state_invalid: the rebuild swap names no stock key' USING ERRCODE = 'P0001';
+  END IF;
+END $swap$;

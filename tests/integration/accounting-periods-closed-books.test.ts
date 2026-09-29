@@ -402,8 +402,16 @@ describe('opening-balance replacement semantics (§21, AL-13) — the whole life
   }
 
   /** Everything a refused attempt must not have left behind. */
-  async function state(businessId: string): Promise<Record<string, number>> {
-    const r = await pool.query<{ entries: number; sets: number; bindings: number; audits: number; outbox: number; reversals: number }>(
+  interface BookState {
+    entries: number;
+    sets: number;
+    bindings: number;
+    audits: number;
+    outbox: number;
+    reversals: number;
+  }
+  async function state(businessId: string): Promise<BookState> {
+    const r = await pool.query<BookState>(
       `SELECT (SELECT count(*) FROM journal_entries              WHERE business_id = $1)::int AS entries,
               (SELECT count(*) FROM accounting_opening_balances  WHERE business_id = $1)::int AS sets,
               (SELECT count(*) FROM accounting_source_bindings   WHERE business_id = $1)::int AS bindings,

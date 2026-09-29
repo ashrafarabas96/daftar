@@ -1,5 +1,5 @@
 'use client';
-import { useState, type CSSProperties, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { colors, elevation, radius, spacing, typography, zIndex } from '../tokens';
 
 export function Card(props: { children: ReactNode; padded?: boolean; style?: CSSProperties }) {
@@ -121,30 +121,59 @@ export function Table<T extends { id?: string }>(props: { columns: Column<T>[]; 
   );
 }
 
+const listRowStyle: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: spacing[3],
+  padding: `${spacing[3]} ${spacing[2]}`,
+  minHeight: '2.75rem',
+};
+
+/**
+ * A list. A row with `onClick` is a button to every user: it takes focus in
+ * tab order and Enter or Space activates it, as a mouse click does. The row
+ * stays a list item; the button is the element inside it (its content may be
+ * block-level, so it is `role="button"` rather than a `<button>`).
+ */
 export function List(props: { items: { key: string; primary: ReactNode; secondary?: ReactNode; trailing?: ReactNode; onClick?: () => void }[] }) {
   return (
     <ul style={{ listStyle: 'none', margin: 0, padding: 0, fontFamily: typography.fontFamily.base }}>
-      {props.items.map((it) => (
-        <li
-          key={it.key}
-          onClick={it.onClick}
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: spacing[3],
-            padding: `${spacing[3]} ${spacing[2]}`,
-            borderBottom: `1px solid ${colors.neutral[100]}`,
-            cursor: it.onClick ? 'pointer' : undefined,
-            minHeight: '2.75rem',
-          }}
-        >
-          <span style={{ flex: 1 }}>
-            <span style={{ display: 'block', fontSize: typography.size.md, color: colors.neutral[900] }}>{it.primary}</span>
-            {it.secondary ? <span style={{ display: 'block', fontSize: typography.size.sm, color: colors.neutral[500] }}>{it.secondary}</span> : null}
-          </span>
-          {it.trailing}
-        </li>
-      ))}
+      {props.items.map((it) => {
+        const content = (
+          <>
+            <span style={{ flex: 1 }}>
+              <span style={{ display: 'block', fontSize: typography.size.md, color: colors.neutral[900] }}>{it.primary}</span>
+              {it.secondary ? <span style={{ display: 'block', fontSize: typography.size.sm, color: colors.neutral[500] }}>{it.secondary}</span> : null}
+            </span>
+            {it.trailing}
+          </>
+        );
+        const activate = it.onClick;
+        return (
+          <li key={it.key} style={{ borderBottom: `1px solid ${colors.neutral[100]}`, ...(activate ? {} : listRowStyle) }}>
+            {activate ? (
+              <div
+                role="button"
+                tabIndex={0}
+                onClick={activate}
+                onKeyDown={(event) => {
+                  // Keys pressed on something focusable inside the row are that element's own.
+                  if (event.target !== event.currentTarget) return;
+                  if (event.key !== 'Enter' && event.key !== ' ') return;
+                  // Space would otherwise scroll the page.
+                  event.preventDefault();
+                  activate();
+                }}
+                style={{ ...listRowStyle, cursor: 'pointer', borderRadius: radius.sm }}
+              >
+                {content}
+              </div>
+            ) : (
+              content
+            )}
+          </li>
+        );
+      })}
     </ul>
   );
 }
@@ -195,10 +224,37 @@ export function Breadcrumb(props: { items: { label: string; href?: string }[] })
   );
 }
 
+/**
+ * A menu under its trigger. It closes the way a menu is expected to: on a
+ * choice, on Escape (focus goes back to the trigger) and on a press outside
+ * it — a menu that only its own trigger can close traps a keyboard user and
+ * covers the page on a phone.
+ */
 export function Dropdown(props: { trigger: ReactNode; items: { key: string; label: string; danger?: boolean; onSelect: () => void }[] }) {
   const [open, setOpen] = useState(false);
+  const box = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      setOpen(false);
+      box.current?.querySelector<HTMLElement>('button, [href], [tabindex]')?.focus();
+    };
+    const onPress = (event: PointerEvent) => {
+      if (event.target instanceof Node && box.current?.contains(event.target)) return;
+      setOpen(false);
+    };
+    document.addEventListener('keydown', onKey);
+    document.addEventListener('pointerdown', onPress);
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      document.removeEventListener('pointerdown', onPress);
+    };
+  }, [open]);
+
   return (
-    <div style={{ position: 'relative', display: 'inline-block', fontFamily: typography.fontFamily.base }}>
+    <div ref={box} style={{ position: 'relative', display: 'inline-block', fontFamily: typography.fontFamily.base }}>
       <span onClick={() => setOpen((o) => !o)}>{props.trigger}</span>
       {open ? (
         <div
@@ -234,6 +290,7 @@ export function Dropdown(props: { trigger: ReactNode; items: { key: string; labe
                 cursor: 'pointer',
                 borderRadius: radius.sm,
                 color: it.danger ? colors.semantic.danger : colors.neutral[800],
+                fontFamily: typography.fontFamily.base,
                 fontSize: typography.size.sm,
                 minHeight: '2.75rem',
               }}

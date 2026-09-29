@@ -1,8 +1,8 @@
 'use client';
 import { useRouter } from 'next/navigation';
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { Button, Card, spacing, typography } from '@daftar/design-system';
-import { logout, refreshSession } from '@/lib/client';
+import { logout, refreshSession, retrySessionNow, sessionState, subscribeSession, type SessionState } from '@/lib/client';
 
 const NAV = [
   { key: 'overview', label: 'Overview', path: '/' },
@@ -17,9 +17,44 @@ const NAV = [
   { key: 'operations', label: 'Operations', path: '/operations' },
 ] as const;
 
+const SESSION_OK: SessionState = { kind: 'ok' };
+
+/**
+ * TD-19: while the console's refresh waits out a rate limit or an outage, say
+ * so — the operator is still signed in — instead of a blank page or a
+ * redirect to the login page. The console is English-only.
+ */
+export function SessionRetryNotice({ onRetry }: { onRetry: () => void }) {
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      style={{
+        display: 'flex',
+        flexWrap: 'wrap',
+        alignItems: 'center',
+        gap: spacing[3],
+        margin: spacing[4],
+        padding: spacing[3],
+        background: '#FEF3C7',
+        color: '#0F172A',
+        borderInlineStart: '4px solid #D97706',
+        borderRadius: '0.5rem',
+        fontFamily: typography.fontFamily.base,
+      }}
+    >
+      <span style={{ flex: '1 1 16rem' }}>The connection is busy right now. You&apos;re still signed in — we&apos;ll try again in a moment.</span>
+      <Button variant="secondary" onClick={onRetry}>
+        Try again
+      </Button>
+    </div>
+  );
+}
+
 export function Shell({ active, children }: { active: string; children: ReactNode }) {
   const router = useRouter();
   const [ready, setReady] = useState(false);
+  const session = useSyncExternalStore(subscribeSession, sessionState, () => SESSION_OK);
 
   useEffect(() => {
     void (async () => {
@@ -31,7 +66,7 @@ export function Shell({ active, children }: { active: string; children: ReactNod
     })();
   }, [router]);
 
-  if (!ready) return null;
+  if (!ready) return session.kind === 'retrying' ? <SessionRetryNotice onRetry={retrySessionNow} /> : null;
 
   return (
     <div style={{ display: 'flex', minHeight: '100vh', fontFamily: typography.fontFamily.base }}>
@@ -73,6 +108,7 @@ export function Shell({ active, children }: { active: string; children: ReactNod
         </Button>
       </aside>
       <main style={{ flex: 1, background: '#F1F5F9', padding: spacing[6] }}>
+        {session.kind === 'retrying' ? <SessionRetryNotice onRetry={retrySessionNow} /> : null}
         <Card>{children}</Card>
       </main>
     </div>

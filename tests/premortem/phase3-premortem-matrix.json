@@ -1,0 +1,333 @@
+{
+  "contract": "docs/PHASE_3_S8_CONTRACT.md A-14, §6.2 (as amended by Annex R #18)",
+  "format": "Each PM row names its proof. `positive` and `negativeControl` entries are `<repository-relative test file>::<prefix of an it( title in that file>`; every row has at least one of each. `s8` lists the S8 suites that add to the row (file paths). A negative control removes exactly the row's invariant in a scratch database built from the real migrations and shows the attack then succeeds (PM cross-cutting 1). The checker is T-18 (tests/security/phase3-s8-premortem-matrix.test.ts) and the S8 gate's premortem step.",
+  "rows": {
+    "PM-01": {
+      "invariant": "cache = ledger",
+      "positive": ["tests/integration/stock-ledger-rebuild.test.ts::T-06.1:"],
+      "negativeControl": ["tests/integration/stock-ledger-rebuild.test.ts::T-06.N:"],
+      "s8": [
+        "tests/integration/phase3-s8-reconciliation.test.ts",
+        "tests/security/phase3-s8-reconciliation-planted.test.ts",
+        "tests/integration/phase3-s8-rebuild-rehearsal.test.ts"
+      ]
+    },
+    "PM-02": {
+      "invariant": "concurrent receipts keep the average",
+      "positive": ["tests/integration/stock-ledger-concurrency.test.ts::T-03.1:", "tests/integration/purchase-s4-concurrency.test.ts::THREE-LAYERS:"],
+      "negativeControl": ["tests/integration/stock-ledger-concurrency.test.ts::T-03.N:", "tests/integration/phase3-s8-negative-controls.test.ts::PM-02"],
+      "s8": ["tests/integration/phase3-s8-negative-controls.test.ts", "tests/integration/phase3-s8-concurrency.test.ts"]
+    },
+    "PM-03": {
+      "invariant": "lock order, no deadlock",
+      "positive": ["tests/integration/stock-ledger-concurrency.test.ts::T-04.1:", "tests/integration/inventory-s3-concurrency.test.ts::W1→W2 [piece, piece2]"],
+      "negativeControl": ["tests/integration/stock-ledger-concurrency.test.ts::T-04.N:", "tests/integration/phase3-s8-concurrency.test.ts::PM-03"],
+      "s8": ["tests/integration/phase3-s8-concurrency.test.ts"]
+    },
+    "PM-04": {
+      "invariant": "a retry makes no duplicate movement",
+      "positive": [
+        "tests/integration/stock-ledger-primitive.test.ts::inventory.movement_identity_conflict for a repeated five-part identity",
+        "tests/integration/purchase-s4-concurrency.test.ts::one commits the receipt; the other waits and answers the stored rows as a replay"
+      ],
+      "negativeControl": ["tests/integration/stock-ledger-primitive.test.ts::identity .N:", "tests/integration/phase3-s8-negative-controls.test.ts::PM-04"],
+      "s8": ["tests/integration/phase3-s8-negative-controls.test.ts"]
+    },
+    "PM-05": {
+      "invariant": "a simple product has a variant",
+      "positive": ["tests/integration/catalog-base-variant.test.ts::row 5: enabling tracking twice makes exactly one base variant"],
+      "negativeControl": ["tests/integration/phase3-s8-negative-controls.test.ts::PM-05"],
+      "s8": ["tests/integration/phase3-s8-negative-controls.test.ts"]
+    },
+    "PM-06": {
+      "invariant": "unit precision",
+      "positive": ["tests/integration/stock-ledger-primitive.test.ts::P-01 … P-10 through the primitive"],
+      "negativeControl": ["tests/integration/stock-ledger-primitive.test.ts::T-08.N (primitive):"],
+      "s8": []
+    },
+    "PM-07": {
+      "invariant": "stocktake vs receipts",
+      "positive": ["tests/integration/inventory-s3-stocktake.test.ts::capture, then an adjustment AND a transfer on the same key"],
+      "negativeControl": ["tests/integration/inventory-s3-stocktake.test.ts::negative control: with the routine check removed"],
+      "s8": []
+    },
+    "PM-08": {
+      "invariant": "landed cost rounds once",
+      "positive": ["tests/integration/purchase-s4-landed-cost.test.ts::a cost’s allocation re-inserted one unit higher"],
+      "negativeControl": ["tests/integration/phase3-s8-negative-controls.test.ts::PM-08"],
+      "s8": ["tests/integration/phase3-s8-negative-controls.test.ts"]
+    },
+    "PM-09": {
+      "invariant": "a duplicate variant line",
+      "positive": ["tests/integration/purchase-s4-draft.test.ts::a repeated variant → duplicate_variant"],
+      "negativeControl": ["tests/integration/phase3-s8-negative-controls.test.ts::PM-09"],
+      "s8": ["tests/integration/phase3-s8-negative-controls.test.ts"]
+    },
+    "PM-10": {
+      "invariant": "stock commits but accounting fails",
+      "positive": ["tests/integration/inventory-s3-atomicity.test.ts::opening (Case A)", "tests/integration/inventory-s3-atomicity.test.ts::adjustment"],
+      "negativeControl": ["tests/integration/phase3-s8-failure-injection.test.ts::PM-10"],
+      "s8": ["tests/integration/phase3-s8-failure-injection.test.ts"]
+    },
+    "PM-11": {
+      "invariant": "accounting commits but stock fails",
+      "positive": ["tests/integration/inventory-s3-atomicity.test.ts::transfer (seam 1)"],
+      "negativeControl": ["tests/integration/phase3-s8-failure-injection.test.ts::PM-10"],
+      "s8": ["tests/integration/phase3-s8-failure-injection.test.ts"]
+    },
+    "PM-12": {
+      "invariant": "payment over-allocates AP",
+      "positive": ["tests/integration/settlement-s6-over-allocation.test.ts::two payments of 60 against 100"],
+      "negativeControl": ["tests/integration/phase3-s8-negative-controls.test.ts::PM-12"],
+      "s8": ["tests/integration/phase3-s8-negative-controls.test.ts"]
+    },
+    "PM-13": {
+      "invariant": "return > received quantity",
+      "positive": ["tests/integration/purchase-s5-quantity-bound.test.ts::the second waits on the purchase row"],
+      "negativeControl": [
+        "tests/integration/purchase-s5-quantity-bound.test.ts::the same insert without the bound is accepted at COMMIT",
+        "tests/integration/phase3-s8-negative-controls.test.ts::PM-13"
+      ],
+      "s8": ["tests/integration/phase3-s8-negative-controls.test.ts"]
+    },
+    "PM-14": {
+      "invariant": "return > warehouse stock",
+      "positive": ["tests/integration/purchase-s5-stock-bound.test.ts::more than the return key holds"],
+      "negativeControl": ["tests/integration/phase3-s8-negative-controls.test.ts::PM-14"],
+      "s8": ["tests/integration/phase3-s8-negative-controls.test.ts"]
+    },
+    "PM-15": {
+      "invariant": "credit consumed twice",
+      "positive": ["tests/integration/settlement-s6-credit-concurrency.test.ts::a credit allocation and a refund of 60 each on 100"],
+      "negativeControl": ["tests/integration/phase3-s8-negative-controls.test.ts::PM-15"],
+      "s8": ["tests/integration/phase3-s8-negative-controls.test.ts", "tests/integration/phase3-s8-concurrency.test.ts"]
+    },
+    "PM-16": {
+      "invariant": "GL ↔ valuation",
+      "positive": ["tests/integration/purchase-s5-reversal-exact.test.ts::after a restock at another cost"],
+      "negativeControl": ["tests/integration/phase3-s8-mixed-sequence.test.ts::PM-16"],
+      "s8": [
+        "tests/integration/phase3-s8-reconciliation.test.ts",
+        "tests/security/phase3-s8-reconciliation-planted.test.ts",
+        "tests/integration/phase3-s8-mixed-sequence.test.ts"
+      ]
+    },
+    "PM-17": {
+      "invariant": "future-dated entry",
+      "positive": ["tests/integration/inventory-db-routines.test.ts::the guard fires before the period guard"],
+      "negativeControl": ["tests/integration/phase3-s8-negative-controls.test.ts::PM-17"],
+      "s8": ["tests/integration/phase3-s8-negative-controls.test.ts"]
+    },
+    "PM-18": {
+      "invariant": "branch-scoped warehouse authority",
+      "positive": [
+        "tests/security/inventory-s3-isolation.test.ts::as daftar_app scoped to A, only A’s documents are visible",
+        "tests/security/settlement-s6-isolation.test.ts::B (another tenant) reaches none of A’s S6 objects"
+      ],
+      "negativeControl": ["tests/security/stock-ledger-authority.test.ts::T-18.1.N:"],
+      "s8": []
+    },
+    "PM-19": {
+      "invariant": "historical rows never deleted",
+      "positive": [
+        "tests/integration/inventory-s3-archival.test.ts::warehouse: warehouse_has_stock",
+        "tests/integration/purchase-s4-immutability.test.ts::as owner: every UPDATE and DELETE of header"
+      ],
+      "negativeControl": [
+        "tests/integration/inventory-s3-archival.test.ts::negative control: with the warehouse trigger dropped",
+        "tests/integration/phase3-s8-negative-controls.test.ts::PM-19"
+      ],
+      "s8": ["tests/security/phase3-s8-grant-matrix.test.ts", "tests/integration/phase3-s8-negative-controls.test.ts"]
+    },
+    "PM-20": {
+      "invariant": "deficit covered twice",
+      "positive": ["tests/integration/purchase-s4-concurrency.test.ts::THREE-LAYERS:"],
+      "negativeControl": ["tests/integration/phase3-s8-negative-controls.test.ts::PM-20"],
+      "s8": ["tests/integration/phase3-s8-negative-controls.test.ts"]
+    },
+    "PM-21": {
+      "invariant": "FIFO by stock_seq, never timestamps",
+      "positive": ["tests/integration/purchase-s4-coverage.test.ts::T-08.1 GOLD-72:"],
+      "negativeControl": ["tests/integration/stock-ledger-guards.test.ts::T-12.3: fires on created_at ordering"],
+      "s8": []
+    },
+    "PM-22": {
+      "invariant": "receive-and-pay is one model",
+      "positive": [
+        "tests/integration/purchase-s4-receipt.test.ts::a cash-labelled and a credit purchase of the same goods",
+        "tests/integration/settlement-s6-receive-and-pay.test.ts::the purchase entry equals the same purchase received on credit"
+      ],
+      "negativeControl": ["tests/integration/phase3-s8-negative-controls.test.ts::PM-22"],
+      "s8": ["tests/integration/phase3-s8-negative-controls.test.ts"]
+    },
+    "PM-23": {
+      "invariant": "no invented tax",
+      "positive": [
+        "tests/security/purchase-s4-tax.test.ts::a new draft with a non-zero tax",
+        "tests/security/purchase-s4-tax.test.ts::the owner’s direct UPDATE of tax_minor to 1"
+      ],
+      "negativeControl": ["tests/integration/phase3-s8-negative-controls.test.ts::PM-23"],
+      "s8": ["tests/integration/phase3-s8-negative-controls.test.ts", "tests/security/phase3-s8-grant-matrix.test.ts"]
+    },
+    "PM-24": {
+      "invariant": "the key stays in one process",
+      "positive": [
+        "tests/integration/inventory-config.test.ts::is REFUSED when its bytes equal the provisioning key",
+        "tests/integration/inventory-config.test.ts::compares the EFFECTIVE HMAC key: K‖0x00 against an accounting key K is refused"
+      ],
+      "negativeControl": ["tests/integration/assertion-key-separation.test.ts::PM-24"],
+      "s8": ["tests/integration/assertion-key-separation.test.ts"]
+    },
+    "PM-25": {
+      "invariant": "a whole unit is not padded",
+      "positive": ["tests/integration/stock-ledger-primitive.test.ts::P-01 … P-10 through R2 agree"],
+      "negativeControl": ["tests/integration/stock-ledger-primitive.test.ts::T-08.N (primitive):"],
+      "s8": []
+    },
+    "PM-26": {
+      "invariant": "the rounded average never feeds valuation",
+      "positive": ["tests/integration/stock-ledger-vectors.test.ts::T-05.1:"],
+      "negativeControl": ["tests/integration/stock-ledger-vectors.test.ts::T-05.N:"],
+      "s8": ["tests/integration/phase3-s8-rebuild-rehearsal.test.ts", "tests/performance/phase3-s8-budgets.test.ts"]
+    },
+    "PM-27": {
+      "invariant": "empty stock carries no value",
+      "positive": ["tests/integration/stock-ledger-vectors.test.ts::T-10.1:"],
+      "negativeControl": ["tests/integration/stock-ledger-vectors.test.ts::T-10.N: CTRL-FLUSH"],
+      "s8": ["tests/integration/phase3-s8-reconciliation.test.ts", "tests/security/phase3-s8-reconciliation-planted.test.ts"]
+    },
+    "PM-28": {
+      "invariant": "no fake assertion, no split commit",
+      "positive": [
+        "tests/integration/inventory-seam-posting.test.ts::configure_product (consuming a real invctl/1) and a manual adjustment commit in ONE transaction"
+      ],
+      "negativeControl": ["tests/security/inventory-signed-authority.test.ts::with inventory_assertion_consume replaced by a verifier that verifies nothing"],
+      "s8": []
+    },
+    "PM-29": {
+      "invariant": "no movement without a source",
+      "positive": ["tests/security/stock-ledger-structure.test.ts::T-14.1:", "tests/integration/inventory-s3-transfer.test.ts::6. a movement with no binding"],
+      "negativeControl": ["tests/security/stock-ledger-structure.test.ts::T-14.N:"],
+      "s8": ["tests/security/phase3-s8-reconciliation-planted.test.ts"]
+    },
+    "PM-30": {
+      "invariant": "a line over many layers keeps every coverage",
+      "positive": ["tests/integration/purchase-s4-coverage.test.ts::T-08.2 THREE-LAYERS:"],
+      "negativeControl": ["tests/integration/phase3-s8-negative-controls.test.ts::PM-30"],
+      "s8": ["tests/integration/phase3-s8-negative-controls.test.ts"]
+    },
+    "PM-31": {
+      "invariant": "one rounding only",
+      "positive": ["tests/integration/stock-ledger-vectors.test.ts::the vector file carries the nine §D scenarios"],
+      "negativeControl": ["tests/integration/stock-ledger-vectors.test.ts::T-11.N:"],
+      "s8": ["tests/integration/phase3-s8-reconciliation.test.ts", "tests/security/phase3-s8-reconciliation-planted.test.ts"]
+    },
+    "PM-32": {
+      "invariant": "one line, two movements, one binding each",
+      "positive": ["tests/security/stock-ledger-structure.test.ts::T-15.1:"],
+      "negativeControl": ["tests/security/stock-ledger-structure.test.ts::T-14.N:"],
+      "s8": []
+    },
+    "PM-33": {
+      "invariant": "binding for a line that never existed",
+      "positive": ["tests/security/stock-ledger-structure.test.ts::T-14.3: a movement + binding pair whose source line NEVER existed"],
+      "negativeControl": ["tests/security/stock-ledger-structure.test.ts::T-14.N:"],
+      "s8": []
+    },
+    "PM-34": {
+      "invariant": "S1 atomicity is real",
+      "positive": [
+        "tests/integration/inventory-seam-posting.test.ts::configure_product (consuming a real invctl/1) and a manual adjustment commit in ONE transaction"
+      ],
+      "negativeControl": ["tests/integration/inventory-seam-posting.test.ts::a failure injected after both rolls back"],
+      "s8": []
+    },
+    "PM-35": {
+      "invariant": "manager does not silently gain authority",
+      "positive": ["tests/integration/inventory-permissions-provisioning.test.ts::owner is the whole registry; manager is the accepted Phase 1 list"],
+      "negativeControl": ["tests/integration/phase3-s8-negative-controls.test.ts::PM-35"],
+      "s8": ["tests/integration/phase3-s8-negative-controls.test.ts"]
+    },
+    "PM-36": {
+      "invariant": "a new warehouse is reachable, and only by the right people",
+      "positive": ["tests/integration/inventory-warehouse-matrix.test.ts::an assigned-scope actor gains a warehouse only when"],
+      "negativeControl": ["tests/integration/inventory-warehouse-matrix.test.ts::row D negative control:"],
+      "s8": []
+    },
+    "PM-37": {
+      "invariant": "unit locked after history",
+      "positive": ["tests/integration/stock-ledger-unit-lock.test.ts::T-17.2 (row 3):"],
+      "negativeControl": ["tests/integration/stock-ledger-unit-lock.test.ts::T-17.N:"],
+      "s8": []
+    },
+    "PM-38": {
+      "invariant": "the base variant stays hidden",
+      "positive": ["tests/integration/catalog-base-variant.test.ts::row 7 (raw SQL as daftar_app):"],
+      "negativeControl": ["tests/integration/phase3-s8-negative-controls.test.ts::PM-38"],
+      "s8": ["tests/integration/phase3-s8-negative-controls.test.ts"]
+    },
+    "PM-39": {
+      "invariant": "a catalogue UPDATE cannot change the unit",
+      "positive": ["tests/integration/stock-ledger-unit-lock.test.ts::T-17.3 (A-12):"],
+      "negativeControl": ["tests/integration/stock-ledger-unit-lock.test.ts::T-17.5 control (A-18):"],
+      "s8": []
+    },
+    "PM-40": {
+      "invariant": "a catalogue UPDATE cannot enable tracking",
+      "positive": ["tests/security/inventory-signed-authority.test.ts::a raw INSERT born tracked is refused the same way"],
+      "negativeControl": ["tests/security/inventory-signed-authority.test.ts::with the column guard dropped as well, row A succeeds"],
+      "s8": []
+    },
+    "PM-41": {
+      "invariant": "the onboarding maintainer can write its association",
+      "positive": ["tests/integration/inventory-warehouse-matrix.test.ts::row D: with the maintainer REMOVED"],
+      "negativeControl": ["tests/integration/inventory-warehouse-matrix.test.ts::row D negative control:"],
+      "s8": []
+    },
+    "PM-42": {
+      "invariant": "no runtime role in the internal role",
+      "positive": [
+        "tests/security/stock-ledger-authority.test.ts::T-02.4:",
+        "tests/security/inventory-db-authority.test.ts::has exactly one member — the migrator"
+      ],
+      "negativeControl": ["tests/security/stock-ledger-authority.test.ts::T-02.N: an in-transaction GRANT INSERT ON stock_levels TO daftar_app"],
+      "s8": ["tests/security/phase3-s8-grant-matrix.test.ts"]
+    },
+    "PM-43": {
+      "invariant": "definer hijack; login owner",
+      "positive": [
+        "tests/security/search-path-shadowing.test.ts::every routine, the exceptions included, pins search_path = pg_catalog, public, pg_temp",
+        "tests/security/inventory-db-authority.test.ts::is NOLOGIN NOINHERIT, has no password"
+      ],
+      "negativeControl": ["tests/security/phase3-s8-definer-law.test.ts::PM-43"],
+      "s8": ["tests/security/phase3-s8-definer-law.test.ts"]
+    },
+    "PM-44": {
+      "invariant": "direct EXECUTE is not authority",
+      "positive": [
+        "tests/security/inventory-signed-authority.test.ts::no carriers at all → P0001 inventory.assertion_missing",
+        "tests/security/inventory-s3-authority.test.ts::every other runtime role is refused EXECUTE on every routine"
+      ],
+      "negativeControl": [
+        "tests/security/inventory-signed-authority.test.ts::with inventory_assertion_consume replaced by a verifier that verifies nothing",
+        "tests/security/phase3-s8-signed-authority-matrix.test.ts::PM-44"
+      ],
+      "s8": ["tests/security/phase3-s8-signed-authority-matrix.test.ts"]
+    },
+    "PM-45": {
+      "invariant": "one assertion is not stretched",
+      "positive": [
+        "tests/security/inventory-signed-authority.test.ts::a committed use, presented again in a second transaction",
+        "tests/security/inventory-signed-authority.test.ts::a configuration assertion → the association routine"
+      ],
+      "negativeControl": ["tests/security/inventory-signed-authority.test.ts::with inventory_assertion_consume replaced by a verifier that verifies nothing"],
+      "s8": ["tests/security/phase3-s8-signed-authority-matrix.test.ts"]
+    },
+    "PM-46": {
+      "invariant": "key domains never collapse",
+      "positive": ["tests/security/inventory-signed-authority.test.ts::PM-46 cross-protocol:"],
+      "negativeControl": ["tests/security/inventory-signed-authority.test.ts::with inventory_assertion_consume replaced by a verifier that verifies nothing"],
+      "s8": ["tests/security/phase3-s8-signed-authority-matrix.test.ts", "tests/integration/assertion-key-separation.test.ts"]
+    }
+  }
+}

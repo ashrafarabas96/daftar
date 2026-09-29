@@ -141,7 +141,7 @@ describe('runtime process isolation (§15–20)', () => {
     const db = ref.get(Database);
     expect(db.ownedPools().sort()).toEqual(['identity', 'platform']);
     await expect(db.withTransaction({}, async () => 1)).rejects.toThrow(/not configured/);
-    await expect(db.withProvisionerTransaction(null, async () => 1)).rejects.toThrow(/not configured/);
+    await expect(db.withProvisionerTransaction(null, null, async () => 1)).rejects.toThrow(/not configured/);
     await expect(db.withWorkerTransaction(async () => 1)).rejects.toThrow(/not configured/);
   });
 

@@ -4,7 +4,7 @@ import { useRouter } from 'next/navigation';
 import type { CountryDto, CurrencyDto } from '@daftar/shared-contracts';
 import { Button, Combobox, TextField, colors, spacing, typography } from '@daftar/design-system';
 import { makeT, type Locale } from '@/lib/i18n';
-import { ApiError, refreshSession, setCurrentBusinessId } from '@/lib/client';
+import { ApiError, ensureSession, setCurrentBusinessId } from '@/lib/client';
 import { createBusinessInTenant, getCountries, getCurrencies, getCurrentBusiness } from '@/lib/merchant-api';
 import { PageShell } from '../../AppHeader';
 
@@ -28,7 +28,7 @@ export default function NewBusinessPage({ params }: { params: Promise<{ locale: 
 
   useEffect(() => {
     void (async () => {
-      if (!(await refreshSession())) {
+      if (!(await ensureSession())) {
         router.push(`/${locale}/login`);
         return;
       }

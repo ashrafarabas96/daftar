@@ -161,9 +161,11 @@ describe('clientIp trusted proxy handling (§XL matrix)', () => {
     expect(ip).toBe('198.51.100.7');
   });
 
-  it('TRUST_PROXY=true uses the first X-Forwarded-For entry (legacy mode)', () => {
+  it('TRUST_PROXY=true uses the entry its one proxy appended, never what the caller wrote (legacy mode, dev/test only)', () => {
+    // TD-19 review M-1: the leftmost entry is the caller's own writing.
     const ip = clientIp(reqWith('203.0.113.9, 10.0.0.1', '198.51.100.7'), { TRUST_PROXY: 'true', TRUSTED_PROXIES: '' });
-    expect(ip).toBe('203.0.113.9');
+    expect(ip).toBe('10.0.0.1');
+    expect(clientIp(reqWith(undefined, '198.51.100.7'), { TRUST_PROXY: 'true', TRUSTED_PROXIES: '' })).toBe('198.51.100.7');
   });
 
   it('direct request with FORGED XFF: untrusted socket peer → XFF ignored entirely', () => {

@@ -126,6 +126,7 @@ jobs:
         run: |
           npm run build -w packages/domain-core -w packages/shared-contracts -w packages/design-system
           npm run build -w packages/accounting
+          npm run build -w packages/inventory
       - name: Tier 2 acceptance measurement
         run: npx vitest run tests/performance/accounting-budgets.test.ts
         env:
@@ -186,6 +187,7 @@ jobs:
         run: |
           npm run build -w packages/domain-core -w packages/shared-contracts -w packages/design-system
           npm run build -w packages/accounting
+          npm run build -w packages/inventory
       - name: Answer and plan equivalence across the 0051 → 0052 boundary
         run: npx vitest run tests/performance/accounting-rls-equivalence.test.ts
         env:
@@ -242,6 +244,7 @@ jobs:
         run: |
           npm run build -w packages/domain-core -w packages/shared-contracts -w packages/design-system
           npm run build -w packages/accounting
+          npm run build -w packages/inventory
       - name: A real backup, a real restore, the accepted Phase 1 build on the upgraded database
         run: npm run rehearse:phase2:rollback
         env:
@@ -308,6 +311,7 @@ jobs:
         run: |
           npm run build -w packages/domain-core -w packages/shared-contracts -w packages/design-system
           npm run build -w packages/accounting
+          npm run build -w packages/inventory
       # GREEN IS NOT EVIDENCE unless the mechanism that reports green is
       # proven capable of reporting red. Asked here in the workflow, from the
       # exit status directly, before any suite runs: a runner that exits 0

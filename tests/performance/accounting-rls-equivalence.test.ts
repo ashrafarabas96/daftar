@@ -225,8 +225,16 @@ beforeAll(async () => {
   before = await capture(scope);
 
   // The one change under test, applied to the SAME database with the SAME
-  // rows already in it. Nothing is reset, reseeded or re-ANALYZEd.
-  await runMigrations(ownerUrl(DB));
+  // rows already in it. Nothing is reset, reseeded or re-ANALYZEd. Exactly
+  // 0052 and nothing after it: applying the whole history once 0053+ existed
+  // measured AFTER at the newest migration, and the boundary check below
+  // failed on every run since P3-S1 (found in the Phase 3 corrective pass).
+  const upTo0052 = migrationsUpTo('0052');
+  try {
+    await runMigrations(ownerUrl(DB), upTo0052);
+  } finally {
+    rmSync(upTo0052, { recursive: true, force: true });
+  }
   const check = new Pool({ connectionString: ownerUrl(DB), max: 1 });
   try {
     boundaryAfter = must((await check.query<{ name: string }>(`SELECT name FROM schema_migrations ORDER BY name DESC LIMIT 1`)).rows[0]).name;
