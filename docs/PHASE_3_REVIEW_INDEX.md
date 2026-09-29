@@ -575,7 +575,7 @@ It lists every path in `git diff --name-only 0f2b09e HEAD` except this page itse
 | `tests/performance/accounting-rls-equivalence.test.ts` | corrective | BEFORE / AFTER: THE ANSWER AND THE PLAN (P2-S8 RLS directive §10, §11). | not yet (corrective candidate) |
 | `tests/performance/phase3-dataset.ts` | P3-S8 (+S9) | P3-S8 SCALE DATASETS (docs/PHASE_3_S8_CONTRACT.md A-17; T-13 and the T-09 rehearsal read them). | 5fcab76 (S8 freeze) |
 | `tests/performance/phase3-s7-read-budgets.test.ts` | P3-S7 | P3-S7 T-17 — THE READ BUDGETS AND THEIR PLANS (docs PHASE_3_S7_CONTRACT A-02, §6 T-17, §7.3 #4). | a0aee73 (S7 freeze) |
-| `tests/performance/phase3-s8-budgets.test.ts` | P3-S8 | P3-S8 T-13 — THE S8 BUDGETS (docs/PHASE_3_S8_CONTRACT.md A-17, §6.1 T-13, TL-7). | 5fcab76 (S8 freeze) |
+| `tests/performance/phase3-s8-budgets.test.ts` | P3-S8 (+corrective) | P3-S8 T-13 — THE S8 BUDGETS (docs/PHASE_3_S8_CONTRACT.md A-17, §6.1 T-13, TL-7). | 5fcab76 (S8 freeze) |
 | `tests/premortem/phase3-premortem-matrix.json` | P3-S8 | the P3-S8 gate, the premortem matrix and T-18 (§7.1, A-14, Annex R §2.11) | 5fcab76 (S8 freeze) |
 | `tests/security/accounting-raw-sql-invariants.test.ts` | P3-S1 | THE INVARIANT MATRIX (P2-S8 §14, §18). | 61b89d6 (S1 closure) |
 | `tests/security/accounting-sources-authority.test.ts` | P3-S3 (+S4, S5, S6, corrective) | evolve predecessor pins to the exact 0061/0062 end state; add the P3-S3 upgrade case | fecbecb (S3 freeze) |
