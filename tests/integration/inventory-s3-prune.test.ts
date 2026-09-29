@@ -141,6 +141,20 @@ async function expired(r: Registry): Promise<number> {
   );
 }
 
+/** Uses older than `cutoff`: the rows a prune at that cutoff must delete. */
+async function expiredBefore(r: Registry, cutoff: string): Promise<number> {
+  return Number(
+    must((await ownerPool().query<{ n: string }>(`SELECT count(*)::text AS n FROM ${r.table} WHERE used_at < $1::timestamptz`, [cutoff])).rows[0]).n,
+  );
+}
+
+/** Uses at or after `cutoff`: the rows a prune at that cutoff must keep. */
+async function usesSince(r: Registry, cutoff: string): Promise<number> {
+  return Number(
+    must((await ownerPool().query<{ n: string }>(`SELECT count(*)::text AS n FROM ${r.table} WHERE used_at >= $1::timestamptz`, [cutoff])).rows[0]).n,
+  );
+}
+
 /** Whether backend `pid` holds this registry's hygiene advisory lock. */
 async function holdsPruneLock(r: Registry, pid: number): Promise<boolean> {
   const q = await ownerPool().query(
@@ -201,18 +215,25 @@ for (const r of REGISTRIES) {
 
     it('the skipped hygiene is only deferred: a later consume prunes every expired use, never a live one', async () => {
       await seedExpired(r, 3);
-      const liveBefore = Number(
-        must((await ownerPool().query<{ n: string }>(`SELECT count(*)::text AS n FROM ${r.table} WHERE used_at >= now() - interval '1 hour'`)).rows[0]).n,
-      );
       expect(await expired(r)).toBeGreaterThanOrEqual(3);
       const c = await r.open(one, true);
-      await c.query('COMMIT');
-      await c.end();
-      expect(await expired(r)).toBe(0);
-      const liveAfter = Number(
-        must((await ownerPool().query<{ n: string }>(`SELECT count(*)::text AS n FROM ${r.table} WHERE used_at >= now() - interval '1 hour'`)).rows[0]).n,
-      );
-      expect(liveAfter, 'every live jti kept, plus the one just consumed').toBe(liveBefore + 1);
+      // The prune compares against the consuming transaction's own now(), so
+      // "expired" and "live" are judged at that one cutoff. A later now() would
+      // move the boundary: a use written about an hour earlier in the same run
+      // is live at the prune and expired a moment afterwards.
+      let cutoff: string;
+      let liveBefore: number;
+      try {
+        cutoff = must((await c.query<{ t: string }>(`SELECT (now() - interval '1 hour')::text AS t`)).rows[0]).t;
+        // Read from another connection before the commit: the consume's insert
+        // and the prune's deletes are not yet visible there.
+        liveBefore = await usesSince(r, cutoff);
+        await c.query('COMMIT');
+      } finally {
+        await c.end();
+      }
+      expect(await expiredBefore(r, cutoff), 'every use expired at the prune is gone').toBe(0);
+      expect(await usesSince(r, cutoff), 'every live jti kept, plus the one just consumed').toBe(liveBefore + 1);
     });
 
     it('negative control: with the plain-DELETE body restored, the second consumer waits on the first and fails lock_timeout (55P03)', async () => {

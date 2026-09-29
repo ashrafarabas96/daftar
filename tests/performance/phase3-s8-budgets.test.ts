@@ -36,7 +36,7 @@ import { INVENTORY_RECONCILIATION_CHECK_IDS, reconcile, type InventoryReconcilia
 import { DatabaseAccountingReconciliationReader } from '../../apps/api/src/modules/accounting/accounting-reconciliation.reader';
 import { PoolReconciliationConnection } from '../helpers/accounting-reconciliation';
 import { PG_DIR, PG_PORT } from '../helpers/embedded-cluster';
-import { must, registerActor, type HttpActor } from '../helpers/inventory-commands';
+import { must, registerActor } from '../helpers/inventory-commands';
 import { setScope } from '../helpers/stock-ledger';
 import { createTestApp, ensurePostgres, ownerPool, reconcilerDbUrl, resetData, type TestApp } from '../helpers/test-app';
 import {
@@ -89,7 +89,6 @@ async function inventoryPass(checks: readonly InventoryReconciliationCheckId[]):
 }
 
 let t: TestApp;
-let owner: HttpActor;
 let ledger: LedgerDataset;
 let gl: GlDataset;
 
@@ -98,7 +97,6 @@ beforeAll(
     await ensurePostgres();
     await resetData();
     t = await createTestApp();
-    owner = await registerActor(t, 'S8 budgets owner');
   },
   60 * 60 * 1000,
 );
@@ -171,6 +169,11 @@ describe(`T-13 D-LEDGER (tier ${PERF_TIER}, scale ${PERF_SCALE})`, () => {
 describe(`T-13 D-GL (tier ${PERF_TIER}, scale ${PERF_SCALE})`, () => {
   beforeAll(
     async () => {
+      // Signed up here, just before its only use, not once for the whole file:
+      // an access token lives 900 s, and at Tier 2 the D-LEDGER build above
+      // takes about that long, so a token issued before it had expired by the
+      // time D-GL onboarded its business (401).
+      const owner = await registerActor(t, 'S8 budgets owner');
       gl = await buildGlDataset(t, owner);
     },
     8 * 60 * 60 * 1000,
