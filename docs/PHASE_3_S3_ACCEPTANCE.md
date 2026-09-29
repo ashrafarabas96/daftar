@@ -59,7 +59,7 @@ Also: authority and tamper matrix, replay, and the bridge helper out of reach (`
 
 ## 4. Rulings and deviations for the Tech Lead
 
-- **B-1 (open).** Superseding a posted inventory opening is refused (`inventory.opening_state_invalid`). The lock has no operation kind or movement mapping for it and does not say what happens once stock has moved; a wrong opening is corrected with a reasoned adjustment. Carried to the Phase 3 final report.
+- **B-1 — CONFIRMED by the Tech Lead's final seal (2026-09-29).** A posted inventory opening cannot be superseded or replaced; an incorrect posted opening is corrected with a reasoned inventory adjustment, and history stays immutable. The refusal this slice shipped (`inventory.opening_state_invalid`) already implements the decision, so no product code changed. (Originally recorded here as open and carried to the Phase 3 final report: the lock has no operation kind or movement mapping for supersession and does not say what happens once stock has moved.)
 - **Plan §5 "both totals reported".** Security review F4 removed the two totals from the Case B mismatch response, because they disclose an accounting position; the refusal is still counted and writes nothing.
 - Stocktake cancel is signed under `inventory.stocktake_finalize` with an `outcome` field (TL-3); the reason is bound as eight uint32 words of its SHA-256 (TL-4); no server retry on `inventory.valuation_changed` (TL-5).
 - The migration headers record R-1 … R-16 where the implementation differs from the contract's first text; the contract was amended for F1–F4.

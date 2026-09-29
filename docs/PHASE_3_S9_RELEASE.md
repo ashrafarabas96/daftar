@@ -1,6 +1,7 @@
 # PHASE 3 — P3-S9 RELEASE CLOSURE
 
 **Status: PHASE 3 RELEASE — closed under the Tech Lead's 2026-09-26 directive to complete Phase 3. PR #4 stays a draft and is not merged.**
+**Final seal (2026-09-29): the Tech Lead returned CHANGES REQUIRED on this page's original candidate, the corrective pass added `0070`–`0073`, and the final Phase 3 boundary is `0073`. §10 records it; statements below that end at `0069` describe the original S9 candidate and are marked historical.**
 **Scope: release closure. Zero migrations and no change under `packages/` or `infrastructure/`. One change under `apps/`: the R-ACC-06 correction the Tech Lead authorized on 2026-09-27 (§6).**
 
 This page states what P3-S9 establishes and the mechanism that proves it. It carries no workflow run id, no timing and no archive digest, for the reason `docs/PHASE_2_S9_RELEASE.md` gives: a page that has to be edited to carry a run changes the head that the run described. Everything a run produces lives in `release/phase3-s9-release-evidence.json`, assembled by `scripts/phase3-s9-evidence.ts` from artefacts. The run ids are named in PR #4 and in the hand-off to the Tech Lead.
@@ -13,7 +14,7 @@ P3-S9 closes Phase 3 (inventory, purchases and suppliers). It adds no migration,
 
 | | |
 |---|---|
-| **Protects** | the Phase 3 migration prefix `0053`–`0069` as a literal invariant (`scripts/phase3-prefix.ts`), next to the Phase 2 prefix `0000`–`0052`; later migrations stay permitted |
+| **Protects** | the final Phase 3 migration history `0053`–`0073` as a literal invariant (`scripts/phase3-prefix.ts`, §10), next to the Phase 2 prefix `0000`–`0052`; later migrations stay permitted. Historical: the original S9 candidate protected `0053`–`0069` |
 | **Composes** | one release gate, `npm run gate:phase3:release`: the runner canaries, tree identity, the Phase 3 prefix, the document check, `gate:phase2:release` (which composes the Phase 1 release gate), `gate:phase3:s8` (which composes P3-S7 … P3-S1, P2-S8 … P2-S1 and Phase 1) and the deployed-database rehearsal |
 | **Rehearses** | the business on a database the deployment principal `daftar_migrator` built, with no superuser in the path (`npm run rehearse:phase3:deployed`) |
 | **Ships** | a Phase 3 release-candidate archive (`npm run export:release:phase3`) whose gate is run again inside the extracted archive, on a new database cluster |
@@ -21,7 +22,7 @@ P3-S9 closes Phase 3 (inventory, purchases and suppliers). It adds no migration,
 
 ## 2. The accepted boundary
 
-`frozenThrough` = `0069_inventory_reconciliation_read_and_account_domain.sql`, 70 frozen migrations. The Phase 3 prefix, as `scripts/phase3-prefix.ts` and the manifest both carry it:
+*Historical — the original S9 candidate's boundary, superseded by the final seal (§10):* `frozenThrough` = `0069_inventory_reconciliation_read_and_account_domain.sql`, 70 frozen migrations. The Phase 3 slice prefix (`PHASE3_SLICE_PREFIX` in `scripts/phase3-prefix.ts`), as the manifest carries it:
 
 | migration | SHA-256 |
 |---|---|
@@ -62,12 +63,12 @@ Each digest is also carried by its slice gate's accepted tense (`S2_ACCEPTED` �
 
 1. The runner failure canaries, root and web, outside Vitest (`scripts/runner-canary.ts`).
 2. Tree identity; a delivery manifest, if present, says phase 3.
-3. The Phase 3 prefix `0053`–`0069` intact; later migrations permitted.
+3. The Phase 3 history `0053`–`0073` intact (§10; originally the prefix `0053`–`0069`); later migrations permitted.
 4. No authoritative Phase 3 document contradicts the accepted state, and no acceptance or release page carries a placeholder. This page is one of the pages checked.
 5. `gate:phase2:release`, verbatim: toolchain, manifest, `db-from-zero --release`, guards, localization, format, lint, typecheck, unit, integration and security (every Phase 3 suite), golden, the API, web and admin builds, Android, audit, artefact and secret scans, the Phase 2 prefix and the deployment-authority matrix.
 6. The source tree is a source tree again (the API build output removed).
 7. `gate:phase3:corrective` (the corrective directive §19). It composes `gate:phase3:s8` first, and through it every Phase 3 and Phase 2 slice gate and Phase 1: structural checks, suites and the Tier 1 budgets. Then it proves each corrected blocker:
-   - the corrective migration boundary: the Phase 3 prefix stays intact, and the files after `0069` are exactly the declared corrective list, each called "Phase 3 corrective hardening". While a candidate, none of them is in the manifest. Once accepted, each hashes to its recorded digest;
+   - the corrective migration boundary: the Phase 3 history stays intact, the files after `0069` begin with the declared corrective list, each called "Phase 3 corrective hardening", and each hashes to its accepted digest on disk and in the manifest; later migrations are permitted. While the pass was a candidate, the list was exact and none of it was in the manifest (that tense is still proved, `tests/security/p3c-corrective-gate-tamper.test.ts`);
    - the corrective suites, root and web, as an exact named list. A listed suite that is missing or skips fails the gate, and so does a `p3c-*` suite that no entry lists;
    - the review-index check and the explicit Phase 3 secret range scan from `0f2b09e7…`;
    - the real-browser red proof, then the full ar/en/tr × 360×640, 768×1024, 1280×800 matrix on the production build. The gate declares this matrix, and dropping a locale, a viewport or a planted-defect kind fails it before anything runs;
@@ -140,18 +141,40 @@ The Tier 2 evidence of the slices still describes this head. From the P3-S8 free
 - **OD-03, purchase tax: OPEN, and every tax element is BLOCKED BY OD-03.** A purchase with a non-zero tax is refused with `purchase.tax_policy_absent`. No tax rate, tax account or tax posting exists in Phase 3.
 - **`MAIN_PROTECTION_EXTERNAL_BLOCKER` (TD-08):** `main` has no branch protection or ruleset. Only a repository administrator can configure it; it is recorded, never described as configured.
 - **Tech Lead decisions recorded in the slices:**
-  - P3-S3 B-1: superseding a posted inventory opening is refused; a wrong opening is corrected with a reasoned adjustment.
+  - P3-S3 B-1: superseding a posted inventory opening is refused; a wrong opening is corrected with a reasoned adjustment. **CONFIRMED** by the Tech Lead's final seal (2026-09-29): a posted opening cannot be superseded or replaced, and history stays immutable.
   - P3-S4 R-B1: one receipt may consume several single-use accounting assertions. **CONFIRMED** by the Tech Lead's corrective directive §12 (2026-09-28), its seam suites green at the corrected candidate.
   - P3-S6 TL-11: the inventory-assertion sequence, a sibling of R-B1. **CONFIRMED** the same way.
   - P3-S8 I-1: after the first stock movement, reversing one of two offsetting pre-movement manual Inventory lines opened a difference that R-INV-01 reported. **Closed in the Phase 3 corrective pass** by `0071`: such a reversal is refused (`docs/PHASE_3_FINAL_CORRECTIVE_AUDIT.md`, B).
 - **Debt (as written at the P3-S9 candidate `d6f1bc6`; the Phase 3 corrective pass closed TD-01, TD-06 for the Phase 3 web, TD-16, TD-18, TD-19 and TD-20 and narrowed TD-14 — `TECHNICAL_DEBT.md` is current):** TD-06 (no browser job in CI), TD-10 (symmetric assertion keys, bounded), TD-14 (a platform credential chooses the assertion key it installs), TD-15 (no supplier-payment reversal), TD-16 (a sub-unit AP residue from a pilot-currency partial return), TD-17 (no stored stock rebuild swap), TD-18 (four applier-owned pre-Phase-3 definers), TD-19 (the web server's calls to the API share one per-IP auth allowance; Phase 1) and TD-20 (two cosmetic interface items). TD-09, TD-11, TD-12 and TD-13 are closed.
 - **The hygiene scan window.** On a pull request, the gitleaks action scans only a 30-commit page of PR #4's commits, not the whole range. Accepted commit `61b89d6` carries three SHA-256 migration digests that the generic-api-key rule flags as false positives. **Corrected in the Phase 3 corrective pass:** the earlier wording called the window "sliding", which is not established; the range is now scanned in full, independently of the action, by `npm run scan:secrets:phase3` (base `0f2b09e7…`, first-parent history, the three digests allowlisted by exact fingerprint), which `gate:phase3:corrective` runs.
 
+## 10. Final corrective seal
+
+This section records what changed after this page's original candidate. The sections above describe that candidate and are kept as its record.
+
+- **The S9 candidate originally ended at `0069`.** `d6f1bc6`, 70 frozen migrations, `frozenThrough = 0069_inventory_reconciliation_read_and_account_domain.sql`, the Phase 3 prefix `0053`–`0069` (§2).
+- **The Tech Lead returned CHANGES REQUIRED** on it (2026-09-28). The corrective pass (`docs/PHASE_3_FINAL_CORRECTIVE_AUDIT.md`) added four migrations, "Phase 3 corrective hardening", not Phase 4, each frozen after `gate:phase3:corrective` passed:
+
+| migration | closes | SHA-256 |
+|---|---|---|
+| `0070_definer_ownership_hardening.sql` | TD-18 | `add1fdea23051887900f33fb1a5ab30257656350807b58e479363231b2d432be` |
+| `0071_reversal_inventory_account_domain.sql` | S8 I-1 | `da36cae26c8c51847217e0e3654b5934f2f12ccbef824fc15222454d6a2ad14f` |
+| `0072_purchase_sub_unit_residue.sql` | TD-16 | `19ade4bf5b2e6d3960b73bf5834f78bcf862da59ba229f936208bb3b5a3ab1d0` |
+| `0073_default_warehouse_locale_name.sql` | TD-20 | `c47d4acbc94314ff68d043fcc0356274a2996492de9b6c10e4f52e5f05228ed7` |
+
+- **The Tech Lead passed the corrected technical candidate** `95adda94cb25a6568cabacb2cc462e9e861e0b6a` on 2026-09-29 (PHASE 3 — TECHNICAL PASS / FINAL SEAL REQUIRED).
+- **The final Phase 3 database boundary is `0073`.** Total migrations through Phase 3: **74** (`0000`–`0073`), `frozenThrough = 0073_default_warehouse_locale_name.sql`.
+- **The permanent Phase 3 invariant protects the final accepted history.** `scripts/phase3-prefix.ts` carries `PHASE3_SLICE_PREFIX` (`0053`–`0069`, the slices P3-S1 … P3-S8) and `PHASE3_CORRECTIVE_PREFIX` (`0070`–`0073`, the corrective hardening) as separate literals, so the provenance stays visible, and `PHASE3_PREFIX` is the two in order. Every later phase's `gate:phase3:release` proves that `0053`–`0073` exist under their names, in order, byte-identical to their accepted SHA-256, with identical manifest entries and `frozenThrough` at least `0073`. `gate:phase3:corrective` keeps proving the corrective behaviour separately. `tests/security/phase3-release-prefix.test.ts` proves both directions: PASS for the exact history and for the history plus a fixture-only `0074`; FAIL for one changed byte in `0070` or `0073`, a changed manifest digest, a rename, a deletion, a reorder and `frozenThrough` before `0073`.
+- **Later migrations remain allowed.** No gate says "nothing after `0073`"; no real `0074` exists.
+- **S3 B-1 is CONFIRMED** (§9).
+- **Release evidence.** The per-release migration claim (`scripts/phase3-s9-evidence.ts`, check 4) now expects the Phase 2 prefix followed by the final Phase 3 prefix, 74 migrations, `frozenThrough` `0073`. The runs at the seal commit are recorded in PR #4 and the final report, for the reason the page's header gives.
+
 ## ملخص
 
 أُغلقت المرحلة الثالثة (المخزون والمشتريات والموردون) بلا هجرة جديدة، وبتغيير واحد في كود المنتج أذن به قائد الفريق في 2026-09-27: تصحيح R-ACC-06 (§6):
 
-- الهجرات `0053`–`0069` محمية كبادئة ثابتة إلى جانب بادئة المرحلة الثانية.
+- (تاريخي: المرشح الأصلي للشريحة P3-S9 انتهى عند `0069`.) بعد الختم النهائي (§10) صار تاريخ المرحلة الثالثة كله `0053`–`0073` محميًا كبادئة ثابتة إلى جانب بادئة المرحلة الثانية: `0053`–`0069` من الشرائح و`0070`–`0073` تصحيح المرحلة الثالثة، والمجموع 74 هجرة، والهجرات اللاحقة مسموحة.
+- ثبّت قائد الفريق القرار B-1: الرصيد الافتتاحي المرحَّل لا يُستبدل، ويُصحَّح الخطأ فيه بتسوية مخزون مسبَّبة.
 - بوابة إصدار واحدة تجمع بوابة إصدار المرحلة الثانية وكل بوابات شرائح المرحلة الثالثة، وتمرينًا كاملًا على قاعدة بيانات بناها حساب النشر دون أي مستخدم خارق.
 - تُشغَّل البوابة مرتين: في المستودع، وداخل الأرشيف المستخرج على قاعدة بيانات جديدة.
 - كشف التمرين أن أربع دوال بصلاحيات مالكها يملكها من يطبّق الهجرات. مسارات الإنتاج كلها تعمل على قاعدة النشر، والفرق مثبّت الآن باختبار.

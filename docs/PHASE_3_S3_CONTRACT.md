@@ -1072,6 +1072,8 @@ No guard is weakened. S3 needs **no guard code change**, because each guard disc
 
 ### 9.1 Real blockers
 
+> **Decided — S3 B-1 CONFIRMED (Tech Lead, final seal, 2026-09-29).** A posted inventory opening cannot be superseded or replaced; an incorrect posted opening is corrected with a reasoned inventory adjustment, and history stays immutable. The refusal described below is the permanent behaviour, not a placeholder; `superseded` has no path into it. The analysis that follows is kept as the historical record of why.
+
 **B-1 · Correcting a posted inventory opening (`posted → superseded`, L:724) is an architectural contradiction plus a product ambiguity.** It does **not** block S3 acceptance: it is absent from P:181-198's Delivers and Must-prove lists.
 
 The exact reasons:

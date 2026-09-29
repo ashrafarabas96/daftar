@@ -14,7 +14,7 @@
 ## 0. Status: ACCEPTED (internal) / FROZEN
 
 - **Candidate head:** `96fb40c0f15106711a95db720a7cac402766bd26`. It is green on all five jobs of `DAFTAR CI` run `36345809905` (attempt 1), on that exact SHA.
-- **Freeze:** the freeze commit appends `0069` to `MIGRATION_MANIFEST.json`, with `frozenThrough = 0069_inventory_reconciliation_read_and_account_domain.sql` and 70 migrations frozen, and fills `S8_ACCEPTED` in `scripts/phase3-s8-gate.ts`.
+- **Freeze:** the freeze commit appends `0069` to `MIGRATION_MANIFEST.json`, with `frozenThrough = 0069_inventory_reconciliation_read_and_account_domain.sql` and 70 migrations frozen, and fills `S8_ACCEPTED` in `scripts/phase3-s8-gate.ts`. (Historical: the S8 freeze. The final Phase 3 boundary is `0073`, `docs/PHASE_3_S9_RELEASE.md` §10.)
 - **CI:** runs `gate:phase3:s8`, which composes `gate:phase3:s7` and the chain back to Phase 1.
 
 | migration | SHA-256 | state |
@@ -96,7 +96,7 @@ The candidate `96fb40c` was checked locally on a fresh embedded PostgreSQL.
 - **`npm run gate:phase3:s8`.** Every step passed: `gate:phase3:s7` and the whole chain back to Phase 1, the S8 structural checks, the package suites, the 20 functional suites, T-13 Tier 1, and Budget A and B in isolation. One step of the composed chain, `check:deployment-authority`, could not start its cluster because an orphaned PostgreSQL from an earlier run held its port; with that process stopped, `check:deployment-authority` alone passed. The full gate is proven on GitHub by the freeze CI run, which runs `gate:phase3:s8`.
 - **Static checks:** format, typecheck, lint, the static guards (23 rules) and the migration manifest check are all clean.
 
-**The accepted tense.** It was proven red on two plantings, each refused before the regression matrix: a wrong digest in `S8_ACCEPTED` (2 boundary violations), and one line appended to `0069` (the file hashes to `be2632e7…`, not `912299e9…`). T-15c (`tests/security/phase3-s8-gate-tamper.test.ts`) passes 19/19 in the accepted tense, and `npm run check:migrations` verifies 70 frozen migrations.
+**The accepted tense.** It was proven red on two plantings, each refused before the regression matrix: a wrong digest in `S8_ACCEPTED` (2 boundary violations), and one line appended to `0069` (the file hashes to `be2632e7…`, not `912299e9…`). T-15c (`tests/security/phase3-s8-gate-tamper.test.ts`) passes 19/19 in the accepted tense, and `npm run check:migrations` verified 70 frozen migrations at the time (historical: the final Phase 3 boundary is `0073`, 74 migrations).
 
 ## ملخص
 

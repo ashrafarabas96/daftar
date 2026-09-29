@@ -1,6 +1,6 @@
 # PHASE 3 — FINAL CORRECTIVE AUDIT
 
-**Status: CORRECTIVE PASS — results in §5, final proof in §6. The Tech Lead's verdict on the release candidate `d6f1bc6ecff08694351949d637090139e1ccc8f2` is PHASE 3 — CHANGES REQUIRED (2026-09-28). PR #4 stays a draft and is not merged. No Phase 4 work.**
+**Status: CORRECTIVE PASS — results in §5, final proof in §6. The Tech Lead's verdict on the release candidate `d6f1bc6ecff08694351949d637090139e1ccc8f2` was PHASE 3 — CHANGES REQUIRED (2026-09-28); on the corrected technical candidate `95adda94cb25a6568cabacb2cc462e9e861e0b6a` it is PHASE 3 — TECHNICAL PASS / FINAL SEAL REQUIRED (2026-09-29). PR #4 stays a draft and is not merged. No Phase 4 work.**
 
 This page turns every finding of the Tech Lead's corrective directive into an explicit closure requirement. A finding closes only when its requirement is met and the proof named here exists. None of these findings may be closed by moving it to `TECHNICAL_DEBT.md`.
 
@@ -95,11 +95,27 @@ Each row names the change and the proof. The corrective gate entry (`scripts/pha
 
 ### History scan decision
 
-The first range scan of this pass found four `generic-api-key` findings: fake refresh tokens in two BFF test files, in unpushed commits of this pass (`e259306`, `8abae15`). They are test fixtures, not credentials; `ec8eb3b` replaced them with low-entropy values. The remaining question — rewrite the unpushed history or allowlist the four exact fingerprints — is the Tech Lead's decision and is recorded with the final report.
+The first range scan of this pass found four `generic-api-key` findings: fake refresh tokens in two BFF test files, in commits of this pass that had not been pushed. They were test fixtures, not credentials, and a later commit replaced them with low-entropy values. The question was whether to rewrite the unpushed history or allowlist the four exact fingerprints. **The Tech Lead chose the rewrite (2026-09-28).** Only unpushed commits were rewritten, and the result was pushed as a fast-forward, with no force-push and no accepted commit touched. The final tree was identical to the tree before the rewrite, and `0000`–`0069` and every accepted checkpoint were unchanged. The commit ids named in earlier drafts of this paragraph no longer exist on the branch. The range scan then read every commit with no fake-token finding. The only allowlisted findings are the three SHA-256 digest false positives in accepted `61b89d6`, each by exact fingerprint.
 
 ## 6. Final proof at the corrected candidate
 
-Recorded with the corrected candidate SHA in PR #4 and in the final report: the exact-SHA `DAFTAR CI` push run, the exact-SHA release-evidence run, the `pull_request` run labelled with its merge commit, the test census, Tier 1 and the budgets.
+The Tech Lead passed this candidate on 2026-09-29. Its evidence:
+
+| | |
+|---|---|
+| technical candidate | `95adda94cb25a6568cabacb2cc462e9e861e0b6a` |
+| exact-SHA push CI | `DAFTAR CI` **36488297689**: SUCCESS, six jobs (workspaces, backend, web-admin, android, hygiene, browser); `P3 CORRECTIVE GATE: PASS` |
+| exact-SHA release | `DAFTAR P3-S9 release evidence` **36488297808**: PASS |
+| PR equivalent-tree CI | `DAFTAR CI` **36488304766**: SUCCESS, on the merge commit `63eee511aac5b57d5c7323675be7873b64a24103` (equivalent-tree evidence, not the exact SHA) |
+| secret history | `0f2b09e7f2bd1015053ff2cb79ad1ceafc25bc6f` → `95adda94cb25a6568cabacb2cc462e9e861e0b6a`: 482 / 482 commits, 3 findings, 3 allowlisted by exact fingerprint, 0 remaining |
+| repository release gate | PASS: 9 pass, 0 fail, 0 mandatory skipped |
+| extracted archive release gate | PASS: 9 pass, 0 fail, 0 mandatory skipped |
+| migrations | 74, `frozenThrough = 0073_default_warehouse_locale_name.sql` |
+| browser | ar/en/tr × 360×640, 768×1024, 1280×800: 9 runs, 135 steps, 348 screenshots, 0 issues |
+| test census | 338 files, 5,808 tests |
+| Tier 1 | within every budget in the push run; Budget A 15 ms and B 60 ms unchanged |
+
+**The final seal** (Tech Lead, 2026-09-29) adds no migration and changes no product behaviour. It extends the permanent Phase 3 invariant to the whole history `0053`–`0073`, confirms S3 B-1 and corrects the canonical documents (`docs/PHASE_3_S9_RELEASE.md` §10). Because the seal changes scripts and documents, the evidence above does not describe the seal commit. The seal commit's own exact-SHA push CI and release evidence, its PR run and the sequential Tier 2 measurements are recorded in PR #4 and the final seal report, for the reason `docs/PHASE_3_S9_RELEASE.md` gives: a page that has to be edited to carry a run changes the head that the run described.
 
 ## ملخص
 
