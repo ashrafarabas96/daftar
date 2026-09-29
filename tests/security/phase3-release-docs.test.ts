@@ -63,6 +63,15 @@ const CLAIMS: readonly (readonly [line: string, why: string])[] = [
   ['The next allowed step is P3-S8.', 'still names P3-S8 as the next step'],
   ['OD-03 (purchase tax) is resolved.', 'describes OD-03 as settled'],
   ['OD-03 is implemented by the Country Pack.', 'describes OD-03 as settled'],
+  [
+    '- Migrations: `frozenThrough = 0069_inventory_reconciliation_read_and_account_domain.sql`',
+    'still states the pre-corrective boundary frozenThrough = 0069',
+  ],
+  ['- Migrations: 70 frozen, through the S8 file.', 'still states the pre-corrective count of 70 frozen migrations'],
+  ['The boundary is 70 frozen migrations.', 'still states the pre-corrective count of 70 frozen migrations'],
+  ['`gate:phase3:release` protects the Phase 3 prefix `0053`–`0069`.', 'still states the pre-seal Phase 3 prefix 0053–0069'],
+  ['- **B-1 (open).** Superseding a posted opening is refused.', 'still calls S3 B-1 open'],
+  ['One open owner decision: B-1, superseding a posted inventory opening.', 'still calls S3 B-1 open'],
 ];
 
 describe('the release-state pages carry no finding', () => {

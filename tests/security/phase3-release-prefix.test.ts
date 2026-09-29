@@ -1,26 +1,21 @@
 /**
  * T-01 — THE PHASE 3 PREFIX MUST BE ABLE TO SAY BOTH YES AND NO
- * (docs/PHASE_3_S9_CONTRACT.md A-03, §7 T-01, T-12).
+ * (docs/PHASE_3_S9_CONTRACT.md A-03, §7 T-01, T-12; the Tech Lead's final
+ * seal of 2026-09-29).
  *
- * `scripts/phase3-prefix.ts` protects the accepted Phase 3 migrations
- * 0053–0069 as a literal copy of their digests and permits every later
- * migration. This file proves it in both directions, on throwaway copies of
- * the migrations directory and the manifest (the method of
+ * `scripts/phase3-prefix.ts` protects the final Phase 3 migration history,
+ * 0053–0073, as a literal copy of the digests: the slices' 0053–0069 and the
+ * corrective hardening's 0070–0073, provenance kept apart. It permits every
+ * later migration. This file proves it in both directions, on throwaway
+ * copies of the migrations directory and the manifest (the method of
  * `tests/security/phase2-release-prefix.test.ts`). Nothing in this repository
- * is written to; the successor `0070` exists in the copy only.
+ * is written to; the successor `0074` exists in the copy only, and no real
+ * 0074 exists.
  *
- * ── Before and after the P3-S8 freeze ────────────────────────────────────
- *
- * The literal's 0069 digest is the one the S8 freeze records. Until that
- * freeze commit, the manifest does not yet list 0069 and `frozenThrough` is
- * still 0068, and `S8_ACCEPTED` in `scripts/phase3-s8-gate.ts` is empty. So:
- *   - the literal is compared with `S8_ACCEPTED` when that is non-empty, and
- *     with the digest of the 0069 file on disk otherwise;
- *   - each copy is taken to the S8 freeze state when the real manifest has
- *     not reached it (0069 appended at its on-disk digest, `frozenThrough`
- *     moved to it). After the freeze this changes nothing;
- *   - the real tree is expected to PASS once frozen, and before that to fail
- *     for exactly the two freeze reasons and nothing else.
+ * Until the seal, this file also carried the scaffolding for the moment
+ * before the P3-S8 freeze (0069 on disk but not yet in the manifest). Both
+ * freezes are recorded now, so the copies are taken from the real manifest
+ * as it stands.
  */
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -29,7 +24,17 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { PHASE2_PREFIX } from '../../scripts/phase2-prefix';
-import { PHASE3_PREFIX, PHASE3_PREFIX_END, PHASE3_PREFIX_START, PHASE3_SLICE_HEADS, checkPhase3Prefix } from '../../scripts/phase3-prefix';
+import { CORRECTIVE_ACCEPTED, CORRECTIVE_MIGRATIONS } from '../../scripts/phase3-corrective-gate';
+import {
+  PHASE3_CORRECTIVE_PREFIX,
+  PHASE3_PREFIX,
+  PHASE3_PREFIX_END,
+  PHASE3_PREFIX_START,
+  PHASE3_SLICE_HEADS,
+  PHASE3_SLICE_PREFIX,
+  PHASE3_SLICE_PREFIX_END,
+  checkPhase3Prefix,
+} from '../../scripts/phase3-prefix';
 import { S8_MIGRATION_NAME } from '../../scripts/phase3-s8-gate';
 
 const REPO = join(__dirname, '../..');
@@ -45,21 +50,11 @@ afterAll(() => {
 
 const sha256 = (buf: Buffer | string): string => createHash('sha256').update(buf).digest('hex');
 const realManifest = (): Manifest => JSON.parse(readFileSync(join(REPO, MANIFEST), 'utf8')) as Manifest;
-const onDisk = (name: string): string => sha256(readFileSync(join(REPO, MIGRATIONS, name)));
 const nameAt = (i: number): string => {
   const pair = PHASE3_PREFIX[i];
   if (pair === undefined) throw new Error(`no Phase 3 prefix entry ${i}`);
   return pair[0];
 };
-
-/** True while the real manifest has not yet recorded the S8 freeze. */
-const freezePending = (): boolean => !realManifest().migrations.some((m) => m.name === PHASE3_PREFIX_END);
-
-/** The manifest as the S8 freeze leaves it: unchanged once the freeze has happened. */
-function atS8Freeze(m: Manifest): Manifest {
-  if (m.migrations.some((e) => e.name === PHASE3_PREFIX_END)) return m;
-  return { ...m, frozenThrough: PHASE3_PREFIX_END, migrations: [...m.migrations, { name: PHASE3_PREFIX_END, sha256: onDisk(PHASE3_PREFIX_END) }] };
-}
 
 /** `S8_ACCEPTED` as `scripts/phase3-s8-gate.ts` states it, read from its source (it is not exported). */
 function s8Accepted(): Record<string, string> {
@@ -70,7 +65,7 @@ function s8Accepted(): Record<string, string> {
   return Object.fromEntries([...body.matchAll(/['"]?([0-9A-Za-z_.]+)['"]?\s*:\s*['"]([0-9a-f]{64})['"]/g)].map((m) => [m[1] ?? '', m[2] ?? '']));
 }
 
-/** A throwaway tree holding the migrations and the manifest at the S8 freeze. */
+/** A throwaway tree holding the migrations and the manifest as they stand. */
 function tree(): { root: string; dir: string; manifest: () => Manifest; write: (m: Manifest) => void; manifestPath: string } {
   const root = mkdtempSync(join(tmpdir(), 'daftar-p3-prefix-'));
   temporaries.push(root);
@@ -79,7 +74,7 @@ function tree(): { root: string; dir: string; manifest: () => Manifest; write: (
   for (const f of readdirSync(join(REPO, MIGRATIONS))) if (f.endsWith('.sql')) copyFileSync(join(REPO, MIGRATIONS, f), join(dir, f));
   const manifestPath = join(root, MANIFEST);
   const write = (m: Manifest): void => writeFileSync(manifestPath, `${JSON.stringify(m, null, 2)}\n`);
-  write(atS8Freeze(realManifest()));
+  write(realManifest());
   const manifest = (): Manifest => JSON.parse(readFileSync(manifestPath, 'utf8')) as Manifest;
   return { root, dir, manifest, write, manifestPath };
 }
@@ -88,13 +83,23 @@ const check = (t: ReturnType<typeof tree>): string[] => checkPhase3Prefix(t.dir,
 const M0053 = nameAt(0);
 const M0060 = nameAt(7);
 const M0063 = nameAt(10);
+const M0069 = PHASE3_SLICE_PREFIX_END;
+const corrective = (i: number): string => PHASE3_CORRECTIVE_PREFIX[i]?.[0] ?? `(no corrective entry ${i})`;
+const M0070 = corrective(0);
+const M0071 = corrective(1);
+const M0072 = corrective(2);
+const M0073 = corrective(3);
 const OFFSET = PHASE2_PREFIX.length;
 
 describe('the accepted Phase 3 prefix literal', () => {
-  it('is 17 migrations, 0053 through 0069, in order', () => {
-    expect(PHASE3_PREFIX).toHaveLength(17);
+  it('is 21 migrations, 0053 through 0073, in order: 17 slice migrations through 0069, then 4 corrective ones', () => {
+    expect(PHASE3_PREFIX).toHaveLength(21);
+    expect(PHASE3_SLICE_PREFIX).toHaveLength(17);
+    expect(PHASE3_CORRECTIVE_PREFIX).toHaveLength(4);
+    expect(PHASE3_PREFIX).toEqual([...PHASE3_SLICE_PREFIX, ...PHASE3_CORRECTIVE_PREFIX]);
     expect(PHASE3_PREFIX_START).toBe('0053_inventory_units_and_product_configuration.sql');
-    expect(PHASE3_PREFIX_END).toBe('0069_inventory_reconciliation_read_and_account_domain.sql');
+    expect(PHASE3_SLICE_PREFIX_END).toBe('0069_inventory_reconciliation_read_and_account_domain.sql');
+    expect(PHASE3_PREFIX_END).toBe('0073_default_warehouse_locale_name.sql');
     const names = PHASE3_PREFIX.map(([n]) => n);
     expect([...names].sort()).toEqual(names);
     PHASE3_PREFIX.forEach(([n, digest], i) => {
@@ -103,56 +108,49 @@ describe('the accepted Phase 3 prefix literal', () => {
     });
   });
 
-  it('equals the manifest entries that follow the Phase 2 prefix (53–68, and 69 once the S8 freeze records it)', () => {
+  it('equals the manifest entries that follow the Phase 2 prefix (53–73)', () => {
     const recorded = realManifest().migrations.slice(OFFSET, OFFSET + PHASE3_PREFIX.length);
-    expect(recorded.length).toBe(freezePending() ? PHASE3_PREFIX.length - 1 : PHASE3_PREFIX.length);
-    expect(recorded.map((m) => [m.name, m.sha256])).toEqual(PHASE3_PREFIX.slice(0, recorded.length).map(([n, s]) => [n, s]));
+    expect(recorded.map((m) => [m.name, m.sha256])).toEqual(PHASE3_PREFIX.map(([n, s]) => [n, s]));
   });
 
-  it('carries the P3-S8 file the S8 gate names, at S8_ACCEPTED once frozen and at its on-disk digest before', () => {
-    expect(PHASE3_PREFIX_END).toBe(S8_MIGRATION_NAME);
-    const accepted = s8Accepted();
-    const literal = PHASE3_PREFIX[PHASE3_PREFIX.length - 1]?.[1];
-    if (Object.keys(accepted).length > 0) expect(accepted).toEqual({ [PHASE3_PREFIX_END]: literal });
-    else expect(literal).toBe(onDisk(PHASE3_PREFIX_END));
+  it('carries the P3-S8 file the S8 gate names, at S8_ACCEPTED, as the end of the slice prefix', () => {
+    expect(PHASE3_SLICE_PREFIX_END).toBe(S8_MIGRATION_NAME);
+    expect(s8Accepted()).toEqual({ [PHASE3_SLICE_PREFIX_END]: PHASE3_SLICE_PREFIX[PHASE3_SLICE_PREFIX.length - 1]?.[1] });
   });
 
-  it('names each accepted slice head, in order, from the literal', () => {
-    const names = PHASE3_PREFIX.map(([n]) => n);
+  it('carries the corrective hardening as the corrective gate froze it: CORRECTIVE_MIGRATIONS in order, at CORRECTIVE_ACCEPTED', () => {
+    expect(PHASE3_CORRECTIVE_PREFIX.map(([n]) => n)).toEqual([...CORRECTIVE_MIGRATIONS]);
+    expect(Object.fromEntries(PHASE3_CORRECTIVE_PREFIX.map(([n, d]) => [n, d]))).toEqual(CORRECTIVE_ACCEPTED);
+  });
+
+  it('names each accepted slice head, in order, from the slice literal', () => {
+    const names = PHASE3_SLICE_PREFIX.map(([n]) => n);
     const heads = Object.values(PHASE3_SLICE_HEADS);
     expect(Object.keys(PHASE3_SLICE_HEADS)).toEqual(['P3-S1', 'P3-S2', 'P3-S3', 'P3-S4', 'P3-S5', 'P3-S6', 'P3-S7', 'P3-S8']);
     for (const h of heads) expect(names).toContain(h);
     expect([...heads].sort()).toEqual(heads);
-    expect(PHASE3_SLICE_HEADS['P3-S8']).toBe(PHASE3_PREFIX_END);
+    expect(PHASE3_SLICE_HEADS['P3-S8']).toBe(PHASE3_SLICE_PREFIX_END);
   });
 
-  it('names no migration after 0069, so it needs no edit for any later phase', () => {
-    expect(readFileSync(join(REPO, 'scripts/phase3-prefix.ts'), 'utf8')).not.toMatch(/\b0(0[7-9]\d|[1-9]\d\d)_/);
+  it('names no migration after 0073, so it needs no edit for any later phase', () => {
+    expect(readFileSync(join(REPO, 'scripts/phase3-prefix.ts'), 'utf8')).not.toMatch(/\b0(07[4-9]|0[89]\d|[1-9]\d\d)_/);
   });
 });
 
 describe('the repository itself', () => {
-  it('passes once the S8 freeze is recorded, and before it fails only for the freeze', () => {
-    const problems = checkPhase3Prefix(join(REPO, MIGRATIONS), join(REPO, MANIFEST));
-    if (!freezePending()) {
-      expect(problems).toEqual([]);
-      return;
-    }
-    expect(problems).toEqual([
-      `frozenThrough is ${realManifest().frozenThrough}; the Phase 3 prefix must stay frozen through ${PHASE3_PREFIX_END}`,
-      `the manifest ends before entry ${OFFSET + PHASE3_PREFIX.length - 1} (${PHASE3_PREFIX_END}) of the Phase 3 prefix`,
-    ]);
+  it('passes: the final Phase 3 history is intact and frozen', () => {
+    expect(checkPhase3Prefix(join(REPO, MIGRATIONS), join(REPO, MANIFEST))).toEqual([]);
   });
 });
 
 describe('must PASS', () => {
-  it('the intact tree at the S8 freeze', () => {
+  it('the exact accepted 0053–0073', () => {
     expect(check(tree())).toEqual([]);
   });
 
-  it('the tree plus a synthetic frozen successor 0070 in the copy only (forward evolution)', () => {
+  it('the accepted prefix plus a synthetic frozen successor 0074 in the copy only (forward evolution)', () => {
     const t = tree();
-    const successor = '0070_fixture_successor.sql';
+    const successor = '0074_fixture_successor.sql';
     writeFileSync(join(t.dir, successor), '-- fixture only: a later phase\nselect 1;\n');
     const m = t.manifest();
     t.write({
@@ -166,7 +164,7 @@ describe('must PASS', () => {
 
 describe('must FAIL', () => {
   it('one byte changed in a Phase 3 migration', () => {
-    for (const name of [M0053, M0063, PHASE3_PREFIX_END]) {
+    for (const name of [M0053, M0063, M0069, M0070, M0073]) {
       const t = tree();
       const bytes = readFileSync(join(t.dir, name));
       bytes.writeUInt8(bytes.readUInt8(bytes.length - 1) ^ 0x01, bytes.length - 1);
@@ -176,42 +174,52 @@ describe('must FAIL', () => {
   });
 
   it('one byte changed AND its manifest digest updated to match', () => {
-    const t = tree();
-    const bytes = readFileSync(join(t.dir, M0063));
-    bytes.writeUInt8(bytes.readUInt8(0) ^ 0x01, 0);
-    writeFileSync(join(t.dir, M0063), bytes);
-    const m = t.manifest();
-    t.write({ ...m, migrations: m.migrations.map((e) => (e.name === M0063 ? { ...e, sha256: sha256(bytes) } : e)) });
-    const problems = check(t).join('\n');
-    expect(problems).toContain(`${M0063} hashes to`);
-    expect(problems).toContain(`the manifest records ${M0063}`);
+    for (const name of [M0063, M0072]) {
+      const t = tree();
+      const bytes = readFileSync(join(t.dir, name));
+      bytes.writeUInt8(bytes.readUInt8(0) ^ 0x01, 0);
+      writeFileSync(join(t.dir, name), bytes);
+      const m = t.manifest();
+      t.write({ ...m, migrations: m.migrations.map((e) => (e.name === name ? { ...e, sha256: sha256(bytes) } : e)) });
+      const problems = check(t).join('\n');
+      expect(problems).toContain(`${name} hashes to`);
+      expect(problems).toContain(`the manifest records ${name}`);
+    }
   });
 
   it('a Phase 3 migration deleted', () => {
-    const t = tree();
-    unlinkSync(join(t.dir, M0060));
-    expect(check(t).join('\n')).toContain(`${M0060} belongs to the accepted Phase 3 prefix but is missing`);
+    for (const name of [M0060, M0071, M0073]) {
+      const t = tree();
+      unlinkSync(join(t.dir, name));
+      expect(check(t).join('\n')).toContain(`${name} belongs to the accepted Phase 3 prefix but is missing`);
+    }
   });
 
   it('a Phase 3 migration renamed', () => {
-    const t = tree();
-    const renamed = M0060.replace(/\.sql$/, '_renamed.sql');
-    renameSync(join(t.dir, M0060), join(t.dir, renamed));
-    const problems = check(t).join('\n');
-    expect(problems).toContain(`${M0060} belongs to the accepted Phase 3 prefix but is missing`);
-    expect(problems).toContain(`${renamed} is in the Phase 3 range`);
+    for (const name of [M0060, M0072]) {
+      const t = tree();
+      const renamed = name.replace(/\.sql$/, '_renamed.sql');
+      renameSync(join(t.dir, name), join(t.dir, renamed));
+      const problems = check(t).join('\n');
+      expect(problems).toContain(`${name} belongs to the accepted Phase 3 prefix but is missing`);
+      expect(problems).toContain(`${renamed} is in the Phase 3 range`);
+    }
   });
 
-  it('a Phase 3 migration moved out of the range, past 0069', () => {
-    const t = tree();
-    renameSync(join(t.dir, M0060), join(t.dir, '0099_moved.sql'));
-    expect(check(t).join('\n')).toContain(`${M0060} belongs to the accepted Phase 3 prefix but is missing`);
+  it('a Phase 3 migration moved out of the range, past 0073', () => {
+    for (const name of [M0060, M0070]) {
+      const t = tree();
+      renameSync(join(t.dir, name), join(t.dir, '0099_moved.sql'));
+      expect(check(t).join('\n')).toContain(`${name} belongs to the accepted Phase 3 prefix but is missing`);
+    }
   });
 
-  it('a file inserted into the Phase 3 range', () => {
-    const t = tree();
-    writeFileSync(join(t.dir, '0060a_inserted.sql'), 'select 1;\n');
-    expect(check(t).join('\n')).toContain('0060a_inserted.sql is in the Phase 3 range');
+  it('a file inserted into the Phase 3 range, among the slices or among the corrective migrations', () => {
+    for (const inserted of ['0060a_inserted.sql', '0071a_inserted.sql']) {
+      const t = tree();
+      writeFileSync(join(t.dir, inserted), 'select 1;\n');
+      expect(check(t).join('\n')).toContain(`${inserted} is in the Phase 3 range`);
+    }
   });
 
   it('the order of the prefix changed in the manifest', () => {
@@ -225,6 +233,19 @@ describe('must FAIL', () => {
     migrations[OFFSET + 7] = a;
     t.write({ ...m, migrations });
     expect(check(t).join('\n')).toContain(`manifest entry ${OFFSET + 6} is ${M0060}`);
+  });
+
+  it('the order of the corrective migrations changed in the manifest', () => {
+    const t = tree();
+    const m = t.manifest();
+    const migrations = [...m.migrations];
+    const a = migrations[OFFSET + 17];
+    const b = migrations[OFFSET + 18];
+    if (a === undefined || b === undefined) throw new Error('the manifest is shorter than the prefix');
+    migrations[OFFSET + 17] = b;
+    migrations[OFFSET + 18] = a;
+    t.write({ ...m, migrations });
+    expect(check(t).join('\n')).toContain(`manifest entry ${OFFSET + 17} is ${M0071}`);
   });
 
   it('the name of a prefix entry changed in the manifest', () => {
@@ -243,17 +264,20 @@ describe('must FAIL', () => {
   });
 
   it('the expected digest of a Phase 3 migration changed in the manifest', () => {
-    const t = tree();
-    const m = t.manifest();
-    t.write({ ...m, migrations: m.migrations.map((e) => (e.name === M0060 ? { ...e, sha256: 'f'.repeat(64) } : e)) });
-    expect(check(t).join('\n')).toContain(`the manifest records ${M0060} at ffffffffffff…`);
+    for (const name of [M0060, M0070, M0073]) {
+      const t = tree();
+      const m = t.manifest();
+      t.write({ ...m, migrations: m.migrations.map((e) => (e.name === name ? { ...e, sha256: 'f'.repeat(64) } : e)) });
+      expect(check(t).join('\n')).toContain(`the manifest records ${name} at ffffffffffff…`);
+    }
   });
 
-  it('frozenThrough moved below 0069', () => {
-    const t = tree();
-    const below = nameAt(PHASE3_PREFIX.length - 2);
-    t.write({ ...t.manifest(), frozenThrough: below });
-    expect(check(t).join('\n')).toContain(`frozenThrough is ${below}`);
+  it('frozenThrough moved before 0073: to 0072, or back to the original S9 boundary 0069', () => {
+    for (const below of [M0072, M0069]) {
+      const t = tree();
+      t.write({ ...t.manifest(), frozenThrough: below });
+      expect(check(t).join('\n')).toContain(`frozenThrough is ${below}; the Phase 3 prefix must stay frozen through ${M0073}`);
+    }
   });
 });
 

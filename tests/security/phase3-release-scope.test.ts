@@ -2,7 +2,8 @@
  * T-02 — OD-03 AND "NO ROLE CHANGE", OVER THE FROZEN PHASE 3 FILES
  * (docs/PHASE_3_S9_CONTRACT.md A-06, §7 T-02). BLOCKED BY OD-03.
  *
- * Once the Phase 3 prefix is pinned by digest, any property of those 17 files
+ * Once the Phase 3 prefix is pinned by digest, any property of those 21 files
+ * (the slices' 0053–0069 and the corrective hardening's 0070–0073)
  * is fixed forever. It is therefore proved once, here, by a permanent test
  * over exactly `PHASE3_PREFIX`, rather than by a gate step that would restate
  * the S4–S6 gates or forbid a later, authorized tax migration:

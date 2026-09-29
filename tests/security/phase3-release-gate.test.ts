@@ -124,7 +124,7 @@ describe('(b) --list plans the library build, then exactly the eight steps of §
     expect(commands[0]).toBe('(in process)');
     expect(commands[1]).toBe('npx tsx scripts/runner-canary.ts');
     expect(steps[2]?.name).toMatch(/tree identity.*phase 3/);
-    expect(steps[3]?.name).toMatch(/Phase 3 migration prefix 0053–0069 intact; later migrations permitted/);
+    expect(steps[3]?.name).toMatch(/Phase 3 migration prefix 0053–0073 intact; later migrations permitted/);
     expect(steps[4]?.name).toMatch(/no authoritative Phase 3 document contradicts the accepted state/);
     expect(commands.slice(2, 5)).toEqual(['(in process)', '(in process)', '(in process)']);
     expect(commands[5]).toMatch(/^npm run -s gate:phase2:release -- --evidence=\S+\/phase2-release-gate\.json --log-dir=\S+\/phase2$/);
@@ -196,9 +196,9 @@ describe('(d) --root <copy> --structural-only', () => {
     expect(run.output).not.toContain('gate:phase2:release');
   });
 
-  it('PASS on the copy plus a synthetic frozen 0070 with its manifest entry (forward evolution)', () => {
+  it('PASS on the copy plus a synthetic frozen 0074 with its manifest entry (forward evolution)', () => {
     const root = structuralCopy();
-    const successor = '0070_fixture_successor.sql';
+    const successor = '0074_fixture_successor.sql';
     const body = '-- fixture only: a later phase\nselect 1;\n';
     write(root, `${MIGRATIONS}/${successor}`, body);
     const m = JSON.parse(readFileSync(join(root, MANIFEST), 'utf8')) as Manifest;
@@ -212,16 +212,17 @@ describe('(d) --root <copy> --structural-only', () => {
     expect(run.artefact.verdict).toBe('STRUCTURAL_PASS');
   });
 
-  it('FAIL on one byte changed in a Phase 3 file', () => {
-    const root = structuralCopy();
-    const name = PHASE3_PREFIX[5]?.[0] ?? '';
-    const bytes = readFileSync(join(root, MIGRATIONS, name));
-    bytes.writeUInt8(bytes.readUInt8(10) ^ 0x01, 10);
-    writeFileSync(join(root, MIGRATIONS, name), bytes);
-    const run = structural(root);
-    expect(run.status).toBe(1);
-    expect(run.artefact.verdict).toBe('FAIL');
-    expect(run.output).toContain(`${name} hashes to`);
+  it('FAIL on one byte changed in a Phase 3 file, a slice migration or a corrective one', () => {
+    for (const name of [PHASE3_PREFIX[5]?.[0] ?? '', PHASE3_PREFIX_END]) {
+      const root = structuralCopy();
+      const bytes = readFileSync(join(root, MIGRATIONS, name));
+      bytes.writeUInt8(bytes.readUInt8(10) ^ 0x01, 10);
+      writeFileSync(join(root, MIGRATIONS, name), bytes);
+      const run = structural(root);
+      expect(run.status).toBe(1);
+      expect(run.artefact.verdict).toBe('FAIL');
+      expect(run.output).toContain(`${name} hashes to`);
+    }
   });
 
   it('FAIL on a planted stale claim', () => {

@@ -365,7 +365,7 @@ describe('no silent pass: suites and pending entries', () => {
   }, 700_000);
 });
 
-describe('§18: the corrective migration boundary is exact', () => {
+describe('§18: the corrective migration boundary', () => {
   const synthetic = (name: string, header: string): string => `-- ${name}\n-- ${header} — fixture.\nSELECT 1;\n`;
   /** The copy with every declared corrective migration present (the real file where it has landed, a synthetic one otherwise). */
   function withCorrectiveFiles(): string {
@@ -375,20 +375,40 @@ describe('§18: the corrective migration boundary is exact', () => {
     return root;
   }
 
-  it('exactly the declared files after 0069, unrecorded, named Phase 3 corrective hardening → no boundary or header refusal', () => {
+  it('exactly the declared files after 0069, frozen at their accepted digests, named Phase 3 corrective hardening → no boundary or header refusal', () => {
     const r = gate(withCorrectiveFiles());
     expect(failLines(r, 'boundary'), r.output.slice(-3000)).toEqual([]);
     expect(failLines(r, 'migration')).toEqual([]);
   }, 700_000);
 
-  it('one more file after the declared list → FAIL [boundary]', () => {
+  // The final seal (2026-09-29): once the corrective pass is accepted, a later
+  // phase's migration after 0073 is legitimate, so the gate must not refuse
+  // it. The candidate tense keeps its exact-list refusal, asked directly.
+  it('accepted tense: a later file after the corrective migrations (a future phase) → no boundary refusal', () => {
+    const root = withCorrectiveFiles();
+    rewrite(root, `${MIGRATIONS}/0099_planted_extra.sql`, synthetic('0099_planted_extra.sql', 'a later phase'));
+    expect(boundaryProblems(root)).toEqual([]);
+    const r = gate(root);
+    expect(failLines(r, 'boundary'), r.output.slice(-3000)).toEqual([]);
+  }, 700_000);
+
+  it('accepted tense: a file inserted among the corrective migrations → FAIL [boundary]', () => {
+    const root = withCorrectiveFiles();
+    rewrite(root, `${MIGRATIONS}/0071a_planted_insert.sql`, synthetic('0071a_planted_insert.sql', CORRECTIVE_MIGRATION_HEADER));
+    const r = gate(root);
+    expect(failLines(r, 'boundary'), r.output.slice(-3000)).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('0071a_planted_insert.sql is in the Phase 3 range'),
+        expect.stringMatching(/begin with CORRECTIVE_MIGRATIONS .* — found .*0071a_planted_insert\.sql/),
+      ]),
+    );
+  }, 700_000);
+
+  it('candidate tense: one more file after the declared list → a boundary problem (the list was exact before the freeze)', () => {
     const root = withCorrectiveFiles();
     rewrite(root, `${MIGRATIONS}/0099_planted_extra.sql`, synthetic('0099_planted_extra.sql', CORRECTIVE_MIGRATION_HEADER));
-    const r = gate(root);
-    expect(failLines(r, 'boundary'), r.output.slice(-3000)).toEqual([
-      expect.stringMatching(/are exactly CORRECTIVE_MIGRATIONS .* — found .*0099_planted_extra\.sql$/),
-    ]);
-  }, 700_000);
+    expect(boundaryProblems(root, {})).toContainEqual(expect.stringMatching(/are exactly CORRECTIVE_MIGRATIONS .* — found .*0099_planted_extra\.sql$/));
+  });
 
   // The candidate tense is asked of boundaryProblems directly, with an empty
   // accepted set, so the premature-freeze refusal stays proven after the

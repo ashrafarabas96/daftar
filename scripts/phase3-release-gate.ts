@@ -149,6 +149,11 @@ export const PHASE3_STALE_CLAIMS: readonly (readonly [RegExp, string])[] = [
   [/\b69 (migrations )?frozen\b/i, 'still states the pre-S8 count of 69 frozen migrations'],
   [/next (allowed )?step is P3-S8/i, 'still names P3-S8 as the next step'],
   [/OD-03[^\n|]{0,80}\b(closed|resolved|implemented)\b/i, 'describes OD-03 as settled'],
+  // The final seal (2026-09-29): the Phase 3 history ends at 0073, and S3 B-1 is decided.
+  [/frozenThrough[^\n|]{0,20}=\s*`?0069/i, 'still states the pre-corrective boundary frozenThrough = 0069'],
+  [/\b70 (migrations )?frozen\b|\b70 frozen migrations\b/i, 'still states the pre-corrective count of 70 frozen migrations'],
+  [/Phase 3 (migration )?prefix\W{0,4}0053\W{0,4}0069\b/i, 'still states the pre-seal Phase 3 prefix 0053–0069'],
+  [/\bB-1\b[^\n|]{0,60}\b(open|until decided|undecided)\b|\bopen\b[^\n|]{0,40}\bB-1\b/i, 'still calls S3 B-1 open'],
 ];
 
 /** A line that says of itself that it is history is not a stale claim (the P2 pattern, verbatim). */

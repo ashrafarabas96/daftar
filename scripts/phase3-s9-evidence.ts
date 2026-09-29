@@ -32,15 +32,12 @@
  *      path set. The export's route is the working tree; this one is git's.
  *   3. `phase: 3`.
  *   4. The migration claim, for this release only: the migrations shipped
- *      are exactly the Phase 2 prefix, then the Phase 3 prefix, then the
- *      corrective migrations the corrective freeze accepted
- *      (`CORRECTIVE_ACCEPTED`, in `CORRECTIVE_MIGRATIONS` order, each at its
- *      accepted digest), and `frozenThrough` is the last of them — the Phase 3
- *      prefix end while none is accepted. P3-S9 itself added none; the
- *      corrective pass added 0070–0073 and froze them, and an unaccepted or
- *      re-digested migration is still refused. This file describes one run of
- *      one commit and is named for the slice, which is the only place such a
- *      sentence may live; no gate says it.
+ *      are exactly the Phase 2 prefix followed by the final Phase 3 prefix
+ *      (`PHASE3_PREFIX`: the slices 0053–0069, then the corrective hardening
+ *      0070–0073, each at its accepted digest), and `frozenThrough` is the
+ *      Phase 3 prefix end, 0073. P3-S9 itself added none. This file describes
+ *      one run of one commit and is named for the slice, which is the only
+ *      place such a sentence may live; no gate says it.
  *   5. The deployment matrix and the deployed-database rehearsal PASS in both
  *      runs, and no role but the deployer holds TEMP or CREATE on `public`.
  *   6. The nested `gate:phase2:release` artefact PASS in both runs, on the
@@ -69,7 +66,6 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { PHASE2_PREFIX } from './phase2-prefix';
-import { CORRECTIVE_ACCEPTED, CORRECTIVE_MIGRATIONS } from './phase3-corrective-gate';
 import { PHASE3_PREFIX, PHASE3_PREFIX_END } from './phase3-prefix';
 import { secretScanEvidenceProblems, type ScanResult } from './phase3-secret-scan';
 
@@ -227,25 +223,21 @@ if (delivery) {
   if (recomputed !== delivery.treeHash)
     problems.push(`the delivery inventory recomputes to tree hash ${recomputed.slice(0, 12)}…, not the recorded ${String(delivery.treeHash).slice(0, 12)}…`);
 
-  // 4. The migration claim, for this one release: both prefixes, then the accepted corrective migrations.
-  const acceptedCorrective = CORRECTIVE_MIGRATIONS.flatMap((name) => {
-    const digest = CORRECTIVE_ACCEPTED[name];
-    return digest === undefined ? [] : [[name, digest] as const];
-  });
-  const expected = [...PHASE2_PREFIX, ...PHASE3_PREFIX, ...acceptedCorrective].map(([name, digest]) => ({ name, sha256: digest }));
-  const expectedEnd = acceptedCorrective.at(-1)?.[0] ?? PHASE3_PREFIX_END;
+  // 4. The migration claim, for this one release: the Phase 2 prefix, then the final Phase 3 prefix.
+  const expected = [...PHASE2_PREFIX, ...PHASE3_PREFIX].map(([name, digest]) => ({ name, sha256: digest }));
   const shipped = (delivery.migrationHashes ?? []).map((m) => ({ name: m.name, sha256: m.sha256 }));
   if (JSON.stringify(shipped) !== JSON.stringify(expected)) {
     const extra = shipped.filter((m) => !expected.some((e) => e.name === m.name)).map((m) => m.name);
     const changed = shipped.filter((m) => expected.some((e) => e.name === m.name && e.sha256 !== m.sha256)).map((m) => m.name);
     const missing = expected.filter((e) => !shipped.some((m) => m.name === e.name)).map((e) => e.name);
     problems.push(
-      `the migrations shipped are not exactly the Phase 2 prefix, the Phase 3 prefix and the accepted corrective migrations: extra [${extra.join(', ')}], changed [${changed.join(', ')}], missing [${missing.join(', ')}]`,
+      `the migrations shipped are not exactly the Phase 2 prefix and the final Phase 3 prefix (0053–0073): extra [${extra.join(', ')}], changed [${changed.join(', ')}], missing [${missing.join(', ')}]`,
     );
   }
   if (delivery.migrationCount !== expected.length)
     problems.push(`the delivery manifest counts ${String(delivery.migrationCount)} migrations, not ${expected.length}`);
-  if (delivery.frozenThrough !== expectedEnd) problems.push(`the delivery manifest says frozenThrough ${String(delivery.frozenThrough)}, not ${expectedEnd}`);
+  if (delivery.frozenThrough !== PHASE3_PREFIX_END)
+    problems.push(`the delivery manifest says frozenThrough ${String(delivery.frozenThrough)}, not ${PHASE3_PREFIX_END}`);
 }
 
 // ── 2. the second route to the content: git's own archive of the commit ──

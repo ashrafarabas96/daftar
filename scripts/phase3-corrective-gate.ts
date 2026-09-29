@@ -15,8 +15,12 @@
  *     Phase 3 boundary 0069, the files after it are exactly
  *     `CORRECTIVE_MIGRATIONS`, and none of them is recorded in the manifest.
  *   — ACCEPTED (`CORRECTIVE_ACCEPTED` holds a digest for every corrective
- *     migration): `frozenThrough` is a floor at the last corrective file, and
- *     each hashes to its accepted digest on disk and in the manifest.
+ *     migration): `frozenThrough` is a floor at the last corrective file, the
+ *     files after 0069 begin with `CORRECTIVE_MIGRATIONS`, and each hashes to
+ *     its accepted digest on disk and in the manifest. Later migrations are
+ *     permitted (the final seal, 2026-09-29): the whole Phase 3 history
+ *     0053–0073 is `PHASE3_PREFIX`, checked here and by `gate:phase3:release`,
+ *     and "nothing after 0073" is no sentence any gate may say.
  *
  * Directive §18: a corrective migration is "Phase 3 corrective hardening",
  * never a Phase 4 migration, and it is frozen only after this gate passes.
@@ -51,7 +55,7 @@ import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { checkPhase3Prefix } from './phase3-prefix';
+import { PHASE3_SLICE_PREFIX, checkPhase3Prefix } from './phase3-prefix';
 import { testTitles } from './phase3-s8-gate';
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -250,22 +254,32 @@ interface Manifest {
 
 /** §18: the boundary, in the tense `accepted` names. */
 export function boundaryProblems(root: string, accepted: Readonly<Record<string, string>> = CORRECTIVE_ACCEPTED): string[] {
-  const problems = checkPhase3Prefix(migrationsDir(root), join(root, 'infrastructure/database/MIGRATION_MANIFEST.json')).map((p) => `the Phase 3 prefix: ${p}`);
+  const candidate = Object.keys(accepted).length === 0;
+  // The candidate tense predates the corrective freeze, so only the slice prefix was frozen then; once accepted, the whole Phase 3 history is.
+  const problems = checkPhase3Prefix(
+    migrationsDir(root),
+    join(root, 'infrastructure/database/MIGRATION_MANIFEST.json'),
+    candidate ? PHASE3_SLICE_PREFIX : undefined,
+  ).map((p) => `the Phase 3 prefix: ${p}`);
   const manifest = JSON.parse(read(root, 'infrastructure/database/MIGRATION_MANIFEST.json')) as Manifest;
   const recorded = new Map(manifest.migrations.map((m) => [m.name, m.sha256]));
   const after = readdirSync(migrationsDir(root))
     .filter((f) => f.endsWith('.sql') && f > PHASE3_BOUNDARY)
     .sort();
   const declared = [...CORRECTIVE_MIGRATIONS];
-  if (JSON.stringify(after) !== JSON.stringify(declared))
-    problems.push(`the files after ${PHASE3_BOUNDARY} are exactly CORRECTIVE_MIGRATIONS (${declared.join(', ')}) — found ${after.join(', ') || 'none'}`);
   const last = declared[declared.length - 1] ?? PHASE3_BOUNDARY;
-  if (Object.keys(accepted).length === 0) {
+  if (candidate) {
+    if (JSON.stringify(after) !== JSON.stringify(declared))
+      problems.push(`the files after ${PHASE3_BOUNDARY} are exactly CORRECTIVE_MIGRATIONS (${declared.join(', ')}) — found ${after.join(', ') || 'none'}`);
     if (manifest.frozenThrough !== PHASE3_BOUNDARY)
       problems.push(`frozenThrough is ${manifest.frozenThrough} — a corrective candidate sits exactly on the Phase 3 boundary ${PHASE3_BOUNDARY}`);
     for (const name of after) if (recorded.has(name)) problems.push(`${name} is in the manifest before the corrective gate passed — premature freeze (§18)`);
     return problems;
   }
+  if (JSON.stringify(after.slice(0, declared.length)) !== JSON.stringify(declared))
+    problems.push(
+      `the files after ${PHASE3_BOUNDARY} begin with CORRECTIVE_MIGRATIONS (${declared.join(', ')}) — found ${after.slice(0, declared.length).join(', ') || 'none'}`,
+    );
   if (JSON.stringify(Object.keys(accepted).sort()) !== JSON.stringify([...declared].sort()))
     problems.push(`CORRECTIVE_ACCEPTED must name exactly CORRECTIVE_MIGRATIONS (${declared.join(', ')})`);
   if (manifest.frozenThrough < last)
@@ -529,10 +543,12 @@ function runGate(root: string, listOnly: boolean, structuralOnly: boolean): void
     console.log(`P3 CORRECTIVE GATE plan (${tense}):`);
     if (accepted)
       console.log(
-        `  structural: frozenThrough at or beyond ${CORRECTIVE_MIGRATIONS[CORRECTIVE_MIGRATIONS.length - 1] ?? PHASE3_BOUNDARY}; CORRECTIVE_ACCEPTED digests`,
+        `  structural: frozenThrough at or beyond ${CORRECTIVE_MIGRATIONS[CORRECTIVE_MIGRATIONS.length - 1] ?? PHASE3_BOUNDARY}; CORRECTIVE_ACCEPTED digests; later migrations permitted`,
       );
     else console.log(`  structural: frozenThrough = ${PHASE3_BOUNDARY}; after it exactly ${CORRECTIVE_MIGRATIONS.join(', ')}, unrecorded`);
-    console.log(`  structural: 0053–0069 intact; each corrective migration named "${CORRECTIVE_MIGRATION_HEADER}"; Budget A 15 ms, B 60 ms`);
+    console.log(
+      `  structural: ${accepted ? '0053–0073' : '0053–0069'} intact; each corrective migration named "${CORRECTIVE_MIGRATION_HEADER}"; Budget A 15 ms, B 60 ms`,
+    );
     console.log(
       `  structural: browser matrix ${BROWSER_MATRIX.locales.join('/')} × ${BROWSER_MATRIX.viewports.map((v) => `${v.width}x${v.height}`).join(', ')}; plants ${REQUIRED_PLANTS.join(', ')}`,
     );
