@@ -16,6 +16,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { PHASE2_PREFIX, PHASE2_PREFIX_END } from '../phase2-prefix';
+import { PHASE4_INHERITED_PREFIX } from '../phase4-prefix';
 import {
   CONSTRAINT_OPENERS,
   balancedBody,
@@ -51,23 +52,37 @@ import {
  */
 const MIGRATIONS_DIR = join(__dirname, '../../infrastructure/database/migrations');
 
-let prefixRelations: ReadonlySet<string> | null = null;
+type AcceptedPrefix = readonly (readonly [name: string, sha256: string])[];
 
-/** Every stored relation the accepted Phase 2 prefix creates, read from its digest-verified files. */
-export function phase2PrefixRelations(): ReadonlySet<string> {
-  if (prefixRelations !== null) return prefixRelations;
+const prefixRelationCache = new Map<AcceptedPrefix, ReadonlySet<string>>();
+
+/**
+ * Every stored relation an ACCEPTED prefix creates, read from its
+ * digest-verified files. One reader, so the Phase 3 anchor and the Phase 4
+ * anchor below cannot drift apart: a file that is missing or differs from its
+ * accepted digest yields an EMPTY set, which can only make the arms stricter.
+ */
+function acceptedPrefixRelations(prefix: AcceptedPrefix): ReadonlySet<string> {
+  const cached = prefixRelationCache.get(prefix);
+  if (cached !== undefined) return cached;
   const found = new Set<string>();
-  for (const [name, sha256] of PHASE2_PREFIX) {
+  for (const [name, sha256] of prefix) {
     const path = join(MIGRATIONS_DIR, name);
     const bytes = existsSync(path) ? readFileSync(path) : null;
     if (bytes === null || createHash('sha256').update(bytes).digest('hex') !== sha256) {
-      prefixRelations = new Set();
-      return prefixRelations;
+      const empty: ReadonlySet<string> = new Set();
+      prefixRelationCache.set(prefix, empty);
+      return empty;
     }
     for (const relation of discoverStoredRelations(bytes.toString('utf8'))) found.add(relation);
   }
-  prefixRelations = found;
-  return prefixRelations;
+  prefixRelationCache.set(prefix, found);
+  return found;
+}
+
+/** Every stored relation the accepted Phase 2 prefix creates, read from its digest-verified files. */
+export function phase2PrefixRelations(): ReadonlySet<string> {
+  return acceptedPrefixRelations(PHASE2_PREFIX);
 }
 
 /** Whether a relation belongs to the Phase 3 surface: the accepted Phase 2 prefix did not create it. */
@@ -257,8 +272,26 @@ export const AP_BALANCE_COLUMN = /(^|_)(outstanding|paid|unpaid|due|owed|payable
 /** A stored COGS or a stored cost TOTAL — never a per-unit cost input on a source document. */
 export const DERIVED_COST_COLUMN = /(^|_)(cogs|cost_of_goods|costs?_(total|totals|sum|sums)|(total|sum)_costs?)($|_)/;
 
-/** The derived-total column vocabulary that BOTH arms carry (P4-AL-06). */
-const DERIVED_TOTAL_COLUMN_PATTERNS: readonly RegExp[] = [AP_BALANCE_COLUMN, DERIVED_COST_COLUMN];
+/**
+ * A stored DEBT truth: what a customer still owes, how much of it is late, or
+ * an aging bucket of it.
+ *
+ * `AP_BALANCE_COLUMN` carries `outstanding`, `due` and `receivable`, and those
+ * three words are not the whole of the law. `debt_minor` names the same
+ * derived quantity in the merchant's own word and matches none of them, and
+ * `overdue_amount_minor` matches none of them either — `(^|_)due($|_)` needs a
+ * boundary before `due`, and `overdue` does not give it one. An aging bucket is
+ * the §4 "materialised aging table" written as a column instead of a relation.
+ * Each of those is a debt total that competes with the invoices and the
+ * payments for being the truth, so each is refused by name.
+ *
+ * Token-bounded, like every pattern here: `overdueish`, `subpayables` and a
+ * `managed`/`packaged` word are not debt columns and stay untouched.
+ */
+export const DERIVED_DEBT_COLUMN = /(^|_)(debts?|overdue|arrears|aging|ageing)($|_)/;
+
+/** The derived-total column vocabulary that EVERY arm carries (P4-AL-06). */
+const DERIVED_TOTAL_COLUMN_PATTERNS: readonly RegExp[] = [AP_BALANCE_COLUMN, DERIVED_COST_COLUMN, DERIVED_DEBT_COLUMN];
 
 /**
  * A relation whose NAME is a stored balance, outstanding, payable,
@@ -268,7 +301,8 @@ const DERIVED_TOTAL_COLUMN_PATTERNS: readonly RegExp[] = [AP_BALANCE_COLUMN, DER
  * `invoice_outstanding_cache` are refused by the same rule that already
  * refuses `supplier_balances`. No Phase 2/3 relation in either arm matches it.
  */
-const DERIVED_TOTAL_TABLE = /(^|_)(balances?|outstanding|payables?|receivables?|caches?|projections?|summar(y|ies)|snapshots?|rollups?)($|_)/;
+const DERIVED_TOTAL_TABLE =
+  /(^|_)(balances?|outstanding|overdue|arrears|aging|ageing|payables?|receivables?|caches?|projections?|summar(y|ies)|snapshots?|rollups?)($|_)/;
 
 export interface BalanceColumnFinding {
   readonly table: string;
@@ -385,15 +419,25 @@ export function findForbiddenInventoryRelations(sql: string): string[] {
   return discoverStoredRelations(sql).filter((table) => INVENTORY_FORBIDDEN_TABLE.test(table));
 }
 
-/** A table whose NAME is a stored inventory balance, summary, snapshot, rollup or cache — or a stored accounting balance. */
-export function isForbiddenInventoryTable(table: string): boolean {
+/**
+ * A relation that IS derived truth, under ANY name: a stored stock or
+ * accounting balance, an outstanding, an overdue or aging bucket, a cache, a
+ * projection, a summary, a snapshot or a rollup.
+ *
+ * P4-S1: this is the ONE relation-name predicate, shared by every arm. It was
+ * the body of `isForbiddenInventoryTable`, and a Phase 4 arm that copied it
+ * would be a second copy free to drift from this one. A declared source
+ * document keeps its AL-13 exemption (`SOURCE_DOCUMENT_TABLES`).
+ */
+export function isDerivedTruthRelation(table: string): boolean {
   const name = table.toLowerCase();
-  // P4-S1 (P4-AL-06, §4): `DERIVED_TOTAL_TABLE` too, so a relation that IS a
-  // stored balance, outstanding, cache, projection, summary, snapshot or
-  // rollup is refused under ANY name, not only under a stock/inventory one.
-  // A declared source document keeps its AL-13 exemption (`SOURCE_DOCUMENT_TABLES`).
   if (SOURCE_DOCUMENT_TABLES.includes(name)) return false;
   return INVENTORY_FORBIDDEN_TABLE.test(name) || DERIVED_TOTAL_TABLE.test(name) || isForbiddenBalanceTable(name);
+}
+
+/** A table whose NAME is a stored inventory balance, summary, snapshot, rollup or cache — or a stored accounting balance. */
+export function isForbiddenInventoryTable(table: string): boolean {
+  return isDerivedTruthRelation(table);
 }
 
 /** Whether `column` on inventory table `table` claims storage authority over a derived stock quantity. */
@@ -534,4 +578,97 @@ export function findAuthoritativeSupplierColumns(sql: string, tables: readonly s
   const watched = new Set(tables.map((t) => t.toLowerCase()));
   const declared = [...findColumnDeclarations(sql), ...findColumnRenames(sql).map((r) => ({ table: r.table, column: r.to }))];
   return declared.filter((d) => watched.has(d.table) && isAuthoritativeSupplierColumn(d.column)).map((d) => ({ table: d.table, column: d.column }));
+}
+
+/**
+ * ── P4-S1: the third arm, anchored on the INHERITED prefix (P4-AL-06, plan
+ * action 2; P4-AL-05 §4, P4-AL-14) ───────────────────────────────────────
+ *
+ * The two arms above partition the Phase 3 surface — every relation the
+ * accepted Phase 2 prefix (`0000`–`PHASE2_PREFIX_END`) did not create — and
+ * `tests/integration/phase3-s8-guards.test.ts:108-111` pins that partition.
+ * This arm adds nothing to it and takes nothing from it: its anchor is a
+ * DIFFERENT, later prefix, so it is a third set beside the partition, not a
+ * third piece of it.
+ *
+ * Its surface is every stored relation the accepted INHERITED prefix
+ * (`0000`–`0073`, `PHASE4_INHERITED_PREFIX`, digest-verified by the same
+ * reader) did not create. That is the catalogue definition of "Phase 4 and
+ * later", the way `isPhase3Relation` is the catalogue definition of "Phase 3
+ * and later", and it is why no Phase 4 name appears anywhere below. A list of
+ * Phase 4 names — `customers`, `invoices`, `installments` — would rebuild
+ * exactly the hole this file's header (`:33-38`) and P3-S8 exist to remove:
+ * the relation that breaks the law is by definition the one nobody thought to
+ * list. The one thing this arm keys on is SQL RELATION POSITION: which
+ * accepted prefix created the relation, or none.
+ *
+ * Why a third arm rather than leaving the Phase 4 surface to the complement
+ * arm. `discoverInventoryTables` reaches a Phase 4 relation today only as a
+ * side effect of being anchored on the Phase 2 prefix while being named,
+ * documented and tested as the INVENTORY vocabulary. That is an accident, and
+ * the day a slice narrows the complement arm to the Phase 3 surface it was
+ * written for, the Phase 4 surface would silently lose its cover. This arm
+ * states the cover instead of inheriting it, and CI runs both
+ * (`scripts/static-guards.ts` rule 15).
+ *
+ * The vocabulary is the SHARED one, not a fourth copy: the accounting
+ * patterns (`FORBIDDEN_COLUMN_PATTERNS` — any balance, a running debit/credit
+ * total, a stock level), the derived-total words every arm carries
+ * (`DERIVED_TOTAL_COLUMN_PATTERNS` — the AP/AR words, a stored COGS or cost
+ * total, and the debt/overdue/aging words `DERIVED_DEBT_COLUMN` adds), and
+ * `NEVER_STORED` (`reserved`, `available`), because the law names available
+ * and reserved stock and Phase 4 reserves nothing either.
+ *
+ * The exemptions are the shared ones too, `INVENTORY_NOT_A_QUANTITY`: an
+ * identity, an actor, an instant, a classifier or an ORDERING (`*_seq`) is not
+ * a stored quantity, whatever noun it is built from. There is no allowlist and
+ * no name exemption — `remaining_*` needs none, because the remaining pair of
+ * a credit note or a customer credit is a fact of the source document
+ * (P4-AL-14) and matches no pattern above.
+ */
+
+/** Whether a relation belongs to the Phase 4 surface: the accepted inherited prefix (`0000`–`0073`) did not create it. */
+export function isPhase4Relation(table: string): boolean {
+  return !acceptedPrefixRelations(PHASE4_INHERITED_PREFIX).has(table.toLowerCase());
+}
+
+/** Every stored relation the accepted inherited prefix creates, read from its digest-verified files. */
+export function phase4InheritedPrefixRelations(): ReadonlySet<string> {
+  return acceptedPrefixRelations(PHASE4_INHERITED_PREFIX);
+}
+
+/**
+ * The third arm's watched set: every stored relation one SQL text makes that
+ * the accepted inherited prefix did not create — by any `CREATE TABLE` (bare,
+ * quoted or schema-qualified), a materialized view, a `SELECT … INTO`, or as
+ * the new name of `ALTER TABLE … RENAME TO`. Sorted.
+ */
+export function discoverSalesTables(sql: string): string[] {
+  return discoverStoredRelations(sql).filter(isPhase4Relation);
+}
+
+/** A Phase 4 relation that IS derived truth — the same one predicate every arm uses. */
+export function isForbiddenSalesTable(table: string): boolean {
+  return isDerivedTruthRelation(table);
+}
+
+/** The shared vocabulary, carried by this arm: the accounting patterns, the derived-total words, and never a reservation. */
+const SALES_FORBIDDEN_COLUMN_PATTERNS: readonly RegExp[] = [...FORBIDDEN_COLUMN_PATTERNS, ...DERIVED_TOTAL_COLUMN_PATTERNS, NEVER_STORED];
+
+/** Whether `column` on a Phase 4 relation claims storage authority over a derived receivable, debt or stock quantity. */
+export function isAuthoritativeSalesColumn(column: string): boolean {
+  const name = column.toLowerCase();
+  if (INVENTORY_NOT_A_QUANTITY.test(name)) return false;
+  return SALES_FORBIDDEN_COLUMN_PATTERNS.some((re) => re.test(name));
+}
+
+/**
+ * Authoritative derived-truth columns declared on any of `tables` in one SQL
+ * text — CREATE TABLE bodies, ALTER TABLE … ADD COLUMN, and a column RENAMEd
+ * to such a name. An empty array is a pass.
+ */
+export function findAuthoritativeSalesColumns(sql: string, tables: readonly string[]): BalanceColumnFinding[] {
+  const watched = new Set(tables.map((t) => t.toLowerCase()));
+  const declared = [...findColumnDeclarations(sql), ...findColumnRenames(sql).map((r) => ({ table: r.table, column: r.to }))];
+  return declared.filter((d) => watched.has(d.table) && isAuthoritativeSalesColumn(d.column)).map((d) => ({ table: d.table, column: d.column }));
 }

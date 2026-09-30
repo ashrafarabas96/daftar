@@ -115,6 +115,13 @@ export interface SuiteEntry {
   /** `root`: the root Vitest configuration; `web`: apps/web/vitest.config.mts. */
   readonly runner: 'root' | 'web';
   readonly file: string;
+  /**
+   * `file` is a DIRECTORY handed to the runner whole, so a suite added to it
+   * later is executed by existing rather than by somebody remembering to list
+   * it. Every file inside is still checked, and the canary refuses a directory
+   * that is empty or that holds a file the runner would not pick up.
+   */
+  readonly directory?: true;
 }
 
 export interface CommandEntry {
@@ -139,6 +146,22 @@ const SETTLEMENT_S6 = 'tests/security/settlement-s6-no-customer-payments.test.ts
 const GOLDEN_DIR = 'tests/golden-regression/phase4';
 
 /**
+ * The guard red proofs live in their own directory, and NO gate and no npm
+ * script reached it: `test:integration` runs `tests/integration tests/security`
+ * and nothing else picks `tests/guards` up. So every planted-defect proof for
+ * G-3, G-6 and the merchant-language rules would have been written, committed
+ * and never executed — the exact shape of
+ * `[[daftar-a-green-gate-must-prove-it-can-be-red]]`, one level up: not a
+ * runner that cannot say no, but a proof nobody asked.
+ *
+ * This gate runs the DIRECTORY, never a list of names, so the next proof is
+ * picked up by existing. `guardSuiteProblems` is the canary: the directory must
+ * exist, hold at least one suite, and hold nothing the root runner would not
+ * execute when handed the directory.
+ */
+const GUARD_SUITE_DIR = 'tests/guards';
+
+/**
  * Every P4-S1 suite, by id. Exact: nothing is discovered, and every `p4-*`
  * suite on disk and every file under `tests/golden-regression/phase4/` must be
  * listed by one of these rows.
@@ -149,16 +172,15 @@ export const S1_SUITES: readonly (SuiteEntry | Pending)[] = [
   // P4-AL-88: the re-expressed Phase 3 settlement suite. It is composed here
   // because `gate:phase3:corrective` composes it; the row makes that visible.
   { id: 'P3C-88', area: 'phase3-coupling', runner: 'root', file: SETTLEMENT_S6 },
-  // The guard arms of the pre-migration actions (execution plan, P4-S1 §2, §3),
-  // delivered as tests/guards/. Each file carries mutation-verified red proofs:
-  // the rule is widened and then shown able to refuse. Listed by name so a
-  // deleted file is a FAIL rather than a directory that quietly empties.
-  { id: 'GD-01', area: 'guards', runner: 'root', file: 'tests/guards/phase4-derived-truth-guard.test.ts' },
-  { id: 'GD-02', area: 'guards', runner: 'root', file: 'tests/guards/phase4-merchant-language-guard.test.ts' },
-  { id: 'GD-03', area: 'guards', runner: 'root', file: 'tests/guards/phase4-read-surface-guard.test.ts' },
+  // The guard arms of the six pre-migration actions (execution plan, P4-S1 §2,
+  // §3) and their planted defects: the whole of `tests/guards`, by directory.
+  { id: 'GD-01', area: 'guard-proofs', runner: 'root', file: GUARD_SUITE_DIR, directory: true },
   // The permission-default authority of action 4 (OD-P4-01 A): the Phase 4 key
-  // set, the sensitivity vector, the audited backfill, and the phase scoping of
-  // the operation-kind registry that action 1 widened.
+  // set, the sensitivity vector, the delegation ceiling, the audited backfill,
+  // and the phase scoping of the registry assertions that action 7 rewrote.
+  // Named file by file rather than by directory: they live in tests/security
+  // beside the accepted estate, so a directory row there would claim suites
+  // this slice does not own.
   { id: 'PD-01', area: 'permissions', runner: 'root', file: 'tests/security/phase4-permission-defaults.test.ts' },
   { id: 'PD-02', area: 'permissions', runner: 'root', file: 'tests/security/phase4-registry-phase-scoping.test.ts' },
   // The four P4-S1 goldens (lock §17.4; execution plan P4-S1 Exit).
@@ -567,6 +589,50 @@ export function pendingProblems(): string[] {
   return rows.filter(isPending).map((p) => `${p.id} (${p.area}) is not filled — ${p.owner} owes it: ${p.pending}`);
 }
 
+/** Every test file directly inside `dir`, sorted. Whatever extension it carries: a file the runner would not pick up is a finding, not an omission. */
+export function suitesIn(root: string, dir: string): string[] {
+  if (!has(root, dir)) return [];
+  return readdirSync(join(root, dir))
+    .filter((f) => /\.(test|spec)\.[tj]sx?$/.test(f))
+    .sort()
+    .map((f) => `${dir}/${f}`);
+}
+
+/**
+ * The canary on the guard red proofs. `tests/guards` was reached by no gate and
+ * no npm script, so a planted-defect proof written there was never executed.
+ * This refuses:
+ *
+ *   — the directory missing, or holding no suite at all — a gate that runs an
+ *     empty directory proves nothing, and vitest's own "no test files found"
+ *     would be the only sign;
+ *   — a file in it the ROOT runner would not execute when handed the directory:
+ *     `vitest.config.ts` includes `tests/**\/*.test.ts`, so a `.test.tsx` or a
+ *     `.spec.ts` there is a proof that silently never runs;
+ *   — the plan not naming the directory, which is the failure this canary is
+ *     named after.
+ */
+export function guardSuiteProblems(root: string): string[] {
+  const problems: string[] = [];
+  const wired = s1Plan().some((s) => s.args.includes(GUARD_SUITE_DIR));
+  if (!wired) problems.push(`no step of this gate runs ${GUARD_SUITE_DIR} — the guard red proofs would be committed and never executed`);
+  if (!has(root, GUARD_SUITE_DIR))
+    return [...problems, `${GUARD_SUITE_DIR} is missing — the guard owner's planted-defect proofs for G-3, G-6 and the merchant-language rules live there`];
+  const suites = suitesIn(root, GUARD_SUITE_DIR);
+  if (suites.length === 0) problems.push(`${GUARD_SUITE_DIR} holds no suite — this gate would hand the runner an empty directory and call the result a pass`);
+  const include = has(root, 'vitest.config.ts') ? read(root, 'vitest.config.ts') : '';
+  if (!include.includes("'tests/**/*.test.ts'"))
+    problems.push(
+      `vitest.config.ts no longer includes tests/**/*.test.ts — this gate hands ${GUARD_SUITE_DIR} to the root runner and relies on that pattern to pick every proof up`,
+    );
+  for (const suite of suites)
+    if (!suite.endsWith('.test.ts'))
+      problems.push(
+        `${suite} is not matched by the root runner's include (tests/**/*.test.ts), so handing it the directory would not execute it — rename it .test.ts`,
+      );
+  return problems;
+}
+
 /** The listed suites exist and do not skip; every `p4-*` suite and every Phase 4 golden on disk is listed; ids are unique. */
 export function suiteProblems(root: string): string[] {
   const problems: string[] = [];
@@ -582,11 +648,14 @@ export function suiteProblems(root: string): string[] {
       continue;
     }
     if ((e.runner === 'web') !== e.file.startsWith('apps/web/test/')) problems.push(`${e.id} ${e.file} is not a ${e.runner} suite`);
-    const hit = SKIP.exec(stripTsProse(read(root, e.file)).replace(QUOTED, "''"));
-    if (hit) problems.push(`${e.id} ${e.file} contains ${hit[0]} — no Phase 4 suite skips`);
+    for (const file of e.directory === true ? suitesIn(root, e.file) : [e.file]) {
+      const hit = SKIP.exec(stripTsProse(read(root, file)).replace(QUOTED, "''"));
+      if (hit) problems.push(`${e.id} ${file} contains ${hit[0]} — no Phase 4 suite skips`);
+    }
   }
+  problems.push(...guardSuiteProblems(root));
   const listed = new Set(files.map((e) => e.file));
-  for (const dir of ['tests/integration', 'tests/security', 'tests/performance', 'tests/guards']) {
+  for (const dir of ['tests/integration', 'tests/security', 'tests/performance']) {
     if (!has(root, dir)) continue;
     for (const f of readdirSync(join(root, dir)).sort())
       if (/^(?:p4|phase4)-.*\.test\.ts$/.test(f) && !listed.has(`${dir}/${f}`)) problems.push(`${dir}/${f} is a Phase 4 suite no S1_SUITES entry lists`);
@@ -689,7 +758,72 @@ export function guardProblems(root: string): string[] {
     else if (source({ [PHASE4_WEB_FILE]: '<p>Ledger</p>' }).length === 0)
       problems.push(`the merchant-jargon source scope does not examine ${PHASE4_WEB_FILE} — a pos/ or customers/ file is never examined today (plan action 3)`);
   }
+  problems.push(...readSurfaceCoverageProblems(root));
+  problems.push(...derivedTruthCitationProblems(root));
   return problems;
+}
+
+/**
+ * G-6 must reach a Phase 4 read module, and it must reach it by SHAPE.
+ *
+ * `READ_SURFACE` was a path regex naming `accounting-reports`,
+ * `inventory-reads.ts` and `supplier-balance-reads.ts`, so a Phase 4 read
+ * module was never examined and an `OFFSET` or a `Number()` on money would
+ * ship green. The probes below are read modules in context directories that do
+ * not exist in the tree: they cannot be satisfied by adding a name, only by a
+ * rule about a module's shape. `apps/api/src/modules/<context>/<name>-reads.ts`
+ * is that rule.
+ *
+ * The accepted exclusions are asserted from the same side, so widening the rule
+ * cannot quietly swallow them: `purchasing-reads.ts` holds S6's command-side FX
+ * binding and must stay OFF the surface
+ * (`tests/integration/static-guards-s7.test.ts:141`), and a controller or a
+ * service is not a read module.
+ */
+export function readSurfaceCoverageProblems(root: string): string[] {
+  const module = 'scripts/guards/read-surface.ts';
+  if (!has(root, module)) return [`${module} is missing`];
+  /* eslint-disable-next-line @typescript-eslint/no-require-imports */
+  const guard = require(join(root, module)) as { READ_SURFACE?: RegExp };
+  const surface = guard.READ_SURFACE;
+  if (!(surface instanceof RegExp)) return [`${module} exports no READ_SURFACE pattern this gate can probe`];
+  const problems: string[] = [];
+  // A read module in a context nobody has created yet. If the surface misses
+  // one of these it is still a name list, however it is spelled.
+  for (const context of ['selling', 'sales', 'pos', 'receivables', 'invoices', 'customers', 'debts', 'installments'])
+    if (!surface.test(`apps/api/src/modules/${context}/${context}-reads.ts`))
+      problems.push(
+        `guard G-6's READ_SURFACE does not reach apps/api/src/modules/${context}/${context}-reads.ts — a Phase 4 read module is never examined, so an OFFSET or a Number() on money would ship green (G-6; the surface must be a rule about a module's shape, not a list of paths)`,
+      );
+  for (const [path, why] of [
+    [
+      'apps/api/src/modules/purchasing/purchasing-reads.ts',
+      "it holds S6's command-side FX binding and static-guards-s7.test.ts:141 requires it OFF the surface",
+    ],
+    ['apps/api/src/modules/selling/sales-reads.controller.ts', 'a controller is not a read module'],
+    ['apps/api/src/modules/selling/sales-movements.service.ts', 'a service is not a read module'],
+  ] as const)
+    if (surface.test(path))
+      problems.push(`guard G-6's READ_SURFACE now matches ${path}, and ${why} — widening the rule must not swallow the accepted exclusions`);
+  return problems;
+}
+
+/**
+ * The complement arm of G-3 returns the Phase 4 relations too, so its finding
+ * must cite the decision that governs a stored receivable. `static-guards.ts`
+ * is this gate's own file; the assertion keeps the correction from being
+ * reverted silently, since a wrong citation sends the next reader to a decision
+ * about the stock ledger.
+ */
+export function derivedTruthCitationProblems(root: string): string[] {
+  const file = 'scripts/static-guards.ts';
+  if (!has(root, file)) return [`${file} is missing`];
+  const code = read(root, file);
+  if (!/P4-AL-06/.test(code))
+    return [
+      `${file} reports a derived-truth finding without a Phase 4 citation — a receivable column failing under P3-AL-49 sends the reader to a decision about the stock ledger`,
+    ];
+  return [];
 }
 
 /**
@@ -954,8 +1088,17 @@ export function closureRuleProblems(root: string): string[] {
   const FORBIDDEN: readonly (readonly [RegExp, string])[] = [
     [/\.sql['"`]\s*\)\s*\)?\s*\.length\s*[=!<>]==?\s*\d+/, 'a count of .sql files compared with a literal'],
     [/frozenThrough\s*[=!]==/, 'a frozenThrough equality (it is a floor)'],
-    [/0074_/, 'the name of a migration that does not exist yet'],
   ];
+  // The head is READ from the tree, never written down: a permanent module may
+  // name a migration that exists (its accepted digests do) and may not name one
+  // that does not, and that rule stays correct as the head moves.
+  const head = Number(
+    readdirSync(migrationsDir(root))
+      .filter((f) => f.endsWith('.sql'))
+      .sort()
+      .slice(-1)[0]
+      ?.slice(0, 4) ?? '0',
+  );
   for (const file of ['scripts/phase4-prefix.ts']) {
     if (!has(root, file)) {
       problems.push(`${file} is missing`);
@@ -964,6 +1107,9 @@ export function closureRuleProblems(root: string): string[] {
     const code = stripTsProse(read(root, file));
     for (const [shape, why] of FORBIDDEN)
       if (shape.test(code)) problems.push(`${file} contains ${why} — a permanent invariant never bounds the future (P4-AL-60)`);
+    for (const m of code.matchAll(/['"`](\d{4})_[a-z0-9_]+\.sql['"`]/g))
+      if (Number(m[1]) > head)
+        problems.push(`${file} names the migration ${m[0]}, which does not exist — a permanent module that names a future file bounds the future (P4-AL-60)`);
   }
   // The candidate tense is fenced, and the fence names the decision that allows it.
   const self = 'scripts/phase4-s1-gate.ts';
@@ -1027,7 +1173,7 @@ export const CHECKS: readonly Check[] = [
     area: 'suites',
     needs: 'live',
     run: suiteProblems,
-    ok: `every listed suite exists and skips nothing; every p4-* suite and every ${GOLDEN_DIR} file is listed`,
+    ok: `every listed suite exists and skips nothing; every p4-* suite and every ${GOLDEN_DIR} file is listed; every ${GUARD_SUITE_DIR} proof is one this gate executes`,
   },
   {
     id: 'commands',
@@ -1168,9 +1314,12 @@ export type Step = { readonly kind: 'command'; readonly name: string; readonly a
  */
 export function s1Plan(): readonly Step[] {
   const suites = S1_SUITES.filter((e): e is SuiteEntry => !isPending(e));
-  const rootSuites = suites.filter((e) => e.runner === 'root' && e.area !== 'golden').map((e) => e.file);
+  const rootSuites = suites.filter((e) => e.runner === 'root' && e.area !== 'golden' && e.area !== 'guard-proofs').map((e) => e.file);
   const webSuites = suites.filter((e) => e.runner === 'web').map((e) => e.file);
   const goldens = suites.filter((e) => e.area === 'golden').map((e) => e.file);
+  // Its own visible step: when a planted defect stops firing, a reviewer must
+  // see THAT in the step list, not inside a run of everything.
+  const guardProofs = suites.filter((e) => e.area === 'guard-proofs').map((e) => e.file);
   const commands = S1_COMMANDS.filter((c): c is CommandEntry => !isPending(c));
   return [
     {
@@ -1189,6 +1338,17 @@ export function s1Plan(): readonly Step[] {
         args: ['run', c.npmScript, ...(c.args.length ? ['--', ...c.args] : [])],
       }),
     ),
+    ...(guardProofs.length > 0
+      ? [
+          {
+            kind: 'command' as const,
+            name: `the guard planted-defect proofs, by directory (${guardProofs.join(', ')}) — reached by no other gate or script`,
+            area: 'guard-proofs',
+            cmd: 'npx',
+            args: ['vitest', 'run', ...guardProofs],
+          },
+        ]
+      : []),
     ...(rootSuites.length > 0
       ? [
           {

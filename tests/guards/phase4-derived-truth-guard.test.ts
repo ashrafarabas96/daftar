@@ -23,16 +23,24 @@ import { describe, expect, it } from 'vitest';
 import {
   AP_BALANCE_COLUMN,
   DERIVED_COST_COLUMN,
+  DERIVED_DEBT_COLUMN,
   STOCK_CACHE_COLUMNS,
   discoverInventoryTables,
+  discoverPhase3Relations,
+  discoverSalesTables,
   discoverSupplierTables,
   findAuthoritativeInventoryColumns,
+  findAuthoritativeSalesColumns,
   findAuthoritativeSupplierColumns,
   isAuthoritativeInventoryColumn,
+  isAuthoritativeSalesColumn,
   isAuthoritativeSupplierColumn,
   isForbiddenInventoryTable,
+  isForbiddenSalesTable,
   isForbiddenSupplierTable,
   isPhase3Relation,
+  isPhase4Relation,
+  phase4InheritedPrefixRelations,
 } from '../../scripts/guards/no-authoritative-balance';
 import { INVENTORY_TYPE_PINS, findInventoryNumericViolations } from '../../scripts/guards/no-float-rate';
 import { stripComments } from '../../scripts/guards/sql-schema';
@@ -56,6 +64,18 @@ function g3Failures(sql: string): string[] {
   const supplier = discoverSupplierTables(sql);
   for (const h of findAuthoritativeSupplierColumns(sql, supplier)) out.push(`${h.table}.${h.column}`);
   for (const t of supplier) if (isForbiddenSupplierTable(t)) out.push(`table ${t}`);
+  // P4-S1: the third arm, wired into rule 15 beside the two above.
+  const phase4 = discoverSalesTables(sql);
+  for (const h of findAuthoritativeSalesColumns(sql, phase4)) out.push(`${h.table}.${h.column}`);
+  for (const t of phase4) if (isForbiddenSalesTable(t)) out.push(`table ${t}`);
+  return [...new Set(out)].sort();
+}
+
+/** The third arm ALONE, so a proof shows what the Phase 4 arm itself refuses rather than what some arm refuses. */
+function salesArmFailures(sql: string): string[] {
+  const watched = discoverSalesTables(sql);
+  const out = findAuthoritativeSalesColumns(sql, watched).map((h) => `${h.table}.${h.column}`);
+  for (const t of watched) if (isForbiddenSalesTable(t)) out.push(`table ${t}`);
   return [...new Set(out)].sort();
 }
 
@@ -211,5 +231,151 @@ describe('P4-S1 — G-2 pins a Phase 4 `quantity` to the accepted precision (P4-
 
   it('GREEN HALF — the accepted tree declares no quantity in the word form, so no verdict moved', () => {
     for (const f of files()) expect(findInventoryNumericViolations(readFileSync(join(MIGRATIONS, f), 'utf8')), f).toEqual([]);
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+/**
+ * P4-S1 action 2 — the G-3 SALES ARM (`findAuthoritativeSalesColumns`).
+ *
+ * The gate (`scripts/phase4-s1-gate.ts`, `guardProblems`) demands this arm as
+ * a BEHAVIOUR: run over Phase 4 DDL it must name every derived total and none
+ * of the document's own facts. Each rule below is planted as the defect it
+ * refuses and asserted to fail for that reason, and then the accepted tree is
+ * shown clean. The arm's surface is the relation COMPLEMENT of the accepted
+ * inherited prefix (`0000`–`0073`), never a Phase 4 table list.
+ */
+describe('P4-S1 action 2 — the G-3 sales arm refuses derived truth on the Phase 4 surface (P4-AL-06)', () => {
+  it('the arm is anchored on SQL RELATION POSITION: the accepted inherited prefix created it, or the arm watches it', () => {
+    // A relation the inherited prefix created is not this arm's business, whatever it is called.
+    for (const t of ['products', 'accounts', 'journal_lines', 'stock_movements', 'stock_levels', 'suppliers', 'purchases', 'stocktake_lines', 'units']) {
+      expect(phase4InheritedPrefixRelations().has(t), t).toBe(true);
+      expect(isPhase4Relation(t), t).toBe(false);
+    }
+    // …and a relation it did not create is, under ANY name — no list anywhere.
+    for (const t of ['customers', 'invoices', 'installments', 'credit_notes', 'sale_items', 'layaway_plans', 'wedding_deposit_books']) {
+      expect(isPhase4Relation(t), t).toBe(true);
+    }
+    // The plant is caught on the Phase 4 side of that line and NOT on the inherited side.
+    expect(salesArmFailures('CREATE TABLE layaway_plans (id UUID, debt_minor BIGINT NOT NULL);')).toEqual(['layaway_plans.debt_minor']);
+    expect(salesArmFailures('CREATE TABLE products (id UUID, debt_minor BIGINT NOT NULL);')).toEqual([]);
+    expect(discoverSalesTables('CREATE TABLE stock_movements (id UUID, overdue_minor BIGINT);')).toEqual([]);
+  });
+
+  it('RED — every column of the lock’s reproduced fixture is named by the sales arm itself', () => {
+    const failures = salesArmFailures(PHASE4_PLANTED_COLUMNS);
+    for (const planted of [
+      'customers.balance_minor',
+      'customers.amount_due_minor',
+      'invoices.paid_minor',
+      'invoices.outstanding_minor',
+      'installments.outstanding_minor',
+      'installments.settled_minor',
+      'credit_notes.refunded_amount_minor',
+      'sale_items.cogs_minor',
+    ]) {
+      expect(failures, `${planted} must be refused by the G-3 sales arm`).toContain(planted);
+    }
+    // …and it names nothing else in that DDL: the document's own facts stay facts.
+    for (const fact of ['invoices.total_txn_minor', 'credit_notes.original_amount_minor', 'credit_notes.remaining_amount_minor', 'sale_items.quantity'])
+      expect(failures, fact).not.toContain(fact);
+  });
+
+  it('RED — a stored DEBT truth: `debt`, `overdue`, `arrears` and an aging bucket, none of which the AP/AR words reach', () => {
+    // The hole this rule closes: `(^|_)due($|_)` needs a boundary before `due`,
+    // so `overdue_amount_minor` passed AP_BALANCE_COLUMN, and `debt_minor`
+    // names the quantity in a word no earlier pattern carried at all.
+    for (const c of ['debt_minor', 'total_debt_minor', 'overdue_amount_minor', 'overdue_minor', 'arrears_minor', 'aging_bucket_minor', 'ageing_30_minor']) {
+      expect(AP_BALANCE_COLUMN.test(c) || DERIVED_COST_COLUMN.test(c), `${c} escaped the pre-P4 vocabulary`).toBe(false);
+      expect(DERIVED_DEBT_COLUMN.test(c), c).toBe(true);
+      expect(isAuthoritativeSalesColumn(c), c).toBe(true);
+    }
+    const planted =
+      'CREATE TABLE customers (id UUID, debt_minor BIGINT NOT NULL DEFAULT 0, overdue_amount_minor BIGINT NOT NULL DEFAULT 0, aging_bucket_minor BIGINT NOT NULL DEFAULT 0);';
+    expect(salesArmFailures(planted)).toEqual(['customers.aging_bucket_minor', 'customers.debt_minor', 'customers.overdue_amount_minor']);
+    // The vocabulary is SHARED, so the same word is refused on the Phase 3 arms
+    // too — planted on the real tree, which is what gives those arms their
+    // watched set (a bare ALTER creates no relation to discover).
+    expect(g3Failures(`${schema()}\nALTER TABLE suppliers ADD COLUMN overdue_amount_minor BIGINT;`)).toEqual(['suppliers.overdue_amount_minor']);
+    expect(g3Failures(`${schema()}\nALTER TABLE stocktake_lines ADD COLUMN debt_minor BIGINT;`)).toEqual(['stocktake_lines.debt_minor']);
+    // …and it is token-bounded: a word that merely CONTAINS one of them is not a debt column.
+    for (const c of ['overdueish', 'packaged_qty', 'managed_by', 'indebtedness_note_text', 'imaging_ref_id'])
+      expect(isAuthoritativeSalesColumn(c), c).toBe(false);
+  });
+
+  it('RED — a reservation or an availability is never stored on the Phase 4 surface either', () => {
+    const planted = 'CREATE TABLE sale_holds (id UUID, reserved_qty NUMERIC(18,4) NOT NULL, available_qty NUMERIC(18,4) NOT NULL, reserved_at TIMESTAMPTZ);';
+    expect(salesArmFailures(planted)).toEqual(['sale_holds.available_qty', 'sale_holds.reserved_qty']);
+    // `reserved_at` is an instant, not a quantity, and is deliberately untouched.
+    expect(isAuthoritativeSalesColumn('reserved_at')).toBe(false);
+  });
+
+  it('RED — a Phase 4 RELATION that IS derived truth is refused under any name, aging and overdue included', () => {
+    for (const table of [
+      'customer_balances',
+      'customer_ar_aging',
+      'invoice_overdue_buckets',
+      'debt_arrears_table',
+      'sales_summary',
+      'invoice_outstanding_cache',
+      'receivables_rollup',
+      'invoice_balance_snapshots',
+      'customer_ar_projection',
+    ]) {
+      const planted = `CREATE TABLE ${table} (id UUID, amount_minor BIGINT NOT NULL);`;
+      expect(salesArmFailures(planted), `${table} must be refused by the G-3 sales arm`).toContain(`table ${table}`);
+      expect(isForbiddenSalesTable(table), table).toBe(true);
+    }
+  });
+
+  it('RED — a column RENAMEd into the vocabulary is refused: the rename is the declaration', () => {
+    expect(salesArmFailures('CREATE TABLE invoices (id UUID, note TEXT); ALTER TABLE public.invoices RENAME COLUMN note TO overdue_minor;')).toContain(
+      'invoices.overdue_minor',
+    );
+    expect(salesArmFailures('CREATE TABLE customers (id UUID); ALTER TABLE customers ADD COLUMN balance_minor BIGINT;')).toEqual(['customers.balance_minor']);
+  });
+
+  it('the legitimate §4 rows stay legitimate under the sales arm, and no allowlist is what keeps them so', () => {
+    expect(salesArmFailures(PHASE4_LEGITIMATE)).toEqual([]);
+    // P4-AL-14's remaining pair, an allocation's own amount, a policy input, an ordering, an identity, an actor, an instant.
+    for (const c of [
+      'remaining_amount_minor',
+      'remaining_carrying_base_amount_minor',
+      'invoice_amount_applied_minor',
+      'credit_limit_minor',
+      'total_minor',
+      'total_txn_minor',
+      'tax_minor',
+      'unit_price_minor',
+      'invoice_seq',
+      'due_at',
+      'due_status',
+      'received_by',
+      'balance_id',
+    ])
+      expect(isAuthoritativeSalesColumn(c), c).toBe(false);
+    // Nothing named those columns: each passes because no pattern matches it.
+    const code = stripComments(readFileSync(join(__dirname, '../../scripts/guards/no-authoritative-balance.ts'), 'utf8'));
+    for (const allowed of ['remaining', 'credit_limit', 'amount_applied']) expect(code.includes(allowed), allowed).toBe(false);
+  });
+
+  it('the arm is a third SET beside the Phase 3 partition, not a third PIECE of it (phase3-s8-guards.test.ts:108-111)', () => {
+    const inventory = discoverInventoryTables(schema());
+    const supplier = discoverSupplierTables(schema());
+    const phase4 = discoverSalesTables(schema());
+    // Every Phase 3 relation is still watched by exactly one of the two arms…
+    for (const t of discoverPhase3Relations(schema())) expect([inventory.includes(t), supplier.includes(t)].filter(Boolean), t).toHaveLength(1);
+    // …and the sales arm claims none of them, because the inherited prefix created every one.
+    for (const t of [...inventory, ...supplier]) expect(phase4, t).not.toContain(t);
+    for (const t of discoverPhase3Relations(schema())) expect(isPhase4Relation(t), t).toBe(false);
+    expect(phase4).toEqual([]);
+  });
+
+  it('GREEN HALF — the sales arm is silent on the accepted tree, all 74 migrations of it, file by file', () => {
+    expect(files().length).toBeGreaterThanOrEqual(74);
+    expect(salesArmFailures(schema())).toEqual([]);
+    for (const f of files()) expect(salesArmFailures(readFileSync(join(MIGRATIONS, f), 'utf8')), f).toEqual([]);
+    // …and rule 15 as a whole, with the third arm wired in, is unchanged on it.
+    expect(g3Failures(schema())).toEqual([]);
   });
 });
