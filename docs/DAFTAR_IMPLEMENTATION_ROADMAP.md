@@ -14,7 +14,7 @@ Tenancy · identity + auth (sessions, refresh lineage, JWT ring) · multi-user +
 
 **Gate:** `PHASE_1_ACCEPTANCE_REPORT.md` — repository and extracted-archive release gates both PASS, tenant isolation proven, bug budget clean.
 
-## Phase 2 — Accounting & Financial Core ⟵ NEXT (not started)
+## Phase 2 — Accounting & Financial Core ✅ CLOSED / PASS
 
 Chart of accounts · immutable double-entry journal (entries + lines) · posting engine with balanced debit/credit enforced at the database boundary · deterministic, idempotent posting keyed by `(source_type, source_id)` · integer minor-unit money · base-currency authority + FX rate snapshots · rounding policy · opening balances · reversal/correction semantics · trial balance, general ledger and account balances as read models · RBAC permissions · outbox events · audit.
 
@@ -22,11 +22,11 @@ Chart of accounts · immutable double-entry journal (entries + lines) · posting
 
 **Gate:** `PHASE_2_ACCOUNTING_EXECUTION_PLAN.md` acceptance gates + accounting golden tests + invariant enforcement.
 
-## Phase 3 — Inventory, Purchases, Suppliers
+## Phase 3 — Inventory, Purchases, Suppliers ✅ CLOSED / PASS
 
 Inventory ledger and stock movements · warehouses/locations dimensionality · purchase cycle · suppliers · landed cost · stock valuation posting **through** the Phase 2 engine · transfers and stock counts.
 
-## Phase 4 — Sales, POS, Customers, Debts, Installments
+## Phase 4 — Sales, POS, Customers, Debts, Installments ⟵ IN PROGRESS (P4-S0 Architecture Lock)
 
 Sales documents and invoices · POS (web first) · customers · receivables · payments (cash/credit/partial) · debts and statements · installment plans · returns, refunds and credit notes.
 
@@ -86,8 +86,8 @@ External penetration test · load testing · disaster-recovery drill · final au
 - **Phase 0: PASS** (`PHASE_0_ACCEPTANCE_REPORT.md`).
 - **Phase 1: CLOSED / PASS** (`PHASE_1_ACCEPTANCE_REPORT.md`, 2026-09-21).
 - **Phase 2: CLOSED / PASS**, merged into `main` at `0f2b09e7f2bd1015053ff2cb79ad1ceafc25bc6f` (2026-09-24; `PHASE_2_S9_RELEASE.md`). Migrations `0000`–`0052`, protected permanently by `gate:phase2:release` (`scripts/phase2-prefix.ts`).
-- **Phase 3: final seal candidate.** The Tech Lead passed the corrected technical candidate `95adda94cb25a6568cabacb2cc462e9e861e0b6a` on 2026-09-29 (PHASE 3 — TECHNICAL PASS / FINAL SEAL REQUIRED). The final Phase 3 database history is `0053`–`0073` (74 migrations through Phase 3): `0053`–`0069` from the slices P3-S1 … P3-S8, `0070`–`0073` Phase 3 corrective hardening, protected permanently by `gate:phase3:release` (`scripts/phase3-prefix.ts`). Phase 3 is CLOSED only once the seal commit's own gates pass on its exact SHA (`PHASE_3_S9_RELEASE.md` §10, `PHASE_3_FINAL_CORRECTIVE_AUDIT.md` §6); work branch `phase/3-inventory-purchases-suppliers`, draft PR #4, not merged. Open: OD-03 (purchase tax; a non-zero tax is refused) and the debt in `TECHNICAL_DEBT.md`.
-- **Phase 4: NOT STARTED / NEXT.** It starts only on an explicit Tech Lead directive after Phase 3 is closed.
+- **Phase 3: CLOSED / PASS**, merged into `main`. Draft PR #4 was marked ready and merged on 2026-09-29 as the merge commit `042f5d43d2edefd35eadab1cf8243b385aca9514` (parents `0f2b09e7…` and the sealed head `dd59962c2e53119d5cd5dea0d44df5d2f207a512`, tree identical to the sealed head). `DAFTAR CI` was then RED on `main` on three post-merge tooling defects — history-walking checks that break once the sealed head is inside `main` — and the follow-up PR #5 (tests and scripts only) was merged as `6fc505d33b7a6f7a49fa04ee3bc60bb1ddf3b595`. **`DAFTAR CI` 36637141476 on `6fc505d` is SUCCESS on all six jobs** (workspaces, backend, web-admin, android, hygiene, browser), push event, attempt 1. The final Phase 3 database history is `0053`–`0073` (74 migrations in total, `frozenThrough = 0073_default_warehouse_locale_name.sql`, no `0074`): `0053`–`0069` from the slices P3-S1 … P3-S8, `0070`–`0073` Phase 3 corrective hardening, protected permanently by `gate:phase3:release` (`scripts/phase3-prefix.ts`). Open: OD-03 (tax; a non-zero tax is refused) and the debt in `TECHNICAL_DEBT.md`.
+- **Phase 4: AUTHORIZED — P4-S0 ARCHITECTURE LOCK IN PROGRESS.** The Tech Lead authorized Phase 4 (Sales, POS, Customers, Debts, Receivables & Installments) on 2026-09-30, but only its first stage: P4-S0, the Architecture Lock. Baseline `main = 6fc505d33b7a6f7a49fa04ee3bc60bb1ddf3b595`, CI 36637141476 PASS, migrations `0000`–`0073` frozen. P4-S0 creates no product code, no endpoint, no POS screen and no migration — `0074` is not created in P4-S0. Work branch `phase/4-sales-pos-customers-receivables`; every Phase 4 change goes through a pull request. Implementation starts only on a new explicit Tech Lead PASS on the Architecture Lock.
 
 ---
 
