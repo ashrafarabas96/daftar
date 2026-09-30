@@ -66,9 +66,10 @@ CI green on the branch head, verdict reported. **STOP.**
 **Scope.** `customers`, `customer_contacts`, `invoices`, `invoice_items`, `invoice_sequences`; per-business
 document numbering; the customer and invoice read surface; and the protection Phase 4 cannot inherit.
 
-**Four protection classes implemented through six mandatory pre-migration actions** (`TL-P4-S0-03`). The
-classes are the kinds of protection at stake; the six numbered actions below are the work items that
-implement them, and every one of the six lands before any Phase 4 table exists:
+**Four protection classes implemented through seven mandatory pre-migration actions** (`TL-P4-S0-03`, count
+corrected from six to seven in P4-S1 by `TL-P4-S1-C7`). The classes are the kinds of protection at stake; the
+seven numbered actions below are the work items that implement them, and every one of the seven lands before
+any Phase 4 table exists:
 
 - **Class I — schema-registration reach.** The accepted registries must accept a Phase 4 registrant at all
   (action 1).
@@ -76,11 +77,11 @@ implement them, and every one of the six lands before any Phase 4 table exists:
   Phase 4 relation (action 2).
 - **Class III — merchant language and the OD-03 tax boundary.** Both must reach the Phase 4 namespaces and
   screens (action 3), and the accepted absence assertions that claim the Phase 4 surface will never exist must
-  be re-expressed as claims about the Phase 3 prefix rather than about the future (action 4).
+  be re-expressed as claims about the Phase 3 prefix rather than about the future (actions 4 and 7).
 - **Class IV — permission-default authority.** Nothing in the database or the accepted tests may let a Phase 4
   migration grant a sensitive key by default (actions 5 and 6).
 
-**The six actions, first, before any Phase 4 table exists.**
+**The seven actions, first, before any Phase 4 table exists.**
 1. The `registered_by` pattern widened from `^P3-S[0-9]+$` to `^P[0-9]+-S[0-9]+$` on all four constraints
    (`0054:54`, `0059:53`, `0059:59`, `0059:69`) — without it the first Phase 4 registration fails.
 2. Guard **G-3 extended** with a sales arm (lock P4-AL-06). Today its own exported discovery functions, run over
@@ -107,6 +108,20 @@ implement them, and every one of the six lands before any Phase 4 table exists:
    `inventory-permissions-provisioning.test.ts:142` assert the cashier's and manager's built-in sets with
    `toEqual`, so any Phase 4 default key turns them red. Re-expressed the way Phase 3 did for its own keys,
    never loosened.
+7. **The registry-set helpers re-expressed per phase** (`TL-P4-S1-C7`, found in P4-S1 and the largest of the
+   forward-evolution breakages). `assertMigrationState()` (`tests/helpers/stock-ledger.ts:661-702`) and
+   `assertS4MigrationState()` (`tests/helpers/purchase-deficits.ts:243-282`) assert the **complete** contents
+   of `stock_source_types`, `inventory_operation_movement_kinds` and `inventory_operation_kinds` with a single
+   `expect(...).toEqual(...)` over hard-coded `S1_/S3_/S4_/S5_/S6_/P3C_` arrays. `assertMigrationState()` is
+   called from 13+ sites across four **permanent Phase 3** files (`stock-ledger-concurrency.test.ts:67`,
+   `stock-ledger-same-owner.test.ts:77,483`, `stock-ledger-authority.test.ts:74,1115`,
+   `stock-ledger-structure.test.ts:267,269,549,569,578,588,1013`, `stock-ledger.ts:1034`);
+   `assertS4MigrationState()` from `purchase-deficits.ts:363`. **Registering one Phase 4 operation kind or
+   stock source type turns all of them red.** Re-expressed per phase, exactly as the three role `toEqual`
+   sets are, and never loosened: each must still fail on a row the phase does not own and on a missing
+   expected row. Two consequences: the first Phase 4 migration carries **no registry row at all**, and the
+   widened `registered_by` CHECK is unaffected because these helpers read rows rather than constraint text
+   (`0072`'s own `pg_get_constraintdef` pin lives inside `0072`'s one-shot `DO` block).
 **Also.** `tests/security/phase4-forward-evolution.test.ts`; `scripts/phase4-prefix.ts`;
 `flows.ts` exporting `PHASE3_STEPS`/`PHASE4_STEPS` and `gate:phase3:corrective` pinned to the Phase 3 steps
 (lock P4-AL-63); the cashier default-permission backfill as ruled under `OD-P4-01` (OPTION A: non-sensitive defaults only,

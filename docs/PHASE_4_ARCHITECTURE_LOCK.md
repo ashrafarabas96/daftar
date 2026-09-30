@@ -157,7 +157,7 @@ thing. Each is ruled here; the document corrections are owed by the slice named 
 | D-07 | `TRANSACTION_MAP.md` §1 says a cash sale creates "Invoice (status=paid)"; `SOURCE_OF_TRUTH_MATRIX.md` §1 says invoice status is derived and "لا تُحرَّر يدويًا" | the Phase 3 precedent settles it: `purchases.status` is **lifecycle only** and settlement state is never stored | **P4-AL-24** |
 | D-08 | `DATA_MODEL.md` §7 `payment_allocations.reversed BOOLEAN` and `reverse_allocation_journal_entry_id → journal_entries(id)` | a mutable flag on a financial row contradicts "no mutation of historical financial rows"; and the FK is **physically unimplementable** — `journal_entries` PK is `(business_id, id)` (`0042:144`) with no `UNIQUE (id)` | append-only reversal rows, and no domain FK to the journal — **P4-AL-10**, **P4-AL-23** |
 | D-09 | `DATA_MODEL.md` §7/§11 `credit_notes.refunded_amount_minor` | the accepted analogue carries only the **remaining pair** (`0065:262-265`); a stored consumed total is a second truth | dropped — **P4-AL-14** (I-25/I-26) |
-| D-10 | `DATA_MODEL.md` §14أ `invoice_sequences.current_value BIGINT` | the database contains **zero** PostgreSQL sequences and **zero** counter columns; ordinals are `max+1` under the owning row's lock backed by a UNIQUE (`0060:490-513`, `0059:135,147`) | **P4-AL-31** |
+| D-10 | `DATA_MODEL.md` §14أ `invoice_sequences.current_value BIGINT` | the database contains **zero** PostgreSQL sequences and **zero** counter columns; ordinals are `max+1` under the owning row's lock backed by a UNIQUE (`0060:490-513`, `0059:216`) | **P4-AL-31** |
 | D-11 | `DATA_MODEL.md` §1 banner "مرحلة تصميم فقط. لا Migrations إنتاجية الآن"; §2 names `business_memberships` / `membership_branch_access`; §18 ERD prints `branches.default_warehouse_id` | 74 frozen migrations; the tables are `memberships` (`0003:45`) and `member_branch_scopes`; §3 of the same document says the warehouse column never existed | stale text; must not be copied into Phase 4 DDL |
 | D-12 | `DAFTAR_SECURITY_MODEL.md:20` names permissions `purchase.create` and `reports.view`; `DAFTAR_EXTENSION_READINESS.md:13` says 38 permissions | neither permission exists; the registry holds **46** keys (`packages/domain-core/src/permissions.ts:11-69`) | code wins — **P4-AL-36** |
 | D-13 | `PHASE_2_ARCHITECTURE_LOCK.md:647`, `PHASE_2_ACCOUNTING_EXECUTION_PLAN.md:367`, `DAFTAR_SECURITY_MODEL.md:20`, `DAFTAR_GLOSSARY.md:15` all name the permission `sale.create` (singular) | Phase 3 code chose **plural** prefixes for the mirror business-document domains: `purchases.*`, `suppliers.*` (`permissions.ts:62-68`) | plural — **P4-AL-36**, and the four documents are corrected |
@@ -213,11 +213,43 @@ would build the same hole one phase later. It is one rule. The AP/AR column voca
 file — `AP_BALANCE_COLUMN` (`:411`) matches `paid_minor`, `outstanding_minor`, `amount_due_minor` and
 `settled_minor` — and it is wired only to `SUPPLIER_TABLE_NAME` (`:408`). It is rewired to apply to **every
 relation the accepted Phase 2 prefix did not create**, which is the set the inventory arm already discovers
-(the probe shows it returns every Phase 4 table). `cogs` and `cost` join the pattern for the reason
-P4-AL-05 gives, and the `_seq` exemption (`:281`) stays for inventory relations only. That one change also
-catches `credit_notes.refunded_amount_minor`, which P4-AL-14 forbids and which passes both arms today. Red
-proof: plant `invoices.paid_minor` and require the guard to name it. `remaining_*` stays permitted for the
-reason the file documents at `:384-392`, which is what lets P4-AL-14's remaining pair exist at all.
+(the probe shows it returns every Phase 4 table), and the `_seq` exemption (`:281`) stays for inventory
+relations only. Red proof: plant `invoices.paid_minor` and require the guard to name it. `remaining_*` stays
+permitted for the reason the file documents at `:384-392`, which is what lets P4-AL-14's remaining pair
+exist at all.
+
+**Corrected in P4-S1 (`TL-P4-S1-C1`), because this paragraph as first written was wrong in two ways and
+unfinished in a third.**
+
+1. **A bare `cost` cannot join the pattern.** `(^|_)costs?($|_)` flags **twelve accepted Phase 3 columns**,
+   every one a per-unit *input* frozen on its own source document rather than a derived total:
+   `stock_movements.unit_cost_base_minor`, `purchase_lines.unit_cost_base_minor`,
+   `stocktake_lines.unit_cost_base_minor`, `inventory_adjustment_lines.unit_cost_base_minor`,
+   `inventory_opening_lines.unit_cost_base_minor`,
+   `negative_inventory_deficits.provisional_unit_cost_base_minor`, both
+   `negative_deficit_coverages.*_unit_cost_base_minor`, `purchases.landed_cost_txn_minor`,
+   `purchase_lines.landed_cost_txn_minor`, `supplier_return_lines.unit_cost_base_minor` and
+   `purchase_reversal_lines.unit_cost_base_minor`. Adding it would break the standing requirement that no
+   currently-passing relation starts failing. What P4-AL-05 actually forbids is a stored **COGS** or a
+   stored **cost total**, so the pattern is `(^|_)(cogs|cost_of_goods|costs?_(total|totals|sum|sums)|(total|sum)_costs?)($|_)`
+   — which matches nothing in the accepted tree and does refuse `sale_items.cogs_minor`.
+2. **The rewiring alone does not catch `credit_notes.refunded_amount_minor`.** The inherited AP vocabulary is
+   `outstanding|paid|unpaid|due|owed|payable|settled` and has no `refunded`. `receivable`, `refunded`,
+   `collected` and `allocated` are therefore added explicitly, each verified to match zero accepted Phase 3
+   columns. `applied`, `consumed`, `remaining`, `total`, `net` and `gross` are deliberately **not** added:
+   each has accepted Phase 3 columns behind it.
+3. **The gap has a relation dimension as well as a column dimension.** `INVENTORY_FORBIDDEN_TABLE` (`:283`)
+   only refuses a `*_summary`/`*_snapshot`/`*_rollup`/`*_cache` name when it also matches `(stock|inventory)_`,
+   and `SUPPLIER_FORBIDDEN_TABLE` (`:424`) was only ever applied over the supplier arm — so a Phase 4
+   **relation** whose whole purpose is a stored balance or a rollup (`customer_balances`, `sales_summary`,
+   `invoice_cache`, `ar_aging_summary`, `receivables_rollup`) passed CI. The forbidden-name pattern becomes
+   shared across both arms, with `receivables?` added and the P4-AL-13 source-document exemption kept ahead
+   of it.
+
+Also corrected: the rewiring carries the shared vocabulary on **both** arms rather than widening the
+supplier arm's watched set, because `tests/integration/phase3-s8-guards.test.ts:108-111` pins the two arms as
+a **disjoint partition** of the Phase 3 surface, so widening one arm's set turns an accepted Phase 3 test
+red.
 
 Until that guard exists, no Phase 4 migration may be accepted — the ordering matters, because the first Phase 4 migration is exactly where such a column
 would be introduced.
@@ -349,7 +381,14 @@ are rules, not preferences:
 - no floating-point column anywhere in Phase 4;
 - `INVENTORY_TYPE_PINS` (`no-float-rate.ts:145-165`) pin any Phase 4 column named `qty_delta`, `on_hand`,
   `*_qty` or `qty_*` to `NUMERIC(18,4)`, `*_cost_base_minor` to `NUMERIC(28,10)`, and
-  `value_delta_base_minor` / `valuation_base_minor` to `BIGINT`;
+  `value_delta_base_minor` / `valuation_base_minor` to `BIGINT`. **`TL-P4-S1-C5`: as first written this
+  decision's own DDL vocabulary opted out of the guard it cites.** The pin matched `qty_delta`, `on_hand`,
+  `*_qty` and `qty_*` only, so a bare `quantity NUMERIC(18,2)` on `invoice_items` produced **no finding**
+  while `unit_cost_base_minor NUMERIC(20,4)` beside it was correctly caught. The pin is extended in P4-S1 to
+  the word forms `quantity`, `*_quantity`, `quantity_*` and `quantities` at the accepted `NUMERIC(18,4)`.
+  The column is **not** renamed to dodge the guard: naming around a guard is how the next phase inherits the
+  same hole. Measured green half: the accepted tree declares 980 columns, 525 on a watched relation, and not
+  one names a quantity in the word form, so the added pattern matches the empty set today;
 - `NEVER_STORED` (`no-authoritative-balance.ts:276`) refuses any Phase 4 column matching `reserved` or
   `available`, so a POS "reserved" or "available to sell" column is refused today;
 - `INVENTORY_FORBIDDEN_TABLE` (`:283`) refuses a Phase 4 relation named `*_summary`, `*_snapshot`,
@@ -389,7 +428,12 @@ FK** into `accounting_source_bindings` (the `0067:388-391` shape, with `binding_
 `0067:382`), which fails the COMMIT when a source row has no entry. So every Phase 4 accounting-source
 table carries `accounting_source_type` as a `GENERATED ALWAYS AS (…) STORED` constant, `binding_source_id`,
 the equality CHECK and the deferred FK, and `gate:phase4:s2`'s structural half asserts all four from
-`pg_constraint`. A `sales` table without them would ship a real split commit under a green seam.
+`pg_constraint`. **`TL-P4-S1-C6`: `binding_source_id` has two accepted shapes and this sentence read as
+though the `NOT NULL` one were the only one.** `supplier_payment_allocations` has it `NOT NULL` (`0067:384`)
+because an allocation always owes an entry; `purchases` has it **nullable** with
+`purchases_binding_owed_ck CHECK ((status = 'received') = (binding_source_id IS NOT NULL))`
+(`0063:255,258`) because a draft owes none. A relation with a `draft` state — `invoices` — takes the
+`purchases` variant, with the status-conditional CHECK carrying the obligation. A `sales` table without them would ship a real split commit under a green seam.
 
 **P4-AL-17 — One journal entry per allocation, never one per payment.**
 `TRANSACTION_MAP.md` §3 and `ACCOUNTING_RULES.md` §4.3 describe one entry per payment. The accepted code
@@ -643,7 +687,10 @@ not a precedent for a document number, and the difference is the point: `last_st
 **cache** whose value the exact rebuild `inventory_stock_fold` recomputes from the ledger
 (`0060:520-570`), so a wrong counter is detectable and correctable. A document number has no rebuild — the
 number *is* the record — so it takes the `max + 1` form of `inventory_next_deficit_seq`
-(`0060:490-513`, with its `UNIQUE` at `0059:135,147`) instead. Three reasons, and the third is the
+(`0060:490-513`, with its `UNIQUE` at `0059:216`) instead. (`TL-P4-S1-C4`: the citation first given here
+was `0059:135,147`, which is `stock_movements.stock_seq` and `stock_movements_key_seq_uq` — the wrong
+ordinal. `deficit_seq`'s backing constraint is `negative_inventory_deficits_seq_uq` at `0059:216`. The
+decision is unaffected; the citation was wrong.) Three reasons, and the third is the
 decisive one:
 a stored counter is a derived number and therefore a second truth; a PostgreSQL sequence is
 non-transactional and leaves gaps on rollback, which a legal document number may not have; and a counter
@@ -772,7 +819,18 @@ assume the protection already exists.
 **P4-AL-38 — RLS is layered exactly as Phase 2 and 3 layer it, and `daftar_app` gets no DML on any Phase 4
 table.**
 `ENABLE ROW LEVEL SECURITY` **and** `FORCE`; one permissive tenant policy; four `RESTRICTIVE` per-command
-isolation policies. `daftar_app` holds `SELECT` and `EXECUTE` and nothing else, so every write goes through
+isolation policies; **plus `inventory_internal_read` (`0063:473-474`), and on an accounting-source relation
+also `accounting_validator` (`0063:490-491`)** — so the accepted count is **six policies on an ordinary
+relation and seven on an accounting-source relation, not five** (`TL-P4-S1-C2`). The first draft of this
+decision said five. Omitting `accounting_validator` on `invoices` under `FORCE ROW LEVEL SECURITY` makes the
+deferred completeness validator read **zero rows and pass vacuously**, which is the worst failure mode
+available here: a green gate over an unchecked invariant.
+
+The tenant policy takes the **direct** form `tenant_id = nullif(app_tenant(), '')::uuid` that `0052:305-330`
+adopted after measurement (`0052:280-291` records a six-row table showing every partial correction is worse
+than none), not the correlated `(SELECT b.tenant_id FROM businesses b WHERE b.id = …)` that `0063:462-463`
+still carries. The correlated subselect is the **second** per-row cost, and it is the one `0052` actually
+removed for the read path it measured. `daftar_app` holds `SELECT` and `EXECUTE` and nothing else, so every write goes through
 a routine whose authority was checked — `[[daftar-wrapper-is-not-an-invariant]]` is closed by the grant, not
 by the wrapper. Two consequences the lock states explicitly:
 
@@ -1389,7 +1447,14 @@ prefix rather than a rebase. Every other agent describes the DDL it needs and th
 
 **P4-AL-84 — The first Phase 4 migration carries the two registry widenings and nothing else of substance.**
 The `registered_by` pattern (`^P3-S[0-9]+$` → `^P[0-9]+-S[0-9]+$`, four constraints at `0054:54`, `0059:53`,
-`0059:59`, `0059:69`) and whatever the extended guards require. Putting them first means the first red CI run
+`0059:59`, `0059:69`) and whatever the extended guards require. **Corrected in P4-S1 (`TL-P4-S1-C3`): this is
+three statements plus one different statement, not one statement repeated four times.** `0072:812-814` already
+dropped and re-added `inventory_operation_kinds_registered_by_check` as
+`CHECK (registered_by ~ '^P3-S[0-9]+$' OR registered_by = 'P3-C')`, and `0072:817` inserted
+`('purchase.write_off_residue', 'P3-C')`. So the live constraint is not `0054:54`'s text, and a widening that
+produces a bare `^P[0-9]+-S[0-9]+$` **fails at `ADD CONSTRAINT`** because the existing `P3-C` row violates it.
+The fourth statement must be `CHECK (registered_by ~ '^P[0-9]+-S[0-9]+$' OR registered_by = 'P3-C')`. A
+migration reads the live catalogue, never the migration that wrote it — `[[daftar-the-live-catalogue-is-the-policy]]`. Putting them first means the first red CI run
 of Phase 4 is about them alone, rather than about them plus a table.
 
 **P4-AL-85 — `0000–0073` stay immutable byte for byte, and `frozenThrough` is a floor that never retreats.**
@@ -1792,9 +1857,11 @@ rows over three documents, which is what produced the miscount.
 ### TL-P4-S0-03 — protection count / taxonomy
 **Low / Documentation. CLOSED.**
 The plan's P4-S1 heading read "the three protections" over a list of **six** numbered pre-migration actions.
-The taxonomy is now stated explicitly: **four protection classes implemented through six mandatory
-pre-migration actions**, each of the six mapped to its class. No heading states a count that its own list
-contradicts.
+The taxonomy is now stated explicitly: **four protection classes implemented through the mandatory
+pre-migration actions that implement them**, each action mapped to its class. No heading states a count that
+its own list contradicts. The count was **six** when this correction was made and became **seven** in P4-S1
+when `TL-P4-S1-C7` found a further forward-evolution breakage; the execution plan carries the current count
+and is the single place it is stated, so the two documents cannot drift again.
 
 ### Tech Lead rulings
 Every open decision except `OD-03` is now **CLOSED** by a recorded **`TECH LEAD RULING`** in §22:
@@ -1804,6 +1871,51 @@ chain head, telescoping proof first, LIFO-only as the sole fallback) · `OD-P4-0
 triggered) · `OD-P4-13` A + C · `OD-P4-14` A · `OD-P4-15` A. `OD-03` stays open: Phase 4 ships **structural
 zero sales tax only**, and any non-zero tax is refused until an approved Country Pack built on official legal
 sources exists.
+
+### P4-S1 coordinator corrections to this lock (2026-09-30)
+
+P4-S1's first parallel wave read the SQL rather than this document and returned corrections to it. Each was
+re-verified against the code before it was applied, and each is applied **in place** at the decision it
+corrects, so this document never states a claim its own later section contradicts. Nothing below is a
+redesign of Phase 4 or a widening of a slice.
+
+| id | decision | correction |
+|---|---|---|
+| `TL-P4-S1-C1` | `P4-AL-06` | A bare `cost` in the pattern would flag twelve accepted Phase 3 per-unit input columns, so the pattern is `cogs` and a cost **total**. `refunded`, `receivable`, `collected` and `allocated` are added explicitly, because the inherited AP vocabulary has no `refunded` and the decision's own stated outcome was therefore untrue. The gap has a **relation** dimension as well as a column one. The rewiring carries the vocabulary on both arms, because `phase3-s8-guards.test.ts:108-111` pins them as a disjoint partition. |
+| `TL-P4-S1-C2` | `P4-AL-38` | The accepted policy count is **six** on an ordinary relation and **seven** on an accounting-source relation, not five. Omitting `accounting_validator` on `invoices` under `FORCE ROW LEVEL SECURITY` makes the deferred completeness validator read zero rows and **pass vacuously**. The tenant policy takes the direct `nullif(app_tenant(), '')::uuid` form `0052` measured, not the correlated subselect. |
+| `TL-P4-S1-C3` | `P4-AL-84` | The `registered_by` widening is three statements **plus one different statement**: `0072:812-814` already re-added the `inventory_operation_kinds` CHECK with `OR registered_by = 'P3-C'` and `0072:817` inserted such a row, so a bare widened pattern fails at `ADD CONSTRAINT`. |
+| `TL-P4-S1-C4` | `P4-AL-31`, `D-10` | Citation corrected from `0059:135,147` (the wrong ordinal, `stock_movements.stock_seq`) to `0059:216`. |
+| `TL-P4-S1-C5` | `P4-AL-15b` | The decision's own DDL vocabulary opted out of the guard it cites: a bare `quantity NUMERIC(18,2)` produced no finding. The pin is extended to the word forms; the column is **not** renamed to dodge the guard. |
+| `TL-P4-S1-C6` | `P4-AL-16` | `binding_source_id` has two accepted shapes. A relation with a `draft` state takes the nullable `purchases` variant with the status-conditional CHECK, not the `NOT NULL` allocation variant. |
+| `TL-P4-S1-C7` | execution plan, P4-S1 | A **seventh** mandatory pre-migration action: `assertMigrationState()` and `assertS4MigrationState()` assert the complete registry contents with one `toEqual` and are called from 13+ sites across four permanent Phase 3 files, so one Phase 4 registry row turns all of them red. Consequence: the first Phase 4 migration carries no registry row at all. |
+| `TL-P4-S1-C8` | §19 | The first Phase 4 migration adds **no** `MIGRATION_MANIFEST.json` entry. `scripts/check-migration-manifest.ts:51-58` allows a file newer than the frozen set and fails only on a file at or below `frozenThrough` that is missing, so the entry is added at acceptance by whoever moves `frozenThrough`. Freezing a digest early turns `check:migrations` red on the next edit of the same file. |
+
+### Still unresolved, carried to the slice that needs it
+
+- **`stock_source_bridge_sale`'s tenant carriage (P4-S2).** `P4-AL-08` requires every Phase 4 relation to
+  carry `tenant_id` and `business_id` as real columns; the accepted precedent
+  `stock_source_bridge_purchase` (`0063:400-406`) carries **no** `tenant_id` and no
+  `(tenant_id, business_id)` FK, which is why its `tenant_membership` policy uses the correlated
+  `businesses` subselect (`0063:556-557`). `inventory_stock_source_guard_gaps()` pins the bridge primary key
+  "exactly", so the precedent is the safer reading. The two instructions conflict and this lock does not
+  resolve it; it is P4-S2's to resolve, with evidence, before the sale bridge is written.
+- **`invoice_sequences.period` granularity — SETTLED (`TL-P4-S1-C9`, Tech Lead decision 2026-09-30).**
+  `P4-AL-31` fixed the row's purpose but not the period, which is in the first Phase 4 migration's
+  **primary key** and therefore had to be settled before `0074` rather than after. **The ruling is
+  `YEARLY`:** the ordinal restarts at 1 for each calendar year of the issue date, per business and per
+  document kind, so the key is `(business_id, document_kind, period)` with `period` the four-digit year.
+  Gaplessness holds **within** a period — the `max+1` under the sequence row's lock is taken over the
+  invoices of that key — and the year is part of the rendered document number, so two invoices in different
+  years never collide. `number_format` carries the year and a zero-padded ordinal placeholder; its grammar
+  is P4-S1's to fix and to assert structurally, since it is a rendering rule rather than an identity, and
+  the format column is `NOT NULL` with a CHECK requiring the ordinal placeholder.
+- **Branch scope on the invoice list.** `P4-AL-40` assigns branch scope to the policy rather than the
+  controller and `P4-AL-43` scenario 9 assigns the bypass test to P4-S1, but this lock never says whether an
+  assigned-scope member **sees** another branch's invoices in a list or is refused. Pending a ruling, P4-S1
+  implements the **narrower** reading — an assigned-scope member sees only the invoices of a branch in their
+  scope — because a visibility rule that turns out to be too tight is a complaint and one that turns out to
+  be too loose is a leak. The three money reads require business-wide scope, following the accepted
+  `GET /v1/suppliers/:id/payable` precedent.
 
 ---
 
