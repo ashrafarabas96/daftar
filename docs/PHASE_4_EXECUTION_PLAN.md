@@ -56,15 +56,31 @@ for speed is refused.
 ### P4-S0 — Architecture Lock *(this slice)*
 **Scope.** Analysis, audit, decisions, and correction of the stale canonical status sources.
 **Migrations.** None. **Product code.** None.
-**Outputs.** `docs/PHASE_4_ARCHITECTURE_LOCK.md`, this plan, and the four corrected canonical documents.
+**Outputs.** Two new documents — `docs/PHASE_4_ARCHITECTURE_LOCK.md` and this plan — plus the three
+corrected existing canonical documents (`PROJECT_STATUS.md`, `TECHNICAL_DEBT.md`,
+`docs/DAFTAR_IMPLEMENTATION_ROADMAP.md`): five documents, three existing and two new.
 **Exit.** Both documents written, every High/Medium review finding closed, documentation and static checks green,
 CI green on the branch head, verdict reported. **STOP.**
 
 ### P4-S1 — Customers, sales documents, numbering, and the guards Phase 4 must build
 **Scope.** `customers`, `customer_contacts`, `invoices`, `invoice_items`, `invoice_sequences`; per-business
-document numbering; the customer and invoice read surface; and the three pieces of protection Phase 4 cannot
-inherit.
-**The three protections, first, before any Phase 4 table exists.**
+document numbering; the customer and invoice read surface; and the protection Phase 4 cannot inherit.
+
+**Four protection classes implemented through six mandatory pre-migration actions** (`TL-P4-S0-03`). The
+classes are the kinds of protection at stake; the six numbered actions below are the work items that
+implement them, and every one of the six lands before any Phase 4 table exists:
+
+- **Class I — schema-registration reach.** The accepted registries must accept a Phase 4 registrant at all
+  (action 1).
+- **Class II — derived-truth guard.** No authoritative stored balance, paid total or outstanding total on any
+  Phase 4 relation (action 2).
+- **Class III — merchant language and the OD-03 tax boundary.** Both must reach the Phase 4 namespaces and
+  screens (action 3), and the accepted absence assertions that claim the Phase 4 surface will never exist must
+  be re-expressed as claims about the Phase 3 prefix rather than about the future (action 4).
+- **Class IV — permission-default authority.** Nothing in the database or the accepted tests may let a Phase 4
+  migration grant a sensitive key by default (actions 5 and 6).
+
+**The six actions, first, before any Phase 4 table exists.**
 1. The `registered_by` pattern widened from `^P3-S[0-9]+$` to `^P[0-9]+-S[0-9]+$` on all four constraints
    (`0054:54`, `0059:53`, `0059:59`, `0059:69`) — without it the first Phase 4 registration fails.
 2. Guard **G-3 extended** with a sales arm (lock P4-AL-06). Today its own exported discovery functions, run over
@@ -93,7 +109,8 @@ inherit.
    never loosened.
 **Also.** `tests/security/phase4-forward-evolution.test.ts`; `scripts/phase4-prefix.ts`;
 `flows.ts` exporting `PHASE3_STEPS`/`PHASE4_STEPS` and `gate:phase3:corrective` pinned to the Phase 3 steps
-(lock P4-AL-63); the cashier default-permission backfill once `OD-P4-01` is answered; the `VIEW_REGISTRY`
+(lock P4-AL-63); the cashier default-permission backfill as ruled under `OD-P4-01` (OPTION A: non-sensitive defaults only,
+audited backfill); the `VIEW_REGISTRY`
 entries for the Phase 4 views.
 **Migrations.** `0074` onward, by the single migration owner.
 **Gate.** `gate:phase4:s1` — composes `gate:phase3:corrective` and the permanent core; migration boundary,
@@ -101,9 +118,9 @@ two-tense; forward evolution; the extended guards with their red proofs; composi
 the enumerated cross-tenant suite over every Phase 4 route; the schema lint (G-19); numbering isolation (G-07,
 structural half).
 **Exit.** Goldens G-02 (enumeration), G-03, G-07 (structure), G-19 green with named red proofs; gate green;
-exact-SHA CI green on six jobs; no authoritative balance column anywhere; `OD-P4-01` answered.
-**Blocked by.** `OD-P4-01` (its migration, not its start); `OD-P4-15` should be answered so the slice knows
-which `GOLD` ids it carries.
+exact-SHA CI green on six jobs; no authoritative balance column anywhere; the `OD-P4-01` ruling implemented.
+**Blocked by.** Nothing. `OD-P4-01` is RULED (OPTION A) and `OD-P4-15` is RULED (OPTION A), so the slice knows
+which `GOLD` ids it carries and which default keys the cashier gets.
 
 ### P4-S2 — The sale commit primitive
 **Scope.** `sales`, `sale_items`; the `sale.*` operation kinds on the existing `invctl/1` assertion; the stock
@@ -116,7 +133,8 @@ bindings and their deferred completeness validators; the last-item race under fo
 by document UUID + `intent_sha256`; failure injection proving no partial state.
 **Exit.** G-01, G-16 (sale key), G-18's sale-side half green; the `R-INV-*` question answered in writing;
 calibration run for P4-C recorded; gate and exact-SHA CI green.
-**Blocked by.** `OD-P4-05` (oversell) before it starts; `OD-P4-13` for its acceptance.
+**Blocked by.** Nothing. `OD-P4-05` is RULED (OPTION A — no oversell, atomic refusal, the stock writer
+unchanged) and `OD-P4-13` is RULED (A + C — `min(1000 ms, calibrated)`, tighten-only).
 
 ### P4-S3 — POS, web
 **Scope.** The server-side till basket (`pos_till_sessions`, `pos_cart_lines` — named so
@@ -127,7 +145,8 @@ refusal; the cart's statement count constant in the line count; the POS browser 
 nine combinations; POS type-ahead paced, never the limiter raised.
 **Exit.** The POS steps green in all nine combinations with the four new invariant kinds each proven able to
 fire; P4-A and P4-B budgets measured; gate and CI green.
-**Blocked by.** `OD-P4-02` (price override) and `OD-P4-09` (till session) before it starts.
+**Blocked by.** Nothing. `OD-P4-02` is RULED (OPTION A — discount only) and `OD-P4-09` is RULED (OPTION A —
+one session, one authenticated user).
 
 ### P4-S4 — Payments, allocation, receivables, overpayment → customer credit
 **Scope.** `payments`, `payment_allocations`, `customer_credits`,
@@ -139,7 +158,8 @@ level-uniqueness; the surplus becoming a credit and never revenue.
 SQL; `paid + outstanding = total` after every step; the credit's two halves proportional on partial consumption
 and exactly zero on full.
 **Exit.** G-04, G-14, G-15, G-16 (payment and allocation keys) green; P4-D and P4-F measured; gate and CI green.
-**Blocked by.** `OD-P4-03` (credit limit) is not blocking; `OD-P4-14` for its acceptance evidence.
+**Blocked by.** Nothing. `OD-P4-03` is RULED (OPTION A — no credit limit) and `OD-P4-14` is RULED (OPTION A —
+calibration-derived, tighten-only, `3×` provisional).
 
 ### P4-S5 — Returns, credit notes, refunds
 **Scope.** `credit_notes`, `credit_note_items`, `refunds`; revenue reversed exactly once; the cap check inside
@@ -147,7 +167,7 @@ the source's `FOR UPDATE`; `refunds` with exactly one non-null source and no col
 **Gate.** `gate:phase4:s5` — composes s4; the structural absence of a payment column asserted; the cap under
 concurrency; cross-currency caps in the source's own currency.
 **Exit.** G-06, G-08, G-09, G-12 green; P4-G calibrated; gate and CI green.
-**Blocked by.** `OD-P4-13` for its acceptance.
+**Blocked by.** Nothing. `OD-P4-13` is RULED (A + C) and governs its acceptance.
 
 ### P4-S6 — Reversals, void, and TD-15
 **Scope.** `payment_reversals`, `allocation_reversals`; the `void_invoice` compound command and the refusal of
@@ -157,8 +177,11 @@ red proof; a second reversal refused; the multi-currency reversal using the orig
 allocation after a payment reversal; `provider_reference` idempotency at the database.
 **Exit.** G-05, G-10, G-11 green; TD-15 closed with its `TECHNICAL_DEBT.md` reference corrected; gate and CI
 green.
-**Blocked by.** **`OD-P4-04` blocks this slice entirely.** Nothing in P4-S6 may be written until the mid-chain
-reversal mechanism is chosen, because the choice decides the table shape, not just the code.
+**Blocked by.** Nothing. `OD-P4-04` is RULED: **OPTION B AUTHORIZED** — an append-only negative release /
+reducer at the current chain head, history never rewritten. The telescoping identity
+`rel(X, a) = R(X + a) − R(X)` and `rel(S, −a) = R(S − a) − R(S)` must be proved **before** any reversal product
+code is written, with the ten required test cases; if the proof fails, the only permitted fallback is
+OPTION A / LIFO-only.
 
 ### P4-S7 — Debts, statements, installments, and the narrow TD-22 repayment
 **Scope.** `installment_plans`, `installments`; the statement, the debts and aging reads; the schedule as a

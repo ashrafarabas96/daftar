@@ -9,7 +9,7 @@
 >
 > Every load-bearing claim below is cited as `file:line` against the baseline tree. Where a canonical
 > document disagreed with the code, the code won and the disagreement is recorded in §3 rather than
-> silently resolved. An Arabic summary is at §25.
+> silently resolved. The Tech Lead corrective seal record is at §25 and an Arabic summary is at §26.
 
 ---
 
@@ -513,10 +513,14 @@ void, revenue reversed exactly once, AR zero, and cash net movement equal to wha
 gets back.
 
 **P4-AL-25 — The COGS entry's Inventory line is the stored `value_delta_base_minor` integers, summed.**
-Not a recomputation from quantity × average cost. The movement rows already hold the exact integer value
-delta the stock writer computed; summing them makes `GL(1200) = Σ(qty × avg)` an exact integer identity
-that `R-INV-01` can assert, and removes the second rounding that a recomputation would introduce —
-`[[daftar-rounding-is-not-additive]]`. Where the sum of per-line COGS differs from the posted total after
+Not a recomputation from quantity times average cost. Average cost is a derived rounded quotient, so
+re-multiplying it reintroduces the drift the stored delta has already resolved and establishes a second
+source of truth beside the ledger — `[[daftar-a-rounded-quotient-is-never-an-input]]`. The movement rows
+already hold the exact integer value delta the stock writer computed, so the reconciliation identity is
+**`GL Inventory (1200) = Σ stock_movements.value_delta_base_minor`** — an exact integer identity that
+`R-INV-01` can assert, which removes the second rounding a recomputation would introduce —
+`[[daftar-rounding-is-not-additive]]`. `quantity × average_cost` is never the reconciliation truth
+anywhere in Phase 4 (`TL-P4-S0-01`). Where the sum of per-line COGS differs from the posted total after
 `HALF_EVEN`, the difference is distributed across the lines, once, at the line grain, with no
 intermediate rounding.
 
@@ -1177,7 +1181,7 @@ scenario (`tests/golden-regression/phase2/01-engine-shapes.golden.test.ts:17-29`
 | G-15 | overpayment → customer credit (GOLD-68, 69, 70, 79, 80) | the surplus becomes a credit, not revenue; application onto a later invoice under a lock; refund at **carrying** value; partial consumption leaves both halves proportional, full consumption zeroes both exactly | S4, S5 |
 | G-16 | idempotency (GOLD-12, 62 and every Phase 4 key) | every replay refused **at the database** by a real `UNIQUE` over real columns; no second journal, no second movement, no second decrement; plus the GOLD-74 schema lint | S2, S4, S5, S6, S8 |
 | G-17 | GL = source model (GOLD-88, `R-SAL-*`) | the identities of §15 computed by the **product's** reconciler; and no `completed → refunded` transition exists | S8 |
-| G-18 | inventory = stock ledger (GOLD-33, `R-INV-01…05` with sales) | `GL(1200) = Σ(qty × avg)` exactly after purchase-at-two-costs → sale → return → void → transfer → adjustment; `Σ line COGS = posted COGS` after `HALF_EVEN`; no intermediate rounding | S8, with S2 owning the sale-side movement law |
+| G-18 | inventory = stock ledger (GOLD-33, `R-INV-01…05` with sales) | `GL Inventory (1200) = Σ stock_movements.value_delta_base_minor` exactly after purchase-at-two-costs → sale → return → void → transfer → adjustment; `Σ line COGS = posted COGS` after `HALF_EVEN`; no intermediate rounding | S8, with S2 owning the sale-side movement law |
 | G-19 | schema lint (GOLD-74) | every column named in every `UNIQUE`, `CHECK` and `FK` of every Phase 4 table exists; no literal inside a constraint; no polymorphic FK in the financial core | S1, re-run by every later gate |
 | G-20 | the shape stand-ins still agree | every journal the Phase 2 stand-ins predicted, produced by Phase 4's **real** commands, matches line for line — and if it does not, the gate must say which was changed | S8 |
 
@@ -1466,15 +1470,25 @@ collision. None of them is a defect deferred to make a gate green.
 
 ## 22. Open decisions
 
-Each of these is a point this lock deliberately did **not** settle, because settling it would mean inventing a
-commercial policy, a legal policy or an authority the Tech Lead has not granted. Each carries its options, the
-risk of each option, an engineering recommendation, and whether it blocks a slice. Nothing below is implemented
-in a slice until it is answered.
+Each of these was a point this lock deliberately did **not** settle, because settling it would have meant
+inventing a commercial policy, a legal policy or an authority the Tech Lead had not granted. Each carries its
+options, the risk of each option, the engineering recommendation, and whether it blocks a slice.
+
+**STATUS AFTER THE P4-S0 FINAL CORRECTIVE SEAL DIRECTIVE (2026-09-30).** The Tech Lead has ruled on every
+decision below. Each ruling is recorded under its decision as a **`TECH LEAD RULING`** and is binding on every
+slice and every agent. **`OD-03` is the only decision that remains open**; `OD-P4-01` … `OD-P4-15` are all
+**CLOSED** and are implemented as ruled, not re-opened, re-argued or re-designed.
 
 **OD-03 — non-zero jurisdiction-specific tax. Carried forward unchanged and not closed.**
 Extended in this lock to the **sales** side with its own boundary (P4-AL-44, P4-AL-45). No country's law is
 researched and no rate, rule, threshold, exemption, recoverability or legal invoice field is guessed. *Blocks:*
 nothing in Phase 4, because Phase 4 ships structural zero.
+
+**TECH LEAD RULING (2026-09-30) — STAYS OPEN.** This is the one decision that remains open after this
+seal. Phase 4 supports **structural zero sales tax only**. Any non-zero tax is **REFUSED** until an approved
+**Country Pack** built on official legal and tax sources exists. No VAT rate, exemption, threshold,
+inclusive/exclusive rule, legal invoice field or registration rule may be guessed, and no country's law is to
+be researched now.
 
 **OD-P4-01 — the cashier's first financial authority, and what happens to existing cashiers.**
 Phase 4 is the first phase in which a `Cashier` role does anything financial. *Options.* (a) The default set of
@@ -1491,6 +1505,12 @@ requires P4-S1 to write — a decision this lock is making, not a fact it inheri
 or leave them unable to sell. Recommendation: grant the non-sensitive defaults in the migration, audited, and
 grant nothing sensitive. *Blocks:* **P4-S1's migration**, not its start.
 
+**TECH LEAD RULING (2026-09-30) — OPTION A.** The cashier receives **only non-sensitive operational
+permissions by default**, and existing cashiers receive an **audited backfill of those same non-sensitive
+defaults**. Forbidden as a default, for the cashier and for any built-in role: `sales.discount`, `sales.void`,
+`refunds.approve`, `payments.reverse`, `installments.manage`, and any other sensitive permission. The default
+set is closed by the Phase 4 `role_permissions` assertion (P4-AL-37), with a planted-defect red proof.
+
 **OD-P4-02 — price override, or discount only.**
 *Options.* (a) Discount only: the catalogue price is the price, and a reduction is a discount with its own
 permission and its own audit row. (b) Free price override at the till under `sales.discount`. (c) Override
@@ -1500,6 +1520,8 @@ indistinguishable from the forged-total attack when it arrives over HTTP. (c) ne
 given. *Recommendation.* (a) for Phase 4 — a discount is auditable as a decision, an override is not. *Blocks:*
 P4-S3's cart design, so it should be answered before P4-S3 starts.
 
+**TECH LEAD RULING (2026-09-30) — OPTION A.** **Discount only.** No arbitrary price override in Phase 4.
+
 **OD-P4-03 — a customer credit limit.**
 *Options.* (a) No limit in Phase 4: a credit sale is permitted whatever the balance, and the balance is visible.
 (b) A per-customer limit that refuses the sale. (c) A limit that warns and permits with a permission.
@@ -1507,6 +1529,9 @@ P4-S3's cart design, so it should be answered before P4-S3 starts.
 worst place to discover a policy. (c) needs the authority question answered (who may override, and is it
 sensitive). *Recommendation.* (a) for Phase 4, with the balance and the aging shown on the customer picker, and
 (c) as a named Phase 5 candidate. *Blocks:* nothing; it adds a column later without re-modelling.
+
+**TECH LEAD RULING (2026-09-30) — OPTION A.** **No customer credit limit in Phase 4.** The balance and its
+aging are shown clearly; there is no hidden limit and no silent refusal driven by one.
 
 **OD-P4-04 — mid-chain reversal of an allocation. This is the one hard blocker.**
 The carrying-release chain (P4-AL-21) telescopes, so reversing any allocation other than the **last** breaks it
@@ -1528,6 +1553,16 @@ releases written and asserted **before** any reversal code is written, and (a) a
 does not hold. But this is a financial-mechanism decision with a measurable one-minor-unit consequence, and it
 is the Tech Lead's. *Blocks:* **P4-S6 entirely, and TD-15 with it.**
 
+**TECH LEAD RULING (2026-09-30) — OPTION B AUTHORIZED.** Mid-chain allocation reversal is implemented as an
+**append-only negative release / reducer at the current chain head**. Deleting or modifying a historical
+release is **forbidden**. Before any reversal product code is written, the telescoping identity must be proved:
+`rel(X, a) = R(X + a) − R(X)` and `rel(S, −a) = R(S − a) − R(S)`. The tests must prove: reversal of the first,
+a middle and the last allocation; `HALF_EVEN` ties; cross-currency; multiple allocations; refusal of a
+duplicate reversal; concurrent reversal attempts; the exact carrying value; no one-minor-unit residue; and that
+history stayed append-only. **If the proof fails, the only permitted fallback is OPTION A / LIFO-only.**
+Forbidden: rewriting history, recomputing old releases, inventing a third mechanism. This unblocks P4-S6 and
+TD-15.
+
 **OD-P4-05 — oversell.**
 *Options.* (a) No oversell in Phase 4: a sale of more than `on_hand` of a stock-tracked product is refused.
 (b) A per-business flag permitting it. (c) Permit it only for products that are not stock-tracked. *Risks.*
@@ -1539,6 +1574,10 @@ system — and would make `on_hand` able to go negative, which several accepted 
 merchant understands why one product refuses and another does not. *Blocks:* P4-S2's movement path, so it
 should be answered before P4-S2 starts.
 
+**TECH LEAD RULING (2026-09-30) — OPTION A.** **No oversell for stock-tracked products.** A requested
+quantity greater than `on_hand` is refused atomically. Non-stock-tracked products stay sellable with no
+decrement. The stock writer is **not** changed to permit negatives.
+
 **OD-P4-06 — interest or fees on an installment plan.**
 *Options.* (a) None in Phase 4: `Σ instalments + down = invoice total`, exactly, enforced by the database
 (P4-AL-13). (b) A flat fee added as an invoice line at plan creation. (c) Interest accrued over the schedule.
@@ -1548,6 +1587,9 @@ needs a commercial decision about whether the fee is refundable on early settlem
 it needs an accrual schedule, a second revenue recognition pattern and, in many jurisdictions, a licence.
 *Recommendation.* (a). *Blocks:* nothing; (b) is additive later.
 
+**TECH LEAD RULING (2026-09-30) — OPTION A.** **No interest and no installment fees in Phase 4.**
+`Σ installments + down payment = invoice total`, exactly.
+
 **OD-P4-07 — unrealized FX on a customer statement.**
 *Options.* (a) The statement shows amounts in the invoice's own currency and the base carrying value as
 recorded, with no revaluation. (b) A revaluation column at today's rate, displayed only. (c) Posted
@@ -1555,6 +1597,9 @@ revaluation entries. *Risks.* (a) understates what a foreign-currency receivable
 may read as an error. (b) puts a number on a financial screen that no journal line supports, and someone will
 reconcile against it. (c) is period-end accounting policy Phase 4 has no mandate for. *Recommendation.* (a),
 with the rate and date of each line visible so the merchant can see why. *Blocks:* nothing.
+
+**TECH LEAD RULING (2026-09-30) — OPTION A.** **No unrealized FX revaluation.** The statement shows the
+original currency alongside the historical carrying and base figures.
 
 **OD-P4-08 — writing off a terminal AR residue.**
 A cross-currency AR can end with a residue of a few minor units that no payment will ever clear.
@@ -1566,17 +1611,26 @@ that already has enough. (c) is a silent automatic journal entry triggered by a 
 the worst of the three. *Recommendation.* (a) for Phase 4 and (b) as a named Phase 5 candidate. *Blocks:*
 nothing.
 
+**TECH LEAD RULING (2026-09-30) — OPTION A.** **No AR residue write-off in Phase 4**, neither automatic nor
+manual, and **no silent threshold**. The residue stays and is visible.
+
 **OD-P4-09 — whether a till session may be shared between cashiers.**
 *Options.* (a) One session, one authenticated user; a shift change is a new session. (b) A shared till session
 with a per-sale actor. *Risks.* (a) is unambiguous for audit and slightly slower at a shift change. (b) makes
 the audit row's actor and the session's owner different people, and a cash-drawer discrepancy then has no
 single owner. *Recommendation.* (a). *Blocks:* P4-S3's session model.
 
+**TECH LEAD RULING (2026-09-30) — OPTION A.** **One till session = one authenticated user.** A change of user
+is a new session.
+
 **OD-P4-10 — whether the Phase 4 goldens run in `test:golden` as well as inside the slice gates.**
 *Options.* (a) Both, accepting that they run twice per CI run. (b) Only in the gates. *Risks.* (a) costs CI
 minutes; the Phase 3 release gate already accepted double execution on principle. (b) means a golden regression
 is reported by a large composed gate's log rather than by a small, early, clearly-named step — the readability
 problem `ci.yml:257-262` was written about. *Recommendation.* (a). *Blocks:* nothing.
+
+**TECH LEAD RULING (2026-09-30) — OPTION A.** The Phase 4 goldens run in **both** `test:golden` and the
+relevant Phase 4 gate; duplicate execution is accepted.
 
 **OD-P4-11 — whether `gate:phase3:corrective`'s browser-matrix assertion is relaxed from equality to superset.**
 *Options.* (a) Leave it as equality; Phase 4 adds no locale and no viewport (P4-AL-64). (b) Relax to superset,
@@ -1586,6 +1640,9 @@ edited an accepted gate" must be explicit and authorised. *Recommendation.* (a) 
 a fourth viewport or locale is actually wanted rather than pre-emptively. *Blocks:* nothing, unless a Phase 4
 screen genuinely needs a viewport the current three do not cover.
 
+**TECH LEAD RULING (2026-09-30) — OPTION A.** The accepted Phase 3 browser equality is **not modified**. The
+same `ar`/`en`/`tr` and the same phone/tablet/desktop viewports stand.
+
 **OD-P4-12 — the `browser` job's wall-clock budget once Phase 4 roughly doubles the step count.**
 *Options.* (a) Raise `timeout-minutes` from 40 to about 90, one job. (b) A `strategy.matrix` over locale
 **inside** the `browser` job, keeping the job name unchanged. (c) Move the full matrix to the dispatched
@@ -1594,6 +1651,11 @@ may produce a separate check context, which could break the required-checks conf
 the tree. (c) **weakens the per-push claim** and would let a Phase 4 screen regression reach a reviewer green.
 *Recommendation.* (a) first, measured; (b) only after confirming in repository settings that the required-checks
 key is unaffected; (c) **refused**. *Blocks:* the slice that first makes the job exceed its timeout.
+
+**TECH LEAD RULING (2026-09-30) — OPTION A, MEASUREMENT TRIGGERED.** The browser timeout is **not** raised
+pre-emptively. If real measurement proves 40 minutes insufficient, the **same full required browser job** is
+raised to about 90 minutes. Forbidden: a reduced per-push matrix, and moving any coverage out of required CI.
+**OPTION C is refused.**
 
 **OD-P4-13 — the absolute cap on the sale-commit and return+refund budgets.**
 *Options.* (a) A 1 000 ms hard cap stated as a product requirement — a POS sale slower than a second is a defect
@@ -1611,6 +1673,11 @@ may not exceed — a calibration landing above 1 000 ms is a **FAIL to be diagno
 written. The 1 000 ms value itself needs confirmation. *Blocks:* **P4-S2's and P4-S5's acceptance**, not their
 start.
 
+**TECH LEAD RULING (2026-09-30) — A + C.** For sale commit and for return+refund there is a **hard product
+ceiling of `p95 ≤ 1000 ms`**, together with a tighter calibration-derived ceiling; the effective ceiling is
+`min(1000 ms, accepted calibrated ceiling)`, and it may only ever be **tightened**. The Phase 4 reconciliation
+hard upper bound is **≤ 300 seconds** and is never raised automatically.
+
 **OD-P4-14 — the per-invoice constant in the allocation budget, and the 3× RLS cost threshold.**
 *Options.* (a) Both calibration-derived, then tighten-only. (b) Both fixed now from the nearest anchors.
 *Risks.* (a) means the absolute ceilings are not final until P4-S4, though the ratio assertions are red-capable
@@ -1619,6 +1686,10 @@ measured anchor anywhere in the tree** — the Phase 2 RLS work proved an *answe
 correlated subplan; it never published a cost ratio. *Recommendation.* (a), with 3× recorded as **provisional**
 and confirmed by the first Tier-2 run's measured ratios. *Blocks:* P4-S4's and P4-S8's acceptance evidence, not
 any slice's start.
+
+**TECH LEAD RULING (2026-09-30) — OPTION A.** The allocation scaling constant and the RLS cost thresholds are
+**calibration-derived and tighten-only**. The `3×` figure stays **provisional** until a real Tier-2
+measurement replaces it.
 
 **OD-P4-15 — the ≈70 canonical `GOLD` scenarios that no golden test covers.**
 *Options.* (a) Phase 4 implements the twenty in its own scope, and
@@ -1631,6 +1702,10 @@ careful to declare it was avoiding. (c) leaves "إلزاميًا … لا يُخ
 phase ≤ 4 has a golden file referencing it and an id owned by a later phase does not. *Blocks:* nothing, but it
 should be answered before P4-S1 so the slice knows which ids it carries.
 
+
+**TECH LEAD RULING (2026-09-30) — OPTION A.** Phase 4 implements the canonical goldens **owned by a phase
+≤ 4 and in scope**, and adds the per-id **owning phase** metadata. **No stubs** are created for ids owned by a
+later phase.
 
 ---
 
@@ -1676,15 +1751,63 @@ journal. Resolved in P4-AL-32 and P4-AL-41 by declaring the **domain** order and
 
 No product code. No endpoint. No POS screen. No migration. `0074` does not exist. No Phase 4 table, routine,
 route, component or string was created. No gate, suite or budget was executed. No country's tax law was
-researched and OD-03 is not closed. The only files P4-S0 changed are this document,
-`docs/PHASE_4_EXECUTION_PLAN.md`, and the three canonical documents listed in §3.1 — `PROJECT_STATUS.md`,
-`TECHNICAL_DEBT.md` and `docs/DAFTAR_IMPLEMENTATION_ROADMAP.md`, which §3.1 covers in four rows.
+researched and OD-03 is not closed. P4-S0 touched **five documents in total: three existing and two new** (`TL-P4-S0-02`).
+The three existing canonical documents it corrected are `PROJECT_STATUS.md`, `TECHNICAL_DEBT.md` and
+`docs/DAFTAR_IMPLEMENTATION_ROADMAP.md` (§3.1 covers their stale claims in four rows — four rows over three
+documents, not four documents). The two new documents it created are this document,
+`docs/PHASE_4_ARCHITECTURE_LOCK.md`, and `docs/PHASE_4_EXECUTION_PLAN.md`. No other file was changed.
 
 P4-S1 does not begin until the Tech Lead says so.
 
 ---
 
-## 25. ملخص بالعربية
+## 25. The Tech Lead corrective seal (2026-09-30)
+
+The Tech Lead reviewed this lock and returned the verdict **`P4-S0 — NARROW CORRECTIVE PASS`**: the
+architecture is **not rejected**, Phase 4 is **not** redesigned, and P4-S0 is **not** widened. Three named
+corrections were required, and each is closed here.
+
+### TL-P4-S0-01 — inventory reconciliation formula regression
+**High — Data Integrity / Architecture Contract. CLOSED.**
+This lock still stated the inventory reconciliation identity as `GL(1200) = Σ(qty × avg)` in two places
+(`P4-AL-25` and the `G-18` row of §17.4), which contradicts both this lock's own reasoning and the accepted
+Phase 3 law (`P3-AL-43`, `P3-AL-49` §B, `INV-INV-06`). Average cost is a **derived rounded quotient**;
+re-multiplying it reintroduces the rounding drift the stored integer delta has already resolved, and it
+establishes a second source of truth beside the ledger. The single official formula, everywhere in Phase 4, is:
+
+> **`GL Inventory (1200) = Σ stock_movements.value_delta_base_minor`**
+
+`quantity × average_cost` is **never** the reconciliation truth. Both occurrences were replaced, and all Phase 4
+documents were searched for `qty × avg`, `qty*avg`, `qty×avg`, `quantity × average` and equivalent paraphrases;
+no other occurrence exists.
+
+### TL-P4-S0-02 — canonical document count
+**Low / Documentation. CLOSED.**
+§24 and the plan's P4-S0 outputs said "four canonical documents". The truth is **five documents: three existing
+and two new**. Existing and corrected: `PROJECT_STATUS.md`, `TECHNICAL_DEBT.md`,
+`docs/DAFTAR_IMPLEMENTATION_ROADMAP.md`. New: `docs/PHASE_4_ARCHITECTURE_LOCK.md`,
+`docs/PHASE_4_EXECUTION_PLAN.md`. §3.1 covers the three existing documents' stale claims in **four rows** — four
+rows over three documents, which is what produced the miscount.
+
+### TL-P4-S0-03 — protection count / taxonomy
+**Low / Documentation. CLOSED.**
+The plan's P4-S1 heading read "the three protections" over a list of **six** numbered pre-migration actions.
+The taxonomy is now stated explicitly: **four protection classes implemented through six mandatory
+pre-migration actions**, each of the six mapped to its class. No heading states a count that its own list
+contradicts.
+
+### Tech Lead rulings
+Every open decision except `OD-03` is now **CLOSED** by a recorded **`TECH LEAD RULING`** in §22:
+`OD-P4-01` A · `OD-P4-02` A · `OD-P4-03` A · `OD-P4-04` **B authorized** (append-only negative release at the
+chain head, telescoping proof first, LIFO-only as the sole fallback) · `OD-P4-05` A · `OD-P4-06` A ·
+`OD-P4-07` A · `OD-P4-08` A · `OD-P4-09` A · `OD-P4-10` A · `OD-P4-11` A · `OD-P4-12` A (measurement
+triggered) · `OD-P4-13` A + C · `OD-P4-14` A · `OD-P4-15` A. `OD-03` stays open: Phase 4 ships **structural
+zero sales tax only**, and any non-zero tax is refused until an approved Country Pack built on official legal
+sources exists.
+
+---
+
+## 26. ملخص بالعربية
 
 P4-S0 هي مرحلة تحليل وقرار فقط. لم تُكتب أي شيفرة منتج، ولا endpoint، ولا شاشة POS، ولا migration، و`0074`
 غير موجود، و`0000–0073` لم تُمسّ.
@@ -1707,3 +1830,23 @@ P4-S0 هي مرحلة تحليل وقرار فقط. لم تُكتب أي شيف�
 وبقيت ستّة عشر قرارًا مفتوحًا تحتاج قرارك، وأهمّها `OD-P4-04`: عكس تخصيص في منتصف السلسلة يكسر حساب
 التحرير بوحدة صغرى واحدة، وهو يوقف `P4-S6` وتقنيًا TD-15 معه. و`OD-03` (ضريبة البيع) باقٍ مفتوحًا كما هو،
 ولم يُبحث قانون أي دولة.
+
+### ختم المراجعة التصحيحية (2026-09-30)
+
+ردّ الـTech Lead بحكم **«مرور تصحيحي ضيق»**: المعمارية **غير مرفوضة**، ولا إعادة تصميم للمرحلة الرابعة،
+ولا توسيع لـP4-S0. وأُغلقت التصحيحات الثلاثة المطلوبة:
+
+1. **TL-P4-S0-01 (عالٍ — سلامة البيانات).** كان المستند ما يزال يكتب معادلة المصالحة كـ`Σ(qty × avg)` في
+   موضعين (`P4-AL-25` ووصف `G-18`). والصيغة الرسمية الوحيدة هي
+   **`GL Inventory (1200) = Σ stock_movements.value_delta_base_minor`**، لأن متوسط التكلفة خارج قسمة
+   مقرّبة، فضربه مرّة أخرى يُعيد الانحراف ويخلق مصدر حقيقة ثانيًا. أُصلح الموضعان، ولم يبقَ أي تكرار في
+   وثائق المرحلة الرابعة.
+2. **TL-P4-S0-02 (منخفض / توثيق).** العدد الصحيح: **خمس وثائق — ثلاث قائمة مُصحّحة واثنتان جديدتان**.
+3. **TL-P4-S0-03 (منخفض / توثيق).** التصنيف الصحيح: **أربع فئات حماية تُنفّذ عبر ستّ إجراءات إلزاميّة
+   قبل أوّل migration**.
+
+وأُغلق **خمسة عشر قرارًا** بأحكام مسجّلة في §22 (`TECH LEAD RULING`)، ولم يبقَ مفتوحًا إلا `OD-03`
+(ضريبة البيع: صفر بنيوي فقط، وأي ضريبة غير صفرية مرفوضة حتى وجود Country Pack معتمد على مصادر قانونية
+رسمية). وأهمّها `OD-P4-04`: **الخيار B مُعتمد** — مخفّف سالب يُلحق في رأس السلسلة، ولا تُمسّ الـreleases
+التاريخيّة أبدًا، والبرهان التلسكوبي يُكتب قبل أي شيفرة، والبديل الوحيد عند فشل البرهان هو LIFO فقط.
+وبذلك ارتفع الحاجز عن `P4-S6` وعن TD-15.
