@@ -43,6 +43,10 @@ import { InventoryReadsController } from '../modules/inventory/inventory-reads.c
 import { SupplierBalanceReadService } from '../modules/purchasing/supplier-balance-reads';
 import { SupplierBalancesController } from '../modules/purchasing/supplier-balances.controller';
 import { PaymentMethodDefaultsController, PaymentMethodDefaultsReadService } from '../modules/payment-methods/payment-method-defaults.controller';
+// P4-S1: the Phase 4 customer and invoice read surface.
+import { CustomersController } from '../modules/selling/customers.controller';
+import { InvoicesController } from '../modules/selling/invoices.controller';
+import { sellingProviders } from '../modules/selling/selling.module';
 
 /**
  * MERCHANT PROCESS (Directive §16). Composes the merchant HTTP surface and
@@ -82,6 +86,9 @@ export class MerchantApiModule implements NestModule {
         InventoryReadsController,
         SupplierBalancesController,
         PaymentMethodDefaultsController,
+        // P4-S1: the customer and invoice reads (GET only; the invoice's one writer is the sale command).
+        CustomersController,
+        InvoicesController,
       ],
       providers: [
         ...coreProviders(config, options),
@@ -111,6 +118,8 @@ export class MerchantApiModule implements NestModule {
         InventoryReadService,
         SupplierBalanceReadService,
         PaymentMethodDefaultsReadService,
+        // P4-S1: the customer and invoice read services of the two Phase 4 controllers.
+        ...sellingProviders(),
         TenancyService,
         StructureService,
         InvitationsService,

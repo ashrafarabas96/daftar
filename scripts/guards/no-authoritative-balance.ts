@@ -175,7 +175,7 @@ const FORBIDDEN_TABLE_PATTERNS: readonly RegExp[] = [
  * what the merchant calls it, and a guard that refused the word rather than
  * the property would be refusing AL-13.
  */
-const SOURCE_DOCUMENT_TABLES: readonly string[] = ['accounting_opening_balances', 'accounting_opening_balance_lines'];
+export const SOURCE_DOCUMENT_TABLES: readonly string[] = ['accounting_opening_balances', 'accounting_opening_balance_lines'];
 
 export function isForbiddenBalanceTable(table: string): boolean {
   const name = table.toLowerCase();
@@ -197,6 +197,78 @@ const FORBIDDEN_COLUMN_PATTERNS: readonly RegExp[] = [/(^|_)balances?($|_)/, /(^
  * stored number is what this rule is about.
  */
 const NOT_A_QUANTITY = /_(id|ids|at|by|status|kind|type|code|name|currency)$/;
+
+/**
+ * ── P4-S1: the derived-total vocabulary, on every relation the accepted
+ * prefixes did not create (P4-AL-06; P4-AL-05 §4) ─────────────────────────
+ *
+ * `AP_BALANCE_COLUMN` was written in P3-S4 for supplier AP and wired to
+ * `SUPPLIER_TABLE_NAME` alone. That wiring was a table-NAME rule wearing a
+ * column rule's clothes, and it failed the moment a phase brought relations
+ * under other names. Running this file's own discovery functions over scratch
+ * Phase 4 DDL showed exactly that: the supplier arm saw only `purchases`, the
+ * complement arm saw `customers`, `installments`, `invoices`, `sales` — and of
+ * their columns only `customers.balance_minor` was caught, while
+ * `invoices.paid_minor`, `invoices.outstanding_minor`,
+ * `customers.amount_due_minor`, `installments.outstanding_minor`,
+ * `installments.settled_minor` and `credit_notes.refunded_amount_minor` all
+ * passed CI.
+ *
+ * The rewiring is neither a sales arm nor a Phase 4 table list: a list of
+ * Phase 4 names would rebuild the very hole this file's header (`:33-38`)
+ * exists to explain. The vocabulary below is carried by BOTH discovery arms,
+ * and between them the two arms cover every relation the accepted Phase 2
+ * prefix did not create (`isPhase3Relation`) — the complement arm takes every
+ * such relation that is not a supplier / purchase / payment-method name, the
+ * supplier arm takes the rest, and `tests/integration/phase3-s8-guards.test.ts`
+ * pins that partition. So the rule follows the CATALOGUE, and a Phase 5
+ * relation is covered the day it is written, not the day somebody remembers
+ * this file.
+ *
+ * `receivable` joins the AP words for the AR direction. `refunded`,
+ * `collected` and `allocated` join them because §4's matrix and P4-AL-14
+ * forbid exactly those stored totals: a credit note's
+ * `refunded_amount_minor`, an instalment plan's collected sum, an allocated
+ * sum. `cogs` joins for P4-AL-05's reason — COGS is `journal_lines` on `5000`
+ * and its input is `stock_movements.value_delta_base_minor`, so
+ * `sale_items.cogs_minor` would be a second stored integer for the same money
+ * with a second writer and nothing tying them.
+ *
+ * What deliberately does NOT join is a bare `cost`. P4-AL-06's prose asks for
+ * it, and a bare `(^|_)costs?($|_)` flags eight ACCEPTED Phase 3 columns:
+ * `stock_movements.unit_cost_base_minor`,
+ * `purchase_lines.unit_cost_base_minor`, `stocktake_lines.unit_cost_base_minor`,
+ * `inventory_adjustment_lines.unit_cost_base_minor`,
+ * `inventory_opening_lines.unit_cost_base_minor`,
+ * `negative_inventory_deficits.provisional_unit_cost_base_minor`,
+ * `negative_deficit_coverages.provisional_unit_cost_base_minor` and
+ * `negative_deficit_coverages.actual_unit_cost_base_minor` — every one a
+ * per-unit INPUT frozen on its own source document, none of them a derived
+ * total. Turning eight accepted rows red is how a guard gets relaxed instead of
+ * obeyed. What P4-AL-05 actually forbids is a stored COGS or a stored cost
+ * TOTAL, so that, and only that, is what `DERIVED_COST_COLUMN` matches.
+ *
+ * `remaining_*` stays permitted, for the reason the supplier arm documents
+ * below: a credit note's remaining pair is part of the source document, and it
+ * is what P4-AL-14 is built on.
+ */
+export const AP_BALANCE_COLUMN = /(^|_)(outstanding|paid|unpaid|due|owed|payable|receivable|settled|refunded|collected|allocated)($|_)/;
+
+/** A stored COGS or a stored cost TOTAL — never a per-unit cost input on a source document. */
+export const DERIVED_COST_COLUMN = /(^|_)(cogs|cost_of_goods|costs?_(total|totals|sum|sums)|(total|sum)_costs?)($|_)/;
+
+/** The derived-total column vocabulary that BOTH arms carry (P4-AL-06). */
+const DERIVED_TOTAL_COLUMN_PATTERNS: readonly RegExp[] = [AP_BALANCE_COLUMN, DERIVED_COST_COLUMN];
+
+/**
+ * A relation whose NAME is a stored balance, outstanding, payable,
+ * receivable, cache, projection, summary, snapshot or rollup. P3-S4 wrote it
+ * for supplier tables only; P4-S1 gives it to the complement arm too, so §4's
+ * forbidden "materialised aging table", a `customer_balances` and an
+ * `invoice_outstanding_cache` are refused by the same rule that already
+ * refuses `supplier_balances`. No Phase 2/3 relation in either arm matches it.
+ */
+const DERIVED_TOTAL_TABLE = /(^|_)(balances?|outstanding|payables?|receivables?|caches?|projections?|summar(y|ies)|snapshots?|rollups?)($|_)/;
 
 export interface BalanceColumnFinding {
   readonly table: string;
@@ -275,7 +347,12 @@ export const STOCK_CACHE_COLUMNS: readonly string[] = ['on_hand', 'valuation_bas
 /** Never stored anywhere in inventory, the cache included: Phase 3 has no reservation (L:1274). */
 const NEVER_STORED = /(^|_)(reserved|available)($|_)/;
 
-const INVENTORY_FORBIDDEN_COLUMN_PATTERNS: readonly RegExp[] = [...FORBIDDEN_COLUMN_PATTERNS, /(^|_)(on_hand|valuation|reserved|available)($|_)/];
+const INVENTORY_FORBIDDEN_COLUMN_PATTERNS: readonly RegExp[] = [
+  ...FORBIDDEN_COLUMN_PATTERNS,
+  /(^|_)(on_hand|valuation|reserved|available)($|_)/,
+  // P4-S1 (P4-AL-06): the derived-total words, on every relation the prefix did not create.
+  ...DERIVED_TOTAL_COLUMN_PATTERNS,
+];
 
 /** Inventory tables only: an identity, actor, instant, classifier or ORDERING is not a stored quantity. */
 export const INVENTORY_NOT_A_QUANTITY = /_(id|ids|at|by|status|kind|type|code|name|currency|seq)$/;
@@ -311,7 +388,12 @@ export function findForbiddenInventoryRelations(sql: string): string[] {
 /** A table whose NAME is a stored inventory balance, summary, snapshot, rollup or cache — or a stored accounting balance. */
 export function isForbiddenInventoryTable(table: string): boolean {
   const name = table.toLowerCase();
-  return INVENTORY_FORBIDDEN_TABLE.test(name) || isForbiddenBalanceTable(name);
+  // P4-S1 (P4-AL-06, §4): `DERIVED_TOTAL_TABLE` too, so a relation that IS a
+  // stored balance, outstanding, cache, projection, summary, snapshot or
+  // rollup is refused under ANY name, not only under a stock/inventory one.
+  // A declared source document keeps its AL-13 exemption (`SOURCE_DOCUMENT_TABLES`).
+  if (SOURCE_DOCUMENT_TABLES.includes(name)) return false;
+  return INVENTORY_FORBIDDEN_TABLE.test(name) || DERIVED_TOTAL_TABLE.test(name) || isForbiddenBalanceTable(name);
 }
 
 /** Whether `column` on inventory table `table` claims storage authority over a derived stock quantity. */
@@ -408,9 +490,7 @@ export function checkStockCacheShape(sql: string): string[] {
 export const SUPPLIER_TABLE_NAME = /^(suppliers|supplier_[a-z0-9_]+|purchases|purchase_[a-z0-9_]+|payment_methods|payment_method_[a-z0-9_]+)$/;
 
 /** The AP words: a column carrying one claims to be what the supplier is owed or has been paid (L:847-850). */
-const AP_BALANCE_COLUMN = /(^|_)(outstanding|paid|unpaid|due|owed|payable|settled)($|_)/;
-
-const SUPPLIER_FORBIDDEN_COLUMN_PATTERNS: readonly RegExp[] = [...FORBIDDEN_COLUMN_PATTERNS, AP_BALANCE_COLUMN];
+const SUPPLIER_FORBIDDEN_COLUMN_PATTERNS: readonly RegExp[] = [...FORBIDDEN_COLUMN_PATTERNS, ...DERIVED_TOTAL_COLUMN_PATTERNS];
 
 /** The two tables every other supplier or purchase table hangs from: if either is missing, this half is watching nothing. */
 export const SUPPLIER_AUTHORITY_TABLES = ['suppliers', 'purchases'] as const;
@@ -421,7 +501,7 @@ export const SUPPLIER_AUTHORITY_TABLES = ['suppliers', 'purchases'] as const;
  * (L:851, L:1261). `supplier_balances` with an innocent `amount_minor` column
  * is the same second truth as `suppliers.balance`.
  */
-const SUPPLIER_FORBIDDEN_TABLE = /(^|_)(balances?|outstanding|payables?|caches?|projections?|summar(y|ies)|snapshots?|rollups?)($|_)/;
+const SUPPLIER_FORBIDDEN_TABLE = DERIVED_TOTAL_TABLE;
 
 /**
  * Every supplier- or purchase-owned relation the migrations make, sorted: by
