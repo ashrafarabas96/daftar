@@ -1,0 +1,315 @@
+# DAFTAR — Phase 4 Execution Plan / خطة تنفيذ المرحلة الرابعة
+
+**Phase 4 — Sales, POS, Customers, Debts, Receivables & Installments.**
+Companion to `docs/PHASE_4_ARCHITECTURE_LOCK.md`, which holds the decisions. This document holds the order of
+work, the ownership, the gates and the exit criteria. Where the two could disagree, the lock wins and this
+document is corrected.
+
+Produced in **P4-S0**. P4-S0 created no product code, no endpoint, no POS screen and no migration, and `0074`
+does not exist.
+
+---
+
+## 1. Baseline and branch
+
+| item | value |
+|---|---|
+| `main` | `6fc505d33b7a6f7a49fa04ee3bc60bb1ddf3b595` |
+| CI evidence on it | `DAFTAR CI` **36637141476**, SUCCESS, six jobs (workspaces, backend, web-admin, android, hygiene, browser) |
+| migrations | 74, `frozenThrough = 0073_default_warehouse_locale_name.sql`, no `0074` |
+| Phase 3 | merged, closed and verified on `main` |
+| Phase 4 branch | `phase/4-sales-pos-customers-receivables`, created from that exact SHA |
+| Phase 4 PR | **#6**, **draft**, into `main` |
+
+Every Phase 4 change goes through PR #6. There is no direct push to `main` and no work on `main`. `main`
+remains unprotected (TD-08, external), so that discipline is the compensating control and it is not optional.
+
+---
+
+## 2. Working method
+
+**`MAX_ACTIVE_AGENTS = 6`, including the coordinator.** One coordinator and at most five specialists active at
+any moment. The coordinator does not write architecture from an agent's summary: it reads the diffs.
+
+- Parallelism only where ownership is disjoint. Each agent works in its own git worktree; the coordinator alone
+  merges results.
+- **One agent owns migrations for the whole phase**, allocating serially from `0074` (lock P4-AL-83). Every
+  other agent describes the DDL it needs.
+- High-risk areas are serialized, not parallelized: the sale commit primitive, the reversal paths, and anything
+  touching `inventory_apply_stock_movements` or `accounting_post_entry`.
+- A **file-ownership matrix** is agreed before a slice starts (§4). Two agents never hold the same file.
+- The coordinator reviews every diff before it is committed, and runs the slice's own gate plus exact-SHA CI
+  before reporting.
+- Each slice ends with a report in Arabic and a **STOP** at the slice boundary. The next slice starts only on an
+  explicit Tech Lead directive.
+- One background agent may prepare the next slice as analysis only: no branch, no commit, no file outside its
+  report.
+
+---
+
+## 3. Slice sequence
+
+Nine slices. A boundary exists where a new invariant becomes assertable, which is why the gate estate maps
+one-to-one onto it (lock P4-AL-81). An agent may refine a boundary for a real technical reason; merging slices
+for speed is refused.
+
+### P4-S0 — Architecture Lock *(this slice)*
+**Scope.** Analysis, audit, decisions, and correction of the stale canonical status sources.
+**Migrations.** None. **Product code.** None.
+**Outputs.** `docs/PHASE_4_ARCHITECTURE_LOCK.md`, this plan, and the four corrected canonical documents.
+**Exit.** Both documents written, every High/Medium review finding closed, documentation and static checks green,
+CI green on the branch head, verdict reported. **STOP.**
+
+### P4-S1 — Customers, sales documents, numbering, and the guards Phase 4 must build
+**Scope.** `customers`, `customer_contacts`, `invoices`, `invoice_items`, `invoice_sequences`; per-business
+document numbering; the customer and invoice read surface; and the three pieces of protection Phase 4 cannot
+inherit.
+**The three protections, first, before any Phase 4 table exists.**
+1. The `registered_by` pattern widened from `^P3-S[0-9]+$` to `^P[0-9]+-S[0-9]+$` on all four constraints
+   (`0054:54`, `0059:53`, `0059:59`, `0059:69`) — without it the first Phase 4 registration fails.
+2. Guard **G-3 extended** with a sales arm (lock P4-AL-06). Today its own exported discovery functions, run over
+   scratch Phase 4 DDL, flag only `customers.balance_minor`: `invoices.paid_minor`,
+   `invoices.outstanding_minor`, `customers.amount_due_minor`, `installments.outstanding_minor` and
+   `installments.settled_minor` all pass CI. The extension has its own planted-defect red proof.
+3. The **merchant-jargon guard and the browser gate's tax rule extended to the Phase 4 namespaces** (lock
+   P4-AL-52). `isS7WebFile` is scoped to `(stock|purchases|suppliers)`, so a `pos/` or `customers/` file is
+   never examined, and the browser gate's `tax-control` rule — which is the OD-03 boundary check — only fires on
+   the screens the gate walks.
+4. `tests/security/settlement-s6-no-customer-payments.test.ts` **re-expressed as a claim about the Phase 3
+   prefix** (lock P4-AL-88). It asserts against the live catalogue that `payments`, `refunds`, `credit_notes`,
+   `customer_credits` and friends do not exist, and that **no relation matches `(customer|sale|invoice)`**
+   (`:41-65`). It is a permanent Phase 3 suite composed by `gate:phase3:corrective`, so the first Phase 4
+   migration turns an accepted Phase 3 gate red. It is neither deleted nor allowlisted: it is re-expressed
+   structurally against the Phase 3 prefix's own files, which keeps it exactly as strong and stops it being a
+   claim about the future. **This must land before the first Phase 4 migration.**
+**Also.** `tests/security/phase4-forward-evolution.test.ts`; `scripts/phase4-prefix.ts`;
+`flows.ts` exporting `PHASE3_STEPS`/`PHASE4_STEPS` and `gate:phase3:corrective` pinned to the Phase 3 steps
+(lock P4-AL-63); the cashier default-permission backfill once `OD-P4-01` is answered; the `VIEW_REGISTRY`
+entries for the Phase 4 views.
+**Migrations.** `0074` onward, by the single migration owner.
+**Gate.** `gate:phase4:s1` — composes `gate:phase3:corrective` and the permanent core; migration boundary,
+two-tense; forward evolution; the extended guards with their red proofs; composite-FK presence and validity;
+the enumerated cross-tenant suite over every Phase 4 route; the schema lint (G-19); numbering isolation (G-07,
+structural half).
+**Exit.** Goldens G-02 (enumeration), G-03, G-07 (structure), G-19 green with named red proofs; gate green;
+exact-SHA CI green on six jobs; no authoritative balance column anywhere; `OD-P4-01` answered.
+**Blocked by.** `OD-P4-01` (its migration, not its start); `OD-P4-15` should be answered so the slice knows
+which `GOLD` ids it carries.
+
+### P4-S2 — The sale commit primitive
+**Scope.** `sales`, `sale_items`; the `sale.*` operation kinds on the existing `invctl/1` assertion; the stock
+movement path through `inventory_apply_stock_movements` unchanged; the COGS journal entry from the stored
+integer deltas; the revenue/AR/tax entry; the whole of the atomic sale law.
+**Before it writes a movement**, P4-S2 establishes whether any Phase 3 `R-INV-*` check was written assuming
+purchase-only movement sources (risk R-P4-09 in the lock).
+**Gate.** `gate:phase4:s2` — composes s1; one transaction asserted, not assumed; the two source types with both
+bindings and their deferred completeness validators; the last-item race under forced interleaving; idempotency
+by document UUID + `intent_sha256`; failure injection proving no partial state.
+**Exit.** G-01, G-16 (sale key), G-18's sale-side half green; the `R-INV-*` question answered in writing;
+calibration run for P4-C recorded; gate and exact-SHA CI green.
+**Blocked by.** `OD-P4-05` (oversell) before it starts; `OD-P4-13` for its acceptance.
+
+### P4-S3 — POS, web
+**Scope.** The server-side cart, POS search and reads, the till session, the POS screens in ar/en/tr at three
+viewports. The client sends identities, quantities and a discount request, and nothing else is believed.
+**Gate.** `gate:phase4:s3` — composes s2; the trust boundary asserted by sending forged totals and requiring
+refusal; the cart's statement count constant in the line count; the POS browser steps' red proof planted in all
+nine combinations; POS type-ahead paced, never the limiter raised.
+**Exit.** The POS steps green in all nine combinations with the four new invariant kinds each proven able to
+fire; P4-A and P4-B budgets measured; gate and CI green.
+**Blocked by.** `OD-P4-02` (price override) and `OD-P4-09` (till session) before it starts.
+
+### P4-S4 — Payments, allocation, receivables, overpayment → customer credit
+**Scope.** `payments`, `payment_methods`, `payment_allocations`, `customer_credits`,
+`customer_credit_applications`; one journal entry per allocation; the carrying-release chain and its verifier;
+level-uniqueness; the surplus becoming a credit and never revenue.
+**Gate.** `gate:phase4:s4` — composes s3; the release chain verified; level-uniqueness asserted against direct
+SQL; `paid + outstanding = total` after every step; the credit's two halves proportional on partial consumption
+and exactly zero on full.
+**Exit.** G-04, G-14, G-15, G-16 (payment and allocation keys) green; P4-D and P4-F measured; gate and CI green.
+**Blocked by.** `OD-P4-03` (credit limit) is not blocking; `OD-P4-14` for its acceptance evidence.
+
+### P4-S5 — Returns, credit notes, refunds
+**Scope.** `credit_notes`, `credit_note_items`, `refunds`; revenue reversed exactly once; the cap check inside
+the source's `FOR UPDATE`; `refunds` with exactly one non-null source and no column that could name a payment.
+**Gate.** `gate:phase4:s5` — composes s4; the structural absence of a payment column asserted; the cap under
+concurrency; cross-currency caps in the source's own currency.
+**Exit.** G-06, G-08, G-09, G-12 green; P4-G calibrated; gate and CI green.
+**Blocked by.** `OD-P4-13` for its acceptance.
+
+### P4-S6 — Reversals, void, and TD-15
+**Scope.** `payment_reversals`, `allocation_reversals`; the `void_invoice` compound command and the refusal of
+the direct path; and **TD-15's supplier twin closed in the same transaction shape**, with AP preserved exactly.
+**Gate.** `gate:phase4:s6` — composes s5; reversal and refund proven to be two operations by the merged-path
+red proof; a second reversal refused; the multi-currency reversal using the original snapshots; no stale
+allocation after a payment reversal; `provider_reference` idempotency at the database.
+**Exit.** G-05, G-10, G-11 green; TD-15 closed with its `TECHNICAL_DEBT.md` reference corrected; gate and CI
+green.
+**Blocked by.** **`OD-P4-04` blocks this slice entirely.** Nothing in P4-S6 may be written until the mid-chain
+reversal mechanism is chosen, because the choice decides the table shape, not just the code.
+
+### P4-S7 — Debts, statements, installments, and the narrow TD-22 repayment
+**Scope.** `installment_plans`, `installments`; the statement, the debts and aging reads; the schedule as a
+view over an existing receivable with no second ledger; and TD-22 repaid by correcting the design-system
+document to the shipped tokens and removing the unloaded Inter reference.
+**Gate.** `gate:phase4:s7` — composes s6; `Σ instalments + down = total` enforced by the database; every
+status derived from a **supplied** as-of date with no reference to the machine's clock; the statement's keyset
+paging with no `OFFSET`.
+**Exit.** G-13 green; P4-E and P4-H measured; TD-22 closed; gate and CI green.
+
+### P4-S8 — Hardening, reconciliation, concurrency, performance, document corrections
+**Scope.** `R-SAL-01…07` added to the existing reconciliation pass; the declared lock order statically checked
+and the deadlock matrix run in both directions; the eight budgets at both tiers; the golden suite asserted
+**complete**; and the corrections to `docs/DAFTAR_RELEASE_GATES.md`, `docs/DAFTAR_TEST_STRATEGY.md` and
+`docs/DAFTAR_GOLDEN_REGRESSION_SUITE.md` (lock P4-AL-80, `OD-P4-15`).
+**Gate.** `gate:phase4:s8` — composes s7; the full browser matrix, every step, plus the planted-defect red
+proof; Tier-1 budgets alone on their own `PG_DIR` after the functional suites; the budget ratchet; the complete
+idempotency key inventory; `perf:phase2:s8` narrowed to the Phase 2 files.
+**Exit.** G-17, G-18, G-20 green; every reconciliation check green with a planted-discrepancy red proof;
+zero deadlocks over the full pair matrix; every budget met with `planningStatistics` non-null and the RLS cost
+recorded; the three documents corrected.
+
+### P4-S9 — Release closure
+**Scope.** Evidence only. No migration, no product code.
+`gate:phase4:release` from an extracted archive on a fresh cluster; the Phase 4 range secret scan with a
+`PHASE4_BASE` verified against `git merge-base`; `DAFTAR_PHASE_4_RC.zip` with a sibling `.sha256`; a `push` run
+of `DAFTAR CI` at the seal commit's own SHA and a release-evidence run at the same SHA.
+**Exit.** All of the above green at one SHA, and the evidence uploaded. Then **STOP** and wait for the Tech
+Lead's closure directive. A green gate grants no authority to merge.
+
+---
+
+## 4. File-ownership matrix
+
+Agreed per slice before work starts. Two agents never hold the same file. The shapes below are the rule; the
+per-slice matrix instantiates them.
+
+| area | owner | notes |
+|---|---|---|
+| `infrastructure/database/migrations/*` and `MIGRATION_MANIFEST.json` | **the single migration owner**, for the whole phase | others describe the DDL they need; nobody else touches the directory |
+| `scripts/phase4-prefix.ts`, `scripts/phase4-*-gate.ts`, `scripts/phase4-budget-ratchet.ts` | the gate owner | one owner per slice gate; the prefix module has one owner for the phase |
+| `scripts/guards/*` | the guard owner | G-3's sales arm and the jargon guard's namespaces are one change by one agent |
+| `packages/domain-core/src/permissions.ts` | the authority owner | the registry is closed and adding to it is one change |
+| `packages/accounting/*` | the accounting owner | serialized; never edited in parallel with a migration that changes a journal shape |
+| `apps/api/src/**` per bounded context | one agent per context | the composite seams in `infra/database.ts` are the accounting owner's |
+| `apps/web/src/app/[locale]/(pos|customers|invoices|payments|refunds|installments|debts)/**` | one agent per screen group | shared components are the design owner's |
+| `tests/browser/flows.ts`, `config.ts`, `invariants.ts` | the browser owner | asserted against by a Phase 3 gate; a second editor here is how C-9 and C-10 happen again |
+| `tests/helpers/test-app.ts` (`resetData()`) | the harness owner | every new Phase 4 table must appear, derived from the migrations |
+| `tests/golden-regression/phase4/*` | the golden owner per slice | canonical `GOLD-nn` ids only |
+| `tests/performance/phase4-*`, `phase4-dataset.ts` | the performance owner | one owner for the phase, so the dataset stays one dataset |
+| `docs/*` | the coordinator, except the three corrections owned by P4-S8 | the lock and this plan are the coordinator's alone |
+
+---
+
+## 5. Gate estate
+
+`gate:phase4:s1` … `gate:phase4:s8`, then `gate:phase4:release` closing at P4-S9. Each composes its
+predecessor; `gate:phase4:s1` composes `gate:phase3:corrective` and through it the whole accepted chain, plus
+`check:migrations`, `check:guards`, `check:localization`, `check:deployment-authority` and the prefix modules.
+
+Every gate, without exception:
+
+- runs the **runner canary first** and refuses the matrix if the runner cannot report failure;
+- runs structural checks before any suite;
+- carries explicit `SUITES` / `COMMANDS` / `RED_PROOFS` / `BUDGETS` tables in which a `{ pending }` row is a
+  **FAIL**, never a skip; a listed suite that is missing or carries `.skip`/`.only`/`.todo` fails; and a `p4-*`
+  suite on disk that no entry lists fails;
+- supports `--list`, `--root` and `--structural-only`, so it can print its plan and be pointed at a copy for
+  its own red proofs;
+- writes machine-readable evidence on `--evidence=<file>`;
+- fails before running anything if any `RELEASE_GATE_SKIP_*` is set (the release gate).
+
+**CI wiring.** No new job and no renamed job: job names are the required-checks keys and that configuration
+lives in repository settings, outside the tree. Phase 4's work goes into steps of `backend` and `browser`, one
+visible step per Phase 4 gate so a reviewer sees **which** predecessor failed. The only new workflows are the
+dispatched `phase4-s8-evidence.yml` and `phase4-s9-release.yml`, which are not required checks.
+
+**The three Phase 3 couplings, resolved in P4-S1 before the first Phase 4 table or browser step exists.**
+A permanent Phase 3 suite asserts against the live catalogue that no relation matching `(customer|sale|invoice)`
+exists, so the first Phase 4 migration turns an accepted Phase 3 gate red; it is re-expressed as a claim about
+the Phase 3 prefix rather than deleted or allowlisted (lock P4-AL-88).
+**The two Phase 3 couplings, resolved in P4-S1 before the first Phase 4 browser step exists.**
+`gate:phase3:corrective` runs the browser matrix with no `--steps`, so it would run Phase 4's steps and go red
+over a Phase 4 screen; and it asserts **equality** between its matrix and `tests/browser/config.ts`, so adding a
+locale or viewport would turn an accepted Phase 3 gate red. Resolved by exporting per-phase step lists and
+pinning the Phase 3 gate to its own fifteen, and by Phase 4 keeping exactly three locales and three viewports.
+
+---
+
+## 6. Migration plan — planning only
+
+No migration is created in P4-S0 and `0074` does not exist. The plan below is the allocation order; the single
+migration owner writes them.
+
+| slice | migration content (planned) |
+|---|---|
+| S1 | the four `registered_by` pattern widenings; `customers`, `customer_contacts`; `invoices`, `invoice_items`, `invoice_sequences` with their composite candidate keys and FKs; RLS enable + force + the five policies each; the `invoice` source type, its operation kinds, both bindings and its deferred completeness validator |
+| S2 | `sales`, `sale_items`; the `sale.*` operation kinds; the `sale` source type with both bindings and its validator; the sale commit routine and the walk-in consistency trigger |
+| S3 | the till session and server-side cart tables; no accounting object |
+| S4 | `payments`, `payment_methods`, `payment_allocations`, `customer_credits`, `customer_credit_applications`; the level-uniqueness constraints; the carrying-release routine and its verifier; the `payment_allocation` source type |
+| S5 | `credit_notes`, `credit_note_items`, `refunds` with the one-non-null-source `CHECK`; the `credit_note` and `refund` source types |
+| S6 | `payment_reversals`, `allocation_reversals`; the `allocation_reversal` source type; the void-path refusal trigger; the shape `OD-P4-04` decides |
+| S7 | `installment_plans`, `installments` with the sum constraint |
+| S8 | possibly none; any index a measured budget proves necessary, with its plan assertion |
+| S9 | **none** |
+
+`0000–0073` stay immutable byte for byte. `frozenThrough` is a floor and never retreats. No permanent gate
+contains a sentence of the form "nothing after N".
+
+---
+
+## 7. Golden tests, browser coverage and budgets
+
+Twenty goldens **G-01…G-20** in `tests/golden-regression/phase4/*`, carrying the canonical `GOLD-nn` ids, each
+with a named and resolved RED proof, owned by the slice that owns the invariant and asserted complete by
+`gate:phase4:s8`. The full table, with what each proves and how it can fail, is §17.4 of the lock.
+
+Sixteen new browser steps × ar, en, tr × 360, 768, 1280 — 144 step-runs per gate run on top of the existing
+135 — plus four new invariant kinds each with its own planted defect. Locales and viewports unchanged.
+
+Eight budgets plus a reconciliation total, five anchored to an accepted budget and two calibration-locked with a
+product cap, every one carrying a host-independent ratio assertion and narrow plan assertions, measured against
+`D-SALES` at two tiers with the **same** ceilings, as `daftar_app`, with every relation `ANALYZE`d. The table and
+the derivations are §17.6 of the lock.
+
+---
+
+## 8. Exit criteria for the phase
+
+Phase 4 is complete when **all** of the following hold at one commit:
+
+1. `gate:phase4:release` PASS from an extracted archive on a fresh cluster.
+2. A `push` run of `DAFTAR CI` green on **all six** jobs at that exact SHA, plus a release-evidence run at the
+   same SHA. A run on a different SHA is not evidence for this one.
+3. All twenty goldens green, every one with a resolved red proof, and the suite asserted complete.
+4. `R-SAL-01…07` and `R-INV-01…05` green, each with a planted-discrepancy red proof.
+5. Every budget met at both tiers with `planningStatistics` non-null, every sample recorded, the RLS cost
+   recorded per budget, and the ratchet refusing every increase.
+6. Zero deadlocks over the full pair matrix in both orders.
+7. The browser matrix green in all nine combinations over every step, with every plant proven able to fire.
+8. TD-15 closed. TD-22 closed. TD-08 still open and external, with the compensating policy honoured throughout.
+9. No authoritative balance column anywhere, proved by the extended G-3.
+10. Sales tax structurally zero, refused at three layers, OD-03 still open.
+11. No accumulated defects at any slice boundary: no security, accounting or data-integrity bug was moved to
+    technical debt to close a slice.
+
+**And then STOP.** A green gate grants no authority. Merging PR #6 and starting Phase 5 each require an explicit
+Tech Lead directive.
+
+---
+
+## 9. Independent review
+
+An independent reviewer read the Architecture Lock and this plan against the current tree, without the
+coordinator's summary, hunting nineteen named failure classes. Its findings and their resolutions are recorded
+here; the resolutions themselves live in the lock.
+
+*(Filled by the review pass — see the P4-S0 report.)*
+
+---
+
+## 10. What this slice did not do
+
+No product code, no endpoint, no POS screen, no migration. `0074` does not exist. No gate, suite or budget was
+executed. No country's tax law was researched and OD-03 is not closed. P4-S1 does not begin until the Tech Lead
+says so.
