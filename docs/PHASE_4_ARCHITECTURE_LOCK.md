@@ -595,8 +595,9 @@ open.
 **P4-AL-28 — The Phase 4 operation-code namespaces are `sale.*` and `customer.*`. A first segment
 containing an underscore is not representable, so there is no `customer_payment.*`.**
 The registry's key is `op_code TEXT PRIMARY KEY CHECK (op_code ~ '^[a-z]+(\.[a-z_]+)+$')`
-(`0054:53`), and the **same regex is inside the frozen `inventory_assertion_consume` body** at
-`0054:229`. The first segment is `[a-z]+` with no underscore, so `customer_payment.collect` is refused
+(`0054:53`), and the **same regex is inside a frozen routine body** at
+`0054:229` — `inventory_payload_digest`, not `inventory_assertion_consume`, whose pattern is the
+colon-separated assertion preimage (`TL-P4-S1-C10`). The first segment is `[a-z]+` with no underscore, so `customer_payment.collect` is refused
 twice: by the `CHECK` on insert and by the routine at call time. Widening the table's `CHECK` would be an
 ordinary migration; widening the copy inside the routine would mean replacing the body of the single
 inventory authority routine, which is exactly the change P4-AL-27 and P4-AL-29 forbid. So the namespace
@@ -1888,6 +1889,7 @@ redesign of Phase 4 or a widening of a slice.
 | `TL-P4-S1-C5` | `P4-AL-15b` | The decision's own DDL vocabulary opted out of the guard it cites: a bare `quantity NUMERIC(18,2)` produced no finding. The pin is extended to the word forms; the column is **not** renamed to dodge the guard. |
 | `TL-P4-S1-C6` | `P4-AL-16` | `binding_source_id` has two accepted shapes. A relation with a `draft` state takes the nullable `purchases` variant with the status-conditional CHECK, not the `NOT NULL` allocation variant. |
 | `TL-P4-S1-C7` | execution plan, P4-S1 | A **seventh** mandatory pre-migration action: `assertMigrationState()` and `assertS4MigrationState()` assert the complete registry contents with one `toEqual` and are called from 13+ sites across four permanent Phase 3 files, so one Phase 4 registry row turns all of them red. Consequence: the first Phase 4 migration carries no registry row at all. |
+| `TL-P4-S1-C10` | `P4-AL-28` | The decision is sound and its citation is wrong. The second copy of the op-code pattern `^[a-z]+(\.[a-z_]+)+$` at `0054:229` is inside **`inventory_payload_digest`** (`CREATE OR REPLACE FUNCTION` at `0054:214`), not inside `inventory_assertion_consume`, which carries the different colon-separated assertion preimage `^[a-z]+(:[a-z_]+)+$`. Exactly one live routine body carries the op-code pattern, confirmed from `pg_proc`. So the reason the NAMESPACE moved instead of the regex stands — the copy is in a frozen body `P4-AL-27`/`P4-AL-29` forbid replacing — but any change reasoning from the named routine would have changed the wrong one. `0074` asserts both halves of the namespace by performing them, and `tests/guards/phase4-registry-widening-guard.test.ts` §C discovers the carrier from the catalogue rather than trusting either citation. |
 | `TL-P4-S1-C8` | §19 | The first Phase 4 migration adds **no** `MIGRATION_MANIFEST.json` entry. `scripts/check-migration-manifest.ts:51-58` allows a file newer than the frozen set and fails only on a file at or below `frozenThrough` that is missing, so the entry is added at acceptance by whoever moves `frozenThrough`. Freezing a digest early turns `check:migrations` red on the next edit of the same file. |
 
 ### Still unresolved, carried to the slice that needs it

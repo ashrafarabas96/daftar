@@ -221,3 +221,65 @@ describe('§B action 1: the live registries admit a Phase 4 registrant and refus
     }
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// §C P4-AL-28 — the operation-code namespace, which the widening does not change
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('§C P4-AL-28: the Phase 4 op-code namespaces are `sale.*` and `customer.*`', () => {
+  it('0074 asserts both halves, and says why the namespace changed instead of the regex', () => {
+    const sql = readFileSync(join(ROOT, 'infrastructure/database/migrations/0074_phase4_registry_widening.sql'), 'utf8');
+    expect(sql).toContain("'customer.collect_payment'");
+    expect(sql).toContain("'customer_payment.collect'");
+    expect(sql).toContain('P4-AL-28');
+    // The reason, recorded: the same regex is inside the frozen routine body,
+    // so widening it is the change P4-AL-27 and P4-AL-29 forbid.
+    expect(sql).toMatch(/0054:229/);
+  });
+
+  it('a `customer.*` code is ADMITTED and `customer_payment.*` is REFUSED, live', async () => {
+    await inRolledBackTx(async (c) => {
+      await c.query(`INSERT INTO inventory_operation_kinds (op_code, registered_by) VALUES ('customer.collect_payment', 'P4-S1')`);
+    });
+    await inRolledBackTx(async (c) => {
+      // An underscore in the FIRST segment is not representable. The refusal
+      // must come from the op-code pattern, not from anything else, or the
+      // claim is about the wrong constraint.
+      await expect(
+        c.query(`INSERT INTO inventory_operation_kinds (op_code, registered_by) VALUES ('customer_payment.collect', 'P4-S1')`),
+      ).rejects.toMatchObject({ code: '23514', constraint: 'inventory_operation_kinds_op_code_check' });
+    });
+  });
+
+  it('a frozen routine body carries the same regex, which is why the namespace is the thing that moved', async () => {
+    // The second copy of the op-code pattern is the whole reason P4-AL-28
+    // changed the NAMESPACE instead of the regex: widening the table's CHECK
+    // would be an ordinary migration, while widening the copy inside a frozen
+    // routine body means replacing that routine, which P4-AL-27 and P4-AL-29
+    // forbid. If the two copies ever disagreed, an op code could be accepted
+    // on insert and refused at call time.
+    //
+    // The routine is DISCOVERED from `pg_proc`, not named, for two reasons. A
+    // later migration may add a third copy, which this then covers by
+    // existing. And the lock's own citation of which routine holds it is
+    // wrong: P4-AL-28 says the copy is "inside the frozen
+    // `inventory_assertion_consume` body at `0054:229`", but `0054:229` is
+    // inside `inventory_payload_digest` (the `CREATE OR REPLACE FUNCTION` at
+    // `0054:214`), and `inventory_assertion_consume` carries a different
+    // pattern — the colon-separated assertion preimage `^[a-z]+(:[a-z_]+)+$`.
+    // The DECISION is sound and the citation is not, so this test reads the
+    // catalogue rather than the citation.
+    const carriers = await pool.query<{ proname: string }>(`SELECT p.proname FROM pg_proc p WHERE strpos(p.prosrc, $1) > 0 ORDER BY p.proname`, [
+      '^[a-z]+(\\.[a-z_]+)+$',
+    ]);
+    expect(
+      carriers.rows.map((r) => r.proname),
+      'no routine body carries the op-code pattern any more — P4-AL-28 rests on a second copy that no longer exists',
+    ).not.toEqual([]);
+    // And the table's CHECK is the same pattern, so the two agree.
+    const check = await pool.query<{ def: string }>(
+      `SELECT pg_get_constraintdef(c.oid) AS def FROM pg_constraint c WHERE c.conname = 'inventory_operation_kinds_op_code_check'`,
+    );
+    expect(check.rows[0]?.def ?? '', 'the table CHECK and the routine copy have diverged').toContain('^[a-z]+(\\.[a-z_]+)+$');
+  });
+});

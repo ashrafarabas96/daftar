@@ -54,7 +54,17 @@
 --      a subtransaction and rolled back, so the admission proved is the
 --      LIVE constraint's and not this file's opinion of it; and a malformed
 --      registrant ('P4') is still refused by each of the four.
---   4. AFTER: 'P3-C' is still admitted by the one table that holds it —
+--   4. AFTER, also by PERFORMING it (P4-AL-28): the Phase 4 operation-code
+--      namespace. `customer.collect_payment` is accepted and
+--      `customer_payment.collect` is refused by the frozen op-code pattern,
+--      so the reason the Phase 4 namespaces are `sale.*` and `customer.*` is
+--      recorded in the tree rather than rediscovered — the same regex sits
+--      inside a frozen routine body (`inventory_payload_digest`, `0054:229`;
+--      P4-AL-28 cites `inventory_assertion_consume`, which in fact carries the
+--      colon-separated assertion preimage instead — the decision is sound and
+--      the citation is not, so the probe reads the catalogue),
+--      which P4-AL-27 and P4-AL-29 forbid replacing.
+--   5. AFTER: 'P3-C' is still admitted by the one table that holds it —
 --      proved by the ADD CONSTRAINT above having validated that row, and
 --      re-proved directly, together with the row counts of all four
 --      registries being unchanged by this migration.
@@ -274,7 +284,52 @@ BEGIN
     END IF;
   END LOOP;
 
-  -- (c) 'P3-C' is still admitted where it lives, and no registry row moved.
+  -- (c) P4-AL-28: the Phase 4 OP-CODE NAMESPACE, documented by performing it
+  --     rather than left to be rediscovered.
+  --
+  --     `inventory_operation_kinds.op_code` is constrained to
+  --     `^[a-z]+(\.[a-z_]+)+$` (0054:53), and the SAME regex is inside the
+  --     frozen `inventory_payload_digest` body at 0054:229 — which P4-AL-27
+  --     and P4-AL-29 forbid replacing. So the first segment carries no
+  --     underscore, `customer_payment.collect` is not representable, and the
+  --     Phase 4 namespaces are `sale.*` and `customer.*`. Both halves are
+  --     asserted here, and neither leaves a row behind (ruling C8).
+  BEGIN
+    INSERT INTO inventory_operation_kinds (op_code, registered_by) VALUES ('customer.collect_payment', 'P4-S1');
+    RAISE EXCEPTION 'probe_rollback' USING ERRCODE = 'P0001';
+  EXCEPTION
+    WHEN SQLSTATE 'P0001' THEN
+      IF SQLERRM <> 'probe_rollback' THEN RAISE; END IF;
+    WHEN check_violation THEN
+      GET STACKED DIAGNOSTICS v_con = CONSTRAINT_NAME;
+      RAISE EXCEPTION '0074: the Phase 4 namespace code ''customer.collect_payment'' is refused by % — P4-AL-28 names this namespace precisely because it IS representable (%)',
+        coalesce(v_con, '(unnamed)'), SQLERRM USING ERRCODE = 'P0001';
+  END;
+
+  v_admit := 'admitted';
+  BEGIN
+    -- An underscore in the FIRST segment. Refused by the table's CHECK on
+    -- insert and by the frozen routine at call time; the routine's copy is
+    -- the reason the namespace changed instead of the regex.
+    INSERT INTO inventory_operation_kinds (op_code, registered_by) VALUES ('customer_payment.collect', 'P4-S1');
+    RAISE EXCEPTION 'probe_rollback' USING ERRCODE = 'P0001';
+  EXCEPTION
+    WHEN check_violation THEN
+      GET STACKED DIAGNOSTICS v_con = CONSTRAINT_NAME;
+      IF v_con <> 'inventory_operation_kinds_op_code_check' THEN
+        RAISE EXCEPTION '0074: ''customer_payment.collect'' was refused by % rather than by the op-code pattern, so the namespace probe proved nothing (%)',
+          coalesce(v_con, '(unnamed)'), SQLERRM USING ERRCODE = 'P0001';
+      END IF;
+      v_admit := 'refused';
+    WHEN SQLSTATE 'P0001' THEN
+      IF SQLERRM <> 'probe_rollback' THEN RAISE; END IF;
+  END;
+  IF v_admit <> 'refused' THEN
+    RAISE EXCEPTION '0074: ''customer_payment.collect'' was ADMITTED — the frozen op-code pattern at 0054:53 is not what P4-AL-28 was decided against'
+      USING ERRCODE = 'P0001';
+  END IF;
+
+  -- (d) 'P3-C' is still admitted where it lives, and no registry row moved.
   IF NOT EXISTS (SELECT 1 FROM inventory_operation_kinds k WHERE k.registered_by = 'P3-C') THEN
     RAISE EXCEPTION '0074: the corrective registrant ''P3-C'' is gone from inventory_operation_kinds'
       USING ERRCODE = 'P0001';
