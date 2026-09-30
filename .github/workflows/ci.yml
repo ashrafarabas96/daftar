@@ -93,15 +93,23 @@ jobs:
           npm run build -w packages/inventory
       - name: Migration manifest check
         run: npm run check:migrations
-      # The two historical invariants, on every push: the accepted Phase 2
-      # prefix 0000–0052 and the accepted Phase 3 prefix 0053–0069 stay
-      # byte-identical, and later migrations are permitted. Both run in
-      # seconds with no database. Until P3-S9 the Phase 2 one ran only inside
-      # `gate:phase2:release`, which no workflow on the Phase 3 branch runs.
+      # The three historical invariants, on every push: the accepted Phase 2
+      # prefix 0000–0052, the accepted Phase 3 prefix 0053–0073 and the Phase 4
+      # floor stay byte-identical, and later migrations are permitted. All three
+      # run in seconds with no database. Until P3-S9 the Phase 2 one ran only
+      # inside `gate:phase2:release`, which no workflow on the Phase 3 branch runs.
       - name: Phase 2 migration prefix
         run: npx tsx scripts/phase2-prefix.ts
       - name: Phase 3 migration prefix
         run: npx tsx scripts/phase3-prefix.ts
+      # Phase 4 (P4-AL-60): the inherited history 0000–0073 is intact and
+      # `frozenThrough` is a FLOOR at it. It asserts nothing about a file after
+      # 0073, so it is already true today, with no `0074` in the tree, and stays
+      # true when `0074` lands. Each Phase 4 acceptance commit appends that
+      # slice's accepted digests to the module, and the same checks then protect
+      # them. `[[daftar-a-closure-rule-is-not-an-invariant]]`.
+      - name: Phase 4 migration prefix
+        run: npm run phase4-prefix
       - name: Phase 1 machine gate
         run: npm run gate:phase1
       - name: Static guards
@@ -304,6 +312,15 @@ jobs:
             release/browser-red-proof
           if-no-files-found: ignore
           retention-days: 30
+      # The P4-S1 slice gate (`gate:phase4:s1`) is NOT run here yet, and the step
+      # is added in the commit that completes the slice. The gate exists, is
+      # composed by `npm run gate:phase4:s1`, and is run locally at every step of
+      # P4-S1; while the slice is open it reports a FAIL for every stream that has
+      # not landed, which is correct for the gate and wrong for this workflow: a
+      # job that is red by design cannot show a real regression appearing. The
+      # Phase 3 corrective gate was wired while still red and this is the lesson
+      # taken from it, not a departure from it — the gate's verdict is read, it is
+      # simply read where it can still say something new.
       - name: Tampered-migration hard-fail proof
         run: |
           set -e

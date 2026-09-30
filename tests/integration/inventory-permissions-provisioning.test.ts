@@ -113,14 +113,50 @@ const isPhase3 = (p: string): boolean => PHASE3.includes(p);
 const sorted = (xs: readonly string[]): string[] => [...xs].sort();
 
 /**
- * The registry a pre-Phase-3 deployment passed to the frozen writer. Derived
- * from TODAY's registry by removing exactly the eleven keys, and asserted
- * below to equal the pre-P3 literal, so the reconstruction is itself checked.
+ * P4-AL-36's twelve Phase 4 keys, copied from the lock. P4-S1 needs them here
+ * for TWO reasons, and neither loosens anything this suite asserted.
+ *
+ *   1. `PRE_P3_REGISTRY` below reconstructs the registry a PRE-PHASE-3
+ *      deployment handed the frozen writer, by removing the eleven Phase 3 keys
+ *      from today's registry. With Phase 4 keys in the registry that
+ *      reconstruction would hand the frozen writer a "past" that contains keys
+ *      from the FUTURE, and the whole point of this suite — building the real
+ *      past in a throwaway database — would be destroyed. Removing the Phase 4
+ *      keys too is what keeps the reconstruction honest, and the literal
+ *      equalities at the end of the block still check it.
+ *   2. The cashier equality below was `toEqual(['catalog.view'])` and is now
+ *      phase-scoped, the way Phase 3 scoped its own.
  */
+const PHASE4: readonly string[] = [
+  'sales.view',
+  'sales.create',
+  'sales.void',
+  'sales.return',
+  'sales.discount',
+  'customers.view',
+  'customers.manage',
+  'payments.collect',
+  'payments.reverse',
+  'refunds.approve',
+  'receivables.view',
+  'installments.manage',
+];
+const isPhase4 = (p: string): boolean => PHASE4.includes(p);
+/** The Phase 4 DEFAULTS, by built-in role (OD-P4-01 OPTION A), copied from the ruling. */
+const MANAGER_PHASE4 = ['sales.view', 'sales.create', 'customers.view', 'customers.manage', 'payments.collect', 'receivables.view'];
+const CASHIER_PHASE4 = ['sales.view', 'sales.create', 'customers.view', 'payments.collect'];
+
+/**
+ * The registry a pre-Phase-3 deployment passed to the frozen writer. Derived
+ * from TODAY's registry by removing exactly the eleven Phase 3 keys and the
+ * twelve Phase 4 keys, and asserted below to equal the pre-P3 literal, so the
+ * reconstruction is itself checked.
+ */
+const notYetInThePast = (p: string): boolean => !isPhase3(p) && !isPhase4(p);
 const PRE_P3_REGISTRY: Record<string, readonly string[]> = {
-  owner: PERMISSIONS.filter((p) => !isPhase3(p)),
-  manager: BUILTIN_ROLE_PERMISSIONS.manager.filter((p) => !isPhase3(p)),
-  cashier: BUILTIN_ROLE_PERMISSIONS.cashier.filter((p) => !isPhase3(p)),
+  owner: PERMISSIONS.filter(notYetInThePast),
+  manager: BUILTIN_ROLE_PERMISSIONS.manager.filter(notYetInThePast),
+  cashier: BUILTIN_ROLE_PERMISSIONS.cashier.filter(notYetInThePast),
 };
 
 describe('P3-AL-53 — the registry evolved in the same shape the lock fixes', () => {
@@ -138,10 +174,41 @@ describe('P3-AL-53 — the registry evolved in the same shape the lock fixes', (
 
   it('owner is the whole registry; manager is the accepted Phase 1 list, unaltered and in order, with the three views APPENDED; cashier is untouched', () => {
     expect(BUILTIN_ROLE_PERMISSIONS.owner).toBe(PERMISSIONS);
-    expect([...BUILTIN_ROLE_PERMISSIONS.manager]).toEqual([...MANAGER_PHASE1, ...VIEWS]);
-    expect([...BUILTIN_ROLE_PERMISSIONS.cashier]).toEqual(['catalog.view']);
+    // P4-S1 (plan action 6): these three equalities were absolute and broke on
+    // the first Phase 4 default. They are re-expressed per phase, not loosened:
+    // the FULL array is still asserted by exact equality, with the Phase 4
+    // defaults written out from the `OD-P4-01` ruling. A key of no phase, a
+    // reordering, a trim or a sensitive Phase 4 default is still red here.
+    expect([...BUILTIN_ROLE_PERMISSIONS.manager]).toEqual([...MANAGER_PHASE1, ...VIEWS, ...MANAGER_PHASE4]);
+    expect([...BUILTIN_ROLE_PERMISSIONS.cashier]).toEqual(['catalog.view', ...CASHIER_PHASE4]);
+    // And the phase-scoped halves, so the failure message names the phase.
+    expect(BUILTIN_ROLE_PERMISSIONS.manager.filter(notYetInThePast)).toEqual(MANAGER_PHASE1);
+    expect(BUILTIN_ROLE_PERMISSIONS.cashier.filter(notYetInThePast)).toEqual(['catalog.view']);
+    expect(BUILTIN_ROLE_PERMISSIONS.manager.filter(isPhase4)).toEqual(MANAGER_PHASE4);
+    expect(BUILTIN_ROLE_PERMISSIONS.cashier.filter(isPhase4)).toEqual(CASHIER_PHASE4);
     expect(PRE_P3_REGISTRY['manager']).toEqual(MANAGER_PHASE1);
     expect(PRE_P3_REGISTRY['cashier']).toEqual(['catalog.view']);
+  });
+
+  it('no Phase 4 default is sensitive, and the reconstructed pre-Phase-3 past contains no Phase 4 key', () => {
+    // The OD-P4-01 ruling, restated against THIS suite's own writer path: the
+    // frozen `provision_create_business` is fed from `BUILTIN_ROLE_PERMISSIONS`,
+    // so a sensitive Phase 4 default would reach every NEW business through it.
+    for (const key of [...MANAGER_PHASE4, ...CASHIER_PHASE4]) expect(isSensitivePermission(key as Permission), key).toBe(false);
+    for (const key of ['sales.discount', 'sales.void', 'refunds.approve', 'payments.reverse', 'installments.manage']) {
+      expect(isSensitivePermission(key as Permission), key).toBe(true);
+      expect(BUILTIN_ROLE_PERMISSIONS.manager, `manager / ${key}`).not.toContain(key);
+      expect(BUILTIN_ROLE_PERMISSIONS.cashier, `cashier / ${key}`).not.toContain(key);
+    }
+    // The reconstructed past is a PRE-Phase-3 past: no Phase 3 key and no
+    // Phase 4 key may leak into the registry handed to the frozen writer.
+    for (const role of ['owner', 'manager', 'cashier']) {
+      expect(
+        PRE_P3_REGISTRY[role]?.filter((p) => isPhase3(p) || isPhase4(p)),
+        role,
+      ).toEqual([]);
+    }
+    expect(sorted(PERMISSIONS.filter(isPhase4))).toEqual(sorted(PHASE4));
   });
 });
 

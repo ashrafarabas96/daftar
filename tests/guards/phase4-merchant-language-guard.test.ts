@@ -19,7 +19,6 @@
  * The green half of every proof is that no Phase 3 verdict moves, asserted here
  * against the real catalogs and the real web tree rather than asserted in prose.
  */
-import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -43,6 +42,7 @@ import {
   type ElementView,
   type FieldDescriptor,
 } from '../../tests/browser/invariants';
+import { deliveredFiles } from '../helpers/delivered-files';
 
 const ROOT = join(__dirname, '../..');
 const catalog = (locale: CatalogLocale): Record<string, string> =>
@@ -51,8 +51,10 @@ const catalogs = (): Record<CatalogLocale, Record<string, string>> => ({ ar: cat
 
 const webFiles = (): Record<string, string> => {
   const out: Record<string, string> = {};
-  for (const f of execFileSync('git', ['ls-files', 'apps/web/src'], { cwd: ROOT, encoding: 'utf8' }).trim().split('\n')) {
-    if (/\.tsx?$/.test(f)) out[f] = readFileSync(join(ROOT, f), 'utf8');
+  // The tree's own inventory, never a bare `git` call: the release gate runs
+  // from an extracted archive with no `.git` (A-11, archive-portability).
+  for (const f of deliveredFiles(ROOT)) {
+    if (f.startsWith('apps/web/src/') && /\.tsx?$/.test(f)) out[f] = readFileSync(join(ROOT, f), 'utf8');
   }
   return out;
 };
