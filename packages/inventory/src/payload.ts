@@ -98,13 +98,38 @@ export type InventoryS6OperationCode =
  */
 export type InventoryCorrectiveOperationCode = 'purchase.write_off_residue';
 
+/**
+ * The four operation kinds P4-S1 registers (lock P4-AL-39, gap G-5).
+ *
+ * A customer write needs a signed server decision like every other Phase 4
+ * write: `P4-AL-38` gives `daftar_app` no DML on any Phase 4 table, and
+ * `P4-AL-39` requires every Phase 4 definer routine to verify one. A customer
+ * posts nothing to the ledger, so the assertion it verifies is the `invctl/1`
+ * inventory assertion rather than the accounting one — by elimination, and
+ * following the P3-S4 SUPPLIER precedent exactly: a customer is the mirror of a
+ * supplier, business-wide master data shared by every branch.
+ *
+ * `customer.<verb>`, singular first segment, because the registry grammar
+ * `^[a-z]+(\.[a-z_]+)+$` (`0054:53`, duplicated at `0054:229`) admits no
+ * underscore in the first segment — the same constraint that made P3-S6 write
+ * `payment.<verb>_method`. The PERMISSION keys are plural (`customers.manage`,
+ * P4-AL-36); an operation code and a permission key are different namespaces
+ * with different grammars, and P3-S4 already pairs `supplier.create` with
+ * `suppliers.manage`.
+ *
+ * Reactivation is its own kind rather than a direction flag, as P3-S4 ruled for
+ * the supplier (TL-3).
+ */
+export type InventoryP4S1OperationCode = 'customer.create' | 'customer.update' | 'customer.archive' | 'customer.reactivate';
+
 export type InventoryOperationCode =
   | InventoryS1OperationCode
   | InventoryS3OperationCode
   | InventoryS4OperationCode
   | InventoryS5OperationCode
   | InventoryS6OperationCode
-  | InventoryCorrectiveOperationCode;
+  | InventoryCorrectiveOperationCode
+  | InventoryP4S1OperationCode;
 
 export const INVENTORY_S1_OPERATION_CODES: readonly InventoryS1OperationCode[] = [
   'inventory.configure_product',
@@ -146,6 +171,13 @@ export const INVENTORY_S6_OPERATION_CODES: readonly InventoryS6OperationCode[] =
 
 export const INVENTORY_CORRECTIVE_OPERATION_CODES: readonly InventoryCorrectiveOperationCode[] = ['purchase.write_off_residue'];
 
+export const INVENTORY_P4_S1_OPERATION_CODES: readonly InventoryP4S1OperationCode[] = [
+  'customer.create',
+  'customer.update',
+  'customer.archive',
+  'customer.reactivate',
+];
+
 export const INVENTORY_OPERATION_CODES: readonly InventoryOperationCode[] = [
   ...INVENTORY_S1_OPERATION_CODES,
   ...INVENTORY_S3_OPERATION_CODES,
@@ -153,6 +185,7 @@ export const INVENTORY_OPERATION_CODES: readonly InventoryOperationCode[] = [
   ...INVENTORY_S5_OPERATION_CODES,
   ...INVENTORY_S6_OPERATION_CODES,
   ...INVENTORY_CORRECTIVE_OPERATION_CODES,
+  ...INVENTORY_P4_S1_OPERATION_CODES,
 ];
 
 /** The literal first line of every stream. */
@@ -267,6 +300,38 @@ const SUPPLIER_TEXT: readonly InventoryPayloadFieldSpec[] = [
   ...textWordSpecs('phone', true),
   ...textWordSpecs('email', true),
   ...textWordSpecs('tax_identifier', true),
+  ...textWordSpecs('notes', true),
+];
+
+/**
+ * The customer word groups (P4-S1, gap G-5): the SUPPLIER group of
+ * `PHASE_3_S4_CONTRACT` A-09, built from the same `textWordSpecs` binding with
+ * the same required-name / nullable-rest shape, because a customer is the
+ * mirror of a supplier. The name is required; the rest may be NULL.
+ *
+ * It mirrors FOUR of the supplier's five groups and not the fifth. The
+ * supplier's `tax_identifier` is deliberately absent, and its absence is a
+ * ruling rather than an omission: P4-AL-44 records that the registered /
+ * unregistered / exempt distinction "has no representation in the data model
+ * yet", P4-AL-45 forbids inventing one while OD-03 is open, and the accepted
+ * P4-S1 read contract states it outright — "no tax identifier and no
+ * registration flag" (`packages/shared-contracts/src/customers.ts:25-28`), so
+ * `CustomerFieldsDto` carries `name`, `phone`, `email` and `notes` and nothing
+ * else. A signed field the routine has no argument for could never be rebuilt
+ * in SQL anyway, so mirroring the fifth group would have been a stream the
+ * database cannot reproduce as well as a legal policy this slice may not
+ * invent.
+ *
+ * Also deliberately NOT here, each for the same kind of reason:
+ *   - no credit limit — `OD-P4-03` is RULED OPTION A, no limit in Phase 4;
+ *   - no balance, paid total, outstanding total or aging field — `P4-AL-06`
+ *     forbids any stored authoritative one on any Phase 4 relation, and a
+ *     signed payload field is the strongest possible form of storing one.
+ */
+const CUSTOMER_TEXT: readonly InventoryPayloadFieldSpec[] = [
+  ...textWordSpecs('name', false),
+  ...textWordSpecs('phone', true),
+  ...textWordSpecs('email', true),
   ...textWordSpecs('notes', true),
 ];
 
@@ -535,6 +600,23 @@ export const INVENTORY_PAYLOAD_SCHEMAS: Readonly<Record<InventoryOperationCode, 
     spec('released_before', 'integer'),
     spec('residue_base', 'integer'),
   ]),
+  // P4-S1 (lock P4-AL-39, gap G-5). A customer is business-wide master data and
+  // follows the P3-S4 supplier payload: the id, the optimistic revision on
+  // every edit, then the free-text word groups (`CUSTOMER_TEXT` — the supplier
+  // groups less the tax identifier P4-AL-44/45 forbid). Every field is client
+  // intent, so these kinds get NO `INVENTORY_OPERATION_INTENT_FIELDS` entry and
+  // their intent digest is the digest of the whole payload — the S4 supplier
+  // rule (A-10(b)).
+  //
+  // `customer.archive` and `customer.reactivate` have the SAME field list as
+  // each other and as `supplier.archive` / `supplier.reactivate` — one uuid and
+  // one non-nullable integer. Nothing about their shape tells them apart; the
+  // op_code line of the signed stream does, which is why reactivation is its
+  // own kind and not a direction flag (the S4 TL-3 ruling).
+  'customer.create': Object.freeze([spec('customer_id', 'uuid'), ...CUSTOMER_TEXT]),
+  'customer.update': Object.freeze([spec('customer_id', 'uuid'), spec('expected_revision', 'integer'), ...CUSTOMER_TEXT]),
+  'customer.archive': Object.freeze([spec('customer_id', 'uuid'), spec('expected_revision', 'integer')]),
+  'customer.reactivate': Object.freeze([spec('customer_id', 'uuid'), spec('expected_revision', 'integer')]),
 };
 
 /**

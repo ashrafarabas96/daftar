@@ -21,7 +21,18 @@ import type { BusinessTransactionId } from './business-transaction';
  * One row per registered kind and no default: a kind registered in
  * `@daftar/inventory` without a row here does not compile.
  */
-const OPERATION_AUTHORITY: Readonly<Record<InventoryOperationCode, { readonly permission: Permission; readonly scope: 'warehouses' | 'business_wide' }>> = {
+/**
+ * A permission that may authorize MINTING. Every `*.view` key is excluded by
+ * construction: a read mints nothing, so no read permission may appear in
+ * `OPERATION_AUTHORITY` — naming `customers.view`, `inventory.view` or any other
+ * read key in a row below does not compile. This is the type-level form of the
+ * P4-S1 rule that a till holding `customers.view` cannot mint a customer write.
+ */
+type MintingPermission = Exclude<Permission, `${string}.view`>;
+
+const OPERATION_AUTHORITY: Readonly<
+  Record<InventoryOperationCode, { readonly permission: MintingPermission; readonly scope: 'warehouses' | 'business_wide' }>
+> = {
   'inventory.configure_product': { permission: 'inventory.adjust', scope: 'warehouses' },
   'structure.associate_warehouse_branch': { permission: 'warehouse.manage', scope: 'business_wide' },
   'structure.dissociate_warehouse_branch': { permission: 'warehouse.manage', scope: 'business_wide' },
@@ -72,6 +83,24 @@ const OPERATION_AUTHORITY: Readonly<Record<InventoryOperationCode, { readonly pe
   // residue settles supplier AP, so it is the settlement permission, and
   // business-wide like every settlement (S6 TL-5).
   'purchase.write_off_residue': { permission: 'suppliers.pay', scope: 'business_wide' },
+  // P4-S1 (lock P4-AL-35, P4-AL-39; gap G-5): a customer is business-wide
+  // master data shared by every branch — the exact mirror of the P3-S4
+  // supplier, so its commands are permission-only under `scope: 'warehouses'`,
+  // which passes the scope half trivially because they name no warehouse
+  // (the `supplier.*` rows at :44-47 and the `payment.*_method` rows at :61-64
+  // are the two precedents, and both read this way for the same reason).
+  //
+  // `customers.manage` is ORDINARY, not sensitive (P4-AL-37: master data is not
+  // a value movement), and it is a MANAGER default but NOT a cashier one
+  // (P4-AL-35, `OD-P4-01` OPTION A) — a till may look a customer up with the
+  // read key and may not edit the master record. That read key is deliberately
+  // absent from this table: it grants no write, and a read mints no assertion.
+  // The `Permission` type above is narrowed so that absence is a compile error
+  // rather than a convention.
+  'customer.create': { permission: 'customers.manage', scope: 'warehouses' },
+  'customer.update': { permission: 'customers.manage', scope: 'warehouses' },
+  'customer.archive': { permission: 'customers.manage', scope: 'warehouses' },
+  'customer.reactivate': { permission: 'customers.manage', scope: 'warehouses' },
 };
 
 /**

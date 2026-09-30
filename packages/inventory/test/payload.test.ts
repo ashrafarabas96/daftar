@@ -7,9 +7,14 @@ import {
   configureProductPayload,
   dissociateWarehouseBranchPayload,
   INVENTORY_OPERATION_CODES,
+  INVENTORY_OPERATION_INTENT_FIELDS,
+  INVENTORY_P4_S1_OPERATION_CODES,
   INVENTORY_PAYLOAD_SCHEMAS,
+  INVENTORY_SERVER_DERIVED_FIELDS,
+  inventoryIntentSchema,
   inventoryPayloadSha256,
   isInventoryOperationCode,
+  OPERATION_CODE_RE,
   type InventoryOperationCode,
   type InventoryPayloadField,
 } from '../src/payload';
@@ -225,8 +230,16 @@ describe('invpl/1 — refusals of non-canonical input (never normalized)', () =>
   // P3-S6 kinds; the S1, S3, S4 and S5 rows stay verbatim.
   // Phase 3 corrective (0072, TD-16) appends the one corrective kind,
   // `purchase.write_off_residue`; every slice row stays verbatim.
-  it('registers exactly the three P3-S1 operation kinds, the seven P3-S3 kinds, the seven P3-S4 kinds, the two P3-S5 kinds, the seven P3-S6 kinds and the one corrective kind', () => {
+  // P4-S1 (gap G-5) appends the four customer kinds; every Phase 3 row stays
+  // verbatim. The list is ABSOLUTE on purpose: a fifth kind, a renamed kind or a
+  // kind quietly dropped turns this red, and the registry is the thing a signed
+  // authority is scoped by.
+  it('registers exactly the three P3-S1 operation kinds, the seven P3-S3 kinds, the seven P3-S4 kinds, the two P3-S5 kinds, the seven P3-S6 kinds, the one corrective kind and the four P4-S1 customer kinds', () => {
     expect([...INVENTORY_OPERATION_CODES].sort()).toEqual([
+      'customer.archive', // P4-S1 (gap G-5)
+      'customer.create', // P4-S1 (gap G-5)
+      'customer.reactivate', // P4-S1 (gap G-5)
+      'customer.update', // P4-S1 (gap G-5)
       'inventory.adjust',
       'inventory.configure_product',
       'inventory.damage',
@@ -325,5 +338,103 @@ describe('invpl/1 — typed builders follow the lock field order', () => {
       configureProductPayload({ tenantId: T, businessId: B, productId: P.toUpperCase(), trackInventory: true, unitCode: 'kg', unitDecimals: 3 }),
     );
     expectRefused(() => configureProductPayload({ tenantId: T, businessId: B, productId: P, trackInventory: true, unitCode: 'kg', unitDecimals: 2.5 }));
+  });
+});
+
+// ── P4-S1 (gap G-5) — the customer schemas and the policy they may not carry ──
+describe('invpl/1 — the four P4-S1 customer kinds (gap G-5)', () => {
+  const CUSTOMER_KINDS = ['customer.create', 'customer.update', 'customer.archive', 'customer.reactivate'] as const;
+  const words = (prefix: string, nullable: boolean): [string, string, boolean][] =>
+    Array.from({ length: 8 }, (_, i) => [`${prefix}_w${i + 1}`, 'integer', nullable]);
+  const shape = (op: InventoryOperationCode): [string, string, boolean][] => INVENTORY_PAYLOAD_SCHEMAS[op].map((f) => [f.name, f.type, f.nullable]);
+
+  it('the code list is exactly the four kinds, and every one satisfies the frozen registry grammar', () => {
+    expect([...INVENTORY_P4_S1_OPERATION_CODES]).toEqual(['customer.create', 'customer.update', 'customer.archive', 'customer.reactivate']);
+    // `0054:53`, duplicated inside the frozen routine body at `0054:229`. The
+    // same four codes are proved against the REAL constraint in PostgreSQL;
+    // this is the JS half, so a rename cannot slip past the package alone.
+    for (const op of INVENTORY_P4_S1_OPERATION_CODES) {
+      expect(OPERATION_CODE_RE.test(op)).toBe(true);
+      expect(isInventoryOperationCode(op)).toBe(true);
+      // Singular first segment: the grammar admits no underscore before the dot.
+      expect(OPERATION_CODE_RE.test(op.replace('customer.', 'customer_master.'))).toBe(false);
+    }
+  });
+
+  it('customer.create is the id plus four word groups; the three edit kinds add expected_revision', () => {
+    expect(shape('customer.create')).toEqual([
+      ['customer_id', 'uuid', false],
+      ...words('name', false),
+      ...words('phone', true),
+      ...words('email', true),
+      ...words('notes', true),
+    ]);
+    expect(shape('customer.update')).toEqual([
+      ['customer_id', 'uuid', false],
+      ['expected_revision', 'integer', false],
+      ...words('name', false),
+      ...words('phone', true),
+      ...words('email', true),
+      ...words('notes', true),
+    ]);
+    for (const op of ['customer.archive', 'customer.reactivate'] as const) {
+      expect(shape(op)).toEqual([
+        ['customer_id', 'uuid', false],
+        ['expected_revision', 'integer', false],
+      ]);
+      expect(INVENTORY_PAYLOAD_SCHEMAS[op].repeat).toBeUndefined();
+      expect(INVENTORY_PAYLOAD_SCHEMAS[op].trailer).toBeUndefined();
+    }
+    for (const op of CUSTOMER_KINDS) {
+      expect(INVENTORY_PAYLOAD_SCHEMAS[op].repeat).toBeUndefined();
+      expect(INVENTORY_PAYLOAD_SCHEMAS[op].trailer).toBeUndefined();
+    }
+  });
+
+  // The CUSTOMER group is the SUPPLIER group's binding and nullability, less
+  // the tax identifier: P4-AL-44 records that the registered / unregistered /
+  // exempt distinction has no representation in the data model yet, P4-AL-45
+  // forbids inventing one while OD-03 is open, and the accepted P4-S1 read
+  // contract states "no tax identifier and no registration flag".
+  it('the customer text group is the supplier group less the tax identifier, binding for binding', () => {
+    const supplierText = shape('supplier.create').slice(1);
+    const customerText = shape('customer.create').slice(1);
+    expect(supplierText).toEqual([
+      ...words('name', false),
+      ...words('phone', true),
+      ...words('email', true),
+      ...words('tax_identifier', true),
+      ...words('notes', true),
+    ]);
+    expect(customerText).toEqual(supplierText.filter(([name]) => !name.startsWith('tax_identifier_')));
+    // The same required-name / nullable-rest shape, group for group.
+    expect(customerText.map(([, type]) => type)).toEqual(Array.from({ length: 32 }, () => 'integer'));
+    expect(customerText.filter(([, , nullable]) => !nullable)).toEqual(words('name', false));
+  });
+
+  // "No commercial or legal policy invented": no credit limit, no balance, no
+  // paid / outstanding / aging figure, no tax rate or tax amount. A signed
+  // field is the strongest possible form of storing one, so the ban is
+  // asserted over the FIELD NAMES of every customer schema, not documented.
+  it('no customer field names money, a limit, a total or a tax', () => {
+    const banned = /minor|amount|total|limit|tax_rate|tax_amount/;
+    for (const op of CUSTOMER_KINDS) {
+      for (const f of INVENTORY_PAYLOAD_SCHEMAS[op]) expect(f.name).not.toMatch(banned);
+      // and nothing shaped like a stored position, by name, either.
+      for (const f of INVENTORY_PAYLOAD_SCHEMAS[op]) expect(f.name).not.toMatch(/balance|paid|outstanding|aging|credit|tax/);
+    }
+  });
+
+  // Every customer field is client intent, so intent = payload: the accepted
+  // P3-S4 supplier rule (A-10(b)). An entry here would mean the server derives
+  // one of these fields, and none of them is derived.
+  it('has no INVENTORY_OPERATION_INTENT_FIELDS entry, and no field is server-derived', () => {
+    for (const op of CUSTOMER_KINDS) {
+      expect(INVENTORY_OPERATION_INTENT_FIELDS[op]).toBeUndefined();
+      expect(Object.keys(INVENTORY_OPERATION_INTENT_FIELDS)).not.toContain(op);
+      for (const f of INVENTORY_PAYLOAD_SCHEMAS[op]) expect(INVENTORY_SERVER_DERIVED_FIELDS).not.toContain(f.name);
+      // So the intent schema is the payload schema, field for field.
+      expect(inventoryIntentSchema(op).map((f) => f.name)).toEqual(INVENTORY_PAYLOAD_SCHEMAS[op].map((f) => f.name));
+    }
   });
 });
