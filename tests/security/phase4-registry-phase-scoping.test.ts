@@ -54,6 +54,42 @@ async function inRolledBackTx(fn: (c: { query: Pool['query'] }) => Promise<void>
   }
 }
 
+/**
+ * Drop, inside the caller's transaction, every foreign key that points AT
+ * `parent`, so a plant that removes a registry row is not stopped by machinery
+ * that has nothing to do with what the plant proves.
+ *
+ * Why the constraints and not the referencing rows. These registries are
+ * referenced by `inventory_assertion_uses`, `inventory_operation_movement_kinds`,
+ * `stock_source_bindings` and `stock_movements`, and the suites that ran earlier
+ * against this database have filled them. Deleting the referencing rows first
+ * therefore means deleting a large part of the stock ledger row by row: correct,
+ * but it took over two minutes and timed out. Dropping the constraint is
+ * instant, and in PostgreSQL DDL is transactional, so the `ROLLBACK` that every
+ * one of these proofs ends with puts the constraint back exactly as it was —
+ * asserted below by the final "the database is untouched afterwards" test,
+ * which re-runs both helpers against the real catalogue.
+ *
+ * It does not weaken the proof. What each proof claims is that the HELPER
+ * notices a registry row that is missing or does not belong; whether the
+ * database would also have refused the deletion on its own is a different
+ * property, proved elsewhere.
+ *
+ * The constraints are DISCOVERED from `pg_constraint`, never listed here: a
+ * later phase will add references, and a hand-written list would make these
+ * proofs quietly stop working on the day one appears.
+ */
+async function dropReferencesTo(c: { query: Pool['query'] }, parent: string): Promise<number> {
+  const deps = await c.query<{ child: string; conname: string }>(
+    `SELECT c.conrelid::regclass::text AS child, c.conname::text AS conname
+       FROM pg_constraint c
+      WHERE c.contype = 'f' AND c.confrelid = $1::regclass`,
+    [parent],
+  );
+  for (const d of deps.rows) await c.query(`ALTER TABLE ${d.child} DROP CONSTRAINT ${d.conname}`);
+  return deps.rows.length;
+}
+
 describe('P4-S1 the phase-scoped registry assertions are no weaker (plan action 7)', () => {
   it('both helpers are green on the untouched database, so the red proofs below mean something', async () => {
     await assertMigrationState();
@@ -78,8 +114,15 @@ describe('P4-S1 the phase-scoped registry assertions are no weaker (plan action 
 
   it('RED PROOF 1: a MISSING Phase 3 operation kind is still caught', async () => {
     await inRolledBackTx(async (c) => {
+      // Earlier suites in this database mint assertions against this op code, so
+      // `inventory_assertion_uses` references it. The references are dropped
+      // inside this transaction first, or the plant fails on a foreign key
+      // instead of proving anything about the helper.
+      expect(await dropReferencesTo(c, 'inventory_operation_kinds'), 'the op-kind registry is referenced at all').toBeGreaterThan(0);
       await c.query(`DELETE FROM inventory_operation_movement_kinds WHERE op_code = 'inventory.transfer'`);
       await c.query(`DELETE FROM inventory_operation_kinds WHERE op_code = 'inventory.transfer'`);
+      const left = await c.query<{ n: number }>(`SELECT count(*)::int AS n FROM inventory_operation_kinds WHERE op_code = 'inventory.transfer'`);
+      expect(left.rows[0]?.n, 'the plant actually removed the row').toBe(0);
       await expect(assertMigrationState(c)).rejects.toThrow();
       await expect(assertS4MigrationState(c)).rejects.toThrow();
     });
@@ -87,8 +130,11 @@ describe('P4-S1 the phase-scoped registry assertions are no weaker (plan action 
 
   it('RED PROOF 2: a MISSING Phase 3 stock source type is still caught', async () => {
     await inRolledBackTx(async (c) => {
+      expect(await dropReferencesTo(c, 'stock_source_types'), 'the source-type registry is referenced at all').toBeGreaterThan(0);
       await c.query(`DELETE FROM inventory_operation_movement_kinds WHERE registered_by = 'P3-S5'`);
       await c.query(`DELETE FROM stock_source_types WHERE registered_by = 'P3-S5'`);
+      const left = await c.query<{ n: number }>(`SELECT count(*)::int AS n FROM stock_source_types WHERE registered_by = 'P3-S5'`);
+      expect(left.rows[0]?.n, 'the plant actually removed the rows').toBe(0);
       await expect(assertMigrationState(c)).rejects.toThrow();
       await expect(assertS4MigrationState(c)).rejects.toThrow();
     });

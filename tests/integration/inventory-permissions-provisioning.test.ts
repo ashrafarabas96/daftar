@@ -547,19 +547,87 @@ describe('P3-AL-53 — a backfilled population and a freshly provisioned one, in
     }
   });
 
-  it('…stronger: an UNEDITED backfilled business is indistinguishable from a fresh one — whole sets, role key by role key, and the same role keys', async () => {
+  /**
+   * P4-S1: re-expressed, and tense-independent.
+   *
+   * This used to compare the WHOLE persisted set of every role between a
+   * backfilled business and a fresh one, by exact equality. That is a claim
+   * about the future: a fresh business is provisioned through the frozen writer
+   * from today's `BUILTIN_ROLE_PERMISSIONS`, so it receives a phase's defaults
+   * the instant the registry has them, while a business provisioned earlier
+   * receives them only when that phase's audited backfill migration runs. The
+   * registry gained the twelve Phase 4 keys in this slice and the Phase 4
+   * backfill is the migration owner's work, so for one commit the two
+   * populations legitimately differ — and the old form called that a defect.
+   *
+   * What it MEANT, and now says, is that the difference can only ever be the
+   * pending backfill:
+   *   - every non-Phase-4 key is still compared by exact equality, role key by
+   *     role key, so nothing outside Phase 4 may drift at all;
+   *   - the backfilled side may hold nothing the fresh side lacks, for ANY key,
+   *     Phase 4 included — a backfilled business never has MORE authority;
+   *   - the fresh side's surplus may be nothing but a Phase 4 default of that
+   *     very role, and for a non-owner role never a sensitive key.
+   *
+   * All three hold before the backfill migration (the surplus is those
+   * defaults) and after it (the surplus is empty), so this test does not have
+   * to be touched again when it lands.
+   */
+  it('…stronger: an UNEDITED backfilled business differs from a fresh one by nothing but the pending Phase 4 backfill', async () => {
     const sets = await roleSets();
     const keysOf = (label: string): string[] =>
       [...sets.keys()]
         .filter((k) => k.startsWith(`${label}/`))
         .map((k) => k.slice(label.length + 1))
         .sort();
+    const phase4DefaultsOf = (role: string): readonly string[] =>
+      role === 'owner' ? PERMISSIONS.filter(isPhase4) : role === 'manager' ? MANAGER_PHASE4 : role === 'cashier' ? CASHIER_PHASE4 : [];
     expect(keysOf('B1')).toEqual(['cashier', 'manager', 'owner']);
     for (const label of FRESH) {
       expect(keysOf(label), label).toEqual(keysOf('B1'));
-      for (const key of keysOf('B1')) expect(sets.get(`${label}/${key}`), `${label}/${key}`).toEqual(sets.get(`B1/${key}`));
+      for (const key of keysOf('B1')) {
+        const backfilled = sets.get(`B1/${key}`) ?? [];
+        const fresh = sets.get(`${label}/${key}`) ?? [];
+        // Outside Phase 4, the two populations are identical. No drift at all.
+        expect(
+          fresh.filter((p) => !isPhase4(p)),
+          `${label}/${key} outside Phase 4`,
+        ).toEqual(backfilled.filter((p) => !isPhase4(p)));
+        // A backfilled business never holds an authority a fresh one lacks.
+        expect(
+          backfilled.filter((p) => !fresh.includes(p)),
+          `${label}/${key} held by the backfilled business alone`,
+        ).toEqual([]);
+        // And the fresh surplus is exactly a subset of that role's Phase 4
+        // defaults — never another role's, never a sensitive key, never a key
+        // no phase owns.
+        const surplus = fresh.filter((p) => !backfilled.includes(p));
+        expect(
+          surplus.filter((p) => !isPhase4(p)),
+          `${label}/${key} surplus outside Phase 4`,
+        ).toEqual([]);
+        expect(
+          surplus.filter((p) => !phase4DefaultsOf(key).includes(p)),
+          `${label}/${key} surplus not a Phase 4 default of ${key}`,
+        ).toEqual([]);
+        if (key !== 'owner')
+          expect(
+            surplus.filter((p) => isSensitivePermission(p as Permission)),
+            `${label}/${key} sensitive surplus`,
+          ).toEqual([]);
+      }
     }
     expect(sets.get('F1/owner')).toEqual(sorted(PERMISSIONS));
+  });
+
+  it('…and the Phase 4 half, positively: a fresh business already carries each role\u2019s Phase 4 defaults', async () => {
+    const sets = await roleSets();
+    expect((sets.get('F1/manager') ?? []).filter(isPhase4)).toEqual(sorted(MANAGER_PHASE4));
+    expect((sets.get('F1/cashier') ?? []).filter(isPhase4)).toEqual(sorted(CASHIER_PHASE4));
+    expect((sets.get('F1/owner') ?? []).filter(isPhase4)).toEqual(sorted(PERMISSIONS.filter(isPhase4)));
+    // The backfilled population is where the migration owner's audited backfill
+    // will show up; today it carries none of them, and that is the delta above.
+    for (const key of ['manager', 'cashier']) expect((sets.get(`B1/${key}`) ?? []).filter(isPhase4), `B1/${key}`).toEqual([]);
   });
 
   it('a custom role created after the migration gets no automatic Phase 3 authority — the persisted set is exactly what was asked', async () => {

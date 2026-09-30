@@ -13,44 +13,33 @@ import { RequiresPermission } from '../../common/guards';
  * the STATEMENT of what each route needs, in one place, so the registry owner
  * and a reviewer can check the two against each other by reading two lists.
  *
- * ## The one temporary seam in this slice, and how it removes itself
+ * ## The temporary seam this module carried, and its removal
  *
- * `Permission` is the union of `PERMISSIONS` (`permissions.ts:11-72`), so until
- * the registry gains the twelve keys these four names are not of that type.
- * `phase4Permission` is the single place that bridges the gap, and
- * `PHASE4_REGISTRY_TRIPWIRE` below makes the bridge impossible to leave behind:
- * the day the registry gains the keys, that declaration stops compiling and the
- * cast must be deleted in the same change.
- *
- * Until then the runtime behaviour is the safe one rather than the convenient
- * one: `hasPermission` (`permissions.ts:182-188`) matches a key against the
- * grants a role actually holds, so an unregistered key matches no grant and
- * every one of these routes refuses every member who is not the system owner.
- * A route that answers nobody is a visible defect; a route that answers
- * everybody would not be.
+ * While the registry lacked the twelve P4-AL-36 keys, these four names were not
+ * of type `Permission`, so a `phase4Permission` decorator bridged the gap and a
+ * `PHASE4_REGISTRY_TRIPWIRE` declaration made the bridge impossible to leave
+ * behind: the day the registry gained the keys it stopped compiling. It fired,
+ * and the bridge is gone. `Phase4SellingPermission` is now an `Extract` from
+ * `Permission`, so each of the four names is checked against the registry by
+ * the compiler and a key that is renamed or dropped there is a type error here
+ * rather than a route that silently answers nobody.
  */
 
-/** The four keys this module's routes name. A subset of P4-AL-36's twelve. */
-export type Phase4SellingPermission = 'sales.view' | 'customers.view' | 'customers.manage' | 'receivables.view';
-
 /**
- * The tripwire. While the registry lacks the Phase 4 keys this resolves to
- * `true` and the constant below compiles. The moment the registry gains them it
- * resolves to the instruction, `PHASE4_REGISTRY_TRIPWIRE` fails to compile, and
- * whoever lands the registry deletes `phase4Permission` and uses
- * `RequiresPermission` directly.
+ * The four keys this module's routes name. `Extract` rather than a bare union,
+ * so each name must BE a registered permission: the registry is the authority
+ * and this list is checked against it at compile time.
  */
-type Phase4RegistryStatus = Phase4SellingPermission extends Permission ? 'DELETE phase4Permission: the registry now has the P4-AL-36 keys' : true;
-
-export const PHASE4_REGISTRY_TRIPWIRE: Phase4RegistryStatus = true;
+export type Phase4SellingPermission = Extract<Permission, 'sales.view' | 'customers.view' | 'customers.manage' | 'receivables.view'>;
 
 /**
- * The route decorator. It is `RequiresPermission` with the bridge, and nothing
- * else: there is no default, no fallback key and no "any of" — a route names
- * exactly one key, and a member without it never reaches the service.
+ * The route decorator. It is `RequiresPermission` narrowed to this module's four
+ * keys, and nothing else: there is no default, no fallback key and no "any of" —
+ * a route names exactly one key, and a member without it never reaches the
+ * service. No cast: the key is a `Permission` by construction.
  */
 export function phase4Permission(permission: Phase4SellingPermission): MethodDecorator & ClassDecorator {
-  return RequiresPermission(permission as unknown as Permission);
+  return RequiresPermission(permission);
 }
 
 /**
