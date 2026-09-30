@@ -96,7 +96,7 @@ export const PREVIOUS_HEAD = PHASE4_INHERITED_PREFIX_END;
  * them. Empty until they are written: an empty list is the absence of a
  * declared candidate, never a claim that the slice has no migration.
  */
-export const S1_MIGRATIONS: readonly string[] = [];
+export const S1_MIGRATIONS: readonly string[] = ['0074_phase4_registry_widening.sql'];
 
 /** The digests recorded at the P4-S1 freeze. Empty while the slice is a candidate; filling it flips the tense. */
 export const S1_ACCEPTED: Readonly<Record<string, string>> = {};
@@ -275,6 +275,11 @@ export const RED_PROOFS: readonly (RedProof | Pending)[] = [
     id: 'RP-P3STEPS',
     defect: 'a Phase 4 step reaches what gate:phase3:corrective walks, so a Phase 4 screen defect turns an accepted Phase 3 gate red',
     proof: `${BROWSER_STEP_OWNERSHIP}::a Phase 4 step is not in what the Phase 3 gate walks`,
+  },
+  {
+    id: 'RP-REGWIDEN',
+    defect: 'a Phase 4 migration widens a registered_by CHECK and then puts the Phase-3-only pattern back, or never widens one of the four at all',
+    proof: `${GUARD_SUITE_DIR}/phase4-registry-widening-guard.test.ts::RED: a Phase 4 migration that RE-ADDS the Phase-3-only CHECK is still caught`,
   },
   { id: 'RP-FK', area: 'composite-fk', owner: 'the golden owner (G-03)', pending: 'the planted single-column FK to a business-scoped parent' },
   { id: 'RP-LINT', area: 'schema-lint', owner: 'the golden owner (G-19)', pending: 'the planted constraint naming a column that does not exist' },
@@ -917,9 +922,16 @@ export function browserStepProblems(root: string): string[] {
   return problems;
 }
 
-/** Action 1: before the first Phase 4 registration, the four accepted registries accept a `P4-Sn` registrant. */
-export function registeredByProblems(root: string): string[] {
-  const sql = phase4Sql(root);
+/**
+ * Action 1: before the first Phase 4 registration, the four accepted registries
+ * accept a `P4-Sn` registrant.
+ *
+ * `sql` defaults to the Phase 4 migrations on disk; it is a parameter so that
+ * `tests/guards/phase4-registry-widening-guard.test.ts` can plant the defect
+ * this rule exists to catch, rather than assert that a green rule is a correct
+ * rule.
+ */
+export function registeredByProblems(root: string, sql: string = phase4Sql(root)): string[] {
   const problems: string[] = [];
   for (const relation of REGISTERED_BY_RELATIONS) {
     const widened = new RegExp(
@@ -931,9 +943,37 @@ export function registeredByProblems(root: string): string[] {
         `no Phase 4 migration widens ${relation}.registered_by to ${REGISTERED_BY_WIDENED} — the first Phase 4 registration fails the accepted CHECK (plan action 1)`,
       );
   }
-  if (new RegExp(REGISTERED_BY_PHASE3_ONLY.replace(/[[\]$^*+?.()|{}\\]/g, '\\$&')).test(sql))
-    problems.push(`a Phase 4 migration re-introduces ${REGISTERED_BY_PHASE3_ONLY} — widening it and putting it back is not widening it`);
+  for (const clause of addConstraintClauses(sql))
+    if (new RegExp(REGISTERED_BY_PHASE3_ONLY.replace(/[[\]$^*+?.()|{}\\]/g, '\\$&')).test(clause))
+      problems.push(`a Phase 4 migration re-introduces ${REGISTERED_BY_PHASE3_ONLY} — widening it and putting it back is not widening it`);
   return problems;
+}
+
+/**
+ * Every `ADD CONSTRAINT … CHECK (…)` clause of the given SQL, up to the
+ * statement terminator.
+ *
+ * The re-introduction rule reads THESE and not the whole file, because the
+ * two places the Phase-3-only pattern can appear mean opposite things:
+ *
+ *   - inside an `ADD CONSTRAINT … CHECK`, it IS the re-introduction — the
+ *     committed state would once again refuse a Phase 4 registrant;
+ *   - inside a `DO` block that compares `pg_get_constraintdef()` against the
+ *     shape the migration was written for, it is the migration READING the
+ *     live catalogue, which is the discipline the lock demands of it
+ *     (P4-AL-84: "a migration reads the live catalogue, never the migration
+ *     that wrote it"), and `0074`'s pre-flight assertion is exactly that.
+ *
+ * A file-wide grep cannot tell those apart, so it fired on `0074`'s
+ * assertion and would have been answered by deleting the assertion — the
+ * check contorting its subject rather than the subject satisfying the
+ * check. Scoping the rule to the clause that actually installs a constraint
+ * makes it strictly sharper: `tests/guards/phase4-registry-widening-guard.test.ts`
+ * proves both directions, that a re-added Phase-3-only CHECK is still
+ * caught and that naming the old shape in an assertion is not a finding.
+ */
+export function addConstraintClauses(sql: string): string[] {
+  return [...sql.matchAll(/ADD\s+CONSTRAINT\b[\s\S]*?;/gi)].map((m) => m[0]);
 }
 
 /** G-03's structural half: every FK from a Phase 4 relation to a business-scoped parent is composite, present and VALID. */

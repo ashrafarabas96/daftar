@@ -424,7 +424,14 @@ describe('P4-AL-62: an accepted gate survives the next migration', () => {
 describe('P4-AL-60: the forbidden shapes', () => {
   it('the forbidden shapes are absent from every permanent gate', () => {
     const headNumber = Number(headOf(REPO).slice(0, 4));
-    expect(headNumber).toBe(Number(PHASE4_INHERITED_PREFIX_END.slice(0, 4)));
+    // A FLOOR, not an equality. This was the tenth breakage of the shape this
+    // very suite exists to refuse, and it was in the suite itself: requiring
+    // the head migration to BE the last inherited one is the claim "no Phase 4
+    // migration exists", which `0074` made false the moment action 1 landed.
+    // What the check below actually needs of `headNumber` is a number at or
+    // above the inherited prefix, so that a literal equal to the CURRENT count
+    // is recognised as a forbidden shape (P4-AL-88).
+    expect(headNumber).toBeGreaterThanOrEqual(Number(PHASE4_INHERITED_PREFIX_END.slice(0, 4)));
     const problems = SHAPE_SCOPE.flatMap((rel) => forbiddenShapeProblems(rel, readFileSync(join(REPO, rel), 'utf8'), headNumber));
     expect(problems).toEqual([]);
   });
