@@ -15,6 +15,110 @@ import type { Locator } from 'playwright-core';
 import { tabUntil } from './invariants';
 import type { Run } from './run-context';
 
+/**
+ * PHASE OWNERSHIP OF THE BROWSER STEPS (P4-AL-63).
+ *
+ * `scripts/phase3-corrective-gate.ts` ran the browser matrix with no
+ * `--steps`, so it walked every step that existed. That is harmless while
+ * every step is Phase 3's and wrong the moment one is not: a defect on a
+ * Phase 4 screen would turn an already-ACCEPTED Phase 3 gate red — a
+ * predecessor's gate failing on its successor's work. The fix is ownership,
+ * not a looser assertion. Each phase's gate walks the steps that phase owns;
+ * the Phase 3 matrix still performs all nine ar/en/tr x 360/768/1280 runs and
+ * its equality across them is untouched (OD-P4-11 OPTION A). What changed is
+ * WHICH steps it walks, not how many runs it makes.
+ *
+ * The two lists below are a PARTITION of the steps `runFlows` declares, not
+ * two loose lists: every declared step belongs to exactly one of them, and a
+ * step added to this file and left out of both is a problem
+ * `stepOwnershipProblems` names, so a new step is never silently unwalked.
+ * `scripts/phase4-s1-gate.ts` checks the same partition over the source, and
+ * `tests/guards/phase4-browser-step-ownership.test.ts` plants each way of
+ * breaking it and asserts the refusal.
+ */
+export const PHASE3_STEPS: readonly string[] = [
+  'login',
+  'header',
+  'stock',
+  'move',
+  'count',
+  'adjust',
+  'purchases',
+  'receive',
+  'receive-pay',
+  'return',
+  'undo-receipt',
+  'suppliers',
+  'pay',
+  'states',
+  'starting-stock',
+];
+
+/**
+ * The Phase 4 steps. Empty TODAY because no Phase 4 screen exists yet, and
+ * that emptiness is an asserted fact, not an unchecked array: the first
+ * `run.step` name this list does not hold turns the ownership test and the
+ * P4-S1 gate red, and the Phase 3 gate keeps walking only PHASE3_STEPS.
+ */
+export const PHASE4_STEPS: readonly string[] = [];
+
+/**
+ * The prefix every Phase 4 step name carries, so a Phase 4 step can never
+ * collide with a Phase 3 one (P4-AL-68 — this file already has a step named
+ * `return`). `scripts/phase4-s1-gate.ts` holds the same literal and the
+ * ownership test pins the two together.
+ */
+export const PHASE4_STEP_PREFIX = 'p4-';
+
+/** Every step that exists, Phase 3's then Phase 4's. */
+export const ALL_BROWSER_STEPS: readonly string[] = [...PHASE3_STEPS, ...PHASE4_STEPS];
+
+/**
+ * What is wrong with the partition, empty when nothing is. `declared` is the
+ * step names this file declares, in declaration order; pass
+ * `ALL_BROWSER_STEPS` to check only the lists against each other.
+ */
+export function stepOwnershipProblems(declared: readonly string[]): string[] {
+  const problems: string[] = [];
+  const tally = (names: readonly string[]): Map<string, number> => {
+    const counts = new Map<string, number>();
+    for (const name of names) counts.set(name, (counts.get(name) ?? 0) + 1);
+    return counts;
+  };
+  for (const [list, names] of [
+    ['PHASE3_STEPS', PHASE3_STEPS],
+    ['PHASE4_STEPS', PHASE4_STEPS],
+  ] as const)
+    for (const [name, n] of tally(names)) if (n > 1) problems.push(`${list} names the step "${name}" ${n} times`);
+  for (const name of PHASE3_STEPS)
+    if (PHASE4_STEPS.includes(name)) problems.push(`the step "${name}" is owned by both PHASE3_STEPS and PHASE4_STEPS — a step is owned by exactly one phase`);
+  for (const name of PHASE4_STEPS)
+    if (!name.startsWith(PHASE4_STEP_PREFIX))
+      problems.push(`the Phase 4 step "${name}" is not ${PHASE4_STEP_PREFIX}-prefixed, so it can collide with a Phase 3 step name (P4-AL-68)`);
+  const owned = new Set(ALL_BROWSER_STEPS);
+  for (const [name, n] of tally(declared)) {
+    if (!owned.has(name))
+      problems.push(
+        `the step "${name}" is declared in tests/browser/flows.ts but is owned by neither PHASE3_STEPS nor PHASE4_STEPS — an unowned step is walked by no phase gate`,
+      );
+    if (n > 1) problems.push(`the step "${name}" is declared ${n} times — a step name is run once and names its own evidence (P4-AL-68)`);
+  }
+  const seen = new Set(declared);
+  if (declared.length > 0)
+    for (const name of owned)
+      if (!seen.has(name)) problems.push(`the step "${name}" is owned by a phase list but tests/browser/flows.ts declares no such step`);
+  return problems;
+}
+
+// The lists themselves, checked as this module loads: a malformed partition is
+// never a browser run that quietly walks the wrong set. The declared half of
+// the partition is checked over the source by the ownership test and the
+// P4-S1 gate, which can see the declarations this module cannot.
+{
+  const broken = stepOwnershipProblems(ALL_BROWSER_STEPS);
+  if (broken.length > 0) throw new Error(`tests/browser/flows.ts step ownership: ${broken.join('; ')}`);
+}
+
 const UUID_PATH = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
 
 /** True when the element is fully inside the viewport, its own text not cut. */

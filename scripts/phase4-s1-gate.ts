@@ -160,6 +160,8 @@ const GOLDEN_DIR = 'tests/golden-regression/phase4';
  * execute when handed the directory.
  */
 const GUARD_SUITE_DIR = 'tests/guards';
+/** P4-AL-63/P4-AL-68: the browser step partition and its red proofs. It lives inside `GUARD_SUITE_DIR`, so the directory row above already runs it; this constant exists so the red proofs can name the file that carries them. */
+const BROWSER_STEP_OWNERSHIP = `${GUARD_SUITE_DIR}/phase4-browser-step-ownership.test.ts`;
 
 /**
  * Every P4-S1 suite, by id. Exact: nothing is discovered, and every `p4-*`
@@ -238,21 +240,34 @@ export const RED_PROOFS: readonly (RedProof | Pending)[] = [
   },
   {
     id: 'RP-G3',
-    area: 'guards',
-    owner: 'the guard owner',
-    pending: 'the planted authoritative balance column (invoices.paid_minor) that the G-3 sales arm must name',
+    defect: 'a Phase 4 migration stores an authoritative receivable, paid total, outstanding total or debt, and G-3 does not name it',
+    proof: `${GUARD_SUITE_DIR}/phase4-derived-truth-guard.test.ts::RED — every column of the lock’s reproduced fixture is named by the sales arm`,
+  },
+  {
+    id: 'RP-G3-DEBT',
+    defect:
+      'a stored debt, overdue, arrears or aging column passes, because the inherited AP/AR vocabulary needs a token boundary before `due` and never named `debt` at all',
+    proof: `${GUARD_SUITE_DIR}/phase4-derived-truth-guard.test.ts::RED — a stored DEBT truth`,
   },
   {
     id: 'RP-JARGON',
-    area: 'guards',
-    owner: 'the guard owner',
-    pending: 'the planted accountant word on a Phase 4 screen, and the planted tax control, that the widened guard must name',
+    defect: 'an accountant’s word reaches a Phase 4 merchant screen, in any of the three languages',
+    proof: `${GUARD_SUITE_DIR}/phase4-merchant-language-guard.test.ts::PLANTED: an accounting or tax WORD anywhere in a Phase 4 screen is reported as \`jargon\``,
+  },
+  {
+    id: 'RP-TAXCTL',
+    defect: 'a tax field ships on a merchant screen while OD-03 is open, including one named only in an aria-label or a placeholder',
+    proof: `${GUARD_SUITE_DIR}/phase4-merchant-language-guard.test.ts::PLANTED: a tax field on a Phase 4 screen is reported as \`tax-control\`, whatever element carries it`,
   },
   {
     id: 'RP-STEPS',
-    area: 'browser',
-    owner: 'the browser owner (tests/browser/flows.ts)',
-    pending: 'the planted duplicate step name, and a Phase 4 screen defect that must NOT turn gate:phase3:corrective red',
+    defect: 'a browser step is declared twice, or belongs to neither phase list, so it is walked by no phase gate or overwrites another run\u2019s evidence',
+    proof: `${BROWSER_STEP_OWNERSHIP}::red: a step declared twice`,
+  },
+  {
+    id: 'RP-P3STEPS',
+    defect: 'a Phase 4 step reaches what gate:phase3:corrective walks, so a Phase 4 screen defect turns an accepted Phase 3 gate red',
+    proof: `${BROWSER_STEP_OWNERSHIP}::a Phase 4 step is not in what the Phase 3 gate walks`,
   },
   { id: 'RP-FK', area: 'composite-fk', owner: 'the golden owner (G-03)', pending: 'the planted single-column FK to a business-scoped parent' },
   { id: 'RP-LINT', area: 'schema-lint', owner: 'the golden owner (G-19)', pending: 'the planted constraint naming a column that does not exist' },

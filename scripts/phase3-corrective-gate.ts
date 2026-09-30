@@ -55,6 +55,7 @@ import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import { PHASE3_STEPS } from '../tests/browser/flows';
 import { PHASE3_SLICE_PREFIX, checkPhase3Prefix } from './phase3-prefix';
 import { testTitles } from './phase3-s8-gate';
 
@@ -509,7 +510,15 @@ export function correctivePlan(root: string): readonly Step[] {
       name: `real-browser gate: ${BROWSER_MATRIX.locales.join('/')} × ${BROWSER_MATRIX.viewports.map((v) => `${v.width}×${v.height}`).join(', ')}`,
       area: 'browser',
       cmd: npm,
-      args: ['run', 'gate:browser', '--', ...matrixArgs(), '--out=release/browser'],
+      // P4-AL-63: pinned to the steps PHASE 3 OWNS. With no --steps this
+      // walked every step that existed, so the first Phase 4 step would have
+      // made a Phase 4 screen defect turn this ACCEPTED gate red. The matrix
+      // itself is untouched: matrixArgs() still yields all nine ar/en/tr x
+      // 360/768/1280 runs and the equality assertion over them (§8,
+      // browserMatrixProblems) is unchanged. Today PHASE3_STEPS is every step
+      // tests/browser/flows.ts declares, so this walks exactly what it walked
+      // before; tomorrow it walks its own and no more.
+      args: ['run', 'gate:browser', '--', `--steps=${PHASE3_STEPS.join(',')}`, ...matrixArgs(), '--out=release/browser'],
     },
     // The browser build leaves apps/api/dist, which the Phase 1 machine gate
     // refuses in a source tree: the release gate's own restore step, here.
