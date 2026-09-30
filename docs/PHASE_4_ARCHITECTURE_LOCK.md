@@ -9,7 +9,7 @@
 >
 > Every load-bearing claim below is cited as `file:line` against the baseline tree. Where a canonical
 > document disagreed with the code, the code won and the disagreement is recorded in §3 rather than
-> silently resolved. An Arabic summary is at §26.
+> silently resolved. An Arabic summary is at §25.
 
 ---
 
@@ -70,6 +70,8 @@ from the schema rather than naming one, so a new writer fails CI.
 | a **deferred constraint trigger** re-deriving the exact expected line multiset from the persisted source row | `0063:1706-1713`, `0067:1959-2035` |
 | the source type added to `DOMAIN_SOURCE_TYPES` so the generic engine refuses it and `mintDomainPostingAssertion` admits it | `packages/accounting/src/post.ts:208`, `domain-posting.ts:54` |
 | one accounting assertion minted **before** the transaction opens, one per posting, in posting order | `apps/api/src/infra/database.ts:409-492` |
+| the source type added to the **literal list inside `accounting_reversals_20_domain_source_guard`**, by `CREATE OR REPLACE` in the same migration that registers it | the guard body at `0067:2242-2271`; the pattern at `0061:1520`, `0063:1523`, `0065:1749`, `0067:2242` |
+| the source table's `binding_source_id`, its generated `accounting_source_type` constant, the `binding_source_id = id` CHECK and the **deferred** binding FK — this, not the assertion seam, is what makes a missing entry fail the COMMIT | `0067:382`, `0067:388-391` |
 
 ### 2.3 Reversal authority
 
@@ -166,7 +168,7 @@ thing. Each is ruled here; the document corrections are owed by the slice named 
 | D-18 | `DAFTAR_LOCALIZATION_GLOSSARY.md:51` gives the canonical Arabic for *statement* as "كشف حساب" | `حساب` is on the Arabic jargon denylist (`scripts/guards/merchant-jargon.ts:46`), which covers `common.` too, so that key would fail `check:localization` | a different Arabic term — **P4-AL-50** |
 | D-19 | `DAFTAR_UX_ARCHITECTURE.md:5-8` mandates a 5-item bottom navigation and a web sidebar | the shipped web shell is a collapsing header with proven keyboard and focus behaviour (`tests/browser/flows.ts:57-62,96-109`); there is no bottom bar anywhere | the bottom bar is a mobile pattern; web keeps the header — **P4-AL-53** |
 | D-20 | `DAFTAR_DESIGN_SYSTEM.md:35` reserves a `color.whatsapp` token | there is no such token and WhatsApp is Phase 8 | no WhatsApp affordance in Phase 4 |
-| D-21 | `DAFTAR_DATA_MODEL.md` §10ب/§13/§14 and `DAFTAR_THREAT_MODEL.md` TH-04 describe `customers`, `sales`, `sale_items`, `invoices`, `invoice_sequences`, `payments`, `payment_allocations`, `payment_reversals`, `refunds`, `customer_credits`, `credit_notes` as if they existed | **none of them exists**, and a permanent test asserts they never will (§4.2) | they are design commitments Phase 4 implements, not facts |
+| D-21 | `DAFTAR_DATA_MODEL.md` §10ب/§13/§14 and `DAFTAR_THREAT_MODEL.md` TH-04 describe `customers`, `sales`, `sale_items`, `invoices`, `invoice_sequences`, `payments`, `payment_allocations`, `payment_reversals`, `refunds`, `customer_credits`, `credit_notes` as if they existed | **none of them exists**, and a permanent Phase 3 test asserts they never will, which the first Phase 4 migration therefore breaks (P4-AL-88) | they are design commitments Phase 4 implements, not facts |
 | D-22 | `TECHNICAL_DEBT.md` TD-15 points at "the DM §7 `reverse_payment_allocation` shape" and names one source | DM §7 contains a mutable `reversed` flag, not a command shape; the substantive spec is `ACCOUNTING_RULES.md` §5.2 + §5.4, and the debt's own text names **three** sources (payment, credit allocation, refund) | corrected when TD-15 closes — §21 |
 
 **Nothing in this table was resolved by compromise.** Where two sources disagreed, the higher-ranked
@@ -183,8 +185,9 @@ or a report, and may never be stored in a column that another writer could disag
 | quantity | source of truth | derivation | forbidden second truth |
 |---|---|---|---|
 | a sale's commercial content | `sales` + `sale_items` rows | — | a mirrored copy on `invoices` |
-| revenue recognised | `journal_lines` on `4100` bound to the `invoice` source | — | `invoices.revenue_minor` |
-| COGS | `journal_lines` on `5000` bound to the `sale` source | — | `sale_items.cogs_minor` as an authority (it is the *input*, see P4-AL-25) |
+| revenue recognised | `journal_lines` on **`4000` `sales_revenue`** bound to the `invoice` source (`0040:59`) | — | `invoices.revenue_minor` |
+| revenue reversed by a return | `journal_lines` on **`4100` `sales_returns`** bound to the `credit_note` source (`0040:60`) | — | a debit to `4000`, which would net revenue to zero in a perfectly balanced entry |
+| COGS | `journal_lines` on `5000` bound to the `sale` source | — | **`sale_items.cogs_minor`**. The COGS input is `stock_movements.value_delta_base_minor` (`0059:142`), written by the stock writer (`0060:445-454`); a per-line cost on `sale_items` would be a second stored integer for the same money with a second writer and no constraint tying them. A per-line cost needed before the movement is written is a transient in the routine, not a column |
 | on-hand quantity | `stock_levels` written only by `inventory_apply_stock_movements` | — | any sales-side quantity column |
 | a customer's AR balance | `journal_lines` on the AR account, scoped to the customer | `customer_ar_outstanding(...)` | `customers.balance_minor` — refused by P4-AL-06 |
 | an invoice's paid / outstanding | the invoice total minus the allocations and applied credit notes | `invoice_outstanding(...)` | `invoices.paid_minor`, `invoices.outstanding_minor` |
@@ -202,12 +205,21 @@ over scratch Phase 4 DDL, the supplier arm sees only `purchases`; the inventory 
 `customers`, `installments`, `invoices`, `sales`; and `findAuthoritativeInventoryColumns` flags exactly
 one column — `customers.balance_minor`. So `invoices.paid_minor`, `invoices.outstanding_minor`,
 `customers.amount_due_minor`, `installments.outstanding_minor` and `installments.settled_minor` **all pass
-CI today**. G-3 is therefore not a protection Phase 4 inherits; it is a protection Phase 4 must build. The
-extension adds a sales arm (`customers`, `sales`, `invoices`, `invoice_items`, `payments`,
-`payment_allocations`, `credit_notes`, `refunds`, `customer_credits`, `installment_plans`, `installments`)
-discovered from the migrations rather than named, with the same column regex, and its own red proof: plant
-`invoices.paid_minor` and require the guard to name it. Until that guard exists, no Phase 4 migration may
-be accepted — the ordering matters, because the first Phase 4 migration is exactly where such a column
+CI today**. G-3 is therefore not a protection Phase 4 inherits; it is a protection Phase 4 must build.
+
+The fix is **not** a named sales arm. Naming eleven Phase 4 tables in the file whose own header explains
+that "a rule keyed on a name protects a name" (`:33-38`, the lesson that cost Phase 3 five missed tables)
+would build the same hole one phase later. It is one rule. The AP/AR column vocabulary already exists in the
+file — `AP_BALANCE_COLUMN` (`:411`) matches `paid_minor`, `outstanding_minor`, `amount_due_minor` and
+`settled_minor` — and it is wired only to `SUPPLIER_TABLE_NAME` (`:408`). It is rewired to apply to **every
+relation the accepted Phase 2 prefix did not create**, which is the set the inventory arm already discovers
+(the probe shows it returns every Phase 4 table). `cogs` and `cost` join the pattern for the reason
+P4-AL-05 gives, and the `_seq` exemption (`:281`) stays for inventory relations only. That one change also
+catches `credit_notes.refunded_amount_minor`, which P4-AL-14 forbids and which passes both arms today. Red
+proof: plant `invoices.paid_minor` and require the guard to name it. `remaining_*` stays permitted for the
+reason the file documents at `:384-392`, which is what lets P4-AL-14's remaining pair exist at all.
+
+Until that guard exists, no Phase 4 migration may be accepted — the ordering matters, because the first Phase 4 migration is exactly where such a column
 would be introduced.
 
 **P4-AL-07 — A derived value is read through the product's own function, and that function is the same
@@ -220,14 +232,25 @@ is a second truth with a slower failure mode, because it disagrees only under th
 
 ## 5. Entity model
 
-**P4-AL-08 — Nineteen tables, every one of them keyed by `(tenant_id, business_id, …)`.**
+**P4-AL-08 — Eighteen new commercial tables, plus the stock-source bridges and the POS session tables,
+every one of them keyed by `(tenant_id, business_id, …)`. `payment_methods` is reused, not created.**
 `customers`, `customer_contacts`, `sales`, `sale_items`, `invoices`, `invoice_items`,
-`invoice_sequences`, `payments`, `payment_methods`, `payment_allocations`, `payment_reversals`,
+`invoice_sequences`, `payments`, `payment_allocations`, `payment_reversals`,
 `allocation_reversals`, `credit_notes`, `credit_note_items`, `refunds`, `customer_credits`,
 `customer_credit_applications`, `installment_plans`, `installments`. Every one carries `tenant_id` and
 `business_id` as real columns, not as a joinable inference, because both RLS layers read them directly
 (`0041`, `0057:140-151`) and because the composite FKs below are only expressible when the child row
 carries the business itself.
+
+Three things are **not** in that list and must not be counted as if they were. `payment_methods`
+already exists — Phase 3 created it at `0067:284` with `PRIMARY KEY (business_id, id)`, a
+`posting_account_id` candidate key, RLS and its `payment_method_names` twin (`0067:310`) — so a
+`CREATE TABLE payment_methods` in a Phase 4 migration fails outright; Phase 4 reuses it, and a Phase 4
+payment binds `(business_id, payment_method_id, posting_account_id)` through the same three-column FK
+`supplier_payments` already uses (`0067:352-354`). The **stock-source bridge** tables of P4-AL-29b are
+mandatory and are additional. And P4-S3's POS session tables — `pos_till_sessions`, `pos_cart_lines`
+(P4-AL-86) — are additional too. The schema lint (G-19) and `resetData()` are built from the union,
+discovered from the migrations rather than from this paragraph.
 
 **P4-AL-09 — Every reference between two commercial rows is a composite foreign key that includes
 `business_id`, so cross-business linkage is not representable in the database.**
@@ -245,10 +268,16 @@ Three refusals come with it, and each is a refusal of something a canonical docu
   (`0042:144`) and there is no `UNIQUE (id)`, so `DATA_MODEL.md` §7's
   `reverse_allocation_journal_entry_id → journal_entries(id)` is not implementable; and it should not be,
   because the binding direction is already fixed by `accounting_source_bindings` (P4-AL-20).
-- **`MATCH SIMPLE` is not a hole Phase 4 leaves open.** Where a composite FK has a nullable component —
-  the walk-in sale of P4-AL-11 — PostgreSQL's default `MATCH SIMPLE` skips the check entirely when any
-  column is null, which would let a null `customer_id` carry a foreign `business_id`. Closed by a
-  deferred constraint trigger, not by making the column mandatory.
+- **`MATCH SIMPLE` is not a hole, and the reason is not the one it first looks like.** Where a composite
+  FK has a nullable component — the walk-in sale of P4-AL-11 — PostgreSQL's default `MATCH SIMPLE` skips
+  that FK entirely when any of its columns is null. That is harmless here, because `business_id` is
+  **independently** constrained on every Phase 4 table by the mandatory
+  `FOREIGN KEY (tenant_id, business_id) REFERENCES businesses (tenant_id, id)` over two `NOT NULL`
+  columns (the accepted shape is `0067:303`), and when `customer_id IS NULL` there is no customer row for
+  the row to be foreign to. The accepted tree already relies on exactly this: `supplier_payments` declares
+  a nullable `fx_rate_id` (`0067:339`) with a composite FK (`0067:356`) and **no** consistency trigger. So
+  Phase 4 adds no trigger for this. What P4-AL-11 does need a trigger for is a different and real
+  invariant, stated there.
 
 **P4-AL-10 — Financial history is append-only. A reversal is a new row, never a flag on the old one.**
 `DATA_MODEL.md` §7's `payment_allocations.reversed BOOLEAN` is refused: a mutable column on a financial
@@ -261,11 +290,18 @@ reversed it, *when*, or *under which journal entry*. Phase 4 adds `allocation_re
 **P4-AL-11 — A walk-in sale carries a null `customer_id`, and the null is made safe by a deferred
 consistency trigger rather than by a synthetic "walk-in customer" row.**
 A synthetic customer is a real row that accumulates a real balance, which is exactly the customer-balance
-defect with a friendly name. The null is the honest representation. `payment_allocation_walkin_consistent`
-is a `DEFERRABLE INITIALLY DEFERRED` constraint trigger asserting that when `customer_id` is null the
-row's `business_id` still matches its parent's, and that no AR line was posted for it — a cash sale to a
-walk-in customer never touches AR. Its red proof plants a cross-business `business_id` under a null
-`customer_id` and requires the trigger to raise.
+defect with a friendly name. The null is the honest representation, and P4-AL-09 explains why the null is
+not a foreign-key hole.
+
+The invariant the null *does* need enforcing is the accounting one: **a null `customer_id` means no AR
+line.** A cash sale to a walk-in customer never touches AR, and nothing about the FK graph says so. The
+nullable `customer_id` lives on `sales`, `invoices` and — for a walk-in cash receipt — `payments`, so
+that is three `DEFERRABLE INITIALLY DEFERRED` constraint triggers, one per table:
+`sales_walkin_no_ar`, `invoices_walkin_no_ar`, `payments_walkin_no_ar`. Each asserts that the journal
+entry bound to its row carries no line on the AR account when `customer_id IS NULL`, and each has its own
+red proof that posts an AR line under a null customer and requires that table's trigger to raise. The
+same requirement is carried in the `invoice` source's deferred completeness validator, because that is
+where the entry's expected line set is already computed.
 
 **P4-AL-12 — `sales`/`sale_items` and `invoices`/`invoice_items` are two tables and two accounting
 sources, not one entity with two names.**
@@ -302,6 +338,28 @@ unwritable row. This is the structural form of GOLD-85, and P4-S5's gate asserts
 column rather than the presence of a check.
 
 
+**P4-AL-15b — Phase 4 inherits guard rules it must *comply* with, not only guards it must build, and they
+fix parts of the DDL vocabulary.**
+`isPhase3Relation` means "the accepted Phase 2 prefix did not create it"
+(`scripts/guards/no-authoritative-balance.ts:74-76`), so **every Phase 4 table is treated as a Phase 3
+relation** by G-2's inventory half (`scripts/guards/no-float-rate.ts:180`) and by G-3's inventory arm — which
+my probe confirms: all eight synthetic Phase 4 tables appear in `discoverInventoryTables`. The consequences
+are rules, not preferences:
+
+- no floating-point column anywhere in Phase 4;
+- `INVENTORY_TYPE_PINS` (`no-float-rate.ts:145-165`) pin any Phase 4 column named `qty_delta`, `on_hand`,
+  `*_qty` or `qty_*` to `NUMERIC(18,4)`, `*_cost_base_minor` to `NUMERIC(28,10)`, and
+  `value_delta_base_minor` / `valuation_base_minor` to `BIGINT`;
+- `NEVER_STORED` (`no-authoritative-balance.ts:276`) refuses any Phase 4 column matching `reserved` or
+  `available`, so a POS "reserved" or "available to sell" column is refused today;
+- `INVENTORY_FORBIDDEN_TABLE` (`:283`) refuses a Phase 4 relation named `*_summary`, `*_snapshot`,
+  `*_rollup` or `*_cache` if it also matches `(stock|inventory)_`.
+
+So Phase 4's vocabulary is fixed in advance: quantities are `quantity NUMERIC(18,4)`, unit costs are
+`unit_cost_base_minor NUMERIC(28,10)`, all money is `BIGINT` minor units, and nothing is named `reserved` or
+`available`. `remaining_*` stays permitted for the reason the guard file documents at `:384-392`, which is
+what lets P4-AL-14's remaining pair exist at all.
+
 ---
 
 ## 6. Transaction boundaries
@@ -319,6 +377,19 @@ The boundary is not a convention: `gate:phase4:s2` asserts that the sale path op
 transaction (P4-AL-57's plan assertion), and G-06 of §17 injects a mid-routine failure and requires the
 test to find no partial state. This is the `tests/integration/failure-injection.test.ts` idiom, and it is
 the only way "atomic" is a fact rather than an intention.
+
+**Which mechanism guarantees it matters, because the obvious one does not.**
+`AccountingAssertionSequence.assertComplete()` is
+`if (this.presented > 0 && this.presented < this.assertions.length) throw`
+(`apps/api/src/infra/database.ts:488-495`): presenting **none** is deliberately allowed, for the replay case
+the comment at `:425-429` documents. So a transaction that minted three assertions, wrote the `sales` row
+and the stock movements and posted **zero** journal entries commits with that seam silent. The seam catches
+the *partial*-posting case only. The all-or-nothing guarantee is the source row's own **deferred binding
+FK** into `accounting_source_bindings` (the `0067:388-391` shape, with `binding_source_id = id` at
+`0067:382`), which fails the COMMIT when a source row has no entry. So every Phase 4 accounting-source
+table carries `accounting_source_type` as a `GENERATED ALWAYS AS (…) STORED` constant, `binding_source_id`,
+the equality CHECK and the deferred FK, and `gate:phase4:s2`'s structural half asserts all four from
+`pg_constraint`. A `sales` table without them would ship a real split commit under a green seam.
 
 **P4-AL-17 — One journal entry per allocation, never one per payment.**
 `TRANSACTION_MAP.md` §3 and `ACCOUNTING_RULES.md` §4.3 describe one entry per payment. The accepted code
@@ -392,14 +463,30 @@ recomputed `before = 0`, so the chain check raises; and `Σ rel = 4` against `HA
 therefore **not** a mechanism the lock may assume; it is `OD-P4-04` of §22 and it is the one hard blocker
 on P4-S6 and on TD-15.
 
-**P4-AL-22 — Level-uniqueness is how a source cannot be double-spent.**
-`UNIQUE (business_id, <source>_id, <source>_remaining_before_minor)` (`0067:441`, `:497`) applied to
-`payment_allocations` over the payment, to `customer_credit_applications` over the credit, and to
-`refunds` over the credit note. Two concurrent consumers reading the same remaining value cannot both
-commit, whatever the isolation level, because they would write the same tuple. This is a database
-invariant and it holds against a direct SQL attacker, which a `FOR UPDATE` in a routine does not.
+**P4-AL-22 — Level-uniqueness is necessary and not sufficient. The sufficient mechanism is a
+COMMIT-time chain verifier, and Phase 4 must build both.**
+The accepted level-uniqueness constraints are
+`supplier_credit_allocations_level_uq UNIQUE (business_id, credit_note_id, credit_remaining_before_minor)`
+(`0067:438`) and `supplier_refunds_level_uq` (`0067:491`). Both are over a **credit note**. There is no
+Phase 3 precedent over a *payment*: the accepted `supplier_payment_allocations` (`0067:362-405`) carries
+no remaining-level column at all — its uniqueness is `(business_id, payment_id, line_no)` and
+`(business_id, payment_id, purchase_id)`, and over-allocation is prevented by
+`supplier_payments.allocation_count` together with the COMMIT-time value guard
+`purchase_settlement_verify` (`0067:717-758`, invoked from constraint triggers at `0067:1287`, `:1293`,
+`:1299`). So Phase 4 **introduces** `payment_remaining_before_minor` on `payment_allocations`; it does not
+inherit it.
 
-Its known cost is recorded honestly: the constraint also caps an operation that legitimately needs several
+And the distinction matters more than the citation. A `UNIQUE` over a *declared* remaining level forbids
+two rows claiming the same level; it does not cap total consumption, because a direct SQL attacker simply
+declares a different level. `Σ consumed ≤ original` is enforced at COMMIT by the chain verifier, in the
+`purchase_settlement_verify` form, asserting the chain from zero and the exact telescoping sum. So each
+consumable Phase 4 source — the payment, the credit note, the customer credit — carries **both**: the
+level `UNIQUE`, which turns the same-level race into a constraint violation, and a deferred
+constraint-trigger verifier, which is what actually bounds the total. `gate:phase4:s4` asserts the
+verifier against direct SQL **bypassing the routine**, with a red proof that inserts an allocation at a
+fabricated remaining level and requires the COMMIT to fail.
+
+Its known cost is recorded honestly: the `UNIQUE` also caps an operation that legitimately needs several
 rows at one remaining level — `[[daftar-a-unique-tuple-is-not-a-source-proof]]`. Phase 4's split
 allocation writes one row per invoice at **successive** remaining levels, so the cap is not reached; a
 future operation that needs several rows at one level must change the mechanism, not drop the constraint.
@@ -457,13 +544,25 @@ preimages, and the cheaper, safer separation here is no second protocol at all. 
 registry rows (`0060:186` is data-driven), which is precisely the extension point the Phase 3 design left
 open.
 
-**P4-AL-28 — The Phase 4 operation-code namespaces are `sale.*`, `customer.*` and `customer_payment.*`.**
-`payment.*` is already taken by the payment-method kinds, so a `payment.reverse` code would collide with
-an existing namespace. `customer_payment.collect`, `customer_payment.allocate`,
-`customer_payment.reverse`, `customer_payment.reverse_allocation`, `sale.commit`, `sale.void`,
-`sale.return`, `customer.credit_note`, `customer.refund`, `customer.credit_apply`. Each is a registry row
-with its own authority, and the single-use `jti` of `0054:344-480` gives replay protection at the
-assertion layer independently of P4-AL-30's document-level idempotency.
+**P4-AL-28 — The Phase 4 operation-code namespaces are `sale.*` and `customer.*`. A first segment
+containing an underscore is not representable, so there is no `customer_payment.*`.**
+The registry's key is `op_code TEXT PRIMARY KEY CHECK (op_code ~ '^[a-z]+(\.[a-z_]+)+$')`
+(`0054:53`), and the **same regex is inside the frozen `inventory_assertion_consume` body** at
+`0054:229`. The first segment is `[a-z]+` with no underscore, so `customer_payment.collect` is refused
+twice: by the `CHECK` on insert and by the routine at call time. Widening the table's `CHECK` would be an
+ordinary migration; widening the copy inside the routine would mean replacing the body of the single
+inventory authority routine, which is exactly the change P4-AL-27 and P4-AL-29 forbid. So the namespace
+changes instead:
+
+`sale.commit`, `sale.void`, `sale.return`, `customer.collect_payment`, `customer.allocate_payment`,
+`customer.reverse_payment`, `customer.reverse_allocation`, `customer.credit_note`, `customer.refund`,
+`customer.credit_apply`. `payment.*` is already taken by the four payment-method kinds, which is why the
+collection codes live under `customer.*` rather than under `payment.*` — but the deciding constraint is
+the regex, not the collision. The first Phase 4 migration asserts both halves: a `customer.*` code is
+accepted and `customer_payment.x` is refused, so the constraint is documented rather than rediscovered.
+
+Each code is a registry row with its own authority, and the single-use `jti` of `0054:344-480` gives
+replay protection at the assertion layer independently of P4-AL-30's document-level idempotency.
 
 **P4-AL-29 — A sale writes stock only through `inventory_apply_stock_movements`, and the routine is not
 changed.**
@@ -475,6 +574,30 @@ is recorded as new technical debt in §21 rather than silently accepted.
 
 Oversell is **not** enabled by this decision, and enabling it would mean changing that routine — the
 highest-risk change available in the system. See `OD-P4-05`.
+
+**P4-AL-29b — A stock movement's source is a *second* registry with its own bridge apparatus, and §2.2's
+accounting checklist does not cover it.**
+`stock_movements.source_type` is a foreign key into `stock_source_types` (`0059:137`), with
+`stock_source_bindings` alongside it (`0059:174`). Registering a row there obliges the registering migration
+to build the whole apparatus that `inventory_stock_source_guard_gaps()` reports on, enumerated at
+`0061:307-481` and built concretely for the purchase source at `0063:400-431,456-459,555-562`:
+
+| the `sale` source must also provide | shape |
+|---|---|
+| a `stock_source_types` row | `0059:137` |
+| `stock_source_bridge_sale`, a plain table | PK exactly `(business_id, source_id, source_line_id, movement_kind)`; a stored generated `source_type` constant |
+| a five-column validated `bridge_binding_fk` | into `stock_source_bindings` |
+| a three-column validated `bridge_line_fk` | into the exact line table and key — so **`sale_items` must carry `UNIQUE (business_id, sale_id, id)`** for the FK to be expressible |
+| RLS **enabled and forced**, plus the five policies | the `0063:456-459,555-562` set |
+| a `bridge_immutable` row trigger | on `stock_ledger_append_only()` |
+| a deferred `binding_trigger` on its own internal DEFINER function | `0061:321-341` |
+| `source_complete`, `source_freeze`, `header_immutable`, `value_complete` | each pinned by table, name, event, column list, `WHEN`, deferral, enabled state, **and the SHA-256 of its `prosrc`** recorded at migration time |
+| the migration's own assertion that `inventory_stock_source_guard_gaps()` returns no row | `0061:481` |
+
+That is six-plus objects, an RLS policy set, an append-only trigger and a recorded body digest that §2.2
+does not mention because §2.2 is the *accounting* checklist. A slice that builds only what §2.2 lists fails
+`0061`'s own guard report on its first run. The `sale_items` candidate key joins P4-AL-09's edge list, and
+these objects join the migration plan's S2 row.
 
 
 ---
@@ -509,9 +632,15 @@ check.
 
 **P4-AL-31 — Invoice and credit-note numbers are allocated as `max + 1` under the sequence row's lock,
 backed by a `UNIQUE`. There is no counter column and no PostgreSQL sequence.**
-`DATA_MODEL.md` §14أ specifies `invoice_sequences.current_value BIGINT`. The database contains zero
-sequences and zero counter columns; ordinals are allocated as `max + 1` under the owning row's lock with a
-`UNIQUE` behind them (`0060:490-513`, `0059:135,147`). Three reasons, and the third is the decisive one:
+`DATA_MODEL.md` §14أ specifies `invoice_sequences.current_value BIGINT`. The database contains **zero
+PostgreSQL sequences**, and exactly **one** counter column — `stock_levels.last_stock_seq`
+(`0059:107`, advanced at `0060:437,454`), which allocates the stock ledger's primary ordinal. That one is
+not a precedent for a document number, and the difference is the point: `last_stock_seq` is a per-key
+**cache** whose value the exact rebuild `inventory_stock_fold` recomputes from the ledger
+(`0060:520-570`), so a wrong counter is detectable and correctable. A document number has no rebuild — the
+number *is* the record — so it takes the `max + 1` form of `inventory_next_deficit_seq`
+(`0060:490-513`, with its `UNIQUE` at `0059:135,147`) instead. Three reasons, and the third is the
+decisive one:
 a stored counter is a derived number and therefore a second truth; a PostgreSQL sequence is
 non-transactional and leaves gaps on rollback, which a legal document number may not have; and a counter
 column takes **the same lock** as `max + 1`, so it buys no concurrency whatever — it only adds a value that
@@ -527,9 +656,16 @@ one tenant have two independent series and no tenant-level mixing is expressible
 **P4-AL-32 — The sequence row is the last lock a sale takes.**
 The sequence row is business-wide: every sale in the business contends on it. Taking it first would put a
 business-wide lock in front of the per-product and per-customer locks and serialise the whole till on the
-slowest sale. It is therefore step 8 of the sale — after the stock levels, after the customer, after the
-journal — so the window in which it is held is the shortest possible. This is a lock-order decision and it
-is part of the single declared order of P4-AL-41.
+slowest sale. It is therefore taken **after every per-key domain lock** — after the customer, after the
+stock levels, after the COGS entry — and immediately before the `invoices` INSERT that needs the number, so
+the window in which it is held is the shortest possible.
+
+It is not taken "after the journal", because the journal is entered twice and the invoice row must carry its
+number at INSERT: allocating the number after the revenue entry would mean inserting the invoice without it
+and updating the row, which P4-AL-46 forbids. So the sale's order is: `sales` -> movements -> `stock_levels`
+-> COGS entry -> **`invoice_sequences`** -> `invoices` + items -> revenue/AR entry -> (cash sale) payment,
+allocation, settlement entry. That is consistent with P4-AL-41's domain order, and it is the order the static
+check compares against.
 
 ---
 
@@ -577,6 +713,24 @@ roles that may hold it.**
 | view receivables, debts, statements | `receivables.view` | no | ✔ | ✔ | ✔ | — |
 | create or amend an installment plan | `installments.manage` | **yes** | ✔ | by grant | ✔ | — |
 
+**The Accountant is a custom role, not a built-in one.** `BuiltinRoleKey` is
+`'owner' | 'manager' | 'cashier'` (`packages/domain-core/src/permissions.ts:120`) and
+`0041:19-20` records the decision in terms: "P2-S1 adds NO built-in accountant role." So the Accountant
+column above describes a role a business creates itself, every entry in it is a grant rather than a
+default, and Phase 4 creates no built-in role — creating one in a sales phase, and granting it two
+sensitive keys by default, is exactly what P4-AL-37 forbids.
+
+**And changing the cashier's or the manager's default set breaks three accepted permanent tests by exact
+equality**, which P4-S1 owns and must re-express per phase rather than loosen:
+`packages/domain-core/test/domain-core.test.ts:474`
+(`expect(BUILTIN_ROLE_PERMISSIONS.cashier).toEqual(['catalog.view'])`), the same assertion at
+`tests/integration/inventory-permissions-provisioning.test.ts:142`, and
+`domain-core.test.ts:468`, whose manager assertion filters out Phase 3 keys
+(`filter((p) => !isPhase3(p))`) — a Phase 4 key is not a Phase 3 key, so it lands inside the filter and
+breaks the equality. The re-expression is the one Phase 3 already used for its own keys: filter Phase 4
+keys out of the Phase 1 equality and assert the Phase 4 set separately. Both files are named in the
+execution plan's file-ownership matrix for this reason.
+
 "by grant only" means the key is not in the role's default set and must be delegated explicitly, within
 the delegator's `beyondGrantAuthority` ceiling. The cashier's default set is deliberately the narrowest
 thing a till needs: read, sell for cash, and take money. Everything that moves value outside that flow is
@@ -595,12 +749,21 @@ also name `purchase.create` and `reports.view`, neither of which exists, and
 authority (P4-AL-04 rank 1) and the documents are wrong.
 
 **P4-AL-37 — "Sensitive" means value-moving outside the normal operating flow.**
-Not "everything except a read". The distinction is load-bearing because the role-default constraints
-(`0041:57-65`, `0057:140-151`) forbid granting a sensitive key to a role by default: a definition under
-which `sales.create` is sensitive would make the cashier role unconstructible, and a definition under which
-nothing is sensitive would let a cashier void a paid invoice. Taking cash for a sale is the normal flow and
-is not sensitive; discounting, voiding, returning, refunding, reversing and rescheduling a debt are value
-movements outside it and are.
+Not "everything except a read". Taking cash for a sale is the normal flow and is not sensitive;
+discounting, voiding, returning, refunding, reversing and rescheduling a debt are value movements outside
+it and are.
+
+**And no accepted constraint enforces this — Phase 4 must write the enforcement.** `0041:57-65` and
+`0057:140-151` are one-shot migration-time `DO`-block assertions over hard-coded key arrays: `0041`'s
+checks its five Phase 2 keys, `0057`'s checks its eleven Phase 3 keys, each raising
+`permission_backfill_overreach` if a non-owner role holds one. There is no `CHECK`, no trigger and no
+exclusion constraint on `role_permissions` — nothing in the database binds a key registered later. So
+nothing today would stop a migration granting `sales.void`, `refunds.approve` or `payments.reverse` to the
+cashier by default. The first Phase 4 permission migration therefore carries the same assertion over the
+twelve Phase 4 keys, with a red proof that plants `cashier -> sales.void` and requires the migration to
+raise. This is the **fourth** protection Phase 4 must build rather than inherit, alongside the three in
+P4-AL-06, P4-AL-52 and P4-AL-88, and it is listed here because a reader of this decision would otherwise
+assume the protection already exists.
 
 **P4-AL-38 — RLS is layered exactly as Phase 2 and 3 layer it, and `daftar_app` gets no DML on any Phase 4
 table.**
@@ -648,9 +811,15 @@ deadlock proof.**
 3. `invoices` — ascending by `id` where several are touched
 4. `payments` / `credit_notes` / `customer_credits` — the consumed source
 5. `stock_levels` — ascending by `(warehouse_id, variant_id)`
-6. `journal_entries` — through `accounting_post_entry`, which takes its own locks in its own fixed order
-7. `installment_plans`
-8. `invoice_sequences` — **last** (P4-AL-32)
+6. `installment_plans`
+7. `invoice_sequences` — **last of the domain locks** (P4-AL-32)
+
+`accounting_post_entry` takes its own locks, in its own fixed internal order, at each call. It is therefore
+**not** a position in this list: a sale calls it twice (the COGS entry, then the revenue entry), so a linear
+order that named `journal_entries` once could not describe the sale at all. The order above is the order of
+the **domain** rows, and the routine's internal order is safe because it is the same at every call. The
+static acquisition-order check reads the domain acquisitions and compares them to this list; the routine's
+own order is asserted separately, once, against its body.
 
 A static check reads each routine's acquisition sequence and compares it against this list;
 `gate:phase4:s8` runs every pair of lock-taking commands in both orders N times and requires zero
@@ -677,7 +846,7 @@ test contains a sleep.
 | 7 | cross-tenant read or write | RLS tenant policy + the four restrictive policies, asserted per route (G-02) | S1, every slice |
 | 8 | cross-business linkage | composite FKs (P4-AL-09), asserted by direct SQL (G-03) | S1 |
 | 9 | branch-scope bypass | the policy, not the controller (P4-AL-40) | S1 |
-| 10 | permission escalation through delegation | the closed registry, the role-default constraints, and the `beyondGrantAuthority` ceiling (P4-AL-36, P4-AL-37) | S1 |
+| 10 | permission escalation through delegation | the closed registry and the `beyondGrantAuthority` ceiling, which are real; **plus the Phase 4 `role_permissions` assertion P4-AL-37 requires S1 to write**, because no accepted constraint covers a Phase 4 key | S1 |
 | 11 | double revenue reversal on a return then a void | one whole-entry reversal per entry, ever (P4-AL-47); the void's refund is drawn from the credit-note source only | S5, S6 |
 | 12 | an allocation left stale by a payment reversal | the reversal and the allocation reversal are one transaction — the substance of TD-15 (§21) and blocked by `OD-P4-04` | S6 |
 
@@ -727,6 +896,18 @@ Phase 4 rather than constrain it: entries are minted at the grain at which they 
 (P4-AL-17); a partial correction is a new entry, not a partial reversal; and a domain-specific reversal
 that needs its own source identity uses the `accounting_reversals_20_domain_source_guard` carve-out pattern
 (`0067:2242-2271`) rather than a second reversal table.
+
+**And the guard is a closed literal list that stops at Phase 3, so it is a hole until Phase 4 replaces its
+body.** `accounting_reversals_20_domain_source_guard` refuses the generic reversal workflow only for the
+seven source types named inside it plus `purchase` (`0067:2249-2251`), and `accounting_post_reversal` is
+granted to `daftar_app` (`0046:765`). Until every Phase 4 source type is added to that list, `daftar_app`
+can call the generic reversal on an `invoice` entry and get a mirrored revenue reversal with **no paired
+credit note, no stock return and no audit of the commercial fact** — and, because there is exactly one
+reversal slot per entry, that illegitimate reversal consumes it and the legitimate domain correction is then
+refused with `accounting.reversal_exists`, leaving the books un-correctable by any product path. This is
+hunt item 5 reached through the generic door. So the widening is a requirement of §2.2, it lands in the same
+migration that registers each source type, and `gate:phase4:s1` asserts from `pg_proc.prosrc` that every
+registered Phase 4 source type appears in the guard's list, with a red proof that removes one.
 
 ---
 
@@ -782,10 +963,19 @@ namespaces in P4-S1, before the first POS screen exists.**
 This is the second protection Phase 4 must build rather than inherit, and I verified it directly.
 `scripts/guards/merchant-jargon.ts:40-50,60-70,118-130` scopes its web-file arm to paths matching
 `(stock|purchases|suppliers)`, so a `pos/` or `customers/` file is simply not examined. And
-`tests/browser/invariants.ts:200-216`'s `acctRe` matches a bare `tax` and drives the `tax-control` rule —
-which is exactly the OD-03 boundary check — but only on the screens the gate walks. A POS screen merged
-today would be unguarded for jargon **and** for the tax boundary, and both guards would stay green while
-saying nothing.
+`tests/browser/invariants.ts:207-209`'s `acctRe` matches a bare `tax`, `taxes`, `vat`, `vergi`, `kdv` and the
+Arabic stem `ضريب`, and drives the **`jargon`** rule over the whole rendered text — not the narrower
+`tax-control` rule at `:210-216`, which is scoped to form controls. Either way it fires only on the screens
+the gate walks, so a POS screen merged today is unguarded for jargon and for the tax boundary alike, and both
+guards stay green while saying nothing.
+
+That has a consequence P4-AL-44 must answer rather than inherit: because `acctRe` forbids the *word*, a
+Phase 4 screen cannot render a tax row at all while the `jargon` rule stands. So **no Phase 4 screen renders
+a tax field while sales tax is structurally zero.** The column exists, the journal shape has the line's
+place, and the invoice template's tax row is added by the Country Pack that enables non-zero tax — at which
+point the words move from `jargon` into `tax-control`, which is an edit to an accepted Phase 3 invariant file
+and needs the same authorisation `OD-P4-11` describes. Not rendering a zero tax line is the cheaper half of
+the trade and it keeps an accepted guard untouched.
 
 So: `S7_NAMESPACE_PREFIXES` and `isS7WebFile` gain the Phase 4 namespaces (`pos`, `sales`, `customers`,
 `invoices`, `payments`, `refunds`, `installments`, `debts`), each with a planted-defect red proof, and the
@@ -905,10 +1095,19 @@ This is the third Phase 3 coupling, and it is worse than the other two because i
 The test asserts, against the **live catalogue**, that `payments`, `payment_allocations`, `payment_reversals`,
 `refunds`, `customer_credits`, `credit_notes`, `customer_payments` and `customer_refunds` do not exist
 (`:41-56`, `to_regclass` must be NULL for each), and that **no relation whatever** matches
-`(customer|sale|invoice)` (`:58-65`). It is a permanent Phase 3 suite, so it is composed by
-`gate:phase3:corrective` and through it by `gate:phase3:release`. The very first Phase 4 migration that creates
-`customers` or `invoices` therefore turns an **accepted Phase 3 gate** red, and every Phase 4 slice gate red
-with it through composition.
+`(customer|sale|invoice)` (`:58-65`). And it goes further than the tables: every verb on `/v1/payments`,
+`/v1/refunds`, `/v1/customer-credits`, `/v1/credit-notes`, **`/v1/invoices`** and **`/v1/sales`** must return
+404 to a business owner (`:81-108`); `accounting_source_types` filtered by
+`/payment|refund|sale|invoice|customer|credit/` must equal the S6 list exactly (`:113-115`), as must
+`DOMAIN_SOURCE_TYPES` in `packages/accounting/src/post.ts` (`:120`) — which §2.2 *requires* Phase 4 to
+extend; and `inventory_operation_kinds` must hold nothing matching `/sale|invoice|customer/` and exactly four
+`payment.*` kinds (`:124-133`), which every operation code of P4-AL-28 breaks.
+
+It is a permanent suite, required by name at `scripts/phase3-s6-gate.ts:172`, so it is composed by
+`gate:phase3:s6` -> `s7` -> `s8` -> `gate:phase3:corrective` and through that by `gate:phase3:release` **and
+by `gate:phase4:s1`**. So the first Phase 4 migration, the first Phase 4 source type, the first Phase 4
+operation code and the first Phase 4 route each turn an **accepted Phase 3 gate** red, and every Phase 4 slice
+gate red with it through composition.
 
 Neither available shortcut is acceptable. Deleting the suite deletes a real Phase 3 protection — that P3-S6
 built a supplier settlement surface and did not quietly build a customer one. Adding an allowlist of the Phase 4
@@ -916,15 +1115,25 @@ names turns a "these do not exist" assertion into a "these exist and that is fin
 nothing.
 
 The resolution is to say what the test always meant. Its invariant is **phase-scoped**: *the Phase 3
-migrations created no customer-payment, sale or invoice surface.* That is a claim about migrations `0053–0073`,
-not about the database a later phase also populates. So the suite is re-expressed structurally — it reads the
-Phase 3 prefix's own files (`scripts/phase3-prefix.ts`, which already holds the accepted names and digests) and
-asserts that no relation matching those patterns is created by any of them — and keeps its live-catalogue form
-only for the relations the Phase 3 range does create, which is the exact-list half at `:58-65` that is
-genuinely about the catalogue Phase 3 built. The re-expressed suite is **strictly as strong**: it still fails if
-a Phase 3 migration is edited to add a customer table, and it now says nothing about the future, which is what
-`[[daftar-a-closure-rule-is-not-an-invariant]]` requires of it. Its red proof plants a `CREATE TABLE customers`
-into a scratch copy of a Phase 3 migration and requires the suite to name that file.
+settlement work built a supplier surface and did not quietly build a customer one.* That is a claim about
+migrations `0053–0073` and about the supplier side, not about the database a later phase also populates. So it
+is re-expressed in two halves, each keeping its full force:
+
+- **The absolute-absence assertions become structural.** Instead of asking today's catalogue whether
+  `customers` exists, the suite reads the Phase 3 prefix's own accepted files — `scripts/phase3-prefix.ts`
+  already holds their names and digests — and asserts that no migration in `0053–0073` creates a relation
+  matching those patterns. It still fails if a Phase 3 migration is edited to add a customer table, and it now
+  says nothing about the future. Red proof: plant a `CREATE TABLE customers` into a scratch copy of a Phase 3
+  migration and require the suite to name that file.
+- **The exact-list and route assertions become supplier-scoped.** The `(payment|refund|credit_note|credit_alloc)`
+  relation set (`:64-76`), the `accounting_source_types` and `DOMAIN_SOURCE_TYPES` lists (`:113-120`), the
+  `inventory_operation_kinds` list (`:124-133`) and the 404 assertions (`:81-108`) each keep every
+  `supplier_*` name they carry and drop the absolute equality, so what they assert is *the supplier settlement
+  surface is exactly these objects and these routes and nothing more* — the property P3-S6 actually bought.
+  Red proof: plant a second supplier-side refund route or source type and require the suite to name it.
+
+`[[daftar-a-closure-rule-is-not-an-invariant]]` is the whole argument: the invariant that outlives the slice is
+the shape of what the slice built, never "nothing else will ever exist".
 
 This work belongs to **P4-S1, before the first Phase 4 migration is written**, alongside the `registered_by`
 widening. It is the second of the two reasons the first Phase 4 CI run would otherwise be red for reasons that
@@ -985,9 +1194,16 @@ red proof is a claim, not a test.
 ### 17.5 Browser coverage
 
 **P4-AL-68 — Every Phase 4 screen is driven in all nine combinations: ar, en, tr × 360, 768, 1280.**
-Sixteen new steps added to `flows.ts` and exported as `PHASE4_STEPS`: `pos`, `pos-credit`, `pos-keypad`,
-`customers`, `customer`, `statement`, `invoices`, `invoice`, `collect`, `return`, `refund`, `installments`,
-`installment-collect`, `debts`, `void`, `p4-states`. 16 × 9 = 144 step-runs per gate run on top of the
+Sixteen new steps added to `flows.ts` and exported as `PHASE4_STEPS`, **every one `p4-` prefixed** so no
+name can collide with a Phase 3 step: `p4-pos`, `p4-pos-credit`, `p4-pos-keypad`, `p4-customers`,
+`p4-customer`, `p4-statement`, `p4-invoices`, `p4-invoice`, `p4-collect`, `p4-return`, `p4-refund`,
+`p4-installments`, `p4-installment-collect`, `p4-debts`, `p4-void`, `p4-states`. The prefix is not cosmetic:
+`flows.ts:275` already has `run.step('return', …)` — the supplier return, one of the fifteen Phase 3 steps —
+and `tests/browser/gate.ts:97,185` filters `--steps` as a plain name list with step records keyed by name
+(`run-context.ts:25`, `gate.ts:194-197`), so a second `return` would be run by `--steps=<PHASE3_STEPS>` and
+would reintroduce the exact coupling P4-AL-63 exists to remove, as well as colliding in the evidence
+records. P4-AL-63 therefore also asserts the two exported lists are **disjoint**, and `run.step` refuses a
+duplicate step name — a two-line assertion with its own red proof. 16 × 9 = 144 step-runs per gate run on top of the
 existing 135. Four new invariant kinds, each with its own planted defect so it is provably able to fire:
 `money` (every amount inside `<bdi>`, the currency's minor-unit decimals exactly, no locale digit
 substitution inside a document number), `total-visible` (at 360×640 with the keypad open, the cart total and
@@ -1024,7 +1240,7 @@ calibration-locked, never guessed.**
 | P4-F | payment allocation over 5 invoices, in-transaction and over HTTP | ≤ 40 ms / ≤ 100 ms | Budget A for the journal half; the per-invoice constant is calibration-derived (`OD-P4-14`) |
 | P4-G | return + refund: a 4-line return, its credit note, its inventory entry and the refund | **calibration-locked**, hard cap p95 ≤ 1 000 ms | composed: Budget A × 3 + 4 movements + the HTTP envelope |
 | P4-H | installment schedule read: a 24-instalment plan with derived status as of a date | p95 ≤ 50 ms | the accepted P3-S7 return-options read (`phase3-s7-read-budgets.test.ts:58`) |
-| P4-R | one full `R-SAL-*` + `R-INV-*` pass over the ≈1 000 000-line business | total ≤ 300 s | Budget F (`accounting-budgets.test.ts:65-66`) — the same ceiling now holds a strictly harder claim |
+| P4-R | one full `R-SAL-*` + `R-INV-*` pass over the ≈1 000 000-line business | **calibration-locked**, hard cap total ≤ 300 s | Budget F's 300 s (`accounting-budgets.test.ts:63-64`) covers the **Phase 2** checks only; Phase 4 adds seven `R-SAL-*` and five `R-INV-*` checks over a second million-row relation, so reusing the number would be neither anchored nor calibrated. The 300 s becomes an independent product cap above a calibrated ceiling, on the P4-C rule (`OD-P4-13`) |
 
 **P4-AL-72 — Every budget also carries a host-independent ratio assertion and narrow plan assertions.**
 A millisecond encodes this host's speed; a ratio measured in the same run on the same host encodes the
@@ -1186,6 +1402,14 @@ activation of any country-specific tax without an approved Country Pack (§13). 
 a `FUTURE_SLICE_SURFACES` list and refuses a table, operation kind or route belonging to a later slice or a
 later phase.
 
+**The one edge worth naming: "cart".** The roadmap gives Phase 6 "cart and checkout"
+(`docs/DAFTAR_IMPLEMENTATION_ROADMAP.md:37-39`). A POS till basket and a public checkout cart are different
+things, but a name-based `FUTURE_SLICE_SURFACES` list has no rule by which a `cart` table is Phase 4 here and
+Phase 6 there. So Phase 4's are named `pos_till_sessions` and `pos_cart_lines`, the Phase 4 basket is defined
+as server-side state keyed by an authenticated till session with **no public route**, and
+`FUTURE_SLICE_SURFACES` carries the `pos_` prefix rule rather than a bare `cart` name. The refusal then
+survives Phase 6 arriving.
+
 ### 20.1 Risks this lock accepts and names
 
 | # | risk | why it is accepted, and what bounds it |
@@ -1258,8 +1482,10 @@ P4-AL-35 — read, cash sale, collect payment — and everything else by explici
 `sales.discount` to the default, because a till that cannot discount is unusable in a shop that haggles.
 (c) Give cashiers nothing by default and require delegation even for a cash sale. *Risks.* (a) means a shop must
 delegate discounting to every cashier on day one, which is friction that invites over-delegation. (b) grants a
-sensitive, value-moving key by default, which the role-default constraints (`0041:57-65`, `0057:140-151`)
-forbid outright — so (b) is not merely unwise, it is unbuildable without changing an accepted constraint.
+sensitive, value-moving key by default. It is **buildable**: the Phase 2 and Phase 3 "no sensitive leak"
+checks are one-shot migration-time assertions over their own key arrays (`0041:57-65`, `0057:140-151`), not
+constraints, so nothing in the database refuses it today. It is refused by the Phase 4 assertion P4-AL-37
+requires P4-S1 to write — a decision this lock is making, not a fact it inherited.
 (c) makes the role pointless. *Recommendation.* (a). *And the backfill is the real question:* existing
 `Cashier` memberships predate these keys, so P4-S1 must either grant the new default keys to existing cashiers
 or leave them unable to sell. Recommendation: grant the non-sensitive defaults in the migration, audited, and
@@ -1372,7 +1598,9 @@ key is unaffected; (c) **refused**. *Blocks:* the slice that first makes the job
 **OD-P4-13 — the absolute cap on the sale-commit and return+refund budgets.**
 *Options.* (a) A 1 000 ms hard cap stated as a product requirement — a POS sale slower than a second is a defect
 whatever the machine measures. (b) No absolute cap; the calibration-locked p95 × 1.3 is the only ceiling.
-(c) A cap derived from the composed anchors alone, with no round number. *Risks.* (a) is a number nobody
+(c) A cap derived from the composed anchors alone, with no round number. The same question applies to
+**P4-R**, whose 300 s came from Budget F for the Phase 2 checks alone and now has to cover twelve more checks
+over a second million-row relation. *Risks.* (a) is a number nobody
 measured; its defence is that it is a **product** statement rather than a measurement, which makes it the Tech
 Lead's or the owner's to set rather than an engineer's to invent. (b) means a slow implementation locks in its
 own slowness at acceptance and the budget can only ever say the product got slower, never that it is too slow.
@@ -1416,9 +1644,31 @@ accounting; races on the last item, on invoice numbering, on allocations and on 
 counting; forged client totals; permission escalation; branch-scope bypass; an FX mismatch; an accidental
 non-zero tax policy; a migration conflict; and Phase 5/6/7 scope leakage.
 
-Its findings, and where each was closed in this document, are recorded in §23 of
-`docs/PHASE_4_EXECUTION_PLAN.md` — see **§9, Independent review** there. Every High and Medium finding
-touching data integrity, security or accounting was closed in this lock before the verdict was given.
+It returned twenty findings, RT-01 … RT-20, and eleven contradictions. Every one is tabulated in
+**§9, Independent review**, of `docs/PHASE_4_EXECUTION_PLAN.md`, with the decision that closed it. Every
+finding it raised — Critical, High, Medium and Low alike — was closed in this document before the verdict was
+given, and five of them changed a decision rather than a sentence:
+
+- **RT-01 (Critical)** — §4 pinned revenue to `4100`, which is **Sales Returns**; revenue is `4000`
+  (`0040:59-60`). Following the matrix would have netted revenue to zero against returns in a perfectly
+  balanced entry: the exact defect GOLD-28 exists to catch. Corrected, with a separate row for the returns
+  account.
+- **RT-02 (Critical)** — the permanent Phase 3 suite of P4-AL-88 asserts far more than the table half this
+  document originally named: the routes, both source-type registries and the inventory operation kinds too.
+  P4-AL-88 now carries all of it.
+- **RT-03 (High)** — `accounting_reversals_20_domain_source_guard` is a closed literal list ending at Phase 3
+  while `accounting_post_reversal` is granted to `daftar_app`, so the generic reversal path was open on a
+  Phase 4 entry and would have consumed its one reversal slot. Now a §2.2 requirement with a gate assertion.
+- **RT-04 (High)** — `customer_payment.*` is **unbuildable**: the op-code regex forbids an underscore in the
+  first segment, and the same regex lives in a frozen routine body. The namespace is now `customer.*`.
+- **RT-05 (High)** — the "role-default constraints" this document relied on are one-shot migration-time
+  assertions over hard-coded key arrays, not constraints. Nothing binds a Phase 4 key. That enforcement is
+  now the fourth protection Phase 4 must build, and `OD-P4-01`'s false "unbuildable" premise is corrected.
+
+The review also found the one internal contradiction that mattered: the sale's step order took the invoice
+sequence between two journal acquisitions while the declared lock order called it the last lock *after* the
+journal. Resolved in P4-AL-32 and P4-AL-41 by declaring the **domain** order and treating
+`accounting_post_entry`'s internal locks as its own, because the sale enters the journal twice.
 
 ---
 
@@ -1427,6 +1677,33 @@ touching data integrity, security or accounting was closed in this lock before t
 No product code. No endpoint. No POS screen. No migration. `0074` does not exist. No Phase 4 table, routine,
 route, component or string was created. No gate, suite or budget was executed. No country's tax law was
 researched and OD-03 is not closed. The only files P4-S0 changed are this document,
-`docs/PHASE_4_EXECUTION_PLAN.md`, and the four canonical status sources listed in §3.1.
+`docs/PHASE_4_EXECUTION_PLAN.md`, and the three canonical documents listed in §3.1 — `PROJECT_STATUS.md`,
+`TECHNICAL_DEBT.md` and `docs/DAFTAR_IMPLEMENTATION_ROADMAP.md`, which §3.1 covers in four rows.
 
 P4-S1 does not begin until the Tech Lead says so.
+
+---
+
+## 25. ملخص بالعربية
+
+P4-S0 هي مرحلة تحليل وقرار فقط. لم تُكتب أي شيفرة منتج، ولا endpoint، ولا شاشة POS، ولا migration، و`0074`
+غير موجود، و`0000–0073` لم تُمسّ.
+
+ما أُنتج: هذا المستند، وفيه القرارات المرقّمة `P4-AL-01` إلى `P4-AL-88`، وخطة التنفيذ
+`docs/PHASE_4_EXECUTION_PLAN.md` بتسع مراحل فرعية. وقبلهما صُحّحت المستندات الرسمية الثلاثة التي كانت
+تقول إن المرحلة الثانية «لم تبدأ» وإن المرحلة الثالثة «مرشّحة» لا مغلقة.
+
+اثنتان وعشرون مخالفة بين المستندات والشيفرة حُسمت لصالح الشيفرة، بلا حلول وسط. وأربع حمايات يفترض أي
+منفّذ أنها موروثة تبيّن أنها لا تغطّي المرحلة الرابعة إطلاقًا، وصارت أول عمل في `P4-S1`: الحارس `G-3`
+(يمسك `customers.balance_minor` وحده ويترك `invoices.paid_minor` يمرّ)، وحارس مصطلحات التاجر وقاعدة
+الضريبة في بوّابة المتصفّح (محصورة في `stock|purchases|suppliers`)، واختبار أمني دائم من المرحلة الثالثة
+يؤكّد أن جداول المرحلة الرابعة لن توجد أبدًا، ومنع منح صلاحية حسّاسة لدور بشكل افتراضي — وهو ليس قيدًا في
+قاعدة البيانات كما كنّا نظنّ، بل تحقّق يُنفَّذ مرّة واحدة.
+
+مراجعة معمارية مستقلّة قرأت المستندين والشيفرة بنفسها وأعادت عشرين ملاحظة، أُغلقت كلها في هذا المستند قبل
+الحكم. خمس منها غيّرت قرارًا، وأخطرها أن حساب الإيراد الذي كان مكتوبًا هنا (`4100`) هو في الواقع حساب
+مردودات البيع، والإيراد هو `4000`.
+
+وبقيت ستّة عشر قرارًا مفتوحًا تحتاج قرارك، وأهمّها `OD-P4-04`: عكس تخصيص في منتصف السلسلة يكسر حساب
+التحرير بوحدة صغرى واحدة، وهو يوقف `P4-S6` وتقنيًا TD-15 معه. و`OD-03` (ضريبة البيع) باقٍ مفتوحًا كما هو،
+ولم يُبحث قانون أي دولة.

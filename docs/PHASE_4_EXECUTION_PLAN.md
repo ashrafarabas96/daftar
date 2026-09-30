@@ -82,6 +82,15 @@ inherit.
    migration turns an accepted Phase 3 gate red. It is neither deleted nor allowlisted: it is re-expressed
    structurally against the Phase 3 prefix's own files, which keeps it exactly as strong and stops it being a
    claim about the future. **This must land before the first Phase 4 migration.**
+5. The **Phase 4 `role_permissions` assertion** (lock P4-AL-37). `0041:57-65` and `0057:140-151` are one-shot
+   migration-time `DO`-block assertions over hard-coded Phase 2 and Phase 3 key arrays — not constraints — so
+   nothing in the database stops a migration granting `sales.void` or `refunds.approve` to the cashier by
+   default. The first Phase 4 permission migration asserts it for the twelve Phase 4 keys, with a red proof
+   that plants `cashier -> sales.void`.
+6. The three accepted **exact-equality** role tests re-expressed per phase: `domain-core.test.ts:468,474` and
+   `inventory-permissions-provisioning.test.ts:142` assert the cashier's and manager's built-in sets with
+   `toEqual`, so any Phase 4 default key turns them red. Re-expressed the way Phase 3 did for its own keys,
+   never loosened.
 **Also.** `tests/security/phase4-forward-evolution.test.ts`; `scripts/phase4-prefix.ts`;
 `flows.ts` exporting `PHASE3_STEPS`/`PHASE4_STEPS` and `gate:phase3:corrective` pinned to the Phase 3 steps
 (lock P4-AL-63); the cashier default-permission backfill once `OD-P4-01` is answered; the `VIEW_REGISTRY`
@@ -110,8 +119,9 @@ calibration run for P4-C recorded; gate and exact-SHA CI green.
 **Blocked by.** `OD-P4-05` (oversell) before it starts; `OD-P4-13` for its acceptance.
 
 ### P4-S3 — POS, web
-**Scope.** The server-side cart, POS search and reads, the till session, the POS screens in ar/en/tr at three
-viewports. The client sends identities, quantities and a discount request, and nothing else is believed.
+**Scope.** The server-side till basket (`pos_till_sessions`, `pos_cart_lines` — named so
+`FUTURE_SLICE_SURFACES` can refuse Phase 6's public checkout cart by prefix), POS search and reads, the POS
+screens in ar/en/tr at three viewports. The client sends identities, quantities and a discount request, and nothing else is believed.
 **Gate.** `gate:phase4:s3` — composes s2; the trust boundary asserted by sending forged totals and requiring
 refusal; the cart's statement count constant in the line count; the POS browser steps' red proof planted in all
 nine combinations; POS type-ahead paced, never the limiter raised.
@@ -120,8 +130,10 @@ fire; P4-A and P4-B budgets measured; gate and CI green.
 **Blocked by.** `OD-P4-02` (price override) and `OD-P4-09` (till session) before it starts.
 
 ### P4-S4 — Payments, allocation, receivables, overpayment → customer credit
-**Scope.** `payments`, `payment_methods`, `payment_allocations`, `customer_credits`,
-`customer_credit_applications`; one journal entry per allocation; the carrying-release chain and its verifier;
+**Scope.** `payments`, `payment_allocations`, `customer_credits`,
+`customer_credit_applications` — **`payment_methods` already exists** (`0067:284`) and is reused, not
+created, with the same `(business_id, payment_method_id, posting_account_id)` three-column FK
+`supplier_payments` uses (`0067:352-354`); one journal entry per allocation; the carrying-release chain and its verifier;
 level-uniqueness; the surplus becoming a credit and never revenue.
 **Gate.** `gate:phase4:s4` — composes s3; the release chain verified; level-uniqueness asserted against direct
 SQL; `paid + outstanding = total` after every step; the credit's two halves proportional on partial consumption
@@ -190,6 +202,8 @@ per-slice matrix instantiates them.
 | `scripts/phase4-prefix.ts`, `scripts/phase4-*-gate.ts`, `scripts/phase4-budget-ratchet.ts` | the gate owner | one owner per slice gate; the prefix module has one owner for the phase |
 | `scripts/guards/*` | the guard owner | G-3's sales arm and the jargon guard's namespaces are one change by one agent |
 | `packages/domain-core/src/permissions.ts` | the authority owner | the registry is closed and adding to it is one change |
+| `packages/domain-core/test/domain-core.test.ts`, `tests/integration/inventory-permissions-provisioning.test.ts` | the authority owner | three accepted `toEqual` assertions on the built-in role sets; a Phase 4 default key turns them red, and they are re-expressed per phase, never loosened |
+| `tests/security/settlement-s6-no-customer-payments.test.ts` | the authority owner, in P4-S1 | a **Phase 3** security suite composed into `gate:phase4:s1`; the first Phase 4 migration, source type, operation code and route each break it (lock P4-AL-88) |
 | `packages/accounting/*` | the accounting owner | serialized; never edited in parallel with a migration that changes a journal shape |
 | `apps/api/src/**` per bounded context | one agent per context | the composite seams in `infra/database.ts` are the accounting owner's |
 | `apps/web/src/app/[locale]/(pos|customers|invoices|payments|refunds|installments|debts)/**` | one agent per screen group | shared components are the design owner's |
@@ -244,9 +258,9 @@ migration owner writes them.
 | slice | migration content (planned) |
 |---|---|
 | S1 | the four `registered_by` pattern widenings; `customers`, `customer_contacts`; `invoices`, `invoice_items`, `invoice_sequences` with their composite candidate keys and FKs; RLS enable + force + the five policies each; the `invoice` source type, its operation kinds, both bindings and its deferred completeness validator |
-| S2 | `sales`, `sale_items`; the `sale.*` operation kinds; the `sale` source type with both bindings and its validator; the sale commit routine and the walk-in consistency trigger |
-| S3 | the till session and server-side cart tables; no accounting object |
-| S4 | `payments`, `payment_methods`, `payment_allocations`, `customer_credits`, `customer_credit_applications`; the level-uniqueness constraints; the carrying-release routine and its verifier; the `payment_allocation` source type |
+| S2 | `sales`, `sale_items` (with `UNIQUE (business_id, sale_id, id)` for the bridge's line FK); the `sale.*` operation kinds; the `sale` accounting source type with both bindings and its validator; **the `stock_source_types` row and the whole `stock_source_bridge_sale` apparatus** — bridge table, generated constant, binding FK, line FK, RLS enable+force plus five policies, append-only trigger, deferred binding trigger, recorded `prosrc` digests, and the migration's own assertion that `inventory_stock_source_guard_gaps()` returns no row (P4-AL-29b); the sale commit routine; `sales_walkin_no_ar` |
+| S3 | `pos_till_sessions` and `pos_cart_lines`; no accounting object |
+| S4 | `payments`, `payment_allocations`, `customer_credits`, `customer_credit_applications` (**not** `payment_methods`, which `0067:284` already created); the level-uniqueness constraints **and** the deferred chain verifier; the carrying-release routine; the `payment_allocation` source type |
 | S5 | `credit_notes`, `credit_note_items`, `refunds` with the one-non-null-source `CHECK`; the `credit_note` and `refund` source types |
 | S6 | `payment_reversals`, `allocation_reversals`; the `allocation_reversal` source type; the void-path refusal trigger; the shape `OD-P4-04` decides |
 | S7 | `installment_plans`, `installments` with the sum constraint |
@@ -300,11 +314,45 @@ Tech Lead directive.
 
 ## 9. Independent review
 
-An independent reviewer read the Architecture Lock and this plan against the current tree, without the
-coordinator's summary, hunting nineteen named failure classes. Its findings and their resolutions are recorded
-here; the resolutions themselves live in the lock.
+An independent reviewer read the Architecture Lock and this plan against the current tree, reading the code
+itself rather than the coordinator's summary, and hunting the nineteen named failure classes. It returned
+twenty findings and eleven contradictions. **All twenty were closed in the lock before the verdict was
+given**, and every claim below was re-verified by the coordinator against the cited code rather than accepted
+on the reviewer's word.
 
-*(Filled by the review pass — see the P4-S0 report.)*
+| id | severity | category | finding | closed by |
+|---|---|---|---|---|
+| RT-01 | Critical | accounting | the source-of-truth matrix pinned revenue to `4100`, which is **Sales Returns**; revenue is `4000` (`0040:59-60`). A perfectly balanced entry would have netted revenue to zero — the GOLD-28 defect | lock §4, corrected, with a separate returns row; goldens read every code from `0040` |
+| RT-02 | Critical | process | `tests/security/settlement-s6-no-customer-payments.test.ts` asserts, against the live catalogue, that the Phase 4 tables, routes, source types and operation kinds will never exist (`:41-133`); it is required by name at `phase3-s6-gate.ts:172` and composed into `gate:phase4:s1` | lock P4-AL-88, widened to all four halves, with the two-part re-expression and its red proofs; owner named in §4 above |
+| RT-03 | High | security | `accounting_reversals_20_domain_source_guard` is a closed literal list ending at Phase 3 (`0067:2249-2251`) while `accounting_post_reversal` is granted to `daftar_app` (`0046:765`), so the generic path could reverse an `invoice` entry and consume its one reversal slot | a §2.2 requirement, plus a `pg_proc.prosrc` assertion in `gate:phase4:s1` with a red proof |
+| RT-04 | High | process | `customer_payment.*` is unbuildable: `op_code ~ '^[a-z]+(\.[a-z_]+)+$'` (`0054:53`) forbids an underscore in the first segment, and the same regex is in the frozen `inventory_assertion_consume` body (`0054:229`) | lock P4-AL-28 renamed the namespace to `customer.*`, and S1 asserts both halves |
+| RT-05 | High | security | the "role-default constraints" are one-shot migration-time `DO`-block assertions over hard-coded key arrays (`0041:57-65`, `0057:140-151`); nothing binds a Phase 4 key | lock P4-AL-37 makes the Phase 4 assertion the fourth protection S1 builds; `OD-P4-01`'s "unbuildable" premise corrected |
+| RT-06 | High | security | the authority matrix had an **Accountant** column over a three-role system (`permissions.ts:120`, `0041:19-20`), and the cashier/manager default changes break three accepted `toEqual` tests | lock P4-AL-35 states the Accountant is a custom role and names the three tests; plan §4 and P4-S1 own them |
+| RT-07 | High | accounting | level-uniqueness has no Phase 3 precedent over a *payment* (the two real `level_uq`s are `0067:438,491`, over a credit note), and a UNIQUE over a declared level does not cap total consumption | lock P4-AL-22 rewritten: the `UNIQUE` is necessary, the COMMIT-time chain verifier is sufficient, and S4 asserts the verifier against direct SQL |
+| RT-08 | High | data-integrity | §2.2 omitted the entire **stock** source apparatus that `inventory_stock_source_guard_gaps()` demands (`0061:307-481`, precedent `0063:400-431`) | new lock P4-AL-29b with the full object table; added to plan §6's S2 row and to the `sale_items` candidate key |
+| RT-09 | Medium/High | data-integrity | §4 sanctioned `sale_items.cogs_minor` as an "input" while P4-AL-25's input is `stock_movements.value_delta_base_minor` — two stored integers for one figure, unguarded | lock §4 now forbids the column; `cogs|cost` join the extended G-3 pattern |
+| RT-10 | Medium/High | documentation | "zero counter columns" is false: `stock_levels.last_stock_seq` (`0059:107`, `0060:437,454`) | lock P4-AL-31's premise replaced with the truth and the cache-versus-record distinction; the conclusion stands |
+| RT-11 | Medium | data-integrity | `invariants.ts:207-209`'s `acctRe` drives the **`jargon`** rule, not `tax-control`, and forbids the word `tax` on any walked screen — so P4-AL-44's zero-tax field is un-displayable | lock P4-AL-52 corrected and P4-AL-44 decided: no Phase 4 screen renders a tax field while tax is structurally zero; the Country Pack adds the row |
+| RT-12 | Medium | process | the proposed step `return` collides with `flows.ts:275`, reintroducing the coupling P4-AL-63 removes | every Phase 4 step is `p4-` prefixed; P4-AL-63 asserts the lists disjoint and `run.step` refuses a duplicate |
+| RT-13 | Medium | documentation | inherited G-2/G-3 rules treat every Phase 4 table as a Phase 3 relation and fix the DDL vocabulary; the lock listed only the guards it must build | new lock P4-AL-15b names the inherited rules and pins the vocabulary |
+| RT-14 | Medium | documentation | P4-AL-09's MATCH SIMPLE hazard cannot occur (`business_id` is independently constrained; precedent `0067:339,356`) and the named trigger was on a table with no `customer_id` | both rewritten: the FK reasoning corrected, and three `*_walkin_no_ar` triggers for the invariant that is real |
+| RT-15 | Medium | process | P4-AL-06 demanded discovery and then supplied an eleven-table list, in the file whose header explains why lists rot (`:33-38`) | replaced with one rule: the AP/AR vocabulary applies to every relation the Phase 2 prefix did not create |
+| RT-16 | Low/Medium | documentation | `§26`, `§4.2` and the plan's `§23` all dangled, and the lock claimed a review had closed every finding while this section was an empty placeholder | §25 Arabic summary added, references fixed, and this table is the record |
+| RT-17 | Low/Medium | scope | `payment_methods` already exists (`0067:284`) and the "nineteen tables" count was wrong three ways | lock P4-AL-08 restated; removed from plan §6's S4 row; the bridges and POS tables counted |
+| RT-18 | Low/Medium | scope | Phase 6 owns "cart and checkout" by name and `FUTURE_SLICE_SURFACES` is name-based | Phase 4's are `pos_till_sessions` / `pos_cart_lines`, with a `pos_` prefix rule |
+| RT-19 | Low | data-integrity | `assertComplete()` allows the **zero**-posting case (`database.ts:488-495`), so the seam the atomic-sale law credited does not give all-or-nothing | lock P4-AL-16 now credits the source row's deferred binding FK, with four structural assertions in `gate:phase4:s2` |
+| RT-20 | Low | process | P4-R reused Budget F's 300 s for strictly more work | made calibration-locked with 300 s as a product cap, under `OD-P4-13` |
+
+**The one internal contradiction that changed a decision.** The sale's step order took the invoice sequence
+between the two journal acquisitions while the declared lock order called `invoice_sequences` the last lock
+*after* `journal_entries`. Resolved by declaring the **domain** lock order and treating
+`accounting_post_entry`'s locks as its own internal order, because a sale enters the journal twice and no
+linear list naming it once could describe the sale at all.
+
+**What the review could not do.** It executed no gate, suite, budget or migration — one scratch probe of the
+guard's own exported functions aside — so RT-02's and RT-06's failure predictions are structural reads of
+literal `toEqual` and `toBeNull` assertions rather than observed red runs. It read no Phase 4 product code,
+because none exists.
 
 ---
 
