@@ -268,6 +268,35 @@ export function forbiddenShapeProblems(rel: string, source: string, headNumber: 
 const EXACT_EQUALITY = /toEqual\(\s*(?!expect\.)/;
 
 /**
+ * `.not.toBeNull()` asserts that a relation EXISTS. That is the OPPOSITE of a
+ * future claim — it is a present-tense statement about what the current prefix
+ * built — so the negated form is rewritten out of the way before the
+ * absolute-absence rule looks for a positive `toBeNull`.
+ *
+ * This is what made the rule wrong in both directions when it was scoped to
+ * the FILE: `tests/security/settlement-s6-no-customer-payments.test.ts` asserts
+ * `.not.toBeNull()` over the seven SUPPLIER settlement relations at §B1, and
+ * the rule saw the token `toBeNull` somewhere, the token `to_regclass`
+ * somewhere, and then attributed a finding to every Phase 4 relation named in
+ * any quoted string anywhere in the file — ten findings, none of them a claim
+ * the file actually makes. Scoping the rule to the ASSERTION and teaching it
+ * the negation makes it strictly sharper: it still catches a genuine
+ * `toBeNull` (the red proof below plants one), and it no longer invents a
+ * claim out of two tokens that never met.
+ *
+ * It is applied to the WHOLE source rather than to one line, because a
+ * formatter may put `.not` at the end of one line and `.toBeNull()` at the
+ * start of the next, and a line-by-line strip would then read the second line
+ * as a positive assertion. Every whitespace run is captured and written back,
+ * so the rewrite never changes a line number: the positions the rule reports
+ * are the positions in the file the reader opens.
+ */
+const withoutNegatedNullAssertions = (s: string): string => s.replace(/\.not(\s*)\.(\s*)toBeNull(\s*)\(/g, '.not$1.$2toBeNonNull$3(');
+
+/** A POSITIVE `toBeNull` assertion, the negated form having been rewritten away. */
+const ASSERTS_NULL = /\.toBeNull\s*\(/;
+
+/**
  * The future claims a suite may not make. Each rule returns the problems of one
  * file; `window` is used where the claim and its subject sit on nearby lines.
  */
@@ -275,15 +304,31 @@ export function futureClaimProblems(rel: string, source: string): string[] {
   const problems: string[] = [];
   const lines = source.split('\n');
   const window = (i: number): string => lines.slice(Math.max(0, i - 8), i + 9).join('\n');
-
-  if (/to_regclass/.test(source) && /toBeNull/.test(source))
-    for (const relation of PHASE4_RELATIONS)
-      if (new RegExp(`['"\`](?:public\\.)?${relation}['"\`]`).test(source))
-        problems.push(
-          `${rel}: it asks the live catalogue whether "${relation}" exists and requires NULL — that is a claim about the phase that creates it, not about the Phase 3 prefix (P4-AL-88)`,
-        );
+  // The same lines with every NEGATED null assertion rewritten away, line
+  // numbering preserved. Only the absolute-absence rule reads these.
+  const positiveLines = withoutNegatedNullAssertions(source).split('\n');
 
   lines.forEach((line, i) => {
+    // ABSOLUTE ABSENCE, scoped to the ASSERTION rather than to the file: a
+    // POSITIVE `toBeNull` whose `to_regclass` lookup and whose Phase 4
+    // relation name are both within reach of it. `.not.toBeNull()` is the
+    // opposite claim and is excluded by `withoutNegatedNullAssertions`.
+    if (ASSERTS_NULL.test(positiveLines[i] ?? '') && /to_regclass/.test(window(i))) {
+      // The subjects: the Phase 4 relations named within reach of the
+      // assertion. A loop over a table list declared far above names none of
+      // them nearby, so when the window names none the rule falls back to the
+      // whole FILE rather than miss the claim. The thing this rule now
+      // discriminates on is the NEGATION, never the distance — so it is
+      // strictly sharper than the file-scoped version it replaces and never
+      // less catching.
+      const named = (haystack: string, relation: string): boolean => new RegExp(`['"\`](?:public\\.)?${relation}['"\`]`).test(haystack);
+      const near = PHASE4_RELATIONS.filter((relation) => named(window(i), relation));
+      const subjects = near.length > 0 ? near : PHASE4_RELATIONS.filter((relation) => named(source, relation));
+      for (const relation of subjects)
+        problems.push(
+          `${rel}:${i + 1}: it asks the live catalogue whether "${relation}" exists and requires NULL — that is a claim about the phase that creates it, not about the Phase 3 prefix (P4-AL-88)`,
+        );
+    }
     if (/relname\s*~/.test(line) && /\((?:[a-z_|]*\|)+[a-z_]*\)/.test(line) && EXACT_EQUALITY.test(window(i)))
       problems.push(
         `${rel}:${i + 1}: a "no relation whatever matches" catalogue claim — a Phase 4 relation makes it red, and it says nothing about what Phase 3 built (P4-AL-88)`,
@@ -431,6 +476,74 @@ describe('P4-AL-88: the permanent Phase 3 suites claim the prefix, not the futur
     // re-expression must be able to keep every supplier name it carries.
     const scoped = `const rows = await pool.query("SELECT source_type FROM accounting_source_types WHERE source_type ~ '(payment|refund)'");\nexpect(rows.rows.map((r) => r.source_type)).toEqual(expect.arrayContaining(['supplier_payment', 'supplier_refund']));`;
     expect(futureClaimProblems('fixture.test.ts', scoped)).toEqual([]);
+  });
+
+  it('the absolute-absence rule reads the assertion, not the file: a positive toBeNull is caught and a negated one is not', () => {
+    // BOTH directions, because a precision change that only proves one of them
+    // is a claim and not a proof. The rule used to fire on the co-occurrence of
+    // `to_regclass` and `toBeNull` ANYWHERE in a file, which made it wrong both
+    // ways: it invented ten findings out of §B1's `.not.toBeNull()` existence
+    // check, and it would equally have credited a file for a genuine absence
+    // claim sitting next to any unrelated `.not.toBeNull()`.
+
+    // (1) STILL CAUGHT. A genuine absence claim about a Phase 4 relation.
+    const claimsAbsent = `const r = await pool.query('SELECT to_regclass($1)::text AS oid', ['public.customers']);\nexpect(r.rows[0]?.oid ?? null).toBeNull();`;
+    const caught = futureClaimProblems('fixture.test.ts', claimsAbsent);
+    expect(caught.join('\n')).toContain('whether "customers" exists and requires NULL');
+
+    // (2) NOT A FINDING. The same relation, the same `to_regclass`, the
+    // opposite assertion: that it EXISTS. This is §B1's shape, and it is a
+    // present-tense claim about what the current prefix built.
+    const claimsPresent = `const r = await pool.query('SELECT to_regclass($1)::text AS oid', ['public.customers']);\nexpect(r.rows[0]?.oid ?? null).not.toBeNull();`;
+    expect(futureClaimProblems('fixture.test.ts', claimsPresent)).toEqual([]);
+
+    // (3) The two together in one file: the negated one must not launder the
+    // positive one away, and the positive one must not contaminate it. Exactly
+    // one finding, and it names the line the real claim is on.
+    const both = `${claimsPresent}\n${'\n'.repeat(20)}${claimsAbsent}`;
+    const mixed = futureClaimProblems('fixture.test.ts', both);
+    expect(mixed).toHaveLength(1);
+    expect(mixed[0]).toContain(`fixture.test.ts:${both.split('\n').findIndex((l) => /(?<!not)\.toBeNull/.test(l)) + 1}:`);
+
+    // (4) STILL CAUGHT, and the reason the rule keeps a file-scoped fallback:
+    // a LOOP whose table list is declared far above the assertion names no
+    // relation within reach of it. The old file-scoped rule caught this; the
+    // new one must too, or the precision fix would have been a narrowing.
+    const loopClaim = [
+      `const PHASE4_TABLES = ['payments', 'refunds'] as const;`,
+      ...Array.from({ length: 30 }, () => ''),
+      `for (const name of PHASE4_TABLES) {`,
+      `  const r = await pool.query('SELECT to_regclass($1)::text AS oid', [\`public.\${name}\`]);`,
+      `  expect(r.rows[0]?.oid ?? null).toBeNull();`,
+      `}`,
+    ].join('\n');
+    const loopCaught = futureClaimProblems('fixture.test.ts', loopClaim);
+    expect(loopCaught.join('\n')).toContain('whether "payments" exists and requires NULL');
+    expect(loopCaught.join('\n')).toContain('whether "refunds" exists and requires NULL');
+
+    // (5) And the negated form of that same loop — §B1's actual shape, a list
+    // of names far above an EXISTENCE check — is still not a finding.
+    const loopPresent = loopClaim.replace('.toBeNull()', '.not.toBeNull()');
+    expect(futureClaimProblems('fixture.test.ts', loopPresent)).toEqual([]);
+
+    // (6) And the file-scoped mistake itself, reconstructed: a `to_regclass`
+    // existence check with the Phase 4 relation names appearing only as data
+    // far away from it — which is precisely §B1 plus this suite's own table
+    // lists — is no longer a finding at all.
+    const fileScopedTrap = `const TABLES = ['payments', 'refunds', 'credit_notes', 'customer_credits'] as const;\n${'\n'.repeat(30)}${claimsPresent}`;
+    expect(futureClaimProblems('fixture.test.ts', fileScopedTrap)).toEqual([]);
+
+    // (7) And the negation is recognised ACROSS A LINE BREAK, the shape a
+    // formatter produces on a long expectation. A line-by-line strip would
+    // read the second line as a positive assertion and invent a finding; and
+    // the rewrite must not shift the line numbers it reports either, which the
+    // positive case below pins.
+    const wrapped = `const r = await pool.query('SELECT to_regclass($1)::text AS oid', ['public.customers']);\nexpect(r.rows[0]?.oid ?? null)\n  .not\n  .toBeNull();`;
+    expect(futureClaimProblems('fixture.test.ts', wrapped)).toEqual([]);
+    const wrappedPositive = `const r = await pool.query('SELECT to_regclass($1)::text AS oid', ['public.customers']);\nexpect(r.rows[0]?.oid ?? null)\n  .toBeNull();`;
+    const wrappedCaught = futureClaimProblems('fixture.test.ts', wrappedPositive);
+    expect(wrappedCaught).toHaveLength(1);
+    expect(wrappedCaught[0]).toContain('fixture.test.ts:3:');
   });
 });
 

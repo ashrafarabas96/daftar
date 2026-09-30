@@ -185,6 +185,13 @@ export const S1_SUITES: readonly (SuiteEntry | Pending)[] = [
   // this slice does not own.
   { id: 'PD-01', area: 'permissions', runner: 'root', file: 'tests/security/phase4-permission-defaults.test.ts' },
   { id: 'PD-02', area: 'permissions', runner: 'root', file: 'tests/security/phase4-registry-phase-scoping.test.ts' },
+  // P4-AL-88: the Phase 4 route-surface property. It carries the protection
+  // §B5 of the settlement suite used to hold — no customer settlement route —
+  // in the tense-independent form: the mounted `/v1` surface equals what the
+  // selling controllers DECLARE, both halves derived from the same Nest route
+  // metadata, so mounting a route updates both at once and P4-S4 does not turn
+  // it red. Composed here because the claim is Phase 4's, not Phase 3's.
+  { id: 'RS-01', area: 'route-surface', runner: 'root', file: 'tests/security/phase4-route-surface.test.ts' },
   // The four P4-S1 goldens (lock §17.4; execution plan P4-S1 Exit).
   {
     id: 'G-02',
@@ -284,6 +291,27 @@ export const RED_PROOFS: readonly (RedProof | Pending)[] = [
 // The Phase 4 surface this gate reasons about. All of it is vocabulary, not a
 // count: adding a route group or a relation cannot escape by arithmetic.
 // ─────────────────────────────────────────────────────────────────────────
+
+/**
+ * The twelve Phase 4 permission keys P4-S1 declares (lock OD-P4-01 A), in the
+ * lock's own order. Used ONLY by the candidate-tense fence: the permanent
+ * suite requires each of them by name, and this is what makes "and no
+ * thirteenth" checkable while P4-S1 is the open slice.
+ */
+export const P4_S1_PERMISSION_KEYS: readonly string[] = [
+  'sales.view',
+  'sales.create',
+  'sales.void',
+  'sales.return',
+  'sales.discount',
+  'customers.view',
+  'customers.manage',
+  'payments.collect',
+  'payments.reverse',
+  'refunds.approve',
+  'receivables.view',
+  'installments.manage',
+];
 
 /** The route prefixes Phase 4 serves (lock §16, P4-AL-88's route list). A controller under one of these is a Phase 4 route. */
 export const PHASE4_ROUTE_PREFIXES: readonly string[] = [
@@ -1064,10 +1092,21 @@ export function discoverPhase4Routes(root: string): string[] {
     const source = stripTsProse(readFileSync(file, 'utf8'));
     const prefix = /@Controller\(\s*'([^']*)'/.exec(source)?.[1] ?? '';
     const normalized = `/${prefix.replace(/^\/+|\/+$/g, '')}`;
-    if (!PHASE4_ROUTE_PREFIXES.some((p) => normalized === p || normalized.startsWith(`${p}/`))) continue;
     for (const m of source.matchAll(/@(Get|Post|Patch|Put|Delete)\(\s*(?:'([^']*)')?\s*\)/g)) {
       const sub = (m[2] ?? '').replace(/^\/+/, '');
-      routes.push(`${(m[1] ?? '').toUpperCase()} ${sub === '' ? normalized : `${normalized}/${sub}`}`);
+      const path = sub === '' ? normalized : `${normalized}/${sub}`;
+      // The prefix is matched against the FULL ROUTE, never against the
+      // `@Controller` argument alone. `InvoicesController` is
+      // `@Controller('/v1')` and mounts `invoices`, `invoices/:invoiceId`,
+      // `invoices/:invoiceId/settlement` and `document-sequences`: matching the
+      // controller argument would have compared `/v1` against `/v1/invoices`
+      // and discovered NONE of them, so four Phase 4 routes escaped this
+      // function — and with it `crossTenantProblems` (G-02), which enumerates
+      // the cross-tenant golden from exactly this list, and the write-route
+      // check of the candidate-tense fence. A route is Phase 4 because of the
+      // path it SERVES, not because of how its controller happens to be split.
+      if (!PHASE4_ROUTE_PREFIXES.some((q) => path === q || path.startsWith(`${q}/`))) continue;
+      routes.push(`${(m[1] ?? '').toUpperCase()} ${path}`);
     }
   }
   return [...new Set(routes)].sort();
@@ -1089,6 +1128,109 @@ export function crossTenantProblems(root: string): string[] {
     if (!text.includes(path))
       problems.push(`${route} appears in no cross-tenant golden — the suite is enumerated from the route surface so a new route cannot escape (G-02)`);
   }
+  return problems;
+}
+
+/**
+ * Every route declared by a controller in `apps/api/src/modules/selling/` — the
+ * Phase 4 selling surface — WHATEVER path it serves.
+ *
+ * Deliberately not `discoverPhase4Routes`, which filters by
+ * `PHASE4_ROUTE_PREFIXES`. That filter is right for G-02, whose subject is the
+ * enumerated Phase 4 route surface, but it is wrong for a "no write route"
+ * claim: a write route mounted on a path the prefix list does not yet name
+ * would escape the check entirely. `GET /v1/document-sequences` is exactly such
+ * a path today — a real Phase 4 read route that no prefix in that list covers.
+ * The claim here is about the CONTROLLERS, so it reads the controllers.
+ */
+export function sellingRoutes(root: string): string[] {
+  const dir = join(root, 'apps/api/src/modules/selling');
+  if (!existsSync(dir)) return [];
+  const routes: string[] = [];
+  for (const entry of readdirSync(dir).sort()) {
+    if (!entry.endsWith('.controller.ts')) continue;
+    const source = stripTsProse(readFileSync(join(dir, entry), 'utf8'));
+    const prefix = /@Controller\(\s*'([^']*)'/.exec(source)?.[1] ?? '';
+    const normalized = `/${prefix.replace(/^\/+|\/+$/g, '')}`;
+    for (const m of source.matchAll(/@(Get|Post|Patch|Put|Delete)\(\s*(?:'([^']*)')?\s*\)/g)) {
+      const sub = (m[2] ?? '').replace(/^\/+/, '');
+      routes.push(`${(m[1] ?? '').toUpperCase()} ${sub === '' ? normalized : `${normalized}/${sub}`}`);
+    }
+  }
+  return [...new Set(routes)].sort();
+}
+
+/**
+ * THE P4-S1-ONLY CLAIMS (P4-AL-61), fenced.
+ *
+ * Two protections are true of P4-S1 and FALSE of the slices that follow it, so
+ * no permanent suite may hold them in any tense, and neither may be dropped:
+ *
+ *   1. P4-S1 MOUNTS NO WRITE ROUTE ON THE PHASE 4 SURFACE (lock P4-AL-31).
+ *      `tests/security/phase4-route-surface.test.ts` holds the permanent,
+ *      tense-independent half — that the mounted surface equals the DECLARED
+ *      surface and nothing outside it answers — which stays true when P4-S4
+ *      declares `POST /v1/payments`, because both of its halves read the same
+ *      declaration. What that permanent form deliberately cannot say is that
+ *      the declared surface contains no write verb AT ALL. That is this
+ *      slice's claim, and P4-S4 makes it false by design.
+ *
+ *   2. THE REGISTRY HOLDS NO PHASE 4 PERMISSION KEY P4-S1 DID NOT DECLARE.
+ *      `tests/security/phase4-permission-defaults.test.ts` requires all twelve
+ *      of the lock's keys BY NAME and no longer requires the Phase 4 namespaces
+ *      to hold exactly twelve, because P4-S4 registers the payment keys and
+ *      P4-S5 the credit-note ones. "And no thirteenth" is this slice's claim.
+ *
+ * Both are read from the same sources the permanent suites read — the
+ * controllers' own decorators and `packages/domain-core/src/permissions.ts` —
+ * so neither is a literal list that can drift from what the tree does.
+ *
+ * The acceptance commit DELETES this function, its fence and its CHECKS entry,
+ * exactly as it deletes the candidate half of `boundaryProblems`. While P4-S1
+ * is a candidate `closureRuleProblems` requires the markers to be present; the
+ * moment `S1_ACCEPTED` is filled it requires them to be GONE, so this cannot be
+ * left behind.
+ */
+export function candidateSurfaceProblems(root: string, accepted: Readonly<Record<string, string>> = S1_ACCEPTED): string[] {
+  if (Object.keys(accepted).length > 0) return [];
+  const problems: string[] = [];
+  // ───────────────────────── CANDIDATE-TENSE (P4-AL-61) ─────────────────────────
+  // Deleted by the P4-S1 acceptance commit, together with this fence. These are
+  // closure rules about ONE OPEN SLICE and they may never be copied into a
+  // permanent suite or into scripts/phase4-prefix.ts.
+
+  // (1) No write verb on the Phase 4 surface while P4-S1 is the open slice.
+  const routes = sellingRoutes(root);
+  const writes = routes.filter((r) => !r.startsWith('GET '));
+  for (const route of writes)
+    problems.push(
+      `${route} is a WRITE route on the Phase 4 surface — P4-S1 delivers reads only (P4-AL-31). If this is P4-S4's work, it is landing in the wrong slice; if P4-S1 is now accepted, fill S1_ACCEPTED and delete the CANDIDATE-TENSE fence that carries this check`,
+    );
+  // The canary: with no route discovered at all, the check above passes by
+  // having no subject, which would hide the very thing it exists to catch.
+  if (routes.length === 0)
+    problems.push(
+      'no route is declared by any controller in apps/api/src/modules/selling — the write-route check has no subject, so it cannot say anything (P4-AL-31)',
+    );
+
+  // (2) No Phase 4 permission key beyond the lock's twelve.
+  const permissionsFile = 'packages/domain-core/src/permissions.ts';
+  if (!has(root, permissionsFile)) problems.push(`${permissionsFile} is missing — the Phase 4 key set cannot be read`);
+  else {
+    const declared = new Set(
+      [...stripTsProse(read(root, permissionsFile)).matchAll(/'((?:sales|customers|payments|refunds|receivables|installments)\.[a-z_]+)'/g)].map(
+        (m) => m[1] ?? '',
+      ),
+    );
+    const extra = [...declared].filter((k) => !P4_S1_PERMISSION_KEYS.includes(k)).sort();
+    for (const key of extra)
+      problems.push(
+        `${key} is a Phase 4 permission key that P4-S1 does not declare — the lock's twelve are the whole P4-S1 set (OD-P4-01). If a later slice owns this key, it is landing in the wrong slice; if P4-S1 is now accepted, fill S1_ACCEPTED and delete the CANDIDATE-TENSE fence that carries this check`,
+      );
+    for (const key of P4_S1_PERMISSION_KEYS)
+      if (!declared.has(key)) problems.push(`${key} is one of P4-S1's twelve Phase 4 permission keys and ${permissionsFile} does not declare it`);
+  }
+  // ─────────────────────── end CANDIDATE-TENSE (P4-AL-61) ───────────────────────
   return problems;
 }
 
@@ -1213,6 +1355,17 @@ export const CHECKS: readonly Check[] = [
     needs: 'live',
     run: closureRuleProblems,
     ok: 'the permanent prefix module bounds nothing, and the candidate tense is fenced inside this gate',
+  },
+  {
+    id: 'candidate-surface',
+    title: "P4-S1's own claims, which the acceptance commit deletes (P4-AL-61, P4-AL-31)",
+    area: 'closure-rule',
+    // 'live', not 'phase4-route': this check carries its own canary for an
+    // empty route surface, so it must be able to FAIL when the surface is
+    // missing rather than report NOT-YET-APPLICABLE and say nothing.
+    needs: 'live',
+    run: candidateSurfaceProblems,
+    ok: "the Phase 4 surface is reads only and the Phase 4 permission set is exactly P4-S1's twelve",
   },
   {
     id: 'guards',

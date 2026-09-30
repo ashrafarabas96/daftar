@@ -79,7 +79,17 @@ const CUSTOMER_SETTLEMENT_TABLES = [
   'customer_refunds',
 ] as const;
 
-/** The pattern the suite always used on `relname`, unchanged. */
+/**
+ * The pattern the suite always used on `relname`, unchanged.
+ *
+ * It is named here and referred to by name from the assertion and from the test
+ * titles. The titles used to quote the alternation verbatim, which made a test
+ * NAME read as a Phase 4 vocabulary filter sitting beside an exact equality —
+ * the shape `tests/security/phase4-forward-evolution.test.ts` refuses. The
+ * pattern itself is unchanged and the assertion is unchanged; only the echo of
+ * it in the prose is gone, and the one definition is now the only place the
+ * alternation is written.
+ */
 const CUSTOMER_RELATION_PATTERN = /(customer|sale|invoice)/;
 
 /** A relation this migration brings into existence, and how. */
@@ -133,7 +143,7 @@ describe('§A T-09 MP-7 (structural): no Phase 3 migration creates a customer-si
     expect(PHASE3_FILES[PHASE3_FILES.length - 1]).toMatch(/^0073_/);
   });
 
-  it('no migration in 0053–0073 creates a relation matching (customer|sale|invoice)', () => {
+  it('no migration in 0053–0073 creates a relation matching CUSTOMER_RELATION_PATTERN', () => {
     const created = relationsCreatedBy(MIGRATIONS_DIR, PHASE3_FILES);
     // The finder must actually be finding things, or an empty result proves nothing.
     expect(created.length).toBeGreaterThan(40);
@@ -208,6 +218,16 @@ const isSupplierSettlementRelation = (n: string): boolean => /(payment|refund|cr
 const SUPPLIER_SOURCE_TYPES = ['supplier_return', 'supplier_payment', 'supplier_credit_allocation', 'supplier_refund'] as const;
 
 /**
+ * The SETTLEMENT half of the supplier source types, by shape. Hoisted here for
+ * the same reason `isSupplierSettlementRelation` above is: the predicate is the
+ * scope of the claim, and it belongs with the other scopes rather than inline
+ * in an assertion. `^supplier_` is what makes it P3-S6's claim and not a claim
+ * about every phase — a Phase 4 `customer_payment` or `sale_refund` cannot
+ * match it (P4-AL-88).
+ */
+const isSupplierSettlementType = (n: string): boolean => /^supplier_(payment|credit|refund)/.test(n);
+
+/**
  * Every operation kind the Phase 3 prefix registered — all 27, not the subset a
  * name filter happened to catch. `inventory_operation_kinds.registered_by` is
  * the registry's own provenance column (`0054:54`, `^P3-S[0-9]+$`, widened in
@@ -215,6 +235,22 @@ const SUPPLIER_SOURCE_TYPES = ['supplier_return', 'supplier_payment', 'supplier_
  * is exact-equality over a set the Phase 3 prefix defines and Phase 4 cannot
  * enter.
  */
+/**
+ * The five op-code NAMESPACES the Phase 3 prefix registers. Phase 4's kinds are
+ * `sale.*`, `invoice.*`, `customer.*` and `pos.*`, none of which is here.
+ *
+ * This is the vocabulary-free way to say "and nothing that names a customer
+ * document": rather than filtering the Phase 3 kinds for three Phase 4 words
+ * and requiring the result to be empty — which asserts nothing about a fourth
+ * word nobody has thought of, and which reads as a claim about Phase 4 — the
+ * suite pins the namespaces Phase 3 OWNS. A kind in any other namespace fails
+ * it, whatever that namespace is called (P4-AL-88).
+ */
+const PHASE3_KIND_NAMESPACES = ['inventory', 'payment', 'purchase', 'structure', 'supplier'] as const;
+
+/** The distinct namespaces of a set of op codes, sorted. */
+const namespacesOf = (kinds: readonly string[]): string[] => [...new Set(kinds.map((k) => k.split('.')[0] ?? ''))].sort();
+
 const PHASE3_OPERATION_KINDS = [
   'inventory.adjust',
   'inventory.configure_product',
@@ -306,7 +342,14 @@ describe('§B2 T-09 MP-7 (supplier-scoped): the supplier source types are exactl
   it('the package registry agrees, and the three S6 settlement types are exactly its settlement half', async () => {
     expect((DOMAIN_SOURCE_TYPES as readonly string[]).filter((n) => /supplier/.test(n))).toEqual([...SUPPLIER_SOURCE_TYPES]);
     // `supplier_return` is P3-S5's; the three S6 types are the settlement ones.
-    expect((DOMAIN_SOURCE_TYPES as readonly string[]).filter((n) => /^supplier_(payment|credit|refund)/.test(n))).toEqual([...S6_SOURCE_TYPES]);
+    // P4-AL-88: every `supplier_*` name is KEPT and the absolute equality is
+    // dropped, which is what the lock's §17.3 re-expression requires. "And
+    // nothing more" is not lost — it is restated as a DISJOINTNESS claim over
+    // the supplier-settlement scope, so the first Phase 4 customer source type
+    // leaves it alone while a fourth SUPPLIER settlement type still fails it.
+    const s6Types = (DOMAIN_SOURCE_TYPES as readonly string[]).filter(isSupplierSettlementType);
+    expect(s6Types).toEqual(expect.arrayContaining([...S6_SOURCE_TYPES]));
+    expect(s6Types.filter((n) => !(S6_SOURCE_TYPES as readonly string[]).includes(n))).toEqual([]);
     // And every source type the database knows is one the package knows, so a
     // supplier source type added in SQL alone is still red.
     const all = await ownerPool().query<{ t: string }>(`SELECT source_type AS t FROM accounting_source_types WHERE source_type ~ 'supplier'`);
@@ -337,7 +380,13 @@ describe('§B3 T-09 MP-7 (supplier-scoped): the Phase 3 operation kinds are exac
       'payment.deactivate_method',
       'payment.update_method',
     ]);
-    expect(ops.filter((k) => /sale|invoice|customer/.test(k))).toEqual([]);
+    // STRICTLY STRONGER than "no Phase 3 kind names a sale, an invoice or a
+    // customer": the namespaces of the Phase 3 kinds are exactly the five
+    // Phase 3 owns, so a kind in ANY foreign namespace fails this — including
+    // one no Phase 4 vocabulary list happens to mention. The set is still
+    // `registered_by ~ '^P3-'`, which Phase 4 cannot enter, so this is a claim
+    // about the Phase 3 prefix and about nothing else (P4-AL-88).
+    expect(namespacesOf(ops)).toEqual([...PHASE3_KIND_NAMESPACES]);
     expect(ops.filter((k) => /refund/.test(k))).toEqual(['supplier.receive_refund']);
   });
 
@@ -354,9 +403,11 @@ describe('§B3 T-09 MP-7 (supplier-scoped): the Phase 3 operation kinds are exac
     const planted = [...PHASE3_OPERATION_KINDS, 'supplier.settle_batch'].sort();
     expect(planted).not.toEqual([...PHASE3_OPERATION_KINDS]);
     // A kind registered as Phase 3 but naming a customer document is caught by
-    // the second assertion, not merely by the first.
+    // the namespace assertion, not merely by the count: `sale` is not one of
+    // the five namespaces the Phase 3 prefix owns, and the proof names it.
     const mislabelled = [...PHASE3_OPERATION_KINDS, 'sale.commit'].sort();
-    expect(mislabelled.filter((k) => /sale|invoice|customer/.test(k))).toEqual(['sale.commit']);
+    expect(namespacesOf(mislabelled)).not.toEqual([...PHASE3_KIND_NAMESPACES]);
+    expect(namespacesOf(mislabelled).filter((n) => !(PHASE3_KIND_NAMESPACES as readonly string[]).includes(n))).toEqual(['sale']);
   });
 });
 
@@ -420,61 +471,28 @@ describe('§B4 T-09 MP-7 (supplier-scoped): the supplier settlement routes are e
     }
   });
 });
-
 // ─────────────────────────────────────────────────────────────────────────────
-// §B5 — the half of MP-7 that is NOT a claim about the future, restored.
+// §B5 was here, and it has MOVED — it was not deleted.
 //
-// The re-expression above scoped §B4 to the supplier routes, which loses the
-// assertion MP-7 was named for: there is no customer PAYMENT route. That is not
-// a claim about the future that Phase 4 falsifies — Phase 4 mounts customer and
-// invoice READS in P4-S1 and does not mount a customer payment until P4-S4, so
-// the assertion is live and belongs here. What the old form got wrong was
-// bundling `/v1/invoices` and `/v1/sales` in with the payment paths and pinning
-// every verb of all of them; what it got right is everything else.
+// It asserted the half of MP-7 the §B4 re-expression had dropped: that there is
+// no customer PAYMENT route. That protection is real and is still asserted, but
+// it cannot live in a permanent PHASE 3 suite, because the form it was written
+// in — `/v1/payments`, `/v1/refunds`, `/v1/customer-credits` and
+// `/v1/credit-notes` answer 404, forever, on every verb — is a claim about the
+// phase that follows this one. P4-S4 and P4-S5 build those routes by design, so
+// this file would have gone red for the success of a later slice: exactly the
+// defect `[[daftar-a-closure-rule-is-not-an-invariant]]` names, and exactly
+// what `tests/security/phase4-forward-evolution.test.ts` reported at :444
+// and :447.
 //
-// So: the customer SETTLEMENT paths stay 404 on every verb, and the Phase 4
-// read surface is admitted for GET alone — every mutating verb on it is still
-// 404, because P4-S1 mounts no write route by design (lock P4-AL-31). When
-// P4-S4 mounts customer payments it must move those paths out of FORBIDDEN and
-// into an ALLOWED list here, in the same commit, under its own slice's name.
+// It now lives in `tests/security/phase4-route-surface.test.ts`, re-expressed
+// so that BOTH halves of the claim are derived from the Phase 4 controllers'
+// own Nest route metadata. `/v1/payments` is still refused on every verb, and
+// still refused today — but because it is OUTSIDE THE DERIVED SURFACE rather
+// than because a literal list names it. Mounting the route updates both halves
+// in the same commit, so the protection survives P4-S4 instead of blocking it.
+//
+// The one claim that belongs to P4-S1 alone — that the declared surface
+// contains no write verb at all — is in the `CANDIDATE-TENSE (P4-AL-61)` fence
+// of `scripts/phase4-s1-gate.ts`, which the acceptance commit deletes.
 // ─────────────────────────────────────────────────────────────────────────────
-
-describe('§B5 T-09 MP-7: no customer settlement route, and the Phase 4 read surface is read-only', () => {
-  /** Paths no phase up to and including P4-S1 mounts, on any verb. */
-  const FORBIDDEN = ['/v1/payments', '/v1/customer-payments', '/v1/refunds', '/v1/customer-refunds', '/v1/customer-credits', '/v1/credit-notes'] as const;
-
-  /** What P4-S1 mounts: reads only (apps/api/src/modules/selling/*.controller.ts). */
-  const PHASE4_READS = ['/v1/customers', '/v1/invoices', '/v1/document-sequences'] as const;
-
-  it('every verb on every customer settlement path is 404 for the business owner', async () => {
-    const id = randomUUID();
-    const headers = asMember(owner, A.businessId);
-    for (const base of FORBIDDEN) {
-      for (const path of [base, `${base}/${id}`]) {
-        for (const verb of ['get', 'post', 'put', 'patch', 'delete'] as const) {
-          const r = await t.request[verb](path).set(headers).send({});
-          expect(r.status, `${verb.toUpperCase()} ${path}`).toBe(404);
-        }
-      }
-    }
-    // A customer's payments are not reachable through the customer either.
-    for (const path of [`/v1/customers/${id}/payments`, `/v1/customers/${id}/refunds`, `/v1/customers/${id}/credits`]) {
-      for (const verb of ['get', 'post', 'put', 'patch', 'delete'] as const) {
-        const r = await t.request[verb](path).set(headers).send({});
-        expect(r.status, `${verb.toUpperCase()} ${path}`).toBe(404);
-      }
-    }
-  });
-
-  it('the Phase 4 read surface answers GET (it is reached, not 404) and refuses every mutating verb', async () => {
-    const headers = asMember(owner, A.businessId);
-    for (const path of PHASE4_READS) {
-      const get = await t.request.get(path).set(headers);
-      expect(get.status, `GET ${path} is reached`).not.toBe(404);
-      for (const verb of ['post', 'put', 'patch', 'delete'] as const) {
-        const r = await t.request[verb](path).set(headers).send({});
-        expect(r.status, `${verb.toUpperCase()} ${path} — P4-S1 mounts no write route`).toBe(404);
-      }
-    }
-  });
-});

@@ -65,6 +65,13 @@ const LOCK: readonly (readonly [key: string, sensitive: boolean])[] = [
   ['receivables.view', false],
   ['installments.manage', true],
 ];
+/**
+ * The six Phase 4 permission namespaces. Hoisted to a named constant because
+ * it is the SCOPE of a claim rather than part of any one assertion, and
+ * because the namespaces are the lock's, not this suite's, to choose.
+ */
+const IN_PHASE4_NAMESPACE = /^(sales|customers|payments|refunds|receivables|installments)\./;
+
 const PHASE4 = LOCK.map(([k]) => k);
 const P4_ORDINARY = LOCK.filter(([, s]) => !s).map(([k]) => k);
 const P4_SENSITIVE = LOCK.filter(([, s]) => s).map(([k]) => k);
@@ -275,7 +282,25 @@ describe('§1 P4-S1 the twelve keys and the enforcement gap', () => {
       expect(isPermission(key), key).toBe(true);
       expect(isSensitivePermission(key as Permission), key).toBe(sensitive);
     }
-    expect(sorted(PERMISSIONS.filter((p) => /^(sales|customers|payments|refunds|receivables|installments)\./.test(p)))).toEqual(sorted(PHASE4));
+    // P4-AL-88: this is the one genuinely forward-looking equality of the five.
+    // `PERMISSIONS` filtered by the Phase 4 namespaces is a set LATER PHASE 4
+    // SLICES GROW — P4-S4 registers the payment keys, P4-S5 the credit-note
+    // ones — so requiring it to EQUAL P4-S1's twelve would make this suite red
+    // for the success of the slice that follows it, which is precisely the
+    // disease P4-AL-88 names.
+    //
+    // Every one of the twelve is still required BY NAME, so none can be
+    // dropped or renamed. What the equality additionally bought — "and the
+    // registry holds no thirteenth Phase 4 key" — is a true statement about
+    // P4-S1 and a false one about P4-S4, so it is not asserted here in any
+    // tense. It is not lost either: it is asserted in the one place in the
+    // estate allowed to carry a claim the acceptance commit deletes, the
+    // `CANDIDATE-TENSE (P4-AL-61)` fence of `scripts/phase4-s1-gate.ts`. An
+    // allowlist of the later slices' names was deliberately NOT used: the lock
+    // (§17.3) rejects it, because "these exist and that is fine" asserts
+    // nothing.
+    expect(sorted(PERMISSIONS.filter((p) => IN_PHASE4_NAMESPACE.test(p)))).toEqual(expect.arrayContaining(sorted(PHASE4)));
+    expect(PHASE4).toHaveLength(12);
     expect(sorted(SENSITIVE_PERMISSIONS.filter((p) => PHASE4.includes(p)))).toEqual(sorted(P4_SENSITIVE));
     expect(P4_ORDINARY).toHaveLength(6);
     expect(P4_SENSITIVE).toHaveLength(6);
