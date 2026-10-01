@@ -27,7 +27,7 @@ import {
   type SaleCommitPayloadLine,
 } from '@daftar/inventory';
 import type { SaleDto } from '@daftar/shared-contracts';
-import { Database, presentInventoryAssertion, type BusinessInventoryAccountingTransaction } from '../../infra/database';
+import { Database, presentInventoryAssertion, type BusinessInventoryAccountingTransaction, type SeamAccountingAuthority } from '../../infra/database';
 import { DatabaseAccountingPostingAdapter } from '../accounting/accounting-posting.adapter';
 import { SalePostingService } from '../accounting/sale-posting.service';
 import type { BusinessTransactionId } from '../inventory/business-transaction';
@@ -141,7 +141,27 @@ export class SaleCommitService {
     const inventoryAssertion = this.authorization.mint(plan.authority, plan.built.payload);
     // The two accounting assertions were minted by `SalePostingService` inside
     // `plan`, in posting order, with the P4-AL-35 matrix applied at the mint.
-    const accountingAssertions = plan.accountingAssertions;
+    //
+    // The COGS one is declared CONDITIONAL. A sale of stock whose stored
+    // valuation is zero releases no value, so it posts only the REVENUE entry
+    // — `journal_lines` refuses a zero amount
+    // (`journal_lines_money_cap_ck`, `0042:225`) and `0060:388-390` gives an
+    // emptying movement exactly `-valuation_base_minor`, which is 0 for a
+    // zero valuation. The accounting is sound with one entry: there is no cost
+    // of goods to post and `GL Inventory (1200) = Σ value_delta_base_minor`
+    // still holds at 0.
+    //
+    // The seam PERMITS the non-presentation; it does not and cannot police it,
+    // because it never sees a COGS total. The law is the DEFERRED
+    // `sales_cogs_owed` trigger (contract C-07): a sale whose bridged
+    // movements carry a non-zero total value and no `sale` accounting binding
+    // cannot COMMIT. A rule only the wrapper enforces is a convention while
+    // the trusted primitive can still write the row.
+    const accountingAssertions: SeamAccountingAuthority = {
+      kind: 'postings',
+      assertions: plan.accountingAssertions,
+      conditional: [plan.accountingAssertions[0]],
+    };
 
     // 6. One transaction: the routine, the COGS entry, the revenue entry, COMMIT.
     const replayed = await this.db.withBusinessInventoryAccountingTransaction(plan.authority.scope, inventoryAssertion, accountingAssertions, (tx) =>
@@ -334,12 +354,19 @@ export class SaleCommitService {
       baseCurrency: business.baseCurrency,
       movements,
     };
-    // A sale of stock whose average cost is zero releases no value, so there
-    // is no positive COGS entry to post — and `deriveSaleCogsEntryLines`
-    // refuses a zero one, correctly, because `journal_lines` refuses a zero
-    // amount. The accounting module has no `cogs: null` arm yet, so such a
-    // sale cannot be authorized at all; it is refused with a stable code
-    // rather than posted wrongly, and the gap is REPORTED rather than hidden.
+    // A sale of stock whose stored valuation is zero posts ONE entry, and the
+    // seam and `execute` both handle it (the conditional COGS assertion, and
+    // `sales_cogs_owed` as the law). What does NOT handle it yet is
+    // `deriveSaleCogsEntryLines`, which refuses to derive a zero COGS entry,
+    // so `authorizeSaleCommit` cannot be called for such a sale at all.
+    //
+    // This is the LAST of the three places the gap lives, and the only one
+    // outside this slice: it closes the moment
+    // `packages/accounting/src/sale-posting.ts` gains its `cogs: null` arm,
+    // at which point this gate is deleted and `plan` keeps
+    // `authorized.postings.cogs === null` instead. Until then the sale is
+    // refused under a stable code rather than posted wrongly — an
+    // accounting-integrity gap is never carried as technical debt.
     if (movements.every((mv) => mv.valueDeltaBaseMinor === 0n)) throw sellingRefusal('sale.zero_cost_stock');
     const authorized = this.salePosting.authorizeSaleCommit(m, invoiceFacts, cogsFacts);
 
@@ -420,8 +447,17 @@ export class SaleCommitService {
     // posting is attempted rather than a fingerprint mismatch inside the
     // ledger writer. Never `quantity x average_cost`.
     const actual = parseMinor(first.cogs_base_minor);
+    const released = actual < 0n ? -actual : actual;
     const signed = plan.postings.cogs.lines.reduce((t, l) => (l.side === 'D' ? t + l.baseAmountMinor : t), 0n);
-    if ((actual < 0n ? -actual : actual) !== signed) throw sellingRefusal('sale.state_changed');
+    // Zero released value ⇒ no COGS entry exists to post, and the COGS
+    // assertion was declared CONDITIONAL for exactly this case. Only the
+    // revenue entry is posted, and `sales_cogs_owed` (C-07) is what proves at
+    // COMMIT that nothing was owed.
+    if (released === 0n) {
+      await this.posting.postEntryInTransaction(tx.accounting, { command: revenuePostingCommand(plan) });
+      return false;
+    }
+    if (released !== signed) throw sellingRefusal('sale.state_changed');
     const cogsCommand: PostingCommand = {
       tenantId: plan.tenantId,
       businessId: plan.businessId,
@@ -430,16 +466,8 @@ export class SaleCommitService {
       entryDate: plan.postings.cogs.entryDate,
       lines: plan.postings.cogs.lines,
     };
-    const revenueCommand: PostingCommand = {
-      tenantId: plan.tenantId,
-      businessId: plan.businessId,
-      sourceType: plan.postings.revenue.sourceType,
-      sourceId: plan.postings.revenue.sourceId,
-      entryDate: plan.postings.revenue.entryDate,
-      lines: plan.postings.revenue.lines,
-    };
     await this.posting.postEntryInTransaction(tx.accounting, { command: cogsCommand });
-    await this.posting.postEntryInTransaction(tx.accounting, { command: revenueCommand });
+    await this.posting.postEntryInTransaction(tx.accounting, { command: revenuePostingCommand(plan) });
     return false;
   }
 
@@ -589,6 +617,18 @@ export interface BoundSaleFx {
   readonly source: 'base' | 'manual';
   /** Second precision. Derived from the DATE alone, never from a clock. */
   readonly at: Date;
+}
+
+/** The revenue entry as a posting command, from the derived posting the authority was minted over. */
+function revenuePostingCommand(plan: SaleCommitPlan): PostingCommand {
+  return {
+    tenantId: plan.tenantId,
+    businessId: plan.businessId,
+    sourceType: plan.postings.revenue.sourceType,
+    sourceId: plan.postings.revenue.sourceId,
+    entryDate: plan.postings.revenue.entryDate,
+    lines: plan.postings.revenue.lines,
+  };
 }
 
 /**
