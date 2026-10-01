@@ -1007,13 +1007,60 @@ export async function rewindToP3S2Checkpoint(c: Queryable): Promise<void> {
   const types = await c.query(`DELETE FROM stock_source_types WHERE registered_by = 'P3-S3'`);
   expect(types.rowCount, 'the P3-S3 stock source types').toBe(S3_SOURCE_TYPES.length);
   await c.query(`REVOKE SELECT ON stock_source_bindings FROM ${INTERNAL}`);
-  const left = await c.query<{ types: number; mapping: number; bindings: boolean }>(
+  /**
+   * ── P4-AL-88: the REWIND was incomplete, not the assertion ─────────────
+   *
+   * This helper reconstructs, in a rolled-back transaction, the exact state
+   * `0059`/`0060` left — so that each file's own frozen END-STATE BLOCK can
+   * be REPLAYED against it. Those blocks are inside migrations `0000`–`0073`,
+   * frozen byte for byte (P4-AL-85), and two of their clauses are absolute:
+   *
+   *   0059-E: `stock_movement_kinds` is exactly the ten P3-S2 seed rows;
+   *   0060-E: `stock_source_types` and `inventory_operation_movement_kinds`
+   *           are EMPTY after 0060.
+   *
+   * They are true of the checkpoint they describe and they cannot be
+   * re-expressed — nobody may edit a frozen migration. `0077` registers the
+   * `sale` stock source type, the `sale.commit → sale` mapping and the `sale`
+   * movement kind, and the rewind did not remove them, so the replay began
+   * reporting `inventory.authority_leak` for rows that have nothing to do
+   * with any leak.
+   *
+   * The defect was HERE: a rewind that leaves a later phase's registrations
+   * standing has not reached the checkpoint it claims to have reached. So it
+   * removes them too, by PROVENANCE — every row no Phase 3 registrant
+   * registered — and the original assertions below are then restored WORD FOR
+   * WORD: both registries empty, the internal principal's binding SELECT
+   * revoked, and (for 0059-E) `stock_movement_kinds` exactly the ten seeds.
+   * Nothing is weakened; a registry that does not reach the checkpoint is
+   * still red. The deletes are COUNTED against what the catalogue said was
+   * there, so a rewind that silently removed a Phase 3 row would be red too.
+   *
+   * This is a rolled-back transaction, so no registration is actually lost.
+   */
+  const beyond = await c.query<{ mapping: number; types: number; kinds: number }>(
+    `SELECT (SELECT count(*)::int FROM inventory_operation_movement_kinds WHERE registered_by !~ '^P3-') AS mapping,
+            (SELECT count(*)::int FROM stock_source_types WHERE registered_by !~ '^P3-') AS types,
+            (SELECT count(*)::int FROM stock_movement_kinds WHERE registered_by !~ '^P3-') AS kinds`,
+  );
+  const wanted = must(beyond.rows[0], 'the beyond-Phase-3 registrations');
+  // Children before parents: the mapping references both of the others.
+  const droppedMapping = await c.query(`DELETE FROM inventory_operation_movement_kinds WHERE registered_by !~ '^P3-'`);
+  const droppedTypes = await c.query(`DELETE FROM stock_source_types WHERE registered_by !~ '^P3-'`);
+  const droppedKinds = await c.query(`DELETE FROM stock_movement_kinds WHERE registered_by !~ '^P3-'`);
+  expect(
+    { mapping: droppedMapping.rowCount, types: droppedTypes.rowCount, kinds: droppedKinds.rowCount },
+    'the rewind removed exactly the registrations no Phase 3 registrant made',
+  ).toEqual(wanted);
+
+  const left = await c.query<{ types: number; mapping: number; kinds: number; bindings: boolean }>(
     `SELECT (SELECT count(*)::int FROM stock_source_types) AS types,
             (SELECT count(*)::int FROM inventory_operation_movement_kinds) AS mapping,
+            (SELECT count(*)::int FROM stock_movement_kinds) AS kinds,
             has_table_privilege($1, 'stock_source_bindings', 'SELECT') AS bindings`,
     [INTERNAL],
   );
-  expect(left.rows[0], 'the P3-S2 checkpoint').toEqual({ types: 0, mapping: 0, bindings: false });
+  expect(left.rows[0], 'the P3-S2 checkpoint').toEqual({ types: 0, mapping: 0, kinds: SEEDED_KINDS.length, bindings: false });
 }
 
 /**

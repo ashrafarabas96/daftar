@@ -277,6 +277,33 @@ describe('P4-AL-88 — the provenance scope of the registry claims', () => {
   const builders = Object.keys(OP_KIND_BUILDERS).sort();
 
   it('GREEN with a later-phase kind registered: the scoped claims hold, the unscoped one would not, and the LAW reaches it', async () => {
+    /**
+     * ── P4-AL-88, a second time, on this proof's OWN expectations ────────
+     *
+     * Two lines of this proof were themselves closure rules about the phase
+     * that follows, and `0077` — which registers `sale.commit` as `P4-S2`,
+     * the first real later-phase registration this proof was written to
+     * anticipate — turned them red for exactly the reason the proof exists
+     * to demonstrate:
+     *
+     *   - `beyond === ['sale.issue_invoice']` said "the plant is the ONLY
+     *     kind outside the Phase 3 scope";
+     *   - `registeredOpKinds() === phase3RegisteredOpKinds()` after the
+     *     rollback said "once the plant is gone the registry is Phase 3's
+     *     and nothing else".
+     *
+     * Both are re-expressed against the beyond-scope half the LIVE registry
+     * already holds, read here before the plant: the plant must be accounted
+     * for positively on top of it, and a kind that appeared from anywhere
+     * else is still named. Nothing is dropped from either claim — the
+     * registry is still covered end to end, by the two halves together.
+     */
+    const beyondBefore = (await registeredOpKinds()).filter((k) => !builders.includes(k));
+    const registrantsBefore = await opKindRegistrants();
+    expect(
+      beyondBefore.filter((k) => !/^P[0-9]+-S[0-9]+$/.test(registrantsBefore[k] ?? '') || /^P3-/.test(registrantsBefore[k] ?? '')),
+      'every kind already beyond the Phase 3 scope records a well-formed later-phase registrant',
+    ).toEqual([]);
     await planted([`INSERT INTO inventory_operation_kinds (op_code, registered_by) VALUES ('sale.issue_invoice', 'P4-S2')`], async () => {
       const registrants = await opKindRegistrants(owner);
       const phase3Kinds = await phase3RegisteredOpKinds(owner);
@@ -291,7 +318,10 @@ describe('P4-AL-88 — the provenance scope of the registry claims', () => {
       // The partition still covers the whole registry.
       const beyond = all.filter((k) => !phase3Kinds.includes(k));
       expect([...phase3Kinds, ...beyond].sort()).toEqual([...all].sort());
-      expect(beyond).toEqual(['sale.issue_invoice']);
+      // The plant lands outside the scope, and the beyond-scope half is
+      // exactly what was already there PLUS the plant — so nothing arrived
+      // unaccounted for and nothing was merely dropped from the claim.
+      expect(beyond, 'the plant on top of the beyond-scope kinds already registered').toEqual([...beyondBefore, 'sale.issue_invoice'].sort());
       // UNSCOPED, for contrast: the claim as it was written is red — which is
       // the breakage this re-expression removes.
       expect(builders).not.toEqual(all);
@@ -302,8 +332,17 @@ describe('P4-AL-88 — the provenance scope of the registry claims', () => {
       expect(Object.keys(law.consumers)).toContain('sale.issue_invoice');
       expect(law.violations).toEqual(['1: sale.issue_invoice has 0 consumers']);
     });
-    // Rolled back: the registry is as it was.
-    expect(await registeredOpKinds()).toEqual(await phase3RegisteredOpKinds());
+    // Rolled back: the registry is as it was — the Phase 3 half exactly, the
+    // beyond-scope half exactly, and the two together the whole of it. The
+    // plant is gone from both.
+    const after = await registeredOpKinds();
+    expect(await phase3RegisteredOpKinds(), 'the Phase 3 half is untouched').toEqual(builders);
+    expect(
+      after.filter((k) => !builders.includes(k)),
+      'the beyond-scope half is untouched',
+    ).toEqual(beyondBefore);
+    expect([...builders, ...beyondBefore].sort(), 'and the two halves are the whole registry again').toEqual([...after].sort());
+    expect(after, 'the plant is gone').not.toContain('sale.issue_invoice');
     expect((await operationKindLaw(ownerPool())).violations).toEqual([]);
   }, 120_000);
 

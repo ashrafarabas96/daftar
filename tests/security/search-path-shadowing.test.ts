@@ -13,6 +13,7 @@ import {
   resolverDbUrl,
   workerDbUrl,
 } from '../helpers/test-app';
+import { inheritedPrefixRoutines } from '../helpers/phase4-inherited-scope';
 import {
   appClient,
   dbPayload,
@@ -633,9 +634,59 @@ describe('the §D inventory definer contract (P3-AL-54 §D)', () => {
   });
 
   it('EXECUTE grantees are exactly the §H matrix, and nobody for every routine it does not name', async () => {
-    const actual = Object.fromEntries((await owned()).map((x) => [x.sig, x.grantees]));
+    /**
+     * ── P4-AL-88 ───────────────────────────────────────────────────────────
+     *
+     * "nobody for every routine it does not name" was an exact equality over
+     * EVERY routine this principal owns, which made it a claim about the
+     * phase that follows: `0077` adds `inventory_sale_cost_base_minor` and
+     * grants EXECUTE to `daftar_accounting_internal` — the cross-domain cost
+     * read the revenue posting needs — so an accepted §D contract went red
+     * for a grant that is the design
+     * (`[[daftar-a-closure-rule-is-not-an-invariant]]`).
+     *
+     * Scoped by the ROUTINE'S OWN NAME, read from the accepted prefix's
+     * digest-verified text (`inheritedPrefixRoutines()`), because a routine
+     * is not separable by the relation it touches. The matrix is applied
+     * UNCHANGED over that scope and still carries BOTH halves of its claim: a
+     * routine the matrix names has exactly its grantees, and a routine of the
+     * accepted prefix the matrix does NOT name has nobody. A tampered prefix
+     * empties the scope, which makes this red rather than vacuous, and the
+     * matrix's own surface is checked to lie inside the scope so no entry can
+     * fall out of the claim silently.
+     *
+     * The later phases' half is claimed SEPARATELY AND POSITIVELY: a grantee
+     * on a routine beyond the accepted prefix is `daftar_app` — the one
+     * runtime credential the signed-command surface uses — or a NOLOGIN
+     * internal principal. Never PUBLIC and never another runtime login role,
+     * which is the shadowing leak this file exists to refuse; and the
+     * "PUBLIC may execute none of them" and "no runtime role holds EXECUTE
+     * through a membership either" cases above are UNSCOPED, so they reach
+     * these routines as laws already.
+     */
+    const prefixRoutines = inheritedPrefixRoutines();
+    expect(prefixRoutines.size, 'the digest-verified prefix routine reader came back empty').toBeGreaterThan(0);
+    const rows = await owned();
+    const nameOf = (sig: string): string => sig.slice(0, sig.indexOf('(')).toLowerCase();
+    const inScope = rows.filter((x) => prefixRoutines.has(nameOf(x.sig)));
+    const beyond = rows.filter((x) => !prefixRoutines.has(nameOf(x.sig)));
+    expect(inScope.length + beyond.length, 'the two scopes together are every routine this principal owns').toBe(rows.length);
+    expect(
+      Object.keys(EXECUTE_MATRIX).filter((sig) => !prefixRoutines.has(nameOf(sig))),
+      'every routine the §H matrix names is declared by the accepted prefix, so no entry falls out of the claim',
+    ).toEqual([]);
+    const actual = Object.fromEntries(inScope.map((x) => [x.sig, x.grantees]));
     const expected = Object.fromEntries(Object.keys(actual).map((sig) => [sig, [...(EXECUTE_MATRIX[sig] ?? [])]]));
     expect(actual).toEqual(expected);
+    const nologinInternal = new Set(
+      (
+        await ownerPool().query<{ g: string }>(`SELECT rolname::text AS g FROM pg_roles WHERE NOT rolcanlogin AND rolname LIKE 'daftar\\_%\\_internal'`)
+      ).rows.map((x) => x.g),
+    );
+    expect(
+      beyond.flatMap((x) => x.grantees.filter((g) => g !== 'daftar_app' && !nologinInternal.has(g)).map((g) => `${x.sig} → ${g}`)),
+      'a grantee on a routine beyond the accepted prefix is daftar_app or a NOLOGIN internal principal',
+    ).toEqual([]);
   });
 
   it('no runtime role holds EXECUTE through a membership either', async () => {
