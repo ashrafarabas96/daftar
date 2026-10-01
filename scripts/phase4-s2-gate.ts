@@ -253,7 +253,16 @@ const QUOTED_BODY = /'(?:\\.|[^'\\\n])*'|"(?:\\.|[^"\\\n])*"|`(?:\\.|[^`\\])*`/g
 const SKIP_MARKER = /\b(?:it|test|describe|suite)\.(?:skip|only|todo|skipIf|runIf)\b|\bx(?:it|describe)\s*\(/;
 /** Vitest says this on stderr and exits 1 when the filter matched nothing. A run that found no tests is not a pass. */
 const NO_TEST_FILES = /No test files found/;
-const ANSI = /\u001B\[[0-9;]*m/g;
+/**
+ * Colour escapes, stripped before the summary is read. The run already asks for
+ * `FORCE_COLOR=0`, so this is the belt to that braces: a runner that colours its
+ * output anyway must not make the tally unreadable, because an unreadable tally
+ * is a FAIL and would read as a defect in the estate rather than in this parser.
+ *
+ * Built with `new RegExp` rather than written as a literal because `ESC` is a
+ * control character, and `no-control-regex` refuses one inside a regex literal.
+ */
+const ANSI = new RegExp(`${String.fromCharCode(0x1b)}\\[[0-9;]*m`, 'g');
 
 /** What the runner reported, or `null` for a number that is genuinely unavailable — never invented. */
 export interface Tally {
