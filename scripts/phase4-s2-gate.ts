@@ -138,9 +138,18 @@ export const S2_SUITES: readonly SuiteRow[] = [
   {
     id: 'S2-X01',
     file: 'tests/guards/sale-s2-gate-execution.test.ts',
-    claim: "that THIS gate's execution check judges test RESULTS and not test existence: on a scratch root a broken S2 assertion is RED and the lawful one is GREEN (TL-P4-S2-R2)",
+    claim:
+      "that THIS gate's execution check judges test RESULTS and not test existence: on a scratch root a broken S2 assertion is RED and the lawful one is GREEN (TL-P4-S2-R2)",
     proof:
       'tests/guards/sale-s2-gate-execution.test.ts::a scratch roster whose suite FAILS makes the execution check red, while the same roster passing is green',
+  },
+  {
+    id: 'S2-W01',
+    file: 'tests/guards/required-ci-chain-composition.test.ts',
+    claim:
+      'that the required `backend` job itself composes P4-S1 then P4-S2 — visibly, in that order, with no continue-on-error and no condition that a normal push can skip — read by parsing the workflow rather than grepping it (TL-P4-S2-R3)',
+    proof:
+      'tests/guards/required-ci-chain-composition.test.ts::RED: the P4-S2 step is removed — a comment that still names the command does not stand in for it',
   },
   {
     id: 'S2-R01',
@@ -210,7 +219,6 @@ export function rosterProblems(root: string): string[] {
   }
   return problems;
 }
-
 
 // ───── EXECUTION (TL-P4-S2-R2) ────────────────────────────────────────────
 // «A gate that checks test filenames but never executes the tests is not a
@@ -345,7 +353,8 @@ export function resolveRoster(root: string, rows: readonly SuiteRow[]): { files:
         continue;
       }
       const found = suitesIn(root, row.file);
-      if (found.length === 0) problems.push(`${row.id}: ${row.file} holds no suite — handing the runner an empty directory and calling it a pass is the defect`);
+      if (found.length === 0)
+        problems.push(`${row.id}: ${row.file} holds no suite — handing the runner an empty directory and calling it a pass is the defect`);
       files.push(...found);
       continue;
     }
@@ -387,11 +396,27 @@ export function executeSuites(root: string, rows: readonly SuiteRow[], timeoutMs
     if (hit !== null) problems.push(`${file} carries ${hit[0]} — a suite that reports green without asserting is not evidence, and the runner exits 0 over it`);
   }
   if (files.length === 0)
-    return { ...base, status: null, signal: null, error: null, tally: none, ran: false, problems: [...problems, 'no S2_SUITES row resolved to a test file, so this check would execute nothing'] };
+    return {
+      ...base,
+      status: null,
+      signal: null,
+      error: null,
+      tally: none,
+      ran: false,
+      problems: [...problems, 'no S2_SUITES row resolved to a test file, so this check would execute nothing'],
+    };
 
   const bin = join(root, 'node_modules/.bin/vitest');
   if (!existsSync(bin))
-    return { ...base, status: null, signal: null, error: null, tally: none, ran: false, problems: [...problems, `${bin} is missing — the roster cannot be executed`] };
+    return {
+      ...base,
+      status: null,
+      signal: null,
+      error: null,
+      tally: none,
+      ran: false,
+      problems: [...problems, `${bin} is missing — the roster cannot be executed`],
+    };
 
   // `stdio: 'pipe'`, and the verdict is read off THIS object. A pipeline would
   // hand back the last stage's status instead, which is the trap.
@@ -406,8 +431,7 @@ export function executeSuites(root: string, rows: readonly SuiteRow[], timeoutMs
   const output = `${r.stdout ?? ''}${r.stderr ?? ''}`;
   const tally = parseTally(output);
   problems.push(...runOutcomeProblems(`the P4-S2 roster (${files.length} file(s))`, { status: r.status, signal: r.signal, error: r.error, output }));
-  if (tally.total === null)
-    problems.push('the runner printed no "Tests" summary line, so how many tests ran is UNKNOWN — an unknown tally is not a pass');
+  if (tally.total === null) problems.push('the runner printed no "Tests" summary line, so how many tests ran is UNKNOWN — an unknown tally is not a pass');
   else {
     if (tally.total === 0) problems.push('the runner executed 0 tests — a run that found no tests is not a pass');
     if ((tally.failed ?? 0) > 0) problems.push(`${tally.failed} test(s) FAILED`);
