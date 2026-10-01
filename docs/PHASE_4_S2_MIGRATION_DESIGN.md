@@ -1155,3 +1155,86 @@ the header, because `sale_items_sale_fk` and the bridge's line FK are both immed
 This is the part of the fork that was not visible from either direction until the arm was actually
 reachable, and it is why the weakened `sales_binding_owed_ck` is now justified by something: a committed
 sale with a NULL binding is a real, lawful row.
+
+## 18. The deferred validators judge the row at COMMIT, not their own `NEW`
+
+### 18.1 The defect, as a mechanism rather than a symptom
+
+A `DEFERRABLE INITIALLY DEFERRED` constraint trigger's `NEW` is the tuple of **its own event**, captured
+when that statement ran — **not** the row as it stands at COMMIT. One row INSERTed and then UPDATEd in one
+transaction queues **two** deferred events whose `NEW` tuples disagree. The coordinator measured it on a
+two-column scratch table with the same trigger shape: one transaction, `INSERT (1, NULL)` then
+`UPDATE SET b = 7`, each event recording both what it saw and what the row then held, giving
+`INSERT NEW.b=NULL current=7` / `UPDATE NEW.b=7 current=7`.
+
+§17.3's step 9b is exactly that shape: `0078` inserts a confirmed header with no binding and sets the
+binding afterwards. So `sales_cogs_owed()`, reading `NEW.binding_source_id`, refused a **lawful** non-zero
+sale on the INSERT event while the row by then carried its binding. The 403 that surfaced was
+`apps/api/src/common/error.filter.ts:112` rendering an unparsed `P0001` as FORBIDDEN; the real message was
+`selling.sale_cogs_owed: a committed sale whose goods carry value owes a COGS entry, and this one has none`.
+
+### 18.2 The fix: `NEW` for the KEY alone
+
+Both `sales_cogs_owed()` and `sales_walkin_no_ar()` now use `NEW` only to name the row and re-read the
+judged state from `sales` by `(business_id, id)`, with `IF NOT FOUND THEN RETURN NULL` for the row deleted
+in the same transaction. That makes the two events **idempotent** — both reach the same verdict about the
+same row — which is what a deferred validator is supposed to be.
+
+It closes a second hole in the same move. The `draft` early exit is now taken from the re-read as well: a
+sale inserted as a draft and confirmed in one transaction was judged by the INSERT event on
+`NEW.status = 'draft'` and walked out of the law entirely.
+
+`sales_walkin_no_ar()` was **lenient**-stale rather than wrongly-refusing, because its early exit is
+`binding_source_id IS NULL`: the INSERT event walked out and the UPDATE event happened to reach the right
+answer. That is luck, not construction, and luck changes when the writer changes.
+
+### 18.3 What is NOT the fix
+
+Narrowing either trigger to `AFTER UPDATE` only. An INSERT that lands a confirmed sale in one statement
+must still be judged, and `0078`'s replay and zero-cost paths are exactly that.
+
+The two `journal_entries_*` validators need no change and now say so in a comment: they are `AFTER INSERT`
+only on `journal_entries`, which is append-only, so no second deferred event for the same row can exist and
+their `NEW` cannot be a stale snapshot. What they read **through** that key is read by query at COMMIT, as
+the staleness problem requires.
+
+### 18.4 The law that pins the construction: `0077-E(9c)`
+
+For each of the two triggers the migration strips `--` comments from `prosrc` — *a law that reads its own
+prose is a law about its prose*, which is how the first attempt failed, on the explanatory comment quoting
+`NEW.b` — then asserts the body contains `FROM public.sales s` and
+`WHERE s.business_id = NEW.business_id AND s.id = NEW.id`, and that **no** `NEW.<column>` other than
+`business_id` and `id` appears anywhere in it. The contrast half asserts
+`journal_entries_sale_complete` and `journal_entries_invoice_complete` are still `tgtype = 5`
+(ROW|AFTER|INSERT), so the comment above cannot quietly stop being true.
+
+The ledger-backed performed proof is `tests/integration/sale-s2-cogs-owed.test.ts`'s NON-ZERO ARM, which
+commits a real sale through the real routine — demonstrably red before this amendment, green after. A
+migration-time performed proof of the same thing is not available: it would have to COMMIT a sale without
+the ledger that `sales_cogs_owed` consults, and any surviving `sales` row would trip the deferred
+validators at the migration's own COMMIT. `0077-E(9c)` is the strongest claim a migration can make here.
+
+### 18.5 The series lock is a LOCK privilege, narrowed to one column
+
+Every PostgreSQL locking clause needs `UPDATE` — `FOR UPDATE`, `FOR NO KEY UPDATE`, `FOR SHARE` and
+`FOR KEY SHARE` alike — but the privilege is satisfied by `UPDATE` on **any one column**, which is why
+`0045:399` lets `daftar_accounting_internal` lock `businesses` through `UPDATE (financial_started_at)`
+alone. `0078` first took a table-level `UPDATE ON invoice_sequences`, and Agent F's re-expressed
+`tests/security/inventory-db-authority.test.ts` was right to call it: beyond the accepted prefix this
+principal must hold no table-level `UPDATE`, because a lifecycle change belongs to columns somebody granted
+**by name**. A table-level grant also hands this writer the authority to rewrite a merchant's
+`number_format`, which no law here rests on.
+
+It is now `GRANT UPDATE (updated_at) ON invoice_sequences`. `updated_at` is the lifecycle column — the one a
+legitimate rewrite of the series would touch — and the narrowest grant that still carries the lock. The
+series row is **locked and never written** (`R-P4-S2-78-03`: `invoice_sequences` holds no counter, so there
+is nothing on it to advance), and `0078-E(5)` already proves the routine's body writes it nowhere.
+`0078-E(7)` now proves the privilege itself cannot be used for more: it requires the column privilege,
+**refuses** a table-level `UPDATE`, and refuses a column grant naming anything but `updated_at`.
+
+The one failure that survived Agent F's work was then the in-scope half of the same map:
+`0078` grants `SELECT ON product_translations`, a read on a relation already inside the accepted prefix,
+needed because `0036` normalized product names out of `products.translations` and no inventory routine had
+wanted a product NAME before. That map is a measurement of the LIVE privileges over the frozen prefix
+rather than a frozen literal, so the new read belongs in it, named — which is exactly what makes an unnamed
+one visible.

@@ -176,10 +176,25 @@ $pre$;
 --    (`0075:495`) and already holds `INSERT` on `audit_events` (`0055:52`)
 --    and `outbox_events` (`0061:1827`). What it does not yet hold is the
 --    right to WRITE the invoice and its lines — P4-S1 created no writer —
---    and the table-level `UPDATE` that a row lock on the series requires.
+--    and the `UPDATE` privilege that a row lock on the series requires.
+--
+--    THE SERIES GRANT IS COLUMN-LEVEL, AND THAT IS THE WHOLE POINT. Every
+--    PostgreSQL locking clause needs `UPDATE` — `FOR UPDATE`, `FOR NO KEY
+--    UPDATE`, `FOR SHARE` and `FOR KEY SHARE` alike — but the privilege is
+--    satisfied by `UPDATE` on ANY ONE COLUMN, which is why `0045:399` lets
+--    `daftar_accounting_internal` lock `businesses` through
+--    `UPDATE (financial_started_at)` alone. The series row is LOCKED and
+--    NEVER WRITTEN (`R-P4-S2-78-03`: `invoice_sequences` holds no counter,
+--    so there is nothing on it to advance), so a TABLE-LEVEL `UPDATE` would
+--    hand this writer the right to rewrite a merchant's `number_format` —
+--    authority no law here rests on. The named column is `updated_at`: the
+--    lifecycle column, the one a legitimate rewrite of the series would
+--    touch, and the narrowest grant that still carries the lock. 0078-E(5)
+--    already proves the routine's body writes `invoice_sequences` nowhere;
+--    0078-E(7) now proves the privilege itself cannot be used for more.
 -- ─────────────────────────────────────────────────────────────────────────
 GRANT INSERT ON invoices, invoice_items TO daftar_inventory_internal;
-GRANT UPDATE ON invoice_sequences TO daftar_inventory_internal;
+GRANT UPDATE (updated_at) ON invoice_sequences TO daftar_inventory_internal;
 -- The name snapshot the sale and the invoice both store is read from
 -- `product_translations` (`0036:9`), which `0053:253` did not grant to this
 -- role because no inventory routine needed a product NAME before. A read
@@ -1191,13 +1206,31 @@ BEGIN
     RAISE EXCEPTION 'selling.migration_end_state_invalid: 0078-E(6): the stock writer changed owner' USING ERRCODE = 'P0001';
   END IF;
 
-  -- (7) The privileges the owner needs, and no more: INSERT on the invoice
-  --     relations, UPDATE on the series (the lock), and still NO DML for
-  --     daftar_app on any Phase 4 relation (P4-AL-38).
+  -- (7) The privileges the owner needs, and NO MORE: INSERT on the invoice
+  --     relations, the column-level UPDATE on the series that carries the
+  --     row lock and nothing else, and still NO DML for daftar_app on any
+  --     Phase 4 relation (P4-AL-38).
   IF NOT has_table_privilege('daftar_inventory_internal', 'invoices', 'INSERT')
      OR NOT has_table_privilege('daftar_inventory_internal', 'invoice_items', 'INSERT')
-     OR NOT has_table_privilege('daftar_inventory_internal', 'invoice_sequences', 'UPDATE') THEN
+     OR NOT has_column_privilege('daftar_inventory_internal', 'invoice_sequences', 'updated_at', 'UPDATE') THEN
     RAISE EXCEPTION 'selling.migration_end_state_invalid: 0078-E(7): the routine''s owner cannot write what the routine writes'
+      USING ERRCODE = 'P0001';
+  END IF;
+  -- The lock privilege is a LOCK privilege. A table-level UPDATE on the
+  -- series would let this writer rewrite a merchant's number_format, and
+  -- `information_schema.role_table_grants` — which the estate's authority
+  -- law reads — would then report this append-only writer as a rewriter of
+  -- a relation beyond the accepted prefix. Pinned here so no later
+  -- migration can widen it back by habit.
+  IF has_table_privilege('daftar_inventory_internal', 'invoice_sequences', 'UPDATE') THEN
+    RAISE EXCEPTION 'selling.migration_end_state_invalid: 0078-E(7): the series UPDATE is table-level, which is authority to rewrite a number_format rather than authority to take a row lock'
+      USING ERRCODE = 'P0001';
+  END IF;
+  IF EXISTS (SELECT 1 FROM information_schema.column_privileges
+              WHERE grantee = 'daftar_inventory_internal' AND table_schema = 'public'
+                AND table_name = 'invoice_sequences' AND privilege_type = 'UPDATE'
+                AND column_name <> 'updated_at') THEN
+    RAISE EXCEPTION 'selling.migration_end_state_invalid: 0078-E(7): the series UPDATE names a column beyond updated_at, and one column is all a lock needs'
       USING ERRCODE = 'P0001';
   END IF;
   FOREACH v_name IN ARRAY ARRAY['sales', 'sale_items', 'invoices', 'invoice_items', 'invoice_sequences', 'customers'] LOOP
