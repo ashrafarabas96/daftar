@@ -122,6 +122,23 @@ export type InventoryCorrectiveOperationCode = 'purchase.write_off_residue';
  */
 export type InventoryP4S1OperationCode = 'customer.create' | 'customer.update' | 'customer.archive' | 'customer.reactivate';
 
+/**
+ * The ONE operation kind P4-S2 registers (lock P4-AL-28, P4-AL-29; plan §6
+ * S2 row).
+ *
+ * `sale.*` and `customer.*` are the Phase 4 namespaces, and the first segment
+ * may hold no underscore: `op_code TEXT PRIMARY KEY CHECK (op_code ~
+ * '^[a-z]+(\.[a-z_]+)+$')` (`0054:53`), with the SAME regex inside the frozen
+ * body of `inventory_payload_digest` (`0054:229`). Widening either is
+ * forbidden by P4-AL-27 and P4-AL-29, so the namespace is what changes.
+ *
+ * `sale.void` and `sale.return` are deliberately ABSENT. They belong to P4-S6
+ * and P4-S5, and this file's own rule says why: "a kind listed here without a
+ * routine would be an authority nothing refuses". `TL-P4-S1-R1` has just ruled
+ * on the same mistake one layer up, for an accounting source type.
+ */
+export type InventoryP4S2OperationCode = 'sale.commit';
+
 export type InventoryOperationCode =
   | InventoryS1OperationCode
   | InventoryS3OperationCode
@@ -129,7 +146,8 @@ export type InventoryOperationCode =
   | InventoryS5OperationCode
   | InventoryS6OperationCode
   | InventoryCorrectiveOperationCode
-  | InventoryP4S1OperationCode;
+  | InventoryP4S1OperationCode
+  | InventoryP4S2OperationCode;
 
 export const INVENTORY_S1_OPERATION_CODES: readonly InventoryS1OperationCode[] = [
   'inventory.configure_product',
@@ -178,6 +196,8 @@ export const INVENTORY_P4_S1_OPERATION_CODES: readonly InventoryP4S1OperationCod
   'customer.reactivate',
 ];
 
+export const INVENTORY_P4_S2_OPERATION_CODES: readonly InventoryP4S2OperationCode[] = ['sale.commit'];
+
 export const INVENTORY_OPERATION_CODES: readonly InventoryOperationCode[] = [
   ...INVENTORY_S1_OPERATION_CODES,
   ...INVENTORY_S3_OPERATION_CODES,
@@ -186,6 +206,7 @@ export const INVENTORY_OPERATION_CODES: readonly InventoryOperationCode[] = [
   ...INVENTORY_S6_OPERATION_CODES,
   ...INVENTORY_CORRECTIVE_OPERATION_CODES,
   ...INVENTORY_P4_S1_OPERATION_CODES,
+  ...INVENTORY_P4_S2_OPERATION_CODES,
 ];
 
 /** The literal first line of every stream. */
@@ -617,6 +638,69 @@ export const INVENTORY_PAYLOAD_SCHEMAS: Readonly<Record<InventoryOperationCode, 
   'customer.update': Object.freeze([spec('customer_id', 'uuid'), spec('expected_revision', 'integer'), ...CUSTOMER_TEXT]),
   'customer.archive': Object.freeze([spec('customer_id', 'uuid'), spec('expected_revision', 'integer')]),
   'customer.reactivate': Object.freeze([spec('customer_id', 'uuid'), spec('expected_revision', 'integer')]),
+  // P4-S2 (docs/PHASE_4_S2_CONTRACT.md A-05): the atomic sale commit. The
+  // header binds the identities, the supplied dates, the SERVER-resolved FX
+  // snapshot and the SERVER-computed totals; the group binds one row per line.
+  //
+  // `invoice_id` is in the payload and NOT in the intent, exactly as
+  // `purchase.receive`'s `coverage_adjustment_id` is: the assertion must
+  // authorize the invoice identity the routine will write, and a
+  // server-minted UUID inside the INTENT would make two identical requests
+  // two different commands.
+  //
+  // `invoice_number_seq` is deliberately absent from both. It is allocated as
+  // `max + 1` under the sequence row's lock INSIDE the routine (P4-AL-31), so
+  // it does not exist when the assertion is minted; signing it would mean
+  // either minting inside the transaction or guessing a number.
+  //
+  // There is no cost, no value and no COGS field at any grain: the stock
+  // writer computes the value from the locked level row, and the lock's §4
+  // matrix makes a per-line cost the forbidden second truth.
+  'sale.commit': withLines(
+    [
+      spec('sale_id', 'uuid'),
+      // A STATED fact, part of the intent: `credit` or `cash` (P4-S2 D-01).
+      spec('settlement_mode', 'code'),
+      // NULL is a walk-in, admissible only for a `cash` sale.
+      spec('customer_id', 'uuid', true),
+      spec('warehouse_id', 'uuid'),
+      spec('branch_id', 'uuid'),
+      spec('invoice_id', 'uuid'),
+      spec('document_date', 'integer'),
+      spec('due_date', 'integer', true),
+      spec('currency', 'code'),
+      spec('rate_id', 'uuid', true),
+      spec('rate_r10', 'integer'),
+      spec('rate_source', 'code'),
+      spec('rate_at', 'integer'),
+      spec('subtotal_txn_minor', 'integer'),
+      spec('discount_txn_minor', 'integer'),
+      spec('tax_minor', 'integer'),
+      spec('total_txn_minor', 'integer'),
+      spec('total_base_minor', 'integer'),
+      ...textWordSpecs('notes', true),
+      spec('line_count', 'integer'),
+    ],
+    [
+      spec('line_id', 'uuid'),
+      // The STATED stock identity, and the whole of what a line may state
+      // about it: the product, plus the merchant variant only for a product
+      // that has them. The hidden base variant never leaves the server
+      // (P3-AL-52), which is why a simple product's line carries a NULL
+      // variant and the server resolves the stock key from the product.
+      spec('product_id', 'uuid'),
+      spec('merchant_variant_id', 'uuid', true),
+      // The RESOLVED stock key: the base variant for a simple product, the
+      // named merchant variant otherwise. Server-derived, so outside the
+      // intent — a client cannot name it and a replay cannot depend on it.
+      spec('variant_id', 'uuid'),
+      spec('qty_q4', 'integer'),
+      spec('discount_minor', 'integer'),
+      spec('unit_price_c10', 'integer'),
+      spec('net_txn_minor', 'integer'),
+      spec('base_share_minor', 'integer'),
+    ],
+  ),
 };
 
 /**
@@ -688,6 +772,42 @@ export const INVENTORY_OPERATION_INTENT_FIELDS: Readonly<Partial<Record<Inventor
   // Phase 3 corrective (0072, TD-16): the purchase, the date, the reason and
   // the stated residue; the chain point and the released base are derived.
   'purchase.write_off_residue': Object.freeze(['purchase_id', 'write_off_date', ...Array.from({ length: 8 }, (_, i) => `reason_w${i + 1}`), 'residue']),
+  // P4-S2 (docs/PHASE_4_S2_CONTRACT.md A-06): the sale commit's intent is
+  // WHAT THE CLIENT ASKED FOR and nothing else — the sale's own id, the
+  // customer, the warehouse, both supplied dates, the stated (zero) tax, the
+  // notes, and per line the line's id, its variant, its quantity and its
+  // requested discount.
+  //
+  // Everything else is server-derived and therefore OUTSIDE the fingerprint:
+  // the branch (resolved from the warehouse), the invoice id (minted), the
+  // currency and the whole FX snapshot (read from the registry), every total,
+  // and per line the resolved catalogue price, the net and the base share. A
+  // replay must be the same command even though the catalogue price, the rate
+  // and the stock have all moved since — and a fingerprint that covered the
+  // resolved price would make every price change a false conflict.
+  //
+  // `tax_minor` IS intent, because `OD-03` is open and the client states the
+  // zero rather than the server defaulting it. `document_date` and `due_date`
+  // ARE intent, because `[[daftar-a-command-must-not-read-the-clock]]`: a
+  // date a fingerprint covers is supplied by the caller and is part of the
+  // intent, and no layer — DTO, schema, service, engine or trusted database
+  // command — resolves one from a clock.
+  'sale.commit': Object.freeze([
+    'sale_id',
+    'settlement_mode',
+    'customer_id',
+    'warehouse_id',
+    'document_date',
+    'due_date',
+    'tax_minor',
+    ...Array.from({ length: 8 }, (_, i) => `notes_w${i + 1}`),
+    'line_count',
+    'line_id',
+    'product_id',
+    'merchant_variant_id',
+    'qty_q4',
+    'discount_minor',
+  ]),
 });
 
 /** The intent schema of an operation kind: its schema with the server-derived fields removed, header and group alike. */

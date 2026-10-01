@@ -101,6 +101,25 @@ const OPERATION_AUTHORITY: Readonly<
   'customer.update': { permission: 'customers.manage', scope: 'warehouses' },
   'customer.archive': { permission: 'customers.manage', scope: 'warehouses' },
   'customer.reactivate': { permission: 'customers.manage', scope: 'warehouses' },
+  // P4-S2 (docs/PHASE_4_S2_CONTRACT.md A-04; lock P4-AL-35, P4-AL-39,
+  // P4-AL-40): a sale is scoped by THE WAREHOUSE THE STOCK LEAVES, like every
+  // other movement command. `sales.create` is the minting key; `sales.view`
+  // cannot appear here and would not compile, which is the point of the
+  // narrowed `MintingPermission`.
+  //
+  // Two further authority facts the sale needs are deliberately NOT expressed
+  // here, because this table is one permission per kind and conflating them
+  // would make a single row carry three different decisions:
+  //
+  //   - a CREDIT sale also requires `receivables.view` (P4-AL-35's matrix
+  //     row), checked by the route's own authority table in
+  //     `selling-permissions.ts`;
+  //   - a non-zero line or cart discount also requires the SENSITIVE
+  //     `sales.discount` (P4-AL-35, P4-AL-37), checked by the service against
+  //     the request before anything is minted, and refused — never silently
+  //     zeroed, because a silently-zeroed discount charges the customer more
+  //     than the cashier told them.
+  'sale.commit': { permission: 'sales.create', scope: 'warehouses' },
 };
 
 /**

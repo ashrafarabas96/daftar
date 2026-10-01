@@ -1,6 +1,8 @@
 import type { Provider } from '@nestjs/common';
 import { CustomerReadService } from './customer-reads';
 import { InvoiceReadService } from './invoice-reads';
+import { SaleCommitService } from './sale-commit.service';
+import { SaleReadService } from './sale-reads';
 
 /**
  * The Phase 4 customer and invoice providers (P4-S1), as the two merchant
@@ -19,5 +21,22 @@ import { InvoiceReadService } from './invoice-reads';
  * a route that cannot be tested. Both are registered.
  */
 export function sellingProviders(): Provider[] {
-  return [CustomerReadService, InvoiceReadService];
+  return [CustomerReadService, InvoiceReadService, SaleCommitService, SaleReadService];
 }
+
+/**
+ * P4-S2 adds `SalesController`, which BOTH compositions must register for the
+ * same reason the two P4-S1 controllers are registered in both: DAFTAR
+ * composes Nest twice and a controller in only one of them is a route that
+ * cannot be tested (`tests/integration/process-composition.test.ts` holds
+ * both processes to their own `controllers` list).
+ *
+ * `app.module.ts` and `merchant-api.module.ts` are outside this slice's file
+ * ownership, so the required wiring is STATED here and reported rather than
+ * made: add `SalesController` to each composition's `controllers` list beside
+ * `CustomersController` and `InvoicesController`. `SaleCommitService` also
+ * needs `SalePostingService` (added to `runtime.ts`'s accounting providers),
+ * `InventoryAuthorizationService` and `DatabaseAccountingPostingAdapter`,
+ * all of which both compositions already provide.
+ */
+export const P4_S2_REQUIRED_CONTROLLERS: readonly string[] = Object.freeze(['SalesController']);

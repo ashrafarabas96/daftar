@@ -26,11 +26,14 @@ import { RequiresPermission } from '../../common/guards';
  */
 
 /**
- * The four keys this module's routes name. `Extract` rather than a bare union,
+ * The keys this module's routes name. `Extract` rather than a bare union,
  * so each name must BE a registered permission: the registry is the authority
  * and this list is checked against it at compile time.
  */
-export type Phase4SellingPermission = Extract<Permission, 'sales.view' | 'customers.view' | 'customers.manage' | 'receivables.view'>;
+export type Phase4SellingPermission = Extract<
+  Permission,
+  'sales.view' | 'sales.create' | 'sales.discount' | 'customers.view' | 'customers.manage' | 'receivables.view'
+>;
 
 /**
  * The route decorator. It is `RequiresPermission` narrowed to this module's four
@@ -46,11 +49,24 @@ export function phase4Permission(permission: Phase4SellingPermission): MethodDec
  * Every route of this module and the key it requires — the list `gate:phase4:s1`
  * checks a route enumeration against, and the list the registry owner reads.
  *
- * `sensitive` repeats P4-AL-37's classification: none of these is sensitive,
- * because none of them moves value. Reading a receivable is not a value
- * movement; every value-moving key of P4-AL-35 (`sales.discount`, `sales.void`,
- * `refunds.approve`, `payments.reverse`, `installments.manage`) belongs to a
- * later slice and appears nowhere in this module.
+ * `sensitive` repeats P4-AL-37's classification. Every P4-S1 read is
+ * non-sensitive, because reading a receivable is not a value movement.
+ *
+ * P4-S2 adds ONE writing route, and its classification needs care:
+ * `POST /v1/sales` names `sales.create`, which P4-AL-35's matrix classifies
+ * as ORDINARY (it is the cashier's own key — selling and taking the money for
+ * it ARE the normal flow). The sale's two SENSITIVE conditions —
+ * `sales.discount` for any non-zero discount, and `receivables.view` for a
+ * credit sale — are not decorators, because both depend on the BODY and a
+ * route decorator cannot see it. They are checked in the service, after the
+ * idempotency proof and before any state read, and `sensitiveInBody` records
+ * that here so a reviewer reading this one list is not misled into thinking
+ * the route needs only one key. A discount asked without its key is REFUSED,
+ * never silently zeroed.
+ *
+ * `sale.void` and `sale.return` appear nowhere, by `TL-P4-S2-K1`: `0077`
+ * registers the `sale.commit` operation kind ALONE, and a route for an
+ * authority the database does not grant is a route that cannot work.
  */
 export const SELLING_ROUTE_AUTHORITY: readonly {
   readonly method: 'GET' | 'POST' | 'PUT';
@@ -59,6 +75,8 @@ export const SELLING_ROUTE_AUTHORITY: readonly {
   readonly sensitive: false;
   /** True when the read sums across branches and therefore also needs business-wide scope. */
   readonly businessWide: boolean;
+  /** Keys the SERVICE additionally requires, decided by the body rather than the route (P4-S2). */
+  readonly sensitiveInBody?: readonly Phase4SellingPermission[];
 }[] = Object.freeze([
   Object.freeze({ method: 'GET' as const, path: '/v1/customers', permission: 'customers.view' as const, sensitive: false as const, businessWide: false }),
   Object.freeze({
@@ -99,4 +117,15 @@ export const SELLING_ROUTE_AUTHORITY: readonly {
     businessWide: true,
   }),
   Object.freeze({ method: 'GET' as const, path: '/v1/document-sequences', permission: 'sales.view' as const, sensitive: false as const, businessWide: false }),
+
+  // ── P4-S2: the atomic sale commit, and the read of what it wrote ───────
+  Object.freeze({
+    method: 'POST' as const,
+    path: '/v1/sales',
+    permission: 'sales.create' as const,
+    sensitive: false as const,
+    businessWide: false,
+    sensitiveInBody: Object.freeze(['sales.discount' as const, 'receivables.view' as const]),
+  }),
+  Object.freeze({ method: 'GET' as const, path: '/v1/sales/:saleId', permission: 'sales.view' as const, sensitive: false as const, businessWide: false }),
 ]);
