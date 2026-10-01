@@ -1973,8 +1973,11 @@ explicit Tech Lead directive.
   (`0018_onboarding_operations.sql:16`; no `FORCE` for it anywhere in `0000`–`0076`). And `phase3Tables()`
   is defined as "at the head and not at `0052`" (`tests/helpers/phase3-surface.ts:190-196`), so it is not a
   Phase 3 set at all: it has **54** members on this tree, **9** of which carry neither flag — the eight
-  inherited registry relations above plus **`schema_migrations`, the applier's own bookkeeping relation**,
-  which that helper does not subtract. A protection that must be born failing is not a protection, and an
+  `0053`–`0059` registry relations (`units`, `unit_names`, `inventory_assertion_keys`,
+  `inventory_assertion_uses`, `inventory_operation_kinds`, `inventory_operation_movement_kinds`,
+  `stock_movement_kinds`, `stock_source_types`) plus **`schema_migrations`, the applier's own bookkeeping
+  relation**, which that helper does not subtract. A first text-regex estimate of this figure said eight and
+  was wrong; the nine is the `pg_class` measurement. A protection that must be born failing is not a protection, and an
   allowlist to make it pass is what §17.3 refuses.
 
   **The correct scope is exact rather than narrower**, because `P4-AL-08` makes it so: every Phase 4
