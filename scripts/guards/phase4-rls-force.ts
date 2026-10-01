@@ -387,7 +387,9 @@ export function handwrittenListProblems(lawSource: string, discovered: readonly 
   for (const name of discovered) {
     const literal = new RegExp(String.raw`['"\`](?:public\.)?${name.replace(/[^\w]/g, '\\$&')}['"\`]`);
     if (literal.test(lawSource))
-      problems.push(`${LAW_MODULE} contains "${name}" as a string literal — the Phase 4 surface is DISCOVERED, and a name written down is a name protected instead of a surface (TL-P4-S1-R2)`);
+      problems.push(
+        `${LAW_MODULE} contains "${name}" as a string literal — the Phase 4 surface is DISCOVERED, and a name written down is a name protected instead of a surface (TL-P4-S1-R2)`,
+      );
   }
   return problems;
 }

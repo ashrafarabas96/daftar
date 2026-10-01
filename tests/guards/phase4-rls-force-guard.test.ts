@@ -110,8 +110,7 @@ async function catalogue(c: PoolClient): Promise<LiveRelation[]> {
 const law = (live: readonly LiveRelation[] | null, migrationsDir = MIGRATIONS): string[] =>
   phase4RlsForceProblems({ migrationsDir, applierSource: APPLIER, live });
 
-const report = (live: readonly LiveRelation[] | null, migrationsDir = MIGRATIONS) =>
-  phase4RlsForceReport({ migrationsDir, applierSource: APPLIER, live });
+const report = (live: readonly LiveRelation[] | null, migrationsDir = MIGRATIONS) => phase4RlsForceReport({ migrationsDir, applierSource: APPLIER, live });
 
 /** The problems naming `name`, so a plant's own finding is read rather than the whole list. */
 const about = (problems: readonly string[], name: string): string[] => problems.filter((p) => p.includes(name));
@@ -283,7 +282,9 @@ describe('RP-RLS-C — a newly created Phase 4 relation the discovery OMITS is c
       // deployment, a restored dump, DDL from inside a DO block: every route
       // by which a relation reaches a database without a migration the text
       // parser can read.
-      await c.query(`CREATE TABLE ${name} (${TENANT_COLUMN} UUID NOT NULL, ${BUSINESS_COLUMN} UUID NOT NULL, id UUID NOT NULL, PRIMARY KEY (${BUSINESS_COLUMN}, id))`);
+      await c.query(
+        `CREATE TABLE ${name} (${TENANT_COLUMN} UUID NOT NULL, ${BUSINESS_COLUMN} UUID NOT NULL, id UUID NOT NULL, PRIMARY KEY (${BUSINESS_COLUMN}, id))`,
+      );
       const live = await catalogue(c);
       const r = report(live);
 
@@ -336,7 +337,9 @@ describe('RP-RLS-C — a newly created Phase 4 relation the discovery OMITS is c
 
       // NOT A FINDING: apply it, and the two halves agree — the law is
       // completely silent about the canary, from the same code.
-      await c.query(`CREATE TABLE ${name} (${TENANT_COLUMN} UUID NOT NULL, ${BUSINESS_COLUMN} UUID NOT NULL, id UUID NOT NULL, PRIMARY KEY (${BUSINESS_COLUMN}, id))`);
+      await c.query(
+        `CREATE TABLE ${name} (${TENANT_COLUMN} UUID NOT NULL, ${BUSINESS_COLUMN} UUID NOT NULL, id UUID NOT NULL, PRIMARY KEY (${BUSINESS_COLUMN}, id))`,
+      );
       await c.query(`ALTER TABLE ${name} ENABLE ROW LEVEL SECURITY`);
       await c.query(`ALTER TABLE ${name} FORCE ROW LEVEL SECURITY`);
       const applied = report(await catalogue(c), planted);
