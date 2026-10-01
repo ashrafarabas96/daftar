@@ -74,11 +74,13 @@ import {
   requireSubject,
   saleSubject,
   waitUntilQueued,
+  SALE_COMMIT_ROUTINE,
   type Census,
   type Park,
   type SaleSubject,
 } from '../golden-regression/phase4-s2/harness';
 import { ownerClient } from '../helpers/stock-ledger';
+import { lexBody } from '../helpers/phase3-surface';
 import { confirmSale, seedSaleFixtures } from '../golden-regression/phase4-s2/sale-path';
 
 /** The relations P4-AL-16 names by hand. A FLOOR of the discovered seam set, never an equality. */
@@ -245,9 +247,81 @@ describe('P4-AL-16 one transaction, or no sale: a failure at every seam leaves n
   }
 
   /**
+   * THE PREMISE OF E-01, ASSERTED RATHER THAN ASSUMED.
+   *
+   * `invoice_sequences` is proved by HOLDING its row because the routine only
+   * ever LOCKS it. That premise has been reported twice as a defect — "the
+   * invoice_sequences injection does not fire" — and both times the answer was
+   * that a row trigger cannot observe a row lock. So the premise is a law now,
+   * stated in both directions, and a future edit that puts the relation back
+   * into the trigger set, or a migration that starts writing the row, is
+   * refused HERE with the reason rather than as an obscure
+   * "expected false to be true" inside a generated case.
+   *
+   * The routine body is read through `lexBody`, the repo's own recogniser,
+   * which strips `--` and block comments and replaces every single-quoted
+   * literal with a placeholder. A law that grepped the raw text would be
+   * satisfied — or broken — by a word in a comment or an error message.
+   */
+  it('invoice_sequences is LOCKED and never written, so it belongs to the held-lock case and not to the trigger set', async () => {
+    requireSubject(subject.missing, CLAIM);
+    // (a) the list invariant, both ways.
+    expect(UPDATE_SEAMS, 'invoice_sequences is a seam, named because a count delta cannot discover it').toContain('invoice_sequences');
+    expect(
+      TRIGGER_SEAMS,
+      'invoice_sequences is in TRIGGER_SEAMS: a BEFORE INSERT OR UPDATE trigger there can never fire, because the routine takes the row ' +
+        'FOR NO KEY UPDATE and never writes it (P4-AL-31 forbids a stored counter). The generated case would assert a refusal and get a ' +
+        'success. This seam is proved by the held-lock case below, through pg_blocking_pids.',
+    ).not.toContain('invoice_sequences');
+
+    // (b) the claim about the ROUTINE, from the live catalogue. `0078`'s
+    //     `sale_commit` is the only writer of a sale, so it is the only body
+    //     that could write the series row.
+    const def = must(
+      (
+        await ownerPool().query<{ src: string }>(
+          `SELECT pg_get_functiondef(p.oid) AS src FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+            WHERE n.nspname = 'public' AND p.proname = $1`,
+          [SALE_COMMIT_ROUTINE],
+        )
+      ).rows[0],
+      `the ${SALE_COMMIT_ROUTINE} definition`,
+    ).src;
+    const { code } = lexBody(def);
+    expect(code.length, `NO SUBJECT — ${SALE_COMMIT_ROUTINE}'s lexed body is empty, so both claims below read nothing`).toBeGreaterThan(0);
+    expect(
+      /invoice_sequences/i.test(code),
+      `${SALE_COMMIT_ROUTINE} does not mention invoice_sequences at all, so this law has no subject and the seam is not the one it claims to be`,
+    ).toBe(true);
+    expect(
+      /\bUPDATE\s+(?:public\.)?invoice_sequences\b/i.test(code),
+      `${SALE_COMMIT_ROUTINE} UPDATEs invoice_sequences: the ordinal has become a stored counter (P4-AL-31), and the held-lock case below is no ` +
+        `longer the only way to reach this seam`,
+    ).toBe(false);
+    expect(
+      /\bFOR\s+NO\s+KEY\s+UPDATE\b/i.test(code) || /\bFOR\s+UPDATE\b/i.test(code),
+      `${SALE_COMMIT_ROUTINE} takes no row lock at all, so nothing serialises two sales on the same series and the ordinal is racy`,
+    ).toBe(true);
+
+    // (c) the recognisers, PLANTED, because a `.toBe(false)` over a regex that
+    //     matches nothing is the quietest vacuous pass there is. Both are
+    //     proved to see a real write and to NOT see one written in a comment
+    //     or inside a message — which is the whole reason the body is lexed.
+    const plantedWrite = 'BEGIN UPDATE invoice_sequences SET number_seq = 1; END';
+    expect(/\bUPDATE\s+(?:public\.)?invoice_sequences\b/i.test(lexBody(plantedWrite).code), 'the recogniser sees a real UPDATE of the series row').toBe(true);
+    expect(
+      /\bUPDATE\s+(?:public\.)?invoice_sequences\b/i.test(lexBody("BEGIN RAISE EXCEPTION 'never UPDATE invoice_sequences'; END").code),
+      'and does not see one inside a message, so the law cannot be broken by its own documentation',
+    ).toBe(false);
+    expect(/\bUPDATE\s+(?:public\.)?invoice_sequences\b/i.test(lexBody('-- UPDATE invoice_sequences\nBEGIN NULL; END').code), 'nor one inside a comment').toBe(
+      false,
+    );
+  });
+
+  /**
    * E-01, THE SEAM THAT IS REACHED BY A LOCK AND NOT BY A WRITE.
    *
-   * `invoice_sequences` is read `FOR UPDATE` and never updated, so the only
+   * `invoice_sequences` is read `FOR NO KEY UPDATE` and never updated, so the only
    * way to be at that seam when the sale arrives is to be HOLDING the row.
    * The interleaving is FORCED, not hoped for: the series row is parked on a
    * connection of its own, the sale is launched once, and it is OBSERVED into

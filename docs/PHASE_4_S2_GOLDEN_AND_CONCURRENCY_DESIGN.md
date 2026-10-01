@@ -829,6 +829,81 @@ a discovered FK closure, not a list". Nothing was scoped, relaxed or wrapped in
 
 ---
 
+## 7f. After the `0077` amendment: the green pass, measured — and two reports the measurement contradicts
+
+Merged head `4b7995c`. Pristine cluster each round, `PG_PORT=5444` and
+`PG_DIR=/tmp/daftar-pg-d-golden-5444` both set and `PG_DIR` deleted first. No
+file in the tree was edited while a run was reading it.
+
+### The green pass
+
+| round | what was run | result |
+| --- | --- | --- |
+| A | the eight P4-S2 suites plus both Phase 4 golden directories (12 files) | **156 / 156** |
+| B | fresh cluster: the WHOLE golden tree plus the WHOLE guard estate plus the three `sale-s2-*` integration suites (32 files) | **376 / 376** |
+| C | fresh cluster: `stock-ledger-concurrency`, `inventory-s3-atomicity` and the P4-S2 suites together (9 files) | **105 / 105** |
+| D | round A again, with §7f's new law in place | **157 / 157** |
+
+Three rounds found nothing new, which is the bar: a count from one run is a
+FLOOR because a failing assertion aborts its body. The `selling.sale_cogs_owed`
+403 that masked sixteen failures last round is gone — the amendment re-reads
+`sales` by `(business_id, id)` instead of trusting a deferred trigger's `NEW` —
+and the 155/1 figure I previously had to obtain by dropping the trigger by hand
+is now 156/156 against the shipped tree.
+
+### Report 1: the `invoice_sequences` trigger case — NOT PRESENT
+
+There is no trigger-based `invoice_sequences` case in the file and has not been
+since `ff66910`. A verbose run lists seventeen cases and the only
+`invoice_sequences` one is
+`a sale held at the invoice_sequences seam has committed NOTHING, and
+serialises once the row is released`, which passes. `TRIGGER_SEAMS` is
+`[...P4_AL_16_FLOOR, 'stock_levels']` and the generated loop iterates that, not
+`UPDATE_SEAMS`.
+
+The reported symptom is reproducible, and reproducing it identifies the tree it
+came from: adding `'invoice_sequences'` back to `TRIGGER_SEAMS` produces
+**exactly** the reported text —
+`the invoice_sequences seam: the injected failure surfaces as a refusal rather
+than a success: expected false to be true`. That is the pre-`ff66910` shape.
+
+### Report 2: `stock_source_bindings` with no case — NOT PRESENT
+
+`a failure at the stock_source_bindings seam leaves nothing` runs and passes,
+and `every discovered seam was covered by a case above` passes. The relation is
+in `P4_AL_16_FLOOR`, and `covered` is built from that same list, so adding it to
+the floor put it in both the generated cases and the covered set. Removing it
+again reproduces the reported text:
+`the sale writes stock_source_bindings, and no case above injects a failure
+there`.
+
+### What DID change: the premise of E-01 is now a law
+
+Twice reported, twice the same answer — a row trigger cannot observe a row lock.
+So the premise stops being a comment. A new case states it in both directions
+and refuses the regression at the LIST level, with the reason, instead of as an
+obscure `expected false to be true` inside a generated case:
+
+* `invoice_sequences` **is** in `UPDATE_SEAMS` and **is not** in
+  `TRIGGER_SEAMS`;
+* `sale_commit`'s body, read from the live catalogue through **`lexBody`** — the
+  repo's own recogniser, which strips `--` and block comments and replaces every
+  single-quoted literal with a placeholder — mentions `invoice_sequences`, does
+  **not** `UPDATE` it (P4-AL-31: the ordinal is not a stored counter), and does
+  take a row lock (`FOR NO KEY UPDATE`), so two sales on one series still
+  serialise;
+* and the recognisers are PLANTED, because `.toBe(false)` over a regex that
+  matches nothing is the quietest vacuous pass there is: the `UPDATE` pattern is
+  proved to see a real write, and proved NOT to see one written in a `RAISE`
+  message or in a comment — which is the whole reason the body is lexed rather
+  than grepped.
+
+Red proof, run: with `'invoice_sequences'` planted back into `TRIGGER_SEAMS`,
+**two** cases fail — the new law naming the reason, and the generated case that
+cannot fire. The law is the one that says why.
+
+---
+
 ## 8. Open items for other owners
 
 1. **`docs/DAFTAR_GOLDEN_REGRESSION_SUITE.md:41`** states GOLD-33 as
