@@ -521,6 +521,67 @@ made red proves nothing:
 The scratch build costs ~2s, measured, which is why it is affordable in a
 golden that `npm run test:golden` runs over the whole tree.
 
+### (b2) Three more `0077` breaks the same run found, in goldens 02, 03 and 04
+
+A single run of `tests/golden-regression` is how these were found, and the
+first round reported **7 of 17 files red**. Treating that as a floor and
+re-running was the right discipline: the second round is **4 of 17**, and
+every remaining failure is the `sale_commit` canary.
+
+**Goldens 02 and 03 — the same FK, two more fixtures.** Both write `invoices`
+rows directly and both passed a fresh `randomUUID()` as `sale_id`. In golden 02
+that turned every cross-business probe into a pass for the WRONG REASON: the
+DENY was refused by `invoices_sale_fk` rather than by
+`invoices_customer_fk`/`invoices_branch_fk`, which is precisely the failure mode
+an ALLOW/DENY pair exists to rule out, and the ALLOW stopped being a real
+insert. In golden 03 a numbering suite's inserts died on a foreign key, and the
+`23505` duplicate-ordinal case reported `23503` instead — measured, not
+inferred.
+
+Both now mint a real parent, and a **fresh one per invoice**, because
+`invoices_sale_uq UNIQUE (business_id, sale_id, document_kind)` (`0075:288`)
+admits one invoice of a kind per sale: a shared parent would have turned the
+ALLOW into a `23505` and the probe into a vacuous pass. Golden 02's parent
+carries the fixture's customer and settles on credit; golden 03's is a
+**walk-in** — no `customer_id`, therefore no `customer_name_snapshot`
+(`sales_customer_snapshot_ck`) and cash settlement
+(`sales_credit_customer_ck`) — which matches the invoices that suite writes,
+none of which names a customer either. Both needed a `warehouses` row, since
+`sales.warehouse_id` is NOT NULL and composite-bound.
+
+**Golden 04 — the seam is closed, so the exemption is removed.** LAW 2 reported
+`invoices: the live catalogue carries the unreviewed constraint "f
+invoices_sale_fk"`. That is the lint doing its job: the constraint is reviewed
+here and recorded in `EXPECTED_CONSTRAINTS`.
+
+LAW 5 is the more interesting half, and it did **not** go red — which is the
+problem. `SEAM_ALLOWLIST` held `invoices.sale_id`, and
+`polymorphicReferenceProblems` skips an allowlisted column **before** it looks
+at whether the column is bound. So the stale exemption would have sheltered a
+later migration that dropped `invoices_sale_fk`, and LAW 5 would have reported
+nothing at all. The file's own header said closing the seam means removing the
+entry, so the list is now **empty** and LAW 5 asserts the closure
+**positively**: `invoices.sale_id` is bound by exactly one foreign key, it is
+`invoices_sale_fk`, `convalidated` is true, and `pg_get_constraintdef` renders
+the composite edge `FOREIGN KEY (business_id, sale_id) REFERENCES sales
+(business_id, id)`. "The allowlist is empty" can therefore never be satisfied
+by the seam quietly reopening.
+
+Red proofs, each run:
+
+| planted | assertion that fired |
+| --- | --- |
+| the orphan `sale_id` put back in golden 01's `seedPhase4` | `22 skipped` and `violates foreign key constraint "invoices_sale_fk"` |
+| nothing — the pre-fix state of goldens 02 and 03 | 6 and 3 failures, including `expected '23503' to be '23505'` |
+| nothing — the pre-fix state of golden 04 LAW 2 | `the live catalogue carries the unreviewed constraint "f invoices_sale_fk"` |
+| `'invoices.sale_id'` put back in `SEAM_ALLOWLIST` | `expected [ 'invoices.sale_id' ] to deeply equal []` |
+
+Measured after the fixes, whole golden tree, pristine cluster: **13 of 17 files
+green, 138 passed, 35 failed, and every one of the 35 is a `requireSubject`
+throw naming `the sale commit routine sale_commit`** — no failure of any other
+kind. 27/27 green over `sale-s2-red-proofs` and `sale-s2-interleaving` in the
+same round, which keeps `suiteProblems(REPO) == []`.
+
 ### (c) The `S2_SUITES` roster
 
 See §9.

@@ -73,21 +73,31 @@ const RELATIONS: readonly string[] = ['customers', 'customer_contacts', 'invoice
 const FINANCIAL_CORE: readonly string[] = ['invoices', 'invoice_items'];
 
 /**
- * THE SEAM ALLOWLIST (`0075:105-111`, seam S-P4-01).
+ * THE SEAM ALLOWLIST (`0075:105-111`, seam S-P4-01) — NOW EMPTY, BECAUSE THE
+ * SEAM IS CLOSED.
  *
- * `invoices.sale_id` carries no foreign key because `sales` is P4-S2's
- * relation and P4-AL-86 refuses a later slice's table in this migration. The
- * seam is safe rather than merely unenforced: P4-S1 grants no DML to any
- * principal and ships no command, so no invoice row can exist, and P4-S2's
- * `invoices_sale_fk` validates over an empty table.
+ * `invoices.sale_id` carried no foreign key while `sales` was P4-S2's relation
+ * and P4-AL-86 refused a later slice's table in `0075`. The seam was safe
+ * rather than merely unenforced: P4-S1 granted no DML to any principal and
+ * shipped no command, so no invoice row could exist, and `0077:353` added
+ * `invoices_sale_fk FOREIGN KEY (business_id, sale_id) REFERENCES sales
+ * (business_id, id)` over an empty table, validated.
  *
- * This list has exactly ONE entry, and the test below asserts that it does. A
- * SECOND unbound `*_id` column in the financial core is therefore a failure
- * and not an addition somebody makes to this array: closing this seam means
- * removing this entry, and opening a new one means a Tech Lead ruling and a
- * header that declares it.
+ * The entry is therefore REMOVED, which is exactly what this header said
+ * closing the seam would mean. Leaving it would be worse than untidy: an
+ * allowlisted column is skipped by `polymorphicReferenceProblems` BEFORE its
+ * binding is looked at, so a later migration dropping `invoices_sale_fk` would
+ * have been sheltered by a stale exemption and LAW 5 would have reported
+ * nothing. With the list empty the law is strictly stronger, and the test
+ * below asserts the closure POSITIVELY — the column is bound, by that
+ * constraint, validated — so "the allowlist is empty" can never be satisfied
+ * by the seam quietly reopening.
+ *
+ * An entry is never simply added here. A new unbound `*_id` column in the
+ * financial core is a failure of LAW 5, and opening a seam means a Tech Lead
+ * ruling and a migration header that declares it.
  */
-const SEAM_ALLOWLIST: readonly string[] = ['invoices.sale_id'];
+const SEAM_ALLOWLIST: readonly string[] = [];
 
 interface AttRow {
   readonly relation: string;
@@ -552,6 +562,8 @@ const EXPECTED_CONSTRAINTS: ReadonlyMap<string, readonly ConstraintEntry[]> = ne
       'f invoices_currency_fk',
       'f invoices_fx_rate_fk',
       'f invoices_binding_fk',
+      // Seam S-P4-01, closed by `0077:353` once `sales` existed.
+      'f invoices_sale_fk',
       'f invoices_created_by_fkey',
       'f invoices_voided_by_fkey',
       // The document's own shape.
@@ -691,10 +703,35 @@ describe('GOLD-74 / G-19 — the Phase 4 schema lint, against the live catalogue
     expect(await derivedTruthColumnProblems(owner, RELATIONS)).toEqual([]);
   });
 
-  it('LAW 5: the seam allowlist holds exactly invoices.sale_id, the one seam 0075 declares', () => {
-    // A second entry here would be a second unbound reference smuggled in as a
-    // list edit. The seam is S-P4-01 and only S-P4-01 (`0075:105-111`).
-    expect(SEAM_ALLOWLIST).toEqual(['invoices.sale_id']);
+  it('LAW 5: the seam allowlist is empty, and S-P4-01 is closed by a VALIDATED invoices_sale_fk rather than exempted', async () => {
+    // An entry here would be an unbound reference smuggled in as a list edit.
+    // S-P4-01 was the one seam `0075:105-111` declared and `0077:353` closed
+    // it, so there is nothing left to exempt.
+    expect(SEAM_ALLOWLIST).toEqual([]);
+    // And the closure, positively: the exemption is gone because the EDGE is
+    // there, not because somebody tidied an array. Read from `pg_constraint`,
+    // with `convalidated` asserted — a NOT VALID constraint protects none of
+    // the rows already present, which is the whole reason this file has a
+    // separate `unvalidated` law.
+    const closure = await query<{ conname: string; validated: boolean; def: string }>(
+      owner,
+      `SELECT c.conname::text AS conname, c.convalidated AS validated, pg_get_constraintdef(c.oid) AS def
+         FROM pg_constraint c
+         JOIN pg_class r ON r.oid = c.conrelid
+         JOIN pg_namespace n ON n.oid = r.relnamespace
+         CROSS JOIN LATERAL unnest(c.conkey) AS k(attnum)
+         JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = k.attnum AND NOT a.attisdropped
+        WHERE n.nspname = 'public' AND r.relname = 'invoices' AND c.contype = 'f' AND a.attname = 'sale_id'`,
+      [],
+    );
+    expect(
+      closure.map((r) => r.conname),
+      'invoices.sale_id is bound by exactly one foreign key, and it is invoices_sale_fk',
+    ).toEqual(['invoices_sale_fk']);
+    expect(closure[0]?.validated, 'invoices_sale_fk is VALIDATED — a NOT VALID edge would protect none of the rows already there').toBe(true);
+    expect(closure[0]?.def, 'and it is the COMPOSITE edge to sales, so a sale of another business cannot be named').toMatch(
+      /FOREIGN KEY \(business_id, sale_id\) REFERENCES sales\(business_id, id\)/,
+    );
   });
 
   it('LAW 5: every *_id column of the financial core is bound, a declared seam, or a catalogue-wide correlation id', async () => {

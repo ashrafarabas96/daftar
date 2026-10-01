@@ -333,6 +333,8 @@ interface SeededBusiness {
   readonly tenantId: string;
   readonly businessId: string;
   readonly branchId: string;
+  /** The business's own default warehouse — `sales.warehouse_id` is NOT NULL and composite-bound to it. */
+  readonly warehouseId: string;
 }
 
 async function one(q: Queryable, sql: string, params: readonly unknown[] = []): Promise<string> {
@@ -356,7 +358,11 @@ async function seedBusiness(q: Queryable, tenantId: string, slug: string): Promi
     [tenantId, `GOLD-48 ${slug}`, slug],
   );
   const branchId = await one(q, `INSERT INTO branches (business_id, name, is_default) VALUES ($1, 'Main', true) RETURNING id`, [businessId]);
-  return { tenantId, businessId, branchId };
+  const warehouseId = await one(q, `INSERT INTO warehouses (business_id, branch_id, name, is_default) VALUES ($1, $2, 'Main WH', true) RETURNING id`, [
+    businessId,
+    branchId,
+  ]);
+  return { tenantId, businessId, branchId, warehouseId };
 }
 
 /** What varies between the invoices this suite writes; everything else is fixed below. */
@@ -367,6 +373,48 @@ interface InvoiceSpec {
   /** Defaults to 15 June of `period` — the agreeing date. A disagreeing one is passed explicitly. */
   readonly issueDate?: string;
   readonly documentKind?: string;
+}
+
+/**
+ * ONE DRAFT SALE, FOR ONE INVOICE TO HANG FROM.
+ *
+ * `0077:353` closed seam S-P4-01 with `invoices_sale_fk FOREIGN KEY
+ * (business_id, sale_id) REFERENCES sales (business_id, id)`, so the fresh
+ * `randomUUID()` `insertInvoice` passed as `sale_id` is now refused by THAT
+ * edge — and a numbering suite whose inserts die on a foreign key proves
+ * nothing about numbering. A FRESH parent per invoice, because
+ * `invoices_sale_uq UNIQUE (business_id, sale_id, document_kind)`
+ * (`0075:288`) admits one invoice of a kind per sale, and this suite writes
+ * many invoices of one kind per business on purpose.
+ *
+ * The sale is a WALK-IN draft: no `customer_id`, so no `customer_name_snapshot`
+ * (`sales_customer_snapshot_ck`) and settlement in cash
+ * (`sales_credit_customer_ck`) — which matches the invoices this suite writes,
+ * none of which names a customer either. A draft is the only sale shape a
+ * fixture may write by hand: `sale_header_guard()` admits one carrying no
+ * binding, `sales_cogs_owed()` returns early for it, and no `sale_items` row is
+ * written, so the deferred `stock_source_complete_sale` has no subject. A
+ * CONFIRMED sale is the commit primitive's alone.
+ */
+async function insertDraftSale(q: Queryable, biz: SeededBusiness): Promise<string> {
+  const saleId = randomUUID();
+  await q.query(
+    `INSERT INTO sales (
+       tenant_id, business_id, id, branch_id, warehouse_id, status, settlement_mode,
+       document_date, currency_code,
+       subtotal_txn_minor, discount_txn_minor, tax_minor, total_txn_minor, total_base_minor,
+       source_to_base_rate, rate_source, rate_timestamp,
+       commit_intent_sha256, business_transaction_id, created_by
+     ) VALUES (
+       $1, $2, $3, $4, $5, 'draft', 'cash',
+       DATE '2026-03-14', 'ILS',
+       1000, 0, 0, 1000, 1000,
+       1, 'base', date_trunc('second', now()),
+       $6, $7, $8
+     )`,
+    [biz.tenantId, biz.businessId, saleId, biz.branchId, biz.warehouseId, 'a'.repeat(64), randomUUID(), USER_ID],
+  );
+  return saleId;
 }
 
 /**
@@ -404,7 +452,7 @@ async function insertInvoice(q: Queryable, biz: SeededBusiness, spec: InvoiceSpe
       biz.tenantId,
       biz.businessId,
       randomUUID(),
-      randomUUID(),
+      await insertDraftSale(q, biz),
       biz.branchId,
       spec.documentKind ?? 'invoice',
       spec.documentNumber,
