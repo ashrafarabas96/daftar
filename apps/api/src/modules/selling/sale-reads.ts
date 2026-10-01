@@ -2,6 +2,7 @@ import { Inject, Injectable } from '@nestjs/common';
 import type { SaleDto, SaleInvoiceRefDto, SaleLineDto } from '@daftar/shared-contracts';
 import type { QueryResultRow } from 'pg';
 import { Database } from '../../infra/database';
+import { productNameSql } from '../inventory/inventory-reads';
 import type { ReadScope } from '../inventory/inventory-stock-read';
 import { sellingRefusal } from './selling-errors';
 
@@ -126,7 +127,14 @@ export async function readSalePriceFacts(db: Database, scope: ReadScope, variant
     `SELECT p.id AS product_id, v.id AS variant_id, p.status AS product_status, v.status AS variant_status,
             p.track_inventory, p.unit_decimals,
             coalesce(v.price_minor, p.base_price_minor)::text AS price_minor, p.price_currency,
-            coalesce(p.translations ->> 'ar', p.translations ->> 'en', p.translations ->> 'tr') AS name_snapshot
+            -- products.translations was DROPPED by
+            -- 0036_catalog_translations_normalized.sql:86; the catalogue's
+            -- names live in product_translations (business_id, product_id,
+            -- locale, name). productNameSql is the accepted reader of that
+            -- relation, and asking it for 'ar' keeps this read's original
+            -- order -- ar, then the remaining locales in order -- and its
+            -- empty-string answer for a product with no name in any locale.
+            ${productNameSql('p', "'ar'")} AS name_snapshot
        FROM product_variants v
        JOIN products p ON p.business_id = v.business_id AND p.id = v.product_id
       WHERE v.business_id = $1 AND v.id = ANY($2::uuid[])`,

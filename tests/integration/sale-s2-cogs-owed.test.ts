@@ -339,7 +339,7 @@ describe('C-07 the matched pair, driven through the sale commit command', () => 
     const res = await sale('4');
     expect(res.status, `the zero-valuation sale commits: ${JSON.stringify(res.body)}`).toBeLessThan(300);
 
-    const saleId = res.body.id as string;
+    const saleId = res.body.saleId as string;
     const cost = await ownerPool().query<{ cost: string | null }>(`SELECT inventory_sale_cost_base_minor($1, $2)::text AS cost`, [A.businessId, saleId]);
     expect(cost.rows[0]?.cost, 'the sale carries a bridged movement, and its cost is exactly zero').toBe('0');
 
@@ -381,7 +381,7 @@ describe('C-07 the matched pair, driven through the sale commit command', () => 
 
     const res = await sale('1');
     expect(res.status, `the priced sale commits: ${JSON.stringify(res.body)}`).toBeLessThan(300);
-    const saleId = res.body.id as string;
+    const saleId = res.body.saleId as string;
 
     const row = await ownerPool().query<{ cost: string | null; binding: string | null }>(
       `SELECT inventory_sale_cost_base_minor($1, $2)::text AS cost,
