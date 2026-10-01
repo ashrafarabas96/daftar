@@ -1064,16 +1064,69 @@ export async function rewindToP3S2Checkpoint(c: Queryable): Promise<void> {
 }
 
 /**
+ * TRUNCATE every relation in the transitive FK-referencing closure of `seed`.
+ *
+ * PostgreSQL refuses a TRUNCATE that does not name EVERY table referencing a
+ * table being truncated (`0A000`, "cannot truncate a table referenced in a
+ * foreign key constraint"), so the statement has to carry the whole
+ * referencing closure. Both fixtures that need this used to write that closure
+ * out by hand, one phase at a time — the S3, S4 and S5 bridges, the S5
+ * documents, the six S6 tables, the 0072 write-offs — and a hand-written
+ * closure is a closure rule in inventory shape
+ * ([[daftar-a-closure-rule-is-not-an-invariant]]): red the moment a later
+ * phase adds a reference, with the symptom a `beforeAll` dying in permanent
+ * Phase 3 suites and an error message about something else entirely. `0077`'s
+ * `stock_source_bridge_sale` references `stock_source_bindings` and did
+ * exactly that, in two helpers rather than one.
+ *
+ * So the closure is DISCOVERED from `pg_constraint` and transitively closed —
+ * the idiom already accepted at
+ * `tests/security/phase4-registry-phase-scoping.test.ts:82`. What a CALLER
+ * writes is the SEED: the relations its fixture owns and means to empty. A
+ * later phase's reference to one of them is swept in without an edit, and a
+ * reference that leaves the seed set is still refused by the database, which
+ * is the property the hand-written lists only appeared to have.
+ *
+ * Order is not load-bearing: one TRUNCATE naming every relation in the closure
+ * empties them together, so the children-first sequencing the old lists were
+ * careful about never mattered. The statement is sorted for stability.
+ *
+ * `required` is checked rather than assumed: a closure that lost its own seed
+ * would empty the wrong thing and read as a passing fixture.
+ */
+export async function truncateReferencingClosure(c: Queryable, seed: readonly string[], required: readonly string[]): Promise<readonly string[]> {
+  const bare = (x: string): string => x.replace(/^public\./, '');
+  const closure = new Set<string>();
+  let frontier = seed.map(bare);
+  while (frontier.length > 0) {
+    const r = await c.query<{ child: string }>(
+      `SELECT DISTINCT k.conrelid::regclass::text AS child
+         FROM pg_constraint k
+        WHERE k.contype = 'f'
+          AND k.confrelid = ANY (SELECT to_regclass('public.' || x) FROM unnest($1::text[]) x)`,
+      [frontier],
+    );
+    for (const x of frontier) closure.add(x);
+    frontier = r.rows.map((x) => bare(x.child)).filter((x) => !closure.has(x));
+  }
+  const present = await c.query<{ name: string }>(`SELECT x AS name FROM unnest($1::text[]) x WHERE to_regclass('public.' || x) IS NOT NULL ORDER BY x`, [
+    [...closure],
+  ]);
+  const targets = present.rows.map((x) => x.name);
+  for (const want of required) {
+    if (!targets.includes(bare(want))) throw new Error(`truncateReferencingClosure: the discovered closure lost ${want}`);
+  }
+  await c.query(`TRUNCATE ${targets.join(', ')}`);
+  return targets;
+}
+
+/**
  * Remove a committed fixture and everything it produced. Idempotent: every
  * step tolerates the fixture being absent. Append-only triggers refuse DELETE,
- * so the stock rows go by TRUNCATE (deliberately unguarded, E-24). Since 0061
- * the four P3-S3 bridges reference `stock_source_bindings`, and PostgreSQL
- * refuses to truncate a referenced table without its referencing ones
- * (0A000), so they are named in the same statement. P3-S4 (0063/0064): so
- * are the two P3-S4 bridges. P3-S5 (0065/0066): so are the two P3-S5
- * bridges, and the five S5 documents with them, children first (§7.3 row 16).
- * P3-S6 (0067/0068): the six S6 tables, children first and before the S5
- * credit notes they reference (§7.3 row 17).
+ * so the stock rows go by TRUNCATE (deliberately unguarded, E-24), and the
+ * relations that have to be named with them are DISCOVERED — see
+ * `truncateReferencingClosure`, which replaced the hand-written per-phase list
+ * this comment used to carry.
  */
 export async function removeCommittedFixture(): Promise<void> {
   const c = await ownerClient();
@@ -1082,11 +1135,13 @@ export async function removeCommittedFixture(): Promise<void> {
     const bridge = must((await c.query<{ r: string | null }>(`SELECT to_regclass('public.stock_source_bridge_fixture_line')::text AS r`)).rows[0]).r;
     const lines = must((await c.query<{ r: string | null }>(`SELECT to_regclass('public.stock_fixture_lines')::text AS r`)).rows[0]).r;
     const extra = [bridge, lines].filter((x): x is string => x !== null);
-    await c.query(
-      // P3-S4 (0063/0064): the two S4 bridges reference stock_source_bindings too.
-      // P3-S5 (0065/0066): so do the two S5 bridges; the S5 documents follow them.
-      // P3-S6 (0067/0068): the six S6 tables reference the purchases and the credit notes, so they precede the S5 documents.
-      `TRUNCATE ${['stock_source_bindings', 'stock_movements', 'stock_levels', 'negative_deficit_coverages', 'negative_inventory_deficits', ...S3_BRIDGES, ...S4_BRIDGES, ...S5_BRIDGES, ...S6_TABLES, ...S5_TABLES, ...extra].join(', ')}`,
+    // The seed: what this fixture owns and means to empty. Every bridge and
+    // document of every later slice arrives through the closure.
+    await c.query('SET LOCAL client_min_messages = warning');
+    await truncateReferencingClosure(
+      c,
+      ['stock_source_bindings', 'stock_movements', 'stock_levels', 'negative_inventory_deficits', ...extra],
+      ['stock_movements', 'stock_source_bindings'],
     );
     await c.query(`DROP TRIGGER IF EXISTS stock_binding_requires_${FIXTURE_SOURCE_TYPE} ON stock_source_bindings`);
     await c.query(`DROP TABLE IF EXISTS stock_source_bridge_fixture_line`);
