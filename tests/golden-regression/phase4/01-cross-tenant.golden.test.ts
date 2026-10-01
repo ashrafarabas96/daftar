@@ -145,10 +145,24 @@ function bind(route: string, shop: Shop): { method: string; path: string } {
  * series, and one OPEN invoice with one line — so every one of the eight reads
  * has something to return, and a leak is a visible row rather than an empty
  * page that looks like a refusal.
+ *
+ * The invoice needs a PARENT SALE. `0077` closed seam S-P4-01 with
+ * `invoices_sale_fk FOREIGN KEY (business_id, sale_id) REFERENCES sales
+ * (business_id, id)` (`0077:353`), so the fresh `randomUUID()` this fixture
+ * used to pass as `sale_id` no longer inserts, and the whole `beforeAll` went
+ * with it. The parent is written as a DRAFT, which is the only sale shape a
+ * fixture may write by hand: `sale_header_guard()` admits a draft carrying no
+ * binding, `sales_cogs_owed()` returns early for one, and no `sale_items` row
+ * is written, so the deferred `stock_source_complete_sale` has no subject.
+ * A CONFIRMED sale is the commit primitive's to write and nobody else's —
+ * hand-seeding one here would plant exactly the half-built commercial fact
+ * that the atomic sale law exists to forbid.
  */
 async function seedPhase4(pool: Pool, shop: Omit<Shop, 'customerId' | 'invoiceId'>): Promise<{ customerId: string; invoiceId: string }> {
   const customerId = randomUUID();
   const invoiceId = randomUUID();
+  /** The invoice's parent sale. Local, never published as `shop.saleId`: that one is a COMMITTED sale, and `sellable()` makes it. */
+  const parentSaleId = randomUUID();
   const digest = 'a'.repeat(64);
   const period = '2026';
   const client = await pool.connect();
@@ -171,13 +185,22 @@ async function seedPhase4(pool: Pool, shop: Omit<Shop, 'customerId' | 'invoiceId
       [shop.tenantId, shop.businessId, period],
     );
     await client.query(
+      `INSERT INTO sales (tenant_id, business_id, id, customer_id, branch_id, warehouse_id, status, settlement_mode,
+                          document_date, currency_code, subtotal_txn_minor, discount_txn_minor, tax_minor,
+                          total_txn_minor, total_base_minor, source_to_base_rate, rate_source, rate_timestamp,
+                          customer_name_snapshot, commit_intent_sha256, business_transaction_id, created_by)
+       VALUES ($1, $2, $3, $4, $5, $6, 'draft', 'credit', DATE '2026-03-14', 'ILS', 1000, 0, 0, 1000, 1000,
+               1, 'base', TIMESTAMPTZ '2026-03-14T09:15:00Z', 'Customer snapshot', $7, $8, $9)`,
+      [shop.tenantId, shop.businessId, parentSaleId, customerId, shop.branchId, shop.warehouseId, digest, randomUUID(), shop.userId],
+    );
+    await client.query(
       `INSERT INTO invoices (tenant_id, business_id, id, sale_id, customer_id, branch_id, document_kind, document_number, number_seq,
                              period, issue_date, due_date, currency_code, status, subtotal_txn_minor, discount_txn_minor, tax_minor,
                              total_txn_minor, total_base_minor, source_to_base_rate, rate_source, rate_timestamp,
                              customer_name_snapshot, issue_intent_sha256, business_transaction_id, created_by)
        VALUES ($1, $2, $3, $4, $5, $6, 'invoice', $7, 1, $8, DATE '2026-03-14', DATE '2026-04-14', 'ILS', 'draft',
                1000, 0, 0, 1000, 1000, 1, 'base', TIMESTAMPTZ '2026-03-14T09:15:00Z', 'Customer snapshot', $9, $10, $11)`,
-      [shop.tenantId, shop.businessId, invoiceId, randomUUID(), customerId, shop.branchId, `INV-${period}-00001`, period, digest, randomUUID(), shop.userId],
+      [shop.tenantId, shop.businessId, invoiceId, parentSaleId, customerId, shop.branchId, `INV-${period}-00001`, period, digest, randomUUID(), shop.userId],
     );
     await client.query(
       `INSERT INTO invoice_items (tenant_id, business_id, invoice_id, id, line_no, product_id, name_snapshot, quantity,
