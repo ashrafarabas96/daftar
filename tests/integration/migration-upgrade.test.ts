@@ -7,7 +7,15 @@ import { describe, it, expect, afterAll } from 'vitest';
 import { MIGRATIONS_DIR, runMigrations } from '../../apps/api/src/infra/migrate';
 import { phase4InheritedPrefixRelations } from '../../scripts/guards/no-authoritative-balance';
 import { PHASE4_INHERITED_PREFIX_END } from '../../scripts/phase4-prefix';
-import { backfillAuditViolations, phase3RegistryViolations, phase3Registrants } from '../helpers/phase3-scope-drift';
+import {
+  backfillAuditViolations,
+  phase3RegistryViolations,
+  phase3Registrants,
+  provenanceRelationsOf,
+  registryRowsOf,
+  registryTagsOf,
+  withoutRegistryRows,
+} from '../helpers/phase3-scope-drift';
 import {
   dbUrl,
   PG_PORT,
@@ -500,18 +508,37 @@ describe('migration upgrade path: pre-encryption schema → latest (§13–16)',
 
       // Exactly the migrations of P2-S2, P2-S3, P2-S4, P2-S5 and P2-S6 follow
       // the frozen P2-S1 boundary, in order.
-      expect(await runMigrations(url5)).toEqual([
-        '0042_accounting_journal.sql',
-        '0043_accounting_invariants.sql',
-        '0044_accounting_assertion_keys.sql',
-        '0045_accounting_post_entry.sql',
-        '0046_accounting_sources.sql',
-        '0047_accounting_opening_balances.sql',
-        '0048_accounting_fx_rates.sql',
-        '0049_accounting_periods.sql',
-        '0050_accounting_report_indexes.sql',
-        ...migrationsAfter('0050_accounting_report_indexes.sql'),
-      ]);
+      // P4-AL-88, the accepted TWO-STEP shape. `runMigrations(url)` with no
+      // bound means the WHOLE tree, so every exact equality below was a claim
+      // about the phase that FOLLOWS this one: `0077` registers two accounting
+      // source types and an accepted matrix went red for a reason that has
+      // nothing to do with the upgrade it judges. The upgrade now stops at the
+      // ACCEPTED PHASE 3 HEAD — `0000`-`0073`, frozen byte for byte by
+      // P4-AL-85, so no later phase can enter that scope — every assertion
+      // below is the one that was here, WORD FOR WORD, against the state at
+      // that head, and the migrations beyond it are applied in a step of their
+      // own at the end of this case, which carries the disjointness half.
+      const toPhase3Head5 = migrationsUpTo(PHASE4_INHERITED_PREFIX_END);
+      let applied5: string[];
+      try {
+        applied5 = await runMigrations(url5, toPhase3Head5);
+      } finally {
+        rmSync(toPhase3Head5, { recursive: true, force: true });
+      }
+      expect(applied5).toEqual(
+        [
+          '0042_accounting_journal.sql',
+          '0043_accounting_invariants.sql',
+          '0044_accounting_assertion_keys.sql',
+          '0045_accounting_post_entry.sql',
+          '0046_accounting_sources.sql',
+          '0047_accounting_opening_balances.sql',
+          '0048_accounting_fx_rates.sql',
+          '0049_accounting_periods.sql',
+          '0050_accounting_report_indexes.sql',
+          ...migrationsAfter('0050_accounting_report_indexes.sql'),
+        ].filter((f) => f <= PHASE4_INHERITED_PREFIX_END),
+      );
 
       // The closed registries came out with the shape the slice specifies:
       // three source types, and no system actor at all (AL-04 invents nobody).
@@ -521,7 +548,10 @@ describe('migration upgrade path: pre-encryption schema → latest (§13–16)',
       // P3-S5 (0065/0066): then the one P3-S5 registers (0065, contract A-05;
       // R-B2a: `purchase_reversal` is a stock source type only).
       // P3-S6 (0067/0068): then the three P3-S6 registers (0067, contract A-05), in order.
-      expect((await pool.query<{ t: string }>(`SELECT source_type AS t FROM accounting_source_types ORDER BY sort_order`)).rows.map((r) => r.t)).toEqual([
+      const typesAtPhase3Head = (await pool.query<{ t: string }>(`SELECT source_type AS t FROM accounting_source_types ORDER BY sort_order`)).rows.map(
+        (r) => r.t,
+      );
+      expect(typesAtPhase3Head).toEqual([
         'opening_balance',
         'manual_adjustment',
         'reversal',
@@ -612,6 +642,27 @@ describe('migration upgrade path: pre-encryption schema → latest (§13–16)',
 
       // The chart alone still does not start the business's financial life.
       expect((await pool.query(`SELECT 1 FROM businesses WHERE financial_started_at IS NOT NULL`)).rows).toEqual([]);
+
+      // ── BEYOND the accepted Phase 3 head: the disjointness half ─────────
+      //
+      // What the migrations past the accepted head register is the next phase's
+      // business, and this case claims nothing about it. What they may not do is
+      // reach back into the scope this case owns: `0046`'s rule is that a source
+      // type is APPENDED, so the twelve above must still be the first twelve in
+      // the same order, and whatever a successor added must sit entirely after
+      // them. Asserted positively, so nothing was merely dropped from the claim.
+      const beyond5 = await runMigrations(url5);
+      expect(beyond5, 'beyond the accepted head, exactly the files that follow it').toEqual(migrationsAfter(PHASE4_INHERITED_PREFIX_END));
+      const typesAfterBeyond = (await pool.query<{ t: string }>(`SELECT source_type AS t FROM accounting_source_types ORDER BY sort_order`)).rows.map(
+        (r) => r.t,
+      );
+      expect(typesAfterBeyond.slice(0, typesAtPhase3Head.length), 'a later phase did not reorder or displace the accepted source types').toEqual(
+        typesAtPhase3Head,
+      );
+      expect(
+        typesAfterBeyond.slice(typesAtPhase3Head.length).filter((t) => typesAtPhase3Head.includes(t)),
+        'and registered none of them a second time',
+      ).toEqual([]);
 
       // Second run does nothing.
       expect(await runMigrations(url5)).toEqual([]);
@@ -832,7 +883,20 @@ describe('migration upgrade path: pre-encryption schema → latest (§13–16)',
       // 0049 is the first thing that follows the frozen P2-S5 boundary; a
       // later authorized candidate may follow it, and this case is not the
       // place that decides whether one exists.
-      const fromS5 = await runMigrations(url7);
+      // P4-AL-88, the accepted TWO-STEP shape: the digest below is an EXACT
+      // equality and it was taken after an UNBOUNDED upgrade, so it was a claim
+      // about the phase that follows — `0077` appends two accounting source
+      // types. The upgrade now stops at the ACCEPTED PHASE 3 HEAD, frozen byte
+      // for byte by P4-AL-85; every assertion below is the one that was here,
+      // WORD FOR WORD; and the migrations beyond it are applied in a step of
+      // their own further down, which carries the disjointness half.
+      const toPhase3Head7 = migrationsUpTo(PHASE4_INHERITED_PREFIX_END);
+      let fromS5: string[];
+      try {
+        fromS5 = await runMigrations(url7, toPhase3Head7);
+      } finally {
+        rmSync(toPhase3Head7, { recursive: true, force: true });
+      }
       expect(fromS5[0]).toBe('0049_accounting_periods.sql');
 
       // §28 — the books are exactly as they were, byte for byte, and no
@@ -845,23 +909,22 @@ describe('migration upgrade path: pre-encryption schema → latest (§13–16)',
       // and likewise touches no other row.
       // P3-S6 (0067/0068): and P3-S6's — 0067 appends three more (contract
       // A-05) and likewise touches no other row.
-      expect(await protectedDigest()).toEqual(
-        [
-          ...before,
-          'src:inventory_adjustment:4',
-          'src:inventory_opening:5',
-          'src:purchase:6',
-          'src:negative_inventory_cost_adjustment:7',
-          // P3-S5 (0065/0066)
-          'src:supplier_return:8',
-          // P3-S6 (0067/0068)
-          'src:supplier_payment:9',
-          'src:supplier_credit_allocation:10',
-          'src:supplier_refund:11',
-          // Phase 3 corrective (0072 TD-16, R-96)
-          ...P3C_SOURCE_TYPE_ROWS,
-        ].sort(),
-      );
+      const digestAtPhase3Head = [
+        ...before,
+        'src:inventory_adjustment:4',
+        'src:inventory_opening:5',
+        'src:purchase:6',
+        'src:negative_inventory_cost_adjustment:7',
+        // P3-S5 (0065/0066)
+        'src:supplier_return:8',
+        // P3-S6 (0067/0068)
+        'src:supplier_payment:9',
+        'src:supplier_credit_allocation:10',
+        'src:supplier_refund:11',
+        // Phase 3 corrective (0072 TD-16, R-96)
+        ...P3C_SOURCE_TYPE_ROWS,
+      ].sort();
+      expect(await protectedDigest()).toEqual(digestAtPhase3Head);
       expect((await pool.query<{ n: number }>(`SELECT count(*)::int AS n FROM journal_entries`)).rows[0]?.n).toBe(0);
       expect((await pool.query(`SELECT 1 FROM businesses WHERE financial_started_at IS NOT NULL`)).rows).toEqual([]);
 
@@ -932,6 +995,31 @@ describe('migration upgrade path: pre-encryption schema → latest (§13–16)',
       expect(manifest.migrations.find((m) => m.name === '0049_accounting_periods.sql')?.sha256).toBe(
         '454a52183f8666f88bbf17b87b4b44e6413114af069149d2eb2489854307d851',
       );
+
+      // ── BEYOND the accepted Phase 3 head: the disjointness half ─────────
+      //
+      // The declarative registries come OUT of the equality — a migration of
+      // ANY phase may add a row to one, which is what `0074`'s widening exists
+      // to let it do — and are claimed immediately after instead. NARROWED, not
+      // loosened: every row of every other relation is still claimed exactly,
+      // word for word, against the digest pinned at the accepted head. The
+      // registries are DISCOVERED from the catalogue, never listed; `src` is
+      // this digest's own abbreviation for the relation the discovery found.
+      const beyond7 = await runMigrations(url7);
+      expect(beyond7, 'beyond the accepted head, exactly the files that follow it').toEqual(migrationsAfter(PHASE4_INHERITED_PREFIX_END));
+      const registryTags7 = await registryTagsOf(pool, { src: 'accounting_source_types' });
+      const digestAfterBeyond = await protectedDigest();
+      expect(withoutRegistryRows(digestAfterBeyond, registryTags7), 'the migrations beyond the accepted head did not reach into the books').toEqual(
+        withoutRegistryRows(digestAtPhase3Head, registryTags7),
+      );
+      expect(
+        registryRowsOf(digestAtPhase3Head, registryTags7).length,
+        'the digest carries registry rows, so this narrowing is about something',
+      ).toBeGreaterThan(0);
+      expect(
+        registryRowsOf(digestAtPhase3Head, registryTags7).filter((r) => !registryRowsOf(digestAfterBeyond, registryTags7).includes(r)),
+        'a migration beyond the accepted head removed or rewrote a registry row',
+      ).toEqual([]);
 
       // Second run does nothing.
       expect(await runMigrations(url7)).toEqual([]);
@@ -1284,14 +1372,30 @@ describe('migration upgrade path: pre-encryption schema → latest (§13–16)',
       // 7, 0064 §2.5), every such row by P3-S4; the ledger stays empty.
       // P3-S5 (0065/0066): plus exactly what P3-S5 registered (0065 §2.1, 0066
       // §2.6), every such row by P3-S5; the ledger stays empty.
+      // P4-AL-88. The two registry reads and the three registry COUNTS below
+      // were absolute, so they were closure rules — "these registries contain
+      // nothing else, ever" — and `0077` registering one stock source type and
+      // one movement kind turns them red. Re-expressed PER PHASE and NOT
+      // loosened, by the registry's own provenance column: the
+      // `registered_by ~ '^P3-'` idiom of `tests/helpers/stock-ledger.ts
+      // :661-692`. So a MISSING Phase 3 row is still red, and so is an extra
+      // row claiming Phase 3 provenance — the scoping cannot be dodged by
+      // mislabelling a Phase 4 row as `P3-S7`. Which relations carry that
+      // column is DISCOVERED from the catalogue, never listed here.
+      const provenanceTables = await provenanceRelationsOf(pool);
       const counts = (
-        await pool.query<{ t: string; n: number }>(LEDGER.map((t) => `SELECT '${t}' AS t, count(*)::int AS n FROM ${t}`).join(' UNION ALL '))
+        await pool.query<{ t: string; n: number }>(
+          LEDGER.map((t) => `SELECT '${t}' AS t, count(*)::int AS n FROM ${t}${provenanceTables.has(t) ? ` WHERE registered_by ~ '^P3-'` : ''}`).join(
+            ' UNION ALL ',
+          ),
+        )
       ).rows.reduce<Record<string, number>>((acc, r) => ({ ...acc, [r.t]: r.n }), {});
       expect(
         (
           await pool.query<{ r: string }>(
-            `SELECT 'type:' || source_type || ':' || registered_by AS r FROM stock_source_types
-             UNION ALL SELECT 'map:' || op_code || ':' || movement_kind || ':' || registered_by FROM inventory_operation_movement_kinds`,
+            `SELECT 'type:' || source_type || ':' || registered_by AS r FROM stock_source_types WHERE registered_by ~ '^P3-'
+             UNION ALL SELECT 'map:' || op_code || ':' || movement_kind || ':' || registered_by FROM inventory_operation_movement_kinds
+              WHERE registered_by ~ '^P3-'`,
           )
         ).rows
           .map((x) => x.r)
@@ -1538,8 +1642,25 @@ describe('migration upgrade path: pre-encryption schema → latest (§13–16)',
         ...P3C_SOURCE_TYPE_ROWS,
       ].sort();
 
-      const applied = await runMigrations(url10);
-      expect(applied).toEqual(migrationsAfter(FROZEN));
+      // P4-AL-88, the accepted TWO-STEP shape. `runMigrations(url)` with no
+      // bound means the WHOLE tree, so the exact equalities below were claims
+      // about the phase that FOLLOWS this one: `0077` registers a stock source
+      // type, a movement kind, an operation kind, an op->kind row and two
+      // accounting source types, and an accepted Phase 3 matrix went red for a
+      // reason that has nothing to do with the upgrade it judges. The upgrade
+      // now stops at the ACCEPTED PHASE 3 HEAD — frozen byte for byte by
+      // P4-AL-85, so no later phase can enter that scope — every assertion
+      // below is the one that was here, WORD FOR WORD, and the migrations
+      // beyond it are applied in a step of their own at the end of this case,
+      // which carries the disjointness half.
+      const toPhase3Head10 = migrationsUpTo(PHASE4_INHERITED_PREFIX_END);
+      let applied: string[];
+      try {
+        applied = await runMigrations(url10, toPhase3Head10);
+      } finally {
+        rmSync(toPhase3Head10, { recursive: true, force: true });
+      }
+      expect(applied).toEqual(migrationsAfter(FROZEN).filter((f) => f <= PHASE4_INHERITED_PREFIX_END));
       expect(applied.slice(0, 2)).toEqual(['0061_inventory_movement_sources.sql', '0062_inventory_movement_commands.sql']);
 
       // Books, catalog, configuration and the movement-kind seed are exactly
@@ -1649,6 +1770,35 @@ describe('migration upgrade path: pre-encryption schema → latest (§13–16)',
       for (const role of ['daftar_inventory_internal', 'daftar_accounting_internal']) {
         expect((await pool.query<{ c: boolean }>(`SELECT has_schema_privilege($1, 'public', 'CREATE') AS c`, [role])).rows[0]?.c, role).toBe(false);
       }
+
+      // ── BEYOND the accepted Phase 3 head: the disjointness half ─────────
+      //
+      // What the migrations past the accepted head CREATE and REGISTER is the
+      // next phase's business, and this case claims nothing about it. What they
+      // may not do is reach back into the scope this case owns. The declarative
+      // registries come OUT of the equality — a migration of ANY phase may add
+      // a row to one, which is what `0074`'s widening exists to let it do — and
+      // are claimed immediately below instead. NARROWED, not loosened: every
+      // row of every other relation is still claimed exactly, word for word,
+      // against the list pinned at the accepted head, and no registry row that
+      // stood at that head may be removed or rewritten. The registries are
+      // DISCOVERED from the catalogue, never listed; `src` and `kind` are this
+      // digest's own abbreviations for relations the discovery found.
+      const registriesAtPhase3Head10 = await registries();
+      const beyond10 = await runMigrations(url10);
+      expect(beyond10, 'beyond the accepted head, exactly the files that follow it').toEqual(migrationsAfter(PHASE4_INHERITED_PREFIX_END));
+      const registryTags10 = await registryTagsOf(pool, { src: 'accounting_source_types', kind: 'stock_movement_kinds' });
+      const afterBeyond10 = await protectedRows();
+      expect(withoutRegistryRows(afterBeyond10, registryTags10), 'the migrations beyond the accepted head did not reach into the Phase 3 scope').toEqual(
+        withoutRegistryRows(after, registryTags10),
+      );
+      expect(registryRowsOf(after, registryTags10).length, 'the digest carries registry rows, so this narrowing is about something').toBeGreaterThan(0);
+      expect(
+        registryRowsOf(after, registryTags10).filter((r) => !registryRowsOf(afterBeyond10, registryTags10).includes(r)),
+        'a migration beyond the accepted head removed or rewrote a registry row',
+      ).toEqual([]);
+      expect(phase3RegistryViolations(registriesAtPhase3Head10, await registries()), 'and no Phase 3 registry row was removed, rewritten or added').toEqual([]);
+      expect(phase3Registrants(registriesAtPhase3Head10).length, 'and the Phase 3 half of the registries is not empty').toBeGreaterThan(0);
 
       // Second run does nothing.
       expect(await runMigrations(url10)).toEqual([]);
@@ -1852,8 +2002,25 @@ describe('migration upgrade path: pre-encryption schema → latest (§13–16)',
         ...P3C_SOURCE_TYPE_ROWS,
       ].sort();
 
-      const applied = await runMigrations(url11);
-      expect(applied).toEqual(migrationsAfter(FROZEN));
+      // P4-AL-88, the accepted TWO-STEP shape. `runMigrations(url)` with no
+      // bound means the WHOLE tree, so the exact equalities below were claims
+      // about the phase that FOLLOWS this one: `0077` registers a stock source
+      // type, a movement kind, an operation kind, an op->kind row and two
+      // accounting source types, and an accepted Phase 3 matrix went red for a
+      // reason that has nothing to do with the upgrade it judges. The upgrade
+      // now stops at the ACCEPTED PHASE 3 HEAD — frozen byte for byte by
+      // P4-AL-85, so no later phase can enter that scope — every assertion
+      // below is the one that was here, WORD FOR WORD, and the migrations
+      // beyond it are applied in a step of their own at the end of this case,
+      // which carries the disjointness half.
+      const toPhase3Head11 = migrationsUpTo(PHASE4_INHERITED_PREFIX_END);
+      let applied: string[];
+      try {
+        applied = await runMigrations(url11, toPhase3Head11);
+      } finally {
+        rmSync(toPhase3Head11, { recursive: true, force: true });
+      }
+      expect(applied).toEqual(migrationsAfter(FROZEN).filter((f) => f <= PHASE4_INHERITED_PREFIX_END));
       expect(applied.slice(0, 2)).toEqual(['0063_purchases_suppliers_sources.sql', '0064_purchase_commands.sql']);
 
       // Books, ledger, S3 documents and catalogue are exactly as they were,
@@ -1932,9 +2099,41 @@ describe('migration upgrade path: pre-encryption schema → latest (§13–16)',
         expect((await pool.query<{ c: boolean }>(`SELECT has_schema_privilege($1, 'public', 'CREATE') AS c`, [role])).rows[0]?.c, role).toBe(false);
       }
 
+      // ── BEYOND the accepted Phase 3 head: the disjointness half ─────────
+      //
+      // What the migrations past the accepted head CREATE and REGISTER is the
+      // next phase's business, and this case claims nothing about it. What they
+      // may not do is reach back into the scope this case owns. The declarative
+      // registries come OUT of the equality — a migration of ANY phase may add
+      // a row to one, which is what `0074`'s widening exists to let it do — and
+      // are claimed immediately below instead. NARROWED, not loosened: every
+      // row of every other relation is still claimed exactly, word for word,
+      // against the list pinned at the accepted head, and no registry row that
+      // stood at that head may be removed or rewritten. The registries are
+      // DISCOVERED from the catalogue, never listed; `src` and `kind` are this
+      // digest's own abbreviations for relations the discovery found.
+      const registriesAtPhase3Head11 = await registries();
+      const beyond11 = await runMigrations(url11);
+      expect(beyond11, 'beyond the accepted head, exactly the files that follow it').toEqual(migrationsAfter(PHASE4_INHERITED_PREFIX_END));
+      const registryTags11 = await registryTagsOf(pool, { src: 'accounting_source_types', kind: 'stock_movement_kinds' });
+      const afterBeyond11 = await protectedRows();
+      expect(withoutRegistryRows(afterBeyond11, registryTags11), 'the migrations beyond the accepted head did not reach into the Phase 3 scope').toEqual(
+        withoutRegistryRows(after, registryTags11),
+      );
+      expect(registryRowsOf(after, registryTags11).length, 'the digest carries registry rows, so this narrowing is about something').toBeGreaterThan(0);
+      expect(
+        registryRowsOf(after, registryTags11).filter((r) => !registryRowsOf(afterBeyond11, registryTags11).includes(r)),
+        'a migration beyond the accepted head removed or rewrote a registry row',
+      ).toEqual([]);
+      expect(phase3RegistryViolations(registriesAtPhase3Head11, await registries()), 'and no Phase 3 registry row was removed, rewritten or added').toEqual([]);
+      expect(phase3Registrants(registriesAtPhase3Head11).length, 'and the Phase 3 half of the registries is not empty').toBeGreaterThan(0);
+      // And the replaced discovery still reports no gap, now over every type
+      // the later phases registered too.
+      expect((await pool.query(`SELECT * FROM inventory_stock_source_guard_gaps()`)).rows).toEqual([]);
+
       // Second run does nothing, and still leaves every protected row as it was.
       expect(await runMigrations(url11)).toEqual([]);
-      expect(await protectedRows()).toEqual(after);
+      expect(await protectedRows()).toEqual(afterBeyond11);
     } finally {
       await pool.end();
       await admin.query(`DROP DATABASE IF EXISTS ${db11} WITH (FORCE)`).catch(() => undefined);
@@ -2271,7 +2470,27 @@ describe('migration upgrade path: pre-encryption schema → latest (§13–16)',
       // vocabulary is the table's own name.)
       const nonAudit = (rows: readonly string[]): string[] => rows.filter((t) => !t.startsWith('audit_events:'));
       const auditIn = (rows: readonly string[]): string[] => rows.filter((t) => t.startsWith('audit_events:'));
-      expect(nonAudit(afterBeyond), 'the migrations beyond the accepted head did not reach into the Phase 3 scope').toEqual(nonAudit(after));
+      // NARROWED, not loosened (P4-AL-88): the declarative registries come out
+      // of this equality, because a migration of ANY phase may add a row to one
+      // — `0074`'s widening exists to let it — and they are claimed by
+      // `phase3RegistryViolations` and the positive `phase3Registrants` floor
+      // below instead, which still refuse a removed row, a rewritten row and a
+      // row mislabelled with a Phase 3 provenance. The registries are
+      // DISCOVERED from the catalogue (no business dimension plus a
+      // registration column), never listed; `src` is this digest's own
+      // abbreviation for the relation the discovery found.
+      const registryTags = await registryTagsOf(pool, { src: 'accounting_source_types' });
+      const scoped = (rows: readonly string[]): string[] => withoutRegistryRows(nonAudit(rows), registryTags);
+      expect(scoped(afterBeyond), 'the migrations beyond the accepted head did not reach into the Phase 3 scope').toEqual(scoped(after));
+      // And the registry half is not vacuous: the digest really did carry
+      // registry rows, so the narrowing removed something rather than nothing.
+      expect(registryRowsOf(after, registryTags).length, 'the digest carries registry rows, so this narrowing is about something').toBeGreaterThan(0);
+      // No registry row the accepted head held was removed or rewritten — the
+      // half of the original equality that survives on the registries too.
+      expect(
+        registryRowsOf(after, registryTags).filter((r) => !registryRowsOf(afterBeyond, registryTags).includes(r)),
+        'a migration beyond the accepted head removed or rewrote a registry row',
+      ).toEqual([]);
       // The audit records: none of those the accepted head held removed or
       // rewritten, and every record ADDED is one NO ACTOR wrote — what a
       // migration's own record looks like and what the record of a business
@@ -2710,7 +2929,27 @@ describe('migration upgrade path: pre-encryption schema → latest (§13–16)',
       // just below.
       const nonAudit = (rows: readonly string[]): string[] => rows.filter((t) => !t.startsWith('audit_events:'));
       const auditIn = (rows: readonly string[]): string[] => rows.filter((t) => t.startsWith('audit_events:'));
-      expect(nonAudit(afterBeyond), 'the migrations beyond the accepted head did not reach into the Phase 3 scope').toEqual(nonAudit(after));
+      // NARROWED, not loosened (P4-AL-88): the declarative registries come out
+      // of this equality, because a migration of ANY phase may add a row to one
+      // — `0074`'s widening exists to let it — and they are claimed by
+      // `phase3RegistryViolations` and the positive `phase3Registrants` floor
+      // below instead, which still refuse a removed row, a rewritten row and a
+      // row mislabelled with a Phase 3 provenance. The registries are
+      // DISCOVERED from the catalogue (no business dimension plus a
+      // registration column), never listed; `src` is this digest's own
+      // abbreviation for the relation the discovery found.
+      const registryTags = await registryTagsOf(pool, { src: 'accounting_source_types' });
+      const scoped = (rows: readonly string[]): string[] => withoutRegistryRows(nonAudit(rows), registryTags);
+      expect(scoped(afterBeyond), 'the migrations beyond the accepted head did not reach into the Phase 3 scope').toEqual(scoped(after));
+      // And the registry half is not vacuous: the digest really did carry
+      // registry rows, so the narrowing removed something rather than nothing.
+      expect(registryRowsOf(after, registryTags).length, 'the digest carries registry rows, so this narrowing is about something').toBeGreaterThan(0);
+      // No registry row the accepted head held was removed or rewritten — the
+      // half of the original equality that survives on the registries too.
+      expect(
+        registryRowsOf(after, registryTags).filter((r) => !registryRowsOf(afterBeyond, registryTags).includes(r)),
+        'a migration beyond the accepted head removed or rewrote a registry row',
+      ).toEqual([]);
       expect(await note(), 'and the credit note is untouched by them').toEqual({
         original: '1200',
         remaining: '1200',
