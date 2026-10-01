@@ -143,9 +143,11 @@ movement path through `inventory_apply_stock_movements` unchanged; the COGS jour
 integer deltas; the revenue/AR/tax entry; the whole of the atomic sale law.
 **Before it writes a movement**, P4-S2 establishes whether any Phase 3 `R-INV-*` check was written assuming
 purchase-only movement sources (risk R-P4-09 in the lock).
-**Gate.** `gate:phase4:s2` — composes s1; one transaction asserted, not assumed; the two source types with both
-bindings and their deferred completeness validators; the last-item race under forced interleaving; idempotency
-by document UUID + `intent_sha256`; failure injection proving no partial state.
+**Gate.** `gate:phase4:s2` — a **delta** gate composed with s1 through the required CI chain
+(`TL-P4-S2-R3`), wired as the visible `Phase 4 slice gate — P4-S2` step immediately after the P4-S1 step of
+the `backend` job; one transaction asserted, not assumed; the two source types with both bindings and their
+deferred completeness validators; the last-item race under forced interleaving; idempotency by document
+UUID + `intent_sha256`; failure injection proving no partial state.
 **Exit.** G-01, G-16 (sale key), G-18's sale-side half green; the `R-INV-*` question answered in writing;
 calibration run for P4-C recorded; gate and exact-SHA CI green.
 **Blocked by.** Nothing. `OD-P4-05` is RULED (OPTION A — no oversell, atomic refusal, the stock writer
@@ -259,6 +261,15 @@ per-slice matrix instantiates them.
 predecessor; `gate:phase4:s1` composes `gate:phase3:corrective` and through it the whole accepted chain, plus
 `check:migrations`, `check:guards`, `check:localization`, `check:deployment-authority` and the prefix modules.
 
+**`TL-P4-S2-R3` — REQUIRED-CI CHAIN COMPOSITION.** From `gate:phase4:s2` onward a slice gate may discharge
+that composition **through the required job instead of internally**: `P4-S1 → P4-S2 → later slice gates` run
+sequentially and visibly as steps of the one required `backend` job, so a successor is a **delta** gate and
+does not re-execute its ~50-minute predecessor inside itself. The chain is the composition, so its shape is
+load-bearing and is asserted by `tests/guards/required-ci-chain-composition.test.ts`, which **parses**
+`.github/workflows/ci.yml` (lock `P4-AL-57`, `P4-AL-58`). `gate:phase4:release` is **not** covered: it still
+composes `gate:phase3:release` and `gate:phase4:s8` verbatim and internally, because it must run as one
+command from an extracted archive with no workflow around it.
+
 Every gate, without exception:
 
 - runs the **runner canary first** and refuses the matrix if the runner cannot report failure;
@@ -272,9 +283,14 @@ Every gate, without exception:
 - fails before running anything if any `RELEASE_GATE_SKIP_*` is set (the release gate).
 
 **CI wiring.** No new job and no renamed job: job names are the required-checks keys and that configuration
-lives in repository settings, outside the tree. Phase 4's work goes into steps of `backend` and `browser`, one
-visible step per Phase 4 gate so a reviewer sees **which** predecessor failed. The only new workflows are the
-dispatched `phase4-s8-evidence.yml` and `phase4-s9-release.yml`, which are not required checks.
+lives in repository settings, outside the tree. Phase 4's work goes into steps of `backend` and `browser`,
+**one visible step per Phase 4 slice gate, in slice order**, so a reviewer sees **which** predecessor failed
+— and, under `TL-P4-S2-R3`, so that the ordered steps of the required `backend` job *are* the composition.
+Each slice-gate step therefore runs unconditionally: no `continue-on-error`, no `if:`, no
+`workflow_dispatch`-only path, and the exact npm script as its command. A slice gate that is written and not
+wired is the blocker that ruling was issued over, so **wiring the step is part of completing the slice**. The
+only new workflows are the dispatched `phase4-s8-evidence.yml` and `phase4-s9-release.yml`, which are not
+required checks.
 
 **The three Phase 3 couplings, resolved in P4-S1 before the first Phase 4 table or browser step exists.**
 A permanent Phase 3 suite asserts against the live catalogue that no relation matching `(customer|sale|invoice)`

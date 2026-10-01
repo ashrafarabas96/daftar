@@ -1084,7 +1084,15 @@ sales phase. TD-22 is evaluated here and fixed in P4-S7, and P4-S0 changes no co
 **P4-AL-57 — `gate:phase4:s1` … `gate:phase4:s8` plus `gate:phase4:release`, closing at P4-S9.**
 Each slice gate composes its predecessor; `gate:phase4:s1` composes `gate:phase3:corrective` and through it
 the entire accepted chain, plus `check:migrations`, `check:guards`, `check:localization`,
-`check:deployment-authority` and the two prefix modules. Every gate: runs the runner canary **before**
+`check:deployment-authority` and the two prefix modules. **Amended by `TL-P4-S2-R3` — REQUIRED-CI CHAIN
+COMPOSITION:** from `gate:phase4:s2` onward a slice gate discharges the composition requirement **either**
+internally **or** by running as an ordered, visible step of the one required `backend` job beside its
+predecessor's step, which makes it a **delta** gate — `gate:phase4:s2` need not re-execute `gate:phase4:s1`'s
+~50-minute estate inside itself to be composed, because `P4-S1 → P4-S2 → later slice gates` run sequentially
+in that job and a red predecessor fails the same required check. The option is legal **only** while the
+precondition of `P4-AL-58` holds. It is confined to the slice gates: `gate:phase4:release` is unchanged and
+still composes `gate:phase3:release` and `gate:phase4:s8` **verbatim and internally**, because a release gate
+must be one command that can run from an extracted archive with no workflow around it. Every gate: runs the runner canary **before**
 trusting any result and refuses the matrix if the runner cannot report failure
 (`[[daftar-a-green-gate-must-prove-it-can-be-red]]`); runs structural checks before any suite; carries
 explicit `SUITES` / `COMMANDS` / `RED_PROOFS` / `BUDGETS` tables in which a `{ pending }` row is a **FAIL**
@@ -1094,9 +1102,35 @@ machine-readable evidence. `gate:phase4:release` composes `gate:phase3:release` 
 verbatim, adds only the closure's own business, must run from an extracted archive, and fails before running
 anything if any `RELEASE_GATE_SKIP_*` is set.
 
-**P4-AL-58 — Predecessor gate steps stay visible in CI even though the successor composes them.**
-`ci.yml:257-262` records the reason: when a predecessor breaks, a reviewer should see **which** one failed in
-the step list rather than reading the log of a gate that contains all of them.
+**P4-AL-58 — The slice gates are an ordered, visible chain of steps inside the one required `backend`
+job, and that ordering is itself asserted structurally.**
+This decision began as a diagnostic preference — `ci.yml` records the original reason, that when a
+predecessor breaks a reviewer should see **which** one failed in the step list rather than reading the log of
+a gate that contains all of them. Under `TL-P4-S2-R3` it is more than a preference: when a successor is a
+delta gate, the **job is the composition**, so the chain's shape is load-bearing and is no longer a
+convention anybody has to remember.
+
+The precondition, in full: for every wired Phase 4 slice gate, a step exists in the **required** `backend`
+job; the predecessor's step **precedes** the successor's; neither step nor the job carries
+`continue-on-error`; neither step nor the job carries an `if:`, and the workflow triggers on an ordinary
+`push` and `pull_request`, so no normal push or pull request can skip a step; and the command is exactly the
+gate's own npm script (`npm run gate:phase4:s2` for P4-S2). The blocker that produced the ruling was exactly
+this precondition failing: the required job ran `gate:phase4:s1` and never ran `gate:phase4:s2`, so every
+green reported for the slice was green for a workflow that never ran the slice's gate —
+**a green workflow is not evidence for a gate the workflow never ran.**
+
+`tests/guards/required-ci-chain-composition.test.ts` is the permanent check. It **parses**
+`.github/workflows/ci.yml` into mappings and sequences and asks each of the seven claims of a key's value at
+a position in the document tree, so a reordering, a re-indentation, a move into another job or a
+`continue-on-error` landing on the job rather than the step is actually seen — and so is comment text, in the
+sense that it cannot satisfy anything: comments are discarded before any claim is asked, because a law that
+reads prose is a law about its prose. It carries the red proofs the discipline
+requires, each planted on a mutated **copy** of the workflow text: the step removed (with a comment that
+still names the command left behind), the two steps reordered, `continue-on-error` added to the step and to
+the job, an `if:` added, the command changed or weakened, the step moved into another job, the push trigger
+removed, the required job renamed, and the step re-indented out of its sequence — plus the green direction,
+that the workflow as it stands passes. It lives in `tests/guards/`, which `gate:phase4:s1` runs as a
+directory (`GD-01`), so it executes **before** the step it is about on every required run.
 
 **P4-AL-59 — Phase 4 adds no CI job and renames none.**
 Job names are the required-checks keys and that configuration lives in repository settings, outside the tree
@@ -1952,6 +1986,12 @@ explicit Tech Lead directive.
 | `TL-P4-S2-K3` | `P4-AL-29b`; `0067:1548-1564` | **`inventory_stock_source_guard_gaps()` must be REPLACED by `0077`, and the hole it leaves is reachable, not theoretical.** The live body is `0067:1438`, the fifth version (`0059` → `0061` → `0063` → `0065` → `0067`); `P4-AL-29b` cites `0061:307-481`, a superseded body the database does not hold, so a reader reasoning from the citation gets a materially wrong answer. In the live body, for a source type that is none of S3/S4/S5 the line FK's **target table and key are unpinned** — its own comment says "for any other type to some third table (the S2 template)" — and no `prosrc` digest is recorded and none of `source_complete` / `source_freeze` / `header_immutable` / `value_complete` is required. Measured on a from-zero database: a `stock_source_bridge_sale` whose line FK pointed at `invoice_items` instead of `sale_items` was reported as **no gap at all**. So `P4-AL-29b`'s obligations are documentation and not enforcement until the guard carries a `sale` arm, and without the replacement the sale would be the least-protected source in the registry (`[[daftar-every-journal-writer-equally-protected]]`). Replacement is the accepted mechanism and not a frozen-file edit: `0063`, `0065` and `0067` each replaced it. |
 | `TL-P4-S2-K4` | `P4-AL-20` | Recorded only, no action: `P4-AL-20` still states the widening as a bare `^P[0-9]+-S[0-9]+$`, while the live `inventory_operation_kinds` CHECK carries `OR registered_by = 'P3-C'`, as `TL-P4-S1-C3` already corrected. Noted so the next reader of `P4-AL-20` is not misled. |
 
+### Tech Lead rulings during P4-S2 (2026-10-01)
+
+| id | ruling |
+|---|---|
+| `TL-P4-S2-R3` | **REQUIRED-CI CHAIN COMPOSITION.** A BLOCKER first: the required `backend` job ran `gate:phase4:s1` and **not** `gate:phase4:s2`, so every green reported for the slice was green for a workflow that never ran the slice's gate — *a green workflow is not evidence for a gate the workflow never ran.* The step is added, visibly and unconditionally, immediately after the P4-S1 step with the same database environment. With it, the cheaper equivalent of internal composition is **authorized** for the slice gates: `P4-S1 → P4-S2 → later slice gates` run sequentially and visibly inside the SAME required job, so a successor **delta** gate need not re-execute a ~50-minute predecessor internally. The authorization is conditional on a **permanent structural check** proving all seven of — the P4-S1 step exists; the P4-S2 step exists; both are inside the required `backend` job; S1 precedes S2; neither uses `continue-on-error`; neither is conditional in a way that can skip a normal push or pull request; and the S2 command is exactly `npm run gate:phase4:s2` — by **parsing** the workflow rather than grepping it, with a red proof for every way of breaking it. `P4-AL-57` and `P4-AL-58` are amended in place; `gate:phase4:release` is **not** weakened and still composes everything verbatim. |
+
 ### Carried forward from P4-S1 (named so it is not lost)
 
 - ~~**No law asserts RLS `ENABLE`/`FORCE` over the DISCOVERED relation surface.**~~ **DISCHARGED IN P4-S2
@@ -2028,6 +2068,11 @@ explicit Tech Lead directive.
 > **تحديث (2026-10-01).** ما يلي وصفٌ تاريخيٌّ للشريحة P4-S0 وقت كتابته. وقد قُبِلت P4-S0 وأُقفل المعمار في
 > 2026-09-30، ثم سُلِّمت الشريحة P4-S1 وقُبِلت وجُمِّدت في 2026-10-01: الهجرات `0074`–`0076` مجمّدة، فصار
 > `0000`–`0076` غير قابلٍ للتغيير، والهجرة التالية هي `0077` (انظر `docs/PHASE_4_S1_ACCEPTANCE.md` والقسم 25).
+> وبحكم `TL-P4-S2-R3` صار **تركيب البوّابات في الـCI المطلوب**: بوّابة الشريحة P4-S1 ثم P4-S2 ثم ما يليهما
+> خطواتٌ ظاهرةٌ مرتّبةٌ داخل الوظيفة المطلوبة `backend` نفسها، فلا تحتاج البوّابة اللاحقة إلى إعادة تنفيذ
+> سابقتها داخليًا. وهذا مشروط بتحقّقٍ بنيويٍّ دائم يقرأ ملف الـworkflow **تحليلًا** لا بحثًا نصيًّا
+> (`tests/guards/required-ci-chain-composition.test.ts`). وبوّابة الإصدار `gate:phase4:release` لم تُضعَّف:
+> ما تزال تُركّب كل شيء داخليًا.
 
 P4-S0 هي مرحلة تحليل وقرار فقط. لم تُكتب أي شيفرة منتج، ولا endpoint، ولا شاشة POS، ولا migration، و`0074`
 غير موجود وقتها، و`0000–0073` لم تُمسّ.

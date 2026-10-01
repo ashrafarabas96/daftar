@@ -322,6 +322,31 @@ jobs:
           # The range scan's head: the PR head on a pull_request run (the
           # checkout is GitHub's merge commit), the pushed SHA on a push run.
           PHASE3_SCAN_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+      # TL-P4-S2-R3 — REQUIRED-CI CHAIN COMPOSITION. The P4-S2 gate is a DELTA
+      # gate: it does not re-execute the ~50-minute P4-S1 predecessor inside
+      # itself. The composition the Architecture Lock requires is satisfied
+      # HERE instead, by this job: P4-S1 runs immediately above, P4-S2 runs
+      # immediately below, both VISIBLE and both REQUIRED, in that order, in
+      # the one required `backend` job. Neither step may carry
+      # `continue-on-error`, and neither may carry an `if:` — a step that can
+      # skip on an ordinary push or pull_request is not a gate.
+      #
+      # That arrangement is not a convention anybody has to remember: it is
+      # asserted structurally, by parsing THIS file, in
+      # `tests/guards/required-ci-chain-composition.test.ts`, which also plants
+      # each way of breaking it (the step removed, the two reordered,
+      # `continue-on-error` added, an `if:` added, the command changed) and
+      # requires the check to go red on every one. Reordering these two steps
+      # or moving either out of this job fails that suite.
+      #
+      # `A green workflow is not evidence for a gate the workflow never ran.`
+      - name: Phase 4 slice gate — P4-S2
+        run: npm run gate:phase4:s2
+        env:
+          # The same database environment as every other gate step in this job:
+          # PG_PORT=5432 makes the test harness reuse the `postgres` service
+          # above instead of starting an embedded instance.
+          PG_PORT: '5432'
       - name: Keep the gate's browser screenshots and results
         if: always()
         uses: actions/upload-artifact@v4
