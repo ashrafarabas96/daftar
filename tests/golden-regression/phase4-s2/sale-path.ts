@@ -37,14 +37,53 @@
 import type { Response } from 'supertest';
 import type { TestApp } from '../../helpers/test-app';
 
-/** The assumption this adapter makes about the command's body, recorded so correcting it is one visible line. */
+/**
+ * The command's body, as the selling module's DTO actually defines it
+ * (`SaleCommitDto` in `@daftar/shared-contracts`; P4-S2 contract A-02).
+ *
+ * This is no longer an assumption. Four of the names this file first guessed
+ * were wrong, and each correction is a law rather than a preference:
+ *
+ *   — there is NO `branchId`. The server resolves the branch from the
+ *     warehouse's immutable home branch, so a client-stated branch would be a
+ *     figure the client could choose (P4-AL-18, P4-AL-40). The suites still
+ *     pass one and this adapter DROPS it, which is exactly the coupling this
+ *     file exists to absorb;
+ *   — `occurredOn` is `documentDate`, and it is REQUIRED with no default
+ *     anywhere behind it (`[[daftar-a-command-must-not-read-the-clock]]`);
+ *   — there is NO `payment`. `payments` and `payment_allocations` are P4-S4's
+ *     relations and `P4-AL-86` forbids creating a later slice's relation here,
+ *     so a cash sale is a STATED `settlementMode: 'cash'` that debits the
+ *     `cash` system account directly and writes no payment document. The
+ *     suites' `payment` presence/absence is translated into that mode;
+ *   — a line carries `lineId` (the client's: it is the `sale_items.id`, the
+ *     movement's `source_line_id` and the bridge row's) and an optional
+ *     `variantId` (null for a product with no merchant variants — the hidden
+ *     base variant never leaves the server, P3-AL-52). The suites state
+ *     neither, so this adapter derives `lineId` DETERMINISTICALLY from the
+ *     sale id and the line's position: a replay of the same `SaleInput` is
+ *     byte-identical, which is what the idempotency suites measure. A random
+ *     line id would make two identical requests two different commands.
+ *
+ * `taxMinor` is `'0'` and nothing else is representable (P4-AL-44, OD-03
+ * open), and `notes`/`dueDate` are `null` rather than absent, because the DTO
+ * is `.strict()` and nullable-not-optional throughout: "no term" is stated,
+ * never inferred from a missing field.
+ */
 export const SALE_BODY_SHAPE =
-  'POST /v1/sales { saleId, customerId|null, warehouseId, branchId, occurredOn, lines[{ productId, quantity, discount? }], payment? }';
+  "POST /v1/sales { saleId, settlementMode: 'credit'|'cash', customerId|null, warehouseId, documentDate, dueDate|null, taxMinor: '0', notes|null, lines[{ lineId, productId, variantId|null, quantity, discountMinor }] }";
+
+/** The trusted database command the route calls, named so a canary can look for the real one. */
+export const SALE_COMMIT_ROUTINE = 'sale_commit';
 
 export interface SaleLine {
   readonly productId: string;
   /** A decimal string. A quantity is never a float in this estate. */
   readonly quantity: string;
+  /** The merchant variant, or absent for a product that has none. Never the base variant. */
+  readonly variantId?: string | null;
+  /** Integer minor units of the sale's currency; absent means no discount. */
+  readonly discountMinor?: string;
 }
 
 export interface SaleInput {
@@ -53,19 +92,60 @@ export interface SaleInput {
   /** Null for a walk-in sale (P4-AL-11). */
   readonly customerId: string | null;
   readonly warehouseId: string;
-  readonly branchId: string;
+  /**
+   * Still accepted so no suite changes, and deliberately NOT sent: the server
+   * resolves the branch from the warehouse. A suite that stops passing it must
+   * keep passing, which is the point.
+   */
+  readonly branchId?: string;
   readonly occurredOn: string;
   readonly lines: readonly SaleLine[];
-  /** A cash sale settles in the same transaction (P4-AL-16); a credit sale omits this. */
+  /**
+   * A cash sale settles in the same transaction (P4-AL-16); a credit sale
+   * omits this. The `paymentMethodId` is NOT sent: there is no payment
+   * document in this slice, so the presence of this field means
+   * `settlementMode: 'cash'` and nothing more.
+   */
   readonly payment?: { readonly paymentMethodId: string };
+  readonly dueDate?: string | null;
+  readonly notes?: string | null;
+}
+
+/**
+ * The line id for position `i` of a sale: a UUIDv4-shaped value derived from
+ * the sale id's own hex, so the SAME `SaleInput` always produces the SAME
+ * body. The idempotency suites send one input twice and require the second
+ * call to change nothing; a random line id would defeat that silently.
+ */
+function derivedLineId(saleId: string, i: number): string {
+  const hex = saleId.replace(/-/g, '');
+  const tail = (BigInt(`0x${hex.slice(20)}`) + BigInt(i + 1)).toString(16).padStart(12, '0').slice(-12);
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-8${hex.slice(17, 20)}-${tail}`;
 }
 
 /** The one call every P4-S2 suite makes. */
 export function confirmSale(t: TestApp, headers: Record<string, string>, input: SaleInput): Promise<Response> {
-  return t.request
-    .post('/v1/sales')
-    .set(headers)
-    .send(input as unknown as object);
+  const body = {
+    saleId: input.saleId,
+    // A walk-in cannot be a credit sale: `invoices_walkin_no_ar` (`0075:660`)
+    // makes a receivable behind a null customer unpostable, so the mode a
+    // suite implies is translated rather than invented.
+    settlementMode: input.payment !== undefined || input.customerId === null ? 'cash' : 'credit',
+    customerId: input.customerId,
+    warehouseId: input.warehouseId,
+    documentDate: input.occurredOn,
+    dueDate: input.dueDate ?? null,
+    taxMinor: '0',
+    notes: input.notes ?? null,
+    lines: input.lines.map((l, i) => ({
+      lineId: derivedLineId(input.saleId, i),
+      productId: l.productId,
+      variantId: l.variantId ?? null,
+      quantity: l.quantity,
+      discountMinor: l.discountMinor ?? '0',
+    })),
+  };
+  return t.request.post('/v1/sales').set(headers).send(body);
 }
 
 /**

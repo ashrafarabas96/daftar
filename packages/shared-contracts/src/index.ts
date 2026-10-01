@@ -803,3 +803,5 @@ export interface AccountingBalanceListDto {
   baseCurrency: string;
   items: AccountingAccountBalanceDto[];
 }
+// Phase 4 (P4-S2): the atomic sale commit contract.
+export * from './sales';
