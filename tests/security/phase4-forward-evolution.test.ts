@@ -61,7 +61,7 @@ import { dirname, join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { deliveredFiles } from '../helpers/delivered-files';
 import { PHASE4_INHERITED_PREFIX_END, checkPhase4Prefix } from '../../scripts/phase4-prefix';
-import { closureRuleProblems } from '../../scripts/phase4-s1-gate';
+import { closureRuleProblems } from '../../scripts/phase4-s2-gate';
 
 const REPO = join(__dirname, '../..');
 /** This suite's own path: the detector is excluded from the estate it polices. */
@@ -90,7 +90,7 @@ const ACCEPTED_GATES: readonly { readonly script: string; readonly args: (root: 
  * boundary and requires its acceptance commit to delete it, so it is the one
  * gate that legitimately refuses a foreign successor migration.
  */
-const OPEN_SLICE_GATE = 'scripts/phase4-s1-gate.ts';
+const OPEN_SLICE_GATE = 'scripts/phase4-s2-gate.ts';
 
 /** The files the shape rules police: the Phase 4 estate and the permanent prefix modules. */
 const SHAPE_SCOPE: readonly string[] = ['scripts/phase2-prefix.ts', 'scripts/phase3-prefix.ts', 'scripts/phase4-prefix.ts'];
