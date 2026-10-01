@@ -13,7 +13,6 @@ import {
 import { hasPermission, MAX_SALE_LINES, type SaleSettlementMode } from '@daftar/domain-core';
 import {
   assertQuantityRepresentable,
-  baseShares,
   formatQuantity,
   InventoryError,
   parseDecimal,
@@ -157,11 +156,18 @@ export class SaleCommitService {
     // movements carry a non-zero total value and no `sale` accounting binding
     // cannot COMMIT. A rule only the wrapper enforces is a convention while
     // the trusted primitive can still write the row.
-    const accountingAssertions: SeamAccountingAuthority = {
-      kind: 'postings',
-      assertions: plan.accountingAssertions,
-      conditional: [plan.accountingAssertions[0]],
-    };
+    //
+    //    When `postings.cogs` is null the authority is ONE assertion — the
+    //    revenue one — and nothing is conditional: there is no COGS entry to
+    //    declare optional, so declaring one would exempt a posting that does
+    //    not exist (and the seam refuses a wholly-conditional transaction).
+    //    When both exist, the COGS assertion (always first, in posting order)
+    //    is the conditional one, because the prediction can still turn out to
+    //    be zero under the lock.
+    const accountingAssertions: SeamAccountingAuthority =
+      plan.postings.cogs === null
+        ? { kind: 'postings', assertions: plan.accountingAssertions }
+        : { kind: 'postings', assertions: plan.accountingAssertions, conditional: [plan.accountingAssertions[0]] };
 
     // 6. One transaction: the routine, the COGS entry, the revenue entry, COMMIT.
     const replayed = await this.db.withBusinessInventoryAccountingTransaction(plan.authority.scope, inventoryAssertion, accountingAssertions, (tx) =>
@@ -261,22 +267,113 @@ export class SaleCommitService {
             baseCurrency: business.baseCurrency,
             fxRate: fx.rate,
           });
-    const shares = baseShares(
-      totalBaseMinor,
-      priced.lines.map((l) => l.netTxnMinor),
-    );
     const invoiceId = randomUUID();
-    const lines: SaleCommitPayloadLine[] = priced.lines.map((l, i) => ({
-      lineId: l.lineId,
-      productId: l.productId,
-      merchantVariantId: l.merchantVariantId,
-      variantId: l.variantId,
-      qtyQ4: l.qtyQ4,
-      discountMinor: l.discountMinor,
-      unitPriceC10: l.unitPriceC10,
-      netTxnMinor: l.netTxnMinor,
-      baseShareMinor: shares[i] ?? 0n,
-    }));
+
+    // 5. The two postings and their assertions, minted by the ONE sale
+    //    posting authority (`SalePostingService`), in posting order: the COGS
+    //    entry on source type `sale`, then the revenue entry on source type
+    //    `invoice`. **This comes BEFORE the payload is built, and that order
+    //    is deliberate**: the per-line base shares the payload carries are the
+    //    accounting owner's, and the sale path computes them ONCE (see below).
+    //
+    //    The COGS figure is a PREDICTION, because the stock writer computes
+    //    the real value deltas inside the lock and the seam requires its
+    //    assertions before the transaction opens. `readSaleStockLevels` reads
+    //    the keys' current valuation and `predictMovements` applies the stock
+    //    writer's OWN rule, including the exact-emptying rule that keeps
+    //    `R-INV-03` green: a movement that empties a key carries exactly
+    //    `-valuation`, never a re-multiplied average. A-08 of the contract
+    //    states why a stale prediction is a refused sale and never a
+    //    misstated cost.
+    const invoiceFacts: SaleInvoiceFacts = {
+      tenantId: m.tenantId,
+      businessId: m.businessId,
+      invoiceId,
+      issueDate: input.documentDate,
+      branchId: warehouse.branchId,
+      customerId: input.customerId,
+      settlementKind: input.settlementMode,
+      // A cash sale lands in the `cash` system account DIRECTLY and writes no
+      // payment document: `payments` and `payment_allocations` are P4-S4's
+      // relations and `P4-AL-86` forbids creating a later slice's relation
+      // here. RECOMMENDED-PENDING the Tech Lead's word (contract D-01).
+      //
+      // It is the SYSTEM form and never `{kind:'code'}`. The accounting
+      // owner's §3.1 refuses the code arm outright, because it admitted
+      // `{kind:'code', code:'4000'}` and derived `Dr 4000 / Cr sales_revenue`
+      // — the same account on both sides on the default chart. A till's
+      // account is an engine identity, not a code someone typed.
+      settlementAccount: input.settlementMode === 'cash' ? { kind: 'system', systemKey: 'cash' } : null,
+      currencyCode: priced.currency,
+      baseCurrency: business.baseCurrency,
+      subtotalTxnMinor: priced.subtotalTxnMinor,
+      discountTxnMinor: priced.discountTxnMinor,
+      taxMinor: 0n,
+      totalTxnMinor: priced.totalTxnMinor,
+      totalBaseMinor,
+      fx: { sourceToBaseRate: fx.rate, rateSource: fx.source, rateTimestamp: fx.at },
+      lines: priced.lines.map((l, i) => ({ lineNo: i + 1, netTxnMinor: l.netTxnMinor, taxMinor: 0n })),
+    };
+    const levels = await readSaleStockLevels(
+      this.db,
+      m,
+      input.warehouseId,
+      priced.lines.map((l) => l.variantId),
+    );
+    const cogsFacts: SaleCogsFacts = {
+      tenantId: m.tenantId,
+      businessId: m.businessId,
+      saleId: input.saleId,
+      soldOn: input.documentDate,
+      branchId: warehouse.branchId,
+      warehouseId: input.warehouseId,
+      baseCurrency: business.baseCurrency,
+      movements: predictMovements(priced.lines, levels),
+    };
+    // A sale of stock whose stored valuation is zero releases no value and
+    // posts ONE entry: `postings.cogs` is null, the COGS assertion is not
+    // minted, and the conditional seam arm makes the non-presentation lawful.
+    // There is no refusal for it any more and there must not be one — a
+    // legitimate sale that cannot commit is worse than the code suggested.
+    const authorized = this.salePosting.authorizeSaleCommit(m, invoiceFacts, cogsFacts);
+
+    // 6. The per-line base shares, taken from the ACCOUNTING owner's
+    //    derivation and consumed BY `lineNo`.
+    //
+    //    There were briefly two share computations in the sale path — the
+    //    inventory `baseShares` zipped positionally here, and
+    //    `deriveSaleInvoiceBaseShares` inside the posting derivation — and
+    //    they agreed only because they are the same algorithm. Two
+    //    derivations of one figure that agree by coincidence are a second
+    //    truth waiting for one of them to be changed, so there is now one:
+    //    the accounting owner's, because the share is a REVENUE figure and
+    //    the entry that carries it is theirs (`R-SAL-03` reconciles revenue
+    //    from the journal against `Σ invoice_items.base_share_minor`, so the
+    //    two must be the same integers by construction and not by agreement).
+    //
+    //    It is consumed by `lineNo` and never by index: `SaleInvoiceBaseShare`
+    //    NAMES its line precisely so a mis-zip is impossible, and the
+    //    duplicate-`lineNo` case is already refused by the derivation. A share
+    //    with no line, or a line with no share, is a defect and is raised as
+    //    one rather than defaulted to zero — a zero share would silently
+    //    break `Σ base_share = total_base`.
+    const shareByLineNo = new Map(authorized.postings.baseShares.map((sh) => [sh.lineNo, sh.shareMinor]));
+    if (shareByLineNo.size !== priced.lines.length) throw new Error("the derived base shares do not name this sale's lines one for one");
+    const lines: SaleCommitPayloadLine[] = priced.lines.map((l, i) => {
+      const shareMinor = shareByLineNo.get(i + 1);
+      if (shareMinor === undefined) throw new Error('a sale line has no derived base share');
+      return {
+        lineId: l.lineId,
+        productId: l.productId,
+        merchantVariantId: l.merchantVariantId,
+        variantId: l.variantId,
+        qtyQ4: l.qtyQ4,
+        discountMinor: l.discountMinor,
+        unitPriceC10: l.unitPriceC10,
+        netTxnMinor: l.netTxnMinor,
+        baseShareMinor: shareMinor,
+      };
+    });
     const built = saleCommitPayload({
       tenantId: m.tenantId,
       businessId: m.businessId,
@@ -299,76 +396,6 @@ export class SaleCommitService {
       lines,
     });
     if (built.intentSha256 !== intentSha256) throw new Error('the bound sale payload does not carry the proven intent');
-
-    // 5. The two postings and their assertions, minted by the ONE sale
-    //    posting authority (`SalePostingService`), in posting order: the COGS
-    //    entry on source type `sale`, then the revenue entry on source type
-    //    `invoice`.
-    //
-    //    The COGS figure is a PREDICTION, because the stock writer computes
-    //    the real value deltas inside the lock and the seam requires its
-    //    assertions before the transaction opens. `readSaleStockLevels` reads
-    //    the keys' current valuation and `predictMovements` applies the stock
-    //    writer's OWN rule, including the exact-emptying rule that keeps
-    //    `R-INV-03` green: a movement that empties a key carries exactly
-    //    `-valuation`, never a re-multiplied average. A-08 of the contract
-    //    states why a stale prediction is a refused sale and never a
-    //    misstated cost.
-    const levels = await readSaleStockLevels(
-      this.db,
-      m,
-      input.warehouseId,
-      lines.map((l) => l.variantId),
-    );
-    const movements = predictMovements(lines, levels);
-    const invoiceFacts: SaleInvoiceFacts = {
-      tenantId: m.tenantId,
-      businessId: m.businessId,
-      invoiceId,
-      issueDate: input.documentDate,
-      branchId: warehouse.branchId,
-      customerId: input.customerId,
-      settlementKind: input.settlementMode,
-      // A cash sale lands in the `cash` system account DIRECTLY and writes no
-      // payment document: `payments` and `payment_allocations` are P4-S4's
-      // relations and `P4-AL-86` forbids creating a later slice's relation
-      // here. RECOMMENDED-PENDING the Tech Lead's word (contract D-01).
-      settlementAccount: input.settlementMode === 'cash' ? { kind: 'system', systemKey: 'cash' } : null,
-      currencyCode: priced.currency,
-      baseCurrency: business.baseCurrency,
-      subtotalTxnMinor: priced.subtotalTxnMinor,
-      discountTxnMinor: priced.discountTxnMinor,
-      taxMinor: 0n,
-      totalTxnMinor: priced.totalTxnMinor,
-      totalBaseMinor,
-      fx: { sourceToBaseRate: fx.rate, rateSource: fx.source, rateTimestamp: fx.at },
-      lines: priced.lines.map((l, i) => ({ lineNo: i + 1, netTxnMinor: l.netTxnMinor, taxMinor: 0n })),
-    };
-    const cogsFacts: SaleCogsFacts = {
-      tenantId: m.tenantId,
-      businessId: m.businessId,
-      saleId: input.saleId,
-      soldOn: input.documentDate,
-      branchId: warehouse.branchId,
-      warehouseId: input.warehouseId,
-      baseCurrency: business.baseCurrency,
-      movements,
-    };
-    // A sale of stock whose stored valuation is zero posts ONE entry, and the
-    // seam and `execute` both handle it (the conditional COGS assertion, and
-    // `sales_cogs_owed` as the law). What does NOT handle it yet is
-    // `deriveSaleCogsEntryLines`, which refuses to derive a zero COGS entry,
-    // so `authorizeSaleCommit` cannot be called for such a sale at all.
-    //
-    // This is the LAST of the three places the gap lives, and the only one
-    // outside this slice: it closes the moment
-    // `packages/accounting/src/sale-posting.ts` gains its `cogs: null` arm,
-    // at which point this gate is deleted and `plan` keeps
-    // `authorized.postings.cogs === null` instead. Until then the sale is
-    // refused under a stable code rather than posted wrongly — an
-    // accounting-integrity gap is never carried as technical debt.
-    if (movements.every((mv) => mv.valueDeltaBaseMinor === 0n)) throw sellingRefusal('sale.zero_cost_stock');
-    const authorized = this.salePosting.authorizeSaleCommit(m, invoiceFacts, cogsFacts);
 
     const params: unknown[] = [
       input.saleId,
@@ -448,23 +475,33 @@ export class SaleCommitService {
     // ledger writer. Never `quantity x average_cost`.
     const actual = parseMinor(first.cogs_base_minor);
     const released = actual < 0n ? -actual : actual;
-    const signed = plan.postings.cogs.lines.reduce((t, l) => (l.side === 'D' ? t + l.baseAmountMinor : t), 0n);
-    // Zero released value ⇒ no COGS entry exists to post, and the COGS
-    // assertion was declared CONDITIONAL for exactly this case. Only the
-    // revenue entry is posted, and `sales_cogs_owed` (C-07) is what proves at
-    // COMMIT that nothing was owed.
+    const cogs = plan.postings.cogs;
+    // Zero released value ⇒ no COGS entry exists to post. Either the
+    // derivation already said so (`cogs === null`: the stock carried no value
+    // when the prediction was read) or the prediction said otherwise and the
+    // lock disagreed. BOTH end the same way: only the revenue entry is
+    // posted, the conditional seam arm makes the non-presentation lawful, and
+    // `sales_cogs_owed` (C-07) is what proves at COMMIT that nothing was owed.
     if (released === 0n) {
       await this.posting.postEntryInTransaction(tx.accounting, { command: revenuePostingCommand(plan) });
       return false;
     }
+    // Non-zero released value with no derived COGS entry is the OTHER
+    // direction of the same disagreement: the prediction read zero and the
+    // lock found value. There is no signed authority for the entry that is now
+    // owed, so the sale is refused rather than committed without it —
+    // `sales_cogs_owed` would fail the COMMIT anyway, and a named refusal is
+    // what the till can act on.
+    if (cogs === null) throw sellingRefusal('sale.state_changed');
+    const signed = cogs.lines.reduce((t, l) => (l.side === 'D' ? t + l.baseAmountMinor : t), 0n);
     if (released !== signed) throw sellingRefusal('sale.state_changed');
     const cogsCommand: PostingCommand = {
       tenantId: plan.tenantId,
       businessId: plan.businessId,
-      sourceType: plan.postings.cogs.sourceType,
-      sourceId: plan.postings.cogs.sourceId,
-      entryDate: plan.postings.cogs.entryDate,
-      lines: plan.postings.cogs.lines,
+      sourceType: cogs.sourceType,
+      sourceId: cogs.sourceId,
+      entryDate: cogs.entryDate,
+      lines: cogs.lines,
     };
     await this.posting.postEntryInTransaction(tx.accounting, { command: cogsCommand });
     await this.posting.postEntryInTransaction(tx.accounting, { command: revenuePostingCommand(plan) });
@@ -644,7 +681,7 @@ function revenuePostingCommand(plan: SaleCommitPlan): PostingCommand {
  * exists to catch. Predicting it any other way would make the prediction
  * disagree with the writer on every emptying sale.
  */
-function predictMovements(lines: readonly SaleCommitPayloadLine[], levels: ReadonlyMap<string, SaleStockLevel>): readonly SaleMovementFacts[] {
+function predictMovements(lines: readonly PricedLine[], levels: ReadonlyMap<string, SaleStockLevel>): readonly SaleMovementFacts[] {
   return lines.map((l) => {
     const level = levels.get(l.variantId);
     // A key with no row holds nothing; the writer will refuse the sale under
@@ -693,10 +730,18 @@ export interface SaleCommitPlan {
   readonly tenantId: string;
   readonly businessId: string;
   readonly built: MovementPayload;
-  /** Both derived postings, from the ONE sale posting authority. The COGS amount is the PREDICTION (A-08). */
+  /**
+   * Both derived postings, from the ONE sale posting authority. `cogs` is null
+   * for a sale that released no value, which posts ONE entry. The COGS amount
+   * is the PREDICTION (A-08).
+   */
   readonly postings: SaleCommitPostings;
-  /** The two minted assertions, in posting order. Minted by `SalePostingService`, never here. */
-  readonly accountingAssertions: readonly [string, string];
+  /**
+   * The minted assertions, in posting order: the COGS one then the revenue
+   * one, or the revenue one alone when the sale released no value. Minted by
+   * `SalePostingService`, never here.
+   */
+  readonly accountingAssertions: readonly [string] | readonly [string, string];
   /** The `sale_commit` arguments, in its signature's order. */
   readonly params: readonly unknown[];
 }

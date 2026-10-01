@@ -155,6 +155,21 @@ variant carries one (`0005:44`: NULL inherits). So:
   per-line base shares are an EXACT integer partition of it (`0043`'s per-line
   law) — never eight separate conversions and never a rounding account.
 
+**The shares are computed ONCE, by the accounting owner, and consumed by
+`lineNo`.** There were briefly two derivations in the sale path — the inventory
+`baseShares` zipped positionally at the call site, and
+`deriveSaleInvoiceBaseShares` inside the posting derivation — and they agreed
+only because they are the same algorithm. *Two derivations of one figure that
+agree by coincidence are a second truth waiting for one of them to be changed.*
+The accounting owner's wins because the share is a REVENUE figure and the entry
+that carries it is theirs: `R-SAL-03` reconciles revenue from the journal
+against `Σ invoice_items.base_share_minor`, so the two must be the same
+integers **by construction and not by agreement**. `SaleInvoiceBaseShare`
+NAMES its line, so `plan` builds a `lineNo → shareMinor` map and raises on a
+share with no line or a line with no share — never defaults to zero, because a
+zero share would silently break `Σ base_share = total_base`. This is why
+`authorizeSaleCommit` is now called BEFORE the payload is built.
+
 `halfEvenDiv` in `sale-commit.service.ts` is exact HALF_EVEN by integer
 division and remainder, sign-symmetric, with no float: the same arithmetic as
 `inventory_half_even` (`0060:85-111`), because a second rounding rule would
@@ -767,6 +782,13 @@ Lead's word and implemented as such in the code:
 - it is NOT a settlement STATE. `invoices.status` stays lifecycle-only
   (P4-AL-24) and whether an invoice is paid is derived through
   `invoice_settlement_state(...)`, never read from this field.
+
+The till's account is always the **SYSTEM** form,
+`{kind:'system', systemKey:'cash'}`, and never `{kind:'code'}`. The accounting
+owner's §3.1 refuses the code arm outright, because it admitted
+`{kind:'code', code:'4000'}` and derived `Dr 4000 / Cr sales_revenue` — the
+same account on both sides on the default chart. A till's account is an engine
+identity, not a code someone typed.
 
 The cash shape is forced rather than chosen: `invoices_walkin_no_ar`
 (`0075:660-696`) is a DEFERRABLE INITIALLY DEFERRED constraint trigger that
