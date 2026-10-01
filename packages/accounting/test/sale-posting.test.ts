@@ -19,6 +19,8 @@ import { AccountingError } from '../src/errors';
 import { DOMAIN_REVERSIBLE_SOURCE_TYPES, DOMAIN_SOURCE_TYPES } from '../src/post';
 import {
   assertSalesTaxStructurallyZero,
+  saleCogsReleasedBaseMinor,
+  type SaleInvoiceBaseShare,
   computeSaleCogsFingerprint,
   computeSaleInvoiceFingerprint,
   deriveSaleCogsEntryLines,
@@ -153,6 +155,20 @@ const COGS: SaleCogsFacts = {
   ],
 };
 
+/** Σ of the per-line base shares. */
+const sumShares = (shares: readonly SaleInvoiceBaseShare[]): bigint => shares.reduce((a, s) => a + s.shareMinor, 0n);
+
+/**
+ * The COGS lines, refusing `null`. Used where the test's subject IS the
+ * entry, so a `null` that slipped in would fail here rather than make the
+ * assertions below vacuous.
+ */
+const cogsLines = (facts: SaleCogsFacts): PostingLineCommand[] => {
+  const lines = deriveSaleCogsEntryLines(facts);
+  if (lines === null) throw new Error('expected a COGS entry, got the zero-cost arm');
+  return lines;
+};
+
 /** A journal line as a comparable tuple, so an assertion names every field. */
 const shape = (l: PostingLineCommand): string =>
   [
@@ -210,14 +226,37 @@ describe('P4-S2: the revenue entry of a CASH sale — source type `invoice`', ()
         'accounting.payload_invalid',
       );
     }
-    // A business-defined posting account with no system key is admitted: it is
-    // the `payment_methods.posting_account_id` shape `supplier_payments`
-    // already uses, and the database checks its eligibility.
-    expect(saleInvoiceDebitAccount({ settlementKind: 'cash', settlementAccount: { kind: 'code', code: '1001' }, customerId: null })).toEqual({
-      kind: 'code',
-      code: '1001',
-    });
     expect(codeOf(() => saleInvoiceDebitAccount({ settlementKind: 'cash', settlementAccount: null, customerId: null }))).toBe('accounting.payload_invalid');
+  });
+
+  it('RED PROOF: the `code` arm of AccountRef is refused outright, so revenue can never be its own settlement', () => {
+    // This replaces an assertion that recorded the hole as DELIBERATE, on the
+    // stated ground that "the database checks its eligibility". That ground
+    // was false: `accounting_settlement_account_eligibility` is invoked only
+    // from the payment-method and supplier guards (`0067:827`, `:845`, `:924`,
+    // `:1160`), never on the invoice posting path, and at `0067:1940-1943` it
+    // admits any active asset account whose `system_key` is NULL anyway.
+    //
+    // The harm needed no attacker. `0040:59-60` seeds `sales_revenue`'s
+    // default_code as `4000` and `0040:67` seeds `cogs`'s as `5000`, so on a
+    // business keeping the default chart these two codes name the SAME
+    // ACCOUNT the entry already credits — revenue settled against itself,
+    // balanced and reconciling.
+    for (const code of ['4000', '5000', '1000', '1001', '9999']) {
+      expect(
+        codeOf(() => saleInvoiceDebitAccount({ settlementKind: 'cash', settlementAccount: { kind: 'code', code }, customerId: null })),
+        `code:${code} is refused`,
+      ).toBe('accounting.payload_invalid');
+    }
+    // And the refusal reaches the shape, not only the helper: no entry is
+    // derivable with a code-named settlement account.
+    expect(codeOf(() => deriveSaleInvoiceEntryLines({ ...CASH_SALE, settlementAccount: { kind: 'code', code: '4000' } }))).toBe('accounting.payload_invalid');
+    // NON-VACUITY CANARY: the system arm of the SAME shape still works, so
+    // the loop above is proving a refusal and not a broken function.
+    expect(deriveSaleInvoiceEntryLines(CASH_SALE).map(shape)).toEqual([
+      `cash|D|4499|USD|4499|USD|1.0000000000|base|2026-10-01T00:00:00.000Z|-|${BRANCH}`,
+      `sales_revenue|C|4499|USD|4499|USD|1.0000000000|base|2026-10-01T00:00:00.000Z|-|${BRANCH}`,
+    ]);
   });
 });
 
@@ -255,7 +294,7 @@ describe('P4-S2: the revenue entry of a CREDIT sale — source type `invoice`', 
 
 describe('P4-S2: the COGS entry — source type `sale`', () => {
   it('is exactly Dr cogs 1533 / Cr inventory 1533, base only, carrying the sale warehouse and branch on both lines', () => {
-    const lines = deriveSaleCogsEntryLines(COGS);
+    const lines = cogsLines(COGS);
     expect(lines.map(shape)).toEqual([
       `cogs|D|1533|USD|1533|USD|1.0000000000|base|2026-10-01T00:00:00.000Z|${WAREHOUSE}|${BRANCH}`,
       `inventory|C|1533|USD|1533|USD|1.0000000000|base|2026-10-01T00:00:00.000Z|${WAREHOUSE}|${BRANCH}`,
@@ -268,11 +307,11 @@ describe('P4-S2: the COGS entry — source type `sale`', () => {
     expect(COGS.movements).toHaveLength(2);
     expect(new Set(COGS.movements.map((m) => m.valueDeltaBaseMinor)).size).toBe(2);
     expect(COGS.movements.reduce((a, m) => a + m.valueDeltaBaseMinor, 0n)).toBe(-1533n);
-    expect(deriveSaleCogsEntryLines(COGS)[0]?.baseAmountMinor).toBe(1533n);
+    expect(cogsLines(COGS)[0]?.baseAmountMinor).toBe(1533n);
 
     // One movement more, one base minor unit more, with no other input
     // changed: the amount tracks the stored deltas exactly.
-    const plusOne = deriveSaleCogsEntryLines({
+    const plusOne = cogsLines({
       ...COGS,
       movements: [...COGS.movements, { sourceLineId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', valueDeltaBaseMinor: -1n }],
     });
@@ -291,21 +330,94 @@ describe('P4-S2: the COGS entry — source type `sale`', () => {
     expect(codeOf(() => deriveSaleCogsEntryLines({ ...COGS, movements: [{ sourceLineId: 'x', valueDeltaBaseMinor: 5n }] }))).toBe('accounting.payload_invalid');
   });
 
-  it('refuses a sale with no movements and a sale whose released value is zero, rather than posting a zero entry', () => {
+  it('refuses a sale that moved no stock at all, which is a caller defect and not a free sample', () => {
     expect(codeOf(() => deriveSaleCogsEntryLines({ ...COGS, movements: [] }))).toBe('accounting.payload_invalid');
-    expect(codeOf(() => deriveSaleCogsEntryLines({ ...COGS, movements: [{ sourceLineId: 'x', valueDeltaBaseMinor: 0n }] }))).toBe('accounting.payload_invalid');
+    expect(codeOf(() => saleCogsReleasedBaseMinor({ ...COGS, movements: [] }))).toBe('accounting.payload_invalid');
+  });
+
+  it('returns NULL, not a zero line and not a refusal, for a sale that released no stock value', () => {
+    // `0060:388-390` sets `v_value := -v_level_value` on the movement that
+    // empties a key, which is 0 when the key's stored valuation is 0 —
+    // reachable without anything being wrong (a free sample taken into stock
+    // at no cost, a write-down that emptied a key's value while units
+    // remained, an opening position stated at zero). Such a sale has no cost
+    // of goods, and `journal_lines_money_cap_ck` (`0042:225`) makes a zero
+    // line unexpressible, so the honest answer is one entry rather than two.
+    const zero: SaleCogsFacts = {
+      ...COGS,
+      movements: [
+        { sourceLineId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', valueDeltaBaseMinor: 0n },
+        { sourceLineId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', valueDeltaBaseMinor: 0n },
+      ],
+    };
+    expect(saleCogsReleasedBaseMinor(zero)).toBe(0n);
+    expect(deriveSaleCogsEntryLines(zero)).toBeNull();
+    // NON-VACUITY CANARY: one non-zero movement among the zeros and the entry
+    // comes back, so `null` is a statement about the TOTAL and not about any
+    // movement being zero.
+    const mixed: SaleCogsFacts = { ...zero, movements: [...zero.movements, { sourceLineId: 'c', valueDeltaBaseMinor: -7n }] };
+    expect(saleCogsReleasedBaseMinor(mixed)).toBe(7n);
+    expect(cogsLines(mixed).map((l) => l.baseAmountMinor)).toEqual([7n, 7n]);
+    // GL Inventory == Σ value_delta_base_minor still holds, at 0 on both sides.
+    expect(zero.movements.reduce((a, m) => a + m.valueDeltaBaseMinor, 0n)).toBe(0n);
   });
 });
 
 describe('P4-S2: rounding is not additive, so the second rounding is DELETED', () => {
-  it('splits the one converted base total over the rows exactly: Σ base_share_minor = total_base_minor', () => {
+  it('splits the one converted base total over the rows exactly, each share NAMING its line: Σ = total_base_minor', () => {
     const shares = deriveSaleInvoiceBaseShares(CREDIT_SALE);
-    expect(shares).toEqual([3797n, 1084n]);
-    expect(shares.reduce((a, b) => a + b, 0n)).toBe(4881n);
-    expect(shares.reduce((a, b) => a + b, 0n)).toBe(CREDIT_SALE.totalBaseMinor);
+    expect(shares).toEqual([
+      { lineNo: 1, shareMinor: 3797n },
+      { lineNo: 2, shareMinor: 1084n },
+    ]);
+    expect(sumShares(shares)).toBe(4881n);
+    expect(sumShares(shares)).toBe(CREDIT_SALE.totalBaseMinor);
     // The domestic case is the degenerate one and must still be exact.
-    expect(deriveSaleInvoiceBaseShares(CASH_SALE)).toEqual([3500n, 999n]);
-    expect(deriveSaleInvoiceBaseShares(CASH_SALE).reduce((a, b) => a + b, 0n)).toBe(4499n);
+    expect(deriveSaleInvoiceBaseShares(CASH_SALE)).toEqual([
+      { lineNo: 1, shareMinor: 3500n },
+      { lineNo: 2, shareMinor: 999n },
+    ]);
+    expect(sumShares(deriveSaleInvoiceBaseShares(CASH_SALE))).toBe(4499n);
+  });
+
+  it('EXERCISES THE SORT: lines supplied out of lineNo order get the same shares, each still on its own line', () => {
+    // Every other assertion in this file supplies lines already in `lineNo`
+    // order, so the internal sort was never exercised and a caller zipping
+    // the old bare array positionally would have been invisible. Here the
+    // input order is REVERSED, and the `lineNo` the share names is what makes
+    // the answer checkable at all.
+    const reversed: SaleInvoiceFacts = {
+      ...CREDIT_SALE,
+      lines: [
+        { lineNo: 2, netTxnMinor: 999n, taxMinor: 0n },
+        { lineNo: 1, netTxnMinor: 3500n, taxMinor: 0n },
+      ],
+    };
+    // NON-VACUITY CANARY: the input really is out of order, and the two lines
+    // really do carry different nets — otherwise the sort has nothing to do.
+    expect(reversed.lines.map((l) => l.lineNo)).toEqual([2, 1]);
+    expect(reversed.lines[0]?.netTxnMinor).not.toBe(reversed.lines[1]?.netTxnMinor);
+    // The tie rule is "to the lower index", so the index must mean `lineNo`:
+    // line 1 gets 3797 and line 2 gets 1084 whichever order they arrived in.
+    expect(deriveSaleInvoiceBaseShares(reversed)).toEqual([
+      { lineNo: 1, shareMinor: 3797n },
+      { lineNo: 2, shareMinor: 1084n },
+    ]);
+    expect(deriveSaleInvoiceBaseShares(reversed)).toEqual(deriveSaleInvoiceBaseShares(CREDIT_SALE));
+    expect(sumShares(deriveSaleInvoiceBaseShares(reversed))).toBe(CREDIT_SALE.totalBaseMinor);
+    // Two lines claiming one number would make "each share names its line" a
+    // lie, so it is refused rather than resolved.
+    expect(
+      codeOf(() =>
+        deriveSaleInvoiceBaseShares({
+          ...CREDIT_SALE,
+          lines: [
+            { lineNo: 1, netTxnMinor: 3500n, taxMinor: 0n },
+            { lineNo: 1, netTxnMinor: 999n, taxMinor: 0n },
+          ],
+        }),
+      ),
+    ).toBe('accounting.payload_invalid');
   });
 
   it('a SECOND per-row HALF_EVEN conversion would post one base minor unit of revenue that does not exist', () => {
@@ -328,7 +440,13 @@ describe('P4-S2: rounding is not additive, so the second rounding is DELETED', (
     expect(deriveSaleInvoiceEntryLines(CREDIT_SALE).map((l) => l.baseAmountMinor)).toEqual([v.totalBaseMinor, v.totalBaseMinor]);
   });
 
-  it('agrees with the purchase receipt split (`packages/inventory/src/allocation.ts`) on every pinned vector', () => {
+  it('matches every pinned agreement vector on THIS side; the cross-package comparison is tests/guards/sale-s2-base-split-agreement.test.ts', () => {
+    // The title used to claim this test "agrees with the purchase receipt
+    // split (`packages/inventory/src/allocation.ts`)". It never imported it,
+    // and it cannot: `@daftar/accounting` has no inventory dependency and must
+    // not acquire one. So the cross-package claim moved to a root-level suite
+    // that can see both packages, and this one asserts only what it can see —
+    // that this implementation matches the shared vectors.
     // NON-VACUITY CANARY: the vectors are the whole subject.
     expect(SALE_BASE_SPLIT_AGREEMENT_VECTORS.length).toBeGreaterThanOrEqual(6);
     for (const v of SALE_BASE_SPLIT_AGREEMENT_VECTORS) {
@@ -362,17 +480,48 @@ describe('P4-S2: tax is structurally zero and a non-zero tax is REFUSED (OD-03 s
 describe('P4-S2: the two postings of one commit, and the authority they spend', () => {
   it('derives the COGS posting first and the revenue posting second, each at its own source identity', () => {
     const p = deriveSaleCommitPostings(CASH_SALE, COGS);
-    expect([p.cogs.sourceType, p.revenue.sourceType]).toEqual([SALE_SOURCE_TYPE, INVOICE_SOURCE_TYPE]);
-    expect([p.cogs.sourceId, p.revenue.sourceId]).toEqual([SALE_ID, INVOICE_ID]);
-    expect([p.cogs.entryDate, p.revenue.entryDate]).toEqual(['2026-10-01', '2026-10-01']);
-    expect(p.cogs.lines.map((l) => l.baseAmountMinor)).toEqual([1533n, 1533n]);
+    const cogs = p.cogs;
+    if (cogs === null) throw new Error('expected a COGS posting for a sale that released value');
+    expect([cogs.sourceType, p.revenue.sourceType]).toEqual([SALE_SOURCE_TYPE, INVOICE_SOURCE_TYPE]);
+    expect([cogs.sourceId, p.revenue.sourceId]).toEqual([SALE_ID, INVOICE_ID]);
+    expect([cogs.entryDate, p.revenue.entryDate]).toEqual(['2026-10-01', '2026-10-01']);
+    expect(cogs.lines.map((l) => l.baseAmountMinor)).toEqual([1533n, 1533n]);
     expect(p.revenue.lines.map((l) => l.baseAmountMinor)).toEqual([4499n, 4499n]);
-    expect(p.baseShares).toEqual([3500n, 999n]);
+    expect(p.baseShares).toEqual([
+      { lineNo: 1, shareMinor: 3500n },
+      { lineNo: 2, shareMinor: 999n },
+    ]);
     // Two entries, not one: `accounting_reversals.id = original_entry_id`
     // gives one whole-entry reversal per entry for ever, and a single entry
     // would make "reverse the revenue, leave the inventory" unexpressible.
-    expect(p.cogs.sourceId).not.toBe(p.revenue.sourceId);
-    expect(p.cogs.fingerprint).not.toBe(p.revenue.fingerprint);
+    expect(cogs.sourceId).not.toBe(p.revenue.sourceId);
+    expect(cogs.fingerprint).not.toBe(p.revenue.fingerprint);
+  });
+
+  it('a zero-cost sale carries `cogs: null` and mints ONE assertion, never a fabricated second', () => {
+    const zeroCogs: SaleCogsFacts = { ...COGS, movements: [{ sourceLineId: 'a', valueDeltaBaseMinor: 0n }] };
+    const p = deriveSaleCommitPostings(CASH_SALE, zeroCogs);
+    expect(p.cogs).toBeNull();
+    // The revenue posting is untouched: the customer still paid 4499.
+    expect(p.revenue.lines.map((l) => l.baseAmountMinor)).toEqual([4499n, 4499n]);
+    expect(sumShares(p.baseShares)).toBe(4499n);
+
+    const { minter, claims } = minterSpy();
+    const assertions = mintSaleCommitAssertions(minter, p, CASH_SALE, ACTOR);
+    expect(assertions).toHaveLength(1);
+    expect(claims.map((c) => [c.sourceType, c.sourceId])).toEqual([[INVOICE_SOURCE_TYPE, INVOICE_ID]]);
+    // The one thing that must not happen: no `sale` assertion is minted for
+    // an entry that will never be posted. `assertComplete()` refuses a commit
+    // that presented some but not all of its assertions, so a fabricated
+    // second would make this legitimate sale uncommittable.
+    expect(claims.some((c) => c.sourceType === SALE_SOURCE_TYPE)).toBe(false);
+
+    // NON-VACUITY CANARY: the same code path mints TWO for a sale that did
+    // release value, so "one" is a fact about the zero-cost arm and not about
+    // the minter being broken.
+    const two = minterSpy();
+    expect(mintSaleCommitAssertions(two.minter, deriveSaleCommitPostings(CASH_SALE, COGS), CASH_SALE, ACTOR)).toHaveLength(2);
+    expect(two.claims.map((c) => c.sourceType)).toEqual([SALE_SOURCE_TYPE, INVOICE_SOURCE_TYPE]);
   });
 
   it('refuses a commit whose two halves disagree about the business, the date or the branch', () => {
@@ -383,6 +532,8 @@ describe('P4-S2: the two postings of one commit, and the authority they spend', 
 
   it('mints two `post` assertions in posting order, each over the fingerprint of the lines it authorizes', () => {
     const p = deriveSaleCommitPostings(CREDIT_SALE, COGS);
+    const pcogs = p.cogs;
+    if (pcogs === null) throw new Error('expected a COGS posting for a sale that released value');
     const { minter, claims } = minterSpy();
     const assertions = mintSaleCommitAssertions(minter, p, CREDIT_SALE, ACTOR);
     expect(assertions).toHaveLength(2);
@@ -390,13 +541,13 @@ describe('P4-S2: the two postings of one commit, and the authority they spend', 
       [SALE_SOURCE_TYPE, SALE_ID, 'post'],
       [INVOICE_SOURCE_TYPE, INVOICE_ID, 'post'],
     ]);
-    expect(claims.map((c) => c.postingFingerprint)).toEqual([p.cogs.fingerprint, p.revenue.fingerprint]);
+    expect(claims.map((c) => c.postingFingerprint)).toEqual([pcogs.fingerprint, p.revenue.fingerprint]);
     expect(claims.every((c) => c.tenantId === TENANT && c.businessId === BUSINESS && c.actorUserId === ACTOR)).toBe(true);
     // The fingerprint is over the LINES. One base minor unit different and the
     // authority is a different authority, which is what makes a stale COGS
     // prediction a refusal rather than a wrong entry.
-    const tampered = deriveSaleCogsEntryLines({ ...COGS, movements: [{ sourceLineId: 'z', valueDeltaBaseMinor: -1534n }] });
-    expect(computeSaleCogsFingerprint(COGS, tampered)).not.toBe(p.cogs.fingerprint);
+    const tampered = cogsLines({ ...COGS, movements: [{ sourceLineId: 'z', valueDeltaBaseMinor: -1534n }] });
+    expect(computeSaleCogsFingerprint(COGS, tampered)).not.toBe(pcogs.fingerprint);
     expect(computeSaleInvoiceFingerprint(CREDIT_SALE, deriveSaleInvoiceEntryLines(CASH_SALE))).not.toBe(p.revenue.fingerprint);
   });
 
