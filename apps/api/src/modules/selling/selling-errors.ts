@@ -158,6 +158,117 @@ export const SELLING_CODES: readonly SellingCode[] = Object.keys(SELLING_STATUS)
 const DATABASE_CODE_RE = /^((?:customer|invoice|sale)\.[a-z_]+)\b/;
 
 /**
+ * ── THE INTERNAL PHASE 4 INVARIANTS (`selling.*`) ─────────────────────────
+ *
+ * `SELLING_STATUS` above is the MERCHANT vocabulary: `customer.*`,
+ * `invoice.*`, `sale.*`. The `selling.*` prefix is a different thing
+ * altogether and is deliberately not in that table. It is the prefix `0075` /
+ * `0077` / `0078` raise their OWN structural laws under — the ones that say
+ * the slice's shape is intact — and a merchant has no vocabulary for "a
+ * committed sale owes a COGS entry".
+ *
+ * An internal invariant failure is NOT an authorization denial (TL-P4-S2-R5).
+ * Rendering `selling.sale_cogs_owed` as `403 FORBIDDEN / Access denied` told
+ * sixteen suites the sale was refused while the log said the invariant had
+ * broken, which is the single most expensive kind of wrong answer: it reads
+ * as a merchant outcome, so nobody looks at the server. A violated invariant
+ * is a DEFECT, and 500 is the only status that says so.
+ *
+ * The registry is EXPLICIT and closed, never a `selling.*` wildcard. Two
+ * thirds of the `selling.*` strings in the tree are migration-time END-STATE
+ * assertions inside `DO` blocks: they fire while the migration runs, in a
+ * transaction no request is attached to, and a wildcard would be a standing
+ * claim that they could reach a response. A code enters this set only when a
+ * FUNCTION BODY raises it — a routine the commit calls, or a trigger that
+ * fires on a request's own transaction.
+ *
+ * Reachability was read from the raises themselves, not from the names:
+ *
+ * INCLUDED — raised from a function body, so a request can reach it:
+ *
+ *   - `selling.sale_cogs_owed` — `sales_cogs_owed()` (`0077:1537`), a
+ *     DEFERRED constraint trigger on `sales`. It fires at COMMIT of the
+ *     sale's own transaction, which is exactly the request's. The headline
+ *     case of the ruling;
+ *   - `selling.walkin_receivable_forbidden` — `sales_walkin_no_ar()`
+ *     (`0077:1606`), the other deferred constraint trigger, fired at the same
+ *     COMMIT;
+ *   - `selling.source_document_immutable` — `sale_header_guard()`
+ *     (`0077:667`), a row trigger on every `sales` INSERT / UPDATE / DELETE.
+ *     No runtime principal holds DML on `sales` (P4-AL-38), so only the
+ *     commit routine's own statements can trip it, and a routine that trips
+ *     it is a defect in the routine;
+ *   - `selling.sequence_format_invalid` — `sale_document_number()`
+ *     (`0078:291`), called by `sale_commit` at `0078:868` to render the
+ *     invoice number. No route writes `invoice_sequences.number_format`, so a
+ *     format the renderer refuses is server-side state, never a payload;
+ *   - `selling.payload_invalid` — the same renderer's argument guard
+ *     (`0078:298`). Its "payload" is the ROUTINE's argument list, not the
+ *     merchant's body: reaching it means `sale_commit` passed a null format,
+ *     a null period or an ordinal below one.
+ *
+ * EXCLUDED — raised only from migration `DO` blocks, so no request can reach
+ * one and an entry here would be a claim nobody can falsify:
+ *
+ *   - `selling.migration_end_state_invalid` (94 raises) — every one is a
+ *     precondition or end-state proof: `0075:151-174` and `0075:880-1071`,
+ *     `0077:139-188`, `0078:127-171` and `0078:1043-1277`. All of them sit
+ *     outside every `CREATE FUNCTION` in their file;
+ *   - `selling.authority_leak` (15 raises) — the ACL and grant proofs
+ *     (`0075:181`, `0075:943-1062`, `0077:204`, `0077:1783-2154`). A grant
+ *     is wrong at migration time or not at all;
+ *   - `selling.derived_truth_stored` (`0075:895`, `0077:1766`) — the
+ *     P4-AL-06 column-vocabulary proof, read from `pg_attribute` in an
+ *     end-state block. A stored derived column is a schema fact;
+ *   - `selling.cross_business_binding_expressible` (`0075:968`) — the
+ *     end-state proof that every Phase 4 foreign key carries `business_id`
+ *     on both sides and is validated. Also a schema fact.
+ *
+ * If a later slice raises one of the excluded codes from a routine, it joins
+ * this set in the same commit. That is the edit the explicitness exists to
+ * force.
+ */
+const INTERNAL_DATABASE_CODE_RE = /^(selling\.[a-z_]+)\b/;
+
+const SELLING_INTERNAL_INVARIANTS: ReadonlySet<string> = new Set([
+  'selling.sale_cogs_owed',
+  'selling.walkin_receivable_forbidden',
+  'selling.source_document_immutable',
+  'selling.sequence_format_invalid',
+  'selling.payload_invalid',
+]);
+
+/** The internal invariant codes, in registry order — the list a contract test enumerates. */
+export const SELLING_INTERNAL_INVARIANT_CODES: readonly string[] = [...SELLING_INTERNAL_INVARIANTS];
+
+/**
+ * A RECOGNIZED internal `selling.*` invariant code — never a prefix test. A
+ * `selling.*` string this registry does not hold is not treated as an
+ * invariant at all: it keeps the unaudited historical `P0001` rendering,
+ * because inventing a contract for a raise nobody has located is the mistake
+ * this module is fixing.
+ */
+export function isSellingInternalInvariant(code: string): boolean {
+  return SELLING_INTERNAL_INVARIANTS.has(code);
+}
+
+/**
+ * The `selling.*` code a database refusal carries, or null.
+ *
+ * Its own recognizer, because `DATABASE_CODE_RE` matches the merchant
+ * prefixes alone and widening it would pull the internal vocabulary into
+ * `rethrowSellingRefusal`'s merchant path — which is where a 403 for a broken
+ * invariant came from. The code is all that is taken: the routine's text
+ * after the colon names the assertion, and an assertion body is written for
+ * an engineer reading a log.
+ */
+export function parseDatabaseSellingInternalCode(error: unknown): string | null {
+  const message = error instanceof Error ? error.message : typeof error === 'string' ? error : null;
+  if (message === null) return null;
+  return INTERNAL_DATABASE_CODE_RE.exec(message)?.[1] ?? null;
+}
+
+/**
  * The selling code a database refusal carries, or null. Only the code is taken:
  * the routine's message after the colon is never forwarded, because it is
  * written for an engineer reading a log and not for a merchant reading a screen.
