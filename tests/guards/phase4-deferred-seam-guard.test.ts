@@ -181,26 +181,36 @@ describe('S-P4-01 — the FK owed the moment `sales` exists (DISCHARGED: the pro
     ).toEqual([]);
   });
 
-  it('NOTE: the seam does not read WHICH relation carries the edge — documented so no suite claims otherwise', () => {
+  it('RED: only the edge ON `invoices` is removed — the one on `sale_items` does not stand in for it', () => {
     /**
-     * A FINDING, reported rather than fixed here (`scripts/phase4-s1-gate.ts`
-     * is sealed). S-P4-01's predicate greps the whole concatenated Phase 4
-     * DDL for "a FOREIGN KEY on `sale_id` REFERENCING `sales`" and never asks
-     * which table it is ON. `0077` writes two such edges — `invoices_sale_fk`
-     * on `invoices` and `sale_items_sale_fk` on `sale_items` — so dropping
-     * the one the seam exists for leaves the seam silent, satisfied by the
-     * other.
+     * This was a REAL HOLE in the seam, found in P4-S2 and closed in
+     * `scripts/phase4-s1-gate.ts` (a correction to a sealed predecessor gate,
+     * reported to the Tech Lead). S-P4-01's predicate used to grep the whole
+     * concatenated Phase 4 DDL for "a FOREIGN KEY on `sale_id` REFERENCING
+     * `sales`" and never ask which table it was ON. `0077` writes two edges
+     * of that exact shape — `invoices_sale_fk` on `invoices` and
+     * `sale_items_sale_fk` on `sale_items` — so dropping the one the seam
+     * exists for left the seam silent, satisfied by the other table's.
      *
-     * This test states that behaviour positively so it cannot change
-     * unnoticed, and names where the gap IS closed: `0077`'s own end-state
-     * block asserts `invoices_sale_fk` is the validated composite edge on
-     * `public.invoices`, which is the assertion with the force the gate's
-     * grep does not have.
+     * The predicate now reads the child relation: it asks `invoices` for the
+     * constraint. This proof plants precisely the case the grep could not
+     * see — the `invoices` edge gone, the `sale_items` edge untouched — and
+     * requires the seam to speak.
      */
     const onlyInvoices = /FOREIGN\s+KEY\s*\(business_id,\s*sale_id\)\s*REFERENCES\s+sales\s*\(business_id,\s*id\);/i;
     const stripped = rootMinus(onlyInvoices, 'FOREIGN KEY (business_id, id) REFERENCES businesses (tenant_id, id);');
-    expect(deferredSeamProblems(stripped), 'S-P4-01 is satisfied by an edge on another relation — the predicate reads no child table').toEqual([]);
-    // Where the claim really lives, in the migration's own end state.
+    // The stand-in is still there — otherwise this would only repeat the
+    // proof above.
+    const strippedSql = phase4Migrations(stripped)
+      .map((f) => readFileSync(join(stripped, 'infrastructure/database/migrations', f), 'utf8'))
+      .join('\n');
+    expect(DISCHARGE.test(strippedSql), 'an edge of the watched shape survives, on `sale_items`').toBe(true);
+    const problems = deferredSeamProblems(stripped);
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain('S-P4-01');
+    expect(problems[0]).toContain('sale_id');
+    // And the claim also lives in the migration's own end state, which names
+    // the child relation outright.
     const phase4Sql = phase4Migrations(REPO)
       .map((f) => readFileSync(join(MIGRATIONS, f), 'utf8'))
       .join('\n');

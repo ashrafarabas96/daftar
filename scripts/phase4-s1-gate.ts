@@ -327,7 +327,7 @@ export const RED_PROOFS: readonly (RedProof | Pending)[] = [
     id: 'RP-SEAM',
     defect:
       'a declared seam stops being safe and nothing says so: `sales` exists and invoices.sale_id still has no FK, the `invoice` source type is registered without the reversal guard naming it, or a relation that settles an invoice exists and invoice_outstanding does not read it',
-    proof: `${GUARD_SUITE_DIR}/phase4-deferred-seam-guard.test.ts::RED: a Phase 4 migration creates \`sales\` and nothing binds invoices.sale_id to it`,
+    proof: `${GUARD_SUITE_DIR}/phase4-deferred-seam-guard.test.ts::RED: the discharge is removed — \`sales\` exists and nothing binds invoices.sale_id to it`,
   },
   {
     id: 'RP-FK',
@@ -1118,7 +1118,15 @@ export const DEFERRED_SEAMS: readonly DeferredSeam[] = [
     what: "invoices.sale_id carries no foreign key, because `sales` is a later slice's relation",
     run: (root) => {
       if (!phase4Creates(root, 'invoices') || !phase4Creates(root, 'sales')) return [];
-      const fk = /FOREIGN\s+KEY\s*\([^)]*\bsale_id\b[^)]*\)\s*REFERENCES\s+sales\b/i.test(phase4Sql(root));
+      // The edge has to be ON `invoices`. Asking the concatenated Phase 4 DDL
+      // whether a matching FOREIGN KEY appears ANYWHERE was a hole, found in
+      // P4-S2 and closed here: `0077` writes two edges that match the same
+      // shape, `sale_items_sale_fk` on `sale_items` and `invoices_sale_fk` on
+      // `invoices`, so dropping the one this seam exists for left the seam
+      // silent, satisfied by the other table's. A seam that reads no child
+      // relation reports the hole it watches as closed.
+      const invoices = readTables(phase4Sql(root)).tables.find((t) => t.name === 'invoices');
+      const fk = (invoices?.constraints ?? []).some((c) => /FOREIGN\s+KEY\s*\([^)]*\bsale_id\b[^)]*\)\s*REFERENCES\s+sales\b/i.test(c));
       return fk
         ? []
         : [
