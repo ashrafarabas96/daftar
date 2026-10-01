@@ -144,6 +144,13 @@ export const S2_SUITES: readonly SuiteRow[] = [
       'tests/guards/sale-s2-gate-execution.test.ts::a scratch roster whose suite FAILS makes the execution check red, while the same roster passing is green',
   },
   {
+    id: 'S2-N01',
+    file: 'tests/integration/sale-s2-sequence-init.test.ts',
+    claim:
+      'TL-P4-S2-R4: a business that has never numbered a document issues its first invoice — the first-use series row, its default internal format, the ordinals, and the forced initialiser races',
+    proof: 'tests/integration/sale-s2-sequence-init.test.ts::7a. two sales FORCED into one brand-new year yield ONE row, TWO numbers, ordinals 1 and 2',
+  },
+  {
     id: 'S2-E01',
     file: 'tests/integration/sale-s2-error-contract.test.ts',
     claim:
