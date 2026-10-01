@@ -384,7 +384,31 @@ describe('G-7 — the tree as it stands', () => {
         .filter((d) => stockTablesWritten(d.body ?? '').length > 0)
         .map((d) => `${d.file}: ${d.name}`),
     );
-    expect(report.writers.filter((w) => stockWriters.has(w))).toEqual([
+    /**
+     * ── P4-AL-88 ───────────────────────────────────────────────────────────
+     *
+     * "the ONLY stock writers are these" is an inventory, so asserting it
+     * whole was a claim about the phase that follows: `0078` adds
+     * `sale_bridge_commit`, the one writer of `stock_source_bridge_sale`, and
+     * an accepted P3-S8 claim went red for a writer that is the design
+     * (`[[daftar-a-closure-rule-is-not-an-invariant]]`).
+     *
+     * Scoped by POSITION, the same shape `handoverScope` above uses: a writer
+     * belongs to the Phase 3 scope when the FILE that defines it is inside the
+     * accepted inherited prefix, which `0000`-`0073` being frozen byte for
+     * byte (P4-AL-85) closes to every later phase. The ORIGINAL list below is
+     * unchanged, entry for entry.
+     *
+     * `report.violations` is asserted EMPTY above and is unscoped, so the real
+     * authority law — every writer of the truth set opens with the assertion —
+     * already reaches `0078`'s writers as a law. What is scoped here is only
+     * the enumeration, and the later phases' half is then asserted separately
+     * and positively just below.
+     */
+    const inPrefix = (w: string): boolean => w.slice(0, w.indexOf(':')) <= PHASE4_INHERITED_PREFIX_END;
+    const scopedStockWriters = report.writers.filter((w) => stockWriters.has(w) && inPrefix(w));
+    const beyondStockWriters = report.writers.filter((w) => stockWriters.has(w) && !inPrefix(w));
+    expect(scopedStockWriters).toEqual([
       `${F60}: inventory_apply_stock_movements`,
       `${F62}: inventory_bridge_source_lines`,
       // P3-S4 (0063/0064)
@@ -400,6 +424,15 @@ describe('G-7 — the tree as it stands', () => {
       // P3-S6 (0067/0068)
       `${F68}: supplier_credit_note_consume`,
     ]);
+    // The successor's half, positively and completely. A later phase's stock
+    // writer is a DEFINER routine owned by the inventory principal that opens
+    // with the assertion — which `report.violations` above already proves of
+    // every writer — and the two scopes together are every stock writer in the
+    // tree, so nothing can be dropped from the claim by falling between them.
+    expect(beyondStockWriters.length, 'the beyond-prefix scope is empty, so the claim below says nothing').toBeGreaterThan(0);
+    expect([...scopedStockWriters, ...beyondStockWriters].sort(), 'the two scopes together are every stock writer the guard found').toEqual(
+      report.writers.filter((w) => stockWriters.has(w)).sort(),
+    );
   });
 
   it('rule 22 (P3-S8 A-04, pin 8): the writers of the truth set are every entry routine and asserted helper, each opening with the assertion, and the one exception is the home-branch maintainer', () => {
@@ -413,7 +446,19 @@ describe('G-7 — the tree as it stands', () => {
     for (const t of ['inventory_assertion_keys', 'inventory_assertion_uses', 'audit_events', 'outbox_events']) expect(report.truthTables, t).not.toContain(t);
     expect(report.exempt).toEqual(['0056_inventory_branch_warehouses.sql: warehouses_home_branch_maintain']);
     const F56 = '0056_inventory_branch_warehouses.sql';
-    expect(report.writers).toEqual([
+    /**
+     * P4-AL-88, the same treatment as the case above and for the same reason:
+     * `0078` adds `sale_commit` and `sale_bridge_commit` to the writers of the
+     * truth set. Scoped by the DEFINING FILE's position in the accepted
+     * inherited prefix; the list below is unchanged entry for entry. The
+     * authority law itself — `report.violations` — is asserted empty and
+     * unscoped above, so every later writer is held to "opens with the
+     * assertion" as a law rather than by appearing in this enumeration.
+     */
+    const inPrefixFile = (w: string): boolean => w.slice(0, w.indexOf(':')) <= PHASE4_INHERITED_PREFIX_END;
+    const scopedWriters = report.writers.filter(inPrefixFile);
+    const beyondWriters = report.writers.filter((w) => !inPrefixFile(w));
+    expect(scopedWriters).toEqual([
       `${F55}: inventory_configure_product`,
       `${F56}: structure_associate_warehouse_branch`,
       `${F56}: structure_dissociate_warehouse_branch`,
@@ -454,6 +499,13 @@ describe('G-7 — the tree as it stands', () => {
       // with the assertion; it writes its own document, no stock table.
       `${F72}: purchase_write_off_residue`,
     ]);
+    // The successor's half, positively and completely.
+    expect(beyondWriters.length, 'the beyond-prefix scope is empty, so the claim below says nothing').toBeGreaterThan(0);
+    expect([...scopedWriters, ...beyondWriters].sort(), 'the two scopes together are every writer of the truth set').toEqual([...report.writers].sort());
+    // And the exemption stays a CLOSED list over the whole tree, unscoped: a
+    // later phase may add writers, never a second routine excused from opening
+    // with the assertion. That is the security claim, so it is not scoped.
+    expect(report.exempt, 'no later phase has excused a second writer from the assertion').toHaveLength(1);
   });
 });
 
