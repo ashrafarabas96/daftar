@@ -175,12 +175,29 @@ sale, walk-in or named, so there is one shape and not two.
 not a derived truth. It is not a settlement *state*: `invoices.status` stays lifecycle-only (`P4-AL-24`)
 and `invoice_settlement_state()` remains the derived reader.
 
-The settlement account is restricted to the five keys
-`accounting_settlement_account_eligibility` (`0067:1940-1943`) admits — `cash`, `bank`, `card_clearing`,
-`wallet_clearing`, `cheque_clearing` — or a business-defined `payment_methods.posting_account_id` the
-database checks, following the `(business_id, payment_method_id, posting_account_id)` three-column FK
-`supplier_payments` uses at `0067:352-354`. `payment_methods` already exists (`0067:284`) and is reused,
-never created.
+The settlement account is restricted to **exactly five SYSTEM keys** — `cash`, `bank`, `card_clearing`,
+`wallet_clearing`, `cheque_clearing`, the ones `accounting_settlement_account_eligibility`
+(`0067:1918-1945`) admits for a payment method's posting account. An account named by **CODE is refused
+outright**, and the reason is worth recording because the first version of this section got it wrong.
+
+It said a code-named account was also admitted "which the database checks". **It does not.**
+`accounting_settlement_account_eligibility` is invoked from exactly four places — the payment-method
+guards at `0067:827` and `0067:845`, `supplier_payment_guard` at `0067:924`, `supplier_refund_guard` at
+`0067:1160` — and from **nothing on the invoice posting path**; and at `0067:1940-1943` it returns
+`eligible` for any active asset account whose `system_key` is NULL, so it would not discriminate a code
+even if it ran. What the code arm actually admitted was an own-goal needing no attacker:
+`{ kind: 'code', code: '4000' }` derived `Dr code:4000 / Cr sales_revenue`, and `0040:59` seeds
+`sales_revenue`'s `default_code` as exactly `4000`, so on a business keeping the default chart that is the
+**same account on both sides** — revenue posted as its own settlement, balanced and reconciling. `'5000'`
+(`cogs`, `0040:67`) does the same.
+
+Refusing the arm is the safer fix: mapping a code back to a system key would mean resolving the business's
+chart inside a pure derivation, and nothing is lost, because a till settles into one of five system
+identities. `sales.payment_method_id` / `posting_account_id` still carry the method, with the
+`(business_id, payment_method_id, posting_account_id)` three-column FK `supplier_payments` uses at
+`0067:352-354`; `payment_methods` already exists (`0067:284`) and is reused, never created. The
+**database-side** check that the method's posting account is the one the entry debited stays where §6.3
+puts it: the invoice validator compares the line to `sales.posting_account_id` by id.
 
 ### 3.2 Worked example — CASH sale, exact amounts
 
@@ -274,10 +291,37 @@ So the COGS figure is the sum of those stored integers, negated. **It is never
 emptying branch at all, and `average_cost` is itself a derived rounded quotient —
 `[[daftar-a-rounded-quotient-is-never-an-input]]`. §2.1 shows what breaks if it is.
 
-### 4.2 A sale that moved no stock, and a sale of zero-valued stock
+### 4.2 A sale that moved no stock is refused; a sale of ZERO-VALUED stock posts one entry
 
-Both are refused rather than posted as a zero entry: `journal_lines` refuses a zero amount, and an entry
-asserting that goods worth nothing left the shelf is not a fact.
+These are two different things, and the first version of this section ran them together and refused both.
+Refusing the second made a legitimate sale **uncommittable**, which is worse than the wrong journal it was
+trying to avoid.
+
+**A sale that moved no stock at all** is refused: a commit with no movements is a caller defect.
+
+**A sale that released no stock VALUE is legitimate and reachable.** `0060:388-390` sets
+`v_value := -v_level_value` on the movement that empties a stock key, and that is `0` when the key's stored
+valuation is `0` — a free sample taken into stock at no cost, a write-down that emptied a key's value while
+units remained, an opening position stated at zero. Such a sale has no cost of goods, and
+`journal_lines_money_cap_ck` (`0042:225`) requires `base_amount_minor > 0`, so a zero line is not
+expressible.
+
+So `deriveSaleCogsEntryLines` returns **`null`**, `SaleCommitPostings.cogs` is `null`, and
+`mintSaleCommitAssertions` mints **one** assertion. The accounting is sound with one entry — revenue and
+its settlement — and `GL Inventory (1200) = Σ stock_movements.value_delta_base_minor` still holds, at `0`
+on both sides.
+
+**Minting a second assertion for an entry that will never be posted is the one thing that must not
+happen.** `AccountingAssertionSequence.assertComplete()` refuses a commit that presented some but not all
+of its assertions, so a fabricated COGS assertion would make the sale fail at COMMIT with the seam's own
+error — a correct sale refused by a bookkeeping artefact.
+
+**Where this is enforced is NOT here.** A pure function returning `null` is a shape, not a guarantee:
+nothing in it stops a future writer bridging a non-zero movement value and posting no `sale` entry. That is
+the migration owner's deferred trigger on `sales` — a non-zero bridged movement total with no `sale`
+accounting binding fails the COMMIT — and this arm is written to agree with it, not to replace it
+(`[[daftar-wrapper-is-not-an-invariant]]`). The seam side is the sale contract owner's conditional-assertion
+arm.
 
 ---
 
@@ -324,7 +368,16 @@ Inventory line carry the same B and **no rounding or variance line (6100, 6200) 
 sale's split must be that algorithm because `G-18`/`GOLD-33` compares a purchase and a sale in one ledger.
 It is restated in `@daftar/accounting` rather than imported — that package depends on `@daftar/domain-core`
 only, and a money package importing an inventory valuation package would be an edge in the wrong
-direction — and `SALE_BASE_SPLIT_AGREEMENT_VECTORS` pins the two implementations to the same answers.
+direction.
+
+**The two implementations are compared in `tests/guards/sale-s2-base-split-agreement.test.ts`**, the only
+place both packages are visible: it imports `splitBaseByLargestRemainder` and the inventory
+`largestRemainder`, runs both over `SALE_BASE_SPLIT_AGREEMENT_VECTORS` and over a swept range, and
+**proves the vectors discriminate before trusting them** — flipping the tie rule to the higher index
+changes the answer on three of the six, so the set can see the one thing two correct largest-remainder
+implementations can disagree about. An earlier version of this sentence pointed at an accounting-package
+test that claimed the cross-package agreement and never imported the inventory side, so a duplication
+justified by a pin had a pin with one side missing; that test now claims only its own side and says so.
 
 ### 5.2 The COGS side — one rounding, already performed, at the row
 
@@ -374,17 +427,23 @@ within it. `upper_bound_policy` has `'not_after_today'` as its only admitted val
 
 ### 6.2 The generic reversal guard, replaced by its owner — and how `S-P4-02` is **satisfied**
 
-`accounting_reversals_20_domain_source_guard` (`0067:2242-2271`) is a **closed literal list** that stops
-at Phase 3. `accounting_post_reversal` is granted to `daftar_app` (`0046:765`). Until both Phase 4 types
+`accounting_reversals_20_domain_source_guard` is a **closed literal list** that stops at Phase 3. **The
+live body is `0072:634-666`, the SIXTH version — not `0067:2242-2271`, which an earlier draft of this
+section cited.** The function has been `CREATE OR REPLACE`d five times (`0061:1527`, `0063:1530`,
+`0065:1756`, `0067:2249`, `0072:642`), and the correction matters because the replacement is specified as
+"the previous body byte for byte except the `IN` list": based on `0067` it would have silently **dropped
+`purchase_residue_write_off`**, which `0072` added, re-opening the generic reversal door for the Phase 3
+corrective source type while appearing to close two. Rebase the replacement on `0072`'s body. `0077` does
+not exist at this head, so nothing was built on the wrong citation. `accounting_post_reversal` is granted to `daftar_app` (`0046:765`). Until both Phase 4 types
 are in that list, `daftar_app` can call the generic reversal on an `invoice` entry and get a mirrored
 revenue reversal with **no paired credit note, no stock return and no audit of the commercial fact** —
 and, because there is exactly one reversal slot per entry, that illegitimate reversal **consumes it** and
 the legitimate correction is then refused with `accounting.reversal_exists`, leaving the books
 un-correctable by any product path (`P4-AL-47`).
 
-So `0077` replaces the body **by its owner**, `0067:2240`'s bracket exactly — `SET LOCAL ROLE
+So `0077` replaces the body **by its owner**, `0072:632`'s bracket exactly — `SET LOCAL ROLE
 daftar_accounting_internal;` … `RESET ROLE;` and `REVOKE CREATE ON SCHEMA public FROM
-daftar_accounting_internal;` — keeping `0067`'s body byte for byte except the always-refused `IN` list,
+daftar_accounting_internal;` — keeping **`0072`'s** body byte for byte except the always-refused `IN` list,
 which gains both names:
 
 ```sql
@@ -551,24 +610,41 @@ Both tables carry `tenant_id` and `business_id` as real columns with the composi
 `FOREIGN KEY (tenant_id, business_id) REFERENCES businesses (tenant_id, id)`, so a cross-tenant or
 cross-business claim is not expressible.
 
-### 6.7 The unresolved carried item: `stock_source_bridge_sale`'s tenant carriage
+### 6.7 The carried item, SETTLED: `stock_source_bridge_sale` carries `tenant_id`
 
-The lock carries this to P4-S2 unresolved. `P4-AL-08` requires every Phase 4 relation to carry `tenant_id`
-and `business_id` as real columns; the accepted precedent `stock_source_bridge_purchase` (`0063:400-406`)
+The lock carried this to P4-S2 unresolved. `P4-AL-08` requires every Phase 4 relation to carry `tenant_id`
+and `business_id` as real columns; the Phase 3 precedent `stock_source_bridge_purchase` (`0063:400-406`)
 carries **no** `tenant_id`, which is why its `tenant_membership` policy uses the correlated `businesses`
 subselect (`0063:556-557`).
 
-**Resolution, with evidence: follow the precedent — no `tenant_id` on the bridge.** The deciding fact is
-that the live guard pins the bridge primary key **exactly** to
-`(business_id, source_id, source_line_id, movement_kind)`, and `inventory_apply_stock_movements` is the
-only writer of `stock_source_bindings`, which itself carries no `tenant_id`. A bridge row is not a
-commercial row: it is a join record between two relations that are each already tenant-bound, it holds no
-money, no quantity and no customer, and the business it names is FK-bound to `businesses`, so a
-cross-tenant bridge row would have to name a business of another tenant — which the `business_id` FK
-already refuses. Adding a column the pinned key may not include, and that the only writer does not write,
-would be a column nothing maintains. The cost is the correlated subselect in one policy, which is a
-measured per-row cost (`[[daftar-rls-policy-shape-is-a-cost]]`) on a relation read only by the internal
-principals.
+**Resolution: `tenant_id NOT NULL`, with the composite FK. The precedent loses.**
+
+```sql
+tenant_id   UUID NOT NULL,
+business_id UUID NOT NULL,
+CONSTRAINT stock_source_bridge_sale_tenant_fk
+  FOREIGN KEY (tenant_id, business_id) REFERENCES businesses (tenant_id, id),
+PRIMARY KEY (business_id, source_id, source_line_id, movement_kind)   -- tenant_id NOT in the key
+```
+
+`tenant_id` is **absent from the primary key** — the live guard pins that key exactly — and **absent from
+the three-column line FK** `(business_id, source_id, source_line_id)`, which the guard also pins exactly.
+It is a carried, FK-bound column, not part of either identity.
+
+**The evidence is decisive and it is a landed law in this slice's own gate, which is why the precedent
+argument fails.** `scripts/guards/phase4-rls-force.ts:326-330` reports, name-independently, a Phase 4
+relation carrying exactly ONE of `tenant_id`/`business_id` as a `P4-AL-08` violation:
+
+> `${name} carries ${business_id} and not ${tenant_id}: a P4-AL-08 violation — every Phase 4 relation
+> carries both as real columns`
+
+A bridge without `tenant_id` would be **RED in `gate:phase4:s2`**. An earlier version of this section
+resolved the other way, on the ground that the column is one the only writer does not write and the pinned
+key may not include. That reasoning was wrong in its premise, not just its conclusion:
+`stock_source_bridge_purchase` is a **Phase 3** relation and the Phase 4 guard does not judge it, so it was
+never a precedent *for a Phase 4 relation* at all — it is simply outside the rule's scope. A precedent from
+a phase whose law is different is not a precedent; and a landed guard in the slice's own gate outranks an
+argument from convenience either way.
 
 ---
 
@@ -727,3 +803,18 @@ itself**: that is the whole point of §7.
    stopped being true (`customers do not exist yet`, after `0075` created them). Corrected in place in
    `packages/accounting/src/reconciliation.ts`; a deferral whose stated reason has become false is a green
    nobody re-reads.
+7. **Five defects in this contract's own first version**, found by an independent red team and verified in
+   the code before being fixed. They are recorded rather than quietly corrected, because four of the five
+   are the same mistake in different clothes — *a claim about a protection that was not where the claim
+   said it was*:
+   - the settlement account's `code` arm fell through unchecked, justified by a database check that is not
+     invoked on this path (§3.1);
+   - the cross-package base-split agreement was asserted against one side only (§5.1);
+   - `packages/accounting/src/post.ts` stated as a present database fact that the reversal guard names
+     `sale` and `invoice`; it names neither, in any of its six versions, and `0077` does not exist;
+   - §6.2 cited `0067` as the live guard body when the live one is `0072` — a replacement built on that
+     citation would have silently dropped `purchase_residue_write_off` from the refused list;
+   - §6.7 resolved the bridge tenancy from a Phase 3 precedent that the Phase 4 guard does not judge.
+
+   The fifth, the zero-cost COGS arm (§4.2), is a different kind: a refusal that was correct about the
+   journal and wrong about the sale.
