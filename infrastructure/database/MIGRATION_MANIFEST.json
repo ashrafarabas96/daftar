@@ -1,7 +1,7 @@
 {
-  "generatedAt": "2026-09-28T16:00:00.000Z",
-  "frozenThrough": "0073_default_warehouse_locale_name.sql",
-  "policy": "Migrations 0000–0073 are FROZEN. 0000–0039 froze at the Phase 1 release; 0040–0041 froze on Tech Lead acceptance of P2-S1 (docs/PHASE_2_S1_ACCEPTANCE.md); 0042–0043 froze on Tech Lead acceptance of P2-S2 (docs/PHASE_2_S2_ACCEPTANCE.md); 0044–0045 froze on Tech Lead acceptance of P2-S3 (docs/PHASE_2_S3_ACCEPTANCE.md); 0046–0047 froze on Tech Lead acceptance of P2-S4 (docs/PHASE_2_S4_ACCEPTANCE.md); 0048 froze on Tech Lead acceptance of P2-S5 (docs/PHASE_2_S5_ACCEPTANCE.md); 0049 froze on Tech Lead acceptance of P2-S6 (docs/PHASE_2_S6_ACCEPTANCE.md); 0050 froze on Tech Lead acceptance of P2-S7 (docs/PHASE_2_S7_ACCEPTANCE.md); 0051–0052 froze on Tech Lead acceptance of P2-S8 (docs/PHASE_2_S8_ACCEPTANCE.md); 0053–0058 froze on Tech Lead acceptance of P3-S1 (docs/PHASE_3_S1_ACCEPTANCE.md); 0059–0060 froze on acceptance of P3-S2 under the Tech Lead's Phase 3 completion directive (docs/PHASE_3_S2_ACCEPTANCE.md); 0061–0062 froze on acceptance of P3-S3 under the same directive (docs/PHASE_3_S3_ACCEPTANCE.md); 0063–0064 froze on acceptance of P3-S4 under the same directive (docs/PHASE_3_S4_ACCEPTANCE.md); 0065–0066 froze on acceptance of P3-S5 under the same directive (docs/PHASE_3_S5_ACCEPTANCE.md); 0067–0068 froze on acceptance of P3-S6 under the same directive (docs/PHASE_3_S6_ACCEPTANCE.md); P3-S7 added no migration (docs/PHASE_3_S7_ACCEPTANCE.md); 0069 froze on acceptance of P3-S8 under the same directive (docs/PHASE_3_S8_ACCEPTANCE.md); 0070–0073 are Phase 3 corrective hardening (not Phase 4) and froze after `gate:phase3:corrective` passed under the Tech Lead's corrective directive (docs/PHASE_3_FINAL_CORRECTIVE_AUDIT.md). A frozen migration is never edited or deleted; every schema correction is a NEW migration appended after 0073, and only under an explicit Tech Lead directive authorizing it. Check: npm run check:migrations.",
+  "generatedAt": "2026-10-01T00:00:00.000Z",
+  "frozenThrough": "0076_phase4_permission_defaults_backfill.sql",
+  "policy": "Migrations 0000–0076 are FROZEN. 0000–0039 froze at the Phase 1 release; 0040–0041 froze on Tech Lead acceptance of P2-S1 (docs/PHASE_2_S1_ACCEPTANCE.md); 0042–0043 froze on Tech Lead acceptance of P2-S2 (docs/PHASE_2_S2_ACCEPTANCE.md); 0044–0045 froze on Tech Lead acceptance of P2-S3 (docs/PHASE_2_S3_ACCEPTANCE.md); 0046–0047 froze on Tech Lead acceptance of P2-S4 (docs/PHASE_2_S4_ACCEPTANCE.md); 0048 froze on Tech Lead acceptance of P2-S5 (docs/PHASE_2_S5_ACCEPTANCE.md); 0049 froze on Tech Lead acceptance of P2-S6 (docs/PHASE_2_S6_ACCEPTANCE.md); 0050 froze on Tech Lead acceptance of P2-S7 (docs/PHASE_2_S7_ACCEPTANCE.md); 0051–0052 froze on Tech Lead acceptance of P2-S8 (docs/PHASE_2_S8_ACCEPTANCE.md); 0053–0058 froze on Tech Lead acceptance of P3-S1 (docs/PHASE_3_S1_ACCEPTANCE.md); 0059–0060 froze on acceptance of P3-S2 under the Tech Lead's Phase 3 completion directive (docs/PHASE_3_S2_ACCEPTANCE.md); 0061–0062 froze on acceptance of P3-S3 under the same directive (docs/PHASE_3_S3_ACCEPTANCE.md); 0063–0064 froze on acceptance of P3-S4 under the same directive (docs/PHASE_3_S4_ACCEPTANCE.md); 0065–0066 froze on acceptance of P3-S5 under the same directive (docs/PHASE_3_S5_ACCEPTANCE.md); 0067–0068 froze on acceptance of P3-S6 under the same directive (docs/PHASE_3_S6_ACCEPTANCE.md); P3-S7 added no migration (docs/PHASE_3_S7_ACCEPTANCE.md); 0069 froze on acceptance of P3-S8 under the same directive (docs/PHASE_3_S8_ACCEPTANCE.md); 0070–0073 are Phase 3 corrective hardening (not Phase 4) and froze after `gate:phase3:corrective` passed under the Tech Lead's corrective directive (docs/PHASE_3_FINAL_CORRECTIVE_AUDIT.md). 0074–0076 froze on Tech Lead acceptance of P4-S1 under the P4-S1 final seal directive (docs/PHASE_4_S1_ACCEPTANCE.md). A frozen migration is never edited or deleted; every schema correction is a NEW migration appended after 0076, and only under an explicit Tech Lead directive authorizing it. Check: npm run check:migrations.",
   "migrations": [
     {
       "name": "0000_extensions.sql",
@@ -298,6 +298,18 @@
     {
       "name": "0073_default_warehouse_locale_name.sql",
       "sha256": "c47d4acbc94314ff68d043fcc0356274a2996492de9b6c10e4f52e5f05228ed7"
+    },
+    {
+      "name": "0074_phase4_registry_widening.sql",
+      "sha256": "8f8fa9c080661255f77a6a036292bc8cd786a3c8f5a22a38f359cbbdaf66901d"
+    },
+    {
+      "name": "0075_phase4_customers_invoices_numbering.sql",
+      "sha256": "b5d64176c3af9fb38a56b26f3e767a36fd2fd4a583423a1f60b3165d5f239905"
+    },
+    {
+      "name": "0076_phase4_permission_defaults_backfill.sql",
+      "sha256": "2bbad56286ac06e988e4d590b290957fbb716313a6d82c4ba85c1f164bc3dcec"
     }
   ]
 }

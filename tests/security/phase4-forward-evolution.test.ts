@@ -555,15 +555,43 @@ describe('P4-AL-88: the permanent Phase 3 suites claim the prefix, not the futur
 });
 
 describe('P4-AL-61: the candidate tense is confined to the slice currently open', () => {
-  it('the candidate tense is fenced inside the open slice gate', () => {
+  /**
+   * The law has TWO tenses and both are asserted, because P4-AL-61 is a claim
+   * about the transition, not about one side of it: while a slice is open its
+   * candidate tense must be fenced between a PAIR of markers, so the acceptance
+   * commit can find what to delete; once the slice is accepted the fence must be
+   * GONE, so the closure rule cannot be left behind in a permanent gate.
+   *
+   * Which arm runs is read from the tree, never written down here, and the arm
+   * that is dormant today becomes live the moment the next slice opens its own
+   * gate. Each arm carries its own red proof: the open arm unfences the block
+   * and watches the rule refuse it, the accepted arm PLANTS a fence comment in a
+   * gate that should carry none and watches the same rule refuse that.
+   */
+  it('the candidate tense is fenced while a slice is open, and gone once it is accepted', () => {
     expect(closureRuleProblems(REPO)).toEqual([]);
     const root = copyTree('fence');
     const gate = readFileSync(join(REPO, OPEN_SLICE_GATE), 'utf8');
-    const markers = gate.match(/CANDIDATE-TENSE \(P4-AL-61\)/g) ?? [];
-    expect(markers.length, `${OPEN_SLICE_GATE} must fence its candidate tense between two markers`).toBeGreaterThanOrEqual(2);
-    rewrite(root, OPEN_SLICE_GATE, gate.replace(/CANDIDATE-TENSE \(P4-AL-61\)/g, 'candidate tense'));
-    const problems = closureRuleProblems(root);
-    expect(problems.join('\n')).toContain('fenced');
+    const FENCE = /^\s*\/\/\s*[─-]+\s*(?:end\s+)?CANDIDATE-TENSE \(P4-AL-61\)/;
+    const fences = gate.split('\n').filter((l) => FENCE.test(l)).length;
+
+    if (fences > 0) {
+      // The open tense. A lone marker is not a fence: the deletion needs both ends.
+      expect(fences, `${OPEN_SLICE_GATE} must fence its candidate tense between two markers`).toBeGreaterThanOrEqual(2);
+      rewrite(root, OPEN_SLICE_GATE, gate.replace(/CANDIDATE-TENSE \(P4-AL-61\)/g, 'candidate tense'));
+      expect(closureRuleProblems(root).join('\n')).toContain('fenced');
+    } else {
+      // The accepted tense. The gate of an accepted slice carries no candidate
+      // tense at all, and a planted fence is refused even though it is "only" a
+      // comment, because the block it would fence is what P4-AL-61 forbids.
+      const planted = gate.replace(
+        /^(export function closureRuleProblems)/m,
+        '// ───── CANDIDATE-TENSE (P4-AL-61) ─────\n// ───── end CANDIDATE-TENSE (P4-AL-61) ─────\n$1',
+      );
+      expect(planted, 'the planted fence really was inserted').not.toBe(gate);
+      rewrite(root, OPEN_SLICE_GATE, planted);
+      expect(closureRuleProblems(root).join('\n')).toContain('still here');
+    }
   }, 120_000);
 
   it('the open slice gate is the only file in the Phase 4 estate that asserts a tense', () => {

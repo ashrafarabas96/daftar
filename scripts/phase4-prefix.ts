@@ -48,15 +48,17 @@
  *
  * ── Correct today, correct after `0074` ──────────────────────────────────
  *
- * Today `PHASE4_PREFIX` is empty: no Phase 4 migration has been accepted, and
- * `0074` does not exist (docs/PHASE_4_EXECUTION_PLAN.md §6). In that state
- * checks 1–3 and 5 are vacuous, check 0 is the whole 74-file inherited history,
- * and check 4 is the floor `frozenThrough >= 0073_default_warehouse_locale_name.sql`.
- * Nothing is asserted about a file after `0073`, so the arrival of `0074` — or
- * of `0074` and `0075` together — cannot make this module fail. When a slice is
- * accepted, its acceptance commit appends its `[name, sha256]` pairs to that
- * slice's sub-prefix below and the same code starts protecting them. No other
- * edit is needed, and none of the checks changes shape.
+ * This module was written while `PHASE4_PREFIX` was still empty — before the
+ * first Phase 4 migration existed — and the arrival of that migration required
+ * no edit to any check here, which was the point. P4-S1's acceptance commit
+ * appended its three `[name, sha256]` pairs to `PHASE4_S1_PREFIX` below, and the
+ * same code began protecting them: checks 1–3 and 5 became live over exactly
+ * those three names, check 0 is still the whole inherited history, and check 4
+ * is still a floor — now at the last accepted Phase 4 name rather than at the
+ * inherited head. Nothing is asserted about a file numbered past the last
+ * ACCEPTED name, so P4-S2's first migration cannot make this module fail
+ * either. Each later slice is accepted the same way: append to that slice's
+ * sub-prefix, change nothing else, and none of the checks changes shape.
  *
  * The candidate tense — "`frozenThrough` is exactly the previous head and the
  * files after it are exactly this slice's list" — is deliberately NOT here. It
@@ -102,8 +104,16 @@ export const PHASE4_FIRST_NUMBER = Number(PHASE4_INHERITED_PREFIX_END.slice(0, 4
 // accepted one, which is why nothing below asserts a count.
 // ─────────────────────────────────────────────────────────────────────────
 
-/** P4-S1 — customers, sales documents and per-business document numbering. */
-export const PHASE4_S1_PREFIX: Prefix = [];
+/**
+ * P4-S1 — customers, sales documents and per-business document numbering.
+ * Accepted and frozen by the P4-S1 seal commit; the digests are the ones the
+ * manifest froze, computed from the files in the accepted candidate tree.
+ */
+export const PHASE4_S1_PREFIX: Prefix = [
+  ['0074_phase4_registry_widening.sql', '8f8fa9c080661255f77a6a036292bc8cd786a3c8f5a22a38f359cbbdaf66901d'],
+  ['0075_phase4_customers_invoices_numbering.sql', 'b5d64176c3af9fb38a56b26f3e767a36fd2fd4a583423a1f60b3165d5f239905'],
+  ['0076_phase4_permission_defaults_backfill.sql', '2bbad56286ac06e988e4d590b290957fbb716313a6d82c4ba85c1f164bc3dcec'],
+];
 /** P4-S2 — the sale commit primitive and the stock source bridge. */
 export const PHASE4_S2_PREFIX: Prefix = [];
 /** P4-S3 — POS till sessions and cart lines. */
@@ -132,7 +142,9 @@ export const PHASE4_PREFIX: Prefix = [
 ];
 
 /** The last migration each accepted Phase 4 slice left frozen, by full name. Filled by the same acceptance commit. */
-export const PHASE4_SLICE_HEADS: Readonly<Record<string, string>> = {};
+export const PHASE4_SLICE_HEADS: Readonly<Record<string, string>> = {
+  'P4-S1': '0076_phase4_permission_defaults_backfill.sql',
+};
 
 const migrationNumber = (file: string): number | null => {
   const m = /^(\d+)_/.exec(file);

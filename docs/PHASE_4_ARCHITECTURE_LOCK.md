@@ -1903,9 +1903,50 @@ redesign of Phase 4 or a widening of a slice.
 | `TL-P4-S1-C19` | `P4-AL-88`, `R-P4-12` | **A size is not a set, and the difference is a reach-back that passes silently.** The disjointness half of the re-expressed Phase 3 upgrade matrices judges a successor's permission writes by `backfillAuditViolations`, whose first form took role id → **the number of keys** the role holds. A successor that REMOVES one inherited key and ADDS another leaves that number unchanged: nothing read as lost, nothing read as grown, no audit row required, and a permission swapped on a Phase 3 role passed with the clause green. It now takes role id → **the keys**, and judges by set difference, so any key that disappears is named and red whatever arrived in its place — and red even when the swap is audited, because an audited backfill is permission to ADD, never permission to take away. `0076`'s own assertions 5 and 6 already forbid the swap at the migration; the law about a successor may not be weaker than the migration it is written to police. Proved both ways in `tests/guards/phase3-scope-drift.test.ts`, whose swap case asserts first that the swap really is size-preserving. |
 | `TL-P4-S1-C20` | `P4-AL-88`, the grant matrix | **`probeStatementsMissingFrom` is REMOVED, not kept with a reservation.** It supplied, on a scratch database, the relations the runtime grant model records but this checkout's migrations had not built — a no-op in any tree carrying `0075`, and its only reason to exist was a split worktree in which one agent held the migration. That situation ended when `0075` entered the tree, and what remains is only the risk: in a tree whose migrations FAILED to build a relation the model records, the fixture creates it and `deviations()` then reports no MISSING entry for it, which is the single failure a two-directional comparison exists to catch, and "all missing" is exactly what a broken deployment looks like (`[[daftar-a-superuser-skips-the-questions-a-deployer-is-asked]]`). Both call sites in `tests/security/phase3-s8-grant-matrix.test.ts` now state the requirement POSITIVELY — this checkout's migrations built every relation the model records — and refuse a tree that does not, rather than repairing it. 28 tests pass with the fixture gone. |
 
+### The Tech Lead's P4-S1 final seal (2026-10-01)
+
+P4-S1 was reviewed at candidate head `9a41089724e585f90fa3d2eee9b08c27254318ae` and **TECHNICALLY ACCEPTED /
+AUTHORIZED TO SEAL**. The seal was one commit, documentation and freeze metadata only: `0074`, `0075` and
+`0076` were not touched, and no product, API, permission, RLS or performance behaviour changed. Three rulings
+came with it, and each is binding on the slices that follow.
+
+| id | ruling |
+|---|---|
+| `TL-P4-S1-R1` | **INVOICE SOURCE OWNERSHIP MOVED TO THE POSTING SLICE.** `docs/PHASE_4_EXECUTION_PLAN.md` still recorded the `invoice` accounting source type, its source bindings and its deferred completeness validator as P4-S1's. They are **P4-S2's**. An accounting source type must not exist as a dead registry concept without a real writer, its binding, its journal shape, its deferred completeness validator and its red proof, all in the same slice. `0075` is **not** changed to add them; the correction is to the plan, which now assigns them to S2, and the seam stays watched by `S-P4-02` in the meantime. P4-S1 shipped no registry row at all, which is why this ruling costs no migration. |
+| `TL-P4-S1-R2` | **A GENERAL PHASE 4 RLS/FORCE DISCOVERY GUARD IS REQUIRED, AND IT IS P4-S2'S FIRST MANDATORY PROTECTION.** It must discover the relation surface from the migration tree or the live catalogue and **never** from a handwritten list, and prove for every discovered relation that `pg_class.relrowsecurity` and `pg_class.relforcerowsecurity` are both true. It must carry three planted red proofs: a relation with RLS disabled, a relation with FORCE disabled, and a newly created Phase 4 relation the discovery omits. It is part of `gate:phase4:s2`, it weakens no Phase 3 guard, and **`0077` may not be created until it is integrated and red-proven**. It is **not** retrofitted into `0075`, and `0075` is not modified. |
+| `TL-P4-S1-R3` | **DOCUMENT_KIND NARROWING ACCEPTED.** `invoices.document_kind` stays restricted to `'invoice'`. `0075` is **not** widened and **no fake credit-note row** is created in `invoices`. P4-S5 owns the future widening, which it performs without rewriting an accepted row. The open card is closed by this ruling in the narrow direction. |
+
+**What the seal commit did, and why that was the whole of it (P4-AL-61).** Sealing a slice is the tense
+transition this lock designed in advance, so it had a fixed shape: fill `S1_ACCEPTED` in
+`scripts/phase4-s1-gate.ts` with the three digests **computed from the files**, append the same
+`[name, sha256]` pairs to `PHASE4_S1_PREFIX` in `scripts/phase4-prefix.ts` and record
+`PHASE4_SLICE_HEADS['P4-S1']`, move the manifest's `frozenThrough` to `0076` with the three entries appended,
+and **delete the fenced candidate-tense block** — the candidate half of `boundaryProblems`, the whole of
+`candidateSurfaceProblems` with its `CHECKS` entry, and `sellingRoutes`, which existed only to serve it.
+`closureRuleProblems` refuses a tree in which any fence marker survived, so the deletion could not be left
+half done. Two things were learned in the doing, and both are recorded because they are about the mechanism
+rather than about this slice:
+
+- **A rule that counts a marker must not count its own diagnostic.** `closureRuleProblems` counted every
+  occurrence of the string `CANDIDATE-TENSE (P4-AL-61)` in the gate — including the one inside its own error
+  message — so in the accepted tense it reported a surviving fence for ever, from text that is the refusal
+  itself. It now counts the **fence comment lines**, which is what the rule was always about.
+- **The fence law has two tenses and both are now asserted.** `tests/security/phase4-forward-evolution.test.ts`
+  asserted only the open tense (the fence is a pair, and unfencing it is red), which has no subject once a
+  slice is accepted. It now reads the tense from the tree and carries a red proof on each arm: the open arm
+  unfences the block and watches the rule refuse it; the accepted arm **plants** a fence comment in a gate
+  that should carry none and watches the same rule refuse that. The dormant arm becomes live the moment the
+  next slice opens its own gate. This is the `P4-AL-88` shape applied to the gate's own hygiene: scope the
+  claim to the tense it is true of, and assert the other tense separately and positively.
+
+`0000`–`0076` are now immutable: no edit, no rename, no reorder, no deletion, no whitespace or comment edit,
+no digest rewrite. Every correction from here is a NEW migration beginning at `0077`, and only under an
+explicit Tech Lead directive.
+
 ### Carried forward from P4-S1 (named so it is not lost)
 
-- **No law asserts RLS `ENABLE`/`FORCE` over the DISCOVERED relation surface.** Every assertion in the
+- **No law asserts RLS `ENABLE`/`FORCE` over the DISCOVERED relation surface.** **NOW A TECH LEAD
+  REQUIREMENT: `TL-P4-S1-R2`, and P4-S2's first mandatory protection, before `0077`.** Every assertion in the
   estate is over a named table list or is a two-build catalogue comparison, so a later relation that forgot
   to enable or force RLS would be caught by nothing. `0075-E` asserts both on its own five relations from
   `pg_class`, so P4-S1 itself is covered, and the general law — over `phase3Tables()`, unscoped, in the
@@ -1946,8 +1987,12 @@ redesign of Phase 4 or a widening of a slice.
 
 ## 26. ملخص بالعربية
 
+> **تحديث (2026-10-01).** ما يلي وصفٌ تاريخيٌّ للشريحة P4-S0 وقت كتابته. وقد قُبِلت P4-S0 وأُقفل المعمار في
+> 2026-09-30، ثم سُلِّمت الشريحة P4-S1 وقُبِلت وجُمِّدت في 2026-10-01: الهجرات `0074`–`0076` مجمّدة، فصار
+> `0000`–`0076` غير قابلٍ للتغيير، والهجرة التالية هي `0077` (انظر `docs/PHASE_4_S1_ACCEPTANCE.md` والقسم 25).
+
 P4-S0 هي مرحلة تحليل وقرار فقط. لم تُكتب أي شيفرة منتج، ولا endpoint، ولا شاشة POS، ولا migration، و`0074`
-غير موجود، و`0000–0073` لم تُمسّ.
+غير موجود وقتها، و`0000–0073` لم تُمسّ.
 
 ما أُنتج: هذا المستند، وفيه القرارات المرقّمة `P4-AL-01` إلى `P4-AL-88`، وخطة التنفيذ
 `docs/PHASE_4_EXECUTION_PLAN.md` بتسع مراحل فرعية. وقبلهما صُحّحت المستندات الرسمية الثلاثة التي كانت
