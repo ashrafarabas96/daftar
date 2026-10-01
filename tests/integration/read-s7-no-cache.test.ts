@@ -27,6 +27,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { ensurePostgres, ownerPool, resetData } from '../helpers/test-app';
 import { rolledBack, type Queryable } from '../helpers/inventory-commands';
 import { STOCK_CACHE_EXCEPTION, phase4InheritedPrefixRelations } from '../../scripts/guards/no-authoritative-balance';
+import { phase4InheritedPrefixRoutines } from '../helpers/phase4-inherited-surface';
 
 const CACHE_NAME = /balance|summary|snapshot|cache|projection/;
 
@@ -185,8 +186,48 @@ describe('T-01 the catalogue end state', () => {
       }),
       'daftar_app writes a relation the accepted inherited prefix did not create',
     ).toEqual([]);
-    const named = new Set<string>([...P3C_APP_GRANTS, ...P4_S1_APP_GRANTS]);
-    const matrix = all.filter((l) => !named.has(l));
+    /**
+     * P4-AL-88. The digest's subject used to be "the whole matrix minus the
+     * lines named above", so every grant any later phase makes had to be
+     * enumerated beside it or the pinned digest went red. `P4_S1_APP_GRANTS`
+     * was that enumeration for `0075`, and it worked exactly once:
+     * `0077_phase4_sales_sale_items_sources.sql` grants SELECT on `sales` and
+     * `sale_items`, the matrix grew to 176 lines, and an accepted P3-S7 claim
+     * went red for two SELECT grants on a later slice's relations. A list that
+     * must be appended to by every future slice is the closure rule
+     * `[[daftar-a-closure-rule-is-not-an-invariant]]` names.
+     *
+     * The digest is NOT widened and NOT recomputed. Its SUBJECT is scoped to
+     * the ACCEPTED INHERITED PREFIX — the relations and the routines `0000`–
+     * `0073` create, both read from those files' digest-verified text and
+     * frozen byte for byte by P4-AL-85, so no later phase can enter the scope
+     * — and `S6_END_STATE` is still asserted over it byte for byte, with the
+     * corrective pass's two lines still named and still excluded. A grant
+     * `daftar_app` gains on any inherited relation, column or routine is as
+     * red as it ever was.
+     *
+     * What lies beyond that scope is then asserted SEPARATELY AND POSITIVELY,
+     * so nothing is merely dropped from the claim: every such line is a bare
+     * SELECT on a relation or a bare EXECUTE on a routine — never a column
+     * grant, never a grantable one, and never DML, which the law above
+     * already says over the whole matrix — the nine `0075` grants are each
+     * still present by name, and the two scopes together are the whole matrix.
+     */
+    const inheritedRoutines = phase4InheritedPrefixRoutines();
+    expect(inheritedRoutines.size, 'the prefix routine reader is empty — the scoped digest below would be red for the wrong reason').toBeGreaterThan(0);
+    /** Whether a matrix line's subject is one the accepted inherited prefix created. */
+    const ofInheritedPrefix = (line: string): boolean => {
+      const relation = /^(?:relation|column) (?:public\.)?([a-z_][a-z0-9_]*)[. ]/.exec(line)?.[1];
+      if (relation !== undefined) return inherited.has(relation);
+      const routine = /^routine ([a-z_][a-z0-9_]*)\(/.exec(line)?.[1];
+      if (routine !== undefined) return inheritedRoutines.has(routine);
+      // `schema …`, `default …` and `member of …` name no relation, so they
+      // belong to the inherited matrix the S6 digest pinned.
+      return true;
+    };
+    const named = new Set<string>(P3C_APP_GRANTS);
+    const matrix = all.filter((l) => ofInheritedPrefix(l) && !named.has(l));
+    const beyond = all.filter((l) => !ofInheritedPrefix(l));
     expect(
       matrix.some((l) => l.startsWith('relation public.stock_levels SELECT')),
       'the matrix reads real grants',
@@ -196,6 +237,14 @@ describe('T-01 the catalogue end state', () => {
       'no stock DML',
     ).toEqual([]);
     expect(digest(matrix)).toEqual(S6_END_STATE);
+
+    // The successor's half, positively and completely.
+    expect(beyond.length, 'the beyond-prefix scope is empty, so the assertions below say nothing').toBeGreaterThan(0);
+    expect([...matrix, ...named, ...beyond].sort(), 'the two scopes together are the whole matrix').toEqual([...all].sort());
+    expect(
+      beyond.filter((l) => !/^relation public\.[a-z_][a-z0-9_]* SELECT$/.test(l) && !/^routine [a-z_][a-z0-9_]*\([^)]*\) EXECUTE$/.test(l)),
+      'daftar_app holds something other than a bare SELECT or EXECUTE beyond the accepted inherited prefix',
+    ).toEqual([]);
   });
 
   it('negative: a matview, a cache-named table, an UNLOGGED table, a view and a new grant made in a rolled-back transaction are each reported', async () => {

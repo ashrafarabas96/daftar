@@ -7,6 +7,7 @@ import { describe, it, expect, afterAll } from 'vitest';
 import { BUILTIN_ROLE_PERMISSIONS, isSensitivePermission, type Permission } from '../../packages/domain-core/src/permissions';
 import { MIGRATIONS_DIR, runMigrations } from '../../apps/api/src/infra/migrate';
 import { PHASE4_INHERITED_PREFIX_END } from '../../scripts/phase4-prefix';
+import { beyondInheritedPrefixRoutines, phase4InheritedPrefixRoutines } from '../helpers/phase4-inherited-surface';
 import {
   dbUrl,
   PG_PORT,
@@ -25,20 +26,26 @@ import {
 
 /**
  * P4-S1 (P4-AL-88): every routine the migrations AFTER the frozen inherited
- * prefix create, read from those files. Discovery, not a list — the definer
- * assertion below splits the catalogue by it, so a later Phase 4 migration
- * adding a routine does not turn an accepted Phase 3 equality red, and a
- * Phase 3 routine quietly changing owner still does.
+ * prefix BRING INTO EXISTENCE, read from those files. Discovery, not a list —
+ * the definer assertion below splits the catalogue by it, so a later Phase 4
+ * migration adding a routine does not turn an accepted Phase 3 equality red,
+ * and a Phase 3 routine quietly changing owner still does.
+ *
+ * P4-S2: this used to be "every routine a migration past the head NAMES in a
+ * `CREATE [OR REPLACE] FUNCTION`", which is a different set. A later migration
+ * may legitimately REPLACE an inherited routine — `0077` replaces
+ * `accounting_reversals_20_domain_source_guard` (P4-AL-47, seam S-P4-02) and
+ * `inventory_stock_source_guard_gaps` (its `sale` arm) — and calling those two
+ * "Phase 4 routines" lifted them out of the INHERITED half of the equality
+ * below, which then failed for two routines whose owner, definer flag and
+ * pinned search path had not changed at all. The scope is now discovered from
+ * the FROZEN PREFIX (`tests/helpers/phase4-inherited-surface.ts`): a routine
+ * the accepted inherited prefix declares stays in the inherited half, whoever
+ * replaces it later, and only a genuinely new routine is the successor's.
+ * Both halves are asserted non-empty below, so a prefix reader that failed
+ * empty is red rather than laundered.
  */
-function phase4CreatedRoutines(): string[] {
-  const found = new Set<string>();
-  for (const file of readdirSync(MIGRATIONS_DIR).sort()) {
-    if (!file.endsWith('.sql') || file <= PHASE4_INHERITED_PREFIX_END) continue;
-    const sql = readFileSync(join(MIGRATIONS_DIR, file), 'utf8');
-    for (const m of sql.matchAll(/CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+(?:public\.)?([a-z_][a-z0-9_]*)\s*\(/gi)) found.add((m[1] ?? '').toLowerCase());
-  }
-  return [...found].sort();
-}
+const phase4CreatedRoutines = beyondInheritedPrefixRoutines;
 
 /**
  * MANAGED-POSTGRESQL PORTABILITY (P2-S1 Tech Lead correction §8).
@@ -1226,6 +1233,13 @@ describe('managed PostgreSQL: 0039 → 0049 under a non-superuser migration prin
          * losing its pinned path or turning INVOKER is still red here, and the
          * Phase 4 half is asserted positively and completely below.
          */
+        // The prefix reader FAILS EMPTY on a tampered or missing prefix file,
+        // and an empty inherited scope would make every routine look like the
+        // successor's and empty the equality below. Asserted, not assumed.
+        expect(
+          phase4InheritedPrefixRoutines().size,
+          `the accepted inherited prefix (through ${PHASE4_INHERITED_PREFIX_END}) declares no routine — the reader failed empty`,
+        ).toBeGreaterThan(0);
         const phase4Routines = new Set(phase4CreatedRoutines());
         const inheritedOwners = owners.filter((o) => !phase4Routines.has(o.proname));
         expect(inheritedOwners).toEqual(

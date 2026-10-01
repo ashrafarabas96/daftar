@@ -35,6 +35,8 @@ import { join } from 'node:path';
 import { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { ensurePostgres, ownerPool } from '../helpers/test-app';
+import { createScratchDb } from '../helpers/scratch-db';
+import { PHASE4_INHERITED_PREFIX_END, PHASE4_S1_PREFIX } from '../../scripts/phase4-prefix';
 import { REGISTERED_BY_RELATIONS, REGISTERED_BY_WIDENED, REGISTERED_BY_PHASE3_ONLY, S1_MIGRATIONS, registeredByProblems } from '../../scripts/phase4-s1-gate';
 
 const ROOT = join(__dirname, '../..');
@@ -212,14 +214,122 @@ describe('§B action 1: the live registries admit a Phase 4 registrant and refus
     }
   });
 
-  it('0074 registered nothing: every row in all four registries carries Phase 3 provenance', async () => {
-    for (const relation of REGISTERED_BY_RELATIONS) {
-      const all = await pool.query<{ n: number }>(`SELECT count(*)::int AS n FROM ${relation}`);
-      const p3 = await pool.query<{ n: number }>(`SELECT count(*)::int AS n FROM ${relation} WHERE registered_by ~ '^P3-'`);
-      expect(all.rows[0]?.n ?? 0, `${relation} is empty, so this says nothing`).toBeGreaterThan(0);
-      expect(p3.rows[0]?.n, `${relation} holds a row no Phase 3 slice registered — 0074 carries no registry row (ruling C8)`).toBe(all.rows[0]?.n);
+  /**
+   * P4-AL-88. This was asserted over the LIVE catalogue: "every row in all
+   * four registries carries Phase 3 provenance". That was a true observation
+   * while `0074` was the head of the tree, and it was written as a permanent
+   * property — a closure rule wearing the clothes of a measurement. The first
+   * slice authorized to register anything made it false:
+   * `0077_phase4_sales_sale_items_sources.sql` registers the `sale` movement
+   * kind, the `sale` stock source type, the `sale.commit` operation kind and
+   * its op→kind row, all with `P4-S2` provenance, and an accepted P4-S1 guard
+   * went red for a reason that has nothing to do with the widening it judges.
+   *
+   * What it was really guarding is that `0074` ITSELF registered nothing —
+   * ruling C8 — and that is a claim about the ACCEPTED PREFIX AT `0074`,
+   * frozen byte for byte in `scripts/phase4-prefix.ts`, so it stays true for
+   * ever and no later phase can enter its scope. It is re-expressed in three
+   * parts, none of them weaker than the original:
+   *
+   *   1. the DIFFERENCE is empty — the four registries hold exactly the same
+   *      rows at the accepted `0074` state as at the inherited Phase 3 head,
+   *      which is what "0074 registered nothing" means;
+   *   2. the ORIGINAL SENTENCE, word for word, at that `0074` state: every
+   *      row in all four registries carries Phase 3 provenance there;
+   *   3. the later phases' half, POSITIVELY: no row of the `0074` state was
+   *      removed or rewritten, every row the live catalogue holds beyond it
+   *      records a well-formed registrant that is not a Phase 3 one — so a
+   *      row cannot be smuggled in unlabelled or mislabelled — and the two
+   *      scopes together are the whole registry, so nothing can be merely
+   *      dropped from the claim.
+   *
+   * The bound is taken from the accepted prefix literal, never written as a
+   * number: `PHASE4_S1_PREFIX[0]` is the accepted name of the migration this
+   * suite judges and `PHASE4_INHERITED_PREFIX_END` the accepted Phase 3 head
+   * it follows.
+   */
+  it('0074 ITSELF registered nothing, and every row beyond it records a later registrant', async () => {
+    const widening = PHASE4_S1_PREFIX[0]?.[0];
+    expect(widening, 'the accepted P4-S1 prefix is empty, so this proof has no subject').toBeDefined();
+
+    /** `relation:registered_by:<the row's primary key>` for every row of the four registries, sorted. */
+    const rows = async (q: { query: Pool['query'] }): Promise<string[]> => {
+      const out: string[] = [];
+      for (const relation of REGISTERED_BY_RELATIONS) {
+        // The key columns are DISCOVERED from the catalogue, so no registry's
+        // shape is written here and a registry that gains a key column is
+        // still identified row by row.
+        const keys = await q.query<{ k: string }>(
+          `SELECT string_agg(a.attname, ',' ORDER BY k.ord) AS k
+             FROM pg_constraint c
+             CROSS JOIN LATERAL unnest(c.conkey) WITH ORDINALITY AS k(att, ord)
+             JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = k.att
+            WHERE c.conrelid = $1::regclass AND c.contype = 'p'`,
+          [relation],
+        );
+        const key = keys.rows[0]?.k;
+        expect(key, `${relation} has no primary key to identify its rows by`).toBeDefined();
+        const r = await q.query<{ t: string }>(
+          `SELECT concat_ws(':', $1::text, registered_by, ${(key as string)
+            .split(',')
+            .map((c) => `${c}::text`)
+            .join(", ':', ")}) AS t FROM ${relation}`,
+          [relation],
+        );
+        out.push(...r.rows.map((x) => x.t));
+      }
+      return out.sort();
+    };
+
+    const head = await createScratchDb('daftar_p4s1_inherited_head', { upTo: PHASE4_INHERITED_PREFIX_END, keys: false });
+    let atHead: string[];
+    try {
+      atHead = await rows(head.pool);
+    } finally {
+      await head.drop();
     }
-  });
+    const at74 = await createScratchDb('daftar_p4s1_at_the_widening', { upTo: widening as string, keys: false });
+    let atWidening: string[];
+    try {
+      expect(at74.applied, 'the scratch build stops at the accepted widening').toContain(widening as string);
+      atWidening = await rows(at74.pool);
+    } finally {
+      await at74.drop();
+    }
+
+    // 1. The difference is empty — two frozen states, so true for ever.
+    expect(atHead.length, 'the registries are empty at the inherited head, so nothing below says anything').toBeGreaterThan(0);
+    expect(atWidening, '0074 added or removed a registry row (ruling C8)').toEqual(atHead);
+
+    // 2. The ORIGINAL SENTENCE, word for word, at the accepted 0074 state.
+    for (const relation of REGISTERED_BY_RELATIONS) {
+      const of = atWidening.filter((t) => t.startsWith(`${relation}:`));
+      expect(of.length, `${relation} is empty, so this says nothing`).toBeGreaterThan(0);
+      expect(
+        of.filter((t) => !/^[a-z_]+:P3-/.test(t)),
+        `${relation} holds a row no Phase 3 slice registered — 0074 carries no registry row (ruling C8)`,
+      ).toEqual([]);
+    }
+
+    // 3. The later phases' half, positively, and the closure.
+    const live = await rows(pool);
+    expect(
+      atWidening.filter((t) => !live.includes(t)),
+      'a row that stood at the accepted 0074 state has been removed or rewritten',
+    ).toEqual([]);
+    const beyond = live.filter((t) => !atWidening.includes(t));
+    expect([...atWidening, ...beyond].sort(), 'and the two scopes together are the whole registry').toEqual(live);
+    // Not "these exist and that is fine": every row beyond the accepted state
+    // must record a registrant of the accepted shape that is not a Phase 3
+    // one, so its provenance is recorded and reviewable.
+    expect(
+      beyond.filter((t) => {
+        const registrant = t.split(':')[1] ?? '';
+        return !/^P[0-9]+-S[0-9]+$/.test(registrant) || /^P3-/.test(registrant);
+      }),
+      'a row beyond the accepted 0074 state does not record a later-phase registrant',
+    ).toEqual([]);
+  }, 300_000);
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
