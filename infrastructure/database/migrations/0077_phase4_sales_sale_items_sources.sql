@@ -110,9 +110,9 @@
 --       implements and which is on a decision card: the minimal cash sale
 --       balances against the `cash` SYSTEM ACCOUNT directly, with no payment
 --       document; the settlement mode is a stored INPUT on the sale header
---       (settlement_kind), which is a fact the merchant states and not a
+--       (settlement_mode), which is a fact the merchant states and not a
 --       derived truth, so P4-AL-24's "settlement state is derived, never a
---       status" is untouched — nothing recomputes settlement_kind and no
+--       status" is untouched — nothing recomputes settlement_mode and no
 --       later command rewrites it. P4-S4 adds the payment document lifecycle
 --       without rewriting an accepted row. A credit sale balances against AR.
 --   D-2 REVENUE IS RECOGNISED NET. invoices_total_ck (0075:294) is
@@ -199,7 +199,7 @@ BEGIN
   -- No routine this file creates may already exist: an ACL that is already
   -- there is an ACL nobody reviewed.
   IF EXISTS (SELECT 1 FROM pg_proc p WHERE p.proname IN ('stock_binding_requires_sale', 'stock_source_complete_sale',
-                                                          'sale_header_guard', 'sales_walkin_no_ar',
+                                                          'sale_header_guard', 'sales_walkin_no_ar', 'sales_cogs_owed',
                                                           'accounting_sale_entry_complete', 'accounting_invoice_entry_complete')) THEN
     RAISE EXCEPTION 'selling.authority_leak: a routine 0077 creates already exists, so its ACL is not reviewable' USING ERRCODE = 'P0001';
   END IF;
@@ -224,13 +224,13 @@ CREATE TABLE sales (
   branch_id               UUID NOT NULL,
   warehouse_id            UUID NOT NULL,
   status                  TEXT NOT NULL CHECK (status IN ('draft', 'confirmed', 'returned_partial', 'returned_full', 'void')),
-  settlement_kind         TEXT NOT NULL CHECK (settlement_kind IN ('cash', 'credit')),
-  occurred_on             DATE NOT NULL,
+  settlement_mode         TEXT NOT NULL CHECK (settlement_mode IN ('cash', 'credit')),
+  document_date           DATE NOT NULL,
   currency_code           CHAR(3) NOT NULL,
   subtotal_txn_minor      BIGINT NOT NULL CHECK (subtotal_txn_minor BETWEEN 0 AND 1000000000000000000),
   discount_txn_minor      BIGINT NOT NULL CHECK (discount_txn_minor BETWEEN 0 AND 1000000000000000000),
   tax_minor               BIGINT NOT NULL DEFAULT 0 CONSTRAINT sales_tax_policy_absent_ck CHECK (tax_minor = 0),
-  total_txn_minor         BIGINT NOT NULL CHECK (total_txn_minor BETWEEN 1 AND 1000000000000000000),
+  total_txn_minor         BIGINT NOT NULL CONSTRAINT sales_total_range_ck CHECK (total_txn_minor BETWEEN 1 AND 1000000000000000000),
   total_base_minor        BIGINT NOT NULL CHECK (total_base_minor BETWEEN 1 AND 1000000000000000000),
   source_to_base_rate     NUMERIC(20,10) NOT NULL CHECK (source_to_base_rate > 0),
   rate_source             TEXT NOT NULL CHECK (rate_source IN ('base', 'manual', 'provider')),
@@ -252,15 +252,26 @@ CREATE TABLE sales (
   binding_source_id       UUID,
   PRIMARY KEY (business_id, id),
   CONSTRAINT sales_total_ck CHECK (total_txn_minor = subtotal_txn_minor - discount_txn_minor + tax_minor),
-  CONSTRAINT sales_discount_ck CHECK (discount_txn_minor <= subtotal_txn_minor),
+  CONSTRAINT sales_discount_ck CHECK (discount_txn_minor BETWEEN 0 AND subtotal_txn_minor),
   CONSTRAINT sales_rate_shape_ck CHECK ((rate_source = 'base') = (fx_rate_id IS NULL AND source_to_base_rate = 1)),
   CONSTRAINT sales_binding_identity_ck CHECK (binding_source_id IS NULL OR binding_source_id = id),
-  -- A draft owes no binding; a sale that has been confirmed owes one and
-  -- keeps it, because voiding is a new reversal entry and never the removal
-  -- of the original posting (P4-AL-10, P4-AL-16 / TL-P4-S1-C6: sales has a
-  -- draft state, so it takes the nullable `purchases` variant at 0063:376,
-  -- never the NOT NULL allocation variant).
-  CONSTRAINT sales_binding_owed_ck CHECK ((status <> 'draft') = (binding_source_id IS NOT NULL)),
+  -- A draft owes NO binding, and that half is a row CHECK because it needs
+  -- nothing but the row. The other half — what a COMMITTED sale owes — is NOT
+  -- a CHECK, and C-01's strict `(status <> 'draft') = (binding_source_id IS
+  -- NOT NULL)` is therefore WEAKENED HERE DELIBERATELY, on C-07's reasoning
+  -- and the coordinator's ruling: a sale of ZERO-average-cost stock is
+  -- reachable (`0060:388-390` sets the emptying movement's value to
+  -- `-v_level_value`, which is 0 when the stored valuation is 0) and
+  -- `journal_lines_money_cap_ck` (`0042:225`) refuses a zero-amount line, so
+  -- such a sale legitimately posts its REVENUE entry and NO COGS entry and
+  -- owes no `sale` binding at all. The obligation is conditional on a value NO
+  -- ROW HOLDS — `sales` may carry no cost column (P4-AL-05) and storing the
+  -- sum here to make it checkable is exactly the forbidden second truth — so
+  -- it is carried by the DEFERRED constraint trigger `sales_cogs_owed` below,
+  -- which states the IFF against the ledger. A CHECK cannot read another
+  -- table; a trigger can, and a rule only the writer enforces is a convention
+  -- while the trusted primitive can still write the row.
+  CONSTRAINT sales_binding_owed_ck CHECK (status <> 'draft' OR binding_source_id IS NULL),
   -- The state machine as a physical shape (the 0047 / stocktake pattern, as
   -- 0063:260 names it): one CHECK enumerating each status with every column
   -- that must be null or non-null in it (P4-AL-33).
@@ -280,7 +291,7 @@ CREATE TABLE sales (
   -- to owe it is what a receivable behind a null customer looks like on the
   -- way in (P4-AL-11).
   CONSTRAINT sales_customer_snapshot_ck CHECK ((customer_id IS NULL) = (customer_name_snapshot IS NULL)),
-  CONSTRAINT sales_walkin_cash_ck CHECK (customer_id IS NOT NULL OR settlement_kind = 'cash'),
+  CONSTRAINT sales_credit_customer_ck CHECK (settlement_mode = 'cash' OR customer_id IS NOT NULL),
   CONSTRAINT sales_tenant_fk FOREIGN KEY (tenant_id, business_id) REFERENCES businesses (tenant_id, id),
   CONSTRAINT sales_customer_fk FOREIGN KEY (business_id, customer_id) REFERENCES customers (business_id, id) ON DELETE RESTRICT,
   CONSTRAINT sales_branch_fk FOREIGN KEY (business_id, branch_id) REFERENCES branches (business_id, id),
@@ -299,8 +310,8 @@ CREATE TABLE sales (
 REVOKE ALL ON sales FROM PUBLIC;
 
 -- One customer's sales in occurrence order, and the sale list as a keyset walk.
-CREATE INDEX sales_customer_idx ON sales (business_id, customer_id, occurred_on, id);
-CREATE INDEX sales_occurred_idx ON sales (business_id, occurred_on, id);
+CREATE INDEX sales_customer_idx ON sales (business_id, customer_id, document_date, id);
+CREATE INDEX sales_document_date_idx ON sales (business_id, document_date, id);
 
 CREATE TABLE sale_items (
   tenant_id            UUID NOT NULL,
@@ -664,8 +675,8 @@ BEGIN
   END IF;
   IF NEW.customer_id IS DISTINCT FROM OLD.customer_id OR NEW.branch_id IS DISTINCT FROM OLD.branch_id
      OR NEW.warehouse_id IS DISTINCT FROM OLD.warehouse_id
-     OR NEW.settlement_kind IS DISTINCT FROM OLD.settlement_kind
-     OR NEW.occurred_on IS DISTINCT FROM OLD.occurred_on
+     OR NEW.settlement_mode IS DISTINCT FROM OLD.settlement_mode
+     OR NEW.document_date IS DISTINCT FROM OLD.document_date
      OR NEW.currency_code IS DISTINCT FROM OLD.currency_code
      OR NEW.subtotal_txn_minor IS DISTINCT FROM OLD.subtotal_txn_minor
      OR NEW.discount_txn_minor IS DISTINCT FROM OLD.discount_txn_minor
@@ -857,7 +868,7 @@ DECLARE
     "stock_binding_requires_sale()": "740afbde38f3497a3850f5c76cd61a51ded5fd047e2ac879fa48cb907238615d",
     "stock_source_complete_sale()": "eb0fdfe309da5d5fdf606c7a6901f0ff674f060b9497369aa107bfe17ded8c8c",
     "stock_source_complete_sale_header()": "0eafdbf85adce5d3ea9c7ff925e30bf96fc5a4ec8fd6ef1213b9448485bdd88a",
-    "sale_header_guard()": "8c9ea8cec7b1071b085afbf173733490f2aed98d838e89f274aa09e783affd30"
+    "sale_header_guard()": "11b3103b3f15cb4158c31850bc4cc75c8369857dfc45c6daf463463eabb16553"
   }';
 BEGIN
   FOR v_type IN SELECT t.source_type FROM stock_source_types t ORDER BY t.source_type LOOP
@@ -1284,7 +1295,7 @@ RESET ROLE;
 --     refused rather than treated as a cost of zero: that is the vacuous
 --     pass a deferred validator is made of.
 --
---     `occurred_on` is a caller-supplied NOT NULL column and is used as it
+--     `document_date` is a caller-supplied NOT NULL column and is used as it
 --     stands. There is no `coalesce(p_entry_date, today)` here or anywhere
 --     ([[daftar-no-coalesce-entry-date]]).
 CREATE FUNCTION accounting_sale_entry_complete() RETURNS trigger
@@ -1299,7 +1310,7 @@ DECLARE
   v_inv_ok BOOLEAN;
   v_cogs_ok BOOLEAN;
 BEGIN
-  SELECT s.id, s.occurred_on, s.warehouse_id, s.status INTO v_s
+  SELECT s.id, s.document_date, s.warehouse_id, s.status INTO v_s
   FROM sales s
   WHERE s.business_id = NEW.business_id AND s.binding_source_id = NEW.source_id AND s.status <> 'draft';
   IF NOT FOUND THEN
@@ -1308,6 +1319,12 @@ BEGIN
   END IF;
   SELECT w.branch_id INTO v_branch FROM warehouses w WHERE w.business_id = NEW.business_id AND w.id = v_s.warehouse_id;
   v_cost := inventory_sale_cost_base_minor(NEW.business_id, v_s.id);
+  -- NULL means the sale carries no bridged movement at all, and zero means a
+  -- sale of zero-average-cost stock, which posts NO `sale` entry — this
+  -- validator judges an entry that EXISTS, so either one means the entry
+  -- should not be here. The opposite direction (a non-zero cost with no
+  -- entry) is `sales_cogs_owed`'s, because no entry exists for a trigger on
+  -- `journal_entries` to fire on.
   IF v_cost IS NULL OR v_cost <= 0 THEN
     RAISE EXCEPTION 'accounting.selling_detail_missing: a sale entry must be posted for the cost its own stock movements carry'
       USING ERRCODE = 'P0001';
@@ -1327,7 +1344,7 @@ BEGIN
   JOIN accounts a ON a.business_id = l.business_id AND a.id = l.account_id
   WHERE l.business_id = NEW.business_id AND l.journal_entry_id = NEW.id;
 
-  IF NEW.entry_date IS DISTINCT FROM v_s.occurred_on OR v_branch IS NULL
+  IF NEW.entry_date IS DISTINCT FROM v_s.document_date OR v_branch IS NULL
      OR v_lines <> 2 OR v_inv <> 1 OR v_cogs <> 1 OR NOT v_inv_ok OR NOT v_cogs_ok
      OR EXISTS (SELECT 1 FROM journal_lines l
                  WHERE l.business_id = NEW.business_id AND l.journal_entry_id = NEW.id
@@ -1345,7 +1362,7 @@ $$;
 --
 --     ▲ DESIGNED AGAINST THE RECOMMENDED OPTION, PENDING THE TECH LEAD'S
 --       CARD. The balancing side of the revenue entry is taken from
---       `sales.settlement_kind` — a STORED INPUT, a fact the merchant
+--       `sales.settlement_mode` — a STORED INPUT, a fact the merchant
 --       states and not a derived truth, so [[daftar-no-stored-derived-truth]]
 --       is untouched: `cash` debits the `cash` system account DIRECTLY, with
 --       no payment document and no P4-S4 relation; `credit` debits
@@ -1386,7 +1403,7 @@ BEGIN
     RAISE EXCEPTION 'accounting.selling_detail_missing: an invoice entry must be registered by its issued invoice in the same transaction'
       USING ERRCODE = 'P0001';
   END IF;
-  SELECT s.settlement_kind INTO v_settle
+  SELECT s.settlement_mode INTO v_settle
   FROM sales s WHERE s.business_id = NEW.business_id AND s.id = v_i.sale_id AND s.status <> 'draft';
   IF v_settle IS NULL THEN
     RAISE EXCEPTION 'accounting.selling_detail_missing: an invoice entry must name the confirmed sale whose settlement mode balances it'
@@ -1441,7 +1458,67 @@ BEGIN
 END;
 $$;
 
--- (d) The walk-in invariant for the sale (P4-AL-11, the third of the three
+-- (d) `sales_cogs_owed` (C-07, and the coordinator's ruling on the zero-cost
+--     sale). The COGS obligation stated as an IFF, at COMMIT, against the
+--     ledger:
+--
+--         Σ stock_movements.value_delta_base_minor over this sale's bridged
+--         movements is non-zero  ⟺  the sale carries a `sale` binding.
+--
+--     Both directions matter and each refuses a real, reachable state:
+--
+--       → a sale whose goods had value and whose COGS entry never happened is
+--         an inventory decrement with no cost — the sixth state P4-AL-16
+--         forbids, and the one `AccountingAssertionSequence.assertComplete()`
+--         cannot catch, because presenting NONE is deliberately allowed
+--         (apps/api/src/infra/database.ts:484-490);
+--       ← a sale of zero-average-cost stock that carries a binding anyway
+--         means a zero-amount journal line, which `journal_lines_money_cap_ck`
+--         (`0042:225`) refuses — so the binding would be to an entry that
+--         cannot exist.
+--
+--     It is a TRIGGER and not a row CHECK because the condition is a value no
+--     row holds and must not: `sales` may carry no cost column (P4-AL-05,
+--     DERIVED_COST_COLUMN), and storing the sum to make it checkable is
+--     precisely the forbidden second truth. It is DEFERRED because the sale
+--     row, its movements and its entry are written in one transaction and none
+--     of them can be judged before the others exist. And it is in the DATABASE
+--     and not in `sale_commit`, because a rule only the wrapper enforces is a
+--     convention while the trusted primitive can still write the row
+--     ([[daftar-wrapper-is-not-an-invariant]]).
+--
+--     A draft is out of scope: `sales_binding_owed_ck` already refuses a draft
+--     a binding, and a draft has no movements to value.
+CREATE FUNCTION sales_cogs_owed() RETURNS TRIGGER
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $$
+DECLARE
+  v_cost BIGINT;
+BEGIN
+  IF NEW.status = 'draft' THEN
+    RETURN NULL;
+  END IF;
+  v_cost := inventory_sale_cost_base_minor(NEW.business_id, NEW.id);
+  -- No bridged movement at all for a sale that is not a draft. The stock-side
+  -- guards own that refusal; this one does not pass it off as a zero cost,
+  -- because reading an empty set as "nothing of value left the shelf" is the
+  -- vacuous pass a deferred validator is made of.
+  IF v_cost IS NULL THEN
+    RAISE EXCEPTION 'selling.sale_cogs_owed: a committed sale carries no bridged stock movement, so its cost cannot be judged'
+      USING ERRCODE = 'P0001';
+  END IF;
+  IF (v_cost <> 0) AND NEW.binding_source_id IS NULL THEN
+    RAISE EXCEPTION 'selling.sale_cogs_owed: a committed sale whose goods carry value owes a COGS entry, and this one has none'
+      USING ERRCODE = 'P0001';
+  END IF;
+  IF (v_cost = 0) AND NEW.binding_source_id IS NOT NULL THEN
+    RAISE EXCEPTION 'selling.sale_cogs_owed: a committed sale of zero-cost stock carries no COGS entry, so it owes no accounting binding'
+      USING ERRCODE = 'P0001';
+  END IF;
+  RETURN NULL;
+END;
+$$;
+
+-- (e) The walk-in invariant for the sale (P4-AL-11, the third of the three
 --     the lock names at PHASE_4_ARCHITECTURE_LOCK.md:332). The sale entry
 --     is the cost pair, so it carries no receivable by construction — and
 --     the law is stated anyway, because "by construction" is a reading of
@@ -1472,14 +1549,18 @@ END;
 $$;
 
 COMMENT ON FUNCTION accounting_sale_entry_complete() IS
-  'P4-S2 (P4-AL-16, TL-P4-S1-R1). At COMMIT, for a `sale` entry: its sale row exists (binding_source_id = source_id) and is not a draft; the cost is inventory_sale_cost_base_minor(), refused when NULL or not positive; the entry is exactly Dr COGS / Cr Inventory for that cost, base-only at the base sentinel, the Inventory line on the sale''s warehouse and the COGS line on its branch with no warehouse, dated the sale''s occurred_on. Otherwise accounting.selling_detail_missing / accounting.selling_entry_mismatch. Accounting-owned DEFINER, pinned, no grantee but the owner.';
+  'P4-S2 (P4-AL-16, TL-P4-S1-R1). At COMMIT, for a `sale` entry: its sale row exists (binding_source_id = source_id) and is not a draft; the cost is inventory_sale_cost_base_minor(), refused when NULL or not positive; the entry is exactly Dr COGS / Cr Inventory for that cost, base-only at the base sentinel, the Inventory line on the sale''s warehouse and the COGS line on its branch with no warehouse, dated the sale''s document_date. Otherwise accounting.selling_detail_missing / accounting.selling_entry_mismatch. Accounting-owned DEFINER, pinned, no grantee but the owner.';
 COMMENT ON FUNCTION accounting_invoice_entry_complete() IS
-  'P4-S2 (P4-AL-16, TL-P4-S1-R1), the invoice half of the split at PHASE_4_ARCHITECTURE_LOCK.md:341-342. At COMMIT, for an `invoice` entry: its invoice row exists (binding_source_id = source_id) and is not a draft, its sale is confirmed, and the entry is exactly two lines — Cr sales_revenue for total_base_minor and Dr the settlement account for the same, both on the invoice''s branch with no warehouse, carrying the invoice''s own FX snapshot, dated its issue_date. Revenue is NET: exactly two lines is what refuses a discounts contra line and a tax_payable line (OD-03 is open; tax_minor = 0 is a row CHECK). The settlement account is `cash` when the sale''s settlement_kind is cash and `accounts_receivable` when it is credit — DESIGNED AGAINST THE RECOMMENDED OPTION, pending the Tech Lead''s card; a different ruling is a REPLACEMENT in a later migration. Accounting-owned DEFINER, pinned, no grantee but the owner.';
+  'P4-S2 (P4-AL-16, TL-P4-S1-R1), the invoice half of the split at PHASE_4_ARCHITECTURE_LOCK.md:341-342. At COMMIT, for an `invoice` entry: its invoice row exists (binding_source_id = source_id) and is not a draft, its sale is confirmed, and the entry is exactly two lines — Cr sales_revenue for total_base_minor and Dr the settlement account for the same, both on the invoice''s branch with no warehouse, carrying the invoice''s own FX snapshot, dated its issue_date. Revenue is NET: exactly two lines is what refuses a discounts contra line and a tax_payable line (OD-03 is open; tax_minor = 0 is a row CHECK). The settlement account is `cash` when the sale''s settlement_mode is cash and `accounts_receivable` when it is credit — DESIGNED AGAINST THE RECOMMENDED OPTION, pending the Tech Lead''s card; a different ruling is a REPLACEMENT in a later migration. Accounting-owned DEFINER, pinned, no grantee but the owner.';
+COMMENT ON FUNCTION sales_cogs_owed() IS
+  'P4-S2 (C-07, P4-AL-16): the sale''s COGS obligation as an IFF, at COMMIT — the sum of its bridged stock movements'' value_delta_base_minor is non-zero if and only if the sale carries a `sale` accounting binding. A committed sale with no bridged movement at all is refused outright rather than read as a zero cost. A trigger and not a row CHECK because the condition is a value no row holds and must not (P4-AL-05): storing the sum on `sales` to make it checkable is the forbidden second truth, and a CHECK cannot read another table. Deferred because the sale, its movements and its entry are written in one transaction. Owner daftar_accounting_internal, DEFINER, reading the inventory domain''s own published sum through inventory_sale_cost_base_minor(UUID, UUID); no EXECUTE grantee but the owner.';
 COMMENT ON FUNCTION sales_walkin_no_ar() IS
   'P4-S2 (P4-AL-11): a null customer_id means no AR line, for the sale as invoices_walkin_no_ar() states it for the invoice. Deferred to the end of the transaction because the sale and its entry are written together. Owner daftar_accounting_internal; no EXECUTE grantee but the owner.';
 
 REVOKE ALL ON FUNCTION accounting_sale_entry_complete() FROM PUBLIC;
 REVOKE ALL ON FUNCTION accounting_invoice_entry_complete() FROM PUBLIC;
+REVOKE ALL ON FUNCTION sales_cogs_owed() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION sales_cogs_owed() TO daftar_accounting_internal;
 REVOKE ALL ON FUNCTION sales_walkin_no_ar() FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION sales_walkin_no_ar() TO daftar_accounting_internal;
 
@@ -1492,6 +1573,10 @@ CREATE CONSTRAINT TRIGGER journal_entries_invoice_complete
   FOR EACH ROW WHEN (NEW.source_type = 'invoice')
   EXECUTE FUNCTION accounting_invoice_entry_complete();
 
+CREATE CONSTRAINT TRIGGER sales_cogs_owed
+  AFTER INSERT OR UPDATE ON sales
+  DEFERRABLE INITIALLY DEFERRED
+  FOR EACH ROW EXECUTE FUNCTION sales_cogs_owed();
 CREATE CONSTRAINT TRIGGER sales_walkin_no_ar
   AFTER INSERT OR UPDATE ON sales
   DEFERRABLE INITIALLY DEFERRED
@@ -1499,6 +1584,7 @@ CREATE CONSTRAINT TRIGGER sales_walkin_no_ar
 
 ALTER FUNCTION accounting_sale_entry_complete() OWNER TO daftar_accounting_internal;
 ALTER FUNCTION accounting_invoice_entry_complete() OWNER TO daftar_accounting_internal;
+ALTER FUNCTION sales_cogs_owed() OWNER TO daftar_accounting_internal;
 ALTER FUNCTION sales_walkin_no_ar() OWNER TO daftar_accounting_internal;
 
 REVOKE CREATE ON SCHEMA public FROM daftar_accounting_internal;
@@ -1530,7 +1616,7 @@ DECLARE
   c_inv_fns   CONSTANT TEXT[] := ARRAY['stock_binding_requires_sale()', 'stock_source_complete_sale()',
                                        'stock_source_complete_sale_header()', 'sale_header_guard()'];
   c_acc_fns   CONSTANT TEXT[] := ARRAY['accounting_sale_entry_complete()', 'accounting_invoice_entry_complete()',
-                                       'sales_walkin_no_ar()'];
+                                       'sales_walkin_no_ar()', 'sales_cogs_owed()'];
   -- R-P4-02's vocabulary as TL-P4-S1-C1 fixed it, with guard G-3's own
   -- exemptions: an identity, an actor, an instant, a classifier or an
   -- ordering is not a stored quantity, because only a stored NUMBER can
@@ -1811,6 +1897,34 @@ BEGIN
     END IF;
   END LOOP;
 
+  -- (9b) The two deferred obligations on `sales` are installed as DEFERRABLE
+  --      INITIALLY DEFERRED constraint triggers: `sales_cogs_owed`, which
+  --      carries the COGS obligation a row CHECK cannot express (C-07), and
+  --      `sales_walkin_no_ar`. Read from the catalogue, because a trigger this
+  --      file created and a trigger the database holds are different claims.
+  FOREACH v_name IN ARRAY ARRAY['sales_cogs_owed', 'sales_walkin_no_ar'] LOOP
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger g
+                    WHERE g.tgrelid = 'public.sales'::regclass AND g.tgname = v_name
+                      AND NOT g.tgisinternal AND g.tgtype = 21 AND g.tgenabled IN ('O', 'A')
+                      AND g.tgconstraint <> 0 AND g.tgdeferrable AND g.tginitdeferred
+                      AND g.tgfoid = ('public.' || v_name || '()')::regprocedure) THEN
+      RAISE EXCEPTION 'selling.migration_end_state_invalid: % is not installed on sales as a deferred constraint trigger', v_name
+        USING ERRCODE = 'P0001';
+    END IF;
+  END LOOP;
+  -- And the COGS obligation is NOT expressible as a row CHECK, which is why it
+  -- is a trigger: assert the weakened CHECK really is the weak one, so a later
+  -- hand cannot quietly restore the strict form and make a lawful zero-cost
+  -- sale uncommittable again.
+  IF (SELECT pg_get_constraintdef(c.oid) FROM pg_constraint c
+       WHERE c.conrelid = 'public.sales'::regclass AND c.conname = 'sales_binding_owed_ck')
+     IS DISTINCT FROM 'CHECK (((status <> ''draft''::text) OR (binding_source_id IS NULL)))' THEN
+    RAISE EXCEPTION 'selling.migration_end_state_invalid: sales_binding_owed_ck is not the draft-only half C-07 leaves it (found %)',
+      (SELECT pg_get_constraintdef(c.oid) FROM pg_constraint c
+        WHERE c.conrelid = 'public.sales'::regclass AND c.conname = 'sales_binding_owed_ck')
+      USING ERRCODE = 'P0001';
+  END IF;
+
   -- (10) The reversal guard's live BODY refuses both new types, and keeps
   --      every refusal it already carried. Read from prosrc, because the
   --      replacement in section 9(a) is a claim about what the database now
@@ -1874,7 +1988,7 @@ BEGIN
   SELECT count(*) INTO v_n FROM pg_proc p, aclexplode(p.proacl) x
    WHERE p.proname IN ('stock_binding_requires_sale', 'stock_source_complete_sale', 'stock_source_complete_sale_header',
                        'sale_header_guard', 'inventory_sale_cost_base_minor', 'accounting_sale_entry_complete',
-                       'accounting_invoice_entry_complete', 'sales_walkin_no_ar')
+                       'accounting_invoice_entry_complete', 'sales_walkin_no_ar', 'sales_cogs_owed')
      AND x.grantee::regrole::text = ANY (c_runtime);
   IF v_n <> 0 THEN
     RAISE EXCEPTION 'selling.authority_leak: a runtime principal may execute one of 0077''s routines (% grants)', v_n USING ERRCODE = 'P0001';
@@ -1905,7 +2019,7 @@ DECLARE
 BEGIN
   -- (a) A sale is never INSERTed already void.
   BEGIN
-    INSERT INTO sales (tenant_id, business_id, id, branch_id, warehouse_id, status, settlement_kind, occurred_on,
+    INSERT INTO sales (tenant_id, business_id, id, branch_id, warehouse_id, status, settlement_mode, document_date,
                        currency_code, subtotal_txn_minor, discount_txn_minor, total_txn_minor, total_base_minor,
                        source_to_base_rate, rate_source, rate_timestamp, commit_intent_sha256,
                        confirmed_by, confirmed_at, void_intent_sha256, voided_by, voided_at,
@@ -1926,7 +2040,7 @@ BEGIN
 
   -- (b) A draft sale is never INSERTed carrying an accounting binding.
   BEGIN
-    INSERT INTO sales (tenant_id, business_id, id, branch_id, warehouse_id, status, settlement_kind, occurred_on,
+    INSERT INTO sales (tenant_id, business_id, id, branch_id, warehouse_id, status, settlement_mode, document_date,
                        currency_code, subtotal_txn_minor, discount_txn_minor, total_txn_minor, total_base_minor,
                        source_to_base_rate, rate_source, rate_timestamp, commit_intent_sha256,
                        business_transaction_id, created_by, binding_source_id)
@@ -1963,7 +2077,7 @@ BEGIN
   PERFORM set_config('app.tenant_id', v_tenant::text, true);
   PERFORM set_config('app.business_id', v_business::text, true);
   BEGIN
-    INSERT INTO sales (tenant_id, business_id, id, branch_id, warehouse_id, status, settlement_kind, occurred_on,
+    INSERT INTO sales (tenant_id, business_id, id, branch_id, warehouse_id, status, settlement_mode, document_date,
                        currency_code, subtotal_txn_minor, discount_txn_minor, tax_minor, total_txn_minor, total_base_minor,
                        source_to_base_rate, rate_source, rate_timestamp, commit_intent_sha256,
                        business_transaction_id, created_by)

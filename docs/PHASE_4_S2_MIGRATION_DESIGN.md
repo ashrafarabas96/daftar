@@ -881,3 +881,121 @@ form, which needs no second database and no new helper:
 - compare it against `types.slice(0, 12)` rather than `types`;
 - add, positively, that `types.slice(12)` contains none of the twelve — so a
   successor cannot register one of them a second time or displace the order.
+
+---
+
+## 15. `0077` amended for the four late rulings, and the naming the landed code settles
+
+This section supersedes every earlier section of this document wherever they disagree, because it was
+written against the code at `7902b7a` rather than against a contract draft.
+
+### 15.1 The column names are the landed code's, not either contract's
+
+`docs/PHASE_4_S2_ACCOUNTING_CONTRACT.md` §6.5 still says `settlement_kind` and `sold_on`;
+`docs/PHASE_4_S2_CONTRACT.md` C-01 says `settlement_mode` and `document_date`. The **code wins**, and the
+code is unambiguous: `packages/inventory/src/sale-payloads.ts:115,120` declare `settlementMode` and
+`documentDate`, and the 29-argument call the service already makes
+(`apps/api/src/modules/selling/sale-commit.service.ts:376,380`) passes them in that order. The accounting
+package's `soldOn` (`packages/accounting/src/sale-posting.ts:221`) is a **fact-struct field name**, not a
+column name, and the service binds it from `input.documentDate` (`:351`). So `0077` carries
+`sales.settlement_mode` and `sales.document_date`, and `accounting_sale_entry_complete()` dates the COGS
+entry on `document_date` while `accounting_invoice_entry_complete()` dates the revenue entry on the
+invoice's own `issue_date` — which the service sets from the same `documentDate` (`:328`).
+
+### 15.2 The cash sale debits the `cash` SYSTEM ACCOUNT, and the landed code agrees
+
+The accounting contract's §6.5 asks for `payment_method_id` / `posting_account_id` on `sales` with the
+three-column FK to `payment_methods`, and for the cash arm to be compared by
+`l.account_id = sales.posting_account_id`. The landed service does not do that:
+`apps/api/src/modules/selling/sale-commit.service.ts:336` passes
+`settlementAccount: input.settlementMode === 'cash' ? { kind: 'system', systemKey: 'cash' } : null`,
+and `saleInvoiceDebitAccount()` (`packages/accounting/src/sale-posting.ts:396-397`) resolves it from
+there. That is exactly the recommended option this document designed against (D-1), now landed. `0077`
+therefore adds **no** `payment_method_id` and **no** `posting_account_id` to `sales`, and
+`accounting_invoice_entry_complete()` compares the debit against the `cash` system account key for a cash
+sale and `accounts_receivable` for a credit sale. A payment-method posting account is P4-S4's, and adding
+the column now would be a live column with no writer.
+
+### 15.3 `sales` carries no `cogs_base_minor`, so `P4-AL-29b`'s `value_complete` arm has no subject
+
+The accounting contract's §6.4 table still asks for a `value_complete` arm asserting
+`Σ stock_movements.value_delta_base_minor = -sales.cogs_base_minor`, and §6.5 still lists
+`cogs_base_minor BIGINT` among `sales`' columns. Both are refused by a law that is already landed:
+`scripts/guards/no-authoritative-balance.ts:317`'s `DERIVED_COST_COLUMN` and `P4-AL-05`. The landed
+accounting code settles it in the same direction — `deriveSaleCogsEntryLines()`
+(`packages/accounting/src/sale-posting.ts:632`) computes the cost from the bridged movement values and
+reads no column on `sales`. So `0077` creates no such column and the `value_complete` arm of the sale's
+guard row is deliberately absent; what replaces it is `sales_cogs_owed` (§15.4), which re-derives the sum
+instead of comparing against a stored copy.
+
+### 15.4 `sales_cogs_owed` — the deferred rule that makes the conditional COGS arm safe
+
+The conditional arm has landed: `deriveSaleCogsEntryLines()` returns `null` for a sale that released no
+stock value, `deriveSaleCommitPostings()` carries `cogs: null`
+(`packages/accounting/src/sale-posting.ts:713,745-746`), and `mintSaleCommitAssertions()` mints one
+assertion instead of two (`:820-825`). Nothing in the application layer can refuse the case where the skip
+was **not** owed, because the seam never sees a COGS total. The database rule is therefore not an
+alternative to the seam, it is what the seam's permission rests on, and the two land together:
+
+```sql
+CREATE CONSTRAINT TRIGGER sales_cogs_owed AFTER INSERT OR UPDATE ON sales
+  DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION sales_cogs_owed();
+```
+
+owned by `daftar_accounting_internal`, `SECURITY DEFINER`, pinned path. It re-derives
+`Σ value_delta_base_minor` over the **bridged** movements through
+`inventory_sale_cost_base_minor(business_id, id)` and requires a `sale`-source accounting binding **iff**
+that sum is non-zero. A NULL sum — a committed sale with no bridged movement at all — is refused outright
+rather than treated as zero, because NULL is the absence of a subject and not a value (the same reasoning
+as the validators' non-vacuity canaries). Draft rows return early.
+
+`sales_binding_owed_ck` is consequently **weakened on purpose** to
+`CHECK (status <> 'draft' OR binding_source_id IS NULL)`, not the accounting contract §6.5 /
+`docs/PHASE_4_S2_CONTRACT.md` C-01 biconditional `(status IN ('confirmed','void')) = (binding_source_id IS
+NOT NULL)`. A CHECK constraint cannot read the ledger, so the strict form would refuse the lawful
+zero-cost sale outright. The obligation moved to the deferred trigger, which can read it; the CHECK keeps
+only the half that is unconditional (a draft owes nothing). End-state item (9b) pins
+`pg_get_constraintdef` of that constraint exactly, so a later migration cannot quietly restore the strict
+form and re-close the lawful case.
+
+### 15.5 The reversal guard is rebased on `0072`, verified mechanically
+
+`0077`'s `accounting_reversals_20_domain_source_guard` body is `0072`'s body **byte for byte** with
+`'sale', 'invoice'` appended to the always-refused `IN` list after `'purchase_residue_write_off'`. Appended
+rather than inserted, because `0067:2790` and `0072:903` each assert a **substring** of that list. Verified
+by extracting both bodies between their `AS $$` markers and comparing after substituting the one list — the
+comparison is exact, so nothing of `0072`'s sixth version is dropped, the `purchase` carve-out is
+unchanged, and `purchase_residue_write_off` is retained. `0077:1934` additionally asserts
+`position('''purchase_residue_write_off''' IN v_def) <> 0` over the live definition, so the drop this
+correction warned about cannot recur unnoticed.
+
+### 15.6 The bridge carries `tenant_id`, measured against the live guard
+
+`stock_source_bridge_sale` carries `tenant_id UUID NOT NULL` with
+`stock_source_bridge_sale_tenant_fk FOREIGN KEY (tenant_id, business_id) REFERENCES businesses (tenant_id,
+id)`, absent from the primary key — which stays exactly `(business_id, source_id, source_line_id,
+movement_kind)` — and absent from the three-column line FK. Its `tenant_membership` policy takes the
+direct `tenant_id = nullif(app_tenant(), '')::uuid` form. Verified live:
+`inventory_stock_source_guard_gaps()` returns **no row**, and Agent A's law partitions all eight declared
+Phase 4 relations into `tenantAndBusiness` with `oneDimension` and `noDimension` both empty.
+
+### 15.7 `invoice_sequences` holds NO counter, which changes what C-09 step 10 can lock
+
+Confirmed for the sale contract owner, who read `0075:375` (`period`) and flagged the rest. The full shape
+(`0075:371-384`) is `tenant_id`, `business_id`, `document_kind` (CHECK `= 'invoice'`), `period` (CHECK
+`~ '^[0-9]{4}$'`), `number_format` (8–64 chars, trimmed, matching
+`^[A-Za-z0-9/-]*\{YYYY\}[A-Za-z0-9/-]*\{SEQ:[1-9][0-9]?\}[A-Za-z0-9/-]*$`), `created_at`, `updated_at`,
+`PRIMARY KEY (business_id, document_kind, period)` and `invoice_sequences_tenant_fk (tenant_id,
+business_id) → businesses (tenant_id, id)`. RLS enable + force with five policies (`0075:398-399,475-492`),
+`SELECT` to `daftar_app` and `daftar_inventory_internal` (`:494-495`), and
+`invoice_sequences_key_guard BEFORE UPDATE OR DELETE` refusing a key change (`:639`).
+
+**There is no `next_seq`, `last_seq` or counter column of any name.** The counter is
+`invoices.number_seq BIGINT NOT NULL CHECK (number_seq >= 1)` (`0075:252`) under
+`invoices_number_uq UNIQUE (business_id, document_kind, period, number_seq)` (`:286`), and `0075:131`
+states the credit-note precedent reads `max(number_seq)` from `invoices` rather than from a counter. So
+C-09 step 10 cannot lock and bump a counter: it must take a **row lock on the `invoice_sequences` row** for
+`(business_id, 'invoice', period)` — `FOR NO KEY UPDATE`, which the `BEFORE UPDATE` key guard does not
+obstruct because no update is performed — and then read `coalesce(max(number_seq), 0) + 1` from `invoices`
+under that lock. `invoices_number_uq` is the backstop that makes a missed lock a refusal rather than a
+duplicate number. The lock order must stay `businesses → invoice_sequences`, matching R-1.
