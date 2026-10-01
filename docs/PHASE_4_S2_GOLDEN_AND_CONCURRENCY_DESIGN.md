@@ -35,6 +35,25 @@ goes green or states a real defect.
 
 ---
 
+## 0. Why this work is not pushed on its own — integration sequencing
+
+`npm run test:integration` runs `tests/integration tests/security tests/guards` and
+`npm run test:golden` runs the whole of `tests/golden-regression` (`package.json:20-21`),
+and both are steps of the `backend` CI job (`.github/workflows/ci.yml:159-164`). Four of
+the suites here refuse, correctly and by canary, until the sale primitive exists:
+`06-sale-last-item-race`, `07-atomic-sale-law`, `08-sale-idempotency` and
+`tests/integration/sale-s2-atomic-law`. On a head without `0077` and the commit service,
+those refusals are CI red.
+
+Nothing is removed, parked, skipped or relocated to make that red go away — a suite moved
+out of the test scripts' reach is a suite nobody runs, and the move back is the step that
+gets forgotten. The suites stay exactly where they are and the **push** waits instead: this
+merge is held locally until the migration owner's `0077` and the sale contract owner's
+commit service land, and the whole slice goes up as one head whose CI is green because the
+canaries' subject exists. The three suites whose subject exists today — `05-last-item-race`,
+`tests/integration/sale-s2-interleaving` and `tests/guards/sale-s2-red-proofs` — are green
+already and were verified so before the merge.
+
 ## 1. Placement — a constraint that is not the one the brief anticipated
 
 `suiteProblems` in the **sealed** `scripts/phase4-s1-gate.ts` fails:
