@@ -937,21 +937,25 @@ cannot fire. The law is the one that says why.
 
 ---
 
-## 9. The `S2_SUITES` roster for `scripts/phase4-s2-gate.ts`
+## 9. The `S2_SUITES` roster for `scripts/phase4-s2-gate.ts` — ACCEPTED
 
-The gate file is not mine to edit; this is the list its owner asked for. Every
-path exists on this branch and every one is run by the commands in §0.
+The gate file is not mine to edit. This is the roster as its owner accepted it,
+with the `it(` title each row's verdict should be named by. Every path exists on
+this branch, every one is run by the commands in §0, and all eight are **green**
+on the merged head (§7f: 156/156 over these eight plus both Phase 4 golden
+directories, 157/157 with §7f's own law in, over three rounds that found nothing
+new).
 
-| row | suite | what the gate reads out of it | state today |
+| row | suite | the claim it carries | the `it(` title the gate names as its red proof |
 | --- | --- | --- | --- |
-| `S2-G05` | `tests/golden-regression/phase4-s2/05-last-item-race.golden.test.ts` | the last-item race on the **stock writer** the sale must use, and the lock-order probe | **green now** |
-| `S2-G06` | `tests/golden-regression/phase4-s2/06-sale-last-item-race.golden.test.ts` | the same race through `POST /v1/sales` | canary-red until `0078` |
-| `S2-G07` | `tests/golden-regression/phase4-s2/07-atomic-sale-law.golden.test.ts` | §15 as eight laws over committed state, plus the official reconciliation identity | canary-red until `0078` |
-| `S2-G08` | `tests/golden-regression/phase4-s2/08-sale-idempotency.golden.test.ts` | the replay contract, structural and behavioural | canary-red until `0078` |
-| `S2-I01` | `tests/integration/sale-s2-interleaving.test.ts` | that the forcing **mechanism** works: the `blockedBehind` fixed point, every throw of `waitUntilQueued`, a planted real `40P01` classified and refused | **green now** |
-| `S2-I02` | `tests/integration/sale-s2-atomic-law.test.ts` | failure injection at every discovered seam, and that nothing survives | canary-red until `0078` |
-| `S2-C01` | `tests/integration/sale-s2-cogs-owed.test.ts` | C-07's matched pair: the live-catalogue agreement law (red on this head — see §7d) and the behavioural ZERO/NON-ZERO arms | **mixed**: the agreement law and its four planted proofs run today, the behavioural pair is canary-red until `0078` |
-| `S2-R01` | `tests/guards/sale-s2-red-proofs.test.ts` | that every law on the books has a planted defect, that the canary fails in both directions, that the runner's exit status can say no, and `suiteProblems(REPO) == []` | **green now** |
+| `S2-G05` | `tests/golden-regression/phase4-s2/05-last-item-race.golden.test.ts` | the last-item race on the stock writer the sale must use; no oversell; the deterministic lock-order probe | `the lock order is the KEY order and not the payload order — the deterministic lock-order probe` |
+| `S2-G06` | `tests/golden-regression/phase4-s2/06-sale-last-item-race.golden.test.ts` | the same race through `POST /v1/sales`: one commit, one stable business refusal, no orphan of any kind | `exactly one attempt is refused, and the refusal is a stable business refusal naming the stock` |
+| `S2-G07` | `tests/golden-regression/phase4-s2/07-atomic-sale-law.golden.test.ts` | §15 as eight laws over committed state, the official reconciliation identity, and the structural ban on the forbidden reconstruction | `the identity is never reconstructed from quantity × average cost` |
+| `S2-G08` | `tests/golden-regression/phase4-s2/08-sale-idempotency.golden.test.ts` | the replay contract, structural and behavioural (P4-AL-30: the stored intent is read before any write) | `the same document id with a DIFFERENT intent is refused, and writes nothing` |
+| `S2-I01` | `tests/integration/sale-s2-interleaving.test.ts` | that the forcing MECHANISM works: the `blockedBehind` fixed point, every throw of `waitUntilQueued`, a planted real `40P01` classified and refused, no retry anywhere | `a real deadlock is classified as a deadlock, and expectNoDeadlock fails on it` |
+| `S2-I02` | `tests/integration/sale-s2-atomic-law.test.ts` | failure injection at every discovered seam — `stock_source_bindings` included — plus the E-01 held-lock case and its premise | `invoice_sequences is LOCKED and never written, so it belongs to the held-lock case and not to the trigger set` |
+| `S2-C01` | `tests/integration/sale-s2-cogs-owed.test.ts` | C-07's matched pair: the live-catalogue agreement law and the behavioural ZERO / NON-ZERO arms | `PLANTED: a strictly-negative predicate on the LINE guard is reported` |
+| `S2-R01` | `tests/guards/sale-s2-red-proofs.test.ts` | that every law on the books has a planted defect, the canary fails in both directions, the runner's exit status can say no, and `suiteProblems(REPO) == []` | `the runner’s exit status can say no` |
 
 Three notes for whoever wires them.
 
@@ -960,13 +964,13 @@ Three notes for whoever wires them.
    observed twice during this work, and the estate has already shipped a runner
    that exited 0 over four failing tests. `rlsSuiteProblems` in the gate today
    does it correctly, with `spawnSync` and `stdio: 'pipe'`.
-2. **The four canary-red rows are red *on purpose* until `0078`.** They refuse
-   with `NO SUBJECT — … the sale commit routine sale_commit`, never with a skip
-   and never with a conditional pass, so the gate is honestly red while the
-   slice is incomplete. Adding them before `0078` lands makes
-   `gate:phase4:s2` red; adding them after it lands is a gate that was never
-   proved able to say no. The list is complete as written and its rows should
-   go in together.
+2. **`S2-I02` names the PREMISE, not the held-lock case.** Planting the
+   regression — `invoice_sequences` back in `TRIGGER_SEAMS` — fails the premise
+   law *and* the generated case that cannot fire, and the premise is the one
+   that says why. The held-lock case
+   (`a sale held at the invoice_sequences seam has committed NOTHING, and
+   serialises once the row is released`) carries the behaviour and has its own
+   two planted proofs (§7e); it is not the row's named verdict.
 3. **`tests/guards/` by directory** would also pick up
    `sale-s2-base-split-agreement.test.ts`, which is another owner's; the row
    above names the one file instead, so each owner's guard is listed by its
