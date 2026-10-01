@@ -88,6 +88,8 @@
         "purchase_reversal_lines",
         "purchase_reversals",
         "purchases",
+        "sale_items",
+        "sales",
         "stock_levels",
         "stock_movements",
         "stocktake_lines",
@@ -177,6 +179,7 @@
       "purchase_save_draft(uuid,integer,uuid,uuid,uuid,character,date,text,text,bigint,uuid[],uuid[],numeric[],numeric[],bigint[],uuid[],text[],bigint[],text[],bigint[])",
       "purchase_settlement_state(uuid,uuid)",
       "purchase_write_off_residue(uuid,date,text,bigint,bigint,bigint)",
+      "sale_commit(uuid,uuid,text,uuid,uuid,uuid,date,date,character,uuid,numeric,text,timestamp with time zone,bigint,bigint,bigint,bigint,text,uuid[],uuid[],uuid[],uuid[],text[],numeric[],bigint[],bigint[],bigint[],bigint[],bigint[])",
       "structure_associate_warehouse_branch(uuid,uuid)",
       "structure_dissociate_warehouse_branch(uuid,uuid)",
       "supplier_allocate_credit(uuid,uuid,uuid,uuid,date,character,bigint,bigint,bigint,bigint,character,bigint,bigint,bigint,bigint,bigint)",
@@ -202,7 +205,7 @@
     "public": []
   },
   "executeNotes": {
-    "daftar_app": "The 27 signed entry routines (one per registered operation kind) plus the two INVOKER read functions purchase_ap_outstanding and purchase_settlement_state (0065, replaced in 0067 and, purchase_ap_outstanding, in 0072). S7 adds none; S8 adds none; the Phase 3 corrective 0072 (TD-16) adds purchase_write_off_residue, the routine of its one operation kind. Beyond the Phase 3 scope, 0075 adds the four INVOKER receivables read functions — invoice_outstanding, invoice_settlement_state, customer_ar_outstanding and customer_ar_aging — granted to daftar_app and to daftar_inventory_internal, and to nobody else; PUBLIC holds EXECUTE on none of them.",
+    "daftar_app": "The 27 signed entry routines (one per registered operation kind) plus the two INVOKER read functions purchase_ap_outstanding and purchase_settlement_state (0065, replaced in 0067 and, purchase_ap_outstanding, in 0072). S7 adds none; S8 adds none; the Phase 3 corrective 0072 (TD-16) adds purchase_write_off_residue, the routine of its one operation kind. Beyond the Phase 3 scope, 0078 adds sale_commit, the signed entry routine of the sale.commit operation kind, granted to daftar_app and to nobody else — its three helpers (sale_lock_commit_targets, sale_document_number, sale_bridge_commit) carry no EXECUTE grant at all, so the only way into them is the entry routine's own DEFINER body. And 0075 adds the four INVOKER receivables read functions — invoice_outstanding, invoice_settlement_state, customer_ar_outstanding and customer_ar_aging — granted to daftar_app and to daftar_inventory_internal, and to nobody else; PUBLIC holds EXECUTE on none of them.",
     "daftar_platform": "The two inventory key-domain routines (L:1868) plus the three provisioning routines 0070 (TD-18) re-created and handed to daftar_provisioning_internal: provision_actor(text[]) and the provisioning key install/retire commands. Each keeps its accepted Phase 1 grant to the platform alone; TD-18 closed the TL-3 exception set (no replaced routine is owned by the applier or pins a public-first path any more).",
     "public": "No Phase 3 routine, definer or invoker, is executable by PUBLIC.",
     "beyondPhase3Scope": "Entries for relations and routines a later phase creates are reviewed here on the same terms as the Phase 3 ones. They are NOT an allowlist that admits them: they are the reviewed statement of which grants exist, and every law in the suite — the forbidden privileges, the by-USE DML refusal sweep, the definer law — still applies to them in full."

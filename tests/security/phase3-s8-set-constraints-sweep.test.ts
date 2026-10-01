@@ -66,7 +66,7 @@ import { appDbUrl, ensurePostgres, ownerPool, resetData } from '../helpers/test-
 import { attempt, must, ownerClient, rolledBack, seedS3Business, seedS3World, today, type Queryable, type S3Business } from '../helpers/inventory-commands';
 import { expectRefused, settle, type Outcome } from '../helpers/stock-ledger';
 import { OP_KIND_BUILDERS, mintHonest, type PreparedKind, type ResultRow } from '../helpers/op-kind-builders';
-import { phase4InheritedPrefixRelations } from '../../scripts/guards/no-authoritative-balance';
+import { inheritedPrefixTriggers, splitByTriggerProvenance } from '../helpers/phase4-inherited-scope';
 import { truthTables } from '../helpers/phase3-surface';
 import { JOURNAL_AND_LOGS, changedTables, tableDigest } from '../helpers/table-digest';
 import { assertionFor, postAs, postReversalAs, reversalFingerprintOf, sourceAssertion, type PostCommand } from '../helpers/accounting-posting';
@@ -310,9 +310,29 @@ async function deferredGuards(q: Queryable): Promise<{ inScope: string[]; beyond
         WHERE g.tgdeferrable AND NOT g.tgisinternal AND g.tgconstraint <> 0 ORDER BY 1`,
     )
   ).rows.filter((r) => !PHASE1.includes(r.n));
-  const prefixRelations = phase4InheritedPrefixRelations();
-  const scoped = rows.filter((r) => prefixRelations.has(r.rel));
-  const outside = rows.filter((r) => !prefixRelations.has(r.rel));
+  /**
+   * ── P4-AL-88: a trigger claim a RELATION name cannot scope ─────────────
+   *
+   * The scope used to be POSITION OF THE RELATION —
+   * `phase4InheritedPrefixRelations()`. That is right for a claim whose
+   * subject IS a relation, and wrong here, because a later phase may put a
+   * deferred guard on a relation the accepted prefix created, and `0077`
+   * does: `stock_binding_requires_sale` on `stock_source_bindings`, and
+   * `journal_entries_sale_complete` / `journal_entries_invoice_complete` on
+   * `journal_entries`. All three landed inside the Phase 3 equality and
+   * turned an accepted P3-S8 sweep red for guards whose ABSENCE would have
+   * been the defect (`[[daftar-a-closure-rule-is-not-an-invariant]]`).
+   *
+   * The separable part is the TRIGGER'S OWN NAME, read from the accepted
+   * prefix's digest-verified text. A guard is outside the scope only when a
+   * migration PAST the accepted head declares it and the accepted prefix does
+   * not; a guard NO migration declares — a hand-planted intruder — stays
+   * inside, where the classified equality names it. Both readers fail LOUD:
+   * an emptied prefix reader empties `inScope` and the equality goes red, and
+   * an unread later file leaves its guards inside the scope, where the
+   * equality goes red too. Neither direction lets a guard escape judgement.
+   */
+  const { inScope: scoped, beyond: outside } = splitByTriggerProvenance(rows, (r) => r.n);
   const login = new Set((await q.query<{ r: string }>(`SELECT rolname::text AS r FROM pg_roles WHERE rolcanlogin OR rolsuper`)).rows.map((x) => x.r));
   const beyondProblems = outside
     .filter(
@@ -331,8 +351,7 @@ async function deferredGuards(q: Queryable): Promise<{ inScope: string[]; beyond
 
 describe('the catalogue: every Phase 2/3 deferred guard is classified', () => {
   it('REFUSES_EARLY ∪ JUDGES_COMPLETE is exactly the deferrable non-internal constraint triggers on the accepted prefix’s relations, and the two are disjoint', async () => {
-    const prefixRelations = phase4InheritedPrefixRelations();
-    expect(prefixRelations.size, 'the digest-verified prefix reader came back empty').toBeGreaterThan(0);
+    expect(inheritedPrefixTriggers().size, 'the digest-verified prefix trigger reader came back empty').toBeGreaterThan(0);
     const { inScope, beyond, beyondProblems } = await deferredGuards(ownerPool());
     const early = Object.keys(REFUSES_EARLY);
     const complete = Object.keys(JUDGES_COMPLETE);

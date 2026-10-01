@@ -29,19 +29,15 @@ import { expect } from 'vitest';
 import {
   FIXTURE_SOURCE_TYPE,
   S1_OPERATION_KINDS,
-  S3_BRIDGES,
   S3_OPERATION_KINDS,
   S3_OPERATION_MOVEMENT_KINDS,
   S3_SOURCE_TYPES,
   // P3-S5 (0065/0066)
-  S5_BRIDGES,
   S5_OPERATION_KINDS,
   S5_OPERATION_MOVEMENT_KINDS,
   S5_SOURCE_TYPES,
-  S5_TABLES,
   // P3-S6 (0067/0068)
   S6_OPERATION_KINDS,
-  S6_TABLES,
   installStockFixture,
   must,
   ownerClient,
@@ -317,26 +313,34 @@ export async function assertS4MigrationState(q: Queryable = ownerPool()): Promis
 }
 
 /**
- * Remove a committed fixture and every stock row: TRUNCATE (the append-only
- * triggers refuse DELETE; E-24), naming every table that references
- * `stock_source_bindings`, `stock_movements`, `stock_levels` and the deficit
- * tables — the S3 and S4 bridges, the S4 documents and the coverage header —
- * then the fixture's objects and registrations, then the S4 end state.
+ * Remove a committed fixture and every stock row: TRUNCATE, because the
+ * append-only triggers refuse DELETE (E-24).
+ *
+ * PostgreSQL refuses a TRUNCATE that does not name EVERY table referencing a
+ * table being truncated (`0A000`, "cannot truncate a table referenced in a
+ * foreign key constraint"), so the statement has to carry the whole
+ * referencing closure. That closure used to be written out by hand, one
+ * phase at a time — the S3 and S5 bridges, the S5 documents, the six S6
+ * tables, the 0072 write-offs — and it was a closure rule in inventory
+ * shape: red the moment a later phase added a reference, with the symptom a
+ * `beforeAll` dying in four permanent Phase 3 suites rather than anything
+ * about purchases. `0077`'s `stock_source_bridge_sale` references
+ * `stock_source_bindings` and did exactly that.
+ *
+ * So the closure is now DISCOVERED from `pg_constraint` and transitively
+ * closed, the same idiom as `dropReferencesTo` in
+ * `tests/security/phase4-registry-phase-scoping.test.ts:82`. What IS written
+ * here is the SEED: the relations this fixture owns and means to empty. Every
+ * later phase's reference to one of them is swept in without an edit, and a
+ * reference that leaves the seed set is still refused by the database, which
+ * is the property the hand-written list was pretending to have.
+ *
+ * Order does not matter: a single TRUNCATE naming every table in the closure
+ * empties them together, so the children-first sequencing the old list was
+ * careful about was never load-bearing. The list is sorted for a stable
+ * statement.
+ *
  * Idempotent.
- *
- * P3-S5 (0065/0066): the two S5 bridges reference `stock_source_bindings`, and
- * the five S5 documents reference the purchases and purchase lines truncated
- * here, so all seven are named too (bridges first, then the documents,
- * children first); without them PostgreSQL refuses the whole statement
- * (0A000, "cannot truncate a table referenced in a foreign key constraint").
- *
- * P3-S6 (0067/0068): the six S6 tables reference the purchases and the S5
- * credit notes truncated here, so they are named too, children first and
- * before the S5 documents (§7.3 row 17); without them the same 0A000 refuses
- * the statement and every suite using this fixture fails in its beforeAll.
- *
- * Phase 3 corrective (0072, TD-16): `purchase_residue_write_offs` references
- * the purchases, so it is named too.
  */
 export async function removeCommittedDeficitFixture(): Promise<void> {
   const c = await ownerClient();
@@ -345,31 +349,45 @@ export async function removeCommittedDeficitFixture(): Promise<void> {
     const bridge = must((await c.query<{ r: string | null }>(`SELECT to_regclass('public.stock_source_bridge_fixture_line')::text AS r`)).rows[0]).r;
     const lines = must((await c.query<{ r: string | null }>(`SELECT to_regclass('public.stock_fixture_lines')::text AS r`)).rows[0]).r;
     const extra = [bridge, lines].filter((x): x is string => x !== null);
-    await c.query(
-      `TRUNCATE ${[
-        'stock_source_bindings',
-        'stock_movements',
-        'stock_levels',
-        'negative_deficit_coverages',
-        'negative_inventory_deficits',
-        ...S3_BRIDGES,
-        'stock_source_bridge_purchase',
-        'stock_source_bridge_negative_inventory_cost_adjustment',
-        'negative_inventory_cost_adjustments',
-        'purchase_landed_cost_allocations',
-        'purchase_landed_costs',
-        'purchase_lines',
-        'purchases',
-        // P3-S5 (0065/0066)
-        ...S5_BRIDGES,
-        // Phase 3 corrective (0072, TD-16): the write-offs reference the purchases.
-        'purchase_residue_write_offs',
-        // P3-S6 (0067/0068)
-        ...S6_TABLES,
-        ...S5_TABLES,
-        ...extra,
-      ].join(', ')}`,
-    );
+    /**
+     * The seed: what this fixture owns and means to empty. The deficit
+     * tables, the stock ledger and its bindings, the purchase documents the
+     * fixture commits, and the fixture's own two relations when they exist.
+     * Nothing about a later phase is named, and nothing here is a bridge or
+     * a document of a slice this helper does not own — those arrive through
+     * the closure below.
+     */
+    const seed = ['stock_source_bindings', 'stock_movements', 'stock_levels', 'negative_inventory_deficits', 'purchase_lines', 'purchases', ...extra];
+    /**
+     * The transitive referencing closure, read from the catalogue. A table
+     * that references anything already in the set joins it, and then its own
+     * referents are asked in turn, so a bridge reached through another
+     * bridge is reached too. `to_regclass` keeps a seed that a given
+     * database does not have from aborting the sweep.
+     */
+    const closure = new Set<string>();
+    let frontier = seed;
+    while (frontier.length > 0) {
+      const r = await c.query<{ child: string }>(
+        `SELECT DISTINCT k.conrelid::regclass::text AS child
+           FROM pg_constraint k
+          WHERE k.contype = 'f'
+            AND k.confrelid = ANY (SELECT to_regclass('public.' || x) FROM unnest($1::text[]) x)`,
+        [frontier],
+      );
+      for (const x of frontier) closure.add(x.replace(/^public\./, ''));
+      frontier = r.rows.map((x) => x.child.replace(/^public\./, '')).filter((x) => !closure.has(x));
+    }
+    const present = await c.query<{ name: string }>(`SELECT x AS name FROM unnest($1::text[]) x WHERE to_regclass('public.' || x) IS NOT NULL ORDER BY x`, [
+      [...closure],
+    ]);
+    const targets = present.rows.map((x) => x.name);
+    // A closure that lost its own seed would truncate the wrong thing and
+    // read as a passing fixture, so it is checked rather than assumed.
+    for (const want of ['stock_movements', 'stock_source_bindings', 'purchases']) {
+      if (!targets.includes(want)) throw new Error(`removeCommittedDeficitFixture: the discovered closure lost ${want}`);
+    }
+    await c.query(`TRUNCATE ${targets.join(', ')}`);
     await c.query(`DROP TRIGGER IF EXISTS stock_binding_requires_${FIXTURE_SOURCE_TYPE} ON stock_source_bindings`);
     await c.query(`DROP TABLE IF EXISTS stock_source_bridge_fixture_line`);
     await c.query(`DROP TABLE IF EXISTS stock_fixture_lines`);
