@@ -62,7 +62,6 @@
  */
 import { randomUUID } from 'node:crypto';
 import type { ArgumentsHost } from '@nestjs/common';
-import type { Response as ExpressResponse } from 'express';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { AccountingError } from '@daftar/accounting';
 import { GlobalExceptionFilter } from '../../apps/api/src/common/error.filter';
