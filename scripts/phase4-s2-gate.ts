@@ -136,6 +136,13 @@ export const S2_SUITES: readonly SuiteRow[] = [
     proof: 'tests/guards/sale-s2-base-split-agreement.test.ts::THE VECTORS DISCRIMINATE: flipping the tie rule changes the answer on at least three of them',
   },
   {
+    id: 'S2-X01',
+    file: 'tests/guards/sale-s2-gate-execution.test.ts',
+    claim: "that THIS gate's execution check judges test RESULTS and not test existence: on a scratch root a broken S2 assertion is RED and the lawful one is GREEN (TL-P4-S2-R2)",
+    proof:
+      'tests/guards/sale-s2-gate-execution.test.ts::a scratch roster whose suite FAILS makes the execution check red, while the same roster passing is green',
+  },
+  {
     id: 'S2-R01',
     file: 'tests/guards/sale-s2-red-proofs.test.ts',
     claim: 'that every law on the books has a planted defect, and that the runner’s exit status can carry a refusal',
@@ -148,6 +155,8 @@ export interface Check {
   readonly title: string;
   readonly run: (root: string) => string[];
   readonly ok: string;
+  /** Measured numbers this check must report on a PASS as well as on a FAIL. */
+  readonly note?: (root: string) => string;
 }
 
 /** The structural half of `TL-P4-S1-R2`: the canaries and the "never a handwritten list" meta-rule. */
@@ -201,6 +210,238 @@ export function rosterProblems(root: string): string[] {
   }
   return problems;
 }
+
+
+// ───── EXECUTION (TL-P4-S2-R2) ────────────────────────────────────────────
+// «A gate that checks test filenames but never executes the tests is not a
+// gate.» `rosterProblems` above answers "does the file exist and does its red
+// proof resolve". It cannot answer "does the suite PASS", and for the first
+// wiring of this roster nothing else did either: only `rls-force-runtime`
+// executed anything, so every P4-S2 law could have been red while this gate
+// printed PASS. What follows executes the roster.
+//
+// Two traps this repository has already paid for are designed against here:
+//
+//   1. NEVER read a verdict through a pipe. A shell pipeline's exit status is
+//      the LAST stage's, so `vitest … | tee` reports `tee`'s success over a
+//      failing run. `spawnSync` with `stdio: 'pipe'` is used throughout and
+//      `status`, `signal` and `error` are read off the result object — the
+//      shape `rlsSuiteProblems` already uses.
+//   2. A RUNNER CAN EXIT 0 OVER HIDDEN FAILURES. Vitest exits 0 over `.skip`
+//      and `.todo` (measured), so a non-zero status, a terminating signal, a
+//      "no test files found" outcome, a skipped/todo/only tally and a static
+//      skip marker are each detected SEPARATELY. No single one of them is
+//      trusted as the whole verdict.
+//
+// Nothing below catches a test failure and continues: `spawnSync` does not
+// throw, there is no try/catch around the run, and every adverse outcome
+// becomes a problem string, which is a FAIL.
+
+/** Comments removed, so a rule never fires on prose. */
+const stripProse = (source: string): string => source.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/(^|[^:'"`\\])\/\/[^\n]*/g, '$1');
+/** String and template bodies, blanked so a rule never fires on a planted source a red proof carries as a literal. */
+const QUOTED_BODY = /'(?:\\.|[^'\\\n])*'|"(?:\\.|[^"\\\n])*"|`(?:\\.|[^`\\])*`/g;
+/** The markers that make a suite report green while asserting nothing. Same set the sealed predecessor gate refuses. */
+const SKIP_MARKER = /\b(?:it|test|describe|suite)\.(?:skip|only|todo|skipIf|runIf)\b|\bx(?:it|describe)\s*\(/;
+/** Vitest says this on stderr and exits 1 when the filter matched nothing. A run that found no tests is not a pass. */
+const NO_TEST_FILES = /No test files found/;
+const ANSI = /\u001B\[[0-9;]*m/g;
+
+/** What the runner reported, or `null` for a number that is genuinely unavailable — never invented. */
+export interface Tally {
+  readonly passed: number | null;
+  readonly failed: number | null;
+  readonly skipped: number | null;
+  readonly todo: number | null;
+  readonly total: number | null;
+  readonly files: number | null;
+}
+
+/**
+ * The reporter's two summary lines, as numbers:
+ *
+ *     Test Files  1 failed | 1 passed (2)
+ *          Tests  1 failed | 2 passed (3)
+ *
+ * A number the reporter did not print stays `null`, and the verdict then says
+ * so rather than reporting a zero nobody measured. An absent `Tests` line is
+ * itself a finding, handled by `executeSuites`.
+ */
+export function parseTally(output: string): Tally {
+  const clean = output.replace(ANSI, '');
+  const line = (label: string): string | null => {
+    const hits = [...clean.matchAll(new RegExp(`^[^\\S\\n]*${label}[^\\S\\n]+(\\S.*)$`, 'gm'))];
+    // Only a line of the SUMMARY shape, which ends in the parenthesised total.
+    // Measured on this very roster: vitest writes
+    //     Tests closed successfully but something prevents Vite server from exiting
+    // to stderr, which begins with the same word and carries no numbers at
+    // all. Taken for the summary — and it is the LAST such line, because
+    // stderr is read after stdout — it reported `0 passed` over a run of 142
+    // passing tests. That is the invented-number failure mode this parser is
+    // forbidden to have, so the shape is required rather than the word.
+    const summaries = hits.map((m) => (m[1] ?? '').trim()).filter((t) => /\(\d+\)$/.test(t));
+    return summaries.length === 0 ? null : (summaries[summaries.length - 1] as string);
+  };
+  const count = (text: string | null, word: string): number | null => {
+    if (text === null) return null;
+    const m = new RegExp(`(\\d+)\\s+${word}\\b`).exec(text);
+    // The word is absent when its count is zero: `2 passed (2)` means nothing
+    // failed. The line existing is what licenses the zero.
+    return m === null ? 0 : Number(m[1]);
+  };
+  const totalOf = (text: string | null): number | null => {
+    if (text === null) return null;
+    const m = /\((\d+)\)\s*$/.exec(text);
+    return m === null ? null : Number(m[1]);
+  };
+  const tests = line('Tests');
+  const files = line('Test Files');
+  // All or nothing: without the summary line there is no number to report,
+  // and a zero nobody measured is worse than an admitted gap.
+  if (tests === null) return { passed: null, failed: null, skipped: null, todo: null, total: null, files: totalOf(files) };
+  return {
+    passed: count(tests, 'passed'),
+    failed: count(tests, 'failed'),
+    skipped: count(tests, 'skipped'),
+    todo: count(tests, 'todo'),
+    total: totalOf(tests),
+    files: totalOf(files),
+  };
+}
+
+/** Just enough of `SpawnSyncReturns` to be judged, so the verdict can be proved against a synthetic outcome. */
+export interface RunOutcome {
+  readonly status: number | null;
+  readonly signal: string | null;
+  readonly error?: Error | undefined;
+  readonly output: string;
+}
+
+/**
+ * The three ways a RUN — as opposed to a test — can fail, each detected on its
+ * own because each has reported a false green here before: the process never
+ * started, the process was killed by a signal (whose `status` is `null`, which
+ * an `=== 0` test would never see), and the process exited non-zero.
+ */
+export function runOutcomeProblems(label: string, r: RunOutcome): string[] {
+  const problems: string[] = [];
+  const tail = r.output.replace(ANSI, '').slice(-4000);
+  if (r.error !== undefined) problems.push(`${label}: the test process did not run — ${r.error.message}`);
+  if (r.signal !== null) problems.push(`${label}: the test process was KILLED by ${r.signal} — a terminated run is not a pass\n${tail}`);
+  if (NO_TEST_FILES.test(r.output)) problems.push(`${label}: the runner found NO TEST FILES — a run that executed nothing is not a pass\n${tail}`);
+  if (r.status === null && r.signal === null && r.error === undefined) problems.push(`${label}: the test process reported no exit status at all`);
+  if (r.status !== null && r.status !== 0) problems.push(`${label}: the test process exited ${r.status} — the suites refuse this tree\n${tail}`);
+  return problems;
+}
+
+/** Every file a row stands for: a `directory` row is the FULL DISCOVERED directory, never only what is written down. */
+export function resolveRoster(root: string, rows: readonly SuiteRow[]): { files: string[]; problems: string[] } {
+  const files: string[] = [];
+  const problems: string[] = [];
+  for (const row of rows) {
+    if (row.directory === true) {
+      if (!has(root, row.file)) {
+        problems.push(`${row.id}: the directory ${row.file} is missing, so this row stands for nothing`);
+        continue;
+      }
+      const found = suitesIn(root, row.file);
+      if (found.length === 0) problems.push(`${row.id}: ${row.file} holds no suite — handing the runner an empty directory and calling it a pass is the defect`);
+      files.push(...found);
+      continue;
+    }
+    if (!has(root, row.file)) {
+      problems.push(`${row.id}: ${row.file} is missing, so it cannot be executed`);
+      continue;
+    }
+    files.push(row.file);
+  }
+  return { files: [...new Set(files)].sort(), problems };
+}
+
+export interface SuiteExecution {
+  /** How many `S2_SUITES` rows were asked for. */
+  readonly claimed: number;
+  /** The files those rows resolved to, directories expanded. */
+  readonly resolved: readonly string[];
+  readonly status: number | null;
+  readonly signal: string | null;
+  readonly error: string | null;
+  readonly tally: Tally;
+  readonly ran: boolean;
+  readonly problems: readonly string[];
+}
+
+/**
+ * ONE bounded Vitest invocation over every resolved file. One process rather
+ * than one per file because the root config pins `maxWorkers: 1` with
+ * per-file isolation, so the sequencing a per-file loop would buy is already
+ * there, and a single run yields a single exit status and a single tally to
+ * read.
+ */
+export function executeSuites(root: string, rows: readonly SuiteRow[], timeoutMs = 90 * 60_000): SuiteExecution {
+  const { files, problems } = resolveRoster(root, rows);
+  const base = { claimed: rows.length, resolved: files };
+  const none: Tally = { passed: null, failed: null, skipped: null, todo: null, total: null, files: null };
+  for (const file of files) {
+    const hit = SKIP_MARKER.exec(stripProse(read(root, file)).replace(QUOTED_BODY, "''"));
+    if (hit !== null) problems.push(`${file} carries ${hit[0]} — a suite that reports green without asserting is not evidence, and the runner exits 0 over it`);
+  }
+  if (files.length === 0)
+    return { ...base, status: null, signal: null, error: null, tally: none, ran: false, problems: [...problems, 'no S2_SUITES row resolved to a test file, so this check would execute nothing'] };
+
+  const bin = join(root, 'node_modules/.bin/vitest');
+  if (!existsSync(bin))
+    return { ...base, status: null, signal: null, error: null, tally: none, ran: false, problems: [...problems, `${bin} is missing — the roster cannot be executed`] };
+
+  // `stdio: 'pipe'`, and the verdict is read off THIS object. A pipeline would
+  // hand back the last stage's status instead, which is the trap.
+  const r = spawnSync(bin, ['run', ...files], {
+    cwd: root,
+    encoding: 'utf8',
+    stdio: 'pipe',
+    timeout: timeoutMs,
+    maxBuffer: 256 * 1024 * 1024,
+    env: { ...process.env, FORCE_COLOR: '0', CI: '1' },
+  });
+  const output = `${r.stdout ?? ''}${r.stderr ?? ''}`;
+  const tally = parseTally(output);
+  problems.push(...runOutcomeProblems(`the P4-S2 roster (${files.length} file(s))`, { status: r.status, signal: r.signal, error: r.error, output }));
+  if (tally.total === null)
+    problems.push('the runner printed no "Tests" summary line, so how many tests ran is UNKNOWN — an unknown tally is not a pass');
+  else {
+    if (tally.total === 0) problems.push('the runner executed 0 tests — a run that found no tests is not a pass');
+    if ((tally.failed ?? 0) > 0) problems.push(`${tally.failed} test(s) FAILED`);
+    if ((tally.skipped ?? 0) > 0) problems.push(`${tally.skipped} test(s) were SKIPPED — the runner exits 0 over a skip, so the gate refuses it here`);
+    if ((tally.todo ?? 0) > 0) problems.push(`${tally.todo} test(s) are TODO — a todo is a claim nobody has tested`);
+  }
+  if (tally.files !== null && tally.files < files.length)
+    problems.push(`${files.length} file(s) were handed to the runner and it reported only ${tally.files} — the rest were never executed`);
+  return { ...base, status: r.status, signal: r.signal, error: r.error === undefined ? null : r.error.message, tally, ran: true, problems };
+}
+
+/** One execution per root per process: the check reads the verdict and the report line reads the numbers. */
+const executions = new Map<string, SuiteExecution>();
+export function s2Execution(root: string): SuiteExecution {
+  const cached = executions.get(root);
+  if (cached !== undefined) return cached;
+  const fresh = executeSuites(root, S2_SUITES);
+  executions.set(root, fresh);
+  return fresh;
+}
+
+const n = (v: number | null): string => (v === null ? 'unavailable' : String(v));
+
+/** The numbers the Tech Lead asked to see, on a pass as well as on a failure. */
+export function executionReport(root: string): string {
+  const e = s2Execution(root);
+  const exit = e.error !== null ? `did not start (${e.error})` : e.signal !== null ? `killed by ${e.signal}` : e.ran ? `exited ${n(e.status)}` : 'was not run';
+  return `${e.claimed} suite(s) claimed → ${e.resolved.length} file(s) resolved; the test process ${exit}; tests: ${n(e.tally.passed)} passed, ${n(e.tally.failed)} failed, ${n(e.tally.skipped)} skipped, ${n(e.tally.todo)} todo of ${n(e.tally.total)} across ${n(e.tally.files)} file(s) reported`;
+}
+
+function executionProblems(root: string): string[] {
+  return [...s2Execution(root).problems];
+}
+// ───── end EXECUTION (TL-P4-S2-R2) ────────────────────────────────────────
 
 // ───── CANDIDATE-TENSE (P4-AL-61) ─────────────────────────────────────────
 // P4-S2's migration boundary, in the CANDIDATE tense. `0077` and `0078` are
@@ -298,6 +539,13 @@ export const CHECKS: readonly Check[] = [
     ok: 'every row names a suite that exists, states what it is evidence for, and resolves to a planted-defect proof that shows the claim can go red; and no sale-s2 suite or phase4-s2 golden on disk is unlisted',
   },
   {
+    id: 'roster-execution',
+    title: "P4-S2's suite roster, EXECUTED (TL-P4-S2-R2)",
+    run: executionProblems,
+    note: executionReport,
+    ok: 'every row of the roster was handed to one bounded Vitest run, the process exited 0 without a signal, it found test files, and nothing failed, skipped or was left todo',
+  },
+  {
     id: 'closure-and-tense',
     title: 'the closure rules, and this gate holding the open slice’s candidate tense (P4-AL-60 / P4-AL-61)',
     run: closureRuleProblems,
@@ -319,7 +567,10 @@ if (require.main === module) {
   const rootArg = args.find((a) => a.startsWith('--root='));
   const root = rootArg ? rootArg.slice('--root='.length) : join(__dirname, '..');
   const structuralOnly = args.includes('--structural-only');
-  const checks = structuralOnly ? CHECKS.filter((c) => c.id !== 'rls-force-runtime') : CHECKS;
+  // Both RUNTIME checks need a cluster. `--structural-only` suppresses them
+  // and the verdict below says they did NOT run, which is not a pass.
+  const RUNTIME = new Set(['rls-force-runtime', 'roster-execution']);
+  const checks = structuralOnly ? CHECKS.filter((c) => !RUNTIME.has(c.id)) : CHECKS;
   let failed = 0;
   for (const check of checks) {
     const problems = check.run(root);
@@ -328,6 +579,9 @@ if (require.main === module) {
       failed += 1;
       console.error(`FAIL ${check.id} — ${check.title}\n  ${problems.join('\n  ')}`);
     }
+    // The measured numbers, on both branches: a check that reports a tally
+    // only when it is happy is a check nobody can audit.
+    if (check.note !== undefined) console.log(`     ${check.id} measured: ${check.note(root)}`);
   }
   const skipped = CHECKS.length - checks.length;
   console.log(
