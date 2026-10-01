@@ -280,29 +280,49 @@ jobs:
         run: npm run gate:phase2:s8
         env:
           PG_PORT: '5432'
-      # The Phase 3 corrective gate (the Tech Lead's corrective directive §19),
-      # which replaces the P3-S8 step here and composes it FIRST: the permanent
-      # P3-S8 gate (0069 frozen at S8_ACCEPTED; the reconciler grants, the
-      # R-B1a guard, the definer law, the reconciliation reads, the S8 suites
-      # and T-13) and through it P3-S7 … P3-S1, P2-S8 and the chain back to
-      # Phase 1. Then every corrected blocker: the corrective migration
-      # boundary (0070 on, Phase 3 corrective hardening, frozen only after this
-      # gate passes), the corrective suites, the review-index check, the full
-      # Phase 3 secret range scan, the real-browser red proof and the full
-      # ar/en/tr × phone/tablet/desktop matrix on the production build, and
-      # Budget A last. An entry the coordinator has not filled is a FAIL, not
-      # a skip, so this step is red until every corrective stream has landed.
-      - name: Install Chromium for the corrective gate's real-browser matrix
+      # The P4-S1 slice gate, which REPLACES the Phase 3 corrective-gate step
+      # here and composes it FIRST — the same relationship the corrective gate
+      # itself has to the P3-S8 step it replaced, and for the same reason: the
+      # newest gate runs its predecessor as its first stream, so wiring both
+      # would run the corrective gate's real-browser matrix, its full ar/en/tr
+      # × phone/tablet/desktop pass and Budget A twice in one job.
+      #
+      # Through the predecessor it therefore still runs: the permanent P3-S8
+      # gate (0069 frozen at S8_ACCEPTED; the reconciler grants, the R-B1a
+      # guard, the definer law, the reconciliation reads, the S8 suites and
+      # T-13) and through that P3-S7 … P3-S1, P2-S8 and the chain back to Phase
+      # 1; then every corrected blocker — the corrective migration boundary,
+      # the corrective suites, the review-index check, the full Phase 3 secret
+      # range scan, the real-browser red proof, the browser matrix, and Budget
+      # A last.
+      #
+      # On top of that it adds P4-S1's own streams: the three migration
+      # prefixes (0000-0073 byte for byte, the candidate boundary, and the
+      # permanent module that bounds nothing), the four Phase 4 goldens, the
+      # guard red proofs, the declared deferred seams, composite-FK presence
+      # and validity, the schema lint and numbering isolation.
+      #
+      # It is wired in the commit that COMPLETES the slice, and not earlier:
+      # while a slice is open the gate reports a FAIL for every stream that has
+      # not landed, which is correct for the gate and wrong for a workflow job,
+      # because a job that is red by design cannot show a real regression
+      # appearing. The corrective gate was wired while still red and this is
+      # the lesson taken from that, not a departure from it — the verdict is
+      # read either way, it is simply read from the point where it can still
+      # say something new.
+      #
+      # An entry the coordinator has not filled is a FAIL, not a skip.
+      - name: Install Chromium for the gate's real-browser matrix
         run: npx playwright-core install --with-deps chromium
-      - name: Phase 3 corrective gate (composes P3-S8)
-        run: npm run gate:phase3:corrective
+      - name: Phase 4 slice gate — P4-S1 (composes the Phase 3 corrective gate)
+        run: npm run gate:phase4:s1
         env:
           PG_PORT: '5432'
           BROWSER_PG_DIR: ${{ runner.temp }}/corrective-browser-pg
           # The range scan's head: the PR head on a pull_request run (the
           # checkout is GitHub's merge commit), the pushed SHA on a push run.
           PHASE3_SCAN_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
-      - name: Keep the corrective gate's browser screenshots and results
+      - name: Keep the gate's browser screenshots and results
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -312,15 +332,6 @@ jobs:
             release/browser-red-proof
           if-no-files-found: ignore
           retention-days: 30
-      # The P4-S1 slice gate (`gate:phase4:s1`) is NOT run here yet, and the step
-      # is added in the commit that completes the slice. The gate exists, is
-      # composed by `npm run gate:phase4:s1`, and is run locally at every step of
-      # P4-S1; while the slice is open it reports a FAIL for every stream that has
-      # not landed, which is correct for the gate and wrong for this workflow: a
-      # job that is red by design cannot show a real regression appearing. The
-      # Phase 3 corrective gate was wired while still red and this is the lesson
-      # taken from it, not a departure from it — the gate's verdict is read, it is
-      # simply read where it can still say something new.
       - name: Tampered-migration hard-fail proof
         run: |
           set -e

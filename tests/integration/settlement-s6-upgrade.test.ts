@@ -32,6 +32,7 @@ import { join } from 'node:path';
 import { Pool } from 'pg';
 import { afterAll, describe, expect, it } from 'vitest';
 import { MIGRATIONS_DIR, runMigrations } from '../../apps/api/src/infra/migrate';
+import { PHASE4_INHERITED_PREFIX_END } from '../../scripts/phase4-prefix';
 import {
   ACCOUNTING_ASSERTION_KEY_B64,
   ACCOUNTING_ASSERTION_KID,
@@ -201,6 +202,17 @@ describe('T-17 the P3-S6 upgrade matrix', () => {
         ).rows
           .map((x) => x.t)
           .sort();
+      // P4-AL-88. `protectedRows()` digests `audit_events`, the estate's one
+      // audit relation, and that is a relation a LATER PHASE legitimately
+      // appends to: a Phase 4 permission migration writes one structural
+      // record per business it changed, and this accepted Phase 3 suite went
+      // red for a reason that has nothing to do with the P3-S6 upgrade. The equality is
+      // re-expressed by SCOPE, not loosened. Every row of every OTHER
+      // relation in the digest is still claimed exactly, word for word, and
+      // the audit records are claimed separately and positively below: none
+      // removed, none rewritten, and every one added written by no actor.
+      const nonAudit = (rows: readonly string[]): string[] => rows.filter((t) => !t.startsWith('audit:'));
+      const auditIn = (rows: readonly string[]): string[] => rows.filter((t) => t.startsWith('audit:'));
       const before = await protectedRows();
       expect(before.filter((t) => t.startsWith('pur:')).length, 'the checkpoint holds two received purchases').toBe(2);
       expect(before.filter((t) => t.startsWith('ret:')).length, 'and one return').toBe(1);
@@ -208,7 +220,21 @@ describe('T-17 the P3-S6 upgrade matrix', () => {
 
       const applied = await runMigrations(scratchUrl);
       expect(applied, 'exactly the S6 migrations apply').toEqual(migrationsAfter(FROZEN));
-      expect(applied).toEqual([
+      // P4-AL-88. `applied` is every migration that exists past this test's
+      // frozen checkpoint, so the literal enumeration below was an exact
+      // equality over a set a LATER PHASE populates: the first Phase 4
+      // migration entered it and an accepted Phase 3 suite went red for a
+      // reason that has nothing to do with the P3-S6 upgrade. It is re-expressed by
+      // SCOPE, not loosened. The equality above is discovery-based and grows
+      // on its own, so it stays exactly as it was. The enumeration keeps its
+      // full force over the ACCEPTED PHASE 3 PREFIX — frozen byte for byte by
+      // P4-AL-85, so no later phase can enter that scope — and what lies
+      // beyond it is claimed separately and positively, by discovery, so
+      // "and nothing more" is still said about every file that applied.
+      const inheritedApplied = applied.filter((f) => f <= PHASE4_INHERITED_PREFIX_END);
+      const beyondApplied = applied.filter((f) => f > PHASE4_INHERITED_PREFIX_END);
+      expect(beyondApplied, 'the migrations past the accepted Phase 3 head are exactly the ones on disk').toEqual(migrationsAfter(PHASE4_INHERITED_PREFIX_END));
+      expect(inheritedApplied).toEqual([
         ...S6_MIGRATIONS,
         // P3-S8 (0069): reconciler column grants and the R-B1a guard; no registry row
         '0069_inventory_reconciliation_read_and_account_domain.sql',
@@ -218,9 +244,29 @@ describe('T-17 the P3-S6 upgrade matrix', () => {
 
       // Everything as it was, plus the three accounting source types 0067 adds (A-05).
       // Phase 3 corrective (0072): and the one the TD-16 write-off adds.
-      expect(await protectedRows()).toEqual(
-        [...before, 'src:supplier_payment:9', 'src:supplier_credit_allocation:10', 'src:supplier_refund:11', ...P3C_SOURCE_TYPE_ROWS].sort(),
+      const afterRows = await protectedRows();
+      expect(nonAudit(afterRows)).toEqual(
+        nonAudit([...before, 'src:supplier_payment:9', 'src:supplier_credit_allocation:10', 'src:supplier_refund:11', ...P3C_SOURCE_TYPE_ROWS].sort()),
       );
+
+      // The audit records. Nothing the checkpoint held was removed or
+      // rewritten, and every record the migrations ADDED is one NO ACTOR
+      // wrote — which is what a migration's own record looks like
+      // (`0076:217-219`) and what the record of a business action never is.
+      // Read from the table, so no slice's action name is named here and a
+      // later slice's structural record needs no edit to this test.
+      expect(
+        auditIn(before).filter((t) => !auditIn(afterRows).includes(t)),
+        'a migration removed or rewrote an audit record',
+      ).toEqual([]);
+      const addedAuditIds = auditIn(afterRows)
+        .filter((t) => !auditIn(before).includes(t))
+        .map((t) => t.split(':')[1] ?? '');
+      expect(
+        (await pool.query<{ n: string }>(`SELECT count(*)::text AS n FROM audit_events WHERE id = ANY ($1::uuid[]) AND actor_user_id IS NULL`, [addedAuditIds]))
+          .rows[0]?.n,
+        'every audit record the migrations added is one no actor wrote',
+      ).toBe(String(addedAuditIds.length));
 
       // The registries: the checkpoint's rows plus exactly S6's (§2.8, A-05): no stock source type, no mapping.
       const after = await registries();
@@ -289,9 +335,13 @@ describe('T-17 the P3-S6 upgrade matrix', () => {
       // A second run applies nothing.
       expect(await runMigrations(scratchUrl)).toEqual([]);
       // Phase 3 corrective (0072): and the one the TD-16 write-off adds.
-      expect(await protectedRows()).toEqual(
-        [...before, 'src:supplier_payment:9', 'src:supplier_credit_allocation:10', 'src:supplier_refund:11', ...P3C_SOURCE_TYPE_ROWS].sort(),
+      const rerun = await protectedRows();
+      expect(nonAudit(rerun)).toEqual(
+        nonAudit([...before, 'src:supplier_payment:9', 'src:supplier_credit_allocation:10', 'src:supplier_refund:11', ...P3C_SOURCE_TYPE_ROWS].sort()),
       );
+      // 0076's own promise: a second application writes no permission row and
+      // therefore no audit row (`0076:30-32`).
+      expect(auditIn(rerun)).toEqual(auditIn(afterRows));
     } finally {
       await pool.end();
       await admin.query(`DROP DATABASE IF EXISTS ${SCRATCH} WITH (FORCE)`);

@@ -472,10 +472,37 @@ describe('P3-AL-53 — a backfilled population and a freshly provisioned one, in
     }
   });
 
+  /**
+   * P4-S1 (P4-AL-88): the five assertions below were exact equalities over a
+   * role's WHOLE persisted set. `0076`'s audited Phase 4 backfill runs inside
+   * this very fixture's database — the scratch build applies migrations to the
+   * pre-Phase-3 boundary, provisions B1-B4 there, then applies the rest — so
+   * each one had become a claim that Phase 4 never happens.
+   *
+   * Every Phase 3 and Phase 1 claim below is kept EXACTLY, with the Phase 4
+   * keys filtered out, and nothing about Phase 4 is asserted here by an exact
+   * equality: the relationship between the backfilled and the fresh population
+   * is already owned, correctly and tense-independently, by the "differs by
+   * nothing but the pending Phase 4 backfill" test further down, and the
+   * completeness of the backfill itself by
+   * `tests/security/phase4-permission-backfill-assertion.test.ts`, which
+   * asserts it against the key list the migration declares. What is added here
+   * is the ceiling, which is absolute in every tense: no role holds a Phase 4
+   * key its own registry default does not give it, and no non-owner role holds
+   * a sensitive one.
+   */
   it('…and the owner of a backfilled business kept every accepted permission it held before, gaining the eleven and nothing else', async () => {
     const sets = await roleSets();
     for (const label of BACKFILLED) {
-      expect(sets.get(`${label}/owner`), label).toEqual(sorted([...(before.get(`${label}/owner`) ?? []), ...PHASE3]));
+      expect(
+        (sets.get(`${label}/owner`) ?? []).filter((p) => !isPhase4(p)),
+        label,
+      ).toEqual(sorted([...(before.get(`${label}/owner`) ?? []), ...PHASE3]));
+      const p4 = (sets.get(`${label}/owner`) ?? []).filter(isPhase4);
+      expect(
+        p4.filter((k) => !PHASE4.includes(k)),
+        `${label}: owner holds a key no phase owns`,
+      ).toEqual([]);
     }
   });
 
@@ -513,29 +540,72 @@ describe('P3-AL-53 — a backfilled population and a freshly provisioned one, in
     for (const k of custom) expect(sets.get(k), k).toEqual(before.get(k));
   });
 
-  it('…and the cashier, edited or not, is byte-identical too', async () => {
+  it('…and the cashier, edited or not, is byte-identical too outside Phase 4, and inside it holds only its own defaults', async () => {
     const sets = await roleSets();
-    for (const label of ['B1', 'B2', 'B4']) expect(sets.get(`${label}/cashier`), label).toEqual(before.get(`${label}/cashier`));
-    expect(sets.get('B2/cashier')).toEqual(['catalog.update', 'catalog.view']);
+    for (const label of ['B1', 'B2', 'B4']) {
+      expect(
+        (sets.get(`${label}/cashier`) ?? []).filter((p) => !isPhase4(p)),
+        label,
+      ).toEqual(before.get(`${label}/cashier`));
+      const p4 = (sets.get(`${label}/cashier`) ?? []).filter(isPhase4);
+      expect(
+        p4.filter((k) => !CASHIER_PHASE4.includes(k)),
+        `${label}: cashier beyond its Phase 4 default set`,
+      ).toEqual([]);
+      expect(
+        p4.filter((k) => isSensitivePermission(k as Permission)),
+        `${label}: sensitive on the cashier`,
+      ).toEqual([]);
+    }
+    expect((sets.get('B2/cashier') ?? []).filter((p) => !isPhase4(p))).toEqual(['catalog.update', 'catalog.view']);
   });
 
   it('assertion 5 — manager preservation: each manager’s non-Phase-3 set is byte-identical, a merchant-trimmed one is NOT restored to the template', async () => {
     const sets = await roleSets();
     for (const label of ['B1', 'B2', 'B4']) {
       expect(
-        (sets.get(`${label}/manager`) ?? []).filter((p) => !isPhase3(p)),
+        (sets.get(`${label}/manager`) ?? []).filter((p) => !isPhase3(p) && !isPhase4(p)),
         label,
       ).toEqual(before.get(`${label}/manager`));
+      const p4 = (sets.get(`${label}/manager`) ?? []).filter(isPhase4);
+      expect(
+        p4.filter((k) => !MANAGER_PHASE4.includes(k)),
+        `${label}: manager beyond its Phase 4 default set`,
+      ).toEqual([]);
+      expect(
+        p4.filter((k) => isSensitivePermission(k as Permission)),
+        `${label}: sensitive on the manager`,
+      ).toEqual([]);
     }
     const b2 = sets.get('B2/manager') ?? [];
     expect(b2).toContain('member.manage');
     expect(b2).not.toContain('catalog.archive');
     expect(b2).not.toContain('member.invite');
-    expect(sets.get('B1/manager')).toEqual(sorted([...MANAGER_PHASE1, ...VIEWS]));
+    expect((sets.get('B1/manager') ?? []).filter((p) => !isPhase4(p))).toEqual(sorted([...MANAGER_PHASE1, ...VIEWS]));
   });
 
   it('…and a custom role keyed `manager` in place of the deleted template receives only the three views (the accepted Agent 0 ruling), no sensitive key', async () => {
-    expect(await perms('B4', 'manager')).toEqual(sorted(['catalog.view', 'branch.view', ...VIEWS]));
+    const held = (await perms('B4', 'manager')) ?? [];
+    expect(held.filter((p) => !isPhase4(p))).toEqual(sorted(['catalog.view', 'branch.view', ...VIEWS]));
+    /**
+     * The Phase 4 half of the same ruling. A role keyed `manager` that a
+     * MERCHANT created receives the manager defaults, because the accepted
+     * writer marks only the owner as a system role — `0057:32-39` says so in
+     * terms and selects `r.key = 'manager'` with no `is_system` condition
+     * (`0057:101`), and `0076` follows that precedent exactly rather than
+     * inventing a narrower one. So this is the accepted behaviour, not a leak,
+     * and the claim that carries the weight is the second one: what such a role
+     * receives is the ORDINARY default set and never a sensitive key.
+     */
+    const p4 = held.filter(isPhase4);
+    expect(
+      p4.filter((k) => !MANAGER_PHASE4.includes(k)),
+      'a merchant-made manager beyond the ordinary default set',
+    ).toEqual([]);
+    expect(
+      p4.filter((k) => isSensitivePermission(k as Permission)),
+      'a merchant-made manager holding a sensitive Phase 4 key',
+    ).toEqual([]);
   });
 
   it('P3-AL-53 fifth check — for every system role key, a backfilled business and BOTH freshly provisioned ones hold the same Phase 3 set', async () => {
@@ -625,9 +695,34 @@ describe('P3-AL-53 — a backfilled population and a freshly provisioned one, in
     expect((sets.get('F1/manager') ?? []).filter(isPhase4)).toEqual(sorted(MANAGER_PHASE4));
     expect((sets.get('F1/cashier') ?? []).filter(isPhase4)).toEqual(sorted(CASHIER_PHASE4));
     expect((sets.get('F1/owner') ?? []).filter(isPhase4)).toEqual(sorted(PERMISSIONS.filter(isPhase4)));
-    // The backfilled population is where the migration owner's audited backfill
-    // will show up; today it carries none of them, and that is the delta above.
-    for (const key of ['manager', 'cashier']) expect((sets.get(`B1/${key}`) ?? []).filter(isPhase4), `B1/${key}`).toEqual([]);
+    /**
+     * P4-S1: and the BACKFILLED population carries them too, because `0076`'s
+     * audited backfill runs inside this fixture's own database. This used to
+     * assert the opposite — `toEqual([])` — which was true for exactly as long
+     * as the backfill did not exist.
+     *
+     * The claim made here is the one that is absolute in every tense: a
+     * backfilled role holds nothing outside its own role's Phase 4 default
+     * set, nothing sensitive unless it is the owner, and — the half that
+     * catches a backfill which silently wrote nothing under a non-superuser
+     * principal — at least one key. Whether it holds ALL of them is the
+     * backfill migration's own suite's claim, and the backfilled/fresh
+     * relationship is the preceding test's.
+     */
+    for (const key of ['owner', 'manager', 'cashier'] as const) {
+      const p4 = (sets.get(`B1/${key}`) ?? []).filter(isPhase4);
+      const defaults = key === 'owner' ? PERMISSIONS.filter(isPhase4) : key === 'manager' ? MANAGER_PHASE4 : CASHIER_PHASE4;
+      expect(
+        p4.filter((k) => !defaults.includes(k)),
+        `B1/${key} beyond its Phase 4 defaults`,
+      ).toEqual([]);
+      if (key !== 'owner')
+        expect(
+          p4.filter((k) => isSensitivePermission(k as Permission)),
+          `B1/${key} sensitive`,
+        ).toEqual([]);
+      expect(p4.length, `B1/${key}: the audited backfill wrote nothing at all`).toBeGreaterThan(0);
+    }
   });
 
   it('a custom role created after the migration gets no automatic Phase 3 authority — the persisted set is exactly what was asked', async () => {

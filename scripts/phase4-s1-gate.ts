@@ -96,7 +96,11 @@ export const PREVIOUS_HEAD = PHASE4_INHERITED_PREFIX_END;
  * them. Empty until they are written: an empty list is the absence of a
  * declared candidate, never a claim that the slice has no migration.
  */
-export const S1_MIGRATIONS: readonly string[] = ['0074_phase4_registry_widening.sql'];
+export const S1_MIGRATIONS: readonly string[] = [
+  '0074_phase4_registry_widening.sql',
+  '0075_phase4_customers_invoices_numbering.sql',
+  '0076_phase4_permission_defaults_backfill.sql',
+];
 
 /** The digests recorded at the P4-S1 freeze. Empty while the slice is a candidate; filling it flips the tense. */
 export const S1_ACCEPTED: Readonly<Record<string, string>> = {};
@@ -185,6 +189,15 @@ export const S1_SUITES: readonly (SuiteEntry | Pending)[] = [
   // this slice does not own.
   { id: 'PD-01', area: 'permissions', runner: 'root', file: 'tests/security/phase4-permission-defaults.test.ts' },
   { id: 'PD-02', area: 'permissions', runner: 'root', file: 'tests/security/phase4-registry-phase-scoping.test.ts' },
+  // P4-AL-37's own protection, in both directions: the migration-time
+  // `role_permissions` assertion over the twelve keys, planted against
+  // (`cashier -> sales.void` must raise) and exercised legitimately (a
+  // non-sensitive default must pass). It resolves its SQL from the one Phase 4
+  // migration that carries `phase4.permission_backfill_overreach` — `0076` —
+  // and from nothing else: the specification draft it fell back to while the
+  // migration owner had not written the file is deleted in the same commit,
+  // because a second copy of applied DDL in the tree is a second truth.
+  { id: 'PD-03', area: 'permissions', runner: 'root', file: 'tests/security/phase4-permission-backfill-assertion.test.ts' },
   // P4-AL-88: the Phase 4 route-surface property. It carries the protection
   // §B5 of the settlement suite used to hold — no customer settlement route —
   // in the tense-independent form: the mounted `/v1` surface equals what the
@@ -192,16 +205,29 @@ export const S1_SUITES: readonly (SuiteEntry | Pending)[] = [
   // metadata, so mounting a route updates both at once and P4-S4 does not turn
   // it red. Composed here because the claim is Phase 4's, not Phase 3's.
   { id: 'RS-01', area: 'route-surface', runner: 'root', file: 'tests/security/phase4-route-surface.test.ts' },
+  // P4-AL-88, the forward-scope proof for the estate re-expressions: a scratch
+  // database built to the inherited prefix, a successor applied, and then the
+  // three reds the scoping must still give — a rewritten Phase 3 registry row,
+  // a row written to a non-registry prefix relation, and a deleted Phase 3
+  // registry row. It is the guarantee that the scoped equalities in the
+  // permanent Phase 3 suites are not rubber stamps.
+  { id: 'FS-01', area: 'forward-scope', runner: 'root', file: 'tests/integration/phase4-s1-forward-scope.test.ts' },
   // The four P4-S1 goldens (lock §17.4; execution plan P4-S1 Exit).
-  {
-    id: 'G-02',
-    area: 'golden',
-    owner: 'the golden owner',
-    pending: `GOLD-20 cross-tenant, enumerated from the route surface, under ${GOLDEN_DIR}/`,
-  },
-  { id: 'G-03', area: 'golden', owner: 'the golden owner', pending: `GOLD-30 cross-business FK manipulation refused by the database, under ${GOLDEN_DIR}/` },
-  { id: 'G-07', area: 'golden', owner: 'the golden owner', pending: `GOLD-48 invoice sequence isolation (structural half), under ${GOLDEN_DIR}/` },
-  { id: 'G-19', area: 'golden', owner: 'the golden owner', pending: `GOLD-74 schema lint, under ${GOLDEN_DIR}/` },
+  // GOLD-20: eighteen tests. The eight routes are asserted EQUAL to
+  // `discoverPhase4Routes`, so the enumeration this gate checks is the same
+  // list the suite walks, and a ninth route turns the suite itself red.
+  { id: 'G-02', area: 'golden', runner: 'root', file: `${GOLDEN_DIR}/01-cross-tenant.golden.test.ts` },
+  // GOLD-30: the cross-business bindings attempted as the TABLE OWNER, so the
+  // refusal is the composite seam and not a privilege. Its two catalogue laws
+  // are exported from the file and planted against in the guard suite.
+  { id: 'G-03', area: 'golden', runner: 'root', file: `${GOLDEN_DIR}/02-cross-business-fk.golden.test.ts` },
+  // GOLD-48: the numbering laws, performed — two businesses of one tenant both
+  // holding ordinal 1, the duplicate refused, the year restart accepted.
+  { id: 'G-07', area: 'golden', runner: 'root', file: `${GOLDEN_DIR}/03-sequence-isolation.golden.test.ts` },
+  // GOLD-74: the LIVE half of the schema lint — the same law the static check
+  // above reads out of the SQL, asserted against the catalogue the migrations
+  // actually built, so a defect the text parser cannot see is still caught.
+  { id: 'G-19', area: 'golden', runner: 'root', file: `${GOLDEN_DIR}/04-schema-lint.golden.test.ts` },
 ];
 
 /** The permanent core, run as commands after the predecessor gate. */
@@ -281,14 +307,33 @@ export const RED_PROOFS: readonly (RedProof | Pending)[] = [
     defect: 'a Phase 4 migration widens a registered_by CHECK and then puts the Phase-3-only pattern back, or never widens one of the four at all',
     proof: `${GUARD_SUITE_DIR}/phase4-registry-widening-guard.test.ts::RED: a Phase 4 migration that RE-ADDS the Phase-3-only CHECK is still caught`,
   },
-  { id: 'RP-FK', area: 'composite-fk', owner: 'the golden owner (G-03)', pending: 'the planted single-column FK to a business-scoped parent' },
-  { id: 'RP-LINT', area: 'schema-lint', owner: 'the golden owner (G-19)', pending: 'the planted constraint naming a column that does not exist' },
-  { id: 'RP-SEQ', area: 'numbering', owner: 'the golden owner (G-07)', pending: 'the planted global sequence behind a document number' },
+  {
+    id: 'RP-SEAM',
+    defect:
+      'a declared seam stops being safe and nothing says so: `sales` exists and invoices.sale_id still has no FK, the `invoice` source type is registered without the reversal guard naming it, or a relation that settles an invoice exists and invoice_outstanding does not read it',
+    proof: `${GUARD_SUITE_DIR}/phase4-deferred-seam-guard.test.ts::RED: a Phase 4 migration creates \`sales\` and nothing binds invoices.sale_id to it`,
+  },
+  {
+    id: 'RP-FK',
+    defect:
+      'a reference between two commercial rows carries business_id on one side only, or on neither, so SQL can bind one business’s row to another business’s parent',
+    proof: `${GUARD_SUITE_DIR}/phase4-composite-seam-guard.test.ts::a COLUMN-level REFERENCES to a business-scoped parent`,
+  },
+  {
+    id: 'RP-LINT',
+    defect: 'a constraint names a column the relation does not have, a money column is declared floating point, or an unbound *_id sits in the financial core',
+    proof: `${GOLDEN_DIR}/04-schema-lint.golden.test.ts::RED: a relation whose CHECK names a column it does not have is caught`,
+  },
+  {
+    id: 'RP-SEQ',
+    defect: 'a document number is backed by a cluster-wide sequence, or by a UNIQUE that omits business_id, so two businesses of one tenant share one series',
+    proof: `${GOLDEN_DIR}/03-sequence-isolation.golden.test.ts::RED: a document-number UNIQUE that omits business_id is caught`,
+  },
   {
     id: 'RP-XTENANT',
-    area: 'cross-tenant',
-    owner: 'the golden owner (G-02)',
-    pending: 'the planted Phase 4 route with no cross-tenant case, which the enumeration must name',
+    defect:
+      'a Phase 4 route is mounted and no cross-tenant golden names it — the route nobody remembered to enumerate is the one route with no cross-tenant case',
+    proof: `${GUARD_SUITE_DIR}/phase4-cross-tenant-enumeration-guard.test.ts::a ninth route the golden does not mention is a finding, and the finding names it`,
   },
 ];
 
@@ -1012,6 +1057,119 @@ export function compositeFkProblems(root: string): string[] {
   return problems;
 }
 
+/**
+ * ── THE DEFERRED SEAMS ─────────────────────────────────────────────────────
+ *
+ * A slice sometimes cannot close a seam without creating a later slice's
+ * relation, which P4-AL-86 refuses. The wrong answers are both familiar: leave
+ * the hole undeclared and let a later slice not notice it, or widen the slice
+ * until the hole closes and lose the boundary the Tech Lead set.
+ *
+ * The answer here is a declared seam. Each one names WHAT is open, WHY the
+ * open seam is safe today, and WHICH LATER CONDITION makes it unsafe — and the
+ * condition is DISCOVERED from the tree rather than written down as a slice
+ * number, because a slice number is a promise and a discovered condition is a
+ * fact ([[daftar-every-journal-writer-equally-protected]]: G-4 discovers
+ * writers from the schema instead of naming one).
+ *
+ * So this check is not a to-do list. It is red the moment the thing that made
+ * a seam safe stops being true, whichever slice is running, and it says
+ * nothing at all while the seam is safe. It is also the reason none of these
+ * three is a "nothing after N" claim (P4-AL-60): each asks what the tree
+ * HOLDS, never what it may not hold later.
+ */
+export interface DeferredSeam {
+  readonly id: string;
+  /** What is open. */
+  readonly what: string;
+  /** The problem to report when the seam has become unsafe. */
+  readonly run: (root: string) => string[];
+}
+
+/** Whether the Phase 4 DDL creates a relation named `name`. */
+function phase4Creates(root: string, name: string): boolean {
+  return readTables(phase4Sql(root)).tables.some((t) => t.name === name);
+}
+
+/**
+ * The body of a Phase 4 routine, from its CREATE to the closing dollar-quote.
+ *
+ * The LAST definition, not the first: a later `CREATE OR REPLACE` is what the
+ * database ends up holding, so reading the first one would judge a slice by
+ * the routine it replaced. The first draft of this helper took the first
+ * match and reported a correctly-replaced routine as still missing its
+ * relations.
+ */
+export function phase4RoutineBody(root: string, name: string): string | null {
+  const all = [...phase4Sql(root).matchAll(new RegExp(`CREATE\\s+(?:OR\\s+REPLACE\\s+)?FUNCTION\\s+${name}\\s*\\([\\s\\S]*?\\$\\$;`, 'gi'))];
+  return all.length === 0 ? null : (all[all.length - 1]?.[0] ?? null);
+}
+
+/**
+ * The relations that settle an invoice: a payment allocation, an applied
+ * credit note, a customer credit application, a refund or a reversal of any
+ * of those. DISCOVERED from the Phase 4 DDL, so the set grows by itself.
+ */
+export const SETTLEMENT_VOCABULARY =
+  /^(payment_allocations|allocation_reversals|payment_reversals|credit_note_applications|credit_notes|customer_credit_applications|refunds|invoice_write_offs)$/;
+
+export const DEFERRED_SEAMS: readonly DeferredSeam[] = [
+  {
+    id: 'S-P4-01',
+    what: "invoices.sale_id carries no foreign key, because `sales` is a later slice's relation",
+    run: (root) => {
+      if (!phase4Creates(root, 'invoices') || !phase4Creates(root, 'sales')) return [];
+      const fk = /FOREIGN\s+KEY\s*\([^)]*\bsale_id\b[^)]*\)\s*REFERENCES\s+sales\b/i.test(phase4Sql(root));
+      return fk
+        ? []
+        : [
+            'seam S-P4-01: a Phase 4 migration now creates `sales`, so invoices.sale_id owes its composite FK to it — the seam was safe only while the parent did not exist (P4-AL-09)',
+          ];
+    },
+  },
+  {
+    id: 'S-P4-02',
+    what: 'the accounting source type `invoice` is not registered, because no slice can post an invoice yet',
+    run: (root) => {
+      const sql = phase4Sql(root);
+      if (!/INSERT\s+INTO\s+accounting_source_types\b[\s\S]{0,400}?'invoice'/i.test(sql)) return [];
+      // P4-AL-47: the registration and the reversal guard's list move together.
+      return /accounting_reversals?[\s\S]{0,4000}?'invoice'/i.test(sql)
+        ? []
+        : [
+            "seam S-P4-02: a Phase 4 migration registers the `invoice` source type without naming it in the generic reversal guard's list — daftar_app could then reverse an invoice entry through the generic path (P4-AL-47)",
+          ];
+    },
+  },
+  {
+    id: 'S-P4-03',
+    what: 'invoice_outstanding subtracts nothing, because nothing that settles an invoice exists yet',
+    run: (root) => {
+      const settlers = readTables(phase4Sql(root))
+        .tables.map((t) => t.name)
+        .filter((n) => SETTLEMENT_VOCABULARY.test(n))
+        .sort();
+      if (settlers.length === 0) return [];
+      const body = phase4RoutineBody(root, 'invoice_outstanding');
+      if (body === null)
+        return [
+          `seam S-P4-03: the Phase 4 DDL creates ${settlers.join(', ')} and no Phase 4 migration defines invoice_outstanding — the reader-of-record of a settlement cannot be absent once something settles (P4-AL-07)`,
+        ];
+      const missing = settlers.filter((n) => !new RegExp(`\\b${n}\\b`).test(body));
+      return missing.length === 0
+        ? []
+        : [
+            `seam S-P4-03: invoice_outstanding does not read ${missing.join(', ')}, which a Phase 4 migration now creates — a reader-of-record that does not read a relation that settles an invoice reports the invoice unpaid (P4-AL-05, P4-AL-07)`,
+          ];
+    },
+  },
+];
+
+/** Every deferred seam that has stopped being safe. */
+export function deferredSeamProblems(root: string): string[] {
+  return DEFERRED_SEAMS.flatMap((seam) => seam.run(root));
+}
+
 /** G-19 (GOLD-74): the schema lint over the Phase 4 tables. */
 export function schemaLintProblems(root: string): string[] {
   const sql = phase4Sql(root);
@@ -1431,6 +1589,17 @@ export const CHECKS: readonly Check[] = [
     run: registeredByProblems,
     ok: `all four registered_by CHECKs widened to ${REGISTERED_BY_WIDENED}`,
     liveWhen: 'a migration numbered past the inherited prefix exists',
+  },
+  {
+    id: 'deferred-seams',
+    title: 'the declared seams are still safe (P4-AL-09, P4-AL-47, P4-AL-07)',
+    area: 'composite-fk',
+    // 'live', not 'phase4-migration': each seam's own predicate decides
+    // whether it has a subject, and an empty Phase 4 DDL makes every one of
+    // them vacuous rather than inert.
+    needs: 'live',
+    run: deferredSeamProblems,
+    ok: `the ${DEFERRED_SEAMS.length} declared seams (${DEFERRED_SEAMS.map((x) => x.id).join(', ')}) are each still safe: what made them safe is still true in the tree`,
   },
   {
     id: 'composite-fk',

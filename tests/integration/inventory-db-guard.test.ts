@@ -1,8 +1,15 @@
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { INVENTORY_INVOKER_EXCEPTIONS, checkInventoryDefinerContract, inventoryRoutineDefinitions } from '../../scripts/guards/inventory-definer-contract';
+import {
+  INVENTORY_INVOKER_EXCEPTIONS,
+  INVENTORY_SEARCH_PATH,
+  checkInventoryDefinerContract,
+  inventoryRoutineDefinitions,
+} from '../../scripts/guards/inventory-definer-contract';
 import { checkInventoryWriterAuthority, stockTablesWritten } from '../../scripts/guards/inventory-writer-authority';
+// P4-AL-88: the accepted Phase 3 head, the boundary the handover inventory is scoped to.
+import { PHASE4_INHERITED_PREFIX_END } from '../../scripts/phase4-prefix';
 
 /**
  * GUARD G-7 — the §D definer contract for daftar_inventory_internal
@@ -49,13 +56,36 @@ function mutate(file: string, from: string | RegExp, to: string): Record<string,
 
 const violations = (migrations: Record<string, string>): string[] => checkInventoryDefinerContract({ migrations }).violations;
 
+/**
+ * THE HANDOVER SET, SPLIT BY THE FILE THAT MADE THE HANDOVER (P4-AL-88).
+ *
+ * `transferred` is an INVENTORY — "these and no others are handed to the
+ * inventory principal" — so asserting it whole was a claim about the phase that
+ * follows: `0075` hands six more routines over and an accepted P3-S8 gate went
+ * red for a reason that has nothing to do with the §D contract. The claim is
+ * scoped by POSITION instead: a routine belongs to the Phase 3 scope when the
+ * FIRST file that hands it over is inside the accepted inherited prefix, which
+ * `0000`-`0073` being frozen byte for byte (P4-AL-85) closes to every later
+ * phase. A later file re-handing a Phase 3 routine cannot move it out of the
+ * scope, and no prefix file can hand a later phase's routine in.
+ */
+function handoverScope(migrations: Record<string, string>): { inScope: string[]; beyond: string[]; all: string[] } {
+  const { transferred, handovers } = checkInventoryDefinerContract({ migrations });
+  const firstHandover = (name: string): string => handovers[name]?.[0] ?? '\uffff';
+  return {
+    inScope: transferred.filter((n) => firstHandover(n) <= PHASE4_INHERITED_PREFIX_END).sort(),
+    beyond: transferred.filter((n) => firstHandover(n) > PHASE4_INHERITED_PREFIX_END).sort(),
+    all: [...transferred].sort(),
+  };
+}
+
 describe('G-7 — the tree as it stands', () => {
   it('accepts the real migrations', () => {
     expect(violations(real())).toEqual([]);
   });
 
   it('sees every routine the migrations hand to the inventory principal, including the two asserted exceptions', () => {
-    const { transferred } = checkInventoryDefinerContract({ migrations: real() });
+    const { inScope, beyond, all } = handoverScope(real());
     // P3-S3 appends thirty routines (0061: the bridge, completeness, freeze,
     // header, value and archive guards and the allocator; 0062: the seven
     // entry routines and their four helpers), all DEFINER — no new exception.
@@ -75,7 +105,10 @@ describe('G-7 — the tree as it stands', () => {
     // the reversal's unsettled guard; 0068: the seven entry routines and the
     // credit-note writer, R-73), all DEFINER — no new exception. 0067's owner
     // replacement of the credit-note guard (A-12) adds a definition, not a name.
-    expect(transferred).toEqual(
+    // P4-AL-88: the list below is the one that stood here, name for name; it
+    // is now asserted over the routines the ACCEPTED PHASE 3 PREFIX hands
+    // over, and the handovers a later phase makes are judged beside it.
+    expect(inScope).toEqual(
       [
         'branch_warehouses_keep_home',
         'inventory_adjust_stock',
@@ -228,6 +261,94 @@ describe('G-7 — the tree as it stands', () => {
       ].sort(),
     );
     expect([...INVENTORY_INVOKER_EXCEPTIONS].sort()).toEqual(['product_variants_10_base_variant_authority', 'products_10_inventory_config_authority']);
+
+    // The partition, so "and nothing more" is still said about the Phase 3
+    // scope: the two halves are disjoint and together they are the WHOLE
+    // handover set — nothing is quietly dropped from judgement.
+    expect(
+      inScope.filter((n) => beyond.includes(n)),
+      'the two halves are disjoint',
+    ).toEqual([]);
+    expect([...inScope, ...beyond].sort(), 'and together they are the whole handover set').toEqual(all);
+    // And the later phase's half is judged POSITIVELY, not tolerated: every
+    // routine it hands over is really defined, every definition of it is
+    // SECURITY DEFINER with the pinned path, and none of them is smuggled in
+    // as an asserted INVOKER exception (§D; the exceptions are the two above).
+    const defs = inventoryRoutineDefinitions(real());
+    const beyondProblems = beyond.flatMap((name) => {
+      const own = defs.filter((d) => d.name === name);
+      if (own.length === 0) return [`${name}: handed over but no migration defines it`];
+      return own.flatMap((d) => [
+        ...(d.securityDefiner ? [] : [`${d.file}: ${name} is handed to the inventory principal but is not SECURITY DEFINER`]),
+        ...((d.searchPath ?? '')
+          .split(',')
+          .map((x) => x.trim().replaceAll('"', ''))
+          .join(',') === INVENTORY_SEARCH_PATH.join(',')
+          ? []
+          : [`${d.file}: ${name} pins ${d.searchPath ?? 'no search_path'}, not ${INVENTORY_SEARCH_PATH.join(', ')}`]),
+      ]);
+    });
+    expect(beyondProblems, 'every handover a later phase makes satisfies §D 1, 2 and 5').toEqual([]);
+    expect(
+      beyond.filter((n) => INVENTORY_INVOKER_EXCEPTIONS.includes(n)),
+      'and none of them claims an asserted INVOKER exception',
+    ).toEqual([]);
+  });
+
+  /**
+   * P4-AL-88 — the re-expression proved in both directions. The green one is
+   * the case above, which runs with `0075` on disk handing six routines over.
+   * This is the red one, and each case breaks the PHASE 3 half of the claim in
+   * a real prefix file and requires the scoped list to notice.
+   */
+  it('P4-AL-88 — the scoped handover inventory is red when the Phase 3 half is wrong', () => {
+    const asIs = handoverScope(real());
+    expect(asIs.beyond.length, 'a later phase really hands routines over — which is what forced the scoping').toBeGreaterThan(0);
+    expect(asIs.inScope.length, 'and the Phase 3 half is not empty').toBeGreaterThan(100);
+
+    // (a) A Phase 3 handover REMOVED from a prefix file: the scoped list loses
+    //     that name, so the exact equality above is red. Scoping cannot hide a
+    //     routine the prefix stopped handing over.
+    const dropped = handoverScope(mutate(F62, 'ALTER FUNCTION inventory_bridge_source_lines(TEXT, UUID) OWNER TO daftar_inventory_internal;\n', ''));
+    expect(dropped.inScope).not.toEqual(asIs.inScope);
+    expect(asIs.inScope.filter((n) => !dropped.inScope.includes(n))).toEqual(['inventory_bridge_source_lines']);
+
+    // (b) A handover ADDED to a prefix file: it lands in the Phase 3 half, not
+    //     the later one, so the exact equality is red. A new authority cannot
+    //     be slipped into the frozen prefix and pass as a successor's.
+    const added = handoverScope(
+      mutate(
+        F62,
+        'ALTER FUNCTION inventory_fixed_text(NUMERIC, INTEGER) OWNER TO daftar_inventory_internal;',
+        'ALTER FUNCTION inventory_fixed_text(NUMERIC, INTEGER) OWNER TO daftar_inventory_internal;\nALTER FUNCTION inventory_smuggled_guard() OWNER TO daftar_inventory_internal;',
+      ),
+    );
+    expect(added.inScope.filter((n) => !asIs.inScope.includes(n))).toEqual(['inventory_smuggled_guard']);
+    expect(added.beyond, 'and the later phase’s half is untouched by it').toEqual(asIs.beyond);
+
+    // (c) A LATER phase's handover cannot be moved into the Phase 3 half, and
+    //     removing one leaves the Phase 3 half exactly as it was — which is
+    //     what "says nothing about the phase that follows" means here.
+    const successorGone = handoverScope(
+      mutate('0075_phase4_customers_invoices_numbering.sql', /ALTER FUNCTION customers_no_delete\(\) OWNER TO daftar_inventory_internal;\n/, ''),
+    );
+    expect(successorGone.inScope, 'the Phase 3 half is indifferent to the successor').toEqual(asIs.inScope);
+    expect(asIs.beyond.filter((n) => !successorGone.beyond.includes(n))).toEqual(['customers_no_delete']);
+
+    // (d) And the partition never loses a name: every routine the tree hands
+    //     over is in exactly one half, in each of the trees above.
+    for (const [label, scope] of [
+      ['as it stands', asIs],
+      ['a Phase 3 handover removed', dropped],
+      ['a handover smuggled into the prefix', added],
+      ['a successor handover removed', successorGone],
+    ] as const) {
+      expect([...scope.inScope, ...scope.beyond].sort(), label).toEqual(scope.all);
+      expect(
+        scope.inScope.filter((n) => scope.beyond.includes(n)),
+        label,
+      ).toEqual([]);
+    }
   });
 
   it('reads EVERY definition of a transferred routine: inventory_configure_product is defined in 0055 and replaced in 0060 as the principal', () => {

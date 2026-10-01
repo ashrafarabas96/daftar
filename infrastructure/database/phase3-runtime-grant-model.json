@@ -1,8 +1,9 @@
 {
-  "purpose": "P3-S8 A-07: the runtime grant matrix over the Phase 3 surface. For every runtime principal and PUBLIC: the exact SELECT on each Phase 3 table (table or column level), no write privilege of any kind, and the exact Phase 3 routines it may EXECUTE.",
-  "source": "infrastructure/database/migrations/0053_inventory_units_and_product_configuration.sql through 0073_default_warehouse_locale_name.sql (the Phase 3 corrective 0070-0073 included)",
-  "note": "This file is the INTENDED model. The P3-S8 grant-matrix suite (T-04) compares it against the live PostgreSQL catalogues, in both directions: an entry here that the database does not grant is a broken deployment, and a grant the database holds that is absent here is an unreviewed privilege. The Phase 3 surface is DISCOVERED (the difference against a database built from 0000 through phase2PrefixEnd), never listed by hand; phase3Tables is the expected discovery, compared by equality, so a new table fails until a reviewer adds it here. Editing this file does not widen anything (a migration does), but editing it to match a widening is exactly the change a reviewer must see.",
+  "purpose": "P3-S8 A-07: the runtime grant matrix over the DISCOVERED Phase 3 surface — every relation a database built from 0000 through phase2PrefixEnd does not have, which is Phase 3 and every phase after it. For every runtime principal and PUBLIC: the exact SELECT on each such table (table or column level), no write privilege of any kind, and the exact routines it may EXECUTE.",
+  "source": "infrastructure/database/migrations/0053_inventory_units_and_product_configuration.sql through 0073_default_warehouse_locale_name.sql (the Phase 3 corrective 0070-0073 included) for the Phase 3 scope; 0074_phase4_registry_widening.sql onwards for the entries beyond it.",
+  "note": "This file is the INTENDED model. The P3-S8 grant-matrix suite (T-04) compares it against the live PostgreSQL catalogues, in both directions: an entry here that the database does not grant is a broken deployment, and a grant the database holds that is absent here is an unreviewed privilege. That comparison runs over the WHOLE discovered surface, Phase 4's own relations included, because it is a law over whatever exists rather than a claim about what will: a migration that grants SELECT on a new table is red until a reviewer records the grant here, which is exactly the change a reviewer must see. Editing this file does not widen anything; a migration does. The one entry that is an INVENTORY rather than a law is phase3Tables, and it is the inventory of the PHASE 3 SCOPE alone — the relations the accepted, digest-verified files 0053 through phase3ScopeEnd create (P4-AL-88): 0000-0073 is frozen byte for byte, so no later phase can enter that scope, and 'and nothing more' still holds of it. A relation a later phase creates is outside that inventory and inside every law.",
   "phase2PrefixEnd": "0052_accounting_journal_lines_rls_performance.sql",
+  "phase3ScopeEnd": "0073_default_warehouse_locale_name.sql",
   "runtimePrincipals": ["daftar_app", "daftar_platform", "daftar_worker", "daftar_identity", "daftar_resolver", "daftar_provisioner", "daftar_reconciler"],
   "excludedFromRuntime": {
     "daftar_migrator": "the deployment principal, not a runtime credential",
@@ -64,12 +65,17 @@
     "daftar_app": {
       "tables": [
         "branch_warehouses",
+        "customer_contacts",
+        "customers",
         "inventory_adjustment_lines",
         "inventory_adjustments",
         "inventory_opening_lines",
         "inventory_openings",
         "inventory_transfer_lines",
         "inventory_transfers",
+        "invoice_items",
+        "invoice_sequences",
+        "invoices",
         "negative_deficit_coverages",
         "negative_inventory_cost_adjustments",
         "negative_inventory_deficits",
@@ -147,6 +153,8 @@
   },
   "execute": {
     "daftar_app": [
+      "customer_ar_aging(uuid,uuid,date,integer[])",
+      "customer_ar_outstanding(uuid,uuid)",
       "inventory_adjust_stock(uuid,uuid,date,text,uuid[],numeric[],numeric[],bigint[])",
       "inventory_configure_product(uuid,boolean,text,smallint)",
       "inventory_record_damage(uuid,uuid,date,text,uuid[],numeric[],bigint[])",
@@ -155,6 +163,8 @@
       "inventory_stocktake_finalize(uuid,uuid,text,date,uuid[],numeric[],numeric[],bigint[])",
       "inventory_stocktake_open(uuid,uuid)",
       "inventory_transfer_stock(uuid,uuid,uuid,uuid[],numeric[])",
+      "invoice_outstanding(uuid,uuid)",
+      "invoice_settlement_state(uuid,uuid)",
       "payment_method_activate(uuid,integer)",
       "payment_method_create(uuid,text,uuid,boolean,integer,text,text,text)",
       "payment_method_deactivate(uuid,integer)",
@@ -192,9 +202,10 @@
     "public": []
   },
   "executeNotes": {
-    "daftar_app": "The 27 signed entry routines (one per registered operation kind) plus the two INVOKER read functions purchase_ap_outstanding and purchase_settlement_state (0065, replaced in 0067 and, purchase_ap_outstanding, in 0072). S7 adds none; S8 adds none; the Phase 3 corrective 0072 (TD-16) adds purchase_write_off_residue, the routine of its one operation kind.",
+    "daftar_app": "The 27 signed entry routines (one per registered operation kind) plus the two INVOKER read functions purchase_ap_outstanding and purchase_settlement_state (0065, replaced in 0067 and, purchase_ap_outstanding, in 0072). S7 adds none; S8 adds none; the Phase 3 corrective 0072 (TD-16) adds purchase_write_off_residue, the routine of its one operation kind. Beyond the Phase 3 scope, 0075 adds the four INVOKER receivables read functions — invoice_outstanding, invoice_settlement_state, customer_ar_outstanding and customer_ar_aging — granted to daftar_app and to daftar_inventory_internal, and to nobody else; PUBLIC holds EXECUTE on none of them.",
     "daftar_platform": "The two inventory key-domain routines (L:1868) plus the three provisioning routines 0070 (TD-18) re-created and handed to daftar_provisioning_internal: provision_actor(text[]) and the provisioning key install/retire commands. Each keeps its accepted Phase 1 grant to the platform alone; TD-18 closed the TL-3 exception set (no replaced routine is owned by the applier or pins a public-first path any more).",
-    "public": "No Phase 3 routine, definer or invoker, is executable by PUBLIC."
+    "public": "No Phase 3 routine, definer or invoker, is executable by PUBLIC.",
+    "beyondPhase3Scope": "Entries for relations and routines a later phase creates are reviewed here on the same terms as the Phase 3 ones. They are NOT an allowlist that admits them: they are the reviewed statement of which grants exist, and every law in the suite — the forbidden privileges, the by-USE DML refusal sweep, the definer law — still applies to them in full."
   },
   "replacedPrePhase3Routines": [
     "accounting_actor(text[])",

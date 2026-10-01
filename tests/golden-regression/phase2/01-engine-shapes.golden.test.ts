@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto';
+import { readFileSync, readdirSync } from 'node:fs';
+import { join } from 'node:path';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { ensurePostgres, ownerPool, resetData } from '../../helpers/test-app';
 import { must, post, rate10, seedPostingFixture, todayIn, type PostCommand, type PostLine, type PostingFixture } from '../../helpers/accounting-posting';
@@ -508,6 +510,8 @@ describe('golden: engine shapes — supplier return and purchase price variance 
   });
 });
 
+const MIGRATIONS = join(__dirname, '../../../infrastructure/database/migrations');
+
 describe('golden: engine shapes prove representability without creating the domains (directive §71, §85)', () => {
   /**
    * The claim is about the SHAPES posted above: every one of them was
@@ -538,10 +542,42 @@ describe('golden: engine shapes prove representability without creating the doma
    * `payment_reversals`, `refunds`, `credit_notes` and `customer_credits` stay
    * forbidden: S6's tables are supplier-scoped (`supplier_payments`, …), and
    * no generic payment or customer-credit table is authorized (MP-7).
+   *
+   * P4-S1 (0075): `invoices` came off the same way, when P4-S1 created it
+   * under the Phase 4 architecture lock (P4-AL-16 the document shape, P4-AL-31
+   * the numbering, `docs/PHASE_4_ARCHITECTURE_LOCK.md` §5). No shape above
+   * names a customer invoice — every shape here posts through the generic
+   * journal, which is the whole claim. `payments`, `payment_allocations`,
+   * `payment_reversals`, `refunds`, `credit_notes` and `customer_credits`
+   * stay forbidden: P4-S1 creates none of them, and each belongs to a later
+   * slice that has not been authorized.
+   *
+   * AND THE NAME DOES NOT COME OFF ON TRUST. Each removal records the ONE
+   * migration that creates the table, and the second assertion below holds the
+   * tree to it: exactly one migration may create it, and it must be that one.
+   * A table appearing from a second place, or from no recorded place, is the
+   * defect this list exists to catch, and it is caught by name now. It could
+   * not have been before — the old form only ever said "absent", so a name
+   * struck off was struck off by fiat.
    */
+  /**
+   * Removed from `forbidden` by an authorized slice — and each one recorded
+   * with the ONE migration that makes it, so a removal is a checked fact
+   * rather than a struck-off line. `accounting_periods` sits INSIDE the Phase
+   * 2 prefix on purpose: P2-S6 authorized it under its own directive, and that
+   * authorization is what makes a removal legitimate. It is never the position
+   * in the sequence.
+   */
+  const AUTHORIZED_ELSEWHERE: Readonly<Record<string, string>> = {
+    accounting_periods: '0049_accounting_periods.sql',
+    suppliers: '0063_purchases_suppliers_sources.sql',
+    supplier_credit_notes: '0065_supplier_returns_reversals_sources.sql',
+    supplier_refunds: '0067_payment_methods_supplier_settlement_sources.sql',
+    invoices: '0075_phase4_customers_invoices_numbering.sql',
+  };
+
   it('not one operational table was created to express any of the shapes above', async () => {
     const forbidden = [
-      'invoices',
       'payments',
       'payment_allocations',
       'payment_reversals',
@@ -558,6 +594,22 @@ describe('golden: engine shapes prove representability without creating the doma
       )
     ).rows.map((r) => r.t);
     expect(present).toEqual([]);
+    // The list and the note above it cannot drift apart: a name struck off
+    // `forbidden` is a name `AUTHORIZED_ELSEWHERE` must carry.
+    for (const name of Object.keys(AUTHORIZED_ELSEWHERE)) expect(forbidden, `${name} is both authorized and forbidden`).not.toContain(name);
+  });
+
+  it('…and every name struck off that list is created by exactly ONE migration, the one recorded against it', async () => {
+    const files = readdirSync(MIGRATIONS)
+      .filter((f) => f.endsWith('.sql'))
+      .sort();
+    expect(files.length, 'no migration was read — the claim below would be vacuous').toBeGreaterThan(0);
+    for (const [name, migration] of Object.entries(AUTHORIZED_ELSEWHERE)) {
+      const creators = files.filter((f) =>
+        new RegExp(`CREATE\\s+TABLE\\s+(?:IF\\s+NOT\\s+EXISTS\\s+)?(?:public\\.)?${name}\\b`, 'i').test(readFileSync(join(MIGRATIONS, f), 'utf8')),
+      );
+      expect(creators, `${name}: exactly one migration creates it, and it is the recorded one`).toEqual([migration]);
+    }
   });
 
   it('every shape used the generic internal source identity, and the source registry holds exactly the three native types followed by the two P3-S3 inventory types and the two P3-S4 purchase types (P3-S5: and the P3-S5 supplier-return type; P3-S6: and the three P3-S6 supplier-settlement types; Phase 3 corrective hardening: and the 0072 residue write-off type)', async () => {

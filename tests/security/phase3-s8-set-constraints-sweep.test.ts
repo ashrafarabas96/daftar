@@ -10,9 +10,10 @@
  * pass vacuously. R-B1a did (H-1, fixed in 0069 R-94); this suite proves the
  * rest do not.
  *
- * The catalogue: every deferrable, non-internal constraint trigger created by
- * 0040–0069 is in exactly one of two lists, so a new deferred guard fails this
- * suite until it is classified:
+ * The catalogue: every deferrable, non-internal constraint trigger ON A
+ * RELATION THE ACCEPTED PHASE 2/3 PREFIX CREATED is in exactly one of two
+ * lists, so a new deferred guard on one of those relations fails this suite
+ * until it is classified:
  *
  *   REFUSES_EARLY — forced IMMEDIATE by name, the real command (as
  *     `daftar_app`, through the entry routine of its kind and the entries the
@@ -26,14 +27,46 @@
  *
  * Deferrable foreign keys are not listed: an RI check fired early raises when
  * the referenced row is missing, so it fails closed by construction.
+ *
+ * ── P4-AL-88: why the catalogue equality is scoped ──────────────────────
+ *
+ * The equality was over EVERY deferrable non-internal constraint trigger in
+ * the database, which made it a claim about the phase that follows this one:
+ * the first later-phase deferred guard turns an accepted Phase 3 gate red
+ * although nothing about the Phase 2/3 guards changed
+ * (`[[daftar-a-closure-rule-is-not-an-invariant]]`). It could not be proved
+ * for a later phase's guard either — every proof below drives a Phase 3
+ * command through its own entry routine, and there is no such command for a
+ * guard on a relation Phase 3 never built.
+ *
+ * So the equality is scoped by POSITION, to the triggers on the relations the
+ * accepted inherited prefix (`0000`–`0073`, frozen byte for byte by P4-AL-85,
+ * digest-verified by `phase4InheritedPrefixRelations()`) created. A later
+ * phase cannot enter that scope, and a later phase that adds a deferred guard
+ * to one of THOSE relations still lands inside it and is still red until
+ * classified and proved.
+ *
+ * "And nothing more" is kept by a PARTITION plus a structural claim: every
+ * deferrable non-internal constraint trigger in the database is either inside
+ * the scope or on a relation no accepted prefix created, disjointly and
+ * covering; and each one outside the scope must be INITIALLY DEFERRED,
+ * enabled, and backed by a SECURITY DEFINER function with the pinned
+ * `search_path` owned by a NOLOGIN internal principal — so it is inside the
+ * T-05 definer law and cannot be an applier-owned or invoker guard.
+ *
+ * What is NOT claimed of a guard outside the scope is that it refuses when
+ * forced IMMEDIATE. That proof needs the phase's own command surface, and it
+ * belongs to that phase's `SET CONSTRAINTS` sweep. It is a hand-off, recorded
+ * here, not a hole hidden here.
  */
 import { randomUUID } from 'node:crypto';
-import { Client } from 'pg';
+import { Client, type PoolClient } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { appDbUrl, ensurePostgres, ownerPool, resetData } from '../helpers/test-app';
 import { attempt, must, ownerClient, rolledBack, seedS3Business, seedS3World, today, type Queryable, type S3Business } from '../helpers/inventory-commands';
 import { expectRefused, settle, type Outcome } from '../helpers/stock-ledger';
 import { OP_KIND_BUILDERS, mintHonest, type PreparedKind, type ResultRow } from '../helpers/op-kind-builders';
+import { phase4InheritedPrefixRelations } from '../../scripts/guards/no-authoritative-balance';
 import { truthTables } from '../helpers/phase3-surface';
 import { JOURNAL_AND_LOGS, changedTables, tableDigest } from '../helpers/table-digest';
 import { assertionFor, postAs, postReversalAs, reversalFingerprintOf, sourceAssertion, type PostCommand } from '../helpers/accounting-posting';
@@ -44,6 +77,9 @@ import { coverageVector, seedVector } from '../helpers/purchase-deficits';
 import { parseQuantity } from '../../packages/inventory/src';
 
 const P = 'P0001';
+
+/** The `search_path` the definer law pins on every guard function (T-05 clause 1). */
+const PINNED_PATH = 'search_path=pg_catalog, public, pg_temp';
 
 /** Phase 1 deferred guards (0036), outside this sweep's range. */
 const PHASE1 = ['categories_require_translation', 'category_translations_keep_one', 'product_translations_keep_one', 'products_require_translation'];
@@ -244,23 +280,79 @@ afterAll(async () => {
   await resetData();
 });
 
+/** One deferrable, non-internal constraint trigger, with everything the catalogue claim reads. */
+interface DeferredGuard {
+  n: string;
+  rel: string;
+  deferred: boolean;
+  enabled: string;
+  definer: boolean;
+  owner: string;
+  cfg: string[] | null;
+}
+
+/** The internal principals a guard function may be owned by (T-05 clause 2). */
+const GUARD_OWNERS = ['daftar_inventory_internal', 'daftar_accounting_internal', 'daftar_catalog_internal', 'daftar_provisioning_internal'];
+
+/**
+ * The deferred-guard catalogue of `q`, split by POSITION: the guards on the
+ * relations the accepted inherited prefix created, and those on relations no
+ * accepted prefix created. `beyondProblems` is the structural claim's
+ * findings over the second half. An empty prefix reader empties `inScope`,
+ * which makes the equality red rather than vacuous.
+ */
+async function deferredGuards(q: Queryable): Promise<{ inScope: string[]; beyond: string[]; beyondProblems: string[] }> {
+  const rows = (
+    await q.query<DeferredGuard>(
+      `SELECT DISTINCT g.tgname::text AS n, c.relname::text AS rel, g.tginitdeferred AS deferred, g.tgenabled::text AS enabled,
+              f.prosecdef AS definer, pg_get_userbyid(f.proowner) AS owner, f.proconfig AS cfg
+         FROM pg_trigger g JOIN pg_class c ON c.oid = g.tgrelid JOIN pg_proc f ON f.oid = g.tgfoid
+        WHERE g.tgdeferrable AND NOT g.tgisinternal AND g.tgconstraint <> 0 ORDER BY 1`,
+    )
+  ).rows.filter((r) => !PHASE1.includes(r.n));
+  const prefixRelations = phase4InheritedPrefixRelations();
+  const scoped = rows.filter((r) => prefixRelations.has(r.rel));
+  const outside = rows.filter((r) => !prefixRelations.has(r.rel));
+  const login = new Set((await q.query<{ r: string }>(`SELECT rolname::text AS r FROM pg_roles WHERE rolcanlogin OR rolsuper`)).rows.map((x) => x.r));
+  const beyondProblems = outside
+    .filter(
+      (r) =>
+        !r.deferred ||
+        r.enabled !== 'O' ||
+        !r.definer ||
+        !GUARD_OWNERS.includes(r.owner) ||
+        login.has(r.owner) ||
+        JSON.stringify(r.cfg) !== JSON.stringify([PINNED_PATH]),
+    )
+    .map((r) => `${r.rel}.${r.n}`)
+    .sort();
+  return { inScope: scoped.map((r) => r.n).sort(), beyond: outside.map((r) => r.n).sort(), beyondProblems };
+}
+
 describe('the catalogue: every Phase 2/3 deferred guard is classified', () => {
-  it('REFUSES_EARLY ∪ JUDGES_COMPLETE is exactly the deferrable non-internal constraint triggers after Phase 1, and the two are disjoint', async () => {
-    const live = (
-      await ownerPool().query<{ n: string }>(
-        `SELECT DISTINCT g.tgname::text AS n FROM pg_trigger g
-          WHERE g.tgdeferrable AND NOT g.tgisinternal AND g.tgconstraint <> 0 ORDER BY 1`,
-      )
-    ).rows
-      .map((r) => r.n)
-      .filter((n) => !PHASE1.includes(n));
+  it('REFUSES_EARLY ∪ JUDGES_COMPLETE is exactly the deferrable non-internal constraint triggers on the accepted prefix’s relations, and the two are disjoint', async () => {
+    const prefixRelations = phase4InheritedPrefixRelations();
+    expect(prefixRelations.size, 'the digest-verified prefix reader came back empty').toBeGreaterThan(0);
+    const { inScope, beyond, beyondProblems } = await deferredGuards(ownerPool());
     const early = Object.keys(REFUSES_EARLY);
     const complete = Object.keys(JUDGES_COMPLETE);
     expect(
       early.filter((t) => complete.includes(t)),
       'disjoint',
     ).toEqual([]);
-    expect([...early, ...complete].sort(), 'every deferred guard is classified, and nothing else').toEqual(live);
+    expect([...early, ...complete].sort(), 'every deferred guard is classified, and nothing else').toEqual(inScope);
+    // The PARTITION: nothing escapes between the scoped equality and the
+    // structural claim, and the two halves are disjoint by construction.
+    expect(
+      inScope.filter((n) => beyond.includes(n)),
+      'the two scopes are disjoint',
+    ).toEqual([]);
+    // And what IS claimed of a guard outside the scope: initially deferred,
+    // enabled, and inside the T-05 definer law.
+    expect(
+      beyondProblems,
+      'a deferred guard outside the accepted prefix must still be initially deferred, enabled, and a DEFINER of a NOLOGIN internal principal with the pinned path',
+    ).toEqual([]);
     const proved = new Set([...Object.values(OP_KIND_EXPECTED).flat(), ...Object.values(ACCOUNTING_EXPECTED).flat(), ...DEFICIT_EXPECTED]);
     proved.add('journal_entries_inventory_account_domain');
     proved.add('journal_entries_inventory_account_domain_serial');
@@ -527,4 +619,94 @@ describe('forced early: a receipt that covers deficits (GOLD72 and FLUSH-RESIDUE
       });
     });
   }
+});
+
+/**
+ * ── P4-AL-88 proof: the scoped catalogue, both directions ────────────────
+ *
+ * The scoped equality must still be RED when a deferred guard appears on one
+ * of the accepted prefix's own relations — that is the protection the
+ * unscoped equality bought, and scoping must not have dropped it — and the
+ * structural claim must be RED when a guard outside the scope is not the
+ * shape it must be. Both are planted on the real catalogue inside a
+ * transaction that is always rolled back.
+ */
+describe('P4-AL-88 — the scoped deferred-guard catalogue is red where it must be', () => {
+  let owner: PoolClient;
+
+  beforeAll(async () => {
+    owner = await ownerPool().connect();
+  });
+
+  afterAll(() => {
+    owner.release();
+  });
+
+  const planted = async (plant: readonly string[], body: () => Promise<void>): Promise<void> => {
+    await owner.query('BEGIN');
+    try {
+      for (const sql of plant) await owner.query(sql);
+      await body();
+    } finally {
+      await owner.query('ROLLBACK').catch(() => undefined);
+    }
+  };
+
+  it('the later phase really did add a deferred guard outside the scope, so the structural claim is not vacuous', async () => {
+    const { beyond, beyondProblems } = await deferredGuards(ownerPool());
+    expect(beyond.length, 'no deferred guard outside the accepted prefix exists, so the claims below prove nothing').toBeGreaterThan(0);
+    expect(beyondProblems).toEqual([]);
+  });
+
+  it('RED: an unclassified deferred guard on one of the accepted prefix’s relations is named by the scoped equality', async () => {
+    await planted(
+      [
+        `CREATE FUNCTION p4al88_probe_guard() RETURNS TRIGGER LANGUAGE plpgsql SECURITY DEFINER
+           SET search_path = pg_catalog, public, pg_temp AS $fn$ BEGIN RETURN NULL; END $fn$`,
+        `ALTER FUNCTION p4al88_probe_guard() OWNER TO daftar_inventory_internal`,
+        `CREATE CONSTRAINT TRIGGER p4al88_probe_unclassified AFTER INSERT ON purchases
+           DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION p4al88_probe_guard()`,
+      ],
+      async () => {
+        const { inScope } = await deferredGuards(owner);
+        expect(inScope).toContain('p4al88_probe_unclassified');
+        // Which is exactly the assertion the suite makes: the classified
+        // lists are no longer the scope, so it is red and it names the guard.
+        expect([...Object.keys(REFUSES_EARLY), ...Object.keys(JUDGES_COMPLETE)].sort()).not.toEqual(inScope);
+        expect(inScope.filter((n) => !Object.keys(REFUSES_EARLY).includes(n) && !Object.keys(JUDGES_COMPLETE).includes(n))).toEqual([
+          'p4al88_probe_unclassified',
+        ]);
+      },
+    );
+    const { inScope } = await deferredGuards(ownerPool());
+    expect([...Object.keys(REFUSES_EARLY), ...Object.keys(JUDGES_COMPLETE)].sort()).toEqual(inScope);
+  });
+
+  it('RED: a guard outside the scope that is not the required shape is named by the structural claim', async () => {
+    const { beyond } = await deferredGuards(ownerPool());
+    const victim = must(beyond[0], 'a deferred guard outside the accepted prefix');
+    const fn = must(
+      (
+        await ownerPool().query<{ sig: string; rel: string }>(
+          `SELECT regexp_replace(f.oid::regprocedure::text, '^public\\.', '') AS sig, c.relname::text AS rel
+             FROM pg_trigger g JOIN pg_proc f ON f.oid = g.tgfoid JOIN pg_class c ON c.oid = g.tgrelid WHERE g.tgname = $1`,
+          [victim],
+        )
+      ).rows[0],
+      `the function of ${victim}`,
+    );
+    // (1) The pinned path removed.
+    await planted([`ALTER FUNCTION ${fn.sig} RESET search_path`], async () => {
+      expect((await deferredGuards(owner)).beyondProblems).toEqual([`${fn.rel}.${victim}`]);
+    });
+    // (2) Handed to the applying principal, which is a login/superuser role.
+    await planted([`ALTER FUNCTION ${fn.sig} OWNER TO daftar_migrator`], async () => {
+      expect((await deferredGuards(owner)).beyondProblems).toEqual([`${fn.rel}.${victim}`]);
+    });
+    // (3) Disabled — a guard that never fires is the fail-open this suite exists for.
+    await planted([`ALTER TABLE ${fn.rel} DISABLE TRIGGER ${victim}`], async () => {
+      expect((await deferredGuards(owner)).beyondProblems).toEqual([`${fn.rel}.${victim}`]);
+    });
+    expect((await deferredGuards(ownerPool())).beyondProblems).toEqual([]);
+  }, 120_000);
 });

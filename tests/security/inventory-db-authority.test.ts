@@ -1,6 +1,7 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { Client, type PoolClient } from 'pg';
 import { beforeAll, describe, expect, it } from 'vitest';
+import { phase4InheritedPrefixRelations } from '../../scripts/guards/no-authoritative-balance';
 import {
   appDbUrl,
   ensurePostgres,
@@ -214,13 +215,52 @@ describe('the inventory principal (P3-AL-54 §A, must-prove 5-7)', () => {
 });
 
 describe('the §H grant matrix, from information_schema and pg_policy (P3-AL-54 §H)', () => {
-  it('the internal principal holds exactly these table privileges', async () => {
+  it('the internal principal holds exactly these table privileges on the accepted prefix’s relations, and SELECT and nothing else beyond them', async () => {
     const r = await ownerPool().query<{ t: string; p: string }>(
       `SELECT table_name AS t, string_agg(privilege_type, ',' ORDER BY privilege_type) AS p
        FROM information_schema.role_table_grants WHERE grantee = $1 GROUP BY table_name ORDER BY table_name`,
       [INTERNAL],
     );
-    expect(Object.fromEntries(r.rows.map((x) => [x.t, x.p]))).toEqual({
+    /**
+     * P4-AL-88. This map was asserted over EVERY table the principal holds a
+     * privilege on, which made it a claim about the phase that follows: the
+     * first later-phase relation granted SELECT to this principal turns an
+     * accepted Phase 3 suite red although nothing about the Phase 3 authority
+     * changed (`[[daftar-a-closure-rule-is-not-an-invariant]]`).
+     *
+     * It is scoped by POSITION — which accepted prefix created the relation,
+     * read from the digest-verified files by
+     * `phase4InheritedPrefixRelations()`; `0000`-`0073` is frozen byte for
+     * byte (P4-AL-85), so a later phase cannot enter that scope — and the map
+     * below is unchanged, entry for entry.
+     *
+     * "And nothing more" is kept by a PARTITION plus a POSITIVE claim about
+     * the rest: on a relation no accepted prefix created, this principal holds
+     * SELECT and nothing else. That is not an allowlist — it is the same
+     * authority contract this file exists for, stated for the relations it
+     * cannot name: the writes belong to the signed routines, so a later
+     * migration that hands this principal INSERT, UPDATE or DELETE on its own
+     * relation is RED here and must be reviewed, exactly as every Phase 3
+     * write in the map below was.
+     *
+     * An emptied (tampered) prefix reader makes the scope empty, which makes
+     * the map assertion red rather than vacuous.
+     */
+    const prefixRelations = phase4InheritedPrefixRelations();
+    expect(prefixRelations.size, 'the digest-verified prefix reader came back empty').toBeGreaterThan(0);
+    const live = Object.fromEntries(r.rows.map((x) => [x.t, x.p] as const));
+    const inScope = Object.fromEntries(Object.entries(live).filter(([t]) => prefixRelations.has(t)));
+    const beyond = Object.fromEntries(Object.entries(live).filter(([t]) => !prefixRelations.has(t)));
+    expect(
+      Object.keys(inScope).filter((t) => t in beyond),
+      'the two scopes are disjoint',
+    ).toEqual([]);
+    expect([...Object.keys(inScope), ...Object.keys(beyond)].sort(), 'and together they are every table').toEqual(Object.keys(live).sort());
+    expect(
+      Object.entries(beyond).filter(([, p]) => p !== 'SELECT'),
+      'beyond the accepted prefix this principal reads and never writes: the writes belong to the signed routines',
+    ).toEqual([]);
+    expect(inScope).toEqual({
       audit_events: 'INSERT',
       branch_warehouses: 'DELETE,INSERT,SELECT',
       branches: 'SELECT',
@@ -772,5 +812,77 @@ describe('invctl/1 key management through daftar_platform (P3-AL-55 §C)', () =>
     expect(r.rows).toEqual([{ status: 'retired', stamped: true }]);
     const message = await platform((c) => refusal(() => c.query(`SELECT inventory_assertion_key_install($1, $2)`, [kid, secret])));
     expect(message).toMatch(/inventory\.assertion_key_conflict/);
+  });
+});
+
+/**
+ * ── P4-AL-88 proof: the scoped privilege map, both directions ────────────
+ *
+ * Scoping the map must not have dropped what the unscoped map bought. So:
+ * the in-scope equality is still RED when a Phase 3 privilege is wrong, and
+ * the positive beyond-scope claim is RED when this principal is handed a
+ * write on a relation no accepted prefix created. Both planted on the real
+ * catalogue inside a transaction that is always rolled back; the relation is
+ * DISCOVERED, never named.
+ */
+describe('P4-AL-88 — the scoped internal privilege map is red where it must be', () => {
+  let owner: PoolClient;
+
+  beforeAll(async () => {
+    owner = await ownerPool().connect();
+  });
+
+  const privileges = async (q: Client | PoolClient): Promise<Readonly<Record<string, string>>> =>
+    Object.fromEntries(
+      (
+        await q.query<{ t: string; p: string }>(
+          `SELECT table_name AS t, string_agg(privilege_type, ',' ORDER BY privilege_type) AS p
+             FROM information_schema.role_table_grants WHERE grantee = $1 GROUP BY table_name ORDER BY table_name`,
+          [INTERNAL],
+        )
+      ).rows.map((x) => [x.t, x.p] as const),
+    );
+
+  const planted = async (plant: readonly string[], body: () => Promise<void>): Promise<void> => {
+    await owner.query('BEGIN');
+    try {
+      for (const sql of plant) await owner.query(sql);
+      await body();
+    } finally {
+      await owner.query('ROLLBACK').catch(() => undefined);
+    }
+  };
+
+  it('RED: a write handed to the internal principal beyond the accepted prefix is named', async () => {
+    const prefixRelations = phase4InheritedPrefixRelations();
+    const live = await privileges(owner);
+    const beyond = Object.keys(live).filter((t) => !prefixRelations.has(t));
+    if (beyond.length === 0) return; // nothing beyond the prefix in this tree: the claim below has no subject
+    const target = beyond[0] ?? '';
+    await planted([`GRANT INSERT ON ${target} TO ${INTERNAL}`], async () => {
+      const after = await privileges(owner);
+      const problems = Object.entries(after)
+        .filter(([t]) => !prefixRelations.has(t))
+        .filter(([, p]) => p !== 'SELECT');
+      expect(problems).toEqual([[target, 'INSERT,SELECT']]);
+    });
+    expect(
+      Object.entries(await privileges(owner))
+        .filter(([t]) => !prefixRelations.has(t))
+        .filter(([, p]) => p !== 'SELECT'),
+    ).toEqual([]);
+  });
+
+  it('RED: a Phase 3 privilege removed is still named by the in-scope map', async () => {
+    const prefixRelations = phase4InheritedPrefixRelations();
+    const before = await privileges(owner);
+    expect(before['units']).toBe('SELECT');
+    await planted([`REVOKE SELECT ON units FROM ${INTERNAL}`], async () => {
+      const after = await privileges(owner);
+      const inScope = Object.fromEntries(Object.entries(after).filter(([t]) => prefixRelations.has(t)));
+      expect(Object.keys(inScope)).not.toContain('units');
+      expect(inScope).not.toEqual(Object.fromEntries(Object.entries(before).filter(([t]) => prefixRelations.has(t))));
+    });
+    expect((await privileges(owner))['units']).toBe('SELECT');
   });
 });

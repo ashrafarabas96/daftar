@@ -26,7 +26,7 @@ import { createHash } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { ensurePostgres, ownerPool, resetData } from '../helpers/test-app';
 import { rolledBack, type Queryable } from '../helpers/inventory-commands';
-import { STOCK_CACHE_EXCEPTION } from '../../scripts/guards/no-authoritative-balance';
+import { STOCK_CACHE_EXCEPTION, phase4InheritedPrefixRelations } from '../../scripts/guards/no-authoritative-balance';
 
 const CACHE_NAME = /balance|summary|snapshot|cache|projection/;
 
@@ -116,6 +116,32 @@ const P3C_APP_GRANTS = [
   'routine purchase_write_off_residue(uuid,date,text,bigint,bigint,bigint) EXECUTE',
 ] as const;
 
+/**
+ * P4-S1 (0075): the nine grants the first Phase 4 migration adds to
+ * `daftar_app` — SELECT on the five relations and EXECUTE on the four read
+ * functions. Named line for line, by the SAME mechanism `P3C_APP_GRANTS`
+ * above already uses, and for the same reason: the S6 digest stays pinned
+ * byte for byte and nothing that is not named here may appear.
+ *
+ * This is the re-expression the digest needed, not a loosening of it. Had the
+ * digest been widened, or recomputed to today's value, a tenth grant would
+ * have slipped in silently; as it is, the S6 end state is still absolute and
+ * every grant after it is enumerated. Note what is NOT here: no INSERT, no
+ * UPDATE, no DELETE. `daftar_app` reads the Phase 4 surface and writes none of
+ * it, and the absence of those lines from this list is the assertion.
+ */
+const P4_S1_APP_GRANTS = [
+  'relation public.customer_contacts SELECT',
+  'relation public.customers SELECT',
+  'relation public.invoice_items SELECT',
+  'relation public.invoice_sequences SELECT',
+  'relation public.invoices SELECT',
+  'routine customer_ar_aging(uuid,uuid,date,integer[]) EXECUTE',
+  'routine customer_ar_outstanding(uuid,uuid) EXECUTE',
+  'routine invoice_outstanding(uuid,uuid) EXECUTE',
+  'routine invoice_settlement_state(uuid,uuid) EXECUTE',
+] as const;
+
 beforeAll(async () => {
   await ensurePostgres();
   await resetData();
@@ -134,8 +160,33 @@ describe('T-01 the catalogue end state', () => {
 
   it('the daftar_app privilege matrix is the S6 end state: S7 adds no grant (the corrective pass adds exactly its two)', async () => {
     const all = await appPrivilegeMatrix(ownerPool());
-    for (const g of P3C_APP_GRANTS) expect(all, g).toContain(g);
-    const matrix = all.filter((l) => !(P3C_APP_GRANTS as readonly string[]).includes(l));
+    for (const g of [...P3C_APP_GRANTS, ...P4_S1_APP_GRANTS]) expect(all, g).toContain(g);
+    /**
+     * No DML on ANY relation beyond the accepted inherited prefix, asserted
+     * over the whole matrix rather than by the absence of a line from the list
+     * above — and with the relations DISCOVERED rather than named, so this
+     * covers every later Phase 4 relation without being edited, and names none
+     * of them. A literal alternation of Phase 4 relation names beside an
+     * equality is itself the P4-AL-88 shape, and
+     * `tests/security/phase4-forward-evolution.test.ts` is right to refuse it
+     * — it refused the first form of this very assertion.
+     *
+     * The right-hand side is empty, which makes this a LAW rather than an
+     * inventory: it grows to cover each new relation the moment its migration
+     * exists.
+     */
+    const inherited = phase4InheritedPrefixRelations();
+    expect(inherited.size, 'the prefix reader is empty — the law below would be vacuous').toBeGreaterThan(0);
+    expect(
+      all.filter((l) => {
+        if (!/ (INSERT|UPDATE|DELETE|TRUNCATE)$/.test(l)) return false;
+        const relation = /^relation (?:public\.)?([a-z_][a-z0-9_]*) /.exec(l)?.[1];
+        return relation !== undefined && !inherited.has(relation);
+      }),
+      'daftar_app writes a relation the accepted inherited prefix did not create',
+    ).toEqual([]);
+    const named = new Set<string>([...P3C_APP_GRANTS, ...P4_S1_APP_GRANTS]);
+    const matrix = all.filter((l) => !named.has(l));
     expect(
       matrix.some((l) => l.startsWith('relation public.stock_levels SELECT')),
       'the matrix reads real grants',

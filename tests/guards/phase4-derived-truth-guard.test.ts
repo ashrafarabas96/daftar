@@ -43,7 +43,8 @@ import {
   phase4InheritedPrefixRelations,
 } from '../../scripts/guards/no-authoritative-balance';
 import { INVENTORY_TYPE_PINS, findInventoryNumericViolations } from '../../scripts/guards/no-float-rate';
-import { stripComments } from '../../scripts/guards/sql-schema';
+import { PHASE4_INHERITED_PREFIX_END } from '../../scripts/phase4-prefix';
+import { discoverStoredRelations, stripComments } from '../../scripts/guards/sql-schema';
 
 const MIGRATIONS = join(__dirname, '../../infrastructure/database/migrations');
 const files = (): string[] =>
@@ -52,6 +53,20 @@ const files = (): string[] =>
     .sort();
 const schema = (): string =>
   files()
+    .map((f) => readFileSync(join(MIGRATIONS, f), 'utf8'))
+    .join('\n');
+
+/** The FROZEN inherited prefix alone (`0000`-`0073`): the only tree over which a partition claim can be permanent. */
+const inheritedSchema = (): string =>
+  files()
+    .filter((f) => f <= PHASE4_INHERITED_PREFIX_END)
+    .map((f) => readFileSync(join(MIGRATIONS, f), 'utf8'))
+    .join('\n');
+
+/** The Phase 4 migrations alone: everything after the inherited prefix. */
+const phase4Schema = (): string =>
+  files()
+    .filter((f) => f > PHASE4_INHERITED_PREFIX_END)
     .map((f) => readFileSync(join(MIGRATIONS, f), 'utf8'))
     .join('\n');
 
@@ -359,16 +374,60 @@ describe('P4-S1 action 2 — the G-3 sales arm refuses derived truth on the Phas
     for (const allowed of ['remaining', 'credit_limit', 'amount_applied']) expect(code.includes(allowed), allowed).toBe(false);
   });
 
-  it('the arm is a third SET beside the Phase 3 partition, not a third PIECE of it (phase3-s8-guards.test.ts:108-111)', () => {
-    const inventory = discoverInventoryTables(schema());
-    const supplier = discoverSupplierTables(schema());
-    const phase4 = discoverSalesTables(schema());
-    // Every Phase 3 relation is still watched by exactly one of the two arms…
-    for (const t of discoverPhase3Relations(schema())) expect([inventory.includes(t), supplier.includes(t)].filter(Boolean), t).toHaveLength(1);
-    // …and the sales arm claims none of them, because the inherited prefix created every one.
-    for (const t of [...inventory, ...supplier]) expect(phase4, t).not.toContain(t);
-    for (const t of discoverPhase3Relations(schema())) expect(isPhase4Relation(t), t).toBe(false);
-    expect(phase4).toEqual([]);
+  /**
+   * P4-S1: re-expressed, and tense-independent (P4-AL-88).
+   *
+   * This used to read the WHOLE migration directory and end with
+   * `expect(discoverSalesTables(schema())).toEqual([])`. That is a claim about
+   * the phase that follows, written while the phase that follows had created
+   * nothing: the sales arm is DEFINED as "every stored relation the accepted
+   * inherited prefix did not create", so the first Phase 4 relation makes the
+   * assertion false by construction, and an accepted suite that goes red
+   * because the next migration exists is a suite that FORBIDS the next
+   * migration — exactly what `P4-AL-88` refuses.
+   *
+   * There is a second thing the old form got wrong, and it is the more
+   * interesting one. The partition it asserts cannot hold over a tree that has
+   * Phase 4 relations in it, because `isPhase3Relation` means "the Phase 2
+   * prefix did not create it" and `discoverInventoryTables` takes, as its
+   * complement clause, every such relation that is not supplier-named. A Phase
+   * 4 relation satisfies both, so the inherited inventory arm claims it TOO.
+   * That overlap is not a defect and must not be papered over: a Phase 4
+   * relation watched by two arms is watched more strictly, never less. The
+   * honest form asserts it as the fact it is, rather than denying it.
+   *
+   * So the partition claim is made where it is true and permanent — over the
+   * ACCEPTED INHERITED PREFIX, whose contents are frozen — and the Phase 4
+   * half is made positively, over the Phase 4 files alone. Both halves hold
+   * today and after every later Phase 4 migration, and a Phase 3 relation
+   * quietly leaving one of the two inherited arms is still red.
+   */
+  it('the arm is a third SET beside the Phase 3 partition, over the frozen prefix where that claim is permanent', () => {
+    const inherited = inheritedSchema();
+    const inventory = discoverInventoryTables(inherited);
+    const supplier = discoverSupplierTables(inherited);
+    // Every relation of the FROZEN inherited prefix is watched by exactly one
+    // of the two inherited arms. Unchanged, and it cannot drift: the prefix is
+    // byte-frozen and the gate proves it.
+    for (const t of discoverPhase3Relations(inherited)) expect([inventory.includes(t), supplier.includes(t)].filter(Boolean), t).toHaveLength(1);
+    // The sales arm claims NOTHING the inherited prefix created — permanently
+    // true, because that prefix is the arm's own definition.
+    expect(discoverSalesTables(inherited)).toEqual([]);
+    for (const t of [...inventory, ...supplier]) expect(isPhase4Relation(t), t).toBe(false);
+    // And positively: the sales arm claims every relation the Phase 4
+    // migrations create, and only those.
+    const phase4Relations = discoverSalesTables(phase4Schema());
+    expect(phase4Relations).toEqual(discoverStoredRelations(phase4Schema()));
+    for (const t of phase4Relations) expect(isPhase4Relation(t), t).toBe(true);
+    // The deliberate overlap, asserted rather than denied: the inherited
+    // inventory arm's complement clause also claims each Phase 4 relation, so
+    // each is watched by TWO arms. Stricter, never looser — and a Phase 4
+    // relation that fell out of BOTH would be watched by neither.
+    const inventoryOverWholeTree = discoverInventoryTables(schema());
+    for (const t of phase4Relations) {
+      expect(inventoryOverWholeTree, `${t} is watched by the inherited inventory arm too`).toContain(t);
+      expect(discoverSalesTables(schema()), `${t} is watched by the sales arm`).toContain(t);
+    }
   });
 
   it('GREEN HALF — the sales arm is silent on the accepted tree, all 74 migrations of it, file by file', () => {

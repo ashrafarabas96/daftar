@@ -27,7 +27,9 @@
  * routine).
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { balanced, INVENTORY_INTERNAL, lexBody, registeredOpKinds } from '../helpers/phase3-surface';
+import { type PoolClient } from 'pg';
+import { OP_KIND_BUILDERS } from '../helpers/op-kind-builders';
+import { balanced, INVENTORY_INTERNAL, lexBody, opKindRegistrants, phase3RegisteredOpKinds, registeredOpKinds } from '../helpers/phase3-surface';
 import { P3C_OPERATION_KINDS } from '../helpers/p3c-migrations';
 import { createScratchDb, type ScratchDb } from '../helpers/scratch-db';
 import type { Queryable } from '../helpers/stock-ledger';
@@ -146,9 +148,27 @@ beforeAll(async () => {
 }, 300_000);
 
 describe('T-03 — the operation-kind law over the catalogue (A-05)', () => {
-  it('26 kinds are registered at the S8 head (S8 registers none) plus exactly the corrective kinds (P3-C), each with exactly one consuming routine', async () => {
+  it('26 kinds are registered by Phase 3 at the S8 head (S8 registers none) plus exactly the corrective kinds (P3-C), and every registered kind has exactly one consuming routine', async () => {
     const law = await operationKindLaw(ownerPool());
-    expect(Object.keys(law.consumers)).toHaveLength(26 + P3C_OPERATION_KINDS.length);
+    // P4-AL-88. The COUNT is scoped by provenance — `registered_by ~ '^P3-'`,
+    // the registry's own column, which `0074` widened so a later phase can
+    // register a kind — because "there are exactly N kinds" is a closure rule
+    // and not an invariant. The LAW below is deliberately NOT scoped: every
+    // registered kind, whichever phase registered it, must have exactly one
+    // consuming routine, and the partition assertion is what keeps the two
+    // halves from leaving a gap between them.
+    const registrants = await opKindRegistrants();
+    const phase3Kinds = await phase3RegisteredOpKinds();
+    expect(phase3Kinds).toHaveLength(26 + P3C_OPERATION_KINDS.length);
+    const registered = Object.keys(registrants).sort();
+    const beyond = registered.filter((k) => !phase3Kinds.includes(k));
+    expect(
+      phase3Kinds.filter((k) => beyond.includes(k)),
+      'the two scopes are disjoint',
+    ).toEqual([]);
+    expect([...phase3Kinds, ...beyond].sort(), 'and together they are the whole registry').toEqual(registered);
+    // The law's own surface is the whole registry, both ways.
+    expect(Object.keys(law.consumers).sort(), 'the law is evaluated over every registered kind').toEqual(registered);
     for (const [kind, sigs] of Object.entries(law.consumers)) expect(sigs, kind).toHaveLength(1);
     // Phase 3 corrective (0072): the kinds registered after the S8 head are
     // exactly the reviewed corrective list, each registered by 'P3-C'.
@@ -218,5 +238,95 @@ describe('T-03 NEGATIVE CONTROLS — a second consumer, and a kind taken from a 
         v_actor := inventory_assertion_consume(p_op, inventory_claimed_payload_digest(p_op, ARRAY['uuid'], ARRAY[p_x::text]));
       END $$`);
     expect((await operationKindLaw(scratch.pool)).violations).toEqual(['2: t03_generic(text,uuid) consumes a non-literal kind']);
+  });
+});
+
+/**
+ * ── P4-AL-88 proof: the provenance-scoped registry claims, both directions ──
+ *
+ * `0074` widened `inventory_operation_kinds.registered_by` from
+ * `^P3-S[0-9]+$` to `^P[0-9]+-S[0-9]+$` so that a later phase can register an
+ * operation kind. The two claims that were exact over the whole registry —
+ * the COUNT here and `OP_KIND_BUILDERS = registeredOpKinds()` in
+ * `tests/security/phase3-s8-signed-authority-matrix.test.ts` — are now scoped
+ * to `registered_by ~ '^P3-'`. This proves the scoping, in both directions,
+ * by actually registering a later-phase kind inside a transaction that is
+ * always rolled back, which is what the widening made possible.
+ */
+describe('P4-AL-88 — the provenance scope of the registry claims', () => {
+  let owner: PoolClient;
+
+  beforeAll(async () => {
+    owner = await ownerPool().connect();
+  });
+
+  afterAll(() => {
+    owner.release();
+  });
+
+  const planted = async (plant: readonly string[], body: () => Promise<void>): Promise<void> => {
+    await owner.query('BEGIN');
+    try {
+      for (const sql of plant) await owner.query(sql);
+      await body();
+    } finally {
+      await owner.query('ROLLBACK').catch(() => undefined);
+    }
+  };
+
+  const builders = Object.keys(OP_KIND_BUILDERS).sort();
+
+  it('GREEN with a later-phase kind registered: the scoped claims hold, the unscoped one would not, and the LAW reaches it', async () => {
+    await planted([`INSERT INTO inventory_operation_kinds (op_code, registered_by) VALUES ('sale.issue_invoice', 'P4-S2')`], async () => {
+      const registrants = await opKindRegistrants(owner);
+      const phase3Kinds = await phase3RegisteredOpKinds(owner);
+      const all = await registeredOpKinds(owner);
+      // The kind is really registered, and really outside the Phase 3 scope.
+      expect(all).toContain('sale.issue_invoice');
+      expect(phase3Kinds).not.toContain('sale.issue_invoice');
+      expect(registrants['sale.issue_invoice']).toBe('P4-S2');
+      // SCOPED: both re-expressed claims are green.
+      expect(phase3Kinds).toHaveLength(26 + P3C_OPERATION_KINDS.length);
+      expect(builders).toEqual(phase3Kinds);
+      // The partition still covers the whole registry.
+      const beyond = all.filter((k) => !phase3Kinds.includes(k));
+      expect([...phase3Kinds, ...beyond].sort()).toEqual([...all].sort());
+      expect(beyond).toEqual(['sale.issue_invoice']);
+      // UNSCOPED, for contrast: the claim as it was written is red — which is
+      // the breakage this re-expression removes.
+      expect(builders).not.toEqual(all);
+      // And the LAW is not scoped: it reaches the new kind and refuses it,
+      // because nothing consumes it yet. A later phase's migration satisfies
+      // the law by shipping the consuming routine with the registration.
+      const law = await operationKindLaw(owner);
+      expect(Object.keys(law.consumers)).toContain('sale.issue_invoice');
+      expect(law.violations).toEqual(['1: sale.issue_invoice has 0 consumers']);
+    });
+    // Rolled back: the registry is as it was.
+    expect(await registeredOpKinds()).toEqual(await phase3RegisteredOpKinds());
+    expect((await operationKindLaw(ownerPool())).violations).toEqual([]);
+  }, 120_000);
+
+  it('RED: a kind registered by a PHASE 3 registrant with no builder is still named by the scoped claim', async () => {
+    await planted([`INSERT INTO inventory_operation_kinds (op_code, registered_by) VALUES ('purchase.probe_unbuilt', 'P3-S9')`], async () => {
+      const phase3Kinds = await phase3RegisteredOpKinds(owner);
+      expect(phase3Kinds).toContain('purchase.probe_unbuilt');
+      expect(phase3Kinds).toHaveLength(26 + P3C_OPERATION_KINDS.length + 1);
+      expect(builders).not.toEqual(phase3Kinds);
+      expect(phase3Kinds.filter((k) => !builders.includes(k))).toEqual(['purchase.probe_unbuilt']);
+    });
+  }, 120_000);
+
+  it('RED: a kind whose registrant is not of the accepted shape is named, so the beyond-scope half is not vacuous', async () => {
+    // The 0074 CHECK refuses a malformed registrant outright, which is the
+    // strongest form of this: the provenance cannot be omitted or invented.
+    await owner.query('BEGIN');
+    try {
+      await expect(owner.query(`INSERT INTO inventory_operation_kinds (op_code, registered_by) VALUES ('sale.issue_invoice', 'P4')`)).rejects.toThrow(
+        /inventory_operation_kinds_registered_by_check/,
+      );
+    } finally {
+      await owner.query('ROLLBACK').catch(() => undefined);
+    }
   });
 });

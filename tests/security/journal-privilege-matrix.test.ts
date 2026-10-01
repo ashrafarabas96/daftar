@@ -1,5 +1,6 @@
-import { Client } from 'pg';
+import { Client, type PoolClient } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { phase4InheritedPrefixRelations } from '../../scripts/guards/no-authoritative-balance';
 import {
   ACCOUNTING_REGISTRY_TABLES,
   ACCOUNTING_ROUTINES,
@@ -339,7 +340,30 @@ describe('RLS is real on the ledger', () => {
     // three S6 completeness triggers read. Phase 3 corrective (0072, TD-16):
     // plus purchase_residue_write_offs, which the write-off entry's
     // completeness trigger reads.
-    expect(rows.map((r) => r.tablename)).toEqual([
+    //
+    // P4-AL-88. "The list is asserted whole" was a claim about the phase that
+    // follows this one: a later phase's accounting source relation carries the
+    // same validator policy, and the moment one exists an accepted Phase 3
+    // suite goes red although nothing Phase 3 built changed
+    // (`[[daftar-a-closure-rule-is-not-an-invariant]]`). So the WHOLE list is
+    // now asserted over the relations the accepted inherited prefix
+    // (`0000`-`0073`, frozen byte for byte by P4-AL-85, read from the
+    // digest-verified files) created — a scope a later phase cannot enter —
+    // and the policies on the relations no accepted prefix created are
+    // asserted POSITIVELY below, with the same three claims this test's title
+    // makes: one identity, not a login role, read-only. A policy on a Phase 3
+    // table nobody reviewed still fails here, and a later phase's policy that
+    // is not the reviewed shape fails too.
+    const prefixRelations = phase4InheritedPrefixRelations();
+    expect(prefixRelations.size, 'the digest-verified prefix reader came back empty').toBeGreaterThan(0);
+    const inScope = rows.filter((r) => prefixRelations.has(r.tablename));
+    const beyond = rows.filter((r) => !prefixRelations.has(r.tablename));
+    expect(
+      inScope.filter((r) => beyond.includes(r)),
+      'the two scopes are disjoint',
+    ).toEqual([]);
+    expect(inScope.length + beyond.length, 'and together they are every accounting_validator policy').toBe(rows.length);
+    expect(inScope.map((r) => r.tablename)).toEqual([
       'accounting_fx_rates',
       'accounting_manual_adjustments',
       'accounting_period_operations',
@@ -392,9 +416,17 @@ describe('RLS is real on the ledger', () => {
       // Phase 3 corrective (0072): and so does the residue write-off.
       'purchase_residue_write_offs',
     ];
+    // The three claims of this test's title are a LAW over whatever policies
+    // exist, and they are deliberately NOT scoped: they run over every row,
+    // the later phase's included. The only thing the scope decides is WHICH
+    // of the two reviewed layerings a table must use — a relation beyond the
+    // accepted prefix uses the header layering (`FOR SELECT TO
+    // daftar_accounting_internal USING (true)`), because the PUBLIC-role
+    // predicate form belongs to the Phase 2/3 accounting tables that were
+    // written that way.
     for (const row of rows) {
       expect(row.cmd, row.tablename).toBe('SELECT');
-      if (S3_HEADERS.includes(row.tablename)) {
+      if (S3_HEADERS.includes(row.tablename) || !prefixRelations.has(row.tablename)) {
         expect({ roles: row.roles, qual: row.qual }, row.tablename).toEqual({ roles: ['daftar_accounting_internal'], qual: 'true' });
       } else {
         expect(row.roles, row.tablename).toEqual(['public']);
@@ -503,5 +535,93 @@ describe('RLS is real on the ledger', () => {
     } finally {
       await app.end();
     }
+  });
+});
+
+/**
+ * ── P4-AL-88 proof: the scoped validator-policy claim, both directions ───
+ *
+ * Scoping the table list must not have dropped what the unscoped list
+ * bought. So: the in-scope list is still RED when a Phase 3 table loses or
+ * gains the policy, and the three claims of the title are still RED when a
+ * policy beyond the accepted prefix is not the reviewed shape. Both planted
+ * on the real catalogue inside a transaction that is always rolled back; the
+ * relation is DISCOVERED, never named.
+ */
+describe('P4-AL-88 — the scoped validator-policy claim is red where it must be', () => {
+  let owner: PoolClient;
+
+  beforeAll(async () => {
+    owner = await ownerPool().connect();
+  });
+
+  interface PolicyRow {
+    tablename: string;
+    cmd: string;
+    qual: string;
+    withcheck: string | null;
+    roles: string[];
+  }
+
+  const policies = async (q: PoolClient): Promise<PolicyRow[]> =>
+    (
+      await q.query<PolicyRow>(
+        `SELECT tablename, cmd, qual, with_check AS withcheck, roles::text[] AS roles FROM pg_policies
+          WHERE schemaname = 'public' AND policyname = 'accounting_validator' ORDER BY tablename`,
+      )
+    ).rows;
+
+  const planted = async (plant: readonly string[], body: () => Promise<void>): Promise<void> => {
+    await owner.query('BEGIN');
+    try {
+      for (const sql of plant) await owner.query(sql);
+      await body();
+    } finally {
+      await owner.query('ROLLBACK').catch(() => undefined);
+    }
+  };
+
+  /** The reviewed shape of a validator policy on a relation beyond the accepted prefix. */
+  const wrongShape = (rows: readonly PolicyRow[], prefixRelations: ReadonlySet<string>): string[] =>
+    rows
+      .filter((r) => !prefixRelations.has(r.tablename))
+      .filter(
+        (r) => r.cmd !== 'SELECT' || JSON.stringify(r.roles) !== JSON.stringify(['daftar_accounting_internal']) || r.qual !== 'true' || r.withcheck !== null,
+      )
+      .map((r) => r.tablename)
+      .sort();
+
+  it('RED: a validator policy beyond the accepted prefix that admits another identity is named', async () => {
+    const prefixRelations = phase4InheritedPrefixRelations();
+    expect(wrongShape(await policies(owner), prefixRelations)).toEqual([]);
+    // A relation no accepted prefix created that does NOT already carry the
+    // policy, discovered from the catalogue.
+    const candidate = (
+      await owner.query<{ t: string }>(
+        `SELECT c.relname::text AS t FROM pg_class c
+          WHERE c.relnamespace = 'public'::regnamespace AND c.relkind = 'r' AND c.relrowsecurity
+            AND NOT EXISTS (SELECT 1 FROM pg_policy p WHERE p.polrelid = c.oid AND p.polname = 'accounting_validator')
+          ORDER BY 1`,
+      )
+    ).rows
+      .map((x) => x.t)
+      .find((t) => !prefixRelations.has(t));
+    if (candidate === undefined) return; // no subject in this tree
+    await planted([`CREATE POLICY accounting_validator ON ${candidate} FOR SELECT TO daftar_app USING (true)`], async () => {
+      expect(wrongShape(await policies(owner), prefixRelations)).toEqual([candidate]);
+    });
+    expect(wrongShape(await policies(owner), prefixRelations)).toEqual([]);
+  });
+
+  it('RED: a Phase 3 table that loses the validator policy is named by the in-scope list', async () => {
+    const prefixRelations = phase4InheritedPrefixRelations();
+    const before = (await policies(owner)).filter((r) => prefixRelations.has(r.tablename)).map((r) => r.tablename);
+    expect(before).toContain('purchases');
+    await planted([`DROP POLICY accounting_validator ON purchases`], async () => {
+      const after = (await policies(owner)).filter((r) => prefixRelations.has(r.tablename)).map((r) => r.tablename);
+      expect(after).not.toContain('purchases');
+      expect(after).not.toEqual(before);
+    });
+    expect((await policies(owner)).filter((r) => prefixRelations.has(r.tablename)).map((r) => r.tablename)).toEqual(before);
   });
 });

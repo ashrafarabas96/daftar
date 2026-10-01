@@ -211,7 +211,51 @@ const FORBIDDEN_COLUMN_PATTERNS: readonly RegExp[] = [/(^|_)balances?($|_)/, /(^
  * own schema. Only a stored NUMBER can drift from the journal, so only a
  * stored number is what this rule is about.
  */
-const NOT_A_QUANTITY = /_(id|ids|at|by|status|kind|type|code|name|currency)$/;
+const NOT_A_QUANTITY = /_(id|ids|at|date|by|status|kind|type|code|name|currency)$/;
+
+/**
+ * …and an INSTANT is an instant whether it is spelled `_at` or `_date`. The
+ * suffix list carried `_at` and not `_date`, which made `invoices.due_date`
+ * — the payment term a merchant AGREES, an input to the aging computation
+ * and not a derivation of anything — read as a claim of storage authority
+ * over an amount due, under a rule whose own header says "only a stored
+ * NUMBER can drift from the journal, so only a stored number is what this
+ * rule is about" (`:211-212`). `_date` is therefore an instant here too, and
+ * `due_date` is now exempt for exactly the reason the accepted `due_status`
+ * already is: the word `due` is in the AP vocabulary, and a due DATE and a
+ * due STATUS are both terms while a due AMOUNT is a balance. A date column
+ * cannot hold money or a quantity, so it cannot drift from a sum, which is
+ * the whole subject of this rule. `(^|_)due($|_)` on any numeric column is
+ * untouched.
+ *
+ * ── AND WHAT THIS DELIBERATELY DOES NOT DO (P4-S1, TL-P4-S1-C11) ───────
+ *
+ * A first attempt consulted `DERIVED_SETTLEMENT_INSTANT` below BEFORE the
+ * exemption, on the reasoning that "when this was settled" is read off the
+ * allocations exactly as "how much is settled" is, and that `_at` being
+ * blanket-exempt was therefore a hole. That reasoning is wrong here, and the
+ * accepted tree says so: `tests/integration/accounting-guards.test.ts:272`
+ * names `paid_at` in the list of columns this rule must ALLOW, beside
+ * `paid_by`, under the heading "identities, actors, instants". It is a
+ * deliberate decision, not an oversight, and it is right — on a payment
+ * document, `paid_at` is a FACT OF THAT DOCUMENT, not a derivation of
+ * anything.
+ *
+ * Which exposes what a column-name rule cannot express: whether a settlement
+ * instant is derived depends on WHICH RELATION carries it. `paid_at` on a
+ * payment is a fact; `settled_at` on an invoice is a second truth. The
+ * vocabulary is tree-wide and relation-blind, so consulting the pattern here
+ * would refuse the fact in order to refuse the derivation, and would reverse
+ * an accepted decision to do it.
+ *
+ * So the pattern below is NOT consulted by the four predicates in this file.
+ * It is exported for the RELATION-SCOPED surface that can express the
+ * distinction: `0075-E`'s end-state block over the five Phase 4 relations,
+ * and `tests/golden-regression/phase4/04-schema-lint.golden.test.ts`, which
+ * apply it only where a settlement instant would in fact be derived. `due`
+ * is absent from it for the same reason as above.
+ */
+export const DERIVED_SETTLEMENT_INSTANT = /(^|_)(settled|paid|collected|allocated|refunded)_(at|date)($|_)/;
 
 /**
  * ── P4-S1: the derived-total vocabulary, on every relation the accepted
@@ -388,8 +432,8 @@ const INVENTORY_FORBIDDEN_COLUMN_PATTERNS: readonly RegExp[] = [
   ...DERIVED_TOTAL_COLUMN_PATTERNS,
 ];
 
-/** Inventory tables only: an identity, actor, instant, classifier or ORDERING is not a stored quantity. */
-export const INVENTORY_NOT_A_QUANTITY = /_(id|ids|at|by|status|kind|type|code|name|currency|seq)$/;
+/** Inventory tables only: an identity, actor, instant (`_at` or `_date`), classifier or ORDERING is not a stored quantity. */
+export const INVENTORY_NOT_A_QUANTITY = /_(id|ids|at|date|by|status|kind|type|code|name|currency|seq)$/;
 
 const INVENTORY_FORBIDDEN_TABLE = /(^|_)(stock|inventory)_(balances?|summar(y|ies)|snapshots?|rollups?|caches?)($|_)/;
 

@@ -235,10 +235,36 @@ describe('P4-AL-88: the mounted surface equals the declared surface', () => {
     const id = randomUUID();
     for (const r of await declaredRoutes()) {
       const res = await t.request[r.verb](concrete(r.path, id)).set(headers).send({});
-      // Reached, not necessarily successful: a well-formed request for an
-      // absent row is a 404 from the HANDLER, so the claim is that routing
-      // happened at all. A 404 here would mean the declaration is a fiction.
-      expect(res.status, `${r.verb.toUpperCase()} ${r.template} (${r.controller}) is declared but not mounted`).not.toBe(404);
+      /**
+       * Reached, not necessarily successful. The old form of this claim was
+       * `not.toBe(404)`, which its own comment already contradicted: a
+       * well-formed request for an absent row IS a 404, from the handler. It
+       * passed only while no Phase 4 relation existed and an item route could
+       * not answer cleanly — `0075` gave `GET /v1/customers/:customerId` a
+       * table to miss in, and a correct handler 404 broke the assertion. A
+       * status that a correct implementation returns is not a discriminator.
+       *
+       * What discriminates is WHO answered, and the two are not told apart by
+       * the status or by `error.code`: `common/error.filter.ts:68-80` maps
+       * Nest's own router `NotFoundException` to the same
+       * `{ error: { code: 'NOT_FOUND', message: 'Resource not found' } }` body
+       * a handler's refusal gets. The one thing only a handler produces is
+       * `error.details.sellingCode` — `selling-errors.ts:108-113` puts the
+       * stable code there on every refusal of this surface, so an unmounted
+       * route cannot forge it.
+       *
+       * The claim is therefore what it always meant, and one notch stronger:
+       * a declared route answers, and when it answers 404 it answers with this
+       * surface's own stable code rather than the router's anonymous one.
+       */
+      if (res.status !== 404) continue;
+      const details = ((res.body as { error?: { details?: Record<string, unknown> } } | undefined)?.error?.details ?? {}) as {
+        sellingCode?: unknown;
+      };
+      expect(
+        typeof details.sellingCode === 'string' ? details.sellingCode : null,
+        `${r.verb.toUpperCase()} ${r.template} (${r.controller}) answered 404 with no sellingCode — that is Nest's router answering, not a handler`,
+      ).toMatch(/^[a-z_]+\.[a-z_]+$/);
     }
   }, 120_000);
 
