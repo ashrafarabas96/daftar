@@ -231,10 +231,15 @@ describe('invpl/1 — refusals of non-canonical input (never normalized)', () =>
   // Phase 3 corrective (0072, TD-16) appends the one corrective kind,
   // `purchase.write_off_residue`; every slice row stays verbatim.
   // P4-S1 (gap G-5) appends the four customer kinds; every Phase 3 row stays
-  // verbatim. The list is ABSOLUTE on purpose: a fifth kind, a renamed kind or a
-  // kind quietly dropped turns this red, and the registry is the thing a signed
-  // authority is scoped by.
-  it('registers exactly the three P3-S1 operation kinds, the seven P3-S3 kinds, the seven P3-S4 kinds, the two P3-S5 kinds, the seven P3-S6 kinds, the one corrective kind and the four P4-S1 customer kinds', () => {
+  // verbatim.
+  // P4-S2 (docs/PHASE_4_S2_CONTRACT.md A-05) appends the ONE sale kind,
+  // `sale.commit`; every earlier row stays verbatim. `sale.void` and
+  // `sale.return` are NOT here: they belong to P4-S6 and P4-S5, and a kind
+  // registered without its routine would be an authority nothing refuses.
+  // The list is ABSOLUTE on purpose: a kind added, renamed or quietly dropped
+  // turns this red, and the registry is the thing a signed authority is
+  // scoped by.
+  it('registers exactly the three P3-S1 operation kinds, the seven P3-S3 kinds, the seven P3-S4 kinds, the two P3-S5 kinds, the seven P3-S6 kinds, the one corrective kind, the four P4-S1 customer kinds and the one P4-S2 sale kind', () => {
     expect([...INVENTORY_OPERATION_CODES].sort()).toEqual([
       'customer.archive', // P4-S1 (gap G-5)
       'customer.create', // P4-S1 (gap G-5)
@@ -258,6 +263,7 @@ describe('invpl/1 — refusals of non-canonical input (never normalized)', () =>
       'purchase.return', // P3-S5 (0065/0066)
       'purchase.reverse', // P3-S5 (0065/0066)
       'purchase.write_off_residue', // Phase 3 corrective (0072, TD-16)
+      'sale.commit', // P4-S2 (the atomic sale commit)
       'structure.associate_warehouse_branch',
       'structure.dissociate_warehouse_branch',
       'supplier.allocate_credit', // P3-S6 (0067/0068)
