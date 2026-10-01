@@ -109,12 +109,23 @@ const P4_AL_16_FLOOR: readonly string[] = [
  *
  * `invoice_sequences` is here but is NOT in `TRIGGER_SEAMS`, and that is the
  * point of E-01: P4-AL-31 forbids a stored counter, so the routine takes the
- * series row `FOR UPDATE`, reads `max(number_seq) + 1` and never UPDATEs it.
- * A `BEFORE UPDATE` trigger on it therefore never fires — the injection
- * observed nothing, the sale succeeded, and the case asserted a refusal it
- * then failed to get. The seam is real and it is reached by a ROW LOCK, so it
- * is proved by HOLDING that row in another session: see the dedicated case
- * below.
+ * series row `FOR NO KEY UPDATE`, reads `max(number_seq) + 1` and never
+ * UPDATEs it. A `BEFORE UPDATE` trigger on it therefore never fires — the
+ * injection observed nothing, the sale succeeded, and the case asserted a
+ * refusal it then failed to get. The seam that matters here is reached by a
+ * ROW LOCK, so it is proved by HOLDING that row in another session: see the
+ * dedicated case below.
+ *
+ * TL-P4-S2-R4 added ONE write to the relation and did not change that: the
+ * routine now creates the series row of a `(business, year)` on FIRST USE,
+ * `INSERT … ON CONFLICT DO NOTHING`. In THIS suite `seedSaleFixtures` has
+ * already seeded the row, so the sale's initialiser conflicts and inserts
+ * nothing, which is why a count delta still cannot discover the relation and
+ * why it is still named here. The initialiser has its own suite —
+ * `tests/integration/sale-s2-sequence-init.test.ts` — which starts from
+ * businesses that have seeded NOTHING, and the case below is extended to
+ * police the shape of that one write: exactly one INSERT, `DO NOTHING`, and
+ * still no UPDATE and no DELETE.
  */
 const UPDATE_SEAMS: readonly string[] = ['stock_levels', 'invoice_sequences'];
 
@@ -249,14 +260,29 @@ describe('P4-AL-16 one transaction, or no sale: a failure at every seam leaves n
   /**
    * THE PREMISE OF E-01, ASSERTED RATHER THAN ASSUMED.
    *
-   * `invoice_sequences` is proved by HOLDING its row because the routine only
-   * ever LOCKS it. That premise has been reported twice as a defect — "the
-   * invoice_sequences injection does not fire" — and both times the answer was
-   * that a row trigger cannot observe a row lock. So the premise is a law now,
-   * stated in both directions, and a future edit that puts the relation back
-   * into the trigger set, or a migration that starts writing the row, is
-   * refused HERE with the reason rather than as an obscure
-   * "expected false to be true" inside a generated case.
+   * `invoice_sequences` is proved by HOLDING its row because the ORDINAL seam
+   * is reached by a lock and by nothing else. That premise has been reported
+   * twice as a defect — "the invoice_sequences injection does not fire" — and
+   * both times the answer was that a row trigger cannot observe a row lock.
+   * So the premise is a law now, stated in both directions, and a future edit
+   * that puts the relation into the generated trigger set, or a migration
+   * that starts UPDATEing the row, is refused HERE with the reason rather
+   * than as an obscure "expected false to be true" inside a generated case.
+   *
+   * TL-P4-S2-R4 CORRECTED ONE HALF OF THE OLD PREMISE, AND THE LAW IS
+   * NARROWER AND STRONGER FOR IT. The old reading was "the routine writes
+   * this relation nowhere", which left a clean business with no path to its
+   * first invoice number and was ruled a product blocker. The routine now
+   * carries exactly ONE write: the first-use initialiser,
+   * `INSERT … ON CONFLICT (business_id, document_kind, period) DO NOTHING`.
+   * What the slice's privilege argument and P4-AL-31 actually need is that
+   * the routine never REWRITES the row — no UPDATE, no DELETE, and no
+   * `DO UPDATE` that would overwrite a merchant's `number_format` with the
+   * default on every sale — and that is what is asserted below, together
+   * with the count of initialisers, so a SECOND write cannot slip in beside
+   * the first. The relation stays out of `TRIGGER_SEAMS` because the ordinal
+   * seam this suite is about is still the LOCK, and because in this suite the
+   * fixture has already created the row.
    *
    * The routine body is read through `lexBody`, the repo's own recogniser,
    * which strips `--` and block comments and replaces every single-quoted
@@ -269,9 +295,10 @@ describe('P4-AL-16 one transaction, or no sale: a failure at every seam leaves n
     expect(UPDATE_SEAMS, 'invoice_sequences is a seam, named because a count delta cannot discover it').toContain('invoice_sequences');
     expect(
       TRIGGER_SEAMS,
-      'invoice_sequences is in TRIGGER_SEAMS: a BEFORE INSERT OR UPDATE trigger there can never fire, because the routine takes the row ' +
-        'FOR NO KEY UPDATE and never writes it (P4-AL-31 forbids a stored counter). The generated case would assert a refusal and get a ' +
-        'success. This seam is proved by the held-lock case below, through pg_blocking_pids.',
+      'invoice_sequences is in TRIGGER_SEAMS: the ORDINAL seam is reached by the row lock the routine takes FOR NO KEY UPDATE, and a row ' +
+        'trigger cannot observe a lock (P4-AL-31 forbids a stored counter, so there is no UPDATE to observe either). This suite seeds the ' +
+        'series row, so the first-use initialiser of TL-P4-S2-R4 conflicts and writes nothing here. This seam is proved by the held-lock ' +
+        'case below, through pg_blocking_pids; the initialiser is proved in tests/integration/sale-s2-sequence-init.test.ts.',
     ).not.toContain('invoice_sequences');
 
     // (b) the claim about the ROUTINE, from the live catalogue. `0078`'s
@@ -302,6 +329,31 @@ describe('P4-AL-16 one transaction, or no sale: a failure at every seam leaves n
       /\bFOR\s+NO\s+KEY\s+UPDATE\b/i.test(code) || /\bFOR\s+UPDATE\b/i.test(code),
       `${SALE_COMMIT_ROUTINE} takes no row lock at all, so nothing serialises two sales on the same series and the ordinal is racy`,
     ).toBe(true);
+    expect(
+      /\bDELETE\s+FROM\s+(?:public\.)?invoice_sequences\b/i.test(code),
+      `${SALE_COMMIT_ROUTINE} DELETEs a series row, and a deleted series is a renumbered business`,
+    ).toBe(false);
+
+    // The ONE write TL-P4-S2-R4 added, and its shape. Exactly one, and it can
+    // only ever CREATE: `DO UPDATE` would rewrite a merchant's number_format
+    // with the default on every sale, which is the authority the column-level
+    // grant of `0078` §1 deliberately withholds.
+    const initialisers = [...code.matchAll(/\bINSERT\s+INTO\s+(?:public\.)?invoice_sequences\b/gi)];
+    expect(
+      initialisers.length,
+      `${SALE_COMMIT_ROUTINE} carries ${initialisers.length} inserts into invoice_sequences. TL-P4-S2-R4 asks for EXACTLY ONE — the first-use ` +
+        `initialiser of a (business, year) series. None means a clean business has no path to its first invoice number again; two means there ` +
+        `is a second, unreviewed way for a series row to come into existence.`,
+    ).toBe(1);
+    expect(
+      /\bON\s+CONFLICT\b[^;]*\bDO\s+NOTHING\b/i.test(code),
+      `${SALE_COMMIT_ROUTINE}'s series initialiser is not ON CONFLICT … DO NOTHING, so two concurrent first sales of one year are not decided by ` +
+        `the primary key and the loser has no defined outcome`,
+    ).toBe(true);
+    expect(
+      /\bON\s+CONFLICT\b[^;]*\bDO\s+UPDATE\b/i.test(code),
+      `${SALE_COMMIT_ROUTINE} UPSERTS the series row: the default format would be written over a merchant's stated number_format on every sale`,
+    ).toBe(false);
 
     // (c) the recognisers, PLANTED, because a `.toBe(false)` over a regex that
     //     matches nothing is the quietest vacuous pass there is. Both are
@@ -316,6 +368,22 @@ describe('P4-AL-16 one transaction, or no sale: a failure at every seam leaves n
     expect(/\bUPDATE\s+(?:public\.)?invoice_sequences\b/i.test(lexBody('-- UPDATE invoice_sequences\nBEGIN NULL; END').code), 'nor one inside a comment').toBe(
       false,
     );
+    // And the same for the initialiser recognisers, so neither the count nor
+    // the DO NOTHING / DO UPDATE readings can be a vacuous pass.
+    const plantedUpsert = lexBody(
+      'BEGIN INSERT INTO invoice_sequences (period) VALUES (1) ON CONFLICT (business_id, document_kind, period) DO UPDATE SET number_format = 1; END',
+    ).code;
+    expect([...plantedUpsert.matchAll(/\bINSERT\s+INTO\s+(?:public\.)?invoice_sequences\b/gi)].length, 'the counter sees a real initialiser').toBe(1);
+    expect(/\bON\s+CONFLICT\b[^;]*\bDO\s+UPDATE\b/i.test(plantedUpsert), 'and the upsert recogniser sees a real DO UPDATE').toBe(true);
+    expect(/\bON\s+CONFLICT\b[^;]*\bDO\s+NOTHING\b/i.test(plantedUpsert), 'and does not read a DO UPDATE as a DO NOTHING').toBe(false);
+    expect(
+      [...lexBody('-- INSERT INTO invoice_sequences\nBEGIN NULL; END').code.matchAll(/\bINSERT\s+INTO\s+(?:public\.)?invoice_sequences\b/gi)].length,
+      'nor does the counter see an initialiser written in a comment',
+    ).toBe(0);
+    expect(
+      /\bDELETE\s+FROM\s+(?:public\.)?invoice_sequences\b/i.test(lexBody('BEGIN DELETE FROM invoice_sequences; END').code),
+      'and the delete recogniser sees a real DELETE',
+    ).toBe(true);
   });
 
   /**
