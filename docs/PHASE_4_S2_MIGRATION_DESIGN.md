@@ -698,3 +698,112 @@ stock-side guards with `daftar_inventory_internal` and `sales_walkin_no_ar` with
 - **`tsc` over my own diff.** This branch adds one document and no TypeScript, so there is nothing of
   mine for `tsc` to judge; a green `tsc` in this worktree would be about the main checkout's files, since
   the worktree carries no `node_modules` of its own.
+
+---
+
+## 13. `0077` as built, and what building it changed (added after the release to write it)
+
+`0077_phase4_sales_sale_items_sources.sql` exists on this branch. It **applies from
+zero as `daftar_migrator`**, **re-applies as a no-op**, and the deployment it
+produces was diffed against a superuser-built catalogue: the two schema dumps are
+byte-identical apart from `pg_dump`'s own nonce, the 213 `OWNER TO
+daftar_*_internal` lines are identical, and every `GRANT`/`REVOKE` line is
+identical. The only difference is which role owns the objects the applier keeps,
+which is `daftar_migrator` in one build and `postgres` in the other — correct, and
+the reason the deployment is proved by performing it rather than by a superuser
+suite.
+
+Agent A's law is **green over all three new relations**: zero problems, both halves
+agreeing, 8 declared and 8 live Phase 4 relations, all 8 in `tenantAndBusiness`,
+nothing in `oneDimension` or `noDimension`, 109 inherited and one applier relation
+subtracted. The sealed S1 gate's **sixteen** structural check functions each return
+`[]`, the three deferred seams included — so `S-P4-01` is closed by
+`invoices_sale_fk` and `S-P4-02` by the reversal guard naming `'invoice'`.
+`inventory_stock_source_guard_gaps()` returns **no row**. `check:migrations` is
+green with 0077 present and **no manifest entry**, per `TL-P4-S1-C8`.
+
+### 13.1 Things the design document did not have, found by building it
+
+**(a) The vacuous-pass trap was live on `invoice_items`, not hypothetical.**
+`invoice_items` carries exactly six policies (`0075:460-473`) and its RESTRICTIVE
+read admits `daftar_inventory_internal` alone. The deferred invoice validator is a
+DEFINER owned by `daftar_accounting_internal`, so under `FORCE ROW LEVEL SECURITY`
+it read **zero lines and passed** — not failed, passed. `0077` therefore makes
+`invoice_items` an accounting-source-reading relation: `ALTER POLICY
+business_isolation_read` to the same two principals `0075` already names on
+`invoices`, a seventh `accounting_validator` policy, and `GRANT SELECT ... TO
+daftar_accounting_internal`. All three are needed; a policy without the grant and a
+grant without the policy each read zero rows and pass. Never an edit to `0075`.
+
+**(b) `P4-AL-29b`'s `value_complete` arm has no lawful subject for `sale`.** Its
+subject would have to be a stored cost total on `sales`, which `P4-AL-05` forbids
+and which the no-authoritative-balance guard's `DERIVED_COST_COLUMN`
+(`scripts/guards/no-authoritative-balance.ts:317`) refuses by name. The `sale` arm
+therefore carries `source_complete`, `header_complete`, `source_freeze` and
+`header_immutable` — four, not five. Recorded as a Tech Lead review point.
+
+**(c) The sale's cost had to cross a domain boundary, and does so as a function.**
+The `sale` entry is the COGS/Inventory pair (`PHASE_4_ARCHITECTURE_LOCK.md:341`) and
+its amount is the sum of `stock_movements.value_delta_base_minor`. There is no
+stored total to read, by (b). The accounting validator therefore needs a number the
+inventory domain owns. Granting `daftar_accounting_internal` `SELECT` on
+`stock_movements` would buy a table-wide read **and** require adding it a policy on
+a FROZEN Phase 3 relation to get one number. `0077` instead adds
+`inventory_sale_cost_base_minor(UUID, UUID)` — `STABLE SECURITY DEFINER`, owned by
+`daftar_inventory_internal`, pinned, `PUBLIC` revoked, `EXECUTE` to
+`daftar_accounting_internal` **alone**. The precedent is
+`inventory_business_has_stock_movements(UUID)` at `0069:212`, granted to this very
+principal for this very reason. It returns **NULL, never 0**, on an empty movement
+set, so the caller cannot read "no movements" as "a cost of nothing".
+
+**(d) A header twin was required and the design document did not name one.** A
+draft that becomes `confirmed` by an `UPDATE` touches no line, so without
+`stock_source_complete_sale_header()` on `sales` a sale could be confirmed carrying
+movements for none of its lines — the hole `purchases_received_complete`
+(`0063:1132`) exists to close. Five new inventory-owned routines, not four.
+
+**(e) RLS is evaluated before CHECK constraints, and `app_bypass()` is not what
+`0006` defined.** The performed tax probe tripped `new row violates row-level
+security policy` and reported itself DEFECTIVE, which is what a defective-probe
+handler is for. `SET LOCAL app.bypass_rls` does not help: the **live**
+`app_bypass()` is `current_user = 'daftar_platform'`, not `0006:11`'s setting read —
+one more instance of `[[daftar-the-live-catalogue-is-the-policy]]`. The probe now
+STATES a tenant and a business context and inserts a row in it, which widens
+nothing and is reset afterwards.
+
+**(f) The bridge carries two RESTRICT edges, not three.** The tenant edge to
+`businesses (tenant_id, id)` is a plain composite FK, as everywhere else; it is
+asserted by name and column list separately.
+
+### 13.2 The two recommended-option decisions, marked in the file itself
+
+- **D-1 (the balancing side).** `accounting_invoice_entry_complete()` takes the
+  settlement account from `sales.settlement_kind`: `cash` debits the `cash` system
+  account **directly**, with no payment document and no P4-S4 relation; `credit`
+  debits `accounts_receivable`. `settlement_kind` is a stored **input** — a fact the
+  merchant states — so `[[daftar-no-stored-derived-truth]]` is untouched. Marked in
+  the file as the recommended option pending the Tech Lead's card. **If the ruling
+  goes the other way this function is the only thing in `0077` that changes, and it
+  changes by replacement in a later migration.**
+- **D-2 (net revenue).** Revenue is recognised net. Requiring **exactly two** lines
+  is what refuses a separate `discounts` contra line and a `tax_payable` line: a
+  third line of any kind fails, so a gross-plus-contra shape cannot be posted behind
+  the validator's back. `tax_minor = 0` is a row CHECK, and a non-zero tax is
+  REFUSED, not computed — `OD-03` stays open and no jurisdiction's rule is encoded.
+
+### 13.3 The non-vacuity canaries
+
+Every validator fails when it has no subject rather than passing:
+
+| validator | canary |
+| --- | --- |
+| `accounting_sale_entry_complete()` | the sale row was found and is not a draft; `inventory_sale_cost_base_minor()` is **not NULL** and is positive; the entry has exactly two lines |
+| `accounting_invoice_entry_complete()` | the invoice row was found and is not a draft; its sale was found; the line **count** is asserted separately and the base-share **sum is refused when NULL**; the entry has exactly two lines |
+| `stock_source_complete_sale()` / `_header()` | a non-draft sale with **zero** lines is refused, so an empty document cannot satisfy "every line is right" |
+| `inventory_stock_source_guard_gaps()` | `0077-E` reads it and prints every gap it found, rather than asserting a count |
+
+### 13.4 The name Agent D's canary needs
+
+The commit routine `0078` creates is **`sale_commit`**. `0077` creates no writer at
+all, and `0077-E` asserts that physically: no routine it creates is executable by
+any runtime principal.
