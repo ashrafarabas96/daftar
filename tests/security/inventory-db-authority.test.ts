@@ -13,6 +13,8 @@ import {
   resolverDbUrl,
   workerDbUrl,
 } from '../helpers/test-app';
+import { inheritedPrefixRoutines } from '../helpers/phase4-inherited-scope';
+import { must } from '../helpers/inventory-commands';
 
 /**
  * P3-S1 — THE INVENTORY PRINCIPAL AND ITS GRANT MATRIX (P3-AL-54 §A-§H).
@@ -256,9 +258,80 @@ describe('the §H grant matrix, from information_schema and pg_policy (P3-AL-54 
       'the two scopes are disjoint',
     ).toEqual([]);
     expect([...Object.keys(inScope), ...Object.keys(beyond)].sort(), 'and together they are every table').toEqual(Object.keys(live).sort());
+    /**
+     * ── P4-AL-88, a second time, on the BEYOND half's own wording ────────
+     *
+     * The beyond half said "SELECT and nothing else", and its own comment
+     * above says why: "a later migration that hands this principal INSERT,
+     * UPDATE or DELETE on its own relation is RED here and must be reviewed".
+     * It is a review gate, and the review is now due. `0077` hands this
+     * principal INSERT on `sales`, `sale_items` and
+     * `stock_source_bridge_sale`, and a column UPDATE on eight `sales`
+     * lifecycle columns.
+     *
+     * The reviewed answer is that this is the authority model working, not a
+     * hole: it is the SAME shape every in-scope entry of the map below has —
+     * `stock_source_bridge_purchase: 'INSERT,SELECT'`, `purchases` with its
+     * thirty UPDATE columns — so "SELECT and nothing else" was never the
+     * contract. It was a closure rule about the phase that follows, and it
+     * contradicted the map it sits beside
+     * (`[[daftar-a-closure-rule-is-not-an-invariant]]`).
+     *
+     * So the beyond half now states the contract the closure rule stood in
+     * for, POSITIVELY and in two clauses, both read from the catalogue and
+     * neither naming a relation:
+     *
+     *   (1) APPEND-ONLY AND LIFECYCLE-CONFINED. Beyond the accepted prefix
+     *       this principal holds no DELETE, no TRUNCATE, no table-level
+     *       UPDATE, no REFERENCES and no TRIGGER — so a row it writes cannot
+     *       be removed or rewritten wholesale, and a lifecycle change is
+     *       confined to columns somebody granted BY NAME (which the column
+     *       map in the next case then claims exactly).
+     *
+     *   (2) THE WRITES BELONG TO THE SIGNED ROUTINES — checked now, rather
+     *       than asserted in a comment. Every relation beyond the prefix this
+     *       principal can write is one NO runtime login principal can write
+     *       at all, so the only path to that write is a SECURITY DEFINER
+     *       routine this principal owns.
+     *
+     * Clause 2 is strictly STRONGER than the sentence it replaces, because
+     * "this principal reads" said nothing whatever about the runtime
+     * principals: it is red the day a migration hands `daftar_app` a write on
+     * its own relation, which the proxy could not see. What is no longer
+     * claimed is that a later phase registers no append-only relation of its
+     * own — which was never a security property.
+     */
+    const NON_INSERT_WRITES = ['UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER'];
     expect(
-      Object.entries(beyond).filter(([, p]) => p !== 'SELECT'),
-      'beyond the accepted prefix this principal reads and never writes: the writes belong to the signed routines',
+      Object.entries(beyond).filter(([, p]) => p.split(',').some((x) => NON_INSERT_WRITES.includes(x))),
+      '(1) beyond the accepted prefix this principal holds no DELETE, TRUNCATE, table-level UPDATE, REFERENCES or TRIGGER',
+    ).toEqual([]);
+    const beyondWritable = (
+      await ownerPool().query<{ t: string }>(
+        `SELECT c.relname::text AS t FROM pg_class c
+          WHERE c.relnamespace = 'public'::regnamespace AND c.relkind IN ('r', 'p') AND c.relname = ANY ($2::text[])
+            AND (has_table_privilege($1, c.oid, 'INSERT') OR has_any_column_privilege($1, c.oid, 'UPDATE'))
+          ORDER BY 1`,
+        [INTERNAL, Object.keys(beyond)],
+      )
+    ).rows.map((x) => x.t);
+    // Clause 2 needs a subject: a tree in which this principal writes nothing
+    // beyond the accepted prefix would make it vacuous, and that is worth
+    // knowing rather than passing silently.
+    expect(beyondWritable.length, 'this principal writes at least one relation beyond the accepted prefix').toBeGreaterThan(0);
+    expect(
+      (
+        await ownerPool().query<{ v: string }>(
+          `SELECT p.rolname || ' ' || v.priv || ' ' || t.name AS v
+             FROM pg_roles p, unnest($1::text[]) t(name), unnest(ARRAY['INSERT','UPDATE','DELETE','TRUNCATE']) v(priv)
+            WHERE p.rolcanlogin AND NOT p.rolsuper AND p.rolname <> 'daftar_migrator'
+              AND (has_table_privilege(p.rolname, 'public.' || t.name, v.priv)
+                   OR (v.priv IN ('INSERT', 'UPDATE') AND has_any_column_privilege(p.rolname, 'public.' || t.name, v.priv)))
+            ORDER BY 1`,
+          [beyondWritable],
+        )
+      ).rows.map((x) => x.v),
+      '(2) a relation beyond the accepted prefix this principal can write is writable by no runtime principal: the write belongs to the signed routines',
     ).toEqual([]);
     expect(inScope).toEqual({
       audit_events: 'INSERT',
@@ -345,7 +418,51 @@ describe('the §H grant matrix, from information_schema and pg_policy (P3-AL-54 
        GROUP BY 1, 2 ORDER BY 1, 2`,
       [INTERNAL],
     );
-    expect(r.rows).toEqual([
+    /**
+     * ── P4-AL-88 ─────────────────────────────────────────────────────────
+     *
+     * The same defect as the table map above, in the same shape: this was an
+     * exact equality over EVERY relation the principal holds a column
+     * privilege on, so `0077`'s eight `sales` lifecycle columns turn an
+     * accepted Phase 3 claim red
+     * (`[[daftar-a-closure-rule-is-not-an-invariant]]`).
+     *
+     * Scoped by POSITION, by the same digest-verified reader, with the list
+     * below unchanged column for column. The beyond half is claimed
+     * SEPARATELY AND POSITIVELY, and with the clause a column whitelist
+     * actually needs: a column UPDATE is only as good as the trigger that
+     * judges the transition, so every relation beyond the prefix on which
+     * this principal holds a column UPDATE must carry a SECURITY DEFINER
+     * guard trigger owned by an internal principal. (Clause 2 of the case
+     * above — no runtime principal may write these relations — covers them
+     * too, because a column UPDATE makes a relation `beyondWritable` there.)
+     * Plus a CLOSURE assertion, so nothing escapes between the halves.
+     */
+    const prefixRelations = phase4InheritedPrefixRelations();
+    expect(prefixRelations.size, 'the digest-verified prefix reader came back empty').toBeGreaterThan(0);
+    const inScopeCols = r.rows.filter((x) => prefixRelations.has(x.t));
+    const beyondCols = r.rows.filter((x) => !prefixRelations.has(x.t));
+    expect([...inScopeCols, ...beyondCols].length, 'the two scopes together are every column grant').toBe(r.rows.length);
+    expect(
+      beyondCols.filter((x) => x.p !== 'UPDATE' && x.p !== 'INSERT'),
+      'beyond the accepted prefix a column grant to this principal is an INSERT or an UPDATE and nothing else',
+    ).toEqual([]);
+    const guarded = new Set(
+      (
+        await ownerPool().query<{ t: string }>(
+          `SELECT DISTINCT c.relname::text AS t
+             FROM pg_trigger g JOIN pg_class c ON c.oid = g.tgrelid JOIN pg_proc f ON f.oid = g.tgfoid JOIN pg_roles o ON o.oid = f.proowner
+            WHERE NOT g.tgisinternal AND g.tgenabled <> 'D' AND f.prosecdef AND NOT o.rolcanlogin AND o.rolname LIKE 'daftar\\_%\\_internal'
+              AND c.relname = ANY ($1::text[])`,
+          [beyondCols.map((x) => x.t)],
+        )
+      ).rows.map((x) => x.t),
+    );
+    expect(
+      beyondCols.filter((x) => x.p === 'UPDATE' && !guarded.has(x.t)).map((x) => x.t),
+      'a relation beyond the accepted prefix whose columns this principal may UPDATE carries a DEFINER guard trigger owned by an internal principal',
+    ).toEqual([]);
+    expect(inScopeCols).toEqual([
       // P3-S4 (0063, contract A-18): the coverage decrements a deficit layer.
       { t: 'negative_inventory_deficits', p: 'UPDATE', cols: 'status,uncovered_qty' },
       // P3-S6 (0067, contract A-17): a method's mutable fields and its names'
@@ -447,7 +564,47 @@ describe('the §H grant matrix, from information_schema and pg_policy (P3-AL-54 
        ORDER BY 2, 1`,
       [INTERNAL],
     );
-    expect(r.rows).toEqual([
+    /**
+     * ── P4-AL-88 ─────────────────────────────────────────────────────────
+     *
+     * The same defect once more: an exact equality over every EXECUTE grant
+     * on every routine this principal owns, which made it a claim about the
+     * phase that follows. `0077` adds `inventory_sale_cost_base_minor` and
+     * grants it to `daftar_accounting_internal` — the cross-domain read the
+     * revenue posting needs — so an accepted Phase 3 matrix went red for a
+     * grant that is the design (`[[daftar-a-closure-rule-is-not-an-
+     * invariant]]`).
+     *
+     * Scoped by the ROUTINE'S OWN NAME, read from the accepted prefix's
+     * digest-verified text (`inheritedPrefixRoutines()`, the twin of
+     * `phase3PrefixRoutines()`), because a routine is not separable by the
+     * relation it touches. The matrix below is unchanged, grant for grant: a
+     * MISSING grant and an extra grantee on an accepted routine are both
+     * still red, and an emptied prefix reader empties the scope, which makes
+     * the matrix red rather than vacuous.
+     *
+     * The beyond half is claimed SEPARATELY AND POSITIVELY: an EXECUTE
+     * grantee on a routine a later phase added to this principal is either
+     * `daftar_app` — the one runtime credential the signed-command surface
+     * uses — or a NOLOGIN internal principal. Never PUBLIC, and never another
+     * runtime login role, which is the leak this matrix exists to refuse.
+     * Plus a CLOSURE assertion over the two halves.
+     */
+    const prefixRoutines = inheritedPrefixRoutines();
+    expect(prefixRoutines.size, 'the digest-verified prefix routine reader came back empty').toBeGreaterThan(0);
+    const inScopeExec = r.rows.filter((x) => prefixRoutines.has(x.r));
+    const beyondExec = r.rows.filter((x) => !prefixRoutines.has(x.r));
+    expect([...inScopeExec, ...beyondExec].length, 'the two scopes together are every EXECUTE grant').toBe(r.rows.length);
+    const nologinInternal = new Set(
+      (
+        await ownerPool().query<{ g: string }>(`SELECT rolname::text AS g FROM pg_roles WHERE NOT rolcanlogin AND rolname LIKE 'daftar\\_%\\_internal'`)
+      ).rows.map((x) => x.g),
+    );
+    expect(
+      beyondExec.filter((x) => x.g !== 'daftar_app' && !nologinInternal.has(x.g)),
+      'an EXECUTE grantee on a routine beyond the accepted prefix is daftar_app or a NOLOGIN internal principal, never PUBLIC and never another runtime role',
+    ).toEqual([]);
+    expect(inScopeExec).toEqual([
       // P3-S3 (0062, contract §2.4): the seven signed entry routines, daftar_app only.
       { g: 'daftar_app', r: 'inventory_adjust_stock' },
       { g: 'daftar_platform', r: 'inventory_assertion_key_install' },
@@ -853,24 +1010,111 @@ describe('P4-AL-88 — the scoped internal privilege map is red where it must be
     }
   };
 
-  it('RED: a write handed to the internal principal beyond the accepted prefix is named', async () => {
+  /**
+   * ── P4-AL-88: a red proof whose planted state became the real one ──────
+   *
+   * This proof planted `GRANT INSERT … TO the internal principal` on a
+   * relation beyond the accepted prefix and required the beyond-scope claim
+   * to name it — which was right while that claim read "SELECT and nothing
+   * else". `0077` makes exactly that grant for real, on three relations, and
+   * the reviewed answer (see the §H case above) is that an append-only INSERT
+   * to this principal is the authority model rather than a hole. So the
+   * planted state IS the real state and this proof's subject moved.
+   *
+   * Re-aimed, not deleted, and at the two clauses that replaced the proxy —
+   * each planted separately so each is proved on its own, and each strictly
+   * harder to satisfy than the grant this proof used to plant:
+   *
+   *   (1) a DELETE handed to the internal principal beyond the prefix: the
+   *       relation stops being append-only to it;
+   *   (2) a write handed to a RUNTIME principal on a relation this principal
+   *       writes: the write stops belonging to the signed routines. This is
+   *       the real leak, and the old proxy claim could not see it at all.
+   */
+  const beyondProblems = async (q: Client | PoolClient): Promise<string[]> => {
+    const prefixRelations = phase4InheritedPrefixRelations();
+    const live = await privileges(q);
+    const beyond = Object.keys(live).filter((t) => !prefixRelations.has(t));
+    const NON_INSERT_WRITES = ['UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER'];
+    const out = beyond.filter((t) => (live[t] ?? '').split(',').some((x) => NON_INSERT_WRITES.includes(x))).map((t) => `${INTERNAL} writes ${t}: ${live[t]}`);
+    const writable = (
+      await q.query<{ t: string }>(
+        `SELECT c.relname::text AS t FROM pg_class c
+          WHERE c.relnamespace = 'public'::regnamespace AND c.relkind IN ('r', 'p') AND c.relname = ANY ($2::text[])
+            AND (has_table_privilege($1, c.oid, 'INSERT') OR has_any_column_privilege($1, c.oid, 'UPDATE'))`,
+        [INTERNAL, beyond],
+      )
+    ).rows.map((x) => x.t);
+    const leaks = (
+      await q.query<{ v: string }>(
+        `SELECT p.rolname || ' ' || v.priv || ' ' || t.name AS v
+           FROM pg_roles p, unnest($1::text[]) t(name), unnest(ARRAY['INSERT','UPDATE','DELETE','TRUNCATE']) v(priv)
+          WHERE p.rolcanlogin AND NOT p.rolsuper AND p.rolname <> 'daftar_migrator'
+            AND (has_table_privilege(p.rolname, 'public.' || t.name, v.priv)
+                 OR (v.priv IN ('INSERT', 'UPDATE') AND has_any_column_privilege(p.rolname, 'public.' || t.name, v.priv)))
+          ORDER BY 1`,
+        [writable],
+      )
+    ).rows.map((x) => x.v);
+    return [...out, ...leaks].sort();
+  };
+
+  it('RED: a non-append write to the internal principal beyond the accepted prefix is named (clause 1)', async () => {
     const prefixRelations = phase4InheritedPrefixRelations();
     const live = await privileges(owner);
     const beyond = Object.keys(live).filter((t) => !prefixRelations.has(t));
-    if (beyond.length === 0) return; // nothing beyond the prefix in this tree: the claim below has no subject
-    const target = beyond[0] ?? '';
-    await planted([`GRANT INSERT ON ${target} TO ${INTERNAL}`], async () => {
-      const after = await privileges(owner);
-      const problems = Object.entries(after)
-        .filter(([t]) => !prefixRelations.has(t))
-        .filter(([, p]) => p !== 'SELECT');
-      expect(problems).toEqual([[target, 'INSERT,SELECT']]);
+    // The claim must have a subject: a tree with nothing beyond the accepted
+    // prefix proves nothing here, and that is worth failing on rather than
+    // returning early.
+    expect(beyond.length, 'a relation beyond the accepted prefix').toBeGreaterThan(0);
+    const target = must(beyond[0], 'a relation beyond the accepted prefix');
+    expect(await beyondProblems(owner), 'green before the plant').toEqual([]);
+    await planted([`GRANT DELETE ON ${target} TO ${INTERNAL}`], async () => {
+      const problems = await beyondProblems(owner);
+      expect(problems, 'the DELETE is named, on the relation it was granted on').toContain(
+        `${INTERNAL} writes ${target}: ${must((await privileges(owner))[target], target)}`,
+      );
+      expect(
+        problems.filter((p) => !p.includes(target)),
+        'and nothing else is named',
+      ).toEqual([]);
     });
-    expect(
-      Object.entries(await privileges(owner))
-        .filter(([t]) => !prefixRelations.has(t))
-        .filter(([, p]) => p !== 'SELECT'),
-    ).toEqual([]);
+    expect(await beyondProblems(owner), 'rolled back').toEqual([]);
+  });
+
+  it('RED: a write handed to a RUNTIME principal on a relation this principal writes is named (clause 2)', async () => {
+    const prefixRelations = phase4InheritedPrefixRelations();
+    const live = await privileges(owner);
+    const beyond = Object.keys(live).filter((t) => !prefixRelations.has(t));
+    const writable = (
+      await owner.query<{ t: string }>(
+        `SELECT c.relname::text AS t FROM pg_class c
+          WHERE c.relnamespace = 'public'::regnamespace AND c.relkind IN ('r', 'p') AND c.relname = ANY ($2::text[])
+            AND (has_table_privilege($1, c.oid, 'INSERT') OR has_any_column_privilege($1, c.oid, 'UPDATE'))
+          ORDER BY 1`,
+        [INTERNAL, beyond],
+      )
+    ).rows.map((x) => x.t);
+    expect(writable.length, 'a relation beyond the accepted prefix this principal writes').toBeGreaterThan(0);
+    const target = must(writable[0], 'a writable relation beyond the accepted prefix');
+    await planted([`GRANT INSERT ON ${target} TO daftar_app`], async () => {
+      expect(await beyondProblems(owner)).toEqual([`daftar_app INSERT ${target}`]);
+    });
+    // And a column-level grant is seen too: a leak does not have to be
+    // table-wide to be a leak.
+    const col = must(
+      (
+        await owner.query<{ c: string }>(
+          `SELECT a.attname::text AS c FROM pg_attribute a WHERE a.attrelid = ('public.' || $1)::regclass AND a.attnum > 0 AND NOT a.attisdropped ORDER BY a.attnum LIMIT 1`,
+          [target],
+        )
+      ).rows[0],
+      `a column of ${target}`,
+    ).c;
+    await planted([`GRANT UPDATE (${col}) ON ${target} TO daftar_worker`], async () => {
+      expect(await beyondProblems(owner)).toEqual([`daftar_worker UPDATE ${target}`]);
+    });
+    expect(await beyondProblems(owner), 'rolled back').toEqual([]);
   });
 
   it('RED: a Phase 3 privilege removed is still named by the in-scope map', async () => {
