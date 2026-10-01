@@ -220,17 +220,38 @@ A stale prediction therefore costs a REFUSED sale the till retries — there is
 no server retry, `[[daftar-lock-order-not-retry]]` — and can never cost a
 misstated cost.
 
-**Open gap, reported not hidden.** `deriveSaleCogsEntryLines` refuses a
-zero-total COGS entry, correctly, because `journal_lines` refuses a zero amount
-and "an entry asserting that goods worth nothing left the shelf is not a fact".
-But a sale of zero-average-cost stock is legitimate and posts only the REVENUE
-entry — one of two assertions — which `AccountingAssertionSequence.assertComplete()`
-refuses (`presented 1 < 2`). So such a sale is currently UNCOMMITTABLE. It is
-refused with the stable code `sale.zero_cost_stock` (422) rather than posted
-wrongly. Closing it needs a `cogs: null` arm in
-`packages/accounting/src/sale-posting.ts` (the accounting owner's file) and a
-one-assertion sale, and it is an accounting-integrity gap, so it is not
-Technical Debt.
+**The zero-valued sale, and how it is CLOSED.** A sale of stock whose stored
+valuation is zero releases no value, so it legitimately posts ONE entry — the
+revenue one. Both halves of that are physical:
+`journal_lines_money_cap_ck` (`0042:225`) requires `base_amount_minor > 0`, and
+`0060:388-390` gives the movement that empties a key exactly
+`-valuation_base_minor`, which is `0` when the stored valuation is `0`. The
+accounting is SOUND with one entry: there is no cost of goods to post, and
+`GL Inventory (1200) = Σ stock_movements.value_delta_base_minor` still holds at
+0. A legitimate sale that cannot commit is a worse outcome than any refusal
+code suggests, and an accounting-integrity gap may not be carried as technical
+debt.
+
+It is closed in THREE places, each with its own owner, and the pairing is what
+makes it safe:
+
+1. **the seam** (this slice): `SeamAccountingAuthority` gained a CONDITIONAL
+   arm — see A-09. The COGS assertion is declared conditional, so leaving it
+   unpresented is lawful while leaving the REQUIRED revenue assertion
+   unpresented stays refused;
+2. **the accounting module** (the accounting owner's
+   `packages/accounting/src/sale-posting.ts`): a `cogs: null` arm, so
+   `deriveSaleCommitPostings` can derive a one-entry sale instead of refusing
+   to derive it. **This is the only part still open**, and it is the only
+   reason `sale.zero_cost_stock` (422) still exists: `authorizeSaleCommit`
+   cannot be called at all for such a sale today. The gate is one line in
+   `plan`, deleted the moment that arm lands;
+3. **the database** (the migration owner's): the deferred `sales_cogs_owed`
+   trigger of C-07. **This is the actual law.** The seam never sees a COGS
+   total, so it cannot know whether the skipped entry was owed — and a rule
+   only the wrapper enforces is a convention while the trusted primitive can
+   still write the row. So the seam PERMITS the non-presentation and the
+   database REFUSES the case where it would have been a hole.
 
 ### A-09 The seam, and the declared accounting authority
 
@@ -266,6 +287,23 @@ empty and presenting ANY posting is refused
 (`seam.accounting_assertion_not_authorized`), so "posts nothing" is enforced
 rather than described. The change is additive: a bare string and a tuple remain
 exactly today's seam, and no existing caller changes.
+
+**The conditional arm.** The same type carries, on its `postings` arm, an
+optional `conditional: readonly string[]` naming those of `assertions` whose
+entry may legitimately not exist (A-08's zero-valued sale). Order is unchanged:
+`assertions` is still the posting order, and a conditional element is SKIPPED
+rather than reordered, so the authority for one posting can never be spent on
+another. Presenting none of the REQUIRED elements after presenting any is still
+refused `seam.accounting_assertion_unused`. Two shapes are MALFORMED rather
+than tolerated: a `conditional` entry that is not one of the transaction's own
+assertions (a mis-spelled exemption is the quietest way a required posting
+becomes optional), and every element conditional (a transaction that may post
+nothing says `no_posting`).
+
+With no conditional element, every rule is bit-for-bit what it was — asserted
+directly in `tests/integration/sale-s2-seam-authority.test.ts` (15 tests),
+which also re-proves strict order, strict completeness, the mismatch, the
+duplicate, the empty list and the scope mismatch in the declared form.
 
 **The permissive "presented none" branch is deliberately NOT tightened, and
 that is a Tech Lead decision rather than this slice's.**
@@ -608,10 +646,15 @@ COGS entry, because a journal amount must be positive. So
 The obligation is carried by a DEFERRED constraint trigger
 `sales_cogs_owed`, in the accepted `inventory_source_value_complete()` form:
 at COMMIT, re-derive `Σ stock_movements.value_delta_base_minor` for the
-movements bound to this sale and require a `sale`-sourced entry to exist iff
-that sum is non-zero. It is a trigger rather than a row `CHECK` because a
-`CHECK` cannot read another table, and storing the sum on `sales` to make it
-checkable is precisely the forbidden second truth.
+movements BRIDGED to this sale and require a `sale`-sourced accounting binding
+to exist **iff** that sum is non-zero. It is a trigger rather than a row
+`CHECK` because a `CHECK` cannot read another table, and storing the sum on
+`sales` to make it checkable is precisely the forbidden second truth.
+
+**This trigger is the law that makes the seam's conditional arm safe** (A-08
+item 3, A-09). The seam permits the COGS assertion to go unpresented because it
+cannot know whether an entry was owed; this trigger is what knows. Without it
+the conditional arm is a hole, so the two land together or neither does.
 
 ### C-08 `invoices_sale_fk` — an unclosed hole in the sealed `0075`
 
@@ -755,7 +798,7 @@ cannot survive:
 | an invoice with no accounting binding | fail the FIRST `postEntryInTransaction` — `failPosting()`'s `vi.spyOn(posting, 'postEntryInTransaction').mockRejectedValueOnce(...)` |
 | a COGS entry with no commercial source | present the COGS assertion and then throw before the revenue posting — the partial-posting case `assertComplete()` catches (`seam.accounting_assertion_unused`) |
 | a revenue entry with no invoice | post the revenue entry against an invoice id the routine never wrote: refused by `invoices_binding_fk` at COMMIT |
-| an inventory decrement with no COGS | post ONLY the revenue entry: refused by `sales_cogs_owed` (C-07) at COMMIT, and by `assertComplete()` before it |
+| an inventory decrement with no COGS | sell stock of NON-zero value and post ONLY the revenue entry: the seam permits the non-presentation (the COGS assertion is conditional), so `sales_cogs_owed` (C-07) is the only thing that can refuse it — and it must, at COMMIT. **This is the test that proves the conditional arm is not a hole**, and it must be red before C-07 exists |
 | a partial sale after a failure | `failBeforeCommit()` — wrap `db.withBusinessInventoryAccountingTransaction` so the callback throws AFTER `fn(tx)` returned |
 
 Four more this slice owes:
@@ -773,7 +816,12 @@ Four more this slice owes:
   by trusting the comment;
 - **the last item** (OD-P4-05): two concurrent commits of the final unit —
   exactly one commits, the loser is refused `inventory.insufficient_stock`
-  under the level row's `FOR UPDATE`, and no retry happens anywhere.
+  under the level row's `FOR UPDATE`, and no retry happens anywhere;
+- **the zero-valued sale COMMITS** (A-08): a sale of stock whose stored
+  valuation is zero must leave one sale, one invoice, **one** journal entry
+  (the revenue one), the bridge rows and the movements — and must NOT be
+  refused. Its twin above is the proof that the permission is narrow: the same
+  non-presentation on stock of non-zero value must fail the COMMIT.
 
 Every one of these is a REFUSAL test. None of them may be answered by a retry,
 a relaxed threshold, a `.skip`, a `.todo` or a `.only`.
