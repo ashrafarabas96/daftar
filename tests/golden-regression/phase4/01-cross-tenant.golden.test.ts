@@ -3,6 +3,8 @@ import { join } from 'node:path';
 import { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { discoverPhase4Routes } from '../../../scripts/phase4-s1-gate';
+import { requireSubject, saleSubject, type SaleSubject } from '../phase4-s2/harness';
+import { SALE_COMMIT_ROUTINE, confirmSale } from '../phase4-s2/sale-path';
 import { appDbUrl, createTestApp, ensurePostgres, ownerPool, resetData, uniqueEmail, type TestApp } from '../../helpers/test-app';
 
 /**
@@ -42,8 +44,22 @@ import { appDbUrl, createTestApp, ensurePostgres, ownerPool, resetData, uniqueEm
 const REPO = join(__dirname, '..', '..', '..');
 
 /**
- * The Phase 4 read surface, enumerated. Eight routes; the equality below is
- * what makes a ninth impossible to miss.
+ * The Phase 4 route surface, enumerated. The equality below against
+ * `discoverPhase4Routes` is what makes a route mounted and not added here
+ * impossible to miss — and it has now fired once, for real: P4-S2's
+ * `SalesController` mounted `POST /v1/sales` and `GET /v1/sales/:saleId`, and
+ * `crossTenantProblems` turned the SEALED `gate:phase4:s1` red because neither
+ * appeared in any enumerated cross-tenant golden. That is the mechanism of
+ * G-02 working exactly as designed, so the two routes are added HERE rather
+ * than in a new file: this suite is listed by `S1_SUITES`, while a new
+ * `.test.ts` under `tests/golden-regression/phase4/` would itself redden the
+ * sealed gate through the `GOLDEN_DIR` clause of `suiteProblems`
+ * (`scripts/phase4-s1-gate.ts:755-758`).
+ *
+ * `POST /v1/sales` is the FIRST WRITING route on the Phase 4 surface, and a
+ * write route cannot be proved by the two loops below: a POST driven as a GET
+ * would be a 404 that looked like isolation. It and its read are treated in
+ * their own section, with their own ALLOW/DENY pairs.
  */
 const PHASE4_ROUTES: readonly string[] = [
   'GET /v1/customers',
@@ -54,7 +70,27 @@ const PHASE4_ROUTES: readonly string[] = [
   'GET /v1/invoices',
   'GET /v1/invoices/:invoiceId',
   'GET /v1/invoices/:invoiceId/settlement',
+  'GET /v1/sales/:saleId',
+  'POST /v1/sales',
 ];
+
+/**
+ * The routes whose SERVER-SIDE SUBJECT arrives with `0077` — `sales`,
+ * `sale_items`, the `sale` source types and `sale_commit`. Until it does,
+ * "the sale routes refuse another tenant" has no subject: no sale can be
+ * committed, so no ALLOW can be formed, and a DENY with no ALLOW beside it
+ * proves only that the route refuses everything.
+ *
+ * They are therefore excluded from the two generic loops and asserted in their
+ * own section, which REFUSES with the missing names through `requireSubject`
+ * while the subject is absent. Not skipped, not `todo`, not conditional: a
+ * conditional pass is a `.skip` the gate's SKIP regex cannot see, and this
+ * file's own doctrine is that an unpaired refusal proves nothing.
+ */
+const SALE_ROUTES: readonly string[] = ['POST /v1/sales', 'GET /v1/sales/:saleId'];
+
+/** A route the two generic loops below can drive: a GET whose subject exists today. */
+const isGenericReadRoute = (route: string): boolean => route.startsWith('GET ') && !SALE_ROUTES.includes(route);
 
 /** The five relations 0075 creates, every one of which must refuse a foreign business at SQL. */
 const PHASE4_RELATIONS: readonly string[] = ['customers', 'customer_contacts', 'invoices', 'invoice_items', 'invoice_sequences'];
@@ -63,10 +99,14 @@ interface Shop {
   readonly tenantId: string;
   readonly businessId: string;
   readonly branchId: string;
+  /** The business's own default warehouse — the sale's stock scope, and never the client's to choose. */
+  readonly warehouseId: string;
   readonly productId: string;
   readonly userId: string;
   readonly customerId: string;
   readonly invoiceId: string;
+  /** The sale this business committed, once `0077` makes one possible. */
+  saleId?: string;
 }
 
 interface Actor {
@@ -93,7 +133,10 @@ const isItemRoute = (route: string): boolean => route.includes(':');
 /** Every declared route, with its path parameters bound to `shop`'s own ids. */
 function bind(route: string, shop: Shop): { method: string; path: string } {
   const [method = 'GET', template = ''] = route.split(' ');
-  const path = template.replace(':customerId', shop.customerId).replace(':invoiceId', shop.invoiceId);
+  const path = template
+    .replace(':customerId', shop.customerId)
+    .replace(':invoiceId', shop.invoiceId)
+    .replace(':saleId', shop.saleId ?? '00000000-0000-0000-0000-000000000000');
   return { method, path: `${path}${QUERY[route] ?? ''}` };
 }
 
@@ -200,8 +243,9 @@ beforeAll(async () => {
 
   const furnish = async (o: Actor, businessId: string): Promise<Shop> => {
     const row = (
-      await ownerPool().query<{ tenant_id: string; branch_id: string }>(
-        `SELECT b.tenant_id, (SELECT br.id FROM branches br WHERE br.business_id = b.id ORDER BY br.is_default DESC, br.id LIMIT 1) AS branch_id
+      await ownerPool().query<{ tenant_id: string; branch_id: string; warehouse_id: string }>(
+        `SELECT b.tenant_id, (SELECT br.id FROM branches br WHERE br.business_id = b.id ORDER BY br.is_default DESC, br.id LIMIT 1) AS branch_id,
+                (SELECT w.id FROM warehouses w WHERE w.business_id = b.id ORDER BY w.id LIMIT 1) AS warehouse_id
            FROM businesses b WHERE b.id = $1`,
         [businessId],
       )
@@ -215,6 +259,7 @@ beforeAll(async () => {
       tenantId: row?.tenant_id ?? '',
       businessId,
       branchId: row?.branch_id ?? '',
+      warehouseId: row?.warehouse_id ?? '',
       productId: pr.body.id as string,
       userId: o.userId,
     };
@@ -258,7 +303,23 @@ afterAll(async () => {
 describe('the enumeration is checked, not trusted (G-02)', () => {
   it('PHASE4_ROUTES is exactly the Phase 4 route surface the slice gate discovers', () => {
     expect(PHASE4_ROUTES).toEqual(discoverPhase4Routes(REPO));
-    expect(PHASE4_ROUTES).toHaveLength(8);
+    // The count was a LITERAL 8, which is a second copy of the line above and
+    // a closure rule on the surface: it had to be edited by hand for every
+    // authorized route a later slice mounts, and editing it is the moment
+    // somebody edits the list instead of adding the route's pair. What the
+    // literal was really guarding is NON-VACUITY — a discovery that returned
+    // nothing would satisfy `toEqual` against an empty list — so that is what
+    // is asserted, and the exact surface stays the business of the equality.
+    // `[[daftar-a-closure-rule-is-not-an-invariant]]`.
+    expect(PHASE4_ROUTES.length, 'NO SUBJECT — the route surface is empty, so the equality above compared nothing with nothing').toBeGreaterThan(0);
+    // Every declared sale route is really on the surface, and every route this
+    // file excludes from the generic loops is really a sale route: the two
+    // partitions below must cover the surface exactly once.
+    for (const route of SALE_ROUTES) expect(PHASE4_ROUTES, `${route} is declared a sale route but is not on the surface`).toContain(route);
+    expect(
+      PHASE4_ROUTES.filter((r) => !isGenericReadRoute(r)).sort(),
+      'a route is either driven by the generic loops or by the sale section — never by neither',
+    ).toEqual([...SALE_ROUTES].sort());
   });
 
   it('the fixture is real: each of the three businesses holds its own customer and its own invoice', async () => {
@@ -329,7 +390,7 @@ describe('HTTP: every enumerated Phase 4 route refuses another tenant’s busine
    * this business's own resource asked for under another business's header (a
    * read bound to the header alone would answer).
    */
-  for (const route of PHASE4_ROUTES.filter(isItemRoute)) {
+  for (const route of PHASE4_ROUTES.filter((r) => isGenericReadRoute(r) && isItemRoute(r))) {
     it(`${route}: answers for A, and refuses A2 and B`, async () => {
       const mine = bind(route, A);
       const ok = await t.request.get(mine.path).set(hdr(owner, A.businessId));
@@ -363,7 +424,7 @@ describe('HTTP: every enumerated Phase 4 route refuses another tenant’s busine
    * other — which is the stronger claim of the two anyway, because a leak
    * shows up as a row rather than as a status code.
    */
-  for (const route of PHASE4_ROUTES.filter((r) => !isItemRoute(r))) {
+  for (const route of PHASE4_ROUTES.filter((r) => isGenericReadRoute(r) && !isItemRoute(r))) {
     it(`${route}: each business's page holds its own rows and no other's`, async () => {
       const path = bind(route, A).path;
       const seen: string[] = [];
@@ -384,9 +445,188 @@ describe('HTTP: every enumerated Phase 4 route refuses another tenant’s busine
   }
 
   it('another tenant’s token cannot page this tenant’s collection', async () => {
-    for (const route of PHASE4_ROUTES.filter((r) => !isItemRoute(r))) {
+    for (const route of PHASE4_ROUTES.filter((r) => isGenericReadRoute(r) && !isItemRoute(r))) {
       const res = await t.request.get(bind(route, A).path).set(hdr(ownerB, A.businessId));
       expect([401, 403, 404], `${route} answered ${res.status} for another tenant's token`).toContain(res.status);
+    }
+  });
+});
+
+/**
+ * THE SALE ROUTES — the first WRITING route on the Phase 4 surface, and its
+ * read (P4-AL-16, P4-AL-18, P4-AL-30, P4-AL-40, P4-AL-43 scenario 8).
+ *
+ * The two loops above cannot state this claim. A collection loop would have
+ * issued `POST /v1/sales` as a GET and read the 404 as isolation; an item loop
+ * would have asked for a sale id no business holds and read the 404 as
+ * isolation too. Both are the failure this file's header warns about: a DENY
+ * whose ALLOW was never formed proves only that the route refuses everything.
+ *
+ * So each route gets a real pair, and the pair needs a real committed sale —
+ * which needs `0077`. Until `0077` lands, `requireSubject` REFUSES with the
+ * missing names. Nothing here is skipped and nothing is conditional.
+ *
+ * The fixture is built ONCE, lazily, inside this section: while the subject is
+ * absent it never runs, so the existing 300-second `beforeAll` of this suite is
+ * untouched and the eight read routes above keep their current verdict.
+ */
+describe('HTTP: the sale command and the sale read refuse another tenant’s business', () => {
+  const CLAIM = 'the sale routes refuse another tenant’s business at the API';
+  let subject: SaleSubject;
+  let documentDate = '';
+  /** Built at most once; the error of a failed build is re-thrown to every case rather than swallowed. */
+  let fixture: Promise<void> | null = null;
+
+  /**
+   * Make this shop's product sellable and give it stock, through the product's
+   * OWN commands, then commit one sale. The stock is 10 so no case below can
+   * be refused for the stock rather than for the isolation — a 409 that meant
+   * `insufficient_stock` would be a DENY that proved nothing.
+   */
+  async function sellable(shop: Shop, actor: Actor): Promise<void> {
+    const configured = await t.request
+      .put(`/v1/inventory/products/${shop.productId}/configuration`)
+      .set(hdr(actor, shop.businessId))
+      .send({ trackInventory: true, unitCode: 'piece' });
+    expect(configured.status, `the product of ${shop.businessId} could not be configured: ${JSON.stringify(configured.body)}`).toBe(200);
+    const stocked = await t.request
+      .post('/v1/inventory/adjustments')
+      .set(hdr(actor, shop.businessId))
+      .send({
+        adjustmentId: randomUUID(),
+        warehouseId: shop.warehouseId,
+        occurredOn: documentDate,
+        reason: 'the cross-tenant sale fixture',
+        lines: [{ productId: shop.productId, quantity: '10', unitCost: '5' }],
+      });
+    expect(stocked.status, `the stock of ${shop.businessId} could not be seeded: ${JSON.stringify(stocked.body)}`).toBe(201);
+    const saleId = randomUUID();
+    const res = await confirmSale(t, hdr(actor, shop.businessId), {
+      saleId,
+      customerId: shop.customerId,
+      warehouseId: shop.warehouseId,
+      occurredOn: documentDate,
+      lines: [{ productId: shop.productId, quantity: '1' }],
+    });
+    expect(res.status, `the ALLOW sale of ${shop.businessId} was refused: ${JSON.stringify(res.body)}`).toBe(200);
+    shop.saleId = saleId;
+  }
+
+  /** The number of `sales` rows a business holds, read as the owner so no policy can hide a leak. */
+  async function saleCount(shop: Shop): Promise<number> {
+    return Number(
+      (await ownerPool().query<{ n: string }>(`SELECT count(*)::text AS n FROM sales WHERE business_id = $1`, [shop.businessId])).rows[0]?.n ?? '-1',
+    );
+  }
+
+  /** Build the fixture at most once, and hand the same failure to every case that needs it. */
+  async function ready(): Promise<void> {
+    subject = await saleSubject(ownerPool());
+    requireSubject(subject.missing, CLAIM);
+    if (fixture === null)
+      fixture = (async (): Promise<void> => {
+        documentDate = String((await ownerPool().query<{ d: string }>(`SELECT current_date::text AS d`)).rows[0]?.d ?? '');
+        await sellable(A, owner);
+        await sellable(A2, owner);
+        await sellable(B, ownerB);
+      })();
+    await fixture;
+  }
+
+  it('the subject exists: the sale relations, the two source types, the sale.* kinds and the commit routine are in the tree', async () => {
+    subject = await saleSubject(ownerPool());
+    requireSubject(subject.missing, CLAIM);
+    expect(subject.routine, 'the commit routine the route calls').toBe(SALE_COMMIT_ROUTINE);
+  });
+
+  it('POST /v1/sales: commits for A, and refuses every cross-business form of the same request', async () => {
+    await ready();
+
+    // DENY 1 — A's own customer and warehouse under A2's HEADER, by an actor
+    // who legitimately holds `sales.create` in both businesses. Only the
+    // business binding refuses this; the token is valid everywhere it is used.
+    const beforeA2 = await saleCount(A2);
+    const foreignHeader = await confirmSale(t, hdr(owner, A2.businessId), {
+      saleId: randomUUID(),
+      customerId: A.customerId,
+      warehouseId: A.warehouseId,
+      occurredOn: documentDate,
+      lines: [{ productId: A.productId, quantity: '1' }],
+    });
+    expect([403, 404, 409, 422], `POST /v1/sales answered ${foreignHeader.status} for A's ids under A2's header`).toContain(foreignHeader.status);
+    expect(await saleCount(A2), 'the refused command wrote a sale into A2 anyway').toBe(beforeA2);
+
+    // DENY 2 — the harder half: the OTHER business's customer, warehouse and
+    // product under the actor's own valid header. A controller that trusted
+    // the body would have written A2's stock into A's sale.
+    for (const other of [A2, B]) {
+      const beforeOther = await saleCount(other);
+      const beforeMine = await saleCount(A);
+      const res = await confirmSale(t, hdr(owner, A.businessId), {
+        saleId: randomUUID(),
+        customerId: other.customerId,
+        warehouseId: other.warehouseId,
+        occurredOn: documentDate,
+        lines: [{ productId: other.productId, quantity: '1' }],
+      });
+      expect([403, 404, 409, 422], `POST /v1/sales answered ${res.status} for ${other.businessId}'s ids under A's header`).toContain(res.status);
+      expect(await saleCount(other), `the refused command wrote a sale into ${other.businessId}`).toBe(beforeOther);
+      expect(await saleCount(A), 'the refused command wrote a sale into A out of another business’s rows').toBe(beforeMine);
+    }
+
+    // DENY 3 — another tenant's token against this tenant's business.
+    const beforeToken = await saleCount(A);
+    const foreignToken = await confirmSale(t, hdr(ownerB, A.businessId), {
+      saleId: randomUUID(),
+      customerId: A.customerId,
+      warehouseId: A.warehouseId,
+      occurredOn: documentDate,
+      lines: [{ productId: A.productId, quantity: '1' }],
+    });
+    expect([401, 403, 404], `POST /v1/sales answered ${foreignToken.status} for another tenant's token`).toContain(foreignToken.status);
+    expect(await saleCount(A), 'another tenant’s token wrote a sale into A').toBe(beforeToken);
+  });
+
+  it('GET /v1/sales/:saleId: answers for A, and refuses A2 and B', async () => {
+    await ready();
+    const route = 'GET /v1/sales/:saleId';
+
+    // ALLOW — the pair's other half: A's own sale answers, so each refusal
+    // below is the isolation and not a route that reads nothing.
+    const ok = await t.request.get(bind(route, A).path).set(hdr(owner, A.businessId));
+    expect(ok.status, `${route} does not answer for its own business: ${JSON.stringify(ok.body)}`).toBe(200);
+    expect(ok.body.id, `${route} answered with some other sale`).toBe(A.saleId);
+
+    // DENY 1 — A's own id under A2's header.
+    const foreignHeader = await t.request.get(bind(route, A).path).set(hdr(owner, A2.businessId));
+    expect([403, 404], `${route} answered ${foreignHeader.status} for A's id under A2's header`).toContain(foreignHeader.status);
+
+    // DENY 2 — the other business's id under the actor's own header.
+    for (const other of [A2, B]) {
+      const res = await t.request.get(bind(route, other).path).set(hdr(owner, A.businessId));
+      expect([403, 404], `${route} answered ${res.status} for ${other.businessId}'s id under A's header`).toContain(res.status);
+    }
+
+    // DENY 3 — another tenant's token against this tenant's business.
+    const foreignToken = await t.request.get(bind(route, A).path).set(hdr(ownerB, A.businessId));
+    expect([401, 403, 404], `${route} answered ${foreignToken.status} for another tenant's token`).toContain(foreignToken.status);
+  });
+
+  it('SQL: the sale relations refuse another business under daftar_app’s row security', async () => {
+    await ready();
+    for (const relation of ['sales', 'sale_items', 'stock_source_bridge_sale']) {
+      // ALLOW: the unqualified read under A's scope returns only A's rows —
+      // the statement names no business at all.
+      const mine = await asApp<{ business_id: string }>(app, A, `SELECT DISTINCT business_id FROM ${relation}`);
+      expect(
+        mine.map((r) => r.business_id),
+        `${relation} under A's scope`,
+      ).toEqual([A.businessId]);
+      // DENY: the same statement asking for the other business by id.
+      for (const other of [A2, B]) {
+        const rows = await asApp<{ business_id: string }>(app, A, `SELECT business_id FROM ${relation} WHERE business_id = $1`, [other.businessId]);
+        expect(rows, `${relation} leaked ${other.businessId} to ${A.businessId}`).toEqual([]);
+      }
     }
   });
 });

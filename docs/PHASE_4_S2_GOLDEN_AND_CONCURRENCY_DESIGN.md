@@ -350,6 +350,92 @@ method beside it, and must be re-taken until a round finds nothing new.
 
 ---
 
+## 7b. The three corrections of the first review round
+
+Recorded because each is a defect class this document claims to refuse, found
+in this document's own estate.
+
+**(i) `crossTenantProblems` — the sealed-gate clause §1 did not cover.** §1
+found the `GOLDEN_DIR` clause of `suiteProblems`. There is a THIRD way to
+redden the sealed gate: `crossTenantProblems`
+(`scripts/phase4-s1-gate.ts:1313-1329`) derives G-02's subject from the
+controllers (`discoverPhase4Routes`) and requires the text of every golden
+listed with `area === 'golden'` to name every route it finds. P4-S2's
+`SalesController` mounted `POST /v1/sales` and `GET /v1/sales/:saleId`, and the
+gate went red — **the mechanism of G-02 working exactly as designed**: the
+route nobody remembered to add is by construction the one route with no
+cross-tenant case.
+
+The two routes are therefore added to the **existing listed** golden,
+`tests/golden-regression/phase4/01-cross-tenant.golden.test.ts`, and not to a
+new file, which the `GOLDEN_DIR` clause would reject. `POST /v1/sales` is the
+first **writing** route on the Phase 4 surface, and neither of that suite's two
+generic loops can state its claim: a collection loop would have issued the POST
+as a GET and an item loop would have asked for a sale id no business holds, and
+both 404s would have read as isolation. So the surface is now partitioned —
+generic read routes, and the sale routes in their own section with their own
+ALLOW/DENY pairs, refusing through `requireSubject` until `0077` supplies a
+committable sale. Its fixture is built lazily **inside** that section, so the
+suite's existing 300-second `beforeAll` and the eight read routes keep their
+current verdict.
+
+While there: that suite asserted `expect(PHASE4_ROUTES).toHaveLength(8)` beside
+the equality against `discoverPhase4Routes`. The literal is a second copy of
+the line above it and a closure rule on the surface — it must be hand-edited
+for every authorized route a later slice mounts, and that edit is the moment
+somebody edits the list instead of adding the route's pair
+(`[[daftar-a-closure-rule-is-not-an-invariant]]`). What it was really guarding
+is non-vacuity, which is now what it says; the exact surface stays the business
+of the equality. A new assertion also requires the two partitions to cover the
+surface exactly once, so a route can be in neither loop only by being declared
+a sale route.
+
+**(ii) a canary that could not fail, inside the placement test.** The
+placement check read
+
+```ts
+const mine = files.filter((f) => /^sale-s2-/.test(f));
+expect(mine.filter((f) => /^(p4|phase4)-/.test(f)), …).toEqual([]);
+```
+
+`mine` is already filtered to names beginning `sale-s2-`, so no member can
+match the inner regex and the assertion could only ever say yes — the
+`RP-S2-VACUITY` class, in the test whose stated job is the placement
+constraint. The law is now stated over the **whole** directory listing ("every
+`phase4-*`/`p4-*` suite in these three directories is listed by `S1_SUITES`"),
+with the number of files it judged asserted non-zero so a regex that stopped
+matching cannot read as a clean estate. The rule is also extracted as
+`sealedGateWouldReject(path)`, a function of a path, which is the only way to
+prove it **refuses**: putting the offending file on disk IS the defect, so the
+predicate is asked about files that are not there. `RP-S2-PLACEMENT-PREDICATE`
+plants the two names this estate was tempted to use, plus an unlisted golden
+under `tests/golden-regression/phase4/`, and requires each to be rejected and
+the four real paths to be accepted.
+
+**(iii) a red proof that a header comment could satisfy.** "Every declared red
+proof resolves to a real `it(` title" resolved each row with a bare
+`source.includes(title)`, which any prose in the file satisfies. All 20 rows
+named real titles, so nothing was false — but the check could not have said
+otherwise. `itTitles()` now extracts the first argument of every `it(`, in both
+the string-literal and the template-literal forms, and `resolves()` matches a
+literal title by prefix and a **generated** title by pattern (so
+`a failure at the sales seam leaves nothing` still resolves against
+``it(`a failure at the ${relation} seam leaves nothing`)``). `RP-S2-RESOLVER`
+proves it: a prefix only the prose carries does **not** resolve, and a
+concrete instance of a generated title does.
+
+**(iv) the commit routine's name has one owner.** `harness.ts` guessed among
+four candidate names. A guess is the wrong shape even when one candidate is
+right: the canary's job is to say "the subject is absent", and a guessing
+canary says that both when the routine is missing and when it was renamed
+outside the list — so a rename would have left every P4-S2 suite permanently
+red for a reason that is not a defect, and the fix would have been to widen the
+guess rather than to follow the name. The harness now re-exports
+`SALE_COMMIT_ROUTINE` from `sale-path.ts`, which the slice that owns the route
+keeps correct, and golden 01 asserts the discovered routine IS that constant.
+
+---
+
 ## 8. Open items for other owners
 
 1. **`docs/DAFTAR_GOLDEN_REGRESSION_SUITE.md:41`** states GOLD-33 as
@@ -366,7 +452,16 @@ method beside it, and must be re-taken until a round finds nothing new.
    module owner should check it against the DTO rather than letting the suites
    be rewritten line by line — a rewrite is where a law quietly becomes a
    weaker law.
-4. **`tests/helpers/` was not edited.** Everything shared lives under
+4. **A latent break in golden 01's own fixture, for the migration owner.**
+   `seedPhase4` inserts an `invoices` row whose `sale_id` is a fresh
+   `randomUUID()` with no `sales` row behind it — it could not be otherwise,
+   because the suite predates `sales`. If `0077` adds a composite foreign key
+   from `invoices (business_id, sale_id)` to `sales`, that fixture stops
+   inserting and golden 01 goes red in its `beforeAll`. It is not fixable from
+   the test side before the table exists; the migration owner should say
+   whether the FK lands, and if it does the fixture needs a `sales` parent row
+   inserted first.
+5. **`tests/helpers/` was not edited.** Everything shared lives under
    `tests/golden-regression/phase4-s2/` and is imported from there by the
    integration and guard suites, following the precedent of
    `tests/guards/phase4-composite-seam-guard.test.ts:30`.
