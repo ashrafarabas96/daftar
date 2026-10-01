@@ -1954,14 +1954,40 @@ explicit Tech Lead directive.
 
 ### Carried forward from P4-S1 (named so it is not lost)
 
-- **No law asserts RLS `ENABLE`/`FORCE` over the DISCOVERED relation surface.** **NOW A TECH LEAD
-  REQUIREMENT: `TL-P4-S1-R2`, and P4-S2's first mandatory protection, before `0077`.** Every assertion in the
-  estate is over a named table list or is a two-build catalogue comparison, so a later relation that forgot
-  to enable or force RLS would be caught by nothing. `0075-E` asserts both on its own five relations from
-  `pg_class`, so P4-S1 itself is covered, and the general law — over `phase3Tables()`, unscoped, in the
-  spirit of the three laws already in the grant matrix — is a **new invariant** rather than a re-expression,
-  which P4-S1's hard order does not authorize. It belongs to the next slice, and it is the first thing that
-  slice should build.
+- ~~**No law asserts RLS `ENABLE`/`FORCE` over the DISCOVERED relation surface.**~~ **DISCHARGED IN P4-S2
+  (`TL-P4-S1-R2`), AND THIS NOTE'S OWN PRESCRIPTION WAS WRONG ON THIS TREE.** The gap was real: every
+  assertion in the estate was over a named table list or was a two-build catalogue comparison, so a later
+  relation that forgot to enable or force RLS would have been caught by nothing. `0075-E` asserts both on its
+  own five relations from `pg_class`, so P4-S1 itself was covered. The law now exists —
+  `scripts/guards/phase4-rls-force.ts`, proved in `tests/guards/phase4-rls-force-guard.test.ts` and run by
+  `gate:phase4:s2` — and it is **scoped to Phase 4**, not to `phase3Tables()`.
+
+  **The `phase3Tables()`, unscoped form this note prescribed is RED ON ARRIVAL, and its red is false.**
+  Measured from `pg_class` on a database built from `0000`–`0076` (2026-10-01, P4-S2): of the **109**
+  relations the accepted inherited prefix creates, **30 carry no `FORCE`** and **29 carry no `ENABLE`** —
+  platform, global reference and registry relations with no tenant dimension at all (`currencies`,
+  `country_registry`, `plans`, `features`, `limit_definitions`, the four assertion-key/use pairs, the
+  operation-kind and movement-kind registries, `units`, `unit_names`, `stock_movement_kinds`,
+  `stock_source_types`, `reserved_store_slugs`, `platform_settings`, `tenants`, `support_sessions` and the
+  rest). `onboarding_operations` is the single inherited relation that **`ENABLE`s and never `FORCE`s**
+  (`0018_onboarding_operations.sql:16`; no `FORCE` for it anywhere in `0000`–`0076`). And `phase3Tables()`
+  is defined as "at the head and not at `0052`" (`tests/helpers/phase3-surface.ts:190-196`), so it is not a
+  Phase 3 set at all: it has **54** members on this tree, **9** of which carry neither flag — the eight
+  inherited registry relations above plus **`schema_migrations`, the applier's own bookkeeping relation**,
+  which that helper does not subtract. A protection that must be born failing is not a protection, and an
+  allowlist to make it pass is what §17.3 refuses.
+
+  **The correct scope is exact rather than narrower**, because `P4-AL-08` makes it so: every Phase 4
+  relation carries `tenant_id` and `business_id`, so the Phase 4 surface is precisely the set on which
+  `ENABLE` + `FORCE` is unconditionally owed. The law therefore partitions its discovered surface
+  structurally — both dimensions ⇒ `ENABLE` + `FORCE` owed; exactly one ⇒ a `P4-AL-08` violation reported as
+  one, with `ENABLE` + `FORCE` still owed; neither ⇒ a declared Phase 4 global registry, **red until this
+  lock records a decision for it** — so a future Phase 4 global registry raises a decision instead of a
+  false red or a silent hole. The partition is 5 / 0 / 0 today. The surface is the union of the migration
+  tree (`phase4MigrationsOnDisk`, bounded by the derived `PHASE4_FIRST_NUMBER`) and the live `pg_class`,
+  minus the applier's own relations **discovered from `apps/api/src/infra/migrate.ts`'s text** rather than
+  excluded by name; each half is the other's completeness proof, and a member of one that the other lacks is
+  reported, never dropped.
 - ~~**`probeStatementsMissingFrom`.**~~ **DISCHARGED IN THIS SLICE** — removed, with both call sites
   restated as positive requirements. See `TL-P4-S1-C20`.
 
