@@ -1238,3 +1238,41 @@ needed because `0036` normalized product names out of `products.translations` an
 wanted a product NAME before. That map is a measurement of the LIVE privileges over the frozen prefix
 rather than a frozen literal, so the new read belongs in it, named — which is exactly what makes an unnamed
 one visible.
+
+### 18.6 Two more `P4-AL-88` re-expressions `0078` forced, in suites Agent F had already touched
+
+Both survived Agent F's pass, so by the coordinator's rule they are mine. Both are the same mistake in
+different clothes: a sentence about the accepted prefix written as a sentence about the live catalogue.
+
+**`tests/security/phase3-s8-operation-kinds.test.ts` — "the consumers are 26 distinct routines."**
+`0078`'s `sale_commit` is the first consumer of `inventory_assertion_consume` a later phase owns, so the
+count became 27. The sibling case above it had already been scoped by the **kinds'** provenance; this one
+had not. Re-expressed in the accepted shape: the `26` kept word for word over the consumers of the
+Phase 3-registered kinds (discovered from `registered_by ~ '^P3-'`, not a name list); the later phases'
+half asserted positively — every kind beyond that scope still has its **one** consumer, and no routine
+consumes kinds from both scopes, so the two consumer sets are provably disjoint rather than overlapping
+uncounted; and a closure assertion that the two scopes together are every consumer the law accounts for.
+The second half — that the law accounts for every routine which calls `inventory_assertion_consume` at all
+— stays **unscoped**, because that is the security claim and it was never a closure rule.
+
+**`tests/security/search-path-shadowing.test.ts` — two cases, both naming `sale_commit`.**
+
+1. *"no runtime role holds EXECUTE through a membership either"* compared each runtime role's **effective**
+   privilege against `EXECUTE_MATRIX`, a frozen declaration of the prefix's routines. So `0078`'s direct
+   `GRANT EXECUTE … TO daftar_app` — exactly what C-09 and the `purchase_receive` precedent require — was
+   reported as a leak. The §H case above it even asserts this case is "UNSCOPED, so it reaches these
+   routines as laws already", which is true of the PUBLIC case and **false** of this one. Re-expressed: the
+   matrix comparison kept word for word in scope, and beyond the prefix the case asserts what its own name
+   says — a runtime role may hold `EXECUTE` only when it is itself a **named grantee**, so an effective
+   privilege with no direct grant behind it came through a role membership and is named. The §H case
+   independently confines who a beyond-prefix grantee may be, so nothing is lost.
+
+2. *"no body builds SQL at run time or creates a session relation"* scanned raw `prosrc` for
+   `\bEXECUTE\b`, and `sale_commit`'s body explains in a comment that its customer advisory lock is one
+   "PUBLIC may execute". The law convicted a routine of dynamic SQL for a word in its prose — the same
+   defect `0077-E(9c)` hit, and the estate already has the answer: `lexBody`, the recogniser
+   `phase3-s8-operation-kinds` uses for exactly this, which strips `--` comments and string literals
+   first. The filter now reads the lexed **code**, and two planted assertions keep the lexer honest: it
+   must still see a real `EXECUTE` and must not see one in a comment — because a recogniser that returned
+   the empty string for every body would pass this law in silence, which is the vacuous-pass failure mode
+   the estate refuses.

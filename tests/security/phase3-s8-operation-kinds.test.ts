@@ -183,11 +183,49 @@ describe('T-03 — the operation-kind law over the catalogue (A-05)', () => {
   });
 
   it('the consumers are 26 distinct routines (plus one per corrective kind), and no other routine calls inventory_assertion_consume', async () => {
+    // P4-AL-88, the same shape as the count above and for the same reason:
+    // "there are exactly N consuming routines" is a CLOSURE RULE, not an
+    // invariant. `0078` makes it false by registering the first consumer a
+    // later phase owns — `sale_commit`, which consumes `sale.commit` — and the
+    // original sentence was about PHASE 3's consumers all along.
+    //
+    // So the 26 is kept WORD FOR WORD, scoped by the provenance of the KINDS
+    // (`registered_by ~ '^P3-'`, discovered from the registry rather than from
+    // a name list), the later phases' half is asserted SEPARATELY and
+    // POSITIVELY, and a closure assertion states the two are the whole. The
+    // second half — no routine calls `inventory_assertion_consume` that the
+    // law does not account for — stays UNSCOPED, over every phase's consumers,
+    // because that is the security claim and it was never a closure rule.
     const law = await operationKindLaw(ownerPool());
+    const phase3Kinds = await phase3RegisteredOpKinds();
+    const sigsOf = (kinds: readonly string[]): readonly string[] => [...new Set(kinds.flatMap((k) => law.consumers[k] ?? []))].sort();
+
+    const phase3Sigs = sigsOf(phase3Kinds);
+    expect(new Set(phase3Sigs).size).toBe(26 + P3C_OPERATION_KINDS.length);
+
+    // The later phases' half, positively: every kind beyond the Phase 3 scope
+    // HAS a consumer (an unconsumed kind would otherwise vanish from the
+    // claim), and no routine serves both scopes — so the two consumer sets are
+    // disjoint and the whole is really the sum of the two halves rather than
+    // an overlap nobody counted.
+    const beyondKinds = Object.keys(law.consumers)
+      .filter((k) => !phase3Kinds.includes(k))
+      .sort();
+    for (const k of beyondKinds) expect(law.consumers[k], `${k} is registered beyond Phase 3 and must still have its one consumer`).toHaveLength(1);
+    const beyondSigs = sigsOf(beyondKinds);
+    expect(
+      beyondSigs.filter((sig) => phase3Sigs.includes(sig)),
+      'no routine consumes both a Phase 3 kind and a later phase kind, so the two consumer sets are disjoint',
+    ).toEqual([]);
+
+    // Closure: the two scopes together are every consumer the law accounts
+    // for, and that set is exactly the set of routines that call
+    // `inventory_assertion_consume` at all — the original second half,
+    // unscoped.
     const sigs = Object.values(law.consumers).flat();
-    expect(new Set(sigs).size).toBe(26 + P3C_OPERATION_KINDS.length);
+    expect([...new Set(sigs)].sort(), 'the two scopes are the whole set of consumers the law accounts for').toEqual([...phase3Sigs, ...beyondSigs].sort());
     const consumers = (await consumptions(ownerPool())).filter((c) => c.ops.length > 0).map((c) => c.sig);
-    expect([...consumers].sort()).toEqual([...sigs].sort());
+    expect([...consumers].sort()).toEqual([...new Set(sigs)].sort());
   });
 
   it('the recogniser reads code, not text: a kind in a comment or an error message is not a consumption', async () => {
