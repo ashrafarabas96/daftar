@@ -108,9 +108,16 @@ describe('G-16 / GOLD-12, GOLD-62 the sale document key', () => {
 
   it('the structural half: a UNIQUE or primary key over the document identity, with columns that resolve', async () => {
     requireSubject(subject.missing, CLAIM);
+    // The column names are cast to `text[]`, not left as `name[]`:
+    // node-postgres has no parser for the `name` array type and hands back the
+    // raw array literal as a STRING, so `cols.includes('business_id')` was a
+    // substring test that happened to agree and `cols.join` threw outright —
+    // which is how the real assertion below came to be hidden behind a
+    // TypeError in its own failure message. The cast makes it a real array on
+    // this side of the wire.
     const r = await ownerPool().query<{ conname: string; contype: string; cols: string[]; unresolved: number }>(
       `SELECT con.conname, con.contype::text AS contype,
-              (SELECT coalesce(array_agg(a.attname ORDER BY a.attnum), '{}')
+              (SELECT coalesce(array_agg(a.attname::text ORDER BY a.attnum), '{}'::text[])
                  FROM pg_attribute a WHERE a.attrelid = con.conrelid AND a.attnum = ANY (con.conkey) AND NOT a.attisdropped) AS cols,
               (SELECT count(*)::int FROM unnest(con.conkey) AS k
                 WHERE NOT EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid = con.conrelid AND a.attnum = k AND NOT a.attisdropped)) AS unresolved

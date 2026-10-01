@@ -35,11 +35,13 @@
  * `06-sale-last-item-race.golden.test.ts` for why that is the correct state.
  */
 import { randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import type { Response } from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createTestApp, ensurePostgres, ownerPool, resetData, type TestApp } from '../../helpers/test-app';
 import { asMember, onboardS3Business, registerActor, today, type HttpActor, type S3Business } from '../../helpers/inventory-commands';
-import { existingRelations, expectInventoryReconciled, must, requireSubject, saleSubject, type SaleSubject } from './harness';
+import { REPO, existingRelations, expectInventoryReconciled, must, requireSubject, saleSubject, type SaleSubject } from './harness';
 import { confirmSale, requireColumns, seedSaleFixtures } from './sale-path';
 import { COGS_KEY, INVENTORY_KEY, LAWS, REVENUE_KEY, atomicSaleLawViolations, readSaleWorld, type SaleWorld } from './atomic-sale-law';
 
@@ -163,26 +165,75 @@ describe('the atomic sale law (§15) over the state a committed sale leaves', ()
     expect(gl === 0n, 'non-vacuity: 6 units remain, so the identity is asserted over a NON-ZERO position').toBe(false);
   });
 
+  /**
+   * THE FORBIDDEN RECONSTRUCTION, PROVED STRUCTURALLY — AND WHY NOT NUMERICALLY.
+   *
+   * This case used to assert that the two formulas DISAGREE over the fixture,
+   * on the reasoning that a reconciler silently rewritten as
+   * `Σ(on_hand × avg_unit_cost_base_minor)` would then be caught. Measured on
+   * the `0078` head it reported `official=20 forbidden=20`, and the premise
+   * turns out to be unachievable rather than merely unlucky:
+   *
+   *   `valuation = T − round(q·avg)` is what the writer stores (`0060:388-393`
+   *   values an outbound at `half_even(|q|·avg)`), and the reconstruction is
+   *   `round(on_hand·avg) = round(T − q·avg)`. For a single stock key, with
+   *   `T` an integer, `round(T − x) = T − round(x)` under HALF_EVEN for every
+   *   `x` — including the exact halves, where the two ties break in opposite
+   *   directions because the integer parts differ by an integer. So the two
+   *   formulas are ALGEBRAICALLY EQUAL at one key, whatever the lots are, and
+   *   summing over keys cannot separate them either because each key is
+   *   individually equal. The remaining gap — `avg_unit_cost_base_minor` being
+   *   a rounded quotient at `NUMERIC(28,10)` (`0059:106`) — needs an
+   *   `on_hand` above 5e9 before it moves a single minor unit.
+   *
+   * Asserting a numeric disagreement that cannot exist is the kind of premise
+   * that gets "fixed" by nudging the fixture until it passes. The law is
+   * therefore stated where it actually lives — in the SQL, as
+   * `[[daftar-a-rounded-quotient-is-never-an-input]]`: the reconciliation reads
+   * `Σ stock_movements.value_delta_base_minor` and NAMES NEITHER the stored
+   * average nor `on_hand`. That is checkable, it is red the moment the
+   * forbidden column appears in it, and it does not depend on arithmetic luck.
+   */
   it('the identity is never reconstructed from quantity × average cost', async () => {
     requireSubject(subject.missing, CLAIM);
-    // The two lots were chosen so the two formulas DISAGREE. If a future
-    // reconciler is rewritten as `Σ(on_hand × avg_unit_cost_base_minor)`,
-    // rounded at the per-unit average, this is the assertion that catches it:
-    // the forbidden reconstruction must not equal the official identity here,
-    // so a suite that silently swapped one for the other cannot stay green.
-    const r = must(
-      (
-        await ownerPool().query<{ official: string; forbidden: string }>(
-          `SELECT (SELECT coalesce(sum(value_delta_base_minor), 0)::text FROM stock_movements WHERE business_id = $1) AS official,
-                (SELECT coalesce(sum(round(on_hand * avg_unit_cost_base_minor)), 0)::text FROM stock_levels WHERE business_id = $1) AS forbidden`,
-          [A.businessId],
-        )
-      ).rows[0],
-    );
+    // The numeric half that IS true: the official identity holds, over a
+    // non-zero position, and it is read from the ledger.
+    const gl = await expectInventoryReconciled(ownerPool(), A.businessId, 'G-18 the official identity, before the structural claim below');
+    expect(gl === 0n, 'non-vacuity: the identity is asserted over a NON-ZERO position').toBe(false);
+
+    // And the structural half, over the ONE reconciliation this estate reads
+    // the verdict out of. Read from disk, so a rewrite of the helper is what
+    // this case is about and not a copy of it kept here.
+    const source = readFileSync(join(REPO, 'tests/golden-regression/phase4-s2/harness.ts'), 'utf8');
+    // The two SIDES of the identity, as CODE. Comments are stripped and string
+    // literals are NOT: the prose above each function names the forbidden
+    // formula in order to forbid it, so a check that read the prose would be
+    // red for the warning rather than for the SQL — while the SQL itself lives
+    // in a template literal, so stripping strings would read nothing at all.
+    // The same trap as the harness's own `deadlock_timeout` check, which first
+    // failed on its own message.
+    const stripComments = (text: string): string => text.replaceAll(/\/\*[\s\S]*?\*\//g, ' ').replaceAll(/^[ \t]*\/\/.*$/gm, ' ');
+    const sides = ['glInventoryBaseMinor', 'ledgerValueBaseMinor'].map((name) => {
+      const at = source.indexOf(`export async function ${name}`);
+      const end = source.indexOf('\n}\n', at);
+      return { name, code: at < 0 || end < 0 ? '' : stripComments(source.slice(at, end)) };
+    });
+    for (const side of sides) {
+      expect(side.code.length, `NO SUBJECT — ${side.name} was not found in the harness, so the claim below reads nothing`).toBeGreaterThan(0);
+    }
     expect(
-      r.official === r.forbidden,
-      `the fixture must keep the two formulas apart, or this golden could not tell them apart: official=${r.official} forbidden=${r.forbidden}`,
-    ).toBe(false);
+      must(sides.find((x) => x.name === 'ledgerValueBaseMinor')).code.includes('value_delta_base_minor'),
+      'the ledger side is Σ stock_movements.value_delta_base_minor, read from the movements',
+    ).toBe(true);
+    for (const side of sides) {
+      for (const forbidden of ['avg_unit_cost_base_minor', 'average_cost', 'on_hand', 'stock_levels']) {
+        expect(
+          side.code.includes(forbidden),
+          `${side.name} names ${forbidden}: the inventory value is NEVER reconstructed from a quantity times a rounded average ` +
+            `(P4-AL-25, TL-P4-S0-01, [[daftar-a-rounded-quotient-is-never-an-input]])`,
+        ).toBe(false);
+      }
+    }
   });
 
   it('the three account identities carry the codes written out from the chart migration', async () => {
