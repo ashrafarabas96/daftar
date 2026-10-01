@@ -618,7 +618,12 @@ describe('HTTP: the sale command and the sale read refuse another tenant’s bus
     // below is the isolation and not a route that reads nothing.
     const ok = await t.request.get(bind(route, A).path).set(hdr(owner, A.businessId));
     expect(ok.status, `${route} does not answer for its own business: ${JSON.stringify(ok.body)}`).toBe(200);
-    expect(ok.body.id, `${route} answered with some other sale`).toBe(A.saleId);
+    // `saleId`, not `id`: the sale DTO names the document by the field the
+    // contract names it by (`sale-reads.ts:302` maps `row.id` to `saleId`),
+    // and `ok.body.id` was `undefined` — an assertion comparing `undefined`
+    // with the id would have been satisfied by any read that returned nothing
+    // under a different field name.
+    expect(ok.body.saleId, `${route} answered with some other sale`).toBe(A.saleId);
 
     // DENY 1 — A's own id under A2's header.
     const foreignHeader = await t.request.get(bind(route, A).path).set(hdr(owner, A2.businessId));
@@ -637,7 +642,39 @@ describe('HTTP: the sale command and the sale read refuse another tenant’s bus
 
   it('SQL: the sale relations refuse another business under daftar_app’s row security', async () => {
     await ready();
-    for (const relation of ['sales', 'sale_items', 'stock_source_bridge_sale']) {
+    const relations = ['sales', 'sale_items', 'stock_source_bridge_sale'];
+    // The three relations are NOT all reachable by the runtime principal, and
+    // the probe must not pretend otherwise. `0077:484-485` grants
+    // `stock_source_bridge_sale` to `daftar_inventory_internal` only, so a
+    // `SELECT` as `daftar_app` is `permission denied for table …` — which this
+    // loop used to take as a suite error rather than as the answer.
+    //
+    // So the surface is PARTITIONED by what the catalogue actually grants,
+    // discovered with `has_table_privilege` and never listed: a relation
+    // `daftar_app` can read is proved by its ROW SECURITY, and one it cannot
+    // read is proved by the PRIVILEGE BEING ABSENT — which is the stronger of
+    // the two, because an ungranted relation needs no policy to be
+    // unreachable. Writing the bridge into the RLS loop would have been a
+    // claim the grant makes unprovable; leaving it out silently would have
+    // been an exemption nobody stated.
+    const granted = new Set(
+      (
+        await ownerPool().query<{ relation: string }>(
+          `SELECT c.relname::text AS relation FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+            WHERE n.nspname = 'public' AND c.relname = ANY($1::text[]) AND has_table_privilege('daftar_app', c.oid, 'SELECT')`,
+          [relations],
+        )
+      ).rows.map((r) => r.relation),
+    );
+    const readable = relations.filter((r) => granted.has(r));
+    const unreachable = relations.filter((r) => !granted.has(r));
+    expect(
+      readable.length,
+      'NO SUBJECT — daftar_app may read none of the sale relations, so the row-security claim below has nothing to prove',
+    ).toBeGreaterThan(0);
+    expect([...readable, ...unreachable].sort(), 'the partition covers the three sale relations exactly once').toEqual([...relations].sort());
+
+    for (const relation of readable) {
       // ALLOW: the unqualified read under A's scope returns only A's rows —
       // the statement names no business at all.
       const mine = await asApp<{ business_id: string }>(app, A, `SELECT DISTINCT business_id FROM ${relation}`);
@@ -650,6 +687,18 @@ describe('HTTP: the sale command and the sale read refuse another tenant’s bus
         const rows = await asApp<{ business_id: string }>(app, A, `SELECT business_id FROM ${relation} WHERE business_id = $1`, [other.businessId]);
         expect(rows, `${relation} leaked ${other.businessId} to ${A.businessId}`).toEqual([]);
       }
+    }
+
+    // And the other half of the partition, asserted rather than skipped: the
+    // statement is refused by the GRANT, before any policy is consulted.
+    for (const relation of unreachable) {
+      const outcome = await asApp<{ n: string }>(app, A, `SELECT count(*)::text AS n FROM ${relation}`).then(
+        () => 'allowed',
+        (e: unknown) => String((e as { message?: unknown }).message ?? e),
+      );
+      expect(outcome, `${relation} is readable by daftar_app, so it owes the row-security proof above and must join the loop`).toMatch(
+        /permission denied for table/,
+      );
     }
   });
 });

@@ -672,6 +672,163 @@ is resolved**, which is what makes the two halves one finding rather than two.
 
 ---
 
+## 7e. The round after `0078`: the measured green pass, and six corrections
+
+All numbers below are measured on a cluster built from scratch, with both
+`PG_PORT=5444` and `PG_DIR` set and `PG_DIR` deleted first. `PG_PORT` alone
+collides on the default shared data directory, and a stale `PG_DIR` after an
+amended migration reports "Migration tampered after apply (checksum mismatch)",
+which is an old copy of the database and not a defect.
+
+### The one defect that masks everything else
+
+**Every priced sale in the estate is refused `403 FORBIDDEN / Access denied`,
+and the cause is `selling.sale_cogs_owed`.** `error.filter.ts:112-115` maps any
+`P0001` to an opaque 403, so the database's named refusal never reaches the
+client. The suites see 403 and say "the sale was refused"; the log says
+`selling.sale_cogs_owed`.
+
+The discriminator is the COST, and it is exact: `sale-s2-cogs-owed`'s ZERO ARM
+(stock in at a unit cost of 0) **commits and passes**, while its NON-ZERO ARM
+(unit cost 5) is refused. A zero-cost sale sets no binding, so the deferred
+trigger's INSERT-event `NEW.binding_source_id` is NULL and its cost is 0 and it
+returns early; a priced sale has its binding set by a later UPDATE in the same
+transaction, and the INSERT event's `NEW` still carries NULL — the defect the
+migration owner is amending. Nothing was worked around.
+
+Measured, shipped state (`387f4e5`), over
+`tests/golden-regression/phase4-s2`, `tests/golden-regression/phase4`,
+`sale-s2-interleaving`, `sale-s2-atomic-law`, `sale-s2-cogs-owed` and
+`sale-s2-red-proofs`: **123 passed, 16 failed, 17 skipped**. Every one of the 16
+traces to that 403; the 17 skipped are `sale-s2-atomic-law`, whose `beforeAll`
+needs one accepted sale to discover the seam set. The only other named refusal
+in the whole log is `inventory.insufficient_stock`, twice — which is golden 06's
+losing attempt being refused correctly.
+
+With `sales_cogs_owed` dropped from the cluster by hand, which simulates the
+amendment and is **not** the shipped state: **155 passed, 1 failed**, and the
+one failure is `sale-s2-cogs-owed`'s own check that the trigger is installed and
+`INITIALLY DEFERRED` — that is the check doing its job. That is the green pass,
+and it is the number to expect once the amendment lands.
+
+### E-01 — `invoice_sequences`, now a held row lock rather than a trigger
+
+My own §E-01 note was the fix. P4-AL-31 forbids a stored counter, so
+`sale_commit` takes the series row `FOR UPDATE`, reads `max(number_seq) + 1`
+and never UPDATEs it; a `BEFORE UPDATE` trigger there never fires, the
+injection observed nothing, the sale succeeded, and the case asserted a refusal
+it then failed to get. `invoice_sequences` therefore left `TRIGGER_SEAMS`
+(a new, derived list) while staying in the discovered set, and it has a case of
+its own: the series row is parked on a connection of its own via the harness's
+new `parkRow`, the sale is launched once and **observed into the lock queue
+through `pg_blocking_pids`** before anything is asserted, and
+`waitUntilQueued` throws if the sale ever settles without parking. **No sleep
+anywhere.** While it is held the case asserts the census delta is `{}` — a sale
+stopped at that seam has committed nothing, whatever it has already written —
+and re-checks `blockedBehind` afterwards to prove the census was taken mid-sale.
+Released, the sale serialises and commits.
+
+Two planted red proofs, each run and each red:
+
+| planted | what fired |
+| --- | --- |
+| the park's predicate changed to an absent `document_kind` | `the invoice series row of this business — a park on an absent row holds no lock and forces no interleaving` |
+| the park released before the sale is launched | `attempt 1 finished without ever waiting on the parked lock, so this was not a race` |
+
+`parkRow` is the generalisation of `parkStockKey`, which now delegates to it
+with a `what` that keeps its message byte-identical, so the stock park's
+existing red proof still covers both.
+
+### `stock_source_bindings` now has an injection case
+
+It was a discovered written seam with no case — the generic source binding the
+ledger carries for every source document and the parent
+`stock_source_bridge_sale` hangs from. Adding it to `P4_AL_16_FLOOR` gives it a
+generated raising-trigger case. Planted red proof, run: with the name removed
+from the floor, `every discovered seam was covered` reports
+`the sale writes stock_source_bindings, and no case above injects a failure
+there`.
+
+### L4 was WRONG, not merely strict
+
+L4 required every COGS entry to carry `source_type = 'sale'`. Measured on the
+`0078` head it reported two violations over **lawful** state: this suite's own
+inbound fixture lots post `inventory_adjustment` COGS entries, and an inventory
+adjustment is a commercial source. §15 forbids "a COGS entry but no commercial
+source" and says nothing about the source being a sale. A law that is red over
+state the estate is required to allow is not strict, it is wrong — and the
+tempting repair was to scope the query, which is how a law quietly becomes a
+weaker law.
+
+Re-expressed at §15's own grain and no looser: a COGS entry with no source
+identity is a violation; one with no `accounting_source_bindings` row binding it
+to the source it names is a violation; and one naming a `sale` that does not
+exist is a violation. A second planted world covers the new clause — a COGS
+entry whose binding row is missing — beside the existing one.
+
+### The "two formulas disagree" premise was unachievable
+
+Golden 07 asserted the official identity and the forbidden reconstruction
+DISAGREE over its fixture. Measured: `official=20 forbidden=20`. The premise is
+not unlucky, it is impossible. The writer stores
+`valuation = T − round(q·avg)` (`0060:388-393` values an outbound at
+`half_even(|q|·avg)`), so the reconstruction is `round(T − q·avg)`, and for
+integer `T` and HALF_EVEN, `round(T − x) = T − round(x)` for every `x` — the
+exact halves included, because the two ties break in opposite directions when
+the integer parts differ by an integer. The formulas are algebraically equal at
+one key whatever the lots are, and summing over keys cannot separate them
+because each key is individually equal. The only remaining gap is
+`avg_unit_cost_base_minor` being a rounded quotient at `NUMERIC(28,10)`
+(`0059:106`), which needs an `on_hand` above 5e9 to move one minor unit.
+
+A premise that cannot hold gets "fixed" by nudging the fixture until it passes,
+so the law is now stated where it lives: the numeric half asserts the official
+identity over a non-zero position, and the structural half reads
+`glInventoryBaseMinor` and `ledgerValueBaseMinor` from disk, **strips comments
+and keeps string literals**, and asserts the ledger side names
+`value_delta_base_minor` and that neither side names
+`avg_unit_cost_base_minor`, `average_cost`, `on_hand` or `stock_levels`.
+Comments must go because the prose above each function names the forbidden
+formula in order to forbid it; strings must stay because the SQL is a template
+literal — the same trap as the harness's own `deadlock_timeout` check, which
+first failed on its own message.
+
+### Two more of my own bugs the live sale path exposed
+
+1. **`ok.body.id` was `undefined`.** The sale DTO names the document `saleId`
+   (`sale-reads.ts:302` maps `row.id` to `saleId`). An assertion comparing
+   `undefined` with the id would have been satisfied by any read returning
+   nothing under a different field name.
+2. **`array_agg(a.attname)` came back as a STRING.** node-postgres has no
+   parser for `name[]` and hands back the raw array literal, so
+   `cols.includes('business_id')` was a substring test that happened to agree
+   and `cols.join` threw — which is how golden 08's real assertion came to be
+   hidden behind a `TypeError` in its own failure message. Cast to `text[]`.
+
+### `daftar_app` cannot read `stock_source_bridge_sale`, and the probe now says so
+
+Golden 01's SQL section looped the three sale relations under `daftar_app` and
+got `permission denied for table stock_source_bridge_sale` — `0077:484-485`
+grants the bridge to `daftar_inventory_internal` only. The loop treated that as
+a suite error rather than as the answer. The surface is now **partitioned by
+what the catalogue grants**, discovered with `has_table_privilege` and never
+listed: a relation `daftar_app` may read is proved by its ROW SECURITY, and one
+it may not is proved by the PRIVILEGE BEING ABSENT — the stronger of the two,
+because an ungranted relation needs no policy to be unreachable. The partition
+is asserted to cover the three relations exactly once, and the readable side is
+asserted non-empty, so neither half can become vacuous.
+
+### Item 3 of the brief: the six shared-harness cases
+
+`02-cross-business-fk.golden.test.ts` and `phase4-composite-seam-guard.test.ts`
+are **green**, measured twice: alone (26/26) and inside a run of the whole guard
+estate plus both Phase 4 golden directories. The shared harness defect was
+fixed by the head commit itself — `387f4e5`, "the deficit fixture's TRUNCATE is
+a discovered FK closure, not a list". Nothing was scoped, relaxed or wrapped in
+`arrayContaining`; there was nothing left to fix.
+
+---
+
 ## 8. Open items for other owners
 
 1. **`docs/DAFTAR_GOLDEN_REGRESSION_SUITE.md:41`** states GOLD-33 as

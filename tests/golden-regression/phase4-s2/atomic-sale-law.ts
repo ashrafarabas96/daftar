@@ -155,12 +155,39 @@ export const LAWS: readonly Law[] = [
     id: 'L4',
     forbids: 'a COGS entry with no commercial source',
     check: (w) => {
+      // §15 forbids a COGS entry with NO COMMERCIAL SOURCE. It does not say
+      // the source must be a SALE, and this law used to: it required every
+      // COGS entry to carry `source_type = 'sale'`, which reported a defect
+      // over LAWFUL Phase 3 state. An inventory adjustment is a commercial
+      // source and its COGS entry is as sourced as a sale's — measured on the
+      // `0078` head, where this suite's own inbound fixture lots post two
+      // `inventory_adjustment` COGS entries and the law called both of them
+      // violations. A law that is red over state the estate is required to
+      // allow is not a strict law; it is a wrong one, and it would have been
+      // "fixed" by scoping the query, which is how a law quietly becomes a
+      // weaker law.
+      //
+      // So the claim is stated at the grain §15 actually uses — the entry has
+      // a SOURCE, and the source is THERE — and it keeps its teeth on the
+      // sale: a COGS entry with no `accounting_source_bindings` row at all is
+      // a violation, and one that names a sale which does not exist is a
+      // violation. Nothing about this admits an unbound COGS entry.
       const sales = ids(w.sales, (s) => s.id);
+      const bound = new Set(w.bindings.map((b) => `${b.journalEntryId}\u0000${b.sourceType}\u0000${b.sourceId}`));
       const out: string[] = [];
       for (const e of w.entries) {
         if (!e.systemKeys.includes(COGS_KEY)) continue;
-        if (e.sourceType !== SALE_ACCOUNTING_SOURCE) out.push(`L4: COGS entry ${e.id} is bound to source type ${e.sourceType}, not to a sale`);
-        else if (!sales.has(e.sourceId)) out.push(`L4: COGS entry ${e.id} names sale ${e.sourceId}, which does not exist`);
+        if (e.sourceType === '' || e.sourceId === '') {
+          out.push(`L4: COGS entry ${e.id} carries no source identity at all`);
+          continue;
+        }
+        if (!bound.has(`${e.id}\u0000${e.sourceType}\u0000${e.sourceId}`)) {
+          out.push(`L4: COGS entry ${e.id} names ${e.sourceType} ${e.sourceId} and no accounting_source_bindings row binds it there`);
+          continue;
+        }
+        if (e.sourceType === SALE_ACCOUNTING_SOURCE && !sales.has(e.sourceId)) {
+          out.push(`L4: COGS entry ${e.id} names sale ${e.sourceId}, which does not exist`);
+        }
       }
       return out;
     },

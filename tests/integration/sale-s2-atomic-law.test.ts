@@ -65,15 +65,20 @@ import { DatabaseAccountingPostingAdapter } from '../../apps/api/src/modules/acc
 import { createTestApp, ensurePostgres, ownerPool, resetData, type TestApp } from '../helpers/test-app';
 import { asMember, onboardS3Business, registerActor, today, type HttpActor, type S3Business } from '../helpers/inventory-commands';
 import {
+  blockedBehind,
   census,
   censusDelta,
   existingRelations,
   must,
+  parkRow,
   requireSubject,
   saleSubject,
+  waitUntilQueued,
   type Census,
+  type Park,
   type SaleSubject,
 } from '../golden-regression/phase4-s2/harness';
+import { ownerClient } from '../helpers/stock-ledger';
 import { confirmSale, seedSaleFixtures } from '../golden-regression/phase4-s2/sale-path';
 
 /** The relations P4-AL-16 names by hand. A FLOOR of the discovered seam set, never an equality. */
@@ -81,6 +86,13 @@ const P4_AL_16_FLOOR: readonly string[] = [
   'sales',
   'sale_items',
   'stock_movements',
+  // The GENERIC source binding the ledger carries for every source document,
+  // and the parent `stock_source_bridge_sale` hangs from
+  // (`stock_source_bridge_sale_binding_fk`). It was discovered as a written
+  // seam and had no case of its own: a seam outside the injection set is a
+  // seam at which a partial sale could survive unobserved, which is the one
+  // thing this suite exists to rule out.
+  'stock_source_bindings',
   'stock_source_bridge_sale',
   'journal_entries',
   'journal_lines',
@@ -89,8 +101,27 @@ const P4_AL_16_FLOOR: readonly string[] = [
   'invoice_items',
 ];
 
-/** Relations the path UPDATES rather than inserts into, so a count delta cannot discover them. */
+/**
+ * Relations the path reaches WITHOUT inserting a row, so a count delta cannot
+ * discover them. They are added to the discovered set by name.
+ *
+ * `invoice_sequences` is here but is NOT in `TRIGGER_SEAMS`, and that is the
+ * point of E-01: P4-AL-31 forbids a stored counter, so the routine takes the
+ * series row `FOR UPDATE`, reads `max(number_seq) + 1` and never UPDATEs it.
+ * A `BEFORE UPDATE` trigger on it therefore never fires — the injection
+ * observed nothing, the sale succeeded, and the case asserted a refusal it
+ * then failed to get. The seam is real and it is reached by a ROW LOCK, so it
+ * is proved by HOLDING that row in another session: see the dedicated case
+ * below.
+ */
 const UPDATE_SEAMS: readonly string[] = ['stock_levels', 'invoice_sequences'];
+
+/**
+ * The seams a raising trigger can actually observe: every one the routine
+ * WRITES, plus `stock_levels`, which it genuinely UPDATEs. Derived, so adding
+ * a relation to the floor adds its case.
+ */
+const TRIGGER_SEAMS: readonly string[] = [...P4_AL_16_FLOOR, 'stock_levels'];
 
 const CLAIM = 'a failure at any seam of the sale commit path leaves nothing behind';
 
@@ -205,13 +236,77 @@ describe('P4-AL-16 one transaction, or no sale: a failure at every seam leaves n
   // all of them would stop at the first surviving row and hide every seam
   // after it — the measurement defect that made P4-S1's breakage count grow
   // round after round instead of being known once.
-  for (const relation of [...P4_AL_16_FLOOR, ...UPDATE_SEAMS]) {
+  for (const relation of TRIGGER_SEAMS) {
     it(`a failure at the ${relation} seam leaves nothing`, async () => {
       requireSubject(subject.missing, CLAIM);
       expect(seams, `${relation} is not among the discovered seams, so this case has no subject`).toContain(relation);
       await expectNothingSurvives((fn) => withRaisingTrigger(relation, fn), `the ${relation} seam`);
     });
   }
+
+  /**
+   * E-01, THE SEAM THAT IS REACHED BY A LOCK AND NOT BY A WRITE.
+   *
+   * `invoice_sequences` is read `FOR UPDATE` and never updated, so the only
+   * way to be at that seam when the sale arrives is to be HOLDING the row.
+   * The interleaving is FORCED, not hoped for: the series row is parked on a
+   * connection of its own, the sale is launched once, and it is OBSERVED into
+   * the lock queue through `pg_blocking_pids` before anything is asserted —
+   * `waitUntilQueued` throws if the sale ever settles without parking, so a
+   * sale that sailed past the seam is a FAILURE and never a pass. No sleep is
+   * involved at any point: a verdict read out of an unforced interleaving is a
+   * verdict about the machine's speed
+   * (`[[daftar-a-test-whose-verdict-is-the-machines-speed]]`).
+   */
+  it('a sale held at the invoice_sequences seam has committed NOTHING, and serialises once the row is released', async () => {
+    requireSubject(subject.missing, CLAIM);
+    expect(seams, 'invoice_sequences is not among the discovered seams, so this case has no subject').toContain('invoice_sequences');
+
+    const before: Census = await census(ownerPool(), A.businessId);
+    let park: Park | null = null;
+    const settledFlag = { done: false };
+    let inFlight: Promise<Response> | null = null;
+    try {
+      park = await parkRow(
+        () => ownerClient(),
+        `SELECT 1 FROM invoice_sequences WHERE business_id = $1 AND document_kind = 'invoice' FOR UPDATE`,
+        [A.businessId],
+        'the invoice series row of this business',
+      );
+      const held = park;
+      inFlight = sale().then(
+        (r) => {
+          settledFlag.done = true;
+          return r;
+        },
+        (e: unknown) => {
+          settledFlag.done = true;
+          throw e;
+        },
+      );
+      const queued = await waitUntilQueued([held.pid], 1, settledFlag, 'the sale at the invoice_sequences seam');
+      expect(queued.length, 'the sale is queued behind the held series row — the seam is really reached by a row lock').toBeGreaterThanOrEqual(1);
+
+      // Everything the routine has written so far is inside its own open
+      // transaction, so a census taken from another connection must see NONE
+      // of it. This is the atomicity half of the case: a sale stopped at this
+      // seam has committed nothing, whatever it has already written.
+      expect(
+        censusDelta(before, await census(ownerPool(), A.businessId)),
+        'a sale held at the invoice_sequences seam has committed NOTHING — not a row of any business-scoped relation',
+      ).toEqual({});
+      expect((await blockedBehind([held.pid])).length, 'and it is STILL queued after the census, so the census was taken mid-sale').toBeGreaterThanOrEqual(1);
+    } finally {
+      await park?.release();
+    }
+
+    // Released, it serialises: the ordinal it then reads is the one the lock
+    // was protecting, and the sale commits. A seam that blocked and then
+    // failed would be a lock-order or contention defect, not a business
+    // outcome, and it is reported as the refusal it is.
+    const res = await must(inFlight, 'the in-flight sale');
+    expect(res.status, `once the series row is released the sale serialises and commits: ${JSON.stringify(res.body)}`).toBeLessThan(300);
+  });
 
   it('every discovered seam was covered by a case above, or is named here', () => {
     requireSubject(subject.missing, CLAIM);

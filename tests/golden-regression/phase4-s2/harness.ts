@@ -287,17 +287,38 @@ export interface Park {
  * past and the suite would report a green race that never happened.
  */
 export async function parkStockKey(open: () => Promise<Client>, businessId: string, warehouseId: string, variantId: string): Promise<Park> {
+  return parkRow(
+    open,
+    `SELECT 1 FROM stock_levels WHERE business_id = $1 AND warehouse_id = $2 AND variant_id = $3 FOR UPDATE`,
+    [businessId, warehouseId, variantId],
+    `parkStockKey: no stock_levels row for (${warehouseId}, ${variantId})`,
+  );
+}
+
+/**
+ * Park a row lock on EXACTLY ONE row, whatever relation it is in, on a
+ * connection of its own.
+ *
+ * The generalisation of `parkStockKey`, and it exists because a seam the
+ * routine reaches by TAKING A ROW LOCK cannot be injected at with a trigger:
+ * `invoice_sequences` is read `FOR UPDATE` and never updated (P4-AL-31 — the
+ * ordinal is `max(number_seq) + 1`, not a stored counter), so a
+ * `BEFORE UPDATE` trigger there never fires, the injection observes nothing,
+ * and the case passes for the wrong reason. Holding the row is the only way
+ * to reach that seam, and it is the method §2 already uses for the stock key.
+ *
+ * `sql` must select EXACTLY ONE row `FOR UPDATE`. A park on an absent row
+ * holds nothing, every attempt sails past, and the suite reports a forced
+ * interleaving that never happened — so a row count other than one THROWS.
+ */
+export async function parkRow(open: () => Promise<Client>, sql: string, params: readonly unknown[], what: string): Promise<Park> {
   const c = await open();
   await c.query('BEGIN');
-  const r = await c.query(`SELECT 1 FROM stock_levels WHERE business_id = $1 AND warehouse_id = $2 AND variant_id = $3 FOR UPDATE`, [
-    businessId,
-    warehouseId,
-    variantId,
-  ]);
+  const r = await c.query(sql, [...params]);
   if (r.rowCount !== 1) {
     await c.query('ROLLBACK').catch(() => undefined);
     await c.end().catch(() => undefined);
-    throw new Error(`parkStockKey: no stock_levels row for (${warehouseId}, ${variantId}) — a park on an absent row holds no lock and forces no interleaving`);
+    throw new Error(`${what} — a park on an absent row holds no lock and forces no interleaving`);
   }
   const pid = await pidOf(c);
   let released = false;

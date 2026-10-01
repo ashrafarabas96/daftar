@@ -281,6 +281,15 @@ const PLANTED: readonly { readonly law: string; readonly what: string; readonly 
     },
   },
   {
+    law: 'L4',
+    what: 'a COGS entry with no accounting_source_bindings row binding it to its named source — the clause §15 actually states',
+    world: {
+      ...LAWFUL,
+      entries: [{ id: 'je-cogs', sourceType: 'inventory_adjustment', sourceId: 'adj-1', systemKeys: ['cogs'] }, ...LAWFUL.entries.slice(1)],
+      bindings: [...LAWFUL.bindings.slice(1)],
+    },
+  },
+  {
     law: 'L5',
     what: 'a revenue entry bound to a sale instead of to an invoice',
     world: {
