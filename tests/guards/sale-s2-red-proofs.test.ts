@@ -167,6 +167,26 @@ export const RED_PROOFS: readonly { readonly id: string; readonly defect: string
     defect: 'a P4-S2 file is placed where the SEALED gate:phase4:s1 fails over it',
     proof: 'tests/guards/sale-s2-red-proofs.test.ts::no P4-S2 file turns the sealed gate red',
   },
+  {
+    id: 'RP-S2-COGS-LINE',
+    defect: "the per-line stock guard requires value_delta_base_minor < 0, so sales_cogs_owed()'s zero-cost arm has no reachable subject",
+    proof: 'tests/integration/sale-s2-cogs-owed.test.ts::PLANTED: a strictly-negative predicate on the LINE guard is reported',
+  },
+  {
+    id: 'RP-S2-COGS-HEADER',
+    defect: 'the same strictly-negative predicate on the HEADER guard alone, which one arm of the law would miss',
+    proof: 'tests/integration/sale-s2-cogs-owed.test.ts::PLANTED: a strictly-negative predicate on the HEADER guard is reported too',
+  },
+  {
+    id: 'RP-S2-COGS-UNCONSTRAINED',
+    defect: 'a stock-side guard that constrains the movement’s value with nothing, which would make the agreement unprovable rather than true',
+    proof: 'tests/integration/sale-s2-cogs-owed.test.ts::PLANTED: a stock-side guard that constrains the value with nothing is reported',
+  },
+  {
+    id: 'RP-S2-COGS-PREMISE',
+    defect: 'the agreement law fires against a slice that never claimed a zero cost was legitimate, forcing one resolution by construction',
+    proof: 'tests/integration/sale-s2-cogs-owed.test.ts::PLANTED: with NO zero-cost branch the law has no premise',
+  },
 ];
 
 /**
