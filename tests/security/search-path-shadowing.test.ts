@@ -14,6 +14,7 @@ import {
   workerDbUrl,
 } from '../helpers/test-app';
 import { inheritedPrefixRoutines } from '../helpers/phase4-inherited-scope';
+import { lexBody } from '../helpers/phase3-surface';
 import {
   appClient,
   dbPayload,
@@ -690,22 +691,65 @@ describe('the §D inventory definer contract (P3-AL-54 §D)', () => {
   });
 
   it('no runtime role holds EXECUTE through a membership either', async () => {
+    // P4-AL-88. `EXECUTE_MATRIX` is a frozen declaration of the ACCEPTED
+    // PREFIX's routines, so comparing an effective privilege against it is an
+    // exact-equality inventory and NOT the sentence this case is named after.
+    // The §H case above says these two cases are unscoped and "reach these
+    // routines as laws already" — true of the PUBLIC one, and NOT true here,
+    // because a matrix miss on a beyond-prefix routine is reported as a leak.
+    // `0078` makes that visible: `sale_commit` is granted to `daftar_app`
+    // directly, exactly as C-09 and the `purchase_receive` precedent require,
+    // and this case called it a leak.
+    //
+    // So the original law is kept WORD FOR WORD in scope, and the beyond half
+    // asserts what the case is actually about — MEMBERSHIP, as opposed to a
+    // direct grant: a runtime role may hold EXECUTE on a routine beyond the
+    // prefix only when that role is itself a named grantee. An effective
+    // privilege with no direct grant behind it came through a role
+    // membership, which is the leak, and the §H case above independently
+    // confines who a beyond-prefix grantee may be.
+    const prefixRoutines = inheritedPrefixRoutines();
+    const nameOf = (sig: string): string => sig.slice(0, sig.indexOf('(')).toLowerCase();
     const leaks: string[] = [];
+    const indirect: string[] = [];
     for (const x of await owned()) {
+      const inPrefix = prefixRoutines.has(nameOf(x.sig));
       for (const role of RUNTIME_ROLES) {
         const r = await ownerPool().query<{ e: boolean }>(`SELECT has_function_privilege($1, $2::regprocedure, 'EXECUTE') AS e`, [role, x.sig]);
-        const allowed = (EXECUTE_MATRIX[x.sig] ?? []).includes(role);
-        if (r.rows[0]?.e !== allowed) leaks.push(`${role} ${allowed ? 'lacks' : 'holds'} EXECUTE on ${x.sig}`);
+        const effective = r.rows[0]?.e === true;
+        if (inPrefix) {
+          const allowed = (EXECUTE_MATRIX[x.sig] ?? []).includes(role);
+          if (effective !== allowed) leaks.push(`${role} ${allowed ? 'lacks' : 'holds'} EXECUTE on ${x.sig}`);
+        } else if (effective && !x.grantees.includes(role)) {
+          indirect.push(`${role} holds EXECUTE on ${x.sig} with no direct grant, so it came through a membership`);
+        }
       }
     }
     expect(leaks).toEqual([]);
+    expect(indirect, 'a runtime role reaches a routine beyond the accepted prefix only through a grant made to it by name').toEqual([]);
   });
 
   it('no body builds SQL at run time or creates a session relation', async () => {
+    // The recogniser reads CODE, not text — `lexBody` strips `--` comments
+    // and string literals first, as `phase3-s8-operation-kinds` already does
+    // for the same reason. Scanning raw `prosrc` made a routine guilty of
+    // dynamic SQL for saying the word "execute" in a comment about privileges
+    // (`0078`'s `sale_commit`, explaining that an advisory lock is one PUBLIC
+    // may execute). A law that reads its own prose is a law about its prose,
+    // and this one is about what the body DOES.
     const off = (await owned())
-      .filter((x) => /\bEXECUTE\b(?!\s+FUNCTION\b)/i.test(x.src) || /\bCREATE\s+(?:GLOBAL\s+|LOCAL\s+)?(?:TEMP|TEMPORARY)\b/i.test(x.src))
+      .filter((x) => {
+        const { code } = lexBody(x.src);
+        return /\bEXECUTE\b(?!\s+FUNCTION\b)/i.test(code) || /\bCREATE\s+(?:GLOBAL\s+|LOCAL\s+)?(?:TEMP|TEMPORARY)\b/i.test(code);
+      })
       .map((x) => x.sig);
     expect(off).toEqual([]);
+    // NON-VACUITY: the lexer must not have emptied the bodies it judges. A
+    // recogniser that returns '' for every routine would pass this law in
+    // silence, which is the vacuous-pass failure mode the estate refuses.
+    const planted = 'BEGIN EXECUTE $q$SELECT 1$q$; END';
+    expect(/\bEXECUTE\b(?!\s+FUNCTION\b)/i.test(lexBody(planted).code), 'the lexer still sees a real EXECUTE').toBe(true);
+    expect(/\bEXECUTE\b(?!\s+FUNCTION\b)/i.test(lexBody('-- execute\nBEGIN NULL; END').code), 'and does not see one in a comment').toBe(false);
     expect(new Set((await owned()).map((x) => x.language))).toEqual(new Set(['plpgsql', 'sql']));
   });
 

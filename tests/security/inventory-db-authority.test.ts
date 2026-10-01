@@ -341,6 +341,15 @@ describe('the §H grant matrix, from information_schema and pg_policy (P3-AL-54 
       inventory_assertion_keys: 'INSERT,SELECT,UPDATE',
       inventory_assertion_uses: 'DELETE,INSERT,SELECT',
       inventory_operation_kinds: 'SELECT',
+      // `0078` grants this read: `sale_commit` snapshots the product NAME on
+      // the sale line and the invoice line, and `0036` normalized the names
+      // out of `products.translations` into this relation, so no inventory
+      // routine needed it before. A READ on a relation already inside the
+      // accepted prefix, and this map is a measurement of the LIVE
+      // privileges over that prefix rather than a frozen literal — a later
+      // phase's new read belongs here, named, which is exactly what makes an
+      // unnamed one visible.
+      product_translations: 'SELECT',
       product_variants: 'SELECT',
       products: 'SELECT',
       units: 'SELECT',

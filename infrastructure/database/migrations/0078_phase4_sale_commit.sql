@@ -80,10 +80,15 @@
 --     `coalesce(max(number_seq), 0) + 1` read from `invoices` while holding
 --     the series row `FOR NO KEY UPDATE`, with `invoices_number_uq`
 --     (`0075:286`) as the backstop that turns a missed lock into a refusal
---     rather than a duplicate number. `FOR NO KEY UPDATE` needs table-level
---     `UPDATE`, so this file grants it — and 0078-E asserts that the
---     routine's own body contains no `UPDATE` of that relation, so the
---     privilege is the lock's and nothing else's.
+--     rather than a duplicate number. Every locking clause needs `UPDATE`,
+--     but ANY ONE COLUMN satisfies it (`0045:399` locks `businesses` through
+--     `UPDATE (financial_started_at)` alone), so this file grants
+--     `UPDATE (updated_at)` and NOT a table-level `UPDATE`: the latter is
+--     authority to rewrite a merchant's `number_format`, which no law here
+--     rests on. 0078-E asserts that the routine's own body contains no
+--     `UPDATE` of that relation AND that the privilege itself is neither
+--     table-level nor on any other column — so it is the lock's and nothing
+--     else's, by privilege and not only by body.
 --
 --   R-P4-S2-78-05  GRANT BEFORE OWNER ([[daftar-grant-before-owner]],
 --     `P4-AL-39`): a `GRANT` issued after `OWNER TO` warns and commits, so
@@ -176,10 +181,25 @@ $pre$;
 --    (`0075:495`) and already holds `INSERT` on `audit_events` (`0055:52`)
 --    and `outbox_events` (`0061:1827`). What it does not yet hold is the
 --    right to WRITE the invoice and its lines — P4-S1 created no writer —
---    and the table-level `UPDATE` that a row lock on the series requires.
+--    and the `UPDATE` privilege that a row lock on the series requires.
+--
+--    THE SERIES GRANT IS COLUMN-LEVEL, AND THAT IS THE WHOLE POINT. Every
+--    PostgreSQL locking clause needs `UPDATE` — `FOR UPDATE`, `FOR NO KEY
+--    UPDATE`, `FOR SHARE` and `FOR KEY SHARE` alike — but the privilege is
+--    satisfied by `UPDATE` on ANY ONE COLUMN, which is why `0045:399` lets
+--    `daftar_accounting_internal` lock `businesses` through
+--    `UPDATE (financial_started_at)` alone. The series row is LOCKED and
+--    NEVER WRITTEN (`R-P4-S2-78-03`: `invoice_sequences` holds no counter,
+--    so there is nothing on it to advance), so a TABLE-LEVEL `UPDATE` would
+--    hand this writer the right to rewrite a merchant's `number_format` —
+--    authority no law here rests on. The named column is `updated_at`: the
+--    lifecycle column, the one a legitimate rewrite of the series would
+--    touch, and the narrowest grant that still carries the lock. 0078-E(5)
+--    already proves the routine's body writes `invoice_sequences` nowhere;
+--    0078-E(7) now proves the privilege itself cannot be used for more.
 -- ─────────────────────────────────────────────────────────────────────────
 GRANT INSERT ON invoices, invoice_items TO daftar_inventory_internal;
-GRANT UPDATE ON invoice_sequences TO daftar_inventory_internal;
+GRANT UPDATE (updated_at) ON invoice_sequences TO daftar_inventory_internal;
 -- The name snapshot the sale and the invoice both store is read from
 -- `product_translations` (`0036:9`), which `0053:253` did not grant to this
 -- role because no inventory routine needed a product NAME before. A read
@@ -902,7 +922,7 @@ $$;
 COMMENT ON FUNCTION sale_commit(UUID, UUID, TEXT, UUID, UUID, UUID, DATE, DATE, CHAR(3), UUID, NUMERIC, TEXT, TIMESTAMPTZ,
                                 BIGINT, BIGINT, BIGINT, BIGINT, TEXT, UUID[], UUID[], UUID[], UUID[], TEXT[], NUMERIC[],
                                 BIGINT[], BIGINT[], BIGINT[], BIGINT[], BIGINT[]) IS
-  'P4-S2 C-09. The trusted atomic sale command: consumes the sale.commit invctl/1 assertion over its own 29 arguments, takes the per-document advisory lock, re-derives and compares the request-only intent digest before reading any state (replay returns (true, the stored COGS) having written nothing; a different intent is sale.idempotency_conflict), takes the domain locks in SALE_COMMIT_LOCK_ORDER, RECOMPUTES every amount from the catalogue and refuses sale.state_changed on any disagreement, inserts sales as confirmed with its own binding and sale_items, calls inventory_apply_stock_movements with both cost columns NULL so the writer values the movement and raises inventory.insufficient_stock under the stock key lock, bridges the bindings, allocates the invoice ordinal as max+1 while holding the series row FOR NO KEY UPDATE and inserts invoices as open with invoice_items, and returns (false, the summed value deltas). Writes NO journal line. Reads NO clock into anything hashed. Admits the ZERO-valued sale, whose COGS is 0 and whose obligation is judged by the deferred sales_cogs_owed. SECURITY DEFINER, owned by daftar_inventory_internal, EXECUTE to daftar_app only.';
+  'P4-S2 C-09. The trusted atomic sale command: consumes the sale.commit invctl/1 assertion over its own 29 arguments, takes the per-document advisory lock, re-derives and compares the request-only intent digest before reading any state (replay returns (true, the stored COGS) having written nothing; a different intent is sale.idempotency_conflict), takes the domain locks in SALE_COMMIT_LOCK_ORDER, RECOMPUTES every amount from the catalogue and refuses sale.state_changed on any disagreement, inserts sales as confirmed with NO binding and sale_items, calls inventory_apply_stock_movements with both cost columns NULL so the writer values the movement and raises inventory.insufficient_stock under the stock key lock, bridges the bindings, sets binding_source_id to the sale itself exactly when the bridged value is non-zero (a zero-cost sale owes no COGS entry, so it keeps a NULL binding), allocates the invoice ordinal as max+1 while holding the series row FOR NO KEY UPDATE and inserts invoices as open with invoice_items, and returns (false, the summed value deltas). Writes NO journal line. Reads NO clock into anything hashed. Admits the ZERO-valued sale, whose COGS is 0 and whose obligation is judged by the deferred sales_cogs_owed. SECURITY DEFINER, owned by daftar_inventory_internal, EXECUTE to daftar_app only.';
 
 -- ─────────────────────────────────────────────────────────────────────────
 
@@ -1191,13 +1211,31 @@ BEGIN
     RAISE EXCEPTION 'selling.migration_end_state_invalid: 0078-E(6): the stock writer changed owner' USING ERRCODE = 'P0001';
   END IF;
 
-  -- (7) The privileges the owner needs, and no more: INSERT on the invoice
-  --     relations, UPDATE on the series (the lock), and still NO DML for
-  --     daftar_app on any Phase 4 relation (P4-AL-38).
+  -- (7) The privileges the owner needs, and NO MORE: INSERT on the invoice
+  --     relations, the column-level UPDATE on the series that carries the
+  --     row lock and nothing else, and still NO DML for daftar_app on any
+  --     Phase 4 relation (P4-AL-38).
   IF NOT has_table_privilege('daftar_inventory_internal', 'invoices', 'INSERT')
      OR NOT has_table_privilege('daftar_inventory_internal', 'invoice_items', 'INSERT')
-     OR NOT has_table_privilege('daftar_inventory_internal', 'invoice_sequences', 'UPDATE') THEN
+     OR NOT has_column_privilege('daftar_inventory_internal', 'invoice_sequences', 'updated_at', 'UPDATE') THEN
     RAISE EXCEPTION 'selling.migration_end_state_invalid: 0078-E(7): the routine''s owner cannot write what the routine writes'
+      USING ERRCODE = 'P0001';
+  END IF;
+  -- The lock privilege is a LOCK privilege. A table-level UPDATE on the
+  -- series would let this writer rewrite a merchant's number_format, and
+  -- `information_schema.role_table_grants` — which the estate's authority
+  -- law reads — would then report this append-only writer as a rewriter of
+  -- a relation beyond the accepted prefix. Pinned here so no later
+  -- migration can widen it back by habit.
+  IF has_table_privilege('daftar_inventory_internal', 'invoice_sequences', 'UPDATE') THEN
+    RAISE EXCEPTION 'selling.migration_end_state_invalid: 0078-E(7): the series UPDATE is table-level, which is authority to rewrite a number_format rather than authority to take a row lock'
+      USING ERRCODE = 'P0001';
+  END IF;
+  IF EXISTS (SELECT 1 FROM information_schema.column_privileges
+              WHERE grantee = 'daftar_inventory_internal' AND table_schema = 'public'
+                AND table_name = 'invoice_sequences' AND privilege_type = 'UPDATE'
+                AND column_name <> 'updated_at') THEN
+    RAISE EXCEPTION 'selling.migration_end_state_invalid: 0078-E(7): the series UPDATE names a column beyond updated_at, and one column is all a lock needs'
       USING ERRCODE = 'P0001';
   END IF;
   FOREACH v_name IN ARRAY ARRAY['sales', 'sale_items', 'invoices', 'invoice_items', 'invoice_sequences', 'customers'] LOOP

@@ -1537,9 +1537,44 @@ $$;
 CREATE FUNCTION sales_cogs_owed() RETURNS TRIGGER
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $$
 DECLARE
-  v_cost BIGINT;
+  v_cost    BIGINT;
+  v_status  TEXT;
+  v_binding UUID;
 BEGIN
-  IF NEW.status = 'draft' THEN
+  -- THE ROW IS RE-READ BY KEY, AND `NEW` IS USED FOR THE KEY ALONE.
+  --
+  -- A DEFERRED trigger's `NEW` is the tuple of ITS OWN event, captured when
+  -- that statement ran, not the row as it stands at COMMIT. `0078` inserts
+  -- the sale header with no binding and sets it once the movements have told
+  -- it the cost, so ONE row queues TWO deferred events: at COMMIT the INSERT
+  -- event still presents `binding_source_id` NULL and the UPDATE event
+  -- presents the real one. Reading `NEW` therefore refused every lawful
+  -- non-zero sale, from the INSERT event, while the row itself was already
+  -- correct — measured, not reasoned: a two-column scratch table with this
+  -- same trigger shape reports `INSERT NEW.b=NULL current=7` and
+  -- `UPDATE NEW.b=7 current=7` in one transaction.
+  --
+  -- Re-reading by key makes the two events IDEMPOTENT: both reach the same
+  -- verdict about the same row, which is what a deferred validator is for. It
+  -- also closes a second hole of the same shape — the `draft` early exit. Taken
+  -- from `NEW.status`, a sale inserted as a draft and confirmed in the same
+  -- transaction is judged by the INSERT event as a draft and walks out of the
+  -- law entirely. Taken from the re-read, it cannot.
+  --
+  -- This is NOT a reason to narrow the trigger to `AFTER UPDATE`. An INSERT
+  -- that lands a confirmed sale in one statement must still be judged, and
+  -- `sale_commit`'s own non-zero path is exactly that.
+  SELECT s.status, s.binding_source_id INTO v_status, v_binding
+  FROM public.sales s
+  WHERE s.business_id = NEW.business_id AND s.id = NEW.id;
+  IF NOT FOUND THEN
+    -- The row is gone at COMMIT, so there is no sale for this law to be about.
+    -- `sale_header_guard()` refuses a DELETE outright, so this is unreachable
+    -- through any accepted path; it is still answered, because a validator
+    -- that assumes its subject exists reports nothing when it does not.
+    RETURN NULL;
+  END IF;
+  IF v_status = 'draft' THEN
     RETURN NULL;
   END IF;
   v_cost := inventory_sale_cost_base_minor(NEW.business_id, NEW.id);
@@ -1551,11 +1586,11 @@ BEGIN
     RAISE EXCEPTION 'selling.sale_cogs_owed: a committed sale carries no bridged stock movement, so its cost cannot be judged'
       USING ERRCODE = 'P0001';
   END IF;
-  IF (v_cost <> 0) AND NEW.binding_source_id IS NULL THEN
+  IF (v_cost <> 0) AND v_binding IS NULL THEN
     RAISE EXCEPTION 'selling.sale_cogs_owed: a committed sale whose goods carry value owes a COGS entry, and this one has none'
       USING ERRCODE = 'P0001';
   END IF;
-  IF (v_cost = 0) AND NEW.binding_source_id IS NOT NULL THEN
+  IF (v_cost = 0) AND v_binding IS NOT NULL THEN
     RAISE EXCEPTION 'selling.sale_cogs_owed: a committed sale of zero-cost stock carries no COGS entry, so it owes no accounting binding'
       USING ERRCODE = 'P0001';
   END IF;
@@ -1570,8 +1605,29 @@ $$;
 --     today's shape and this is a guard against tomorrow's.
 CREATE FUNCTION sales_walkin_no_ar() RETURNS TRIGGER
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $$
+DECLARE
+  v_customer UUID;
+  v_binding  UUID;
+  v_type     TEXT;
 BEGIN
-  IF NEW.customer_id IS NOT NULL OR NEW.binding_source_id IS NULL THEN
+  -- Re-read by key, for the reason `sales_cogs_owed` above states at length: a
+  -- DEFERRED trigger's `NEW` is its own event's tuple, and a sale whose binding
+  -- is set by a later statement of the same transaction queues two events whose
+  -- `NEW` tuples disagree. This one was LENIENT-stale rather than
+  -- wrongly-refusing — its early exit is `binding_source_id IS NULL`, so the
+  -- INSERT event walked out and the UPDATE event happened to reach the right
+  -- answer. That is luck, not construction, and luck changes when the writer
+  -- changes: a writer that set the binding in the INSERT and the customer in a
+  -- later statement would be waved through. So the state this law is about is
+  -- read from the row at COMMIT, and `NEW` supplies the key alone.
+  SELECT s.customer_id, s.binding_source_id, s.accounting_source_type
+    INTO v_customer, v_binding, v_type
+  FROM public.sales s
+  WHERE s.business_id = NEW.business_id AND s.id = NEW.id;
+  IF NOT FOUND THEN
+    RETURN NULL;
+  END IF;
+  IF v_customer IS NOT NULL OR v_binding IS NULL THEN
     RETURN NULL;
   END IF;
   IF EXISTS (
@@ -1582,8 +1638,8 @@ BEGIN
       JOIN public.accounts a
         ON a.business_id = l.business_id AND a.id = l.account_id
      WHERE b.business_id = NEW.business_id
-       AND b.source_type = NEW.accounting_source_type
-       AND b.source_id = NEW.binding_source_id
+       AND b.source_type = v_type
+       AND b.source_id = v_binding
        AND a.system_key = 'accounts_receivable'
   ) THEN
     RAISE EXCEPTION 'selling.walkin_receivable_forbidden: a sale with no customer may not carry a receivable line'
@@ -1609,6 +1665,13 @@ GRANT EXECUTE ON FUNCTION sales_cogs_owed() TO daftar_accounting_internal;
 REVOKE ALL ON FUNCTION sales_walkin_no_ar() FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION sales_walkin_no_ar() TO daftar_accounting_internal;
 
+-- The two entry validators below read `NEW` and that is SAFE, which is worth
+-- saying rather than leaving to the next reader of the two triggers above.
+-- They are `AFTER INSERT` only, on `journal_entries`, which is append-only:
+-- an entry's own row is never updated, so no second deferred event for the
+-- same row can exist and `NEW` cannot be a stale snapshot of it. What they
+-- read THROUGH that key — the source row and the entry's lines — is read by
+-- query at COMMIT, as the staleness problem requires.
 CREATE CONSTRAINT TRIGGER journal_entries_sale_complete
   AFTER INSERT ON journal_entries DEFERRABLE INITIALLY DEFERRED
   FOR EACH ROW WHEN (NEW.source_type = 'sale')
@@ -1969,6 +2032,58 @@ BEGIN
         WHERE c.conrelid = 'public.sales'::regclass AND c.conname = 'sales_binding_owed_ck')
       USING ERRCODE = 'P0001';
   END IF;
+
+  -- (9c) AND EACH OF THE TWO TAKES ITS VERDICT FROM THE ROW, NOT FROM `NEW`.
+  --      Read from `prosrc`, because this is a claim about the body the
+  --      database holds.
+  --
+  --      A DEFERRED trigger's `NEW` is the tuple of ITS OWN event, captured
+  --      when that statement ran, not the row as it stands at COMMIT. A sale
+  --      whose header is inserted without a binding and whose binding is set
+  --      once the movements have reported the cost — which is the only order
+  --      available, because the movements cannot exist before the header —
+  --      queues TWO deferred events whose `NEW` tuples DISAGREE. Reading
+  --      `NEW.binding_source_id` therefore refused every lawful non-zero
+  --      sale, from the INSERT event, while the row itself was already
+  --      correct; and reading `NEW.status` let a sale inserted as a draft and
+  --      confirmed in the same transaction walk out of the law entirely.
+  --
+  --      So each body must (a) SELECT the state it judges from `sales` by the
+  --      key `NEW` supplies, and (b) mention no other column of `NEW` at all.
+  --      Claim (b) is what stops the fix being undone one column at a time,
+  --      and it is checkable: `NEW` may appear only as `NEW.business_id` and
+  --      `NEW.id`.
+  FOREACH v_name IN ARRAY ARRAY['sales_cogs_owed', 'sales_walkin_no_ar'] LOOP
+    -- The COMMENT lines are stripped before the scan, because this file's own
+    -- explanation of the defect quotes the stale tuple it is about and a law
+    -- that reads its own prose is a law about its prose.
+    SELECT regexp_replace(p.prosrc, '--[^\n]*', '', 'g') INTO v_def
+      FROM pg_proc p WHERE p.oid = ('public.' || v_name || '()')::regprocedure;
+    IF position('FROM public.sales s' IN v_def) = 0
+       OR position('WHERE s.business_id = NEW.business_id AND s.id = NEW.id' IN v_def) = 0 THEN
+      RAISE EXCEPTION 'selling.migration_end_state_invalid: %() does not re-read its subject from sales by key, so its verdict is a stale NEW snapshot', v_name
+        USING ERRCODE = 'P0001';
+    END IF;
+    IF EXISTS (SELECT 1 FROM regexp_matches(v_def, 'NEW\.([a-z_]+)', 'g') AS m(c)
+                WHERE m.c[1] NOT IN ('business_id', 'id')) THEN
+      RAISE EXCEPTION 'selling.migration_end_state_invalid: %() reads NEW.% — a deferred trigger may use NEW for the KEY alone', v_name,
+        (SELECT m.c[1] FROM regexp_matches(v_def, 'NEW\.([a-z_]+)', 'g') AS m(c)
+          WHERE m.c[1] NOT IN ('business_id', 'id') LIMIT 1)
+        USING ERRCODE = 'P0001';
+    END IF;
+  END LOOP;
+  -- The two entry validators are the CONTRAST, and it is asserted rather than
+  -- assumed: they are AFTER INSERT only, on the append-only `journal_entries`,
+  -- so no second deferred event for one row can exist and their `NEW` cannot
+  -- go stale. tgtype 5 is ROW|AFTER|INSERT; 21 would be INSERT OR UPDATE.
+  FOREACH v_name IN ARRAY ARRAY['journal_entries_sale_complete', 'journal_entries_invoice_complete'] LOOP
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger g
+                    WHERE g.tgrelid = 'public.journal_entries'::regclass AND g.tgname = v_name
+                      AND NOT g.tgisinternal AND g.tgtype = 5) THEN
+      RAISE EXCEPTION 'selling.migration_end_state_invalid: % is not AFTER INSERT only, so its NEW can go stale and it must re-read by key too', v_name
+        USING ERRCODE = 'P0001';
+    END IF;
+  END LOOP;
 
   -- (10) The reversal guard's live BODY refuses both new types, and keeps
   --      every refusal it already carried. Read from prosrc, because the
