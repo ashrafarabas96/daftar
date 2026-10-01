@@ -21,10 +21,18 @@ names exists in this commit.
 | `tests/golden-regression/phase4-s2/05-last-item-race.golden.test.ts` | **GREEN**, 11 tests | G-01's no-oversell half is a property of `inventory_apply_stock_movements`, which exists; the sale is required to use it unchanged (P4-AL-29, OD-P4-05) |
 | `tests/integration/sale-s2-interleaving.test.ts` | **GREEN**, 8 tests | the mechanism's own proofs, including a planted deadlock |
 | `tests/guards/sale-s2-red-proofs.test.ts` | **GREEN** | pure law-tampering, the canary's two directions, the runner's exit status, the red-proof table's resolution |
-| `tests/golden-regression/phase4-s2/06-sale-last-item-race.golden.test.ts` | **RED by canary** | `sales`, `sale_items`, the bridge, the two accounting source types, the `sale.*` kinds and the commit routine do not exist |
+| `tests/golden-regression/phase4-s2/06-sale-last-item-race.golden.test.ts` | **RED by canary** | after `0077`, the canary names ONE missing subject: `the sale commit routine sale_commit`, which is `0078`'s. It named eight before `0077` |
 | `tests/golden-regression/phase4-s2/07-atomic-sale-law.golden.test.ts` | **RED by canary** (one case green: the chart identities) | same |
 | `tests/golden-regression/phase4-s2/08-sale-idempotency.golden.test.ts` | **RED by canary** | same |
 | `tests/integration/sale-s2-atomic-law.test.ts` | **RED by canary** | same |
+
+Measured on the merge of `0077` (integration head `1b5a606`), on a pristine
+cluster: 39 passed over the three green files, 47 failed over the four
+canary-red ones, and **every one of those 47 failures is a `requireSubject`
+throw naming the single missing name `the sale commit routine sale_commit`** —
+no failure of any other kind. `tests/golden-regression/phase4/01-cross-tenant.golden.test.ts`
+is 18 passed / 4 failed on the same canary. That is the predicted move from
+"eight missing" to "one missing"; the green pass is planned for after `0078`.
 
 A red-until-implementation suite is the intended state, not a defect. Nothing is
 `.skip`, `.todo`, `.only` or conditional: a conditional pass is a `.skip` the
@@ -436,6 +444,150 @@ keeps correct, and golden 01 asserts the discovered routine IS that constant.
 
 ---
 
+## 7c. The three items of the second review round, after `0077`
+
+### (a) The `invoices_sale_fk` parent — open item 4 below, closed
+
+`0077:353` added
+`invoices_sale_fk FOREIGN KEY (business_id, sale_id) REFERENCES sales (business_id, id)`,
+exactly as §8.4 predicted, so `seedPhase4` in
+`tests/golden-regression/phase4/01-cross-tenant.golden.test.ts` — which passed a
+fresh `randomUUID()` as `sale_id` with nothing behind it — stopped inserting and
+took all 22 tests of the suite with it. Measured, not assumed: with the orphan
+`sale_id` put back, the run reports `22 skipped` and
+`insert or update on table "invoices" violates foreign key constraint
+"invoices_sale_fk"`; with the parent in place, 18 pass and the only four
+failures are the sale section's canary.
+
+The parent is written as a **draft** sale, which is the only sale shape a
+fixture may write by hand:
+
+* `sale_header_guard()` admits a draft that carries no `binding_source_id`, and
+  refuses any status but `draft`/`confirmed` on insert;
+* `sales_cogs_owed()` returns early for a draft, so it does not demand a
+  bridged stock movement;
+* `sales_walkin_no_ar()` returns early while `binding_source_id IS NULL`;
+* no `sale_items` row is written, so the deferred `stock_source_complete_sale`
+  has no subject to refuse.
+
+A **confirmed** sale is the commit primitive's to write and nobody else's.
+Hand-seeding one here would plant precisely the half-built commercial fact that
+§4's law set exists to forbid, and it would do it inside the fixture of another
+suite — the quietest possible place to put one.
+
+The parent's id is local to `seedPhase4` and is deliberately **not** published
+as `shop.saleId`: that field names a *committed* sale and only `sellable()`,
+which goes through `confirmSale`, may set it.
+
+### (b) The `P4-AL-88` equality in the Phase 2 engine-shapes golden
+
+`tests/golden-regression/phase2/01-engine-shapes.golden.test.ts` asserted
+`accounting_source_types` by exact equality against the **live** catalogue. That
+made an accepted Phase 2 golden a claim about every phase that follows Phase 3:
+`0077:1594-1596` registers `sale` and `invoice`, and the suite went red for a
+reason that has nothing to do with the posting engine it judges. This is the
+defect the estate keeps rediscovering, and it is
+`[[daftar-a-closure-rule-is-not-an-invariant]]`.
+
+It is **narrowed, not loosened**, in the two-step frozen-prefix form the
+migration owner used for the signed-authority matrix
+(`tests/security/phase3-s8-signed-authority-matrix.test.ts`):
+
+1. the registry is read at the **accepted Phase 3 head** — a scratch database
+   built `upTo: PHASE4_INHERITED_PREFIX_END`, read from
+   `scripts/phase4-prefix.ts` (`0073_default_warehouse_locale_name.sql`) and
+   never from a list of names, frozen byte for byte by P4-AL-85 so no later
+   phase can enter it — and the original twelve-name equality stands there
+   **word for word**, including its comments;
+2. the later phases' types are claimed **separately and positively**: no type of
+   the accepted head is counted as a later phase's, and no type that stood at
+   the head was removed or renamed later;
+3. and the close: **the two scopes together are the whole registry**, so a type
+   belonging to neither cannot hide between them.
+
+`accounting_source_types` carries **no `registered_by` column**, so the
+`registered_by ~ '^P3-'` idiom used elsewhere is not available here; the frozen
+prefix is the only scope that can carry the claim.
+
+Three planted defects, each run and each red, because a golden that cannot be
+made red proves nothing:
+
+| planted | assertion that fired |
+| --- | --- |
+| `purchase_residue_write_off` struck from the expected list | `expected [ … (11) ] to deeply equal [ … (10) ]` — the head-scoped equality really reads the registry at `0073` and still claims all twelve |
+| a type appended to the head reading that is not live | `no type that stood at the accepted Phase 3 head was removed or renamed later` |
+| `sale` filtered out of `beyondHead` | `the two scopes together are the whole registry` |
+
+The scratch build costs ~2s, measured, which is why it is affordable in a
+golden that `npm run test:golden` runs over the whole tree.
+
+### (b2) Three more `0077` breaks the same run found, in goldens 02, 03 and 04
+
+A single run of `tests/golden-regression` is how these were found, and the
+first round reported **7 of 17 files red**. Treating that as a floor and
+re-running was the right discipline: the second round is **4 of 17**, and
+every remaining failure is the `sale_commit` canary.
+
+**Goldens 02 and 03 — the same FK, two more fixtures.** Both write `invoices`
+rows directly and both passed a fresh `randomUUID()` as `sale_id`. In golden 02
+that turned every cross-business probe into a pass for the WRONG REASON: the
+DENY was refused by `invoices_sale_fk` rather than by
+`invoices_customer_fk`/`invoices_branch_fk`, which is precisely the failure mode
+an ALLOW/DENY pair exists to rule out, and the ALLOW stopped being a real
+insert. In golden 03 a numbering suite's inserts died on a foreign key, and the
+`23505` duplicate-ordinal case reported `23503` instead — measured, not
+inferred.
+
+Both now mint a real parent, and a **fresh one per invoice**, because
+`invoices_sale_uq UNIQUE (business_id, sale_id, document_kind)` (`0075:288`)
+admits one invoice of a kind per sale: a shared parent would have turned the
+ALLOW into a `23505` and the probe into a vacuous pass. Golden 02's parent
+carries the fixture's customer and settles on credit; golden 03's is a
+**walk-in** — no `customer_id`, therefore no `customer_name_snapshot`
+(`sales_customer_snapshot_ck`) and cash settlement
+(`sales_credit_customer_ck`) — which matches the invoices that suite writes,
+none of which names a customer either. Both needed a `warehouses` row, since
+`sales.warehouse_id` is NOT NULL and composite-bound.
+
+**Golden 04 — the seam is closed, so the exemption is removed.** LAW 2 reported
+`invoices: the live catalogue carries the unreviewed constraint "f
+invoices_sale_fk"`. That is the lint doing its job: the constraint is reviewed
+here and recorded in `EXPECTED_CONSTRAINTS`.
+
+LAW 5 is the more interesting half, and it did **not** go red — which is the
+problem. `SEAM_ALLOWLIST` held `invoices.sale_id`, and
+`polymorphicReferenceProblems` skips an allowlisted column **before** it looks
+at whether the column is bound. So the stale exemption would have sheltered a
+later migration that dropped `invoices_sale_fk`, and LAW 5 would have reported
+nothing at all. The file's own header said closing the seam means removing the
+entry, so the list is now **empty** and LAW 5 asserts the closure
+**positively**: `invoices.sale_id` is bound by exactly one foreign key, it is
+`invoices_sale_fk`, `convalidated` is true, and `pg_get_constraintdef` renders
+the composite edge `FOREIGN KEY (business_id, sale_id) REFERENCES sales
+(business_id, id)`. "The allowlist is empty" can therefore never be satisfied
+by the seam quietly reopening.
+
+Red proofs, each run:
+
+| planted | assertion that fired |
+| --- | --- |
+| the orphan `sale_id` put back in golden 01's `seedPhase4` | `22 skipped` and `violates foreign key constraint "invoices_sale_fk"` |
+| nothing — the pre-fix state of goldens 02 and 03 | 6 and 3 failures, including `expected '23503' to be '23505'` |
+| nothing — the pre-fix state of golden 04 LAW 2 | `the live catalogue carries the unreviewed constraint "f invoices_sale_fk"` |
+| `'invoices.sale_id'` put back in `SEAM_ALLOWLIST` | `expected [ 'invoices.sale_id' ] to deeply equal []` |
+
+Measured after the fixes, whole golden tree, pristine cluster: **13 of 17 files
+green, 138 passed, 35 failed, and every one of the 35 is a `requireSubject`
+throw naming `the sale commit routine sale_commit`** — no failure of any other
+kind. 27/27 green over `sale-s2-red-proofs` and `sale-s2-interleaving` in the
+same round, which keeps `suiteProblems(REPO) == []`.
+
+### (c) The `S2_SUITES` roster
+
+See §9.
+
+---
+
 ## 8. Open items for other owners
 
 1. **`docs/DAFTAR_GOLDEN_REGRESSION_SUITE.md:41`** states GOLD-33 as
@@ -452,7 +604,8 @@ keeps correct, and golden 01 asserts the discovered routine IS that constant.
    module owner should check it against the DTO rather than letting the suites
    be rewritten line by line — a rewrite is where a law quietly becomes a
    weaker law.
-4. **A latent break in golden 01's own fixture, for the migration owner.**
+4. **CLOSED by §7c(a).** *(Was: a latent break in golden 01's own fixture, for
+   the migration owner.)*
    `seedPhase4` inserts an `invoices` row whose `sale_id` is a fresh
    `randomUUID()` with no `sales` row behind it — it could not be otherwise,
    because the suite predates `sales`. If `0077` adds a composite foreign key
@@ -465,3 +618,39 @@ keeps correct, and golden 01 asserts the discovered routine IS that constant.
    `tests/golden-regression/phase4-s2/` and is imported from there by the
    integration and guard suites, following the precedent of
    `tests/guards/phase4-composite-seam-guard.test.ts:30`.
+
+---
+
+## 9. The `S2_SUITES` roster for `scripts/phase4-s2-gate.ts`
+
+The gate file is not mine to edit; this is the list its owner asked for. Every
+path exists on this branch and every one is run by the commands in §0.
+
+| row | suite | what the gate reads out of it | state today |
+| --- | --- | --- | --- |
+| `S2-G05` | `tests/golden-regression/phase4-s2/05-last-item-race.golden.test.ts` | the last-item race on the **stock writer** the sale must use, and the lock-order probe | **green now** |
+| `S2-G06` | `tests/golden-regression/phase4-s2/06-sale-last-item-race.golden.test.ts` | the same race through `POST /v1/sales` | canary-red until `0078` |
+| `S2-G07` | `tests/golden-regression/phase4-s2/07-atomic-sale-law.golden.test.ts` | §15 as eight laws over committed state, plus the official reconciliation identity | canary-red until `0078` |
+| `S2-G08` | `tests/golden-regression/phase4-s2/08-sale-idempotency.golden.test.ts` | the replay contract, structural and behavioural | canary-red until `0078` |
+| `S2-I01` | `tests/integration/sale-s2-interleaving.test.ts` | that the forcing **mechanism** works: the `blockedBehind` fixed point, every throw of `waitUntilQueued`, a planted real `40P01` classified and refused | **green now** |
+| `S2-I02` | `tests/integration/sale-s2-atomic-law.test.ts` | failure injection at every discovered seam, and that nothing survives | canary-red until `0078` |
+| `S2-R01` | `tests/guards/sale-s2-red-proofs.test.ts` | that every law on the books has a planted defect, that the canary fails in both directions, that the runner's exit status can say no, and `suiteProblems(REPO) == []` | **green now** |
+
+Three notes for whoever wires them.
+
+1. **Do not read the verdict through a pipe.** Piping `vitest` or `tsc` into
+   `grep` or `tail` replaces the exit status with the pipeline's. This was
+   observed twice during this work, and the estate has already shipped a runner
+   that exited 0 over four failing tests. `rlsSuiteProblems` in the gate today
+   does it correctly, with `spawnSync` and `stdio: 'pipe'`.
+2. **The four canary-red rows are red *on purpose* until `0078`.** They refuse
+   with `NO SUBJECT — … the sale commit routine sale_commit`, never with a skip
+   and never with a conditional pass, so the gate is honestly red while the
+   slice is incomplete. Adding them before `0078` lands makes
+   `gate:phase4:s2` red; adding them after it lands is a gate that was never
+   proved able to say no. The list is complete as written and its rows should
+   go in together.
+3. **`tests/guards/` by directory** would also pick up
+   `sale-s2-base-split-agreement.test.ts`, which is another owner's; the row
+   above names the one file instead, so each owner's guard is listed by its
+   owner.

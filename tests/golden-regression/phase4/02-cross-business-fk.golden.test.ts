@@ -46,9 +46,45 @@ interface Fixture {
   readonly userId: string;
   readonly customerId: string;
   readonly invoiceId: string;
+  /** The business's own default warehouse — `sales.warehouse_id` is NOT NULL and composite-bound to it. */
+  readonly warehouseId: string;
 }
 
 const DIGEST = 'b'.repeat(64);
+
+/**
+ * ONE DRAFT SALE, FOR ONE INVOICE TO HANG FROM.
+ *
+ * `0077:353` closed seam S-P4-01 with `invoices_sale_fk FOREIGN KEY
+ * (business_id, sale_id) REFERENCES sales (business_id, id)`, so the fresh
+ * `randomUUID()` the probes below used to pass as `sale_id` is now refused by
+ * THAT edge — which would have made every DENY in this file pass for the wrong
+ * reason, the one failure mode a cross-business probe exists to rule out. A
+ * valid parent is therefore minted for every invoice, and a FRESH one each
+ * time because `invoices_sale_uq UNIQUE (business_id, sale_id, document_kind)`
+ * (`0075:288`) admits one invoice of a kind per sale: a shared parent would
+ * turn the ALLOW into a 23505 and the probe into a vacuous pass.
+ *
+ * A draft is the only sale shape a fixture may write by hand:
+ * `sale_header_guard()` admits one carrying no binding, `sales_cogs_owed()`
+ * returns early for it, and no `sale_items` row is written, so the deferred
+ * `stock_source_complete_sale` has no subject. A CONFIRMED sale is the commit
+ * primitive's alone, and hand-seeding one would plant exactly the half-built
+ * commercial fact the atomic sale law exists to forbid.
+ */
+async function draftSale(c: PoolClient, fx: Omit<Fixture, 'invoiceId'>): Promise<string> {
+  const saleId = randomUUID();
+  await c.query(
+    `INSERT INTO sales (tenant_id, business_id, id, customer_id, branch_id, warehouse_id, status, settlement_mode,
+                        document_date, currency_code, subtotal_txn_minor, discount_txn_minor, tax_minor,
+                        total_txn_minor, total_base_minor, source_to_base_rate, rate_source, rate_timestamp,
+                        customer_name_snapshot, commit_intent_sha256, business_transaction_id, created_by)
+     VALUES ($1, $2, $3, $4, $5, $6, 'draft', 'credit', DATE '2026-03-14', 'ILS', 1000, 0, 0, 1000, 1000,
+             1, 'base', TIMESTAMPTZ '2026-03-14T09:15:00Z', 'Snapshot', $7, $8, $9)`,
+    [fx.tenantId, fx.businessId, saleId, fx.customerId, fx.branchId, fx.warehouseId, DIGEST, randomUUID(), fx.userId],
+  );
+  return saleId;
+}
 
 async function one<T extends Record<string, unknown>>(c: PoolClient, sql: string, params: unknown[] = []): Promise<T> {
   const r = await c.query<T>(sql, params);
@@ -57,7 +93,7 @@ async function one<T extends Record<string, unknown>>(c: PoolClient, sql: string
   return row;
 }
 
-/** A tenant, a business, a branch, a product, a user, a customer and one invoice — all inside `c`'s transaction. */
+/** A tenant, a business, a branch, a warehouse, a product, a user, a customer and one invoice behind its draft sale — all inside `c`'s transaction. */
 async function seed(c: PoolClient, label: string): Promise<Fixture> {
   const tenantId = (await one<{ id: string }>(c, `INSERT INTO tenants DEFAULT VALUES RETURNING id`)).id;
   const userId = (
@@ -76,6 +112,12 @@ async function seed(c: PoolClient, label: string): Promise<Fixture> {
   ).id;
   const branchId = (await one<{ id: string }>(c, `INSERT INTO branches (business_id, name, is_default) VALUES ($1, 'Main', true) RETURNING id`, [businessId]))
     .id;
+  const warehouseId = (
+    await one<{ id: string }>(c, `INSERT INTO warehouses (business_id, branch_id, name, is_default) VALUES ($1, $2, 'Main WH', true) RETURNING id`, [
+      businessId,
+      branchId,
+    ])
+  ).id;
   const productId = randomUUID();
   await c.query(`INSERT INTO products (business_id, id, base_price_minor, price_currency) VALUES ($1, $2, 1000, 'ILS')`, [businessId, productId]);
   const customerId = randomUUID();
@@ -86,6 +128,7 @@ async function seed(c: PoolClient, label: string): Promise<Fixture> {
     [tenantId, businessId, customerId, `Customer ${label}`, DIGEST, randomUUID(), userId],
   );
   const invoiceId = randomUUID();
+  const saleId = await draftSale(c, { tenantId, businessId, branchId, warehouseId, productId, userId, customerId });
   await c.query(
     `INSERT INTO invoices (tenant_id, business_id, id, sale_id, customer_id, branch_id, document_kind, document_number, number_seq,
                            period, issue_date, currency_code, status, subtotal_txn_minor, discount_txn_minor, tax_minor,
@@ -93,9 +136,9 @@ async function seed(c: PoolClient, label: string): Promise<Fixture> {
                            customer_name_snapshot, issue_intent_sha256, business_transaction_id, created_by)
      VALUES ($1, $2, $3, $4, $5, $6, 'invoice', $7, 1, '2026', DATE '2026-03-14', 'ILS', 'draft', 1000, 0, 0, 1000, 1000, 1,
              'base', TIMESTAMPTZ '2026-03-14T09:15:00Z', $8, $9, $10, $11)`,
-    [tenantId, businessId, invoiceId, randomUUID(), customerId, branchId, `INV-2026-${label}`, `Customer ${label}`, DIGEST, randomUUID(), userId],
+    [tenantId, businessId, invoiceId, saleId, customerId, branchId, `INV-2026-${label}`, `Customer ${label}`, DIGEST, randomUUID(), userId],
   );
-  return { tenantId, businessId, branchId, productId, userId, customerId, invoiceId };
+  return { tenantId, businessId, branchId, warehouseId, productId, userId, customerId, invoiceId };
 }
 
 type Outcome = { ok: true } | { ok: false; sqlstate: string; constraint: string; message: string };
@@ -223,7 +266,7 @@ describe('performed: the database refuses every cross-business binding, asked as
                                customer_name_snapshot, issue_intent_sha256, business_transaction_id, created_by)
          VALUES ($1, $2, $3, $4, $5, $6, 'invoice', 'INV-2026-OWN', 2, '2026', DATE '2026-03-15', 'ILS', 'draft', 1000, 0, 0, 1000, 1000, 1,
                  'base', TIMESTAMPTZ '2026-03-15T09:15:00Z', 'Snapshot', $7, $8, $9)`,
-        [A.tenantId, A.businessId, randomUUID(), randomUUID(), A.customerId, A.branchId, DIGEST, randomUUID(), A.userId],
+        [A.tenantId, A.businessId, randomUUID(), await draftSale(c, A), A.customerId, A.branchId, DIGEST, randomUUID(), A.userId],
       );
       expect(own.ok, own.ok ? '' : own.message).toBe(true);
 
@@ -235,7 +278,7 @@ describe('performed: the database refuses every cross-business binding, asked as
                                customer_name_snapshot, issue_intent_sha256, business_transaction_id, created_by)
          VALUES ($1, $2, $3, $4, $5, $6, 'invoice', 'INV-2026-FOREIGN', 3, '2026', DATE '2026-03-15', 'ILS', 'draft', 1000, 0, 0, 1000, 1000, 1,
                  'base', TIMESTAMPTZ '2026-03-15T09:15:00Z', 'Snapshot', $7, $8, $9)`,
-        [A.tenantId, A.businessId, randomUUID(), randomUUID(), B.customerId, A.branchId, DIGEST, randomUUID(), A.userId],
+        [A.tenantId, A.businessId, randomUUID(), await draftSale(c, A), B.customerId, A.branchId, DIGEST, randomUUID(), A.userId],
       );
       refusedBy(foreign, '23503', 'invoices_customer_fk');
     });
@@ -251,7 +294,7 @@ describe('performed: the database refuses every cross-business binding, asked as
                                customer_name_snapshot, issue_intent_sha256, business_transaction_id, created_by)
          VALUES ($1, $2, $3, $4, $5, $6, 'invoice', 'INV-2026-BRANCH', 4, '2026', DATE '2026-03-15', 'ILS', 'draft', 1000, 0, 0, 1000, 1000, 1,
                  'base', TIMESTAMPTZ '2026-03-15T09:15:00Z', 'Snapshot', $7, $8, $9)`,
-        [A.tenantId, A.businessId, randomUUID(), randomUUID(), A.customerId, B.branchId, DIGEST, randomUUID(), A.userId],
+        [A.tenantId, A.businessId, randomUUID(), await draftSale(c, A), A.customerId, B.branchId, DIGEST, randomUUID(), A.userId],
       );
       refusedBy(foreign, '23503', 'invoices_branch_fk');
     });

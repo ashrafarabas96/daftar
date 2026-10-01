@@ -2,6 +2,8 @@ import { randomUUID } from 'node:crypto';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { beforeAll, describe, expect, it } from 'vitest';
+import { PHASE4_INHERITED_PREFIX_END } from '../../../scripts/phase4-prefix';
+import { createScratchDb } from '../../helpers/scratch-db';
 import { ensurePostgres, ownerPool, resetData } from '../../helpers/test-app';
 import { must, post, rate10, seedPostingFixture, todayIn, type PostCommand, type PostLine, type PostingFixture } from '../../helpers/accounting-posting';
 
@@ -620,7 +622,30 @@ describe('golden: engine shapes prove representability without creating the doma
     // `purchase_reversal`, whose accounting fact is a Phase 2 `reversal`).
     // P3-S6 (0067/0068): then P3-S6's three (0067, contract A-05), in order.
     // Phase 3 corrective hardening (0072, TD-16): then the residue write-off.
-    const types = (await ownerPool().query<{ t: string }>(`SELECT source_type AS t FROM accounting_source_types ORDER BY sort_order`)).rows.map((r) => r.t);
+    //
+    // P4-AL-88, `[[daftar-a-closure-rule-is-not-an-invariant]]`. This equality
+    // was taken against the LIVE catalogue, which made it a claim about every
+    // phase that follows Phase 3: `0077` registers `sale` and `invoice`
+    // (`0077:1594-1596`) and an accepted Phase 2 golden went red for a reason
+    // that has nothing to do with the posting engine it judges.
+    //
+    // It is NARROWED, not loosened, in the two-step frozen-prefix form the
+    // migration owner used for the signed-authority matrix
+    // (`tests/security/phase3-s8-signed-authority-matrix.test.ts`).
+    // `accounting_source_types` carries no `registered_by` column, so the
+    // `registered_by ~ '^P3-'` idiom is NOT available here and the scope has to
+    // be the ACCEPTED PHASE 3 HEAD — `PHASE4_INHERITED_PREFIX_END`, read from
+    // `scripts/phase4-prefix.ts` and never from a list of names, frozen byte
+    // for byte by P4-AL-85 so no later phase can enter it. The original
+    // equality stands there WORD FOR WORD, and the types a later phase
+    // registers are claimed separately and positively just below.
+    const phase3Head = await createScratchDb('daftar_gold_p2_engine_phase3_head', { upTo: PHASE4_INHERITED_PREFIX_END, keys: false });
+    let types: string[];
+    try {
+      types = (await phase3Head.pool.query<{ t: string }>(`SELECT source_type AS t FROM accounting_source_types ORDER BY sort_order`)).rows.map((r) => r.t);
+    } finally {
+      await phase3Head.drop();
+    }
     expect(types).toEqual([
       'opening_balance',
       'manual_adjustment',
@@ -639,6 +664,25 @@ describe('golden: engine shapes prove representability without creating the doma
       // Phase 3 corrective hardening (0072)
       'purchase_residue_write_off',
     ]);
+    // The LATER PHASES' half, positively, so nothing was merely dropped from
+    // the claim. Every source type the live catalogue holds beyond the accepted
+    // head is a type NO shape in this suite posts — the engine created none,
+    // which is this suite's whole point — and it is a floor compared with
+    // `filter`, never an equality over a set a later phase populates.
+    const live = (await ownerPool().query<{ t: string }>(`SELECT source_type AS t FROM accounting_source_types ORDER BY sort_order`)).rows.map((r) => r.t);
+    expect(live.length, 'NO SUBJECT — the live source registry is empty, so neither scope below could be wrong').toBeGreaterThan(0);
+    const beyondHead = live.filter((t) => !types.includes(t));
+    expect(
+      beyondHead.filter((t) => types.includes(t)),
+      'no type of the accepted Phase 3 head is counted as a later phase’s',
+    ).toEqual([]);
+    expect(
+      types.filter((t) => !live.includes(t)),
+      'no type that stood at the accepted Phase 3 head was removed or renamed later',
+    ).toEqual([]);
+    // And the close: the two scopes together are the whole registry, so a type
+    // that belongs to neither cannot hide between them.
+    expect([...types, ...beyondHead].sort(), 'the two scopes together are the whole registry').toEqual([...live].sort());
     const used = (
       await ownerPool().query<{ t: string }>(`SELECT DISTINCT source_type AS t FROM journal_entries WHERE business_id = $1`, [must(fx).businessId])
     ).rows.map((r) => r.t);
