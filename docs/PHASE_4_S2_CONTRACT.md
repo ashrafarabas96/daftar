@@ -380,7 +380,7 @@ Consequence: the `tenant_membership` policy takes the DIRECT
 
 Four independent lines of evidence.
 
-**(a) Measured, not reasoned.** `tests/integration/phase4-s2-bridge-tenancy.test.ts`
+**(a) Measured, not reasoned.** `tests/integration/sale-s2-bridge-tenancy.test.ts`
 (8 tests, green) builds a `probe` bridge apparatus FOUR ways in one
 `BEGIN … ROLLBACK` transaction and asks the LIVE
 `inventory_stock_source_guard_gaps()`:
