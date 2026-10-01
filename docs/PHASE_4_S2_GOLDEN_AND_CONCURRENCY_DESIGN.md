@@ -829,6 +829,81 @@ a discovered FK closure, not a list". Nothing was scoped, relaxed or wrapped in
 
 ---
 
+## 7f. After the `0077` amendment: the green pass, measured — and two reports the measurement contradicts
+
+Merged head `4b7995c`. Pristine cluster each round, `PG_PORT=5444` and
+`PG_DIR=/tmp/daftar-pg-d-golden-5444` both set and `PG_DIR` deleted first. No
+file in the tree was edited while a run was reading it.
+
+### The green pass
+
+| round | what was run | result |
+| --- | --- | --- |
+| A | the eight P4-S2 suites plus both Phase 4 golden directories (12 files) | **156 / 156** |
+| B | fresh cluster: the WHOLE golden tree plus the WHOLE guard estate plus the three `sale-s2-*` integration suites (32 files) | **376 / 376** |
+| C | fresh cluster: `stock-ledger-concurrency`, `inventory-s3-atomicity` and the P4-S2 suites together (9 files) | **105 / 105** |
+| D | round A again, with §7f's new law in place | **157 / 157** |
+
+Three rounds found nothing new, which is the bar: a count from one run is a
+FLOOR because a failing assertion aborts its body. The `selling.sale_cogs_owed`
+403 that masked sixteen failures last round is gone — the amendment re-reads
+`sales` by `(business_id, id)` instead of trusting a deferred trigger's `NEW` —
+and the 155/1 figure I previously had to obtain by dropping the trigger by hand
+is now 156/156 against the shipped tree.
+
+### Report 1: the `invoice_sequences` trigger case — NOT PRESENT
+
+There is no trigger-based `invoice_sequences` case in the file and has not been
+since `ff66910`. A verbose run lists seventeen cases and the only
+`invoice_sequences` one is
+`a sale held at the invoice_sequences seam has committed NOTHING, and
+serialises once the row is released`, which passes. `TRIGGER_SEAMS` is
+`[...P4_AL_16_FLOOR, 'stock_levels']` and the generated loop iterates that, not
+`UPDATE_SEAMS`.
+
+The reported symptom is reproducible, and reproducing it identifies the tree it
+came from: adding `'invoice_sequences'` back to `TRIGGER_SEAMS` produces
+**exactly** the reported text —
+`the invoice_sequences seam: the injected failure surfaces as a refusal rather
+than a success: expected false to be true`. That is the pre-`ff66910` shape.
+
+### Report 2: `stock_source_bindings` with no case — NOT PRESENT
+
+`a failure at the stock_source_bindings seam leaves nothing` runs and passes,
+and `every discovered seam was covered by a case above` passes. The relation is
+in `P4_AL_16_FLOOR`, and `covered` is built from that same list, so adding it to
+the floor put it in both the generated cases and the covered set. Removing it
+again reproduces the reported text:
+`the sale writes stock_source_bindings, and no case above injects a failure
+there`.
+
+### What DID change: the premise of E-01 is now a law
+
+Twice reported, twice the same answer — a row trigger cannot observe a row lock.
+So the premise stops being a comment. A new case states it in both directions
+and refuses the regression at the LIST level, with the reason, instead of as an
+obscure `expected false to be true` inside a generated case:
+
+* `invoice_sequences` **is** in `UPDATE_SEAMS` and **is not** in
+  `TRIGGER_SEAMS`;
+* `sale_commit`'s body, read from the live catalogue through **`lexBody`** — the
+  repo's own recogniser, which strips `--` and block comments and replaces every
+  single-quoted literal with a placeholder — mentions `invoice_sequences`, does
+  **not** `UPDATE` it (P4-AL-31: the ordinal is not a stored counter), and does
+  take a row lock (`FOR NO KEY UPDATE`), so two sales on one series still
+  serialise;
+* and the recognisers are PLANTED, because `.toBe(false)` over a regex that
+  matches nothing is the quietest vacuous pass there is: the `UPDATE` pattern is
+  proved to see a real write, and proved NOT to see one written in a `RAISE`
+  message or in a comment — which is the whole reason the body is lexed rather
+  than grepped.
+
+Red proof, run: with `'invoice_sequences'` planted back into `TRIGGER_SEAMS`,
+**two** cases fail — the new law naming the reason, and the generated case that
+cannot fire. The law is the one that says why.
+
+---
+
 ## 8. Open items for other owners
 
 1. **`docs/DAFTAR_GOLDEN_REGRESSION_SUITE.md:41`** states GOLD-33 as
@@ -862,21 +937,25 @@ a discovered FK closure, not a list". Nothing was scoped, relaxed or wrapped in
 
 ---
 
-## 9. The `S2_SUITES` roster for `scripts/phase4-s2-gate.ts`
+## 9. The `S2_SUITES` roster for `scripts/phase4-s2-gate.ts` — ACCEPTED
 
-The gate file is not mine to edit; this is the list its owner asked for. Every
-path exists on this branch and every one is run by the commands in §0.
+The gate file is not mine to edit. This is the roster as its owner accepted it,
+with the `it(` title each row's verdict should be named by. Every path exists on
+this branch, every one is run by the commands in §0, and all eight are **green**
+on the merged head (§7f: 156/156 over these eight plus both Phase 4 golden
+directories, 157/157 with §7f's own law in, over three rounds that found nothing
+new).
 
-| row | suite | what the gate reads out of it | state today |
+| row | suite | the claim it carries | the `it(` title the gate names as its red proof |
 | --- | --- | --- | --- |
-| `S2-G05` | `tests/golden-regression/phase4-s2/05-last-item-race.golden.test.ts` | the last-item race on the **stock writer** the sale must use, and the lock-order probe | **green now** |
-| `S2-G06` | `tests/golden-regression/phase4-s2/06-sale-last-item-race.golden.test.ts` | the same race through `POST /v1/sales` | canary-red until `0078` |
-| `S2-G07` | `tests/golden-regression/phase4-s2/07-atomic-sale-law.golden.test.ts` | §15 as eight laws over committed state, plus the official reconciliation identity | canary-red until `0078` |
-| `S2-G08` | `tests/golden-regression/phase4-s2/08-sale-idempotency.golden.test.ts` | the replay contract, structural and behavioural | canary-red until `0078` |
-| `S2-I01` | `tests/integration/sale-s2-interleaving.test.ts` | that the forcing **mechanism** works: the `blockedBehind` fixed point, every throw of `waitUntilQueued`, a planted real `40P01` classified and refused | **green now** |
-| `S2-I02` | `tests/integration/sale-s2-atomic-law.test.ts` | failure injection at every discovered seam, and that nothing survives | canary-red until `0078` |
-| `S2-C01` | `tests/integration/sale-s2-cogs-owed.test.ts` | C-07's matched pair: the live-catalogue agreement law (red on this head — see §7d) and the behavioural ZERO/NON-ZERO arms | **mixed**: the agreement law and its four planted proofs run today, the behavioural pair is canary-red until `0078` |
-| `S2-R01` | `tests/guards/sale-s2-red-proofs.test.ts` | that every law on the books has a planted defect, that the canary fails in both directions, that the runner's exit status can say no, and `suiteProblems(REPO) == []` | **green now** |
+| `S2-G05` | `tests/golden-regression/phase4-s2/05-last-item-race.golden.test.ts` | the last-item race on the stock writer the sale must use; no oversell; the deterministic lock-order probe | `the lock order is the KEY order and not the payload order — the deterministic lock-order probe` |
+| `S2-G06` | `tests/golden-regression/phase4-s2/06-sale-last-item-race.golden.test.ts` | the same race through `POST /v1/sales`: one commit, one stable business refusal, no orphan of any kind | `exactly one attempt is refused, and the refusal is a stable business refusal naming the stock` |
+| `S2-G07` | `tests/golden-regression/phase4-s2/07-atomic-sale-law.golden.test.ts` | §15 as eight laws over committed state, the official reconciliation identity, and the structural ban on the forbidden reconstruction | `the identity is never reconstructed from quantity × average cost` |
+| `S2-G08` | `tests/golden-regression/phase4-s2/08-sale-idempotency.golden.test.ts` | the replay contract, structural and behavioural (P4-AL-30: the stored intent is read before any write) | `the same document id with a DIFFERENT intent is refused, and writes nothing` |
+| `S2-I01` | `tests/integration/sale-s2-interleaving.test.ts` | that the forcing MECHANISM works: the `blockedBehind` fixed point, every throw of `waitUntilQueued`, a planted real `40P01` classified and refused, no retry anywhere | `a real deadlock is classified as a deadlock, and expectNoDeadlock fails on it` |
+| `S2-I02` | `tests/integration/sale-s2-atomic-law.test.ts` | failure injection at every discovered seam — `stock_source_bindings` included — plus the E-01 held-lock case and its premise | `invoice_sequences is LOCKED and never written, so it belongs to the held-lock case and not to the trigger set` |
+| `S2-C01` | `tests/integration/sale-s2-cogs-owed.test.ts` | C-07's matched pair: the live-catalogue agreement law and the behavioural ZERO / NON-ZERO arms | `PLANTED: a strictly-negative predicate on the LINE guard is reported` |
+| `S2-R01` | `tests/guards/sale-s2-red-proofs.test.ts` | that every law on the books has a planted defect, the canary fails in both directions, the runner's exit status can say no, and `suiteProblems(REPO) == []` | `the runner’s exit status can say no` |
 
 Three notes for whoever wires them.
 
@@ -885,13 +964,13 @@ Three notes for whoever wires them.
    observed twice during this work, and the estate has already shipped a runner
    that exited 0 over four failing tests. `rlsSuiteProblems` in the gate today
    does it correctly, with `spawnSync` and `stdio: 'pipe'`.
-2. **The four canary-red rows are red *on purpose* until `0078`.** They refuse
-   with `NO SUBJECT — … the sale commit routine sale_commit`, never with a skip
-   and never with a conditional pass, so the gate is honestly red while the
-   slice is incomplete. Adding them before `0078` lands makes
-   `gate:phase4:s2` red; adding them after it lands is a gate that was never
-   proved able to say no. The list is complete as written and its rows should
-   go in together.
+2. **`S2-I02` names the PREMISE, not the held-lock case.** Planting the
+   regression — `invoice_sequences` back in `TRIGGER_SEAMS` — fails the premise
+   law *and* the generated case that cannot fire, and the premise is the one
+   that says why. The held-lock case
+   (`a sale held at the invoice_sequences seam has committed NOTHING, and
+   serialises once the row is released`) carries the behaviour and has its own
+   two planted proofs (§7e); it is not the row's named verdict.
 3. **`tests/guards/` by directory** would also pick up
    `sale-s2-base-split-agreement.test.ts`, which is another owner's; the row
    above names the one file instead, so each owner's guard is listed by its
