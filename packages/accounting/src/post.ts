@@ -215,6 +215,21 @@ export const DOMAIN_SOURCE_TYPES = [
   'supplier_credit_allocation',
   'supplier_refund',
   'purchase_residue_write_off',
+  // P4-S2 (0077): the two accounting source types of a confirmed sale. `sale`
+  // is the COGS entry at the sale's grain and `invoice` is the revenue entry
+  // at the invoice's grain, and they are two types rather than one because
+  // `accounting_reversals.id = original_entry_id` allows exactly one
+  // whole-entry reversal per entry for ever (P4-AL-47): a price correction
+  // that reversed the revenue would otherwise have to reverse the inventory
+  // with it. `invoice` is here, and not in P4-S1, by Tech Lead ruling
+  // `TL-P4-S1-R1`: a source type must not exist as a dead registry concept
+  // without the writer, the binding, the journal shape and the deferred
+  // completeness validator that give it meaning. Both are derived by the sale
+  // commit command through `sale-posting.ts`, never through
+  // `AccountingEngine.post`, and neither is reversible by the generic
+  // workflow — `accounting_reversals_20_domain_source_guard` names both.
+  'sale',
+  'invoice',
 ] as const;
 
 /**
