@@ -102,13 +102,41 @@ describe('P4-S1 the phase-scoped registry assertions are no weaker (plan action 
               'P4-S1' ~ '^P3-' AS p4s1, 'P4-S2' ~ '^P3-' AS p4s2`,
     );
     expect(r.rows[0]).toEqual({ p3s1: true, p3s6: true, p3c: true, p4s1: false, p4s2: false });
-    // And every row in all three registries today carries Phase 3 provenance,
-    // so the scoped read and the old absolute read agree exactly right now.
+    /**
+     * P4-AL-88. This half used to read: "every row in all three registries
+     * today carries Phase 3 provenance, so the scoped read and the old
+     * absolute read agree exactly right now". That was a MEASUREMENT of the
+     * tree at `0074` written as a property — and the agreement it recorded is
+     * precisely what the scoping exists to END. `0077` registers the `sale`
+     * stock source type, the `sale` movement kind, the `sale.commit`
+     * operation kind and its op→kind row with `P4-S2` provenance, so the two
+     * reads no longer agree, and a suite whose whole subject is "a later
+     * phase falls outside the scope" went red for a later phase falling
+     * outside the scope.
+     *
+     * It is re-expressed as the PARTITION it always meant — a statement about
+     * the registries' own provenance column, so true for ever, and no weaker:
+     * the scoped read is exactly the rows a Phase 3 registrant owns, it is
+     * not empty, every row it omits records a WELL-FORMED registrant that is
+     * not a Phase 3 one — so the scope cannot be dodged by an unlabelled or
+     * mislabelled row, which is what RED PROOFS 3 and 4 below perform — and
+     * the two parts together are the whole table, so nothing can be merely
+     * dropped from the read.
+     */
     for (const table of ['stock_source_types', 'inventory_operation_movement_kinds', 'inventory_operation_kinds']) {
-      const all = await pool.query<{ n: number }>(`SELECT count(*)::int AS n FROM ${table}`);
-      const scoped = await pool.query<{ n: number }>(`SELECT count(*)::int AS n FROM ${table} WHERE registered_by ~ '^P3-'`);
-      expect(scoped.rows[0]?.n, table).toBe(all.rows[0]?.n);
-      expect(all.rows[0]?.n ?? 0, table).toBeGreaterThan(0);
+      const registrants = (await pool.query<{ b: string }>(`SELECT registered_by AS b FROM ${table} ORDER BY 1`)).rows.map((x) => x.b);
+      const scoped = (await pool.query<{ b: string }>(`SELECT registered_by AS b FROM ${table} WHERE registered_by ~ '^P3-' ORDER BY 1`)).rows.map((x) => x.b);
+      expect(scoped.length, `${table}: the Phase 3 scope is empty, so every scoped equality would be vacuous`).toBeGreaterThan(0);
+      expect(
+        scoped.filter((b) => !/^P3-/.test(b)),
+        `${table}: the scoped read admits a row no Phase 3 slice registered`,
+      ).toEqual([]);
+      const beyond = registrants.filter((b) => !/^P3-/.test(b));
+      expect([...scoped, ...beyond].sort(), `${table}: the two scopes together are the whole table`).toEqual([...registrants].sort());
+      expect(
+        beyond.filter((b) => !/^P[0-9]+-S[0-9]+$/.test(b)),
+        `${table}: a row outside the Phase 3 scope does not record a later-phase registrant`,
+      ).toEqual([]);
     }
   });
 
@@ -140,11 +168,41 @@ describe('P4-S1 the phase-scoped registry assertions are no weaker (plan action 
     });
   });
 
+  /**
+   * P4-AL-88, and the same class as the scope read above. RED PROOFS 3 and 4
+   * each planted a NAMED key — `'sale.commit'`, `'sale'` — chosen because no
+   * registry held it. `0077` registers both, so the plant stopped reaching
+   * the claim at all: it failed on the primary key (23505) and the helper was
+   * never asked. The CLAIM is untouched; what needed widening is how the
+   * plant finds a key that is not registered, which is now DISCOVERED from
+   * the registry itself rather than written down, so no later slice's
+   * registration can collide with it.
+   */
+  const unregisteredKey = async (c: { query: Pool['query'] }, table: string, column: string, candidates: readonly string[]): Promise<string> => {
+    const free = await c.query<{ k: string }>(
+      `SELECT k AS k FROM unnest($1::text[]) AS k
+        WHERE NOT EXISTS (SELECT 1 FROM ${table} t WHERE t.${column} = k) ORDER BY 1 LIMIT 1`,
+      [candidates],
+    );
+    const key = free.rows[0]?.k;
+    expect(key, `every candidate key is already registered in ${table}, so the plant below would prove nothing`).toBeDefined();
+    return key as string;
+  };
+
   it('RED PROOF 3: an EXTRA operation kind mislabelled with Phase 3 provenance is still caught', async () => {
     await inRolledBackTx(async (c) => {
+      // Candidates all satisfy the accepted op-code CHECK
+      // (`^[a-z]+(\.[a-z_]+)+$`); the one that is not registered is used, so
+      // the plant reaches the helper rather than the primary key.
+      const op = await unregisteredKey(c, 'inventory_operation_kinds', 'op_code', [
+        'scoping.probe_one',
+        'scoping.probe_two',
+        'scoping.probe_three',
+        'scoping.probe_four',
+      ]);
       // `P3-S7` satisfies the accepted CHECK (`^P3-S[0-9]+$`), so this is the
       // exact shape a later phase would use to smuggle a row into scope.
-      await c.query(`INSERT INTO inventory_operation_kinds (op_code, registered_by) VALUES ('sale.commit', 'P3-S7')`);
+      await c.query(`INSERT INTO inventory_operation_kinds (op_code, registered_by) VALUES ($1, 'P3-S7')`, [op]);
       await expect(assertMigrationState(c)).rejects.toThrow();
       await expect(assertS4MigrationState(c)).rejects.toThrow();
     });
@@ -159,7 +217,13 @@ describe('P4-S1 the phase-scoped registry assertions are no weaker (plan action 
       // on the table's full shape.
       expect(cols.rows.map((x) => x.c)).toContain('source_type');
       expect(cols.rows.map((x) => x.c)).toContain('registered_by');
-      await c.query(`INSERT INTO stock_source_types (source_type, registered_by) VALUES ('sale', 'P3-S7')`);
+      const type = await unregisteredKey(c, 'stock_source_types', 'source_type', [
+        'scoping_probe_one',
+        'scoping_probe_two',
+        'scoping_probe_three',
+        'scoping_probe_four',
+      ]);
+      await c.query(`INSERT INTO stock_source_types (source_type, registered_by) VALUES ($1, 'P3-S7')`, [type]);
       await expect(assertMigrationState(c)).rejects.toThrow();
       await expect(assertS4MigrationState(c)).rejects.toThrow();
     });
