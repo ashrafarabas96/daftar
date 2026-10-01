@@ -999,3 +999,159 @@ C-09 step 10 cannot lock and bump a counter: it must take a **row lock on the `i
 obstruct because no update is performed — and then read `coalesce(max(number_seq), 0) + 1` from `invoices`
 under that lock. `invoices_number_uq` is the backstop that makes a missed lock a refusal rather than a
 duplicate number. The lock order must stay `businesses → invoice_sequences`, matching R-1.
+
+---
+
+## 16. `0078` — `sale_commit`, as built
+
+### 16.1 What it creates
+
+`sale_commit` to C-09's 29-argument signature (18 scalars, 11 parallel arrays,
+`RETURNS TABLE (replayed BOOLEAN, cogs_base_minor BIGINT)`, no `p_tax_minor`, no `DEFAULT`), plus three
+internal helpers with no `EXECUTE` grant at all: `sale_lock_commit_targets` (the `sale.commit` twin of
+`purchase_lock_receipt_targets`, `0064:80`), `sale_document_number` (the renderer of
+`invoice_sequences.number_format` — the FIRST in the tree, because P4-S1 created no writer of `invoices`)
+and `sale_bridge_commit` (the one writer of `stock_source_bridge_sale`, on the `purchase_bridge_receipt`
+pattern at `0064:301`, copying `tenant_id` from the binding it bridges). `EXECUTE` on the entry routine is
+`daftar_app`'s and nobody else's; all four are `SECURITY DEFINER` with the pinned path, owned by
+`daftar_inventory_internal`.
+
+### 16.2 The two digests, verified by measurement rather than by reading
+
+The highest-risk part of this file is the two `invpl/1` streams it re-derives: get a field's type, order or
+fixed-point scale wrong and the routine refuses every lawful sale with
+`inventory.assertion_payload_mismatch`, which reads like an authority problem and is an arithmetic one. So
+it was measured, not reasoned about: the two array expressions were extracted from the migration's own
+text, bound to the same values through a CTE whose columns carry the routine's parameter names, and
+compared against `saleCommitPayload()` and `saleCommitIntentSha256()` from
+`packages/inventory/src/sale-payloads.ts`. Both digests match byte for byte, on two cases chosen for their
+different NULL paths:
+
+| case | payload | intent |
+|---|---|---|
+| credit sale, named customer, due date, notes, foreign rate, one line with a merchant variant and one without | MATCH | MATCH |
+| walk-in cash sale, no customer, no due date, no notes, domestic rate | MATCH | MATCH |
+
+Two fields of the argument list are deliberately ABSENT from the payload stream — `p_gross` and
+`p_name_snapshots` — because both are derivable, and a derivable field inside a fingerprint is a second
+truth. They are recomputed at step 6 instead and a disagreement is `sale.state_changed`.
+
+### 16.3 Three things the live catalogue decided, against a document or a reading
+
+**`products.translations` does not exist.** `0036` normalized the catalogue's translations into
+`product_translations (business_id, product_id, locale, name)` and DROPPED the JSONB column. The name
+snapshot is therefore read from that relation, ordered by `array_position(ARRAY['ar','en','tr'], locale)`,
+and `0078` grants `SELECT ON product_translations TO daftar_inventory_internal` — `0053:253` had not,
+because no inventory routine needed a product NAME before.
+
+**Every PostgreSQL locking clause needs `UPDATE`.** `FOR UPDATE`, `FOR NO KEY UPDATE`, `FOR SHARE` and
+`FOR KEY SHARE` alike require `UPDATE` on the relation, at relation level or on any one column. So
+`businesses` and `customers` are READ rather than row-locked: locking the tenancy root would mean granting
+the inventory writer the right to WRITE `businesses`, which is a far larger authority than the lock is
+worth, and `purchase_receive` reads the same two business columns unlocked (`0064:1248`). The customer
+takes a SHARED ADVISORY lock on its own id instead, which PUBLIC may execute and which therefore adds no
+privilege, so two concurrent sales of one customer still serialise. The two locks the slice's laws DO rest
+on are taken and paid for: `stock_levels` `FOR UPDATE` inside the writer (OD-P4-05, the last-item race) and
+`invoice_sequences` `FOR NO KEY UPDATE` at step 10, for which the file grants exactly one `UPDATE` — with
+0078-E(5) asserting from `prosrc` that the routine contains no `UPDATE`, `INSERT` or `DELETE` of that
+relation, so the privilege is the lock's and nothing else's.
+
+**`lpad` TRUNCATES.** `lpad('1234', 2, '0')` is `'12'`, so a naive renderer would turn an ordinal wider
+than its `{SEQ:n}` field into an earlier document's number and collide under
+`invoices_document_number_uq`. The width is a minimum in `sale_document_number`, and a performed proof
+pins both directions.
+
+### 16.4 The one correction to `0077`, as a replacement and not an edit
+
+`0077`'s `accounting_sale_entry_complete()` required the COGS line to carry a NULL `warehouse_id`, on the
+purchase entry's precedent (`0063:1584-1585`, whose counter-account is Accounts Payable — a supplier fact
+with no warehouse). That is wrong for a sale, and the landed accounting code says so with the better
+citation: `deriveSaleCogsEntryLines` (`packages/accounting/src/sale-posting.ts:632-650`) puts the sale's
+warehouse on BOTH lines, because the one accepted Inventory/COGS PAIR in the tree —
+`accounting_negative_inventory_cost_adjustment_entry_complete` (`0063:1640-1643`) — requires
+`warehouse_id IS NOT DISTINCT FROM v_wh` on every line of the entry, its COGS line included. Measured, not
+reasoned: with `0077`'s arm in force the first end-to-end sale is refused
+`accounting.selling_entry_mismatch` at COMMIT and the whole P4-AL-16 path is unreachable.
+
+`0077` is **not edited**. It is merged at `1b5a606` and other agents have applied it, so an edit would
+change its checksum and fail each of their databases with `Migration tampered after apply`. `0078`
+replaces the body with `CREATE OR REPLACE`, by its owner under a lent `CREATE ON SCHEMA public`, keeping
+`0077`'s text byte for byte except the one `warehouse_id` comparison — the mechanism `0063`, `0065`,
+`0067` and `0072` each used on this estate.
+
+### 16.5 The forward-evolution break `0078` causes, and the one narrowing it needed
+
+`tests/integration/read-s7-no-cache.test.ts` pins `daftar_app`'s privilege matrix at 174 lines and a
+digest. P4-S2 adds three grants and the file already carries the accepted shape for exactly this: a named
+constant per phase, subtracted before the digest is taken. So a `P4_S2_APP_GRANTS` of
+`relation public.sale_items SELECT`, `relation public.sales SELECT` and the `sale_commit` `EXECUTE` line
+was added beside `P3C_APP_GRANTS` and `P4_S1_APP_GRANTS`, and `S6_END_STATE` keeps its original 174 and
+its original digest WORD FOR WORD. Recomputing that digest to today's value would have let a fourth grant
+in silently, which is the failure mode the shape exists to refuse. The discovered no-DML law above it
+covers `sales` and `sale_items` without naming either.
+
+### 16.6 What `0078` deliberately does not do
+
+It writes no journal line. It adds no refusal for the zero-valued sale — the landed conditional arm is
+what the caller uses and `sales_cogs_owed` is what makes it safe, so a second refusal here would refuse
+the lawful case. It does not touch `inventory_apply_stock_movements`: both cost columns of every request
+are NULL, so the writer values the movement under the stock key's own lock, which is also where
+`inventory.insufficient_stock` is raised (OD-P4-05), and 0078-E(6) reads that refusal back out of the live
+`prosrc`. And it creates no `invoice_sequences` row: nothing in `0000`–`0077` does, so a business with no
+stated series is refused `sale.issue_invoice` rather than given a default `number_format`, which would be
+a product decision about what every document of that business is called forever.
+
+---
+
+## 17. The zero-cost sale, made reachable — the `0077` amendment
+
+### 17.1 What was unreachable, and why it was not visible
+
+`0077:564` and `0077:618` both required `m.value_delta_base_minor < 0` on every line of a non-draft sale —
+a STRICTLY negative value. The zero-valued movement `0060:388-390` produces does not satisfy it, so
+`stock_source_complete_sale` and `stock_source_complete_sale_header` refused the zero-cost sale outright
+with `inventory.source_movement_set_incomplete`. Three things in this slice therefore rested on a state
+nothing could reach: `sales_cogs_owed()`'s `v_cost = 0` branch, the seam's conditional COGS arm, and the
+weakening of `sales_binding_owed_ck` away from C-01's strict biconditional.
+
+The amendment, on the recommended option: both predicates read `<= 0`, and the quantity — which is what
+actually establishes completeness — is pinned exactly AND explicitly strictly outbound
+(`m.qty_delta = -quantity AND m.qty_delta < 0`). The value predicate was asserting "value must have moved",
+which is not a completeness property, and relaxing it while keeping the quantity exact loses no protection.
+The recorded `prosrc` digests of both guards were recomputed and `inventory_stock_source_guard_gaps()`
+returns no row.
+
+### 17.2 The premise the coordinator asked me to verify: an inbound at cost 0 IS accepted
+
+Read from `0060`'s inbound branch rather than from a document. The only gate on the cost is
+`IF v_snapshot < 0 OR v_snapshot <> trunc(v_snapshot, 10) OR v_snapshot >= c_value_limit`
+(`0060:403-405`), so **exactly 0 passes**; the value is then
+`v_value := inventory_half_even(v_qty * v_snapshot, 1, 0)` (`0060:412`), which is 0. The resulting key has
+`value = 0` and a derived average of 0, and the outbound branch then values a sale of it at
+`-inventory_half_even(abs(qty) * 0, 1, 0) = 0`, or at `-v_level_value = 0` when it empties the key
+(`0060:388-390`). So a zero-valued stock key is reachable by an ordinary adjustment and the zero-cost sale
+has a real premise. Confirmed end to end as well: with the amendment in place the ZERO ARM's inbound is
+accepted and the sale COMMITS, where before the amendment it was refused.
+
+### 17.3 A consequence the amendment forced on `0078`, and a second amendment to `0077`
+
+C-09 step 7 says the header is inserted `with binding_source_id = id`. **That cannot be unconditional once
+the zero arm is real.** A zero-cost sale owes no `sale` entry, so a `binding_source_id` written at insert
+time leaves the deferred `sales_binding_fk` pointing at a binding nobody posts, and the COMMIT fails with
+`23503` — measured: it refused the lawful sale, not an unlawful one.
+
+The obligation is conditional on a number no row holds, and the movements that carry it cannot exist before
+the header, because `sale_items_sale_fk` and the bridge's line FK are both immediate. So:
+
+- `0078` inserts the header with **no** binding, learns the cost at a new step 9b from the movements it has
+  just written, and sets the binding **exactly when that cost is non-zero**;
+- `0077`'s `sale_header_guard()` is amended to admit that one transition and no other — a confirmed sale's
+  `binding_source_id` is **SET ONCE**, from NULL to the sale's own id. It may not change to another value,
+  may not return to NULL, and may not be set on a row that already carries one, so the binding of a posted
+  sale is still final (`P4-AL-10`). `sales_binding_identity_ck` pins the value independently and the
+  deferred `sales_cogs_owed` decides at COMMIT, against the ledger, whether the final state was the owed
+  one.
+
+This is the part of the fork that was not visible from either direction until the arm was actually
+reachable, and it is why the weakened `sales_binding_owed_ck` is now justified by something: a committed
+sale with a NULL binding is a real, lawful row.

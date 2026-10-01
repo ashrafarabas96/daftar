@@ -142,6 +142,33 @@ const P4_S1_APP_GRANTS = [
   'routine invoice_settlement_state(uuid,uuid) EXECUTE',
 ] as const;
 
+/**
+ * P4-S2 (0077, 0078): the three grants the sale slice adds to `daftar_app` —
+ * SELECT on the two new relations and EXECUTE on the one trusted command.
+ * Named line for line, by the SAME mechanism `P3C_APP_GRANTS` and
+ * `P4_S1_APP_GRANTS` already use, and for the same reason: the S6 digest
+ * below stays pinned byte for byte and nothing that is not named here may
+ * appear.
+ *
+ * The scope is NARROWED, never loosened (`P4-AL-88`,
+ * `[[daftar-a-closure-rule-is-not-an-invariant]]`): `S6_END_STATE` keeps its
+ * original 174 lines and its original digest, word for word, over the matrix
+ * with these three subtracted. Recomputing that digest to today's value would
+ * have let a FOURTH grant in silently, which is the whole failure mode this
+ * shape exists to refuse.
+ *
+ * Note again what is NOT here, and that the absence is the assertion: no
+ * INSERT, no UPDATE, no DELETE on `sales` or `sale_items`. `daftar_app`
+ * reaches the sale surface through `sale_commit` and writes none of it
+ * directly (`P4-AL-38`) — and the discovered no-DML law above covers both
+ * relations without naming either.
+ */
+const P4_S2_APP_GRANTS = [
+  'relation public.sale_items SELECT',
+  'relation public.sales SELECT',
+  'routine sale_commit(uuid,uuid,text,uuid,uuid,uuid,date,date,character,uuid,numeric,text,timestamp with time zone,bigint,bigint,bigint,bigint,text,uuid[],uuid[],uuid[],uuid[],text[],numeric[],bigint[],bigint[],bigint[],bigint[],bigint[]) EXECUTE',
+] as const;
+
 beforeAll(async () => {
   await ensurePostgres();
   await resetData();
@@ -160,7 +187,7 @@ describe('T-01 the catalogue end state', () => {
 
   it('the daftar_app privilege matrix is the S6 end state: S7 adds no grant (the corrective pass adds exactly its two)', async () => {
     const all = await appPrivilegeMatrix(ownerPool());
-    for (const g of [...P3C_APP_GRANTS, ...P4_S1_APP_GRANTS]) expect(all, g).toContain(g);
+    for (const g of [...P3C_APP_GRANTS, ...P4_S1_APP_GRANTS, ...P4_S2_APP_GRANTS]) expect(all, g).toContain(g);
     /**
      * No DML on ANY relation beyond the accepted inherited prefix, asserted
      * over the whole matrix rather than by the absence of a line from the list
@@ -185,7 +212,7 @@ describe('T-01 the catalogue end state', () => {
       }),
       'daftar_app writes a relation the accepted inherited prefix did not create',
     ).toEqual([]);
-    const named = new Set<string>([...P3C_APP_GRANTS, ...P4_S1_APP_GRANTS]);
+    const named = new Set<string>([...P3C_APP_GRANTS, ...P4_S1_APP_GRANTS, ...P4_S2_APP_GRANTS]);
     const matrix = all.filter((l) => !named.has(l));
     expect(
       matrix.some((l) => l.startsWith('relation public.stock_levels SELECT')),

@@ -561,7 +561,27 @@ BEGIN
   SELECT count(*),
          count(*) FILTER (WHERE m.movement_kind = 'sale' AND m.warehouse_id = v_wh AND m.variant_id = v_line.variant_id
                             AND m.qty_delta = -v_line.quantity
-                            AND m.value_delta_base_minor < 0)
+                            -- The quantity is what establishes COMPLETENESS, and it is
+                            -- pinned exactly: the movement moved out precisely this line's
+                            -- quantity, and strictly out, which `sale_items`' own
+                            -- `CHECK (quantity > 0)` already implies and this states anyway
+                            -- so the guard does not rest on its neighbour's constraint.
+                            AND m.qty_delta < 0
+                            -- `<= 0` and NOT `< 0`. A strictly negative VALUE is not a
+                            -- completeness property at all — it is "value must have
+                            -- moved" — and it refuses a sale that is lawful and reachable:
+                            -- `0060:388-390` values an emptying outbound at the key's
+                            -- stored valuation, which is 0 when that valuation is 0, and
+                            -- `0060:403-412` accepts an INBOUND at a unit cost of exactly
+                            -- 0 (the only gate is `v_snapshot < 0`), so a zero-valued key
+                            -- is reachable by an ordinary adjustment. With `< 0` here the
+                            -- zero-cost sale was refused `inventory.source_movement_set_incomplete`
+                            -- and THREE things in this slice rested on an unreachable
+                            -- state: `sales_cogs_owed()`'s `v_cost = 0` branch, the seam's
+                            -- conditional COGS arm and the weakening of
+                            -- `sales_binding_owed_ck`. Relaxing the value while keeping the
+                            -- quantity exact loses no protection.
+                            AND m.value_delta_base_minor <= 0)
     INTO v_all, v_ok
   FROM stock_source_bridge_sale b
   JOIN stock_movements m ON m.business_id = b.business_id AND m.source_type = b.source_type AND m.source_id = b.source_id
@@ -615,7 +635,12 @@ BEGIN
                                                          AND m.movement_kind = b.movement_kind
                                   WHERE b.business_id = l.business_id AND b.source_id = l.sale_id AND b.source_line_id = l.id
                                     AND m.movement_kind = 'sale' AND m.warehouse_id = v_wh AND m.variant_id = l.variant_id
-                                    AND m.qty_delta = -l.quantity AND m.value_delta_base_minor < 0)
+                                    -- The same correction as the line guard above: the
+                                    -- quantity is pinned exactly and strictly outbound,
+                                    -- and the value is `<= 0` so the lawful zero-valued
+                                    -- movement of `0060:388-390` is not refused.
+                                    AND m.qty_delta = -l.quantity AND m.qty_delta < 0
+                                    AND m.value_delta_base_minor <= 0)
            END)
     INTO v_lines, v_bad
   FROM sale_items l
@@ -689,9 +714,29 @@ BEGIN
      OR NEW.fx_rate_id IS DISTINCT FROM OLD.fx_rate_id
      OR NEW.customer_name_snapshot IS DISTINCT FROM OLD.customer_name_snapshot
      OR NEW.commit_intent_sha256 IS DISTINCT FROM OLD.commit_intent_sha256
-     OR NEW.confirmed_by IS DISTINCT FROM OLD.confirmed_by OR NEW.confirmed_at IS DISTINCT FROM OLD.confirmed_at
-     OR NEW.binding_source_id IS DISTINCT FROM OLD.binding_source_id THEN
+     OR NEW.confirmed_by IS DISTINCT FROM OLD.confirmed_by OR NEW.confirmed_at IS DISTINCT FROM OLD.confirmed_at THEN
     RAISE EXCEPTION 'selling.source_document_immutable: the commercial facts of a confirmed sale are final' USING ERRCODE = 'P0001';
+  END IF;
+  -- `binding_source_id` is SET ONCE and never changed, which is weaker than
+  -- "never changed" and is what the ZERO-COST SALE forces. The obligation is
+  -- conditional on a number no row holds — the sum of the bridged movement
+  -- values — and the movements cannot exist before the header does, because
+  -- `sale_items_sale_fk` and the bridge's line FK are immediate. So the
+  -- committing routine inserts the header with NO binding, learns the cost
+  -- from the movements it then writes, and sets the binding exactly when the
+  -- cost is non-zero. A row that never owed one keeps NULL.
+  --
+  -- Set-once, stated as a shape: NULL may become this sale's own id, and
+  -- nothing else may happen. It may not change to another value, may not
+  -- return to NULL, and may not be set on a row that already carries one —
+  -- so the binding of a posted sale is still final, which is what
+  -- `P4-AL-10` is about. `sales_binding_identity_ck` pins the value
+  -- independently and the DEFERRED `sales_cogs_owed` decides, at COMMIT and
+  -- against the ledger, whether the final state was the owed one.
+  IF NEW.binding_source_id IS DISTINCT FROM OLD.binding_source_id
+     AND NOT (OLD.binding_source_id IS NULL AND NEW.binding_source_id = OLD.id) THEN
+    RAISE EXCEPTION 'selling.source_document_immutable: the accounting binding of a confirmed sale is set once, to the sale itself, and never changed'
+      USING ERRCODE = 'P0001';
   END IF;
   IF NEW.status NOT IN ('confirmed', 'returned_partial', 'returned_full', 'void') THEN
     RAISE EXCEPTION 'selling.source_document_immutable: a confirmed sale does not return to a draft' USING ERRCODE = 'P0001';
@@ -866,9 +911,9 @@ DECLARE
     "purchase_reversal_detail_same_transaction()": "e408924187c911f6b1d61f46ce1ae7e6ff965f2807562c9cfaa176508c5838bf",
     "supplier_credit_note_guard()": "a21031b39170a8cec024de3947b8de6ee70c7def674235fcdbff01f27d99177e",
     "stock_binding_requires_sale()": "740afbde38f3497a3850f5c76cd61a51ded5fd047e2ac879fa48cb907238615d",
-    "stock_source_complete_sale()": "eb0fdfe309da5d5fdf606c7a6901f0ff674f060b9497369aa107bfe17ded8c8c",
-    "stock_source_complete_sale_header()": "0eafdbf85adce5d3ea9c7ff925e30bf96fc5a4ec8fd6ef1213b9448485bdd88a",
-    "sale_header_guard()": "11b3103b3f15cb4158c31850bc4cc75c8369857dfc45c6daf463463eabb16553"
+    "stock_source_complete_sale()": "0d66d946ae01292345ded8215710f96283e7cb60ad8a6cb3a8219a7cec96ba5b",
+    "stock_source_complete_sale_header()": "6aa21ff188d72c53cc887c0a88e5c302953f78d58e7dc95a0909b01a830c89b1",
+    "sale_header_guard()": "b5d218c0114b7ea43e9e84fe4470f383be2a5c9d86486749e1312126d7a6bcc3"
   }';
 BEGIN
   FOR v_type IN SELECT t.source_type FROM stock_source_types t ORDER BY t.source_type LOOP
