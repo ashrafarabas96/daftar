@@ -1943,16 +1943,51 @@ rather than about this slice:
 no digest rewrite. Every correction from here is a NEW migration beginning at `0077`, and only under an
 explicit Tech Lead directive.
 
+### P4-S2 coordinator corrections to this lock (2026-10-01)
+
+| id | decision | correction |
+|---|---|---|
+| `TL-P4-S2-K1` | execution plan, S2 row; `P4-AL-28`; `TL-P4-S1-R1` | **`0077` registers `sale.commit` ALONE, not `sale.*`.** The plan's S2 row and `P4-AL-28` name `sale.commit`, `sale.void` and `sale.return` together, but `sale.void` is P4-S6's command and `sale.return` is P4-S5's, and an `inventory_operation_kinds` row is a registration of **authority**: once it exists, `inventory_assertion_consume` will accept an assertion carrying it. That is a live authority with no writer, which is exactly what `TL-P4-S1-R1` refused for the `invoice` source type. The later kinds are registered by the slices that supply their writers. This NARROWS a plan row; it widens nothing. |
+| `TL-P4-S2-K2` | execution plan, S2 row; `TL-P4-S1-C2` | **Six policies on the sale bridge, not five.** The plan said five; the accepted `stock_source_bridge_purchase` carries six, read from `0063:555-568`: `tenant_membership`, the four `RESTRICTIVE` per-command isolation policies, and `inventory_internal_read`. `TL-P4-S1-C2` had already corrected the ordinary/accounting-source counts to six and seven; the S2 row was not updated with it. The bridge is not an accounting-source relation, so it takes no `accounting_validator`. |
+| `TL-P4-S2-K3` | `P4-AL-29b`; `0067:1548-1564` | **`inventory_stock_source_guard_gaps()` must be REPLACED by `0077`, and the hole it leaves is reachable, not theoretical.** The live body is `0067:1438`, the fifth version (`0059` → `0061` → `0063` → `0065` → `0067`); `P4-AL-29b` cites `0061:307-481`, a superseded body the database does not hold, so a reader reasoning from the citation gets a materially wrong answer. In the live body, for a source type that is none of S3/S4/S5 the line FK's **target table and key are unpinned** — its own comment says "for any other type to some third table (the S2 template)" — and no `prosrc` digest is recorded and none of `source_complete` / `source_freeze` / `header_immutable` / `value_complete` is required. Measured on a from-zero database: a `stock_source_bridge_sale` whose line FK pointed at `invoice_items` instead of `sale_items` was reported as **no gap at all**. So `P4-AL-29b`'s obligations are documentation and not enforcement until the guard carries a `sale` arm, and without the replacement the sale would be the least-protected source in the registry (`[[daftar-every-journal-writer-equally-protected]]`). Replacement is the accepted mechanism and not a frozen-file edit: `0063`, `0065` and `0067` each replaced it. |
+| `TL-P4-S2-K4` | `P4-AL-20` | Recorded only, no action: `P4-AL-20` still states the widening as a bare `^P[0-9]+-S[0-9]+$`, while the live `inventory_operation_kinds` CHECK carries `OR registered_by = 'P3-C'`, as `TL-P4-S1-C3` already corrected. Noted so the next reader of `P4-AL-20` is not misled. |
+
 ### Carried forward from P4-S1 (named so it is not lost)
 
-- **No law asserts RLS `ENABLE`/`FORCE` over the DISCOVERED relation surface.** **NOW A TECH LEAD
-  REQUIREMENT: `TL-P4-S1-R2`, and P4-S2's first mandatory protection, before `0077`.** Every assertion in the
-  estate is over a named table list or is a two-build catalogue comparison, so a later relation that forgot
-  to enable or force RLS would be caught by nothing. `0075-E` asserts both on its own five relations from
-  `pg_class`, so P4-S1 itself is covered, and the general law — over `phase3Tables()`, unscoped, in the
-  spirit of the three laws already in the grant matrix — is a **new invariant** rather than a re-expression,
-  which P4-S1's hard order does not authorize. It belongs to the next slice, and it is the first thing that
-  slice should build.
+- ~~**No law asserts RLS `ENABLE`/`FORCE` over the DISCOVERED relation surface.**~~ **DISCHARGED IN P4-S2
+  (`TL-P4-S1-R2`), AND THIS NOTE'S OWN PRESCRIPTION WAS WRONG ON THIS TREE.** The gap was real: every
+  assertion in the estate was over a named table list or was a two-build catalogue comparison, so a later
+  relation that forgot to enable or force RLS would have been caught by nothing. `0075-E` asserts both on its
+  own five relations from `pg_class`, so P4-S1 itself was covered. The law now exists —
+  `scripts/guards/phase4-rls-force.ts`, proved in `tests/guards/phase4-rls-force-guard.test.ts` and run by
+  `gate:phase4:s2` — and it is **scoped to Phase 4**, not to `phase3Tables()`.
+
+  **The `phase3Tables()`, unscoped form this note prescribed is RED ON ARRIVAL, and its red is false.**
+  Measured from `pg_class` on a database built from `0000`–`0076` (2026-10-01, P4-S2): of the **109**
+  relations the accepted inherited prefix creates, **30 carry no `FORCE`** and **29 carry no `ENABLE`** —
+  platform, global reference and registry relations with no tenant dimension at all (`currencies`,
+  `country_registry`, `plans`, `features`, `limit_definitions`, the four assertion-key/use pairs, the
+  operation-kind and movement-kind registries, `units`, `unit_names`, `stock_movement_kinds`,
+  `stock_source_types`, `reserved_store_slugs`, `platform_settings`, `tenants`, `support_sessions` and the
+  rest). `onboarding_operations` is the single inherited relation that **`ENABLE`s and never `FORCE`s**
+  (`0018_onboarding_operations.sql:16`; no `FORCE` for it anywhere in `0000`–`0076`). And `phase3Tables()`
+  is defined as "at the head and not at `0052`" (`tests/helpers/phase3-surface.ts:190-196`), so it is not a
+  Phase 3 set at all: it has **54** members on this tree, **9** of which carry neither flag — the eight
+  inherited registry relations above plus **`schema_migrations`, the applier's own bookkeeping relation**,
+  which that helper does not subtract. A protection that must be born failing is not a protection, and an
+  allowlist to make it pass is what §17.3 refuses.
+
+  **The correct scope is exact rather than narrower**, because `P4-AL-08` makes it so: every Phase 4
+  relation carries `tenant_id` and `business_id`, so the Phase 4 surface is precisely the set on which
+  `ENABLE` + `FORCE` is unconditionally owed. The law therefore partitions its discovered surface
+  structurally — both dimensions ⇒ `ENABLE` + `FORCE` owed; exactly one ⇒ a `P4-AL-08` violation reported as
+  one, with `ENABLE` + `FORCE` still owed; neither ⇒ a declared Phase 4 global registry, **red until this
+  lock records a decision for it** — so a future Phase 4 global registry raises a decision instead of a
+  false red or a silent hole. The partition is 5 / 0 / 0 today. The surface is the union of the migration
+  tree (`phase4MigrationsOnDisk`, bounded by the derived `PHASE4_FIRST_NUMBER`) and the live `pg_class`,
+  minus the applier's own relations **discovered from `apps/api/src/infra/migrate.ts`'s text** rather than
+  excluded by name; each half is the other's completeness proof, and a member of one that the other lacks is
+  reported, never dropped.
 - ~~**`probeStatementsMissingFrom`.**~~ **DISCHARGED IN THIS SLICE** — removed, with both call sites
   restated as positive requirements. See `TL-P4-S1-C20`.
 
