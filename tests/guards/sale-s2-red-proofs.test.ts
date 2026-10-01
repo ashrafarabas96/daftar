@@ -38,7 +38,7 @@ import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'n
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { suiteProblems } from '../../scripts/phase4-s1-gate';
+import { S1_SUITES, isPending, suiteProblems } from '../../scripts/phase4-s1-gate';
 import { LAWS, atomicSaleLawViolations, type SaleWorld } from '../golden-regression/phase4-s2/atomic-sale-law';
 import { censusDelta, requireSubject } from '../golden-regression/phase4-s2/harness';
 import { stockRefusalCode } from '../golden-regression/phase4-s2/sale-path';
@@ -138,6 +138,21 @@ export const RED_PROOFS: readonly { readonly id: string; readonly defect: string
     proof: `${S2_GOLDEN_DIR}/08-sale-idempotency.golden.test.ts::the structural half: a UNIQUE or primary key`,
   },
   {
+    id: 'RP-S2-XTENANT-SALE',
+    defect: 'a Phase 4 WRITING route escapes the enumerated cross-tenant surface, so the one route with no cross-tenant case is the one nobody remembered',
+    proof: 'tests/golden-regression/phase4/01-cross-tenant.golden.test.ts::POST /v1/sales: commits for A',
+  },
+  {
+    id: 'RP-S2-RESOLVER',
+    defect: 'a declared red proof is satisfied by a header comment rather than by an it( title, so the table of proofs is about the files’ prose',
+    proof: 'tests/guards/sale-s2-red-proofs.test.ts::the resolver reads `it(` titles and says NO',
+  },
+  {
+    id: 'RP-S2-PLACEMENT-PREDICATE',
+    defect: 'the placement check compares a list against a regex no member of it can match, so it can only ever say yes',
+    proof: 'tests/guards/sale-s2-red-proofs.test.ts::the placement predicate says NO to the two names',
+  },
+  {
     id: 'RP-S2-VACUITY',
     defect: 'a P4-S2 claim reports green while its subject does not exist',
     proof: 'tests/guards/sale-s2-red-proofs.test.ts::the canary says NO when the subject is absent',
@@ -153,6 +168,47 @@ export const RED_PROOFS: readonly { readonly id: string; readonly defect: string
     proof: 'tests/guards/sale-s2-red-proofs.test.ts::no P4-S2 file turns the sealed gate red',
   },
 ];
+
+/**
+ * Every `it(` title a source declares, as written. A template literal is kept
+ * with its `${...}` holes intact, because a GENERATED title is as real as a
+ * typed one and `resolves` below knows how to match one.
+ */
+export function itTitles(source: string): readonly string[] {
+  const titles: string[] = [];
+  for (const m of source.matchAll(/\bit(?:\.each\([\s\S]*?\))?\(\s*(['"`])((?:\\.|(?!\1)[\s\S])*?)\1/g)) titles.push(m[2] ?? '');
+  return titles;
+}
+
+/** Does `prefix` name this title? A literal title by its prefix; a template title by matching it. */
+export function resolves(title: string, prefix: string): boolean {
+  if (!title.includes('${')) return title.startsWith(prefix);
+  const pattern = title
+    .split(/\$\{[^}]*\}/)
+    .map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+    .join('[\\s\\S]*?');
+  return new RegExp(`^${pattern}`).test(prefix) || new RegExp(pattern).test(prefix);
+}
+
+/**
+ * The sealed gate's placement rule, as a function of a path, so it can be
+ * asked about a file that is not on disk.
+ *
+ * Returns the reason `suiteProblems` (`scripts/phase4-s1-gate.ts:750-758`)
+ * would reject a suite at `path`, or `null` when it would not.
+ */
+export function sealedGateWouldReject(path: string): string | null {
+  const slash = path.lastIndexOf('/');
+  const dir = path.slice(0, slash);
+  const base = path.slice(slash + 1);
+  if (!base.endsWith('.test.ts')) return null;
+  const listed = new Set(S1_SUITES.filter((e) => !isPending(e)).map((e) => (e as { file: string }).file));
+  if (listed.has(path)) return null;
+  if (dir === 'tests/golden-regression/phase4') return `${path} is a Phase 4 golden no S1_SUITES row lists (suiteProblems GOLDEN_DIR clause)`;
+  if (['tests/integration', 'tests/security', 'tests/performance'].includes(dir) && /^(?:p4|phase4)-/.test(base))
+    return `${path} is a Phase 4 suite no S1_SUITES row lists (suiteProblems prefix clause)`;
+  return null;
+}
 
 /** A world in which every law of §15 holds. The tampered worlds below are this one, with one thing changed. */
 const LAWFUL: SaleWorld = {
@@ -317,13 +373,49 @@ describe('P4-S2 red proofs: every law, every canary and the exit status are prov
         problems.push(`${row.id}: ${file} does not exist`);
         continue;
       }
-      // The titles a suite GENERATES from a list are matched too: a generated
-      // title is as real as a typed one.
-      if (!source.includes(title) && !source.includes(title.replace(/^a failure at the \w+ seam/, 'a failure at the ${relation} seam')))
-        problems.push(`${row.id}: no it( title in ${file} begins with ${JSON.stringify(title)}`);
+      const titles = itTitles(source);
+      if (titles.length === 0) {
+        problems.push(`${row.id}: ${file} declares no it( title at all, so no proof in it can resolve`);
+        continue;
+      }
+      if (!titles.some((t) => resolves(t, title)))
+        problems.push(`${row.id}: no it( title in ${file} begins with ${JSON.stringify(title)} — titles are ${JSON.stringify(titles)}`);
     }
     expect(problems, 'a red proof that does not resolve is a claim about a test that is not there (P4-AL-67)').toEqual([]);
     expect(RED_PROOFS.length, 'the table is not empty').toBeGreaterThan(10);
+  });
+
+  it('the resolver reads `it(` titles and says NO to a prefix that only a comment carries', () => {
+    // The red proof of the resolver itself. It used a bare
+    // `source.includes(title)`, which is satisfied by a HEADER COMMENT: a row
+    // naming a claim the file only talks about would have resolved, and the
+    // test titled "resolves to a real `it(` title" would have been about the
+    // file's prose. Every row named a real title at the time, so nothing was
+    // false — but the check could not have said otherwise, and a check that
+    // cannot say no is the class this very file exists to catch.
+    const source = [
+      '/** This file mentions a planted claim in its header and nowhere else. */',
+      "it('a real title that is really here', () => {});",
+      'it(`a generated ${law.id} title`, () => {});',
+    ].join('\n');
+    const titles = itTitles(source);
+    expect(titles, 'both forms of title are read: the literal and the template').toEqual(['a real title that is really here', 'a generated ${law.id} title']);
+    expect(
+      titles.some((t) => resolves(t, 'a real title')),
+      'a literal prefix resolves',
+    ).toBe(true);
+    expect(
+      titles.some((t) => resolves(t, 'a generated L3 title')),
+      'a GENERATED title resolves for a concrete instance of it',
+    ).toBe(true);
+    expect(
+      titles.some((t) => resolves(t, 'a planted claim in its header')),
+      'a prefix only the PROSE carries does NOT resolve',
+    ).toBe(false);
+    expect(
+      titles.some((t) => resolves(t, 'a title that is nowhere')),
+      'a prefix nothing carries does not resolve',
+    ).toBe(false);
   });
 
   it('every P4-S2 golden on disk is named by at least one red proof', () => {
@@ -340,11 +432,23 @@ describe('P4-S2 red proofs: every law, every canary and the exit status are prov
     // tests/performance that no `S1_SUITES` row lists (:750-753) AND any
     // `.test.ts` under `tests/golden-regression/phase4/` that no row lists
     // (:755-758). The sealed gate is not reopened and that file is not this
-    // agent's to edit, so the P4-S2 estate is placed to satisfy both: the
-    // goldens live in `tests/golden-regression/phase4-s2/` and the integration
-    // suites are named `sale-s2-*`. This assertion is what keeps that true
-    // after the next file is added.
+    // agent's to edit, so the P4-S2 estate is placed to satisfy both.
+    //
+    // This one DOES fire: it has already caught a real break.
     expect(suiteProblems(REPO), 'the sealed gate:phase4:s1 suite inventory must stay clean').toEqual([]);
+
+    // The whole-directory law, over the WHOLE listing and not over a subset
+    // already filtered to the names it then tests. The first version of this
+    // assertion read
+    //     const mine = files.filter((f) => /^sale-s2-/.test(f));
+    //     expect(mine.filter((f) => /^(p4|phase4)-/.test(f))).toEqual([]);
+    // in which no string can satisfy both regexes, so it could only ever say
+    // yes — a canary that cannot fail, inside the test whose stated job is the
+    // placement constraint, which is exactly the class `RP-S2-VACUITY` exists
+    // to catch. What the law actually is: every `phase4-*`/`p4-*` suite in
+    // these three directories is LISTED by `S1_SUITES`.
+    const listed = new Set(S1_SUITES.filter((e) => !isPending(e)).map((e) => (e as { file: string }).file));
+    let prefixed = 0;
     for (const dir of ['tests/integration', 'tests/security', 'tests/performance']) {
       let files: string[];
       try {
@@ -352,11 +456,43 @@ describe('P4-S2 red proofs: every law, every canary and the exit status are prov
       } catch {
         continue;
       }
-      const mine = files.filter((f) => /^sale-s2-/.test(f));
-      expect(
-        mine.filter((f) => /^(p4|phase4)-/.test(f)),
-        `a P4-S2 suite in ${dir} must not be named phase4-* or p4-*`,
-      ).toEqual([]);
+      const escaping: string[] = [];
+      for (const f of files) {
+        if (!/^(?:p4|phase4)-.*\.test\.ts$/.test(f)) continue;
+        prefixed += 1;
+        if (!listed.has(`${dir}/${f}`)) escaping.push(`${dir}/${f}`);
+      }
+      expect(escaping, `a phase4-*/p4-* suite in ${dir} that no S1_SUITES row lists turns the SEALED gate red`).toEqual([]);
     }
+    // Non-vacuity: the loop above must have had something to judge. There ARE
+    // listed `phase4-*` suites in those directories, so a zero here means the
+    // regex stopped matching rather than that the estate is clean.
+    expect(prefixed, 'NO SUBJECT — no phase4-*/p4-* suite was examined, so the law above quantified over nothing').toBeGreaterThan(0);
+  });
+
+  it('the placement predicate says NO to the two names this estate was tempted to use', () => {
+    // The planted-defect proof for the rule above. `sealedGateWouldReject` is
+    // the rule as a function of a path, so it can be asked about a file that
+    // is NOT on disk — which is the only way to prove it refuses, given that
+    // putting such a file on disk is the defect.
+    expect(
+      sealedGateWouldReject('tests/integration/phase4-s2-last-item-race.test.ts'),
+      'a phase4-* suite in tests/integration that no S1_SUITES row lists must be rejected',
+    ).toMatch(/S1_SUITES/);
+    expect(sealedGateWouldReject('tests/security/p4-sale-race.test.ts'), 'a p4-* suite in tests/security likewise').toMatch(/S1_SUITES/);
+    expect(
+      sealedGateWouldReject('tests/golden-regression/phase4/05-last-item-race.golden.test.ts'),
+      'ANY unlisted .test.ts under tests/golden-regression/phase4/ must be rejected, prefix or no prefix',
+    ).toMatch(/S1_SUITES/);
+    // …and says YES to where the estate actually is, so it is not a predicate
+    // that refuses everything.
+    for (const path of [
+      'tests/golden-regression/phase4-s2/05-last-item-race.golden.test.ts',
+      'tests/integration/sale-s2-interleaving.test.ts',
+      'tests/guards/sale-s2-red-proofs.test.ts',
+      // A file the sealed gate DOES list is accepted where it is.
+      'tests/golden-regression/phase4/01-cross-tenant.golden.test.ts',
+    ])
+      expect(sealedGateWouldReject(path), `${path} is where the P4-S2 estate is, and must be accepted`).toBeNull();
   });
 });

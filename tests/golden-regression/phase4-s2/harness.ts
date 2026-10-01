@@ -52,6 +52,7 @@ import { DatabaseError } from 'pg';
 import { expect } from 'vitest';
 import { phase4Sql, readTables } from '../../../scripts/phase4-s1-gate';
 import { ownerPool } from '../../helpers/test-app';
+import { SALE_COMMIT_ROUTINE } from './sale-path';
 
 export const REPO = join(__dirname, '..', '..', '..');
 
@@ -130,16 +131,28 @@ export interface SaleSubject {
 export const S2_DECLARED_RELATIONS: readonly string[] = ['sales', 'sale_items', 'stock_source_bridge_sale'];
 
 /**
- * The names the sale commit routine may ship under. A set, not one name,
- * because the routine's signature belongs to the slice that writes it; the
- * harness only has to FIND it, and finding none is the canary firing.
+ * The name of the sale commit routine, read from the SINGLE SOURCE OF TRUTH:
+ * `SALE_COMMIT_ROUTINE` in `sale-path.ts`, which the slice that writes the
+ * route exports and keeps correct.
+ *
+ * This was a four-candidate GUESS (`sale_commit`, `sales_commit`,
+ * `sale_confirm`, `selling_commit_sale`), written when no routine existed. A
+ * guess is the wrong shape even when one of its candidates is right: the
+ * canary's job is to say "the subject is absent", and a guessing canary says
+ * that both when the routine is missing AND when it was renamed to something
+ * outside the list — so a rename would have left every P4-S2 suite
+ * permanently red for a reason that is not a defect, and the fix would have
+ * been to widen the guess rather than to follow the name. One constant, owned
+ * by the route's own slice, decides it.
+ *
+ * `sale-path.ts` imports only a TYPE from this module, so this is not a
+ * runtime cycle.
  */
-export const S2_COMMIT_ROUTINE_CANDIDATES: readonly string[] = ['sale_commit', 'sales_commit', 'sale_confirm', 'selling_commit_sale'];
+export { SALE_COMMIT_ROUTINE } from './sale-path';
 
 export async function saleSubject(q: Queryable = ownerPool()): Promise<SaleSubject> {
   const relations = await existingRelations(q, S2_DECLARED_RELATIONS);
-  let routine: string | null = null;
-  for (const candidate of S2_COMMIT_ROUTINE_CANDIDATES) if (await routineExists(q, candidate)) routine = candidate;
+  const routine = (await routineExists(q, SALE_COMMIT_ROUTINE)) ? SALE_COMMIT_ROUTINE : null;
   const stockSourceTypeSale = await registryHas(q, 'stock_source_types', 'source_type', 'sale');
   const accountingSourceTypeSale = await registryHas(q, 'accounting_source_types', 'source_type', 'sale');
   const accountingSourceTypeInvoice = await registryHas(q, 'accounting_source_types', 'source_type', 'invoice');
@@ -150,7 +163,7 @@ export async function saleSubject(q: Queryable = ownerPool()): Promise<SaleSubje
 
   const missing: string[] = [];
   for (const rel of S2_DECLARED_RELATIONS) if (!relations.includes(rel)) missing.push(`relation ${rel}`);
-  if (routine === null) missing.push(`a sale commit routine (none of ${S2_COMMIT_ROUTINE_CANDIDATES.join(', ')})`);
+  if (routine === null) missing.push(`the sale commit routine ${SALE_COMMIT_ROUTINE}`);
   if (!stockSourceTypeSale) missing.push(`stock_source_types row 'sale'`);
   if (!accountingSourceTypeSale) missing.push(`accounting_source_types row 'sale'`);
   if (!accountingSourceTypeInvoice) missing.push(`accounting_source_types row 'invoice'`);
