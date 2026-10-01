@@ -588,6 +588,90 @@ See §9.
 
 ---
 
+## 7d. `sales_cogs_owed` — the matched pair, and a contradiction it uncovered
+
+`tests/integration/sale-s2-cogs-owed.test.ts`. Two halves.
+
+### The live-catalogue half, provable today — and RED
+
+The law has two arms and they are a matched pair: a committed sale whose
+bridged movements carry a **non-zero** total value and no `sale` binding must
+fail at COMMIT; a **zero**-valued one must commit, with one entry and no
+binding. The zero arm is not decoration — three deliberate weakenings in this
+slice rest on it and on nothing else:
+
+1. `sales_binding_owed_ck` is deliberately weaker than C-01's strict
+   `(status <> 'draft') = (binding_source_id IS NOT NULL)`;
+2. the seam's `conditional` authority arm exists so a declared assertion's
+   entry may legitimately not exist;
+3. `sales_cogs_owed()` itself carries a `v_cost = 0` branch.
+
+**All three are justified by a state nothing can reach.**
+`stock_source_complete_sale()` and `stock_source_complete_sale_header()` each
+require every line of a non-draft sale to carry exactly one bridged `sale`
+movement with **`value_delta_base_minor < 0`**, strictly. A zero-valued sale
+movement — which `0060:388-390` produces exactly, by valuing an emptying
+outbound at the stored valuation — does not match, the guards' `v_ok` count
+falls short, and the sale is refused
+`inventory.source_movement_set_incomplete`. `inventory_sale_cost_base_minor`
+negates a sum of strictly-negative numbers, so `v_cost = 0` is unreachable by
+construction.
+
+The two readings cannot both be right, and which is wrong is the migration
+owner's call:
+
+* **(a) the zero-cost sale is real** — the stock-side predicates are `<= 0`,
+  and the law goes quiet; or
+* **(b) the zero-cost sale is refused on purpose** — then the zero branch is
+  dead, the seam's `conditional` arm has no case, and `sales_binding_owed_ck`
+  should return to C-01's **strict iff**, which is a *stronger* law than the
+  one in the tree.
+
+The law is `zeroCostArmProblems`, a pure function of the three function
+bodies read from `pg_get_functiondef` (the live catalogue is the policy; a
+function a later migration replaces is the one that runs, and the file that
+first created it is not). It is **red on this head, naming both guards**.
+
+Non-vacuity is explicit and throws: each definition must be non-empty, the
+`v_cost = 0` premise must really be in the tree (without it the law has no
+premise and must stay quiet — otherwise it would force resolution (a) by
+construction), and each stock-side guard must really compare the movement's
+value with zero.
+
+Four planted red proofs, each run and each red: `<` on the line guard; `<` on
+the header guard alone (one arm is not enough); a guard that constrains the
+value with nothing (reported, not passed); and the no-premise world (quiet,
+whatever the predicates are). Recorded as `RP-S2-COGS-LINE`,
+`RP-S2-COGS-HEADER`, `RP-S2-COGS-UNCONSTRAINED` and `RP-S2-COGS-PREMISE`.
+
+### The behavioural half — canary-red until `0078`
+
+The matched pair driven through the real command: the ZERO arm brings stock in
+at a unit cost of 0 and asserts the sale **commits**, carries a cost of exactly
+`'0'`, holds **no** `sale` binding, has **no** journal entry sourced on the sale
+while the invoice's revenue entry **is** posted, and still satisfies
+`GL Inventory (1200) = Σ stock_movements.value_delta_base_minor`. The NON-ZERO
+arm asserts a priced sale's cost is neither `'0'` nor `NULL`, that
+`binding_source_id` is the sale's own id (`sales_binding_identity_ck`), and that
+the id names a real `accounting_source_bindings` row rather than a dangling one.
+A third test reads the trigger from `pg_trigger` and asserts it is `DEFERRABLE`
+and `INITIALLY DEFERRED` — not decoration: a non-deferred trigger would judge
+the sale before the entry it is owed could exist and would refuse every sale.
+
+**Why this half is not a fixture.** The only sanctioned producer of a committed
+sale is `sale_commit`. `stock_movements` is append-only and reachable only
+through `inventory_apply_stock_movements`, itself reachable only from a
+registered entry routine, and a confirmed sale additionally owes
+`stock_source_complete_sale`, `stock_source_complete_sale_header`,
+`sales_binding_fk`, `sales_walkin_no_ar` and `stock_binding_requires_sale`.
+Hand-building it would mean reimplementing `sale_commit` in a test, and a law
+proved against a reimplementation is a law about the reimplementation. So the
+pair is canary-gated on `sale_commit` and goes green the day `0078` lands —
+**except that the ZERO arm cannot go green at all until the contradiction above
+is resolved**, which is what makes the two halves one finding rather than two.
+
+---
+
 ## 8. Open items for other owners
 
 1. **`docs/DAFTAR_GOLDEN_REGRESSION_SUITE.md:41`** states GOLD-33 as
@@ -634,6 +718,7 @@ path exists on this branch and every one is run by the commands in §0.
 | `S2-G08` | `tests/golden-regression/phase4-s2/08-sale-idempotency.golden.test.ts` | the replay contract, structural and behavioural | canary-red until `0078` |
 | `S2-I01` | `tests/integration/sale-s2-interleaving.test.ts` | that the forcing **mechanism** works: the `blockedBehind` fixed point, every throw of `waitUntilQueued`, a planted real `40P01` classified and refused | **green now** |
 | `S2-I02` | `tests/integration/sale-s2-atomic-law.test.ts` | failure injection at every discovered seam, and that nothing survives | canary-red until `0078` |
+| `S2-C01` | `tests/integration/sale-s2-cogs-owed.test.ts` | C-07's matched pair: the live-catalogue agreement law (red on this head — see §7d) and the behavioural ZERO/NON-ZERO arms | **mixed**: the agreement law and its four planted proofs run today, the behavioural pair is canary-red until `0078` |
 | `S2-R01` | `tests/guards/sale-s2-red-proofs.test.ts` | that every law on the books has a planted defect, that the canary fails in both directions, that the runner's exit status can say no, and `suiteProblems(REPO) == []` | **green now** |
 
 Three notes for whoever wires them.
