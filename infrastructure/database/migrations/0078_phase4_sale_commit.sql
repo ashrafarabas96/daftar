@@ -50,7 +50,10 @@
 --     and what makes it safe is the DEFERRED `sales_cogs_owed` trigger of
 --     `0077`, not a second check here. A refusal here would refuse the
 --     lawful case.
---   * It creates NO `invoice_sequences` row. See `R-P4-S2-78-03`.
+--   * It creates no `invoice_sequences` row AT APPLY TIME. The ROUTINE
+--     creates the row of a `(business, year)` on FIRST USE — see the
+--     corrected `R-P4-S2-78-03` — but this file inserts nothing, and
+--     0078-E(8) still asserts the invoice relations are empty after it.
 --   * It carries NO `MIGRATION_MANIFEST.json` entry (`TL-P4-S1-C8`), and
 --     `0000`–`0077` are untouched.
 --
@@ -68,15 +71,52 @@
 --     own arguments; a disagreement is `sale.state_changed`. Client totals
 --     are not authoritative and neither are the service's.
 --
---   R-P4-S2-78-03  THE SERIES ROW IS A PRECONDITION, NOT A SIDE EFFECT.
+--   R-P4-S2-78-03  THE SERIES ROW IS CREATED ON FIRST USE (TL-P4-S2-R4).
 --     `invoice_sequences` holds no counter (`0075:29-33`) and NOTHING in
---     `0000`–`0077` inserts a row into it. This routine therefore REFUSES
---     `sale.issue_invoice` when the business has stated no series for the
---     period, and does not invent one: a default `number_format` is a
---     product decision about what every document of that business will be
---     called forever, and a migration is not where that is decided.
+--     `0000`–`0076` inserts a row into it, so the earlier reading of this
+--     rule — refuse `sale.issue_invoice` until the merchant states a series
+--     — left a CLEAN BUSINESS with no supported path to its first invoice.
+--     That was reported as a product blocker and ruled on: a sale endpoint
+--     that requires manual SQL setup is not a complete product path. The
+--     Tech Lead's ruling fixes the default internal numbering format, and
+--     step 10 below creates the row of a `(business, year)` the first time
+--     one is needed, with that format, and then locks it.
 --
---   R-P4-S2-78-04  THE SEQUENCE ROW IS LOCKED, NEVER WRITTEN. The ordinal is
+--     WHAT THE DEFAULT IS AND IS NOT. `INV-{YYYY}-{SEQ:6}` renders
+--     `INV-2026-000001`: a DAFTAR-INTERNAL document identifier and NOT a
+--     claim of jurisdiction-specific fiscal or tax compliance. **OD-03
+--     REMAINS OPEN.** No country's invoice law, VAT rule, registration
+--     threshold or legal invoice field is researched or encoded here
+--     (`P4-AL-45`), and a Country Pack may impose legal requirements of its
+--     own later, independently of this default.
+--
+--     THE WIDTH IS SPELLED `{SEQ:6}` AND NOT `{SEQ:06}`, AND THAT IS NOT A
+--     CHOICE THIS FILE MADE. `invoice_sequences_format_ck` (`0075:379`)
+--     admits `\{SEQ:[1-9][0-9]?\}` — the first digit of the width cannot be
+--     `0` — and `0075` is FROZEN. `{SEQ:6}` is this estate's spelling of
+--     "zero-pad the ordinal to six", which is what the ruling's `{SEQ:06}`
+--     asks for, and it renders the same six-digit number. The literal
+--     string `{SEQ:06}` would need a frozen CHECK widened, which only the
+--     Tech Lead may authorise; the deviation is reported rather than taken
+--     quietly, and nothing below depends on which spelling wins.
+--
+--   R-P4-S2-78-04  THE SEQUENCE ROW IS CREATED ONCE, THEN LOCKED, AND ITS
+--     FORMAT IS NEVER REWRITTEN. The initialiser is a single
+--     `INSERT … ON CONFLICT (business_id, document_kind, period) DO
+--     NOTHING`, which is the whole of the concurrency argument: two
+--     concurrent first sales of a new year produce ONE row, because the
+--     PRIMARY KEY decides it, and the loser's `DO NOTHING` waits on the
+--     winner's transaction and then leaves the winner's `number_format`
+--     exactly as it is. `DO UPDATE` would be the defect: it would hand
+--     this writer the right to rewrite a merchant's format, which is
+--     precisely the authority the column-level grant below withholds.
+--     There is no retry loop and no second order
+--     ([[daftar-lock-order-not-retry]]): the INSERT sits where the lock
+--     already sat, at step 10, LAST (`P4-AL-32`), and its only FK —
+--     `invoice_sequences_tenant_fk` on `businesses` — takes a `FOR KEY
+--     SHARE` the `sales` insert of step 6 has already taken through
+--     `sales_tenant_fk`, so no lock-order edge is added at all.
+--     Then the row is LOCKED and never rewritten. The ordinal is
 --     `coalesce(max(number_seq), 0) + 1` read from `invoices` while holding
 --     the series row `FOR NO KEY UPDATE`, with `invoices_number_uq`
 --     (`0075:286`) as the backstop that turns a missed lock into a refusal
@@ -85,10 +125,13 @@
 --     `UPDATE (financial_started_at)` alone), so this file grants
 --     `UPDATE (updated_at)` and NOT a table-level `UPDATE`: the latter is
 --     authority to rewrite a merchant's `number_format`, which no law here
---     rests on. 0078-E asserts that the routine's own body contains no
---     `UPDATE` of that relation AND that the privilege itself is neither
---     table-level nor on any other column — so it is the lock's and nothing
---     else's, by privilege and not only by body.
+--     rests on. 0078-E(5) asserts that the routine's own body contains no
+--     `UPDATE` and no `DELETE` of that relation, that it carries EXACTLY ONE
+--     `INSERT` into it and that the insert is `ON CONFLICT … DO NOTHING`;
+--     0078-E(7) asserts that the privilege itself is neither table-level nor
+--     on any column but `updated_at` — so the UPDATE is the lock's and
+--     nothing else's, by privilege and not only by body, and the INSERT can
+--     create a row but can never overwrite one.
 --
 --   R-P4-S2-78-05  GRANT BEFORE OWNER ([[daftar-grant-before-owner]],
 --     `P4-AL-39`): a `GRANT` issued after `OWNER TO` warns and commits, so
@@ -189,16 +232,37 @@ $pre$;
 --    satisfied by `UPDATE` on ANY ONE COLUMN, which is why `0045:399` lets
 --    `daftar_accounting_internal` lock `businesses` through
 --    `UPDATE (financial_started_at)` alone. The series row is LOCKED and
---    NEVER WRITTEN (`R-P4-S2-78-03`: `invoice_sequences` holds no counter,
+--    NEVER REWRITTEN (`R-P4-S2-78-03`: `invoice_sequences` holds no counter,
 --    so there is nothing on it to advance), so a TABLE-LEVEL `UPDATE` would
 --    hand this writer the right to rewrite a merchant's `number_format` —
 --    authority no law here rests on. The named column is `updated_at`: the
 --    lifecycle column, the one a legitimate rewrite of the series would
 --    touch, and the narrowest grant that still carries the lock. 0078-E(5)
---    already proves the routine's body writes `invoice_sequences` nowhere;
---    0078-E(7) now proves the privilege itself cannot be used for more.
+--    proves the routine's body never UPDATEs or DELETEs the series row;
+--    0078-E(7) proves the privilege itself cannot be used for more.
+--
+--    AND THE SERIES ALSO TAKES AN `INSERT`, WHICH IS A DIFFERENT AUTHORITY.
+--    TL-P4-S2-R4 made the first-use row a product path, so the writer must
+--    be able to CREATE a `(business, year)` series. `INSERT` creates; it
+--    cannot overwrite. Combined with the `ON CONFLICT … DO NOTHING` of step
+--    10 and the withheld table-level `UPDATE`, a merchant's stated
+--    `number_format` is unreachable from this routine by construction: there
+--    is no statement it is privileged to issue that could change one.
+--    `invoice_sequences_key_guard` (`0075:639`) is BEFORE UPDATE OR DELETE
+--    only, so an INSERT is not something it was written to refuse, and the
+--    row-security side is unchanged: the RESTRICTIVE
+--    `business_isolation_insert` (`0075:480`) and the PERMISSIVE
+--    `tenant_membership` (`0075:475`) are the same two policies the
+--    `invoices` insert of step 10 already satisfies, under the same
+--    `app_business()` / `app_tenant()` settings, and NEITHER carries a
+--    `current_user = 'daftar_inventory_internal'` exemption — so the
+--    initialiser is admitted by the tenancy of the REQUEST and by nothing
+--    about who owns the routine. Asserted against the live catalogues in
+--    0078-E(7) and behaviourally in
+--    `tests/integration/sale-s2-sequence-init.test.ts`.
 -- ─────────────────────────────────────────────────────────────────────────
 GRANT INSERT ON invoices, invoice_items TO daftar_inventory_internal;
+GRANT INSERT ON invoice_sequences TO daftar_inventory_internal;
 GRANT UPDATE (updated_at) ON invoice_sequences TO daftar_inventory_internal;
 -- The name snapshot the sale and the invoice both store is read from
 -- `product_translations` (`0036:9`), which `0053:253` did not grant to this
@@ -848,18 +912,53 @@ BEGIN
 
   -- ── Step 10. The number, LAST of the domain locks (P4-AL-32). ────────
   --
-  -- The series row is held `FOR NO KEY UPDATE` and the ordinal is read as
-  -- `max + 1` from `invoices` under that lock; there is no counter column to
-  -- bump (`0075:29-33`, `P4-AL-31`) and this routine writes nothing to
-  -- `invoice_sequences` (R-P4-S2-78-04). `invoices_number_uq` is the
-  -- backstop: a missed lock is a refusal, never a duplicate number.
+  -- The series row is CREATED ON FIRST USE, then held `FOR NO KEY UPDATE`,
+  -- and the ordinal is read as `max + 1` from `invoices` under that lock;
+  -- there is no counter column to bump (`0075:29-33`, `P4-AL-31`) and the
+  -- ordinal is never stored on the series row (R-P4-S2-78-04).
+  -- `invoices_number_uq` is the backstop: a missed lock is a refusal, never
+  -- a duplicate number.
+  --
+  -- The period is the DOCUMENT DATE's year and nothing else — not `now()`,
+  -- not the business timezone's today (R-P4-S2-78-01): a series the server
+  -- picked from the clock is a series the fingerprint does not cover.
   v_period := to_char(p_document_date, 'YYYY');
+
+  -- TL-P4-S2-R4. The first invoice of a `(business, year)` creates its own
+  -- series row rather than refusing. `DO NOTHING` — never `DO UPDATE` — so a
+  -- row that is ALREADY there keeps its `number_format` untouched, whatever
+  -- the merchant has set it to; and two concurrent first sales of a new year
+  -- produce exactly ONE row, because the loser's insert waits on the
+  -- winner's transaction and then does nothing. The INSERT is HERE, at step
+  -- 10, and not earlier: `invoice_sequences` is LAST in the lock order
+  -- (`P4-AL-32`) and this statement must not move it forward. It adds no
+  -- lock-order edge of its own — its one FK, `invoice_sequences_tenant_fk`,
+  -- needs the same `businesses` `FOR KEY SHARE` that `sales_tenant_fk` took
+  -- at step 6. No retry loop: a retry is a second order
+  -- ([[daftar-lock-order-not-retry]]).
+  --
+  -- `INV-{YYYY}-{SEQ:6}` is the DEFAULT OUT-OF-BOX DAFTAR-INTERNAL format
+  -- and is NOT a claim of fiscal or tax compliance in any jurisdiction
+  -- (OD-03 REMAINS OPEN, `P4-AL-45`). `{SEQ:6}` rather than the ruling's
+  -- `{SEQ:06}` because `invoice_sequences_format_ck` (`0075:379`) admits no
+  -- leading zero in the width and `0075` is frozen; both spell the same
+  -- six-digit zero-padded ordinal. See R-P4-S2-78-03.
+  INSERT INTO invoice_sequences (tenant_id, business_id, document_kind, period, number_format)
+  VALUES (v_tenant, v_business, 'invoice', v_period, 'INV-{YYYY}-{SEQ:6}')
+  ON CONFLICT (business_id, document_kind, period) DO NOTHING;
+
+  -- THEN the lock, on that exact row. After the statement above, in READ
+  -- COMMITTED, the row is there and visible: either this transaction
+  -- inserted it, or the concurrent inserter it waited on committed its own.
+  -- The `NOT FOUND` arm is therefore a can't-happen backstop and no longer
+  -- the product's answer to a clean business — it survives as a refusal
+  -- rather than as a silent NULL `number_format`.
   SELECT s.number_format INTO v_format
   FROM invoice_sequences s
   WHERE s.business_id = v_business AND s.document_kind = 'invoice' AND s.period = v_period
   FOR NO KEY UPDATE;
   IF NOT FOUND THEN
-    RAISE EXCEPTION 'sale.issue_invoice: this business has stated no invoice series for %, so the document cannot be numbered', v_period
+    RAISE EXCEPTION 'sale.issue_invoice: the invoice series for % could not be read back after its initialisation', v_period
       USING ERRCODE = 'P0001';
   END IF;
   SELECT coalesce(max(i.number_seq), 0) + 1 INTO v_seq
@@ -922,7 +1021,7 @@ $$;
 COMMENT ON FUNCTION sale_commit(UUID, UUID, TEXT, UUID, UUID, UUID, DATE, DATE, CHAR(3), UUID, NUMERIC, TEXT, TIMESTAMPTZ,
                                 BIGINT, BIGINT, BIGINT, BIGINT, TEXT, UUID[], UUID[], UUID[], UUID[], TEXT[], NUMERIC[],
                                 BIGINT[], BIGINT[], BIGINT[], BIGINT[], BIGINT[]) IS
-  'P4-S2 C-09. The trusted atomic sale command: consumes the sale.commit invctl/1 assertion over its own 29 arguments, takes the per-document advisory lock, re-derives and compares the request-only intent digest before reading any state (replay returns (true, the stored COGS) having written nothing; a different intent is sale.idempotency_conflict), takes the domain locks in SALE_COMMIT_LOCK_ORDER, RECOMPUTES every amount from the catalogue and refuses sale.state_changed on any disagreement, inserts sales as confirmed with NO binding and sale_items, calls inventory_apply_stock_movements with both cost columns NULL so the writer values the movement and raises inventory.insufficient_stock under the stock key lock, bridges the bindings, sets binding_source_id to the sale itself exactly when the bridged value is non-zero (a zero-cost sale owes no COGS entry, so it keeps a NULL binding), allocates the invoice ordinal as max+1 while holding the series row FOR NO KEY UPDATE and inserts invoices as open with invoice_items, and returns (false, the summed value deltas). Writes NO journal line. Reads NO clock into anything hashed. Admits the ZERO-valued sale, whose COGS is 0 and whose obligation is judged by the deferred sales_cogs_owed. SECURITY DEFINER, owned by daftar_inventory_internal, EXECUTE to daftar_app only.';
+  'P4-S2 C-09. The trusted atomic sale command: consumes the sale.commit invctl/1 assertion over its own 29 arguments, takes the per-document advisory lock, re-derives and compares the request-only intent digest before reading any state (replay returns (true, the stored COGS) having written nothing; a different intent is sale.idempotency_conflict), takes the domain locks in SALE_COMMIT_LOCK_ORDER, RECOMPUTES every amount from the catalogue and refuses sale.state_changed on any disagreement, inserts sales as confirmed with NO binding and sale_items, calls inventory_apply_stock_movements with both cost columns NULL so the writer values the movement and raises inventory.insufficient_stock under the stock key lock, bridges the bindings, sets binding_source_id to the sale itself exactly when the bridged value is non-zero (a zero-cost sale owes no COGS entry, so it keeps a NULL binding), creates the (business, document-date year) invoice series row on first use with the default DAFTAR-internal format INV-{YYYY}-{SEQ:6} if it is not there (INSERT ... ON CONFLICT DO NOTHING, so an existing number_format is never overwritten; TL-P4-S2-R4, and no jurisdiction fiscal rule is implied - OD-03 is OPEN), allocates the invoice ordinal as max+1 while holding that series row FOR NO KEY UPDATE and inserts invoices as open with invoice_items, and returns (false, the summed value deltas). Writes NO journal line. Reads NO clock into anything hashed. Admits the ZERO-valued sale, whose COGS is 0 and whose obligation is judged by the deferred sales_cogs_owed. SECURITY DEFINER, owned by daftar_inventory_internal, EXECUTE to daftar_app only.';
 
 -- ─────────────────────────────────────────────────────────────────────────
 
@@ -1039,6 +1138,19 @@ DECLARE
 BEGIN
   -- (a) The renderer pads and never truncates, and refuses a format that
   --     states only one of the two placeholders.
+  -- The DEFAULT of TL-P4-S2-R4, rendered: a six-digit zero-padded first
+  -- ordinal, and a format `invoice_sequences_format_ck` (`0075:379`) admits.
+  -- A DAFTAR-INTERNAL identifier; no jurisdiction's law is encoded (OD-03
+  -- is OPEN, `P4-AL-45`).
+  IF sale_document_number('INV-{YYYY}-{SEQ:6}', '2026', 1) <> 'INV-2026-000001' THEN
+    RAISE EXCEPTION 'selling.migration_end_state_invalid: the default internal numbering format does not render a six-digit zero-padded first ordinal'
+      USING ERRCODE = 'P0001';
+  END IF;
+  IF NOT EXISTS (SELECT 1 WHERE 'INV-{YYYY}-{SEQ:6}' ~ '^[A-Za-z0-9/-]*\{YYYY\}[A-Za-z0-9/-]*\{SEQ:[1-9][0-9]?\}[A-Za-z0-9/-]*$'
+                              AND char_length('INV-{YYYY}-{SEQ:6}') BETWEEN 8 AND 64) THEN
+    RAISE EXCEPTION 'selling.migration_end_state_invalid: the default internal numbering format is not one invoice_sequences_format_ck admits'
+      USING ERRCODE = 'P0001';
+  END IF;
   IF sale_document_number('INV-{YYYY}-{SEQ:5}', '2026', 7) <> 'INV-2026-00007' THEN
     RAISE EXCEPTION 'selling.migration_end_state_invalid: proof(a): the renderer does not pad the ordinal' USING ERRCODE = 'P0001';
   END IF;
@@ -1168,14 +1280,42 @@ BEGIN
   END LOOP;
 
   -- (5) The body, read from `pg_proc.prosrc` rather than from this file:
-  --     no clock default, and the sequence row is locked and never written.
+  --     no clock default, and the sequence row is CREATED ONCE, LOCKED, and
+  --     never rewritten. TL-P4-S2-R4 replaced the older reading of this
+  --     check — which asserted the routine writes `invoice_sequences`
+  --     NOWHERE — because a routine that cannot create the row leaves a
+  --     clean business with no path to its first invoice. What the privilege
+  --     argument actually needs is narrower and is what is asserted now:
+  --     exactly ONE insert, `ON CONFLICT … DO NOTHING`, and no UPDATE or
+  --     DELETE at all. A `DO UPDATE` would overwrite a merchant's
+  --     `number_format` with the default on every sale, which is the defect
+  --     the old blanket check was standing in for.
   SELECT p.prosrc INTO v_def FROM pg_proc p WHERE p.oid = c_commit::regprocedure;
   IF v_def ~* 'coalesce\s*\(\s*p_(document_date|due_date)' THEN
     RAISE EXCEPTION 'selling.migration_end_state_invalid: 0078-E(5): a date argument is defaulted inside the routine (P4-AL-30)'
       USING ERRCODE = 'P0001';
   END IF;
-  IF v_def ~* '(update|insert\s+into|delete\s+from)\s+invoice_sequences' THEN
-    RAISE EXCEPTION 'selling.migration_end_state_invalid: 0078-E(5): the routine writes invoice_sequences, so the UPDATE privilege is not only the lock''s'
+  IF v_def ~* '\mupdate\s+(public\.)?invoice_sequences\M' OR v_def ~* 'delete\s+from\s+(public\.)?invoice_sequences' THEN
+    RAISE EXCEPTION 'selling.migration_end_state_invalid: 0078-E(5): the routine UPDATEs or DELETEs invoice_sequences, so the UPDATE privilege is not only the lock''s and a merchant''s number_format is reachable from it'
+      USING ERRCODE = 'P0001';
+  END IF;
+  -- The first-use initialiser: exactly one, and it can only CREATE.
+  IF (SELECT count(*) FROM regexp_matches(v_def, 'insert\s+into\s+(public\.)?invoice_sequences', 'gi')) <> 1 THEN
+    RAISE EXCEPTION 'selling.migration_end_state_invalid: 0078-E(5): the routine does not carry EXACTLY ONE insert into invoice_sequences, so the first-use initialiser of TL-P4-S2-R4 is missing or duplicated'
+      USING ERRCODE = 'P0001';
+  END IF;
+  IF position('ON CONFLICT (business_id, document_kind, period) DO NOTHING' IN v_def) = 0 THEN
+    RAISE EXCEPTION 'selling.migration_end_state_invalid: 0078-E(5): the series initialiser is not ON CONFLICT (business_id, document_kind, period) DO NOTHING, so two concurrent first sales of a year are not decided by the primary key'
+      USING ERRCODE = 'P0001';
+  END IF;
+  IF v_def ~* 'on\s+conflict[^;]*do\s+update' THEN
+    RAISE EXCEPTION 'selling.migration_end_state_invalid: 0078-E(5): the series initialiser upserts, so it would overwrite a merchant''s number_format with the default'
+      USING ERRCODE = 'P0001';
+  END IF;
+  -- The default format itself, pinned in the body: a default silently
+  -- changed is every later document of every business renamed.
+  IF position('''INV-{YYYY}-{SEQ:6}''' IN v_def) = 0 THEN
+    RAISE EXCEPTION 'selling.migration_end_state_invalid: 0078-E(5): the default internal numbering format INV-{YYYY}-{SEQ:6} is not the one the initialiser writes (TL-P4-S2-R4; a DAFTAR-internal identifier, not a fiscal-compliance claim — OD-03 is OPEN)'
       USING ERRCODE = 'P0001';
   END IF;
   IF position('FOR NO KEY UPDATE' IN v_def) = 0 THEN
@@ -1212,11 +1352,14 @@ BEGIN
   END IF;
 
   -- (7) The privileges the owner needs, and NO MORE: INSERT on the invoice
-  --     relations, the column-level UPDATE on the series that carries the
-  --     row lock and nothing else, and still NO DML for daftar_app on any
-  --     Phase 4 relation (P4-AL-38).
+  --     relations and on the series (the first-use initialiser of
+  --     TL-P4-S2-R4, which can create a row and can never overwrite one),
+  --     the column-level UPDATE on the series that carries the row lock and
+  --     nothing else, and still NO DML for daftar_app on any Phase 4
+  --     relation (P4-AL-38).
   IF NOT has_table_privilege('daftar_inventory_internal', 'invoices', 'INSERT')
      OR NOT has_table_privilege('daftar_inventory_internal', 'invoice_items', 'INSERT')
+     OR NOT has_table_privilege('daftar_inventory_internal', 'invoice_sequences', 'INSERT')
      OR NOT has_column_privilege('daftar_inventory_internal', 'invoice_sequences', 'updated_at', 'UPDATE') THEN
     RAISE EXCEPTION 'selling.migration_end_state_invalid: 0078-E(7): the routine''s owner cannot write what the routine writes'
       USING ERRCODE = 'P0001';
@@ -1231,6 +1374,27 @@ BEGIN
     RAISE EXCEPTION 'selling.migration_end_state_invalid: 0078-E(7): the series UPDATE is table-level, which is authority to rewrite a number_format rather than authority to take a row lock'
       USING ERRCODE = 'P0001';
   END IF;
+  IF has_table_privilege('daftar_inventory_internal', 'invoice_sequences', 'DELETE') THEN
+    RAISE EXCEPTION 'selling.migration_end_state_invalid: 0078-E(7): the writer can DELETE a series row, and a deleted series is a renumbered business'
+      USING ERRCODE = 'P0001';
+  END IF;
+  -- The INSERT the initialiser needs is for the INTERNAL writer alone. A
+  -- runtime principal holding it would be a client that can name its own
+  -- document format, which P4-AL-38 refuses from the other side.
+  -- PUBLIC needs no row of its own: `has_table_privilege` counts a privilege
+  -- granted to PUBLIC as held by every role, so a PUBLIC grant shows up here
+  -- as every principal holding it.
+  FOR v_name IN
+    SELECT r.rolname::text FROM pg_roles r
+     WHERE r.rolname = ANY (ARRAY['daftar_app', 'daftar_platform', 'daftar_worker', 'daftar_identity',
+                                  'daftar_resolver', 'daftar_provisioner', 'daftar_reconciler'])
+     ORDER BY 1
+  LOOP
+    IF has_table_privilege(v_name, 'invoice_sequences', 'INSERT') THEN
+      RAISE EXCEPTION 'selling.migration_end_state_invalid: 0078-E(7): % holds INSERT on invoice_sequences, so a client could state the format its own documents are numbered with', v_name
+        USING ERRCODE = 'P0001';
+    END IF;
+  END LOOP;
   IF EXISTS (SELECT 1 FROM information_schema.column_privileges
               WHERE grantee = 'daftar_inventory_internal' AND table_schema = 'public'
                 AND table_name = 'invoice_sequences' AND privilege_type = 'UPDATE'
