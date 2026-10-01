@@ -144,6 +144,14 @@ export const S2_SUITES: readonly SuiteRow[] = [
       'tests/guards/sale-s2-gate-execution.test.ts::a scratch roster whose suite FAILS makes the execution check red, while the same roster passing is green',
   },
   {
+    id: 'S2-E01',
+    file: 'tests/integration/sale-s2-error-contract.test.ts',
+    claim:
+      'the P0001 error contract of the selling surface (TL-P4-S2-R5): a known selling code keeps its REGISTERED status, a violated internal Phase 4 invariant is a 500 rather than a 403, and the historical P0001 fallback, 42501, the inventory mappings and the accounting mappings do not move',
+    proof:
+      'tests/integration/sale-s2-error-contract.test.ts::REAL ROUTE — PLANTED: an internal `selling.*` invariant reached through the commit is 500 INTERNAL_ERROR, not 403',
+  },
+  {
     id: 'S2-W01',
     file: 'tests/guards/required-ci-chain-composition.test.ts',
     claim:
