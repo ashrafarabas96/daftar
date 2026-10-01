@@ -116,16 +116,22 @@ const SELLING_STATUS = {
   /** The whole sale was discounted to nothing: an invoice total of zero is not representable (`0075:260`). */
   'sale.total_zero': 422,
   'sale.currency_unknown': 422,
-  /**
-   * A sale of stock whose average cost is zero: it releases no value, so
-   * there is no POSITIVE COGS entry to post, and `journal_lines` refuses a
-   * zero amount. `deriveSaleCogsEntryLines` refuses to derive one, so such a
-   * sale cannot be authorized at all until the accounting module gains a
-   * `cogs: null` arm and the seam a one-assertion sale. It is refused under
-   * a stable code rather than posted wrongly, and the gap is REPORTED — an
-   * accounting-integrity gap is never closed by a weaker posting.
-   */
-  'sale.zero_cost_stock': 422,
+  //
+  // There is deliberately NO code for a sale of zero-VALUED stock. Such a
+  // sale is legitimate and COMMITS with one entry: `journal_lines_money_cap_ck`
+  // (`0042:225`) refuses a zero amount, `0060:388-390` gives the emptying
+  // movement exactly `-valuation_base_minor`, and `GL Inventory (1200) =
+  // Σ value_delta_base_minor` still holds at 0. It is handled by
+  // `postings.cogs === null`, the conditional seam arm and the deferred
+  // `sales_cogs_owed` trigger — a legitimate sale that cannot commit is a
+  // worse outcome than any refusal code suggests.
+  //
+  // And there is no code for a sale that moved NO stock at all. Every line
+  // produces exactly one movement, so a sale with no movements is a sale with
+  // no lines — `sale.lines_required` above — and the accounting module's own
+  // `accounting.payload_invalid` ("a sale moves stock: a commit with no
+  // movements is not a sale") is a CALLER DEFECT reported as one, never a
+  // merchant outcome dressed as a 422.
   'sale.fx_rate_missing': 422,
   /** The catalogue, the customer, the rate or the stock moved under the command's locks. Retryable BY THE CLIENT; there is no server retry. */
   'sale.state_changed': 409,
