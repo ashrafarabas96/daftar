@@ -246,7 +246,11 @@ describe('TL-P4-S2-R2: the P4-S2 gate EXECUTES its roster, and the execution che
     // A shell pipeline's exit status is the LAST stage's. This is the trap in
     // the flesh: the same failing runner, piped, reports success.
     const root = scratch({ [SCRATCH_SUITE]: RED });
-    const piped = spawnSync('/bin/sh', ['-c', `"${join(root, 'node_modules/.bin/vitest')}" run ${SCRATCH_SUITE} | cat`], { cwd: root, encoding: 'utf8', stdio: 'pipe' });
+    const piped = spawnSync('/bin/sh', ['-c', `"${join(root, 'node_modules/.bin/vitest')}" run ${SCRATCH_SUITE} | cat`], {
+      cwd: root,
+      encoding: 'utf8',
+      stdio: 'pipe',
+    });
     expect(piped.status, 'piped, the failing run reports the status of `cat`').toBe(0);
     const direct = executeSuites(root, [row()], BOUND);
     expect(direct.status, 'read off the spawn result, the SAME run refuses').not.toBe(0);
