@@ -123,3 +123,96 @@ export function backfillAuditViolations(
   const unbacked = auditedRoles.filter((r) => !grew.includes(r)).map((r) => `audit-without-backfill:${r}`);
   return [...roster, ...lost, ...unaudited, ...unbacked].sort();
 }
+
+/**
+ * ── THE DECLARATIVE REGISTRIES, DISCOVERED FROM THE CATALOGUE ───────────────
+ *
+ * The disjointness half of an upgrade matrix compares a digest of EVERY
+ * protected row taken at the accepted Phase 3 head against the same digest
+ * taken after the migrations beyond it. That equality is right about business
+ * data — no migration of any phase may write a business row — and WRONG about
+ * the declarative registries, because registering a source type, a movement
+ * kind or an operation kind is precisely what a later phase's migration does.
+ * `0074_phase4_registry_widening.sql` exists to let it.
+ *
+ * So the equality is NARROWED, not loosened: the registry rows come out of it
+ * and are claimed by `phase3RegistryViolations` and the positive
+ * `phase3Registrants` floor instead — which still refuse a removed row, a
+ * rewritten row and a row mislabelled with a Phase 3 provenance. Nothing stops
+ * being claimed; the claim moves to the function that can carry it.
+ *
+ * And the registries are DISCOVERED, never listed. A declarative registry is a
+ * relation with NO business dimension — no `business_id` and no `tenant_id`, so
+ * its rows belong to no business, which is the same partition Agent A's
+ * RLS/FORCE law calls a GLOBAL REGISTRY — that also carries one of the columns
+ * a registration is made of: `registered_by`, `source_type` or
+ * `operation_kind`. On the Phase 4 head that is exactly six relations, and not
+ * one of them is named here. A seventh registry a later phase adds is found by
+ * the same query on the day it exists.
+ */
+export const REGISTRY_RELATION_SQL = `
+  SELECT c.relname::text AS name
+    FROM pg_class c
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+   WHERE n.nspname = 'public' AND c.relkind = 'r'
+     AND NOT EXISTS (SELECT 1 FROM pg_attribute a
+                      WHERE a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped
+                        AND a.attname IN ('business_id', 'tenant_id'))
+     AND EXISTS (SELECT 1 FROM pg_attribute a
+                  WHERE a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped
+                    AND a.attname IN ('registered_by', 'source_type', 'operation_kind'))
+   ORDER BY c.relname`;
+
+/** The minimum a caller must look like to read `REGISTRY_RELATION_SQL`. */
+export interface RegistryQueryable {
+  query(sql: string): Promise<{ rows: { name: string }[] }>;
+}
+
+/**
+ * The digest TAGS the registries occupy, for a suite whose digest tags a row by
+ * its relation's name.
+ *
+ * `alias` maps a suite's own abbreviation to the relation it stands for — the
+ * `src` of `concat_ws(':', 'src', source_type, sort_order)`, for instance. An
+ * alias whose relation the discovery did NOT find is dropped, so a stale alias
+ * is dead weight rather than a silent exemption of something that is not a
+ * registry at all.
+ */
+export async function registryTagsOf(q: RegistryQueryable, alias: Readonly<Record<string, string>> = {}): Promise<Set<string>> {
+  const found = new Set((await q.query(REGISTRY_RELATION_SQL)).rows.map((r) => r.name));
+  const tags = new Set(found);
+  for (const [tag, relation] of Object.entries(alias)) if (found.has(relation)) tags.add(tag);
+  return tags;
+}
+
+/** The digest rows that are NOT registrations: everything the equality still claims word for word. */
+export function withoutRegistryRows(rows: readonly string[], registryTags: ReadonlySet<string>): string[] {
+  return rows.filter((r) => !registryTags.has(r.split(':')[0] ?? ''));
+}
+
+/** The digest rows that ARE registrations, so a suite can claim them positively. */
+export function registryRowsOf(rows: readonly string[], registryTags: ReadonlySet<string>): string[] {
+  return rows.filter((r) => registryTags.has(r.split(':')[0] ?? ''));
+}
+
+/**
+ * The relations that carry a `registered_by` provenance column, so a read of
+ * them can be scoped by the phase that registered the row — the
+ * `registered_by ~ '^P3-'` idiom `tests/helpers/stock-ledger.ts:661-692` uses.
+ * Discovered from the catalogue, never listed, so a registry a later phase adds
+ * is scoped by the same query on the day it exists.
+ */
+export const PROVENANCE_RELATION_SQL = `
+  SELECT c.relname::text AS name
+    FROM pg_class c
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+   WHERE n.nspname = 'public' AND c.relkind = 'r'
+     AND EXISTS (SELECT 1 FROM pg_attribute a
+                  WHERE a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped
+                    AND a.attname = 'registered_by')
+   ORDER BY c.relname`;
+
+/** `PROVENANCE_RELATION_SQL`'s answer as a set. */
+export async function provenanceRelationsOf(q: RegistryQueryable): Promise<Set<string>> {
+  return new Set((await q.query(PROVENANCE_RELATION_SQL)).rows.map((r) => r.name));
+}

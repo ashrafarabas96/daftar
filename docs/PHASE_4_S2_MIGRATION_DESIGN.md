@@ -807,3 +807,77 @@ Every validator fails when it has no subject rather than passing:
 The commit routine `0078` creates is **`sale_commit`**. `0077` creates no writer at
 all, and `0077-E` asserts that physically: no routine it creates is executable by
 any runtime principal.
+
+---
+
+## 14. The forward-evolution breakage, MEASURED (this supersedes §7's prediction)
+
+§7 was a prediction read off the source. This is what a full estate run actually
+reported with `0077` applied. **It is a FLOOR and not a total** (`TL-P4-S1-C18`):
+a failing assertion hides every assertion after it in the same body, so each
+round of fixes surfaces more. One round has already proved that — fixing
+`settlement-s6-upgrade.test.ts:248` surfaced a second failure at `:292` in the
+same body that the first had been hiding.
+
+### 14.1 Round 1, measured
+
+| file:line | claim | why `0077` breaks it |
+| --- | --- | --- |
+| `tests/integration/migration-upgrade.test.ts:524` | exact `toEqual` over `accounting_source_types ORDER BY sort_order` | `sale` at 13, `invoice` at 14 |
+| `…:848` | `protectedDigest()` exact, with `src:<type>:<order>` rows | the same two |
+| `…:1299` | `registries()` exact, `type:`/`map:` rows | `type:sale:P4-S2`, `map:sale.commit:sale:P4-S2` |
+| `…:1548` | `protectedRows()` exact, `src:`/`kind:` rows | the two source types and `kind:sale:negative:f:P4-S2` |
+| `…:1862` | `protectedRows()` exact over `PROTECTED` + `src:` | the same, plus the `stock_movement_kinds` row |
+| `…:2274`, `…:2713` | the **already two-step** disjointness half, `nonAudit(afterBeyond)` **equal to** `nonAudit(after)` | it compares EVERY non-audit row exactly, and the declarative registries are relations a later phase legitimately appends to |
+| `tests/integration/settlement-s6-upgrade.test.ts:248` | `nonAudit(afterRows)` exact | the two source types |
+| `…:292` (**hidden behind `:248`**) | `registries()` exact, `acct:`/`map:`/`op:`/`type:` rows | `acct:post:sale`, `acct:post:invoice`, `op:sale.commit:P4-S2`, `map:…`, `type:…` |
+| `tests/security/phase3-s8-signed-authority-matrix.test.ts:253` | `toHaveLength(9)` on the types added after `0052`, taken against the WHOLE tree | 11 |
+| `tests/golden-regression/phase2/01-engine-shapes.golden.test.ts:624` | exact `toEqual` over the twelve source types | the same two — **Agent D's file, not mine to edit** |
+
+`tests/integration/phase4-s1-forward-scope.test.ts` **passes**: it builds its
+scratch database `{ upTo: PHASE4_INHERITED_PREFIX_END }` and only its probe
+fixture runs past that, so no real Phase 4 migration ever reaches its claims. My
+§6 flag on its line 46 was a false positive and C's prediction of `:47,61` does
+not reproduce. `tests/guards/phase4-rls-force-guard.test.ts` passes.
+
+### 14.2 The method, beside the floor
+
+Three narrowings, in order of preference, and **never a loosening**:
+
+1. **Scope by the registry's own provenance column**, `registered_by ~ '^P3-'` —
+   the idiom of `tests/helpers/stock-ledger.ts:661-692`. Exact equality survives
+   on the scoped subset, so a missing Phase 3 row is still red and so is an extra
+   row claiming Phase 3 provenance: the scope cannot be dodged by mislabelling a
+   Phase 4 row as `P3-S7`. **Which relations carry that column is discovered**
+   from the catalogue (`PROVENANCE_RELATION_SQL`), never listed.
+2. **Stop the upgrade at the accepted Phase 3 head** and keep every assertion
+   word for word there, then apply the migrations beyond it in a step of their
+   own that carries the disjointness half. This is the only option when the
+   registry has **no provenance column** — `accounting_source_types` and
+   `accounting_operation_kinds` do not — and it is the shape P4-S1 already used.
+3. **Take the registries out of a whole-estate row equality** and claim them
+   separately: nothing a Phase 3 row was promised stops being promised (no
+   removal, no rewrite, no Phase-3-labelled arrival), and a row a later phase
+   registers is out of scope, which is the point. The registries are
+   **discovered** as the relations with no business dimension that carry a
+   registration column (`REGISTRY_RELATION_SQL`) — on the Phase 4 head exactly
+   six, none of them named in the helper.
+
+Where a registry has no provenance and a second database is too expensive, the
+claim is kept as a **PREFIX** claim instead: the types the accepted head holds
+are still the first *n* in `sort_order`, in the same order, and whatever a
+successor registered sits entirely after them and repeats none of them. That is
+`0046`'s append rule stated positively, and it is strictly stronger than the
+count it replaces.
+
+### 14.3 What Agent D is owed
+
+`tests/golden-regression/phase2/01-engine-shapes.golden.test.ts:623-640` reads
+the LIVE catalogue and asserts the twelve source types exactly. It is Agent D's
+file and I have not touched it. The narrowing that fits it is option 3's prefix
+form, which needs no second database and no new helper:
+
+- keep the twelve-name literal exactly as it is;
+- compare it against `types.slice(0, 12)` rather than `types`;
+- add, positively, that `types.slice(12)` contains none of the twelve — so a
+  successor cannot register one of them a second time or displace the order.
