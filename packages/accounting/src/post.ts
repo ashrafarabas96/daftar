@@ -226,8 +226,26 @@ export const DOMAIN_SOURCE_TYPES = [
   // without the writer, the binding, the journal shape and the deferred
   // completeness validator that give it meaning. Both are derived by the sale
   // commit command through `sale-posting.ts`, never through
-  // `AccountingEngine.post`, and neither is reversible by the generic
-  // workflow — `accounting_reversals_20_domain_source_guard` names both.
+  // `AccountingEngine.post`.
+  //
+  // NEITHER IS IN THE DATABASE'S GENERIC REVERSAL GUARD YET, and an earlier
+  // version of this comment asserted that it was. The live
+  // `accounting_reversals_20_domain_source_guard` is the sixth version,
+  // `0072:634-666`, and its always-refused list is
+  // `inventory_adjustment, inventory_opening, negative_inventory_cost_adjustment,
+  // supplier_return, supplier_payment, supplier_credit_allocation,
+  // supplier_refund, purchase_residue_write_off` plus the `purchase` pairing
+  // clause — I checked every version (`0061:1527`, `0063:1530`, `0065:1756`,
+  // `0067:2249`, `0072:642`) and `sale` and `invoice` appear in none of them.
+  // Adding both is `0077`'s, specified in
+  // `docs/PHASE_4_S2_ACCOUNTING_CONTRACT.md` §6.2, and `0077` does not exist
+  // at this head. Until it lands, `daftar_app` CAN reverse one of these
+  // entries through the generic door (`accounting_post_reversal` is granted
+  // to it at `0046:765`), which is the hole `S-P4-02` watches.
+  //
+  // A permanent module may not state as a present database fact something a
+  // future migration will make true: a reader who trusted the old sentence
+  // would have concluded the hole was closed and stopped looking for it.
   'sale',
   'invoice',
 ] as const;

@@ -435,6 +435,37 @@ export type AccountingAssertions = string | readonly [string, ...string[]];
  * empty and presenting ANY posting is refused, so "posts nothing" is enforced
  * rather than described.
  *
+ * ── The CONDITIONAL arm, and why it is safe ──────────────────────────────
+ *
+ * Some commands imply a posting only for a value they cannot know before the
+ * transaction. A sale is the case that forced it: its COGS entry exists only
+ * when the stock it released carried value, and `journal_lines` refuses a
+ * zero amount (`journal_lines_money_cap_ck`, `0042:225`, requires
+ * `base_amount_minor > 0`), while `0060:388-390` sets the emptying movement's
+ * value to `-valuation_base_minor` — which is 0 when the stored valuation is
+ * 0. So a sale of zero-valued stock legitimately posts ONE entry, the
+ * revenue one, and the accounting is sound: there is no cost of goods to
+ * post, and `GL Inventory (1200) = Σ stock_movements.value_delta_base_minor`
+ * still holds at 0. A legitimate sale that cannot commit is a worse outcome
+ * than any refusal code suggests.
+ *
+ * `conditional` names, by assertion string, which elements of `assertions`
+ * MAY be left unpresented. Order is unchanged — `assertions` is still the
+ * posting order, and a conditional element is SKIPPED rather than reordered,
+ * so the authority for one posting can never be spent on another. Presenting
+ * none of the REQUIRED elements after presenting any is still refused
+ * `seam.accounting_assertion_unused`.
+ *
+ * **The seam is not the enforcer, and must not be mistaken for one.** It
+ * cannot know a sale's COGS total, so it cannot know whether the conditional
+ * entry was owed. A rule only the wrapper enforces is a convention while the
+ * trusted primitive can still write the row. The real law is a DEFERRED
+ * constraint trigger on `sales` that makes it impossible to commit a sale
+ * whose bridged movements carry a non-zero total value with no `sale`
+ * accounting binding (contract C-07, the migration owner's). That pairing is
+ * what makes this arm safe: the seam PERMITS the non-presentation, and the
+ * database REFUSES the case where it would have been a hole.
+ *
  * It is additive on purpose: a bare string and a tuple remain exactly today's
  * seam, so no existing caller changes. **The permissive "presented none"
  * branch of `assertComplete` is deliberately NOT tightened here** — see A-09
@@ -445,7 +476,20 @@ export type AccountingAssertions = string | readonly [string, ...string[]];
  * a way for the callback itself to declare the replay, which changes an
  * accepted P3 contract and is a Tech Lead decision rather than this slice's.
  */
-export type SeamAccountingAuthority = { readonly kind: 'postings'; readonly assertions: AccountingAssertions } | { readonly kind: 'no_posting' };
+export type SeamAccountingAuthority =
+  | {
+      readonly kind: 'postings';
+      /** Every assertion of this transaction, in POSTING order. */
+      readonly assertions: AccountingAssertions;
+      /**
+       * Those of `assertions` whose entry may legitimately not exist. Each
+       * must be an element of `assertions`; one that is not is a defect, not
+       * a tolerated typo, because a mis-spelled exemption would silently make
+       * a required posting optional.
+       */
+      readonly conditional?: readonly string[];
+    }
+  | { readonly kind: 'no_posting' };
 
 /** True for the declared form, so the seam can keep accepting today's bare assertions. */
 function isSeamAccountingAuthority(value: AccountingAssertions | SeamAccountingAuthority): value is SeamAccountingAuthority {
@@ -468,12 +512,21 @@ function isSeamAccountingAuthority(value: AccountingAssertions | SeamAccountingA
 export class AccountingAssertionSequence {
   private presented = 0;
 
+  /** How far through `assertions` presentation has reached, including skipped conditional ones. */
+  private cursor = 0;
+  /** Which positions were actually presented; parallel to `assertions`. */
+  private readonly done: boolean[];
+
   private constructor(
     private readonly assertions: readonly string[],
     private readonly sources: readonly AccountingAssertionSource[],
     /** `no_posting` is a DECLARATION that this transaction posts nothing; see `SeamAccountingAuthority`. */
     private readonly kind: 'postings' | 'no_posting' = 'postings',
-  ) {}
+    /** Parallel to `assertions`: false where the entry may legitimately not exist. */
+    private readonly required: readonly boolean[] = assertions.map(() => true),
+  ) {
+    this.done = assertions.map(() => false);
+  }
 
   /**
    * Coherence-check every element against `scope` (before any connection is
@@ -492,7 +545,48 @@ export class AccountingAssertionSequence {
       // anyway. It is NOT `sequence: null`, because `null` is the
       // single-authority path and would let a posting through.
       if (accountingAssertions.kind === 'no_posting') return { guc: '', sequence: new AccountingAssertionSequence([], [], 'no_posting') };
-      return AccountingAssertionSequence.plan(scope, accountingAssertions.assertions);
+      const plain = AccountingAssertionSequence.plan(scope, accountingAssertions.assertions);
+      const conditional = accountingAssertions.conditional ?? [];
+      if (conditional.length === 0) return plain;
+      // A conditional element forces the sequence form even for a single
+      // assertion: the single-authority path sets the GUC at BEGIN and has no
+      // sequence to record what was owed.
+      const list: readonly string[] = Array.isArray(accountingAssertions.assertions)
+        ? accountingAssertions.assertions
+        : [accountingAssertions.assertions as string];
+      const assertions: string[] = [];
+      const sources: AccountingAssertionSource[] = [];
+      for (const raw of list) {
+        const parts = accountingAssertionParts(scope, raw);
+        assertions.push(parts.join('.'));
+        sources.push({ sourceType: parts[6] ?? '', sourceId: parts[7] ?? '' });
+      }
+      const exempt = new Set(conditional.map((raw) => accountingAssertionParts(scope, raw).join('.')));
+      for (const e of exempt) {
+        if (!assertions.includes(e)) {
+          throw new TransactionSeamError(
+            'seam.accounting_assertion_malformed',
+            "a conditional accounting assertion must be one of this transaction's own assertions",
+          );
+        }
+      }
+      if (exempt.size === assertions.length) {
+        // Every posting optional is a transaction that declared nothing. If it
+        // may post nothing at all, it says so with `no_posting`.
+        throw new TransactionSeamError(
+          'seam.accounting_assertion_malformed',
+          'a transaction whose every accounting assertion is conditional declares no_posting instead',
+        );
+      }
+      return {
+        guc: '',
+        sequence: new AccountingAssertionSequence(
+          assertions,
+          sources,
+          'postings',
+          assertions.map((a) => !exempt.has(a)),
+        ),
+      };
     }
     const list: readonly unknown[] = Array.isArray(accountingAssertions) ? accountingAssertions : [accountingAssertions];
     if (list.length === 0) {
@@ -522,29 +616,51 @@ export class AccountingAssertionSequence {
         'this transaction declared that it posts nothing: it carries no accounting authority to present',
       );
     }
-    const i = this.presented;
+    // Walk forward from the cursor, SKIPPING conditional elements whose
+    // claims do not match — a conditional entry that does not exist is simply
+    // passed over. A REQUIRED element that does not match is the mismatch it
+    // has always been, so with no conditional elements this is exactly
+    // today's strict in-order behaviour.
+    let i = this.cursor;
+    for (;;) {
+      const claims = this.sources[i];
+      if (claims === undefined) {
+        throw new TransactionSeamError('seam.accounting_assertion_exhausted', 'every accounting assertion of this transaction has already been presented');
+      }
+      if (source.sourceType === claims.sourceType && source.sourceId === claims.sourceId) break;
+      if (this.required[i] === true) {
+        throw new TransactionSeamError(
+          'seam.accounting_assertion_source_mismatch',
+          "the posting's source differs from the claims of the next accounting assertion",
+        );
+      }
+      i += 1;
+    }
     const assertion = this.assertions[i];
-    const claims = this.sources[i];
-    if (assertion === undefined || claims === undefined) {
+    if (assertion === undefined) {
       throw new TransactionSeamError('seam.accounting_assertion_exhausted', 'every accounting assertion of this transaction has already been presented');
     }
-    if (source.sourceType !== claims.sourceType || source.sourceId !== claims.sourceId) {
-      throw new TransactionSeamError(
-        'seam.accounting_assertion_source_mismatch',
-        "the posting's source differs from the claims of the next accounting assertion",
-      );
-    }
-    this.presented = i + 1;
+    this.done[i] = true;
+    this.cursor = i + 1;
+    this.presented += 1;
     return assertion;
   }
 
   /** Refuse a commit that left an assertion unpresented after presenting any. */
   assertComplete(): void {
     if (this.kind === 'no_posting') return;
-    if (this.presented > 0 && this.presented < this.assertions.length) {
+    // Presenting NONE is still lawful — the replay case, an accepted P3 law
+    // (`tests/integration/purchase-s4-seam.test.ts:207`): a replay is
+    // discovered INSIDE the transaction, after the seam was opened by a
+    // caller that could not know it would be one. Tightening it needs a way
+    // for the callback itself to declare the replay, which changes that
+    // accepted contract and is not this slice's to change.
+    if (this.presented === 0) return;
+    const missing = this.required.reduce((n, req, i) => (req && this.done[i] !== true ? n + 1 : n), 0);
+    if (missing > 0) {
       throw new TransactionSeamError(
         'seam.accounting_assertion_unused',
-        `${this.assertions.length - this.presented} accounting assertion(s) of this transaction were never presented`,
+        `${missing} required accounting assertion(s) of this transaction were never presented`,
       );
     }
   }

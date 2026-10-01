@@ -56,6 +56,11 @@ export class SalePostingService {
    * Derive both postings of a sale commit and mint their two assertions, in
    * posting order, for presentation to the seam.
    *
+   * **Two postings, or one.** A sale that released no stock value has no cost
+   * of goods to post (`saleCogsReleasedBaseMinor`), so `postings.cogs` is
+   * `null` and exactly one assertion is minted. The caller passes the array
+   * through to the seam unchanged and does not assume its length.
+   *
    * The returned assertions are passed to
    * `withBusinessInventoryAccountingTransaction` as its ordered
    * `accountingAssertions`, and `AccountingAssertionSequence` then hands out
@@ -74,7 +79,7 @@ export class SalePostingService {
     membership: MembershipContext,
     invoice: SaleInvoiceFacts,
     cogs: SaleCogsFacts,
-  ): { readonly postings: SaleCommitPostings; readonly assertions: readonly [string, string] } {
+  ): { readonly postings: SaleCommitPostings; readonly assertions: readonly [string] | readonly [string, string] } {
     if (!hasPermission(membership.roles, 'sales.create')) {
       throw new ForbiddenException('sales.create is required to commit a sale');
     }
@@ -95,7 +100,12 @@ export class SalePostingService {
       throw new ForbiddenException('a sale may only be committed for a branch in the member branch scope');
     }
     const postings = deriveSaleCommitPostings(invoice, cogs);
-    const [cogsAssertion, revenueAssertion] = mintSaleCommitAssertions(this.minter, postings, invoice, membership.userId);
-    return { postings, assertions: [cogsAssertion, revenueAssertion] };
+    // ONE assertion when `postings.cogs` is null — a sale that released no
+    // stock value posts revenue only, and a fabricated COGS assertion would
+    // make it uncommittable. The seam is handed exactly this array, so its
+    // LENGTH is what tells the seam how many postings to expect; the caller
+    // never counts them itself.
+    const assertions = mintSaleCommitAssertions(this.minter, postings, invoice, membership.userId);
+    return { postings, assertions };
   }
 }
