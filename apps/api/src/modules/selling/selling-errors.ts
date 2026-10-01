@@ -116,6 +116,16 @@ const SELLING_STATUS = {
   /** The whole sale was discounted to nothing: an invoice total of zero is not representable (`0075:260`). */
   'sale.total_zero': 422,
   'sale.currency_unknown': 422,
+  /**
+   * A sale of stock whose average cost is zero: it releases no value, so
+   * there is no POSITIVE COGS entry to post, and `journal_lines` refuses a
+   * zero amount. `deriveSaleCogsEntryLines` refuses to derive one, so such a
+   * sale cannot be authorized at all until the accounting module gains a
+   * `cogs: null` arm and the seam a one-assertion sale. It is refused under
+   * a stable code rather than posted wrongly, and the gap is REPORTED — an
+   * accounting-integrity gap is never closed by a weaker posting.
+   */
+  'sale.zero_cost_stock': 422,
   'sale.fx_rate_missing': 422,
   /** The catalogue, the customer, the rate or the stock moved under the command's locks. Retryable BY THE CLIENT; there is no server retry. */
   'sale.state_changed': 409,

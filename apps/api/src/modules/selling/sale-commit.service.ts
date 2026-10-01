@@ -1,6 +1,15 @@
 import { randomUUID } from 'node:crypto';
 import { Inject, Injectable } from '@nestjs/common';
-import { AccountingError, convertToBaseMinor, mintDomainPostingAssertion, parseDatabaseAccountingError, type PostingCommand } from '@daftar/accounting';
+import {
+  AccountingError,
+  convertToBaseMinor,
+  parseDatabaseAccountingError,
+  type PostingCommand,
+  type SaleCogsFacts,
+  type SaleCommitPostings,
+  type SaleInvoiceFacts,
+  type SaleMovementFacts,
+} from '@daftar/accounting';
 import { hasPermission, MAX_SALE_LINES, type SaleSettlementMode } from '@daftar/domain-core';
 import {
   assertQuantityRepresentable,
@@ -18,15 +27,14 @@ import {
   type SaleCommitPayloadLine,
 } from '@daftar/inventory';
 import type { SaleDto } from '@daftar/shared-contracts';
-import { Database, presentInventoryAssertion, type AccountingAssertions, type BusinessInventoryAccountingTransaction } from '../../infra/database';
-import { AccountingAssertionMinterService } from '../accounting/accounting-assertion.minter';
+import { Database, presentInventoryAssertion, type BusinessInventoryAccountingTransaction } from '../../infra/database';
 import { DatabaseAccountingPostingAdapter } from '../accounting/accounting-posting.adapter';
+import { SalePostingService } from '../accounting/sale-posting.service';
 import type { BusinessTransactionId } from '../inventory/business-transaction';
 import { InventoryAuthorizationService, type InventoryCommandAuthority } from '../inventory/inventory-authorization';
 import { readWarehouses, resolveVariants, type ReadScope, type ResolvedVariant } from '../inventory/inventory-stock-read';
 import type { MembershipContext } from '../tenancy/tenancy.service';
-import { invoiceRevenuePostingCommand, saleCogsPostingCommand, type SaleFx } from './sale-posting';
-import { readSaleHeader, readSalePriceFacts, scopedSellingRows, type SalePriceFacts } from './sale-reads';
+import { readSaleHeader, readSalePriceFacts, readSaleStockLevels, scopedSellingRows, type SalePriceFacts, type SaleStockLevel } from './sale-reads';
 import { rethrowSellingRefusal, sellingInventoryRefusal, sellingPackageRefusal, sellingRefusal } from './selling-errors';
 import type { SaleCommitRequest } from './selling.schemas';
 
@@ -106,7 +114,11 @@ export class SaleCommitService {
   constructor(
     @Inject(Database) private readonly db: Database,
     @Inject(InventoryAuthorizationService) private readonly authorization: InventoryAuthorizationService,
-    @Inject(AccountingAssertionMinterService) private readonly accountingMinter: AccountingAssertionMinterService,
+    // The ONE place a sale's posting authority is minted (C's
+    // `SalePostingService`). This service mints NO accounting assertion
+    // itself: a selling service that did would be a second posting authority
+    // with no permission check in front of it.
+    @Inject(SalePostingService) private readonly salePosting: SalePostingService,
     @Inject(DatabaseAccountingPostingAdapter) private readonly posting: DatabaseAccountingPostingAdapter,
   ) {}
 
@@ -127,10 +139,9 @@ export class SaleCommitService {
     //    order, which is what `AccountingAssertionSequence` hands out by
     //    position: the COGS entry, then the revenue entry.
     const inventoryAssertion = this.authorization.mint(plan.authority, plan.built.payload);
-    const accountingAssertions: AccountingAssertions = [
-      mintDomainPostingAssertion(this.accountingMinter, plan.cogsCommandTemplate, m.userId),
-      mintDomainPostingAssertion(this.accountingMinter, plan.revenueCommand, m.userId),
-    ];
+    // The two accounting assertions were minted by `SalePostingService` inside
+    // `plan`, in posting order, with the P4-AL-35 matrix applied at the mint.
+    const accountingAssertions = plan.accountingAssertions;
 
     // 6. One transaction: the routine, the COGS entry, the revenue entry, COMMIT.
     const replayed = await this.db.withBusinessInventoryAccountingTransaction(plan.authority.scope, inventoryAssertion, accountingAssertions, (tx) =>
@@ -269,30 +280,68 @@ export class SaleCommitService {
     });
     if (built.intentSha256 !== intentSha256) throw new Error('the bound sale payload does not carry the proven intent');
 
-    const postingBase = {
+    // 5. The two postings and their assertions, minted by the ONE sale
+    //    posting authority (`SalePostingService`), in posting order: the COGS
+    //    entry on source type `sale`, then the revenue entry on source type
+    //    `invoice`.
+    //
+    //    The COGS figure is a PREDICTION, because the stock writer computes
+    //    the real value deltas inside the lock and the seam requires its
+    //    assertions before the transaction opens. `readSaleStockLevels` reads
+    //    the keys' current valuation and `predictMovements` applies the stock
+    //    writer's OWN rule, including the exact-emptying rule that keeps
+    //    `R-INV-03` green: a movement that empties a key carries exactly
+    //    `-valuation`, never a re-multiplied average. A-08 of the contract
+    //    states why a stale prediction is a refused sale and never a
+    //    misstated cost.
+    const levels = await readSaleStockLevels(
+      this.db,
+      m,
+      input.warehouseId,
+      lines.map((l) => l.variantId),
+    );
+    const movements = predictMovements(lines, levels);
+    const invoiceFacts: SaleInvoiceFacts = {
       tenantId: m.tenantId,
       businessId: m.businessId,
-      documentDate: input.documentDate,
-      baseCurrency: business.baseCurrency,
-      branchId: warehouse.branchId,
-      businessTransactionId: btx,
-    };
-    // The COGS entry's amount is the SUM of the value deltas the routine will
-    // compute from the locked level rows (P4-AL-25), so the command is
-    // completed inside the transaction, from the routine's own return. The
-    // template is what the assertion is minted over; A-08 of the contract
-    // states the consequence and the mechanism that closes it.
-    const cogsCommandTemplate = saleCogsPostingCommand({ ...postingBase, saleId: input.saleId, warehouseId: input.warehouseId, cogsBaseMinor: 1n });
-    if (cogsCommandTemplate === null) throw new Error('the COGS command template is never null');
-    const revenueCommand = invoiceRevenuePostingCommand({
-      ...postingBase,
       invoiceId,
-      settlementMode: input.settlementMode,
-      currency: priced.currency,
+      issueDate: input.documentDate,
+      branchId: warehouse.branchId,
+      customerId: input.customerId,
+      settlementKind: input.settlementMode,
+      // A cash sale lands in the `cash` system account DIRECTLY and writes no
+      // payment document: `payments` and `payment_allocations` are P4-S4's
+      // relations and `P4-AL-86` forbids creating a later slice's relation
+      // here. RECOMMENDED-PENDING the Tech Lead's word (contract D-01).
+      settlementAccount: input.settlementMode === 'cash' ? { kind: 'system', systemKey: 'cash' } : null,
+      currencyCode: priced.currency,
+      baseCurrency: business.baseCurrency,
+      subtotalTxnMinor: priced.subtotalTxnMinor,
+      discountTxnMinor: priced.discountTxnMinor,
+      taxMinor: 0n,
       totalTxnMinor: priced.totalTxnMinor,
       totalBaseMinor,
-      fx,
-    });
+      fx: { sourceToBaseRate: fx.rate, rateSource: fx.source, rateTimestamp: fx.at },
+      lines: priced.lines.map((l, i) => ({ lineNo: i + 1, netTxnMinor: l.netTxnMinor, taxMinor: 0n })),
+    };
+    const cogsFacts: SaleCogsFacts = {
+      tenantId: m.tenantId,
+      businessId: m.businessId,
+      saleId: input.saleId,
+      soldOn: input.documentDate,
+      branchId: warehouse.branchId,
+      warehouseId: input.warehouseId,
+      baseCurrency: business.baseCurrency,
+      movements,
+    };
+    // A sale of stock whose average cost is zero releases no value, so there
+    // is no positive COGS entry to post — and `deriveSaleCogsEntryLines`
+    // refuses a zero one, correctly, because `journal_lines` refuses a zero
+    // amount. The accounting module has no `cogs: null` arm yet, so such a
+    // sale cannot be authorized at all; it is refused with a stable code
+    // rather than posted wrongly, and the gap is REPORTED rather than hidden.
+    if (movements.every((mv) => mv.valueDeltaBaseMinor === 0n)) throw sellingRefusal('sale.zero_cost_stock');
+    const authorized = this.salePosting.authorizeSaleCommit(m, invoiceFacts, cogsFacts);
 
     const params: unknown[] = [
       input.saleId,
@@ -329,6 +378,8 @@ export class SaleCommitService {
       kind: 'plan',
       plan: {
         authority,
+        tenantId: m.tenantId,
+        businessId: m.businessId,
         saleId: input.saleId,
         invoiceId,
         settlementMode: input.settlementMode,
@@ -338,8 +389,8 @@ export class SaleCommitService {
         baseCurrency: business.baseCurrency,
         businessTransactionId: btx,
         built,
-        cogsCommandTemplate,
-        revenueCommand,
+        postings: authorized.postings,
+        accountingAssertions: authorized.assertions,
         params,
       },
     };
@@ -362,23 +413,33 @@ export class SaleCommitService {
     const [first] = r.rows;
     if (first === undefined) throw new Error('sale_commit returned no row');
     if (first.replayed) return true;
-    // P4-AL-25: the posted COGS is the SUM of the stored
-    // `stock_movements.value_delta_base_minor` integers, as the routine
-    // returned them. Never `quantity x average_cost`.
-    const cogsBaseMinor = parseMinor(first.cogs_base_minor);
-    const cogsCommand = saleCogsPostingCommand({
-      tenantId: plan.cogsCommandTemplate.tenantId,
-      businessId: plan.cogsCommandTemplate.businessId,
-      documentDate: plan.documentDate,
-      baseCurrency: plan.baseCurrency,
-      branchId: plan.branchId,
-      businessTransactionId: plan.businessTransactionId,
-      saleId: plan.saleId,
-      warehouseId: plan.warehouseId,
-      cogsBaseMinor: cogsBaseMinor < 0n ? -cogsBaseMinor : cogsBaseMinor,
-    });
-    if (cogsCommand !== null) await this.posting.postEntryInTransaction(tx.accounting, { command: cogsCommand });
-    await this.posting.postEntryInTransaction(tx.accounting, { command: plan.revenueCommand });
+    // P4-AL-25: the COGS truth is the SUM of the stored
+    // `stock_movements.value_delta_base_minor` integers, which is what the
+    // routine returns. It is compared against the figure the assertion was
+    // signed over, HERE, so a stale prediction is a named refusal before any
+    // posting is attempted rather than a fingerprint mismatch inside the
+    // ledger writer. Never `quantity x average_cost`.
+    const actual = parseMinor(first.cogs_base_minor);
+    const signed = plan.postings.cogs.lines.reduce((t, l) => (l.side === 'D' ? t + l.baseAmountMinor : t), 0n);
+    if ((actual < 0n ? -actual : actual) !== signed) throw sellingRefusal('sale.state_changed');
+    const cogsCommand: PostingCommand = {
+      tenantId: plan.tenantId,
+      businessId: plan.businessId,
+      sourceType: plan.postings.cogs.sourceType,
+      sourceId: plan.postings.cogs.sourceId,
+      entryDate: plan.postings.cogs.entryDate,
+      lines: plan.postings.cogs.lines,
+    };
+    const revenueCommand: PostingCommand = {
+      tenantId: plan.tenantId,
+      businessId: plan.businessId,
+      sourceType: plan.postings.revenue.sourceType,
+      sourceId: plan.postings.revenue.sourceId,
+      entryDate: plan.postings.revenue.entryDate,
+      lines: plan.postings.revenue.lines,
+    };
+    await this.posting.postEntryInTransaction(tx.accounting, { command: cogsCommand });
+    await this.posting.postEntryInTransaction(tx.accounting, { command: revenueCommand });
     return false;
   }
 
@@ -471,12 +532,10 @@ export class SaleCommitService {
 
   /** The customer, by the composite key. A customer of another business is not reachable: RLS, not a filter. */
   private async readCustomer(scope: ReadScope, customerId: string): Promise<{ readonly status: string } | null> {
-    const [row] = await scopedSellingRows<{ status: string }>(
-      this.db,
-      scope,
-      `SELECT c.status FROM customers c WHERE c.business_id = $1 AND c.id = $2`,
-      [scope.businessId, customerId],
-    );
+    const [row] = await scopedSellingRows<{ status: string }>(this.db, scope, `SELECT c.status FROM customers c WHERE c.business_id = $1 AND c.id = $2`, [
+      scope.businessId,
+      customerId,
+    ]);
     return row === undefined ? null : { status: row.status };
   }
 
@@ -521,10 +580,41 @@ export class SaleCommitService {
   }
 }
 
-/** The FX snapshot in both the payload's and the posting's forms. */
-export interface BoundSaleFx extends SaleFx {
+/** The FX snapshot the sale binds, in the payload's and the posting's forms at once. */
+export interface BoundSaleFx {
   readonly rateId: string | null;
+  /** Canonical decimal string with exactly 10 fraction digits, as `invoices.source_to_base_rate` stores it. */
+  readonly rate: string;
   readonly rateR10: bigint;
+  readonly source: 'base' | 'manual';
+  /** Second precision. Derived from the DATE alone, never from a clock. */
+  readonly at: Date;
+}
+
+/**
+ * The stock writer's OWN valuation rule (`0060:383-396`), applied to the
+ * pre-lock level rows to predict what it will compute inside the lock.
+ *
+ * The exact-emptying rule is the part that matters: a movement taking the LAST
+ * unit of a key carries exactly `-valuation_base_minor`, not
+ * `-HALF_EVEN(qty x average)`. An average unit cost is a derived ROUNDED
+ * quotient, and re-multiplying it leaves a residue the stored valuation does
+ * not have — `[[daftar-a-rounded-quotient-is-never-an-input]]` — which is
+ * exactly the drift `R-INV-03` ("an emptied key carries zero valuation")
+ * exists to catch. Predicting it any other way would make the prediction
+ * disagree with the writer on every emptying sale.
+ */
+function predictMovements(lines: readonly SaleCommitPayloadLine[], levels: ReadonlyMap<string, SaleStockLevel>): readonly SaleMovementFacts[] {
+  return lines.map((l) => {
+    const level = levels.get(l.variantId);
+    // A key with no row holds nothing; the writer will refuse the sale under
+    // the lock with `inventory.insufficient_stock`. The prediction says zero
+    // rather than guessing, because the refusal is the writer's to make.
+    if (level === undefined) return { sourceLineId: l.lineId, valueDeltaBaseMinor: 0n };
+    if (l.qtyQ4 === level.onHandQ4) return { sourceLineId: l.lineId, valueDeltaBaseMinor: -level.valuationBaseMinor };
+    const avg = level.avgUnitCostC10 ?? 0n;
+    return { sourceLineId: l.lineId, valueDeltaBaseMinor: -halfEvenDiv(l.qtyQ4 * avg, 10n ** 14n) };
+  });
 }
 
 interface PricedLine {
@@ -560,14 +650,13 @@ export interface SaleCommitPlan {
   readonly documentDate: string;
   readonly baseCurrency: string;
   readonly businessTransactionId: string;
+  readonly tenantId: string;
+  readonly businessId: string;
   readonly built: MovementPayload;
-  /**
-   * The COGS command as it stands BEFORE the routine ran: every field final
-   * except the amount, which the routine computes from the locked level rows.
-   * `execute` rebuilds it from the routine's own returned sum.
-   */
-  readonly cogsCommandTemplate: PostingCommand;
-  readonly revenueCommand: PostingCommand;
+  /** Both derived postings, from the ONE sale posting authority. The COGS amount is the PREDICTION (A-08). */
+  readonly postings: SaleCommitPostings;
+  /** The two minted assertions, in posting order. Minted by `SalePostingService`, never here. */
+  readonly accountingAssertions: readonly [string, string];
   /** The `sale_commit` arguments, in its signature's order. */
   readonly params: readonly unknown[];
 }

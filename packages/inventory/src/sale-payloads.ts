@@ -240,13 +240,7 @@ export function saleCommitIntentSha256(input: SaleCommitIntentInput): string {
     int(BigInt(input.lines.length)),
   ];
   for (const l of input.lines) {
-    fields.push(
-      uuid(l.lineId, 'line_id'),
-      uuid(l.productId, 'product_id'),
-      uuidOrNull(l.merchantVariantId, 'variant_id'),
-      int(l.qtyQ4),
-      int(l.discountMinor),
-    );
+    fields.push(uuid(l.lineId, 'line_id'), uuid(l.productId, 'product_id'), uuidOrNull(l.merchantVariantId, 'variant_id'), int(l.qtyQ4), int(l.discountMinor));
   }
   return inventoryIntentSha256('sale.commit', input.tenantId, input.businessId, fields);
 }

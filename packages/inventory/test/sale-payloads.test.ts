@@ -59,8 +59,28 @@ function base(): SaleCommitPayloadInput {
     totalTxnMinor: 1250n,
     totalBaseMinor: 1250n,
     lines: [
-      { lineId: L1, productId: P1, merchantVariantId: null, variantId: V1, qtyQ4: 20_000n, discountMinor: 50n, unitPriceC10: 500n * 10n ** 10n, netTxnMinor: 950n, baseShareMinor: 950n },
-      { lineId: L2, productId: P2, merchantVariantId: M2, variantId: V2, qtyQ4: 10_000n, discountMinor: 0n, unitPriceC10: 300n * 10n ** 10n, netTxnMinor: 300n, baseShareMinor: 300n },
+      {
+        lineId: L1,
+        productId: P1,
+        merchantVariantId: null,
+        variantId: V1,
+        qtyQ4: 20_000n,
+        discountMinor: 50n,
+        unitPriceC10: 500n * 10n ** 10n,
+        netTxnMinor: 950n,
+        baseShareMinor: 950n,
+      },
+      {
+        lineId: L2,
+        productId: P2,
+        merchantVariantId: M2,
+        variantId: V2,
+        qtyQ4: 10_000n,
+        discountMinor: 0n,
+        unitPriceC10: 300n * 10n ** 10n,
+        netTxnMinor: 300n,
+        baseShareMinor: 300n,
+      },
     ],
   };
 }
@@ -102,7 +122,14 @@ describe('sale.commit — the payload builds, and its digests are what they clai
 describe('P4-AL-30 — the intent is the CLIENT request, computable before any state is read', () => {
   it('the intent digest equals the digest of the intent stream over the client fields alone', () => {
     const i = base();
-    const words = Array.from({ length: 8 }, (_, k) => BigInt(createHash('sha256').update(Buffer.from('counter sale', 'utf8')).digest().readUInt32BE(k * 4)));
+    const words = Array.from({ length: 8 }, (_, k) =>
+      BigInt(
+        createHash('sha256')
+          .update(Buffer.from('counter sale', 'utf8'))
+          .digest()
+          .readUInt32BE(k * 4),
+      ),
+    );
     const bytes = canonicalInventoryIntent('sale.commit', T, B, [
       { kind: 'uuid', value: SALE },
       { kind: 'code', value: 'credit' },
@@ -182,11 +209,11 @@ describe('P4-AL-30 — the intent is the CLIENT request, computable before any s
 
   it('the STATED identity is in the intent: a different product, or a variant where there was none, is a different command', () => {
     const a = base();
-    for (const change of [
-      { productId: RATE },
-      { merchantVariantId: M2 },
-    ] as const) {
-      const b: SaleCommitPayloadInput = { ...a, lines: [{ ...(a.lines[0] as SaleCommitPayloadInput['lines'][number]), ...change }, a.lines[1] as SaleCommitPayloadInput['lines'][number]] };
+    for (const change of [{ productId: RATE }, { merchantVariantId: M2 }] as const) {
+      const b: SaleCommitPayloadInput = {
+        ...a,
+        lines: [{ ...(a.lines[0] as SaleCommitPayloadInput['lines'][number]), ...change }, a.lines[1] as SaleCommitPayloadInput['lines'][number]],
+      };
       expect(saleCommitIntentSha256(b), JSON.stringify(Object.keys(change))).not.toBe(saleCommitIntentSha256(a));
     }
   });
@@ -204,8 +231,28 @@ describe('P4-AL-30 — the intent is the CLIENT request, computable before any s
       totalTxnMinor: 2500n,
       totalBaseMinor: 2750n,
       lines: [
-        { lineId: L1, productId: P1, merchantVariantId: null, variantId: V1, qtyQ4: 20_000n, discountMinor: 50n, unitPriceC10: 1000n * 10n ** 10n, netTxnMinor: 1900n, baseShareMinor: 2090n },
-        { lineId: L2, productId: P2, merchantVariantId: M2, variantId: V2, qtyQ4: 10_000n, discountMinor: 0n, unitPriceC10: 600n * 10n ** 10n, netTxnMinor: 600n, baseShareMinor: 660n },
+        {
+          lineId: L1,
+          productId: P1,
+          merchantVariantId: null,
+          variantId: V1,
+          qtyQ4: 20_000n,
+          discountMinor: 50n,
+          unitPriceC10: 1000n * 10n ** 10n,
+          netTxnMinor: 1900n,
+          baseShareMinor: 2090n,
+        },
+        {
+          lineId: L2,
+          productId: P2,
+          merchantVariantId: M2,
+          variantId: V2,
+          qtyQ4: 10_000n,
+          discountMinor: 0n,
+          unitPriceC10: 600n * 10n ** 10n,
+          netTxnMinor: 600n,
+          baseShareMinor: 660n,
+        },
       ],
     };
     // The one thing the client stated that changed is nothing: note the
@@ -271,9 +318,7 @@ describe('the builder reads no clock', () => {
 describe('P4-AL-44 / OD-03 — the tax boundary, refused before any assertion is minted', () => {
   it('a non-zero tax is refused with the one code, by the intent digest and by the payload', () => {
     expect(refusal(() => saleCommitIntentSha256({ ...base(), taxMinor: 1n })).code).toBe('sale.tax_policy_absent');
-    expect(refusal(() => saleCommitPayload({ ...base(), taxMinor: 1n, totalTxnMinor: 1251n, totalBaseMinor: 1251n })).code).toBe(
-      'sale.tax_policy_absent',
-    );
+    expect(refusal(() => saleCommitPayload({ ...base(), taxMinor: 1n, totalTxnMinor: 1251n, totalBaseMinor: 1251n })).code).toBe('sale.tax_policy_absent');
   });
 
   it('zero is accepted, and it is the only accepted value', () => {
@@ -298,8 +343,28 @@ describe('the arithmetic the builder refuses, so no assertion is minted over fig
       totalTxnMinor: 0n,
       totalBaseMinor: 0n,
       lines: [
-        { lineId: L1, productId: P1, merchantVariantId: null, variantId: V1, qtyQ4: 20_000n, discountMinor: 1000n, unitPriceC10: 500n * 10n ** 10n, netTxnMinor: 0n, baseShareMinor: 0n },
-        { lineId: L2, productId: P2, merchantVariantId: M2, variantId: V2, qtyQ4: 10_000n, discountMinor: 300n, unitPriceC10: 300n * 10n ** 10n, netTxnMinor: 0n, baseShareMinor: 0n },
+        {
+          lineId: L1,
+          productId: P1,
+          merchantVariantId: null,
+          variantId: V1,
+          qtyQ4: 20_000n,
+          discountMinor: 1000n,
+          unitPriceC10: 500n * 10n ** 10n,
+          netTxnMinor: 0n,
+          baseShareMinor: 0n,
+        },
+        {
+          lineId: L2,
+          productId: P2,
+          merchantVariantId: M2,
+          variantId: V2,
+          qtyQ4: 10_000n,
+          discountMinor: 300n,
+          unitPriceC10: 300n * 10n ** 10n,
+          netTxnMinor: 0n,
+          baseShareMinor: 0n,
+        },
       ],
     };
     expect(refusal(() => saleCommitPayload(z)).code).toBe('sale.total_zero');
@@ -347,7 +412,10 @@ describe('the line rules — a sale takes stock OUT, one line per variant, each 
       refusal(() =>
         saleCommitIntentSha256({
           ...dup,
-          lines: [dup.lines[0] as SaleCommitPayloadInput['lines'][number], { ...(dup.lines[1] as SaleCommitPayloadInput['lines'][number]), productId: P1, merchantVariantId: null }],
+          lines: [
+            dup.lines[0] as SaleCommitPayloadInput['lines'][number],
+            { ...(dup.lines[1] as SaleCommitPayloadInput['lines'][number]), productId: P1, merchantVariantId: null },
+          ],
         }),
       ).code,
     ).toBe('inventory.duplicate_line');
@@ -368,21 +436,17 @@ describe('the line rules — a sale takes stock OUT, one line per variant, each 
   it('a non-positive quantity is refused: the client states the magnitude and the routine owns the sign', () => {
     const neg = base();
     expect(
-      refusal(() =>
-        saleCommitIntentSha256({ ...neg, lines: [{ ...(neg.lines[0] as SaleCommitPayloadInput['lines'][number]), qtyQ4: -20_000n }] }),
-      ).code,
+      refusal(() => saleCommitIntentSha256({ ...neg, lines: [{ ...(neg.lines[0] as SaleCommitPayloadInput['lines'][number]), qtyQ4: -20_000n }] })).code,
     ).toBe('inventory.payload_invalid');
-    expect(
-      refusal(() => saleCommitIntentSha256({ ...neg, lines: [{ ...(neg.lines[0] as SaleCommitPayloadInput['lines'][number]), qtyQ4: 0n }] })).code,
-    ).toBe('inventory.payload_invalid');
+    expect(refusal(() => saleCommitIntentSha256({ ...neg, lines: [{ ...(neg.lines[0] as SaleCommitPayloadInput['lines'][number]), qtyQ4: 0n }] })).code).toBe(
+      'inventory.payload_invalid',
+    );
   });
 
   it('a negative discount is refused', () => {
     const neg = base();
     expect(
-      refusal(() =>
-        saleCommitIntentSha256({ ...neg, lines: [{ ...(neg.lines[0] as SaleCommitPayloadInput['lines'][number]), discountMinor: -1n }] }),
-      ).code,
+      refusal(() => saleCommitIntentSha256({ ...neg, lines: [{ ...(neg.lines[0] as SaleCommitPayloadInput['lines'][number]), discountMinor: -1n }] })).code,
     ).toBe('inventory.payload_invalid');
   });
 

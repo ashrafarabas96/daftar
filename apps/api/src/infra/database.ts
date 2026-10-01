@@ -132,6 +132,8 @@ export type TransactionSeamRefusal =
   | 'seam.accounting_assertion_exhausted'
   | 'seam.accounting_assertion_unused'
   | 'seam.accounting_assertion_sequence_required'
+  /** A posting attempted on a transaction that DECLARED it posts nothing (`SeamAccountingAuthority`). */
+  | 'seam.accounting_assertion_not_authorized'
   | 'seam.nested_transaction'
   | 'seam.not_a_posting_transaction'
   | 'seam.transaction_closed'
@@ -414,6 +416,43 @@ function accountingAssertionParts(scope: BusinessScope, accountingAssertion: unk
 export type AccountingAssertions = string | readonly [string, ...string[]];
 
 /**
+ * Seam 2's accounting authority, DECLARED (P4-S2; docs/PHASE_4_S2_CONTRACT.md
+ * A-09).
+ *
+ * The problem this type solves. `AccountingAssertions` is a non-empty type and
+ * `plan` refuses an empty list (`seam.accounting_assertion_missing`), so a
+ * command that needs the seam's ATOMICITY but posts NOTHING had only two ways
+ * out: mint a signed assertion it never presents and rely for ever on
+ * `assertComplete`'s permissive "presented none" branch, or split its commit.
+ * The first is a fake authority nothing declares; the second is what the
+ * atomic sale law forbids. A draft sale and a draft invoice are exactly this
+ * case — `invoices_binding_owed_ck` (`0075:301`) makes a draft owe no binding
+ * — and so is any future command whose only writes are inventory's.
+ *
+ * So the capability is carried in the TYPE: a caller either states the
+ * postings it is authorized for, or states that it posts nothing. Under
+ * `no_posting` the transaction's `app.accounting_assertion` starts and stays
+ * empty and presenting ANY posting is refused, so "posts nothing" is enforced
+ * rather than described.
+ *
+ * It is additive on purpose: a bare string and a tuple remain exactly today's
+ * seam, so no existing caller changes. **The permissive "presented none"
+ * branch of `assertComplete` is deliberately NOT tightened here** — see A-09
+ * of the contract. `tests/integration/purchase-s4-seam.test.ts:207` asserts
+ * that behaviour as a LAW ("presenting none commits (the replay case, A-08)"),
+ * because a replay is discovered INSIDE the transaction, after the seam was
+ * opened by a caller that could not know it would be one. Tightening it needs
+ * a way for the callback itself to declare the replay, which changes an
+ * accepted P3 contract and is a Tech Lead decision rather than this slice's.
+ */
+export type SeamAccountingAuthority = { readonly kind: 'postings'; readonly assertions: AccountingAssertions } | { readonly kind: 'no_posting' };
+
+/** True for the declared form, so the seam can keep accepting today's bare assertions. */
+function isSeamAccountingAuthority(value: AccountingAssertions | SeamAccountingAuthority): value is SeamAccountingAuthority {
+  return typeof value === 'object' && value !== null && !Array.isArray(value) && 'kind' in value;
+}
+
+/**
  * R-B1: the ordered accounting assertions of one seam-2 transaction, each
  * presented for exactly one posting.
  *
@@ -432,6 +471,8 @@ export class AccountingAssertionSequence {
   private constructor(
     private readonly assertions: readonly string[],
     private readonly sources: readonly AccountingAssertionSource[],
+    /** `no_posting` is a DECLARATION that this transaction posts nothing; see `SeamAccountingAuthority`. */
+    private readonly kind: 'postings' | 'no_posting' = 'postings',
   ) {}
 
   /**
@@ -441,7 +482,18 @@ export class AccountingAssertionSequence {
    * more assertions have one, and the transaction starts with the GUC empty so
    * nothing can post that was not presented.
    */
-  static plan(scope: BusinessScope, accountingAssertions: AccountingAssertions): { guc: string; sequence: AccountingAssertionSequence | null } {
+  static plan(
+    scope: BusinessScope,
+    accountingAssertions: AccountingAssertions | SeamAccountingAuthority,
+  ): { guc: string; sequence: AccountingAssertionSequence | null } {
+    if (isSeamAccountingAuthority(accountingAssertions)) {
+      // A declared no-posting transaction: no authority, an empty GUC, and a
+      // sequence whose only job is to refuse a posting that is attempted
+      // anyway. It is NOT `sequence: null`, because `null` is the
+      // single-authority path and would let a posting through.
+      if (accountingAssertions.kind === 'no_posting') return { guc: '', sequence: new AccountingAssertionSequence([], [], 'no_posting') };
+      return AccountingAssertionSequence.plan(scope, accountingAssertions.assertions);
+    }
     const list: readonly unknown[] = Array.isArray(accountingAssertions) ? accountingAssertions : [accountingAssertions];
     if (list.length === 0) {
       throw new TransactionSeamError('seam.accounting_assertion_missing', 'the accounting seam cannot be opened without an accounting assertion');
@@ -464,6 +516,12 @@ export class AccountingAssertionSequence {
 
   /** The assertion for the next posting, refusing a source that is not its claim, or a posting beyond the last. */
   next(source: AccountingAssertionSource): string {
+    if (this.kind === 'no_posting') {
+      throw new TransactionSeamError(
+        'seam.accounting_assertion_not_authorized',
+        'this transaction declared that it posts nothing: it carries no accounting authority to present',
+      );
+    }
     const i = this.presented;
     const assertion = this.assertions[i];
     const claims = this.sources[i];
@@ -482,6 +540,7 @@ export class AccountingAssertionSequence {
 
   /** Refuse a commit that left an assertion unpresented after presenting any. */
   assertComplete(): void {
+    if (this.kind === 'no_posting') return;
     if (this.presented > 0 && this.presented < this.assertions.length) {
       throw new TransactionSeamError(
         'seam.accounting_assertion_unused',
@@ -744,7 +803,7 @@ export class Database implements OnModuleDestroy, OnModuleInit {
   async withBusinessInventoryAccountingTransaction<T>(
     scope: BusinessScope,
     inventoryAssertions: InventoryAssertions,
-    accountingAssertions: AccountingAssertions,
+    accountingAssertions: AccountingAssertions | SeamAccountingAuthority,
     fn: (tx: BusinessInventoryAccountingTransaction) => Promise<T>,
   ): Promise<T> {
     this.refuseNestedSeam();

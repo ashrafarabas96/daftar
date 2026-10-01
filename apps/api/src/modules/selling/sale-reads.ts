@@ -323,3 +323,67 @@ export class SaleReadService {
     return readSaleDto(this.db, scope, saleId, true);
   }
 }
+
+// ── 4. The COGS prediction (A-08) ────────────────────────────────────────
+
+/** One stock key's current valuation, as the prediction reads it before any lock. */
+export interface SaleStockLevel {
+  readonly onHandQ4: bigint;
+  readonly valuationBaseMinor: bigint;
+  /** `avg_unit_cost_base_minor` as C10 (x 10^10), or null for a key with no stock. */
+  readonly avgUnitCostC10: bigint | null;
+}
+
+/**
+ * The `stock_levels` rows of the keys this sale will touch — read BEFORE the
+ * transaction and therefore before the stock key's `FOR UPDATE`.
+ *
+ * It exists for exactly one reason. The accounting assertions of a sale are
+ * minted before the seam opens (the seam's own contract), so the COGS figure
+ * they are signed over is a PREDICTION of what the stock writer will compute
+ * inside the lock. `packages/accounting/src/sale-posting.ts`'s header states
+ * why that is safe: a concurrent movement on the same key makes the prediction
+ * stale, and three mechanisms make the disagreement loud rather than silent —
+ * `accounting_post_entry` recomputes `acctfp/1` from the lines it received and
+ * refuses a mismatch before any write; the deferred
+ * `accounting_sale_entry_complete` trigger re-derives the expected COGS line
+ * from the PERSISTED `stock_movements`; and the sale's own deferred binding FK
+ * fails the COMMIT if the entry never happened. A stale prediction costs a
+ * refused sale the till retries, never a misstated cost.
+ *
+ * **It is NOT a stock check.** Nothing here decides whether there is enough
+ * stock: `inventory_apply_stock_movements` raises
+ * `inventory.insufficient_stock` under the level row's own `FOR UPDATE`
+ * (`0060:383`), which is also the last-item race mechanism, and that stays
+ * the only answer (OD-P4-05, NO OVERSELL). A pre-read that refused early
+ * would be a second oversell rule racing the real one.
+ */
+export async function readSaleStockLevels(
+  db: Database,
+  scope: ReadScope,
+  warehouseId: string,
+  variantIds: readonly string[],
+): Promise<ReadonlyMap<string, SaleStockLevel>> {
+  const ids = [...new Set(variantIds)];
+  if (ids.length === 0) return new Map();
+  const found = await rows<{ variant_id: string; on_hand_q4: string; valuation_base_minor: string; avg_c10: string | null }>(
+    db,
+    scope,
+    `SELECT l.variant_id,
+            (l.on_hand * 10000)::numeric(22,0)::text AS on_hand_q4,
+            l.valuation_base_minor::text AS valuation_base_minor,
+            (l.avg_unit_cost_base_minor * 10000000000)::numeric(40,0)::text AS avg_c10
+       FROM stock_levels l
+      WHERE l.business_id = $1 AND l.warehouse_id = $2 AND l.variant_id = ANY($3::uuid[])`,
+    [scope.businessId, warehouseId, ids],
+  );
+  const out = new Map<string, SaleStockLevel>();
+  for (const r of found) {
+    out.set(r.variant_id, {
+      onHandQ4: BigInt(r.on_hand_q4),
+      valuationBaseMinor: BigInt(r.valuation_base_minor),
+      avgUnitCostC10: r.avg_c10 === null ? null : BigInt(r.avg_c10),
+    });
+  }
+  return out;
+}

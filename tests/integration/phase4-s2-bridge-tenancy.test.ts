@@ -14,7 +14,7 @@
  *      business_id)` FK, which is why its `tenant_membership` policy uses the
  *      correlated `businesses` subselect (`0063:556-557`) instead of the
  *      direct `tenant_id` form `0052` adopted after measurement;
- *   3. `inventory_stock_source_guard_gaps()` (`0061:307-481`) pins the
+ *   3. `inventory_stock_source_guard_gaps()` pins the
  *      bridge primary key "exactly".
  *
  * The question is NOT settled by reading the three; it is settled by asking
@@ -55,7 +55,22 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { PoolClient } from 'pg';
 import { ensurePostgres, ownerPool } from '../helpers/test-app';
 
-/** The seven checks `inventory_stock_source_guard_gaps()` makes about the bridge itself (`0061:355-412`). */
+/**
+ * The seven checks `inventory_stock_source_guard_gaps()` makes about the
+ * bridge itself, in the LIVE body at `0067:1438` (`TL-P4-S2-K3`): `bridge`
+ * 1518, `bridge_rls` 1521, `bridge_pk` 1529, `bridge_source_type` 1535,
+ * `bridge_binding_fk` 1547, `bridge_line_fk` 1564, `bridge_immutable` 1576,
+ * and `binding_trigger` 1595 beside them.
+ *
+ * `P4-AL-29b` cites `0061:307-481`, which is the FIRST of five versions of
+ * this function and a body the database no longer holds. Reasoning from it is
+ * how a guard gets designed against a check that was replaced: `bridge_pk` is
+ * `IS DISTINCT FROM ARRAY['business_id','source_id','source_line_id','movement_kind']`
+ * for EVERY source type, and the line FK's `conkey` is pinned to
+ * `ARRAY['business_id','source_id','source_line_id']` for every type too —
+ * only the FK's TARGET (`confrelid`/`confkey`) is relaxed for a type outside
+ * S3/S4/S5, by `NOT (v_s3 OR v_s4 OR v_s5) OR ...` at 1548-1564.
+ */
 const BRIDGE_GAPS = ['bridge', 'bridge_rls', 'bridge_pk', 'bridge_source_type', 'bridge_binding_fk', 'bridge_line_fk', 'bridge_immutable'] as const;
 
 type Variant = 'no_tenant' | 'tenant_col' | 'tenant_in_pk' | 'tenant_in_line_fk';
@@ -118,9 +133,7 @@ async function gapsFor(variant: Variant): Promise<readonly string[]> {
     await c.query(`CREATE TRIGGER stock_bridge_immutable_probe BEFORE UPDATE OR DELETE ON stock_source_bridge_probe
                      FOR EACH ROW EXECUTE FUNCTION stock_ledger_append_only()`);
 
-    const r = await c.query<{ missing: string }>(
-      `SELECT missing FROM inventory_stock_source_guard_gaps() WHERE source_type = 'probe' ORDER BY missing`,
-    );
+    const r = await c.query<{ missing: string }>(`SELECT missing FROM inventory_stock_source_guard_gaps() WHERE source_type = 'probe' ORDER BY missing`);
     return r.rows.map((x) => x.missing);
   } finally {
     // Always: the probe commits nothing, whatever happened.
@@ -177,9 +190,7 @@ describe('P4-S2 B-01 the sale bridge may carry tenant_id, and may not carry it i
   it('the probe committed nothing: `probe` is not registered and no probe relation exists', async () => {
     const t = await ownerPool().query<{ n: number }>(`SELECT count(*)::int AS n FROM stock_source_types WHERE source_type = 'probe'`);
     expect(t.rows[0]?.n).toBe(0);
-    const c = await ownerPool().query<{ n: number }>(
-      `SELECT count(*)::int AS n FROM pg_class WHERE relname IN ('stock_source_bridge_probe', 'probe_lines')`,
-    );
+    const c = await ownerPool().query<{ n: number }>(`SELECT count(*)::int AS n FROM pg_class WHERE relname IN ('stock_source_bridge_probe', 'probe_lines')`);
     expect(c.rows[0]?.n).toBe(0);
   });
 
