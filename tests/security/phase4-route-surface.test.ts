@@ -83,7 +83,7 @@
  * place in the estate allowed to carry a claim the acceptance commit deletes.
  */
 import { randomUUID } from 'node:crypto';
-import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { METHOD_METADATA, PATH_METADATA } from '@nestjs/common/constants';
 import { RequestMethod } from '@nestjs/common';
@@ -91,6 +91,8 @@ import { beforeAll, afterAll, describe, expect, it } from 'vitest';
 import { createTestApp, ensurePostgres, resetData, type TestApp } from '../helpers/test-app';
 import { asMember, onboardS3Business, registerActor, type HttpActor, type S3Business } from '../helpers/inventory-commands';
 import { PHASE4_ROUTE_PREFIXES } from '../../scripts/phase4-s1-gate';
+import { AppModule } from '../../apps/api/src/app/app.module';
+import { MerchantApiModule } from '../../apps/api/src/app/merchant-api.module';
 import { P4_S3_REQUIRED_CONTROLLERS } from '../../apps/api/src/modules/pos/pos-permissions';
 
 /** The whole module tree. A controller is a Phase 4 controller by what it DECLARES, never by where it lives. */
@@ -99,8 +101,35 @@ const MODULES_DIR = join(__dirname, '../../apps/api/src/modules');
 /** The POS module directory — named once, for the `P4_S3_REQUIRED_CONTROLLERS` cross-check, and never for a route path. */
 const POS_DIR = join(MODULES_DIR, 'pos');
 
-/** The two compositions. A controller registered in only one of them is a route no integration test can reach. */
-const COMPOSITIONS: readonly string[] = ['apps/api/src/app/app.module.ts', 'apps/api/src/app/merchant-api.module.ts'];
+/**
+ * THE TWO COMPOSITIONS, READ AS METADATA AND NEVER AS TEXT.
+ *
+ * A controller registered in only one of them is a route no integration test
+ * can reach, so both are asked what they actually compose: each is a
+ * `@Module({})` class whose `register(options)` returns the `DynamicModule`,
+ * and `controllers` on that object is the list Nest itself mounts. The options
+ * are never used by either `register` beyond being spread into providers, which
+ * is why `{ config: {} as never }` is enough and why
+ * `tests/integration/process-composition.test.ts` already calls them this way.
+ *
+ * This REPLACED a source-text check (`new RegExp('\\b' + name + '\\b')` over
+ * each composition file), and the replacement was forced by a red proof rather
+ * than by taste: deleting `PosCartController` from `merchant-api.module.ts`'s
+ * `controllers` array left the suite GREEN, because the class is still named on
+ * its own `import` line and the regex found it there. A check that an identifier
+ * appears SOMEWHERE in a file cannot tell a registration from an import, so it
+ * was satisfied by exactly the defect it existed to catch. Metadata cannot be
+ * fooled that way: an imported, unregistered controller is simply not in the
+ * list.
+ */
+const compositions = (): readonly { readonly name: string; readonly controllers: readonly string[] }[] => {
+  const options = { config: {} as never };
+  const controllersOf = (dynamic: { controllers?: unknown }): string[] => ((dynamic.controllers ?? []) as { name: string }[]).map((c) => c.name);
+  return [
+    { name: 'app.module.ts (PROCESS_MODE=all — what every integration test composes)', controllers: controllersOf(AppModule.register(options)) },
+    { name: 'merchant-api.module.ts (PROCESS_MODE=merchant-api — what production runs)', controllers: controllersOf(MerchantApiModule.register(options)) },
+  ];
+};
 
 /** Whether a declared path is on the Phase 4 surface, by the estate's own prefix list. */
 const isPhase4Path = (path: string): boolean => PHASE4_ROUTE_PREFIXES.some((p) => path === p || path.startsWith(`${p}/`));
@@ -320,20 +349,20 @@ describe('P4-AL-88: the declared Phase 4 surface is discovered, not listed', () 
   it('both Nest compositions register every discovered Phase 4 controller', async () => {
     // DAFTAR composes Nest twice (`selling.module.ts:19-22`, `pos.module.ts`),
     // and a controller in one composition only is a route no integration test
-    // can reach. Both compositions are `@Module({})` classes that build a
-    // `DynamicModule` in `register(options)`, so the controller list is not in
-    // class metadata and is read from the composition SOURCE instead.
+    // can reach. Each composition's REGISTERED list is read off the
+    // `DynamicModule` its `register()` returns — see `compositions` for why
+    // that is metadata and no longer source text.
     //
     // `tests/integration/process-composition.test.ts` already holds the two
-    // lists to EACH OTHER. What it cannot notice is a Phase 4 controller that
-    // is in neither, which is what this adds — derived from the tree, so a
-    // controller added later is covered by existing.
+    // lists to EACH OTHER, but one-directionally (merchant ⊆ single), so a
+    // Phase 4 controller in NEITHER passes there. That is the hole this closes
+    // — derived from the tree, so a controller added later is covered by
+    // existing.
     const discovered = (await phase4Controllers()).map((c) => c.name);
     expect(discovered.length, 'no Phase 4 controller was discovered in the module tree').toBeGreaterThan(0);
-    for (const file of COMPOSITIONS) {
-      const source = readFileSync(join(__dirname, '../..', file), 'utf8');
-      const missing = discovered.filter((name) => !new RegExp(`\\b${name}\\b`).test(source));
-      expect(missing, `${file} does not register these Phase 4 controllers`).toEqual([]);
+    for (const { name, controllers } of compositions()) {
+      const missing = discovered.filter((c) => !controllers.includes(c));
+      expect(missing, `${name} does not register these Phase 4 controllers`).toEqual([]);
     }
   });
 
@@ -363,10 +392,9 @@ describe('P4-AL-88: the declared Phase 4 surface is discovered, not listed', () 
       .sort();
     expect(built.length, 'modules/pos declares no Phase 4 controller — the whole POS surface would be unmounted').toBeGreaterThan(0);
     expect([...P4_S3_REQUIRED_CONTROLLERS].sort(), 'the stated POS controllers and the built ones disagree').toEqual(built);
-    for (const file of COMPOSITIONS) {
-      const source = readFileSync(join(__dirname, '../..', file), 'utf8');
-      const missing = P4_S3_REQUIRED_CONTROLLERS.filter((name) => !new RegExp(`\\b${name}\\b`).test(source));
-      expect(missing, `${file} does not register these P4-S3 controllers`).toEqual([]);
+    for (const { name, controllers } of compositions()) {
+      const missing = P4_S3_REQUIRED_CONTROLLERS.filter((c) => !controllers.includes(c));
+      expect(missing, `${name} does not register these P4-S3 controllers`).toEqual([]);
     }
   });
 });
