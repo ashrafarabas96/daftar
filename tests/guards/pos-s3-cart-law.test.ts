@@ -54,6 +54,8 @@ import {
   POS_CART_COLUMNS,
   POS_CART_COLUMNS_BEYOND_CONTRACT,
   POS_CART_FORBIDDEN_COLUMNS,
+  POS_CART_MERGE_UNIQUE_KEY,
+  POS_CART_MERGE_KEY_NULLS_NOT_DISTINCT,
   cartStatementPlan,
   type CartCommandTarget,
 } from '../../apps/api/src/modules/pos/pos-cart-statements';
@@ -685,6 +687,38 @@ describe('P4-S3 (D) — no stored derived truth, and the refusal registry', () =
     expect(POS_CART_COLUMNS.lines.tillSessionId).toBe(CART_LINE_COLUMNS.session);
     expect(POS_CART_COLUMNS.lines.businessId).toBe(CART_LINE_COLUMNS.business);
     expect(POS_CART_COLUMNS.sessions.owner).toBe(TILL_SESSION_COLUMNS.owner);
+  });
+
+  it('the merge key the add-line upsert INFERS is the key reported as a requirement on `0079`', () => {
+    // `ON CONFLICT (a, b, c, d)` infers an index. If the requirement handed to
+    // the migration owner and the tuple in the statement ever disagree, the
+    // add raises `42P10` at a till — so the two are one assertion here rather
+    // than two sentences in two files.
+    const plan = cartStatementPlan('cart.add_line', target());
+    const mutation = plan.find((p) => p.role === 'mutation');
+    expect(mutation?.text).toContain(`ON CONFLICT (${POS_CART_MERGE_UNIQUE_KEY.join(', ')})`);
+    expect([...POS_CART_MERGE_UNIQUE_KEY]).toEqual(['business_id', 'till_session_id', 'product_id', 'variant_id']);
+    // Every column of the key is one the module declares, so the key cannot
+    // name a column nobody asked `0079` for.
+    const declared = Object.values(POS_CART_COLUMNS.lines);
+    for (const column of POS_CART_MERGE_UNIQUE_KEY) expect(declared).toContain(column);
+    // And the NULL semantics, which are the half that would fail SILENTLY:
+    // `variant_id` is nullable, two NULLs are DISTINCT by default, so for a
+    // product with no variants the conflict would never be inferred and a
+    // second scan of one barcode would quietly mint a second line. The
+    // requirement is `UNIQUE NULLS NOT DISTINCT`, and it is recorded as data
+    // because a reviewer reading the migration needs to look for it.
+    expect(POS_CART_MERGE_KEY_NULLS_NOT_DISTINCT).toBe(true);
+    expect(POS_CART_MERGE_UNIQUE_KEY).toContain('variant_id');
+  });
+
+  it('the three commands that address an existing line are NOT upserts', () => {
+    // Only the add merges. A change, a removal or a discount that could INSERT
+    // would be a command minting the row it claims to be amending.
+    for (const command of ['cart.change_quantity', 'cart.remove_line', 'cart.request_discount'] as const) {
+      const mutation = cartStatementPlan(command, target()).find((p) => p.role === 'mutation');
+      expect(mutation?.text, command).not.toMatch(/ON CONFLICT|INSERT INTO/i);
+    }
   });
 
   it('EVERY cart code lives in the ONE canonical registry, with a registered status', () => {

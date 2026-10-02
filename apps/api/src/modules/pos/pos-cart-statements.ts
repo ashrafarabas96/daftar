@@ -123,6 +123,38 @@ export const POS_CART_COLUMNS = Object.freeze({
 export const POS_CART_COLUMNS_BEYOND_CONTRACT: readonly string[] = Object.freeze(['product_id', 'variant_id', 'quantity', 'discount_minor', 'line_seq']);
 
 /**
+ * The unique key the add-line merge requires of `0079`, as data.
+ *
+ * `cart.add_line` is an upsert: adding a product already in the basket must
+ * INCREASE that line's quantity rather than mint a second line for one
+ * product, which is also what keeps the statement count at two (the
+ * alternative is a read, then a branch, then a write). `ON CONFLICT` needs a
+ * unique index on exactly these four columns to infer, and without it the
+ * statement does not merely behave differently — it raises `42P10`, so a
+ * missing index is loud rather than silent.
+ *
+ * ## The part that WOULD be silent, and is the reason this is written down
+ *
+ * `variant_id` is nullable: a product with no variants has no variant. Under
+ * the default UNIQUE semantics two NULLs are DISTINCT, so for exactly those
+ * products the conflict would never be inferred, `ON CONFLICT` would find
+ * nothing, and a second scan of the same barcode would quietly produce a
+ * second line — the one case a cashier meets most often, wrong, with no
+ * error anywhere. `0079` must therefore declare the index
+ * `UNIQUE NULLS NOT DISTINCT` (PostgreSQL 15+; this estate runs 18.4), or
+ * else make `variant_id` NOT NULL with a sentinel, which this module does not
+ * ask for because a sentinel variant is a row in the catalogue that is not a
+ * variant.
+ *
+ * The integration suite's `0079` seam asserts this against the live
+ * catalogue once the migration lands, rather than trusting the sentence.
+ */
+export const POS_CART_MERGE_UNIQUE_KEY: readonly string[] = Object.freeze(['business_id', 'till_session_id', 'product_id', 'variant_id']);
+
+/** `true` iff the merge key must treat two NULL `variant_id`s as EQUAL. See above: it must. */
+export const POS_CART_MERGE_KEY_NULLS_NOT_DISTINCT = true;
+
+/**
  * The columns `0079` must NOT have, asserted by the guard suite against the
  * migration tree once it lands.
  *

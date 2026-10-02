@@ -56,6 +56,8 @@ import {
   CART_STATEMENTS_PER_COMMAND,
   POS_CART_COLUMNS,
   POS_CART_FORBIDDEN_COLUMNS,
+  POS_CART_MERGE_UNIQUE_KEY,
+  POS_CART_MERGE_KEY_NULLS_NOT_DISTINCT,
   cartStatementPlan,
   type CartCommandTarget,
 } from '../../apps/api/src/modules/pos/pos-cart-statements';
@@ -487,6 +489,35 @@ describe('§5 — the `0079` seam, discovered from the DATABASE and not from a s
     // And the projection EXECUTES, which is the whole point of the seam.
     const [, projection] = cartStatementPlan('cart.add_line', target());
     await expect(pool.query(projection?.text ?? '', [...(projection?.params ?? [])])).resolves.toBeDefined();
+
+    // ── The merge key, including the half that would fail SILENTLY ────────
+    // The add is an upsert, so `0079` must carry a unique index on exactly
+    // the tuple the statement infers, and it must treat two NULL
+    // `variant_id`s as EQUAL. Without `NULLS NOT DISTINCT`, a product with no
+    // variants would never conflict with itself: a second scan of one barcode
+    // would quietly mint a second line, with no error at the till and no
+    // failing assertion anywhere else in this slice. So it is read off
+    // `pg_index` rather than trusted.
+    const { rows: indexes } = await pool.query<{ cols: string[]; nulls_not_distinct: boolean }>(
+      `SELECT array_agg(a.attname::text ORDER BY k.ord) AS cols, i.indnullsnotdistinct AS nulls_not_distinct
+         FROM pg_index i
+         JOIN pg_class c ON c.oid = i.indrelid
+         CROSS JOIN LATERAL unnest(i.indkey) WITH ORDINALITY AS k(attnum, ord)
+         JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = k.attnum
+        WHERE c.relname = $1 AND i.indisunique
+        GROUP BY i.indexrelid, i.indnullsnotdistinct`,
+      [POS_CART_COLUMNS.lines.table],
+    );
+    const merge = indexes.find((row) => [...row.cols].sort().join(',') === [...POS_CART_MERGE_UNIQUE_KEY].sort().join(','));
+    expect(merge, `0079 has no unique index on (${POS_CART_MERGE_UNIQUE_KEY.join(', ')}) — the add-line upsert would raise 42P10`).toBeDefined();
+    expect(
+      merge?.nulls_not_distinct,
+      'the merge index treats two NULL variant_id values as DISTINCT: a product with no variants would silently get a SECOND line',
+    ).toBe(POS_CART_MERGE_KEY_NULLS_NOT_DISTINCT);
+
+    // The merge itself, demonstrated: the same product twice is ONE line.
+    const [mutation] = cartStatementPlan('cart.add_line', target());
+    expect(mutation?.text).toContain('ON CONFLICT');
   });
 });
 
