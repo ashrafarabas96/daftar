@@ -752,6 +752,16 @@ export const INVENTORY_PAYLOAD_SCHEMAS: Readonly<Record<InventoryOperationCode, 
   // resolves identically on a replay, which is exactly what a resolved
   // catalogue price does not do — the reason `sale.commit` needs the carve-out
   // and these do not.
+  //
+  // THE ACTOR IS NOT A FIELD IN ANY OF THE FOUR, and that is `OD-P4-09`
+  // itself rather than an omission. The tenant, the business and the acting
+  // user come from the verified assertion (`inventory_verified_actor`) and
+  // never from an argument, so the user a till session belongs to is a signed
+  // fact. A `user_id` or `cashier_id` field here would offer the takeover
+  // that ruling refused as a parameter, and the database half of the same
+  // rule — `pos_cart_lines_session_actor_fk` against
+  // `pos_till_sessions_actor_uq` — would then be guarding a door whose key
+  // the caller hands it.
   'pos.session_open': Object.freeze([
     spec('session_id', 'uuid'),
     spec('branch_id', 'uuid'),
@@ -1206,5 +1216,67 @@ export function dissociateWarehouseBranchPayload(input: WarehouseBranchPayloadIn
   return buildInventoryPayload('structure.dissociate_warehouse_branch', input.tenantId, input.businessId, [
     { kind: 'uuid', value: input.warehouseId },
     { kind: 'uuid', value: input.branchId },
+  ]);
+}
+
+// ── P4-S3: the two till-session builders (`0079` §6; OD-P4-09) ────────────
+//
+// Neither input carries an actor, and neither can: the business, the tenant
+// and the ACTOR come from the verified `invctl/1` assertion inside the
+// routine, so the user a till session belongs to is a signed server decision
+// and not a parameter. `tenantId` and `businessId` are here because every
+// `invpl/1` stream binds its scope in the preimage, not because a caller
+// chooses them — they come from the authorized membership.
+
+export interface TillSessionOpenPayloadInput {
+  readonly tenantId: string;
+  readonly businessId: string;
+  readonly sessionId: string;
+  readonly branchId: string;
+  readonly warehouseId: string;
+  /** The physical till, held to the `code` grammar by the caller's schema and by the column's own CHECK. */
+  readonly terminalCode: string;
+  /** The session's ISO currency, UPPER-CASE as the column stores it. It is lower-cased here, and only here. */
+  readonly currencyCode: string;
+  /** The cash a human COUNTED in the drawer at the start of the shift, in minor units. */
+  readonly openingFloatMinor: bigint;
+}
+
+/**
+ * `pos.session_open`: session_id, branch_id, warehouse_id, terminal_code,
+ * currency_code (LOWER-CASED), opening_float_minor.
+ *
+ * The lower-casing is the one transformation in this builder and it is
+ * required, not stylistic: the `code` field type is `^[a-z][a-z0-9_]{0,31}$`
+ * (`0054:206`) and an ISO currency code is upper-case, so the routine hashes
+ * `lower(p_currency_code)` while the column stores `upper(p_currency_code)`.
+ * A builder that hashed the upper-case form would mint a digest the routine
+ * cannot reproduce, and every call would be
+ * `inventory.assertion_payload_mismatch`.
+ */
+export function tillSessionOpenPayload(input: TillSessionOpenPayloadInput): InventoryPayload {
+  return buildInventoryPayload('pos.session_open', input.tenantId, input.businessId, [
+    { kind: 'uuid', value: input.sessionId },
+    { kind: 'uuid', value: input.branchId },
+    { kind: 'uuid', value: input.warehouseId },
+    { kind: 'code', value: input.terminalCode },
+    { kind: 'code', value: input.currencyCode.toLowerCase() },
+    { kind: 'integer', value: input.openingFloatMinor },
+  ]);
+}
+
+export interface TillSessionClosePayloadInput {
+  readonly tenantId: string;
+  readonly businessId: string;
+  readonly sessionId: string;
+  /** The cash a human COUNTED in the drawer at the end of the shift, in minor units. */
+  readonly closingCountMinor: bigint;
+}
+
+/** `pos.session_close`: session_id, closing_count_minor. */
+export function tillSessionClosePayload(input: TillSessionClosePayloadInput): InventoryPayload {
+  return buildInventoryPayload('pos.session_close', input.tenantId, input.businessId, [
+    { kind: 'uuid', value: input.sessionId },
+    { kind: 'integer', value: input.closingCountMinor },
   ]);
 }

@@ -1,165 +1,148 @@
-import { createHash } from 'node:crypto';
 import { Inject, Injectable } from '@nestjs/common';
-import type { PoolClient } from 'pg';
-import { Database, type Scope } from '../../infra/database';
-import { AuditService } from '../audit/audit.service';
+import { tillSessionClosePayload, tillSessionOpenPayload } from '@daftar/inventory';
+import { Database } from '../../infra/database';
+import type { BusinessTransactionId } from '../inventory/business-transaction';
+import { InventoryAuthorizationService } from '../inventory/inventory-authorization';
+import { readBaseCurrency, type ReadScope } from '../inventory/inventory-stock-read';
 import type { MembershipContext } from '../tenancy/tenancy.service';
 import { posRefusal, rethrowPosRefusal } from './pos-errors';
-import { CART_LINE_COLUMNS, POS_CART_LINES, POS_TILL_SESSIONS, TILL_SESSION_COLUMNS as C, TILL_SESSION_STATES } from './pos-session-contract';
+import { POS_TILL_SESSIONS, TILL_SESSION_COLUMNS as C, TILL_SESSION_STATES } from './pos-session-contract';
 import type { TillSessionCloseRequest, TillSessionOpenRequest } from './pos.schemas';
 
 /**
  * THE TILL-SESSION LIFECYCLE (P4-S3; `OD-P4-09` OPTION A — **one session, one
- * authenticated user**; lock `P4-AL-30`, `P4-AL-40`, `P4-AL-48`).
+ * authenticated user**; lock `P4-AL-30`, `P4-AL-39`, `P4-AL-40`, `P4-AL-48`).
  *
  * Two commands and two reads. Opening a till and closing it are separate
- * commands because they happen at separate times — which is why this is NOT
+ * commands because they happen at separate times — which is why this is not
  * the `POST /v1/sales` case, where a `confirm` route would have been half of
  * an atomic commit offered over HTTP. There is deliberately NO reopen, NO
  * take-over and NO transfer command: a change of user is a NEW session, which
- * is the ruling itself, and a command for either would be the refused
+ * is the ruling itself, and a command for any of them would be the refused
  * `OD-P4-09` OPTION B with a route in front of it.
  *
- * ## The owner is derived, never sent
+ * ## This service does not write the till. It AUTHORIZES and MINTS.
  *
- * `m.userId` is the authenticated principal, resolved from the membership by
- * `TenancyService` before this service is reached. It is the ONLY source of
- * the session's owner: `pos.schemas.ts` refuses `openedByUserId`,
- * `actorUserId` and `cashierId` as unknown keys, so there is no spelling of
- * "open a till in my colleague's name" that reaches here to be validated.
+ * `daftar_app` — the principal every request runs as — holds `SELECT` and
+ * nothing else on `pos_till_sessions` and `pos_cart_lines`. The writers are
+ * `0079`'s two `SECURITY DEFINER` routines, owned by
+ * `daftar_inventory_internal`, and each one's FIRST executable statement
+ * consumes an `invctl/1` assertion of its own registered kind over its own
+ * arguments. So the shape of every command here is:
  *
- * ## Why every ownership check below is ALSO a database rule, and why that is
- * ## not belt-and-braces
+ *   1. **validate** what the client may say — identities and counted cash, and
+ *      nothing else is believed;
+ *   2. **authorize**, through `InventoryAuthorizationService`: `sales.create`,
+ *      plus branch/warehouse scope over the till's warehouse. This is where
+ *      `P4-AL-40` is honoured, and it has to be here: `0079` §9.1 records that
+ *      its own RLS policies cannot reach `member_branch_scopes`, so the
+ *      database verifies the SIGNED RESULT of this decision rather than the
+ *      membership graph (P3-AL-54 §E);
+ *   3. **mint** the assertion over the exact `invpl/1` payload the routine
+ *      hashes — `tillSessionOpenPayload` / `tillSessionClosePayload`, held
+ *      byte-identical to `inventory_claimed_payload_digest(...)`'s own
+ *      argument arrays by the shared vectors. A field in the wrong place, of
+ *      the wrong type, or one too many or too few, is
+ *      `inventory.assertion_payload_mismatch` on every call;
+ *   4. **one seam-1 transaction**, and the routine. Seam 1 and not seam 2,
+ *      because P4-S3 creates **no accounting object at all**: the handle
+ *      carries no posting capability, and that is a property of its type
+ *      rather than a convention — counting a drawer is not posting it.
  *
- * `Database.withTransaction` is the TRUSTED GENERIC PRIMITIVE of this
- * process: any service can open a scoped transaction as `daftar_app` under
- * the caller's own tenant and business GUCs and issue arbitrary SQL. The
- * checks in this file protect the ROUTE. They do not protect the TABLE, and
- * they are not inherited by the next writer who needs to touch a till — a
- * reporting service, a later slice's cash-movement command, a repair script
- * running in the same process. Each of those reaches the generic primitive,
- * and none of them reaches this file.
+ * **The business, the tenant and the ACTOR come from the verified assertion,
+ * never from an argument.** Neither payload grammar has a user field and
+ * neither routine takes one, so the user a till session belongs to is a signed
+ * server decision. A client that could name the owner could open a till in a
+ * colleague's name, and `pos.schemas.ts` refuses every spelling of it as an
+ * unknown key.
  *
- * So `OD-P4-09` is in the SCHEMA (`0079`, the migration owner's), in two
- * parts, and this service's checks exist to render those parts as a merchant
- * sentence rather than to be the rule:
+ * ## The replay proof is SIGNED, and this service does not compute it
  *
- *   1. the session's owning column is `NOT NULL` and IMMUTABLE, so a till
- *      cannot be re-owned by any writer at all — reaching that refusal is a
- *      server-side defect and renders as `pos.session_owner_immutable` (500,
- *      no details), not as a merchant outcome;
- *   2. a write that attaches a basket line to a session owned by a DIFFERENT
- *      authenticated user is refused at the database and renders as
- *      `pos.session_not_owned` (403).
+ * `open_intent_sha256` and `close_intent_sha256` are the assertion's own
+ * payload digest, which the routine lifts out of the token it has just
+ * verified. A replay is therefore answered only to a caller who presented an
+ * assertion over the identical payload — the counted cash figure included,
+ * because both figures are inside the signed payload. An earlier version of
+ * this service computed a digest of its own; it would have matched the stored
+ * value never.
  *
- * `tests/guards/pos-s3-session-law.test.ts` requires both of those to be in
- * the migration tree, and `tests/security/pos-s3-session-authority.test.ts`
- * performs the bypass — the raw statement through the generic primitive, on a
- * real connection — and requires the database to refuse it. A rule proved
- * only against this service would be a rule about this service.
+ * ## Why the ownership rules are not `if`s in this file
+ *
+ * They are constraints. `pos_cart_lines (business_id, till_session_id,
+ * added_by)` references `pos_till_sessions (business_id, id, opened_by)`, so a
+ * basket line for another user's session has no parent row to point at; and
+ * `pos_till_session_guard()` refuses an `UPDATE` that changes `opened_by`.
+ * Neither is a check inside a wrapper, which is what makes them binding on
+ * `daftar_inventory_internal` itself and on anything reaching
+ * `Database.withTransaction` — the trusted generic primitive, which protects
+ * no table by itself. The reads below compare the owner too, but that
+ * comparison is a merchant SENTENCE and not the rule.
  *
  * ## Isolation
  *
- * Cross-tenant and cross-business invisibility is RLS's, never a predicate
- * here (`P4-AL-40`). The `business_id = $1` clauses below are not the
- * isolation: they are the ordinary scoping every query in the estate carries,
- * and the policies on `pos_till_sessions` are what make another business's
- * till unreadable and unwritable even when its id is known. That is why
- * naming a foreign session answers `pos.session_not_found` and not
- * `pos.session_not_owned`: the row is not merely forbidden, it is absent from
- * the actor's own transaction, and a 403 there would confirm the existence of
- * a row in a business the caller has no membership in.
- *
- * ## No accounting object, and no stored derived truth
- *
- * P4-S3 creates **no accounting object at all**: closing a till writes the
- * counted cash and posts nothing. The till's expected cash, and therefore any
- * over/short figure, is a computation over the session's own sales and is
- * never a column (`P4-AL-06`).
+ * Cross-tenant and cross-business invisibility is RLS's. The `business_id = $1`
+ * clauses are the ordinary scoping every query in the estate carries, not the
+ * isolation: the six policies on each relation are what make another
+ * business's till unreadable with its id in hand. That is why naming a foreign
+ * session answers `pos.session_not_found` and not a 403 — the row is absent
+ * from the actor's own transaction, and a 403 would confirm a row exists in a
+ * business the caller has no membership in.
  */
 @Injectable()
 export class TillSessionService {
   constructor(
     @Inject(Database) private readonly db: Database,
-    @Inject(AuditService) private readonly audit: AuditService,
+    @Inject(InventoryAuthorizationService) private readonly authorization: InventoryAuthorizationService,
   ) {}
 
   /**
    * `POST /v1/pos/till-sessions` — open a till for the authenticated user.
    *
-   * The replay proof comes FIRST, under the per-session advisory lock and
-   * before the branch or any other state is read
-   * (`[[daftar-registry-before-state]]`): a stale request replayed after a
-   * later transition, whose handler reads state first, performs a second real
-   * change. Same digest ⇒ the stored session is returned, having changed
-   * nothing. Different digest ⇒ `pos.session_idempotency_conflict`, because an
-   * idempotency key is not permission and a replay must prove WHICH command it
-   * is replaying before it answers "success".
+   * The currency is **server-derived**, from the business's base currency, and
+   * is deliberately not a request field even though the routine takes it as an
+   * argument: a currency is a policy and not an identity, and the client sends
+   * identities, quantities and a discount request. It is minted lower-cased
+   * and stored upper-cased, which is the one place that asymmetry is handled.
    *
-   * A replay of a session id that belongs to ANOTHER user is
-   * `pos.session_not_owned` and never a replay: the digest comparison is not
-   * reached, because answering a colleague's session id with its stored body
-   * would be a read across the `OD-P4-09` boundary dressed as idempotency.
+   * Everything the routine then decides is the routine's: the three advisory
+   * locks in their fixed order, the replay against the stored intent, the
+   * `OD-P4-09` refusal of a replay presented by a different user, the two
+   * partial unique indexes behind `pos.till_session_already_open` and
+   * `pos.terminal_already_open`, the insert, and the audit row in the same
+   * transaction (`P4-AL-48`). This service re-decides none of it, because a
+   * second copy of a decision is a second answer.
    */
-  async open(m: MembershipContext, body: TillSessionOpenRequest): Promise<TillSession> {
-    const digest = openIntentDigest(m, body);
+  async open(m: MembershipContext, body: TillSessionOpenRequest, businessTransactionId: BusinessTransactionId): Promise<TillSession> {
     try {
-      return await this.db.withTransaction(this.scope(m), async (c) => {
-        await lockSession(c, body.sessionId);
-
-        const stored = await this.storedSession(c, m, body.sessionId);
-        if (stored !== null) {
-          if (stored.opened_by_user_id !== m.userId) throw posRefusal('pos.session_not_owned');
-          if (stored.open_intent_sha256 !== digest) throw posRefusal('pos.session_idempotency_conflict');
-          return stored;
-        }
-
-        // `P4-AL-40`: the branch is named by the command and judged by the
-        // database. A branch outside this actor's `member_branch_scopes` is
-        // filtered by the policy, so "absent" and "not yours" are the same
-        // answer here — deliberately, because telling them apart is a
-        // cross-scope enumeration.
-        const branch = await c.query(`SELECT 1 FROM branches WHERE ${C.business} = $1 AND id = $2`, [m.businessId, body.branchId]);
-        if (branch.rowCount === 0) throw posRefusal('pos.branch_not_found');
-
-        // One user, one open till. The service says it as a sentence; the
-        // database says it as a rule, which is what makes it true for the
-        // generic primitive too.
-        const openAlready = await c.query(`SELECT 1 FROM ${POS_TILL_SESSIONS} WHERE ${C.business} = $1 AND ${C.owner} = $2 AND ${C.status} = $3 LIMIT 1`, [
-          m.businessId,
-          m.userId,
-          TILL_SESSION_STATES.open,
-        ]);
-        if (openAlready.rowCount !== 0) throw posRefusal('pos.session_already_open');
-
-        const { rows } = await c.query<TillSession>(
-          `INSERT INTO ${POS_TILL_SESSIONS}
-             (${C.tenant}, ${C.business}, ${C.id}, ${C.branch}, ${C.owner}, ${C.status}, ${C.openingFloatMinor}, ${C.intentDigest})
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-           RETURNING ${RETURNING}`,
-          [m.tenantId, m.businessId, body.sessionId, body.branchId, m.userId, TILL_SESSION_STATES.open, body.openingFloatMinor, digest],
-        );
-        const session = first(rows);
-
-        // `P4-AL-48`: the audit row is written in the SAME transaction as its
-        // effect, and it carries the actor, the permission exercised, the
-        // document's UUID, the intent digest, the branch and the till session.
-        await this.audit.recordTx(c, {
-          action: 'pos.till_session.open',
-          entity: POS_TILL_SESSIONS,
-          entityId: session.id,
-          actorUserId: m.userId,
+      const currencyCode = await readBaseCurrency(this.db, this.scope(m));
+      const authority = await this.authorization.authorize(m, 'pos.session_open', businessTransactionId, [body.warehouseId]);
+      const assertion = this.authorization.mint(
+        authority,
+        tillSessionOpenPayload({
           tenantId: m.tenantId,
           businessId: m.businessId,
-          metadata: {
-            permission: 'sales.create',
-            branchId: session.branch_id,
-            tillSessionId: session.id,
-            intentSha256: digest,
-            openingFloatMinor: session.opening_float_minor,
-          },
-        });
-        return session;
+          sessionId: body.sessionId,
+          branchId: body.branchId,
+          warehouseId: body.warehouseId,
+          terminalCode: body.terminalCode,
+          currencyCode,
+          openingFloatMinor: BigInt(body.openingFloatMinor),
+        }),
+      );
+      return await this.db.withBusinessInventoryTransaction(authority.scope, assertion, async (tx) => {
+        await tx.query(`SELECT till_session_id, replayed FROM pos_till_session_open($1, $2, $3, $4, $5, $6)`, [
+          body.sessionId,
+          body.branchId,
+          body.warehouseId,
+          body.terminalCode,
+          currencyCode,
+          body.openingFloatMinor,
+        ]);
+        const { rows } = await tx.query<TillSession>(`SELECT ${RETURNING} FROM ${POS_TILL_SESSIONS} WHERE ${C.business} = $1 AND ${C.id} = $2`, [
+          m.businessId,
+          body.sessionId,
+        ]);
+        return first(rows);
       });
     } catch (e) {
       rethrowPosRefusal(e);
@@ -167,60 +150,41 @@ export class TillSessionService {
   }
 
   /**
-   * `POST /v1/pos/till-sessions/:sessionId/close` — count the till and close
-   * it. A closed session is never reopened: the next shift opens a new one.
+   * `POST /v1/pos/till-sessions/:sessionId/close` — count the till and close it.
    *
-   * The row is taken `FOR UPDATE`, so two concurrent closes of one till
-   * serialise and the second meets `pos.session_not_open` rather than
-   * overwriting the first count.
+   * The session is read FIRST, under the caller's own scope, for one reason
+   * only: the warehouse to branch-scope check. That read is not the
+   * authorization and not the ownership decision — both are the routine's and
+   * the schema's — and it is scoped, so another business's session is invisible
+   * to it and answers `pos.session_not_found`.
+   *
+   * The basket is **not** emptied and not required to be empty: a closed
+   * session and its lines are the frozen record of the shift, and
+   * `pos_cart_line_guard()` refuses every later write to them. An earlier
+   * version of this service refused a close over a non-empty cart, which would
+   * have made a cashier unable to end a shift over an abandoned basket.
    */
-  async close(m: MembershipContext, sessionId: string, body: TillSessionCloseRequest): Promise<TillSession> {
+  async close(m: MembershipContext, sessionId: string, body: TillSessionCloseRequest, businessTransactionId: BusinessTransactionId): Promise<TillSession> {
     try {
-      return await this.db.withTransaction(this.scope(m), async (c) => {
-        await lockSession(c, sessionId);
-
-        const { rows } = await c.query<TillSession>(`SELECT ${RETURNING} FROM ${POS_TILL_SESSIONS} WHERE ${C.business} = $1 AND ${C.id} = $2 FOR UPDATE`, [
-          m.businessId,
-          sessionId,
-        ]);
-        const stored = rows[0];
-        // Absent, or in another tenant or another business and therefore
-        // invisible to this transaction. One answer for both: see the class
-        // comment on why this is not a 403.
-        if (stored === undefined) throw posRefusal('pos.session_not_found');
-        if (stored.opened_by_user_id !== m.userId) throw posRefusal('pos.session_not_owned');
-        if (stored.status !== TILL_SESSION_STATES.open) throw posRefusal('pos.session_not_open');
-
-        const basket = await c.query(`SELECT 1 FROM ${POS_CART_LINES} WHERE ${CART_LINE_COLUMNS.business} = $1 AND ${CART_LINE_COLUMNS.session} = $2 LIMIT 1`, [
-          m.businessId,
-          sessionId,
-        ]);
-        if (basket.rowCount !== 0) throw posRefusal('pos.session_cart_not_empty');
-
-        const closed = await c.query<TillSession>(
-          `UPDATE ${POS_TILL_SESSIONS}
-              SET ${C.status} = $3, ${C.closingCountMinor} = $4, ${C.closedAt} = now()
-            WHERE ${C.business} = $1 AND ${C.id} = $2
-            RETURNING ${RETURNING}`,
-          [m.businessId, sessionId, TILL_SESSION_STATES.closed, body.closingCountMinor],
-        );
-        const session = first(closed.rows);
-
-        await this.audit.recordTx(c, {
-          action: 'pos.till_session.close',
-          entity: POS_TILL_SESSIONS,
-          entityId: session.id,
-          actorUserId: m.userId,
+      const stored = await this.readRow(m, sessionId);
+      if (stored === null) throw posRefusal('pos.session_not_found');
+      const authority = await this.authorization.authorize(m, 'pos.session_close', businessTransactionId, [stored.warehouse_id]);
+      const assertion = this.authorization.mint(
+        authority,
+        tillSessionClosePayload({
           tenantId: m.tenantId,
           businessId: m.businessId,
-          metadata: {
-            permission: 'sales.create',
-            branchId: session.branch_id,
-            tillSessionId: session.id,
-            closingCountMinor: session.closing_count_minor,
-          },
-        });
-        return session;
+          sessionId,
+          closingCountMinor: BigInt(body.closingCountMinor),
+        }),
+      );
+      return await this.db.withBusinessInventoryTransaction(authority.scope, assertion, async (tx) => {
+        await tx.query(`SELECT till_session_id, replayed FROM pos_till_session_close($1, $2)`, [sessionId, body.closingCountMinor]);
+        const { rows } = await tx.query<TillSession>(`SELECT ${RETURNING} FROM ${POS_TILL_SESSIONS} WHERE ${C.business} = $1 AND ${C.id} = $2`, [
+          m.businessId,
+          sessionId,
+        ]);
+        return first(rows);
       });
     } catch (e) {
       rethrowPosRefusal(e);
@@ -232,20 +196,15 @@ export class TillSessionService {
    *
    * A colleague's session in the caller's own business is REFUSED and not
    * merely filtered: `OD-P4-09` says a second user may not act in it, and a
-   * read that returned another cashier's drawer figures would be the shared
+   * read that handed over another cashier's drawer figures would be the shared
    * till the ruling refused, read-only. A session in another business is
-   * invisible, so it answers `pos.session_not_found`.
+   * invisible to the policies, so it answers `pos.session_not_found`.
    */
   async read(m: MembershipContext, sessionId: string): Promise<TillSession> {
     try {
-      const { rows } = await this.db.scoped<TillSession>(
-        this.scope(m),
-        `SELECT ${RETURNING} FROM ${POS_TILL_SESSIONS} WHERE ${C.business} = $1 AND ${C.id} = $2`,
-        [m.businessId, sessionId],
-      );
-      const stored = rows[0];
-      if (stored === undefined) throw posRefusal('pos.session_not_found');
-      if (stored.opened_by_user_id !== m.userId) throw posRefusal('pos.session_not_owned');
+      const stored = await this.readRow(m, sessionId);
+      if (stored === null) throw posRefusal('pos.session_not_found');
+      if (stored.opened_by !== m.userId) throw posRefusal('pos.session_not_owned');
       return stored;
     } catch (e) {
       rethrowPosRefusal(e);
@@ -258,12 +217,14 @@ export class TillSessionService {
    * Scoped to `m.userId` in the statement, so there is no id for a caller to
    * supply and no way to ask the question about somebody else. `null` rather
    * than a refusal: "I have no till open" is a legitimate answer a POS screen
-   * renders as the open-till prompt, not an error.
+   * renders as the open-till prompt, not an error. At most one row can come
+   * back whatever the `LIMIT` says — `pos_till_sessions_one_open_per_user_uq`
+   * is a partial unique index over exactly this predicate.
    */
   async current(m: MembershipContext): Promise<TillSession | null> {
     try {
       const { rows } = await this.db.scoped<TillSession>(
-        this.scope(m),
+        { tenantId: m.tenantId, businessId: m.businessId },
         `SELECT ${RETURNING} FROM ${POS_TILL_SESSIONS}
           WHERE ${C.business} = $1 AND ${C.owner} = $2 AND ${C.status} = $3
           ORDER BY ${C.openedAt} DESC LIMIT 1`,
@@ -275,87 +236,63 @@ export class TillSessionService {
     }
   }
 
-  /**
-   * The GUC scope of every statement above. `actorUserId` is set because the
-   * database's own actor-binding rule reads it: the rule compares the session's
-   * stored owner with `app.actor_user_id`, so a transaction that did not set it
-   * writes into no session at all rather than into any session.
-   *
-   * It is **not** authority, and the law does not claim it is. `0044` and
-   * `0054` already record why: anything holding the `daftar_app` credential can
-   * `set_config('app.actor_user_id', …)`, so authority travels in signed
-   * assertions and permission checks, never in a GUC. What the rule buys is
-   * the thing this slice actually needs — that a writer INSIDE this process,
-   * reaching the trusted generic primitive with the real request's scope, still
-   * cannot write into a till belonging to another authenticated user. That is
-   * an in-process bypass, not an attacker with the database password, and it is
-   * the bypass `OD-P4-09` is about. No `GRANT EXECUTE` and no definer routine
-   * is taken for it: new authority is not needed to close a hole that is about
-   * whose row it is.
-   */
-  private scope(m: MembershipContext): Scope {
-    return { tenantId: m.tenantId, businessId: m.businessId, actorUserId: m.userId };
+  private scope(m: MembershipContext): ReadScope {
+    return { tenantId: m.tenantId, businessId: m.businessId };
   }
 
-  private async storedSession(c: PoolClient, m: MembershipContext, sessionId: string): Promise<TillSession | null> {
-    const { rows } = await c.query<TillSession>(`SELECT ${RETURNING} FROM ${POS_TILL_SESSIONS} WHERE ${C.business} = $1 AND ${C.id} = $2 FOR UPDATE`, [
-      m.businessId,
-      sessionId,
-    ]);
+  private async readRow(m: MembershipContext, sessionId: string): Promise<TillSession | null> {
+    const { rows } = await this.db.scoped<TillSession>(
+      { tenantId: m.tenantId, businessId: m.businessId },
+      `SELECT ${RETURNING} FROM ${POS_TILL_SESSIONS} WHERE ${C.business} = $1 AND ${C.id} = $2`,
+      [m.businessId, sessionId],
+    );
     return rows[0] ?? null;
   }
 }
 
-/** One till session as the API reports it. Minor units travel as strings, exactly as they are stored. */
+/** The projection every statement returns, so the four of them cannot disagree about the shape. */
+const RETURNING = [
+  C.id,
+  C.branch,
+  C.warehouse,
+  C.terminalCode,
+  C.currency,
+  C.owner,
+  C.status,
+  C.openedAt,
+  C.closedAt,
+  C.openingFloatMinor,
+  C.closingCountMinor,
+].join(', ');
+
+/**
+ * One till session as the API reports it. Minor units travel as strings,
+ * exactly as `BIGINT` arrives from `pg`.
+ *
+ * Neither intent digest is in the projection. They are the replay proofs, they
+ * are the assertion's own payload digests, and a client has no use for one —
+ * echoing a signed digest back over HTTP would be handing out a value whose
+ * only purpose is to be presented again.
+ */
 export interface TillSession {
   readonly id: string;
   readonly branch_id: string;
-  readonly opened_by_user_id: string;
+  readonly warehouse_id: string;
+  readonly terminal_code: string;
+  readonly currency_code: string;
+  readonly opened_by: string;
   readonly status: string;
   readonly opened_at: Date;
   readonly closed_at: Date | null;
   readonly opening_float_minor: string;
   readonly closing_count_minor: string | null;
-  readonly open_intent_sha256: string;
-}
-
-/** The projection every statement returns, so the four of them cannot disagree about the shape. */
-const RETURNING = [C.id, C.branch, C.owner, C.status, C.openedAt, C.closedAt, C.openingFloatMinor, C.closingCountMinor, C.intentDigest].join(', ');
-
-/**
- * The per-session advisory lock, in its own namespace — the accepted
- * `pg_advisory_xact_lock(hashtext('daftar.sale_id'), …)` shape of
- * `0078:554`. It serialises two commands naming the SAME session id and
- * nothing else, so the replay proof and the close are each decided once.
- * Transaction-scoped: it is released by the COMMIT or the ROLLBACK, never by
- * a call this service has to remember to make.
- */
-async function lockSession(c: PoolClient, sessionId: string): Promise<void> {
-  await c.query(`SELECT pg_advisory_xact_lock(hashtext('daftar.pos_till_session_id'), hashtext($1))`, [sessionId]);
 }
 
 function first(rows: readonly TillSession[]): TillSession {
   const row = rows[0];
-  // A write that returned no row is a defect in the statement, not a merchant
-  // outcome: it renders as 500 through the registry rather than as a refusal.
+  // A command whose routine returned and whose row is then unreadable is a
+  // defect in this service or in the routine, not a merchant outcome: it
+  // renders as a 500 through the registry rather than as a refusal.
   if (row === undefined) throw posRefusal('pos.session_state_invalid');
   return row;
-}
-
-/**
- * The open command's intent digest (`P4-AL-30`) — the PROOF a replay is
- * judged by, not the key.
- *
- * The preimage binds the scope, the actor and every field of the command, in a
- * fixed order, with a field separator that cannot occur inside a uuid or a
- * minor-unit string. The actor is IN the preimage on purpose: the same session
- * id re-sent by a different user is not the same command, and must not be able
- * to look like a replay of one.
- *
- * It reads no clock. The same request sent either side of local midnight is
- * the same command for ever (`[[daftar-a-command-must-not-read-the-clock]]`).
- */
-export function openIntentDigest(m: MembershipContext, body: TillSessionOpenRequest): string {
-  const preimage = ['pos.till_session.open/1', m.tenantId, m.businessId, m.userId, body.sessionId, body.branchId, body.openingFloatMinor].join('\n');
-  return createHash('sha256').update(preimage, 'utf8').digest('hex');
 }
