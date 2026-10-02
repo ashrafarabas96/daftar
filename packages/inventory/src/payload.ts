@@ -139,6 +139,25 @@ export type InventoryP4S1OperationCode = 'customer.create' | 'customer.update' |
  */
 export type InventoryP4S2OperationCode = 'sale.commit';
 
+/**
+ * The four operation kinds P4-S3 registers: the till session's two ends, and
+ * the two writes a client may make to the server-side basket (lock P4-AL-18,
+ * `OD-P4-02`, `OD-P4-09`).
+ *
+ * `pos.*` is the namespace, which is what the frozen `op_code` regex permits
+ * to change (`^[a-z]+(\.[a-z_]+)+$`, `0054:53` and the identical copy inside
+ * the frozen body of `inventory_payload_digest` at `0054:229`); widening
+ * either is forbidden by P4-AL-27 and P4-AL-29.
+ *
+ * There are exactly four because `0079` creates exactly four routines that
+ * consume an `invctl/1` assertion, and this file's standing rule is that "a
+ * kind listed here without a routine would be an authority nothing refuses".
+ * `pos.sale_commit` is deliberately ABSENT: a sale rung up on a till commits
+ * through the accepted `sale.commit` of P4-S2, which is the whole reason the
+ * basket is a separate relation from the sale.
+ */
+export type InventoryP4S3OperationCode = 'pos.session_open' | 'pos.session_close' | 'pos.cart_set_line' | 'pos.cart_remove_line';
+
 export type InventoryOperationCode =
   | InventoryS1OperationCode
   | InventoryS3OperationCode
@@ -147,7 +166,8 @@ export type InventoryOperationCode =
   | InventoryS6OperationCode
   | InventoryCorrectiveOperationCode
   | InventoryP4S1OperationCode
-  | InventoryP4S2OperationCode;
+  | InventoryP4S2OperationCode
+  | InventoryP4S3OperationCode;
 
 export const INVENTORY_S1_OPERATION_CODES: readonly InventoryS1OperationCode[] = [
   'inventory.configure_product',
@@ -198,6 +218,13 @@ export const INVENTORY_P4_S1_OPERATION_CODES: readonly InventoryP4S1OperationCod
 
 export const INVENTORY_P4_S2_OPERATION_CODES: readonly InventoryP4S2OperationCode[] = ['sale.commit'];
 
+export const INVENTORY_P4_S3_OPERATION_CODES: readonly InventoryP4S3OperationCode[] = [
+  'pos.session_open',
+  'pos.session_close',
+  'pos.cart_set_line',
+  'pos.cart_remove_line',
+];
+
 export const INVENTORY_OPERATION_CODES: readonly InventoryOperationCode[] = [
   ...INVENTORY_S1_OPERATION_CODES,
   ...INVENTORY_S3_OPERATION_CODES,
@@ -207,6 +234,7 @@ export const INVENTORY_OPERATION_CODES: readonly InventoryOperationCode[] = [
   ...INVENTORY_CORRECTIVE_OPERATION_CODES,
   ...INVENTORY_P4_S1_OPERATION_CODES,
   ...INVENTORY_P4_S2_OPERATION_CODES,
+  ...INVENTORY_P4_S3_OPERATION_CODES,
 ];
 
 /** The literal first line of every stream. */
@@ -701,6 +729,77 @@ export const INVENTORY_PAYLOAD_SCHEMAS: Readonly<Record<InventoryOperationCode, 
       spec('base_share_minor', 'integer'),
     ],
   ),
+  // P4-S3 (docs/PHASE_4_S3_MIGRATION_DESIGN.md; lock P4-AL-18, OD-P4-02,
+  // OD-P4-09). Each of the four streams is the argument list of its routine in
+  // `0079`, in order and with its declared type, because the routine rebuilds
+  // the claimed digest from those arguments and the two must agree field for
+  // field:
+  //
+  //   pos_till_session_open  ARRAY['uuid','uuid','uuid','code','code','integer']
+  //   pos_till_session_close ARRAY['uuid','integer']
+  //   pos_cart_set_line      ARRAY['uuid','uuid','integer','uuid','uuid','integer','integer']
+  //   pos_cart_remove_line   ARRAY['uuid','uuid']
+  //
+  // None of the four appears in `INVENTORY_OPERATION_INTENT_FIELDS`, and that
+  // is a ruling rather than an omission. `0079` stores component 7 of the
+  // assertion itself as the session's `open_intent_sha256` /
+  // `close_intent_sha256` (`0079:836`, `0079:912`), so for these kinds the
+  // payload digest IS the idempotency proof. It may be, because none of these
+  // streams carries a server-resolved value that moves under a replay: there
+  // is no price, no total, no rate and no clock value anywhere in them. The
+  // one resolved field, the cart line's `variant_id`, is a FUNCTION of the
+  // stated product (the hidden base variant of a simple product, P3-AL-52) and
+  // resolves identically on a replay, which is exactly what a resolved
+  // catalogue price does not do — the reason `sale.commit` needs the carve-out
+  // and these do not.
+  'pos.session_open': Object.freeze([
+    spec('session_id', 'uuid'),
+    spec('branch_id', 'uuid'),
+    spec('warehouse_id', 'uuid'),
+    // `pos_till_sessions_terminal_code_ck` is the registry-code regex
+    // (`0079:362`), the same one `encodeCode` enforces, so the drawer's code
+    // travels verbatim on both sides.
+    spec('terminal_code', 'code'),
+    // The routine signs `lower(p_currency_code)` while the column holds the
+    // upper-case ISO code, so the client encodes the lower-case form. A `code`
+    // field cannot be upper case: `encodeCode` would refuse it.
+    spec('currency_code', 'code'),
+    // The cash a human COUNTED in the drawer at the open, in minor units. It
+    // is inside the signed payload deliberately: a replay presenting a
+    // different float is a different command, which is what makes the figure
+    // trustworthy at all.
+    spec('opening_float_minor', 'integer'),
+  ]),
+  // The counted close, by the same argument. There is no expected-cash figure,
+  // variance or over/short in the stream, because none is stored: each is
+  // derived from this count, the opening float and the shift's cash payments,
+  // and P4-AL-06 forbids a stored authoritative one.
+  'pos.session_close': Object.freeze([spec('session_id', 'uuid'), spec('closing_count_minor', 'integer')]),
+  // The whole of what a client may say about a basket line: identities, an
+  // ordinal, a quantity and a discount REQUEST. There is no price, no line
+  // total and no tax field here because `pos_cart_set_line` has no argument
+  // for one — a forged price has nowhere to arrive.
+  'pos.cart_set_line': Object.freeze([
+    spec('session_id', 'uuid'),
+    spec('line_id', 'uuid'),
+    // The basket is append-only and ordinal-keyed with tombstones, so the
+    // ordinal is part of the signed command rather than a position the server
+    // picks.
+    spec('line_no', 'integer'),
+    spec('product_id', 'uuid'),
+    // Resolved, and non-nullable: `0079` refuses a NULL variant outright.
+    spec('variant_id', 'uuid'),
+    // The routine signs `inventory_fixed_text(p_quantity, 4)`, so the field
+    // carries the quantity × 10^4 as an exact integer — the P3-S3 `qty_q4`
+    // binding, unchanged.
+    spec('qty_q4', 'integer'),
+    // A REQUEST in the minor units of the session's currency, not a granted
+    // discount: `0079` deliberately does not cap it against a gross the
+    // basket does not store, and `sale_items_discount_ck` is where the cap
+    // lives (R-P4-S3-03).
+    spec('requested_discount_minor', 'integer'),
+  ]),
+  'pos.cart_remove_line': Object.freeze([spec('session_id', 'uuid'), spec('line_id', 'uuid')]),
 };
 
 /**

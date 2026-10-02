@@ -120,6 +120,44 @@ const OPERATION_AUTHORITY: Readonly<
   //     zeroed, because a silently-zeroed discount charges the customer more
   //     than the cashier told them.
   'sale.commit': { permission: 'sales.create', scope: 'warehouses' },
+  // P4-S3 (docs/PHASE_4_S3_MIGRATION_DESIGN.md; lock P4-AL-18, P4-AL-39,
+  // OD-P4-09): a till session and its basket exist only to ring up a sale, so
+  // `sales.create` — the cashier's own key (`permissions.ts:214`) — is the
+  // minting key for all four kinds. No `pos.*` permission is invented: the
+  // accepted permission vocabulary is sealed, and this slice was not given a
+  // ruling that widens it.
+  //
+  // All four are `scope: 'warehouses'`, and for these kinds that half is NOT
+  // trivial the way `supplier.*` and `customer.*` are. An open names its
+  // warehouse, and the three later kinds are called with THE SESSION'S
+  // warehouse, read from `pos_till_sessions`. Re-checking it on every cart
+  // write is deliberate: a cashier's branch scope can be narrowed in the
+  // middle of a shift, and a basket that kept writing because the scope was
+  // checked once at open would be authority outliving the decision that
+  // granted it.
+  //
+  // `business_wide` would be wrong for all four. A till is bound to one branch
+  // by `pos_till_sessions.branch_id`, so an assigned-scope cashier — which is
+  // what a cashier normally is — must be able to open and work one; demanding
+  // `branch_scope_mode = 'all'` would lock every ordinary cashier out of the
+  // point of sale, which is the opposite of what P4-AL-18 describes.
+  //
+  // Two authority facts are deliberately NOT in these rows, for the reason the
+  // `sale.commit` row above gives — one permission per kind:
+  //
+  //   - a non-zero `requested_discount_minor` on a cart line also requires the
+  //     SENSITIVE `sales.discount` (P4-AL-35, P4-AL-37), checked by the cart
+  //     service against the request before anything is minted and REFUSED,
+  //     never silently zeroed;
+  //   - only the cashier who opened a session may write to it or close it.
+  //     That is not a permission at all and is not checked here: it is
+  //     `pos_cart_lines_session_actor_fk` against `pos_till_sessions_actor_uq`
+  //     in `0079`, so it holds against the database rather than against this
+  //     table (OD-P4-09).
+  'pos.session_open': { permission: 'sales.create', scope: 'warehouses' },
+  'pos.session_close': { permission: 'sales.create', scope: 'warehouses' },
+  'pos.cart_set_line': { permission: 'sales.create', scope: 'warehouses' },
+  'pos.cart_remove_line': { permission: 'sales.create', scope: 'warehouses' },
 };
 
 /**
