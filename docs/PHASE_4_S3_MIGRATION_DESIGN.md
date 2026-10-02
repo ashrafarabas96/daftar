@@ -660,9 +660,10 @@ before being reported; none did.
 ### The `ORDER BY 1` defect this slice found in its own assertion — MEASURED
 
 `0079-E(3)` read the slice's money columns as `array_agg(… ORDER BY 1)`, and went red the moment the
-two counted figures made the set three elements instead of one. The cause was challenged, so it was
-**measured** on this estate's own PostgreSQL 18.4 rather than argued, in two throwaway probes that
-were run and deleted. The results, which settle it:
+two counted figures made the set three elements instead of one. The cause was challenged — twice, and
+the second challenge came with a measurement attached — so it was settled by **measuring each form in
+isolation** on this estate's own PostgreSQL 18.4, in throwaway probes that were run and deleted. The
+results:
 
 | statement | result |
 |---|---|
@@ -680,6 +681,22 @@ forces SQL99 rules and the integer is an ordinary **constant** expression: the s
 for every row, the sort is a no-op, and `ORDER BY 2` is accepted precisely because it is a constant
 and not a position. The accepted `ORDER BY 2` with no error is the decisive discriminator; a probe
 that tests only `ORDER BY 1` cannot tell the two readings apart.
+
+**And there is a second way to measure this wrong, which is worth recording because it is how the
+first attempt to refute the finding went.** Put a no-op `ORDER BY 1` aggregate in the *same* `SELECT`
+as a sibling aggregate that genuinely sorts, and the no-op one comes back sorted:
+
+| statement | result |
+|---|---|
+| `array_agg(x ORDER BY 1)` **alone** | `{b,a,c,a}` |
+| `array_agg(x ORDER BY 1)` beside `array_agg(x ORDER BY x)` in one `SELECT` | `{a,a,b,c}` |
+
+The planner sorts the input once to satisfy the sibling, and the constant-keyed sort inherits that
+order. The sibling supplies the behaviour the probe is looking for. So an `ORDER BY 1` aggregate can
+*appear* to sort, which is precisely why this construct is a hazard rather than merely a wart: it is
+correct-looking, it is sometimes accidentally correct in practice, and the thing that makes it
+correct is somewhere else in the query. **Measure the construct in isolation, and use `ORDER BY 2` as
+the discriminator.**
 
 So the cause of the `0079-E(3)` failure was exactly this: the no-op sort returned the rows in
 **physical catalogue order** — `pos_till_sessions`'s two columns first, because that table is created
