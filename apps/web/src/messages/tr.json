@@ -833,5 +833,20 @@
   "pos.till.floatInDrawer": "Başlangıç nakdi",
   "pos.till.closingCount": "Saydığın nakit ({currency})",
   "pos.till.closingCountHint": "Kasayı kapatmadan önce çekmeceyi say.",
-  "pos.till.amountInvalid": "Bu para biriminde bir tutar yaz"
+  "pos.till.amountInvalid": "Bu para biriminde bir tutar yaz",
+  "error.sale.quantity_invalid": "Bu geçerli bir miktar değil. Hiçbir şey kaydedilmedi. Kaç tane sattığınızı yazıp tekrar deneyin.",
+  "error.sale.discount_invalid": "Bu indirim bu satışa uymuyor; satışın kendisinden büyük olabilir. Hiçbir şey kaydedilmedi. Daha küçük bir indirim yazın.",
+  "error.sale.discount_not_permitted": "Burada indirim verme yetkiniz yok. Hiçbir şey kaydedilmedi. Onaylayabilecek birinden isteyin.",
+  "error.sale.product_not_found": "Bu ürün artık bulunamadı. Hiçbir şey kaydedilmedi. Yeniden arayın.",
+  "error.sale.product_not_priced": "Bu ürünün henüz fiyatı yok. Hiçbir şey kaydedilmedi. Fiyatını belirleyip sonra satın.",
+  "error.sale.total_zero": "Tahsil edilecek bir şey yok. Hiçbir şey kaydedilmedi. Sepete bir şey ekleyin ya da indirimi küçültün.",
+  "error.sale.lines_required": "Sepet boş. Hiçbir şey kaydedilmedi. Önce sattığınız şeyi ekleyin.",
+  "error.sale.lines_too_many": "Bu sepette çok fazla satır var. Hiçbir şey kaydedilmedi. Bu satışı tamamlayıp sonra yenisine başlayın.",
+  "error.sale.duplicate_line": "Bu ürün sepette zaten var. Hiçbir şey kaydedilmedi. Var olan satırdaki miktarı değiştirin.",
+  "error.sale.state_changed": "Siz çalışırken sepet değişti. Hiçbir şey kaydedilmedi. Sepeti kontrol edip tekrar deneyin.",
+  "error.sale.state_invalid": "Bu satış bu hâliyle tamamlanamaz. Hiçbir şey kaydedilmedi. Sepeti kontrol edip tekrar deneyin.",
+  "error.sale.immutable": "Bu satış zaten tamamlandı. Bu kez hiçbir şey kaydedilmedi. Yeni bir satış başlatın.",
+  "error.sale.idempotency_conflict": "Bu satış başka bir şekilde zaten gönderildi. Hiçbir şey kaydedilmedi. Görmek için sayfayı yenileyin.",
+  "error.sale.not_found": "Bu satış bulunamadı. Hiçbir şey kaydedilmedi. Sayfayı yenileyip yeniden başlayın.",
+  "error.sale.warehouse_not_found": "Bu yerin satış yapılacak bir deposu yok. Hiçbir şey kaydedilmedi. Başka bir yer seçin ya da birinin ayarlamasını isteyin."
 }

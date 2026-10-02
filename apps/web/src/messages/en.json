@@ -833,5 +833,20 @@
   "pos.till.floatInDrawer": "Cash at the start",
   "pos.till.closingCount": "Cash you counted ({currency})",
   "pos.till.closingCountHint": "Count the drawer before you close the till.",
-  "pos.till.amountInvalid": "Type an amount in this currency"
+  "pos.till.amountInvalid": "Type an amount in this currency",
+  "error.sale.quantity_invalid": "That is not a valid quantity. Nothing was saved. Type how many you are selling and try again.",
+  "error.sale.discount_invalid": "That discount does not work for this sale — it may be more than the sale itself. Nothing was saved. Type a smaller discount.",
+  "error.sale.discount_not_permitted": "You are not allowed to give a discount here. Nothing was saved. Ask someone who can approve it.",
+  "error.sale.product_not_found": "We couldn't find that item any more. Nothing was saved. Search for it again.",
+  "error.sale.product_not_priced": "That item has no price yet. Nothing was saved. Set its price, then sell it.",
+  "error.sale.total_zero": "There is nothing to charge for. Nothing was saved. Add something to the basket, or make the discount smaller.",
+  "error.sale.lines_required": "The basket is empty. Nothing was saved. Add what you are selling first.",
+  "error.sale.lines_too_many": "This basket has too many lines. Nothing was saved. Finish this sale, then start another one.",
+  "error.sale.duplicate_line": "That item is already in the basket. Nothing was saved. Change how many you are selling on the line it is already on.",
+  "error.sale.state_changed": "The basket changed while you were working. Nothing was saved. Check the basket and try again.",
+  "error.sale.state_invalid": "This sale can't be finished as it is. Nothing was saved. Check the basket and try again.",
+  "error.sale.immutable": "This sale is already finished. Nothing was saved this time. Start a new sale.",
+  "error.sale.idempotency_conflict": "This sale was already sent another way. Nothing was saved. Refresh the page to see it.",
+  "error.sale.not_found": "We couldn't find this sale. Nothing was saved. Refresh the page and start again.",
+  "error.sale.warehouse_not_found": "This place has nowhere to sell the goods from. Nothing was saved. Choose another place, or ask someone to set it up."
 }
