@@ -183,8 +183,8 @@ export function renderFixture(fixture: ViewFixture, locale: Locale): Rendered {
 
 const WEB_ROOT = join(__dirname, '..', '..');
 
-/** The S7 view areas (§4.3, §8): each has a `src/views/<area>/registry.ts(x)` once its views exist. */
-export const VIEW_AREAS = ['stock', 'catalog', 'structure', 'purchases', 'suppliers', 'common'] as const;
+/** The merchant view areas (§4.3, §8, plus P4-S3's `pos`): each has a `src/views/<area>/registry.ts(x)` once its views exist. */
+export const VIEW_AREAS = ['stock', 'catalog', 'structure', 'purchases', 'suppliers', 'common', 'pos'] as const;
 
 export interface AreaRegistry {
   readonly area: string;

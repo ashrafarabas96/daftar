@@ -458,6 +458,16 @@ jobs:
         run: npm run gate:browser -- --plant=all --steps=header,stock --out=release/browser-red-proof
         env:
           BROWSER_PG_DIR: ${{ runner.temp }}/browser-pg-red
+      # P4-S3: the POS steps' own red proof. The Phase 3 proof above plants the
+      # four defects on two Phase 3 steps; this one plants them on the four POS
+      # steps, so the POS screens are proved able to go red in all NINE
+      # locale x viewport combinations and not only in the one a sampled run
+      # happened to use. The gate's own verdict is 0 only when EVERY planted
+      # kind was reported in EVERY run, so the step is the assertion.
+      - name: POS browser red proof (planted overflow, raw key, console error, missing string)
+        run: npm run gate:browser -- --plant=all --steps=p4-pos-till,p4-pos-sale,p4-pos-discount,p4-pos-close --out=release/browser-red-proof-pos
+        env:
+          BROWSER_PG_DIR: ${{ runner.temp }}/browser-pg-red-pos
       - name: Browser gate (ar/en/tr x phone/tablet/desktop)
         run: npm run gate:browser
         env:
@@ -470,6 +480,7 @@ jobs:
           path: |
             release/browser
             release/browser-red-proof
+            release/browser-red-proof-pos
           retention-days: 30
 
   # -------------------------------------------------------------------------

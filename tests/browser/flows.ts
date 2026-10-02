@@ -55,12 +55,13 @@ export const PHASE3_STEPS: readonly string[] = [
 ];
 
 /**
- * The Phase 4 steps. Empty TODAY because no Phase 4 screen exists yet, and
- * that emptiness is an asserted fact, not an unchecked array: the first
- * `run.step` name this list does not hold turns the ownership test and the
- * P4-S1 gate red, and the Phase 3 gate keeps walking only PHASE3_STEPS.
+ * The Phase 4 steps. P4-S3 opened this list with the POS screens; every entry
+ * is `p4-`-prefixed and absent from PHASE3_STEPS, so the accepted Phase 3
+ * gate — pinned to PHASE3_STEPS — never walks a Phase 4 screen and a defect on
+ * one can never turn it red. A `run.step` name this list does not hold turns
+ * the ownership test and the P4-S1 gate red.
  */
-export const PHASE4_STEPS: readonly string[] = [];
+export const PHASE4_STEPS: readonly string[] = ['p4-pos-till', 'p4-pos-sale', 'p4-pos-discount', 'p4-pos-close'];
 
 /**
  * The prefix every Phase 4 step name carries, so a Phase 4 step can never
@@ -163,6 +164,44 @@ async function nav(run: Run, key: 'stock' | 'purchases' | 'suppliers'): Promise<
   if (await toggle.isVisible()) await toggle.click();
   await run.page.getByRole('link', { name: run.T(`nav.${key}`), exact: true }).click();
   await run.page.waitForURL(new RegExp(`/${run.locale}/${key}$`));
+}
+
+/** Open the POS screens from the header, through the menu button where the viewport collapses it. */
+async function posNav(run: Run): Promise<void> {
+  const toggle = run.page.getByRole('button', { name: run.T('nav.menu'), exact: true });
+  if (await toggle.isVisible()) await toggle.click();
+  await run.page.getByRole('link', { name: run.T('nav.pos'), exact: true }).click();
+  await run.page.waitForURL(new RegExp(`/${run.locale}/pos$`));
+}
+
+/** Add a found item to the basket from the search results. */
+async function addFound(run: Run, name: string): Promise<void> {
+  await run
+    .row(name)
+    .getByRole('button', { name: run.T('common.add'), exact: true })
+    .click();
+}
+
+/** Wait until the basket holds exactly `n` lines, by the quantity fields the screen shows. */
+async function basketLines(run: Run, n: number): Promise<void> {
+  const fields = run.page.getByLabel(run.T('pos.basket.quantity'), { exact: true });
+  for (let i = 0; i < 40; i += 1) {
+    if ((await fields.count()) === n) return;
+    await run.page.waitForTimeout(250);
+  }
+  run.fail('flow', `the basket shows ${await fields.count()} line(s), expected ${n}`);
+  throw new Error(`basket lines: expected ${n}`);
+}
+
+/**
+ * The text of one amount the screen shows, by the label beside it — read
+ * BACK from the page, never computed here. The amounts are the server's, so a
+ * step can only compare what it read before with what it reads after.
+ */
+async function amountShown(run: Run, key: string): Promise<string> {
+  const label = run.page.getByText(run.T(key), { exact: true }).first();
+  await label.waitFor();
+  return (await label.locator('xpath=following-sibling::span[1]').innerText()).trim();
 }
 
 async function startingStockOffered(run: Run): Promise<boolean> {
@@ -519,5 +558,131 @@ export async function runFlows(run: Run): Promise<void> {
     await run.reload();
     await assertStartingStockClosed(run, 'after a reload');
     await run.shot('adjust-starting-closed');
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // P4-S3 — THE POS STEPS.
+  //
+  // Four steps, each `p4-` prefixed and owned by PHASE4_STEPS, so the
+  // accepted Phase 3 gate (pinned to PHASE3_STEPS) never walks them and a
+  // defect on a POS screen can never turn it red (P4-AL-63, P4-AL-68).
+  //
+  // Each step takes its FIRST screenshot as soon as the screen is on the
+  // page, before it drives anything: `run.shot()` is what checks the
+  // invariants, so a planted defect is reported in EVERY locale × viewport
+  // run — the nine-combination red proof — and not only where a flow happens
+  // to get far enough.
+  //
+  // Every amount these steps read is the server's: the steps compare the
+  // text of "To pay" before and after a discount request and require the
+  // SERVER to have changed it. They never compute an expected total; a step
+  // that did would be the browser deciding the price.
+  // ═══════════════════════════════════════════════════════════════════════
+
+  await run.step('p4-pos-till', async () => {
+    // The Phase 3 steps end in the starter business; selling happens in the
+    // one that has stock and prices. One document load per run, no more.
+    await page.evaluate(`localStorage.setItem('daftar_business_id', ${JSON.stringify(seed.businessId)})`);
+    await run.reload();
+    await page.locator('header').waitFor();
+    await posNav(run);
+    await run.shot('p4-pos-no-till');
+    await run.text('pos.till.mustOpen');
+    await tabToButton(run, T('pos.till.goToTill'));
+    await page.waitForURL(new RegExp(`/${run.locale}/pos/till$`));
+    await run.text('pos.till.none');
+    await run.shot('p4-pos-till');
+    await run.field(T('pos.till.where')).selectOption({ label: seed.mainWarehouse });
+    await tabToButton(run, T('pos.till.open'));
+    await page.waitForURL(new RegExp(`/${run.locale}/pos$`));
+    await run.text('pos.basket.empty');
+    await run.shot('p4-pos-till-open');
+  });
+
+  await run.step('p4-pos-sale', async () => {
+    await posNav(run);
+    await run.shot('p4-pos-register');
+    // The type-ahead is paced by the screen: one read per pause, nothing
+    // under two characters. The step waits for the screen's own pause.
+    await run.field(T('pos.search.label')).fill(names.riceSearch);
+    await run.row(names.rice).waitFor();
+    await run.shot('p4-pos-search');
+    await addFound(run, names.rice);
+    await basketLines(run, 1);
+    await run.field(T('pos.search.label')).fill(names.teaSearch);
+    await run.row(names.tea).waitFor();
+    await addFound(run, names.tea);
+    await basketLines(run, 2);
+    // How many: the screen sends the quantity and takes the server's basket back.
+    const before = await amountShown(run, 'pos.total.due');
+    await run.field(T('pos.basket.quantity')).first().fill('3');
+    await page.waitForTimeout(1200);
+    const after = await amountShown(run, 'pos.total.due');
+    if (after === before) run.fail('flow', `"to pay" did not change after the server was sent a new quantity (still ${before})`);
+    await run.shot('p4-pos-basket');
+    // A quantity that is not a quantity is refused on the line, not sent.
+    await run.field(T('pos.basket.quantity')).first().fill('3..5');
+    await run.text('pos.basket.quantityInvalid');
+    await run.shot('p4-pos-quantity-refused');
+    await run.field(T('pos.basket.quantity')).first().fill('3');
+    await page.waitForTimeout(1200);
+    // One line off again, and the server's basket is what the screen shows.
+    await run.button(T('common.remove')).last().click();
+    await basketLines(run, 1);
+    await run.shot('p4-pos-basket-one');
+  });
+
+  await run.step('p4-pos-discount', async () => {
+    const due = await amountShown(run, 'pos.total.due');
+    await run.field(T('pos.discount.amount', { currency: seed.currency })).fill('1.50');
+    await run.shot('p4-pos-discount');
+    await tabToButton(run, T('pos.discount.apply'));
+    await page.waitForTimeout(800);
+    const discounted = await amountShown(run, 'pos.total.due');
+    if (discounted === due) run.fail('flow', `the server was asked for a discount and "to pay" is unchanged (${due})`);
+    const given = await amountShown(run, 'pos.total.discount');
+    if (!/[1-9]/.test(given)) run.fail('flow', `the discount the server allowed reads as nothing ("${given}")`);
+    await run.shot('p4-pos-discounted');
+    // A discount that is not an amount in this currency never leaves the screen.
+    await run.field(T('pos.discount.amount', { currency: seed.currency })).fill('1.5555');
+    await run.button(T('pos.discount.apply')).click();
+    await run.text('pos.discount.invalid');
+    await run.shot('p4-pos-discount-refused');
+    await run.button(T('pos.discount.clear')).click();
+    await page.waitForTimeout(800);
+    // Finish, behind a visible confirmation, and read the sale the server recorded.
+    await tabToButton(run, T('pos.finish.action'));
+    const dialog = page.getByRole('dialog');
+    await dialog.waitFor();
+    const confirm = dialog.getByRole('button', { name: T('pos.finish.action'), exact: true });
+    await fullyVisible(run, confirm, 'the "Finish the sale" confirmation');
+    await fullyVisible(run, dialog.getByText(T('pos.finish.confirmHint')), 'the finish warning');
+    await run.shot('p4-pos-finish-confirm');
+    await confirm.click();
+    await run.text('pos.finish.done');
+    await run.text('pos.receipt.title');
+    await run.shot('p4-pos-sold');
+    await run.button(T('pos.finish.another')).click();
+    await run.text('pos.basket.empty');
+    await run.shot('p4-pos-next-sale');
+  });
+
+  await run.step('p4-pos-close', async () => {
+    await run.button(T('pos.till.goToTill')).click();
+    await page.waitForURL(new RegExp(`/${run.locale}/pos/till$`));
+    await run.text('pos.till.opened');
+    await run.shot('p4-pos-till-after-sale');
+    await run.button(T('pos.till.close')).click();
+    const dialog = page.getByRole('dialog');
+    await dialog.waitFor();
+    const confirm = dialog.getByRole('button', { name: T('pos.till.close'), exact: true });
+    await fullyVisible(run, confirm, 'the "Close the till" confirmation');
+    await run.shot('p4-pos-close-confirm');
+    await confirm.click();
+    await run.text('pos.till.closed');
+    await run.shot('p4-pos-closed');
+    await posNav(run);
+    await run.text('pos.till.mustOpen');
+    await run.shot('p4-pos-no-till-again');
   });
 }

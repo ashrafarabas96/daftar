@@ -11,6 +11,11 @@ import { getInventoryAccess, type Phase3Permission } from '@/lib/phase3-api';
 
 const NAV = [
   { key: 'dashboard', path: 'dashboard' },
+  // P4-S3: the POS screens. Not behind a `requires`, because the POS grants
+  // come from `GET /v1/pos/access` and this header reads the inventory grants;
+  // the POS pages enforce `pos.sell` themselves and show `common.noPermission`
+  // without trying a command.
+  { key: 'pos', path: 'pos' },
   { key: 'catalog', path: 'catalog' },
   // P3-S7 (A-11): shown only to a member holding the matching view permission.
   { key: 'stock', path: 'stock', requires: 'inventory.view' },
