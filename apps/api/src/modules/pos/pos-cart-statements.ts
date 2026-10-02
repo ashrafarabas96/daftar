@@ -128,6 +128,15 @@ export const POS_CART_COLUMNS = Object.freeze({
     lineNo: 'line_no',
     /** The actor, and the subject of `OD-P4-09`'s composite edge `pos_cart_lines_session_actor_fk`. */
     addedBy: 'added_by',
+    /**
+     * The TOMBSTONE. `0079` gives the internal writer no `DELETE` on this
+     * relation — `tests/security/inventory-db-authority.test.ts` states
+     * positively that beyond the accepted prefix `daftar_inventory_internal`
+     * holds none — so a removal sets `removed_at` and the row stays. Every
+     * read of a live basket must therefore say `removed_at IS NULL`, and the
+     * ordinal's uniqueness is the PARTIAL index carrying the same predicate.
+     */
+    removedAt: 'removed_at',
   }),
 });
 
@@ -170,16 +179,33 @@ export const POS_CART_UNIQUE_CONSTRAINT = 'pos_cart_lines_line_uq';
 /** The columns `pos_cart_lines_line_uq` covers, in order. The basket's identity is its ORDINAL. */
 export const POS_CART_UNIQUE_COLUMNS: readonly string[] = Object.freeze(['business_id', 'till_session_id', 'line_no']);
 
+/** The partial index's predicate, verbatim enough to recognize in `pg_get_indexdef`. */
+export const POS_CART_UNIQUE_PREDICATE = 'removed_at IS NULL';
+
 /**
- * `0079` ships NO tombstone: there is no `removed_at` column and
- * `pos_cart_remove_line` is a hard `DELETE`, so `pos_cart_lines_line_uq` is a
- * TOTAL unique constraint and not a partial one. Recorded as data because the
- * difference is load-bearing twice over: a removed ordinal is free again
- * immediately (so `max(line_no) + 1` is right), and a seam asserting a
- * predicate the migration does not carry would be red against a correct
- * migration.
+ * `pos_cart_lines_line_uq` is PARTIAL — `WHERE removed_at IS NULL` — and that
+ * is load-bearing in both directions.
+ *
+ * `0079` tombstones instead of deleting because the accepted estate gives
+ * `daftar_inventory_internal` no `DELETE` beyond the accepted prefix
+ * (`tests/security/inventory-db-authority.test.ts` asserts the absence
+ * positively, so it is a law and not an omission). A tombstone keeps its row,
+ * so WITHOUT the predicate the removed ordinal would be held for ever and the
+ * cashier could never reuse it; WITH it, the ordinal is free again.
+ *
+ * This module nevertheless computes the next ordinal as `max(line_no) + 1`
+ * over the whole basket, tombstones included, which never reuses a freed
+ * ordinal. That is deliberate: filling gaps would renumber a basket under a
+ * cashier's eyes, and the predicate's job is to make reuse POSSIBLE, not
+ * mandatory.
+ *
+ * An earlier revision of this module asserted the opposite — not partial, no
+ * tombstone column — from a SUPERSEDED `0079`. The record is kept because the
+ * lesson is the durable part: a sibling's in-flight branch is not a source of
+ * truth, and this module's seam now reads the live catalogue for every one of
+ * these facts rather than any file.
  */
-export const POS_CART_UNIQUE_IS_PARTIAL = false;
+export const POS_CART_UNIQUE_IS_PARTIAL = true;
 
 /**
  * The columns `0079` must NOT have, asserted by the guard suite against the
@@ -210,7 +236,13 @@ export const POS_CART_FORBIDDEN_COLUMNS: readonly string[] = Object.freeze([
 /** One statement of a plan: its name (for the counter and the log), its text, its parameters. */
 export interface CartStatement {
   /** `mutation` or `projection`. The two roles a cart statement may have; a third is a design change. */
-  readonly role: 'mutation' | 'projection';
+  readonly role: 'gate' | 'routine' | 'projection';
+  /**
+   * `true` when `params` is empty because the GATE's answer supplies them
+   * (`setLineParams`). Declared rather than inferred, so "this statement was
+   * issued with no parameters" cannot be mistaken for a correct call.
+   */
+  readonly bindsFromGate?: boolean;
   readonly name: string;
   readonly text: string;
   readonly params: readonly unknown[];
@@ -225,8 +257,8 @@ export interface CartCommandTarget {
    * The AUTHENTICATED user, from the membership context — never a request
    * field in any form. `OD-P4-09` OPTION A: one session, one authenticated
    * user, so a cart command into a colleague's till is refused
-   * `pos.session_not_owned` and the session's `opened_by_user_id` is what it
-   * is compared against, inside the mutation's own statement.
+   * `pos.session_not_owned` and the session's `opened_by` is what it is
+   * compared against, inside the GATE's own statement.
    */
   readonly actorUserId: string;
   /** The line a change, a removal or a discount names. `null` on an add, where the server mints it. */
@@ -237,6 +269,14 @@ export interface CartCommandTarget {
   readonly quantity: string | null;
   /** A non-negative integer count of minor units, as a decimal string. */
   readonly discountMinor: string | null;
+  /**
+   * NOTE: there is no `lineNo` here, deliberately. `0079` makes `p_line_no` a
+   * parameter of `pos_cart_set_line` rather than something the routine
+   * derives, so somebody must supply it — and that somebody is the GATE, via
+   * `setLineParams`, never a request field and never this type. `lineNo` is in
+   * no command's accepted key set either, which the guard suite asserts, so an
+   * ordinal cannot arrive in a body at all.
+   */
 }
 
 const S = POS_CART_COLUMNS.sessions;
@@ -321,6 +361,7 @@ const PROJECTION = `
    WHERE l.${L.tenantId} = $1::uuid
      AND l.${L.businessId} = $2::uuid
      AND l.${L.tillSessionId} = $3::uuid
+     AND l.${L.removedAt} IS NULL
    ORDER BY l.${L.lineNo}`;
 
 const projection = (t: CartCommandTarget): CartStatement => ({
@@ -331,133 +372,178 @@ const projection = (t: CartCommandTarget): CartStatement => ({
 });
 
 /**
- * The statement plan for one cart command. EXACTLY TWO statements, for every
- * command, for every cart size.
+ * The GATE. ONE statement that answers everything the routine call needs to
+ * know and everything a refusal needs to be chosen from.
+ *
+ * It exists because `0079` makes the two writers SECURITY DEFINER routines
+ * whose arguments are supplied by the caller: `pos_cart_set_line` takes
+ * `p_line_no`, `p_product_id` and `p_variant_id`, so revising a line means
+ * knowing what the line already is, and appending means knowing the next free
+ * ordinal. Reading those one at a time would be three statements and a race;
+ * reading them in the same statement as the session gate is one.
+ *
+ * The session is locked `FOR SHARE` here and the routine takes the same lock,
+ * so the ordinal this computes cannot be overtaken between the two.
+ *
+ * Every column it returns is a fact the SERVER then states to the routine. The
+ * client supplied none of them, which is the whole trust boundary expressed in
+ * the shape of the plan rather than in a comment.
+ */
+const GATE = `
+  WITH${USABLE_SESSION},
+  line AS (
+    SELECT l.${L.id}, l.${L.lineNo}, l.${L.productId}, l.${L.variantId}, l.${L.removedAt}
+      FROM ${L.table} l
+     WHERE l.${L.tenantId} = $1::uuid
+       AND l.${L.businessId} = $2::uuid
+       AND l.${L.tillSessionId} = $3::uuid
+       AND l.${L.id} = $5::uuid
+  )
+  SELECT ${SESSION_DISCRIMINATORS},
+         coalesce((SELECT max(x.${L.lineNo}) FROM ${L.table} x
+                    WHERE x.${L.businessId} = $2::uuid AND x.${L.tillSessionId} = $3::uuid), 0) + 1 AS next_line_no,
+         (SELECT count(*) FROM line) AS line_present,
+         (SELECT count(*) FROM line WHERE ${L.removedAt} IS NOT NULL) AS line_removed,
+         (SELECT ${L.lineNo} FROM line) AS line_no,
+         (SELECT ${L.productId} FROM line) AS product_id,
+         (SELECT ${L.variantId} FROM line) AS variant_id`;
+
+const gate = (t: CartCommandTarget): CartStatement => ({
+  role: 'gate',
+  name: 'cart.gate',
+  text: GATE,
+  params: [t.tenantId, t.businessId, t.tillSessionId, t.actorUserId, t.cartLineId ?? null],
+});
+
+/**
+ * The one writer of a cart line, as `0079` ships it.
+ *
+ * `pos_cart_set_line` carries the add, the quantity change and the discount
+ * request alike: it is keyed by `p_line_id` and REVISES `quantity` and
+ * `requested_discount_minor` when that id already names the same identities.
+ * Three commands, one routine, which is the schema's decision and not this
+ * module's — and it is why the three plans differ only in the arguments they
+ * compute.
+ *
+ * There is NO price argument of any kind. A forged total is not refused here;
+ * it is INEXPRESSIBLE, because the routine has nowhere to put it.
+ */
+// No `target` parameter, and that is the point: this statement's arguments do
+// not exist until the GATE has answered, so there is nothing about the command
+// for it to read. `setLineParams` is the one place a call is assembled.
+const setLine = (name: string): CartStatement => ({
+  role: 'routine',
+  name,
+  text: `SELECT cart_line_id, line_no, revised FROM pos_cart_set_line($1::uuid, $2::uuid, $3::integer, $4::uuid, $5::uuid, $6::numeric, $7::bigint)`,
+  // EMPTY, and bound by `setLineParams` from the GATE's answer. The ordinal
+  // and (on a revision) the identities are not known until the gate has run,
+  // and inventing them before it would be the server guessing at its own
+  // state. The plan's SHAPE — three statements, these texts, in this order —
+  // is still fixed before any statement is issued, which is what the O(1)
+  // claim is about.
+  params: [],
+  bindsFromGate: true,
+});
+
+/**
+ * The routine's arguments, from the GATE's answer and the command's own
+ * fields. The one place a `pos_cart_set_line` call is assembled.
+ *
+ * On an APPEND the ordinal is the gate's `next_line_no` and the identities are
+ * the command's. On a REVISION the ordinal and the identities are the EXISTING
+ * line's, read from the gate — because `pos_cart_set_line` refuses a line id
+ * whose identities changed (`pos.cart_line_conflict`), and because a revision
+ * that could restate a line's product would be an edit nobody asked for.
+ */
+export function setLineParams(
+  command: PosCartCommand,
+  t: CartCommandTarget,
+  gate: { readonly next_line_no: number; readonly line_no: number | null; readonly product_id: string | null; readonly variant_id: string | null },
+): readonly unknown[] {
+  const append = command === 'cart.add_line';
+  return [
+    t.tillSessionId,
+    t.cartLineId,
+    append ? gate.next_line_no : gate.line_no,
+    append ? t.productId : gate.product_id,
+    append ? t.variantId : gate.variant_id,
+    // A quantity change states a quantity; a discount request does not, and
+    // must not silently restate one, so it passes NULL and the routine keeps
+    // what is there. Symmetrically for the discount.
+    command === 'cart.request_discount' ? null : t.quantity,
+    command === 'cart.request_discount' ? t.discountMinor : null,
+  ];
+}
+
+/**
+ * The removal, which writes the `removed_at` TOMBSTONE and never deletes.
+ *
+ * It is idempotent by row count: a line already tombstoned matches nothing,
+ * returns 0 and raises nothing, because a till that taps "remove" twice has
+ * not done anything wrong. The 404 for a line that was never in this session
+ * is a DIFFERENT event and the service supplies it from the gate — see
+ * `POS_CART_REMOVAL_OUTCOMES`.
+ */
+const removeLine = (t: CartCommandTarget): CartStatement => ({
+  role: 'routine',
+  name: 'cart.remove_line',
+  text: `SELECT pos_cart_remove_line($1::uuid, $2::uuid) AS removed`,
+  params: [t.tillSessionId, t.cartLineId],
+});
+
+/**
+ * The three outcomes of a removal, kept as data because the distinction is a
+ * ruling and not an implementation detail.
+ *
+ * E's routine is idempotent and this module's 404 is also right; the TOMBSTONE
+ * is what makes them distinguishable without guessing, so neither has to be
+ * withdrawn:
+ *
+ *   - a row with `removed_at IS NOT NULL` → already removed → 200, no refusal;
+ *   - a row with `removed_at IS NULL`     → tombstone it    → 200;
+ *   - no row at all for that id           → `pos.cart_line_not_found` 404.
+ *
+ * Without the tombstone the first and the third are the same observation, and
+ * one of the two behaviours would have had to go.
+ */
+export const POS_CART_REMOVAL_OUTCOMES = Object.freeze({
+  alreadyRemoved: 'idempotent',
+  live: 'removed',
+  absent: 'pos.cart_line_not_found',
+} as const);
+
+/**
+ * The statement plan for one cart command. EXACTLY THREE statements, for every
+ * command, for every cart size: the gate, the routine, the projection.
+ *
+ * It was TWO until `0079` was read properly. Two was a plan that resolved the
+ * session and mutated in one statement — under a protocol the schema does not
+ * permit, because `daftar_app` holds SELECT and only SELECT on both relations
+ * and every write is a SECURITY DEFINER routine whose arguments the caller
+ * supplies. An honest three beats a two that counts SQL which cannot run.
+ *
+ * The assertion that authorizes the routine costs NO statement: it rides the
+ * seam's own scope statement at `BEGIN`
+ * (`withBusinessInventoryTransaction` → `app.inventory_assertion`), so the
+ * third statement is the gate, which `p_line_no` and the removal's three-way
+ * outcome force.
  *
  * It is a pure function of the command and its identifiers. It never sees the
- * cart's current lines, so its length cannot depend on them — which is the O(1)
- * claim, stated in a form a test can hold without a database.
+ * cart's current lines, so its length cannot depend on them — which is the
+ * O(1) claim, stated in a form a test can hold without a database.
  */
 export function cartStatementPlan(command: PosCartCommand, t: CartCommandTarget): readonly CartStatement[] {
   switch (command) {
     case 'cart.add_line':
-      return Object.freeze([
-        {
-          role: 'mutation' as const,
-          name: 'cart.add_line',
-          // ONE statement: resolve the session, APPEND the line at the next
-          // free ordinal, hand back the id.
-          //
-          // An APPEND and deliberately not an upsert (coordinator ruling,
-          // P4-S3). A second scan of one product is a SECOND LINE, because
-          // `requested_discount_minor` is a PER-LINE request (`OD-P4-02`
-          // OPTION A): merging two scans into one line would make it
-          // impossible to discount one of two identical items, so the merge
-          // would trade an accepted capability for a cosmetic one. `0079`
-          // carries no unique index on the product identity to merge on
-          // either, so an upsert here would raise `42P10` on the first add
-          // rather than behave differently.
-          //
-          // `line_no` is the server's, never the client's: it is derived from
-          // the basket's own maximum inside this statement, so there is no
-          // ordinal a client could state and no round trip to ask for one.
-          text: `
-            WITH${USABLE_SESSION},
-            minted AS (
-              INSERT INTO ${L.table} (
-                ${L.id}, ${L.tenantId}, ${L.businessId}, ${L.tillSessionId},
-                ${L.productId}, ${L.variantId}, ${L.quantity}, ${L.discountMinor}, ${L.lineNo}, ${L.addedBy}
-              )
-              SELECT $5::uuid, $1::uuid, $2::uuid, u.${S.id}, $6::uuid, $7::uuid, $8::numeric, 0,
-                     coalesce((SELECT max(x.${L.lineNo}) FROM ${L.table} x
-                                WHERE x.${L.businessId} = $2::uuid AND x.${L.tillSessionId} = $3::uuid), 0) + 1,
-                     $4::uuid
-                FROM usable u
-              RETURNING ${L.id}
-            )
-            SELECT ${SESSION_DISCRIMINATORS}, (SELECT count(*) FROM minted) AS written`,
-          params: [t.tenantId, t.businessId, t.tillSessionId, t.actorUserId, t.cartLineId, t.productId, t.variantId, t.quantity],
-        },
-        projection(t),
-      ]);
-
+      return Object.freeze([gate(t), setLine('cart.add_line'), projection(t)]);
     case 'cart.change_quantity':
-      return Object.freeze([
-        {
-          role: 'mutation' as const,
-          name: 'cart.change_quantity',
-          text: `
-            WITH${USABLE_SESSION},
-            changed AS (
-              UPDATE ${L.table} l
-                 SET ${L.quantity} = $6::numeric
-                FROM usable u
-               WHERE l.${L.tenantId} = $1::uuid
-                 AND l.${L.businessId} = $2::uuid
-                 AND l.${L.tillSessionId} = u.${S.id}
-                 AND l.${L.id} = $5::uuid
-              RETURNING l.${L.id}
-            )
-            SELECT ${SESSION_DISCRIMINATORS}, (SELECT count(*) FROM changed) AS written`,
-          params: [t.tenantId, t.businessId, t.tillSessionId, t.actorUserId, t.cartLineId, t.quantity],
-        },
-        projection(t),
-      ]);
-
-    case 'cart.remove_line':
-      return Object.freeze([
-        {
-          role: 'mutation' as const,
-          name: 'cart.remove_line',
-          text: `
-            WITH${USABLE_SESSION},
-            removed AS (
-              DELETE FROM ${L.table} l
-               USING usable u
-               WHERE l.${L.tenantId} = $1::uuid
-                 AND l.${L.businessId} = $2::uuid
-                 AND l.${L.tillSessionId} = u.${S.id}
-                 AND l.${L.id} = $5::uuid
-              RETURNING l.${L.id}
-            )
-            SELECT ${SESSION_DISCRIMINATORS}, (SELECT count(*) FROM removed) AS written`,
-          params: [t.tenantId, t.businessId, t.tillSessionId, t.actorUserId, t.cartLineId],
-        },
-        projection(t),
-      ]);
-
+      return Object.freeze([gate(t), setLine('cart.change_quantity'), projection(t)]);
     case 'cart.request_discount':
-      return Object.freeze([
-        {
-          role: 'mutation' as const,
-          name: 'cart.request_discount',
-          // The discount REQUEST is stored as the integer the client sent, and
-          // whether it is ALLOWED against this line's derived gross is decided
-          // by `priceCart` on the projection — because the gross is the
-          // server's figure and the client never saw it.
-          text: `
-            WITH${USABLE_SESSION},
-            discounted AS (
-              UPDATE ${L.table} l
-                 SET ${L.discountMinor} = $6::bigint
-                FROM usable u
-               WHERE l.${L.tenantId} = $1::uuid
-                 AND l.${L.businessId} = $2::uuid
-                 AND l.${L.tillSessionId} = u.${S.id}
-                 AND l.${L.id} = $5::uuid
-              RETURNING l.${L.id}
-            )
-            SELECT ${SESSION_DISCRIMINATORS}, (SELECT count(*) FROM discounted) AS written`,
-          params: [t.tenantId, t.businessId, t.tillSessionId, t.actorUserId, t.cartLineId, t.discountMinor],
-        },
-        projection(t),
-      ]);
+      return Object.freeze([gate(t), setLine('cart.request_discount'), projection(t)]);
+    case 'cart.remove_line':
+      return Object.freeze([gate(t), removeLine(t), projection(t)]);
   }
 }
 
-/**
- * The number of statements one cart command issues. Two, for every command and
- * every cart size — the constant the law is about, named so a test asserts a
- * value rather than a tautology.
- */
-export const CART_STATEMENTS_PER_COMMAND = 2;
+/** Three: the gate, the routine, the projection. Constant in the line count. */
+export const CART_STATEMENTS_PER_COMMAND = 3;

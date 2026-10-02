@@ -6,7 +6,7 @@ import { Database } from '../../infra/database';
 import type { Logger } from '../../infra/logger';
 import type { MembershipContext } from '../tenancy/tenancy.service';
 import { minorToString, priceCart, roundingGrains, type PricedCart, type StoredCartLine } from './pos-cart-pricing';
-import { cartStatementPlan, CART_STATEMENTS_PER_COMMAND, type CartCommandTarget, type CartStatement } from './pos-cart-statements';
+import { cartStatementPlan, setLineParams, CART_STATEMENTS_PER_COMMAND, type CartCommandTarget, type CartStatement } from './pos-cart-statements';
 import { posRefusal, type PosCode } from './pos-errors';
 import type { PosCartCommand } from './pos-price-authority';
 
@@ -77,15 +77,30 @@ export class RecordingCartSql implements CartSql {
   }
 }
 
-interface MutationRow extends QueryResultRow {
+/**
+ * The GATE's one row: the session verdict, the ordinal to call the routine
+ * with, and what the addressed line currently is.
+ *
+ * Every field is a fact the SERVER then states to `pos_cart_set_line`. The
+ * client supplied none of them.
+ */
+interface GateRow extends QueryResultRow {
   /** The isolation step: 0 means invisible — another tenant's or business's, or never opened. */
   session_visible: string;
   /** The lifecycle step: 0 means the till is closed. */
   session_open: string;
   /** The `OD-P4-09` step: 0 means it is a colleague's till. */
   session_usable: string;
-  /** How many cart rows the mutation actually touched. */
-  written: string;
+  /** `max(line_no) + 1` over the whole basket, tombstones included. The append's ordinal. */
+  next_line_no: number;
+  /** 1 when a row with this id exists in this session, tombstoned or not. */
+  line_present: string;
+  /** 1 when that row is already tombstoned — the half that makes the removal idempotent AND 404-able. */
+  line_removed: string;
+  /** The existing line's own ordinal and identities, for a REVISION's routine call. */
+  line_no: number | null;
+  product_id: string | null;
+  variant_id: string | null;
 }
 
 interface ProjectionRow extends QueryResultRow {
@@ -198,12 +213,13 @@ export class PosCartService {
   }
 
   /**
-   * One command: ONE transaction, the plan's two statements in order, then the
-   * server's arithmetic over what came back.
+   * One command: ONE transaction, the plan's three statements in order, then
+   * the server's arithmetic over what came back.
    *
-   * The refusals are read off the mutation's own columns rather than from a
-   * second query: `session_usable = 0` is an unusable session and
-   * `written = 0` behind a usable one is a line this basket does not hold.
+   * The refusals are read off the GATE's own columns rather than from a second
+   * query: `session_usable = 0` is an unusable session, and `line_present`
+   * with `line_removed` are what let the removal be idempotent for a line
+   * already gone while still answering 404 for one that was never here.
    */
   private async run(m: MembershipContext, command: PosCartCommand, target: CartCommandTarget): Promise<CartDto> {
     const plan = cartStatementPlan(command, target);
@@ -213,34 +229,77 @@ export class PosCartService {
         query: async <T extends QueryResultRow>(text: string, params: readonly unknown[]): Promise<readonly T[]> =>
           (await client.query<T>(text, [...params])).rows,
       };
-      return this.runPlan(sql, plan);
+      return this.runPlan(sql, plan, command, target);
     });
     return this.recompute(target.tillSessionId, projected);
   }
 
   /**
-   * Run exactly the plan. No statement is issued that the plan does not hold,
-   * and the plan's two roles are checked rather than assumed — a plan whose
-   * shape drifted is a 500 and not a silently different operation.
+   * Run exactly the plan: the gate, the routine, the projection. No statement
+   * is issued that the plan does not hold, and all three roles are checked
+   * rather than assumed — a plan whose shape drifted is a 500 and not a
+   * silently different operation.
+   *
+   * The routine is `0079`'s SECURITY DEFINER writer, because `daftar_app`
+   * holds SELECT and only SELECT on both POS relations: there is no direct
+   * INSERT, UPDATE or DELETE this service could issue even if it wanted to.
+   * The assertion that authorizes it is presented at `BEGIN` by the seam, so
+   * it costs no statement here.
    */
-  async runPlan(sql: CartSql, plan: readonly CartStatement[]): Promise<readonly StoredCartLine[]> {
-    const mutation = plan[0];
-    const projectionStatement = plan[1];
-    if (plan.length !== CART_STATEMENTS_PER_COMMAND || mutation?.role !== 'mutation' || projectionStatement?.role !== 'projection') {
+  async runPlan(sql: CartSql, plan: readonly CartStatement[], command: PosCartCommand, target: CartCommandTarget): Promise<readonly StoredCartLine[]> {
+    const [gateStatement, routine, projectionStatement] = plan;
+    if (
+      plan.length !== CART_STATEMENTS_PER_COMMAND ||
+      gateStatement?.role !== 'gate' ||
+      routine?.role !== 'routine' ||
+      projectionStatement?.role !== 'projection'
+    ) {
       throw this.invariant('pos.cart_statement_plan_invalid');
     }
-    const [outcome] = await sql.query<MutationRow>(mutation.text, mutation.params);
-    if (outcome === undefined) throw this.invariant('pos.cart_statement_plan_invalid');
+
+    const [gateRow] = await sql.query<GateRow>(gateStatement.text, gateStatement.params);
+    if (gateRow === undefined) throw this.invariant('pos.cart_statement_plan_invalid');
+
     // WIDEST REFUSAL FIRST. The order is the law, not a style: answering
     // `pos.session_not_owned` for a session in another business would confirm
     // that a row exists there, which is the cross-tenant enumeration the
     // estate refuses. Every code is the till-session surface's own, registered
     // in the one canonical registry — a cart command invents no second
-    // vocabulary for a session fact.
-    if (Number(outcome.session_visible) === 0) throw posRefusal('pos.session_not_found');
-    if (Number(outcome.session_open) === 0) throw posRefusal('pos.session_not_open');
-    if (Number(outcome.session_usable) === 0) throw posRefusal('pos.session_not_owned');
-    if (Number(outcome.written) === 0) throw posRefusal('pos.cart_line_not_found');
+    // vocabulary for a session fact, and in particular it does not adopt the
+    // `pos.till_session_*` spellings `0079` currently raises.
+    if (Number(gateRow.session_visible) === 0) throw posRefusal('pos.session_not_found');
+    if (Number(gateRow.session_open) === 0) throw posRefusal('pos.session_not_open');
+    if (Number(gateRow.session_usable) === 0) throw posRefusal('pos.session_not_owned');
+
+    const present = Number(gateRow.line_present) > 0;
+    const alreadyRemoved = Number(gateRow.line_removed) > 0;
+
+    if (command === 'cart.remove_line') {
+      // THE THREE-WAY REMOVAL (coordinator ruling). The tombstone is what
+      // makes E's idempotency and this module's 404 both survivable: without
+      // it, "already removed" and "never existed" are the same observation
+      // and one of the two behaviours would have had to be withdrawn.
+      if (!present) throw posRefusal('pos.cart_line_not_found');
+      // Present, live or already tombstoned: issue the routine either way. It
+      // matches nothing when the line is already tombstoned, returns 0 and
+      // raises nothing — a till that taps "remove" twice has not done
+      // anything wrong — and the plan stays three statements in both cases,
+      // so the count does not depend on the outcome.
+      await sql.query(routine.text, routine.params);
+    } else if (command === 'cart.add_line') {
+      // The append: the gate's `next_line_no` is the ordinal, and the server
+      // states it. `max(line_no) + 1` over the whole basket, tombstones
+      // included, so a freed ordinal is never reused under a cashier.
+      await sql.query(routine.text, setLineParams(command, target, gateRow));
+    } else {
+      // A revision of a line that must already exist and must still be live.
+      // A tombstoned line is GONE as far as a quantity change or a discount
+      // request is concerned: reviving it by revision would make the removal
+      // undoable by a route that does not say so.
+      if (!present || alreadyRemoved) throw posRefusal('pos.cart_line_not_found');
+      await sql.query(routine.text, setLineParams(command, target, gateRow));
+    }
+
     const rows = await sql.query<ProjectionRow>(projectionStatement.text, projectionStatement.params);
     return rows.map((r) => ({
       cartLineId: r.cart_line_id,

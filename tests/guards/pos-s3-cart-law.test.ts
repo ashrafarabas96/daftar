@@ -57,6 +57,9 @@ import {
   POS_CART_UNIQUE_CONSTRAINT,
   POS_CART_UNIQUE_COLUMNS,
   POS_CART_UNIQUE_IS_PARTIAL,
+  POS_CART_UNIQUE_PREDICATE,
+  POS_CART_REMOVAL_OUTCOMES,
+  setLineParams,
   cartStatementPlan,
   type CartCommandTarget,
 } from '../../apps/api/src/modules/pos/pos-cart-statements';
@@ -591,7 +594,10 @@ describe('P4-S3 (C) — the cart’s statement count is CONSTANT in the line cou
       const fifty = cartStatementPlan(command, target());
       expect(one).toHaveLength(fifty.length);
       expect(one).toHaveLength(CART_STATEMENTS_PER_COMMAND);
-      expect(one.map((s) => s.role)).toEqual(['mutation', 'projection']);
+      // Three roles, in this order, for every command: the gate that reads
+      // the session and the addressed line, the `0079` routine that writes,
+      // and the one projection that returns the whole basket.
+      expect(one.map((s) => s.role)).toEqual(['gate', 'routine', 'projection']);
     }
   });
 
@@ -608,7 +614,7 @@ describe('P4-S3 (C) — the cart’s statement count is CONSTANT in the line cou
   it('the projection is ONE statement that returns every line WITH its catalogue price', () => {
     // This is the half that would be N statements if written naturally: read
     // the lines, then look up each line's price. One statement, one join.
-    const [, projection] = cartStatementPlan('cart.add_line', target());
+    const [, , projection] = cartStatementPlan('cart.add_line', target());
     expect(projection?.role).toBe('projection');
     expect(projection?.text).toContain('JOIN products');
     expect(projection?.text).toContain(POS_CART_COLUMNS.lines.table);
@@ -646,12 +652,13 @@ describe('P4-S3 (C) — the cart’s statement count is CONSTANT in the line cou
     // is how every cart in the world is written first. Planted as a local
     // plan builder; the real one is never edited.
     const perLinePlan = (lineCount: number): readonly { role: string }[] => [
-      { role: 'mutation' },
+      { role: 'gate' },
+      { role: 'routine' },
       ...Array.from({ length: lineCount }, () => ({ role: 'projection' })),
     ];
     // With the defect in place the equality the law asserts is FALSE.
-    expect(perLinePlan(1)).toHaveLength(2);
-    expect(perLinePlan(50)).toHaveLength(51);
+    expect(perLinePlan(1)).toHaveLength(3);
+    expect(perLinePlan(50)).toHaveLength(52);
     expect(perLinePlan(1).length === perLinePlan(50).length).toBe(false);
     // And with the real plan it holds, for every command.
     for (const command of POS_CART_COMMANDS) {
@@ -671,7 +678,7 @@ describe('P4-S3 (D) — no stored derived truth, and the refusal registry', () =
       expect(declared, `the cart depends on a stored derived column: ${forbidden}`).not.toContain(forbidden);
     }
     // The price is joined from the catalogue on every recomputation.
-    const [, projection] = cartStatementPlan('cart.add_line', target());
+    const [, , projection] = cartStatementPlan('cart.add_line', target());
     expect(projection?.text).toContain('base_price_minor');
   });
 
@@ -713,12 +720,15 @@ describe('P4-S3 (D) — no stored derived truth, and the refusal registry', () =
   });
 
   it('the add APPENDS at the next free ordinal, and the ordinal is the SERVER\u2019s', () => {
-    const [mutation] = cartStatementPlan('cart.add_line', target());
-    // Derived from the basket's own maximum, inside the one statement: there
-    // is no ordinal a client could state and no round trip to ask for one.
-    expect(mutation?.text).toContain(`max(x.${POS_CART_COLUMNS.lines.lineNo})`);
-    expect(mutation?.text).toMatch(/\+ 1/);
-    expect(mutation?.text).toContain('INSERT INTO');
+    const [gate] = cartStatementPlan('cart.add_line', target());
+    // The ordinal is derived in the GATE, from the basket's own maximum, and
+    // handed to `pos_cart_set_line` as `p_line_no`. `0079` makes it a
+    // parameter of the routine rather than something the routine derives, so
+    // somebody must state it — and the server states it. There is no ordinal
+    // a client could send and no extra round trip to ask for one.
+    expect(gate?.role).toBe('gate');
+    expect(gate?.text).toContain(`max(x.${POS_CART_COLUMNS.lines.lineNo})`);
+    expect(gate?.text).toMatch(/\+ 1 AS next_line_no/);
     // And `line_no` is not in the accepted key set of any command, so it
     // cannot arrive in a body at all.
     for (const command of POS_CART_COMMANDS) {
@@ -727,29 +737,71 @@ describe('P4-S3 (D) — no stored derived truth, and the refusal registry', () =
     }
   });
 
-  it('the uniqueness this module relies on is the one `0079` ships, and it is NOT partial', () => {
-    // `pos_cart_lines_line_uq UNIQUE (business_id, till_session_id, line_no)`.
-    // A TOTAL constraint: `0079` has no `removed_at` and the removal is a hard
-    // DELETE, so a removed ordinal is free again immediately — which is what
-    // makes `max(line_no) + 1` right rather than merely plausible.
+  it('the uniqueness this module relies on is the one `0079` ships, and it IS partial', () => {
+    // `pos_cart_lines_line_uq UNIQUE (business_id, till_session_id, line_no)
+    // WHERE removed_at IS NULL` — PARTIAL, and that is load-bearing: `0079`
+    // tombstones rather than deleting (the estate gives the internal writer no
+    // DELETE beyond the accepted prefix), so without the predicate a removed
+    // ordinal would be held for ever and a cashier could never reuse it.
     expect(POS_CART_UNIQUE_CONSTRAINT).toBe('pos_cart_lines_line_uq');
     expect([...POS_CART_UNIQUE_COLUMNS]).toEqual(['business_id', 'till_session_id', 'line_no']);
-    expect(POS_CART_UNIQUE_IS_PARTIAL).toBe(false);
+    expect(POS_CART_UNIQUE_IS_PARTIAL).toBe(true);
+    expect(POS_CART_UNIQUE_PREDICATE).toBe('removed_at IS NULL');
     const declared = Object.values(POS_CART_COLUMNS.lines);
     for (const column of POS_CART_UNIQUE_COLUMNS) expect(declared).toContain(column);
-    // No tombstone column is referenced by any statement, because none exists.
+    // The live basket EXCLUDES tombstones, or a removed line would come back
+    // priced on the cashier's screen.
+    const [, , projection] = cartStatementPlan('cart.add_line', target());
+    expect(projection?.text).toContain(`${POS_CART_COLUMNS.lines.removedAt} IS NULL`);
+  });
+
+  it('NO cart statement writes the relation directly — every write is a `0079` routine', () => {
+    // `daftar_app` holds SELECT and only SELECT on both POS relations, so an
+    // INSERT, UPDATE or DELETE here would not merely be the wrong design: it
+    // would be refused by the database. The writes are `pos_cart_set_line`
+    // and `pos_cart_remove_line`, which are SECURITY DEFINER and gated by an
+    // `invctl/1` assertion.
     for (const command of POS_CART_COMMANDS) {
-      for (const statement of cartStatementPlan(command, target())) expect(statement.text).not.toMatch(/removed_at|deleted_at|voided_at/);
+      for (const statement of cartStatementPlan(command, target())) {
+        expect(statement.text, `${command}/${statement.name}`).not.toMatch(/\b(INSERT\s+INTO|UPDATE\s+pos_|DELETE\s+FROM)\b/i);
+      }
+      const routine = cartStatementPlan(command, target()).find((p) => p.role === 'routine');
+      expect(routine?.text, command).toMatch(/pos_cart_(set_line|remove_line)\(/);
     }
   });
 
-  it('the three commands that address an EXISTING line never INSERT', () => {
-    // A change, a removal or a discount that could INSERT would be a command
-    // minting the row it claims to be amending.
-    for (const command of ['cart.change_quantity', 'cart.remove_line', 'cart.request_discount'] as const) {
-      const mutation = cartStatementPlan(command, target()).find((p) => p.role === 'mutation');
-      expect(mutation?.text, command).not.toMatch(/INSERT INTO/i);
+  it('the routine\u2019s arguments come from the GATE, and it carries NO parameters of its own', () => {
+    // `pos_cart_set_line` takes `p_line_no`, `p_product_id` and
+    // `p_variant_id`, so the server has to state them — and the only honest
+    // source is the gate, not the body. The statement therefore declares
+    // `bindsFromGate` and ships with empty params, so "issued with no
+    // parameters" cannot be mistaken for a correct call.
+    for (const command of ['cart.add_line', 'cart.change_quantity', 'cart.request_discount'] as const) {
+      const routine = cartStatementPlan(command, target()).find((p) => p.role === 'routine');
+      expect(routine?.bindsFromGate, command).toBe(true);
+      expect(routine?.params, command).toEqual([]);
     }
+    // An APPEND states the gate's next ordinal and the command's identities.
+    const gateRow = { next_line_no: 9, line_no: 3, product_id: 'P-OLD', variant_id: 'V-OLD' };
+    const t = target({ productId: 'P-NEW', variantId: 'V-NEW', quantity: '2', discountMinor: '0' });
+    expect(setLineParams('cart.add_line', t, gateRow)).toEqual([t.tillSessionId, t.cartLineId, 9, 'P-NEW', 'V-NEW', '2', null]);
+    // A REVISION states the EXISTING line's ordinal and identities, so it
+    // cannot restate a line's product as a side effect of changing a count.
+    expect(setLineParams('cart.change_quantity', t, gateRow)).toEqual([t.tillSessionId, t.cartLineId, 3, 'P-OLD', 'V-OLD', '2', null]);
+    // A discount request states the discount and NOT a quantity.
+    expect(setLineParams('cart.request_discount', t, gateRow)).toEqual([t.tillSessionId, t.cartLineId, 3, 'P-OLD', 'V-OLD', null, '0']);
+  });
+
+  it('the removal\u2019s three outcomes are DATA, so the ruling cannot be lost in a branch', () => {
+    // E's routine is idempotent and this slice's 404 is also right; the
+    // TOMBSTONE is what makes them distinguishable without guessing. Without
+    // it, "already removed" and "never existed" are one observation.
+    expect(POS_CART_REMOVAL_OUTCOMES).toEqual({
+      alreadyRemoved: 'idempotent',
+      live: 'removed',
+      absent: 'pos.cart_line_not_found',
+    });
+    expect(isSellingCode(POS_CART_REMOVAL_OUTCOMES.absent)).toBe(true);
   });
 
   it('EVERY cart code lives in the ONE canonical registry, with a registered status', () => {
