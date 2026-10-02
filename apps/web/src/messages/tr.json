@@ -849,5 +849,6 @@
   "error.sale.idempotency_conflict": "Bu satış başka bir şekilde zaten gönderildi. Hiçbir şey kaydedilmedi. Görmek için sayfayı yenileyin.",
   "error.sale.not_found": "Bu satış bulunamadı. Hiçbir şey kaydedilmedi. Sayfayı yenileyip yeniden başlayın.",
   "error.sale.warehouse_not_found": "Bu yerin satış yapılacak bir deposu yok. Hiçbir şey kaydedilmedi. Başka bir yer seçin ya da birinin ayarlamasını isteyin.",
-  "error.pos.warehouse_out_of_scope": "Bu kasa artık çalışmadığınız bir dükkâna ait. Hiçbir şey kaydedilmedi. Bu kasayı kapatıp şimdi çalıştığınız yerde yeni bir kasa açın."
+  "error.pos.warehouse_out_of_scope": "Bu kasa artık çalışmadığınız bir dükkâna ait. Hiçbir şey kaydedilmedi. Bu kasayı kapatıp şimdi çalıştığınız yerde yeni bir kasa açın.",
+  "pos.search.narrow": "En yakın sonuçlar gösteriliyor. Daraltmak için yazmaya devam edin."
 }

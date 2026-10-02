@@ -55,7 +55,10 @@ function declaredRequestFields(clientSource: string): Readonly<Record<string, st
   return Object.fromEntries(pairs);
 }
 
-const CLIENT_SOURCE = readFileSync(join(REPO, CLIENT), 'utf8');
+// Comments are stripped FIRST: an apostrophe in prose — "the till's
+// warehouse" — opens a string literal as far as a quote-matching parser is
+// concerned, and the parser then read a doc comment as a forbidden field name.
+const CLIENT_SOURCE = strip(readFileSync(join(REPO, CLIENT), 'utf8'));
 const FORBIDDEN_REQUEST_FIELDS = declaredForbiddenFields(CLIENT_SOURCE);
 const POS_REQUEST_FIELDS = declaredRequestFields(CLIENT_SOURCE);
 
@@ -190,6 +193,35 @@ export function priceRequestProblems(): string[] {
   return field === 'amountMinor' ? [] : [`the one price request is "${field}", expected the discount's "amountMinor"`];
 }
 
+/**
+ * Rule 6: the QUERY STRINGS too. A POS read is not a `send<…>`, so rules 1-3
+ * never saw it — and `GET /v1/pos/products` is where the client's authority
+ * over its own read scope was actually decided. Every key a POS read puts in a
+ * query string must be named in `POS_REQUEST_FIELDS`, and none may be
+ * forbidden: `warehouseId` in the forbidden list is only a claim until
+ * something checks the query, because the till's warehouse is a fact of the
+ * SESSION and a client that could name it would choose the scope of its own
+ * read (RULING 2, `P4-AL-18`).
+ */
+export function queryFieldProblems(clientSource: string): string[] {
+  const code = strip(clientSource);
+  // `qs(` matches the helper's own declaration too, and `function qs(params: …)`
+  // is not a query string: a rule that read it would report `params` forever.
+  const calls = callArguments(code, 'qs').filter(({ index }) => !/\bfunction\s+$/.test(code.slice(0, index)));
+  const problems: string[] = [];
+  if (calls.length === 0) problems.push(`${CLIENT} builds no query string with qs( — the query shapes are what this rule reads`);
+  for (const { args, index } of calls) {
+    for (const m of args.matchAll(/(?:^|[{,])\s*(\w+)\s*:/g)) {
+      const field = m[1] ?? '';
+      if (FORBIDDEN_REQUEST_FIELDS.includes(field))
+        problems.push(`${CLIENT}:${lineOf(code, index)} puts "${field}" in a query string: the client would choose the scope or the price of its own read`);
+      else if (!Object.hasOwn(POS_REQUEST_FIELDS, field))
+        problems.push(`${CLIENT}:${lineOf(code, index)} puts "${field}" in a query string, which POS_REQUEST_FIELDS does not name`);
+    }
+  }
+  return problems;
+}
+
 // ── Green over the tree as delivered ─────────────────────────────────────
 
 const FILES = posSources();
@@ -211,6 +243,14 @@ describe('P4-S3 — the POS client sends identities, quantities and a discount r
 
   it('no POS source does arithmetic on money, parses it into a number, or rounds it', () => {
     expect(moneyArithmeticProblems(FILES)).toEqual([]);
+  });
+
+  it('no POS read puts a forbidden or undeclared field in a query string', () => {
+    expect(queryFieldProblems(FILES[CLIENT] ?? '')).toEqual([]);
+    // The one that matters: the product type-ahead names the session, never the warehouse.
+    expect(FORBIDDEN_REQUEST_FIELDS).toContain('warehouseId');
+    expect(Object.hasOwn(POS_REQUEST_FIELDS, 'warehouseId')).toBe(false);
+    expect(FILES[CLIENT] ?? '').toContain('/pos/products');
   });
 
   it('exactly one POS request field is a price request, and it is the ruled discount', () => {
@@ -303,5 +343,28 @@ describe('red: each way of making the browser authoritative about price is refus
     ).toEqual([]);
     expect(posCommands(FILES[CLIENT] ?? '')).toContain('finishSale');
     expect(posCommands(FILES[CLIENT] ?? '')).not.toContain('getPosBasket');
+  });
+
+  it('red: a POS read that names the warehouse instead of the session', () => {
+    const planted = once(
+      FILES[CLIENT] ?? '',
+      'qs({ sessionId: q.sessionId, q: q.q, limit: q.limit })',
+      'qs({ warehouseId: q.sessionId, q: q.q, limit: q.limit })',
+    );
+    expect(queryFieldProblems(planted)).toContainEqual(expect.stringContaining('puts "warehouseId" in a query string'));
+  });
+
+  it('red: a POS read that names a price in its query string', () => {
+    const planted = once(FILES[CLIENT] ?? '', 'qs({ sessionId: q.sessionId', 'qs({ unitPriceMinor: q.sessionId');
+    expect(queryFieldProblems(planted)).toContainEqual(expect.stringContaining('puts "unitPriceMinor" in a query string'));
+  });
+
+  it('red: a POS read that names a field nobody declared', () => {
+    const planted = once(FILES[CLIENT] ?? '', 'q: q.q, limit: q.limit })', 'q: q.q, limit: q.limit, tillNickname: q.q })');
+    expect(queryFieldProblems(planted)).toContainEqual(expect.stringContaining('which POS_REQUEST_FIELDS does not name'));
+  });
+
+  it('red: a client that stopped building query strings at all is not silently green', () => {
+    expect(queryFieldProblems('export const x = 1;\n')).toContainEqual(expect.stringContaining('builds no query string'));
   });
 });

@@ -18,7 +18,7 @@
  */
 import { Button, Card, ConfirmationDialog, List, SearchField, TextField, spacing } from '@daftar/design-system';
 import type { ViewBaseProps } from '@/lib/phase3-format';
-import type { PosBasketDto, PosSearchHitDto } from '@/lib/phase4-pos-api';
+import type { PosBasketDto, PosProductHitDto } from '@/lib/phase4-pos-api';
 import { Heading, Money, Muted, Notice, Quantity, Stack, Title } from '../common/primitives';
 import { RefusalNotice } from '../common/feedback';
 import { hasAmount } from './model';
@@ -29,7 +29,13 @@ export interface RegisterViewProps {
   tillOpen: boolean;
   search: string;
   /** The hits of the last POS search, or null before one was made. */
-  hits: readonly PosSearchHitDto[] | null;
+  hits: readonly PosProductHitDto[] | null;
+  /**
+   * True when the server found further matches and dropped them: the prefix is
+   * too broad. The screen says so rather than offering a page two, because
+   * there is none — a type-ahead is narrowed by typing one more character.
+   */
+  moreMatches: boolean;
   /** The server's basket, or null while it is being read. */
   basket: PosBasketDto | null;
   /** What the cashier has typed into each line's quantity field, by line id. */
@@ -43,7 +49,7 @@ export interface RegisterViewProps {
   errorKey: string | null;
   unitNames: Readonly<Record<string, string>>;
   onSearch: (text: string) => void;
-  onAdd: (hit: PosSearchHitDto) => void;
+  onAdd: (hit: PosProductHitDto) => void;
   onQuantity: (lineId: string, value: string) => void;
   onRemove: (lineId: string) => void;
   onDiscountText: (value: string) => void;
@@ -102,7 +108,7 @@ export function RegisterView(props: RegisterViewProps & ViewBaseProps) {
                 <span>{t('pos.search.priceEach')}</span>
                 <Money amountMinor={hit.unitPriceMinor} currency={hit.currency} locale={locale} />
                 {hit.onHand === null ? null : <span>{t('pos.search.here')}</span>}
-                {hit.onHand === null ? null : <Quantity value={hit.onHand} decimals={hit.unitDecimals} locale={locale} />}
+                {hit.onHand === null ? null : <Quantity value={hit.onHand} decimals={hit.unitDecimals ?? 0} locale={locale} />}
               </span>
             ),
             trailing: (
@@ -113,6 +119,7 @@ export function RegisterView(props: RegisterViewProps & ViewBaseProps) {
           }))}
         />
       )}
+      {props.hits !== null && props.moreMatches ? <PosHint>{t('pos.search.narrow')}</PosHint> : null}
 
       <Heading>{t('pos.basket.title')}</Heading>
       {basket === null || lines.length === 0 ? <PosHint>{t('pos.basket.empty')}</PosHint> : null}

@@ -6,7 +6,7 @@
  *
  * LAW (as in `merchant-api.ts` and `phase3-api.ts`):
  *   - one path convention: `${BFF}/<resource>`, NO `/v1` (the proxy adds it);
- *   - every list is `{ items }` (`ListDto` / `Page`), never a bare array;
+ *   - every list answers in an envelope with an `items` array, never a bare array;
  *   - money is an integer minor-unit STRING and a quantity a decimal STRING,
  *     end to end; this file does NO arithmetic on either;
  *   - every GET is `cache: 'no-store'`: the POS reads are live;
@@ -27,7 +27,6 @@
  * and the POS screens and refuses either kind of drift, with a red proof for
  * each way of breaking it.
  */
-import type { Page } from '@daftar/shared-contracts';
 import { apiFetch } from './client';
 
 const BFF = '/api/proxy';
@@ -88,19 +87,46 @@ export interface PosCurrentTillDto {
   session: PosTillSessionDto | null;
 }
 
-/** One hit of `GET /v1/pos/search`. The price is the server's; the screen never edits it. */
-export interface PosSearchHitDto {
+/** One sellable unit the cashier may add, as `GET /v1/pos/products` answers. The price is the server's; the screen never edits it. */
+export interface PosProductHitDto {
   productId: string;
+  /** `null` for a simple product: the base variant never leaves the server (P3-AL-52). */
   variantId: string | null;
   name: string;
   variantName: string | null;
+  sku: string | null;
+  barcode: string | null;
   unitCode: string | null;
-  unitDecimals: number;
-  /** Integer minor units, as text. Display only. */
+  /** How many fraction digits the unit allows; `null` for an unconfigured product. */
+  unitDecimals: number | null;
+  /** The CATALOGUE price of one unit, integer minor units as text. Display only: the sale's own figure is the server's recomputation. */
   unitPriceMinor: string;
   currency: string;
-  /** What the warehouse has now, as a decimal string, or null when the item is not tracked. */
+  /** On hand at the TILL'S warehouse now, as a decimal string, or null for an item that does not track inventory (`0` would read as "out of stock"). */
   onHand: string | null;
+  trackInventory: boolean;
+  /** Which index arm matched: a scanned barcode ranks first, then SKU, then name. */
+  matchedOn: 'barcode' | 'sku' | 'name';
+}
+
+/**
+ * `GET /v1/pos/products` — the type-ahead's answer.
+ *
+ * There is no cursor and no page two, on purpose: a type-ahead is narrowed by
+ * typing one more character, and `moreMatches` says the prefix was too broad,
+ * which is an answer a cashier can act on.
+ */
+export interface PosProductSearchDto {
+  /** The prefix the SERVER actually searched on, trimmed and lower-cased. */
+  query: string;
+  /**
+   * The warehouse the figures are from — DERIVED by the server from the
+   * session the request named, never supplied by this client (RULING 2). It is
+   * read, never sent.
+   */
+  warehouseId: string;
+  items: PosProductHitDto[];
+  moreMatches: boolean;
 }
 
 /** One basket line, as the server holds it (`pos_cart_lines`). Every amount is the server's. */
@@ -226,8 +252,15 @@ export interface PosFinishSaleRequestDto {
  * kind of thing it is. The guard test checks this list against the request
  * interfaces above and against the POS screens.
  */
-export const POS_REQUEST_FIELDS: Readonly<Record<string, 'identity' | 'quantity' | 'counted-cash' | 'discount-request' | 'concurrency'>> = {
-  /** The caller-minted id that makes a retry a replay (`useFormDocumentId`). */
+export const POS_REQUEST_FIELDS: Readonly<
+  Record<string, 'identity' | 'quantity' | 'counted-cash' | 'discount-request' | 'concurrency' | 'search-text' | 'page-size'>
+> = {
+  /**
+   * The caller-minted id that makes a retry a replay (`useFormDocumentId`) —
+   * and, on `GET /v1/pos/products`, the identity of the till whose warehouse
+   * the server DERIVES the answer from. It is the only place identity the POS
+   * reads carry, which is the whole of RULING 2.
+   */
   sessionId: 'concurrency',
   documentId: 'concurrency',
   revision: 'concurrency',
@@ -244,6 +277,10 @@ export const POS_REQUEST_FIELDS: Readonly<Record<string, 'identity' | 'quantity'
   openingFloatMinor: 'counted-cash',
   closingCountMinor: 'counted-cash',
   amountMinor: 'discount-request',
+  /** The typed prefix. Text the cashier is looking for, not a fact about the catalogue. */
+  q: 'search-text',
+  /** How many matches to show at once. It cannot widen the read's scope, only shorten its answer. */
+  limit: 'page-size',
 };
 
 /**
@@ -265,6 +302,17 @@ export const FORBIDDEN_REQUEST_FIELDS: readonly string[] = [
   // `TillSessionCloseSchema` as unknown keys and unspellable here.
   'expectedCashMinor',
   'varianceMinor',
+  /**
+   * RULING 2: the till's warehouse is a FACT OF THE SESSION — `NOT NULL`,
+   * immutable after the session opens, and behind a composite foreign key. A
+   * client that could name it could name a warehouse its own open till does
+   * not sell from, and would then be the source of truth for the scope of its
+   * own read (`P4-AL-18`). So no POS request names it, in a body or in a query
+   * string: the request names the SESSION and the server derives the rest.
+   * `PosProductSearchDto` ECHOES it so the screen can say which warehouse an
+   * availability figure belongs to; reading it back is not sending it.
+   */
+  'warehouseId',
 ];
 
 // ── Plumbing (the `phase3-api.ts` helpers, unchanged) ────────────────────
@@ -302,15 +350,19 @@ function send<T>(method: 'POST' | 'PUT' | 'DELETE', path: string, body?: unknown
 export const getCurrentTill = () => read<PosCurrentTillDto>(`${BFF}/pos/till-sessions/current`);
 export const getTillSession = (tillSessionId: string) => read<PosTillSessionDto>(`${BFF}/pos/till-sessions/${seg(tillSessionId)}`);
 /**
- * `GET /v1/pos/search` — what this till may sell, for the typed text.
+ * `GET /v1/pos/products` — what this till may sell, for the typed prefix.
  *
- * It names the BRANCH, which is the only place identity a till session carries
- * (`TillSessionOpenSchema`). WHICH warehouse the stock and the price come from
- * is the server's answer, not the client's choice: a browser that picked the
- * warehouse would be deciding where the goods leave from.
+ * FACT, read from `PosProductSearchQuerySchema` (`.strict()`): the query is
+ * `{ sessionId, q, limit? }` and `limit` is 1..50. It names the SESSION, and
+ * `warehouseId` is REFUSED as a query parameter — which warehouse the stock
+ * and the price come from is the server's answer, derived from the session,
+ * not the client's choice. A browser that picked the warehouse would be
+ * deciding where the goods leave from and would be the source of truth for
+ * the scope of its own read (RULING 2, `P4-AL-18`). The answer ECHOES the
+ * warehouse it used so the screen can say what an on-hand figure belongs to.
  */
-export const searchPosItems = (q: { search: string; branchId: string; limit?: number }) =>
-  read<Page<PosSearchHitDto>>(`${BFF}/pos/search${qs({ search: q.search, branchId: q.branchId, limit: q.limit })}`);
+export const searchPosProducts = (q: { sessionId: string; q: string; limit?: number }) =>
+  read<PosProductSearchDto>(`${BFF}/pos/products${qs({ sessionId: q.sessionId, q: q.q, limit: q.limit })}`);
 export const getPosBasket = () => read<PosBasketDto>(`${BFF}/pos/basket`);
 
 // ── POS commands (document-id and revision retry kinds) ──────────────────

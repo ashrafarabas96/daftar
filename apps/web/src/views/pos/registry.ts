@@ -8,7 +8,7 @@
  * fixture is an integer minor-unit STRING, as the server sends it.
  */
 import { defineView, type ViewEntry } from '@/lib/phase3-format';
-import type { PosBasketDto, PosBasketLineDto, PosSaleReceiptDto, PosSearchHitDto } from '@/lib/phase4-pos-api';
+import type { PosBasketDto, PosBasketLineDto, PosProductHitDto, PosSaleReceiptDto } from '@/lib/phase4-pos-api';
 import { RegisterView, type RegisterViewProps } from './RegisterView';
 import { SaleDoneView, type SaleDoneViewProps } from './SaleDoneView';
 import { TillView, type PosBranchOption, type TillViewProps } from './TillView';
@@ -31,28 +31,38 @@ const BRANCHES: PosBranchOption[] = [
 
 const UNIT_NAMES: Record<string, string> = { PCE: 'piece', KGM: 'kg' };
 
-const HITS: PosSearchHitDto[] = [
+const HITS: PosProductHitDto[] = [
   {
     productId: 'p1000000-0000-4000-8000-000000000001',
     variantId: null,
     name: 'Rice 5 kg',
     variantName: null,
+    sku: 'RICE-5',
+    barcode: '0000000000017',
     unitCode: 'PCE',
     unitDecimals: 0,
     unitPriceMinor: '3150',
     currency: 'JOD',
     onHand: '24',
+    trackInventory: true,
+    matchedOn: 'name',
   },
   {
     productId: 'p1000000-0000-4000-8000-000000000002',
     variantId: 'v1000000-0000-4000-8000-000000000002',
     name: 'Olive oil',
     variantName: '1 litre',
+    sku: null,
+    // A scanned barcode ranks first, and an untracked item shows no on-hand
+    // figure at all: `0` would read as "out of stock" and stop a fine sale.
+    barcode: '0000000000024',
     unitCode: 'PCE',
-    unitDecimals: 0,
+    unitDecimals: null,
     unitPriceMinor: '710',
     currency: 'JOD',
     onHand: null,
+    trackInventory: false,
+    matchedOn: 'barcode',
   },
 ];
 
@@ -144,6 +154,7 @@ const REGISTER_BASE: RegisterViewProps = {
   tillOpen: true,
   search: 'ri',
   hits: HITS,
+  moreMatches: false,
   basket: BASKET,
   quantityDrafts: {},
   lineErrors: {},
@@ -190,6 +201,7 @@ export const VIEW_REGISTRY: readonly ViewEntry[] = [
       basket: { ...BASKET, lines: [], subtotalMinor: '0', discountMinor: '0', totalMinor: '0' },
     },
     'nothing found': { ...REGISTER_BASE, hits: [] },
+    'the prefix is too broad': { ...REGISTER_BASE, search: 'a', moreMatches: true },
     'two lines in the basket': REGISTER_BASE,
     'a discount the server allowed': { ...REGISTER_BASE, basket: DISCOUNTED, discountText: '3.65' },
     'a quantity that is not a quantity': {

@@ -849,5 +849,6 @@
   "error.sale.idempotency_conflict": "This sale was already sent another way. Nothing was saved. Refresh the page to see it.",
   "error.sale.not_found": "We couldn't find this sale. Nothing was saved. Refresh the page and start again.",
   "error.sale.warehouse_not_found": "This place has nowhere to sell the goods from. Nothing was saved. Choose another place, or ask someone to set it up.",
-  "error.pos.warehouse_out_of_scope": "This till belongs to a shop you no longer work at. Nothing was saved. Close this till, then open a new one where you work now."
+  "error.pos.warehouse_out_of_scope": "This till belongs to a shop you no longer work at. Nothing was saved. Close this till, then open a new one where you work now.",
+  "pos.search.narrow": "Showing the closest matches. Keep typing to narrow it down."
 }

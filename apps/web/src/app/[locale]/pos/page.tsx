@@ -10,11 +10,11 @@ import {
   getPosBasket,
   removeBasketLine,
   requestBasketDiscount,
-  searchPosItems,
+  searchPosProducts,
   setBasketLineQuantity,
   type PosBasketDto,
   type PosSaleReceiptDto,
-  type PosSearchHitDto,
+  type PosProductHitDto,
 } from '@/lib/phase4-pos-api';
 import { RegisterView } from '@/views/pos/RegisterView';
 import { SaleDoneView } from '@/views/pos/SaleDoneView';
@@ -50,7 +50,10 @@ export default function PosPage({ params }: { params: Promise<{ locale: Locale }
   const screen = usePosScreen(locale);
   const [documentId, resetDocumentId] = useFormDocumentId();
   const [search, setSearch] = useState('');
-  const [hits, setHits] = useState<readonly PosSearchHitDto[] | null>(null);
+  const [hits, setHits] = useState<readonly PosProductHitDto[] | null>(null);
+  // The server dropped further matches: the prefix is too broad, and the
+  // cashier narrows it by typing. There is no page two to ask for.
+  const [moreMatches, setMoreMatches] = useState(false);
   const [basket, setBasket] = useState<PosBasketDto | null>(null);
   const [basketFailed, setBasketFailed] = useState(false);
   const [quantityDrafts, setQuantityDrafts] = useState<Record<string, string>>({});
@@ -64,7 +67,12 @@ export default function PosPage({ params }: { params: Promise<{ locale: Locale }
   const quantityTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
 
   const tillOpen = screen.till !== null;
-  const branchId = screen.till?.branchId ?? '';
+  // The till SESSION is the only place identity a POS read carries: the
+  // warehouse the prices and the on-hand figures come from is derived from it
+  // by the server (RULING 2). This screen cannot name a warehouse, and it
+  // cannot name the branch either — a browser that chose either would be
+  // deciding the scope of its own read.
+  const tillSessionId = screen.till?.tillSessionId ?? '';
 
   // The basket this till is holding, read back from the server on arrival.
   const [attempt, setAttempt] = useState(0);
@@ -93,19 +101,22 @@ export default function PosPage({ params }: { params: Promise<{ locale: Locale }
     const text = search.trim();
     if (text.length < POS_SEARCH_MIN_CHARS) {
       setHits(null);
+      setMoreMatches(false);
       return;
     }
     let live = true;
     const timer = setTimeout(() => {
-      searchPosItems({ search: text, branchId })
-        .then((page) => {
+      searchPosProducts({ sessionId: tillSessionId, q: text })
+        .then((answer) => {
           if (!live) return;
-          setHits(page.items);
+          setHits(answer.items);
+          setMoreMatches(answer.moreMatches);
           setErrorKey(null);
         })
         .catch((error: unknown) => {
           if (!live) return;
           setHits([]);
+          setMoreMatches(false);
           setErrorKey(refusalKey(error));
         });
     }, POS_SEARCH_DELAY_MS);
@@ -113,7 +124,7 @@ export default function PosPage({ params }: { params: Promise<{ locale: Locale }
       live = false;
       clearTimeout(timer);
     };
-  }, [screen.phase, tillOpen, search, branchId]);
+  }, [screen.phase, tillOpen, search, tillSessionId]);
 
   useEffect(
     () => () => {
@@ -144,7 +155,7 @@ export default function PosPage({ params }: { params: Promise<{ locale: Locale }
     [basket],
   );
 
-  async function add(hit: PosSearchHitDto) {
+  async function add(hit: PosProductHitDto) {
     await command((revision) => addBasketLine({ documentId, productId: hit.productId, variantId: hit.variantId, quantity: '1', revision }));
   }
 
@@ -233,6 +244,7 @@ export default function PosPage({ params }: { params: Promise<{ locale: Locale }
           tillOpen={tillOpen}
           search={search}
           hits={hits}
+          moreMatches={moreMatches}
           basket={basket}
           quantityDrafts={quantityDrafts}
           lineErrors={lineErrors}
