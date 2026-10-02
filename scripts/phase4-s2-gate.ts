@@ -108,7 +108,7 @@ export const S2_SUITES: readonly SuiteRow[] = [
      * premise.
      */
     proof:
-      'tests/integration/sale-s2-atomic-law.test.ts::invoice_sequences is LOCKED and never written, so it belongs to the held-lock case and not to the trigger set',
+      'tests/integration/sale-s2-atomic-law.test.ts::invoice_sequences is LOCKED and never UPDATED, so the ordinal seam belongs to the held-lock case and not to the trigger set',
   },
   {
     id: 'S2-C01',

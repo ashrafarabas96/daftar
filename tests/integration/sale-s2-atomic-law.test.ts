@@ -289,7 +289,7 @@ describe('P4-AL-16 one transaction, or no sale: a failure at every seam leaves n
    * literal with a placeholder. A law that grepped the raw text would be
    * satisfied — or broken — by a word in a comment or an error message.
    */
-  it('invoice_sequences is LOCKED and never written, so it belongs to the held-lock case and not to the trigger set', async () => {
+  it('invoice_sequences is LOCKED and never UPDATED, so the ordinal seam belongs to the held-lock case and not to the trigger set', async () => {
     requireSubject(subject.missing, CLAIM);
     // (a) the list invariant, both ways.
     expect(UPDATE_SEAMS, 'invoice_sequences is a seam, named because a count delta cannot discover it').toContain('invoice_sequences');

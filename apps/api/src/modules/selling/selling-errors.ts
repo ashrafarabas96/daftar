@@ -75,7 +75,15 @@ const SELLING_STATUS = {
   /** A direct `UPDATE invoices SET status = …` refused by the transition trigger (P4-AL-24). */
   'invoice.status_not_writable': 409,
   'invoice.state_invalid': 409,
-  /** The document series named by a read does not exist for this business. */
+  /**
+   * The document series named by a read does not exist for this business.
+   *
+   * Practically unreachable on the WRITE path since TL-P4-S2-R4: `sale_commit`
+   * creates the series row on first use, so no sale is refused for the want of
+   * one. The code is KEPT rather than deleted: it is the registered rendering
+   * for a read that names a series by hand, and removing a registered code
+   * would change an accepted HTTP contract to tidy a comment.
+   */
   'invoice.sequence_not_found': 404,
   'invoice.document_kind_unknown': 400,
 

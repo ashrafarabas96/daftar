@@ -1097,9 +1097,36 @@ what the caller uses and `sales_cogs_owed` is what makes it safe, so a second re
 the lawful case. It does not touch `inventory_apply_stock_movements`: both cost columns of every request
 are NULL, so the writer values the movement under the stock key's own lock, which is also where
 `inventory.insufficient_stock` is raised (OD-P4-05), and 0078-E(6) reads that refusal back out of the live
-`prosrc`. And it creates no `invoice_sequences` row: nothing in `0000`–`0077` does, so a business with no
-stated series is refused `sale.issue_invoice` rather than given a default `number_format`, which would be
-a product decision about what every document of that business is called forever.
+`prosrc`. It does not **update** an `invoice_sequences` row: the series row is created on first use under
+TL-P4-S2-R4 (see §16.7), and the writer deliberately holds no `UPDATE` privilege on `number_format`, so a
+merchant's own series name can never be written over. What was once deferred here — which `number_format`
+a business that stated none is given — is now the Tech Lead's product ruling of 2026-10-01, and the
+default it names is a DAFTAR internal identifier, not a fiscal-compliance claim. OD-03 stays OPEN.
+
+
+### 16.7 The series row, created on first use (TL-P4-S2-R4)
+
+Nothing in `0000`–`0077` inserts an `invoice_sequences` row, and this migration's own end-state check
+`0078-E(5)` once asserted that `sale_commit` never writes one. A business onboarded today would therefore
+have had to be given a series row by hand before its first sale could be numbered. A sale endpoint that
+requires manual SQL setup is not a complete product path, so step 10 of `sale_commit` now:
+
+1. inserts the row for the document date's period — correct tenant and business, `document_kind =
+   'invoice'`, the default format `INV-{YYYY}-{SEQ:6}` — with `ON CONFLICT (business_id, document_kind,
+   period) DO NOTHING`;
+2. **then** locks that exact row with `SELECT … FOR NO KEY UPDATE`;
+3. **then** reads `max(number_seq) + 1` under that lock.
+
+The order is the whole concurrency argument. The primary key decides that exactly one row exists; a
+concurrent first sale that loses the conflict waits on the winner's transaction id and then reads the
+committed row, format and all. `DO UPDATE` is not merely avoided but structurally impossible: the writing
+principal has no `UPDATE` privilege on the relation, which `0078-E(7)` asserts against the live
+catalogues. There is no counter column and no PostgreSQL sequence; `max+1` under the row lock stays.
+
+On the format: the ruling names `INV-{YYYY}-{SEQ:06}`, and the FROZEN
+`invoice_sequences_format_ck` (`0075:379`) admits `\{SEQ:[1-9][0-9]?\}` — a first width digit of `0` is
+unstorable. The shipped default is `INV-{YYYY}-{SEQ:6}`, which `lpad` renders as `INV-2026-000001`: the
+ruling's rendering, reached without widening a sealed constraint.
 
 ---
 
