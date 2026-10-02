@@ -855,5 +855,18 @@
   "error.sale.not_found": "Bu satış bulunamadı. Hiçbir şey kaydedilmedi. Sayfayı yenileyip yeniden başlayın.",
   "error.sale.warehouse_not_found": "Bu yerin satış yapılacak bir deposu yok. Hiçbir şey kaydedilmedi. Başka bir yer seçin ya da birinin ayarlamasını isteyin.",
   "error.pos.warehouse_out_of_scope": "Bu kasa artık çalışmadığınız bir dükkâna ait. Hiçbir şey kaydedilmedi. Bu kasayı kapatıp şimdi çalıştığınız yerde yeni bir kasa açın.",
+  "error.pos.cart_price_authority_refused": "Kasa kendi belirlediği bir fiyat gönderdi; fiyatlar yalnızca fiyat listenizden gelir. Hiçbir şey kaydedilmedi. Tekrar deneyin; sorun sürerse destekle iletişime geçin.",
+  "error.pos.cart_field_unknown": "Kasa bu ekranın anlamadığı bir bilgi gönderdi. Hiçbir şey kaydedilmedi. Tekrar deneyin; sorun sürerse destekle iletişime geçin.",
+  "error.pos.cart_quantity_invalid": "Bu geçerli bir miktar değil. Hiçbir şey kaydedilmedi. Kaç tane sattığınızı yazıp tekrar deneyin.",
+  "error.pos.cart_discount_invalid": "Bu indirim bu sepete uymuyor; ürünün kendisinden büyük olabilir. Hiçbir şey kaydedilmedi. Daha küçük bir indirim yazın.",
+  "error.pos.cart_discount_not_permitted": "İndirim verme yetkiniz yok. Hiçbir şey kaydedilmedi. Onaylayabilecek birinden isteyin.",
+  "error.pos.cart_line_not_found": "Bu satır sepette bulunamadı. Hiçbir şey kaydedilmedi. Sepeti yenileyip içinde ne olduğunu görün.",
+  "error.pos.cart_lines_too_many": "Bu sepette çok fazla satır var. Hiçbir şey kaydedilmedi. Bu satışı tamamlayıp sonra yenisine başlayın.",
+  "error.pos.cart_product_not_found": "Bu ürün artık bulunamadı. Hiçbir şey kaydedilmedi. Yeniden arayın.",
+  "error.pos.cart_product_not_priced": "Bu ürünün henüz fiyatı yok. Hiçbir şey kaydedilmedi. Fiyatını belirleyip sonra satın.",
+  "error.pos.cart_currency_mixed": "Bir sepette iki para birimi bulunamaz. Hiçbir şey kaydedilmedi. Farklı olan ürünü çıkarın ya da ayrı satın.",
+  "error.pos.cart_rounding_grain_invalid": "Bizim tarafımızda bir sorun oluştu. Hiçbir şey kaydedilmedi. Tekrar deneyin; sorun sürerse destekle iletişime geçin.",
+  "error.pos.cart_minor_units_invalid": "Bizim tarafımızda bir sorun oluştu. Hiçbir şey kaydedilmedi. Tekrar deneyin; sorun sürerse destekle iletişime geçin.",
+  "error.pos.cart_statement_plan_invalid": "Bizim tarafımızda bir sorun oluştu. Hiçbir şey kaydedilmedi. Tekrar deneyin; sorun sürerse destekle iletişime geçin.",
   "pos.search.narrow": "En yakın sonuçlar gösteriliyor. Daraltmak için yazmaya devam edin."
 }
