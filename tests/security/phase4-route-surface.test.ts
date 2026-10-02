@@ -25,9 +25,34 @@
  *     outside it is 404.
  *
  * BOTH SIDES of that equality are derived from the same source: the Nest route
- * metadata of every `*.controller.ts` in `apps/api/src/modules/selling/`. So
- * mounting a route updates both halves in the same commit, by construction, and
- * there is no list anywhere for a later slice to forget to edit.
+ * metadata of every `*.controller.ts` ANYWHERE under `apps/api/src/modules`
+ * whose declared paths fall under `PHASE4_ROUTE_PREFIXES`. So mounting a route
+ * updates both halves in the same commit, by construction, and there is no list
+ * anywhere for a later slice to forget to edit.
+ *
+ * ── Why the subject is the TREE and not one directory ────────────────────
+ *
+ * This derivation used to read `apps/api/src/modules/selling` alone, and that
+ * was a hand-written choice of directory doing the work a derivation was
+ * supposed to do. It cost exactly what such a choice costs: P4-S3 built its
+ * whole POS surface under `apps/api/src/modules/pos`, and this suite — the one
+ * suite whose entire purpose is "the mounted surface equals the declared
+ * surface" — could not see a single one of those nine routes. It would have
+ * passed with the POS controllers mounted, unmounted, or mounted in one
+ * composition only. That is the same defect as a hand-kept list of refusal
+ * field names, which this project has already paid for once with a whole
+ * family of dead error strings.
+ *
+ * So the directory is gone. A controller is this suite's subject when it
+ * DECLARES A PHASE 4 ROUTE, discovered by walking the whole module tree and
+ * filtering on `PHASE4_ROUTE_PREFIXES` — the estate's own canonical prefix
+ * list, the same one `discoverPhase4Routes` (`scripts/phase4-s1-gate.ts`)
+ * filters by, imported rather than retyped. A later slice that puts customer
+ * settlement routes in `modules/receivables` is covered by existing, with no
+ * edit here. There is no POS path written anywhere in this file, and that is
+ * the property that keeps the derivation from going stale silently: nothing
+ * here can be true of a surface it is not looking at, because what it looks at
+ * is "every Phase 4 route in the tree".
  *
  * Why that is the SAME protection §B5 carried:
  *
@@ -58,7 +83,7 @@
  * place in the estate allowed to carry a claim the acceptance commit deletes.
  */
 import { randomUUID } from 'node:crypto';
-import { readFileSync, readdirSync } from 'node:fs';
+import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { METHOD_METADATA, PATH_METADATA } from '@nestjs/common/constants';
 import { RequestMethod } from '@nestjs/common';
@@ -66,9 +91,19 @@ import { beforeAll, afterAll, describe, expect, it } from 'vitest';
 import { createTestApp, ensurePostgres, resetData, type TestApp } from '../helpers/test-app';
 import { asMember, onboardS3Business, registerActor, type HttpActor, type S3Business } from '../helpers/inventory-commands';
 import { PHASE4_ROUTE_PREFIXES } from '../../scripts/phase4-s1-gate';
+import { P4_S3_REQUIRED_CONTROLLERS } from '../../apps/api/src/modules/pos/pos-permissions';
 
-/** The directory whose controllers ARE the Phase 4 route surface. */
-const SELLING_DIR = join(__dirname, '../../apps/api/src/modules/selling');
+/** The whole module tree. A controller is a Phase 4 controller by what it DECLARES, never by where it lives. */
+const MODULES_DIR = join(__dirname, '../../apps/api/src/modules');
+
+/** The POS module directory — named once, for the `P4_S3_REQUIRED_CONTROLLERS` cross-check, and never for a route path. */
+const POS_DIR = join(MODULES_DIR, 'pos');
+
+/** The two compositions. A controller registered in only one of them is a route no integration test can reach. */
+const COMPOSITIONS: readonly string[] = ['apps/api/src/app/app.module.ts', 'apps/api/src/app/merchant-api.module.ts'];
+
+/** Whether a declared path is on the Phase 4 surface, by the estate's own prefix list. */
+const isPhase4Path = (path: string): boolean => PHASE4_ROUTE_PREFIXES.some((p) => path === p || path.startsWith(`${p}/`));
 
 /** Every HTTP verb a route could be mounted on, so "no more" is asserted over all of them. */
 const ALL_VERBS = ['get', 'post', 'put', 'patch', 'delete'] as const;
@@ -101,22 +136,78 @@ const normalise = (p: string): string =>
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type ControllerClass = new (...args: any[]) => unknown;
 
+/** Every `*.controller.ts` anywhere under `apps/api/src/modules`, with the directory it lives in. */
+function controllerFiles(dir: string): { readonly dir: string; readonly file: string }[] {
+  const found: { dir: string; file: string }[] = [];
+  for (const entry of readdirSync(dir).sort()) {
+    const full = join(dir, entry);
+    if (statSync(full).isDirectory()) found.push(...controllerFiles(full));
+    else if (entry.endsWith('.controller.ts')) found.push({ dir, file: full });
+  }
+  return found;
+}
+
+/** One discovered controller class, with every route it declares and where its file sits. */
+interface DiscoveredController {
+  readonly name: string;
+  readonly cls: ControllerClass;
+  readonly dir: string;
+  readonly routes: readonly DeclaredRoute[];
+}
+
+/** Every route one controller class declares, read from the Nest metadata its decorators wrote. */
+function routesOf(name: string, cls: ControllerClass): DeclaredRoute[] {
+  const base = String(Reflect.getMetadata(PATH_METADATA, cls) ?? '');
+  const proto = (cls as unknown as { prototype: object }).prototype;
+  const routes: DeclaredRoute[] = [];
+  for (const key of Object.getOwnPropertyNames(proto)) {
+    if (key === 'constructor') continue;
+    const handler = (proto as Record<string, unknown>)[key];
+    if (typeof handler !== 'function') continue;
+    const methodPath = Reflect.getMetadata(PATH_METADATA, handler) as string | undefined;
+    const method = Reflect.getMetadata(METHOD_METADATA, handler) as number | undefined;
+    if (methodPath === undefined || method === undefined) continue;
+    const verb = VERB_OF[method];
+    // `@All()` would make the surface unenumerable, which is itself a finding.
+    expect(verb, `${name}.${key} is mounted on a verb this suite cannot enumerate (RequestMethod ${method})`).toBeDefined();
+    const template = normalise(`${base}/${methodPath}`);
+    routes.push({ controller: name, verb: verb as Verb, path: template, template });
+  }
+  return routes;
+}
+
 /**
- * Every controller class exported by `apps/api/src/modules/selling/`, discovered
- * from the DIRECTORY rather than from a list, so a controller added later is
- * part of this suite's subject by existing.
+ * EVERY PHASE 4 CONTROLLER IN THE TREE, discovered rather than listed.
+ *
+ * The walk covers all of `apps/api/src/modules`; the filter is "declares at
+ * least one path under `PHASE4_ROUTE_PREFIXES`". So `modules/selling` and
+ * `modules/pos` are both in the subject today, by derivation, and a Phase 4
+ * route a later slice mounts from a third directory joins it by existing.
+ *
+ * A controller that declares a mix of Phase 4 and non-Phase-4 paths would make
+ * the "no more" half of the equality unstateable — the probe loop would demand
+ * 404 on verbs of a path this suite has no business judging — so a mixed
+ * controller is reported as a finding rather than silently split. None exists
+ * today, and the assertion is what notices if one appears.
  */
-async function sellingControllers(): Promise<{ readonly name: string; readonly cls: ControllerClass }[]> {
-  const files = readdirSync(SELLING_DIR)
-    .filter((f) => f.endsWith('.controller.ts'))
-    .sort();
-  const found: { name: string; cls: ControllerClass }[] = [];
-  for (const file of files) {
-    const mod = (await import(join(SELLING_DIR, file))) as Record<string, unknown>;
+async function phase4Controllers(): Promise<DiscoveredController[]> {
+  const found: DiscoveredController[] = [];
+  for (const { dir, file } of controllerFiles(MODULES_DIR)) {
+    const mod = (await import(file)) as Record<string, unknown>;
     for (const [name, value] of Object.entries(mod)) {
       if (typeof value !== 'function') continue;
       if (Reflect.getMetadata(PATH_METADATA, value) === undefined) continue;
-      found.push({ name, cls: value as ControllerClass });
+      const routes = routesOf(name, value as ControllerClass);
+      const phase4 = routes.filter((r) => isPhase4Path(r.path));
+      if (phase4.length === 0) continue;
+      expect(
+        routes.length,
+        `${name} declares both Phase 4 and non-Phase-4 paths (${routes
+          .filter((r) => !isPhase4Path(r.path))
+          .map((r) => r.path)
+          .join(', ')}) — this suite's "no more" half cannot speak for the second kind`,
+      ).toBe(phase4.length);
+      found.push({ name, cls: value as ControllerClass, dir, routes: phase4 });
     }
   }
   return found.sort((a, b) => a.name.localeCompare(b.name));
@@ -128,24 +219,7 @@ async function sellingControllers(): Promise<{ readonly name: string; readonly c
  * routes on, so it cannot drift from what the process serves.
  */
 async function declaredRoutes(): Promise<DeclaredRoute[]> {
-  const routes: DeclaredRoute[] = [];
-  for (const { name, cls } of await sellingControllers()) {
-    const base = String(Reflect.getMetadata(PATH_METADATA, cls) ?? '');
-    const proto = (cls as unknown as { prototype: object }).prototype;
-    for (const key of Object.getOwnPropertyNames(proto)) {
-      if (key === 'constructor') continue;
-      const handler = (proto as Record<string, unknown>)[key];
-      if (typeof handler !== 'function') continue;
-      const methodPath = Reflect.getMetadata(PATH_METADATA, handler) as string | undefined;
-      const method = Reflect.getMetadata(METHOD_METADATA, handler) as number | undefined;
-      if (methodPath === undefined || method === undefined) continue;
-      const verb = VERB_OF[method];
-      // `@All()` would make the surface unenumerable, which is itself a finding.
-      expect(verb, `${name}.${key} is mounted on a verb this suite cannot enumerate (RequestMethod ${method})`).toBeDefined();
-      const template = normalise(`${base}/${methodPath}`);
-      routes.push({ controller: name, verb: verb as Verb, path: template, template });
-    }
-  }
+  const routes = (await phase4Controllers()).flatMap((c) => [...c.routes]);
   return routes.sort((a, b) => `${a.path} ${a.verb}`.localeCompare(`${b.path} ${b.verb}`));
 }
 
@@ -196,35 +270,91 @@ afterAll(async () => {
 });
 
 describe('P4-AL-88: the declared Phase 4 surface is discovered, not listed', () => {
-  it('the selling controllers declare a non-empty surface, and every declaration is enumerable', async () => {
+  it('the Phase 4 controllers declare a non-empty surface, and every declaration is enumerable', async () => {
     const routes = await declaredRoutes();
     // The canary. An empty surface would make every assertion below vacuous,
-    // so a directory that stops declaring routes is a finding and not a pass.
+    // so a tree that stops declaring Phase 4 routes is a finding and not a pass.
     expect(routes.length, 'no Phase 4 route is declared — every probe below would pass vacuously').toBeGreaterThan(0);
-    const controllers = (await sellingControllers()).map((c) => c.name);
-    expect(controllers.length, 'no controller was discovered in the selling directory').toBeGreaterThan(0);
+    const controllers = (await phase4Controllers()).map((c) => c.name);
+    expect(controllers.length, 'no Phase 4 controller was discovered in the module tree').toBeGreaterThan(0);
     // Every declared path is under `/v1`: a Phase 4 route mounted anywhere else
     // would escape the probe half entirely.
     for (const r of routes) expect(r.path, `${r.controller} declares ${r.verb.toUpperCase()} ${r.path} outside /v1`).toMatch(/^\/v1(\/|$)/);
   });
 
-  it('both Nest compositions register every discovered selling controller', async () => {
-    // DAFTAR composes Nest twice (`selling.module.ts:19-22`), and a controller
-    // in one composition only is a route no integration test can reach. Both
-    // compositions are `@Module({})` classes that build a `DynamicModule` in
-    // `register(options)`, so the controller list is not in class metadata and
-    // is read from the composition SOURCE instead.
+  /**
+   * The surface is drawn from MORE THAN ONE module directory, asserted so the
+   * widening of this suite's subject cannot silently narrow back.
+   *
+   * This case is the one that would have caught the defect it was written for:
+   * while the derivation read `modules/selling` alone, the whole POS surface
+   * was invisible here, and every assertion in this file passed without ever
+   * looking at it. The claim is deliberately STRUCTURAL and names no path — it
+   * says the subject spans at least two module directories, and that the
+   * Phase 4 prefixes the tree actually declares span more than one prefix.
+   * Narrowing the walk back to one directory makes it red.
+   */
+  it('the discovered surface spans more than one module directory — the walk is the tree, not a directory', async () => {
+    const controllers = await phase4Controllers();
+    const dirs = new Set(controllers.map((c) => c.dir));
+    expect(
+      dirs.size,
+      `every Phase 4 controller was found in one directory (${[...dirs].join(', ')}) — either the estate really has one, or this walk narrowed back to one`,
+    ).toBeGreaterThan(1);
+    const prefixes = new Set((await declaredRoutes()).map((r) => PHASE4_ROUTE_PREFIXES.find((p) => r.path === p || r.path.startsWith(`${p}/`))));
+    expect(prefixes.size, 'the declared surface covers one Phase 4 prefix only — a whole slice may be invisible to this derivation').toBeGreaterThan(1);
+  });
+
+  it('both Nest compositions register every discovered Phase 4 controller', async () => {
+    // DAFTAR composes Nest twice (`selling.module.ts:19-22`, `pos.module.ts`),
+    // and a controller in one composition only is a route no integration test
+    // can reach. Both compositions are `@Module({})` classes that build a
+    // `DynamicModule` in `register(options)`, so the controller list is not in
+    // class metadata and is read from the composition SOURCE instead.
     //
     // `tests/integration/process-composition.test.ts` already holds the two
-    // lists to EACH OTHER. What it cannot notice is a selling controller that
-    // is in neither, which is what this adds — derived from the directory, so
-    // a controller added later is covered by existing.
-    const discovered = (await sellingControllers()).map((c) => c.name);
-    expect(discovered.length, 'no controller was discovered in the selling directory').toBeGreaterThan(0);
-    for (const file of ['apps/api/src/app/app.module.ts', 'apps/api/src/app/merchant-api.module.ts']) {
+    // lists to EACH OTHER. What it cannot notice is a Phase 4 controller that
+    // is in neither, which is what this adds — derived from the tree, so a
+    // controller added later is covered by existing.
+    const discovered = (await phase4Controllers()).map((c) => c.name);
+    expect(discovered.length, 'no Phase 4 controller was discovered in the module tree').toBeGreaterThan(0);
+    for (const file of COMPOSITIONS) {
       const source = readFileSync(join(__dirname, '../..', file), 'utf8');
       const missing = discovered.filter((name) => !new RegExp(`\\b${name}\\b`).test(source));
       expect(missing, `${file} does not register these Phase 4 controllers`).toEqual([]);
+    }
+  });
+
+  /**
+   * `P4_S3_REQUIRED_CONTROLLERS` IS CHECKED FROM BOTH SIDES.
+   *
+   * `pos-permissions.ts` states the controllers P4-S3 owes the compositions.
+   * For most of the slice's life nothing read that constant and it named a
+   * class that did not exist — a list describing itself, which is no evidence
+   * at all. Two claims make it evidence:
+   *
+   *   1. it is EQUAL to the Phase 4 controllers discovered by reading
+   *      `apps/api/src/modules/pos`. A controller built and not listed is red;
+   *      a name listed and not built is red. Neither direction can be settled
+   *      by editing only the list, because the other direction then fails.
+   *   2. every name appears in BOTH composition sources.
+   *
+   * The routes themselves are proved by the HTTP cases below, which drive them
+   * through the production composition. That is what finally makes the mount a
+   * fact rather than a claim: the list names the obligation, and a request is
+   * what settles whether it was met.
+   */
+  it('P4_S3_REQUIRED_CONTROLLERS is exactly what modules/pos builds, and both compositions register all of it', async () => {
+    const built = (await phase4Controllers())
+      .filter((c) => c.dir === POS_DIR)
+      .map((c) => c.name)
+      .sort();
+    expect(built.length, 'modules/pos declares no Phase 4 controller — the whole POS surface would be unmounted').toBeGreaterThan(0);
+    expect([...P4_S3_REQUIRED_CONTROLLERS].sort(), 'the stated POS controllers and the built ones disagree').toEqual(built);
+    for (const file of COMPOSITIONS) {
+      const source = readFileSync(join(__dirname, '../..', file), 'utf8');
+      const missing = P4_S3_REQUIRED_CONTROLLERS.filter((name) => !new RegExp(`\\b${name}\\b`).test(source));
+      expect(missing, `${file} does not register these P4-S3 controllers`).toEqual([]);
     }
   });
 });

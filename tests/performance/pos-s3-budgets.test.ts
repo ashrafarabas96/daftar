@@ -93,8 +93,8 @@ import { cpus, loadavg, totalmem } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { PoolClient } from 'pg';
-import { ensurePostgres, ownerPool, resetData, type TestApp } from '../helpers/test-app';
-import { createPosReadTestApp } from '../helpers/pos-s3-route';
+import { createTestApp, ensurePostgres, ownerPool, resetData, type TestApp } from '../helpers/test-app';
+import { openTillSession } from '../helpers/pos-till-sessions';
 import { must, onboardS3Business, registerActor, type HttpActor, type S3Business } from '../helpers/inventory-commands';
 import { INTERNAL, addWarehouse, setScope } from '../helpers/stock-ledger';
 import { readAs } from '../helpers/merchant-reads';
@@ -146,6 +146,8 @@ let t: TestApp;
 let owner: HttpActor;
 let A: S3Business;
 let warehouses: string[];
+/** The owner's open till at `warehouses[0]` — the read's whole scope (RULING 2). */
+let tillSessionId: string | undefined;
 /** A prefix that matches many names, and one that matches exactly one barcode. */
 const NAME_PREFIX = 'pos item 1';
 let oneBarcode: string;
@@ -300,7 +302,24 @@ async function planningStatistics(): Promise<Record<string, { rows: number; anal
   return out;
 }
 
-const searchPath = (q: string, limit: number): string => `/v1/pos/products?warehouseId=${must(warehouses[0])}&q=${encodeURIComponent(q)}&limit=${limit}`;
+/**
+ * The till names its SESSION and the server derives the warehouse (RULING 2).
+ *
+ * This used to send `warehouseId=${warehouses[0]}`, which the route has
+ * refused since `PosProductSearchQuerySchema` became `.strict()` around
+ * `sessionId`: every call answered 400 with `{"path":"sessionId","code":
+ * "invalid_type"}` plus `unrecognized_keys`, and because the first such call
+ * is in this suite's own `beforeAll`, all ten of its cases reported as
+ * SKIPPED rather than run — a suite that measured nothing and said so only in
+ * the word "skipped". The fix is to open a real till in the fixture and name
+ * it here; it is NOT to re-add `warehouseId`, which is exactly the client
+ * naming its own read scope that `P4-AL-18` forbids.
+ *
+ * The session is opened at `warehouses[0]`, so every figure below is still
+ * measured against the same warehouse the seed stocks and the same statement
+ * the planner saw.
+ */
+const searchPath = (q: string, limit: number): string => `/v1/pos/products?sessionId=${must(tillSessionId)}&q=${encodeURIComponent(q)}&limit=${limit}`;
 
 /** Every statement one read runs through `Database.scoped`, with its own scope and parameters. */
 async function capture(path: string): Promise<Captured[]> {
@@ -387,10 +406,19 @@ beforeAll(
   async () => {
     await ensurePostgres();
     await resetData();
-    t = await createPosReadTestApp();
+    t = await createTestApp();
     owner = await registerActor(t, 'POS S3 budget owner');
     A = await onboardS3Business(t, owner, `posperf${randomUUID().slice(0, 6)}`);
     await seed();
+
+    // The read's scope, opened through `POST /v1/pos/till-sessions` — the real
+    // route, in the real composition, as the owner. Nothing here inserts a
+    // session row: `daftar_app` holds SELECT only on `pos_till_sessions`
+    // (`0079:605`), so a fixture that tried would be refused by the grant, and
+    // a measurement taken against a hand-seeded session would be a measurement
+    // of a path no cashier can reach.
+    tillSessionId = (await openTillSession(t, owner, A.businessId, { branchId: A.branchX, warehouseId: must(warehouses[0]) }, { terminalCode: 'posperf_1' }))
+      .sessionId;
 
     // P4-AL-74 in one measurement: the SAME read, on the SAME rows, with and
     // without planner statistics. Printed, never asserted — it exists so the
