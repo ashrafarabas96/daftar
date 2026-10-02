@@ -187,7 +187,7 @@ const SELLING_STATUS = {
   /**
    * A trigger refusal NO ROUTE CAN REACH, and the whole point of putting the
    * rule in the schema: a session's owning user is immutable, so
-   * `UPDATE pos_till_sessions SET opened_by_user_id = …` is refused even when
+   * `UPDATE pos_till_sessions SET opened_by = …` is refused even when
    * it arrives through the trusted generic primitive
    * (`Database.withTransaction`) rather than through this module. Reaching it
    * means a server-side writer tried to re-own a till, which is a DEFECT in
@@ -202,6 +202,85 @@ const SELLING_STATUS = {
   'pos.closing_count_invalid': 400,
   /** A till does not close over an unfinished basket: the cart is cleared or committed first. */
   'pos.session_cart_not_empty': 409,
+
+  // ── P4-S3, the five `0079` refusals with no twin above ──────────────────
+  //
+  // `0079` RAISEs fifteen `pos.*` codes. Nine of them are the vocabulary
+  // above (six after the migration owner's rename to these spellings, three
+  // already matching); three are migration-time end-state assertions that no
+  // request can reach and that must NEVER be registered — see
+  // `scripts/guards/pos-session-law.ts` POS-LAW-6b, which refuses their
+  // presence here structurally rather than by name; and these five are
+  // genuinely new.
+  //
+  // Each status is read from WHAT THE REFUSAL IS, and the two 500s are a
+  // DEPARTURE from the coordinator's own reading, recorded here with the
+  // argument because a silent deviation would be worse than a wrong status.
+  //
+  /**
+   * One physical till already holds an open session
+   * (`pos_till_sessions_one_open_per_terminal_uq`). Reachable by a cashier
+   * choosing a drawer a colleague is already on: the command is well formed
+   * and the till's state forbids it, which is what 409 says — the same
+   * reading as `pos.session_already_open` beside it.
+   */
+  'pos.terminal_already_open': 409,
+  /**
+   * A cart line id already names a different line, or the ordinal is taken by
+   * a live line. A conflict over truth that already exists, not a malformed
+   * request: `sale.idempotency_conflict`'s reading.
+   */
+  'pos.cart_line_conflict': 409,
+  /**
+   * A tombstoned cart line is final; the till adds a NEW line at that
+   * ordinal. Reachable from `pos_cart_set_line`, so it is a merchant outcome
+   * about state — 409.
+   */
+  'pos.cart_line_removed': 409,
+  /**
+   * **500, NOT a 4xx, and this is the departure.** The coordinator read
+   * `pos.till_session_immutable` as "a client trying to change an opening
+   * fact of a session that is final". No client can: it is raised ONLY by
+   * `pos_till_session_guard()`, a row trigger, on a DELETE or on an UPDATE
+   * that changes an identity or opening column — and no route can issue
+   * either. `daftar_app` holds `SELECT` and nothing else on
+   * `pos_till_sessions` (`0079:605`); the only principal with DML is
+   * `daftar_inventory_internal`, whose UPDATE grant covers `status`,
+   * `closed_at`, `close_intent_sha256`, `closing_count_minor` and
+   * `business_transaction_id` (`0079:607`) — not one of the columns this arm
+   * guards; and `pos_till_session_close` issues that UPDATE only on an `open`
+   * session, so even the "a closed session is final" arm is unreachable
+   * through it.
+   *
+   * So reaching this code means a SERVER-SIDE writer attempted what the
+   * schema forbids, which is a defect in that writer. The registered
+   * precedents are `sale.immutable` and `invoice.immutable`, both 500 for
+   * exactly this shape — "a guard refusal no route can reach" — and a 409
+   * here would tell a cashier their shift is in a state they can fix.
+   *
+   * If a later slice grants a runtime principal DML on `pos_till_sessions`,
+   * this becomes reachable and the status is a one-line change. POS-LAW-6a
+   * will not catch that, because the code is registered either way; it is
+   * recorded here so the next reader knows what the 500 is resting on.
+   */
+  'pos.till_session_immutable': 500,
+  /**
+   * **500, for the same reason and with the same evidence.** Raised only by
+   * `pos_cart_line_guard()` on a DELETE, or on an UPDATE that changes a cart
+   * line's identity, product, actor or instant. `daftar_app` holds `SELECT`
+   * only; `daftar_inventory_internal`'s cart UPDATE grant is `quantity`,
+   * `removed_at` and `requested_discount_minor` (`0079:608`) — none of the
+   * columns this arm guards — and nothing deletes a cart line at all,
+   * because the removal is a tombstone. A route cannot reach it; a writer
+   * that does is broken.
+   *
+   * Note what this is NOT: `pos.cart_line_removed` above is the REACHABLE
+   * sibling, and it is 409. The two are deliberately different codes with
+   * different statuses, because "you tapped a line you already voided" and "a
+   * server statement tried to rewrite a basket's history" are not the same
+   * event.
+   */
+  'pos.cart_line_immutable': 500,
 } as const satisfies Readonly<Record<`${'customer' | 'invoice' | 'pos' | 'sale'}.${string}`, 400 | 403 | 404 | 409 | 422 | 500>>;
 
 /** A classified selling refusal code. */

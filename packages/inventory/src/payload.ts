@@ -139,6 +139,24 @@ export type InventoryP4S1OperationCode = 'customer.create' | 'customer.update' |
  */
 export type InventoryP4S2OperationCode = 'sale.commit';
 
+/**
+ * The TWO till-session operation kinds P4-S3 registers (`0079` §6; lock
+ * `P4-AL-39`, `OD-P4-09`).
+ *
+ * The two CART kinds `0079` also registers — `pos.cart_set_line` and
+ * `pos.cart_remove_line` — are deliberately NOT in this union. They are the
+ * cart owner's minting side, and a kind declared here without the builder
+ * that mints for it would be exactly the authority-nothing-refuses shape the
+ * `InventoryP4S2OperationCode` comment names. They join this file in the same
+ * commit as their builders.
+ *
+ * `pos` is a Phase 4 namespace whose first segment holds no underscore, so
+ * both names satisfy the frozen `^[a-z]+(\.[a-z_]+)+$` of `0054:53` and its
+ * duplicate inside `inventory_payload_digest` (`0054:229`). Neither regex is
+ * widened.
+ */
+export type InventoryP4S3OperationCode = 'pos.session_open' | 'pos.session_close';
+
 export type InventoryOperationCode =
   | InventoryS1OperationCode
   | InventoryS3OperationCode
@@ -147,7 +165,8 @@ export type InventoryOperationCode =
   | InventoryS6OperationCode
   | InventoryCorrectiveOperationCode
   | InventoryP4S1OperationCode
-  | InventoryP4S2OperationCode;
+  | InventoryP4S2OperationCode
+  | InventoryP4S3OperationCode;
 
 export const INVENTORY_S1_OPERATION_CODES: readonly InventoryS1OperationCode[] = [
   'inventory.configure_product',
@@ -198,6 +217,8 @@ export const INVENTORY_P4_S1_OPERATION_CODES: readonly InventoryP4S1OperationCod
 
 export const INVENTORY_P4_S2_OPERATION_CODES: readonly InventoryP4S2OperationCode[] = ['sale.commit'];
 
+export const INVENTORY_P4_S3_OPERATION_CODES: readonly InventoryP4S3OperationCode[] = ['pos.session_open', 'pos.session_close'];
+
 export const INVENTORY_OPERATION_CODES: readonly InventoryOperationCode[] = [
   ...INVENTORY_S1_OPERATION_CODES,
   ...INVENTORY_S3_OPERATION_CODES,
@@ -207,6 +228,7 @@ export const INVENTORY_OPERATION_CODES: readonly InventoryOperationCode[] = [
   ...INVENTORY_CORRECTIVE_OPERATION_CODES,
   ...INVENTORY_P4_S1_OPERATION_CODES,
   ...INVENTORY_P4_S2_OPERATION_CODES,
+  ...INVENTORY_P4_S3_OPERATION_CODES,
 ];
 
 /** The literal first line of every stream. */
@@ -701,6 +723,43 @@ export const INVENTORY_PAYLOAD_SCHEMAS: Readonly<Record<InventoryOperationCode, 
       spec('base_share_minor', 'integer'),
     ],
   ),
+  // ── P4-S3, the till session (`0079` §6; OD-P4-09) ────────────────────
+  //
+  // Both grammars are taken from the migration design's §6 table with the
+  // counted cash figure the coordinator ruled in appended, and both are held
+  // byte-identical to the routine's own
+  // `inventory_claimed_payload_digest(...)` argument arrays by the shared
+  // vectors. A field here that the routine does not hash — or in a different
+  // order — is `inventory.assertion_payload_mismatch` on every call, so this
+  // is the one table in this file that cannot be approximately right.
+  //
+  // THE ACTOR IS NOT A FIELD, in either of them, and that is OD-P4-09: the
+  // business, the tenant and the ACTOR come from the verified assertion and
+  // never from an argument, so the user a till session belongs to is a signed
+  // fact rather than a client's word. A `user_id` field here would be the
+  // takeover the ruling refused, offered as a parameter.
+  //
+  // `terminal_code` and the currency are `code`, the `^[a-z][a-z0-9_]{0,31}$`
+  // grammar of `0054:206`. The currency is therefore hashed LOWER-CASED while
+  // the column stores it upper-cased: an ISO code is upper-case, the `code`
+  // grammar is not, and the routine refuses an argument that is not already
+  // upper-case — so there is exactly one spelling in the database and exactly
+  // one in the preimage.
+  //
+  // Both counted cash figures are `integer`, the type `0054:205` canonicalises
+  // a `bigint` as. They are inside the signed payload deliberately: a drawer
+  // figure that could change between the minting and the call would be a
+  // counted fact the signature did not cover, and a replay presenting a
+  // different float is then `pos.idempotency_conflict` rather than a replay.
+  'pos.session_open': Object.freeze([
+    spec('session_id', 'uuid'),
+    spec('branch_id', 'uuid'),
+    spec('warehouse_id', 'uuid'),
+    spec('terminal_code', 'code'),
+    spec('currency_code', 'code'),
+    spec('opening_float_minor', 'integer'),
+  ]),
+  'pos.session_close': Object.freeze([spec('session_id', 'uuid'), spec('closing_count_minor', 'integer')]),
 };
 
 /**
@@ -1107,5 +1166,67 @@ export function dissociateWarehouseBranchPayload(input: WarehouseBranchPayloadIn
   return buildInventoryPayload('structure.dissociate_warehouse_branch', input.tenantId, input.businessId, [
     { kind: 'uuid', value: input.warehouseId },
     { kind: 'uuid', value: input.branchId },
+  ]);
+}
+
+// ── P4-S3: the two till-session builders (`0079` §6; OD-P4-09) ────────────
+//
+// Neither input carries an actor, and neither can: the business, the tenant
+// and the ACTOR come from the verified `invctl/1` assertion inside the
+// routine, so the user a till session belongs to is a signed server decision
+// and not a parameter. `tenantId` and `businessId` are here because every
+// `invpl/1` stream binds its scope in the preimage, not because a caller
+// chooses them — they come from the authorized membership.
+
+export interface TillSessionOpenPayloadInput {
+  readonly tenantId: string;
+  readonly businessId: string;
+  readonly sessionId: string;
+  readonly branchId: string;
+  readonly warehouseId: string;
+  /** The physical till, held to the `code` grammar by the caller's schema and by the column's own CHECK. */
+  readonly terminalCode: string;
+  /** The session's ISO currency, UPPER-CASE as the column stores it. It is lower-cased here, and only here. */
+  readonly currencyCode: string;
+  /** The cash a human COUNTED in the drawer at the start of the shift, in minor units. */
+  readonly openingFloatMinor: bigint;
+}
+
+/**
+ * `pos.session_open`: session_id, branch_id, warehouse_id, terminal_code,
+ * currency_code (LOWER-CASED), opening_float_minor.
+ *
+ * The lower-casing is the one transformation in this builder and it is
+ * required, not stylistic: the `code` field type is `^[a-z][a-z0-9_]{0,31}$`
+ * (`0054:206`) and an ISO currency code is upper-case, so the routine hashes
+ * `lower(p_currency_code)` while the column stores `upper(p_currency_code)`.
+ * A builder that hashed the upper-case form would mint a digest the routine
+ * cannot reproduce, and every call would be
+ * `inventory.assertion_payload_mismatch`.
+ */
+export function tillSessionOpenPayload(input: TillSessionOpenPayloadInput): InventoryPayload {
+  return buildInventoryPayload('pos.session_open', input.tenantId, input.businessId, [
+    { kind: 'uuid', value: input.sessionId },
+    { kind: 'uuid', value: input.branchId },
+    { kind: 'uuid', value: input.warehouseId },
+    { kind: 'code', value: input.terminalCode },
+    { kind: 'code', value: input.currencyCode.toLowerCase() },
+    { kind: 'integer', value: input.openingFloatMinor },
+  ]);
+}
+
+export interface TillSessionClosePayloadInput {
+  readonly tenantId: string;
+  readonly businessId: string;
+  readonly sessionId: string;
+  /** The cash a human COUNTED in the drawer at the end of the shift, in minor units. */
+  readonly closingCountMinor: bigint;
+}
+
+/** `pos.session_close`: session_id, closing_count_minor. */
+export function tillSessionClosePayload(input: TillSessionClosePayloadInput): InventoryPayload {
+  return buildInventoryPayload('pos.session_close', input.tenantId, input.businessId, [
+    { kind: 'uuid', value: input.sessionId },
+    { kind: 'integer', value: input.closingCountMinor },
   ]);
 }

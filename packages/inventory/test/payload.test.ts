@@ -9,11 +9,14 @@ import {
   INVENTORY_OPERATION_CODES,
   INVENTORY_OPERATION_INTENT_FIELDS,
   INVENTORY_P4_S1_OPERATION_CODES,
+  INVENTORY_P4_S3_OPERATION_CODES,
   INVENTORY_PAYLOAD_SCHEMAS,
   INVENTORY_SERVER_DERIVED_FIELDS,
   inventoryIntentSchema,
   inventoryPayloadSha256,
   isInventoryOperationCode,
+  tillSessionClosePayload,
+  tillSessionOpenPayload,
   OPERATION_CODE_RE,
   type InventoryOperationCode,
   type InventoryPayloadField,
@@ -239,7 +242,7 @@ describe('invpl/1 — refusals of non-canonical input (never normalized)', () =>
   // The list is ABSOLUTE on purpose: a kind added, renamed or quietly dropped
   // turns this red, and the registry is the thing a signed authority is
   // scoped by.
-  it('registers exactly the three P3-S1 operation kinds, the seven P3-S3 kinds, the seven P3-S4 kinds, the two P3-S5 kinds, the seven P3-S6 kinds, the one corrective kind, the four P4-S1 customer kinds and the one P4-S2 sale kind', () => {
+  it('registers exactly the three P3-S1 operation kinds, the seven P3-S3 kinds, the seven P3-S4 kinds, the two P3-S5 kinds, the seven P3-S6 kinds, the one corrective kind, the four P4-S1 customer kinds, the one P4-S2 sale kind and the two P4-S3 till-session kinds', () => {
     expect([...INVENTORY_OPERATION_CODES].sort()).toEqual([
       'customer.archive', // P4-S1 (gap G-5)
       'customer.create', // P4-S1 (gap G-5)
@@ -257,6 +260,13 @@ describe('invpl/1 — refusals of non-canonical input (never normalized)', () =>
       'payment.create_method', // P3-S6 (0067/0068)
       'payment.deactivate_method', // P3-S6 (0067/0068)
       'payment.update_method', // P3-S6 (0067/0068)
+      // P4-S3 (`0079`): the TWO till-session kinds. The two cart kinds the
+      // same migration registers belong to the cart owner's minting side and
+      // are deliberately absent, by this list's own rule — a kind registered
+      // here without the builder that mints for it would be an authority
+      // nothing refuses.
+      'pos.session_close',
+      'pos.session_open',
       'purchase.cancel',
       'purchase.draft',
       'purchase.receive',
@@ -290,6 +300,108 @@ describe('invpl/1 — refusals of non-canonical input (never normalized)', () =>
       expect(INVENTORY_PAYLOAD_SCHEMAS[op].repeat).toBeUndefined();
     }
     expect(INVENTORY_PAYLOAD_SCHEMAS['inventory.configure_product'].repeat).toBeUndefined();
+    // P4-S3. The grammars are written out field by field because an
+    // approximate one is not a smaller defect than a missing one: a field in
+    // the wrong place, of the wrong type, or one more or one fewer than the
+    // routine's own `inventory_claimed_payload_digest(...)` argument arrays
+    // makes EVERY till command `inventory.assertion_payload_mismatch`. The
+    // actor is in neither list, which is `OD-P4-09`: the user a till session
+    // belongs to comes from the verified assertion, never from an argument.
+    expect(s1('pos.session_open')).toEqual([
+      ['session_id', 'uuid', false],
+      ['branch_id', 'uuid', false],
+      ['warehouse_id', 'uuid', false],
+      ['terminal_code', 'code', false],
+      ['currency_code', 'code', false],
+      ['opening_float_minor', 'integer', false],
+    ]);
+    expect(s1('pos.session_close')).toEqual([
+      ['session_id', 'uuid', false],
+      ['closing_count_minor', 'integer', false],
+    ]);
+    for (const op of INVENTORY_P4_S3_OPERATION_CODES) {
+      expect(INVENTORY_PAYLOAD_SCHEMAS[op].repeat, op).toBeUndefined();
+      expect(INVENTORY_PAYLOAD_SCHEMAS[op].trailer, op).toBeUndefined();
+      // No till-session field is server-derived, so the intent schema is the
+      // whole payload: a replay of an open or a close is the same command in
+      // every field, the counted cash included.
+      expect(
+        inventoryIntentSchema(op).map((f) => f.name),
+        op,
+      ).toEqual(INVENTORY_PAYLOAD_SCHEMAS[op].map((f) => f.name));
+    }
+  });
+
+  it('the two P4-S3 builders mint the grammars the routines hash, and the currency is lower-cased in the preimage only', () => {
+    const tenantId = '11111111-1111-4111-8111-111111111111';
+    const businessId = '22222222-2222-4222-8222-222222222222';
+    const sessionId = '33333333-3333-4333-8333-333333333333';
+    const branchId = '44444444-4444-4444-8444-444444444444';
+    const warehouseId = '55555555-5555-4555-8555-555555555555';
+
+    const open = tillSessionOpenPayload({
+      tenantId,
+      businessId,
+      sessionId,
+      branchId,
+      warehouseId,
+      terminalCode: 'till_1',
+      currencyCode: 'TRY',
+      openingFloatMinor: 25000n,
+    });
+    expect(open.opCode).toBe('pos.session_open');
+    // The digest a routine reproduces is the one over the LOWER-CASED
+    // currency: `0054:206`'s `code` grammar has no upper-case letter in it,
+    // so an upper-case ISO code is not a canonicalisable `code` at all.
+    expect(open.sha256).toBe(
+      inventoryPayloadSha256('pos.session_open', tenantId, businessId, [
+        { kind: 'uuid', value: sessionId },
+        { kind: 'uuid', value: branchId },
+        { kind: 'uuid', value: warehouseId },
+        { kind: 'code', value: 'till_1' },
+        { kind: 'code', value: 'try' },
+        { kind: 'integer', value: 25000n },
+      ]),
+    );
+    // RED-ADJACENT, and stronger than "a different digest": the upper-case
+    // spelling is not a `code` AT ALL. The encoder refuses it rather than
+    // hashing it, so a builder that forwarded the column's own spelling could
+    // not mint for this routine even in principle — which is why the
+    // lower-casing lives in the builder and not in a caller's discipline.
+    expect(() =>
+      inventoryPayloadSha256('pos.session_open', tenantId, businessId, [
+        { kind: 'uuid', value: sessionId },
+        { kind: 'uuid', value: branchId },
+        { kind: 'uuid', value: warehouseId },
+        { kind: 'code', value: 'till_1' },
+        { kind: 'code', value: 'TRY' },
+        { kind: 'integer', value: 25000n },
+      ]),
+    ).toThrow(/currency_code\) is not a registry code/);
+    // And the counted float is INSIDE the signature: a drawer figure the
+    // signature did not cover could be changed between minting and call.
+    expect(open.sha256).not.toBe(
+      tillSessionOpenPayload({
+        tenantId,
+        businessId,
+        sessionId,
+        branchId,
+        warehouseId,
+        terminalCode: 'till_1',
+        currencyCode: 'TRY',
+        openingFloatMinor: 25001n,
+      }).sha256,
+    );
+
+    const close = tillSessionClosePayload({ tenantId, businessId, sessionId, closingCountMinor: 41900n });
+    expect(close.opCode).toBe('pos.session_close');
+    expect(close.sha256).toBe(
+      inventoryPayloadSha256('pos.session_close', tenantId, businessId, [
+        { kind: 'uuid', value: sessionId },
+        { kind: 'integer', value: 41900n },
+      ]),
+    );
+    expect(close.sha256).not.toBe(tillSessionClosePayload({ tenantId, businessId, sessionId, closingCountMinor: 41901n }).sha256);
   });
 });
 

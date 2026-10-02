@@ -120,6 +120,29 @@ const OPERATION_AUTHORITY: Readonly<
   //     zeroed, because a silently-zeroed discount charges the customer more
   //     than the cashier told them.
   'sale.commit': { permission: 'sales.create', scope: 'warehouses' },
+  // P4-S3 (`0079` §6; lock P4-AL-39, P4-AL-40; `OD-P4-09` OPTION A). Opening
+  // and closing a till are the first and last act of selling for cash, which
+  // P4-AL-37 classifies as the NORMAL OPERATING FLOW, so both name
+  // `sales.create` — the cashier's own ORDINARY key — and no thirteenth
+  // permission is invented for a closed twelve-key registry (P4-AL-36).
+  //
+  // `scope: 'warehouses'` is the load-bearing half, and it is where
+  // `P4-AL-40` is actually honoured. The migration's own §9.1 records that
+  // `0079` CANNOT enforce branch scope: its RLS policies see the tenant and
+  // the business, and `member_branch_scopes` is not reachable from a policy
+  // on these relations. So the till session names the warehouse it belongs
+  // to, this table declares that the warehouse is scope-checked, and
+  // `authorize` refuses an assigned-scope actor who cannot reach it through
+  // `branch_warehouses` BEFORE anything is minted. The database then verifies
+  // the signed result of that decision rather than the membership graph
+  // (P3-AL-54 §E) — which is the only shape in which a branch-scope rule and
+  // a signed assertion can agree.
+  //
+  // The two CART kinds `0079` registers are deliberately absent: they are the
+  // cart owner's, and a row here for a kind nothing mints would be an
+  // authority with no command behind it.
+  'pos.session_open': { permission: 'sales.create', scope: 'warehouses' },
+  'pos.session_close': { permission: 'sales.create', scope: 'warehouses' },
 };
 
 /**
