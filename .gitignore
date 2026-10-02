@@ -19,3 +19,8 @@ apps/android/local.properties
 
 # Release gate evidence + export output (never committed; produced by gate:phase1:release / export:release)
 release/
+
+# Agent worktrees created by the Claude Code harness inside the repository.
+# These are live git worktrees, not project content, and committing them would
+# put a nested .git administrative tree into the history.
+.claude/
