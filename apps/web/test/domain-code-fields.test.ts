@@ -110,7 +110,9 @@ describe('a refusal the API can send is a refusal the client can name', () => {
     const declared = declaredFields();
     const unreadable = [...attached.entries()]
       .filter(([field]) => !declared.includes(field))
-      .map(([field, sites]) => `${field} is attached at ${sites[0]} and is not in DOMAIN_CODE_FIELDS, so every refusal carrying it renders the generic fallback`);
+      .map(
+        ([field, sites]) => `${field} is attached at ${sites[0]} and is not in DOMAIN_CODE_FIELDS, so every refusal carrying it renders the generic fallback`,
+      );
     expect(unreadable).toEqual([]);
   });
 

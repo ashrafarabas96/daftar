@@ -314,6 +314,93 @@ const SELLING_STATUS = {
   // in this table from the till-session lifecycle, and the read raises those
   // same ones rather than minting read-flavoured twins.
   'pos.warehouse_out_of_scope': 403,
+
+  // ── The POS SERVER-SIDE CART (P4-S3, `OD-P4-02` OPTION A) ───────────────
+  //
+  // Added to THIS table and nowhere else: there is one Phase 4 refusal
+  // registry, and a second status table in the POS module would be a second
+  // answer to "what status does this code have" while the error filter reads
+  // the first one. Every entry below is additive; nothing above it changed.
+  //
+  // ## The trust boundary, which is P4-S3's central claim
+  //
+  // «The client sends identities, quantities and a discount request, and
+  // NOTHING else is believed» (P4-AL-18). The first two codes are that law's
+  // whole vocabulary, and they are TWO rather than one on purpose:
+  //
+  //   - `pos.cart_price_authority_refused` is the law itself. The request
+  //     named a figure the SERVER derives — a line total, a cart total, a unit
+  //     price, a tax amount, a cost, a rate, a scope. Its PRESENCE is the
+  //     defect, never its value: the number is not parsed, not compared with
+  //     the server's and not logged, because each of those would be a step
+  //     toward adopting it. 400 — the payload is unaskable; not 403 (nobody's
+  //     authority is in question) and not 422 (the command is not
+  //     unprocessable, it cannot be stated at all);
+  //   - `pos.cart_field_unknown` is every OTHER unknown key: a typo, a stale
+  //     client field, a `force` flag. Also 400, and deliberately a different
+  //     code, because without two codes «the forged total was refused» and «a
+  //     typo was refused» are the same observation and the slice's central law
+  //     cannot be asserted by name.
+  //
+  // There is deliberately NO `pos.cart_total_mismatch` and no
+  // `pos.cart_price_override_*`. A mismatch code would mean the client's total
+  // had been COMPARED, and P4-AL-18 is explicit that validating a client's
+  // figure "implies the client's number could be adopted"; `OD-P4-02` is
+  // RULED OPTION A, so an override is UNREPRESENTABLE rather than refused by
+  // its own name, and a refusal for a thing that cannot be asked for is a hint
+  // that it could be. There is no tax code either: a `taxMinor` on a cart
+  // request is not a tax question, it is a figure the server derives, so it
+  // leaves as a forged total like any other and `sale.tax_policy_absent`
+  // remains the whole of the tax vocabulary (P4-AL-44, `OD-03` OPEN).
+  // Two codes were registered here and then WITHDRAWN, which is worth a line
+  // because the reason generalizes. `pos.cart_duplicate_line` was the merge's
+  // refusal, and `0079` makes the basket APPEND-ONLY and ordinal-keyed, so
+  // two scans of one product are two lines and nothing is duplicate.
+  // `pos.cart_state_changed` had no condition anywhere: it was registered
+  // because the route table declared it, which is the wrong direction of
+  // travel. A code nothing can raise invites a handler for a case the system
+  // cannot reach, and a reviewer reading the registry cannot tell it apart
+  // from one that is merely rare. The guard asserting the route table
+  // declares only REGISTERED codes is what caught the pair; the registry
+  // itself cannot see that nothing raises an entry.
+  'pos.cart_price_authority_refused': 400,
+  'pos.cart_field_unknown': 400,
+
+  // The two things a client MAY state, judged.
+  'pos.cart_quantity_invalid': 400,
+  'pos.cart_discount_invalid': 400,
+  /**
+   * A discount requested by an actor without the SENSITIVE `sales.discount`
+   * (P4-AL-35). Refused, never silently zeroed — a silently-zeroed discount
+   * charges the customer more than the cashier told them, and the cashier
+   * finds out from the customer. The `sale.discount_not_permitted` precedent
+   * exactly, one layer earlier.
+   */
+  'pos.cart_discount_not_permitted': 403,
+
+  // The cart's own shape.
+  'pos.cart_line_not_found': 404,
+  'pos.cart_lines_too_many': 400,
+  'pos.cart_product_not_found': 404,
+  /** The catalogue has no price for this product: the server has nothing to derive from. */
+  'pos.cart_product_not_priced': 422,
+  /** A basket mixing two price currencies has no single total. Refused, never converted at an invented cross-rate. */
+  'pos.cart_currency_mixed': 422,
+
+  // ── The cart's INTERNAL invariants: 500, and never a merchant outcome ───
+  //
+  // Each one says the CART'S OWN ARITHMETIC or shape is broken, and a merchant
+  // has no vocabulary for "the pricing pass rounded at two aggregation
+  // grains". They are registered HERE rather than in a private table for the
+  // same reason `pos.session_owner_immutable` is: one registry, one status per
+  // code. 500 is the only status that says DEFECT — a 4xx would read as a
+  // merchant outcome, so nobody would look at the server (TL-P4-S2-R5).
+  /** The pricing pass rounded at more than one aggregation grain (`[[daftar-rounding-is-not-additive]]`). */
+  'pos.cart_rounding_grain_invalid': 500,
+  /** A money figure left the pricing pass as something other than an exact integer count of minor units. */
+  'pos.cart_minor_units_invalid': 500,
+  /** A command's statement plan was not constant in the line count — the O(1) claim, broken. */
+  'pos.cart_statement_plan_invalid': 500,
 } as const satisfies Readonly<Record<`${'customer' | 'invoice' | 'pos' | 'sale'}.${string}`, 400 | 403 | 404 | 409 | 422 | 500>>;
 
 /** A classified selling refusal code. */
