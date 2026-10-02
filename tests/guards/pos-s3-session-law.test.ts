@@ -118,10 +118,34 @@ function nextNumber(dir: string): string {
 }
 
 /**
- * A root whose migrations directory is the repository's plus `planted` as a
- * further Phase 4 migration. Everything else the law reads is shared with the
- * checkout, so only the DDL differs — the house pattern of
+ * Every migration in the checkout that declares a `pos_` relation. On a tree
+ * that does not yet carry one this is empty; with `0079` on the branch it is
+ * that one file.
+ */
+function posDeclaringMigrations(dir: string): readonly string[] {
+  return readdirSync(dir)
+    .filter((f) => f.endsWith('.sql'))
+    .filter((f) => /CREATE\s+TABLE\s+(IF\s+NOT\s+EXISTS\s+)?pos_/i.test(readFileSync(join(dir, f), 'utf8')))
+    .sort();
+}
+
+/**
+ * A root whose migrations directory is the repository's — MINUS every
+ * migration that declares a `pos_` relation — plus `planted` as a further
+ * Phase 4 migration. Everything else the law reads is shared with the
+ * checkout, so only the DDL differs: the house pattern of
  * `tests/guards/phase4-deferred-seam-guard.test.ts`.
+ *
+ * The exclusion is what makes every red proof below a proof. This suite was
+ * written while `0079` was still on the migration owner's branch, so the
+ * plant was the only POS DDL in the tree by accident of sequencing. The
+ * moment `0079` merged, a copy of the whole directory gave the law TWO
+ * declarations of each POS relation — the real compliant one and the planted
+ * broken one — and a `POS-LAW-*` count of exactly one became a count of zero
+ * or two. The suite went red, which is the good failure: the harness said so
+ * instead of quietly proving nothing. The fix is to leave the plant as the
+ * only POS declaration, never to loosen the counts, and
+ * the canary in the first proof below asserts it rather than trusting it.
  */
 function rootWith(planted: string): string {
   const root = mkdtempSync(join(tmpdir(), 'p4-pos-law-'));
@@ -129,6 +153,7 @@ function rootWith(planted: string): string {
   const dir = join(root, 'infrastructure/database/migrations');
   mkdirSync(dir, { recursive: true });
   cpSync(MIGRATIONS, dir, { recursive: true });
+  for (const f of posDeclaringMigrations(dir)) rmSync(join(dir, f), { force: true });
   writeFileSync(join(dir, `${nextNumber(MIGRATIONS)}_planted_pos.sql`), planted);
   writeFileSync(
     join(root, 'infrastructure/database/MIGRATION_MANIFEST.json'),
@@ -306,6 +331,21 @@ describe('§A — OD-P4-09 is a property of the data, and the law can say so', (
     const subject = posSessionSubject(root);
     expect(subject.applicable, 'the compliant plant did not make the law applicable — every proof below would be vacuous').toBe(true);
     expect([...subject.relations].sort()).toEqual([...POS_RELATIONS].sort());
+    // The SECOND canary, and the one that catches the sequencing hazard
+    // described at `rootWith`: the plant must be the ONLY POS declaration in
+    // the planted root. If the checkout's own POS migration survived the
+    // copy, each relation is declared twice, the real compliant one satisfies
+    // the rule the plant breaks, and a `toHaveLength(1)` below silently
+    // becomes a count of zero or two. Asserting the subject is distinct is
+    // not enough — `relations` would hold duplicates, which is exactly what
+    // this compares against.
+    expect(subject.relations, 'a POS relation is declared twice in the planted root, so every red proof below is measuring two migrations at once').toEqual([
+      ...new Set(subject.relations),
+    ]);
+    expect(
+      posDeclaringMigrations(join(root, 'infrastructure/database/migrations')),
+      'the planted migration is not the sole POS declaration in the planted root',
+    ).toEqual([`${nextNumber(MIGRATIONS)}_planted_pos.sql`]);
   });
 
   it('RED POS-LAW-0: a third pos_ relation nobody applied the law to is named', () => {

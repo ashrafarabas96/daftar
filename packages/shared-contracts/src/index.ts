@@ -805,3 +805,5 @@ export interface AccountingBalanceListDto {
 }
 // Phase 4 (P4-S2): the atomic sale commit contract.
 export * from './sales';
+// Phase 4 (P4-S3): the POS read contract (the product type-ahead).
+export * from './pos';

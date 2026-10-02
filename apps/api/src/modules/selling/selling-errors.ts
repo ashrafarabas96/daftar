@@ -281,6 +281,39 @@ const SELLING_STATUS = {
    * event.
    */
   'pos.cart_line_immutable': 500,
+
+  // ── The POS READS (P4-S3): the till's own scope refusal ─────────────────
+  //
+  // ONE code, not the two this block first carried. The POS type-ahead no
+  // longer lets the client name a warehouse — it names its SESSION and the
+  // server derives the warehouse (RULING 2) — which changed what is reachable:
+  //
+  //   - `pos.warehouse_out_of_scope` (403) SURVIVES, and it is not a leftover.
+  //     A session's `warehouse_id` is frozen for the session's whole life by
+  //     `pos_till_session_guard()`, while the member's branch assignments are
+  //     editable at any moment. Reassign an assigned-scope cashier away from
+  //     the branch, or merely DEACTIVATE that branch, and they own an open
+  //     session whose warehouse they no longer reach. This is the only check
+  //     standing between a stale till and a standing read on a branch the
+  //     member was deliberately moved off, so it is a security refusal and not
+  //     a validation nicety. It is the P3-S7
+  //     `inventory.warehouse_out_of_scope` rule in POS vocabulary, and it is
+  //     REFUSED rather than answered with an empty page: a type-ahead that
+  //     returned no rows would read as "the shop is empty", and a cashier
+  //     acting on it refuses a sale of stock that is on the shelf.
+  //
+  //   - `pos.warehouse_not_found` (404) is DELETED, because Ruling 2 made it
+  //     unreachable. `pos_till_sessions.warehouse_id` is `NOT NULL` and
+  //     carries a composite foreign key into `warehouses (business_id, id)`,
+  //     so a derived warehouse always exists and always belongs to this same
+  //     business; the database will not store a session that says otherwise.
+  //     A code nothing can raise is worse than no code: it implies a case the
+  //     system cannot reach and invites a handler for it.
+  //
+  // The session's own four refusals are NOT duplicated here. They are already
+  // in this table from the till-session lifecycle, and the read raises those
+  // same ones rather than minting read-flavoured twins.
+  'pos.warehouse_out_of_scope': 403,
 } as const satisfies Readonly<Record<`${'customer' | 'invoice' | 'pos' | 'sale'}.${string}`, 400 | 403 | 404 | 409 | 422 | 500>>;
 
 /** A classified selling refusal code. */
