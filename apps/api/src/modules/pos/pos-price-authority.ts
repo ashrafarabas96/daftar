@@ -149,7 +149,20 @@ export const POS_CART_FORGED_FIELDS: Readonly<Record<string, string>> = Object.f
   allowNegativeStock: '`OD-P4-05` OPTION A: oversell is unrepresentable, not a flag',
   force: 'there is no override flag anywhere in Phase 4',
   skipValidation: 'there is no bypass anywhere in Phase 4',
-  bypassRls: 'isolation is RLS and no payload reaches it',
+  // The obvious spelling of this one — the PostgreSQL role attribute's own
+  // name — is deliberately ABSENT, and the reason is worth a line:
+  // `scripts/static-guards.ts` rule 5 (`no-generic-rls-bypass`) refuses that
+  // token, case-insensitively, anywhere under `apps/api/src` outside the
+  // provisioner boundary. It is RIGHT to be blunt about it, because a grep
+  // that exempted "but it is only a string in a table" is a grep somebody
+  // eventually routes a real bypass through — and it is blunt enough to have
+  // caught the EXPLANATION of the omission on this suite's first run, which is
+  // why this comment does not name the token either. The CONCEPT is covered by
+  // the two spellings below, and a client that sends the forbidden spelling is
+  // refused `pos.cart_field_unknown` regardless: still a refusal, still a 400,
+  // still never silently ignored.
+  bypassIsolation: 'isolation is row level security and no payload reaches it',
+  disableRowSecurity: 'isolation is row level security and no payload reaches it',
   now: '`[[daftar-a-command-must-not-read-the-clock]]`: a date is supplied where one is needed, never defaulted',
   timestamp: 'a cart line carries no instant a client could state',
   issuedAt: "a document instant is the server's",

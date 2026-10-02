@@ -184,6 +184,27 @@ describe('P4-S3 (A) — the trust boundary: identities, quantities, a discount r
     }
   });
 
+  it('the forged table carries no token the estate\u2019s static guards forbid, in CODE or in PROSE', () => {
+    // `scripts/static-guards.ts` rule 5 (`no-generic-rls-bypass`) refuses the
+    // PostgreSQL role attribute's name anywhere under `apps/api/src`, and rule
+    // 6 refuses float money. A TABLE OF ATTACKER VOCABULARY is exactly the
+    // file that collects such tokens innocently, and the first run of this
+    // slice tripped the guard twice: once on a key, and once on the COMMENT
+    // explaining why the key had been renamed. So the whole source — prose
+    // included, because the guard greps prose — is held to the same rules
+    // here, and a reviewer gets the finding from this suite in two seconds
+    // rather than from a twelve-minute gate.
+    const whole = readFileSync(AUTHORITY_SOURCE, 'utf8');
+    for (const forbidden of [/app_bypass_rls/i, /bypassrls/i, /SET row_security\s*=\s*off/i]) {
+      expect(forbidden.test(whole), `the authority module carries ${String(forbidden)} — static-guards rule 5 refuses it`).toBe(false);
+    }
+    // The concept is still covered, and a client that sends the forbidden
+    // spelling is still refused — under the other code, which is a refusal.
+    expect(POS_CART_FORGED_FIELD_NAMES).toContain('bypassIsolation');
+    expect(refusalOf(() => assertNoClientPriceAuthority('cart.add_line', { bypassIsolation: true })).code).toBe('pos.cart_price_authority_refused');
+    expect(refusalOf(() => assertNoClientPriceAuthority('cart.add_line', { bypassRowLevelSecurity: true })).code).toBe('pos.cart_field_unknown');
+  });
+
   it('the accepted key set and the forged table are DISJOINT — no name is both allowed and refused', () => {
     for (const command of POS_CART_COMMANDS) {
       for (const accepted of POS_CART_COMMAND_FIELDS[command]) {
