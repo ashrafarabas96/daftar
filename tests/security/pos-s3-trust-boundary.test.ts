@@ -208,13 +208,22 @@ beforeEach(() => {
 });
 
 // ═════════════════════════════════════════════════════════════════════════
+const EXPECTED_STATUS: Readonly<Record<string, 200 | 201>> = Object.freeze({
+  // 201 on the append, because a line really is created every time; 200 on
+  // the three that address a line which already exists.
+  'cart.add_line': 201,
+  'cart.change_quantity': 200,
+  'cart.remove_line': 200,
+  'cart.request_discount': 200,
+});
+
 describe('P4-S3 — forged totals are REFUSED, and the refusal is proved by sending them', () => {
   it('the four routes accept their own bodies — so a refusal below is the forged field and not the route', () => {
     // The control. Without it, a suite that refused everything would look
     // identical to a suite that proved the law.
     for (const route of routes()) {
       const answer = send(route, validBody(route));
-      expect(answer.status, `${route.command} refused its own valid body: ${answer.raw}`).toBe(200);
+      expect(answer.status, `${route.command} refused its own valid body: ${answer.raw}`).toBe(EXPECTED_STATUS[route.command]);
       expect(calls, route.command).toHaveLength(1);
     }
   });
@@ -329,7 +338,7 @@ describe('P4-S3 — forged totals are REFUSED, and the refusal is proved by send
 describe('P4-S3 — the two things a client MAY state, and nothing more', () => {
   it('a quantity and a discount request are the whole of what gets through', () => {
     const add = send(routes()[0] as PosCartRoute, { productId: PRODUCT, variantId: null, quantity: '2.5' });
-    expect(add.status).toBe(200);
+    expect(add.status).toBe(201);
     expect(calls[0]).toEqual({ command: 'addLine', body: { productId: PRODUCT, variantId: null, quantity: '2.5' } });
 
     const discount = send(routes()[3] as PosCartRoute, { discountMinor: '150' });
@@ -420,7 +429,11 @@ describe('P4-S3 — the refusal contract and the handed-over surface', () => {
       expect(POS_CART_COMMAND_FIELDS[route.command], route.command).toBeDefined();
       // The DELETE hole, closed as a property of the table.
       expect(route.body, `${route.command} does not declare a body: a forged field there would be SILENTLY IGNORED`).toBe(true);
-      expect(route.status, `${route.command} answers 201: a merged line is not a created one`).toBe(200);
+      // The append answers 201 and the other three 200. This assertion read
+      // `toBe(200)` while the add was an upsert, on the ground that a MERGED
+      // line is not a created one; `0079` makes the basket append-only, so
+      // the honest answer flipped with the identity.
+      expect(route.status, `${route.command} answers the wrong status`).toBe(EXPECTED_STATUS[route.command]);
       // `sales.create` on all four; the SENSITIVE key on none, because it
       // depends on the body and a decorator cannot see the body.
       expect(route.permission, route.command).toBe('sales.create');

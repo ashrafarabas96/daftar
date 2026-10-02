@@ -92,7 +92,15 @@ export const POS_CART_COLUMNS = Object.freeze({
     /** The lifecycle column the till-session surface transitions. A cart command only READS it. */
     status: TILL_SESSION_COLUMNS.status,
     /** `OD-P4-09`'s column. A cart command only READS it; re-owning a till is refused by the schema. */
-    owner: TILL_SESSION_COLUMNS.owner,
+    // `0079` ships `opened_by`. A's `pos-session-contract.ts` declares
+    // `opened_by_user_id`, and the two cannot both be right: the composite
+    // edge `pos_cart_lines_session_actor_fk` names
+    // `REFERENCES pos_till_sessions (business_id, id, opened_by)`, so the
+    // migration's spelling is the one the database answers to. Reported to
+    // the coordinator as a contract/migration conflict rather than resolved
+    // in A's file, which is not mine. Asserted against `0079`'s own text by
+    // the guard suite so this cannot drift back.
+    owner: 'opened_by',
     /** The one value of `status` a cart command may write behind. */
     openStatus: TILL_SESSION_STATES.open,
   }),
@@ -102,16 +110,24 @@ export const POS_CART_COLUMNS = Object.freeze({
     tenantId: CART_LINE_COLUMNS.tenant,
     businessId: CART_LINE_COLUMNS.business,
     tillSessionId: CART_LINE_COLUMNS.session,
-    // ── The five the session contract does not declare (reported to the
-    //    coordinator as this agent's requirement on `0079`) ──────────────
+    // ── The six the session contract does not declare, spelled as `0079`
+    //    SHIPS them. These were a REQUIREMENT on the migration when this
+    //    module was written and are now a reading of it: where my name and
+    //    E's differed, E's wins, because the schema is the truth and its
+    //    names are woven through its own constraints and end-state
+    //    assertions. `line_seq` was mine and is `line_no`; `discount_minor`
+    //    was mine and is `requested_discount_minor` — a better name, because
+    //    it says REQUESTED and so cannot be read as what was granted.
     productId: 'product_id',
     variantId: 'variant_id',
-    /** `NUMERIC(18,4)` — the ledger's quantity type (P4-AL-15b). */
+    /** `NUMERIC(18,4) CHECK (quantity > 0)` — the ledger's quantity type (P4-AL-15b). */
     quantity: 'quantity',
-    /** `BIGINT`, a non-negative integer count of minor units. The discount REQUEST. */
-    discountMinor: 'discount_minor',
-    /** The stable ordering of a basket, so two recomputations agree on the order of the lines. */
-    lineSeq: 'line_seq',
+    /** `BIGINT NOT NULL DEFAULT 0`, the client's discount REQUEST. No column records what was GRANTED. */
+    discountMinor: 'requested_discount_minor',
+    /** `INTEGER CHECK (line_no >= 1)`. The basket's identity and its stable order. */
+    lineNo: 'line_no',
+    /** The actor, and the subject of `OD-P4-09`'s composite edge `pos_cart_lines_session_actor_fk`. */
+    addedBy: 'added_by',
   }),
 });
 
@@ -120,39 +136,50 @@ export const POS_CART_COLUMNS = Object.freeze({
  * session contract — the list the hand-back reports and a guard enumerates, so
  * "five more columns" is data rather than a sentence.
  */
-export const POS_CART_COLUMNS_BEYOND_CONTRACT: readonly string[] = Object.freeze(['product_id', 'variant_id', 'quantity', 'discount_minor', 'line_seq']);
+export const POS_CART_COLUMNS_BEYOND_CONTRACT: readonly string[] = Object.freeze([
+  'added_by',
+  'line_no',
+  'product_id',
+  'quantity',
+  'requested_discount_minor',
+  'variant_id',
+]);
 
 /**
- * The unique key the add-line merge requires of `0079`, as data.
+ * The uniqueness `0079` actually ships on the cart, as data.
  *
- * `cart.add_line` is an upsert: adding a product already in the basket must
- * INCREASE that line's quantity rather than mint a second line for one
- * product, which is also what keeps the statement count at two (the
- * alternative is a read, then a branch, then a write). `ON CONFLICT` needs a
- * unique index on exactly these four columns to infer, and without it the
- * statement does not merely behave differently — it raises `42P10`, so a
- * missing index is loud rather than silent.
+ * `pos_cart_lines_line_uq UNIQUE (business_id, till_session_id, line_no)` — a
+ * TOTAL unique constraint on the ORDINAL, not on the product identity. It is
+ * what makes the basket append-only and ordinal-keyed, and it is the reason
+ * `cart.add_line` derives `line_no` from `max(line_no) + 1` inside its own
+ * statement instead of accepting one.
  *
- * ## The part that WOULD be silent, and is the reason this is written down
- *
- * `variant_id` is nullable: a product with no variants has no variant. Under
- * the default UNIQUE semantics two NULLs are DISTINCT, so for exactly those
- * products the conflict would never be inferred, `ON CONFLICT` would find
- * nothing, and a second scan of the same barcode would quietly produce a
- * second line — the one case a cashier meets most often, wrong, with no
- * error anywhere. `0079` must therefore declare the index
- * `UNIQUE NULLS NOT DISTINCT` (PostgreSQL 15+; this estate runs 18.4), or
- * else make `variant_id` NOT NULL with a sentinel, which this module does not
- * ask for because a sentinel variant is a row in the catalogue that is not a
- * variant.
- *
- * The integration suite's `0079` seam asserts this against the live
- * catalogue once the migration lands, rather than trusting the sentence.
+ * A withdrawn requirement is recorded here rather than deleted, because the
+ * reasoning was right and only the premise was wrong. This module previously
+ * required a unique index on `(business_id, till_session_id, product_id,
+ * variant_id)` with `NULLS NOT DISTINCT`, on the ground that `variant_id`
+ * would be nullable and two NULLs are DISTINCT by default — which would have
+ * merged nothing for a product with no variants and silently minted a second
+ * line. That hazard does not exist in this estate: `0079` declares
+ * `variant_id UUID NOT NULL` and every product carries exactly one hidden
+ * base variant (`product_variants.is_base`, `0053`). The instinct is worth
+ * keeping and the requirement is withdrawn.
  */
-export const POS_CART_MERGE_UNIQUE_KEY: readonly string[] = Object.freeze(['business_id', 'till_session_id', 'product_id', 'variant_id']);
+export const POS_CART_UNIQUE_CONSTRAINT = 'pos_cart_lines_line_uq';
 
-/** `true` iff the merge key must treat two NULL `variant_id`s as EQUAL. See above: it must. */
-export const POS_CART_MERGE_KEY_NULLS_NOT_DISTINCT = true;
+/** The columns `pos_cart_lines_line_uq` covers, in order. The basket's identity is its ORDINAL. */
+export const POS_CART_UNIQUE_COLUMNS: readonly string[] = Object.freeze(['business_id', 'till_session_id', 'line_no']);
+
+/**
+ * `0079` ships NO tombstone: there is no `removed_at` column and
+ * `pos_cart_remove_line` is a hard `DELETE`, so `pos_cart_lines_line_uq` is a
+ * TOTAL unique constraint and not a partial one. Recorded as data because the
+ * difference is load-bearing twice over: a removed ordinal is free again
+ * immediately (so `max(line_no) + 1` is right), and a seam asserting a
+ * predicate the migration does not carry would be red against a correct
+ * migration.
+ */
+export const POS_CART_UNIQUE_IS_PARTIAL = false;
 
 /**
  * The columns `0079` must NOT have, asserted by the guard suite against the
@@ -294,7 +321,7 @@ const PROJECTION = `
    WHERE l.${L.tenantId} = $1::uuid
      AND l.${L.businessId} = $2::uuid
      AND l.${L.tillSessionId} = $3::uuid
-   ORDER BY l.${L.lineSeq}`;
+   ORDER BY l.${L.lineNo}`;
 
 const projection = (t: CartCommandTarget): CartStatement => ({
   role: 'projection',
@@ -318,23 +345,34 @@ export function cartStatementPlan(command: PosCartCommand, t: CartCommandTarget)
         {
           role: 'mutation' as const,
           name: 'cart.add_line',
-          // ONE statement: resolve the session, mint or merge the line, hand
-          // back the id. A second add of the same variant MERGES rather than
-          // duplicating, because two lines for one variant give a cashier two
-          // places to change one quantity.
+          // ONE statement: resolve the session, APPEND the line at the next
+          // free ordinal, hand back the id.
+          //
+          // An APPEND and deliberately not an upsert (coordinator ruling,
+          // P4-S3). A second scan of one product is a SECOND LINE, because
+          // `requested_discount_minor` is a PER-LINE request (`OD-P4-02`
+          // OPTION A): merging two scans into one line would make it
+          // impossible to discount one of two identical items, so the merge
+          // would trade an accepted capability for a cosmetic one. `0079`
+          // carries no unique index on the product identity to merge on
+          // either, so an upsert here would raise `42P10` on the first add
+          // rather than behave differently.
+          //
+          // `line_no` is the server's, never the client's: it is derived from
+          // the basket's own maximum inside this statement, so there is no
+          // ordinal a client could state and no round trip to ask for one.
           text: `
             WITH${USABLE_SESSION},
             minted AS (
               INSERT INTO ${L.table} (
                 ${L.id}, ${L.tenantId}, ${L.businessId}, ${L.tillSessionId},
-                ${L.productId}, ${L.variantId}, ${L.quantity}, ${L.discountMinor}, ${L.lineSeq}
+                ${L.productId}, ${L.variantId}, ${L.quantity}, ${L.discountMinor}, ${L.lineNo}, ${L.addedBy}
               )
               SELECT $5::uuid, $1::uuid, $2::uuid, u.${S.id}, $6::uuid, $7::uuid, $8::numeric, 0,
-                     coalesce((SELECT max(x.${L.lineSeq}) FROM ${L.table} x
-                                WHERE x.${L.businessId} = $2::uuid AND x.${L.tillSessionId} = $3::uuid), 0) + 1
+                     coalesce((SELECT max(x.${L.lineNo}) FROM ${L.table} x
+                                WHERE x.${L.businessId} = $2::uuid AND x.${L.tillSessionId} = $3::uuid), 0) + 1,
+                     $4::uuid
                 FROM usable u
-              ON CONFLICT (${L.businessId}, ${L.tillSessionId}, ${L.productId}, ${L.variantId})
-              DO UPDATE SET ${L.quantity} = ${L.table}.${L.quantity} + EXCLUDED.${L.quantity}
               RETURNING ${L.id}
             )
             SELECT ${SESSION_DISCRIMINATORS}, (SELECT count(*) FROM minted) AS written`,

@@ -85,11 +85,16 @@ export interface PosCartRoute {
    */
   readonly sensitive: false;
   /**
-   * `200` on every row, including the add. A second add of the same variant
-   * MERGES into the existing line, so `201` would tell the till it had just
-   * created a second line for one product.
+   * `201` on the add and `200` on the other three.
+   *
+   * This started as `200` everywhere, on the ground that a second add of one
+   * variant MERGED into the existing line and `201` would wrongly tell the
+   * till a line had been created. `0079` makes the basket append-only, so a
+   * second scan really is a second line — and the honest answer flipped with
+   * the identity, not with the opinion. The argument was about honesty both
+   * times, which is why it is recorded rather than quietly edited.
    */
-  readonly status: 200;
+  readonly status: 200 | 201;
   /**
    * TRUE on every row, including the removal — and that is load-bearing, not
    * decoration.
@@ -144,11 +149,12 @@ export const POS_CART_ROUTE_AUTHORITY: readonly PosCartRoute[] = Object.freeze([
     command: 'cart.add_line' as const,
     permission: 'sales.create' as const,
     sensitive: false as const,
-    status: 200 as const,
+    // 201: the append really creates a line, every time.
+    status: 201 as const,
     body: true as const,
     schema: POS_CART_SCHEMAS['cart.add_line'],
     pipe: () => new CartCommandPipe('cart.add_line'),
-    refusals: Object.freeze([...COMMON_REFUSALS, 'pos.cart_product_not_found', 'pos.cart_quantity_invalid', 'pos.cart_duplicate_line'] as PosCode[]),
+    refusals: Object.freeze([...COMMON_REFUSALS, 'pos.cart_product_not_found', 'pos.cart_quantity_invalid'] as PosCode[]),
   }),
   Object.freeze({
     method: 'PATCH' as const,

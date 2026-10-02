@@ -54,8 +54,9 @@ import {
   POS_CART_COLUMNS,
   POS_CART_COLUMNS_BEYOND_CONTRACT,
   POS_CART_FORBIDDEN_COLUMNS,
-  POS_CART_MERGE_UNIQUE_KEY,
-  POS_CART_MERGE_KEY_NULLS_NOT_DISTINCT,
+  POS_CART_UNIQUE_CONSTRAINT,
+  POS_CART_UNIQUE_COLUMNS,
+  POS_CART_UNIQUE_IS_PARTIAL,
   cartStatementPlan,
   type CartCommandTarget,
 } from '../../apps/api/src/modules/pos/pos-cart-statements';
@@ -680,44 +681,74 @@ describe('P4-S3 (D) — no stored derived truth, and the refusal registry', () =
     // so the two halves of the POS module cannot spell one column two ways.
     // Five names are the cart's own and are reported to the coordinator as
     // this agent's requirement on `0079`.
-    expect([...POS_CART_COLUMNS_BEYOND_CONTRACT].sort()).toEqual(['discount_minor', 'line_seq', 'product_id', 'quantity', 'variant_id']);
+    expect([...POS_CART_COLUMNS_BEYOND_CONTRACT].sort()).toEqual(['added_by', 'line_no', 'product_id', 'quantity', 'requested_discount_minor', 'variant_id']);
     const declared = Object.values(POS_CART_COLUMNS.lines);
     for (const column of POS_CART_COLUMNS_BEYOND_CONTRACT) expect(declared).toContain(column);
     // The shared four come from the contract, not from a second literal.
     expect(POS_CART_COLUMNS.lines.tillSessionId).toBe(CART_LINE_COLUMNS.session);
     expect(POS_CART_COLUMNS.lines.businessId).toBe(CART_LINE_COLUMNS.business);
-    expect(POS_CART_COLUMNS.sessions.owner).toBe(TILL_SESSION_COLUMNS.owner);
+    // The owner column is `0079`'s spelling and NOT A's contract's: the two
+    // disagree (`opened_by` vs `opened_by_user_id`) and the composite edge
+    // `pos_cart_lines_session_actor_fk` references
+    // `pos_till_sessions (business_id, id, opened_by)`, so the migration is
+    // the one the database answers to. Reported as a conflict, not resolved
+    // in A's file.
+    expect(POS_CART_COLUMNS.sessions.owner).toBe('opened_by');
+    expect(POS_CART_COLUMNS.sessions.owner).not.toBe(TILL_SESSION_COLUMNS.owner);
   });
 
-  it('the merge key the add-line upsert INFERS is the key reported as a requirement on `0079`', () => {
-    // `ON CONFLICT (a, b, c, d)` infers an index. If the requirement handed to
-    // the migration owner and the tuple in the statement ever disagree, the
-    // add raises `42P10` at a till — so the two are one assertion here rather
-    // than two sentences in two files.
-    const plan = cartStatementPlan('cart.add_line', target());
-    const mutation = plan.find((p) => p.role === 'mutation');
-    expect(mutation?.text).toContain(`ON CONFLICT (${POS_CART_MERGE_UNIQUE_KEY.join(', ')})`);
-    expect([...POS_CART_MERGE_UNIQUE_KEY]).toEqual(['business_id', 'till_session_id', 'product_id', 'variant_id']);
-    // Every column of the key is one the module declares, so the key cannot
-    // name a column nobody asked `0079` for.
+  it('the basket is APPEND-ONLY: no cart statement is an upsert, anywhere', () => {
+    // The coordinator's ruling, as a property of every statement rather than
+    // a sentence in one comment. `0079` carries no unique index on the
+    // product identity, so `ON CONFLICT (…product_id, variant_id)` would
+    // raise `42P10` on the FIRST add — and more importantly
+    // `requested_discount_minor` is a PER-LINE request (`OD-P4-02` OPTION A),
+    // so merging two scans of one product would make it impossible to
+    // discount one of two identical items.
+    for (const command of POS_CART_COMMANDS) {
+      for (const statement of cartStatementPlan(command, target())) {
+        expect(statement.text, `${command}/${statement.name} is an upsert`).not.toMatch(/ON CONFLICT/i);
+      }
+    }
+  });
+
+  it('the add APPENDS at the next free ordinal, and the ordinal is the SERVER\u2019s', () => {
+    const [mutation] = cartStatementPlan('cart.add_line', target());
+    // Derived from the basket's own maximum, inside the one statement: there
+    // is no ordinal a client could state and no round trip to ask for one.
+    expect(mutation?.text).toContain(`max(x.${POS_CART_COLUMNS.lines.lineNo})`);
+    expect(mutation?.text).toMatch(/\+ 1/);
+    expect(mutation?.text).toContain('INSERT INTO');
+    // And `line_no` is not in the accepted key set of any command, so it
+    // cannot arrive in a body at all.
+    for (const command of POS_CART_COMMANDS) {
+      expect(POS_CART_COMMAND_FIELDS[command]).not.toContain('lineNo');
+      expect(POS_CART_COMMAND_FIELDS[command]).not.toContain('line_no');
+    }
+  });
+
+  it('the uniqueness this module relies on is the one `0079` ships, and it is NOT partial', () => {
+    // `pos_cart_lines_line_uq UNIQUE (business_id, till_session_id, line_no)`.
+    // A TOTAL constraint: `0079` has no `removed_at` and the removal is a hard
+    // DELETE, so a removed ordinal is free again immediately — which is what
+    // makes `max(line_no) + 1` right rather than merely plausible.
+    expect(POS_CART_UNIQUE_CONSTRAINT).toBe('pos_cart_lines_line_uq');
+    expect([...POS_CART_UNIQUE_COLUMNS]).toEqual(['business_id', 'till_session_id', 'line_no']);
+    expect(POS_CART_UNIQUE_IS_PARTIAL).toBe(false);
     const declared = Object.values(POS_CART_COLUMNS.lines);
-    for (const column of POS_CART_MERGE_UNIQUE_KEY) expect(declared).toContain(column);
-    // And the NULL semantics, which are the half that would fail SILENTLY:
-    // `variant_id` is nullable, two NULLs are DISTINCT by default, so for a
-    // product with no variants the conflict would never be inferred and a
-    // second scan of one barcode would quietly mint a second line. The
-    // requirement is `UNIQUE NULLS NOT DISTINCT`, and it is recorded as data
-    // because a reviewer reading the migration needs to look for it.
-    expect(POS_CART_MERGE_KEY_NULLS_NOT_DISTINCT).toBe(true);
-    expect(POS_CART_MERGE_UNIQUE_KEY).toContain('variant_id');
+    for (const column of POS_CART_UNIQUE_COLUMNS) expect(declared).toContain(column);
+    // No tombstone column is referenced by any statement, because none exists.
+    for (const command of POS_CART_COMMANDS) {
+      for (const statement of cartStatementPlan(command, target())) expect(statement.text).not.toMatch(/removed_at|deleted_at|voided_at/);
+    }
   });
 
-  it('the three commands that address an existing line are NOT upserts', () => {
-    // Only the add merges. A change, a removal or a discount that could INSERT
-    // would be a command minting the row it claims to be amending.
+  it('the three commands that address an EXISTING line never INSERT', () => {
+    // A change, a removal or a discount that could INSERT would be a command
+    // minting the row it claims to be amending.
     for (const command of ['cart.change_quantity', 'cart.remove_line', 'cart.request_discount'] as const) {
       const mutation = cartStatementPlan(command, target()).find((p) => p.role === 'mutation');
-      expect(mutation?.text, command).not.toMatch(/ON CONFLICT|INSERT INTO/i);
+      expect(mutation?.text, command).not.toMatch(/INSERT INTO/i);
     }
   });
 
@@ -746,11 +777,9 @@ describe('P4-S3 (D) — no stored derived truth, and the refusal registry', () =
       'pos.cart_discount_not_permitted': 403,
       'pos.cart_line_not_found': 404,
       'pos.cart_lines_too_many': 400,
-      'pos.cart_duplicate_line': 400,
       'pos.cart_product_not_found': 404,
       'pos.cart_product_not_priced': 422,
       'pos.cart_currency_mixed': 422,
-      'pos.cart_state_changed': 409,
       'pos.cart_rounding_grain_invalid': 500,
       'pos.cart_minor_units_invalid': 500,
       'pos.cart_statement_plan_invalid': 500,

@@ -56,8 +56,9 @@ import {
   CART_STATEMENTS_PER_COMMAND,
   POS_CART_COLUMNS,
   POS_CART_FORBIDDEN_COLUMNS,
-  POS_CART_MERGE_UNIQUE_KEY,
-  POS_CART_MERGE_KEY_NULLS_NOT_DISTINCT,
+  POS_CART_UNIQUE_CONSTRAINT,
+  POS_CART_UNIQUE_COLUMNS,
+  POS_CART_UNIQUE_IS_PARTIAL,
   cartStatementPlan,
   type CartCommandTarget,
 } from '../../apps/api/src/modules/pos/pos-cart-statements';
@@ -490,34 +491,60 @@ describe('§5 — the `0079` seam, discovered from the DATABASE and not from a s
     const [, projection] = cartStatementPlan('cart.add_line', target());
     await expect(pool.query(projection?.text ?? '', [...(projection?.params ?? [])])).resolves.toBeDefined();
 
-    // ── The merge key, including the half that would fail SILENTLY ────────
-    // The add is an upsert, so `0079` must carry a unique index on exactly
-    // the tuple the statement infers, and it must treat two NULL
-    // `variant_id`s as EQUAL. Without `NULLS NOT DISTINCT`, a product with no
-    // variants would never conflict with itself: a second scan of one barcode
-    // would quietly mint a second line, with no error at the till and no
-    // failing assertion anywhere else in this slice. So it is read off
-    // `pg_index` rather than trusted.
-    const { rows: indexes } = await pool.query<{ cols: string[]; nulls_not_distinct: boolean }>(
-      `SELECT array_agg(a.attname::text ORDER BY k.ord) AS cols, i.indnullsnotdistinct AS nulls_not_distinct
+    // ── The uniqueness `0079` ACTUALLY ships, read off `pg_index` ─────────
+    // `pos_cart_lines_line_uq UNIQUE (business_id, till_session_id, line_no)`:
+    // a TOTAL unique constraint on the ORDINAL. The basket is append-only and
+    // ordinal-keyed, so this is the index `max(line_no) + 1` races against,
+    // and it must NOT be partial — `0079` carries no `removed_at` and the
+    // removal is a hard DELETE, which is what frees an ordinal for reuse.
+    const { rows: indexes } = await pool.query<{ name: string; cols: string[]; partial: boolean; nulls_not_distinct: boolean }>(
+      `SELECT ci.relname::text AS name,
+              array_agg(a.attname::text ORDER BY k.ord) AS cols,
+              i.indpred IS NOT NULL AS partial,
+              i.indnullsnotdistinct AS nulls_not_distinct
          FROM pg_index i
          JOIN pg_class c ON c.oid = i.indrelid
+         JOIN pg_class ci ON ci.oid = i.indexrelid
          CROSS JOIN LATERAL unnest(i.indkey) WITH ORDINALITY AS k(attnum, ord)
          JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = k.attnum
         WHERE c.relname = $1 AND i.indisunique
-        GROUP BY i.indexrelid, i.indnullsnotdistinct`,
+        GROUP BY ci.relname, i.indpred, i.indnullsnotdistinct`,
       [POS_CART_COLUMNS.lines.table],
     );
-    const merge = indexes.find((row) => [...row.cols].sort().join(',') === [...POS_CART_MERGE_UNIQUE_KEY].sort().join(','));
-    expect(merge, `0079 has no unique index on (${POS_CART_MERGE_UNIQUE_KEY.join(', ')}) — the add-line upsert would raise 42P10`).toBeDefined();
-    expect(
-      merge?.nulls_not_distinct,
-      'the merge index treats two NULL variant_id values as DISTINCT: a product with no variants would silently get a SECOND line',
-    ).toBe(POS_CART_MERGE_KEY_NULLS_NOT_DISTINCT);
+    const ordinal = indexes.find((row) => row.name === POS_CART_UNIQUE_CONSTRAINT);
+    expect(ordinal, `0079 has no ${POS_CART_UNIQUE_CONSTRAINT}`).toBeDefined();
+    expect([...(ordinal?.cols ?? [])]).toEqual([...POS_CART_UNIQUE_COLUMNS]);
+    expect(ordinal?.partial, 'the ordinal constraint is PARTIAL: a tombstone predicate would hold removed ordinals for ever').toBe(POS_CART_UNIQUE_IS_PARTIAL);
 
-    // The merge itself, demonstrated: the same product twice is ONE line.
-    const [mutation] = cartStatementPlan('cart.add_line', target());
-    expect(mutation?.text).toContain('ON CONFLICT');
+    // There is NO unique index on the product identity, which is why the add
+    // is an append: an upsert would raise 42P10 against this catalogue.
+    const byProduct = indexes.find((row) => row.cols.includes('product_id') && row.cols.includes('variant_id'));
+    expect(byProduct, 'a unique index on the product identity exists: the append-only ruling would need revisiting').toBeUndefined();
+
+    // And no tombstone column exists, so nothing may come to depend on one.
+    for (const tombstone of ['removed_at', 'deleted_at', 'voided_at']) {
+      expect([...actual], `${POS_CART_COLUMNS.lines.table} carries ${tombstone}`).not.toContain(tombstone);
+    }
+
+    // ── The writer protocol, which this slice does NOT yet speak ──────────
+    // `0079` REVOKEs ALL on the cart from PUBLIC and grants `daftar_app`
+    // SELECT only; every write belongs to `daftar_inventory_internal` and is
+    // reachable solely through the SECURITY DEFINER routines
+    // `pos_cart_set_line` / `pos_cart_remove_line`, each gated by an
+    // `invctl/1` assertion. So the mutation half of this module's statement
+    // plan CANNOT execute as the API's role, whatever it says. That is a
+    // design reconciliation for the coordinator, and it is asserted here
+    // rather than described so it cannot be forgotten: the projection is a
+    // SELECT and stays valid; the mutations need the routines.
+    const { rows: writers } = await pool.query<{ privilege_type: string }>(
+      `SELECT privilege_type FROM information_schema.table_privileges
+        WHERE table_name = $1 AND grantee = 'daftar_app' ORDER BY privilege_type`,
+      [POS_CART_COLUMNS.lines.table],
+    );
+    expect(
+      writers.map((r) => r.privilege_type),
+      'daftar_app can write pos_cart_lines directly: re-check the writer protocol before trusting the mutation statements',
+    ).toEqual(['SELECT']);
   });
 });
 
@@ -536,7 +563,8 @@ describe('§6 — the surface this slice hands over, stated so it is enumerable'
     for (const route of POS_CART_ROUTE_AUTHORITY) {
       expect(route.permission).toBe('sales.create');
       expect(route.sensitive).toBe(false);
-      expect(route.status).toBe(200);
+      // 201 on the append, 200 on the three that address an existing line.
+      expect(route.status, route.command).toBe(route.command === 'cart.add_line' ? 201 : 200);
       expect(route.body).toBe(true);
     }
   });

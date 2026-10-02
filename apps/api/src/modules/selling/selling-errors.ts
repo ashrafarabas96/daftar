@@ -240,6 +240,17 @@ const SELLING_STATUS = {
   // request is not a tax question, it is a figure the server derives, so it
   // leaves as a forged total like any other and `sale.tax_policy_absent`
   // remains the whole of the tax vocabulary (P4-AL-44, `OD-03` OPEN).
+  // Two codes were registered here and then WITHDRAWN, which is worth a line
+  // because the reason generalizes. `pos.cart_duplicate_line` was the merge's
+  // refusal, and `0079` makes the basket APPEND-ONLY and ordinal-keyed, so
+  // two scans of one product are two lines and nothing is duplicate.
+  // `pos.cart_state_changed` had no condition anywhere: it was registered
+  // because the route table declared it, which is the wrong direction of
+  // travel. A code nothing can raise invites a handler for a case the system
+  // cannot reach, and a reviewer reading the registry cannot tell it apart
+  // from one that is merely rare. The guard asserting the route table
+  // declares only REGISTERED codes is what caught the pair; the registry
+  // itself cannot see that nothing raises an entry.
   'pos.cart_price_authority_refused': 400,
   'pos.cart_field_unknown': 400,
 
@@ -258,14 +269,11 @@ const SELLING_STATUS = {
   // The cart's own shape.
   'pos.cart_line_not_found': 404,
   'pos.cart_lines_too_many': 400,
-  'pos.cart_duplicate_line': 400,
   'pos.cart_product_not_found': 404,
   /** The catalogue has no price for this product: the server has nothing to derive from. */
   'pos.cart_product_not_priced': 422,
   /** A basket mixing two price currencies has no single total. Refused, never converted at an invented cross-rate. */
   'pos.cart_currency_mixed': 422,
-  /** The catalogue or the cart moved under the command. Retryable BY THE CLIENT; there is no server retry. */
-  'pos.cart_state_changed': 409,
 
   // ── The cart's INTERNAL invariants: 500, and never a merchant outcome ───
   //
