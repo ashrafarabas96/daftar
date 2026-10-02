@@ -179,6 +179,27 @@
 --        assertion below is an equality over the `P4-S3`-REGISTERED SUBSET,
 --        never a count over the whole registry, so a later slice registering
 --        its own kinds does not turn this file's end state red.
+--
+--   R-P4-S3-08 A BASKET IS APPEND-ONLY, AND A REMOVAL IS A TOMBSTONE. The
+--        accepted estate states the contract for a relation BEYOND the
+--        accepted prefix positively and in two clauses
+--        (`tests/security/inventory-db-authority.test.ts:284-302`): beyond
+--        that prefix the internal writer holds no DELETE, no TRUNCATE, no
+--        table-level UPDATE, no REFERENCES and no TRIGGER, so a row it writes
+--        cannot be removed or rewritten wholesale and a lifecycle change is
+--        confined to columns somebody granted BY NAME; and every relation it
+--        can write is writable by no runtime principal at all.
+--
+--        An earlier draft of this file granted `DELETE ON pos_cart_lines` to
+--        the internal writer, on the reasoning that removing a line from a
+--        basket is what a till does. The first full-estate round refused it by
+--        name, in three assertions of that one file, and the refusal is right:
+--        the clause is a security property and the convenience is not. So a
+--        removal is `removed_at`, granted by name; the ordinal is held by a
+--        PARTIAL unique index so the till may reuse it; `pos_cart_line_guard()`
+--        refuses a DELETE outright; and the basket of a shift — live lines and
+--        tombstones alike — stays the record of that shift. §12 of
+--        docs/PHASE_4_S3_MIGRATION_DESIGN.md records the round.
 
 -- ─────────────────────────────────────────────────────────────────────────
 -- 0. Preconditions, read from the live catalogue (R-P4-S3-01).
@@ -381,8 +402,16 @@ CREATE TABLE pos_cart_lines (
   -- The actor, and the subject of OD-P4-09's composite edge below.
   added_by                 UUID NOT NULL,
   added_at                 TIMESTAMPTZ NOT NULL DEFAULT now(),
+  -- THE REMOVAL, AS A TOMBSTONE AND NOT AS A DELETE (R-P4-S3-08). The estate
+  -- forbids the internal writer DELETE, TRUNCATE or table-level UPDATE on any
+  -- relation beyond the accepted prefix — the append-only clause of
+  -- `tests/security/inventory-db-authority.test.ts:284-291` — so a basket is
+  -- an APPEND-ONLY log of the shift and "remove" is a column grant by name.
+  -- NULL is "in the basket". No actor column accompanies it, because the only
+  -- principal that can write any row of this table is already the session's
+  -- own user by `pos_cart_lines_session_actor_fk`.
+  removed_at               TIMESTAMPTZ,
   PRIMARY KEY (business_id, id),
-  CONSTRAINT pos_cart_lines_line_uq UNIQUE (business_id, till_session_id, line_no),
   CONSTRAINT pos_cart_lines_tenant_fk FOREIGN KEY (tenant_id, business_id) REFERENCES businesses (tenant_id, id),
   -- ── OD-P4-09 IN THE DATABASE (R-P4-S3-02(a), (b)) ──────────────────────
   --
@@ -405,6 +434,14 @@ CREATE TABLE pos_cart_lines (
   CONSTRAINT pos_cart_lines_variant_fk FOREIGN KEY (business_id, variant_id) REFERENCES product_variants (business_id, id)
 );
 REVOKE ALL ON pos_cart_lines FROM PUBLIC;
+
+-- One LIVE line per ordinal. A partial unique INDEX and not a unique
+-- CONSTRAINT, because a constraint cannot carry a predicate and the predicate
+-- is the point: once line 2 is tombstoned, the till may put a new line 2 in
+-- its place, and without `WHERE removed_at IS NULL` the tombstone would hold
+-- the ordinal for ever. Asserted from `pg_get_indexdef` at `0079-E(4e)`.
+CREATE UNIQUE INDEX pos_cart_lines_line_uq
+  ON pos_cart_lines (business_id, till_session_id, line_no) WHERE removed_at IS NULL;
 
 -- The cart read: every line of one session in display order, which is the
 -- P4-B budget's access path.
@@ -487,16 +524,21 @@ CREATE POLICY inventory_internal_read ON pos_cart_lines
 --    figures a cashier may revise — and `added_by` is NOT among them, which is
 --    a fifth, privilege-level expression of OD-P4-09.
 --
---    There is NO DELETE on `pos_till_sessions` for anyone: a shift is history
---    the moment it opens. There IS a DELETE on `pos_cart_lines`, because
---    removing a line from a basket is what a till does, and the guard binds it
---    to an OPEN session, so a closed shift's basket is frozen evidence.
+--    There is NO DELETE on EITHER relation, for anyone. A shift is history the
+--    moment it opens, and a basket is an append-only log of that shift: the
+--    accepted estate's append-only clause
+--    (`tests/security/inventory-db-authority.test.ts:284-291`) gives the
+--    internal writer no DELETE, no TRUNCATE and no table-level UPDATE on any
+--    relation beyond the accepted prefix, and the first full-estate round
+--    refused an earlier draft of this file by name for granting one
+--    (§12, round 1). So "remove a line" is the `removed_at` column grant, the
+--    guard refuses a DELETE outright, and a closed shift's basket — live lines
+--    and tombstones alike — is frozen evidence.
 -- ─────────────────────────────────────────────────────────────────────────
 GRANT SELECT ON pos_till_sessions, pos_cart_lines TO daftar_app;
 GRANT SELECT, INSERT ON pos_till_sessions, pos_cart_lines TO daftar_inventory_internal;
 GRANT UPDATE (status, closed_at, close_intent_sha256, business_transaction_id) ON pos_till_sessions TO daftar_inventory_internal;
-GRANT UPDATE (quantity, requested_discount_minor) ON pos_cart_lines TO daftar_inventory_internal;
-GRANT DELETE ON pos_cart_lines TO daftar_inventory_internal;
+GRANT UPDATE (quantity, removed_at, requested_discount_minor) ON pos_cart_lines TO daftar_inventory_internal;
 
 -- ─────────────────────────────────────────────────────────────────────────
 -- 5. The guards. Created while the migrator still owns them, PUBLIC revoked,
@@ -581,23 +623,36 @@ DECLARE
   v_session  UUID;
   v_business UUID;
 BEGIN
-  -- On DELETE there is no NEW at all — referencing it would raise
-  -- "record NEW is not assigned yet" and the guard would fail as a defect
-  -- rather than as a refusal — so the subject is chosen by TG_OP first.
+  -- A cart line is NEVER deleted. The privilege level already says so — no
+  -- principal holds DELETE on this relation — and this is the second
+  -- expression of the same fact, for the owner and for a future migration
+  -- that grants one by accident. A removal is `removed_at`, and the basket of
+  -- a shift stays the record of that shift.
+  --
+  -- On DELETE there is no NEW at all, so the refusal comes before any
+  -- reference to it: referencing NEW here would raise "record NEW is not
+  -- assigned yet" and the guard would fail as a defect rather than as a
+  -- refusal.
   IF TG_OP = 'DELETE' THEN
-    v_session  := OLD.till_session_id;
-    v_business := OLD.business_id;
-  ELSE
-    v_session  := NEW.till_session_id;
-    v_business := NEW.business_id;
+    RAISE EXCEPTION 'pos.cart_line_immutable: a cart line is never deleted; a removal is a tombstone and the basket is the record of the shift'
+      USING ERRCODE = 'P0001';
   END IF;
+  v_session  := NEW.till_session_id;
+  v_business := NEW.business_id;
   IF TG_OP = 'UPDATE' THEN
     IF NEW.tenant_id IS DISTINCT FROM OLD.tenant_id OR NEW.business_id IS DISTINCT FROM OLD.business_id
        OR NEW.id IS DISTINCT FROM OLD.id OR NEW.till_session_id IS DISTINCT FROM OLD.till_session_id
        OR NEW.line_no IS DISTINCT FROM OLD.line_no
        OR NEW.product_id IS DISTINCT FROM OLD.product_id OR NEW.variant_id IS DISTINCT FROM OLD.variant_id
        OR NEW.added_by IS DISTINCT FROM OLD.added_by OR NEW.added_at IS DISTINCT FROM OLD.added_at THEN
-      RAISE EXCEPTION 'pos.cart_line_immutable: a cart line''s identity, its product and its actor are final; a revision changes the quantity or the discount request'
+      RAISE EXCEPTION 'pos.cart_line_immutable: a cart line''s identity, its product and its actor are final; a revision changes the quantity, the discount request or the removal'
+        USING ERRCODE = 'P0001';
+    END IF;
+    -- A tombstone is final. Un-removing a line would make `removed_at` a
+    -- two-way flag and the basket a mutable document again; the till puts a
+    -- NEW line at that ordinal instead, which the partial unique index allows.
+    IF OLD.removed_at IS NOT NULL THEN
+      RAISE EXCEPTION 'pos.cart_line_removed: a removed cart line is final; add a new line at that ordinal instead'
         USING ERRCODE = 'P0001';
     END IF;
   END IF;
@@ -607,9 +662,6 @@ BEGIN
   FOR NO KEY UPDATE;
   IF NOT FOUND OR v_status <> 'open' THEN
     RAISE EXCEPTION 'pos.till_session_not_open: a cart is only written while its till session is open' USING ERRCODE = 'P0001';
-  END IF;
-  IF TG_OP = 'DELETE' THEN
-    RETURN OLD;
   END IF;
   RETURN NEW;
 END;
@@ -882,15 +934,21 @@ BEGIN
   IF v_status <> 'open' THEN
     RAISE EXCEPTION 'pos.till_session_not_open: a cart is only written while its till session is open' USING ERRCODE = 'P0001';
   END IF;
+  -- A tombstone does not hold an ordinal — which is the predicate the partial
+  -- unique index carries, restated here so the refusal is the named one and
+  -- not the index's 23505 (rule 22 forbids translating it in a handler).
   IF EXISTS (SELECT 1 FROM pos_cart_lines l
               WHERE l.business_id = v_actor.business_id AND l.till_session_id = p_session_id
-                AND l.line_no = p_line_no AND l.id <> p_line_id) THEN
+                AND l.line_no = p_line_no AND l.id <> p_line_id AND l.removed_at IS NULL) THEN
     RAISE EXCEPTION 'pos.cart_line_conflict: this cart already holds a line at that ordinal' USING ERRCODE = 'P0001';
   END IF;
 
-  SELECT l.till_session_id, l.line_no, l.product_id, l.variant_id, l.added_by INTO v_old
+  SELECT l.till_session_id, l.line_no, l.product_id, l.variant_id, l.added_by, l.removed_at INTO v_old
   FROM pos_cart_lines l WHERE l.business_id = v_actor.business_id AND l.id = p_line_id FOR UPDATE;
   IF FOUND THEN
+    IF v_old.removed_at IS NOT NULL THEN
+      RAISE EXCEPTION 'pos.cart_line_removed: a removed cart line is final; add a new line at that ordinal instead' USING ERRCODE = 'P0001';
+    END IF;
     IF v_old.till_session_id <> p_session_id OR v_old.line_no <> p_line_no
        OR v_old.product_id <> p_product_id OR v_old.variant_id <> p_variant_id THEN
       RAISE EXCEPTION 'pos.cart_line_conflict: this cart line id already names a different line' USING ERRCODE = 'P0001';
@@ -921,9 +979,9 @@ $$;
 COMMENT ON FUNCTION pos_cart_set_line(UUID, UUID, INTEGER, UUID, UUID, NUMERIC, BIGINT) IS
   'P4-S3, P4-AL-18, OD-P4-02. The one writer of pos_cart_lines. Takes identities, a Q4 quantity and a DISCOUNT REQUEST in minor units, and NOTHING about price: there is no unit-price, line-total or tax argument, so a forged figure is unexpressible rather than rejected. added_by is the invctl/1 assertion''s actor, so pos_cart_lines_session_actor_fk — not this body — is what makes a line on another user''s session unrepresentable; the pos.till_session_not_yours raised here is the localizable MESSAGE for that same refusal, because rule 22 forbids translating the foreign key''s 23503 in a handler. Locks the session row FOR NO KEY UPDATE first, so every cart write on one basket is serialised and a line cannot be added to a shift being closed. An existing line id with different identities is pos.cart_line_conflict; otherwise the quantity and the discount request are revised. EXECUTE: daftar_app only.';
 
--- (d) Remove a cart line. Idempotent by row count: a line already gone
---     returns 0 and raises nothing, because a till that taps "remove" twice
---     has not done anything wrong.
+-- (d) Remove a cart line, by writing its TOMBSTONE. Idempotent by row count:
+--     a line already removed returns 0 and raises nothing, because a till that
+--     taps "remove" twice has not done anything wrong.
 CREATE FUNCTION pos_cart_remove_line(p_session_id UUID, p_line_id UUID) RETURNS INTEGER
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $$
 DECLARE
@@ -939,17 +997,24 @@ BEGIN
     RAISE EXCEPTION 'inventory.payload_invalid: a removal names its session and its line' USING ERRCODE = 'P0001';
   END IF;
   -- `added_by` is in the predicate, so the removal is bounded by OD-P4-09 the
-  -- same way the INSERT is: a DELETE has no foreign key to refuse it.
-  DELETE FROM pos_cart_lines l
+  -- same way the INSERT is: the actor edge refuses a line whose actor is not
+  -- the session's user, but it cannot refuse a REVISION of a row that already
+  -- satisfies it, so the predicate carries the actor as well.
+  --
+  -- `removed_at IS NULL` is what makes the second tap 0 rather than a second
+  -- tombstone with a later instant, and `pos_cart_line_guard()` refuses the
+  -- write outright once the session is closed.
+  UPDATE pos_cart_lines l
+     SET removed_at = now()
    WHERE l.business_id = v_actor.business_id AND l.till_session_id = p_session_id AND l.id = p_line_id
-     AND l.added_by = v_actor.actor_user_id;
+     AND l.added_by = v_actor.actor_user_id AND l.removed_at IS NULL;
   GET DIAGNOSTICS v_rows = ROW_COUNT;
   RETURN v_rows;
 END;
 $$;
 
 COMMENT ON FUNCTION pos_cart_remove_line(UUID, UUID) IS
-  'P4-S3, OD-P4-09. Removes one line of the actor''s OWN open cart, under an invctl/1 pos.cart_remove_line assertion; added_by is in the predicate because a DELETE has no foreign key to refuse it, and pos_cart_line_guard() refuses the removal outright once the session is closed. Returns the row count, so a repeated removal is 0 and not an error. EXECUTE: daftar_app only.';
+  'P4-S3, OD-P4-09. Removes one line of the actor''s OWN open cart by writing its removed_at TOMBSTONE — never a DELETE, because the accepted estate gives the internal writer no DELETE on a relation beyond the accepted prefix and a basket is the append-only record of its shift. added_by is in the predicate because the actor edge cannot refuse a revision of a row that already satisfies it, and pos_cart_line_guard() refuses the write outright once the session is closed. Returns the row count, so a repeated removal is 0 and not an error. EXECUTE: daftar_app only.';
 
 REVOKE ALL ON FUNCTION pos_till_session_open(UUID, UUID, UUID, TEXT, TEXT) FROM PUBLIC;
 REVOKE ALL ON FUNCTION pos_till_session_close(UUID) FROM PUBLIC;
@@ -1167,6 +1232,18 @@ BEGIN
     RAISE EXCEPTION 'pos.migration_end_state_invalid: 0079-E(4c): pos_till_sessions_one_open_per_user_uq is not the partial unique index on (business_id, opened_by) WHERE status = ''open'' (found %)', coalesce(v_def, '<absent>')
       USING ERRCODE = 'P0001';
   END IF;
+  --     (e) the line ordinal is held by LIVE lines only. A partial unique
+  --         index, predicate and column list both read from the definition:
+  --         without the predicate a tombstone would hold its ordinal for ever,
+  --         and without the index two live lines could share one.
+  v_def := (SELECT pg_get_indexdef(i.indexrelid) FROM pg_index i
+             WHERE i.indrelid = 'public.pos_cart_lines'::regclass
+               AND i.indexrelid = 'public.pos_cart_lines_line_uq'::regclass);
+  IF v_def IS NULL OR v_def NOT LIKE '%UNIQUE INDEX%(business_id, till_session_id, line_no)%'
+     OR v_def NOT LIKE '%WHERE (removed_at IS NULL)%' THEN
+    RAISE EXCEPTION 'pos.migration_end_state_invalid: 0079-E(4e): pos_cart_lines_line_uq is not the partial unique index on (business_id, till_session_id, line_no) WHERE removed_at IS NULL (found %)', coalesce(v_def, '<absent>')
+      USING ERRCODE = 'P0001';
+  END IF;
   --     (d) one open session per physical till, which is the other half of
   --         the ruling's own risk sentence about the cash drawer's owner.
   v_def := (SELECT pg_get_indexdef(i.indexrelid) FROM pg_index i
@@ -1296,15 +1373,25 @@ BEGIN
     FROM pg_attribute a, aclexplode(a.attacl) x
    WHERE a.attrelid = 'public.pos_cart_lines'::regclass AND a.attnum > 0 AND NOT a.attisdropped
      AND x.grantee::regrole::text = 'daftar_inventory_internal' AND x.privilege_type = 'UPDATE';
-  IF v_actual IS DISTINCT FROM ARRAY['quantity', 'requested_discount_minor'] THEN
-    RAISE EXCEPTION 'pos.authority_leak: 0079-E(6): a cart line''s writable columns are % and not the quantity and the discount request alone (OD-P4-09: added_by is not revisable)', v_actual
+  IF v_actual IS DISTINCT FROM ARRAY['quantity', 'removed_at', 'requested_discount_minor'] THEN
+    RAISE EXCEPTION 'pos.authority_leak: 0079-E(6): a cart line''s writable columns are % and not the quantity, the discount request and the removal tombstone alone (OD-P4-09: added_by is not revisable)', v_actual
       USING ERRCODE = 'P0001';
   END IF;
-  IF EXISTS (SELECT 1 FROM pg_class c, aclexplode(c.relacl) x
-              WHERE c.oid = 'public.pos_till_sessions'::regclass AND x.privilege_type = 'DELETE'
-                AND x.grantee <> c.relowner) THEN
-    RAISE EXCEPTION 'pos.authority_leak: 0079-E(6): somebody may DELETE a till session, and a shift is history the moment it opens' USING ERRCODE = 'P0001';
-  END IF;
+  --     Nobody at all may DELETE EITHER relation. A shift is history the
+  --     moment it opens and a basket is the append-only record of that shift,
+  --     and the estate's append-only clause
+  --     (`tests/security/inventory-db-authority.test.ts:284-291`) gives the
+  --     internal writer no DELETE beyond the accepted prefix — the claim this
+  --     migration now makes about itself, so it refuses the deployment that
+  --     round 1 of the full estate refused.
+  FOREACH v_name IN ARRAY c_relations LOOP
+    IF EXISTS (SELECT 1 FROM pg_class c, aclexplode(c.relacl) x
+                WHERE c.oid = ('public.' || v_name)::regclass
+                  AND x.privilege_type IN ('DELETE', 'TRUNCATE') AND x.grantee <> c.relowner) THEN
+      RAISE EXCEPTION 'pos.authority_leak: 0079-E(6): somebody may DELETE or TRUNCATE %, and a shift and its basket are both history the moment they are written', v_name
+        USING ERRCODE = 'P0001';
+    END IF;
+  END LOOP;
 
   -- (7) The two guards: internal DEFINER, owned by daftar_inventory_internal,
   --     pinned path, and NO grantee but the owner. EXECUTE is reachability,
@@ -1340,6 +1427,33 @@ BEGIN
     FROM pg_proc p WHERE p.oid = 'public.pos_cart_line_guard()'::regprocedure;
   IF position('FOR NO KEY UPDATE' IN v_def) = 0 OR position('pos.till_session_not_open' IN v_def) = 0 THEN
     RAISE EXCEPTION 'pos.migration_end_state_invalid: 0079-E(7): the live pos_cart_line_guard() body does not lock its session row, so a line can be added to a session being closed concurrently'
+      USING ERRCODE = 'P0001';
+  END IF;
+  -- And BOTH guards refuse a DELETE outright, which is the second expression
+  -- of the append-only shift and its append-only basket: the privilege level
+  -- gives nobody DELETE, and this is the half that still holds if a later
+  -- migration grants one by accident. Read from the SHIPPED body, because a
+  -- comment claiming it is not it.
+  --
+  -- The claim is that the DELETE branch RAISES, and the absence of `RETURN
+  -- OLD` anywhere is what says so decisively: a BEFORE DELETE row trigger
+  -- permits the delete precisely by returning OLD, and a first draft of this
+  -- check asked only whether the branch and the message both EXISTED, which a
+  -- body whose branch was `RETURN OLD` satisfied while permitting the delete
+  -- ([[daftar-a-wrapper-is-not-an-invariant]] in assertion form — the red
+  -- proof is recorded in §12 of docs/PHASE_4_S3_MIGRATION_DESIGN.md).
+  FOREACH v_sig IN ARRAY c_guards LOOP
+    SELECT regexp_replace(p.prosrc, '--[^\n]*', '', 'g') INTO v_def
+      FROM pg_proc p WHERE p.oid = ('public.' || v_sig)::regprocedure;
+    IF v_def !~ 'TG_OP\s*=\s*''DELETE''\s*THEN\s*RAISE EXCEPTION' OR v_def ~* '\mRETURN\s+OLD\M' THEN
+      RAISE EXCEPTION 'pos.migration_end_state_invalid: 0079-E(7): the live % body does not RAISE on DELETE, or returns OLD somewhere — a BEFORE DELETE row trigger permits the delete by returning OLD, so an append-only relation would be a convention', v_sig
+        USING ERRCODE = 'P0001';
+    END IF;
+  END LOOP;
+  SELECT regexp_replace(p.prosrc, '--[^\n]*', '', 'g') INTO v_def
+    FROM pg_proc p WHERE p.oid = 'public.pos_cart_line_guard()'::regprocedure;
+  IF position('pos.cart_line_immutable' IN v_def) = 0 OR position('pos.cart_line_removed' IN v_def) = 0 THEN
+    RAISE EXCEPTION 'pos.migration_end_state_invalid: 0079-E(7): the live pos_cart_line_guard() body does not name the cart-line refusals, so a revision of a tombstoned line is unaccounted for'
       USING ERRCODE = 'P0001';
   END IF;
 

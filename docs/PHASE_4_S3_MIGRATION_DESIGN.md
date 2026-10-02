@@ -126,14 +126,38 @@ a third global relation is then judged by the same rule instead of needing a new
 
 ```
 tenant_id, business_id, till_session_id, id      identity
-line_no                                          display order, UNIQUE per session
+line_no                                          display order, UNIQUE per session among LIVE lines
 product_id, variant_id                           WHAT is being sold
 quantity          NUMERIC(18,4)                  HOW MUCH (Q4 — the scale
                                                  inventory_fixed_text(…, 4) canonicalises)
 requested_discount_minor  BIGINT                 THE CLIENT'S DISCOUNT REQUEST, integer minor
                                                  units of the SESSION's currency
 added_by, added_at                               the actor (OD-P4-09's subject) and when
+removed_at        TIMESTAMPTZ NULL               THE TOMBSTONE — NULL is "in the basket"
 ```
+
+**The basket is APPEND-ONLY, and a removal is a tombstone.** This is not a stylistic preference; it is
+what the accepted estate already requires of a relation beyond the accepted prefix. The append-only
+clause at `tests/security/inventory-db-authority.test.ts:284-302` states the contract positively: the
+internal writer holds **no `DELETE`, no `TRUNCATE`, no table-level `UPDATE`, no `REFERENCES` and no
+`TRIGGER`** on any relation the accepted prefix did not create, so a row it writes cannot be removed or
+rewritten wholesale and a lifecycle change is confined to columns somebody granted **by name**. An
+earlier draft of `0079` granted `DELETE ON pos_cart_lines`; round 1 of the full estate refused it in
+three assertions of that file, and §12 records the round. So:
+
+- `removed_at` is granted by name, alongside the quantity and the discount request;
+- the line ordinal is a **partial** unique index, `WHERE removed_at IS NULL`, so a tombstone releases
+  its ordinal and the till may put a new line 2 where the old line 2 was (`0079-E(4e)` reads the
+  predicate and the column list from `pg_get_indexdef`);
+- a tombstone is **final** — un-removing would make `removed_at` a two-way flag and the basket a
+  mutable document again (`pos.cart_line_removed`);
+- `pos_cart_line_guard()` refuses a `DELETE` outright, so the append-only basket survives a later
+  migration that grants a `DELETE` by accident. `0079-E(7)` asserts that from the shipped body, and
+  asserts the absence of `RETURN OLD` anywhere in either guard, because a `BEFORE DELETE` row trigger
+  permits the delete precisely by returning `OLD`.
+
+The whole basket of a closed shift — live lines and tombstones alike — is therefore the record of that
+shift, which is strictly more than the earlier draft preserved.
 
 **Absent, on purpose, every one of them asserted absent from the live column list by `0079-E(3)`:**
 `unit_price_*`, `gross_*`, `net_*`, `subtotal_*`, `line_total_*`, `total_*`, `amount_*`, `tax_*`,
@@ -212,7 +236,7 @@ look harmless alone.
 | principal | `pos_till_sessions` | `pos_cart_lines` |
 |---|---|---|
 | `daftar_app` | `SELECT` | `SELECT` |
-| `daftar_inventory_internal` | `SELECT`, `INSERT`, `UPDATE (status, closed_at, close_intent_sha256, business_transaction_id)` | `SELECT`, `INSERT`, `UPDATE (quantity, requested_discount_minor)`, `DELETE` |
+| `daftar_inventory_internal` | `SELECT`, `INSERT`, `UPDATE (status, closed_at, close_intent_sha256, business_transaction_id)` | `SELECT`, `INSERT`, `UPDATE (quantity, requested_discount_minor, removed_at)` |
 | every other runtime principal, PUBLIC | — | — |
 | `daftar_accounting_internal` | — | — |
 
@@ -224,10 +248,12 @@ Four things in that table are decisions:
   `UPDATE` would let the trusted generic primitive write a column the lifecycle guard happens not to
   name. `0079-E(6)` asserts both column lists exactly and asserts there is no table-level `UPDATE`
   behind them.
-- **No `DELETE` on `pos_till_sessions` for anyone.** A shift is history the moment it opens.
-- **A `DELETE` on `pos_cart_lines`,** because removing a line from a basket is what a till does. The
-  guard binds every write — the removal included — to an OPEN session, so a closed shift's basket is
-  frozen evidence rather than editable history.
+- **No `DELETE` and no `TRUNCATE` on EITHER relation, for anyone.** A shift is history the moment it
+  opens, and a basket is the append-only record of that shift (§4.1, `R-P4-S3-08`). `0079-E(6)`
+  asserts that over both relations, so the migration refuses the deployment round 1 refused.
+- **Removing a line is the `removed_at` column grant,** and the guard binds every write — the removal
+  included — to an OPEN session, so a closed shift's basket is frozen evidence rather than editable
+  history.
 
 `infrastructure/database/phase3-runtime-grant-model.json` is extended to match, in the three places
 the grant-matrix suite reads: `select.daftar_app.tables`, `execute.daftar_app`, and
@@ -284,8 +310,10 @@ refusal.
   `added_by` is the assertion's actor and nothing else, so
   `pos_cart_lines_session_actor_fk` — not the body — refuses a line on another user's session; the
   body only translates `23503` into `pos.till_session_not_yours`.
-- **`pos.cart_remove_line`** carries `added_by` in its predicate, because a `DELETE` has no foreign
-  key to refuse it, and returns the row count, so a repeated removal is `0` rather than an error.
+- **`pos.cart_remove_line`** writes `removed_at = now()` — never a `DELETE` — and carries `added_by`
+  in its predicate, because the actor edge cannot refuse a *revision* of a row that already satisfies
+  it. `AND removed_at IS NULL` is what makes the second tap return `0` rather than write a second
+  tombstone with a later instant, so a repeated removal is `0` and not an error.
 
 ### 6.2 The registry rows
 
@@ -332,10 +360,10 @@ wrote.
 | E(1) | both relations are plain tables with `relrowsecurity` **and** `relforcerowsecurity`, and both carry `tenant_id` + `business_id` NOT NULL |
 | E(2) | exactly the six ordinary policies by NAME on each; the direct tenant form; the inventory principal admitted in the restrictive read and the accounting principal not; `daftar_accounting_internal` holds no privilege |
 | E(3) | no derived-truth column, **no price-vocabulary column**, no float/money column, and the slice's `%_minor` set is exactly the one discount request |
-| E(4a–e) | `OD-P4-09`: the candidate key; the composite actor FK, both column lists in order, validated, RESTRICT on delete **and** update; the two partial unique indexes with their predicates read from `pg_get_indexdef`; and the live guard body refusing a change of `opened_by` |
+| E(4a–e) | `OD-P4-09`: the candidate key; the composite actor FK, both column lists in order, validated, RESTRICT on delete **and** update; the THREE partial unique indexes with their predicates read from `pg_get_indexdef` — one open shift per user, one per terminal, and one LIVE line per ordinal; and the live guard body refusing a change of `opened_by` |
 | E(5) | **no accounting object**, six ways: no POS accounting source type, no POS accounting operation kind, no accounting column, no FK into the accounting estate, no POS routine on `journal_entries`, and no command body naming the ledger or the stock ledger |
-| E(6) | the privileges from the catalogue: `daftar_app` reads; no runtime principal holds DML or any column privilege; the internal writer's writable column lists exactly; no table-level `UPDATE`; nobody may `DELETE` a session |
-| E(7) | both guards are pinned DEFINERs owned by the inventory principal with no grantee; both triggers installed as enabled `BEFORE INSERT OR UPDATE OR DELETE` row triggers (`tgtype = 31`); the cart guard's `FOR NO KEY UPDATE` |
+| E(6) | the privileges from the catalogue: `daftar_app` reads; no runtime principal holds DML or any column privilege; the internal writer's writable column lists exactly; no table-level `UPDATE`; nobody but the owner may `DELETE` or `TRUNCATE` **either** relation |
+| E(7) | both guards are pinned DEFINERs owned by the inventory principal with no grantee; both triggers installed as enabled `BEFORE INSERT OR UPDATE OR DELETE` row triggers (`tgtype = 31`); the cart guard's `FOR NO KEY UPDATE`; both guards RAISE on `DELETE` and neither returns `OLD` anywhere |
 | E(8) | the four commands: pinned, default-free DEFINERs; `EXECUTE` held by `daftar_app` **alone**; the assertion consume as the first executable statement; no actor argument; no run-time SQL |
 | E(9) | exactly the four POS operation kinds for `P4-S3`, and no stock registration |
 | E(10) | `inventory_apply_stock_movements` is still one routine, still the inventory principal's, still refusing an oversell; `inventory_stock_source_guard_gaps()` still reports no gap |
@@ -388,8 +416,8 @@ Owed, named, and the slice's test estate's (`tests/security/pos-s3-*.test.ts`,
 3. A second **open** session on one terminal → `pos.terminal_already_open`.
 4. An `UPDATE` of `opened_by` → `pos.till_session_actor_immutable`, on a session with an **empty**
    basket (the case the foreign key cannot see) and on one with lines (where the FK refuses first).
-5. A write to a **closed** shift's basket → `pos.till_session_not_open`, for INSERT, UPDATE and
-   DELETE.
+5. A write to a **closed** shift's basket → `pos.till_session_not_open`, for INSERT and UPDATE; a
+   `DELETE` is refused earlier still, by `pos.cart_line_immutable` and by the absent privilege.
 6. **RLS, behaviourally**, as `daftar_app`: a cross-tenant and a cross-business read and write on both
    relations, with the policies never weakened for the test.
 7. **The forged-total refusal**, which is the slice's trust-boundary gate step: the cart commands take
@@ -404,9 +432,16 @@ Read from a file and never through a pipe (a pipeline's status is the last comma
 
 | command | exit |
 |---|---|
-| `DB_FROM_ZERO_PORT=55111 tsx scripts/db-from-zero.ts` | **0** — `80 migrations, roles 12, no-op rerun, manifest + history verified, tamper rejected`; `rerunApplied: 0`, `candidateMigrations: ["0079_phase4_pos_till_sessions_cart.sql"]`, `manifestFrozenThrough: 0078_phase4_sale_commit.sql` |
+| `DB_FROM_ZERO_PORT=55114 PG_PORT=55114 PG_DIR=/tmp/daftar-pg-rp-base tsx scripts/db-from-zero.ts` | **0** — `80 migrations, roles 12, no-op rerun, manifest + history verified, tamper rejected`; `rerunApplied: 0`, `candidateMigrations: ["0079_phase4_pos_till_sessions_cart.sql"]`, `manifestFrozenThrough: 0078_phase4_sale_commit.sql` |
+| `tsx scripts/check-migration-manifest.ts` | **0** — `79 frozen migrations verified (frozen through 0078_phase4_sale_commit.sql)` |
+| `tsx scripts/static-guards.ts` | **0** — `STATIC GUARDS: PASS (23 rules)` |
+| `prettier --check .` | **0** |
+| `eslint . --max-warnings 0` | **0** |
+| `npm run typecheck` | **0** |
+| the behavioural smoke proof (scratch, not committed) | **0** — `SMOKE: PASS (27 checks)` |
 
-The full-estate rounds and the repo checks are recorded in §11.
+The migration applies to a fresh database and re-applies as a no-op, which is the `0000 → latest`
+twice the brief requires. The full-estate rounds are recorded in §12.
 
 ---
 
@@ -487,3 +522,36 @@ what accounts for each are recorded in §12 as they are measured.
 See the hand-back report for the authoritative command list and exit codes. This section records what
 each failing file was and what accounted for it, so a later reader does not have to re-derive the
 attribution.
+
+### Round 1 — `vitest run tests/integration tests/security tests/guards`, exit **1**
+
+`287` files, `4981` assertions, `2286 s`. **One** failing file, **three** failing assertions, and all
+three are one fact:
+
+| file | assertion | what accounted for it |
+|---|---|---|
+| `tests/security/inventory-db-authority.test.ts` | `the internal principal holds exactly these table privileges on the accepted prefix's relations, and SELECT and nothing else beyond them` — `expected [ [ 'pos_cart_lines', …(1) ] ] to deeply equal []` | **A real defect in `0079`, not a stale assertion.** The clause at `:284-291` states positively that beyond the accepted prefix the internal writer holds no `DELETE`, no `TRUNCATE`, no table-level `UPDATE`, no `REFERENCES` and no `TRIGGER`. The first draft granted `DELETE ON pos_cart_lines`. |
+| | `RED: a non-append write to the internal principal beyond the accepted prefix is named (clause 1)` — `green before the plant: expected [ Array(1) ] to deeply equal []` | The same grant. This case plants a `DELETE` of its own and requires the tree to be green first; `0079`'s grant made the pre-condition false, so the suite's own red proof could no longer run. |
+| | `RED: a write handed to a RUNTIME principal on a relation this principal writes is named (clause 2)` — `expected [ …(2) ] to deeply equal [ 'daftar_app INSERT invoice_items' ]` | The same grant, seen from the other side: `pos_cart_lines` joined the writable-beyond set, so the planted leak was named twice. |
+
+The resolution is `R-P4-S3-08` and §4.1: the grant is withdrawn, the basket becomes append-only, a
+removal is the `removed_at` tombstone granted by name, and the ordinal becomes a partial unique index
+so the till may still reuse it. No accepted assertion was edited, no privilege was relaxed and no RLS
+was weakened; the rule is a security property and the convenience that broke it was not.
+
+Three red proofs were planted on the correction and each was refused **by name** (`db-from-zero`
+against a fresh cluster, exit `1` each time, and the tree restored to its digest afterwards):
+
+| plant | refused by |
+|---|---|
+| `GRANT DELETE ON pos_cart_lines TO daftar_inventory_internal` restored | `pos.authority_leak: 0079-E(6): somebody may DELETE or TRUNCATE pos_cart_lines, …` |
+| `WHERE removed_at IS NULL` dropped from `pos_cart_lines_line_uq` | `pos.migration_end_state_invalid: 0079-E(4e): pos_cart_lines_line_uq is not the partial unique index …` |
+| `pos_cart_line_guard()`'s `DELETE` branch changed from `RAISE` to `RETURN OLD` | `pos.migration_end_state_invalid: 0079-E(7): the live pos_cart_line_guard() body does not RAISE on DELETE, or returns OLD somewhere …` |
+
+The third plant is worth recording as a lesson about the check and not only about the body. The first
+version of that `0079-E(7)` check asked whether the body contained `TG_OP = 'DELETE'` **and** the two
+refusal messages. A body whose `DELETE` branch was `RETURN OLD` satisfied all three — the messages were
+still in the `UPDATE` branch — so the check passed while the delete was permitted: an assertion that
+was a convention. The shipped check requires the branch to be followed by `RAISE EXCEPTION` and
+requires `RETURN OLD` to appear nowhere in either guard, which is the property that actually decides a
+`BEFORE DELETE` row trigger.
