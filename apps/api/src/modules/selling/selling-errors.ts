@@ -146,7 +146,63 @@ const SELLING_STATUS = {
 
   // ── The tax boundary (P4-AL-44). The whole of it. ────────────────────────
   'sale.tax_policy_absent': 422,
-} as const satisfies Readonly<Record<`${'customer' | 'invoice' | 'sale'}.${string}`, 400 | 403 | 404 | 409 | 422 | 500>>;
+
+  // ── The POS till session (P4-S3, `OD-P4-09` OPTION A) ───────────────────
+  //
+  // `pos.*` is MERCHANT vocabulary, so it belongs in THIS table and not in
+  // the internal `selling.*` registry below: every code here is something a
+  // cashier can cause and a POS screen must render. The prefix joins
+  // `DATABASE_CODE_RE` for the same reason — a `pos.*` refusal raised by a
+  // trigger is a merchant outcome with a registered status, exactly as
+  // `customer.not_deletable` is. The internal vocabulary is NOT widened into
+  // that recognizer (TL-P4-S2-R5): `selling.*` keeps its own recognizer and
+  // its own 500 rendering.
+  //
+  // `OD-P4-09` OPTION A — ONE TILL SESSION = ONE AUTHENTICATED USER — is the
+  // reason for the first two codes, and the reason they are two rather than
+  // one. They answer different questions and must not be collapsed:
+  //
+  //   - `pos.session_not_found` is the ISOLATION answer. Another tenant's or
+  //     another business's session is INVISIBLE, because the RLS policies
+  //     filter it out of the actor's own transaction; the service cannot tell
+  //     such a session from one that was never opened, and must not be able
+  //     to. A 403 here would confirm the existence of a row in a business the
+  //     caller has no membership in, which is the cross-tenant enumeration
+  //     `tests/guards/phase4-cross-tenant-enumeration-guard.test.ts` exists
+  //     to refuse;
+  //   - `pos.session_not_owned` is the OD-P4-09 answer. The session IS
+  //     visible — same tenant, same business, a colleague's till — and the
+  //     acting user is still refused, because a shift change is a new session
+  //     and not a second actor on an existing one. 403, not 409: the command
+  //     is well formed and the till's state allows it; what forbids it is WHO
+  //     is asking.
+  'pos.session_not_found': 404,
+  'pos.session_not_owned': 403,
+  /** The till is closed. A closed session is never reopened — a shift change opens a new one. */
+  'pos.session_not_open': 409,
+  /** This user already holds an open till in this business. One user, one open session. */
+  'pos.session_already_open': 409,
+  /** The replay proof disagreed: this session id already carries a DIFFERENT open command (the P4-AL-30 model). */
+  'pos.session_idempotency_conflict': 409,
+  /**
+   * A trigger refusal NO ROUTE CAN REACH, and the whole point of putting the
+   * rule in the schema: a session's owning user is immutable, so
+   * `UPDATE pos_till_sessions SET opened_by_user_id = …` is refused even when
+   * it arrives through the trusted generic primitive
+   * (`Database.withTransaction`) rather than through this module. Reaching it
+   * means a server-side writer tried to re-own a till, which is a DEFECT in
+   * that writer and not a merchant outcome — hence 500 with no details, the
+   * `sale.immutable` / `invoice.immutable` precedent.
+   */
+  'pos.session_owner_immutable': 500,
+  'pos.session_state_invalid': 409,
+  /** The till names a branch that is not visible to this actor's branch scope (P4-AL-40 — the policy refuses it, not a predicate here). */
+  'pos.branch_not_found': 404,
+  'pos.opening_float_invalid': 400,
+  'pos.closing_count_invalid': 400,
+  /** A till does not close over an unfinished basket: the cart is cleared or committed first. */
+  'pos.session_cart_not_empty': 409,
+} as const satisfies Readonly<Record<`${'customer' | 'invoice' | 'pos' | 'sale'}.${string}`, 400 | 403 | 404 | 409 | 422 | 500>>;
 
 /** A classified selling refusal code. */
 export type SellingCode = keyof typeof SELLING_STATUS;
@@ -163,7 +219,15 @@ export function isSellingCode(code: string): code is SellingCode {
  */
 export const SELLING_CODES: readonly SellingCode[] = Object.keys(SELLING_STATUS).filter(isSellingCode);
 
-const DATABASE_CODE_RE = /^((?:customer|invoice|sale)\.[a-z_]+)\b/;
+/**
+ * The PUBLIC merchant prefixes, and only those. `pos` joined the set with
+ * P4-S3's till session; `selling` deliberately did NOT, and never may:
+ * widening this recognizer to carry the internal invariant vocabulary is
+ * exactly how `selling.sale_cogs_owed` came to be rendered as a 403
+ * authorization denial (TL-P4-S2-R5). The internal half has its own
+ * recognizer, `INTERNAL_DATABASE_CODE_RE`, and its own 500 rendering.
+ */
+const DATABASE_CODE_RE = /^((?:customer|invoice|pos|sale)\.[a-z_]+)\b/;
 
 /**
  * ── THE INTERNAL PHASE 4 INVARIANTS (`selling.*`) ─────────────────────────
