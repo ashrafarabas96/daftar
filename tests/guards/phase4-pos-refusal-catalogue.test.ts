@@ -287,10 +287,21 @@ describe('the rules are red when they should be (planted)', () => {
   });
 
   it('rule 2 names the dead keys in each namespace the registry knows', () => {
-    const problems = deadKeys(registeredCodes(plantedRegistry), CATALOGUES);
-    // The planted registry knows one real POS code and one real sale code; the
-    // other ten POS keys and fourteen sale keys are dead, in all three locales.
-    expect(problems.length).toBe((10 + 14) * 3);
+    const planted = registeredCodes(plantedRegistry);
+    const problems = deadKeys(planted, CATALOGUES);
+    // The planted registry knows ONE real code per namespace, so every other
+    // key the catalogues carry in those namespaces is dead, in all three
+    // locales. The expected count is DERIVED from the real key sets rather
+    // than written down: a hand-written total goes stale the moment a code is
+    // added, and a stale total is a test that stops meaning what it says.
+    const expected =
+      LOCALES.length *
+      COVERED_NAMESPACES.reduce((total, namespace) => {
+        const known = new Set(codesIn(planted, namespace));
+        return total + errorKeysIn(CATALOGUES.en, namespace).filter((key) => !known.has(key.slice('error.'.length))).length;
+      }, 0);
+    expect(expected).toBeGreaterThan(20);
+    expect(problems.length).toBe(expected);
     expect(problems.some((line) => line.includes('error.pos.branch_not_found'))).toBe(true);
     expect(problems.some((line) => line.includes('error.sale.product_not_priced'))).toBe(true);
     expect(problems.some((line) => line.includes('error.pos.session_not_open'))).toBe(false);
