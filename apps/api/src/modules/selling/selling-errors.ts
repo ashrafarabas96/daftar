@@ -205,13 +205,29 @@ const SELLING_STATUS = {
 
   // ── P4-S3, the five `0079` refusals with no twin above ──────────────────
   //
-  // `0079` RAISEs fifteen `pos.*` codes. Nine of them are the vocabulary
-  // above (six after the migration owner's rename to these spellings, three
-  // already matching); three are migration-time end-state assertions that no
-  // request can reach and that must NEVER be registered — see
-  // `scripts/guards/pos-session-law.ts` POS-LAW-6b, which refuses their
-  // presence here structurally rather than by name; and these five are
-  // genuinely new.
+  // `0079` RAISEs fifteen `pos.*` codes, and they split SEVEN + THREE + FIVE.
+  //
+  // Seven are reachable codes the block above already carried:
+  // `pos.session_already_open`, `pos.session_idempotency_conflict`,
+  // `pos.session_not_found`, `pos.session_not_open`, `pos.session_not_owned`,
+  // `pos.session_owner_immutable` and `pos.session_state_invalid`. Three are
+  // migration-time end-state assertions that no request can reach and that
+  // must NEVER be registered — see `scripts/guards/pos-session-law.ts`
+  // POS-LAW-6b, which refuses their presence here structurally rather than by
+  // name. And these five are genuinely new.
+  //
+  // This comment said NINE for the first group, which is 9 + 3 + 5 = 17 and
+  // not fifteen. The nine counted every `pos.session_*` row in the block above
+  // rather than the ones `0079` RAISES, and four of those rows are
+  // SERVICE-level refusals the migration does not raise at all:
+  // `pos.branch_not_found`, `pos.opening_float_invalid`,
+  // `pos.closing_count_invalid` and `pos.session_cart_not_empty`. So the
+  // registry legitimately holds more `pos.*` codes than the migration raises,
+  // and a count of this table is not a count of the migration.
+  //
+  // Do not trust the seven either: it is derived, and re-derivable in one
+  // call. `posRefusalReachability()` over `0079` returns 12 reachable and 3
+  // build-time, and the seven are the reachable set minus the five below.
   //
   // Each status is read from WHAT THE REFUSAL IS, and the two 500s are a
   // DEPARTURE from the coordinator's own reading, recorded here with the
