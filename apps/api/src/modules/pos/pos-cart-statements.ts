@@ -101,6 +101,12 @@ export const POS_CART_COLUMNS = Object.freeze({
     // in A's file, which is not mine. Asserted against `0079`'s own text by
     // the guard suite so this cannot drift back.
     owner: 'opened_by',
+    /**
+     * The warehouse the till sells from, and the subject of every cart
+     * command's `authorize(..., warehouseIds)`. It is the SESSION's, read per
+     * command, because a cashier's branch scope can be narrowed mid-shift.
+     */
+    warehouse: 'warehouse_id',
     /** The one value of `status` a cart command may write behind. */
     openStatus: TILL_SESSION_STATES.open,
   }),
@@ -311,12 +317,11 @@ const L = POS_CART_COLUMNS.lines;
  */
 const USABLE_SESSION = `
   visible AS (
-    SELECT s.${S.id}, s.${S.status}, s.${S.owner}
+    SELECT s.${S.id}, s.${S.status}, s.${S.owner}, s.${S.warehouse}
       FROM ${S.table} s
      WHERE s.${S.tenantId} = $1::uuid
        AND s.${S.businessId} = $2::uuid
        AND s.${S.id} = $3::uuid
-     FOR SHARE
   ),
   opened AS (SELECT v.${S.id}, v.${S.owner} FROM visible v WHERE v.${S.status} = '${S.openStatus}'),
   usable AS (SELECT o.${S.id} FROM opened o WHERE o.${S.owner} = $4::uuid)`;
@@ -372,18 +377,29 @@ const projection = (t: CartCommandTarget): CartStatement => ({
 });
 
 /**
- * The GATE. ONE statement that answers everything the routine call needs to
- * know and everything a refusal needs to be chosen from.
+ * The GATE. ONE statement, issued BEFORE the seam opens, that answers
+ * everything the minting needs and everything a refusal needs to be chosen
+ * from.
  *
- * It exists because `0079` makes the two writers SECURITY DEFINER routines
- * whose arguments are supplied by the caller: `pos_cart_set_line` takes
- * `p_line_no`, `p_product_id` and `p_variant_id`, so revising a line means
- * knowing what the line already is, and appending means knowing the next free
- * ordinal. Reading those one at a time would be three statements and a race;
- * reading them in the same statement as the session gate is one.
+ * It runs first — and outside the write transaction — because the `invctl/1`
+ * assertion SIGNS the payload, and `pos.cart_set_line`'s payload carries
+ * `line_no`, `product_id`, `variant_id` and `qty_q4`. Those are server facts
+ * about an existing basket, so they must be READ before anything can be
+ * minted, and minting must precede the seam. The order is forced by the
+ * protocol, not chosen: gate, authorize, mint, then the routine.
  *
- * The session is locked `FOR SHARE` here and the routine takes the same lock,
- * so the ordinal this computes cannot be overtaken between the two.
+ * It also carries the session's `warehouse_id`, so the authority check and
+ * the line facts are one round trip rather than two.
+ *
+ * WHAT THIS DOES NOT DO is hold a lock. An earlier revision took `FOR SHARE`
+ * here, which was meaningful while the gate and the write shared one
+ * transaction and is meaningless now that the gate is its own read. The
+ * ordinal it computes CAN therefore be taken by a concurrent till between the
+ * gate and the routine — and that is handled where it belongs: the partial
+ * unique index refuses the second writer and `pos_cart_set_line` raises
+ * `pos.cart_line_conflict`, which is a real refusal of a real race and is
+ * retryable by the client. Pretending to prevent it with a lock in a
+ * transaction that has already ended would be the worse answer.
  *
  * Every column it returns is a fact the SERVER then states to the routine. The
  * client supplied none of them, which is the whole trust boundary expressed in
@@ -392,7 +408,8 @@ const projection = (t: CartCommandTarget): CartStatement => ({
 const GATE = `
   WITH${USABLE_SESSION},
   line AS (
-    SELECT l.${L.id}, l.${L.lineNo}, l.${L.productId}, l.${L.variantId}, l.${L.removedAt}
+    SELECT l.${L.id}, l.${L.lineNo}, l.${L.productId}, l.${L.variantId}, l.${L.removedAt},
+             l.${L.quantity}, l.${L.discountMinor}
       FROM ${L.table} l
      WHERE l.${L.tenantId} = $1::uuid
        AND l.${L.businessId} = $2::uuid
@@ -400,19 +417,42 @@ const GATE = `
        AND l.${L.id} = $5::uuid
   )
   SELECT ${SESSION_DISCRIMINATORS},
+         -- The SESSION's warehouse, for the authority check. Read per command
+         -- and never cached: a cashier's branch scope can be narrowed
+         -- mid-shift, and a basket that kept accepting writes because the
+         -- scope was checked once at open would be authority outliving the
+         -- decision that granted it.
+         (SELECT v.${S.warehouse} FROM visible v) AS warehouse_id,
          coalesce((SELECT max(x.${L.lineNo}) FROM ${L.table} x
                     WHERE x.${L.businessId} = $2::uuid AND x.${L.tillSessionId} = $3::uuid), 0) + 1 AS next_line_no,
          (SELECT count(*) FROM line) AS line_present,
          (SELECT count(*) FROM line WHERE ${L.removedAt} IS NOT NULL) AS line_removed,
          (SELECT ${L.lineNo} FROM line) AS line_no,
          (SELECT ${L.productId} FROM line) AS product_id,
-         (SELECT ${L.variantId} FROM line) AS variant_id`;
+         (SELECT ${L.variantId} FROM line) AS variant_id,
+         -- The line's CURRENT quantity and discount request. They are read
+         -- because pos_cart_set_line writes BOTH columns on every call: a
+         -- quantity change that did not restate the discount would silently
+         -- clear it, and a discount request that did not restate the quantity
+         -- would set it to NULL and be refused outright. Revising one field
+         -- therefore means restating the other, from the server's own copy.
+         (SELECT ${L.quantity}::text FROM line) AS quantity,
+         (SELECT ${L.discountMinor}::text FROM line) AS requested_discount_minor,
+         -- The stated product's BASE variant, for an append that named no
+         -- variant. Migration 0079 declares variant_id UUID NOT NULL, so none
+         -- is not representable in the relation: a simple product sells as its
+         -- one hidden base variant (product_variants.is_base, 0053). The
+         -- SERVER resolves it, which is also what keeps it safe to sign -- it
+         -- is a function of the stated product and resolves identically on a
+         -- replay, unlike a catalogue price.
+         (SELECT bv.id FROM product_variants bv
+           WHERE bv.business_id = $2::uuid AND bv.product_id = $6::uuid AND bv.is_base) AS base_variant_id`;
 
 const gate = (t: CartCommandTarget): CartStatement => ({
   role: 'gate',
   name: 'cart.gate',
   text: GATE,
-  params: [t.tenantId, t.businessId, t.tillSessionId, t.actorUserId, t.cartLineId ?? null],
+  params: [t.tenantId, t.businessId, t.tillSessionId, t.actorUserId, t.cartLineId ?? null, t.productId ?? null],
 });
 
 /**
@@ -458,7 +498,15 @@ const setLine = (name: string): CartStatement => ({
 export function setLineParams(
   command: PosCartCommand,
   t: CartCommandTarget,
-  gate: { readonly next_line_no: number; readonly line_no: number | null; readonly product_id: string | null; readonly variant_id: string | null },
+  gate: {
+    readonly next_line_no: number;
+    readonly line_no: number | null;
+    readonly product_id: string | null;
+    readonly variant_id: string | null;
+    readonly quantity: string | null;
+    readonly requested_discount_minor: string | null;
+    readonly base_variant_id?: string | null;
+  },
 ): readonly unknown[] {
   const append = command === 'cart.add_line';
   return [
@@ -466,12 +514,16 @@ export function setLineParams(
     t.cartLineId,
     append ? gate.next_line_no : gate.line_no,
     append ? t.productId : gate.product_id,
-    append ? t.variantId : gate.variant_id,
-    // A quantity change states a quantity; a discount request does not, and
-    // must not silently restate one, so it passes NULL and the routine keeps
-    // what is there. Symmetrically for the discount.
-    command === 'cart.request_discount' ? null : t.quantity,
-    command === 'cart.request_discount' ? t.discountMinor : null,
+    // A stated variant wins; a product sold without one takes its BASE
+    // variant, resolved by the server. `0079` has no nullable variant.
+    append ? (t.variantId ?? gate.base_variant_id ?? null) : gate.variant_id,
+    // BOTH columns are written on every call, so revising one field means
+    // RESTATING the other from the server's own copy. Passing NULL for the
+    // field this command does not change would not "leave it alone": the
+    // routine refuses a NULL quantity outright, and a NULL discount would
+    // clear a discount the cashier had already granted.
+    command === 'cart.request_discount' ? gate.quantity : t.quantity,
+    command === 'cart.request_discount' ? t.discountMinor : append ? '0' : gate.requested_discount_minor,
   ];
 }
 

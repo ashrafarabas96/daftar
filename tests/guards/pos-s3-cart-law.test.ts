@@ -782,14 +782,22 @@ describe('P4-S3 (D) — no stored derived truth, and the refusal registry', () =
       expect(routine?.params, command).toEqual([]);
     }
     // An APPEND states the gate's next ordinal and the command's identities.
-    const gateRow = { next_line_no: 9, line_no: 3, product_id: 'P-OLD', variant_id: 'V-OLD' };
+    // The gate's answer, including the line's CURRENT quantity and discount —
+    // which a revision must RESTATE, because `pos_cart_set_line` writes both
+    // columns on every call.
+    const gateRow = { next_line_no: 9, line_no: 3, product_id: 'P-OLD', variant_id: 'V-OLD', quantity: '5', requested_discount_minor: '250' };
     const t = target({ productId: 'P-NEW', variantId: 'V-NEW', quantity: '2', discountMinor: '0' });
-    expect(setLineParams('cart.add_line', t, gateRow)).toEqual([t.tillSessionId, t.cartLineId, 9, 'P-NEW', 'V-NEW', '2', null]);
+    expect(setLineParams('cart.add_line', t, gateRow)).toEqual([t.tillSessionId, t.cartLineId, 9, 'P-NEW', 'V-NEW', '2', '0']);
     // A REVISION states the EXISTING line's ordinal and identities, so it
     // cannot restate a line's product as a side effect of changing a count.
-    expect(setLineParams('cart.change_quantity', t, gateRow)).toEqual([t.tillSessionId, t.cartLineId, 3, 'P-OLD', 'V-OLD', '2', null]);
+    // A quantity change RESTATES the existing discount, or it would clear it.
+    expect(setLineParams('cart.change_quantity', t, gateRow)).toEqual([t.tillSessionId, t.cartLineId, 3, 'P-OLD', 'V-OLD', '2', '250']);
     // A discount request states the discount and NOT a quantity.
-    expect(setLineParams('cart.request_discount', t, gateRow)).toEqual([t.tillSessionId, t.cartLineId, 3, 'P-OLD', 'V-OLD', null, '0']);
+    // And a discount request RESTATES the existing QUANTITY. Passing NULL
+    // would not "leave it alone": `pos_cart_set_line` refuses a NULL quantity
+    // outright, so the discount would fail — and if it did not, it would set
+    // the quantity to NULL. This is the trap the routine's shape sets.
+    expect(setLineParams('cart.request_discount', t, gateRow)).toEqual([t.tillSessionId, t.cartLineId, 3, 'P-OLD', 'V-OLD', '5', '0']);
   });
 
   it('the removal\u2019s three outcomes are DATA, so the ruling cannot be lost in a branch', () => {

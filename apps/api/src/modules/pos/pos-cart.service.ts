@@ -1,10 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import { Inject, Injectable } from '@nestjs/common';
 import { hasPermission } from '@daftar/domain-core';
+import { buildInventoryPayload, parseQuantity, type InventoryPayload } from '@daftar/inventory';
 import type { QueryResultRow } from 'pg';
 import { Database } from '../../infra/database';
 import type { Logger } from '../../infra/logger';
 import type { MembershipContext } from '../tenancy/tenancy.service';
+import { InventoryAuthorizationService } from '../inventory/inventory-authorization';
+import type { BusinessTransactionId } from '../inventory/business-transaction';
 import { minorToString, priceCart, roundingGrains, type PricedCart, type StoredCartLine } from './pos-cart-pricing';
 import { cartStatementPlan, setLineParams, CART_STATEMENTS_PER_COMMAND, type CartCommandTarget, type CartStatement } from './pos-cart-statements';
 import { posRefusal, type PosCode } from './pos-errors';
@@ -97,10 +100,20 @@ interface GateRow extends QueryResultRow {
   line_present: string;
   /** 1 when that row is already tombstoned — the half that makes the removal idempotent AND 404-able. */
   line_removed: string;
+  /** The SESSION's warehouse, for the authority check. Read per command, never cached. */
+  warehouse_id: string | null;
   /** The existing line's own ordinal and identities, for a REVISION's routine call. */
   line_no: number | null;
   product_id: string | null;
   variant_id: string | null;
+  /**
+   * The line's CURRENT quantity and discount request. `pos_cart_set_line`
+   * writes BOTH columns on every call, so revising one means RESTATING the
+   * other from the server's own copy — otherwise a discount request would set
+   * the quantity to NULL and a quantity change would clear a granted discount.
+   */
+  quantity: string | null;
+  requested_discount_minor: string | null;
 }
 
 interface ProjectionRow extends QueryResultRow {
@@ -140,39 +153,60 @@ export interface CartDto {
 export class PosCartService {
   constructor(
     @Inject(Database) private readonly db: Database,
+    @Inject(InventoryAuthorizationService) private readonly authorization: InventoryAuthorizationService,
     @Inject('LOGGER') private readonly logger: Logger,
   ) {}
 
   /** Add a line, or merge into the existing line for this variant. Requires `sales.create`. */
-  async addLine(m: MembershipContext, tillSessionId: string, input: { productId: string; variantId: string | null; quantity: string }): Promise<CartDto> {
-    return this.run(m, 'cart.add_line', {
-      ...this.base(m, tillSessionId),
-      // The server mints the line id. A client-supplied one would let a till
-      // name a row in another basket, and the cart has no idempotency contract
-      // the id could be the key of.
-      cartLineId: randomUUID(),
-      productId: input.productId,
-      variantId: input.variantId,
-      quantity: input.quantity,
-      discountMinor: null,
-    });
+  async addLine(
+    m: MembershipContext,
+    tillSessionId: string,
+    input: { productId: string; variantId: string | null; quantity: string },
+    btx: BusinessTransactionId,
+  ): Promise<CartDto> {
+    return this.run(
+      m,
+      'cart.add_line',
+      {
+        ...this.base(m, tillSessionId),
+        // The server mints the line id. A client-supplied one would let a till
+        // name a row in another basket, and the cart has no idempotency contract
+        // the id could be the key of.
+        cartLineId: randomUUID(),
+        productId: input.productId,
+        variantId: input.variantId,
+        quantity: input.quantity,
+        discountMinor: null,
+      },
+      btx,
+    );
   }
 
   /** Change one line's quantity. Requires `sales.create`. */
-  async changeQuantity(m: MembershipContext, tillSessionId: string, cartLineId: string, quantity: string): Promise<CartDto> {
-    return this.run(m, 'cart.change_quantity', { ...this.base(m, tillSessionId), cartLineId, productId: null, variantId: null, quantity, discountMinor: null });
+  async changeQuantity(m: MembershipContext, tillSessionId: string, cartLineId: string, quantity: string, btx: BusinessTransactionId): Promise<CartDto> {
+    return this.run(
+      m,
+      'cart.change_quantity',
+      { ...this.base(m, tillSessionId), cartLineId, productId: null, variantId: null, quantity, discountMinor: null },
+      btx,
+    );
   }
 
   /** Remove one line. Requires `sales.create`. */
-  async removeLine(m: MembershipContext, tillSessionId: string, cartLineId: string): Promise<CartDto> {
-    return this.run(m, 'cart.remove_line', {
-      ...this.base(m, tillSessionId),
-      cartLineId,
-      productId: null,
-      variantId: null,
-      quantity: null,
-      discountMinor: null,
-    });
+  async removeLine(m: MembershipContext, tillSessionId: string, cartLineId: string, btx: BusinessTransactionId): Promise<CartDto> {
+    return this.run(
+      m,
+      'cart.remove_line',
+      {
+        ...this.base(m, tillSessionId),
+        cartLineId,
+        productId: null,
+        variantId: null,
+        quantity: null,
+        discountMinor: null,
+      },
+      btx,
+    );
   }
 
   /**
@@ -189,16 +223,21 @@ export class PosCartService {
    * key, because setting a discount to zero changes the price the cashier
    * quoted just as surely as setting it to anything else.
    */
-  async requestDiscount(m: MembershipContext, tillSessionId: string, cartLineId: string, discountMinor: string): Promise<CartDto> {
+  async requestDiscount(m: MembershipContext, tillSessionId: string, cartLineId: string, discountMinor: string, btx: BusinessTransactionId): Promise<CartDto> {
     if (!hasPermission(m.roles, 'sales.discount')) throw posRefusal('pos.cart_discount_not_permitted');
-    return this.run(m, 'cart.request_discount', {
-      ...this.base(m, tillSessionId),
-      cartLineId,
-      productId: null,
-      variantId: null,
-      quantity: null,
-      discountMinor,
-    });
+    return this.run(
+      m,
+      'cart.request_discount',
+      {
+        ...this.base(m, tillSessionId),
+        cartLineId,
+        productId: null,
+        variantId: null,
+        quantity: null,
+        discountMinor,
+      },
+      btx,
+    );
   }
 
   /**
@@ -213,40 +252,97 @@ export class PosCartService {
   }
 
   /**
-   * One command: ONE transaction, the plan's three statements in order, then
-   * the server's arithmetic over what came back.
-   *
-   * The refusals are read off the GATE's own columns rather than from a second
-   * query: `session_usable = 0` is an unusable session, and `line_present`
-   * with `line_removed` are what let the removal be idempotent for a line
-   * already gone while still answering 404 for one that was never here.
+   * The op kind each command is authorized and minted under. `0079` registers
+   * four, and the cart's three write commands all go through ONE of them:
+   * `pos_cart_set_line` is keyed by the line id and revises what is there, so
+   * the add, the quantity change and the discount request are the same kind of
+   * authority over the same relation.
    */
-  private async run(m: MembershipContext, command: PosCartCommand, target: CartCommandTarget): Promise<CartDto> {
+  private static readonly OP_CODE: Readonly<Record<PosCartCommand, 'pos.cart_set_line' | 'pos.cart_remove_line'>> = Object.freeze({
+    'cart.add_line': 'pos.cart_set_line',
+    'cart.change_quantity': 'pos.cart_set_line',
+    'cart.request_discount': 'pos.cart_set_line',
+    'cart.remove_line': 'pos.cart_remove_line',
+  });
+
+  /**
+   * One command, in the order the protocol forces:
+   *
+   *   1. the GATE — one read, outside the write transaction, for the session
+   *      verdict, the session's warehouse, the next ordinal and what the
+   *      addressed line currently is;
+   *   2. `authorize` — `sales.create` and the SESSION's warehouse against the
+   *      actor's branch scope, refused before anything is minted;
+   *   3. `mint` — the `invctl/1` assertion over the exact payload the routine
+   *      will rebuild and re-digest;
+   *   4. the seam — `app.inventory_assertion` at `BEGIN`, then the routine and
+   *      the projection.
+   *
+   * The gate cannot move inside the seam and the mint cannot move before the
+   * gate: the assertion SIGNS `line_no`, `product_id`, `variant_id` and
+   * `qty_q4`, which are server facts about an existing basket. The order is
+   * the protocol's, not a preference.
+   *
+   * THREE statements per command — gate, routine, projection — and the
+   * assertion costs none of them, because it rides the seam's own scope
+   * statement at `BEGIN`.
+   */
+  private async run(m: MembershipContext, command: PosCartCommand, target: CartCommandTarget, btx: BusinessTransactionId): Promise<CartDto> {
     const plan = cartStatementPlan(command, target);
     this.assertPlanIsConstant(plan, command);
-    const projected = await this.db.withTransaction({ tenantId: m.tenantId, businessId: m.businessId, actorUserId: m.userId }, async (client) => {
-      const sql: CartSql = {
-        query: async <T extends QueryResultRow>(text: string, params: readonly unknown[]): Promise<readonly T[]> =>
-          (await client.query<T>(text, [...params])).rows,
-      };
-      return this.runPlan(sql, plan, command, target);
-    });
-    return this.recompute(target.tillSessionId, projected);
+    const [gateStatement] = plan;
+    if (gateStatement?.role !== 'gate') throw this.invariant('pos.cart_statement_plan_invalid');
+
+    // 1. THE GATE, in its own read transaction: the mint must follow it and
+    //    precede the seam, so it cannot share the write transaction.
+    const gateSql: CartSql = {
+      query: async <T extends QueryResultRow>(text: string, params: readonly unknown[]): Promise<readonly T[]> =>
+        this.db.withTransaction(
+          { tenantId: m.tenantId, businessId: m.businessId, actorUserId: m.userId },
+          async (client) => (await client.query<T>(text, [...params])).rows,
+        ),
+    };
+    const lines = await this.issuePlan(
+      m,
+      command,
+      target,
+      plan,
+      gateSql,
+      (assertion, run) =>
+        this.db.withBusinessInventoryTransaction(
+          { tenantId: m.tenantId, businessId: m.businessId, actorUserId: m.userId, businessTransactionId: btx },
+          assertion,
+          async (tx) =>
+            run({
+              query: async <T extends QueryResultRow>(text: string, params: readonly unknown[]): Promise<readonly T[]> =>
+                (await tx.query<T>(text, [...params])).rows,
+            }),
+        ),
+      btx,
+    );
+    return this.recompute(target.tillSessionId, lines);
   }
 
   /**
-   * Run exactly the plan: the gate, the routine, the projection. No statement
-   * is issued that the plan does not hold, and all three roles are checked
-   * rather than assumed — a plan whose shape drifted is a 500 and not a
-   * silently different operation.
+   * The whole of a cart command's behaviour, over two `CartSql` ports: the
+   * gate's and the seam's.
    *
-   * The routine is `0079`'s SECURITY DEFINER writer, because `daftar_app`
-   * holds SELECT and only SELECT on both POS relations: there is no direct
-   * INSERT, UPDATE or DELETE this service could issue even if it wanted to.
-   * The assertion that authorizes it is presented at `BEGIN` by the seam, so
-   * it costs no statement here.
+   * It is one function and not two halves because EVERY decision a cart
+   * command makes lives here — the session refusals, the removal's three-way
+   * outcome, the authority, the mint and the three statements in order — and
+   * splitting it would let a test measure a path production does not take.
+   * The integration suite passes ONE recording port for both, which is how
+   * the statement count is measured against exactly this code.
    */
-  async runPlan(sql: CartSql, plan: readonly CartStatement[], command: PosCartCommand, target: CartCommandTarget): Promise<readonly StoredCartLine[]> {
+  async issuePlan(
+    m: MembershipContext,
+    command: PosCartCommand,
+    target: CartCommandTarget,
+    plan: readonly CartStatement[],
+    gateSql: CartSql,
+    seam: (assertion: string, run: (sql: CartSql) => Promise<readonly ProjectionRow[]>) => Promise<readonly ProjectionRow[]>,
+    btx: BusinessTransactionId,
+  ): Promise<readonly StoredCartLine[]> {
     const [gateStatement, routine, projectionStatement] = plan;
     if (
       plan.length !== CART_STATEMENTS_PER_COMMAND ||
@@ -257,51 +353,50 @@ export class PosCartService {
       throw this.invariant('pos.cart_statement_plan_invalid');
     }
 
-    const [gateRow] = await sql.query<GateRow>(gateStatement.text, gateStatement.params);
+    // 1. THE GATE.
+    const [gateRow] = await gateSql.query<GateRow>(gateStatement.text, gateStatement.params);
     if (gateRow === undefined) throw this.invariant('pos.cart_statement_plan_invalid');
 
-    // WIDEST REFUSAL FIRST. The order is the law, not a style: answering
-    // `pos.session_not_owned` for a session in another business would confirm
-    // that a row exists there, which is the cross-tenant enumeration the
-    // estate refuses. Every code is the till-session surface's own, registered
-    // in the one canonical registry — a cart command invents no second
-    // vocabulary for a session fact, and in particular it does not adopt the
-    // `pos.till_session_*` spellings `0079` currently raises.
+    // The session refusals, widest first, before any authority is established:
+    // a cashier asking about another business's till learns only that it does
+    // not exist.
     if (Number(gateRow.session_visible) === 0) throw posRefusal('pos.session_not_found');
     if (Number(gateRow.session_open) === 0) throw posRefusal('pos.session_not_open');
     if (Number(gateRow.session_usable) === 0) throw posRefusal('pos.session_not_owned');
 
     const present = Number(gateRow.line_present) > 0;
     const alreadyRemoved = Number(gateRow.line_removed) > 0;
-
     if (command === 'cart.remove_line') {
-      // THE THREE-WAY REMOVAL (coordinator ruling). The tombstone is what
-      // makes E's idempotency and this module's 404 both survivable: without
-      // it, "already removed" and "never existed" are the same observation
-      // and one of the two behaviours would have had to be withdrawn.
+      // A line that was never in this session is a different event from one
+      // already removed, and the tombstone is what tells them apart.
       if (!present) throw posRefusal('pos.cart_line_not_found');
-      // Present, live or already tombstoned: issue the routine either way. It
-      // matches nothing when the line is already tombstoned, returns 0 and
-      // raises nothing — a till that taps "remove" twice has not done
-      // anything wrong — and the plan stays three statements in both cases,
-      // so the count does not depend on the outcome.
-      await sql.query(routine.text, routine.params);
-    } else if (command === 'cart.add_line') {
-      // The append: the gate's `next_line_no` is the ordinal, and the server
-      // states it. `max(line_no) + 1` over the whole basket, tombstones
-      // included, so a freed ordinal is never reused under a cashier.
-      await sql.query(routine.text, setLineParams(command, target, gateRow));
-    } else {
-      // A revision of a line that must already exist and must still be live.
-      // A tombstoned line is GONE as far as a quantity change or a discount
-      // request is concerned: reviving it by revision would make the removal
-      // undoable by a route that does not say so.
+    } else if (command !== 'cart.add_line') {
+      // A revision of a line that must exist AND still be live: reviving a
+      // tombstoned line by revising it would make the removal undoable
+      // through a route that does not say so.
       if (!present || alreadyRemoved) throw posRefusal('pos.cart_line_not_found');
-      await sql.query(routine.text, setLineParams(command, target, gateRow));
     }
 
-    const rows = await sql.query<ProjectionRow>(projectionStatement.text, projectionStatement.params);
-    return rows.map((r) => ({
+    // 2. AUTHORIZE, against the SESSION's warehouse.
+    if (gateRow.warehouse_id === null) throw this.invariant('pos.cart_statement_plan_invalid');
+    const authority = await this.authorization.authorize(m, PosCartService.OP_CODE[command], btx, [gateRow.warehouse_id]);
+
+    // 3. MINT over the exact payload the routine will rebuild.
+    const assertion = this.authorization.mint(authority, this.payload(m, command, target, gateRow));
+
+    // 4. THE SEAM. The assertion is presented at `BEGIN`; the routine consumes
+    //    it and re-digests the payload from its own arguments, so a mismatch
+    //    between what was signed and what is called is refused by the database
+    //    rather than by this service.
+    const projected = await seam(assertion, async (sql) => {
+      await sql.query(routine.text, routine.bindsFromGate === true ? setLineParams(command, target, gateRow) : routine.params);
+      return sql.query<ProjectionRow>(projectionStatement.text, projectionStatement.params);
+    });
+
+    // The stored lines, and NOT a priced cart: `recompute` is the one place a
+    // cart figure is produced, and keeping it outside this function is what
+    // lets the integration suite drive the arithmetic over exactly these rows.
+    return projected.map((r) => ({
       cartLineId: r.cart_line_id,
       productId: r.product_id,
       variantId: r.variant_id,
@@ -311,6 +406,39 @@ export class PosCartService {
       priceCurrency: r.price_currency,
       nameSnapshot: r.name_snapshot,
     }));
+  }
+
+  /**
+   * The payload the assertion signs, field for field as `0079`'s
+   * `inventory_claimed_payload_digest` rebuilds it.
+   *
+   * Every field is a SERVER fact. `line_no`, `product_id` and `variant_id`
+   * come from the gate on a revision and from the gate's next ordinal plus the
+   * command's identities on an append; `qty_q4` is the quantity × 10^4 as an
+   * exact integer, because the routine signs
+   * `inventory_fixed_text(p_quantity, 4)`. There is no price field of any
+   * kind — a forged total is not refused here, it is INEXPRESSIBLE.
+   */
+  private payload(m: MembershipContext, command: PosCartCommand, target: CartCommandTarget, gateRow: GateRow): InventoryPayload {
+    const opCode = PosCartService.OP_CODE[command];
+    if (opCode === 'pos.cart_remove_line') {
+      return buildInventoryPayload(opCode, m.tenantId, m.businessId, [
+        { kind: 'uuid', value: target.tillSessionId },
+        { kind: 'uuid', value: target.cartLineId ?? '' },
+      ]);
+    }
+    const [, , lineNo, productId, variantId, quantity, discountMinor] = setLineParams(command, target, gateRow);
+    return buildInventoryPayload(opCode, m.tenantId, m.businessId, [
+      { kind: 'uuid', value: target.tillSessionId },
+      { kind: 'uuid', value: target.cartLineId ?? '' },
+      { kind: 'integer', value: Number(lineNo) },
+      { kind: 'uuid', value: String(productId ?? '') },
+      { kind: 'uuid', value: String(variantId ?? '') },
+      // Q4: the quantity x 10^4 as an exact integer, because the routine
+      // signs `inventory_fixed_text(p_quantity, 4)`.
+      { kind: 'integer', value: parseQuantity(String(quantity ?? '0')) },
+      { kind: 'integer', value: BigInt(String(discountMinor ?? '0')) },
+    ]);
   }
 
   /**

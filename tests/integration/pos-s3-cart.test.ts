@@ -60,12 +60,14 @@ import {
   POS_CART_UNIQUE_COLUMNS,
   POS_CART_UNIQUE_IS_PARTIAL,
   POS_CART_UNIQUE_PREDICATE,
+  type CartStatement,
   setLineParams,
   cartStatementPlan,
   type CartCommandTarget,
 } from '../../apps/api/src/modules/pos/pos-cart-statements';
-import { roundingGrains, priceCart } from '../../apps/api/src/modules/pos/pos-cart-pricing';
+import { roundingGrains, priceCart, type StoredCartLine } from '../../apps/api/src/modules/pos/pos-cart-pricing';
 import { POS_CART_COMMANDS, type PosCartCommand } from '../../apps/api/src/modules/pos/pos-price-authority';
+import { newBusinessTransactionId } from '../../apps/api/src/modules/inventory/business-transaction';
 import { POS_CART_ROUTE_AUTHORITY, POS_CART_ROUTE_HANDLERS } from '../../apps/api/src/modules/pos/pos-cart-routes';
 import { PosCartService as PosCartServiceType } from '../../apps/api/src/modules/pos/pos-cart.service';
 import { ensurePostgres, ownerPool } from '../helpers/test-app';
@@ -106,8 +108,60 @@ const noDatabase = new Proxy(
   },
 ) as Database;
 
+/**
+ * A stand-in for the shared authority module: it establishes an authority and
+ * mints a token without a key or a connection.
+ *
+ * It is a stub because what this suite measures is the CART's behaviour — the
+ * statement count, the arithmetic, the refusals — and the authority module has
+ * its own suites for `sales.create`, the warehouse scope and the signing. What
+ * is NOT stubbed is the order: `issuePlan` calls `authorize` then `mint` then
+ * the seam, and §3 asserts the authority was established with the SESSION's
+ * warehouse rather than anything a body carried.
+ */
+const BTX = newBusinessTransactionId();
+
+const authorized: { opCode: string; warehouseIds: readonly string[]; payloadSha256: string }[] = [];
+
+const authorization = {
+  authorize: async (
+    _m: MembershipContext,
+    opCode: string,
+    _btx: unknown,
+    warehouseIds: readonly string[] = [],
+  ): Promise<{ opCode: string; warehouseIds: readonly string[] }> => {
+    authorized.push({ opCode, warehouseIds, payloadSha256: '' });
+    return { opCode, warehouseIds };
+  },
+  mint: (authority: { opCode: string }, payload: { opCode: string; sha256: string }): string => {
+    if (payload.opCode !== authority.opCode) throw new Error(`authority for ${authority.opCode} cannot sign ${payload.opCode}`);
+    const last = authorized[authorized.length - 1];
+    if (last !== undefined) last.payloadSha256 = payload.sha256;
+    return `invctl1.test.${payload.sha256.slice(0, 16)}`;
+  },
+} as unknown as ConstructorParameters<typeof PosCartService>[1];
+
 function service(): PosCartService {
-  return new PosCartService(noDatabase, logger);
+  return new PosCartService(noDatabase, authorization, logger);
+}
+
+/**
+ * Drive one command over ONE recording port for both the gate and the seam.
+ *
+ * Production passes two ports — the gate reads in its own transaction, the
+ * routine and the projection run inside the `invctl/1` seam — and this passes
+ * the same one twice, so every statement the real path issues is recorded in
+ * the real order. That is what makes the count a measurement of production
+ * rather than of a test-only path.
+ */
+async function runPlan(
+  sql: RecordingCartSql,
+  plan: readonly CartStatement[],
+  command: PosCartCommand,
+  t: CartCommandTarget,
+  m: MembershipContext = membership('sales.create', 'sales.discount'),
+): Promise<readonly StoredCartLine[]> {
+  return service().issuePlan(m, command, t, plan, sql, (_assertion, run) => run(sql), BTX);
 }
 
 function membership(...permissions: readonly Permission[]): MembershipContext {
@@ -123,6 +177,7 @@ function membership(...permissions: readonly Permission[]): MembershipContext {
 }
 
 const ACTOR = '66666666-6666-4666-8666-666666666666';
+const WAREHOUSE = '77777777-7777-4777-8777-777777777777';
 
 const target = (overrides: Partial<CartCommandTarget> = {}): CartCommandTarget => ({
   tenantId: TENANT,
@@ -156,9 +211,16 @@ const USABLE = {
   next_line_no: 4,
   line_present: '1',
   line_removed: '0',
+  warehouse_id: WAREHOUSE,
   line_no: 3,
   product_id: 'bbbbbbbb-0000-4000-8000-000000000001',
   variant_id: 'cccccccc-0000-4000-8000-000000000001',
+  // The line's CURRENT quantity and discount, which a revision must RESTATE.
+  quantity: '2',
+  requested_discount_minor: '0',
+  // The stated product's BASE variant, for an append that named none: `0079`
+  // declares `variant_id UUID NOT NULL`, so the server resolves it.
+  base_variant_id: 'cccccccc-0000-4000-8000-000000000001',
 };
 
 /** One row of the projection, as the statement's column names spell it. */
@@ -178,7 +240,7 @@ const projectionRow = (i: number, overrides: Record<string, unknown> = {}): Reco
  * A recording seam that answers the mutation with "one usable session, one row
  * written" and the projection with `lineCount` rows.
  *
- * The two statements are told apart by their ROLE in the plan rather than by
+ * The three statements are told apart by their ROLE in the plan rather than by
  * matching their text, so the discrimination does not depend on the SQL's
  * spelling and survives `0079` renaming a column.
  */
@@ -211,7 +273,7 @@ afterAll(async () => {
 
 // ═════════════════════════════════════════════════════════════════════════
 describe('§1 — the statement count is constant in the line count, MEASURED at the seam', () => {
-  it('one line and fifty lines issue exactly two statements, for every command', async () => {
+  it('one line and fifty lines issue exactly THREE statements, for every command', async () => {
     // The structural claim is asserted in the permanent guard suite. THIS is
     // the behavioural half: what the executor really sent. A per-operation
     // count, not a millisecond.
@@ -220,7 +282,7 @@ describe('§1 — the statement count is constant in the line count, MEASURED at
       const counts: number[] = [];
       for (const lineCount of [1, 50]) {
         const sql = seam(plan, lineCount);
-        const lines = await service().runPlan(sql, plan, command, target());
+        const lines = await runPlan(sql, plan, command, target());
         expect(lines, `${command} @ ${lineCount}`).toHaveLength(lineCount);
         counts.push(sql.issued.length);
       }
@@ -230,12 +292,12 @@ describe('§1 — the statement count is constant in the line count, MEASURED at
     }
   });
 
-  it('a 500-line cart still issues two statements — the count is flat, not merely equal at two points', async () => {
+  it('a 200-line cart still issues three statements — the count is flat, not merely equal at two points', async () => {
     const plan = cartStatementPlan('cart.add_line', target());
     const observed: number[] = [];
     for (const lineCount of [1, 2, 7, 50, 200]) {
       const sql = seam(plan, lineCount);
-      await service().runPlan(sql, plan, 'cart.add_line', target());
+      await runPlan(sql, plan, 'cart.add_line', target());
       observed.push(sql.issued.length);
     }
     expect(new Set(observed)).toEqual(new Set([CART_STATEMENTS_PER_COMMAND]));
@@ -244,7 +306,7 @@ describe('§1 — the statement count is constant in the line count, MEASURED at
   it('the executor issues EXACTLY the plan, in order — no statement the plan does not hold', async () => {
     const plan = cartStatementPlan('cart.change_quantity', target());
     const sql = seam(plan, 3);
-    await service().runPlan(sql, plan, 'cart.change_quantity', target());
+    await runPlan(sql, plan, 'cart.change_quantity', target());
     // The TEXTS are exactly the plan's, in the plan's order: no statement the
     // plan does not hold, and none of them reordered.
     expect(sql.issued.map((s) => s.text)).toEqual(plan.map((s) => s.text));
@@ -270,7 +332,7 @@ describe('§1 — the statement count is constant in the line count, MEASURED at
     // without that error IS the assertion; this case states it so the
     // mechanism is visible rather than incidental.
     const plan = cartStatementPlan('cart.remove_line', target());
-    await expect(service().runPlan(seam(plan, 4), plan, 'cart.remove_line', target())).resolves.toHaveLength(4);
+    await expect(runPlan(seam(plan, 4), plan, 'cart.remove_line', target())).resolves.toHaveLength(4);
     expect(() => (noDatabase as unknown as { withTransaction: unknown }).withTransaction).toThrow(/took a database connection/);
   });
 });
@@ -280,7 +342,7 @@ describe('§2 — the arithmetic: derived on the server, integer minor units, ON
   it('the cart a command answers with is RECOMPUTED, and its rounding has one grain at any size', async () => {
     for (const lineCount of [1, 50]) {
       const plan = cartStatementPlan('cart.add_line', target());
-      const lines = await service().runPlan(seam(plan, lineCount), plan, 'cart.add_line', target());
+      const lines = await runPlan(seam(plan, lineCount), plan, 'cart.add_line', target());
       const cart = service().recompute(TILL, lines, 'SAR');
       // 1999 x 2 = 3998 per line, exactly.
       expect(cart.lines).toHaveLength(lineCount);
@@ -311,7 +373,7 @@ describe('§2 — the arithmetic: derived on the server, integer minor units, ON
             projectionRow(2, { quantity: '0.5', unit_price_minor: '105' }),
           ],
     );
-    const cart = service().recompute(TILL, await service().runPlan(sql, plan, 'cart.add_line', target()), 'SAR');
+    const cart = service().recompute(TILL, await runPlan(sql, plan, 'cart.add_line', target()), 'SAR');
     expect(cart.lines.map((l) => l.grossMinor)).toEqual(['50', '52', '52']);
     expect(cart.subtotalMinor).toBe('154');
     expect(cart.totalMinor).toBe('154');
@@ -326,22 +388,88 @@ describe('§2 — the arithmetic: derived on the server, integer minor units, ON
         ? [USABLE]
         : [projectionRow(0, { quantity: '2.5000' }), projectionRow(1, { quantity: '0.0001' }), projectionRow(2, { quantity: '7' })],
     );
-    const cart = service().recompute(TILL, await service().runPlan(sql, plan, 'cart.add_line', target()), 'SAR');
+    const cart = service().recompute(TILL, await runPlan(sql, plan, 'cart.add_line', target()), 'SAR');
     expect(cart.lines.map((l) => l.quantity)).toEqual(['2.5', '0.0001', '7']);
   });
 
   it('a discount is applied to the DERIVED gross, and one minor unit past it is refused', async () => {
     const plan = cartStatementPlan('cart.request_discount', target({ discountMinor: '3998' }));
     const atTheGross = new RecordingCartSql((text) => (text === plan[0]?.text ? [USABLE] : [projectionRow(0, { discount_minor: '3998' })]));
-    expect(
-      service().recompute(TILL, await service().runPlan(atTheGross, plan, 'cart.request_discount', target({ discountMinor: '3998' })), 'SAR').totalMinor,
-    ).toBe('0');
+    expect(service().recompute(TILL, await runPlan(atTheGross, plan, 'cart.request_discount', target({ discountMinor: '3998' })), 'SAR').totalMinor).toBe('0');
 
     const pastIt = new RecordingCartSql((text) => (text === plan[0]?.text ? [USABLE] : [projectionRow(0, { discount_minor: '3999' })]));
     const refusal = await refusalOf(async () =>
-      service().recompute(TILL, await service().runPlan(pastIt, plan, 'cart.request_discount', target({ discountMinor: '3998' })), 'SAR'),
+      service().recompute(TILL, await runPlan(pastIt, plan, 'cart.request_discount', target({ discountMinor: '3998' })), 'SAR'),
     );
     expect(refusal).toMatchObject({ code: 'pos.cart_discount_invalid', status: 400 });
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════════
+describe('§2b — the minting side: the authority, the payload, and what is NOT in it', () => {
+  it('every cart command authorizes against the SESSION\u2019s warehouse, read per command', async () => {
+    // The coordinator's ruling, asserted. A cashier's branch scope can be
+    // narrowed in the middle of a shift, so a basket that kept accepting
+    // writes because the scope had been checked once at open would be
+    // authority outliving the decision that granted it. The warehouse comes
+    // from `pos_till_sessions`, in the gate, on EVERY command.
+    for (const command of POS_CART_COMMANDS) {
+      authorized.length = 0;
+      const plan = cartStatementPlan(command, target());
+      await runPlan(seam(plan, 2), plan, command, target());
+      expect(authorized, command).toHaveLength(1);
+      expect(authorized[0]?.warehouseIds, command).toEqual([WAREHOUSE]);
+    }
+  });
+
+  it('the three writing commands authorize under ONE op kind, and the removal under its own', async () => {
+    // `pos_cart_set_line` is keyed by the line id and revises what is there,
+    // so the add, the quantity change and the discount request are the same
+    // authority over the same relation. `0079` registers exactly four kinds
+    // and the cart uses two of them.
+    const seen: Record<string, string> = {};
+    for (const command of POS_CART_COMMANDS) {
+      authorized.length = 0;
+      const plan = cartStatementPlan(command, target());
+      await runPlan(seam(plan, 1), plan, command, target());
+      seen[command] = authorized[0]?.opCode ?? '';
+    }
+    expect(seen).toEqual({
+      'cart.add_line': 'pos.cart_set_line',
+      'cart.change_quantity': 'pos.cart_set_line',
+      'cart.request_discount': 'pos.cart_set_line',
+      'cart.remove_line': 'pos.cart_remove_line',
+    });
+  });
+
+  it('the signed payload carries NO price field, and a different request signs a different digest', async () => {
+    // The trust boundary, at the minting layer: there is no field a total, a
+    // unit price, a tax or a rate could travel in, so a forged figure is not
+    // refused here — it is INEXPRESSIBLE. The digest is asserted to MOVE with
+    // the quantity, so "no price field" is not being proved by a constant.
+    const digests = new Set<string>();
+    for (const quantity of ['1', '2', '3']) {
+      authorized.length = 0;
+      const t = target({ quantity });
+      const plan = cartStatementPlan('cart.add_line', t);
+      await runPlan(seam(plan, 1), plan, 'cart.add_line', t);
+      digests.add(authorized[0]?.payloadSha256 ?? '');
+    }
+    expect(digests.size).toBe(3);
+    for (const d of digests) expect(d).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it('the authority is established BEFORE the assertion is minted, and the mint matches its kind', async () => {
+    // `mint` refuses a payload whose op kind is not the authorized one, which
+    // is the estate's own guard against signing one command with another's
+    // authority. Asserted through the real ordering: the authority is pushed
+    // by `authorize` and the digest is attached by `mint`, so a digest present
+    // on the recorded authority proves the order.
+    authorized.length = 0;
+    const plan = cartStatementPlan('cart.remove_line', target());
+    await runPlan(seam(plan, 1), plan, 'cart.remove_line', target());
+    expect(authorized[0]?.opCode).toBe('pos.cart_remove_line');
+    expect(authorized[0]?.payloadSha256).toMatch(/^[0-9a-f]{64}$/);
   });
 });
 
@@ -362,7 +490,7 @@ describe('§3 — the refusals, by stable code and registered status', () => {
     for (const { counts, code, status } of cases) {
       const plan = cartStatementPlan('cart.add_line', target());
       const sql = new RecordingCartSql(() => [{ ...counts, written: '0' }]);
-      expect(await refusalOf(() => service().runPlan(sql, plan, 'cart.add_line', target())), code).toMatchObject({ code, status });
+      expect(await refusalOf(() => runPlan(sql, plan, 'cart.add_line', target())), code).toMatchObject({ code, status });
       // And the PROJECTION was never issued: a refused command does not go on
       // to read a basket it is not allowed to touch.
       expect(sql.issued, code).toHaveLength(1);
@@ -390,7 +518,7 @@ describe('§3 — the refusals, by stable code and registered status', () => {
     // `line_present: '0'` is the 404; `written` no longer exists, because the
     // gate reports what the line IS rather than what a mutation touched.
     const missing = new RecordingCartSql(() => [{ ...USABLE, line_present: '0', line_removed: '0', line_no: null, product_id: null, variant_id: null }]);
-    expect(await refusalOf(() => service().runPlan(missing, plan, 'cart.change_quantity', target()))).toMatchObject({
+    expect(await refusalOf(() => runPlan(missing, plan, 'cart.change_quantity', target()))).toMatchObject({
       code: 'pos.cart_line_not_found',
       status: 404,
     });
@@ -400,11 +528,11 @@ describe('§3 — the refusals, by stable code and registered status', () => {
   it('a discount without `sales.discount` is 403 `pos.cart_discount_not_permitted` — never silently zeroed', async () => {
     // P4-AL-35: SENSITIVE. The refusal is in the SERVICE because it depends on
     // the body and a decorator cannot see the body.
-    const refusal = await refusalOf(() => service().requestDiscount(membership('sales.create'), TILL, LINE, '500'));
+    const refusal = await refusalOf(() => service().requestDiscount(membership('sales.create'), TILL, LINE, '500', BTX));
     expect(refusal).toMatchObject({ code: 'pos.cart_discount_not_permitted', status: 403 });
     // A request of exactly ZERO needs the same key: setting a discount to zero
     // changes the price the cashier quoted just as surely as any other value.
-    expect(await refusalOf(() => service().requestDiscount(membership('sales.create'), TILL, LINE, '0'))).toMatchObject({
+    expect(await refusalOf(() => service().requestDiscount(membership('sales.create'), TILL, LINE, '0', BTX))).toMatchObject({
       code: 'pos.cart_discount_not_permitted',
       status: 403,
     });
@@ -416,19 +544,19 @@ describe('§3 — the refusals, by stable code and registered status', () => {
   it('an actor WITH `sales.discount` gets past the permission gate and reaches the seam', async () => {
     // The control for the case above: without it, a service that refused every
     // discount would look identical.
-    const refusal = await refusalOf(() => service().requestDiscount(membership('sales.create', 'sales.discount'), TILL, LINE, '500'));
+    const refusal = await refusalOf(() => service().requestDiscount(membership('sales.create', 'sales.discount'), TILL, LINE, '500', BTX));
     expect(refusal.code).toMatch(/took a database connection/);
   });
 
   it('an unpriced product is 422 and a mixed-currency basket is 422 — refused, never guessed', async () => {
     const plan = cartStatementPlan('cart.add_line', target());
     const unpriced = new RecordingCartSql((text) => (text === plan[0]?.text ? [USABLE] : [projectionRow(0, { unit_price_minor: null, price_currency: null })]));
-    expect(await refusalOf(async () => service().recompute(TILL, await service().runPlan(unpriced, plan, 'cart.add_line', target()), 'SAR'))).toMatchObject({
+    expect(await refusalOf(async () => service().recompute(TILL, await runPlan(unpriced, plan, 'cart.add_line', target()), 'SAR'))).toMatchObject({
       code: 'pos.cart_product_not_priced',
       status: 422,
     });
     const mixed = new RecordingCartSql((text) => (text === plan[0]?.text ? [USABLE] : [projectionRow(0), projectionRow(1, { price_currency: 'TRY' })]));
-    expect(await refusalOf(async () => service().recompute(TILL, await service().runPlan(mixed, plan, 'cart.add_line', target()), 'SAR'))).toMatchObject({
+    expect(await refusalOf(async () => service().recompute(TILL, await runPlan(mixed, plan, 'cart.add_line', target()), 'SAR'))).toMatchObject({
       code: 'pos.cart_currency_mixed',
       status: 422,
     });
@@ -437,7 +565,7 @@ describe('§3 — the refusals, by stable code and registered status', () => {
 
 // ═════════════════════════════════════════════════════════════════════════
 describe('§4 — a recognized internal invariant is a 500 with NO details', () => {
-  it('a statement plan that is not two statements is 500, logged by name, with nothing in the body', async () => {
+  it('a statement plan that is not three statements is 500, logged by name, with nothing in the body', async () => {
     // «Keep a recognized internal invariant at 500 with no details rather than
     // a merchant-facing 4xx»: a broken plan is a DEFECT and a merchant can do
     // nothing about it. 403 would say the cashier lacked authority; 409 would
@@ -447,7 +575,7 @@ describe('§4 — a recognized internal invariant is a 500 with NO details', () 
     const planted = [cartStatementPlan('cart.add_line', target())[0]] as never;
     let thrown: unknown;
     try {
-      await service().runPlan(new RecordingCartSql(() => []), planted, 'cart.add_line', target());
+      await runPlan(new RecordingCartSql(() => []), planted, 'cart.add_line', target());
     } catch (e) {
       thrown = e;
     }
@@ -468,7 +596,7 @@ describe('§4 — a recognized internal invariant is a 500 with NO details', () 
     const silent = new RecordingCartSql(() => []);
     let thrown: unknown;
     try {
-      await service().runPlan(silent, plan, 'cart.add_line', target());
+      await runPlan(silent, plan, 'cart.add_line', target());
     } catch (e) {
       thrown = e;
     }
@@ -622,7 +750,7 @@ describe('§6 — the surface this slice hands over, stated so it is enumerable'
   });
 
   it('every route names a method that exists on the service \u2014 the mount cannot call a handler that is not there', () => {
-    const service = new PosCartServiceType(noDatabase, logger);
+    const service = new PosCartServiceType(noDatabase, authorization, logger);
     for (const route of POS_CART_ROUTE_AUTHORITY) {
       const method = POS_CART_ROUTE_HANDLERS[route.command];
       expect(typeof (service as unknown as Record<string, unknown>)[method], `${route.command} \u2192 ${String(method)}`).toBe('function');
