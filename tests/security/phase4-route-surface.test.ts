@@ -184,11 +184,25 @@ function routesOf(name: string, cls: ControllerClass): DeclaredRoute[] {
  * `modules/pos` are both in the subject today, by derivation, and a Phase 4
  * route a later slice mounts from a third directory joins it by existing.
  *
- * A controller that declares a mix of Phase 4 and non-Phase-4 paths would make
- * the "no more" half of the equality unstateable — the probe loop would demand
- * 404 on verbs of a path this suite has no business judging — so a mixed
- * controller is reported as a finding rather than silently split. None exists
- * today, and the assertion is what notices if one appears.
+ * ── THE PREFIX DECIDES WHICH CONTROLLERS, NEVER WHICH OF THEIR ROUTES ───
+ *
+ * The filter selects CONTROLLERS. Once a controller is in the subject, ALL of
+ * its declared routes are, including any that fall outside
+ * `PHASE4_ROUTE_PREFIXES`. That is not laxity; it is what keeps this widening
+ * from being a narrowing, and it was measured rather than assumed:
+ * `InvoicesController` also declares `GET /v1/document-sequences`, which the
+ * old `modules/selling` derivation covered — it took every route of every
+ * controller in that directory, with no prefix filter anywhere. Keeping only
+ * the prefixed routes would have DROPPED that path from both halves of the
+ * equality while the suite reported green, which is the exact failure mode
+ * this file exists to refuse.
+ *
+ * Both halves stay well-formed under that rule. The declared half is "every
+ * route these controllers mount", and the "no more" half asks for 404 on the
+ * undeclared VERBS of those same paths — a question about a path a Phase 4
+ * controller itself owns, which this suite has every business judging. The
+ * separate `PROBE_BASES` half, which probes paths NO controller declares, is
+ * still driven by `PHASE4_ROUTE_PREFIXES` alone and is untouched by this.
  */
 async function phase4Controllers(): Promise<DiscoveredController[]> {
   const found: DiscoveredController[] = [];
@@ -198,16 +212,8 @@ async function phase4Controllers(): Promise<DiscoveredController[]> {
       if (typeof value !== 'function') continue;
       if (Reflect.getMetadata(PATH_METADATA, value) === undefined) continue;
       const routes = routesOf(name, value as ControllerClass);
-      const phase4 = routes.filter((r) => isPhase4Path(r.path));
-      if (phase4.length === 0) continue;
-      expect(
-        routes.length,
-        `${name} declares both Phase 4 and non-Phase-4 paths (${routes
-          .filter((r) => !isPhase4Path(r.path))
-          .map((r) => r.path)
-          .join(', ')}) — this suite's "no more" half cannot speak for the second kind`,
-      ).toBe(phase4.length);
-      found.push({ name, cls: value as ControllerClass, dir, routes: phase4 });
+      if (!routes.some((r) => isPhase4Path(r.path))) continue;
+      found.push({ name, cls: value as ControllerClass, dir, routes });
     }
   }
   return found.sort((a, b) => a.name.localeCompare(b.name));
@@ -301,7 +307,13 @@ describe('P4-AL-88: the declared Phase 4 surface is discovered, not listed', () 
       dirs.size,
       `every Phase 4 controller was found in one directory (${[...dirs].join(', ')}) — either the estate really has one, or this walk narrowed back to one`,
     ).toBeGreaterThan(1);
-    const prefixes = new Set((await declaredRoutes()).map((r) => PHASE4_ROUTE_PREFIXES.find((p) => r.path === p || r.path.startsWith(`${p}/`))));
+    // Only the Phase 4 PATHS carry a prefix to count. A subject controller's
+    // other routes (`GET /v1/document-sequences`) are part of the declared
+    // surface and deliberately match no prefix, so counting them would put one
+    // `undefined` in the set and inflate the figure this claim rests on.
+    const prefixes = new Set(
+      (await declaredRoutes()).filter((r) => isPhase4Path(r.path)).map((r) => PHASE4_ROUTE_PREFIXES.find((p) => r.path === p || r.path.startsWith(`${p}/`))),
+    );
     expect(prefixes.size, 'the declared surface covers one Phase 4 prefix only — a whole slice may be invisible to this derivation').toBeGreaterThan(1);
   });
 

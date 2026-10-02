@@ -433,14 +433,62 @@ describe('P4-S3 (A2) — the silently-ignored body: a REAL hole this slice found
     expect(refusalOf(() => assertRemovalStatesNothing('a string'))).toEqual({ code: 'pos.cart_field_unknown', status: 400 });
   });
 
-  it('P4-S3 creates NO `*.controller.ts` file anywhere in the POS module', () => {
-    // `discoverPhase4Routes` (`scripts/phase4-s1-gate.ts`) walks all of
-    // `apps/api/src/modules` for `.controller.ts` and extracts routes from the
-    // SOURCE TEXT; the G-02 golden asserts its own route list EQUAL to that
-    // discovery. So the mere EXISTENCE of the file turns a sealed P4-S1 golden
-    // red, mounted or not. The route table is data and the mount is the
-    // coordinator's, once, after `0079`.
-    expect(readdirSync(join(REPO, 'apps/api/src/modules/pos')).filter((f) => f.endsWith('.controller.ts'))).toEqual([]);
+  /**
+   * THE MOUNT IS THE TABLE, read out of the controller's own SOURCE TEXT.
+   *
+   * What stood here asserted that `modules/pos` contains no `*.controller.ts`
+   * at all, and the reason was real while it held: `discoverPhase4Routes`
+   * (`scripts/phase4-s1-gate.ts`) walks `apps/api/src/modules` for that suffix
+   * and reads routes from the source text, and the G-02 golden asserts its own
+   * route list EQUAL to that discovery — so the file's mere existence turned a
+   * sealed P4-S1 golden red. The condition was never "a POS controller is
+   * wrong"; it was "the transport, the goldens and the route surface land
+   * together, once". They have, so the claim inverts.
+   *
+   * The inverted claim is the stronger one, and it is the claim this
+   * PERMANENT suite actually owes: the four route rows it hands over are the
+   * four routes that are MOUNTED, neither more nor fewer. Both halves are
+   * derived — the table from the module, the mount from the controller's
+   * source — so a fifth route added to the controller is red, a row deleted
+   * from the table is red, and a path edited on either side is red. It is read
+   * as TEXT on purpose: that is what `discoverPhase4Routes` and the G-02
+   * golden see, so this guard and the sealed golden cannot disagree about what
+   * the mounted surface is.
+   */
+  it('the cart controller mounts exactly the four rows of `POS_CART_ROUTE_AUTHORITY`, and every one declares a body', () => {
+    const controllers = readdirSync(join(REPO, 'apps/api/src/modules/pos')).filter((f) => f.endsWith('.controller.ts'));
+    expect(controllers, 'the cart has no transport, so the route table hands over a surface nothing serves').toContain('pos-cart.controller.ts');
+
+    // The CODE, with every comment removed first. This file's own docblocks
+    // quote `@Body()` and the route decorators while explaining them, and a
+    // guard that counted prose would be measuring the documentation.
+    const source = readFileSync(join(REPO, 'apps/api/src/modules/pos/pos-cart.controller.ts'), 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/^[ \t]*\/\/.*$/gm, '');
+    const base = /@Controller\('([^']*)'\)/.exec(source)?.[1];
+    expect(base, 'the cart controller declares no `@Controller` path literal — `discoverPhase4Routes` reads this text').toBeDefined();
+
+    /** `base` + the verb decorator's own literal, Nest-normalised, exactly as the router composes it. */
+    const join2 = (suffix: string): string =>
+      `/${`${base as string}/${suffix}`
+        .split('/')
+        .filter((s) => s !== '')
+        .join('/')}`;
+    const mounted = [...source.matchAll(/@(Post|Patch|Delete|Get|Put)\((?:'([^']*)')?\)/g)]
+      .map((m) => `${(m[1] as string).toUpperCase()} ${join2(m[2] ?? '')}`)
+      .sort();
+
+    expect(mounted, 'the mounted cart routes and the handed-over route table disagree').toEqual(
+      POS_CART_ROUTE_AUTHORITY.map((r) => `${r.method} ${r.path}`).sort(),
+    );
+
+    // The other half of the `DELETE` fix: every handler presents a `@Body()`,
+    // so `@UsePipes` — which runs per PARAMETER — shows the authority scan the
+    // body on all four. A removal with no body parameter is how a forged
+    // `cartTotalMinor` once answered 200 with nothing changed and nothing said.
+    expect([...source.matchAll(/@Body\(\)/g)], 'a cart route declares no `@Body()`, so its price-authority scan never runs').toHaveLength(
+      POS_CART_ROUTE_AUTHORITY.length,
+    );
   });
 
   // ── RED PROOF (A2) ──────────────────────────────────────────────────
