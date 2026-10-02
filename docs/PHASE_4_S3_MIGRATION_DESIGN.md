@@ -643,9 +643,19 @@ finishing a run against the superseded file would have measured nothing. Agent B
 the brief forbids running a timing-budget suite beside another heavy run. The authoritative round is
 round 3.
 
-### Round 3 — the tree with the counted cash figures
+### Round 3 — the tree with the counted cash figures, exit **0**
 
-Recorded in the hand-back report with its real exit code.
+`287` files, `4981` assertions, `2470 s`. **No failing file and no failing assertion.**
+
+`TL-P4-S1-C18`'s floor-not-total rule is satisfied in the only way it can be: a round that finds
+nothing is the terminating condition, and this round was run against the final committed tree
+(`0079` at `8f80b63e…`, commit `096af06`) with no file mutated while it was in flight.
+
+Round 3 ran with agent B's suite live in another worktree for part of its duration, which is slower
+but not unsound — no suite in this estate is timing-budgeted (`tests/performance` is not in the
+`tests/integration tests/security tests/guards` set the brief names), so contention costs minutes
+rather than verdicts. Had any timing-sensitive assertion failed it would have been re-checked alone
+before being reported; none did.
 
 ### The `ORDER BY 1` defect this slice found in its own assertion
 
