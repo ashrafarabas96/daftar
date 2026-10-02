@@ -1,13 +1,13 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { AppError } from '@daftar/domain-core';
-import { z } from 'zod';
 import type { LocaleCode, PosMatchKindDto, PosProductHitDto, PosProductSearchDto } from '@daftar/shared-contracts';
 import type { QueryResultRow } from 'pg';
 import { Database } from '../../infra/database';
 import type { MembershipContext } from '../tenancy/tenancy.service';
-import { inventoryRefusal } from '../inventory/inventory-errors';
 import { productNameSql, variantNameSql } from '../inventory/inventory-reads';
-import { assertWarehouseReachable, likeEscaped, quantityText, reachableWarehouses, requireAnyPermission, searchQueryParam } from '../inventory/read-scope';
+import { quantityText, reachableWarehouses, requireAnyPermission } from '../inventory/read-scope';
+import { sellingRefusal } from '../selling/selling-errors';
+import { POS_SEARCH_DEFAULT_LIMIT, type PosProductSearchQuery } from './pos-read.schemas';
 
 /**
  * THE POS READ SURFACE — P4-S3. One read: the product type-ahead.
@@ -46,27 +46,52 @@ import { assertWarehouseReachable, likeEscaped, quantityText, reachableWarehouse
  * `… IS NOT NULL` — not as belt and braces but because dropping either makes
  * the index unusable and the arm a sequential scan.
  *
- * ── A measured dependency, stated rather than assumed ───────────────────
+ * ── `^@` and not `LIKE`, and the RLS fact that decided it ───────────────
  *
- * `lower(x) LIKE $n || '%'` becomes an index RANGE
- * (`lower(x) >= 'p' AND lower(x) < 'q'`) only in a CUSTOM plan, where the
- * parameter has been folded to a constant. Measured on this estate's cluster
- * (PostgreSQL 18.4, `datcollate = C`): a custom plan gives
- * `Index Cond: (business_id = … AND lower(name) >= 'item a' AND lower(name) <
- * 'item b')`; the same statement under `plan_cache_mode =
- * force_generic_plan` gives `Index Cond: (business_id = $1)` with the LIKE
- * demoted to a `Filter` — the whole business scanned.
+ * The arms use `x ^@ $n` (`starts_with`) rather than `x LIKE $n || '%'`, and
+ * that is a MEASURED choice, not a stylistic one. Measured on this estate's
+ * cluster (PostgreSQL 18.4, `datcollate = C`), the same statement as the two
+ * principals that matter:
  *
- * Two facts make the custom plan the one that runs: `Database.scoped` issues
- * `client.query(text, params)` with no statement `name`, so node-postgres
- * never creates a server-side prepared statement and PostgreSQL custom-plans
- * every execution; and the cluster collates `C`, which is what lets the
- * prefix become a range at all. Neither is a thing to take on trust, so
- * `tests/performance/pos-s3-budgets.test.ts` asserts the index reach of every
- * arm from the EXPLAIN of the statement this module actually ran. If a later
- * change introduces server-side prepare, or a deployment initialises its
- * cluster with a linguistic collation, that assertion goes red here rather
- * than becoming a slow POS in production.
+ *   | predicate                      | as the owner | as `daftar_app` |
+ *   |--------------------------------|--------------|-----------------|
+ *   | `barcode LIKE $p \|\| '%'`     | index RANGE  | **no range**    |
+ *   | `barcode ^@ $p`                | index RANGE  | **index RANGE** |
+ *   | `lower(sku) ^@ $p`             | index RANGE  | **no range**    |
+ *   | `lower(name) ^@ $p`            | index RANGE  | **no range**    |
+ *
+ * The owner bypasses row security; `daftar_app` does not. Under RLS these
+ * relations carry a PERMISSIVE `tenant_membership` policy whose qual is a
+ * SUBQUERY (`EXISTS (SELECT 1 FROM businesses …)`), which makes the scan a
+ * security barrier — and a user qual may only be pushed below a security
+ * barrier if it is LEAKPROOF. In `pg_proc` on this cluster: `uuid_eq` true,
+ * `text_ge` true, `text_lt` true, `starts_with` true — and `textlike`
+ * **false**, `like_escape` **false**, `lower` **false**.
+ *
+ * So: `LIKE` can never be an index condition here, which is why the barcode
+ * arms use `^@` and get a real range on `products_barcode_uq` /
+ * `variants_barcode_uq` — the scanner path, which is the one that matters most
+ * at a till. And the SKU and NAME arms cannot be ranged by ANY predicate,
+ * because the index expression is `lower(...)` and `lower` is not leakproof:
+ * they reach their index for `business_id` and filter the prefix above the
+ * barrier.
+ *
+ * `[[daftar-rls-policy-shape-is-a-cost]]`, measured rather than assumed. The
+ * remedy is NOT another index — the five indexes are the right five. It is a
+ * schema-level change (a normalized `*_norm` column with a plain btree, which
+ * needs a `P4-AL-06` ruling on whether a normalized copy is stored derived
+ * truth; or marking the comparison leakproof, which is a security decision).
+ * Both are a migration, and a migration belongs to exactly one agent, so this
+ * module MEASURES the fact and REPORTS it instead of acting on it.
+ * `tests/performance/pos-s3-budgets.test.ts` holds both halves: the barcode
+ * arms' range is a GATE, and the `lower` leakproofness fact is asserted by
+ * name, so the day it changes the suite says the SKU and name arms can now be
+ * ranged too.
+ *
+ * `^@` also removes the need to escape the prefix. A typed `%` or `_` — and a
+ * scanner can send either — is a LITERAL character in a prefix; under `LIKE`
+ * it is a wildcard that has to be escaped, and an escape that is ever
+ * forgotten is a search that silently matches the wrong product.
  *
  * ── No page two, and why that is the design and not a gap ───────────────
  *
@@ -107,37 +132,41 @@ import { assertWarehouseReachable, likeEscaped, quantityText, reachableWarehouse
  * by stripping them on a real `daftar_app` connection and finding zero rows.
  */
 
-/** The cap P4-A measures at, and the ceiling the route accepts. */
-const MAX_LIMIT = 50;
-const DEFAULT_LIMIT = 20;
-const NIL_UUID = '00000000-0000-0000-0000-000000000000';
-const CANONICAL_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-
-const uuid = z.string().regex(CANONICAL_UUID, 'a canonical lowercase uuid');
-const limit = z
-  .string()
-  .regex(/^\d{1,2}$/, `a limit is 1..${MAX_LIMIT}`)
-  .transform((s) => Number.parseInt(s, 10))
-  .pipe(z.number().int().min(1).max(MAX_LIMIT));
-
 /**
- * `GET /v1/pos/products` — the till's warehouse and the typed prefix.
+ * THE ROUTE THIS SERVICE ANSWERS, stated here and MOUNTED ELSEWHERE.
  *
- * `q` reuses `searchQueryParam`, which trims, bounds the length and refuses a
- * NUL (PostgreSQL rejects NUL in text with SQLSTATE 22021, which would
- * otherwise surface as a 500 — P3-S7 review finding L-2). It is REQUIRED: a
- * type-ahead with no prefix is "list the whole catalogue", which is the stock
- * page's job and not this one's.
+ * P4-S3 deliberately contains no `*.controller.ts` of its own, and that is a
+ * structural requirement rather than a convenience.
+ * `discoverPhase4Routes` (`scripts/phase4-s1-gate.ts`) walks all of
+ * `apps/api/src/modules` for `*.controller.ts`, extracts route paths from the
+ * SOURCE TEXT and keeps everything under `PHASE4_ROUTE_PREFIXES` — which
+ * includes `/v1/pos`. The sealed G-02 golden
+ * (`tests/golden-regression/phase4/01-cross-tenant.golden.test.ts`) asserts its
+ * own route list EQUAL to that discovery, and
+ * `tests/security/phase4-route-surface.test.ts` derives the declared Phase 4
+ * surface from `modules/selling` alone while requiring every `/v1/pos` verb to
+ * answer 404. So a controller file's MERE EXISTENCE — mounted or not — turns a
+ * sealed P4-S1 golden red.
+ *
+ * The transport therefore lands once, from the slice coordinator, together
+ * with the two golden updates and after migration `0079`. What this module
+ * owns is the read, its authority, its refusals and its laws; what it hands
+ * over is this table.
+ *
+ * The permission is `sales.view`, matching `pos-permissions.ts`'s
+ * classification of every POS read: ORDINARY (`P4-AL-37`), held by the
+ * built-in cashier by default (`permissions.ts`), and NOT `inventory.view` —
+ * the cashier holds no inventory key at all, so gating the till's own search
+ * on one would lock the cashier out of the till.
  */
-export const PosProductSearchQuerySchema = z
-  .object({
-    warehouseId: uuid,
-    q: searchQueryParam,
-    limit: limit.optional(),
-  })
-  .strict();
+const NIL_UUID = '00000000-0000-0000-0000-000000000000';
 
-export type PosProductSearchQuery = z.infer<typeof PosProductSearchQuerySchema>;
+export const POS_READ_ROUTE_AUTHORITY: readonly {
+  readonly method: 'GET';
+  readonly path: string;
+  readonly permission: 'sales.view';
+  readonly sensitive: false;
+}[] = Object.freeze([Object.freeze({ method: 'GET' as const, path: '/v1/pos/products', permission: 'sales.view' as const, sensitive: false as const })]);
 
 interface HitRow extends QueryResultRow {
   product_id: string;
@@ -178,25 +207,25 @@ const MATCH_KIND: readonly PosMatchKindDto[] = ['barcode', 'sku', 'name'];
 const ARMS = `
   (SELECT v.product_id, v.id AS variant_id, 0 AS match_rank
      FROM product_variants v
-    WHERE v.business_id = $1 AND v.barcode IS NOT NULL AND v.status <> 'archived' AND v.barcode LIKE $3 || '%' ESCAPE '\\'
+    WHERE v.business_id = $1 AND v.barcode IS NOT NULL AND v.status <> 'archived' AND v.barcode ^@ $3
     ORDER BY v.barcode
     LIMIT $4)
   UNION ALL
   (SELECT p.id AS product_id, NULL::uuid AS variant_id, 0 AS match_rank
      FROM products p
-    WHERE p.business_id = $1 AND p.barcode IS NOT NULL AND p.status <> 'archived' AND p.barcode LIKE $3 || '%' ESCAPE '\\'
+    WHERE p.business_id = $1 AND p.barcode IS NOT NULL AND p.status <> 'archived' AND p.barcode ^@ $3
     ORDER BY p.barcode
     LIMIT $4)
   UNION ALL
   (SELECT v.product_id, v.id AS variant_id, 1 AS match_rank
      FROM product_variants v
-    WHERE v.business_id = $1 AND v.sku IS NOT NULL AND v.status <> 'archived' AND lower(v.sku) LIKE $2 || '%' ESCAPE '\\'
+    WHERE v.business_id = $1 AND v.sku IS NOT NULL AND v.status <> 'archived' AND lower(v.sku) ^@ $2
     ORDER BY lower(v.sku)
     LIMIT $4)
   UNION ALL
   (SELECT p.id AS product_id, NULL::uuid AS variant_id, 1 AS match_rank
      FROM products p
-    WHERE p.business_id = $1 AND p.sku IS NOT NULL AND p.status <> 'archived' AND lower(p.sku) LIKE $2 || '%' ESCAPE '\\'
+    WHERE p.business_id = $1 AND p.sku IS NOT NULL AND p.status <> 'archived' AND lower(p.sku) ^@ $2
     ORDER BY lower(p.sku)
     LIMIT $4)
   UNION ALL
@@ -207,7 +236,7 @@ const ARMS = `
   -- row, and the LIMIT still stops the index walk early.
   (SELECT t.product_id, NULL::uuid AS variant_id, 2 AS match_rank
      FROM product_translations t
-    WHERE t.business_id = $1 AND lower(t.name) LIKE $2 || '%' ESCAPE '\\'
+    WHERE t.business_id = $1 AND lower(t.name) ^@ $2
       AND EXISTS (SELECT 1 FROM products ap WHERE ap.business_id = t.business_id AND ap.id = t.product_id AND ap.status = 'active')
     ORDER BY lower(t.name)
     LIMIT $4)`;
@@ -223,7 +252,8 @@ export class PosReadService {
   /**
    * The POS product type-ahead.
    *
-   * Permission: any of `sales.create` or `sales.view`. Deliberately NOT
+   * Permission: `sales.view`, the key `pos-permissions.ts` gives every POS
+   * read. Deliberately NOT
    * `inventory.view` — the built-in cashier role holds `catalog.view`,
    * `sales.view`, `sales.create`, `customers.view` and `payments.collect` and
    * no inventory key at all (`permissions.ts:214`), so gating the POS search
@@ -234,15 +264,18 @@ export class PosReadService {
    *
    * Scope: the till names its warehouse, and the P3 read rule applies
    * unchanged — an assigned-scope member who names a warehouse they do not
-   * reach is REFUSED (`inventory.warehouse_out_of_scope`), never answered with
-   * an empty page. An empty page would read as "nothing in stock", which is a
-   * different and wrong answer.
+   * reach is REFUSED (`pos.warehouse_out_of_scope`, 403), and a warehouse this
+   * transaction cannot see at all is REFUSED too (`pos.warehouse_not_found`,
+   * 404) — never answered with an empty page. An empty page would read as
+   * "nothing in stock", which is a different and wrong answer, and a cashier
+   * acting on it refuses a sale of stock that is on the shelf.
    */
   async searchProducts(m: MembershipContext, q: PosProductSearchQuery, locale: LocaleCode): Promise<PosProductSearchDto> {
-    requireAnyPermission(m, ['sales.create', 'sales.view']);
-    assertWarehouseReachable(await reachableWarehouses(this.db, m), q.warehouseId);
+    requireAnyPermission(m, ['sales.view']);
+    const reachable = await reachableWarehouses(this.db, m);
+    if (reachable !== null && !reachable.has(q.warehouseId)) throw sellingRefusal('pos.warehouse_out_of_scope');
 
-    const size = q.limit ?? DEFAULT_LIMIT;
+    const size = q.limit ?? POS_SEARCH_DEFAULT_LIMIT;
     const prefix = q.q.toLowerCase();
 
     /**
@@ -273,7 +306,7 @@ export class PosReadService {
     );
     const row = facts.rows[0];
     if (row === undefined) throw AppError.forbidden('The business does not exist');
-    if (!row.warehouse_exists) throw inventoryRefusal('inventory.warehouse_not_found');
+    if (!row.warehouse_exists) throw sellingRefusal('pos.warehouse_not_found');
     const currency = row.base_currency;
 
     const found = await this.db.scoped<HitRow>(
@@ -317,7 +350,7 @@ export class PosReadService {
                  CASE WHEN v.is_base THEN '' ELSE ${variantNameSql('v')} END,
                  CASE WHEN v.is_base THEN '${NIL_UUID}'::uuid ELSE v.id END
         LIMIT $7`,
-      [m.businessId, likeEscaped(prefix), likeEscaped(q.q), size + 1, locale, q.warehouseId, size + 1],
+      [m.businessId, prefix, q.q, size + 1, locale, q.warehouseId, size + 1],
     );
 
     const page = found.rows.slice(0, size);

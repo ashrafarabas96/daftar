@@ -56,12 +56,14 @@
  * Run with `PG_PORT=55140 PG_DIR=/tmp/daftar-pg-c`, as every P4-S3 suite of
  * this agent does.
  */
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { Client } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { PosProductHitDto, PosProductSearchDto } from '@daftar/shared-contracts';
-import { appDbUrl, createTestApp, ensurePostgres, ownerPool, resetData, type TestApp } from '../helpers/test-app';
+import { appDbUrl, ensurePostgres, ownerPool, resetData, type TestApp } from '../helpers/test-app';
+import { POS_READ_TEST_ROUTE, createPosReadTestApp } from '../helpers/pos-s3-route';
+import { POS_READ_ROUTE_AUTHORITY } from '../../apps/api/src/modules/pos/pos-reads';
 import { asMember, must, onboardS3Business, registerActor, type HttpActor, type S3Business } from '../helpers/inventory-commands';
 import { addMerchantVariant, configureRaw, createProduct, setScope } from '../helpers/stock-ledger';
 import { addMember, httpAdjust, nameProduct, nameVariant, readAs } from '../helpers/merchant-reads';
@@ -141,8 +143,13 @@ function searchPath(warehouseId: string, q: string, limit?: number): string {
   return `/v1/pos/products?warehouseId=${warehouseId}&q=${encodeURIComponent(q)}${limit === undefined ? '' : `&limit=${limit}`}`;
 }
 
-const search = (by: HttpActor, biz: { businessId: string }, warehouseId: string, q: string, opts: { limit?: number; locale?: string } = {}): Promise<SearchResult> =>
-  paced(by, biz.businessId, searchPath(warehouseId, q, opts.limit), opts.locale);
+const search = (
+  by: HttpActor,
+  biz: { businessId: string },
+  warehouseId: string,
+  q: string,
+  opts: { limit?: number; locale?: string } = {},
+): Promise<SearchResult> => paced(by, biz.businessId, searchPath(warehouseId, q, opts.limit), opts.locale);
 
 async function hits(q: string, opts: { limit?: number; locale?: string } = {}): Promise<PosProductHitDto[]> {
   const r = await search(owner, A, A.w1, q, opts);
@@ -164,7 +171,7 @@ async function twinCatalogue(by: HttpActor, s: S3Business, name: string): Promis
 beforeAll(async () => {
   await ensurePostgres();
   await resetData();
-  t = await createTestApp();
+  t = await createPosReadTestApp();
   owner = await registerActor(t, 'POS S3 owner');
   A = await onboardS3Business(t, owner, 'poss3a');
   A2 = await onboardS3Business(t, owner, 'poss3a2', A.tenantId);
@@ -183,10 +190,7 @@ beforeAll(async () => {
     .send({ key: 'stockclerk', name: 'Stock clerk', permissions: ['catalog.view', 'inventory.view'] });
   expect(role.status, JSON.stringify(role.body)).toBe(201);
   clerk = await registerActor(t, 'POS S3 clerk');
-  const add = await t.request
-    .post('/v1/businesses/current/members')
-    .set(asMember(owner, A.businessId))
-    .send({ email: clerk.email, roleKey: 'stockclerk' });
+  const add = await t.request.post('/v1/businesses/current/members').set(asMember(owner, A.businessId)).send({ email: clerk.email, roleKey: 'stockclerk' });
   expect(add.status, JSON.stringify(add.body)).toBe(201);
 
   // ── A's catalogue ────────────────────────────────────────────────────
@@ -377,13 +381,13 @@ describe('isolation — by RLS, and proved on a real connection', () => {
   it('A’s warehouse id in A2’s context is REFUSED, not answered from A2 with a zero on hand', async () => {
     const r = await search(owner, A2, A.w1, SHARED.barcode);
     expect(r.status).toBe(404);
-    expect(r.body.error?.details?.['inventoryCode']).toBe('inventory.warehouse_not_found');
+    expect(r.body.error?.details?.['sellingCode']).toBe('pos.warehouse_not_found');
   });
 
   it('a warehouse that exists nowhere is refused the same way', async () => {
     const r = await search(owner, A, '11111111-2222-3333-4444-555555555555', SHARED.barcode);
     expect(r.status).toBe(404);
-    expect(r.body.error?.details?.['inventoryCode']).toBe('inventory.warehouse_not_found');
+    expect(r.body.error?.details?.['sellingCode']).toBe('pos.warehouse_not_found');
   });
 
   /**
@@ -460,7 +464,7 @@ describe('refusals', () => {
   it('a warehouse the member does not reach is REFUSED, never answered with an empty page', async () => {
     const outOfScope = await search(manager, A, A.w1, SHARED.barcode);
     expect(outOfScope.status).toBe(403);
-    expect(outOfScope.body.error?.details?.['inventoryCode']).toBe('inventory.warehouse_out_of_scope');
+    expect(outOfScope.body.error?.details?.['sellingCode']).toBe('pos.warehouse_out_of_scope');
     const inScope = await search(manager, A, A.w2, SHARED.barcode);
     expect(inScope.status, 'the warehouse it does reach answers normally').toBe(200);
   });
@@ -482,6 +486,31 @@ describe('refusals', () => {
   });
 });
 
+describe('the declared route, and the transport that is deliberately absent', () => {
+  /**
+   * The harness and the module must name ONE route. If the coordinator mounts
+   * a different path, verb or permission than `POS_READ_ROUTE_AUTHORITY`
+   * declares, this is where the two stop agreeing.
+   */
+  it('the module declares exactly one POS read route, and this suite exercises that one', () => {
+    expect(POS_READ_ROUTE_AUTHORITY).toEqual([{ method: 'GET', path: '/v1/pos/products', permission: 'sales.view', sensitive: false }]);
+    expect(POS_READ_TEST_ROUTE).toEqual(POS_READ_ROUTE_AUTHORITY[0]);
+  });
+
+  /**
+   * P4-S3 contains no `*.controller.ts`, and this case is why that holds
+   * rather than why it was once true: `discoverPhase4Routes` walks
+   * `apps/api/src/modules` for `*.controller.ts` and the sealed G-02 golden
+   * asserts its route list EQUAL to that discovery, so a controller file's
+   * mere existence turns a sealed P4-S1 golden red. The transport lands once,
+   * from the coordinator, with both golden updates.
+   */
+  it('no controller file exists under modules/pos — a sealed P4-S1 golden depends on that', () => {
+    const dir = join(__dirname, '../../apps/api/src/modules/pos');
+    expect(readdirSync(dir).filter((f) => f.endsWith('.controller.ts'))).toEqual([]);
+  });
+});
+
 describe('pacing, never raising (P4-AL-69)', () => {
   it('the API’s route allowance is still 300 a minute — a test paces, and never moves a limiter', () => {
     const runtime = readFileSync(join(__dirname, '../../apps/api/src/app/runtime.ts'), 'utf8');
@@ -497,7 +526,10 @@ describe('pacing, never raising (P4-AL-69)', () => {
       statuses.push((await search(owner, A, A.w1, q)).status);
     }
     console.info('[P4-S3] pacing', JSON.stringify({ keystrokes: KEYSTROKES, pacedRequests, pacerWaitedMs }));
-    expect(statuses.filter((s) => s === 429), 'a 429 is a reported error, never a reason to raise the limiter').toEqual([]);
+    expect(
+      statuses.filter((s) => s === 429),
+      'a 429 is a reported error, never a reason to raise the limiter',
+    ).toEqual([]);
     expect(new Set(statuses)).toEqual(new Set([200]));
   }, 600_000);
 });
@@ -520,8 +552,6 @@ describe('the read writes nothing', () => {
       expect((await search(owner, A, A.w1, i % 2 === 0 ? 'pos' : 'appl')).status).toBe(200);
     }
     expect(await digest()).toBe(before);
-    expect(pacedRequests, 'this file drives more type-aheads than the API allows in a minute, so the pacing is load-bearing').toBeGreaterThan(
-      API_ROUTE_LIMIT,
-    );
+    expect(pacedRequests, 'this file drives more type-aheads than the API allows in a minute, so the pacing is load-bearing').toBeGreaterThan(API_ROUTE_LIMIT);
   }, 600_000);
 });

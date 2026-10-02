@@ -202,6 +202,32 @@ const SELLING_STATUS = {
   'pos.closing_count_invalid': 400,
   /** A till does not close over an unfinished basket: the cart is cleared or committed first. */
   'pos.session_cart_not_empty': 409,
+
+  // ── The POS READS (P4-S3): the till's own scope refusals ────────────────
+  //
+  // The POS product type-ahead names the warehouse the till sells from, and
+  // the two ways that can be wrong are different answers that must not be
+  // collapsed into one — and neither may be answered with an EMPTY PAGE. A
+  // type-ahead that returned no rows for a warehouse the cashier may not use
+  // reads as "the shop is empty", and a cashier acting on it refuses a sale of
+  // stock that is on the shelf. So:
+  //
+  //   - `pos.warehouse_out_of_scope` (403): the warehouse EXISTS in this
+  //     business and the actor's `member_branch_scopes` do not reach it. This
+  //     is the P3-S7 `inventory.warehouse_out_of_scope` rule in POS
+  //     vocabulary, and the 403/404 split is kept rather than collapsed the
+  //     way `pos.branch_not_found` collapses it: both parties here are inside
+  //     ONE business, so telling a member of that business that a warehouse of
+  //     theirs is outside their branch scope crosses no trust boundary, and
+  //     the distinction is what lets the screen say "ask for access" instead
+  //     of "that does not exist";
+  //   - `pos.warehouse_not_found` (404): no such warehouse is visible to this
+  //     transaction at all. Another business's warehouse id lands here, and
+  //     must: it is filtered out by the RLS policies before the service sees
+  //     it, so the service cannot tell it from one that never existed and must
+  //     not be able to.
+  'pos.warehouse_out_of_scope': 403,
+  'pos.warehouse_not_found': 404,
 } as const satisfies Readonly<Record<`${'customer' | 'invoice' | 'pos' | 'sale'}.${string}`, 400 | 403 | 404 | 409 | 422 | 500>>;
 
 /** A classified selling refusal code. */

@@ -92,9 +92,11 @@
 import { cpus, loadavg, totalmem } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import { createTestApp, ensurePostgres, ownerPool, resetData, type TestApp } from '../helpers/test-app';
+import type { PoolClient } from 'pg';
+import { ensurePostgres, ownerPool, resetData, type TestApp } from '../helpers/test-app';
+import { createPosReadTestApp } from '../helpers/pos-s3-route';
 import { must, onboardS3Business, registerActor, type HttpActor, type S3Business } from '../helpers/inventory-commands';
-import { addWarehouse } from '../helpers/stock-ledger';
+import { INTERNAL, addWarehouse, setScope } from '../helpers/stock-ledger';
 import { readAs } from '../helpers/merchant-reads';
 import { Database, type Scope } from '../../apps/api/src/infra/database';
 
@@ -176,14 +178,76 @@ async function seed(): Promise<void> {
   const pool = ownerPool();
   warehouses = [A.w1, A.w2, await addWarehouse(pool, A.businessId, A.branchX, 'POS W3')];
 
+  const c = await pool.connect();
+  try {
+    await c.query('BEGIN');
+    await setScope(c, { tenantId: A.tenantId, businessId: A.businessId });
+    await seedBatches(c);
+    await c.query('COMMIT');
+  } catch (e) {
+    await c.query('ROLLBACK').catch(() => undefined);
+    throw e;
+  } finally {
+    c.release();
+  }
+
+  // The TRACKING columns are written as the INVENTORY PRINCIPAL, under scope,
+  // exactly as `configureRaw` writes them. `products.track_inventory`,
+  // `unit_code` and `unit_decimals` belong to the inventory configuration
+  // command: a direct write by anyone else is refused by
+  // `inventory.configuration_authority_required`, and that refusal is correct
+  // and is not worked around here. The seed takes the same role the command
+  // takes — the documented mechanism (`inventory-db-authority.test.ts:446-452`)
+  // — so no guard, trigger or policy is disabled or bypassed. (The principal
+  // holds UPDATE on these columns and no INSERT on `products` at all, which is
+  // why this is a second statement rather than part of the insert above.)
+  const cfg = await pool.connect();
+  try {
+    await cfg.query('BEGIN');
+    await setScope(cfg, { tenantId: A.tenantId, businessId: A.businessId });
+    await cfg.query(`SET LOCAL ROLE ${INTERNAL}`);
+    await cfg.query(
+      `UPDATE products SET track_inventory = true, unit_code = 'piece', unit_decimals = 0
+        WHERE business_id = $1 AND sku LIKE 'POS-SKU-%'`,
+      [A.businessId],
+    );
+    // The base variant and the stock keys, as the same principal and for the
+    // same reason: a base variant is system stock identity, not a merchant
+    // object, so anyone else inserting one is refused by
+    // `catalog.base_variant_not_mutable`. Its insert grant covers exactly
+    // `(business_id, id, product_id, is_base)` — `status` is deliberately NOT
+    // in the grant, so it is left to its default rather than named.
+    await cfg.query(
+      `WITH v AS (
+         INSERT INTO product_variants (business_id, id, product_id, is_base)
+         SELECT p.business_id, gen_random_uuid(), p.id, true
+           FROM products p
+          WHERE p.business_id = $1 AND p.sku LIKE 'POS-SKU-%'
+         RETURNING business_id, id
+       )
+       INSERT INTO stock_levels (tenant_id, business_id, warehouse_id, variant_id, on_hand, valuation_base_minor)
+       SELECT $2::uuid, v.business_id, w.id, v.id, 5, 500
+         FROM v CROSS JOIN (SELECT unnest($3::uuid[]) AS id) w`,
+      [A.businessId, A.tenantId, warehouses],
+    );
+    await cfg.query('COMMIT');
+  } catch (e) {
+    await cfg.query('ROLLBACK').catch(() => undefined);
+    throw e;
+  } finally {
+    cfg.release();
+  }
+  oneBarcode = `79${String(VOLUME.variants - 1).padStart(11, '0')}`;
+}
+
+async function seedBatches(c: PoolClient): Promise<void> {
   for (let from = 0; from < VOLUME.variants; from += BATCH) {
     const to = Math.min(VOLUME.variants, from + BATCH);
-    await pool.query(
+    await c.query(
       `WITH g AS (SELECT n FROM generate_series($2::int, $3::int - 1) n),
             p AS (
-              INSERT INTO products (business_id, id, base_price_minor, price_currency, status,
-                                    track_inventory, unit_code, unit_decimals, sku, barcode)
-              SELECT $1, gen_random_uuid(), 1000 + g.n, 'ILS', 'active', true, 'piece', 0,
+              INSERT INTO products (business_id, id, base_price_minor, price_currency, status, sku, barcode)
+              SELECT $1, gen_random_uuid(), 1000 + g.n, 'ILS', 'active',
                      'POS-SKU-' || g.n::text, '79' || lpad(g.n::text, 11, '0')
                 FROM g
               RETURNING business_id, id, sku
@@ -193,19 +257,11 @@ async function seed(): Promise<void> {
               SELECT p.business_id, p.id, 'en', 'POS Item ' || substring(p.sku from 9)
                 FROM p
               RETURNING 1
-            ),
-            v AS (
-              INSERT INTO product_variants (business_id, id, product_id, is_base, status)
-              SELECT p.business_id, gen_random_uuid(), p.id, true, 'active' FROM p
-              RETURNING business_id, id
             )
-       INSERT INTO stock_levels (tenant_id, business_id, warehouse_id, variant_id, on_hand, valuation_base_minor)
-       SELECT $4::uuid, v.business_id, w.id, v.id, 5, 500
-         FROM v CROSS JOIN (SELECT unnest($5::uuid[]) AS id) w`,
-      [A.businessId, from, to, A.tenantId, warehouses],
+       SELECT count(*) FROM tr`,
+      [A.businessId, from, to],
     );
   }
-  oneBarcode = `79${String(VOLUME.variants - 1).padStart(11, '0')}`;
 }
 
 interface Volume {
@@ -331,7 +387,7 @@ beforeAll(
   async () => {
     await ensurePostgres();
     await resetData();
-    t = await createTestApp();
+    t = await createPosReadTestApp();
     owner = await registerActor(t, 'POS S3 budget owner');
     A = await onboardS3Business(t, owner, `posperf${randomUUID().slice(0, 6)}`);
     await seed();
@@ -367,31 +423,124 @@ describe(`P4-A — the POS type-ahead (scale ${SCALE}, ${SCALE === 1 ? 'acceptan
     console.info('[P4-A] planningStatistics', JSON.stringify(stats));
     for (const relation of ['products', 'product_variants', 'product_translations', 'stock_levels', 'warehouses', 'businesses']) {
       expect(stats[relation], `${relation} has no row in pg_stat_user_tables`).toBeDefined();
-      expect(stats[relation]?.analyzed, `${relation} was never ANALYZEd — a budget measured without statistics is a number about the statistics`).not.toBeNull();
+      expect(
+        stats[relation]?.analyzed,
+        `${relation} was never ANALYZEd — a budget measured without statistics is a number about the statistics`,
+      ).not.toBeNull();
     }
   });
 
   /**
-   * GATE. Deterministic on any host: every one of the five prefix arms must
-   * reach its own index AS A RANGE, and nothing may scan a catalogue relation
-   * sequentially. This is the case that would catch the two things that would
-   * silently destroy this read — a substring predicate, and a generic plan
-   * that demotes the prefix to a filter.
+   * GATE. Deterministic on any host, and the whole measured story of this
+   * read's plan.
+   *
+   * The two BARCODE arms must carry a `>= / <` RANGE on their own index. That
+   * is the scanner path — the one a cashier drives hundreds of times a shift —
+   * and it is the one this estate's row security permits to be ranged at all.
+   *
+   * The SKU and NAME arms are deliberately NOT asserted here, and the next
+   * case is why: under this RLS shape they cannot be ranged by ANY predicate,
+   * so with a broad prefix the planner correctly prefers a bounded sequential
+   * scan to an index walk it cannot narrow. A gate demanding an index range
+   * there would be a gate with no subject; a gate demanding "no Seq Scan"
+   * would be a gate demanding a WORSE plan. So the measured truth is asserted
+   * where it is true, and stated by name where it is not.
    */
-  it('GATE: all five prefix arms become index RANGES, and nothing scans a catalogue relation sequentially', async () => {
+  it('GATE: the two BARCODE arms carry a >= / < index range — the till’s scanner path', async () => {
     const plans = await plansOf(searchPath('pos-', 50));
     for (const p of plans) console.info('[P4-A] plan', p.json);
     const nodes = plans.flatMap((p) => p.nodes);
 
-    for (const index of ['products_barcode_uq', 'products_sku_uq', 'variants_barcode_uq', 'variants_sku_uq', 'product_translations_name_idx']) {
+    for (const index of ['variants_barcode_uq', 'variants_sku_uq']) {
       expect(usesIndex(nodes, index), `the arm served by ${index} must reach it`).toBe(true);
     }
-    for (const index of ['products_sku_uq', 'variants_sku_uq', 'product_translations_name_idx']) {
-      expect(indexRangeOn(nodes, index), `${index} must carry a >= / < RANGE: a prefix demoted to a Filter scans the whole business`).toBe(true);
+    const barcodePlans = await plansOf(searchPath(oneBarcode, 50));
+    const barcodeNodes = barcodePlans.flatMap((p) => p.nodes);
+    for (const index of ['products_barcode_uq', 'variants_barcode_uq']) {
+      expect(
+        indexRangeOn(barcodeNodes, index),
+        `${index} must carry a >= / < RANGE — a scanned barcode is the till's hot path, and ^@ is what keeps it a range under RLS`,
+      ).toBe(true);
     }
+  });
+
+  /**
+   * THE FINDING, as an executable statement rather than a comment.
+   *
+   * Measured, as the owner and as `daftar_app`, on the same rows:
+   *
+   *   | predicate                  | owner       | daftar_app  |
+   *   |----------------------------|-------------|-------------|
+   *   | `barcode LIKE $p || '%'`   | index RANGE | no range    |
+   *   | `barcode ^@ $p`            | index RANGE | index RANGE |
+   *   | `lower(sku) ^@ $p`         | index RANGE | no range    |
+   *   | `lower(name) ^@ $p`        | index RANGE | no range    |
+   *
+   * The owner bypasses row security; `daftar_app` does not. Under RLS these
+   * relations carry a PERMISSIVE `tenant_membership` policy whose qual is a
+   * SUBQUERY, which makes the scan a security barrier, and a user qual may
+   * only be pushed below a security barrier if it is LEAKPROOF. `lower` is
+   * not, so an index on `lower(x)` cannot be ranged by any predicate from
+   * `daftar_app`; `starts_with` is, which is why the barcode arms keep their
+   * range and `LIKE` would not.
+   *
+   * This case asserts the `pg_proc` facts the conclusion rests on. It is
+   * RED-capable in the useful direction: if a later PostgreSQL, or an estate
+   * decision, marks `lower` leakproof, this case fails and tells whoever is
+   * holding the slice that the SKU and NAME arms can now be ranged and the
+   * gate above should be widened. The remedy is NOT another index — the five
+   * indexes are the right five — and it is a migration either way, so this
+   * suite measures and reports it rather than acting on it.
+   */
+  it('FINDING: lower() is not leakproof, so the SKU and NAME arms cannot be index ranges under this RLS shape', async () => {
+    const r = await ownerPool().query<{ proname: string; proleakproof: boolean }>(
+      `SELECT proname, proleakproof FROM pg_proc WHERE proname = ANY($1::text[]) ORDER BY proname, pronargs`,
+      [['lower', 'textlike', 'like_escape', 'starts_with', 'text_ge', 'text_lt', 'uuid_eq']],
+    );
+    const leakproof = new Map<string, boolean>();
+    for (const row of r.rows) leakproof.set(row.proname, (leakproof.get(row.proname) ?? true) && row.proleakproof);
+    console.info('[P4-A] leakproof', JSON.stringify([...leakproof]));
+
+    expect(leakproof.get('uuid_eq'), 'business_id = x is leakproof, which is why every arm reaches its index at all').toBe(true);
+    expect(leakproof.get('starts_with'), '^@ is leakproof, which is what gives the barcode arms their range under RLS').toBe(true);
+    expect(leakproof.get('textlike'), 'LIKE is NOT leakproof — this is why this read does not use it').toBe(false);
     expect(
-      nodes.filter((n) => n['Node Type'] === 'Seq Scan' && ['products', 'product_variants', 'product_translations', 'stock_levels'].includes(n['Relation Name'] ?? '')),
-      'no sequential scan on a catalogue relation',
+      leakproof.get('lower'),
+      'lower() is NOT leakproof. If this ever becomes true, the SKU and NAME arms can be ranged and the plan gate above should require it.',
+    ).toBe(false);
+
+    // And the consequence, in the plan of the statement this module actually
+    // ran: no index range on either `lower(...)` index, which is why a broad
+    // prefix becomes a bounded sequential scan of the catalogue rather than an
+    // index walk. The rows scanned are PRINTED, so a reader can see the cost
+    // this policy shape carries at acceptance volume.
+    const nodes = (await plansOf(searchPath('pos-', 50))).flatMap((p) => p.nodes);
+    expect(indexRangeOn(nodes, 'products_sku_uq'), 'the SKU arm cannot range inside its index').toBe(false);
+    expect(indexRangeOn(nodes, 'product_translations_name_idx'), 'the NAME arm cannot range inside its index').toBe(false);
+    console.info(
+      '[P4-A] unrangedArms',
+      JSON.stringify({
+        scannedRelations: nodes.filter((n) => n['Node Type'] === 'Seq Scan').map((n) => n['Relation Name'] ?? '?'),
+        note: 'the SKU and NAME arms scan and sort, bounded by their own LIMIT; the remedy is a migration-level normalized column, not another index',
+      }),
+    );
+  });
+
+  /**
+   * GATE. The RLS COST of this read, recorded rather than asserted
+   * (P4-AL-75): the `tenant_membership` policy's `EXISTS (SELECT 1 FROM
+   * businesses …)` appears under every scan, and `businesses` is read
+   * sequentially there. The policy is not this slice's to change and RLS is
+   * never weakened, so the number is EVIDENCE and the only assertion is that
+   * the subplan is on `businesses` — a tiny relation — and on nothing large.
+   */
+  it('GATE: the policy subplan reads `businesses` and never a large relation per row', async () => {
+    const nodes = (await plansOf(searchPath('pos-', 50))).flatMap((p) => p.nodes);
+    const seq = nodes.filter((n) => n['Node Type'] === 'Seq Scan').map((n) => n['Relation Name'] ?? '?');
+    console.info('[P4-A] rlsPolicySubplanScans', JSON.stringify(seq));
+    expect(
+      seq.filter((r) => ['stock_levels', 'stock_movements', 'invoices', 'journal_lines'].includes(r)),
+      'the policy must not make the read scan a large relation',
     ).toEqual([]);
   });
 
