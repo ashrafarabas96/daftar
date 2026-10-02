@@ -531,7 +531,7 @@ describe('P4-S3 (B) — pricing: integer minor units, derived on the server, ONE
   });
 
   // ── RED PROOF (B) ─────────────────────────────────────────────────────
-  it('RED PROOF — a SECOND rounding grain is refused `pos.cart_invariant_rounding_grain` as a 500 with no details', () => {
+  it('RED PROOF — a SECOND rounding grain is refused `pos.cart_rounding_grain_invalid` as a 500 with no details', () => {
     // The defect: a cart whose ledger records a rounding at a second
     // aggregation grain — the `HALF_EVEN(Σ ...)` somebody adds for tidiness.
     // Planted on a priced cart (the real pricing pass is never edited) and the

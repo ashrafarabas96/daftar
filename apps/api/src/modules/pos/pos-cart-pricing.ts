@@ -49,7 +49,7 @@ import { posRefusal } from './pos-errors';
  * and `tests/integration/pos-s3-cart.test.ts` asserts the same ledger through
  * the service. A second rounding layer added later cannot be silent: it
  * either goes through this function and appears in the ledger, or it does not
- * and `pos.cart_invariant_rounding_grain` fires.
+ * and `pos.cart_rounding_grain_invalid` fires.
  *
  * ## No float, anywhere
  *
