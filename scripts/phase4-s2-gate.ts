@@ -8,24 +8,28 @@
  *
  * ── P4-AL-60 / P4-AL-61 / P4-AL-88 ───────────────────────────────────────
  *
- * This file is now the OPEN SLICE GATE, which
- * `tests/security/phase4-forward-evolution.test.ts` exempts from the
- * forbidden-shape rules for exactly one reason: P4-AL-61 authorises the open
- * slice's gate — and only it — to assert a CANDIDATE TENSE. That block is
- * fenced between two `CANDIDATE-TENSE (P4-AL-61)` markers below, and the P4-S2
- * acceptance commit DELETES what the fence encloses and fills `S2_ACCEPTED`
- * with the digests. Nothing else here bounds the future: no count of `.sql`
- * files against a literal, no `frozenThrough` equality, and no migration name
- * outside the fence.
- *
- * The marker moved here from `scripts/phase4-s1-gate.ts` in the same commit
- * that wired this roster. P4-S1 is accepted, its gate carries no fence, and it
- * is policed by the shape rules as an ordinary member of the estate again —
+ * This file WAS the open slice gate. P4-S2 is **accepted**: `S2_ACCEPTED`
+ * holds the two digests, the fenced `CANDIDATE-TENSE (P4-AL-61)` block is
+ * GONE, and `closureRuleProblems` now refuses a tree in which a fence marker
+ * survived — so the deletion could not be left half done. This gate is policed
+ * by the forbidden-shape rules as an ordinary member of the estate again,
  * which is the transition P4-AL-61 exists to make legible.
+ *
+ * Nothing here bounds the future. The migration names below are ACCEPTED
+ * names, which is what P4-AL-60 permits a permanent module to hold; there is no
+ * count of `.sql` files against a literal and no `frozenThrough` equality — the
+ * manifest's head is read as a FLOOR, so the next slice freezing further ahead
+ * is that slice doing its job.
+ *
+ * The candidate-tense marker passes to the gate of whichever slice opens next;
+ * `tests/security/phase4-forward-evolution.test.ts` reads which tense is live
+ * from the tree and carries a red proof on each arm.
  */
 import { existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { PHASE4_S2_PREFIX } from './phase4-prefix';
 import { phase4RlsForceStructuralProblems } from './guards/phase4-rls-force';
 import { closureRuleProblems as predecessorClosureRuleProblems, suitesIn } from './phase4-s1-gate';
 import { testTitles } from './phase3-s8-gate';
@@ -37,12 +41,19 @@ const RLS_SUITE = 'tests/guards/phase4-rls-force-guard.test.ts';
 const read = (root: string, rel: string): string => readFileSync(join(root, rel), 'utf8');
 const has = (root: string, rel: string): boolean => existsSync(join(root, rel));
 
+/** The migrations P4-S2 had accepted, in order. Accepted names, so a permanent module may hold them (P4-AL-60). */
+export const S2_MIGRATIONS: readonly string[] = ['0077_phase4_sales_sale_items_sources.sql', '0078_phase4_sale_commit.sql'];
+
 /**
- * The migrations P4-S2 has had ACCEPTED, by digest. Empty while the slice is
- * open, which is what puts this gate in the candidate tense; the acceptance
- * commit fills it and deletes the fenced block below (P4-AL-61).
+ * The digests recorded at the P4-S2 freeze, computed from the accepted files
+ * themselves in the accepted candidate tree and frozen into the manifest by the
+ * same commit that filled this literal. Filling it flipped the tense, which is
+ * why the candidate-tense block is gone.
  */
-export const S2_ACCEPTED: Readonly<Record<string, string>> = {};
+export const S2_ACCEPTED: Readonly<Record<string, string>> = {
+  '0077_phase4_sales_sale_items_sources.sql': '9d9c34f83b77085b8e8d85aeb457ce9df9c011084b25d382ad7d323b4f544237',
+  '0078_phase4_sale_commit.sql': '8a11b768c3259a75d0e341f20b97037146ae8b40e9dc7f86655f77ba1b6dc730',
+};
 
 export interface SuiteRow {
   readonly id: string;
@@ -491,49 +502,74 @@ function executionProblems(root: string): string[] {
 }
 // ───── end EXECUTION (TL-P4-S2-R2) ────────────────────────────────────────
 
-// ───── CANDIDATE-TENSE (P4-AL-61) ─────────────────────────────────────────
-// P4-S2's migration boundary, in the CANDIDATE tense. `0077` and `0078` are
-// written, applied and tested, and they are NOT frozen: the manifest's
-// `frozenThrough` is still the predecessor's accepted head, and no entry for
-// either file exists in it. That is the whole claim, and it is a claim about
-// TODAY which stops being true the moment the Tech Lead accepts this slice —
-// which is why it lives here, behind this fence, and why the acceptance commit
-// DELETES everything between these two markers and fills `S2_ACCEPTED`.
-//
-// P4-AL-60 is not violated by the migration names below BECAUSE of the fence:
-// a permanent module may never name them, and this block is by construction
-// not permanent.
-const S2_CANDIDATES: readonly string[] = ['0077_phase4_sales_sale_items_sources.sql', '0078_phase4_sale_commit.sql'];
-
-/** The candidate migrations exist on disk and NONE of them is frozen yet. */
-export function candidateBoundaryProblems(root: string): string[] {
-  if (Object.keys(S2_ACCEPTED).length > 0) return [];
+/**
+ * The P4-S2 migration boundary, in the ACCEPTED tense (P4-AL-61).
+ *
+ * The permanent half, and a FLOOR rather than an equality: every accepted
+ * migration must still hash to the digest it was accepted at, the manifest must
+ * record that same digest, the permanent prefix module must hold the same pairs,
+ * and `frozenThrough` must have reached the slice's head. A manifest frozen
+ * further ahead than this is a LATER slice doing its job, not a finding — which
+ * is the one thing a successor gate must never turn red on.
+ *
+ * Three independent readers recompute these digests from the files themselves:
+ * `scripts/check-migration-manifest.ts`, `scripts/phase4-prefix.ts` and this
+ * function. None of them copies a number out of a document.
+ */
+export function boundaryProblems(
+  root: string,
+  accepted: Readonly<Record<string, string>> = S2_ACCEPTED,
+  declared: readonly string[] = S2_MIGRATIONS,
+): string[] {
   const problems: string[] = [];
   const manifestRel = 'infrastructure/database/MIGRATION_MANIFEST.json';
   if (!has(root, manifestRel)) return [`${manifestRel} is missing`];
   const manifest = JSON.parse(read(root, manifestRel)) as {
     frozenThrough?: string;
-    migrations?: readonly { readonly name: string }[];
+    migrations?: readonly { readonly name: string; readonly sha256: string }[];
   };
-  const frozen = new Set((manifest.migrations ?? []).map((m) => m.name));
-  for (const name of S2_CANDIDATES) {
-    if (!has(root, `infrastructure/database/migrations/${name}`)) problems.push(`${name} is a declared P4-S2 candidate and is not on disk`);
-    if (frozen.has(name)) problems.push(`${name} is frozen in the manifest while P4-S2 is still open — only the Tech Lead's acceptance freezes a migration`);
-    if (manifest.frozenThrough === name) problems.push(`frozenThrough is ${name}, a candidate of the open slice`);
+  const recorded = new Map((manifest.migrations ?? []).map((e) => [e.name, e.sha256]));
+
+  if (JSON.stringify(Object.keys(accepted).sort()) !== JSON.stringify([...declared].sort()))
+    problems.push(`S2_ACCEPTED must name exactly S2_MIGRATIONS (${declared.join(', ')})`);
+
+  const head = declared[declared.length - 1] ?? '';
+  const frozenThrough = manifest.frozenThrough ?? '';
+  // A FLOOR. `>=` on these names is an ordering on the zero-padded prefix.
+  if (!(frozenThrough >= head)) problems.push(`frozenThrough is ${frozenThrough || 'absent'} — it is a floor at ${head} once P4-S2 is accepted`);
+
+  for (const [name, digest] of Object.entries(accepted)) {
+    const rel = `infrastructure/database/migrations/${name}`;
+    if (!has(root, rel)) {
+      problems.push(`${name} was accepted but is missing`);
+      continue;
+    }
+    const onDisk = createHash('sha256')
+      .update(readFileSync(join(root, rel)))
+      .digest('hex');
+    if (onDisk !== digest) problems.push(`${name} hashes to ${onDisk.slice(0, 12)}… but was accepted at ${digest.slice(0, 12)}…`);
+    if (recorded.get(name) !== digest) problems.push(`${name} is not frozen in the manifest at its accepted digest`);
   }
+
+  // The same acceptance commit appends the same pairs to the permanent module.
+  const inPrefix = PHASE4_S2_PREFIX.map(([name, digest]) => `${name}:${digest}`).join('\n');
+  const expected = [...declared].map((name) => `${name}:${accepted[name] ?? ''}`).join('\n');
+  if (inPrefix !== expected)
+    problems.push('PHASE4_S2_PREFIX in scripts/phase4-prefix.ts does not hold exactly the accepted P4-S2 pairs — the acceptance commit fills both');
   return problems;
 }
-// ───── end CANDIDATE-TENSE (P4-AL-61) ─────────────────────────────────────
 
 /**
  * The closure rules, plus this gate's own tense.
  *
  * The permanent-module sweep is DELEGATED to the predecessor gate, which still
  * owns it — P4-S1 is accepted, so its own self-check contributes nothing and
- * composing is not double-counting. What is added is the half that moved here
- * with the open-slice marker: while this slice is open the candidate tense must
- * be FENCED between a pair of markers, so the acceptance commit can find what
- * to delete; once `S2_ACCEPTED` is filled the fence must be GONE.
+ * composing is not double-counting. What is added is the half that came here
+ * with the open-slice marker, and it has BOTH tenses: while a slice is open its
+ * candidate tense must be FENCED between a pair of markers, so the acceptance
+ * commit can find what to delete; once `S2_ACCEPTED` is filled the fence must be
+ * GONE. P4-S2 is accepted, so this gate is on the second arm: a fence comment
+ * surviving here is now itself the refusal.
  */
 export function closureRuleProblems(root: string): string[] {
   const problems = [...predecessorClosureRuleProblems(root)];
@@ -600,13 +636,10 @@ export const CHECKS: readonly Check[] = [
     ok: 'no permanent module bounds the future, and the candidate-tense block is fenced between the two markers the acceptance commit deletes',
   },
   {
-    id: 'candidate-boundary',
-    title: `the P4-S2 migration boundary (${Object.keys(S2_ACCEPTED).length === 0 ? 'candidate' : 'accepted'} tense)`,
-    run: candidateBoundaryProblems,
-    ok:
-      Object.keys(S2_ACCEPTED).length === 0
-        ? 'the slice’s migrations are on disk, and NONE of them is frozen — only the Tech Lead’s acceptance freezes a migration'
-        : 'the slice’s migrations are accepted and frozen by digest',
+    id: 'boundary',
+    title: 'the P4-S2 migration boundary (accepted tense)',
+    run: (root) => boundaryProblems(root),
+    ok: 'the P4-S2 migrations are frozen at their accepted digests, the permanent prefix holds the same pairs, and frozenThrough is a floor at the slice head',
   },
 ];
 

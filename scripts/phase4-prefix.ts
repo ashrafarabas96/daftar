@@ -114,8 +114,15 @@ export const PHASE4_S1_PREFIX: Prefix = [
   ['0075_phase4_customers_invoices_numbering.sql', 'b5d64176c3af9fb38a56b26f3e767a36fd2fd4a583423a1f60b3165d5f239905'],
   ['0076_phase4_permission_defaults_backfill.sql', '2bbad56286ac06e988e4d590b290957fbb716313a6d82c4ba85c1f164bc3dcec'],
 ];
-/** P4-S2 — the sale commit primitive and the stock source bridge. */
-export const PHASE4_S2_PREFIX: Prefix = [];
+/**
+ * P4-S2 — the sale commit primitive and the stock source bridge.
+ * Accepted and frozen by the P4-S2 seal commit; the digests are the ones the
+ * manifest froze, computed from the files in the accepted candidate tree.
+ */
+export const PHASE4_S2_PREFIX: Prefix = [
+  ['0077_phase4_sales_sale_items_sources.sql', '9d9c34f83b77085b8e8d85aeb457ce9df9c011084b25d382ad7d323b4f544237'],
+  ['0078_phase4_sale_commit.sql', '8a11b768c3259a75d0e341f20b97037146ae8b40e9dc7f86655f77ba1b6dc730'],
+];
 /** P4-S3 — POS till sessions and cart lines. */
 export const PHASE4_S3_PREFIX: Prefix = [];
 /** P4-S4 — payments, allocation, customer credit. */
@@ -144,6 +151,7 @@ export const PHASE4_PREFIX: Prefix = [
 /** The last migration each accepted Phase 4 slice left frozen, by full name. Filled by the same acceptance commit. */
 export const PHASE4_SLICE_HEADS: Readonly<Record<string, string>> = {
   'P4-S1': '0076_phase4_permission_defaults_backfill.sql',
+  'P4-S2': '0078_phase4_sale_commit.sql',
 };
 
 const migrationNumber = (file: string): number | null => {

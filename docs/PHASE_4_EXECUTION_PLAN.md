@@ -137,7 +137,12 @@ exact-SHA CI green on six jobs; no authoritative balance column anywhere; the `O
 **Blocked by.** Nothing. `OD-P4-01` is RULED (OPTION A) and `OD-P4-15` is RULED (OPTION A), so the slice knows
 which `GOLD` ids it carries and which default keys the cashier gets.
 
-### P4-S2 — The sale commit primitive
+### P4-S2 — The sale commit primitive — ACCEPTED AND FROZEN (2026-10-02)
+**Status.** Accepted and frozen at candidate `712eafee9c15daadaeff773a69c73cf5e535c01c`, exact-SHA
+`DAFTAR CI` 36950325428 (push), six jobs SUCCESS at attempt 1 with P4-S1 then P4-S2 both passing visibly in
+the required `backend` job. Migrations `0077`–`0078` frozen, 79 in total,
+`frozenThrough = 0078_phase4_sale_commit.sql`. The acceptance followed the Tech Lead's narrow corrective
+pass (`TL-P4-S2-R1` … `TL-P4-S2-R6`); the freeze page is `docs/PHASE_4_S2_ACCEPTANCE.md`.
 **Scope.** `sales`, `sale_items`; the `sale.*` operation kinds on the existing `invctl/1` assertion; the stock
 movement path through `inventory_apply_stock_movements` unchanged; the COGS journal entry from the stored
 integer deltas; the revenue/AR/tax entry; the whole of the atomic sale law.

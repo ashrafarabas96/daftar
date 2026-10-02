@@ -1992,6 +1992,23 @@ explicit Tech Lead directive.
 |---|---|
 | `TL-P4-S2-R3` | **REQUIRED-CI CHAIN COMPOSITION.** A BLOCKER first: the required `backend` job ran `gate:phase4:s1` and **not** `gate:phase4:s2`, so every green reported for the slice was green for a workflow that never ran the slice's gate — *a green workflow is not evidence for a gate the workflow never ran.* The step is added, visibly and unconditionally, immediately after the P4-S1 step with the same database environment. With it, the cheaper equivalent of internal composition is **authorized** for the slice gates: `P4-S1 → P4-S2 → later slice gates` run sequentially and visibly inside the SAME required job, so a successor **delta** gate need not re-execute a ~50-minute predecessor internally. The authorization is conditional on a **permanent structural check** proving all seven of — the P4-S1 step exists; the P4-S2 step exists; both are inside the required `backend` job; S1 precedes S2; neither uses `continue-on-error`; neither is conditional in a way that can skip a normal push or pull request; and the S2 command is exactly `npm run gate:phase4:s2` — by **parsing** the workflow rather than grepping it, with a red proof for every way of breaking it. `P4-AL-57` and `P4-AL-58` are amended in place; `gate:phase4:release` is **not** weakened and still composes everything verbatim. |
 
+| `TL-P4-S2-R2` | **A gate that checks test filenames but never executes the tests is not a gate.** `gate:phase4:s2` registered its roster and verified only that the files and the red-proof titles existed; only `rls-force-runtime` executed anything, so a real S2 test could fail while the gate printed PASS. The gate must EXECUTE every suite it claims, preferably in one bounded Vitest invocation, and FAIL on a missing file, a `.skip`/`.todo`/`.only`, a failing test, an empty discovery, a termination by signal or an unreadable tally; it may never catch a test failure and continue with PASS. It must report the claimed suites, the resolved files, the exit status and the tests passed and failed, and carry a red proof that breaking one S2 assertion — roster and proof title intact — turns it red. |
+| `TL-P4-S2-R4` | **A sale endpoint that requires manual SQL setup is not a complete product path.** Nothing in `0000`–`0078` created an `invoice_sequences` row, and `0078-E(5)` asserted the routine never writes one, so a newly onboarded business could not number its first invoice. The default internal format is `INV-{YYYY}-{SEQ:06}` — a DAFTAR identifier, **not** a fiscal or tax compliance claim, and `OD-03` stays OPEN. The row is created safely on first use from the document date, and only THEN is that exact row locked before `max(number_seq) + 1`; an existing `number_format` is NEVER overwritten. No counter column and no PostgreSQL sequence. On this tree the literal `{SEQ:06}` is unstorable, because the frozen `invoice_sequences_format_ck` admits no leading zero in the width; the Tech Lead was asked and chose `{SEQ:6}`, which `lpad` renders as the ruling's own `INV-2026-000001` (2026-10-02). |
+| `TL-P4-S2-R5` | **An internal invariant failure is not an authorization denial.** `apps/api/src/common/error.filter.ts` rendered every `P0001` as an opaque 403. Known `sale.*`/`invoice.*`/`customer.*` codes are parsed canonically and rendered through `sellingRefusal(...)` with their registered semantics preserved; recognized internal `selling.*` invariants are **500 INTERNAL_ERROR**, logged with the `requestId` and the code and exposing no SQL, no raw PostgreSQL message, no amounts, no journal ids, no assertion body and no stack; an UNKNOWN historical `P0001` keeps the existing fallback until separately audited, so no accepted Phase 1–3 HTTP contract moves. `42501` stays 403. |
+| `TL-P4-S2-R1` | The correction of the SEALED `scripts/phase4-s1-gate.ts` is **authorized** as strictly stronger corrective hardening, not weakening: `S-P4-01` grepped the whole Phase 4 DDL and never asked which relation carried the foreign key, and `0077` writes two matching edges, so dropping `invoices_sale_fk` passed silently. It now reads the `invoices` child relation. The planted red proof is retained. That sealed gate is not otherwise modified without a new finding. |
+| `TL-P4-S2-R6` | **The history rewrite is REFUSED.** The twelve historical commits are not rewritten and no force-push is performed to correct author or co-author attribution: it would invalidate every descendant SHA and with it the whole chain of CI evidence, acceptance SHAs, audit references, review comments and seal references. Attribution is non-product and non-integrity-critical; if it still matters after Phase 4 it is answered by an append-only provenance note or a verified mailmap. **No history rewrite during active Phase 4. The question is CLOSED and is not reopened.** |
+
+### P4-S2 — ACCEPTED AND FROZEN (2026-10-02)
+
+Accepted candidate `712eafee9c15daadaeff773a69c73cf5e535c01c`; exact-SHA `DAFTAR CI` **36950325428** (push),
+six jobs SUCCESS at attempt 1, with step 33 `Phase 4 slice gate — P4-S1` and step 34
+`Phase 4 slice gate — P4-S2` both SUCCESS in that order inside the required `backend` job. Migrations
+`0077`–`0078` frozen at their accepted digests, **79** frozen in total,
+`frozenThrough = 0078_phase4_sale_commit.sql`, `0000`–`0078` immutable, next migration `0079`. The
+candidate-tense fence (P4-AL-61) is deleted from `scripts/phase4-s2-gate.ts` and passes to the gate of
+whichever slice opens next. Freeze page: `docs/PHASE_4_S2_ACCEPTANCE.md`. **§20 of the same directive starts
+P4-S3 with no further permission message; P4-S4 must not begin.**
+
 ### Carried forward from P4-S1 (named so it is not lost)
 
 - ~~**No law asserts RLS `ENABLE`/`FORCE` over the DISCOVERED relation surface.**~~ **DISCHARGED IN P4-S2
@@ -2115,3 +2132,14 @@ P4-S0 هي مرحلة تحليل وقرار فقط. لم تُكتب أي شيف�
 رسمية). وأهمّها `OD-P4-04`: **الخيار B مُعتمد** — مخفّف سالب يُلحق في رأس السلسلة، ولا تُمسّ الـreleases
 التاريخيّة أبدًا، والبرهان التلسكوبي يُكتب قبل أي شيفرة، والبديل الوحيد عند فشل البرهان هو LIFO فقط.
 وبذلك ارتفع الحاجز عن `P4-S6` وعن TD-15.
+
+وفي 2026-10-02 **قُبِلت الشريحة P4-S2 وجُمِّدت**. أعاد المالك على مرشّحها الأوّل `111554d` حكم «تغييرات
+مطلوبة» في مسارٍ تصحيحيٍّ ضيّق لأربعة عيوبٍ حقيقية: بوّابة الشريحة كانت تتحقّق من أسماء ملفّات الاختبار ولا
+تُنفّذها — «بوّابةٌ تفحص الأسماء ولا تُشغّل الاختبارات ليست بوّابة» — وCI المطلوب لم يكن يُشغّل تلك البوّابة
+أصلاً، ولم يكن في `0000`–`0078` ما يُنشئ صفّ ترقيم الفواتير فكان عملٌ جديد يُرفَض عند أوّل بيعة، وكلّ
+`P0001` كان يُصيَّر 403 فيُقرأ انتهاكُ ثابتةٍ داخلية كأنّه منعُ تخويل. أُغلقت الأربعة، و**رفض المالك إعادة
+كتابة تاريخ الـ commits** لأنّها تُبطل كلّ سلسلة أدلّة CI وكلّ SHA مقبول — والسؤال مُغلق. والصيغة الافتراضية
+للترقيم `INV-{YYYY}-{SEQ:6}` تُخرج `INV-2026-000001`، وهي **معرّفٌ داخليّ لا ادّعاءَ امتثالٍ ضريبيّ**،
+و`OD-03` ما زال مفتوحًا. المرشّح المقبول `712eafe` وتشغيل CI رقم 36950325428 ناجح في الوظائف الستّ،
+والهجرتان `0077`–`0078` مجمّدتان، ومجموع الهجرات 79، والحدّ المجمّد `0078`، والهجرة التالية `0079`،
+و`0000`–`0078` غير قابلٍ للتغيير. وتبدأ الشريحة **P4-S3** بموجب البند §20 بلا إذنٍ إضافي، **ولا تبدأ P4-S4**.
