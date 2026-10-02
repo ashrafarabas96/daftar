@@ -29,9 +29,12 @@
  * Phase 4 screen defect cannot turn `gate:phase3:corrective` red, while the
  * nine runs and their equality survive intact.
  *
- * `PHASE4_STEPS` is empty today because no Phase 4 screen exists. That
- * emptiness is asserted here, not assumed: the moment a `run.step` name
- * appears that neither list owns, this file goes red.
+ * `PHASE4_STEPS` was empty while no Phase 4 screen existed; P4-S3's POS steps
+ * opened it. The emptiness is not loosened away — it is replaced by the
+ * assertions it was standing in for, which bite on every entry the list will
+ * ever hold: `p4-`-prefixed, disjoint from Phase 3, declared in flows.ts, and
+ * walked by no Phase 3 gate. The moment a `run.step` name appears that neither
+ * list owns, this file goes red.
  */
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -52,6 +55,14 @@ function declaredSteps(source: string): string[] {
 
 const FLOWS_SOURCE = readFileSync(join(REPO, FLOWS), 'utf8');
 const DECLARED = declaredSteps(FLOWS_SOURCE);
+/** The declared steps that are not Phase 4's — what PHASE3_STEPS must be, in declaration order. */
+const DECLARED_PHASE3 = DECLARED.filter((step) => !step.startsWith(PHASE4_STEP_PREFIX));
+
+/**
+ * The PHASE4_STEPS line as the tree carries it, read from the source rather
+ * than copied, so the plants below cannot drift from it.
+ */
+const PHASE4_LIST_LINE = (/^export const PHASE4_STEPS: readonly string\[\] = .*$/m.exec(FLOWS_SOURCE) ?? [''])[0];
 
 const temps: string[] = [];
 
@@ -96,14 +107,20 @@ describe('green: the steps are partitioned by phase, exhaustively, over the tree
     expect(new Set(PHASE3_STEPS).size).toBe(PHASE3_STEPS.length);
     // The step P4-AL-68 warns about: it is Phase 3's, and it keeps its name.
     expect(PHASE3_STEPS).toContain('return');
-    expect(PHASE3_STEPS).toEqual(DECLARED);
+    expect(PHASE3_STEPS).toEqual(DECLARED_PHASE3);
   });
 
-  it('PHASE4_STEPS is empty, because no Phase 4 screen exists yet — the asserted fact, not an unchecked array', () => {
-    expect(PHASE4_STEPS).toEqual([]);
-    // If it were not empty, this is what would have to hold of it.
+  it('PHASE4_STEPS holds the Phase 4 steps the tree declares, every one prefixed and owned by Phase 4 alone', () => {
+    expect(PHASE4_STEPS.length).toBeGreaterThan(0);
+    expect(new Set(PHASE4_STEPS).size).toBe(PHASE4_STEPS.length);
     for (const step of PHASE4_STEPS) expect(step.startsWith(PHASE4_STEP_PREFIX)).toBe(true);
     expect(PHASE3_STEPS.filter((s) => PHASE4_STEPS.includes(s))).toEqual([]);
+    // Exhaustive in both directions: the list is the p4- steps flows.ts runs, no more and no fewer.
+    expect([...PHASE4_STEPS].sort()).toEqual(DECLARED.filter((step) => step.startsWith(PHASE4_STEP_PREFIX)).sort());
+  });
+
+  it('the Phase 4 list and the declared Phase 3 steps together are every step, once each', () => {
+    expect([...DECLARED_PHASE3, ...PHASE4_STEPS].sort()).toEqual([...DECLARED].sort());
   });
 
   it('the Phase 4 step prefix is one literal: flows.ts and the P4-S1 gate cannot drift apart', () => {
@@ -137,7 +154,8 @@ describe('green: the Phase 3 corrective gate walks the steps Phase 3 owns, and s
     const walked = (browserSteps().find((a) => a.startsWith('--steps=')) ?? '').slice('--steps='.length).split(',');
     expect(walked).toEqual([...PHASE3_STEPS]);
     for (const step of walked) expect(step.startsWith(PHASE4_STEP_PREFIX)).toBe(false);
-    // The Phase 4 step that does not exist yet, and would not be walked here.
+    // Every Phase 4 step that now exists: none of them is walked by the Phase 3 gate.
+    for (const step of PHASE4_STEPS) expect(walked).not.toContain(step);
     expect(walked).not.toContain(`${PHASE4_STEP_PREFIX}invoice`);
   });
 });
@@ -176,19 +194,19 @@ describe('red: a step that belongs to neither list, or to both, is refused', () 
   });
 
   it('red: one step owned by both lists is named a collision', () => {
-    const root = treeWith((s) => once(s, 'export const PHASE4_STEPS: readonly string[] = [];', "export const PHASE4_STEPS: readonly string[] = ['return'];"));
+    const root = treeWith((s) => once(s, PHASE4_LIST_LINE, "export const PHASE4_STEPS: readonly string[] = ['return'];"));
     expect(browserStepProblems(root)).toContainEqual(expect.stringContaining('PHASE3_STEPS and PHASE4_STEPS share return'));
   });
 
   it('red: a Phase 4 step with no p4- prefix is refused, because flows.ts already has a step named "return"', () => {
-    const root = treeWith((s) => once(s, 'export const PHASE4_STEPS: readonly string[] = [];', "export const PHASE4_STEPS: readonly string[] = ['invoice'];"));
+    const root = treeWith((s) => once(s, PHASE4_LIST_LINE, "export const PHASE4_STEPS: readonly string[] = ['invoice'];"));
     expect(browserStepProblems(root)).toContainEqual(expect.stringContaining(`the Phase 4 browser step "invoice" is not ${PHASE4_STEP_PREFIX}-prefixed`));
   });
 
   it('red: dropping either list altogether is the original P4-AL-63 coupling, and is named as such', () => {
     const noP3 = treeWith((s) => once(s, 'export const PHASE3_STEPS: readonly string[] = [', 'const PHASE3_STEPS: readonly string[] = ['));
     expect(browserStepProblems(noP3)).toContainEqual(expect.stringContaining('exports no PHASE3_STEPS'));
-    const noP4 = treeWith((s) => once(s, 'export const PHASE4_STEPS: readonly string[] = [];', 'const PHASE4_STEPS: readonly string[] = [];'));
+    const noP4 = treeWith((s) => once(s, PHASE4_LIST_LINE, PHASE4_LIST_LINE.replace('export ', '')));
     expect(browserStepProblems(noP4)).toContainEqual(expect.stringContaining('exports no PHASE4_STEPS'));
   });
 

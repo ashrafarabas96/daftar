@@ -138,23 +138,28 @@ describe('P4-S1 action 3a — the jargon guard examines the Phase 4 namespaces (
       expect(new RegExp(TAX_WORD.source, 'u').test(innocent), innocent).toBe(false);
   });
 
-  it('GREEN HALF — no Phase 3 verdict moved: the widened scope matches the empty set today', () => {
+  it('GREEN HALF — no Phase 3 verdict moved, and every Phase 4 file the widened scope now reaches is clean', () => {
     const files = webFiles();
     const examined = Object.keys(files).filter(isS7WebFile);
     expect(examined.length).toBeGreaterThan(40);
-    // No Phase 4 web file exists yet, so widening the path scope examined nothing new…
-    for (const f of examined) expect(f.includes('/pos/') || f.includes('/customers/') || f.includes('/invoices/'), f).toBe(false);
-    // …and the real tree is clean under the widened rule set, the new tax rule included.
+    // P4-S1 wrote this assertion as "the widened scope matches the empty set
+    // today", which was true while no Phase 4 screen existed. P4-S3 ships the
+    // POS screens, so the emptiness claim is RE-EXPRESSED, not relaxed: the
+    // widened scope must now actually REACH them — a Phase 4 screen that the
+    // jargon guard never examined was the whole defect P4-AL-52 corrected —
+    // and they must be clean under the widened rule set.
+    const phase4 = examined.filter((f) => PHASE4_SEGMENTS.some((s) => f.includes(`/${s}/`)) || /phase4-/.test(f));
+    expect(phase4.length).toBeGreaterThan(0);
+    for (const f of phase4) expect(isS7WebFile(f), f).toBe(true);
+    // The real tree, Phase 3 and Phase 4 alike, is clean under the widened
+    // rule set, the new tax rule included.
     expect(findS7SourceViolations(files)).toEqual([]);
-    // No catalog key sits under a Phase 4 prefix yet, in any locale.
-    for (const [locale, dict] of Object.entries(catalogs())) {
-      for (const key of Object.keys(dict)) {
-        expect(
-          PHASE4_KEY_PREFIXES.some((p) => key.startsWith(p)),
-          `${locale}:${key}`,
-        ).toBe(false);
-      }
-    }
+    // Every catalog key under a Phase 4 prefix is examined by the key scope
+    // (the same correction: a Phase 4 namespace the jargon rules skipped).
+    const phase4Keys = Object.keys(catalogs().en).filter((key) => PHASE4_KEY_PREFIXES.some((p) => key.startsWith(p)));
+    expect(phase4Keys.length).toBeGreaterThan(0);
+    for (const key of phase4Keys) expect(isS7Key(key), key).toBe(true);
+    // …and the three catalogs carry no merchant jargon, Phase 4 keys included.
     expect(findMerchantJargon(catalogs())).toEqual([]);
     // The Phase 3 scope is a subset of the new one: nothing was dropped.
     for (const p of ['stock.', 'purchasing.', 'suppliers.', 'payments.', 'error.', 'common.']) expect(S7_NAMESPACE_PREFIXES).toContain(p);
