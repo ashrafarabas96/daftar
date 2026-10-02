@@ -347,6 +347,30 @@ jobs:
           # PG_PORT=5432 makes the test harness reuse the `postgres` service
           # above instead of starting an embedded instance.
           PG_PORT: '5432'
+      # TL-P4-S2-R3, continued for P4-S3. The chain the Architecture Lock
+      # requires is composed HERE, by this job: P4-S1, then P4-S2, then P4-S3,
+      # all three VISIBLE and all three REQUIRED, in that order. The P4-S3
+      # gate is a delta gate like its predecessor — it does not re-execute
+      # P4-S2 inside itself — so the order of these steps IS the composition,
+      # and this step may carry neither `continue-on-error` nor any `if:`.
+      #
+      # That is not a convention anybody has to remember: it is asserted
+      # structurally, by parsing THIS file, in
+      # `tests/guards/required-ci-chain-composition.test.ts`, which plants each
+      # way of breaking it (this step removed, renamed, reordered before its
+      # predecessors, given `continue-on-error`, given an `if:`, its command
+      # changed, or moved into another job) and requires the check to go red on
+      # every one. That suite is itself on the P4-S3 gate's roster, so the gate
+      # executes the evidence for its own place in this job.
+      #
+      # `A green workflow is not evidence for a gate the workflow never ran.`
+      - name: Phase 4 slice gate — P4-S3
+        run: npm run gate:phase4:s3
+        env:
+          # The same database environment as every other gate step in this job:
+          # PG_PORT=5432 makes the test harness reuse the `postgres` service
+          # above instead of starting an embedded instance.
+          PG_PORT: '5432'
       - name: Keep the gate's browser screenshots and results
         if: always()
         uses: actions/upload-artifact@v4

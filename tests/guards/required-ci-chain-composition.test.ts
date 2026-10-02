@@ -17,18 +17,23 @@
  * reported for the slice was green for a workflow that never ran the slice's
  * gate — `A green workflow is not evidence for a gate the workflow never ran.`
  *
- * So the ruling's precondition is asserted here, permanently, as seven claims
- * about `.github/workflows/ci.yml`:
+ * So the ruling's precondition is asserted here, permanently, as eight claims
+ * about `.github/workflows/ci.yml`, over every slice gate in `CHAIN` —
+ * P4-S1, P4-S2 and P4-S3 today, and whichever slice is added to that table
+ * next:
  *
  *   C-1  a step of the required job runs the P4-S1 gate;
- *   C-2  a step of the required job runs the P4-S2 gate;
- *   C-3  both are inside the REQUIRED `backend` job and nowhere else;
- *   C-4  the P4-S1 step PRECEDES the P4-S2 step;
- *   C-5  neither step (nor the job) carries `continue-on-error`;
- *   C-6  neither step (nor the job) carries an `if:`, and the workflow really
+ *   C-2  a step of the required job runs each later slice gate;
+ *   C-3  all of them are inside the REQUIRED `backend` job and nowhere else;
+ *   C-4  each slice's step PRECEDES its successor's, pairwise along the chain;
+ *   C-5  no step (and not the job) carries `continue-on-error`;
+ *   C-6  no step (and not the job) carries an `if:`, and the workflow really
  *        does trigger on an ordinary `push` and `pull_request` — a step that
  *        can be skipped on a normal push is not a required gate;
- *   C-7  the P4-S2 step's command is EXACTLY `npm run gate:phase4:s2`.
+ *   C-7  each step's command is EXACTLY `npm run gate:phase4:<slice>`;
+ *   C-8  each step's `name` is EXACTLY the ruled one — a gate step that has
+ *        been renamed is a gate a reader of the required job's log can no
+ *        longer identify as that slice's.
  *
  * ── WHY THIS PARSES AND DOES NOT GREP ────────────────────────────────────
  *
@@ -79,9 +84,30 @@ const WORKFLOW_PATH = join(REPO, WORKFLOW);
 const REQUIRED_JOB = 'backend';
 /** The exact command the ruling fixes for the P4-S2 step. */
 const S2_COMMAND = 'npm run gate:phase4:s2';
+/** The exact command for the P4-S3 step, on the same terms. */
+const S3_COMMAND = 'npm run gate:phase4:s3';
 /** The npm script names, as they appear inside a `run:`, used to FIND each gate step. */
 const S1_SCRIPT = 'gate:phase4:s1';
 const S2_SCRIPT = 'gate:phase4:s2';
+const S3_SCRIPT = 'gate:phase4:s3';
+
+/**
+ * THE CHAIN, in order, as it must appear in the required job: the slice label,
+ * the script that FINDS the step, the exact command it must run, and the
+ * step's exact `name`.
+ *
+ * The `name` is part of the claim because a step found only by its command
+ * can be RENAMED into something a reader of the job's log would not recognise
+ * as the slice's gate — and the log is where a green tick is read. Adding a
+ * slice to this table is the whole edit: C-1/C-2, C-3, C-5, C-6, C-7, the
+ * name claim and the pairwise ordering are all driven from it, so a successor
+ * gate cannot be wired into the job without being asserted here.
+ */
+const CHAIN: readonly { readonly slice: string; readonly script: string; readonly command: string; readonly name: string }[] = [
+  { slice: 'P4-S1', script: S1_SCRIPT, command: 'npm run gate:phase4:s1', name: 'Phase 4 slice gate — P4-S1 (composes the Phase 3 corrective gate)' },
+  { slice: 'P4-S2', script: S2_SCRIPT, command: S2_COMMAND, name: 'Phase 4 slice gate — P4-S2' },
+  { slice: 'P4-S3', script: S3_SCRIPT, command: S3_COMMAND, name: 'Phase 4 slice gate — P4-S3' },
+];
 
 // ───────────────────────────────────────────────────────────────────────────
 // A strict block-YAML reader for the workflow subset.
@@ -332,10 +358,7 @@ export function chainCompositionProblems(text: string): string[] {
   if (job['if'] !== undefined) problems.push(`the \`${REQUIRED_JOB}\` job is conditional (if: ${String(job['if'])}), so the whole chain can be skipped`);
   if (!isSeq(job['steps'])) return [...problems, `the \`${REQUIRED_JOB}\` job has no steps sequence`];
 
-  for (const [slice, script] of [
-    ['P4-S1', S1_SCRIPT],
-    ['P4-S2', S2_SCRIPT],
-  ] as const) {
+  for (const { slice, script, command: expected, name } of CHAIN) {
     const all = gateSteps(doc, script);
     // C-1 / C-2: it exists at all.
     if (all.length === 0) {
@@ -360,23 +383,34 @@ export function chainCompositionProblems(text: string): string[] {
       // depends on the event is not a gate on every push and pull request.
       if (step['if'] !== undefined)
         problems.push(`the ${slice} gate step (#${index + 1}) is conditional (if: ${String(step['if'])}), so an ordinary push or pull_request can skip it`);
+      // C-7: the command, exactly. A weakened invocation is not the gate.
+      const run = step['run'];
+      const command = typeof run === 'string' ? run.trim() : '';
+      if (command !== expected) problems.push(`the ${slice} gate step runs \`${command}\`, not exactly \`${expected}\``);
+      // C-8: the step's NAME, exactly. A step renamed is a step a reader of
+      // the required job's log can no longer identify as this slice's gate.
+      if (step['name'] !== name)
+        problems.push(
+          `the ${slice} gate step (#${index + 1}) is named \`${String(step['name'])}\`, not \`${name}\` — a renamed gate step is not the ruled one`,
+        );
     }
   }
 
-  const s1 = gateSteps(doc, S1_SCRIPT).filter((s) => s.job === REQUIRED_JOB);
-  const s2 = gateSteps(doc, S2_SCRIPT).filter((s) => s.job === REQUIRED_JOB);
-  const first = s1[0];
-  const second = s2[0];
-  if (first !== undefined && second !== undefined) {
-    // C-4: the predecessor runs first. Chain composition IS the order.
+  // C-4: each slice's gate runs after its predecessor's. Chain composition IS
+  // the order, and it is asserted pairwise along CHAIN so a slice added to the
+  // table is ordered against its neighbour without another claim being written.
+  const inJob = (script: string): GateStep | undefined => gateSteps(doc, script).filter((s) => s.job === REQUIRED_JOB)[0];
+  for (let i = 1; i < CHAIN.length; i += 1) {
+    const before = CHAIN[i - 1];
+    const after = CHAIN[i];
+    if (before === undefined || after === undefined) continue;
+    const first = inJob(before.script);
+    const second = inJob(after.script);
+    if (first === undefined || second === undefined) continue;
     if (first.index >= second.index)
       problems.push(
-        `the P4-S2 gate step (#${second.index + 1}) does not come after the P4-S1 gate step (#${first.index + 1}) — chain composition requires the predecessor to run first`,
+        `the ${after.slice} gate step (#${second.index + 1}) does not come after the ${before.slice} gate step (#${first.index + 1}) — chain composition requires the predecessor to run first`,
       );
-    // C-7: the command, exactly.
-    const run = second.step['run'];
-    const command = typeof run === 'string' ? run.trim() : '';
-    if (command !== S2_COMMAND) problems.push(`the P4-S2 gate step runs \`${command}\`, not exactly \`${S2_COMMAND}\``);
   }
   return problems;
 }
@@ -406,39 +440,49 @@ function workflowWith(what: string, mutate: (lines: string[]) => string[]): stri
   return mutated;
 }
 
-/** The P4-S2 step, gone. A comment that still names the command is left behind on purpose. */
-const S2_REMOVED = (): string =>
-  workflowWith('the P4-S2 step removed', (lines) => {
-    const [start, end] = stepBlock(lines, S2_COMMAND);
-    return [...lines.slice(0, start), `      # removed; it used to be: run: ${S2_COMMAND}`, ...lines.slice(end)];
+/** A gate step, gone. A comment that still names the command is left behind on purpose. */
+const STEP_REMOVED = (command: string): string =>
+  workflowWith(`the step running ${command} removed`, (lines) => {
+    const [start, end] = stepBlock(lines, command);
+    return [...lines.slice(0, start), `      # removed; it used to be: run: ${command}`, ...lines.slice(end)];
   });
 
-/** The two gate steps swapped, so the successor would run before its predecessor. */
-const REORDERED = (): string =>
-  workflowWith('the two gate steps reordered', (lines) => {
-    const [aStart, aEnd] = stepBlock(lines, 'npm run gate:phase4:s1');
-    const [bStart, bEnd] = stepBlock(lines, S2_COMMAND);
-    expect(aEnd, 'the P4-S1 step is expected to precede the P4-S2 step in the tree as it stands').toBeLessThanOrEqual(bStart);
+/** The P4-S2 step, gone. */
+const S2_REMOVED = (): string => STEP_REMOVED(S2_COMMAND);
+
+/** A gate step's `name:` replaced, its command untouched. */
+const STEP_RENAMED = (command: string, replacement: string): string =>
+  workflowWith(`the step running ${command} renamed to ${replacement}`, (lines) => {
+    const [start, end] = stepBlock(lines, command);
+    return lines.map((l, i) => (i >= start && i < end && /^ {6}- name: /.test(l) ? `      - name: ${replacement}` : l));
+  });
+
+/** Two gate steps swapped, named by their commands, so a successor would run before its predecessor. */
+const SWAPPED = (earlier: string, later: string): string =>
+  workflowWith(`${earlier} and ${later} reordered`, (lines) => {
+    const [aStart, aEnd] = stepBlock(lines, earlier);
+    const [bStart, bEnd] = stepBlock(lines, later);
+    expect(aEnd, `${earlier} is expected to precede ${later} in the tree as it stands`).toBeLessThanOrEqual(bStart);
     return [...lines.slice(0, aStart), ...lines.slice(bStart, bEnd), ...lines.slice(aEnd, bStart), ...lines.slice(aStart, aEnd), ...lines.slice(bEnd)];
   });
 
-/** A key added to the P4-S2 step's own mapping. */
-const S2_PLUS = (what: string, line: string): string =>
+/** A key added to a gate step's own mapping. */
+const STEP_PLUS = (command: string, what: string, line: string): string =>
   workflowWith(what, (lines) => {
-    const [start] = stepBlock(lines, S2_COMMAND);
+    const [start] = stepBlock(lines, command);
     return [...lines.slice(0, start + 1), line, ...lines.slice(start + 1)];
   });
 
-/** The P4-S2 step's command changed. */
-const S2_COMMAND_CHANGED = (replacement: string): string =>
-  workflowWith(`the P4-S2 command changed to ${replacement}`, (lines) =>
-    lines.map((l) => (stripComment(l).trim() === `run: ${S2_COMMAND}` ? l.replace(`run: ${S2_COMMAND}`, `run: ${replacement}`) : l)),
+/** A gate step's command changed. */
+const COMMAND_CHANGED = (command: string, replacement: string): string =>
+  workflowWith(`${command} changed to ${replacement}`, (lines) =>
+    lines.map((l) => (stripComment(l).trim() === `run: ${command}` ? l.replace(`run: ${command}`, `run: ${replacement}`) : l)),
   );
 
-/** The P4-S2 step moved out of the required job and into the `hygiene` job. */
-const S2_IN_ANOTHER_JOB = (): string =>
-  workflowWith('the P4-S2 step moved into the hygiene job', (lines) => {
-    const [start, end] = stepBlock(lines, S2_COMMAND);
+/** A gate step moved out of the required job and into the `hygiene` job. */
+const IN_ANOTHER_JOB = (command: string): string =>
+  workflowWith(`the step running ${command} moved into the hygiene job`, (lines) => {
+    const [start, end] = stepBlock(lines, command);
     const block = lines.slice(start, end);
     const without = [...lines.slice(0, start), ...lines.slice(end)];
     const hygiene = without.findIndex((l) => l === '  hygiene:');
@@ -447,6 +491,18 @@ const S2_IN_ANOTHER_JOB = (): string =>
     expect(steps, 'the hygiene job is expected to have a steps sequence').toBeGreaterThan(-1);
     return [...without.slice(0, steps + 1), ...block, ...without.slice(steps + 1)];
   });
+
+/** The P4-S1 and P4-S2 steps swapped, so the successor would run before its predecessor. */
+const REORDERED = (): string => SWAPPED('npm run gate:phase4:s1', S2_COMMAND);
+
+/** A key added to the P4-S2 step's own mapping. */
+const S2_PLUS = (what: string, line: string): string => STEP_PLUS(S2_COMMAND, what, line);
+
+/** The P4-S2 step's command changed. */
+const S2_COMMAND_CHANGED = (replacement: string): string => COMMAND_CHANGED(S2_COMMAND, replacement);
+
+/** The P4-S2 step moved out of the required job and into the `hygiene` job. */
+const S2_IN_ANOTHER_JOB = (): string => IN_ANOTHER_JOB(S2_COMMAND);
 
 // ───────────────────────────────────────────────────────────────────────────
 
@@ -612,5 +668,98 @@ describe('TL-P4-S2-R3 — and every way of breaking it is seen (planted on a cop
     );
     expect(problems).toHaveLength(1);
     expect(problems[0]).toContain('cannot be read as a document');
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// P4-S3. The slice gate `npm run gate:phase4:s3` is a DELTA gate: it does not
+// re-execute P4-S2 inside itself, so the ONLY thing that makes "P4-S1 → P4-S2
+// → P4-S3" a composition is the order of these three steps in the one
+// required job. Every way of breaking that is planted below, on a copy of the
+// workflow text; the checkout is never touched.
+// ───────────────────────────────────────────────────────────────────────────
+
+describe('TL-P4-S2-R3 extended to P4-S3 — the required job composes the whole chain', () => {
+  const doc = parseWorkflow(WORKFLOW_TEXT);
+  const inJob = (script: string): GateStep | undefined => gateSteps(doc, script).filter((s) => s.job === REQUIRED_JOB)[0];
+
+  it('GREEN: the required job runs P4-S1, then P4-S2, then P4-S3, visibly and unconditionally', () => {
+    expect(chainCompositionProblems(WORKFLOW_TEXT)).toEqual([]);
+    const indices = CHAIN.map((c) => inJob(c.script)?.index);
+    expect(indices.every((i) => i !== undefined)).toBe(true);
+    expect(indices).toEqual([...(indices as number[])].sort((a, b) => a - b));
+  });
+
+  it('the P4-S3 step is named, commanded and environed exactly as the chain requires', () => {
+    const s3 = inJob(S3_SCRIPT);
+    const s1 = inJob(S1_SCRIPT);
+    expect(s3).toBeDefined();
+    expect(s1).toBeDefined();
+    const step = s3 === undefined ? {} : s3.step;
+    expect(step['name']).toBe('Phase 4 slice gate — P4-S3');
+    expect(typeof step['run'] === 'string' ? (step['run'] as string).trim() : '').toBe(S3_COMMAND);
+    expect(step['continue-on-error']).toBeUndefined();
+    expect(step['if']).toBeUndefined();
+    // Not a guessed value: the same PG_PORT the P4-S1 step sets, which is what
+    // makes the harness reuse the job's `postgres` service.
+    const env = step['env'];
+    const s1env = s1 === undefined ? {} : s1.step['env'];
+    expect(isMap(env)).toBe(true);
+    expect(isMap(env) ? env['PG_PORT'] : null).toBe(isMap(s1env) ? s1env['PG_PORT'] : 'nothing');
+  });
+
+  it('RED: the P4-S3 step is removed — a comment that still names the command does not stand in for it', () => {
+    const text = STEP_REMOVED(S3_COMMAND);
+    expect(text).toContain(`# removed; it used to be: run: ${S3_COMMAND}`);
+    const problems = chainCompositionProblems(text);
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain('no step of');
+    expect(problems[0]).toContain(S3_SCRIPT);
+    expect(problems[0]).toContain('a gate the workflow never ran');
+  });
+
+  it('RED: the P4-S3 step is RENAMED, its command untouched — the log would no longer identify the slice’s gate', () => {
+    const problems = chainCompositionProblems(STEP_RENAMED(S3_COMMAND, 'Extra checks'));
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain('is named `Extra checks`');
+    expect(problems[0]).toContain('not `Phase 4 slice gate — P4-S3`');
+  });
+
+  it('RED: P4-S3 is moved ahead of P4-S2 — a successor that runs before its predecessor composes nothing', () => {
+    const problems = chainCompositionProblems(SWAPPED(S2_COMMAND, S3_COMMAND));
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain('does not come after');
+    expect(problems[0]).toContain('P4-S2');
+    expect(problems[0]).toContain('the predecessor to run first');
+  });
+
+  it('RED: `continue-on-error: true` is added to the P4-S3 step', () => {
+    const problems = chainCompositionProblems(STEP_PLUS(S3_COMMAND, 'continue-on-error on the P4-S3 step', '        continue-on-error: true'));
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain('continue-on-error');
+    expect(problems[0]).toContain('leaves the required job green');
+  });
+
+  it('RED: the P4-S3 step is made conditional, so a normal push skips it', () => {
+    for (const condition of ["        if: github.event_name == 'workflow_dispatch'", '        if: success()']) {
+      const problems = chainCompositionProblems(STEP_PLUS(S3_COMMAND, `a condition on the P4-S3 step: ${condition}`, condition));
+      expect(problems).toHaveLength(1);
+      expect(problems[0]).toContain('is conditional');
+    }
+  });
+
+  it('RED: the P4-S3 command is weakened — a weakened invocation is not the gate', () => {
+    for (const changed of [`${S3_COMMAND} -- --structural-only`, `${S3_COMMAND} || true`, `echo ${S3_COMMAND}`]) {
+      const problems = chainCompositionProblems(COMMAND_CHANGED(S3_COMMAND, changed));
+      expect(problems).toHaveLength(1);
+      expect(problems[0]).toContain(`not exactly \`${S3_COMMAND}\``);
+      expect(problems[0]).toContain(changed);
+    }
+  });
+
+  it('RED: the P4-S3 step is moved into another job — being somewhere in the workflow is not being in the required job', () => {
+    const problems = chainCompositionProblems(IN_ANOTHER_JOB(S3_COMMAND));
+    expect(problems.some((p) => p.includes('runs in the `hygiene` job'))).toBe(true);
+    expect(problems.some((p) => p.includes(`not in the required \`${REQUIRED_JOB}\` job`))).toBe(true);
   });
 });
