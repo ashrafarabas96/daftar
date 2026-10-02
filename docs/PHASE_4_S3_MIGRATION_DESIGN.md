@@ -82,6 +82,56 @@ a stored total here.
 denominations at once, which is a structural fact rather than a validation, and
 `requested_discount_minor` has exactly one meaning without carrying a currency of its own.
 
+### 3.1b The two counted cash figures, and the line between counted and derived
+
+`opening_float_minor BIGINT NOT NULL` and `closing_count_minor BIGINT NULL` are the cash a human
+**counts** in the drawer when a shift opens and when it ends, in integer minor units of the session's
+`currency_code`. They are in the migration, and the reasoning is `R-P4-S3-09`:
+
+**Why they are storable.** Neither is derivable from anything else in this database. Nobody but the
+person holding the notes knows how much cash is in the drawer, so the figure is a **source document**,
+the same species of fact as a `stocktake_lines` counted quantity or an `inventory_openings` opening —
+both of which the accepted prefix stores. `[[daftar-no-stored-derived-truth]]` is about **derived**
+truth: a column a second writer could make disagree with the function that owns it. A counted figure
+has no such function.
+
+I checked the accepted vocabulary rather than assuming it. `FORBIDDEN_COLUMN_PATTERNS`
+(`scripts/guards/no-authoritative-balance.ts:205`) is `balance(s)`, a debit/credit total, and `stock`.
+`DERIVED_TOTAL_COLUMN_PATTERNS` (`:314-338`) is `AP_BALANCE_COLUMN`
+(`outstanding|paid|unpaid|due|owed|payable|receivable|settled|refunded|collected|allocated`),
+`DERIVED_COST_COLUMN` (a stored COGS or cost total) and `DERIVED_DEBT_COLUMN`
+(`debt|overdue|arrears|aging`). `NEVER_STORED` (`:426`) is `reserved|available`. A counted opening
+float matches **none** of them, and no accepted ruling forbids it. So the answer to "which ruling does
+a counted float violate" is: **none**, and the coordinator's reading is confirmed.
+
+**What my own earlier comment was gesturing at, and why it was wrong as stated.** The worry was that a
+drawer figure implies a reconciliation, and a reconciliation implies a single accountable owner. The
+first half is right and the second is already closed: `pos_till_sessions_one_open_per_terminal_uq` and
+`pos_till_sessions_one_open_per_user_uq` together make the owner of the drawer unambiguous for exactly
+the window the two figures describe, and `OD-P4-09` makes the shift one authenticated user's. What the
+worry should have excluded is not the counts but the **comparison**, and that is what is excluded:
+
+**What is forbidden, and is asserted absent at `0079-E(3b)`:** an expected-cash figure, a variance, a
+discrepancy, an over/short, an overage, a shortage, a drawer or cash balance, a cash total, a
+`reconciled_*` column. Each is a **function** of these two counts and the shift's cash payments, so a
+stored copy could disagree with the function — which is the real content of `P4-AL-05`. The
+reconciliation itself belongs to whichever later slice owns the cash-up; P4-S3 posts nothing
+(`0079-E(5)`), and counting a drawer is not posting it.
+
+**The physical shape.**
+
+| fact | mechanism |
+|---|---|
+| the float is required | `opening_float_minor BIGINT NOT NULL`, range-checked `0 … 10^18` |
+| the close count exists exactly when the shift is closed | `pos_till_sessions_state_ck` carries `closing_count_minor` beside `closed_at` and `close_intent_sha256` |
+| neither can be forged in flight | both are inside the signed `invpl/1` payload of their command, digested as the `integer` field type (`0054:205`, `^(0\|-?[1-9][0-9]*)$`) |
+| a replay with a different float is not a replay | the float is in the open intent, so the digest differs and `pos.idempotency_conflict` names it |
+| the float is final | **absent** from the `UPDATE` grant, and listed among the opening facts in `pos_till_session_guard()` — a float that can be rewritten after the shift opened is not a counted float |
+| the money set is closed | `0079-E(3)` pins the slice's `%_minor` columns to **exactly** these two and the discount request |
+
+The command signatures widen accordingly: `pos_till_session_open(uuid, uuid, uuid, text, text, bigint)`
+and `pos_till_session_close(uuid, bigint)`.
+
 ### 3.2 `OD-P4-09`, as four physical facts
 
 The ruling is "one till session = one authenticated user; a change of user is a new session". A service
@@ -236,7 +286,7 @@ look harmless alone.
 | principal | `pos_till_sessions` | `pos_cart_lines` |
 |---|---|---|
 | `daftar_app` | `SELECT` | `SELECT` |
-| `daftar_inventory_internal` | `SELECT`, `INSERT`, `UPDATE (status, closed_at, close_intent_sha256, business_transaction_id)` | `SELECT`, `INSERT`, `UPDATE (quantity, requested_discount_minor, removed_at)` |
+| `daftar_inventory_internal` | `SELECT`, `INSERT`, `UPDATE (status, closed_at, close_intent_sha256, closing_count_minor, business_transaction_id)` | `SELECT`, `INSERT`, `UPDATE (quantity, requested_discount_minor, removed_at)` |
 | every other runtime principal, PUBLIC | — | — |
 | `daftar_accounting_internal` | — | — |
 
@@ -359,7 +409,8 @@ wrote.
 |---|---|
 | E(1) | both relations are plain tables with `relrowsecurity` **and** `relforcerowsecurity`, and both carry `tenant_id` + `business_id` NOT NULL |
 | E(2) | exactly the six ordinary policies by NAME on each; the direct tenant form; the inventory principal admitted in the restrictive read and the accounting principal not; `daftar_accounting_internal` holds no privilege |
-| E(3) | no derived-truth column, **no price-vocabulary column**, no float/money column, and the slice's `%_minor` set is exactly the one discount request |
+| E(3) | no derived-truth column, **no price-vocabulary column**, no float/money column, and the slice's `%_minor` set is exactly the one discount request and the two counted cash figures |
+| E(3b) | **no reconciliation column**: no expected-cash figure, variance, discrepancy, over/short, drawer or cash balance, cash total or `reconciled_*` — every one is derived from the two counts and the shift's cash payments (`R-P4-S3-09`) |
 | E(4a–e) | `OD-P4-09`: the candidate key; the composite actor FK, both column lists in order, validated, RESTRICT on delete **and** update; the THREE partial unique indexes with their predicates read from `pg_get_indexdef` — one open shift per user, one per terminal, and one LIVE line per ordinal; and the live guard body refusing a change of `opened_by` |
 | E(5) | **no accounting object**, six ways: no POS accounting source type, no POS accounting operation kind, no accounting column, no FK into the accounting estate, no POS routine on `journal_entries`, and no command body naming the ledger or the stock ledger |
 | E(6) | the privileges from the catalogue: `daftar_app` reads; no runtime principal holds DML or any column privilege; the internal writer's writable column lists exactly; no table-level `UPDATE`; nobody but the owner may `DELETE` or `TRUNCATE` **either** relation |
@@ -446,6 +497,33 @@ twice the brief requires. The full-estate rounds are recorded in §12.
 ---
 
 ## 9. Tech Lead review points
+
+### 9.0 `pos_cart_lines.added_by` — the three facts the exemption rests on
+
+The coordinator ratified the column on the ground that a per-row copy a composite key forbids from
+disagreeing is not a second truth, conditional on three facts. Each is asserted in the migration and
+each has a red proof, so a guard can see any of them stop being true:
+
+| fact | asserted at | red proof: the plant | refused by |
+|---|---|---|---|
+| the composite actor FK, validated, `RESTRICT`/`RESTRICT`, both column lists in order | `0079-E(4b)` | the edge narrowed to `(business_id, till_session_id) → (business_id, id)` | `pos.migration_end_state_invalid: 0079-E(4b): pos_cart_lines does not bind (business_id, till_session_id, added_by) to pos_till_sessions (business_id, id, opened_by) …` |
+| `pos_till_sessions_actor_uq` as the reference target | `0079-E(4a)` | the candidate key dropped (and the FK with it, since it depends on it) | `pos.migration_end_state_invalid: 0079-E(4a): pos_till_sessions carries no (business_id, id, opened_by) candidate key, so OD-P4-09's actor edge is not expressible` |
+| the `UPDATE` grant excludes `added_by` | `0079-E(6)` | `added_by` added to the cart's column grant | `pos.authority_leak: 0079-E(6): a cart line's writable columns are {added_by,quantity,removed_at,requested_discount_minor} and not the quantity, the discount request and the removal tombstone alone` |
+
+All three also hold behaviourally, read from the catalogue in the slice's smoke proof (FACT 1, FACT 2,
+FACT 3), and the central claim holds end-to-end: a raw `INSERT` executed as
+`daftar_inventory_internal` with another user's session is refused by
+`pos_cart_lines_session_actor_fk`, and when the actor is dropped from the edge that same `INSERT`
+succeeds.
+
+### 9.0b Accepted rulings recorded
+
+- **`opened_by` is the column name.** Not renamed. It is woven through `pos_till_sessions_actor_uq`,
+  `pos_cart_lines_session_actor_fk`, `pos_till_session_guard()` and six end-state assertions, and the
+  schema is the truth; a client-side `opened_by_user_id` is corrected in the TypeScript.
+- **`pos_till_sessions.warehouse_id` is accepted,** and the POS search route derives the warehouse
+  from the session rather than taking it from the client. The column is `NOT NULL` with a composite
+  `(business_id, warehouse_id)` edge to `warehouses`, so the derivation has a single source.
 
 ### 9.1 `P4-AL-40`'s branch-scope policy cannot be honoured by this migration
 
@@ -555,3 +633,25 @@ still in the `UPDATE` branch — so the check passed while the delete was permit
 was a convention. The shipped check requires the branch to be followed by `RAISE EXCEPTION` and
 requires `RETURN OLD` to appear nowhere in either guard, which is the property that actually decides a
 `BEFORE DELETE` row trigger.
+
+### Round 2 — abandoned deliberately, not failed
+
+Round 2 was launched on the corrected tree and **stopped** mid-run when the coordinator ruled on the
+two counted cash figures (§3.1b): the ruling changes the schema and the two command signatures, so
+finishing a run against the superseded file would have measured nothing. Agent B's
+`tests/performance/accounting-budgets.test.ts` was also live in another worktree at that moment, and
+the brief forbids running a timing-budget suite beside another heavy run. The authoritative round is
+round 3.
+
+### Round 3 — the tree with the counted cash figures
+
+Recorded in the hand-back report with its real exit code.
+
+### The `ORDER BY 1` defect this slice found in its own assertion
+
+`0079-E(3)` read the slice's money columns as
+`array_agg(… ORDER BY 1)`. Inside an aggregate the `1` is the **constant one**, not a positional
+reference, so it sorted nothing — invisible while the array held a single element, and immediately
+red when the two counted figures made it three. Found by `db-from-zero` rather than by reading, which
+is the argument for a migration asserting its own end state at all. Both `ORDER BY 1` aggregates in
+the file now order by the expression.

@@ -200,6 +200,45 @@
 --        refuses a DELETE outright; and the basket of a shift — live lines and
 --        tombstones alike — stays the record of that shift. §12 of
 --        docs/PHASE_4_S3_MIGRATION_DESIGN.md records the round.
+--
+--   R-P4-S3-09 A COUNTED FACT IS NOT A DERIVED ONE. `opening_float_minor` and
+--        `closing_count_minor` are the cash a human COUNTS in the drawer when
+--        a shift opens and when it ends, in integer minor units of the
+--        session's currency. Neither is derivable from anything else in this
+--        database, so neither is a second writer of a truth something else
+--        owns: they are source documents, the same species of fact as a
+--        `stocktake_lines` counted quantity or an `inventory_openings`
+--        opening, and [[daftar-no-stored-derived-truth]] is about DERIVED
+--        truth specifically. The accepted vocabulary agrees and was checked
+--        rather than assumed: `FORBIDDEN_COLUMN_PATTERNS`,
+--        `DERIVED_TOTAL_COLUMN_PATTERNS` and `NEVER_STORED`
+--        (scripts/guards/no-authoritative-balance.ts:205,314-338,426) name
+--        balances, outstanding/paid/receivable figures, stored COGS and cost
+--        totals, debt and aging buckets, and reserved/available stock. A
+--        counted float matches none of them, and no accepted ruling forbids
+--        it.
+--
+--        WHAT IS FORBIDDEN, and is asserted absent at `0079-E(3b)`: an
+--        expected-cash figure, a variance, a discrepancy, an over/short, a
+--        drawer or cash balance, a cash total. Every one is a FUNCTION of
+--        these two counts and the shift's cash payments, and a stored copy
+--        could disagree with the function — which is the real content of
+--        P4-AL-05, and the thing an earlier draft of this file's comment was
+--        gesturing at when it left the counts out too.
+--
+--        The two are also NOT a reconciliation and NOT an accounting object.
+--        P4-S3 posts nothing (`0079-E(5)`): counting a drawer is not posting
+--        it, and the comparison belongs to whichever later slice owns the
+--        cash-up — which is why no `reconciled_*` column exists here either.
+--
+--        `opening_float_minor` is NOT in the UPDATE grant and the lifecycle
+--        guard lists it among the opening facts, because a float that can be
+--        rewritten after the shift opened is not a counted float.
+--        `closing_count_minor` is in the grant and is tied to `status` by
+--        `pos_till_sessions_state_ck`, exactly as `closed_at` and
+--        `close_intent_sha256` are. Both figures are inside the signed
+--        `invpl/1` payload of their command, so a drawer figure cannot be
+--        altered between the minting and the call.
 
 -- ─────────────────────────────────────────────────────────────────────────
 -- 0. Preconditions, read from the live catalogue (R-P4-S3-01).
@@ -329,6 +368,31 @@ CREATE TABLE pos_till_sessions (
   opened_by               UUID NOT NULL REFERENCES users (id),
   opened_at               TIMESTAMPTZ NOT NULL DEFAULT now(),
   closed_at               TIMESTAMPTZ,
+  -- ── THE TWO COUNTED CASH FIGURES (R-P4-S3-09) ─────────────────────────
+  --
+  -- Both are COUNTED FACTS A HUMAN PUTS IN, in integer minor units of this
+  -- session's `currency_code`, and that is what makes them storable: neither
+  -- is derivable from anything else in the database, so neither is a second
+  -- writer of a truth something else owns. They are the same species of fact
+  -- as a `stocktake_lines` counted quantity or an `inventory_openings`
+  -- opening — a source document, recorded because only the person holding the
+  -- notes knows it.
+  --
+  -- WHAT WOULD BE DERIVED, AND IS THEREFORE ABSENT: an expected-cash figure,
+  -- a variance, an over/short, a drawer balance, a cash total. Every one of
+  -- those is a FUNCTION of these two counts and the cash payments of the
+  -- shift, and a stored copy could disagree with the function
+  -- ([[daftar-no-stored-derived-truth]], P4-AL-05). `0079-E(3b)` asserts that
+  -- vocabulary absent from the live column list, so the distinction is
+  -- enforced and not merely described.
+  --
+  -- The reconciliation that compares them is NOT in this slice, and P4-S3
+  -- creates no accounting object: counting the drawer is not posting it.
+  opening_float_minor     BIGINT NOT NULL
+    CONSTRAINT pos_till_sessions_opening_float_ck CHECK (opening_float_minor BETWEEN 0 AND 1000000000000000000),
+  closing_count_minor     BIGINT
+    CONSTRAINT pos_till_sessions_closing_count_ck
+      CHECK (closing_count_minor IS NULL OR closing_count_minor BETWEEN 0 AND 1000000000000000000),
   open_intent_sha256      TEXT NOT NULL CHECK (open_intent_sha256 ~ '^[0-9a-f]{64}$'),
   close_intent_sha256     TEXT CHECK (close_intent_sha256 IS NULL OR close_intent_sha256 ~ '^[0-9a-f]{64}$'),
   business_transaction_id UUID NOT NULL,
@@ -343,8 +407,8 @@ CREATE TABLE pos_till_sessions (
   -- `0063:260` names; P4-AL-33): one CHECK enumerating each status with every
   -- column that must be null or non-null in it.
   CONSTRAINT pos_till_sessions_state_ck CHECK (
-    (status = 'open'   AND closed_at IS NULL     AND close_intent_sha256 IS NULL)
-    OR (status = 'closed' AND closed_at IS NOT NULL AND close_intent_sha256 IS NOT NULL)
+    (status = 'open'   AND closed_at IS NULL     AND close_intent_sha256 IS NULL     AND closing_count_minor IS NULL)
+    OR (status = 'closed' AND closed_at IS NOT NULL AND close_intent_sha256 IS NOT NULL AND closing_count_minor IS NOT NULL)
   ),
   CONSTRAINT pos_till_sessions_closed_after_ck CHECK (closed_at IS NULL OR closed_at >= opened_at),
   CONSTRAINT pos_till_sessions_tenant_fk FOREIGN KEY (tenant_id, business_id) REFERENCES businesses (tenant_id, id),
@@ -520,7 +584,10 @@ CREATE POLICY inventory_internal_read ON pos_cart_lines
 --    UPDATE is COLUMN-LEVEL, never table-level: a table-level UPDATE would let
 --    the trusted generic primitive write a column the lifecycle guard happens
 --    not to name (the `0063:597` / `0077` shape). On the session the writable
---    set is exactly the closing columns; on a cart line it is exactly the two
+--    set is exactly the closing columns — `opening_float_minor` is NOT among
+--    them, because a counted opening float is a fact of the opening and a
+--    shift whose float can be rewritten afterwards has no counted float at
+--    all; on a cart line it is exactly the two
 --    figures a cashier may revise — and `added_by` is NOT among them, which is
 --    a fifth, privilege-level expression of OD-P4-09.
 --
@@ -537,7 +604,7 @@ CREATE POLICY inventory_internal_read ON pos_cart_lines
 -- ─────────────────────────────────────────────────────────────────────────
 GRANT SELECT ON pos_till_sessions, pos_cart_lines TO daftar_app;
 GRANT SELECT, INSERT ON pos_till_sessions, pos_cart_lines TO daftar_inventory_internal;
-GRANT UPDATE (status, closed_at, close_intent_sha256, business_transaction_id) ON pos_till_sessions TO daftar_inventory_internal;
+GRANT UPDATE (status, closed_at, close_intent_sha256, closing_count_minor, business_transaction_id) ON pos_till_sessions TO daftar_inventory_internal;
 GRANT UPDATE (quantity, removed_at, requested_discount_minor) ON pos_cart_lines TO daftar_inventory_internal;
 
 -- ─────────────────────────────────────────────────────────────────────────
@@ -587,6 +654,7 @@ BEGIN
      OR NEW.branch_id IS DISTINCT FROM OLD.branch_id OR NEW.warehouse_id IS DISTINCT FROM OLD.warehouse_id
      OR NEW.terminal_code IS DISTINCT FROM OLD.terminal_code OR NEW.currency_code IS DISTINCT FROM OLD.currency_code
      OR NEW.opened_at IS DISTINCT FROM OLD.opened_at
+     OR NEW.opening_float_minor IS DISTINCT FROM OLD.opening_float_minor
      OR NEW.open_intent_sha256 IS DISTINCT FROM OLD.open_intent_sha256 THEN
     RAISE EXCEPTION 'pos.till_session_immutable: the identity and the opening facts of a till session are final' USING ERRCODE = 'P0001';
   END IF;
@@ -694,12 +762,18 @@ CREATE TRIGGER pos_cart_lines_session_open
 -- (a) Open a shift. The actor is the assertion's; the business and the tenant
 --     are the assertion's; a replay of the same intent on the same id is the
 --     same session, and a different intent on the same id is a conflict.
+--
+--     The counted opening float is part of the signed payload, so a replay
+--     presenting a DIFFERENT float is not a replay: its intent digest differs
+--     and `pos.idempotency_conflict` names it. That is the property that makes
+--     the figure trustworthy at all (R-P4-S3-09).
 CREATE FUNCTION pos_till_session_open(
   p_session_id    UUID,
   p_branch_id     UUID,
   p_warehouse_id  UUID,
   p_terminal_code TEXT,
-  p_currency_code TEXT
+  p_currency_code TEXT,
+  p_opening_float_minor BIGINT
 ) RETURNS TABLE (
   till_session_id UUID,
   replayed        BOOLEAN
@@ -715,8 +789,9 @@ DECLARE
   v_replay BOOLEAN;
 BEGIN
   v_actor := inventory_assertion_consume('pos.session_open', inventory_claimed_payload_digest('pos.session_open',
-    ARRAY['uuid', 'uuid', 'uuid', 'code', 'code'],
-    ARRAY[p_session_id::text, p_branch_id::text, p_warehouse_id::text, p_terminal_code, lower(p_currency_code)]));
+    ARRAY['uuid', 'uuid', 'uuid', 'code', 'code', 'integer'],
+    ARRAY[p_session_id::text, p_branch_id::text, p_warehouse_id::text, p_terminal_code, lower(p_currency_code),
+          p_opening_float_minor::text]));
   IF current_setting('transaction_isolation') <> 'read committed' THEN
     RAISE EXCEPTION 'inventory.isolation_unsupported: POS commands run only at READ COMMITTED' USING ERRCODE = 'P0001';
   END IF;
@@ -730,6 +805,13 @@ BEGIN
   END IF;
   IF p_currency_code IS NULL OR p_currency_code <> upper(p_currency_code) OR char_length(p_currency_code) <> 3 THEN
     RAISE EXCEPTION 'inventory.payload_invalid: a till session names an upper-case ISO currency code' USING ERRCODE = 'P0001';
+  END IF;
+  -- The counted float is REQUIRED and non-negative. It is inside the signed
+  -- payload above, so a drawer figure cannot be changed between the minting
+  -- and the call; the CHECK is the localizable message for the range.
+  IF p_opening_float_minor IS NULL OR p_opening_float_minor < 0 THEN
+    RAISE EXCEPTION 'inventory.payload_invalid: a till session records the counted cash in the drawer when it opens, in minor units'
+      USING ERRCODE = 'P0001';
   END IF;
 
   -- THREE advisory locks, ALWAYS IN THIS ORDER, and no `EXCEPTION WHEN`
@@ -777,9 +859,9 @@ BEGIN
       RAISE EXCEPTION 'pos.terminal_already_open: this terminal already holds an open till session' USING ERRCODE = 'P0001';
     END IF;
     INSERT INTO pos_till_sessions (tenant_id, business_id, id, branch_id, warehouse_id, terminal_code, currency_code,
-                                   status, opened_by, open_intent_sha256, business_transaction_id)
+                                   status, opened_by, opening_float_minor, open_intent_sha256, business_transaction_id)
     VALUES (v_actor.tenant_id, v_actor.business_id, p_session_id, p_branch_id, p_warehouse_id, p_terminal_code,
-            upper(p_currency_code), 'open', v_actor.actor_user_id, v_intent, v_trace);
+            upper(p_currency_code), 'open', v_actor.actor_user_id, p_opening_float_minor, v_intent, v_trace);
 
     INSERT INTO audit_events (tenant_id, business_id, actor_user_id, action, entity, entity_id, metadata)
     VALUES (v_actor.tenant_id, v_actor.business_id, v_actor.actor_user_id, 'pos.till_session_opened', 'pos_till_session',
@@ -792,13 +874,13 @@ BEGIN
 END;
 $$;
 
-COMMENT ON FUNCTION pos_till_session_open(UUID, UUID, UUID, TEXT, TEXT) IS
-  'P4-S3, OD-P4-09. Opens one till session for the actor the invctl/1 pos.session_open assertion names; the business, the tenant and the ACTOR come from the assertion and never from an argument. Under the daftar.pos_till_session_id key an existing id replays when its open intent AND its user are equal, and is pos.idempotency_conflict or pos.till_session_not_yours otherwise. A second open session for the same user is pos.till_session_already_open and for the same terminal pos.terminal_already_open, pre-checked under the daftar.pos_till_session_actor and daftar.pos_till_terminal advisory keys (rule 22 forbids an EXCEPTION handler in a routine that writes a truth table, so the index cannot be translated after the fact) while the two partial unique indexes stay the authority. EXECUTE: daftar_app only — reachability, not authority.';
+COMMENT ON FUNCTION pos_till_session_open(UUID, UUID, UUID, TEXT, TEXT, BIGINT) IS
+  'P4-S3, OD-P4-09. Opens one till session for the actor the invctl/1 pos.session_open assertion names; the business, the tenant and the ACTOR come from the assertion and never from an argument. Under the daftar.pos_till_session_id key an existing id replays when its open intent AND its user are equal, and is pos.idempotency_conflict or pos.till_session_not_yours otherwise. A second open session for the same user is pos.till_session_already_open and for the same terminal pos.terminal_already_open, pre-checked under the daftar.pos_till_session_actor and daftar.pos_till_terminal advisory keys (rule 22 forbids an EXCEPTION handler in a routine that writes a truth table, so the index cannot be translated after the fact) while the two partial unique indexes stay the authority. p_opening_float_minor is the cash a human COUNTED in the drawer, in minor units of the session currency; it is inside the signed payload, so a replay presenting a different float is pos.idempotency_conflict and not a replay, and it is absent from the UPDATE grant so it cannot be rewritten afterwards (R-P4-S3-09). EXECUTE: daftar_app only — reachability, not authority.';
 
 -- (b) Close a shift. The basket stays: a closed session and its lines are the
 --     frozen record of what was in the drawer, and `pos_cart_line_guard()`
 --     refuses every write to them afterwards.
-CREATE FUNCTION pos_till_session_close(p_session_id UUID) RETURNS TABLE (
+CREATE FUNCTION pos_till_session_close(p_session_id UUID, p_closing_count_minor BIGINT) RETURNS TABLE (
   till_session_id UUID,
   replayed        BOOLEAN
 )
@@ -814,7 +896,7 @@ DECLARE
   v_replay BOOLEAN;
 BEGIN
   v_actor := inventory_assertion_consume('pos.session_close', inventory_claimed_payload_digest('pos.session_close',
-    ARRAY['uuid'], ARRAY[p_session_id::text]));
+    ARRAY['uuid', 'integer'], ARRAY[p_session_id::text, p_closing_count_minor::text]));
   IF current_setting('transaction_isolation') <> 'read committed' THEN
     RAISE EXCEPTION 'inventory.isolation_unsupported: POS commands run only at READ COMMITTED' USING ERRCODE = 'P0001';
   END IF;
@@ -822,6 +904,10 @@ BEGIN
   v_trace  := inventory_business_transaction_id();
   IF v_trace IS NULL THEN
     RAISE EXCEPTION 'inventory.trace_missing: a till session records its business transaction id' USING ERRCODE = 'P0001';
+  END IF;
+  IF p_closing_count_minor IS NULL OR p_closing_count_minor < 0 THEN
+    RAISE EXCEPTION 'inventory.payload_invalid: closing a till session records the counted cash in the drawer, in minor units'
+      USING ERRCODE = 'P0001';
   END IF;
   v_intent := split_part(current_setting('app.inventory_assertion', true), '.', 7);
 
@@ -841,7 +927,8 @@ BEGIN
     v_replay := true;
   ELSE
     UPDATE pos_till_sessions s
-       SET status = 'closed', closed_at = now(), close_intent_sha256 = v_intent, business_transaction_id = v_trace
+       SET status = 'closed', closed_at = now(), close_intent_sha256 = v_intent,
+           closing_count_minor = p_closing_count_minor, business_transaction_id = v_trace
      WHERE s.business_id = v_actor.business_id AND s.id = p_session_id;
 
     INSERT INTO audit_events (tenant_id, business_id, actor_user_id, action, entity, entity_id, metadata)
@@ -854,8 +941,8 @@ BEGIN
 END;
 $$;
 
-COMMENT ON FUNCTION pos_till_session_close(UUID) IS
-  'P4-S3, OD-P4-09. Closes the actor''s OWN till session (pos.till_session_not_yours otherwise), under an invctl/1 pos.session_close assertion. Already closed by the same intent replays; by a different one it is pos.idempotency_conflict. The basket is NOT deleted: a closed session and its lines are the frozen record of the shift, and pos_cart_line_guard() refuses every later write to them. EXECUTE: daftar_app only.';
+COMMENT ON FUNCTION pos_till_session_close(UUID, BIGINT) IS
+  'P4-S3, OD-P4-09. Closes the actor''s OWN till session (pos.till_session_not_yours otherwise), under an invctl/1 pos.session_close assertion. Already closed by the same intent replays; by a different one it is pos.idempotency_conflict. p_closing_count_minor is the cash a human COUNTED in the drawer at the end of the shift, in minor units of the session currency, and it is inside the signed payload; pos_till_sessions_state_ck ties it to the closed status exactly as it ties closed_at. No expected-cash figure, variance or over/short is stored: each is derived from this count, the opening float and the shift''s cash payments, and the comparison belongs to whichever later slice owns the cash-up (R-P4-S3-09). The basket is NOT deleted: a closed session and its lines are the frozen record of the shift, and pos_cart_line_guard() refuses every later write to them. EXECUTE: daftar_app only.';
 
 -- (c) Set a cart line: the whole of what a client may say about a basket.
 --     IDENTITIES, A QUANTITY AND A DISCOUNT REQUEST (P4-AL-18, OD-P4-02).
@@ -1016,21 +1103,21 @@ $$;
 COMMENT ON FUNCTION pos_cart_remove_line(UUID, UUID) IS
   'P4-S3, OD-P4-09. Removes one line of the actor''s OWN open cart by writing its removed_at TOMBSTONE — never a DELETE, because the accepted estate gives the internal writer no DELETE on a relation beyond the accepted prefix and a basket is the append-only record of its shift. added_by is in the predicate because the actor edge cannot refuse a revision of a row that already satisfies it, and pos_cart_line_guard() refuses the write outright once the session is closed. Returns the row count, so a repeated removal is 0 and not an error. EXECUTE: daftar_app only.';
 
-REVOKE ALL ON FUNCTION pos_till_session_open(UUID, UUID, UUID, TEXT, TEXT) FROM PUBLIC;
-REVOKE ALL ON FUNCTION pos_till_session_close(UUID) FROM PUBLIC;
+REVOKE ALL ON FUNCTION pos_till_session_open(UUID, UUID, UUID, TEXT, TEXT, BIGINT) FROM PUBLIC;
+REVOKE ALL ON FUNCTION pos_till_session_close(UUID, BIGINT) FROM PUBLIC;
 REVOKE ALL ON FUNCTION pos_cart_set_line(UUID, UUID, INTEGER, UUID, UUID, NUMERIC, BIGINT) FROM PUBLIC;
 REVOKE ALL ON FUNCTION pos_cart_remove_line(UUID, UUID) FROM PUBLIC;
 
-GRANT EXECUTE ON FUNCTION pos_till_session_open(UUID, UUID, UUID, TEXT, TEXT) TO daftar_app;
-GRANT EXECUTE ON FUNCTION pos_till_session_close(UUID) TO daftar_app;
+GRANT EXECUTE ON FUNCTION pos_till_session_open(UUID, UUID, UUID, TEXT, TEXT, BIGINT) TO daftar_app;
+GRANT EXECUTE ON FUNCTION pos_till_session_close(UUID, BIGINT) TO daftar_app;
 GRANT EXECUTE ON FUNCTION pos_cart_set_line(UUID, UUID, INTEGER, UUID, UUID, NUMERIC, BIGINT) TO daftar_app;
 GRANT EXECUTE ON FUNCTION pos_cart_remove_line(UUID, UUID) TO daftar_app;
 
 -- The handover, last (R-P4-S3-04), and the bracket closed immediately after.
 ALTER FUNCTION pos_till_session_guard() OWNER TO daftar_inventory_internal;
 ALTER FUNCTION pos_cart_line_guard() OWNER TO daftar_inventory_internal;
-ALTER FUNCTION pos_till_session_open(UUID, UUID, UUID, TEXT, TEXT) OWNER TO daftar_inventory_internal;
-ALTER FUNCTION pos_till_session_close(UUID) OWNER TO daftar_inventory_internal;
+ALTER FUNCTION pos_till_session_open(UUID, UUID, UUID, TEXT, TEXT, BIGINT) OWNER TO daftar_inventory_internal;
+ALTER FUNCTION pos_till_session_close(UUID, BIGINT) OWNER TO daftar_inventory_internal;
 ALTER FUNCTION pos_cart_set_line(UUID, UUID, INTEGER, UUID, UUID, NUMERIC, BIGINT) OWNER TO daftar_inventory_internal;
 ALTER FUNCTION pos_cart_remove_line(UUID, UUID) OWNER TO daftar_inventory_internal;
 
@@ -1061,7 +1148,7 @@ DECLARE
                                        'daftar_provisioner', 'daftar_reconciler', 'public'];
   c_dml       CONSTANT TEXT[] := ARRAY['INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER'];
   c_guards    CONSTANT TEXT[] := ARRAY['pos_till_session_guard()', 'pos_cart_line_guard()'];
-  c_commands  CONSTANT TEXT[] := ARRAY['pos_till_session_open(uuid,uuid,uuid,text,text)', 'pos_till_session_close(uuid)',
+  c_commands  CONSTANT TEXT[] := ARRAY['pos_till_session_open(uuid,uuid,uuid,text,text,bigint)', 'pos_till_session_close(uuid,bigint)',
                                        'pos_cart_set_line(uuid,uuid,integer,uuid,uuid,numeric,bigint)',
                                        'pos_cart_remove_line(uuid,uuid)'];
   c_ops       CONSTANT TEXT[] := ARRAY['pos.cart_remove_line', 'pos.cart_set_line', 'pos.session_close', 'pos.session_open'];
@@ -1072,6 +1159,14 @@ DECLARE
   -- it (P4-AL-05, P4-AL-18).
   c_forbidden CONSTANT TEXT := '(^|_)(balance|outstanding|paid|unpaid|due|owed|payable|receivable|settled|refunded|collected'
                             || '|allocated|cogs|cost|reserved|available|stock)($|_)';
+  -- R-P4-S3-09's vocabulary: what a DRAWER RECONCILIATION would store. Each
+  -- word names a figure derived from the two counted cash figures and the
+  -- shift's cash payments, so each is a second writer of a function's truth.
+  -- `float` and `count` are deliberately NOT here: those are the counts
+  -- themselves, which nothing else in the database can produce.
+  c_reconciled CONSTANT TEXT := '(^|_)(expected|variance|variances|discrepancy|discrepancies|over_short|overage|overages'
+                            || '|shortage|shortages|shortfall|drawer_balance|cash_balance|cash_total|cash_totals'
+                            || '|counted_expected|reconciled|reconciliation)($|_)';
   c_priced    CONSTANT TEXT := '(^|_)(price|prices|unit_price|gross|net|subtotal|subtotals|total|totals|amount|amounts'
                             || '|tax|taxes|rate|rates|percent|percentage|value)($|_)';
   c_instant   CONSTANT TEXT := '_(id|ids|at|date|by|status|kind|type|code|name|currency|seq|no)$';
@@ -1175,14 +1270,46 @@ BEGIN
         USING ERRCODE = 'P0001';
     END IF;
   END LOOP;
-  SELECT array_agg(c.relname || '.' || a.attname || ':' || format_type(a.atttypid, NULL) ORDER BY 1) INTO v_actual
+  -- ORDER BY the EXPRESSION, never `ORDER BY 1`: inside an aggregate the `1`
+  -- is the constant one and sorts nothing, which a one-element array hides.
+  SELECT array_agg(c.relname || '.' || a.attname || ':' || format_type(a.atttypid, NULL)
+                   ORDER BY c.relname || '.' || a.attname) INTO v_actual
     FROM pg_class c JOIN pg_attribute a ON a.attrelid = c.oid
    WHERE c.oid = ANY (SELECT ('public.' || x)::regclass FROM unnest(c_relations) x)
      AND a.attnum > 0 AND NOT a.attisdropped AND a.attname LIKE '%_minor';
-  IF v_actual IS DISTINCT FROM ARRAY['pos_cart_lines.requested_discount_minor:bigint'] THEN
-    RAISE EXCEPTION 'pos.migration_end_state_invalid: 0079-E(3): the slice''s minor-unit columns are % and not the one discount REQUEST (OD-P4-02 is DISCOUNT ONLY)', v_actual
+  -- The slice's money columns are EXACTLY three, and each of the three is a
+  -- fact somebody PUT IN rather than a figure something else computes: the
+  -- client's discount REQUEST on a cart line (OD-P4-02 is DISCOUNT ONLY), and
+  -- the two COUNTED CASH figures of the shift (R-P4-S3-09). A fourth
+  -- `%_minor` column on either relation is red whatever it is called, which
+  -- is what makes this an equality and not a sweep.
+  IF v_actual IS DISTINCT FROM ARRAY['pos_cart_lines.requested_discount_minor:bigint',
+                                     'pos_till_sessions.closing_count_minor:bigint',
+                                     'pos_till_sessions.opening_float_minor:bigint'] THEN
+    RAISE EXCEPTION 'pos.migration_end_state_invalid: 0079-E(3): the slice''s minor-unit columns are % and not the one discount REQUEST and the two COUNTED cash figures', v_actual
       USING ERRCODE = 'P0001';
   END IF;
+
+  -- (3b) THE COUNTED/DERIVED LINE, ENFORCED (R-P4-S3-09). A counted float and
+  --      a counted close are storable because nothing else in the database
+  --      can produce them. Everything the RECONCILIATION would produce from
+  --      them is a function of those counts and of the shift's cash payments,
+  --      so a stored copy is a second writer of a truth the function owns —
+  --      and that is the whole of why these two are admitted and those are
+  --      not. The vocabulary is asserted ABSENT from the live column list, so
+  --      the distinction is a property of the database and not of this
+  --      comment. `c_instant` exempts an identity, an actor or an instant, so
+  --      `closed_at` and `business_transaction_id` are not caught by it.
+  FOREACH v_name IN ARRAY c_relations LOOP
+    IF EXISTS (SELECT 1 FROM pg_attribute a
+                WHERE a.attrelid = ('public.' || v_name)::regclass AND a.attnum > 0 AND NOT a.attisdropped
+                  AND a.attname ~ c_reconciled AND a.attname !~ c_instant) THEN
+      RAISE EXCEPTION 'pos.derived_truth_stored: 0079-E(3b): % carries % — an expected-cash figure, a variance, an over/short or a drawer balance is DERIVED from the two counted figures and the shift''s cash payments, and a stored copy could disagree with the function (P4-AL-05)', v_name,
+        (SELECT a.attname FROM pg_attribute a WHERE a.attrelid = ('public.' || v_name)::regclass AND a.attnum > 0
+           AND NOT a.attisdropped AND a.attname ~ c_reconciled AND a.attname !~ c_instant LIMIT 1)
+        USING ERRCODE = 'P0001';
+    END IF;
+  END LOOP;
 
   -- (4) OD-P4-09 IN THE DATABASE, read from the catalogue (R-P4-S3-02).
   --     Four claims, and each is the mechanism and not a description of it.
@@ -1365,8 +1492,9 @@ BEGIN
     FROM pg_attribute a, aclexplode(a.attacl) x
    WHERE a.attrelid = 'public.pos_till_sessions'::regclass AND a.attnum > 0 AND NOT a.attisdropped
      AND x.grantee::regrole::text = 'daftar_inventory_internal' AND x.privilege_type = 'UPDATE';
-  IF v_actual IS DISTINCT FROM ARRAY['business_transaction_id', 'close_intent_sha256', 'closed_at', 'status'] THEN
-    RAISE EXCEPTION 'pos.authority_leak: 0079-E(6): the session''s writable columns are % and not the four closing columns — in particular opened_by must not be among them (OD-P4-09)', v_actual
+  IF v_actual IS DISTINCT FROM ARRAY['business_transaction_id', 'close_intent_sha256', 'closed_at',
+                                     'closing_count_minor', 'status'] THEN
+    RAISE EXCEPTION 'pos.authority_leak: 0079-E(6): the session''s writable columns are % and not the five closing columns — in particular opened_by must not be among them (OD-P4-09), and neither must opening_float_minor, because a counted float that can be rewritten after the shift opened is not a counted float (R-P4-S3-09)', v_actual
       USING ERRCODE = 'P0001';
   END IF;
   SELECT array_agg(a.attname::text ORDER BY a.attname) INTO v_actual
@@ -1477,7 +1605,7 @@ BEGIN
     IF NOT has_function_privilege('daftar_app', ('public.' || v_sig)::regprocedure, 'EXECUTE') THEN
       RAISE EXCEPTION 'pos.migration_end_state_invalid: 0079-E(8): daftar_app cannot execute %', v_sig USING ERRCODE = 'P0001';
     END IF;
-    SELECT array_agg(x.grantee::regrole::text ORDER BY 1) INTO v_actual
+    SELECT array_agg(x.grantee::regrole::text ORDER BY x.grantee::regrole::text) INTO v_actual
       FROM pg_proc p, aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) x
      WHERE p.oid = ('public.' || v_sig)::regprocedure AND x.privilege_type = 'EXECUTE' AND x.grantee <> p.proowner;
     IF v_actual IS DISTINCT FROM ARRAY['daftar_app'] THEN
@@ -1644,10 +1772,10 @@ BEGIN
   --     and before any foreign key: no fixture row is needed and none is made.
   BEGIN
     INSERT INTO pos_till_sessions (tenant_id, business_id, id, branch_id, warehouse_id, terminal_code, currency_code,
-                                   status, opened_by, closed_at, open_intent_sha256, close_intent_sha256,
-                                   business_transaction_id)
+                                   status, opened_by, opening_float_minor, closing_count_minor, closed_at,
+                                   open_intent_sha256, close_intent_sha256, business_transaction_id)
       VALUES (gen_random_uuid(), gen_random_uuid(), gen_random_uuid(), gen_random_uuid(), gen_random_uuid(), 'till_a', 'USD',
-              'closed', gen_random_uuid(), now(), repeat('a', 64), repeat('b', 64), gen_random_uuid());
+              'closed', gen_random_uuid(), 0, 0, now(), repeat('a', 64), repeat('b', 64), gen_random_uuid());
     RAISE EXCEPTION 'pos.migration_end_state_invalid: 0079-P(a): a till session was INSERTed already closed' USING ERRCODE = 'P0001';
   EXCEPTION
     WHEN OTHERS THEN
@@ -1714,9 +1842,9 @@ BEGIN
   PERFORM set_config('app.business_id', v_business::text, true);
   BEGIN
     INSERT INTO pos_till_sessions (tenant_id, business_id, id, branch_id, warehouse_id, terminal_code, currency_code,
-                                   status, opened_by, open_intent_sha256, business_transaction_id)
+                                   status, opened_by, opening_float_minor, open_intent_sha256, business_transaction_id)
       VALUES (v_tenant, v_business, gen_random_uuid(), gen_random_uuid(), gen_random_uuid(), 'Till #1', 'USD',
-              'open', gen_random_uuid(), repeat('a', 64), gen_random_uuid());
+              'open', gen_random_uuid(), 0, repeat('a', 64), gen_random_uuid());
     RAISE EXCEPTION 'pos.migration_end_state_invalid: 0079-P(c): a till name outside the invpl/1 code grammar was accepted, so a session could exist that no assertion can cover'
       USING ERRCODE = 'P0001';
   EXCEPTION
