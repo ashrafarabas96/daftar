@@ -150,6 +150,20 @@ describe('a refusal the API can send is a refusal the client can name', () => {
     const declared = declaredFields().filter((f) => f !== 'sellingCode');
     const unreadable = [...attached.keys()].filter((field) => !declared.includes(field));
     expect(unreadable).toEqual(['sellingCode']);
-    expect(attached.get('sellingCode')?.[0]).toBe('apps/api/src/modules/selling/selling-errors.ts:473');
+    // The site is DERIVED and then checked against the file, not written down.
+    // This assertion first read `.toBe('…/selling-errors.ts:473')`, and the
+    // line moved to 576 the moment the registry grew — which is the exact
+    // hand-kept-fact defect this whole suite exists to prevent, committed one
+    // level down inside the suite itself. A literal line number beside a
+    // derivation is a fact that goes stale on every merge that touches the
+    // file, including the merges that prove the derivation works.
+    const site = attached.get('sellingCode')?.[0] ?? '';
+    const [file, line] = site.split(':');
+    expect(file).toBe('apps/api/src/modules/selling/selling-errors.ts');
+    expect(Number(line)).toBeGreaterThan(0);
+    // And the derived site really points at the attachment, so "derived"
+    // cannot quietly mean "wrong line".
+    const text = readFileSync(join(REPO, file ?? ''), 'utf8').split('\n')[Number(line) - 1] ?? '';
+    expect(text).toMatch(/\bsellingCode\s*:/);
   });
 });

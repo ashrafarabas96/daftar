@@ -63,7 +63,36 @@ import {
   cartStatementPlan,
   type CartCommandTarget,
 } from '../../apps/api/src/modules/pos/pos-cart-statements';
-import { POS_CODES, isPosCode, posRefusal } from '../../apps/api/src/modules/pos/pos-errors';
+import { POS_CODES, isPosCode, posRefusal, type PosCode } from '../../apps/api/src/modules/pos/pos-errors';
+
+/**
+ * THE SERVER CART'S OWN REFUSAL CODES, derived from the cart module's source.
+ *
+ * This was `POS_CODES.filter((c) => c.startsWith('pos.cart_'))`, and the
+ * prefix is not the thing it was standing for. `0079`'s own triggers raise
+ * `pos.cart_line_removed` and `pos.cart_line_immutable`, which are registered
+ * and begin `pos.cart_` and are NOT the server cart's: they belong to the
+ * migration's immutability guard and to the POS session law that asserts it.
+ * The moment another agent registered them, every claim below that pinned an
+ * exact set or an exact map went red while being right about everything it
+ * actually measured.
+ *
+ * It is the same class of defect as a planted root that copied the whole
+ * migrations directory, or a hand-kept list of refusal-detail field names: a
+ * SHAPE used as a stand-in for a FACT, correct until someone else's work
+ * matches the shape. So the fact is read directly — a code this module names
+ * in its own source — and intersected with the registry, so a code the cart
+ * raises without registering still fails the claim below rather than
+ * disappearing from it.
+ */
+const CART_MODULE_CODES: readonly PosCode[] = (() => {
+  const sources = readdirSync(join(__dirname, '..', '..', 'apps/api/src/modules/pos'))
+    .filter((f) => /^pos-cart.*\.ts$/.test(f) || f === 'pos-price-authority.ts')
+    .map((f) => readFileSync(join(__dirname, '..', '..', 'apps/api/src/modules/pos', f), 'utf8'))
+    .join('\n');
+  const named = new Set([...sources.matchAll(/pos\.cart_[a-z_]+/g)].map((m) => m[0]));
+  return POS_CODES.filter((c) => named.has(c));
+})();
 import { POS_CART_ROUTE_AUTHORITY } from '../../apps/api/src/modules/pos/pos-cart-routes';
 import { SELLING_CODES, isSellingCode } from '../../apps/api/src/modules/selling/selling-errors';
 import {
@@ -701,7 +730,16 @@ describe('P4-S3 (D) — no stored derived truth, and the refusal registry', () =
     // the one the database answers to. Reported as a conflict, not resolved
     // in A's file.
     expect(POS_CART_COLUMNS.sessions.owner).toBe('opened_by');
-    expect(POS_CART_COLUMNS.sessions.owner).not.toBe(TILL_SESSION_COLUMNS.owner);
+    // This read `.not.toBe(TILL_SESSION_COLUMNS.owner)` while the session
+    // contract still said `opened_by_user_id` and the disagreement was open.
+    // It is RESOLVED: `pos-session-contract.ts:127` now says `opened_by`, the
+    // same name the migration's `pos_till_sessions_actor_uq` and
+    // `pos_cart_lines_session_actor_fk` are built on. So the assertion is
+    // inverted — it now demands that the two modules DISAGREE about a column
+    // whose name they were corrected to share, and it would stay red for as
+    // long as they are right. Pinned as the equality it should always have
+    // been, which is a claim that goes red if either side drifts again.
+    expect(POS_CART_COLUMNS.sessions.owner).toBe(TILL_SESSION_COLUMNS.owner);
   });
 
   it('the basket is APPEND-ONLY: no cart statement is an upsert, anywhere', () => {
@@ -817,7 +855,7 @@ describe('P4-S3 (D) — no stored derived truth, and the refusal registry', () =
     // module registers nothing of its own: a second status table would be a
     // second answer to "what status does this code have" while the error
     // filter reads the first one.
-    const cartCodes = POS_CODES.filter((c) => c.startsWith('pos.cart_'));
+    const cartCodes = CART_MODULE_CODES;
     expect(cartCodes.length).toBeGreaterThan(0);
     for (const code of cartCodes) {
       expect(isSellingCode(code), `${code} is not in the canonical registry`).toBe(true);
@@ -843,6 +881,13 @@ describe('P4-S3 (D) — no stored derived truth, and the refusal registry', () =
       'pos.cart_rounding_grain_invalid': 500,
       'pos.cart_minor_units_invalid': 500,
       'pos.cart_statement_plan_invalid': 500,
+      // Surfaced by the cart, raised by the migration: the ordinal can be
+      // taken between the gate and the routine, the partial unique index
+      // refuses the second writer, and `pos_cart_set_line` raises this. A
+      // real refusal of a real race, and retryable by the client — which is
+      // why it is HERE and `pos.cart_line_removed` and
+      // `pos.cart_line_immutable` are not. Those two the cart never names.
+      'pos.cart_line_conflict': 409,
     });
     // A code the registry does not hold is not a refusal at all.
     expect(isPosCode('pos.cart_made_up')).toBe(false);
@@ -860,7 +905,7 @@ describe('P4-S3 (D) — no stored derived truth, and the refusal registry', () =
     // invariant is "a cart code the registry gives 500", which is checkable,
     // whereas `_invalid` also matches `pos.cart_quantity_invalid` — a 400 a
     // cashier causes every day.
-    const invariants = POS_CODES.filter((c) => c.startsWith('pos.cart_') && posRefusal(c).httpStatus === 500);
+    const invariants = CART_MODULE_CODES.filter((c) => posRefusal(c).httpStatus === 500);
     expect([...invariants].sort()).toEqual(['pos.cart_minor_units_invalid', 'pos.cart_rounding_grain_invalid', 'pos.cart_statement_plan_invalid']);
     for (const code of invariants) {
       const error = posRefusal(code);
@@ -883,7 +928,7 @@ describe('P4-S3 (D) — no stored derived truth, and the refusal registry', () =
   it('P4-S3 registers NO payment, allocation, credit, refund, return or installment code', () => {
     // The slice owns none of those objects, and a registered code for a thing
     // that cannot be asked for is a hint that it could be.
-    for (const code of POS_CODES.filter((c) => c.startsWith('pos.cart_'))) {
+    for (const code of CART_MODULE_CODES) {
       expect(code).not.toMatch(/payment|allocation|credit|refund|return|installment|void|settle/i);
     }
   });
