@@ -93,13 +93,34 @@ export const POS_ROUTE_AUTHORITY: readonly {
 ]);
 
 /**
- * The wiring P4-S3 owes the two Nest compositions, STATED and reported rather
- * than made — the `P4_S2_REQUIRED_CONTROLLERS` precedent in
- * `selling.module.ts`. `apps/api/src/app/app.module.ts` and
- * `apps/api/src/app/merchant-api.module.ts` are outside this module's file
- * ownership, and DAFTAR composes Nest twice: a controller registered in only
- * one of them is a route no integration test can reach, which
- * `tests/integration/process-composition.test.ts` and
- * `tests/security/phase4-route-surface.test.ts` both hold the compositions to.
+ * EVERY CONTROLLER P4-S3 OWES THE TWO NEST COMPOSITIONS — the
+ * `P4_S2_REQUIRED_CONTROLLERS` precedent in `selling.module.ts`, grown to the
+ * whole slice.
+ *
+ * DAFTAR composes Nest twice (`apps/api/src/app/app.module.ts` and
+ * `apps/api/src/app/merchant-api.module.ts`), and a controller registered in
+ * only one of them is a route no integration test can reach.
+ *
+ * ## This list is not evidence on its own, and it is not asked to be
+ *
+ * A list a slice edits to match what it built describes itself. For most of
+ * P4-S3's life this one named `TillSessionsController`, a class that did not
+ * exist, and NOTHING read the list — so it asserted nothing at all in either
+ * direction. It is now checked from BOTH SIDES by
+ * `tests/security/phase4-route-surface.test.ts`:
+ *
+ *   1. it is asserted EQUAL to the controllers DISCOVERED in
+ *      `apps/api/src/modules/pos` by reading the directory, so a controller
+ *      built and not listed is red and a name listed and not built is red;
+ *   2. every name is required to appear in BOTH composition sources, so a
+ *      controller composed in one process only is red;
+ *   3. and the routes are then DRIVEN over real HTTP through the production
+ *      composition, so what finally proves the mount is a request a cashier
+ *      could make — not this constant.
+ *
+ * Without (1) and (3) the list would be exactly the self-describing artefact
+ * `[[daftar-a-closure-rule-is-not-an-invariant]]` warns about. With them, the
+ * list's job is to NAME the obligation; the suites' job is to refuse a tree in
+ * which it is unmet.
  */
-export const P4_S3_REQUIRED_CONTROLLERS: readonly string[] = Object.freeze(['TillSessionsController']);
+export const P4_S3_REQUIRED_CONTROLLERS: readonly string[] = Object.freeze(['PosCartController', 'PosReadsController', 'TillSessionsController']);

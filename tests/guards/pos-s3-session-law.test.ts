@@ -736,4 +736,50 @@ describe('§B — the POS refusal vocabulary is registered once and renders thro
       expect(route.path, `${route.method} ${route.path}`).toMatch(/^\/v1\/pos\//);
     }
   });
+
+  /**
+   * THE TABLE IS WHAT IS MOUNTED, VERB AND PERMISSION BOTH.
+   *
+   * The case above holds `POS_ROUTE_AUTHORITY` to the closed permission set,
+   * which is a claim about the TABLE. Nothing held the table to the MOUNT, and
+   * a table that can disagree with the decorators it describes is the
+   * hand-kept fact standing in for a derived one that this slice has already
+   * been bitten by three times: a permission tightened on a decorator and not
+   * in the table, or loosened in the table and not on the decorator, would
+   * leave a reviewer reading a document about a different surface. The cart's
+   * half of the same law is in `pos-s3-cart-law.test.ts`; this is the till
+   * session's.
+   *
+   * Both halves are derived. The table comes from the module; the mount is
+   * read out of the controller's SOURCE TEXT, which is what
+   * `discoverPhase4Routes` (`scripts/phase4-s1-gate.ts`) and the sealed G-02
+   * golden see — so this guard and the golden cannot disagree about what the
+   * mounted surface is. Comments are stripped first: the file's docblocks quote
+   * its own decorators while explaining them.
+   *
+   * Each verb decorator is paired with the NEAREST following
+   * `@RequiresPermission`, which is the order Nest itself applies them in.
+   */
+  it('the till-session controller mounts exactly `POS_ROUTE_AUTHORITY`, on the same verbs and the same permissions', () => {
+    const file = join(REPO, 'apps/api/src/modules/pos/till-sessions.controller.ts');
+    const source = readFileSync(file, 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/^[ \t]*\/\/.*$/gm, '');
+
+    const base = /@Controller\('([^']*)'\)/.exec(source)?.[1];
+    expect(base, 'the till-session controller declares no `@Controller` path literal').toBeDefined();
+    const mountedPath = (suffix: string): string =>
+      `/${`${base as string}/${suffix}`
+        .split('/')
+        .filter((s) => s !== '')
+        .join('/')}`;
+
+    const mounted = [...source.matchAll(/@(Post|Get|Patch|Delete|Put)\((?:'([^']*)')?\)[\s\S]*?@RequiresPermission\('([^']+)'\)/g)]
+      .map((m) => `${(m[1] as string).toUpperCase()} ${mountedPath(m[2] ?? '')} ${m[3] as string}`)
+      .sort();
+
+    expect(mounted, 'the mounted till-session routes and `POS_ROUTE_AUTHORITY` disagree on a verb, a path or a permission').toEqual(
+      POS_ROUTE_AUTHORITY.map((r) => `${r.method} ${r.path} ${r.permission}`).sort(),
+    );
+  });
 });

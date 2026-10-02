@@ -730,14 +730,22 @@ describe('§5 — the `0079` seam, discovered from the DATABASE and not from a s
 
 // ═════════════════════════════════════════════════════════════════════════
 describe('§6 — the surface this slice hands over, stated so it is enumerable', () => {
-  it('the route table is four rows, one per command, and the mount is the coordinator\u2019s', () => {
-    // P4-S3 creates NO `*.controller.ts` file, not even an unmounted one:
-    // `discoverPhase4Routes` walks all of `apps/api/src/modules` for that
-    // suffix and the G-02 golden asserts its own route list EQUAL to that
-    // discovery, so the file's mere existence turns a sealed P4-S1 golden red.
-    // The surface is handed over as DATA and mounted once, by the coordinator,
-    // after `0079`.
-    expect(readdirSync(join(REPO, 'apps/api/src/modules/pos')).filter((f) => f.endsWith('.controller.ts'))).toEqual([]);
+  it('the route table is four rows, one per command, and the mount that serves them exists', () => {
+    // This used to assert that `modules/pos` contains NO `*.controller.ts`,
+    // because `discoverPhase4Routes` walks `apps/api/src/modules` for that
+    // suffix and the G-02 golden asserts its route list EQUAL to that
+    // discovery \u2014 so the file's mere existence turned a sealed P4-S1 golden
+    // red. The condition was "the transport, the goldens and the route surface
+    // land together, once", and they have: the golden now carries the nine POS
+    // routes and their cross-tenant pairs. So the claim inverts, because a
+    // route table with no transport is a surface nothing serves.
+    //
+    // The ROW-BY-ROW equality between this table and the mounted decorators is
+    // derived from the controller's source text by the permanent guard
+    // (`tests/guards/pos-s3-cart-law.test.ts`), which is where a claim about
+    // the mount belongs: that suite needs no database and cannot be skipped
+    // past by a Postgres that will not start.
+    expect(readdirSync(join(REPO, 'apps/api/src/modules/pos')).filter((f) => f.endsWith('.controller.ts'))).toContain('pos-cart.controller.ts');
     expect(POS_CART_ROUTE_AUTHORITY).toHaveLength(4);
     expect(POS_CART_ROUTE_AUTHORITY.map((r) => r.command)).toEqual([...POS_CART_COMMANDS]);
     for (const route of POS_CART_ROUTE_AUTHORITY) {

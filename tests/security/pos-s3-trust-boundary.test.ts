@@ -46,16 +46,27 @@
  * `SALE_FORBIDDEN_REQUEST_FIELDS` is an unknown-key refusal today). It is
  * reported in the hand-back rather than settled here.
  *
- * ── THE HARNESS, AND WHY THERE IS NO CONTROLLER ───────────────────────────
+ * ── THE HARNESS, AND WHY IT IS STILL THE RIGHT SUBJECT ────────────────────
  *
- * P4-S3 creates NO `*.controller.ts` file, not even an unmounted one.
+ * When this suite was written, P4-S3 created no `*.controller.ts` at all:
  * `discoverPhase4Routes` (`scripts/phase4-s1-gate.ts`) walks all of
  * `apps/api/src/modules` for files ending `.controller.ts` and extracts route
  * paths from the SOURCE TEXT, and the G-02 golden asserts its own route list
- * EQUAL to that discovery — so the mere existence of the file turns a sealed
- * P4-S1 golden red whether or not Nest ever mounts it. The route table is
- * handed to the coordinator as DATA (`POS_CART_ROUTE_AUTHORITY`) and mounted
- * once, by the coordinator, after `0079`.
+ * EQUAL to that discovery — so the mere existence of the file turned a sealed
+ * P4-S1 golden red whether or not Nest ever mounted it. The transport has
+ * since landed WITH both golden updates (`pos-cart.controller.ts`, and the
+ * nine POS routes and their cross-tenant pairs in
+ * `tests/golden-regression/phase4/01-cross-tenant.golden.test.ts`), so the
+ * controller now exists and the cart routes answer over real HTTP.
+ *
+ * This suite's subject does NOT change with it, and deliberately so: what it
+ * isolates is the PIPE — `row.pipe()`, the same `CartCommandPipe` object the
+ * mount applies, built from the same table — so a forged field is proved
+ * refused BEFORE any service, database or session exists to refuse it for
+ * other reasons. The whole-stack half of the same law is now driven over the
+ * mounted routes by the G-02 POS section and by the HTTP cases of
+ * `tests/integration/pos-s3-cart.test.ts`; this file is what says the refusal
+ * is the boundary's and not a side effect of something further in.
  *
  * So this suite drives the accepted alternative, which is the repo's own
  * pattern for exactly this case (`tests/integration/sale-s2-error-contract.test.ts`:

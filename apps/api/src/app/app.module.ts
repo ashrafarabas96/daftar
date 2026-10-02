@@ -50,6 +50,11 @@ import { CustomersController } from '../modules/selling/customers.controller';
 import { InvoicesController } from '../modules/selling/invoices.controller';
 import { SalesController } from '../modules/selling/sales.controller';
 import { sellingProviders } from '../modules/selling/selling.module';
+// P4-S3: the POS till session, the till's type-ahead and the server-side cart.
+import { TillSessionsController } from '../modules/pos/till-sessions.controller';
+import { PosReadsController } from '../modules/pos/pos-reads.controller';
+import { PosCartController } from '../modules/pos/pos-cart.controller';
+import { posProviders } from '../modules/pos/pos.module';
 import { AdminService } from '../modules/admin/admin.service';
 import { AdminController } from '../modules/admin/admin.controller';
 import { OutboxPublisher } from '../modules/outbox/publisher';
@@ -102,6 +107,15 @@ export class AppModule implements NestModule {
         InvoicesController,
         // P4-S2: the sale command and its read (POST /v1/sales, GET /v1/sales/:saleId).
         SalesController,
+        // P4-S3: the till session lifecycle, the POS type-ahead and the
+        // server-side cart. All three are registered in MerchantApiModule too:
+        // a controller composed in one process only is a route no integration
+        // test can reach, which `P4_S3_REQUIRED_CONTROLLERS`
+        // (`pos-permissions.ts`) names and `phase4-route-surface.test.ts`
+        // refuses from both sides.
+        TillSessionsController,
+        PosReadsController,
+        PosCartController,
         AdminController,
       ],
       providers: [
@@ -134,6 +148,11 @@ export class AppModule implements NestModule {
         PaymentMethodDefaultsReadService,
         // P4-S1: the customer and invoice read services of the two Phase 4 controllers.
         ...sellingProviders(),
+        // P4-S3: the till-session minter, the POS read and the cart. Each
+        // needs only providers composed above — `Database`,
+        // `InventoryAuthorizationService` and `'LOGGER'` — which is why the
+        // POS slice adds no provider of its own (`pos.module.ts`).
+        ...posProviders(),
         ...workerProviders(config, options),
         // Only PROCESS_MODE=all composes the reconciler beside the worker,
         // and only because this composition exists for dev and tests;

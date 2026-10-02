@@ -45,13 +45,31 @@
  *    future "fix" that raised it to make something pass would delete the
  *    protection this case exercises, and would fail here.
  *
- * 4. THE REFUSALS. A warehouse an assigned-scope member does not reach is
- *    REFUSED, never answered with an empty page — an empty page reads as
- *    "nothing in stock", which is a different and wrong answer. A member
- *    holding neither `sales.create` nor `sales.view` is refused. An unknown
- *    query parameter is refused rather than ignored, because a POS client
- *    whose filter was silently dropped believes it asked for something the
- *    server never did.
+ * 4. THE REFUSALS, EVERY ONE OF THEM ABOUT THE SESSION (RULING 2). The till
+ *    names its SESSION and the server derives the warehouse, so none of these
+ *    is a warehouse the client chose: a session another business owns is
+ *    invisible and answers `pos.session_not_found`; a colleague's open till in
+ *    the caller's own business is visible and still refused
+ *    `pos.session_not_owned` (`OD-P4-09`); the caller's own CLOSED till answers
+ *    `pos.session_not_open`; and a session whose frozen warehouse the member
+ *    has since been reassigned away from answers
+ *    `pos.warehouse_out_of_scope`. Not one of them is an empty page — an empty
+ *    page reads as "nothing in stock", which is a different and wrong answer,
+ *    and a cashier acting on it refuses a sale of stock that is on the shelf. A
+ *    member holding neither `sales.create` nor `sales.view` is refused, and an
+ *    unknown query parameter — `warehouseId` included, by name — is refused
+ *    rather than ignored, because a POS client whose filter was silently
+ *    dropped believes it asked for something the server never did.
+ *
+ * 5. THE REAL TRANSPORT. Every request here goes through `createTestApp()`,
+ *    which composes the production `AppModule` — the same `TillSessionsController`,
+ *    `PosReadsController` and `PosCartController` production serves. The
+ *    test-only harness this suite used to import
+ *    (`tests/helpers/pos-s3-route.ts`, which constructed `PosReadService` by
+ *    hand inside a test-declared controller) is DELETED. Until it was, every
+ *    assertion in this file measured a hand-built object rather than a route a
+ *    cashier can reach, and would have passed with the real route absent. The
+ *    fixture's own `POST /v1/pos/till-sessions` is now part of the evidence.
  *
  * Run with `PG_PORT=55140 PG_DIR=/tmp/daftar-pg-c`, as every P4-S3 suite of
  * this agent does.
@@ -61,9 +79,10 @@ import { join } from 'node:path';
 import { Client } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { PosProductHitDto, PosProductSearchDto } from '@daftar/shared-contracts';
-import { appDbUrl, ensurePostgres, ownerPool, resetData, type TestApp } from '../helpers/test-app';
-import { POS_READ_TEST_ROUTE, createPosReadTestApp } from '../helpers/pos-s3-route';
+import { appDbUrl, createTestApp, ensurePostgres, ownerPool, resetData, type TestApp } from '../helpers/test-app';
 import { POS_READ_ROUTE_AUTHORITY } from '../../apps/api/src/modules/pos/pos-reads';
+import { P4_S3_REQUIRED_CONTROLLERS } from '../../apps/api/src/modules/pos/pos-permissions';
+import { closeTillSession, openTillSession } from '../helpers/pos-till-sessions';
 import { asMember, must, onboardS3Business, registerActor, type HttpActor, type S3Business } from '../helpers/inventory-commands';
 import { addMerchantVariant, configureRaw, createProduct, setScope } from '../helpers/stock-ledger';
 import { addMember, httpAdjust, nameProduct, nameVariant, readAs } from '../helpers/merchant-reads';
@@ -103,6 +122,23 @@ let baseCurrency: string;
 let applePriceMinor: string;
 let shirtL: string;
 let shirtM: string;
+/**
+ * The open tills every case below reads through. One per (actor, business),
+ * because `pos_till_sessions_one_open_per_user_uq` is a partial unique index
+ * on `(business_id, opened_by) WHERE status = 'open'`: an actor holds at most
+ * ONE open drawer in a business, which is `OD-P4-09` in the schema. Two
+ * warehouses at once therefore needs two ACTORS, and that is the ruling rather
+ * than an obstacle.
+ */
+let tillA: string;
+let tillA2: string;
+let tillB: string;
+/** The branch-Y manager's till, whose warehouse is W2 — the second warehouse this file reads. */
+let tillManagerW2: string;
+/** A CLOSED till of its own owner, for the one refusal only a closed session can produce. */
+let tillClosed: string;
+/** A second cashier in A, so a colleague's open till exists to be refused by name. */
+let cashier: HttpActor;
 
 /** A scoped write by the schema owner, so the identifier triggers of `0037` run with a business context. */
 async function scopedWrite(s: S3Business, sql: string, params: readonly unknown[]): Promise<void> {
@@ -139,20 +175,39 @@ async function paced(by: HttpActor, businessId: string, path: string, locale = '
   return { status: r.status, body: r.body as SearchResult['body'] };
 }
 
-function searchPath(warehouseId: string, q: string, limit?: number): string {
-  return `/v1/pos/products?warehouseId=${warehouseId}&q=${encodeURIComponent(q)}${limit === undefined ? '' : `&limit=${limit}`}`;
+/**
+ * THE TILL NAMES ITS SESSION, AND THE SERVER DERIVES THE WAREHOUSE (RULING 2).
+ *
+ * Every call in this file used to send `warehouseId=…`, and
+ * `PosProductSearchQuerySchema` has refused that since Ruling 2 replaced it:
+ * twenty assertions here answered 400 with `{"path":"sessionId","code":
+ * "invalid_type"}` plus `unrecognized_keys`, which is a suite measuring the
+ * validator rather than the read.
+ *
+ * The realignment is to open REAL till sessions in the fixture and name them.
+ * It is deliberately NOT to re-add `warehouseId`: a client that could name the
+ * warehouse could name one its own open till does not sell from, which is
+ * `P4-AL-18` exactly — the client would be the source of truth for the scope of
+ * its own read. Nor is any assertion lowered: the warehouse-shaped claims below
+ * are restated as SESSION-shaped claims of the same strength, and the two
+ * refusals that only a session can produce (`pos.session_not_owned`,
+ * `pos.session_not_open`) are added rather than traded for the one Ruling 2
+ * made unreachable.
+ */
+function searchPath(sessionId: string, q: string, limit?: number): string {
+  return `/v1/pos/products?sessionId=${sessionId}&q=${encodeURIComponent(q)}${limit === undefined ? '' : `&limit=${limit}`}`;
 }
 
 const search = (
   by: HttpActor,
   biz: { businessId: string },
-  warehouseId: string,
+  sessionId: string,
   q: string,
   opts: { limit?: number; locale?: string } = {},
-): Promise<SearchResult> => paced(by, biz.businessId, searchPath(warehouseId, q, opts.limit), opts.locale);
+): Promise<SearchResult> => paced(by, biz.businessId, searchPath(sessionId, q, opts.limit), opts.locale);
 
 async function hits(q: string, opts: { limit?: number; locale?: string } = {}): Promise<PosProductHitDto[]> {
-  const r = await search(owner, A, A.w1, q, opts);
+  const r = await search(owner, A, tillA, q, opts);
   expect(r.status, JSON.stringify(r.body)).toBe(200);
   return r.body.items;
 }
@@ -171,7 +226,7 @@ async function twinCatalogue(by: HttpActor, s: S3Business, name: string): Promis
 beforeAll(async () => {
   await ensurePostgres();
   await resetData();
-  t = await createPosReadTestApp();
+  t = await createTestApp();
   owner = await registerActor(t, 'POS S3 owner');
   A = await onboardS3Business(t, owner, 'poss3a');
   A2 = await onboardS3Business(t, owner, 'poss3a2', A.tenantId);
@@ -249,6 +304,30 @@ beforeAll(async () => {
   baseCurrency = must(facts.rows[0]).base_currency;
   applePriceMinor = must(facts.rows[0]).base_price_minor;
 
+  // ── The tills, opened through the REAL route ─────────────────────────
+  //
+  // `POST /v1/pos/till-sessions` in the production composition, as each actor,
+  // and nothing else. No row is inserted by hand: `daftar_app` holds SELECT
+  // only on `pos_till_sessions` (`0079:605`), every write goes through a
+  // SECURITY DEFINER routine consuming an `invctl/1` assertion, and a session
+  // seeded past that would be a scope no cashier could have created. If the
+  // mount, the provider wiring or the minting is wrong, this fixture fails
+  // with the route's own refusal body — which is the point of reaching the
+  // routes through the composition rather than through a bespoke harness.
+  tillA = (await openTillSession(t, owner, A.businessId, { branchId: A.branchX, warehouseId: A.w1 }, { terminalCode: 'poss3_a1' })).sessionId;
+  tillA2 = (await openTillSession(t, owner, A2.businessId, { branchId: A2.branchX, warehouseId: A2.w1 }, { terminalCode: 'poss3_a2' })).sessionId;
+  tillB = (await openTillSession(t, ownerB, B.businessId, { branchId: B.branchX, warehouseId: B.w1 }, { terminalCode: 'poss3_b1' })).sessionId;
+  // The manager is ASSIGNED to branch Y, so its till sells from W2 — the only
+  // way this file reads a second warehouse, now that the warehouse is a fact
+  // of the session and not a query parameter.
+  tillManagerW2 = (await openTillSession(t, manager, A.businessId, { branchId: A.branchY, warehouseId: A.w2 }, { terminalCode: 'poss3_w2' })).sessionId;
+  // A second cashier in A: its OPEN till is the colleague's drawer that
+  // `pos.session_not_owned` refuses, and the till it then closes is the
+  // subject of `pos.session_not_open`.
+  cashier = await addMember(t, owner, A, 'POS S3 cashier', 'cashier');
+  tillClosed = (await openTillSession(t, cashier, A.businessId, { branchId: A.branchX, warehouseId: A.w1 }, { terminalCode: 'poss3_shut' })).sessionId;
+  await closeTillSession(t, cashier, A.businessId, tillClosed);
+
   // P4-AL-74: a benchmark — and a correctness read whose plan matters —
   // measures what the planner saw.
   await ownerPool().query('ANALYZE');
@@ -322,7 +401,13 @@ describe('the contract of the type-ahead', () => {
 
   it('on hand is the stock at the till’s warehouse; an untracked product reports null and not zero', async () => {
     expect((await hits(SHARED.barcode))[0]?.onHand).toBe('7');
-    const atW2 = await search(owner, A, A.w2, SHARED.barcode);
+    // A SECOND warehouse is now a second TILL, read by the cashier whose
+    // session sells from it. The claim is unchanged — the figure is the stock
+    // at the till's own warehouse — but the till is what says which warehouse
+    // that is, which is the whole of Ruling 2.
+    const atW2 = await search(manager, A, tillManagerW2, SHARED.barcode);
+    expect(atW2.status, JSON.stringify(atW2.body)).toBe(200);
+    expect(atW2.body.warehouseId, 'the server derived the warehouse from the session').toBe(A.w2);
     expect(atW2.body.items[0]?.onHand, 'no stock of it at W2').toBe('0');
     const gift = await hits('pos-gift');
     expect(gift.map((h) => ({ onHand: h.onHand, tracked: h.trackInventory }))).toEqual([{ onHand: null, tracked: false }]);
@@ -336,12 +421,12 @@ describe('the contract of the type-ahead', () => {
   });
 
   it('a prefix too broad for one page says so, and offers no page two', async () => {
-    const r = await search(owner, A, A.w1, 'pos-', { limit: 2 });
+    const r = await search(owner, A, tillA, 'pos-', { limit: 2 });
     expect(r.status).toBe(200);
     expect(r.body.items).toHaveLength(2);
     expect(r.body.moreMatches).toBe(true);
     expect(Object.keys(r.body), 'there is no cursor to walk, by design').not.toContain('nextCursor');
-    const wide = await search(owner, A, A.w1, 'pos-', { limit: 50 });
+    const wide = await search(owner, A, tillA, 'pos-', { limit: 50 });
     expect(wide.body.moreMatches).toBe(false);
   });
 });
@@ -356,38 +441,59 @@ describe('isolation — by RLS, and proved on a real connection', () => {
   });
 
   it('A’s till never sees A2’s row, though the owner is a member of both', async () => {
-    const inA = await search(owner, A, A.w1, SHARED.barcode);
+    const inA = await search(owner, A, tillA, SHARED.barcode);
     expect(inA.body.items.map((h) => h.productId)).toEqual([A.piece.productId]);
-    const inA2 = await search(owner, A2, A2.w1, SHARED.barcode);
+    const inA2 = await search(owner, A2, tillA2, SHARED.barcode);
     expect(inA2.status).toBe(200);
     expect(inA2.body.items).toHaveLength(1);
     expect(inA2.body.items.map((h) => h.productId)).not.toContain(A.piece.productId);
   });
 
   it('A’s till never sees another tenant’s row, and A’s owner cannot even address B', async () => {
-    expect((await search(owner, A, A.w1, SHARED.barcode)).body.items).toHaveLength(1);
-    const crossTenant = await search(owner, B, B.w1, SHARED.barcode);
+    expect((await search(owner, A, tillA, SHARED.barcode)).body.items).toHaveLength(1);
+    // B's OWN till, named by A's owner under B's header. The session is real
+    // and open — it is the membership that is absent, so the refusal happens
+    // before any session fact is consulted.
+    const crossTenant = await search(owner, B, tillB, SHARED.barcode);
     expect(crossTenant.status, 'A’s owner is not a member of B').toBe(403);
   });
 
   /**
-   * The reach check alone does NOT cover this, which is why the existence
-   * check is there too: the owner is business-wide in A2, so every warehouse
-   * id "reaches". Without the existence check the answer would be a 200 whose
-   * every `onHand` is `0` — "the shop is empty" rather than "that is not your
-   * warehouse", and a cashier acting on it refuses a sale of stock that is on
-   * the shelf.
+   * THE SAME CLAIM AS BEFORE RULING 2, AT THE SAME STRENGTH, ABOUT THE SESSION.
+   *
+   * This case used to name A's WAREHOUSE under A2's header and expect
+   * `pos.warehouse_not_found`. That code is GONE and it had to go: it became
+   * genuinely unreachable once the warehouse stopped being a request field,
+   * because `pos_till_sessions.warehouse_id` is `NOT NULL` and carries a
+   * composite FK into `warehouses (business_id, id)` — a derived warehouse
+   * always exists and always belongs to this business. «A code nothing can
+   * raise is worse than no code.»
+   *
+   * What the case was really protecting is intact and is asserted here: the
+   * cross-business identifier is REFUSED rather than answered from the wrong
+   * business with a zero on hand. A 200 whose every `onHand` is `0` reads as
+   * "the shop is empty", and a cashier acting on it refuses a sale of stock
+   * that is on the shelf. The answer is `pos.session_not_found`, and it is 404
+   * for the usual reason: A's session is INVISIBLE to A2's transaction under
+   * RLS, so a mistyped id and another business's id are the same answer and
+   * neither confirms the other exists.
    */
-  it('A’s warehouse id in A2’s context is REFUSED, not answered from A2 with a zero on hand', async () => {
-    const r = await search(owner, A2, A.w1, SHARED.barcode);
+  it('A’s session id in A2’s context is REFUSED, not answered from A2 with a zero on hand', async () => {
+    const r = await search(owner, A2, tillA, SHARED.barcode);
     expect(r.status).toBe(404);
-    expect(r.body.error?.details?.['sellingCode']).toBe('pos.warehouse_not_found');
+    expect(r.body.error?.details?.['sellingCode']).toBe('pos.session_not_found');
+    expect(r.body.items, 'a refusal carries no page at all — an empty page would read as "nothing in stock"').toBeUndefined();
   });
 
-  it('a warehouse that exists nowhere is refused the same way', async () => {
-    const r = await search(owner, A, '11111111-2222-3333-4444-555555555555', SHARED.barcode);
-    expect(r.status).toBe(404);
-    expect(r.body.error?.details?.['sellingCode']).toBe('pos.warehouse_not_found');
+  it('a session that exists nowhere is refused the same way, and so is one that is not a canonical uuid', async () => {
+    const nowhere = await search(owner, A, '11111111-2222-4333-8444-555555555555', SHARED.barcode);
+    expect(nowhere.status).toBe(404);
+    expect(nowhere.body.error?.details?.['sellingCode']).toBe('pos.session_not_found');
+    // A malformed id is refused by the schema instead, which is a DIFFERENT
+    // answer and the right one: it never reaches the session lookup, so it
+    // cannot be an oracle for which session ids exist.
+    const malformed = await paced(owner, A.businessId, `/v1/pos/products?sessionId=not-a-uuid&q=${encodeURIComponent(SHARED.barcode)}`);
+    expect(malformed.status).toBe(400);
   });
 
   /**
@@ -461,53 +567,158 @@ describe('isolation — by RLS, and proved on a real connection', () => {
 });
 
 describe('refusals', () => {
-  it('a warehouse the member does not reach is REFUSED, never answered with an empty page', async () => {
-    const outOfScope = await search(manager, A, A.w1, SHARED.barcode);
-    expect(outOfScope.status).toBe(403);
-    expect(outOfScope.body.error?.details?.['sellingCode']).toBe('pos.warehouse_out_of_scope');
-    const inScope = await search(manager, A, A.w2, SHARED.barcode);
-    expect(inScope.status, 'the warehouse it does reach answers normally').toBe(200);
+  /**
+   * `pos.warehouse_out_of_scope` SURVIVES RULING 2, and this is the path that
+   * reaches it.
+   *
+   * The old form named a warehouse the member did not reach, which a client can
+   * no longer do. The code is still live and still security-relevant, because a
+   * session's warehouse is FROZEN while a membership is not:
+   * `pos_till_session_guard()` refuses any change to `branch_id` or
+   * `warehouse_id`, so a till opened at branch Y keeps selling from Y's
+   * warehouse for its whole life — while `member_branch_scopes` is editable at
+   * any moment. Move an assigned-scope cashier off Y and they now own an open
+   * till whose warehouse they do not reach.
+   *
+   * So the case performs exactly that, through the real member route: the
+   * manager's till answers normally at W2, the manager is reassigned to branch
+   * X, and the SAME till is then refused. Removing this check would turn a
+   * stale till into a standing read on a branch the member was deliberately
+   * moved off. The scope is restored afterwards so no later case depends on
+   * this one's order.
+   */
+  it('a session whose warehouse the member no longer reaches is REFUSED, never answered with an empty page', async () => {
+    const rescope = async (branchIds: readonly string[]): Promise<void> => {
+      const res = await t.request
+        .patch(`/v1/businesses/current/members/${manager.userId}/branch-scope`)
+        .set(asMember(owner, A.businessId))
+        .send({ mode: 'assigned', branchIds });
+      expect(res.status, JSON.stringify(res.body)).toBe(200);
+    };
+
+    const inScope = await search(manager, A, tillManagerW2, SHARED.barcode);
+    expect(inScope.status, 'the warehouse its own till sells from answers normally').toBe(200);
+
+    await rescope([A.branchX]);
+    try {
+      const outOfScope = await search(manager, A, tillManagerW2, SHARED.barcode);
+      expect(outOfScope.status).toBe(403);
+      expect(outOfScope.body.error?.details?.['sellingCode']).toBe('pos.warehouse_out_of_scope');
+      expect(outOfScope.body.items, 'an empty page would read as "nothing in stock", which is a different and wrong answer').toBeUndefined();
+    } finally {
+      await rescope([A.branchY]);
+    }
+    expect((await search(manager, A, tillManagerW2, SHARED.barcode)).status, 'and the reassignment back restores the read').toBe(200);
+  });
+
+  /**
+   * `OD-P4-09`: one session, one authenticated user. A colleague's till in the
+   * caller's own business is VISIBLE and still refused — reading another
+   * cashier's drawer through its own warehouse would be the shared till the
+   * ruling refused, read-only. 403 and not 404, because the row really is
+   * there: the 404 answer is reserved for invisibility, and using it here would
+   * make a present row indistinguishable from an absent one.
+   */
+  it('a colleague’s open till is refused by name, not read through', async () => {
+    const r = await search(cashier, A, tillA, SHARED.barcode);
+    expect(r.status).toBe(403);
+    expect(r.body.error?.details?.['sellingCode']).toBe('pos.session_not_owned');
+  });
+
+  /**
+   * A closed till has no selling context. Answering from one would let a
+   * cashier keep ringing up a drawer that has already been counted, which is
+   * why this is a refusal and not an empty page.
+   */
+  it('the caller’s OWN closed till is refused — a counted drawer has no selling context', async () => {
+    const r = await search(cashier, A, tillClosed, SHARED.barcode);
+    expect(r.status).toBe(409);
+    expect(r.body.error?.details?.['sellingCode']).toBe('pos.session_not_open');
   });
 
   it('a member holding neither sales.create nor sales.view is refused', async () => {
-    expect((await search(clerk, A, A.w1, SHARED.barcode)).status).toBe(403);
+    expect((await search(clerk, A, tillA, SHARED.barcode)).status).toBe(403);
   });
 
   it('an unknown query parameter is refused, not quietly ignored', async () => {
-    const r = await paced(owner, A.businessId, `/v1/pos/products?warehouseId=${A.w1}&q=appl&unitPriceMinor=1`);
+    const r = await paced(owner, A.businessId, `/v1/pos/products?sessionId=${tillA}&q=appl&unitPriceMinor=1`);
     expect(r.status).toBe(400);
     expect((r.body as { error: { code: string } }).error.code).toBe('VALIDATION_FAILED');
   });
 
-  it('an empty prefix, an oversized limit and a NUL are each refused', async () => {
-    for (const query of [`warehouseId=${A.w1}&q=`, `warehouseId=${A.w1}&q=a&limit=51`, `warehouseId=${A.w1}&q=${encodeURIComponent('a\u0000b')}`]) {
+  /**
+   * `warehouseId` is refused BY NAME, and that is the Ruling 2 assertion this
+   * file owes. A client whose warehouse was silently dropped would believe it
+   * had asked the server to read one warehouse while the server read another —
+   * and would render the answer as the answer to its own question.
+   */
+  it('warehouseId is refused as an unknown key — the client does not name its own read scope', async () => {
+    const r = await paced(owner, A.businessId, `/v1/pos/products?sessionId=${tillA}&q=appl&warehouseId=${A.w2}`);
+    expect(r.status).toBe(400);
+    expect((r.body as { error: { code: string } }).error.code).toBe('VALIDATION_FAILED');
+  });
+
+  it('a request with no session at all is refused, and so is an empty prefix, an oversized limit and a NUL', async () => {
+    for (const query of [`q=appl`, `sessionId=${tillA}&q=`, `sessionId=${tillA}&q=a&limit=51`, `sessionId=${tillA}&q=${encodeURIComponent('a\u0000b')}`]) {
       expect((await paced(owner, A.businessId, `/v1/pos/products?${query}`)).status, query).toBe(400);
     }
   });
 });
 
-describe('the declared route, and the transport that is deliberately absent', () => {
+describe('the declared route, and the real transport that now serves it', () => {
   /**
-   * The harness and the module must name ONE route. If the coordinator mounts
-   * a different path, verb or permission than `POS_READ_ROUTE_AUTHORITY`
-   * declares, this is where the two stop agreeing.
+   * The module declares ONE read route, and this suite drives that one. If the
+   * mounted path, verb or permission ever differs from
+   * `POS_READ_ROUTE_AUTHORITY`, this is where the two stop agreeing.
    */
   it('the module declares exactly one POS read route, and this suite exercises that one', () => {
     expect(POS_READ_ROUTE_AUTHORITY).toEqual([{ method: 'GET', path: '/v1/pos/products', permission: 'sales.view', sensitive: false }]);
-    expect(POS_READ_TEST_ROUTE).toEqual(POS_READ_ROUTE_AUTHORITY[0]);
   });
 
   /**
-   * P4-S3 contains no `*.controller.ts`, and this case is why that holds
-   * rather than why it was once true: `discoverPhase4Routes` walks
-   * `apps/api/src/modules` for `*.controller.ts` and the sealed G-02 golden
-   * asserts its route list EQUAL to that discovery, so a controller file's
-   * mere existence turns a sealed P4-S1 golden red. The transport lands once,
-   * from the coordinator, with both golden updates.
+   * THE REPLACEMENT OF THIS CASE IS THE WHOLE POINT OF THE MOUNT.
+   *
+   * What stood here asserted that `modules/pos` contains NO `*.controller.ts`,
+   * and the reason was real while it held: `discoverPhase4Routes` walks
+   * `apps/api/src/modules` for controller files and the sealed G-02 golden
+   * asserts its route list EQUAL to that discovery, so a controller file's mere
+   * existence turned that golden red. The condition was never "a POS controller
+   * is wrong"; it was "the transport, the goldens and the route surface land
+   * together, once". They have, in this commit, so the claim inverts.
+   *
+   * The inverted claim is stronger than the old one, because it is about the
+   * COMPOSITION rather than about a directory listing. Until now the only
+   * transport for this read was `tests/helpers/pos-s3-route.ts`, a test-declared
+   * controller that constructed `PosReadService` by hand through `ModuleRef`:
+   * every assertion above measured a hand-built object, and would have passed
+   * with the real route absent, the provider uncomposed or the DI graph broken.
+   * That harness is deleted; this suite now reaches the route through
+   * `createTestApp()`, which composes the production `AppModule`. So the
+   * fixture's own `POST /v1/pos/till-sessions` and every case above are
+   * evidence that the mount exists — a 404 or a DI failure would fail them all.
+   *
+   * The structural half of the claim is derived rather than listed: the
+   * controllers the slice BUILDS are read from the directory and asserted equal
+   * to `P4_S3_REQUIRED_CONTROLLERS`, so a controller added and not stated is
+   * red and a name stated and not built is red.
    */
-  it('no controller file exists under modules/pos — a sealed P4-S1 golden depends on that', () => {
+  it('modules/pos builds exactly the controllers it states, and the read route answers through the production composition', async () => {
     const dir = join(__dirname, '../../apps/api/src/modules/pos');
-    expect(readdirSync(dir).filter((f) => f.endsWith('.controller.ts'))).toEqual([]);
+    const files = readdirSync(dir).filter((f) => f.endsWith('.controller.ts'));
+    expect(files.length, 'the POS surface has no transport at all — every case above would be measuring a 404').toBeGreaterThan(0);
+
+    const built: string[] = [];
+    for (const file of files.sort()) {
+      const mod = (await import(join(dir, file))) as Record<string, unknown>;
+      for (const [name, value] of Object.entries(mod)) if (typeof value === 'function' && name.endsWith('Controller')) built.push(name);
+    }
+    expect(built.sort(), 'the stated P4-S3 controllers and the built ones disagree').toEqual([...P4_S3_REQUIRED_CONTROLLERS].sort());
+
+    // And the route really answers in this application, on its declared verb
+    // and path, rather than being a file that exists: a 404 here would mean the
+    // controller is built but composed into neither process.
+    const reached = await paced(owner, A.businessId, searchPath(tillA, SHARED.barcode));
+    expect(reached.status, 'the declared POS read route does not answer in the production composition').toBe(200);
   });
 });
 
@@ -523,7 +734,7 @@ describe('pacing, never raising (P4-AL-69)', () => {
     const statuses: number[] = [];
     for (let i = 0; i < KEYSTROKES; i += 1) {
       const q = word.slice(0, 3 + (i % (word.length - 2)));
-      statuses.push((await search(owner, A, A.w1, q)).status);
+      statuses.push((await search(owner, A, tillA, q)).status);
     }
     console.info('[P4-S3] pacing', JSON.stringify({ keystrokes: KEYSTROKES, pacedRequests, pacerWaitedMs }));
     expect(
@@ -549,7 +760,7 @@ describe('the read writes nothing', () => {
     };
     const before = await digest();
     for (let i = 0; i < IDLE_READS; i += 1) {
-      expect((await search(owner, A, A.w1, i % 2 === 0 ? 'pos' : 'appl')).status).toBe(200);
+      expect((await search(owner, A, tillA, i % 2 === 0 ? 'pos' : 'appl')).status).toBe(200);
     }
     expect(await digest()).toBe(before);
     expect(pacedRequests, 'this file drives more type-aheads than the API allows in a minute, so the pacing is load-bearing').toBeGreaterThan(API_ROUTE_LIMIT);

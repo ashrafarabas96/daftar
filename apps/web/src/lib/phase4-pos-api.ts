@@ -27,38 +27,50 @@
  * and the POS screens and refuses either kind of drift, with a red proof for
  * each way of breaking it.
  */
+import type { PosMatchKindDto, PosProductHitDto, PosProductSearchDto } from '@daftar/shared-contracts';
 import { apiFetch } from './client';
 
 const BFF = '/api/proxy';
 
 // ═════════════════════════════════════════════════════════════════════════
-// SWITCH POINT — the P4-S3 POS DTOs.
+// SWITCH POINT — the P4-S3 POS DTOs. PARTLY SWITCHED, and the line is exact.
 //
-// The POS endpoints are built by the till-session, cart and search streams of
-// this slice. Until their contract types land in
-// `@daftar/shared-contracts`, the shapes the screens read are declared here.
-// When they land, this block becomes ONE `import type { … }` plus the matching
-// `export type { … }` line, and no screen changes: every screen imports these
-// names from THIS file.
+// The read's two shapes have landed in `@daftar/shared-contracts`
+// (`packages/shared-contracts/src/pos.ts`), so they are IMPORTED and
+// re-exported rather than declared a second time here. That block used to be
+// a field-for-field copy of the contract, which is the worst kind of
+// duplication: a shape that compiles whether or not it still agrees with the
+// server. A field renamed in the contract is now a type error in this file
+// instead of a screen quietly rendering `undefined`.
 //
-// WHERE EACH SHAPE COMES FROM, so a reader can tell fact from proposal:
+// WHAT IS STILL DECLARED HERE, and why that is honest rather than unfinished:
 //
-//   - the TILL paths and REQUEST bodies below are the ones the till-session
-//     stream shipped — `POS_ROUTE_AUTHORITY` in
-//     `apps/api/src/modules/pos/pos-permissions.ts` and the two `.strict()`
-//     schemas in `pos.schemas.ts`. They are read from that module, not
-//     guessed, and both schemas are strict, so a field this client invented
-//     would be REFUSED as an unknown key rather than quietly accepted;
-//   - the till RESPONSE shape is this file's PROPOSAL: the service returns its
-//     stored row and no controller is mounted yet, so the wire DTO is still
-//     the coordinator's to settle. It is camelCase, as every other DTO in the
-//     estate is, and it deliberately carries NEITHER the owning user nor the
-//     replay digest: `current` is already scoped to the caller, and
-//     `open_intent_sha256` is an engine identity a merchant never sees (A-13);
-//   - the BASKET, SEARCH and SALE shapes are this file's proposal too, for the
-//     cart and POS-reads streams to confirm or correct. Nothing but this file
-//     changes when they do.
+//   - the TILL paths and REQUEST bodies are the ones `POS_ROUTE_AUTHORITY`
+//     (`apps/api/src/modules/pos/pos-permissions.ts`) and the two `.strict()`
+//     schemas of `pos.schemas.ts` state. Both schemas are strict, so a field
+//     this client invented would be REFUSED as an unknown key rather than
+//     quietly accepted;
+//   - the till RESPONSE shape, the BASKET and the SALE receipt have NO
+//     contract type yet: `TillSession` (`till-session.service.ts`) and
+//     `CartDto` (`pos-cart.service.ts`) are declared in the API module and
+//     have not been promoted to the shared contract. Replacing these with an
+//     import is not possible today, and inventing a contract type for them is
+//     a decision for whoever owns the package — so they stay, named as
+//     proposals, and this comment says which is which.
+//
+// Every screen imports every one of these names from THIS file, so promoting
+// another shape later is one line here and no change anywhere else.
 // ═════════════════════════════════════════════════════════════════════════
+
+/**
+ * The POS read contract, from the package that declares it.
+ *
+ * Re-exported under the same names the screens already import, so the switch
+ * costs no screen edit. `PosMatchKindDto` comes with them: `matchedOn` used to
+ * be an inline `'barcode' | 'sku' | 'name'` union here, which is a third copy
+ * of a vocabulary the contract and the API both already name.
+ */
+export type { PosMatchKindDto, PosProductHitDto, PosProductSearchDto };
 
 /**
  * The POS routes name `sales.view` and `sales.create` — the cashier's own
@@ -85,48 +97,6 @@ export interface PosTillSessionDto {
 /** `GET /v1/pos/till-sessions/current` answer. `session` is null when this user has no till open. */
 export interface PosCurrentTillDto {
   session: PosTillSessionDto | null;
-}
-
-/** One sellable unit the cashier may add, as `GET /v1/pos/products` answers. The price is the server's; the screen never edits it. */
-export interface PosProductHitDto {
-  productId: string;
-  /** `null` for a simple product: the base variant never leaves the server (P3-AL-52). */
-  variantId: string | null;
-  name: string;
-  variantName: string | null;
-  sku: string | null;
-  barcode: string | null;
-  unitCode: string | null;
-  /** How many fraction digits the unit allows; `null` for an unconfigured product. */
-  unitDecimals: number | null;
-  /** The CATALOGUE price of one unit, integer minor units as text. Display only: the sale's own figure is the server's recomputation. */
-  unitPriceMinor: string;
-  currency: string;
-  /** On hand at the TILL'S warehouse now, as a decimal string, or null for an item that does not track inventory (`0` would read as "out of stock"). */
-  onHand: string | null;
-  trackInventory: boolean;
-  /** Which index arm matched: a scanned barcode ranks first, then SKU, then name. */
-  matchedOn: 'barcode' | 'sku' | 'name';
-}
-
-/**
- * `GET /v1/pos/products` — the type-ahead's answer.
- *
- * There is no cursor and no page two, on purpose: a type-ahead is narrowed by
- * typing one more character, and `moreMatches` says the prefix was too broad,
- * which is an answer a cashier can act on.
- */
-export interface PosProductSearchDto {
-  /** The prefix the SERVER actually searched on, trimmed and lower-cased. */
-  query: string;
-  /**
-   * The warehouse the figures are from — DERIVED by the server from the
-   * session the request named, never supplied by this client (RULING 2). It is
-   * read, never sent.
-   */
-  warehouseId: string;
-  items: PosProductHitDto[];
-  moreMatches: boolean;
 }
 
 /** One basket line, as the server holds it (`pos_cart_lines`). Every amount is the server's. */

@@ -71,18 +71,17 @@
  * The generator asserts the volume it actually realized, and the printed
  * evidence says which scale produced it.
  *
- * ── P4-B IS NOT MEASURED HERE, AND WHY ─────────────────────────────────
+ * ── P4-B IS MEASURED HERE NOW, AND WAS NOT ─────────────────────────────
  *
  * P4-B is "server-side cart recomputation, 20 lines with discounts and tax",
  * p95 ≤ 60 ms. Its subject is the cart — `pos_cart_lines` and
- * `pos_till_sessions`, created by migration `0079`, which only agent E may
- * write — and the recomputation command, which is agent B's. Neither exists
- * at this commit, and no document in this repository states those relations'
- * columns, so there is nothing to measure and nothing may be invented to
- * stand in for it. A budget case asserting a ceiling on a fabricated cart
- * would be the exact "green gate that cannot be red" this estate refuses. So
- * P4-B is REPORTED as blocked rather than faked; the case belongs in this file
- * and is added the moment `0079` and the cart command land.
+ * `pos_till_sessions`, created by migration `0079` — and the recomputation
+ * command behind `PATCH .../cart-lines/:cartLineId`. While neither existed,
+ * this file REPORTED P4-B as blocked rather than faking it, and asserted the
+ * fact that made it unmeasurable so that the day the relations landed the case
+ * would turn red and call the measurement in. `0079` and the cart routes have
+ * landed, the case did turn red, and the measurement is now in this file. See
+ * the `P4-B` describe block for what is timed and why tax is zero.
  *
  * ── RUNNING IT ─────────────────────────────────────────────────────────
  *
@@ -93,9 +92,9 @@ import { cpus, loadavg, totalmem } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { PoolClient } from 'pg';
-import { ensurePostgres, ownerPool, resetData, type TestApp } from '../helpers/test-app';
-import { createPosReadTestApp } from '../helpers/pos-s3-route';
-import { must, onboardS3Business, registerActor, type HttpActor, type S3Business } from '../helpers/inventory-commands';
+import { createTestApp, ensurePostgres, ownerPool, resetData, type TestApp } from '../helpers/test-app';
+import { openTillSession } from '../helpers/pos-till-sessions';
+import { asMember, must, onboardS3Business, registerActor, type HttpActor, type S3Business } from '../helpers/inventory-commands';
 import { INTERNAL, addWarehouse, setScope } from '../helpers/stock-ledger';
 import { readAs } from '../helpers/merchant-reads';
 import { Database, type Scope } from '../../apps/api/src/infra/database';
@@ -108,7 +107,7 @@ import { Database, type Scope } from '../../apps/api/src/infra/database';
  * principal (`phase3-s7-read-budgets.test.ts:56`). Never raise it to obtain a
  * pass.
  */
-const BUDGET = { A_POS_SEARCH_P95: 150 } as const;
+const BUDGET = { A_POS_SEARCH_P95: 150, B_POS_CART_P95: 60 } as const;
 
 /**
  * P4-AL-72's host-independent ratio for this read.
@@ -146,6 +145,8 @@ let t: TestApp;
 let owner: HttpActor;
 let A: S3Business;
 let warehouses: string[];
+/** The owner's open till at `warehouses[0]` — the read's whole scope (RULING 2). */
+let tillSessionId: string | undefined;
 /** A prefix that matches many names, and one that matches exactly one barcode. */
 const NAME_PREFIX = 'pos item 1';
 let oneBarcode: string;
@@ -300,7 +301,24 @@ async function planningStatistics(): Promise<Record<string, { rows: number; anal
   return out;
 }
 
-const searchPath = (q: string, limit: number): string => `/v1/pos/products?warehouseId=${must(warehouses[0])}&q=${encodeURIComponent(q)}&limit=${limit}`;
+/**
+ * The till names its SESSION and the server derives the warehouse (RULING 2).
+ *
+ * This used to send `warehouseId=${warehouses[0]}`, which the route has
+ * refused since `PosProductSearchQuerySchema` became `.strict()` around
+ * `sessionId`: every call answered 400 with `{"path":"sessionId","code":
+ * "invalid_type"}` plus `unrecognized_keys`, and because the first such call
+ * is in this suite's own `beforeAll`, all ten of its cases reported as
+ * SKIPPED rather than run — a suite that measured nothing and said so only in
+ * the word "skipped". The fix is to open a real till in the fixture and name
+ * it here; it is NOT to re-add `warehouseId`, which is exactly the client
+ * naming its own read scope that `P4-AL-18` forbids.
+ *
+ * The session is opened at `warehouses[0]`, so every figure below is still
+ * measured against the same warehouse the seed stocks and the same statement
+ * the planner saw.
+ */
+const searchPath = (q: string, limit: number): string => `/v1/pos/products?sessionId=${must(tillSessionId)}&q=${encodeURIComponent(q)}&limit=${limit}`;
 
 /** Every statement one read runs through `Database.scoped`, with its own scope and parameters. */
 async function capture(path: string): Promise<Captured[]> {
@@ -387,10 +405,19 @@ beforeAll(
   async () => {
     await ensurePostgres();
     await resetData();
-    t = await createPosReadTestApp();
+    t = await createTestApp();
     owner = await registerActor(t, 'POS S3 budget owner');
     A = await onboardS3Business(t, owner, `posperf${randomUUID().slice(0, 6)}`);
     await seed();
+
+    // The read's scope, opened through `POST /v1/pos/till-sessions` — the real
+    // route, in the real composition, as the owner. Nothing here inserts a
+    // session row: `daftar_app` holds SELECT only on `pos_till_sessions`
+    // (`0079:605`), so a fixture that tried would be refused by the grant, and
+    // a measurement taken against a hand-seeded session would be a measurement
+    // of a path no cashier can reach.
+    tillSessionId = (await openTillSession(t, owner, A.businessId, { branchId: A.branchX, warehouseId: must(warehouses[0]) }, { terminalCode: 'posperf_1' }))
+      .sessionId;
 
     // P4-AL-74 in one measurement: the SAME read, on the SAME rows, with and
     // without planner statistics. Printed, never asserted — it exists so the
@@ -605,22 +632,119 @@ describe(`P4-A — the POS type-ahead (scale ${SCALE}, ${SCALE === 1 ? 'acceptan
 });
 
 /**
- * P4-B has no subject at this commit, and this case says so out loud rather
- * than leaving a silent gap in the file that is supposed to measure it.
+ * P4-B — AND THE TRIPWIRE THAT CALLED IT IN.
  *
- * It asserts the FACT that makes P4-B unmeasurable — that neither POS relation
- * exists yet — so that the day migration `0079` creates them, this case turns
- * RED and whoever is holding the slice is told, by name, that the P4-B
- * measurement is now owed. A comment would not have done that.
+ * What stood here asserted the FACT that made P4-B unmeasurable — that neither
+ * POS relation existed — so that the day `0079` created them, the case would
+ * turn RED and whoever held the slice would be told, by name, that the
+ * measurement was owed. It did exactly that, and this is the measurement.
+ *
+ * It was owed for a while without anyone hearing it, which is worth recording:
+ * this suite's `beforeAll` was calling the type-ahead with `warehouseId` after
+ * Ruling 2 replaced it, so the fixture threw and all ten cases — the tripwire
+ * among them — reported as SKIPPED rather than run. A tripwire inside a file
+ * that cannot start is not a tripwire. That is why the fixture now opens a
+ * real till through `POST /v1/pos/till-sessions` instead.
+ *
+ * ── THE SUBJECT, AND WHAT IS AND IS NOT MEASURED ───────────────────────
+ *
+ * «Server-side cart recomputation, 20 lines with discounts and tax», p95 ≤ 60
+ * ms (`P4-AL-71`, table row `P4-B`). The ceiling is the lock's own, taken
+ * verbatim, and is never raised to obtain a pass.
+ *
+ * The subject is a real 20-line basket on the owner's own open till, every
+ * line appended through `POST .../cart-lines` and every discount requested
+ * through `POST .../cart-lines/:cartLineId/discount`. No row is inserted by
+ * hand: `daftar_app` holds SELECT only on both POS relations (`0079:605`), and
+ * a figure measured against a hand-seeded basket would be a figure about a
+ * path no cashier can reach.
+ *
+ * What is TIMED is one `PATCH .../cart-lines/:cartLineId` — the smallest
+ * command the till issues — because every cart command answers with the WHOLE
+ * recomputed cart. So one request is one full recomputation of all twenty
+ * lines, which is the thing P4-B names, and the response's own line count is
+ * asserted so the number cannot quietly become a figure about a shorter
+ * basket.
+ *
+ * TAX IS ZERO, and that is not an omission this case papers over: `OD-03` is
+ * OPEN and tax stays zero across Phase 4, so there is no tax arithmetic in the
+ * recomputation to measure. The discounts are real. When `OD-03` is settled and
+ * tax arithmetic lands, this case's basket is where it is added.
  */
 describe('P4-B — server-side cart recomputation', () => {
-  it('is not measured here, and the reason is checkable: neither POS relation exists yet', async () => {
-    const r = await ownerPool().query<{ relname: string }>(`SELECT relname FROM pg_class WHERE relname = ANY($1::text[])`, [
-      ['pos_till_sessions', 'pos_cart_lines'],
-    ]);
-    expect(
-      r.rows.map((x) => x.relname),
-      'pos_till_sessions / pos_cart_lines now exist: migration 0079 has landed, so the P4-B budget case is owed in this file',
-    ).toEqual([]);
+  /** The twenty lines, with discounts on a quarter of them, built through the routes alone. */
+  async function twentyLineBasket(): Promise<string[]> {
+    const products = (
+      await ownerPool().query<{ id: string }>(`SELECT id FROM products WHERE business_id = $1 AND sku LIKE 'POS-SKU-%' ORDER BY sku LIMIT 20`, [A.businessId])
+    ).rows.map((r) => r.id);
+    expect(products, 'the seed holds fewer than twenty priced products, so this would not be a twenty-line measurement').toHaveLength(20);
+
+    const headers = asMember(owner, A.businessId);
+    const base = `/v1/pos/till-sessions/${must(tillSessionId)}/cart-lines`;
+    const lineIds: string[] = [];
+    for (const productId of products) {
+      const res = await t.request.post(base).set(headers).send({ productId, variantId: null, quantity: '1' });
+      // 201: the basket is append-only, so a line really is created.
+      expect(res.status, `the append was refused: ${JSON.stringify(res.body)}`).toBe(201);
+      lineIds.push(must((res.body.lines as { cartLineId: string }[]).at(-1)).cartLineId);
+    }
+    expect(new Set(lineIds).size, 'two appends answered with the same line id').toBe(20);
+
+    // «with discounts»: every fourth line carries one, requested through the
+    // route rather than written into a column.
+    for (const lineId of lineIds.filter((_, i) => i % 4 === 0)) {
+      const res = await t.request.post(`${base}/${lineId}/discount`).set(headers).send({ discountMinor: '1' });
+      expect(res.status, `the discount was refused: ${JSON.stringify(res.body)}`).toBe(200);
+    }
+    return lineIds;
+  }
+
+  it(`MEASUREMENT: p95 of ${RUNS} warm recomputations of a 20-line basket is within P4-B (${BUDGET.B_POS_CART_P95} ms)`, async () => {
+    // The tripwire's own fact, kept and inverted: the subject must EXIST, so a
+    // revert of `0079` makes this red rather than making the figure vacuous.
+    const present = (
+      await ownerPool().query<{ relname: string }>(`SELECT relname FROM pg_class WHERE relname = ANY($1::text[]) ORDER BY relname`, [
+        ['pos_cart_lines', 'pos_till_sessions'],
+      ])
+    ).rows.map((x) => x.relname);
+    expect(present, 'the POS relations P4-B measures are not in the tree').toEqual(['pos_cart_lines', 'pos_till_sessions']);
+
+    const lineIds = await twentyLineBasket();
+    const headers = asMember(owner, A.businessId);
+    const subject = `/v1/pos/till-sessions/${must(tillSessionId)}/cart-lines/${must(lineIds[0])}`;
+
+    /** One recomputation of the whole basket, timed, with its line count read back off the answer. */
+    const recompute = async (quantity: string): Promise<{ ms: number; lines: number }> => {
+      const start = process.hrtime.bigint();
+      const res = await t.request.patch(subject).set(headers).send({ quantity });
+      const ms = Number(process.hrtime.bigint() - start) / 1e6;
+      expect(res.status, `the recomputation was refused: ${JSON.stringify(res.body)}`).toBe(200);
+      return { ms, lines: (res.body.lines as unknown[]).length };
+    };
+
+    for (let i = 0; i < WARMUP; i += 1) await recompute(i % 2 === 0 ? '1' : '2');
+    const samples: number[] = [];
+    for (let i = 0; i < RUNS; i += 1) {
+      const run = await recompute(i % 2 === 0 ? '1' : '2');
+      // The figure is about TWENTY lines on every single sample, not on average.
+      expect(run.lines, 'a sample recomputed a basket of some other size').toBe(20);
+      samples.push(run.ms);
+    }
+
+    const sorted = [...samples].sort((a, b) => a - b);
+    const rank = (q: number): number => must(sorted[Math.min(sorted.length - 1, Math.ceil(q * sorted.length) - 1)]);
+    const measured = {
+      name: 'POS cart recomputation, 20 lines, 5 discounted, tax zero (OD-03 OPEN)',
+      budgetMs: BUDGET.B_POS_CART_P95,
+      p50: rank(0.5),
+      p95: rank(0.95),
+      max: must(sorted.at(-1)),
+      samplesMs: samples.map((x) => Math.round(x * 100) / 100),
+    };
+    console.info('[P4-B] budget', JSON.stringify({ lines: 20, discounted: 5, loadavg: loadavg(), measured }));
+
+    expect(measured.p95, `${measured.name}: p95 ${measured.p95.toFixed(1)} ms against P4-B's ${BUDGET.B_POS_CART_P95} ms`).toBeLessThanOrEqual(
+      BUDGET.B_POS_CART_P95,
+    );
   });
 });
