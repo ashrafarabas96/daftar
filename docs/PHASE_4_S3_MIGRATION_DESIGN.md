@@ -125,7 +125,7 @@ reconciliation itself belongs to whichever later slice owns the cash-up; P4-S3 p
 | the float is required | `opening_float_minor BIGINT NOT NULL`, range-checked `0 … 10^18` |
 | the close count exists exactly when the shift is closed | `pos_till_sessions_state_ck` carries `closing_count_minor` beside `closed_at` and `close_intent_sha256` |
 | neither can be forged in flight | both are inside the signed `invpl/1` payload of their command, digested as the `integer` field type (`0054:205`, `^(0\|-?[1-9][0-9]*)$`) |
-| a replay with a different float is not a replay | the float is in the open intent, so the digest differs and `pos.idempotency_conflict` names it |
+| a replay with a different float is not a replay | the float is in the open intent, so the digest differs and `pos.session_idempotency_conflict` names it |
 | the float is final | **absent** from the `UPDATE` grant, and listed among the opening facts in `pos_till_session_guard()` — a float that can be rewritten after the shift opened is not a counted float |
 | the money set is closed | `0079-E(3)` pins the slice's `%_minor` columns to **exactly** these two and the discount request |
 
@@ -144,7 +144,7 @@ trusted generic principal every inventory command runs as — can still write th
 | (b) | `pos_cart_lines_session_actor_fk FOREIGN KEY (business_id, till_session_id, added_by) REFERENCES pos_till_sessions (business_id, id, opened_by)` | **a cart line added by anyone but the session's own user.** There is no parent tuple to point at, so the refusal is the referential integrity of the database. This is the ruling. |
 | (b′) | the same edge, `ON UPDATE RESTRICT` | reassigning the session's user while a basket exists |
 | (c) | `pos_till_sessions_one_open_per_user_uq UNIQUE (business_id, opened_by) WHERE status = 'open'` | **a second open session for one user.** "A shift change is a new session" becomes a uniqueness fact |
-| (d) | `pos_till_session_guard()`'s `opened_by` clause, with its own error code `pos.till_session_actor_immutable` | reassigning the session's user when the basket is still EMPTY — the one window (b′) cannot see, because there is no referencing row to restrict |
+| (d) | `pos_till_session_guard()`'s `opened_by` clause, with its own error code `pos.session_owner_immutable` | reassigning the session's user when the basket is still EMPTY — the one window (b′) cannot see, because there is no referencing row to restrict |
 
 Note that (b) also does the `P4-AL-09` job: the edge names `business_id` on both sides, so a
 cross-business basket is not representable either. One foreign key, two laws.
@@ -349,9 +349,9 @@ refusal.
 
 - **`pos.session_open`** locks `hashtext('daftar.pos_till_session_id')` (the `supplier_create`
   idiom), replays on an equal `open_intent_sha256`, and refuses a replay presented by a **different
-  user** with `pos.till_session_not_yours` — a second user holding the first user's intent is not a
+  user** with `pos.session_not_owned` — a second user holding the first user's intent is not a
   replay, it is a takeover. The two partial unique indexes are translated into
-  `pos.till_session_already_open` and `pos.terminal_already_open`, so the till gets a stable business
+  `pos.session_already_open` and `pos.terminal_already_open`, so the till gets a stable business
   refusal while the DECISION stays the index's.
 - **`pos.session_close`** refuses a session that is not the actor's own, and **does not delete the
   basket**: a closed session and its lines are the frozen record of the shift.
@@ -359,7 +359,7 @@ refusal.
   `pos.cart_line_conflict`; otherwise the quantity and the discount request are revised. On INSERT,
   `added_by` is the assertion's actor and nothing else, so
   `pos_cart_lines_session_actor_fk` — not the body — refuses a line on another user's session; the
-  body only translates `23503` into `pos.till_session_not_yours`.
+  body only translates `23503` into `pos.session_not_owned`.
 - **`pos.cart_remove_line`** writes `removed_at = now()` — never a `DELETE` — and carries `added_by`
   in its predicate, because the actor edge cannot refuse a *revision* of a row that already satisfies
   it. `AND removed_at IS NULL` is what makes the second tap return `0` rather than write a second
@@ -424,8 +424,8 @@ wrote.
 
 `0079-P(a)…(c)` PERFORM three refusals inside sub-transactions and roll them back, and each handler
 reports a **defective probe** if a different refusal fires: a session inserted already closed
-(`pos.till_session_lifecycle_invalid`), a cart line with no open session
-(`pos.till_session_not_open`), and a till name outside the `invpl/1` `code` grammar
+(`pos.session_state_invalid`), a cart line with no open session
+(`pos.session_not_open`), and a till name outside the `invpl/1` `code` grammar
 (`pos_till_sessions_terminal_code_ck`).
 
 ### 8.2 The probe that was written, run, and REMOVED — and why
@@ -463,11 +463,11 @@ Owed, named, and the slice's test estate's (`tests/security/pos-s3-*.test.ts`,
    session is refused by `pos_cart_lines_session_actor_fk`, and refused **as the raw INSERT too**, by
    `daftar_inventory_internal` directly — which is the only way to show it is a constraint and not a
    wrapper's check.
-2. A second **open** session for one user → `pos.till_session_already_open`.
+2. A second **open** session for one user → `pos.session_already_open`.
 3. A second **open** session on one terminal → `pos.terminal_already_open`.
-4. An `UPDATE` of `opened_by` → `pos.till_session_actor_immutable`, on a session with an **empty**
+4. An `UPDATE` of `opened_by` → `pos.session_owner_immutable`, on a session with an **empty**
    basket (the case the foreign key cannot see) and on one with lines (where the FK refuses first).
-5. A write to a **closed** shift's basket → `pos.till_session_not_open`, for INSERT and UPDATE; a
+5. A write to a **closed** shift's basket → `pos.session_not_open`, for INSERT and UPDATE; a
    `DELETE` is refused earlier still, by `pos.cart_line_immutable` and by the absent privilege.
 6. **RLS, behaviourally**, as `daftar_app`: a cross-tenant and a cross-business read and write on both
    relations, with the policies never weakened for the test.
@@ -657,11 +657,104 @@ but not unsound — no suite in this estate is timing-budgeted (`tests/performan
 rather than verdicts. Had any timing-sensitive assertion failed it would have been re-checked alone
 before being reported; none did.
 
-### The `ORDER BY 1` defect this slice found in its own assertion
+### The `ORDER BY 1` defect this slice found in its own assertion — MEASURED
 
-`0079-E(3)` read the slice's money columns as
-`array_agg(… ORDER BY 1)`. Inside an aggregate the `1` is the **constant one**, not a positional
-reference, so it sorted nothing — invisible while the array held a single element, and immediately
-red when the two counted figures made it three. Found by `db-from-zero` rather than by reading, which
-is the argument for a migration asserting its own end state at all. Both `ORDER BY 1` aggregates in
-the file now order by the expression.
+`0079-E(3)` read the slice's money columns as `array_agg(… ORDER BY 1)`, and went red the moment the
+two counted figures made the set three elements instead of one. The cause was challenged, so it was
+**measured** on this estate's own PostgreSQL 18.4 rather than argued, in two throwaway probes that
+were run and deleted. The results, which settle it:
+
+| statement | result |
+|---|---|
+| `ARRAY(SELECT x FROM (VALUES ('b'),('a'),('c'),('a')) t(x) ORDER BY 1)` | `{a,a,b,c}` — **sorts** |
+| the same with `ORDER BY 2` | `ERROR: ORDER BY position 2 is not in select list` |
+| `array_agg(x ORDER BY 1)` over the same values | `{b,a,c,a}` — **does not sort** |
+| `array_agg(x ORDER BY 2)` over the same values | `{b,a,c,a}` — **no error, and still unsorted** |
+| `array_agg(x)` with no `ORDER BY` | `{b,a,c,a}` — identical to the `ORDER BY 1` case |
+| `string_agg(x, ',' ORDER BY 1)` | `b,a,c,a` — does not sort |
+
+**The two forms are different, and that is the whole point.** In a SUBQUERY's `ORDER BY`, `1` is a
+positional reference to the first output column, so it sorts — and `ORDER BY 2` is an error because
+there is no second output column. In an AGGREGATE's `ORDER BY` there is no output list, so PostgreSQL
+forces SQL99 rules and the integer is an ordinary **constant** expression: the sort key is the same
+for every row, the sort is a no-op, and `ORDER BY 2` is accepted precisely because it is a constant
+and not a position. The accepted `ORDER BY 2` with no error is the decisive discriminator; a probe
+that tests only `ORDER BY 1` cannot tell the two readings apart.
+
+So the cause of the `0079-E(3)` failure was exactly this: the no-op sort returned the rows in
+**physical catalogue order** — `pos_till_sessions`'s two columns first, because that table is created
+first, then `pos_cart_lines`'s one — while the expected literal was written alphabetically. Both
+halves were needed to make it red, and with a working sort the alphabetical literal is the correct
+one. Found by `db-from-zero`, not by reading, which is the argument for a migration asserting its own
+end state at all.
+
+**What this does and does not say about the accepted prefix.** Both forms occur in the frozen
+migrations and they must not be conflated:
+
+- `0060:186`, `0065:1041` and `0067:2442` are the SUBQUERY form, `ARRAY(SELECT … ORDER BY 1)`. These
+  sort. Nothing to note.
+- the thirteen AGGREGATE-form sites — `0070` (seven), `0071`, `0072` (two), `0075` (two), `0077` — do
+  not sort. They are **not failing**: the full estate is green at 4981/4981, so each one's expected
+  literal currently matches the physical order its own query produces (ACL array order for an
+  `aclexplode`, catalogue scan order for a `pg_proc` sweep), because the migration issued those
+  grants in that order. The exposure is therefore **order-fragility, not a present defect**: such an
+  assertion compares against the order a grant happened to be issued in rather than against a sorted
+  set. They are frozen, so there is nothing to do and no directive is owed; it is a note for whoever
+  writes the next one. `0070:490`'s `string_agg` is a DETAIL message only and cosmetic either way.
+
+`0079`'s two sites now order by the expression, which makes the sort real and the alphabetical
+literals right.
+
+### The refusal-code rename — the registry's spelling wins
+
+Of the fifteen `pos.*` codes this file RAISEs, none were in `SELLING_STATUS`, so every refusal —
+including the `OD-P4-09` one the whole slice exists to produce — rendered through the generic `P0001`
+fallback instead of its mapped status. Agent B found it; the coordinator ruled that the registry's
+spelling wins, because the registry is the public HTTP contract (`GlobalExceptionFilter`'s status
+map, `DATABASE_CODE_RE`'s recogniser, the ar/en/tr catalogue keys) and six `RAISE` strings in a
+CANDIDATE migration are far less churn than moving all of that. The ruling is right and it is applied:
+
+| was | now |
+|---|---|
+| `pos.till_session_not_yours` | `pos.session_not_owned` |
+| `pos.till_session_unknown` | `pos.session_not_found` |
+| `pos.till_session_not_open` | `pos.session_not_open` |
+| `pos.till_session_already_open` | `pos.session_already_open` |
+| `pos.till_session_actor_immutable` | `pos.session_owner_immutable` |
+| `pos.till_session_lifecycle_invalid` | `pos.session_state_invalid` |
+| `pos.idempotency_conflict` | `pos.session_idempotency_conflict` |
+
+The last is the answer to the coordinator's question: **both** raises of it are the SESSION's — the
+open command's reused id under a different intent (`0079:842`) and the close command's already-closed
+session under a different intent (`0079:925`). No cart command raises it, so it collapses two
+spellings onto one event rather than two events onto one spelling, and A's registered
+`pos.session_idempotency_conflict` (409) is the right target.
+
+Renamed in the `RAISE` strings, in the routine `COMMENT`s, in every end-state assertion that reads a
+body for them, and in the `0079-P(a)`/`0079-P(b)` probe expectations. Unchanged, because A is
+registering them: `pos.till_session_immutable`, `pos.terminal_already_open`, `pos.cart_line_conflict`,
+`pos.cart_line_immutable`, `pos.cart_line_removed`.
+
+**The three migration-time codes must never be registered, and that is now a measured fact rather
+than a classification.** `pos.migration_end_state_invalid` (54 occurrences), `pos.authority_leak`
+(16) and `pos.derived_truth_stored` (3) appear in **no routine body at all** — every occurrence is
+inside the `$pre$`, `$end$` or `$proof$` `DO` blocks, which run once at migration time as the
+migrator. Parsing the file's six `CREATE FUNCTION … AS $$ … $$` bodies finds zero of the three, so
+none is reachable through any `GRANT EXECUTE` to `daftar_app` or `daftar_inventory_internal`, and A's
+structural test — reachability through a grant rather than a name list — will classify them the same
+way. The coordinator's classification is correct.
+
+### Round 3b — the comment correction, re-verified rather than assumed
+
+Correcting the explanation above changed `0079`'s digest (comment text inside its own `DO` block), so
+round 3's verdict no longer covered the file byte for byte, and the refusal-code rename above changed
+it again. Rather than assume a comment or a message string is inert, or spend another forty minutes
+on the whole estate for a rename, the **29 suites that actually read migration text**
+— all of `tests/guards`, plus every suite under `tests/security` and `tests/integration` that
+references `MIGRATIONS_DIR`, the prefix readers or the migration directory — were re-run: **29 files
+passed (29), 794 assertions passed (794), exit 0** — run once after the comment correction and again
+after the rename — with `db-from-zero` re-running to `PASS` with `rerunApplied: 0` each time, and the
+35-check behavioural proof re-run to `PASS` against the new spellings so every renamed refusal is
+observed actually firing under its new code. Nothing in the slice's end state depends on the comment,
+and the rename is message text only: no column, constraint, index, privilege, policy or signature
+moved.

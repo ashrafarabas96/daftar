@@ -636,7 +636,7 @@ LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp 
 BEGIN
   IF TG_OP = 'INSERT' THEN
     IF NEW.status <> 'open' OR NEW.closed_at IS NOT NULL OR NEW.close_intent_sha256 IS NOT NULL THEN
-      RAISE EXCEPTION 'pos.till_session_lifecycle_invalid: a till session is created open, never already closed' USING ERRCODE = 'P0001';
+      RAISE EXCEPTION 'pos.session_state_invalid: a till session is created open, never already closed' USING ERRCODE = 'P0001';
     END IF;
     RETURN NEW;
   END IF;
@@ -646,7 +646,7 @@ BEGIN
   -- OD-P4-09: one session, one authenticated user. Named on its own so the
   -- refusal says which ruling refused it.
   IF NEW.opened_by IS DISTINCT FROM OLD.opened_by THEN
-    RAISE EXCEPTION 'pos.till_session_actor_immutable: a till session belongs to one authenticated user and a change of user is a new session (OD-P4-09)'
+    RAISE EXCEPTION 'pos.session_owner_immutable: a till session belongs to one authenticated user and a change of user is a new session (OD-P4-09)'
       USING ERRCODE = 'P0001';
   END IF;
   IF NEW.tenant_id IS DISTINCT FROM OLD.tenant_id OR NEW.business_id IS DISTINCT FROM OLD.business_id
@@ -662,7 +662,7 @@ BEGIN
     RAISE EXCEPTION 'pos.till_session_immutable: a closed till session is final' USING ERRCODE = 'P0001';
   END IF;
   IF NEW.status <> 'closed' THEN
-    RAISE EXCEPTION 'pos.till_session_lifecycle_invalid: an open till session becomes a closed one and nothing else' USING ERRCODE = 'P0001';
+    RAISE EXCEPTION 'pos.session_state_invalid: an open till session becomes a closed one and nothing else' USING ERRCODE = 'P0001';
   END IF;
   RETURN NEW;
 END;
@@ -729,7 +729,7 @@ BEGIN
   WHERE s.business_id = v_business AND s.id = v_session
   FOR NO KEY UPDATE;
   IF NOT FOUND OR v_status <> 'open' THEN
-    RAISE EXCEPTION 'pos.till_session_not_open: a cart is only written while its till session is open' USING ERRCODE = 'P0001';
+    RAISE EXCEPTION 'pos.session_not_open: a cart is only written while its till session is open' USING ERRCODE = 'P0001';
   END IF;
   RETURN NEW;
 END;
@@ -765,7 +765,7 @@ CREATE TRIGGER pos_cart_lines_session_open
 --
 --     The counted opening float is part of the signed payload, so a replay
 --     presenting a DIFFERENT float is not a replay: its intent digest differs
---     and `pos.idempotency_conflict` names it. That is the property that makes
+--     and `pos.session_idempotency_conflict` names it. That is the property that makes
 --     the figure trustworthy at all (R-P4-S3-09).
 CREATE FUNCTION pos_till_session_open(
   p_session_id    UUID,
@@ -839,18 +839,18 @@ BEGIN
   FROM pos_till_sessions s WHERE s.business_id = v_actor.business_id AND s.id = p_session_id FOR UPDATE;
   IF FOUND THEN
     IF v_stored <> v_intent THEN
-      RAISE EXCEPTION 'pos.idempotency_conflict: this till session id was used for a different session' USING ERRCODE = 'P0001';
+      RAISE EXCEPTION 'pos.session_idempotency_conflict: this till session id was used for a different session' USING ERRCODE = 'P0001';
     END IF;
     -- OD-P4-09 again, at the replay: a second user presenting the first
     -- user's intent is not a replay, it is a takeover.
     IF v_owner <> v_actor.actor_user_id THEN
-      RAISE EXCEPTION 'pos.till_session_not_yours: a till session belongs to one authenticated user (OD-P4-09)' USING ERRCODE = 'P0001';
+      RAISE EXCEPTION 'pos.session_not_owned: a till session belongs to one authenticated user (OD-P4-09)' USING ERRCODE = 'P0001';
     END IF;
     v_replay := true;
   ELSE
     IF EXISTS (SELECT 1 FROM pos_till_sessions s
                 WHERE s.business_id = v_actor.business_id AND s.opened_by = v_actor.actor_user_id AND s.status = 'open') THEN
-      RAISE EXCEPTION 'pos.till_session_already_open: this user already holds an open till session; close it before opening another (OD-P4-09)'
+      RAISE EXCEPTION 'pos.session_already_open: this user already holds an open till session; close it before opening another (OD-P4-09)'
         USING ERRCODE = 'P0001';
     END IF;
     IF EXISTS (SELECT 1 FROM pos_till_sessions s
@@ -875,7 +875,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION pos_till_session_open(UUID, UUID, UUID, TEXT, TEXT, BIGINT) IS
-  'P4-S3, OD-P4-09. Opens one till session for the actor the invctl/1 pos.session_open assertion names; the business, the tenant and the ACTOR come from the assertion and never from an argument. Under the daftar.pos_till_session_id key an existing id replays when its open intent AND its user are equal, and is pos.idempotency_conflict or pos.till_session_not_yours otherwise. A second open session for the same user is pos.till_session_already_open and for the same terminal pos.terminal_already_open, pre-checked under the daftar.pos_till_session_actor and daftar.pos_till_terminal advisory keys (rule 22 forbids an EXCEPTION handler in a routine that writes a truth table, so the index cannot be translated after the fact) while the two partial unique indexes stay the authority. p_opening_float_minor is the cash a human COUNTED in the drawer, in minor units of the session currency; it is inside the signed payload, so a replay presenting a different float is pos.idempotency_conflict and not a replay, and it is absent from the UPDATE grant so it cannot be rewritten afterwards (R-P4-S3-09). EXECUTE: daftar_app only — reachability, not authority.';
+  'P4-S3, OD-P4-09. Opens one till session for the actor the invctl/1 pos.session_open assertion names; the business, the tenant and the ACTOR come from the assertion and never from an argument. Under the daftar.pos_till_session_id key an existing id replays when its open intent AND its user are equal, and is pos.session_idempotency_conflict or pos.session_not_owned otherwise. A second open session for the same user is pos.session_already_open and for the same terminal pos.terminal_already_open, pre-checked under the daftar.pos_till_session_actor and daftar.pos_till_terminal advisory keys (rule 22 forbids an EXCEPTION handler in a routine that writes a truth table, so the index cannot be translated after the fact) while the two partial unique indexes stay the authority. p_opening_float_minor is the cash a human COUNTED in the drawer, in minor units of the session currency; it is inside the signed payload, so a replay presenting a different float is pos.session_idempotency_conflict and not a replay, and it is absent from the UPDATE grant so it cannot be rewritten afterwards (R-P4-S3-09). EXECUTE: daftar_app only — reachability, not authority.';
 
 -- (b) Close a shift. The basket stays: a closed session and its lines are the
 --     frozen record of what was in the drawer, and `pos_cart_line_guard()`
@@ -914,15 +914,15 @@ BEGIN
   SELECT s.status, s.opened_by, s.close_intent_sha256 INTO v_status, v_owner, v_close
   FROM pos_till_sessions s WHERE s.business_id = v_actor.business_id AND s.id = p_session_id FOR UPDATE;
   IF NOT FOUND THEN
-    RAISE EXCEPTION 'pos.till_session_unknown: no such till session' USING ERRCODE = 'P0001';
+    RAISE EXCEPTION 'pos.session_not_found: no such till session' USING ERRCODE = 'P0001';
   END IF;
   -- OD-P4-09: only the session's own user ends their own shift.
   IF v_owner <> v_actor.actor_user_id THEN
-    RAISE EXCEPTION 'pos.till_session_not_yours: a till session belongs to one authenticated user (OD-P4-09)' USING ERRCODE = 'P0001';
+    RAISE EXCEPTION 'pos.session_not_owned: a till session belongs to one authenticated user (OD-P4-09)' USING ERRCODE = 'P0001';
   END IF;
   IF v_status = 'closed' THEN
     IF v_close <> v_intent THEN
-      RAISE EXCEPTION 'pos.idempotency_conflict: this till session was closed by a different request' USING ERRCODE = 'P0001';
+      RAISE EXCEPTION 'pos.session_idempotency_conflict: this till session was closed by a different request' USING ERRCODE = 'P0001';
     END IF;
     v_replay := true;
   ELSE
@@ -942,7 +942,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION pos_till_session_close(UUID, BIGINT) IS
-  'P4-S3, OD-P4-09. Closes the actor''s OWN till session (pos.till_session_not_yours otherwise), under an invctl/1 pos.session_close assertion. Already closed by the same intent replays; by a different one it is pos.idempotency_conflict. p_closing_count_minor is the cash a human COUNTED in the drawer at the end of the shift, in minor units of the session currency, and it is inside the signed payload; pos_till_sessions_state_ck ties it to the closed status exactly as it ties closed_at. No expected-cash figure, variance or over/short is stored: each is derived from this count, the opening float and the shift''s cash payments, and the comparison belongs to whichever later slice owns the cash-up (R-P4-S3-09). The basket is NOT deleted: a closed session and its lines are the frozen record of the shift, and pos_cart_line_guard() refuses every later write to them. EXECUTE: daftar_app only.';
+  'P4-S3, OD-P4-09. Closes the actor''s OWN till session (pos.session_not_owned otherwise), under an invctl/1 pos.session_close assertion. Already closed by the same intent replays; by a different one it is pos.session_idempotency_conflict. p_closing_count_minor is the cash a human COUNTED in the drawer at the end of the shift, in minor units of the session currency, and it is inside the signed payload; pos_till_sessions_state_ck ties it to the closed status exactly as it ties closed_at. No expected-cash figure, variance or over/short is stored: each is derived from this count, the opening float and the shift''s cash payments, and the comparison belongs to whichever later slice owns the cash-up (R-P4-S3-09). The basket is NOT deleted: a closed session and its lines are the frozen record of the shift, and pos_cart_line_guard() refuses every later write to them. EXECUTE: daftar_app only.';
 
 -- (c) Set a cart line: the whole of what a client may say about a basket.
 --     IDENTITIES, A QUANTITY AND A DISCOUNT REQUEST (P4-AL-18, OD-P4-02).
@@ -1013,13 +1013,13 @@ BEGIN
   FROM pos_till_sessions s WHERE s.business_id = v_actor.business_id AND s.id = p_session_id
   FOR NO KEY UPDATE;
   IF NOT FOUND THEN
-    RAISE EXCEPTION 'pos.till_session_unknown: no such till session' USING ERRCODE = 'P0001';
+    RAISE EXCEPTION 'pos.session_not_found: no such till session' USING ERRCODE = 'P0001';
   END IF;
   IF v_owner <> v_actor.actor_user_id THEN
-    RAISE EXCEPTION 'pos.till_session_not_yours: that till session is not this authenticated user''s (OD-P4-09)' USING ERRCODE = 'P0001';
+    RAISE EXCEPTION 'pos.session_not_owned: that till session is not this authenticated user''s (OD-P4-09)' USING ERRCODE = 'P0001';
   END IF;
   IF v_status <> 'open' THEN
-    RAISE EXCEPTION 'pos.till_session_not_open: a cart is only written while its till session is open' USING ERRCODE = 'P0001';
+    RAISE EXCEPTION 'pos.session_not_open: a cart is only written while its till session is open' USING ERRCODE = 'P0001';
   END IF;
   -- A tombstone does not hold an ordinal — which is the predicate the partial
   -- unique index carries, restated here so the refusal is the named one and
@@ -1041,7 +1041,7 @@ BEGIN
       RAISE EXCEPTION 'pos.cart_line_conflict: this cart line id already names a different line' USING ERRCODE = 'P0001';
     END IF;
     IF v_old.added_by <> v_actor.actor_user_id THEN
-      RAISE EXCEPTION 'pos.till_session_not_yours: a cart line belongs to the user whose session it is on (OD-P4-09)' USING ERRCODE = 'P0001';
+      RAISE EXCEPTION 'pos.session_not_owned: a cart line belongs to the user whose session it is on (OD-P4-09)' USING ERRCODE = 'P0001';
     END IF;
     UPDATE pos_cart_lines l
        SET quantity = p_quantity, requested_discount_minor = p_requested_discount_minor
@@ -1064,7 +1064,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION pos_cart_set_line(UUID, UUID, INTEGER, UUID, UUID, NUMERIC, BIGINT) IS
-  'P4-S3, P4-AL-18, OD-P4-02. The one writer of pos_cart_lines. Takes identities, a Q4 quantity and a DISCOUNT REQUEST in minor units, and NOTHING about price: there is no unit-price, line-total or tax argument, so a forged figure is unexpressible rather than rejected. added_by is the invctl/1 assertion''s actor, so pos_cart_lines_session_actor_fk — not this body — is what makes a line on another user''s session unrepresentable; the pos.till_session_not_yours raised here is the localizable MESSAGE for that same refusal, because rule 22 forbids translating the foreign key''s 23503 in a handler. Locks the session row FOR NO KEY UPDATE first, so every cart write on one basket is serialised and a line cannot be added to a shift being closed. An existing line id with different identities is pos.cart_line_conflict; otherwise the quantity and the discount request are revised. EXECUTE: daftar_app only.';
+  'P4-S3, P4-AL-18, OD-P4-02. The one writer of pos_cart_lines. Takes identities, a Q4 quantity and a DISCOUNT REQUEST in minor units, and NOTHING about price: there is no unit-price, line-total or tax argument, so a forged figure is unexpressible rather than rejected. added_by is the invctl/1 assertion''s actor, so pos_cart_lines_session_actor_fk — not this body — is what makes a line on another user''s session unrepresentable; the pos.session_not_owned raised here is the localizable MESSAGE for that same refusal, because rule 22 forbids translating the foreign key''s 23503 in a handler. Locks the session row FOR NO KEY UPDATE first, so every cart write on one basket is serialised and a line cannot be added to a shift being closed. An existing line id with different identities is pos.cart_line_conflict; otherwise the quantity and the discount request are revised. EXECUTE: daftar_app only.';
 
 -- (d) Remove a cart line, by writing its TOMBSTONE. Idempotent by row count:
 --     a line already removed returns 0 and raises nothing, because a till that
@@ -1270,8 +1270,25 @@ BEGIN
         USING ERRCODE = 'P0001';
     END IF;
   END LOOP;
-  -- ORDER BY the EXPRESSION, never `ORDER BY 1`: inside an aggregate the `1`
-  -- is the constant one and sorts nothing, which a one-element array hides.
+  -- ORDER BY the EXPRESSION, never `ORDER BY 1`. MEASURED on PostgreSQL 18.4,
+  -- because the two forms differ and are easy to conflate:
+  --
+  --   ARRAY(SELECT x FROM (VALUES ('b'),('a')) t(x) ORDER BY 1)  -> {a,b}
+  --   array_agg(x ORDER BY 1)            over the same values    -> {b,a}
+  --   array_agg(x ORDER BY 2)            over the same values    -> {b,a}
+  --
+  -- In a SUBQUERY's ORDER BY the `1` is a POSITIONAL reference to the first
+  -- output column, so it sorts (and `ORDER BY 2` is an error: there is no
+  -- second output column). In an AGGREGATE's ORDER BY there is no output list,
+  -- so SQL99 rules are forced and the integer is an ordinary CONSTANT: one
+  -- sort key for every row, the sort a no-op, and `ORDER BY 2` ACCEPTED
+  -- without error — which is the discriminator, since a positional 2 would
+  -- have to be out of range.
+  --
+  -- A one-element array hides this completely. This assertion went red the
+  -- day the slice's money set reached three, because the unsorted result came
+  -- back in physical catalogue order while the expected literal below is
+  -- alphabetical.
   SELECT array_agg(c.relname || '.' || a.attname || ':' || format_type(a.atttypid, NULL)
                    ORDER BY c.relname || '.' || a.attname) INTO v_actual
     FROM pg_class c JOIN pg_attribute a ON a.attrelid = c.oid
@@ -1387,7 +1404,7 @@ BEGIN
   SELECT regexp_replace(p.prosrc, '--[^\n]*', '', 'g') INTO v_def
     FROM pg_proc p WHERE p.oid = 'public.pos_till_session_guard()'::regprocedure;
   IF position('NEW.opened_by IS DISTINCT FROM OLD.opened_by' IN v_def) = 0
-     OR position('pos.till_session_actor_immutable' IN v_def) = 0 THEN
+     OR position('pos.session_owner_immutable' IN v_def) = 0 THEN
     RAISE EXCEPTION 'pos.migration_end_state_invalid: 0079-E(4e): the live pos_till_session_guard() body does not refuse a change of opened_by, so a shift could change hands in the one window the foreign key cannot see'
       USING ERRCODE = 'P0001';
   END IF;
@@ -1553,7 +1570,7 @@ BEGIN
   -- KEY UPDATE, so without this the basket of a closing shift could still grow.
   SELECT regexp_replace(p.prosrc, '--[^\n]*', '', 'g') INTO v_def
     FROM pg_proc p WHERE p.oid = 'public.pos_cart_line_guard()'::regprocedure;
-  IF position('FOR NO KEY UPDATE' IN v_def) = 0 OR position('pos.till_session_not_open' IN v_def) = 0 THEN
+  IF position('FOR NO KEY UPDATE' IN v_def) = 0 OR position('pos.session_not_open' IN v_def) = 0 THEN
     RAISE EXCEPTION 'pos.migration_end_state_invalid: 0079-E(7): the live pos_cart_line_guard() body does not lock its session row, so a line can be added to a session being closed concurrently'
       USING ERRCODE = 'P0001';
   END IF;
@@ -1780,7 +1797,7 @@ BEGIN
   EXCEPTION
     WHEN OTHERS THEN
       v_msg := SQLERRM;
-      IF position('pos.till_session_lifecycle_invalid' IN v_msg) = 0 THEN
+      IF position('pos.session_state_invalid' IN v_msg) = 0 THEN
         RAISE EXCEPTION 'pos.migration_end_state_invalid: 0079-P(a) is a DEFECTIVE PROBE — it tripped % instead of the lifecycle guard', v_msg
           USING ERRCODE = 'P0001';
       END IF;
@@ -1799,7 +1816,7 @@ BEGIN
   EXCEPTION
     WHEN OTHERS THEN
       v_msg := SQLERRM;
-      IF position('pos.till_session_not_open' IN v_msg) = 0 THEN
+      IF position('pos.session_not_open' IN v_msg) = 0 THEN
         RAISE EXCEPTION 'pos.migration_end_state_invalid: 0079-P(b) is a DEFECTIVE PROBE — it tripped % instead of the open-session guard', v_msg
           USING ERRCODE = 'P0001';
       END IF;
