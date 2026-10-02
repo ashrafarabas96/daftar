@@ -22,6 +22,17 @@ import { searchQueryParam } from '../inventory/read-scope';
  * - **`tenantId` / `businessId`.** Scope is resolved from the membership and
  *   enforced by RLS (`P4-AL-40`); a request carrying its own scope is a
  *   request asking to choose it.
+ * - **`warehouseId`.** REFUSED as of the P4-S3 coordinator's RULING 2, and
+ *   this one is worth stating because it used to be accepted. The till's
+ *   warehouse is a FACT OF THE SESSION: `pos_till_sessions.warehouse_id` is
+ *   `NOT NULL`, it is immutable after the session opens
+ *   (`pos_till_session_guard()` refuses a change with
+ *   `pos.till_session_immutable`), and it carries a composite foreign key into
+ *   `warehouses (business_id, id)`. A client that could name the warehouse
+ *   could name a warehouse its own open till does not sell from, which is
+ *   `P4-AL-18` exactly: the client would be the source of truth for the scope
+ *   of its own read. So the request names the SESSION and the server derives
+ *   the warehouse.
  * - **`cursor`, `page`, `offset`.** There is no page two. `OFFSET` is
  *   forbidden to every read module (G-6), a keyset cursor over a UNION of five
  *   independent index ranges would need one position per arm and would still
@@ -47,7 +58,11 @@ const limit = z
   .pipe(z.number().int().min(1).max(POS_SEARCH_MAX_LIMIT));
 
 /**
- * `GET /v1/pos/products` — the till's warehouse and the typed prefix.
+ * `GET /v1/pos/products` — the till SESSION and the typed prefix.
+ *
+ * `sessionId` and not `warehouseId`: the warehouse is derived from the
+ * session, which is the only party entitled to say which warehouse this till
+ * sells from (RULING 2; see the refusal list above).
  *
  * `q` reuses `searchQueryParam`, the P3-S7 parameter: it trims, bounds the
  * length to 1..100 and refuses a NUL. PostgreSQL rejects a NUL in text with
@@ -61,7 +76,7 @@ const limit = z
  */
 export const PosProductSearchQuerySchema = z
   .object({
-    warehouseId: uuid,
+    sessionId: uuid,
     q: searchQueryParam,
     limit: limit.optional(),
   })

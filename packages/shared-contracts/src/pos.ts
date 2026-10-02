@@ -61,6 +61,13 @@ export interface PosProductHitDto {
 export interface PosProductSearchDto {
   /** The prefix the server actually searched on, lower-cased and trimmed. */
   query: string;
+  /**
+   * The warehouse the figures are from — DERIVED by the server from the
+   * session the request named, never supplied by the client (RULING 2). It is
+   * echoed because a till that renders an availability figure should be able
+   * to say which warehouse it is the availability of, and because a client
+   * that silently assumed the wrong one would mis-state stock.
+   */
   warehouseId: string;
   items: PosProductHitDto[];
   /**

@@ -22,7 +22,7 @@ import { POS_SEARCH_DEFAULT_LIMIT, type PosProductSearchQuery } from './pos-read
  *
  * ── What the read is ────────────────────────────────────────────────────
  *
- * `GET /v1/pos/products?warehouseId=…&q=…` — the cashier types, or scans a
+ * `GET /v1/pos/products?sessionId=…&q=…` — the cashier types, or scans a
  * barcode, and gets the sellable units whose barcode, SKU or name STARTS WITH
  * what was typed, best first: barcode, then SKU, then name. P4-A measures
  * exactly this: "one 50-row page by name/SKU/barcode prefix, over HTTP",
@@ -250,6 +250,81 @@ export class PosReadService {
   }
 
   /**
+   * THE TILL'S SELLING CONTEXT, derived from the session and never from the
+   * client (RULING 2).
+   *
+   * ## Why this is one statement and not three
+   *
+   * A type-ahead runs on every keystroke, so the session's warehouse, the
+   * session's state, its owner and the business's currency are read together.
+   * The `LEFT JOIN` is load-bearing: it lets ONE statement distinguish "this
+   * business is gone" from "this session is not visible to me", which an inner
+   * join would collapse into a single empty result.
+   *
+   * ## Why `pos.warehouse_out_of_scope` SURVIVES Ruling 2
+   *
+   * The coordinator expected this code to become unreachable once the client
+   * stopped naming the warehouse, and asked for a path that still raises it.
+   * There are two, both live and both security-relevant, and they exist
+   * because a session's warehouse is FROZEN while a membership is not:
+   *
+   *   1. **reassignment.** `pos_till_session_guard()` refuses any change to
+   *      `branch_id` or `warehouse_id` (`pos.till_session_immutable`), so a
+   *      session opened at branch Y keeps selling from Y's warehouse for its
+   *      whole life. The member's `allowedBranchIds`, though, is editable at
+   *      any moment. Move an assigned-scope cashier from Y to Z while their
+   *      till is open and they now own an open session whose warehouse they do
+   *      not reach;
+   *   2. **branch deactivation.** `reachableWarehouses` joins
+   *      `branches … AND b.status = 'active'`, so deactivating branch Y drops
+   *      its warehouses out of the reachable set without touching the session
+   *      at all.
+   *
+   * In both cases the session is this business's, open, and owned by the
+   * caller — every session check passes — and the only thing standing between
+   * the caller and a warehouse they are no longer entitled to read is this
+   * check. Removing it would turn a stale till into a standing read on a
+   * branch the member was deliberately moved off. So it stays, and it is
+   * REFUSED rather than answered empty for the usual reason.
+   *
+   * ## Why `pos.warehouse_not_found` is GONE
+   *
+   * It became genuinely unreachable, which is the test the coordinator set.
+   * `pos_till_sessions.warehouse_id` is `NOT NULL` and carries
+   * `pos_till_sessions_warehouse_fk FOREIGN KEY (business_id, warehouse_id)
+   * REFERENCES warehouses (business_id, id)`. A derived warehouse therefore
+   * always exists AND always belongs to this same business — the database
+   * will not store a session that says otherwise. A code nothing can raise is
+   * worse than no code, so it is deleted from `SELLING_STATUS` rather than
+   * left as vocabulary that implies a case the system cannot reach.
+   */
+  private async resolveTillWarehouse(m: MembershipContext, sessionId: string): Promise<{ warehouseId: string; baseCurrency: string }> {
+    const { rows } = await this.db.scoped<{
+      base_currency: string;
+      warehouse_id: string | null;
+      opened_by: string | null;
+      status: string | null;
+    }>(
+      this.scope(m),
+      `SELECT b.base_currency, s.warehouse_id, s.opened_by, s.status
+         FROM businesses b
+         LEFT JOIN pos_till_sessions s ON s.business_id = b.id AND s.id = $2::uuid
+        WHERE b.id = $1`,
+      [m.businessId, sessionId],
+    );
+    const row = rows[0];
+    if (row === undefined) throw AppError.forbidden('The business does not exist');
+    // Order matters. Invisibility comes first, so another tenant's session and
+    // a mistyped id are the same answer and neither confirms the other exists.
+    if (row.warehouse_id === null || row.opened_by === null) throw sellingRefusal('pos.session_not_found');
+    if (row.opened_by !== m.userId) throw sellingRefusal('pos.session_not_owned');
+    if (row.status !== 'open') throw sellingRefusal('pos.session_not_open');
+    const reachable = await reachableWarehouses(this.db, m);
+    if (reachable !== null && !reachable.has(row.warehouse_id)) throw sellingRefusal('pos.warehouse_out_of_scope');
+    return { warehouseId: row.warehouse_id, baseCurrency: row.base_currency };
+  }
+
+  /**
    * The POS product type-ahead.
    *
    * Permission: `sales.view`, the key `pos-permissions.ts` gives every POS
@@ -262,52 +337,42 @@ export class PosReadService {
    * ruled OPTION A (no oversell, atomic refusal): a cashier who cannot see
    * that a line is out of stock can only discover it when the sale is refused.
    *
-   * Scope: the till names its warehouse, and the P3 read rule applies
-   * unchanged — an assigned-scope member who names a warehouse they do not
-   * reach is REFUSED (`pos.warehouse_out_of_scope`, 403), and a warehouse this
-   * transaction cannot see at all is REFUSED too (`pos.warehouse_not_found`,
-   * 404) — never answered with an empty page. An empty page would read as
-   * "nothing in stock", which is a different and wrong answer, and a cashier
-   * acting on it refuses a sale of stock that is on the shelf.
+   * Scope: the till names its SESSION, and the server derives the warehouse
+   * from it (RULING 2). The client never names a warehouse — see
+   * `pos-read.schemas.ts` for why that is `P4-AL-18` and not a convenience.
+   *
+   * Four refusals, and not one of them is an empty page. An empty page would
+   * read as "nothing in stock", which is a different and wrong answer, and a
+   * cashier acting on it refuses a sale of stock that is on the shelf:
+   *
+   *   - `pos.session_not_found` (404) — no such session is VISIBLE to this
+   *     transaction. Another business's or another tenant's session is
+   *     invisible under RLS, so it arrives here as "no row" and gets this
+   *     same answer; that is the isolation answer and it is deliberately
+   *     indistinguishable from a typo;
+   *   - `pos.session_not_owned` (403) — the session exists in this business
+   *     but belongs to another cashier. `OD-P4-09`: one session, one
+   *     authenticated user. Reading a colleague's till through its own
+   *     warehouse would be the shared till the ruling refused, read-only;
+   *   - `pos.session_not_open` (409) — the session is closed. A closed till
+   *     has no selling context, and answering from it would let a cashier
+   *     keep ringing up a drawer that has been counted;
+   *   - `pos.warehouse_out_of_scope` (403) — the session's own warehouse is
+   *     no longer one this member reaches. See `resolveTillWarehouse` for why
+   *     this is still reachable after RULING 2, and why it has to be.
+   *
+   * All four codes already exist in `SELLING_STATUS`; this read introduces no
+   * new refusal vocabulary. `pos.warehouse_not_found` is GONE, because it
+   * became unreachable: see the same note.
    */
   async searchProducts(m: MembershipContext, q: PosProductSearchQuery, locale: LocaleCode): Promise<PosProductSearchDto> {
     requireAnyPermission(m, ['sales.view']);
-    const reachable = await reachableWarehouses(this.db, m);
-    if (reachable !== null && !reachable.has(q.warehouseId)) throw sellingRefusal('pos.warehouse_out_of_scope');
+    const till = await this.resolveTillWarehouse(m, q.sessionId);
 
     const size = q.limit ?? POS_SEARCH_DEFAULT_LIMIT;
     const prefix = q.q.toLowerCase();
 
-    /**
-     * The business's currency and the existence of the named warehouse, in one
-     * statement.
-     *
-     * The existence check is the P3-S7 rule (`inventory-reads.ts`'s
-     * `assertWarehouse`) and it is not redundant beside the reach check. A
-     * BUSINESS-WIDE member reaches every warehouse of their own business, so
-     * the reach check passes for any id at all — and a till that named another
-     * business's warehouse would then get a 200 whose every `onHand` is `0`,
-     * because the stock join simply finds nothing under row security. "Zero of
-     * everything" is a different and wrong answer from "that is not your
-     * warehouse": it reads as an empty shop and would have a cashier refuse a
-     * sale of stock that is on the shelf. So an unknown warehouse is REFUSED.
-     *
-     * It is folded into the currency read rather than added beside it because
-     * a type-ahead runs on every keystroke, and three round trips per
-     * keystroke is the kind of cost that only shows up at the till.
-     */
-    const facts = await this.db.scoped<{ base_currency: string; warehouse_exists: boolean }>(
-      this.scope(m),
-      `SELECT b.base_currency,
-              EXISTS (SELECT 1 FROM warehouses w WHERE w.business_id = b.id AND w.id = $2::uuid) AS warehouse_exists
-         FROM businesses b
-        WHERE b.id = $1`,
-      [m.businessId, q.warehouseId],
-    );
-    const row = facts.rows[0];
-    if (row === undefined) throw AppError.forbidden('The business does not exist');
-    if (!row.warehouse_exists) throw sellingRefusal('pos.warehouse_not_found');
-    const currency = row.base_currency;
+    const currency = till.baseCurrency;
 
     const found = await this.db.scoped<HitRow>(
       this.scope(m),
@@ -350,7 +415,7 @@ export class PosReadService {
                  CASE WHEN v.is_base THEN '' ELSE ${variantNameSql('v')} END,
                  CASE WHEN v.is_base THEN '${NIL_UUID}'::uuid ELSE v.id END
         LIMIT $7`,
-      [m.businessId, prefix, q.q, size + 1, locale, q.warehouseId, size + 1],
+      [m.businessId, prefix, q.q, size + 1, locale, till.warehouseId, size + 1],
     );
 
     const page = found.rows.slice(0, size);
@@ -369,6 +434,6 @@ export class PosReadService {
       trackInventory: r.track_inventory,
       matchedOn: MATCH_KIND[r.match_rank] ?? 'name',
     }));
-    return { query: prefix, warehouseId: q.warehouseId, items, moreMatches: found.rows.length > size };
+    return { query: prefix, warehouseId: till.warehouseId, items, moreMatches: found.rows.length > size };
   }
 }

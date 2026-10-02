@@ -203,31 +203,38 @@ const SELLING_STATUS = {
   /** A till does not close over an unfinished basket: the cart is cleared or committed first. */
   'pos.session_cart_not_empty': 409,
 
-  // ── The POS READS (P4-S3): the till's own scope refusals ────────────────
+  // ── The POS READS (P4-S3): the till's own scope refusal ─────────────────
   //
-  // The POS product type-ahead names the warehouse the till sells from, and
-  // the two ways that can be wrong are different answers that must not be
-  // collapsed into one — and neither may be answered with an EMPTY PAGE. A
-  // type-ahead that returned no rows for a warehouse the cashier may not use
-  // reads as "the shop is empty", and a cashier acting on it refuses a sale of
-  // stock that is on the shelf. So:
+  // ONE code, not the two this block first carried. The POS type-ahead no
+  // longer lets the client name a warehouse — it names its SESSION and the
+  // server derives the warehouse (RULING 2) — which changed what is reachable:
   //
-  //   - `pos.warehouse_out_of_scope` (403): the warehouse EXISTS in this
-  //     business and the actor's `member_branch_scopes` do not reach it. This
-  //     is the P3-S7 `inventory.warehouse_out_of_scope` rule in POS
-  //     vocabulary, and the 403/404 split is kept rather than collapsed the
-  //     way `pos.branch_not_found` collapses it: both parties here are inside
-  //     ONE business, so telling a member of that business that a warehouse of
-  //     theirs is outside their branch scope crosses no trust boundary, and
-  //     the distinction is what lets the screen say "ask for access" instead
-  //     of "that does not exist";
-  //   - `pos.warehouse_not_found` (404): no such warehouse is visible to this
-  //     transaction at all. Another business's warehouse id lands here, and
-  //     must: it is filtered out by the RLS policies before the service sees
-  //     it, so the service cannot tell it from one that never existed and must
-  //     not be able to.
+  //   - `pos.warehouse_out_of_scope` (403) SURVIVES, and it is not a leftover.
+  //     A session's `warehouse_id` is frozen for the session's whole life by
+  //     `pos_till_session_guard()`, while the member's branch assignments are
+  //     editable at any moment. Reassign an assigned-scope cashier away from
+  //     the branch, or merely DEACTIVATE that branch, and they own an open
+  //     session whose warehouse they no longer reach. This is the only check
+  //     standing between a stale till and a standing read on a branch the
+  //     member was deliberately moved off, so it is a security refusal and not
+  //     a validation nicety. It is the P3-S7
+  //     `inventory.warehouse_out_of_scope` rule in POS vocabulary, and it is
+  //     REFUSED rather than answered with an empty page: a type-ahead that
+  //     returned no rows would read as "the shop is empty", and a cashier
+  //     acting on it refuses a sale of stock that is on the shelf.
+  //
+  //   - `pos.warehouse_not_found` (404) is DELETED, because Ruling 2 made it
+  //     unreachable. `pos_till_sessions.warehouse_id` is `NOT NULL` and
+  //     carries a composite foreign key into `warehouses (business_id, id)`,
+  //     so a derived warehouse always exists and always belongs to this same
+  //     business; the database will not store a session that says otherwise.
+  //     A code nothing can raise is worse than no code: it implies a case the
+  //     system cannot reach and invites a handler for it.
+  //
+  // The session's own four refusals are NOT duplicated here. They are already
+  // in this table from the till-session lifecycle, and the read raises those
+  // same ones rather than minting read-flavoured twins.
   'pos.warehouse_out_of_scope': 403,
-  'pos.warehouse_not_found': 404,
 } as const satisfies Readonly<Record<`${'customer' | 'invoice' | 'pos' | 'sale'}.${string}`, 400 | 403 | 404 | 409 | 422 | 500>>;
 
 /** A classified selling refusal code. */
