@@ -680,6 +680,24 @@ BEGIN
     RAISE EXCEPTION 'inventory.payload_invalid: a till session names an upper-case ISO currency code' USING ERRCODE = 'P0001';
   END IF;
 
+  -- THREE advisory locks, ALWAYS IN THIS ORDER, and no `EXCEPTION WHEN`
+  -- anywhere in this body. Rule 22
+  -- (scripts/guards/inventory-writer-authority.ts:379) refuses an exception
+  -- handler in any routine that writes a table the inventory principal holds
+  -- DML on, because a handler could swallow the assertion refusal and write
+  -- anyway — so the two partial unique indexes cannot be TRANSLATED into their
+  -- business refusals after the fact. They are PRE-CHECKED instead, and the
+  -- lock is what makes a pre-check a decision rather than a guess: the actor
+  -- key serialises every open attempt by one user and the terminal key every
+  -- open attempt on one drawer, so the `EXISTS` below cannot be overtaken.
+  -- The index is still the AUTHORITY — under a lock this body does not hold
+  -- it is the index that refuses, with `23505` naming itself — and these
+  -- checks are the localizable message. Fixed order, so a deadlock here is a
+  -- defect and not a retry (P3-AL-07).
+  PERFORM pg_advisory_xact_lock(hashtext('daftar.pos_till_session_actor'),
+                                hashtext(v_actor.business_id::text || ':' || v_actor.actor_user_id::text));
+  PERFORM pg_advisory_xact_lock(hashtext('daftar.pos_till_terminal'),
+                                hashtext(v_actor.business_id::text || ':' || p_branch_id::text || ':' || p_terminal_code));
   PERFORM pg_advisory_xact_lock(hashtext('daftar.pos_till_session_id'), hashtext(p_session_id::text));
   v_intent := split_part(current_setting('app.inventory_assertion', true), '.', 7);
 
@@ -696,24 +714,20 @@ BEGIN
     END IF;
     v_replay := true;
   ELSE
-    BEGIN
-      INSERT INTO pos_till_sessions (tenant_id, business_id, id, branch_id, warehouse_id, terminal_code, currency_code,
-                                     status, opened_by, open_intent_sha256, business_transaction_id)
-      VALUES (v_actor.tenant_id, v_actor.business_id, p_session_id, p_branch_id, p_warehouse_id, p_terminal_code,
-              upper(p_currency_code), 'open', v_actor.actor_user_id, v_intent, v_trace);
-    EXCEPTION
-      WHEN unique_violation THEN
-        -- The two partial unique indexes of OD-P4-09 and of the drawer,
-        -- turned into the two stable business refusals a till can act on.
-        IF position('pos_till_sessions_one_open_per_user_uq' IN SQLERRM) > 0 THEN
-          RAISE EXCEPTION 'pos.till_session_already_open: this user already holds an open till session; close it before opening another (OD-P4-09)'
-            USING ERRCODE = 'P0001';
-        END IF;
-        IF position('pos_till_sessions_one_open_per_terminal_uq' IN SQLERRM) > 0 THEN
-          RAISE EXCEPTION 'pos.terminal_already_open: this terminal already holds an open till session' USING ERRCODE = 'P0001';
-        END IF;
-        RAISE;
-    END;
+    IF EXISTS (SELECT 1 FROM pos_till_sessions s
+                WHERE s.business_id = v_actor.business_id AND s.opened_by = v_actor.actor_user_id AND s.status = 'open') THEN
+      RAISE EXCEPTION 'pos.till_session_already_open: this user already holds an open till session; close it before opening another (OD-P4-09)'
+        USING ERRCODE = 'P0001';
+    END IF;
+    IF EXISTS (SELECT 1 FROM pos_till_sessions s
+                WHERE s.business_id = v_actor.business_id AND s.branch_id = p_branch_id
+                  AND s.terminal_code = p_terminal_code AND s.status = 'open') THEN
+      RAISE EXCEPTION 'pos.terminal_already_open: this terminal already holds an open till session' USING ERRCODE = 'P0001';
+    END IF;
+    INSERT INTO pos_till_sessions (tenant_id, business_id, id, branch_id, warehouse_id, terminal_code, currency_code,
+                                   status, opened_by, open_intent_sha256, business_transaction_id)
+    VALUES (v_actor.tenant_id, v_actor.business_id, p_session_id, p_branch_id, p_warehouse_id, p_terminal_code,
+            upper(p_currency_code), 'open', v_actor.actor_user_id, v_intent, v_trace);
 
     INSERT INTO audit_events (tenant_id, business_id, actor_user_id, action, entity, entity_id, metadata)
     VALUES (v_actor.tenant_id, v_actor.business_id, v_actor.actor_user_id, 'pos.till_session_opened', 'pos_till_session',
@@ -727,7 +741,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION pos_till_session_open(UUID, UUID, UUID, TEXT, TEXT) IS
-  'P4-S3, OD-P4-09. Opens one till session for the actor the invctl/1 pos.session_open assertion names; the business, the tenant and the ACTOR come from the assertion and never from an argument. Under the daftar.pos_till_session_id key an existing id replays when its open intent AND its user are equal, and is pos.idempotency_conflict or pos.till_session_not_yours otherwise. A second open session for the same user is pos.till_session_already_open and for the same terminal pos.terminal_already_open, both decided by a partial unique index and not by this body. EXECUTE: daftar_app only — reachability, not authority.';
+  'P4-S3, OD-P4-09. Opens one till session for the actor the invctl/1 pos.session_open assertion names; the business, the tenant and the ACTOR come from the assertion and never from an argument. Under the daftar.pos_till_session_id key an existing id replays when its open intent AND its user are equal, and is pos.idempotency_conflict or pos.till_session_not_yours otherwise. A second open session for the same user is pos.till_session_already_open and for the same terminal pos.terminal_already_open, pre-checked under the daftar.pos_till_session_actor and daftar.pos_till_terminal advisory keys (rule 22 forbids an EXCEPTION handler in a routine that writes a truth table, so the index cannot be translated after the fact) while the two partial unique indexes stay the authority. EXECUTE: daftar_app only — reachability, not authority.';
 
 -- (b) Close a shift. The basket stays: a closed session and its lines are the
 --     frozen record of what was in the drawer, and `pos_cart_line_guard()`
@@ -814,6 +828,8 @@ LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp 
 DECLARE
   v_actor  inventory_verified_actor;
   v_old    RECORD;
+  v_owner  UUID;
+  v_status TEXT;
   v_revise BOOLEAN;
 BEGIN
   v_actor := inventory_assertion_consume('pos.cart_set_line', inventory_claimed_payload_digest('pos.cart_set_line',
@@ -839,6 +855,39 @@ BEGIN
   END IF;
   v_revise := false;
 
+  -- The session row is LOCKED before anything is read or written, which does
+  -- three jobs at once: it serialises every cart write on this basket, so the
+  -- line-ordinal pre-check below cannot be overtaken; it is the lock
+  -- `pos_cart_line_guard()` would take anyway; and it conflicts with
+  -- `pos.session_close`'s own non-key UPDATE, so a line cannot be added to a
+  -- shift that is being closed (§7 of the design document).
+  --
+  -- `v_owner` is read for the MESSAGE and not for the law. OD-P4-09 is
+  -- `pos_cart_lines_session_actor_fk`, which refuses the row whatever this
+  -- body does — and it must be the law, because rule 22
+  -- (scripts/guards/inventory-writer-authority.ts:379) forbids an
+  -- `EXCEPTION WHEN` handler here, so the foreign key's `23503` cannot be
+  -- translated after the fact. A raw INSERT as the internal principal is
+  -- refused with no body involved, which is the proof the slice's test estate
+  -- owes (design document §8.3(1)).
+  SELECT s.opened_by, s.status INTO v_owner, v_status
+  FROM pos_till_sessions s WHERE s.business_id = v_actor.business_id AND s.id = p_session_id
+  FOR NO KEY UPDATE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'pos.till_session_unknown: no such till session' USING ERRCODE = 'P0001';
+  END IF;
+  IF v_owner <> v_actor.actor_user_id THEN
+    RAISE EXCEPTION 'pos.till_session_not_yours: that till session is not this authenticated user''s (OD-P4-09)' USING ERRCODE = 'P0001';
+  END IF;
+  IF v_status <> 'open' THEN
+    RAISE EXCEPTION 'pos.till_session_not_open: a cart is only written while its till session is open' USING ERRCODE = 'P0001';
+  END IF;
+  IF EXISTS (SELECT 1 FROM pos_cart_lines l
+              WHERE l.business_id = v_actor.business_id AND l.till_session_id = p_session_id
+                AND l.line_no = p_line_no AND l.id <> p_line_id) THEN
+    RAISE EXCEPTION 'pos.cart_line_conflict: this cart already holds a line at that ordinal' USING ERRCODE = 'P0001';
+  END IF;
+
   SELECT l.till_session_id, l.line_no, l.product_id, l.variant_id, l.added_by INTO v_old
   FROM pos_cart_lines l WHERE l.business_id = v_actor.business_id AND l.id = p_line_id FOR UPDATE;
   IF FOUND THEN
@@ -858,23 +907,10 @@ BEGIN
     -- makes `pos_cart_lines_session_actor_fk` the enforcer of OD-P4-09: on a
     -- session that is not this user's, the parent tuple does not exist and the
     -- INSERT has nothing to point at.
-    BEGIN
-      INSERT INTO pos_cart_lines (tenant_id, business_id, till_session_id, id, line_no, product_id, variant_id,
-                                  quantity, requested_discount_minor, added_by)
-      VALUES (v_actor.tenant_id, v_actor.business_id, p_session_id, p_line_id, p_line_no, p_product_id, p_variant_id,
-              p_quantity, p_requested_discount_minor, v_actor.actor_user_id);
-    EXCEPTION
-      WHEN foreign_key_violation THEN
-        IF position('pos_cart_lines_session_actor_fk' IN SQLERRM) > 0 THEN
-          RAISE EXCEPTION 'pos.till_session_not_yours: that till session is not this authenticated user''s (OD-P4-09)' USING ERRCODE = 'P0001';
-        END IF;
-        RAISE;
-      WHEN unique_violation THEN
-        IF position('pos_cart_lines_line_uq' IN SQLERRM) > 0 THEN
-          RAISE EXCEPTION 'pos.cart_line_conflict: this cart already holds a line at that ordinal' USING ERRCODE = 'P0001';
-        END IF;
-        RAISE;
-    END;
+    INSERT INTO pos_cart_lines (tenant_id, business_id, till_session_id, id, line_no, product_id, variant_id,
+                                quantity, requested_discount_minor, added_by)
+    VALUES (v_actor.tenant_id, v_actor.business_id, p_session_id, p_line_id, p_line_no, p_product_id, p_variant_id,
+            p_quantity, p_requested_discount_minor, v_actor.actor_user_id);
   END IF;
 
   RETURN QUERY SELECT l.id, l.line_no, v_revise FROM pos_cart_lines l
@@ -883,7 +919,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION pos_cart_set_line(UUID, UUID, INTEGER, UUID, UUID, NUMERIC, BIGINT) IS
-  'P4-S3, P4-AL-18, OD-P4-02. The one writer of pos_cart_lines. Takes identities, a Q4 quantity and a DISCOUNT REQUEST in minor units, and NOTHING about price: there is no unit-price, line-total or tax argument, so a forged figure is unexpressible rather than rejected. added_by is the invctl/1 assertion''s actor, so pos_cart_lines_session_actor_fk — not this body — refuses a line on another user''s session (pos.till_session_not_yours). An existing line id with different identities is pos.cart_line_conflict; otherwise the quantity and the discount request are revised. EXECUTE: daftar_app only.';
+  'P4-S3, P4-AL-18, OD-P4-02. The one writer of pos_cart_lines. Takes identities, a Q4 quantity and a DISCOUNT REQUEST in minor units, and NOTHING about price: there is no unit-price, line-total or tax argument, so a forged figure is unexpressible rather than rejected. added_by is the invctl/1 assertion''s actor, so pos_cart_lines_session_actor_fk — not this body — is what makes a line on another user''s session unrepresentable; the pos.till_session_not_yours raised here is the localizable MESSAGE for that same refusal, because rule 22 forbids translating the foreign key''s 23503 in a handler. Locks the session row FOR NO KEY UPDATE first, so every cart write on one basket is serialised and a line cannot be added to a shift being closed. An existing line id with different identities is pos.cart_line_conflict; otherwise the quantity and the discount request are revised. EXECUTE: daftar_app only.';
 
 -- (d) Remove a cart line. Idempotent by row count: a line already gone
 --     returns 0 and raises nothing, because a till that taps "remove" twice
@@ -1341,11 +1377,30 @@ BEGIN
       RAISE EXCEPTION 'pos.migration_end_state_invalid: 0079-E(8): the first statement of % is not the assertion consume, so something is read before the caller''s authority is decided', v_sig
         USING ERRCODE = 'P0001';
     END IF;
+    -- From here the body is scanned with its COMMENT LINES STRIPPED, which is
+    -- not a convenience: these two bodies EXPLAIN in prose why they carry no
+    -- exception handler, and a law that reads its own explanation is a law
+    -- about its prose (the `0077-E(9c)` lesson, and it fired here — the first
+    -- form of the check below refused `pos_till_session_open` over its own
+    -- comment).
+    SELECT regexp_replace(p.prosrc, '--[^\n]*', '', 'g') INTO v_def
+      FROM pg_proc p WHERE p.oid = ('public.' || v_sig)::regprocedure;
     -- No command builds SQL at run time (the G-7 contract) and none defaults a
     -- date from the clock (P4-AL-30 — there is no date argument here at all,
     -- which is the stronger form).
     IF v_def ~* '\mEXECUTE\s+(format|''|")' THEN
       RAISE EXCEPTION 'pos.migration_end_state_invalid: 0079-E(8): % builds SQL at run time, which an elevated routine may not do', v_sig
+        USING ERRCODE = 'P0001';
+    END IF;
+    -- And NO `EXCEPTION WHEN` handler anywhere in a command body. This is
+    -- rule 22 (scripts/guards/inventory-writer-authority.ts:379) stated here
+    -- against the LIVE body as well as against the file text, because a
+    -- handler in a routine that writes a table the inventory principal holds
+    -- DML on could swallow the assertion refusal and write anyway. It is also
+    -- why the two partial unique indexes and the actor foreign key are
+    -- PRE-CHECKED for their message rather than translated afterwards.
+    IF v_def ~* '\mEXCEPTION\s+WHEN\M' THEN
+      RAISE EXCEPTION 'pos.authority_leak: 0079-E(8): % carries an EXCEPTION WHEN handler, which could swallow the assertion refusal and write anyway (PM-44, rule 22)', v_sig
         USING ERRCODE = 'P0001';
     END IF;
   END LOOP;
