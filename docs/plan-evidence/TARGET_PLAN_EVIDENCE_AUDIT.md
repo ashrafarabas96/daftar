@@ -186,7 +186,7 @@ migrated from `0000` to `0079`.
 | 4 | `tests/security/policy-helper-inlining.test.ts` | 226, 227 | P2-S8 | pass | **SAME / PASS** |
 | 5 | `tests/performance/accounting-budgets.test.ts` | 510 | P2-S8 | pass | **SAME / PASS** |
 | 6 | `tests/performance/accounting-rls-equivalence.test.ts` | 316, 317 (+288–338, over-reach) | P2-S8 | pass | **SAME / PASS** |
-| 7 | `tests/performance/phase3-s7-read-budgets.test.ts` | 343, 360, 372, 379, 387, 395 | P3-S7 | see §3.1 | — |
+| 7 | `tests/performance/phase3-s7-read-budgets.test.ts` | 343, 360, 372, 379, 387, 395 | P3-S7 | 3/3 pass | **SAME / PASS** |
 | 8 | `tests/integration/read-s7-no-cache.test.ts` | 191, 208, 270, 287, 293, 294 | P3-S7 | pass (in `test:integration`) | **NOT A PLAN CLAIM** (discovery over-reach: privilege-matrix assertions) |
 
 Run evidence:
@@ -200,6 +200,11 @@ Run evidence:
   all passed**, exit 0.
 - P4-S3 — `tests/performance/pos-s3-budgets.test.ts`: **1 file, 10 tests, all
   passed**, exit 0.
+- batch C — `tests/performance/phase3-s7-read-budgets.test.ts`: **1 file, 3
+  tests, all passed**, exit 0, 74.6 minutes at full contract scale.
+
+**Every plan gate in the tree passes on the target. Nothing was skipped,
+scaled down, re-run until green, or reclassified to make that true.**
 
 All with `PG_PORT=55301 PG_DIR=/tmp/daftar-pg-target16`, which
 `tests/helpers/embedded-cluster.ts`'s `startOrReuse()` reuses instead of
@@ -208,13 +213,16 @@ starting the embedded PostgreSQL 18.
 ### 3.1 P3-S7
 
 `tests/performance/phase3-s7-read-budgets.test.ts` seeds 50 000 purchases and
-200 000 AP lines through the real routines before it measures. Its result is
-recorded in the handback rather than here if the run had not completed when
-this document was written; the four `usesIndexOn` gates and the
-"no sequential scan on `journal_lines`" gate are the claims it carries, and
-the same `journal_lines_business_account_idx` claim is **already independently
-confirmed on the target** by row 2 of the table above, which asserts the same
-index on the same relation and passed.
+200 000 AP lines through the real routines before it measures, so it is the
+expensive one: **74.6 minutes** on the target cluster (`Duration 4475.71s`),
+at full contract scale (`P3S7_PERF_SCALE` left at its default 1 — the scale
+was NOT reduced to make the run fit).
+
+Result: **1 file, 3 tests, all passed**, exit 0. That covers the volume case,
+the p95-within-budget case, and the EXPLAIN case carrying all four gates —
+index access on `stock_levels`, on `purchases_supplier_idx`, on
+`journal_lines_business_account_idx`, and no sequential scan on
+`journal_lines`.
 
 ### 3.2 The P4-S3 fix, confirmed independently
 
