@@ -10,7 +10,10 @@ import { sellingRefusal } from '../selling/selling-errors';
 import { POS_SEARCH_DEFAULT_LIMIT, type PosProductSearchQuery } from './pos-read.schemas';
 
 /**
- * THE POS READ SURFACE — P4-S3. One read: the product type-ahead.
+ * THE POS READ SURFACE — P4-S3. Two reads: the product type-ahead (this
+ * file's service) and the till basket (`PosCartService.readCart`, whose
+ * authority row is in `POS_READ_ROUTE_AUTHORITY` below and whose transport is
+ * `PosReadsController`).
  *
  * This file is named `*-reads.ts` on purpose. `scripts/guards/read-surface.ts`
  * (G-6) matches `apps/api/src/modules/<context>/<name>-reads.ts`, so the POS
@@ -20,7 +23,7 @@ import { POS_SEARCH_DEFAULT_LIMIT, type PosProductSearchQuery } from './pos-read
  * persisted or materialized balance source, and no module-level result cache.
  * Naming the file anything else would have taken it off that surface.
  *
- * ── What the read is ────────────────────────────────────────────────────
+ * ── What this file's read is ────────────────────────────────────────────
  *
  * `GET /v1/pos/products?sessionId=…&q=…` — the cashier types, or scans a
  * barcode, and gets the sellable units whose barcode, SKU or name STARTS WITH
@@ -166,7 +169,38 @@ export const POS_READ_ROUTE_AUTHORITY: readonly {
   readonly path: string;
   readonly permission: 'sales.view';
   readonly sensitive: false;
-}[] = Object.freeze([Object.freeze({ method: 'GET' as const, path: '/v1/pos/products', permission: 'sales.view' as const, sensitive: false as const })]);
+}[] = Object.freeze([
+  Object.freeze({ method: 'GET' as const, path: '/v1/pos/products', permission: 'sales.view' as const, sensitive: false as const }),
+  /**
+   * THE CART READ, and why its row is HERE and not in
+   * `POS_CART_ROUTE_AUTHORITY`.
+   *
+   * That table is the four COMMANDS — one row per `PosCartCommand`, each with
+   * a request schema, an accepted-key set and a boundary pipe — and
+   * `tests/integration/pos-s3-cart.test.ts` holds it to «one plan, one
+   * schema, one accepted-key row and one route» per command. A read has no
+   * command, no plan of three statements, no schema (it has no body at all)
+   * and no accepted keys, so a fifth row there would have had to be excused
+   * from every one of those claims. It belongs on the READ surface, beside
+   * `GET /v1/pos/products`, which is the table that already means "a GET, no
+   * body, `sales.view`, no writes".
+   *
+   * `sales.view` for the same reason every other POS read names it
+   * (`pos-permissions.ts`): the four cart commands name `sales.create`
+   * because they WRITE, and the built-in cashier holds both keys.
+   *
+   * It is served by `PosReadsController` and answered by
+   * `PosCartService.readCart` — the cart's own service, because the read
+   * reuses the commands' gate, the commands' projection and `recompute`
+   * rather than defining a second cart.
+   */
+  Object.freeze({
+    method: 'GET' as const,
+    path: '/v1/pos/till-sessions/:sessionId/cart-lines',
+    permission: 'sales.view' as const,
+    sensitive: false as const,
+  }),
+]);
 
 interface HitRow extends QueryResultRow {
   product_id: string;

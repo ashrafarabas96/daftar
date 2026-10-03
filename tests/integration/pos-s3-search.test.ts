@@ -667,12 +667,27 @@ describe('refusals', () => {
 
 describe('the declared route, and the real transport that now serves it', () => {
   /**
-   * The module declares ONE read route, and this suite drives that one. If the
-   * mounted path, verb or permission ever differs from
-   * `POS_READ_ROUTE_AUTHORITY`, this is where the two stop agreeing.
+   * The POS read surface declares TWO rows, and this suite drives ONE of them
+   * — the type-ahead. If the mounted path, verb or permission of that one ever
+   * differs from `POS_READ_ROUTE_AUTHORITY`, this is where the two stop
+   * agreeing.
+   *
+   * It was one row until the cart read landed
+   * (`GET /v1/pos/till-sessions/:sessionId/cart-lines`), which is driven by
+   * `tests/security/pos-s3-cart-read.test.ts` against a real database. Both
+   * halves are stated here, separately: the equality this suite has always
+   * made about ITS OWN route, unchanged word for word on the row it describes;
+   * and the equality over the WHOLE table, so the count cannot be quietly
+   * dropped and a third row added without a suite cannot hide here.
    */
-  it('the module declares exactly one POS read route, and this suite exercises that one', () => {
-    expect(POS_READ_ROUTE_AUTHORITY).toEqual([{ method: 'GET', path: '/v1/pos/products', permission: 'sales.view', sensitive: false }]);
+  it('the POS read surface is the type-ahead this suite exercises, and the cart read beside it — two rows', () => {
+    expect(POS_READ_ROUTE_AUTHORITY.filter((r) => r.path === '/v1/pos/products')).toEqual([
+      { method: 'GET', path: '/v1/pos/products', permission: 'sales.view', sensitive: false },
+    ]);
+    expect(POS_READ_ROUTE_AUTHORITY).toEqual([
+      { method: 'GET', path: '/v1/pos/products', permission: 'sales.view', sensitive: false },
+      { method: 'GET', path: '/v1/pos/till-sessions/:sessionId/cart-lines', permission: 'sales.view', sensitive: false },
+    ]);
   });
 
   /**

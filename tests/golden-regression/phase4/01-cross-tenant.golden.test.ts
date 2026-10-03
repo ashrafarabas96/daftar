@@ -73,6 +73,7 @@ const PHASE4_ROUTES: readonly string[] = [
   'GET /v1/invoices/:invoiceId/settlement',
   'GET /v1/pos/products',
   'GET /v1/pos/till-sessions/:sessionId',
+  'GET /v1/pos/till-sessions/:sessionId/cart-lines',
   'GET /v1/pos/till-sessions/current',
   'GET /v1/sales/:saleId',
   'PATCH /v1/pos/till-sessions/:sessionId/cart-lines/:cartLineId',
@@ -84,20 +85,29 @@ const PHASE4_ROUTES: readonly string[] = [
 ];
 
 /**
- * THE NINE POS ROUTES OF P4-S3, and why they are a section of their own.
+ * THE TEN POS ROUTES OF P4-S3, and why they are a section of their own.
  *
  * A new route surface with no cross-tenant golden is an untested boundary, and
  * a cross-tenant or cross-business leak is a BLOCKER in this project. So every
- * one of the nine appears in `PHASE4_ROUTES` above — the equality against
- * `discoverPhase4Routes` would not tolerate otherwise — and all nine get real
+ * one of the ten appears in `PHASE4_ROUTES` above — the equality against
+ * `discoverPhase4Routes` would not tolerate otherwise — and all ten get real
  * ALLOW/DENY pairs below.
+ *
+ * It was NINE until the cart READ landed.
+ * `GET /v1/pos/till-sessions/:sessionId/cart-lines` is the tenth: the slice
+ * shipped a server-side basket whose only readers were its own four write
+ * commands, so a reloaded till screen lost the basket while its rows sat in
+ * `pos_cart_lines`. The count moved because the surface did, and its
+ * ALLOW/DENY pair is below with the rest — a new read route with no
+ * cross-business probe is exactly the untested boundary this file exists to
+ * refuse.
  *
  * They cannot be driven by the two generic loops, for the reason `SALE_ROUTES`
  * already records and more so:
  *
  *   - six of them are WRITES. A `POST` driven as a `GET` is a 404 that looks
  *     exactly like isolation, which is a DENY with no ALLOW beside it;
- *   - the three reads are scoped by a TILL SESSION, not by a customer or an
+ *   - the four reads are scoped by a TILL SESSION, not by a customer or an
  *     invoice, so `bind()` has no id to put in their paths and
  *     `GET /v1/pos/products` needs a `sessionId` in its QUERY STRING before it
  *     is a well-formed request at all;
@@ -133,7 +143,7 @@ const isGenericReadRoute = (route: string): boolean => route.startsWith('GET ') 
 /** The two relations 0079 creates. Both must refuse a foreign business at SQL, and neither may be written by `daftar_app`. */
 const POS_RELATIONS: readonly string[] = ['pos_cart_lines', 'pos_till_sessions'];
 
-/** The four SECURITY DEFINER routines the nine POS routes call. A route cannot write by issuing SQL; it mints and calls one of these. */
+/** The four SECURITY DEFINER routines the six POS WRITES call. A route cannot write by issuing SQL; it mints and calls one of these; the four reads call none. */
 const POS_ROUTINES: readonly string[] = ['pos_cart_remove_line', 'pos_cart_set_line', 'pos_till_session_close', 'pos_till_session_open'];
 
 /** The five relations 0075 creates, every one of which must refuse a foreign business at SQL. */
@@ -388,7 +398,10 @@ describe('the enumeration is checked, not trusted (G-02)', () => {
     // route driven by neither loop nor section would be a route with no
     // cross-tenant pair at all, which is the hole G-02 exists to close.
     for (const route of POS_ROUTES) expect(PHASE4_ROUTES, `${route} is declared a POS route but is not on the surface`).toContain(route);
-    expect(POS_ROUTES.length, 'the POS surface is empty, so its whole section below would prove nothing').toBe(9);
+    // Ten: six writes and four reads. It was nine until the cart read landed
+    // (`GET …/cart-lines`), and the number is asserted rather than bounded so
+    // a route added without a cross-business probe below is red here.
+    expect(POS_ROUTES.length, 'the POS surface is empty, so its whole section below would prove nothing').toBe(10);
     expect(
       PHASE4_ROUTES.filter((r) => !isGenericReadRoute(r)).sort(),
       'a route is driven by the generic loops, by the sale section or by the POS section — never by none of them',
@@ -754,14 +767,14 @@ describe('HTTP: the sale command and the sale read refuse another tenant’s bus
 });
 
 /**
- * THE POS SURFACE — nine routes, six of them WRITES (P4-S3; `OD-P4-01`
+ * THE POS SURFACE — ten routes, six of them WRITES (P4-S3; `OD-P4-01`
  * OPTION A, `OD-P4-09` OPTION A; lock `P4-AL-18`, `P4-AL-38`, `P4-AL-40`,
  * `P4-AL-43` scenario 8, `P4-AL-86`).
  *
  * A new route surface with no cross-tenant golden is an untested boundary, and
  * a cross-tenant or cross-business leak is a BLOCKER in this project. These
- * nine routes cannot be driven by the two generic loops above, for the reasons
- * `POS_ROUTES` records: six are writes, and all three reads are scoped by a
+ * ten routes cannot be driven by the two generic loops above, for the reasons
+ * `POS_ROUTES` records: six are writes, and all four reads are scoped by a
  * TILL SESSION rather than by a customer or an invoice.
  *
  * EVERY ALLOW HERE IS REAL, AND THAT IS THE POINT. The till is opened through
@@ -1010,6 +1023,43 @@ describe('HTTP: the POS till, its type-ahead and its cart refuse another tenant�
 
     const foreignToken = await t.request.get(path(A)).set(hdr(ownerB, A.businessId));
     expect([401, 403, 404], `the type-ahead answered ${foreignToken.status} for another tenant's token`).toContain(foreignToken.status);
+  });
+
+  /**
+   * `GET /v1/pos/till-sessions/:sessionId/cart-lines` — the cart READ, whose
+   * subject is the basket the fixture appended through the route.
+   *
+   * The DENY that matters here is not the status code: it is that no refusal
+   * answers an EMPTY CART. A cross-business session answered `200 { lines: [] }`
+   * would be a leak dressed as a zero — the cashier would read it as "the
+   * basket is empty" and the suite would read it as "no row escaped" — so each
+   * refusal is asserted to carry no `lines` at all.
+   */
+  it('GET /v1/pos/till-sessions/:sessionId/cart-lines: answers A’s own basket, and refuses A2 and B without an empty cart', async () => {
+    await ready();
+    const path = (shop: Shop): string => `/v1/pos/till-sessions/${till(shop).sessionId}/cart-lines`;
+
+    const ok = await t.request.get(path(A)).set(hdr(owner, A.businessId));
+    expect(ok.status, `the cart read does not answer for its own business: ${JSON.stringify(ok.body)}`).toBe(200);
+    expect(ok.body.tillSessionId).toBe(till(A).sessionId);
+    expect(
+      (ok.body.lines as { cartLineId: string }[]).map((l) => l.cartLineId),
+      'the cart read answered some other basket than the one the fixture appended to',
+    ).toContain(till(A).lineId);
+
+    const foreignHeader = await t.request.get(path(A)).set(hdr(owner, A2.businessId));
+    expect([403, 404], `the cart read answered ${foreignHeader.status} for A's session under A2's header`).toContain(foreignHeader.status);
+    expect(foreignHeader.body.lines, 'the cart read handed out A’s lines under A2’s header').toBeUndefined();
+
+    for (const other of [A2, B]) {
+      const res = await t.request.get(path(other)).set(hdr(owner, A.businessId));
+      expect([403, 404], `the cart read answered ${res.status} for ${other.businessId}'s session under A's header`).toContain(res.status);
+      expect(res.body.lines, `the cart read handed out a basket for ${other.businessId}'s session`).toBeUndefined();
+    }
+
+    const foreignToken = await t.request.get(path(A)).set(hdr(ownerB, A.businessId));
+    expect([401, 403, 404], `the cart read answered ${foreignToken.status} for another tenant's token`).toContain(foreignToken.status);
+    expect(foreignToken.body.lines, 'another tenant’s token read A’s basket').toBeUndefined();
   });
 
   it('POST /v1/pos/till-sessions/:sessionId/cart-lines: appends for A, and refuses every cross-business form', async () => {

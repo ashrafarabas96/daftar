@@ -1,15 +1,34 @@
-import { Controller, Get, Inject, Query, Req } from '@nestjs/common';
+import { Controller, Get, Inject, Param, Query, Req } from '@nestjs/common';
 import type { Request } from 'express';
 import type { PosProductSearchDto } from '@daftar/shared-contracts';
 import { Membership, RequiresPermission } from '../../common/guards';
 import { localeOf } from '../../common/locale';
 import type { MembershipContext } from '../tenancy/tenancy.service';
+import { cartUuidParam } from './pos-cart.schemas';
+import { PosCartService, type CartDto } from './pos-cart.service';
 import { PosProductSearchQuerySchema } from './pos-read.schemas';
 import { PosReadService } from './pos-reads';
 
 /**
- * THE POS READ SURFACE'S TRANSPORT — one route, `GET /v1/pos/products`
- * (P4-S3; `POS_READ_ROUTE_AUTHORITY` in `pos-reads.ts:164`).
+ * THE POS READ SURFACE'S TRANSPORT — two routes, `GET /v1/pos/products` and
+ * `GET /v1/pos/till-sessions/:sessionId/cart-lines`
+ * (P4-S3; `POS_READ_ROUTE_AUTHORITY` in `pos-reads.ts`).
+ *
+ * ## Why the cart read is mounted HERE and not on `PosCartController`
+ *
+ * `pos-cart.controller.ts` states, as its own law, that it has «no `GET` …
+ * reading the cart belongs to this slice's POS read surface», and
+ * `pos-cart-routes.ts` says the same about the route table: four routes, each
+ * mutating ONE line. So the read is mounted on the READ surface, which is
+ * this controller, and its authority row is in `POS_READ_ROUTE_AUTHORITY`
+ * rather than in the four-row command table. The command table stays four
+ * rows, one per `PosCartCommand`, and nothing a command suite asserts about
+ * it has to be excused.
+ *
+ * It is answered by `PosCartService.readCart` and not by `PosReadService`,
+ * because the basket's gate, the basket's projection and the one rounding
+ * layer (`recompute`) all live on the cart service. A read that queried
+ * `pos_cart_lines` from here would be a SECOND definition of "the cart".
  *
  * ## This replaces a test-only harness, and that was the point of the task
  *
@@ -53,12 +72,33 @@ import { PosReadService } from './pos-reads';
  */
 @Controller('/v1/pos')
 export class PosReadsController {
-  constructor(@Inject(PosReadService) private readonly reads: PosReadService) {}
+  constructor(
+    @Inject(PosReadService) private readonly reads: PosReadService,
+    @Inject(PosCartService) private readonly cart: PosCartService,
+  ) {}
 
   /** The product type-ahead. Requires `sales.view`; the warehouse comes from the named session. */
   @Get('products')
   @RequiresPermission('sales.view')
   async products(@Membership() m: MembershipContext, @Query() query: unknown, @Req() req: Request): Promise<PosProductSearchDto> {
     return this.reads.searchProducts(m, PosProductSearchQuerySchema.parse(query), localeOf(req));
+  }
+
+  /**
+   * The till basket, as the SERVER holds it — the same `CartDto` the four cart
+   * commands answer with, so a reloaded till screen recovers exactly what its
+   * last command reported. Requires `sales.view`.
+   *
+   * There is no `@Body()` and no `@Query()`: a read that accepted a price, a
+   * total, a tax or a line would be the forged-totals surface `P4-AL-18`
+   * forbids, and here it is not refused — it is INEXPRESSIBLE, because the
+   * handler takes nothing but the session in the path. A malformed `sessionId`
+   * is `pos.session_not_found` through `cartUuidParam`, the same answer as
+   * another business's session, so the path is no oracle for which ids exist.
+   */
+  @Get('till-sessions/:sessionId/cart-lines')
+  @RequiresPermission('sales.view')
+  async cartLines(@Membership() m: MembershipContext, @Param('sessionId') sessionId: string): Promise<CartDto> {
+    return this.cart.readCart(m, cartUuidParam(sessionId, 'sessionId'));
   }
 }

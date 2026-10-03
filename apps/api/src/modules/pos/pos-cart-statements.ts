@@ -289,10 +289,10 @@ const S = POS_CART_COLUMNS.sessions;
 const L = POS_CART_COLUMNS.lines;
 
 /**
- * The gate every mutation passes through: the till session, resolved in the
- * mutation's OWN statement, in three narrowing steps.
+ * The gate every mutation — and the one cart READ — passes through: the till
+ * session, resolved in the statement's OWN text, in four narrowing steps.
  *
- * It is three CTEs and not one predicate because the four refusals a cart
+ * It is four CTEs and not one predicate because the four refusals a cart
  * command can carry are different answers and must not collapse into one:
  *
  *   - `visible` is the ISOLATION step. RLS is the isolation (P4-AL-40) — the
@@ -305,15 +305,22 @@ const L = POS_CART_COLUMNS.lines;
  *   - `opened` is the LIFECYCLE step: a closed till is `pos.session_not_open`
  *     (409). The cart only READS `status`; transitioning it belongs to the
  *     till-session surface;
- *   - `usable` is the `OD-P4-09` step: the session is visible, in the
- *     caller's own business, open — and belongs to a COLLEAGUE. 403
- *     `pos.session_not_owned`. The command is well formed and the till's
- *     state allows it; what forbids it is WHO is asking, and a shift change
- *     opens a new session rather than adding a second actor to this one.
+ *   - `owned` is the `OD-P4-09` step on its own, INDEPENDENT of the
+ *     lifecycle: the session is visible, in the caller's own business, and
+ *     belongs to a COLLEAGUE. 403 `pos.session_not_owned`. It exists as its
+ *     own CTE because the cart READ (`cartReadPlan`) answers a CLOSED
+ *     session's basket and still has to refuse a colleague's: taking that
+ *     verdict from `usable` would have reported `session_not_owned` for the
+ *     owner's own closed shift, which is a false accusation rather than a
+ *     refusal;
+ *   - `usable` is the step a WRITE needs, and it is exactly
+ *     `opened ∩ owned` — visible, open, and the caller's own. The command is
+ *     well formed and the till's state allows it; what forbids it is WHO is
+ *     asking, and a shift change opens a new session rather than adding a
+ *     second actor to this one.
  *
- * All three are resolved in the mutation's one statement, so learning which
- * refusal applies costs no extra round trip and the statement count stays
- * constant.
+ * All four are resolved in the one statement, so learning which refusal
+ * applies costs no extra round trip and the statement count stays constant.
  */
 const USABLE_SESSION = `
   visible AS (
@@ -324,17 +331,24 @@ const USABLE_SESSION = `
        AND s.${S.id} = $3::uuid
   ),
   opened AS (SELECT v.${S.id}, v.${S.owner} FROM visible v WHERE v.${S.status} = '${S.openStatus}'),
+  owned AS (SELECT v.${S.id}, v.${S.status} FROM visible v WHERE v.${S.owner} = $4::uuid),
   usable AS (SELECT o.${S.id} FROM opened o WHERE o.${S.owner} = $4::uuid)`;
 
 /**
- * The three counts every mutation reports beside its own, so ONE statement
- * answers all four questions a cart command can be refused by. Each count is
- * a registered code in the canonical registry and the service maps them in
- * this order — widest refusal first, because the narrower ones would leak the
- * existence of a row the wider one says is invisible.
+ * The four counts every statement of a cart plan reports beside its own, so
+ * ONE statement answers every question a cart command or the cart read can be
+ * refused by. Each count is a registered code in the canonical registry and
+ * the service maps them in this order — widest refusal first, because the
+ * narrower ones would leak the existence of a row the wider one says is
+ * invisible.
+ *
+ * A WRITE reads `session_visible`, `session_open`, `session_usable`; the READ
+ * reads `session_visible`, `session_owned` and deliberately ignores
+ * `session_open` (see `PosCartService.readCart` for the ruling and why).
  */
 const SESSION_DISCRIMINATORS = `(SELECT count(*) FROM visible) AS session_visible,
                    (SELECT count(*) FROM opened) AS session_open,
+                   (SELECT count(*) FROM owned) AS session_owned,
                    (SELECT count(*) FROM usable) AS session_usable`;
 
 /**
@@ -599,3 +613,46 @@ export function cartStatementPlan(command: PosCartCommand, t: CartCommandTarget)
 
 /** Three: the gate, the routine, the projection. Constant in the line count. */
 export const CART_STATEMENTS_PER_COMMAND = 3;
+
+/**
+ * What the cart READ names: the three identities and the actor, and nothing
+ * else. A read addresses no line, states no quantity and asks for no
+ * discount, so the four command fields are structurally absent rather than
+ * passed as `null` by a caller who might one day pass something.
+ */
+export type CartReadTarget = Pick<CartCommandTarget, 'tenantId' | 'businessId' | 'tillSessionId' | 'actorUserId'>;
+
+/**
+ * The statement plan for the ONE cart read,
+ * `GET /v1/pos/till-sessions/:sessionId/cart-lines`. EXACTLY TWO statements,
+ * for every cart size: the gate, then the projection.
+ *
+ * It is the SAME `gate` and the SAME `projection` the four commands are built
+ * from — not a second pair that happens to look like them. That is the point
+ * of building it here rather than writing a query in the read: the session
+ * verdict a read refuses on and the session verdict a write refuses on are
+ * one statement's text, so they cannot come to disagree, and the basket a
+ * read answers and the basket a command answers are one `PROJECTION`, so the
+ * read cannot drift into a second definition of "the cart" (and cannot grow a
+ * second rounding layer, which `recompute` refuses in production anyway).
+ *
+ * TWO and not three: there is no routine, because a read writes nothing. It
+ * is also the FEWEST the gate plus the projection can be — the gate's four
+ * discriminators are one statement and the whole basket with its prices
+ * joined on is one more, and neither can be dropped: without the gate the
+ * read would answer a colleague's basket, and without the projection it would
+ * answer nothing.
+ *
+ * The gate's `$5` (the addressed line) and `$6` (the stated product) are
+ * `null` here, which makes its `line` CTE empty and its `base_variant_id`
+ * NULL. The read ignores both, and paying for them is the price of ONE gate
+ * instead of two — measured as columns in a row that is already being
+ * fetched, not as a round trip.
+ */
+export function cartReadPlan(t: CartReadTarget): readonly CartStatement[] {
+  const target: CartCommandTarget = { ...t, cartLineId: null, productId: null, variantId: null, quantity: null, discountMinor: null };
+  return Object.freeze([gate(target), projection(target)]);
+}
+
+/** Two: the gate and the projection. Constant in the line count, and one fewer than a command. */
+export const CART_STATEMENTS_PER_READ = 2;
