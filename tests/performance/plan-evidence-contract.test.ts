@@ -30,7 +30,8 @@
  * reads it. Wiring belongs to the workflow's owner; proving the wiring is
  * present belongs here.
  */
-import { readFileSync, existsSync, readdirSync } from 'node:fs';
+import { readFileSync, existsSync, readdirSync, mkdtempSync, symlinkSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { describe, it, expect } from 'vitest';
@@ -41,6 +42,7 @@ import {
   classifyPlanEvidence,
   type PlanEvidenceEnvironment,
 } from '../helpers/plan-evidence-env';
+import { discover } from '../../scripts/plan-evidence/discover-plan-claims';
 
 const ROOT = join(__dirname, '..', '..');
 const INVENTORY = join(ROOT, 'docs', 'plan-evidence', 'plan-claim-inventory.json');
@@ -170,6 +172,53 @@ describe('every discovered plan-shape claim is executed by required CI against p
     const dir = join(ROOT, 'docs', 'plan-evidence');
     const offenders = readdirSync(dir).filter((f) => /\.(ts|mts|tsx|sql|yml|yaml)$/.test(f));
     expect(offenders, 'docs/plan-evidence/ is excluded from discovery, so nothing executable may live there').toEqual([]);
+  });
+
+  /**
+   * ARCHIVE PORTABILITY, PROVED RATHER THAN DECLARED.
+   *
+   * `tests/security/archive-portability.test.ts` requires every git call under
+   * `tests/**` and `scripts/**` to carry a `DELIVERY_MANIFEST.json` branch,
+   * because the release gate runs from an extracted archive with no `.git`.
+   * That law reads the SHAPE of the code. This reads the BEHAVIOUR: the
+   * generator is driven over a root that has a manifest and no repository at
+   * all, and must discover the same claims from it. A branch nothing ever
+   * takes is a branch that satisfies the shape law and still fails in the
+   * archive.
+   */
+  it('discovers claims from DELIVERY_MANIFEST.json with no repository present', () => {
+    const root = mkdtempSync(join(tmpdir(), 'plan-evidence-manifest-'));
+    try {
+      // Only `tests/` and `docs/` are linked through, so the manifest also
+      // exercises three filters at once: a path outside ROOTS is never read,
+      // a path under the excluded SELF directory is dropped, and a path the
+      // manifest names but the tree does not carry is skipped rather than
+      // throwing.
+      symlinkSync(join(ROOT, 'tests'), join(root, 'tests'));
+      symlinkSync(join(ROOT, 'docs'), join(root, 'docs'));
+      writeFileSync(
+        join(root, 'DELIVERY_MANIFEST.json'),
+        JSON.stringify({
+          inventory: [
+            { path: 'tests/performance/pos-s3-budgets.test.ts' },
+            { path: 'tests/security/policy-helper-inlining.test.ts' },
+            { path: 'docs/plan-evidence/plan-claim-inventory.json' },
+            { path: 'a-path-the-tree-does-not-carry.md' },
+          ],
+        }),
+      );
+      expect(existsSync(join(root, '.git')), 'the fixture root must have no repository, or this proves nothing').toBe(false);
+
+      const hits = discover(root);
+      const files = [...new Set(hits.map((hit) => hit.file))].sort();
+      expect(files).toEqual(['tests/performance/pos-s3-budgets.test.ts', 'tests/security/policy-helper-inlining.test.ts']);
+      // The P4-S3 barcode gate itself is among what the manifest branch finds,
+      // so the claim that matters most in this slice is reproducible from the
+      // artifact the deployment is cut from.
+      expect(hits.some((hit) => hit.kind === 'plan-gate' && hit.file === 'tests/performance/pos-s3-budgets.test.ts')).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it('the discovery rule finds the claims it is supposed to find', () => {

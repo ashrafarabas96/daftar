@@ -962,7 +962,7 @@
     },
     {
       "file": "scripts/plan-evidence/discover-plan-claims.ts",
-      "line": 137,
+      "line": 161,
       "phase": "cross-phase",
       "signals": ["explain", "explain-analyze", "query-plan-json"],
       "kind": "mention",
@@ -970,7 +970,7 @@
     },
     {
       "file": "scripts/plan-evidence/discover-plan-claims.ts",
-      "line": 161,
+      "line": 185,
       "phase": "cross-phase",
       "signals": ["explain"],
       "kind": "mention",
@@ -978,7 +978,7 @@
     },
     {
       "file": "scripts/plan-evidence/discover-plan-claims.ts",
-      "line": 170,
+      "line": 194,
       "phase": "cross-phase",
       "signals": ["explain"],
       "kind": "mention",
@@ -986,7 +986,7 @@
     },
     {
       "file": "scripts/plan-evidence/discover-plan-claims.ts",
-      "line": 181,
+      "line": 205,
       "phase": "cross-phase",
       "signals": ["explain"],
       "kind": "mention",
@@ -994,7 +994,7 @@
     },
     {
       "file": "scripts/plan-evidence/discover-plan-claims.ts",
-      "line": 183,
+      "line": 207,
       "phase": "cross-phase",
       "signals": ["plan-shape-word"],
       "kind": "assertion",
@@ -1877,7 +1877,7 @@
     },
     {
       "file": "tests/performance/plan-evidence-contract.test.ts",
-      "line": 85,
+      "line": 87,
       "phase": "cross-phase",
       "signals": ["collation-dependent-range"],
       "kind": "mention",
@@ -1885,7 +1885,7 @@
     },
     {
       "file": "tests/performance/plan-evidence-contract.test.ts",
-      "line": 111,
+      "line": 113,
       "phase": "cross-phase",
       "signals": ["collation-dependent-range"],
       "kind": "mention",
@@ -1893,7 +1893,7 @@
     },
     {
       "file": "tests/performance/plan-evidence-contract.test.ts",
-      "line": 125,
+      "line": 127,
       "phase": "cross-phase",
       "signals": ["collation-dependent-range"],
       "kind": "mention",
@@ -1901,7 +1901,7 @@
     },
     {
       "file": "tests/performance/plan-evidence-contract.test.ts",
-      "line": 136,
+      "line": 138,
       "phase": "cross-phase",
       "signals": ["collation-dependent-range"],
       "kind": "mention",
@@ -1909,7 +1909,7 @@
     },
     {
       "file": "tests/performance/plan-evidence-contract.test.ts",
-      "line": 145,
+      "line": 147,
       "phase": "cross-phase",
       "signals": ["plan-shape-word"],
       "kind": "mention",
@@ -1917,7 +1917,7 @@
     },
     {
       "file": "tests/performance/plan-evidence-contract.test.ts",
-      "line": 200,
+      "line": 249,
       "phase": "cross-phase",
       "signals": [],
       "kind": "plan-gate",
@@ -1926,7 +1926,7 @@
     },
     {
       "file": "tests/performance/plan-evidence-contract.test.ts",
-      "line": 202,
+      "line": 251,
       "phase": "cross-phase",
       "signals": ["plan-shape-word"],
       "kind": "assertion",

@@ -80,12 +80,36 @@ export const SIGNALS: readonly { readonly id: string; readonly re: RegExp }[] = 
 
 const ASSERTION_VERB = /\bexpect\s*\(|\bassert\b|\bmust\b|\bthrow\b|\bfail\s*\(|\bok\s*\(/i;
 
-function tracked(): string[] {
-  const out = execFileSync('git', ['ls-files', '-z', '--', ...ROOTS], {
-    encoding: 'utf8',
-    maxBuffer: 1 << 28,
-  });
-  return out.split('\0').filter((p) => p.length > 0 && EXTENSIONS.has(extname(p)) && !p.startsWith(SELF));
+/**
+ * The files of the tree this inventory is about.
+ *
+ * In a git checkout: `git ls-files`, which is what a reviewer's checkout
+ * contains. In an extracted release candidate there is no `.git` by design —
+ * the release gate runs from the archive — and the archive's own
+ * `DELIVERY_MANIFEST.json` inventory is the source, exactly as
+ * `tests/helpers/delivered-files.ts` and
+ * `tests/security/phase2-s8-gate-tamper.test.ts` already read it. A discovery
+ * tool that can only run inside a repository would make the plan-claim
+ * inventory unreproducible from the artifact the deployment is cut from, which
+ * is the one place the inventory's claim about deployment matters most.
+ */
+function tracked(root: string): string[] {
+  const manifest = join(root, 'DELIVERY_MANIFEST.json');
+  const paths = existsSync(manifest)
+    ? ((JSON.parse(readFileSync(manifest, 'utf8')) as { inventory?: { path?: string }[] }).inventory ?? [])
+        .map((entry) => entry.path)
+        .filter((path): path is string => typeof path === 'string' && path !== '')
+    : execFileSync('git', ['ls-files', '-z', '--', ...ROOTS], {
+        cwd: root,
+        encoding: 'utf8',
+        maxBuffer: 1 << 28,
+      })
+        .split('\0')
+        .filter((rel) => rel.length > 0);
+  // The manifest covers the whole archive, so the root filter is applied here
+  // rather than being left to git's pathspec: both branches must answer with
+  // the same set over the same tree.
+  return paths.filter((p) => ROOTS.some((root) => p === root || p.startsWith(`${root}/`)) && EXTENSIONS.has(extname(p)) && !p.startsWith(SELF));
 }
 
 /** The phase is derived from the path, never remembered. */
@@ -261,7 +285,7 @@ export interface Hit {
 
 export function discover(root: string): Hit[] {
   const hits: Hit[] = [];
-  for (const rel of tracked()) {
+  for (const rel of tracked(root)) {
     const abs = join(root, rel);
     if (!existsSync(abs)) continue;
     let lines: string[];
