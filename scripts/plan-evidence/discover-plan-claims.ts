@@ -36,6 +36,24 @@ import { join, extname } from 'node:path';
 const ROOTS = ['tests', 'scripts', 'apps', 'packages', 'infrastructure', 'docs', '.github'];
 const EXTENSIONS = new Set(['.ts', '.mts', '.tsx', '.sql', '.yml', '.yaml', '.md', '.json']);
 
+/**
+ * THE ONE EXCLUSION, AND WHY IT IS NOT A HIDING PLACE.
+ *
+ * Rule 1 says no file is excluded by name, because an exclusion list is how a
+ * claim hides. There is exactly one exception and it is self-reference: this
+ * generator's OWN OUTPUT lives in `docs/plan-evidence/`, and the inventory
+ * quotes the text of every line it reports. Scanning it means the inventory
+ * reports its own quotations, which the next run then quotes again — measured:
+ * 196 hits became 416 on the second run, and it has no fixpoint.
+ *
+ * The audit report in the same directory is prose ABOUT claims, not a claim.
+ *
+ * This cannot become somewhere to hide an assertion, because
+ * `tests/performance/plan-evidence-contract.test.ts` asserts that the
+ * directory holds no executable file at all.
+ */
+const SELF = 'docs/plan-evidence/';
+
 /** Every signal the directive names, each as its own labelled rule. */
 export const SIGNALS: readonly { readonly id: string; readonly re: RegExp }[] = [
   { id: 'explain', re: /\bEXPLAIN\b/ },
@@ -67,7 +85,7 @@ function tracked(): string[] {
     encoding: 'utf8',
     maxBuffer: 1 << 28,
   });
-  return out.split('\0').filter((p) => p.length > 0 && EXTENSIONS.has(extname(p)));
+  return out.split('\0').filter((p) => p.length > 0 && EXTENSIONS.has(extname(p)) && !p.startsWith(SELF));
 }
 
 /** The phase is derived from the path, never remembered. */

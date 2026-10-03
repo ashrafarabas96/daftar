@@ -88,10 +88,10 @@
     "note": "Derived from git ls-files. No file is excluded by name — an exclusion list is how a claim hides."
   },
   "totals": {
-    "hits": 196,
-    "planGates": 40,
-    "assertions": 15,
-    "files": 33
+    "hits": 234,
+    "planGates": 41,
+    "assertions": 17,
+    "files": 37
   },
   "byPhase": {
     "phase-2": {
@@ -110,9 +110,9 @@
       "mentions": 17
     },
     "cross-phase": {
-      "planGates": 25,
-      "assertions": 5,
-      "mentions": 53
+      "planGates": 26,
+      "assertions": 7,
+      "mentions": 88
     }
   },
   "byFile": {
@@ -218,6 +218,18 @@
       "mentions": 2,
       "phase": "phase-3"
     },
+    "scripts/plan-evidence/discover-plan-claims.ts": {
+      "planGates": 0,
+      "assertions": 1,
+      "mentions": 8,
+      "phase": "cross-phase"
+    },
+    "scripts/plan-evidence/target-cluster.ts": {
+      "planGates": 0,
+      "assertions": 0,
+      "mentions": 1,
+      "phase": "cross-phase"
+    },
     "tests/browser/flows.ts": {
       "planGates": 0,
       "assertions": 0,
@@ -234,6 +246,12 @@
       "planGates": 0,
       "assertions": 0,
       "mentions": 1,
+      "phase": "cross-phase"
+    },
+    "tests/helpers/plan-evidence-env.ts": {
+      "planGates": 0,
+      "assertions": 0,
+      "mentions": 19,
       "phase": "cross-phase"
     },
     "tests/integration/read-s7-no-cache.test.ts": {
@@ -283,6 +301,12 @@
       "assertions": 2,
       "mentions": 9,
       "phase": "phase-3"
+    },
+    "tests/performance/plan-evidence-contract.test.ts": {
+      "planGates": 1,
+      "assertions": 1,
+      "mentions": 7,
+      "phase": "cross-phase"
     },
     "tests/performance/pos-s3-budgets.test.ts": {
       "planGates": 9,
@@ -853,6 +877,86 @@
       "text": "/** P3-S7's migrations: none. Becomes ['0069_…_read_indexes.sql'] only under A-02's exception, with T-17's EXPLAIN attached. */"
     },
     {
+      "file": "scripts/plan-evidence/discover-plan-claims.ts",
+      "line": 2,
+      "phase": "cross-phase",
+      "signals": ["plan-shape-word"],
+      "kind": "mention",
+      "text": "* DISCOVER EVERY PLAN-SHAPE CLAIM IN THE TREE."
+    },
+    {
+      "file": "scripts/plan-evidence/discover-plan-claims.ts",
+      "line": 4,
+      "phase": "cross-phase",
+      "signals": ["plan-shape-word"],
+      "kind": "mention",
+      "text": "* The P4-S3 defect stood for months because the set of plan-shape claims was"
+    },
+    {
+      "file": "scripts/plan-evidence/discover-plan-claims.ts",
+      "line": 71,
+      "phase": "cross-phase",
+      "signals": ["plan-shape-word"],
+      "kind": "mention",
+      "text": "{ id: 'plan-shape-word', re: /\\bplan[- ]shape\\b|\\bplanShape\\b/i },"
+    },
+    {
+      "file": "scripts/plan-evidence/discover-plan-claims.ts",
+      "line": 75,
+      "phase": "cross-phase",
+      "signals": ["collation-dependent-range"],
+      "kind": "mention",
+      "text": "re: /\\^@|text_pattern_ops|varchar_pattern_ops|COLLATE\\s+\"?C\"?\\b|\\bdatcollate\\b|\\bindcollation\\b/,"
+    },
+    {
+      "file": "scripts/plan-evidence/discover-plan-claims.ts",
+      "line": 137,
+      "phase": "cross-phase",
+      "signals": ["explain", "explain-analyze", "query-plan-json"],
+      "kind": "mention",
+      "text": "// signature — and the `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)` eight"
+    },
+    {
+      "file": "scripts/plan-evidence/discover-plan-claims.ts",
+      "line": 161,
+      "phase": "cross-phase",
+      "signals": ["explain"],
+      "kind": "mention",
+      "text": "// 'EXPLAIN …')` taint every later `r` in the file. A seed is the"
+    },
+    {
+      "file": "scripts/plan-evidence/discover-plan-claims.ts",
+      "line": 170,
+      "phase": "cross-phase",
+      "signals": ["explain"],
+      "kind": "mention",
+      "text": "// `async function capture()` runs its EXPLAIN eight lines in, and a"
+    },
+    {
+      "file": "scripts/plan-evidence/discover-plan-claims.ts",
+      "line": 181,
+      "phase": "cross-phase",
+      "signals": ["explain"],
+      "kind": "mention",
+      "text": "// that runs the EXPLAIN. A declaration-only rule reads the type annotation,"
+    },
+    {
+      "file": "scripts/plan-evidence/discover-plan-claims.ts",
+      "line": 183,
+      "phase": "cross-phase",
+      "signals": ["plan-shape-word"],
+      "kind": "assertion",
+      "text": "// a genuine plan-shape gate. Found by hand while auditing, which is the"
+    },
+    {
+      "file": "scripts/plan-evidence/target-cluster.ts",
+      "line": 47,
+      "phase": "cross-phase",
+      "signals": ["collation-dependent-range"],
+      "kind": "mention",
+      "text": "* prefix range from `^@` over a default-collation index, which is the"
+    },
+    {
       "file": "tests/browser/flows.ts",
       "line": 651,
       "phase": "cross-phase",
@@ -875,6 +979,158 @@
       "signals": ["collation-dependent-range"],
       "kind": "mention",
       "text": "* matches `lower(t.name) ^@ lower($q)`. `riceSearch` is the substring term"
+    },
+    {
+      "file": "tests/helpers/plan-evidence-env.ts",
+      "line": 4,
+      "phase": "cross-phase",
+      "signals": ["plan-shape-word"],
+      "kind": "mention",
+      "text": "* A plan-shape claim made on a different server major or a different"
+    },
+    {
+      "file": "tests/helpers/plan-evidence-env.ts",
+      "line": 10,
+      "phase": "cross-phase",
+      "signals": ["collation-dependent-range"],
+      "kind": "mention",
+      "text": "* PostgreSQL derives a prefix range from `^@` only when the index's collation"
+    },
+    {
+      "file": "tests/helpers/plan-evidence-env.ts",
+      "line": 17,
+      "phase": "cross-phase",
+      "signals": ["collation-dependent-range"],
+      "kind": "mention",
+      "text": "*     datcollate   | `^@` over a default-collation index"
+    },
+    {
+      "file": "tests/helpers/plan-evidence-env.ts",
+      "line": 19,
+      "phase": "cross-phase",
+      "signals": ["index-cond"],
+      "kind": "mention",
+      "text": "*     C            | Index Cond: barcode >= 'x' AND barcode < 'y'"
+    },
+    {
+      "file": "tests/helpers/plan-evidence-env.ts",
+      "line": 20,
+      "phase": "cross-phase",
+      "signals": ["index-cond"],
+      "kind": "mention",
+      "text": "*     POSIX        | Index Cond: barcode >= 'x' AND barcode < 'y'"
+    },
+    {
+      "file": "tests/helpers/plan-evidence-env.ts",
+      "line": 21,
+      "phase": "cross-phase",
+      "signals": ["seq-scan", "collation-dependent-range"],
+      "kind": "mention",
+      "text": "*     C.utf8       | Seq Scan, Filter: barcode ^@ 'x'"
+    },
+    {
+      "file": "tests/helpers/plan-evidence-env.ts",
+      "line": 22,
+      "phase": "cross-phase",
+      "signals": ["seq-scan", "collation-dependent-range"],
+      "kind": "mention",
+      "text": "*     en_US.utf8   | Seq Scan, Filter: barcode ^@ 'x'"
+    },
+    {
+      "file": "tests/helpers/plan-evidence-env.ts",
+      "line": 25,
+      "phase": "cross-phase",
+      "signals": ["collation-dependent-range"],
+      "kind": "mention",
+      "text": "* PostgreSQL stores `datcollate` exactly as it was given and normalises"
+    },
+    {
+      "file": "tests/helpers/plan-evidence-env.ts",
+      "line": 29,
+      "phase": "cross-phase",
+      "signals": ["collation-dependent-range"],
+      "kind": "mention",
+      "text": "*     CREATE DATABASE … LOCALE 'en_US.utf8'   -> datcollate = en_US.utf8"
+    },
+    {
+      "file": "tests/helpers/plan-evidence-env.ts",
+      "line": 30,
+      "phase": "cross-phase",
+      "signals": ["collation-dependent-range"],
+      "kind": "mention",
+      "text": "*     CREATE DATABASE … LOCALE 'en_US.UTF-8'  -> datcollate = en_US.UTF-8"
+    },
+    {
+      "file": "tests/helpers/plan-evidence-env.ts",
+      "line": 31,
+      "phase": "cross-phase",
+      "signals": ["collation-dependent-range"],
+      "kind": "mention",
+      "text": "*     CREATE DATABASE … LOCALE 'C.utf8'       -> datcollate = C.utf8"
+    },
+    {
+      "file": "tests/helpers/plan-evidence-env.ts",
+      "line": 46,
+      "phase": "cross-phase",
+      "signals": ["collation-dependent-range"],
+      "kind": "mention",
+      "text": "readonly datcollate: string;"
+    },
+    {
+      "file": "tests/helpers/plan-evidence-env.ts",
+      "line": 75,
+      "phase": "cross-phase",
+      "signals": ["collation-dependent-range"],
+      "kind": "mention",
+      "text": "export const isByteOrderCollation = (datcollate: string): boolean => BYTE_ORDER_COLLATIONS.includes(datcollate);"
+    },
+    {
+      "file": "tests/helpers/plan-evidence-env.ts",
+      "line": 92,
+      "phase": "cross-phase",
+      "signals": ["collation-dependent-range"],
+      "kind": "mention",
+      "text": "datcollate: string;"
+    },
+    {
+      "file": "tests/helpers/plan-evidence-env.ts",
+      "line": 100,
+      "phase": "cross-phase",
+      "signals": ["collation-dependent-range"],
+      "kind": "mention",
+      "text": "d.datcollate,"
+    },
+    {
+      "file": "tests/helpers/plan-evidence-env.ts",
+      "line": 128,
+      "phase": "cross-phase",
+      "signals": ["collation-dependent-range"],
+      "kind": "mention",
+      "text": "datcollate: r.datcollate,"
+    },
+    {
+      "file": "tests/helpers/plan-evidence-env.ts",
+      "line": 133,
+      "phase": "cross-phase",
+      "signals": ["collation-dependent-range"],
+      "kind": "mention",
+      "text": "collationIsByteOrder: isByteOrderCollation(r.datcollate),"
+    },
+    {
+      "file": "tests/helpers/plan-evidence-env.ts",
+      "line": 161,
+      "phase": "cross-phase",
+      "signals": ["collation-dependent-range"],
+      "kind": "mention",
+      "text": "reasons.push(`datcollate=${env.datcollate} is byte order; the deployment target is not, and a prefix range derived here is not derivable there`);"
+    },
+    {
+      "file": "tests/helpers/plan-evidence-env.ts",
+      "line": 193,
+      "phase": "cross-phase",
+      "signals": ["collation-dependent-range"],
+      "kind": "mention",
+      "text": "return `[plan-evidence] ${label} | server_version_num=${env.serverVersionNum} datcollate=${env.datcollate} datctype=${env.datctype} provider=${env.localeProvider ?? 'n/a'} byteOrder=${env.collationIsByteOrder}${v.authoritative ? '' : ` | ${v.reasons.join('; ')}`}`;"
     },
     {
       "file": "tests/integration/read-s7-no-cache.test.ts",
@@ -1542,6 +1798,79 @@
       "signals": ["node-type", "seq-scan"],
       "kind": "assertion",
       "text": "all.filter((n) => n['Node Type'] === 'Seq Scan' && n['Relation Name'] === 'journal_lines'),"
+    },
+    {
+      "file": "tests/performance/plan-evidence-contract.test.ts",
+      "line": 12,
+      "phase": "cross-phase",
+      "signals": ["plan-shape-word"],
+      "kind": "mention",
+      "text": "*   1. THE INVENTORY IS CURRENT. The set of plan-shape claims is DERIVED from"
+    },
+    {
+      "file": "tests/performance/plan-evidence-contract.test.ts",
+      "line": 25,
+      "phase": "cross-phase",
+      "signals": ["collation-dependent-range"],
+      "kind": "mention",
+      "text": "*      stores `datcollate` verbatim; `en_US.utf8` and `en_US.UTF-8` are the"
+    },
+    {
+      "file": "tests/performance/plan-evidence-contract.test.ts",
+      "line": 85,
+      "phase": "cross-phase",
+      "signals": ["collation-dependent-range"],
+      "kind": "mention",
+      "text": "// different strings, because PostgreSQL stores datcollate verbatim."
+    },
+    {
+      "file": "tests/performance/plan-evidence-contract.test.ts",
+      "line": 111,
+      "phase": "cross-phase",
+      "signals": ["collation-dependent-range"],
+      "kind": "mention",
+      "text": "datcollate: 'C',"
+    },
+    {
+      "file": "tests/performance/plan-evidence-contract.test.ts",
+      "line": 125,
+      "phase": "cross-phase",
+      "signals": ["collation-dependent-range"],
+      "kind": "mention",
+      "text": "datcollate: 'C',"
+    },
+    {
+      "file": "tests/performance/plan-evidence-contract.test.ts",
+      "line": 136,
+      "phase": "cross-phase",
+      "signals": ["collation-dependent-range"],
+      "kind": "mention",
+      "text": "datcollate: 'en_US.utf8',"
+    },
+    {
+      "file": "tests/performance/plan-evidence-contract.test.ts",
+      "line": 145,
+      "phase": "cross-phase",
+      "signals": ["plan-shape-word"],
+      "kind": "mention",
+      "text": "describe('every discovered plan-shape claim is executed by required CI against postgres:16', () => {"
+    },
+    {
+      "file": "tests/performance/plan-evidence-contract.test.ts",
+      "line": 200,
+      "phase": "cross-phase",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["unreached"],
+      "text": "expect("
+    },
+    {
+      "file": "tests/performance/plan-evidence-contract.test.ts",
+      "line": 202,
+      "phase": "cross-phase",
+      "signals": ["plan-shape-word"],
+      "kind": "assertion",
+      "text": "`these files hold plan-shape claims that required CI never executes against its postgres:16 service, ` +"
     },
     {
       "file": "tests/performance/pos-s3-budgets.test.ts",

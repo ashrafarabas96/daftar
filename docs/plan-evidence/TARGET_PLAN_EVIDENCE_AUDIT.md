@@ -311,5 +311,33 @@ true, which `tests/performance/plan-evidence-contract.test.ts` now supplies by
 parsing `.github/workflows/ci.yml` and resolving `npm run` steps through
 `package.json` and the gate scripts they compose.
 
-The one wiring change still required is that this new suite itself must run in
-required CI. See the handback for the exact step.
+### The one change still required — and the suite is RED until it lands
+
+`tests/performance/plan-evidence-contract.test.ts` discovers itself. It holds
+a plan gate (line 203), so by its own rule it must be executed by the required
+`backend` job — and no step runs it yet. So it reports **7 passed, 1 failed**,
+and the failure is itself:
+
+```
+these files hold plan-shape claims that required CI never executes against its
+postgres:16 service, which is the exact shape of the P4-S3 defect:
+  tests/performance/plan-evidence-contract.test.ts
+```
+
+That red is deliberate and is left in place. The two ways to make it green
+without wiring CI are to exclude the file from discovery, which is hiding a
+claim, or to delete the reachability assertion, which is deleting the gate.
+Both are forbidden, and both are how the original defect survived.
+
+The step the workflow's owner must add to the `backend` job:
+
+```yaml
+      - name: Plan-evidence contract
+        run: npm run plan-evidence:contract
+        env:
+          PG_PORT: '5432'
+```
+
+No `continue-on-error`, no `if:` — a step that can skip is not a gate. The
+failure message above prints this same block, so the fix travels with the
+failure.

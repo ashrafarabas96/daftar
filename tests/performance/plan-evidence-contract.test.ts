@@ -30,7 +30,7 @@
  * reads it. Wiring belongs to the workflow's owner; proving the wiring is
  * present belongs here.
  */
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { describe, it, expect } from 'vitest';
@@ -157,6 +157,21 @@ describe('every discovered plan-shape claim is executed by required CI against p
     ).toEqual(inv.hits);
   });
 
+  /**
+   * The generator excludes exactly one directory — its own output, because
+   * the inventory quotes every line it reports and scanning itself has no
+   * fixpoint (measured: 196 hits became 416 on the second run).
+   *
+   * An exclusion is how a claim hides, so the exclusion is sealed here: the
+   * directory may hold only the artifact and prose about it. Put a `.ts` in
+   * it and this goes red.
+   */
+  it('the one excluded directory cannot hold an executable claim', () => {
+    const dir = join(ROOT, 'docs', 'plan-evidence');
+    const offenders = readdirSync(dir).filter((f) => /\.(ts|mts|tsx|sql|yml|yaml)$/.test(f));
+    expect(offenders, 'docs/plan-evidence/ is excluded from discovery, so nothing executable may live there').toEqual([]);
+  });
+
   it('the discovery rule finds the claims it is supposed to find', () => {
     // A sanity floor, not a remembered list: if the rule stops finding the
     // gates we know exist, the rule has broken and the inventory is lying.
@@ -185,7 +200,13 @@ describe('every discovered plan-shape claim is executed by required CI against p
     expect(
       unreached,
       `these files hold plan-shape claims that required CI never executes against its postgres:16 service, ` +
-        `which is the exact shape of the P4-S3 defect:\n  ${unreached.join('\n  ')}`,
+        `which is the exact shape of the P4-S3 defect:\n  ${unreached.join('\n  ')}\n\n` +
+        `Wire each one into the required \`backend\` job of .github/workflows/ci.yml, ` +
+        `with PG_PORT: '5432' so the harness reuses the postgres:16 service. For this suite that step is:\n` +
+        `      - name: Plan-evidence contract\n` +
+        `        run: npm run plan-evidence:contract\n` +
+        `        env:\n` +
+        `          PG_PORT: '5432'`,
     ).toEqual([]);
   });
 
