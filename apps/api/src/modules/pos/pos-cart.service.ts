@@ -8,8 +8,17 @@ import type { Logger } from '../../infra/logger';
 import type { MembershipContext } from '../tenancy/tenancy.service';
 import { InventoryAuthorizationService } from '../inventory/inventory-authorization';
 import type { BusinessTransactionId } from '../inventory/business-transaction';
+import { requireAnyPermission } from '../inventory/read-scope';
 import { minorToString, priceCart, roundingGrains, type PricedCart, type StoredCartLine } from './pos-cart-pricing';
-import { cartStatementPlan, setLineParams, CART_STATEMENTS_PER_COMMAND, type CartCommandTarget, type CartStatement } from './pos-cart-statements';
+import {
+  cartReadPlan,
+  cartStatementPlan,
+  setLineParams,
+  CART_STATEMENTS_PER_COMMAND,
+  CART_STATEMENTS_PER_READ,
+  type CartCommandTarget,
+  type CartStatement,
+} from './pos-cart-statements';
 import { posRefusal, type PosCode } from './pos-errors';
 import type { PosCartCommand } from './pos-price-authority';
 
@@ -92,7 +101,14 @@ interface GateRow extends QueryResultRow {
   session_visible: string;
   /** The lifecycle step: 0 means the till is closed. */
   session_open: string;
-  /** The `OD-P4-09` step: 0 means it is a colleague's till. */
+  /**
+   * The `OD-P4-09` step ALONE, independent of the lifecycle: 0 means it is a
+   * colleague's till. The cart READ needs it separately from `session_usable`,
+   * because it answers a CLOSED session's basket and would otherwise have had
+   * to read a closed-but-own shift as "not owned".
+   */
+  session_owned: string;
+  /** The `OD-P4-09` step a WRITE needs: `opened ∩ owned`. 0 means closed, or a colleague's till. */
   session_usable: string;
   /** `max(line_no) + 1` over the whole basket, tombstones included. The append's ordinal. */
   next_line_no: number;
@@ -238,6 +254,121 @@ export class PosCartService {
       },
       btx,
     );
+  }
+
+  /**
+   * `GET /v1/pos/till-sessions/:sessionId/cart-lines` — READ the basket.
+   * Requires `sales.view`.
+   *
+   * ## Why the read is owed at all
+   *
+   * The four commands above each answer with the recomputed cart, and for a
+   * while that was taken to mean a till «never asks twice»
+   * (`pos-cart-routes.ts`). It was wrong about one case, which is the only
+   * case that matters: a till screen that RELOADS. The basket is server-side
+   * state in `pos_cart_lines`, and neither
+   * `GET /v1/pos/till-sessions/current` nor
+   * `GET /v1/pos/till-sessions/:sessionId` carries a line — both answer a
+   * `TillSession`. So before this read, a reload lost the basket while its
+   * rows sat in the table with no route that could see them. The row is in
+   * `POS_READ_ROUTE_AUTHORITY` (`pos-reads.ts`) and NOT in
+   * `POS_CART_ROUTE_AUTHORITY`: that table is the four COMMANDS, one per
+   * `PosCartCommand`, and a read is not a fifth command.
+   *
+   * ## `sales.view` and not `sales.create`
+   *
+   * The four commands name `sales.create` because they WRITE. Reading a till
+   * session names `sales.view` (`pos-permissions.ts`), and so does the POS
+   * type-ahead (`pos-reads.ts`); the basket is the same till's own state, so
+   * it takes the same key. The decorator is the route's authority and this
+   * check is what holds if the read is ever reached from another transport —
+   * the `PosReadService.searchProducts` precedent, not duplication.
+   *
+   * ## A CLOSED shift's basket IS readable, and that is a decision
+   *
+   * The four commands refuse `pos.session_not_open` (409) behind a closed
+   * till, and this read deliberately does NOT. The reasoning is the schema's
+   * own, not a preference:
+   *
+   *   - `0079` does not delete the basket at close. Its own comment on
+   *     `pos_till_session_close` says «The basket is NOT deleted: a closed
+   *     session and its lines are the frozen record of the shift, and
+   *     `pos_cart_line_guard()` refuses every later write to them»
+   *     (`0079:945`, and `0079:601-603` calls it «frozen evidence»). So the
+   *     rows exist, by design, after the drawer is counted;
+   *   - what `pos_cart_line_guard()` refuses is a WRITE. There is no reading
+   *     of that guard under which a `SELECT` changes a counted drawer, so the
+   *     409 the commands answer is about mutating evidence and has no
+   *     counterpart here;
+   *   - `GET /v1/pos/till-sessions/:sessionId` already answers for a closed
+   *     session (`till-session.service.ts`: it checks visibility and the
+   *     owner, and never `status`). A line-level read of the same session
+   *     that refused where the session-level read answers would be two
+   *     answers to one question;
+   *   - and refusing would make the frozen evidence unreachable. The record
+   *     of what was in the drawer would exist in `pos_cart_lines` with no
+   *     route able to read it — which is exactly the defect this read was
+   *     added to fix, moved from "no route" to "a route that refuses".
+   *
+   * `GET /v1/pos/products` keeps its `pos.session_not_open` and should: a
+   * type-ahead on a closed till is a cashier still ringing up a counted
+   * drawer. Answering what WAS in the basket is a different act from offering
+   * to add to it.
+   *
+   * ## The refusals, and that they are the slice's own
+   *
+   * Two, both from the EXISTING gate (`cartReadPlan` reuses the commands' own
+   * `gate`), widest first and neither of them an empty cart:
+   *
+   *   - `pos.session_not_found` (404) — not VISIBLE to this transaction. A
+   *     session of another business or another tenant is invisible under RLS
+   *     and arrives here as no row, so it is the same answer as a session that
+   *     was never opened, and a malformed id is the same answer again
+   *     (`cartUuidParam`). The path is therefore no oracle for which ids
+   *     exist;
+   *   - `pos.session_not_owned` (403) — visible, in this business, and a
+   *     COLLEAGUE's. `OD-P4-09`: one session, one authenticated user. Handing
+   *     over another cashier's basket would be the shared till the ruling
+   *     refused, read-only.
+   *
+   * An empty cart is NOT a refusal and must never be used as one: a
+   * cross-business session answered with `{ lines: [] }` would be a leak
+   * dressed as a zero, and a cashier reading it would believe the basket was
+   * emptied.
+   *
+   * ## Two statements, one connection, no second query
+   *
+   * `cartReadPlan` is the commands' own `gate` and `projection` — see its
+   * note for why it is built there and not here. Both run in ONE
+   * `db.withTransaction` as `daftar_app`, which is the only connection this
+   * read takes and the only role it needs: `daftar_app` already holds
+   * `SELECT` on both relations (`0079:605`), so the read needs no routine, no
+   * assertion, no `invctl/1` mint and no `BusinessTransactionId` — all four
+   * are the write protocol's, and a read that minted one would be claiming an
+   * authority it does not use. The arithmetic is `recompute`, the one place a
+   * cart figure is produced, so the read adds no rounding layer and answers
+   * the identical `CartDto` the commands do.
+   */
+  async readCart(m: MembershipContext, tillSessionId: string): Promise<CartDto> {
+    requireAnyPermission(m, ['sales.view']);
+    const plan = cartReadPlan(this.base(m, tillSessionId));
+    const [gateStatement, projectionStatement] = plan;
+    if (plan.length !== CART_STATEMENTS_PER_READ || gateStatement?.role !== 'gate' || projectionStatement?.role !== 'projection') {
+      throw this.invariant('pos.cart_statement_plan_invalid');
+    }
+    const projected = await this.db.withTransaction({ tenantId: m.tenantId, businessId: m.businessId, actorUserId: m.userId }, async (client) => {
+      const gateRow = (await client.query<GateRow>(gateStatement.text, [...gateStatement.params])).rows[0];
+      if (gateRow === undefined) throw this.invariant('pos.cart_statement_plan_invalid');
+      // Widest first, for the same reason the commands order them so: a 403
+      // about a session the 404 says is invisible would confirm it exists.
+      if (Number(gateRow.session_visible) === 0) throw posRefusal('pos.session_not_found');
+      if (Number(gateRow.session_owned) === 0) throw posRefusal('pos.session_not_owned');
+      // `session_open` is READ by the gate and deliberately not consulted
+      // here. See this method's note: a closed shift's basket is frozen
+      // evidence and a SELECT cannot thaw it.
+      return (await client.query<ProjectionRow>(projectionStatement.text, [...projectionStatement.params])).rows;
+    });
+    return this.recompute(tillSessionId, projected.map(storedLine));
   }
 
   /**
@@ -396,16 +527,7 @@ export class PosCartService {
     // The stored lines, and NOT a priced cart: `recompute` is the one place a
     // cart figure is produced, and keeping it outside this function is what
     // lets the integration suite drive the arithmetic over exactly these rows.
-    return projected.map((r) => ({
-      cartLineId: r.cart_line_id,
-      productId: r.product_id,
-      variantId: r.variant_id,
-      quantity: r.quantity,
-      discountMinor: r.discount_minor,
-      unitPriceMinor: r.unit_price_minor,
-      priceCurrency: r.price_currency,
-      nameSnapshot: r.name_snapshot,
-    }));
+    return projected.map(storedLine);
   }
 
   /**
@@ -507,6 +629,27 @@ export class PosCartService {
     this.logger.error({ invariant: code }, 'pos cart invariant violated');
     return posRefusal(code);
   }
+}
+
+/**
+ * One projected row as a `StoredCartLine`.
+ *
+ * ONE function, called by the commands' `issuePlan` and by `readCart`, so the
+ * read and the four writes cannot come to read the projection's columns two
+ * ways. It carries no figure of its own: every money value is still the
+ * column's own text and `recompute` is what prices it.
+ */
+function storedLine(r: ProjectionRow): StoredCartLine {
+  return {
+    cartLineId: r.cart_line_id,
+    productId: r.product_id,
+    variantId: r.variant_id,
+    quantity: r.quantity,
+    discountMinor: r.discount_minor,
+    unitPriceMinor: r.unit_price_minor,
+    priceCurrency: r.price_currency,
+    nameSnapshot: r.name_snapshot,
+  };
 }
 
 /** Q4 as its exact decimal string. Integer arithmetic only; `Number` never touches a quantity. */

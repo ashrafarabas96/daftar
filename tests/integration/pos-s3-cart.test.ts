@@ -63,12 +63,15 @@ import {
   type CartStatement,
   setLineParams,
   cartStatementPlan,
+  cartReadPlan,
+  CART_STATEMENTS_PER_READ,
   type CartCommandTarget,
 } from '../../apps/api/src/modules/pos/pos-cart-statements';
 import { roundingGrains, priceCart, type StoredCartLine } from '../../apps/api/src/modules/pos/pos-cart-pricing';
 import { POS_CART_COMMANDS, type PosCartCommand } from '../../apps/api/src/modules/pos/pos-price-authority';
 import { newBusinessTransactionId } from '../../apps/api/src/modules/inventory/business-transaction';
 import { POS_CART_ROUTE_AUTHORITY, POS_CART_ROUTE_HANDLERS } from '../../apps/api/src/modules/pos/pos-cart-routes';
+import { POS_READ_ROUTE_AUTHORITY } from '../../apps/api/src/modules/pos/pos-reads';
 import { PosCartService as PosCartServiceType } from '../../apps/api/src/modules/pos/pos-cart.service';
 import { ensurePostgres, ownerPool } from '../helpers/test-app';
 
@@ -207,6 +210,10 @@ const target = (overrides: Partial<CartCommandTarget> = {}): CartCommandTarget =
 const USABLE = {
   session_visible: '1',
   session_open: '1',
+  // The ownership verdict ALONE, which the gate reports beside `session_usable`
+  // so the cart READ can answer a closed shift's basket without reading the
+  // owner's own closed till as a colleague's.
+  session_owned: '1',
   session_usable: '1',
   next_line_no: 4,
   line_present: '1',
@@ -736,7 +743,7 @@ describe('§6 — the surface this slice hands over, stated so it is enumerable'
     // suffix and the G-02 golden asserts its route list EQUAL to that
     // discovery \u2014 so the file's mere existence turned a sealed P4-S1 golden
     // red. The condition was "the transport, the goldens and the route surface
-    // land together, once", and they have: the golden now carries the nine POS
+    // land together, once", and they have: the golden now carries the ten POS
     // routes and their cross-tenant pairs. So the claim inverts, because a
     // route table with no transport is a surface nothing serves.
     //
@@ -755,6 +762,83 @@ describe('§6 — the surface this slice hands over, stated so it is enumerable'
       expect(route.status, route.command).toBe(route.command === 'cart.add_line' ? 201 : 200);
       expect(route.body).toBe(true);
     }
+  });
+
+  /**
+   * THE READ, asserted SEPARATELY from the four commands and never inside
+   * their table.
+   *
+   * The command table above is four rows and stays four rows: one per
+   * `PosCartCommand`, each with a plan of three statements, a request schema,
+   * an accepted-key row and a route. The cart READ has none of those — no
+   * command, no body, no accepted keys, two statements — so a fifth row there
+   * would have had to be excused from every claim the table makes. Its
+   * authority row is on the POS READ surface (`POS_READ_ROUTE_AUTHORITY`,
+   * beside `GET /v1/pos/products`), which is the table that already means "a
+   * GET, no body, `sales.view`, no writes".
+   *
+   * So the surface is FOUR COMMANDS AND ONE READ, and both halves are stated
+   * positively: the read is on the read table, with `sales.view`; and it is
+   * absent from the command table, by path and by method alike.
+   */
+  it('the read is one row on the POS READ table, with `sales.view`, and is no row of the command table', () => {
+    const READ_PATH = '/v1/pos/till-sessions/:sessionId/cart-lines';
+    const read = POS_READ_ROUTE_AUTHORITY.filter((r) => r.path === READ_PATH);
+    expect(read, 'the cart read is not on the POS read surface, so nothing declares its authority').toHaveLength(1);
+    expect(read[0]).toEqual({ method: 'GET', path: READ_PATH, permission: 'sales.view', sensitive: false });
+    // `sales.view` and NOT `sales.create`: the four commands name the minting
+    // key because they WRITE, and reading a till session already names
+    // `sales.view` (`pos-permissions.ts`).
+    expect(read[0]?.permission, 'the read names the write key').not.toBe('sales.create');
+
+    // And it is not smuggled into the command table — which is still four
+    // rows, by the assertion above, and carries no GET at all.
+    //
+    // The claim is about the METHOD and not the path: the append's own row is
+    // `POST /v1/pos/till-sessions/:sessionId/cart-lines`, the same path, which
+    // is exactly right — one collection, written with POST and read with GET.
+    // What must not exist is a GET row in the COMMAND table, because that
+    // table's rows carry a `command`, a schema, an accepted-key set and a
+    // boundary pipe, and a read has none of the four.
+    expect(
+      POS_CART_ROUTE_AUTHORITY.map((r) => r.method as string),
+      'a GET is in the command table',
+    ).not.toContain('GET');
+    expect(
+      POS_CART_ROUTE_AUTHORITY.filter((r) => (r.method as string) === 'GET' || r.path === READ_PATH).map((r) => `${r.method} ${r.path}`),
+      'the command table holds a row with the read’s method and path',
+    ).not.toContain(`GET ${READ_PATH}`);
+  });
+
+  /**
+   * The read's plan is TWO statements — the gate and the projection — and they
+   * are the COMMANDS' OWN statements, not a second pair that looks like them.
+   *
+   * Asserted by text equality against `cartStatementPlan`'s first and last
+   * statement, because that is the claim: one gate text and one projection
+   * text in the module, so the session verdict a read refuses on and the
+   * verdict a write refuses on cannot come to disagree, and the read cannot
+   * drift into a second definition of "the cart".
+   */
+  it('the read reuses the commands\u2019 own gate and projection, and issues two statements and no routine', () => {
+    const plan = cartReadPlan(target());
+    expect(plan).toHaveLength(CART_STATEMENTS_PER_READ);
+    expect(CART_STATEMENTS_PER_READ, 'two: the gate and the projection, one fewer than a command').toBe(2);
+    expect(
+      plan.map((st) => st.role),
+      'a read that issued a routine would be a write',
+    ).toEqual(['gate', 'projection']);
+
+    const command = cartStatementPlan('cart.add_line', target());
+    expect(plan[0]?.text, 'the read built its own gate instead of reusing the commands\u2019').toBe(command[0]?.text);
+    expect(plan[1]?.text, 'the read built its own projection instead of reusing the commands\u2019').toBe(command[2]?.text);
+
+    // The gate answers the ownership question INDEPENDENTLY of the lifecycle,
+    // which is what lets the read answer a closed shift's frozen basket and
+    // still refuse a colleague's. `session_usable` is `opened \u2229 owned` and
+    // would have reported `pos.session_not_owned` for the owner's own closed
+    // till.
+    for (const column of ['session_visible', 'session_owned', 'session_usable']) expect(plan[0]?.text).toContain(column);
   });
 
   it('every route names a method that exists on the service \u2014 the mount cannot call a handler that is not there', () => {
@@ -799,5 +883,22 @@ describe('§6 — the surface this slice hands over, stated so it is enumerable'
         command,
       ).toHaveLength(1);
     }
+  });
+
+  /**
+   * The whole cart surface, counted in one place: FOUR COMMANDS AND ONE READ.
+   *
+   * Two numbers rather than one, and each from the table that owns it. A
+   * single "five cart routes" would have hidden what the difference is for —
+   * the commands write, carry a schema, carry accepted keys and mint an
+   * `invctl/1` assertion; the read does none of those and takes no body at
+   * all.
+   */
+  it('the cart surface is four commands and one read \u2014 counted separately, from the two tables that own them', () => {
+    expect(POS_CART_ROUTE_AUTHORITY, 'the commands').toHaveLength(4);
+    expect(
+      POS_READ_ROUTE_AUTHORITY.filter((r) => r.path.endsWith('/cart-lines')),
+      'the read',
+    ).toHaveLength(1);
   });
 });
