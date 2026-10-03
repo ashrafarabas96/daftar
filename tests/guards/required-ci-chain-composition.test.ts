@@ -17,7 +17,7 @@
  * reported for the slice was green for a workflow that never ran the slice's
  * gate — `A green workflow is not evidence for a gate the workflow never ran.`
  *
- * So the ruling's precondition is asserted here, permanently, as eight claims
+ * So the ruling's precondition is asserted here, permanently, as nine claims
  * about `.github/workflows/ci.yml`, over every slice gate in `CHAIN` —
  * P4-S1, P4-S2 and P4-S3 today, and whichever slice is added to that table
  * next:
@@ -34,6 +34,15 @@
  *   C-8  each step's `name` is EXACTLY the ruled one — a gate step that has
  *        been renamed is a gate a reader of the required job's log can no
  *        longer identify as that slice's.
+ *   C-9  EVERY REQUIRED PROOF IN `REQUIRED_PROOFS` is wired on the same
+ *        terms, and runs after the last slice gate of `CHAIN`. TL-P4-S3-R5
+ *        requires the process composition guard's planted-defect proof to be
+ *        EXECUTED, not asserted by hand once: `A planted-defect proof that
+ *        cannot be shown failing is not a proof`, and a proof that runs only
+ *        on an author's machine is a proof nobody can show failing. The
+ *        directive's own words on this file's subject are that the wiring
+ *        itself must be proved rather than assumed, so the proof step gets
+ *        the same eight claims the gate steps get.
  *
  * ── WHY THIS PARSES AND DOES NOT GREP ────────────────────────────────────
  *
@@ -107,6 +116,27 @@ const CHAIN: readonly { readonly slice: string; readonly script: string; readonl
   { slice: 'P4-S1', script: S1_SCRIPT, command: 'npm run gate:phase4:s1', name: 'Phase 4 slice gate — P4-S1 (composes the Phase 3 corrective gate)' },
   { slice: 'P4-S2', script: S2_SCRIPT, command: S2_COMMAND, name: 'Phase 4 slice gate — P4-S2' },
   { slice: 'P4-S3', script: S3_SCRIPT, command: S3_COMMAND, name: 'Phase 4 slice gate — P4-S3' },
+];
+
+/** The exact command of the process composition guard's planted-defect proof. */
+const COMPOSITION_RED_PROOF_COMMAND = 'npm run proof:composition:red';
+const COMPOSITION_RED_PROOF_SCRIPT = 'proof:composition:red';
+
+/**
+ * C-9 — THE REQUIRED PROOFS. Not slice gates, so not in `CHAIN`: they carry
+ * no pairwise order among themselves and compose nothing. What they share
+ * with `CHAIN` is every other term — in the required job, exactly once,
+ * exactly this command, exactly this name, no `continue-on-error`, no `if:`
+ * — plus one of their own: a proof runs AFTER the last slice gate, because a
+ * proof of a guard the job has not yet exercised is evidence out of order.
+ */
+const REQUIRED_PROOFS: readonly { readonly id: string; readonly script: string; readonly command: string; readonly name: string }[] = [
+  {
+    id: 'TL-P4-S3-R5 process composition red proof',
+    script: COMPOSITION_RED_PROOF_SCRIPT,
+    command: COMPOSITION_RED_PROOF_COMMAND,
+    name: 'Process composition guard — planted-defect red proof',
+  },
 ];
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -394,6 +424,40 @@ export function chainCompositionProblems(text: string): string[] {
           `the ${slice} gate step (#${index + 1}) is named \`${String(step['name'])}\`, not \`${name}\` — a renamed gate step is not the ruled one`,
         );
     }
+  }
+
+  // C-9: every required proof, on the same terms as a gate step.
+  for (const { id, script, command: expected, name } of REQUIRED_PROOFS) {
+    const all = gateSteps(doc, script);
+    if (all.length === 0) {
+      problems.push(`no step of ${WORKFLOW} runs the ${id} (${script}) — a planted-defect proof no required job executes cannot be shown failing`);
+      continue;
+    }
+    for (const stray of all.filter((s) => s.job !== REQUIRED_JOB))
+      problems.push(`the ${id} runs in the \`${stray.job}\` job, which is not the required \`${REQUIRED_JOB}\` job`);
+    const here = all.filter((s) => s.job === REQUIRED_JOB);
+    if (here.length === 0) {
+      problems.push(`the ${id} is in ${WORKFLOW} but not in the required \`${REQUIRED_JOB}\` job, so it proves nothing on any push`);
+      continue;
+    }
+    if (here.length > 1) problems.push(`the \`${REQUIRED_JOB}\` job runs the ${id} ${here.length} times — which of them the claim rests on is undecidable`);
+    for (const { step, index } of here) {
+      if (step['continue-on-error'] !== undefined)
+        problems.push(`the ${id} step (#${index + 1}) carries continue-on-error, so a proof that cannot go red leaves the required job green`);
+      if (step['if'] !== undefined)
+        problems.push(`the ${id} step (#${index + 1}) is conditional (if: ${String(step['if'])}), so an ordinary push or pull_request can skip it`);
+      const run = step['run'];
+      const command = typeof run === 'string' ? run.trim() : '';
+      if (command !== expected) problems.push(`the ${id} step runs \`${command}\`, not exactly \`${expected}\``);
+      if (step['name'] !== name) problems.push(`the ${id} step (#${index + 1}) is named \`${String(step['name'])}\`, not \`${name}\``);
+    }
+    const lastGate = CHAIN[CHAIN.length - 1];
+    const gate = lastGate === undefined ? undefined : gateSteps(doc, lastGate.script).filter((s) => s.job === REQUIRED_JOB)[0];
+    const proof = here[0];
+    if (gate !== undefined && proof !== undefined && proof.index <= gate.index)
+      problems.push(
+        `the ${id} step (#${proof.index + 1}) runs before the ${lastGate?.slice ?? 'last'} gate step (#${gate.index + 1}) — a guard's red proof belongs after the job has run the gate it proves`,
+      );
   }
 
   // C-4: each slice's gate runs after its predecessor's. Chain composition IS
@@ -761,5 +825,111 @@ describe('TL-P4-S2-R3 extended to P4-S3 — the required job composes the whole 
     const problems = chainCompositionProblems(IN_ANOTHER_JOB(S3_COMMAND));
     expect(problems.some((p) => p.includes('runs in the `hygiene` job'))).toBe(true);
     expect(problems.some((p) => p.includes(`not in the required \`${REQUIRED_JOB}\` job`))).toBe(true);
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// C-9. TL-P4-S3-R5 requires the process composition guard's planted-defect
+// proof to be EXECUTED, and the directive requires the WIRING ITSELF to be
+// proved rather than assumed. So the proof step gets the same treatment every
+// gate step gets: parsed out of the document, held to its exact command, its
+// exact name, its job, its position and the absence of any way to skip it —
+// and every one of those is planted against on a copy of the text.
+// ───────────────────────────────────────────────────────────────────────────
+
+describe('TL-P4-S3-R5 — the required job EXECUTES the composition guard’s planted-defect proof', () => {
+  const doc = parseWorkflow(WORKFLOW_TEXT);
+  const inJob = (script: string): GateStep | undefined => gateSteps(doc, script).filter((s) => s.job === REQUIRED_JOB)[0];
+
+  it('GREEN: the proof step is in the required job, after the last slice gate, unconditionally', () => {
+    expect(chainCompositionProblems(WORKFLOW_TEXT)).toEqual([]);
+    const proof = inJob(COMPOSITION_RED_PROOF_SCRIPT);
+    const lastGate = inJob((CHAIN[CHAIN.length - 1] as { script: string }).script);
+    expect(proof, 'the required job does not run the composition guard’s red proof at all').toBeDefined();
+    expect(lastGate).toBeDefined();
+    expect((proof as GateStep).index).toBeGreaterThan((lastGate as GateStep).index);
+  });
+
+  it('the proof step is named, commanded and environed exactly as the ruling requires', () => {
+    const proof = inJob(COMPOSITION_RED_PROOF_SCRIPT);
+    const s1 = inJob(S1_SCRIPT);
+    expect(proof).toBeDefined();
+    const step = proof === undefined ? {} : proof.step;
+    expect(step['name']).toBe('Process composition guard — planted-defect red proof');
+    expect(typeof step['run'] === 'string' ? (step['run'] as string).trim() : '').toBe(COMPOSITION_RED_PROOF_COMMAND);
+    expect(step['continue-on-error']).toBeUndefined();
+    expect(step['if']).toBeUndefined();
+    // The proof spawns the guard's suite under the root Vitest config, whose
+    // global setup needs a cluster: the same PG_PORT the gate steps set, read
+    // off the P4-S1 step rather than written down a second time.
+    const env = step['env'];
+    const s1env = s1 === undefined ? {} : s1.step['env'];
+    expect(isMap(env)).toBe(true);
+    expect(isMap(env) ? env['PG_PORT'] : null).toBe(isMap(s1env) ? s1env['PG_PORT'] : 'nothing');
+  });
+
+  it('the npm script the step names really exists and really runs the red-proof module', () => {
+    // A step whose command resolves to no script is a step that fails for the
+    // wrong reason, and a claim about `npm run X` where X is undefined is a
+    // claim about nothing.
+    const pkg = JSON.parse(readFileSync(join(REPO, 'package.json'), 'utf8')) as { readonly scripts?: Readonly<Record<string, string>> };
+    const script = pkg.scripts?.[COMPOSITION_RED_PROOF_SCRIPT];
+    expect(script, `package.json declares no \`${COMPOSITION_RED_PROOF_SCRIPT}\` script`).toBeDefined();
+    expect(script).toContain('scripts/guards/process-composition-red-proof.ts');
+    expect(readFileSync(join(REPO, 'scripts/guards/process-composition-red-proof.ts'), 'utf8').length).toBeGreaterThan(0);
+  });
+
+  it('RED: the proof step is removed — a comment that still names the command does not stand in for it', () => {
+    const text = STEP_REMOVED(COMPOSITION_RED_PROOF_COMMAND);
+    expect(text).toContain(`# removed; it used to be: run: ${COMPOSITION_RED_PROOF_COMMAND}`);
+    const problems = chainCompositionProblems(text);
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain('no step of');
+    expect(problems[0]).toContain(COMPOSITION_RED_PROOF_SCRIPT);
+    expect(problems[0]).toContain('cannot be shown failing');
+  });
+
+  it('RED: the proof step is RENAMED, its command untouched', () => {
+    const problems = chainCompositionProblems(STEP_RENAMED(COMPOSITION_RED_PROOF_COMMAND, 'Extra checks'));
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain('is named `Extra checks`');
+  });
+
+  it('RED: `continue-on-error: true` is added to the proof step', () => {
+    const problems = chainCompositionProblems(
+      STEP_PLUS(COMPOSITION_RED_PROOF_COMMAND, 'continue-on-error on the proof step', '        continue-on-error: true'),
+    );
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain('continue-on-error');
+    expect(problems[0]).toContain('leaves the required job green');
+  });
+
+  it('RED: the proof step is made conditional, so a normal push skips it', () => {
+    for (const condition of ["        if: github.event_name == 'workflow_dispatch'", '        if: success()']) {
+      const problems = chainCompositionProblems(STEP_PLUS(COMPOSITION_RED_PROOF_COMMAND, `a condition on the proof step: ${condition}`, condition));
+      expect(problems).toHaveLength(1);
+      expect(problems[0]).toContain('is conditional');
+    }
+  });
+
+  it('RED: the proof command is weakened — a trailing `|| true` over a red proof is the defect the proof exists to catch', () => {
+    for (const changed of [`${COMPOSITION_RED_PROOF_COMMAND} || true`, `echo ${COMPOSITION_RED_PROOF_COMMAND}`]) {
+      const problems = chainCompositionProblems(COMMAND_CHANGED(COMPOSITION_RED_PROOF_COMMAND, changed));
+      expect(problems).toHaveLength(1);
+      expect(problems[0]).toContain(`not exactly \`${COMPOSITION_RED_PROOF_COMMAND}\``);
+    }
+  });
+
+  it('RED: the proof step is moved into another job', () => {
+    const problems = chainCompositionProblems(IN_ANOTHER_JOB(COMPOSITION_RED_PROOF_COMMAND));
+    expect(problems.some((p) => p.includes('runs in the `hygiene` job'))).toBe(true);
+    expect(problems.some((p) => p.includes(`not in the required \`${REQUIRED_JOB}\` job`))).toBe(true);
+  });
+
+  it('RED: the proof step is moved AHEAD of the P4-S3 gate — evidence out of order', () => {
+    const problems = chainCompositionProblems(SWAPPED(S3_COMMAND, COMPOSITION_RED_PROOF_COMMAND));
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain('runs before the P4-S3 gate step');
+    expect(problems[0]).toContain('belongs after the job has run the gate it proves');
   });
 });
