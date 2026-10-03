@@ -99,7 +99,15 @@ function tracked(root: string): string[] {
     ? ((JSON.parse(readFileSync(manifest, 'utf8')) as { inventory?: { path?: string }[] }).inventory ?? [])
         .map((entry) => entry.path)
         .filter((path): path is string => typeof path === 'string' && path !== '')
-    : execFileSync('git', ['ls-files', '-z', '--', ...ROOTS], {
+    : // `--others --exclude-standard` as well as the cache, exactly as
+      // `tests/helpers/delivered-files.ts` reads a checkout: the contract this
+      // inventory answers to is "the committed inventory matches THE TREE", and
+      // a rule that saw only tracked files would call a tree clean while an
+      // uncommitted file in it carried an undiscovered plan claim. Measured:
+      // `docs/PHASE_4_S3_ACCEPTANCE.md` was invisible to this generator until
+      // it was committed, so the inventory regenerated beside it was stale the
+      // moment the commit landed.
+      execFileSync('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard', '--', ...ROOTS], {
         cwd: root,
         encoding: 'utf8',
         maxBuffer: 1 << 28,

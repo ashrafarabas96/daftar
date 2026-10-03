@@ -88,10 +88,10 @@
     "note": "Derived from git ls-files. No file is excluded by name — an exclusion list is how a claim hides."
   },
   "totals": {
-    "hits": 242,
+    "hits": 243,
     "planGates": 41,
     "assertions": 19,
-    "files": 39
+    "files": 40
   },
   "byPhase": {
     "cross-phase": {
@@ -107,7 +107,7 @@
     "phase-4": {
       "planGates": 9,
       "assertions": 5,
-      "mentions": 56
+      "mentions": 57
     },
     "phase-3": {
       "planGates": 6,
@@ -174,6 +174,12 @@
       "planGates": 0,
       "assertions": 0,
       "mentions": 2,
+      "phase": "phase-4"
+    },
+    "docs/PHASE_4_S3_ACCEPTANCE.md": {
+      "planGates": 0,
+      "assertions": 0,
+      "mentions": 1,
       "phase": "phase-4"
     },
     "infrastructure/database/migrations/0050_accounting_report_indexes.sql": {
@@ -721,6 +727,14 @@
       "text": "5. Every budget met at both tiers with `planningStatistics` non-null, every sample recorded, the RLS cost"
     },
     {
+      "file": "docs/PHASE_4_S3_ACCEPTANCE.md",
+      "line": 56,
+      "phase": "phase-4",
+      "signals": ["plan-shape-word", "collation-dependent-range"],
+      "kind": "mention",
+      "text": "| `TL-P4-S3-R4` | Plan-shape gates were measured on the embedded test cluster, whose collation is `C`. PostgreSQL derives a prefix range from `^@` only on a byte-order collation and recognises exactly `C` and `POSIX` — so the till's scanner path had **no index range at all** on the deployment target"
+    },
+    {
       "file": "infrastructure/database/migrations/0050_accounting_report_indexes.sql",
       "line": 12,
       "phase": "cross-phase",
@@ -978,7 +992,7 @@
     },
     {
       "file": "scripts/plan-evidence/discover-plan-claims.ts",
-      "line": 161,
+      "line": 169,
       "phase": "cross-phase",
       "signals": ["explain", "explain-analyze", "query-plan-json"],
       "kind": "mention",
@@ -986,7 +1000,7 @@
     },
     {
       "file": "scripts/plan-evidence/discover-plan-claims.ts",
-      "line": 185,
+      "line": 193,
       "phase": "cross-phase",
       "signals": ["explain"],
       "kind": "mention",
@@ -994,7 +1008,7 @@
     },
     {
       "file": "scripts/plan-evidence/discover-plan-claims.ts",
-      "line": 194,
+      "line": 202,
       "phase": "cross-phase",
       "signals": ["explain"],
       "kind": "mention",
@@ -1002,7 +1016,7 @@
     },
     {
       "file": "scripts/plan-evidence/discover-plan-claims.ts",
-      "line": 205,
+      "line": 213,
       "phase": "cross-phase",
       "signals": ["explain"],
       "kind": "mention",
@@ -1010,7 +1024,7 @@
     },
     {
       "file": "scripts/plan-evidence/discover-plan-claims.ts",
-      "line": 207,
+      "line": 215,
       "phase": "cross-phase",
       "signals": ["plan-shape-word"],
       "kind": "assertion",
