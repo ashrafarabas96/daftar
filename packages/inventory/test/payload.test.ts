@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { InventoryError } from '../src/errors';
 import {
   associateWarehouseBranchPayload,
+  buildInventoryPayload,
   canonicalInventoryPayload,
   configureProductPayload,
   dissociateWarehouseBranchPayload,
@@ -242,7 +243,7 @@ describe('invpl/1 — refusals of non-canonical input (never normalized)', () =>
   // The list is ABSOLUTE on purpose: a kind added, renamed or quietly dropped
   // turns this red, and the registry is the thing a signed authority is
   // scoped by.
-  it('registers exactly the three P3-S1 operation kinds, the seven P3-S3 kinds, the seven P3-S4 kinds, the two P3-S5 kinds, the seven P3-S6 kinds, the one corrective kind, the four P4-S1 customer kinds, the one P4-S2 sale kind and the two P4-S3 till-session kinds', () => {
+  it('registers exactly the three P3-S1 operation kinds, the seven P3-S3 kinds, the seven P3-S4 kinds, the two P3-S5 kinds, the seven P3-S6 kinds, the one corrective kind, the four P4-S1 customer kinds, the one P4-S2 sale kind and the four P4-S3 POS kinds', () => {
     expect([...INVENTORY_OPERATION_CODES].sort()).toEqual([
       'customer.archive', // P4-S1 (gap G-5)
       'customer.create', // P4-S1 (gap G-5)
@@ -260,11 +261,27 @@ describe('invpl/1 — refusals of non-canonical input (never normalized)', () =>
       'payment.create_method', // P3-S6 (0067/0068)
       'payment.deactivate_method', // P3-S6 (0067/0068)
       'payment.update_method', // P3-S6 (0067/0068)
-      // P4-S3 (`0079`): the TWO till-session kinds. The two cart kinds the
-      // same migration registers belong to the cart owner's minting side and
-      // are deliberately absent, by this list's own rule — a kind registered
-      // here without the builder that mints for it would be an authority
-      // nothing refuses.
+      // P4-S3 (`0079`): FOUR kinds — the two till-session ones and the two
+      // cart ones.
+      //
+      // An earlier revision of this list carried only the two session kinds
+      // and said the cart kinds were «deliberately absent, by this list's own
+      // rule — a kind registered here without the builder that mints for it
+      // would be an authority nothing refuses». That rule is right and the
+      // conclusion was simply out of date: it was written before the cart's
+      // minting side landed. `PosCartService.payload()` mints both, through
+      // the generic `buildInventoryPayload` over the registered schema rather
+      // than through a bespoke named helper, which satisfies the rule — being
+      // mintable is a property of having a schema the builder accepts, not of
+      // having a function named after the kind.
+      //
+      // So the rule stops being prose here. `buildInventoryPayload` is driven
+      // over every registered P4-S3 kind below, and a kind in this list that
+      // nothing can mint for turns THAT red rather than going unnoticed
+      // behind a comment — which is the whole failure this list exists to
+      // prevent, and the one the stale conclusion above committed.
+      'pos.cart_remove_line',
+      'pos.cart_set_line',
       'pos.session_close',
       'pos.session_open',
       'purchase.cancel',
@@ -319,9 +336,50 @@ describe('invpl/1 — refusals of non-canonical input (never normalized)', () =>
       ['session_id', 'uuid', false],
       ['closing_count_minor', 'integer', false],
     ]);
+    // The cart's two, in the order and of the types `0079`'s own
+    // `inventory_claimed_payload_digest` argument arrays carry:
+    //   pos_cart_set_line      ARRAY['uuid','uuid','integer','uuid','uuid','integer','integer']
+    //   pos_cart_remove_line   ARRAY['uuid','uuid']
+    // There is no price, line total or tax field in either, and that is the
+    // trust boundary expressed as an absence: a forged total has nowhere to
+    // arrive, so it is not refused — it is INEXPRESSIBLE (P4-AL-18).
+    expect(s1('pos.cart_set_line')).toEqual([
+      ['session_id', 'uuid', false],
+      ['line_id', 'uuid', false],
+      ['line_no', 'integer', false],
+      ['product_id', 'uuid', false],
+      ['variant_id', 'uuid', false],
+      ['qty_q4', 'integer', false],
+      ['requested_discount_minor', 'integer', false],
+    ]);
+    expect(s1('pos.cart_remove_line')).toEqual([
+      ['session_id', 'uuid', false],
+      ['line_id', 'uuid', false],
+    ]);
     for (const op of INVENTORY_P4_S3_OPERATION_CODES) {
       expect(INVENTORY_PAYLOAD_SCHEMAS[op].repeat, op).toBeUndefined();
       expect(INVENTORY_PAYLOAD_SCHEMAS[op].trailer, op).toBeUndefined();
+      // THE RULE THIS LIST STATES, MEASURED: every registered P4-S3 kind can
+      // actually be minted for. The fields are generated FROM the kind's own
+      // schema, so this cannot drift as the grammar changes, and a kind added
+      // to the list with no usable schema fails here by name instead of
+      // sitting in the list as an authority nothing can produce a payload
+      // for. This is what the comment on the list above used to assert in
+      // prose, and prose is what let a stale conclusion stand.
+      const minted = buildInventoryPayload(
+        op,
+        '11111111-1111-4111-8111-111111111111',
+        '22222222-2222-4222-8222-222222222222',
+        INVENTORY_PAYLOAD_SCHEMAS[op].map(
+          (f): InventoryPayloadField =>
+            f.type === 'uuid'
+              ? { kind: 'uuid', value: '33333333-3333-4333-8333-333333333333' }
+              : f.type === 'integer'
+                ? { kind: 'integer', value: 1 }
+                : { kind: 'code', value: 'abc' },
+        ),
+      );
+      expect(minted.opCode, op).toBe(op);
       // No till-session field is server-derived, so the intent schema is the
       // whole payload: a replay of an open or a close is the same command in
       // every field, the counted cash included.
