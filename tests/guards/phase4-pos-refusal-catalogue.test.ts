@@ -74,7 +74,18 @@ export const EXCLUDED_CODES: Readonly<Record<string, string>> = {
   'sale.tax_policy_absent': 'OD-03 is open; a tax rule may not be invented here, so this code stays unkeyed',
   // Fields no POS screen sends, so no POS command can raise these.
   'sale.notes_invalid': 'the POS screens send no notes',
-  'sale.document_date_in_future': 'the POS screens send no document date; the server dates the sale',
+  //
+  // `sale.document_date_in_future` WAS excluded here, on the reason "the POS
+  // screens send no document date; the server dates the sale". That reason was
+  // false, and it was false for a structural rather than an accidental
+  // reason: `SaleCommitSchema.documentDate` is REQUIRED and has no default,
+  // because `[[daftar-a-command-must-not-read-the-clock]]` — a financial
+  // command whose fingerprint covers a server-resolved date is not idempotent.
+  // So the CLIENT states the day, the register states it as
+  // `localDateIso()`, and a device whose clock is ahead of the server's
+  // reaches this refusal at the one moment a cashier can least afford a
+  // generic sentence. It now has merchant text in ar, en and tr, and rule 4
+  // is what forced the choice to be made rather than inherited.
   // The customers / receivables surface. A POS sale in P4-S3 is a walk-in cash
   // sale: the client names no customer, no terms, no currency and no rate.
   'sale.customer_not_found': 'the customers slice ships the screen that names a customer',
