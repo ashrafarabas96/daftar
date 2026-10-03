@@ -123,6 +123,17 @@ const COMPOSITION_RED_PROOF_COMMAND = 'npm run proof:composition:red';
 const COMPOSITION_RED_PROOF_SCRIPT = 'proof:composition:red';
 
 /**
+ * TL-P4-S3-R4's half of the same claim. The plan-evidence contract asserts
+ * that every plan-shape gate the tree declares is reachable from the required
+ * job AND that the cluster the job measured is a deployment-equivalent one. It
+ * is the check that would have caught the P4-S3 barcode defect months earlier,
+ * so it is held to C-9's terms rather than left to an author's machine: a
+ * contract that runs nowhere states nothing about deployment.
+ */
+const PLAN_EVIDENCE_CONTRACT_COMMAND = 'npm run plan-evidence:contract';
+const PLAN_EVIDENCE_CONTRACT_SCRIPT = 'plan-evidence:contract';
+
+/**
  * C-9 — THE REQUIRED PROOFS. Not slice gates, so not in `CHAIN`: they carry
  * no pairwise order among themselves and compose nothing. What they share
  * with `CHAIN` is every other term — in the required job, exactly once,
@@ -136,6 +147,12 @@ const REQUIRED_PROOFS: readonly { readonly id: string; readonly script: string; 
     script: COMPOSITION_RED_PROOF_SCRIPT,
     command: COMPOSITION_RED_PROOF_COMMAND,
     name: 'Process composition guard — planted-defect red proof',
+  },
+  {
+    id: 'TL-P4-S3-R4 plan-evidence contract',
+    script: PLAN_EVIDENCE_CONTRACT_SCRIPT,
+    command: PLAN_EVIDENCE_CONTRACT_COMMAND,
+    name: 'Plan-evidence contract',
   },
 ];
 

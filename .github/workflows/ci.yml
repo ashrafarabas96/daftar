@@ -389,6 +389,26 @@ jobs:
           # job: the guard's suite runs under the root Vitest config, whose
           # global setup reuses the `postgres` service at PG_PORT=5432.
           PG_PORT: '5432'
+      # TL-P4-S3-R4. THE PLAN-EVIDENCE CONTRACT. Every plan-shape assertion the
+      # tree declares is discovered from the tree, and each one must be
+      # reachable from this job; the contract also MEASURES the cluster it ran
+      # against — `server_version_num`, `datcollate`, `datctype`, the locale
+      # provider — and records whether that cluster is a deployment-equivalent
+      # one rather than a byte-order collation that answers `^@` differently.
+      # `A plan-shape claim made on a different server major or collation is
+      # not automatically a claim about deployment`: here the claim is made on
+      # the `postgres:16` service the product deploys against, so the P4-S3
+      # barcode defect could not have survived a single push.
+      # `required-ci-chain-composition.test.ts` (C-9) asserts this step's
+      # presence, command, job, name and the absence of
+      # `continue-on-error` / `if:`.
+      - name: Plan-evidence contract
+        run: npm run plan-evidence:contract
+        env:
+          # PG_PORT=5432 makes the contract REUSE the `postgres` service above
+          # and start nothing, so what it measures is the environment the
+          # required job's own gates ran on — not a cluster of its own.
+          PG_PORT: '5432'
       - name: Keep the gate's browser screenshots and results
         if: always()
         uses: actions/upload-artifact@v4

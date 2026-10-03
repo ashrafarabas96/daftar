@@ -88,12 +88,17 @@
     "note": "Derived from git ls-files. No file is excluded by name — an exclusion list is how a claim hides."
   },
   "totals": {
-    "hits": 234,
+    "hits": 240,
     "planGates": 41,
-    "assertions": 17,
-    "files": 37
+    "assertions": 19,
+    "files": 39
   },
   "byPhase": {
+    "cross-phase": {
+      "planGates": 26,
+      "assertions": 8,
+      "mentions": 92
+    },
     "phase-2": {
       "planGates": 0,
       "assertions": 3,
@@ -101,21 +106,22 @@
     },
     "phase-4": {
       "planGates": 9,
-      "assertions": 4,
+      "assertions": 5,
       "mentions": 56
     },
     "phase-3": {
       "planGates": 6,
       "assertions": 3,
       "mentions": 17
-    },
-    "cross-phase": {
-      "planGates": 26,
-      "assertions": 7,
-      "mentions": 88
     }
   },
   "byFile": {
+    ".github/workflows/ci.yml": {
+      "planGates": 0,
+      "assertions": 1,
+      "mentions": 3,
+      "phase": "cross-phase"
+    },
     ".github/workflows/phase2-s8-evidence.yml": {
       "planGates": 0,
       "assertions": 0,
@@ -160,7 +166,7 @@
     },
     "docs/PHASE_4_ARCHITECTURE_LOCK.md": {
       "planGates": 0,
-      "assertions": 0,
+      "assertions": 1,
       "mentions": 1,
       "phase": "phase-4"
     },
@@ -243,6 +249,12 @@
       "phase": "cross-phase"
     },
     "tests/browser/seed.ts": {
+      "planGates": 0,
+      "assertions": 0,
+      "mentions": 1,
+      "phase": "cross-phase"
+    },
+    "tests/guards/required-ci-chain-composition.test.ts": {
       "planGates": 0,
       "assertions": 0,
       "mentions": 1,
@@ -340,6 +352,38 @@
     }
   },
   "hits": [
+    {
+      "file": ".github/workflows/ci.yml",
+      "line": 392,
+      "phase": "cross-phase",
+      "signals": ["plan-shape-word"],
+      "kind": "mention",
+      "text": "# TL-P4-S3-R4. THE PLAN-EVIDENCE CONTRACT. Every plan-shape assertion the"
+    },
+    {
+      "file": ".github/workflows/ci.yml",
+      "line": 395,
+      "phase": "cross-phase",
+      "signals": ["collation-dependent-range"],
+      "kind": "assertion",
+      "text": "# against — `server_version_num`, `datcollate`, `datctype`, the locale"
+    },
+    {
+      "file": ".github/workflows/ci.yml",
+      "line": 397,
+      "phase": "cross-phase",
+      "signals": ["collation-dependent-range"],
+      "kind": "mention",
+      "text": "# one rather than a byte-order collation that answers `^@` differently."
+    },
+    {
+      "file": ".github/workflows/ci.yml",
+      "line": 398,
+      "phase": "cross-phase",
+      "signals": ["plan-shape-word"],
+      "kind": "mention",
+      "text": "# `A plan-shape claim made on a different server major or collation is"
+    },
     {
       "file": ".github/workflows/phase2-s8-evidence.yml",
       "line": 152,
@@ -635,6 +679,14 @@
       "signals": ["planning-statistics"],
       "kind": "mention",
       "text": "**P4-AL-74 — Every measured relation is `ANALYZE`d, `planningStatistics` is recorded, and a null fails the"
+    },
+    {
+      "file": "docs/PHASE_4_ARCHITECTURE_LOCK.md",
+      "line": 2163,
+      "phase": "phase-4",
+      "signals": ["plan-shape-word", "collation-dependent-range"],
+      "kind": "assertion",
+      "text": "| `TL-P4-S3-R4` | **DEPLOYMENT PLAN-EVIDENCE ENVIRONMENT.** The P4-S3 barcode defect exposed a systemic evidence problem: the local embedded test server is PostgreSQL 18 at a commonly `C` collation, while the required CI and deployment target is the PostgreSQL 16 family at a deployment-style `en_US."
     },
     {
       "file": "docs/PHASE_4_EXECUTION_PLAN.md",
@@ -979,6 +1031,14 @@
       "signals": ["collation-dependent-range"],
       "kind": "mention",
       "text": "* matches `lower(t.name) ^@ lower($q)`. `riceSearch` is the substring term"
+    },
+    {
+      "file": "tests/guards/required-ci-chain-composition.test.ts",
+      "line": 127,
+      "phase": "cross-phase",
+      "signals": ["plan-shape-word"],
+      "kind": "mention",
+      "text": "* that every plan-shape gate the tree declares is reachable from the required"
     },
     {
       "file": "tests/helpers/plan-evidence-env.ts",
