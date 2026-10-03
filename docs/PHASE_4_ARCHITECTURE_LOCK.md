@@ -2143,3 +2143,47 @@ P4-S0 هي مرحلة تحليل وقرار فقط. لم تُكتب أي شيف�
 و`OD-03` ما زال مفتوحًا. المرشّح المقبول `712eafe` وتشغيل CI رقم 36950325428 ناجح في الوظائف الستّ،
 والهجرتان `0077`–`0078` مجمّدتان، ومجموع الهجرات 79، والحدّ المجمّد `0078`، والهجرة التالية `0079`،
 و`0000`–`0078` غير قابلٍ للتغيير. وتبدأ الشريحة **P4-S3** بموجب البند §20 بلا إذنٍ إضافي، **ولا تبدأ P4-S4**.
+
+---
+
+## 27. The Tech Lead's P4-S3 final corrective directive (2026-10-03)
+
+P4-S3 was reviewed at candidate head `0d055e5bdc9866d5fac837c94f3431784a1bb6e6`, with exact-SHA CI
+`37108856227` (event `push`, attempt 1) green on all six jobs and PR CI `37108859071` green on the same
+source SHA. The verdict was **`P4-S3 — CHANGES REQUIRED`**, as a **FINAL NARROW CORRECTIVE PASS**: the
+P4-S3 architecture is **not rejected** and POS is **not** redesigned. The till session, the server-side
+cart, POS search, the POS reads, the browser surface, the localization, the barcode correction and the
+candidate migration `0079` all remain the accepted basis. Five rulings close before `0079` freezes.
+
+| id | ruling |
+|---|---|
+| `TL-P4-S3-R1` | **POS CHECKOUT MUST BE ATOMIC WITH CART CONSUMPTION.** The shipped UI flow committed a sale and then removed cart rows one at a time, so a committed sale followed by a partial cart-clear failure left stale cart rows after financial and inventory truth had already committed — a stale basket, an accidental second sale, and a partial cleanup that describes no business event. One POS checkout performs, in ONE database transaction: lock the till session; establish same tenant, same business, correct branch, correct warehouse, authenticated session owner and session OPEN; read the exact active cart set; bind its exact identities and quantities; derive price, discount and tax from server truth; execute the **existing accepted sale primitive**; execute the stock, COGS, invoice and accounting effects already owned by P4-S2; consume exactly the cart rows represented by THIS sale; and commit all of it together. If any step fails, **nothing commits**. Never: sale committed with cart not consumed; cart consumed with sale not committed; partial cart consumption; invoice without sale; stock movement without sale; accounting posting without commercial source. `POST /v1/sales` stays the **generic** sale surface and is given no implicit knowledge of any POS basket; the orchestration is a POS-specific route. The route name is not the law; the transaction semantics are. **No second sale writer**: no duplicate `sale_commit`, no alternative financial writer, no POS-only sale implementation, no copied sale arithmetic, no second COGS path, no second invoice writer, no second journal writer. Only the seam may be refactored so the accepted sale logic runs inside a caller-owned transaction. If atomicity proves impossible without modifying frozen `0077`/`0078`, the work **STOPS** and reports the exact reason; the frozen files are not modified. The checkout binds the exact cart state it sells (**the server decides product, variant, quantity, price, discount authority, tax, subtotal, total and currency — never the browser**), and a concurrent cart change either lands deterministically before the bind or produces a stable refusal; it never silently sells one cart and clears another. Replay is safe through the project's caller-supplied identity plus stored intent fingerprint, and **a replay may never issue a blanket delete against the current basket**: the consumed row identity is tied to the original accepted snapshot, so lines added after a successful checkout survive it. Sixteen named permanent tests are required, with deterministic interleaving and **no sleeps**. |
+| `TL-P4-S3-R2` | **DISCOUNT GRAIN = PER-LINE.** The open discount-grain card is closed. Phase 4 discount is **per line only** and the existing implementation is accepted; no cart-wide or order-wide discount is introduced in Phase 4. `sale_items` already owns discount at line granularity, per-line discount has one exact source, and a cart-wide discount would require allocation across lines — which creates further HALF_EVEN and residue decisions, a new derived truth and another concurrency surface, for no Phase 4 requirement. A future phase may introduce order-level promotions explicitly. For Phase 4: the discount request belongs to a line; the server revalidates `sales.discount`; zero removes the line discount; the cart total is the sum of the recomputed lines; and there is **no hidden proportional distribution**. |
+| `TL-P4-S3-R3` | **CLOSED OWNED CART READ ACCEPTED.** Allowing the authenticated **owner** of a closed till to read its frozen cart evidence is accepted. It is read-only with no mutation, available only to the authenticated session owner under accepted scope, and another user's closed session stays unreadable. An empty cart is a real `200 { lines: [] }` **only after authorization succeeds** — an access refusal must never masquerade as an empty cart. |
+| `TL-P4-S3-R4` | **DEPLOYMENT PLAN-EVIDENCE ENVIRONMENT.** The P4-S3 barcode defect exposed a systemic evidence problem: the local embedded test server is PostgreSQL 18 at a commonly `C` collation, while the required CI and deployment target is the PostgreSQL 16 family at a deployment-style `en_US.utf8` collation. **A plan-shape claim made on a different server major or collation is not automatically a claim about deployment**, and this is hardened BEFORE S4 performance work begins. Every plan-shape assertion across Phases 2, 3 and 4 is **discovered from the tree**, never from a remembered list, into a machine-readable inventory. Every authoritative plan-evidence run records `server_version_num`, `datcollate`, `datctype`, the locale provider where relevant, the exact query, the dataset tier and the ANALYZE state; the target spelling is **measured from CI's own PostgreSQL service** and not hard-coded from memory. Local PG18/`C` runs stay valid for correctness, SQL validity, security, RLS answer equivalence, functional invariants and concurrency, but **may not be labelled authoritative deployment plan evidence** without proven parity. The problem may **not** be solved by deleting, lowering or genericising plan assertions, by skipping required CI, or by accepting whichever plan local PostgreSQL happens to choose. Required CI must carry the authoritative side, and a structural test must prove that wiring. The retrospective audit classifies every discovered assertion as SAME/PASS, DIFFERENT BUT EQUIVALENT, PERFORMANCE REGRESSION, INVALID HISTORICAL CLAIM, NEEDS PRODUCT INDEX or NEEDS TEST CORRECTION; frozen historical migrations are never modified, and a missing accepted product index is repaired **only by a new migration**. A High data-integrity, security or accounting finding **STOPS the S3 seal**. |
+| `TL-P4-S3-R5` | **PROCESS COMPOSITION GUARD — BIDIRECTIONAL.** `process-composition.test.ts` proved one direction only and could permit a controller belonging to no application composition. The law is now bidirectional: every controller or module declared in the authoritative process composition appears where expected; every production controller is reachable through at least one intended production module or process; no controller exists only as a file; **no test fixture or import statement may satisfy the check**; a planted unattached controller is RED; and a planted wrong-process controller is RED. Module reflection is **not** to be replaced by regex-only source matching. |
+
+### Two statuses corrected, which were carried as open and were already ruled
+
+The P4-S3 report listed two items as open decisions. Both were already decided, and the canonical status is:
+
+- **RLS / FORCE — `TL-P4-S1-R2` is DISCHARGED**, by P4-S2. The general discovery guard is **Phase-4 scoped,
+  and that scope is intentional**. A tree-wide RLS law is **not** reopened: it would incorrectly fail
+  accepted non-commercial relations. This is not an open item and is not carried as one again.
+- **`credit_note` / `document_kind` — RULED / OWNED BY P4-S5**, by `TL-P4-S1-R3`. `0075` stays `'invoice'`
+  only and stays frozen; P4-S5 owns the widening; the widening happens in a **new** migration; and no fake
+  credit-note row is created in `invoices` before S5. This is not an open decision.
+
+### What remains open
+
+`OD-03` only. Sales tax remains **structurally zero** and a non-zero sales tax remains refused. Tax law is
+not researched and VAT rules are not inferred; Country Pack work is not part of this run.
+
+### The boundary this directive sets
+
+The directive authorizes the S3 corrective work, the S3 seal if **every** acceptance condition passes, the
+full P4-S4 implementation, exact-SHA S4 CI and an independent S4 review. It does **not** authorize freezing
+S4 migrations: `frozenThrough` is not moved to the S4 head and the S4 accepted prefix is not populated. P4-S4
+ends at **`P4-S4 — READY FOR TECH LEAD REVIEW`**, and **P4-S5 product work does not begin** — the boundary is
+deliberate, because P4-S5's refunds and returns consume the financial truth S4 creates, and that truth is
+reviewed before anything is built on it.
