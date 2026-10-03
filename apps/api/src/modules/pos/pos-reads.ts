@@ -138,23 +138,26 @@ import { POS_SEARCH_DEFAULT_LIMIT, type PosProductSearchQuery } from './pos-read
 /**
  * THE ROUTE THIS SERVICE ANSWERS, stated here and MOUNTED ELSEWHERE.
  *
- * P4-S3 deliberately contains no `*.controller.ts` of its own, and that is a
- * structural requirement rather than a convenience.
+ * The transport is `PosReadsController` (`pos-reads.controller.ts`), which
+ * mounts both rows of the table below. It is a SEPARATE file from this one,
+ * and the reason is worth keeping, because for most of this slice there was
+ * no controller here at all.
+ *
  * `discoverPhase4Routes` (`scripts/phase4-s1-gate.ts`) walks all of
  * `apps/api/src/modules` for `*.controller.ts`, extracts route paths from the
  * SOURCE TEXT and keeps everything under `PHASE4_ROUTE_PREFIXES` — which
  * includes `/v1/pos`. The sealed G-02 golden
  * (`tests/golden-regression/phase4/01-cross-tenant.golden.test.ts`) asserts its
- * own route list EQUAL to that discovery, and
- * `tests/security/phase4-route-surface.test.ts` derives the declared Phase 4
- * surface from `modules/selling` alone while requiring every `/v1/pos` verb to
- * answer 404. So a controller file's MERE EXISTENCE — mounted or not — turns a
- * sealed P4-S1 golden red.
+ * own route list EQUAL to that discovery. So a controller file's MERE
+ * EXISTENCE — mounted or not — turns that golden red until the golden names
+ * every route the file declares: the discovery reads the source, not the Nest
+ * container. That is why the transport landed ONCE, from the slice
+ * coordinator, together with the golden updates and after migration `0079`,
+ * rather than arriving with each read as it was written.
  *
- * The transport therefore lands once, from the slice coordinator, together
- * with the two golden updates and after migration `0079`. What this module
- * owns is the read, its authority, its refusals and its laws; what it hands
- * over is this table.
+ * What this module owns is the type-ahead, its authority, its refusals and
+ * its laws; what it hands over is this table. A row added here without the
+ * matching golden row is red, which is the point.
  *
  * The permission is `sales.view`, matching `pos-permissions.ts`'s
  * classification of every POS read: ORDINARY (`P4-AL-37`), held by the

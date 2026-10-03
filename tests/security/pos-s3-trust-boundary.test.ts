@@ -54,10 +54,13 @@
  * paths from the SOURCE TEXT, and the G-02 golden asserts its own route list
  * EQUAL to that discovery — so the mere existence of the file turned a sealed
  * P4-S1 golden red whether or not Nest ever mounted it. The transport has
- * since landed WITH both golden updates (`pos-cart.controller.ts`, and the
- * nine POS routes and their cross-tenant pairs in
- * `tests/golden-regression/phase4/01-cross-tenant.golden.test.ts`), so the
- * controller now exists and the cart routes answer over real HTTP.
+ * since landed WITH the golden updates (`pos-cart.controller.ts` and
+ * `pos-reads.controller.ts`, and the POS routes and their cross-tenant pairs
+ * in `tests/golden-regression/phase4/01-cross-tenant.golden.test.ts` — ten of
+ * them once the cart READ landed, six writes and four reads), so the
+ * controllers now exist and the cart routes answer over real HTTP. The count
+ * is stated here as background only; the golden is what asserts it, and that
+ * file is where it must be changed.
  *
  * This suite's subject does NOT change with it, and deliberately so: what it
  * isolates is the PIPE — `row.pipe()`, the same `CartCommandPipe` object the

@@ -228,9 +228,13 @@ export const S1_SUITES: readonly (SuiteEntry | Pending)[] = [
   // permanent Phase 3 suites are not rubber stamps.
   { id: 'FS-01', area: 'forward-scope', runner: 'root', file: 'tests/integration/phase4-s1-forward-scope.test.ts' },
   // The four P4-S1 goldens (lock §17.4; execution plan P4-S1 Exit).
-  // GOLD-20: eighteen tests. The eight routes are asserted EQUAL to
+  // GOLD-20: the suite's route list is asserted EQUAL to
   // `discoverPhase4Routes`, so the enumeration this gate checks is the same
-  // list the suite walks, and a ninth route turns the suite itself red.
+  // list the suite walks, and a route added without a cross-tenant pair turns
+  // the suite itself red. The equality is the claim; no count is written here,
+  // because the surface grows every slice (eight routes at P4-S1, twenty once
+  // P4-S3's POS surface landed) and a number in this comment would only ever
+  // record the slice that last touched it.
   { id: 'G-02', area: 'golden', runner: 'root', file: `${GOLDEN_DIR}/01-cross-tenant.golden.test.ts` },
   // GOLD-30: the cross-business bindings attempted as the TABLE OWNER, so the
   // refusal is the composite seam and not a privilege. Its two catalogue laws
