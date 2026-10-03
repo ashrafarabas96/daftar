@@ -21,7 +21,18 @@ import type { BusinessTransactionId } from './business-transaction';
  * One row per registered kind and no default: a kind registered in
  * `@daftar/inventory` without a row here does not compile.
  */
-const OPERATION_AUTHORITY: Readonly<Record<InventoryOperationCode, { readonly permission: Permission; readonly scope: 'warehouses' | 'business_wide' }>> = {
+/**
+ * A permission that may authorize MINTING. Every `*.view` key is excluded by
+ * construction: a read mints nothing, so no read permission may appear in
+ * `OPERATION_AUTHORITY` — naming `customers.view`, `inventory.view` or any other
+ * read key in a row below does not compile. This is the type-level form of the
+ * P4-S1 rule that a till holding `customers.view` cannot mint a customer write.
+ */
+type MintingPermission = Exclude<Permission, `${string}.view`>;
+
+const OPERATION_AUTHORITY: Readonly<
+  Record<InventoryOperationCode, { readonly permission: MintingPermission; readonly scope: 'warehouses' | 'business_wide' }>
+> = {
   'inventory.configure_product': { permission: 'inventory.adjust', scope: 'warehouses' },
   'structure.associate_warehouse_branch': { permission: 'warehouse.manage', scope: 'business_wide' },
   'structure.dissociate_warehouse_branch': { permission: 'warehouse.manage', scope: 'business_wide' },
@@ -72,6 +83,81 @@ const OPERATION_AUTHORITY: Readonly<Record<InventoryOperationCode, { readonly pe
   // residue settles supplier AP, so it is the settlement permission, and
   // business-wide like every settlement (S6 TL-5).
   'purchase.write_off_residue': { permission: 'suppliers.pay', scope: 'business_wide' },
+  // P4-S1 (lock P4-AL-35, P4-AL-39; gap G-5): a customer is business-wide
+  // master data shared by every branch — the exact mirror of the P3-S4
+  // supplier, so its commands are permission-only under `scope: 'warehouses'`,
+  // which passes the scope half trivially because they name no warehouse
+  // (the `supplier.*` rows at :44-47 and the `payment.*_method` rows at :61-64
+  // are the two precedents, and both read this way for the same reason).
+  //
+  // `customers.manage` is ORDINARY, not sensitive (P4-AL-37: master data is not
+  // a value movement), and it is a MANAGER default but NOT a cashier one
+  // (P4-AL-35, `OD-P4-01` OPTION A) — a till may look a customer up with the
+  // read key and may not edit the master record. That read key is deliberately
+  // absent from this table: it grants no write, and a read mints no assertion.
+  // The `Permission` type above is narrowed so that absence is a compile error
+  // rather than a convention.
+  'customer.create': { permission: 'customers.manage', scope: 'warehouses' },
+  'customer.update': { permission: 'customers.manage', scope: 'warehouses' },
+  'customer.archive': { permission: 'customers.manage', scope: 'warehouses' },
+  'customer.reactivate': { permission: 'customers.manage', scope: 'warehouses' },
+  // P4-S2 (docs/PHASE_4_S2_CONTRACT.md A-04; lock P4-AL-35, P4-AL-39,
+  // P4-AL-40): a sale is scoped by THE WAREHOUSE THE STOCK LEAVES, like every
+  // other movement command. `sales.create` is the minting key; `sales.view`
+  // cannot appear here and would not compile, which is the point of the
+  // narrowed `MintingPermission`.
+  //
+  // Two further authority facts the sale needs are deliberately NOT expressed
+  // here, because this table is one permission per kind and conflating them
+  // would make a single row carry three different decisions:
+  //
+  //   - a CREDIT sale also requires `receivables.view` (P4-AL-35's matrix
+  //     row), checked by the route's own authority table in
+  //     `selling-permissions.ts`;
+  //   - a non-zero line or cart discount also requires the SENSITIVE
+  //     `sales.discount` (P4-AL-35, P4-AL-37), checked by the service against
+  //     the request before anything is minted, and refused — never silently
+  //     zeroed, because a silently-zeroed discount charges the customer more
+  //     than the cashier told them.
+  'sale.commit': { permission: 'sales.create', scope: 'warehouses' },
+  // P4-S3 (docs/PHASE_4_S3_MIGRATION_DESIGN.md; lock P4-AL-18, P4-AL-39,
+  // OD-P4-09): a till session and its basket exist only to ring up a sale, so
+  // `sales.create` — the cashier's own key (`permissions.ts:214`) — is the
+  // minting key for all four kinds. No `pos.*` permission is invented: the
+  // accepted permission vocabulary is sealed, and this slice was not given a
+  // ruling that widens it.
+  //
+  // All four are `scope: 'warehouses'`, and for these kinds that half is NOT
+  // trivial the way `supplier.*` and `customer.*` are. An open names its
+  // warehouse, and the three later kinds are called with THE SESSION'S
+  // warehouse, read from `pos_till_sessions`. Re-checking it on every cart
+  // write is deliberate: a cashier's branch scope can be narrowed in the
+  // middle of a shift, and a basket that kept writing because the scope was
+  // checked once at open would be authority outliving the decision that
+  // granted it.
+  //
+  // `business_wide` would be wrong for all four. A till is bound to one branch
+  // by `pos_till_sessions.branch_id`, so an assigned-scope cashier — which is
+  // what a cashier normally is — must be able to open and work one; demanding
+  // `branch_scope_mode = 'all'` would lock every ordinary cashier out of the
+  // point of sale, which is the opposite of what P4-AL-18 describes.
+  //
+  // Two authority facts are deliberately NOT in these rows, for the reason the
+  // `sale.commit` row above gives — one permission per kind:
+  //
+  //   - a non-zero `requested_discount_minor` on a cart line also requires the
+  //     SENSITIVE `sales.discount` (P4-AL-35, P4-AL-37), checked by the cart
+  //     service against the request before anything is minted and REFUSED,
+  //     never silently zeroed;
+  //   - only the cashier who opened a session may write to it or close it.
+  //     That is not a permission at all and is not checked here: it is
+  //     `pos_cart_lines_session_actor_fk` against `pos_till_sessions_actor_uq`
+  //     in `0079`, so it holds against the database rather than against this
+  //     table (OD-P4-09).
+  'pos.session_open': { permission: 'sales.create', scope: 'warehouses' },
+  'pos.session_close': { permission: 'sales.create', scope: 'warehouses' },
+  'pos.cart_set_line': { permission: 'sales.create', scope: 'warehouses' },
+  'pos.cart_remove_line': { permission: 'sales.create', scope: 'warehouses' },
 };
 
 /**

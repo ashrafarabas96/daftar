@@ -9,8 +9,54 @@ import { REPO_ROOT } from './helpers/refusal-codes';
 
 /**
  * T-12 (P3-S7 contract A-19; MP-2): the tax boundary. BLOCKED BY OD-03 — no
- * S7 screen, view, message key or client function carries a tax element,
- * and there are no customer payments (Phase 4).
+ * S7 screen, view or message key carries a tax element, no screen names a
+ * customer, and nothing anywhere computes either.
+ *
+ * ── WHERE THE BOUNDARY RUNS, AND WHY IT MOVED ────────────────────────────
+ * This suite used to read `.ts` CLIENT LIBRARIES under the same rule as
+ * `.tsx` screens: no identifier whose token starts with tax/VAT/duty, and no
+ * `customer` token, anywhere in `apps/web/src/lib/phase*-*.ts` either.
+ *
+ * That was true of the tree only for as long as no web client sent a SALE
+ * COMMIT, and P4-S3 is the slice that sends one. `SaleCommitSchema`
+ * (`apps/api/src/modules/selling/selling.schemas.ts`) is `.strict()` and
+ * REQUIRES two fields this rule forbade by name:
+ *
+ *   - `taxMinor: z.literal(SALE_STRUCTURAL_ZERO_TAX_MINOR)` — the literal
+ *     `'0'` and nothing else is accepted. It is a signed input rather than a
+ *     server default precisely so that the day a Country Pack enables tax the
+ *     fingerprint position already exists (`P4-AL-44`). There is no value a
+ *     client could put there that the server would adopt;
+ *   - `customerId: uuid.nullable()` — `null` is a WALK-IN, which is what a
+ *     till sale is, and the field is `nullable` rather than `optional` so the
+ *     walk-in is STATED rather than inferred from an absent key.
+ *
+ * So a POS that could not name them could not sell at all, and the choice was
+ * never "name them or keep the rule" — it was "ship a working till or not".
+ *
+ * The boundary this suite now draws is the one the SHARED guard already drew
+ * and wrote down: `S7_SOURCE_RULES`' tax rule in
+ * `scripts/guards/merchant-jargon.ts` is `tsxOnly: true`, on the stated
+ * reason that "the column, the DTO field and the refusal code are real
+ * (`invoices.tax_minor`, `sale.tax_policy_absent`) and they live in `.ts`
+ * libraries, which is their place. Rendering happens in `.tsx`." This file was
+ * stricter than the accepted P4-S1 ruling beside it, and it is the one that
+ * moved.
+ *
+ * WHAT IS NOT WEAKENED, and is now asserted where it was previously implied:
+ *
+ *   - no `.tsx` — no screen, no view — names a tax element or a customer, by
+ *     exactly the rule that was there before;
+ *   - no `.ts` client library names a tax RATE, EXEMPTION, THRESHOLD,
+ *     JURISDICTION, REGISTRATION or INCLUSIVE/EXCLUSIVE spelling: the
+ *     structural zero is a position, and a policy is what `OD-03` forbids;
+ *   - the only tax identifier a `.ts` library may name at all is `taxMinor`,
+ *     and the only value it may be set from is the named structural-zero
+ *     constant;
+ *   - the only value `customerId` may be set from is `null`.
+ *
+ * Each of those four is a claim about the shipped sources, shown firing on a
+ * planted copy.
  */
 /** An identifier that is, or has a camelCase segment that is, tax / VAT / duty — "syntax" is not one. */
 const TAX_IDENTIFIER = /\b(?:[Tt]ax\w*|TAX\w*|\w*[a-z0-9]Tax\w*|[Vv][Aa][Tt]|[Dd]ut(?:y|ies))\b/g;
@@ -47,6 +93,37 @@ function taxIdentifiers(source: string): string[] {
   return [...stripTsComments(source).matchAll(TAX_IDENTIFIER)].map((m) => m[0]);
 }
 
+/**
+ * The same source with any DENYLIST of request field names excised.
+ *
+ * `apps/web/src/lib/phase4-pos-api.ts` declares
+ * `FORBIDDEN_REQUEST_FIELDS = ['…', 'tax', 'taxRate', 'taxExempt', …]`: the
+ * names the POS client may NOT put in a request, mirroring the server's own
+ * `POS_CART_FORGED_FIELDS`. A list of words that may not be sent is the
+ * opposite of naming a tax policy, and a rule that read it would force the
+ * denylist to be shorter than the server's — which is how a forgeable field
+ * stops being named on the client side.
+ */
+function withoutDenylists(source: string): string {
+  return stripTsComments(source).replace(/FORBIDDEN_REQUEST_FIELDS[^=]*=\s*\[[\s\S]*?\];/g, (m) => m.replace(/[^\n]/g, ' '));
+}
+
+/**
+ * The values a source puts under `field:`, normalised and with the spellings
+ * that are not a SEND filtered out. One function, so the shipped claim and the
+ * planted proof below cannot read the text two different ways.
+ */
+function valuesUnder(source: string, field: 'taxMinor' | 'customerId', allowed: readonly string[]): string[] {
+  return [...stripTsComments(source).matchAll(new RegExp(String.raw`\b${field}\s*:\s*([^,\n]+)`, 'g'))]
+    .map((m) => (m[1] ?? '').trim().replace(/[\s;}]+$/, ''))
+    .filter((value) => !allowed.includes(value));
+}
+
+/** A type in an interface, a kind row in the declared field table, and the structural zero itself. */
+const TAX_MINOR_ALLOWED = ['string', "'structural-zero'", 'POS_SALE_TAX_MINOR', "'0'"];
+/** The field's type, its kind row, and the walk-in a till sale is. */
+const CUSTOMER_ID_ALLOWED = ['null', 'string | null', "'identity'"];
+
 describe('T-12 — OD-03: no tax element anywhere in S7', () => {
   it('fires on a planted tax element, and not on the OD-03 comment', () => {
     expect(taxIdentifiers('const body = { taxAmount: "0" };')).toEqual(['taxAmount']);
@@ -56,12 +133,30 @@ describe('T-12 — OD-03: no tax element anywhere in S7', () => {
     expect(taxIdentifiers('const syntax = 1;')).toEqual([]);
   });
 
-  it('no S7 web file, phase3-api.ts included, names a tax element', () => {
+  it('no S7 SCREEN names a tax element', () => {
+    const files = s7Sources();
+    // Not vacuous: the screens are what this claim is about, and there are many.
+    const screens = Object.entries(files).filter(([path]) => path.endsWith('.tsx'));
+    expect(screens.length).toBeGreaterThan(10);
+    const hits = screens.flatMap(([path, src]) => taxIdentifiers(src).map((t) => `${path}: ${t}`));
+    expect(hits).toEqual([]);
+  });
+
+  it('no S7 client library names a tax POLICY, and the one tax field it may name is the structural zero', () => {
     const files = s7Sources();
     expect(Object.keys(files)).toContain('apps/web/src/lib/phase3-api.ts');
-    const hits = Object.entries(files).flatMap(([path, src]) => taxIdentifiers(src).map((t) => `${path}: ${t}`));
-    expect(hits).toEqual([]);
     expect(files['apps/web/src/lib/phase3-api.ts']).not.toMatch(/taxAmount/);
+    const libraries = Object.entries(files).filter(([path]) => !path.endsWith('.tsx'));
+    // Every tax identifier a non-rendering source names must be `taxMinor` —
+    // the one position `SaleCommitSchema` requires. A rate, an exemption, a
+    // threshold or a jurisdiction is a POLICY, and `OD-03` is OPEN.
+    const named = libraries.flatMap(([path, src]) => taxIdentifiers(withoutDenylists(src)).map((t) => `${path}: ${t}`));
+    expect(named.filter((hit) => !hit.endsWith(': taxMinor'))).toEqual([]);
+    // And the only value it is ever set from is the named constant. A
+    // `taxMinor` computed, read off an answer or passed through is caught here
+    // even though the server's `z.literal` would refuse it too.
+    const assigned = libraries.flatMap(([path, src]) => valuesUnder(src, 'taxMinor', TAX_MINOR_ALLOWED).map((value) => `${path}: ${value}`));
+    expect(assigned).toEqual([]);
   });
 
   it('the text rule fires on a planted value, and not on an ordinary word', () => {
@@ -93,7 +188,42 @@ describe('T-12 — OD-03: no tax element anywhere in S7', () => {
         .map(([key]) => `${locale}: ${key}`),
     );
     expect(catalogHits).toEqual([]);
-    const sourceHits = Object.entries(s7Sources()).filter(([, src]) => /customer/i.test(stripTsComments(src)));
-    expect(sourceHits.map(([path]) => path)).toEqual([]);
+    // No SCREEN names a customer: the screen that names one ships with the
+    // customers slice, and until then no merchant surface offers the idea.
+    const screens = Object.entries(s7Sources()).filter(([path]) => path.endsWith('.tsx'));
+    expect(screens.length).toBeGreaterThan(10);
+    expect(screens.filter(([, src]) => /customer/i.test(stripTsComments(src))).map(([path]) => path)).toEqual([]);
+  });
+
+  it('a client library may carry the walk-in customerId, and may set it from nothing but null', () => {
+    const libraries = Object.entries(s7Sources()).filter(([path]) => !path.endsWith('.tsx'));
+    expect(libraries.length).toBeGreaterThan(2);
+    // `SaleCommitSchema` requires `customerId`, and `null` IS the walk-in a
+    // till sale is. Any other value would be a POS screen naming a buyer,
+    // which would also need `receivables.view` and a customer read that P4-S3
+    // does not own.
+    const assigned = libraries.flatMap(([path, src]) => valuesUnder(src, 'customerId', CUSTOMER_ID_ALLOWED).map((value) => `${path}: ${value}`));
+    expect(assigned).toEqual([]);
+    // And no other customer vocabulary leaks into a library either: a name, a
+    // balance, a credit limit or a list is the customers slice's, not this one's.
+    const other = libraries.flatMap(([path, src]) =>
+      [...stripTsComments(src).matchAll(/\b[Cc]ustomer(\w*)/g)].map((m) => `${path}: customer${m[1] ?? ''}`).filter((hit) => !hit.endsWith(': customerId')),
+    );
+    expect(other).toEqual([]);
+  });
+
+  it('the two library rules fire on a planted policy, a planted figure and a planted buyer', () => {
+    // A POLICY, named outside a denylist: caught.
+    expect(taxIdentifiers(withoutDenylists('const r = { taxRate: "0.16" };'))).toEqual(['taxRate']);
+    expect(taxIdentifiers(withoutDenylists('const r = { taxExemptionId: x };'))).toEqual(['taxExemptionId']);
+    // The same words INSIDE the denylist: not a policy, and excised.
+    expect(taxIdentifiers(withoutDenylists("export const FORBIDDEN_REQUEST_FIELDS: readonly string[] = ['taxRate', 'taxExempt'];\n"))).toEqual([]);
+    // A figure put under `taxMinor`, and a buyer put under `customerId`.
+    expect(valuesUnder('const b = { taxMinor: cart.taxMinor };', 'taxMinor', TAX_MINOR_ALLOWED)).toEqual(['cart.taxMinor']);
+    expect(valuesUnder('const b = { customerId: chosen.id };', 'customerId', CUSTOMER_ID_ALLOWED)).toEqual(['chosen.id']);
+    // And the allowed spellings really are allowed, so the filter is not
+    // doing the whole job on its own.
+    expect(valuesUnder('const b = { taxMinor: POS_SALE_TAX_MINOR, customerId: null };', 'taxMinor', TAX_MINOR_ALLOWED)).toEqual([]);
+    expect(valuesUnder('const b = { taxMinor: POS_SALE_TAX_MINOR, customerId: null };', 'customerId', CUSTOMER_ID_ALLOWED)).toEqual([]);
   });
 });

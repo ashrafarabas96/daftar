@@ -27,6 +27,7 @@ import {
   truthTables,
 } from '../../scripts/guards/inventory-writer-authority';
 import { PHASE2_PREFIX_END } from '../../scripts/phase2-prefix';
+import { PHASE4_INHERITED_PREFIX_END } from '../../scripts/phase4-prefix';
 import { deliveredFiles } from '../helpers/delivered-files';
 import { P3C_RELATIONS } from '../helpers/p3c-migrations';
 
@@ -75,12 +76,41 @@ function appFiles(): Record<string, string> {
 
 // ── The shared discovery ─────────────────────────────────────────────────────
 describe('the Phase 3 surface, discovered by migration position (A-18(a), TL-10)', () => {
-  it('the prefix complement equals "created by a file after 0052" on the real tree: 47 relations (plus the corrective ones), the five escapees among them', () => {
+  it('the prefix complement equals "created by a file after 0052" on the real tree, and the accepted prefix’s half of it is 47 relations (plus the corrective ones), the five escapees among them', () => {
     const byComplement = discoverPhase3Relations(schema());
     const byPosition = discoverPhase3RelationsByPosition(migrations());
+    // The two discoveries agree over the WHOLE complement, whichever phase
+    // created a relation: that equivalence is the property A-18(a)/TL-10 buys
+    // and it is NOT scoped.
     expect(byComplement).toEqual(byPosition);
+    /**
+     * P4-AL-88. The COUNT was over the whole complement, which is the
+     * complement of the accepted PHASE 2 prefix — so it counts Phase 3 AND
+     * every phase after it, and the first later-phase relation makes it red
+     * although nothing Phase 3 built changed
+     * (`[[daftar-a-closure-rule-is-not-an-invariant]]`). Diagnosed rather
+     * than assumed: with one synthetic successor file carrying two relations
+     * the complement is 50 where the literal says 48, and the proof below
+     * plants exactly that.
+     *
+     * So the count is taken over the accepted INHERITED prefix's half —
+     * the relations a file at or before `PHASE4_INHERITED_PREFIX_END` creates,
+     * `0000`-`0073` being frozen byte for byte by P4-AL-85 — and the
+     * complement is asserted to PARTITION into that half and the files after
+     * it, so nothing escapes between the two claims.
+     */
+    const byPositionInPrefix = discoverPhase3RelationsByPosition(
+      Object.fromEntries(Object.entries(migrations()).filter(([f]) => f <= PHASE4_INHERITED_PREFIX_END)),
+    );
+    const beyondPrefix = discoverPhase3RelationsByPosition(Object.fromEntries(Object.entries(migrations()).filter(([f]) => f > PHASE4_INHERITED_PREFIX_END)));
     // Phase 3 corrective (0072, TD-16): plus exactly purchase_residue_write_offs.
-    expect(byComplement).toHaveLength(47 + P3C_RELATIONS.length);
+    expect(byPositionInPrefix).toHaveLength(47 + P3C_RELATIONS.length);
+    expect(
+      byPositionInPrefix.filter((t) => beyondPrefix.includes(t)),
+      'the two halves are disjoint',
+    ).toEqual([]);
+    expect([...new Set([...byPositionInPrefix, ...beyondPrefix])].sort(), 'and together they are the whole complement').toEqual(byComplement);
+    for (const t of P3C_RELATIONS) expect(byPositionInPrefix, t).toContain(t);
     for (const t of P3C_RELATIONS) expect(byComplement, t).toContain(t);
     for (const t of ESCAPED) {
       expect(byComplement, t).toContain(t);
@@ -109,6 +139,88 @@ describe('A-18(a) — G-3 watches every Phase 3 relation; the names only choose 
     // Every Phase 3 relation is watched by exactly one of the two halves.
     const supplier = discoverSupplierTables(schema());
     for (const t of discoverPhase3Relations(schema())) expect([inventory.includes(t), supplier.includes(t)].filter(Boolean), t).toHaveLength(1);
+  });
+
+  /**
+   * P4-AL-88. The partition above is pinned over `discoverPhase3Relations`,
+   * which is the complement of the accepted Phase 2 prefix — so it covers
+   * Phase 4's relations as well, and the partition has to survive them. It
+   * does, BY CONSTRUCTION rather than by luck, and this proves it rather
+   * than asserting it:
+   *
+   *   `discoverInventoryTables` = `INVENTORY_TABLE_NAME` ∪
+   *                              (complement \ `SUPPLIER_TABLE_NAME`)
+   *   `discoverSupplierTables`  = `SUPPLIER_TABLE_NAME`
+   *
+   * so a relation in the complement is in the supplier arm exactly when its
+   * name matches `SUPPLIER_TABLE_NAME` and in the inventory arm exactly when
+   * it does not — one arm, always. The two NAME vocabularies are disjoint as
+   * well (`stock_*`/`negative_*`/`inventory_*` against
+   * `suppliers`/`supplier_*`/`purchases`/`purchase_*`/`payment_method*`), so
+   * a relation the Phase 2 prefix DID create cannot be in both either.
+   *
+   * The third arm (`discoverSalesTables`, anchored on the inherited prefix)
+   * is a set BESIDE the partition and takes nothing from it, which is the
+   * other half of what `:108-111` pins. So this site is NOT changed.
+   */
+  it('P4-AL-88 proof: a successor file grows the complement but not the accepted prefix’s half, and the half is still red when the prefix itself changes', () => {
+    // The DIAGNOSIS, reproduced: one synthetic file after the accepted
+    // inherited prefix, carrying two relations. Nothing is written to disk —
+    // the successor exists only in this in-memory migration map.
+    const real = migrations();
+    const successor = `${String(Number(PHASE4_INHERITED_PREFIX_END.slice(0, 4)) + 2).padStart(4, '0')}_forward_scope_probe.sql`;
+    const withSuccessor = {
+      ...real,
+      [successor]: 'CREATE TABLE p4al88_probe_head (id UUID PRIMARY KEY);\nCREATE TABLE p4al88_probe_line (id UUID PRIMARY KEY);\n',
+    };
+    const inPrefix = (m: Record<string, string>): string[] =>
+      discoverPhase3RelationsByPosition(Object.fromEntries(Object.entries(m).filter(([f]) => f <= PHASE4_INHERITED_PREFIX_END)));
+    const beyond = (m: Record<string, string>): string[] =>
+      discoverPhase3RelationsByPosition(Object.fromEntries(Object.entries(m).filter(([f]) => f > PHASE4_INHERITED_PREFIX_END)));
+
+    // The whole complement GROWS by the successor's two relations — which is
+    // exactly what made the old count red.
+    const complementBefore = discoverPhase3Relations(Object.values(real).join('\n'));
+    const complementAfter = discoverPhase3Relations(Object.values(withSuccessor).join('\n'));
+    expect(complementAfter.length).toBe(complementBefore.length + 2);
+    // The accepted prefix's half does NOT grow: the scoped count is stable.
+    expect(inPrefix(withSuccessor)).toEqual(inPrefix(real));
+    expect(inPrefix(withSuccessor)).toHaveLength(47 + P3C_RELATIONS.length);
+    // And the partition still covers the grown complement.
+    expect(beyond(withSuccessor)).toContain('p4al88_probe_head');
+    expect([...new Set([...inPrefix(withSuccessor), ...beyond(withSuccessor)])].sort()).toEqual(complementAfter);
+
+    // RED, the other direction: the scoped count is not a rubber stamp. A
+    // relation added to a file INSIDE the accepted prefix lands in the scoped
+    // half and breaks the count, which is the protection the old assertion
+    // bought and scoping must not have dropped.
+    const tampered = {
+      ...real,
+      [PHASE4_INHERITED_PREFIX_END]: `${real[PHASE4_INHERITED_PREFIX_END] ?? ''}\nCREATE TABLE p4al88_probe_inside_prefix (id UUID PRIMARY KEY);\n`,
+    };
+    expect(inPrefix(tampered)).toHaveLength(47 + P3C_RELATIONS.length + 1);
+    expect(inPrefix(tampered)).toContain('p4al88_probe_inside_prefix');
+  });
+
+  it('P4-AL-88: the partition survives a relation no accepted prefix creates — proved on planted Phase 4 relations', () => {
+    // A planted relation of each kind: one that no vocabulary names, one the
+    // supplier vocabulary names, one the inventory vocabulary names.
+    const planted = ['customers', 'invoices', 'invoice_items', 'customer_contacts', 'invoice_sequences', 'supplier_statements', 'stock_reservations'];
+    const sql = `${schema()}\n${planted.map((t) => `CREATE TABLE ${t} (id UUID PRIMARY KEY);`).join('\n')}`;
+    const inventory = discoverInventoryTables(sql);
+    const supplier = discoverSupplierTables(sql);
+    const complement = discoverPhase3Relations(sql);
+    // Each planted relation is in the complement, and in exactly one arm.
+    for (const t of planted) {
+      expect(complement, t).toContain(t);
+      expect([inventory.includes(t), supplier.includes(t)].filter(Boolean), t).toHaveLength(1);
+    }
+    // And the whole complement, planted relations included, still partitions.
+    for (const t of complement) expect([inventory.includes(t), supplier.includes(t)].filter(Boolean), t).toHaveLength(1);
+    // The two NAME vocabularies are themselves disjoint, which is why no
+    // relation can land in both arms whatever prefix created it.
+    for (const t of [...planted, ...complement, 'suppliers', 'purchases', 'stock_movements', 'payment_methods'])
+      expect(INVENTORY_TABLE_NAME.test(t) && SUPPLIER_TABLE_NAME.test(t), t).toBe(false);
   });
 
   it('is clean on the real tree', () => {

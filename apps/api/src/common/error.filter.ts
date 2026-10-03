@@ -7,6 +7,13 @@ import { RateLimitError, RateLimiterUnavailableError } from '../infra/redis';
 import { getContext } from '../infra/request-context';
 import type { Logger } from '../infra/logger';
 import { inventoryRefusal, parseDatabaseInventoryCode } from '../modules/inventory/inventory-errors';
+import {
+  isSellingCode,
+  isSellingInternalInvariant,
+  parseDatabaseSellingCode,
+  parseDatabaseSellingInternalCode,
+  sellingRefusal,
+} from '../modules/selling/selling-errors';
 
 /**
  * Error architecture (§29): the backend returns a STABLE ERROR CODE + requestId
@@ -106,6 +113,58 @@ export class GlobalExceptionFilter implements ExceptionFilter {
       if (code !== null && P3_S3_INVENTORY_CODES.has(code)) {
         const e = inventoryRefusal(code);
         body(e.code, e.message, e.httpStatus, e.details);
+        return;
+      }
+    }
+    // P4-S2 (TL-P4-S2-R5). The KNOWN Phase 4 selling surface, in two halves,
+    // and NEITHER of them is an authorization denial.
+    //
+    // (A) A PUBLIC selling code — `sale.*`, `invoice.*`, `customer.*` — gets
+    //     the status the stable registry already assigns it, through
+    //     `sellingRefusal`, the one selling mapping. There is no second
+    //     status table here on purpose: the registry classifies idempotency
+    //     conflicts as 409, current-state conflicts by their own entry,
+    //     payload problems as 400/422, permission problems as 403 and a
+    //     missing target as 404, so those come out right by construction. A
+    //     code whose registered status is wrong is fixed in the registry.
+    //
+    //     The services translate these themselves; this catches the ones a
+    //     trigger raises on a path that does not — the `sale.immutable` and
+    //     `invoice.immutable` guards, `customer.not_deletable` — so the typed
+    //     code and its status still reach the client.
+    //
+    // (B) An INTERNAL Phase 4 invariant — `selling.*` — is a violated
+    //     structural law, NOT a merchant refusal and not an authorization
+    //     denial: «An internal invariant failure is not an authorization
+    //     denial.» It becomes 500 with the generic body, and the invariant's
+    //     name goes to the LOG beside the request id, where the engineer who
+    //     has to fix it is reading. The registry is explicit (there is no
+    //     `selling.*` wildcard) because most `selling.*` raises are
+    //     migration-time end-state assertions no request can reach.
+    //
+    //     The body carries the generic envelope alone — `INTERNAL_ERROR`, the
+    //     safe sentence and the request id, with NO `details`. SQL, the
+    //     routine's message after the colon, an amount, a journal entry id,
+    //     an assertion body and a stack never leave the process, and the
+    //     invariant vocabulary is not part of the merchant contract either:
+    //     no `error.selling.*` entry exists in any of the three catalogues,
+    //     so a client that received one could render nothing from it.
+    //
+    // Both sit BEFORE the historical `P0001` fallback and change nothing
+    // about it: an UNKNOWN `P0001` is not redesigned here (it keeps the
+    // accepted Phase 1-3 rendering until it is separately audited), and
+    // `42501` is still 403.
+    if (pg.code === 'P0001') {
+      const selling = parseDatabaseSellingCode(exception);
+      if (selling !== null && isSellingCode(selling)) {
+        const e = sellingRefusal(selling);
+        body(e.code, e.message, e.httpStatus, e.details);
+        return;
+      }
+      const invariant = parseDatabaseSellingInternalCode(exception);
+      if (invariant !== null && isSellingInternalInvariant(invariant)) {
+        this.logger.error({ requestId, invariant }, 'phase 4 selling invariant violated');
+        body('INTERNAL_ERROR', 'Internal error', HttpStatus.INTERNAL_SERVER_ERROR);
         return;
       }
     }

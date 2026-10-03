@@ -98,13 +98,76 @@ export type InventoryS6OperationCode =
  */
 export type InventoryCorrectiveOperationCode = 'purchase.write_off_residue';
 
+/**
+ * The four operation kinds P4-S1 registers (lock P4-AL-39, gap G-5).
+ *
+ * A customer write needs a signed server decision like every other Phase 4
+ * write: `P4-AL-38` gives `daftar_app` no DML on any Phase 4 table, and
+ * `P4-AL-39` requires every Phase 4 definer routine to verify one. A customer
+ * posts nothing to the ledger, so the assertion it verifies is the `invctl/1`
+ * inventory assertion rather than the accounting one — by elimination, and
+ * following the P3-S4 SUPPLIER precedent exactly: a customer is the mirror of a
+ * supplier, business-wide master data shared by every branch.
+ *
+ * `customer.<verb>`, singular first segment, because the registry grammar
+ * `^[a-z]+(\.[a-z_]+)+$` (`0054:53`, duplicated at `0054:229`) admits no
+ * underscore in the first segment — the same constraint that made P3-S6 write
+ * `payment.<verb>_method`. The PERMISSION keys are plural (`customers.manage`,
+ * P4-AL-36); an operation code and a permission key are different namespaces
+ * with different grammars, and P3-S4 already pairs `supplier.create` with
+ * `suppliers.manage`.
+ *
+ * Reactivation is its own kind rather than a direction flag, as P3-S4 ruled for
+ * the supplier (TL-3).
+ */
+export type InventoryP4S1OperationCode = 'customer.create' | 'customer.update' | 'customer.archive' | 'customer.reactivate';
+
+/**
+ * The ONE operation kind P4-S2 registers (lock P4-AL-28, P4-AL-29; plan §6
+ * S2 row).
+ *
+ * `sale.*` and `customer.*` are the Phase 4 namespaces, and the first segment
+ * may hold no underscore: `op_code TEXT PRIMARY KEY CHECK (op_code ~
+ * '^[a-z]+(\.[a-z_]+)+$')` (`0054:53`), with the SAME regex inside the frozen
+ * body of `inventory_payload_digest` (`0054:229`). Widening either is
+ * forbidden by P4-AL-27 and P4-AL-29, so the namespace is what changes.
+ *
+ * `sale.void` and `sale.return` are deliberately ABSENT. They belong to P4-S6
+ * and P4-S5, and this file's own rule says why: "a kind listed here without a
+ * routine would be an authority nothing refuses". `TL-P4-S1-R1` has just ruled
+ * on the same mistake one layer up, for an accounting source type.
+ */
+export type InventoryP4S2OperationCode = 'sale.commit';
+
+/**
+ * The four operation kinds P4-S3 registers: the till session's two ends, and
+ * the two writes a client may make to the server-side basket (lock P4-AL-18,
+ * `OD-P4-02`, `OD-P4-09`).
+ *
+ * `pos.*` is the namespace, which is what the frozen `op_code` regex permits
+ * to change (`^[a-z]+(\.[a-z_]+)+$`, `0054:53` and the identical copy inside
+ * the frozen body of `inventory_payload_digest` at `0054:229`); widening
+ * either is forbidden by P4-AL-27 and P4-AL-29.
+ *
+ * There are exactly four because `0079` creates exactly four routines that
+ * consume an `invctl/1` assertion, and this file's standing rule is that "a
+ * kind listed here without a routine would be an authority nothing refuses".
+ * `pos.sale_commit` is deliberately ABSENT: a sale rung up on a till commits
+ * through the accepted `sale.commit` of P4-S2, which is the whole reason the
+ * basket is a separate relation from the sale.
+ */
+export type InventoryP4S3OperationCode = 'pos.session_open' | 'pos.session_close' | 'pos.cart_set_line' | 'pos.cart_remove_line';
+
 export type InventoryOperationCode =
   | InventoryS1OperationCode
   | InventoryS3OperationCode
   | InventoryS4OperationCode
   | InventoryS5OperationCode
   | InventoryS6OperationCode
-  | InventoryCorrectiveOperationCode;
+  | InventoryCorrectiveOperationCode
+  | InventoryP4S1OperationCode
+  | InventoryP4S2OperationCode
+  | InventoryP4S3OperationCode;
 
 export const INVENTORY_S1_OPERATION_CODES: readonly InventoryS1OperationCode[] = [
   'inventory.configure_product',
@@ -146,6 +209,22 @@ export const INVENTORY_S6_OPERATION_CODES: readonly InventoryS6OperationCode[] =
 
 export const INVENTORY_CORRECTIVE_OPERATION_CODES: readonly InventoryCorrectiveOperationCode[] = ['purchase.write_off_residue'];
 
+export const INVENTORY_P4_S1_OPERATION_CODES: readonly InventoryP4S1OperationCode[] = [
+  'customer.create',
+  'customer.update',
+  'customer.archive',
+  'customer.reactivate',
+];
+
+export const INVENTORY_P4_S2_OPERATION_CODES: readonly InventoryP4S2OperationCode[] = ['sale.commit'];
+
+export const INVENTORY_P4_S3_OPERATION_CODES: readonly InventoryP4S3OperationCode[] = [
+  'pos.session_open',
+  'pos.session_close',
+  'pos.cart_set_line',
+  'pos.cart_remove_line',
+];
+
 export const INVENTORY_OPERATION_CODES: readonly InventoryOperationCode[] = [
   ...INVENTORY_S1_OPERATION_CODES,
   ...INVENTORY_S3_OPERATION_CODES,
@@ -153,6 +232,9 @@ export const INVENTORY_OPERATION_CODES: readonly InventoryOperationCode[] = [
   ...INVENTORY_S5_OPERATION_CODES,
   ...INVENTORY_S6_OPERATION_CODES,
   ...INVENTORY_CORRECTIVE_OPERATION_CODES,
+  ...INVENTORY_P4_S1_OPERATION_CODES,
+  ...INVENTORY_P4_S2_OPERATION_CODES,
+  ...INVENTORY_P4_S3_OPERATION_CODES,
 ];
 
 /** The literal first line of every stream. */
@@ -267,6 +349,38 @@ const SUPPLIER_TEXT: readonly InventoryPayloadFieldSpec[] = [
   ...textWordSpecs('phone', true),
   ...textWordSpecs('email', true),
   ...textWordSpecs('tax_identifier', true),
+  ...textWordSpecs('notes', true),
+];
+
+/**
+ * The customer word groups (P4-S1, gap G-5): the SUPPLIER group of
+ * `PHASE_3_S4_CONTRACT` A-09, built from the same `textWordSpecs` binding with
+ * the same required-name / nullable-rest shape, because a customer is the
+ * mirror of a supplier. The name is required; the rest may be NULL.
+ *
+ * It mirrors FOUR of the supplier's five groups and not the fifth. The
+ * supplier's `tax_identifier` is deliberately absent, and its absence is a
+ * ruling rather than an omission: P4-AL-44 records that the registered /
+ * unregistered / exempt distinction "has no representation in the data model
+ * yet", P4-AL-45 forbids inventing one while OD-03 is open, and the accepted
+ * P4-S1 read contract states it outright — "no tax identifier and no
+ * registration flag" (`packages/shared-contracts/src/customers.ts:25-28`), so
+ * `CustomerFieldsDto` carries `name`, `phone`, `email` and `notes` and nothing
+ * else. A signed field the routine has no argument for could never be rebuilt
+ * in SQL anyway, so mirroring the fifth group would have been a stream the
+ * database cannot reproduce as well as a legal policy this slice may not
+ * invent.
+ *
+ * Also deliberately NOT here, each for the same kind of reason:
+ *   - no credit limit — `OD-P4-03` is RULED OPTION A, no limit in Phase 4;
+ *   - no balance, paid total, outstanding total or aging field — `P4-AL-06`
+ *     forbids any stored authoritative one on any Phase 4 relation, and a
+ *     signed payload field is the strongest possible form of storing one.
+ */
+const CUSTOMER_TEXT: readonly InventoryPayloadFieldSpec[] = [
+  ...textWordSpecs('name', false),
+  ...textWordSpecs('phone', true),
+  ...textWordSpecs('email', true),
   ...textWordSpecs('notes', true),
 ];
 
@@ -535,6 +649,167 @@ export const INVENTORY_PAYLOAD_SCHEMAS: Readonly<Record<InventoryOperationCode, 
     spec('released_before', 'integer'),
     spec('residue_base', 'integer'),
   ]),
+  // P4-S1 (lock P4-AL-39, gap G-5). A customer is business-wide master data and
+  // follows the P3-S4 supplier payload: the id, the optimistic revision on
+  // every edit, then the free-text word groups (`CUSTOMER_TEXT` — the supplier
+  // groups less the tax identifier P4-AL-44/45 forbid). Every field is client
+  // intent, so these kinds get NO `INVENTORY_OPERATION_INTENT_FIELDS` entry and
+  // their intent digest is the digest of the whole payload — the S4 supplier
+  // rule (A-10(b)).
+  //
+  // `customer.archive` and `customer.reactivate` have the SAME field list as
+  // each other and as `supplier.archive` / `supplier.reactivate` — one uuid and
+  // one non-nullable integer. Nothing about their shape tells them apart; the
+  // op_code line of the signed stream does, which is why reactivation is its
+  // own kind and not a direction flag (the S4 TL-3 ruling).
+  'customer.create': Object.freeze([spec('customer_id', 'uuid'), ...CUSTOMER_TEXT]),
+  'customer.update': Object.freeze([spec('customer_id', 'uuid'), spec('expected_revision', 'integer'), ...CUSTOMER_TEXT]),
+  'customer.archive': Object.freeze([spec('customer_id', 'uuid'), spec('expected_revision', 'integer')]),
+  'customer.reactivate': Object.freeze([spec('customer_id', 'uuid'), spec('expected_revision', 'integer')]),
+  // P4-S2 (docs/PHASE_4_S2_CONTRACT.md A-05): the atomic sale commit. The
+  // header binds the identities, the supplied dates, the SERVER-resolved FX
+  // snapshot and the SERVER-computed totals; the group binds one row per line.
+  //
+  // `invoice_id` is in the payload and NOT in the intent, exactly as
+  // `purchase.receive`'s `coverage_adjustment_id` is: the assertion must
+  // authorize the invoice identity the routine will write, and a
+  // server-minted UUID inside the INTENT would make two identical requests
+  // two different commands.
+  //
+  // `invoice_number_seq` is deliberately absent from both. It is allocated as
+  // `max + 1` under the sequence row's lock INSIDE the routine (P4-AL-31), so
+  // it does not exist when the assertion is minted; signing it would mean
+  // either minting inside the transaction or guessing a number.
+  //
+  // There is no cost, no value and no COGS field at any grain: the stock
+  // writer computes the value from the locked level row, and the lock's §4
+  // matrix makes a per-line cost the forbidden second truth.
+  'sale.commit': withLines(
+    [
+      spec('sale_id', 'uuid'),
+      // A STATED fact, part of the intent: `credit` or `cash` (P4-S2 D-01).
+      spec('settlement_mode', 'code'),
+      // NULL is a walk-in, admissible only for a `cash` sale.
+      spec('customer_id', 'uuid', true),
+      spec('warehouse_id', 'uuid'),
+      spec('branch_id', 'uuid'),
+      spec('invoice_id', 'uuid'),
+      spec('document_date', 'integer'),
+      spec('due_date', 'integer', true),
+      spec('currency', 'code'),
+      spec('rate_id', 'uuid', true),
+      spec('rate_r10', 'integer'),
+      spec('rate_source', 'code'),
+      spec('rate_at', 'integer'),
+      spec('subtotal_txn_minor', 'integer'),
+      spec('discount_txn_minor', 'integer'),
+      spec('tax_minor', 'integer'),
+      spec('total_txn_minor', 'integer'),
+      spec('total_base_minor', 'integer'),
+      ...textWordSpecs('notes', true),
+      spec('line_count', 'integer'),
+    ],
+    [
+      spec('line_id', 'uuid'),
+      // The STATED stock identity, and the whole of what a line may state
+      // about it: the product, plus the merchant variant only for a product
+      // that has them. The hidden base variant never leaves the server
+      // (P3-AL-52), which is why a simple product's line carries a NULL
+      // variant and the server resolves the stock key from the product.
+      spec('product_id', 'uuid'),
+      spec('merchant_variant_id', 'uuid', true),
+      // The RESOLVED stock key: the base variant for a simple product, the
+      // named merchant variant otherwise. Server-derived, so outside the
+      // intent — a client cannot name it and a replay cannot depend on it.
+      spec('variant_id', 'uuid'),
+      spec('qty_q4', 'integer'),
+      spec('discount_minor', 'integer'),
+      spec('unit_price_c10', 'integer'),
+      spec('net_txn_minor', 'integer'),
+      spec('base_share_minor', 'integer'),
+    ],
+  ),
+  // P4-S3 (docs/PHASE_4_S3_MIGRATION_DESIGN.md; lock P4-AL-18, OD-P4-02,
+  // OD-P4-09). Each of the four streams is the argument list of its routine in
+  // `0079`, in order and with its declared type, because the routine rebuilds
+  // the claimed digest from those arguments and the two must agree field for
+  // field:
+  //
+  //   pos_till_session_open  ARRAY['uuid','uuid','uuid','code','code','integer']
+  //   pos_till_session_close ARRAY['uuid','integer']
+  //   pos_cart_set_line      ARRAY['uuid','uuid','integer','uuid','uuid','integer','integer']
+  //   pos_cart_remove_line   ARRAY['uuid','uuid']
+  //
+  // None of the four appears in `INVENTORY_OPERATION_INTENT_FIELDS`, and that
+  // is a ruling rather than an omission. `0079` stores component 7 of the
+  // assertion itself as the session's `open_intent_sha256` /
+  // `close_intent_sha256` (`0079:836`, `0079:912`), so for these kinds the
+  // payload digest IS the idempotency proof. It may be, because none of these
+  // streams carries a server-resolved value that moves under a replay: there
+  // is no price, no total, no rate and no clock value anywhere in them. The
+  // one resolved field, the cart line's `variant_id`, is a FUNCTION of the
+  // stated product (the hidden base variant of a simple product, P3-AL-52) and
+  // resolves identically on a replay, which is exactly what a resolved
+  // catalogue price does not do — the reason `sale.commit` needs the carve-out
+  // and these do not.
+  //
+  // THE ACTOR IS NOT A FIELD IN ANY OF THE FOUR, and that is `OD-P4-09`
+  // itself rather than an omission. The tenant, the business and the acting
+  // user come from the verified assertion (`inventory_verified_actor`) and
+  // never from an argument, so the user a till session belongs to is a signed
+  // fact. A `user_id` or `cashier_id` field here would offer the takeover
+  // that ruling refused as a parameter, and the database half of the same
+  // rule — `pos_cart_lines_session_actor_fk` against
+  // `pos_till_sessions_actor_uq` — would then be guarding a door whose key
+  // the caller hands it.
+  'pos.session_open': Object.freeze([
+    spec('session_id', 'uuid'),
+    spec('branch_id', 'uuid'),
+    spec('warehouse_id', 'uuid'),
+    // `pos_till_sessions_terminal_code_ck` is the registry-code regex
+    // (`0079:362`), the same one `encodeCode` enforces, so the drawer's code
+    // travels verbatim on both sides.
+    spec('terminal_code', 'code'),
+    // The routine signs `lower(p_currency_code)` while the column holds the
+    // upper-case ISO code, so the client encodes the lower-case form. A `code`
+    // field cannot be upper case: `encodeCode` would refuse it.
+    spec('currency_code', 'code'),
+    // The cash a human COUNTED in the drawer at the open, in minor units. It
+    // is inside the signed payload deliberately: a replay presenting a
+    // different float is a different command, which is what makes the figure
+    // trustworthy at all.
+    spec('opening_float_minor', 'integer'),
+  ]),
+  // The counted close, by the same argument. There is no expected-cash figure,
+  // variance or over/short in the stream, because none is stored: each is
+  // derived from this count, the opening float and the shift's cash payments,
+  // and P4-AL-06 forbids a stored authoritative one.
+  'pos.session_close': Object.freeze([spec('session_id', 'uuid'), spec('closing_count_minor', 'integer')]),
+  // The whole of what a client may say about a basket line: identities, an
+  // ordinal, a quantity and a discount REQUEST. There is no price, no line
+  // total and no tax field here because `pos_cart_set_line` has no argument
+  // for one — a forged price has nowhere to arrive.
+  'pos.cart_set_line': Object.freeze([
+    spec('session_id', 'uuid'),
+    spec('line_id', 'uuid'),
+    // The basket is append-only and ordinal-keyed with tombstones, so the
+    // ordinal is part of the signed command rather than a position the server
+    // picks.
+    spec('line_no', 'integer'),
+    spec('product_id', 'uuid'),
+    // Resolved, and non-nullable: `0079` refuses a NULL variant outright.
+    spec('variant_id', 'uuid'),
+    // The routine signs `inventory_fixed_text(p_quantity, 4)`, so the field
+    // carries the quantity × 10^4 as an exact integer — the P3-S3 `qty_q4`
+    // binding, unchanged.
+    spec('qty_q4', 'integer'),
+    // A REQUEST in the minor units of the session's currency, not a granted
+    // discount: `0079` deliberately does not cap it against a gross the
+    // basket does not store, and `sale_items_discount_ck` is where the cap
+    // lives (R-P4-S3-03).
+    spec('requested_discount_minor', 'integer'),
+  ]),
+  'pos.cart_remove_line': Object.freeze([spec('session_id', 'uuid'), spec('line_id', 'uuid')]),
 };
 
 /**
@@ -606,6 +881,42 @@ export const INVENTORY_OPERATION_INTENT_FIELDS: Readonly<Partial<Record<Inventor
   // Phase 3 corrective (0072, TD-16): the purchase, the date, the reason and
   // the stated residue; the chain point and the released base are derived.
   'purchase.write_off_residue': Object.freeze(['purchase_id', 'write_off_date', ...Array.from({ length: 8 }, (_, i) => `reason_w${i + 1}`), 'residue']),
+  // P4-S2 (docs/PHASE_4_S2_CONTRACT.md A-06): the sale commit's intent is
+  // WHAT THE CLIENT ASKED FOR and nothing else — the sale's own id, the
+  // customer, the warehouse, both supplied dates, the stated (zero) tax, the
+  // notes, and per line the line's id, its variant, its quantity and its
+  // requested discount.
+  //
+  // Everything else is server-derived and therefore OUTSIDE the fingerprint:
+  // the branch (resolved from the warehouse), the invoice id (minted), the
+  // currency and the whole FX snapshot (read from the registry), every total,
+  // and per line the resolved catalogue price, the net and the base share. A
+  // replay must be the same command even though the catalogue price, the rate
+  // and the stock have all moved since — and a fingerprint that covered the
+  // resolved price would make every price change a false conflict.
+  //
+  // `tax_minor` IS intent, because `OD-03` is open and the client states the
+  // zero rather than the server defaulting it. `document_date` and `due_date`
+  // ARE intent, because `[[daftar-a-command-must-not-read-the-clock]]`: a
+  // date a fingerprint covers is supplied by the caller and is part of the
+  // intent, and no layer — DTO, schema, service, engine or trusted database
+  // command — resolves one from a clock.
+  'sale.commit': Object.freeze([
+    'sale_id',
+    'settlement_mode',
+    'customer_id',
+    'warehouse_id',
+    'document_date',
+    'due_date',
+    'tax_minor',
+    ...Array.from({ length: 8 }, (_, i) => `notes_w${i + 1}`),
+    'line_count',
+    'line_id',
+    'product_id',
+    'merchant_variant_id',
+    'qty_q4',
+    'discount_minor',
+  ]),
 });
 
 /** The intent schema of an operation kind: its schema with the server-derived fields removed, header and group alike. */
@@ -905,5 +1216,67 @@ export function dissociateWarehouseBranchPayload(input: WarehouseBranchPayloadIn
   return buildInventoryPayload('structure.dissociate_warehouse_branch', input.tenantId, input.businessId, [
     { kind: 'uuid', value: input.warehouseId },
     { kind: 'uuid', value: input.branchId },
+  ]);
+}
+
+// ── P4-S3: the two till-session builders (`0079` §6; OD-P4-09) ────────────
+//
+// Neither input carries an actor, and neither can: the business, the tenant
+// and the ACTOR come from the verified `invctl/1` assertion inside the
+// routine, so the user a till session belongs to is a signed server decision
+// and not a parameter. `tenantId` and `businessId` are here because every
+// `invpl/1` stream binds its scope in the preimage, not because a caller
+// chooses them — they come from the authorized membership.
+
+export interface TillSessionOpenPayloadInput {
+  readonly tenantId: string;
+  readonly businessId: string;
+  readonly sessionId: string;
+  readonly branchId: string;
+  readonly warehouseId: string;
+  /** The physical till, held to the `code` grammar by the caller's schema and by the column's own CHECK. */
+  readonly terminalCode: string;
+  /** The session's ISO currency, UPPER-CASE as the column stores it. It is lower-cased here, and only here. */
+  readonly currencyCode: string;
+  /** The cash a human COUNTED in the drawer at the start of the shift, in minor units. */
+  readonly openingFloatMinor: bigint;
+}
+
+/**
+ * `pos.session_open`: session_id, branch_id, warehouse_id, terminal_code,
+ * currency_code (LOWER-CASED), opening_float_minor.
+ *
+ * The lower-casing is the one transformation in this builder and it is
+ * required, not stylistic: the `code` field type is `^[a-z][a-z0-9_]{0,31}$`
+ * (`0054:206`) and an ISO currency code is upper-case, so the routine hashes
+ * `lower(p_currency_code)` while the column stores `upper(p_currency_code)`.
+ * A builder that hashed the upper-case form would mint a digest the routine
+ * cannot reproduce, and every call would be
+ * `inventory.assertion_payload_mismatch`.
+ */
+export function tillSessionOpenPayload(input: TillSessionOpenPayloadInput): InventoryPayload {
+  return buildInventoryPayload('pos.session_open', input.tenantId, input.businessId, [
+    { kind: 'uuid', value: input.sessionId },
+    { kind: 'uuid', value: input.branchId },
+    { kind: 'uuid', value: input.warehouseId },
+    { kind: 'code', value: input.terminalCode },
+    { kind: 'code', value: input.currencyCode.toLowerCase() },
+    { kind: 'integer', value: input.openingFloatMinor },
+  ]);
+}
+
+export interface TillSessionClosePayloadInput {
+  readonly tenantId: string;
+  readonly businessId: string;
+  readonly sessionId: string;
+  /** The cash a human COUNTED in the drawer at the end of the shift, in minor units. */
+  readonly closingCountMinor: bigint;
+}
+
+/** `pos.session_close`: session_id, closing_count_minor. */
+export function tillSessionClosePayload(input: TillSessionClosePayloadInput): InventoryPayload {
+  return buildInventoryPayload('pos.session_close', input.tenantId, input.businessId, [
+    { kind: 'uuid', value: input.sessionId },
+    { kind: 'integer', value: input.closingCountMinor },
   ]);
 }

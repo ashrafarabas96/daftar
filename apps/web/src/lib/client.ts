@@ -160,8 +160,24 @@ export async function ensureSession(): Promise<boolean> {
  * P3-S7 contract reads them (A-12(2), Annex R #12). An `accounting.*` code
  * travels as `details.code`, and only under the `ACCOUNTING_REFUSED` envelope
  * code; no payload carries an `accountingCode`.
+ *
+ * `sellingCode` was MISSING from this list until P4-S3, and its absence made
+ * every `sale.*` and `pos.*` refusal render the generic "your data is safe"
+ * fallback: the API sets `details.sellingCode` on all six status arms
+ * (`apps/api/src/modules/selling/selling-errors.ts:473`), `domainCode`
+ * returned null because no field here named it, `refusalCode` then fell back
+ * to the envelope code, and `error.CONFLICT` is not a catalogue key. So the
+ * whole `error.sale.*` family shipped with P4-S2 and the whole `error.pos.*`
+ * family were dead strings — present, translated, asserted by a guard that
+ * reads the catalogues, and unreachable on a screen.
+ *
+ * That is why `apps/web/test/domain-code-fields.test.ts` derives this list's
+ * required contents from the API's own detail-field names rather than checking
+ * the one code that was missing. A list of strings kept by hand beside a
+ * growing set of namespaces goes stale silently, and the only symptom is a
+ * cashier being told nothing.
  */
-const DOMAIN_CODE_FIELDS = ['inventoryCode', 'purchasingCode', 'paymentMethodCode', 'catalogCode'] as const;
+const DOMAIN_CODE_FIELDS = ['inventoryCode', 'purchasingCode', 'paymentMethodCode', 'catalogCode', 'sellingCode'] as const;
 
 export class ApiError extends Error {
   constructor(

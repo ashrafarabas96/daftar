@@ -32,6 +32,7 @@ import {
   supportedCountries,
   transliterateArabic,
   validateSlug,
+  type Permission,
 } from '../src';
 
 describe('currency registry (financial facts only)', () => {
@@ -308,7 +309,7 @@ describe('RBAC evaluator (§25–27: owner authority = trusted role identity)', 
     const notOwner = TrustedRoleSet.fromPersistence([{ key: 'manager', isSystem: true, permissions: new Set() }]);
     expect(hasPermission(notOwner, 'member.manage')).toBe(false);
   });
-  it('cashier is catalog.view only', () => {
+  it('cashier holds catalog.view and no catalog or member authority beyond it', () => {
     const cashier = TrustedRoleSet.fromPersistence([{ key: 'cashier', isSystem: false, permissions: new Set(BUILTIN_ROLE_PERMISSIONS.cashier) }]);
     expect(hasPermission(cashier, 'catalog.view')).toBe(true);
     expect(hasPermission(cashier, 'catalog.create')).toBe(false);
@@ -407,41 +408,70 @@ describe('P2-S1 accounting permissions (directive §17, §18, §23)', () => {
   });
 });
 
-describe('P3-S1 Phase 3 permissions (P3-AL-38, P3-AL-53)', () => {
-  const ORDINARY = ['inventory.view', 'purchases.view', 'suppliers.view'] as const;
-  const SENSITIVE = [
-    'inventory.adjust',
-    'inventory.transfer',
-    'inventory.stocktake',
-    'purchases.manage',
-    'purchases.receive',
-    'purchases.return',
-    'suppliers.manage',
-    'suppliers.pay',
-  ] as const;
-  const PHASE_3: readonly string[] = [...ORDINARY, ...SENSITIVE];
-  const isPhase3 = (p: string): boolean => PHASE_3.includes(p);
+/**
+ * The twelve Phase 4 keys (P4-AL-36), copied from the lock and NOT read back
+ * from the registry, so a key added to the registry without being added to the
+ * lock's list is not silently absorbed by any assertion that uses `isPhase4`.
+ */
+const PHASE_4_KEYS: readonly string[] = [
+  'sales.view',
+  'sales.create',
+  'sales.void',
+  'sales.return',
+  'sales.discount',
+  'customers.view',
+  'customers.manage',
+  'payments.collect',
+  'payments.reverse',
+  'refunds.approve',
+  'receivables.view',
+  'installments.manage',
+];
+const isPhase4 = (p: string): boolean => PHASE_4_KEYS.includes(p);
 
-  /** The Manager's accepted Phase 1 set, byte for byte and in order (P3-AL-38 precision note). */
-  const MANAGER_PHASE_1 = [
-    'business.view',
-    'branch.view',
-    'branch.manage',
-    'warehouse.view',
-    'warehouse.manage',
-    'member.view',
-    'member.invite',
-    'role.view',
-    'role.assign',
-    'catalog.view',
-    'catalog.create',
-    'catalog.update',
-    'catalog.archive',
-    'category.manage',
-    'media.manage',
-    'settings.view',
-    'subscription.view',
-  ];
+/**
+ * P3-S1's own lists, hoisted to module scope in P4-S1 so the Phase 4 block can
+ * reuse the same `isPhase3` predicate for its totality check. Contents
+ * unchanged, byte for byte.
+ */
+const P3_ORDINARY = ['inventory.view', 'purchases.view', 'suppliers.view'] as const;
+const P3_SENSITIVE = [
+  'inventory.adjust',
+  'inventory.transfer',
+  'inventory.stocktake',
+  'purchases.manage',
+  'purchases.receive',
+  'purchases.return',
+  'suppliers.manage',
+  'suppliers.pay',
+] as const;
+const PHASE_3: readonly string[] = [...P3_ORDINARY, ...P3_SENSITIVE];
+const isPhase3 = (p: string): boolean => PHASE_3.includes(p);
+
+/** The Manager's accepted Phase 1 set, byte for byte and in order (P3-AL-38 precision note). */
+const MANAGER_PHASE_1 = [
+  'business.view',
+  'branch.view',
+  'branch.manage',
+  'warehouse.view',
+  'warehouse.manage',
+  'member.view',
+  'member.invite',
+  'role.view',
+  'role.assign',
+  'catalog.view',
+  'catalog.create',
+  'catalog.update',
+  'catalog.archive',
+  'category.manage',
+  'media.manage',
+  'settings.view',
+  'subscription.view',
+];
+
+describe('P3-S1 Phase 3 permissions (P3-AL-38, P3-AL-53)', () => {
+  const ORDINARY = P3_ORDINARY;
+  const SENSITIVE = P3_SENSITIVE;
 
   it('registers exactly the eleven Phase 3 keys, and no other key under their prefixes', () => {
     for (const key of PHASE_3) expect(isPermission(key)).toBe(true);
@@ -465,13 +495,26 @@ describe('P3-S1 Phase 3 permissions (P3-AL-38, P3-AL-53)', () => {
   });
 
   it('manager: the accepted Phase 1 set survives untouched, in order, with the Phase 3 keys appended', () => {
-    expect(BUILTIN_ROLE_PERMISSIONS.manager.filter((p) => !isPhase3(p))).toEqual(MANAGER_PHASE_1);
+    // P4-S1 (P4-AL-35, plan action 6): this equality was `filter((p) => !isPhase3(p))`,
+    // which put every LATER phase's keys inside the Phase 1 list and broke on the
+    // first Phase 4 default. Re-expressed PER PHASE, exactly as Phase 3 itself did
+    // for its own keys: the claim is still "the accepted Phase 1 list, byte for
+    // byte and in order", and it is NOT loosened — the Phase 4 keys are not
+    // dropped from scrutiny, they are asserted by exact equality in the P4-S1
+    // block below, which also proves the registry holds no key belonging to no
+    // phase at all. A key under a prefix no phase owns still lands in this filter
+    // and still turns this assertion red.
+    expect(BUILTIN_ROLE_PERMISSIONS.manager.filter((p) => !isPhase3(p) && !isPhase4(p))).toEqual(MANAGER_PHASE_1);
     expect(BUILTIN_ROLE_PERMISSIONS.manager.slice(0, MANAGER_PHASE_1.length)).toEqual(MANAGER_PHASE_1);
   });
 
   it('cashier: no Phase 3 key', () => {
+    // P4-S1: `toEqual(['catalog.view'])` became `filter((p) => !isPhase4(p))` for
+    // the same reason and with the same guarantee — the cashier's non-Phase-4 set
+    // is still exactly `['catalog.view']`, so a Phase 3 key, or a key of no phase,
+    // appearing on the cashier is still red here.
     expect(BUILTIN_ROLE_PERMISSIONS.cashier.some((p) => isPhase3(p))).toBe(false);
-    expect(BUILTIN_ROLE_PERMISSIONS.cashier).toEqual(['catalog.view']);
+    expect(BUILTIN_ROLE_PERMISSIONS.cashier.filter((p) => !isPhase4(p))).toEqual(['catalog.view']);
   });
 
   it('no non-owner built-in role holds a sensitive Phase 3 key', () => {
@@ -487,6 +530,177 @@ describe('P3-S1 Phase 3 permissions (P3-AL-38, P3-AL-53)', () => {
     const manager = TrustedRoleSet.fromPersistence([{ key: 'manager', isSystem: true, permissions: new Set(BUILTIN_ROLE_PERMISSIONS.manager) }]);
     expect(beyondGrantAuthority(manager, ['inventory.view'])).toEqual([]);
     expect(beyondGrantAuthority(manager, ['inventory.adjust', 'suppliers.pay'])).toEqual(['inventory.adjust', 'suppliers.pay']);
+  });
+});
+
+describe('P4-S1 Phase 4 permissions (P4-AL-35, P4-AL-36, P4-AL-37, OD-P4-01 OPTION A)', () => {
+  /**
+   * P4-AL-36's twelve keys with P4-AL-37's sensitivity column, copied from the
+   * lock rather than read from the registry. `PHASE_4_KEYS` above is derived
+   * from this table and asserted against it, so the two cannot drift.
+   */
+  const LOCK: readonly (readonly [string, 'ordinary' | 'sensitive'])[] = [
+    ['sales.view', 'ordinary'],
+    ['sales.create', 'ordinary'],
+    ['sales.void', 'sensitive'],
+    ['sales.return', 'sensitive'],
+    ['sales.discount', 'sensitive'],
+    ['customers.view', 'ordinary'],
+    ['customers.manage', 'ordinary'],
+    ['payments.collect', 'ordinary'],
+    ['payments.reverse', 'sensitive'],
+    ['refunds.approve', 'sensitive'],
+    ['receivables.view', 'ordinary'],
+    ['installments.manage', 'sensitive'],
+  ];
+  const ORDINARY = LOCK.filter(([, l]) => l === 'ordinary').map(([k]) => k);
+  const SENSITIVE = LOCK.filter(([, l]) => l === 'sensitive').map(([k]) => k);
+
+  /** The `OD-P4-01` ruling's forbidden-as-a-default list, verbatim. */
+  const FORBIDDEN_AS_DEFAULT = ['sales.discount', 'sales.void', 'refunds.approve', 'payments.reverse', 'installments.manage'];
+
+  /** The DEFAULTS the ruling grants, by role. Not read from the registry. */
+  const MANAGER_PHASE_4 = ['sales.view', 'sales.create', 'customers.view', 'customers.manage', 'payments.collect', 'receivables.view'];
+  const CASHIER_PHASE_4 = ['sales.view', 'sales.create', 'customers.view', 'payments.collect'];
+
+  /** The accepted pre-Phase-4 built-in sets, byte for byte and in order. */
+  const MANAGER_PRE_P4 = [...MANAGER_PHASE_1, 'inventory.view', 'purchases.view', 'suppliers.view'];
+  const CASHIER_PRE_P4 = ['catalog.view'];
+
+  const sorted = (xs: readonly string[]): string[] => [...xs].sort();
+
+  it('the lock table and the shared isPhase4 predicate are the same twelve keys', () => {
+    expect(sorted(LOCK.map(([k]) => k))).toEqual(sorted(PHASE_4_KEYS));
+    expect(LOCK).toHaveLength(12);
+  });
+
+  it('registers exactly the twelve Phase 4 keys, and no other key under their prefixes', () => {
+    for (const key of PHASE_4_KEYS) expect(isPermission(key), key).toBe(true);
+    expect(sorted(PERMISSIONS.filter((p) => /^(sales|customers|payments|refunds|receivables|installments)\./.test(p)))).toEqual(sorted(PHASE_4_KEYS));
+  });
+
+  it('the registry went from 46 keys to exactly 58, and every key belongs to a phase this suite knows', () => {
+    expect(PERMISSIONS).toHaveLength(58);
+    expect(PERMISSIONS.filter((p) => !isPhase4(p))).toHaveLength(46);
+    // Totality: this is what keeps the per-phase re-expression from being a
+    // loosening. Every registered key is claimed by exactly one phase, so a key
+    // added under a prefix NO phase owns is red here even though it slips
+    // through every phase-scoped filter above.
+    const PHASE_1_2 = PERMISSIONS.filter((p) => !isPhase3(p) && !isPhase4(p));
+    const claimed = new Set([...PHASE_1_2, ...PHASE_3, ...PHASE_4_KEYS]);
+    expect(PERMISSIONS.filter((p) => !claimed.has(p))).toEqual([]);
+    expect(new Set(PERMISSIONS).size).toBe(PERMISSIONS.length);
+    // And the Phase 1/2 residue is exactly the accepted 35 keys, so "no phase
+    // owns it" cannot be laundered by calling a new key a Phase 1 key.
+    expect(PHASE_1_2).toHaveLength(35);
+  });
+
+  it('the sensitivity column matches the lock row by row: six ordinary, six sensitive', () => {
+    for (const [key, level] of LOCK) expect(isSensitivePermission(key as Permission), key).toBe(level === 'sensitive');
+    expect(sorted(SENSITIVE_PERMISSIONS.filter(isPhase4))).toEqual(sorted(SENSITIVE));
+    expect(ORDINARY).toHaveLength(6);
+    expect(SENSITIVE).toHaveLength(6);
+    // Every key the ruling forbids as a default is in fact classified sensitive.
+    for (const key of FORBIDDEN_AS_DEFAULT) expect(isSensitivePermission(key as Permission), key).toBe(true);
+  });
+
+  it('owner: all twelve, by construction of the registry and by identity', () => {
+    for (const key of PHASE_4_KEYS) expect(BUILTIN_ROLE_PERMISSIONS.owner).toContain(key);
+    const owner = TrustedRoleSet.fromPersistence([{ key: 'owner', isSystem: true, permissions: new Set() }]);
+    for (const key of PHASE_4_KEYS) expect(hasPermission(owner, key as Permission), key).toBe(true);
+  });
+
+  it('manager: the accepted pre-Phase-4 list survives untouched, in order, with exactly the six ordinary keys appended', () => {
+    // FULL exact equality on the whole array — nothing weaker than the
+    // `toEqual` this slice re-expressed, only re-expressed per phase.
+    expect([...BUILTIN_ROLE_PERMISSIONS.manager]).toEqual([...MANAGER_PRE_P4, ...MANAGER_PHASE_4]);
+    expect(BUILTIN_ROLE_PERMISSIONS.manager.filter((p) => isPhase4(p))).toEqual(MANAGER_PHASE_4);
+    expect(sorted(MANAGER_PHASE_4)).toEqual(sorted(ORDINARY));
+  });
+
+  it('cashier: the accepted ["catalog.view"] survives untouched, with exactly the four ordinary till keys appended', () => {
+    expect([...BUILTIN_ROLE_PERMISSIONS.cashier]).toEqual([...CASHIER_PRE_P4, ...CASHIER_PHASE_4]);
+    expect(BUILTIN_ROLE_PERMISSIONS.cashier.filter((p) => isPhase4(p))).toEqual(CASHIER_PHASE_4);
+    // The narrowest thing a till needs: read, sell, see the customer, take money.
+    for (const key of CASHIER_PHASE_4) expect(isSensitivePermission(key as Permission), key).toBe(false);
+    // `receivables.view` is ordinary but is the second half of a CREDIT sale
+    // (P4-AL-35), so it is a grant and not a default.
+    expect(BUILTIN_ROLE_PERMISSIONS.cashier).not.toContain('receivables.view');
+  });
+
+  /**
+   * The sensitive keys a built-in role already held when Phase 4 opened, byte
+   * for byte. `role.assign` is a SENSITIVE permission (`permissions.ts:84`) and
+   * is an ACCEPTED Phase 1 manager default (`permissions.ts:132`). That is an
+   * accepted Phase 1 decision, not something Phase 4 may reopen, and the P4-S1
+   * brief forbids altering the Phase 1 set. So the ruling's "no sensitive
+   * default" is asserted here as an EXACT equality against this inventory
+   * rather than against `[]`: a new sensitive default, in any phase, on any
+   * built-in role, is red — and the accepted Phase 1 fact stays visible instead
+   * of being silently absorbed.
+   */
+  const ACCEPTED_SENSITIVE_DEFAULTS: Record<'manager' | 'cashier', readonly string[]> = {
+    manager: ['role.assign'],
+    cashier: [],
+  };
+
+  it('OD-P4-01 OPTION A: Phase 4 adds no sensitive default to any built-in role, and the sensitive-default inventory is unchanged', () => {
+    for (const roleKey of ['manager', 'cashier'] as const) {
+      const defaults = BUILTIN_ROLE_PERMISSIONS[roleKey];
+      // (a) every key the ruling names, over the whole registry.
+      for (const key of FORBIDDEN_AS_DEFAULT) expect(defaults, `${roleKey} / ${key}`).not.toContain(key);
+      // (b) "and any other sensitive permission", for the phases that added keys
+      //     under a no-sensitive-default rule: Phase 3 (P3-AL-38) and Phase 4.
+      expect(
+        defaults.filter((p) => isSensitivePermission(p) && (isPhase3(p) || isPhase4(p))),
+        roleKey,
+      ).toEqual([]);
+      // (c) exact equality on the whole sensitive-default inventory, so a new
+      //     sensitive default under ANY prefix — including one no phase owns —
+      //     turns this red.
+      expect(
+        defaults.filter((p) => isSensitivePermission(p)),
+        roleKey,
+      ).toEqual(ACCEPTED_SENSITIVE_DEFAULTS[roleKey]);
+      const set = TrustedRoleSet.fromPersistence([{ key: roleKey, isSystem: true, permissions: new Set(defaults) }]);
+      for (const key of SENSITIVE) expect(hasPermission(set, key as Permission), `${roleKey} / ${key}`).toBe(false);
+    }
+  });
+
+  it('an existing custom role gains nothing from the twelve new registry entries', () => {
+    const custom = TrustedRoleSet.fromPersistence([{ key: 'stock-clerk', isSystem: false, permissions: new Set(['catalog.view', 'catalog.update']) }]);
+    for (const key of PHASE_4_KEYS) expect(hasPermission(custom, key as Permission), key).toBe(false);
+  });
+
+  it('delegation ceiling: a built-in role may pass on only what it holds', () => {
+    const manager = TrustedRoleSet.fromPersistence([{ key: 'manager', isSystem: true, permissions: new Set(BUILTIN_ROLE_PERMISSIONS.manager) }]);
+    expect(beyondGrantAuthority(manager, MANAGER_PHASE_4 as Permission[])).toEqual([]);
+    expect(beyondGrantAuthority(manager, SENSITIVE as Permission[])).toEqual(SENSITIVE);
+    const cashier = TrustedRoleSet.fromPersistence([{ key: 'cashier', isSystem: true, permissions: new Set(BUILTIN_ROLE_PERMISSIONS.cashier) }]);
+    expect(beyondGrantAuthority(cashier, CASHIER_PHASE_4 as Permission[])).toEqual([]);
+    expect(beyondGrantAuthority(cashier, ['receivables.view', ...SENSITIVE] as Permission[])).toEqual(['receivables.view', ...SENSITIVE]);
+    // A custom role that WAS delegated a sensitive key may pass that one on and
+    // no other — the ceiling is what you hold, not who you are.
+    const tillLead = TrustedRoleSet.fromPersistence([{ key: 'till-lead', isSystem: false, permissions: new Set(['sales.view', 'sales.discount']) }]);
+    expect(beyondGrantAuthority(tillLead, ['sales.discount', 'sales.view'] as Permission[])).toEqual([]);
+    expect(beyondGrantAuthority(tillLead, ['sales.void', 'refunds.approve'] as Permission[])).toEqual(['sales.void', 'refunds.approve']);
+    // The system owner is exempt by identity, and only by identity.
+    const owner = TrustedRoleSet.fromPersistence([{ key: 'owner', isSystem: true, permissions: new Set() }]);
+    expect(beyondGrantAuthority(owner, PHASE_4_KEYS as Permission[])).toEqual([]);
+    const fakeOwner = TrustedRoleSet.fromPersistence([{ key: 'owner', isSystem: false, permissions: new Set() }]);
+    expect(beyondGrantAuthority(fakeOwner, PHASE_4_KEYS as Permission[])).toEqual([...PHASE_4_KEYS]);
+  });
+
+  it('every Phase 4 key satisfies the frozen operation-code regex (0054:53, 0054:229)', () => {
+    // `customer_payment.*` is unbuildable: no underscore is allowed in the first
+    // segment. Every Phase 4 first segment is a single lowercase word.
+    const OP_CODE = /^[a-z]+(\.[a-z_]+)+$/;
+    for (const key of PHASE_4_KEYS) expect(OP_CODE.test(key), key).toBe(true);
+    expect(OP_CODE.test('customer_payment.collect')).toBe(false);
+  });
+
+  it('every Phase 4 sensitive permission is a registered permission', () => {
+    for (const key of SENSITIVE) expect(isPermission(key), key).toBe(true);
   });
 });
 

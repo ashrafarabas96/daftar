@@ -4,7 +4,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Pool } from 'pg';
 import { describe, it, expect, afterAll } from 'vitest';
+import { BUILTIN_ROLE_PERMISSIONS, isSensitivePermission, type Permission } from '../../packages/domain-core/src/permissions';
 import { MIGRATIONS_DIR, runMigrations } from '../../apps/api/src/infra/migrate';
+import { PHASE4_INHERITED_PREFIX_END } from '../../scripts/phase4-prefix';
+import { beyondInheritedPrefixRoutines, phase4InheritedPrefixRoutines } from '../helpers/phase4-inherited-surface';
 import {
   dbUrl,
   PG_PORT,
@@ -20,6 +23,29 @@ import {
   MIGRATOR_DB_PASSWORD,
   ensurePostgres,
 } from '../helpers/test-app';
+
+/**
+ * P4-S1 (P4-AL-88): every routine the migrations AFTER the frozen inherited
+ * prefix BRING INTO EXISTENCE, read from those files. Discovery, not a list —
+ * the definer assertion below splits the catalogue by it, so a later Phase 4
+ * migration adding a routine does not turn an accepted Phase 3 equality red,
+ * and a Phase 3 routine quietly changing owner still does.
+ *
+ * P4-S2: this used to be "every routine a migration past the head NAMES in a
+ * `CREATE [OR REPLACE] FUNCTION`", which is a different set. A later migration
+ * may legitimately REPLACE an inherited routine — `0077` replaces
+ * `accounting_reversals_20_domain_source_guard` (P4-AL-47, seam S-P4-02) and
+ * `inventory_stock_source_guard_gaps` (its `sale` arm) — and calling those two
+ * "Phase 4 routines" lifted them out of the INHERITED half of the equality
+ * below, which then failed for two routines whose owner, definer flag and
+ * pinned search path had not changed at all. The scope is now discovered from
+ * the FROZEN PREFIX (`tests/helpers/phase4-inherited-surface.ts`): a routine
+ * the accepted inherited prefix declares stays in the inherited half, whoever
+ * replaces it later, and only a genuinely new routine is the successor's.
+ * Both halves are asserted non-empty below, so a prefix reader that failed
+ * empty is red rather than laundered.
+ */
+const phase4CreatedRoutines = beyondInheritedPrefixRoutines;
 
 /**
  * MANAGED-POSTGRESQL PORTABILITY (P2-S1 Tech Lead correction §8).
@@ -1065,10 +1091,65 @@ describe('managed PostgreSQL: 0039 → 0049 under a non-superuser migration prin
               .map((r) => r.p)
               .sort();
           const phase3 = (p: string): boolean => /^(inventory|purchases|suppliers)\./.test(p);
-          expect((await perms(ids.owner)).filter(phase3), `${db}: owner`).toHaveLength(11);
-          expect(await perms(ids.manager), `${db}: manager`).toEqual([...MANAGER_BEFORE, 'inventory.view', 'purchases.view', 'suppliers.view'].sort());
-          expect(await perms(ids.cashier), `${db}: cashier`).toEqual(['catalog.view']);
+          /**
+           * P4-S1: the pre-Phase-4 equalities are kept EXACTLY as they were,
+           * with the Phase 4 keys filtered out, and the Phase 4 half is
+           * asserted by what it is safe for THIS file to claim.
+           *
+           * `0076` puts the Phase 4 defaults on this fixture's built-in roles,
+           * so the equalities as written were claims that Phase 4 never
+           * happens — the defect P4-AL-88 names, and
+           * `tests/security/phase4-forward-evolution.test.ts` catches it.
+           *
+           * The Phase 4 half is deliberately NOT an exact equality here, and
+           * not because an equality is hard to write: an exact equality over a
+           * set the Phase 4 vocabulary selects is red for any commit in which
+           * the registry has gained a key that a later slice's backfill has not
+           * granted yet, which is a legitimate state and the same one
+           * `inventory-permissions-provisioning.test.ts` re-expressed itself
+           * around. Completeness of the backfill is owned by
+           * `tests/security/phase4-permission-backfill-assertion.test.ts`,
+           * which asserts it against the key list the migration itself
+           * declares. What belongs HERE is the portability claim and the
+           * authority ceiling, and both are absolute:
+           *   - no role holds a Phase 4 key its registry default does not give
+           *     it, so the backfill can never grant MORE than the registry;
+           *   - no non-owner role holds a SENSITIVE Phase 4 key at all
+           *     (P4-AL-37, the OD-P4-01 ruling), on the deployer build;
+           *   - the owner holds at least one, so the split is not vacuous and a
+           *     backfill that silently wrote nothing is still red — the failure
+           *     mode `[[daftar-a-superuser-skips-the-questions-a-deployer-is-asked]]`
+           *     produced under `daftar_migrator` and a superuser run never sees.
+           */
+          const p4ns = ['sales', 'customers', 'payments', 'refunds', 'receivables', 'installments'];
+          const phase4 = (p: string): boolean => p4ns.includes(p.split('.')[0] ?? '');
+          const registry = (role: 'owner' | 'manager' | 'cashier'): string[] => [...BUILTIN_ROLE_PERMISSIONS[role]].filter(phase4).sort();
+
+          expect((await perms(ids.owner)).filter(phase3), `${db}: owner, Phase 3`).toHaveLength(11);
+          expect(
+            (await perms(ids.manager)).filter((p) => !phase4(p)),
+            `${db}: manager, everything but Phase 4`,
+          ).toEqual([...MANAGER_BEFORE, 'inventory.view', 'purchases.view', 'suppliers.view'].sort());
+          expect(
+            (await perms(ids.cashier)).filter((p) => !phase4(p)),
+            `${db}: cashier, everything but Phase 4`,
+          ).toEqual(['catalog.view']);
+          // The custom role keeps its whole set, which is the proof that the
+          // backfill touched no role a merchant made (OD-P4-01).
           expect(await perms(ids.custom), `${db}: custom`).toEqual(['catalog.view']);
+          for (const role of ['owner', 'manager', 'cashier'] as const) {
+            const held = (await perms(ids[role])).filter(phase4);
+            expect(
+              held.filter((k) => !registry(role).includes(k)),
+              `${db}: ${role} holds a Phase 4 key the registry does not give it`,
+            ).toEqual([]);
+            if (role !== 'owner')
+              expect(
+                held.filter((k) => isSensitivePermission(k as Permission)),
+                `${db}: ${role} holds a SENSITIVE Phase 4 key`,
+              ).toEqual([]);
+          }
+          expect((await perms(ids.owner)).filter(phase4).length, `${db}: the Phase 4 backfill wrote nothing at all`).toBeGreaterThan(0);
           expect(
             (
               await read.query<{ n: number }>(
@@ -1136,7 +1217,32 @@ describe('managed PostgreSQL: 0039 → 0049 under a non-superuser migration prin
           definer,
           config: PIN,
         });
-        expect(owners).toEqual(
+        /**
+         * P4-S1: the equality below is the INHERITED half.
+         *
+         * It used to be asserted over the whole query result, which made it a
+         * claim that no later phase ever adds an internal-principal routine —
+         * and `0075`'s six guard functions, owned by `daftar_inventory_internal`
+         * exactly as every Phase 3 guard is, turned it red simply by existing.
+         * An accepted suite that goes red because the next migration exists is
+         * a suite that forbids the next migration (P4-AL-88).
+         *
+         * So the result is split by what the Phase 4 migrations THEMSELVES
+         * create, discovered from those files, and the inherited list below is
+         * byte-identical to the accepted one. A Phase 3 routine changing owner,
+         * losing its pinned path or turning INVOKER is still red here, and the
+         * Phase 4 half is asserted positively and completely below.
+         */
+        // The prefix reader FAILS EMPTY on a tampered or missing prefix file,
+        // and an empty inherited scope would make every routine look like the
+        // successor's and empty the equality below. Asserted, not assumed.
+        expect(
+          phase4InheritedPrefixRoutines().size,
+          `the accepted inherited prefix (through ${PHASE4_INHERITED_PREFIX_END}) declares no routine — the reader failed empty`,
+        ).toBeGreaterThan(0);
+        const phase4Routines = new Set(phase4CreatedRoutines());
+        const inheritedOwners = owners.filter((o) => !phase4Routines.has(o.proname));
+        expect(inheritedOwners).toEqual(
           [
             { proname: 'accounting_entry_date_guard', owner: 'daftar_accounting_internal', definer: true, config: PIN },
             internal('branch_warehouses_keep_home'),
@@ -1337,6 +1443,51 @@ describe('managed PostgreSQL: 0039 → 0049 under a non-superuser migration prin
             { proname: 'accounting_inventory_account_domain_serial_guard', owner: 'daftar_accounting_internal', definer: true, config: PIN },
           ].sort((a, b) => (a.proname < b.proname ? -1 : 1)),
         );
+
+        /**
+         * …and the PHASE 4 half, positively and completely: EVERY routine the
+         * Phase 4 migrations create is one of exactly two accepted shapes, and
+         * there is no third case. Either it is a guard — SECURITY DEFINER, owned
+         * by an internal NOLOGIN principal, never by the applier, with the
+         * pinned path — or it is a read function: SECURITY INVOKER, STABLE,
+         * applier-owned and pinned, the shape `purchase_ap_outstanding` set
+         * (T-05's owner clauses bind definer routines only).
+         *
+         * This runs on the DEPLOYER build (`check` is the `daftar_migrator`
+         * connection), which is the half a superuser run never asks
+         * `[[daftar-a-superuser-skips-the-questions-a-deployer-is-asked]]`. The
+         * superuser build is compared against it, applier-normalized, by
+         * `snapshot()` further down, so a shape that is right under one
+         * principal and wrong under the other is caught by the pair.
+         */
+        expect(phase4Routines.size, 'the Phase 4 split is not vacuous').toBeGreaterThan(0);
+        const phase4Shapes = (
+          await check.query<{ proname: string; owner: string; definer: boolean; volatile: string; config: string | null }>(
+            `SELECT p.proname, r.rolname AS owner, p.prosecdef AS definer, p.provolatile AS volatile,
+                    array_to_string(p.proconfig, ',') AS config
+               FROM pg_proc p JOIN pg_roles r ON r.oid = p.proowner JOIN pg_namespace n ON n.oid = p.pronamespace
+              WHERE n.nspname = 'public' AND p.proname = ANY($1::text[])
+              ORDER BY p.proname`,
+            [[...phase4Routines]],
+          )
+        ).rows;
+        expect(
+          phase4Shapes.map((r) => r.proname),
+          'every routine the Phase 4 migrations create exists in the built catalogue',
+        ).toEqual([...phase4Routines]);
+        const guards = phase4Shapes.filter((r) => r.definer);
+        const reads = phase4Shapes.filter((r) => !r.definer);
+        expect(guards.length + reads.length, 'no third shape').toBe(phase4Shapes.length);
+        expect(guards.length, 'the Phase 4 guards exist').toBeGreaterThan(0);
+        for (const g of guards) {
+          expect(g.owner, `${g.proname}: a definer guard is owned by an internal principal`).toMatch(/^daftar_[a-z]+_internal$/);
+          expect(g.config, `${g.proname}: pinned path`).toBe(PIN);
+        }
+        for (const f of reads) {
+          expect(f.volatile, `${f.proname}: an invoker read function is STABLE`).toBe('s');
+          expect(f.owner, `${f.proname}: an invoker read function is the applier's, as purchase_ap_outstanding is`).toBe('daftar_migrator');
+          expect(f.config, `${f.proname}: pinned path`).toBe(PIN);
+        }
         for (const role of ['daftar_inventory_internal', 'daftar_accounting_internal']) {
           expect((await check.query<{ c: boolean }>(`SELECT has_schema_privilege($1, 'public', 'CREATE') AS c`, [role])).rows[0]?.c, role).toBe(false);
         }
