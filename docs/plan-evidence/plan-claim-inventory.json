@@ -88,7 +88,7 @@
     "note": "Derived from git ls-files. No file is excluded by name — an exclusion list is how a claim hides."
   },
   "totals": {
-    "hits": 240,
+    "hits": 242,
     "planGates": 41,
     "assertions": 19,
     "files": 39
@@ -97,7 +97,7 @@
     "cross-phase": {
       "planGates": 26,
       "assertions": 8,
-      "mentions": 92
+      "mentions": 94
     },
     "phase-2": {
       "planGates": 0,
@@ -119,7 +119,7 @@
     ".github/workflows/ci.yml": {
       "planGates": 0,
       "assertions": 1,
-      "mentions": 3,
+      "mentions": 5,
       "phase": "cross-phase"
     },
     ".github/workflows/phase2-s8-evidence.yml": {
@@ -383,6 +383,22 @@
       "signals": ["plan-shape-word"],
       "kind": "mention",
       "text": "# `A plan-shape claim made on a different server major or collation is"
+    },
+    {
+      "file": ".github/workflows/ci.yml",
+      "line": 417,
+      "phase": "cross-phase",
+      "signals": ["collation-dependent-range"],
+      "kind": "mention",
+      "text": "# `server_version_num`, `datcollate`, `datctype`, the locale provider and"
+    },
+    {
+      "file": ".github/workflows/ci.yml",
+      "line": 420,
+      "phase": "cross-phase",
+      "signals": ["plan-shape-word"],
+      "kind": "mention",
+      "text": "# plan-shape PASS in this job is recorded nowhere, which is how the P4-S3"
     },
     {
       "file": ".github/workflows/phase2-s8-evidence.yml",

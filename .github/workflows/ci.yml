@@ -409,6 +409,26 @@ jobs:
           # and start nothing, so what it measures is the environment the
           # required job's own gates ran on — not a cluster of its own.
           PG_PORT: '5432'
+      # TL-P4-S3-R4, the half a structural contract cannot state:
+      # `Do not hard-code a spelling without first measuring what CI's
+      # PostgreSQL service reports`. The step above proves every plan claim is
+      # REACHABLE from this job; this one MEASURES the server the job reached
+      # it on and prints the measurement into the log —
+      # `server_version_num`, `datcollate`, `datctype`, the locale provider and
+      # the derived byte-order verdict — then exits non-zero unless that server
+      # is a deployment-equivalent one. Without it the environment behind every
+      # plan-shape PASS in this job is recorded nowhere, which is how the P4-S3
+      # barcode gate stayed green for months on a collation the product does
+      # not deploy on. It measures and starts nothing: the service is already
+      # listening, and `--measure` never calls `initdb`.
+      # `required-ci-chain-composition.test.ts` (C-9) asserts this step's
+      # presence, command, job, name and the absence of
+      # `continue-on-error` / `if:`.
+      - name: Plan-evidence target measurement
+        run: npm run plan-evidence:target -- --measure
+        env:
+          # The `postgres` service of this job, by the name this script reads.
+          PLAN_EVIDENCE_PG_PORT: '5432'
       - name: Keep the gate's browser screenshots and results
         if: always()
         uses: actions/upload-artifact@v4

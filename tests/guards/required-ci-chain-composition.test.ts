@@ -134,6 +134,17 @@ const PLAN_EVIDENCE_CONTRACT_COMMAND = 'npm run plan-evidence:contract';
 const PLAN_EVIDENCE_CONTRACT_SCRIPT = 'plan-evidence:contract';
 
 /**
+ * And the measurement itself. The contract states that every plan claim is
+ * reachable from this job; it cannot state WHICH SERVER the job reached it on.
+ * `Do not hard-code a spelling without first measuring what CI's PostgreSQL
+ * service reports` — so the measurement runs here, against the job's own
+ * service, and is held to the same terms, because a measurement no required
+ * step takes is a measurement of someone's development machine.
+ */
+const PLAN_EVIDENCE_TARGET_COMMAND = 'npm run plan-evidence:target -- --measure';
+const PLAN_EVIDENCE_TARGET_SCRIPT = 'plan-evidence:target';
+
+/**
  * C-9 — THE REQUIRED PROOFS. Not slice gates, so not in `CHAIN`: they carry
  * no pairwise order among themselves and compose nothing. What they share
  * with `CHAIN` is every other term — in the required job, exactly once,
@@ -153,6 +164,12 @@ const REQUIRED_PROOFS: readonly { readonly id: string; readonly script: string; 
     script: PLAN_EVIDENCE_CONTRACT_SCRIPT,
     command: PLAN_EVIDENCE_CONTRACT_COMMAND,
     name: 'Plan-evidence contract',
+  },
+  {
+    id: 'TL-P4-S3-R4 plan-evidence target measurement',
+    script: PLAN_EVIDENCE_TARGET_SCRIPT,
+    command: PLAN_EVIDENCE_TARGET_COMMAND,
+    name: 'Plan-evidence target measurement',
   },
 ];
 
