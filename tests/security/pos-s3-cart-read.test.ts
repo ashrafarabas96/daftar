@@ -670,3 +670,111 @@ describe('§7 — two statements and one connection, measured on the production 
     );
   });
 });
+
+/**
+ * §8 — THE VARIANT THE CASHIER CHOSE, AND THE BASE VARIANT THEY DID NOT.
+ *
+ * `0079` declares `pos_cart_lines.variant_id UUID NOT NULL`, so a line for a
+ * product with no merchant variants STORES the product's hidden base variant
+ * (`product_variants.is_base`, `0053`). The server resolved it; nobody chose
+ * it. Reporting it was not merely untidy — it was unusable: `resolveVariants`
+ * (`inventory-stock-read.ts:98`) looks a stated variant up as
+ * `variant_id = $wanted AND NOT is_base`, so a base id matches NOTHING and
+ * the sale came back `inventory.variant_not_found`, "we couldn't find that
+ * option", about a product with no options. Found in the browser gate as a
+ * 404 on the Arabic sale.
+ *
+ * So the column means STORAGE and the field means CHOICE. Both halves are
+ * asserted, because "the read says null" alone would also pass if the
+ * projection had started nulling every variant.
+ */
+describe('§8 — the cart reports the variant a cashier chose, and null for a product that has no options', () => {
+  it('a product with no merchant variants reads back as null, while its ROW still stores the base variant', async () => {
+    const res = await read(cashier, A.businessId, session);
+    expect(res.status).toBe(200);
+    const line = (res.body as unknown as CartDto).lines[0];
+    expect(line, 'the basket the whole suite is about is empty').toBeDefined();
+    // The CHOICE: null, because this product has no options to choose.
+    expect(line?.variantId, 'the cart reported a variant the cashier never chose').toBeNull();
+    // And the LAST command answered the same thing, so the read and the four
+    // writes cannot disagree about what a line is.
+    expect(commandAnswer.lines[0]?.variantId).toBeNull();
+    // The STORAGE: not null, and the base variant specifically. This is the
+    // half that makes the claim above meaningful — remove the projection's
+    // `CASE WHEN v.is_base` and `variantId` becomes this id.
+    const { rows } = await ownerPool().query<{ variant_id: string; is_base: boolean }>(
+      `SELECT l.variant_id::text AS variant_id, v.is_base
+         FROM pos_cart_lines l JOIN product_variants v ON v.id = l.variant_id
+        WHERE l.id = $1`,
+      [line?.cartLineId],
+    );
+    expect(rows[0]?.variant_id, 'the row stores no variant, so 0079 is not what this test thinks it is').toBeTruthy();
+    expect(rows[0]?.is_base, 'the stored variant is not the base variant, so this case is not the one it claims to be').toBe(true);
+  });
+
+  it('CANARY: the null is the projection’s `CASE` and nothing else — the same statement without it reports the id', async () => {
+    // The first shape of this canary tried to make the stored variant a
+    // merchant one with `UPDATE product_variants SET is_base = false`. The
+    // DATABASE refused it — `catalog.base_variant_not_mutable: a base variant
+    // is system stock identity and is not a merchant object` — which is a
+    // protection working, not an obstacle. So the discrimination is proved
+    // without fighting it: run the SHIPPED projection, then run the same text
+    // with only the `CASE` removed, over the same row, as the same principal.
+    const m: MembershipContext = await t.app.get(TenancyService).resolveMembership(cashier.userId, A.businessId);
+    const plan = cartReadPlan({ tenantId: m.tenantId, businessId: m.businessId, tillSessionId: session, actorUserId: m.userId });
+    const projection = plan[1];
+    expect(projection?.role).toBe('projection');
+    const shipped = projection?.text ?? '';
+    const CASE_EXPR = 'CASE WHEN v.is_base THEN NULL ELSE l.variant_id END AS variant_id';
+    expect(shipped, 'the projection no longer carries the guard this canary is about').toContain(CASE_EXPR);
+
+    const params = [...(projection?.params ?? [])];
+    const withGuard = await ownerPool().query<{ variant_id: string | null }>(shipped, params);
+    expect(withGuard.rows[0], 'the projection returned no row, so neither half below proves anything').toBeDefined();
+    expect(withGuard.rows[0]?.variant_id, 'the shipped projection reported a base variant').toBeNull();
+
+    const withoutGuard = await ownerPool().query<{ variant_id: string | null }>(shipped.replace(CASE_EXPR, 'l.variant_id AS variant_id'), params);
+    // Same statement, same row, same connection — only the guard removed. A
+    // non-null here is what the guard is suppressing, so the null above is
+    // the guard's doing and not an empty column or a filtered row.
+    expect(withoutGuard.rows[0]?.variant_id, 'removing the guard changed nothing, so the guard is not what nulls the variant').toBeTruthy();
+  });
+});
+
+/**
+ * §9 — AN EMPTY BASKET STILL HAS A CURRENCY.
+ *
+ * `recompute` took the cart's currency off the stored LINES, so a basket with
+ * no lines answered `currency: ''`. An empty string is not a currency:
+ * rendering the totals threw `Unsupported currency:` out of `minorUnitsOf`,
+ * a client-side exception in all three locales at all three viewports, and
+ * the crash took the till-close step with it.
+ *
+ * A till has a currency from the moment it is opened
+ * (`pos_till_sessions.currency_code`, `CHAR(3) NOT NULL` with a foreign key
+ * to `currencies`), so the empty basket reports the SESSION's.
+ */
+describe('§9 — an emptied basket answers the session’s own currency, not an empty string', () => {
+  it('the currency survives removing every line, and equals the till’s own `currency_code`', async () => {
+    const { rows } = await ownerPool().query<{ currency_code: string }>(`SELECT currency_code FROM pos_till_sessions WHERE id = $1`, [session]);
+    const sessionCurrency = rows[0]?.currency_code ?? '';
+    expect(sessionCurrency, 'the session has no currency, so 0079 is not what this test thinks it is').toMatch(/^[A-Z]{3}$/);
+
+    const full = await read(cashier, A.businessId, session);
+    expect((full.body as unknown as CartDto).currency, 'a basket WITH lines already disagrees with its till').toBe(sessionCurrency);
+
+    // Empty it through the real route, one line at a time, then read again.
+    for (const id of (full.body as unknown as CartDto).lines) {
+      const res = await t.request.delete(`${cartPath(session)}/${id.cartLineId}`).set(asMember(cashier, A.businessId));
+      expect(res.status, `the removal was refused: ${JSON.stringify(res.body)}`).toBe(200);
+      // Every command's own answer must carry it too, not just the read.
+      expect((res.body as unknown as CartDto).currency, 'a command answered an empty-string currency').toBe(sessionCurrency);
+    }
+
+    const emptied = await read(cashier, A.businessId, session);
+    expect(emptied.status).toBe(200);
+    expect((emptied.body as unknown as CartDto).lines, 'the basket was not emptied, so this case proves nothing').toEqual([]);
+    expect((emptied.body as unknown as CartDto).currency, 'an emptied basket answered an empty-string currency').toBe(sessionCurrency);
+    expect((emptied.body as unknown as CartDto).currency).not.toBe('');
+  });
+});

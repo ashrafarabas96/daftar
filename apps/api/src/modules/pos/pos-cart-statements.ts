@@ -107,6 +107,18 @@ export const POS_CART_COLUMNS = Object.freeze({
      * command, because a cashier's branch scope can be narrowed mid-shift.
      */
     warehouse: 'warehouse_id',
+    /**
+     * The SESSION's currency, `CHAR(3) NOT NULL` with a foreign key to
+     * `currencies (code)` (`0079`). It is what an EMPTY basket's currency is:
+     * the cart's figures otherwise take their currency off the stored lines,
+     * and a basket with no lines had none, so `recompute` answered
+     * `currency: ''`. An empty string is not a currency — rendering its
+     * totals threw `Unsupported currency:` on the till, in all three locales
+     * at all three viewports, and the crash took the close step with it. The
+     * till has a currency from the moment it is opened, so the empty basket
+     * reports the session's rather than nothing.
+     */
+    currency: TILL_SESSION_COLUMNS.currency,
     /** The one value of `status` a cart command may write behind. */
     openStatus: TILL_SESSION_STATES.open,
   }),
@@ -324,7 +336,7 @@ const L = POS_CART_COLUMNS.lines;
  */
 const USABLE_SESSION = `
   visible AS (
-    SELECT s.${S.id}, s.${S.status}, s.${S.owner}, s.${S.warehouse}
+    SELECT s.${S.id}, s.${S.status}, s.${S.owner}, s.${S.warehouse}, s.${S.currency}
       FROM ${S.table} s
      WHERE s.${S.tenantId} = $1::uuid
        AND s.${S.businessId} = $2::uuid
@@ -361,10 +373,32 @@ const SESSION_DISCRIMINATORS = `(SELECT count(*) FROM visible) AS session_visibl
  * row holds no copy of it — which is "no stored derived truth" (P4-AL-06) as a
  * query rather than as a sentence.
  */
+/**
+ * THE BASKET, as both the four commands and the one read answer it.
+ *
+ * `variant_id` is reported as NULL for a product's BASE variant, and that is
+ * a correction rather than a convenience. `0079` declares
+ * `pos_cart_lines.variant_id UUID NOT NULL`, so a line for a product with no
+ * merchant variants stores the product's hidden base variant
+ * (`product_variants.is_base`, `0053`) — the server resolved it, the cashier
+ * never chose it. Reporting that id to a client is reporting a choice nobody
+ * made, and it is unusable besides: `resolveVariants`
+ * (`inventory-stock-read.ts:98`) looks a stated variant up as
+ * `variant_id = $wanted AND NOT is_base`, so a base id matches NOTHING and
+ * the sale is refused `inventory.variant_not_found` — "we couldn't find that
+ * option", about a product that has no options. Measured in the browser gate
+ * as a 404 on the Arabic sale of a product with no variants.
+ *
+ * So the column means storage and this field means CHOICE: the merchant
+ * variant the cashier picked, or NULL for "the product itself". That is the
+ * same thing `PosProductHitDto` already reports from the type-ahead and the
+ * same thing `resolveVariants` carries as `merchantVariantId`, so the three
+ * now agree instead of two agreeing and one leaking. `P3-AL-52`.
+ */
 const PROJECTION = `
   SELECT l.${L.id} AS cart_line_id,
          l.${L.productId} AS product_id,
-         l.${L.variantId} AS variant_id,
+         CASE WHEN v.is_base THEN NULL ELSE l.${L.variantId} END AS variant_id,
          l.${L.quantity}::text AS quantity,
          l.${L.discountMinor}::text AS discount_minor,
          coalesce(v.price_minor, p.base_price_minor)::text AS unit_price_minor,
@@ -437,6 +471,8 @@ const GATE = `
          -- scope was checked once at open would be authority outliving the
          -- decision that granted it.
          (SELECT v.${S.warehouse} FROM visible v) AS warehouse_id,
+         -- The session's own currency, so an EMPTY basket still has one.
+         (SELECT v.${S.currency} FROM visible v) AS session_currency,
          coalesce((SELECT max(x.${L.lineNo}) FROM ${L.table} x
                     WHERE x.${L.businessId} = $2::uuid AND x.${L.tillSessionId} = $3::uuid), 0) + 1 AS next_line_no,
          (SELECT count(*) FROM line) AS line_present,

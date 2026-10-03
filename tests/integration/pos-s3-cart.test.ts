@@ -164,7 +164,10 @@ async function runPlan(
   t: CartCommandTarget,
   m: MembershipContext = membership('sales.create', 'sales.discount'),
 ): Promise<readonly StoredCartLine[]> {
-  return service().issuePlan(m, command, t, plan, sql, (_assertion, run) => run(sql), BTX);
+  // `.lines` because `issuePlan` now also carries the SESSION's currency, so
+  // an empty basket's figures have one. This helper keeps returning exactly
+  // the stored lines it always returned, so every claim below is unchanged.
+  return (await service().issuePlan(m, command, t, plan, sql, (_assertion, run) => run(sql), BTX)).lines;
 }
 
 function membership(...permissions: readonly Permission[]): MembershipContext {

@@ -110,6 +110,13 @@ interface GateRow extends QueryResultRow {
   session_owned: string;
   /** The `OD-P4-09` step a WRITE needs: `opened ∩ owned`. 0 means closed, or a colleague's till. */
   session_usable: string;
+  /**
+   * The SESSION's own currency. It is the fallback an EMPTY basket's figures
+   * take, because a cart with no lines has no line to take one off and
+   * `currency: ''` is not a currency — it threw `Unsupported currency:` on
+   * the till screen. See `POS_CART_COLUMNS.sessions.currency`.
+   */
+  session_currency: string;
   /** `max(line_no) + 1` over the whole basket, tombstones included. The append's ordinal. */
   next_line_no: number;
   /** 1 when a row with this id exists in this session, tombstoned or not. */
@@ -366,9 +373,10 @@ export class PosCartService {
       // `session_open` is READ by the gate and deliberately not consulted
       // here. See this method's note: a closed shift's basket is frozen
       // evidence and a SELECT cannot thaw it.
-      return (await client.query<ProjectionRow>(projectionStatement.text, [...projectionStatement.params])).rows;
+      const rows = (await client.query<ProjectionRow>(projectionStatement.text, [...projectionStatement.params])).rows;
+      return { rows, currency: gateRow.session_currency };
     });
-    return this.recompute(tillSessionId, projected.map(storedLine));
+    return this.recompute(tillSessionId, projected.rows.map(storedLine), projected.currency);
   }
 
   /**
@@ -433,7 +441,7 @@ export class PosCartService {
           async (client) => (await client.query<T>(text, [...params])).rows,
         ),
     };
-    const lines = await this.issuePlan(
+    const issued = await this.issuePlan(
       m,
       command,
       target,
@@ -451,7 +459,7 @@ export class PosCartService {
         ),
       btx,
     );
-    return this.recompute(target.tillSessionId, lines);
+    return this.recompute(target.tillSessionId, issued.lines, issued.currency);
   }
 
   /**
@@ -473,7 +481,7 @@ export class PosCartService {
     gateSql: CartSql,
     seam: (assertion: string, run: (sql: CartSql) => Promise<readonly ProjectionRow[]>) => Promise<readonly ProjectionRow[]>,
     btx: BusinessTransactionId,
-  ): Promise<readonly StoredCartLine[]> {
+  ): Promise<{ readonly lines: readonly StoredCartLine[]; readonly currency: string }> {
     const [gateStatement, routine, projectionStatement] = plan;
     if (
       plan.length !== CART_STATEMENTS_PER_COMMAND ||
@@ -527,7 +535,10 @@ export class PosCartService {
     // The stored lines, and NOT a priced cart: `recompute` is the one place a
     // cart figure is produced, and keeping it outside this function is what
     // lets the integration suite drive the arithmetic over exactly these rows.
-    return projected.map(storedLine);
+    //
+    // The session's currency rides along because an EMPTY basket has no line
+    // to take one off, and `currency: ''` is not a currency.
+    return { lines: projected.map(storedLine), currency: gateRow.session_currency };
   }
 
   /**

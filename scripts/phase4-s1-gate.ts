@@ -1242,11 +1242,59 @@ export function schemaLintProblems(root: string): string[] {
   return problems;
 }
 
+/**
+ * A soft-delete predicate: the column that marks a row dead, asserted NULL.
+ *
+ * It is the ONE partial-index predicate under which a document-number series
+ * still has no duplicates in the sense G-07 means. The rows the predicate
+ * excludes are the dead ones, so uniqueness over the rest is uniqueness over
+ * the series as anybody reads it. Any OTHER predicate restricts the index to
+ * a subset this check cannot characterise, and a unique index over a subset
+ * is not a unique over the series — so it is reported rather than accepted.
+ */
+const SOFT_DELETE_PREDICATE = /^\(?\s*(removed_at|deleted_at|voided_at|cancelled_at|canceled_at|archived_at|reversed_at)\s+IS\s+NULL\s*\)?$/i;
+
+/**
+ * Every UNIQUE INDEX the Phase 4 migrations create, by table, with the
+ * columns it covers and its partial predicate when it has one.
+ *
+ * This exists because G-07 used to ask `table.constraints` alone, which reads
+ * only what is declared INSIDE `CREATE TABLE`. In PostgreSQL a unique INDEX
+ * binds exactly as hard as a unique CONSTRAINT — a constraint is implemented
+ * as one — so a relation that protected its series with `CREATE UNIQUE INDEX`
+ * was reported as having no protection at all. `pos_cart_lines.line_no` is
+ * that relation: it is covered by `pos_cart_lines_line_uq`, and the check
+ * could not see it.
+ *
+ * A unique CONSTRAINT cannot carry a predicate, so reading indexes is also
+ * the only way a tombstoned relation can be read correctly at all.
+ */
+function uniqueIndexes(sql: string): Map<string, { readonly columns: readonly string[]; readonly predicate: string | null }[]> {
+  const found = new Map<string, { readonly columns: readonly string[]; readonly predicate: string | null }[]>();
+  const re =
+    /CREATE\s+UNIQUE\s+INDEX\s+(?:CONCURRENTLY\s+)?(?:IF\s+NOT\s+EXISTS\s+)?[a-z_][a-z0-9_]*\s+ON\s+(?:ONLY\s+)?([a-z_][a-z0-9_.]*)\s*\(([^;]*?)\)\s*(?:WHERE\s+([^;]*?))?\s*;/gi;
+  for (const m of sql.matchAll(re)) {
+    const table = (m[1] ?? '').toLowerCase().replace(/^public\./, '');
+    const entry = { columns: columnList(`(${m[2] ?? ''})`).columns, predicate: (m[3] ?? '').trim() === '' ? null : (m[3] ?? '').trim() };
+    found.set(table, [...(found.get(table) ?? []), entry]);
+  }
+  return found;
+}
+
 /** G-07's structural half: document numbering is per business, and no global sequence backs a document number. */
 export function numberingProblems(root: string): string[] {
-  const sql = phase4Sql(root);
+  return numberingProblemsInSql(phase4Sql(root));
+}
+
+/**
+ * The same check over SQL rather than a checkout, so it can be driven over a
+ * planted defect and proved capable of saying no. A check whose red is never
+ * demonstrated is a check nobody has measured.
+ */
+export function numberingProblemsInSql(sql: string): string[] {
   const { tables, unreadable } = readTables(sql);
   const problems = [...unreadable];
+  const indexes = uniqueIndexes(sql);
   for (const m of sql.matchAll(/CREATE\s+SEQUENCE\s+(?:IF\s+NOT\s+EXISTS\s+)?([a-z_][a-z0-9_]*)/gi))
     problems.push(
       `a Phase 4 migration creates the sequence ${m[1] ?? ''} — a document number comes from a per-business counter row under a lock, never from a cluster-wide sequence that two businesses share (G-07)`,
@@ -1265,18 +1313,33 @@ export function numberingProblems(root: string): string[] {
       continue;
     }
     for (const number of numbers) {
-      const unique = table.constraints
+      // A unique CONSTRAINT in the table body, and a unique INDEX on the same
+      // table, are both protection and both are read. `predicate` is null for
+      // a constraint, which cannot carry one.
+      const fromConstraints = table.constraints
         .filter((c) => /\b(UNIQUE|PRIMARY\s+KEY)\b/i.test(c))
-        .map((c) => columnList(c.replace(/REFERENCES[\s\S]*$/i, '')).columns);
-      const covering = unique.filter((cols) => cols.includes(number));
+        .map((c) => ({ columns: columnList(c.replace(/REFERENCES[\s\S]*$/i, '')).columns, predicate: null as string | null }));
+      const unique = [...fromConstraints, ...(indexes.get(table.name) ?? [])];
+      const covering = unique.filter((u) => u.columns.includes(number));
       if (covering.length === 0) {
         problems.push(`${table.name}.${number} is a document number with no UNIQUE over it — a series with duplicates is not a series (G-07)`);
         continue;
       }
-      for (const cols of covering)
-        if (!cols.includes('business_id'))
+      // A partial unique whose predicate is not a soft-delete predicate
+      // protects a subset this check cannot characterise, so it does not
+      // count as covering the series. If NONE of the covering uniques is
+      // total or soft-delete-partial, the number is unprotected.
+      const effective = covering.filter((u) => u.predicate === null || SOFT_DELETE_PREDICATE.test(u.predicate));
+      if (effective.length === 0) {
+        problems.push(
+          `${table.name}.${number} is a document number whose only UNIQUE is partial on \`${covering.map((u) => u.predicate).join(' / ')}\` — that is a unique over a subset, not over the series, so the series may still hold duplicates (G-07)`,
+        );
+        continue;
+      }
+      for (const u of effective)
+        if (!u.columns.includes('business_id'))
           problems.push(
-            `${table.name}: UNIQUE (${cols.join(', ')}) over the document number ${number} omits business_id — two businesses of one tenant must hold independent series (G-07)`,
+            `${table.name}: UNIQUE (${u.columns.join(', ')}) over the document number ${number} omits business_id — two businesses of one tenant must hold independent series (G-07)`,
           );
     }
   }

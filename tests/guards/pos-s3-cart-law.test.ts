@@ -107,6 +107,7 @@ import {
 } from '../../apps/api/src/modules/pos/pos-price-authority';
 import { POS_CART_SCHEMAS, assertRemovalStatesNothing } from '../../apps/api/src/modules/pos/pos-cart.schemas';
 import { CART_LINE_COLUMNS, TILL_SESSION_COLUMNS } from '../../apps/api/src/modules/pos/pos-session-contract';
+import { numberingProblemsInSql, phase4Sql } from '../../scripts/phase4-s1-gate';
 
 const REPO = join(import.meta.dirname, '..', '..');
 const PRICING_SOURCE = join(REPO, 'apps/api/src/modules/pos/pos-cart-pricing.ts');
@@ -1006,5 +1007,81 @@ describe('P4-S3 (D) — no stored derived truth, and the refusal registry', () =
     // showing a discount the server never applied.
     const refusal = refusalOf(() => assertNoClientPriceAuthority('cart.request_discount', { discountMinor: '100', lineTotalMinor: '1' }));
     expect(refusal).toEqual({ code: 'pos.cart_price_authority_refused', status: 400 });
+  });
+});
+
+/**
+ * G-07'S NUMBERING CHECK CAN SAY NO, AND SAYS IT ABOUT THE RIGHT THING.
+ *
+ * This block exists because the check had **no red proof at all**, and that
+ * absence cost a CI cycle. `pos_cart_lines.line_no` is covered by
+ * `pos_cart_lines_line_uq`, a partial unique INDEX — and G-07 read only the
+ * `UNIQUE`/`PRIMARY KEY` constraints declared inside `CREATE TABLE`, so it
+ * reported a protected series as unprotected and failed the whole sealed
+ * P4-S1 gate in zero seconds.
+ *
+ * A unique INDEX binds exactly as hard as a unique CONSTRAINT in PostgreSQL —
+ * a constraint is implemented as one — and a constraint cannot carry a
+ * predicate, so reading indexes is the only way a tombstoned relation can be
+ * read correctly at all. Teaching the check to read them is therefore a
+ * CORRECTION, not a relaxation, and these cases are what hold that line: the
+ * check must still refuse a number with no unique, and must still refuse a
+ * partial unique whose predicate is not a soft-delete predicate, because a
+ * unique over an arbitrary subset is not a unique over the series.
+ *
+ * Driven over planted SQL rather than over the tree, so each case is a
+ * MEASURED verdict on a known input instead of an assertion about the
+ * migrations as they happen to stand today.
+ */
+describe('G-07 numbering: the check reads unique indexes, and still refuses what is unprotected', () => {
+  const table = (body: string): string =>
+    `CREATE TABLE widget_numbers (\n  tenant_id UUID NOT NULL,\n  business_id UUID NOT NULL,\n  doc_no INTEGER NOT NULL,\n  removed_at TIMESTAMPTZ,\n  status TEXT NOT NULL${body}\n);`;
+
+  it('RED: a document number with no unique at all is reported', () => {
+    const problems = numberingProblemsInSql(table(''));
+    expect(problems.join('\n')).toContain('widget_numbers.doc_no is a document number with no UNIQUE over it');
+  });
+
+  it('a unique CONSTRAINT in the table body is accepted, as it always was', () => {
+    expect(numberingProblemsInSql(table(',\n  CONSTRAINT widget_numbers_no_uq UNIQUE (business_id, doc_no)'))).toEqual([]);
+  });
+
+  it('a total unique INDEX is accepted — the case the check used to miss', () => {
+    const sql = `${table('')}\nCREATE UNIQUE INDEX widget_numbers_no_uq ON widget_numbers (business_id, doc_no);`;
+    expect(numberingProblemsInSql(sql)).toEqual([]);
+  });
+
+  it('a PARTIAL unique INDEX on a soft-delete predicate is accepted — this is `pos_cart_lines_line_uq`', () => {
+    const sql = `${table('')}\nCREATE UNIQUE INDEX widget_numbers_no_uq ON widget_numbers (business_id, doc_no) WHERE removed_at IS NULL;`;
+    expect(numberingProblemsInSql(sql)).toEqual([]);
+  });
+
+  it('RED: a PARTIAL unique INDEX on an ARBITRARY predicate is reported — a unique over a subset is not a unique over the series', () => {
+    // The line that keeps the correction from being a loophole. Without this
+    // case, `WHERE status = 'draft'` would satisfy a document-number check
+    // while leaving every posted row free to duplicate.
+    const sql = `${table('')}\nCREATE UNIQUE INDEX widget_numbers_no_uq ON widget_numbers (business_id, doc_no) WHERE status = 'draft';`;
+    expect(numberingProblemsInSql(sql).join('\n')).toContain('is a document number whose only UNIQUE is partial');
+  });
+
+  it('RED: a unique INDEX that omits business_id is reported — two businesses of one tenant would share a series', () => {
+    const sql = `${table('')}\nCREATE UNIQUE INDEX widget_numbers_no_uq ON widget_numbers (tenant_id, doc_no);`;
+    expect(numberingProblemsInSql(sql).join('\n')).toContain('omits business_id');
+  });
+
+  it('the real `pos_cart_lines` is accepted, and the acceptance is the index and not the table body', () => {
+    // Both halves, because "it passes now" is not the claim. The table body
+    // ALONE must still be refused: that is what proves the pass above comes
+    // from reading the index, not from the check having gone quiet.
+    // `phase4Sql` and not the raw file: it is the gate's OWN input, comments
+    // stripped. Reading the file directly made this case report six
+    // "cannot read the table item" problems that were the comments inside
+    // `CREATE TABLE pos_cart_lines`, which is a fact about the normaliser and
+    // not about the series.
+    const sql = phase4Sql(join(__dirname, '..', '..'));
+    expect(numberingProblemsInSql(sql).filter((p) => p.includes('pos_cart_lines'))).toEqual([]);
+    expect(sql).toMatch(/CREATE UNIQUE INDEX pos_cart_lines_line_uq[\s\S]*?WHERE removed_at IS NULL;/);
+    const withoutIndex = sql.replace(/CREATE UNIQUE INDEX pos_cart_lines_line_uq[\s\S]*?;/, '');
+    expect(numberingProblemsInSql(withoutIndex).join('\n')).toContain('pos_cart_lines.line_no is a document number with no UNIQUE over it');
   });
 });
