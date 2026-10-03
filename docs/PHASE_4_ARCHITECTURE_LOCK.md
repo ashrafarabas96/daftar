@@ -2187,3 +2187,19 @@ S4 migrations: `frozenThrough` is not moved to the S4 head and the S4 accepted p
 ends at **`P4-S4 — READY FOR TECH LEAD REVIEW`**, and **P4-S5 product work does not begin** — the boundary is
 deliberate, because P4-S5's refunds and returns consume the financial truth S4 creates, and that truth is
 reviewed before anything is built on it.
+
+### The S3 seal, performed
+
+`P4-S3` is **ACCEPTED AND FROZEN** at the accepted candidate head
+`f3bf439dff5d12c4d1f3bd4c682d37feca0d8a4a`, whose exact-SHA push CI `37143557554` returned six jobs SUCCESS
+at attempt 1 with the P4-S1 → P4-S2 → P4-S3 chain visibly executed in that order. `0079` froze at
+`1dd406985f6800244e0a0d8a14248595330f6995d3e867e483eda6b9affa173f`, recomputed from the accepted file rather
+than inherited from the candidate round, because `0079` itself changed in the corrective pass. **80
+migrations frozen, `0000`–`0079` immutable, the next migration is `0080`.** The freeze page is
+`docs/PHASE_4_S3_ACCEPTANCE.md`.
+
+One defect found during this pass is carried into P4-S4 **as a named item rather than as technical debt**: a
+cash-settled invoice to a named customer reports an outstanding receivable the ledger never carried, because
+the invoice is written `open` and `invoice_outstanding` keys on status alone while the posting debits cash.
+P4-S4 is the slice that owns what "outstanding" means, its fix is a new migration rather than an edit to
+anything frozen here, and nothing merges before it lands.

@@ -124,7 +124,7 @@ export const PHASE4_S2_PREFIX: Prefix = [
   ['0078_phase4_sale_commit.sql', '8a11b768c3259a75d0e341f20b97037146ae8b40e9dc7f86655f77ba1b6dc730'],
 ];
 /** P4-S3 — POS till sessions and cart lines. */
-export const PHASE4_S3_PREFIX: Prefix = [];
+export const PHASE4_S3_PREFIX: Prefix = [['0079_phase4_pos_till_sessions_cart.sql', '1dd406985f6800244e0a0d8a14248595330f6995d3e867e483eda6b9affa173f']];
 /** P4-S4 — payments, allocation, customer credit. */
 export const PHASE4_S4_PREFIX: Prefix = [];
 /** P4-S5 — returns, credit notes, refunds. */
@@ -152,6 +152,7 @@ export const PHASE4_PREFIX: Prefix = [
 export const PHASE4_SLICE_HEADS: Readonly<Record<string, string>> = {
   'P4-S1': '0076_phase4_permission_defaults_backfill.sql',
   'P4-S2': '0078_phase4_sale_commit.sql',
+  'P4-S3': '0079_phase4_pos_till_sessions_cart.sql',
 };
 
 const migrationNumber = (file: string): number | null => {
