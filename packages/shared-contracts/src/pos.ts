@@ -24,6 +24,9 @@
  * and `OD-03` is OPEN, so a non-zero tax is refused rather than guessed.
  */
 
+import type { SaleSettlementMode } from '@daftar/domain-core';
+import type { SaleDto } from './sales';
+
 /** Which index arm matched the typed prefix. A scanned barcode ranks first, then SKU, then name. */
 export type PosMatchKindDto = 'barcode' | 'sku' | 'name';
 
@@ -75,4 +78,65 @@ export interface PosProductSearchDto {
    * is too broad, and the cashier narrows it by typing. There is no page two.
    */
   moreMatches: boolean;
+}
+
+// ── THE POS CHECKOUT (P4-S3, TL-P4-S3-R1) ────────────────────────────────
+
+/**
+ * `POST /v1/pos/till-sessions/:sessionId/checkout` — the request body.
+ *
+ * Read the field list as the law. There is **no `lines` array**, **no
+ * `warehouseId`**, **no currency**, **no total, subtotal or discount**, and
+ * **no price of any kind**. The basket is server-side state keyed by the till
+ * session in the path, so the only thing a till can say about WHAT is being
+ * sold is "the session I am at"; everything else — product, stock variant,
+ * quantity, price, discount authority, tax, subtotal, total, currency — is
+ * read from `pos_cart_lines` and the catalogue inside the checkout's own
+ * transaction (P4-AL-18, CART SNAPSHOT LAW).
+ *
+ * `saleId` is the caller-supplied document identity the replay is keyed on,
+ * exactly as `POST /v1/sales` keys it (P4-AL-30). There is no
+ * `Idempotency-Key` header and no generic key subsystem: the stored
+ * `sales.commit_intent_sha256` is the intent fingerprint, and the proof is
+ * consulted BEFORE any current state is read.
+ */
+export interface PosCheckoutRequestDto {
+  /** The sale this checkout commits, and the replay key. */
+  saleId: string;
+  settlementMode: SaleSettlementMode;
+  /** Null for a walk-in. A credit checkout names the customer who owes it. */
+  customerId: string | null;
+  documentDate: string;
+  dueDate: string | null;
+  /** Always `"0"` while P4-AL-44 holds and OD-03 is open. */
+  taxMinor: '0';
+  notes: string | null;
+}
+
+/**
+ * What the checkout answers with: the accepted sale exactly as
+ * `POST /v1/sales` reports it, plus what this call did to the BASKET.
+ *
+ * `consumedCartLineIds` is the whole of the consumption claim, stated rather
+ * than implied: these are the `pos_cart_lines` rows this sale was derived
+ * from and the rows that carry a tombstone as of its COMMIT.
+ *
+ * Every sale line's `lineId` IS one of them — a POS sale line is the cart line
+ * it came from, which is what ties the consumed row identity to the accepted
+ * cart snapshot rather than to "whatever is active now". The list can be
+ * LONGER than the sale's lines, because the basket is append-only and the
+ * accepted sale has one line per stock key: two scans of one product are two
+ * cart rows, both consumed, merged into one sale line that carries their
+ * total and the id of the first of them.
+ *
+ * On a replay the sale is the stored one, `sale.replayed` is `true`, and this
+ * list is the stored sale's own line ids — the original snapshot's
+ * representatives. A replay clears NOTHING: lines added after the first
+ * successful checkout are not in that list and are still in the basket, and a
+ * till that wants the exact basket re-reads it rather than deducing it.
+ */
+export interface PosCheckoutDto {
+  tillSessionId: string;
+  sale: SaleDto;
+  consumedCartLineIds: string[];
 }

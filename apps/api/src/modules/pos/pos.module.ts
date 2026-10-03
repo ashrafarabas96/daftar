@@ -1,5 +1,6 @@
 import type { Provider } from '@nestjs/common';
 import { PosCartService } from './pos-cart.service';
+import { PosCheckoutService } from './pos-checkout.service';
 import { PosReadService } from './pos-reads';
 import { TillSessionService } from './till-session.service';
 
@@ -45,7 +46,15 @@ import { TillSessionService } from './till-session.service';
  *     `'LOGGER'`. Both compositions already provide all three
  *     (`app.module.ts`, `merchant-api.module.ts`, `runtime.ts:126`), which is
  *     why the cart needs no new provider of its own.
+ *   - `PosCheckoutService` needs `Database`, `InventoryAuthorizationService`
+ *     and `SaleCommitService` (TL-P4-S3-R1). The third is the point: the ONE
+ *     sale writer is INJECTED rather than reimplemented, which is what makes
+ *     an atomic checkout an orchestration of the accepted primitive instead of
+ *     a second financial writer. Both compositions spread `sellingProviders()`
+ *     BEFORE `posProviders()` (`app.module.ts:150`,
+ *     `merchant-api.module.ts:138`), so the dependency resolves in both
+ *     processes.
  */
 export function posProviders(): Provider[] {
-  return [TillSessionService, PosReadService, PosCartService];
+  return [TillSessionService, PosReadService, PosCartService, PosCheckoutService];
 }

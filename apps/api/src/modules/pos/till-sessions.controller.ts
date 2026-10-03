@@ -1,4 +1,5 @@
 import { Body, Controller, Get, HttpCode, Inject, Param, Post, UsePipes } from '@nestjs/common';
+import type { PosCheckoutDto } from '@daftar/shared-contracts';
 import { Membership, RequiresPermission } from '../../common/guards';
 import { ZodValidationPipe } from '../../common/validation';
 import { newBusinessTransactionId } from '../inventory/business-transaction';
@@ -6,6 +7,8 @@ import type { MembershipContext } from '../tenancy/tenancy.service';
 import { cartUuidParam } from './pos-cart.schemas';
 import { TillSessionCloseSchema, TillSessionOpenSchema, type TillSessionCloseRequest, type TillSessionOpenRequest } from './pos.schemas';
 import { TillSessionService, type TillSession } from './till-session.service';
+import { PosCheckoutPipe, type PosCheckoutRequest } from './pos-checkout.schemas';
+import { PosCheckoutService } from './pos-checkout.service';
 
 /**
  * THE TILL-SESSION ROUTES OF P4-S3 — the transport for `TillSessionService`
@@ -66,7 +69,10 @@ export class TillSessionsController {
   // Explicit `@Inject`, as every controller in this repository is written:
   // esbuild does not implement `emitDecoratorMetadata`, so a parameter typed
   // only by its TypeScript type injects `undefined` under vitest.
-  constructor(@Inject(TillSessionService) private readonly sessions: TillSessionService) {}
+  constructor(
+    @Inject(TillSessionService) private readonly sessions: TillSessionService,
+    @Inject(PosCheckoutService) private readonly checkouts: PosCheckoutService,
+  ) {}
 
   /**
    * Open a till for the AUTHENTICATED user. Requires `sales.create` — the
@@ -99,6 +105,32 @@ export class TillSessionsController {
   @UsePipes(new ZodValidationPipe(TillSessionCloseSchema))
   async close(@Membership() m: MembershipContext, @Param('sessionId') sessionId: string, @Body() body: TillSessionCloseRequest): Promise<TillSession> {
     return this.sessions.close(m, cartUuidParam(sessionId, 'sessionId'), body, newBusinessTransactionId());
+  }
+
+  /**
+   * **THE ATOMIC POS CHECKOUT** (TL-P4-S3-R1). Turn this till's basket into an
+   * accepted sale, and consume exactly the cart rows that sale was derived
+   * from, in ONE transaction. Requires `sales.create` — the same ORDINARY
+   * cashier key the cart's four commands and the sale commit name, because
+   * ringing a basket up IS selling and P4-S3 invents no permission.
+   *
+   * `HttpCode(200)` for the `POST /v1/sales` and `POST /v1/pos/till-sessions`
+   * reason: the command is REPLAYABLE on its caller-supplied `saleId`, so a
+   * repeat answers from the stored sale and creates nothing. A `201` would
+   * tell a till it had just made a second sale.
+   *
+   * The body states the sale's HEADER and nothing about the basket: no lines,
+   * no warehouse, no currency, no price, no discount and no total. Those are
+   * read from `pos_cart_lines`, the session and the catalogue inside the
+   * checkout's own transaction, and `PosCheckoutPipe` refuses a request that
+   * tried to state one BY NAME (P4-AL-18).
+   */
+  @Post(':sessionId/checkout')
+  @HttpCode(200)
+  @RequiresPermission('sales.create')
+  @UsePipes(new PosCheckoutPipe())
+  async checkout(@Membership() m: MembershipContext, @Param('sessionId') sessionId: string, @Body() body: PosCheckoutRequest): Promise<PosCheckoutDto> {
+    return this.checkouts.checkout(m, cartUuidParam(sessionId, 'sessionId'), body, newBusinessTransactionId());
   }
 
   /**

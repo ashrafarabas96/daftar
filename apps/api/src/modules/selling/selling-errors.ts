@@ -417,6 +417,45 @@ const SELLING_STATUS = {
   'pos.cart_minor_units_invalid': 500,
   /** A command's statement plan was not constant in the line count — the O(1) claim, broken. */
   'pos.cart_statement_plan_invalid': 500,
+
+  // ── THE POS CHECKOUT (TL-P4-S3-R1) ───────────────────────────────────
+  //
+  // Four codes, and the vocabulary is deliberately NOT `pos.cart_*`: a
+  // checkout is not a cart command, and `CART_MODULE_CODES`
+  // (`tests/guards/pos-s3-cart-law.test.ts:88`) derives the cart's pinned
+  // status table from the `pos.cart_` prefix. A checkout code borrowing that
+  // prefix would silently join a table that is about four other routes.
+  /**
+   * There is nothing to sell. A till that taps FINISH on an empty basket has
+   * not made a sale, and committing a zero-line sale would mint an invoice
+   * number for nothing.
+   */
+  'pos.checkout_cart_empty': 409,
+  /**
+   * CART SNAPSHOT LAW. The basket the command BOUND is not the basket at
+   * COMMIT: a line was revised, removed or added between the snapshot and the
+   * consumption. The whole transaction rolls back — no sale, no invoice, no
+   * movement, no posting, no tombstone — and the till re-reads and asks again.
+   * It is deliberately a stable 409 and never a silent "sell one cart, clear
+   * another".
+   */
+  'pos.checkout_cart_state_changed': 409,
+  /**
+   * The caller-supplied `saleId` was seen and names a DIFFERENT command: a
+   * different settlement mode, customer, date, note, or a sale that is not
+   * this till session's at all. «An idempotency key is not permission»
+   * (`[[daftar-idempotency-key-is-not-permission]]`) — a replay must prove
+   * WHICH command it is replaying before it answers "success", so a key reused
+   * over a different intent is a conflict and never an acceptance.
+   */
+  'pos.checkout_idempotency_conflict': 409,
+  /**
+   * The request stated a figure the server derives: a total, a subtotal, a
+   * unit price, a line, a discount, a currency. P4-AL-18 — refused BY NAME
+   * rather than validated against the server's own number, because validating
+   * one implies the client's number could have been adopted.
+   */
+  'pos.checkout_price_authority_refused': 400,
 } as const satisfies Readonly<Record<`${'customer' | 'invoice' | 'pos' | 'sale'}.${string}`, 400 | 403 | 404 | 409 | 422 | 500>>;
 
 /** A classified selling refusal code. */

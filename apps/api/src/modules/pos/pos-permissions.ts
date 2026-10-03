@@ -88,6 +88,18 @@ export const POS_ROUTE_AUTHORITY: readonly {
     permission: 'sales.create' as const,
     sensitive: false as const,
   }),
+  // TL-P4-S3-R1. `sales.create`, like the cart and like `POST /v1/sales`:
+  // ringing a basket up IS selling, and the SENSITIVE `sales.discount` is
+  // deliberately absent here for the reason the cart's table records — whether
+  // a discount was granted depends on the CART, which a route decorator cannot
+  // see. `PosCheckoutService` checks it against the snapshot and REFUSES
+  // `pos.cart_discount_not_permitted` rather than silently zeroing.
+  Object.freeze({
+    method: 'POST' as const,
+    path: '/v1/pos/till-sessions/:sessionId/checkout',
+    permission: 'sales.create' as const,
+    sensitive: false as const,
+  }),
   Object.freeze({ method: 'GET' as const, path: '/v1/pos/till-sessions/current', permission: 'sales.view' as const, sensitive: false as const }),
   Object.freeze({ method: 'GET' as const, path: '/v1/pos/till-sessions/:sessionId', permission: 'sales.view' as const, sensitive: false as const }),
 ]);
