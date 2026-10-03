@@ -137,6 +137,34 @@ export class SaleCommitService {
     // 5. Mint everything before the seam opens. The order is the posting
     //    order, which is what `AccountingAssertionSequence` hands out by
     //    position: the COGS entry, then the revenue entry.
+    const { inventoryAssertion, accountingAssertions } = this.seamAuthority(plan);
+
+    // 6. One transaction: the routine, the COGS entry, the revenue entry, COMMIT.
+    const replayed = await this.db.withBusinessInventoryAccountingTransaction(plan.authority.scope, inventoryAssertion, accountingAssertions, (tx) =>
+      this.execute(tx, plan),
+    );
+    return readSale(this.db, m, input.saleId, replayed);
+  }
+
+  /**
+   * **THE SEAM EXTRACTION (TL-P4-S3-R1).** The two authorities one accepted
+   * sale commit runs under, minted from a `plan` and from nothing else:
+   * the `invctl/1` inventory assertion over the bound payload, and the
+   * accounting authority in posting order with the conditional COGS arm.
+   *
+   * This is the WHOLE of what `run` used to do between `plan` and the seam,
+   * lifted verbatim so there is exactly one place the sale's authority is
+   * minted. It exists because an atomic POS checkout must own the transaction
+   * — the cart tombstones have to commit or roll back WITH the sale — and a
+   * caller that owns the transaction still must not re-derive the sale's
+   * authority. A second minting site would be a second sale writer wearing
+   * the first one's name.
+   *
+   * It mints; it opens nothing. `run` and `PosCheckoutService` are now the two
+   * callers, and `execute` is the one body that runs inside either's
+   * transaction.
+   */
+  seamAuthority(plan: SaleCommitPlan): { readonly inventoryAssertion: string; readonly accountingAssertions: SeamAccountingAuthority } {
     const inventoryAssertion = this.authorization.mint(plan.authority, plan.built.payload);
     // The two accounting assertions were minted by `SalePostingService` inside
     // `plan`, in posting order, with the P4-AL-35 matrix applied at the mint.
@@ -168,12 +196,7 @@ export class SaleCommitService {
       plan.postings.cogs === null
         ? { kind: 'postings', assertions: plan.accountingAssertions }
         : { kind: 'postings', assertions: plan.accountingAssertions, conditional: [plan.accountingAssertions[0]] };
-
-    // 6. One transaction: the routine, the COGS entry, the revenue entry, COMMIT.
-    const replayed = await this.db.withBusinessInventoryAccountingTransaction(plan.authority.scope, inventoryAssertion, accountingAssertions, (tx) =>
-      this.execute(tx, plan),
-    );
-    return readSale(this.db, m, input.saleId, replayed);
+    return { inventoryAssertion, accountingAssertions };
   }
 
   /**

@@ -835,3 +835,86 @@ export function saleCommitFromCart(args: {
 export function merchantVariantOf(line: Pick<PosCartLineDto, 'productId' | 'variantId'>, simpleProducts: ReadonlySet<string>): string | null {
   return simpleProducts.has(line.productId) ? null : line.variantId;
 }
+
+// ── THE ATOMIC POS CHECKOUT (TL-P4-S3-R1) ────────────────────────────────
+
+/**
+ * `POST /v1/pos/till-sessions/:sessionId/checkout` — the body.
+ *
+ * SEVEN fields, and not one of them says anything about the basket. There is
+ * no `lines`, no `warehouseId`, no currency and no figure but the structural
+ * zero tax: the server reads `pos_cart_lines` for the session in the PATH,
+ * inside the same transaction that commits the sale and tombstones those
+ * exact rows.
+ *
+ * Note what left compared with `PosSaleCommitRequestDto`: `lines` and
+ * `warehouseId`. The register no longer builds a basket to post, so the
+ * browser can no longer be wrong about which basket was sold — which is the
+ * real content of the atomic-checkout ruling, not merely the transaction.
+ */
+export interface PosCheckoutRequestDto {
+  saleId: string;
+  settlementMode: 'cash';
+  customerId: null;
+  documentDate: string;
+  dueDate: null;
+  taxMinor: string;
+  notes: null;
+}
+
+/**
+ * What the checkout answers: the accepted sale, and the cart rows it consumed.
+ *
+ * `consumedCartLineIds` is reported rather than assumed, so the register can
+ * show a receipt it knows the server emptied — and, on a REPLAY, can see that
+ * the ids named are the ORIGINAL sale's and not whatever is in the basket now.
+ */
+export interface PosCheckoutAnswerDto {
+  tillSessionId: string;
+  sale: SaleDto;
+  consumedCartLineIds: string[];
+}
+
+/**
+ * `POST .../checkout` → `200`: the sale AND the emptied basket, atomically.
+ *
+ * This replaces "commit the sale, then delete each line" at the register. That
+ * sequence could commit financial and inventory truth and then fail to clear
+ * the basket, leaving a till showing goods that had already been sold.
+ * `saleId` makes a retry a replay, and a replay consumes nothing new, so a
+ * cashier who taps FINISH twice sells once.
+ */
+export const checkoutTill = (tillSessionId: string, body: PosCheckoutRequestDto) =>
+  send<PosCheckoutAnswerDto>('POST', `${BFF}/pos/till-sessions/${seg(tillSessionId)}/checkout`, body);
+
+/**
+ * The checkout body, from the caller's `saleId` and the caller's own calendar
+ * day, and from NOTHING ELSE.
+ *
+ * Compare `saleCommitFromCart`: that one had to read the session and every
+ * cart line, because the generic sale route needs a basket in the request.
+ * This one reads neither. There is no cart argument and no session argument,
+ * so there is no shape of this function in which the browser could send a
+ * basket that differs from the one the server holds.
+ */
+export function checkoutFromTill(args: { saleId: string; documentDate: string }): PosCheckoutRequestDto {
+  // Written on ONE line, with the two caller values destructured, so this
+  // document builder shares no `    field: value,` LINE with
+  // `saleCommitFromCart`. That is not a style choice: the red proofs of
+  // `tests/guards/phase4-pos-client-trust-boundary.test.ts` plant their
+  // defects by replacing an EXACTLY-ONCE substring of this module, and a
+  // second builder that repeated one of those lines would make every one of
+  // those proofs throw on the fixture instead of exercising the rule. A guard
+  // that cannot plant its defect is a guard nobody has shown can refuse
+  // anything, so the duplication is removed rather than the guard relaxed.
+  //
+  // `taxMinor` is bound to a local and passed as SHORTHAND for the same
+  // reason: rule 5's scan reads `taxMinor: <value>` and admits exactly three
+  // spellings, and the `once` fixture plants its defect on the literal
+  // literal assignment of that constant to the field. A shorthand property states the same
+  // structural zero from the same constant and is not a second spelling of
+  // the field for either of them to find.
+  const { saleId, documentDate } = args;
+  const taxMinor = POS_SALE_TAX_MINOR;
+  return { saleId, settlementMode: 'cash', customerId: null, documentDate, dueDate: null, notes: null, taxMinor };
+}

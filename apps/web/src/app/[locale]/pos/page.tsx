@@ -6,11 +6,11 @@ import { localDateIso, useFormDocumentId } from '@/lib/phase3-format';
 import { refusalKey } from '@/lib/phase3-errors';
 import {
   addCartLine,
-  commitSale,
+  checkoutFromTill,
+  checkoutTill,
   getCart,
   removeCartLine,
   requestDiscount,
-  saleCommitFromCart,
   searchPosProducts,
   setCartLineQuantity,
   type PosCartDto,
@@ -35,13 +35,15 @@ import { POS_SEARCH_DELAY_MS, POS_SEARCH_MIN_CHARS, usePosScreen } from './pos-p
  *   change how many   → `PATCH  .../cart-lines/:cartLineId`          `{ quantity }`
  *   remove a line     → `DELETE .../cart-lines/:cartLineId`          no body at all
  *   ask for a discount→ `POST   .../cart-lines/:cartLineId/discount` `{ discountMinor }`
- *   finish the sale   → `POST   /v1/sales`                           `saleCommitFromCart(…)`
+ *   finish the sale   → `POST   .../checkout`                        `checkoutFromTill(…)`
  *
  * No total of any kind is sent, and NONE is computed here: `cart` is the
  * server's answer to the last accepted command and the view reads its amounts
- * straight out of it. The sale commit's body is built by
- * `saleCommitFromCart` in the client module, from the till session and the
- * cart the server answered, so this page never spells a field of it.
+ * straight out of it. The checkout's body is built by `checkoutFromTill` in
+ * the client module from the minted `saleId` and the cashier's own calendar
+ * day, so this page never spells a field of it — and the body carries NO
+ * BASKET at all, because the server reads the basket of the session in the
+ * path.
  *
  * ── WHERE THE BASKET COMES FROM ──────────────────────────────────────────
  * Two sources, and the SERVER is both of them. Every cart command answers
@@ -255,43 +257,56 @@ export default function PosPage({ params }: { params: Promise<{ locale: Locale }
   }
 
   /**
-   * Finish the sale, then empty the basket the sale was made from.
+   * Finish the sale: ONE call, which commits the sale and consumes the basket
+   * it was made from, atomically (TL-P4-S3-R1).
    *
-   * THE EMPTYING IS NOT HOUSEKEEPING AND IT IS NOT ATOMIC. `POST /v1/sales` is
-   * P4-S2's command and it knows nothing about `pos_cart_lines`: there is no
-   * server command that commits a cart AS a sale, and no command that empties
-   * a cart in one call. So the register removes each committed line through
-   * the real `DELETE .../cart-lines/:cartLineId`, one call per line, and the
-   * cart it shows afterwards is whichever answer came back last.
+   * ## What this used to be, and why it was wrong
    *
-   * If a removal is refused, the sale is STILL COMMITTED and the receipt is
-   * still shown — hiding a committed sale would be far worse — and the
-   * refusal is reported, with the lines the server still holds left on screen
-   * rather than cleared locally. A locally emptied basket beside a server that
-   * still holds the lines is how the same goods get sold twice.
+   * It used to be `POST /v1/sales` followed by one
+   * `DELETE .../cart-lines/:cartLineId` per line, with a comment admitting
+   * «THE EMPTYING IS NOT HOUSEKEEPING AND IT IS NOT ATOMIC» and a `catch` that
+   * showed the receipt anyway when a removal failed. That was the honest
+   * handling of a defect that should not have existed: a committed sale
+   * followed by a partial cart-clear leaves a till showing goods whose
+   * financial and inventory truth is already written, and the next cashier
+   * sells them a second time.
+   *
+   * `POST .../checkout` closes it in the only place it can be closed — the
+   * server, in one transaction. The browser therefore no longer needs to know
+   * WHICH lines were sold: it does not build the basket, does not delete the
+   * lines, and does not decide what is left. It sends an id and a date.
+   *
+   * ## The basket afterwards
+   *
+   * The basket is RE-READ from the server (`getCart`) rather than emptied
+   * locally. A locally emptied basket beside a server that still holds the
+   * lines is how the same goods get sold twice, and the server is the only
+   * thing that knows what a checkout consumed — on a REPLAY it consumes
+   * nothing, so a line scanned after the first FINISH is still there and the
+   * screen must show it.
+   *
+   * It is one extra round trip and it is worth it: filtering locally by
+   * `consumedCartLineIds` would be right for a fresh checkout and subtly
+   * wrong for a replay, which reports the ORIGINAL sale's line ids.
+   *
+   * There is no second `catch`. A refusal means NOTHING committed — no sale,
+   * no invoice, no movement, no posting, no tombstone — so the one honest
+   * thing to do with it is to show it and leave the basket alone.
    */
   async function finish() {
-    if (till === null || cart === null) return;
-    const body = saleCommitFromCart({ saleId, session: till, cart, documentDate: localDateIso(), simpleProducts: simpleProducts.current });
-    if (body === null) return;
+    if (till === null || cart === null || cart.lines.length === 0) return;
+    const body = checkoutFromTill({ saleId, documentDate: localDateIso() });
     setBusy(true);
     setErrorKey(null);
     try {
-      const committed = await commitSale(body);
+      const done = await checkoutTill(tillSessionId, body);
       setConfirmingFinish(false);
       setHits(null);
       setSearch('');
       setDiscountDrafts({});
       setDiscountErrors({});
-      // The committed lines, by the ids the sale was built from.
-      let remaining = cart;
-      try {
-        for (const line of cart.lines) remaining = await removeCartLine(tillSessionId, line.cartLineId);
-      } catch (error) {
-        setErrorKey(refusalKey(error));
-      }
-      setCart(remaining);
-      setSale(committed);
+      setCart(await getCart(tillSessionId));
+      setSale(done.sale);
     } catch (error) {
       setErrorKey(refusalKey(error));
       setConfirmingFinish(false);

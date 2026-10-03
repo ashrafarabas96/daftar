@@ -868,5 +868,9 @@
   "error.pos.cart_rounding_grain_invalid": "Bizim tarafımızda bir sorun oluştu. Hiçbir şey kaydedilmedi. Tekrar deneyin; sorun sürerse destekle iletişime geçin.",
   "error.pos.cart_minor_units_invalid": "Bizim tarafımızda bir sorun oluştu. Hiçbir şey kaydedilmedi. Tekrar deneyin; sorun sürerse destekle iletişime geçin.",
   "error.pos.cart_statement_plan_invalid": "Bizim tarafımızda bir sorun oluştu. Hiçbir şey kaydedilmedi. Tekrar deneyin; sorun sürerse destekle iletişime geçin.",
+  "error.pos.checkout_cart_empty": "Sepette satılacak bir şey yok. Hiçbir şey değişmedi. Önce bir ürün okutun.",
+  "error.pos.checkout_cart_state_changed": "Satış işlenirken sepet değişti. Hiçbir şey kaydedilmedi ve hiçbir şey silinmedi. Sepeti kontrol edip yeniden bitirin.",
+  "error.pos.checkout_idempotency_conflict": "Bu satış numarası başka bir satış için kullanılmış. Hiçbir şey değişmedi. Satışı yeniden başlatın.",
+  "error.pos.checkout_price_authority_refused": "Kasa bir fiyat, indirim ya da toplam gönderdi. Fiyatları sunucu belirler. Hiçbir şey kaydedilmedi.",
   "pos.search.narrow": "En yakın sonuçlar gösteriliyor. Daraltmak için yazmaya devam edin."
 }

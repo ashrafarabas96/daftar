@@ -868,5 +868,9 @@
   "error.pos.cart_rounding_grain_invalid": "Something went wrong on our side. Nothing was saved. Try again; if it keeps happening, contact support.",
   "error.pos.cart_minor_units_invalid": "Something went wrong on our side. Nothing was saved. Try again; if it keeps happening, contact support.",
   "error.pos.cart_statement_plan_invalid": "Something went wrong on our side. Nothing was saved. Try again; if it keeps happening, contact support.",
+  "error.pos.checkout_cart_empty": "There is nothing in the basket to sell. Nothing was changed. Scan an item first.",
+  "error.pos.checkout_cart_state_changed": "The basket changed while the sale was being rung up. Nothing was saved and nothing was cleared. Check the basket and finish again.",
+  "error.pos.checkout_idempotency_conflict": "This sale number has already been used for a different sale. Nothing was changed. Start the sale again.",
+  "error.pos.checkout_price_authority_refused": "The till sent a price, a discount or a total. Prices come from the server. Nothing was saved.",
   "pos.search.narrow": "Showing the closest matches. Keep typing to narrow it down."
 }

@@ -80,18 +80,28 @@ const PHASE4_ROUTES: readonly string[] = [
   'POST /v1/pos/till-sessions',
   'POST /v1/pos/till-sessions/:sessionId/cart-lines',
   'POST /v1/pos/till-sessions/:sessionId/cart-lines/:cartLineId/discount',
+  'POST /v1/pos/till-sessions/:sessionId/checkout',
   'POST /v1/pos/till-sessions/:sessionId/close',
   'POST /v1/sales',
 ];
 
 /**
- * THE TEN POS ROUTES OF P4-S3, and why they are a section of their own.
+ * THE ELEVEN POS ROUTES OF P4-S3, and why they are a section of their own.
  *
  * A new route surface with no cross-tenant golden is an untested boundary, and
  * a cross-tenant or cross-business leak is a BLOCKER in this project. So every
  * one of the ten appears in `PHASE4_ROUTES` above — the equality against
  * `discoverPhase4Routes` would not tolerate otherwise — and all ten get real
  * ALLOW/DENY pairs below.
+ *
+ * It was TEN until the ATOMIC CHECKOUT landed (TL-P4-S3-R1).
+ * `POST /v1/pos/till-sessions/:sessionId/checkout` is the eleventh: the till
+ * used to finish a sale by committing it through `POST /v1/sales` and THEN
+ * deleting each cart line, so a committed sale followed by a partial
+ * cart-clear left stale rows after financial and inventory truth had already
+ * committed. The one call commits the sale and consumes exactly the cart rows
+ * it was derived from in ONE transaction, and its cross-business pair is
+ * below with the rest. The count moved because the surface did.
  *
  * It was NINE until the cart READ landed.
  * `GET /v1/pos/till-sessions/:sessionId/cart-lines` is the tenth: the slice
@@ -401,7 +411,7 @@ describe('the enumeration is checked, not trusted (G-02)', () => {
     // Ten: six writes and four reads. It was nine until the cart read landed
     // (`GET …/cart-lines`), and the number is asserted rather than bounded so
     // a route added without a cross-business probe below is red here.
-    expect(POS_ROUTES.length, 'the POS surface is empty, so its whole section below would prove nothing').toBe(10);
+    expect(POS_ROUTES.length, 'the POS surface is empty, so its whole section below would prove nothing').toBe(11);
     expect(
       PHASE4_ROUTES.filter((r) => !isGenericReadRoute(r)).sort(),
       'a route is driven by the generic loops, by the sale section or by the POS section — never by none of them',
@@ -881,10 +891,39 @@ describe('HTTP: the POS till, its type-ahead and its cart refuse another tenant�
     entry.lineId = (line as { cartLineId: string }).cartLineId;
   }
 
+  /**
+   * Stock this shop's product through its OWN command, so the checkout ALLOW
+   * below is refused — if it is refused — by the isolation and never by the
+   * stock. A 409 that meant `insufficient_stock` would be a DENY with no ALLOW
+   * beside it, which is exactly what this file exists to refuse.
+   */
+  async function stock(shop: Shop, actor: Actor): Promise<void> {
+    const day = String((await ownerPool().query<{ d: string }>(`SELECT current_date::text AS d`)).rows[0]?.d ?? '');
+    const configured = await t.request
+      .put(`/v1/inventory/products/${shop.productId}/configuration`)
+      .set(hdr(actor, shop.businessId))
+      .send({ trackInventory: true, unitCode: 'piece' });
+    expect(configured.status, `the product of ${shop.businessId} could not be configured: ${JSON.stringify(configured.body)}`).toBe(200);
+    const stocked = await t.request
+      .post('/v1/inventory/adjustments')
+      .set(hdr(actor, shop.businessId))
+      .send({
+        adjustmentId: randomUUID(),
+        warehouseId: shop.warehouseId,
+        occurredOn: day,
+        reason: 'the cross-tenant checkout fixture',
+        lines: [{ productId: shop.productId, quantity: '20', unitCost: '5' }],
+      });
+    expect(stocked.status, `the stock of ${shop.businessId} could not be seeded: ${JSON.stringify(stocked.body)}`).toBe(201);
+  }
+
   /** Build the fixture at most once, and hand the same failure to every case that needs it. */
   async function ready(): Promise<void> {
     if (fixture === null)
       fixture = (async (): Promise<void> => {
+        await stock(A, owner);
+        await stock(A2, owner);
+        await stock(B, ownerB);
         await openTill(A, owner, 'gold_pos_a');
         await openTill(A2, owner, 'gold_pos_a2');
         await openTill(B, ownerB, 'gold_pos_b');
@@ -1161,6 +1200,83 @@ describe('HTTP: the POS till, its type-ahead and its cart refuse another tenant�
       const ok = await form.send(A, owner, A);
       expect(ok.status, `${form.name} does not work for its own business`).toBe(200);
     }
+  });
+
+  /**
+   * THE ATOMIC CHECKOUT (TL-P4-S3-R1), and the two things its pair proves.
+   *
+   * The DENY halves are the usual three — another business's header, another
+   * business's session id, another tenant's token — and after each one the
+   * OTHER business's `sales` count is read back AS THE SCHEMA OWNER, who
+   * bypasses row security. A checkout that committed a sale into a business
+   * the caller cannot see would be invisible to the caller and visible here.
+   *
+   * The ALLOW half proves the law this route exists for, and it is asserted on
+   * the SERVER's rows rather than on the response: after A's own checkout, A
+   * holds one more `sales` row AND zero live `pos_cart_lines` for that
+   * session. A sale with the basket still full, or an emptied basket with no
+   * sale, is the defect; both halves are read from the database.
+   */
+  it('POST /v1/pos/till-sessions/:sessionId/checkout: sells A’s own basket atomically, and refuses every cross-business form', async () => {
+    await ready();
+    const path = (shop: Shop): string => `/v1/pos/till-sessions/${till(shop).sessionId}/checkout`;
+    const day = String((await ownerPool().query<{ d: string }>(`SELECT current_date::text AS d`)).rows[0]?.d ?? '');
+    const body = (): Record<string, unknown> => ({
+      saleId: randomUUID(),
+      settlementMode: 'cash',
+      customerId: null,
+      documentDate: day,
+      dueDate: null,
+      taxMinor: '0',
+      notes: null,
+    });
+    const sales = async (shop: Shop): Promise<number> =>
+      Number((await ownerPool().query<{ n: string }>(`SELECT count(*)::text AS n FROM sales WHERE business_id = $1`, [shop.businessId])).rows[0]?.n ?? '-1');
+    const liveLines = async (shop: Shop): Promise<number> =>
+      Number(
+        (
+          await ownerPool().query<{ n: string }>(
+            `SELECT count(*)::text AS n FROM pos_cart_lines WHERE business_id = $1 AND till_session_id = $2 AND removed_at IS NULL`,
+            [shop.businessId, till(shop).sessionId],
+          )
+        ).rows[0]?.n ?? '-1',
+      );
+
+    // DENY 1 — A's own session under A2's header.
+    const beforeA2 = await sales(A2);
+    const foreignHeader = await t.request.post(path(A)).set(hdr(owner, A2.businessId)).send(body());
+    expect([403, 404, 409, 422], `the checkout answered ${foreignHeader.status} for A's session under A2's header`).toContain(foreignHeader.status);
+    expect(await sales(A2), 'the refused checkout committed a sale into A2 anyway').toBe(beforeA2);
+
+    // DENY 2 — the other business's session under A's own header. A route that
+    // trusted its path parameter would have sold another business's basket.
+    for (const other of [A2, B]) {
+      const beforeOther = await sales(other);
+      const beforeLines = await liveLines(other);
+      const res = await t.request.post(path(other)).set(hdr(owner, A.businessId)).send(body());
+      expect([403, 404, 409, 422], `the checkout answered ${res.status} for ${other.businessId}'s session under A's header`).toContain(res.status);
+      expect(await sales(other), `the refused checkout committed a sale into ${other.businessId}`).toBe(beforeOther);
+      expect(await liveLines(other), `the refused checkout consumed ${other.businessId}'s basket`).toBe(beforeLines);
+    }
+
+    // DENY 3 — another tenant's token against this tenant's business.
+    const beforeToken = await sales(A);
+    const foreignToken = await t.request.post(path(A)).set(hdr(ownerB, A.businessId)).send(body());
+    expect([401, 403, 404], `the checkout answered ${foreignToken.status} for another tenant's token`).toContain(foreignToken.status);
+    expect(await sales(A), 'another tenant’s token sold A’s basket').toBe(beforeToken);
+
+    // ALLOW — and BOTH halves of the atomic law, read off the database.
+    const addedLine = await t.request
+      .post(`/v1/pos/till-sessions/${till(A).sessionId}/cart-lines`)
+      .set(hdr(owner, A.businessId))
+      .send({ productId: A.productId, variantId: null, quantity: '1' });
+    expect(addedLine.status, `A's basket could not be refilled for the ALLOW: ${JSON.stringify(addedLine.body)}`).toBe(201);
+    expect(await liveLines(A), 'the ALLOW has no subject: A’s basket is empty before the checkout').toBeGreaterThan(0);
+    const beforeSales = await sales(A);
+    const ok = await t.request.post(path(A)).set(hdr(owner, A.businessId)).send(body());
+    expect(ok.status, `the checkout does not work for its own business: ${JSON.stringify(ok.body)}`).toBe(200);
+    expect(await sales(A), 'the accepted checkout committed no sale').toBe(beforeSales + 1);
+    expect(await liveLines(A), 'the accepted checkout left live cart lines behind — a sale committed and a basket not consumed').toBe(0);
   });
 
   /**
