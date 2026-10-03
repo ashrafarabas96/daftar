@@ -371,6 +371,24 @@ jobs:
           # PG_PORT=5432 makes the test harness reuse the `postgres` service
           # above instead of starting an embedded instance.
           PG_PORT: '5432'
+      # TL-P4-S3-R5. The process composition guard's PLANTED-DEFECT PROOF.
+      # It writes an unattached `@Controller()` into `apps/api/src/`, then
+      # registers a merchant controller in the platform runtime, and requires
+      # the guard to exit non-zero on each — reading the verdict off the
+      # spawn result object, never through a pipe — before restoring the tree
+      # and requiring green again. `A planted-defect proof that cannot be
+      # shown failing is not a proof`, so the proof runs here on every push
+      # and pull request rather than being asserted once by hand.
+      # `required-ci-chain-composition.test.ts` (C-9) asserts this step's
+      # presence, its command, its job and the absence of
+      # `continue-on-error` / `if:`.
+      - name: Process composition guard — planted-defect red proof
+        run: npm run proof:composition:red
+        env:
+          # The same database environment as every other gate step in this
+          # job: the guard's suite runs under the root Vitest config, whose
+          # global setup reuses the `postgres` service at PG_PORT=5432.
+          PG_PORT: '5432'
       - name: Keep the gate's browser screenshots and results
         if: always()
         uses: actions/upload-artifact@v4
