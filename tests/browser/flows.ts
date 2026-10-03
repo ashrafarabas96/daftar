@@ -622,6 +622,25 @@ export async function runFlows(run: Run): Promise<void> {
     await run.row(names.tea).waitFor();
     await addFound(run, names.tea);
     await basketLines(run, 2);
+
+    // ── THE RELOAD ────────────────────────────────────────────────────────
+    // The basket is SERVER-SIDE state in `pos_cart_lines`, and a reload is
+    // the one case the register's "every command answers with the whole
+    // cart" property does not cover. Before the mount read
+    // (`GET .../cart-lines`) was wired, this reload showed an EMPTY register
+    // while the server still held both lines — the defect the cart read was
+    // built for, and the only step here that can tell whether it is wired.
+    //
+    // The amount is read BACK from the page on both sides and compared to
+    // itself; nothing here computes a total.
+    const dueBefore = await amountShown(run, 'pos.total.due');
+    await run.reload();
+    await page.locator('header').waitFor();
+    await basketLines(run, 2);
+    const dueAfter = await amountShown(run, 'pos.total.due');
+    if (dueAfter !== dueBefore) run.fail('flow', `the basket did not survive a reload: "To pay" read ${dueBefore} before and ${dueAfter} after`);
+    await run.shot('p4-pos-reloaded');
+
     // How many: the screen sends the quantity and takes the server's basket back.
     const before = await amountShown(run, 'pos.total.due');
     await run.field(T('pos.basket.quantity')).first().fill('3');

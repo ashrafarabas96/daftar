@@ -7,6 +7,7 @@ import { refusalKey } from '@/lib/phase3-errors';
 import {
   addCartLine,
   commitSale,
+  getCart,
   removeCartLine,
   requestDiscount,
   saleCommitFromCart,
@@ -42,15 +43,23 @@ import { POS_SEARCH_DELAY_MS, POS_SEARCH_MIN_CHARS, usePosScreen } from './pos-p
  * `saleCommitFromCart` in the client module, from the till session and the
  * cart the server answered, so this page never spells a field of it.
  *
- * ── WHERE THE BASKET COMES FROM, AND WHAT IS NOT WIRED ───────────────────
- * There is no mount read, because there is no cart read mounted in this tree
- * (see `getCart`). A till session is created EMPTY and every cart command
- * answers with the whole recomputed cart — which is the reason
- * `pos-cart.controller.ts` gives for having no `GET` — so the register that
- * opened the till knows the basket from the server's own answers. The cost is
- * that a basket does not survive a page RELOAD: the server still holds the
- * lines and the screen shows none. One line fixes it the moment the sibling's
- * `GET .../cart-lines` lands.
+ * ── WHERE THE BASKET COMES FROM ──────────────────────────────────────────
+ * Two sources, and the SERVER is both of them. Every cart command answers
+ * with the whole recomputed cart, so the register that is already open takes
+ * each answer as the truth and never needs a second read — which is the
+ * reason `pos-cart.controller.ts` gives for having no `GET` of its own.
+ *
+ * And on MOUNT, once, the basket is read: `GET .../cart-lines`
+ * (`getCart`). The basket is server-side state in `pos_cart_lines`, so
+ * without that read a page RELOAD showed an empty register while the server
+ * still held the lines — the one case the "never asks twice" property does
+ * not cover, and the reason the read exists at all. Neither
+ * `GET /pos/till-sessions/current` nor `GET /pos/till-sessions/:id` carries a
+ * line; both answer a `TillSession`.
+ *
+ * The read is attempted once per till session, tracked by
+ * `basketReadFor`, so a refusal is not retried in a loop and a command's
+ * answer is never overwritten by a late mount read.
  *
  * The type-ahead is paced (`POS_SEARCH_DELAY_MS`, `POS_SEARCH_MIN_CHARS`) so a
  * sale costs a handful of reads, not one per keystroke.
@@ -77,6 +86,12 @@ export default function PosPage({ params }: { params: Promise<{ locale: Locale }
   const [busy, setBusy] = useState(false);
   const [errorKey, setErrorKey] = useState<string | null>(null);
   const [sale, setSale] = useState<SaleDto | null>(null);
+  /**
+   * The till session the mount read has already been attempted for. A ref and
+   * not state, because changing it must not itself cause a render, and `''`
+   * means "no session yet" rather than "not read".
+   */
+  const basketReadFor = useRef<string>('');
   const quantityTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
   /**
    * The products the type-ahead has reported as having NO merchant variants
@@ -97,6 +112,35 @@ export default function PosPage({ params }: { params: Promise<{ locale: Locale }
   // and it cannot name the branch either — a browser that chose either would
   // be deciding the scope of its own read.
   const tillSessionId = till?.id ?? '';
+
+  /**
+   * THE MOUNT READ: the basket the server already holds.
+   *
+   * Once per till session. It runs only while nothing else has set the cart,
+   * so a command's answer — which is the whole recomputed cart — is never
+   * clobbered by a read that resolves after it. A refusal sets the error key
+   * and is not retried, because the two refusals this route can give
+   * (`pos.session_not_found`, `pos.session_not_owned`) do not become true by
+   * asking again.
+   */
+  useEffect(() => {
+    if (screen.phase !== 'ready' || !tillOpen || tillSessionId === '') return;
+    if (basketReadFor.current === tillSessionId) return;
+    basketReadFor.current = tillSessionId;
+    let live = true;
+    getCart(tillSessionId)
+      .then((answer) => {
+        // `cart === null` is the guard: if a command has already answered,
+        // its cart is newer than this read and wins.
+        if (live) setCart((current) => current ?? answer);
+      })
+      .catch((error: unknown) => {
+        if (live) setErrorKey(refusalKey(error));
+      });
+    return () => {
+      live = false;
+    };
+  }, [screen.phase, tillOpen, tillSessionId]);
 
   // The paced type-ahead: nothing before `POS_SEARCH_MIN_CHARS`, and one read per pause.
   useEffect(() => {
