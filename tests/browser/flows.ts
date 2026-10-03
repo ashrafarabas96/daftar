@@ -136,7 +136,36 @@ async function fullyVisible(run: Run, target: Locator, what: string): Promise<vo
 }
 
 /** Keyboard: Tab from the top of the page reaches `label` (a button), and Enter presses it. */
+/**
+ * The target must EXIST before its reachability can be measured.
+ *
+ * `tabUntil` presses Tab up to 120 times and reports "never reached" when
+ * none of them lands on the target. That answer is only about the keyboard if
+ * the target is on the page: against a screen still fetching its data it is a
+ * statement about the clock, and it reads exactly like an accessibility
+ * defect.
+ *
+ * MEASURED, and this is why the wait is here rather than a larger `max`: with
+ * the full nineteen-step sequence the `receive` step failed at 768px in `ar`,
+ * `en` AND `tr` on one run of the gate, and on the very next run of the SAME
+ * build `tr` passed while `ar` and `en` failed. A verdict that changes between
+ * runs of one build is not measuring the product. The screenshot kept from the
+ * failing run shows the button rendered and plainly visible, so Tab was being
+ * pressed before it was there — `nav()` resolves on `waitForURL`, which is
+ * navigation and not render, and below `lg` the collapsed menu adds an
+ * interaction that moves the timing.
+ *
+ * So the wait is a PRECONDITION, not a relaxation: nothing about the claim
+ * changes, and a button that never renders now fails saying that, instead of
+ * being reported as unreachable by keyboard.
+ */
 async function tabToButton(run: Run, label: string): Promise<void> {
+  try {
+    await run.page.getByRole('button', { name: label, exact: true }).first().waitFor({ state: 'visible', timeout: 15000 });
+  } catch {
+    run.fail('flow', `the "${label}" button never rendered, so its keyboard reachability could not be measured`);
+    throw new Error(`render: "${label}" absent`);
+  }
   const presses = await tabUntil(run.page, `(a) => a.tagName === 'BUTTON' && (a.textContent || '').trim() === ${JSON.stringify(label)}`);
   if (presses === null) {
     run.fail('keyboard', `Tab never reached the "${label}" button`);
@@ -147,6 +176,14 @@ async function tabToButton(run: Run, label: string): Promise<void> {
 
 /** Keyboard: Tab reaches a list row containing `text`, and Enter opens it. */
 async function tabToRow(run: Run, text: string): Promise<void> {
+  // The same precondition as `tabToButton`, for the same measured reason: a
+  // row that has not rendered yet is not a row the keyboard cannot reach.
+  try {
+    await run.page.locator('main li').filter({ hasText: text }).first().waitFor({ state: 'visible', timeout: 15000 });
+  } catch {
+    run.fail('flow', `a row with "${text}" never rendered, so its keyboard reachability could not be measured`);
+    throw new Error(`render: row "${text}" absent`);
+  }
   const presses = await tabUntil(
     run.page,
     `(a) => a.getAttribute('role') === 'button' && !!a.closest('main li') && (a.textContent || '').includes(${JSON.stringify(text)})`,
