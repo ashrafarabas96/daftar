@@ -592,6 +592,12 @@ export async function runFlows(run: Run): Promise<void> {
     await page.waitForURL(new RegExp(`/${run.locale}/pos/till$`));
     await run.text('pos.till.none');
     await run.shot('p4-pos-till');
+    // One choice, and it is a WAREHOUSE — which is what this step has always
+    // picked. `TillSessionOpenSchema` requires `branchId` AND `warehouseId`
+    // (plus a `terminalCode`), and the warehouse's answer carries its own home
+    // branch, so choosing the place to sell from supplies both identities. The
+    // screen used to offer BRANCHES and send `branchId` alone, which `.strict()`
+    // refused for the two missing keys.
     await run.field(T('pos.till.where')).selectOption({ label: seed.mainWarehouse });
     await tabToButton(run, T('pos.till.open'));
     await page.waitForURL(new RegExp(`/${run.locale}/pos$`));
@@ -604,12 +610,15 @@ export async function runFlows(run: Run): Promise<void> {
     await run.shot('p4-pos-register');
     // The type-ahead is paced by the screen: one read per pause, nothing
     // under two characters. The step waits for the screen's own pause.
-    await run.field(T('pos.search.label')).fill(names.riceSearch);
+    // `ricePrefix`, not `riceSearch`: the POS type-ahead is a PREFIX probe
+    // (`lower(t.name) ^@ lower($q)` in pos-reads.ts), unlike the catalog and
+    // stock pickers, which match a substring.
+    await run.field(T('pos.search.label')).fill(names.ricePrefix);
     await run.row(names.rice).waitFor();
     await run.shot('p4-pos-search');
     await addFound(run, names.rice);
     await basketLines(run, 1);
-    await run.field(T('pos.search.label')).fill(names.teaSearch);
+    await run.field(T('pos.search.label')).fill(names.teaPrefix);
     await run.row(names.tea).waitFor();
     await addFound(run, names.tea);
     await basketLines(run, 2);
@@ -633,8 +642,39 @@ export async function runFlows(run: Run): Promise<void> {
   });
 
   await run.step('p4-pos-discount', async () => {
+    // ── THE DISCOUNT IS ASKED FOR ON A LINE ───────────────────────────────
+    // This step used to ask for ONE discount for the whole basket. The server
+    // has no such command: the discount lives on `pos_cart_lines`
+    // (`requested_discount_minor`), `POST .../cart-lines/:cartLineId/discount`
+    // addresses one line, and P4-S2's sealed `sale_items_discount_ck` is per
+    // line too. A basket-level discount would need a server command that
+    // ALLOCATES across the lines, with an allocation rule and a
+    // rounding-residue decision nobody has given — and a browser that divided
+    // one figure across the lines itself would be computing the per-line
+    // amounts the server owns, which is the whole of `P4-AL-18`.
+    //
+    // So the field is per line (`POS_DISCOUNT_GRAIN` in
+    // `apps/web/src/lib/phase4-pos-api.ts` is the one place that choice
+    // lives), and the BASKET's "Discount given" stays as the figure the
+    // merchant reads — the server's own exact sum of the line requests.
+    //
+    // Nothing else about this step changed: it still compares the text of
+    // "To pay" before and after and requires the SERVER to have changed it,
+    // it still requires an invalid amount to be refused on screen and never
+    // sent, and it still keeps every confirmation and visibility check.
+    //
+    // The GRAIN is asserted here rather than assumed: one discount field per
+    // basket line is what "per line" means on screen, and a basket-level
+    // field would be one field beside two lines.
+    const quantityFields = page.getByLabel(T('pos.basket.quantity'), { exact: true });
+    const discountFields = page.getByLabel(T('pos.discount.amount', { currency: seed.currency }), { exact: true });
+    const lineCount = await quantityFields.count();
+    const fieldCount = await discountFields.count();
+    if (fieldCount !== lineCount)
+      run.fail('flow', `the basket shows ${lineCount} line(s) and ${fieldCount} discount field(s): the discount is asked for per LINE`);
+
     const due = await amountShown(run, 'pos.total.due');
-    await run.field(T('pos.discount.amount', { currency: seed.currency })).fill('1.50');
+    await discountFields.first().fill('1.50');
     await run.shot('p4-pos-discount');
     await tabToButton(run, T('pos.discount.apply'));
     await page.waitForTimeout(800);
@@ -644,12 +684,16 @@ export async function runFlows(run: Run): Promise<void> {
     if (!/[1-9]/.test(given)) run.fail('flow', `the discount the server allowed reads as nothing ("${given}")`);
     await run.shot('p4-pos-discounted');
     // A discount that is not an amount in this currency never leaves the screen.
-    await run.field(T('pos.discount.amount', { currency: seed.currency })).fill('1.5555');
-    await run.button(T('pos.discount.apply')).click();
+    await discountFields.first().fill('1.5555');
+    await run.button(T('pos.discount.apply')).first().click();
     await run.text('pos.discount.invalid');
     await run.shot('p4-pos-discount-refused');
-    await run.button(T('pos.discount.clear')).click();
+    // Clearing asks the server for a discount of zero on that line, and the
+    // server's own figure is what comes back.
+    await run.button(T('pos.discount.clear')).first().click();
     await page.waitForTimeout(800);
+    const cleared = await amountShown(run, 'pos.total.discount');
+    if (cleared === given) run.fail('flow', `the discount was cleared on the line and "discount given" is unchanged (${given})`);
     // Finish, behind a visible confirmation, and read the sale the server recorded.
     await tabToButton(run, T('pos.finish.action'));
     const dialog = page.getByRole('dialog');
