@@ -512,6 +512,94 @@ CREATE UNIQUE INDEX pos_cart_lines_line_uq
 CREATE INDEX pos_cart_lines_session_idx ON pos_cart_lines (business_id, till_session_id, line_no);
 
 -- ─────────────────────────────────────────────────────────────────────────
+-- 2b. THE SCANNER PATH'S BYTE-ORDER INDEXES — and the measurement that
+--     forced them.
+--
+--     P4-AL-76 in `pos-reads.ts` chose `x ^@ $n` over `x LIKE $n || '%'`
+--     because `^@` needs no escaping and because the barcode arms "get a real
+--     range". The first half was always true. The second half was true only
+--     of the machine it was measured on.
+--
+--     MEASURED, not reasoned. The same arm, the same rows, PostgreSQL 16.13:
+--
+--       | index the arm can reach                  | plan for `barcode ^@ $p`  |
+--       |------------------------------------------|---------------------------|
+--       | `(business_id, barcode)`, default collation | Index Cond on business_id ONLY, `^@` as a Filter |
+--       | `(business_id, barcode COLLATE "C")`     | Index Cond: `business_id = … AND barcode >= $p AND barcode < succ($p)` |
+--
+--     PostgreSQL derives a prefix RANGE from `^@` only when the index's
+--     collation is byte order, and it recognises exactly two collations as
+--     byte order: `C` and `POSIX`. It does NOT recognise `C.utf8`, and it does
+--     not recognise `en_US.utf8` — which is what the deployment target's
+--     cluster is initialised with. `products_barcode_uq` and
+--     `variants_barcode_uq` (`0005:34`, `0005:52`) are on the database default
+--     collation, so on the real target the till's scanner path had NO range:
+--     the variants arm read its index on `business_id` alone and filtered
+--     every barcode in the business, and the products arm fell to a Seq Scan.
+--
+--     WHY THIS WAS NOT CAUGHT EARLIER, stated plainly because it indicts the
+--     estate and not the code: the embedded cluster the suites run on locally
+--     is initialised with the bare `C` locale, which PostgreSQL DOES recognise.
+--     So the local green was a fact about a collation the deployment target
+--     does not have. The budget suite's own gate caught it the first time the
+--     slice gate was ever reached in CI.
+--
+--     WHY AN INDEX AND NOT A REWRITTEN PREDICATE. `^@` is a byte-prefix test
+--     by definition, so it is already collation-independent in MEANING; only
+--     its PLAN depended on the collation. An index in the collation the
+--     operator already implies makes the plan match the meaning, and leaves
+--     `pos-reads.ts` untouched — no escaping, no application-computed upper
+--     bound, no second parameter that could disagree with the predicate it is
+--     supposed to accelerate.
+--
+--     WHY ADDITIVE AND NOT A CHANGE TO `0005`. `0000`–`0078` are immutable.
+--     These are new indexes, created here, duplicating no uniqueness: the
+--     uniqueness of a barcode stays where it was accepted, on the unique
+--     indexes of `0005`, which these do not touch and do not replace. These
+--     carry no UNIQUE and exist only to be walked.
+--
+--     The predicate is `0005`'s predicate verbatim, so the two indexes cover
+--     exactly the rows the arms can see.
+-- ─────────────────────────────────────────────────────────────────────────
+CREATE INDEX products_barcode_prefix_c_idx
+  ON products (business_id, barcode COLLATE "C")
+  WHERE barcode IS NOT NULL AND status <> 'archived';
+
+CREATE INDEX variants_barcode_prefix_c_idx
+  ON product_variants (business_id, barcode COLLATE "C")
+  WHERE barcode IS NOT NULL AND status <> 'archived';
+
+-- The claim is the COLLATION, so the collation is what is asserted: an index
+-- that exists under the right name but on the default collation would leave
+-- the scanner path exactly as slow as it was, and would read as fixed.
+DO $coll$
+DECLARE
+  r RECORD;
+BEGIN
+  FOR r IN
+    SELECT unnest(ARRAY['products_barcode_prefix_c_idx', 'variants_barcode_prefix_c_idx']) AS idx
+  LOOP
+    IF to_regclass(r.idx) IS NULL THEN
+      RAISE EXCEPTION 'pos.migration_end_state_invalid: % was not created', r.idx;
+    END IF;
+    IF NOT EXISTS (
+      SELECT 1
+        FROM pg_index i
+        JOIN pg_collation c ON c.oid = i.indcollation[1]
+       WHERE i.indexrelid = to_regclass(r.idx) AND c.collname = 'C'
+    ) THEN
+      RAISE EXCEPTION
+        'pos.migration_end_state_invalid: % must order `barcode` in collation C — any other collation gives the scanner path no prefix range',
+        r.idx;
+    END IF;
+    IF (SELECT indpred IS NULL FROM pg_index WHERE indexrelid = to_regclass(r.idx)) THEN
+      RAISE EXCEPTION 'pos.migration_end_state_invalid: % must carry 0005''s partial predicate', r.idx;
+    END IF;
+  END LOOP;
+END
+$coll$;
+
+-- ─────────────────────────────────────────────────────────────────────────
 -- 3. Row security: ENABLE and FORCE on both (TL-P4-S1-R2), then the SIX
 --    policies of an ordinary relation (P4-AL-38 as corrected by TL-P4-S1-C2;
 --    the accepted shape is `0077`'s `sale_items` and the purchase bridge at

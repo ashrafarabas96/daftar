@@ -134,7 +134,27 @@ const SCALE = ((): number => {
 const scaled = (n: number): number => Math.max(1, Math.round(n * SCALE));
 
 /** P4-AL-73's POS half: the accepted P3-S7 catalogue volume, exactly. */
-const VOLUME = { variants: scaled(5_000), warehouses: 3 } as const;
+/**
+ * `merchantVariants` is the population the BARCODE arm on `product_variants`
+ * is measured against, and it exists because the arm had none.
+ *
+ * The base variants this seed creates carry NO barcode and cannot: a base
+ * variant is system stock identity, and `daftar_inventory_internal`'s INSERT
+ * grant is exactly `(business_id, id, product_id, is_base)` (`0053:257`). So
+ * every one of the 5 000 variants had `barcode IS NULL`, both partial barcode
+ * indexes on `product_variants` were EMPTY, and the arm's gate was asserting a
+ * plan shape over an index with nothing in it — measured: `pg_stats.null_frac`
+ * 1.0, `reltuples` 0, and the planner choosing a Sort over the unique index by
+ * a 2.24-unit cost margin computed from two zero-row estimates. A barcode on
+ * even ONE merchant variant makes the arm range.
+ *
+ * A separate namespace on purpose: `catalog_identifiers_sync` enforces
+ * identifier uniqueness ACROSS the two tables, so these take `68…` barcodes
+ * where the products take `79…`. And their SKUs are `VAR-SKU-…`, deliberately
+ * NOT under `pos-`, so adding them does not change which rows the SKU and NAME
+ * arms match and therefore does not move what the P4-A budget measures.
+ */
+const VOLUME = { variants: scaled(5_000), warehouses: 3, merchantVariants: scaled(500) } as const;
 
 const WARMUP = 5;
 const RUNS = 20;
@@ -184,6 +204,7 @@ async function seed(): Promise<void> {
     await c.query('BEGIN');
     await setScope(c, { tenantId: A.tenantId, businessId: A.businessId });
     await seedBatches(c);
+    await seedMerchantVariants(c);
     await c.query('COMMIT');
   } catch (e) {
     await c.query('ROLLBACK').catch(() => undefined);
@@ -241,6 +262,26 @@ async function seed(): Promise<void> {
   oneBarcode = `79${String(VOLUME.variants - 1).padStart(11, '0')}`;
 }
 
+/**
+ * The merchant variants, with barcodes: the only rows either barcode index on
+ * `product_variants` will ever hold in this dataset, and the reason the arm's
+ * gate has a subject at all. Written as the merchant principal the seed
+ * already runs as, because a barcode IS a merchant identifier — the inventory
+ * principal has no grant on the column and should not.
+ */
+async function seedMerchantVariants(c: PoolClient): Promise<void> {
+  for (let from = 0; from < VOLUME.merchantVariants; from += BATCH) {
+    const to = Math.min(VOLUME.merchantVariants, from + BATCH);
+    await c.query(
+      `INSERT INTO product_variants (business_id, product_id, sku, barcode, status)
+       SELECT p.business_id, p.id, 'VAR-SKU-' || g.n::text, '68' || lpad(g.n::text, 11, '0'), 'active'
+         FROM generate_series($2::int, $3::int - 1) g(n)
+         JOIN products p ON p.business_id = $1 AND p.sku = 'POS-SKU-' || g.n::text`,
+      [A.businessId, from, to],
+    );
+  }
+}
+
 async function seedBatches(c: PoolClient): Promise<void> {
   for (let from = 0; from < VOLUME.variants; from += BATCH) {
     const to = Math.min(VOLUME.variants, from + BATCH);
@@ -268,6 +309,7 @@ async function seedBatches(c: PoolClient): Promise<void> {
 interface Volume {
   products: number;
   variants: number;
+  variantBarcodes: number;
   translations: number;
   stockKeys: number;
   namePrefixMatches: number;
@@ -278,6 +320,8 @@ async function measuredVolume(): Promise<Volume> {
     `SELECT (SELECT count(*)::int FROM products WHERE business_id = $1 AND status = 'active' AND sku LIKE 'POS-SKU-%') AS products,
             (SELECT count(*)::int FROM product_variants v JOIN products p ON p.business_id = v.business_id AND p.id = v.product_id
               WHERE v.business_id = $1 AND p.sku LIKE 'POS-SKU-%') AS variants,
+            (SELECT count(*)::int FROM product_variants v JOIN products p ON p.business_id = v.business_id AND p.id = v.product_id
+              WHERE v.business_id = $1 AND p.sku LIKE 'POS-SKU-%' AND v.barcode IS NOT NULL AND v.status <> 'archived') AS "variantBarcodes",
             (SELECT count(*)::int FROM product_translations WHERE business_id = $1 AND name LIKE 'POS Item %') AS translations,
             (SELECT count(*)::int FROM stock_levels WHERE business_id = $1) AS "stockKeys",
             (SELECT count(*)::int FROM product_translations WHERE business_id = $1 AND lower(name) LIKE $2 || '%') AS "namePrefixMatches"`,
@@ -387,6 +431,16 @@ async function ownerCost(path: string): Promise<number> {
   return must(sorted[Math.min(sorted.length - 1, Math.ceil(0.95 * sorted.length) - 1)]);
 }
 
+/**
+ * The indexes either barcode arm may legitimately range on. `0079`'s
+ * byte-order index can on any cluster; `0005`'s unique index can only where
+ * the database default collation is `C` or `POSIX`.
+ */
+const BARCODE_INDEXES = {
+  products: ['products_barcode_prefix_c_idx', 'products_barcode_uq'],
+  product_variants: ['variants_barcode_prefix_c_idx', 'variants_barcode_uq'],
+} as const;
+
 const INDEX_ACCESS = new Set(['Index Scan', 'Index Only Scan', 'Bitmap Index Scan']);
 
 function usesIndex(nodes: readonly PlanNode[], index: string): boolean {
@@ -439,7 +493,8 @@ describe(`P4-A — the POS type-ahead (scale ${SCALE}, ${SCALE === 1 ? 'acceptan
     const v = await measuredVolume();
     console.info('[P4-A] volume', JSON.stringify({ scale: SCALE, ...v, cpus: cpus().length, totalmemGiB: Math.round(totalmem() / 2 ** 30) }));
     expect(v.products).toBe(VOLUME.variants);
-    expect(v.variants, 'one base variant per product').toBe(VOLUME.variants);
+    expect(v.variants, 'one base variant per product, plus the barcoded merchant variants').toBe(VOLUME.variants + VOLUME.merchantVariants);
+    expect(v.variantBarcodes, 'the barcode arm on product_variants must have a subject').toBe(VOLUME.merchantVariants);
     expect(v.translations).toBe(VOLUME.variants);
     expect(v.stockKeys, 'every variant holds stock in all three warehouses').toBe(VOLUME.variants * VOLUME.warehouses);
     expect(v.namePrefixMatches, 'a prefix read whose prefix matches nothing measures nothing').toBeGreaterThanOrEqual(50);
@@ -458,12 +513,28 @@ describe(`P4-A — the POS type-ahead (scale ${SCALE}, ${SCALE === 1 ? 'acceptan
   });
 
   /**
-   * GATE. Deterministic on any host, and the whole measured story of this
-   * read's plan.
+   * GATE. The whole measured story of this read's plan — and, since 2026-10-03,
+   * the case that caught the slice's own worst defect.
    *
    * The two BARCODE arms must carry a `>= / <` RANGE on their own index. That
    * is the scanner path — the one a cashier drives hundreds of times a shift —
    * and it is the one this estate's row security permits to be ranged at all.
+   *
+   * THE INDEX NAMED HERE IS NOT AN ACCIDENT, and it is not `0005`'s unique
+   * index. PostgreSQL derives a prefix range from `^@` only when the index's
+   * collation is byte order, and it recognises `C` and `POSIX` and nothing
+   * else — not `C.utf8`, not `en_US.utf8`. `variants_barcode_uq` is on the
+   * database default collation, so on any cluster not initialised with the
+   * bare `C` locale this arm had NO range: it read its index on `business_id`
+   * alone and filtered every barcode in the business, and the products arm
+   * fell to a Seq Scan. `0079` adds the two byte-order indexes this case
+   * names, for exactly that reason.
+   *
+   * THIS CASE IS THEREFORE NOT "deterministic on any host", which is what the
+   * comment here used to claim. Its verdict depends on the cluster's
+   * collation, and the comment that denied it was the reason a green local run
+   * was mistaken for a fact about the deployment target for as long as it was.
+   * It is written down rather than smoothed over.
    *
    * The SKU and NAME arms are deliberately NOT asserted here, and the next
    * case is why: under this RLS shape they cannot be ranged by ANY predicate,
@@ -478,17 +549,46 @@ describe(`P4-A — the POS type-ahead (scale ${SCALE}, ${SCALE === 1 ? 'acceptan
     for (const p of plans) console.info('[P4-A] plan', p.json);
     const nodes = plans.flatMap((p) => p.nodes);
 
-    for (const index of ['variants_barcode_uq', 'variants_sku_uq']) {
-      expect(usesIndex(nodes, index), `the arm served by ${index} must reach it`).toBe(true);
-    }
+    // The SKU arm is named exactly; the barcode arm is named as a SET, and the
+    // next paragraph of the doc comment is why. On a cluster initialised with
+    // the bare `C` locale BOTH `0005`'s unique index and `0079`'s byte-order
+    // index can carry the range, and which one the planner picks is not a
+    // claim this product makes. On every other cluster only the byte-order
+    // one can. So the gate asserts the thing the till actually needs — that
+    // the arm reaches SOME index able to range — and asserting one name would
+    // have made this case's verdict the host's collation all over again.
+    expect(usesIndex(nodes, 'variants_sku_uq'), 'the arm served by variants_sku_uq must reach it').toBe(true);
+    expect(
+      BARCODE_INDEXES.product_variants.some((i) => usesIndex(nodes, i)),
+      `the barcode arm must reach one of ${BARCODE_INDEXES.product_variants.join(' / ')}`,
+    ).toBe(true);
+
     const barcodePlans = await plansOf(searchPath(oneBarcode, 50));
+    // Printed for the same reason the prefix plan above is: the assertion that
+    // follows is about a plan, so the plan it judged is part of the record.
+    for (const p of barcodePlans) console.info('[P4-A] barcode plan', p.json);
     const barcodeNodes = barcodePlans.flatMap((p) => p.nodes);
-    for (const index of ['products_barcode_uq', 'variants_barcode_uq']) {
+    for (const [table, candidates] of Object.entries(BARCODE_INDEXES)) {
       expect(
-        indexRangeOn(barcodeNodes, index),
-        `${index} must carry a >= / < RANGE — a scanned barcode is the till's hot path, and ^@ is what keeps it a range under RLS`,
+        candidates.some((i) => indexRangeOn(barcodeNodes, i)),
+        `the ${table} barcode arm must carry a >= / < RANGE on one of ${candidates.join(' / ')} — a scanned barcode is the till's hot path, and only a byte-order index makes ^@ a range`,
       ).toBe(true);
     }
+
+    // And the schema fact the range depends on, asserted where it is NOT a
+    // property of the host: `0079`'s two indexes exist and order `barcode` in
+    // collation C. Without this, a cluster that happens to be `C` would let
+    // the case above pass over a schema that has no byte-order index at all,
+    // which is the precise shape of the defect this case was changed to catch.
+    const collations = await ownerPool().query<{ idx: string; collname: string }>(
+      `SELECT ci.relname AS idx, c.collname
+         FROM pg_index i
+         JOIN pg_class ci ON ci.oid = i.indexrelid
+         JOIN pg_collation c ON c.oid = i.indcollation[1]
+        WHERE ci.relname = ANY ($1::text[])`,
+      [['products_barcode_prefix_c_idx', 'variants_barcode_prefix_c_idx']],
+    );
+    expect(collations.rows.map((r) => `${r.idx}:${r.collname}`).sort()).toEqual(['products_barcode_prefix_c_idx:C', 'variants_barcode_prefix_c_idx:C']);
   });
 
   /**

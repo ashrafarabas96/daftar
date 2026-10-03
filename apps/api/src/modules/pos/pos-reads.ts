@@ -72,9 +72,48 @@ import { POS_SEARCH_DEFAULT_LIMIT, type PosProductSearchQuery } from './pos-read
  * **false**, `like_escape` **false**, `lower` **false**.
  *
  * So: `LIKE` can never be an index condition here, which is why the barcode
- * arms use `^@` and get a real range on `products_barcode_uq` /
- * `variants_barcode_uq` — the scanner path, which is the one that matters most
- * at a till. And the SKU and NAME arms cannot be ranged by ANY predicate,
+ * arms use `^@`.
+ *
+ * ── THE COLLATION, which this table recorded and then failed to read ────
+ *
+ * The row above says `datcollate = C`, and that turned out to be carrying the
+ * whole claim. PostgreSQL derives a prefix RANGE from `^@` only when the
+ * index's collation is byte order, and it recognises exactly `C` and `POSIX`
+ * — not `C.utf8`, not `en_US.utf8`, which is what the deployment target's
+ * cluster is initialised with. `products_barcode_uq` and `variants_barcode_uq`
+ * (`0005:34`, `0005:52`) are on the database DEFAULT collation. So on the
+ * target, this arm had no range at all: it read its index on `business_id`
+ * alone and filtered every barcode in the business, while the products arm
+ * fell to a Seq Scan. Measured on PostgreSQL 16.13, the version CI runs.
+ *
+ * The fix is `0079`'s two byte-order indexes, `products_barcode_prefix_c_idx`
+ * and `variants_barcode_prefix_c_idx`, which are what the barcode arms range
+ * on now. Nothing in the SQL below changed: `^@` is a byte-prefix test by
+ * definition, so it was already collation-independent in MEANING, and only
+ * its PLAN depended on the cluster. An index in the collation the operator
+ * already implies makes the plan match the meaning — no escaping, and no
+ * application-computed upper bound that could disagree with the predicate it
+ * is supposed to accelerate.
+ *
+ * ONE line of SQL did change, and only because leaving it would have undone
+ * the index: the two barcode arms order by `barcode COLLATE "C"` rather than
+ * `barcode`. An `ORDER BY` in the default collation asks for a walk the
+ * byte-order index cannot serve, so the planner went back to `0005`'s index
+ * for the ordering and lost the range again — measured, not predicted. The
+ * arm's `ORDER BY` exists to make its `LIMIT` an early-terminating index walk
+ * rather than a sort, and to make the cap deterministic; it is not a sort the
+ * client sees, because the outer query re-orders every hit by rank and name.
+ * So the ordering now matches the range, which is the only way either is
+ * worth anything, and for the ASCII digits a scanner actually sends the two
+ * orders coincide.
+ *
+ * The lesson, recorded where the mistake was made: this table measured the
+ * right thing and named the cluster it measured on, and was still wrong,
+ * because a measurement on a cluster the product does not deploy on is a
+ * measurement about that cluster. The estate's embedded server is initialised
+ * with the bare `C` locale; the target is not.
+ *
+ * And the SKU and NAME arms cannot be ranged by ANY predicate,
  * because the index expression is `lower(...)` and `lower` is not leakproof:
  * they reach their index for `business_id` and filter the prefix above the
  * barrier.
@@ -245,13 +284,13 @@ const ARMS = `
   (SELECT v.product_id, v.id AS variant_id, 0 AS match_rank
      FROM product_variants v
     WHERE v.business_id = $1 AND v.barcode IS NOT NULL AND v.status <> 'archived' AND v.barcode ^@ $3
-    ORDER BY v.barcode
+    ORDER BY v.barcode COLLATE "C"
     LIMIT $4)
   UNION ALL
   (SELECT p.id AS product_id, NULL::uuid AS variant_id, 0 AS match_rank
      FROM products p
     WHERE p.business_id = $1 AND p.barcode IS NOT NULL AND p.status <> 'archived' AND p.barcode ^@ $3
-    ORDER BY p.barcode
+    ORDER BY p.barcode COLLATE "C"
     LIMIT $4)
   UNION ALL
   (SELECT v.product_id, v.id AS variant_id, 1 AS match_rank
