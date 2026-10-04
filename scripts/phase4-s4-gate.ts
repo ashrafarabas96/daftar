@@ -388,6 +388,141 @@ export const SETTLEMENT_REFUSALS: readonly string[] = ['invoice_settlement.custo
  */
 export const SETTLEMENT_SOURCE_TYPES: readonly string[] = ['customer_payment_allocation', 'customer_credit_application', 'customer_credit'];
 
+/**
+ * THE TABLES THE SETTLEMENT ROUTINES LOCK BUT MUST NEVER WRITE.
+ *
+ * `customer_collect_payment` and `customer_apply_credit` are SECURITY DEFINER
+ * owned by `daftar_inventory_internal`, and their bodies take row locks on
+ * `invoices` (`FOR UPDATE`, the cap lock) and `customers` (`FOR SHARE`).
+ * PostgreSQL grants a locking clause only to a role holding SELECT **plus one
+ * of** UPDATE/DELETE/TRUNCATE on the locked table, so `0081:660-661` gives the
+ * role a one-column `GRANT UPDATE (status)` on each — `0075:495` already
+ * supplied the SELECT half.
+ *
+ * That grant is SAFE ONLY BECAUSE NEITHER ROUTINE WRITES EITHER TABLE. The
+ * invoice's status is advanced by the sale and void paths of `0078`, and a
+ * customer's by `0075`; a settlement routine that began to UPDATE one would
+ * be writing a lifecycle it does not own, and the ACL it was handed for a lock
+ * would silently have become a write capability. The comment at `0081:620-659`
+ * says so, and `[[a wrapper is not an invariant]]` applies to a comment just
+ * as much: the claim is MACHINE-CHECKED here, over the routine bodies with
+ * every SQL comment stripped, so neither the prose of the migration nor the
+ * prose of this law can satisfy it or break it.
+ */
+export const ROW_LOCK_ONLY_TABLES: readonly string[] = ['invoices', 'customers'];
+
+/** The routines whose bodies the law above is quantified over. */
+export const ROW_LOCK_ONLY_ROUTINES: readonly string[] = ['customer_collect_payment', 'customer_apply_credit'];
+
+/**
+ * `sql` with every SQL comment removed and nothing else changed.
+ *
+ * A comment may hold an apostrophe, and a single-quoted literal may hold `--`,
+ * so neither can be found by a plain regex over the other: the scanner tracks
+ * which of the two it is inside. Each comment is replaced by ONE SPACE and not
+ * by nothing, so stripping can never fuse two tokens into a third that was
+ * never written (`UPDATE/*x*\/invoices` must not become `UPDATEinvoices`, and
+ * must not become `UPDATE invoices` either — see the law below, which is why
+ * the replacement is a space and the law then demands real whitespace).
+ */
+export function stripSqlComments(sql: string): string {
+  let out = '';
+  let literal = false;
+  for (let i = 0; i < sql.length; i += 1) {
+    const ch = sql[i] as string;
+    if (literal) {
+      out += ch;
+      if (ch !== "'") continue;
+      if (sql[i + 1] === "'") {
+        out += "'";
+        i += 1;
+      } else literal = false;
+      continue;
+    }
+    if (ch === "'") {
+      literal = true;
+      out += ch;
+      continue;
+    }
+    if (ch === '-' && sql[i + 1] === '-') {
+      const nl = sql.indexOf('\n', i);
+      out += ' ';
+      // An unterminated line comment runs to the end of the text.
+      if (nl < 0) return out;
+      i = nl - 1;
+      continue;
+    }
+    if (ch === '/' && sql[i + 1] === '*') {
+      const end = sql.indexOf('*/', i + 2);
+      out += ' ';
+      // An unterminated block comment runs to the end of the text.
+      if (end < 0) return out;
+      i = end + 1;
+      continue;
+    }
+    out += ch;
+  }
+  return out;
+}
+
+/**
+ * The dollar-quoted BODY of `fn` as the text declares it, or null when the
+ * text declares no such routine (or leaves its body unterminated).
+ *
+ * `readSqlStatement` deliberately does not slice a routine body; this does the
+ * opposite and reads nothing else. The opening tag is whatever the text used
+ * (`$$`, `$func$`, …) and the body ends at the matching tag, so a `$$` inside
+ * a nested literal cannot end it early. Returning null keeps a caller LOUD:
+ * an unreadable body is never "nothing to check".
+ */
+export function routineBody(sql: string, fn: string): string | null {
+  const head = new RegExp(String.raw`create\s+(?:or\s+replace\s+)?function\s+(?:public\s*\.\s*)?${fn}\b`, 'i').exec(sql);
+  if (head === null) return null;
+  const open = /\$([A-Za-z_][A-Za-z0-9_]*)?\$/.exec(sql.slice(head.index));
+  if (open === undefined || open === null) return null;
+  const tag = open[0];
+  const from = head.index + open.index + tag.length;
+  const end = sql.indexOf(tag, from);
+  if (end < 0) return null;
+  return sql.slice(from, end);
+}
+
+/**
+ * The law: neither settlement routine issues an `UPDATE` of `invoices` or
+ * `customers`.
+ *
+ * Robust to whitespace (`\s+` throughout, so a newline between the keyword and
+ * the table reads the same as a space) and to the schema prefix (`public.`,
+ * with or without spaces around the dot), and to `UPDATE ONLY t`. It cannot be
+ * confused by a locking clause: `FOR UPDATE` is followed by `;`, `)`, `OF` or
+ * `NOWAIT`, never by a bare table name, which is exactly what this demands.
+ *
+ * The subject is the ROUTINE BODY, comments stripped — not the file — so the
+ * migration's own prose about the grant is outside the law's reach, and a
+ * routine the text does not declare is reported rather than skipped.
+ */
+export function rowLockOnlyWriteProblems(sql: string): string[] {
+  const problems: string[] = [];
+  for (const fn of ROW_LOCK_ONLY_ROUTINES) {
+    const raw = routineBody(sql, fn);
+    if (raw === null) {
+      problems.push(
+        `${fn}'s body cannot be read from the settlement text (no CREATE [OR REPLACE] FUNCTION, or an unterminated dollar-quoted body) — the row-lock grant at 0081:660-661 is safe only while this routine writes neither ${ROW_LOCK_ONLY_TABLES.join(' nor ')}, and an unreadable body proves nothing`,
+      );
+      continue;
+    }
+    const body = stripSqlComments(raw);
+    for (const table of ROW_LOCK_ONLY_TABLES) {
+      const write = new RegExp(String.raw`\bupdate\s+(?:only\s+)?(?:public\s*\.\s*)?${table}\b`, 'i');
+      if (write.test(body))
+        problems.push(
+          `${fn} issues an UPDATE of ${table} — it holds UPDATE (status) on that table for ONE reason, PostgreSQL's row-locking ACL (0081:620-659), and a routine that writes the table has turned a lock privilege into a write capability over a lifecycle it does not own`,
+        );
+    }
+  }
+  return problems;
+}
+
 export function settlementContractProblems(sql: string): string[] {
   const declared = discoverSalesTables(sql);
   const settlement = CONTRACT_RELATIONS.filter((r) => declared.includes(r));
@@ -479,6 +614,11 @@ export function settlementContractProblems(sql: string): string[] {
         `${fn} is never called in the settlement text — the accepted primitive is reused by name (its name is historical; the arithmetic is general), never re-implemented`,
       );
   }
+
+  // The row-lock grant's standing precondition. Stated here so the gate
+  // applies it to whatever candidate settlement text the tree holds, with no
+  // second call site to keep in step.
+  problems.push(...rowLockOnlyWriteProblems(sql));
   return problems;
 }
 

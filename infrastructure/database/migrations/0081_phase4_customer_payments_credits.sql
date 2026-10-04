@@ -617,6 +617,49 @@ GRANT SELECT, INSERT ON payments, payment_allocations, customer_credits, custome
 GRANT UPDATE (remaining_amount_minor, remaining_carrying_base_amount_minor) ON customer_credits TO daftar_inventory_internal;
 GRANT SELECT ON payments, payment_allocations, customer_credits, customer_credit_applications TO daftar_accounting_internal;
 
+-- THE ROW-LOCK ACL, AND NOTHING ELSE. PostgreSQL requires, for a locking
+-- clause, SELECT **plus one of** UPDATE/DELETE/TRUNCATE on the locked table —
+-- SELECT alone raises `permission denied for table …` before any body logic
+-- runs. The two SECURITY DEFINER routines below, owned by
+-- `daftar_inventory_internal`, take five such locks:
+--
+--   `0081:1987`  invoices        FOR UPDATE  (`customer_collect_payment`, the
+--                                             cap lock, in id order)
+--   `0081:2014`  customers       FOR SHARE   (lock step 2b)
+--   `0081:2024`  payment_methods FOR SHARE   (lock step 2c)
+--   `0081:2299`  invoices        FOR UPDATE  (`customer_apply_credit`, its cap lock)
+--   `0081:2345`  customers       FOR SHARE   (`customer_apply_credit`)
+--
+-- `0075:495` already supplies the SELECT half for `invoices` and `customers`;
+-- the locking half is what was missing, and only for those two.
+-- `payment_methods` needs nothing: `0067:648-650` already holds a column
+-- UPDATE on it. `customer_credits` (locked FOR UPDATE at `0081:2321`) is
+-- covered by `0081:617` above. Both were measured on a live cluster, not
+-- assumed.
+--
+-- The privilege exists SOLELY to satisfy that ACL. NEITHER ROUTINE ISSUES ANY
+-- `UPDATE` ON EITHER TABLE — every `UPDATE` token in either body is the word
+-- inside a `FOR UPDATE` clause, and the only DML they carry is INSERT
+-- (`payments`, `payment_allocations`, `customer_credits`,
+-- `customer_credit_applications`, `audit_events`, `outbox_events`). A
+-- permanent assertion holds that true:
+-- `tests/guards/p4s4-settlement-surface-laws.test.ts`.
+--
+-- So it is column-level and ONE column each — the narrowest list the ACL
+-- accepts, since PostgreSQL honours a locking clause on the strength of
+-- UPDATE on ANY single column — and never a table-level UPDATE, DELETE or
+-- TRUNCATE. `status` on both: a column an UPDATE could in principle touch, so
+-- the privilege is not a fiction, and on both tables any UPDATE is bounded by
+-- a guard this role cannot lift. `invoices_lifecycle_guard()` (`0075:546`,
+-- trigger at `0075:637`) advances the status draft → open → void and refuses
+-- anything else; `customers_revision_guard()` (`0075:516`, trigger at
+-- `0075:635`) bounds a customer revision. The role owns the guard FUNCTIONS
+-- but NOT the TABLES — `0075:642-647` alters only functions, and the tables
+-- stay with the migrator — so it cannot `ALTER TABLE … DISABLE TRIGGER` them
+-- ("must be owner of table invoices").
+GRANT UPDATE (status) ON invoices TO daftar_inventory_internal;
+GRANT UPDATE (status) ON customers TO daftar_inventory_internal;
+
 -- ─────────────────────────────────────────────────────────────────────────
 -- 3. The inventory bracket. Every function below is created while the
 --    migrator owns it, PUBLIC's EXECUTE revoked and its trigger installed (a

@@ -100,42 +100,6 @@ async function storedIntent(paymentId: string): Promise<string | null> {
   return r.rows[0]?.s ?? null;
 }
 
-/**
- * A SEPARATE, DISCLOSED DEFECT OF `0081` THAT BLOCKS EVERY COLLECTION, stood
- * in for here so that this suite measures the intent digest and not that.
- *
- * `customer_collect_payment` and `customer_apply_credit` are SECURITY DEFINER
- * owned by `daftar_inventory_internal`, and their bodies read `invoices`
- * (`FOR UPDATE`) and `customers` (`FOR SHARE`). `0078:264` grants that role
- * `INSERT ON invoices, invoice_items` and nothing more, and nothing anywhere
- * grants it a privilege on `customers` — so both routines raise `permission
- * denied for table invoices` before they reach any logic of their own, and NO
- * customer payment can be collected against `0081` as it stands. The accepted
- * `tests/integration/p4s4-payment-closure.test.ts` is red on exactly this
- * (11 of 15) at this head, so the defect is not this suite's doing.
- *
- * The grant belongs in `0081` next to its other
- * `GRANT … TO daftar_inventory_internal` lines (`0081:615-617`), which is
- * another agent's file. This stand-in is IDEMPOTENT and CONDITIONAL: it adds
- * only what is missing, so it becomes a no-op the day `0081` carries the
- * grants, and it can then be deleted with nothing else changing.
- */
-async function standInForMissing0081Grants(): Promise<void> {
-  const q = ownerPool();
-  for (const relation of ['invoices', 'customers']) {
-    const held = await q.query<{ p: string }>(
-      `SELECT privilege_type AS p FROM information_schema.table_privileges
-        WHERE grantee = 'daftar_inventory_internal' AND table_schema = 'public' AND table_name = $1`,
-      [relation],
-    );
-    const have = new Set(held.rows.map((r) => r.p));
-    // SELECT to read the row; UPDATE because PostgreSQL requires one of
-    // UPDATE/DELETE/TRUNCATE alongside SELECT for a row-locking clause.
-    const need = ['SELECT', 'UPDATE'].filter((p) => !have.has(p));
-    if (need.length > 0) await q.query(`GRANT ${need.join(', ')} ON ${relation} TO daftar_inventory_internal`);
-  }
-}
-
 /** The business's own base currency, as the server would resolve a NULL to. */
 async function baseCurrency(): Promise<string> {
   const r = await ownerPool().query<{ c: string }>(`SELECT base_currency::text AS c FROM businesses WHERE id = $1`, [w.shop.businessId]);
@@ -207,7 +171,6 @@ async function replayOnce(input: PaymentInput): Promise<Replay> {
 
 beforeAll(async () => {
   await ensurePostgres();
-  await standInForMissing0081Grants();
   await resetData();
   w = await settlementWorld('s4replay');
   missing = await settlementMissing(w);

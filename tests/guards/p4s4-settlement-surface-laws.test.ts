@@ -51,15 +51,26 @@
  * function to whatever candidate migration the tree holds. Each plant is
  * required to have actually changed the text.
  */
+import { readFileSync, readdirSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
+  ROW_LOCK_ONLY_ROUTINES,
+  ROW_LOCK_ONLY_TABLES,
   SETTLEMENT_ARITHMETIC,
   SETTLEMENT_REFUSALS,
   SETTLEMENT_ROUTINES,
   SETTLEMENT_SOURCE_TYPES,
   SETTLEMENT_VERIFIER,
+  routineBody,
+  rowLockOnlyWriteProblems,
   settlementContractProblems,
+  stripSqlComments,
 } from '../../scripts/phase4-s4-gate';
+import { MIGRATIONS_SUBDIR } from '../../scripts/guards/phase4-rls-force';
+
+/** This repository's root, from this file's own location. */
+const REPO_ROOT = join(__dirname, '..', '..');
 
 /**
  * A contract-shaped settlement text: the two child relations with the
@@ -374,5 +385,138 @@ describe('RP-S4-ARITH — the settlement arithmetic, planted as a second body an
     });
     const problems = settlementContractProblems(sql);
     for (const fn of SETTLEMENT_ARITHMETIC) expect(about(problems, fn).join('\n'), fn).toContain('never called');
+  });
+});
+
+/**
+ * RP-S4-ROWLOCK — THE ROW-LOCK GRANT'S STANDING PRECONDITION.
+ *
+ * `0081:660-661` hands `daftar_inventory_internal` a one-column
+ * `GRANT UPDATE (status)` on `invoices` and on `customers`. It is not there so
+ * that anything may be written: PostgreSQL refuses a locking clause
+ * (`FOR UPDATE` / `FOR SHARE`) to a role holding SELECT alone — it wants
+ * SELECT **plus one of** UPDATE/DELETE/TRUNCATE — and `customer_collect_payment`
+ * and `customer_apply_credit` lock both tables. `0075:495` supplied the SELECT
+ * half; this is the other half, and nothing more.
+ *
+ * Which means the grant is safe only on a condition: NEITHER ROUTINE WRITES
+ * EITHER TABLE. The invoice lifecycle belongs to `0078` and the customer
+ * revision to `0075`; a settlement routine that began to UPDATE one would have
+ * quietly converted a lock privilege into a write capability over a lifecycle
+ * it does not own, and no suite would have noticed, because the migration says
+ * it does not in a COMMENT. `[[a wrapper is not an invariant]]` reads the same
+ * way about a comment, so the condition is machine-checked instead — over the
+ * routine BODIES with every SQL comment stripped, so the migration's own prose
+ * about the grant can neither satisfy the law nor break it.
+ *
+ * The law is `rowLockOnlyWriteProblems`, and the gate already applies it to
+ * every candidate settlement migration through `settlementContractProblems`,
+ * so it is enforced rather than remembered at review. It is proved here GREEN
+ * against the REAL settlement migration on disk and RED against a copy of that
+ * same text with an `UPDATE` planted into each routine — in memory, because
+ * editing an applied migration breaks every suite with "Migration tampered
+ * after apply".
+ */
+describe('RP-S4-ROWLOCK — neither settlement routine writes the tables it only locks', () => {
+  const settlementText = (): string => {
+    const dir = join(REPO_ROOT, MIGRATIONS_SUBDIR);
+    const hit = readdirSync(dir).find((f) => /_phase4_customer_payments_credits\.sql$/.test(f));
+    expect(hit, 'the slice’s settlement migration is not on disk, so this law has no subject').toBeDefined();
+    return readFileSync(join(dir, hit as string), 'utf8');
+  };
+
+  /** A body-shaped two-routine text: the law's subject, with one statement planted. */
+  const shape = (stmt: string): string =>
+    `CREATE OR REPLACE FUNCTION customer_collect_payment(p UUID) RETURNS VOID LANGUAGE plpgsql AS $$\nBEGIN\n${stmt}\nEND;\n$$;\n` +
+    `CREATE OR REPLACE FUNCTION customer_apply_credit(p UUID) RETURNS VOID LANGUAGE plpgsql AS $$\nBEGIN\n  PERFORM 1;\nEND;\n$$;\n`;
+
+  it('green: the real settlement migration’s two routines issue no UPDATE of invoices or customers', () => {
+    expect(rowLockOnlyWriteProblems(settlementText())).toEqual([]);
+  });
+
+  it('the silence is not vacuous: both bodies are really read, and each really takes the locks the grant is for', () => {
+    const sql = settlementText();
+    expect(ROW_LOCK_ONLY_ROUTINES.length).toBe(2);
+    expect([...ROW_LOCK_ONLY_TABLES]).toEqual(['invoices', 'customers']);
+    for (const fn of ROW_LOCK_ONLY_ROUTINES) {
+      const body = routineBody(sql, fn);
+      expect(body, `${fn}'s body was not read, so the green case above proves nothing`).not.toBeNull();
+      // Long enough to be the routine and not a stub, and one that actually
+      // locks — otherwise "issues no UPDATE" is true of nothing.
+      expect((body as string).length, fn).toBeGreaterThan(2000);
+      expect(stripSqlComments(body as string), fn).toMatch(/FOR\s+(?:UPDATE|SHARE)/i);
+    }
+    // The grant the law exists for is really in the text, as a COLUMN grant.
+    expect(sql).toMatch(/GRANT\s+UPDATE\s*\(\s*status\s*\)\s+ON\s+invoices\s+TO\s+daftar_inventory_internal\s*;/i);
+    expect(sql).toMatch(/GRANT\s+UPDATE\s*\(\s*status\s*\)\s+ON\s+customers\s+TO\s+daftar_inventory_internal\s*;/i);
+    // And never a table-level UPDATE, nor DELETE, nor TRUNCATE, on either.
+    expect(stripSqlComments(sql)).not.toMatch(/GRANT\s+[A-Za-z, ]*UPDATE\s+ON\s+(?:public\s*\.\s*)?(?:invoices|customers)\b/i);
+    expect(stripSqlComments(sql)).not.toMatch(
+      /GRANT\s+[A-Za-z, ()_]*\b(?:DELETE|TRUNCATE)\b[A-Za-z, ()_]*\s+ON\s+(?:public\s*\.\s*)?(?:invoices|customers)\b/i,
+    );
+  });
+
+  // One red proof per (routine, table) pair, planted into the REAL text.
+  for (const fn of ROW_LOCK_ONLY_ROUTINES)
+    for (const table of ROW_LOCK_ONLY_TABLES)
+      it(`red: an UPDATE of ${table} planted into ${fn} is named`, () => {
+        const sql = settlementText();
+        const body = routineBody(sql, fn) as string;
+        const mutatedBody = body.replace('BEGIN', `BEGIN\n  UPDATE ${table} SET status = status WHERE false;`);
+        expect(mutatedBody === body, 'the plant changed nothing, so the proof would prove nothing').toBe(false);
+        const problems = rowLockOnlyWriteProblems(sql.split(body).join(mutatedBody));
+        expect(problems.join('\n')).toContain(`${fn} issues an UPDATE of ${table}`);
+        // And the OTHER routine is not blamed for this one's plant.
+        const other = ROW_LOCK_ONLY_ROUTINES.find((r) => r !== fn) as string;
+        expect(problems.join('\n')).not.toContain(`${other} issues an UPDATE of ${table}`);
+      });
+
+  it('red: whitespace, the schema prefix and ONLY are all reached, and a locking clause is not mistaken for a write', () => {
+    for (const stmt of [
+      '  UPDATE invoices SET status = status;',
+      '  UPDATE\n    invoices\n  SET status = status;',
+      '  UPDATE public.invoices SET status = status;',
+      '  UPDATE public . invoices SET status = status;',
+      '  UPDATE ONLY customers SET status = status;',
+      '  WITH x AS (UPDATE invoices SET status = status RETURNING id) SELECT 1 FROM x;',
+    ])
+      expect(rowLockOnlyWriteProblems(shape(stmt)).join('\n'), stmt).toContain('issues an UPDATE of');
+    for (const stmt of [
+      '  PERFORM 1 FROM invoices WHERE false FOR UPDATE;',
+      '  PERFORM 1 FROM invoices WHERE false FOR UPDATE OF invoices;',
+      '  PERFORM 1 FROM invoices WHERE false FOR UPDATE NOWAIT;',
+      '  PERFORM 1 FROM customers WHERE false FOR SHARE;',
+      '  PERFORM 1 FROM invoices i JOIN customers c ON true WHERE false FOR SHARE;',
+    ])
+      expect(rowLockOnlyWriteProblems(shape(stmt)), stmt).toEqual([]);
+  });
+
+  it('a comment cannot satisfy the law, and cannot break it either', () => {
+    // Prose ABOUT an update is not an update — in either comment syntax.
+    expect(rowLockOnlyWriteProblems(shape('  -- this routine never runs UPDATE invoices, and must not\n  PERFORM 1;'))).toEqual([]);
+    expect(rowLockOnlyWriteProblems(shape('  /* no UPDATE customers here, ever */\n  PERFORM 1;'))).toEqual([]);
+    // A real statement COMMENTED OUT is not a write either.
+    expect(rowLockOnlyWriteProblems(shape('  -- UPDATE invoices SET status = status;\n  PERFORM 1;'))).toEqual([]);
+    // But a comment cannot HIDE one: stripping leaves a space, never a splice.
+    expect(rowLockOnlyWriteProblems(shape('  UPDATE /* sneaky */ invoices SET status = status;')).join('\n')).toContain('issues an UPDATE of invoices');
+    // An apostrophe in a comment does not derail the scanner.
+    expect(rowLockOnlyWriteProblems(shape("  -- the invoice's status is 0078's\n  UPDATE invoices SET status = status;")).join('\n')).toContain(
+      'issues an UPDATE of invoices',
+    );
+    // A `--` inside a LITERAL is not a comment, so what follows it still counts.
+    expect(rowLockOnlyWriteProblems(shape("  PERFORM 'a -- b';\n  UPDATE customers SET status = status;")).join('\n')).toContain(
+      'issues an UPDATE of customers',
+    );
+  });
+
+  it('a routine whose body cannot be read is reported, never skipped', () => {
+    expect(rowLockOnlyWriteProblems('-- nothing at all').length).toBe(ROW_LOCK_ONLY_ROUTINES.length);
+    expect(rowLockOnlyWriteProblems('-- nothing at all').join('\n')).toContain('cannot be read from the settlement text');
+    // An unterminated dollar-quoted body is unreadable, not empty.
+    expect(
+      rowLockOnlyWriteProblems('CREATE OR REPLACE FUNCTION customer_collect_payment(p UUID) RETURNS VOID LANGUAGE plpgsql AS $$\nBEGIN\n  PERFORM 1;\n').join(
+        '\n',
+      ),
+    ).toContain("customer_collect_payment's body cannot be read");
   });
 });
