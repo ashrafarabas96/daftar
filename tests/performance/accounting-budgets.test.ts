@@ -22,7 +22,7 @@
  * millisecond figure with no machine attached is not evidence of anything.
  */
 import { execSync } from 'node:child_process';
-import { cpus, totalmem, arch, platform, release } from 'node:os';
+import { cpus, freemem, loadavg, totalmem, arch, platform, release } from 'node:os';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -44,6 +44,7 @@ import {
   type TableStatistics,
 } from './accounting-dataset';
 import { exactShaBinding } from '../../scripts/phase2-s8-binding';
+import { distribution, quantile, type Distribution } from './percentile';
 
 /**
  * PHASE_2_ACCOUNTING_EXECUTION_PLAN §34, repeated verbatim. Milliseconds.
@@ -67,6 +68,29 @@ const BUDGET = {
 const TIER = process.env['P2S8_PERF_TIER'] === '2' ? 2 : 1;
 const RUN_LOCATION = process.env['CI'] === 'true' ? 'CI' : 'LOCAL';
 const ITERATIONS = TIER === 2 ? 60 : 30;
+/**
+ * THE TWO SHORT PERCENTILE BUDGETS TAKE 200 MEASURED ITERATIONS
+ * (TL-P4-S3 performance-evidence directive §4).
+ *
+ * A and B are the only budgets whose single operation takes a few
+ * milliseconds, and they were being judged on a `p95` over thirty samples —
+ * which is the SECOND-WORST sample of the thirty (proven at
+ * `tests/guards/accounting-budget-percentile-semantics.test.ts`). One stalled
+ * iteration was therefore the verdict, in either direction: a lucky run
+ * passed and an unlucky one failed, and neither outcome was about the product.
+ *
+ * NOTHING ELSE MOVES. The ceilings are the accepted 15 ms and 60 ms, the
+ * percentile is still p95, the timing scope is unchanged — COMMIT is still
+ * inside A and the endpoint is still end-to-end in B — every sample is still
+ * counted, and the dataset and the product are untouched. More samples make
+ * `p95` an actual tail estimate instead of a near-maximum, which can only
+ * strengthen the estimate: it may show the ceiling is met, or show more firmly
+ * that it is not. Both are evidence.
+ *
+ * C, D and E keep the accepted `ITERATIONS`, and F is one timed pass rather
+ * than a percentile, so neither is touched here (§4).
+ */
+const SHORT_PERCENTILE_ITERATIONS = 200;
 const WARMUP = 5;
 
 interface Measurement {
@@ -109,20 +133,73 @@ const MONEY = {
 
 function summarise(name: string, budgetMs: number, samples: number[]): Measurement {
   const sorted = [...samples].sort((a, b) => a - b);
-  const at = (q: number): number => must(sorted[Math.min(sorted.length - 1, Math.floor(q * sorted.length))]);
+  // `quantile` is the arithmetic that was here, moved to `./percentile` so a
+  // test can assert the index it reads (TL-P4-S3 §6). Unchanged: the same
+  // `min(n - 1, floor(q · n))` over the ascending samples.
   const m: Measurement = {
     name,
     budgetMs,
     iterations: sorted.length,
-    p50: at(0.5),
-    p95: at(0.95),
-    p99: at(0.99),
+    p50: quantile(sorted, 0.5),
+    p95: quantile(sorted, 0.95),
+    p99: quantile(sorted, 0.99),
     max: must(sorted[sorted.length - 1]),
     min: must(sorted[0]),
     samplesMs: samples.map((v) => Number(v.toFixed(3))),
   };
   measurements.push(m);
   return m;
+}
+
+/**
+ * WHAT THE DISTRIBUTION LOOKED LIKE, PRINTED AND RECORDED
+ * (TL-P4-S3 performance-evidence directive §7).
+ *
+ * A percentile and a ceiling say a budget was missed. They do not say whether
+ * it was missed by one stalled iteration or by a slow population that is a
+ * third of the series, and that difference is the difference between an
+ * instrument problem and a product problem. So for the two short percentile
+ * budgets the whole ordered series is printed beside the counts either side
+ * of the ceiling, the ratios between the modes, and what kind of runner took
+ * the measurement.
+ *
+ * DIAGNOSTIC DATA NEVER CHANGES THE VERDICT (§7). Nothing here is consulted
+ * by an assertion, nothing is excluded because a host metric looked bad, and
+ * the verdict above is still `p95` over every sample.
+ */
+interface Diagnostic extends Distribution {
+  readonly name: string;
+  /** `push`, `pull_request`, or `local` when no workflow took it. */
+  readonly runnerEvent: string;
+  readonly workflowRunId: string;
+  readonly cpuCount: number;
+  readonly loadAverage: readonly number[];
+  readonly processUptimeSeconds: number;
+  readonly freeMemoryBytes: number;
+}
+
+const diagnostics: Diagnostic[] = [];
+
+function diagnose(m: Measurement): Diagnostic {
+  const d: Diagnostic = {
+    ...distribution(m.samplesMs, m.budgetMs),
+    name: m.name,
+    runnerEvent: process.env['GITHUB_EVENT_NAME'] ?? 'local',
+    workflowRunId: process.env['GITHUB_RUN_ID'] ?? 'none',
+    cpuCount: cpus().length,
+    loadAverage: loadavg(),
+    processUptimeSeconds: Number(process.uptime().toFixed(1)),
+    freeMemoryBytes: freemem(),
+  };
+  diagnostics.push(d);
+  console.log(`\nDISTRIBUTION — ${m.name}\n${JSON.stringify(d, null, 1)}\n`);
+  // Returned so the ASSERTION MESSAGE carries it as well. Vitest's reporter
+  // did not surface this suite's `console.log` output in the piped CI log —
+  // the C plan block is captured in the artefact and absent from the log —
+  // whereas the message of a failed `expect` is always printed. §7 asks for
+  // the distribution to be readable while a failure is fresh, and the only
+  // channel that reliably is, on the run that matters, is the failure itself.
+  return d;
 }
 
 /** Warm up, then measure. The warm-up samples are discarded, never averaged in. */
@@ -332,6 +409,12 @@ afterAll(async () => {
     dataset: { ...spec, seededLines, reportingLines, reconciliationLines },
     budgets: BUDGET,
     measurements,
+    /**
+     * TL-P4-S3 §7: the full distribution behind the two short percentile
+     * budgets — the ordered series, the counts either side of the ceiling,
+     * and the runner that took them. Recorded, never consulted by a verdict.
+     */
+    distributions: diagnostics,
     /** §11: the plan behind budget C, recorded rather than described. */
     plans: { C_TRIAL_BALANCE: trialBalancePlan },
     /**
@@ -352,17 +435,22 @@ describe('A — the posting command, inside an existing transaction (§34 A)', (
   it(`p95 ≤ ${BUDGET.A_POST_P95} ms`, async () => {
     const c = await appClient();
     try {
-      const m = await measure('A post() in an open transaction', BUDGET.A_POST_P95, async () => {
-        const command = simpleCommand({ tenantId, businessId, userId } as never, randomUUID(), today, 12_345n);
-        await c.query('BEGIN');
-        await postAs(assertionFor(command, userId), command, {}, c);
-        // Measured through COMMIT on purpose: the deferred entry validators
-        // run there, so timing only the call would leave out the part of the
-        // cost that scales with the journal. This is a stricter reading of
-        // the budget than §34 requires, never a looser one.
-        await c.query('COMMIT');
-      });
-      expect(m.p95, JSON.stringify(m)).toBeLessThanOrEqual(BUDGET.A_POST_P95);
+      const m = await measure(
+        'A post() in an open transaction',
+        BUDGET.A_POST_P95,
+        async () => {
+          const command = simpleCommand({ tenantId, businessId, userId } as never, randomUUID(), today, 12_345n);
+          await c.query('BEGIN');
+          await postAs(assertionFor(command, userId), command, {}, c);
+          // Measured through COMMIT on purpose: the deferred entry validators
+          // run there, so timing only the call would leave out the part of the
+          // cost that scales with the journal. This is a stricter reading of
+          // the budget than §34 requires, never a looser one.
+          await c.query('COMMIT');
+        },
+        SHORT_PERCENTILE_ITERATIONS,
+      );
+      expect(m.p95, JSON.stringify(diagnose(m))).toBeLessThanOrEqual(BUDGET.A_POST_P95);
     } finally {
       await c.end();
     }
@@ -371,24 +459,29 @@ describe('A — the posting command, inside an existing transaction (§34 A)', (
 
 describe('B — the manual-adjustment endpoint, end to end (§34 B)', () => {
   it(`p95 ≤ ${BUDGET.B_ADJUSTMENT_ENDPOINT_P95} ms`, async () => {
-    const m = await measure('B manual adjustment endpoint', BUDGET.B_ADJUSTMENT_ENDPOINT_P95, async () => {
-      const response = await t.request
-        .post(`/v1/businesses/${businessId}/accounting/adjustments`)
-        .set('Authorization', `Bearer ${token}`)
-        .set('X-Business-Id', businessId)
-        .set('Idempotency-Key', randomUUID())
-        .send({
-          entryDate: today,
-          description: 'budget measurement',
-          reason: 'budget measurement',
-          lines: [
-            { account: { kind: 'system', systemKey: 'cash' }, side: 'D', ...MONEY },
-            { account: { kind: 'system', systemKey: 'opening_equity' }, side: 'C', ...MONEY },
-          ],
-        });
-      expect([200, 201]).toContain(response.status);
-    });
-    expect(m.p95, JSON.stringify(m)).toBeLessThanOrEqual(BUDGET.B_ADJUSTMENT_ENDPOINT_P95);
+    const m = await measure(
+      'B manual adjustment endpoint',
+      BUDGET.B_ADJUSTMENT_ENDPOINT_P95,
+      async () => {
+        const response = await t.request
+          .post(`/v1/businesses/${businessId}/accounting/adjustments`)
+          .set('Authorization', `Bearer ${token}`)
+          .set('X-Business-Id', businessId)
+          .set('Idempotency-Key', randomUUID())
+          .send({
+            entryDate: today,
+            description: 'budget measurement',
+            reason: 'budget measurement',
+            lines: [
+              { account: { kind: 'system', systemKey: 'cash' }, side: 'D', ...MONEY },
+              { account: { kind: 'system', systemKey: 'opening_equity' }, side: 'C', ...MONEY },
+            ],
+          });
+        expect([200, 201]).toContain(response.status);
+      },
+      SHORT_PERCENTILE_ITERATIONS,
+    );
+    expect(m.p95, JSON.stringify(diagnose(m))).toBeLessThanOrEqual(BUDGET.B_ADJUSTMENT_ENDPOINT_P95);
   }, 900_000);
 });
 
