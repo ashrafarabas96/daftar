@@ -248,6 +248,43 @@ export const DOMAIN_SOURCE_TYPES = [
   // would have concluded the hole was closed and stopped looking for it.
   'sale',
   'invoice',
+  // P4-S4 (R-82, R-93): the three accounting source types of customer
+  // settlement. `customer_payment_allocation` is the entry of ONE allocation of
+  // a payment to one invoice, `customer_credit_application` the entry of one
+  // credit spent against one invoice, and `customer_credit` the entry of an
+  // overpayment's surplus credit. They are three types rather than one for the
+  // P4-AL-47 reason the `sale`/`invoice` pair above gives:
+  // `accounting_reversals.id = original_entry_id` allows exactly one
+  // whole-entry reversal per entry for ever, and a payment that reversed one
+  // allocation would otherwise have to reverse every other allocation of the
+  // same payment and its surplus credit with it. All three are derived by the
+  // two P4-S4 commands through `receivables-settlement-posting.ts`, never
+  // through `AccountingEngine.post`.
+  //
+  // NONE OF THE THREE IS IN THE DATABASE'S GENERIC REVERSAL GUARD AT THIS
+  // HEAD, and this comment does not say that it is. The live
+  // `accounting_reversals_20_domain_source_guard` is the version `0077`
+  // installed; appending all three to its always-refused list is `0081`'s, at
+  // `0081:1347-1375`, and `0081` DOES NOT EXIST AS AN APPLIED MIGRATION here —
+  // it is a CANDIDATE, absent from `MIGRATION_MANIFEST.json`, whose
+  // `frozenThrough` is still `0079_phase4_pos_till_sessions_cart.sql`. Until it
+  // is applied, `daftar_app` CAN reverse one of these entries through the
+  // generic door (`accounting_post_reversal` is granted to it at `0046:765`),
+  // which is the same hole `S-P4-02` watches for `sale` and `invoice`.
+  //
+  // A permanent module may not state as a present database fact something only
+  // a future migration makes true: a reader who trusted such a sentence would
+  // conclude the hole was closed and stop looking for it. That is why the
+  // paragraph above names the candidate as a candidate.
+  //
+  // None of the three joins `DOMAIN_REVERSIBLE_SOURCE_TYPES` below. Reversal is
+  // P4-S6: this slice ships no reversal document for any of them, so all three
+  // go in `0081`'s plain refusal arm with no `purchase`-style pairing escape,
+  // and P4-S6 adds the paired clause when it ships the writer
+  // (`0081:1355-1359`).
+  'customer_payment_allocation',
+  'customer_credit_application',
+  'customer_credit',
 ] as const;
 
 /**

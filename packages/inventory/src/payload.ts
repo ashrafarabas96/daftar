@@ -158,6 +158,36 @@ export type InventoryP4S2OperationCode = 'sale.commit';
  */
 export type InventoryP4S3OperationCode = 'pos.session_open' | 'pos.session_close' | 'pos.cart_set_line' | 'pos.cart_remove_line';
 
+/**
+ * The two operation kinds P4-S4 registers: taking a customer's money, and
+ * spending a credit the customer already holds.
+ *
+ * `customer.*` is the namespace, and it is the thing that changed rather than
+ * the `op_code` regex — `^[a-z]+(\.[a-z_]+)+$` (`0054:53`, with the identical
+ * copy inside the frozen body of `inventory_payload_digest` at `0054:229`),
+ * which P4-AL-27 and P4-AL-29 forbid widening. `0074:62-70` proves the point
+ * by probe: `customer.collect_payment` is admitted and `customer_payment.collect`
+ * is refused, because the FIRST segment may hold no underscore. The accounting
+ * source types of the same slice are `customer_payment_allocation`,
+ * `customer_credit_application` and `customer_credit` — a different registry
+ * with no such constraint, which is why the two vocabularies deliberately
+ * differ.
+ *
+ * There are exactly two because `0081` creates exactly two routines that
+ * consume an `invctl/1` assertion — `customer_collect_payment` (`0081:1732`)
+ * and `customer_apply_credit` (`0081:2156`) — and this file's standing rule is
+ * that "a kind listed here without a routine would be an authority nothing
+ * refuses".
+ *
+ * `customer.refund` and `customer.reverse_payment` are deliberately ABSENT, for
+ * the reason the `sale.commit` row above gives about `sale.void` and
+ * `sale.return`: they belong to P4-S6, which ships the reversal document, the
+ * writer and the paired guard clause together. Registering a kind here ahead of
+ * its routine is exactly the mistake `TL-P4-S1-R1` ruled on one layer up, for an
+ * accounting source type.
+ */
+export type InventoryP4S4OperationCode = 'customer.collect_payment' | 'customer.apply_credit';
+
 export type InventoryOperationCode =
   | InventoryS1OperationCode
   | InventoryS3OperationCode
@@ -167,7 +197,8 @@ export type InventoryOperationCode =
   | InventoryCorrectiveOperationCode
   | InventoryP4S1OperationCode
   | InventoryP4S2OperationCode
-  | InventoryP4S3OperationCode;
+  | InventoryP4S3OperationCode
+  | InventoryP4S4OperationCode;
 
 export const INVENTORY_S1_OPERATION_CODES: readonly InventoryS1OperationCode[] = [
   'inventory.configure_product',
@@ -225,6 +256,8 @@ export const INVENTORY_P4_S3_OPERATION_CODES: readonly InventoryP4S3OperationCod
   'pos.cart_remove_line',
 ];
 
+export const INVENTORY_P4_S4_OPERATION_CODES: readonly InventoryP4S4OperationCode[] = ['customer.collect_payment', 'customer.apply_credit'];
+
 export const INVENTORY_OPERATION_CODES: readonly InventoryOperationCode[] = [
   ...INVENTORY_S1_OPERATION_CODES,
   ...INVENTORY_S3_OPERATION_CODES,
@@ -235,6 +268,7 @@ export const INVENTORY_OPERATION_CODES: readonly InventoryOperationCode[] = [
   ...INVENTORY_P4_S1_OPERATION_CODES,
   ...INVENTORY_P4_S2_OPERATION_CODES,
   ...INVENTORY_P4_S3_OPERATION_CODES,
+  ...INVENTORY_P4_S4_OPERATION_CODES,
 ];
 
 /** The literal first line of every stream. */
@@ -810,6 +844,106 @@ export const INVENTORY_PAYLOAD_SCHEMAS: Readonly<Record<InventoryOperationCode, 
     spec('requested_discount_minor', 'integer'),
   ]),
   'pos.cart_remove_line': Object.freeze([spec('session_id', 'uuid'), spec('line_id', 'uuid')]),
+  // P4-S4 (R-86, R-87, R-93). Each stream is the argument list of its `0081`
+  // routine, in declaration order and with its declared type, because the
+  // routine rebuilds the claimed digest from those arguments and the two must
+  // agree field for field:
+  //
+  //   customer_collect_payment  `0081:1732-1758` (the signature),
+  //                             `0081:1804-1827` (the consume rebuilding it)
+  //   customer_apply_credit     `0081:2156-2170` (the signature),
+  //                             `0081:2202-2209` (the consume rebuilding it)
+  //
+  // A payment is the STRUCTURAL TWIN of `supplier.pay` above: the same header
+  // identities, the same supplied date, the same SERVER-resolved FX snapshot,
+  // the same server-computed base, the same eight reference words and the same
+  // `allocation_count` group — so it is built with the same `withGroup` under
+  // the same count field, and the three differences are all the customer side
+  // of the mirror. It names a `customer_id` where the supplier names a
+  // `supplier_id`; its allocations settle an `invoice_id` rather than a
+  // `purchase_id`; and it carries THREE extra header fields for the surplus
+  // credit — `credit_id`, `credit_amount` and `credit_carrying_base`, each
+  // NULLABLE together, because a payment that is fully allocated creates no
+  // credit and R-87 makes the id and the surplus a single stated fact.
+  //
+  // An allocation carries NO `warehouse_id` where `supplier.pay`'s does. That
+  // is the authority mirror rather than an omission: a purchase allocation is
+  // scoped by the warehouse the goods arrived at, while a customer invoice is
+  // settled business-wide, which is why both P4-S4 rows of
+  // `OPERATION_AUTHORITY` name no warehouse and pass the scope half trivially.
+  'customer.collect_payment': withGroup(
+    [
+      spec('payment_id', 'uuid'),
+      spec('customer_id', 'uuid'),
+      spec('payment_method_id', 'uuid'),
+      // The method's posting account, as READ. A client never states it, which
+      // is why it is a payload field and not an intent one.
+      spec('posting_account_id', 'uuid'),
+      spec('payment_date', 'integer'),
+      // The currency the SERVER RESOLVED: the client's own code when it stated
+      // one, the business's `base_currency` when it stated NULL. The routine
+      // signs `lower(p_currency_code)` over a CHAR(3) its own shape check
+      // refuses as NULL (`0081:1821`, `0081:1877-1881`), so this field is
+      // non-nullable on both sides.
+      spec('currency', 'code'),
+      spec('amount', 'integer'),
+      // NULL rate_id with a rate of exactly 1 is the domestic snapshot; a
+      // foreign one is a positive rate with a registry row.
+      spec('rate_id', 'uuid', true),
+      spec('rate', 'integer'),
+      spec('rate_source', 'code'),
+      spec('rate_at', 'integer'),
+      // `Σ pb_i` plus the surplus credit's carrying base — never `conv(Σ p_i)`.
+      spec('base_amount', 'integer'),
+      ...textWordSpecs('reference', true),
+      // The surplus credit, as one nullable triple (R-87, R-93): the client's
+      // id so a replay cannot mint a second credit, then the credit's own
+      // `(OA, OB)` snapshot, which is server-derived.
+      spec('credit_id', 'uuid', true),
+      spec('credit_amount', 'integer', true),
+      spec('credit_carrying_base', 'integer', true),
+      spec('allocation_count', 'integer'),
+    ],
+    'allocation_count',
+    [
+      spec('allocation_id', 'uuid'),
+      spec('invoice_id', 'uuid'),
+      spec('invoice_currency', 'code'),
+      spec('payment_amount', 'integer'),
+      spec('payment_base', 'integer'),
+      spec('applied', 'integer'),
+      spec('ar_released_before', 'integer'),
+      spec('carrying_released', 'integer'),
+      // Signed, both of them: `rel − conv_R(a)` and `pb − rel`.
+      spec('ar_dust', 'integer'),
+      spec('realized', 'integer'),
+    ],
+  ),
+  // The credit application is the twin of `supplier.allocate_credit` above,
+  // field for field in the same order, less that kind's `warehouse_id` and with
+  // the AR side's names on the invoice half. Neither the credit's FX snapshot
+  // nor the invoice's is an argument, exactly as the supplier kind takes
+  // neither: a stored snapshot is the routine's to read under its own lock, and
+  // passing it would make it a figure the caller could state.
+  'customer.apply_credit': Object.freeze([
+    spec('application_id', 'uuid'),
+    spec('credit_id', 'uuid'),
+    spec('invoice_id', 'uuid'),
+    spec('application_date', 'integer'),
+    spec('credit_currency', 'code'),
+    spec('consumed', 'integer'),
+    // `rb`: the level, and the level-uniqueness key
+    // (`customer_credit_applications_level_uq`, `0081:470`).
+    spec('remaining_before', 'integer'),
+    spec('credit_carrying_released', 'integer'),
+    spec('credit_dust', 'integer'),
+    spec('invoice_currency', 'code'),
+    spec('applied', 'integer'),
+    spec('ar_released_before', 'integer'),
+    spec('carrying_released', 'integer'),
+    spec('ar_dust', 'integer'),
+    spec('realized', 'integer'),
+  ]),
 };
 
 /**
@@ -917,6 +1051,57 @@ export const INVENTORY_OPERATION_INTENT_FIELDS: Readonly<Partial<Record<Inventor
     'qty_q4',
     'discount_minor',
   ]),
+  // P4-S4 (R-86, R-87, R-93): the two settlement intents are their
+  // client-stated fields only — the S3-S6 supplier settlement pattern above,
+  // unchanged. Every FX snapshot, base, release, dust and realized amount, the
+  // payment's posting account and the surplus credit's carrying base are
+  // DERIVED and therefore outside the fingerprint, so the comparison happens
+  // before any state is read and a rate that moved between two retries is not
+  // a false `customer_payment.idempotency_conflict`
+  // (`[[daftar-registry-before-state]]`).
+  //
+  // Each list is the routine's OWN intent, read from the `inventory_payload_digest`
+  // call that computes the value the document header stores:
+  // `0081:1851-1865` for the payment and `0081:2227-2231` for the application.
+  //
+  // Two fields in the payment's intent repay attention, because neither is the
+  // obvious choice:
+  //
+  //   - `currency` IS intent, and it is the SERVER-RESOLVED code, not the
+  //     client's nullable one. `0081:1859` signs `lower(p_currency_code::text)`
+  //     — the same expression the payload consume signs at `0081:1820` — over
+  //     an argument the routine's shape check refuses as NULL. This is the
+  //     `supplier.pay` precedent at :856-869, which binds its resolved
+  //     `currency` the same way.
+  //   - `credit_amount` IS intent, and `credit_carrying_base` is NOT. The
+  //     surplus is `amount − Σ payment_amount`, a function of stated figures
+  //     alone, so a client that asked for a different surplus asked for a
+  //     different command (R-87) — and `0081:2151` records it in the routine's
+  //     own COMMENT as part of the request-only intent. The credit's carrying
+  //     base is a conversion at the resolved rate, so it is derived and stays
+  //     out.
+  //
+  // `credit_id` is intent for the reason its own payload comment gives: a
+  // replay must not mint a second credit. Child ids are idempotency keys in
+  // their own right, which is why each allocation's `allocation_id` is in the
+  // group's intent too (R-74, `0081:649-651`' twin).
+  'customer.collect_payment': Object.freeze([
+    'payment_id',
+    'customer_id',
+    'payment_method_id',
+    'payment_date',
+    'currency',
+    'amount',
+    ...Array.from({ length: 8 }, (_, i) => `reference_w${i + 1}`),
+    'credit_id',
+    'credit_amount',
+    'allocation_count',
+    'allocation_id',
+    'invoice_id',
+    'payment_amount',
+    'applied',
+  ]),
+  'customer.apply_credit': Object.freeze(['application_id', 'credit_id', 'invoice_id', 'application_date', 'consumed', 'applied']),
 });
 
 /** The intent schema of an operation kind: its schema with the server-derived fields removed, header and group alike. */

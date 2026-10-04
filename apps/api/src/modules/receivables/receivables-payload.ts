@@ -37,46 +37,74 @@ import { receivablesRefusal } from './receivables-errors';
  * domain refusal and never a raw primary-key violation (R-74,
  * `0068:649-651`).
  *
- * ## Why this file is a BRIDGE, and how it is forced to die
+ * ## The temporary seam this module carried, and its removal
  *
  * `InventoryOperationCode` and `INVENTORY_PAYLOAD_SCHEMAS`
  * (`packages/inventory/src/payload.ts`) are CLOSED: an op code that is not in
  * the union has no field schema, and `canonicalInventoryPayload` refuses to
- * hash a payload it cannot type. `packages/**` is not this agent's surface —
- * the slice's payload builders and their schemas belong to the package owner —
- * so the two codes are resolved HERE through one named, runtime-checked
- * lookup against `INVENTORY_OPERATION_CODES` rather than through a cast. The
- * field order below is the argument order of the database routine, which is
- * what the package builder must reproduce byte for byte.
+ * hash a payload it cannot type. While the package lacked the two codes they
+ * were resolved here through one named, runtime-checked lookup against
+ * `INVENTORY_OPERATION_CODES` rather than through a cast, every call refused
+ * `customer_payment.registry_incomplete` (500) naming the exact file to edit,
+ * and a `P4S4PayloadRegistryTripwire` declaration made the seam impossible to
+ * leave behind: the day the package registered the codes it stopped compiling.
  *
- * Until the package registers them, every call refuses
- * `customer_payment.registry_incomplete` (500) naming the exact file to edit.
- * That is deliberate: a bridge that silently produced a hash of the wrong
- * shape would sign a command the routine must then refuse, and the failure
- * would surface as an assertion mismatch with no pointer to the cause.
+ * IT FIRED. `packages/inventory/src/payload.ts` now carries
+ * `InventoryP4S4OperationCode`, both `INVENTORY_PAYLOAD_SCHEMAS` entries and
+ * both `INVENTORY_OPERATION_INTENT_FIELDS` entries, so the tripwire is gone and
+ * the two constants below are `satisfies InventoryOperationCode` — each checked
+ * against the registry by the compiler, the same device
+ * `selling-permissions.ts` ended on with its `Extract` from `Permission`.
  *
- * `P4S4PayloadRegistryTripwire` is the other half. The day
- * `@daftar/inventory` carries `customer.collect_payment`, the declaration
- * below STOPS COMPILING, and this whole module must be deleted in favour of
- * the package's `customerCollectPaymentPayload` /
- * `customerApplyCreditPayload`. The accepted precedent for this exact device
- * is `selling-permissions.ts`' `PHASE4_REGISTRY_TRIPWIRE`, which fired and was
- * removed.
+ * The module STAYS, exactly as `selling-permissions.ts` stayed when its own
+ * tripwire fired. Its builders are not duplicates of anything: the package
+ * registers the two SCHEMAS and `customer-settlement-payloads.ts` carries the
+ * two PLANS, but neither file carries a `customerCollectPaymentPayload` or
+ * `customerApplyCreditPayload`, and the package module says so in as many words
+ * ("NOT HERE, deliberately: the `invpl/1` field streams and intent digests").
+ * Lifting these two builders into the package is a later edit and belongs with
+ * the `customer-settlement.ts` lift of `P4_S4_REQUIRED_WIRING`; it is not what
+ * registering the schemas asked for.
+ *
+ * `receivablesOperationCode` is kept for the same reason the lookup was named
+ * in the first place — the services call it to re-establish the code at the
+ * point of use, and it now always succeeds.
+ *
+ * ## ONE KNOWN DIVERGENCE FROM `0081`, NOT FIXED HERE
+ *
+ * `collectIntentFields` below does NOT reproduce the intent
+ * `customer_collect_payment` computes, in two ways, and both are visible in
+ * `0081:1851-1865`:
+ *
+ *   - the routine signs `lower(p_currency_code::text)` — the SERVER-RESOLVED
+ *     currency, non-NULL by its own shape check — where this file signs the
+ *     client's raw nullable `currency`;
+ *   - the routine's intent carries `p_credit_amount_minor` (recorded in the
+ *     routine's own COMMENT at `0081:2151` as part of the request-only intent)
+ *     where this file omits it, so the two streams differ in length.
+ *
+ * `customer-payment.service.ts:517` compares this file's digest against the
+ * value the ROUTINE stored, so while they disagree every replay of a stored
+ * payment is a false `customer_payment.idempotency_conflict`. The package's
+ * `INVENTORY_OPERATION_INTENT_FIELDS` entry follows `0081`, because
+ * `payments.intent_sha256` is a stored database fact and the registry is
+ * permanent. Closing the gap on this side is a change to WHICH currency the
+ * service may know before it reads state, which is the service's own documented
+ * constraint (`customer-payment.service.ts:502-504`) and the `0081` argument
+ * boundary of `P4_S4_REQUIRED_WIRING`' fourth row — not a package edit.
  */
-
-/** The `invctl/1` operation code of collecting a customer payment. */
-export const CUSTOMER_COLLECT_PAYMENT_OP = 'customer.collect_payment';
-/** The `invctl/1` operation code of applying an existing customer credit to an invoice. */
-export const CUSTOMER_APPLY_CREDIT_OP = 'customer.apply_credit';
 
 /**
- * THE TRIPWIRE. `never` while the package does not carry the op code; the
- * assignment below is then legal. The moment the package registers it the type
- * becomes `never`'s opposite and `true` no longer assigns — a compile error
- * whose only fix is deleting this bridge.
+ * The `invctl/1` operation code of collecting a customer payment.
+ *
+ * `satisfies` rather than a bare literal: the code must BE a registered
+ * `InventoryOperationCode`, so the registry is the authority and this constant
+ * is checked against it by the compiler. A code renamed or dropped there is a
+ * type error here rather than a command that silently mints nothing.
  */
-export type P4S4PayloadRegistryTripwire = typeof CUSTOMER_COLLECT_PAYMENT_OP extends InventoryOperationCode ? never : true;
-const P4_S4_PAYLOAD_BRIDGE_IS_STILL_NEEDED: P4S4PayloadRegistryTripwire = true;
+export const CUSTOMER_COLLECT_PAYMENT_OP = 'customer.collect_payment' satisfies InventoryOperationCode;
+/** The `invctl/1` operation code of applying an existing customer credit to an invoice. */
+export const CUSTOMER_APPLY_CREDIT_OP = 'customer.apply_credit' satisfies InventoryOperationCode;
 
 /** A payment's allocations, 0..50 (OQ-4 relaxes the supplier precedent's lower bound to zero). */
 export const CUSTOMER_PAYMENT_MAX_ALLOCATIONS = 50;
@@ -89,7 +117,6 @@ export const RECEIVABLES_REFERENCE_MAX = 100;
  * `INVENTORY_OPERATION_CODES`, so nothing downstream has to trust this file.
  */
 export function receivablesOperationCode(code: string): InventoryOperationCode {
-  void P4_S4_PAYLOAD_BRIDGE_IS_STILL_NEEDED;
   const registered = INVENTORY_OPERATION_CODES.find((c) => c === code);
   if (registered === undefined) {
     throw receivablesRefusal('customer_payment.registry_incomplete', {

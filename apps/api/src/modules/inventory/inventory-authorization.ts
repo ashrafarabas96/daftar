@@ -158,6 +158,36 @@ const OPERATION_AUTHORITY: Readonly<
   'pos.session_close': { permission: 'sales.create', scope: 'warehouses' },
   'pos.cart_set_line': { permission: 'sales.create', scope: 'warehouses' },
   'pos.cart_remove_line': { permission: 'sales.create', scope: 'warehouses' },
+  // P4-S4 (R-86, R-87): taking a customer's money and spending a credit they
+  // already hold. `payments.collect` is the minting key for both — it is the
+  // accepted vocabulary's own settlement key and no `receivables.*` write key
+  // is invented, because the permission registry is sealed and this slice was
+  // given no ruling that widens it.
+  //
+  // Both are `scope: 'warehouses'`, and for these two that half passes
+  // TRIVIALLY, exactly as it does for the `supplier.*` master-data rows at
+  // :55-58 and the `customer.*` rows at :100-103: neither command names a
+  // warehouse, both services call `authorize(m, code, btx)` with no warehouse
+  // ids, and the `affected.length > 0` arm below is therefore never entered.
+  //
+  // `business_wide` WOULD BE WRONG, and not merely redundant. It demands
+  // `branchScopeMode === 'all'` (:234-237), and a cashier is normally
+  // assigned-scope while `payments.collect` is the cashier's OWN key — one of
+  // the five the role default holds (`permissions.ts:214`). So requiring
+  // business-wide scope would hand every ordinary cashier the key to collect a
+  // payment and then refuse them the command, which is the `pos.*` mistake the
+  // block above refuses for the same reason.
+  //
+  // This is a DEPARTURE from the supplier mirror, and a deliberate one. The
+  // P3-S6 rows at :80-81 make `supplier.allocate_credit` and
+  // `supplier.receive_refund` business-wide under TL-5, because moving a
+  // supplier-wide credit reveals the business's AP position to an actor who
+  // holds only some branches. The customer side cannot follow that: the key
+  // that authorizes it is a till key by role default, so the S6 rule would
+  // close the point of sale. The two slices' settlements are scoped by WHO
+  // normally holds the key, not by a shared shape.
+  'customer.collect_payment': { permission: 'payments.collect', scope: 'warehouses' },
+  'customer.apply_credit': { permission: 'payments.collect', scope: 'warehouses' },
 };
 
 /**
