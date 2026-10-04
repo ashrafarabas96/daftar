@@ -63,7 +63,17 @@ const temporaries: string[] = [];
  * further Phase 4 migration. Everything else the gate reads is shared with
  * the repository, so only the DDL differs.
  */
-function rootWith(planted: string, name = '0076_planted.sql'): string {
+/*
+ * The planted file's NAME IS LOAD-BEARING, and it sorts last on purpose.
+ * `phase4RoutineBody` takes the LAST definition of a routine across the
+ * Phase 4 DDL in file order, because a routine REPLACED by a later migration
+ * is the one that runs. A plant numbered 0076 therefore stopped being the
+ * body under test the moment a real migration after it redefined the
+ * routine — which `0080` does for `invoice_outstanding`. Three proofs in this
+ * file silently became proofs about `0080`'s body instead of the plant's
+ * (P4-S4). `9999_` keeps the plant last whatever the tree grows.
+ */
+function rootWith(planted: string, name = '9999_planted.sql'): string {
   const root = mkdtempSync(join(tmpdir(), 'p4-seam-'));
   temporaries.push(root);
   mkdirSync(join(root, 'infrastructure/database/migrations'), { recursive: true });
@@ -334,7 +344,16 @@ describe('S-P4-03 — the reader-of-record reads every relation that settles an 
     temporaries.push(root);
     mkdirSync(join(root, 'infrastructure/database/migrations'), { recursive: true });
     cpSync(MIGRATIONS, join(root, 'infrastructure/database/migrations'), { recursive: true });
-    rmSync(join(root, 'infrastructure/database/migrations/0075_phase4_customers_invoices_numbering.sql'));
+    // EVERY Phase 4 migration that defines the routine is removed, DISCOVERED
+    // rather than named: deleting only `0075` left `0080`'s replacement
+    // standing, and then "no migration defines the routine" was false and the
+    // proof passed for the wrong reason (P4-S4). This fails loudly if the
+    // discovery finds nothing, so it cannot go vacuous either.
+    const definers = phase4Migrations(root).filter((f) =>
+      /CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+invoice_outstanding\s*\(/i.test(readFileSync(join(root, 'infrastructure/database/migrations', f), 'utf8')),
+    );
+    expect(definers, 'no Phase 4 migration defines invoice_outstanding, so removing them proves nothing').not.toEqual([]);
+    for (const f of definers) rmSync(join(root, 'infrastructure/database/migrations', f));
     writeFileSync(join(root, 'infrastructure/database/migrations/0076_planted.sql'), ALLOCATIONS);
     writeFileSync(
       join(root, 'infrastructure/database/MIGRATION_MANIFEST.json'),
