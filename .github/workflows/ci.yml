@@ -371,6 +371,28 @@ jobs:
           # PG_PORT=5432 makes the test harness reuse the `postgres` service
           # above instead of starting an embedded instance.
           PG_PORT: '5432'
+      # P4-S3's READ BUDGET, NAMED IN THIS FILE.
+      #
+      # `tests/performance/pos-s3-budgets.test.ts` holds P4-A's `p95 <= 150 ms`
+      # and P4-B's `p95 <= 60 ms`, the two plan-shape claims P4-AL-71 states.
+      # The P4-S3 gate step above does execute that file — its
+      # `roster-execution` check derives the roster FROM THE TREE at run time
+      # and hands all fourteen suites to one bounded Vitest run. But a roster
+      # derived at run time is invisible to anything that reads this file, and
+      # `tests/performance/plan-evidence-contract.test.ts` must be able to
+      # prove from the text that required CI executes every plan-shape claim.
+      # What it was finding instead was one sentence in a comment inside
+      # `scripts/phase4-s3-gate.ts` that happens to name the file — so the law
+      # was green for a reason that would survive the execution going away.
+      # This step makes the reach readable, and holds if the gate's derivation
+      # rule ever stops matching the file. Roughly 30 s of a two-hour job.
+      - name: POS read budgets — P4-A and P4-B, measured
+        run: npx vitest run tests/performance/pos-s3-budgets.test.ts
+        env:
+          # The same database environment as every other gate step in this job:
+          # PG_PORT=5432 makes the test harness reuse the `postgres` service
+          # above instead of starting an embedded instance.
+          PG_PORT: '5432'
       # TL-P4-S2-R3, continued for P4-S4 — the customer-settlement slice.
       # The chain is composed HERE, by this job: P4-S1, P4-S2, P4-S3, then
       # P4-S4, all VISIBLE and all REQUIRED, in that order. P4-S4 is a delta

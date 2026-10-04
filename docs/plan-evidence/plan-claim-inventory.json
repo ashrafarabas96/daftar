@@ -88,16 +88,16 @@
     "note": "Derived from git ls-files. No file is excluded by name — an exclusion list is how a claim hides."
   },
   "totals": {
-    "hits": 243,
+    "hits": 245,
     "planGates": 41,
-    "assertions": 19,
+    "assertions": 20,
     "files": 40
   },
   "byPhase": {
     "cross-phase": {
       "planGates": 26,
-      "assertions": 8,
-      "mentions": 94
+      "assertions": 9,
+      "mentions": 95
     },
     "phase-2": {
       "planGates": 0,
@@ -118,8 +118,8 @@
   "byFile": {
     ".github/workflows/ci.yml": {
       "planGates": 0,
-      "assertions": 1,
-      "mentions": 5,
+      "assertions": 2,
+      "mentions": 6,
       "phase": "cross-phase"
     },
     ".github/workflows/phase2-s8-evidence.yml": {
@@ -360,7 +360,23 @@
   "hits": [
     {
       "file": ".github/workflows/ci.yml",
-      "line": 420,
+      "line": 377,
+      "phase": "cross-phase",
+      "signals": ["plan-shape-word"],
+      "kind": "mention",
+      "text": "# and P4-B's `p95 <= 60 ms`, the two plan-shape claims P4-AL-71 states."
+    },
+    {
+      "file": ".github/workflows/ci.yml",
+      "line": 383,
+      "phase": "cross-phase",
+      "signals": ["plan-shape-word"],
+      "kind": "assertion",
+      "text": "# prove from the text that required CI executes every plan-shape claim."
+    },
+    {
+      "file": ".github/workflows/ci.yml",
+      "line": 442,
       "phase": "cross-phase",
       "signals": ["plan-shape-word"],
       "kind": "mention",
@@ -368,7 +384,7 @@
     },
     {
       "file": ".github/workflows/ci.yml",
-      "line": 423,
+      "line": 445,
       "phase": "cross-phase",
       "signals": ["collation-dependent-range"],
       "kind": "assertion",
@@ -376,7 +392,7 @@
     },
     {
       "file": ".github/workflows/ci.yml",
-      "line": 425,
+      "line": 447,
       "phase": "cross-phase",
       "signals": ["collation-dependent-range"],
       "kind": "mention",
@@ -384,7 +400,7 @@
     },
     {
       "file": ".github/workflows/ci.yml",
-      "line": 426,
+      "line": 448,
       "phase": "cross-phase",
       "signals": ["plan-shape-word"],
       "kind": "mention",
@@ -392,7 +408,7 @@
     },
     {
       "file": ".github/workflows/ci.yml",
-      "line": 445,
+      "line": 467,
       "phase": "cross-phase",
       "signals": ["collation-dependent-range"],
       "kind": "mention",
@@ -400,7 +416,7 @@
     },
     {
       "file": ".github/workflows/ci.yml",
-      "line": 448,
+      "line": 470,
       "phase": "cross-phase",
       "signals": ["plan-shape-word"],
       "kind": "mention",

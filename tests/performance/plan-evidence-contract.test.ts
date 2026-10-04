@@ -264,13 +264,20 @@ describe('every discovered plan-shape claim is executed by required CI against p
    * already paid once for a gate that was only ever green.
    *
    * `ci.yml` belongs to another owner, so the defect is planted in a COPY of
-   * its text rather than on disk: the P4-S3 step — the one whose absence
-   * would have hidden the barcode defect indefinitely — is deleted, and the
-   * same resolver must then name `pos-s3-budgets.test.ts` as unreached.
+   * its text rather than on disk: the step that EXECUTES
+   * `pos-s3-budgets.test.ts` — the measurement of P4-A and P4-B, the one
+   * whose absence would have hidden the barcode defect indefinitely — is
+   * deleted, and the same resolver must then name the file as unreached.
+   *
+   * It plants that step and not the `gate:phase4:s3` step on purpose. The
+   * gate does run the suite, but through a roster it derives at run time,
+   * which no reader of `ci.yml` can see; what the gate script contributed to
+   * THIS resolver was a comment, not a run. So planting the gate step proved
+   * nothing once any other gate script named `gate:phase4:s3`.
    */
   it('goes red when a plan-gate step is removed from the required job', () => {
-    const planted = ci.replace(/ {6}- name: Phase 4 slice gate — P4-S3[\s\S]*?PG_PORT: '5432'\n/, '');
-    expect(planted, 'the P4-S3 step was not found to remove — update this proof').not.toBe(ci);
+    const planted = ci.replace(/ {6}- name: POS read budgets — P4-A and P4-B, measured[\s\S]*?PG_PORT: '5432'\n/, '');
+    expect(planted, 'the POS read budgets step was not found to remove — update this proof').not.toBe(ci);
     expect(unreachedBy(planted, ['tests/performance/pos-s3-budgets.test.ts'])).toEqual(['tests/performance/pos-s3-budgets.test.ts']);
     // And the control: unplanted, the same file is reached.
     expect(unreachedBy(ci, ['tests/performance/pos-s3-budgets.test.ts'])).toEqual([]);
@@ -316,7 +323,26 @@ function unreachedBy(ciText: string, files: readonly string[]): string[] {
       const p = join(ROOT, m[0]);
       if (!existsSync(p)) continue;
       const src = readFileSync(p, 'utf8');
-      scriptSource.push(src);
+      // COMMENTS ARE NOT EXECUTION. The docstring above says resolution is by
+      // reading rather than by trusting a comment; for a long time the code
+      // did not keep that promise, and the cost was exact. The only thing in
+      // the required job's reachable TEXT that named
+      // `tests/performance/pos-s3-budgets.test.ts` was one sentence inside
+      // `scripts/phase4-s3-gate.ts` arguing that demanding a planted-defect
+      // proof OF that file is a category error.
+      //
+      // The file was in fact being executed — the P4-S3 gate derives its
+      // roster from the tree at run time and runs all fourteen suites — but
+      // nothing readable said so, so the law was green for a reason that
+      // would have survived the execution going away, and the red proof had
+      // no force: deleting the P4-S3 step left the comment reachable through
+      // any other gate script that names `gate:phase4:s3`. The remedy is a
+      // step in `ci.yml` that names the file, not a resolver taught to model
+      // a runtime derivation.
+      //
+      // A gate script therefore names a suite only in code. `://` is spared so
+      // a URL in a comment-stripped line cannot amputate the line itself.
+      scriptSource.push(src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1'));
       for (const g of src.matchAll(/gate:[\w:]+/g)) {
         const body2 = pkg.scripts[g[0]];
         if (body2 !== undefined) addScript(body2, depth + 1);
