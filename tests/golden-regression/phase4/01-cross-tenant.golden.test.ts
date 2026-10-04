@@ -2,8 +2,11 @@ import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { DOMAIN_SOURCE_TYPES } from '@daftar/accounting';
+import { INVENTORY_OPERATION_CODES } from '@daftar/inventory';
+import { CUSTOMER_APPLY_CREDIT_OP, CUSTOMER_COLLECT_PAYMENT_OP } from '../../../apps/api/src/modules/receivables/receivables-payload';
 import { discoverPhase4Routes } from '../../../scripts/phase4-s1-gate';
-import { requireSubject, saleSubject, type SaleSubject } from '../phase4-s2/harness';
+import { existingRelations, registryHas, requireSubject, routineExists, saleSubject, type SaleSubject } from '../phase4-s2/harness';
 import { SALE_COMMIT_ROUTINE, confirmSale } from '../phase4-s2/sale-path';
 import { appDbUrl, createTestApp, ensurePostgres, ownerPool, resetData, uniqueEmail, type TestApp } from '../../helpers/test-app';
 
@@ -60,11 +63,29 @@ const REPO = join(__dirname, '..', '..', '..');
  * write route cannot be proved by the two loops below: a POST driven as a GET
  * would be a 404 that looked like isolation. It and its read are treated in
  * their own section, with their own ALLOW/DENY pairs.
+ *
+ * AND IT HAS NOW FIRED A SECOND TIME, for P4-S4's `ReceivablesController`, in a
+ * way worth recording because only HALF of it fired. That controller mounts
+ * four routes, and two of them — `POST /v1/customer-credits/:creditId/applications`
+ * and `GET /v1/customers/:customerId/credits` — were discovered immediately
+ * under the existing `/v1/customer-credits` and `/v1/customers` prefixes and
+ * turned the sealed gate red, exactly as the sale routes had. The other two,
+ * `POST /v1/customer-payments` and `GET /v1/customer-payments/:paymentId`, were
+ * NOT: `PHASE4_ROUTE_PREFIXES` carried `/v1/payments` and a prefix is matched at
+ * a path segment boundary, so `customer-payments` is a different first segment
+ * and neither route was a Phase 4 route to `discoverPhase4Routes` at all. A
+ * route that collects a customer's money was therefore outside G-02's reach
+ * while its two siblings were inside it. The prefix was ADDED to the sealed
+ * gate (`scripts/phase4-s1-gate.ts`, with the argument recorded there) and all
+ * four appear below — because a route cannot be made to escape this file by the
+ * accident of how its path is spelled.
  */
 const PHASE4_ROUTES: readonly string[] = [
   'DELETE /v1/pos/till-sessions/:sessionId/cart-lines/:cartLineId',
+  'GET /v1/customer-payments/:paymentId',
   'GET /v1/customers',
   'GET /v1/customers/:customerId',
+  'GET /v1/customers/:customerId/credits',
   'GET /v1/customers/:customerId/open-invoices',
   'GET /v1/customers/:customerId/receivable',
   'GET /v1/customers/:customerId/receivable/aging',
@@ -77,6 +98,8 @@ const PHASE4_ROUTES: readonly string[] = [
   'GET /v1/pos/till-sessions/current',
   'GET /v1/sales/:saleId',
   'PATCH /v1/pos/till-sessions/:sessionId/cart-lines/:cartLineId',
+  'POST /v1/customer-credits/:creditId/applications',
+  'POST /v1/customer-payments',
   'POST /v1/pos/till-sessions',
   'POST /v1/pos/till-sessions/:sessionId/cart-lines',
   'POST /v1/pos/till-sessions/:sessionId/cart-lines/:cartLineId/discount',
@@ -147,14 +170,83 @@ const POS_ROUTES: readonly string[] = PHASE4_ROUTES.filter((r) => r.includes(' /
  */
 const SALE_ROUTES: readonly string[] = ['POST /v1/sales', 'GET /v1/sales/:saleId'];
 
+/**
+ * THE FOUR RECEIVABLES ROUTES OF P4-S4, and why they are a section of their
+ * own (`RECEIVABLES_ROUTE_AUTHORITY`, `receivables-permissions.ts:81-118`).
+ *
+ * Two WRITES — `POST /v1/customer-payments` and
+ * `POST /v1/customer-credits/:creditId/applications` — and two READS of what
+ * they wrote, `GET /v1/customer-payments/:paymentId` and
+ * `GET /v1/customers/:customerId/credits`.
+ *
+ * None of the four can be driven by the two generic loops above:
+ *
+ *   - the two writes are POSTs, and a POST driven as a GET is a 404 that looks
+ *     exactly like isolation — a DENY with no ALLOW beside it, which is the one
+ *     failure this file exists to refuse;
+ *   - `GET /v1/customer-payments/:paymentId` is keyed by a PAYMENT, and
+ *     `bind()` has no payment id to put in its path: a fresh uuid would make
+ *     the ALLOW a 404 too, so the pair would again be two refusals;
+ *   - `GET /v1/customers/:customerId/credits` is the one route `bind()` could
+ *     fill, and it still must not join the item loop. The loop asserts the
+ *     ALLOW is a 200 and nothing more, and this route answers `200 []` for a
+ *     customer with no credit — so the generic pair would have been satisfied
+ *     by a read that returned nothing for everybody, which proves no isolation
+ *     at all. Its claim is about CONTENTS: under A's header the array holds
+ *     A's own credit and not one credit of A2 or B.
+ *
+ * Every ALLOW below is REAL and goes through the product's own commands: the
+ * payment is collected by `POST /v1/customer-payments` and the credit is the
+ * surplus that command created. No `payments`, `payment_allocations`,
+ * `customer_credits` or `customer_credit_applications` row is ever inserted by
+ * hand, and none could be: `payment_guard()` refuses any INSERT whose
+ * `business_transaction_id` is not `inventory_business_transaction_id()`
+ * (`0081:898-901`), so only the command's own transaction writes one, and
+ * `daftar_app` holds `SELECT` and nothing else on all four (`0081:615`).
+ *
+ * Their subject is NOT yet complete, and the section says so by name rather
+ * than by skipping — the `SALE_ROUTES` precedent exactly. `0081` is on disk, so
+ * the relations and the two routines exist; what is missing is the THREE
+ * code-side registrations `receivables.module.ts` reports as required wiring
+ * (`P4_S4_REQUIRED_WIRING` rows 1-3): the `INVENTORY_PAYLOAD_SCHEMAS` entries,
+ * the `OPERATION_AUTHORITY` rows and the `DOMAIN_SOURCE_TYPES` members. Until
+ * they land both commands refuse `customer_payment.registry_incomplete` (500)
+ * at the first call, so no ALLOW can be formed and `requireSubject` REFUSES
+ * with the missing names. Nothing here is skipped, nothing is conditional, and
+ * the day the wiring lands these cases go live with no edit to this file.
+ */
+const RECEIVABLES_ROUTES: readonly string[] = [
+  'POST /v1/customer-payments',
+  'POST /v1/customer-credits/:creditId/applications',
+  'GET /v1/customer-payments/:paymentId',
+  'GET /v1/customers/:customerId/credits',
+];
+
 /** A route the two generic loops below can drive: a GET whose subject is a customer or an invoice. */
-const isGenericReadRoute = (route: string): boolean => route.startsWith('GET ') && !SALE_ROUTES.includes(route) && !POS_ROUTES.includes(route);
+const isGenericReadRoute = (route: string): boolean =>
+  route.startsWith('GET ') && !SALE_ROUTES.includes(route) && !POS_ROUTES.includes(route) && !RECEIVABLES_ROUTES.includes(route);
 
 /** The two relations 0079 creates. Both must refuse a foreign business at SQL, and neither may be written by `daftar_app`. */
 const POS_RELATIONS: readonly string[] = ['pos_cart_lines', 'pos_till_sessions'];
 
 /** The four SECURITY DEFINER routines the six POS WRITES call. A route cannot write by issuing SQL; it mints and calls one of these; the four reads call none. */
 const POS_ROUTINES: readonly string[] = ['pos_cart_remove_line', 'pos_cart_set_line', 'pos_till_session_close', 'pos_till_session_open'];
+
+/** The four relations 0081 creates. Every one must refuse a foreign business at SQL, and `daftar_app` may write none of them. */
+const RECEIVABLES_RELATIONS: readonly string[] = ['customer_credit_applications', 'customer_credits', 'payment_allocations', 'payments'];
+
+/** The two SECURITY DEFINER routines the two receivables WRITES call. A route cannot write by issuing SQL; it mints and calls one of these. */
+const RECEIVABLES_ROUTINES: readonly string[] = ['customer_apply_credit', 'customer_collect_payment'];
+
+/**
+ * The two operation codes the commands mint an `invctl/1` assertion of, named
+ * from the module that defines them rather than typed out here: a code typed
+ * into a test is a second copy of the registry.
+ */
+const RECEIVABLES_OPS: readonly string[] = [CUSTOMER_APPLY_CREDIT_OP, CUSTOMER_COLLECT_PAYMENT_OP];
+
+/** The three accounting source types 0081 registers — one per entry this slice signs (`P4_S4_REQUIRED_WIRING` row 3). */
+const RECEIVABLES_SOURCE_TYPES: readonly string[] = ['customer_credit', 'customer_credit_application', 'customer_payment_allocation'];
 
 /** The five relations 0075 creates, every one of which must refuse a foreign business at SQL. */
 const PHASE4_RELATIONS: readonly string[] = ['customers', 'customer_contacts', 'invoices', 'invoice_items', 'invoice_sequences'];
@@ -412,10 +504,18 @@ describe('the enumeration is checked, not trusted (G-02)', () => {
     // (`GET …/cart-lines`), and the number is asserted rather than bounded so
     // a route added without a cross-business probe below is red here.
     expect(POS_ROUTES.length, 'the POS surface is empty, so its whole section below would prove nothing').toBe(11);
+    // Every receivables route this file excludes from the generic loops is
+    // really on the surface. `RECEIVABLES_ROUTES` is written out rather than
+    // filtered from `PHASE4_ROUTES` by a path pattern, because two of the four
+    // live under `/v1/customers` and `/v1/customer-credits` alongside routes of
+    // other slices: a filter would have silently swallowed
+    // `GET /v1/customers/:customerId/receivable` the day somebody widened it.
+    for (const route of RECEIVABLES_ROUTES) expect(PHASE4_ROUTES, `${route} is declared a receivables route but is not on the surface`).toContain(route);
+    expect(RECEIVABLES_ROUTES.length, 'the receivables surface is empty, so its whole section below would prove nothing').toBe(4);
     expect(
       PHASE4_ROUTES.filter((r) => !isGenericReadRoute(r)).sort(),
-      'a route is driven by the generic loops, by the sale section or by the POS section — never by none of them',
-    ).toEqual([...SALE_ROUTES, ...POS_ROUTES].sort());
+      'a route is driven by the generic loops, by the sale section, by the POS section or by the receivables section — never by none of them',
+    ).toEqual([...SALE_ROUTES, ...POS_ROUTES, ...RECEIVABLES_ROUTES].sort());
   });
 
   it('the fixture is real: each of the three businesses holds its own customer and its own invoice', async () => {
@@ -1368,5 +1468,540 @@ describe('HTTP: the POS till, its type-ahead and its cart refuse another tenant�
       [[...POS_RELATIONS]],
     );
     expect(rows.rows.map((r) => `${r.relname}:${String(r.f)}`)).toEqual([...POS_RELATIONS].sort().map((r) => `${r}:true`));
+  });
+});
+
+/**
+ * THE RECEIVABLES SURFACE — four routes of P4-S4 (`RECEIVABLES_ROUTE_AUTHORITY`,
+ * `receivables-permissions.ts:81-118`; lock `P4-AL-18`, `P4-AL-36`,
+ * `P4-AL-38`, `P4-AL-40`, `P4-AL-43` scenario 8).
+ *
+ * Two WRITES that move money — collecting a customer payment and applying an
+ * existing customer credit to an invoice — and the two READS of what they
+ * wrote. `RECEIVABLES_ROUTES` records at length why none of the four can be
+ * driven by the two generic loops, and why the subject is incomplete today.
+ *
+ * Three DENY forms per route, the same three the sale and POS sections use:
+ *
+ *   1. this business's own ids under ANOTHER business's header, by an actor who
+ *      legitimately holds `payments.collect` and `receivables.view` in both
+ *      (one owner, two businesses, one tenant). Only the business binding
+ *      refuses it; the token is valid everywhere it is used here;
+ *   2. the OTHER business's ids under the actor's own valid header — the harder
+ *      half, which a controller that trusted its path parameter or its body
+ *      would have answered. A payment collected against another business's
+ *      invoice is that business's receivable settled with this business's cash;
+ *   3. another tenant's token against this tenant's business.
+ *
+ * And after every refused WRITE the row counts of BOTH businesses are read back
+ * as the SCHEMA OWNER, who bypasses row security, so a write that happened and
+ * was merely hidden from the caller is still visible to the assertion. A
+ * refusal that left a `payments` row behind would be the worst outcome of the
+ * three and the one a status-code-only assertion cannot see.
+ *
+ * The fixture is built ONCE, lazily, inside this section, so this suite's
+ * existing 300-second `beforeAll` is untouched and every route above keeps its
+ * current verdict. While the subject is incomplete it never runs at all.
+ */
+describe('HTTP: the customer payment, the credit application and their reads refuse another tenant’s business', () => {
+  const CLAIM = 'the P4-S4 receivables routes refuse another tenant’s business at the API and again at SQL';
+
+  /** One shop's receivables state, every row of it written by the shop's own commands. */
+  interface Settled {
+    /** The two open invoices the shop's own credit sales produced: one to pay, one to apply the credit to. */
+    readonly paidInvoiceId: string;
+    readonly creditInvoiceId: string;
+    readonly paymentMethodId: string;
+    /** The payment `POST /v1/customer-payments` collected, and the surplus credit it created. */
+    readonly paymentId: string;
+    readonly creditId: string;
+  }
+
+  const settled = new Map<string, Settled>();
+  /** Built at most once; the error of a failed build is re-thrown to every case rather than swallowed. */
+  let fixture: Promise<void> | null = null;
+  let day = '';
+
+  const state = (shop: Shop): Settled => {
+    const found = settled.get(shop.businessId);
+    if (found === undefined) throw new Error(`no receivables fixture was built for ${shop.businessId}`);
+    return found;
+  };
+
+  /**
+   * WHAT THIS SLICE'S CLAIMS ARE ABOUT, AND WHICH PARTS OF IT EXIST.
+   *
+   * `0081` is on disk and `runMigrations` applies every `.sql` in the directory,
+   * so the four relations, the two routines and the registry rows are LIVE. The
+   * three CODE-side registrations are not, and they are the half that makes an
+   * ALLOW impossible rather than merely wrong: `receivables-payload.ts:95`
+   * refuses `customer_payment.registry_incomplete` (500) at the first call of
+   * either command while `INVENTORY_PAYLOAD_SCHEMAS` has no field schema for
+   * the op code, because `canonicalInventoryPayload` cannot hash a payload
+   * whose code it does not know.
+   *
+   * `OPERATION_AUTHORITY` (`P4_S4_REQUIRED_WIRING` row 2) is deliberately NOT
+   * probed here: it is a `Record<InventoryOperationCode, …>` with no default, so
+   * `inventory-authorization.ts` stops COMPILING the moment the package
+   * registers the two codes. A check for it would be a second copy of a law the
+   * compiler already states, and the day it could fail is a day this file does
+   * not build.
+   */
+  async function receivablesMissing(): Promise<readonly string[]> {
+    const q = ownerPool();
+    const missing: string[] = [];
+    const relations = await existingRelations(q, RECEIVABLES_RELATIONS);
+    for (const relation of RECEIVABLES_RELATIONS) if (!relations.includes(relation)) missing.push(`relation ${relation}`);
+    for (const routine of RECEIVABLES_ROUTINES) if (!(await routineExists(q, routine))) missing.push(`the routine ${routine}`);
+    for (const source of RECEIVABLES_SOURCE_TYPES)
+      if (!(await registryHas(q, 'accounting_source_types', 'source_type', source))) missing.push(`accounting_source_types row '${source}'`);
+    for (const op of RECEIVABLES_OPS) {
+      if (!(await registryHas(q, 'inventory_operation_kinds', 'op_code', op))) missing.push(`inventory_operation_kinds row '${op}'`);
+      if (!(INVENTORY_OPERATION_CODES as readonly string[]).includes(op))
+        missing.push(
+          `the @daftar/inventory payload registration of '${op}' (P4_S4_REQUIRED_WIRING row 1, packages/inventory/src/payload.ts) — ` +
+            `without a field schema canonicalInventoryPayload cannot hash the payload, so the command refuses customer_payment.registry_incomplete (500) ` +
+            `and no ALLOW can be formed`,
+        );
+    }
+    for (const source of RECEIVABLES_SOURCE_TYPES)
+      if (!(DOMAIN_SOURCE_TYPES as readonly string[]).includes(source))
+        missing.push(
+          `the @daftar/accounting DOMAIN_SOURCE_TYPES member '${source}' (P4_S4_REQUIRED_WIRING row 3, packages/accounting/src/post.ts) — ` +
+            `mintDomainPostingAssertion refuses a command whose source type is not domain-owned, so no entry of this slice can be signed`,
+        );
+    return missing;
+  }
+
+  /** Rows of a receivables relation a business holds, read as the OWNER so no policy can hide a leak. */
+  async function rows(relation: string, shop: Shop): Promise<number> {
+    return Number(
+      (await ownerPool().query<{ n: string }>(`SELECT count(*)::text AS n FROM ${relation} WHERE business_id = $1`, [shop.businessId])).rows[0]?.n ?? '-1',
+    );
+  }
+
+  /**
+   * The business's own settlement posting account, ASKED OF THE DATABASE rather
+   * than typed: `accounting_settlement_account_eligibility` is the authority
+   * `payment_guard()` itself consults (`0081:917`), so asking it is asking the
+   * same question the guard will ask. A code typed in here would be a second
+   * copy of the chart of accounts.
+   */
+  async function settlementAccount(shop: Shop): Promise<string> {
+    const found = await ownerPool().query<{ id: string }>(
+      `SELECT a.id FROM accounts a
+        WHERE a.business_id = $1 AND accounting_settlement_account_eligibility(a.business_id, a.id) = 'eligible'
+        ORDER BY a.code LIMIT 1`,
+      [shop.businessId],
+    );
+    const id = found.rows[0]?.id;
+    expect(
+      id,
+      `${shop.businessId} holds no eligible settlement account, so no payment method could be created and every ALLOW below would be a 409`,
+    ).toBeDefined();
+    return String(id);
+  }
+
+  /** Make this shop's product sellable and stock it, so a credit sale below is refused — if it is — by the isolation and never by the stock. */
+  async function stocked(shop: Shop, actor: Actor): Promise<void> {
+    const configured = await t.request
+      .put(`/v1/inventory/products/${shop.productId}/configuration`)
+      .set(hdr(actor, shop.businessId))
+      .send({ trackInventory: true, unitCode: 'piece' });
+    expect(configured.status, `the product of ${shop.businessId} could not be configured: ${JSON.stringify(configured.body)}`).toBe(200);
+    const adjusted = await t.request
+      .post('/v1/inventory/adjustments')
+      .set(hdr(actor, shop.businessId))
+      .send({
+        adjustmentId: randomUUID(),
+        warehouseId: shop.warehouseId,
+        occurredOn: day,
+        reason: 'the cross-tenant receivables fixture',
+        lines: [{ productId: shop.productId, quantity: '40', unitCost: '5' }],
+      });
+    expect(adjusted.status, `the stock of ${shop.businessId} could not be seeded: ${JSON.stringify(adjusted.body)}`).toBe(201);
+  }
+
+  /** One open invoice of this customer, with what it still owes, read through the shop's OWN route. */
+  async function openInvoices(shop: Shop, actor: Actor): Promise<readonly { invoiceId: string; outstandingTxnMinor: string }[]> {
+    const page = await t.request.get(`/v1/customers/${shop.customerId}/open-invoices?asOf=${day}`).set(hdr(actor, shop.businessId));
+    expect(page.status, `the open invoices of ${shop.businessId} could not be read: ${JSON.stringify(page.body)}`).toBe(200);
+    return page.body.items as { invoiceId: string; outstandingTxnMinor: string }[];
+  }
+
+  /**
+   * Commit one CREDIT sale for this shop and return the invoice it raised.
+   *
+   * A credit sale is a sale with a customer and no payment (`sale-path.ts:133`),
+   * and it is the only lawful way to obtain an OPEN invoice here: the invoice is
+   * the sale commit primitive's to write, and hand-seeding one would plant the
+   * half-built commercial fact the atomic sale law exists to forbid. The invoice
+   * id is then read back through the shop's OWN
+   * `GET /v1/customers/:customerId/open-invoices`, which is itself one of the
+   * routes the generic loops above prove isolated — the new invoice is the one
+   * that was not open before the sale.
+   */
+  async function openInvoice(shop: Shop, actor: Actor, known: readonly string[]): Promise<string> {
+    const committed = await confirmSale(t, hdr(actor, shop.businessId), {
+      saleId: randomUUID(),
+      customerId: shop.customerId,
+      warehouseId: shop.warehouseId,
+      occurredOn: day,
+      lines: [{ productId: shop.productId, quantity: '1' }],
+    });
+    expect(committed.status, `the credit sale of ${shop.businessId} was refused: ${JSON.stringify(committed.body)}`).toBe(200);
+    const fresh = (await openInvoices(shop, actor)).filter((i) => !known.includes(i.invoiceId));
+    expect(fresh.length, `the credit sale of ${shop.businessId} raised no new open invoice, so the ALLOW below would have nothing to settle`).toBe(1);
+    return (fresh[0] as { invoiceId: string }).invoiceId;
+  }
+
+  /** What one invoice still owes, in its own currency's minor units. */
+  async function outstanding(shop: Shop, actor: Actor, invoiceId: string): Promise<bigint> {
+    const row = (await openInvoices(shop, actor)).find((i) => i.invoiceId === invoiceId);
+    expect(row, `invoice ${invoiceId} is not open for ${shop.businessId}, so the ALLOW below would allocate nothing`).toBeDefined();
+    return BigInt((row as { outstandingTxnMinor: string }).outstandingTxnMinor);
+  }
+
+  /**
+   * Build one shop's receivables state through the product's own commands:
+   * two credit sales, a payment method, and ONE payment that settles the first
+   * invoice in full and overpays by a surplus — so the command creates a
+   * CUSTOMER CREDIT, which is the subject of the credit-application ALLOW and
+   * of the credit read's ALLOW.
+   *
+   * The surplus is the point: a fully allocated payment answers `credit: null`
+   * (the closure law `Σ invoiceAmountAppliedMinor + the credit created =
+   * amountMinor`), and then `POST /v1/customer-credits/:creditId/applications`
+   * would have no credit to apply and `GET /v1/customers/:customerId/credits`
+   * would answer `[]` for everybody — two ALLOWs that prove nothing.
+   */
+  async function furnishReceivables(shop: Shop, actor: Actor): Promise<void> {
+    const before = (await openInvoices(shop, actor)).map((i) => i.invoiceId);
+    const paidInvoiceId = await openInvoice(shop, actor, before);
+    const creditInvoiceId = await openInvoice(shop, actor, [...before, paidInvoiceId]);
+    const paymentMethodId = randomUUID();
+    const method = await t.request
+      .post('/v1/payment-methods')
+      .set(hdr(actor, shop.businessId))
+      .send({
+        paymentMethodId,
+        systemType: 'cash',
+        postingAccountId: await settlementAccount(shop),
+        requiresReference: false,
+        sortOrder: 10,
+        names: { en: 'Golden cash drawer', ar: 'الصندوق' },
+      });
+    expect(method.status, `the payment method of ${shop.businessId} was refused: ${JSON.stringify(method.body)}`).toBe(201);
+
+    const due = await outstanding(shop, actor, paidInvoiceId);
+    const surplus = await outstanding(shop, actor, creditInvoiceId);
+    expect(due > 0n && surplus > 0n, `the two credit sales of ${shop.businessId} owe nothing, so the ALLOW payment would allocate and overpay nothing`).toBe(
+      true,
+    );
+    const paymentId = randomUUID();
+    const collected = await t.request
+      .post('/v1/customer-payments')
+      .set(hdr(actor, shop.businessId))
+      .send({
+        paymentId,
+        customerId: shop.customerId,
+        paymentMethodId,
+        paymentDate: day,
+        currencyCode: 'ILS',
+        amountMinor: (due + surplus).toString(10),
+        reference: null,
+        creditId: randomUUID(),
+        allocations: [
+          { allocationId: randomUUID(), invoiceId: paidInvoiceId, paymentAmountMinor: due.toString(10), invoiceAmountAppliedMinor: due.toString(10) },
+        ],
+      });
+    expect(collected.status, `the ALLOW payment of ${shop.businessId} was refused: ${JSON.stringify(collected.body)}`).toBe(201);
+    const credit = collected.body.credit as { creditId: string } | null;
+    expect(credit, 'the ALLOW payment created no credit, so the credit application and the credit read would both have no subject').not.toBeNull();
+    settled.set(shop.businessId, { paidInvoiceId, creditInvoiceId, paymentMethodId, paymentId, creditId: (credit as { creditId: string }).creditId });
+  }
+
+  /** Build the fixture at most once, and hand the same failure to every case that needs it. */
+  async function ready(): Promise<void> {
+    requireSubject(await receivablesMissing(), CLAIM);
+    if (fixture === null)
+      fixture = (async (): Promise<void> => {
+        day = String((await ownerPool().query<{ d: string }>(`SELECT current_date::text AS d`)).rows[0]?.d ?? '');
+        await stocked(A, owner);
+        await stocked(A2, owner);
+        await stocked(B, ownerB);
+        await furnishReceivables(A, owner);
+        await furnishReceivables(A2, owner);
+        await furnishReceivables(B, ownerB);
+      })();
+    await fixture;
+  }
+
+  it('the subject exists: the four relations, the two routines, the three source types and both op codes are registered in SQL and in code', async () => {
+    // Named rather than skipped. A missing subject is a FAILURE with the
+    // missing names in it: a conditional pass is a `.skip` no SKIP regex can
+    // see, and an unpaired refusal proves nothing.
+    requireSubject(await receivablesMissing(), CLAIM);
+  });
+
+  it('POST /v1/customer-payments: collects for A, and refuses every cross-business form of the same request', async () => {
+    await ready();
+    const mine = state(A);
+
+    /** The exact ALLOW body, with whichever ids a DENY form changes. */
+    const body = (o: { customerId: string; invoiceId: string; paymentMethodId: string; amountMinor: string }): Record<string, unknown> => ({
+      paymentId: randomUUID(),
+      customerId: o.customerId,
+      paymentMethodId: o.paymentMethodId,
+      paymentDate: day,
+      currencyCode: 'ILS',
+      amountMinor: o.amountMinor,
+      reference: null,
+      creditId: randomUUID(),
+      allocations: [{ allocationId: randomUUID(), invoiceId: o.invoiceId, paymentAmountMinor: o.amountMinor, invoiceAmountAppliedMinor: o.amountMinor }],
+    });
+
+    // The ALLOW is the one `ready()` already collected, and it is RESTATED here
+    // rather than repeated: `payment_guard()` makes a payment immutable and the
+    // invoice it settled is now closed, so a second identical call would be
+    // refused for the SETTLEMENT and not for the isolation — a DENY disguised as
+    // an ALLOW. Reading the stored payment back is the statement that the ALLOW
+    // form demonstrably works, which is what each DENY below is one change away
+    // from.
+    const stored = await t.request.get(`/v1/customer-payments/${mine.paymentId}`).set(hdr(owner, A.businessId));
+    expect(stored.status, `the ALLOW payment of A is not readable, so the DENYs below have no ALLOW beside them: ${JSON.stringify(stored.body)}`).toBe(200);
+    expect(stored.body.paymentId).toBe(mine.paymentId);
+    expect((stored.body.allocations as unknown[]).length, 'the ALLOW payment allocated nothing, so it settled no receivable').toBeGreaterThan(0);
+
+    const amount = (await outstanding(A, owner, mine.creditInvoiceId)).toString(10);
+
+    // DENY 1 — A's own customer, invoice and method under A2's HEADER, by an
+    // actor who legitimately holds `payments.collect` in both businesses. Only
+    // the business binding refuses this; the token is valid everywhere.
+    const beforeA2 = await rows('payments', A2);
+    const beforeA2Allocations = await rows('payment_allocations', A2);
+    const foreignHeader = await t.request
+      .post('/v1/customer-payments')
+      .set(hdr(owner, A2.businessId))
+      .send(body({ customerId: A.customerId, invoiceId: mine.creditInvoiceId, paymentMethodId: mine.paymentMethodId, amountMinor: amount }));
+    expect([403, 404, 409, 422], `the collect answered ${foreignHeader.status} for A's ids under A2's header`).toContain(foreignHeader.status);
+    expect(await rows('payments', A2), 'the refused collect wrote a payment into A2 anyway').toBe(beforeA2);
+    expect(await rows('payment_allocations', A2), 'the refused collect wrote an allocation into A2 anyway').toBe(beforeA2Allocations);
+
+    // DENY 2 — the harder half: the OTHER business's customer, invoice and
+    // method under the actor's own valid header. A controller that trusted the
+    // body would have settled another business's receivable with A's cash.
+    for (const other of [A2, B]) {
+      const theirs = state(other);
+      const beforeOther = await rows('payments', other);
+      const beforeOtherAllocations = await rows('payment_allocations', other);
+      const beforeMine = await rows('payments', A);
+      const res = await t.request
+        .post('/v1/customer-payments')
+        .set(hdr(owner, A.businessId))
+        .send(body({ customerId: other.customerId, invoiceId: theirs.creditInvoiceId, paymentMethodId: theirs.paymentMethodId, amountMinor: amount }));
+      expect([403, 404, 409, 422], `the collect answered ${res.status} for ${other.businessId}'s ids under A's header`).toContain(res.status);
+      expect(await rows('payments', other), `the refused collect wrote a payment into ${other.businessId}`).toBe(beforeOther);
+      expect(await rows('payment_allocations', other), `the refused collect wrote an allocation into ${other.businessId}`).toBe(beforeOtherAllocations);
+      expect(await rows('payments', A), 'the refused collect wrote a payment into A out of another business’s rows').toBe(beforeMine);
+    }
+
+    // DENY 3 — another tenant's token against this tenant's business.
+    const beforeToken = await rows('payments', A);
+    const foreignToken = await t.request
+      .post('/v1/customer-payments')
+      .set(hdr(ownerB, A.businessId))
+      .send(body({ customerId: A.customerId, invoiceId: mine.creditInvoiceId, paymentMethodId: mine.paymentMethodId, amountMinor: amount }));
+    expect([401, 403, 404], `the collect answered ${foreignToken.status} for another tenant's token`).toContain(foreignToken.status);
+    expect(await rows('payments', A), 'another tenant’s token collected a payment into A').toBe(beforeToken);
+  });
+
+  it('POST /v1/customer-credits/:creditId/applications: applies A’s own credit, and refuses every cross-business form', async () => {
+    await ready();
+    const mine = state(A);
+    const path = (creditId: string): string => `/v1/customer-credits/${creditId}/applications`;
+
+    /** The exact ALLOW body, with whichever ids a DENY form changes. */
+    const body = (o: { customerId: string; invoiceId: string; amountMinor: string }): Record<string, unknown> => ({
+      applicationId: randomUUID(),
+      customerId: o.customerId,
+      invoiceId: o.invoiceId,
+      applicationDate: day,
+      creditAmountConsumedMinor: o.amountMinor,
+      invoiceAmountAppliedMinor: o.amountMinor,
+    });
+
+    const amountA = (await outstanding(A, owner, mine.creditInvoiceId)).toString(10);
+
+    // DENY 1 — A's own credit and invoice under A2's HEADER. The credit is
+    // INVISIBLE to A2 under row security, so the honest answer is a not-found:
+    // a 403 would confirm a credit exists in a business the request is not in.
+    const beforeA2 = await rows('customer_credit_applications', A2);
+    const foreignHeader = await t.request
+      .post(path(mine.creditId))
+      .set(hdr(owner, A2.businessId))
+      .send(body({ customerId: A.customerId, invoiceId: mine.creditInvoiceId, amountMinor: amountA }));
+    expect([403, 404, 409, 422], `the application answered ${foreignHeader.status} for A's credit under A2's header`).toContain(foreignHeader.status);
+    expect(await rows('customer_credit_applications', A2), 'the refused application wrote a row into A2 anyway').toBe(beforeA2);
+
+    // DENY 2 — the harder half: the OTHER business's credit, customer and
+    // invoice under the actor's own valid header. A route that trusted its path
+    // parameter would have consumed another business's credit.
+    for (const other of [A2, B]) {
+      const theirs = state(other);
+      const beforeOther = await rows('customer_credit_applications', other);
+      const beforeMine = await rows('customer_credit_applications', A);
+      const res = await t.request
+        .post(path(theirs.creditId))
+        .set(hdr(owner, A.businessId))
+        .send(body({ customerId: other.customerId, invoiceId: theirs.creditInvoiceId, amountMinor: amountA }));
+      expect([403, 404, 409, 422], `the application answered ${res.status} for ${other.businessId}'s credit under A's header`).toContain(res.status);
+      expect(await rows('customer_credit_applications', other), `the refused application wrote a row into ${other.businessId}`).toBe(beforeOther);
+      expect(await rows('customer_credit_applications', A), 'the refused application wrote a row into A out of another business’s credit').toBe(beforeMine);
+    }
+
+    // DENY 3 — another tenant's token against this tenant's business.
+    const beforeToken = await rows('customer_credit_applications', A);
+    const foreignToken = await t.request
+      .post(path(mine.creditId))
+      .set(hdr(ownerB, A.businessId))
+      .send(body({ customerId: A.customerId, invoiceId: mine.creditInvoiceId, amountMinor: amountA }));
+    expect([401, 403, 404], `the application answered ${foreignToken.status} for another tenant's token`).toContain(foreignToken.status);
+    expect(await rows('customer_credit_applications', A), 'another tenant’s token applied a credit in A').toBe(beforeToken);
+
+    // ALLOW — last, because it CONSUMES the credit: A's own credit against A's
+    // own open invoice, under A's own header. It is asserted after the refusals
+    // so that each one above was refused while the ALLOW form was still
+    // available, which is what makes them isolation rather than exhaustion.
+    const ok = await t.request
+      .post(path(mine.creditId))
+      .set(hdr(owner, A.businessId))
+      .send(body({ customerId: A.customerId, invoiceId: mine.creditInvoiceId, amountMinor: amountA }));
+    expect(ok.status, `the application does not work for its own business: ${JSON.stringify(ok.body)}`).toBe(201);
+    expect(ok.body.creditId).toBe(mine.creditId);
+    expect(ok.body.invoiceId).toBe(mine.creditInvoiceId);
+  });
+
+  it('GET /v1/customer-payments/:paymentId: answers for A, and refuses A2 and B', async () => {
+    await ready();
+    const route = 'GET /v1/customer-payments/:paymentId';
+    const path = (shop: Shop): string => `/v1/customer-payments/${state(shop).paymentId}`;
+
+    // ALLOW — the pair's other half: A's own payment answers, so each refusal
+    // below is the isolation and not a route that reads nothing.
+    const ok = await t.request.get(path(A)).set(hdr(owner, A.businessId));
+    expect(ok.status, `${route} does not answer for its own business: ${JSON.stringify(ok.body)}`).toBe(200);
+    expect(ok.body.paymentId, `${route} answered with some other payment`).toBe(state(A).paymentId);
+
+    // DENY 1 — A's own id under A2's header.
+    const foreignHeader = await t.request.get(path(A)).set(hdr(owner, A2.businessId));
+    expect([403, 404], `${route} answered ${foreignHeader.status} for A's id under A2's header`).toContain(foreignHeader.status);
+
+    // DENY 2 — the other business's id under the actor's own header.
+    for (const other of [A2, B]) {
+      const res = await t.request.get(path(other)).set(hdr(owner, A.businessId));
+      expect([403, 404], `${route} answered ${res.status} for ${other.businessId}'s id under A's header`).toContain(res.status);
+    }
+
+    // DENY 3 — another tenant's token against this tenant's business.
+    const foreignToken = await t.request.get(path(A)).set(hdr(ownerB, A.businessId));
+    expect([401, 403, 404], `${route} answered ${foreignToken.status} for another tenant's token`).toContain(foreignToken.status);
+  });
+
+  it('GET /v1/customers/:customerId/credits: each business’s read holds its own credit and no other’s', async () => {
+    await ready();
+    const route = 'GET /v1/customers/:customerId/credits';
+    const path = (shop: Shop): string => `/v1/customers/${shop.customerId}/credits`;
+
+    // ALLOW, and the isolation claim in one: each business reads EXACTLY its own
+    // credit. A status code is not the statement this route can make — it
+    // answers `200 []` for a customer with no credit — so the claim is about
+    // CONTENTS, which is the stronger of the two anyway: a leak shows up as a
+    // credit rather than as a status.
+    const seen: string[] = [];
+    for (const shop of [A, A2, B]) {
+      const actor = shop === B ? ownerB : owner;
+      const res = await t.request.get(path(shop)).set(hdr(actor, shop.businessId));
+      expect(res.status, `${route} does not answer for ${shop.businessId}: ${JSON.stringify(res.body)}`).toBe(200);
+      const ids = (res.body as { creditId: string }[]).map((c) => c.creditId);
+      expect(ids, `${route} returned ${JSON.stringify(ids)} for ${shop.businessId}`).toEqual([state(shop).creditId]);
+      seen.push(...ids);
+    }
+    // …and the three reads were three disjoint answers, not one shared one.
+    expect(new Set(seen).size, `${route} answered the same credit to more than one business`).toBe(3);
+
+    // DENY 1 — A's own customer id under A2's header, by an actor who holds
+    // `receivables.view` in both. The customer is invisible to A2 under row
+    // security, so the answer is a refusal and never A's credit.
+    const foreignHeader = await t.request.get(path(A)).set(hdr(owner, A2.businessId));
+    expect([403, 404], `${route} answered ${foreignHeader.status} for A's customer under A2's header`).toContain(foreignHeader.status);
+
+    // DENY 2 — the harder half: the OTHER business's customer id under the
+    // actor's own valid header.
+    for (const other of [A2, B]) {
+      const res = await t.request.get(path(other)).set(hdr(owner, A.businessId));
+      expect([403, 404], `${route} answered ${res.status} for ${other.businessId}'s customer under A's header`).toContain(res.status);
+    }
+
+    // DENY 3 — another tenant's token against this tenant's business.
+    const foreignToken = await t.request.get(path(A)).set(hdr(ownerB, A.businessId));
+    expect([401, 403, 404], `${route} answered ${foreignToken.status} for another tenant's token`).toContain(foreignToken.status);
+  });
+
+  it('SQL: the four receivables relations refuse another business under daftar_app’s row security, and none is writable by it', async () => {
+    await ready();
+    // `daftar_app` holds SELECT and nothing else on all four (`0081:615`), so
+    // the READ is what row security has to decide, and the absence of DML is
+    // what makes a SECURITY DEFINER routine the only writer.
+    const granted = new Set(
+      (
+        await ownerPool().query<{ relation: string }>(
+          `SELECT c.relname::text AS relation FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+            WHERE n.nspname = 'public' AND c.relname = ANY($1::text[]) AND has_table_privilege('daftar_app', c.oid, 'SELECT')`,
+          [[...RECEIVABLES_RELATIONS]],
+        )
+      ).rows.map((r) => r.relation),
+    );
+    expect([...granted].sort(), 'daftar_app must be able to READ all four receivables relations — the reads above run as it').toEqual(
+      [...RECEIVABLES_RELATIONS].sort(),
+    );
+
+    for (const relation of RECEIVABLES_RELATIONS) {
+      // ALLOW: the unqualified read under A's scope returns only A's rows. The
+      // statement names no business at all, so the filtering is the restrictive
+      // `business_isolation_read` policy and not a predicate.
+      const mine = await asApp<{ business_id: string }>(app, A, `SELECT DISTINCT business_id FROM ${relation}`);
+      expect(
+        mine.map((r) => r.business_id),
+        `${relation} under A's scope`,
+      ).toEqual([A.businessId]);
+      // DENY: the same statement, asking for the other business by id. A2 is
+      // the same tenant and the same owner, so only the business binding
+      // refuses it; B is another tenant and is refused twice over.
+      for (const other of [A2, B]) {
+        const leaked = await asApp<{ business_id: string }>(app, A, `SELECT business_id FROM ${relation} WHERE business_id = $1`, [other.businessId]);
+        expect(leaked, `${relation} leaked ${other.businessId} to ${A.businessId}`).toEqual([]);
+      }
+    }
+
+    // And no runtime principal may write any of the four by issuing SQL, which
+    // is stronger than a policy: an ungranted privilege needs no policy to be
+    // unreachable. `customer_credits.remaining_*` is granted to
+    // `daftar_inventory_internal` and to nobody else (`0081:617`), so even the
+    // credit's consumption is a routine's and not a route's.
+    for (const relation of RECEIVABLES_RELATIONS) {
+      for (const privilege of ['INSERT', 'UPDATE', 'DELETE']) {
+        const held = (await ownerPool().query<{ held: boolean }>(`SELECT has_table_privilege('daftar_app', $1, $2) AS held`, [relation, privilege])).rows[0];
+        expect(held?.held, `daftar_app holds ${privilege} on ${relation} — a route could then write without an assertion`).toBe(false);
+      }
+    }
+  });
+
+  it('FORCE ROW LEVEL SECURITY is on for all four receivables relations, so the table owner is not exempt either', async () => {
+    const forced = await ownerPool().query<{ relname: string; f: boolean }>(
+      `SELECT relname, relforcerowsecurity AS f FROM pg_class WHERE relname = ANY ($1::text[]) ORDER BY relname`,
+      [[...RECEIVABLES_RELATIONS]],
+    );
+    expect(forced.rows.map((r) => `${r.relname}:${String(r.f)}`)).toEqual([...RECEIVABLES_RELATIONS].sort().map((r) => `${r}:true`));
   });
 });

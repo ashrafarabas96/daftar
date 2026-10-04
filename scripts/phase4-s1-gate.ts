@@ -393,6 +393,35 @@ export const PHASE4_ROUTE_PREFIXES: readonly string[] = [
   '/v1/refunds',
   '/v1/credit-notes',
   '/v1/customer-credits',
+  // P4-S4's `ReceivablesController` is `@Controller('/v1')` and mounts
+  // `customer-payments` and `customer-payments/:paymentId`. NEITHER was a
+  // Phase 4 route to this function, because the prefix test below is
+  // `path === q || path.startsWith(`${q}/`)` and `/v1/customer-payments`
+  // satisfies neither against `/v1/payments`: a prefix is matched at a path
+  // SEGMENT boundary, and `customer-payments` is a different first segment
+  // from `payments`. So the slice's money-collecting POST and its read were
+  // invisible to `discoverPhase4Routes`, and with it to `crossTenantProblems`
+  // (G-02), which enumerates the cross-tenant golden from exactly this list —
+  // a route that takes a customer's money could have shipped with no
+  // cross-tenant pair at all.
+  //
+  // The gap was PARTIAL, which is what made it easy to miss: the slice's other
+  // two routes (`customer-credits/:creditId/applications` and
+  // `customers/:customerId/credits`) were already discovered under
+  // `/v1/customer-credits` and `/v1/customers`, so two of the four appeared
+  // and two did not.
+  //
+  // THIS LINE IS AN ADDITION TO A SEALED GATE, NOT A WEAKENING — the
+  // `InvoicesController` correction recorded at `discoverPhase4Routes` below is
+  // the precedent, and the same argument holds. This list is the gate's
+  // VOCABULARY, not a predicate and not a threshold: every check that reads it
+  // asks whether a discovered route is named by an enumerated golden, so a
+  // name ADDED here can only make MORE routes Phase 4 routes and therefore
+  // demand MORE golden rows. Nothing becomes permissible that was refused
+  // before this line; no route leaves the surface; no predicate in this file
+  // is relaxed. A name REMOVED from this list would be the weakening, and that
+  // is the edit this precedent does not authorise.
+  '/v1/customer-payments',
   '/v1/installments',
   '/v1/installment-plans',
   '/v1/debts',
