@@ -29,8 +29,16 @@
  *
  * 1. a customer payment need NOT be fully allocated. A payment may allocate
  *    nothing at all, and the whole unallocated surplus becomes a CUSTOMER
- *    CREDIT reported as `CustomerPaymentDto.credit`. The closure law is
- *    `Σ invoiceAmountAppliedMinor + the credit created = amountMinor`;
+ *    CREDIT reported as `CustomerPaymentDto.credit`. The closure law is in the
+ *    PAYMENT's currency and is a sum of commensurable quantities:
+ *    `Σ paymentAmountMinor + the credit created = amountMinor`. It is NOT
+ *    stated over `invoiceAmountAppliedMinor`: that figure is in the INVOICE's
+ *    currency (see the unit rules above), so the moment the two currencies
+ *    differ such a sum compares amounts in different units — which the rule
+ *    four lines up forbids outright. The base identity is the same shape in
+ *    the base currency, `Σ paymentBaseAmountMinor + the credit's carrying base
+ *    = baseAmountMinor`, and the accepted supplier closure (`0067:950-955`)
+ *    sums the payment-currency column for this reason;
  * 2. a WALK-IN invoice (one with no customer on it) can carry neither an
  *    allocation nor a credit application: `….invoice_walkin` (409).
  *

@@ -907,6 +907,11 @@
   "error.customer_credit_application.date_in_future": "The date is in the future. Nothing was saved. Choose today or an earlier date.",
   "error.customer_credit_application.not_found": "We couldn't find this invoice. Nothing was saved. Refresh and try again.",
   "error.customer_credit.not_found": "This balance in the customer's favour could not be found. Nothing was saved. Refresh and try again.",
+  "error.invoice_settlement.walkin_not_settleable": "This invoice has no customer, so a payment or a balance in a customer's favour cannot be applied to it. Nothing was saved.",
+  "error.invoice_settlement.cash_not_settleable": "This invoice was paid in cash when it was issued, so there is nothing left to settle. Nothing was saved.",
+  "error.invoice_settlement.customer_mismatch": "An invoice can only be settled from its own customer's payment, or from a balance in that customer's favour. Nothing was saved.",
+  "error.invoice_settlement.invoice_state_invalid": "This invoice is no longer open, so it cannot be settled. Nothing was saved. Refresh and try again.",
+  "error.invoice_settlement.settlement_inconsistent": "Something went wrong on our side. Nothing was saved. Please try again, and tell us if it keeps happening.",
   "error.customer_payment.arithmetic_invalid": "Something went wrong on our side. Nothing was saved. Try again; if it keeps happening, contact support.",
   "error.customer_payment.registry_incomplete": "Something went wrong on our side. Nothing was saved. Try again; if it keeps happening, contact support.",
   "pos.search.narrow": "Showing the closest matches. Keep typing to narrow it down."

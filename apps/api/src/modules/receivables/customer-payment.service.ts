@@ -131,12 +131,22 @@ export interface ReceivablesMethod {
 /**
  * An invoice's row as the binder's state.
  *
- * A walk-in invoice (`customer_id IS NULL`) is refused HERE as well as being
- * structurally unrepresentable: `payment_allocations.customer_id` is `NOT
- * NULL` and its composite FK is `(business_id, invoice_id, customer_id)`, so
- * no row can ever name one. The code exists so the API answers the question
- * instead of surfacing a constraint, and `invoices_walkin_no_ar` (`0075:661-684`)
- * is the third, deferred backstop.
+ * A walk-in invoice (`customer_id IS NULL`) is refused HERE, and it is the
+ * FIRST of three answers rather than a convenience in front of a constraint.
+ *
+ * It is not refused by the edge to `invoices`: that edge is two columns,
+ * `FOREIGN KEY (business_id, invoice_id) REFERENCES invoices (business_id, id)
+ * ON DELETE RESTRICT` (`0081:357` on `payment_allocations`, `0081:493` on
+ * `customer_credit_applications`). The three-column form this comment once
+ * claimed would need `UNIQUE (business_id, id, customer_id)` on `invoices`,
+ * and `0075` is frozen with no such constraint (`0075:286-288`) — Departure A
+ * of this slice, recorded in the architecture lock. `customer_id` is still
+ * `NOT NULL` on both reducers, so a row cannot OMIT a customer; what no
+ * composite edge enforces is that it is the INVOICE's customer.
+ *
+ * That identity, and the walk-in law with it, is proved by
+ * `invoice_settlement_verify` at COMMIT, and `invoices_walkin_no_ar`
+ * (`0075:661-684`) is the third, deferred backstop.
  */
 export function settledInvoice(row: SettledInvoiceRow, domain: 'customer_payment' | 'customer_credit_application'): SettledInvoice {
   if (row.status !== 'open') throw receivablesRefusal(`${domain}.invoice_state_invalid`);

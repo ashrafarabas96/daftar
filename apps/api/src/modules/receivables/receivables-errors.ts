@@ -94,10 +94,17 @@ const RECEIVABLES_STATUS = {
   /** The invoice is a draft or void: neither owes anything, so neither can be settled. */
   'customer_payment.invoice_state_invalid': 409,
   /**
-   * The invoice is a WALK-IN invoice (`customer_id IS NULL`). It cannot be
-   * settled by a named customer's payment, and the composite FK already makes
-   * the row unrepresentable — this code exists so the API answers the question
-   * instead of surfacing a constraint.
+   * The invoice is a WALK-IN invoice (`customer_id IS NULL`), and nothing can
+   * settle it.
+   *
+   * No composite edge makes the row unrepresentable: under Departure A the
+   * reducers' edge to `invoices` is two columns (`0081:357`, `0081:493`),
+   * because the three-column form needs a key on `invoices` that the frozen
+   * `0075` does not carry. So this code and
+   * `invoice_settlement.walkin_not_settleable` are the only two things
+   * standing there — this one answering at the API, the other at COMMIT — and
+   * neither is belt-and-braces over a structural guarantee. Deleting either as
+   * redundant would open the hole.
    */
   'customer_payment.invoice_walkin': 409,
   /** More applied to an invoice than `invoice_outstanding` says it owes. */
@@ -161,7 +168,37 @@ const RECEIVABLES_STATUS = {
    * `receivables-payload.ts`.
    */
   'customer_payment.registry_incomplete': 500,
-} as const satisfies Readonly<Record<`${'customer_payment' | 'customer_credit' | 'customer_credit_application'}.${string}`, 400 | 404 | 409 | 422 | 500>>;
+
+  // ── The SHARED settlement verifier ──────────────────────────────────
+  //
+  // `invoice_settlement_verify` is one body called by BOTH reducers — a
+  // payment allocation and a credit application — as a DEFERRED constraint
+  // trigger at COMMIT. It therefore cannot speak in either document's domain:
+  // by the time it runs, the rows it judges may come from both, and a refusal
+  // labelled `customer_payment.*` would name the wrong document half the time.
+  //
+  // A shared, non-document prefix has precedent in the accepted mirror: that
+  // module's recognizer lists `purchase_residue` beside the seven document
+  // domains (`purchasing-errors.ts:329-330`). What has NO precedent, and was
+  // the defect, is a prefix the database raises and the recognizer below does
+  // not know: `rethrowReceivablesRefusal` fell through to `throw error` and the
+  // raw PostgreSQL exception text escaped as an unhandled 500 — the P4-AL-54
+  // leak this file's own header forbids. These five are every code
+  // `invoice_settlement_verify` raises, enumerated from the migration, and the
+  // recognizer and all three catalogues carry them.
+  /** The invoice names no customer, so nothing can settle it: a walk-in sale was paid where it was issued. */
+  'invoice_settlement.walkin_not_settleable': 409,
+  /** A cash-settled invoice carries no receivable, so there is nothing to settle. */
+  'invoice_settlement.cash_not_settleable': 409,
+  /** A reducer row names a customer who is not the invoice's. Under Departure A no composite edge refuses this, so the verifier is where it is refused. */
+  'invoice_settlement.customer_mismatch': 409,
+  /** The invoice was not `open` when the settlement committed — a draft was never posted and a void document was reversed. */
+  'invoice_settlement.invoice_state_invalid': 409,
+  /** The settlement chain over the invoice does not close: an internal invariant, never a merchant's mistake and never an authorization answer. */
+  'invoice_settlement.settlement_inconsistent': 500,
+} as const satisfies Readonly<
+  Record<`${'customer_payment' | 'customer_credit' | 'customer_credit_application' | 'invoice_settlement'}.${string}`, 400 | 404 | 409 | 422 | 500>
+>;
 
 /** A classified receivables refusal code. */
 export type ReceivablesCode = keyof typeof RECEIVABLES_STATUS;
@@ -222,7 +259,7 @@ void RECEIVABLES_PLAN_CODES_ARE_REGISTERED;
  * `selling.*` invariant vocabulary is how a broken invariant comes to be
  * rendered as a 403, which `selling-errors.ts` records as a real incident.
  */
-const DATABASE_CODE_RE = /^((?:customer_payment|customer_credit|customer_credit_application)\.[a-z_]+)\b/;
+const DATABASE_CODE_RE = /^((?:customer_payment|customer_credit|customer_credit_application|invoice_settlement)\.[a-z_]+)\b/;
 
 /**
  * The receivables code a database refusal carries, or null. Only the CODE is

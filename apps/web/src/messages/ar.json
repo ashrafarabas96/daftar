@@ -907,6 +907,11 @@
   "error.customer_credit_application.date_in_future": "التاريخ في المستقبل. لم يُحفظ شيء. اختر تاريخ اليوم أو تاريخًا سابقًا.",
   "error.customer_credit_application.not_found": "تعذّر العثور على هذه الفاتورة. لم يُحفظ شيء. حدّث الصفحة وحاول مجددًا.",
   "error.customer_credit.not_found": "تعذّر العثور على رصيد العميل هذا. لم يُحفظ شيء. حدّث الصفحة وحاول مجددًا.",
+  "error.invoice_settlement.walkin_not_settleable": "هذه الفاتورة بلا عميل، فلا يمكن تسويتها بدفعة أو برصيد. لم يُحفظ شيء.",
+  "error.invoice_settlement.cash_not_settleable": "هذه الفاتورة سُدِّدت نقدًا عند إصدارها، فلا يتبقّى شيء لتسويته. لم يُحفظ شيء.",
+  "error.invoice_settlement.customer_mismatch": "لا تُسوَّى الفاتورة إلا بدفعة عميلها نفسه أو برصيده. لم يُحفظ شيء.",
+  "error.invoice_settlement.invoice_state_invalid": "هذه الفاتورة لم تبقَ مفتوحة، فلا يمكن تسويتها. لم يُحفظ شيء. حدِّث الصفحة وأعد المحاولة.",
+  "error.invoice_settlement.settlement_inconsistent": "حدث خطأ من جهتنا ولم يُحفظ شيء. أعد المحاولة، وأخبرنا إن تكرّر الأمر.",
   "error.customer_payment.arithmetic_invalid": "حدث خطأ من جهتنا. لم يُحفظ شيء. حاول مجددًا، وإن تكرر ذلك فتواصل مع الدعم.",
   "error.customer_payment.registry_incomplete": "حدث خطأ من جهتنا. لم يُحفظ شيء. حاول مجددًا، وإن تكرر ذلك فتواصل مع الدعم.",
   "pos.search.narrow": "نعرض أقرب النتائج. تابع الكتابة لتضييق البحث."

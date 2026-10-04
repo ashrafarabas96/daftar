@@ -907,6 +907,11 @@
   "error.customer_credit_application.date_in_future": "Tarih ileri bir tarihte. Hiçbir şey kaydedilmedi. Bugünü veya daha önceki bir tarihi seçin.",
   "error.customer_credit_application.not_found": "Bu fatura bulunamadı. Hiçbir şey kaydedilmedi. Sayfayı yenileyip tekrar deneyin.",
   "error.customer_credit.not_found": "Müşteri lehine bu bakiye bulunamadı. Hiçbir şey kaydedilmedi. Sayfayı yenileyip tekrar deneyin.",
+  "error.invoice_settlement.walkin_not_settleable": "Bu faturanın müşterisi yok, bu nedenle bir ödeme veya alacakla kapatılamaz. Hiçbir şey kaydedilmedi.",
+  "error.invoice_settlement.cash_not_settleable": "Bu fatura düzenlendiğinde nakit olarak ödendi, bu nedenle kapatılacak bir tutar kalmadı. Hiçbir şey kaydedilmedi.",
+  "error.invoice_settlement.customer_mismatch": "Bir fatura yalnızca kendi müşterisinin ödemesi veya alacağıyla kapatılabilir. Hiçbir şey kaydedilmedi.",
+  "error.invoice_settlement.invoice_state_invalid": "Bu fatura artık açık değil, bu nedenle kapatılamaz. Hiçbir şey kaydedilmedi. Sayfayı yenileyip yeniden deneyin.",
+  "error.invoice_settlement.settlement_inconsistent": "Tarafımızda bir sorun oluştu ve hiçbir şey kaydedilmedi. Lütfen yeniden deneyin ve sorun sürerse bize bildirin.",
   "error.customer_payment.arithmetic_invalid": "Bizim tarafımızda bir sorun oluştu. Hiçbir şey kaydedilmedi. Tekrar deneyin; sorun sürerse destekle iletişime geçin.",
   "error.customer_payment.registry_incomplete": "Bizim tarafımızda bir sorun oluştu. Hiçbir şey kaydedilmedi. Tekrar deneyin; sorun sürerse destekle iletişime geçin.",
   "pos.search.narrow": "En yakın sonuçlar gösteriliyor. Daraltmak için yazmaya devam edin."

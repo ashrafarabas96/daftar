@@ -181,13 +181,50 @@ describe('T-12 — OD-03: no tax element anywhere in S7', () => {
     expect(hits).toEqual([]);
   });
 
-  it('no customer payments: no customer token in the S7 namespaces or the client', () => {
+  /**
+   * The receivables refusal namespaces, which P4-S4 SHIPS.
+   *
+   * This test's name was "no customer payments", and that is no longer the
+   * law: the slice that collects a customer payment is built, so its refusal
+   * codes are keyed in all three catalogues on purpose. What the test is
+   * really about survives unchanged — no S7 SCREEN names a customer, and no
+   * S7 catalogue key names one for any reason OTHER than answering a
+   * receivables refusal.
+   *
+   * The exemption is held to the registry rather than to a prefix: every
+   * excluded key must be `error.<code>` for a code in `RECEIVABLES_CODES`,
+   * and that is asserted below. So the exemption cannot quietly widen into
+   * "anything under these namespaces", and a customer token appearing in a
+   * POS key still fails.
+   */
+  /**
+   * The registry is read as TEXT, not imported. `apps/web` must not import
+   * from `apps/api`: that file transitively reaches the API's Nest infra and
+   * compiling it under the web tsconfig fails with `TS1206: Decorators are not
+   * valid here`. Reading the one table out of the source keeps the API's
+   * registry as the authority — a code added there without its catalogue
+   * entries still fails below — without coupling the two builds.
+   */
+  const RECEIVABLES_CODES: readonly string[] = (() => {
+    const source = readFileSync(join(__dirname, '../../api/src/modules/receivables/receivables-errors.ts'), 'utf8');
+    const table = /const RECEIVABLES_STATUS = \{([\s\S]*?)\n\} as const satisfies/.exec(source)?.[1] ?? '';
+    return [...table.matchAll(/^\s*'([a-z_]+\.[a-z_]+)':\s*\d{3},/gm)].map((m) => m[1] as string);
+  })();
+
+  const receivablesKey = (key: string): boolean => RECEIVABLES_CODES.some((code) => key === `error.${code}`);
+
+  it('no S7 screen names a customer, and no S7 key does except to answer a receivables refusal', () => {
     const catalogHits = Object.entries({ ar, en, tr }).flatMap(([locale, catalog]) =>
       Object.entries(catalog)
-        .filter(([key, value]) => isS7Key(key) && /customer|عميل|عملاء|müşteri/i.test(`${key} ${value}`))
+        .filter(([key, value]) => isS7Key(key) && !receivablesKey(key) && /customer|عميل|عملاء|müşteri/i.test(`${key} ${value}`))
         .map(([key]) => `${locale}: ${key}`),
     );
     expect(catalogHits).toEqual([]);
+    // The exemption is not vacuous and not a prefix: it covers a real,
+    // non-empty, registered set, and every key it covers is in that set.
+    const exempted = Object.keys(en).filter((key) => isS7Key(key) && receivablesKey(key));
+    expect(exempted.length, 'the exemption covers no key, so it is hiding nothing and should be deleted').toBe(RECEIVABLES_CODES.length);
+    expect(RECEIVABLES_CODES.length).toBeGreaterThan(0);
     // No SCREEN names a customer: the screen that names one ships with the
     // customers slice, and until then no merchant surface offers the idea.
     const screens = Object.entries(s7Sources()).filter(([path]) => path.endsWith('.tsx'));
@@ -206,8 +243,17 @@ describe('T-12 — OD-03: no tax element anywhere in S7', () => {
     expect(assigned).toEqual([]);
     // And no other customer vocabulary leaks into a library either: a name, a
     // balance, a credit limit or a list is the customers slice's, not this one's.
+    // A library may now also name a receivables refusal CODE, because
+    // `phase3-errors.ts` classifies which of them a retry may repeat. That is
+    // the only widening: a customer's NAME, BALANCE, CREDIT LIMIT or LIST in a
+    // client library still fails, and so does a `customerName` or a
+    // `customerBalance` identifier, because the exemption is the exact
+    // registered code strings and nothing else.
+    const codeToken = new RegExp(`^(?:${RECEIVABLES_CODES.map((c) => c.replace(/[.]/g, '\\.')).join('|')})$`);
     const other = libraries.flatMap(([path, src]) =>
-      [...stripTsComments(src).matchAll(/\b[Cc]ustomer(\w*)/g)].map((m) => `${path}: customer${m[1] ?? ''}`).filter((hit) => !hit.endsWith(': customerId')),
+      [...stripTsComments(src).matchAll(/\b[Cc]ustomer\w*(?:\.[a-z_]+)?/g)]
+        .map((m) => `${path}: ${m[0]}`)
+        .filter((hit) => hit.endsWith(': customerId') === false && codeToken.test(hit.slice(hit.indexOf(': ') + 2)) === false),
     );
     expect(other).toEqual([]);
   });

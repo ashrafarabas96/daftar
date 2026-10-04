@@ -2203,3 +2203,61 @@ cash-settled invoice to a named customer reports an outstanding receivable the l
 the invoice is written `open` and `invoice_outstanding` keys on status alone while the posting debits cash.
 P4-S4 is the slice that owns what "outstanding" means, its fix is a new migration rather than an edit to
 anything frozen here, and nothing merges before it lands.
+
+## 28. P4-S4 execution — the two departures from the implementation map
+
+The P4-S4 implementation map ordered two things the accepted, frozen tree cannot carry. Both are
+recorded here as departures rather than silently taken, and each names what enforces the law in the
+shape that was built instead.
+
+### Departure A — the edge from a settling row to its invoice is TWO columns, not three
+
+**Ordered** (map §8.4 and §8.5): a three-column `FOREIGN KEY (business_id, invoice_id, customer_id)
+REFERENCES invoices (business_id, id, customer_id)` on each reducer, so that a row naming another
+customer's invoice is unrepresentable, with no trigger and no application rule behind it.
+
+**Built**: `FOREIGN KEY (business_id, invoice_id) REFERENCES invoices (business_id, id) ON DELETE
+RESTRICT`, on `payment_allocations` (`0081:357`) and on `customer_credit_applications`
+(`0081:493`).
+
+**Why**: the three-column edge requires `UNIQUE (business_id, id, customer_id)` on `invoices` as its
+referenced key. `0075` is frozen and carries no such constraint — its uniques are
+`invoices_number_uq`, `invoices_document_number_uq` and `invoices_sale_uq` (`0075:286-288`) — so the
+ordered form is unbuildable without editing a frozen migration, which nothing in this slice may do.
+Adding the key in a new migration is possible and is NOT taken here: it is a widening of an accepted
+relation's key surface, which is a Tech Lead decision and not an implementation choice.
+
+**What carries the law instead**: `customer_id` stays `NOT NULL` on both reducers, so a row cannot
+omit a customer; the claim no composite edge makes — that it is the INVOICE's customer — is proved by
+`invoice_settlement_verify` as a DEFERRED constraint trigger at COMMIT, which refuses
+`invoice_settlement.customer_mismatch` over both reducers in one predicate, and
+`invoice_settlement.walkin_not_settleable` for an invoice with no customer at all.
+`invoices_walkin_no_ar()` (`0075:661-684`) remains the third, deferred backstop. The gap against the
+ordered form is therefore one of GRAIN, not of coverage: the refusal arrives at COMMIT rather than at
+INSERT.
+
+**Open item**: whether `invoices` gains `UNIQUE (business_id, id, customer_id)` in a later migration,
+which would let a future slice narrow both edges to the ordered three-column form. Until then the
+permanent proofs of the pin live at the verifier's grain, and a proof at the row grain would be a
+proof about a constraint that does not exist.
+
+### Departure B — a payment method's posting account stays mutable while customer payments reference it
+
+**The gap**: `payment_method_guard()` is a Phase 3 routine whose body digest is pinned by
+`supplier_settlement_guard_gaps()` (`0067:1801`, `0068:1331`). Extending it to notice CUSTOMER
+payments would change a pinned body, which this slice may not do. So a payment method's
+`posting_account_id` can still be changed while `payments` rows reference that method.
+
+**Why it is bounded**: every `payments` row pins its OWN `posting_account_id`, and its journal entry
+is posted against the pinned value, so no existing row and no posted entry is ever rewritten by such
+a change. The whole of the gap is that a FUTURE payment on the same method could post to a different
+account than past ones did, which is a reporting-continuity question and not a correctness one.
+
+**What is required of the slice**: one permanent test DOCUMENTING the current behaviour — it asserts
+what the database does today, and it explicitly does not assert that the behaviour is correct, so the
+day a later slice closes the gap the test is the thing that goes red and says so.
+
+### OD-03 is untouched
+
+Nothing in P4-S4 researches, infers or encodes a tax rule. Sales tax remains structurally zero, no
+relation of this slice carries a tax element, and `OD-03` stays the single open decision it was.
