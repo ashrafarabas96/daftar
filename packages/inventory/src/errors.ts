@@ -119,6 +119,27 @@ export type InventoryErrorCode =
   | 'supplier_refund.amount_below_base_unit'
   | 'supplier_refund.residue_below_base_unit'
   | 'supplier_credit_note.consumption_inconsistent'
+  // The P4-S4 AR settlement arithmetic (`customer-settlement.ts`), the
+  // receivable mirror of the `supplier_*` families above. Written out per
+  // domain rather than templated on the side of the invoice chain, for the
+  // reason `ReceivableArithmeticCode` records: three raise sites are
+  // templated, so each produces two codes and a symmetric type would hide a
+  // code that is reachable and classified nowhere.
+  | 'customer_payment.arithmetic_invalid'
+  | 'customer_payment.allocations_invalid'
+  | 'customer_payment.amount_invalid'
+  | 'customer_payment.amount_exceeds_outstanding'
+  | 'customer_payment.amount_below_base_unit'
+  | 'customer_payment.amount_mismatch'
+  | 'customer_payment.residue_below_base_unit'
+  | 'customer_payment.credit_below_base_unit'
+  | 'customer_credit_application.amount_invalid'
+  | 'customer_credit_application.amount_exceeds_outstanding'
+  | 'customer_credit_application.amount_below_base_unit'
+  | 'customer_credit_application.amount_mismatch'
+  | 'customer_credit_application.residue_below_base_unit'
+  | 'customer_credit_application.credit_exhausted'
+  | 'customer_credit_application.amount_exceeds_credit'
   | 'sale.tax_policy_absent'
   | 'sale.total_zero';
 

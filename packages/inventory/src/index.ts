@@ -23,4 +23,4 @@ export * from './supplier-settlement-payloads';
 export * from './payment-method-payloads';
 export * from './customer-payloads';
 export * from './sale-payloads';
-export * from './customer-settlement-payloads';
+export * from './customer-settlement';

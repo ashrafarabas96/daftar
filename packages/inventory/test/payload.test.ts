@@ -240,12 +240,20 @@ describe('invpl/1 — refusals of non-canonical input (never normalized)', () =>
   // `sale.commit`; every earlier row stays verbatim. `sale.void` and
   // `sale.return` are NOT here: they belong to P4-S6 and P4-S5, and a kind
   // registered without its routine would be an authority nothing refuses.
+  // P4-S4 (0081, a CANDIDATE migration) appends the TWO settlement kinds,
+  // `customer.collect_payment` and `customer.apply_credit`; every earlier row
+  // stays verbatim. Exactly two, because `0081` creates exactly two routines
+  // that consume an `invctl/1` assertion. `customer.refund` and
+  // `customer.reverse_payment` are NOT here: they belong to P4-S6, and the
+  // standing rule above applies to them unchanged.
   // The list is ABSOLUTE on purpose: a kind added, renamed or quietly dropped
   // turns this red, and the registry is the thing a signed authority is
   // scoped by.
-  it('registers exactly the three P3-S1 operation kinds, the seven P3-S3 kinds, the seven P3-S4 kinds, the two P3-S5 kinds, the seven P3-S6 kinds, the one corrective kind, the four P4-S1 customer kinds, the one P4-S2 sale kind and the four P4-S3 POS kinds', () => {
+  it('registers exactly the three P3-S1 operation kinds, the seven P3-S3 kinds, the seven P3-S4 kinds, the two P3-S5 kinds, the seven P3-S6 kinds, the one corrective kind, the four P4-S1 customer kinds, the one P4-S2 sale kind, the four P4-S3 POS kinds and the two P4-S4 settlement kinds', () => {
     expect([...INVENTORY_OPERATION_CODES].sort()).toEqual([
+      'customer.apply_credit', // P4-S4 (0081)
       'customer.archive', // P4-S1 (gap G-5)
+      'customer.collect_payment', // P4-S4 (0081)
       'customer.create', // P4-S1 (gap G-5)
       'customer.reactivate', // P4-S1 (gap G-5)
       'customer.update', // P4-S1 (gap G-5)

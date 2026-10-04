@@ -136,6 +136,16 @@ describe('mintDomainPostingAssertion (A-06)', () => {
       // is P4-S2's rather than P4-S1's by Tech Lead ruling `TL-P4-S1-R1`.
       'sale',
       'invoice',
+      // P4-S4 (0081, a CANDIDATE migration): the two settlement reducers and
+      // the customer credit. The credit is a source in its own right and not a
+      // tail on an allocation entry, because a payment that allocates nothing
+      // has no allocation entry for its surplus leg to ride on. None of the
+      // three is reversible: reversal is P4-S6's, and `0081` deliberately puts
+      // all three in the generic guard's plain refusal arm with no
+      // `purchase`-style escape.
+      'customer_payment_allocation',
+      'customer_credit_application',
+      'customer_credit',
     ]);
     expect(isDomainSourceType('inventory_adjustment')).toBe(true);
     expect(isDomainSourceType('manual_adjustment')).toBe(false);
