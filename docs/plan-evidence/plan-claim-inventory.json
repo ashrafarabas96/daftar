@@ -360,7 +360,7 @@
   "hits": [
     {
       "file": ".github/workflows/ci.yml",
-      "line": 392,
+      "line": 420,
       "phase": "cross-phase",
       "signals": ["plan-shape-word"],
       "kind": "mention",
@@ -368,7 +368,7 @@
     },
     {
       "file": ".github/workflows/ci.yml",
-      "line": 395,
+      "line": 423,
       "phase": "cross-phase",
       "signals": ["collation-dependent-range"],
       "kind": "assertion",
@@ -376,7 +376,7 @@
     },
     {
       "file": ".github/workflows/ci.yml",
-      "line": 397,
+      "line": 425,
       "phase": "cross-phase",
       "signals": ["collation-dependent-range"],
       "kind": "mention",
@@ -384,7 +384,7 @@
     },
     {
       "file": ".github/workflows/ci.yml",
-      "line": 398,
+      "line": 426,
       "phase": "cross-phase",
       "signals": ["plan-shape-word"],
       "kind": "mention",
@@ -392,7 +392,7 @@
     },
     {
       "file": ".github/workflows/ci.yml",
-      "line": 417,
+      "line": 445,
       "phase": "cross-phase",
       "signals": ["collation-dependent-range"],
       "kind": "mention",
@@ -400,7 +400,7 @@
     },
     {
       "file": ".github/workflows/ci.yml",
-      "line": 420,
+      "line": 448,
       "phase": "cross-phase",
       "signals": ["plan-shape-word"],
       "kind": "mention",
@@ -1064,7 +1064,7 @@
     },
     {
       "file": "tests/guards/required-ci-chain-composition.test.ts",
-      "line": 127,
+      "line": 131,
       "phase": "cross-phase",
       "signals": ["plan-shape-word"],
       "kind": "mention",
