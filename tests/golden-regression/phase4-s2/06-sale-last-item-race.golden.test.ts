@@ -41,16 +41,22 @@ import { ownerClient } from '../../helpers/stock-ledger';
 import {
   census,
   censusDelta,
+  censusKinds,
+  discoveredRegistryPrunes,
   expectInventoryReconciled,
   expectNoDeadlock,
   expectOnHand,
   forcedRace,
+  lostBeyondExpiry,
   must,
   negativeLevels,
   parkStockKey,
+  registryExpiry,
   requireSubject,
   saleSubject,
   type Census,
+  type RegistryExpiry,
+  type RegistryPrune,
   type Outcome,
   type SaleSubject,
 } from './harness';
@@ -65,6 +71,16 @@ let customerId: string;
 
 let before: Census;
 let after: Census;
+
+/**
+ * The registries the census counts GLOBALLY, and the wall-clock prunes that
+ * are entitled to delete from them — both DISCOVERED, so neither is a list
+ * anyone maintains. See the two claims at the end of this file.
+ */
+let registries: readonly string[] = [];
+let prunes: readonly RegistryPrune[] = [];
+let registryBefore: Readonly<Record<string, RegistryExpiry>> = {};
+let registryAfter: Readonly<Record<string, RegistryExpiry>> = {};
 let outcomes: readonly Outcome<Response>[] = [];
 
 /** The claim this file exists to settle, named once so every red says the same thing. */
@@ -97,8 +113,12 @@ beforeAll(async () => {
   // absent `outcomes` stays empty and every `it` fails on its canary, which is
   // the honest report; attempting the race against a route that is not mounted
   // would fail with a 404 and call it a refusal.
+  registries = (await censusKinds(ownerPool())).registries;
+  prunes = await discoveredRegistryPrunes(ownerPool());
+
   if (subject.missing.length === 0) {
     before = await census(ownerPool(), A.businessId);
+    registryBefore = await registryExpiry(ownerPool(), prunes);
     const attempt = (): Promise<Response> =>
       confirmSale(t, asMember(owner, A.businessId), {
         saleId: randomUUID(),
@@ -111,6 +131,7 @@ beforeAll(async () => {
     const park = await parkStockKey(() => ownerClient(), A.businessId, A.w1, A.piece.variantId);
     outcomes = await forcedRace(park, [attempt, attempt], 'G-01 two concurrent sales of the final unit');
     after = await census(ownerPool(), A.businessId);
+    registryAfter = await registryExpiry(ownerPool(), prunes);
   }
 }, 180_000);
 
@@ -203,12 +224,66 @@ describe('G-01 / GOLD-19 two concurrent sales of the final unit', () => {
     // record-keeping ones: `audit_events` and `outbox_events` are written for a
     // REFUSED command too (P4-AL-48), in the refused command's own
     // transaction, so a row from the loser there is the audit working.
+    //
+    // THE JTI REGISTRIES ARE NOT UNDER THIS LAW EITHER, for two reasons that
+    // are both about the census and neither about the race. `census()` counts
+    // them with NO business predicate, so their number is a count over the
+    // whole cluster and belongs to nobody's race; and the posting path prunes
+    // expired jtis on a WALL CLOCK inside the very transaction the race
+    // drives, so once a job has been running longer than the prune's interval
+    // the count legitimately goes down. Measured 2026-10-04 (run 37175753520,
+    // step 31): this file ran seven times in one job on an identical tree, the
+    // six runs inside the hour passed, and the seventh — against a cluster up
+    // for 68 minutes — reported `accounting_assertion_uses: -1`. A law that
+    // calls a garbage collection a defect is a law that will be overridden the
+    // first time it fires, which is worse than not having it.
+    //
+    // What they owe instead is the claim below, which is the one the race is
+    // actually about: a registry may lose an EXPIRED row and never any other.
     const d = censusDelta(before, after);
-    const unexpected = Object.entries(d).filter(([table]) => /^(sales|sale_items|invoices|invoice_items)$/.test(table) === false);
+    const exempt = new RegExp(`^(sales|sale_items|invoices|invoice_items|${registries.join('|')})$`);
+    const unexpected = Object.entries(d).filter(([table]) => exempt.test(table) === false);
+    // Non-vacuity: the exemption must not have swallowed the law.
+    expect(unexpected.length, `every counted relation is exempt, so this law asserts nothing: ${JSON.stringify(d)}`).toBeGreaterThan(0);
     expect(
       unexpected.every(([, n]) => n >= 0),
       `no count may go DOWN across a race: ${JSON.stringify(d)}`,
     ).toBe(true);
+  });
+
+  it('a jti registry may only ever lose rows that had already expired', () => {
+    requireSubject(subject.missing, CLAIM);
+    // The compensating claim for the exemption above, and it is STRONGER than
+    // monotonicity where monotonicity was false: the prune may take expired
+    // rows and nothing else, so an unexpired jti can never vanish across the
+    // race — which is what "no row of the loser survived, and no row of the
+    // winner was lost" actually means for these relations.
+    expect(
+      prunes.map((pr) => pr.table),
+      'NO SUBJECT — no wall-clock prune was discovered in the live catalogue, so this claim has nothing to be about',
+    ).not.toEqual([]);
+    for (const pr of prunes) {
+      const was = must(registryBefore[pr.table], `${pr.table} before the race`);
+      const now = must(registryAfter[pr.table], `${pr.table} after the race`);
+      expect(
+        lostBeyondExpiry(was, now),
+        `${pr.table}: ${was.total} rows before the race of which ${was.expired} were already past ${pr.interval}, ` +
+          `and ${now.total} after — a decrease beyond the expired ones is an unexpired jti vanishing, ` +
+          `which no prune may do`,
+      ).toBe(0);
+    }
+  });
+
+  it('that law can say no: a vanished UNEXPIRED jti is refused', () => {
+    // The red proof for the claim above, on synthetic captures, because an
+    // inequality that has only ever been handed a real measurement is an
+    // inequality nobody has watched refuse anything. Four rows of which one
+    // was expired: losing that one is lawful, losing two is not.
+    expect(lostBeyondExpiry({ total: 4, expired: 1 }, { total: 3 }), 'the expired row may go').toBe(0);
+    expect(lostBeyondExpiry({ total: 4, expired: 1 }, { total: 2 }), 'an unexpired row may not').toBe(1);
+    expect(lostBeyondExpiry({ total: 4, expired: 0 }, { total: 3 }), 'with nothing expired, any loss is a defect').toBe(1);
+    expect(lostBeyondExpiry({ total: 4, expired: 4 }, { total: 0 }), 'an all-expired registry may be emptied').toBe(0);
+    expect(lostBeyondExpiry({ total: 2, expired: 0 }, { total: 9 }), 'growth is not a loss').toBe(0);
   });
 
   it('GL Inventory (1200) == Σ stock_movements.value_delta_base_minor after the race', async () => {

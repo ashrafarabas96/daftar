@@ -456,6 +456,75 @@ export function censusDelta(before: Census, after: Census): Record<string, numbe
   return out;
 }
 
+/** The census's two kinds, by the same rules `census` uses. */
+export async function censusKinds(q: Queryable): Promise<{ scoped: readonly string[]; registries: readonly string[] }> {
+  const scoped = await tablesWithColumn(q, 'business_id');
+  return { scoped, registries: (await tablesWithColumn(q, 'jti')).filter((t) => !scoped.includes(t)) };
+}
+
+export interface RegistryPrune {
+  readonly table: string;
+  readonly column: string;
+  /** The interval exactly as the live body spells it, e.g. `1 hour`. */
+  readonly interval: string;
+}
+
+/**
+ * THE WALL-CLOCK PRUNES, read out of the LIVE CATALOGUE and not out of a
+ * migration file. A routine REPLACED by a later migration is the one that
+ * runs: `0045`'s unguarded consumed-assertion DELETE is exactly such a body,
+ * and TD-13 replaced it at `0061` with the try-advisory-lock form. Reading
+ * `pg_get_functiondef` asks the database what it will actually execute, and it
+ * is discovery, so a prune a later slice adds is covered with no edit here.
+ */
+export async function discoveredRegistryPrunes(q: Queryable): Promise<readonly RegistryPrune[]> {
+  const r = await q.query<{ body: string }>(
+    `SELECT pg_get_functiondef(p.oid) AS body FROM pg_proc p
+       JOIN pg_namespace n ON n.oid = p.pronamespace
+      WHERE n.nspname = 'public' AND p.prokind = 'f'
+        AND pg_get_functiondef(p.oid) ILIKE '%delete from%interval%'`,
+  );
+  const found = new Map<string, RegistryPrune>();
+  for (const { body } of r.rows)
+    for (const m of body.matchAll(/DELETE\s+FROM\s+(?:public\.)?(\w+)\s+WHERE\s+(\w+)\s*<\s*(?:now\(\)|clock_timestamp\(\))\s*-\s*interval\s*'([^']+)'/gi))
+      found.set(m[1] as string, { table: m[1] as string, column: m[2] as string, interval: m[3] as string });
+  return [...found.values()].sort((a, b) => a.table.localeCompare(b.table));
+}
+
+export interface RegistryExpiry {
+  readonly total: number;
+  readonly expired: number;
+}
+
+/** Per registry: how many rows there are, and how many of them the prune is already entitled to take. */
+export async function registryExpiry(q: Queryable, prunes: readonly RegistryPrune[]): Promise<Readonly<Record<string, RegistryExpiry>>> {
+  const out: Record<string, RegistryExpiry> = {};
+  for (const p of prunes) {
+    // Both identifiers go through `quoteIdent`, and the interval is the
+    // `[^']+` the regex above captured out of `pg_get_functiondef` — the
+    // catalogue's own text, never caller input.
+    const r = await q.query<RegistryExpiry>(
+      `SELECT count(*)::int AS total,
+              count(*) FILTER (WHERE ${quoteIdent(p.column)} < now() - interval '${p.interval}')::int AS expired
+         FROM ${quoteIdent(p.table)}`,
+    );
+    out[p.table] = must(r.rows[0], `registry expiry for ${p.table}`);
+  }
+  return out;
+}
+
+/**
+ * How many rows a registry lost BEYOND the ones its prune was entitled to
+ * take: zero is lawful, anything above zero is an unexpired jti vanishing.
+ *
+ * A function rather than an inline comparison so the law can be proved RED on
+ * synthetic captures. An inequality that only ever runs against a real capture
+ * is an inequality nobody has seen refuse anything.
+ */
+export function lostBeyondExpiry(was: RegistryExpiry, now: Pick<RegistryExpiry, 'total'>): number {
+  return Math.max(0, was.total - was.expired - now.total);
+}
+
 // ── 4. the official reconciliation formula ────────────────────────────────
 
 /**
