@@ -1588,13 +1588,28 @@ describe('HTTP: the customer payment, the credit application and their reads ref
    * copy of the chart of accounts.
    */
   async function settlementAccount(shop: Shop): Promise<string> {
-    const found = await ownerPool().query<{ id: string }>(
+    /**
+     * UNDER THE SHOP'S OWN GUCs, because the authority being asked refuses to
+     * answer outside them: `accounting_settlement_account_eligibility` opens by
+     * comparing `p_business_id` to `current_setting('app.business_id')` and
+     * raises `accounting.scope_mismatch` when they differ (`0067:1925-1928`) —
+     * "a settlement account is judged only for the transaction's business". A
+     * bare `ownerPool().query` sets no GUC, so every call raised, and because
+     * this helper runs inside `furnishReceivables`' fixture build the raise
+     * surfaced as five failed cases that never reached their own assertions.
+     * `asApp` is the wrapper the rest of this file already uses for exactly
+     * this (`:377-396`); the pool stays the OWNER pool so no row policy can
+     * hide an account from the fixture.
+     */
+    const found = await asApp<{ id: string }>(
+      ownerPool(),
+      shop,
       `SELECT a.id FROM accounts a
         WHERE a.business_id = $1 AND accounting_settlement_account_eligibility(a.business_id, a.id) = 'eligible'
         ORDER BY a.code LIMIT 1`,
       [shop.businessId],
     );
-    const id = found.rows[0]?.id;
+    const id = found[0]?.id;
     expect(
       id,
       `${shop.businessId} holds no eligible settlement account, so no payment method could be created and every ALLOW below would be a 409`,
@@ -1757,7 +1772,22 @@ describe('HTTP: the customer payment, the credit application and their reads ref
       currencyCode: 'ILS',
       amountMinor: o.amountMinor,
       reference: null,
-      creditId: randomUUID(),
+      /**
+       * `null`, because THIS body allocates `amountMinor` in full and so
+       * carries no surplus, and the closure law is "a payment names a credit
+       * id exactly when it carries a surplus"
+       * (`receivables-payload.ts:274`; the rule is stated at
+       * `receivables.schemas.ts:112`). A `randomUUID()` here made every DENY
+       * form of this case answer `400
+       * customer_payment.allocations_invalid` — refused by the STRUCTURAL
+       * validator before the business binding was ever consulted, which is
+       * the "DENY disguised" hazard this case's own ALLOW comment warns
+       * about, and it aborted the case at DENY 1 so DENY 2 and DENY 3 never
+       * ran at all. `uuid.nullish()` (`receivables.schemas.ts:160`) accepts
+       * the `null`. The fixture's real ALLOW overpays on purpose and names a
+       * credit id there, where there IS a surplus.
+       */
+      creditId: null,
       allocations: [{ allocationId: randomUUID(), invoiceId: o.invoiceId, paymentAmountMinor: o.amountMinor, invoiceAmountAppliedMinor: o.amountMinor }],
     });
 
@@ -1784,7 +1814,9 @@ describe('HTTP: the customer payment, the credit application and their reads ref
       .post('/v1/customer-payments')
       .set(hdr(owner, A2.businessId))
       .send(body({ customerId: A.customerId, invoiceId: mine.creditInvoiceId, paymentMethodId: mine.paymentMethodId, amountMinor: amount }));
-    expect([403, 404, 409, 422], `the collect answered ${foreignHeader.status} for A's ids under A2's header`).toContain(foreignHeader.status);
+    expect([403, 404, 409, 422], `the collect answered ${foreignHeader.status} for A's ids under A2's header: ${JSON.stringify(foreignHeader.body)}`).toContain(
+      foreignHeader.status,
+    );
     expect(await rows('payments', A2), 'the refused collect wrote a payment into A2 anyway').toBe(beforeA2);
     expect(await rows('payment_allocations', A2), 'the refused collect wrote an allocation into A2 anyway').toBe(beforeA2Allocations);
 
@@ -1934,7 +1966,9 @@ describe('HTTP: the customer payment, the credit application and their reads ref
     // `receivables.view` in both. The customer is invisible to A2 under row
     // security, so the answer is a refusal and never A's credit.
     const foreignHeader = await t.request.get(path(A)).set(hdr(owner, A2.businessId));
-    expect([403, 404], `${route} answered ${foreignHeader.status} for A's customer under A2's header`).toContain(foreignHeader.status);
+    expect([403, 404], `${route} answered ${foreignHeader.status} for A's customer under A2's header: ${JSON.stringify(foreignHeader.body)}`).toContain(
+      foreignHeader.status,
+    );
 
     // DENY 2 — the harder half: the OTHER business's customer id under the
     // actor's own valid header.

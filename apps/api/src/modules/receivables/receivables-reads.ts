@@ -300,6 +300,35 @@ export class ReceivablesReadService {
   /** A customer's credits, newest first. Both halves of the remaining pair; no derived status. */
   async listCustomerCredits(m: MembershipContext, customerId: string): Promise<readonly CustomerCreditDto[]> {
     if (!hasPermission(m.roles, 'receivables.view')) throw receivablesRefusal('customer_credit.not_found');
+    /**
+     * THE CUSTOMER IS RESOLVED BEFORE ITS CREDITS ARE LISTED, so an id this
+     * business does not hold is a NOT-FOUND and not an empty list.
+     *
+     * Without this, the credit query below simply matched no row for a
+     * customer of another business and the route answered `200 []` —
+     * indistinguishable from "your own customer has no credit", which is a
+     * real answer this route must keep giving. That made the route the one
+     * member of this surface that did not obey the module law stated at the
+     * top of this file: a cross-business id answers "not found" rather than
+     * "forbidden", so the answer reveals nothing about what exists
+     * elsewhere (G-02). `tests/golden-regression/phase4/01-cross-tenant`
+     * holds the route to `[403, 404]` on exactly that pair of DENY forms —
+     * A's customer under A2's header, and another business's customer under
+     * the actor's own valid header — while its ALLOW still requires `200`
+     * with each business's own credit.
+     *
+     * The lookup runs as `daftar_app` under row security like every read
+     * here, so it cannot see the foreign row in the first place; the refusal
+     * is the ABSENCE of a visible customer and never a comparison of
+     * business ids. `customer_credit.not_found` is the code this method
+     * already raises for the permission half, which keeps one HTTP contract
+     * for "this credit surface has nothing for you".
+     */
+    const customer = await scopedReceivablesRows<{ id: string }>(this.db, m, `SELECT c.id FROM customers c WHERE c.business_id = $1 AND c.id = $2`, [
+      m.businessId,
+      customerId,
+    ]);
+    if (customer.length === 0) throw receivablesRefusal('customer_credit.not_found');
     const rows = await scopedReceivablesRows<{ credit: CustomerCreditDto }>(
       this.db,
       m,

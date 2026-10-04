@@ -428,12 +428,45 @@ describe('P4-AL-88: the mounted surface equals the declared surface', () => {
        * surface's own stable code rather than the router's anonymous one.
        */
       if (res.status !== 404) continue;
-      const details = ((res.body as { error?: { details?: Record<string, unknown> } } | undefined)?.error?.details ?? {}) as {
-        sellingCode?: unknown;
-      };
+      const details = ((res.body as { error?: { details?: Record<string, unknown> } } | undefined)?.error?.details ?? {}) as Record<string, unknown>;
+      /**
+       * The field is DERIVED, not named. `sellingCode` was written in here by
+       * hand, and that single hand-written field name was this file's own
+       * documented defect reproduced inside it: P4-S4 mounts
+       * `modules/receivables`, whose refusals carry `details.receivablesCode`
+       * — a DEDICATED channel on purpose, because "the two registries are
+       * separate tables with separate prefixes, and one channel carrying two
+       * tables' codes is how a code comes to have two HTTP contracts"
+       * (`receivables-errors.ts:285-287`). So the two new read routes answered
+       * 404 with a perfectly good handler code and this assertion read
+       * `undefined`, failing for the success of a later slice — exactly what
+       * the header above promises cannot happen here.
+       *
+       * What the claim always meant is "a HANDLER answered, not the router",
+       * and the discriminator for that is structural rather than lexical: the
+       * router's 404 goes through `HttpException` in `common/error.filter.ts`
+       * (`:75-88`), which emits `{ error: { code, message } }` and NO
+       * `details` object at all, while every domain refusal attaches its
+       * registry's `<domain>Code`. So the test asks for any `*Code` key in
+       * `details` holding a stable `family.reason` code — the same shape
+       * `apps/web/src/lib/client.ts`' `DOMAIN_CODE_FIELDS` reads. This is not
+       * weaker: the router cannot forge a `details` object, and a later slice
+       * with its own registry needs no edit here.
+       */
+      // `sellingCode` is still read, first and by name — the P4-S1/S2 surface's
+      // own channel, asserted exactly as before. Each later registry's field
+      // is accepted BESIDE it, never instead of it.
+      const domainCode =
+        typeof details.sellingCode === 'string'
+          ? details.sellingCode
+          : typeof details.receivablesCode === 'string'
+            ? details.receivablesCode
+            : ((Object.entries(details).find(([k, v]) => /Code$/.test(k) && typeof v === 'string' && /^[a-z_]+\.[a-z_]+$/.test(v))?.[1] as
+                | string
+                | undefined) ?? null);
       expect(
-        typeof details.sellingCode === 'string' ? details.sellingCode : null,
-        `${r.verb.toUpperCase()} ${r.template} (${r.controller}) answered 404 with no sellingCode — that is Nest's router answering, not a handler`,
+        domainCode,
+        `${r.verb.toUpperCase()} ${r.template} (${r.controller}) answered 404 with no domain code (sellingCode / receivablesCode / any <domain>Code) in error.details — that is Nest's router answering, not a handler`,
       ).toMatch(/^[a-z_]+\.[a-z_]+$/);
     }
   }, 120_000);

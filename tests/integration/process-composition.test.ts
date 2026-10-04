@@ -159,6 +159,12 @@ const INTENDED: Readonly<Record<string, readonly string[]>> = Object.freeze({
   TillSessionsController: MERCHANT,
   PosReadsController: MERCHANT,
   PosCartController: MERCHANT,
+  // P4-S4 — the receivables commands (collecting a customer payment, applying
+  // a customer credit) and their two reads. Merchant-only for the reason every
+  // row above it is: §16 keeps the merchant surface off the platform runtime,
+  // and `receivables.module.ts`' `P4_S4_REQUIRED_CONTROLLERS` states the
+  // single controller both compositions register.
+  ReceivablesController: MERCHANT,
 });
 
 // ───── CANDIDATE ENUMERATION (source scanning, and ONLY for candidates) ───
