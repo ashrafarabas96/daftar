@@ -53,6 +53,10 @@ import { TillSessionsController } from '../modules/pos/till-sessions.controller'
 import { PosReadsController } from '../modules/pos/pos-reads.controller';
 import { PosCartController } from '../modules/pos/pos-cart.controller';
 import { posProviders } from '../modules/pos/pos.module';
+// P4-S4: the receivables commands — collecting a customer payment and applying
+// a customer credit — and the reads of what they wrote.
+import { ReceivablesController } from '../modules/receivables/receivables.controller';
+import { receivablesProviders } from '../modules/receivables/receivables.module';
 
 /**
  * MERCHANT PROCESS (Directive §16). Composes the merchant HTTP surface and
@@ -105,6 +109,12 @@ export class MerchantApiModule implements NestModule {
         TillSessionsController,
         PosReadsController,
         PosCartController,
+        // P4-S4: POST /v1/customer-payments, POST
+        // /v1/customer-credits/:creditId/applications and their two reads.
+        // Registered in BOTH compositions (`P4_S4_REQUIRED_CONTROLLERS`): a
+        // controller composed in one process only is a route no integration
+        // test can reach.
+        ReceivablesController,
       ],
       providers: [
         ...coreProviders(config, options),
@@ -140,6 +150,12 @@ export class MerchantApiModule implements NestModule {
         // needs only providers composed above — `Database`,
         // `InventoryAuthorizationService` and `'LOGGER'` (`pos.module.ts`).
         ...posProviders(),
+        // P4-S4: the two receivables commands and their read service. Each
+        // needs only providers composed above — `Database`,
+        // `InventoryAuthorizationService`,
+        // `AccountingAssertionMinterService` and
+        // `DatabaseAccountingPostingAdapter`.
+        ...receivablesProviders(),
         TenancyService,
         StructureService,
         InvitationsService,

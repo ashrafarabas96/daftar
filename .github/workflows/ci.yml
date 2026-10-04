@@ -371,6 +371,34 @@ jobs:
           # PG_PORT=5432 makes the test harness reuse the `postgres` service
           # above instead of starting an embedded instance.
           PG_PORT: '5432'
+      # TL-P4-S2-R3, continued for P4-S4 — the customer-settlement slice.
+      # The chain is composed HERE, by this job: P4-S1, P4-S2, P4-S3, then
+      # P4-S4, all VISIBLE and all REQUIRED, in that order. P4-S4 is a delta
+      # gate like its predecessors — it does not re-execute P4-S3 inside
+      # itself — so the order of these steps IS the composition, and this step
+      # carries neither `continue-on-error` nor any `if:`, exactly like the
+      # steps around it.
+      #
+      # The previous slice shipped a gate that was in no required job at all,
+      # so every green tick reported for it was green for a workflow that
+      # never ran it. That is not a convention anybody has to remember here:
+      # the P4-S4 gate's own `required-ci` check PARSES THIS FILE, and
+      # `tests/guards/p4s4-required-ci.test.ts` plants each way of breaking it
+      # (this step removed, renamed, reordered before P4-S3, given
+      # `continue-on-error`, given an `if:`, its command changed, or moved
+      # into another job) on a mutated copy of this text and requires the
+      # check to go red on every one. That suite is on the P4-S4 gate's own
+      # roster, which the gate EXECUTES — so the gate executes the evidence
+      # for its own place in this job.
+      #
+      # `A green workflow is not evidence for a gate the workflow never ran.`
+      - name: Phase 4 slice gate — P4-S4
+        run: npm run gate:phase4:s4
+        env:
+          # The same database environment as every other gate step in this job:
+          # PG_PORT=5432 makes the test harness reuse the `postgres` service
+          # above instead of starting an embedded instance.
+          PG_PORT: '5432'
       # TL-P4-S3-R5. The process composition guard's PLANTED-DEFECT PROOF.
       # It writes an unattached `@Controller()` into `apps/api/src/`, then
       # registers a merchant controller in the platform runtime, and requires

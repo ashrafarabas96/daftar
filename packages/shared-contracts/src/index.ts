@@ -392,6 +392,8 @@ export * from './merchant-reads';
 // Phase 4 (P4-S1): the customer and invoice contract surface.
 export * from './customers';
 export * from './invoices';
+// Phase 4 (P4-S4): collecting a customer payment, and applying a customer credit.
+export * from './customer-settlement';
 /** RBAC permission registry (contract primitive): the exact keys the API accepts in role definitions. */
 export { PERMISSIONS } from '@daftar/domain-core';
 export type { Permission } from '@daftar/domain-core';

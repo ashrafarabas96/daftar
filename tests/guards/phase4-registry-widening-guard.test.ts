@@ -349,7 +349,15 @@ describe('§C P4-AL-28: the Phase 4 op-code namespaces are `sale.*` and `custome
 
   it('a `customer.*` code is ADMITTED and `customer_payment.*` is REFUSED, live', async () => {
     await inRolledBackTx(async (c) => {
-      await c.query(`INSERT INTO inventory_operation_kinds (op_code, registered_by) VALUES ('customer.collect_payment', 'P4-S1')`);
+      // A code NO migration registers. `customer.collect_payment` was the
+      // probe until P4-S4 registered it for real, and the probe then met
+      // `inventory_operation_kinds_pkey` instead of being admitted — a pass
+      // about the wrong constraint waiting to happen. The absence is asserted
+      // first, so the day a slice registers this one the test says so out loud
+      // rather than quietly proving something else.
+      const { rows } = await c.query<{ n: string }>(`SELECT count(*)::text AS n FROM inventory_operation_kinds WHERE op_code = 'customer.guard_probe'`);
+      expect(rows[0]?.n, 'the probe code must be one no migration registers').toBe('0');
+      await c.query(`INSERT INTO inventory_operation_kinds (op_code, registered_by) VALUES ('customer.guard_probe', 'P4-S1')`);
     });
     await inRolledBackTx(async (c) => {
       // An underscore in the FIRST segment is not representable. The refusal

@@ -1,0 +1,603 @@
+import { Inject, Injectable } from '@nestjs/common';
+import { mintDomainPostingAssertion, type PostingCommand } from '@daftar/accounting';
+import { normalizeDocumentText, parseMinor } from '@daftar/inventory';
+import { Database, type AccountingAssertions, type BusinessInventoryAccountingTransaction } from '../../infra/database';
+import { AccountingAssertionMinterService } from '../accounting/accounting-assertion.minter';
+import { DatabaseAccountingPostingAdapter } from '../accounting/accounting-posting.adapter';
+import type { BusinessTransactionId } from '../inventory/business-transaction';
+import { InventoryAuthorizationService, type InventoryCommandAuthority } from '../inventory/inventory-authorization';
+import type { MembershipContext } from '../tenancy/tenancy.service';
+import { planCustomerPayment, type CustomerPaymentAllocationPlan, type InvoiceArState } from './customer-settlement';
+import { receivablesRefusal, rethrowReceivablesRefusal } from './receivables-errors';
+import {
+  CUSTOMER_COLLECT_PAYMENT_OP,
+  customerCollectPaymentIntentSha256,
+  customerCollectPaymentPayload,
+  RECEIVABLES_REFERENCE_MAX,
+  receivablesOperationCode,
+  type CollectPaymentIntentAllocation,
+} from './receivables-payload';
+import {
+  findCustomerPaymentIntent,
+  RECEIVABLES_METHOD_SQL,
+  readCustomerPaymentResult,
+  readReceivablesFx,
+  scopedReceivablesRows,
+  SETTLED_INVOICES_SQL,
+  type ReceivablesFx,
+  type ReceivablesMethodRow,
+  type ReceivablesReadScope,
+  type SettledInvoiceRow,
+} from './receivables-reads';
+import {
+  CUSTOMER_CREDIT_SOURCE,
+  CUSTOMER_PAYMENT_ALLOCATION_SOURCE,
+  receivablePostingCommand,
+  type ReceivableSnapshot,
+} from './receivables-settlement-posting';
+import type { CustomerPaymentResultDto } from './receivables-contracts';
+import type { CustomerPaymentRequest } from './receivables.schemas';
+
+/**
+ * `POST /v1/customer-payments` — COLLECT A CUSTOMER PAYMENT (P4-S4).
+ *
+ * ## The command shape: the SUPPLIER shape (OQ-3, ruled)
+ *
+ * The estate carries two accepted command mechanisms and this slice uses the
+ * supplier one: **the caller computes every figure in TypeScript and the
+ * database routine RECOMPUTES EACH ONE and refuses on disagreement.** That is
+ * `supplier_pay`'s shape (`0068:760-764`), not `sale_commit`'s
+ * recompute-everything-from-the-catalogue shape — the two are different, both
+ * shipped, and a reviewer expecting the other will think this is wrong.
+ *
+ * It is the closer analogue because it is the SAME ARITHMETIC (the four
+ * primitives of `customer-settlement.ts`), the same entry shape and the same
+ * chain verifier. The figures the service computes are not trusted: they are
+ * ASSERTIONS the routine must agree with, and a disagreement is
+ * `customer_payment.settlement_changed` — never a silently-adjusted amount.
+ *
+ * ## The application order
+ *
+ * 1. **the replay proof, FIRST** — the stored `payments.intent_sha256` for
+ *    this caller-supplied `paymentId` against the digest of THIS request,
+ *    before the customer, the method, the invoices, the rate or an outstanding
+ *    is read (`[[daftar-registry-before-state]]`). Same digest ⇒ the stored
+ *    rows, having changed nothing. Different digest ⇒
+ *    `customer_payment.idempotency_conflict`: an idempotency key is not
+ *    permission, and a replay must prove WHICH command it is replaying before
+ *    it answers "success". The INTENT IS REQUEST-ONLY, so a moved rate is not
+ *    a false conflict;
+ * 2. **authority** — `payments.collect`, through
+ *    `InventoryAuthorizationService`, which is also the only issuer of the
+ *    proof that lets anything be minted. Applying a credit uses the same key
+ *    (OQ-5);
+ * 3. **current state in ONE statement** — every allocated invoice with its `O`
+ *    from `invoice_outstanding`, its stored snapshot and its branch; the
+ *    customer; the method and its account's chart code; the base currency and
+ *    "today" in the business's timezone. One snapshot, so two invoices cannot
+ *    be read a second apart;
+ * 4. **the routine's refusals in ITS order**, then every stored amount BOUND
+ *    by the plan — the AR release, the dust, the payment base, the realized FX
+ *    and the surplus credit's pair;
+ * 5. **everything minted before the seam opens** — one `invctl/1` assertion
+ *    over the `customer.collect_payment` payload, and ONE accounting assertion
+ *    per entry;
+ * 6. **ONE transaction** — the routine, then (unless it answered a replay) the
+ *    entries in `line_no` order with the surplus-credit entry last, then
+ *    COMMIT with every deferred guard: both binding FKs (`0042:287-298`), the
+ *    completeness validators, `invoices_walkin_no_ar` and the chain verifier.
+ *    Either all of them pass or the whole transaction rolls back. ATOMICITY IS
+ *    THE ESTATE'S EXISTING MACHINERY, not a new rule this service adds.
+ *
+ * ## What this command does NOT do
+ *
+ * No arithmetic in the controller and no arithmetic on a float: every figure
+ * is `bigint` minor units with ONE half-even at the end, and a rounded
+ * quotient is never an input to the next step (P4-AL-25). No second journal
+ * writer and no second posting path: every entry goes through
+ * `receivablePostingCommand` into the one posting adapter. No stored
+ * `paid`/`outstanding` column is written or read — `invoice_outstanding` is
+ * the reader of record, and `0080` already excludes a cash-settled invoice
+ * from it, so a cash sale to a named customer cannot be collected a second
+ * time.
+ */
+
+/** The state of one invoice an allocation settles, as the service binds it. */
+export interface SettledInvoice {
+  readonly invoiceId: string;
+  readonly customerId: string;
+  /** The dimension of every line of its entry. */
+  readonly branchId: string;
+  readonly currency: string;
+  readonly currencyExponent: number;
+  readonly issueDate: string;
+  readonly totalTxnMinor: bigint;
+  readonly totalBaseMinor: bigint;
+  readonly outstandingTxnMinor: bigint;
+  /** `NUMERIC(20,10)` text of the stored `source_to_base_rate` (`R`). */
+  readonly rate: string;
+  readonly rateSource: 'base' | 'manual' | 'provider';
+  readonly rateAt: Date;
+}
+
+/** The method a payment names, as read: its account by id AND by chart code. */
+export interface ReceivablesMethod {
+  readonly paymentMethodId: string;
+  readonly requiresReference: boolean;
+  readonly postingAccountId: string;
+  readonly postingAccountCode: string;
+}
+
+/**
+ * An invoice's row as the binder's state.
+ *
+ * A walk-in invoice (`customer_id IS NULL`) is refused HERE as well as being
+ * structurally unrepresentable: `payment_allocations.customer_id` is `NOT
+ * NULL` and its composite FK is `(business_id, invoice_id, customer_id)`, so
+ * no row can ever name one. The code exists so the API answers the question
+ * instead of surfacing a constraint, and `invoices_walkin_no_ar` (`0075:661-684`)
+ * is the third, deferred backstop.
+ */
+export function settledInvoice(row: SettledInvoiceRow, domain: 'customer_payment' | 'customer_credit_application'): SettledInvoice {
+  if (row.status !== 'open') throw receivablesRefusal(`${domain}.invoice_state_invalid`);
+  if (row.customer_id === null) throw receivablesRefusal(`${domain}.invoice_walkin`);
+  return {
+    invoiceId: row.id,
+    customerId: row.customer_id,
+    branchId: row.branch_id,
+    currency: row.currency_code,
+    currencyExponent: row.currency_exponent,
+    issueDate: row.issue_date,
+    totalTxnMinor: parseMinor(row.total_txn_minor),
+    totalBaseMinor: parseMinor(row.total_base_minor),
+    outstandingTxnMinor: parseMinor(row.outstanding),
+    rate: row.rate,
+    rateSource: row.rate_source,
+    rateAt: new Date(row.rate_timestamp),
+  };
+}
+
+/** An invoice's stored snapshot as a posting snapshot. */
+export function invoiceSnapshot(i: SettledInvoice): ReceivableSnapshot {
+  return { currency: i.currency, rate: i.rate, source: i.rateSource, at: i.rateAt };
+}
+
+/** An invoice as the AR arithmetic reads it. */
+export function invoiceArState(i: SettledInvoice, baseExponent: number, rateR10: bigint): InvoiceArState {
+  return {
+    totalTxnMinor: i.totalTxnMinor,
+    totalBaseMinor: i.totalBaseMinor,
+    outstandingTxnMinor: i.outstandingTxnMinor,
+    conversion: { rateR10, txnExponent: i.currencyExponent, baseExponent },
+  };
+}
+
+/**
+ * The method checks the service can see: missing, inactive, the reference
+ * rule. ELIGIBILITY OF THE ACCOUNT IS THE DATABASE'S, in one place
+ * (`accounting_settlement_account_eligibility`, `0067:1918-1946`), and the
+ * routine judges it under its own `FOR SHARE` on the method row. This service
+ * does not re-derive it and must not.
+ */
+export function receivablesMethod(row: ReceivablesMethodRow | null, reference: string | null): ReceivablesMethod {
+  if (row === null || !row.is_active) throw receivablesRefusal('customer_payment.not_found');
+  if (row.requires_reference && reference === null) throw receivablesRefusal('customer_payment.reference_required');
+  return {
+    paymentMethodId: row.id,
+    requiresReference: row.requires_reference,
+    postingAccountId: row.posting_account_id,
+    postingAccountCode: row.account_code,
+  };
+}
+
+/** A reference: trimmed, NULL when empty, refused when longer than its bound. */
+export function receivablesReference(raw: string | null | undefined): string | null {
+  const reference = normalizeDocumentText(raw);
+  if (reference !== null && [...reference].length > RECEIVABLES_REFERENCE_MAX) throw receivablesRefusal('customer_payment.allocations_invalid');
+  return reference;
+}
+
+/** Everything a payment binds, read in ONE statement. */
+interface CollectPaymentState {
+  base_currency: string;
+  base_exponent: number;
+  future: boolean;
+  currency_exponent: number | null;
+  customer_status: string | null;
+  method: ReceivablesMethodRow | null;
+  invoices: SettledInvoiceRow[];
+}
+
+/**
+ * `customer_collect_payment` — the ASSUMED signature of the routine `0081`
+ * exposes (map §8.8; Agent E owns the migration).
+ *
+ * 26 parameters: 16 header scalars and 10 per-allocation arrays. It is
+ * `supplier_pay`'s 24 (`SUPPLIER_PAY_SQL`,
+ * `supplier-payment.service.ts:97-100`) with the supplier replaced by the
+ * customer, the per-allocation `warehouse_ids` array dropped (an invoice names
+ * a branch, not a warehouse; the routine reads it from the invoice itself) and
+ * THREE header scalars added for the surplus credit — `credit_id`,
+ * `credit_amount_minor`, `credit_carrying_base_minor`, all NULL together when
+ * the payment is fully allocated.
+ *
+ * It returns one row per allocation plus, when there is a surplus, the credit
+ * id on every row — so a payment with zero allocations still returns exactly
+ * one row and the service can tell a replay from a write. `line_no` is the
+ * ordinal the routine assigned, which is the order the entries are posted in.
+ *
+ * **If `0081` lands with a different order or arity, THIS CONSTANT and
+ * `receivables-payload.ts`' field order are the two places that change** —
+ * they must stay byte-identical to each other, because the assertion the
+ * routine consumes was signed over exactly these arguments.
+ */
+export const CUSTOMER_COLLECT_PAYMENT_SQL = `SELECT payment_id, allocation_id, line_no, invoice_id, credit_id, replayed FROM customer_collect_payment(
+   $1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::date, $6::char(3), $7::bigint, $8::uuid, $9::numeric, $10::text, $11::timestamptz,
+   $12::bigint, $13::text, $14::uuid, $15::bigint, $16::bigint,
+   $17::uuid[], $18::uuid[], $19::char(3)[], $20::bigint[], $21::bigint[], $22::bigint[], $23::bigint[], $24::bigint[], $25::bigint[], $26::bigint[])`;
+
+/** One allocation of a payment to bind: the client's two amounts and the invoice they settle. */
+export interface PaymentAllocationToBind {
+  readonly allocationId: string;
+  readonly invoice: SettledInvoice;
+  readonly paymentAmountMinor: bigint;
+  readonly appliedMinor: bigint;
+}
+
+export interface PaymentToBind {
+  readonly tenantId: string;
+  readonly businessId: string;
+  readonly businessTransactionId: string;
+  readonly paymentId: string;
+  readonly customerId: string;
+  readonly method: ReceivablesMethod;
+  readonly paymentDate: string;
+  /** The payment currency `P`, ISO upper case. */
+  readonly currency: string;
+  readonly currencyExponent: number;
+  readonly baseCurrency: string;
+  readonly baseExponent: number;
+  readonly amountMinor: bigint;
+  /** Already `normalizeDocumentText`-ed. */
+  readonly reference: string | null;
+  /** Client-supplied, and NULL exactly when the payment is fully allocated. */
+  readonly creditId: string | null;
+  /**
+   * The currency the client STATED — NULL included, meaning "the business's
+   * base currency". The intent digest binds this, `currency` above is the
+   * resolved code every stored figure and line uses, and the two are a
+   * deliberate pair: the intent must be computable before any state is read.
+   */
+  readonly statedCurrency: string | null;
+  readonly fx: ReceivablesFx;
+  /** In `line_no` order; possibly EMPTY (OQ-4). */
+  readonly allocations: readonly PaymentAllocationToBind[];
+}
+
+/** A payment with every value the database will store computed and bound, before anything is minted. */
+export interface BoundCustomerPayment {
+  readonly intentSha256: string;
+  readonly payloadSha256: string;
+  readonly payload: { readonly opCode: string; readonly sha256: string };
+  /** One entry per allocation in `line_no` order, then the surplus-credit entry when there is one. */
+  readonly commands: readonly PostingCommand[];
+  /** The routine's arguments, in `CUSTOMER_COLLECT_PAYMENT_SQL`'s order. */
+  readonly params: readonly unknown[];
+  readonly inventoryPayload: Parameters<InventoryAuthorizationService['mint']>[1];
+}
+
+/**
+ * Bind a customer payment: each allocation's AR release, dust, payment base
+ * and realized FX through the plan — the exact half-even arithmetic of the
+ * four accepted primitives — the header base `Σ pb + OB_credit` (never
+ * `conv(Σ p)`), the surplus credit's `(OA, OB)`, the
+ * `customer.collect_payment` payload and one posting command per entry.
+ */
+export function bindCustomerPayment(i: PaymentToBind): BoundCustomerPayment {
+  const payment = { rateR10: i.fx.rateR10, txnExponent: i.currencyExponent, baseExponent: i.baseExponent };
+
+  // ONE call into the plan layer. The AR release, both dusts, each leg's base,
+  // the realized FX, the surplus credit's `(OA, OB)`, the header base and both
+  // closure laws are the planner's — this service recomputes none of them.
+  const plan = planCustomerPayment({
+    amountMinor: i.amountMinor,
+    payment,
+    legs: i.allocations.map((a) => ({
+      invoice: invoiceArState(a.invoice, i.baseExponent, parseUnitCostR10(a.invoice.rate)),
+      sameCurrency: a.invoice.currency === i.currency,
+      paymentAmountMinor: a.paymentAmountMinor,
+      appliedMinor: a.appliedMinor,
+    })),
+  });
+  const planned = i.allocations.map((a, index) => {
+    const leg = plan.allocations[index];
+    if (leg === undefined) throw new Error('an allocation lost its plan');
+    return { a, plan: leg };
+  });
+  const credit = plan.credit;
+  const baseAmountMinor = plan.baseAmountMinor;
+  // The credit id is the CALLER'S (coordinator ruling): a server-minted id
+  // would make two identical requests two different commands, which is the
+  // opposite of idempotent. So the request's `creditId` and the plan's surplus
+  // must agree, and a disagreement is refused before anything is signed.
+  if ((credit === null) !== (i.creditId === null)) throw receivablesRefusal('customer_payment.allocations_invalid');
+
+  const rateAtEpochSeconds = BigInt(i.fx.at.getTime() / 1000);
+  const built = customerCollectPaymentPayload({
+    tenantId: i.tenantId,
+    businessId: i.businessId,
+    paymentId: i.paymentId,
+    customerId: i.customerId,
+    paymentMethodId: i.method.paymentMethodId,
+    postingAccountId: i.method.postingAccountId,
+    paymentDate: i.paymentDate,
+    // The INTENT binds what the client said; the PAYLOAD binds what the server
+    // resolved. Two fields, one for each side of the request-only split.
+    currency: i.statedCurrency,
+    resolvedCurrency: i.currency,
+    amountMinor: i.amountMinor,
+    reference: i.reference,
+    rate: { rateId: i.fx.rateId, rateR10: i.fx.rateR10, source: i.fx.source, rateAtEpochSeconds },
+    baseAmountMinor,
+    creditId: i.creditId,
+    credit: credit === null ? null : { originalAmountMinor: credit.originalAmountMinor, originalCarryingBaseMinor: credit.originalCarryingBaseMinor },
+    allocations: planned.map(({ a, plan }) => ({
+      allocationId: a.allocationId,
+      invoiceId: a.invoice.invoiceId,
+      invoiceCurrency: a.invoice.currency,
+      paymentAmountMinor: plan.paymentAmountMinor,
+      paymentBaseMinor: plan.paymentBaseMinor,
+      appliedMinor: plan.invoiceAmountAppliedMinor,
+      arReleasedBeforeMinor: plan.arReleasedBeforeMinor,
+      carryingReleasedMinor: plan.invoiceCarryingReleasedMinor,
+      arDustBaseMinor: plan.arDustBaseMinor,
+      realizedFxMinor: plan.realizedFxMinor,
+    })),
+  });
+
+  const paymentSnapshot: ReceivableSnapshot = { currency: i.currency, rate: i.fx.rate, source: i.fx.source, at: i.fx.at };
+  const commands: PostingCommand[] = planned.map(({ a, plan }) =>
+    receivablePostingCommand({
+      tenantId: i.tenantId,
+      businessId: i.businessId,
+      sourceType: CUSTOMER_PAYMENT_ALLOCATION_SOURCE,
+      sourceId: a.allocationId,
+      entryDate: i.paymentDate,
+      baseCurrency: i.baseCurrency,
+      snapshots: { invoice: invoiceSnapshot(a.invoice), payment: paymentSnapshot },
+      postingAccountCode: i.method.postingAccountCode,
+      branchId: a.invoice.branchId,
+      lines: plan.entryLines,
+      businessTransactionId: i.businessTransactionId,
+    }),
+  );
+  if (credit !== null && i.creditId !== null) {
+    // The surplus leg: Dr posting account / Cr customer_credit_liability, both
+    // at the payment's own snapshot. No revenue account appears in it, which
+    // is what G-15 asserts — a surplus is a liability to the customer, never
+    // income. It carries no branch: it settles no invoice, so there is no
+    // invoice branch to carry, and inventing one would make the dimension a
+    // guess.
+    commands.push(
+      receivablePostingCommand({
+        tenantId: i.tenantId,
+        businessId: i.businessId,
+        sourceType: CUSTOMER_CREDIT_SOURCE,
+        sourceId: i.creditId,
+        entryDate: i.paymentDate,
+        baseCurrency: i.baseCurrency,
+        snapshots: { payment: paymentSnapshot },
+        postingAccountCode: i.method.postingAccountCode,
+        branchId: null,
+        lines: credit.entryLines,
+        businessTransactionId: i.businessTransactionId,
+      }),
+    );
+  }
+
+  const col = <T>(f: (x: { readonly a: PaymentAllocationToBind; readonly plan: CustomerPaymentAllocationPlan }) => T): T[] => planned.map(f);
+  const params: unknown[] = [
+    i.paymentId,
+    i.customerId,
+    i.method.paymentMethodId,
+    i.method.postingAccountId,
+    i.paymentDate,
+    i.currency,
+    i.amountMinor.toString(10),
+    i.fx.rateId,
+    i.fx.rate,
+    i.fx.source,
+    `${i.fx.at.toISOString().slice(0, 19)}Z`,
+    baseAmountMinor.toString(10),
+    i.reference,
+    i.creditId,
+    credit === null ? null : credit.originalAmountMinor.toString(10),
+    credit === null ? null : credit.originalCarryingBaseMinor.toString(10),
+    col(({ a }) => a.allocationId),
+    col(({ a }) => a.invoice.invoiceId),
+    col(({ a }) => a.invoice.currency),
+    col(({ plan }) => plan.paymentAmountMinor.toString(10)),
+    col(({ plan }) => plan.paymentBaseMinor.toString(10)),
+    col(({ plan }) => plan.invoiceAmountAppliedMinor.toString(10)),
+    col(({ plan }) => plan.arReleasedBeforeMinor.toString(10)),
+    col(({ plan }) => plan.invoiceCarryingReleasedMinor.toString(10)),
+    col(({ plan }) => plan.arDustBaseMinor.toString(10)),
+    col(({ plan }) => plan.realizedFxMinor.toString(10)),
+  ];
+  return {
+    intentSha256: built.intentSha256,
+    payloadSha256: built.payload.sha256,
+    payload: built.payload,
+    commands,
+    params,
+    inventoryPayload: built.payload,
+  };
+}
+
+/** A stored `NUMERIC(20,10)` rate as its R10, without ever becoming a float. */
+function parseUnitCostR10(rate: string): bigint {
+  const [whole = '0', fraction = ''] = rate.split('.');
+  if (!/^\d+$/.test(whole) || (fraction !== '' && !/^\d+$/.test(fraction)) || fraction.length > 10) {
+    throw receivablesRefusal('customer_payment.arithmetic_invalid', { reason: 'a stored rate is not NUMERIC(20,10)' });
+  }
+  return BigInt(`${whole}${fraction.padEnd(10, '0')}`);
+}
+
+/**
+ * Run `customer_collect_payment` on an open seam-2 transaction and, unless the
+ * routine answered a replay, post its entries in order — each through the
+ * posting adapter, which presents that entry's own assertion.
+ */
+export async function executeCollectPayment(
+  tx: BusinessInventoryAccountingTransaction,
+  posting: DatabaseAccountingPostingAdapter,
+  bound: BoundCustomerPayment,
+): Promise<boolean> {
+  const r = await tx.query<{ replayed: boolean }>(CUSTOMER_COLLECT_PAYMENT_SQL, [...bound.params]);
+  const [first] = r.rows;
+  if (first === undefined) throw new Error('customer_collect_payment returned no row');
+  // A replay inside the routine (a concurrent identical payment won the key)
+  // commits no entry; its minted accounting assertions expire unused.
+  if (first.replayed) return true;
+  for (const command of bound.commands) await posting.postEntryInTransaction(tx.accounting, { command });
+  return false;
+}
+
+@Injectable()
+export class CustomerPaymentService {
+  constructor(
+    @Inject(Database) private readonly db: Database,
+    @Inject(InventoryAuthorizationService) private readonly authorization: InventoryAuthorizationService,
+    @Inject(AccountingAssertionMinterService) private readonly accountingMinter: AccountingAssertionMinterService,
+    @Inject(DatabaseAccountingPostingAdapter) private readonly posting: DatabaseAccountingPostingAdapter,
+  ) {}
+
+  async collect(m: MembershipContext, input: CustomerPaymentRequest, btx: BusinessTransactionId): Promise<CustomerPaymentResultDto> {
+    try {
+      return await this.run(m, input, btx);
+    } catch (e) {
+      return rethrowReceivablesRefusal(e);
+    }
+  }
+
+  private async run(m: MembershipContext, input: CustomerPaymentRequest, btx: BusinessTransactionId): Promise<CustomerPaymentResultDto> {
+    // 1. The client intent, then the idempotency proof — before any state read.
+    const reference = receivablesReference(input.reference);
+    const amountMinor = parseMinor(input.amountMinor);
+    const creditId = input.creditId ?? null;
+    const statedCurrency = input.currencyCode ?? null;
+    const intentAllocations: CollectPaymentIntentAllocation[] = input.allocations.map((a) => ({
+      allocationId: a.allocationId,
+      invoiceId: a.invoiceId,
+      paymentAmountMinor: parseMinor(a.paymentAmountMinor),
+      appliedMinor: parseMinor(a.invoiceAmountAppliedMinor),
+    }));
+    const intentSha256 = customerCollectPaymentIntentSha256({
+      tenantId: m.tenantId,
+      businessId: m.businessId,
+      paymentId: input.paymentId,
+      customerId: input.customerId,
+      paymentMethodId: input.paymentMethodId,
+      paymentDate: input.paymentDate,
+      // The client's own value, NULL included: the intent is request-only, so
+      // it cannot depend on the base currency the state read would resolve.
+      currency: statedCurrency,
+      amountMinor,
+      reference,
+      creditId,
+      allocations: intentAllocations,
+    });
+    const stored = await findCustomerPaymentIntent(this.db, m, input.paymentId);
+
+    // 2. Authority. `payments.collect`, re-established through the one issuer
+    //    of a minting proof — the route decorator gates the REQUEST, this
+    //    gates the CALL.
+    const authority: InventoryCommandAuthority = await this.authorization.authorize(m, receivablesOperationCode(CUSTOMER_COLLECT_PAYMENT_OP), btx);
+    if (stored !== null) {
+      if (stored !== intentSha256) throw receivablesRefusal('customer_payment.idempotency_conflict');
+      return readCustomerPaymentResult(this.db, m, input.paymentId, true);
+    }
+
+    // 3. Current state in ONE snapshot.
+    const state = await this.readState(m, input);
+    const byId = new Map(state.invoices.map((i) => [i.id, i]));
+    const rows = intentAllocations.map((a) => {
+      const row = byId.get(a.invoiceId);
+      if (row === undefined) throw receivablesRefusal('customer_payment.not_found');
+      return row;
+    });
+
+    // 4. The routine's refusals, in its order.
+    const invoices = rows.map((row) => settledInvoice(row, 'customer_payment'));
+    for (const invoice of invoices) {
+      if (invoice.customerId !== input.customerId) throw receivablesRefusal('customer_payment.customer_mismatch');
+      if (input.paymentDate < invoice.issueDate) throw receivablesRefusal('customer_payment.date_before_invoice');
+    }
+    if (state.customer_status === null) throw receivablesRefusal('customer_payment.not_found');
+    if (state.customer_status !== 'active') throw receivablesRefusal('customer_payment.customer_inactive');
+    const method = receivablesMethod(state.method, reference);
+    if (state.future) throw receivablesRefusal('customer_payment.date_in_future');
+    // A NULL `currencyCode` means "the business's base currency", resolved
+    // HERE, once, from the same snapshot everything else came out of.
+    const currency = statedCurrency ?? state.base_currency;
+    if (state.currency_exponent === null) throw receivablesRefusal('customer_payment.allocations_invalid');
+    const fx = await readReceivablesFx(this.db, m, currency, state.base_currency, input.paymentDate);
+
+    const bound = bindCustomerPayment({
+      tenantId: m.tenantId,
+      businessId: m.businessId,
+      businessTransactionId: btx,
+      paymentId: input.paymentId,
+      customerId: input.customerId,
+      method,
+      paymentDate: input.paymentDate,
+      currency,
+      statedCurrency,
+      currencyExponent: state.currency_exponent,
+      baseCurrency: state.base_currency,
+      baseExponent: state.base_exponent,
+      amountMinor,
+      reference,
+      creditId,
+      fx,
+      allocations: intentAllocations.map((a, index) => {
+        const invoice = invoices[index];
+        if (invoice === undefined) throw new Error('an allocation lost its invoice');
+        return { allocationId: a.allocationId, invoice, paymentAmountMinor: a.paymentAmountMinor, appliedMinor: a.appliedMinor };
+      }),
+    });
+    if (bound.intentSha256 !== intentSha256) throw new Error('the bound payment payload does not carry the proven intent');
+
+    // 5. Mint everything before the seam opens: one inventory assertion, one accounting assertion per entry.
+    const inventoryAssertion = this.authorization.mint(authority, bound.inventoryPayload);
+    const [firstCommand, ...rest] = bound.commands.map((c) => mintDomainPostingAssertion(this.accountingMinter, c, m.userId));
+    if (firstCommand === undefined) throw new Error('a collected payment posts at least one entry');
+    const accountingAssertions: AccountingAssertions = [firstCommand, ...rest];
+
+    // 6. One transaction: the routine, the entries, COMMIT.
+    const replayed = await this.db.withBusinessInventoryAccountingTransaction(authority.scope, inventoryAssertion, accountingAssertions, (tx) =>
+      executeCollectPayment(tx, this.posting, bound),
+    );
+    return readCustomerPaymentResult(this.db, m, input.paymentId, replayed);
+  }
+
+  /** The payment's state in ONE statement, read by `daftar_app` under RLS. */
+  private async readState(scope: ReceivablesReadScope, input: CustomerPaymentRequest): Promise<CollectPaymentState> {
+    const [row] = await scopedReceivablesRows<CollectPaymentState>(
+      this.db,
+      scope,
+      `SELECT b.base_currency::text AS base_currency, bc.minor_units AS base_exponent,
+              ($2::date > (now() AT TIME ZONE b.timezone)::date) AS future,
+              (SELECT c.minor_units FROM currencies c WHERE c.code = coalesce($3::char(3), b.base_currency)) AS currency_exponent,
+              (SELECT k.status FROM customers k WHERE k.business_id = b.id AND k.id = $4) AS customer_status,
+              ${RECEIVABLES_METHOD_SQL.replace('%METHOD%', '$5')} AS method,
+              ${SETTLED_INVOICES_SQL.replace('%IDS%', '$6')} AS invoices
+         FROM businesses b
+         JOIN currencies bc ON bc.code = b.base_currency
+        WHERE b.id = $1`,
+      [scope.businessId, input.paymentDate, input.currencyCode ?? null, input.customerId, input.paymentMethodId, input.allocations.map((a) => a.invoiceId)],
+    );
+    if (row === undefined) throw new Error('the business is not readable');
+    return row;
+  }
+}

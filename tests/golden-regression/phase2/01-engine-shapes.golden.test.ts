@@ -576,19 +576,20 @@ describe('golden: engine shapes prove representability without creating the doma
     supplier_credit_notes: '0065_supplier_returns_reversals_sources.sql',
     supplier_refunds: '0067_payment_methods_supplier_settlement_sources.sql',
     invoices: '0075_phase4_customers_invoices_numbering.sql',
+    payments: '0081_phase4_customer_payments_credits.sql',
+    payment_allocations: '0081_phase4_customer_payments_credits.sql',
+    customer_credits: '0081_phase4_customer_payments_credits.sql',
   };
 
   it('not one operational table was created to express any of the shapes above', async () => {
-    const forbidden = [
-      'payments',
-      'payment_allocations',
-      'payment_reversals',
-      'refunds',
-      'credit_notes',
-      'customer_credits',
-      'inventory_movements',
-      'fx_rates',
-    ];
+    // P4-S4 authorizes `payments`, `payment_allocations` and `customer_credits`
+    // in `0081`, so they move to `AUTHORIZED_ELSEWHERE` above. The claim this
+    // test makes is unchanged: the POSTING ENGINE created no operational
+    // table. A later slice's authorized relation is not the engine's, and the
+    // companion assertion below holds each of the three to exactly one
+    // creating migration, so the authorization is recorded rather than merely
+    // granted.
+    const forbidden = ['payment_reversals', 'refunds', 'credit_notes', 'inventory_movements', 'fx_rates'];
     const present = (
       await ownerPool().query<{ t: string }>(
         `SELECT table_name AS t FROM information_schema.tables WHERE table_schema = 'public' AND table_name = ANY($1::text[]) ORDER BY 1`,

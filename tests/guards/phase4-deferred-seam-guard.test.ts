@@ -52,7 +52,15 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, cpSync, rmSync } f
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
-import { DEFERRED_SEAMS, deferredSeamProblems, SETTLEMENT_VOCABULARY, phase4Migrations, phase4RoutineBody } from '../../scripts/phase4-s1-gate';
+import {
+  DEFERRED_SEAMS,
+  deferredSeamProblems,
+  SETTLEMENT_VOCABULARY,
+  phase4Migrations,
+  phase4RoutineBody,
+  phase4Sql,
+  readTables,
+} from '../../scripts/phase4-s1-gate';
 
 const REPO = join(__dirname, '..', '..');
 const MIGRATIONS = join(REPO, 'infrastructure/database/migrations');
@@ -292,24 +300,72 @@ describe('S-P4-03 — the reader-of-record reads every relation that settles an 
       expect(SETTLEMENT_VOCABULARY.test(name)).toBe(false);
   });
 
-  it('RED: a Phase 4 migration creates payment_allocations and invoice_outstanding still subtracts nothing', () => {
-    const problems = deferredSeamProblems(rootWith(ALLOCATIONS));
+  /**
+   * The DISCHARGE of S-P4-03, as the seam itself reads it: the LAST Phase 4
+   * definition of `invoice_outstanding` naming every relation that settles an
+   * invoice. P4-S4 writes it, so — exactly as S-P4-01 and S-P4-02 were
+   * re-aimed above — the red proof can no longer plant the CONDITION on a tree
+   * that already carries the discharge. It plants the discharge's ABSENCE
+   * instead, on a COPY, and the relation names are DISCOVERED from the tree
+   * rather than written here.
+   *
+   * Stripping the two `FROM` clauses, not the relations, is what keeps the
+   * proof non-vacuous: `settlers` comes from `CREATE TABLE`, so the seam still
+   * HAS a subject, and only the reader-of-record stops reading it. Removing
+   * the relations instead would leave `settlers` empty and the seam correctly
+   * silent — a green that proves nothing.
+   */
+  const SETTLEMENT_READ = /FROM public\.(?:payment_allocations|customer_credit_applications) \w+/g;
+
+  it('RED: the discharge is removed — the settling relations exist and the reader-of-record reads neither', () => {
+    const stripped = rootMinus(SETTLEMENT_READ, 'FROM public.invoices x');
+    // Discovery, not a hard-coded list: whatever the tree calls its settling
+    // relations is what the finding has to name.
+    const settlers = readTables(
+      phase4Migrations(stripped)
+        .map((f) => readFileSync(join(stripped, 'infrastructure/database/migrations', f), 'utf8'))
+        .join('\n'),
+    )
+      .tables.map((t) => t.name)
+      .filter((n) => SETTLEMENT_VOCABULARY.test(n));
+    expect(settlers.length, 'the stripped copy still creates the relations, so the seam has a subject').toBeGreaterThan(0);
+    const problems = deferredSeamProblems(stripped);
     expect(problems).toHaveLength(1);
     expect(problems[0]).toContain('S-P4-03');
-    expect(problems[0]).toContain('payment_allocations');
+    for (const name of settlers) expect(problems[0]).toContain(name);
     expect(problems[0]).toContain('reports the invoice unpaid');
   });
 
-  it('NOT A FINDING: the same migration replaces invoice_outstanding so it reads the new relation', () => {
+  it('NOT A FINDING: the real tree’s reader-of-record reads every relation that settles an invoice', () => {
+    expect(deferredSeamProblems(REPO)).toEqual([]);
+  });
+
+  it('NOT A FINDING: the same migration replaces invoice_outstanding so it reads every settling relation', () => {
+    // The plant has to read every relation the TREE calls a settling one, not
+    // the one this file happens to create: the moment a slice adds a reducer,
+    // a plant naming a fixed relation would be silently incomplete and this
+    // proof would turn into a proof about the string.
+    const settlers = [
+      ...new Set(
+        readTables(`${phase4Sql(REPO)}\n${ALLOCATIONS}`)
+          .tables.map((t) => t.name)
+          .filter((n) => SETTLEMENT_VOCABULARY.test(n)),
+      ),
+    ];
+    expect(settlers).toContain('payment_allocations');
     const closed = `${ALLOCATIONS}
       CREATE OR REPLACE FUNCTION invoice_outstanding(p_business_id UUID, p_invoice_id UUID)
       RETURNS TABLE (paid_txn_minor BIGINT, paid_base_minor BIGINT, outstanding_txn_minor BIGINT, outstanding_base_minor BIGINT)
       LANGUAGE plpgsql STABLE AS $$
       BEGIN
         RETURN QUERY
-          SELECT coalesce(sum(a.applied_txn_minor), 0)::BIGINT, 0::BIGINT, 0::BIGINT, 0::BIGINT
-            FROM public.payment_allocations a
-           WHERE a.business_id = p_business_id AND a.invoice_id = p_invoice_id;
+          SELECT coalesce(sum(r.applied), 0)::BIGINT, 0::BIGINT, 0::BIGINT, 0::BIGINT
+            FROM (
+              ${settlers
+                .map((name) => `SELECT s.applied_txn_minor AS applied, s.business_id, s.invoice_id FROM public.${name} s`)
+                .join('\n              UNION ALL\n              ')}
+            ) r
+           WHERE r.business_id = p_business_id AND r.invoice_id = p_invoice_id;
       END;
       $$;
     `;

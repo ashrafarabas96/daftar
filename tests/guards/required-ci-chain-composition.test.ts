@@ -95,10 +95,13 @@ const REQUIRED_JOB = 'backend';
 const S2_COMMAND = 'npm run gate:phase4:s2';
 /** The exact command for the P4-S3 step, on the same terms. */
 const S3_COMMAND = 'npm run gate:phase4:s3';
+/** And for the P4-S4 step, the customer-settlement slice, on the same terms again. */
+const S4_COMMAND = 'npm run gate:phase4:s4';
 /** The npm script names, as they appear inside a `run:`, used to FIND each gate step. */
 const S1_SCRIPT = 'gate:phase4:s1';
 const S2_SCRIPT = 'gate:phase4:s2';
 const S3_SCRIPT = 'gate:phase4:s3';
+const S4_SCRIPT = 'gate:phase4:s4';
 
 /**
  * THE CHAIN, in order, as it must appear in the required job: the slice label,
@@ -116,6 +119,7 @@ const CHAIN: readonly { readonly slice: string; readonly script: string; readonl
   { slice: 'P4-S1', script: S1_SCRIPT, command: 'npm run gate:phase4:s1', name: 'Phase 4 slice gate — P4-S1 (composes the Phase 3 corrective gate)' },
   { slice: 'P4-S2', script: S2_SCRIPT, command: S2_COMMAND, name: 'Phase 4 slice gate — P4-S2' },
   { slice: 'P4-S3', script: S3_SCRIPT, command: S3_COMMAND, name: 'Phase 4 slice gate — P4-S3' },
+  { slice: 'P4-S4', script: S4_SCRIPT, command: S4_COMMAND, name: 'Phase 4 slice gate — P4-S4' },
 ];
 
 /** The exact command of the process composition guard's planted-defect proof. */
@@ -960,10 +964,21 @@ describe('TL-P4-S3-R5 — the required job EXECUTES the composition guard’s pl
     expect(problems.some((p) => p.includes(`not in the required \`${REQUIRED_JOB}\` job`))).toBe(true);
   });
 
-  it('RED: the proof step is moved AHEAD of the P4-S3 gate — evidence out of order', () => {
-    const problems = chainCompositionProblems(SWAPPED(S3_COMMAND, COMPOSITION_RED_PROOF_COMMAND));
+  /**
+   * The swap is against the LAST gate of `CHAIN`, read from the table rather
+   * than written down: C-9's claim is "a proof runs after the last slice
+   * gate", so pinning this proof to one slice's command makes it report TWO
+   * findings — its own and the pairwise ordering of the slice that came after
+   * it — the day a successor is added to the table. Driving it from `CHAIN`
+   * keeps it a single-finding proof of exactly C-9, for this slice and the
+   * next.
+   */
+  it('RED: the proof step is moved AHEAD of the last slice gate of the chain — evidence out of order', () => {
+    const last = CHAIN[CHAIN.length - 1];
+    expect(last, 'CHAIN is empty, so there is no last gate to move the proof ahead of').toBeDefined();
+    const problems = chainCompositionProblems(SWAPPED(last?.command ?? '', COMPOSITION_RED_PROOF_COMMAND));
     expect(problems).toHaveLength(1);
-    expect(problems[0]).toContain('runs before the P4-S3 gate step');
+    expect(problems[0]).toContain(`runs before the ${last?.slice ?? ''} gate step`);
     expect(problems[0]).toContain('belongs after the job has run the gate it proves');
   });
 });

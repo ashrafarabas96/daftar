@@ -177,7 +177,12 @@ export async function ensureSession(): Promise<boolean> {
  * growing set of namespaces goes stale silently, and the only symptom is a
  * cashier being told nothing.
  */
-const DOMAIN_CODE_FIELDS = ['inventoryCode', 'purchasingCode', 'paymentMethodCode', 'catalogCode', 'sellingCode'] as const;
+// P4-S4 adds `receivablesCode`: the field
+// `apps/api/src/modules/receivables/receivables-errors.ts` attaches to every
+// customer-payment and customer-credit refusal. A field the API attaches and
+// this list omits makes its whole code family a dead string — the P4-S2 defect
+// `test/domain-code-fields.test.ts` derives this list against.
+const DOMAIN_CODE_FIELDS = ['inventoryCode', 'purchasingCode', 'paymentMethodCode', 'catalogCode', 'sellingCode', 'receivablesCode'] as const;
 
 export class ApiError extends Error {
   constructor(

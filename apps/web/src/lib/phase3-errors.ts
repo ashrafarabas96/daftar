@@ -49,6 +49,16 @@ export const RETRYABLE_CONFLICTS: ReadonlySet<string> = new Set([
   'supplier_credit_allocation.settlement_changed',
   'supplier_refund.settlement_changed',
   'supplier_refund.fx_rate_changed',
+  // P4-S4: the receivables twins of the three above. Both commands are the
+  // SUPPLIER command shape (OQ-3) — the caller computes every figure and the
+  // database routine recomputes each one under its own locks — so a figure
+  // that moved between the read and the locks is the same retryable race, and
+  // the client resends the SAME body with the same document id. There is no
+  // `customer_credit_application.fx_rate_changed`: applying a credit states no
+  // new rate, so only the payment path can meet a moved one.
+  'customer_payment.settlement_changed',
+  'customer_payment.fx_rate_changed',
+  'customer_credit_application.settlement_changed',
 ]);
 
 /** True for a 409 whose code is in `RETRYABLE_CONFLICTS`. */

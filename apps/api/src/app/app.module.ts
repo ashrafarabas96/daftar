@@ -55,6 +55,10 @@ import { TillSessionsController } from '../modules/pos/till-sessions.controller'
 import { PosReadsController } from '../modules/pos/pos-reads.controller';
 import { PosCartController } from '../modules/pos/pos-cart.controller';
 import { posProviders } from '../modules/pos/pos.module';
+// P4-S4: the receivables commands — collecting a customer payment and applying
+// a customer credit — and the reads of what they wrote.
+import { ReceivablesController } from '../modules/receivables/receivables.controller';
+import { receivablesProviders } from '../modules/receivables/receivables.module';
 import { AdminService } from '../modules/admin/admin.service';
 import { AdminController } from '../modules/admin/admin.controller';
 import { OutboxPublisher } from '../modules/outbox/publisher';
@@ -116,6 +120,12 @@ export class AppModule implements NestModule {
         TillSessionsController,
         PosReadsController,
         PosCartController,
+        // P4-S4: POST /v1/customer-payments, POST
+        // /v1/customer-credits/:creditId/applications and their two reads.
+        // Registered in BOTH compositions (`P4_S4_REQUIRED_CONTROLLERS`): a
+        // controller composed in one process only is a route no integration
+        // test can reach.
+        ReceivablesController,
         AdminController,
       ],
       providers: [
@@ -153,6 +163,12 @@ export class AppModule implements NestModule {
         // `InventoryAuthorizationService` and `'LOGGER'` — which is why the
         // POS slice adds no provider of its own (`pos.module.ts`).
         ...posProviders(),
+        // P4-S4: the two receivables commands and their read service. Each
+        // needs only providers composed above — `Database`,
+        // `InventoryAuthorizationService`,
+        // `AccountingAssertionMinterService` and
+        // `DatabaseAccountingPostingAdapter`.
+        ...receivablesProviders(),
         ...workerProviders(config, options),
         // Only PROCESS_MODE=all composes the reconciler beside the worker,
         // and only because this composition exists for dev and tests;
