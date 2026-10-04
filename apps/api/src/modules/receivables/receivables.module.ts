@@ -31,7 +31,22 @@ export function receivablesProviders(): Provider[] {
 export const P4_S4_REQUIRED_CONTROLLERS: readonly string[] = Object.freeze(['ReceivablesController']);
 
 /**
- * EVERYTHING THIS SLICE NEEDS THAT IS OUTSIDE THIS AGENT'S FILE OWNERSHIP.
+ * EVERYTHING THIS SLICE NEEDED THAT WAS OUTSIDE THIS AGENT'S FILE OWNERSHIP.
+ *
+ * ALL TEN ROWS HAVE LANDED. The array is kept as the slice's integration
+ * record, not as a to-do list: each `why` is the argument for an edit that is
+ * now in the tree, and three suites cite these rows BY NUMBER
+ * (`tests/golden-regression/phase4/01-cross-tenant.golden.test.ts`), so the
+ * numbering is load-bearing and the rows are never reordered or removed.
+ *
+ * It is prose, so it cannot notice when it stops being true: two of its paths
+ * were already wrong by the time the work landed — row 9 named a
+ * `src/locales/` directory that does not exist, and row 7 implied the vectors
+ * sat beside the module in `src/`. Both are corrected below. Holding each row
+ * to its edit from both sides, the way `P4_S4_REQUIRED_CONTROLLERS` is held,
+ * would make that impossible rather than merely noticed; it is a new law and
+ * so belongs to a later slice, recorded as an open item rather than built
+ * here.
  *
  * Stated here rather than made, exactly as `selling.module.ts` states the
  * wiring P4-S2 owed to `app.module.ts` and `merchant-api.module.ts`. Each row
@@ -74,7 +89,7 @@ export const P4_S4_REQUIRED_WIRING: readonly { readonly file: string; readonly e
     why: "the golden asserts `discoverPhase4Routes()` equals its own list, so a new route without a golden row is red. `RECEIVABLES_ROUTE_AUTHORITY` is the list to copy. `tests/**` and `scripts/**` are other agents' surfaces.",
   }),
   Object.freeze({
-    file: 'packages/inventory/src/customer-settlement.ts (+ its vector file)',
+    file: 'packages/inventory/src/customer-settlement.ts (+ packages/inventory/vectors/customer-settlement-vectors.json)',
     edit: 'lift `apps/api/src/modules/receivables/customer-settlement.ts` verbatim into the package and hold it to a vector file, the way `supplier-settlement.ts:18-20` is held to `vectors/supplier-settlement-vectors.json`',
     why: 'map §8.7 owes the slice a TypeScript twin of the SQL. The module is written to be lifted: it imports nothing from the API, reads no clock, no rate registry and no database, and composes only the four accepted primitives. Its `customer_*` refusal codes join `InventoryErrorCode` in the same edit.',
   }),
@@ -84,7 +99,7 @@ export const P4_S4_REQUIRED_WIRING: readonly { readonly file: string; readonly e
     why: "the five DTOs are already OUT of `receivables.schemas.ts` and declared in exactly one file, under the package's exact names, which every service, read and the controller import from. So the move is one file and no other file in the directory changes — the same one-line-swap device as `customer-settlement.ts`, needed for the same reason: the package file is the coordinator's and is applied after handback, so importing it today would not compile.",
   }),
   Object.freeze({
-    file: 'apps/web/src/locales/*.json (three locales)',
+    file: 'apps/web/src/messages/{ar,en,tr}.json (three locales)',
     edit: 'add an `error.customer_payment.*` and `error.customer_credit_application.*` entry for every code in `RECEIVABLES_CODES`',
     why: '`receivablesCode` is now read by `apps/web/src/lib/client.ts` (the one edit this slice made outside `apps/api/src/modules/receivables/`, because `apps/web/test/domain-code-fields.test.ts` derives that list from the refusal modules and is red without it). Until the catalogues exist, each code resolves to the SAFE fallback sentence rather than to a wrong one — the correct failure mode, but not the finished one.',
   }),
