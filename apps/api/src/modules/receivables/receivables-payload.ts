@@ -43,11 +43,15 @@ import { receivablesRefusal } from './receivables-errors';
  * identically for ever — the argument `receivables.schemas.ts`' header already
  * makes. So the payment's intent binds the RESOLVED currency, which is what
  * `0081:1859` signs, and `customer-payment.service.ts` reads state before the
- * digest to have it. Child ids are part of the intent, and
- * are idempotency keys in their own right: an allocation id already stored
- * under another payment is `customer_payment.allocation_id_reused`, a stable
- * domain refusal and never a raw primary-key violation (R-74,
- * `0068:649-651`).
+ * digest to have it. Child ids are part of the intent, and are idempotency
+ * keys in their own right: an allocation id, or the surplus credit's id,
+ * already stored under another payment is
+ * `customer_payment.allocations_invalid` — a stable domain refusal and never a
+ * raw primary-key violation (R-74). That is the code `0081:1936` raises, and
+ * the code the mirror raises for the same collision at `0068:650`. The race
+ * the unlocked pre-check leaves open arrives at the key instead, and
+ * `UNIQUE_KEY_REFUSALS` in `receivables-errors.ts` answers it with that same
+ * code, so the loser cannot tell which of the two refused it.
  *
  * ## The temporary seam this module carried, and its removal
  *

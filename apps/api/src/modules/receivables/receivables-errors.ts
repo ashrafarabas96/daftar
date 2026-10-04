@@ -83,12 +83,6 @@ const RECEIVABLES_STATUS = {
    * find.
    */
   'customer_payment.amount_invalid': 400,
-  /**
-   * An allocation id already stored under ANOTHER payment (R-74,
-   * `0068:649-651`): a stable domain refusal, never a raw primary-key
-   * violation. A child id is an idempotency key too.
-   */
-  'customer_payment.allocation_id_reused': 409,
   /** The payment names an invoice of another customer, or the stated customer is not the invoice's. */
   'customer_payment.customer_mismatch': 409,
   /** The invoice is a draft or void: neither owes anything, so neither can be settled. */
@@ -324,6 +318,47 @@ export function receivablesPlanRefusal(error: ReceivableArithmeticError): AppErr
 }
 
 /**
+ * The unique keys a client-chosen id of this slice can collide on in a RACE,
+ * each mapped to the refusal `customer_collect_payment` raises for the same
+ * collision when it sees it committed — the `UNIQUE_KEY_REFUSALS` law of the
+ * mirror (`purchasing-errors.ts:470-506`), which this table follows exactly:
+ * «the loser must see the refusal it would have seen a moment later», never a
+ * generic duplicate that names the constraint.
+ *
+ * The routine's pre-check at `0081:1932-1937` reads WITHOUT a lock, and the
+ * advisory key it holds is `hashtext(p_payment_id::text)` (`0081:1850`) — the
+ * PAYMENT's id, not the children's. So two concurrent collections of
+ * DIFFERENT payments that name one allocation id, or one credit id, take
+ * different advisory keys, both pass the unlocked `EXISTS`, and the loser's
+ * INSERT meets the winner's key once the winner commits. The routine refuses
+ * the committed collision as `customer_payment.allocations_invalid`
+ * (`0081:1936`, mirroring `0068:650`), so that is what the key maps to:
+ *
+ * - `payment_allocations_pkey` — an allocation id is the client's and
+ *   business-wide (`PRIMARY KEY (business_id, id)`, `0081:324`);
+ * - `customer_credits_pkey` — the surplus credit's id, checked by the same
+ *   unlocked read in the same statement.
+ *
+ * `customer_apply_credit` needs no row here: its advisory key IS its only
+ * client-chosen id (`pg_advisory_xact_lock(hashtext('daftar.customer_credit_application_id'), …)`),
+ * so the reuse check at that point is serialised and the loser is refused
+ * `customer_credit_application.idempotency_conflict` by the routine rather
+ * than by the key. Every other unique refusal is re-thrown UNTOUCHED.
+ */
+const UNIQUE_KEY_REFUSALS: Readonly<Record<string, ReceivablesCode>> = {
+  payment_allocations_pkey: 'customer_payment.allocations_invalid',
+  customer_credits_pkey: 'customer_payment.allocations_invalid',
+};
+
+/** The constraint a unique-key refusal (`23505`) names, or null for any other error. */
+function refusedUniqueKey(error: unknown): string | null {
+  if (typeof error !== 'object' || error === null) return null;
+  const code = 'code' in error ? error.code : undefined;
+  const constraint = 'constraint' in error ? error.constraint : undefined;
+  return code === '23505' && typeof constraint === 'string' ? constraint : null;
+}
+
+/**
  * The catch of both receivables commands. Every refusal leaves with its stable
  * code and nothing is swallowed:
  *
@@ -335,6 +370,8 @@ export function receivablesPlanRefusal(error: ReceivableArithmeticError): AppErr
  *   unchanged;
  * - a `customer_payment.*` / `customer_credit*.*` database refusal → its
  *   receivables code;
+ * - a `23505` on a client-chosen child id (`UNIQUE_KEY_REFUSALS`) → the code
+ *   the routine raises for the same collision, committed;
  * - an `accounting.*` refusal raised at COMMIT, after the posting port
  *   returned — the deferred completeness validators and the deferred binding
  *   FKs that ARE the all-or-nothing mechanism (P4-AL-16) → the same
@@ -348,6 +385,9 @@ export function rethrowReceivablesRefusal(error: unknown): never {
   if (error instanceof InventoryError || error instanceof AccountingError || error instanceof AppError || error instanceof TransactionSeamError) throw error;
   const code = parseDatabaseReceivablesCode(error);
   if (code !== null && isReceivablesCode(code)) throw receivablesRefusal(code);
+  const uniqueKey = refusedUniqueKey(error);
+  const uniqueCode = uniqueKey !== null && Object.hasOwn(UNIQUE_KEY_REFUSALS, uniqueKey) ? UNIQUE_KEY_REFUSALS[uniqueKey] : undefined;
+  if (uniqueCode !== undefined) throw receivablesRefusal(uniqueCode);
   const accountingCode = error instanceof Error ? parseDatabaseAccountingError(error.message) : null;
   if (accountingCode !== null) throw new AccountingError(accountingCode, 'the posting was refused by the accounting authority');
   throw error;

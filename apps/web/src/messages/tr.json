@@ -875,7 +875,6 @@
   "error.customer_payment.idempotency_conflict": "Bu ödeme daha önce farklı bilgilerle gönderildi. Hiçbir şey değişmedi. Yeni bir formla yeniden başlayın.",
   "error.customer_payment.allocations_invalid": "Bu ödemenin kapattığı faturalar geçersiz. Hiçbir şey kaydedilmedi. Fatura listesini ve tutarları kontrol edip tekrar deneyin.",
   "error.customer_payment.amount_invalid": "Faturalardan birine ayrılan tutar sıfır ya da daha az. Hiçbir şey kaydedilmedi. Her faturaya ne kadar ayıracağınızı girip tekrar deneyin.",
-  "error.customer_payment.allocation_id_reused": "Bu ödemenin bir kısmı başka bir ödeme altında zaten kayıtlı. Hiçbir şey kaydedilmedi. Sayfayı yenileyip yeni bir ödeme başlatın.",
   "error.customer_payment.customer_mismatch": "Bir fatura başka bir müşteriye ait. Hiçbir şey kaydedilmedi. Onu çıkarıp bu müşterinin faturalarını seçin.",
   "error.customer_payment.invoice_state_invalid": "Yalnızca kesilmiş bir fatura için tahsilat yapılabilir. Hiçbir şey kaydedilmedi. Bu faturayı çıkarın veya önce kesin.",
   "error.customer_payment.invoice_walkin": "Bu faturada müşteri yok, bu yüzden kimseden tahsil edilemez. Hiçbir şey kaydedilmedi. Onu bu ödemeden çıkarın.",

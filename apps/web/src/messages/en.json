@@ -875,7 +875,6 @@
   "error.customer_payment.idempotency_conflict": "This payment was already sent with different details. Nothing was changed. Start again with a new form.",
   "error.customer_payment.allocations_invalid": "The invoices this payment settles are not valid. Nothing was saved. Check the list of invoices and the amounts, then try again.",
   "error.customer_payment.amount_invalid": "The amount put against one of the invoices is zero or less. Nothing was saved. Enter how much to put against each invoice and try again.",
-  "error.customer_payment.allocation_id_reused": "Part of this payment is already recorded under another payment. Nothing was saved. Refresh and start a new payment.",
   "error.customer_payment.customer_mismatch": "An invoice belongs to another customer. Nothing was saved. Remove it and choose invoices of this customer.",
   "error.customer_payment.invoice_state_invalid": "Only an issued invoice can be collected against. Nothing was saved. Remove this invoice, or issue it first.",
   "error.customer_payment.invoice_walkin": "This invoice has no customer on it, so nobody owes it. Nothing was saved. Remove it from this payment.",
