@@ -46,6 +46,43 @@ this slice's own gate recompute it independently.
 edit, no digest rewrite. Every correction from here is a NEW migration beginning at `0080`, and only under
 an explicit Tech Lead directive. **80 migrations frozen.**
 
+### 0a. The performance-evidence pass, and the head this seal actually stands on
+
+The candidate above (`f3bf439`) was green on its push run and **red on the pull-request run of the same
+tree**, at the P4-S1 gate's replay of Budget A — accepted Phase 2 evidence, not P4-S3 content. P4-S3 was
+therefore reported **BLOCKED** with the freeze mechanics already written, and the Tech Lead authorised one
+narrow corrective pass (2026-10-04, OPTION A): raise the sample count of the two short percentile budgets
+to 200 measured iterations and change nothing else. See `docs/PHASE_4_S3_PERFORMANCE_EVIDENCE.md` for the
+method, the prohibitions it honours, and the finding that the percentile itself is the nearest-rank
+definition and not an arithmetic error.
+
+- **The head this seal stands on:** `e3039298731c3a4224184a0d958795e113983541`, branch
+  `phase/4-sales-pos-customers-receivables`, PR #6 (**Draft** — not merged), `mergeable_state: clean`.
+  Two commits separate it from `f3bf439`: the seal metadata itself, the plan-claim generator fix
+  (`ee4322c`), and this performance-evidence commit.
+- **BOTH runs on that exact SHA, six jobs SUCCESS, attempt 1:** `DAFTAR CI` **37168434225** (push) and
+  **37168436641** (pull_request) — `workspaces`, `backend`, `web-admin`, `android`, `hygiene`, `browser`
+  in each. Step 33 `P4-S1 GATE: PASS`, step 34 `PASS gate:phase4:s2 … 6 check(s) ok`
+  (220 tests, 0 skipped), step 35 `PASS gate:phase4:s3 … 7 check(s) ok` (402 tests, 0 skipped). This is
+  the first head on which the pull-request run is green as well, which is what the acceptance required.
+- **Budgets A and B at 200 samples, as measured by the P2-S8 gate's own step in each run:**
+
+  | run | budget | iterations | min | p50 | p95 | p99 | max | ceiling | samples over |
+  |---|---|---|---|---|---|---|---|---|---|
+  | push 37168434225 | A `post()` incl. COMMIT | 200 | 3.738 | 3.982 | **4.566** | 8.326 | 8.423 | 15 | 0 |
+  | push 37168434225 | B adjustment endpoint | 200 | 8.404 | 8.995 | **11.524** | 16.831 | 25.320 | 60 | 0 |
+  | PR 37168436641 | A `post()` incl. COMMIT | 200 | 3.703 | 4.073 | **6.928** | 8.384 | 9.831 | 15 | 0 |
+  | PR 37168436641 | B adjustment endpoint | 200 | 8.412 | 8.952 | **10.961** | 17.015 | 20.099 | 60 | 0 |
+
+  The two budgets are measured seven times per run (once in the P2-S8 gate's own step and six times inside
+  the gates step 33 composes). Worst `p95` across all fourteen A measurements: **7.230** of 15. Worst
+  across all fourteen B measurements: **11.777** of 60.
+- **The slow mode did appear, and the count is what absorbed it.** In two of the seven A repetitions on the
+  push run a single sample landed at 16.922 ms and 17.220 ms — above the ceiling — and `p95` stayed at
+  4.988 and 4.563, because at n = 200 `p95` is the tenth-worst sample. At n = 30 two such samples are the
+  verdict. Nothing was removed to achieve this: `countAboveThreshold` is recorded as 1 in both, the
+  complete ordered series is in the log, and `p95` was taken over all 200 samples.
+
 ## 1. What the corrective pass closed
 
 | ruling | what was wrong | what closed it |

@@ -728,7 +728,7 @@
     },
     {
       "file": "docs/PHASE_4_S3_ACCEPTANCE.md",
-      "line": 56,
+      "line": 93,
       "phase": "phase-4",
       "signals": ["plan-shape-word", "collation-dependent-range"],
       "kind": "mention",
