@@ -85,7 +85,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { ensurePostgres, ownerPool, resetData } from '../helpers/test-app';
 import { ownerClient } from '../helpers/stock-ledger';
 import { requireSubject } from '../golden-regression/phase4-s2/harness';
-import { cloneRow, deferredVerifierWiring, inRolledBackTx, invoiceChain, must, raised } from '../golden-regression/phase4-s4/harness';
+import { deferredVerifierWiring, inRolledBackTx, invoiceChain, must, plantSettlementRow, raised } from '../golden-regression/phase4-s4/harness';
 import {
   applyCredit,
   collectPayment,
@@ -313,7 +313,7 @@ describe('P4-S4 the customer identity pin', () => {
         // `(business_id, invoice_id)` is satisfied — which is the whole point of
         // Departure A — so nothing but the verifier stands between this row and
         // a committed cross-customer settlement.
-        await cloneRow(c, 'payment_allocations', w.shop.businessId, sourceId, {
+        await plantSettlementRow(c, 'payment_allocations', w.shop.businessId, sourceId, {
           id: newId,
           binding_source_id: newId,
           invoice_id: invoiceD.invoiceId,
@@ -391,11 +391,22 @@ describe('P4-S4 the walk-in law', () => {
       w.shop,
       async (c) => {
         const newId = randomUUID();
-        await cloneRow(c, 'customer_credit_applications', w.shop.businessId, sourceId, {
+        await plantSettlementRow(c, 'customer_credit_applications', w.shop.businessId, sourceId, {
           id: newId,
           binding_source_id: newId,
           invoice_id: walkin.invoiceId,
           ar_released_before_txn_minor: 0,
+          // A FREE level on the credit side, so the departure stays the one
+          // this law is about. The clone keeps the accepted row's `credit_id`,
+          // and `customer_credit_applications_level_uq` is
+          // `(business_id, credit_id, credit_remaining_before_minor)` — so
+          // reusing the source's level made the UNIQUE index answer first and
+          // `invoice_settlement_verify` was never reached. This level is unused
+          // by the credit and still satisfies
+          // `customer_credit_applications_consumed_ck`
+          // (`consumed <= remaining_before`), because it is the maximum the
+          // column admits.
+          credit_remaining_before_minor: '1000000000000000000',
         });
         return raised(() => c.query(`SELECT ${ROUTINES.invoiceSettlementVerify}($1::uuid, $2::uuid)`, [w.shop.businessId, walkin.invoiceId]));
       },
@@ -426,7 +437,7 @@ describe('P4-S4 the walk-in law', () => {
       w.shop,
       async (c) => {
         const newId = randomUUID();
-        await cloneRow(c, 'payment_allocations', w.shop.businessId, sourceId, {
+        await plantSettlementRow(c, 'payment_allocations', w.shop.businessId, sourceId, {
           id: newId,
           binding_source_id: newId,
           invoice_id: walkin.invoiceId,

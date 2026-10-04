@@ -326,20 +326,37 @@ describe('P4-S4 the money closure of a customer payment', () => {
 
   it('the surplus posts to `customer_credit_liability` and to NO revenue account — a surplus is owed, never earned', async () => {
     requireSubject(missing, CLAIM);
-    const liability = await ledgerBalance(ownerPool(), w.shop.businessId, CREDIT_LIABILITY_KEY);
+    // SCOPED TO THE ONE `customer_credit` ENTRY OF THIS SCENARIO, found through
+    // the binding rather than by guessing an order.
+    //
+    // It used to be measured with `ledgerBalance`, which sums the WHOLE account
+    // across the business — and this business creates TWO credits, scenario 2's
+    // `over.surplus` and scenario 3's whole on-account amount, one
+    // `customer_credit` entry and one liability line each. So the account
+    // carried the sum of both (5777 over 2 lines) and the law appeared to fail
+    // while the reducer was right. The claim is about THIS surplus's entry, so
+    // that is what it now measures; nothing about the law is weaker — the
+    // figure is still the exact signed amount, not a range, an absolute value
+    // or a net.
+    const creditEntryId = await entryOfSource(ownerPool(), w.shop.businessId, CREDIT_SOURCE_TYPE, over.creditId);
+    expect(creditEntryId, `the surplus credit ${over.creditId} has no bound ${CREDIT_SOURCE_TYPE} entry, so this law has no subject`).not.toBeNull();
+    const creditEntryLines = await entryLines(ownerPool(), w.shop.businessId, creditEntryId as string);
+    const onLiabilityLines = creditEntryLines.filter((l) => l.systemKey === CREDIT_LIABILITY_KEY);
     expect(
-      liability.lines,
-      `NO SUBJECT — nothing in the business is posted to ${CREDIT_LIABILITY_KEY} (2210, already in the closed chart at 0040:57), so this law ` +
-        `is asserted over no line at all`,
+      onLiabilityLines.length,
+      `NO SUBJECT — entry ${creditEntryId as string} (the ${CREDIT_SOURCE_TYPE} entry of credit ${over.creditId}) posts no line to ` +
+        `${CREDIT_LIABILITY_KEY} (2210, already in the closed chart at 0040:57), so this law is asserted over no line at all`,
     ).toBeGreaterThan(0);
     // A liability is a CREDIT balance, so the signed sum is negative by the
     // surplus. Stated as the signed figure rather than as an absolute value:
     // a surplus that landed as a debit would be an asset, and `abs()` would
     // hide it.
+    const liabilityMinor = onLiabilityLines.reduce((acc, l) => acc + l.debitMinor - l.creditMinor, 0n);
     expect(
-      liability.minor.toString(),
+      liabilityMinor.toString(),
       `the ${CREDIT_LIABILITY_KEY} account must carry the surplus ${over.surplus} as a credit balance (contract OQ-9), measured ` +
-        `${liability.minor} over ${liability.lines} line(s)`,
+        `${liabilityMinor} over ${onLiabilityLines.length} line(s) of entry ${creditEntryId as string} — the ${CREDIT_SOURCE_TYPE} entry of ` +
+        `credit ${over.creditId}, this scenario's surplus and no other`,
     ).toBe((-over.surplus).toString());
 
     // And the GOLD-68 half: the surplus is not revenue. Asserted over EVERY

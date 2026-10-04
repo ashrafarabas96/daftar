@@ -7,7 +7,7 @@ import { strictUuidParam } from '../inventory/canonical-id';
 import type { MembershipContext } from '../tenancy/tenancy.service';
 import { CustomerCreditApplicationService } from './customer-credit-application.service';
 import { CustomerPaymentService } from './customer-payment.service';
-import type { CustomerCreditApplicationResultDto, CustomerCreditDto, CustomerPaymentResultDto } from './receivables-contracts';
+import type { CustomerCreditApplicationResultDto, CustomerCreditDto, CustomerPaymentDto, CustomerPaymentResultDto } from './receivables-contracts';
 import { phase4ReceivablesPermission } from './receivables-permissions';
 import { ReceivablesReadService } from './receivables-reads';
 import {
@@ -92,10 +92,22 @@ export class ReceivablesController {
     return result;
   }
 
-  /** One stored payment with its allocations and the credit it created: the writer's key reads what it wrote. */
+  /**
+   * One stored payment with its allocations and the credit it created.
+   *
+   * A READ is gated on the READ key, never on the write key that produced the
+   * row. Both accepted precedents do this: the settlement mirror writes under
+   * `suppliers.pay` and reads under `suppliers.view`
+   * (`supplier-settlements.controller.ts`), and the sale writes under
+   * `sales.create` and reads under `sales.view` (`sales.controller.ts`).
+   * Gating this on `payments.collect` had two wrong consequences at once — a
+   * manager holding `receivables.view` could not read a payment whose credits
+   * they could already list, and every cashier (for whom `payments.collect` is
+   * a role default) gained read of every stored payment.
+   */
   @Get('customer-payments/:paymentId')
-  @phase4ReceivablesPermission('payments.collect')
-  async getPayment(@Membership() m: MembershipContext, @Param('paymentId') paymentId: string): Promise<CustomerPaymentResultDto> {
+  @phase4ReceivablesPermission('receivables.view')
+  async getPayment(@Membership() m: MembershipContext, @Param('paymentId') paymentId: string): Promise<CustomerPaymentDto> {
     return this.reads.getCustomerPayment(m, strictUuidParam(paymentId, 'paymentId'));
   }
 

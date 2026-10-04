@@ -23,7 +23,12 @@
  *   refusals — another settlement moved the invoice, or a rate was stated
  *   meanwhile — and the client retries the SAME body. The cap is never
  *   silently adjusted to fit;
- * - tax is BLOCKED BY OD-03: no request here has a tax field.
+ * - tax: OD-03 is OPEN, and sales tax is structurally ZERO in this estate.
+ *   So this layer carries NO tax arithmetic, and no request or DTO here has
+ *   a tax field. That is a description of where the question stands, not a
+ *   guarantee this slice enforces: with no tax field and no tax figure
+ *   anywhere on the path, there is nothing here that could violate one.
+ *   When OD-03 is settled, these shapes are what it will have to change.
  *
  * Two differences from the supplier side, both deliberate:
  *

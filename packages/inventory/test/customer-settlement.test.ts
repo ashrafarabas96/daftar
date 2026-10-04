@@ -727,11 +727,36 @@ describe('the closure law of a customer payment', () => {
 describe('the settlement arithmetic is imported, never re-implemented', () => {
   const source = readFileSync(join(__dirname, '..', 'src', 'customer-settlement.ts'), 'utf8');
 
-  it('imports the four primitives from the accepted module', () => {
-    for (const name of ['convertToBase', 'apRelease', 'creditRemainingCarrying', 'creditRelease']) {
-      expect(source).toContain(name);
+  /**
+   * `source` with every comment removed.
+   *
+   * Without this, the module's own doc comment satisfies the law: the header
+   * NAMES all four primitives in prose and even writes a call of one of them in
+   * an example, so a `toContain` over the raw text — and a `name(` search over
+   * it — would stay green through a local re-implementation that left the
+   * header intact. The claim is about CODE, so the subject has to be code.
+   */
+  const executable = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
+
+  const PRIMITIVES = ['convertToBase', 'apRelease', 'creditRemainingCarrying', 'creditRelease'] as const;
+
+  it('BINDS each of the four primitives in the import from the accepted module, and CALLS each one', () => {
+    // The import statement and its binding LIST. Matching the statement alone
+    // was satisfied by any import at all from that module — including one that
+    // brought in nothing but the `SettlementConversion` type.
+    const statement = /import \{([^}]*)\} from '\.\/supplier-settlement';/.exec(executable);
+    expect(statement, "the module no longer imports from './supplier-settlement' at all").not.toBeNull();
+    const bound = (statement?.[1] ?? '').split(',').map((b) => b.trim().replace(/^type\s+/, ''));
+    for (const name of PRIMITIVES) {
+      // IMPORTED: the name is a binding of that import, not merely a string
+      // that occurs somewhere in the file.
+      expect(bound, `${name} is not bound by the import from './supplier-settlement'`).toContain(name);
+      // CALLED: the name is APPLIED in executable code. `\b` with a required
+      // `(` also keeps `creditRelease` from being satisfied by the unrelated
+      // field name `creditReleasedMinor`.
+      const calls = [...executable.matchAll(new RegExp(`\\b${name}\\s*\\(`, 'g'))];
+      expect(calls.length, `${name} is never called in executable code — a local re-implementation would leave this unproved`).toBeGreaterThan(0);
     }
-    expect(source).toMatch(/import \{[^}]*\} from '\.\/supplier-settlement';/);
   });
 
   it('holds no second rounding, no second release formula and no float', () => {

@@ -66,7 +66,7 @@ import {
   phase4RlsForceReport,
 } from '../../scripts/guards/phase4-rls-force';
 import { discoverSalesTables, isPhase4Relation } from '../../scripts/guards/no-authoritative-balance';
-import { CONTRACT_RELATIONS, createTableBody, relationRlsTextProblems, vocabularyProblems } from '../../scripts/phase4-s4-gate';
+import { CONTRACT_RELATIONS, createTableBody, newRelationCoverageProblems, relationRlsTextProblems, vocabularyProblems } from '../../scripts/phase4-s4-gate';
 
 const REPO = join(__dirname, '..', '..');
 const MIGRATIONS = join(REPO, MIGRATIONS_SUBDIR);
@@ -388,5 +388,66 @@ describe('G-3’s vocabulary applies to all four relations', () => {
   it('red: a derived-truth RELATION name added beside the four is named', () => {
     const sql = `${RELATIONS_SQL}\nCREATE TABLE customer_receivables_summary (tenant_id UUID NOT NULL, business_id UUID NOT NULL);\n`;
     expect(about(vocabularyProblems(sql), 'customer_receivables_summary')).not.toEqual([]);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+
+describe('F12 — the coverage check reports ABSENCE as a finding, never as `ok`', () => {
+  /**
+   * A root holding every ACCEPTED migration byte for byte, plus whatever
+   * candidate files the case plants. The accepted prefix has to be real or the
+   * digest machinery refuses the root for an unrelated reason and the case
+   * proves nothing.
+   */
+  function rootWithCandidates(candidates: Readonly<Record<string, string>>): string {
+    const root = mkdtempSync(join(tmpdir(), 'p4s4-vacuity-'));
+    temporaries.push(root);
+    mkdirSync(join(root, MIGRATIONS_SUBDIR), { recursive: true });
+    for (const f of readdirSync(MIGRATIONS)) {
+      if (/^008[01]_/.test(f)) continue; // the candidate files are what each case varies
+      cpSync(join(MIGRATIONS, f), join(root, MIGRATIONS_SUBDIR, f));
+    }
+    mkdirSync(join(root, APPLIER_SOURCE, '..'), { recursive: true });
+    writeFileSync(join(root, APPLIER_SOURCE), APPLIER);
+    for (const [name, body] of Object.entries(candidates)) writeFileSync(join(root, MIGRATIONS_SUBDIR, name), body);
+    return root;
+  }
+
+  it('the checkout’s own tree HAS the subject, so the laws below judged something', () => {
+    expect(newRelationCoverageProblems(REPO)).toEqual([]);
+  });
+
+  it('red: a tree with NO candidate migration is refused — every relation law judged an empty set', () => {
+    const problems = newRelationCoverageProblems(rootWithCandidates({}));
+    expect(about(problems, 'reporting ABSENCE, not correctness'), `measured: ${JSON.stringify(problems)}`).not.toEqual([]);
+    // and the finding NAMES what should have been discovered
+    for (const name of CONTRACT_RELATIONS) expect(problems.join('\n')).toContain(name);
+  });
+
+  it('red: a candidate migration declaring NONE of the four is refused, however lawful it is in itself', () => {
+    // This relation satisfies every property the laws assert — both RLS
+    // dimensions, ENABLE, FORCE, REVOKE, a clean name. Before the fix the
+    // check passed on it, because the properties held over a set containing
+    // none of this slice's relations.
+    const unrelated = [
+      'CREATE TABLE unrelated_thing (',
+      '  tenant_id UUID NOT NULL,',
+      '  business_id UUID NOT NULL,',
+      '  id UUID NOT NULL,',
+      '  PRIMARY KEY (business_id, id)',
+      ');',
+      'ALTER TABLE unrelated_thing ENABLE ROW LEVEL SECURITY;',
+      'ALTER TABLE unrelated_thing FORCE ROW LEVEL SECURITY;',
+      'REVOKE ALL ON unrelated_thing FROM PUBLIC;',
+      '',
+    ].join('\n');
+    const problems = newRelationCoverageProblems(rootWithCandidates({ '0081_unrelated.sql': unrelated }));
+    expect(about(problems, 'declares none of'), `measured: ${JSON.stringify(problems)}`).not.toEqual([]);
+    expect(problems.join('\n')).toContain('their silence is not evidence');
+  });
+
+  it('CONTRACT_RELATIONS is the derived subject and is non-empty — an empty contract would make the predicate law vacuous too', () => {
+    expect(CONTRACT_RELATIONS.length).toBeGreaterThan(0);
   });
 });

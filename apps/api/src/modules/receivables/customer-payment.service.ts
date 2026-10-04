@@ -1,6 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { mintDomainPostingAssertion, type PostingCommand } from '@daftar/accounting';
-import { normalizeDocumentText, parseMinor } from '@daftar/inventory';
+import { AccountingError, mintDomainPostingAssertion, parseDatabaseAccountingError, type PostingCommand } from '@daftar/accounting';
+import { normalizeDocumentText, parseMinor, parseUnitCost } from '@daftar/inventory';
 import { Database, type AccountingAssertions, type BusinessInventoryAccountingTransaction } from '../../infra/database';
 import { AccountingAssertionMinterService } from '../accounting/accounting-assertion.minter';
 import { DatabaseAccountingPostingAdapter } from '../accounting/accounting-posting.adapter';
@@ -20,11 +20,9 @@ import {
 import {
   findCustomerPaymentIntent,
   RECEIVABLES_METHOD_SQL,
-  readCustomerPaymentResult,
-  readReceivablesFx,
+  readCustomerPayment,
   scopedReceivablesRows,
   SETTLED_INVOICES_SQL,
-  type ReceivablesFx,
   type ReceivablesMethodRow,
   type ReceivablesReadScope,
   type SettledInvoiceRow,
@@ -254,6 +252,24 @@ export interface PaymentAllocationToBind {
   readonly appliedMinor: bigint;
 }
 
+/**
+ * The FX snapshot a payment binds at its date. It is declared here, beside the
+ * command that binds it, because the lookup that produces it is command-side
+ * (see `CustomerPaymentService.readFx`).
+ */
+export interface ReceivablesFx {
+  readonly rateId: string | null;
+  /** `NUMERIC(20,10)` text. */
+  readonly rate: string;
+  readonly rateR10: bigint;
+  readonly source: 'base' | 'manual';
+  /** Second precision: `<date>T00:00:00Z` when domestic, the registry row's `effective_at` otherwise. */
+  readonly at: Date;
+}
+
+const DOMESTIC_RATE_TEXT = '1.0000000000';
+const DOMESTIC_RATE_R10 = 10_000_000_000n;
+
 export interface PaymentToBind {
   readonly tenantId: string;
   readonly businessId: string;
@@ -272,13 +288,6 @@ export interface PaymentToBind {
   readonly reference: string | null;
   /** Client-supplied, and NULL exactly when the payment is fully allocated. */
   readonly creditId: string | null;
-  /**
-   * The currency the client STATED — NULL included, meaning "the business's
-   * base currency". The intent digest binds this, `currency` above is the
-   * resolved code every stored figure and line uses, and the two are a
-   * deliberate pair: the intent must be computable before any state is read.
-   */
-  readonly statedCurrency: string | null;
   readonly fx: ReceivablesFx;
   /** In `line_no` order; possibly EMPTY (OQ-4). */
   readonly allocations: readonly PaymentAllocationToBind[];
@@ -341,10 +350,10 @@ export function bindCustomerPayment(i: PaymentToBind): BoundCustomerPayment {
     paymentMethodId: i.method.paymentMethodId,
     postingAccountId: i.method.postingAccountId,
     paymentDate: i.paymentDate,
-    // The INTENT binds what the client said; the PAYLOAD binds what the server
-    // resolved. Two fields, one for each side of the request-only split.
-    currency: i.statedCurrency,
-    resolvedCurrency: i.currency,
+    // ONE currency field, the RESOLVED code, on both sides of the digest: it
+    // is what `0081` signs into the intent (`:1859`) and into the payload
+    // (`:1820`), by the same `lower(p_currency_code::text)` expression.
+    currency: i.currency,
     amountMinor: i.amountMinor,
     reference: i.reference,
     rate: { rateId: i.fx.rateId, rateR10: i.fx.rateR10, source: i.fx.source, rateAtEpochSeconds },
@@ -491,17 +500,38 @@ export class CustomerPaymentService {
   }
 
   private async run(m: MembershipContext, input: CustomerPaymentRequest, btx: BusinessTransactionId): Promise<CustomerPaymentResultDto> {
-    // 1. The client intent, then the idempotency proof — before any state read.
+    // 1. The request, then the state snapshot, then the intent — IN THAT ORDER.
+    //
+    //    The state read used to come AFTER the digest, and the comment here used
+    //    to say the intent "cannot depend on the base currency the state read
+    //    would resolve". That ordering was self-imposed and it was WRONG: the
+    //    routine signs `lower(p_currency_code::text)` into its own intent
+    //    (`0081:1859`) over an argument it refuses as NULL, so an intent built
+    //    from the client's nullable code can never equal the one
+    //    `payments.intent_sha256` stores, and every replay of a stored payment
+    //    came back a false `customer_payment.idempotency_conflict`.
+    //
+    //    Reading state first is not a breach of `[[daftar-registry-before-state]]`.
+    //    What that rule keeps out of an intent is a DERIVED figure that moves
+    //    between two retries — a rate, a base, a release, a dust, a realized
+    //    amount, a posting account — and none of those enters the digest. The
+    //    one thing the read contributes to it is `base_currency`, an immutable
+    //    business attribute, so the same request still digests identically for
+    //    ever (the argument `receivables.schemas.ts`' header makes).
     const reference = receivablesReference(input.reference);
     const amountMinor = parseMinor(input.amountMinor);
     const creditId = input.creditId ?? null;
-    const statedCurrency = input.currencyCode ?? null;
     const intentAllocations: CollectPaymentIntentAllocation[] = input.allocations.map((a) => ({
       allocationId: a.allocationId,
       invoiceId: a.invoiceId,
       paymentAmountMinor: parseMinor(a.paymentAmountMinor),
       appliedMinor: parseMinor(a.invoiceAmountAppliedMinor),
     }));
+    const state = await this.readState(m, input);
+    // A NULL `currencyCode` means "the business's base currency", resolved
+    // HERE, once, from the snapshot everything else comes out of — and this is
+    // the code the intent, the payload and every stored line all carry.
+    const currency = input.currencyCode ?? state.base_currency;
     const intentSha256 = customerCollectPaymentIntentSha256({
       tenantId: m.tenantId,
       businessId: m.businessId,
@@ -509,14 +539,14 @@ export class CustomerPaymentService {
       customerId: input.customerId,
       paymentMethodId: input.paymentMethodId,
       paymentDate: input.paymentDate,
-      // The client's own value, NULL included: the intent is request-only, so
-      // it cannot depend on the base currency the state read would resolve.
-      currency: statedCurrency,
+      currency,
       amountMinor,
       reference,
       creditId,
       allocations: intentAllocations,
     });
+    // The replay lookup stays AFTER the digest and before any write: only the
+    // state read moved ahead of it.
     const stored = await findCustomerPaymentIntent(this.db, m, input.paymentId);
 
     // 2. Authority. `payments.collect`, re-established through the one issuer
@@ -525,11 +555,10 @@ export class CustomerPaymentService {
     const authority: InventoryCommandAuthority = await this.authorization.authorize(m, receivablesOperationCode(CUSTOMER_COLLECT_PAYMENT_OP), btx);
     if (stored !== null) {
       if (stored !== intentSha256) throw receivablesRefusal('customer_payment.idempotency_conflict');
-      return readCustomerPaymentResult(this.db, m, input.paymentId, true);
+      return { ...(await readCustomerPayment(this.db, m, input.paymentId)), replayed: true };
     }
 
-    // 3. Current state in ONE snapshot.
-    const state = await this.readState(m, input);
+    // 3. The snapshot read at step 1, now read for everything else it carries.
     const byId = new Map(state.invoices.map((i) => [i.id, i]));
     const rows = intentAllocations.map((a) => {
       const row = byId.get(a.invoiceId);
@@ -547,11 +576,8 @@ export class CustomerPaymentService {
     if (state.customer_status !== 'active') throw receivablesRefusal('customer_payment.customer_inactive');
     const method = receivablesMethod(state.method, reference);
     if (state.future) throw receivablesRefusal('customer_payment.date_in_future');
-    // A NULL `currencyCode` means "the business's base currency", resolved
-    // HERE, once, from the same snapshot everything else came out of.
-    const currency = statedCurrency ?? state.base_currency;
     if (state.currency_exponent === null) throw receivablesRefusal('customer_payment.allocations_invalid');
-    const fx = await readReceivablesFx(this.db, m, currency, state.base_currency, input.paymentDate);
+    const fx = await this.readFx(m, currency, state.base_currency, input.paymentDate);
 
     const bound = bindCustomerPayment({
       tenantId: m.tenantId,
@@ -562,7 +588,6 @@ export class CustomerPaymentService {
       method,
       paymentDate: input.paymentDate,
       currency,
-      statedCurrency,
       currencyExponent: state.currency_exponent,
       baseCurrency: state.base_currency,
       baseExponent: state.base_exponent,
@@ -588,7 +613,7 @@ export class CustomerPaymentService {
     const replayed = await this.db.withBusinessInventoryAccountingTransaction(authority.scope, inventoryAssertion, accountingAssertions, (tx) =>
       executeCollectPayment(tx, this.posting, bound),
     );
-    return readCustomerPaymentResult(this.db, m, input.paymentId, replayed);
+    return { ...(await readCustomerPayment(this.db, m, input.paymentId)), replayed };
   }
 
   /** The payment's state in ONE statement, read by `daftar_app` under RLS. */
@@ -609,5 +634,48 @@ export class CustomerPaymentService {
     );
     if (row === undefined) throw new Error('the business is not readable');
     return row;
+  }
+
+  /**
+   * The payment's FX snapshot at its date.
+   *
+   * Domestic: `(NULL, 1, 'base', <date>T00:00:00Z)` and the registry is never
+   * consulted. Foreign: the row `accounting_fx_rate_lookup` returns for
+   * `(currency → base)` at the LAST SECOND of the date in the business's
+   * timezone — computed in SQL from the date alone, which is the same instant
+   * the routine recomputes under its lock. Nothing here reads a clock.
+   *
+   * It lives HERE, on the command service, and not on the read surface: this
+   * is the payment's COMMAND-side rate binding, and a current-rate lookup on a
+   * reporting module is what G-6 forbids (`scripts/guards/read-surface.ts`) —
+   * a report must re-read the rate the document froze, never today's. That is
+   * also the shape of the precedent this slice follows: the sale commit keeps
+   * its own `readFx` private to the service (`sale-commit.service.ts`), so a
+   * change to another slice's rate read cannot silently move a receivable's
+   * rate.
+   */
+  private async readFx(scope: ReceivablesReadScope, currency: string, baseCurrency: string, date: string): Promise<ReceivablesFx> {
+    if (currency.toUpperCase() === baseCurrency.toUpperCase()) {
+      return { rateId: null, rate: DOMESTIC_RATE_TEXT, rateR10: DOMESTIC_RATE_R10, source: 'base', at: new Date(`${date}T00:00:00Z`) };
+    }
+    let row: { rate_id: string; rate: string; source: 'base' | 'manual'; effective_at: Date } | undefined;
+    try {
+      [row] = await scopedReceivablesRows<{ rate_id: string; rate: string; source: 'base' | 'manual'; effective_at: Date }>(
+        this.db,
+        scope,
+        `SELECT r.rate_id, r.rate::text AS rate, r.source, r.effective_at
+           FROM businesses b
+          CROSS JOIN LATERAL accounting_fx_rate_lookup(
+                  b.id, $2, b.base_currency, ((($3::date + 1)::timestamp AT TIME ZONE b.timezone) - interval '1 second')) r
+          WHERE b.id = $1`,
+        [scope.businessId, currency, date],
+      );
+    } catch (e) {
+      const code = parseDatabaseAccountingError(e instanceof Error ? e.message : String(e));
+      if (code !== null) throw new AccountingError(code, 'the accounting authority refused this rate lookup', { businessId: scope.businessId });
+      throw e;
+    }
+    if (row === undefined) throw new Error('the FX rate lookup returned no row');
+    return { rateId: row.rate_id, rate: row.rate, rateR10: parseUnitCost(row.rate), source: row.source, at: row.effective_at };
   }
 }

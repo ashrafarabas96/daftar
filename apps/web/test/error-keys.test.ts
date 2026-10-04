@@ -158,27 +158,26 @@ describe('refusalKey and the retryable 409s (§3(a)(c), Annex R #9, #12)', () =>
     // Every retryable code is one the API REALLY declares, checked against the
     // registry that owns its namespace rather than against a list kept here.
     //
-    // Scoped per registry, on the accepted `phase4-pos-refusal-catalogue`
-    // precedent: the receivables half goes vacuous ONLY on a tree where
-    // `receivables-errors.ts` has not merged, and the `receivablesPending`
-    // claim below is what makes that state visible instead of silent. The
-    // moment the module lands, the receivables codes are checked in full.
+    // The receivables registry must BE THERE. `receivablesCodes()` answers
+    // `[]` on a tree where `receivables-errors.ts` has not merged, which was a
+    // real state while the slice's agents worked in parallel worktrees — but
+    // an empty answer would make every receivables check below pass over
+    // nothing, so it is refused HERE, before the loop, rather than tolerated.
+    // This is the assertion that keeps the loop honest: with it, the three
+    // receivables codes are checked against the registry unconditionally.
     const receivables = receivablesCodes();
+    expect(
+      receivables.length,
+      'receivables-errors.ts declares no RECEIVABLES_STATUS codes — every receivables check below would pass over nothing',
+    ).toBeGreaterThan(0);
     const isReceivable = (code: string) => /^customer_(?:payment|credit|credit_application)\./.test(code);
     for (const code of RETRYABLE_CONFLICTS) {
       if (isReceivable(code)) {
-        if (receivables.length > 0) expect(receivables, code).toContain(code);
+        expect(receivables, code).toContain(code);
       } else {
         expect([...purchasing, ...inventory], code).toContain(code);
       }
     }
-    // Not vacuous by accident: either the registry is present and every
-    // receivables code was just checked against it, or it is absent and that
-    // is said out loud here with the codes that are waiting for it.
-    const receivablesPending = receivables.length === 0 ? [...RETRYABLE_CONFLICTS].filter(isReceivable).sort() : [];
-    expect(receivablesPending.length === 0 || receivablesPending.length === 3, `receivables registry absent; pending: ${receivablesPending.join(', ')}`).toBe(
-      true,
-    );
     expect(isRetryableConflict(new ApiError(409, 'CONFLICT', { purchasingCode: 'supplier_refund.fx_rate_changed' }))).toBe(true);
     expect(isRetryableConflict(new ApiError(409, 'CONFLICT', { purchasingCode: 'supplier_payment.idempotency_conflict' }))).toBe(false);
     expect(isRetryableConflict(new ApiError(422, 'VALIDATION_FAILED', { purchasingCode: 'supplier_payment.settlement_changed' }))).toBe(false);

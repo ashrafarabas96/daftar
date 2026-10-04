@@ -104,7 +104,7 @@ export const RECEIVABLES_ROUTE_AUTHORITY: readonly {
   Object.freeze({
     method: 'GET' as const,
     path: '/v1/customer-payments/:paymentId',
-    permission: 'payments.collect' as const,
+    permission: 'receivables.view' as const,
     sensitive: false as const,
     businessWide: false,
   }),

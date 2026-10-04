@@ -1,12 +1,11 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { AccountingError, parseDatabaseAccountingError } from '@daftar/accounting';
 import { hasPermission } from '@daftar/domain-core';
 import { parseMinor, parseUnitCost } from '@daftar/inventory';
 import type { QueryResultRow } from 'pg';
 import { Database } from '../../infra/database';
 import type { MembershipContext } from '../tenancy/tenancy.service';
 import { receivablesRefusal } from './receivables-errors';
-import type { CustomerCreditDto, CustomerPaymentResultDto } from './receivables-contracts';
+import type { CustomerCreditDto, CustomerPaymentDto } from './receivables-contracts';
 
 /**
  * The reads of the P4-S4 receivables surface, and the ONE state read each
@@ -131,65 +130,6 @@ export const CUSTOMER_CREDIT_SQL = `(SELECT json_build_object(
        JOIN currencies kc ON kc.code = k.currency_code
       WHERE k.business_id = b.id AND k.id = %CREDIT%::uuid)`;
 
-/** The FX snapshot a payment binds at its date. */
-export interface ReceivablesFx {
-  readonly rateId: string | null;
-  /** `NUMERIC(20,10)` text. */
-  readonly rate: string;
-  readonly rateR10: bigint;
-  readonly source: 'base' | 'manual';
-  /** Second precision: `<date>T00:00:00Z` when domestic, the registry row's `effective_at` otherwise. */
-  readonly at: Date;
-}
-
-const DOMESTIC_RATE_TEXT = '1.0000000000';
-const DOMESTIC_RATE_R10 = 10_000_000_000n;
-
-/**
- * The payment's FX snapshot at its date.
- *
- * Domestic: `(NULL, 1, 'base', <date>T00:00:00Z)` and the registry is never
- * consulted. Foreign: the row `accounting_fx_rate_lookup` returns for
- * `(currency → base)` at the LAST SECOND of the date in the business's
- * timezone — computed in SQL from the date alone, which is the same instant
- * the routine recomputes under its lock. Nothing here reads a clock.
- *
- * This is the sale commit's own local read (`sale-commit.service.ts:633-667`)
- * rather than an import from the purchasing module: the Phase 4 precedent
- * keeps each slice's rate read beside the slice, so a change to the purchasing
- * one cannot silently move a receivable's rate.
- */
-export async function readReceivablesFx(
-  db: Database,
-  scope: ReceivablesReadScope,
-  currency: string,
-  baseCurrency: string,
-  date: string,
-): Promise<ReceivablesFx> {
-  if (currency.toUpperCase() === baseCurrency.toUpperCase()) {
-    return { rateId: null, rate: DOMESTIC_RATE_TEXT, rateR10: DOMESTIC_RATE_R10, source: 'base', at: new Date(`${date}T00:00:00Z`) };
-  }
-  let row: { rate_id: string; rate: string; source: 'base' | 'manual'; effective_at: Date } | undefined;
-  try {
-    [row] = await scopedReceivablesRows<{ rate_id: string; rate: string; source: 'base' | 'manual'; effective_at: Date }>(
-      db,
-      scope,
-      `SELECT r.rate_id, r.rate::text AS rate, r.source, r.effective_at
-         FROM businesses b
-        CROSS JOIN LATERAL accounting_fx_rate_lookup(
-                b.id, $2, b.base_currency, ((($3::date + 1)::timestamp AT TIME ZONE b.timezone) - interval '1 second')) r
-        WHERE b.id = $1`,
-      [scope.businessId, currency, date],
-    );
-  } catch (e) {
-    const code = parseDatabaseAccountingError(e instanceof Error ? e.message : String(e));
-    if (code !== null) throw new AccountingError(code, 'the accounting authority refused this rate lookup', { businessId: scope.businessId });
-    throw e;
-  }
-  if (row === undefined) throw new Error('the FX rate lookup returned no row');
-  return { rateId: row.rate_id, rate: row.rate, rateR10: parseUnitCost(row.rate), source: row.source, at: row.effective_at };
-}
-
 // ── The replay reads ─────────────────────────────────────────────────────
 
 /** The stored `intent_sha256` of a payment this caller can see, or null when there is no such payment. */
@@ -228,13 +168,16 @@ const CUSTOMER_CREDIT_DTO_SQL = `json_build_object(
  * The allocations are ordered by `line_no`, which is the order the entries
  * were posted in and the order the client stated them in: `line_no = ordinal`
  * is the routine's, not this read's.
+ *
+ * It answers `CustomerPaymentDto`, which carries NO `replayed`. A read has no
+ * replay semantics: nothing was written, so there is nothing a retry could
+ * have returned instead. The field used to be hard-coded `false` on the GET —
+ * true by accident rather than by meaning, and a shape a client could come to
+ * rely on. `replayed` belongs to the COMMAND's answer, where 200-vs-201 turns
+ * on it, so the two command paths add it to this row (`CustomerPaymentResultDto
+ * extends CustomerPaymentDto`) and the read does not.
  */
-export async function readCustomerPaymentResult(
-  db: Database,
-  scope: ReceivablesReadScope,
-  paymentId: string,
-  replayed: boolean,
-): Promise<CustomerPaymentResultDto> {
+export async function readCustomerPayment(db: Database, scope: ReceivablesReadScope, paymentId: string): Promise<CustomerPaymentDto> {
   const [row] = await scopedReceivablesRows<{
     payment_id: string;
     customer_id: string;
@@ -243,7 +186,7 @@ export async function readCustomerPaymentResult(
     currency_code: string;
     amount_minor: string;
     reference: string | null;
-    allocations: CustomerPaymentResultDto['allocations'];
+    allocations: CustomerPaymentDto['allocations'];
     credit: CustomerCreditDto | null;
   }>(
     db,
@@ -275,7 +218,6 @@ export async function readCustomerPaymentResult(
     reference: row.reference,
     allocations: row.allocations,
     credit: row.credit,
-    replayed,
   };
 }
 
@@ -335,10 +277,11 @@ export async function readCustomerCreditApplicationResult(
 /**
  * The GET reads of this slice.
  *
- * `payments.collect` gates the read of a payment — the `GET
- * /v1/sales/:saleId` precedent, where the writer's key reads what it wrote —
- * and `receivables.view` gates a customer's credit list, because a credit
- * balance is a receivable-surface fact and is business-wide (a credit is the
+ * `receivables.view` gates BOTH: the read of one payment and a customer's
+ * credit list. A read is gated on the READ key — `GET /v1/sales/:saleId`
+ * requires `sales.view` and not `sales.create`, and the settlement mirror
+ * reads under `suppliers.view` and not `suppliers.pay`. A credit balance is a
+ * receivable-surface fact and is business-wide besides (a credit is the
  * customer's across every branch).
  *
  * The permission is checked here as well as by the route decorator. The
@@ -349,9 +292,9 @@ export async function readCustomerCreditApplicationResult(
 export class ReceivablesReadService {
   constructor(@Inject(Database) private readonly db: Database) {}
 
-  async getCustomerPayment(m: MembershipContext, paymentId: string): Promise<CustomerPaymentResultDto> {
-    if (!hasPermission(m.roles, 'payments.collect')) throw receivablesRefusal('customer_payment.not_found');
-    return readCustomerPaymentResult(this.db, m, paymentId, false);
+  async getCustomerPayment(m: MembershipContext, paymentId: string): Promise<CustomerPaymentDto> {
+    if (!hasPermission(m.roles, 'receivables.view')) throw receivablesRefusal('customer_payment.not_found');
+    return readCustomerPayment(this.db, m, paymentId);
   }
 
   /** A customer's credits, newest first. Both halves of the remaining pair; no derived status. */

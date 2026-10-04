@@ -87,6 +87,60 @@ import {
 const read = (root: string, rel: string): string => readFileSync(join(root, rel), 'utf8');
 const has = (root: string, rel: string): boolean => existsSync(join(root, rel));
 
+/**
+ * The SQL statement beginning at `from`, ending at the first semicolon that
+ * actually TERMINATES it — never one inside a single-quoted literal or a
+ * comment.
+ *
+ * Slicing SQL at the first `;` anywhere cuts a statement in half the moment
+ * its own text contains a semicolon, and a DESCRIPTION column is English
+ * prose. A multi-row INSERT whose first description carries a `;` was read as
+ * its first row only, so the rows after it looked unregistered and the gate
+ * reported a finding on a correct tree — the worst kind, because it teaches
+ * the next reader to disbelieve the gate.
+ *
+ * Handled: single-quoted literals, including the doubled `''` that is a
+ * literal's own escape for a quote; line comments and block comments, whose
+ * prose may hold an apostrophe that would otherwise read as opening a
+ * literal. NOT handled: dollar-quoting — nothing here slices a routine body,
+ * which every other claim reads whole.
+ *
+ * Returns the statement INCLUDING its semicolon, or null when it is never
+ * terminated. A caller that cannot read a statement must stay LOUD: null is
+ * not "nothing to check".
+ */
+export function readSqlStatement(sql: string, from: number): string | null {
+  let literal = false;
+  for (let i = from; i < sql.length; i += 1) {
+    const ch = sql[i];
+    if (literal) {
+      if (ch !== "'") continue;
+      // `''` is an escaped quote WITHIN the literal, not its end.
+      if (sql[i + 1] === "'") i += 1;
+      else literal = false;
+      continue;
+    }
+    if (ch === "'") {
+      literal = true;
+      continue;
+    }
+    if (ch === '-' && sql[i + 1] === '-') {
+      const nl = sql.indexOf('\n', i);
+      if (nl < 0) return null;
+      i = nl;
+      continue;
+    }
+    if (ch === '/' && sql[i + 1] === '*') {
+      const end = sql.indexOf('*/', i + 2);
+      if (end < 0) return null;
+      i = end + 1;
+      continue;
+    }
+    if (ch === ';') return sql.slice(from, i + 1);
+  }
+  return null;
+}
+
 /** This file, relative to a repository root: the subject of its own closure rules. */
 export const SELF = 'scripts/phase4-s4-gate.ts';
 
@@ -379,8 +433,13 @@ export function settlementContractProblems(sql: string): string[] {
   // The RULED source types, in the same universally-quantified shape: a type
   // added to the ruling is checked without another claim being written.
   const insertRows = (table: string): string => {
-    const hit = new RegExp(String.raw`insert\s+into\s+(?:public\.)?${table}\b[\s\S]*?;`, 'i').exec(sql);
-    return hit === null ? '' : hit[0];
+    // The statement is found by its HEAD and then read to its real end by
+    // `readSqlStatement`, so a semicolon inside a description does not end it.
+    const hit = new RegExp(String.raw`insert\s+into\s+(?:public\.)?${table}\b`, 'i').exec(sql);
+    if (hit === null) return '';
+    // An unterminated statement reads as NO rows, which leaves the
+    // registration claims below to report every type — loud, not silent.
+    return readSqlStatement(sql, hit.index) ?? '';
   };
   const registry = insertRows('accounting_source_types');
   const kinds = insertRows('accounting_operation_kinds');
@@ -427,6 +486,32 @@ export function settlementContractProblems(sql: string): string[] {
 export function newRelationCoverageProblems(root: string): string[] {
   const problems = [...predicateCoverageProblems(), ...phase4RlsForceStructuralProblems(root)];
   const files = candidateMigrations(root);
+  const surface = files.map((f) => read(root, `${MIGRATIONS_SUBDIR}/${f}`)).join('\n');
+
+  // ── NON-VACUITY, ASSERTED BEFORE ANY PROPERTY IS ─────────────────────
+  //
+  // Every law below has the shape "discover the relations this text declares,
+  // then judge each one", and a law of that shape PASSES over an empty set.
+  // So a tree with no candidate migration — or one declaring none of this
+  // slice's relations — would report `ok` for a surface that is merely
+  // ABSENT, which is the one verdict a gate must never give. The subject is
+  // derived from the contract and from the migration text; nothing here is a
+  // count written down that a later slice would have to bump.
+  if (CONTRACT_RELATIONS.length === 0)
+    problems.push('CONTRACT_RELATIONS is empty — the predicate-coverage law has no subject at all and could not refuse anything');
+  if (files.length === 0)
+    problems.push(
+      `no candidate migration is on disk, so every relation law below judged an empty set — this slice's surface is ${CONTRACT_RELATIONS.join(', ')}, and a check that discovers none of it is reporting ABSENCE, not correctness`,
+    );
+  else {
+    const declared = discoverSalesTables(surface);
+    const found = CONTRACT_RELATIONS.filter((r) => declared.includes(r));
+    if (found.length === 0)
+      problems.push(
+        `the candidate surface (${files.join(', ')}) declares none of ${CONTRACT_RELATIONS.join(', ')} — the RLS/FORCE, G-3 vocabulary and settlement-contract laws below all judged an empty set, so their silence is not evidence`,
+      );
+  }
+
   for (const file of files) {
     const sql = read(root, `${MIGRATIONS_SUBDIR}/${file}`);
     // Per FILE: the relation-level laws, so the diagnostic names the file the
@@ -438,8 +523,7 @@ export function newRelationCoverageProblems(root: string): string[] {
   // migrations — the relations and guards in `0067`, the commands in `0068` —
   // so a ruled routine living in a different candidate file than the relation
   // it serves is a lawful shape, and judging each file alone would refuse it.
-  for (const p of settlementContractProblems(files.map((f) => read(root, `${MIGRATIONS_SUBDIR}/${f}`)).join('\n')))
-    problems.push(`the candidate settlement surface (${files.join(', ') || 'none'}): ${p}`);
+  for (const p of settlementContractProblems(surface)) problems.push(`the candidate settlement surface (${files.join(', ') || 'none'}): ${p}`);
   return problems;
 }
 
@@ -737,7 +821,7 @@ function walk(root: string, dir: string): string[] {
 export interface Discovery {
   /** The files the rule matched and the runner would execute. */
   readonly suites: readonly string[];
-  /** Files the rule matched that the ROOT runner would never pick up — a finding, never an omission. */
+  /** Suite-like files the rule matched that the ROOT runner would never pick up — a finding, never an omission. A non-suite helper is not one of these. */
   readonly unrunnable: readonly string[];
 }
 
@@ -750,7 +834,14 @@ export function discoverS4Suites(root: string): Discovery {
     const inGoldenDir = file.startsWith(`${S4_GOLDEN_DIR}/`);
     if (!S4_BASENAME.test(base) && !inGoldenDir) continue;
     if (RUNNABLE.test(base)) matched.add(file);
-    else if (SUITE_LIKE.test(base) || inGoldenDir) unrunnable.push(file);
+    // A matched file the runner would not execute is a finding only when it
+    // LOOKS LIKE A SUITE (`.spec.ts`, `.test.tsx`, …): that is a suite the
+    // runner silently drops. A plain `.ts` in the golden directory is a
+    // SHARED HELPER, which is the accepted pattern there — the P4-S2 goldens
+    // keep `harness.ts`, `sale-path.ts` and `atomic-sale-law.ts` beside their
+    // suites and import from them. The test is still derived from the tree:
+    // it asks what the file is NAMED, never which names are allowed.
+    else if (SUITE_LIKE.test(base)) unrunnable.push(file);
   }
   return { suites: [...matched].sort(), unrunnable: unrunnable.sort() };
 }

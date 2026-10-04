@@ -770,6 +770,15 @@ export function derivedChildId(parentId: string, i: number): string {
  * the merchant sentence RENDERED from that code rather than composed by the
  * server (P4-AL-16). So: the code is looked for anywhere in the typed details,
  * which is a law about the refusal and not a copy of the module's DTO.
+ *
+ * WHICH KEY carries the code is left open; WHICH CODE it is, is not. The
+ * comparison is of the FULL dotted code. It previously also accepted any seen
+ * string ending in the expected code's last segment, which made every "the
+ * refusal names X" assertion a claim about a SUFFIX: `customer_payment.
+ * customer_mismatch` satisfied an expectation of `invoice_settlement.
+ * customer_mismatch`, and so would any code at all ending `.customer_mismatch`
+ * — the namespace is what distinguishes the verifier's refusal from a route's,
+ * so dropping it dropped the thing being asserted.
  */
 export function refusalCode(res: Response, expected: string): string | null {
   const seen: string[] = [];
@@ -786,5 +795,5 @@ export function refusalCode(res: Response, expected: string): string | null {
     if (value !== null && typeof value === 'object') for (const v of Object.values(value)) walk(v, depth + 1);
   };
   walk((res.body as { error?: unknown } | undefined)?.error, 0);
-  return seen.find((s) => s === expected || s.endsWith(`.${expected.split('.').slice(-1)[0] ?? ''}`)) ?? null;
+  return seen.find((s) => s === expected) ?? null;
 }

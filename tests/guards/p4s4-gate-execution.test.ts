@@ -35,7 +35,16 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { executeSuites } from '../../scripts/phase4-s2-gate';
-import { CI_COMPOSITION_SUITE, discoverS4Suites, rosterFiles, rosterProblems, rosterRedProofProblems, rosterRows } from '../../scripts/phase4-s4-gate';
+import {
+  CI_COMPOSITION_SUITE,
+  discoverS4Suites,
+  readSqlStatement,
+  rosterFiles,
+  rosterProblems,
+  rosterRedProofProblems,
+  rosterRows,
+  S4_GOLDEN_DIR,
+} from '../../scripts/phase4-s4-gate';
 
 const REPO = join(__dirname, '..', '..');
 const temporaries: string[] = [];
@@ -90,6 +99,33 @@ describe('the roster rule derives a real set from the tree, and refuses the ways
     expect(rosterProblems(root).join('\n')).toContain('would be committed and never executed');
   });
 
+  it('red: a suite-like file planted in the GOLDEN directory is still named, while a shared helper beside it is not', () => {
+    // The golden directory is swept in wholesale, so the rule has to tell a
+    // dropped SUITE from a shared helper. Both live here at once: only the
+    // suite-like one is a "committed and never executed" finding.
+    const root = scratch({
+      [`${S4_GOLDEN_DIR}/01-real.golden.test.ts`]: GREEN,
+      [`${S4_GOLDEN_DIR}/02-planted.golden.spec.ts`]: GREEN,
+      [`${S4_GOLDEN_DIR}/harness.ts`]: 'export const requireSubject = (): void => {};\n',
+      [CI_COMPOSITION_SUITE]: GREEN,
+    });
+    const { suites, unrunnable } = discoverS4Suites(root);
+    // The planted suite is reported — the corrected rule can still go red.
+    expect(unrunnable).toEqual([`${S4_GOLDEN_DIR}/02-planted.golden.spec.ts`]);
+    expect(rosterProblems(root).join('\n')).toContain('would be committed and never executed');
+    // The helper is neither a finding nor handed to the runner as a suite.
+    expect(unrunnable).not.toContain(`${S4_GOLDEN_DIR}/harness.ts`);
+    expect(suites).toEqual([`${S4_GOLDEN_DIR}/01-real.golden.test.ts`]);
+    // And with the planted suite removed, the helper alone leaves the rule clean.
+    const clean = scratch({
+      [`${S4_GOLDEN_DIR}/01-real.golden.test.ts`]: GREEN,
+      [`${S4_GOLDEN_DIR}/harness.ts`]: 'export const requireSubject = (): void => {};\n',
+      [CI_COMPOSITION_SUITE]: GREEN,
+    });
+    expect(discoverS4Suites(clean).unrunnable).toEqual([]);
+    expect(rosterProblems(clean)).toEqual([]);
+  });
+
   it('red: a rostered LAW with no planted-defect title is named, and the same file with one is not', () => {
     const bad = scratch({ 'tests/guards/p4s4-law.test.ts': NO_RED_TITLE, [CI_COMPOSITION_SUITE]: GREEN });
     expect(rosterRedProofProblems(bad).join('\n')).toContain('no it( title announces a planted defect');
@@ -140,5 +176,65 @@ describe('the roster is EXECUTED, and the verdict is the spawn result’s — no
     const e = executeSuites(root, rosterRows(root), 60_000);
     expect(e.ran).toBe(false);
     expect(e.problems.join('\n')).toMatch(/does not exist|execute nothing/);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+
+describe('the gate reads a SQL statement to its real end, not to the first semicolon', () => {
+  // A multi-row INSERT in the shape a migration actually writes: the FIRST
+  // description carries a semicolon, so a reader that stops at the first `;`
+  // anywhere sees row one only and reports rows two and three as missing — a
+  // finding on a correct tree.
+  const INSERT = [
+    'INSERT INTO accounting_operation_kinds (operation_kind, source_type, description) VALUES',
+    "  ('post', 'alpha_kind', 'Alpha; derived by the first command.'),",
+    "  ('post', 'beta_kind', 'Beta; derived by the second command.'),",
+    "  ('post', 'gamma_kind', 'Gamma; derived by the third command.');",
+    '',
+    'SELECT 1;',
+  ].join('\n');
+
+  it('reads a statement whose literals contain semicolons WHOLE, so every row is seen', () => {
+    const statement = readSqlStatement(INSERT, 0);
+    expect(statement, 'the statement was not terminated at all').not.toBeNull();
+    // All three rows are inside the one statement…
+    for (const kind of ['alpha_kind', 'beta_kind', 'gamma_kind']) {
+      expect(statement, `${kind} fell outside the statement the reader returned`).toContain(kind);
+    }
+    // …and it stops at its OWN terminator, not at the next statement's.
+    expect(statement?.endsWith(';')).toBe(true);
+    expect(statement, 'the reader ran past the statement into the next one').not.toContain('SELECT 1');
+    // red: this is what the first-semicolon reader returned instead.
+    const naive = /insert\s+into\s+accounting_operation_kinds\b[\s\S]*?;/i.exec(INSERT)?.[0] ?? '';
+    expect(naive, 'the naive reader is the subject of this claim and must still be wrong').not.toContain('gamma_kind');
+  });
+
+  it('a doubled quote inside a literal does not end it, so a semicolon after it is still inside', () => {
+    // `''` is a literal's own escape for a quote. Reading it as the literal's
+    // END would put the following `;` outside, and cut the statement there.
+    const sql = "INSERT INTO t (d) VALUES ('a customer''s payment; derived'), ('second');\nSELECT 2;";
+    const statement = readSqlStatement(sql, 0);
+    expect(statement).toContain("'second'");
+    expect(statement).not.toContain('SELECT 2');
+    expect(statement?.endsWith(';')).toBe(true);
+  });
+
+  it('a comment’s apostrophe does not open a literal', () => {
+    const sql = ['INSERT INTO t (d) VALUES', "  -- don't let this comment; confuse the reader", "  ('row one'), ('row two');", 'SELECT 3;'].join('\n');
+    const statement = readSqlStatement(sql, 0);
+    expect(statement).toContain("'row two'");
+    expect(statement).not.toContain('SELECT 3');
+  });
+
+  it('red: a genuinely UNTERMINATED statement is reported as unreadable, never as an empty success', () => {
+    // No terminator anywhere. The reader must say so, so the caller can stay
+    // loud instead of treating "no rows" as "nothing to check".
+    expect(readSqlStatement("INSERT INTO t (d) VALUES ('no terminator here')", 0)).toBeNull();
+    // An unterminated LITERAL swallows the rest of the text, terminator and
+    // all — also unreadable, and also not silently a statement.
+    expect(readSqlStatement("INSERT INTO t (d) VALUES ('unclosed literal;", 0)).toBeNull();
+    // An unclosed block comment likewise.
+    expect(readSqlStatement('INSERT INTO t (d) VALUES /* unclosed; ', 0)).toBeNull();
   });
 });

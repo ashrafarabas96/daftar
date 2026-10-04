@@ -44,6 +44,7 @@
  * NOT re-written here: they are imported from the accepted P4-S2 harness,
  * because a mechanism described twice drifts.
  */
+import { createHash, randomUUID } from 'node:crypto';
 import type { Client } from 'pg';
 import { expect } from 'vitest';
 import { must, type Queryable } from '../phase4-s2/harness';
@@ -628,6 +629,71 @@ export async function cloneRow(
   // A clone of an absent row inserts nothing, and a planted proof that planted
   // nothing would then "pass" because the law had nothing to refuse.
   if (r.rowCount !== 1) throw new Error(`cloneRow: ${relation} row (${businessId}, ${sourceId}) is absent, so nothing was planted and no law was exercised`);
+}
+
+/**
+ * PLANT A SETTLEMENT ROW SO THAT THE LAW UNDER TEST IS THE ONE THAT ANSWERS.
+ *
+ * Every settling relation of `0081` carries a BEFORE INSERT guard that refuses
+ * a row written outside its own command's transaction:
+ *
+ *   - `payment_allocation_guard()` (`0081:945-953`) demands the row's
+ *     `created_at = now()` AND that its PAYMENT was created by this very
+ *     transaction — the payment's `created_at = now()` and its
+ *     `business_transaction_id = inventory_business_transaction_id()`;
+ *   - `customer_credit_application_guard()` (`0081:1087-1090`) demands the
+ *     row's own `created_at = now()` and matching trace.
+ *
+ * A plant that cloned an accepted row therefore died on `P0001
+ * customer_payment.immutable` BEFORE reaching the deferred verifier or the
+ * unique index it was aimed at, and the proof proved nothing about the law it
+ * names. This helper satisfies the immutability guards and NOTHING ELSE, so
+ * the next thing to speak is the law under test:
+ *
+ *   - it sets `app.business_transaction_id` to a fresh trace;
+ *   - it stamps `created_at` from the transaction's OWN `now()`, read back
+ *     rather than written as a literal, because the guards compare for exact
+ *     equality;
+ *   - for `payment_allocations` it first clones the owning PAYMENT under that
+ *     trace, so the planted allocation has a payment of this transaction to
+ *     join, and gives that payment its own `intent_sha256` because two
+ *     payments may not share one document digest.
+ *
+ * It deliberately does not touch the deferred COMMIT verifiers: the caller runs
+ * inside `inRolledBackTx`, so they never fire, and the caller either invokes the
+ * verifier directly or lets an immediate constraint answer.
+ */
+export async function plantSettlementRow(
+  c: Client,
+  relation: 'payment_allocations' | 'customer_credit_applications',
+  businessId: string,
+  sourceId: string,
+  overrides: Readonly<Record<string, string | number | null>>,
+): Promise<void> {
+  const trace = randomUUID();
+  const stamp = await c.query<{ now: string }>(`SELECT now()::text AS now`);
+  const createdAt = must(stamp.rows[0], 'the planting transaction’s own now()').now;
+  await c.query(`SELECT set_config('app.business_transaction_id', $1, true)`, [trace]);
+
+  const own: Record<string, string | number | null> = { created_at: createdAt };
+  if (relation === 'payment_allocations') {
+    const owner = await c.query<{ payment_id: string }>(`SELECT payment_id::text AS payment_id FROM payment_allocations WHERE business_id = $1 AND id = $2`, [
+      businessId,
+      sourceId,
+    ]);
+    const sourcePaymentId = must(owner.rows[0], `the payment of allocation ${sourceId}`).payment_id;
+    const paymentId = randomUUID();
+    await cloneRow(c, 'payments', businessId, sourcePaymentId, {
+      id: paymentId,
+      business_transaction_id: trace,
+      created_at: createdAt,
+      intent_sha256: createHash('sha256').update(paymentId).digest('hex'),
+    });
+    own['payment_id'] = paymentId;
+  } else {
+    own['business_transaction_id'] = trace;
+  }
+  await cloneRow(c, relation, businessId, sourceId, { ...own, ...overrides });
 }
 
 export interface VerifierWiring {

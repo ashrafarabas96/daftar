@@ -50,11 +50,11 @@ import { requireSubject } from '../golden-regression/phase4-s2/harness';
 import {
   chainBreaks,
   chainTotals,
-  cloneRow,
   derivedRead,
   inRolledBackTx,
   invoiceChain,
   must,
+  plantSettlementRow,
   raised,
   type ChainStep,
 } from '../golden-regression/phase4-s4/harness';
@@ -331,13 +331,26 @@ describe('P4-S4 the oldest-first chain over an invoice', () => {
       chain.find((s) => s.relation === 'payment_allocations'),
       'a lawful payment allocation of this chain to clone',
     );
+    // THE PLANT HAS TO REACH THE INDEX. `payment_allocation_guard()` is a
+    // BEFORE INSERT trigger that refuses any allocation whose payment was not
+    // created by THIS transaction (`0081:945-953`), so a clone that pointed at
+    // the accepted payment was refused `P0001 customer_payment.immutable: an
+    // allocation joins only a payment created by the same transaction` — an
+    // EARLIER guard pre-empting the one under test, which left the
+    // chain-uniqueness law unexercised and this proof proving nothing.
+    //
+    // `plantSettlementRow` satisfies that immutability guard and nothing else,
+    // so the UNIQUE index is the next thing to speak: the clone keeps the
+    // accepted row's `invoice_id` and chain position, so it collides with the
+    // accepted allocation on
+    // `(business_id, invoice_id, ar_released_before_txn_minor)`.
     const outcome = await inRolledBackTx(
       () => ownerClient(),
       w.shop,
       async (c) => {
         const newId = randomUUID();
         return raised(() =>
-          cloneRow(c, 'payment_allocations', w.shop.businessId, source.id, {
+          plantSettlementRow(c, 'payment_allocations', w.shop.businessId, source.id, {
             id: newId,
             binding_source_id: newId,
           }),

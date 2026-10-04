@@ -28,10 +28,22 @@ import { receivablesRefusal } from './receivables-errors';
  *
  * **The intent is REQUEST-ONLY.** Every FX snapshot, base amount, release,
  * dust and realized figure, the posting account and the created credit's
- * carrying base are DERIVED and are deliberately excluded, so the comparison
- * can happen before any state is read and a moved rate is not a false
- * conflict (`0068:585-600`, `0078:558-567`,
- * `[[daftar-registry-before-state]]`). Child ids are part of the intent, and
+ * carrying base are DERIVED and are deliberately excluded, so a moved rate is
+ * not a false conflict (`0068:585-600`, `0078:558-567`,
+ * `[[daftar-registry-before-state]]`).
+ *
+ * REQUEST-ONLY IS NOT THE SAME AS BEFORE-ANY-READ, and the distinction is what
+ * `payments.intent_sha256` actually requires. What the rule forbids in an
+ * intent is a value the server DERIVES from movable state — a rate, a base, a
+ * release, a dust, a realized amount, a posting account — because such a value
+ * turns a retry into a conflict. The payment currency is not one of those: it
+ * is the client's own code, or, when the client stated NULL, the business's
+ * `base_currency`, an IMMUTABLE business attribute. Resolving it costs one read
+ * of a column that cannot move, and the same request therefore digests
+ * identically for ever — the argument `receivables.schemas.ts`' header already
+ * makes. So the payment's intent binds the RESOLVED currency, which is what
+ * `0081:1859` signs, and `customer-payment.service.ts` reads state before the
+ * digest to have it. Child ids are part of the intent, and
  * are idempotency keys in their own right: an allocation id already stored
  * under another payment is `customer_payment.allocation_id_reused`, a stable
  * domain refusal and never a raw primary-key violation (R-74,
@@ -70,28 +82,42 @@ import { receivablesRefusal } from './receivables-errors';
  * in the first place — the services call it to re-establish the code at the
  * point of use, and it now always succeeds.
  *
- * ## ONE KNOWN DIVERGENCE FROM `0081`, NOT FIXED HERE
+ * ## THE DIVERGENCE FROM `0081` THAT WAS HERE, AND HOW IT WAS CLOSED
  *
- * `collectIntentFields` below does NOT reproduce the intent
- * `customer_collect_payment` computes, in two ways, and both are visible in
+ * `collectIntentFields` used to compute a DIFFERENT intent from the one
+ * `customer_collect_payment` computes, in two ways, both visible in
  * `0081:1851-1865`:
  *
  *   - the routine signs `lower(p_currency_code::text)` — the SERVER-RESOLVED
- *     currency, non-NULL by its own shape check — where this file signs the
- *     client's raw nullable `currency`;
- *   - the routine's intent carries `p_credit_amount_minor` (recorded in the
- *     routine's own COMMENT at `0081:2151` as part of the request-only intent)
- *     where this file omits it, so the two streams differ in length.
+ *     currency, non-NULL by its own shape check (`0081:1877-1881`) — where this
+ *     file signed the client's raw NULLABLE `currency`;
+ *   - the routine's intent carries `p_credit_amount_minor` (`0081:1861`, and
+ *     named in the routine's own COMMENT at `0081:2151` as part of the
+ *     request-only intent) where this file omitted it, so the two streams
+ *     differed in LENGTH — 16 header fields against the routine's 17.
  *
- * `customer-payment.service.ts:517` compares this file's digest against the
- * value the ROUTINE stored, so while they disagree every replay of a stored
- * payment is a false `customer_payment.idempotency_conflict`. The package's
- * `INVENTORY_OPERATION_INTENT_FIELDS` entry follows `0081`, because
- * `payments.intent_sha256` is a stored database fact and the registry is
- * permanent. Closing the gap on this side is a change to WHICH currency the
- * service may know before it reads state, which is the service's own documented
- * constraint (`customer-payment.service.ts:502-504`) and the `0081` argument
- * boundary of `P4_S4_REQUIRED_WIRING`' fourth row — not a package edit.
+ * `customer-payment.service.ts` compares this file's digest against the value
+ * the ROUTINE stored, so the two disagreed on every single payment and EVERY
+ * REPLAY OF A STORED PAYMENT WAS A FALSE
+ * `customer_payment.idempotency_conflict` — a silent product fault: the second
+ * delivery of a request the client is entitled to retry was refused as a
+ * different command.
+ *
+ * The migration won, on both counts, because `payments.intent_sha256` is what
+ * the routine computes and stores and this file only reproduces it:
+ *
+ *   - the currency is resolved BEFORE the digest. The service's state read now
+ *     runs ahead of it, which costs one read of an immutable column and makes
+ *     the stated/resolved pair unnecessary — `resolvedCurrency` is gone and
+ *     `currency` is one field carrying the resolved code on both sides.
+ *   - `credit_amount` is DERIVED HERE from the request (`surplusMinor`), never
+ *     passed in, so no caller can state a third version of it and the two sides
+ *     cannot drift apart again.
+ *
+ * `packages/inventory/src/payload.ts`' `INVENTORY_OPERATION_INTENT_FIELDS`
+ * entry already followed `0081`, and now this file agrees with both. The proof
+ * is a REPLAY against the real routine, not a comparison of two field lists:
+ * `tests/integration/p4s4-intent-replay.test.ts`.
  */
 
 /**
@@ -188,16 +214,28 @@ export interface CollectPaymentIntentInput {
   /** `YYYY-MM-DD`, bound by the client: a command reads no clock. */
   readonly paymentDate: string;
   /**
-   * The payment currency `P`, upper-case ISO, **exactly as the client stated
-   * it** — NULL included, which means "the business's base currency".
+   * The payment currency `P`, upper-case ISO: the RESOLVED code — the client's
+   * own value when it stated one, the business's `base_currency` when it stated
+   * NULL. Never nullable, on either side of the digest.
    *
-   * The intent digest binds the client's own value and never the resolved one,
-   * which is what keeps it request-only and computable before any state is
-   * read. The RESOLVED code is a payload field (`resolvedCurrency`), on the
-   * post-state side of the same split that keeps every rate, base and release
-   * out of the intent.
+   * This is the routine's `p_currency_code`, and the routine signs the SAME
+   * expression into both digests: `lower(p_currency_code::text)` in the payload
+   * consume (`0081:1820`) and again in the request-only intent (`0081:1859`),
+   * over a `CHAR(3)` its own shape check refuses as NULL (`0081:1877-1881`).
+   * So there is no stated/resolved pair here and this field is ONE field: the
+   * accepted `supplier.pay` intent binds its resolved `currency` identically
+   * (`payload.ts`' `INVENTORY_OPERATION_INTENT_FIELDS` entry).
+   *
+   * Resolving it before the digest keeps the intent request-only in the sense
+   * that matters. A business's `base_currency` is an IMMUTABLE business
+   * attribute, not a figure the server derives from movable state — the
+   * argument `receivables.schemas.ts`' header already makes — so the same
+   * request digests identically for ever. What `P4-AL-18` and
+   * `[[daftar-registry-before-state]]` forbid in an intent is a DERIVED value
+   * that moves between two retries: a rate, a base, a release, a dust, a
+   * realized amount, a posting account. None of those is here.
    */
-  readonly currency: string | null;
+  readonly currency: string;
   readonly amountMinor: bigint;
   readonly reference: string | null;
   /**
@@ -233,17 +271,41 @@ function assertAllocations(input: CollectPaymentIntentInput): void {
   }
 }
 
+/**
+ * The surplus credit's stated amount `OA`, DERIVED HERE from the request
+ * alone: `amount − Σ payment_amount`, in the payment currency. NULL exactly
+ * when the payment is fully allocated, which `assertAllocations` has already
+ * tied to `creditId` being NULL.
+ *
+ * It is derived rather than passed in on purpose. The routine's intent carries
+ * `p_credit_amount_minor` (`0081:1861`, and the routine's own COMMENT at
+ * `0081:2151` names "the credit id and amount" as part of the request-only
+ * intent), and it is request-only precisely because it is a function of stated
+ * figures: a client that asked for a different surplus asked for a different
+ * command (R-87). Computing it from the same two inputs the digest already
+ * binds means the caller cannot state a third version of it, so this side and
+ * the routine cannot drift apart again.
+ */
+function surplusMinor(input: CollectPaymentIntentInput): bigint | null {
+  if (input.creditId === null) return null;
+  let allocated = 0n;
+  for (const a of input.allocations) allocated += a.paymentAmountMinor;
+  return input.amountMinor - allocated;
+}
+
 function collectIntentFields(input: CollectPaymentIntentInput): InventoryPayloadField[] {
   assertAllocations(input);
+  const surplus = surplusMinor(input);
   const fields: InventoryPayloadField[] = [
     uuid(input.paymentId, 'payment_id'),
     uuid(input.customerId, 'customer_id'),
     uuid(input.paymentMethodId, 'payment_method_id'),
     int(yyyymmdd(input.paymentDate)),
-    input.currency === null ? { kind: 'null' } : code(input.currency),
+    code(input.currency),
     int(input.amountMinor),
     ...referenceWords(input.reference),
     nullable(input.creditId, 'credit_id'),
+    surplus === null ? { kind: 'null' } : int(surplus),
     int(BigInt(input.allocations.length)),
   ];
   for (const a of input.allocations) {
@@ -280,15 +342,14 @@ export interface CollectPaymentPayloadInput extends CollectPaymentIntentInput {
   readonly rate: ReceivableRateFields;
   /** `Σ pb_i` plus the surplus credit's carrying base — never `conv(Σ p_i)`. */
   readonly baseAmountMinor: bigint;
-  /** The surplus credit's `(OA, OB)`, or NULL when the payment is fully allocated. */
-  readonly credit: { readonly originalAmountMinor: bigint; readonly originalCarryingBaseMinor: bigint } | null;
   /**
-   * The payment currency the SERVER resolved: the client's `currency` when it
-   * stated one, the business's `base_currency` when it stated NULL. This is
-   * the code the routine stores, every line carries and the FX snapshot was
-   * taken for — so it is a payload field and never an intent field.
+   * The surplus credit's `(OA, OB)`, or NULL when the payment is fully
+   * allocated. `OA` must equal the surplus the INTENT derived from the request
+   * (`amount − Σ payment_amount`); `OB` is its carrying base, a conversion at
+   * the resolved rate and therefore derived, which is why it is here and not in
+   * the intent.
    */
-  readonly resolvedCurrency: string;
+  readonly credit: { readonly originalAmountMinor: bigint; readonly originalCarryingBaseMinor: bigint } | null;
   readonly allocations: readonly CollectPaymentPayloadAllocation[];
 }
 
@@ -309,7 +370,7 @@ export function customerCollectPaymentPayload(input: CollectPaymentPayloadInput)
   let baseTotal = 0n;
   for (const a of input.allocations) {
     if (a.realizedFxMinor !== a.paymentBaseMinor - a.carryingReleasedMinor) invalid('realized must be payment_base - carrying_released');
-    if (a.invoiceCurrency.toUpperCase() === input.resolvedCurrency.toUpperCase() && a.paymentAmountMinor !== a.appliedMinor) {
+    if (a.invoiceCurrency.toUpperCase() === input.currency.toUpperCase() && a.paymentAmountMinor !== a.appliedMinor) {
       invalid('a payment in the invoice currency pays exactly what it applies');
     }
     baseTotal += a.paymentBaseMinor;
@@ -317,13 +378,21 @@ export function customerCollectPaymentPayload(input: CollectPaymentPayloadInput)
   if (input.credit !== null) baseTotal += input.credit.originalCarryingBaseMinor;
   if (input.baseAmountMinor !== baseTotal) invalid('the payment base must be the sum of the allocation bases and the surplus credit base');
   if ((input.credit === null) !== (input.creditId === null)) invalid('a surplus credit and its id are stated together');
+  // The payload's `OA` and the intent's derived surplus are the SAME number in
+  // the routine's two digests (`0081:1861` signs `p_credit_amount_minor` into
+  // the intent and `0081:1822` into the payload), so a bound credit whose
+  // original amount is not the surplus the request implies would sign two
+  // streams that disagree about one argument.
+  if (input.credit !== null && input.credit.originalAmountMinor !== surplusMinor(input)) {
+    invalid('the surplus credit must be the payment amount less everything it allocates');
+  }
   const fields: InventoryPayloadField[] = [
     uuid(input.paymentId, 'payment_id'),
     uuid(input.customerId, 'customer_id'),
     uuid(input.paymentMethodId, 'payment_method_id'),
     uuid(input.postingAccountId, 'posting_account_id'),
     int(yyyymmdd(input.paymentDate)),
-    code(input.resolvedCurrency),
+    code(input.currency),
     int(input.amountMinor),
     ...rateFields(input.rate),
     int(input.baseAmountMinor),
