@@ -1288,11 +1288,27 @@ export function invoiceReducerProblems(root: string): string[] {
       );
       continue;
     }
-    // The refund check reads the WHOLE body, string literals included, and that
+    // The refund check reads the WHOLE body, string literals INCLUDED, and that
     // is deliberate: `EXECUTE 'SELECT … FROM public.refunds'` is a read, and a
-    // reader of the derived receivable has no business naming a refund
-    // relation in any form. Over-reporting here is a loud finding with the
-    // routine's name in it; under-reporting is a second reduction nobody sees.
+    // reader of the derived receivable has no business naming a refund relation
+    // in any form. The asymmetry with the precondition above is the point. Over-
+    // reporting here is a loud failure carrying the routine's own name; under-
+    // reporting is a second reduction of a customer's receivable that nobody
+    // sees. On a financial law that is not a close call.
+    //
+    // THE COST OF THAT CHOICE, NAMED SO THE NEXT PERSON MEETS IT EXPLAINED
+    // RATHER THAN DISCOVERING IT. The day someone writes a refusal code inside
+    // a receivable reader whose text literally contains a refund relation name
+    // — `'invoice_outstanding.refunds_not_a_reducer'` is exactly the name a
+    // future author would reach for — this check goes RED on a text that is not
+    // a defect. That is KNOWN, and it is the DELIBERATE direction of the error.
+    //
+    // The remedy is to NARROW the check to the read shapes — a `FROM`, a
+    // `JOIN`, an `UPDATE`/`INSERT INTO`, a `SELECT … FROM` inside an `EXECUTE`
+    // string — so that a refund named in a message is distinguished from a
+    // refund that is read. The remedy is NOT to widen it to ignore literals
+    // wholesale: that would hand back dynamic SQL, which is a read, and a
+    // false green on this law is a receivable reduced twice.
     const refund = REFUND_VOCABULARY.exec(executable);
     if (refund !== null)
       problems.push(
