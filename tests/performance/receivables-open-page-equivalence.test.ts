@@ -691,12 +691,29 @@ describe('P4-S4 0084 — the open-invoice page reader', () => {
     expect(offenders, `these files still filter on the settlement function's output: ${offenders.join(', ')}`).toEqual([]);
   });
 
-  it('§11 the migration that owns the reader is 0084, and it is the only migration this pass adds', () => {
+  it('§11 the migration that owns the reader is 0084, and each corrective pass appends exactly one serial', () => {
     const files = readdirSync(MIGRATIONS_DIR)
       .filter((f) => f.endsWith('.sql'))
       .sort();
     const beyond = files.filter((f) => f > '0083_zzz');
-    expect(beyond.length, `migrations beyond 0083: ${beyond.join(', ')}`).toBeLessThanOrEqual(1);
-    expect(beyond[0] ?? '0084_missing').toMatch(/^0084_/);
+    // ONE SERIAL PER CORRECTIVE PASS, and the serials are pinned EXACTLY
+    // rather than merely bounded. `0084` is this reader's own migration;
+    // `0085` is the allocation-recompute pass that followed it, which
+    // replaces `customer_collect_payment` and adds nothing to this reader.
+    // Pinning the list exactly keeps this red for the case the bound was
+    // written for — a pass that quietly appended a SECOND serial of its own —
+    // and additionally catches a renamed or reordered serial, which the
+    // bound did not.
+    expect(
+      beyond.map((f) => f.slice(0, 4)),
+      `migrations beyond 0083: ${beyond.join(', ')}`,
+    ).toEqual(['0084', '0085']);
+    // And the reader really is 0084's, which the old assertion only claimed
+    // in its name: EXACTLY ONE migration in the whole history defines it, and
+    // it is `0084`. A later serial that recreated the reader would be a
+    // second place to keep right, and is red here.
+    expect(files.filter((f) => readFileSync(join(MIGRATIONS_DIR, f), 'utf8').includes('customer_open_invoices_page'))).toEqual([
+      '0084_phase4_ar_fixed_cost_and_open_invoice_page.sql',
+    ]);
   });
 });
