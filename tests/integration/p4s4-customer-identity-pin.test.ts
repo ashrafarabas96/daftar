@@ -1,38 +1,54 @@
 /**
- * P4-S4 — THE CUSTOMER IDENTITY PIN AND THE WALK-IN LAW.
- * (P4-S4 BUILD CONTRACT **Departure A** and OQ-7; implementation map §8.2,
- *  §8.5; `0075_phase4_customers_invoices_numbering.sql:247`, `:313-316`,
- *  `:661-684`; `0067:274` as the precedent Departure A defers.)
+ * P4-S4 — THE CUSTOMER IDENTITY PIN AND THE WALK-IN LAW, NOW STRUCTURAL.
+ * (P4-S4 BUILD CONTRACT **Departure A** and OQ-7, CLOSED by the Tech Lead's
+ *  §23 ruling and by `0082_phase4_customer_settlement_structural_pin.sql`;
+ *  implementation map §8.2, §8.5;
+ *  `0075_phase4_customers_invoices_numbering.sql:248`, `:313-316`, `:661-684`;
+ *  `0067:274` as the precedent Departure A deferred to.)
  *
  * ── WHY THIS FILE EXISTS AT ALL ───────────────────────────────────────────
  *
  * The implementation map proposed `ALTER TABLE invoices ADD UNIQUE
  * (business_id, id, customer_id)` so that the settlement relations could point
- * a THREE-column foreign key at it. With that key, both laws below are
- * STRUCTURAL and need no test of their own:
+ * a THREE-column foreign key at it. With that key both laws below are
+ * STRUCTURAL:
  *
  *   — an allocation naming customer C against an invoice of customer D has no
  *     FK target at all;
- *   — and a walk-in invoice, whose `customer_id` IS NULL (`0075:247`,
+ *   — and a walk-in invoice, whose `customer_id` IS NULL (`0075:248`,
  *     `:313-316`), has no `(business, id, customer)` tuple with a non-null
  *     customer for a `NOT NULL` child column to match.
  *
- * The contract REFUSED that key for this slice: `invoices` is a table an
- * earlier slice of this phase created and applied, and widening its key is an
- * ownership question the Tech Lead has not answered. The foreign key is
- * therefore the narrow `(business_id, invoice_id) → invoices (business_id, id)`.
+ * The P4-S4 contract DEFERRED that key ("Departure A"): `invoices` is a table
+ * an earlier slice of this phase created and applied, and widening its key was
+ * an ownership question the Tech Lead had not answered. For the length of that
+ * deferral the foreign key was the narrow
+ * `(business_id, invoice_id) → invoices (business_id, id)`, and both laws
+ * rested on `invoice_settlement_verify`, a DEFERRABLE INITIALLY DEFERRED
+ * constraint trigger, with the refusals
+ * `invoice_settlement.customer_mismatch` and
+ * `invoice_settlement.walkin_not_settleable`.
  *
- * Cross-business linkage is still unrepresentable — ONE `business_id` column
- * feeds every FK on the row and there is nowhere to put a second — but the two
- * laws above are no longer structural, and the contract moves them onto
- * `invoice_settlement_verify`, the DEFERRABLE INITIALLY DEFERRED constraint
- * trigger class the purchase chain already relies on:
+ * THE DEFERRAL IS OVER. `0082` adds the non-partial key and widens both
+ * reducer edges onto it, so this file now asserts the STRUCTURAL form, and the
+ * planted proofs below are refused by the EDGE rather than by the verifier.
+ * The obstacle recorded against the key — "PostgreSQL needs a non-partial
+ * unique index as an FK target, and walk-in invoices carry a NULL
+ * `customer_id`" — did not bind: a unique constraint is not a `NOT NULL`
+ * constraint, the key contains the primary key so it validates on any data,
+ * and the NULL is what MAKES the walk-in law structural rather than what
+ * blocks it. A reducer's `customer_id` is `NOT NULL`, so under MATCH SIMPLE
+ * the edge fires on every row, and a non-null triple can never match a
+ * NULL-customer parent tuple.
  *
- *   1. the customer identity pin — `<row>.customer_id` must equal the
- *      invoice's `customer_id`; refusal `invoice_settlement.customer_mismatch`;
- *   2. the walk-in law — an invoice whose `customer_id IS NULL` may carry no
- *      allocation and no credit application at all; refusal
- *      `invoice_settlement.walkin_not_settleable`.
+ * The two verifier arms are KEPT and are now unreachable through the
+ * relations, because the row that would raise them cannot be inserted at all.
+ * This file asserts they are still in the routine, because a corrective that
+ * deleted a subsumed check would trade defence in depth for tidiness.
+ *
+ * Cross-business linkage was never the half that was given up — ONE
+ * `business_id` column feeds every FK on the row and there is nowhere to put a
+ * second — and its law is unchanged below.
  *
  * ONE LAW, TWO VOCABULARIES. Each law is answered twice and this file asserts
  * both, because they are two different claims:
@@ -42,39 +58,45 @@
  *     `customer_payment.customer_mismatch` on the payment path,
  *     `customer_credit_application.*` on the credit path. That is what a
  *     merchant sees, and it is raised before the command reaches the database;
- *   — at COMMIT, `invoice_settlement_verify` answers in the INVARIANT's
- *     domain, `invoice_settlement.*`. That is what a future caller of the
- *     routine — an import, a correction, another slice's command — will see,
- *     and it is the one the planted rows below exercise.
+ *   — at the RELATION, the database answers in the INVARIANT's domain. That is
+ *     what a future caller — an import, a correction, another slice's command —
+ *     will see, and it is what the planted rows below exercise.
  *
- * A route case that expected the verifier's code would assert a code no caller
+ * A route case that expected the database's code would assert a code no caller
  * of that route can see; a planted-row proof that expected the service's would
  * assert a code the database cannot raise. The codes differing is the
  * architecture.
  *
  * So each law needs a PERMANENT TEST and a PLANTED RED PROOF, which is what
- * this file is. Neither may be left to the application layer, and this file proves
- * that by planting each violation with DIRECT SQL that never touches the
+ * this file is. Neither may be left to the application layer, and this file
+ * proves that by planting each violation with DIRECT SQL that never touches the
  * command.
  *
- * ── WHY THE PLANTED PROOFS CALL THE VERIFIER DIRECTLY ─────────────────────
+ * ── WHAT THE PLANTED PROOFS NOW MEASURE, AND WHY IT CHANGED ───────────────
  *
- * A planted row has no accounting source binding, so letting a planted
- * transaction reach COMMIT (or `SET CONSTRAINTS ALL IMMEDIATE`) would fire
- * every deferred check in an order PostgreSQL does not promise, and the proof
- * could die on the missing binding instead of on the law it exists to
- * exercise. Each planted proof therefore calls `invoice_settlement_verify`
- * itself — and the claim that this is a proof about the ESTATE and not about a
- * function nobody runs is carried by its own `it` below, which reads
- * `pg_trigger` and requires both settlement relations to reach that verifier
- * through a deferred constraint trigger.
+ * Before `0082` the planted row INSERTED successfully — the narrow
+ * `(business_id, invoice_id)` edge was satisfied by a mismatched row, which was
+ * the whole point of Departure A — and the proof then called
+ * `invoice_settlement_verify` by hand to show the deferred verifier would
+ * refuse it at COMMIT. Calling it by hand was necessary because a planted row
+ * carries no accounting source binding, so reaching COMMIT would fire every
+ * deferred check in an order PostgreSQL does not promise and the proof could
+ * die on the missing binding instead of on the law.
+ *
+ * After `0082` the INSERT ITSELF IS REFUSED, immediately, by
+ * `<relation>_invoice_fk` — there is no row to verify and no deferral to reach.
+ * That is a STRICTLY STRONGER measurement and the proofs below assert it in
+ * that form: the plant raises `foreign_key_violation` (SQLSTATE 23503) naming
+ * the reducer's invoice edge. The verifier is no longer the thing holding
+ * these two laws up, so a proof that still went through it would be measuring
+ * a backstop and reporting it as the invariant.
  *
  * Every planted transaction is rolled back in a `finally`. A planted violation
  * that committed because the law did not refuse it would poison every later
  * law of the suite, and the suite would report a cascade instead of the one
  * finding.
  *
- * ── RED UNTIL `0081` LANDS ────────────────────────────────────────────────
+ * ── RED UNTIL `0081` AND `0082` LAND ──────────────────────────────────────
  *
  * Every `it` requires its subject first. No `.skip`, no `.todo`, no
  * conditional pass.
@@ -109,14 +131,39 @@ import {
 
 /**
  * Why a ROUTE case expects a document-domain code and a PLANTED-ROW case
- * expects the verifier's. Stated once and quoted in each message, so a reader
+ * expects the database's. Stated once and quoted in each message, so a reader
  * of a failure sees the reason and not just the mismatch.
  */
 const WHY_ROUTE_DOMAIN =
   "The API answers in the DOCUMENT's domain because `settledInvoice` pre-checks the invoice and refuses before the command reaches " +
-  "the database, so the code a merchant sees is the payment's or the application's and NOT the verifier's `invoice_settlement.*` — " +
-  'that one is raised at COMMIT and is asserted by the planted-row proof. The two codes differing is the architecture, not an ' +
-  'inconsistency.';
+  "the database, so the code a merchant sees is the payment's or the application's and NOT a SQLSTATE — the database's refusal is " +
+  'asserted by the planted-row proof. The two codes differing is the architecture, not an inconsistency.';
+
+/**
+ * `foreign_key_violation`. The SQLSTATE the structural pin refuses with, named
+ * rather than matched on a message: PostgreSQL's wording for a constraint
+ * violation is not a stable interface, while the class is.
+ */
+const FK_VIOLATION = '23503';
+
+/**
+ * The refusal `invoices_lifecycle_guard()` (`0075:546-556`) raises when any
+ * identity column of an invoice is changed, `customer_id` among them. It is a
+ * BEFORE trigger, so on the parent side it answers before the widened edge
+ * does — which is why the parent-side law below asserts THIS and not a
+ * SQLSTATE.
+ */
+const INVOICE_IDENTITY_FINAL = 'invoice.state_invalid: the identity of an invoice is final';
+
+/**
+ * The catalogue names the structural pin consists of, so a failure message
+ * tells the reader which constraint was supposed to answer.
+ */
+const STRUCTURAL = {
+  key: 'invoices_customer_uq',
+  allocationEdge: 'payment_allocations_invoice_fk',
+  applicationEdge: 'customer_credit_applications_invoice_fk',
+} as const;
 
 const CLAIM = 'an allocation whose customer is not the invoice’s customer is refused, and a walk-in invoice carries no allocation and no credit application';
 
@@ -300,7 +347,7 @@ describe('P4-S4 the customer identity pin', () => {
     expect(must(r.rows[0]).n, 'no allocation of THIS business names D’s invoice under another customer').toBe(0);
   });
 
-  it('THE PLANTED RED PROOF — a mismatched allocation inserted by DIRECT SQL is refused by invoice_settlement_verify', async () => {
+  it('THE PLANTED RED PROOF — a mismatched allocation inserted by DIRECT SQL is UNREPRESENTABLE: the INSERT itself is refused', async () => {
     requireSubject(missing, CLAIM);
     const sourceId = await cloneSource();
     const outcome = await inRolledBackTx(
@@ -309,29 +356,40 @@ describe('P4-S4 the customer identity pin', () => {
       async (c) => {
         const newId = randomUUID();
         // ONE departure from an accepted row: the invoice it names is D's, while
-        // the row's own `customer_id` stays C's. The narrow FK
-        // `(business_id, invoice_id)` is satisfied — which is the whole point of
-        // Departure A — so nothing but the verifier stands between this row and
-        // a committed cross-customer settlement.
-        await plantSettlementRow(c, 'payment_allocations', w.shop.businessId, sourceId, {
-          id: newId,
-          binding_source_id: newId,
-          invoice_id: invoiceD.invoiceId,
-          ar_released_before_txn_minor: 0,
-        });
-        return raised(() => c.query(`SELECT ${ROUTINES.invoiceSettlementVerify}($1::uuid, $2::uuid)`, [w.shop.businessId, invoiceD.invoiceId]));
+        // the row's own `customer_id` stays C's. Before `0082` the narrow FK
+        // `(business_id, invoice_id)` was satisfied by exactly this row and only
+        // the deferred verifier stood between it and a committed cross-customer
+        // settlement. The widened edge has no tuple for it, so the write dies
+        // here and there is nothing left to verify.
+        return raised(() =>
+          plantSettlementRow(c, 'payment_allocations', w.shop.businessId, sourceId, {
+            id: newId,
+            binding_source_id: newId,
+            invoice_id: invoiceD.invoiceId,
+            ar_released_before_txn_minor: 0,
+          }),
+        );
       },
     );
     expect(
       outcome,
-      `the planted allocation names invoice ${invoiceD.invoiceId} (customer D) while carrying customer C, and ${ROUTINES.invoiceSettlementVerify} ` +
-        `accepted it. Departure A removed the structural guarantee and gave this law to the verifier; a verifier that does not refuse this ` +
-        `means a cross-customer settlement can be committed by anything that writes the row.`,
+      `the planted allocation names invoice ${invoiceD.invoiceId} (customer D) while carrying customer C, and the database ACCEPTED THE ROW. ` +
+        `The §23 ruling asked for a structural pin: with ${STRUCTURAL.key} on invoices and the three-column ${STRUCTURAL.allocationEdge}, this ` +
+        `tuple has no foreign-key target at all. A row that inserts means the pin is not there, and a cross-customer settlement is one missed ` +
+        `verifier call away from being committed by anything that writes the relation.`,
     ).not.toBeNull();
+    const refusal = must(outcome, 'the refusal');
     expect(
-      must(outcome, 'the refusal').message,
-      `and the refusal is the named one: ${VERIFIER_REFUSALS.customerMismatch}. Measured: ${must(outcome, 'the refusal').message}`,
-    ).toContain(VERIFIER_REFUSALS.customerMismatch);
+      refusal.code,
+      `and the refusal is STRUCTURAL — SQLSTATE 23503 (foreign_key_violation), raised by the edge on the INSERT, not ` +
+        `${VERIFIER_REFUSALS.customerMismatch} raised by a deferred trigger the writer could have been the only one to skip. Measured: ` +
+        `[${refusal.code ?? 'no code'}] ${refusal.message}`,
+    ).toBe(FK_VIOLATION);
+    expect(
+      refusal.message,
+      `and it names the reducer's own invoice edge ${STRUCTURAL.allocationEdge}, so the finding points at the constraint that refused it. ` +
+        `Measured: ${refusal.message}`,
+    ).toContain(STRUCTURAL.allocationEdge);
   });
 });
 
@@ -374,7 +432,7 @@ describe('P4-S4 the walk-in law', () => {
     ).not.toBeNull();
   });
 
-  it('THE PLANTED RED PROOF, CREDIT SIDE — a credit application against a walk-in invoice is refused by invoice_settlement_verify too', async () => {
+  it('THE PLANTED RED PROOF, CREDIT SIDE — a credit application against a walk-in invoice is UNREPRESENTABLE too', async () => {
     requireSubject(missing, CLAIM);
     const res = must(lawfulCreditApplication, 'the lawful credit application');
     expect(
@@ -391,36 +449,42 @@ describe('P4-S4 the walk-in law', () => {
       w.shop,
       async (c) => {
         const newId = randomUUID();
-        await plantSettlementRow(c, 'customer_credit_applications', w.shop.businessId, sourceId, {
-          id: newId,
-          binding_source_id: newId,
-          invoice_id: walkin.invoiceId,
-          ar_released_before_txn_minor: 0,
-          // A FREE level on the credit side, so the departure stays the one
-          // this law is about. The clone keeps the accepted row's `credit_id`,
-          // and `customer_credit_applications_level_uq` is
-          // `(business_id, credit_id, credit_remaining_before_minor)` — so
-          // reusing the source's level made the UNIQUE index answer first and
-          // `invoice_settlement_verify` was never reached. This level is unused
-          // by the credit and still satisfies
-          // `customer_credit_applications_consumed_ck`
-          // (`consumed <= remaining_before`), because it is the maximum the
-          // column admits.
-          credit_remaining_before_minor: '1000000000000000000',
-        });
-        return raised(() => c.query(`SELECT ${ROUTINES.invoiceSettlementVerify}($1::uuid, $2::uuid)`, [w.shop.businessId, walkin.invoiceId]));
+        return raised(() =>
+          plantSettlementRow(c, 'customer_credit_applications', w.shop.businessId, sourceId, {
+            id: newId,
+            binding_source_id: newId,
+            invoice_id: walkin.invoiceId,
+            ar_released_before_txn_minor: 0,
+            // A FREE level on the credit side, so the departure stays the one
+            // this law is about. The clone keeps the accepted row's `credit_id`,
+            // and `customer_credit_applications_level_uq` is
+            // `(business_id, credit_id, credit_remaining_before_minor)` — so
+            // reusing the source's level would make the UNIQUE index answer
+            // first and the invoice edge would never be reached. This level is
+            // unused by the credit and still satisfies
+            // `customer_credit_applications_consumed_ck`
+            // (`consumed <= remaining_before`), because it is the maximum the
+            // column admits.
+            credit_remaining_before_minor: '1000000000000000000',
+          }),
+        );
       },
     );
     expect(
       outcome,
       `the route case above proves the COMMAND refuses this; this one proves the RELATION cannot hold such a row, which is a different ` +
-        `claim and the one a future caller of the routine relies on. The planted credit application names the walk-in invoice ` +
-        `${walkin.invoiceId} and ${ROUTINES.invoiceSettlementVerify} accepted it.`,
+        `claim and the one a future caller relies on. The planted credit application names the walk-in invoice ${walkin.invoiceId} and the ` +
+        `database accepted the row. A law enforced on one of the two settling relations and not the other is half a law, so the credit side ` +
+        `carries the same three-column ${STRUCTURAL.applicationEdge} as the payment side.`,
     ).not.toBeNull();
+    const refusal = must(outcome, 'the refusal');
     expect(
-      must(outcome, 'the refusal').message,
-      `and the refusal is the named one: ${VERIFIER_REFUSALS.walkinNotSettleable}. Measured: ${must(outcome, 'the refusal').message}`,
-    ).toContain(VERIFIER_REFUSALS.walkinNotSettleable);
+      refusal.code,
+      `and the refusal is STRUCTURAL — SQLSTATE 23503. A walk-in invoice's parent tuple carries a NULL customer_id and this row's ` +
+        `customer_id is NOT NULL, so there is no tuple to match and the write cannot be expressed. Measured: [${refusal.code ?? 'no code'}] ` +
+        `${refusal.message}`,
+    ).toBe(FK_VIOLATION);
+    expect(refusal.message, `and it names ${STRUCTURAL.applicationEdge}. Measured: ${refusal.message}`).toContain(STRUCTURAL.applicationEdge);
   });
 
   it('and the walk-in invoice’s chain is empty', async () => {
@@ -429,7 +493,7 @@ describe('P4-S4 the walk-in law', () => {
     expect(chain, `the walk-in invoice ${walkin.invoiceId} of this business carries no settlement row at all: ${JSON.stringify(chain)}`).toEqual([]);
   });
 
-  it('THE PLANTED RED PROOF — an allocation against a walk-in invoice inserted by DIRECT SQL is refused by invoice_settlement_verify', async () => {
+  it('THE PLANTED RED PROOF — an allocation against a walk-in invoice inserted by DIRECT SQL is UNREPRESENTABLE', async () => {
     requireSubject(missing, CLAIM);
     const sourceId = await cloneSource();
     const outcome = await inRolledBackTx(
@@ -437,33 +501,36 @@ describe('P4-S4 the walk-in law', () => {
       w.shop,
       async (c) => {
         const newId = randomUUID();
-        await plantSettlementRow(c, 'payment_allocations', w.shop.businessId, sourceId, {
-          id: newId,
-          binding_source_id: newId,
-          invoice_id: walkin.invoiceId,
-          ar_released_before_txn_minor: 0,
-        });
-        return raised(() => c.query(`SELECT ${ROUTINES.invoiceSettlementVerify}($1::uuid, $2::uuid)`, [w.shop.businessId, walkin.invoiceId]));
+        return raised(() =>
+          plantSettlementRow(c, 'payment_allocations', w.shop.businessId, sourceId, {
+            id: newId,
+            binding_source_id: newId,
+            invoice_id: walkin.invoiceId,
+            ar_released_before_txn_minor: 0,
+          }),
+        );
       },
     );
     expect(
       outcome,
-      `the planted allocation names the walk-in invoice ${walkin.invoiceId} and ${ROUTINES.invoiceSettlementVerify} accepted it. ` +
+      `the planted allocation names the walk-in invoice ${walkin.invoiceId} and the database accepted the row. ` +
         `\`invoices_walkin_no_ar\` (0075:661-684) only refuses a walk-in invoice whose ENTRY touches accounts_receivable, which is a ` +
-        `backstop and not this law: the row itself must be unrepresentable.`,
+        `backstop and not this law: the row itself must be unrepresentable, which is what ${STRUCTURAL.allocationEdge} onto ` +
+        `${STRUCTURAL.key} makes it.`,
     ).not.toBeNull();
-    expect(
-      must(outcome, 'the refusal').message,
-      `and the refusal is the named one: ${VERIFIER_REFUSALS.walkinNotSettleable}. Measured: ${must(outcome, 'the refusal').message}`,
-    ).toContain(VERIFIER_REFUSALS.walkinNotSettleable);
+    const refusal = must(outcome, 'the refusal');
+    expect(refusal.code, `and the refusal is STRUCTURAL — SQLSTATE 23503. Measured: [${refusal.code ?? 'no code'}] ${refusal.message}`).toBe(FK_VIOLATION);
+    expect(refusal.message, `and it names ${STRUCTURAL.allocationEdge}. Measured: ${refusal.message}`).toContain(STRUCTURAL.allocationEdge);
   });
 });
 
-describe('P4-S4 Departure A — what holds these two laws up', () => {
-  it('both settlement relations reach invoice_settlement_verify through a DEFERRABLE INITIALLY DEFERRED constraint trigger', async () => {
+describe('P4-S4 the structural pin — what holds these two laws up', () => {
+  it('both settlement relations still reach invoice_settlement_verify through a DEFERRABLE INITIALLY DEFERRED constraint trigger', async () => {
     requireSubject(missing, CLAIM);
-    // This is what makes the two planted proofs above proofs about the ESTATE.
-    // The wiring is read out of the LIVE catalogue with `pg_get_functiondef`,
+    // The verifier is no longer what holds the customer pin and the walk-in law
+    // up — the edge is — but it is still what holds the R-83 CHAIN up, and its
+    // two named arms are kept as defence in depth. So this stays a law: the
+    // wiring is read out of the LIVE catalogue with `pg_get_functiondef`,
     // because a routine REPLACED by a later migration is the one that runs and
     // a migration file is not evidence of what will execute.
     const wiring = await deferredVerifierWiring(ownerPool());
@@ -488,17 +555,15 @@ describe('P4-S4 Departure A — what holds these two laws up', () => {
     }
   });
 
-  it('the invoice-side foreign key is the NARROW two-column one, which is why the verifier has to carry these laws', async () => {
+  it('the invoice-side foreign key is the THREE-column structural pin, on a NON-PARTIAL key that admits walk-in rows', async () => {
     requireSubject(missing, CLAIM);
-    // THE DISCLOSURE, AS A TEST. The contract's Departure A deferred
+    // THE PIN, AS A TEST — the replacement for the disclosure this `it` used to
+    // be. Departure A deferred
     // `ALTER TABLE invoices ADD UNIQUE (business_id, id, customer_id)` to a
-    // Tech Lead ruling; `0067:274` is the accepted precedent for adding
-    // exactly such a key to an earlier slice's table. While the key is absent
-    // the FK is the two-column one and the two laws above are trigger-borne.
-    //
-    // The day the ruling closes it, the FK widens and THIS TEST CHANGES — on
-    // purpose, so nobody has to rediscover why the verifier carried a law a
-    // key could have carried. It does NOT assert the gap is correct.
+    // Tech Lead ruling, naming `0067:274` as the accepted precedent for adding
+    // exactly such a key to an earlier slice's table. The ruling closed it and
+    // `0082` carries it, so the FK has widened and this test has changed with
+    // the edge — which is what the previous version of it said would happen.
     const r = await ownerPool().query<{ relation: string; conname: string; def: string }>(
       `SELECT cl.relname AS relation, c.conname, pg_get_constraintdef(c.oid) AS def
          FROM pg_constraint c JOIN pg_class cl ON cl.oid = c.conrelid JOIN pg_namespace n ON n.oid = cl.relnamespace
@@ -511,22 +576,136 @@ describe('P4-S4 Departure A — what holds these two laws up', () => {
     for (const row of r.rows)
       expect(
         row.def,
-        `${row.relation}.${row.conname} must reference invoices (business_id, id) — the existing primary key — per contract Departure A, ` +
-          `not (business_id, id, customer_id). Measured: ${row.def}`,
-      ).toMatch(/REFERENCES invoices\(business_id, id\)/);
+        `${row.relation}.${row.conname} must be the three-column pin — ` +
+          `FOREIGN KEY (business_id, invoice_id, customer_id) REFERENCES invoices (business_id, id, customer_id) — so that a mismatched ` +
+          `customer has no target. The narrow (business_id, id) form left both laws on a deferred trigger. Measured: ${row.def}`,
+      ).toMatch(/FOREIGN KEY \(business_id, invoice_id, customer_id\) REFERENCES invoices\(business_id, id, customer_id\)/);
 
-    const key = await ownerPool().query<{ conname: string; def: string }>(
-      `SELECT c.conname, pg_get_constraintdef(c.oid) AS def
+    // The key the edges target, and the two properties that make it work: it
+    // exists, and its index is NOT PARTIAL. A partial index is not a lawful FK
+    // target in PostgreSQL, and this key does not need to be partial — it
+    // contains the primary key, so it is unique whatever customer_id holds.
+    const key = await ownerPool().query<{ conname: string; def: string; partial: boolean }>(
+      `SELECT c.conname, pg_get_constraintdef(c.oid) AS def, (i.indpred IS NOT NULL) AS partial
          FROM pg_constraint c JOIN pg_class cl ON cl.oid = c.conrelid JOIN pg_namespace n ON n.oid = cl.relnamespace
+         JOIN pg_index i ON i.indexrelid = c.conindid
         WHERE n.nspname = 'public' AND cl.relname = 'invoices' AND c.contype IN ('p', 'u')
         ORDER BY 1`,
     );
+    const pin = key.rows.filter((x) => /UNIQUE \(business_id, id, customer_id\)/.test(x.def));
     expect(
-      key.rows.filter((x) => /\(business_id, id, customer_id\)/.test(x.def)),
-      `invoices must NOT yet carry UNIQUE (business_id, id, customer_id): this slice did not add it (contract Departure A, OQ-7), and the ` +
-        `day a Tech Lead ruling does, both laws above become structural and this test is the one that changes. Measured keys: ` +
+      pin.length,
+      `invoices must carry UNIQUE (business_id, id, customer_id) — the key both reducer edges target. Measured keys: ` +
         `${JSON.stringify(key.rows.map((x) => x.def))}`,
-    ).toEqual([]);
+    ).toBe(1);
+    expect(
+      must(pin[0], 'the customer key').partial,
+      `and that key is NON-PARTIAL. PostgreSQL does not accept a partial unique index as a foreign-key target, which is the obstacle a ` +
+        `partial key here would reintroduce — and it does not need to be partial, because containing the primary key makes it unique on the ` +
+        `walk-in rows too. Measured: ${JSON.stringify(must(pin[0], 'the customer key'))}`,
+    ).toBe(false);
+  });
+
+  it('and the walk-in invoice is STILL REPRESENTABLE: invoices.customer_id stayed nullable', async () => {
+    requireSubject(missing, CLAIM);
+    // A pin bought by forbidding walk-in sales would be a product change and
+    // not an invariant. The cheapest way to make the three-column edge "work"
+    // is to make `invoices.customer_id` NOT NULL, which would silence every
+    // other assertion in this file and delete the walk-in sale.
+    const r = await ownerPool().query<{ nullable: boolean }>(
+      `SELECT NOT a.attnotnull AS nullable FROM pg_attribute a
+        WHERE a.attrelid = 'public.invoices'::regclass AND a.attname = 'customer_id' AND NOT a.attisdropped`,
+    );
+    expect(
+      must(r.rows[0], 'invoices.customer_id').nullable,
+      'invoices.customer_id must stay NULLABLE — the walk-in invoice (0075:248) is a product behaviour, and the pin is structural WITHOUT ' +
+        'removing it: the reducer side is NOT NULL, which is what makes a non-null triple unable to match a NULL-customer parent.',
+    ).toBe(true);
+    expect(walkin.customerId, 'and a real walk-in invoice of this world still carries a NULL customer').toBeNull();
+  });
+
+  it('the two verifier arms are KEPT as defence in depth, not deleted because the edge subsumes them', async () => {
+    requireSubject(missing, CLAIM);
+    // `0082` adds no trigger and replaces no routine. The customer and walk-in
+    // arms of `invoice_settlement_verify` are now unreachable THROUGH THE
+    // RELATIONS — the planted proofs above die at the INSERT — and they stay in
+    // the routine for any future caller that arrives by another road.
+    const r = await ownerPool().query<{ src: string }>(`SELECT p.prosrc AS src FROM pg_proc p WHERE p.proname = $1`, [ROUTINES.invoiceSettlementVerify]);
+    const src = must(r.rows[0], `the live body of ${ROUTINES.invoiceSettlementVerify}`).src;
+    for (const code of [VERIFIER_REFUSALS.customerMismatch, VERIFIER_REFUSALS.walkinNotSettleable])
+      expect(
+        src,
+        `${code} must still be raised by ${ROUTINES.invoiceSettlementVerify}. The structural pin makes it unreachable through the two ` +
+          `reducer relations; removing a check because a stronger one subsumes it trades defence in depth for tidiness, and would also mean ` +
+          `replacing a candidate body with green CI evidence behind it.`,
+      ).toContain(code);
+  });
+
+  it('the PARENT side is covered too: re-parenting or orphaning a settled invoice is refused, and the pin is the second line behind the frozen guard', async () => {
+    requireSubject(missing, CLAIM);
+    // ── A MEASURED CORRECTION, KEPT AS THE RECORD ────────────────────────
+    //
+    // `invoice_settlement_verify` fires from constraint triggers on the two
+    // REDUCER relations, so it is never reached by a write to `invoices`
+    // itself: moving a settled invoice's customer, or nulling it, is outside
+    // its reach altogether. That looked like a hole the widened edge closes.
+    //
+    // IT IS NOT A HOLE. `invoices_lifecycle_guard()` (`0075:546-556`) already
+    // freezes `customer_id` on every UPDATE, and it ANSWERS FIRST — it is a
+    // BEFORE trigger, so the row never reaches the edge. This `it` therefore
+    // asserts the invariant (the write is refused) and NAMES THE MECHANISM
+    // THAT ANSWERED, rather than claiming the edge did. Asserting 23503 here
+    // would have been asserting a mechanism that never runs.
+    //
+    // What the widened edge adds on the parent side is a SECOND, INDEPENDENT
+    // and STRUCTURAL line behind a guard in the frozen prefix: a guard is a
+    // body that can be replaced, and the edge is a shape that cannot be
+    // satisfied. Both halves are asserted below — the refusal, and the edge's
+    // referenced column list carrying `customer_id`.
+    for (const [label, target] of [
+      ['RE-PARENTING to another customer', customerD],
+      ['ORPHANING into a walk-in', null],
+    ] as const) {
+      const outcome = await inRolledBackTx(
+        () => ownerClient(),
+        w.shop,
+        async (c) =>
+          raised(() => c.query(`UPDATE invoices SET customer_id = $3 WHERE business_id = $1 AND id = $2`, [w.shop.businessId, invoiceC.invoiceId, target])),
+      );
+      expect(
+        outcome,
+        `${label}: invoice ${invoiceC.invoiceId} carries a committed allocation of customer C's money and the database ACCEPTED the write. ` +
+          `That would move C's settled money onto another receivable, or leave a walk-in invoice carrying settlement rows, with no reducer ` +
+          `row changed and nothing on the reducers ever consulted.`,
+      ).not.toBeNull();
+      expect(
+        must(outcome, 'the refusal').message,
+        `${label}: and it is refused BY NAME. ${INVOICE_IDENTITY_FINAL} answers first because it is a BEFORE trigger, so the row never ` +
+          `reaches the three-column edge; the edge is the second line, asserted structurally below. Measured: ` +
+          `[${must(outcome, 'the refusal').code ?? 'no code'}] ${must(outcome, 'the refusal').message}`,
+      ).toContain(INVOICE_IDENTITY_FINAL);
+    }
+
+    // The second line, as a shape: the referenced side of each reducer's edge
+    // names `customer_id`, so a parent tuple a child depends on cannot be
+    // dissolved even if the guard above were ever replaced.
+    const r = await ownerPool().query<{ relation: string; referenced: string[] }>(
+      `SELECT cl.relname AS relation,
+              (SELECT array_agg(a.attname::text ORDER BY k.ord)
+                 FROM unnest(c.confkey) WITH ORDINALITY AS k(attnum, ord)
+                 JOIN pg_attribute a ON a.attrelid = c.confrelid AND a.attnum = k.attnum) AS referenced
+         FROM pg_constraint c JOIN pg_class cl ON cl.oid = c.conrelid
+        WHERE c.contype = 'f' AND c.confrelid = 'public.invoices'::regclass AND cl.relname = ANY ($1)
+        ORDER BY 1`,
+      [['payment_allocations', 'customer_credit_applications']],
+    );
+    expect(r.rows.length, 'NO SUBJECT — neither reducer carries an edge to invoices').toBe(2);
+    for (const row of r.rows)
+      expect(
+        row.referenced,
+        `${row.relation}'s edge must REFERENCE invoices (business_id, id, customer_id), so the customer of a settled invoice is part of the ` +
+          `tuple its children depend on. Measured: ${JSON.stringify(row.referenced)}`,
+      ).toEqual(['business_id', 'id', 'customer_id']);
   });
 
   it('cross-business linkage is still unrepresentable: one business_id column feeds every edge of a settlement row', async () => {

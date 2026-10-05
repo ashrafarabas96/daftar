@@ -9,15 +9,9 @@
  * migration that creates one of the slice's relations, so the ruling is
  * enforced by the gate rather than remembered at review.
  *
- * ── DEPARTURE A — THE INVOICE-SIDE FK TAKES NO NEW KEY ON `invoices` ─────
+ * ── THE STRUCTURAL CUSTOMER PIN — THE INVOICE-SIDE FK TAKES THE NEW KEY ──
  *
- * `invoices` is a table an earlier slice of THIS phase created and applied, so
- * adding `UNIQUE (business_id, id, customer_id)` to it is an ownership question
- * the Tech Lead has not answered. The FK is therefore the EXISTING primary key
- * `(business_id, id)` — and what the narrower key stops proving must then be
- * proved by `invoice_settlement_verify`, a `CREATE CONSTRAINT TRIGGER …
- * DEFERRABLE INITIALLY DEFERRED` of the same class the purchase chain already
- * relies on:
+ * Two laws of this slice were originally carried by a trigger:
  *
  *   — the CUSTOMER IDENTITY PIN: the settling row's `customer_id` equals the
  *     invoice's. Refusal `invoice_settlement.customer_mismatch`;
@@ -25,12 +19,23 @@
  *     allocation and no credit application at all. Refusal
  *     `invoice_settlement.walkin_not_settleable`.
  *
- * Both halves can fail in two opposite directions, and the law states both: a
- * text that takes the three-column key has made a decision this slice was told
- * not to make, and a text that takes the two-column key with no deferred
- * verifier has dropped the guarantee on the floor. `[[daftar-a-deferred-
- * guarantee-is-still-a-guarantee]]` — neither may be left to the application
- * layer.
+ * The slice's own migration carried them on
+ * `invoice_settlement_verify`, a `CREATE CONSTRAINT TRIGGER … DEFERRABLE
+ * INITIALLY DEFERRED`, because `invoices` is a table an earlier slice of THIS
+ * phase created and applied and adding `UNIQUE (business_id, id, customer_id)`
+ * to it was an ownership question the Tech Lead had not answered ("Departure
+ * A"). THE §23 RULING ANSWERED IT. The key is added — non-partially, which is
+ * lawful because it contains the primary key and so validates on walk-in rows
+ * whose `customer_id` is NULL — and both reducer edges widen onto it, which
+ * makes both laws SHAPES rather than checks.
+ *
+ * The law states every direction this can fail in: the narrow two-column edge
+ * (both laws back on a trigger any writer can skip), a missing edge
+ * (cross-business linkage representable), a PARTIAL key (not a lawful FK
+ * target at all), a nullable `customer_id` on a reducer (MATCH SIMPLE skips
+ * the check and the pin holds on nothing), and a deleted verifier or refusal
+ * (the arms are kept as defence in depth). `[[daftar-a-deferred-guarantee-is-
+ * still-a-guarantee]]` — and a structural one is better.
  *
  * ── THE SETTLEMENT ARITHMETIC IS REUSED, NEVER RE-IMPLEMENTED ────────────
  *
@@ -127,14 +132,16 @@ CREATE TABLE payment_allocations (
   ar_dust_minor BIGINT NOT NULL,
   accounting_source_type TEXT NOT NULL GENERATED ALWAYS AS ('customer_payment_allocation') STORED,
   CONSTRAINT payment_allocations_pk PRIMARY KEY (business_id, id),
-  -- Departure A: the EXISTING primary key of invoices. A
-  -- UNIQUE (business_id, id, customer_id) on invoices would make the customer
-  -- pin and the walk-in law structural; 0067:274 is the accepted precedent for
-  -- adding exactly such a key to an earlier slice's table, and it is deferred
-  -- to a Tech Lead ruling rather than forgotten. The cross-relation guarantee
-  -- rests on ${SETTLEMENT_VERIFIER} until then.
-  CONSTRAINT payment_allocations_invoice_fk FOREIGN KEY (business_id, invoice_id)
-    REFERENCES invoices (business_id, id) ON DELETE RESTRICT
+  -- THE STRUCTURAL CUSTOMER PIN: the three-column edge onto the non-partial
+  -- UNIQUE (business_id, id, customer_id) declared at the foot of this
+  -- fixture. A reducer naming one customer against another customer's invoice
+  -- has no target, and a walk-in invoice (customer_id IS NULL, while this
+  -- column is NOT NULL) has no target for any reducer. What used to be
+  -- "Departure A" — the narrow (business_id, id) edge with both laws on
+  -- ${SETTLEMENT_VERIFIER} — was closed by the Tech Lead's §23 ruling, and
+  -- 0067:274 is the precedent the key follows.
+  CONSTRAINT payment_allocations_invoice_fk FOREIGN KEY (business_id, invoice_id, customer_id)
+    REFERENCES invoices (business_id, id, customer_id) ON DELETE RESTRICT
 );
 CREATE TABLE customer_credits (
   tenant_id UUID NOT NULL,
@@ -159,9 +166,17 @@ CREATE TABLE customer_credit_applications (
   credit_dust_minor BIGINT NOT NULL,
   accounting_source_type TEXT NOT NULL GENERATED ALWAYS AS ('customer_credit_application') STORED,
   CONSTRAINT customer_credit_applications_pk PRIMARY KEY (business_id, id),
-  CONSTRAINT customer_credit_applications_invoice_fk FOREIGN KEY (business_id, invoice_id)
-    REFERENCES invoices (business_id, id) ON DELETE RESTRICT
+  -- The same pin on the credit side: a law enforced on one of the two settling
+  -- relations and not the other is half a law.
+  CONSTRAINT customer_credit_applications_invoice_fk FOREIGN KEY (business_id, invoice_id, customer_id)
+    REFERENCES invoices (business_id, id, customer_id) ON DELETE RESTRICT
 );
+
+-- The key both edges above target, in the shape and with the standing of
+-- 0067:274. NON-PARTIAL: it contains invoices' primary key (business_id, id),
+-- so it is unique whatever customer_id holds and validates on any data,
+-- walk-in rows included. PostgreSQL would not accept a partial index here.
+ALTER TABLE invoices ADD CONSTRAINT invoices_customer_uq UNIQUE (business_id, id, customer_id);
 
 -- The settlement arithmetic is the ACCEPTED one. The names are historical; the
 -- arithmetic is general (IMMUTABLE, plain BIGINT, nothing supplier-specific
@@ -245,29 +260,63 @@ describe('the contract-shaped settlement text is accepted, and the silence is ab
   });
 });
 
-describe('RP-S4-DEP-A — Departure A, planted in both directions', () => {
-  it('red: the three-column invoice FK — a new key on an earlier slice’s table — is named', () => {
-    const sql = planted('the invoice FK widened to (business_id, id, customer_id)', (s) =>
+describe('RP-S4-PIN — the structural customer pin, planted in every direction it can fail', () => {
+  it('red: the invoice FK NARROWED back to (business_id, id) is named — both laws would be back on a trigger a writer can skip', () => {
+    const sql = planted('the allocation invoice FK narrowed to the two-column form', (s) =>
       s.replace(
-        'FOREIGN KEY (business_id, invoice_id)\n    REFERENCES invoices (business_id, id) ON DELETE RESTRICT\n);\nCREATE TABLE customer_credits',
         'FOREIGN KEY (business_id, invoice_id, customer_id)\n    REFERENCES invoices (business_id, id, customer_id) ON DELETE RESTRICT\n);\nCREATE TABLE customer_credits',
+        'FOREIGN KEY (business_id, invoice_id)\n    REFERENCES invoices (business_id, id) ON DELETE RESTRICT\n);\nCREATE TABLE customer_credits',
       ),
     );
     const problems = about(settlementContractProblems(sql), 'payment_allocations');
-    expect(problems.join('\n')).toContain('Departure A');
+    expect(problems.join('\n')).toContain('the structural pin is');
+  });
+
+  it('red: the invoice FK narrowed on only the CREDIT side is named — half a law is not the law', () => {
+    const sql = planted('the credit-application invoice FK narrowed', (s) =>
+      s.replace(
+        'CONSTRAINT customer_credit_applications_invoice_fk FOREIGN KEY (business_id, invoice_id, customer_id)\n    REFERENCES invoices (business_id, id, customer_id) ON DELETE RESTRICT',
+        'CONSTRAINT customer_credit_applications_invoice_fk FOREIGN KEY (business_id, invoice_id)\n    REFERENCES invoices (business_id, id) ON DELETE RESTRICT',
+      ),
+    );
+    expect(about(settlementContractProblems(sql), 'customer_credit_applications')).not.toEqual([]);
+  });
+
+  it('red: the key the edges target, DELETED, is named — a widened edge with no target could not even apply', () => {
+    const sql = planted('the invoices customer key removed', (s) =>
+      s.replace('ALTER TABLE invoices ADD CONSTRAINT invoices_customer_uq UNIQUE (business_id, id, customer_id);', ''),
+    );
+    expect(about(settlementContractProblems(sql), 'never declares that key')).not.toEqual([]);
+  });
+
+  it('red: the key made PARTIAL is named — PostgreSQL does not accept a partial unique index as a foreign-key target', () => {
+    const sql = planted('the invoices customer key made partial', (s) =>
+      s.replace('UNIQUE (business_id, id, customer_id);', 'UNIQUE (business_id, id, customer_id) WHERE customer_id IS NOT NULL;'),
+    );
+    expect(about(settlementContractProblems(sql), 'declared PARTIAL')).not.toEqual([]);
+  });
+
+  it('red: a reducer’s customer_id made NULLABLE is named — MATCH SIMPLE would skip the edge and the pin would hold on nothing', () => {
+    const sql = planted('payment_allocations.customer_id made nullable', (s) =>
+      s.replace(
+        '  invoice_id UUID NOT NULL,\n  customer_id UUID NOT NULL,\n  invoice_amount_applied_minor',
+        '  invoice_id UUID NOT NULL,\n  customer_id UUID,\n  invoice_amount_applied_minor',
+      ),
+    );
+    expect(about(settlementContractProblems(sql), 'not declared UUID NOT NULL')).not.toEqual([]);
   });
 
   it('red: no composite invoice FK at all is named — cross-business linkage must be unrepresentable', () => {
     const sql = planted('the invoice FK removed from payment_allocations', (s) =>
       s.replace(
-        '  CONSTRAINT payment_allocations_invoice_fk FOREIGN KEY (business_id, invoice_id)\n    REFERENCES invoices (business_id, id) ON DELETE RESTRICT\n',
+        '  CONSTRAINT payment_allocations_invoice_fk FOREIGN KEY (business_id, invoice_id, customer_id)\n    REFERENCES invoices (business_id, id, customer_id) ON DELETE RESTRICT\n',
         '',
       ),
     );
     expect(about(settlementContractProblems(sql), 'declares no composite FOREIGN KEY')).not.toEqual([]);
   });
 
-  it('red: the verifier missing while the narrower key is used is named — the guarantee would be on the floor', () => {
+  it('red: the verifier missing is named — its arms are kept as defence in depth and the chain still needs it', () => {
     const sql = planted('the deferred verifier deleted', (s) =>
       s.replace(new RegExp(String.raw`CREATE OR REPLACE FUNCTION ${SETTLEMENT_VERIFIER}[\s\S]*$`), ''),
     );
