@@ -277,6 +277,71 @@ export class CustomerReadService {
    * module's. `daysPastDue` is measured from the invoice's own due date to the
    * supplied as-of date, in the database, so one date arithmetic serves the read
    * and the aging.
+   *
+   * ── WHY THIS ASKS `customer_open_invoices_page` (`0084`, R-105/R-106) ─────
+   *
+   * It used to ask for the page by driving `FROM invoices i`, joining
+   * `invoice_outstanding(i.business_id, i.id)` as a `LATERAL ... ON TRUE`, and
+   * then — THE DEFECT — adding the business predicate "outstanding is not
+   * zero" to the `WHERE` clause as a test on that lateral's OUTPUT column,
+   * under `ORDER BY i.issue_date, i.id LIMIT $n`. (The predicate is described
+   * rather than quoted on purpose: the §11 guard in
+   * `tests/performance/receivables-open-page-equivalence.test.ts` greps this
+   * tree for its exact text, and a guard that greps cannot tell a quotation in
+   * a comment from a live filter — so a comment that quoted it would redden
+   * the guard, correctly.)
+   *
+   * The filter was on the FUNCTION'S OUTPUT, so the `LIMIT` could not
+   * short-circuit the walk: PostgreSQL had to run the settlement sum for every
+   * candidate invoice in page order until `$n` of them survived. Measured on
+   * PostgreSQL 16.13 as `daftar_app` with row security applied, over a customer
+   * with 1 500 cash-settled invoices and 60 genuinely open ones: **970.845 ms
+   * and 1 551 LATERAL loops to return 51 rows**, against a 100 ms ceiling.
+   *
+   * `0080` is what makes it bite rather than merely cost. A cash-settled invoice
+   * keeps `status = 'open'` — the status is the DOCUMENT's lifecycle, not its
+   * settlement — and reports outstanding 0, so a shop that sells mostly for cash
+   * accumulates permanently FAILING candidates: rows the predicate reaches, pays
+   * the full settlement computation for, and discards. The same is true of a
+   * fully paid CREDIT invoice, which no table predicate can tell from an unpaid
+   * one.
+   *
+   * So the page is now asked of `customer_open_invoices_page`, which walks the
+   * candidates in BOUNDED CHUNKS and makes ONE set-based call to the one
+   * definition of the settlement sum per chunk. The same two arms measure
+   * **49.591 ms with 1 page-reader call and 1 chunk** (cash) and **87.068 ms
+   * with 1 page-reader call and 8 chunks** (settled credit).
+   *
+   * **This module still holds none of the money.** Every figure here comes out
+   * of that function; there is no copy of the arithmetic, no stored or cached
+   * balance, and no second formula. `settlementState` is deliberately NOT
+   * returned by the page reader — deriving it there would be a second copy of
+   * the state law — so it is still asked of `invoice_settlement_state`, which
+   * then runs only for the rows actually returned.
+   *
+   * **The join to `invoices` is bounded by the PAGE, not by the business**,
+   * which is the whole difference from the re-join `0084` removed from the AR
+   * readers. It is an `invoices_pkey` probe per returned row — measured as a
+   * Nested Loop of 51 loops — and it recovers only `document_kind`,
+   * `document_number` and `total_txn_minor`. `issueDate`, `dueDate` and
+   * `currency` come off the page reader itself.
+   *
+   * **The cursor stays the invoice id** (§14: the public API shape does not
+   * change). The continuation key is `(issue_date, id)`, and under the
+   * coordinator's AMENDMENT 1 (A1-2, A1-3) the id's issue date is resolved
+   * INSIDE the reader through the primary key rather than here: the cursor is
+   * present exactly when the id is non-null, so this module passes the id with
+   * a NULL date and makes NO resolution query of its own. That keeps every
+   * ordering component in the continuation key without adding back a
+   * per-request read of `invoices` under row security — the very kind of read
+   * this correction is busy removing. There is no `OFFSET`, and the `limit + 1`
+   * probe for `nextCursor` is unchanged.
+   *
+   * A cursor id that resolves to nothing — including another business's id,
+   * which row security hides — yields an EMPTY page rather than a refusal. The
+   * reader adds no `P0001` of its own by design; the only refusal reachable
+   * through it is `invoice.not_found` from the one definition, and
+   * `customer.not_found` above it is this module's own and unchanged.
    */
   async openInvoices(m: MembershipContext, customerId: string, q: CustomerOpenInvoicesQuery): Promise<CustomerOpenInvoicesDto> {
     const row = await findCustomer(this.db, this.scope(m), customerId);
@@ -298,21 +363,17 @@ export class CustomerReadService {
       }
     >(
       this.scope(m),
-      `SELECT i.id AS invoice_id, i.document_kind, i.document_number,
-              to_char(i.issue_date, 'YYYY-MM-DD') AS issue_date,
-              to_char(i.due_date, 'YYYY-MM-DD') AS due_date,
-              i.currency_code, i.total_txn_minor::text AS total_txn_minor,
+      `SELECT o.invoice_id, i.document_kind, i.document_number,
+              to_char(o.issue_date, 'YYYY-MM-DD') AS issue_date,
+              to_char(o.due_date, 'YYYY-MM-DD') AS due_date,
+              o.currency_code, i.total_txn_minor::text AS total_txn_minor,
               o.outstanding_txn_minor::text AS outstanding_txn_minor,
               o.outstanding_base_minor::text AS outstanding_base_minor,
               invoice_settlement_state(i.business_id, i.id) AS settlement_state,
-              CASE WHEN i.due_date IS NULL THEN NULL ELSE ($3::date - i.due_date) END AS days_past_due
-         FROM invoices i
-         JOIN LATERAL invoice_outstanding(i.business_id, i.id) o ON TRUE
-        WHERE i.business_id = $1 AND i.customer_id = $2 AND i.status = 'open'
-          AND o.outstanding_txn_minor <> 0
-          AND ($4::uuid IS NULL OR (i.issue_date, i.id) > (SELECT p.issue_date, p.id FROM invoices p WHERE p.business_id = $1 AND p.id = $4))
-        ORDER BY i.issue_date, i.id
-        LIMIT $5`,
+              CASE WHEN o.due_date IS NULL THEN NULL ELSE ($3::date - o.due_date) END AS days_past_due
+         FROM customer_open_invoices_page($1, $2, NULL::date, $4::uuid, $5) o
+         JOIN invoices i ON i.business_id = $1 AND i.id = o.invoice_id
+        ORDER BY o.issue_date, o.invoice_id`,
       [m.businessId, customerId, q.asOf, q.cursor ?? null, size + 1],
     );
     const page = found.rows.slice(0, size);
