@@ -595,3 +595,88 @@ describe('§D the discovered stripper of the S-P4-03 red proof is kept (commit 4
     expect(invoiceReducerProblems(root)).toEqual([]);
   });
 });
+
+describe('§F the body-reading device cannot be escaped by a dollar-quote tag', () => {
+  /**
+   * MEASURED HOLE, closed here. `phase4RoutineBody` read a routine from its
+   * `CREATE` to the first `$$;`, so a routine closed with ANY TAGGED
+   * dollar-quote was not found at all — and a subject the device returns
+   * `null` for was silently skipped by the refund law. A reader subtracting
+   * `public.refunds` inside a `$fn$` body therefore produced ZERO findings.
+   *
+   * The shape is not hypothetical: the accepted Phase 4 migrations already
+   * dollar-quote with `$coll$`, `$end$`, `$pre$`, `$post$` and `$proof$`, so
+   * `$fn$` is the idiom a future author reaches for, not an exotic evasion.
+   * Repairing the device is byte-neutral on the real tree: the four readers it
+   * already found come back identical.
+   */
+  it('RED F1: a refund read inside a TAGGED dollar-quoted reader is found, not skipped', () => {
+    const planted = `CREATE OR REPLACE FUNCTION invoice_outstanding_tagged(p_business_id uuid, p_invoice_id uuid)
+RETURNS numeric
+LANGUAGE sql
+STABLE
+SET search_path = pg_catalog, public, pg_temp
+AS $fn$
+  SELECT i.total_minor
+       - COALESCE((SELECT sum(a.amount_minor) FROM public.payment_allocations a WHERE a.invoice_id = i.id), 0)
+       - COALESCE((SELECT sum(r.amount_minor) FROM public.refunds r WHERE r.invoice_id = i.id), 0)
+    FROM public.invoices i
+   WHERE i.business_id = p_business_id AND i.id = p_invoice_id;
+$fn$;
+`;
+    const root = rootWith(planted, '9999_planted_tagged.sql');
+    // First: the device can now READ it. That is the repair, stated separately
+    // from the law, so a regression says which of the two broke.
+    expect(phase4RoutineBody(root, 'invoice_outstanding_tagged'), 'a `$fn$`-quoted routine is unreadable again').not.toBeNull();
+    const problems = invoiceReducerProblems(root);
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain('TL-P4-S5-R1');
+    expect(problems[0]).toContain('invoice_outstanding_tagged');
+    expect(problems[0]).toContain('refunds');
+  });
+
+  it('F2: repairing the device is byte-neutral on the real tree — every reader it already read is unchanged', () => {
+    // The repair widens reach only. If any of these bodies changed length, the
+    // tagged-close regex is matching something different from what the first
+    // device matched, and every law reading a body through it has moved.
+    const readers = [
+      ...new Set([...phase4Sql(REPO).matchAll(/CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+([a-z_][a-z0-9_]*)\s*\(/gi)].map((m) => (m[1] ?? '').toLowerCase())),
+    ]
+      .filter((n) => RECEIVABLE_READER_VOCABULARY.test(n))
+      .sort();
+    expect(readers, 'the tree defines no receivable reader, so this check has no subject').not.toEqual([]);
+    for (const name of readers) {
+      const body = phase4RoutineBody(REPO, name);
+      expect(body, `${name} is no longer readable`).not.toBeNull();
+      // The body is the routine it claims to be, and it ends where its own
+      // opening tag closes rather than at some later routine's.
+      expect(body).toContain(name);
+      const tag = /AS\s+(\$[a-z_]*\$)/i.exec(body ?? '')?.[1];
+      expect(tag, `${name}: no dollar-quote opening found in the body read`).toBeTruthy();
+      expect(body?.endsWith(`${tag};`), `${name}: the body does not end at its own closing tag ${tag}`).toBe(true);
+    }
+    expect(invoiceReducerProblems(REPO)).toEqual([]);
+  });
+
+  it('RED F3: a reader whose body the device CANNOT read is reported, never skipped', () => {
+    // A string-literal routine body is legal PostgreSQL and carries no
+    // dollar-quote, so the device returns `null` for it. That used to be a
+    // silent `continue`: a discovered subject vanishing from its own law. It
+    // is now a finding in its own right — the same judgement the law already
+    // made for a tree with no reader at all.
+    const planted = `CREATE OR REPLACE FUNCTION invoice_outstanding_literal(p_business_id uuid, p_invoice_id uuid)
+RETURNS numeric
+LANGUAGE sql
+STABLE
+SET search_path = pg_catalog, public, pg_temp
+AS 'SELECT 0::numeric';
+`;
+    const root = rootWith(planted, '9999_planted_literal.sql');
+    expect(phase4RoutineBody(root, 'invoice_outstanding_literal')).toBeNull();
+    const problems = invoiceReducerProblems(root);
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain('TL-P4-S5-R1');
+    expect(problems[0]).toContain('invoice_outstanding_literal');
+    expect(problems[0]).toContain('an unreadable subject is not a pass');
+  });
+});

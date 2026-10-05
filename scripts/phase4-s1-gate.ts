@@ -1179,7 +1179,17 @@ function phase4Creates(root: string, name: string): boolean {
  * relations.
  */
 export function phase4RoutineBody(root: string, name: string): string | null {
-  const all = [...phase4Sql(root).matchAll(new RegExp(`CREATE\\s+(?:OR\\s+REPLACE\\s+)?FUNCTION\\s+${name}\\s*\\([\\s\\S]*?\\$\\$;`, 'gi'))];
+  // The dollar-quote TAG is captured and the close must repeat it. Reading to
+  // the first `$$;` instead was a hole, measured under TL-P4-S5-R1: this tree
+  // already dollar-quotes with `$coll$`, `$end$`, `$pre$`, `$post$` and
+  // `$proof$`, so a routine written `AS $fn$ … $fn$;` was simply NOT FOUND,
+  // and every law that reads a body through this helper went silent on it. A
+  // planted `invoice_outstanding`-family reader subtracting `public.refunds`
+  // inside a `$fn$` body produced zero findings. On a financial law a body
+  // this helper cannot read must never look like a body with nothing in it.
+  const all = [
+    ...phase4Sql(root).matchAll(new RegExp(`CREATE\\s+(?:OR\\s+REPLACE\\s+)?FUNCTION\\s+${name}\\s*\\([\\s\\S]*?(\\$[a-z_]*\\$)[\\s\\S]*?\\1;`, 'gi')),
+  ];
   return all.length === 0 ? null : (all[all.length - 1]?.[0] ?? null);
 }
 
@@ -1266,7 +1276,18 @@ export function invoiceReducerProblems(root: string): string[] {
   const problems: string[] = [];
   for (const name of readers) {
     const executable = phase4RoutineBody(root, name);
-    if (executable === null) continue;
+    // A reader this law DISCOVERED in the very text whose body it then cannot
+    // read is not a reader with nothing to say: it is the body-reading device
+    // disagreeing with the discovery device, and skipping it is the same
+    // vacuous pass the empty-readers branch above refuses. Measured: a
+    // `$fn$`-quoted reader subtracting `public.refunds` was skipped here and
+    // the whole check reported clean.
+    if (executable === null) {
+      problems.push(
+        `TL-P4-S5-R1: ${name} is a reader of the derived receivable that this gate cannot read the body of, so the law that a refund may not reduce invoice AR again cannot be applied to it — an unreadable subject is not a pass (P4-AL-05, P4-AL-34)`,
+      );
+      continue;
+    }
     if (!new RegExp(`\\b${name}\\b`).test(executable)) {
       problems.push(`TL-P4-S5-R1: the body read for ${name} does not contain ${name}, so this law would be reading the wrong text`);
       continue;
