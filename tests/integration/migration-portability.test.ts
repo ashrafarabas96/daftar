@@ -1471,10 +1471,22 @@ describe('managed PostgreSQL: 0039 → 0049 under a non-superuser migration prin
             [[...phase4Routines]],
           )
         ).rows;
-        expect(
-          phase4Shapes.map((r) => r.proname),
-          'every routine the Phase 4 migrations create exists in the built catalogue',
-        ).toEqual([...phase4Routines]);
+        // DISTINCT names, because a Phase 4 routine name may legitimately carry
+        // more than one OVERLOAD and `phase4Routines` is a set of NAMES read out
+        // of the migration text. `0083` made `invoice_outstanding` exactly that:
+        // the set-based definition over a `UUID[]` and the single-invoice wrapper
+        // that delegates to it, which is how P4-AL-07 is kept — one copy of the
+        // settlement arithmetic, reached two ways. Comparing the catalogue's row
+        // list against a name set made the second overload read as a MISSING
+        // routine (47 rows against 46 names), which is the opposite of what
+        // happened.
+        //
+        // Nothing is weakened by this: the claim is still that every declared
+        // name exists, and the two-shape law below iterates the ROWS, so each
+        // overload is shape-checked on its own — strictly more than before.
+        expect([...new Set(phase4Shapes.map((r) => r.proname))].sort(), 'every routine the Phase 4 migrations create exists in the built catalogue').toEqual(
+          [...phase4Routines].sort(),
+        );
         const guards = phase4Shapes.filter((r) => r.definer);
         const reads = phase4Shapes.filter((r) => !r.definer);
         expect(guards.length + reads.length, 'no third shape').toBe(phase4Shapes.length);
