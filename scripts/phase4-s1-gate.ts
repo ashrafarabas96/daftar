@@ -334,6 +334,12 @@ export const RED_PROOFS: readonly (RedProof | Pending)[] = [
     proof: `${GUARD_SUITE_DIR}/phase4-deferred-seam-guard.test.ts::RED: the discharge is removed — \`sales\` exists and nothing binds invoices.sale_id to it`,
   },
   {
+    id: 'RP-REFUND-AR',
+    defect:
+      'a later slice subtracts a cash refund from the derived invoice receivable, so the invoice AR falls twice for one credit — once for the credit/return effect and again for the refund that settles it (TL-P4-S5-R1, lock P4-AL-34)',
+    proof: `${GUARD_SUITE_DIR}/phase4-refund-not-a-reducer-guard.test.ts::RED C: a direct \`refunds\` subtraction planted into invoice_outstanding`,
+  },
+  {
     id: 'RP-FK',
     defect:
       'a reference between two commercial rows carries business_id on one side only, or on neither, so SQL can bind one business’s row to another business’s parent',
@@ -511,8 +517,48 @@ const manifestPath = (root: string): string => join(root, 'infrastructure/databa
 const SKIP = /\b(?:it|test|describe|suite)\.(?:skip|only|todo|skipIf|runIf)\b|\bx(?:it|describe)\s*\(|RELEASE_GATE_SKIP_/;
 const stripTsProse = (source: string): string => source.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/(^|[^:'"`\\])\/\/[^\n]*/g, '$1');
 const QUOTED = /'(?:\\.|[^'\\\n])*'|"(?:\\.|[^"\\\n])*"|`(?:\\.|[^`\\])*`/g;
-/** SQL with `--` and block comments removed, so a rule never fires on prose. */
-const stripSql = (sql: string): string => sql.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/--[^\n]*/g, '');
+/**
+ * SQL with `--` and block comments removed, so a rule never fires on prose.
+ *
+ * This is the gate's comment-stripping device, and `phase4Sql` applies it to
+ * every migration before any check sees one, which is why every law in this
+ * file reads what the database EXECUTES and never what a comment mentions.
+ * TL-P4-S5-R1 depends on exactly that, and `invoiceReducerProblems` asserts
+ * the property rather than assuming it; it is exported so a guard proof can
+ * assert it too instead of trusting it.
+ *
+ * IT IS LITERAL-AWARE, AND THAT IS THE WHOLE POINT OF THE ONE PASS
+ * (TL-P4-S5-R1). It used to be two blind passes — block comments, then
+ * `--[^\n]*` — and neither knew what a string literal was. A line like
+ *
+ *   WHERE a.note <> '-- not a comment' AND x IN (SELECT … FROM public.refunds)
+ *
+ * was AMPUTATED at the literal's `--`, and everything after it on that line
+ * disappeared from every check in this file. On a financial law that is a
+ * FALSE GREEN: the refund read TL-P4-S5-R1 exists to refuse becomes invisible
+ * to it. A literal containing `/*` amputated the same way, across lines.
+ *
+ * The fix is not to blank literals. Several P4-S1 laws search for the CONTENT
+ * INSIDE a literal — a refusal code raised as `'invoice_settlement.…'`, a
+ * registered source type, a role name — and a device that blanked them would
+ * make those checks stop seeing the very thing they exist to see, silently and
+ * greenly, which is the failure mode this gate is built against.
+ *
+ * So one alternation pass decides what each match IS before deciding what to
+ * do with it: a literal is returned BYTE FOR BYTE, a block comment becomes a
+ * space and a line comment becomes nothing — the two substitutions the two
+ * blind passes used, unchanged. A `--` or a `/*` inside a literal is therefore
+ * part of the literal and never a comment, and an apostrophe inside a comment
+ * is part of the comment and never a literal, because a match is taken at the
+ * leftmost position and a comment's marker always precedes its own text. SQL
+ * escapes a quote by DOUBLING it, which `''` in the literal alternative is.
+ *
+ * This brings the SQL device up to the standard its TypeScript siblings above
+ * already meet: `stripTsProse` spares a `//` that follows a quote, and
+ * `QUOTED` reads a literal as one unit rather than as characters.
+ */
+export const stripSql = (sql: string): string =>
+  sql.replace(/'(?:''|[^'])*'|\/\*[\s\S]*?\*\/|--[^\n]*/g, (m) => (m.startsWith("'") ? m : m.startsWith('--') ? '' : ' '));
 
 interface Manifest {
   readonly frozenThrough: string;
@@ -1133,17 +1179,165 @@ function phase4Creates(root: string, name: string): boolean {
  * relations.
  */
 export function phase4RoutineBody(root: string, name: string): string | null {
-  const all = [...phase4Sql(root).matchAll(new RegExp(`CREATE\\s+(?:OR\\s+REPLACE\\s+)?FUNCTION\\s+${name}\\s*\\([\\s\\S]*?\\$\\$;`, 'gi'))];
+  // The dollar-quote TAG is captured and the close must repeat it. Reading to
+  // the first `$$;` instead was a hole, measured under TL-P4-S5-R1: this tree
+  // already dollar-quotes with `$coll$`, `$end$`, `$pre$`, `$post$` and
+  // `$proof$`, so a routine written `AS $fn$ … $fn$;` was simply NOT FOUND,
+  // and every law that reads a body through this helper went silent on it. A
+  // planted `invoice_outstanding`-family reader subtracting `public.refunds`
+  // inside a `$fn$` body produced zero findings. On a financial law a body
+  // this helper cannot read must never look like a body with nothing in it.
+  const all = [
+    ...phase4Sql(root).matchAll(new RegExp(`CREATE\\s+(?:OR\\s+REPLACE\\s+)?FUNCTION\\s+${name}\\s*\\([\\s\\S]*?(\\$[a-z_]*\\$)[\\s\\S]*?\\1;`, 'gi')),
+  ];
   return all.length === 0 ? null : (all[all.length - 1]?.[0] ?? null);
 }
 
 /**
- * The relations that settle an invoice: a payment allocation, an applied
- * credit note, a customer credit application, a refund or a reversal of any
- * of those. DISCOVERED from the Phase 4 DDL, so the set grows by itself.
+ * The Phase-4 relations whose financial existence can change the DERIVED
+ * invoice receivable/outstanding — the REDUCERS: a payment allocation, an
+ * applied credit note, a customer credit application, a write-off, or a
+ * reversal of any of those. DISCOVERED from the Phase 4 DDL, so the set grows
+ * by itself.
+ *
+ * A CASH REFUND IS INTENTIONALLY EXCLUDED, because it settles a
+ * credit-note/customer-credit liability and must not reduce invoice AR again
+ * (TL-P4-S5-R1, ruling on lock P4-AL-34). The financial identity this set
+ * encodes: an invoice becomes a receivable, and a reducer — a payment
+ * allocation, a customer-credit application, a credit-note effect where
+ * applicable — reduces that invoice receivable ONCE. A later refund does not
+ * reduce it a second time; it consumes the liability or right the credit note
+ * or the customer credit still carries and creates the matching OUTWARD cash
+ * movement. Credit/return effect may reduce AR; a refund must not reduce AR
+ * again.
+ *
+ * This set is therefore the discovery half of seam S-P4-03 only. The other
+ * half of TL-P4-S5-R1 is `invoiceReducerProblems` below: a permanent negative
+ * proof over EXECUTABLE SQL, so a later slice cannot put the second reduction
+ * back by subtracting a refund inside a receivable reader. Removing the token
+ * from this regex alone would leave that door open, and renaming a refund
+ * relation would walk straight through it.
  */
-export const SETTLEMENT_VOCABULARY =
-  /^(payment_allocations|allocation_reversals|payment_reversals|credit_note_applications|credit_notes|customer_credit_applications|refunds|invoice_write_offs)$/;
+export const INVOICE_REDUCER_VOCABULARY =
+  /^(payment_allocations|allocation_reversals|payment_reversals|credit_note_applications|credit_notes|customer_credit_applications|invoice_write_offs)$/;
+
+/**
+ * The names a Phase-4 CASH REFUND relation will carry. A vocabulary, not a
+ * list of what the tree has: `refunds` does not exist yet, and the whole point
+ * of TL-P4-S5-R1 is that the law must already be standing on the day it does.
+ */
+export const REFUND_VOCABULARY = /\b(refunds|refund_allocations|refund_applications|invoice_refunds|credit_note_refunds|customer_credit_refunds)\b/i;
+
+/**
+ * The routines that READ the derived invoice/customer receivable. Discovered
+ * from the Phase 4 DDL by what a receivable reader is CALLED, so the family
+ * grows by itself rather than being a list this slice happened to see.
+ */
+export const RECEIVABLE_READER_VOCABULARY = /(^|_)(outstanding|receivable|aging|settlement_state)($|_)/;
+
+/**
+ * TL-P4-S5-R1 — A REFUND MUST NOT REDUCE INVOICE AR AGAIN.
+ *
+ * `INVOICE_REDUCER_VOCABULARY` says which relations seam S-P4-03 requires a
+ * receivable reader to READ. This is the opposite law, and the one that
+ * outlives the slice: whatever a later slice creates and whatever it calls it,
+ * no routine that reads the derived receivable may subtract a cash refund,
+ * because the invoice receivable was already reduced once by the credit-note
+ * or customer-credit effect the refund now settles (lock P4-AL-34).
+ *
+ * It is a law about EXECUTABLE SQL SEMANTICS, never about prose. Every body it
+ * reads comes through `phase4Sql`, which applies `stripSql` first, so a
+ * comment mentioning a refund relation is GONE before this law looks: it can
+ * neither fail the law nor satisfy it. That is asserted, not assumed — a body
+ * that still carries a comment marker means the stripping device changed under
+ * this law, and the law reports THAT rather than reading prose as SQL.
+ *
+ * And it is non-vacuous by construction: it fails loudly if the Phase 4 DDL
+ * carries no reader of the derived receivable at all, and if a body no longer
+ * contains the routine it is supposed to be.
+ */
+export function invoiceReducerProblems(root: string): string[] {
+  const sql = phase4Sql(root);
+  // No Phase 4 DDL at all is the one state in which this law has nothing to
+  // say: the receivable itself does not exist yet. Seam S-P4-03 reads the same
+  // tree the same way.
+  if (sql.trim() === '') return [];
+  const readers = [
+    ...new Set(
+      [...sql.matchAll(/CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+([a-z_][a-z0-9_]*)\s*\(/gi)]
+        .map((m) => (m[1] ?? '').toLowerCase())
+        .filter((n) => RECEIVABLE_READER_VOCABULARY.test(n)),
+    ),
+  ].sort();
+  if (readers.length === 0)
+    return [
+      'TL-P4-S5-R1: the Phase 4 DDL defines no reader of the derived receivable, so the law that a refund may not reduce invoice AR again has no subject — a check with no subject is not a pass (P4-AL-05, P4-AL-34)',
+    ];
+  const problems: string[] = [];
+  for (const name of readers) {
+    const executable = phase4RoutineBody(root, name);
+    // A reader this law DISCOVERED in the very text whose body it then cannot
+    // read is not a reader with nothing to say: it is the body-reading device
+    // disagreeing with the discovery device, and skipping it is the same
+    // vacuous pass the empty-readers branch above refuses. Measured: a
+    // `$fn$`-quoted reader subtracting `public.refunds` was skipped here and
+    // the whole check reported clean.
+    if (executable === null) {
+      problems.push(
+        `TL-P4-S5-R1: ${name} is a reader of the derived receivable that this gate cannot read the body of, so the law that a refund may not reduce invoice AR again cannot be applied to it — an unreadable subject is not a pass (P4-AL-05, P4-AL-34)`,
+      );
+      continue;
+    }
+    if (!new RegExp(`\\b${name}\\b`).test(executable)) {
+      problems.push(`TL-P4-S5-R1: the body read for ${name} does not contain ${name}, so this law would be reading the wrong text`);
+      continue;
+    }
+    // The subject must be prose-free, because a comment must neither satisfy
+    // nor fail this law. `phase4Sql` strips comments out of every migration
+    // before a check sees one; if a marker survived, that device changed and
+    // this law would be reading a sentence as if it were SQL.
+    //
+    // The marker is looked for OUTSIDE string literals, which is the other
+    // half of `stripSql` being literal-aware: `'-- not a comment'` is a value
+    // the database compares, not prose, and a law that read it as a leftover
+    // comment would refuse a legitimate routine. Only the markers are
+    // blanked out here, never the literal's CONTENT, which the refund check
+    // below still reads.
+    if (/--|\/\*/.test(executable.replace(/'(?:''|[^'])*'/g, "''"))) {
+      problems.push(
+        `TL-P4-S5-R1: the body read for ${name} still carries a comment marker, so the SQL prose stripping this law stands on is no longer in force — a comment must neither satisfy nor fail a financial law`,
+      );
+      continue;
+    }
+    // The refund check reads the WHOLE body, string literals INCLUDED, and that
+    // is deliberate: `EXECUTE 'SELECT … FROM public.refunds'` is a read, and a
+    // reader of the derived receivable has no business naming a refund relation
+    // in any form. The asymmetry with the precondition above is the point. Over-
+    // reporting here is a loud failure carrying the routine's own name; under-
+    // reporting is a second reduction of a customer's receivable that nobody
+    // sees. On a financial law that is not a close call.
+    //
+    // THE COST OF THAT CHOICE, NAMED SO THE NEXT PERSON MEETS IT EXPLAINED
+    // RATHER THAN DISCOVERING IT. The day someone writes a refusal code inside
+    // a receivable reader whose text literally contains a refund relation name
+    // — `'invoice_outstanding.refunds_not_a_reducer'` is exactly the name a
+    // future author would reach for — this check goes RED on a text that is not
+    // a defect. That is KNOWN, and it is the DELIBERATE direction of the error.
+    //
+    // The remedy is to NARROW the check to the read shapes — a `FROM`, a
+    // `JOIN`, an `UPDATE`/`INSERT INTO`, a `SELECT … FROM` inside an `EXECUTE`
+    // string — so that a refund named in a message is distinguished from a
+    // refund that is read. The remedy is NOT to widen it to ignore literals
+    // wholesale: that would hand back dynamic SQL, which is a read, and a
+    // false green on this law is a receivable reduced twice.
+    const refund = REFUND_VOCABULARY.exec(executable);
+    if (refund !== null)
+      problems.push(
+        `TL-P4-S5-R1: ${name} reads ${refund[1]} in its executable body — a refund does not undo a payment and does not settle an invoice: it settles the credit-note or customer-credit liability it is paid out of, and the invoice receivable was already reduced once by that credit effect. Reading it here reduces invoice AR a second time (lock P4-AL-34, P4-AL-05)`,
+      );
+  }
+  return problems;
+}
 
 export const DEFERRED_SEAMS: readonly DeferredSeam[] = [
   {
@@ -1185,17 +1379,17 @@ export const DEFERRED_SEAMS: readonly DeferredSeam[] = [
     id: 'S-P4-03',
     what: 'invoice_outstanding subtracts nothing, because nothing that settles an invoice exists yet',
     run: (root) => {
-      const settlers = readTables(phase4Sql(root))
+      const reducers = readTables(phase4Sql(root))
         .tables.map((t) => t.name)
-        .filter((n) => SETTLEMENT_VOCABULARY.test(n))
+        .filter((n) => INVOICE_REDUCER_VOCABULARY.test(n))
         .sort();
-      if (settlers.length === 0) return [];
+      if (reducers.length === 0) return [];
       const body = phase4RoutineBody(root, 'invoice_outstanding');
       if (body === null)
         return [
-          `seam S-P4-03: the Phase 4 DDL creates ${settlers.join(', ')} and no Phase 4 migration defines invoice_outstanding — the reader-of-record of a settlement cannot be absent once something settles (P4-AL-07)`,
+          `seam S-P4-03: the Phase 4 DDL creates ${reducers.join(', ')} and no Phase 4 migration defines invoice_outstanding — the reader-of-record of a settlement cannot be absent once something settles (P4-AL-07)`,
         ];
-      const missing = settlers.filter((n) => !new RegExp(`\\b${n}\\b`).test(body));
+      const missing = reducers.filter((n) => !new RegExp(`\\b${n}\\b`).test(body));
       return missing.length === 0
         ? []
         : [
@@ -1592,6 +1786,16 @@ export const CHECKS: readonly Check[] = [
     needs: 'live',
     run: deferredSeamProblems,
     ok: `the ${DEFERRED_SEAMS.length} declared seams (${DEFERRED_SEAMS.map((x) => x.id).join(', ')}) are each still safe: what made them safe is still true in the tree`,
+  },
+  {
+    id: 'refund-not-a-reducer',
+    title: 'a refund does not reduce invoice AR again (TL-P4-S5-R1, P4-AL-34)',
+    area: 'receivable-identity',
+    // 'live', like the seams above: the law reads the tree's own receivable
+    // readers and says nothing only when there is no Phase 4 DDL at all.
+    needs: 'live',
+    run: invoiceReducerProblems,
+    ok: 'no reader of the derived receivable subtracts a cash refund in its executable body — the credit effect reduced the invoice once and a refund settles that credit, not the invoice',
   },
   {
     id: 'composite-fk',

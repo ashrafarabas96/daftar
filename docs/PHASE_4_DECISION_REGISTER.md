@@ -31,7 +31,7 @@
 | One till = one authenticated cashier | **RULED AND BUILT** | lock §27 | `0079:405` `pos_till_sessions_actor_uq UNIQUE (business_id, id, opened_by)` and `0079:427` a partial unique on `(business_id, opened_by) WHERE status = 'open'` — one open till per authenticated user, enforced by the database |
 | `P4-AL-48` — the refusal half of the audit contract | **CONTRADICTION FOUND, AND RESOLVED WITHOUT WEAKENING THE LOCK.** See §2 | this register §2 | `apps/api/src/modules/audit/audit.service.ts`, `receivables-errors.ts` |
 | `F-3` — does P4-AL-48 need `intent_sha256` / permission / branch in the row's own metadata? | **ANSWERED: it depends on the outcome, and the answer is decided by the jti registry.** See §3 | this register §3 | `0054:88-94`, `0054:450-451`, `0081:2170-2174` |
-| `SETTLEMENT_VOCABULARY` counts `refunds` as settling an invoice, against `P4-AL-34` | **OPEN — AND IT IS THE TECH LEAD'S, NOT AN IMPLEMENTATION CHOICE.** Recorded with a recommendation in §4; **not** unilaterally resolved here | this register §4 | `scripts/phase4-s1-gate.ts:1140-1146` versus lock `:736` |
+| `TL-P4-S5-R1` — the gate's reducer vocabulary versus `P4-AL-34` | **RULED. `P4-AL-34` is authoritative; the gate's future prediction was the defect.** A credit/return effect may reduce AR; **a refund must not reduce AR again.** Owner **`P4-S5`**. Machine enforcement **YES**. **It may not be reopened without new contradictory evidence.** The ruling text is §4 | this register §4 | `scripts/phase4-s1-gate.ts` `INVOICE_REDUCER_VOCABULARY` (no `refunds`) and `invoiceReducerProblems` (the `refund-not-a-reducer` check); red proofs `tests/guards/phase4-refund-not-a-reducer-guard.test.ts`, `tests/guards/phase4-deferred-seam-guard.test.ts` |
 | Whether `invoices` gains `UNIQUE (business_id, id, customer_id)` (Departure A) | **OPEN — a widening of an accepted relation's key surface, which is a Tech Lead decision** | lock `:2298` | `0081:357`, `0081:493` are the two-column edges actually built |
 | An internal/domain writer enforcing its own authority at the **application** layer | **NEW LAW — belongs to a later slice. Card in §5** | this register §5 | `audit.service.ts`, `apps/api/src/infra/database.ts:170`, `:985-992` |
 | "delivery" / "log" / "adjustment" as Phase 4 vocabulary | **AMBIGUOUS IN THE LOCK, measured against the tree. Card in §6** | this register §6 | `0020:6`, `0046:131`, `0061:541`, `0061:569`, `0063:357`, lock `:464`, `:1025` |
@@ -187,30 +187,102 @@ guess.
 
 ---
 
-## 4. Recorded contradiction for the Tech Lead — `SETTLEMENT_VOCABULARY` versus `P4-AL-34`
+## 4. `TL-P4-S5-R1` — RULED. A refund does not reduce invoice AR again
 
-**NOT RESOLVED HERE. This needs the Tech Lead, and nothing in this change touches either side.**
+**Status: RULED. Owner: `P4-S5`. Machine enforcement: YES. It may not be reopened without new
+contradictory evidence.**
 
-- `scripts/phase4-s1-gate.ts:1140-1146` declares *"The relations that settle an invoice: a payment
-  allocation, an applied credit note, a customer credit application, **a refund** or a reversal of any of
-  those"*, and its regex includes `refunds`.
+### 4.1 What the contradiction was
+
+- `scripts/phase4-s1-gate.ts` declared a constant, since removed by this ruling, as *"The relations that settle an invoice: a
+  payment allocation, an applied credit note, a customer credit application, **a refund** or a reversal of
+  any of those"*, and its regex included `refunds`. Seam `S-P4-03` uses that set to discover the relations
+  whose existence requires `invoice_outstanding` to READ them — so the accepted gate carried a FUTURE
+  OBLIGATION to subtract refunds from the invoice receivable.
 - `docs/PHASE_4_ARCHITECTURE_LOCK.md:738` (`P4-AL-34`) states: *"A refund does not undo a payment; it is a
   separate outward movement from a credit note or a customer credit."*
 
-These cannot both be true. If a refund settles an invoice, it reduces what the customer owes — which is
-exactly the "undoing" `P4-AL-34` forbids, and it would also put a refund on the settlement chain that
-`invoice_settlement_verify` closes. If `P4-AL-34` holds, `refunds` does not belong in a vocabulary named
-"the relations that settle an invoice".
+These cannot both be true.
 
-**Recommendation (a recommendation only).** `P4-AL-34` is the stronger side and should win, for a reason
-that is about the journals rather than about the words: `P4-AL-34`'s own argument is that a refund (G-10)
+### 4.2 The ruling
+
+**`P4-AL-34` is authoritative. The gate's future prediction is the defect.**
+
+The financial identity, which is the load-bearing part of this ruling: an invoice becomes a receivable, and
+accepted **reducers** — payment allocation, customer-credit application, credit-note effect where
+applicable — reduce that invoice receivable. A later refund does **not** reduce it a second time; it
+consumes the liability or right represented by a credit note's or a customer credit's remaining value and
+creates the matching **outward cash movement**. **Credit/return effect may reduce AR. Refund must not
+reduce AR again.**
+
+The reason is about the journals and not about the words: `P4-AL-34`'s own argument is that a refund (G-10)
 and a reversal (G-11) have genuinely different journals, and its red proof is that *"the cash-unchanged
 assertion and the cash-reversed assertion cannot both pass on one path"*. A vocabulary that puts `refunds`
-on the settlement chain is the collapse that proof exists to prevent. The narrow correction would be to
-drop `refunds` from `SETTLEMENT_VOCABULARY` and rename the constant to what it actually guards. **But
-`refunds` does not exist yet** — it is P4-S5's relation — so the entry is currently guarding nothing, which
-means this can be settled at S5 with no pressure now, and settling it early by editing a gate script would
-be an implementation choice made over a locked decision.
+on the invoice-reduction chain is exactly the collapse that proof exists to prevent.
+
+### 4.3 What was built, and where
+
+A narrow correction to the already-accepted P4-S1 gate was authorized and made. No other P4-S1 rule was
+changed, no threshold or count was relaxed, and the predecessor gates stay green.
+
+1. **`refunds` is removed** from the set `S-P4-03` uses to discover relations whose existence
+   `invoice_outstanding` must reflect.
+2. **The concept is restated, not just de-tokenised.** The constant is now
+   `INVOICE_REDUCER_VOCABULARY`, documented as *the Phase-4 relations whose financial existence can change
+   the derived invoice receivable/outstanding, with a cash refund intentionally excluded because it settles
+   a credit-note/customer-credit liability and must not reduce invoice AR again*. No sentence anywhere in
+   the gate, its guards or this register now says that a refund settles an invoice.
+3. **A permanent negative proof**, `invoiceReducerProblems` — the gate check `refund-not-a-reducer`. It
+   reads the **executable SQL body** of every routine the Phase 4 DDL defines whose name the receivable
+   reader vocabulary matches (today `invoice_outstanding`, `invoice_settlement_state`,
+   `customer_ar_outstanding`, `customer_ar_aging`, all **discovered**), and refuses any refund relation
+   named in one. Prose is not the subject: every body arrives through `phase4Sql`, which applies the gate's
+   `stripSql` first, and the check **asserts** that precondition rather than assuming it, so a comment
+   mentioning `refunds` can neither satisfy nor fail the law.
+4. **Red proofs, all four directions the ruling required**, in
+   `tests/guards/phase4-refund-not-a-reducer-guard.test.ts` (`RP-REFUND-AR`) and
+   `tests/guards/phase4-deferred-seam-guard.test.ts` (`RP-SEAM`). Every plant is a COPY of the migrations
+   directory; nothing is written into `infrastructure/database/migrations/**`.
+   - **A — a future real reducer.** A synthetic `invoice_write_offs` lands with reducer semantics and the
+     reader does not account for it: `S-P4-03` goes RED and names it.
+   - **B — a refund.** `refunds` lands as P4-S5 will design it (paid out of a credit, naming no invoice):
+     `S-P4-03` stays silent, and the same tree with a real future reducer added does speak, so the silence
+     is about the refund and not about a plant the seam never saw.
+   - **C — a fake refund read.** A direct `refunds` subtraction planted into `invoice_outstanding` goes
+     RED; so does a renamed refund relation, a dead `LEFT JOIN … ON FALSE` reference, and a refund read in
+     a receivable reader other than `invoice_outstanding`. The same text with the read **commented out** is
+     green, and the same defect with the read commented out is **not** accepted as a fix.
+   - **D — the stripper.** The S-P4-03 red proof builds its stripper **from the discovered reducer set**
+     (commit `479110f`); that approach is **accepted and may not be reverted**. It is now also asserted
+     from outside the proof that relies on it: every TRUE reducer the tree creates is verified to have lost
+     its read in the planted copy, while the relations themselves still exist, so the seam keeps its
+     subject.
+
+### 4.4 What is OWED BY THE P4-S5 IMPLEMENTATION, and the measured reason
+
+**Owed: the live financial double-reduction test.** Open a credit invoice; make the accepted
+return/credit-note effect; verify AR falls **exactly once**; refund the resulting liability; verify the
+invoice outstanding does **not** fall again; verify that cash and the liability **do** move.
+
+**It is not built, and it is not stubbed.** The measured reason is that three relations it needs do not
+exist at any prefix in `infrastructure/database/migrations/**`:
+
+| relation | measured state |
+|---|---|
+| `refunds` | **absent** — no `CREATE TABLE refunds` in any migration `0000`–`0082` |
+| `credit_notes` | **absent** — no `CREATE TABLE credit_notes` in any migration `0000`–`0082` |
+| `credit_note_applications` | **absent** — no `CREATE TABLE credit_note_applications` in any migration `0000`–`0082` |
+
+(`customer_credits` and `customer_credit_applications` **do** exist, in `0081`; the credit-note half of the
+identity does not.) A test written against relations the test itself created would prove the fixture and
+not the system, so it is recorded here as owed rather than written. Items 1–4 of §4.3 are textual and
+planted-copy laws and are built **now**, by the same technique the existing deferred-seam red proofs use.
+
+### 4.5 Explicitly refused ways to make the gate green
+
+Adding a comment to `invoice_outstanding`; adding a dead SQL reference; renaming `refunds` to escape the
+vocabulary; making `invoice_outstanding` read refunds; special-casing a test to green. Each of the first
+three is planted against in §4.3 item 4 (direction C) and refused.
 
 ---
 
@@ -398,6 +470,8 @@ to one; only the audit row records it.
 - It resolves **nothing** about `OD-03`. No tax law was researched and no VAT rule inferred.
 - It does not touch `infrastructure/database/migrations/**`. `0000`–`0079` are frozen byte-for-byte and
   `0080`/`0081` are another owner's.
-- It does not touch `.github/workflows/ci.yml` or any gate script, including the
-  `SETTLEMENT_VOCABULARY` line §4 reports.
+- It does not touch `.github/workflows/ci.yml` or `tests/performance/**`. It no longer claims to touch no
+  gate script: `TL-P4-S5-R1` (§4) is a Tech-Lead-authorized narrow correction to `scripts/phase4-s1-gate.ts`
+  and was made, and the earlier wording of this bullet — written while §4 was still an unresolved
+  contradiction — is superseded by it. No other P4-S1 rule was changed.
 - It claims no gate and no test it did not run.
