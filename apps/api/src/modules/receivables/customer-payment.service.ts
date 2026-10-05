@@ -9,7 +9,8 @@ import type { BusinessTransactionId } from '../inventory/business-transaction';
 import { InventoryAuthorizationService, type InventoryCommandAuthority } from '../inventory/inventory-authorization';
 import type { MembershipContext } from '../tenancy/tenancy.service';
 import { planCustomerPayment, type CustomerPaymentAllocationPlan, type InvoiceArState } from './customer-settlement';
-import { auditThenRethrowReceivablesRefusal, receivablesRefusal, type ReceivablesAttempt } from './receivables-errors';
+import { receivablesRefusal } from './receivables-errors';
+import { auditThenRethrowReceivablesRefusal, type ReceivablesAttempt } from './receivables-refusal-audit';
 import {
   CUSTOMER_COLLECT_PAYMENT_OP,
   customerCollectPaymentIntentSha256,

@@ -34,7 +34,7 @@ import type { Response } from 'supertest';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { AppError } from '@daftar/domain-core';
 import { ensurePostgres, ownerPool, resetData } from '../helpers/test-app';
-import { refusedCode } from '../../apps/api/src/modules/receivables/receivables-errors';
+import { refusedCode } from '../../apps/api/src/modules/receivables/receivables-refusal-audit';
 import { collectPayment, type AllocationInput, type PaymentInput } from '../golden-regression/phase4-s4/settlement-path';
 import {
   newCustomer,

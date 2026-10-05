@@ -10,7 +10,8 @@ import { InventoryAuthorizationService } from '../inventory/inventory-authorizat
 import type { MembershipContext } from '../tenancy/tenancy.service';
 import { invoiceArState, invoiceSnapshot, settledInvoice } from './customer-payment.service';
 import { planCustomerCreditApplication, type CustomerCreditState } from './customer-settlement';
-import { auditThenRethrowReceivablesRefusal, receivablesRefusal, type ReceivablesAttempt } from './receivables-errors';
+import { receivablesRefusal } from './receivables-errors';
+import { auditThenRethrowReceivablesRefusal, type ReceivablesAttempt } from './receivables-refusal-audit';
 import { CUSTOMER_APPLY_CREDIT_OP, customerApplyCreditIntentSha256, customerApplyCreditPayload, receivablesOperationCode } from './receivables-payload';
 import {
   CUSTOMER_CREDIT_SQL,
