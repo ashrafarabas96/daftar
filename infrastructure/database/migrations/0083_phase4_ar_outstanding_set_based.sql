@@ -8,10 +8,28 @@
 -- keep right.
 --
 -- Migrations 0000-0079 are FROZEN and untouched. `0080`, `0081` and `0082`
--- are CANDIDATE and are BYTE-FOR-BYTE UNTOUCHED: this file is append-only and
--- corrects FORWARD, which is the only manner a defect in an already-applied
--- migration is repaired here (`0072` is the Phase 3 precedent; `0082` is this
--- slice's own).
+-- are CANDIDATE and are BYTE-FOR-BYTE UNTOUCHED: a defect in one of THOSE is
+-- repaired by correcting FORWARD, which is the only manner open to them
+-- (`0072` is the Phase 3 precedent; `0082` is this slice's own).
+--
+-- ── THIS FILE WAS LATER CORRECTED IN PLACE, UNDER A RULING ───────────────
+--
+-- Sections R-103 and R-104 below, and the three bodies they describe, are a
+-- CORRECTION OF THIS FILE'S OWN TEXT rather than a further migration. The
+-- P4-S4 corrective coordinator is the single migration owner of this slice
+-- and ruled it so on two facts: `0083` is a CANDIDATE of this same slice,
+-- written hours earlier, with NO CI EVIDENCE BOUND TO IT; and an `0084` that
+-- replaced the three routines `0083` had just created would leave a history
+-- in which the live definition of the AR sum can only be found by reading two
+-- files that disagree. `0080`, `0081` and `0082` carry extensive green
+-- evidence and are NOT eligible for the same treatment; `0000`-`0079` are
+-- frozen byte-for-byte. `MIGRATION_MANIFEST.json` is untouched and
+-- `frozenThrough` stays `0079`.
+--
+-- A DATABASE THAT ALREADY APPLIED THE EARLIER TEXT WILL REPORT «Migration
+-- tampered after apply», AND THAT IS THE CORRECT REPORT. Such a database is
+-- REBUILT. No `schema_migrations` row is edited to make a digest agree: that
+-- row is the only record of what a database actually ran.
 --
 -- ── THE MEASURED DEFECT, AND THE THREE BUDGETS IT FAILS ──────────────────
 --
@@ -84,16 +102,21 @@
 --     `UNION ALL` over the reducer SET, and `paid_base` as the sum of the
 --     CARRYING RELEASED rather than a conversion of the paid transaction
 --     amount (so `outstanding_base` is exactly 0 when the last reducer closes
---     the invoice, per `0081`'s own note on the cumulative identity).
+--     the invoice, per `0081`'s own note on the cumulative identity). Since
+--     R-104 it also returns the `currency_code` and the `due_date` OF THE
+--     INVOICE ROW IT ALREADY READ — passthrough, not arithmetic, and the
+--     only reason either AR reader used to visit `invoices` a second time.
 --   — `invoice_outstanding(UUID, UUID)` — REPLACED, and now a THIN WRAPPER:
 --     one `RETURN QUERY` over the definition above with a one-element array.
 --     It contains no arithmetic, no branch and no refusal of its own.
 --   — `customer_ar_outstanding` and `customer_ar_aging` — REPLACED, and the
 --     only change in either is that the `JOIN LATERAL ... ON TRUE` over one
---     invoice becomes ONE call over the customer's open invoices. Their
---     output columns, their `GROUP BY`, their `HAVING sum(...) <> 0`, their
---     bucket arithmetic and their refusal to read the clock (P4-AL-30) are
---     unchanged.
+--     invoice becomes ONE call over the customer's open invoices, from which
+--     (R-104) they take the currency and the due date as well, so neither
+--     joins `invoices` back onto that call and each names `invoices` exactly
+--     ONCE. Their output columns, their `GROUP BY`, their
+--     `HAVING sum(...) <> 0`, their bucket arithmetic and their refusal to
+--     read the clock (P4-AL-30) are unchanged.
 --   — `invoice_settlement_state` is NOT TOUCHED. It composes over the
 --     single-invoice reader (`0075:760`) and inherits this change for free,
 --     which is the whole value of the seam `0081` described.
@@ -132,6 +155,103 @@
 -- S-P4-03 asks which body of `invoice_outstanding` reads the relations that
 -- settle an invoice, and a rename would have meant answering that question by
 -- editing the seam rather than by reading the reducers.
+
+-- ── R-103 THE SECOND MEASURED DEFECT: THE FIXED COST OF ONE CALL ─────────
+--
+-- The reshaping above removed the per-invoice cost and brought the fat-tail
+-- arm inside its ceiling. It ALSO MADE THE MEDIAN ARM SLOWER, and that is not
+-- cosmetic. Measured on PostgreSQL 16.13 — the deployment target — 200
+-- samples per arm, before and after this file on the same box in one session:
+--
+--   P4-D  receivable, fat-tail (2 000 open invoices)   126.092 -> 58.277 ms
+--         ceiling 100 ms                                         now PASS
+--   P4-D  receivable, MEDIAN customer (3 invoices)      14.179 -> 24.161 ms
+--         no ceiling of its own
+--   P4-D  p95(fat-tail) <= 3 x p95(median)               8.893x -> 2.412x
+--         ceiling 3x                                              now PASS
+--
+-- SO THE RATIO PASSES PARTLY BECAUSE ITS DENOMINATOR INFLATED.
+-- Counterfactually, 58.277 / 14.179 = 4.110x would STILL FAIL. The median
+-- regression is therefore holding up an invariant rather than merely costing
+-- ten milliseconds, and the Tech Lead chose to have it corrected before the
+-- slice is sealed rather than after.
+--
+-- WHERE IT IS, which corrects the natural first guess. It is NOT the
+-- single-invoice wrapper. The median arm is a CUSTOMER read: it reaches
+-- `customer_ar_outstanding`, and after the reshaping that routine makes
+-- exactly ONE call to the array form, with THREE ids. One array call over
+-- three invoices cost more than the three `LATERAL` calls it replaced. The
+-- subject is the array form's own FIXED cost, and the work the two AR readers
+-- do AROUND it.
+--
+-- Read against each other, the post-reshaping median path pays three things
+-- the pre-reshaping path did not:
+--
+--   (a) A SECOND VISIT TO `invoices`. The pre-reshaping reader drove FROM
+--       `invoices` restricted by (business, customer, status) and took
+--       `currency_code` and `due_date` off THAT VERY SCAN. The reshaped
+--       reader collected the open invoice ids, handed them to the array form,
+--       and then JOINED `public.invoices` BACK ONTO the function's output to
+--       recover those same two columns — from the very rows the function had
+--       just read. A set-returning function carrying a `SET` clause cannot be
+--       inlined and this one declares no `ROWS`, so the planner estimates its
+--       output at the default 1 000 rows and plans that join against an
+--       estimate some three hundred times the median truth.
+--   (b) AN EXTRA SCAN OF THE ARRAY ON EVERY CALL. The non-vacuity check ran
+--       `SELECT count(*) FROM (SELECT DISTINCT unnest(p_invoice_ids))`
+--       UNCONDITIONALLY, for a comparison that can only come out unequal when
+--       an id is missing or repeated.
+--   (c) ONE MORE PLANNED AND EXECUTED STATEMENT per call, which is what (b)
+--       costs as seen from the plan cache rather than from the array.
+--
+-- (a) is the only one of the three that can plausibly cost MILLISECONDS; (b)
+-- and (c) are microseconds each. How the measured 9.982 ms actually divides
+-- between them is settled by measurement in the window beside this file and
+-- reported there with its numbers, never asserted from this comment.
+--
+-- ── R-104 THE SHAPE THAT REMOVES IT, STILL WITH ONE COPY ─────────────────
+--
+--   — The ONE DEFINITION now returns the invoice's own `currency_code` and
+--     `due_date` BESIDE its four settlement figures. It already reads that
+--     `invoices` row — it must, to know the total and the status — so the two
+--     columns cost it NOTHING, and they are the only reason either AR reader
+--     ever went back. THIS IS PASSTHROUGH, NOT ARITHMETIC: no settlement
+--     figure is computed anywhere a second time, and P4-AL-07 still has
+--     exactly ONE body that computes one, reached two ways.
+--   — Both AR readers therefore LOSE THEIR `JOIN public.invoices` entirely.
+--     Each now names `invoices` exactly ONCE, in the subquery that collects
+--     the customer's open invoice ids — the same single index scan on
+--     `invoices_customer_idx` (`0075:332`) the pre-reshaping reader made. The
+--     output columns, the `GROUP BY`, the `HAVING sum(...) <> 0`, the bucket
+--     arithmetic and the refusal to read the clock (P4-AL-30) are unchanged,
+--     and `0083-E(3)` reads the absence of the join back from the catalogue
+--     rather than from this file's own statements.
+--   — The non-vacuity check KEEPS ITS MEANING and loses its cost in the
+--     passing case. `ROW_COUNT` is one row per invoice FOUND, so it can never
+--     exceed the number of DISTINCT ids asked about, which can never exceed
+--     `cardinality(p_invoice_ids)`. Hence `ROW_COUNT = cardinality` forces all
+--     three equal and NO refusal is possible — the distinct count is only
+--     paid for when they differ, and then the comparison is the same
+--     comparison against the same distinct count raising the same
+--     `invoice.not_found`. An unknown id, another business's id, a dangling
+--     sale, a repeated id, a NULL element, an empty array and a NULL array
+--     all answer exactly what they answered before. That is proved case by
+--     case against THE RULE rather than against the previous text, in
+--     `tests/performance/receivables-ar-setbased-equivalence.test.ts`, because
+--     the array form does not exist at `0082` and so has no before to compare
+--     against.
+--
+-- WHAT R-103 DOES NOT DO EITHER. The wrapper is NOT made `LANGUAGE sql`,
+-- which would have saved it one plpgsql frame and one tuplestore per
+-- single-invoice call. R-100 is why: the array form must be the LAST
+-- definition of `invoice_outstanding` in the Phase 4 DDL for seam S-P4-03 to
+-- read it, an `sql` body resolves its callees at CREATE time, and a
+-- `LANGUAGE sql` wrapper would therefore have to be written AFTER the
+-- definition it calls — which is to say, last. A faster wrapper is not worth
+-- answering the seam's question by editing the seam. Nor is the `SET` clause
+-- unpinned to buy inlining (R-98 already refused that trade), nor is an index
+-- added, nor is `plan_cache_mode` forced: a plan-cache knob is a measured
+-- claim about replanning, and no such claim is made here.
 
 -- ── R-101 WHAT THIS FILE DELIBERATELY DOES NOT DO ────────────────────────
 --
@@ -279,13 +399,28 @@ COMMENT ON FUNCTION invoice_outstanding(UUID, UUID) IS
 --    this routine SUMS figures the writers already computed through
 --    `supplier_ap_release` under their locks.
 --
+--    IT ALSO RETURNS THE INVOICE'S OWN `currency_code` AND `due_date`
+--    (R-104). Those two columns come off the `invoices` row this body already
+--    has to read, they cost it nothing, and they are what lets the two AR
+--    readers in §4 stop joining `invoices` back onto this call. They are
+--    PASSTHROUGH: no settlement figure is computed twice anywhere, which is
+--    the whole of P4-AL-07.
+--
 --    The `invoice.not_found` refusal is kept, in the one form that serves
 --    both shapes: the result carries one row per invoice FOUND, and if that
 --    is fewer than the distinct ids asked about, an id named an invoice this
 --    caller cannot see — under row security that is also how a cross-business
---    id answers "not found" rather than "forbidden" (G-02). `ROW_COUNT` after
---    `RETURN QUERY` is what makes this cost no extra scan, and the rows a
---    failed call had already queued are discarded with the exception.
+--    id answers "not found" rather than "forbidden" (G-02). The rows a failed
+--    call had already queued are discarded with the exception.
+--
+--    THE CHECK IS FREE WHEN IT PASSES (R-104). `ROW_COUNT` is one row per
+--    invoice FOUND, so ROW_COUNT <= distinct(ids) <= cardinality(ids) always;
+--    `ROW_COUNT = cardinality` therefore forces all three equal and leaves no
+--    refusal possible. The distinct count — a whole second statement over the
+--    array, which the first version of this body ran on EVERY call — is paid
+--    for only when the fast comparison already differs, which happens only
+--    when an id is missing or repeated. `cardinality(NULL)` is NULL, so a NULL
+--    array is read as the empty one, exactly as `unnest(NULL)` was.
 --
 --    STABLE and SECURITY INVOKER like every reader of record (R-P4-07):
 --    `daftar_app` holds SELECT on `invoices`, `sales` and both reducers, so a
@@ -293,7 +428,8 @@ COMMENT ON FUNCTION invoice_outstanding(UUID, UUID) IS
 --    nothing.
 -- ─────────────────────────────────────────────────────────────────────────
 CREATE FUNCTION invoice_outstanding(p_business_id UUID, p_invoice_ids UUID[])
-RETURNS TABLE (invoice_id UUID, paid_txn_minor BIGINT, paid_base_minor BIGINT, outstanding_txn_minor BIGINT, outstanding_base_minor BIGINT)
+RETURNS TABLE (invoice_id UUID, currency_code TEXT, due_date DATE,
+               paid_txn_minor BIGINT, paid_base_minor BIGINT, outstanding_txn_minor BIGINT, outstanding_base_minor BIGINT)
 LANGUAGE plpgsql STABLE SET search_path = pg_catalog, public, pg_temp AS $$
 DECLARE
   v_found BIGINT;
@@ -301,6 +437,8 @@ DECLARE
 BEGIN
   RETURN QUERY
     SELECT i.id,
+           i.currency_code::TEXT,
+           i.due_date,
            CASE WHEN i.status <> 'open' THEN 0::BIGINT
                 WHEN s.settlement_mode = 'cash' THEN i.total_txn_minor
                 ELSE coalesce(r.paid_txn, 0)::BIGINT END,
@@ -334,16 +472,24 @@ BEGIN
       ) r ON r.invoice_id = i.id
      WHERE i.business_id = p_business_id AND i.id = ANY(p_invoice_ids);
   GET DIAGNOSTICS v_found = ROW_COUNT;
-  SELECT pg_catalog.count(*) INTO v_asked FROM (SELECT DISTINCT x.id FROM pg_catalog.unnest(p_invoice_ids) AS x(id)) k;
-  IF v_found <> v_asked THEN
-    RAISE EXCEPTION 'invoice.not_found: the invoice does not exist in this business' USING ERRCODE = 'P0001';
+  -- The fast comparison first: one row per invoice FOUND can never exceed the
+  -- DISTINCT ids asked about, which can never exceed the array's cardinality,
+  -- so equality here forces all three equal and no refusal is reachable. The
+  -- distinct count below is the SAME count the first version of this body ran
+  -- unconditionally, and it decides the SAME comparison — it is simply not
+  -- paid for on the calls that cannot refuse.
+  IF v_found <> coalesce(pg_catalog.cardinality(p_invoice_ids), 0) THEN
+    SELECT pg_catalog.count(*) INTO v_asked FROM (SELECT DISTINCT x.id FROM pg_catalog.unnest(p_invoice_ids) AS x(id)) k;
+    IF v_found <> v_asked THEN
+      RAISE EXCEPTION 'invoice.not_found: the invoice does not exist in this business' USING ERRCODE = 'P0001';
+    END IF;
   END IF;
 END;
 $$;
 REVOKE ALL ON FUNCTION invoice_outstanding(UUID, UUID[]) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION invoice_outstanding(UUID, UUID[]) TO daftar_app, daftar_inventory_internal;
 COMMENT ON FUNCTION invoice_outstanding(UUID, UUID[]) IS
-  'P4-S4 (0083; P4-AL-05, P4-AL-07, seam S-P4-03): THE ONE DEFINITION of the settlement sum, set-based. For each invoice asked about: the total minus the sum of invoice_amount_applied_minor over its payment allocations and its customer credit applications, with the paid base the sum of invoice_carrying_base_released_minor so the base closes to zero exactly when the last reducer closes the invoice. A cash-settled invoice reports paid = total and outstanding = 0 (0080). A draft or void document reports zeros. An id that names no invoice this caller can see raises invoice.not_found. ONE pass over the reducer set grouped by invoice, which is why an AR sum over n invoices is one statement and not n function calls; invoice_outstanding(business, invoice) is a thin wrapper over this and holds no arithmetic. INVOKER, reads through the caller''s row security, writes nothing. EXECUTE: daftar_app and daftar_inventory_internal. Replaced by the slice that adds a reducer relation, which appends one UNION ALL branch.';
+  'P4-S4 (0083; P4-AL-05, P4-AL-07, seam S-P4-03): THE ONE DEFINITION of the settlement sum, set-based. For each invoice asked about: the total minus the sum of invoice_amount_applied_minor over its payment allocations and its customer credit applications, with the paid base the sum of invoice_carrying_base_released_minor so the base closes to zero exactly when the last reducer closes the invoice. A cash-settled invoice reports paid = total and outstanding = 0 (0080). A draft or void document reports zeros. An id that names no invoice this caller can see raises invoice.not_found, and the non-vacuity check that decides that costs a second statement only on the calls where a refusal is reachable at all. It returns the invoice''s own currency_code and due_date beside the four figures — passthrough off the invoices row it already reads, which is what lets the AR readers stop joining invoices back onto this call. ONE pass over the reducer set grouped by invoice, which is why an AR sum over n invoices is one statement and not n function calls; invoice_outstanding(business, invoice) is a thin wrapper over this and holds no arithmetic. INVOKER, reads through the caller''s row security, writes nothing. EXECUTE: daftar_app and daftar_inventory_internal. Replaced by the slice that adds a reducer relation, which appends one UNION ALL branch.';
 
 -- ─────────────────────────────────────────────────────────────────────────
 -- 4. The two AR readers, each asking its question ONCE.
@@ -351,11 +497,27 @@ COMMENT ON FUNCTION invoice_outstanding(UUID, UUID[]) IS
 --    The ONLY change in either body is the subject of the FROM: the
 --    per-invoice `JOIN LATERAL public.invoice_outstanding(i.business_id,
 --    i.id)` becomes one call over the array of the customer's open invoice
---    ids, joined back to `invoices` for the currency and the due date. The
---    `status = 'open'` restriction moves INTO the array subquery and is
---    equivalent there, because the definition reports zeros for a draft or a
---    void document and `HAVING ... <> 0` / `WHERE ... <> 0` already drop
+--    ids. The `status = 'open'` restriction moves INTO the array subquery and
+--    is equivalent there, because the definition reports zeros for a draft or
+--    a void document and `HAVING ... <> 0` / `WHERE ... <> 0` already drop
 --    those rows.
+--
+--    NEITHER BODY JOINS `invoices` BACK ONTO THAT CALL (R-104). The currency
+--    and the due date come out of the call itself, off the `invoices` row the
+--    one definition had already read, so each body names `invoices` exactly
+--    ONCE — in the subquery that collects the open invoice ids, which is the
+--    same single index scan the pre-reshaping reader made. The join that used
+--    to recover those two columns went back to rows the function had just
+--    read, against a 1 000-row default estimate for a function that cannot
+--    declare better, and it is gone.
+--
+--    `customer_ar_outstanding` now groups by the TEXT the definition returns
+--    rather than by `invoices.currency_code` itself. The partition is the
+--    same one: the column is `CHAR(3)` and every value in it is exactly three
+--    characters, so `bpchar` equality — which ignores trailing blanks — and
+--    `text` equality agree on every row that can be there. `customer_ar_aging`
+--    already grouped by the same `::TEXT` projection and its `GROUP BY` does
+--    not move at all.
 --
 --    `array_agg` over no rows is NULL, `unnest(NULL)` is no rows, so a
 --    customer with no open invoice still gets the empty answer it got before
@@ -365,7 +527,7 @@ COMMENT ON FUNCTION invoice_outstanding(UUID, UUID[]) IS
 CREATE OR REPLACE FUNCTION customer_ar_outstanding(p_business_id UUID, p_customer_id UUID)
 RETURNS TABLE (currency_code TEXT, txn_minor BIGINT, base_minor BIGINT)
 LANGUAGE sql STABLE SET search_path = pg_catalog, public, pg_temp AS $$
-  SELECT i.currency_code::TEXT,
+  SELECT o.currency_code,
          pg_catalog.sum(o.outstanding_txn_minor)::BIGINT,
          pg_catalog.sum(o.outstanding_base_minor)::BIGINT
     FROM public.invoice_outstanding(
@@ -373,12 +535,11 @@ LANGUAGE sql STABLE SET search_path = pg_catalog, public, pg_temp AS $$
            (SELECT pg_catalog.array_agg(x.id)
               FROM public.invoices x
              WHERE x.business_id = p_business_id AND x.customer_id = p_customer_id AND x.status = 'open')) o
-    JOIN public.invoices i ON i.business_id = p_business_id AND i.id = o.invoice_id
-   GROUP BY i.currency_code
+   GROUP BY o.currency_code
   HAVING pg_catalog.sum(o.outstanding_txn_minor) <> 0;
 $$;
 COMMENT ON FUNCTION customer_ar_outstanding(UUID, UUID) IS
-  'P4-S1, replaced by P4-S4 (0083; P4-AL-05, P4-AL-06): the reader-of-record of a customer receivable, per transaction currency, which is refused as a stored balance column. Computed from the open invoices, never from a cached total. Since 0083 it makes ONE call to the set-based invoice_outstanding over the customer''s open invoices instead of one call per invoice, which is a change of WORK and not of ANSWER.';
+  'P4-S1, replaced by P4-S4 (0083; P4-AL-05, P4-AL-06): the reader-of-record of a customer receivable, per transaction currency, which is refused as a stored balance column. Computed from the open invoices, never from a cached total. Since 0083 it makes ONE call to the set-based invoice_outstanding over the customer''s open invoices instead of one call per invoice, and takes the currency off that call rather than joining invoices back onto it, so it visits invoices exactly once. A change of WORK and not of ANSWER.';
 
 CREATE OR REPLACE FUNCTION customer_ar_aging(p_business_id UUID, p_customer_id UUID, p_as_of DATE, p_bucket_days INTEGER[])
 RETURNS TABLE (bucket_no INTEGER, currency_code TEXT, txn_minor BIGINT, base_minor BIGINT, invoice_count INTEGER)
@@ -391,8 +552,8 @@ LANGUAGE sql STABLE SET search_path = pg_catalog, public, pg_temp AS $$
     FROM (
       SELECT (1 + (SELECT pg_catalog.count(*)
                      FROM pg_catalog.unnest(p_bucket_days) AS t(threshold)
-                    WHERE i.due_date IS NOT NULL AND (p_as_of - i.due_date) > t.threshold))::INTEGER AS bucket_no,
-             i.currency_code::TEXT AS currency_code,
+                    WHERE o.due_date IS NOT NULL AND (p_as_of - o.due_date) > t.threshold))::INTEGER AS bucket_no,
+             o.currency_code AS currency_code,
              o.outstanding_txn_minor AS txn_minor,
              o.outstanding_base_minor AS base_minor
         FROM public.invoice_outstanding(
@@ -400,13 +561,12 @@ LANGUAGE sql STABLE SET search_path = pg_catalog, public, pg_temp AS $$
                (SELECT pg_catalog.array_agg(x.id)
                   FROM public.invoices x
                  WHERE x.business_id = p_business_id AND x.customer_id = p_customer_id AND x.status = 'open')) o
-        JOIN public.invoices i ON i.business_id = p_business_id AND i.id = o.invoice_id
        WHERE o.outstanding_txn_minor <> 0
     ) b
    GROUP BY b.bucket_no, b.currency_code;
 $$;
 COMMENT ON FUNCTION customer_ar_aging(UUID, UUID, DATE, INTEGER[]) IS
-  'P4-S1, replaced by P4-S4 (0083; P4-AL-05): the aging of a customer receivable, computed from the open invoices and a supplied as-of date. There is no materialised aging table (P4-AL-06) and the routine does not read the clock (P4-AL-30). Since 0083 it makes ONE call to the set-based invoice_outstanding over the customer''s open invoices instead of one call per invoice; the buckets, the thresholds and the answer are unchanged.';
+  'P4-S1, replaced by P4-S4 (0083; P4-AL-05): the aging of a customer receivable, computed from the open invoices and a supplied as-of date. There is no materialised aging table (P4-AL-06) and the routine does not read the clock (P4-AL-30). Since 0083 it makes ONE call to the set-based invoice_outstanding over the customer''s open invoices instead of one call per invoice, and takes the currency and the due date off that call rather than joining invoices back onto it, so it visits invoices exactly once; the buckets, the thresholds and the answer are unchanged.';
 
 -- ─────────────────────────────────────────────────────────────────────────
 -- 5. 0083-E: the end state, read from the live catalogues and never from
@@ -423,7 +583,12 @@ BEGIN
   IF v_def IS NULL THEN
     RAISE EXCEPTION 'selling.migration_end_state_invalid: the set-based invoice_outstanding is not in the catalogue' USING ERRCODE = 'P0001';
   END IF;
-  FOREACH v_name IN ARRAY ARRAY['payment_allocations', 'customer_credit_applications', 'settlement_mode', 'invoice.not_found'] LOOP
+  -- `currency_code` and `due_date` are in this list because the two AR
+  -- readers below STOPPED JOINING `invoices` on the strength of them (R-104):
+  -- a definition that quietly dropped them would leave those readers reading
+  -- columns that are not there.
+  FOREACH v_name IN ARRAY ARRAY['payment_allocations', 'customer_credit_applications', 'settlement_mode', 'invoice.not_found',
+                                'currency_code', 'due_date'] LOOP
     IF v_def NOT LIKE '%' || v_name || '%' THEN
       RAISE EXCEPTION 'selling.migration_end_state_invalid: the set-based invoice_outstanding does not carry %', v_name USING ERRCODE = 'P0001';
     END IF;
@@ -462,6 +627,15 @@ BEGIN
     END IF;
     IF v_def LIKE '%payment_allocations%' OR v_def LIKE '%customer_credit_applications%' THEN
       RAISE EXCEPTION 'selling.migration_end_state_invalid: an AR reader reads a reducer relation directly, which is a second copy of the settlement sum'
+        USING ERRCODE = 'P0001';
+    END IF;
+    -- R-104, read back from the catalogue: an AR reader names `invoices`
+    -- EXACTLY ONCE — the subquery that collects the customer's open invoice
+    -- ids — and never a second time to recover the currency or the due date,
+    -- which the one definition now returns. Two occurrences means the join
+    -- that the median arm's fixed cost was made of is back.
+    IF pg_catalog.array_length(pg_catalog.string_to_array(v_def, 'public.invoices'), 1) <> 2 THEN
+      RAISE EXCEPTION 'selling.migration_end_state_invalid: an AR reader does not read public.invoices exactly once — the second visit R-104 removed is back, or the open-invoice subquery is gone'
         USING ERRCODE = 'P0001';
     END IF;
   END LOOP;

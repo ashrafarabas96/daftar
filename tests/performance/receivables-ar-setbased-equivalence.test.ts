@@ -32,6 +32,21 @@
  *   at `0082` the plan's `invoice_outstanding` scan is entered once per
  *   invoice, and after `0083` the reducer relations are scanned ONCE.
  *
+ *   THE REFUSAL IS THE SAME REFUSAL, CASE BY CASE. `0083` was corrected in
+ *   place (its R-103/R-104) to take the FIXED cost out of one array call: the
+ *   two AR readers stopped joining `invoices` back onto the call, and the
+ *   non-vacuity check behind `invoice.not_found` stopped running its distinct
+ *   count on the calls where no refusal is reachable. The first is structure
+ *   and is read from the catalogue. The second is a REFUSAL, so it is proved
+ *   case by case — an unknown id, a repeated id, a NULL element, an empty
+ *   array, a NULL array, another business's invoice, a dangling sale, and the
+ *   mixtures — against THE RULE (one row per invoice found, compared with the
+ *   distinct ids asked about), computed in SQL beside the function rather than
+ *   taken from the function's own body. It cannot be proved before/after,
+ *   because the array form does not exist at `0082`: there is no earlier text
+ *   of it to disagree with. Comparing it to the rule is the stronger claim
+ *   available and the one made here.
+ *
  * This is the shape `tests/performance/accounting-rls-equivalence.test.ts`
  * established for `0052` and it is followed deliberately: its own subject was
  * also "the same answer, expressed faster", and the estate has accepted that
@@ -583,6 +598,121 @@ async function medianReadMs(c: Client, businessId: string, customerId: string, i
   return samples[Math.floor(samples.length / 2)] as number;
 }
 
+/**
+ * THE RULE the array form's `invoice.not_found` implements, computed BESIDE
+ * the function and never read out of it: one row per invoice FOUND in this
+ * business (the reader joins the sale, so an invoice whose `sale_id` dangles
+ * is not found), against the number of DISTINCT ids asked about. The function
+ * must refuse exactly when those two differ — which is what its first text did
+ * unconditionally and what its corrected text does through a fast comparison
+ * first (R-104).
+ *
+ * `cardinality` is read too, because the fast comparison is against THAT: a
+ * case where `found = asked` but `asked <> cardinality` is a case that takes
+ * the slow branch and must still not refuse, and the assertions below check
+ * such a case is actually in the table rather than trusting that it is.
+ */
+async function refusalRule(
+  c: Client,
+  businessId: string,
+  ids: readonly (string | null)[] | null,
+): Promise<{ found: number; asked: number; cardinality: number }> {
+  const r = await c.query<{ found: string; asked: string; card: string }>(
+    `SELECT (SELECT count(*) FROM invoices i
+               JOIN sales s ON s.business_id = i.business_id AND s.id = i.sale_id
+              WHERE i.business_id = $1::uuid AND i.id = ANY($2::uuid[]))::text AS found,
+            (SELECT count(*) FROM (SELECT DISTINCT u.id FROM unnest($2::uuid[]) AS u(id)) k)::text AS asked,
+            coalesce(cardinality($2::uuid[]), 0)::text AS card`,
+    [businessId, ids],
+  );
+  const row = r.rows[0];
+  return { found: Number(row?.found ?? -1), asked: Number(row?.asked ?? -1), cardinality: Number(row?.card ?? -1) };
+}
+
+/** What the array form actually did, inside a savepoint, since a refusal would otherwise end the transaction. */
+async function arrayFormOutcome(
+  c: Client,
+  businessId: string,
+  ids: readonly (string | null)[] | null,
+): Promise<{ raised: boolean; rows: number; message: string }> {
+  await c.query('SAVEPOINT ar_array_case');
+  try {
+    const r = await c.query(`SELECT * FROM invoice_outstanding($1::uuid, $2::uuid[])`, [businessId, ids]);
+    await c.query('RELEASE SAVEPOINT ar_array_case');
+    return { raised: false, rows: r.rowCount ?? 0, message: '' };
+  } catch (e) {
+    await c.query('ROLLBACK TO SAVEPOINT ar_array_case');
+    await c.query('RELEASE SAVEPOINT ar_array_case');
+    return { raised: true, rows: 0, message: (e as Error).message };
+  }
+}
+
+interface ArrayCaseResult {
+  readonly role: 'owner' | 'daftar_app';
+  readonly name: string;
+  readonly rule: { found: number; asked: number; cardinality: number };
+  readonly outcome: { raised: boolean; rows: number; message: string };
+}
+
+/**
+ * Every case the corrected non-vacuity check has to get right, in both roles.
+ * Run only AFTER the file under test is applied, because the array form is
+ * what that file creates.
+ */
+async function arrayFormCases(c: Client, seeded: Seeded): Promise<ArrayCaseResult[]> {
+  const first = seeded.businesses[0] as Seeded['businesses'][number];
+  const second = seeded.businesses[1] as Seeded['businesses'][number];
+  const byLabel = (label: string): string => {
+    const found = first.invoices.find((i) => i.label.endsWith(`/${label}`));
+    // A case this table names and the population does not carry is a table
+    // about nothing, not a table with one case fewer.
+    if (found === undefined) throw new Error(`the population has no case labelled ${label}`);
+    return found.id;
+  };
+  const known = byLabel('zero reducers');
+  const other = byLabel('partial allocation');
+  const dangling = byLabel('dangling sale');
+  const crossBusiness = (second.invoices[0] as InvoiceSpec).id;
+  const UNKNOWN = '00000000-0000-4000-8000-ffffffffffff';
+  const cases: { readonly name: string; readonly ids: readonly (string | null)[] | null }[] = [
+    { name: 'an empty array', ids: [] },
+    { name: 'a NULL array', ids: null },
+    { name: 'one known id', ids: [known] },
+    { name: 'the same known id twice', ids: [known, known] },
+    { name: 'two known ids', ids: [known, other] },
+    { name: 'two known ids with one of them repeated', ids: [known, other, known] },
+    { name: 'one unknown id', ids: [UNKNOWN] },
+    { name: 'a known id and an unknown one', ids: [known, UNKNOWN] },
+    { name: 'a NULL element', ids: [null] },
+    { name: 'a known id and a NULL element', ids: [known, null] },
+    { name: 'a NULL element twice', ids: [null, null] },
+    { name: 'another business’s invoice', ids: [crossBusiness] },
+    { name: 'an invoice whose sale dangles', ids: [dangling] },
+    { name: 'a known id and the dangling-sale invoice', ids: [known, dangling] },
+  ];
+  const out: ArrayCaseResult[] = [];
+  for (const role of ['owner', 'daftar_app'] as const) {
+    if (role === 'daftar_app') {
+      await c.query('SET LOCAL ROLE daftar_app');
+      await c.query(`SELECT set_config('app.tenant_id', $1, true), set_config('app.business_id', $2, true)`, [seeded.tenantId, first.id]);
+    }
+    try {
+      for (const k of cases) {
+        // The rule FIRST, so it is read through the same row security the
+        // function will be read through: under `daftar_app` a hidden invoice is
+        // not found, which is how a cross-business id answers not_found rather
+        // than forbidden (G-02).
+        const rule = await refusalRule(c, first.id, k.ids);
+        const outcome = await arrayFormOutcome(c, first.id, k.ids);
+        out.push({ role, name: k.name, rule, outcome });
+      }
+    } finally {
+      if (role === 'daftar_app') await c.query('RESET ROLE');
+    }
+  }
+  return out;
+}
+
 /** The AR read's plan, with every relation its scans name and how many times each was entered. */
 async function planOf(c: Client, businessId: string, customerId: string): Promise<{ loops: Record<string, number>; plan: unknown }> {
   const r = await c.query<Record<string, unknown>>(
@@ -622,6 +752,15 @@ let definitionBefore: Record<string, string> = {};
 let definitionAfter: Record<string, string> = {};
 let fatTailMsBefore = 0;
 let fatTailMsAfter = 0;
+/**
+ * The MEDIAN-SHAPED arm, which is what R-103 is about: the same read of an
+ * ORDINARY customer, timed before and after on the same rows. DIAGNOSTIC and
+ * never a verdict (P4-AL-74) — the budget is 200 HTTP samples in
+ * `receivables-s4-budgets.test.ts` and no ceiling is declared or moved here.
+ */
+let medianArmMsBefore = 0;
+let medianArmMsAfter = 0;
+let arrayCases: ArrayCaseResult[] = [];
 const READ_ITERATIONS = 25;
 const SIGNATURES = [
   'public.customer_ar_outstanding(uuid,uuid)',
@@ -708,6 +847,7 @@ beforeAll(async () => {
   fatTailPlanBefore = await planOf(client, fat.id, fatCustomer);
   definitionBefore = await definitions(client);
   fatTailMsBefore = await medianReadMs(client, fat.id, fatCustomer, READ_ITERATIONS);
+  medianArmMsBefore = await medianReadMs(client, fat.id, fat.customers[1] as string, READ_ITERATIONS);
 
   // THE ONE CHANGE UNDER TEST, applied to the SAME database inside the SAME
   // transaction, with the SAME rows already in it. Nothing is reset,
@@ -723,6 +863,8 @@ beforeAll(async () => {
   fatTailPlanAfter = await planOf(client, fat.id, fatCustomer);
   definitionAfter = await definitions(client);
   fatTailMsAfter = await medianReadMs(client, fat.id, fatCustomer, READ_ITERATIONS);
+  medianArmMsAfter = await medianReadMs(client, fat.id, fat.customers[1] as string, READ_ITERATIONS);
+  arrayCases = await arrayFormCases(client, seeded);
 }, 1_800_000);
 
 afterAll(async () => {
@@ -745,6 +887,8 @@ afterAll(async () => {
     plan: { before: beforePlan ?? null, after: afterPlan ?? null, fatTailBefore: fatTailPlanBefore ?? null, fatTailAfter: fatTailPlanAfter ?? null },
     liveDefinitions: { before: definitionBefore, after: definitionAfter },
     fatTailArmReadMedianMs: { before: fatTailMsBefore, after: fatTailMsAfter, iterations: READ_ITERATIONS, openInvoices: fatTailInvoices },
+    medianArmReadMedianMs: { before: medianArmMsBefore, after: medianArmMsAfter, iterations: READ_ITERATIONS, note: 'diagnostic, never a verdict (P4-AL-74)' },
+    arrayFormRefusalCases: arrayCases,
   };
   const dir = join(__dirname, '../../release');
   mkdirSync(dir, { recursive: true });
@@ -837,6 +981,62 @@ describe('THE ANSWER DID NOT MOVE — the reshaping changes work, never the answ
   });
 });
 
+describe('THE REFUSAL IS THE SAME REFUSAL — the array form against THE RULE, case by case', () => {
+  // `invoice.not_found` is part of the answer, and R-104 changed HOW the
+  // non-vacuity check behind it is reached: a fast comparison against
+  // `cardinality` first, and the distinct count only when that differs. The
+  // claim is that the SET OF CASES THAT REFUSE did not move. It cannot be
+  // made before/after — the array form does not exist at `0082` — so it is
+  // made against the rule itself, computed in SQL beside the function.
+  const rolesOf = (role: 'owner' | 'daftar_app'): ArrayCaseResult[] => arrayCases.filter((k) => k.role === role);
+
+  it('the table is populated in both roles, so what follows is about something', () => {
+    expect(rolesOf('owner').length, 'owner cases').toBeGreaterThan(10);
+    expect(rolesOf('daftar_app').length, 'daftar_app cases').toBe(rolesOf('owner').length);
+  });
+
+  it('it refuses in EXACTLY the cases the rule refuses, and never in another — in both roles', () => {
+    for (const k of arrayCases) {
+      const shouldRefuse = k.rule.found !== k.rule.asked;
+      expect(k.outcome.raised, `${k.role} / ${k.name}: rule found=${k.rule.found} asked=${k.rule.asked}, message ${k.outcome.message}`).toBe(shouldRefuse);
+      if (shouldRefuse) expect(k.outcome.message, `${k.role} / ${k.name}`).toContain('invoice.not_found');
+      else expect(k.outcome.rows, `${k.role} / ${k.name}: one row per invoice found`).toBe(k.rule.found);
+    }
+  });
+
+  it('and both halves of the rule are exercised: cases that refuse, and cases that pass only because the slow branch said so', () => {
+    // Non-vacuity of the table, and of the branch R-104 added. A case where
+    // `found = asked` but `asked <> cardinality` is a REPEATED id: the fast
+    // comparison differs, the distinct count is paid for, and the answer is
+    // still no refusal. Without such a case in the table the new branch would
+    // be untested and this file would be reporting on a shape it never ran.
+    expect(
+      arrayCases.some((k) => k.outcome.raised),
+      'some case refuses',
+    ).toBe(true);
+    expect(
+      arrayCases.some((k) => !k.outcome.raised && k.rule.found > 0),
+      'some case answers rows',
+    ).toBe(true);
+    const slowButPassing = arrayCases.filter((k) => k.rule.found === k.rule.asked && k.rule.asked !== k.rule.cardinality);
+    expect(slowButPassing.length, 'a repeated id takes the slow branch and still does not refuse').toBeGreaterThan(0);
+    for (const k of slowButPassing) expect(k.outcome.raised, `${k.role} / ${k.name}`).toBe(false);
+    // And the fast comparison can never be the one that refuses on its own:
+    // every refusal in the table is a case the distinct count also condemns.
+    for (const k of arrayCases.filter((x) => x.outcome.raised)) expect(k.rule.found, `${k.role} / ${k.name}`).not.toBe(k.rule.asked);
+  });
+
+  it('a NULL array and an empty array are the empty question, not a refusal', () => {
+    for (const name of ['a NULL array', 'an empty array']) {
+      for (const k of arrayCases.filter((x) => x.name === name)) {
+        expect(k.outcome.raised, `${k.role} / ${name}`).toBe(false);
+        expect(k.outcome.rows, `${k.role} / ${name}`).toBe(0);
+        expect(k.rule.cardinality, `${k.role} / ${name}: cardinality reads as zero`).toBe(0);
+      }
+    }
+  });
+});
+
 describe('THE PER-INVOICE CALL IS GONE — the shape from the catalogue, the cost from the clock', () => {
   it('at 0082 both AR readers call the reader-of-record once per invoice through a LATERAL', () => {
     for (const sig of ['public.customer_ar_outstanding(uuid,uuid)', 'public.customer_ar_aging(uuid,uuid,date,integer[])'])
@@ -859,6 +1059,27 @@ describe('THE PER-INVOICE CALL IS GONE — the shape from the catalogue, the cos
     const wrapper = definitionAfter['public.invoice_outstanding(uuid,uuid)'] ?? '';
     expect(wrapper).toContain('ARRAY[p_invoice_id]');
     for (const reducer of ['payment_allocations', 'customer_credit_applications']) expect(wrapper).not.toContain(reducer);
+  });
+
+  it('and neither AR reader visits `invoices` a second time: the currency and the due date come out of the one call (R-104)', () => {
+    // The one definition carries the two passthrough columns, off the
+    // `invoices` row it already has to read to know the total and the status.
+    // They are the ONLY reason either AR reader used to join `invoices` back
+    // onto the call, and they are arithmetic nowhere: P4-AL-07 still has one
+    // body that computes a settlement.
+    const one = definitionAfter['public.invoice_outstanding(uuid,uuid[])'] ?? '';
+    expect(one, 'the one definition returns the invoice currency').toContain('currency_code');
+    expect(one, 'the one definition returns the invoice due date').toContain('due_date');
+    for (const sig of ['public.customer_ar_outstanding(uuid,uuid)', 'public.customer_ar_aging(uuid,uuid,date,integer[])'] as const) {
+      const def = definitionAfter[sig] ?? '';
+      // EXACTLY ONE mention of the relation: the subquery that collects the
+      // customer's open invoice ids, which is the same single index scan the
+      // pre-reshaping reader made. A second mention is the join R-104 removed
+      // coming back, which is the shape the median arm's fixed cost was in.
+      expect(def.split('public.invoices').length - 1, `${sig}: visits public.invoices exactly once`).toBe(1);
+      expect(def, `${sig}: takes the currency off the call`).toContain('o.currency_code');
+    }
+    expect(definitionAfter['public.customer_ar_aging(uuid,uuid,date,integer[])'] ?? '', 'aging takes the due date off the call').toContain('o.due_date');
   });
 
   it(`and the cost of the fat-tail arm's read fell, measured on the clock in this same transaction`, () => {
