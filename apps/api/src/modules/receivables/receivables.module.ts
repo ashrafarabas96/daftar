@@ -11,7 +11,9 @@ import { ReceivablesReadService } from './receivables-reads';
  * the reason `purchasingProviders()` and `sellingProviders()` both document:
  * these services depend on providers composed INLINE by `AppModule` and
  * `MerchantApiModule` — `Database`, `InventoryAuthorizationService`,
- * `AccountingAssertionMinterService` and `DatabaseAccountingPostingAdapter` —
+ * `AccountingAssertionMinterService`, `DatabaseAccountingPostingAdapter` and
+ * `AuditService` (P4-AL-48's refusal audit; `identityProviders` composes it in
+ * BOTH compositions, ahead of this one) —
  * and a child module's controller would not appear in the composition's own
  * `controllers` list, which `tests/integration/process-composition.test.ts`
  * holds both processes to.

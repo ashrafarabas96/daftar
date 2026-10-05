@@ -3,13 +3,14 @@ import { mintDomainPostingAssertion } from '@daftar/accounting';
 import { parseMinor, parseUnitCost } from '@daftar/inventory';
 import { Database } from '../../infra/database';
 import { AccountingAssertionMinterService } from '../accounting/accounting-assertion.minter';
+import { AuditService } from '../audit/audit.service';
 import { DatabaseAccountingPostingAdapter } from '../accounting/accounting-posting.adapter';
 import type { BusinessTransactionId } from '../inventory/business-transaction';
 import { InventoryAuthorizationService } from '../inventory/inventory-authorization';
 import type { MembershipContext } from '../tenancy/tenancy.service';
 import { invoiceArState, invoiceSnapshot, settledInvoice } from './customer-payment.service';
 import { planCustomerCreditApplication, type CustomerCreditState } from './customer-settlement';
-import { receivablesRefusal, rethrowReceivablesRefusal } from './receivables-errors';
+import { auditThenRethrowReceivablesRefusal, receivablesRefusal, type ReceivablesAttempt } from './receivables-errors';
 import { CUSTOMER_APPLY_CREDIT_OP, customerApplyCreditIntentSha256, customerApplyCreditPayload, receivablesOperationCode } from './receivables-payload';
 import {
   CUSTOMER_CREDIT_SQL,
@@ -130,18 +131,34 @@ export class CustomerCreditApplicationService {
     @Inject(InventoryAuthorizationService) private readonly authorization: InventoryAuthorizationService,
     @Inject(AccountingAssertionMinterService) private readonly accountingMinter: AccountingAssertionMinterService,
     @Inject(DatabaseAccountingPostingAdapter) private readonly posting: DatabaseAccountingPostingAdapter,
+    @Inject(AuditService) private readonly audit: AuditService,
   ) {}
 
+  /** P4-AL-48, the refusal half. See `CustomerPaymentService.collect`. */
   async apply(
     m: MembershipContext,
     creditId: string,
     input: CustomerCreditApplicationRequest,
     btx: BusinessTransactionId,
   ): Promise<CustomerCreditApplicationResultDto> {
+    const attempt: ReceivablesAttempt = {
+      operation: CUSTOMER_APPLY_CREDIT_OP,
+      entity: 'customer_credit_application',
+      entityId: input.applicationId,
+      tillSessionId: null,
+      figures: {
+        creditId,
+        customerId: input.customerId,
+        invoiceId: input.invoiceId,
+        applicationDate: input.applicationDate,
+        creditAmountConsumedMinor: input.creditAmountConsumedMinor,
+        invoiceAmountAppliedMinor: input.invoiceAmountAppliedMinor,
+      },
+    };
     try {
-      return await this.run(m, creditId, input, btx);
+      return await this.run(m, creditId, input, btx, attempt);
     } catch (e) {
-      return rethrowReceivablesRefusal(e);
+      return await auditThenRethrowReceivablesRefusal(this.audit, m, attempt, e);
     }
   }
 
@@ -150,6 +167,7 @@ export class CustomerCreditApplicationService {
     creditId: string,
     input: CustomerCreditApplicationRequest,
     btx: BusinessTransactionId,
+    attempt: ReceivablesAttempt,
   ): Promise<CustomerCreditApplicationResultDto> {
     const consumedMinor = parseMinor(input.creditAmountConsumedMinor);
     const appliedMinor = parseMinor(input.invoiceAmountAppliedMinor);
@@ -165,6 +183,7 @@ export class CustomerCreditApplicationService {
       consumedMinor,
       appliedMinor,
     });
+    attempt.intentSha256 = intentSha256;
     const stored = await findCustomerCreditApplicationIntent(this.db, m, input.applicationId);
     // 2. Authority: `payments.collect`. It reads membership only.
     const authority = await this.authorization.authorize(m, receivablesOperationCode(CUSTOMER_APPLY_CREDIT_OP), btx);
@@ -178,6 +197,8 @@ export class CustomerCreditApplicationService {
     const [invoiceRow] = state.invoices;
     if (invoiceRow === undefined) throw receivablesRefusal('customer_credit_application.not_found');
     const invoice = settledInvoice(invoiceRow, 'customer_credit_application');
+    attempt.branchId = invoice.branchId;
+    attempt.figures['outstandingAtRead'] = invoice.outstandingTxnMinor.toString(10);
     const credit = state.credit;
     if (credit === null) throw receivablesRefusal('customer_credit.not_found');
     // THREE identities must be one: the credit's customer, the invoice's, and

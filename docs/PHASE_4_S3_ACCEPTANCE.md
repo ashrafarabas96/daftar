@@ -110,3 +110,18 @@ definition and not an arithmetic error.
   nothing merges before it lands.
 - `TL-P4-S1-R2` (the RLS `ENABLE`/`FORCE` law) is **DISCHARGED** by P4-S2; its guard is Phase-4 scoped by
   intent and is not to be widened into a tree-wide law that would fail accepted non-commercial relations.
+
+> **STATUS CORRECTION (2026-10-05, P4-S4).** Two items above are no longer open, and this note is added
+> rather than rewriting the body, because this page records what was true the day P4-S3 was sealed.
+>
+> - The **`credit_note` / `document_kind`** question is listed above under "Still open". It is **RULED** by
+>   `TL-P4-S1-R3` — `invoices.document_kind` stays `'invoice'`, frozen `0075` is never edited, and the
+>   widening is a **new** migration owned by P4-S5. It is **not an open decision** and is not to be carried
+>   as one (lock `:2010`, `:2232-2234`, §29).
+> - The **cash-settled named-customer invoice** item carried into P4-S4 above is **DISCHARGED**: derived
+>   `paid = total`, `outstanding = 0`, `settlement_state = 'paid'`, with `invoices.status` lifecycle-only
+>   and never written `'paid'`. Built by the new migration `0080` (`0080:166-171`, `0080:182`); nothing
+>   frozen here was edited.
+>
+> `OD-03` remains the single genuinely open decision. The canonical status of every Phase 4 decision is
+> `docs/PHASE_4_DECISION_REGISTER.md`.

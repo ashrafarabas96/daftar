@@ -153,8 +153,9 @@ export class MerchantApiModule implements NestModule {
         // P4-S4: the two receivables commands and their read service. Each
         // needs only providers composed above — `Database`,
         // `InventoryAuthorizationService`,
-        // `AccountingAssertionMinterService` and
-        // `DatabaseAccountingPostingAdapter`.
+        // `AccountingAssertionMinterService`,
+        // `DatabaseAccountingPostingAdapter` and `AuditService`
+        // (`identityProviders`, P4-AL-48's refusal audit).
         ...receivablesProviders(),
         TenancyService,
         StructureService,
