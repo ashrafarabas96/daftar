@@ -475,3 +475,131 @@ to one; only the audit row records it.
   and was made, and the earlier wording of this bullet — written while §4 was still an unresolved
   contradiction — is superseded by it. No other P4-S1 rule was changed.
 - It claims no gate and no test it did not run.
+
+---
+
+## 9. P4-S4 addendum — the refusal audit of the POS and sale-commit commands, and its gate law
+
+Appended. Nothing above is edited. §2's open item — *"the POS and sale-commit paths carry the same gap and
+P4-S4 did not close them"* — is **discharged**, and `docs/PHASE_4_ARCHITECTURE_LOCK.md` §30 carries the
+clause (`P4-AL-48(b)`).
+
+### What the three named sites actually are, read in the SQL
+
+The slice was pointed at `0078:1002`, `0079:954` and `0079:1022` as "refusal sites". **They are not
+refusal sites.** Each is an `INSERT INTO audit_events` recording a **SUCCESS**, placed as its routine's last
+write:
+
+| site | row | position | raises ahead of it |
+|---|---|---|---|
+| `0078:1002` | `sale.committed`, entity `sale` | `sale_commit`'s last write, before `RETURN QUERY` | **33** |
+| `0079:954` | `pos.till_session_opened`, entity `pos_till_session` | inside `pos_till_session_open`'s NON-REPLAY arm | **7** (`pos.session_idempotency_conflict`, `pos.session_not_owned`, `pos.session_already_open`, `pos.terminal_already_open`, `inventory.payload_invalid` ×3, `inventory.trace_missing`, `inventory.isolation_unsupported`) |
+| `0079:1022` | `pos.till_session_closed`, entity `pos_till_session` | inside `pos_till_session_close`'s NON-REPLAY arm | **6** (`pos.session_not_found`, `pos.session_not_owned`, `pos.session_idempotency_conflict`, `inventory.payload_invalid`, `inventory.trace_missing`, `inventory.isolation_unsupported`) |
+
+A `RAISE EXCEPTION` aborts the transaction, so each of those INSERTs is unreachable on every refused call
+and a row written before it would not survive either. That POSITION — not the raises — is the defect, and it
+is the same one `0081` had for `customer_collect_payment`. The replay arms write no audit row at all, which
+is correct and unchanged: a replay is not a new effect.
+
+**No migration was created or edited to close this.** The refusal row is written by the application in its
+own `daftar_app` transaction under an existing grant.
+
+### The one mechanism, and what was NOT duplicated
+
+- `AuditService.recordRefusal` — unchanged, still the only writer, still `OutboxService.emit`'s shape.
+- `apps/api/src/modules/audit/refusal-audit.ts` — NEW, and the only new structure: the `RefusalAttempt`
+  shape and `auditThenRethrowRefusal`, the four-step order, extracted from the receivables module so that
+  the POS and the sale commit cannot drift from it. `receivables-refusal-audit.ts` now delegates to it and
+  keeps both of its exported names, so nothing that imported it changed.
+- `apps/api/src/modules/selling/selling-refusal-audit.ts` — NEW, the selling/POS binding: the surface's own
+  `rethrowSellingRefusal` plus `refusedSellingCode`, which reads `details.sellingCode` (and
+  `details.inventoryCode`, the channel the ONE stock writer and the ONE branch-scope authorizer answer
+  through) off the object the rethrow produced. It decides no code, holds no status table and serves the POS
+  too, because `pos-errors.ts` narrows the one registry rather than keeping a second.
+- `PosCartService`'s `sales.discount` check moved from `requestDiscount` into the private `issue` it calls,
+  one frame deeper, so the refusal it raises is inside the catch that audits. The P4-AL-35 rule is unchanged
+  — it is still a body-dependent check in the service and not a decorator — and a discount asked without the
+  key is still refused rather than silently zeroed.
+
+### The figures each path audits
+
+| command | operation | entity | till session | intent digest | branch |
+|---|---|---|---|---|---|
+| `POST /v1/sales` | `sale.commit` | `sale` | NULL — the generic surface has no till | set by `plan` before any state read | set from the warehouse, once bound |
+| `POST …/checkout` | `sale.commit` | `sale` | the till | same, when the planner was reached | same |
+| `POST /v1/pos/till-sessions` | `pos.session_open` | `pos_till_session` | the session | not applicable | the branch the open named |
+| `POST …/close` | `pos.session_close` | `pos_till_session` | the session | not applicable | read off the session, NULL before that read |
+| cart add / change / discount | `pos.cart_set_line` | `pos_cart_line` | the till | not applicable | NULL |
+| cart remove | `pos.cart_remove_line` | `pos_cart_line` | the till | not applicable | NULL |
+
+Every figure is a REQUEST figure. `sale_commit` recomputes each price, total and share from the catalogue,
+so the request carries identities, quantities and a discount request and nothing else — which is exactly
+what a reviewer of a refused command needs. Minor units travel as decimal strings, never as JSON numbers.
+
+### Measured, over this agent's own isolated cluster
+
+`embedded-postgres` 18.4 on `127.0.0.1:5481`, data directory `/tmp/daftar-pg-agent-c2`. **Functional
+evidence only — it carries no authority for a plan claim and no millisecond figure, and none is made here.**
+
+| suite | tests | result |
+|---|---|---|
+| `tests/integration/p4s4-pos-sale-refusal-audit.test.ts` | 21 | pass, 0 skipped |
+| `tests/integration/p4s4-refusal-audit-never-throws.test.ts` | 7 | pass, 0 skipped |
+| `tests/guards/p4s4-command-refusal-audit-law.test.ts` | 15 | pass, 0 skipped |
+| `tests/integration/p4s4-refusal-audit.test.ts` (the receivables suite, unchanged behaviour) | 16 | pass, 0 skipped |
+
+Observed refusal codes, which are what the routes ACTUALLY answer and in one case not what a registry entry
+would have suggested: `pos.session_already_open` (409), `pos.session_not_owned` (403),
+`pos.checkout_cart_empty` (409), `inventory.insufficient_stock` (409) on the sale path,
+`pos.cart_line_not_found` (404) on a removal, and `inventory.payload_invalid` (400) — **not**
+`pos.cart_product_not_found` — for a scan of a product id that names nothing, because the gate finds no
+product row and the payload the service would sign has no product to carry. The suite asserts the code the
+merchant receives.
+
+### The gate law, and its red proof
+
+`command-refusal-audit` in `scripts/phase4-s4-gate.ts`. Discovery, not a list: the Phase 4 operation
+vocabulary from its own type unions, the command paths from the services, the obligation per command. On the
+tree as committed it reports **11 declared operations and 10 discovered command paths**, all audited, and
+**2 surface bindings** of the one composer. The four `customer.create` / `update` / `archive` /
+`reactivate` operations are declared and have no service that authorizes them, so they contribute no
+subject today and become subjects on the day a P4-S1 write service lands — which is the point of a
+discovery.
+
+Proved red by a planted defect, in `tests/guards/p4s4-command-refusal-audit-law.test.ts` over mutated
+copies of the real source, and observed once at the gate's own command line: with the composer call removed
+from `TillSessionService.close` and nowhere else, the gate prints
+`FAIL command-refusal-audit`, names `till-session.service.ts#close [pos.session_close] NOT AUDITED`, and
+exits `FAIL gate:phase4:s4 … 1 of 9 check(s) refuse this tree`. The sibling `open` in the same file is NOT
+named, which is what makes it a per-command law rather than a per-file one. The suite also plants: no
+subject at all, an unreadable operation vocabulary, a missing composer module, and a second
+`auditThenRethrow…` that does not delegate.
+
+### One P4-S2 golden had to change, and it was STRENGTHENED rather than relaxed
+
+`tests/golden-regression/phase4-s2/08-sale-idempotency.golden.test.ts` asserted that a sale refused for
+`sale.idempotency_conflict` left an EMPTY census delta. That census is DISCOVERED from `pg_class` over every
+business-scoped relation, so `audit_events` is in it, and P4-AL-48 now legitimately writes exactly one row
+there. The case was failing on the audit working.
+
+What was NOT done: the relation was not excluded and the claim was not weakened. The case now requires
+`audit_events` to move by **exactly 1**, requires every other relation to be unmoved, READS the row back and
+requires it to be `sale.commit.refused` carrying `sale.idempotency_conflict`, and requires `outbox_events`
+not to move — P4-AL-48's «a refusal emits no outbox event». That is strictly more than the empty delta it
+replaced. `06-sale-last-item-race.golden.test.ts:218-226` already made the same argument about the two
+record-keeping relations and is the precedent.
+
+Its `it(` title keeps the exact prefix `scripts/phase4-s2-gate.ts`'s `S2-G08` row pins
+(`…refused, and writes nothing`), so the sealed predecessor gate's roster check is untouched; the clause
+after the dash is appended, not substituted. Measured: `gate:phase4:s2` and `gate:phase4:s3` were both run
+on this tree after the change.
+
+### Two files outside this work's own set were touched, and why
+
+- `tests/integration/pos-s3-cart.test.ts` — `PosCartService`'s constructor gained an `AuditService`, so the
+  suite that builds the service directly had to pass one. It passes a RECORDING port rather than a silent
+  stub, so its cases still measure the refusal and not the audit.
+- the golden above.
+
+Nothing else outside this work's set changed. No migration was created or edited, no threshold, count or
+ceiling was relaxed, and no `.skip`, `.todo` or `.only` exists anywhere in what was added.

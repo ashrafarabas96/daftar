@@ -3,13 +3,15 @@ import { hasPermission } from '@daftar/domain-core';
 import { buildInventoryPayload, formatQuantity, parseMinor, parseQuantity, saleCommitIntentSha256 } from '@daftar/inventory';
 import type { PosCheckoutDto } from '@daftar/shared-contracts';
 import { Database, presentInventoryAssertion, type BusinessInventoryAccountingTransaction } from '../../infra/database';
+import { AuditService } from '../audit/audit.service';
 import type { BusinessTransactionId } from '../inventory/business-transaction';
 import { InventoryAuthorizationService, type InventoryCommandAuthority } from '../inventory/inventory-authorization';
 import { SaleCommitService, type SaleCommitPlan } from '../selling/sale-commit.service';
 import { readSaleDto } from '../selling/sale-reads';
+import { auditThenRethrowSellingRefusal, saleCommitAttempt, type SellingAttempt } from '../selling/selling-refusal-audit';
 import type { SaleCommitRequest } from '../selling/selling.schemas';
 import type { MembershipContext } from '../tenancy/tenancy.service';
-import { posRefusal, rethrowPosRefusal } from './pos-errors';
+import { posRefusal } from './pos-errors';
 import type { PosCheckoutRequest } from './pos-checkout.schemas';
 
 /**
@@ -139,17 +141,58 @@ export class PosCheckoutService {
     // The ONE sale writer. This service holds it to call `plan`,
     // `seamAuthority` and `execute`; it reimplements none of them.
     @Inject(SaleCommitService) private readonly sales: SaleCommitService,
+    // P4-AL-48's refusal audit. A checkout is refused by the session checks,
+    // by the basket checks, by `sale_commit`'s own 33 raises (whose only audit
+    // row, `sale.committed` at `0078:1002`, is its LAST step) or by the
+    // verification — and until this was injected not one of those persisted
+    // any evidence.
+    @Inject(AuditService) private readonly audit: AuditService,
   ) {}
 
+  /**
+   * P4-AL-48's attempt record for a checkout.
+   *
+   * The operation is `sale.commit`, because that is the command a checkout IS:
+   * the cart removals are its CONSUMPTION step, minted per line under
+   * `pos.cart_remove_line`, and a refusal of one of them is reported by its own
+   * code (`pos.checkout_cart_state_changed`) in the same row. One attempt, one
+   * row, and the refusal code says which step refused — a second row per
+   * removal would be an audit of the orchestration's internals rather than of
+   * the command the cashier gave.
+   *
+   * The figures start as the REQUEST's, because a refusal raised on the first
+   * read has only those; once the sale request is derived from the basket they
+   * are replaced by `saleCommitAttempt`'s — the same figures `POST /v1/sales`
+   * audits, from the same function, so a refused checkout and a refused sale
+   * are not two different accounts of the same thing.
+   */
   async checkout(m: MembershipContext, tillSessionId: string, input: PosCheckoutRequest, btx: BusinessTransactionId): Promise<PosCheckoutDto> {
+    const attempt: SellingAttempt = {
+      operation: 'sale.commit',
+      entity: 'sale',
+      entityId: input.saleId,
+      tillSessionId,
+      figures: {
+        settlementMode: input.settlementMode,
+        customerId: input.customerId,
+        documentDate: input.documentDate,
+        dueDate: input.dueDate,
+      },
+    };
     try {
-      return await this.run(m, tillSessionId, input, btx);
+      return await this.run(m, tillSessionId, input, btx, attempt);
     } catch (e) {
-      return rethrowPosRefusal(e);
+      return await auditThenRethrowSellingRefusal(this.audit, m, attempt, e);
     }
   }
 
-  private async run(m: MembershipContext, tillSessionId: string, input: PosCheckoutRequest, btx: BusinessTransactionId): Promise<PosCheckoutDto> {
+  private async run(
+    m: MembershipContext,
+    tillSessionId: string,
+    input: PosCheckoutRequest,
+    btx: BusinessTransactionId,
+    attempt: SellingAttempt,
+  ): Promise<PosCheckoutDto> {
     // 0. THE REPLAY PROOF, BEFORE ANY CURRENT STATE IS READ.
     const replay = await this.provenReplay(m, tillSessionId, input);
     if (replay !== null) return replay;
@@ -176,9 +219,12 @@ export class PosCheckoutService {
     // 3. The sale request, DERIVED from the snapshot. The cart line id is the
     //    sale line id: that is the consumption binding.
     const request = this.saleRequest(input, session, snapshot);
+    // The figures the ONE sale writer is about to be given, from the ONE
+    // function that states what a refused sale commit carries.
+    Object.assign(attempt.figures, saleCommitAttempt(request, tillSessionId).figures);
 
     // 4. The ONE sale writer derives every figure.
-    const outcome = await this.sales.plan(m, request, btx);
+    const outcome = await this.sales.plan(m, request, btx, attempt);
     if (outcome.kind === 'replay') {
       // `plan` found the sale already stored with THIS exact intent between
       // step 0's read and now. Two checkouts of one `saleId` raced; this one

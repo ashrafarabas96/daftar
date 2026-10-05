@@ -2374,3 +2374,69 @@ defect: the vocabulary is now `INVOICE_REDUCER_VOCABULARY`, it excludes a refund
 YES; **not to be reopened without new contradictory evidence**. The live financial double-reduction test is
 recorded as owed by the P4-S5 implementation, because `refunds`, `credit_notes` and
 `credit_note_applications` do not exist at any prefix.
+
+---
+
+## 30. P4-S4 addendum — the refusal audit, extended to the POS and the sale commit
+
+This section is APPENDED. Nothing above it is edited, and one paragraph above it is superseded by name.
+
+**P4-AL-48(b) — the POS and sale-commit commands audit their refusals, through the SAME writer, the SAME
+metadata schema and the SAME composer as receivables; and a gate law holds every Phase 4 command to it.**
+
+`P4-AL-48(a)`'s closing paragraph in §15 reads: *"The POS and sale-commit paths carry the same structural
+gap (`0078:1002`, `0079:954`, `0079:1022` are all last-step audit INSERTs after their own raises) and P4-S4
+did not close them: they are another owner's files, `recordRefusal` is now available to them, and no gate yet
+asserts that every Phase 4 command audits its refusals."* **That paragraph is DISCHARGED.** Both halves of
+it are closed here, and this clause is the later text:
+
+- the three sites were re-read in the SQL and are what the paragraph says they are: `0078:1002` is
+  `sale_commit`'s single `sale.committed` INSERT, its last write, after all **33** of its
+  `RAISE EXCEPTION`s; `0079:954` is `pos_till_session_open`'s single `pos.till_session_opened` INSERT inside
+  its NON-REPLAY arm, after its **7**; `0079:1022` is `pos_till_session_close`'s single
+  `pos.till_session_closed` INSERT inside its NON-REPLAY arm, after its **6**. None of the three is a
+  `RAISE` site. They are the SUCCESS audits whose position is the reason a refusal left no evidence;
+- **no migration was written and no migration was edited.** `0000`–`0079` are intact byte for byte and
+  `0080`–`0082` are untouched. The refusal row needs neither: `daftar_app` already holds
+  `INSERT ON audit_events` (`0006:79`) under the `audit_scope` policy (`0006:53-55`);
+- the audited command paths are now `SaleCommitService.commit`, `TillSessionService.open`,
+  `TillSessionService.close`, `PosCheckoutService.checkout` and the four `PosCartService` commands, beside
+  the two receivables commands that already were. Each one builds a `RefusalAttempt` before its first read —
+  so a refusal raised on the first line still carries the document id, the operation and the request's own
+  figures — and ends in `auditThenRethrowRefusal`;
+- **there is ONE composer and ONE writer.** `AuditService.recordRefusal` is unchanged and remains the only
+  writer. The four-step order a command's catch performs — produce the refusal that will leave, classify
+  THAT object, write the row, throw the same object — was extracted from `receivables-refusal-audit.ts` into
+  `apps/api/src/modules/audit/refusal-audit.ts` and is now stated once; `receivables-refusal-audit.ts` and
+  the new `selling-refusal-audit.ts` are BINDINGS of it, each supplying its own surface's existing rethrow
+  and its own reader of the code that rethrow produced. No second metadata schema, and no second place that
+  decides a refusal code;
+- `selling-refusal-audit.ts` serves both the selling and the POS surfaces, because there is one refusal
+  registry: `pos-errors.ts` registers nothing, it NARROWS `SELLING_STATUS`, and `rethrowPosRefusal` IS
+  `rethrowSellingRefusal`. It is a module of its own and not part of `*-errors.ts` for the reason
+  `receivables-refusal-audit.ts` already records: the refusal code it composes goes into
+  `audit_events.metadata` and never into a response body, and `apps/web/test/domain-code-fields.test.ts`
+  scans `*-errors.ts` for `details` field names the client must render;
+- a `500`-class code is NOT audited as a refusal. `SELLING_STATUS` carries 500s for the internal `selling.*`
+  invariants and `sellingRefusal` attaches those to `details.sellingCode` too, so the classifier reads the
+  status the merchant actually received off the `AppError` itself.
+
+**The durability statement of `P4-AL-48(a)` is unchanged, and it is now TESTED.** «HIGH, NOT ABSOLUTE» is
+not softened, reworded or qualified here. What changed is that the clause has evidence:
+`tests/integration/p4s4-refusal-audit-never-throws.test.ts` drives a real failure into the audit write — a
+rejecting `Database` in §A, and `REVOKE INSERT ON audit_events FROM daftar_app` around one real request in
+§B — and asserts that the caller still receives the original refusal with its original code and status, that
+nothing throws out of `recordRefusal`, and that the loss is logged with the operation and the refusal code in
+the message. With the `catch` removed, §B answers `403 FORBIDDEN` «Access denied» (PostgreSQL's
+`permission denied for table audit_events`, rendered as an authorization failure) instead of
+`409 pos.session_already_open`: measured, and the reason the swallow is not optional.
+
+**The gate law is a DISCOVERY and not a list.** `scripts/phase4-s4-gate.ts`'s `command-refusal-audit` check
+reads the declared Phase 4 operation vocabulary off its own `InventoryP4S<n>OperationCode` type unions,
+discovers the command paths from the code — an ENTRY method of a `*.service.ts` under
+`apps/api/src/modules` that authorizes one of those operations, directly or through a helper of its own file
+— and requires each one's refusal path to reach the one composer. A read authorizes nothing and is
+therefore not a subject, by the rule rather than by an exception. It **fails loudly when it finds no
+subject**, because a derived law with an empty subject set is the one failure that looks like a pass, and it
+refuses a second `auditThenRethrow…` that does not delegate to the single module.
+

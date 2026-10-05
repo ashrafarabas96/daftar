@@ -28,13 +28,15 @@ import {
 import type { SaleDto } from '@daftar/shared-contracts';
 import { Database, presentInventoryAssertion, type BusinessInventoryAccountingTransaction, type SeamAccountingAuthority } from '../../infra/database';
 import { DatabaseAccountingPostingAdapter } from '../accounting/accounting-posting.adapter';
+import { AuditService } from '../audit/audit.service';
 import { SalePostingService } from '../accounting/sale-posting.service';
 import type { BusinessTransactionId } from '../inventory/business-transaction';
 import { InventoryAuthorizationService, type InventoryCommandAuthority } from '../inventory/inventory-authorization';
 import { readWarehouses, resolveVariants, type ReadScope, type ResolvedVariant } from '../inventory/inventory-stock-read';
 import type { MembershipContext } from '../tenancy/tenancy.service';
 import { readSaleHeader, readSalePriceFacts, readSaleStockLevels, scopedSellingRows, type SalePriceFacts, type SaleStockLevel } from './sale-reads';
-import { rethrowSellingRefusal, sellingInventoryRefusal, sellingPackageRefusal, sellingRefusal } from './selling-errors';
+import { sellingInventoryRefusal, sellingPackageRefusal, sellingRefusal } from './selling-errors';
+import { auditThenRethrowSellingRefusal, saleCommitAttempt, type SellingAttempt } from './selling-refusal-audit';
 import type { SaleCommitRequest } from './selling.schemas';
 
 /**
@@ -119,18 +121,37 @@ export class SaleCommitService {
     // with no permission check in front of it.
     @Inject(SalePostingService) private readonly salePosting: SalePostingService,
     @Inject(DatabaseAccountingPostingAdapter) private readonly posting: DatabaseAccountingPostingAdapter,
+    // P4-AL-48's refusal audit. `sale_commit` writes ONE audit row —
+    // `sale.committed` at `0078:1002`, its LAST step — after all 33 of its
+    // `RAISE EXCEPTION`s, every one of which aborts the transaction. So a
+    // refused sale persisted no evidence at all until this was injected.
+    @Inject(AuditService) private readonly audit: AuditService,
   ) {}
 
+  /**
+   * P4-AL-48: a refusal is audited as heavily as a success. The attempt record
+   * is built BEFORE `run`, so a refusal raised on its very first line still has
+   * a sale id, the operation and the request's own figures to audit; `plan`
+   * fills in the intent digest and the branch as it learns them.
+   *
+   * The figures are the ones the REQUEST carried, because those are the ones
+   * «that caused it» for a forged total or an over-cap attempt. Not one of them
+   * is a derived amount: `sale_commit` RECOMPUTES every price, total and share
+   * from the catalogue, so the request carries identities, quantities and a
+   * discount request and nothing else — and that is exactly what a reviewer of
+   * a refused sale needs to see.
+   */
   async commit(m: MembershipContext, input: SaleCommitRequest, btx: BusinessTransactionId): Promise<SaleDto> {
+    const attempt = saleCommitAttempt(input, null);
     try {
-      return await this.run(m, input, btx);
+      return await this.run(m, input, btx, attempt);
     } catch (e) {
-      return rethrowSellingRefusal(e);
+      return await auditThenRethrowSellingRefusal(this.audit, m, attempt, e);
     }
   }
 
-  private async run(m: MembershipContext, input: SaleCommitRequest, btx: BusinessTransactionId): Promise<SaleDto> {
-    const outcome = await this.plan(m, input, btx);
+  private async run(m: MembershipContext, input: SaleCommitRequest, btx: BusinessTransactionId, attempt: SellingAttempt): Promise<SaleDto> {
+    const outcome = await this.plan(m, input, btx, attempt);
     if (outcome.kind === 'replay') return readSale(this.db, m, input.saleId, true);
     const plan = outcome.plan;
 
@@ -205,7 +226,7 @@ export class SaleCommitService {
    * nothing, so a refusal here has consumed no authority and left no trace
    * beyond its audit row.
    */
-  async plan(m: MembershipContext, input: SaleCommitRequest, btx: BusinessTransactionId): Promise<SaleCommitPlanOutcome> {
+  async plan(m: MembershipContext, input: SaleCommitRequest, btx: BusinessTransactionId, attempt?: SellingAttempt): Promise<SaleCommitPlanOutcome> {
     // 1. THE REPLAY PROOF, BEFORE ANY STATE READ.
     //
     //    The intent digest is computable from the request alone — that is the
@@ -230,6 +251,12 @@ export class SaleCommitService {
         discountMinor: parseMinor(l.discountMinor),
       })),
     });
+    // The digest exists now, so a refusal from here on can carry it. The
+    // attempt is OPTIONAL because `plan` has two callers — `commit` and
+    // `PosCheckoutService.checkout` — and each owns its own attempt record;
+    // filling it here rather than in each of them is what keeps the digest a
+    // fact the ONE planner states once.
+    if (attempt !== undefined) attempt.intentSha256 = intentSha256;
     const stored = await readSaleHeader(this.db, m, input.saleId);
     if (stored !== null) {
       if (stored.commit_intent_sha256 === intentSha256) {
@@ -259,6 +286,10 @@ export class SaleCommitService {
     if (business.documentDateInFuture) throw sellingRefusal('sale.document_date_in_future');
     const warehouse = (await readWarehouses(this.db, m, [input.warehouseId], [input.warehouseId])).get(input.warehouseId);
     if (warehouse === undefined) throw sellingRefusal('sale.warehouse_not_found');
+    // The branch is a SERVER fact derived from the warehouse, and it is bound
+    // now, so a refusal from here on carries the dimension the sale would have
+    // been written under.
+    if (attempt !== undefined) attempt.branchId = warehouse.branchId;
     if (input.customerId !== null) {
       const customer = await this.readCustomer(m, input.customerId);
       if (customer === null) throw sellingRefusal('sale.customer_not_found');

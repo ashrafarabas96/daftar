@@ -203,10 +203,40 @@ describe('G-16 / GOLD-12, GOLD-62 the sale document key', () => {
     expect(res.status, 'a true replay of an accepted command is answered, not treated as a new attempt').toBeLessThan(300);
   });
 
-  it('the same document id with a DIFFERENT intent is refused, and writes nothing', () => {
+  it('the same document id with a DIFFERENT intent is refused, and writes nothing — no EFFECT; the only row P4-AL-48 adds is the refusal audit', async () => {
     requireSubject(subject.missing, CLAIM);
     const res = must(tampered, 'the tampered replay');
     expect(res.status, 'the same id with another intent is refused (P4-AL-30: the stored intent_sha256 is read before any write)').toBe(409);
-    expect(censusDelta(afterReplay, afterTampered), 'the refused attempt wrote nothing at all').toEqual({});
+    // The census is DISCOVERED from `pg_class`, so this is a claim about every
+    // business-scoped relation that exists rather than about a list someone
+    // maintained — and that is why it had to change when P4-AL-48 landed. The
+    // ONE relation a refused command now legitimately writes is the
+    // record-keeping one: `AuditService.recordRefusal` writes the refusal row
+    // in its OWN transaction, after this command's has already aborted, so a
+    // row there is the audit WORKING. `06-sale-last-item-race.golden.test.ts`
+    // already excludes `audit_events` and `outbox_events` on exactly this
+    // argument; this case does not merely exclude the relation, it requires
+    // the row and reads it, which is strictly more than the empty delta
+    // asserted before.
+    const delta = censusDelta(afterReplay, afterTampered);
+    expect(delta['audit_events'], 'a refused command writes exactly ONE refusal audit row (P4-AL-48)').toBe(1);
+    const { audit_events: _audited, ...effects } = delta;
+    expect(effects, 'the refused attempt wrote no EFFECT at all: not a sale, a movement, an invoice or a journal line').toEqual({});
+    // And the row is the refusal, under the operation the command exercised,
+    // carrying the code the merchant was answered with. An audit row that said
+    // anything else would be a worse finding than the empty delta this case
+    // used to assert.
+    const row = (
+      await ownerPool().query<{ action: string; code: string | null }>(
+        `SELECT action, metadata->>'refusalCode' AS code FROM audit_events
+          WHERE business_id = $1 AND action LIKE '%.refused' ORDER BY created_at DESC LIMIT 1`,
+        [A.businessId],
+      )
+    ).rows[0];
+    expect(row?.action).toBe('sale.commit.refused');
+    expect(row?.code).toBe('sale.idempotency_conflict');
+    // P4-AL-48 again: a refusal is not a business event, so nothing downstream
+    // reacts to one and the outbox does not move.
+    expect(delta['outbox_events'] ?? 0, 'a refusal emits no outbox event').toBe(0);
   });
 });

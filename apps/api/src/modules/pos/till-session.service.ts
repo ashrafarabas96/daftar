@@ -1,10 +1,12 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { tillSessionClosePayload, tillSessionOpenPayload } from '@daftar/inventory';
 import { Database } from '../../infra/database';
+import { AuditService } from '../audit/audit.service';
 import type { BusinessTransactionId } from '../inventory/business-transaction';
 import { InventoryAuthorizationService } from '../inventory/inventory-authorization';
 import { readBaseCurrency, type ReadScope } from '../inventory/inventory-stock-read';
 import type { MembershipContext } from '../tenancy/tenancy.service';
+import { auditThenRethrowSellingRefusal, type SellingAttempt } from '../selling/selling-refusal-audit';
 import { posRefusal, rethrowPosRefusal } from './pos-errors';
 import { POS_TILL_SESSIONS, TILL_SESSION_COLUMNS as C, TILL_SESSION_STATES } from './pos-session-contract';
 import type { TillSessionCloseRequest, TillSessionOpenRequest } from './pos.schemas';
@@ -93,6 +95,13 @@ export class TillSessionService {
   constructor(
     @Inject(Database) private readonly db: Database,
     @Inject(InventoryAuthorizationService) private readonly authorization: InventoryAuthorizationService,
+    // P4-AL-48's refusal audit. `pos_till_session_open`'s ONLY audit row is
+    // `pos.till_session_opened` (`0079:954`), inside the non-replay arm after
+    // its seven `RAISE EXCEPTION`s; `pos_till_session_close`'s is
+    // `pos.till_session_closed` (`0079:1022`), likewise after its six. Every
+    // raise aborts the transaction, so a refused open and a refused close
+    // persisted no evidence at all until this was injected.
+    @Inject(AuditService) private readonly audit: AuditService,
   ) {}
 
   /**
@@ -113,6 +122,26 @@ export class TillSessionService {
    * second copy of a decision is a second answer.
    */
   async open(m: MembershipContext, body: TillSessionOpenRequest, businessTransactionId: BusinessTransactionId): Promise<TillSession> {
+    // The attempt record is built BEFORE the first read, so a refusal raised on
+    // the base-currency read or at the authorization still carries the session
+    // id, the operation and the figures the request stated (P4-AL-48). The
+    // branch is in it from the start because the OPEN names it; the counted
+    // float is in it because `pos_till_session_open` signs it, so a replay
+    // presenting a different float is a conflict and the figure is what
+    // distinguishes the two attempts.
+    const attempt: SellingAttempt = {
+      operation: 'pos.session_open',
+      entity: 'pos_till_session',
+      entityId: body.sessionId,
+      branchId: body.branchId,
+      tillSessionId: body.sessionId,
+      figures: {
+        branchId: body.branchId,
+        warehouseId: body.warehouseId,
+        terminalCode: body.terminalCode,
+        openingFloatMinor: body.openingFloatMinor,
+      },
+    };
     try {
       const currencyCode = await readBaseCurrency(this.db, this.scope(m));
       const authority = await this.authorization.authorize(m, 'pos.session_open', businessTransactionId, [body.warehouseId]);
@@ -145,7 +174,7 @@ export class TillSessionService {
         return first(rows);
       });
     } catch (e) {
-      rethrowPosRefusal(e);
+      return await auditThenRethrowSellingRefusal(this.audit, m, attempt, e);
     }
   }
 
@@ -165,9 +194,24 @@ export class TillSessionService {
    * have made a cashier unable to end a shift over an abandoned basket.
    */
   async close(m: MembershipContext, sessionId: string, body: TillSessionCloseRequest, businessTransactionId: BusinessTransactionId): Promise<TillSession> {
+    // Built before the read, so `pos.session_not_found` is audited too — a
+    // close aimed at a session that is not the caller's to see is one of the
+    // attempts P4-AL-48 is for. The branch is NULL until the session is read,
+    // because a close names no branch and a refusal that happened before the
+    // read genuinely does not know one.
+    const attempt: SellingAttempt = {
+      operation: 'pos.session_close',
+      entity: 'pos_till_session',
+      entityId: sessionId,
+      tillSessionId: sessionId,
+      figures: { closingCountMinor: body.closingCountMinor },
+    };
     try {
       const stored = await this.readRow(m, sessionId);
       if (stored === null) throw posRefusal('pos.session_not_found');
+      attempt.branchId = stored.branch_id;
+      attempt.figures['warehouseId'] = stored.warehouse_id;
+      attempt.figures['terminalCode'] = stored.terminal_code;
       const authority = await this.authorization.authorize(m, 'pos.session_close', businessTransactionId, [stored.warehouse_id]);
       const assertion = this.authorization.mint(
         authority,
@@ -187,7 +231,7 @@ export class TillSessionService {
         return first(rows);
       });
     } catch (e) {
-      rethrowPosRefusal(e);
+      return await auditThenRethrowSellingRefusal(this.audit, m, attempt, e);
     }
   }
 
