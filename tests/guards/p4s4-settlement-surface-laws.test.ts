@@ -26,16 +26,30 @@
  * to it was an ownership question the Tech Lead had not answered ("Departure
  * A"). THE §23 RULING ANSWERED IT. The key is added — non-partially, which is
  * lawful because it contains the primary key and so validates on walk-in rows
- * whose `customer_id` is NULL — and both reducer edges widen onto it, which
- * makes both laws SHAPES rather than checks.
+ * whose `customer_id` is NULL — and each reducer gains a THREE-COLUMN edge
+ * onto it, which makes both laws SHAPES rather than checks.
  *
- * The law states every direction this can fail in: the narrow two-column edge
- * (both laws back on a trigger any writer can skip), a missing edge
- * (cross-business linkage representable), a PARTIAL key (not a lawful FK
- * target at all), a nullable `customer_id` on a reducer (MATCH SIMPLE skips
- * the check and the pin holds on nothing), and a deleted verifier or refusal
- * (the arms are kept as defence in depth). `[[daftar-a-deferred-guarantee-is-
- * still-a-guarantee]]` — and a structural one is better.
+ * THE PIN IS ADDED BESIDE THE NARROW EDGE, NOT IN PLACE OF IT, and the law is
+ * written to match. A Phase 4 migration never drops a composite seam (P2-S8's
+ * accepted rule, enforced by `compositeFkProblems`), so the corrective cannot
+ * replace `0081`'s `(business_id, invoice_id)` edge and does not: both edges
+ * stand, the narrow one redundant under the wide one, which costs one extra
+ * referential check per row and buys the rule no exception. So this is a
+ * PRESENCE law — is the three-column edge there, validated, immediate and
+ * `ON DELETE RESTRICT` — and a narrow edge standing beside it is a
+ * not-a-finding case asserted below, not a defect.
+ *
+ * The law states every direction this can fail in: the corrective absent
+ * altogether (both laws back on a trigger any writer can skip), the pin
+ * missing on ONE reducer only (half a law), no edge at all (cross-business
+ * linkage representable), the pin added `NOT VALID` (it holds on none of the
+ * rows already there), the pin made `DEFERRABLE` (the verifier again, in a
+ * constraint's clothing), the pin without `ON DELETE RESTRICT`, a missing or
+ * PARTIAL key (not a lawful FK target at all), a nullable `customer_id` on a
+ * reducer (MATCH SIMPLE skips the check and the pin holds on nothing), and a
+ * deleted verifier or refusal (the arms are kept as defence in depth).
+ * `[[daftar-a-deferred-guarantee-is-still-a-guarantee]]` — and a structural
+ * one is better.
  *
  * ── THE SETTLEMENT ARITHMETIC IS REUSED, NEVER RE-IMPLEMENTED ────────────
  *
@@ -67,10 +81,12 @@ import {
   SETTLEMENT_ROUTINES,
   SETTLEMENT_SOURCE_TYPES,
   SETTLEMENT_VERIFIER,
+  declaredInvoiceEdges,
   routineBody,
   rowLockOnlyWriteProblems,
   settlementContractProblems,
   stripSqlComments,
+  structuralPinEdge,
 } from '../../scripts/phase4-s4-gate';
 import { MIGRATIONS_SUBDIR } from '../../scripts/guards/phase4-rls-force';
 
@@ -78,8 +94,10 @@ import { MIGRATIONS_SUBDIR } from '../../scripts/guards/phase4-rls-force';
 const REPO_ROOT = join(__dirname, '..', '..');
 
 /**
- * A contract-shaped settlement text: the two child relations with the
- * Departure A two-column invoice FK, the deferred verifier with both named
+ * A contract-shaped settlement text, in the shape the CANDIDATE SURFACE
+ * actually has: the two child relations carrying `0081`'s two-column invoice
+ * FK, the corrective's non-partial key and its three-column edge onto that key
+ * ADDED BESIDE each narrow one, the deferred verifier with both named
  * refusals, and the three accepted arithmetic primitives CALLED and not
  * redefined.
  */
@@ -132,16 +150,13 @@ CREATE TABLE payment_allocations (
   ar_dust_minor BIGINT NOT NULL,
   accounting_source_type TEXT NOT NULL GENERATED ALWAYS AS ('customer_payment_allocation') STORED,
   CONSTRAINT payment_allocations_pk PRIMARY KEY (business_id, id),
-  -- THE STRUCTURAL CUSTOMER PIN: the three-column edge onto the non-partial
-  -- UNIQUE (business_id, id, customer_id) declared at the foot of this
-  -- fixture. A reducer naming one customer against another customer's invoice
-  -- has no target, and a walk-in invoice (customer_id IS NULL, while this
-  -- column is NOT NULL) has no target for any reducer. What used to be
-  -- "Departure A" — the narrow (business_id, id) edge with both laws on
-  -- ${SETTLEMENT_VERIFIER} — was closed by the Tech Lead's §23 ruling, and
-  -- 0067:274 is the precedent the key follows.
-  CONSTRAINT payment_allocations_invoice_fk FOREIGN KEY (business_id, invoice_id, customer_id)
-    REFERENCES invoices (business_id, id, customer_id) ON DELETE RESTRICT
+  -- The narrow edge the slice's own migration declared while the ownership
+  -- question was open ("Departure A"). It STAYS, exactly as written: a
+  -- composite seam is never dropped (P2-S8's accepted rule), so the
+  -- corrective adds the three-column pin BESIDE it at the foot of this
+  -- fixture rather than replacing it.
+  CONSTRAINT payment_allocations_invoice_fk FOREIGN KEY (business_id, invoice_id)
+    REFERENCES invoices (business_id, id) ON DELETE RESTRICT
 );
 CREATE TABLE customer_credits (
   tenant_id UUID NOT NULL,
@@ -166,17 +181,35 @@ CREATE TABLE customer_credit_applications (
   credit_dust_minor BIGINT NOT NULL,
   accounting_source_type TEXT NOT NULL GENERATED ALWAYS AS ('customer_credit_application') STORED,
   CONSTRAINT customer_credit_applications_pk PRIMARY KEY (business_id, id),
-  -- The same pin on the credit side: a law enforced on one of the two settling
-  -- relations and not the other is half a law.
-  CONSTRAINT customer_credit_applications_invoice_fk FOREIGN KEY (business_id, invoice_id, customer_id)
-    REFERENCES invoices (business_id, id, customer_id) ON DELETE RESTRICT
+  -- The credit side's narrow edge, kept for the same reason.
+  CONSTRAINT customer_credit_applications_invoice_fk FOREIGN KEY (business_id, invoice_id)
+    REFERENCES invoices (business_id, id) ON DELETE RESTRICT
 );
 
--- The key both edges above target, in the shape and with the standing of
--- 0067:274. NON-PARTIAL: it contains invoices' primary key (business_id, id),
--- so it is unique whatever customer_id holds and validates on any data,
--- walk-in rows included. PostgreSQL would not accept a partial index here.
+-- THE STRUCTURAL CUSTOMER PIN, in the two parts the corrective migration
+-- carries it in.
+--
+-- The key, in the shape and with the standing of 0067:274. NON-PARTIAL: it
+-- contains invoices' primary key (business_id, id), so it is unique whatever
+-- customer_id holds and validates on any data, walk-in rows included.
+-- PostgreSQL would not accept a partial index here.
 ALTER TABLE invoices ADD CONSTRAINT invoices_customer_uq UNIQUE (business_id, id, customer_id);
+
+-- And the three-column edge from each reducer onto it, ADDED BESIDE the narrow
+-- edge in each CREATE TABLE above and not in place of it. A reducer naming one
+-- customer against another customer's invoice has no target, and a walk-in
+-- invoice (customer_id IS NULL, while each reducer's column is NOT NULL) has
+-- no target for any reducer. Both laws are shapes, where ${SETTLEMENT_VERIFIER}
+-- used to be the only thing holding them. The narrow edge beside this one is
+-- redundant and that is the accepted trade: a composite seam is never dropped.
+ALTER TABLE payment_allocations
+  ADD CONSTRAINT payment_allocations_invoice_customer_fk
+  FOREIGN KEY (business_id, invoice_id, customer_id)
+  REFERENCES invoices (business_id, id, customer_id) ON DELETE RESTRICT;
+ALTER TABLE customer_credit_applications
+  ADD CONSTRAINT customer_credit_applications_invoice_customer_fk
+  FOREIGN KEY (business_id, invoice_id, customer_id)
+  REFERENCES invoices (business_id, id, customer_id) ON DELETE RESTRICT;
 
 -- The settlement arithmetic is the ACCEPTED one. The names are historical; the
 -- arithmetic is general (IMMUTABLE, plain BIGINT, nothing supplier-specific
@@ -225,6 +258,16 @@ ${RULED_STUBS}
 ${SOURCE_TYPE_ROWS}
 `;
 
+/** The two statements the CORRECTIVE contributes to the surface, as the plants below remove or mutate them. */
+const WIDE_ALLOCATION_EDGE = `ALTER TABLE payment_allocations
+  ADD CONSTRAINT payment_allocations_invoice_customer_fk
+  FOREIGN KEY (business_id, invoice_id, customer_id)
+  REFERENCES invoices (business_id, id, customer_id) ON DELETE RESTRICT;`;
+const WIDE_CREDIT_EDGE = `ALTER TABLE customer_credit_applications
+  ADD CONSTRAINT customer_credit_applications_invoice_customer_fk
+  FOREIGN KEY (business_id, invoice_id, customer_id)
+  REFERENCES invoices (business_id, id, customer_id) ON DELETE RESTRICT;`;
+
 /** The problems naming `fragment`, so a plant's own finding is read rather than the whole list. */
 const about = (problems: readonly string[], fragment: string): string[] => problems.filter((p) => p.includes(fragment));
 
@@ -261,28 +304,78 @@ describe('the contract-shaped settlement text is accepted, and the silence is ab
 });
 
 describe('RP-S4-PIN — the structural customer pin, planted in every direction it can fail', () => {
-  it('red: the invoice FK NARROWED back to (business_id, id) is named — both laws would be back on a trigger a writer can skip', () => {
-    const sql = planted('the allocation invoice FK narrowed to the two-column form', (s) =>
-      s.replace(
-        'FOREIGN KEY (business_id, invoice_id, customer_id)\n    REFERENCES invoices (business_id, id, customer_id) ON DELETE RESTRICT\n);\nCREATE TABLE customer_credits',
-        'FOREIGN KEY (business_id, invoice_id)\n    REFERENCES invoices (business_id, id) ON DELETE RESTRICT\n);\nCREATE TABLE customer_credits',
-      ),
+  it('red: the whole corrective ABSENT — the surface left at 0081’s narrow edges — is named on both reducers and on the key', () => {
+    // "0082 absent": the slice's own migration alone. Both laws are back on a
+    // trigger a writer can skip, and the key nothing targets is not declared.
+    const sql = planted('the corrective migration absent from the surface', (s2) =>
+      s2
+        .replace(WIDE_ALLOCATION_EDGE, '')
+        .replace(WIDE_CREDIT_EDGE, '')
+        .replace('ALTER TABLE invoices ADD CONSTRAINT invoices_customer_uq UNIQUE (business_id, id, customer_id);', ''),
     );
+    const problems = settlementContractProblems(sql);
+    expect(about(problems, 'payment_allocations').join('\n')).toContain('none of them is');
+    expect(about(problems, 'customer_credit_applications').join('\n')).toContain('none of them is');
+    expect(about(problems, 'never declares that key')).not.toEqual([]);
+  });
+
+  it('red: the three-column edge missing on the ALLOCATION side, the narrow one still there, is named — the surviving seam is not the pin', () => {
+    const sql = planted('the allocation three-column edge removed', (s2) => s2.replace(WIDE_ALLOCATION_EDGE, ''));
     const problems = about(settlementContractProblems(sql), 'payment_allocations');
-    expect(problems.join('\n')).toContain('the structural pin is');
+    // The narrow edge is still declared, so the law must not report "no edge
+    // at all" — it must report that NONE OF the edges present is the pin.
+    expect(problems.join('\n')).toContain('declares 1 invoice edge(s)');
+    expect(problems.join('\n')).toContain('(business_id, invoice_id) → invoices (business_id, id)');
+    expect(problems.join('\n')).toContain('none of them is');
+    // …and the credit side, untouched, is not reported.
+    expect(about(settlementContractProblems(sql), 'customer_credit_applications')).toEqual([]);
   });
 
-  it('red: the invoice FK narrowed on only the CREDIT side is named — half a law is not the law', () => {
-    const sql = planted('the credit-application invoice FK narrowed', (s) =>
-      s.replace(
-        'CONSTRAINT customer_credit_applications_invoice_fk FOREIGN KEY (business_id, invoice_id, customer_id)\n    REFERENCES invoices (business_id, id, customer_id) ON DELETE RESTRICT',
-        'CONSTRAINT customer_credit_applications_invoice_fk FOREIGN KEY (business_id, invoice_id)\n    REFERENCES invoices (business_id, id) ON DELETE RESTRICT',
-      ),
+  it('red: ONLY ONE reducer pinned is named — half a law is not the law', () => {
+    const sql = planted('the credit-application three-column edge removed', (s2) => s2.replace(WIDE_CREDIT_EDGE, ''));
+    expect(about(settlementContractProblems(sql), 'customer_credit_applications').join('\n')).toContain('none of them is');
+    expect(about(settlementContractProblems(sql), 'payment_allocations')).toEqual([]);
+  });
+
+  it('red: the three-column edge added NOT VALID is named — an unvalidated pin holds on none of the rows already there', () => {
+    const sql = planted('the allocation pin added NOT VALID', (s2) =>
+      s2.replace(WIDE_ALLOCATION_EDGE, WIDE_ALLOCATION_EDGE.replace('ON DELETE RESTRICT;', 'ON DELETE RESTRICT NOT VALID;')),
     );
-    expect(about(settlementContractProblems(sql), 'customer_credit_applications')).not.toEqual([]);
+    expect(about(settlementContractProblems(sql), 'payment_allocations').join('\n')).toContain('added NOT VALID');
   });
 
-  it('red: the key the edges target, DELETED, is named — a widened edge with no target could not even apply', () => {
+  it('red: the three-column edge made DEFERRABLE is named — a deferred edge is the verifier again, not a shape', () => {
+    const sql = planted('the allocation pin made deferrable', (s2) =>
+      s2.replace(WIDE_ALLOCATION_EDGE, WIDE_ALLOCATION_EDGE.replace('ON DELETE RESTRICT;', 'ON DELETE RESTRICT DEFERRABLE INITIALLY DEFERRED;')),
+    );
+    expect(about(settlementContractProblems(sql), 'payment_allocations').join('\n')).toContain('is DEFERRABLE');
+  });
+
+  it('red: the three-column edge without ON DELETE RESTRICT is named — 0081’s child-side action is carried over, not quietly changed', () => {
+    const sql = planted('the allocation pin left at the default delete action', (s2) =>
+      s2.replace(WIDE_ALLOCATION_EDGE, WIDE_ALLOCATION_EDGE.replace(' ON DELETE RESTRICT;', ';')),
+    );
+    expect(about(settlementContractProblems(sql), 'payment_allocations').join('\n')).toContain('ON DELETE RESTRICT');
+  });
+
+  it('NOT A FINDING: the narrow edge standing beside the three-column one — the composite seams are never dropped', () => {
+    // The whole point of the additive shape. The surface declares TWO invoice
+    // edges per reducer and the law is silent, because the pin is a PRESENCE
+    // law: a surviving narrow edge is what the no-drop rule obliges, not a
+    // defect, and nothing here reads "the last declaration" and calls the
+    // estate narrow.
+    for (const child of ['payment_allocations', 'customer_credit_applications']) {
+      const edges = declaredInvoiceEdges(SETTLEMENT_SQL, child);
+      expect(edges.map((e) => `(${e.child.join(', ')}) → invoices (${e.parent.join(', ')})`)).toEqual([
+        '(business_id, invoice_id) → invoices (business_id, id)',
+        '(business_id, invoice_id, customer_id) → invoices (business_id, id, customer_id)',
+      ]);
+      expect(structuralPinEdge(SETTLEMENT_SQL, child)?.options).toBe('ON DELETE RESTRICT');
+    }
+    expect(settlementContractProblems(SETTLEMENT_SQL)).toEqual([]);
+  });
+
+  it('red: the key the edges target, DELETED, is named — a three-column edge with no target could not even apply', () => {
     const sql = planted('the invoices customer key removed', (s) =>
       s.replace('ALTER TABLE invoices ADD CONSTRAINT invoices_customer_uq UNIQUE (business_id, id, customer_id);', ''),
     );
@@ -306,12 +399,17 @@ describe('RP-S4-PIN — the structural customer pin, planted in every direction 
     expect(about(settlementContractProblems(sql), 'not declared UUID NOT NULL')).not.toEqual([]);
   });
 
-  it('red: no composite invoice FK at all is named — cross-business linkage must be unrepresentable', () => {
-    const sql = planted('the invoice FK removed from payment_allocations', (s) =>
-      s.replace(
-        '  CONSTRAINT payment_allocations_invoice_fk FOREIGN KEY (business_id, invoice_id, customer_id)\n    REFERENCES invoices (business_id, id, customer_id) ON DELETE RESTRICT\n',
-        '',
-      ),
+  it('red: no invoice FK AT ALL — neither edge — is named as the different defect it is: cross-business linkage representable', () => {
+    // Removing BOTH edges is not the same defect as removing the pin and
+    // leaving the seam, and the law says so in different words. This is the
+    // one case where nothing at all binds the reducer to an invoice.
+    const sql = planted('both invoice edges removed from payment_allocations', (s2) =>
+      s2
+        .replace(
+          '  CONSTRAINT payment_allocations_invoice_fk FOREIGN KEY (business_id, invoice_id)\n    REFERENCES invoices (business_id, id) ON DELETE RESTRICT\n',
+          '',
+        )
+        .replace(WIDE_ALLOCATION_EDGE, ''),
     );
     expect(about(settlementContractProblems(sql), 'declares no composite FOREIGN KEY')).not.toEqual([]);
   });

@@ -594,6 +594,17 @@ const EXPECTED_CONSTRAINTS: ReadonlyMap<string, readonly ConstraintEntry[]> = ne
       'c invoices_binding_identity_ck',
       'c invoices_binding_owed_ck',
       'c invoices_state_ck',
+      // The P4-S4 corrective's candidate key (0082). It exists to be a FOREIGN
+      // KEY TARGET and for no other reason: the two settlement reducers pin
+      // their customer against it with a three-column edge, so attaching one
+      // customer's money to another customer's invoice has no target at all.
+      // NON-PARTIAL, which is lawful because it contains the primary key
+      // (business_id, id) — so it is unique whatever customer_id holds and
+      // validates on the walk-in rows whose customer_id is NULL (0067:274 is
+      // the precedent, 0082 R-94 the reasoning). Reviewed HERE because this
+      // inventory is exact: a key on an S1 relation added by a later slice is
+      // a change to this relation's reviewed shape, whoever added it.
+      'u invoices_customer_uq',
       // The walk-in invariant's static half (P4-AL-11).
       'c invoices_customer_name_snapshot_check',
       'c invoices_customer_phone_snapshot_check',
@@ -651,6 +662,9 @@ const EXPECTED_INDEXES: readonly string[] = [
   'invoices.invoices_number_uq',
   'invoices.invoices_document_number_uq',
   'invoices.invoices_sale_uq',
+  // The index backing 0082's candidate key — unique, valid and UNCONDITIONAL,
+  // which is the property that makes it a lawful foreign-key target.
+  'invoices.invoices_customer_uq',
   'invoices.invoices_customer_idx',
   'invoices.invoices_issue_idx',
   'invoice_items.invoice_items_pkey',
