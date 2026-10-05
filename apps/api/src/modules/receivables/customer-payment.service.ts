@@ -3,12 +3,13 @@ import { AccountingError, mintDomainPostingAssertion, parseDatabaseAccountingErr
 import { normalizeDocumentText, parseMinor, parseUnitCost } from '@daftar/inventory';
 import { Database, type AccountingAssertions, type BusinessInventoryAccountingTransaction } from '../../infra/database';
 import { AccountingAssertionMinterService } from '../accounting/accounting-assertion.minter';
+import { AuditService } from '../audit/audit.service';
 import { DatabaseAccountingPostingAdapter } from '../accounting/accounting-posting.adapter';
 import type { BusinessTransactionId } from '../inventory/business-transaction';
 import { InventoryAuthorizationService, type InventoryCommandAuthority } from '../inventory/inventory-authorization';
 import type { MembershipContext } from '../tenancy/tenancy.service';
 import { planCustomerPayment, type CustomerPaymentAllocationPlan, type InvoiceArState } from './customer-settlement';
-import { receivablesRefusal, rethrowReceivablesRefusal } from './receivables-errors';
+import { auditThenRethrowReceivablesRefusal, receivablesRefusal, type ReceivablesAttempt } from './receivables-errors';
 import {
   CUSTOMER_COLLECT_PAYMENT_OP,
   customerCollectPaymentIntentSha256,
@@ -489,17 +490,56 @@ export class CustomerPaymentService {
     @Inject(InventoryAuthorizationService) private readonly authorization: InventoryAuthorizationService,
     @Inject(AccountingAssertionMinterService) private readonly accountingMinter: AccountingAssertionMinterService,
     @Inject(DatabaseAccountingPostingAdapter) private readonly posting: DatabaseAccountingPostingAdapter,
+    @Inject(AuditService) private readonly audit: AuditService,
   ) {}
 
+  /**
+   * P4-AL-48: a refusal is audited as heavily as a success. The attempt record
+   * is created BEFORE `run` so that a refusal raised on its very first line
+   * still has a document id, an operation and the request's own figures to
+   * audit; `run` fills in the intent digest and the branch as it learns them.
+   *
+   * The figures are the ones the REQUEST carried, because those are the ones
+   * «that caused it» for a forged total or an over-cap attempt — the two cases
+   * P4-AL-48 names as the ones worth seeing.
+   */
   async collect(m: MembershipContext, input: CustomerPaymentRequest, btx: BusinessTransactionId): Promise<CustomerPaymentResultDto> {
+    const attempt: ReceivablesAttempt = {
+      operation: CUSTOMER_COLLECT_PAYMENT_OP,
+      entity: 'payment',
+      entityId: input.paymentId,
+      tillSessionId: null,
+      figures: {
+        customerId: input.customerId,
+        paymentMethodId: input.paymentMethodId,
+        paymentDate: input.paymentDate,
+        currencyCode: input.currencyCode ?? null,
+        amountMinor: input.amountMinor,
+        creditId: input.creditId ?? null,
+        allocationCount: String(input.allocations.length),
+        allocations: JSON.stringify(
+          input.allocations.map((a) => ({
+            allocationId: a.allocationId,
+            invoiceId: a.invoiceId,
+            paymentAmountMinor: a.paymentAmountMinor,
+            invoiceAmountAppliedMinor: a.invoiceAmountAppliedMinor,
+          })),
+        ),
+      },
+    };
     try {
-      return await this.run(m, input, btx);
+      return await this.run(m, input, btx, attempt);
     } catch (e) {
-      return rethrowReceivablesRefusal(e);
+      return await auditThenRethrowReceivablesRefusal(this.audit, m, attempt, e);
     }
   }
 
-  private async run(m: MembershipContext, input: CustomerPaymentRequest, btx: BusinessTransactionId): Promise<CustomerPaymentResultDto> {
+  private async run(
+    m: MembershipContext,
+    input: CustomerPaymentRequest,
+    btx: BusinessTransactionId,
+    attempt: ReceivablesAttempt,
+  ): Promise<CustomerPaymentResultDto> {
     // 1. The request, then the state snapshot, then the intent — IN THAT ORDER.
     //
     //    The state read used to come AFTER the digest, and the comment here used
@@ -545,6 +585,9 @@ export class CustomerPaymentService {
       creditId,
       allocations: intentAllocations,
     });
+    // The digest exists now, so a refusal from here on can carry it.
+    attempt.intentSha256 = intentSha256;
+    attempt.figures['resolvedCurrency'] = currency;
     // The replay lookup stays AFTER the digest and before any write: only the
     // state read moved ahead of it.
     const stored = await findCustomerPaymentIntent(this.db, m, input.paymentId);
@@ -568,6 +611,12 @@ export class CustomerPaymentService {
 
     // 4. The routine's refusals, in its order.
     const invoices = rows.map((row) => settledInvoice(row, 'customer_payment'));
+    // The branch dimension is the first allocated invoice's. A payment with
+    // zero allocations settles no invoice and therefore has no branch, and
+    // NULL there is the truth rather than a gap (the same reason the surplus
+    // credit's entry carries no branch).
+    attempt.branchId = invoices[0]?.branchId ?? null;
+    attempt.figures['outstandingAtRead'] = JSON.stringify(invoices.map((i) => [i.invoiceId, i.outstandingTxnMinor.toString(10)]));
     for (const invoice of invoices) {
       if (invoice.customerId !== input.customerId) throw receivablesRefusal('customer_payment.customer_mismatch');
       if (input.paymentDate < invoice.issueDate) throw receivablesRefusal('customer_payment.date_before_invoice');

@@ -980,11 +980,53 @@ registered Phase 4 source type appears in the guard's list, with a red proof tha
 Actor, permission exercised, delegation if any, the document's UUID, the `intent_sha256`, the branch, the
 till session, and — for a refused command — the refusal code and the figures that caused it. A refusal is
 audited as heavily as a success, because the forged-total and over-cap attempts are the ones worth seeing.
-The audit is a record, never a source: no reconciliation check reads it.
+The audit — the relation `audit_events`, not "the log" — is a record, never a source: no reconciliation
+check reads it.
+
+**P4-AL-48(a) — The refusal half has a DIFFERENT transaction and a DIFFERENT durability, because the
+exception model leaves no other shape. Added in P4-S4 after the contradiction was measured.**
+The decision above names one transaction for both outcomes, and for a refusal that is **unsatisfiable**: a
+command's refusals are raised before its audit INSERT (33 `RAISE EXCEPTION` at `0081:1874-2128` against the
+pair at `0081:2170`/`2174`; 23 and `0081:2420`/`2424` for `customer_apply_credit`), and a `RAISE` aborts the
+transaction, so a row written earlier does not survive either. Measured across a 409: audit 8 before and 8
+after, outbox 7 and 7 — **a refused customer payment persisted no audit evidence at all**. So:
+
+- **effect-audit — the SAME transaction, MANDATORY.** Unchanged, and the only shape allowed for a success. A
+  change whose audit fails is a change that does not happen.
+- **refusal-audit — its OWN committed transaction, AFTER the abort.** A refusal describes an **attempt**,
+  not an effect, so there is no effect for it to be atomic with. It is written by
+  `AuditService.recordRefusal`, which is `OutboxService.emit`'s already-accepted own-transaction shape and
+  **no new one**; it needs no migration, because `daftar_app` already holds `INSERT ON audit_events`
+  (`0006:79`) under the `audit_scope` policy (`0006:53-55`).
+- **the refusal row carries its claims LITERALLY, not by join.** For a success the permission exercised is
+  recoverable — `metadata.assertionJti` (`0081:2173`) joins `inventory_assertion_uses`, which stores
+  `op_code` (`0054:88-94`) — and that satisfies this decision for the success path unchanged. After a
+  refusal the registry INSERT (`0054:450-451`) has rolled back with everything else and there is no document
+  row either, so **recoverable-by-join does not exist on that path** and the operation, the intent digest,
+  the branch, the till session, the refusal code and the figures are all in the row's own metadata. That is
+  the `F-3` answer; `docs/PHASE_4_DECISION_REGISTER.md` §3 carries it with the evidence.
+- **durability is HIGH, NOT ABSOLUTE, and no document may claim more.** If the refusal row's own
+  transaction also fails, the merchant is still answered with the refusal they earned and the loss is
+  reported to the process log. A refusal-audit failure may never become a 500: a merchant told "internal
+  error" for a `date_in_future` has been given a worse answer than an un-audited refusal. This is the exact
+  limit of what the accepted transaction model permits, and the lock states it rather than being quietly
+  downgraded.
+- **an error that is not a refusal gets no refusal row.** An infrastructure failure, a seam defect or a bug
+  is not a merchant refusal, and auditing one as such is the same lie as answering one as a 409.
+- **a refusal emits NO outbox event.** A refusal is not a business event; nothing downstream reacts to one.
+
+The POS and sale-commit paths carry the same structural gap (`0078:1002`, `0079:954`, `0079:1022` are all
+last-step audit INSERTs after their own raises) and P4-S4 did not close them: they are another owner's
+files, `recordRefusal` is now available to them, and **no gate yet asserts that every Phase 4 command audits
+its refusals**. Both are recorded in the register rather than claimed.
 
 **P4-AL-49 — The outbox is not a financial source, and reconciliation checks are `R-SAL-01…07` added to
 the existing pass.**
-A delivery record may not be the thing that proves a payment happened. The reconciliation checks:
+An `outbox_events` row, and the at-least-once **publication** of it, may not be the thing that proves a
+payment happened. (This sentence once read "a delivery record", which in a sales phase reads as a goods
+delivery note — a document Phase 4 does not model — while the only `deliver*` relation in the tree is
+`credential_deliveries` (`0020:6`), which is encrypted credential email. See the vocabulary table at the end
+of this section.) The reconciliation checks:
 
 | id | identity |
 |---|---|
@@ -1000,6 +1042,23 @@ Each runs on a `daftar_reconciler` read-only connection, through the product's o
 over its relation rather than per row. `R-INV-01…05` are **not** re-implemented; they are re-run with
 sale-driven movements in the ledger, and whether any of them was written assuming purchase-only movement
 sources is a real risk recorded in §20.
+
+### The vocabulary of this section, bound to its referents
+
+Three words in this document reach more than one real subsystem, and one of them has no referent at all.
+`P4-AL-48` and `P4-AL-49` are reconciliation-bearing decisions, so a reader who binds the wrong referent
+writes a check that passes vacuously — the `TL-P4-S1-C2` failure mode. The binding is therefore stated:
+
+| word | what it means in Phase 4 | what it does NOT mean |
+|---|---|---|
+| "the audit", "the audit row" | the relation `audit_events` — append-only by trigger (`0004:18-23`), `INSERT` only for `daftar_app` (`0006:79`) | `outbox_events`, which `daftar_app` may also `UPDATE` (`0006:80`) because the publisher marks rows published. The two are **not** one "log" |
+| "log" | **nothing.** No relation in the tree matches `*_log`. Name `audit_events` or `outbox_events` | — |
+| "delivery" | in `P4-AL-49`, the **publication of an outbox event** (`OutboxService`: "Delivery is at-least-once") | a goods **delivery note** (Phase 4 models none) and `credential_deliveries` / `apps/api/src/modules/delivery/**`, which are encrypted credential email (`0020:6`) |
+| "adjustment" | whichever of four relations is named explicitly: `accounting_manual_adjustments` (`0046:131`), `inventory_adjustments` (`0061:541`), `inventory_adjustment_lines` (`0061:569`), `negative_inventory_cost_adjustments` (`0063:357`) | the "rounding-adjustment line" of `P4-AL-19` (`:464`), which is a forbidden journal **line shape** with no relation behind it, no `rounding_difference_minor` column and no `6100` line |
+
+`credential_deliveries` and `apps/api/src/modules/delivery/**` are **not** renamed: `0020` is frozen and the
+module is accepted Phase 1 surface. The ambiguity is resolved by naming referents, never by renaming
+accepted code. The card is `docs/PHASE_4_DECISION_REGISTER.md` §6.
 
 
 ---
@@ -2204,6 +2263,12 @@ the invoice is written `open` and `invoice_outstanding` keys on status alone whi
 P4-S4 is the slice that owns what "outstanding" means, its fix is a new migration rather than an edit to
 anything frozen here, and nothing merges before it lands.
 
+**DISCHARGED in P4-S4 (status note, 2026-10-05).** It landed as the new migration `0080`: a cash-settled
+invoice reports derived `paid = total`, `outstanding = 0` and `settlement_state = 'paid'` (`0080:166-171`,
+and the routine's own comment at `0080:182`), while `invoices.status` stays lifecycle-only
+(`draft`/`open`/`void`) and is **never** written `'paid'`. Nothing frozen was edited. **This is no longer a
+carried item and must not be reported as an open decision** (§29).
+
 ## 28. P4-S4 execution — the two departures from the implementation map
 
 The P4-S4 implementation map ordered two things the accepted, frozen tree cannot carry. Both are
@@ -2261,3 +2326,43 @@ day a later slice closes the gap the test is the thing that goes red and says so
 
 Nothing in P4-S4 researches, infers or encodes a tax rule. Sales tax remains structurally zero, no
 relation of this slice carries a tax element, and `OD-03` stays the single open decision it was.
+
+---
+
+## 29. The decision register, and four statuses that must never be reported as open again
+
+**The register is `docs/PHASE_4_DECISION_REGISTER.md`.** It is the single place that states the **STATUS**
+of every Phase 4 decision that has ever been carried as open; the **ruling text** stays here, in §22 and
+§25–§28. Where the register and a slice report disagree about whether something is open, the register is
+canonical, because a slice report is a snapshot of the day it was written and a ruling made afterwards
+cannot reach back into it.
+
+### The four
+
+These are **RULED**. Reporting any of them as open, in any document, report, gate message or hand-off, is a
+defect:
+
+1. **The cash-settled named-customer invoice semantic.** Derived `paid = total`, `outstanding = 0`,
+   `settlement_state = 'paid'`, while `invoices.status` stays **lifecycle-only** (`draft`/`open`/`void`) and
+   is **NEVER** written as `'paid'`. Built in `0080` (`0080:166-171`, and the routine's own comment at
+   `0080:182`). It was carried into P4-S4 as a named item by §27; **that item is discharged** and is not an
+   open decision.
+2. **`document_kind` / `credit_note`** — `TL-P4-S1-R3` (`:2010`, restated `:2232-2234`). Built by a **NEW**
+   migration in P4-S5; frozen `0075` is never edited; no fake credit-note row.
+3. **The general Phase-4 RLS `ENABLE`/`FORCE` discovery law** — `TL-P4-S1-R2` (`:2009`), **discharged in
+   P4-S2**. Phase-4 scoped by intent, and not widened into a tree-wide law.
+4. **The twelve-commit history rewrite** — `TL-P4-S2-R6` (`:2058`). **REFUSED AND CLOSED.** It is never
+   reopened and never proposed again.
+
+Also ruled, and not open: **discount grain is per line** (`TL-P4-S3-R2`); **there is no customer credit
+limit in Phase 4** and **no arbitrary price override** (`OD-P4-02` / `OD-P4-03` A — measured: zero
+occurrences of `credit_limit` in the migration tree); **one till = one authenticated cashier** (`0079:405`,
+`0079:427`); **`OD-P4-04` is Option B with LIFO-only as the sole fallback** (`:1962`).
+
+### What remains open
+
+`OD-03` only, as the single genuinely open decision. Beside it the register carries **two contradictions
+awaiting the Tech Lead, which are not open *decisions* but recorded conflicts**: `SETTLEMENT_VOCABULARY`
+(`scripts/phase4-s1-gate.ts:1140-1146`) counting `refunds` as settling an invoice against `P4-AL-34`
+(`:736`), and whether `invoices` gains `UNIQUE (business_id, id, customer_id)` (Departure A, `§28`). Neither
+was resolved unilaterally, and no gate script was touched.
