@@ -55,7 +55,7 @@ import { afterAll, describe, expect, it } from 'vitest';
 import {
   DEFERRED_SEAMS,
   deferredSeamProblems,
-  SETTLEMENT_VOCABULARY,
+  INVOICE_REDUCER_VOCABULARY,
   phase4Migrations,
   phase4RoutineBody,
   phase4Sql,
@@ -292,75 +292,91 @@ describe('S-P4-03 — the reader-of-record reads every relation that settles an 
     );
   `;
 
-  it('the vocabulary is discovered, not listed: the settlement names a later slice will use all match', () => {
-    for (const name of ['payment_allocations', 'allocation_reversals', 'payment_reversals', 'refunds', 'customer_credit_applications'])
-      expect(SETTLEMENT_VOCABULARY.test(name)).toBe(true);
+  it('the vocabulary is discovered, not listed: the reducer names a later slice will use all match', () => {
+    for (const name of [
+      'payment_allocations',
+      'allocation_reversals',
+      'payment_reversals',
+      'credit_notes',
+      'credit_note_applications',
+      'customer_credit_applications',
+      'invoice_write_offs',
+    ])
+      expect(INVOICE_REDUCER_VOCABULARY.test(name)).toBe(true);
     // …and an ordinary Phase 4 relation does not, so the rule has a shape.
     for (const name of ['customers', 'invoices', 'invoice_items', 'invoice_sequences', 'sales', 'sale_items'])
-      expect(SETTLEMENT_VOCABULARY.test(name)).toBe(false);
+      expect(INVOICE_REDUCER_VOCABULARY.test(name)).toBe(false);
+    // TL-P4-S5-R1, the static half of direction B: a CASH REFUND is not a
+    // reducer of the invoice receivable. It settles the credit-note or
+    // customer-credit liability it is paid out of — the invoice was already
+    // reduced once, by that credit effect (lock P4-AL-34) — so S-P4-03 must
+    // never demand that a receivable reader read it. The behavioural half is
+    // two tests below; the law that a reader may not read one anyway is
+    // `phase4-refund-not-a-reducer-guard.test.ts`.
+    for (const name of ['refunds', 'refund_applications', 'invoice_refunds']) expect(INVOICE_REDUCER_VOCABULARY.test(name)).toBe(false);
   });
 
   /**
    * The DISCHARGE of S-P4-03, as the seam itself reads it: the LAST Phase 4
-   * definition of `invoice_outstanding` naming every relation that settles an
-   * invoice. P4-S4 writes it, so — exactly as S-P4-01 and S-P4-02 were
+   * definition of `invoice_outstanding` naming every relation that reduces the
+   * invoice receivable. P4-S4 writes it, so — exactly as S-P4-01 and S-P4-02 were
    * re-aimed above — the red proof can no longer plant the CONDITION on a tree
    * that already carries the discharge. It plants the discharge's ABSENCE
    * instead, on a COPY, and the relation names are DISCOVERED from the tree
    * rather than written here.
    *
    * Stripping the `FROM` clauses, not the relations, is what keeps the proof
-   * non-vacuous: `settlers` comes from `CREATE TABLE`, so the seam still HAS a
+   * non-vacuous: `reducers` comes from `CREATE TABLE`, so the seam still HAS a
    * subject, and only the reader-of-record stops reading it. Removing the
-   * relations instead would leave `settlers` empty and the seam correctly
+   * relations instead would leave `reducers` empty and the seam correctly
    * silent — a green that proves nothing.
    *
    * AND THE STRIPPER IS DISCOVERED TOO. It used to be a regex naming this
    * slice's two relations outright, beside a comment promising the names were
    * read from the tree: half of the law discovered, half written down. The
    * cost was in the future rather than today — on the day a later slice
-   * creates a settling relation, `settlers` grows, the written-down stripper
+   * creates a reducer relation, `reducers` grows, the written-down stripper
    * does not strip the new read, the reader-of-record keeps reading it, and
    * the finding this proof demands never names it. A proof whose discovery
    * half is hard-coded is green for a reason that will not survive the tree
    * changing, which is this repository's most expensive recurring defect.
    */
-  const settlingRelations = (root: string): string[] =>
+  const reducerRelations = (root: string): string[] =>
     readTables(
       phase4Migrations(root)
         .map((f) => readFileSync(join(root, 'infrastructure/database/migrations', f), 'utf8'))
         .join('\n'),
     )
       .tables.map((t) => t.name)
-      .filter((n) => SETTLEMENT_VOCABULARY.test(n));
+      .filter((n) => INVOICE_REDUCER_VOCABULARY.test(n));
 
   /** The read form this tree uses, over whatever relations it actually has. Relation names come from `CREATE TABLE`, so they are `\w+` and need no escaping. */
-  const settlementRead = (relations: readonly string[]): RegExp => new RegExp(`FROM public\\.(?:${relations.join('|')}) \\w+`, 'g');
+  const reducerRead = (relations: readonly string[]): RegExp => new RegExp(`FROM public\\.(?:${relations.join('|')}) \\w+`, 'g');
 
   it('RED: the discharge is removed — the settling relations exist and the reader-of-record reads neither', () => {
-    const settlers = settlingRelations(REPO);
-    expect(settlers.length, 'the tree creates no settling relation at all, so the seam has no subject and this proof would be vacuous').toBeGreaterThan(0);
-    const stripped = rootMinus(settlementRead(settlers), 'FROM public.invoices x');
+    const reducers = reducerRelations(REPO);
+    expect(reducers.length, 'the tree creates no reducer relation at all, so the seam has no subject and this proof would be vacuous').toBeGreaterThan(0);
+    const stripped = rootMinus(reducerRead(reducers), 'FROM public.invoices x');
     expect(
-      settlingRelations(stripped).slice().sort(),
+      reducerRelations(stripped).slice().sort(),
       'the stripped copy must still CREATE the relations — if it does not, the seam is correctly silent and the green proves nothing',
-    ).toEqual(settlers.slice().sort());
-    // Every settler must actually have LOST its read. Without this, a later
-    // slice that reads its settler in some other form (a JOIN, a lateral, a
+    ).toEqual(reducers.slice().sort());
+    // Every reducer must actually have LOST its read. Without this, a later
+    // slice that reads its reducer in some other form (a JOIN, a lateral, a
     // different alias shape) fails the `toContain` below with no indication
     // that the cause is the stripper rather than the seam.
     const strippedSql = phase4Migrations(stripped)
       .map((f) => readFileSync(join(stripped, 'infrastructure/database/migrations', f), 'utf8'))
       .join('\n');
-    for (const name of settlers)
+    for (const name of reducers)
       expect(
         new RegExp(`FROM public\\.${name} \\w+`).test(strippedSql),
-        `${name} is still read after the strip — this tree reads it in a form the stripper does not cover, so extend \`settlementRead\``,
+        `${name} is still read after the strip — this tree reads it in a form the stripper does not cover, so extend \`reducerRead\``,
       ).toBe(false);
     const problems = deferredSeamProblems(stripped);
     expect(problems).toHaveLength(1);
     expect(problems[0]).toContain('S-P4-03');
-    for (const name of settlers) expect(problems[0]).toContain(name);
+    for (const name of reducers) expect(problems[0]).toContain(name);
     expect(problems[0]).toContain('reports the invoice unpaid');
   });
 
@@ -373,14 +389,14 @@ describe('S-P4-03 — the reader-of-record reads every relation that settles an 
     // the one this file happens to create: the moment a slice adds a reducer,
     // a plant naming a fixed relation would be silently incomplete and this
     // proof would turn into a proof about the string.
-    const settlers = [
+    const reducers = [
       ...new Set(
         readTables(`${phase4Sql(REPO)}\n${ALLOCATIONS}`)
           .tables.map((t) => t.name)
-          .filter((n) => SETTLEMENT_VOCABULARY.test(n)),
+          .filter((n) => INVOICE_REDUCER_VOCABULARY.test(n)),
       ),
     ];
-    expect(settlers).toContain('payment_allocations');
+    expect(reducers).toContain('payment_allocations');
     const closed = `${ALLOCATIONS}
       CREATE OR REPLACE FUNCTION invoice_outstanding(p_business_id UUID, p_invoice_id UUID)
       RETURNS TABLE (paid_txn_minor BIGINT, paid_base_minor BIGINT, outstanding_txn_minor BIGINT, outstanding_base_minor BIGINT)
@@ -389,7 +405,7 @@ describe('S-P4-03 — the reader-of-record reads every relation that settles an 
         RETURN QUERY
           SELECT coalesce(sum(r.applied), 0)::BIGINT, 0::BIGINT, 0::BIGINT, 0::BIGINT
             FROM (
-              ${settlers
+              ${reducers
                 .map((name) => `SELECT s.applied_txn_minor AS applied, s.business_id, s.invoice_id FROM public.${name} s`)
                 .join('\n              UNION ALL\n              ')}
             ) r
@@ -400,14 +416,51 @@ describe('S-P4-03 — the reader-of-record reads every relation that settles an 
     expect(deferredSeamProblems(rootWith(closed))).toEqual([]);
   });
 
-  it('RED: two settlement relations land and the routine reads only one — the finding names the one it misses', () => {
-    const both = `${ALLOCATIONS}
-      CREATE TABLE refunds (
-        tenant_id UUID NOT NULL,
-        business_id UUID NOT NULL,
-        id UUID NOT NULL,
-        PRIMARY KEY (business_id, id)
-      );
+  /**
+   * TL-P4-S5-R1, DIRECTION A — A FUTURE REAL REDUCER.
+   *
+   * A write-off is a reducer under the accepted semantics: it carries an
+   * invoice and an amount applied TO that invoice, and the receivable falls by
+   * it. No migration creates one yet, so this is the synthetic future the seam
+   * exists for: the relation lands, the reader-of-record does not account for
+   * it, and S-P4-03 must name it. The ruling narrowed the vocabulary; it did
+   * not narrow the seam, and this is the proof the seam still bites.
+   */
+  const WRITE_OFFS = `
+    CREATE TABLE invoice_write_offs (
+      tenant_id UUID NOT NULL,
+      business_id UUID NOT NULL,
+      id UUID NOT NULL,
+      invoice_id UUID NOT NULL,
+      invoice_amount_applied_minor BIGINT NOT NULL,
+      invoice_carrying_base_released_minor BIGINT NOT NULL,
+      PRIMARY KEY (business_id, id)
+    );
+  `;
+
+  /**
+   * TL-P4-S5-R1, DIRECTION B — A REFUND, AS P4-S5 WILL DESIGN IT.
+   *
+   * It does not name an invoice at all, and it is not supposed to: a refund is
+   * paid out of the remaining value of a credit note or a customer credit, and
+   * it moves cash OUTWARD. The invoice receivable was already reduced once by
+   * that credit effect (lock P4-AL-34), so the existence of this relation must
+   * not make S-P4-03 demand that `invoice_outstanding` read it.
+   */
+  const REFUNDS = `
+    CREATE TABLE refunds (
+      tenant_id UUID NOT NULL,
+      business_id UUID NOT NULL,
+      id UUID NOT NULL,
+      customer_credit_id UUID,
+      credit_note_id UUID,
+      amount_txn_minor BIGINT NOT NULL,
+      PRIMARY KEY (business_id, id)
+    );
+  `;
+
+  it('RED A: a future reducer relation lands and the routine does not account for it — the finding names it', () => {
+    const both = `${ALLOCATIONS}${WRITE_OFFS}
       CREATE OR REPLACE FUNCTION invoice_outstanding(p_business_id UUID, p_invoice_id UUID) RETURNS BIGINT
       LANGUAGE sql STABLE AS $$
         SELECT coalesce(sum(a.applied_txn_minor), 0)::BIGINT FROM public.payment_allocations a
@@ -416,8 +469,26 @@ describe('S-P4-03 — the reader-of-record reads every relation that settles an 
     `;
     const problems = deferredSeamProblems(rootWith(both));
     expect(problems).toHaveLength(1);
-    expect(problems[0]).toContain('refunds');
+    expect(problems[0]).toContain('invoice_write_offs');
     expect(problems[0]).not.toContain('payment_allocations,');
+  });
+
+  it('NOT A FINDING B: a `refunds` relation lands and S-P4-03 does not demand that invoice_outstanding read it', () => {
+    // The real tree, plus a refund relation and nothing else. The tree's own
+    // reader-of-record is unchanged and reads no refund — and that is CORRECT,
+    // because a refund settles the credit it is paid out of and not the
+    // invoice. A seam that spoke here would be demanding the second reduction
+    // P4-AL-34 forbids.
+    const root = rootWith(REFUNDS, '9999_planted_refunds.sql');
+    expect(
+      reducerRelations(root),
+      'the plant must not have entered the reducer set — if it did, the vocabulary still counts a refund as a reducer',
+    ).not.toContain('refunds');
+    expect(deferredSeamProblems(root)).toEqual([]);
+    // And the plant is not inert: the same tree with a REAL future reducer in
+    // it does speak, so the silence above is about the refund and not about a
+    // plant the seam never saw.
+    expect(deferredSeamProblems(rootWith(`${REFUNDS}${WRITE_OFFS}`, '9999_planted_both.sql'))).not.toEqual([]);
   });
 
   it('RED: the settlement relation lands and no Phase 4 migration defines the routine at all', () => {

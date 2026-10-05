@@ -2361,8 +2361,16 @@ occurrences of `credit_limit` in the migration tree); **one till = one authentic
 
 ### What remains open
 
-`OD-03` only, as the single genuinely open decision. Beside it the register carries **two contradictions
-awaiting the Tech Lead, which are not open *decisions* but recorded conflicts**: `SETTLEMENT_VOCABULARY`
-(`scripts/phase4-s1-gate.ts:1140-1146`) counting `refunds` as settling an invoice against `P4-AL-34`
-(`:736`), and whether `invoices` gains `UNIQUE (business_id, id, customer_id)` (Departure A, `§28`). Neither
-was resolved unilaterally, and no gate script was touched.
+`OD-03` only, as the single genuinely open decision. Beside it the register carries **one contradiction
+awaiting the Tech Lead, which is not an open *decision* but a recorded conflict**: whether `invoices` gains
+`UNIQUE (business_id, id, customer_id)` (Departure A, `§28`). It was not resolved unilaterally.
+
+The second recorded conflict is **no longer open**: the P4-S1 gate's settlement vocabulary against
+`P4-AL-34` is **RULED as `TL-P4-S5-R1`** (`docs/PHASE_4_DECISION_REGISTER.md` §4). `P4-AL-34` is
+authoritative — a credit or return effect may reduce AR, and **a refund must not reduce AR again**, because
+it settles the credit-note or customer-credit liability it is paid out of. The gate's prediction was the
+defect: the vocabulary is now `INVOICE_REDUCER_VOCABULARY`, it excludes a refund, and the gate check
+`refund-not-a-reducer` refuses any receivable reader that subtracts one. Owner `P4-S5`; machine enforcement
+YES; **not to be reopened without new contradictory evidence**. The live financial double-reduction test is
+recorded as owed by the P4-S5 implementation, because `refunds`, `credit_notes` and
+`credit_note_applications` do not exist at any prefix.
