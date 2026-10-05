@@ -691,29 +691,51 @@ describe('P4-S4 0084 — the open-invoice page reader', () => {
     expect(offenders, `these files still filter on the settlement function's output: ${offenders.join(', ')}`).toEqual([]);
   });
 
-  it('§11 the migration that owns the reader is 0084, and each corrective pass appends exactly one serial', () => {
+  it('§11 the reader has exactly ONE owning migration, and every serial past the frozen floor is a candidate', () => {
     const files = readdirSync(MIGRATIONS_DIR)
       .filter((f) => f.endsWith('.sql'))
       .sort();
-    const beyond = files.filter((f) => f > '0083_zzz');
-    // ONE SERIAL PER CORRECTIVE PASS, and the serials are pinned EXACTLY
-    // rather than merely bounded. `0084` is this reader's own migration;
-    // `0085` is the allocation-recompute pass that followed it, which
-    // replaces `customer_collect_payment` and adds nothing to this reader.
-    // Pinning the list exactly keeps this red for the case the bound was
-    // written for — a pass that quietly appended a SECOND serial of its own —
-    // and additionally catches a renamed or reordered serial, which the
-    // bound did not.
+
+    // THE OWNERSHIP CLAIM, which is what this check is named for and what the
+    // bound it replaced only ever asserted in its title: exactly ONE migration
+    // in the whole history defines the page reader. A later serial that
+    // recreated it would be a second place to keep the AR page right, and the
+    // live definition would be findable only by reading two files — the very
+    // objection `0084`'s own header records and answers.
     expect(
-      beyond.map((f) => f.slice(0, 4)),
-      `migrations beyond 0083: ${beyond.join(', ')}`,
-    ).toEqual(['0084', '0085']);
-    // And the reader really is 0084's, which the old assertion only claimed
-    // in its name: EXACTLY ONE migration in the whole history defines it, and
-    // it is `0084`. A later serial that recreated the reader would be a
-    // second place to keep right, and is red here.
-    expect(files.filter((f) => readFileSync(join(MIGRATIONS_DIR, f), 'utf8').includes('customer_open_invoices_page'))).toEqual([
-      '0084_phase4_ar_fixed_cost_and_open_invoice_page.sql',
-    ]);
+      files.filter((f) => readFileSync(join(MIGRATIONS_DIR, f), 'utf8').includes('customer_open_invoices_page')),
+      'the page reader is defined by a number of migrations other than exactly one',
+    ).toEqual(['0084_phase4_ar_fixed_cost_and_open_invoice_page.sql']);
+
+    // AND THE SERIALS PAST THE FROZEN FLOOR ARE CANDIDATES, DERIVED.
+    //
+    // This deliberately does NOT pin the list of serials. An earlier form
+    // bounded it at one, and when `0085` arrived its successor pinned the pair
+    // exactly — which is the P4-AL-88 shape this project refuses: a list every
+    // later pass must append to is a closure rule, not an invariant, and the
+    // day someone appends to it instead of thinking is the day it stops
+    // protecting anything. Migration-count discipline is the single migration
+    // owner's and the manifest's, not this suite's.
+    //
+    // What IS an invariant, and is asserted from the manifest rather than from
+    // a literal: nothing past `frozenThrough` is frozen, and the frozen floor
+    // has not moved up to swallow a candidate. That grows to cover each new
+    // serial the moment it exists and names none of them.
+    const manifest = JSON.parse(readFileSync(join(MIGRATIONS_DIR, '..', 'MIGRATION_MANIFEST.json'), 'utf8')) as {
+      frozenThrough: string;
+      migrations: readonly { readonly name: string }[];
+    };
+    const frozen = new Set(manifest.migrations.map((m) => m.name));
+    const beyond = files.filter((f) => f > manifest.frozenThrough);
+    expect(beyond.length, 'no migration exists past the frozen floor, so this slice has no candidate at all').toBeGreaterThan(0);
+    expect(
+      beyond.filter((f) => frozen.has(f)),
+      `a migration past the frozen floor ${manifest.frozenThrough} is also in the frozen manifest, so the two disagree about what is immutable`,
+    ).toEqual([]);
+    expect(
+      files.filter((f) => f <= manifest.frozenThrough && !frozen.has(f)),
+      'a migration at or below the frozen floor is absent from the manifest, so the floor covers a file nothing pins',
+    ).toEqual([]);
+    expect(beyond, 'the page reader’s own migration is not among the candidates').toContain('0084_phase4_ar_fixed_cost_and_open_invoice_page.sql');
   });
 });
