@@ -1015,10 +1015,21 @@ after, outbox 7 and 7 — **a refused customer payment persisted no audit eviden
   is not a merchant refusal, and auditing one as such is the same lie as answering one as a 409.
 - **a refusal emits NO outbox event.** A refusal is not a business event; nothing downstream reacts to one.
 
-The POS and sale-commit paths carry the same structural gap (`0078:1002`, `0079:954`, `0079:1022` are all
+~~The POS and sale-commit paths carry the same structural gap (`0078:1002`, `0079:954`, `0079:1022` are all
 last-step audit INSERTs after their own raises) and P4-S4 did not close them: they are another owner's
 files, `recordRefusal` is now available to them, and **no gate yet asserts that every Phase 4 command audits
-its refusals**. Both are recorded in the register rather than claimed.
+its refusals**. Both are recorded in the register rather than claimed.~~
+
+**DISCHARGED IN P4-S4 — see §30 (`P4-AL-48(b)`).** The paragraph above is struck through rather than
+rewritten, because its reading of the three sites is CORRECT and worth keeping: each is a last-step
+`INSERT INTO audit_events` recording a SUCCESS, placed after every one of its own raises, so it is
+unreachable on a refused call. Only the last sentence has stopped being true. Both halves are closed:
+`SaleCommitService.commit`, `TillSessionService.open`/`close`, `PosCheckoutService.checkout` and the four
+`PosCartService` commands audit their refusals through the single composer
+`apps/api/src/modules/audit/refusal-audit.ts`, and the `command-refusal-audit` check of
+`scripts/phase4-s4-gate.ts` is the gate law — it DISCOVERS the command paths from the operation vocabulary
+and the service entry methods rather than listing them, fails loudly on an empty subject set, and names the
+one unaudited command rather than its file.
 
 **P4-AL-49 — The outbox is not a financial source, and reconciliation checks are `R-SAL-01…07` added to
 the existing pass.**
