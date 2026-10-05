@@ -672,3 +672,64 @@ case plants the same routine without the subtraction and requires silence; G2
 asserts the hole and its closure over the real tree, including that every
 Phase 4 body is readable; G3 asserts the widening is additive by planting a
 reader the name match alone catches. 26 of 26 pass.
+
+## 12. Departure B was never a gap, and the lock had been contradicting `0082` — coordinator finding, 2026-10-05
+
+The §23 acceptance item "the customer-side payment-method posting-account lock"
+is **closed on integrity, and has been since `0081`**. Measured in the
+catalogue:
+
+```
+supplier_payments_method_fk   confupdtype = a (NO ACTION)   confdeltype = r (RESTRICT)
+payments_method_fk            confupdtype = a (NO ACTION)   confdeltype = r (RESTRICT)
+```
+
+The two edges are identical. An `UPDATE` of `payment_methods.posting_account_id`
+dissolves the parent tuple a live child row depends on, so the edge's
+parent-side action refuses the update — on the customer side exactly as on the
+supplier side. Proved live through the product's own signed
+`payment.update_method` command on PostgreSQL 16.13: the customer-referenced
+method is refused with `23503` naming `payments_method_fk`, the
+supplier-referenced one with `P0001`
+`payment_method.posting_account_locked`. 10 of 10 assertions across the two
+suites pass.
+
+**What remains is diagnostics only**: a raw SQLSTATE where the supplier side has
+a named refusal. Closing it means replacing a Phase 3 body and re-recording its
+digest inside `supplier_settlement_guard_gaps()` (`0072:700-720`) — cross-phase
+surface with no ruling, which is why `0082` left it. It is a difference in the
+message, not in what the database permits.
+
+**Two things about how this was found, recorded because both are cheap to
+repeat.**
+
+**The coordinator's brief was wrong, and the agent contradicted it correctly.**
+The brief asserted as established that the posting-account change SUCCEEDS on
+the customer side, and told the agent to document that. It had read
+`ON DELETE RESTRICT`, concluded the edge protects the stored row and the posted
+entry, and never asked what the edge does on `ON UPDATE`. The agent measured it
+instead of building to the brief, and reported the contradiction as its
+headline. That is the behaviour wanted from a worker: a brief is a hypothesis,
+and a measurement that refutes it is the deliverable. Every claim it made was
+re-verified in the catalogue before this entry was written.
+
+**`0082`'s own R-97 already said it, verbatim** — that the earlier conclusion
+"may still move its posting account" is FALSE and no change is needed to make
+it false — so `docs/PHASE_4_ARCHITECTURE_LOCK.md`'s Departure B entry had been
+contradicting its own migration since `0082` was written, and a reader going by
+the lock would have believed the gap was open. The lock is corrected in place,
+struck through rather than deleted, so a reader who met the old claim finds the
+correction and not a silence. **The prose that misled the coordinator was this
+project's own governing document**, which is the strongest available argument
+for checking a documented gap against the catalogue before acting on it.
+
+**Also found: the work was partly already done.**
+`tests/integration/p4s4-payment-method-posting-lock.test.ts` existed on the
+branch head (`d06b134`), 5 assertions, green, proving the refusal and naming the
+raw-SQLSTATE remainder. The new
+`tests/integration/p4s4-departure-b-method-account-mutability.test.ts` is not a
+duplicate — it adds the live supplier-side contrast that makes the customer-side
+claim non-vacuous, a journal read through `accounting_source_bindings` showing
+the pinned account untouched across the attempt, and a failure message on every
+assertion saying what going red means and what to do about it. The two overlap
+on the core refusal and are **owed a consolidation at acceptance**.

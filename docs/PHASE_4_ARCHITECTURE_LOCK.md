@@ -2317,21 +2317,52 @@ which would let a future slice narrow both edges to the ordered three-column for
 permanent proofs of the pin live at the verifier's grain, and a proof at the row grain would be a
 proof about a constraint that does not exist.
 
-### Departure B — a payment method's posting account stays mutable while customer payments reference it
+### ~~Departure B — a payment method's posting account stays mutable while customer payments reference it~~
 
-**The gap**: `payment_method_guard()` is a Phase 3 routine whose body digest is pinned by
-`supplier_settlement_guard_gaps()` (`0067:1801`, `0068:1331`). Extending it to notice CUSTOMER
-payments would change a pinned body, which this slice may not do. So a payment method's
-`posting_account_id` can still be changed while `payments` rows reference that method.
+**CORRECTED 2026-10-05. The heading above is struck through because it was never true, and this
+entry had been contradicting `0082` since `0082` was written.** It is kept rather than deleted so
+that a reader who met the old claim finds the correction rather than a silence.
 
-**Why it is bounded**: every `payments` row pins its OWN `posting_account_id`, and its journal entry
-is posted against the pinned value, so no existing row and no posted entry is ever rewritten by such
-a change. The whole of the gap is that a FUTURE payment on the same method could post to a different
-account than past ones did, which is a reporting-continuity question and not a correctness one.
+**What the entry used to say**: that `payment_method_guard()`'s `posting_account_locked` arm
+(`0067:839-841`) names only `supplier_payments` and `supplier_refunds`, that extending it would
+change a body whose SHA-256 is pinned by `supplier_settlement_guard_gaps()` (`0067:1801`,
+`0068:1331`) and so is out of this slice's reach, and therefore that a method's
+`posting_account_id` "can still be changed while `payments` rows reference that method".
 
-**What is required of the slice**: one permanent test DOCUMENTING the current behaviour — it asserts
-what the database does today, and it explicitly does not assert that the behaviour is correct, so the
-day a later slice closes the gap the test is the thing that goes red and says so.
+**The first two are true. The conclusion is FALSE.** Measured in the catalogue:
+
+```
+supplier_payments_method_fk   confupdtype = a (NO ACTION)   confdeltype = r (RESTRICT)
+payments_method_fk            confupdtype = a (NO ACTION)   confdeltype = r (RESTRICT)
+```
+
+The two edges are **identical**. `payments_method_fk` (`0081:281-284`) is the same three-column edge
+into `payment_methods (business_id, id, posting_account_id)` that `supplier_payments_method_fk`
+(`0067:351-352`) is, and an `UPDATE` of the parent's `posting_account_id` dissolves the parent tuple
+a live child row depends on, so the edge's parent-side action refuses the update — on the customer
+side exactly as on the supplier side. `0082`'s own R-97 states this in those words and calls the
+earlier conclusion false. **The integrity half has been closed since `0081`.**
+
+The reasoning that produced the error is worth naming, because it is cheap to repeat: it read
+`ON DELETE RESTRICT`, concluded the edge protects the stored row and the posted entry, and never
+asked what the edge does on `ON UPDATE`. The prose that misled it was this document's own.
+
+**What is actually still open, and it is diagnostics only**: the customer side is refused with a raw
+`23503` naming `payments_method_fk`, where the supplier side gets the named
+`payment_method.posting_account_locked`. Closing that means replacing a Phase 3 body and re-recording
+its digest inside `supplier_settlement_guard_gaps()` (`0072:700-720`) — cross-phase surface with no
+ruling, which is why `0082` left it. It is a difference in the message, not in what the database
+permits.
+
+**The permanent proofs**: `tests/integration/p4s4-payment-method-posting-lock.test.ts` proves the
+refusal and the raw-SQLSTATE remainder;
+`tests/integration/p4s4-departure-b-method-account-mutability.test.ts` adds the live supplier-side
+contrast that makes the customer-side claim non-vacuous, reads the journal entry line by line
+through `accounting_source_bindings` to show the pinned account is untouched across the attempt, and
+carries the instruction in each failure message — if the named-refusal assertion goes red the arm
+was extended and this departure is closed; if the refusal assertion itself goes red the edge was
+dropped, narrowed or given `ON UPDATE CASCADE`, and the answer is to restore the edge. The two files
+overlap on the core refusal and are owed a consolidation at acceptance.
 
 ### OD-03 is untouched
 
