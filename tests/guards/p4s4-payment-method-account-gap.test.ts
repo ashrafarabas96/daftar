@@ -2,43 +2,67 @@
  * P4-S4 — DEPARTURE B, DOCUMENTED AS BEHAVIOUR RATHER THAN AS A SENTENCE.
  *
  * THIS SUITE DOES NOT ASSERT THAT THE GAP IS CORRECT. It records what the
- * accepted tree DOES today, so that the day the gap is closed this file goes
- * red and has to be rewritten by the person closing it — and nobody has to
- * rediscover the gap from the code.
+ * accepted tree DOES today, so that the day the arm is extended this file goes
+ * red and has to be rewritten by the person extending it — and nobody has to
+ * rediscover the shape from the code.
  *
- * ── THE GAP, EXACTLY ─────────────────────────────────────────────────────
+ * ── A MEASURED CORRECTION, READ THIS FIRST ───────────────────────────────
  *
- * `payment_method_guard()` (Phase 3) locks a payment method's posting account
- * once money has moved through the method — but its lock arm consults the
- * SUPPLIER-side relations only. A customer payment referencing the method does
- * not lock the account, so a method's posting account can still be changed
- * after customer payments exist, whereas the supplier side forbids it.
+ * Every CLAIM below is still true and still worth keeping. The CONCLUSION this
+ * header used to draw from them was not, and it is corrected here rather than
+ * deleted, because the wrong version is the one a reader would otherwise
+ * re-derive.
  *
- * The boundary of the gap is narrow and is asserted below rather than
- * described: each settlement row pins its OWN posting account through its
- * three-column FK, so no existing row is rewritten and no entry is
- * retroactively changed. The gap is only that a FUTURE payment could post to a
- * different account than past ones.
+ * It used to say: "a method's posting account can still be changed after
+ * customer payments exist, whereas the supplier side forbids it", and that the
+ * remaining exposure was "a FUTURE payment could post to a different account
+ * than past ones". MEASUREMENT SAYS OTHERWISE —
+ * `tests/integration/p4s4-payment-method-posting-lock.test.ts` asks the real
+ * `payment_method_update` command to move the account of a method that has
+ * taken a customer payment AND NO SUPPLIER PAYMENT, and the database refuses
+ * it. The posting account cannot drift on the customer side either.
  *
- * ── WHY THIS SLICE DID NOT CLOSE IT ──────────────────────────────────────
+ * The reason is the third claim of this very file: each settlement row reaches
+ * the method through a THREE-COLUMN FK naming the method AND the account. That
+ * edge is not merely a per-row pin — it is the lock. Moving
+ * `payment_methods.posting_account_id` dissolves the parent tuple
+ * `(business, id, old account)` that a live child depends on, so the parent
+ * UPDATE is refused, on the customer side (`payments_method_fk`) exactly as on
+ * the supplier side (`supplier_payments_method_fk`). The trigger arm is not
+ * what makes the account un-driftable on EITHER side.
+ *
+ * SO WHAT IS DEPARTURE B, REALLY? A DIAGNOSTICS DIFFERENCE. On the supplier
+ * side the BEFORE trigger reaches the arm first and a merchant reads
+ * `payment_method.posting_account_locked`; on the customer side the arm passes
+ * and the edge answers with a raw `foreign_key_violation`. Both refuse. Only
+ * the sentence differs — and that is why the §23 item asking for the lock was
+ * answered with a proof rather than with a build.
+ *
+ * ── WHY NO SLICE HAS EXTENDED THE ARM ────────────────────────────────────
  *
  * Extending the arm means replacing a PHASE 3 routine BODY and re-recording
  * its SHA-256 inside `supplier_settlement_guard_gaps()` with the probe ritual:
  * re-create the discovery in the same migration with the one digest changed,
  * then prove the replacement with a rolled-back probe that neuters the body and
  * requires the discovery to name it. That is cross-phase surface and the Tech
- * Lead has not ruled, so P4-S4 leaves the routine untouched and DISCLOSES the
- * consequence. The second claim below measures the cost of the ritual directly:
+ * Lead has not ruled, so the routine is left untouched and the difference is
+ * DISCLOSED. The fourth claim below measures the cost of the ritual directly:
  * the digest is pinned in more than one accepted migration, and every pin
- * carries the same value.
+ * carries the same value. Paying that cost would buy a better REFUSAL MESSAGE
+ * and no additional integrity, which is why it has not been prioritised over a
+ * structural gap — and the corrective migration `0082` says so in its R-97
+ * rather than quietly extending a frozen body.
  *
- * ── WHAT GOES RED WHEN THE GAP IS CLOSED ─────────────────────────────────
+ * ── WHAT GOES RED WHEN THE ARM IS EXTENDED ───────────────────────────────
  *
  * `lockSubjects` reads the relations the lock arm consults out of the accepted
  * text. The day a migration extends the arm to a customer-side relation, the
  * first claim fails with the new relation named, and the digest claim fails
  * because the body was replaced. Both are the intended signal: this file is
- * then updated to record the CLOSED behaviour and the probe evidence.
+ * then updated to record the EXTENDED behaviour and the probe evidence, and so
+ * is the last `it` of
+ * `tests/integration/p4s4-payment-method-posting-lock.test.ts`, which records
+ * the refusal a merchant currently reads.
  *
  * `[[daftar-a-green-gate-must-prove-it-can-be-red]]`: the last claim plants
  * exactly that change on a COPY of the accepted text and requires the reader to
@@ -153,11 +177,17 @@ describe('Departure B — the posting-account lock is supplier-side only (CURREN
     }
   });
 
-  it('the gap’s boundary: the lock is the only thing missing, and no settlement row is left unpinned', () => {
-    // Why the gap is narrow rather than a retroactive rewrite: every accepted
-    // settlement relation pins its own posting account through a composite FK
-    // that names the method AND the account, so a later account change cannot
-    // move an existing row or an entry already posted.
+  it('and this is WHY only the message is missing: every settlement relation reaches the method through a composite FK naming method AND account', () => {
+    // THE MECHANISM THAT ACTUALLY LOCKS THE ACCOUNT, on both sides. Every
+    // accepted settlement relation reaches the method through a composite FK
+    // that names the method AND the account, so moving
+    // `payment_methods.posting_account_id` dissolves a parent tuple a live
+    // child depends on and the parent UPDATE is refused — no existing row is
+    // rewritten, no posted entry is retroactively changed, and no FUTURE
+    // payment posts anywhere else either. The behavioural half of this claim
+    // is measured against the real command in
+    // `tests/integration/p4s4-payment-method-posting-lock.test.ts`; what is
+    // asserted here is the shape it rests on.
     const [, sql] = definingMigration();
     const pinned = [...sql.matchAll(/FOREIGN KEY\s*\(([^)]*posting_account_id[^)]*)\)\s*REFERENCES\s+(?:public\.)?payment_methods\s*\(([^)]*)\)/gi)];
     expect(pinned.length, 'no accepted relation pins its payment method AND its posting account in one composite FK').toBeGreaterThan(0);

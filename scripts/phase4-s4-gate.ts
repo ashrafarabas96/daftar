@@ -326,15 +326,34 @@ export function vocabularyProblems(sql: string): string[] {
  * to a text that actually creates one of the settlement relations — so a
  * candidate migration about something else is not judged against them.
  *
- * Departure A: the invoice-side FK is the EXISTING primary key
- * `(business_id, id)`, because `invoices` belongs to an earlier slice of this
- * phase and adding a key to it is an ownership question the Tech Lead has not
- * answered. What the narrower key stops proving is proved instead by
- * `invoice_settlement_verify`, a DEFERRABLE INITIALLY DEFERRED constraint
- * trigger, and by its two named refusals. A text that carries the three-column
- * form instead has taken a decision this slice was told not to take; a text
- * that carries the two-column form and no verifier has dropped the guarantee
- * on the floor.
+ * THE STRUCTURAL CUSTOMER PIN (what the slice's own migration called
+ * "Departure A", now CLOSED by the Tech Lead's §23 ruling and by the
+ * corrective migration that carries it). The invoice-side FK ends at the
+ * THREE-column form
+ * `(business_id, invoice_id, customer_id) → invoices (business_id, id, customer_id)`,
+ * so a reducer naming one customer against another customer's invoice has no
+ * foreign-key target at all, and a walk-in invoice — whose `customer_id` IS
+ * NULL while every reducer's is `NOT NULL` — has no target for any reducer
+ * either. Both laws are SHAPES, not checks a writer could get around.
+ *
+ * This law is quantified over the CANDIDATE SURFACE AS A WHOLE and not over
+ * one file, because the pin arrived in two steps on purpose: the slice's own
+ * migration declared the narrow edge inside `CREATE TABLE` while the ownership
+ * question was open, and the corrective migration widens it with
+ * `ALTER TABLE … DROP CONSTRAINT` / `ADD CONSTRAINT` once the ruling closed
+ * it. A law that read only the `CREATE TABLE` body would report the SUPERSEDED
+ * shape and call the estate narrow when it is not — a gate describing a
+ * database that no longer exists. `effectiveInvoiceEdge` below therefore reads
+ * the LAST declaration of each reducer's invoice edge across the surface in
+ * file order, which is the shape a database applying that surface in order
+ * actually ends up with, and the law additionally requires the key that
+ * three-column edge targets to be declared by the same surface.
+ *
+ * `invoice_settlement_verify` and its two named refusals are still required.
+ * The pin makes their customer and walk-in arms unreachable THROUGH THE
+ * RELATIONS; it does not replace the routine, which also carries the R-83
+ * chain arithmetic, and a corrective that deleted a subsumed check would be
+ * trading defence in depth for tidiness.
  *
  * And the arithmetic is REUSED, never re-implemented: the three accepted
  * primitives are `IMMUTABLE`, take plain `BIGINT`, and carry nothing
@@ -523,31 +542,99 @@ export function rowLockOnlyWriteProblems(sql: string): string[] {
   return problems;
 }
 
+/**
+ * The invoice edge `child` ACTUALLY ENDS UP WITH after the whole surface is
+ * applied in order, as a pair of column lists: the referencing columns and the
+ * referenced ones.
+ *
+ * Two declaration forms count, because the pin legitimately arrives in two
+ * steps across two migrations:
+ *   — inside `CREATE TABLE child (… CONSTRAINT … FOREIGN KEY (…) REFERENCES invoices (…) …)`;
+ *   — in `ALTER TABLE child ADD CONSTRAINT … FOREIGN KEY (…) REFERENCES invoices (…)`.
+ * The LAST one in the text wins, which is the shape a database that applies
+ * the files in order holds — a `DROP CONSTRAINT` before it needs no special
+ * handling, because what matters is the final `ADD`, and a surface that
+ * dropped the edge without re-adding it leaves the last match stale. That one
+ * case is caught by the apply itself, not by this reader: the corrective
+ * migration's own end-state assertion reads the live catalogue and refuses to
+ * commit unless the three-column edge is present and validated.
+ *
+ * Only `ALTER TABLE` statements naming THIS child are considered, so one
+ * reducer's widening is never read as the other's.
+ */
+export function effectiveInvoiceEdge(sql: string, child: string): { child: string[]; parent: string[] } | null {
+  const cols = (raw: string | undefined): string[] =>
+    (raw ?? '')
+      .split(',')
+      .map((c) => c.trim().toLowerCase().replace(/^"|"$/g, ''))
+      .filter((c) => c !== '');
+  const edgeIn = (text: string): { child: string[]; parent: string[] } | null => {
+    let last: { child: string[]; parent: string[] } | null = null;
+    const pattern = /foreign\s+key\s*\(([^)]*invoice_id[^)]*)\)\s*references\s+(?:public\.)?"?invoices"?\s*\(([^)]*)\)/gi;
+    for (const m of text.matchAll(pattern)) last = { child: cols(m[1]), parent: cols(m[2]) };
+    return last;
+  };
+  let effective = edgeIn(createTableBody(sql, child) ?? '');
+  const alter = new RegExp(String.raw`alter\s+table\s+(?:only\s+)?(?:public\.)?"?${child}"?\b`, 'gi');
+  for (const hit of sql.matchAll(alter)) {
+    const statement = readSqlStatement(sql, hit.index) ?? '';
+    const found = edgeIn(statement);
+    if (found !== null) effective = found;
+  }
+  return effective;
+}
+
 export function settlementContractProblems(sql: string): string[] {
   const declared = discoverSalesTables(sql);
   const settlement = CONTRACT_RELATIONS.filter((r) => declared.includes(r));
   if (settlement.length === 0) return [];
   const problems: string[] = [];
 
-  // Departure A, both halves.
+  // The structural customer pin, all three halves: each reducer's EFFECTIVE
+  // invoice edge, the key that edge targets, and the NOT NULL that makes the
+  // edge fire on every row.
   for (const child of ['payment_allocations', 'customer_credit_applications'].filter((r) => settlement.includes(r))) {
-    const body = createTableBody(sql, child) ?? '';
-    const fk = /foreign\s+key\s*\([^)]*invoice_id[^)]*\)\s*references\s+(?:public\.)?invoices\s*\(([^)]*)\)/i.exec(body);
-    if (fk === null) {
+    const edge = effectiveInvoiceEdge(sql, child);
+    if (edge === null) {
       problems.push(
-        `${child} declares no composite FOREIGN KEY … REFERENCES invoices (…) — cross-business linkage must be unrepresentable, not refused by the application layer`,
+        `${child} declares no composite FOREIGN KEY … REFERENCES invoices (…) — cross-business linkage and the customer pin must be unrepresentable, not refused by the application layer`,
       );
       continue;
     }
-    const columns = (fk[1] ?? '')
-      .split(',')
-      .map((c) => c.trim().toLowerCase())
-      .filter((c) => c !== '');
-    if (columns.join(',') !== 'business_id,id')
+    if (edge.child.join(',') !== 'business_id,invoice_id,customer_id' || edge.parent.join(',') !== 'business_id,id,customer_id')
       problems.push(
-        `${child}'s invoice FK references invoices (${columns.join(', ')}) — Departure A fixes it at the EXISTING primary key (business_id, id); a new key on invoices is an ownership question the Tech Lead has not answered, and the customer pin and the walk-in law are proved by ${SETTLEMENT_VERIFIER} instead`,
+        `${child}'s effective invoice edge is (${edge.child.join(', ')}) → invoices (${edge.parent.join(', ')}) — the structural pin is ` +
+          `(business_id, invoice_id, customer_id) → invoices (business_id, id, customer_id), which is what makes a cross-customer allocation ` +
+          `and a settled walk-in invoice unrepresentable rather than refused. A narrower edge leaves both laws resting on ` +
+          `${SETTLEMENT_VERIFIER}, which any writer that skips the routine gets past`,
+      );
+    // The pin holds on nothing unless the referencing column is NOT NULL:
+    // under MATCH SIMPLE a referencing tuple holding any NULL skips the check
+    // entirely, so a nullable `customer_id` would leave every constraint
+    // definition reading correctly and pin no row at all.
+    const body = createTableBody(sql, child) ?? '';
+    if (!/\bcustomer_id\s+uuid\s+not\s+null/i.test(body))
+      problems.push(
+        `${child}.customer_id is not declared UUID NOT NULL — under MATCH SIMPLE the three-column invoice edge is skipped on any row holding a ` +
+          `NULL in it, so the pin would read correctly in the catalogue and hold on nothing`,
       );
   }
+  // The key the widened edges target. PostgreSQL will not accept a PARTIAL
+  // unique index as a foreign-key target, and the walk-in invoice carries a
+  // NULL `customer_id` — which is why this key is declared NON-PARTIALLY and
+  // needs no `WHERE`: it contains the primary key `(business_id, id)`, so it
+  // is unique whatever the third column holds and validates on any data. A
+  // surface that widened the edges without declaring the key could not apply.
+  if (!/alter\s+table\s+(?:only\s+)?(?:public\.)?invoices\s+add\s+constraint\s+\w+\s+unique\s*\(\s*business_id\s*,\s*id\s*,\s*customer_id\s*\)/i.test(sql))
+    problems.push(
+      `the settlement surface widens the reducer edges onto invoices (business_id, id, customer_id) but never declares that key — ` +
+        `ALTER TABLE invoices ADD CONSTRAINT … UNIQUE (business_id, id, customer_id), non-partial, is what the edges target`,
+    );
+  if (/unique\s*\(\s*business_id\s*,\s*id\s*,\s*customer_id\s*\)\s*where\b/i.test(sql))
+    problems.push(
+      `the invoices customer key is declared PARTIAL (… WHERE …) — PostgreSQL does not accept a partial unique index as a foreign-key ` +
+        `target, and the key does not need to be partial: containing the primary key makes it unique on walk-in rows too`,
+    );
   // The RULED routine names. Universally quantified over the ruling, so a
   // name added to the ruling is checked without another claim being written.
   const declares = (fn: string): boolean => new RegExp(String.raw`create\s+(?:or\s+replace\s+)?function\s+(?:public\.)?${fn}\b`, 'i').test(sql);
@@ -1195,7 +1282,7 @@ export const CHECKS: readonly Check[] = [
     title: "the RLS/FORCE discovery law and G-3's vocabulary over the relations this slice adds",
     run: newRelationCoverageProblems,
     note: newRelationReport,
-    ok: "every contract relation is admitted by the shared Phase 4 predicate with no registration, the discovery law's structural half is silent, and every relation a candidate migration declares carries tenant_id, business_id, ENABLE, FORCE and REVOKE … FROM PUBLIC and clears the G-3 vocabulary",
+    ok: "every contract relation is admitted by the shared Phase 4 predicate with no registration, the discovery law's structural half is silent, every relation a candidate migration declares carries tenant_id, business_id, ENABLE, FORCE and REVOKE … FROM PUBLIC and clears the G-3 vocabulary, and both reducers' effective invoice edge is the three-column structural customer pin onto a non-partial invoices (business_id, id, customer_id)",
   },
   {
     id: 'required-ci',

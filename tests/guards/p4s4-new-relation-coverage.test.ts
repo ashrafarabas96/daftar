@@ -66,7 +66,14 @@ import {
   phase4RlsForceReport,
 } from '../../scripts/guards/phase4-rls-force';
 import { discoverSalesTables, isPhase4Relation } from '../../scripts/guards/no-authoritative-balance';
-import { CONTRACT_RELATIONS, createTableBody, newRelationCoverageProblems, relationRlsTextProblems, vocabularyProblems } from '../../scripts/phase4-s4-gate';
+import {
+  CONTRACT_RELATIONS,
+  candidateMigrations,
+  createTableBody,
+  newRelationCoverageProblems,
+  relationRlsTextProblems,
+  vocabularyProblems,
+} from '../../scripts/phase4-s4-gate';
 
 const REPO = join(__dirname, '..', '..');
 const MIGRATIONS = join(REPO, MIGRATIONS_SUBDIR);
@@ -404,8 +411,16 @@ describe('F12 — the coverage check reports ABSENCE as a finding, never as `ok`
     const root = mkdtempSync(join(tmpdir(), 'p4s4-vacuity-'));
     temporaries.push(root);
     mkdirSync(join(root, MIGRATIONS_SUBDIR), { recursive: true });
+    // EVERY candidate is withheld, and the set is DERIVED by the same
+    // `candidateMigrations` the gate itself uses — not matched on a number
+    // range. A literal range (`/^008[01]_/`) silently stopped withholding the
+    // next candidate the moment one landed: the fake root then held a real
+    // candidate, the "no candidate migration" case below was no longer the
+    // case it claimed to be, and the law was measured against the wrong tree.
+    // Deriving the set means it cannot drift again.
+    const withheld = new Set(candidateMigrations(REPO));
     for (const f of readdirSync(MIGRATIONS)) {
-      if (/^008[01]_/.test(f)) continue; // the candidate files are what each case varies
+      if (withheld.has(f)) continue; // the candidate files are what each case varies
       cpSync(join(MIGRATIONS, f), join(root, MIGRATIONS_SUBDIR, f));
     }
     mkdirSync(join(root, APPLIER_SOURCE, '..'), { recursive: true });
