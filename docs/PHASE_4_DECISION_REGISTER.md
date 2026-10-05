@@ -603,3 +603,29 @@ on this tree after the change.
 
 Nothing else outside this work's set changed. No migration was created or edited, no threshold, count or
 ceiling was relaxed, and no `.skip`, `.todo` or `.only` exists anywhere in what was added.
+
+## 10. `command-refusal-audit`'s operation attribution is for reading, not for judging — coordinator note, 2026-10-05
+
+Verified independently of the agent that wrote the law: with the composer call
+removed from `TillSessionService.open` only, the S4 gate reports
+`till-session.service.ts#open [pos.session_open] NOT AUDITED` and leaves
+`#close` in the same file unmarked. The law is **per command**, not per file,
+and it is non-vacuous — 11 declared operations, 10 discovered command paths.
+The planted file was restored byte-identical.
+
+**The one inaccuracy found, recorded rather than churned.** The operation shown
+beside each path is resolved from a literal or from the module's own constants,
+and it cannot narrow a DYNAMIC index. So `PosCartService.OP_CODE[command]`
+prints as the whole set — all four cart methods read
+`[pos.cart_remove_line+pos.cart_set_line]` — and
+`pos-checkout.service.ts#checkout` prints `[pos.cart_remove_line]`, which is
+not what a checkout commits.
+
+This is a **reporting** defect and not a hole in the law: the verdict keys on
+whether a command's refusal path reaches the single composer, never on which
+operation was resolved, which is why the plant above was caught with the
+operation irrelevant. It is recorded because a gate's evidence line is what a
+reviewer actually reads, and an evidence line that misnames an operation
+teaches a reviewer something false about the system. **Owed by a later slice:**
+either resolve the index per call site, or print the resolved set as a SET and
+say so, rather than printing one member of it as though it were the answer.
