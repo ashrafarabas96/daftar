@@ -274,7 +274,7 @@ describe('P4-S4 a cash sale to a named customer is not a receivable', () => {
               o.outstanding_txn_minor::text AS outstanding_txn_minor,
               o.outstanding_base_minor::text AS outstanding_base_minor,
               invoice_settlement_state($1, $2) AS state
-         FROM invoice_outstanding($1, $2) o`,
+         FROM invoice_outstanding($1::uuid, $2::uuid) o`,
       [A.businessId, invoiceId],
     );
     return must(r.rows[0], `invoice_outstanding for ${invoiceId}`);

@@ -27,7 +27,7 @@
  */
 import { randomUUID } from 'node:crypto';
 import { expect } from 'vitest';
-import { asMember, onboardS3Business, registerActor, today, type HttpActor, type S3Business } from '../../helpers/inventory-commands';
+import { asMember, onboardS3Business, reauthenticate, registerActor, today, type HttpActor, type S3Business } from '../../helpers/inventory-commands';
 import { committed, createMethod, stateRate } from '../../helpers/supplier-settlement';
 import { createTestApp, ownerPool, type TestApp } from '../../helpers/test-app';
 import { confirmSale, seedSaleFixtures } from '../phase4-s2/sale-path';
@@ -78,6 +78,40 @@ export async function settlementMissing(w: SettlementWorld): Promise<readonly st
   const apply = await w.t.request.post(applyCreditPath(randomUUID())).set(w.headers).send({});
   if (apply.status === 404) missing.push(`the route POST ${applyCreditPath(':creditId')} is not mounted`);
   return missing;
+}
+
+/**
+ * KEEP THE WORLD'S CREDENTIAL FRESH, OUTSIDE EVERY MEASURED SPAN.
+ *
+ * The product's access token lives 900 seconds
+ * (`apps/api/src/modules/auth/tokens.ts:60`) and nothing here lengthens it.
+ * A world that is only read for a few seconds never reaches this; a world
+ * being SEEDED for twenty minutes — the P4-S4 budget dataset, paced against
+ * the product's own rate limiter — would otherwise die of a `401` half way
+ * through, which is a fixture that measures nothing rather than a finding.
+ *
+ * So the actor logs in again when its credential is older than
+ * `REFRESH_AFTER_MS`, which is comfortably inside the token's life, and both
+ * the actor and the world's header object are updated in place. Call it where
+ * a wait is already lawful — beside the pacing wait, never inside a measured
+ * span — and it costs one request every ten minutes.
+ */
+const REFRESH_AFTER_MS = 600_000;
+const lastAuthAt = new WeakMap<SettlementWorld, number>();
+
+export async function keepSettlementAuthFresh(w: SettlementWorld): Promise<void> {
+  const now = Date.now();
+  const since = lastAuthAt.get(w);
+  if (since !== undefined && now - since < REFRESH_AFTER_MS) return;
+  if (since === undefined) {
+    // First sighting of this world: its token was minted when the world was
+    // built, which is as good as a refresh, so only the clock is started.
+    lastAuthAt.set(w, now);
+    return;
+  }
+  await reauthenticate(w.t, w.owner);
+  w.headers.Authorization = `Bearer ${w.owner.token}`;
+  lastAuthAt.set(w, Date.now());
 }
 
 /** Priced stock in through the real adjustment command: goods that carry value. */

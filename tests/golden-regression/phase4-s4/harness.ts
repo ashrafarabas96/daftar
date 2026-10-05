@@ -102,7 +102,7 @@ export interface SettlementSubject {
   readonly routines: readonly string[];
   readonly sourceTypes: readonly string[];
   readonly operationKinds: readonly string[];
-  /** Whether `invoice_outstanding`'s live body reads the two settling relations (seam S-P4-03, map §4.2). */
+  /** Whether the live `invoice_outstanding` bodies — the wrapper and the set-based definition it delegates to — read the two settling relations (seam S-P4-03, map §4.2). */
   readonly readerReadsAllocations: boolean;
   readonly readerReadsCreditApplications: boolean;
   /** Everything this slice declares and the tree does not have yet. */
@@ -134,12 +134,38 @@ export async function settlementSubject(q: Queryable): Promise<SettlementSubject
   const operationKinds: string[] = [];
   for (const k of S4_OPERATION_KINDS) if (await registryHas(q, 'inventory_operation_kinds', 'op_code', k)) operationKinds.push(k);
 
-  const readerBody = (
-    await q.query<{ body: string }>(`SELECT coalesce(pg_get_functiondef(to_regprocedure('public.invoice_outstanding(UUID, UUID)')), '') AS body`)
-  ).rows[0];
-  const body = readerBody?.body ?? '';
+  /**
+   * THE READER OF RECORD IS A COMPOSITION SINCE `0083`, so the seam's question
+   * is asked of the composition.
+   *
+   * `0083` makes the settlement sum SET-BASED: the one definition is
+   * `invoice_outstanding(business, invoice_id[])`, which reads both reducers in
+   * one pass, and `invoice_outstanding(business, invoice)` is a THIN WRAPPER
+   * over it that holds no arithmetic — which is what keeps P4-AL-07's "exactly
+   * one copy of the settlement arithmetic" true. Asking only the single-invoice
+   * body whether it names the reducers would therefore report the SUBJECT
+   * ABSENT for a tree that reads them exactly once, which is the opposite of
+   * what this canary is for.
+   *
+   * So the bodies of EVERY `invoice_outstanding` overload are read, and the
+   * delegation is required as well: the single-invoice reader either reads the
+   * reducers itself or calls another `invoice_outstanding`. A reader that
+   * neither reads them nor delegates is the seam's own defect and is still
+   * reported.
+   */
+  const bodies = (
+    await q.query<{ body: string; args: string }>(
+      `SELECT pg_get_functiondef(p.oid) AS body, p.oid::regprocedure::text AS args
+         FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+        WHERE n.nspname = 'public' AND p.proname = 'invoice_outstanding'
+        ORDER BY args`,
+    )
+  ).rows;
+  const body = bodies.map((r) => r.body).join('\n');
+  const single = bodies.find((r) => r.args.replace(/\s+/g, '') === 'invoice_outstanding(uuid,uuid)')?.body ?? '';
   const readerReadsAllocations = body.includes('payment_allocations');
   const readerReadsCreditApplications = body.includes('customer_credit_applications');
+  const readerComposes = single !== '' && (single.includes('payment_allocations') || /invoice_outstanding\s*\(/.test(single.replace(/^[\s\S]*?AS \$/, '')));
 
   const missing: string[] = [];
   for (const rel of S4_RELATIONS) {
@@ -156,6 +182,8 @@ export async function settlementSubject(q: Queryable): Promise<SettlementSubject
   for (const k of S4_OPERATION_KINDS) if (!operationKinds.includes(k)) missing.push(`inventory_operation_kinds row '${k}'`);
   if (!readerReadsAllocations) missing.push(`invoice_outstanding does not read payment_allocations (seam S-P4-03)`);
   if (!readerReadsCreditApplications) missing.push(`invoice_outstanding does not read customer_credit_applications (seam S-P4-03)`);
+  if (!readerComposes)
+    missing.push(`invoice_outstanding(uuid, uuid) neither reads a reducer relation nor delegates to another invoice_outstanding (seam S-P4-03)`);
   return { relations, routines, sourceTypes, operationKinds, readerReadsAllocations, readerReadsCreditApplications, missing };
 }
 
@@ -465,7 +493,7 @@ export async function derivedRead(q: Queryable, businessId: string, invoiceId: s
     `SELECT o.paid_txn_minor::text AS p, o.paid_base_minor::text AS pb,
             o.outstanding_txn_minor::text AS o, o.outstanding_base_minor::text AS ob,
             invoice_settlement_state($1, $2) AS state
-       FROM invoice_outstanding($1, $2) o`,
+       FROM invoice_outstanding($1::uuid, $2::uuid) o`,
     [businessId, invoiceId],
   );
   const row = must(r.rows[0], `invoice_outstanding for ${invoiceId}`);

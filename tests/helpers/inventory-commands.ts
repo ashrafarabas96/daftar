@@ -938,14 +938,46 @@ export function stocktakeOpenCommand(warehouseId: string, stocktakeId: string = 
 // ── the HTTP world (§6 T-09, T-17): the same S3 shape behind the real API ──
 
 /** A registered user and the bearer token the API issued them. */
+/**
+ * The password every actor registered here is given.
+ *
+ * Named once, because `reauthenticate` below needs the same bytes
+ * `registerActor` used and a second literal would be a second password.
+ */
+export const ACTOR_PASSWORD = 'Str0ng!Passw0rd';
+
 export interface HttpActor {
-  readonly token: string;
+  /**
+   * The access token, which is NOT readonly: it lives 900 seconds
+   * (`apps/api/src/modules/auth/tokens.ts:60`) and a fixture whose seeding
+   * takes longer than that has to log its actor in again — see
+   * `reauthenticate`. Everything else about an actor is fixed.
+   */
+  token: string;
   readonly userId: string;
   readonly email: string;
 }
 
+/**
+ * Log an actor in again, in place, and return it.
+ *
+ * The product's access token lives fifteen minutes. A fixture that seeds for
+ * longer than that — the P4-S4 budget dataset is 2 000 fat-tail invoices plus
+ * three allocation pools, PACED against the product's own rate limiter — dies
+ * of a `401` half way through, and a seed that cannot finish measures nothing.
+ * The answer is the one the real client has: log in again. The token is NOT
+ * lengthened, the limiter is NOT raised and no request is retried into a
+ * sample.
+ */
+export async function reauthenticate(t: TestApp, actor: HttpActor): Promise<HttpActor> {
+  const res = await t.request.post('/v1/auth/login').send({ email: actor.email, password: ACTOR_PASSWORD });
+  expect(res.status, `the actor logs in again: ${JSON.stringify(res.body)}`).toBeLessThan(300);
+  actor.token = String(res.body.accessToken);
+  return actor;
+}
+
 export async function registerActor(t: TestApp, name: string): Promise<HttpActor> {
-  const reg = await t.request.post('/v1/auth/register').send({ email: uniqueEmail(), password: 'Str0ng!Passw0rd', displayName: name, preferredLocale: 'en' });
+  const reg = await t.request.post('/v1/auth/register').send({ email: uniqueEmail(), password: ACTOR_PASSWORD, displayName: name, preferredLocale: 'en' });
   expect(reg.status, `register ${name}`).toBe(201);
   const token = String(reg.body.accessToken);
   const me = await t.request.get('/v1/auth/me').set('Authorization', `Bearer ${token}`);

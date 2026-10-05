@@ -78,6 +78,7 @@ import { expect } from 'vitest';
 import { ownerPool } from '../helpers/test-app';
 import {
   baseCurrency,
+  keepSettlementAuthFresh,
   newCustomer,
   sellOnCredit,
   stateFxRate,
@@ -319,6 +320,7 @@ export function quarterOf(invoice: OpenInvoice): bigint {
  */
 async function pay(w: SettlementWorld, input: PaymentInput): Promise<void> {
   await pace(ROUTE.payment);
+  await keepSettlementAuthFresh(w);
   const res = await collectPayment(w.t, w.headers, input);
   expect(res.status, `the seed's collection of ${input.amountMinor} over ${input.allocations.length} leg(s) commits: ${JSON.stringify(res.body)}`).toBeLessThan(
     300,
@@ -335,12 +337,17 @@ async function pay(w: SettlementWorld, input: PaymentInput): Promise<void> {
  */
 async function sell(w: SettlementWorld, customerId: string, quantity: string): Promise<OpenInvoice> {
   await pace(ROUTE.sale);
+  // Beside the pacing wait, which is where a wait is already lawful: this
+  // seed runs for longer than the product's access token lives, and a 401 half
+  // way through is a dataset that measures nothing (`keepSettlementAuthFresh`).
+  await keepSettlementAuthFresh(w);
   return sellOnCredit(w, customerId, quantity);
 }
 
 /** Priced stock in, paced: one request, but it shares the adjustment handler's allowance with nothing else here. */
 export async function pacedStockUp(w: SettlementWorld, quantity: string, unitCost: string): Promise<void> {
   await pace(ROUTE.adjustment);
+  await keepSettlementAuthFresh(w);
   await stockUp(w, quantity, unitCost);
 }
 
@@ -348,6 +355,9 @@ export async function pacedStockUp(w: SettlementWorld, quantity: string, unitCos
 export async function pacedSellOnCredit(w: SettlementWorld, customerId: string, quantity: string): Promise<OpenInvoice> {
   return sell(w, customerId, quantity);
 }
+
+/** The world's credential, kept fresh outside every measured span — re-exported so the budget suite can call it where it paces. */
+export { keepSettlementAuthFresh };
 
 /**
  * THE SEED.
