@@ -92,14 +92,25 @@ const RECEIVABLES_STATUS = {
    * The invoice is a WALK-IN invoice (`customer_id IS NULL`), and nothing can
    * settle it.
    *
-   * No composite edge makes the row unrepresentable: under Departure A the
-   * reducers' edge to `invoices` is two columns (`0081:357`, `0081:493`),
-   * because the three-column form needs a key on `invoices` that the frozen
-   * `0075` does not carry. So this code and
-   * `invoice_settlement.walkin_not_settleable` are the only two things
-   * standing there — this one answering at the API, the other at COMMIT — and
-   * neither is belt-and-braces over a structural guarantee. Deleting either as
-   * redundant would open the hole.
+   * A composite edge now DOES make the row unrepresentable, and this comment
+   * used to say the opposite. `0082` added
+   * `invoices_customer_uq UNIQUE (business_id, id, customer_id)` — non-partial,
+   * so it validates on data that already holds NULL customers — and widened
+   * both reducers' edges to `invoices` onto it (`0082:187-203`, superseding the
+   * two-column `0081:357` and `0081:493`). Each reducer's `customer_id` is
+   * `NOT NULL`, so all three referencing columns are non-null, so the edge is
+   * checked on every row, and a non-null triple has no target in a walk-in
+   * invoice's NULL-customer row. The INSERT is refused with `23503`.
+   *
+   * So the standing of the three answers has changed, and only their standing:
+   * this code still answers at the API with a sentence a merchant can read,
+   * `invoice_settlement.walkin_not_settleable` still answers at COMMIT, and
+   * both are now defence in depth behind a shape rather than the only things
+   * standing there. They stay: a 409 naming the walk-in invoice is a better
+   * answer to a merchant than a raw foreign-key violation, and an arm that
+   * cannot be reached is not an arm that may be deleted — the shape is what
+   * holds, and a later slice that changes the shape would silently remove the
+   * law with it.
    */
   'customer_payment.invoice_walkin': 409,
   /** More applied to an invoice than `invoice_outstanding` says it owes. */
@@ -185,7 +196,13 @@ const RECEIVABLES_STATUS = {
   'invoice_settlement.walkin_not_settleable': 409,
   /** A cash-settled invoice carries no receivable, so there is nothing to settle. */
   'invoice_settlement.cash_not_settleable': 409,
-  /** A reducer row names a customer who is not the invoice's. Under Departure A no composite edge refuses this, so the verifier is where it is refused. */
+  /**
+   * A reducer row names a customer who is not the invoice's. Since `0082` the
+   * three-column edge onto `invoices_customer_uq` refuses the INSERT itself
+   * (`23503`), so this arm of `invoice_settlement_verify` is defence in depth
+   * rather than the mechanism — unreachable through the relations, kept
+   * because a shape that is changed must not take the law with it silently.
+   */
   'invoice_settlement.customer_mismatch': 409,
   /** The invoice was not `open` when the settlement committed — a draft was never posted and a void document was reversed. */
   'invoice_settlement.invoice_state_invalid': 409,

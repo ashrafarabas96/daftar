@@ -323,9 +323,9 @@ describe('P4-S4 the customer identity pin', () => {
     const res = must(mismatchByCommand, 'the mismatch attempt');
     expect(
       res.status,
-      `customer C's payment may not settle customer D's invoice. With the three-column key of OQ-7 this has no FK target at all; the ` +
-        `contract's Departure A refused that key for this slice and moved the law onto invoice_settlement_verify, so it must refuse here. ` +
-        `Measured: ${res.status} ${JSON.stringify(res.body)}`,
+      `customer C's payment may not settle customer D's invoice. Since 0082 widened the reducer edge onto invoices_customer_uq this has ` +
+        `no FK target at all, and the API answer, the command and invoice_settlement_verify each refuse it as well, so a refusal here is ` +
+        `owed by four independent mechanisms. Measured: ${res.status} ${JSON.stringify(res.body)}`,
     ).toBeGreaterThanOrEqual(400);
     expect(res.status, 'and it is a business refusal naming a reason, not a 500').toBeLessThan(500);
     expect(

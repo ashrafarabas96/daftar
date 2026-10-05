@@ -133,19 +133,23 @@ export interface ReceivablesMethod {
  * A walk-in invoice (`customer_id IS NULL`) is refused HERE, and it is the
  * FIRST of three answers rather than a convenience in front of a constraint.
  *
- * It is not refused by the edge to `invoices`: that edge is two columns,
- * `FOREIGN KEY (business_id, invoice_id) REFERENCES invoices (business_id, id)
- * ON DELETE RESTRICT` (`0081:357` on `payment_allocations`, `0081:493` on
- * `customer_credit_applications`). The three-column form this comment once
- * claimed would need `UNIQUE (business_id, id, customer_id)` on `invoices`,
- * and `0075` is frozen with no such constraint (`0075:286-288`) — Departure A
- * of this slice, recorded in the architecture lock. `customer_id` is still
- * `NOT NULL` on both reducers, so a row cannot OMIT a customer; what no
- * composite edge enforces is that it is the INVOICE's customer.
+ * It is now ALSO refused by the edge to `invoices`, and this comment twice
+ * said otherwise. `0075` is indeed frozen with no such constraint
+ * (`0075:286-288`), which is why `0081` could only carry the two-column
+ * `FOREIGN KEY (business_id, invoice_id)` (`0081:357`, `0081:493`). `0082`
+ * then added the key to `invoices` in a new migration — `invoices_customer_uq
+ * UNIQUE (business_id, id, customer_id)`, non-partial, so it validates on data
+ * already holding NULL customers — and widened both reducer edges onto it
+ * (`0082:187-203`) under the same constraint names. `customer_id` is `NOT NULL`
+ * on both reducers, so all three referencing columns are non-null, the edge is
+ * checked on every row, and a customer-mismatched or walk-in target has no
+ * parent tuple: the INSERT is refused with `23503`.
  *
- * That identity, and the walk-in law with it, is proved by
- * `invoice_settlement_verify` at COMMIT, and `invoices_walkin_no_ar`
- * (`0075:661-684`) is the third, deferred backstop.
+ * So this API answer is still the FIRST of three, and that is its whole value —
+ * a merchant reads a sentence instead of a constraint name. What changed is
+ * what stands behind it: `invoice_settlement_verify`'s identity and walk-in
+ * arms at COMMIT, and `invoices_walkin_no_ar` (`0075:661-684`), are now
+ * defence in depth behind a shape rather than the only things proving the law.
  */
 export function settledInvoice(row: SettledInvoiceRow, domain: 'customer_payment' | 'customer_credit_application'): SettledInvoice {
   if (row.status !== 'open') throw receivablesRefusal(`${domain}.invoice_state_invalid`);

@@ -646,7 +646,7 @@ export function settlementContractProblems(sql: string): string[] {
   }
   if (!declares(SETTLEMENT_VERIFIER))
     problems.push(
-      `${SETTLEMENT_VERIFIER} is not declared in the text that creates ${settlement.join(', ')} — under Departure A it is what proves the customer identity pin and the walk-in law, and neither may be left to the application layer`,
+      `${SETTLEMENT_VERIFIER} is not declared in the text that creates ${settlement.join(', ')} — since 0082 the three-column edge onto invoices_customer_uq proves the customer identity pin and the walk-in law, and this verifier is the defence in depth behind that shape plus the carrier of the R-83 chain arithmetic, so neither law may be left to the application layer`,
     );
   else if (!/create\s+constraint\s+trigger[\s\S]{0,400}?deferrable\s+initially\s+deferred/i.test(sql))
     problems.push(
@@ -687,7 +687,7 @@ export function settlementContractProblems(sql: string): string[] {
   for (const code of SETTLEMENT_REFUSALS)
     if (!sql.includes(code))
       problems.push(
-        `the refusal ${code} appears nowhere in the settlement text — Departure A names it as the refusal the deferred verifier raises, and a refusal with no RAISE is a sentence in a document`,
+        `the refusal ${code} appears nowhere in the settlement text — it is the refusal the deferred verifier raises, kept as defence in depth behind the 0082 edge that now refuses the row outright, and a refusal with no RAISE is a sentence in a document`,
       );
 
   // The arithmetic: called, and never a second body of it.
