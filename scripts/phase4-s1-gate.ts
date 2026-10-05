@@ -1262,18 +1262,58 @@ export function invoiceReducerProblems(root: string): string[] {
   // say: the receivable itself does not exist yet. Seam S-P4-03 reads the same
   // tree the same way.
   if (sql.trim() === '') return [];
-  const readers = [
-    ...new Set(
-      [...sql.matchAll(/CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+([a-z_][a-z0-9_]*)\s*\(/gi)]
-        .map((m) => (m[1] ?? '').toLowerCase())
-        .filter((n) => RECEIVABLE_READER_VOCABULARY.test(n)),
-    ),
+  const defined = [
+    ...new Set([...sql.matchAll(/CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+([a-z_][a-z0-9_]*)\s*\(/gi)].map((m) => (m[1] ?? '').toLowerCase())),
   ].sort();
-  if (readers.length === 0)
+  // THE FAMILY: the routines that ARE the derived receivable, discovered by
+  // name. These are the subjects the law has always had.
+  const family = defined.filter((n) => RECEIVABLE_READER_VOCABULARY.test(n));
+  if (family.length === 0)
     return [
       'TL-P4-S5-R1: the Phase 4 DDL defines no reader of the derived receivable, so the law that a refund may not reduce invoice AR again has no subject — a check with no subject is not a pass (P4-AL-05, P4-AL-34)',
     ];
   const problems: string[] = [];
+  // DISCOVERY BY DEPENDENCY, which is the half the name match cannot reach.
+  //
+  // A routine reads the derived receivable if it CALLS one of the family, and
+  // its NAME need not say so. Measured on the Phase 4 DDL as it stands: 48
+  // routines, 4 in the family by name — and `customer_apply_credit` and
+  // `customer_collect_payment` call one and were OUTSIDE this law entirely.
+  // Those two are the invoice reducers' own command paths, which is precisely
+  // where a refund subtraction would do the damage P4-AL-34 forbids, so the
+  // hole was over the most dangerous routines rather than the least. `0084`'s
+  // page reader of the open invoices would have joined them: it reads the
+  // receivable through the family and carries none of the four name tokens.
+  //
+  // A list of extra names would have closed it for exactly as long as nobody
+  // added a routine (`[[daftar-a-closure-rule-is-not-an-invariant]]`, and
+  // P4-AL-88 refuses the shape). Discovery by dependency needs no list: it
+  // grows to cover each new reader the moment its migration exists, and it is
+  // strictly wider than the name match rather than a replacement for it.
+  const callsFamily = (body: string, self: string): boolean => family.some((r) => r !== self && new RegExp(`\\b${r}\\s*\\(`, 'i').test(body));
+  const dependent: string[] = [];
+  for (const name of defined) {
+    const body = phase4RoutineBody(root, name);
+    // Measured zero unreadable bodies over all 48 Phase 4 routines, so a body
+    // this device cannot read is an ANOMALY and not the ordinary case. It is
+    // reported for the same reason the family loop below reports one: a
+    // routine whose body cannot be read is a routine this law cannot classify,
+    // and classifying it as "not a reader" is the vacuous pass a tagged
+    // dollar quote already bought once in this slice.
+    if (body === null) {
+      // A FAMILY member is already a subject of the law, and the loop below
+      // reports its unreadable body in the law's own words. Reporting it here
+      // too would say one thing twice about one routine. This branch is for
+      // the routines the law would otherwise never have looked at.
+      if (!family.includes(name))
+        problems.push(
+          `TL-P4-S5-R1: ${name} is a Phase 4 routine whose body this gate cannot read, so whether it reads the derived receivable cannot be decided — an unclassifiable subject is not a pass (P4-AL-05, P4-AL-34)`,
+        );
+      continue;
+    }
+    if (!family.includes(name) && callsFamily(body, name)) dependent.push(name);
+  }
+  const readers = [...family, ...dependent].sort();
   for (const name of readers) {
     const executable = phase4RoutineBody(root, name);
     // A reader this law DISCOVERED in the very text whose body it then cannot

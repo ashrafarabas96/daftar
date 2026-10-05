@@ -680,3 +680,138 @@ AS 'SELECT 0::numeric';
     expect(problems[0]).toContain('an unreadable subject is not a pass');
   });
 });
+
+describe('§G a reader of the derived receivable is discovered by DEPENDENCY, not only by its name', () => {
+  /**
+   * The hole §G closes, measured rather than imagined.
+   *
+   * `RECEIVABLE_READER_VOCABULARY` finds the family by NAME — `outstanding`,
+   * `receivable`, `aging`, `settlement_state` — and §B2 is right that finding
+   * them by what they are CALLED beats a list. But a routine that CALLS one of
+   * the family reads the derived receivable just as surely, and its name need
+   * not carry any of those four tokens.
+   *
+   * Measured on the Phase 4 DDL as it stood: 48 routines, 4 in the family by
+   * name, and `customer_apply_credit` and `customer_collect_payment` each call
+   * one while matching no token — so they sat OUTSIDE this law entirely. Those
+   * two are the invoice reducers' own command paths, which is precisely where
+   * a refund subtraction would do the damage P4-AL-34 forbids: the hole was
+   * over the most dangerous routines rather than the least. `0084`'s page
+   * reader of a customer's open invoices would have joined them.
+   *
+   * The remedy is NOT a list of extra names. That would close it for exactly
+   * as long as nobody added a routine, which is the closure-rule shape
+   * P4-AL-88 refuses. It is discovery by DEPENDENCY: a routine is a subject of
+   * this law if it calls a member of the family, whatever it is called. That
+   * needs no list and grows to cover each new reader the moment its migration
+   * exists, and it is strictly WIDER than the name match rather than a
+   * replacement for it — which G3 asserts, so a future narrowing is loud.
+   */
+  it('RED G1: a routine with NO vocabulary token in its name, which calls the family and subtracts a refund, is found', () => {
+    // `customer_picker_page` carries none of `outstanding`, `receivable`,
+    // `aging` or `settlement_state`. Before the widening it was invisible to
+    // this law; the tagged dollar quote is deliberate, so G1 cannot pass by
+    // accident of §F's device.
+    const planted = `CREATE FUNCTION customer_picker_page(p_business_id uuid, p_customer_id uuid)
+RETURNS TABLE (invoice_id uuid, left_minor bigint)
+LANGUAGE sql
+STABLE
+SET search_path = pg_catalog, public, pg_temp
+AS $pick$
+  SELECT o.invoice_id,
+         o.outstanding_txn_minor - coalesce((SELECT sum(f.amount_minor) FROM public.refunds f
+                                              WHERE f.business_id = p_business_id AND f.invoice_id = o.invoice_id), 0)
+    FROM public.invoice_outstanding(p_business_id,
+           (SELECT array_agg(x.id) FROM public.invoices x
+             WHERE x.business_id = p_business_id AND x.customer_id = p_customer_id AND x.status = 'open')) o;
+$pick$;
+`;
+    const root = rootWith(planted, '9999_planted_picker.sql');
+    // The name really does escape the vocabulary — otherwise G1 would be
+    // proving the name match and not the dependency discovery.
+    expect(RECEIVABLE_READER_VOCABULARY.test('customer_picker_page'), 'the planted name matches the vocabulary, so G1 proves the wrong device').toBe(false);
+    const problems = invoiceReducerProblems(root);
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain('TL-P4-S5-R1');
+    expect(problems[0]).toContain('customer_picker_page');
+    expect(problems[0]).toContain('refunds');
+  });
+
+  it('NOT A FINDING G: the same routine WITHOUT the refund subtraction is silent — the discovery widens the law, it does not fail a legitimate reader', () => {
+    const planted = `CREATE FUNCTION customer_picker_page(p_business_id uuid, p_customer_id uuid)
+RETURNS TABLE (invoice_id uuid, left_minor bigint)
+LANGUAGE sql
+STABLE
+SET search_path = pg_catalog, public, pg_temp
+AS $pick$
+  SELECT o.invoice_id, o.outstanding_txn_minor
+    FROM public.invoice_outstanding(p_business_id,
+           (SELECT array_agg(x.id) FROM public.invoices x
+             WHERE x.business_id = p_business_id AND x.customer_id = p_customer_id AND x.status = 'open')) o;
+$pick$;
+`;
+    const root = rootWith(planted, '9999_planted_picker_clean.sql');
+    expect(invoiceReducerProblems(root)).toEqual([]);
+  });
+
+  it('G2: the two command paths the widening brought in are real, and the real tree is still silent with them as subjects', () => {
+    // The hole and its closure, asserted over the actual tree rather than a
+    // plant. If either routine stops calling the family, this says so — and
+    // then the widening has a smaller subject set than the day it was written,
+    // which is exactly the drift worth hearing about.
+    const sql = phase4Sql(REPO);
+    const defined = [
+      ...new Set([...sql.matchAll(/CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+([a-z_][a-z0-9_]*)\s*\(/gi)].map((m) => (m[1] ?? '').toLowerCase())),
+    ].sort();
+    const family = defined.filter((n) => RECEIVABLE_READER_VOCABULARY.test(n));
+    expect(family, 'the family is not the four readers this law has always had').toEqual([
+      'customer_ar_aging',
+      'customer_ar_outstanding',
+      'invoice_outstanding',
+      'invoice_settlement_state',
+    ]);
+    const dependent = defined.filter((n) => {
+      if (family.includes(n)) return false;
+      const body = phase4RoutineBody(REPO, n);
+      return body !== null && family.some((r) => new RegExp(`\\b${r}\\s*\\(`, 'i').test(body));
+    });
+    expect(dependent, 'the routines that read the receivable without saying so in their name').toEqual(['customer_apply_credit', 'customer_collect_payment']);
+    // Every Phase 4 routine's body is readable, which is what makes the
+    // "unclassifiable subject" branch a report of an ANOMALY and not noise.
+    expect(
+      defined.filter((n) => phase4RoutineBody(REPO, n) === null),
+      'a Phase 4 routine body this gate cannot read',
+    ).toEqual([]);
+    expect(invoiceReducerProblems(REPO)).toEqual([]);
+  });
+
+  it('G3: the dependency discovery is strictly WIDER than the name match — a narrowing cannot pass unnoticed', () => {
+    const sql = phase4Sql(REPO);
+    const defined = [
+      ...new Set([...sql.matchAll(/CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+([a-z_][a-z0-9_]*)\s*\(/gi)].map((m) => (m[1] ?? '').toLowerCase())),
+    ].sort();
+    const family = defined.filter((n) => RECEIVABLE_READER_VOCABULARY.test(n));
+    // A plant that the NAME match alone would have caught must still be
+    // caught, so the widening is additive and nothing was traded away for it.
+    const planted = `CREATE FUNCTION invoice_outstanding_shadow(p_business_id uuid, p_invoice_id uuid)
+RETURNS bigint
+LANGUAGE sql
+STABLE
+SET search_path = pg_catalog, public, pg_temp
+AS $sh$
+  SELECT coalesce((SELECT sum(f.amount_minor) FROM public.refunds f WHERE f.business_id = p_business_id AND f.invoice_id = p_invoice_id), 0);
+$sh$;
+`;
+    const root = rootWith(planted, '9999_planted_shadow.sql');
+    expect(RECEIVABLE_READER_VOCABULARY.test('invoice_outstanding_shadow'), 'the plant no longer matches the name vocabulary').toBe(true);
+    const body = phase4RoutineBody(root, 'invoice_outstanding_shadow');
+    expect(body, 'the plant is unreadable, so G3 would pass for the wrong reason').not.toBeNull();
+    expect(
+      family.some((r) => new RegExp(`\\b${r}\\s*\\(`, 'i').test(body ?? '')),
+      'the plant calls the family, so the name match is not what catches it',
+    ).toBe(false);
+    const problems = invoiceReducerProblems(root);
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain('invoice_outstanding_shadow');
+  });
+});

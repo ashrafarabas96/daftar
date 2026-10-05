@@ -629,3 +629,46 @@ reviewer actually reads, and an evidence line that misnames an operation
 teaches a reviewer something false about the system. **Owed by a later slice:**
 either resolve the index per call site, or print the resolved set as a SET and
 say so, rather than printing one member of it as though it were the answer.
+
+## 11. `TL-P4-S5-R1`'s subject set was narrower than the ruling — coordinator finding, 2026-10-05
+
+The refund-not-a-reducer law discovered its subjects by NAME:
+`RECEIVABLE_READER_VOCABULARY` matches `outstanding`, `receivable`, `aging` and
+`settlement_state`, and §B2 of the guard suite is right that finding the family
+by what it is CALLED beats maintaining a list. But a routine that CALLS a
+member of the family reads the derived receivable just as surely, and its name
+need carry none of those four tokens.
+
+**Measured, not supposed.** Over the Phase 4 DDL as it stood: 48 routines, 4 in
+the family by name — and `customer_apply_credit` and `customer_collect_payment`
+each call one while matching no token, so both sat OUTSIDE the law entirely.
+Those two are the invoice reducers' own command paths, which is exactly where a
+refund subtraction would do the damage P4-AL-34 forbids. The hole was over the
+most dangerous routines rather than the least. `0084`'s page reader of a
+customer's open invoices would have joined them: it reads the receivable
+through the family and carries none of the four tokens.
+
+**The remedy is not a list of extra names**, which would hold for exactly as
+long as nobody added a routine — the closure-rule shape P4-AL-88 refuses. It is
+discovery by DEPENDENCY: a routine is a subject of this law if its body calls a
+member of the family, whatever it is called. That needs no list, grows to cover
+each new reader the moment its migration exists, and is strictly WIDER than the
+name match rather than a replacement for it.
+
+One consequence worth stating. The classification pass reads every Phase 4
+routine body, and a body it cannot read is now reported as an unclassifiable
+subject rather than skipped — the same judgement the law already made for a
+tree with no reader at all, and the same judgement §F3 made for an unreadable
+FAMILY member. That is safe to do loudly because it was measured first: **zero
+of the 48 bodies are unreadable**, so the branch reports an anomaly and not
+noise. A family member's unreadable body is left to the law's own message, so
+one routine is never reported twice for one fact.
+
+Proofs: `tests/guards/phase4-refund-not-a-reducer-guard.test.ts` §G — G1 plants
+a `$pick$`-quoted `customer_picker_page` that calls the family and subtracts
+`public.refunds`, and asserts first that its name does NOT match the vocabulary,
+so the test proves the dependency device and not the name one; the companion
+case plants the same routine without the subtraction and requires silence; G2
+asserts the hole and its closure over the real tree, including that every
+Phase 4 body is readable; G3 asserts the widening is additive by planting a
+reader the name match alone catches. 26 of 26 pass.
