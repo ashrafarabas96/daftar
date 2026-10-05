@@ -76,6 +76,7 @@
 import { randomUUID } from 'node:crypto';
 import { expect } from 'vitest';
 import { ownerPool } from '../helpers/test-app';
+import { reauthenticate } from '../helpers/inventory-commands';
 import {
   baseCurrency,
   newCustomer,
@@ -184,7 +185,145 @@ const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout
  * request in its own trailing minute to age out, which can only ever be at
  * least as long as the product requires.
  */
+/**
+ * ── THE BEARER, KEPT FRESH ACROSS A SEED LONGER THAN THE TOKEN'S LIFE ─────
+ *
+ * MEASURED, not assumed: the first acceptance-scale run of this fixture ran
+ * for 902 seconds and then died in its `beforeAll` with
+ * `{"error":{"code":"UNAUTHENTICATED","message":"Authentication required"}}`
+ * on a sale — HTTP 401 against an assertion that wanted < 300. 902 s is the
+ * 900 s of `TokenService.accessTtlSeconds`
+ * (`apps/api/src/modules/auth/tokens.ts:60`) plus the request that met it.
+ *
+ * The cause is not the pacing and not the product. `asMember` builds a static
+ * `Authorization: Bearer …` from the token minted at registration, and a seed
+ * paced against the product's own 300-per-60-s throttle necessarily runs well
+ * past fifteen minutes. So the token expires MID-SEED, and the suite reported
+ * one failed hook, seventeen skipped tests and — through a piped wrapper —
+ * an exit code of 0.
+ *
+ * What is done about it, and what is NOT. The fixture RE-AUTHENTICATES
+ * through the product's own `POST /v1/auth/login`, which
+ * `tests/helpers/inventory-commands.ts` `reauthenticate` drives with the
+ * password `registerActor` registered. The TTL is read from the login
+ * response's own `expiresInSeconds` rather than copied from the product's
+ * source, and the re-mint happens when `MARGIN_FRACTION` of that lifetime is
+ * left — a margin, not a race with the expiry. NOT done: the TTL is not
+ * raised, the auth guard is not disabled, no token is signed outside the
+ * product's own route, the throttle is not bypassed, and no 401 is retried
+ * into a sample.
+ *
+ * WHERE IT HAPPENS MATTERS AS MUCH AS THAT IT HAPPENS. The check is the first
+ * thing `pace()` does, and `pace()` is called before EVERY request this
+ * fixture makes and never inside a measured span (`measure`'s `before`, and
+ * `allocate` before its spy and its clock). So a re-authentication can no
+ * more reach a millisecond figure than a pacing wait can, and no call site can
+ * forget it: a request that is not paced is a request that will meet the
+ * limiter long before it meets the TTL.
+ */
+export const AUTH = {
+  /**
+   * Re-mint once this fraction of the stated lifetime remains. A third of 900 s
+   * is a 300-second margin and a re-mint about every ten minutes — far enough
+   * from the expiry that a slow request cannot straddle it.
+   */
+  marginFraction: 1 / 3,
+  /**
+   * A FLOOR on the interval between two re-authentications, so a defect in the
+   * arithmetic above can never become a tight login loop against
+   * `LOGIN_IP_MAX_ATTEMPTS = 30` per `LOGIN_WINDOW_SECONDS = 300`
+   * (`apps/api/src/modules/auth/auth.service.ts`). A few re-authentications
+   * over half an hour is fine; a loop is not, and this fixture fails loudly
+   * rather than discovering the login limiter the way it discovered the route
+   * limiter.
+   */
+  minIntervalMs: 60_000,
+} as const;
+
+interface AuthKeeper {
+  readonly world: SettlementWorld;
+  /** The product's own stated lifetime of the live token, in seconds. */
+  ttlSeconds: number;
+  mintedAtMs: number;
+  reauthentications: number;
+  /** Every re-mint's offset from the keeper's install, in seconds: the audit trail. */
+  readonly atSeconds: number[];
+}
+
+let keeper: AuthKeeper | null = null;
+let installedAtMs = 0;
+
+/**
+ * Take over `w`'s authentication for the life of the fixture.
+ *
+ * The FIRST login happens here, so the mint instant and the lifetime are both
+ * known facts rather than a guess about when `registerActor` ran.
+ */
+export async function installAuthKeeper(w: SettlementWorld): Promise<void> {
+  const { expiresInSeconds } = await reauthenticate(w.t, w.owner, w.headers);
+  installedAtMs = Date.now();
+  keeper = { world: w, ttlSeconds: expiresInSeconds, mintedAtMs: installedAtMs, reauthentications: 0, atSeconds: [] };
+}
+
+/**
+ * Re-mint if the live bearer is inside its margin. Returns whether it did.
+ *
+ * Called by `pace()` and therefore outside every measured span. A fixture with
+ * no keeper installed is left alone: the short suites that share these helpers
+ * finish inside the TTL and have no business logging in again.
+ */
+export async function ensureFreshAuth(): Promise<boolean> {
+  const k = keeper;
+  if (k === null) return false;
+  const now = Date.now();
+  const marginMs = k.ttlSeconds * 1000 * AUTH.marginFraction;
+  if (now - k.mintedAtMs < k.ttlSeconds * 1000 - marginMs) return false;
+  const sinceLast = now - k.mintedAtMs;
+  if (sinceLast < AUTH.minIntervalMs)
+    throw new Error(
+      `the fixture tried to re-authenticate ${sinceLast} ms after the last mint, under the ${AUTH.minIntervalMs} ms floor — ` +
+        `that is a login loop against LOGIN_IP_MAX_ATTEMPTS, not a refresh, and the arithmetic in AUTH is wrong`,
+    );
+  const { expiresInSeconds } = await reauthenticate(k.world.t, k.world.owner, k.world.headers);
+  k.ttlSeconds = expiresInSeconds;
+  k.mintedAtMs = Date.now();
+  k.reauthentications += 1;
+  k.atSeconds.push(Number(((k.mintedAtMs - installedAtMs) / 1000).toFixed(1)));
+  return true;
+}
+
+/**
+ * The re-authentication count and when each happened: part of the load
+ * context every figure is reported with (`P4-AL-76`), because a reader has to
+ * be able to see that the run outlived its token and that the re-mints
+ * happened where they could not reach a number.
+ */
+export function authReport(): {
+  readonly installed: boolean;
+  readonly accessTtlSeconds: number;
+  readonly marginSeconds: number;
+  readonly reauthentications: number;
+  readonly atSeconds: readonly number[];
+  readonly route: string;
+  readonly note: string;
+} {
+  const k = keeper;
+  return {
+    installed: k !== null,
+    accessTtlSeconds: k?.ttlSeconds ?? 0,
+    marginSeconds: Math.round((k?.ttlSeconds ?? 0) * AUTH.marginFraction),
+    reauthentications: k?.reauthentications ?? 0,
+    atSeconds: k === null ? [] : [...k.atSeconds],
+    route: "POST /v1/auth/login (the product's own route; the TTL is read from its response, never raised)",
+    note: 'every re-authentication happens inside pace(), which is never inside a measured span',
+  };
+}
+
 export async function pace(routeKey: string): Promise<number> {
+  // The bearer first, THEN the window. Both are things that must happen before
+  // a request and must never happen inside a measured span; `pace()` is the
+  // one place this fixture guarantees both of those properties at once.
+  await ensureFreshAuth();
   const state = paceStates.get(routeKey) ?? { at: [], requests: 0, waitedMs: 0 };
   paceStates.set(routeKey, state);
   const ceiling = THROTTLE.limit - THROTTLE.headroom;
@@ -198,6 +337,13 @@ export async function pace(routeKey: string): Promise<number> {
     await sleep(restMs);
     waited += restMs;
   }
+  // AND AGAIN AFTER THE WAIT. A pacing wait can be most of a minute, and the
+  // margin is a margin rather than a race precisely because nothing between
+  // the check and the request is allowed to eat it. Re-minting here costs a
+  // timestamp comparison on every request and a login on none but the few
+  // that need one — and the login is a different route handler, so it does
+  // not spend this handler's window.
+  await ensureFreshAuth();
   state.at.push(Date.now());
   state.requests += 1;
   state.waitedMs += waited;

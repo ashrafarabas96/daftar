@@ -112,6 +112,17 @@
  *
  *     PG_DIR=/tmp/daftar-pg-agent-b PG_PORT=55940 npm run perf:phase4:s4
  *
+ * `npm run perf:phase4:s4` carries `--reporter=verbose`, and that is not a
+ * cosmetic preference. MEASURED on Vitest 4.1.11, read through a pipe: the
+ * DEFAULT reporter surfaces the `console.log` of FAILING cases and of hooks,
+ * and on a run with no failure at all it surfaces NOTHING — not one line. So
+ * the authoritative run, if it were green, printed its
+ * `P4-S4 PERFORMANCE RECORD`, its sample census, its RLS cost and its
+ * allocation scaling to nowhere, and the evidence `TL-P4-S3-R4` requires
+ * existed only inside a process that had exited. The flag fixes the green
+ * case; printing the record from the `afterAll` audit as well fixes the red
+ * one, so a bare `vitest run` that FAILS still carries its own evidence.
+ *
  * never beside another `PG_DIR` user and never beside another timing suite:
  * `accounting-budgets.test.ts` once failed a `p95` purely from contention and
  * turned eight composed gates red, and two agents sharing one database on this
@@ -147,7 +158,9 @@ import {
   ROUTE,
   SCALE,
   THROTTLE,
+  authReport,
   datasetSizeBytes,
+  installAuthKeeper,
   pace,
   pacedSellOnCredit,
   pacedStockUp,
@@ -652,137 +665,377 @@ async function postedEntries(paymentId: string): Promise<{ readonly entries: num
   return { entries: Number.parseInt(row.entries, 10), allocations: Number.parseInt(row.allocations, 10), lines: Number.parseInt(row.lines, 10) };
 }
 
+// ───── THE RUN ACCOUNTS FOR ITSELF ───────────────────────────────────────
+
+/**
+ * ── WHY THIS SECTION EXISTS: SEVENTEEN SKIPPED TESTS READ AS GREEN ────────
+ *
+ * MEASURED, not assumed. The first acceptance-scale run of this file died in
+ * its `beforeAll` 902 seconds in (the bearer's 900-second TTL plus the request
+ * that met it). Vitest reported `1 failed | 17 skipped`, and the wrapper the
+ * run was piped through exited 0 — so the one number a reader is most likely
+ * to trust said the opposite of what had happened, on a suite whose own law
+ * forbids skipping a case at all.
+ *
+ * `vitest run` itself does exit 1 on a failed hook — MEASURED on this version,
+ * and `tests/helpers/exit-code.ts` already guards the one way the runner used
+ * to lose that 1 — so the 0 came from the pipe the run was read through.
+ * That is precisely why the remedy is not "remember to read the exit code".
+ * This repository's standing rule is that a wrapper's exit code is NOT the
+ * run's verdict, and a suite that depends on anybody remembering that rule has
+ * delegated its verdict to a convention. So the suite states its own verdict,
+ * in three layers that do not share a failure mode:
+ *
+ *   1. A FIXTURE FAILURE IS NOT A SKIP. `beforeAll` catches, records and does
+ *      NOT rethrow, so every case still RUNS and every case fails through
+ *      `requireFixture()` naming the fixture's own error. Seventeen skipped
+ *      tests become eighteen failed ones: there is no reading of that report
+ *      in which the run looks green.
+ *   2. A CENSUS CASE counts the series and their samples, and is written so
+ *      that nothing having run cannot satisfy it — it asserts the NUMBER of
+ *      measured series as well as each series' length, against the declared
+ *      constants, so an absent series is as red as a short one.
+ *   3. AN `afterAll` AUDIT reads Vitest's own task tree — which runs even when
+ *      `beforeAll` threw, measured on this version — and throws unless every
+ *      declared case actually ran with a pass-or-fail verdict. A case that was
+ *      skipped, was never reached, or was marked `.skip`/`.todo` by a later
+ *      hand is a failure of this audit, independent of every assertion above
+ *      it and of the exit code. The audit also PRINTS the verdict in words.
+ */
+
+/**
+ * THE DECLARED CASE COUNT of this file: the `it` cases the audit requires to
+ * have run.
+ *
+ * A literal that must be bumped when a case is added is the point rather than
+ * a nuisance: the suite's law is that no case may be skipped, and a census
+ * whose expected size is derived from whatever happened to execute is not a
+ * census. The audit names every missing case, so a mismatch is never a riddle.
+ */
+const DECLARED_CASES = 18;
+
+/** The P4-D read series this file declares: three fat-tail HTTP reads + median + the two RLS halves. */
+const DECLARED_READ_SERIES = 3;
+/** The P4-F arms this file declares, one per `ALLOCATION_ARMS` entry. */
+const DECLARED_ALLOCATION_ARMS = ALLOCATION_ARMS.length;
+
+/**
+ * The fixture's own error, recorded instead of thrown (layer 1 above).
+ *
+ * `null` means the fixture completed. Anything else means every figure below
+ * is absent and every case must say so rather than be skipped.
+ */
+let fixtureError: unknown = null;
+
+/** The first statement of every case: a fixture that did not finish is this case's failure too. */
+function requireFixture(): void {
+  if (fixtureError === null) return;
+  const e = fixtureError;
+  throw new Error(
+    `THE FIXTURE DID NOT COMPLETE, so this case measured nothing and its silence is not a pass. ` +
+      `A seed failure is a RED on every case of this file, never a skip (and never an exit code nobody read). ` +
+      `The fixture's own error was:\n${e instanceof Error ? (e.stack ?? e.message) : String(e)}`,
+  );
+}
+
 // ───── the fixture ───────────────────────────────────────────────────────
+
+/**
+ * THE FIXTURE PROPER. Everything the cases read is built here, and the one
+ * caller below records its failure instead of letting Vitest turn the whole
+ * file into a skip.
+ */
+async function buildFixture(): Promise<void> {
+  await ensurePostgres();
+  await resetData();
+  w = await settlementWorld('s4perf');
+  // THE BEARER, BEFORE ANYTHING LONG HAPPENS. `registerActor`'s token lives
+  // 900 seconds and this seed runs for far longer, so the keeper takes over
+  // the actor's authentication here and re-mints inside `pace()` — outside
+  // every measured span — for the rest of the run.
+  await installAuthKeeper(w);
+  const missing = await settlementMissing(w);
+  expect(missing, `NO SUBJECT — P4-D and P4-F cannot be measured while the slice's own subject is absent: ${missing.join(', ')}`).toEqual([]);
+
+  dataset = await seedFatTailArm(w);
+  foreignRateR10 = rateToR10(FOREIGN_RATE);
+
+  // P4-F's own invoice pools, one per arm, each on its own customer so the
+  // fat-tail counts the volume case asserts cannot be disturbed by the
+  // measurement that follows it.
+  //
+  // Priced stock for the whole pool FIRST, in one adjustment: the pool is a
+  // function of the sample count, not of the dataset tier, so the seed above
+  // cannot know how much it needs and a sale that ran out of stock would
+  // refuse with `inventory.insufficient_stock` — which is exactly what it did
+  // the first time this fixture was run.
+  const poolUnits = ALLOCATION_ARMS.reduce((acc, { shape }) => acc + allocationPoolSize(shape), 0);
+  await pacedStockUp(w, String(poolUnits + 16), '5');
+  for (const { shape, currency } of ALLOCATION_ARMS) {
+    const customerId = await newCustomer(w);
+    const invoices: OpenInvoice[] = [];
+    for (let i = 0; i < allocationPoolSize(shape); i += 1) invoices.push(await pacedSellOnCredit(w, customerId, '1'));
+    pools.set(`${currency}-${shape}`, { customerId, invoices, next: 0 });
+  }
+  // The foreign rate is entered by the seed; re-stated here only if the arm
+  // exists without it, which `stateFxRate` makes idempotent on (pair, instant).
+  await stateFxRate(w, FOREIGN_CURRENCY, dataset.baseCurrencyCode, FOREIGN_RATE, `${w.day}T00:00:02Z`);
+
+  environment = await readPlanEvidenceEnvironment(async <R>(sql: string) => ({ rows: (await ownerPool().query(sql)).rows as R[] }));
+
+  // P4-AL-74 in one measurement: the SAME read, on the SAME rows, with and
+  // without planner statistics. Printed, never asserted — it exists so the
+  // budget's number can never be mistaken for a number about missing
+  // statistics. Thirty iterations, because it is a diagnostic and not a
+  // verdict.
+  beforeAnalyze = await measure(
+    'P4-D receivable, fat-tail, BEFORE ANALYZE (diagnostic, never a verdict)',
+    null,
+    () => read200(READS.receivable(dataset.fatCustomerId)),
+    30,
+    () => pace(ROUTE.receivable),
+  );
+  await ownerPool().query('ANALYZE');
+
+  volume = await realizedVolume(w.shop.businessId, dataset);
+  stats = await planningStatistics();
+  sizeBytes = await datasetSizeBytes();
+  sizes = await relationSizes();
+
+  console.log(
+    `\n${planEvidenceBanner(environment)}\n[P4-S4 budgets] ${JSON.stringify(
+      {
+        scale: SCALE,
+        datasetTier: datasetTier(),
+        seedSeconds: dataset.seedSeconds,
+        volume,
+        databaseSizeBytes: sizeBytes,
+        relationSizes: sizes,
+        analyzeState: stats,
+        cpus: cpus().length,
+        loadAverage: loadavg(),
+        totalmemGiB: Math.round(totalmem() / 2 ** 30),
+        beforeAnalyzeP95: beforeAnalyze === null ? null : quantile(beforeAnalyze.samplesMs, 0.95),
+      },
+      null,
+      1,
+    )}\n`,
+  );
+
+  // ── P4-D's SERIES ARE TAKEN ONCE, HERE, AND REUSED ─────────────────────
+  //
+  // The ceiling case, the fat-tail-over-median ratio and the RLS cost all
+  // ask a question about the SAME read. Measuring it three times would make
+  // them three different populations — a run could then pass the ceiling on
+  // one sample of 200 and compute its ratio from another — and it would also
+  // put 1 000-odd requests on one route handler, which the product's own
+  // limiter (300 per minute, `THROTTLE`) would make this suite wait out for
+  // no gain. So each series is measured ONCE and every case below reads the
+  // stored series.
+  const medianCustomerId = must(dataset.medianCustomerIds[0], 'the first median customer');
+  for (const { label, path, route } of readsOf(dataset.fatCustomerId, w.day)) {
+    readSeries.set(
+      path,
+      await measure(
+        `P4-D ${label}, fat-tail customer (${FAT_TAIL.invoices} invoices, ${FAT_TAIL.allocations} allocations) — as daftar_app, THE BUDGET`,
+        BUDGET.D_BALANCE_P95,
+        () => read200(path),
+        SHORT_PERCENTILE_ITERATIONS,
+        () => pace(route),
+      ),
+    );
+  }
+  medianReceivable = await measure(
+    `P4-D receivable, MEDIAN customer (${MEDIAN.invoicesEach} invoices) — the ratio's denominator`,
+    null,
+    () => read200(READS.receivable(medianCustomerId)),
+    SHORT_PERCENTILE_ITERATIONS,
+    () => pace(ROUTE.receivable),
+  );
+  // The RLS cost's two halves, like against like: the SAME captured
+  // statements on the SAME rows, as `daftar_app` through the product's own
+  // query function with row security applied, and as the schema owner with
+  // row security bypassed. Neither carries the HTTP envelope; the owner
+  // figure is never the budget (P4-AL-75).
+  appStatementReceivable = await statementCostMs(READS.receivable(dataset.fatCustomerId), 'daftar_app');
+  ownerReceivable = await statementCostMs(READS.receivable(dataset.fatCustomerId), 'owner');
+
+  // The three P4-F arms, measured here so the gates below can read the rows
+  // the measurement wrote rather than taking a second, different sample.
+  for (const { shape, currency } of ALLOCATION_ARMS) series.set(`${currency}-${shape}`, await measureAllocations(`${currency}-${shape}`, shape, currency));
+
+  console.log(
+    `\n[P4-S4 budgets] pacing against the product's own limiter — ${JSON.stringify(pacingReport(), null, 1)}` +
+      `\n[P4-S4 budgets] authentication kept fresh across the seed — ${JSON.stringify(authReport(), null, 1)}\n`,
+  );
+}
 
 beforeAll(
   async () => {
-    await ensurePostgres();
-    await resetData();
-    w = await settlementWorld('s4perf');
-    const missing = await settlementMissing(w);
-    expect(missing, `NO SUBJECT — P4-D and P4-F cannot be measured while the slice's own subject is absent: ${missing.join(', ')}`).toEqual([]);
-
-    dataset = await seedFatTailArm(w);
-    foreignRateR10 = rateToR10(FOREIGN_RATE);
-
-    // P4-F's own invoice pools, one per arm, each on its own customer so the
-    // fat-tail counts the volume case asserts cannot be disturbed by the
-    // measurement that follows it.
-    //
-    // Priced stock for the whole pool FIRST, in one adjustment: the pool is a
-    // function of the sample count, not of the dataset tier, so the seed above
-    // cannot know how much it needs and a sale that ran out of stock would
-    // refuse with `inventory.insufficient_stock` — which is exactly what it did
-    // the first time this fixture was run.
-    const poolUnits = ALLOCATION_ARMS.reduce((acc, { shape }) => acc + allocationPoolSize(shape), 0);
-    await pacedStockUp(w, String(poolUnits + 16), '5');
-    for (const { shape, currency } of ALLOCATION_ARMS) {
-      const customerId = await newCustomer(w);
-      const invoices: OpenInvoice[] = [];
-      for (let i = 0; i < allocationPoolSize(shape); i += 1) invoices.push(await pacedSellOnCredit(w, customerId, '1'));
-      pools.set(`${currency}-${shape}`, { customerId, invoices, next: 0 });
-    }
-    // The foreign rate is entered by the seed; re-stated here only if the arm
-    // exists without it, which `stateFxRate` makes idempotent on (pair, instant).
-    await stateFxRate(w, FOREIGN_CURRENCY, dataset.baseCurrencyCode, FOREIGN_RATE, `${w.day}T00:00:02Z`);
-
-    environment = await readPlanEvidenceEnvironment(async <R>(sql: string) => ({ rows: (await ownerPool().query(sql)).rows as R[] }));
-
-    // P4-AL-74 in one measurement: the SAME read, on the SAME rows, with and
-    // without planner statistics. Printed, never asserted — it exists so the
-    // budget's number can never be mistaken for a number about missing
-    // statistics. Thirty iterations, because it is a diagnostic and not a
-    // verdict.
-    beforeAnalyze = await measure(
-      'P4-D receivable, fat-tail, BEFORE ANALYZE (diagnostic, never a verdict)',
-      null,
-      () => read200(READS.receivable(dataset.fatCustomerId)),
-      30,
-      () => pace(ROUTE.receivable),
-    );
-    await ownerPool().query('ANALYZE');
-
-    volume = await realizedVolume(w.shop.businessId, dataset);
-    stats = await planningStatistics();
-    sizeBytes = await datasetSizeBytes();
-    sizes = await relationSizes();
-
-    console.log(
-      `\n${planEvidenceBanner(environment)}\n[P4-S4 budgets] ${JSON.stringify(
-        {
-          scale: SCALE,
-          datasetTier: datasetTier(),
-          seedSeconds: dataset.seedSeconds,
-          volume,
-          databaseSizeBytes: sizeBytes,
-          relationSizes: sizes,
-          analyzeState: stats,
-          cpus: cpus().length,
-          loadAverage: loadavg(),
-          totalmemGiB: Math.round(totalmem() / 2 ** 30),
-          beforeAnalyzeP95: beforeAnalyze === null ? null : quantile(beforeAnalyze.samplesMs, 0.95),
-        },
-        null,
-        1,
-      )}\n`,
-    );
-
-    // ── P4-D's SERIES ARE TAKEN ONCE, HERE, AND REUSED ─────────────────────
-    //
-    // The ceiling case, the fat-tail-over-median ratio and the RLS cost all
-    // ask a question about the SAME read. Measuring it three times would make
-    // them three different populations — a run could then pass the ceiling on
-    // one sample of 200 and compute its ratio from another — and it would also
-    // put 1 000-odd requests on one route handler, which the product's own
-    // limiter (300 per minute, `THROTTLE`) would make this suite wait out for
-    // no gain. So each series is measured ONCE and every case below reads the
-    // stored series.
-    const medianCustomerId = must(dataset.medianCustomerIds[0], 'the first median customer');
-    for (const { label, path, route } of readsOf(dataset.fatCustomerId, w.day)) {
-      readSeries.set(
-        path,
-        await measure(
-          `P4-D ${label}, fat-tail customer (${FAT_TAIL.invoices} invoices, ${FAT_TAIL.allocations} allocations) — as daftar_app, THE BUDGET`,
-          BUDGET.D_BALANCE_P95,
-          () => read200(path),
-          SHORT_PERCENTILE_ITERATIONS,
-          () => pace(route),
-        ),
+    // A FIXTURE FAILURE IS NOT A SKIP (layer 1 of `THE RUN ACCOUNTS FOR
+    // ITSELF`). The error is recorded and NOT rethrown, because a thrown hook
+    // leaves Vitest reporting every case of this file as skipped — which is
+    // exactly how a dead seed once read as a green run. Recorded, every case
+    // runs and every case fails through `requireFixture()` naming this error.
+    try {
+      await buildFixture();
+    } catch (e) {
+      fixtureError = e;
+      console.error(
+        `\n[P4-S4 budgets] THE FIXTURE FAILED — every case of this file will now FAIL naming it, and none will be skipped.\n` +
+          `${e instanceof Error ? (e.stack ?? e.message) : String(e)}\n` +
+          `[P4-S4 budgets] load context at the failure — ${JSON.stringify({ pacing: pacingReport(), auth: authReport() }, null, 1)}\n`,
       );
     }
-    medianReceivable = await measure(
-      `P4-D receivable, MEDIAN customer (${MEDIAN.invoicesEach} invoices) — the ratio's denominator`,
-      null,
-      () => read200(READS.receivable(medianCustomerId)),
-      SHORT_PERCENTILE_ITERATIONS,
-      () => pace(ROUTE.receivable),
-    );
-    // The RLS cost's two halves, like against like: the SAME captured
-    // statements on the SAME rows, as `daftar_app` through the product's own
-    // query function with row security applied, and as the schema owner with
-    // row security bypassed. Neither carries the HTTP envelope; the owner
-    // figure is never the budget (P4-AL-75).
-    appStatementReceivable = await statementCostMs(READS.receivable(dataset.fatCustomerId), 'daftar_app');
-    ownerReceivable = await statementCostMs(READS.receivable(dataset.fatCustomerId), 'owner');
-
-    // The three P4-F arms, measured here so the gates below can read the rows
-    // the measurement wrote rather than taking a second, different sample.
-    for (const { shape, currency } of ALLOCATION_ARMS) series.set(`${currency}-${shape}`, await measureAllocations(`${currency}-${shape}`, shape, currency));
-
-    console.log(`\n[P4-S4 budgets] pacing against the product's own limiter — ${JSON.stringify(pacingReport(), null, 1)}\n`);
   },
   4 * 60 * 60 * 1000,
 );
 
-afterAll(async () => {
-  if (w !== undefined) await w.t.close();
-  await resetData();
+/**
+ * CLEAN UP, THEN AUDIT THE RUN ITSELF (layer 3 of `THE RUN ACCOUNTS FOR
+ * ITSELF`).
+ *
+ * The audit reads Vitest's own task tree — the second hook argument — because
+ * that is the only account of the run that cannot be satisfied by nothing
+ * having happened: it lists the cases that exist and what verdict each one
+ * actually reached. `afterAll` runs even when `beforeAll` threw (measured on
+ * Vitest 4.1.11), so this is the backstop for any future way of killing the
+ * fixture, and it fires whatever the exit code of whatever wrapper the run was
+ * piped through.
+ *
+ * The cleanup runs FIRST and in a `finally`, so an audit failure never leaks a
+ * server or a database.
+ */
+// The empty pattern is Vitest 4's own calling convention and not a style
+// choice: the suite task tree is the hook's SECOND argument, and the parser
+// refuses a first argument that is a plain identifier ("access it in the 2nd
+// argument instead") or a rest pattern ("rest parameters are not supported"),
+// while any NAMED property is read as a fixture request the hook has no
+// context for. An empty destructure is the only form that reaches the suite.
+// eslint-disable-next-line no-empty-pattern
+afterAll(async ({}, suite: { readonly tasks?: readonly unknown[] }) => {
+  try {
+    if (w !== undefined) await w.t.close();
+    await resetData();
+  } finally {
+    auditTheRun(suite);
+  }
 });
+
+/**
+ * EVERYTHING `P4-AL-74`, `P4-AL-75`, `P4-AL-76` AND `TL-P4-S3-R4` REQUIRE
+ * PRINTED BESIDE THE FIGURES, in one object, built from the server and the
+ * samples and from nothing else.
+ *
+ * It is a FUNCTION of module state rather than a case-local literal because
+ * two different things print it, and they print it for different reasons.
+ * MEASURED on Vitest 4.1.11, read through a pipe: the default reporter drops
+ * the `console.log` of every PASSING case, surfaces a FAILING case's and a
+ * HOOK's, and on a run with no failure surfaces nothing at all — the hazard
+ * `diagnose()` above already records, in its full extent. The evidence this
+ * record holds comes from a case that passes when the suite is green, so in a
+ * piped green run it was being written to nowhere.
+ *
+ * So it is printed twice, and each printing answers one half of that. The
+ * environment case prints it beside the case that asserts on it, which the
+ * `--reporter=verbose` of `npm run perf:phase4:s4` surfaces. The `afterAll`
+ * audit prints it again, which the DEFAULT reporter surfaces whenever this
+ * file fails — so the run that most needs its load context never loses it,
+ * even under a bare `vitest run`. A record that exists only when somebody
+ * remembers a reporter flag is the same defect as a verdict that exists only
+ * in an exit code nobody read.
+ */
+function performanceRecord(): Record<string, unknown> {
+  return {
+    serverVersion: environment.serverVersion,
+    serverVersionNum: environment.serverVersionNum,
+    serverMajor: environment.serverMajor,
+    datcollate: environment.datcollate,
+    datctype: environment.datctype,
+    localeProvider: environment.localeProvider,
+    collationIsByteOrder: environment.collationIsByteOrder,
+    encoding: environment.encoding,
+    datasetTier: datasetTier(),
+    databaseSizeBytes: sizeBytes,
+    relationSizes: sizes,
+    analyzeState: stats,
+    iterations: SHORT_PERCENTILE_ITERATIONS,
+    warmup: WARMUP,
+    cpuCount: cpus().length,
+    loadAverage: loadavg(),
+    freeMemoryBytes: freemem(),
+    // The product's own rate limit, and what pacing against it cost: part of
+    // the load context, because a reader has to know that a wait happened,
+    // where it happened, and that it was never inside a measured span.
+    productRateLimit: { ...THROTTLE, reference: 'apps/api/src/app/runtime.ts:116' },
+    pacing: pacingReport(),
+    // The re-authentications this run needed, and when: the seed outlives the
+    // bearer's 900-second TTL, so a reader has to be able to see that the
+    // fixture re-minted through the product's own login route and that every
+    // re-mint happened outside a measured span (inside `pace()`).
+    authentication: authReport(),
+    planEvidence: classifyPlanEvidence(environment),
+    distributions: diagnostics.map((d) => ({ name: d.name, iterations: d.iterations, p95: d.p95, thresholdMs: d.thresholdMs, orderedMs: d.orderedMs })),
+  };
+}
+
+interface TaskNode {
+  readonly type?: string;
+  readonly name?: string;
+  readonly mode?: string;
+  readonly tasks?: readonly TaskNode[];
+  readonly result?: { readonly state?: string };
+}
+
+/** Every `it` case of this file, flattened out of Vitest's own task tree. */
+function casesOf(node: TaskNode): TaskNode[] {
+  const here = node.type === 'test' ? [node] : [];
+  return [...here, ...(node.tasks ?? []).flatMap(casesOf)];
+}
+
+function auditTheRun(suite: { readonly tasks?: readonly unknown[] }): void {
+  const cases = casesOf(suite as TaskNode);
+  const verdictOf = (t: TaskNode): string => (t.mode !== 'run' ? `marked ${t.mode}` : (t.result?.state ?? 'never reached'));
+  const ran = cases.filter((t) => t.mode === 'run' && (t.result?.state === 'pass' || t.result?.state === 'fail'));
+  const failed = ran.filter((t) => t.result?.state === 'fail');
+  const unaccounted = cases.filter((t) => !ran.includes(t)).map((t) => `${t.name ?? '(unnamed)'} — ${verdictOf(t)}`);
+  const record = {
+    declaredCases: DECLARED_CASES,
+    casesInTheFile: cases.length,
+    ranToAVerdict: ran.length,
+    passed: ran.length - failed.length,
+    failed: failed.length,
+    unaccounted,
+    fixtureCompleted: fixtureError === null,
+  };
+  const green = fixtureError === null && cases.length === DECLARED_CASES && ran.length === DECLARED_CASES && failed.length === 0;
+  // THE VERDICT, IN WORDS, IN THE LOG. The exit code of a piped wrapper is not
+  // this run's verdict and never was; this line is.
+  console.log(`\n[P4-S4 budgets] VERDICT — ${green ? 'GREEN' : 'RED'}: ${JSON.stringify(record, null, 1)}\n`);
+  // AND THE RECORD ITSELF, FROM THE HOOK. The environment case prints it too,
+  // but a passing case's output does not survive the default reporter through
+  // a pipe; a hook's does whenever the file fails. So a RED run always carries
+  // the load context its diagnosis needs, whatever it was run with.
+  if (fixtureError === null) console.log(`\nP4-S4 PERFORMANCE RECORD — ${JSON.stringify(performanceRecord(), null, 1)}\n`);
+  if (cases.length !== DECLARED_CASES)
+    throw new Error(
+      `THE CENSUS DOES NOT ADD UP: this file declares ${DECLARED_CASES} cases and Vitest found ${cases.length}. ` +
+        `A case was added or removed without the declaration (or with a \`.skip\`/\`.todo\`, which this suite forbids outright). ` +
+        `Bump DECLARED_CASES in the same diff as the case.`,
+    );
+  if (unaccounted.length > 0)
+    throw new Error(
+      `${unaccounted.length} of ${DECLARED_CASES} declared cases did not run to a verdict, so this run proved nothing about them ` +
+        `and MUST NOT be read as a pass — whatever the exit code of the wrapper it was piped through. ` +
+        `A fixture that dies is a RED on this file, not seventeen quiet skips:\n  ${unaccounted.join('\n  ')}`,
+    );
+}
 
 // ───── P4-D ──────────────────────────────────────────────────────────────
 
 describe(`P4-D — the customer receivable read (scale ${SCALE}, ${SCALE === 1 ? 'acceptance volume' : 'Tier 1, same ceilings on less data'})`, () => {
   it('the realized volume is P4-AL-73’s fat-tail customer, and every one of its invoices is actually in the AR sum', () => {
+    requireFixture();
     expect(volume.fatOpenInvoices, 'the fat-tail customer has P4-AL-73’s invoice count').toBe(FAT_TAIL.invoices);
     expect(volume.fatAllocations, 'and P4-AL-73’s allocation count, two per invoice').toBe(FAT_TAIL.allocations);
     // `customer_ar_outstanding` drops a chain settled to zero through its
@@ -808,6 +1061,7 @@ describe(`P4-D — the customer receivable read (scale ${SCALE}, ${SCALE === 1 ?
   });
 
   it('every relation this read touches has planner statistics — a null fails the suite (P4-AL-74)', () => {
+    requireFixture();
     const missing = Object.entries(stats)
       .filter(([, s]) => s.analyzed === null)
       .map(([relname]) => relname);
@@ -819,6 +1073,7 @@ describe(`P4-D — the customer receivable read (scale ${SCALE}, ${SCALE === 1 ?
   });
 
   it('GATE: no statement of this read uses OFFSET', async () => {
+    requireFixture();
     for (const { label, path } of readsOf(dataset.fatCustomerId, w.day)) {
       for (const c of await capture(path)) {
         expect(/\bOFFSET\b/i.test(c.text), `${label}: a receivable read paginated by OFFSET re-walks the skipped rows on every page:\n${c.text}`).toBe(false);
@@ -827,6 +1082,7 @@ describe(`P4-D — the customer receivable read (scale ${SCALE}, ${SCALE === 1 ?
   });
 
   it('GATE: the statement count is the same for a 2 000-invoice customer and for a 3-invoice one', async () => {
+    requireFixture();
     const median = must(dataset.medianCustomerIds[0], 'the first median customer');
     for (const [i, { label, path }] of readsOf(dataset.fatCustomerId, w.day).entries()) {
       const fat = await capture(path);
@@ -849,6 +1105,7 @@ describe(`P4-D — the customer receivable read (scale ${SCALE}, ${SCALE === 1 ?
    * second copy of the arithmetic into TypeScript or into the read.
    */
   it('GATE: every P4-D read derives its money through the product’s own reader of record, and sums nothing itself', async () => {
+    requireFixture();
     const byRead: Record<string, string[]> = {};
     for (const { label, path } of readsOf(dataset.fatCustomerId, w.day)) {
       const statements = await capture(path);
@@ -898,6 +1155,7 @@ describe(`P4-D — the customer receivable read (scale ${SCALE}, ${SCALE === 1 ?
    * that an index-reach gate on `invoices` has become assertable.
    */
   it('FINDING: the reader of record is not inlinable, so the growth law is the ratio and not a plan node', async () => {
+    requireFixture();
     const median = must(dataset.medianCustomerIds[0], 'the first median customer');
     const medianPlans = await plansOf(READS.receivable(median));
     const fatPlans = await plansOf(READS.receivable(dataset.fatCustomerId));
@@ -947,6 +1205,7 @@ describe(`P4-D — the customer receivable read (scale ${SCALE}, ${SCALE === 1 ?
   });
 
   it(`MEASUREMENT: p95 of ${SHORT_PERCENTILE_ITERATIONS} warm runs of each fat-tail read is within P4-D (${BUDGET.D_BALANCE_P95} ms)`, () => {
+    requireFixture();
     for (const { path } of readsOf(dataset.fatCustomerId, w.day)) {
       const m = must(readSeries.get(path), `the measured series of ${path}`);
       // P4-AL-76: the gate fails when a measurement's sample count is below
@@ -961,6 +1220,7 @@ describe(`P4-D — the customer receivable read (scale ${SCALE}, ${SCALE === 1 ?
   });
 
   it(`RATIO (host-independent, P4-AL-72): p95(fat-tail) <= ${RATIOS.BALANCE_FATTAIL_OVER_MEDIAN.max} x p95(median)`, () => {
+    requireFixture();
     // The SAME series the ceiling case judged, and the median series taken in
     // the same run on the same host: a ratio computed from a second sample
     // would be a ratio between two populations.
@@ -994,6 +1254,7 @@ describe(`P4-D — the customer receivable read (scale ${SCALE}, ${SCALE === 1 ?
   });
 
   it(`RLS COST (P4-AL-75, OD-P4-14 provisional): the daftar_app figure over the schema-owner figure, <= ${RATIOS.RLS_COST.max}x`, () => {
+    requireFixture();
     const path = READS.receivable(dataset.fatCustomerId);
     // LIKE AGAINST LIKE (see `statementCostMs`): the same captured statements
     // on the same rows, as `daftar_app` through the product's own query
@@ -1043,6 +1304,7 @@ describe('P4-F — the customer payment allocation', () => {
   const armOf = (key: string): AllocationSeries => must(series.get(key), `the ${key} allocation series`);
 
   it('GATE: one allocation command opens exactly ONE transaction, whatever the invoice count (P4-AL-72)', () => {
+    requireFixture();
     for (const key of ['base-1', 'base-5', 'foreign-5']) {
       const s = armOf(key);
       const counts = [...new Set(s.transactionsPerCommand)];
@@ -1055,6 +1317,7 @@ describe('P4-F — the customer payment allocation', () => {
   });
 
   it('GATE: one journal entry per allocation and no per-line entry (P4-AL-72)', async () => {
+    requireFixture();
     for (const key of ['base-1', 'base-5', 'foreign-5']) {
       const s = armOf(key);
       const sampled = [must(s.paymentIds[0]), must(s.paymentIds.at(-1))];
@@ -1072,6 +1335,7 @@ describe('P4-F — the customer payment allocation', () => {
   });
 
   it(`MEASUREMENT: p95 of the 5-invoice allocation is within P4-F in-transaction (${BUDGET.F_ALLOCATION_TXN_P95} ms)`, () => {
+    requireFixture();
     for (const key of ['base-5', 'foreign-5']) {
       const s = armOf(key);
       assertWithin(
@@ -1083,6 +1347,7 @@ describe('P4-F — the customer payment allocation', () => {
   });
 
   it(`MEASUREMENT: p95 of the 5-invoice allocation is within P4-F over HTTP (${BUDGET.F_ALLOCATION_HTTP_P95} ms)`, () => {
+    requireFixture();
     for (const key of ['base-5', 'foreign-5']) {
       const s = armOf(key);
       assertWithin(
@@ -1094,6 +1359,7 @@ describe('P4-F — the customer payment allocation', () => {
   });
 
   it('REPORT: the 1-invoice median, the 5-invoice median and the 1→5 scaling ratio, at both depths', () => {
+    requireFixture();
     const one = armOf('base-1');
     const five = armOf('base-5');
     const report = {
@@ -1130,6 +1396,7 @@ describe('P4-F — the customer payment allocation', () => {
   });
 
   it(`RATIO (host-independent, P4-AL-72, OD-P4-14): p95(5 invoices) <= ${RATIOS.ALLOCATION_5_OVER_1.max} x p95(1 invoice)`, () => {
+    requireFixture();
     const one = armOf('base-1');
     const five = armOf('base-5');
     for (const [depth, oneMs, fiveMs] of [
@@ -1157,32 +1424,8 @@ describe('P4-F — the customer payment allocation', () => {
 
 describe('the measurement environment, recorded rather than described (TL-P4-S3-R4, P4-AL-76)', () => {
   it('records the server version, both collation spellings, the dataset tier and the ANALYZE state', () => {
-    const record = {
-      serverVersion: environment.serverVersion,
-      serverVersionNum: environment.serverVersionNum,
-      serverMajor: environment.serverMajor,
-      datcollate: environment.datcollate,
-      datctype: environment.datctype,
-      localeProvider: environment.localeProvider,
-      collationIsByteOrder: environment.collationIsByteOrder,
-      encoding: environment.encoding,
-      datasetTier: datasetTier(),
-      databaseSizeBytes: sizeBytes,
-      relationSizes: sizes,
-      analyzeState: stats,
-      iterations: SHORT_PERCENTILE_ITERATIONS,
-      warmup: WARMUP,
-      cpuCount: cpus().length,
-      loadAverage: loadavg(),
-      freeMemoryBytes: freemem(),
-      // The product's own rate limit, and what pacing against it cost: part of
-      // the load context, because a reader has to know that a wait happened,
-      // where it happened, and that it was never inside a measured span.
-      productRateLimit: { ...THROTTLE, reference: 'apps/api/src/app/runtime.ts:116' },
-      pacing: pacingReport(),
-      planEvidence: classifyPlanEvidence(environment),
-      distributions: diagnostics.map((d) => ({ name: d.name, iterations: d.iterations, p95: d.p95, thresholdMs: d.thresholdMs, orderedMs: d.orderedMs })),
-    };
+    requireFixture();
+    const record = performanceRecord();
     console.log(`\nP4-S4 PERFORMANCE RECORD — ${JSON.stringify(record, null, 1)}\n`);
     expect(environment.serverVersionNum, 'the server did not report a version, so nothing below is attributable to one').toBeGreaterThan(0);
     expect(environment.datcollate.length, 'the server did not report a collation').toBeGreaterThan(0);
@@ -1202,7 +1445,57 @@ describe('the measurement environment, recorded rather than described (TL-P4-S3-
    * side; `tests/performance/plan-evidence-contract.test.ts` is what asserts
    * that wiring structurally.
    */
+  /**
+   * THE SAMPLE CENSUS (layer 2 of `THE RUN ACCOUNTS FOR ITSELF`).
+   *
+   * `P4-AL-76` fails a gate whose measurement carries fewer samples than it
+   * declared, and the individual MEASUREMENT cases already assert that on the
+   * series they read. What they cannot assert is a series that is not there at
+   * all: an absent series is an absent `it` body, and a run in which nothing
+   * happened satisfies every assertion nobody made.
+   *
+   * So this case counts the series as well as their lengths, against the
+   * DECLARED constants — three fat-tail read series, a median series, both
+   * halves of the RLS instrument, one allocation arm per `ALLOCATION_ARMS`
+   * entry, each at `SHORT_PERCENTILE_ITERATIONS` — and it names what is
+   * missing. Nothing having run cannot pass it, and a short series cannot
+   * either.
+   */
+  it('CENSUS: every declared series exists and carries its full declared sample count (P4-AL-76)', () => {
+    requireFixture();
+    const lengths: Record<string, number> = {};
+    for (const { path } of readsOf(dataset.fatCustomerId, w.day))
+      lengths[`P4-D HTTP ${path}`] = must(readSeries.get(path), `the series of ${path}`).samplesMs.length;
+    expect(readSeries.size, `${DECLARED_READ_SERIES} fat-tail read series are declared and ${readSeries.size} were measured`).toBe(DECLARED_READ_SERIES);
+    lengths['P4-D median (the ratio denominator)'] = must(medianReceivable, 'the median series').samplesMs.length;
+    lengths['P4-D daftar_app statements (RLS numerator)'] = must(appStatementReceivable, 'the daftar_app statement series').samplesMs.length;
+    lengths['P4-D owner statements (RLS denominator)'] = must(ownerReceivable, 'the owner statement series').samplesMs.length;
+    expect(series.size, `${DECLARED_ALLOCATION_ARMS} allocation arms are declared and ${series.size} were measured`).toBe(DECLARED_ALLOCATION_ARMS);
+    for (const { shape, currency } of ALLOCATION_ARMS) {
+      const arm = must(series.get(`${currency}-${shape}`), `the ${currency}-${shape} allocation arm`);
+      lengths[`P4-F ${currency}-${shape} in-transaction`] = arm.txnMs.length;
+      lengths[`P4-F ${currency}-${shape} over HTTP`] = arm.httpMs.length;
+    }
+    // The diagnostic series is thirty iterations by declaration, not 200, and
+    // it is a diagnostic rather than a verdict — so it is counted and named
+    // here rather than held to the budget's sample count.
+    const diagnosticSamples = beforeAnalyze === null ? 0 : beforeAnalyze.samplesMs.length;
+    console.log(
+      `\nSAMPLE CENSUS — ${JSON.stringify({ declared: SHORT_PERCENTILE_ITERATIONS, warmupDiscarded: WARMUP, lengths, beforeAnalyzeDiagnosticSamples: diagnosticSamples, reauthentications: authReport().reauthentications }, null, 1)}\n`,
+    );
+    const short = Object.entries(lengths).filter(([, n]) => n !== SHORT_PERCENTILE_ITERATIONS);
+    expect(
+      short.map(([name, n]) => `${name}: ${n}`),
+      `every measured series must carry exactly ${SHORT_PERCENTILE_ITERATIONS} samples — a percentile over fewer samples than claimed is not the claimed percentile (P4-AL-76)`,
+    ).toEqual([]);
+    expect(Object.keys(lengths).length, 'no series was counted at all, so this census was satisfied by nothing having run').toBe(
+      DECLARED_READ_SERIES + 3 + DECLARED_ALLOCATION_ARMS * 2,
+    );
+    expect(diagnosticSamples, 'the before-ANALYZE diagnostic was never taken, so the ANALYZE state of these figures is undocumented (P4-AL-74)').toBe(30);
+  });
+
   it('says plainly whether its plan claims are authoritative deployment evidence', () => {
+    requireFixture();
     const verdict = classifyPlanEvidence(environment);
     console.log(`\n${planEvidenceBanner(environment)}\n`);
     expect(verdict.authoritative || verdict.reasons.length > 0, 'a non-authoritative run must say WHY, or the label means nothing').toBe(true);

@@ -21,7 +21,7 @@
     "test:golden": "vitest run tests/golden-regression",
     "perf:baseline": "vitest run tests/perf",
     "perf:phase2:s8": "vitest run tests/performance",
-    "perf:phase4:s4": "vitest run tests/performance/receivables-s4-budgets.test.ts",
+    "perf:phase4:s4": "vitest run --reporter=verbose tests/performance/receivables-s4-budgets.test.ts",
     "check:budget-ratchet": "tsx scripts/phase4-budget-ratchet.ts",
     "plan-evidence:inventory": "tsx scripts/plan-evidence/discover-plan-claims.ts --out=docs/plan-evidence/plan-claim-inventory.json && prettier --write docs/plan-evidence/plan-claim-inventory.json",
     "plan-evidence:target": "tsx scripts/plan-evidence/target-cluster.ts",
