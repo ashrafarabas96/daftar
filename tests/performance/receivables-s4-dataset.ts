@@ -74,8 +74,11 @@
  * exists.
  */
 import { randomUUID } from 'node:crypto';
+import { existsSync, readFileSync, statfsSync } from 'node:fs';
+import { join } from 'node:path';
 import { expect } from 'vitest';
-import { ownerPool } from '../helpers/test-app';
+import { PG_DIR, PG_PORT, ownerPool } from '../helpers/test-app';
+import { reauthenticate } from '../helpers/inventory-commands';
 import {
   baseCurrency,
   newCustomer,
@@ -184,7 +187,145 @@ const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout
  * request in its own trailing minute to age out, which can only ever be at
  * least as long as the product requires.
  */
+/**
+ * ── THE BEARER, KEPT FRESH ACROSS A SEED LONGER THAN THE TOKEN'S LIFE ─────
+ *
+ * MEASURED, not assumed: the first acceptance-scale run of this fixture ran
+ * for 902 seconds and then died in its `beforeAll` with
+ * `{"error":{"code":"UNAUTHENTICATED","message":"Authentication required"}}`
+ * on a sale — HTTP 401 against an assertion that wanted < 300. 902 s is the
+ * 900 s of `TokenService.accessTtlSeconds`
+ * (`apps/api/src/modules/auth/tokens.ts:60`) plus the request that met it.
+ *
+ * The cause is not the pacing and not the product. `asMember` builds a static
+ * `Authorization: Bearer …` from the token minted at registration, and a seed
+ * paced against the product's own 300-per-60-s throttle necessarily runs well
+ * past fifteen minutes. So the token expires MID-SEED, and the suite reported
+ * one failed hook, seventeen skipped tests and — through a piped wrapper —
+ * an exit code of 0.
+ *
+ * What is done about it, and what is NOT. The fixture RE-AUTHENTICATES
+ * through the product's own `POST /v1/auth/login`, which
+ * `tests/helpers/inventory-commands.ts` `reauthenticate` drives with the
+ * password `registerActor` registered. The TTL is read from the login
+ * response's own `expiresInSeconds` rather than copied from the product's
+ * source, and the re-mint happens when `MARGIN_FRACTION` of that lifetime is
+ * left — a margin, not a race with the expiry. NOT done: the TTL is not
+ * raised, the auth guard is not disabled, no token is signed outside the
+ * product's own route, the throttle is not bypassed, and no 401 is retried
+ * into a sample.
+ *
+ * WHERE IT HAPPENS MATTERS AS MUCH AS THAT IT HAPPENS. The check is the first
+ * thing `pace()` does, and `pace()` is called before EVERY request this
+ * fixture makes and never inside a measured span (`measure`'s `before`, and
+ * `allocate` before its spy and its clock). So a re-authentication can no
+ * more reach a millisecond figure than a pacing wait can, and no call site can
+ * forget it: a request that is not paced is a request that will meet the
+ * limiter long before it meets the TTL.
+ */
+export const AUTH = {
+  /**
+   * Re-mint once this fraction of the stated lifetime remains. A third of 900 s
+   * is a 300-second margin and a re-mint about every ten minutes — far enough
+   * from the expiry that a slow request cannot straddle it.
+   */
+  marginFraction: 1 / 3,
+  /**
+   * A FLOOR on the interval between two re-authentications, so a defect in the
+   * arithmetic above can never become a tight login loop against
+   * `LOGIN_IP_MAX_ATTEMPTS = 30` per `LOGIN_WINDOW_SECONDS = 300`
+   * (`apps/api/src/modules/auth/auth.service.ts`). A few re-authentications
+   * over half an hour is fine; a loop is not, and this fixture fails loudly
+   * rather than discovering the login limiter the way it discovered the route
+   * limiter.
+   */
+  minIntervalMs: 60_000,
+} as const;
+
+interface AuthKeeper {
+  readonly world: SettlementWorld;
+  /** The product's own stated lifetime of the live token, in seconds. */
+  ttlSeconds: number;
+  mintedAtMs: number;
+  reauthentications: number;
+  /** Every re-mint's offset from the keeper's install, in seconds: the audit trail. */
+  readonly atSeconds: number[];
+}
+
+let keeper: AuthKeeper | null = null;
+let installedAtMs = 0;
+
+/**
+ * Take over `w`'s authentication for the life of the fixture.
+ *
+ * The FIRST login happens here, so the mint instant and the lifetime are both
+ * known facts rather than a guess about when `registerActor` ran.
+ */
+export async function installAuthKeeper(w: SettlementWorld): Promise<void> {
+  const { expiresInSeconds } = await reauthenticate(w.t, w.owner, w.headers);
+  installedAtMs = Date.now();
+  keeper = { world: w, ttlSeconds: expiresInSeconds, mintedAtMs: installedAtMs, reauthentications: 0, atSeconds: [] };
+}
+
+/**
+ * Re-mint if the live bearer is inside its margin. Returns whether it did.
+ *
+ * Called by `pace()` and therefore outside every measured span. A fixture with
+ * no keeper installed is left alone: the short suites that share these helpers
+ * finish inside the TTL and have no business logging in again.
+ */
+export async function ensureFreshAuth(): Promise<boolean> {
+  const k = keeper;
+  if (k === null) return false;
+  const now = Date.now();
+  const marginMs = k.ttlSeconds * 1000 * AUTH.marginFraction;
+  if (now - k.mintedAtMs < k.ttlSeconds * 1000 - marginMs) return false;
+  const sinceLast = now - k.mintedAtMs;
+  if (sinceLast < AUTH.minIntervalMs)
+    throw new Error(
+      `the fixture tried to re-authenticate ${sinceLast} ms after the last mint, under the ${AUTH.minIntervalMs} ms floor — ` +
+        `that is a login loop against LOGIN_IP_MAX_ATTEMPTS, not a refresh, and the arithmetic in AUTH is wrong`,
+    );
+  const { expiresInSeconds } = await reauthenticate(k.world.t, k.world.owner, k.world.headers);
+  k.ttlSeconds = expiresInSeconds;
+  k.mintedAtMs = Date.now();
+  k.reauthentications += 1;
+  k.atSeconds.push(Number(((k.mintedAtMs - installedAtMs) / 1000).toFixed(1)));
+  return true;
+}
+
+/**
+ * The re-authentication count and when each happened: part of the load
+ * context every figure is reported with (`P4-AL-76`), because a reader has to
+ * be able to see that the run outlived its token and that the re-mints
+ * happened where they could not reach a number.
+ */
+export function authReport(): {
+  readonly installed: boolean;
+  readonly accessTtlSeconds: number;
+  readonly marginSeconds: number;
+  readonly reauthentications: number;
+  readonly atSeconds: readonly number[];
+  readonly route: string;
+  readonly note: string;
+} {
+  const k = keeper;
+  return {
+    installed: k !== null,
+    accessTtlSeconds: k?.ttlSeconds ?? 0,
+    marginSeconds: Math.round((k?.ttlSeconds ?? 0) * AUTH.marginFraction),
+    reauthentications: k?.reauthentications ?? 0,
+    atSeconds: k === null ? [] : [...k.atSeconds],
+    route: "POST /v1/auth/login (the product's own route; the TTL is read from its response, never raised)",
+    note: 'every re-authentication happens inside pace(), which is never inside a measured span',
+  };
+}
+
 export async function pace(routeKey: string): Promise<number> {
+  // The bearer first, THEN the window. Both are things that must happen before
+  // a request and must never happen inside a measured span; `pace()` is the
+  // one place this fixture guarantees both of those properties at once.
+  await ensureFreshAuth();
   const state = paceStates.get(routeKey) ?? { at: [], requests: 0, waitedMs: 0 };
   paceStates.set(routeKey, state);
   const ceiling = THROTTLE.limit - THROTTLE.headroom;
@@ -198,6 +339,13 @@ export async function pace(routeKey: string): Promise<number> {
     await sleep(restMs);
     waited += restMs;
   }
+  // AND AGAIN AFTER THE WAIT. A pacing wait can be most of a minute, and the
+  // margin is a margin rather than a race precisely because nothing between
+  // the check and the request is allowed to eat it. Re-minting here costs a
+  // timestamp comparison on every request and a login on none but the few
+  // that need one — and the login is a different route handler, so it does
+  // not spend this handler's window.
+  await ensureFreshAuth();
   state.at.push(Date.now());
   state.requests += 1;
   state.waitedMs += waited;
@@ -552,6 +700,133 @@ export async function realizedVolume(businessId: string, d: FatTailDataset): Pro
     businessAllocations: await one(`SELECT count(*)::text AS n FROM payment_allocations WHERE business_id = $1`, [businessId]),
   };
 }
+
+/**
+ * ── WHICH SERVER THE FIGURES WERE TAKEN ON, MEASURED AND NOT ASSUMED ──────
+ *
+ * `tests/helpers/plan-evidence-env.ts` already reads every fact ABOUT the
+ * server out of the connection that is about to be EXPLAINed — version,
+ * `datcollate`, `datctype`, locale provider, ICU locale, encoding — and
+ * `classifyPlanEvidence` already decides from those whether the run may be
+ * called authoritative. None of that is duplicated here and none of it is
+ * inferred.
+ *
+ * What that module cannot know is the one fact that is a property of the
+ * HARNESS rather than of the server: whether this run started its own
+ * embedded PostgreSQL or reused one that was already listening.
+ * `startOrReuse` pings first and returns the moment a usable server answers,
+ * so the same code path serves both, and a record that said "PG_DIR=…"
+ * beside a figure taken on somebody else's server would be a lie by
+ * implication.
+ *
+ * So the provenance is DERIVED BY A STATED RULE from two measurements a
+ * reader can repeat: the embedded distribution keeps its major in
+ * `PG_DIR/PG_VERSION`, and the connected server reports its own. The run is
+ * EMBEDDED only when that data directory exists and its major is the major
+ * that answered. Anything else — no data directory, or a different major on
+ * the wire — is an external server, and the rule is recorded with the verdict
+ * so the derivation is auditable rather than trusted.
+ */
+export interface ServerProvenance {
+  readonly kind: 'external' | 'embedded';
+  readonly why: string;
+  readonly port: number;
+  /** `PG_DIR` exactly as the environment gave it, or null when none was passed. */
+  readonly pgDirEnv: string | null;
+  /** The embedded data directory the harness would have used, and what it holds. */
+  readonly embeddedDataDirectory: string;
+  readonly embeddedDataDirectoryMajor: number | null;
+  readonly connectedMajor: number;
+}
+
+export function serverProvenance(connectedMajor: number): ServerProvenance {
+  const versionFile = join(PG_DIR, 'PG_VERSION');
+  let embeddedMajor: number | null = null;
+  if (existsSync(versionFile)) {
+    const raw = Number.parseInt(readFileSync(versionFile, 'utf8').trim(), 10);
+    embeddedMajor = Number.isInteger(raw) ? raw : null;
+  }
+  const embedded = embeddedMajor !== null && embeddedMajor === connectedMajor;
+  return {
+    kind: embedded ? 'embedded' : 'external',
+    why: embedded
+      ? `the embedded data directory ${PG_DIR} holds major ${embeddedMajor as number}, which is the major that answered on port ${PG_PORT}`
+      : embeddedMajor === null
+        ? `no embedded data directory exists at ${PG_DIR}, so nothing this harness starts could have answered on port ${PG_PORT}: the server on it is external`
+        : `the embedded data directory ${PG_DIR} holds major ${embeddedMajor}, but major ${connectedMajor} answered on port ${PG_PORT}: the server measured is external`,
+    port: PG_PORT,
+    pgDirEnv: process.env['PG_DIR'] ?? null,
+    embeddedDataDirectory: PG_DIR,
+    embeddedDataDirectoryMajor: embeddedMajor,
+    connectedMajor,
+  };
+}
+
+/**
+ * HOW MUCH ROOM THE RUN HAD, on the filesystem that actually holds the data.
+ *
+ * The server's own `data_directory` is asked of the server rather than guessed
+ * from `PG_DIR`, which is wrong by construction for an external one. A
+ * non-superuser connection cannot read that setting, so the field degrades to
+ * null and says so; the process's own temporary filesystem is recorded either
+ * way, because that is where the harness writes.
+ */
+export interface FreeDisk {
+  readonly dataDirectory: string | null;
+  readonly dataDirectoryFreeBytes: number | null;
+  readonly tmpFreeBytes: number;
+  readonly note: string;
+}
+
+export async function freeDisk(): Promise<FreeDisk> {
+  const freeOf = (path: string): number | null => {
+    try {
+      const fs = statfsSync(path);
+      return Number(fs.bavail) * Number(fs.bsize);
+    } catch {
+      return null;
+    }
+  };
+  let dataDirectory: string | null = null;
+  try {
+    const r = await ownerPool().query<{ dir: string }>(`SELECT current_setting('data_directory') AS dir`);
+    dataDirectory = r.rows[0]?.dir ?? null;
+  } catch {
+    dataDirectory = null;
+  }
+  return {
+    dataDirectory,
+    dataDirectoryFreeBytes: dataDirectory === null ? null : freeOf(dataDirectory),
+    tmpFreeBytes: freeOf('/tmp') ?? 0,
+    note:
+      dataDirectory === null
+        ? 'the connection may not read data_directory, so only the harness filesystem is recorded'
+        : 'bavail x bsize on the filesystem holding the server data directory, read before the measurement',
+  };
+}
+
+/**
+ * THE DEPLOYMENT TARGET'S COLLATION SPELLING, RECORDED BESIDE THE RUN'S.
+ *
+ * `TARGET_PLAN_EVIDENCE_CONTRACT` gates on the PROPERTY — "not byte order" —
+ * and not on a literal, for the reason `plan-evidence-env.ts` sets out at
+ * length: PostgreSQL stores `datcollate` exactly as given and normalises
+ * nothing, so a contract that string-matched one spelling would reject the
+ * very environment it describes. A run can therefore be authoritative on a
+ * collation spelled differently from CI's, and that is correct rather than a
+ * loophole.
+ *
+ * It is also the kind of thing a reader should never have to infer from two
+ * strings in different parts of a document. So the spelling CI's service
+ * reports is recorded next to this run's, with the property that is actually
+ * load-bearing, and whether the two spellings are identical is stated rather
+ * than left to be noticed.
+ */
+export const CI_SERVICE_COLLATION = {
+  spelling: 'en_US.utf8',
+  reference: 'image: postgres:16 with LANG=en_US.utf8, .github/workflows/ci.yml',
+  byteOrder: false,
+} as const;
 
 /**
  * EVERY RELATION THE MEASURED READS TOUCH, WITH WHEN ITS STATISTICS WERE
