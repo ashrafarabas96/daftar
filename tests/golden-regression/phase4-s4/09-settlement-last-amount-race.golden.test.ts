@@ -267,9 +267,24 @@ describe('P4-S4 C-1 two concurrent settlements of the last remaining amount', ()
     // list someone maintained.
     //
     // The relations deliberately NOT constrained here are the record-keeping
-    // ones: `audit_events` and `outbox_events` are written for a REFUSED
-    // command too (P4-AL-48), in the refused command's own transaction, so a
-    // row from the loser there is the audit working.
+    // ones: `audit_events` and `outbox_events` are append-only, so a row from
+    // either racer is the record working rather than a count this law owes
+    // anything about.
+    //
+    // This comment used to say they are written for a REFUSED command too, in
+    // the refused command's own transaction. MEASURED, that is false: all 33
+    // refusals in `customer_collect_payment` are `RAISE EXCEPTION`, and the
+    // audit and outbox inserts are the routine's LAST step, after every one of
+    // them — a refused command writes neither row, and a `RAISE` would roll
+    // back an earlier one anyway. P4-AL-48 nonetheless requires a refusal to
+    // be audited as heavily as a success, so the lock and the accepted
+    // transaction model are in contradiction for refusals; it is recorded as
+    // an open contract item and is NOT discharged by this suite. The law
+    // below never depended on the false half: these two tables are outside
+    // `exempt`, so they face only the monotonicity claim, which an append-only
+    // table satisfies either way. A false CLAIM, never a false GREEN — but a
+    // reviewer who read it concluded P4-AL-48 was satisfied, which is how the
+    // gap survived.
     //
     // THE JTI REGISTRIES ARE NOT UNDER THIS LAW EITHER, and that is a finding
     // the P4-S2 estate already paid for. `census()` counts them with NO

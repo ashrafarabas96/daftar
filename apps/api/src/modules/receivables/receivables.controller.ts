@@ -25,8 +25,11 @@ import {
  * accepted `SupplierSettlementsController` and `SalesController` hold none:
  *
  * - the route guard requires its one permission BEFORE the body is parsed —
- *   `payments.collect` for both commands and the payment read (OQ-5),
- *   `receivables.view` for the credit list. `phase4ReceivablesPermission`
+ *   `payments.collect` for both COMMANDS, and `receivables.view` for both
+ *   READS, the payment read included. This header used to name
+ *   `payments.collect` for the payment read as well, which the route has not
+ *   done since the reasoning in `getPayment`'s own comment below: a read is
+ *   not gated on a write key. `phase4ReceivablesPermission`
  *   narrows the decorator to the two registered keys, so a typo or an invented
  *   thirteenth key does not compile;
  * - the service then authorizes the OPERATION CODE through
