@@ -775,7 +775,27 @@ $pick$;
       const body = phase4RoutineBody(REPO, n);
       return body !== null && family.some((r) => new RegExp(`\\b${r}\\s*\\(`, 'i').test(body));
     });
-    expect(dependent, 'the routines that read the receivable without saying so in their name').toEqual(['customer_apply_credit', 'customer_collect_payment']);
+    // NOT an inventory, and the correction is measured rather than argued:
+    // a literal list here is a closure rule a later slice must append to
+    // (P4-AL-88), and `0084` proved it the first time it landed —
+    // `customer_open_invoices_page` joined this set the day it was written,
+    // and the exact-list assertion turned red on a CORRECT widening of the
+    // law's reach. So the law is stated as a property instead: the two
+    // command paths the widening was written for are still subjects, and
+    // every member of the set earns its place by the two things that put it
+    // there.
+    for (const name of ['customer_apply_credit', 'customer_collect_payment'])
+      expect(dependent, `${name} reads the receivable through a call, so it must still be a subject of this law`).toContain(name);
+    expect(dependent.length, 'the dependency discovery found no subject at all, so it is no wider than the name match').toBeGreaterThan(0);
+    for (const name of dependent) {
+      expect(RECEIVABLE_READER_VOCABULARY.test(name), `${name} is in the set BY DEPENDENCY, so its name must not have matched the vocabulary`).toBe(false);
+      const body = phase4RoutineBody(REPO, name);
+      expect(body, `${name} has a body this law can read`).not.toBeNull();
+      expect(
+        family.some((r) => new RegExp(`\\b${r}\\s*\\(`, 'i').test(body ?? '')),
+        `${name} is a subject only because it calls a family member, and it must genuinely do so`,
+      ).toBe(true);
+    }
     // Every Phase 4 routine's body is readable, which is what makes the
     // "unclassifiable subject" branch a report of an ANOMALY and not noise.
     expect(
