@@ -156,10 +156,12 @@ import {
   FOREIGN_RATE,
   MEDIAN,
   ROUTE,
+  CI_SERVICE_COLLATION,
   SCALE,
   THROTTLE,
   authReport,
   datasetSizeBytes,
+  freeDisk,
   installAuthKeeper,
   pace,
   pacedSellOnCredit,
@@ -170,8 +172,11 @@ import {
   realizedVolume,
   relationSizes,
   seedFatTailArm,
+  serverProvenance,
   type FatTailDataset,
+  type FreeDisk,
   type RealizedVolume,
+  type ServerProvenance,
 } from './receivables-s4-dataset';
 
 /**
@@ -241,6 +246,9 @@ let stats: Record<string, { rows: number; analyzed: string | null }>;
 let environment: PlanEvidenceEnvironment;
 let sizeBytes = 0;
 let sizes: Record<string, number> = {};
+/** Which server answered, and how much room it had: read BEFORE the figures (TL-P4-S3-R4). */
+let provenance: ServerProvenance | null = null;
+let disk: FreeDisk | null = null;
 /** The fat-tail read, measured BEFORE the seed's ANALYZE. Printed, never asserted (P4-AL-74). */
 let beforeAnalyze: Measured | null = null;
 
@@ -782,6 +790,13 @@ async function buildFixture(): Promise<void> {
   await stateFxRate(w, FOREIGN_CURRENCY, dataset.baseCurrencyCode, FOREIGN_RATE, `${w.day}T00:00:02Z`);
 
   environment = await readPlanEvidenceEnvironment(async <R>(sql: string) => ({ rows: (await ownerPool().query(sql)).rows as R[] }));
+  // WHICH server, and how much room it had — both before a single figure is
+  // taken. The free space is read first because a measurement that ran the
+  // filesystem out is a measurement about the filesystem, and a reader has to
+  // be able to rule that out afterwards rather than wonder.
+  provenance = serverProvenance(environment.serverMajor);
+  disk = await freeDisk();
+  console.log(`\n[P4-S4 budgets] the server these figures are taken on — ${JSON.stringify({ provenance, freeDisk: disk }, null, 1)}\n`);
 
   // P4-AL-74 in one measurement: the SAME read, on the SAME rows, with and
   // without planner statistics. Printed, never asserted — it exists so the
@@ -950,11 +965,27 @@ function performanceRecord(): Record<string, unknown> {
     serverVersion: environment.serverVersion,
     serverVersionNum: environment.serverVersionNum,
     serverMajor: environment.serverMajor,
+    datname: environment.datname,
     datcollate: environment.datcollate,
     datctype: environment.datctype,
     localeProvider: environment.localeProvider,
+    icuLocale: environment.icuLocale,
     collationIsByteOrder: environment.collationIsByteOrder,
     encoding: environment.encoding,
+    // WHICH server answered, by a stated rule over two measurements rather
+    // than by assumption, and how much room it had.
+    server: provenance,
+    freeDisk: disk,
+    // The deployment target's own collation SPELLING beside this run's, with
+    // the property that is actually load-bearing, so a reader is never left to
+    // compare two strings in two places (`plan-evidence-env.ts`).
+    deploymentCollation: {
+      ciService: CI_SERVICE_COLLATION,
+      thisRun: { spelling: environment.datcollate, byteOrder: environment.collationIsByteOrder },
+      spellingsIdentical: environment.datcollate === CI_SERVICE_COLLATION.spelling,
+      propertyIdentical: environment.collationIsByteOrder === CI_SERVICE_COLLATION.byteOrder,
+      note: 'TARGET_PLAN_EVIDENCE_CONTRACT gates on the property, never the spelling; the spelling is recorded, not matched',
+    },
     datasetTier: datasetTier(),
     databaseSizeBytes: sizeBytes,
     relationSizes: sizes,

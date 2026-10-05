@@ -74,8 +74,10 @@
  * exists.
  */
 import { randomUUID } from 'node:crypto';
+import { existsSync, readFileSync, statfsSync } from 'node:fs';
+import { join } from 'node:path';
 import { expect } from 'vitest';
-import { ownerPool } from '../helpers/test-app';
+import { PG_DIR, PG_PORT, ownerPool } from '../helpers/test-app';
 import { reauthenticate } from '../helpers/inventory-commands';
 import {
   baseCurrency,
@@ -698,6 +700,133 @@ export async function realizedVolume(businessId: string, d: FatTailDataset): Pro
     businessAllocations: await one(`SELECT count(*)::text AS n FROM payment_allocations WHERE business_id = $1`, [businessId]),
   };
 }
+
+/**
+ * ── WHICH SERVER THE FIGURES WERE TAKEN ON, MEASURED AND NOT ASSUMED ──────
+ *
+ * `tests/helpers/plan-evidence-env.ts` already reads every fact ABOUT the
+ * server out of the connection that is about to be EXPLAINed — version,
+ * `datcollate`, `datctype`, locale provider, ICU locale, encoding — and
+ * `classifyPlanEvidence` already decides from those whether the run may be
+ * called authoritative. None of that is duplicated here and none of it is
+ * inferred.
+ *
+ * What that module cannot know is the one fact that is a property of the
+ * HARNESS rather than of the server: whether this run started its own
+ * embedded PostgreSQL or reused one that was already listening.
+ * `startOrReuse` pings first and returns the moment a usable server answers,
+ * so the same code path serves both, and a record that said "PG_DIR=…"
+ * beside a figure taken on somebody else's server would be a lie by
+ * implication.
+ *
+ * So the provenance is DERIVED BY A STATED RULE from two measurements a
+ * reader can repeat: the embedded distribution keeps its major in
+ * `PG_DIR/PG_VERSION`, and the connected server reports its own. The run is
+ * EMBEDDED only when that data directory exists and its major is the major
+ * that answered. Anything else — no data directory, or a different major on
+ * the wire — is an external server, and the rule is recorded with the verdict
+ * so the derivation is auditable rather than trusted.
+ */
+export interface ServerProvenance {
+  readonly kind: 'external' | 'embedded';
+  readonly why: string;
+  readonly port: number;
+  /** `PG_DIR` exactly as the environment gave it, or null when none was passed. */
+  readonly pgDirEnv: string | null;
+  /** The embedded data directory the harness would have used, and what it holds. */
+  readonly embeddedDataDirectory: string;
+  readonly embeddedDataDirectoryMajor: number | null;
+  readonly connectedMajor: number;
+}
+
+export function serverProvenance(connectedMajor: number): ServerProvenance {
+  const versionFile = join(PG_DIR, 'PG_VERSION');
+  let embeddedMajor: number | null = null;
+  if (existsSync(versionFile)) {
+    const raw = Number.parseInt(readFileSync(versionFile, 'utf8').trim(), 10);
+    embeddedMajor = Number.isInteger(raw) ? raw : null;
+  }
+  const embedded = embeddedMajor !== null && embeddedMajor === connectedMajor;
+  return {
+    kind: embedded ? 'embedded' : 'external',
+    why: embedded
+      ? `the embedded data directory ${PG_DIR} holds major ${embeddedMajor as number}, which is the major that answered on port ${PG_PORT}`
+      : embeddedMajor === null
+        ? `no embedded data directory exists at ${PG_DIR}, so nothing this harness starts could have answered on port ${PG_PORT}: the server on it is external`
+        : `the embedded data directory ${PG_DIR} holds major ${embeddedMajor}, but major ${connectedMajor} answered on port ${PG_PORT}: the server measured is external`,
+    port: PG_PORT,
+    pgDirEnv: process.env['PG_DIR'] ?? null,
+    embeddedDataDirectory: PG_DIR,
+    embeddedDataDirectoryMajor: embeddedMajor,
+    connectedMajor,
+  };
+}
+
+/**
+ * HOW MUCH ROOM THE RUN HAD, on the filesystem that actually holds the data.
+ *
+ * The server's own `data_directory` is asked of the server rather than guessed
+ * from `PG_DIR`, which is wrong by construction for an external one. A
+ * non-superuser connection cannot read that setting, so the field degrades to
+ * null and says so; the process's own temporary filesystem is recorded either
+ * way, because that is where the harness writes.
+ */
+export interface FreeDisk {
+  readonly dataDirectory: string | null;
+  readonly dataDirectoryFreeBytes: number | null;
+  readonly tmpFreeBytes: number;
+  readonly note: string;
+}
+
+export async function freeDisk(): Promise<FreeDisk> {
+  const freeOf = (path: string): number | null => {
+    try {
+      const fs = statfsSync(path);
+      return Number(fs.bavail) * Number(fs.bsize);
+    } catch {
+      return null;
+    }
+  };
+  let dataDirectory: string | null = null;
+  try {
+    const r = await ownerPool().query<{ dir: string }>(`SELECT current_setting('data_directory') AS dir`);
+    dataDirectory = r.rows[0]?.dir ?? null;
+  } catch {
+    dataDirectory = null;
+  }
+  return {
+    dataDirectory,
+    dataDirectoryFreeBytes: dataDirectory === null ? null : freeOf(dataDirectory),
+    tmpFreeBytes: freeOf('/tmp') ?? 0,
+    note:
+      dataDirectory === null
+        ? 'the connection may not read data_directory, so only the harness filesystem is recorded'
+        : 'bavail x bsize on the filesystem holding the server data directory, read before the measurement',
+  };
+}
+
+/**
+ * THE DEPLOYMENT TARGET'S COLLATION SPELLING, RECORDED BESIDE THE RUN'S.
+ *
+ * `TARGET_PLAN_EVIDENCE_CONTRACT` gates on the PROPERTY — "not byte order" —
+ * and not on a literal, for the reason `plan-evidence-env.ts` sets out at
+ * length: PostgreSQL stores `datcollate` exactly as given and normalises
+ * nothing, so a contract that string-matched one spelling would reject the
+ * very environment it describes. A run can therefore be authoritative on a
+ * collation spelled differently from CI's, and that is correct rather than a
+ * loophole.
+ *
+ * It is also the kind of thing a reader should never have to infer from two
+ * strings in different parts of a document. So the spelling CI's service
+ * reports is recorded next to this run's, with the property that is actually
+ * load-bearing, and whether the two spellings are identical is stated rather
+ * than left to be noticed.
+ */
+export const CI_SERVICE_COLLATION = {
+  spelling: 'en_US.utf8',
+  reference: 'image: postgres:16 with LANG=en_US.utf8, .github/workflows/ci.yml',
+  byteOrder: false,
+} as const;
 
 /**
  * EVERY RELATION THE MEASURED READS TOUCH, WITH WHEN ITS STATISTICS WERE
