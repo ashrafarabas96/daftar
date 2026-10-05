@@ -132,6 +132,7 @@
  */
 import { cpus, freemem, loadavg, totalmem } from 'node:os';
 import { randomUUID } from 'node:crypto';
+import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { Response } from 'supertest';
 import { ensurePostgres, ownerPool, resetData } from '../helpers/test-app';
@@ -150,6 +151,7 @@ import { R10, allocationFigures, collectPayment, rateToR10, type AllocationInput
 import { Database, type Scope } from '../../apps/api/src/infra/database';
 import { distribution, quantile, type Distribution } from './percentile';
 import { ACCEPTED, RATIOS, effectiveCeilingMs } from '../../scripts/phase4-budget-ratchet';
+import { phase4RoutineBody, phase4Sql } from '../../scripts/phase4-s1-gate';
 import {
   FAT_TAIL,
   FOREIGN_CURRENCY,
@@ -408,6 +410,57 @@ const READS = {
   aging: (customerId: string, asOf: string): string => `/v1/customers/${customerId}/receivable/aging?asOf=${asOf}&bucketDays=30,60,90`,
   openInvoices: (customerId: string, asOf: string): string => `/v1/customers/${customerId}/open-invoices?asOf=${asOf}&limit=50`,
 } as const;
+
+/**
+ * WHO IS A READER OF RECORD, DISCOVERED BY DEPENDENCY RATHER THAN BY NAME.
+ *
+ * The three definitions of the AR truth are the base of the set. They are not
+ * the whole of it: `0084` moved the open-invoice page behind
+ * `customer_open_invoices_page`, which holds no arithmetic of its own and
+ * derives every figure it returns by CALLING `invoice_outstanding`'s array
+ * form. A gate that matched the three names alone read that composition as a
+ * read with no reader at all — the same defect the S1 gate's refund law had,
+ * where discovery by name missed every routine reaching the protected data
+ * through a call.
+ *
+ * So the set is the transitive closure over the Phase 4 DDL: a routine whose
+ * body calls a reader of record IS one. Nothing is added by hand and nothing
+ * has to be appended when the next composition lands (P4-AL-88: a list a later
+ * pass must append to is a closure rule, not an invariant). P4-AL-07 is
+ * untouched — the `sum(` assertion below still refuses a second copy of the
+ * arithmetic in the module's own statement.
+ */
+const BASE_READERS_OF_RECORD = ['customer_ar_outstanding', 'customer_ar_aging', 'invoice_outstanding'] as const;
+
+function readersOfRecord(root: string): string[] {
+  const sql = phase4Sql(root);
+  const defined = [
+    ...new Set([...sql.matchAll(/CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+(?:public\.)?([a-z_][a-z0-9_]*)\s*\(/gi)].map((m) => (m[1] ?? '').toLowerCase())),
+  ];
+  const known = new Set<string>(BASE_READERS_OF_RECORD);
+  for (const base of BASE_READERS_OF_RECORD)
+    if (!defined.includes(base))
+      throw new Error(`${base} is a declared reader of record that the Phase 4 DDL does not define — the gate is reading the wrong tree, not passing.`);
+  // Fixpoint, so a wrapper over a wrapper is reached too.
+  for (;;) {
+    let grew = false;
+    for (const name of defined) {
+      if (known.has(name)) continue;
+      const body = phase4RoutineBody(root, name);
+      if (body === null) continue; // unreadable bodies are the S1 gate's subject, not this one's
+      if ([...known].some((r) => new RegExp(`\\b${r}\\s*\\(`, 'i').test(body))) {
+        known.add(name);
+        grew = true;
+      }
+    }
+    if (!grew) break;
+  }
+  return [...known].sort();
+}
+
+const READERS_OF_RECORD = readersOfRecord(join(__dirname, '..', '..'));
+const READER_OF_RECORD_CALL = new RegExp(`\\b(?:public\\.)?(?:${READERS_OF_RECORD.join('|')})\\s*\\(`, 'i');
+const READER_OF_RECORD_CALL_G = new RegExp(`\\b(?:public\\.)?(?:${READERS_OF_RECORD.join('|')})\\([^)]*\\)`, 'gi');
 
 /** The three reads of one customer, labelled, so the fat-tail and median arms are built identically. */
 const readsOf = (customerId: string, asOf: string): readonly { readonly label: string; readonly path: string; readonly route: string }[] => [
@@ -1140,16 +1193,16 @@ describe(`P4-D — the customer receivable read (scale ${SCALE}, ${SCALE === 1 ?
     const byRead: Record<string, string[]> = {};
     for (const { label, path } of readsOf(dataset.fatCustomerId, w.day)) {
       const statements = await capture(path);
-      const money = statements.filter((c) => /customer_ar_outstanding\(|customer_ar_aging\(|invoice_outstanding\(/.test(c.text));
+      const money = statements.filter((c) => READER_OF_RECORD_CALL.test(c.text));
       byRead[label] = money.map((c) => c.text.replace(/\s+/g, ' ').slice(0, 160));
       expect(
         money.length,
-        `${label}: no statement of this read calls a reader of record. P4-AL-07: "a second copy of the arithmetic in TypeScript is a second truth with a slower failure mode."`,
+        `${label}: no statement of this read calls a reader of record. The readers of record, discovered by dependency over the Phase 4 DDL, are: ${READERS_OF_RECORD.join(', ')}. P4-AL-07: "a second copy of the arithmetic in TypeScript is a second truth with a slower failure mode."`,
       ).toBeGreaterThan(0);
       for (const c of statements) {
         // A `sum(` in the read's OWN statement would be the second copy. The
         // readers of record sum inside their own bodies, which is the point.
-        expect(/\bsum\s*\(/i.test(c.text.replace(/customer_ar_\w+\([^)]*\)/g, '')), `${label}: this read sums money itself:\n${c.text}`).toBe(false);
+        expect(/\bsum\s*\(/i.test(c.text.replace(READER_OF_RECORD_CALL_G, '')), `${label}: this read sums money itself:\n${c.text}`).toBe(false);
       }
     }
     console.log(`\nREADERS OF RECORD — P4-D\n${JSON.stringify(byRead, null, 1)}\n`);
