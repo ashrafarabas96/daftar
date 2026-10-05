@@ -37,10 +37,12 @@
  *     `accounts_receivable` (contract OQ-9);
  *   — the two refusals the deferred verifier owes are
  *     `invoice_settlement.customer_mismatch` and
- *     `invoice_settlement.walkin_not_settleable`. Since `0082` widened both
- *     reducer edges onto `invoices_customer_uq` the row is refused with
- *     `23503` before either arm is reached, so the verifier still OWES them
- *     as defence in depth and is no longer the mechanism;
+ *     `invoice_settlement.walkin_not_settleable`. Since `0082` gave each
+ *     reducer a three-column edge onto `invoices_customer_uq` — added BESIDE
+ *     `0081`'s two-column edge, never in place of it, because a composite seam
+ *     is never dropped — the row is refused with `23503` before either arm is
+ *     reached, so the verifier still OWES them as defence in depth and is no
+ *     longer the mechanism;
  *   — the command is idempotent on a CALLER-SUPPLIED document UUID plus a
  *     stored `intent_sha256` read before any write (P4-AL-30), so the body
  *     carries the payment's own id;
@@ -143,7 +145,7 @@ export const SYSTEM_KEYS = {
   fxLoss: 'fx_loss',
 } as const;
 
-/** The two refusals the deferred verifier owes; since `0082` they sit behind the reducers' three-column edge. */
+/** The two refusals the deferred verifier owes; since `0082` they sit behind the three-column edge each reducer gained beside its narrow one. */
 /**
  * THE TWO VOCABULARIES OF ONE LAW, AND WHY BOTH ARE ASSERTED.
  *

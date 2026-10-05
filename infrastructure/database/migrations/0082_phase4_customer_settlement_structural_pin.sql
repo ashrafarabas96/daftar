@@ -1,9 +1,10 @@
 -- 0082_phase4_customer_settlement_structural_pin.sql
 -- Phase 4 / P4-S4 CORRECTIVE — THE STRUCTURAL `(business_id, invoice_id,
 -- customer_id)` PIN: the candidate key `0081`'s R-84 declined to add, and the
--- widening of the two reducer edges onto it, so that attaching one customer's
--- money to another customer's invoice stops being REFUSED and becomes
--- UNREPRESENTABLE.
+-- three-column edge each settlement reducer gains onto it — ADDED BESIDE the
+-- two-column edge `0081` declared, never in place of it — so that attaching
+-- one customer's money to another customer's invoice stops being REFUSED and
+-- becomes UNREPRESENTABLE.
 --
 -- Migrations 0000-0079 are FROZEN and untouched. `0080` and `0081` are
 -- CANDIDATE and are BYTE-FOR-BYTE UNTOUCHED: this file is append-only and
@@ -26,7 +27,7 @@
 -- earlier slice's table, and says the widening waits on "A TECH LEAD RULING ON
 -- SLICE OWNERSHIP". The Tech Lead's §23 list is that ruling, and it asks for
 -- the pin in the form the departure named: a composite key/FK shape, not
--- another trigger check. This file is that widening and nothing else.
+-- another trigger check. This file is that pin and nothing else.
 --
 -- ── R-94 THE OBSTACLE THAT IS NOT ONE: NULL `customer_id` ────────────────
 --
@@ -87,7 +88,7 @@
 -- name and NOT a `foreign_key_violation`, because asserting the SQLSTATE would
 -- be asserting a mechanism that does not run.
 --
--- What the widened edge adds on the parent side is therefore a SECOND,
+-- What the three-column edge adds on the parent side is therefore a SECOND,
 -- INDEPENDENT line behind a guard in the frozen prefix, and the difference is
 -- the usual one: a guard is a BODY, which a later migration can replace, while
 -- an edge is a SHAPE, which cannot be satisfied. `customer_id` is now part of
@@ -153,16 +154,44 @@ COMMENT ON CONSTRAINT invoices_customer_uq ON invoices IS
   'P4-S4 corrective (0082, R-94). The non-partial candidate key the two settlement reducers pin their customer against, in the shape and with the standing of 0067:274: it contains the primary key (business_id, id), so it is unique whatever customer_id holds and validates on any data, walk-in rows included. It exists to be a FOREIGN KEY TARGET and for no other reason; a walk-in invoice''s NULL customer_id does not collide with another''s, because a unique index treats NULLs as distinct.';
 
 -- ─────────────────────────────────────────────────────────────────────────
--- 2. The two reducer edges, widened onto that key.
+-- 2. The three-column edge, ADDED BESIDE each narrow one. PURELY ADDITIVE:
+--    nothing here drops a constraint.
 --
---    Each narrow edge is dropped and re-added under THE SAME CONSTRAINT NAME,
---    so every catalogue reader that names `payment_allocations_invoice_fk` or
---    `customer_credit_applications_invoice_fk` — `0081`'s own end-state
---    assertion, the suites, the gate — keeps finding one invoice edge per
---    reducer, now the three-column one. Adding a second, wider edge beside the
---    narrow one would leave two overlapping constraints and two per-row checks
---    saying the same thing, with the weaker one still the name a reader finds
---    first.
+--    THE FIRST DRAFT OF THIS FILE DROPPED EACH NARROW EDGE AND RE-ADDED IT
+--    THREE COLUMNS WIDE UNDER THE SAME NAME, so that every catalogue reader
+--    naming `payment_allocations_invoice_fk` or
+--    `customer_credit_applications_invoice_fk` would keep finding exactly one
+--    invoice edge per reducer. That is a violation of an inherited rule this
+--    phase accepted and did not weaken: P2-S8's rule, enforced as
+--    `compositeFkProblems` in `scripts/phase4-s1-gate.ts`, is that A PHASE 4
+--    MIGRATION NEVER DROPS A COMPOSITE SEAM — not to narrow it, not to widen
+--    it, not for a heartbeat inside one transaction. A seam that is dropped
+--    and re-added is a seam that did not exist for part of a deployment, and
+--    the rule is a BLANKET TEXT rule precisely so that no author gets to
+--    argue their own drop is the harmless one. `0081` declared both narrow
+--    edges and `0081` is a candidate with green CI evidence behind it, so
+--    this file leaves both exactly as `0081` wrote them.
+--
+--    So the pin is a SECOND, INDEPENDENT edge from each reducer to the same
+--    parent, under a new name. Two foreign keys from one child to one parent
+--    are perfectly lawful and PostgreSQL checks both.
+--
+--    THE REDUNDANCY IS REAL AND IT IS THE RIGHT TRADE, and this file states
+--    it rather than hiding it: the narrow edge is strictly implied by the
+--    wide one (`(business_id, invoice_id)` is a prefix of
+--    `(business_id, invoice_id, customer_id)` and `(business_id, id)` is the
+--    primary key the wide target contains), so every row now pays one extra
+--    referential check on INSERT and one extra lookup on an invoice DELETE.
+--    That is a per-row cost measured in an index probe against a key the
+--    first edge has already pulled into cache. What it buys is literal
+--    compliance with a rule the estate enforces mechanically and the
+--    preservation of two constraints other slices' evidence was recorded
+--    against. A per-row index probe is cheaper than an exception to a
+--    structural rule, because the rule's value is that it has none.
+--
+--    A reader who wants the narrow edges gone should not get them from here:
+--    dropping them is a separate, separately-ruled act on a file that is not
+--    a corrective, and nothing in the Tech Lead's §23 ruling asks for it.
 --
 --    `ON DELETE RESTRICT` is carried over from `0081:357` and `0081:493`
 --    unchanged. The parent-side action is left at the default NO ACTION, which
@@ -184,23 +213,21 @@ COMMENT ON CONSTRAINT invoices_customer_uq ON invoices IS
 --    loudly at deployment, which is the correct outcome and the reason the
 --    constraint is not added `NOT VALID`.
 -- ─────────────────────────────────────────────────────────────────────────
-ALTER TABLE payment_allocations DROP CONSTRAINT payment_allocations_invoice_fk;
 ALTER TABLE payment_allocations
-  ADD CONSTRAINT payment_allocations_invoice_fk
+  ADD CONSTRAINT payment_allocations_invoice_customer_fk
   FOREIGN KEY (business_id, invoice_id, customer_id)
   REFERENCES invoices (business_id, id, customer_id) ON DELETE RESTRICT;
 
-COMMENT ON CONSTRAINT payment_allocations_invoice_fk ON payment_allocations IS
-  'P4-S4 corrective (0082, R-94/R-95), widening 0081:357 from (business_id, invoice_id) onto invoices_customer_uq. The customer identity pin and the walk-in law are now SHAPES, not invoice_settlement_verify arms: this row''s customer_id is NOT NULL, so all three referencing columns are non-null, so the edge is checked on every row, so an allocation of customer C against an invoice of customer D has no target and an allocation against a walk-in invoice (customer_id IS NULL) has no target either. On the parent side it is a SECOND line under invoices_lifecycle_guard() (0075:546-556), which already freezes customer_id and, being a BEFORE trigger, answers first: re-parenting and orphaning a settled invoice are refused by that guard today, and by this shape if the guard is ever replaced. See 0082 R-95.';
+COMMENT ON CONSTRAINT payment_allocations_invoice_customer_fk ON payment_allocations IS
+  'P4-S4 corrective (0082, R-94/R-95). The three-column pin, ADDED BESIDE 0081:357''s payment_allocations_invoice_fk and not in place of it: the composite seams are never dropped (P2-S8''s accepted rule, enforced by compositeFkProblems), so the narrow edge stays exactly as 0081 declared it and becomes redundant under this one — one extra referential check per row, which is the price of not making an exception to a structural rule. The customer identity pin and the walk-in law are now SHAPES, not invoice_settlement_verify arms: this row''s customer_id is NOT NULL, so all three referencing columns are non-null, so this edge is checked on every row, so an allocation of customer C against an invoice of customer D has no target and an allocation against a walk-in invoice (customer_id IS NULL) has no target either. On the parent side it is a SECOND line under invoices_lifecycle_guard() (0075:546-556), which already freezes customer_id and, being a BEFORE trigger, answers first: re-parenting and orphaning a settled invoice are refused by that guard today, and by this shape if the guard is ever replaced. See 0082 R-95.';
 
-ALTER TABLE customer_credit_applications DROP CONSTRAINT customer_credit_applications_invoice_fk;
 ALTER TABLE customer_credit_applications
-  ADD CONSTRAINT customer_credit_applications_invoice_fk
+  ADD CONSTRAINT customer_credit_applications_invoice_customer_fk
   FOREIGN KEY (business_id, invoice_id, customer_id)
   REFERENCES invoices (business_id, id, customer_id) ON DELETE RESTRICT;
 
-COMMENT ON CONSTRAINT customer_credit_applications_invoice_fk ON customer_credit_applications IS
-  'P4-S4 corrective (0082, R-94/R-95), widening 0081:493 onto invoices_customer_uq, with the same standing as the allocation edge. A law enforced on one of the two settling relations and not the other is half a law, so both widen in this one file and the assertion below quantifies over both.';
+COMMENT ON CONSTRAINT customer_credit_applications_invoice_customer_fk ON customer_credit_applications IS
+  'P4-S4 corrective (0082, R-94/R-95). The same three-column pin on the credit side, added beside 0081:493''s customer_credit_applications_invoice_fk and with the same standing as the allocation edge. A law enforced on one of the two settling relations and not the other is half a law, so both are pinned in this one file and the assertion below quantifies over both.';
 
 -- ─────────────────────────────────────────────────────────────────────────
 -- 3. The END-STATE ASSERTION, in the shape of `0081`'s §(3) and inverted.
@@ -212,12 +239,19 @@ COMMENT ON CONSTRAINT customer_credit_applications_invoice_fk ON customer_credit
 --    catalogue rather than from this file's own text, so it describes the
 --    database and not a wish.
 --
---    It asserts FOUR things, because three of them are the ones a plausible
+--    It asserts FIVE things, because four of them are the ones a plausible
 --    "simplification" would quietly drop:
---      (1) each reducer's invoice edge is a VALIDATED, non-deferrable,
+--      (1) each reducer carries a VALIDATED, non-deferrable,
 --          RESTRICT-on-delete, three-column edge onto `invoices`
 --          (business_id, id, customer_id) — `convalidated` matters, because a
---          `NOT VALID` edge pins new rows only;
+--          `NOT VALID` edge pins new rows only. It is asserted BY SHAPE and
+--          not only by name, so a rename cannot satisfy it and an edge of the
+--          right name but the wrong columns cannot either;
+--      (1b) `0081`'s narrow edge is STILL THERE on each reducer. This file is
+--          additive and that is a property worth asserting at apply time
+--          rather than trusting to a text rule: a seam the estate's rule says
+--          is never dropped is here proved present in the catalogue after
+--          this file runs;
 --      (2) the key it targets exists and its index is NON-PARTIAL — a partial
 --          index here would be the obstacle R-94 dissolves, reintroduced;
 --      (3) each reducer's `customer_id` is NOT NULL — this is what makes the
@@ -235,7 +269,7 @@ DECLARE
 BEGIN
   FOREACH v_name IN ARRAY ARRAY['payment_allocations', 'customer_credit_applications'] LOOP
     IF NOT EXISTS (SELECT 1 FROM pg_constraint c
-                    WHERE c.conname = v_name || '_invoice_fk' AND c.conrelid = ('public.' || v_name)::regclass
+                    WHERE c.conname = v_name || '_invoice_customer_fk' AND c.conrelid = ('public.' || v_name)::regclass
                       AND c.contype = 'f' AND c.convalidated AND NOT c.condeferrable
                       AND c.confrelid = 'public.invoices'::regclass
                       AND c.confdeltype = 'r'
@@ -247,7 +281,21 @@ BEGIN
                              FROM unnest(c.confkey) WITH ORDINALITY AS k(attnum, ord)
                              JOIN pg_attribute a ON a.attrelid = c.confrelid AND a.attnum = k.attnum)
                           = ARRAY['business_id', 'id', 'customer_id']) THEN
-      RAISE EXCEPTION 'selling.migration_end_state_invalid: %''s invoice edge is not the validated, immediate, three-column RESTRICT edge onto invoices (business_id, id, customer_id) the structural pin is', v_name
+      RAISE EXCEPTION 'selling.migration_end_state_invalid: % carries no validated, immediate, three-column RESTRICT edge onto invoices (business_id, id, customer_id) — that edge IS the structural pin', v_name
+        USING ERRCODE = 'P0001';
+    END IF;
+    -- (1b) The narrow edge 0081 declared is still there, beside the wide one.
+    --      This file adds; it does not replace. A composite seam is never
+    --      dropped (P2-S8's accepted rule), and after this file runs the
+    --      catalogue says so.
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint c
+                    WHERE c.conname = v_name || '_invoice_fk' AND c.conrelid = ('public.' || v_name)::regclass
+                      AND c.contype = 'f' AND c.convalidated
+                      AND (SELECT array_agg(a.attname::text ORDER BY k.ord)
+                             FROM unnest(c.conkey) WITH ORDINALITY AS k(attnum, ord)
+                             JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = k.attnum)
+                          = ARRAY['business_id', 'invoice_id']) THEN
+      RAISE EXCEPTION 'selling.migration_end_state_invalid: %''s narrow (business_id, invoice_id) invoice edge from 0081 is gone — this corrective is ADDITIVE and the composite seams are never dropped', v_name
         USING ERRCODE = 'P0001';
     END IF;
     -- (3) The NOT NULL that makes the edge fire on every row. Without it the
@@ -270,7 +318,7 @@ BEGIN
             JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = k.attnum)
          = ARRAY['business_id', 'id', 'customer_id'];
   IF v_index IS NULL THEN
-    RAISE EXCEPTION 'selling.migration_end_state_invalid: invoices does not carry the UNIQUE (business_id, id, customer_id) key the two reducer edges target'
+    RAISE EXCEPTION 'selling.migration_end_state_invalid: invoices does not carry the UNIQUE (business_id, id, customer_id) key the two three-column reducer edges target'
       USING ERRCODE = 'P0001';
   END IF;
   IF EXISTS (SELECT 1 FROM pg_index i WHERE i.indexrelid = v_index AND i.indpred IS NOT NULL) THEN

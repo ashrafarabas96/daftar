@@ -29,8 +29,14 @@
  * `invoice_settlement.customer_mismatch` and
  * `invoice_settlement.walkin_not_settleable`.
  *
- * THE DEFERRAL IS OVER. `0082` adds the non-partial key and widens both
- * reducer edges onto it, so this file now asserts the STRUCTURAL form, and the
+ * THE DEFERRAL IS OVER. `0082` adds the non-partial key and a THREE-COLUMN
+ * edge from each reducer onto it — ADDED BESIDE `0081`'s two-column edge, not
+ * in place of it, because a Phase 4 migration never drops a composite seam
+ * (P2-S8's accepted rule). Each reducer therefore carries TWO invoice edges:
+ * the narrow one, now redundant, and the pin. So this file asserts the
+ * STRUCTURAL form by PRESENCE — the pin is there, on each reducer, and the
+ * refusal a planted row meets names it — and never by "the reducer has exactly
+ * one invoice edge", which is no longer true and was never the law. And the
  * planted proofs below are refused by the EDGE rather than by the verifier.
  * The obstacle recorded against the key — "PostgreSQL needs a non-partial
  * unique index as an FK target, and walk-in invoices carry a NULL
@@ -149,7 +155,7 @@ const FK_VIOLATION = '23503';
 /**
  * The refusal `invoices_lifecycle_guard()` (`0075:546-556`) raises when any
  * identity column of an invoice is changed, `customer_id` among them. It is a
- * BEFORE trigger, so on the parent side it answers before the widened edge
+ * BEFORE trigger, so on the parent side it answers before the three-column edge
  * does — which is why the parent-side law below asserts THIS and not a
  * SQLSTATE.
  */
@@ -161,8 +167,12 @@ const INVOICE_IDENTITY_FINAL = 'invoice.state_invalid: the identity of an invoic
  */
 const STRUCTURAL = {
   key: 'invoices_customer_uq',
-  allocationEdge: 'payment_allocations_invoice_fk',
-  applicationEdge: 'customer_credit_applications_invoice_fk',
+  /** The three-column edges `0082` ADDS. */
+  allocationEdge: 'payment_allocations_invoice_customer_fk',
+  applicationEdge: 'customer_credit_applications_invoice_customer_fk',
+  /** `0081`'s two-column edges, which `0082` leaves exactly where they are. */
+  narrowAllocationEdge: 'payment_allocations_invoice_fk',
+  narrowApplicationEdge: 'customer_credit_applications_invoice_fk',
 } as const;
 
 const CLAIM = 'an allocation whose customer is not the invoice’s customer is refused, and a walk-in invoice carries no allocation and no credit application';
@@ -323,7 +333,7 @@ describe('P4-S4 the customer identity pin', () => {
     const res = must(mismatchByCommand, 'the mismatch attempt');
     expect(
       res.status,
-      `customer C's payment may not settle customer D's invoice. Since 0082 widened the reducer edge onto invoices_customer_uq this has ` +
+      `customer C's payment may not settle customer D's invoice. Since 0082 gave the reducer a three-column edge onto invoices_customer_uq this has ` +
         `no FK target at all, and the API answer, the command and invoice_settlement_verify each refuse it as well, so a refusal here is ` +
         `owed by four independent mechanisms. Measured: ${res.status} ${JSON.stringify(res.body)}`,
     ).toBeGreaterThanOrEqual(400);
@@ -356,10 +366,13 @@ describe('P4-S4 the customer identity pin', () => {
       async (c) => {
         const newId = randomUUID();
         // ONE departure from an accepted row: the invoice it names is D's, while
-        // the row's own `customer_id` stays C's. Before `0082` the narrow FK
-        // `(business_id, invoice_id)` was satisfied by exactly this row and only
+        // the row's own `customer_id` stays C's. `0081`'s narrow FK
+        // `(business_id, invoice_id)` is satisfied by exactly this row — it
+        // still is, which is why the refusal below must name the THREE-column
+        // edge and not that one — and before `0082` only
         // the deferred verifier stood between it and a committed cross-customer
-        // settlement. The widened edge has no tuple for it, so the write dies
+        // settlement. The three-column edge 0082 adds beside it has no tuple
+        // for this row, so the write dies
         // here and there is nothing left to verify.
         return raised(() =>
           plantSettlementRow(c, 'payment_allocations', w.shop.businessId, sourceId, {
@@ -555,31 +568,70 @@ describe('P4-S4 the structural pin — what holds these two laws up', () => {
     }
   });
 
-  it('the invoice-side foreign key is the THREE-column structural pin, on a NON-PARTIAL key that admits walk-in rows', async () => {
+  it('each reducer CARRIES the THREE-column structural pin, beside 0081’s narrow edge, on a NON-PARTIAL key that admits walk-in rows', async () => {
     requireSubject(missing, CLAIM);
     // THE PIN, AS A TEST — the replacement for the disclosure this `it` used to
     // be. Departure A deferred
     // `ALTER TABLE invoices ADD UNIQUE (business_id, id, customer_id)` to a
     // Tech Lead ruling, naming `0067:274` as the accepted precedent for adding
     // exactly such a key to an earlier slice's table. The ruling closed it and
-    // `0082` carries it, so the FK has widened and this test has changed with
-    // the edge — which is what the previous version of it said would happen.
-    const r = await ownerPool().query<{ relation: string; conname: string; def: string }>(
-      `SELECT cl.relname AS relation, c.conname, pg_get_constraintdef(c.oid) AS def
+    // `0082` carries it — ADDITIVELY.
+    //
+    // SO THIS IS A PRESENCE ASSERTION, NOT A COUNT. `0082` could not replace
+    // `0081`'s narrow edge: a Phase 4 migration never drops a composite seam
+    // (P2-S8's accepted rule, enforced by `compositeFkProblems`). Each reducer
+    // therefore has TWO edges to `invoices`, and an assertion that it has
+    // exactly one — or that EVERY invoice edge is the three-column one — would
+    // be red on a correct estate and would be pressure to drop the seam. What
+    // the pin needs is that the three-column edge EXISTS on each reducer, is
+    // VALIDATED (a NOT VALID edge pins new rows only), is IMMEDIATE (a
+    // deferred one is the verifier again) and RESTRICTs on delete. Both halves
+    // are asserted: the pin per reducer, and the narrow edge still standing.
+    const r = await ownerPool().query<{ relation: string; conname: string; def: string; validated: boolean; deferrable: boolean }>(
+      `SELECT cl.relname AS relation, c.conname, pg_get_constraintdef(c.oid) AS def, c.convalidated AS validated, c.condeferrable AS deferrable
          FROM pg_constraint c JOIN pg_class cl ON cl.oid = c.conrelid JOIN pg_namespace n ON n.oid = cl.relnamespace
         WHERE n.nspname = 'public' AND cl.relname = ANY ($1) AND c.contype = 'f'
           AND pg_get_constraintdef(c.oid) LIKE '%REFERENCES invoices%'
         ORDER BY 1, 2`,
       [['payment_allocations', 'customer_credit_applications']],
     );
-    expect(r.rows.length, 'NO SUBJECT — neither settlement relation carries a foreign key to invoices').toBe(2);
-    for (const row of r.rows)
+    expect(r.rows.length, 'NO SUBJECT — neither settlement relation carries a foreign key to invoices').toBeGreaterThan(0);
+    const PIN = /FOREIGN KEY \(business_id, invoice_id, customer_id\) REFERENCES invoices\(business_id, id, customer_id\)/;
+    const NARROW = /FOREIGN KEY \(business_id, invoice_id\) REFERENCES invoices\(business_id, id\)/;
+    for (const [relation, pinName, narrowName] of [
+      ['payment_allocations', STRUCTURAL.allocationEdge, STRUCTURAL.narrowAllocationEdge],
+      ['customer_credit_applications', STRUCTURAL.applicationEdge, STRUCTURAL.narrowApplicationEdge],
+    ] as const) {
+      const own = r.rows.filter((x) => x.relation === relation);
+      const shown = JSON.stringify(own);
+      const pins = own.filter((x) => PIN.test(x.def));
       expect(
-        row.def,
-        `${row.relation}.${row.conname} must be the three-column pin — ` +
-          `FOREIGN KEY (business_id, invoice_id, customer_id) REFERENCES invoices (business_id, id, customer_id) — so that a mismatched ` +
-          `customer has no target. The narrow (business_id, id) form left both laws on a deferred trigger. Measured: ${row.def}`,
-      ).toMatch(/FOREIGN KEY \(business_id, invoice_id, customer_id\) REFERENCES invoices\(business_id, id, customer_id\)/);
+        pins.map((x) => x.conname),
+        `${relation} must carry the three-column pin — FOREIGN KEY (business_id, invoice_id, customer_id) REFERENCES invoices ` +
+          `(business_id, id, customer_id) — so that a mismatched customer has no target at all. Without it both laws are back on a ` +
+          `deferred trigger any writer can skip. Measured: ${shown}`,
+      ).toEqual([pinName]);
+      const pinRow = must(pins[0], `${relation}'s three-column pin`);
+      expect(
+        pinRow.validated,
+        `and ${pinName} is VALIDATED — a NOT VALID edge pins the rows written after it and none of the rows already there. Measured: ${shown}`,
+      ).toBe(true);
+      expect(
+        pinRow.deferrable,
+        `and ${pinName} is IMMEDIATE — a DEFERRABLE edge would make the mismatch refusable at COMMIT, which is what the verifier already ` +
+          `did; the pin is worth having because the row cannot be expressed at the statement. Measured: ${shown}`,
+      ).toBe(false);
+      expect(pinRow.def, `and ${pinName} carries ON DELETE RESTRICT, as 0081's edge did. Measured: ${pinRow.def}`).toContain('ON DELETE RESTRICT');
+      // And the seam `0082` did NOT drop, positively: this is what makes the
+      // corrective additive rather than a replacement, and it is read from the
+      // catalogue rather than trusted to the text rule that forbids the drop.
+      expect(
+        own.filter((x) => NARROW.test(x.def)).map((x) => x.conname),
+        `${relation} must STILL carry 0081's two-column edge ${narrowName}. The composite seams are never dropped (P2-S8's accepted rule), ` +
+          `so the pin was added beside it; a seam that is gone means a later migration dropped and re-added one, which is the defect this ` +
+          `shape exists to avoid. Measured: ${shown}`,
+      ).toEqual([narrowName]);
+    }
 
     // The key the edges target, and the two properties that make it work: it
     // exists, and its index is NOT PARTIAL. A partial index is not a lawful FK
@@ -648,7 +700,7 @@ describe('P4-S4 the structural pin — what holds these two laws up', () => {
     // `invoice_settlement_verify` fires from constraint triggers on the two
     // REDUCER relations, so it is never reached by a write to `invoices`
     // itself: moving a settled invoice's customer, or nulling it, is outside
-    // its reach altogether. That looked like a hole the widened edge closes.
+    // its reach altogether. That looked like a hole the new edge closes.
     //
     // IT IS NOT A HOLE. `invoices_lifecycle_guard()` (`0075:546-556`) already
     // freezes `customer_id` on every UPDATE, and it ANSWERS FIRST — it is a
@@ -657,7 +709,7 @@ describe('P4-S4 the structural pin — what holds these two laws up', () => {
     // THAT ANSWERED, rather than claiming the edge did. Asserting 23503 here
     // would have been asserting a mechanism that never runs.
     //
-    // What the widened edge adds on the parent side is a SECOND, INDEPENDENT
+    // What the three-column edge adds on the parent side is a SECOND, INDEPENDENT
     // and STRUCTURAL line behind a guard in the frozen prefix: a guard is a
     // body that can be replaced, and the edge is a shape that cannot be
     // satisfied. Both halves are asserted below — the refusal, and the edge's
@@ -699,13 +751,19 @@ describe('P4-S4 the structural pin — what holds these two laws up', () => {
         ORDER BY 1`,
       [['payment_allocations', 'customer_credit_applications']],
     );
-    expect(r.rows.length, 'NO SUBJECT — neither reducer carries an edge to invoices').toBe(2);
-    for (const row of r.rows)
+    expect(r.rows.length, 'NO SUBJECT — neither reducer carries an edge to invoices').toBeGreaterThan(0);
+    // Again by PRESENCE and not by count: each reducer has two edges to
+    // `invoices` and only the three-column one carries `customer_id` on the
+    // referenced side. Requiring EVERY edge to name it would be requiring the
+    // narrow seam to have been dropped.
+    for (const relation of ['payment_allocations', 'customer_credit_applications']) {
+      const own = r.rows.filter((x) => x.relation === relation);
       expect(
-        row.referenced,
-        `${row.relation}'s edge must REFERENCE invoices (business_id, id, customer_id), so the customer of a settled invoice is part of the ` +
-          `tuple its children depend on. Measured: ${JSON.stringify(row.referenced)}`,
-      ).toEqual(['business_id', 'id', 'customer_id']);
+        own.filter((x) => (x.referenced ?? []).join(',') === 'business_id,id,customer_id').length,
+        `${relation} must carry an edge REFERENCING invoices (business_id, id, customer_id), so the customer of a settled invoice is part ` +
+          `of the tuple its children depend on and cannot be dissolved under them. Measured: ${JSON.stringify(own)}`,
+      ).toBe(1);
+    }
   });
 
   it('cross-business linkage is still unrepresentable: one business_id column feeds every edge of a settlement row', async () => {
