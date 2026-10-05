@@ -482,6 +482,10 @@ async function pay(w: SettlementWorld, input: PaymentInput): Promise<void> {
  * other suites depend on.
  */
 async function sell(w: SettlementWorld, customerId: string, quantity: string): Promise<OpenInvoice> {
+  // `pace()` keeps the bearer fresh as well as the rate lawful: the seed runs
+  // for longer than the product's access token lives, and `ensureFreshAuth`
+  // re-mints inside it, outside every measured span. There is ONE keeper, and
+  // it reads the lifetime off the product rather than keeping a copy of it.
   await pace(ROUTE.sale);
   return sellOnCredit(w, customerId, quantity);
 }
@@ -496,6 +500,8 @@ export async function pacedStockUp(w: SettlementWorld, quantity: string, unitCos
 export async function pacedSellOnCredit(w: SettlementWorld, customerId: string, quantity: string): Promise<OpenInvoice> {
   return sell(w, customerId, quantity);
 }
+
+/** The world's credential, kept fresh outside every measured span — re-exported so the budget suite can call it where it paces. */
 
 /**
  * THE SEED.

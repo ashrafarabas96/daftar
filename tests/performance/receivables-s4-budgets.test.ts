@@ -1220,17 +1220,29 @@ describe(`P4-D — the customer receivable read (scale ${SCALE}, ${SCALE === 1 ?
       'the index that serves the reader of record’s own predicate (business_id, customer_id, …) is gone — the body has no access path left',
     ).toMatch(/\(business_id, customer_id/);
 
-    // And the per-row call the finding is about, counted rather than asserted:
-    // one `invoice_outstanding` call per open invoice of the customer.
+    // And the reader calls the finding is about, counted rather than asserted
+    // — and the COUNT IS DISCOVERED, from the live body of the AR reader,
+    // because it is a property of that body and not a number this file may
+    // keep a copy of. A body that reaches the reader of record through a
+    // per-invoice `LATERAL` makes one call per open invoice; a body that
+    // passes the ids as a SET makes one call for all of them (`0083`). Before
+    // `0083` this printed the open-invoice count as the call count, which was
+    // true then and became a FALSE CLAIM the moment the reader was reshaped.
     const perRow = await ownerPool().query<{ n: string }>(
       `SELECT count(*)::text AS n FROM invoices WHERE business_id = $1 AND customer_id = $2 AND status = 'open'`,
       [w.shop.businessId, dataset.fatCustomerId],
     );
+    const readerBody = await ownerPool().query<{ def: string }>(
+      `SELECT coalesce(pg_get_functiondef(to_regprocedure('public.customer_ar_outstanding(UUID, UUID)')), '') AS def`,
+    );
+    const openInvoices = Number.parseInt(perRow.rows[0]?.n ?? '0', 10);
+    const perInvoiceCall = (readerBody.rows[0]?.def ?? '').includes('JOIN LATERAL public.invoice_outstanding(i.business_id, i.id)');
     console.log(
-      `\nFINDING — P4-D per-row reader calls: ${JSON.stringify({
-        openInvoices: Number.parseInt(perRow.rows[0]?.n ?? '0', 10),
-        invoiceOutstandingCallsPerRead: Number.parseInt(perRow.rows[0]?.n ?? '0', 10),
-        note: 'invoice_outstanding is plpgsql and STABLE: one call per open invoice inside the non-inlinable customer_ar_outstanding. The ratio below is the growth law.',
+      `\nFINDING — P4-D reader calls per read: ${JSON.stringify({
+        openInvoices,
+        invoiceOutstandingCallsPerRead: perInvoiceCall ? openInvoices : 1,
+        shape: perInvoiceCall ? 'per-invoice LATERAL (0075:783)' : 'set-based: one call over the open invoice ids (0083)',
+        note: 'invoice_outstanding is plpgsql and STABLE, so it is never inlined; how often it is called is a property of the AR reader’s own body, read here from the catalogue. The ratio below is the growth law.',
       })}\n`,
     );
   });
