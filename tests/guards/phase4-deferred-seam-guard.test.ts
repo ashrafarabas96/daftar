@@ -309,26 +309,54 @@ describe('S-P4-03 — the reader-of-record reads every relation that settles an 
    * instead, on a COPY, and the relation names are DISCOVERED from the tree
    * rather than written here.
    *
-   * Stripping the two `FROM` clauses, not the relations, is what keeps the
-   * proof non-vacuous: `settlers` comes from `CREATE TABLE`, so the seam still
-   * HAS a subject, and only the reader-of-record stops reading it. Removing
-   * the relations instead would leave `settlers` empty and the seam correctly
+   * Stripping the `FROM` clauses, not the relations, is what keeps the proof
+   * non-vacuous: `settlers` comes from `CREATE TABLE`, so the seam still HAS a
+   * subject, and only the reader-of-record stops reading it. Removing the
+   * relations instead would leave `settlers` empty and the seam correctly
    * silent — a green that proves nothing.
+   *
+   * AND THE STRIPPER IS DISCOVERED TOO. It used to be a regex naming this
+   * slice's two relations outright, beside a comment promising the names were
+   * read from the tree: half of the law discovered, half written down. The
+   * cost was in the future rather than today — on the day a later slice
+   * creates a settling relation, `settlers` grows, the written-down stripper
+   * does not strip the new read, the reader-of-record keeps reading it, and
+   * the finding this proof demands never names it. A proof whose discovery
+   * half is hard-coded is green for a reason that will not survive the tree
+   * changing, which is this repository's most expensive recurring defect.
    */
-  const SETTLEMENT_READ = /FROM public\.(?:payment_allocations|customer_credit_applications) \w+/g;
-
-  it('RED: the discharge is removed — the settling relations exist and the reader-of-record reads neither', () => {
-    const stripped = rootMinus(SETTLEMENT_READ, 'FROM public.invoices x');
-    // Discovery, not a hard-coded list: whatever the tree calls its settling
-    // relations is what the finding has to name.
-    const settlers = readTables(
-      phase4Migrations(stripped)
-        .map((f) => readFileSync(join(stripped, 'infrastructure/database/migrations', f), 'utf8'))
+  const settlingRelations = (root: string): string[] =>
+    readTables(
+      phase4Migrations(root)
+        .map((f) => readFileSync(join(root, 'infrastructure/database/migrations', f), 'utf8'))
         .join('\n'),
     )
       .tables.map((t) => t.name)
       .filter((n) => SETTLEMENT_VOCABULARY.test(n));
-    expect(settlers.length, 'the stripped copy still creates the relations, so the seam has a subject').toBeGreaterThan(0);
+
+  /** The read form this tree uses, over whatever relations it actually has. Relation names come from `CREATE TABLE`, so they are `\w+` and need no escaping. */
+  const settlementRead = (relations: readonly string[]): RegExp => new RegExp(`FROM public\\.(?:${relations.join('|')}) \\w+`, 'g');
+
+  it('RED: the discharge is removed — the settling relations exist and the reader-of-record reads neither', () => {
+    const settlers = settlingRelations(REPO);
+    expect(settlers.length, 'the tree creates no settling relation at all, so the seam has no subject and this proof would be vacuous').toBeGreaterThan(0);
+    const stripped = rootMinus(settlementRead(settlers), 'FROM public.invoices x');
+    expect(
+      settlingRelations(stripped).slice().sort(),
+      'the stripped copy must still CREATE the relations — if it does not, the seam is correctly silent and the green proves nothing',
+    ).toEqual(settlers.slice().sort());
+    // Every settler must actually have LOST its read. Without this, a later
+    // slice that reads its settler in some other form (a JOIN, a lateral, a
+    // different alias shape) fails the `toContain` below with no indication
+    // that the cause is the stripper rather than the seam.
+    const strippedSql = phase4Migrations(stripped)
+      .map((f) => readFileSync(join(stripped, 'infrastructure/database/migrations', f), 'utf8'))
+      .join('\n');
+    for (const name of settlers)
+      expect(
+        new RegExp(`FROM public\\.${name} \\w+`).test(strippedSql),
+        `${name} is still read after the strip — this tree reads it in a form the stripper does not cover, so extend \`settlementRead\``,
+      ).toBe(false);
     const problems = deferredSeamProblems(stripped);
     expect(problems).toHaveLength(1);
     expect(problems[0]).toContain('S-P4-03');
