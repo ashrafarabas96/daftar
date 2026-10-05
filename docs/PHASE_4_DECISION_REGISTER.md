@@ -574,3 +574,32 @@ exits `FAIL gate:phase4:s4 … 1 of 9 check(s) refuse this tree`. The sibling `o
 named, which is what makes it a per-command law rather than a per-file one. The suite also plants: no
 subject at all, an unreadable operation vocabulary, a missing composer module, and a second
 `auditThenRethrow…` that does not delegate.
+
+### One P4-S2 golden had to change, and it was STRENGTHENED rather than relaxed
+
+`tests/golden-regression/phase4-s2/08-sale-idempotency.golden.test.ts` asserted that a sale refused for
+`sale.idempotency_conflict` left an EMPTY census delta. That census is DISCOVERED from `pg_class` over every
+business-scoped relation, so `audit_events` is in it, and P4-AL-48 now legitimately writes exactly one row
+there. The case was failing on the audit working.
+
+What was NOT done: the relation was not excluded and the claim was not weakened. The case now requires
+`audit_events` to move by **exactly 1**, requires every other relation to be unmoved, READS the row back and
+requires it to be `sale.commit.refused` carrying `sale.idempotency_conflict`, and requires `outbox_events`
+not to move — P4-AL-48's «a refusal emits no outbox event». That is strictly more than the empty delta it
+replaced. `06-sale-last-item-race.golden.test.ts:218-226` already made the same argument about the two
+record-keeping relations and is the precedent.
+
+Its `it(` title keeps the exact prefix `scripts/phase4-s2-gate.ts`'s `S2-G08` row pins
+(`…refused, and writes nothing`), so the sealed predecessor gate's roster check is untouched; the clause
+after the dash is appended, not substituted. Measured: `gate:phase4:s2` and `gate:phase4:s3` were both run
+on this tree after the change.
+
+### Two files outside this work's own set were touched, and why
+
+- `tests/integration/pos-s3-cart.test.ts` — `PosCartService`'s constructor gained an `AuditService`, so the
+  suite that builds the service directly had to pass one. It passes a RECORDING port rather than a silent
+  stub, so its cases still measure the refusal and not the audit.
+- the golden above.
+
+Nothing else outside this work's set changed. No migration was created or edited, no threshold, count or
+ceiling was relaxed, and no `.skip`, `.todo` or `.only` exists anywhere in what was added.
