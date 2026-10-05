@@ -19,6 +19,7 @@
  */
 
 import type { AuditService } from '../audit/audit.service';
+import { auditThenRethrowRefusal, type RefusalAttempt, type RefusalSurface } from '../audit/refusal-audit';
 import { AppError } from '@daftar/domain-core';
 import { AccountingError } from '@daftar/accounting';
 import { InventoryError } from '@daftar/inventory';
@@ -62,23 +63,16 @@ import { parseDatabaseReceivablesCode, rethrowReceivablesRefusal } from './recei
  * answer, recorded in `docs/PHASE_4_DECISION_REGISTER.md`.
  */
 
-/** What a command knows about itself by the time it is refused. It is filled as the command learns it. */
-export interface ReceivablesAttempt {
-  /** The `invctl/1` operation code — the permission exercised. */
-  readonly operation: string;
-  /** `payment` or `customer_credit_application`. */
-  readonly entity: string;
-  /** The caller-supplied document id. Known from the request, so always present. */
-  readonly entityId: string;
-  /** Known once the digest is computed, which is before any state is bound. */
-  intentSha256?: string;
-  /** Known once an invoice is bound; a surplus-credit-only payment has none. */
-  branchId?: string | null;
-  /** Non-null only on a POS path. Receivables is not one, and NULL here is the truth rather than a gap. */
-  tillSessionId?: string | null;
-  /** The figures that caused it, minor units as decimal strings. */
-  figures: Record<string, string | boolean | null>;
-}
+/**
+ * What a receivables command knows about itself by the time it is refused.
+ *
+ * It is `RefusalAttempt` under this surface's name — the SHARED shape, not a
+ * second one. The two notes that used to live on the fields are the things
+ * this surface in particular knows: `entityId` is the caller-supplied document
+ * id, so it is always present; and `tillSessionId` is NULL here because
+ * receivables is not a POS path, which is the truth rather than a gap.
+ */
+export type ReceivablesAttempt = RefusalAttempt;
 
 /**
  * The stable refusal code of an error THAT HAS ALREADY BEEN THROUGH
@@ -110,17 +104,18 @@ export function refusedCode(error: unknown): string | null {
   return parseDatabaseReceivablesCode(error);
 }
 
+/** This surface's two functions, both of them the ones its commands already end with. */
+const RECEIVABLES_SURFACE: RefusalSurface = { rethrow: rethrowReceivablesRefusal, code: refusedCode };
+
 /**
  * Audit a refused receivables command, then re-throw it through
  * `rethrowReceivablesRefusal` exactly as before.
  *
- * The ORDER matters and is the one this body forces: the refusal that WILL
- * leave is produced first, it is classified second, the audit row is written
- * third, and that same refusal is thrown last. So the audit can never change
- * which refusal leaves, and the code in the row can never be a different
- * classification from the code on the response — they are the same object.
- * `recordRefusal` itself never throws (its own contract), so this function's
- * only exit is that refusal.
+ * The ORDER this performs — produce the refusal that will leave, classify
+ * THAT object, write the row, throw the same object — is
+ * `auditThenRethrowRefusal`'s and is stated there, once, for every surface.
+ * This function is the receivables BINDING of it and nothing else: it holds no
+ * order of its own, so the POS and the sale commit cannot drift from it.
  */
 export async function auditThenRethrowReceivablesRefusal(
   audit: AuditService,
@@ -128,31 +123,5 @@ export async function auditThenRethrowReceivablesRefusal(
   attempt: ReceivablesAttempt,
   error: unknown,
 ): Promise<never> {
-  // `rethrowReceivablesRefusal` always throws. Capturing what it throws is how
-  // the audited code is the ANSWERED code by construction rather than by a
-  // second, drift-prone classification of the raw error.
-  let refusal: unknown = error;
-  try {
-    rethrowReceivablesRefusal(error);
-  } catch (e) {
-    refusal = e;
-  }
-  const code = refusedCode(refusal);
-  if (code !== null) {
-    await audit.recordRefusal(
-      { tenantId: scope.tenantId, businessId: scope.businessId },
-      {
-        operation: attempt.operation,
-        refusalCode: code,
-        entity: attempt.entity,
-        entityId: attempt.entityId,
-        actorUserId: scope.userId,
-        intentSha256: attempt.intentSha256,
-        branchId: attempt.branchId ?? null,
-        tillSessionId: attempt.tillSessionId ?? null,
-        figures: attempt.figures,
-      },
-    );
-  }
-  throw refusal;
+  return auditThenRethrowRefusal(audit, RECEIVABLES_SURFACE, scope, attempt, error);
 }

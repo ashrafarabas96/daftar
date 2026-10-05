@@ -5,6 +5,7 @@ import { buildInventoryPayload, parseQuantity, type InventoryPayload } from '@da
 import type { QueryResultRow } from 'pg';
 import { Database } from '../../infra/database';
 import type { Logger } from '../../infra/logger';
+import { AuditService } from '../audit/audit.service';
 import type { MembershipContext } from '../tenancy/tenancy.service';
 import { InventoryAuthorizationService } from '../inventory/inventory-authorization';
 import type { BusinessTransactionId } from '../inventory/business-transaction';
@@ -19,6 +20,7 @@ import {
   type CartCommandTarget,
   type CartStatement,
 } from './pos-cart-statements';
+import { auditThenRethrowSellingRefusal, type SellingAttempt } from '../selling/selling-refusal-audit';
 import { posRefusal, type PosCode } from './pos-errors';
 import type { PosCartCommand } from './pos-price-authority';
 
@@ -178,6 +180,10 @@ export class PosCartService {
     @Inject(Database) private readonly db: Database,
     @Inject(InventoryAuthorizationService) private readonly authorization: InventoryAuthorizationService,
     @Inject('LOGGER') private readonly logger: Logger,
+    // P4-AL-48's refusal audit. A cart command's audit trail is the routine's
+    // own, written inside the transaction every `RAISE EXCEPTION` aborts, so a
+    // refused scan persisted no evidence at all until this was injected.
+    @Inject(AuditService) private readonly audit: AuditService,
   ) {}
 
   /** Add a line, or merge into the existing line for this variant. Requires `sales.create`. */
@@ -235,19 +241,16 @@ export class PosCartService {
   /**
    * REQUEST a discount on one line.
    *
-   * `sales.discount` is SENSITIVE (P4-AL-35) and is checked HERE rather than
-   * at a decorator, because whether a discount was asked for depends on the
-   * BODY and a decorator cannot see it — the accepted `sale_commit` precedent.
-   * A discount asked without the key is REFUSED, never silently zeroed: a
-   * silently-zeroed discount charges the customer more than the cashier told
-   * them, and the cashier finds out from the customer.
-   *
-   * A request of exactly zero is a REMOVAL of a discount and needs the same
-   * key, because setting a discount to zero changes the price the cashier
-   * quoted just as surely as setting it to anything else.
+   * `sales.discount` is SENSITIVE (P4-AL-35) and is checked in `issue` rather
+   * than at a decorator, because whether a discount was asked for depends on
+   * the BODY and a decorator cannot see it — the accepted `sale_commit`
+   * precedent. It sits one call deeper than it used to so that the refusal it
+   * raises is inside P4-AL-48's catch like every other cart refusal; the rule
+   * is unchanged. A discount asked without the key is REFUSED, never silently
+   * zeroed: a silently-zeroed discount charges the customer more than the
+   * cashier told them, and the cashier finds out from the customer.
    */
   async requestDiscount(m: MembershipContext, tillSessionId: string, cartLineId: string, discountMinor: string, btx: BusinessTransactionId): Promise<CartDto> {
-    if (!hasPermission(m.roles, 'sales.discount')) throw posRefusal('pos.cart_discount_not_permitted');
     return this.run(
       m,
       'cart.request_discount',
@@ -427,6 +430,53 @@ export class PosCartService {
    * statement at `BEGIN`.
    */
   private async run(m: MembershipContext, command: PosCartCommand, target: CartCommandTarget, btx: BusinessTransactionId): Promise<CartDto> {
+    // P4-AL-48's attempt record, built before the first statement, so a refusal
+    // raised by the GATE — the session refusals, the unknown line — still
+    // carries the operation, the till and the figures the request stated. It is
+    // built HERE, in the one place all four commands pass through, so the four
+    // cannot drift into four accounts of what a refused cart command was.
+    //
+    // `entityId` is the cart LINE, which is the document a cart command names.
+    // On an add the server mints it before this point (`addLine`), so it is
+    // never null by the time a refusal could be audited; the `?? target
+    // .tillSessionId` arm is the type's, not a case that happens.
+    const attempt: SellingAttempt = {
+      operation: PosCartService.OP_CODE[command],
+      entity: 'pos_cart_line',
+      entityId: target.cartLineId ?? target.tillSessionId,
+      tillSessionId: target.tillSessionId,
+      figures: {
+        command,
+        productId: target.productId,
+        variantId: target.variantId,
+        quantity: target.quantity,
+        discountMinor: target.discountMinor,
+      },
+    };
+    try {
+      return await this.issue(m, command, target, btx);
+    } catch (e) {
+      return await auditThenRethrowSellingRefusal(this.audit, m, attempt, e);
+    }
+  }
+
+  /**
+   * The command itself. It was the whole of `run` until P4-AL-48's refusal
+   * audit needed one catch around every statement a cart command issues.
+   *
+   * `sales.discount` is checked HERE and no longer in `requestDiscount`, and
+   * the move is the audit's doing rather than a change of rule: the P4-AL-35
+   * argument is unchanged — whether a discount was asked for depends on the
+   * BODY and a decorator cannot see it — but a check that ran BEFORE the catch
+   * raised the one cart refusal that persisted no evidence. A discount asked
+   * without the key is still REFUSED and never silently zeroed.
+   *
+   * A request of exactly zero is a REMOVAL of a discount and needs the same
+   * key, because setting a discount to zero changes the price the cashier
+   * quoted just as surely as setting it to anything else.
+   */
+  private async issue(m: MembershipContext, command: PosCartCommand, target: CartCommandTarget, btx: BusinessTransactionId): Promise<CartDto> {
+    if (command === 'cart.request_discount' && !hasPermission(m.roles, 'sales.discount')) throw posRefusal('pos.cart_discount_not_permitted');
     const plan = cartStatementPlan(command, target);
     this.assertPlanIsConstant(plan, command);
     const [gateStatement] = plan;

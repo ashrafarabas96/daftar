@@ -144,8 +144,25 @@ const authorization = {
   },
 } as unknown as ConstructorParameters<typeof PosCartService>[1];
 
+/**
+ * P4-AL-48's refusal audit, as this suite's port.
+ *
+ * `PosCartService` now takes an `AuditService` so that a refused cart command
+ * leaves evidence (`apps/api/src/modules/audit/refusal-audit.ts`). This port
+ * RECORDS what the service tried to write instead of swallowing it, so the
+ * cases below still measure the refusal and not the audit; the own-transaction
+ * write itself is proved against a real database by
+ * `tests/integration/p4s4-pos-sale-refusal-audit.test.ts`.
+ */
+const audited: { operation: string; refusalCode: string }[] = [];
+const audit = {
+  recordRefusal: async (_scope: unknown, entry: { operation: string; refusalCode: string }): Promise<void> => {
+    audited.push({ operation: entry.operation, refusalCode: entry.refusalCode });
+  },
+} as unknown as ConstructorParameters<typeof PosCartService>[3];
+
 function service(): PosCartService {
-  return new PosCartService(noDatabase, authorization, logger);
+  return new PosCartService(noDatabase, authorization, logger, audit);
 }
 
 /**
@@ -845,7 +862,7 @@ describe('§6 — the surface this slice hands over, stated so it is enumerable'
   });
 
   it('every route names a method that exists on the service \u2014 the mount cannot call a handler that is not there', () => {
-    const service = new PosCartServiceType(noDatabase, authorization, logger);
+    const service = new PosCartServiceType(noDatabase, authorization, logger, audit);
     for (const route of POS_CART_ROUTE_AUTHORITY) {
       const method = POS_CART_ROUTE_HANDLERS[route.command];
       expect(typeof (service as unknown as Record<string, unknown>)[method], `${route.command} \u2192 ${String(method)}`).toBe('function');

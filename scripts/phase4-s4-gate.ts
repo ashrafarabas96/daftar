@@ -1289,6 +1289,425 @@ export function closureRuleProblems(root: string): string[] {
   return problems;
 }
 
+// ───── THE REFUSAL-AUDIT LAW (P4-AL-48) ───────────────────────────────────
+//
+// «A refusal is audited as heavily as a success, because the forged-total and
+// over-cap attempts are the ones worth seeing.» Until P4-S4 only the
+// RECEIVABLES commands obeyed it, and the reason was structural rather than an
+// oversight: every Phase 4 audit row is written by the SQL routine itself, as
+// its LAST step, after every one of its `RAISE EXCEPTION`s — `0078:1002` for
+// `sale_commit` (after 33 raises), `0079:954` and `0079:1022` for the two ends
+// of a till session (after 7 and 6). A `RAISE` aborts the transaction, so a
+// refused command persisted no evidence at all.
+//
+// THIS LAW IS A DISCOVERY AND NOT A LIST. It finds the Phase 4 commands in the
+// code — the service methods that exercise a Phase 4 `invctl/1` operation —
+// and requires each one's refusal path to reach the ONE refusal-audit
+// composer. A later slice that adds a command is covered by the law on the day
+// it lands, with no registration here; a check that enumerated what this slice
+// happened to see would go quietly vacuous the moment P4-S5 adds a refund.
+//
+// It is LOUD when it finds nothing. A derived law with no subject is not a
+// pass, and «the discovery found no command» is the way this check fails most
+// dangerously — it would be the only failure that looks like success.
+
+/** Where the API's services live. The law reads this tree and nothing else. */
+export const API_MODULES = 'apps/api/src/modules';
+/** The DECLARED Phase 4 operation vocabulary, which is where the subject set comes from. */
+export const OPERATION_VOCABULARY = 'packages/inventory/src/payload.ts';
+/** The ONE composer. Every surface's `auditThenRethrow…` must be a binding of it. */
+export const REFUSAL_AUDIT_MODULE = `${API_MODULES}/audit/refusal-audit.ts`;
+
+/**
+ * Every character inside a comment, a string or a template literal, blanked —
+ * newlines kept, so indices and line numbers still line up with the original.
+ *
+ * Brace- and paren-matching over raw TypeScript is wrong the moment a SQL
+ * template holds a `{`, and `'sale.commit'` inside a comment is not an
+ * authorization. Everything structural below reads the MASK and everything
+ * textual reads the ORIGINAL at the mask's indices, so neither question is
+ * answered with the other's text.
+ */
+export function maskLiterals(text: string): string {
+  const out = text.split('');
+  const n = text.length;
+  const blank = (a: number, b: number): void => {
+    for (let k = a; k < b && k < n; k += 1) if (out[k] !== '\n') out[k] = ' ';
+  };
+  let i = 0;
+  while (i < n) {
+    const ch = text[i];
+    if (ch === '/' && text[i + 1] === '/') {
+      const nl = text.indexOf('\n', i);
+      const end = nl < 0 ? n : nl;
+      blank(i, end);
+      i = end;
+      continue;
+    }
+    if (ch === '/' && text[i + 1] === '*') {
+      const e = text.indexOf('*/', i + 2);
+      const end = e < 0 ? n : e + 2;
+      blank(i, end);
+      i = end;
+      continue;
+    }
+    if (ch === "'" || ch === '"' || ch === '`') {
+      let j = i + 1;
+      while (j < n) {
+        if (text[j] === '\\') {
+          j += 2;
+          continue;
+        }
+        if (text[j] === ch) {
+          j += 1;
+          break;
+        }
+        j += 1;
+      }
+      blank(i, j);
+      i = j;
+      continue;
+    }
+    i += 1;
+  }
+  return out.join('');
+}
+
+/** The index just past the `)` that closes the `(` at `open`, or null. */
+function closeParen(mask: string, open: number): number | null {
+  let depth = 0;
+  for (let i = open; i < mask.length; i += 1) {
+    if (mask[i] === '(') depth += 1;
+    else if (mask[i] === ')') {
+      depth -= 1;
+      if (depth === 0) return i + 1;
+    }
+  }
+  return null;
+}
+
+/** The index just past the `}` that closes the `{` at `open`, or null. */
+function closeBrace(mask: string, open: number): number | null {
+  let depth = 0;
+  for (let i = open; i < mask.length; i += 1) {
+    if (mask[i] === '{') depth += 1;
+    else if (mask[i] === '}') {
+      depth -= 1;
+      if (depth === 0) return i + 1;
+    }
+  }
+  return null;
+}
+
+/** The `{` that opens a CLASS METHOD's body, starting the scan after its parameter list. */
+function bodyBrace(mask: string, after: number): number | null {
+  let angle = 0;
+  for (let i = after; i < mask.length; i += 1) {
+    const ch = mask[i];
+    if (ch === '<') angle += 1;
+    else if (ch === '>') angle = Math.max(0, angle - 1);
+    else if (ch === ';' && angle === 0)
+      return null; // an interface's method SIGNATURE: no body at all.
+    else if (ch === '{' && angle === 0) {
+      const end = closeBrace(mask, i);
+      if (end === null) return null;
+      // The body's `}` closes at column 2 in this tree's formatting; a return
+      // type's (`): { readonly a: string } {`) closes mid-line. That is what
+      // tells a body brace from a type brace without parsing types.
+      if (mask.slice(Math.max(0, end - 4), end).endsWith('\n  }')) return i;
+    }
+  }
+  return null;
+}
+
+/** One method of one file: its name and the ORIGINAL and MASKED text of its body. */
+export interface MethodBody {
+  readonly name: string;
+  readonly body: string;
+  readonly mask: string;
+}
+
+const METHOD_SIGNATURE = /^ {2}(?:(?:public|private|protected) )?(?:static )?(?:async )?([A-Za-z_$][\w$]*)\s*(?:<[^>\n]*>)?\(/gm;
+
+/**
+ * The class methods of one file — every one of them, whichever class it
+ * belongs to, because a file's methods are what the reachability below walks
+ * and a `this.x(` call cannot cross a file.
+ */
+export function methodBodies(text: string): MethodBody[] {
+  const mask = maskLiterals(text);
+  const out: MethodBody[] = [];
+  for (const m of mask.matchAll(METHOD_SIGNATURE)) {
+    const name = m[1] as string;
+    if (name === 'constructor' || name === 'if' || name === 'for' || name === 'while' || name === 'switch' || name === 'catch') continue;
+    const open = m.index + m[0].length - 1;
+    const params = closeParen(mask, open);
+    if (params === null) continue;
+    const brace = bodyBrace(mask, params);
+    if (brace === null) continue;
+    const end = closeBrace(mask, brace);
+    if (end === null) continue;
+    out.push({ name, body: text.slice(brace, end), mask: mask.slice(brace, end) });
+  }
+  return out;
+}
+
+/**
+ * The DECLARED Phase 4 operation vocabulary, read off its own type unions.
+ *
+ * `InventoryP4S2OperationCode`, `…S3…`, `…S4…` — and whatever a later slice
+ * declares, because the pattern is the slice number and not a list. This is
+ * the one place the law learns which operations are Phase 4's, so adding
+ * `customer.refund` to the vocabulary adds it to this law's subject.
+ */
+export function phase4OperationCodes(root: string): string[] {
+  if (!has(root, OPERATION_VOCABULARY)) return [];
+  const text = read(root, OPERATION_VOCABULARY);
+  const codes = new Set<string>();
+  for (const m of text.matchAll(/export type InventoryP4S\d+OperationCode\s*=([^;]+);/g))
+    for (const q of (m[1] as string).matchAll(/'([a-z]+\.[a-z_]+)'/g)) codes.add(q[1] as string);
+  return [...codes].sort();
+}
+
+/** Every `.ts` file directly under `dir`, as repo-relative paths. */
+function filesIn(root: string, dir: string): string[] {
+  const absolute = join(root, dir);
+  if (!existsSync(absolute)) return [];
+  return readdirSync(absolute)
+    .filter((e) => e.endsWith('.ts') && statSync(join(absolute, e)).isFile())
+    .sort()
+    .map((e) => `${dir}/${e}`);
+}
+
+/** The module directories of the API, discovered. */
+export function apiModuleDirs(root: string): string[] {
+  const absolute = join(root, API_MODULES);
+  if (!existsSync(absolute)) return [];
+  return readdirSync(absolute)
+    .filter((e) => statSync(join(absolute, e)).isDirectory())
+    .sort()
+    .map((e) => `${API_MODULES}/${e}`);
+}
+
+/**
+ * The Phase 4 operations an `authorize(…)` argument names.
+ *
+ * A literal answers itself. Anything else — `PosCartService.OP_CODE[command]`,
+ * `receivablesOperationCode(CUSTOMER_COLLECT_PAYMENT_OP)` — is resolved
+ * through the constants of its own MODULE DIRECTORY, which is where this
+ * tree's operation constants live. Scoped to the directory on purpose: a
+ * global name table would let one module's constant answer another module's
+ * identifier.
+ */
+function resolveOperations(argument: string, ops: readonly string[], constants: ReadonlyMap<string, readonly string[]>): string[] {
+  const found = new Set<string>();
+  for (const q of argument.matchAll(/'([a-z]+\.[a-z_]+)'/g)) if (ops.includes(q[1] as string)) found.add(q[1] as string);
+  for (const id of argument.matchAll(/\b([A-Za-z_$][\w$]*)\b/g)) for (const op of constants.get(id[1] as string) ?? []) found.add(op);
+  return [...found].sort();
+}
+
+/** `name → the Phase 4 operations its declaration mentions`, over one directory. */
+function directoryConstants(root: string, dir: string, ops: readonly string[]): Map<string, readonly string[]> {
+  const table = new Map<string, readonly string[]>();
+  for (const file of filesIn(root, dir)) {
+    const text = read(root, file);
+    for (const m of text.matchAll(/(?:const|readonly)\s+([A-Za-z_$][\w$]*)\s*(?::[^=;]*)?=\s*([^;]{0,4000})/g)) {
+      const named: string[] = [];
+      for (const q of (m[2] as string).matchAll(/'([a-z]+\.[a-z_]+)'/g)) if (ops.includes(q[1] as string)) named.push(q[1] as string);
+      if (named.length > 0) table.set(m[1] as string, [...new Set(named)].sort());
+    }
+  }
+  return table;
+}
+
+/** One discovered Phase 4 command path. */
+export interface CommandPath {
+  readonly file: string;
+  /** The entry method a route calls — the command itself. */
+  readonly method: string;
+  /** The Phase 4 operations it exercises, directly or through its own private helpers. */
+  readonly operations: readonly string[];
+  /** Whether its refusal path reaches the one composer. */
+  readonly audits: boolean;
+}
+
+/** The pattern of the ONE composer family. `refusal-audit.ts` defines it; each surface binds it under its own name. */
+const COMPOSER_CALL = /\bauditThenRethrow[A-Za-z]*\s*\(/;
+
+/**
+ * THE DISCOVERY.
+ *
+ * A **Phase 4 command** is an ENTRY method of an API service — one no other
+ * method of its own file calls, so a route is the only thing that can reach it
+ * — whose own body or that of a helper it calls exercises a Phase 4 `invctl/1`
+ * operation. That is the definition the code already carries: a command is the
+ * thing that authorizes an operation, and a READ authorizes none, which is why
+ * `TillSessionService.read` and `PosCartService.readCart` are not subjects
+ * here without being named as exceptions.
+ */
+export function discoverPhase4Commands(
+  ops: readonly string[],
+  sources: readonly { readonly file: string; readonly text: string }[],
+  constantsFor: (file: string) => ReadonlyMap<string, readonly string[]>,
+): CommandPath[] {
+  const commands: CommandPath[] = [];
+  for (const { file, text } of sources) {
+    const methods = methodBodies(text);
+    if (methods.length === 0) continue;
+    const constants = constantsFor(file);
+    const byName = new Map<string, MethodBody>(methods.map((m) => [m.name, m]));
+    const callees = new Map<string, string[]>();
+    const called = new Set<string>();
+    const operations = new Map<string, string[]>();
+    const audits = new Set<string>();
+    for (const m of methods) {
+      const names: string[] = [];
+      for (const c of m.mask.matchAll(/this\.([A-Za-z_$][\w$]*)\s*\(/g)) {
+        names.push(c[1] as string);
+        called.add(c[1] as string);
+      }
+      callees.set(m.name, names);
+      const own: string[] = [];
+      for (const a of m.mask.matchAll(/\bauthorize\s*\(/g)) {
+        const end = closeParen(m.mask, a.index + a[0].length - 1);
+        if (end === null) continue;
+        own.push(...resolveOperations(m.body.slice(a.index, end), ops, constants));
+      }
+      operations.set(m.name, own);
+      if (COMPOSER_CALL.test(m.mask)) audits.add(m.name);
+    }
+    for (const m of methods) {
+      if (called.has(m.name)) continue; // not an entry: its own file reaches it.
+      // Everything this entry can reach inside its own file, which is the
+      // whole of one command: a service's private helpers are where the
+      // authorization and the catch actually sit.
+      const seen = new Set<string>([m.name]);
+      const queue = [m.name];
+      while (queue.length > 0) {
+        for (const next of callees.get(queue.pop() as string) ?? []) {
+          if (seen.has(next) || !byName.has(next)) continue;
+          seen.add(next);
+          queue.push(next);
+        }
+      }
+      const exercised = [...new Set([...seen].flatMap((n) => operations.get(n) ?? []))].sort();
+      if (exercised.length === 0) continue;
+      commands.push({ file, method: m.name, operations: exercised, audits: [...seen].some((n) => audits.has(n)) });
+    }
+  }
+  return commands.sort((a, b) => `${a.file}#${a.method}`.localeCompare(`${b.file}#${b.method}`));
+}
+
+/** The discovery, applied to a tree. */
+export function phase4Commands(root: string): CommandPath[] {
+  const ops = phase4OperationCodes(root);
+  if (ops.length === 0) return [];
+  const sources: { file: string; text: string }[] = [];
+  const constants = new Map<string, ReadonlyMap<string, readonly string[]>>();
+  for (const dir of apiModuleDirs(root)) {
+    const table = directoryConstants(root, dir, ops);
+    for (const file of filesIn(root, dir)) {
+      if (!file.endsWith('.service.ts')) continue;
+      sources.push({ file, text: read(root, file) });
+      constants.set(file, table);
+    }
+  }
+  return discoverPhase4Commands(ops, sources, (file) => constants.get(file) ?? new Map());
+}
+
+/**
+ * Every `auditThenRethrow…` in the API, and the module it is defined in.
+ *
+ * The law's second half: there is ONE composer. A surface may bind it under
+ * its own name — `auditThenRethrowSellingRefusal`,
+ * `auditThenRethrowReceivablesRefusal` — but a binding that does not go
+ * through `refusal-audit.ts` is a second mechanism with a second order of
+ * operations, and the thing P4-AL-48(a) promises is a property of that order.
+ */
+export function composerDefinitions(root: string): { readonly file: string; readonly delegates: boolean }[] {
+  const out: { file: string; delegates: boolean }[] = [];
+  for (const dir of apiModuleDirs(root))
+    for (const file of filesIn(root, dir)) {
+      if (file === REFUSAL_AUDIT_MODULE) continue;
+      const text = read(root, file);
+      if (!/export\s+(?:async\s+)?function\s+auditThenRethrow[A-Za-z]*\s*\(/.test(text)) continue;
+      out.push({ file, delegates: /from '(?:\.\.?\/)+audit\/refusal-audit'/.test(text) && COMPOSER_CALL.test(maskLiterals(text)) });
+    }
+  return out;
+}
+
+/** Everything the law judges, as a value — so a test can plant a defect in it without mutating the tree. */
+export interface RefusalAuditSubject {
+  /** The declared Phase 4 operation vocabulary. */
+  readonly ops: readonly string[];
+  /** Whether the ONE composer module is in the tree at all. */
+  readonly composerModule: boolean;
+  /** The discovered command paths. */
+  readonly commands: readonly CommandPath[];
+  /** The surface bindings of the composer, and whether each delegates to it. */
+  readonly bindings: readonly { readonly file: string; readonly delegates: boolean }[];
+}
+
+/**
+ * The law, and the four ways it can be broken: the vocabulary is unreadable,
+ * the composer is gone, the discovery has NO SUBJECT, or a discovered command
+ * does not audit — plus the second-mechanism arm.
+ *
+ * It is a pure function of the subject so that
+ * `tests/guards/p4s4-command-refusal-audit-law.test.ts` can plant each defect
+ * and require the law to name it. A law whose only entry point reads the real
+ * tree can be proved green and never proved capable of red.
+ */
+export function refusalAuditProblems(subject: RefusalAuditSubject): string[] {
+  const problems: string[] = [];
+  if (subject.ops.length === 0)
+    problems.push(
+      `${OPERATION_VOCABULARY} declares no InventoryP4S<n>OperationCode union — the law cannot learn which operations are Phase 4's, so it has no subject and that is not a pass`,
+    );
+  if (!subject.composerModule) problems.push(`${REFUSAL_AUDIT_MODULE} is missing — there is then no ONE composer for a command's refusal path to reach`);
+  if (subject.commands.length === 0)
+    problems.push(
+      'the Phase 4 command discovery matched no service method — a derived law with no subject is not a pass (the rule is: an entry method of a *.service.ts under apps/api/src/modules that authorizes an operation of a declared InventoryP4S<n>OperationCode union, directly or through a helper of its own file)',
+    );
+  for (const c of subject.commands)
+    if (!c.audits)
+      problems.push(
+        `${c.file}: ${c.method} exercises Phase 4 operation(s) ${c.operations.join(', ')} and its refusal path reaches no auditThenRethrow… composer — a refused ${c.operations[0] ?? 'command'} would persist no audit evidence (P4-AL-48)`,
+      );
+  for (const d of subject.bindings)
+    if (!d.delegates)
+      problems.push(
+        `${d.file} declares its own auditThenRethrow… and does not delegate to ${REFUSAL_AUDIT_MODULE} — that is a second refusal-audit mechanism (P4-AL-48(a))`,
+      );
+  return problems;
+}
+
+/** The subject, read off a tree. */
+export function refusalAuditSubject(root: string): RefusalAuditSubject {
+  return {
+    ops: phase4OperationCodes(root),
+    composerModule: has(root, REFUSAL_AUDIT_MODULE),
+    commands: phase4Commands(root),
+    bindings: composerDefinitions(root),
+  };
+}
+
+/** The law, applied to a tree. */
+export function commandRefusalAuditProblems(root: string): string[] {
+  return refusalAuditProblems(refusalAuditSubject(root));
+}
+
+/** What the discovery found, printed on a PASS as well as on a FAIL. */
+export function commandRefusalAuditReport(root: string): string {
+  const ops = phase4OperationCodes(root);
+  const commands = phase4Commands(root);
+  const bindings = composerDefinitions(root);
+  return `${ops.length} declared Phase 4 operation(s) (${ops.join(', ') || 'none'}); ${commands.length} command path(s) discovered: ${
+    commands.map((c) => `${c.file.slice(c.file.lastIndexOf('/') + 1)}#${c.method} [${c.operations.join('+')}]${c.audits ? '' : ' NOT AUDITED'}`).join(', ') ||
+    'none'
+  }; ${bindings.length} surface binding(s) of the one composer: ${bindings.map((b) => b.file.slice(b.file.lastIndexOf('/') + 1)).join(', ') || 'none'}`;
+}
+
 export interface Check {
   readonly id: string;
   readonly title: string;
@@ -1351,6 +1770,13 @@ export const CHECKS: readonly Check[] = [
     run: executionProblems,
     note: executionReport,
     ok: 'every rostered file was handed to one bounded Vitest run whose exit status was read off the spawn result and not through a pipe, the process exited 0 without a signal, it found test files, and nothing failed, skipped or was left todo',
+  },
+  {
+    id: 'command-refusal-audit',
+    title: 'every Phase 4 command audits its refusals, over a DISCOVERED set of commands (P4-AL-48)',
+    run: commandRefusalAuditProblems,
+    note: commandRefusalAuditReport,
+    ok: "the Phase 4 operation vocabulary was read off its own type unions, at least one command path was discovered from the code, every discovered command's refusal path reaches the one `auditThenRethrow…` composer, and every surface binding of that composer delegates to the single refusal-audit module",
   },
   {
     id: 'closure-and-tense',
