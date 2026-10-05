@@ -520,14 +520,45 @@ const QUOTED = /'(?:\\.|[^'\\\n])*'|"(?:\\.|[^"\\\n])*"|`(?:\\.|[^`\\])*`/g;
 /**
  * SQL with `--` and block comments removed, so a rule never fires on prose.
  *
- * This is the gate's accepted comment-stripping device, and `phase4Sql`
- * applies it to every migration before any check sees one, which is why every
- * law in this file reads what the database EXECUTES and never what a comment
- * mentions. TL-P4-S5-R1 depends on exactly that, and `invoiceReducerProblems`
- * asserts the property rather than assuming it; it is exported so a guard
- * proof can assert it too instead of trusting it.
+ * This is the gate's comment-stripping device, and `phase4Sql` applies it to
+ * every migration before any check sees one, which is why every law in this
+ * file reads what the database EXECUTES and never what a comment mentions.
+ * TL-P4-S5-R1 depends on exactly that, and `invoiceReducerProblems` asserts
+ * the property rather than assuming it; it is exported so a guard proof can
+ * assert it too instead of trusting it.
+ *
+ * IT IS LITERAL-AWARE, AND THAT IS THE WHOLE POINT OF THE ONE PASS
+ * (TL-P4-S5-R1). It used to be two blind passes — block comments, then
+ * `--[^\n]*` — and neither knew what a string literal was. A line like
+ *
+ *   WHERE a.note <> '-- not a comment' AND x IN (SELECT … FROM public.refunds)
+ *
+ * was AMPUTATED at the literal's `--`, and everything after it on that line
+ * disappeared from every check in this file. On a financial law that is a
+ * FALSE GREEN: the refund read TL-P4-S5-R1 exists to refuse becomes invisible
+ * to it. A literal containing `/*` amputated the same way, across lines.
+ *
+ * The fix is not to blank literals. Several P4-S1 laws search for the CONTENT
+ * INSIDE a literal — a refusal code raised as `'invoice_settlement.…'`, a
+ * registered source type, a role name — and a device that blanked them would
+ * make those checks stop seeing the very thing they exist to see, silently and
+ * greenly, which is the failure mode this gate is built against.
+ *
+ * So one alternation pass decides what each match IS before deciding what to
+ * do with it: a literal is returned BYTE FOR BYTE, a block comment becomes a
+ * space and a line comment becomes nothing — the two substitutions the two
+ * blind passes used, unchanged. A `--` or a `/*` inside a literal is therefore
+ * part of the literal and never a comment, and an apostrophe inside a comment
+ * is part of the comment and never a literal, because a match is taken at the
+ * leftmost position and a comment's marker always precedes its own text. SQL
+ * escapes a quote by DOUBLING it, which `''` in the literal alternative is.
+ *
+ * This brings the SQL device up to the standard its TypeScript siblings above
+ * already meet: `stripTsProse` spares a `//` that follows a quote, and
+ * `QUOTED` reads a literal as one unit rather than as characters.
  */
-export const stripSql = (sql: string): string => sql.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/--[^\n]*/g, '');
+export const stripSql = (sql: string): string =>
+  sql.replace(/'(?:''|[^'])*'|\/\*[\s\S]*?\*\/|--[^\n]*/g, (m) => (m.startsWith("'") ? m : m.startsWith('--') ? '' : ' '));
 
 interface Manifest {
   readonly frozenThrough: string;
@@ -1244,12 +1275,24 @@ export function invoiceReducerProblems(root: string): string[] {
     // nor fail this law. `phase4Sql` strips comments out of every migration
     // before a check sees one; if a marker survived, that device changed and
     // this law would be reading a sentence as if it were SQL.
-    if (/--|\/\*/.test(executable)) {
+    //
+    // The marker is looked for OUTSIDE string literals, which is the other
+    // half of `stripSql` being literal-aware: `'-- not a comment'` is a value
+    // the database compares, not prose, and a law that read it as a leftover
+    // comment would refuse a legitimate routine. Only the markers are
+    // blanked out here, never the literal's CONTENT, which the refund check
+    // below still reads.
+    if (/--|\/\*/.test(executable.replace(/'(?:''|[^'])*'/g, "''"))) {
       problems.push(
         `TL-P4-S5-R1: the body read for ${name} still carries a comment marker, so the SQL prose stripping this law stands on is no longer in force — a comment must neither satisfy nor fail a financial law`,
       );
       continue;
     }
+    // The refund check reads the WHOLE body, string literals included, and that
+    // is deliberate: `EXECUTE 'SELECT … FROM public.refunds'` is a read, and a
+    // reader of the derived receivable has no business naming a refund
+    // relation in any form. Over-reporting here is a loud finding with the
+    // routine's name in it; under-reporting is a second reduction nobody sees.
     const refund = REFUND_VOCABULARY.exec(executable);
     if (refund !== null)
       problems.push(

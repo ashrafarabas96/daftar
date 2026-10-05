@@ -401,6 +401,145 @@ describe('§C the planted defects — direction C of TL-P4-S5-R1', () => {
   });
 });
 
+/**
+ * §E THE AMPUTATION — TL-P4-S5-R1's correction to the gate's SQL comment
+ * stripping, and the two measurements that show it was a FALSE GREEN.
+ *
+ * `stripSql` used to be two blind passes, `/* … *\/` then `--[^\n]*`, neither
+ * of which knew what a string literal was. A `--` or a `/*` INSIDE a literal
+ * was therefore read as the start of a comment, and everything after it
+ * vanished from every check in the gate — `phase4Sql` applies the device to
+ * every migration before any check sees one. On TL-P4-S5-R1 that is not a
+ * cosmetic loss: a refund read sitting after such a literal is simply not
+ * there any more, and the law reports nothing while the second reduction is
+ * live in the database.
+ *
+ * The fix is literal-AWARE stripping, not literal blanking: several P4-S1 laws
+ * search for the content inside a literal (a refusal code, a registered source
+ * type, a role name), so a device that blanked them would make those checks
+ * stop seeing what they exist to see. §E3 pins that down so the next reader
+ * cannot "simplify" this into blanking.
+ *
+ * Each proof below states BOTH measurements over the same planted text: what
+ * the blind device returns, and what the literal-aware one returns.
+ */
+describe('§E a literal containing a comment marker no longer amputates the line (TL-P4-S5-R1)', () => {
+  /** The device as it was: two blind passes, neither literal-aware. Reproduced here, not imported, because it is gone from the gate. */
+  const blindStrip = (sql: string): string => sql.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/--[^\n]*/g, '');
+
+  /**
+   * A reader whose refund read sits AFTER a literal, ON THE SAME LINE as the
+   * comment marker the literal contains. That placement is the whole defect:
+   * the blind `--` pass cut from the marker to the end of the line, so the
+   * subtraction that followed it was not in the text any check was given.
+   */
+  const readAfterLiteral = (literal: string): string =>
+    `    SELECT 0::BIGINT, 0::BIGINT, (SELECT i.total_txn_minor FROM public.invoices i WHERE i.memo <> ${literal} AND i.business_id = p_business_id AND i.id = p_invoice_id) - coalesce((SELECT sum(r.amount_txn_minor) FROM public.refunds r WHERE r.business_id = p_business_id), 0)::BIGINT, 0::BIGINT`;
+
+  it('RED E1: a literal holding `--` earlier on the line no longer hides the refund read that follows it', () => {
+    const routine = outstandingReading(readAfterLiteral("'-- not a comment'"));
+    // Both measurements are taken over the ROUTINE, which is what the law
+    // reads. Taking them over the whole planted file would be a measurement
+    // about the `CREATE TABLE refunds` beside it, which no device removes.
+    // MEASUREMENT 1 — the blind device: the refund read is GONE, cut away with
+    // the rest of its line, so the law would have been green while the second
+    // reduction was live in the database. This is the false green.
+    const blind = blindStrip(routine);
+    expect(blind).not.toContain('public.refunds');
+    expect(REFUND_VOCABULARY.test(blind), 'the blind device loses the refund read entirely — this is the false green').toBe(false);
+    // MEASUREMENT 2 — the literal-aware device: the read is there, and the
+    // literal is still there too, byte for byte.
+    const aware = stripSql(routine);
+    expect(REFUND_VOCABULARY.test(aware), 'the literal-aware device sees the refund read').toBe(true);
+    expect(aware).toContain('public.refunds');
+    expect(aware, 'and the literal survives unchanged').toContain("'-- not a comment'");
+    // And the law itself is RED on it.
+    const problems = invoiceReducerProblems(rootWith(`${REFUNDS}${routine}`));
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain('TL-P4-S5-R1');
+    expect(problems[0]).toContain('refunds');
+  });
+
+  it('RED E2: a literal holding `/*` no longer swallows everything up to the next real block comment', () => {
+    // The block-comment half of the same defect, and it is worse than the line
+    // half: the blind pass looked for the next `*/` ANYWHERE, so a literal
+    // containing `/*` swallowed every line between it and the next genuine
+    // block comment — and a migration in this tree is full of those. The plant
+    // carries one after the routine, which is what a real file looks like.
+    const routine = `${outstandingReading(readAfterLiteral("'/* not a comment'"))}
+      /* The end-state note a migration of this tree carries after its routine. */
+    `;
+    // MEASUREMENT 1 — the blind device swallows across lines and the refund
+    // read goes with it.
+    const blind = blindStrip(routine);
+    expect(blind).not.toContain('public.refunds');
+    expect(REFUND_VOCABULARY.test(blind), 'the blind device loses the refund read across lines — the same false green').toBe(false);
+    // MEASUREMENT 2 — the literal-aware device keeps the read and the literal,
+    // and still removes the genuine block comment that follows.
+    const aware = stripSql(routine);
+    expect(REFUND_VOCABULARY.test(aware)).toBe(true);
+    expect(aware).toContain("'/* not a comment'");
+    expect(aware).not.toContain('The end-state note');
+    const problems = invoiceReducerProblems(rootWith(`${REFUNDS}${routine}`, '9999_planted_block.sql'));
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain('refunds');
+  });
+
+  it('E3: literals are kept BYTE FOR BYTE, never blanked — every refusal code the Phase 4 DDL raises survives the strip', () => {
+    /**
+     * The guard against the "simplification" that would blank literals instead
+     * of reading them. Several P4-S1 laws search INSIDE a literal, so a device
+     * that emptied them would make those checks stop finding their subject —
+     * silently, and greenly.
+     *
+     * The codes are DISCOVERED from the raw migration text, not listed here:
+     * the day a slice adds a refusal code, this proof covers it without being
+     * edited.
+     */
+    const raw = phase4Migrations(REPO)
+      .map((f) => readFileSync(join(MIGRATIONS, f), 'utf8'))
+      .join('\n');
+    const codes = [...new Set([...raw.matchAll(/'([a-z_]+\.[a-z_]+):/g)].map((m) => m[1] ?? ''))].sort();
+    expect(codes.length, 'the Phase 4 DDL raises no refusal code at all, so this proof would be vacuous').toBeGreaterThan(10);
+    const stripped = phase4Sql(REPO);
+    for (const code of codes) expect(stripped, `the refusal code '${code}' must survive the strip`).toContain(`'${code}:`);
+    // And a literal is returned unchanged even when it is nothing but a
+    // comment marker — the narrowest case of the same rule.
+    expect(stripSql("SELECT '--', '/*', '*/' FROM t -- gone")).toBe("SELECT '--', '/*', '*/' FROM t ");
+    // A doubled quote is how SQL escapes one, so it does not end the literal.
+    expect(stripSql("SELECT 'it''s -- fine' FROM t")).toBe("SELECT 'it''s -- fine' FROM t");
+    // An apostrophe INSIDE a comment is part of the comment, not the start of
+    // a literal: the comment's marker is always to the left of its own text.
+    expect(stripSql("SELECT a FROM t -- don't read this\nSELECT b FROM u")).toBe('SELECT a FROM t \nSELECT b FROM u');
+  });
+
+  it('NOT A FINDING E: a legitimate reader whose literal contains `--` is not refused as prose', () => {
+    // The other half of literal-awareness, in the law itself: the prose-free
+    // precondition looks for a comment marker OUTSIDE literals, so a routine
+    // that genuinely compares against `'--'` is a routine and not a leftover
+    // comment. Without that, the fix above would have turned every such
+    // reader red — trading a false green for a false red.
+    const planted = outstandingReading(`    SELECT 0::BIGINT, 0::BIGINT, i.total_txn_minor, 0::BIGINT
+      FROM public.invoices i
+     WHERE i.memo <> '-- not a comment' AND i.memo <> '/* nor this */' AND i.business_id = p_business_id AND i.id = p_invoice_id`);
+    const root = rootWith(planted, '9999_planted_literal.sql');
+    const body = phase4RoutineBody(root, 'invoice_outstanding') ?? '';
+    expect(body, 'the literals really do reach the law with their markers intact').toContain("'-- not a comment'");
+    expect(invoiceReducerProblems(root)).toEqual([]);
+  });
+
+  it('E4: the real tree is unchanged in the one way that matters — every reader still arrives prose-free and refund-free', () => {
+    // The device changed for every check in the gate, so the property
+    // TL-P4-S5-R1 stands on is re-asserted against the real tree under it.
+    for (const name of receivableReaders(REPO)) {
+      const body = phase4RoutineBody(REPO, name) ?? '';
+      expect(body, `${name} arrives with no comment marker`).not.toMatch(/--|\/\*/);
+      expect(REFUND_VOCABULARY.test(body), `${name} reads no refund relation`).toBe(false);
+    }
+    expect(invoiceReducerProblems(REPO)).toEqual([]);
+  });
+});
+
 describe('§D the discovered stripper of the S-P4-03 red proof is kept (commit 479110f)', () => {
   it('every TRUE reducer the tree creates is actually removed from the planted copy the S-P4-03 red proof uses', () => {
     /**
