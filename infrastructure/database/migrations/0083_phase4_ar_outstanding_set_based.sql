@@ -205,9 +205,74 @@
 --       costs as seen from the plan cache rather than from the array.
 --
 -- (a) is the only one of the three that can plausibly cost MILLISECONDS; (b)
--- and (c) are microseconds each. How the measured 9.982 ms actually divides
--- between them is settled by measurement in the window beside this file and
--- reported there with its numbers, never asserted from this comment.
+-- and (c) are microseconds each. That was the expectation, and it was then
+-- MEASURED.
+--
+-- ── R-103-M WHAT THE MEASUREMENT FOUND ───────────────────────────────────
+--
+-- PostgreSQL 16.13 on 127.0.0.1:5432 — the deployment target, not an
+-- embedded 18.4 cluster — over a population of one business, 2 003 invoices,
+-- a 2 000-open-invoice fat-tail customer with 4 000 allocations and a
+-- 3-open-invoice median customer, ANALYZEd. 200 samples per arm, one
+-- session, as `daftar_app` with the request scope GUCs set and ROW SECURITY
+-- APPLIED, which is the principal the product reads as.
+--
+-- THESE ARE STATEMENT FIGURES, NOT THE P4-D BUDGET. The budget is 200 HTTP
+-- samples in `receivables-s4-budgets.test.ts` and is not restated here.
+--
+--   MEDIAN arm, the AR sum over 3 open invoices
+--     with the re-join      (this file's first text)  p50 4.079  p95 4.517
+--     without it            (this file's text)        p50 1.412  p95 1.796
+--     ------------------------------------------------------------------
+--     REMOVING THE RE-JOIN IS WORTH                   p50 2.667  p95 2.721
+--
+--   FAT-TAIL arm, the same sum over 2 000 open invoices
+--     with the re-join                                p50 26.756 p95 31.814
+--     without it                                      p50 23.443 p95 27.206
+--     — so the fat tail gets FASTER too, and nothing regresses.
+--
+--   The non-vacuity check, isolated (the array form called directly with 3
+--   ids, the corrected body against one identical but for running the
+--   distinct count unconditionally):
+--     unconditional                                   p50 1.098  p95 1.352
+--     short-circuited                                 p50 1.026  p95 1.280
+--     ------------------------------------------------------------------
+--     THE SHORT CIRCUIT IS WORTH                      p50 0.072  p95 0.072
+--
+-- So (a) is ~97% of what this correction recovers and (b)+(c) are ~3%, which
+-- is what was expected and is now measured rather than assumed. The ratio of
+-- (a) to (b) is not a constant of nature: the re-join's cost is the cost of
+-- scanning the BUSINESS'S WHOLE INVOICE SET, so it grows with that set while
+-- the check does not.
+--
+-- THE PLAN, WHICH IS WHY (a) COSTS WHAT IT DOES. `EXPLAIN (ANALYZE, BUFFERS)`
+-- of the median read with the re-join:
+--
+--   HashAggregate
+--     InitPlan 1  -> Index Scan using invoices_customer_idx  (actual rows=3)
+--     ->  Hash Join  (cost rows=1000)  (actual rows=3)
+--           ->  Function Scan on invoice_outstanding  (est 1000, actual 3)
+--           ->  Hash  ->  Seq Scan on invoices i  (actual rows=2003,
+--                           Buffers: shared hit=294)
+--
+-- A FULL SEQUENTIAL SCAN OF EVERY INVOICE IN THE BUSINESS, hashed, on every
+-- read of a three-invoice customer — to recover a currency code the function
+-- had already read. Under row security the policy predicate is evaluated on
+-- each of those rows, which is why the saving is 2.667 ms as `daftar_app`
+-- and 0.574 ms as the owner with row security bypassed.
+--
+-- THE 1 000-ROW ESTIMATE IS STILL THERE AND NO `ROWS` CLAUSE IS ADDED. With
+-- the join gone the same plan reads:
+--
+--   HashAggregate  (est 199 groups, actual 1)
+--     ->  Function Scan on invoice_outstanding  (est 1000, actual 3)
+--
+-- The estimate is still 333x high at the median and 2x low at the fat tail,
+-- and it no longer matters: there is nothing left for it to mis-JOIN. It
+-- buys a 40 kB hash table instead of a smaller one, and the aggregate itself
+-- measured ~0.02 ms above its input. A `ROWS` clause is NOT added — one
+-- constant cannot be right for both arms, and the mis-estimate is now
+-- costing nothing worth a declaration that would be wrong on one side.
 --
 -- ── R-104 THE SHAPE THAT REMOVES IT, STILL WITH ONE COPY ─────────────────
 --
