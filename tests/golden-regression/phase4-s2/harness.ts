@@ -494,6 +494,13 @@ export async function discoveredRegistryPrunes(q: Queryable): Promise<readonly R
 export interface RegistryExpiry {
   readonly total: number;
   readonly expired: number;
+  /**
+   * `now() - interval` at the instant of THIS census, in epoch milliseconds,
+   * read from the database's own clock and never from the test host's.
+   */
+  readonly horizonEpochMs?: number;
+  /** The prune column of every row counted, in epoch milliseconds. */
+  readonly keysEpochMs?: readonly number[];
 }
 
 /** Per registry: how many rows there are, and how many of them the prune is already entitled to take. */
@@ -503,12 +510,21 @@ export async function registryExpiry(q: Queryable, prunes: readonly RegistryPrun
     // Both identifiers go through `quoteIdent`, and the interval is the
     // `[^']+` the regex above captured out of `pg_get_functiondef` — the
     // catalogue's own text, never caller input.
-    const r = await q.query<RegistryExpiry>(
+    const r = await q.query<{ total: number; expired: number; horizon_ms: string; keys_ms: string[] | null }>(
       `SELECT count(*)::int AS total,
-              count(*) FILTER (WHERE ${quoteIdent(p.column)} < now() - interval '${p.interval}')::int AS expired
+              count(*) FILTER (WHERE ${quoteIdent(p.column)} < now() - interval '${p.interval}')::int AS expired,
+              (extract(epoch FROM now() - interval '${p.interval}') * 1000)::bigint AS horizon_ms,
+              array_agg((extract(epoch FROM ${quoteIdent(p.column)}) * 1000)::bigint)
+                FILTER (WHERE ${quoteIdent(p.column)} IS NOT NULL) AS keys_ms
          FROM ${quoteIdent(p.table)}`,
     );
-    out[p.table] = must(r.rows[0], `registry expiry for ${p.table}`);
+    const row = must(r.rows[0], `registry expiry for ${p.table}`);
+    out[p.table] = {
+      total: row.total,
+      expired: row.expired,
+      horizonEpochMs: Number(row.horizon_ms),
+      keysEpochMs: (row.keys_ms ?? []).map((k) => Number(k)),
+    };
   }
   return out;
 }
@@ -521,8 +537,38 @@ export async function registryExpiry(q: Queryable, prunes: readonly RegistryPrun
  * synthetic captures. An inequality that only ever runs against a real capture
  * is an inequality nobody has seen refuse anything.
  */
-export function lostBeyondExpiry(was: RegistryExpiry, now: Pick<RegistryExpiry, 'total'>): number {
-  return Math.max(0, was.total - was.expired - now.total);
+export function lostBeyondExpiry(was: RegistryExpiry, now: Pick<RegistryExpiry, 'total' | 'horizonEpochMs'>): number {
+  return Math.max(0, was.total - entitledToPrune(was, now) - now.total);
+}
+
+/**
+ * How many of the rows the BEFORE census counted the prune was entitled to
+ * take, measured against the wall clock the prune actually ran on.
+ *
+ * `was.expired` is the entitlement at the instant of the before census, and
+ * reading the law off it is the same measurement defect the monotonicity law
+ * above was corrected for, one step subtler: the prune fires LATER, inside the
+ * race, so a row that was seconds short of the interval when the census read
+ * it is lawfully past it by the time the prune reaches it, and counting its
+ * removal as "an unexpired jti vanishing" is the law being wrong about the
+ * clock rather than the registry losing a row. Measured 2026-10-05 (step 30 of
+ * the `backend` job on `fd3a66f`): `inventory_assertion_uses` held 2765 rows
+ * of which 2 were already past `1 hour` at the before census and 2762 after —
+ * one row crossed the boundary between the two reads, and the law called it a
+ * defect.
+ *
+ * So the entitlement is recomputed from the before census's own row keys
+ * against the AFTER census's horizon, both read from the database's clock. It
+ * is never smaller than `was.expired`, because the horizon only moves forward,
+ * and it still refuses exactly what the law is about: a row not past the
+ * interval even at the later instant may not disappear. Where a capture
+ * carries no keys — the synthetic red proofs — it falls back to the
+ * before-census entitlement, so those keep proving the inequality can say no.
+ */
+export function entitledToPrune(was: RegistryExpiry, now: Pick<RegistryExpiry, 'horizonEpochMs'>): number {
+  const horizon = now.horizonEpochMs;
+  if (was.keysEpochMs === undefined || horizon === undefined) return was.expired;
+  return was.keysEpochMs.filter((k) => k < horizon).length;
 }
 
 // ── 4. the official reconciliation formula ────────────────────────────────

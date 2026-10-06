@@ -67,6 +67,7 @@ import {
   censusDelta,
   censusKinds,
   discoveredRegistryPrunes,
+  entitledToPrune,
   expectNoDeadlock,
   forcedRace,
   lostBeyondExpiry,
@@ -322,8 +323,9 @@ describe('P4-S4 C-1 two concurrent settlements of the last remaining amount', ()
       const now = must(registryAfter[pr.table], `${pr.table} after the race`);
       expect(
         lostBeyondExpiry(was, now),
-        `${pr.table}: ${was.total} rows before the race of which ${was.expired} were already past ${pr.interval}, and ${now.total} after — ` +
-          `a decrease beyond the expired ones is an unexpired jti vanishing, which no prune may do`,
+        `${pr.table}: ${was.total} rows before the race of which ${entitledToPrune(was, now)} were past ${pr.interval} by the time ` +
+          `the prune ran (${was.expired} already were when the census read them), and ${now.total} after — ` +
+          `a decrease beyond the entitled ones is an unexpired jti vanishing, which no prune may do`,
       ).toBe(0);
     }
   });
@@ -337,5 +339,16 @@ describe('P4-S4 C-1 two concurrent settlements of the last remaining amount', ()
     expect(lostBeyondExpiry({ total: 4, expired: 0 }, { total: 3 }), 'with nothing expired, any loss is a defect').toBe(1);
     expect(lostBeyondExpiry({ total: 4, expired: 4 }, { total: 0 }), 'an all-expired registry may be emptied').toBe(0);
     expect(lostBeyondExpiry({ total: 2, expired: 0 }, { total: 9 }), 'growth is not a loss').toBe(0);
+    // And over the KEYED captures the real census takes, since the entitlement
+    // the law reads is the one recomputed against the prune's own later
+    // horizon. A row is expired when its key is below the horizon, and the
+    // horizon is already `now - interval`, so these keys are stated against
+    // it: four rows aged 1, 30, 59 and 61 minutes of an hour-long interval,
+    // read at the census horizon and then two minutes later.
+    const keyed = { total: 4, expired: 1, horizonEpochMs: 0, keysEpochMs: [3_540_000, 1_800_000, 60_000, -60_000] };
+    expect(entitledToPrune(keyed, { horizonEpochMs: 0 }), 'at the census horizon only the 61-minute row is expired').toBe(1);
+    expect(entitledToPrune(keyed, { horizonEpochMs: 120_000 }), 'two minutes later the 59-minute row is expired too').toBe(2);
+    expect(lostBeyondExpiry(keyed, { total: 2, horizonEpochMs: 120_000 }), 'both entitled rows may go').toBe(0);
+    expect(lostBeyondExpiry(keyed, { total: 1, horizonEpochMs: 120_000 }), 'a third row may not').toBe(1);
   });
 });
