@@ -1258,6 +1258,22 @@ export const REFUND_VOCABULARY = /(^|_)refunds?(_|$)/i;
 export const isRefundRelation = (name: string): boolean => REFUND_VOCABULARY.test(name) && !REFUND_SUPPLIER_EXCLUSION.test(name);
 
 /**
+ * The first refund relation a TEXT mentions, or null — the one device every
+ * caller uses, so a NAME and a BODY are judged by the same rule.
+ *
+ * It scans IDENTIFIERS rather than running a pattern over the raw text,
+ * because the rule is about a name and `_` is a word character: no `\b`
+ * pattern can match a name by one of its tokens, which is why the earlier
+ * prefix-list regex missed `pos_refunds`, `refund_lines` and
+ * `customer_refund_allocations` outright. Scanning identifiers also means
+ * `public.refunds` is found, since `.` ends an identifier.
+ */
+export const refundMention = (text: string): string | null => (text.match(/[A-Za-z_][A-Za-z0-9_]*/g) ?? []).find(isRefundRelation) ?? null;
+
+/** Whether a text mentions any Phase 4 cash-refund relation. */
+export const mentionsRefundRelation = (text: string): boolean => refundMention(text) !== null;
+
+/**
  * The routines that READ the derived invoice/customer receivable. Discovered
  * from the Phase 4 DDL by what a receivable reader is CALLED, so the family
  * grows by itself rather than being a list this slice happened to see.
@@ -1433,11 +1449,7 @@ export function invoiceReducerProblems(root: string): string[] {
     // refund that is read. The remedy is NOT to widen it to ignore literals
     // wholesale: that would hand back dynamic SQL, which is a read, and a
     // false green on this law is a receivable reduced twice.
-    // Every IDENTIFIER of the body against the token rule, rather than one
-    // regex over the whole text: the rule is about a name, and `\b` does not
-    // break at `_`, so no pattern over the raw text could match a name by one
-    // of its tokens. The supplier exclusion is applied by `isRefundRelation`.
-    const refund = (executable.match(/[A-Za-z_][A-Za-z0-9_]*/g) ?? []).find(isRefundRelation) ?? null;
+    const refund = refundMention(executable);
     if (refund !== null)
       problems.push(
         `TL-P4-S5-R1: ${name} reads ${refund} in its executable body — a refund does not undo a payment and does not settle an invoice: it settles the credit-note or customer-credit liability it is paid out of, and the invoice receivable was already reduced once by that credit effect. Reading it here reduces invoice AR a second time (lock P4-AL-34, P4-AL-05)`,

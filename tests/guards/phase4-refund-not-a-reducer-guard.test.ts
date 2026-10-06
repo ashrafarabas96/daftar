@@ -58,7 +58,7 @@
  * `docs/PHASE_4_DECISION_REGISTER.md` under TL-P4-S5-R1, with those three
  * absences as the measured reason.
  */
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, cpSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, cpSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
@@ -66,6 +66,7 @@ import {
   INVOICE_REDUCER_VOCABULARY,
   RECEIVABLE_READER_VOCABULARY,
   REFUND_VOCABULARY,
+  mentionsRefundRelation,
   deferredSeamProblems,
   invoiceReducerProblems,
   phase4Migrations,
@@ -166,7 +167,7 @@ describe('§A the law has a subject, and the tree satisfies it for a reason', ()
     expect(deferredSeamProblems(REPO)).toEqual([]);
     const executable = phase4RoutineBody(REPO, 'invoice_outstanding') ?? '';
     for (const name of reducers) expect(new RegExp(`\\b${name}\\b`).test(executable), `invoice_outstanding reads ${name}`).toBe(true);
-    expect(REFUND_VOCABULARY.test(executable), 'and reads no refund relation').toBe(false);
+    expect(mentionsRefundRelation(executable), 'and reads no refund relation').toBe(false);
   });
 
   it('a tree with no Phase 4 DDL is silent, and a tree with DDL but no receivable reader is NOT', () => {
@@ -209,7 +210,7 @@ describe('§A the law has a subject, and the tree satisfies it for a reason', ()
 describe('§B the vocabulary a refund relation cannot be renamed out of', () => {
   it('the refund vocabulary covers the shapes a refund relation will be given, and nothing a reducer is called', () => {
     for (const name of ['refunds', 'refund_allocations', 'refund_applications', 'invoice_refunds', 'credit_note_refunds', 'customer_credit_refunds'])
-      expect(REFUND_VOCABULARY.test(name), `${name} is a refund relation`).toBe(true);
+      expect(mentionsRefundRelation(name), `${name} is a refund relation`).toBe(true);
     // A reducer is not a refund, in either direction: the two vocabularies are
     // disjoint, so no relation can be demanded by the seam and refused by this
     // law at the same time.
@@ -227,10 +228,44 @@ describe('§B the vocabulary a refund relation cannot be renamed out of', () => 
       'customers',
       'sales',
     ]) {
-      expect(REFUND_VOCABULARY.test(name), `${name} is not a refund relation`).toBe(false);
-      if (INVOICE_REDUCER_VOCABULARY.test(name)) expect(REFUND_VOCABULARY.test(name)).toBe(false);
+      expect(mentionsRefundRelation(name), `${name} is not a refund relation`).toBe(false);
+      if (INVOICE_REDUCER_VOCABULARY.test(name)) expect(mentionsRefundRelation(name)).toBe(false);
     }
     expect(INVOICE_REDUCER_VOCABULARY.test('refunds'), 'a refund is not a reducer of the invoice receivable (P4-AL-34)').toBe(false);
+  });
+
+  it('the supplier exclusion is load-bearing: the purchase side of the estate really carries refund relations, and this law is about the CUSTOMER receivable', () => {
+    // NON-VACUITY FIRST. The exclusion is only worth a law because the tree
+    // genuinely contains purchase-side refund relations. Derived from the
+    // migrations, never from a list here, so a purchase-side name a later
+    // slice adds is covered without this file being edited.
+    const identifiers = new Set<string>();
+    for (const file of readdirSync(MIGRATIONS).filter((f) => f.endsWith('.sql')))
+      for (const token of readFileSync(join(MIGRATIONS, file), 'utf8').match(/[A-Za-z_][A-Za-z0-9_]*/g) ?? [])
+        if (REFUND_VOCABULARY.test(token)) identifiers.add(token.toLowerCase());
+    const purchaseSide = [...identifiers].filter((name) => /(^|_)(supplier|suppliers|purchase|purchases|vendor|vendors)(_|$)/i.test(name)).sort();
+    expect(purchaseSide, 'the tree carries no purchase-side refund name, so excluding one proves nothing').not.toEqual([]);
+
+    // THE RED PROOF. The device WITHOUT the exclusion — the whole rule minus
+    // the one clause — refuses every one of those real names. That is the
+    // false red the exclusion exists to prevent: a routine of the purchase
+    // ledger refused by a law about the sales receivable.
+    const withoutTheExclusion = (text: string): boolean => (text.match(/[A-Za-z_][A-Za-z0-9_]*/g) ?? []).some((token) => REFUND_VOCABULARY.test(token));
+    for (const name of purchaseSide) {
+      expect(withoutTheExclusion(name), `${name} IS refund vocabulary, which is why the exclusion is needed`).toBe(true);
+      expect(mentionsRefundRelation(name), `${name} is the purchase ledger, not the customer receivable`).toBe(false);
+    }
+
+    // And the exclusion is a TOKEN rule, so it narrows the law by exactly one
+    // ledger and not by a spelling: a customer refund relation does not escape
+    // this law by carrying the purchase vocabulary as a SUBSTRING.
+    for (const name of ['refunds_supplierish', 'refund_purchased', 'vendorless_refunds'])
+      expect(mentionsRefundRelation(name), `${name} is a customer refund relation with a purchase-looking substring`).toBe(true);
+
+    // The same holds inside free text, which is where the law is actually
+    // applied: a purchase-side read is silent, a customer-side read is not.
+    expect(mentionsRefundRelation('SELECT amount FROM public.supplier_refunds WHERE id = p_id')).toBe(false);
+    expect(mentionsRefundRelation('SELECT amount FROM public.refunds WHERE id = p_id')).toBe(true);
   });
 
   it('the receivable-reader vocabulary finds the tree’s readers by what they are CALLED, not by a list', () => {
@@ -330,12 +365,12 @@ describe('§C the planted defects — direction C of TL-P4-S5-R1', () => {
      WHERE i.business_id = p_business_id AND i.id = p_invoice_id`;
     // The prose really does name a refund relation — otherwise this test would
     // pass for want of a subject.
-    expect(REFUND_VOCABULARY.test(prose), 'the planted prose does mention refund relations').toBe(true);
+    expect(mentionsRefundRelation(prose), 'the planted prose does mention refund relations').toBe(true);
     const root = rootWith(`${REFUNDS}${outstandingReading(prose)}`);
     // …and it is gone, in both comment forms, by the time the law looks.
     const body = phase4RoutineBody(root, 'invoice_outstanding') ?? '';
     expect(body).not.toMatch(/--|\/\*/);
-    expect(REFUND_VOCABULARY.test(body)).toBe(false);
+    expect(mentionsRefundRelation(body)).toBe(false);
     expect(invoiceReducerProblems(root)).toEqual([]);
   });
 
@@ -374,8 +409,8 @@ describe('§C the planted defects — direction C of TL-P4-S5-R1', () => {
       '  FROM public.payment_allocations a WHERE a.id = p_id',
     ].join('\n');
     const out = stripSql(sql);
-    expect(REFUND_VOCABULARY.test(sql), 'the fixture does name refund relations, in comments only').toBe(true);
-    expect(REFUND_VOCABULARY.test(out), 'and no comment survives the gate’s stripping device').toBe(false);
+    expect(mentionsRefundRelation(sql), 'the fixture does name refund relations, in comments only').toBe(true);
+    expect(mentionsRefundRelation(out), 'and no comment survives the gate’s stripping device').toBe(false);
     expect(out).toContain('public.payment_allocations');
     expect(out).toContain('a.id = p_id');
     // And the bodies the law reads really do arrive prose-free, which is the
@@ -446,11 +481,11 @@ describe('§E a literal containing a comment marker no longer amputates the line
     // reduction was live in the database. This is the false green.
     const blind = blindStrip(routine);
     expect(blind).not.toContain('public.refunds');
-    expect(REFUND_VOCABULARY.test(blind), 'the blind device loses the refund read entirely — this is the false green').toBe(false);
+    expect(mentionsRefundRelation(blind), 'the blind device loses the refund read entirely — this is the false green').toBe(false);
     // MEASUREMENT 2 — the literal-aware device: the read is there, and the
     // literal is still there too, byte for byte.
     const aware = stripSql(routine);
-    expect(REFUND_VOCABULARY.test(aware), 'the literal-aware device sees the refund read').toBe(true);
+    expect(mentionsRefundRelation(aware), 'the literal-aware device sees the refund read').toBe(true);
     expect(aware).toContain('public.refunds');
     expect(aware, 'and the literal survives unchanged').toContain("'-- not a comment'");
     // And the law itself is RED on it.
@@ -473,11 +508,11 @@ describe('§E a literal containing a comment marker no longer amputates the line
     // read goes with it.
     const blind = blindStrip(routine);
     expect(blind).not.toContain('public.refunds');
-    expect(REFUND_VOCABULARY.test(blind), 'the blind device loses the refund read across lines — the same false green').toBe(false);
+    expect(mentionsRefundRelation(blind), 'the blind device loses the refund read across lines — the same false green').toBe(false);
     // MEASUREMENT 2 — the literal-aware device keeps the read and the literal,
     // and still removes the genuine block comment that follows.
     const aware = stripSql(routine);
-    expect(REFUND_VOCABULARY.test(aware)).toBe(true);
+    expect(mentionsRefundRelation(aware)).toBe(true);
     expect(aware).toContain("'/* not a comment'");
     expect(aware).not.toContain('The end-state note');
     const problems = invoiceReducerProblems(rootWith(`${REFUNDS}${routine}`, '9999_planted_block.sql'));
@@ -534,7 +569,7 @@ describe('§E a literal containing a comment marker no longer amputates the line
     for (const name of receivableReaders(REPO)) {
       const body = phase4RoutineBody(REPO, name) ?? '';
       expect(body, `${name} arrives with no comment marker`).not.toMatch(/--|\/\*/);
-      expect(REFUND_VOCABULARY.test(body), `${name} reads no refund relation`).toBe(false);
+      expect(mentionsRefundRelation(body), `${name} reads no refund relation`).toBe(false);
     }
     expect(invoiceReducerProblems(REPO)).toEqual([]);
   });
