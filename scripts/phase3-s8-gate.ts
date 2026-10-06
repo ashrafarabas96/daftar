@@ -21,7 +21,7 @@
  * column grants and, under R-B1a, exactly the delimited guard section); the
  * reconciler model; the reconciliation domain; no stored rebuild swap; TD-12;
  * the suites; the premortem matrix (the static half of T-18); the widened
- * guards (23 rules); no skip. The runtime half composes `gate:phase3:s7` first
+ * guards (every declared rule, floor 23); no skip. The runtime half composes `gate:phase3:s7` first
  * (which composes S6 … S1, P2-S8 … P2-S1 and Phase 1), then the two domain
  * packages, the S8 suites, the Tier 1 budgets alone and Budget A (and B, under
  * R-B1a) alone and last.
@@ -132,7 +132,16 @@ export const TD12_SITES = [
 const TD12_HOME = 'packages/accounting/src/assertion-keys.ts';
 
 /** S7's rule count; S8 widens rules and adds none. */
-export const EXPECTED_RULE_COUNT = 23;
+/**
+ * A FLOOR, not an equality — the accepted rule count of S7, which later slices
+ * may only add to. `[[daftar-a-closure-rule-is-not-an-invariant]]`: this was
+ * compared with `===`, and the first legitimate successor rule (Phase 4's rule
+ * 24) made this ACCEPTED gate refuse every later tree, which is the P2-S9
+ * defect `tests/security/phase4-forward-evolution.test.ts` exists to refuse.
+ * The number the banner must print is DERIVED from the guards script's own
+ * `// Rule N` headers, so the two can never disagree.
+ */
+export const EXPECTED_RULE_FLOOR = 23;
 
 /** The one routine after the prefix that may write the stock cache (A-13 §4: no stored swap). */
 const STOCK_CACHE_WRITERS = ['inventory_apply_stock_movements'];
@@ -796,7 +805,12 @@ function runGate(root: string, listOnly: boolean, structuralOnly: boolean): void
     const declaredRules = new Set(
       [...(has('scripts/static-guards.ts') ? read('scripts/static-guards.ts') : '').matchAll(/^\/\/ Rule (\d+)\b/gm)].map((m) => Number(m[1])),
     ).size;
-    console.log(`P3-S8 GATE — static guards (A-18; ${declaredRules} rules)`);
+    console.log(`P3-S8 GATE — static guards (A-18; ${declaredRules} rules, floor ${EXPECTED_RULE_FLOOR})`);
+    if (declaredRules < EXPECTED_RULE_FLOOR)
+      fail(
+        'guards',
+        `scripts/static-guards.ts declares ${declaredRules} rule(s) and the S7-accepted floor is ${EXPECTED_RULE_FLOOR} — an accepted rule has left the program`,
+      );
     const mark = failures;
     const code = (file: string): string => (has(file) ? stripTsProse(read(file)) : '');
     const references: readonly (readonly [file: string, token: RegExp, why: string])[] = [
@@ -815,9 +829,9 @@ function runGate(root: string, listOnly: boolean, structuralOnly: boolean): void
     // The same guard program `npm run check:guards` runs, under the same tsx.
     const res = spawnSync(process.execPath, [...process.execArgv, join(root, 'scripts/static-guards.ts')], { cwd: root, encoding: 'utf8', env: process.env });
     const output = `${res.stdout ?? ''}${res.stderr ?? ''}`;
-    if (res.status !== 0 || !output.includes(`STATIC GUARDS: PASS (${EXPECTED_RULE_COUNT} rules)`))
-      fail('guards', `the static guards did not print PASS (${EXPECTED_RULE_COUNT} rules) (exit ${res.status ?? 'signal'}):\n${output.slice(-2500)}`);
-    if (failures === mark) ok(`STATIC GUARDS: PASS (${EXPECTED_RULE_COUNT} rules), with rules 15-18 and 22 on the Phase 3 surface`);
+    if (res.status !== 0 || !output.includes(`STATIC GUARDS: PASS (${declaredRules} rules)`))
+      fail('guards', `the static guards did not print PASS (${declaredRules} rules) (exit ${res.status ?? 'signal'}):\n${output.slice(-2500)}`);
+    if (failures === mark) ok(`STATIC GUARDS: PASS (${declaredRules} rules, floor ${EXPECTED_RULE_FLOOR}), with rules 15-18 and 22 on the Phase 3 surface`);
   }
 
   // ── 9. Budgets stay (§A-17) ───────────────────────────────────────────────
