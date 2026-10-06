@@ -132,8 +132,35 @@ export function consumptionShapeProblems(source: string): string[] {
 }
 
 /**
- * RULE 4 — the replay proof is consulted BEFORE any current state is read
- * (`[[daftar-registry-before-state]]`).
+ * RULE 4 — the order of the proof, the one argument it cannot see, and the
+ * state (`[[daftar-registry-before-state]]`, and the
+ * `customer_credit_application` precedent).
+ *
+ * This rule used to say only "the proof comes before every state read", and
+ * THAT IS THE LAW THAT HELD THE DEFECT IN PLACE. `opened_by` is the
+ * `invctl/1` assertion's actor and appears in no POS payload grammar, so the
+ * sale's intent digest cannot carry the authenticated user; while the
+ * ownership refusal sat after `provenReplay`, a colleague who delivered an
+ * already-committed `saleId` was answered `200` with the drawer's sale, its
+ * totals and its `cogsBaseMinor`, and `pos.session_not_owned` — OD-P4-09's
+ * whole sentence — was never reached. A law that forbids reading the session
+ * at all cannot tell that case from the one it was written for.
+ *
+ * So the rule now states the ORDER in three parts, and each part is the half
+ * of the ruling the other cannot express:
+ *
+ *   (a) the CART is read after the proof. That is what
+ *       `[[daftar-registry-before-state]]` is actually about here: the cart is
+ *       the state the sale is derived from, and a handler that derived a sale
+ *       from the basket before consulting the proof would perform a second
+ *       real change on a stale retry.
+ *   (b) `pos.session_not_owned` is judged BEFORE the proof, and the only
+ *       thing between the session read and the proof is that one refusal — so
+ *       the read cannot grow into a decision the proof has not seen.
+ *   (c) `pos.session_not_open` is judged AFTER the proof. A cashier who
+ *       checks out and then closes her till is entitled to have her own retry
+ *       answered from the stored sale; refusing it is the false conflict in
+ *       another spelling.
  */
 export function proofBeforeStateProblems(source: string): string[] {
   const body = code(source);
@@ -142,11 +169,37 @@ export function proofBeforeStateProblems(source: string): string[] {
   const proof = run.indexOf('this.provenReplay(');
   const session = run.indexOf('this.readSession(');
   const cart = run.indexOf('this.readCartSnapshot(');
+  const notOwned = run.indexOf("'pos.session_not_owned'");
+  const notOpen = run.indexOf("'pos.session_not_open'");
   const problems: string[] = [];
   if (proof < 0) problems.push('the checkout consults no replay proof at all');
   if (session < 0 || cart < 0) problems.push('the checkout reads no session or no cart — there is no state read to be ordered against');
-  if (proof >= 0 && session >= 0 && proof > session) problems.push('the checkout reads the till session BEFORE proving which command it is replaying');
+  if (notOwned < 0) problems.push('the checkout never refuses pos.session_not_owned — OD-P4-09 is the whole point of one session, one user');
+  if (notOpen < 0) problems.push('the checkout never refuses pos.session_not_open');
+  // (a) the cart, the state the sale is derived from, comes after the proof.
   if (proof >= 0 && cart >= 0 && proof > cart) problems.push('the checkout reads the cart BEFORE proving which command it is replaying');
+  // (b) the one argument the digest cannot carry is judged first, and the
+  //     session read exists for nothing else until the proof has answered.
+  if (proof >= 0 && notOwned >= 0 && notOwned > proof)
+    problems.push(
+      'the checkout judges pos.session_not_owned AFTER the replay proof — an argument the intent digest cannot carry must be judged before the branch that answers on the digest alone',
+    );
+  if (proof >= 0 && session >= 0 && session > proof)
+    problems.push('the checkout reads the till session AFTER the proof, so the owner cannot have been judged first');
+  if (proof >= 0 && session >= 0 && session < proof) {
+    const between = run.slice(run.indexOf('\n', session) + 1, run.lastIndexOf('\n', proof) + 1);
+    const executable = between
+      .split('\n')
+      .map((l) => l.trim())
+      .filter((l) => l !== '');
+    const permitted = /^if \(session !== null && session\.openedBy !== m\.userId\) throw posRefusal\('pos\.session_not_owned'\);$/;
+    for (const line of executable)
+      if (!permitted.test(line)) problems.push(`the checkout does something other than the ownership refusal between the session read and the proof: ${line}`);
+  }
+  // (c) the status refusal stays after the proof, so the owner's own retry
+  //     still replays once the shift is closed.
+  if (proof >= 0 && notOpen >= 0 && notOpen < proof)
+    problems.push('the checkout refuses pos.session_not_open BEFORE the replay proof — a cashier who closed her till could not retry her own checkout');
   return problems;
 }
 
@@ -210,19 +263,56 @@ describe('rule 3: the consumption names its rows, and a replay therefore cannot 
   });
 });
 
-describe('rule 4: the replay proof is read before any current state', () => {
-  it('the real module proves which command it is replaying first', () => {
+describe('rule 4: the owner first, then the proof, then the state', () => {
+  it('the real module judges the owner, proves the command, and only then reads the basket', () => {
     expect(proofBeforeStateProblems(read(SERVICE))).toEqual([]);
   });
 
-  it('red: rule 4 does NOT fire for the real order and DOES fire for the reversed one', () => {
+  it('red: THE DEFECT ITSELF — the ownership refusal moved back behind the proof', () => {
+    const real = read(SERVICE);
+    const defective = real
+      .replace("if (session !== null && session.openedBy !== m.userId) throw posRefusal('pos.session_not_owned');", '')
+      .replace(
+        "if (session.status !== 'open') throw posRefusal('pos.session_not_open');",
+        "if (session.openedBy !== m.userId) throw posRefusal('pos.session_not_owned');\n    if (session.status !== 'open') throw posRefusal('pos.session_not_open');",
+      );
+    expect(proofBeforeStateProblems(defective)).toContain(
+      'the checkout judges pos.session_not_owned AFTER the replay proof — an argument the intent digest cannot carry must be judged before the branch that answers on the digest alone',
+    );
+  });
+
+  it('red: the status refusal pulled AHEAD of the proof, which breaks a closed till’s own retry', () => {
+    const real = read(SERVICE);
+    const defective = real
+      .replace("if (session.status !== 'open') throw posRefusal('pos.session_not_open');", '')
+      .replace(
+        "if (session !== null && session.openedBy !== m.userId) throw posRefusal('pos.session_not_owned');",
+        "if (session !== null && session.openedBy !== m.userId) throw posRefusal('pos.session_not_owned');\n    if (session !== null && session.status !== 'open') throw posRefusal('pos.session_not_open');",
+      );
+    expect(proofBeforeStateProblems(defective)).toContain(
+      'the checkout refuses pos.session_not_open BEFORE the replay proof — a cashier who closed her till could not retry her own checkout',
+    );
+  });
+
+  it('red: a SECOND sentence smuggled between the session read and the proof', () => {
+    const real = read(SERVICE);
+    const defective = real.replace(
+      "if (session !== null && session.openedBy !== m.userId) throw posRefusal('pos.session_not_owned');",
+      "if (session !== null && session.openedBy !== m.userId) throw posRefusal('pos.session_not_owned');\n    const sneaky = await this.readCartSnapshotEarly(m, tillSessionId);",
+    );
+    expect(proofBeforeStateProblems(defective).join(' | ')).toContain('does something other than the ownership refusal between the session read and the proof');
+  });
+
+  it('red: the cart read pulled ahead of the proof, and a run() with no proof at all', () => {
     const reversed = `private async run(a) {
       const session = await this.readSession(m, id);
+      if (session !== null && session.openedBy !== m.userId) throw posRefusal('pos.session_not_owned');
       const snapshot = await this.readCartSnapshot(m, id);
       const replay = await this.provenReplay(m, id, input);
+      if (session.status !== 'open') throw posRefusal('pos.session_not_open');
     }
     private async consume(b) {}`;
-    expect(proofBeforeStateProblems(reversed)).toHaveLength(2);
+    expect(proofBeforeStateProblems(reversed)).toContain('the checkout reads the cart BEFORE proving which command it is replaying');
     expect(
       proofBeforeStateProblems(
         `private async run(a) { const s = await this.readSession(m, id); const c = await this.readCartSnapshot(m, id); } private async consume(b) {}`,

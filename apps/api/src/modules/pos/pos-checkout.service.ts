@@ -35,7 +35,15 @@ import type { PosCheckoutRequest } from './pos-checkout.schemas';
  * One checkout is ONE seam-2 transaction, owned HERE and by nothing else, and
  * these are the steps in it:
  *
- *   0. **the replay proof, FIRST and before any current state is read.** The
+ *   0. **WHOSE TILL THIS IS, before the replay proof.** `opened_by` is the
+ *      assertion's actor and is in no payload grammar, so the sale's intent
+ *      digest cannot carry the authenticated user — and an argument the digest
+ *      cannot carry must be judged before the branch that answers on the
+ *      digest alone (the `customer_credit_application` precedent). A colleague
+ *      is `pos.session_not_owned` whether or not the sale is already stored;
+ *      `status` and `not_found` stay AFTER the proof, so the owner's retry of
+ *      her own checkout still replays once she has closed her till;
+ *   1. **the replay proof, before any current state is read.** The
  *      `sales` row for the caller-supplied `saleId` is read, and the digest of
  *      THIS request — recomputed over the STORED sale's own lines, which is
  *      the only line set a replay can honestly be judged against — is compared
@@ -48,26 +56,26 @@ import type { PosCheckoutRequest } from './pos-checkout.schemas';
  *      `[[daftar-registry-before-state]]`: a stale request replayed after a
  *      later transition, whose handler reads state first, performs a second
  *      real change;
- *   1. **the session, and the five establishment facts**: same tenant and
+ *   2. **the session, and the remaining establishment facts**: same tenant and
  *      business (RLS, not a predicate), the branch and the warehouse read FROM
  *      the session, the authenticated actor equal to `opened_by` (OD-P4-09),
  *      and `status = 'open'`;
- *   2. **the exact active cart set**, in `line_no` order, with each line's
+ *   3. **the exact active cart set**, in `line_no` order, with each line's
  *      product, STOCK variant, quantity and discount request. That set is THE
  *      SNAPSHOT and nothing later re-reads it;
- *   3. **the sale request is DERIVED from the snapshot**, line for line. Each
+ *   4. **the sale request is DERIVED from the snapshot**, line for line. Each
  *      sale line's `lineId` IS the cart line's id. That is the whole of the
  *      consumption binding: the sale's own `sale_items.id` values are the cart
  *      rows it came from, so "the rows this sale consumed" is a fact of the
  *      committed sale and never "whatever was active at the time";
- *   4. **`SaleCommitService.plan`** derives price, discount, tax, subtotal,
+ *   5. **`SaleCommitService.plan`** derives price, discount, tax, subtotal,
  *      total, currency and FX from server truth. Not one figure of it is
  *      recomputed here;
- *   5. **`SaleCommitService.seamAuthority`** mints the sale's authority — the
+ *   6. **`SaleCommitService.seamAuthority`** mints the sale's authority — the
  *      `invctl/1` assertion and the accounting authority — and this service
  *      mints ONE MORE per cart line: a `pos.cart_remove_line` assertion over
  *      that line's exact payload;
- *   6. **ONE transaction**, opened here with those assertions in CALL ORDER:
+ *   7. **ONE transaction**, opened here with those assertions in CALL ORDER:
  *      `sale.commit` first, then one `pos.cart_remove_line` per line. Inside
  *      it: a transaction-scoped advisory lock on the session,
  *      `SaleCommitService.execute` (the sale, its items, the movements, the
@@ -193,17 +201,52 @@ export class PosCheckoutService {
     btx: BusinessTransactionId,
     attempt: SellingAttempt,
   ): Promise<PosCheckoutDto> {
-    // 0. THE REPLAY PROOF, BEFORE ANY CURRENT STATE IS READ.
+    // 0. THE ONE ARGUMENT THE REPLAY PROOF CANNOT SEE, JUDGED FIRST:
+    //    WHOSE TILL THIS IS (OD-P4-09).
+    //
+    //    For the reason `customer-credit-application.service.ts:196-220` moved
+    //    its stated customer ahead of its own replay branch, and
+    //    `supplier-payment.service.ts:413-415` re-authorizes before it answers
+    //    a stored payment: an argument the digest does not carry must be judged
+    //    before the branch that answers on the digest alone.
+    //
+    //    The authenticated actor is that argument here, and it is not a field
+    //    anyone could add to the digest: `pos_till_sessions.opened_by` is the
+    //    `invctl/1` assertion's own actor and never an argument (`0079:951`,
+    //    and `till-session.service.ts:56-61` — neither POS payload grammar has
+    //    a user field), so `saleCommitIntentSha256` has nowhere to put it, and
+    //    a digest over the actor would turn one cashier's lawful retry of her
+    //    own checkout into a false `pos.checkout_idempotency_conflict`.
+    //
+    //    While this sentence sat AFTER `provenReplay`, a COLLEAGUE — satisfying
+    //    the route's `sales.create` guard and holding no claim at all on this
+    //    till — who delivered the already-committed `saleId` was answered `200`
+    //    with the whole `PosCheckoutDto`: the sale, its totals, its
+    //    `cogsBaseMinor` and the id of every cart row the drawer consumed. The
+    //    sibling READ route refuses a colleague's session precisely so that
+    //    those figures are not handed over (`till-session.service.ts:239-246`),
+    //    and the replay path handed them over anyway.
+    //
+    //    `session.status` deliberately STAYS after the branch. A cashier who
+    //    checks out and then closes her till is entitled to have the retry of
+    //    her own checkout answered from the stored sale; refusing it
+    //    `pos.session_not_open` would be the false conflict in another
+    //    spelling. `pos.session_not_found` stays at step 1 too, so the
+    //    `in_session` proof keeps answering for a session nobody owns.
+    const session = await this.readSession(m, tillSessionId);
+    if (session !== null && session.openedBy !== m.userId) throw posRefusal('pos.session_not_owned');
+
+    // 1. THE REPLAY PROOF, BEFORE ANY *CURRENT* STATE IS CONSULTED. The read
+    //    above produced one fact and the digest binds none of it, so the same
+    //    request still digests identically for ever.
     const replay = await this.provenReplay(m, tillSessionId, input);
     if (replay !== null) return replay;
 
-    // 1. The session, and the five establishment facts.
-    const session = await this.readSession(m, tillSessionId);
+    // 2. The rest of the five establishment facts, over the row read at step 0.
     if (session === null) throw posRefusal('pos.session_not_found');
-    if (session.openedBy !== m.userId) throw posRefusal('pos.session_not_owned');
     if (session.status !== 'open') throw posRefusal('pos.session_not_open');
 
-    // 2. THE SNAPSHOT: the exact active cart set, bound here and never re-read.
+    // 3. THE SNAPSHOT: the exact active cart set, bound here and never re-read.
     const snapshot = await this.readCartSnapshot(m, tillSessionId);
     if (snapshot.length === 0) throw posRefusal('pos.checkout_cart_empty');
     // The SENSITIVE key, against the SNAPSHOT and not against the request —
@@ -216,24 +259,24 @@ export class PosCheckoutService {
       throw posRefusal('pos.cart_discount_not_permitted');
     }
 
-    // 3. The sale request, DERIVED from the snapshot. The cart line id is the
+    // 4. The sale request, DERIVED from the snapshot. The cart line id is the
     //    sale line id: that is the consumption binding.
     const request = this.saleRequest(input, session, snapshot);
     // The figures the ONE sale writer is about to be given, from the ONE
     // function that states what a refused sale commit carries.
     Object.assign(attempt.figures, saleCommitAttempt(request, tillSessionId).figures);
 
-    // 4. The ONE sale writer derives every figure.
+    // 5. The ONE sale writer derives every figure.
     const outcome = await this.sales.plan(m, request, btx, attempt);
     if (outcome.kind === 'replay') {
       // `plan` found the sale already stored with THIS exact intent between
-      // step 0's read and now. Two checkouts of one `saleId` raced; this one
+      // step 1's read and now. Two checkouts of one `saleId` raced; this one
       // sold nothing, so it consumes nothing and answers from the stored rows.
       return this.replayAnswer(m, tillSessionId, request);
     }
     const plan = outcome.plan;
 
-    // 5. The authorities, in CALL ORDER: the sale's, then one per cart line.
+    // 6. The authorities, in CALL ORDER: the sale's, then one per cart line.
     const { inventoryAssertion, accountingAssertions } = this.sales.seamAuthority(plan);
     const removalAuthority = await this.authorization.authorize(m, 'pos.cart_remove_line', btx, [session.warehouseId]);
     const removals = snapshot.map((line) => ({
@@ -247,7 +290,7 @@ export class PosCheckoutService {
       ),
     }));
 
-    // 6. ONE transaction.
+    // 7. ONE transaction.
     await this.db.withBusinessInventoryAccountingTransaction(
       plan.authority.scope,
       [inventoryAssertion, ...removals.map((r) => r.assertion)],
@@ -347,7 +390,8 @@ export class PosCheckoutService {
   }
 
   /**
-   * STEP 0. The replay proof, consulted before any current state is read.
+   * STEP 1. The replay proof, consulted before any current state is read —
+   * and after step 0 has judged the one argument it cannot see.
    *
    * The digest is recomputed over the STORED sale's own lines plus the
    * CLIENT's stated header intent. That is the only honest way to judge a

@@ -109,6 +109,8 @@ DECLARE
   v_admits BOOLEAN;
   v_denies BOOLEAN;
   v_unset  BOOLEAN;
+  v_snap   TEXT;
+  v_check  TEXT;
 BEGIN
   -- THE BARRIER IS ASSERTED BY EVALUATING IT, NOT BY READING IT.
   --
@@ -181,6 +183,76 @@ BEGIN
       END IF;
     END LOOP;
   END LOOP;
+
+  -- THE WRITE BARRIER IS EVALUATED TOO. 0086-E(2) asks only whether
+  -- `tenant_membership`'s WITH CHECK is present and free of subselects. A
+  -- blanket `tenant_id IS NOT NULL` satisfies both and admits a write that
+  -- carries a FOREIGN tenant_id; that attack was executed against this file
+  -- and passed it. Presence is not a barrier, so the check expression gets
+  -- the same truth table as the USING clause: it admits a write in its own
+  -- scope, it refuses one in another scope, and it refuses every write with
+  -- the scope GUC unset.
+  FOREACH v_rel IN ARRAY ARRAY['invoices', 'sales', 'payment_allocations', 'customer_credit_applications'] LOOP
+    SELECT pg_catalog.pg_get_expr(p.polwithcheck, p.polrelid) INTO v_check
+      FROM pg_catalog.pg_policy p JOIN pg_catalog.pg_class c ON c.oid = p.polrelid
+     WHERE c.relnamespace = 'public'::regnamespace AND c.relname = v_rel AND p.polname = 'tenant_membership';
+    IF v_check IS NULL THEN
+      RAISE EXCEPTION '0086-A(w): %.tenant_membership carries no WITH CHECK, so the write path has no barrier to evaluate', v_rel;
+    END IF;
+
+    PERFORM pg_catalog.set_config('app.tenant_id', v_mine::text, true);
+    EXECUTE pg_catalog.format('SELECT (%s) FROM (SELECT $1::uuid AS tenant_id, $1::uuid AS business_id) t', v_check)
+      INTO v_admits USING v_mine;
+    EXECUTE pg_catalog.format('SELECT (%s) FROM (SELECT $1::uuid AS tenant_id, $1::uuid AS business_id) t', v_check)
+      INTO v_denies USING v_other;
+    PERFORM pg_catalog.set_config('app.tenant_id', '', true);
+    EXECUTE pg_catalog.format('SELECT (%s) FROM (SELECT $1::uuid AS tenant_id, $1::uuid AS business_id) t', v_check)
+      INTO v_unset USING v_mine;
+    PERFORM pg_catalog.set_config('app.tenant_id', COALESCE(v_prev_t, ''), true);
+    PERFORM pg_catalog.set_config('app.business_id', COALESCE(v_prev_b, ''), true);
+
+    IF v_admits IS NOT TRUE THEN
+      RAISE EXCEPTION '0086-A(w): %.tenant_membership WITH CHECK refuses a write in its own scope, so it is not the barrier it looks like: %', v_rel, v_check;
+    END IF;
+    IF v_denies IS TRUE THEN
+      RAISE EXCEPTION '0086-A(w): %.tenant_membership WITH CHECK ADMITS a write carrying another tenant''s tenant_id — the write barrier is gone: %', v_rel, v_check;
+    END IF;
+    IF v_unset IS TRUE THEN
+      RAISE EXCEPTION '0086-A(w): %.tenant_membership WITH CHECK admits a write with app.tenant_id unset, so default-deny is gone on the write path: %', v_rel, v_check;
+    END IF;
+  END LOOP;
+
+    -- THE WHOLE POLICY SET, CAPTURED. Everything above judges the two quals
+    -- this file names. Nothing above judges the clauses it does NOT name, and
+    -- two routes through them remove a barrier while every assertion in this
+    -- file still passes: rewriting `tenant_membership`'s WITH CHECK to a
+    -- blanket predicate (0086-E(2) only refuses a NULL one and a subselect in
+    -- it, and never compares it), and dropping a RESTRICTIVE policy and
+    -- re-creating it under the same name AS PERMISSIVE (the count stays 7, the
+    -- USING text is identical, and an AND-ed barrier has become an OR-ed one).
+    -- Both were executed against this file and both passed it.
+    --
+    -- So the file states what it changes by CAPTURING everything else and
+    -- comparing it whole afterwards: permissiveness, command, roles, the WITH
+    -- CHECK expression, and the USING expression of every policy except the
+    -- two this file rewrites. The carrier is a transaction-local GUC, because
+    -- the runner applies each file in its own transaction
+    -- (`apps/api/src/infra/migrate.ts:104-113`) and G-5 forbids creating a
+    -- relation to hold it.
+    SELECT pg_catalog.string_agg(
+             pg_catalog.format(
+               '%s.%s permissive=%s cmd=%s roles=%s check=%s qual=%s',
+               c.relname, p.polname, p.polpermissive, p.polcmd, p.polroles::text,
+               COALESCE(pg_catalog.pg_get_expr(p.polwithcheck, p.polrelid), '<none>'),
+               CASE WHEN p.polname IN ('tenant_membership', 'business_isolation_read')
+                    THEN '<rewritten by this file>'
+                    ELSE COALESCE(pg_catalog.pg_get_expr(p.polqual, p.polrelid), '<none>') END),
+             E'\n' ORDER BY c.relname, p.polname)
+      INTO v_snap
+      FROM pg_catalog.pg_policy p JOIN pg_catalog.pg_class c ON c.oid = p.polrelid
+     WHERE c.relnamespace = 'public'::regnamespace
+       AND c.relname = ANY (ARRAY['invoices', 'sales', 'payment_allocations', 'customer_credit_applications']);
+  PERFORM pg_catalog.set_config('app.p4s4_0086_policy_snapshot', v_snap, true);
 END
 $pre$;
 
@@ -299,7 +371,7 @@ BEGIN
 END
 $post$;
 
--- ── 0086-F — the end state, compared whole against this server's rendering ──
+-- ── 0086-F — the end state, evaluated, and the rest of the set compared ──
 DO $fin$
 DECLARE
   v_rel    TEXT;
@@ -313,6 +385,9 @@ DECLARE
   v_admits BOOLEAN;
   v_denies BOOLEAN;
   v_unset  BOOLEAN;
+  v_snap   TEXT;
+  v_was    TEXT;
+  v_check  TEXT;
 BEGIN
   -- THE BARRIER IS ASSERTED BY EVALUATING IT, NOT BY READING IT.
   --
@@ -383,5 +458,81 @@ BEGIN
       END IF;
     END LOOP;
   END LOOP;
+
+  -- THE WRITE BARRIER IS EVALUATED TOO. 0086-E(2) asks only whether
+  -- `tenant_membership`'s WITH CHECK is present and free of subselects. A
+  -- blanket `tenant_id IS NOT NULL` satisfies both and admits a write that
+  -- carries a FOREIGN tenant_id; that attack was executed against this file
+  -- and passed it. Presence is not a barrier, so the check expression gets
+  -- the same truth table as the USING clause: it admits a write in its own
+  -- scope, it refuses one in another scope, and it refuses every write with
+  -- the scope GUC unset.
+  FOREACH v_rel IN ARRAY ARRAY['invoices', 'sales', 'payment_allocations', 'customer_credit_applications'] LOOP
+    SELECT pg_catalog.pg_get_expr(p.polwithcheck, p.polrelid) INTO v_check
+      FROM pg_catalog.pg_policy p JOIN pg_catalog.pg_class c ON c.oid = p.polrelid
+     WHERE c.relnamespace = 'public'::regnamespace AND c.relname = v_rel AND p.polname = 'tenant_membership';
+    IF v_check IS NULL THEN
+      RAISE EXCEPTION '0086-F(w): %.tenant_membership carries no WITH CHECK, so the write path has no barrier to evaluate', v_rel;
+    END IF;
+
+    PERFORM pg_catalog.set_config('app.tenant_id', v_mine::text, true);
+    EXECUTE pg_catalog.format('SELECT (%s) FROM (SELECT $1::uuid AS tenant_id, $1::uuid AS business_id) t', v_check)
+      INTO v_admits USING v_mine;
+    EXECUTE pg_catalog.format('SELECT (%s) FROM (SELECT $1::uuid AS tenant_id, $1::uuid AS business_id) t', v_check)
+      INTO v_denies USING v_other;
+    PERFORM pg_catalog.set_config('app.tenant_id', '', true);
+    EXECUTE pg_catalog.format('SELECT (%s) FROM (SELECT $1::uuid AS tenant_id, $1::uuid AS business_id) t', v_check)
+      INTO v_unset USING v_mine;
+    PERFORM pg_catalog.set_config('app.tenant_id', COALESCE(v_prev_t, ''), true);
+    PERFORM pg_catalog.set_config('app.business_id', COALESCE(v_prev_b, ''), true);
+
+    IF v_admits IS NOT TRUE THEN
+      RAISE EXCEPTION '0086-F(w): %.tenant_membership WITH CHECK refuses a write in its own scope, so it is not the barrier it looks like: %', v_rel, v_check;
+    END IF;
+    IF v_denies IS TRUE THEN
+      RAISE EXCEPTION '0086-F(w): %.tenant_membership WITH CHECK ADMITS a write carrying another tenant''s tenant_id — the write barrier is gone: %', v_rel, v_check;
+    END IF;
+    IF v_unset IS TRUE THEN
+      RAISE EXCEPTION '0086-F(w): %.tenant_membership WITH CHECK admits a write with app.tenant_id unset, so default-deny is gone on the write path: %', v_rel, v_check;
+    END IF;
+  END LOOP;
+
+    -- THE WHOLE POLICY SET, CAPTURED. Everything above judges the two quals
+    -- this file names. Nothing above judges the clauses it does NOT name, and
+    -- two routes through them remove a barrier while every assertion in this
+    -- file still passes: rewriting `tenant_membership`'s WITH CHECK to a
+    -- blanket predicate (0086-E(2) only refuses a NULL one and a subselect in
+    -- it, and never compares it), and dropping a RESTRICTIVE policy and
+    -- re-creating it under the same name AS PERMISSIVE (the count stays 7, the
+    -- USING text is identical, and an AND-ed barrier has become an OR-ed one).
+    -- Both were executed against this file and both passed it.
+    --
+    -- So the file states what it changes by CAPTURING everything else and
+    -- comparing it whole afterwards: permissiveness, command, roles, the WITH
+    -- CHECK expression, and the USING expression of every policy except the
+    -- two this file rewrites. The carrier is a transaction-local GUC, because
+    -- the runner applies each file in its own transaction
+    -- (`apps/api/src/infra/migrate.ts:104-113`) and G-5 forbids creating a
+    -- relation to hold it.
+    SELECT pg_catalog.string_agg(
+             pg_catalog.format(
+               '%s.%s permissive=%s cmd=%s roles=%s check=%s qual=%s',
+               c.relname, p.polname, p.polpermissive, p.polcmd, p.polroles::text,
+               COALESCE(pg_catalog.pg_get_expr(p.polwithcheck, p.polrelid), '<none>'),
+               CASE WHEN p.polname IN ('tenant_membership', 'business_isolation_read')
+                    THEN '<rewritten by this file>'
+                    ELSE COALESCE(pg_catalog.pg_get_expr(p.polqual, p.polrelid), '<none>') END),
+             E'\n' ORDER BY c.relname, p.polname)
+      INTO v_snap
+      FROM pg_catalog.pg_policy p JOIN pg_catalog.pg_class c ON c.oid = p.polrelid
+     WHERE c.relnamespace = 'public'::regnamespace
+       AND c.relname = ANY (ARRAY['invoices', 'sales', 'payment_allocations', 'customer_credit_applications']);
+  v_was := pg_catalog.current_setting('app.p4s4_0086_policy_snapshot', true);
+  IF v_was IS NULL OR v_was = '' THEN
+    RAISE EXCEPTION '0086-F: the capture 0086-A took is not here, so this file did not run as one transaction and the comparison below would be vacuous';
+  END IF;
+  IF v_snap <> v_was THEN
+    RAISE EXCEPTION '0086-F: this file altered a clause it never named. BEFORE:%  AFTER:%', E'\n' || v_was, E'\n' || v_snap;
+  END IF;
 END
 $fin$;

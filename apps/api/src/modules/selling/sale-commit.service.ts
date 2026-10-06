@@ -57,7 +57,11 @@ import type { SaleCommitRequest } from './selling.schemas';
  *     read. `[[daftar-registry-before-state]]`: a stale request replayed after
  *     a later transition, whose handler reads state first, performs a second
  *     real change. Same digest ⇒ the stored sale is returned, having changed
- *     nothing. Different digest ⇒ `sale.idempotency_conflict`: an idempotency
+ *     nothing (and the actor's authority is established BEFORE that answer,
+ *     for the `customer_credit_application` reason: a replay branch that
+ *     answered first would hand a cashier who may not grant a discount a
+ *     `200 replayed: true` over a discounted sale).
+ *     Different digest ⇒ `sale.idempotency_conflict`: an idempotency
  *     key is not permission, and a replay must prove WHICH command it is
  *     replaying before it answers "success"
  *     (`[[daftar-idempotency-key-is-not-permission]]`);
@@ -221,13 +225,13 @@ export class SaleCommitService {
   }
 
   /**
-   * Steps 1–4: the replay proof, the authority, current state, and every
-   * amount bound with both commands built. It opens no transaction and mints
+   * Steps 1–5: the intent digest, the authority, the replay proof, current state,
+   * and every amount bound with both commands built. It opens no transaction and mints
    * nothing, so a refusal here has consumed no authority and left no trace
    * beyond its audit row.
    */
   async plan(m: MembershipContext, input: SaleCommitRequest, btx: BusinessTransactionId, attempt?: SellingAttempt): Promise<SaleCommitPlanOutcome> {
-    // 1. THE REPLAY PROOF, BEFORE ANY STATE READ.
+    // 1. THE INTENT DIGEST, BEFORE ANY STATE READ.
     //
     //    The intent digest is computable from the request alone — that is the
     //    property `saleCommitIntentSha256` is built for, and the reason the
@@ -258,17 +262,37 @@ export class SaleCommitService {
     // fact the ONE planner states once.
     if (attempt !== undefined) attempt.intentSha256 = intentSha256;
     const stored = await readSaleHeader(this.db, m, input.saleId);
-    if (stored !== null) {
-      if (stored.commit_intent_sha256 === intentSha256) {
-        return { kind: 'replay' };
-      }
-      // The key was seen; the command was NOT. Answering "success" here is
-      // the defect `[[daftar-idempotency-key-is-not-permission]]` names.
-      throw sellingRefusal('sale.idempotency_conflict');
-    }
 
-    // 2. Authority over the warehouse the stock leaves, then the two
-    //    additional keys P4-AL-35's matrix requires.
+    // 2. AUTHORITY, AND P4-AL-35'S MATRIX — BEFORE THE REPLAY BRANCH.
+    //
+    //    The order is the `customer-credit-application.service.ts:196-220`
+    //    order and it is for that file's reason: an argument the intent digest
+    //    does not carry must be judged before the branch that answers on the
+    //    digest alone. Nothing here is a body key — `sale-payloads.ts` and
+    //    `0078:567-584` digest every one of those, field for field — and what
+    //    the digest cannot carry is **the actor and its permission set**. It
+    //    cannot be added either: the digest is re-derived by `sale_commit`
+    //    from its own arguments, and a seventeenth field here would disagree
+    //    with the migration on every sale and make a re-issued token a false
+    //    `sale.idempotency_conflict`.
+    //
+    //    While these three sentences sat AFTER the branch, a CASHIER — whose
+    //    built-in role holds `sales.create` and neither of the two keys below
+    //    (`permissions.ts:214`) — who delivered a manager's already-committed
+    //    DISCOUNTED sale was answered `200 replayed: true` with the whole
+    //    `SaleDto`: the totals, the granted discount and `cogsBaseMinor`. The
+    //    same body under a fresh `saleId` is `403
+    //    sale.discount_not_permitted`. `supplier-payment.service.ts:413-415`
+    //    is the estate's counter-pattern: it re-authorizes over the stored
+    //    payment's warehouses before it answers a replay, because "the stored
+    //    answer is shown only to an actor with authority over every warehouse
+    //    it touches".
+    //
+    //    Reading membership here is not a breach of
+    //    `[[daftar-registry-before-state]]`: the digest above is built before
+    //    it and binds nothing it produces, so the same request still digests
+    //    identically for ever. `input.warehouseId` is itself digested, so on a
+    //    matching digest the warehouse authorized over IS the stored sale's.
     const authority = await this.authorization.authorize(m, 'sale.commit', btx, [input.warehouseId]);
     // P4-AL-35's matrix: `receivables.view` is the second half of a CREDIT
     // sale, and `sales.discount` is SENSITIVE. A discount asked without it is
@@ -281,7 +305,18 @@ export class SaleCommitService {
       throw sellingRefusal('sale.discount_not_permitted');
     }
 
-    // 3. Current state.
+    // 3. The idempotency proof. Everything it compares is in the digest, and
+    //    the arguments that are not have already been judged above.
+    if (stored !== null) {
+      if (stored.commit_intent_sha256 === intentSha256) {
+        return { kind: 'replay' };
+      }
+      // The key was seen; the command was NOT. Answering "success" here is
+      // the defect `[[daftar-idempotency-key-is-not-permission]]` names.
+      throw sellingRefusal('sale.idempotency_conflict');
+    }
+
+    // 4. Current state.
     const business = await this.readBusiness(m, input.documentDate);
     if (business.documentDateInFuture) throw sellingRefusal('sale.document_date_in_future');
     const warehouse = (await readWarehouses(this.db, m, [input.warehouseId], [input.warehouseId])).get(input.warehouseId);
@@ -309,7 +344,7 @@ export class SaleCommitService {
       resolved.map((r) => r.variantId),
     );
 
-    // 4. Every amount the database will store, computed HERE and bound.
+    // 5. Every amount the database will store, computed HERE and bound.
     const priced = this.price(input, resolved, facts);
     const fx = await this.readFx(m, priced.currency, business.baseCurrency, input.documentDate);
     const totalBaseMinor =
@@ -323,7 +358,7 @@ export class SaleCommitService {
           });
     const invoiceId = randomUUID();
 
-    // 5. The two postings and their assertions, minted by the ONE sale
+    // 6. The two postings and their assertions, minted by the ONE sale
     //    posting authority (`SalePostingService`), in posting order: the COGS
     //    entry on source type `sale`, then the revenue entry on source type
     //    `invoice`. **This comes BEFORE the payload is built, and that order
@@ -391,7 +426,7 @@ export class SaleCommitService {
     // legitimate sale that cannot commit is worse than the code suggested.
     const authorized = this.salePosting.authorizeSaleCommit(m, invoiceFacts, cogsFacts);
 
-    // 6. The per-line base shares, taken from the ACCOUNTING owner's
+    // 7. The per-line base shares, taken from the ACCOUNTING owner's
     //    derivation and consumed BY `lineNo`.
     //
     //    There were briefly two share computations in the sale path — the

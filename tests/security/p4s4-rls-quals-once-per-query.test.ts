@@ -100,15 +100,29 @@ async function referenceQuals(): Promise<Record<(typeof REWRITTEN)[number], stri
   const c = new Client({ connectionString: urlOf('daftar', 'postgres') });
   await c.connect();
   try {
-    await c.query(`DROP TABLE IF EXISTS _p4s4_reference`);
+    await c.query(`DROP TABLE IF EXISTS pg_temp._p4s4_reference`);
     await c.query(`CREATE TEMP TABLE _p4s4_reference (tenant_id UUID, business_id UUID)`);
     await c.query(`ALTER TABLE _p4s4_reference ENABLE ROW LEVEL SECURITY`);
     for (const pol of REWRITTEN) await c.query(`CREATE POLICY ${pol} ON _p4s4_reference USING ${EXPECTED_SOURCE[pol]}`);
+    // THE PROBE IS PINNED TO THIS CONNECTION'S OWN TEMP SCHEMA. Matching on
+    // `relname` alone is not enough: a table of the same name in any other
+    // schema matches too, `DROP TABLE IF EXISTS` without a qualification
+    // resolves through `search_path` and leaves a decoy outside it standing,
+    // and two matching rows make the row this reads an arbitrary one. A decoy
+    // `information_schema._p4s4_reference` carrying a hostile expression was
+    // executed against the unpinned form and made the equality law compare a
+    // backdoor against itself: 5 of 5 runs accepted it. `pg_my_temp_schema()`
+    // is this session's own namespace and no other session can put anything
+    // in it, so the reference can only be the table created three lines above.
     const r = await c.query<{ polname: string; q: string | null }>(
       `SELECT p.polname, pg_get_expr(p.polqual, p.polrelid) AS q
          FROM pg_policy p JOIN pg_class c ON c.oid = p.polrelid
-        WHERE c.relname = '_p4s4_reference' ORDER BY 1`,
+        WHERE c.relnamespace = pg_my_temp_schema() AND c.relname = '_p4s4_reference' ORDER BY 1`,
     );
+    if (r.rows.length !== REWRITTEN.length)
+      throw new Error(
+        `the reference probe returned ${r.rows.length} policies and not ${REWRITTEN.length}, so the comparisons below would rest on the wrong row`,
+      );
     const out = {} as Record<(typeof REWRITTEN)[number], string>;
     for (const pol of REWRITTEN) {
       const q = r.rows.find((x) => x.polname === pol)?.q;
@@ -117,7 +131,7 @@ async function referenceQuals(): Promise<Record<(typeof REWRITTEN)[number], stri
       out[pol] = q;
     }
     if (out.tenant_membership === out.business_isolation_read) throw new Error('both reference renderings are identical, so the probe distinguishes nothing');
-    await c.query(`DROP TABLE _p4s4_reference`);
+    await c.query(`DROP TABLE pg_temp._p4s4_reference`);
     return out;
   } finally {
     await c.end();
@@ -354,6 +368,36 @@ afterAll(async () => {
   await resetData();
 });
 
+/**
+ * The format `0086` aggregates its policy-set capture with. The capture is
+ * taken in `0086-A` and compared in `0086-F`, so a block sliced off disk and
+ * run ALONE has no capture to compare against and `0086-F` refuses it as
+ * vacuous — correctly. A case whose subject is the QUAL law therefore supplies
+ * the capture from the live state first, which makes the set comparison a
+ * deliberate no-op there and leaves the qual law as the only thing deciding.
+ * The format string below is asserted to be the file's own, so this stand-in
+ * cannot drift away from what the file actually compares.
+ */
+const SNAPSHOT_FORMAT = `'%s.%s permissive=%s cmd=%s roles=%s check=%s qual=%s'`;
+
+/** A single statement that stores the CURRENT policy set where `0086-F` reads it. */
+function captureStatement(): string {
+  if (!text0086().includes(SNAPSHOT_FORMAT))
+    throw new Error('0086 no longer aggregates its capture with the format this stand-in copies, so the stand-in must be updated with it');
+  return `SELECT pg_catalog.set_config('app.p4s4_0086_policy_snapshot', (
+    SELECT pg_catalog.string_agg(
+             pg_catalog.format(${SNAPSHOT_FORMAT},
+               c.relname, p.polname, p.polpermissive, p.polcmd, p.polroles::text,
+               COALESCE(pg_catalog.pg_get_expr(p.polwithcheck, p.polrelid), '<none>'),
+               CASE WHEN p.polname IN ('tenant_membership', 'business_isolation_read')
+                    THEN '<rewritten by this file>'
+                    ELSE COALESCE(pg_catalog.pg_get_expr(p.polqual, p.polrelid), '<none>') END),
+             E'\\n' ORDER BY c.relname, p.polname)
+      FROM pg_catalog.pg_policy p JOIN pg_catalog.pg_class c ON c.oid = p.polrelid
+     WHERE c.relnamespace = 'public'::regnamespace
+       AND c.relname = ANY ($$1$$::text[])), true)`.replace('$$1$$', `ARRAY[${RELATIONS.map((r) => `'${r}'`).join(', ')}]`);
+}
+
 describe('P4-S4 — 0086: the read quals are evaluated once per query and answer identically', () => {
   it('every reader gives byte-identical answers under both policy shapes, on the same rows', async () => {
     const c = await connectAs('daftar_app', { tenantId: w.shop.tenantId, businessId: w.shop.businessId });
@@ -430,13 +474,26 @@ describe('P4-S4 — 0086: the read quals are evaluated once per query and answer
     //   expression against this server's rendering of the expression 0086
     //   writes. Stated rather than glossed: an evaluated law and an equality
     //   law are both necessary, and neither is sufficient.
-    const block = blockOf0086('fin');
+    const block = `${captureStatement()};\n${blockOf0086('fin')}`;
     expect(block, 'the sliced block is not 0086’s end-state block').toContain('0086-F');
     const restore = RELATIONS.map((rel) => {
       const captured = SHIPPED.get(shippedKey(rel, 'tenant_membership'));
       if (captured === undefined) throw new Error(`no captured shipped qual for ${rel}.tenant_membership, so the plant could not be undone`);
       return { rel, captured };
     });
+    // The capture guard is not decoration: the end-state block run ALONE has
+    // no capture to compare against, and it must say so rather than pass.
+    // Every case here that runs that block in isolation supplies the capture
+    // first, which is only honest if the block refuses to run without it.
+    {
+      const bare = new Client({ connectionString: urlOf('daftar', 'postgres') });
+      await bare.connect();
+      try {
+        await expect(bare.query(blockOf0086('fin'))).rejects.toThrow(/0086-F: the capture 0086-A took is not here/);
+      } finally {
+        await bare.end();
+      }
+    }
     const ref = await referenceQuals();
     const EVALUATED: readonly { readonly why: string; readonly using: string }[] = [
       { why: 'the tenant barrier deleted', using: `((SELECT app_bypass()) OR (SELECT true))` },
@@ -456,7 +513,9 @@ describe('P4-S4 — 0086: the read quals are evaluated once per query and answer
         expect(landed.length).toBe(RELATIONS.length);
         for (const row of landed)
           expect(row.q ?? '', `the plant did not land on ${row.relname}`).not.toBe(SHIPPED.get(shippedKey(row.relname, 'tenant_membership')));
-        await expect(o.query(block), `0086-F accepted ${plant.why}`).rejects.toThrow(/0086-F/);
+        await expect(o.query(block), `0086-F accepted ${plant.why}`).rejects.toThrow(
+          /0086-F: \w+\.tenant_membership (ADMITS another scope|does not admit its own scope|admits a row with the scope GUC unset)/,
+        );
       }
 
       // The targeted backdoor. 0086-F runs it and does NOT refuse it — that is
@@ -511,6 +570,83 @@ describe('P4-S4 — 0086: the read quals are evaluated once per query and answer
       // And the barrier simply gone.
       await db.pool.query(`ALTER POLICY tenant_membership ON invoices USING (app_bypass() OR true)`);
       await expect(db.pool.query(sql)).rejects.toThrow(/0086-A/);
+    } finally {
+      await db.drop();
+    }
+  }, 900_000);
+
+  it('RED PROOF: a WITH CHECK that is present and subselect-free but admits a foreign tenant is REFUSED, and a version of this file that touches a clause it never named is refused by its own last block', async () => {
+    // Two routes removed a barrier while every assertion this file made still
+    // passed, and both were executed against it:
+    //
+    //   B1  `ALTER POLICY tenant_membership ON <rel> WITH CHECK (tenant_id IS
+    //       NOT NULL)`. 0086-E(2) asks only whether the clause is present and
+    //       whether it holds a subselect. A blanket predicate satisfies both
+    //       and admits a write carrying a FOREIGN tenant_id.
+    //   B2  a RESTRICTIVE policy dropped and re-created under the SAME name
+    //       with the SAME USING text `AS PERMISSIVE`. The count stays 7 and
+    //       every text comparison is byte-identical, yet an AND-ed barrier has
+    //       become an OR-ed one.
+    //
+    // Presence is not a barrier and a count is not a set, so the file now
+    // evaluates the check expression (0086-A(w), 0086-F(w)) and captures the
+    // whole policy set — permissiveness, command, roles, WITH CHECK, and the
+    // USING of every policy it does not rewrite — comparing it whole at the
+    // end (0086-F). This is the control for both.
+    const db = await createScratchDb('daftar_p4s4_pre0086_clauses', { upTo: '0085_phase4_allocation_recompute_set_based.sql' });
+    try {
+      const sql = text0086();
+      expect(sql, 'the file carries no evaluated write-barrier block, so this case would prove nothing').toContain('0086-A(w)');
+      expect(sql, 'the file captures no policy set, so the comparison below would prove nothing').toContain('app.p4s4_0086_policy_snapshot');
+
+      // The control for the control: the file applies cleanly to the state
+      // 0085 leaves, so a refusal below is the plant and not the build.
+      await db.pool.query('BEGIN');
+      await db.pool.query(sql);
+      await db.pool.query('ROLLBACK');
+
+      // B1 — present, no subselect, and no barrier.
+      await db.pool.query(`ALTER POLICY tenant_membership ON invoices WITH CHECK (tenant_id IS NOT NULL)`);
+      await expect(db.pool.query(sql)).rejects.toThrow(/0086-A\(w\)/);
+      // Restored to the expression 0085 left, read back rather than assumed.
+      await db.pool.query(`ALTER POLICY tenant_membership ON invoices WITH CHECK (app_bypass() OR tenant_id = nullif(app_tenant(), '')::uuid)`);
+      await db.pool.query('BEGIN');
+      await db.pool.query(sql);
+      await db.pool.query('ROLLBACK');
+
+      // B1 the other way: a check that refuses every write in its own scope is
+      // not a barrier either, it is an outage, and the file must not ship it.
+      await db.pool.query(`ALTER POLICY tenant_membership ON invoices WITH CHECK (false)`);
+      await expect(db.pool.query(sql)).rejects.toThrow(/0086-A\(w\)/);
+      await db.pool.query(`ALTER POLICY tenant_membership ON invoices WITH CHECK (app_bypass() OR tenant_id = nullif(app_tenant(), '')::uuid)`);
+
+      // B2 and the general case, planted into the FILE: a version of 0086
+      // that also widens a clause it never names must be refused by its own
+      // final comparison. The plant goes immediately before the last block,
+      // so everything 0086 really does has already happened.
+      const at = sql.indexOf('DO $fin$');
+      expect(at, 'the final block is not where this plant expects it').toBeGreaterThan(0);
+      const plant = (stmt: string): string => `${sql.slice(0, at)}${stmt}\n${sql.slice(at)}`;
+
+      const widened = plant(`ALTER POLICY business_isolation_delete ON invoices USING (true);`);
+      expect(widened, 'the plant did not change the file').not.toBe(sql);
+      await expect(db.pool.query(widened)).rejects.toThrow(/0086-F: this file altered a clause it never named/);
+
+      const permissive = plant(
+        `DROP POLICY business_isolation_delete ON invoices;\n` +
+          `CREATE POLICY business_isolation_delete ON invoices AS PERMISSIVE FOR DELETE ` +
+          `USING (app_bypass() OR business_id = nullif(app_business(), '')::uuid);`,
+      );
+      await expect(db.pool.query(permissive)).rejects.toThrow(/0086-F: this file altered a clause it never named/);
+
+      const rewrittenCheck = plant(`ALTER POLICY tenant_membership ON invoices WITH CHECK (tenant_id IS NOT NULL);`);
+      await expect(db.pool.query(rewrittenCheck)).rejects.toThrow(/0086-F/);
+
+      // And the file itself still applies, so none of the plants above left
+      // the database in a state that would make a pass meaningless.
+      await db.pool.query('BEGIN');
+      await db.pool.query(sql);
+      await db.pool.query('ROLLBACK');
     } finally {
       await db.drop();
     }
