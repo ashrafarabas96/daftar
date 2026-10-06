@@ -833,12 +833,28 @@ export const S3_SCRIPT = 'gate:phase4:s3';
  * step after it: measured first, then the equivalence, then the gate, which is
  * the order `ci.yml` already carries and the order the slice is measured in.
  */
-export const S4_EVIDENCE_STEPS: readonly { readonly label: string; readonly script: string; readonly command: string; readonly name: string }[] = [
+export const S4_EVIDENCE_STEPS: readonly {
+  readonly label: string;
+  readonly script: string;
+  readonly command: string;
+  readonly name: string;
+  /**
+   * When the step runs `npm run <script>`, the workflow text is only HALF the
+   * truth: the measurement is whatever `package.json` resolves that script to,
+   * and that file is not the workflow. Pinning the step's `run:` and leaving
+   * the script body free is the very defect this law was written to close, one
+   * indirection down — `-t "P4-D"` inside the body deletes the P4-F
+   * measurement with the workflow untouched. So a step that goes through npm
+   * states the body it is allowed to have, exactly.
+   */
+  readonly scriptBody?: string;
+}[] = [
   {
     label: 'the P4-D/P4-F measured budgets',
     script: 'perf:phase4:s4',
     command: 'npm run perf:phase4:s4',
     name: 'Receivables read budgets — P4-D and P4-F, measured',
+    scriptBody: 'vitest run --reporter=verbose tests/performance/receivables-s4-budgets.test.ts',
   },
   {
     label: 'the set-based AR answer equivalence',
@@ -1095,6 +1111,64 @@ export function requiredCiProblems(text: string): string[] {
       `the P4-S4 gate step (#${mine.index + 1}) does not come after the P4-S3 gate step (#${predecessor.index + 1}) — chain composition requires the predecessor to run first`,
     );
   return problems;
+}
+
+/**
+ * The OTHER half of pinning a measured step: the npm script it runs through.
+ *
+ * `requiredCiProblems` reads `.github/workflows/ci.yml` and can only pin what
+ * the workflow says. A step whose `run:` is `npm run perf:phase4:s4` measures
+ * whatever `package.json` resolves that name to, and nothing in the workflow
+ * constrains it. Adding `-t "P4-D"` to the body there leaves the workflow
+ * byte-identical, every assertion of `tests/guards/p4s4-required-ci.test.ts`
+ * green, and the P4-F budget unmeasured — a budget nothing measured being
+ * indistinguishable from a budget that passed.
+ */
+export function evidenceScriptBodyProblems(root: string): string[] {
+  const problems: string[] = [];
+  const MANIFEST = 'package.json';
+  if (!has(root, MANIFEST)) return [`${MANIFEST} is missing, so the body of every measured npm script is unstated`];
+  let scripts: Record<string, unknown>;
+  try {
+    const parsed: unknown = JSON.parse(read(root, MANIFEST));
+    const bag = (parsed as { scripts?: unknown }).scripts;
+    scripts = typeof bag === 'object' && bag !== null ? (bag as Record<string, unknown>) : {};
+  } catch (e) {
+    return [`${MANIFEST} does not parse, so the body of every measured npm script is unstated: ${String(e)}`];
+  }
+  for (const ev of S4_EVIDENCE_STEPS) {
+    if (ev.scriptBody === undefined) continue;
+    const body = scripts[ev.script];
+    if (body === undefined) {
+      problems.push(
+        `${MANIFEST} declares no \`${ev.script}\` script, so the required step \`${ev.command}\` runs nothing — ${ev.label} would not be measured at all`,
+      );
+      continue;
+    }
+    if (typeof body !== 'string') {
+      problems.push(`${MANIFEST}'s \`${ev.script}\` is not a string, so what ${ev.label} runs is undecidable`);
+      continue;
+    }
+    if (body.trim() !== ev.scriptBody)
+      problems.push(
+        `${MANIFEST}'s \`${ev.script}\` is \`${body.trim()}\`, not exactly \`${ev.scriptBody}\` — the workflow pins the step and this pins what the step runs, so a filter, a renamed suite or a narrowed path cannot delete ${ev.label} behind an unchanged workflow`,
+      );
+  }
+  return problems;
+}
+
+/** What each measured npm script resolves to, printed on a pass as well as a failure. */
+export function evidenceScriptBodyReport(root: string): string {
+  if (!has(root, 'package.json')) return 'package.json is missing';
+  let scripts: Record<string, unknown> = {};
+  try {
+    const bag = (JSON.parse(read(root, 'package.json')) as { scripts?: unknown }).scripts;
+    if (typeof bag === 'object' && bag !== null) scripts = bag as Record<string, unknown>;
+  } catch {
+    return 'package.json does not parse';
+  }
+  const pinned = S4_EVIDENCE_STEPS.filter((e) => e.scriptBody !== undefined);
+  return `${pinned.length} measured npm script(s) pinned: ${pinned.map((e) => `${e.script} → ${String(scripts[e.script] ?? 'ABSENT')}`).join('; ')}`;
 }
 
 /** The measured position, on a pass as well as on a failure. */
@@ -1817,6 +1891,13 @@ export const CHECKS: readonly Check[] = [
     run: (root) => (has(root, WORKFLOW) ? requiredCiProblems(read(root, WORKFLOW)) : [`${WORKFLOW} is missing`]),
     note: requiredCiReport,
     ok: 'a step of the required `backend` job runs exactly `npm run gate:phase4:s4` under its ruled name, after the P4-S3 step, with no continue-on-error and no if:, on every push and pull request',
+  },
+  {
+    id: 'evidence-script-bodies',
+    title: 'what each measured step actually runs, pinned where the step goes through npm',
+    run: evidenceScriptBodyProblems,
+    note: evidenceScriptBodyReport,
+    ok: 'every measured step that runs `npm run <script>` resolves to exactly the body it is ruled to have, so a filter or a narrowed path inside `package.json` cannot delete a measurement behind an unchanged workflow',
   },
   {
     id: 'roster',

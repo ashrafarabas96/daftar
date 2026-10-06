@@ -113,10 +113,14 @@ ALTER POLICY business_isolation_read ON customer_credit_applications
 -- ── 0086-E — read back from the catalogue, never asserted in prose ────────
 DO $post$
 DECLARE
-  v_rel   TEXT;
-  v_qual  TEXT;
-  v_check TEXT;
-  v_n     INTEGER;
+  v_rel      TEXT;
+  v_qual     TEXT;
+  v_check    TEXT;
+  v_n        INTEGER;
+  v_operands TEXT[];
+  v_operand  TEXT;
+  v_ors      INTEGER;
+  v_want_ors INTEGER;
 BEGIN
   FOREACH v_rel IN ARRAY ARRAY['invoices', 'sales', 'payment_allocations', 'customer_credit_applications'] LOOP
 
@@ -133,11 +137,34 @@ BEGIN
       IF v_check NOT LIKE '%( SELECT %' THEN
         RAISE EXCEPTION '0086-E(1): %.% still evaluates its row-invariant parts per row: %', v_rel, v_qual, v_check;
       END IF;
-      -- The MEANING, not only the shape: every operand the qual rested on is
-      -- still named in it. A subselect that lost a disjunct would be a policy
-      -- that admits or refuses rows the original did not.
-      IF v_check NOT LIKE '%app_bypass()%' THEN
-        RAISE EXCEPTION '0086-E(1): %.% lost its app_bypass() escape: %', v_rel, v_qual, v_check;
+
+      -- THE MEANING, NOT ONLY THE SHAPE. Asking only for a subselect and for
+      -- `app_bypass()` is not a barrier: `USING ((SELECT app_bypass()) OR
+      -- (SELECT true))` satisfies both and admits every row of every tenant.
+      -- The barrier is the TENANT disjunct on `tenant_membership` and the
+      -- BUSINESS disjunct on `business_isolation_read` — the two operands the
+      -- weaker form never named — so each qual is read back against its whole
+      -- operand set AND against the number of disjuncts it is allowed to have.
+      -- Presence alone would still admit an ADDED `OR (SELECT true)`; the
+      -- count alone would still admit a SWAPPED disjunct. Together they admit
+      -- neither.
+      v_operands := CASE v_qual
+        WHEN 'tenant_membership' THEN ARRAY['app_bypass()', 'app_tenant()', 'tenant_id']
+        WHEN 'business_isolation_read' THEN ARRAY['app_bypass()', 'app_business()', 'business_id',
+                                                  'daftar_inventory_internal', 'daftar_accounting_internal']
+      END;
+      v_want_ors := CASE v_qual WHEN 'tenant_membership' THEN 1 WHEN 'business_isolation_read' THEN 2 END;
+      IF v_operands IS NULL OR v_want_ors IS NULL THEN
+        RAISE EXCEPTION '0086-E(1): % is not one of the two quals this file rewrites, so its operand set is unstated', v_qual;
+      END IF;
+      FOREACH v_operand IN ARRAY v_operands LOOP
+        IF pg_catalog.strpos(v_check, v_operand) = 0 THEN
+          RAISE EXCEPTION '0086-E(1): %.% no longer names %, so a barrier the per-row form carried is gone: %', v_rel, v_qual, v_operand, v_check;
+        END IF;
+      END LOOP;
+      v_ors := (pg_catalog.length(v_check) - pg_catalog.length(pg_catalog.replace(v_check, ' OR ', ''))) / 4;
+      IF v_ors <> v_want_ors THEN
+        RAISE EXCEPTION '0086-E(1): %.% carries % disjunct(s) and the per-row form carried % — a disjunct was added or lost: %', v_rel, v_qual, v_ors + 1, v_want_ors + 1, v_check;
       END IF;
     END LOOP;
 

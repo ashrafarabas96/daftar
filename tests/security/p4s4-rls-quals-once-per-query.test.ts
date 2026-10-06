@@ -31,7 +31,10 @@ import { Client } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { ensurePostgres, ownerPool, resetData } from '../helpers/test-app';
 import { urlOf } from '../helpers/scratch-db';
+import { MIGRATIONS_DIR } from '../../apps/api/src/infra/migrate';
 import { randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { newCustomer, sellOnCredit, settlementMissing, settlementWorld, stockUp, type SettlementWorld } from '../golden-regression/phase4-s4/settlement-world';
 import { applyCredit, collectPayment, type AllocationInput } from '../golden-regression/phase4-s4/settlement-path';
 
@@ -46,13 +49,59 @@ const PER_ROW = {
      OR business_id = nullif(app_business(), '')::uuid)`,
 } as const;
 
-/** The once-per-query form, exactly as `0086` wrote it. */
-const ONCE_PER_QUERY = {
-  tenant_membership: `((SELECT app_bypass()) OR tenant_id = (SELECT nullif(app_tenant(), '')::uuid))`,
-  business_isolation_read: `((SELECT app_bypass())
-     OR (SELECT current_user IN ('daftar_inventory_internal', 'daftar_accounting_internal'))
-     OR business_id = (SELECT nullif(app_business(), '')::uuid))`,
-} as const;
+/**
+ * THE SHIPPED FORM IS CAPTURED, NOT WRITTEN DOWN HERE.
+ *
+ * This file used to carry the once-per-query form as a literal and restore it
+ * with `ALTER POLICY`. That made the file SELF-HEALING: the first case
+ * committed this file's own correct text over whatever the migration had
+ * actually installed, and every later case — the cross-tenant denial case
+ * most of all — then tested the literal instead of the migration. A migration
+ * that shipped a qual with the tenant barrier deleted would have left this
+ * whole file green.
+ *
+ * So the shipped expression is read out of the catalogue ONCE, before
+ * anything alters a policy, and every restore puts THAT text back. The
+ * subject of this file is now the shape `0086` installed, and a hostile
+ * shipped qual is carried into every case below.
+ */
+const SHIPPED = new Map<string, string>();
+const shippedKey = (rel: string, pol: string): string => `${rel}.${pol}`;
+
+/**
+ * The operands each read qual must still name, and the number of disjuncts it
+ * is allowed to have — the same law `0086-E(1)` reads back from the
+ * catalogue. Presence alone would admit an ADDED `OR (SELECT true)`; the
+ * count alone would admit a SWAPPED disjunct.
+ */
+const BARRIER: Record<(typeof REWRITTEN)[number], { readonly operands: readonly string[]; readonly disjuncts: number }> = {
+  tenant_membership: { operands: ['app_bypass()', 'app_tenant()', 'tenant_id'], disjuncts: 2 },
+  business_isolation_read: {
+    operands: ['app_bypass()', 'app_business()', 'business_id', 'daftar_inventory_internal', 'daftar_accounting_internal'],
+    disjuncts: 3,
+  },
+};
+
+/** Every read qual `0086` rewrote, as the catalogue renders it right now. */
+async function readQuals(): Promise<{ relname: string; polname: string; q: string | null }[]> {
+  const r = await ownerPool().query<{ relname: string; polname: string; q: string | null }>(
+    `SELECT c.relname, p.polname, pg_get_expr(p.polqual, p.polrelid) AS q
+       FROM pg_policy p JOIN pg_class c ON c.oid = p.polrelid
+      WHERE c.relnamespace = 'public'::regnamespace AND c.relname = ANY ($1::text[]) AND p.polname = ANY ($2::text[]) ORDER BY 1, 2`,
+    [[...RELATIONS], [...REWRITTEN]],
+  );
+  return r.rows;
+}
+
+/** `0086`'s own post-apply block, sliced out of the migration file on disk. */
+function postApplyBlockOf0086(): string {
+  const file = join(MIGRATIONS_DIR, '0086_phase4_rls_quals_once_per_query.sql');
+  const text = readFileSync(file, 'utf8');
+  const from = text.indexOf('DO $post$');
+  const to = text.indexOf('$post$;', from + 1);
+  if (from < 0 || to < 0) throw new Error(`0086 carries no DO $post$ … $post$; block, so the proof below would prove nothing: ${file}`);
+  return text.slice(from, to + '$post$;'.length);
+}
 
 let w: SettlementWorld;
 const customers: string[] = [];
@@ -127,7 +176,19 @@ async function setShape(shape: 'per-row' | 'once-per-query'): Promise<void> {
   await o.connect();
   try {
     for (const rel of RELATIONS) {
-      for (const pol of REWRITTEN) await o.query(`ALTER POLICY ${pol} ON ${rel} USING ${shape === 'per-row' ? PER_ROW[pol] : ONCE_PER_QUERY[pol]}`);
+      for (const pol of REWRITTEN) {
+        let using: string;
+        if (shape === 'per-row') using = PER_ROW[pol];
+        else {
+          const captured = SHIPPED.get(shippedKey(rel, pol));
+          if (captured === undefined || captured === '')
+            throw new Error(
+              `the shipped qual for ${rel}.${pol} was never captured, so restoring it would restore this file's opinion instead of the migration's`,
+            );
+          using = `(${captured})`;
+        }
+        await o.query(`ALTER POLICY ${pol} ON ${rel} USING ${using}`);
+      }
     }
   } finally {
     await o.end();
@@ -148,6 +209,15 @@ async function shippedShapeIsBack(): Promise<void> {
 
 beforeAll(async () => {
   await ensurePostgres();
+  // BEFORE anything in this file alters a policy: the shape the migration
+  // installed, straight out of the catalogue. Every `once-per-query` restore
+  // below puts this text back, so no case can be answered by a literal.
+  for (const row of await readQuals()) {
+    if (row.q === null || row.q === '') throw new Error(`${row.relname}.${row.polname} has no qual at all, so 0086 altered something that is not there`);
+    SHIPPED.set(shippedKey(row.relname, row.polname), row.q);
+  }
+  if (SHIPPED.size !== RELATIONS.length * REWRITTEN.length)
+    throw new Error(`captured ${SHIPPED.size} shipped qual(s) and 0086 rewrites ${RELATIONS.length * REWRITTEN.length}`);
   await resetData();
   w = await settlementWorld('p4s4rlsq');
   const missing = await settlementMissing(w);
@@ -268,6 +338,61 @@ describe('P4-S4 — 0086: the read quals are evaluated once per query and answer
     }
     await shippedShapeIsBack();
   }, 120_000);
+
+  it('the SHIPPED quals still carry every barrier operand, and not one disjunct more', async () => {
+    // The subject is the text `0086` installed, read out of the catalogue —
+    // not a literal in this file. Asking only for a subselect and for
+    // `app_bypass()` is no barrier: `((SELECT app_bypass()) OR (SELECT true))`
+    // satisfies both and admits every row of every tenant. The barrier is the
+    // TENANT disjunct on `tenant_membership` and the BUSINESS disjunct on
+    // `business_isolation_read`, and the disjunct COUNT is what refuses an
+    // added one.
+    const rows = await readQuals();
+    expect(rows.length).toBe(RELATIONS.length * REWRITTEN.length);
+    for (const row of rows) {
+      const law = BARRIER[row.polname as (typeof REWRITTEN)[number]];
+      expect(law, `${row.polname} has no stated operand set, so this case would pass over an unknown policy`).toBeDefined();
+      const q = row.q ?? '';
+      for (const operand of law.operands)
+        expect(q, `${row.relname}.${row.polname} no longer names ${operand}, so a barrier the per-row form carried is gone`).toContain(operand);
+      expect(q.split(' OR ').length, `${row.relname}.${row.polname} carries the wrong number of disjuncts: ${q}`).toBe(law.disjuncts);
+    }
+  }, 120_000);
+
+  it('RED PROOF: a shipped qual with the tenant barrier deleted makes 0086 ITSELF raise, and this file go red', async () => {
+    // The defect this proves absent: a qual that keeps the subselect and
+    // `app_bypass()` but drops the tenant comparison. It is the one shape
+    // 0086-E(1)'s first form admitted, and the one this file used to heal by
+    // re-applying its own literal.
+    const block = postApplyBlockOf0086();
+    expect(block, 'the sliced block is not 0086’s post-apply block').toContain('0086-E(1)');
+    // Resolved BEFORE the plant, so the restore in `finally` has nothing left
+    // to decide and cannot itself throw.
+    const restore = RELATIONS.map((rel) => {
+      const captured = SHIPPED.get(shippedKey(rel, 'tenant_membership'));
+      if (captured === undefined) throw new Error(`no captured shipped qual for ${rel}.tenant_membership, so the plant could not be undone`);
+      return { rel, captured };
+    });
+    const o = new Client({ connectionString: urlOf('daftar', 'postgres') });
+    await o.connect();
+    try {
+      for (const rel of RELATIONS) await o.query(`ALTER POLICY tenant_membership ON ${rel} USING ((SELECT app_bypass()) OR (SELECT true))`);
+      // 0086's own text, run against that state. It must refuse it.
+      await expect(o.query(block)).rejects.toThrow(/0086-E\(1\)/);
+      // And this file's own law refuses it too, so the proof is not only
+      // about the migration's block.
+      const hostile = (await readQuals()).filter((r) => r.polname === 'tenant_membership');
+      expect(hostile.length).toBe(RELATIONS.length);
+      for (const row of hostile) expect(row.q ?? '').not.toContain('app_tenant()');
+    } finally {
+      for (const { rel, captured } of restore) await o.query(`ALTER POLICY tenant_membership ON ${rel} USING (${captured})`);
+      await o.end();
+    }
+    // Restored, read back from the catalogue rather than assumed.
+    for (const row of (await readQuals()).filter((r) => r.polname === 'tenant_membership'))
+      expect(row.q ?? '', `${row.relname}.tenant_membership was not restored`).toContain('app_tenant()');
+    await shippedShapeIsBack();
+  }, 180_000);
 
   it('DEFAULT-DENY holds from the outside: no scope sees nothing, and another business’s scope sees nothing of this one', async () => {
     const bare = await connectAs('daftar_app');

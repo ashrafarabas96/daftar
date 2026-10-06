@@ -36,7 +36,8 @@
  * P4-AL-88 defect. The non-vacuity assertions are FLOORS and positions
  * RELATIVE to the predecessor's step.
  */
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
@@ -47,6 +48,7 @@ import {
   S4_SCRIPT,
   S4_STEP_NAME,
   WORKFLOW,
+  evidenceScriptBodyProblems,
   readWorkflow,
   requiredCiProblems,
 } from '../../scripts/phase4-s4-gate';
@@ -367,5 +369,107 @@ describe('RP-CI-N — a measured step moved after the gate, or out of the requir
     const problems = requiredCiProblems(mutated);
     expect(problems, 'the law did not refuse a workflow whose measured step left the required job').not.toEqual([]);
     expect(problems.join('\n')).toMatch(/not the required/);
+  });
+});
+
+// ───── THE OTHER HALF OF A PINNED MEASUREMENT: THE NPM SCRIPT BODY ───────
+// Pinning the workflow's `run:` to `npm run perf:phase4:s4` pins the NAME of
+// the measurement, not the measurement. `package.json` resolves that name, and
+// `.github/workflows/ci.yml` says nothing about it — so the same defect this
+// file was written for lives one indirection down, and was reachable at the
+// commit that closed the first level: adding `-t "P4-D"` to the script body
+// left the workflow byte-identical, every assertion above green, and the P4-F
+// budget unmeasured.
+//
+// Every plant below writes a MUTATED COPY of `package.json` into a temporary
+// root. The checkout is never touched, and each mutation is required to have
+// actually changed the text before its claim is asked.
+
+/** A root carrying nothing but a `package.json` whose scripts are `scripts`. */
+function rootWithScripts(scripts: Record<string, unknown>): string {
+  const dir = mkdtempSync(join(tmpdir(), 'p4s4-script-body-'));
+  writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'daftar', scripts }, null, 2), 'utf8');
+  return dir;
+}
+
+/** The real manifest's scripts, which every plant below starts from. */
+function realScripts(): Record<string, unknown> {
+  const parsed = JSON.parse(readFileSync(join(REPO, 'package.json'), 'utf8')) as { scripts?: Record<string, unknown> };
+  const scripts = parsed.scripts;
+  if (scripts === undefined) throw new Error('package.json declares no scripts, so every plant below would be vacuous');
+  return { ...scripts };
+}
+
+describe('P4-S4 — the measured steps that go through npm are pinned to a script BODY, not only to a name', () => {
+  const PINNED = S4_EVIDENCE_STEPS.filter((e) => e.scriptBody !== undefined);
+
+  it('at least one measured step goes through npm, so this whole section has a subject', () => {
+    expect(PINNED.length, 'no measured step runs `npm run <script>`, so these plants would prove nothing').toBeGreaterThan(0);
+    for (const ev of PINNED) expect(ev.command, `${ev.label} declares a body but does not run through npm`).toBe(`npm run ${ev.script}`);
+  });
+
+  it('the checkout passes the law, and every pinned script resolves to exactly its ruled body', () => {
+    expect(evidenceScriptBodyProblems(REPO)).toEqual([]);
+    const scripts = realScripts();
+    for (const ev of PINNED) expect(String(scripts[ev.script]).trim(), `${ev.script} drifted from its ruled body`).toBe(ev.scriptBody);
+  });
+
+  it('RP-SB-A: a pinned script DELETED from package.json is caught — the required step would run nothing', () => {
+    for (const ev of PINNED) {
+      const scripts = realScripts();
+      expect(scripts[ev.script], `${ev.script} is already absent, so this plant changes nothing`).toBeDefined();
+      delete scripts[ev.script];
+      const found = evidenceScriptBodyProblems(rootWithScripts(scripts));
+      expect(
+        found.some((m) => m.includes(ev.script) && m.includes('runs nothing')),
+        `removing ${ev.script} left the law silent: ${found.join(' | ')}`,
+      ).toBe(true);
+    }
+  });
+
+  it('RP-SB-B: a `-t` FILTER added inside the body is caught — the step is unchanged and one budget stops being measured', () => {
+    for (const ev of PINNED) {
+      const scripts = realScripts();
+      const before = String(scripts[ev.script]);
+      scripts[ev.script] = `${before} -t "P4-D"`;
+      expect(scripts[ev.script], 'the plant did not change the body').not.toBe(before);
+      const found = evidenceScriptBodyProblems(rootWithScripts(scripts));
+      expect(
+        found.some((m) => m.includes(ev.script)),
+        `a -t filter inside ${ev.script} left the law silent: ${found.join(' | ')}`,
+      ).toBe(true);
+    }
+  });
+
+  it('RP-SB-C: the body pointed at ANOTHER suite file is caught', () => {
+    for (const ev of PINNED) {
+      const scripts = realScripts();
+      scripts[ev.script] = 'vitest run tests/performance/plan-evidence-contract.test.ts';
+      const found = evidenceScriptBodyProblems(rootWithScripts(scripts));
+      expect(
+        found.some((m) => m.includes(ev.script)),
+        `repointing ${ev.script} left the law silent: ${found.join(' | ')}`,
+      ).toBe(true);
+    }
+  });
+
+  it('RP-SB-D: a body that is not a string at all is caught, rather than crashing the gate', () => {
+    for (const ev of PINNED) {
+      const scripts = realScripts();
+      scripts[ev.script] = ['vitest', 'run'];
+      const found = evidenceScriptBodyProblems(rootWithScripts(scripts));
+      expect(
+        found.some((m) => m.includes(ev.script) && m.includes('undecidable')),
+        `a non-string ${ev.script} left the law silent: ${found.join(' | ')}`,
+      ).toBe(true);
+    }
+  });
+
+  it('RP-SB-E: a root with no package.json, and one whose package.json does not parse, are both findings', () => {
+    const empty = mkdtempSync(join(tmpdir(), 'p4s4-script-body-none-'));
+    expect(evidenceScriptBodyProblems(empty).join(' | ')).toContain('package.json is missing');
+    const broken = mkdtempSync(join(tmpdir(), 'p4s4-script-body-broken-'));
+    writeFileSync(join(broken, 'package.json'), '{ "scripts": ', 'utf8');
+    expect(evidenceScriptBodyProblems(broken).join(' | ')).toContain('does not parse');
   });
 });
