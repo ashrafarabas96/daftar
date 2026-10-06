@@ -790,7 +790,13 @@ function runGate(root: string, listOnly: boolean, structuralOnly: boolean): void
 
   // ── 8. Guards (§7.1(8), A-18) ─────────────────────────────────────────────
   function checkGuards(): void {
-    console.log('P3-S8 GATE — static guards (A-18; 23 rules)');
+    // The number is DERIVED from the script's own `// Rule N` headers: an
+    // evidence line that printed 23 while the tree carried 24 would be a false
+    // statement inside a PASS.
+    const declaredRules = new Set(
+      [...(has('scripts/static-guards.ts') ? read('scripts/static-guards.ts') : '').matchAll(/^\/\/ Rule (\d+)\b/gm)].map((m) => Number(m[1])),
+    ).size;
+    console.log(`P3-S8 GATE — static guards (A-18; ${declaredRules} rules)`);
     const mark = failures;
     const code = (file: string): string => (has(file) ? stripTsProse(read(file)) : '');
     const references: readonly (readonly [file: string, token: RegExp, why: string])[] = [
@@ -864,7 +870,9 @@ function runGate(root: string, listOnly: boolean, structuralOnly: boolean): void
     if (ACCEPTED) console.log(`  structural: frozenThrough at or beyond ${S8_MIGRATION_NAME}; it hashes to S8_ACCEPTED on disk and in the manifest`);
     else console.log(`  structural: frozenThrough = ${S7_BOUNDARY}; after it exactly ${S8_MIGRATION_NAME}, unrecorded`);
     console.log('  structural: §2.11 content (4 reconciler column grants; the delimited R-B1a statements; DO blocks change nothing); the error filter');
-    console.log('  structural: reconciler model; R-INV-01..05; no stored swap; TD-12 at six sites; premortem PM-01..46; static guards (23 rules); budgets');
+    console.log(
+      '  structural: reconciler model; R-INV-01..05; no stored swap; TD-12 at six sites; premortem PM-01..46; static guards (every declared rule); budgets',
+    );
     console.log('  suites:');
     for (const [id, file] of Object.entries(REQUIRED_SUITE_NAMES)) console.log(`    ${id.padEnd(6)} ${file}${has(file) ? '' : '   (missing)'}`);
     console.log('  runtime:    the runner canary');

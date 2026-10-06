@@ -1187,8 +1187,12 @@ export function phase4RoutineBody(root: string, name: string): string | null {
   // planted `invoice_outstanding`-family reader subtracting `public.refunds`
   // inside a `$fn$` body produced zero findings. On a financial law a body
   // this helper cannot read must never look like a body with nothing in it.
+  //
+  // The tag class admits DIGITS. It did not, so `AS $v2$ … $v2$;` — the
+  // obvious spelling for a second version of a routine — was unreadable by
+  // exactly the same mechanism the paragraph above describes.
   const all = [
-    ...phase4Sql(root).matchAll(new RegExp(`CREATE\\s+(?:OR\\s+REPLACE\\s+)?FUNCTION\\s+${name}\\s*\\([\\s\\S]*?(\\$[a-z_]*\\$)[\\s\\S]*?\\1;`, 'gi')),
+    ...phase4Sql(root).matchAll(new RegExp(`CREATE\\s+(?:OR\\s+REPLACE\\s+)?FUNCTION\\s+${name}\\s*\\([\\s\\S]*?(\\$[a-z0-9_]*\\$)[\\s\\S]*?\\1;`, 'gi')),
   ];
   return all.length === 0 ? null : (all[all.length - 1]?.[0] ?? null);
 }
@@ -1231,14 +1235,27 @@ export function phase4RoutineBody(root: string, name: string): string | null {
 // TL-P4-S5-R1's permanent negative proof vacuous against the likeliest name.
 // Both reproduced by running the regexes themselves.
 export const INVOICE_REDUCER_VOCABULARY =
-  /^(payment_allocations|allocation_reversals|payment_reversals|credit_note_applications|credit_notes|customer_credit_notes|customer_credit_note_applications|customer_credit_applications|invoice_write_offs|sale_returns|sales_returns|customer_returns)$/;
+  /^(payment_allocations|allocation_reversals|payment_reversals|credit_note_applications|credit_notes|customer_credit_notes|customer_credit_note_applications|customer_credit_applications|invoice_write_offs|write_offs|sale_returns|sales_returns|customer_returns|credit_note_allocations|customer_credit_note_allocations|customer_credit_allocations)$/;
 
 /**
  * The names a Phase-4 CASH REFUND relation will carry. A vocabulary, not a
  * list of what the tree has: `refunds` does not exist yet, and the whole point
  * of TL-P4-S5-R1 is that the law must already be standing on the day it does.
  */
-export const REFUND_VOCABULARY = /\b((?:customer_|sale_|sales_|invoice_|credit_note_|customer_credit_)?refunds|refund_allocations|refund_applications)\b/i;
+//
+// A TOKEN RULE, not an enumeration of prefixes. The prefix list missed
+// `pos_refunds`, `refund_lines`, `customer_refund_allocations`,
+// `credit_note_allocations` and every singular — and `_` is a word character,
+// so `\b` does not break at it and no prefix or suffix could ever match. The
+// rule is now: a token of the name is `refund` or `refunds`, EXCEPT where the
+// name is a SUPPLIER refund, which is Phase 3's and belongs to the supplier
+// chain rather than to this law. The exclusion is named and has its own red
+// proof rather than being an accident of the pattern.
+export const REFUND_SUPPLIER_EXCLUSION = /(^|_)(supplier|suppliers|purchase|purchases|vendor|vendors)(_|$)/i;
+export const REFUND_VOCABULARY = /(^|_)refunds?(_|$)/i;
+
+/** A relation name is a Phase 4 cash-refund relation when the token rule matches and the supplier exclusion does not. */
+export const isRefundRelation = (name: string): boolean => REFUND_VOCABULARY.test(name) && !REFUND_SUPPLIER_EXCLUSION.test(name);
 
 /**
  * The routines that READ the derived invoice/customer receivable. Discovered
@@ -1416,10 +1433,14 @@ export function invoiceReducerProblems(root: string): string[] {
     // refund that is read. The remedy is NOT to widen it to ignore literals
     // wholesale: that would hand back dynamic SQL, which is a read, and a
     // false green on this law is a receivable reduced twice.
-    const refund = REFUND_VOCABULARY.exec(executable);
+    // Every IDENTIFIER of the body against the token rule, rather than one
+    // regex over the whole text: the rule is about a name, and `\b` does not
+    // break at `_`, so no pattern over the raw text could match a name by one
+    // of its tokens. The supplier exclusion is applied by `isRefundRelation`.
+    const refund = (executable.match(/[A-Za-z_][A-Za-z0-9_]*/g) ?? []).find(isRefundRelation) ?? null;
     if (refund !== null)
       problems.push(
-        `TL-P4-S5-R1: ${name} reads ${refund[1]} in its executable body — a refund does not undo a payment and does not settle an invoice: it settles the credit-note or customer-credit liability it is paid out of, and the invoice receivable was already reduced once by that credit effect. Reading it here reduces invoice AR a second time (lock P4-AL-34, P4-AL-05)`,
+        `TL-P4-S5-R1: ${name} reads ${refund} in its executable body — a refund does not undo a payment and does not settle an invoice: it settles the credit-note or customer-credit liability it is paid out of, and the invoice receivable was already reduced once by that credit effect. Reading it here reduces invoice AR a second time (lock P4-AL-34, P4-AL-05)`,
       );
   }
   return problems;

@@ -102,7 +102,13 @@ DECLARE
   v_qual   TEXT;
   v_have   TEXT;
   v_mine   UUID := '11111111-1111-1111-1111-111111111111';
-  v_other  UUID := '22222222-2222-2222-2222-222222222222';
+  -- M-2: THE DENIED SCOPE IS A FRESH VALUE, NOT A FIXED ONE. With a constant
+  -- here, a qual pinned to one OTHER scope — `OR business_id = '3333…'` —
+  -- denies the one value the probe supplies and passes every case. The
+  -- literal-set arm below refuses that spelling, and this makes the EVALUATED
+  -- half independent of it: a clause that admits any scope but its own is
+  -- denied a value it cannot have been written against.
+  v_other  UUID := pg_catalog.gen_random_uuid();
   v_guc    TEXT;
   v_prev_t TEXT := pg_catalog.current_setting('app.tenant_id', true);
   v_prev_b TEXT := pg_catalog.current_setting('app.business_id', true);
@@ -196,10 +202,31 @@ BEGIN
       -- applied GREEN and was measured as a real cross-business read: 0 rows
       -- before, 1 row after. So the role literals in each qual are enumerated
       -- and required to be EXACTLY the ones the clause is entitled to.
+      --
+      -- C-2 (corrected): THE PATTERN WAS THE HOLE. Reading only
+      -- `'(daftar_[a-z_]+)'` out of the clause enumerated a SHAPE, not the
+      -- clause's literals, and an independent challenge round measured four
+      -- spellings through it, each admitting a foreign business when the
+      -- planted qual was evaluated as `daftar_app`: `daftar_app2` (a digit),
+      -- `appserver` (no prefix), `daftar_App` (an upper-case letter), and
+      -- `'daftar' || '_app'` — which `pg_get_expr` does not fold, so no
+      -- literal of that name ever appears in the text at all.
+      --
+      -- So the clause's ENTIRE literal set is enumerated, not a prefix of it:
+      -- every single-quoted literal other than the empty string (which
+      -- `nullif(app_tenant(), '')` carries) must be exactly the role set the
+      -- clause is entitled to. That refuses an added name whatever it is
+      -- spelled like, and assembling a name is refused separately, because a
+      -- policy qual that concatenates has no legitimate form here.
+      IF pg_catalog.strpos(v_have, '||') > 0 THEN
+        RAISE EXCEPTION '0086-A: %.% ASSEMBLES a value in its USING clause. A name built by concatenation is a literal no enumeration of this text can see: %',
+          v_rel, v_qual, v_have;
+      END IF;
       SELECT pg_catalog.array_agg(m[1] ORDER BY m[1]) INTO v_roles
-        FROM pg_catalog.regexp_matches(v_have, '''(daftar_[a-z_]+)''', 'g') AS m;
+        FROM pg_catalog.regexp_matches(v_have, '''([^'']*)''', 'g') AS m
+       WHERE m[1] <> '';
       IF COALESCE(v_roles, ARRAY[]::TEXT[]) <> v_want_roles THEN
-        RAISE EXCEPTION '0086-A: %.% names the role(s) % and is entitled to exactly % — a name added to the escape list is a reader this file never granted: %',
+        RAISE EXCEPTION '0086-A: %.% names the literal(s) % and is entitled to exactly % — a name added to the escape list is a reader this file never granted: %',
           v_rel, v_qual, COALESCE(v_roles, ARRAY[]::TEXT[]), v_want_roles, v_have;
       END IF;
 
@@ -442,7 +469,13 @@ DECLARE
   v_qual   TEXT;
   v_have   TEXT;
   v_mine   UUID := '11111111-1111-1111-1111-111111111111';
-  v_other  UUID := '22222222-2222-2222-2222-222222222222';
+  -- M-2: THE DENIED SCOPE IS A FRESH VALUE, NOT A FIXED ONE. With a constant
+  -- here, a qual pinned to one OTHER scope — `OR business_id = '3333…'` —
+  -- denies the one value the probe supplies and passes every case. The
+  -- literal-set arm below refuses that spelling, and this makes the EVALUATED
+  -- half independent of it: a clause that admits any scope but its own is
+  -- denied a value it cannot have been written against.
+  v_other  UUID := pg_catalog.gen_random_uuid();
   v_guc    TEXT;
   v_prev_t TEXT := pg_catalog.current_setting('app.tenant_id', true);
   v_prev_b TEXT := pg_catalog.current_setting('app.business_id', true);
@@ -535,10 +568,31 @@ BEGIN
       -- applied GREEN and was measured as a real cross-business read: 0 rows
       -- before, 1 row after. So the role literals in each qual are enumerated
       -- and required to be EXACTLY the ones the clause is entitled to.
+      --
+      -- C-2 (corrected): THE PATTERN WAS THE HOLE. Reading only
+      -- `'(daftar_[a-z_]+)'` out of the clause enumerated a SHAPE, not the
+      -- clause's literals, and an independent challenge round measured four
+      -- spellings through it, each admitting a foreign business when the
+      -- planted qual was evaluated as `daftar_app`: `daftar_app2` (a digit),
+      -- `appserver` (no prefix), `daftar_App` (an upper-case letter), and
+      -- `'daftar' || '_app'` — which `pg_get_expr` does not fold, so no
+      -- literal of that name ever appears in the text at all.
+      --
+      -- So the clause's ENTIRE literal set is enumerated, not a prefix of it:
+      -- every single-quoted literal other than the empty string (which
+      -- `nullif(app_tenant(), '')` carries) must be exactly the role set the
+      -- clause is entitled to. That refuses an added name whatever it is
+      -- spelled like, and assembling a name is refused separately, because a
+      -- policy qual that concatenates has no legitimate form here.
+      IF pg_catalog.strpos(v_have, '||') > 0 THEN
+        RAISE EXCEPTION '0086-F: %.% ASSEMBLES a value in its USING clause. A name built by concatenation is a literal no enumeration of this text can see: %',
+          v_rel, v_qual, v_have;
+      END IF;
       SELECT pg_catalog.array_agg(m[1] ORDER BY m[1]) INTO v_roles
-        FROM pg_catalog.regexp_matches(v_have, '''(daftar_[a-z_]+)''', 'g') AS m;
+        FROM pg_catalog.regexp_matches(v_have, '''([^'']*)''', 'g') AS m
+       WHERE m[1] <> '';
       IF COALESCE(v_roles, ARRAY[]::TEXT[]) <> v_want_roles THEN
-        RAISE EXCEPTION '0086-F: %.% names the role(s) % and is entitled to exactly % — a name added to the escape list is a reader this file never granted: %',
+        RAISE EXCEPTION '0086-F: %.% names the literal(s) % and is entitled to exactly % — a name added to the escape list is a reader this file never granted: %',
           v_rel, v_qual, COALESCE(v_roles, ARRAY[]::TEXT[]), v_want_roles, v_have;
       END IF;
 

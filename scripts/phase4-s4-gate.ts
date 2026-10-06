@@ -441,7 +441,19 @@ export function liveVocabularyReport(input: Phase4VocabularyInput): Phase4Vocabu
       `VACUOUS: the live catalogue handed to this law holds no Phase 4 relation at all (${input.live.length} catalogue row(s) read), so this half has no subject and must not be read as a pass`,
     );
 
-  const byName = new Map((input.live ?? []).map((r) => [r.name, r] as const));
+  // EVERY catalogue row of a name, not one. The live read now covers every
+  // namespace PostgreSQL has not reserved, so two namespaces may hold a
+  // relation of the same name — and a map keyed by name alone would let the
+  // compliant `public.x` answer for a leaking `other.x`, whose authoritative
+  // columns would then never be judged. The RLS law was corrected the same way
+  // in `scripts/guards/phase4-rls-force.ts` (`liveRowsByName`); this is the
+  // same correction in the vocabulary arm.
+  const byName = new Map<string, { readonly name: string; readonly schema?: string; readonly columns: readonly string[] }[]>();
+  for (const row of input.live ?? []) {
+    const bucket = byName.get(row.name);
+    if (bucket === undefined) byName.set(row.name, [row]);
+    else bucket.push(row);
+  }
   const judged = (liveSurface ?? []).filter((name) => byName.has(name));
 
   for (const name of judged) {
@@ -449,13 +461,12 @@ export function liveVocabularyReport(input: Phase4VocabularyInput): Phase4Vocabu
       problems.push(
         `${name} is PRESENT IN THE LIVE CATALOGUE and is a derived-truth relation name under G-3 — a balance, outstanding, receivables, summary, cache, snapshot or rollup relation is a second financial truth. No migration text this gate can read declares it that way, which is the hole this half exists to close`,
       );
-    const row = byName.get(name);
-    if (row === undefined) continue;
-    for (const column of row.columns)
-      if (isAuthoritativeSalesColumn(column))
-        problems.push(
-          `${name}.${column} is a LIVE pg_attribute column claiming storage authority over a derived receivable, debt or stock quantity (G-3 / P4-AL-06) — the text half cannot read a column declared from inside a dollar-quoted body`,
-        );
+    for (const row of byName.get(name) ?? [])
+      for (const column of row.columns)
+        if (isAuthoritativeSalesColumn(column))
+          problems.push(
+            `${row.schema === undefined ? name : `${row.schema}.${name}`}.${column} is a LIVE pg_attribute column claiming storage authority over a derived receivable, debt or stock quantity (G-3 / P4-AL-06) — the text half cannot read a column declared from inside a dollar-quoted body`,
+          );
   }
 
   return { inheritedPrefixSize, applierRelations: applier, liveSurface, judged, problems };
@@ -1927,7 +1938,62 @@ export function rosterRows(root: string): readonly SuiteRow[] {
 // because a later loss then lands above it and is never reported.
 // `p4s4-required-ci` asserts this equals the derived count, so forgetting is a
 // failure rather than a silent relaxation.
-export const ROSTER_FLOOR = 32;
+/**
+ * THE ROSTER AS IT STOOD WHEN THIS LAW WAS LAST MOVED — a RECORD, never the
+ * subject. The subject is still `rosterFiles`, derived from the tree; this list
+ * exists because a COUNT cannot see a SWAP.
+ *
+ * Measured by an independent challenge round: move and rename one rostered
+ * suite out of the basename rule and add one new suite in the SAME directory in
+ * the same commit, and every arm of this ratchet stays silent — the total is
+ * still 32, the floor equality still holds, and the per-directory arm only
+ * asserts non-emptiness, so a directory that loses one and gains one looks
+ * untouched. The suite it removed (`p4s4-migration-self-capture-law.test.ts`)
+ * is referenced by name nowhere else in the repository, so nothing else would
+ * have named the loss either.
+ *
+ * So MEMBERSHIP is recorded, and the arm below is a SUBSET assertion: every
+ * recorded file must still be derived. Additions stay free — a new suite is
+ * never a finding — and a deliberate retirement removes its line here in the
+ * same commit, which is the one place a reviewer then sees it.
+ */
+export const ROSTER_RECORDED: readonly string[] = [
+  'tests/golden-regression/phase4-s4/09-settlement-last-amount-race.golden.test.ts',
+  'tests/golden-regression/phase4-s4/10-settlement-cross-currency.golden.test.ts',
+  'tests/guards/p4s4-budget-ratchet-law.test.ts',
+  'tests/guards/p4s4-command-refusal-audit-law.test.ts',
+  'tests/guards/p4s4-gate-execution.test.ts',
+  'tests/guards/p4s4-migration-self-capture-law.test.ts',
+  'tests/guards/p4s4-new-relation-coverage.test.ts',
+  'tests/guards/p4s4-payment-method-account-gap.test.ts',
+  'tests/guards/p4s4-required-ci.test.ts',
+  'tests/guards/p4s4-settlement-surface-laws.test.ts',
+  'tests/guards/p4s4-vocabulary-live-arm.test.ts',
+  'tests/guards/required-ci-chain-composition.test.ts',
+  'tests/integration/p4s4-allocation-journal-binding.test.ts',
+  'tests/integration/p4s4-cash-invoice-ar.test.ts',
+  'tests/integration/p4s4-checkout-owner-replay.test.ts',
+  'tests/integration/p4s4-checkout-permission-replay.test.ts',
+  'tests/integration/p4s4-credit-application-customer-replay.test.ts',
+  'tests/integration/p4s4-customer-identity-pin.test.ts',
+  'tests/integration/p4s4-departure-b-method-account-mutability.test.ts',
+  'tests/integration/p4s4-intent-replay.test.ts',
+  'tests/integration/p4s4-invoice-settlement-chain.test.ts',
+  'tests/integration/p4s4-nondigested-argument-controls.test.ts',
+  'tests/integration/p4s4-open-invoice-page-rows-estimate.test.ts',
+  'tests/integration/p4s4-payment-closure.test.ts',
+  'tests/integration/p4s4-payment-method-posting-lock.test.ts',
+  'tests/integration/p4s4-pos-sale-refusal-audit.test.ts',
+  'tests/integration/p4s4-refusal-audit-never-throws.test.ts',
+  'tests/integration/p4s4-refusal-audit.test.ts',
+  'tests/integration/p4s4-request-boundary.test.ts',
+  'tests/integration/p4s4-sale-commit-permission-replay.test.ts',
+  'tests/security/p4s4-rls-barrier-behaviour.test.ts',
+  'tests/security/p4s4-rls-quals-once-per-query.test.ts',
+];
+
+/** The ratchet's total floor, DERIVED from the record so one list is the single fact. */
+export const ROSTER_FLOOR = ROSTER_RECORDED.length;
 
 /**
  * The directories the roster occupied when this ratchet was written, each its
@@ -1971,6 +2037,16 @@ export function rosterRatchetProblems(root: string): string[] {
     problems.push(
       `the P4-S4 roster holds ${total} file(s) and the ratchet floor is ${ROSTER_FLOOR} — a rostered suite has left the derived set, which is exactly what a move AND rename out of the basename rule does: the file stops being rostered, stops being executed by this gate, and no other check names the loss. If a suite was retired deliberately, lower ROSTER_FLOOR in the same commit`,
     );
+  // AND BY MEMBERSHIP: a count cannot see a SWAP. Every file the record names
+  // must still be derived; a file the record does not name is free to join.
+  const derived = new Set(files);
+  const gone = ROSTER_RECORDED.filter((f) => !derived.has(f));
+  if (gone.length > 0)
+    problems.push(
+      `${gone.length} recorded P4-S4 suite(s) are no longer derived by the roster rule and this gate therefore no longer executes them: ${gone.join(', ')} — a move AND rename out of the basename rule looks like nothing to a count, because a sibling's new file holds the total up. If one was retired deliberately, remove its line from ROSTER_RECORDED in the same commit`,
+    );
+  if (ROSTER_RECORDED.length === 0) problems.push('ROSTER_RECORDED is empty, so the membership arm above judged nothing and its silence is not evidence');
+
   // AND PER DIRECTORY: the last suite of a directory can leave while the total
   // is held up by a sibling's new file. `tests/security` holds exactly one.
   const occupied = new Set(files.map((f) => f.slice(0, f.lastIndexOf('/'))));
@@ -1986,7 +2062,9 @@ export function rosterRatchetProblems(root: string): string[] {
 export function rosterRatchetReport(root: string): string {
   const files = rosterFiles(root);
   const occupied = new Set(files.map((f) => f.slice(0, f.lastIndexOf('/'))));
-  return `${files.length} rostered file(s) against a floor of ${ROSTER_FLOOR}; ${ROSTER_DIRECTORY_FLOOR.filter((d) => occupied.has(d)).length} of ${
+  const derived = new Set(files);
+  const kept = ROSTER_RECORDED.filter((f) => derived.has(f)).length;
+  return `${files.length} rostered file(s) against a floor of ${ROSTER_FLOOR}; ${kept} of ${ROSTER_RECORDED.length} recorded file(s) still derived; ${ROSTER_DIRECTORY_FLOOR.filter((d) => occupied.has(d)).length} of ${
     ROSTER_DIRECTORY_FLOOR.length
   } floored directory/ies still occupied (${ROSTER_DIRECTORY_FLOOR.map((d) => `${d}${occupied.has(d) ? '' : ' EMPTY'}`).join(', ')})`;
 }

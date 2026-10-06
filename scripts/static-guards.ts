@@ -677,7 +677,7 @@ for (const dir of ['apps/api/src', 'apps/web/src', 'apps/admin/src', 'packages']
   }
 }
 
-// Rule 24 — GUARD G-7: a migration that verifies itself across its own DDL
+// Rule 24 — GUARD G-8: a migration that verifies itself across its own DDL
 // must not be able to forge the comparison. The only carrier a single
 // migration has for a pre-state is a transaction-local GUC — the runner gives
 // each file its own transaction and G-5 forbids creating a relation to hold
@@ -697,7 +697,7 @@ for (const dir of ['apps/api/src', 'apps/web/src', 'apps/admin/src', 'packages']
   // A guard watching nothing is decorative. If the shape ever leaves the tree,
   // this says so rather than reporting a silent pass over an empty set.
   if (selfCaptureSurface({ migrations }).length === 0) {
-    fail('migration-self-capture', 'infrastructure/database/migrations', 'no migration carries a self-capture GUC — rule 24 is watching nothing (G-7)');
+    fail('migration-self-capture', 'infrastructure/database/migrations', 'no migration carries a self-capture GUC — rule 24 is watching nothing (G-8)');
   }
 }
 

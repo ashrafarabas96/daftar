@@ -22,11 +22,60 @@
  *        to the database being judged — reported as DECLARED AND NOT APPLIED,
  *        never silently dropped, because an unjudged subject is not a pass.
  *
- *   (ii) THE LIVE CATALOGUE. `pg_class` rows in `public` with
- *        `relkind IN ('r','p')`. This half sees a relation that reached a
- *        database by a route the text parser cannot read — a hand-run
+ *   (ii) THE LIVE CATALOGUE. EVERY `pg_class` row in EVERY namespace
+ *        PostgreSQL has not reserved for itself. This half sees a relation that
+ *        reached a database by a route the text parser cannot read — a hand-run
  *        statement on a deployment, a restored dump, DDL generated inside a
  *        `DO` block — and so it is the proof of the other half's completeness.
+ *
+ * ── THE LIVE HALF'S OWN DISCOVERY DEFECT, AND HOW IT IS CLOSED ───────────
+ *
+ * Until this correction, half (ii) read `WHERE n.nspname = 'public' AND
+ * c.relkind IN ('r','p')`. That is a NAME filter and a KIND ENUMERATION
+ * wearing discovery's clothes, and it is exactly the `P4-AL-88` defect this
+ * law exists to refuse: a POSITIVE filter admits only the namespace and the
+ * two relkinds somebody thought of, and everything else does not pass or fail
+ * — it is never judged and never reported. Two row-storing subjects escaped
+ * it, and the law then named them false by naming nothing about them:
+ *
+ *   — a MATERIALIZED VIEW (`relkind = 'm'`) that caches tenant rows. G-3's own
+ *     prose calls "a cache, snapshot or rollup" a second financial truth; a
+ *     matview over a tenanted relation is a second COPY of tenant rows, and
+ *     the live half could not see it at all.
+ *   — any relation in a namespace other than `public`. `CREATE SCHEMA x;
+ *     CREATE TABLE x.y (tenant_id …)` was invisible to this law.
+ *
+ * The fix is NOT to widen the `IN (...)` list, and the reason is a fact about
+ * PostgreSQL that the suite VERIFIES BY EXECUTION rather than quoting (`PG-
+ * RLS-KIND`, on PostgreSQL 18.4): a materialized view and a foreign table
+ * CANNOT CARRY row level security at all. `relrowsecurity` is false and
+ * immovable, `ALTER TABLE|MATERIALIZED VIEW|FOREIGN TABLE … ENABLE/FORCE ROW
+ * LEVEL SECURITY` is refused with SQLSTATE `42809` ("ALTER action ENABLE ROW
+ * SECURITY cannot be performed on relation …"), and `CREATE POLICY` is refused
+ * with `42809` ("… is not a table"). Widening the list would therefore hand
+ * every such relation a PERMANENTLY UNSATISFIABLE "owes ENABLE and FORCE"
+ * finding with no legal fix, which turns the law into noise.
+ *
+ * So DISCOVERY and JUDGEMENT are separated:
+ *
+ *   — DISCOVERY asks the catalogue for everything and filters only what
+ *     PostgreSQL has reserved from users: the namespaces whose name begins
+ *     with the reserved `pg_` prefix (which is `pg_catalog`, `pg_toast` and
+ *     every `pg_temp_%`) and the SQL standard's `information_schema`. It is a
+ *     NEGATIVE filter over namespaces nobody may create in, so a namespace
+ *     someone does create can never be excluded by it and needs no edit here.
+ *     No relkind is filtered in SQL at all.
+ *
+ *   — JUDGEMENT is about the barrier the relkind can actually carry, and
+ *     `relkindStorage` is TOTAL: every relkind is classified, and a relkind it
+ *     does not know is `'unclassified'`, which is a FINDING and never a skip.
+ *     `'rows-with-rls'` (`r`, `p`) is judged exactly as before — `ENABLE` +
+ *     `FORCE` owed. `'rows-without-rls'` (`m`, `f`, `t`) is a DISTINCT
+ *     problem: it stores rows, it cannot carry the barrier, so there is no
+ *     ENABLE or FORCE to owe and its presence on this surface is itself the
+ *     violation. `'no-rows'` (`i`, `I`, `v`, `c`, `S`) stores no row of its
+ *     own and is not a subject — which is also what keeps the 283 indexes of
+ *     this tree's `public` out of a surface they were never part of.
  *
  * Both halves are filtered by the estate's ONE Phase 4 predicate,
  * `isPhase4Relation` (`scripts/guards/no-authoritative-balance.ts`): the
@@ -132,8 +181,19 @@ export const MIGRATIONS_SUBDIR = 'infrastructure/database/migrations';
  */
 export interface LiveRelation {
   readonly name: string;
-  /** `pg_class.relkind`. Only `r` and `p` store rows and can carry row level security. */
+  /**
+   * `pg_class.relkind`, classified by `relkindStorage` and never compared
+   * against a list at the point of use. Of the kinds that store rows, only `r`
+   * and `p` can carry row level security; `m` and `f` store or expose rows and
+   * CANNOT carry it, which is a finding of its own rather than a FORCE demand.
+   */
   readonly kind: string;
+  /**
+   * `pg_namespace.nspname`, when the catalogue read supplied it. A fixture
+   * handed to this law may omit it — the law judges the relation, not the
+   * namespace — and it is then reported unqualified.
+   */
+  readonly schema?: string;
   /** `pg_class.relrowsecurity`. */
   readonly rowSecurity: boolean;
   /** `pg_class.relforcerowsecurity`. */
@@ -143,28 +203,37 @@ export interface LiveRelation {
 }
 
 /**
- * The one query that reads the live half. It enumerates `public` and asks
- * nothing about names, so it cannot omit a relation it has not heard of; the
- * Phase 4 filter is applied afterwards, by the shared predicate.
+ * The one query that reads the live half. It asks nothing about relation names
+ * and nothing about relkinds, so it cannot omit a relation it has not heard
+ * of. Its ONLY filter is the one PostgreSQL itself imposes: the `pg_` prefix is
+ * reserved for the system (`pg_catalog`, `pg_toast`, every `pg_temp_%`) and
+ * `information_schema` is reserved by the SQL standard — this tree's own
+ * `information_schema` holds four `relkind = 'r'` relations, so that exclusion
+ * is load-bearing and not decoration. The filter is NEGATIVE, over namespaces
+ * nobody may create in, so no namespace a migration or a hand-run statement
+ * creates can be hidden by it. The Phase 4 filter, the row-storing
+ * classification and the judgement are all applied afterwards, in this module.
  */
 export const LIVE_RELATION_SQL = `
-  SELECT c.relname                                    AS name,
-         c.relkind::text                              AS kind,
-         c.relrowsecurity                              AS row_security,
-         c.relforcerowsecurity                         AS force_row_security,
+  SELECT n.nspname                                     AS schema,
+         c.relname                                     AS name,
+         c.relkind::text                               AS kind,
+         c.relrowsecurity                               AS row_security,
+         c.relforcerowsecurity                          AS force_row_security,
          COALESCE(
            (SELECT array_agg(lower(a.attname) ORDER BY a.attnum)
               FROM pg_attribute a
              WHERE a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped),
            '{}'::text[]
-         )                                             AS columns
+         )                                              AS columns
     FROM pg_class c
     JOIN pg_namespace n ON n.oid = c.relnamespace
-   WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p')
-   ORDER BY c.relname`;
+   WHERE n.nspname NOT LIKE 'pg\\_%' AND n.nspname <> 'information_schema'
+   ORDER BY n.nspname, c.relname`;
 
 /** A row of `LIVE_RELATION_SQL` as `pg` hands it back. */
 export interface LiveRelationRow {
+  readonly schema?: string | null;
   readonly name: string;
   readonly kind: string;
   readonly row_security: boolean;
@@ -176,11 +245,63 @@ export interface LiveRelationRow {
 export const liveRelationsFromRows = (rows: readonly LiveRelationRow[]): LiveRelation[] =>
   rows.map((r) => ({
     name: r.name.toLowerCase(),
+    ...(typeof r.schema === 'string' ? { schema: r.schema.toLowerCase() } : {}),
     kind: r.kind,
     rowSecurity: r.row_security === true,
     forceRowSecurity: r.force_row_security === true,
     columns: (r.columns ?? []).map((c) => c.toLowerCase()),
   }));
+
+/**
+ * What a `pg_class.relkind` can hold, and what barrier it can carry. Every
+ * value is a fact about PostgreSQL that `PG-RLS-KIND` in
+ * `tests/guards/phase4-rls-force-guard.test.ts` VERIFIES BY EXECUTION against a
+ * real cluster rather than quoting from memory.
+ *
+ * This is not the defect it replaces, and the difference is the whole point. A
+ * positive `relkind IN ('r','p')` in SQL made every other kind UNJUDGED AND
+ * UNREPORTED. This classification is TOTAL and FAIL-LOUD: a kind it does not
+ * know is `'unclassified'`, which this law reports as a problem demanding a
+ * decision. Nothing can fall out of the surface by not being thought of.
+ */
+export type RelkindStorage = 'rows-with-rls' | 'rows-without-rls' | 'no-rows';
+
+export const RELKIND_STORAGE: Readonly<Record<string, RelkindStorage>> = {
+  /** Ordinary table: stores its own rows, carries `ENABLE`/`FORCE`. */
+  r: 'rows-with-rls',
+  /** Partitioned table: stores no rows itself, but it is the relation the policies are declared on and `relrowsecurity` is inherited by every partition. */
+  p: 'rows-with-rls',
+  /** Materialized view: stores a COPY of the rows of its query. `ALTER … ENABLE ROW LEVEL SECURITY` is refused with 42809, and so is `CREATE POLICY`. */
+  m: 'rows-without-rls',
+  /** Foreign table: exposes rows held elsewhere. Same 42809 refusal for `ENABLE`, `FORCE` and `CREATE POLICY`. */
+  f: 'rows-without-rls',
+  /** TOAST table: holds the out-of-line values of its parent's rows and cannot carry RLS. It lives in `pg_toast`, so one appearing on this surface is itself the finding. */
+  t: 'rows-without-rls',
+  /** Index: holds no row of its own. */
+  i: 'no-rows',
+  /** Partitioned index: holds nothing at all. */
+  I: 'no-rows',
+  /** View: holds no row; the rows it serves are its base relations', whose own RLS governs them. */
+  v: 'no-rows',
+  /** Composite type: a row TYPE and not a row store. */
+  c: 'no-rows',
+  /** Sequence: counter state, never a tenant row. */
+  S: 'no-rows',
+};
+
+/** `RELKIND_STORAGE`, made total: an unknown relkind is named rather than dropped. */
+export const relkindStorage = (kind: string): RelkindStorage | 'unclassified' => RELKIND_STORAGE[kind] ?? 'unclassified';
+
+/**
+ * The rows of a catalogue read that store rows at all — the live half's
+ * subjects before the Phase 4 filter. An unclassified relkind is KEPT, because
+ * a kind this law cannot classify may well store rows and must be judged, not
+ * assumed harmless.
+ */
+export const rowStoringRelations = (live: readonly LiveRelation[]): LiveRelation[] => live.filter((r) => relkindStorage(r.kind) !== 'no-rows');
+
+/** `schema.name` when the read supplied a namespace, the bare name when a fixture did not. */
+const qualified = (r: LiveRelation): string => (r.schema === undefined ? r.name : `${r.schema}.${r.name}`);
 
 export interface Phase4RlsInput {
   /** The migrations directory the declared half is discovered from. */
@@ -254,10 +375,39 @@ export function declaredPhase4Relations(migrationsDir: string, applierSource: st
   return sorted(found);
 }
 
-/** Half (ii): every Phase 4 relation in the live catalogue, minus the applier's own. */
+/**
+ * Half (ii): every ROW-STORING Phase 4 relation in the live catalogue, minus
+ * the applier's own, in EVERY namespace the read covered. The row-storing
+ * filter is `relkindStorage`, not a relkind list written here, and it is what
+ * keeps this tree's 283 `public` indexes and 6 composite types — none of which
+ * holds a row of its own and all of which `isPhase4Relation` would otherwise
+ * call Phase 4 — out of a surface they were never part of.
+ */
 export function livePhase4Relations(live: readonly LiveRelation[], applierSource: string): string[] {
   const excluded = new Set(applierRelations(applierSource));
-  return sorted(live.filter((r) => isPhase4Relation(r.name) && !excluded.has(r.name)).map((r) => r.name));
+  return sorted(
+    rowStoringRelations(live)
+      .filter((r) => isPhase4Relation(r.name) && !excluded.has(r.name))
+      .map((r) => r.name),
+  );
+}
+
+/**
+ * The catalogue rows of half (ii), grouped by relation name. A LIST and not a
+ * single row per name on purpose: two namespaces may hold a relation of the
+ * same name, and a map keyed by name alone would let the compliant one hide
+ * the one that leaks. Every row is judged.
+ */
+function liveRowsByName(live: readonly LiveRelation[], applierSource: string): Map<string, LiveRelation[]> {
+  const excluded = new Set(applierRelations(applierSource));
+  const out = new Map<string, LiveRelation[]>();
+  for (const row of rowStoringRelations(live)) {
+    if (!isPhase4Relation(row.name) || excluded.has(row.name)) continue;
+    const bucket = out.get(row.name);
+    if (bucket === undefined) out.set(row.name, [row]);
+    else bucket.push(row);
+  }
+  return out;
 }
 
 /**
@@ -298,7 +448,8 @@ export function phase4RlsForceReport(input: Phase4RlsInput): Phase4RlsReport {
     );
   }
 
-  const byName = new Map((input.live ?? []).map((r) => [r.name, r] as const));
+  const byName = liveRowsByName(input.live ?? [], input.applierSource);
+  const rowsOf = (name: string): readonly LiveRelation[] => byName.get(name) ?? [];
   const judged = surface.filter((name) => byName.has(name));
   const declaredNotApplied = declared.filter((name) => input.live !== null && !byName.has(name));
   const liveNotDeclared = (liveSurface ?? []).filter((name) => !declared.includes(name));
@@ -314,33 +465,51 @@ export function phase4RlsForceReport(input: Phase4RlsInput): Phase4RlsReport {
     );
 
   for (const name of judged) {
-    const row = byName.get(name);
-    if (row === undefined) continue;
-    const columns = new Set(row.columns);
-    const hasTenant = columns.has(TENANT_COLUMN);
-    const hasBusiness = columns.has(BUSINESS_COLUMN);
+    // EVERY catalogue row of this name, in every namespace the read covered:
+    // one compliant row must not be allowed to answer for another that leaks.
+    for (const row of rowsOf(name)) {
+      const columns = new Set(row.columns);
+      const hasTenant = columns.has(TENANT_COLUMN);
+      const hasBusiness = columns.has(BUSINESS_COLUMN);
+      const storage = relkindStorage(row.kind);
+      const where = qualified(row);
 
-    if (!hasTenant && !hasBusiness) {
-      problems.push(
-        `${name} carries neither ${TENANT_COLUMN} nor ${BUSINESS_COLUMN}: a declared Phase 4 GLOBAL REGISTRY. P4-AL-08 requires both on every Phase 4 relation and lock §17.3 refuses an allowlist, so this is RED until docs/PHASE_4_ARCHITECTURE_LOCK.md records a decision for a Phase 4 relation with no tenant dimension`,
-      );
-    } else if (!hasTenant || !hasBusiness) {
-      problems.push(
-        `${name} carries ${hasTenant ? TENANT_COLUMN : BUSINESS_COLUMN} and not ${hasTenant ? BUSINESS_COLUMN : TENANT_COLUMN}: a P4-AL-08 violation — every Phase 4 relation carries both as real columns`,
-      );
-    }
+      if (storage === 'unclassified')
+        problems.push(
+          `${where}: pg_class.relkind is '${row.kind}', which this law does not classify — whether it stores rows and whether it can carry row level security are both unknown here, so it is REPORTED rather than skipped. A relkind PostgreSQL grew after this law was written must raise a decision in docs/PHASE_4_ARCHITECTURE_LOCK.md, never fall quietly out of a discovered surface (P4-AL-88)`,
+        );
 
-    // Owed by anything carrying a tenant dimension at all. The no-dimension
-    // case is already red above and its RLS is not the question.
-    if (hasTenant || hasBusiness) {
-      if (!row.rowSecurity)
+      if (!hasTenant && !hasBusiness) {
         problems.push(
-          `${name}: pg_class.relrowsecurity is false — ROW LEVEL SECURITY is not ENABLED on a Phase 4 relation that carries a tenant dimension, so every policy written for it is inert and a cross-tenant read is served by the table itself (TL-P4-S1-R2)`,
+          `${name} carries neither ${TENANT_COLUMN} nor ${BUSINESS_COLUMN}: a declared Phase 4 GLOBAL REGISTRY. P4-AL-08 requires both on every Phase 4 relation and lock §17.3 refuses an allowlist, so this is RED until docs/PHASE_4_ARCHITECTURE_LOCK.md records a decision for a Phase 4 relation with no tenant dimension`,
         );
-      if (!row.forceRowSecurity)
+      } else if (!hasTenant || !hasBusiness) {
         problems.push(
-          `${name}: pg_class.relforcerowsecurity is false — ROW LEVEL SECURITY is not FORCEd, so the relation's OWNER bypasses every policy on it and the migrator, the applier and any BYPASSRLS-free owner session read and write across every tenant (TL-P4-S1-R2)`,
+          `${name} carries ${hasTenant ? TENANT_COLUMN : BUSINESS_COLUMN} and not ${hasTenant ? BUSINESS_COLUMN : TENANT_COLUMN}: a P4-AL-08 violation — every Phase 4 relation carries both as real columns`,
         );
+      }
+
+      // Owed by anything carrying a tenant dimension at all. The no-dimension
+      // case is already red above and its RLS is not the question.
+      if (hasTenant || hasBusiness) {
+        if (storage === 'rows-without-rls') {
+          // NOT a FORCE demand, and not a skip either. There is no ENABLE and
+          // no FORCE to owe, so demanding them would be a finding with no
+          // legal fix; the presence of the relation is the violation.
+          problems.push(
+            `${where} STORES TENANT ROWS AND CANNOT CARRY ROW LEVEL SECURITY: pg_class.relkind is '${row.kind}', for which PostgreSQL refuses ALTER … ENABLE ROW LEVEL SECURITY, ALTER … FORCE ROW LEVEL SECURITY and CREATE POLICY alike (SQLSTATE 42809), so pg_class.relrowsecurity can never be made true on it and there is no ENABLE or FORCE for this law to demand. A cache, snapshot or rollup of tenant rows is a second copy of tenant data standing behind no policy at all, and no owner session is kept out of it — RED until this relation leaves the Phase 4 surface or docs/PHASE_4_ARCHITECTURE_LOCK.md records a decision for it (TL-P4-S1-R2)`,
+          );
+        } else if (storage === 'rows-with-rls') {
+          if (!row.rowSecurity)
+            problems.push(
+              `${name}: pg_class.relrowsecurity is false — ROW LEVEL SECURITY is not ENABLED on a Phase 4 relation that carries a tenant dimension, so every policy written for it is inert and a cross-tenant read is served by the table itself (TL-P4-S1-R2)`,
+            );
+          if (!row.forceRowSecurity)
+            problems.push(
+              `${name}: pg_class.relforcerowsecurity is false — ROW LEVEL SECURITY is not FORCEd, so the relation's OWNER bypasses every policy on it and the migrator, the applier and any BYPASSRLS-free owner session read and write across every tenant (TL-P4-S1-R2)`,
+            );
+        }
+      }
     }
   }
 
@@ -353,19 +522,13 @@ export function phase4RlsForceReport(input: Phase4RlsInput): Phase4RlsReport {
     judged,
     declaredNotApplied,
     liveNotDeclared,
+    // A name is in a partition when ANY of its catalogue rows has that shape,
+    // so a name held in two namespaces appears wherever either row puts it
+    // rather than wherever the last row read happened to.
     partition: {
-      tenantAndBusiness: judged.filter((n) => {
-        const c = new Set(byName.get(n)?.columns ?? []);
-        return c.has(TENANT_COLUMN) && c.has(BUSINESS_COLUMN);
-      }),
-      oneDimension: judged.filter((n) => {
-        const c = new Set(byName.get(n)?.columns ?? []);
-        return c.has(TENANT_COLUMN) !== c.has(BUSINESS_COLUMN);
-      }),
-      noDimension: judged.filter((n) => {
-        const c = new Set(byName.get(n)?.columns ?? []);
-        return !c.has(TENANT_COLUMN) && !c.has(BUSINESS_COLUMN);
-      }),
+      tenantAndBusiness: judged.filter((n) => rowsOf(n).some((r) => r.columns.includes(TENANT_COLUMN) && r.columns.includes(BUSINESS_COLUMN))),
+      oneDimension: judged.filter((n) => rowsOf(n).some((r) => r.columns.includes(TENANT_COLUMN) !== r.columns.includes(BUSINESS_COLUMN))),
+      noDimension: judged.filter((n) => rowsOf(n).some((r) => !r.columns.includes(TENANT_COLUMN) && !r.columns.includes(BUSINESS_COLUMN))),
     },
     problems,
   };

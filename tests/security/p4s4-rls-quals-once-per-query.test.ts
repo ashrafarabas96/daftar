@@ -399,13 +399,13 @@ const SNAPSHOT_FORMAT = `'%s.%s permissive=%s cmd=%s roles=%s check=%s qual=%s'`
 /**
  * A single statement that stores the CURRENT policy set where `0086-F` reads it.
  *
- * This statement is EXACTLY the forgery guard G-7
+ * This statement is EXACTLY the forgery guard G-8
  * (`scripts/guards/migration-self-capture.ts`) forbids inside a migration: one
  * extra `set_config` of the capture GUC lets a file change what it captured
  * and then re-capture, and a planted widening was made to apply green that
  * way, 6 runs of 6. It is legal HERE and only here — in a test, against a
  * block sliced off disk and run alone, to make the set comparison a
- * deliberate no-op so that the qual law is the only thing deciding. G-7's
+ * deliberate no-op so that the qual law is the only thing deciding. G-8's
  * subject is the migration text, so this helper cannot satisfy it.
  */
 function captureStatement(): string {
@@ -545,11 +545,20 @@ describe('P4-S4 — 0086: the read quals are evaluated once per query and answer
         );
       }
 
-      // The targeted backdoor. 0086-F runs it and does NOT refuse it — that is
-      // the measured limit of an evaluated law, asserted rather than assumed.
+      // THE TARGETED BACKDOOR, AND A LIMIT THAT IS NOW CLOSED. A qual that
+      // admits exactly one other tenant passes every evaluated case — it
+      // admits its own scope, denies the one other scope the probe supplies,
+      // denies with the GUC unset and denies NULL — and 0086-F used to run it
+      // GREEN. That was recorded here as the measured limit of an evaluated
+      // law. The literal-set arm closes it INSIDE the file: the tenant it
+      // names is a literal `tenant_membership` is not entitled to, whatever
+      // the evaluation says.
       for (const rel of RELATIONS) await o.query(`ALTER POLICY tenant_membership ON ${rel} USING ${TARGETED}`);
-      await o.query(block);
-      // And the equality law refuses it on every relation.
+      await expect(o.query(block), 'the targeted backdoor is no longer a limit: the literal-set arm must name it').rejects.toThrow(
+        /0086-F: \w+\.tenant_membership names the literal\(s\) \{00000000-0000-0000-0000-0000000000ff\} and is entitled to exactly \{\}/,
+      );
+      // And the equality law refuses it on every relation too, so neither arm
+      // is load-bearing alone.
       const backdoored = (await readQuals()).filter((r) => r.polname === 'tenant_membership');
       expect(backdoored.length).toBe(RELATIONS.length);
       for (const row of backdoored)
@@ -678,12 +687,60 @@ describe('P4-S4 — 0086: the read quals are evaluated once per query and answer
       // `'daftar_app'` — therefore applied GREEN and was measured as a real
       // cross-business read, 0 rows before and 1 row after. So the role
       // literals are pinned by EQUALITY, and this is that law's red proof.
-      const widenedRoles = sql.replaceAll(
-        `(SELECT current_user IN ('daftar_inventory_internal', 'daftar_accounting_internal'))`,
-        `(SELECT current_user IN ('daftar_inventory_internal', 'daftar_accounting_internal', 'daftar_app'))`,
-      );
-      expect(widenedRoles, 'the escape list is not written the way this plant expects, so it proves nothing').not.toBe(sql);
-      await expect(db.pool.query(widenedRoles)).rejects.toThrow(/0086-F\(?w?\)?: .*is entitled to exactly|0086-F: .*names the role/);
+      //
+      // THE PATTERN WAS THE HOLE. The first version of that law read only
+      // `'(daftar_[a-z_]+)'` out of the clause, and an independent challenge
+      // round measured FOUR spellings through it, each admitting a foreign
+      // business when the planted qual was evaluated as `daftar_app`. So the
+      // law now enumerates the clause's WHOLE literal set and refuses
+      // concatenation, and each of those four spellings is a red proof.
+      const LIST = `(SELECT current_user IN ('daftar_inventory_internal', 'daftar_accounting_internal'))`;
+      expect(sql, 'the escape list is not written the way these plants expect, so they prove nothing').toContain(LIST);
+      for (const [why, widenedRoles, expected] of [
+        [
+          'the measured nine-character edit',
+          LIST.replace(`'daftar_accounting_internal')`, `'daftar_accounting_internal', 'daftar_app')`),
+          /is entitled to exactly/,
+        ],
+        ['a name carrying a digit', LIST.replace(`'daftar_accounting_internal')`, `'daftar_accounting_internal', 'daftar_app2')`), /is entitled to exactly/],
+        [
+          'a name without the daftar_ prefix',
+          LIST.replace(`'daftar_accounting_internal')`, `'daftar_accounting_internal', 'appserver')`),
+          /is entitled to exactly/,
+        ],
+        [
+          'a name carrying an upper-case letter',
+          LIST.replace(`'daftar_accounting_internal')`, `'daftar_accounting_internal', 'daftar_App')`),
+          /is entitled to exactly/,
+        ],
+        [
+          'a name assembled at runtime, which pg_get_expr never folds back into a literal',
+          `${LIST.slice(0, -1)} OR (SELECT current_user::text = 'daftar' || '_app'))`,
+          /ASSEMBLES a value in its USING clause/,
+        ],
+      ] as const) {
+        const planted = sql.replaceAll(LIST, widenedRoles);
+        expect(planted, `${why}: the plant changed nothing`).not.toBe(sql);
+        await expect(db.pool.query(planted), why).rejects.toThrow(expected);
+      }
+
+      // M-2 — THE FOURTH CASE IS A FOURTH *VALUE*. A qual pinned to ONE other
+      // business — `OR business_id = '3333…'` — admits its own scope, denies
+      // the scope the probe supplies, denies with the GUC unset and denies
+      // NULL, so every evaluated case passes and an independent challenge
+      // round measured both of these applying GREEN. Two independent arms now
+      // refuse them: the denied scope is a FRESH value each run, so the clause
+      // cannot have been written against it, and the literal-set equality sees
+      // the UUID as a literal the clause is not entitled to.
+      const BUSINESS = `OR business_id = (SELECT nullif(app_business(), '')::uuid)`;
+      expect(sql, 'the business clause is not written the way these plants expect').toContain(BUSINESS);
+      for (const other of ['33333333-3333-3333-3333-333333333333', '00000000-0000-0000-0000-000000000000']) {
+        const planted = sql.replaceAll(BUSINESS, `${BUSINESS} OR business_id = '${other}'::uuid`);
+        expect(planted, `the ${other} plant changed nothing`).not.toBe(sql);
+        await expect(db.pool.query(planted), `a backdoor pinned to business ${other}`).rejects.toThrow(
+          /0086-[AF]: \w+\.business_isolation_read names the literal\(s\)|0086-[AF]: \w+\.business_isolation_read ADMITS another scope/,
+        );
+      }
 
       // M-3 — A NULL SCOPE COLUMN. `OR tenant_id IS NULL` admits no other
       // scope's row and nothing with the GUC unset, so it passes the first

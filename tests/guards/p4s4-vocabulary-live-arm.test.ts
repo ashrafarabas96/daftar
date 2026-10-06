@@ -286,3 +286,141 @@ describe('a law handed no catalogue reports that it judged nothing — NOT A PAS
     expect(problems.join('\n')).toContain('the subtraction that keeps the runner');
   });
 });
+
+/**
+ * VL-E — THE CACHE G-3's OWN PROSE NAMES, AND WHICH NEITHER HALF COULD SEE.
+ *
+ * `liveVocabularyReport` calls "a balance, outstanding, receivables, summary,
+ * cache, snapshot or rollup relation … a second financial truth". A
+ * MATERIALIZED VIEW is exactly that: a stored COPY of the rows of a query. It
+ * was invisible to BOTH halves of this vocabulary at once — the text half
+ * drops dollar-quoted bodies, and the live half's shared read
+ * (`LIVE_RELATION_SQL`, in `scripts/guards/phase4-rls-force.ts`) filtered
+ * `relkind IN ('r','p')`, so the catalogue arm did not return it either. The
+ * same correction that made the RLS law see it makes this law see it, because
+ * both laws read the one query.
+ *
+ * The matview's name is generated at run time for the same reason every canary
+ * here is, and the plant is undone by the enclosing `ROLLBACK`.
+ */
+describe('VL-E — red: a derived-truth MATERIALIZED VIEW is a second financial truth, and the live half names it', () => {
+  it('red: a matview whose name G-3 forbids is read out of pg_class and named on its NAME', async () => {
+    await rolledBack(async (c) => {
+      expect(law(await catalogue(c))).toEqual([]);
+
+      const base = innocentCanary();
+      const view = forbiddenCanary();
+      await c.query(`CREATE TABLE ${base} (tenant_id UUID NOT NULL, business_id UUID NOT NULL, customer_id UUID NOT NULL)`);
+      await c.query(`CREATE MATERIALIZED VIEW ${view} AS SELECT tenant_id, business_id, customer_id FROM ${base} WITH NO DATA`);
+
+      const live = await catalogue(c);
+      expect(live.find((r) => r.name === view)?.kind, 'the shared catalogue read did not return the matview').toBe('m');
+
+      const report = liveVocabularyReport({ applierSource: APPLIER, live });
+      expect(report.liveSurface, 'the catalogue half did not discover the matview').toContain(view);
+      expect(report.judged, 'the matview was discovered and not judged').toContain(view);
+
+      const found = about(report.problems, view);
+      expect(found.join('\n')).toContain('PRESENT IN THE LIVE CATALOGUE');
+      expect(found.join('\n')).toContain('derived-truth relation name under G-3');
+      expect(found.join('\n')).toContain('cache, snapshot or rollup');
+      expect(found).toHaveLength(1);
+
+      await c.query(`DROP MATERIALIZED VIEW ${view}`);
+      expect(about(law(await catalogue(c)), view)).toEqual([]);
+    });
+  });
+
+  it('red: the COLUMN arm reaches a matview too — an authoritative derived column in a cached copy is named', async () => {
+    await rolledBack(async (c) => {
+      const base = innocentCanary();
+      const view = innocentCanary() + '_mv';
+      await c.query(
+        `CREATE TABLE ${base} (tenant_id UUID NOT NULL, business_id UUID NOT NULL, balance_minor BIGINT NOT NULL, outstanding_minor BIGINT NOT NULL)`,
+      );
+      // The base table is itself a finding; the matview is the subject here.
+      const problems = about(law(await catalogue(c)), view);
+      expect(problems).toEqual([]);
+
+      await c.query(`CREATE MATERIALIZED VIEW ${view} AS SELECT tenant_id, business_id, balance_minor, outstanding_minor FROM ${base} WITH NO DATA`);
+      const found = about(law(await catalogue(c)), view);
+      expect(found.join('\n')).toContain(`${view}.balance_minor`);
+      expect(found.join('\n')).toContain(`${view}.outstanding_minor`);
+      expect(found.join('\n')).toContain('LIVE pg_attribute column');
+      expect(found).toHaveLength(2);
+    });
+  });
+
+  it('red: a relation in a namespace other than public reaches this law too', async () => {
+    await rolledBack(async (c) => {
+      const schema = `p4s4_vocab_schema_${process.pid}_${Date.now().toString(36)}`;
+      const name = forbiddenCanary();
+      await c.query(`CREATE SCHEMA ${schema}`);
+      await c.query(`CREATE TABLE ${schema}.${name} (tenant_id UUID NOT NULL, business_id UUID NOT NULL, customer_id UUID NOT NULL)`);
+
+      const live = await catalogue(c);
+      expect(live.find((r) => r.name === name)?.schema, 'the shared catalogue read did not return the non-public relation').toBe(schema);
+      expect(about(law(live), name).join('\n')).toContain('derived-truth relation name under G-3');
+    });
+  });
+
+  it('NOT A FINDING: a matview whose name and columns are in the accepted vocabulary is silent', async () => {
+    await rolledBack(async (c) => {
+      const base = innocentCanary();
+      const view = innocentCanary() + '_mv';
+      await c.query(
+        `CREATE TABLE ${base} (tenant_id UUID NOT NULL, business_id UUID NOT NULL, invoice_amount_applied_minor BIGINT NOT NULL, remaining_amount_minor BIGINT NOT NULL)`,
+      );
+      await c.query(
+        `CREATE MATERIALIZED VIEW ${view} AS SELECT tenant_id, business_id, invoice_amount_applied_minor, remaining_amount_minor FROM ${base} WITH NO DATA`,
+      );
+      expect(about(law(await catalogue(c)), view)).toEqual([]);
+      expect(about(law(await catalogue(c)), base)).toEqual([]);
+    });
+  });
+});
+
+/**
+ * VL-F — ONE NAMESPACE MUST NOT ANSWER FOR ANOTHER.
+ *
+ * The live read now covers every namespace PostgreSQL has not reserved, so two
+ * namespaces may hold a relation of the same name. This law kept its catalogue
+ * rows in a `Map` keyed by the bare name, so the LAST row read won and the
+ * other relation's `pg_attribute` columns were never judged — a compliant
+ * `public.x` answering for a leaking `other.x`. The RLS law was corrected the
+ * same way (`liveRowsByName`); this is that correction's red proof here.
+ */
+describe('VL-F — red: every catalogue row of a name is judged, not one', () => {
+  it('red: a second namespace holding the same relname with an authoritative derived column is named', async () => {
+    await rolledBack(async (c) => {
+      const name = innocentCanary();
+      // The namespace name starts with `p4s4_`, which sorts BEFORE `public`,
+      // and `LIVE_RELATION_SQL` orders by namespace — so in the pre-fix Map,
+      // whose later entry won, the compliant `public` row was the survivor and
+      // the leak was dropped. Measured: with the one-row behaviour restored
+      // this case fails with an empty finding set; with every row judged it
+      // passes. A name sorting after `public` would have made it pass for the
+      // wrong reason, so the prefix is load-bearing.
+      const schema = `p4s4_vocab_ns_${process.pid}_${Date.now().toString(36)}`;
+      // The compliant row first, so a map keyed by name alone would keep IT
+      // and drop the leaking one — the exact shape of the defect.
+      await c.query(`CREATE TABLE ${name} (tenant_id UUID NOT NULL, business_id UUID NOT NULL, customer_id UUID NOT NULL)`);
+      await c.query(`CREATE SCHEMA ${schema}`);
+      await c.query(`CREATE TABLE ${schema}.${name} (tenant_id UUID NOT NULL, business_id UUID NOT NULL, outstanding_minor BIGINT NOT NULL)`);
+
+      const live = await catalogue(c);
+      const rows = live.filter((r) => r.name === name);
+      expect(rows, 'the catalogue read did not return BOTH namespaces rows, so this case proves nothing').toHaveLength(2);
+
+      const report = liveVocabularyReport({ applierSource: APPLIER, live });
+      expect(report.judged).toContain(name);
+      const found = about(report.problems, 'outstanding_minor');
+      expect(found.join('\n')).toContain('LIVE pg_attribute column claiming storage authority');
+      expect(found.join('\n'), 'the finding must name the namespace the leak is in').toContain(`${schema}.${name}.outstanding_minor`);
+      expect(found).toHaveLength(1);
+
+      await c.query(`DROP TABLE ${schema}.${name}`);
+      expect(about(law(await catalogue(c)), 'outstanding_minor')).toEqual([]);
+    });
+  });
+});

@@ -556,9 +556,15 @@ describe('end to end: check:guards refuses each planted violation, and passes th
     return { status: res.status, output: `${res.stdout ?? ''}${res.stderr ?? ''}` };
   };
 
-  it('the untouched copy passes all 23 rules', () => {
+  it('the untouched copy passes every declared rule', () => {
     const run = guards(copy());
-    expect(run.output).toContain('STATIC GUARDS: PASS (23 rules)');
+    // DERIVED from the script's own `// Rule N` headers with a floor, so a new
+    // rule is not a failure of this inherited suite. See the same shape in
+    // tests/integration/stock-ledger-guards.test.ts.
+    const text = readFileSync(join(ROOT, 'scripts/static-guards.ts'), 'utf8');
+    const count = new Set([...text.matchAll(/^\/\/ Rule (\d+)\b/gm)].map((m) => Number(m[1]))).size;
+    expect(count).toBeGreaterThanOrEqual(23);
+    expect(run.output).toContain(`STATIC GUARDS: PASS (${count} rules)`);
     expect(run.status).toBe(0);
   }, 120_000);
 

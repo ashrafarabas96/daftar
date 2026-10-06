@@ -68,6 +68,7 @@ import {
   rosterSuiteKind,
   requiredCiProblems,
   ROSTER_FLOOR,
+  ROSTER_RECORDED,
 } from '../../scripts/phase4-s4-gate';
 
 const REPO = join(__dirname, '..', '..');
@@ -1263,5 +1264,70 @@ describe('P4-S4 — the roster is a RATCHET: the derived set may grow and may no
       found.some((m) => m.includes('tests/security') && m.includes('no longer holds a single suite')),
       `the last suite of tests/security left and only the total was checked: ${found.join(' | ')}`,
     ).toBe(true);
+  });
+
+  it('RP-RT-C red: a SWAP inside one directory — one suite out, one suite in — is named by membership, which a count cannot see', () => {
+    // The challenge round's measured hole. Move AND rename one rostered suite
+    // out of the basename rule and add one new suite IN THE SAME DIRECTORY, in
+    // the same commit: the total is unchanged, the floor equality still holds,
+    // and the per-directory arm sees a directory that still holds suites. Both
+    // of the arms above are therefore silent, by assertion below, and only the
+    // recorded membership can report the loss. The victim is the suite the
+    // round itself used: it is referenced by name nowhere else in the repo.
+    const victim = 'tests/guards/p4s4-migration-self-capture-law.test.ts';
+    expect(rosterFiles(REPO), 'the victim is not on the roster, so this plant has no subject').toContain(victim);
+    expect(ROSTER_RECORDED, 'the victim is not recorded, so the membership arm has nothing to miss').toContain(victim);
+    const dir = mkdtempSync(join(tmpdir(), 'p4s4-ratchet-swap-'));
+    for (const file of rosterFiles(REPO)) {
+      if (file === victim) continue;
+      mkdirSync(join(dir, file.slice(0, file.lastIndexOf('/'))), { recursive: true });
+      writeFileSync(join(dir, file), readFileSync(join(REPO, file), 'utf8'), 'utf8');
+    }
+    // Renamed out of the rule, still in the tree — nothing deleted.
+    mkdirSync(join(dir, 'tests', 'guards'), { recursive: true });
+    writeFileSync(join(dir, 'tests', 'guards', 'migration-self-capture-law.test.ts'), readFileSync(join(REPO, victim), 'utf8'), 'utf8');
+    // And one new suite in the SAME directory, so the count is restored.
+    writeFileSync(
+      join(dir, 'tests', 'guards', 'p4s4-a-swap-replacement.test.ts'),
+      "import { expect, it } from 'vitest';\nit('red: a replacement suite', () => expect([1]).not.toEqual([]));\n",
+      'utf8',
+    );
+    const after = rosterFiles(dir);
+    expect(after, 'the renamed suite is still rostered, so the plant did not reproduce the swap').not.toContain(victim);
+    expect(after.length, 'the total moved, so the total floor would catch this and the plant proves nothing').toBe(rosterFiles(REPO).length);
+    const found = rosterRatchetProblems(dir);
+    expect(
+      found.some((m) => m.includes('a rostered suite has left the derived set')),
+      'the TOTAL floor fired, so the swap is not isolated',
+    ).toBe(false);
+    expect(
+      found.some((m) => m.includes('no longer holds a single suite')),
+      'the per-directory arm fired over a directory that still holds suites',
+    ).toBe(false);
+    expect(
+      found.some((m) => m.includes('no longer derived by the roster rule') && m.includes(victim)),
+      `the swap was silent: ${found.join(' | ')}`,
+    ).toBe(true);
+  });
+
+  it('ROSTER_RECORDED is exactly what the tree derives today, and an ADDITION is never a finding', () => {
+    // Both directions, so the record cannot drift from the tree: every derived
+    // file is recorded and every recorded file is derived.
+    expect([...ROSTER_RECORDED].sort()).toEqual(rosterFiles(REPO));
+    // And a file the record does not name joins freely: a new suite must never
+    // red the ratchet, which is what made the earlier count-only floor go
+    // slack rather than loud.
+    const dir = mkdtempSync(join(tmpdir(), 'p4s4-ratchet-add-'));
+    for (const file of rosterFiles(REPO)) {
+      mkdirSync(join(dir, file.slice(0, file.lastIndexOf('/'))), { recursive: true });
+      writeFileSync(join(dir, file), readFileSync(join(REPO, file), 'utf8'), 'utf8');
+    }
+    writeFileSync(
+      join(dir, 'tests', 'guards', 'p4s4-a-brand-new-suite.test.ts'),
+      "import { expect, it } from 'vitest';\nit('red: a brand new suite', () => expect([1]).not.toEqual([]));\n",
+      'utf8',
+    );
+    expect(rosterFiles(dir).length).toBe(rosterFiles(REPO).length + 1);
+    expect(rosterRatchetProblems(dir)).toEqual([]);
   });
 });
