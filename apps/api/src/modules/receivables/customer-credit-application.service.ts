@@ -40,19 +40,24 @@ import type { CustomerCreditApplicationRequest } from './receivables.schemas';
  *
  * The flow:
  *
- * 1. the client intent and the idempotency proof BEFORE any state read — the
- *    stored `customer_credit_applications.intent_sha256` for this
- *    caller-supplied `applicationId`;
+ * 1. the client intent BEFORE any state read — the digest binds the request
+ *    alone — and the stored `customer_credit_applications.intent_sha256` for
+ *    this caller-supplied `applicationId`;
  * 2. authority — **`payments.collect`** (OQ-5, ruled). Applying a credit moves
  *    value exactly the way an allocation does, so it needs settlement
  *    authority; the registry is a closed set of twelve and gains no
  *    `credits.*` key;
  * 3. the invoice with its `O`, the credit with its stored original pair,
  *    remaining pair and snapshot `Rn`, and the business, in ONE statement;
- * 4. the routine's refusals in its order, then every stored amount bound by
- *    `planCustomerCreditApplication`;
- * 5. both assertions minted before the seam opens;
- * 6. ONE transaction: the routine (which inserts the application BEFORE it
+ * 4. the STATED customer against the invoice's, then the idempotency proof.
+ *    In that order, because `customerId` is a body key the digest does not
+ *    carry and cannot carry (`0081:2270-2273` signs six fields and the routine
+ *    takes no customer), so a replay branch that answered first would hand a
+ *    caller naming someone else a `200 replayed: true`;
+ * 5. the routine's remaining refusals in its order, then every stored amount
+ *    bound by `planCustomerCreditApplication`;
+ * 6. both assertions minted before the seam opens;
+ * 7. ONE transaction: the routine (which inserts the application BEFORE it
  *    decrements the credit, so the decrement is never visible without its
  *    cause), then — unless it answered a replay — the one entry, then COMMIT
  *    with the deferred verifiers.
@@ -188,32 +193,59 @@ export class CustomerCreditApplicationService {
     const stored = await findCustomerCreditApplicationIntent(this.db, m, input.applicationId);
     // 2. Authority: `payments.collect`. It reads membership only.
     const authority = await this.authorization.authorize(m, receivablesOperationCode(CUSTOMER_APPLY_CREDIT_OP), btx);
-    if (stored !== null) {
-      if (stored !== intentSha256) throw receivablesRefusal('customer_credit_application.idempotency_conflict');
-      return readCustomerCreditApplicationResult(this.db, m, input.applicationId, true);
-    }
 
-    // 3. Current state, and the routine's refusals in its order.
+    // 3. Current state, and the routine's refusals in its order. THE STATE
+    //    READ AND THE STATED IDENTITY RUN AHEAD OF THE REPLAY BRANCH, for the
+    //    reason `customer-payment.service.ts:542-565` moved its own read ahead
+    //    of its digest: an argument the replay branch cannot see must be
+    //    judged before that branch answers.
+    //
+    //    `customerId` is a body key (`receivables.schemas.ts`' six) but it is
+    //    NOT in the intent digest, and it cannot be: the digest is computed and
+    //    stored by `customer_apply_credit` over SIX fields (`0081:2270-2273`),
+    //    and the routine has no customer argument among its fifteen. Adding a
+    //    seventh field HERE would disagree with the migration on every
+    //    application and make every lawful replay a false
+    //    `customer_credit_application.idempotency_conflict` — the exact fault
+    //    `p4s4-intent-replay.test.ts` exists for on the payment side. So the
+    //    ORDER is what changes, not the digest: while this check sat after the
+    //    replay branch, a second delivery under a stored `applicationId` naming
+    //    a DIFFERENT customer matched the stored digest and was answered
+    //    `200 replayed: true` — the route told a client that meant someone else
+    //    that its command had been carried out.
+    //
+    //    Reading state first is not a breach of `[[daftar-registry-before-state]]`:
+    //    the digest above is built before the read and binds nothing the read
+    //    produces, so the same request still digests identically for ever.
     const state = await this.readState(m, creditId, input);
     const [invoiceRow] = state.invoices;
     if (invoiceRow === undefined) throw receivablesRefusal('customer_credit_application.not_found');
     const invoice = settledInvoice(invoiceRow, 'customer_credit_application');
     attempt.branchId = invoice.branchId;
     attempt.figures['outstandingAtRead'] = invoice.outstandingTxnMinor.toString(10);
-    const credit = state.credit;
-    if (credit === null) throw receivablesRefusal('customer_credit.not_found');
     // THREE identities must be one: the credit's customer, the invoice's, and
     // the one the caller stated. The first two make the row representable; the
     // third is what tells a client that meant someone else, instead of
-    // silently settling the invoice it named.
-    if (credit.customer_id !== invoice.customerId) throw receivablesRefusal('customer_credit_application.customer_mismatch');
+    // silently settling the invoice it named — and it is the one the digest
+    // does not carry, so it is judged here, before the replay branch.
     if (input.customerId !== invoice.customerId) throw receivablesRefusal('customer_credit_application.customer_mismatch');
+
+    // 4. The idempotency proof. Everything it compares is in the digest, and
+    //    the one argument that is not has already been judged above.
+    if (stored !== null) {
+      if (stored !== intentSha256) throw receivablesRefusal('customer_credit_application.idempotency_conflict');
+      return readCustomerCreditApplicationResult(this.db, m, input.applicationId, true);
+    }
+
+    const credit = state.credit;
+    if (credit === null) throw receivablesRefusal('customer_credit.not_found');
+    if (credit.customer_id !== invoice.customerId) throw receivablesRefusal('customer_credit_application.customer_mismatch');
     creditRemainingRefusal(credit, consumedMinor);
     const source = invoice.issueDate > credit.credit_date ? invoice.issueDate : credit.credit_date;
     if (input.applicationDate < source) throw receivablesRefusal('customer_credit_application.date_before_source');
     if (state.future) throw receivablesRefusal('customer_credit_application.date_in_future');
 
-    // 4. Every stored amount, bound.
+    // 5. Every stored amount, bound.
     const plan = planCustomerCreditApplication({
       invoice: invoiceArState(invoice, state.base_exponent, parseUnitCost(invoice.rate)),
       credit: customerCreditState(credit, state.base_exponent),
@@ -255,11 +287,11 @@ export class CustomerCreditApplicationService {
       businessTransactionId: btx,
     });
 
-    // 5. Mint both assertions before the seam opens.
+    // 6. Mint both assertions before the seam opens.
     const inventoryAssertion = this.authorization.mint(authority, built.payload);
     const accountingAssertion = mintDomainPostingAssertion(this.accountingMinter, command, m.userId);
 
-    // 6. One transaction: the routine, the entry, COMMIT.
+    // 7. One transaction: the routine, the entry, COMMIT.
     const replayed = await this.db.withBusinessInventoryAccountingTransaction(authority.scope, inventoryAssertion, [accountingAssertion], async (tx) => {
       const r = await tx.query<{ replayed: boolean }>(CUSTOMER_APPLY_CREDIT_SQL, [
         input.applicationId,

@@ -72,8 +72,15 @@
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { testTitles } from './phase3-s8-gate';
-import { MIGRATIONS_SUBDIR, phase4RlsForceStructuralProblems } from './guards/phase4-rls-force';
-import { discoverSalesTables, findAuthoritativeSalesColumns, isForbiddenSalesTable, isPhase4Relation } from './guards/no-authoritative-balance';
+import { MIGRATIONS_SUBDIR, type LiveRelation, applierRelations, livePhase4Relations, phase4RlsForceStructuralProblems } from './guards/phase4-rls-force';
+import {
+  discoverSalesTables,
+  findAuthoritativeSalesColumns,
+  isAuthoritativeSalesColumn,
+  isForbiddenSalesTable,
+  isPhase4Relation,
+  phase4InheritedPrefixRelations,
+} from './guards/no-authoritative-balance';
 import { PHASE4_S4_PREFIX, frozenThroughFloor, phase4MigrationsOnDisk, phase4PrefixEnd } from './phase4-prefix';
 import { prefixProblems } from './phase4-s1-gate';
 import { executeSuites, type SuiteExecution, type SuiteRow } from './phase4-s2-gate';
@@ -319,6 +326,118 @@ export function vocabularyProblems(sql: string): string[] {
   for (const hit of findAuthoritativeSalesColumns(sql, watched))
     problems.push(`${hit.table}.${hit.column} claims storage authority over a derived receivable, debt or stock quantity (G-3 / P4-AL-06)`);
   return problems;
+}
+
+/**
+ * ── THE LIVE-CATALOGUE HALF OF THE SAME VOCABULARY (F-09) ────────────────
+ *
+ * `vocabularyProblems` above reads TEXT, and the reader it reads with
+ * (`stripNonSchema`) discards dollar-quoted bodies and quoted literals BY
+ * DESIGN — that is what keeps a comment or a PL/pgSQL body from being mistaken
+ * for a column declaration. The cost is exact and was measured, not assumed: a
+ * relation created by `DO $$ BEGIN EXECUTE 'CREATE TABLE …'; END $$` leaves
+ * `stripNonSchema` with `DO ;`, so `discoverStoredRelations` returns nothing,
+ * `discoverSalesTables` returns nothing, and the vocabulary law is SILENT about
+ * a relation whose very NAME `isForbiddenSalesTable` calls derived truth. The
+ * column half is blind twice over: even handed the name, the column text the
+ * declaration is made of is inside the body the reader dropped.
+ *
+ * The RLS/FORCE law already closed exactly this hole, and it closed it the only
+ * way a text parser's blindness can be closed — by asking the DATABASE what
+ * relations and columns are actually there (`scripts/guards/phase4-rls-force.ts`
+ * half (ii), `pg_class`/`pg_attribute`). This is that half, for the vocabulary:
+ * same input shape (`LiveRelation`, supplied by the caller, so this law never
+ * opens a connection and a fixture can stand in for a database), same shared
+ * Phase 4 predicate, same applier subtraction, same canaries, and the same rule
+ * that `live === null` is reported as HAVING JUDGED NOTHING rather than passing.
+ *
+ * It is deliberately NOT wired into `CHECKS`: the gate judges text and must not
+ * come to need a cluster where it did not before, exactly as the RLS live half
+ * stays with its suite. `tests/guards/p4s4-vocabulary-live-arm.test.ts` reaches
+ * a real cluster through `ensurePostgres()` — which STARTS the embedded
+ * PostgreSQL and throws when it cannot, so there is no path on which this half
+ * silently skips.
+ *
+ * No vocabulary is copied here either: the words are `isForbiddenSalesTable`
+ * and `isAuthoritativeSalesColumn`, the same two predicates the text half uses.
+ */
+export interface Phase4VocabularyInput {
+  /** The applier's source text, from which the runner's own bookkeeping relations are discovered and subtracted. */
+  readonly applierSource: string;
+  /**
+   * The live catalogue, or `null` when none was read. `null` is NOT a pass: a
+   * law that judged no subject is reported as having judged no subject.
+   */
+  readonly live: readonly LiveRelation[] | null;
+}
+
+export interface Phase4VocabularyReport {
+  /** The size of the digest-verified inherited prefix's relation set. Zero means the shared predicate is fail-empty. */
+  readonly inheritedPrefixSize: number;
+  /** The relations the applier's own source creates, subtracted from the surface. */
+  readonly applierRelations: readonly string[];
+  /** The Phase 4 relations present in the live catalogue, or `null` when none was read. */
+  readonly liveSurface: readonly string[] | null;
+  /** Exactly the relations whose name and columns were judged against the vocabulary. */
+  readonly judged: readonly string[];
+  readonly problems: readonly string[];
+}
+
+/** G-3's vocabulary over the LIVE catalogue: the half the text reader structurally cannot have. */
+export function liveVocabularyReport(input: Phase4VocabularyInput): Phase4VocabularyReport {
+  const problems: string[] = [];
+
+  // ── Canary: the shared predicate is the complement of a set read from
+  // digest-verified files, so an empty reading is a tampered prefix and not a
+  // surface — every relation in the catalogue would read as Phase 4.
+  const inheritedPrefixSize = phase4InheritedPrefixRelations().size;
+  if (inheritedPrefixSize === 0)
+    problems.push(
+      'VACUOUS: the inherited-prefix reader returned no relation, so the Phase 4 predicate is the complement of the empty set and EVERY relation in the catalogue reads as Phase 4 — a missing or altered digest-verified prefix file, not a surface',
+    );
+
+  // ── Canary: the subtracted set is read from text, so an empty reading means
+  // that text stopped declaring what it creates.
+  const applier = applierRelations(input.applierSource);
+  if (applier.length === 0)
+    problems.push(
+      `VACUOUS: no relation was discovered in the applier source handed to this law (${input.applierSource.length} characters), so the subtraction that keeps the runner's own bookkeeping out of this surface has no subject`,
+    );
+
+  const liveSurface = input.live === null ? null : livePhase4Relations(input.live, input.applierSource);
+
+  if (input.live === null)
+    problems.push(
+      "VACUOUS: no live catalogue was read, so no relation had its name or its pg_attribute columns judged against G-3's vocabulary — NOT A PASS, and the text half cannot stand in for it, because a relation created from inside a dollar-quoted body is invisible to the text half by construction",
+    );
+  else if (liveSurface !== null && liveSurface.length === 0)
+    problems.push(
+      `VACUOUS: the live catalogue handed to this law holds no Phase 4 relation at all (${input.live.length} catalogue row(s) read), so this half has no subject and must not be read as a pass`,
+    );
+
+  const byName = new Map((input.live ?? []).map((r) => [r.name, r] as const));
+  const judged = (liveSurface ?? []).filter((name) => byName.has(name));
+
+  for (const name of judged) {
+    if (isForbiddenSalesTable(name))
+      problems.push(
+        `${name} is PRESENT IN THE LIVE CATALOGUE and is a derived-truth relation name under G-3 — a balance, outstanding, receivables, summary, cache, snapshot or rollup relation is a second financial truth. No migration text this gate can read declares it that way, which is the hole this half exists to close`,
+      );
+    const row = byName.get(name);
+    if (row === undefined) continue;
+    for (const column of row.columns)
+      if (isAuthoritativeSalesColumn(column))
+        problems.push(
+          `${name}.${column} is a LIVE pg_attribute column claiming storage authority over a derived receivable, debt or stock quantity (G-3 / P4-AL-06) — the text half cannot read a column declared from inside a dollar-quoted body`,
+        );
+  }
+
+  return { inheritedPrefixSize, applierRelations: applier, liveSurface, judged, problems };
+}
+
+/** The live half as the estate's universal guard contract: `string[]`, empty meaning silent. */
+export function liveVocabularyProblems(input: Phase4VocabularyInput): string[] {
+  return [...liveVocabularyReport(input).problems];
 }
 
 /**
@@ -848,6 +967,13 @@ export const S4_EVIDENCE_STEPS: readonly {
    * states the body it is allowed to have, exactly.
    */
   readonly scriptBody?: string;
+  /**
+   * The suite file the step runs. The step being pinned says the command ran;
+   * this says WHAT it ran, so a `describe.skip` inside the file, or a root
+   * config that excludes its directory and passes with no tests, cannot leave
+   * the budget unmeasured behind a green step.
+   */
+  readonly suite: string;
 }[] = [
   {
     label: 'the P4-D/P4-F measured budgets',
@@ -855,12 +981,14 @@ export const S4_EVIDENCE_STEPS: readonly {
     command: 'npm run perf:phase4:s4',
     name: 'Receivables read budgets — P4-D and P4-F, measured',
     scriptBody: 'vitest run --reporter=verbose tests/performance/receivables-s4-budgets.test.ts',
+    suite: 'tests/performance/receivables-s4-budgets.test.ts',
   },
   {
     label: 'the set-based AR answer equivalence',
     script: 'tests/performance/receivables-ar-setbased-equivalence.test.ts',
     command: 'npx vitest run tests/performance/receivables-ar-setbased-equivalence.test.ts',
     name: 'Set-based AR answer equivalence — the 0083/0084 readers against the per-invoice original',
+    suite: 'tests/performance/receivables-ar-setbased-equivalence.test.ts',
   },
 ];
 
@@ -1169,6 +1297,152 @@ export function evidenceScriptBodyReport(root: string): string {
   }
   const pinned = S4_EVIDENCE_STEPS.filter((e) => e.scriptBody !== undefined);
   return `${pinned.length} measured npm script(s) pinned: ${pinned.map((e) => `${e.script} → ${String(scripts[e.script] ?? 'ABSENT')}`).join('; ')}`;
+}
+
+/**
+ * WHAT THE MEASURED STEP ACTUALLY EXECUTES.
+ *
+ * The step is pinned, and so is the npm script body it resolves to. Neither
+ * says the measurement RAN. Three ways to delete it while every other law
+ * stays silent, each found by attacking this file rather than by reading it:
+ *
+ *  - `describe.skip(` on the P4-F block inside the suite. The suite matches no
+ *    roster rule, so the gate reads none of its bytes, and `vitest run` exits
+ *    0 over a skipped block. `.skip` shifts no lines, so even the
+ *    line-quoted plan-claim inventory stays fresh.
+ *  - `exclude: ['tests/performance/**']` with `passWithNoTests: true` in the
+ *    root config: `vitest run <that path>` then exits 0 having run nothing.
+ *  - a `pre<script>` npm hook, which runs before the pinned body and is not
+ *    the pinned body.
+ *
+ * So each evidence step names its SUITE, and this law asks of the suite what
+ * the other two ask of the step.
+ */
+export function evidenceIntegrityProblems(root: string): string[] {
+  const problems: string[] = [];
+  const SKIPPERS = [
+    /\b(?:describe|it|test|suite)\s*\.\s*skip\s*\(/,
+    /\b(?:describe|it|test|suite)\s*\.\s*only\s*\(/,
+    /\b(?:describe|it|test|suite)\s*\.\s*todo\s*\(/,
+  ];
+  for (const ev of S4_EVIDENCE_STEPS) {
+    if (!has(root, ev.suite)) {
+      problems.push(`${ev.label} names the suite ${ev.suite}, which is not in the tree — the step would run nothing`);
+      continue;
+    }
+    const text = read(root, ev.suite);
+    for (const shape of SKIPPERS)
+      if (shape.test(text))
+        problems.push(
+          `${ev.suite} carries ${String(shape.exec(text)?.[0]).trim()} — a skipped, exclusive or todo block leaves the step green over a measurement it did not take, and a budget nothing measured is indistinguishable from a budget that passed`,
+        );
+    if (ev.command.startsWith('npm run ') && ev.scriptBody === undefined)
+      problems.push(`${ev.label} runs through npm and states no script body, so what it runs is pinned only by its name`);
+    if (ev.scriptBody !== undefined && !ev.scriptBody.includes(ev.suite))
+      problems.push(`${ev.label}'s pinned script body does not name ${ev.suite}, so the body and the suite this law judges are not the same thing`);
+  }
+  // No `pre`/`post` npm hook may wrap a pinned script: a hook runs before or
+  // after the pinned body and is not the pinned body.
+  const MANIFEST = 'package.json';
+  if (!has(root, MANIFEST)) problems.push(`${MANIFEST} is missing, so no hook around a measured script can be ruled out`);
+  else {
+    let scripts: Record<string, unknown> = {};
+    try {
+      const bag = (JSON.parse(read(root, MANIFEST)) as { scripts?: unknown }).scripts;
+      if (typeof bag === 'object' && bag !== null) scripts = bag as Record<string, unknown>;
+    } catch (e) {
+      problems.push(`${MANIFEST} does not parse: ${String(e)}`);
+    }
+    for (const ev of S4_EVIDENCE_STEPS)
+      for (const hook of [`pre${ev.script}`, `post${ev.script}`])
+        if (scripts[hook] !== undefined)
+          problems.push(
+            `${MANIFEST} declares \`${hook}\`, which npm runs around the pinned \`${ev.script}\` — a hook can rewrite the config the measurement reads`,
+          );
+  }
+  // The root runner config must not be able to turn a named suite into
+  // nothing. `exclude` plus `passWithNoTests` is the shape that does it.
+  const CONFIG = 'vitest.config.ts';
+  if (!has(root, CONFIG)) problems.push(`${CONFIG} is missing, so what the measured step's runner collects is unstated`);
+  else {
+    const cfg = read(root, CONFIG);
+    if (/passWithNoTests\s*:\s*true/.test(cfg))
+      problems.push(
+        `${CONFIG} sets passWithNoTests: true — a run that collected no test then exits 0, and every measured step becomes satisfiable by running nothing`,
+      );
+    if (/\bexclude\s*:/.test(cfg))
+      problems.push(
+        `${CONFIG} carries an \`exclude\` — a measured suite's directory can be excluded with the step, the body and the file all unchanged; a slice that genuinely needs one changes this law deliberately`,
+      );
+    for (const ev of S4_EVIDENCE_STEPS) {
+      const dir = ev.suite.slice(0, ev.suite.indexOf('/', 'tests/'.length));
+      if (!/include\s*:\s*\[\s*'tests\/\*\*\/\*\.test\.ts'\s*\]/.test(cfg))
+        problems.push(`${CONFIG}'s \`include\` is not the ruled \`['tests/**/*.test.ts']\`, so whether ${dir} is collected at all is unstated`);
+      break;
+    }
+  }
+  return problems;
+}
+
+/** What the measured suites are, and what the runner config says, on a pass as well as a failure. */
+export function evidenceIntegrityReport(root: string): string {
+  return `${S4_EVIDENCE_STEPS.length} measured suite(s): ${S4_EVIDENCE_STEPS.map((e) => `${e.suite}${has(root, e.suite) ? '' : ' (ABSENT)'}`).join('; ')}`;
+}
+
+/**
+ * EVERY ROSTERED SUITE IS SOMEWHERE THE RUNNER GOES.
+ *
+ * The roster is derived by basename, and the only floor is that it matched at
+ * least one file. So moving a rostered suite into a directory no runner script
+ * covers drops it from the roster AND from CI, and no check names the loss:
+ * `test:integration` covers three directories and `test:golden` one, both by
+ * path. The covered directories are read out of those scripts rather than
+ * listed here, so a slice that adds a directory to the runner widens this law
+ * by widening the runner.
+ */
+export function rosterRunnerProblems(root: string): string[] {
+  const MANIFEST = 'package.json';
+  if (!has(root, MANIFEST)) return [`${MANIFEST} is missing, so the directories the runner covers are unstated`];
+  let scripts: Record<string, unknown> = {};
+  try {
+    const bag = (JSON.parse(read(root, MANIFEST)) as { scripts?: unknown }).scripts;
+    if (typeof bag === 'object' && bag !== null) scripts = bag as Record<string, unknown>;
+  } catch (e) {
+    return [`${MANIFEST} does not parse: ${String(e)}`];
+  }
+  const covered = new Set<string>();
+  for (const [name, body] of Object.entries(scripts)) {
+    if (!name.startsWith('test')) continue;
+    if (typeof body !== 'string') continue;
+    for (const m of body.matchAll(/\btests\/[A-Za-z0-9_-]+/g)) covered.add(m[0]);
+  }
+  if (covered.size === 0) return [`no \`test*\` script of ${MANIFEST} names a \`tests/\` directory, so this law would be vacuous`];
+  const problems: string[] = [];
+  const files = rosterFiles(root);
+  if (files.length === 0) return [...problems, 'the roster matched no suite, so this law would be vacuous'];
+  for (const file of files)
+    if (![...covered].some((dir) => file.startsWith(`${dir}/`)))
+      problems.push(
+        `the rostered suite ${file} is in no directory any \`test*\` script of ${MANIFEST} runs (${[...covered].sort().join(', ')}) — a rostered file the runner never reaches is a law that is in the roster and out of CI`,
+      );
+  return problems;
+}
+
+/** Which directories the runner covers, and how many rostered suites fall in them. */
+export function rosterRunnerReport(root: string): string {
+  if (!has(root, 'package.json')) return 'package.json is missing';
+  let scripts: Record<string, unknown> = {};
+  try {
+    const bag = (JSON.parse(read(root, 'package.json')) as { scripts?: unknown }).scripts;
+    if (typeof bag === 'object' && bag !== null) scripts = bag as Record<string, unknown>;
+  } catch {
+    return 'package.json does not parse';
+  }
+  const covered = new Set<string>();
+  for (const [name, body] of Object.entries(scripts))
+    if (name.startsWith('test') && typeof body === 'string') for (const m of body.matchAll(/\btests\/[A-Za-z0-9_-]+/g)) covered.add(m[0]);
+  const files = rosterFiles(root);
+  return `${files.length} rostered suite(s) against ${covered.size} runner directory/ies (${[...covered].sort().join(', ')})`;
 }
 
 /** The measured position, on a pass as well as on a failure. */
@@ -1898,6 +2172,20 @@ export const CHECKS: readonly Check[] = [
     run: evidenceScriptBodyProblems,
     note: evidenceScriptBodyReport,
     ok: 'every measured step that runs `npm run <script>` resolves to exactly the body it is ruled to have, so a filter or a narrowed path inside `package.json` cannot delete a measurement behind an unchanged workflow',
+  },
+  {
+    id: 'evidence-integrity',
+    title: 'what the measured steps EXECUTE, not only what they are named',
+    run: evidenceIntegrityProblems,
+    note: evidenceIntegrityReport,
+    ok: 'every measured suite is in the tree, carries no skipped, exclusive or todo block, is named by the script body that runs it, is wrapped by no npm pre/post hook, and is collected by a root config that neither excludes a directory nor passes with no tests',
+  },
+  {
+    id: 'roster-runner',
+    title: 'every rostered suite is in a directory the runner actually runs',
+    run: rosterRunnerProblems,
+    note: rosterRunnerReport,
+    ok: 'every rostered file falls under a `tests/` directory named by a `test*` script, so a suite cannot be dropped from CI by moving it while staying out of the roster',
   },
   {
     id: 'roster',

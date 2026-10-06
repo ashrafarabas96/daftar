@@ -30,7 +30,7 @@
 import { Client } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { ensurePostgres, ownerPool, resetData } from '../helpers/test-app';
-import { urlOf } from '../helpers/scratch-db';
+import { createScratchDb, urlOf } from '../helpers/scratch-db';
 import { MIGRATIONS_DIR } from '../../apps/api/src/infra/migrate';
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
@@ -69,18 +69,60 @@ const SHIPPED = new Map<string, string>();
 const shippedKey = (rel: string, pol: string): string => `${rel}.${pol}`;
 
 /**
- * The operands each read qual must still name, and the number of disjuncts it
- * is allowed to have — the same law `0086-E(1)` reads back from the
- * catalogue. Presence alone would admit an ADDED `OR (SELECT true)`; the
- * count alone would admit a SWAPPED disjunct.
+ * THE EXPECTED EXPRESSION, RENDERED BY THIS SERVER.
+ *
+ * An earlier version of this file asked whether each qual CONTAINED some
+ * operands and counted the ` OR ` strings in it. Both are lexical and both
+ * are defeated outright, which an independent attack proved by execution and
+ * which was then reproduced here: `tenant_id <> (SELECT nullif(app_tenant(),
+ * '')::uuid)` names every operand and renders exactly one ` OR `, and admits
+ * every other tenant's rows; and an added always-true disjunct renders as
+ * `OR` followed by a NEWLINE before a `CASE`, which is not the four-byte
+ * ` OR `, so the count never sees it. A lexical test cannot see an operator,
+ * and the catalogue's pretty-printer decides its own whitespace.
+ *
+ * So the comparison is an EXACT equality against the expression `0086` means,
+ * rendered by the same `pg_get_expr` on the same server from a probe policy on
+ * a TEMP table carrying the same two column names. Identical expression trees
+ * render identically, so the equality is exact without hard-coding one
+ * PostgreSQL version's whitespace. The probe lives in `pg_temp`, so nothing
+ * that counts the policies of `public` sees it.
  */
-const BARRIER: Record<(typeof REWRITTEN)[number], { readonly operands: readonly string[]; readonly disjuncts: number }> = {
-  tenant_membership: { operands: ['app_bypass()', 'app_tenant()', 'tenant_id'], disjuncts: 2 },
-  business_isolation_read: {
-    operands: ['app_bypass()', 'app_business()', 'business_id', 'daftar_inventory_internal', 'daftar_accounting_internal'],
-    disjuncts: 3,
-  },
+const EXPECTED_SOURCE: Record<(typeof REWRITTEN)[number], string> = {
+  tenant_membership: `((SELECT app_bypass()) OR tenant_id = (SELECT nullif(app_tenant(), '')::uuid))`,
+  business_isolation_read: `((SELECT app_bypass())
+     OR (SELECT current_user IN ('daftar_inventory_internal', 'daftar_accounting_internal'))
+     OR business_id = (SELECT nullif(app_business(), '')::uuid))`,
 };
+
+/** The two expected renderings, obtained from a `pg_temp` probe and dropped again. */
+async function referenceQuals(): Promise<Record<(typeof REWRITTEN)[number], string>> {
+  const c = new Client({ connectionString: urlOf('daftar', 'postgres') });
+  await c.connect();
+  try {
+    await c.query(`DROP TABLE IF EXISTS _p4s4_reference`);
+    await c.query(`CREATE TEMP TABLE _p4s4_reference (tenant_id UUID, business_id UUID)`);
+    await c.query(`ALTER TABLE _p4s4_reference ENABLE ROW LEVEL SECURITY`);
+    for (const pol of REWRITTEN) await c.query(`CREATE POLICY ${pol} ON _p4s4_reference USING ${EXPECTED_SOURCE[pol]}`);
+    const r = await c.query<{ polname: string; q: string | null }>(
+      `SELECT p.polname, pg_get_expr(p.polqual, p.polrelid) AS q
+         FROM pg_policy p JOIN pg_class c ON c.oid = p.polrelid
+        WHERE c.relname = '_p4s4_reference' ORDER BY 1`,
+    );
+    const out = {} as Record<(typeof REWRITTEN)[number], string>;
+    for (const pol of REWRITTEN) {
+      const q = r.rows.find((x) => x.polname === pol)?.q;
+      if (q === undefined || q === null || q === '')
+        throw new Error(`the reference probe rendered nothing for ${pol}, so every comparison below would be vacuous`);
+      out[pol] = q;
+    }
+    if (out.tenant_membership === out.business_isolation_read) throw new Error('both reference renderings are identical, so the probe distinguishes nothing');
+    await c.query(`DROP TABLE _p4s4_reference`);
+    return out;
+  } finally {
+    await c.end();
+  }
+}
 
 /** Every read qual `0086` rewrote, as the catalogue renders it right now. */
 async function readQuals(): Promise<{ relname: string; polname: string; q: string | null }[]> {
@@ -93,14 +135,27 @@ async function readQuals(): Promise<{ relname: string; polname: string; q: strin
   return r.rows;
 }
 
-/** `0086`'s own post-apply block, sliced out of the migration file on disk. */
-function postApplyBlockOf0086(): string {
+/** `0086`'s whole text, as it is on disk. */
+function text0086(): string {
+  return readFileSync(join(MIGRATIONS_DIR, '0086_phase4_rls_quals_once_per_query.sql'), 'utf8');
+}
+
+/**
+ * One `DO $tag$ … $tag$;` block of `0086`, sliced out of the file on disk.
+ *
+ * Disk IS what ran: the runner refuses a migration whose checksum has moved
+ * ("Migration tampered after …"), so the applied text and the file agree or
+ * the harness never came up.
+ */
+function blockOf0086(tag: string): string {
   const file = join(MIGRATIONS_DIR, '0086_phase4_rls_quals_once_per_query.sql');
   const text = readFileSync(file, 'utf8');
-  const from = text.indexOf('DO $post$');
-  const to = text.indexOf('$post$;', from + 1);
-  if (from < 0 || to < 0) throw new Error(`0086 carries no DO $post$ … $post$; block, so the proof below would prove nothing: ${file}`);
-  return text.slice(from, to + '$post$;'.length);
+  const open = `DO $${tag}$`;
+  const close = `$${tag}$;`;
+  const from = text.indexOf(open);
+  const to = text.indexOf(close, from + 1);
+  if (from < 0 || to < 0) throw new Error(`0086 carries no ${open} … ${close} block, so the proof below would prove nothing: ${file}`);
+  return text.slice(from, to + close.length);
 }
 
 let w: SettlementWorld;
@@ -339,60 +394,108 @@ describe('P4-S4 — 0086: the read quals are evaluated once per query and answer
     await shippedShapeIsBack();
   }, 120_000);
 
-  it('the SHIPPED quals still carry every barrier operand, and not one disjunct more', async () => {
-    // The subject is the text `0086` installed, read out of the catalogue —
-    // not a literal in this file. Asking only for a subselect and for
-    // `app_bypass()` is no barrier: `((SELECT app_bypass()) OR (SELECT true))`
-    // satisfies both and admits every row of every tenant. The barrier is the
-    // TENANT disjunct on `tenant_membership` and the BUSINESS disjunct on
-    // `business_isolation_read`, and the disjunct COUNT is what refuses an
-    // added one.
+  it('each SHIPPED qual IS the expression 0086 writes, compared whole against this server’s own rendering', async () => {
+    // Not "contains the operands" and not "has N disjuncts" — both are
+    // lexical and both were broken. The whole installed expression is
+    // compared, character for character, against the rendering of the
+    // expression this file names, produced by the same printer on the same
+    // server. An inverted operator, a swapped disjunct, an added one, a
+    // wrapper that makes the comparison always true: each changes the text.
+    const ref = await referenceQuals();
     const rows = await readQuals();
     expect(rows.length).toBe(RELATIONS.length * REWRITTEN.length);
     for (const row of rows) {
-      const law = BARRIER[row.polname as (typeof REWRITTEN)[number]];
-      expect(law, `${row.polname} has no stated operand set, so this case would pass over an unknown policy`).toBeDefined();
-      const q = row.q ?? '';
-      for (const operand of law.operands)
-        expect(q, `${row.relname}.${row.polname} no longer names ${operand}, so a barrier the per-row form carried is gone`).toContain(operand);
-      expect(q.split(' OR ').length, `${row.relname}.${row.polname} carries the wrong number of disjuncts: ${q}`).toBe(law.disjuncts);
+      const want = ref[row.polname as (typeof REWRITTEN)[number]];
+      expect(want, `${row.polname} has no reference rendering, so this case would pass over an unknown policy`).toBeDefined();
+      expect(row.q ?? '', `${row.relname}.${row.polname} is not the expression 0086 writes`).toBe(want);
     }
-  }, 120_000);
+  }, 180_000);
 
-  it('RED PROOF: a shipped qual with the tenant barrier deleted makes 0086 ITSELF raise, and this file go red', async () => {
-    // The defect this proves absent: a qual that keeps the subselect and
-    // `app_bypass()` but drops the tenant comparison. It is the one shape
-    // 0086-E(1)'s first form admitted, and the one this file used to heal by
-    // re-applying its own literal.
-    const block = postApplyBlockOf0086();
-    expect(block, 'the sliced block is not 0086’s post-apply block').toContain('0086-E(1)');
-    // Resolved BEFORE the plant, so the restore in `finally` has nothing left
-    // to decide and cannot itself throw.
+  it('RED PROOF: each of the four attacks that defeated the earlier LEXICAL law makes 0086 itself raise', async () => {
+    // Every plant below passed the operand-and-count law. They are kept as
+    // the standing proof that the law that replaced it is not lexical:
+    //   1. the tenant barrier simply deleted;
+    //   2. the comparison INVERTED — every operand present, one disjunct,
+    //      and every other tenant's rows admitted;
+    //   3. an ADDED always-true disjunct behind a `CASE`, which the printer
+    //      renders as `OR` + newline so a ` OR ` count never sees it;
+    //   4. a TARGETED backdoor: the real barrier, plus a disjunct true for
+    //      one chosen tenant — the shape no cross-tenant case with a random
+    //      foreign tenant can ever reach.
+    const block = blockOf0086('fin');
+    expect(block, 'the sliced block is not 0086’s end-state block').toContain('0086-F');
     const restore = RELATIONS.map((rel) => {
       const captured = SHIPPED.get(shippedKey(rel, 'tenant_membership'));
       if (captured === undefined) throw new Error(`no captured shipped qual for ${rel}.tenant_membership, so the plant could not be undone`);
       return { rel, captured };
     });
+    const PLANTS: readonly string[] = [
+      `((SELECT app_bypass()) OR (SELECT true))`,
+      `((SELECT app_bypass()) OR tenant_id <> (SELECT nullif(app_tenant(), '')::uuid))`,
+      `((SELECT app_bypass()) OR tenant_id = (SELECT nullif(app_tenant(), '')::uuid) OR CASE WHEN true THEN true ELSE false END)`,
+      `((SELECT app_bypass()) OR tenant_id = (SELECT nullif(app_tenant(), '')::uuid) OR (SELECT app_tenant()) = '00000000-0000-0000-0000-0000000000ff')`,
+    ];
     const o = new Client({ connectionString: urlOf('daftar', 'postgres') });
     await o.connect();
     try {
-      for (const rel of RELATIONS) await o.query(`ALTER POLICY tenant_membership ON ${rel} USING ((SELECT app_bypass()) OR (SELECT true))`);
-      // 0086's own text, run against that state. It must refuse it.
-      await expect(o.query(block)).rejects.toThrow(/0086-E\(1\)/);
-      // And this file's own law refuses it too, so the proof is not only
-      // about the migration's block.
-      const hostile = (await readQuals()).filter((r) => r.polname === 'tenant_membership');
-      expect(hostile.length).toBe(RELATIONS.length);
-      for (const row of hostile) expect(row.q ?? '').not.toContain('app_tenant()');
+      for (const plant of PLANTS) {
+        for (const rel of RELATIONS) await o.query(`ALTER POLICY tenant_membership ON ${rel} USING ${plant}`);
+        // The plant actually landed — else the refusal below would be about
+        // the shipped shape and would prove nothing.
+        const landed = (await readQuals()).filter((r) => r.polname === 'tenant_membership');
+        expect(landed.length).toBe(RELATIONS.length);
+        for (const row of landed)
+          expect(row.q ?? '', `the plant did not land on ${row.relname}`).not.toBe(SHIPPED.get(shippedKey(row.relname, 'tenant_membership')));
+        await expect(o.query(block), `0086-F accepted the plant ${plant}`).rejects.toThrow(/0086-F/);
+      }
     } finally {
       for (const { rel, captured } of restore) await o.query(`ALTER POLICY tenant_membership ON ${rel} USING (${captured})`);
       await o.end();
     }
-    // Restored, read back from the catalogue rather than assumed.
+    // Restored, read back from the catalogue rather than assumed, and against
+    // the reference rather than against a substring.
+    const ref = await referenceQuals();
     for (const row of (await readQuals()).filter((r) => r.polname === 'tenant_membership'))
-      expect(row.q ?? '', `${row.relname}.tenant_membership was not restored`).toContain('app_tenant()');
+      expect(row.q ?? '', `${row.relname}.tenant_membership was not restored`).toBe(ref.tenant_membership);
     await shippedShapeIsBack();
-  }, 180_000);
+  }, 600_000);
+
+  it('RED PROOF: 0086-A refuses a pre-state that is not the expression 0086 rewrites, on a database built to 0085', async () => {
+    // `0086`'s whole safety argument — "the same expression, with subselects"
+    // — is a claim about the state BEFORE it runs, and `ALTER POLICY ...
+    // USING` replaces the clause whatever it held. 0086-A reads that
+    // pre-state out of the catalogue and compares it WHOLE against this
+    // server's rendering of the per-row form. This is the negative control: a
+    // scratch database built from the real migration files up to 0085, one
+    // qual moved off that form, and 0086's own text applied to it.
+    const db = await createScratchDb('daftar_p4s4_pre0086', { upTo: '0085_phase4_allocation_recompute_set_based.sql' });
+    try {
+      expect(db.applied.at(-1), 'the scratch build did not stop at 0085, so the plant would be against the wrong state').toBe(
+        '0085_phase4_allocation_recompute_set_based.sql',
+      );
+      const sql = text0086();
+      expect(sql, 'the file carries no pre-apply block, so this case would prove nothing').toContain('0086-A');
+      // 0086 applies cleanly to the state 0085 leaves — the control for the
+      // control, so a refusal below cannot be the build's own fault.
+      await db.pool.query('BEGIN');
+      await db.pool.query(sql);
+      await db.pool.query('ROLLBACK');
+
+      // Already rewritten ahead of time: 0086 must refuse rather than
+      // overwrite an expression it did not read.
+      await db.pool.query(`ALTER POLICY tenant_membership ON invoices USING ((SELECT app_bypass()) OR tenant_id = (SELECT nullif(app_tenant(), '')::uuid))`);
+      await expect(db.pool.query(sql)).rejects.toThrow(/0086-A/);
+      // Still the per-row shape, but the comparison INVERTED — the plant the
+      // operand-and-count law accepted.
+      await db.pool.query(`ALTER POLICY tenant_membership ON invoices USING (app_bypass() OR tenant_id <> nullif(app_tenant(), '')::uuid)`);
+      await expect(db.pool.query(sql)).rejects.toThrow(/0086-A/);
+      // And the barrier simply gone.
+      await db.pool.query(`ALTER POLICY tenant_membership ON invoices USING (app_bypass() OR true)`);
+      await expect(db.pool.query(sql)).rejects.toThrow(/0086-A/);
+    } finally {
+      await db.drop();
+    }
+  }, 900_000);
 
   it('DEFAULT-DENY holds from the outside: no scope sees nothing, and another business’s scope sees nothing of this one', async () => {
     const bare = await connectAs('daftar_app');

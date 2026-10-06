@@ -36,7 +36,7 @@
  * P4-AL-88 defect. The non-vacuity assertions are FLOORS and positions
  * RELATIVE to the predecessor's step.
  */
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -48,8 +48,10 @@ import {
   S4_SCRIPT,
   S4_STEP_NAME,
   WORKFLOW,
+  evidenceIntegrityProblems,
   evidenceScriptBodyProblems,
   readWorkflow,
+  rosterRunnerProblems,
   requiredCiProblems,
 } from '../../scripts/phase4-s4-gate';
 
@@ -471,5 +473,148 @@ describe('P4-S4 — the measured steps that go through npm are pinned to a scrip
     const broken = mkdtempSync(join(tmpdir(), 'p4s4-script-body-broken-'));
     writeFileSync(join(broken, 'package.json'), '{ "scripts": ', 'utf8');
     expect(evidenceScriptBodyProblems(broken).join(' | ')).toContain('does not parse');
+  });
+});
+
+// ───── WHAT THE MEASURED STEP EXECUTES, AND WHERE A ROSTERED SUITE LIVES ──
+// Two laws below the two above, each found by attacking this file rather than
+// by reading it. The step is pinned and its npm body is pinned, and a
+// `describe.skip(` inside the suite, an `exclude` plus `passWithNoTests` in
+// the root config, or a `pre<script>` hook still deletes the measurement with
+// every other check silent. And the roster is derived by basename with no
+// floor on WHERE the file is, so moving a rostered suite out of every runner
+// directory drops it from the roster and from CI at once.
+
+/** A root carrying a copy of the real manifest, config and evidence suites, with `mutate` applied. */
+function rootWithTree(mutate: (dir: string) => void): string {
+  const dir = mkdtempSync(join(tmpdir(), 'p4s4-evidence-'));
+  writeFileSync(join(dir, 'package.json'), readFileSync(join(REPO, 'package.json'), 'utf8'), 'utf8');
+  writeFileSync(join(dir, 'vitest.config.ts'), readFileSync(join(REPO, 'vitest.config.ts'), 'utf8'), 'utf8');
+  mkdirSync(join(dir, 'tests', 'performance'), { recursive: true });
+  for (const ev of S4_EVIDENCE_STEPS) writeFileSync(join(dir, ev.suite), readFileSync(join(REPO, ev.suite), 'utf8'), 'utf8');
+  mutate(dir);
+  return dir;
+}
+
+describe('P4-S4 — the measured steps are judged by what they EXECUTE', () => {
+  it('the checkout passes, and every evidence step names a suite that is in the tree', () => {
+    expect(evidenceIntegrityProblems(REPO)).toEqual([]);
+    for (const ev of S4_EVIDENCE_STEPS) expect(readFileSync(join(REPO, ev.suite), 'utf8').length, `${ev.suite} is empty`).toBeGreaterThan(0);
+  });
+
+  it('a copied tree with nothing mutated still passes, so every plant below is about the plant', () => {
+    expect(evidenceIntegrityProblems(rootWithTree(() => undefined))).toEqual([]);
+  });
+
+  it('RP-EI-A: `describe.skip(` inside a measured suite is caught', () => {
+    for (const ev of S4_EVIDENCE_STEPS) {
+      const found = evidenceIntegrityProblems(
+        rootWithTree((dir) => {
+          const text = readFileSync(join(dir, ev.suite), 'utf8');
+          const mutated = text.replace('describe(', 'describe.skip(');
+          expect(mutated, `${ev.suite} holds no describe( to skip`).not.toBe(text);
+          writeFileSync(join(dir, ev.suite), mutated, 'utf8');
+        }),
+      );
+      expect(
+        found.some((m) => m.includes(ev.suite) && m.includes('indistinguishable')),
+        `a skipped block in ${ev.suite} left the law silent: ${found.join(' | ')}`,
+      ).toBe(true);
+    }
+  });
+
+  it('RP-EI-B: `it.only(` and `it.todo(` inside a measured suite are caught too', () => {
+    for (const marker of ['it.only(', 'it.todo(']) {
+      const ev = S4_EVIDENCE_STEPS[0];
+      if (ev === undefined) throw new Error('no evidence step, so this plant is vacuous');
+      const found = evidenceIntegrityProblems(
+        rootWithTree((dir) => {
+          const text = readFileSync(join(dir, ev.suite), 'utf8');
+          // At a line start, so the replacement is a real `it(` call and not
+          // the tail of a word like `limit(` — where `\b` would correctly
+          // refuse to match and the plant would be about nothing.
+          const mutated = text.replace(/\n(\s*)it\(/, `\n$1${marker}`);
+          expect(mutated, `${ev.suite} holds no it( at a line start to mark`).not.toBe(text);
+          writeFileSync(join(dir, ev.suite), mutated, 'utf8');
+        }),
+      );
+      expect(
+        found.some((m) => m.includes(ev.suite)),
+        `${marker} left the law silent: ${found.join(' | ')}`,
+      ).toBe(true);
+    }
+  });
+
+  it('RP-EI-C: a measured suite DELETED from the tree is caught', () => {
+    for (const ev of S4_EVIDENCE_STEPS) {
+      const dir = mkdtempSync(join(tmpdir(), 'p4s4-evidence-none-'));
+      writeFileSync(join(dir, 'package.json'), readFileSync(join(REPO, 'package.json'), 'utf8'), 'utf8');
+      writeFileSync(join(dir, 'vitest.config.ts'), readFileSync(join(REPO, 'vitest.config.ts'), 'utf8'), 'utf8');
+      const found = evidenceIntegrityProblems(dir);
+      expect(
+        found.some((m) => m.includes(ev.suite) && m.includes('would run nothing')),
+        `a missing ${ev.suite} left the law silent: ${found.join(' | ')}`,
+      ).toBe(true);
+    }
+  });
+
+  it('RP-EI-D: a `pre<script>` npm hook around a pinned script is caught', () => {
+    const ev = S4_EVIDENCE_STEPS.find((e) => e.scriptBody !== undefined);
+    if (ev === undefined) throw new Error('no pinned script, so this plant is vacuous');
+    const found = evidenceIntegrityProblems(
+      rootWithTree((dir) => {
+        const manifest = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8')) as { scripts: Record<string, string> };
+        manifest.scripts[`pre${ev.script}`] = 'echo rewriting the config the measurement reads';
+        writeFileSync(join(dir, 'package.json'), JSON.stringify(manifest, null, 2), 'utf8');
+      }),
+    );
+    expect(
+      found.some((m) => m.includes(`pre${ev.script}`)),
+      `a pre hook left the law silent: ${found.join(' | ')}`,
+    ).toBe(true);
+  });
+
+  it('RP-EI-E: `passWithNoTests: true` and an `exclude` in the root config are both caught', () => {
+    const withPass = evidenceIntegrityProblems(
+      rootWithTree((dir) => {
+        const cfg = readFileSync(join(dir, 'vitest.config.ts'), 'utf8').replace('maxWorkers: 1,', 'maxWorkers: 1,\n    passWithNoTests: true,');
+        writeFileSync(join(dir, 'vitest.config.ts'), cfg, 'utf8');
+      }),
+    );
+    expect(withPass.join(' | ')).toContain('passWithNoTests');
+    const withExclude = evidenceIntegrityProblems(
+      rootWithTree((dir) => {
+        const cfg = readFileSync(join(dir, 'vitest.config.ts'), 'utf8').replace(
+          "include: ['tests/**/*.test.ts'],",
+          "include: ['tests/**/*.test.ts'],\n    exclude: ['tests/performance/**'],",
+        );
+        writeFileSync(join(dir, 'vitest.config.ts'), cfg, 'utf8');
+      }),
+    );
+    expect(withExclude.join(' | ')).toContain('exclude');
+  });
+});
+
+describe('P4-S4 — every rostered suite is in a directory the runner runs', () => {
+  it('the checkout passes', () => {
+    expect(rosterRunnerProblems(REPO)).toEqual([]);
+  });
+
+  it('RP-RR-A: a rostered suite in a directory no `test*` script runs is caught', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'p4s4-roster-runner-'));
+    writeFileSync(join(dir, 'package.json'), readFileSync(join(REPO, 'package.json'), 'utf8'), 'utf8');
+    mkdirSync(join(dir, 'tests', 'performance'), { recursive: true });
+    writeFileSync(join(dir, 'tests', 'performance', 'p4s4-moved-out-of-ci.test.ts'), "import { it } from 'vitest';\nit('x', () => undefined);\n", 'utf8');
+    const found = rosterRunnerProblems(dir);
+    expect(
+      found.some((m) => m.includes('tests/performance/p4s4-moved-out-of-ci.test.ts') && m.includes('out of CI')),
+      `a rostered suite outside every runner directory left the law silent: ${found.join(' | ')}`,
+    ).toBe(true);
+  });
+
+  it('RP-RR-B: a manifest whose `test*` scripts name no `tests/` directory makes the law say so rather than pass', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'p4s4-roster-runner-none-'));
+    writeFileSync(join(dir, 'package.json'), JSON.stringify({ scripts: { test: 'echo nothing' } }, null, 2), 'utf8');
+    expect(rosterRunnerProblems(dir).join(' | ')).toContain('would be vacuous');
   });
 });
