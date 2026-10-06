@@ -98,71 +98,89 @@
 -- ── 0086-A — the pre-state, read from the catalogue before anything moves ──
 DO $pre$
 DECLARE
-  v_rel   TEXT;
-  v_qual  TEXT;
-  v_have  TEXT;
-  v_want  TEXT;
-  v_ref_t TEXT;
-  v_ref_b TEXT;
+  v_rel    TEXT;
+  v_qual   TEXT;
+  v_have   TEXT;
+  v_mine   UUID := '11111111-1111-1111-1111-111111111111';
+  v_other  UUID := '22222222-2222-2222-2222-222222222222';
+  v_guc    TEXT;
+  v_prev_t TEXT := pg_catalog.current_setting('app.tenant_id', true);
+  v_prev_b TEXT := pg_catalog.current_setting('app.business_id', true);
+  v_admits BOOLEAN;
+  v_denies BOOLEAN;
+  v_unset  BOOLEAN;
 BEGIN
-  -- THE REFERENCE IS RENDERED BY THIS SERVER, NOT WRITTEN DOWN.
+  -- THE BARRIER IS ASSERTED BY EVALUATING IT, NOT BY READING IT.
   --
-  -- A check that asks whether a qual CONTAINS some operands, or counts the
-  -- ` OR ` strings in it, is a check about the catalogue's pretty-printer and
-  -- not about the policy. Both were tried and both are defeated outright:
-  -- `tenant_id <> (SELECT nullif(app_tenant(), '')::uuid)` names every
-  -- operand and renders one ` OR `, and admits every other tenant's rows; and
-  -- an added always-true disjunct renders as `OR` followed by a NEWLINE
-  -- before a `CASE`, which is not the four-byte ` OR `, so the count never
-  -- sees it. A lexical test cannot see an operator, and the printer decides
-  -- its own whitespace.
+  -- Asking whether a qual CONTAINS some operands, or counting the ` OR `
+  -- strings in it, is a question about the catalogue's pretty-printer and not
+  -- about the policy. Both were tried and both are defeated outright:
+  -- `tenant_id <> (SELECT nullif(app_tenant(), '')::uuid)` names every operand
+  -- and renders exactly one ` OR `, and admits every other tenant's rows; and
+  -- an added always-true disjunct renders as `OR` followed by a NEWLINE before
+  -- a `CASE`, which is not the four-byte ` OR `, so a count never sees it. A
+  -- lexical test cannot see an operator.
   --
-  -- So the comparison is an EXACT equality against the expression this file
-  -- means, rendered by the same `pg_get_expr` on the same server from a probe
-  -- policy on a TEMP table carrying the same two column names. Identical
-  -- expression trees render identically, so the equality is exact without
-  -- hard-coding one version's whitespace. The probe lives in `pg_temp`, so
-  -- 0086-E(3)'s count over `public` does not see it, and it is dropped before
-  -- this block ends.
+  -- So the installed expression is EXECUTED. Each qual is evaluated over
+  -- supplied column values with the session GUCs set, and its truth table is
+  -- asserted: it admits the scope's own row, it does NOT admit another
+  -- scope's row, and with the GUC unset it admits nothing. `app_bypass()` is
+  -- FALSE here by construction — it is `CURRENT_USER = 'daftar_platform'` and
+  -- a migration is not that role — so the escape hatch cannot mask the
+  -- barrier. An inverted comparison fails case 2. An always-true disjunct
+  -- fails case 2 and case 3. A qual that lost the barrier fails both.
+  --
+  -- A deny is asserted as `IS NOT TRUE`, never `= FALSE`: `business_id = NULL`
+  -- is NULL, and NULL is how default-deny is actually expressed here.
+  --
+  -- No object is created. G-5 forbids a migration creating a TEMP relation —
+  -- a caller can pre-create and own that name — so the reference the
+  -- comparison needs is computed, not built.
   --
   -- 0086-A judges the state BEFORE the first `ALTER`: every sentence this file
-  -- makes rests on the quals being in the PER-ROW form, because "the same
+  -- makes rests on the quals being the PER-ROW form, because "the same
   -- expression, with subselects" is a claim about what was there. The runner
   -- applies a file once and skips a re-apply by checksum, so this block judges
   -- the state this file was written against and no other.
-  DROP TABLE IF EXISTS _0086_reference;
-  CREATE TEMP TABLE _0086_reference (tenant_id UUID, business_id UUID);
-  ALTER TABLE _0086_reference ENABLE ROW LEVEL SECURITY;
-  CREATE POLICY tenant_membership ON _0086_reference USING (app_bypass() OR tenant_id = nullif(app_tenant(), '')::uuid);
-  CREATE POLICY business_isolation_read ON _0086_reference USING (app_bypass() OR current_user IN ('daftar_inventory_internal', 'daftar_accounting_internal') OR business_id = nullif(app_business(), '')::uuid);
-  SELECT pg_catalog.pg_get_expr(p.polqual, p.polrelid) INTO v_ref_t
-    FROM pg_catalog.pg_policy p JOIN pg_catalog.pg_class c ON c.oid = p.polrelid
-   WHERE c.relname = '_0086_reference' AND p.polname = 'tenant_membership';
-  SELECT pg_catalog.pg_get_expr(p.polqual, p.polrelid) INTO v_ref_b
-    FROM pg_catalog.pg_policy p JOIN pg_catalog.pg_class c ON c.oid = p.polrelid
-   WHERE c.relname = '_0086_reference' AND p.polname = 'business_isolation_read';
-  IF v_ref_t IS NULL OR v_ref_b IS NULL OR v_ref_t = '' OR v_ref_b = '' THEN
-    RAISE EXCEPTION '0086-A: the reference probe rendered nothing, so the comparison below would be against an empty string';
-  END IF;
-  IF v_ref_t = v_ref_b THEN
-    RAISE EXCEPTION '0086-A: both reference renderings are identical, so the probe is not distinguishing the two quals';
-  END IF;
-
   FOREACH v_rel IN ARRAY ARRAY['invoices', 'sales', 'payment_allocations', 'customer_credit_applications'] LOOP
     FOREACH v_qual IN ARRAY ARRAY['tenant_membership', 'business_isolation_read'] LOOP
-      v_want := CASE v_qual WHEN 'tenant_membership' THEN v_ref_t ELSE v_ref_b END;
       SELECT pg_catalog.pg_get_expr(p.polqual, p.polrelid) INTO v_have
         FROM pg_catalog.pg_policy p JOIN pg_catalog.pg_class c ON c.oid = p.polrelid
        WHERE c.relnamespace = 'public'::regnamespace AND c.relname = v_rel AND p.polname = v_qual;
       IF v_have IS NULL THEN
         RAISE EXCEPTION '0086-A: %.% does not exist, so this file would alter something that is not there', v_rel, v_qual;
       END IF;
-      IF v_have <> v_want THEN
-        RAISE EXCEPTION '0086-A: %.% is not the expression this file names. installed: [%] expected: [%]', v_rel, v_qual, v_have, v_want;
+
+      -- THE SHAPE, which is what this file is for and is a fair question to
+      -- ask of the text.
+      IF v_have LIKE '%( SELECT %' THEN
+        RAISE EXCEPTION '0086-A: %.% %: %', v_rel, v_qual, 'already carries a subselect, so "the same expression with subselects" is not a claim about this state', v_have;
+      END IF;
+
+      -- THE MEANING, evaluated.
+      v_guc := CASE v_qual WHEN 'tenant_membership' THEN 'app.tenant_id' ELSE 'app.business_id' END;
+      PERFORM pg_catalog.set_config(v_guc, v_mine::text, true);
+      EXECUTE pg_catalog.format('SELECT (%s) FROM (SELECT $1::uuid AS tenant_id, $1::uuid AS business_id) t', v_have)
+        INTO v_admits USING v_mine;
+      EXECUTE pg_catalog.format('SELECT (%s) FROM (SELECT $1::uuid AS tenant_id, $1::uuid AS business_id) t', v_have)
+        INTO v_denies USING v_other;
+      PERFORM pg_catalog.set_config(v_guc, '', true);
+      EXECUTE pg_catalog.format('SELECT (%s) FROM (SELECT $1::uuid AS tenant_id, $1::uuid AS business_id) t', v_have)
+        INTO v_unset USING v_mine;
+      PERFORM pg_catalog.set_config('app.tenant_id', COALESCE(v_prev_t, ''), true);
+      PERFORM pg_catalog.set_config('app.business_id', COALESCE(v_prev_b, ''), true);
+
+      IF v_admits IS NOT TRUE THEN
+        RAISE EXCEPTION '0086-A: %.% does not admit its own scope''s row, so it is not the boundary this file claims: %', v_rel, v_qual, v_have;
+      END IF;
+      IF v_denies IS TRUE THEN
+        RAISE EXCEPTION '0086-A: %.% ADMITS another scope''s row — the barrier is inverted, weakened or bypassed: %', v_rel, v_qual, v_have;
+      END IF;
+      IF v_unset IS TRUE THEN
+        RAISE EXCEPTION '0086-A: %.% admits a row with the scope GUC unset, so default-deny is gone: %', v_rel, v_qual, v_have;
       END IF;
     END LOOP;
   END LOOP;
-  DROP TABLE _0086_reference;
 END
 $pre$;
 
@@ -284,70 +302,86 @@ $post$;
 -- ── 0086-F — the end state, compared whole against this server's rendering ──
 DO $fin$
 DECLARE
-  v_rel   TEXT;
-  v_qual  TEXT;
-  v_have  TEXT;
-  v_want  TEXT;
-  v_ref_t TEXT;
-  v_ref_b TEXT;
+  v_rel    TEXT;
+  v_qual   TEXT;
+  v_have   TEXT;
+  v_mine   UUID := '11111111-1111-1111-1111-111111111111';
+  v_other  UUID := '22222222-2222-2222-2222-222222222222';
+  v_guc    TEXT;
+  v_prev_t TEXT := pg_catalog.current_setting('app.tenant_id', true);
+  v_prev_b TEXT := pg_catalog.current_setting('app.business_id', true);
+  v_admits BOOLEAN;
+  v_denies BOOLEAN;
+  v_unset  BOOLEAN;
 BEGIN
-  -- THE REFERENCE IS RENDERED BY THIS SERVER, NOT WRITTEN DOWN.
+  -- THE BARRIER IS ASSERTED BY EVALUATING IT, NOT BY READING IT.
   --
-  -- A check that asks whether a qual CONTAINS some operands, or counts the
-  -- ` OR ` strings in it, is a check about the catalogue's pretty-printer and
-  -- not about the policy. Both were tried and both are defeated outright:
-  -- `tenant_id <> (SELECT nullif(app_tenant(), '')::uuid)` names every
-  -- operand and renders one ` OR `, and admits every other tenant's rows; and
-  -- an added always-true disjunct renders as `OR` followed by a NEWLINE
-  -- before a `CASE`, which is not the four-byte ` OR `, so the count never
-  -- sees it. A lexical test cannot see an operator, and the printer decides
-  -- its own whitespace.
+  -- Asking whether a qual CONTAINS some operands, or counting the ` OR `
+  -- strings in it, is a question about the catalogue's pretty-printer and not
+  -- about the policy. Both were tried and both are defeated outright:
+  -- `tenant_id <> (SELECT nullif(app_tenant(), '')::uuid)` names every operand
+  -- and renders exactly one ` OR `, and admits every other tenant's rows; and
+  -- an added always-true disjunct renders as `OR` followed by a NEWLINE before
+  -- a `CASE`, which is not the four-byte ` OR `, so a count never sees it. A
+  -- lexical test cannot see an operator.
   --
-  -- So the comparison is an EXACT equality against the expression this file
-  -- means, rendered by the same `pg_get_expr` on the same server from a probe
-  -- policy on a TEMP table carrying the same two column names. Identical
-  -- expression trees render identically, so the equality is exact without
-  -- hard-coding one version's whitespace. The probe lives in `pg_temp`, so
-  -- 0086-E(3)'s count over `public` does not see it, and it is dropped before
-  -- this block ends.
+  -- So the installed expression is EXECUTED. Each qual is evaluated over
+  -- supplied column values with the session GUCs set, and its truth table is
+  -- asserted: it admits the scope's own row, it does NOT admit another
+  -- scope's row, and with the GUC unset it admits nothing. `app_bypass()` is
+  -- FALSE here by construction — it is `CURRENT_USER = 'daftar_platform'` and
+  -- a migration is not that role — so the escape hatch cannot mask the
+  -- barrier. An inverted comparison fails case 2. An always-true disjunct
+  -- fails case 2 and case 3. A qual that lost the barrier fails both.
   --
-  -- 0086-F is the END STATE: every rewritten qual is exactly the
-  -- once-per-query expression this file writes, operator for operator. It
-  -- replaces an earlier 0086-E(1) that asked only for a subselect and for
-  -- `app_bypass()`, then for an operand set and a disjunct count. Both were
-  -- lexical and both were broken: see the note above.
-  DROP TABLE IF EXISTS _0086_reference;
-  CREATE TEMP TABLE _0086_reference (tenant_id UUID, business_id UUID);
-  ALTER TABLE _0086_reference ENABLE ROW LEVEL SECURITY;
-  CREATE POLICY tenant_membership ON _0086_reference USING ((SELECT app_bypass()) OR tenant_id = (SELECT nullif(app_tenant(), '')::uuid));
-  CREATE POLICY business_isolation_read ON _0086_reference USING ((SELECT app_bypass()) OR (SELECT current_user IN ('daftar_inventory_internal', 'daftar_accounting_internal')) OR business_id = (SELECT nullif(app_business(), '')::uuid));
-  SELECT pg_catalog.pg_get_expr(p.polqual, p.polrelid) INTO v_ref_t
-    FROM pg_catalog.pg_policy p JOIN pg_catalog.pg_class c ON c.oid = p.polrelid
-   WHERE c.relname = '_0086_reference' AND p.polname = 'tenant_membership';
-  SELECT pg_catalog.pg_get_expr(p.polqual, p.polrelid) INTO v_ref_b
-    FROM pg_catalog.pg_policy p JOIN pg_catalog.pg_class c ON c.oid = p.polrelid
-   WHERE c.relname = '_0086_reference' AND p.polname = 'business_isolation_read';
-  IF v_ref_t IS NULL OR v_ref_b IS NULL OR v_ref_t = '' OR v_ref_b = '' THEN
-    RAISE EXCEPTION '0086-F: the reference probe rendered nothing, so the comparison below would be against an empty string';
-  END IF;
-  IF v_ref_t = v_ref_b THEN
-    RAISE EXCEPTION '0086-F: both reference renderings are identical, so the probe is not distinguishing the two quals';
-  END IF;
-
+  -- A deny is asserted as `IS NOT TRUE`, never `= FALSE`: `business_id = NULL`
+  -- is NULL, and NULL is how default-deny is actually expressed here.
+  --
+  -- No object is created. G-5 forbids a migration creating a TEMP relation —
+  -- a caller can pre-create and own that name — so the reference the
+  -- comparison needs is computed, not built.
+  --
+  -- 0086-F is the END STATE: the same truth table over the rewritten quals, so
+  -- the claim that this file moved no answer is a measured fact on both sides
+  -- of the rewrite rather than an argument about evaluation order.
   FOREACH v_rel IN ARRAY ARRAY['invoices', 'sales', 'payment_allocations', 'customer_credit_applications'] LOOP
     FOREACH v_qual IN ARRAY ARRAY['tenant_membership', 'business_isolation_read'] LOOP
-      v_want := CASE v_qual WHEN 'tenant_membership' THEN v_ref_t ELSE v_ref_b END;
       SELECT pg_catalog.pg_get_expr(p.polqual, p.polrelid) INTO v_have
         FROM pg_catalog.pg_policy p JOIN pg_catalog.pg_class c ON c.oid = p.polrelid
        WHERE c.relnamespace = 'public'::regnamespace AND c.relname = v_rel AND p.polname = v_qual;
       IF v_have IS NULL THEN
         RAISE EXCEPTION '0086-F: %.% does not exist, so this file would alter something that is not there', v_rel, v_qual;
       END IF;
-      IF v_have <> v_want THEN
-        RAISE EXCEPTION '0086-F: %.% is not the expression this file names. installed: [%] expected: [%]', v_rel, v_qual, v_have, v_want;
+
+      -- THE SHAPE, which is what this file is for and is a fair question to
+      -- ask of the text.
+      IF v_have NOT LIKE '%( SELECT %' THEN
+        RAISE EXCEPTION '0086-F: %.% %: %', v_rel, v_qual, 'still evaluates its row-invariant parts per row', v_have;
+      END IF;
+
+      -- THE MEANING, evaluated.
+      v_guc := CASE v_qual WHEN 'tenant_membership' THEN 'app.tenant_id' ELSE 'app.business_id' END;
+      PERFORM pg_catalog.set_config(v_guc, v_mine::text, true);
+      EXECUTE pg_catalog.format('SELECT (%s) FROM (SELECT $1::uuid AS tenant_id, $1::uuid AS business_id) t', v_have)
+        INTO v_admits USING v_mine;
+      EXECUTE pg_catalog.format('SELECT (%s) FROM (SELECT $1::uuid AS tenant_id, $1::uuid AS business_id) t', v_have)
+        INTO v_denies USING v_other;
+      PERFORM pg_catalog.set_config(v_guc, '', true);
+      EXECUTE pg_catalog.format('SELECT (%s) FROM (SELECT $1::uuid AS tenant_id, $1::uuid AS business_id) t', v_have)
+        INTO v_unset USING v_mine;
+      PERFORM pg_catalog.set_config('app.tenant_id', COALESCE(v_prev_t, ''), true);
+      PERFORM pg_catalog.set_config('app.business_id', COALESCE(v_prev_b, ''), true);
+
+      IF v_admits IS NOT TRUE THEN
+        RAISE EXCEPTION '0086-F: %.% does not admit its own scope''s row, so it is not the boundary this file claims: %', v_rel, v_qual, v_have;
+      END IF;
+      IF v_denies IS TRUE THEN
+        RAISE EXCEPTION '0086-F: %.% ADMITS another scope''s row — the barrier is inverted, weakened or bypassed: %', v_rel, v_qual, v_have;
+      END IF;
+      IF v_unset IS TRUE THEN
+        RAISE EXCEPTION '0086-F: %.% admits a row with the scope GUC unset, so default-deny is gone: %', v_rel, v_qual, v_have;
       END IF;
     END LOOP;
   END LOOP;
-  DROP TABLE _0086_reference;
 END
 $fin$;

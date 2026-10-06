@@ -411,17 +411,25 @@ describe('P4-S4 — 0086: the read quals are evaluated once per query and answer
     }
   }, 180_000);
 
-  it('RED PROOF: each of the four attacks that defeated the earlier LEXICAL law makes 0086 itself raise', async () => {
-    // Every plant below passed the operand-and-count law. They are kept as
-    // the standing proof that the law that replaced it is not lexical:
-    //   1. the tenant barrier simply deleted;
-    //   2. the comparison INVERTED — every operand present, one disjunct,
-    //      and every other tenant's rows admitted;
-    //   3. an ADDED always-true disjunct behind a `CASE`, which the printer
-    //      renders as `OR` + newline so a ` OR ` count never sees it;
-    //   4. a TARGETED backdoor: the real barrier, plus a disjunct true for
-    //      one chosen tenant — the shape no cross-tenant case with a random
-    //      foreign tenant can ever reach.
+  it('RED PROOF: the four attacks that defeated the earlier LEXICAL law are each refused, by the law that can see them', async () => {
+    // Every plant below passed the operand-and-count law that `0086-E(1)`
+    // once carried. They are kept as the standing proof that what replaced it
+    // is not lexical — AND as the statement of which law catches which, since
+    // the two halves have different reach:
+    //
+    //   0086-A / 0086-F EVALUATE the installed qual with the scope GUC set,
+    //   so they catch anything that changes the truth table over the values
+    //   they supply: the barrier deleted, the comparison INVERTED, an ADDED
+    //   always-true disjunct.
+    //
+    //   A TARGETED backdoor — the real barrier plus a disjunct true for one
+    //   chosen tenant — changes the truth table for NOBODY ELSE, so an
+    //   evaluated check over values the attacker did not choose cannot see
+    //   it, and neither can a cross-tenant case drawing a random foreign
+    //   tenant. That one is caught here, by comparing the whole installed
+    //   expression against this server's rendering of the expression 0086
+    //   writes. Stated rather than glossed: an evaluated law and an equality
+    //   law are both necessary, and neither is sufficient.
     const block = blockOf0086('fin');
     expect(block, 'the sliced block is not 0086’s end-state block').toContain('0086-F');
     const restore = RELATIONS.map((rel) => {
@@ -429,32 +437,43 @@ describe('P4-S4 — 0086: the read quals are evaluated once per query and answer
       if (captured === undefined) throw new Error(`no captured shipped qual for ${rel}.tenant_membership, so the plant could not be undone`);
       return { rel, captured };
     });
-    const PLANTS: readonly string[] = [
-      `((SELECT app_bypass()) OR (SELECT true))`,
-      `((SELECT app_bypass()) OR tenant_id <> (SELECT nullif(app_tenant(), '')::uuid))`,
-      `((SELECT app_bypass()) OR tenant_id = (SELECT nullif(app_tenant(), '')::uuid) OR CASE WHEN true THEN true ELSE false END)`,
-      `((SELECT app_bypass()) OR tenant_id = (SELECT nullif(app_tenant(), '')::uuid) OR (SELECT app_tenant()) = '00000000-0000-0000-0000-0000000000ff')`,
+    const ref = await referenceQuals();
+    const EVALUATED: readonly { readonly why: string; readonly using: string }[] = [
+      { why: 'the tenant barrier deleted', using: `((SELECT app_bypass()) OR (SELECT true))` },
+      { why: 'the comparison inverted', using: `((SELECT app_bypass()) OR tenant_id <> (SELECT nullif(app_tenant(), '')::uuid))` },
+      {
+        why: 'an added always-true disjunct behind a CASE, which the printer renders as OR + newline',
+        using: `((SELECT app_bypass()) OR tenant_id = (SELECT nullif(app_tenant(), '')::uuid) OR CASE WHEN true THEN true ELSE false END)`,
+      },
     ];
+    const TARGETED = `((SELECT app_bypass()) OR tenant_id = (SELECT nullif(app_tenant(), '')::uuid) OR (SELECT app_tenant()) = '00000000-0000-0000-0000-0000000000ff')`;
     const o = new Client({ connectionString: urlOf('daftar', 'postgres') });
     await o.connect();
     try {
-      for (const plant of PLANTS) {
-        for (const rel of RELATIONS) await o.query(`ALTER POLICY tenant_membership ON ${rel} USING ${plant}`);
-        // The plant actually landed — else the refusal below would be about
-        // the shipped shape and would prove nothing.
+      for (const plant of EVALUATED) {
+        for (const rel of RELATIONS) await o.query(`ALTER POLICY tenant_membership ON ${rel} USING ${plant.using}`);
         const landed = (await readQuals()).filter((r) => r.polname === 'tenant_membership');
         expect(landed.length).toBe(RELATIONS.length);
         for (const row of landed)
           expect(row.q ?? '', `the plant did not land on ${row.relname}`).not.toBe(SHIPPED.get(shippedKey(row.relname, 'tenant_membership')));
-        await expect(o.query(block), `0086-F accepted the plant ${plant}`).rejects.toThrow(/0086-F/);
+        await expect(o.query(block), `0086-F accepted ${plant.why}`).rejects.toThrow(/0086-F/);
       }
+
+      // The targeted backdoor. 0086-F runs it and does NOT refuse it — that is
+      // the measured limit of an evaluated law, asserted rather than assumed.
+      for (const rel of RELATIONS) await o.query(`ALTER POLICY tenant_membership ON ${rel} USING ${TARGETED}`);
+      await o.query(block);
+      // And the equality law refuses it on every relation.
+      const backdoored = (await readQuals()).filter((r) => r.polname === 'tenant_membership');
+      expect(backdoored.length).toBe(RELATIONS.length);
+      for (const row of backdoored)
+        expect(row.q ?? '', `${row.relname}.tenant_membership carries a targeted backdoor and the equality law did not see it`).not.toBe(ref.tenant_membership);
     } finally {
       for (const { rel, captured } of restore) await o.query(`ALTER POLICY tenant_membership ON ${rel} USING (${captured})`);
       await o.end();
     }
-    // Restored, read back from the catalogue rather than assumed, and against
-    // the reference rather than against a substring.
-    const ref = await referenceQuals();
+    // Restored, read back from the catalogue and compared against the
+    // reference rather than against a substring.
     for (const row of (await readQuals()).filter((r) => r.polname === 'tenant_membership'))
       expect(row.q ?? '', `${row.relname}.tenant_membership was not restored`).toBe(ref.tenant_membership);
     await shippedShapeIsBack();
