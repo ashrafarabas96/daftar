@@ -48,11 +48,13 @@
  * "nothing after N" and nothing here pins a candidate: the frozen prefix is
  * asserted by DELEGATION to the accepted prefix modules, which compare each
  * accepted file against its accepted digest and treat `frozenThrough` as a
- * FLOOR. `S4_ACCEPTED` is EMPTY because P4-S4 is a CANDIDATE, and the
- * candidate-tense block below is fenced between two
- * `CANDIDATE-TENSE (P4-AL-61)` markers so the acceptance commit can find
- * exactly what to delete. `selfClosureProblems` turns the forbidden shapes on
- * THIS file, including the rule that a gate may not name a migration numbered
+ * FLOOR. `S4_ACCEPTED` is EMPTY because P4-S4 is a CANDIDATE, and everything
+ * the accepted tense has no use for is fenced between
+ * `CANDIDATE-TENSE (P4-AL-61)` markers — the candidate-tense block below and
+ * that check's registration in `CHECKS` — so the acceptance commit can find
+ * exactly what to delete and nothing it still needs.
+ *
+ * `selfClosureProblems` turns the forbidden shapes on THIS file, including the rule that a gate may not name a migration numbered
  * past the last ACCEPTED one — which is why no migration file name appears
  * anywhere below and the candidate surface is DISCOVERED instead.
  *
@@ -152,15 +154,6 @@ export function readSqlStatement(sql: string, from: number): string | null {
 /** This file, relative to a repository root: the subject of its own closure rules. */
 export const SELF = 'scripts/phase4-s4-gate.ts';
 
-// ───── CANDIDATE-TENSE (P4-AL-61) ─────────────────────────────────────────
-// P4-S4 is a CANDIDATE. `S4_ACCEPTED` is empty, this gate pins no digest and
-// names no migration, and the slice's own migration is reached only through
-// `candidateMigrations` — the files on disk numbered past the last ACCEPTED
-// Phase 4 migration. The acceptance commit fills `S4_ACCEPTED` and
-// `PHASE4_S4_PREFIX` together, deletes this fenced block, and
-// `closureRuleProblems` then refuses a tree in which a marker survived, so the
-// transition cannot be left half done.
-
 /**
  * P4-S4's accepted migrations and their digests. EMPTY while the slice is a
  * candidate: only Tech Lead acceptance freezes a migration, and a gate that
@@ -180,6 +173,38 @@ export function candidateMigrations(root: string): string[] {
   const head = phase4PrefixEnd() ?? '';
   return phase4MigrationsOnDisk(dir).filter((f) => f > head);
 }
+
+/**
+ * THIS SLICE'S migrations, in whichever tense the slice is in — the ONE place
+ * the tense decides a subject. While P4-S4 is a candidate `S4_ACCEPTED` is
+ * empty and the subject is the files past the accepted head; the acceptance
+ * commit fills `S4_ACCEPTED`, the accepted head MOVES to this slice's own last
+ * migration, and the subject becomes exactly those accepted files rather than
+ * the NEXT slice's. Both of this file's relation-level laws read it, so
+ * forward evolution cannot make one of them judge an empty set while the other
+ * judges the slice. `[[daftar-a-closure-rule-is-not-an-invariant]]`.
+ */
+export function sliceMigrations(root: string): string[] {
+  const accepted = Object.keys(S4_ACCEPTED).sort();
+  return accepted.length > 0 ? accepted : candidateMigrations(root);
+}
+
+// ───── CANDIDATE-TENSE (P4-AL-61) ─────────────────────────────────────────
+// P4-S4 is a CANDIDATE. `S4_ACCEPTED` is empty, this gate pins no digest and
+// names no migration, and the slice's own migration is reached only through
+// `candidateMigrations` — the files on disk numbered past the last ACCEPTED
+// Phase 4 migration. The acceptance commit fills `S4_ACCEPTED` and
+// `PHASE4_S4_PREFIX` together, deletes EVERY fenced block — this one and the
+// one around this check's registration in `CHECKS` — and
+// `closureRuleProblems` then refuses a tree in which a marker survived, so the
+// transition cannot be left half done.
+//
+// What is fenced is only what the accepted tense has no use for: this prose,
+// `candidateTenseProblems` and `candidateReport`. `S4_ACCEPTED`,
+// `candidateMigrations` and `sliceMigrations` are PERMANENT machinery that the
+// accepted tense still reads, and they sit above the fence for that reason: a
+// fence that swallowed them would make the acceptance commit delete the very
+// literal it had just filled, and the tree would not compile.
 
 /**
  * The candidate tense, asserted rather than assumed: nothing of P4-S4 is
@@ -888,9 +913,11 @@ export function newRelationCoverageProblems(root: string): string[] {
   //
   // So the tense decides the subject, and the tense is a fact about this file:
   // `S4_ACCEPTED` is empty while the slice is a candidate and holds its
-  // migrations afterwards.
-  const accepted = Object.keys(S4_ACCEPTED).sort();
-  const files = accepted.length > 0 ? accepted : candidateMigrations(root);
+  // migrations afterwards. `sliceMigrations` is that one decision, and the
+  // report below reads the same function — a report that said "none declared"
+  // on a PASS, because it had kept reading the candidate head, would be a
+  // false negative printed next to a green verdict.
+  const files = sliceMigrations(root);
   const surface = files.map((f) => read(root, `${MIGRATIONS_SUBDIR}/${f}`)).join('\n');
 
   // ── NON-VACUITY, ASSERTED BEFORE ANY PROPERTY IS ─────────────────────
@@ -935,11 +962,11 @@ export function newRelationCoverageProblems(root: string): string[] {
 /** Which relations of the contract are on disk yet, and which laws therefore had a subject. */
 export function newRelationReport(root: string): string {
   const declared = new Set<string>();
-  for (const file of candidateMigrations(root)) for (const r of discoverSalesTables(read(root, `${MIGRATIONS_SUBDIR}/${file}`))) declared.add(r);
+  for (const file of sliceMigrations(root)) for (const r of discoverSalesTables(read(root, `${MIGRATIONS_SUBDIR}/${file}`))) declared.add(r);
   const found = CONTRACT_RELATIONS.filter((r) => declared.has(r));
   const missing = CONTRACT_RELATIONS.filter((r) => !declared.has(r));
-  return `${CONTRACT_RELATIONS.length} contract relation(s), all ${CONTRACT_RELATIONS.filter(isPhase4Relation).length} admitted by isPhase4Relation(); ${found.length} declared by a candidate migration (${found.join(', ') || 'none'})${
-    missing.length === 0 ? '' : `; NOT YET ON DISK and therefore not yet judged by the text-level laws: ${missing.join(', ')}`
+  return `${CONTRACT_RELATIONS.length} contract relation(s), all ${CONTRACT_RELATIONS.filter(isPhase4Relation).length} admitted by isPhase4Relation(); ${found.length} declared by this slice's migrations (${found.join(', ') || 'none'})${
+    missing.length === 0 ? '' : `; NOT declared by this slice's migrations and therefore not judged by the text-level laws: ${missing.join(', ')}`
   }`;
 }
 
@@ -2173,6 +2200,145 @@ export function rosterRedProofReport(root: string): string {
     .join('; ')}; ${announcing} plant-announcing describe( block(s), each required to execute a refusal`;
 }
 
+// ───── THE ACCEPTANCE TRANSITION ITSELF ───────────────────────────────────
+
+/**
+ * The permanent machinery: the names the ACCEPTED tense still reads, and which
+ * therefore may not be declared inside a fenced region. `S4_ACCEPTED` is the
+ * sharpest case — acceptance FILLS it and then deletes the fences, so a fence
+ * that contained it would delete the literal that had just been filled.
+ */
+export const PERMANENT_TENSE_NAMES = ['S4_ACCEPTED', 'candidateMigrations', 'sliceMigrations'] as const;
+
+/** One fenced region of this file's text, as the markers delimit it. */
+interface Fence {
+  readonly start: number;
+  readonly end: number;
+}
+
+/** Every `CANDIDATE-TENSE (P4-AL-61)` fenced region of a text, paired opening to closing. */
+export function tenseFences(text: string): { readonly fences: readonly Fence[]; readonly problems: readonly string[] } {
+  const opens = [...text.matchAll(/^[ \t]*\/\/ ─+ CANDIDATE-TENSE \(P4-AL-61\)[^\n]*\n/gm)];
+  const closes = [...text.matchAll(/^[ \t]*\/\/ ─+ end CANDIDATE-TENSE \(P4-AL-61\)[^\n]*\n/gm)];
+  if (opens.length !== closes.length)
+    return {
+      fences: [],
+      problems: [
+        `${SELF}: the candidate-tense fences are not paired — ${opens.length} opening marker(s) and ${closes.length} closing, so the acceptance commit cannot know what to delete`,
+      ],
+    };
+  const fences: Fence[] = [];
+  const problems: string[] = [];
+  for (let k = 0; k < opens.length; k += 1) {
+    const o = opens[k];
+    const c = closes[k];
+    if (o?.index === undefined || c?.index === undefined) continue;
+    if (c.index < o.index) {
+      problems.push(`${SELF}: a candidate-tense fence closes at offset ${c.index} before it opens at ${o.index}`);
+      continue;
+    }
+    fences.push({ start: o.index, end: c.index + c[0].length });
+  }
+  return { fences, problems };
+}
+
+/**
+ * THE ACCEPTANCE COMMIT MUST LEAVE A TREE THAT COMPILES.
+ *
+ * `selfClosureProblems` already requires the candidate-tense material to be
+ * FENCED, so acceptance can find what to delete. That is only half the
+ * property: a fence is safe to delete only if nothing OUTSIDE it reads a name
+ * declared INSIDE it. Nothing asserted that, and nothing was going to notice,
+ * because every check in this file runs in the candidate tense where the fence
+ * is still there. The defect was real and was found by rehearsing the
+ * transition on a scratch tree: `S4_ACCEPTED` itself, `candidateMigrations`
+ * and the `CHECKS` entry registering the two candidate-only functions were all
+ * on the wrong side of the one fence, and the sealed tree did not compile —
+ * fifteen TypeScript errors, in the one commit that is required to be green.
+ *
+ * So this law reads the transition rather than the tense: it DELETES every
+ * fenced region from the text in memory, and then asks whether the remainder
+ * still names anything the deletion removed. It is universally quantified over
+ * whatever fences the file holds and whatever they declare; nothing is listed
+ * but `PERMANENT_TENSE_NAMES`, which is the comparison's left-hand side and
+ * not the subject of a law.
+ *
+ * In the ACCEPTED tense there is no fence, the question is vacuous by
+ * construction and `selfClosureProblems` owns the "no marker survived"
+ * assertion. Saying so is the one correct verdict then — the forward-evolution
+ * trap this very slice closed in `newRelationCoverageProblems`.
+ */
+export function fenceDeletionProblems(root: string): string[] {
+  return fenceDeletionProblemsIn(read(root, SELF), S4_ACCEPTED);
+}
+
+/**
+ * The law itself, over a TEXT and a TENSE, so a fixture can plant each defect
+ * and require it to be named. A law whose only entry point reads the real tree
+ * can be proved green and never proved capable of red — which is exactly how
+ * the defect this law exists for survived.
+ */
+export function fenceDeletionProblemsIn(text: string, accepted: Readonly<Record<string, string>>): string[] {
+  const { fences, problems } = tenseFences(text);
+  const out = [...problems];
+  const candidate = Object.keys(accepted).length === 0;
+  if (fences.length === 0) {
+    // Vacuous in the accepted tense, and a finding in the candidate one.
+    if (candidate && out.length === 0)
+      out.push(
+        `${SELF}: P4-S4 is a candidate and this file holds no candidate-tense fenced region at all — there is then nothing for the acceptance commit to delete`,
+      );
+    return out;
+  }
+  // The names each fenced region declares, discovered from its own text.
+  const declared = new Map<string, number>();
+  for (const [k, f] of fences.entries())
+    for (const m of text.slice(f.start, f.end).matchAll(/^\s*export (?:async function|function|const|class|type|interface) (\w+)/gm))
+      if (m[1] !== undefined) declared.set(m[1], k);
+  // The remainder, with every fenced region blanked so offsets and line
+  // numbers still line up, and with comments and literals masked so a name
+  // inside explanatory prose is not read as a reference to it.
+  const chars = maskLiterals(text).split('');
+  for (const f of fences) for (let i = f.start; i < f.end; i += 1) if (chars[i] !== '\n') chars[i] = ' ';
+  const remainder = chars.join('');
+  for (const [name, k] of [...declared.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
+    const hit = new RegExp(String.raw`\b${name}\b`).exec(remainder);
+    if (hit === null) continue;
+    const line = remainder.slice(0, hit.index).split('\n').length;
+    out.push(
+      `${SELF}:${line}: ${name} is declared inside candidate-tense fenced region ${k + 1} and read outside it — the acceptance commit deletes that region, so the sealed tree would not compile. Move ${name} above the fence if the accepted tense still reads it, or move its reader inside the fence with it`,
+    );
+  }
+  for (const name of PERMANENT_TENSE_NAMES) {
+    const where = declared.get(name);
+    if (where !== undefined)
+      out.push(
+        `${SELF}: ${name} is declared inside candidate-tense fenced region ${where + 1} — it is permanent machinery the ACCEPTED tense reads, and acceptance fills ${name === 'S4_ACCEPTED' ? 'it and then deletes that region, which would delete the literal it had just filled' : 'the tense it serves'}`,
+      );
+    else if (!new RegExp(String.raw`export (?:function|const) ${name}\b`).test(text))
+      out.push(`${SELF}: ${name} is not declared at all, so this law cannot tell which side of the fence it is on`);
+  }
+  // NON-VACUITY: a fenced region that declares nothing would make the
+  // reference sweep above pass over an empty set of names.
+  if (declared.size === 0)
+    out.push(
+      `${SELF}: ${fences.length} candidate-tense fenced region(s) declare no exported name between them, so the reference sweep judged nothing and its silence is not evidence`,
+    );
+  return out;
+}
+
+/** What the transition law looked at, printed on a PASS as well as on a FAIL. */
+export function fenceDeletionReport(root: string): string {
+  const text = read(root, SELF);
+  const { fences } = tenseFences(text);
+  if (fences.length === 0) return 'no candidate-tense fenced region: the accepted tense has none, and selfClosureProblems owns that assertion';
+  const names: string[] = [];
+  for (const f of fences)
+    for (const m of text.slice(f.start, f.end).matchAll(/^\s*export (?:async function|function|const|class|type|interface) (\w+)/gm))
+      if (m[1] !== undefined) names.push(m[1]);
+  return `${fences.length} fenced region(s) declaring ${names.length} exported name(s) (${names.join(', ') || 'none'}), none of them read outside the fences; ${PERMANENT_TENSE_NAMES.length} permanent name(s) all declared outside`;
+}
+
 // ───── EXECUTION ──────────────────────────────────────────────────────────
 
 /** One execution per root per process: the check reads the verdict, the report line reads the numbers. */
@@ -2714,12 +2880,24 @@ export const CHECKS: readonly Check[] = [
     ok: 'P4-S1, P4-S2 and P4-S3 all hold their accepted digests, each accepted file still hashes to its accepted digest in the manifest and in the permanent prefix module, and frozenThrough has reached every slice head',
   },
   {
+    id: 'acceptance-transition',
+    title: 'the acceptance commit leaves a tree that compiles (P4-AL-61)',
+    run: fenceDeletionProblems,
+    note: fenceDeletionReport,
+    ok: 'every candidate-tense fenced region is paired, nothing outside a fence reads a name declared inside one, and S4_ACCEPTED, candidateMigrations and sliceMigrations are all declared outside every fence',
+  },
+  // ───── CANDIDATE-TENSE (P4-AL-61) — the registration ──────────────────
+  // Fenced with the block it registers: a check whose two functions the
+  // acceptance commit deletes cannot keep its entry here, and an entry left
+  // behind would not compile.
+  {
     id: 'candidate-tense',
     title: 'P4-S4 in the CANDIDATE tense (P4-AL-61)',
     run: candidateTenseProblems,
     note: candidateReport,
     ok: 'nothing of P4-S4 is digest-pinned by this gate or by the permanent prefix module, and the manifest freezes no candidate',
   },
+  // ───── end CANDIDATE-TENSE (P4-AL-61) — the registration ──────────────
   {
     id: 'new-relation-coverage',
     title: "the RLS/FORCE discovery law and G-3's vocabulary over the relations this slice adds",

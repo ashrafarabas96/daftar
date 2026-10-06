@@ -68,10 +68,16 @@ import {
 import { discoverSalesTables, isPhase4Relation } from '../../scripts/guards/no-authoritative-balance';
 import {
   CONTRACT_RELATIONS,
+  PERMANENT_TENSE_NAMES,
+  SELF,
   candidateMigrations,
   createTableBody,
+  fenceDeletionProblems,
+  fenceDeletionProblemsIn,
   newRelationCoverageProblems,
   relationRlsTextProblems,
+  sliceMigrations,
+  tenseFences,
   vocabularyProblems,
 } from '../../scripts/phase4-s4-gate';
 
@@ -464,5 +470,117 @@ describe('F12 — the coverage check reports ABSENCE as a finding, never as `ok`
 
   it('CONTRACT_RELATIONS is the derived subject and is non-empty — an empty contract would make the predicate law vacuous too', () => {
     expect(CONTRACT_RELATIONS.length).toBeGreaterThan(0);
+  });
+});
+
+/**
+ * THE ACCEPTANCE TRANSITION — the one tense no check in the gate ever runs in.
+ *
+ * Every check in `scripts/phase4-s4-gate.ts` executes while P4-S4 is a
+ * CANDIDATE. The acceptance commit changes the tense, and the shape of the
+ * file that makes that commit COMPILE was asserted by nothing: rehearsing the
+ * seal on a scratch worktree produced fifteen TypeScript errors, because
+ * `S4_ACCEPTED`, `candidateMigrations` and the `CHECKS` entry registering the
+ * two candidate-only functions were all on the deleted side of the fence.
+ * `fenceDeletionProblems` performs the deletion in memory and asks whether the
+ * remainder still names what went; these cases plant each shape it must name.
+ */
+describe('P4-S4 — the acceptance commit leaves a tree that compiles (planted-defect proofs)', () => {
+  const GATE = readFileSync(join(REPO, SELF), 'utf8');
+
+  it('the shipped tree passes, and the law was watching something — two paired fences declaring names', () => {
+    expect(fenceDeletionProblems(REPO)).toEqual([]);
+    const { fences, problems } = tenseFences(GATE);
+    expect(problems).toEqual([]);
+    expect(fences.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('the permanent machinery is declared OUTSIDE every fence, which is what makes the deletion safe', () => {
+    const { fences } = tenseFences(GATE);
+    for (const name of PERMANENT_TENSE_NAMES) {
+      const at = new RegExp(String.raw`export (?:function|const) ${name}\b`).exec(GATE);
+      expect(at, `${name} must be declared somewhere`).not.toBeNull();
+      const i = at?.index ?? -1;
+      for (const f of fences) expect(i >= f.start && i < f.end, `${name} is inside a fenced region`).toBe(false);
+    }
+  });
+
+  it('PLANTED: S4_ACCEPTED moved inside the fence is named twice — as read-outside and as permanent machinery', () => {
+    const line = 'export const S4_ACCEPTED: Readonly<Record<string, string>> = {};\n';
+    expect(GATE.split(line).length - 1, 'the declaration must appear exactly once').toBe(1);
+    const open = /^[ \t]*\/\/ ─+ CANDIDATE-TENSE \(P4-AL-61\)[^\n]*\n/m.exec(GATE);
+    expect(open).not.toBeNull();
+    const removed = GATE.replace(line, '');
+    const openEnd = removed.indexOf(open?.[0] ?? '') + (open?.[0].length ?? 0);
+    const planted = removed.slice(0, openEnd) + line + removed.slice(openEnd);
+    expect(planted).not.toBe(GATE);
+    const inside = tenseFences(planted).fences.some((f) => {
+      const at = planted.indexOf(line);
+      return at >= f.start && at < f.end;
+    });
+    expect(inside, 'the plant must actually land inside a fenced region').toBe(true);
+    const problems = fenceDeletionProblemsIn(planted, {}).join('\n');
+    expect(problems).toMatch(/S4_ACCEPTED is declared inside candidate-tense fenced region 1 and read outside it/);
+    expect(problems).toMatch(/would delete the literal it had just filled/);
+  });
+
+  it('PLANTED: a fenced function read from outside is named with the line that reads it', () => {
+    const renamed = GATE.replace(
+      'export function candidateReport(root: string): string {',
+      'export function candidateReportFenced(root: string): string {',
+    ).replace('note: candidateReport,', 'note: candidateReportFenced,');
+    expect(renamed).not.toBe(GATE);
+    // A reference appended after everything is unambiguously outside every
+    // fence, which is the defect's shape: a reader the deletion leaves behind.
+    const planted = `${renamed}\nexport const theReaderLeftBehind = candidateReportFenced;\n`;
+    const problems = fenceDeletionProblemsIn(planted, {}).join('\n');
+    expect(problems).toMatch(/candidateReportFenced is declared inside candidate-tense fenced region 1 and read outside it/);
+    // and the line it names is the reader's line, not the declaration's.
+    const at = Number(/phase4-s4-gate\.ts:(\d+): candidateReportFenced/.exec(problems)?.[1] ?? '0');
+    expect(planted.split('\n')[at - 1]).toContain('theReaderLeftBehind');
+  });
+
+  it('PLANTED: an unpaired fence is refused rather than silently halving the subject', () => {
+    const planted = GATE.replace('// ───── end CANDIDATE-TENSE (P4-AL-61) ─────────────────────────────────────\n', '');
+    expect(planted).not.toBe(GATE);
+    expect(fenceDeletionProblemsIn(planted, {}).join('\n')).toMatch(/fences are not paired — 2 opening marker\(s\) and 1 closing/);
+  });
+
+  it('PLANTED: a candidate tree with NO fence at all is refused — there would be nothing to delete', () => {
+    const planted = GATE.replace(/^[ \t]*\/\/ ─+ (?:end )?CANDIDATE-TENSE \(P4-AL-61\)[^\n]*\n/gm, '');
+    expect(planted).not.toBe(GATE);
+    expect(fenceDeletionProblemsIn(planted, {}).join('\n')).toMatch(/holds no candidate-tense fenced region at all/);
+  });
+
+  it('a fenced region that declares nothing is refused as a sweep over an empty set', () => {
+    const empty =
+      [
+        '// ───── CANDIDATE-TENSE (P4-AL-61) ─────',
+        '// prose only',
+        '// ───── end CANDIDATE-TENSE (P4-AL-61) ─────',
+        'export const S4_ACCEPTED = {};',
+        'export function candidateMigrations() {}',
+        'export function sliceMigrations() {}',
+      ].join('\n') + '\n';
+    expect(fenceDeletionProblemsIn(empty, {}).join('\n')).toMatch(/declare no exported name between them/);
+  });
+
+  it('in the ACCEPTED tense the absence of a fence is the correct verdict, not a finding — the forward-evolution trap', () => {
+    const sealed = GATE.replace(/^[ \t]*\/\/ ─+ CANDIDATE-TENSE \(P4-AL-61\)[\s\S]*?^[ \t]*\/\/ ─+ end CANDIDATE-TENSE \(P4-AL-61\)[^\n]*\n/gm, '');
+    expect(sealed).not.toBe(GATE);
+    expect(tenseFences(sealed).fences).toEqual([]);
+    expect(fenceDeletionProblemsIn(sealed, { '0086_x.sql': 'deadbeef' })).toEqual([]);
+    // and the same text in the CANDIDATE tense is a finding, so the tense is
+    // doing the work and not the text alone.
+    expect(fenceDeletionProblemsIn(sealed, {}).join('\n')).toMatch(/holds no candidate-tense fenced region at all/);
+  });
+
+  it('sliceMigrations is the ONE place the tense picks a subject, and both relation laws read it', () => {
+    expect(typeof sliceMigrations).toBe('function');
+    expect(sliceMigrations(REPO)).toEqual(candidateMigrations(REPO));
+    const body = GATE.slice(GATE.indexOf('export function newRelationCoverageProblems'));
+    expect(body.slice(0, body.indexOf('\n}\n'))).toContain('sliceMigrations(root)');
+    const report = GATE.slice(GATE.indexOf('export function newRelationReport'));
+    expect(report.slice(0, report.indexOf('\n}\n'))).toContain('sliceMigrations(root)');
   });
 });
