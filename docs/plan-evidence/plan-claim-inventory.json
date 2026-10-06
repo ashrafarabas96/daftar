@@ -88,10 +88,10 @@
     "note": "Derived from git ls-files. No file is excluded by name — an exclusion list is how a claim hides."
   },
   "totals": {
-    "hits": 299,
+    "hits": 300,
     "planGates": 65,
     "assertions": 22,
-    "files": 45
+    "files": 46
   },
   "byPhase": {
     "cross-phase": {
@@ -107,7 +107,7 @@
     "phase-4": {
       "planGates": 9,
       "assertions": 5,
-      "mentions": 64
+      "mentions": 65
     },
     "phase-3": {
       "planGates": 6,
@@ -216,6 +216,12 @@
       "planGates": 0,
       "assertions": 0,
       "mentions": 3,
+      "phase": "phase-4"
+    },
+    "infrastructure/database/migrations/0086_phase4_rls_quals_once_per_query.sql": {
+      "planGates": 0,
+      "assertions": 0,
+      "mentions": 1,
       "phase": "phase-4"
     },
     "scripts/bootstrap-platform-owner.ts": {
@@ -995,6 +1001,14 @@
       "signals": ["seq-scan"],
       "kind": "mention",
       "text": "--           ->  Hash  ->  Seq Scan on invoices i  (actual rows=2003,"
+    },
+    {
+      "file": "infrastructure/database/migrations/0086_phase4_rls_quals_once_per_query.sql",
+      "line": 8,
+      "phase": "phase-4",
+      "signals": ["explain", "explain-analyze"],
+      "kind": "mention",
+      "text": "-- Decomposed with EXPLAIN (ANALYZE, BUFFERS, VERBOSE) on PostgreSQL 16.13 as"
     },
     {
       "file": "scripts/bootstrap-platform-owner.ts",
