@@ -676,6 +676,48 @@ describe('P4-S4 the structural pin — what holds these two laws up', () => {
     expect(walkin.customerId, 'and a real walk-in invoice of this world still carries a NULL customer').toBeNull();
   });
 
+  it('and the OTHER half of that sentence is a catalogue fact too: every reducer column the pin names is NOT NULL', async () => {
+    requireSubject(missing, CLAIM);
+    // THE FACT THE WHOLE PIN RESTS ON, AND THE ONE THIS FILE WAS ONLY
+    // ASSERTING IN PROSE. A composite foreign key is MATCH SIMPLE: if ANY
+    // referencing column is NULL, PostgreSQL does not check the constraint at
+    // all and the row is admitted. So a later slice that made
+    // `payment_allocations.customer_id` nullable would not drop a constraint,
+    // would not rename one, and would leave every planted red proof in this
+    // file still passing — because those proofs insert a non-null WRONG
+    // customer, which stays refused. What it would open is the row nobody
+    // writes a proof for: `customer_id => NULL` against ANY invoice, a
+    // walk-in invoice included, satisfying the edge vacuously and carrying
+    // settlement money that belongs to no customer.
+    //
+    // The sentence one `it` above says "the reducer side is NOT NULL, which is
+    // what makes a non-null triple unable to match a NULL-customer parent".
+    // That is the premise of the walk-in law, and a premise asserted only
+    // inside an error message is a premise nothing checks.
+    const r = await ownerPool().query<{ relation: string; attname: string }>(
+      `SELECT cl.relname AS relation, a.attname
+         FROM pg_attribute a
+         JOIN pg_class cl ON cl.oid = a.attrelid
+         JOIN pg_namespace n ON n.oid = cl.relnamespace
+        WHERE n.nspname = 'public'
+          AND cl.relname = ANY ($1)
+          AND a.attname = ANY ($2)
+          AND NOT a.attisdropped
+          AND NOT a.attnotnull
+        ORDER BY 1, 2`,
+      [
+        ['payment_allocations', 'customer_credit_applications'],
+        ['business_id', 'invoice_id', 'customer_id'],
+      ],
+    );
+    expect(
+      r.rows,
+      'every column the three-column edge references must stay NOT NULL on BOTH reducers. A nullable one makes the foreign key pass ' +
+        'vacuously under MATCH SIMPLE, so the customer pin and the walk-in law would both be gone with no constraint dropped and nothing ' +
+        `else in this file failing. Nullable now: ${JSON.stringify(r.rows)}`,
+    ).toEqual([]);
+  });
+
   it('the two verifier arms are KEPT as defence in depth, not deleted because the edge subsumes them', async () => {
     requireSubject(missing, CLAIM);
     // `0082` adds no trigger and replaces no routine. The customer and walk-in

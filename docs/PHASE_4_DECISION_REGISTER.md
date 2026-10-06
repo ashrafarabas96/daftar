@@ -18,7 +18,7 @@
 
 | decision | status | ruling | code evidence |
 |---|---|---|---|
-| `OD-03` — country tax rules (purchase and, from Phase 4, sales) | **OPEN. The only genuinely open item in Phase 4.** No tax law is researched and no VAT rule inferred. Sales tax is structurally zero; a non-zero tax is refused | lock `:1646` | no tax code exists on the receivables surface at all (`receivables-errors.ts:23-24` states the absence as a law) |
+| `OD-03` — country tax rules. **Within Phase 4 this is the SALES TAX boundary**, and calling it "purchase tax" here is wrong | **OPEN. The only genuinely open item in Phase 4**, and it does not block Phase 4, because **structural zero is the current contract**. No tax law is researched and no VAT rate, inclusive/exclusive rule, threshold, exemption or legal invoice field is inferred or guessed. Sales tax is structurally zero; a non-zero tax is refused. It does **not** close inside Phase 4 | lock `:1646` | `invoices_tax_policy_absent_ck CHECK (tax_minor = 0)` (`0075:261`) is the structural zero; no tax code exists on the receivables surface at all (`receivables-errors.ts:23-24` states the absence as a law) |
 | `OD-P4-01` | **RULED — A** | lock `:1962` | — |
 | `OD-P4-02` / `OD-P4-03` — a customer credit limit, and an arbitrary price override | **RULED — A. There is NO customer credit limit in Phase 4 and NO arbitrary price override.** | lock `:1962` | measured: **zero** occurrences of `credit_limit` in `infrastructure/database/migrations/**` and zero of `price_override` as a column; the refusal vocabulary states the absence (`apps/api/src/modules/selling/selling-errors.ts:34-35`) |
 | `OD-P4-04` — mid-chain reversal of an allocation | **RULED — OPTION B AUTHORIZED**: append-only negative release at the chain head, telescoping proof first, **LIFO-only as the sole fallback**. Not a blocker for S4; it is P4-S6's | lock `:1962`, `:1695` | — |
@@ -32,13 +32,13 @@
 | `P4-AL-48` — the refusal half of the audit contract | **CONTRADICTION FOUND, AND RESOLVED WITHOUT WEAKENING THE LOCK.** See §2 | this register §2 | `apps/api/src/modules/audit/audit.service.ts`, `receivables-errors.ts` |
 | `F-3` — does P4-AL-48 need `intent_sha256` / permission / branch in the row's own metadata? | **ANSWERED: it depends on the outcome, and the answer is decided by the jti registry.** See §3 | this register §3 | `0054:88-94`, `0054:450-451`, `0081:2170-2174` |
 | `TL-P4-S5-R1` — the gate's reducer vocabulary versus `P4-AL-34` | **RULED. `P4-AL-34` is authoritative; the gate's future prediction was the defect.** A credit/return effect may reduce AR; **a refund must not reduce AR again.** Owner **`P4-S5`**. Machine enforcement **YES**. **It may not be reopened without new contradictory evidence.** The ruling text is §4 | this register §4 | `scripts/phase4-s1-gate.ts` `INVOICE_REDUCER_VOCABULARY` (no `refunds`) and `invoiceReducerProblems` (the `refund-not-a-reducer` check); red proofs `tests/guards/phase4-refund-not-a-reducer-guard.test.ts`, `tests/guards/phase4-deferred-seam-guard.test.ts` |
-| Whether `invoices` gains `UNIQUE (business_id, id, customer_id)` (Departure A) | **OPEN — a widening of an accepted relation's key surface, which is a Tech Lead decision** | lock `:2298` | `0081:357`, `0081:493` are the two-column edges actually built |
+| `TL-P4-S4-R4` — the structural customer / invoice pin, i.e. whether `invoices` gains `UNIQUE (business_id, id, customer_id)` (Departure A) | **IMPLEMENTED AND VERIFIED.** `0082` adds the structural customer/invoice pin using **additive** three-column foreign keys **beside** the existing narrow foreign keys; `invoice_settlement_verify` remains as defence-in-depth. The narrow edges are **not** dropped, renamed or replaced: P2-S8's composite-FK-seam rule forbids a later migration from dropping an accepted seam, so `compositeFkProblems` stays green. **Not open. It may not be reported as open in any document, report or gate message.** | lock `:2298`; TL-P4-S4-R4 | `0082:151` `invoices_customer_uq UNIQUE (business_id, id, customer_id)`; `0082:217` `payment_allocations_invoice_customer_fk` and `0082:225` `customer_credit_applications_invoice_customer_fk`, both `(business_id, invoice_id, customer_id)` → `invoices (business_id, id, customer_id)` `ON DELETE RESTRICT`; the narrow edges `0081:357`, `0081:493` still standing beside them; the permanent **direct-SQL** proof `tests/integration/p4s4-customer-identity-pin.test.ts` |
 | An internal/domain writer enforcing its own authority at the **application** layer | **NEW LAW — belongs to a later slice. Card in §5** | this register §5 | `audit.service.ts`, `apps/api/src/infra/database.ts:170`, `:985-992` |
 | "delivery" / "log" / "adjustment" as Phase 4 vocabulary | **AMBIGUOUS IN THE LOCK, measured against the tree. Card in §6** | this register §6 | `0020:6`, `0046:131`, `0061:541`, `0061:569`, `0063:357`, lock `:464`, `:1025` |
 
-### The four statuses that were being reported as open and are **RULED**
+### The five statuses that were being reported as open and are **RULED**
 
-These four are **RULED** and must not be reported as open anywhere, in any document, report or gate message:
+These five are **RULED** and must not be reported as open anywhere, in any document, report or gate message:
 
 1. **the cash-settled named-customer invoice semantic** — derived `paid = total`, `outstanding = 0`,
    `settlement_state = 'paid'`; `invoices.status` is lifecycle-only and is never written `'paid'`;
@@ -46,7 +46,13 @@ These four are **RULED** and must not be reported as open anywhere, in any docum
    is never edited;
 3. **the general Phase-4 RLS `ENABLE`/`FORCE` discovery law** — `TL-P4-S1-R2`, **discharged in P4-S2**;
 4. **the twelve-commit history rewrite** — `TL-P4-S2-R6`, **REFUSED AND CLOSED**. Never reopened, never
-   proposed.
+   proposed;
+5. **the structural customer / invoice pin (Departure A)** — `TL-P4-S4-R4`, **IMPLEMENTED AND VERIFIED** by
+   `0082`, additively, with the narrow edges kept and `invoice_settlement_verify` kept. A later pass that
+   reads the lock's deferral text, or an older report, and concludes the pin "needs building" is reading
+   stale prose: **inspect the live tree first, verify the invariant, and do not duplicate it.** A `0087`
+   drafted for this purpose was deleted unpushed for exactly that reason, and would additionally have
+   broken P2-S8's seam rule by dropping `0081`'s narrow edges.
 
 `docs/PHASE_4_S3_ACCEPTANCE.md:103-111` carried (1) as an open item and (2) under the words "Still open".
 Both are corrected there by a dated forward note rather than by a rewrite of a sealed page, because a seal
