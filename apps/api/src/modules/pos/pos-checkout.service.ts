@@ -43,7 +43,16 @@ import type { PosCheckoutRequest } from './pos-checkout.schemas';
  *      is `pos.session_not_owned` whether or not the sale is already stored;
  *      `status` and `not_found` stay AFTER the proof, so the owner's retry of
  *      her own checkout still replays once she has closed her till;
- *   1. **the replay proof, before any current state is read.** The
+ *   1. **the replay proof, before any current state is read — and, inside it,
+ *      THE ACTOR'S OWN AUTHORITY over the stored sale.** The route admits
+ *      `sales.create` alone, so a stored sale may be reported back only to an
+ *      actor who holds the SENSITIVE `sales.discount` when that sale carries a
+ *      granted discount, and who holds `pos.cart_remove_line` authority over
+ *      the STORED sale's warehouse. Neither is a field the digest could ever
+ *      carry, and the basket both would otherwise be judged against was
+ *      consumed by the original checkout — so both are judged over the stored
+ *      sale's own lines and the stored sale's own warehouse, before the branch
+ *      that answers on the digest alone. The
  *      `sales` row for the caller-supplied `saleId` is read, and the digest of
  *      THIS request — recomputed over the STORED sale's own lines, which is
  *      the only line set a replay can honestly be judged against — is compared
@@ -239,7 +248,7 @@ export class PosCheckoutService {
     // 1. THE REPLAY PROOF, BEFORE ANY *CURRENT* STATE IS CONSULTED. The read
     //    above produced one fact and the digest binds none of it, so the same
     //    request still digests identically for ever.
-    const replay = await this.provenReplay(m, tillSessionId, input);
+    const replay = await this.provenReplay(m, tillSessionId, input, btx);
     if (replay !== null) return replay;
 
     // 2. The rest of the five establishment facts, over the row read at step 0.
@@ -407,8 +416,18 @@ export class PosCheckoutService {
    * till session" is a fact the existing schema already carries. A `saleId`
    * that names a sale born anywhere else is a conflict here, so one till
    * cannot answer "success" for another till's sale.
+   *
+   * And `btx` is here for the same reason the method takes the membership at
+   * all: the two judgements of the ACTOR that the digest cannot carry are made
+   * HERE, over the stored sale, before any exit of this method. The long
+   * comment at the first of them is the ruling.
    */
-  private async provenReplay(m: MembershipContext, tillSessionId: string, input: PosCheckoutRequest): Promise<PosCheckoutDto | null> {
+  private async provenReplay(
+    m: MembershipContext,
+    tillSessionId: string,
+    input: PosCheckoutRequest,
+    btx: BusinessTransactionId,
+  ): Promise<PosCheckoutDto | null> {
     const rows = await this.db.scoped<{
       warehouse_id: string;
       commit_intent_sha256: string;
@@ -437,6 +456,57 @@ export class PosCheckoutService {
     if (header === undefined) return null;
     // The sale exists. From here every exit is an ANSWER or a CONFLICT, and
     // never a fresh commit: the document identity has been spent.
+    //
+    // ## THE ACTOR'S OWN AUTHORITY, BEFORE ANY OF THOSE EXITS
+    //
+    // The ordering above judges WHOSE TILL this is, and that is one argument
+    // the digest cannot carry. It is not the only one. The route admits
+    // `sales.create` and nothing more (`pos-permissions.ts:100`), while the
+    // checkout the cashier gave requires TWO further judgements of the actor
+    // that no payload states: the SENSITIVE `sales.discount` for a basket
+    // carrying a granted discount (`run()` step 3) and warehouse authority
+    // under `pos.cart_remove_line` (`run()` step 6). While both sat only in
+    // `run()` — that is, only AFTER this method had already answered — an
+    // actor holding neither, who delivered the already-committed `saleId`,
+    // was handed the whole `PosCheckoutDto`: the sale, its totals, the
+    // discount somebody else was authorized to grant and `cogsBaseMinor`. The
+    // identical basket under a fresh `saleId` is `pos.cart_discount_not_permitted`
+    // or `inventory.warehouse_out_of_scope`, which is the proof the keys are
+    // real and that the replay path was where they were lost. This is the
+    // ruling `sale-commit.service.ts:266-296` already carries, read onto the
+    // sibling route, and `supplier-payment.service.ts:413-415` is the
+    // estate's counter-pattern: "the stored answer is shown only to an actor
+    // with authority over every warehouse it touches".
+    //
+    // WHY HERE AND NOT BEFORE THE CALL. The current cart is gone — the
+    // original checkout tombstoned its snapshot in the same transaction that
+    // committed the sale — so there is no basket left to judge a discount
+    // against and no snapshot left to take a warehouse from. The only honest
+    // subject is the STORED sale's own lines and the STORED sale's own
+    // warehouse, and this method is where both are already in hand, because
+    // it recomputes the digest over exactly those lines. Judging it before the
+    // call would mean reading the sale twice, or reading the cart on a path
+    // whose whole law is that it touches no cart row.
+    //
+    // WHY BEFORE EVERY EXIT AND NOT MERELY BEFORE THE RETURN. The sentence
+    // below this one and the digest comparison are both answers made on the
+    // digest alone, so both are branches an unjudged actor must not reach:
+    // `pos.checkout_idempotency_conflict` is the stored sale's existence
+    // reported back. The keys are therefore judged while the only fact in
+    // hand is "a sale with this id exists in this business".
+    //
+    // Nothing of this enters the digest and nothing of it could: `0078`/`0079`
+    // re-derive the fingerprint from their own arguments, so a field for the
+    // actor would disagree with the migration on every sale and turn one
+    // cashier's lawful retry into a false `pos.checkout_idempotency_conflict`.
+    // Reading membership scope here is no breach of
+    // `[[daftar-registry-before-state]]` either — the digest below binds
+    // nothing it produces, so the same request still digests identically for
+    // ever.
+    if (rows.rows.some((r) => parseMinor(r.discount_txn_minor) > 0n) && !hasPermission(m.roles, 'sales.discount')) {
+      throw posRefusal('pos.cart_discount_not_permitted');
+    }
+    await this.authorization.authorize(m, 'pos.cart_remove_line', btx, [header.warehouse_id]);
     if (!rows.rows.every((r) => r.in_session)) throw posRefusal('pos.checkout_idempotency_conflict');
     const digest = saleCommitIntentSha256({
       tenantId: m.tenantId,
