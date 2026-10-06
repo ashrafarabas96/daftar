@@ -393,6 +393,21 @@ jobs:
           # PG_PORT=5432 makes the test harness reuse the `postgres` service
           # above instead of starting an embedded instance.
           PG_PORT: '5432'
+      # The P4-S4 measured suites, named HERE because the plan-evidence
+      # contract resolves reachability by reading this file: a suite that
+      # holds a plan-shape claim and is executed by no step of the required
+      # job is a claim nothing in CI ever checks, which is the exact shape of
+      # the P4-S3 defect. The budgets suite runs through its own npm script,
+      # the same command the slice is measured with locally, so CI and the
+      # local round are not approximations of one another.
+      - name: Receivables read budgets — P4-D and P4-F, measured
+        run: npm run perf:phase4:s4
+        env:
+          PG_PORT: '5432'
+      - name: Set-based AR answer equivalence — the 0083/0084 readers against the per-invoice original
+        run: npx vitest run tests/performance/receivables-ar-setbased-equivalence.test.ts
+        env:
+          PG_PORT: '5432'
       # TL-P4-S2-R3, continued for P4-S4 — the customer-settlement slice.
       # The chain is composed HERE, by this job: P4-S1, P4-S2, P4-S3, then
       # P4-S4, all VISIBLE and all REQUIRED, in that order. P4-S4 is a delta
