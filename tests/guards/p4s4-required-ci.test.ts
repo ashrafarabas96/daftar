@@ -39,7 +39,17 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { REQUIRED_JOB, S3_SCRIPT, S4_COMMAND, S4_SCRIPT, S4_STEP_NAME, WORKFLOW, readWorkflow, requiredCiProblems } from '../../scripts/phase4-s4-gate';
+import {
+  REQUIRED_JOB,
+  S3_SCRIPT,
+  S4_COMMAND,
+  S4_EVIDENCE_STEPS,
+  S4_SCRIPT,
+  S4_STEP_NAME,
+  WORKFLOW,
+  readWorkflow,
+  requiredCiProblems,
+} from '../../scripts/phase4-s4-gate';
 
 const REPO = join(__dirname, '..', '..');
 const WORKFLOW_TEXT = readFileSync(join(REPO, WORKFLOW), 'utf8');
@@ -217,5 +227,145 @@ describe('RP-CI-I — the trigger removed: planted red', () => {
       return [...lines.slice(0, i), ...lines.slice(end)];
     });
     expect(about(requiredCiProblems(mutated), 'does not trigger on pull_request')).not.toEqual([]);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// RP-CI-J .. RP-CI-N — THE SAME LAW OVER THE MEASURED EVIDENCE STEPS.
+//
+// The gate step was pinned by `requiredCiProblems` and the two steps that
+// MEASURE this slice were pinned by nothing at all: an exhaustive search of
+// the tree for `perf:phase4:s4` found the workflow line, the npm script and
+// three comments, and no law. That is the TL-P4-S2-R1 defect one level down —
+// the gate's own place was proved and the evidence feeding the verdict was
+// not. A budget nothing measured is indistinguishable from a budget that
+// passed, so each plant below is one way to stop the measurement happening
+// while every tick stays green.
+//
+// Each plant is applied to a mutated COPY of the workflow text, like every
+// proof above, and is required to have really changed it.
+
+describe('the measured evidence steps are pinned too, and the pin can go red', () => {
+  it('the law is silent over the checkout, about real steps ahead of the gate', () => {
+    expect(requiredCiProblems(WORKFLOW_TEXT)).toEqual([]);
+    const doc = readWorkflow(WORKFLOW_TEXT);
+    const steps = doc.steps.filter((s) => s.job === REQUIRED_JOB);
+    const gate = steps.filter((s) => (s.run ?? '').includes(S4_SCRIPT))[0];
+    expect(gate, 'the required job does not run the P4-S4 gate').toBeDefined();
+    expect(S4_EVIDENCE_STEPS.length, 'no evidence step is pinned, so this suite would prove nothing').toBeGreaterThan(1);
+    for (const ev of S4_EVIDENCE_STEPS) {
+      const found = steps.filter((s) => (s.run ?? '').includes(ev.script));
+      expect(found.length, `the required job does not run ${ev.label} exactly once`).toBe(1);
+      const step = found[0];
+      expect(step?.run?.trim()).toBe(ev.command);
+      expect(step?.name).toBe(ev.name);
+      expect(step?.continueOnError).toBe(false);
+      expect(step?.conditional).toBe(false);
+      // Relative to the gate, never a step number written down (P4-AL-88).
+      expect((step?.index ?? -1) < (gate?.index ?? -1), `${ev.label} does not come before the gate step`).toBe(true);
+    }
+  });
+});
+
+describe('RP-CI-J — a measured step removed: planted red', () => {
+  for (const ev of S4_EVIDENCE_STEPS)
+    it(`red: ${ev.label} deleted from the required job is named`, () => {
+      const mutated = workflowWith(`${ev.label} removed`, (lines) => {
+        const [start, end] = stepBlock(lines, ev.command);
+        return [...lines.slice(0, start), ...lines.slice(end)];
+      });
+      const problems = requiredCiProblems(mutated);
+      expect(about(problems, 'no step')).not.toEqual([]);
+      expect(problems.join('\n')).toContain('indistinguishable from a budget that passed');
+    });
+});
+
+describe('RP-CI-K — continue-on-error on a measured step: planted red', () => {
+  for (const ev of S4_EVIDENCE_STEPS)
+    it(`red: continue-on-error on ${ev.label} is named, so a missed budget could not leave the job green`, () => {
+      const mutated = workflowWith(`continue-on-error added to ${ev.label}`, (lines) => {
+        const [start] = stepBlock(lines, ev.command);
+        return [...lines.slice(0, start + 1), '        continue-on-error: true', ...lines.slice(start + 1)];
+      });
+      expect(about(requiredCiProblems(mutated), 'continue-on-error')).not.toEqual([]);
+    });
+});
+
+describe('RP-CI-L — a condition on a measured step: planted red', () => {
+  for (const ev of S4_EVIDENCE_STEPS)
+    it(`red: an if: on ${ev.label} is named, because a measurement an ordinary push can skip is no measurement`, () => {
+      const mutated = workflowWith(`an if: added to ${ev.label}`, (lines) => {
+        const [start] = stepBlock(lines, ev.command);
+        return [...lines.slice(0, start + 1), "        if: github.ref == 'refs/heads/main'", ...lines.slice(start + 1)];
+      });
+      expect(about(requiredCiProblems(mutated), 'conditional')).not.toEqual([]);
+    });
+
+  it('red: an `if: always()` is named too — a condition that reads as harmless is still a condition', () => {
+    const ev = S4_EVIDENCE_STEPS[0];
+    const mutated = workflowWith('an if: always() added to the measured budgets step', (lines) => {
+      const [start] = stepBlock(lines, ev?.command ?? '');
+      return [...lines.slice(0, start + 1), '        if: always()', ...lines.slice(start + 1)];
+    });
+    expect(about(requiredCiProblems(mutated), 'conditional')).not.toEqual([]);
+  });
+});
+
+describe('RP-CI-M — a measured command weakened or renamed: planted red', () => {
+  it('red: the budgets command given a filter is named, because a filtered run is not this measurement', () => {
+    const ev = S4_EVIDENCE_STEPS[0];
+    const mutated = workflowWith('the budgets command given a -t filter', (lines) =>
+      lines.map((l) => (l.trim() === `run: ${ev?.command}` ? `${l} -- -t "P4-D"` : l)),
+    );
+    expect(about(requiredCiProblems(mutated), 'not exactly')).not.toEqual([]);
+  });
+
+  it('red: a renamed measured step is named, because the required job’s log is where the evidence is read', () => {
+    const ev = S4_EVIDENCE_STEPS[0];
+    const mutated = workflowWith('the measured budgets step renamed', (lines) => {
+      const [start, end] = stepBlock(lines, ev?.command ?? '');
+      return lines.map((l, i) => (i >= start && i < end && /^ {6}- name: /.test(l) ? '      - name: Extra checks' : l));
+    });
+    expect(about(requiredCiProblems(mutated), 'is named `Extra checks`')).not.toEqual([]);
+  });
+
+  it('red: a comment naming the budgets command is still named — the law parses, it does not grep', () => {
+    const ev = S4_EVIDENCE_STEPS[0];
+    const mutated = workflowWith('the measured budgets step replaced by a comment naming its command', (lines) => {
+      const [start, end] = stepBlock(lines, ev?.command ?? '');
+      return [...lines.slice(0, start), `      # run: ${ev?.command}  (temporarily disabled)`, ...lines.slice(end)];
+    });
+    expect(mutated).toContain(ev?.command ?? ''); // the string IS there: a grep would pass
+    expect(about(requiredCiProblems(mutated), 'no step')).not.toEqual([]);
+  });
+});
+
+describe('RP-CI-N — a measured step moved after the gate, or out of the required job: planted red', () => {
+  it('red: the budgets step moved after the gate step is named — a failing step skips every step after it', () => {
+    const ev = S4_EVIDENCE_STEPS[0];
+    const mutated = workflowWith('the measured budgets step moved after the P4-S4 gate step', (lines) => {
+      const [start, end] = stepBlock(lines, ev?.command ?? '');
+      const block = lines.slice(start, end);
+      const without = [...lines.slice(0, start), ...lines.slice(end)];
+      const [, gateEnd] = stepBlock(without, S4_COMMAND);
+      return [...without.slice(0, gateEnd), ...block, ...without.slice(gateEnd)];
+    });
+    expect(about(requiredCiProblems(mutated), 'does not come before')).not.toEqual([]);
+  });
+
+  it('red: the budgets step moved into a job nobody requires is named', () => {
+    const ev = S4_EVIDENCE_STEPS[0];
+    const mutated = workflowWith('the measured budgets step moved into another job', (lines) => {
+      const [start, end] = stepBlock(lines, ev?.command ?? '');
+      const block = lines.slice(start, end);
+      const without = [...lines.slice(0, start), ...lines.slice(end)];
+      const jobsKey = without.findIndex((l) => /^jobs:/.test(l));
+      const steps = without.findIndex((l, i) => i > jobsKey && /^ {4}steps:/.test(l));
+      expect(steps, 'no job before the required one has a steps sequence to move the step into').toBeGreaterThan(-1);
+      return [...without.slice(0, steps + 1), ...block, ...without.slice(steps + 1)];
+    });
+    const problems = requiredCiProblems(mutated);
+    expect(problems, 'the law did not refuse a workflow whose measured step left the required job').not.toEqual([]);
+    expect(problems.join('\n')).toMatch(/not the required/);
   });
 });

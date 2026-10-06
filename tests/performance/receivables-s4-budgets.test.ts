@@ -1215,7 +1215,8 @@ describe(`P4-D — the customer receivable read (scale ${SCALE}, ${SCALE === 1 ?
    *
    * `customer_ar_outstanding` is `LANGUAGE sql STABLE`, which is the shape
    * PostgreSQL CAN inline — but its body carries `sum(...)`, `GROUP BY` and
-   * `HAVING` (`0075:776-790`), and `inline_set_returning_function` refuses a
+   * `HAVING` (`0083:365-378`, the LIVE body — `0075:776-790` is the superseded
+   * definition this comment used to cite), and `inline_set_returning_function` refuses a
    * body with aggregates or grouping. Measured: the plan of the statement this
    * module actually runs is `Sort → Function Scan`, with no `invoices` node in
    * it anywhere.

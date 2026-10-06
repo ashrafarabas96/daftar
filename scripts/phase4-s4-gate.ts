@@ -818,6 +818,37 @@ export const S4_STEP_NAME = 'Phase 4 slice gate — P4-S4';
 export const S3_SCRIPT = 'gate:phase4:s3';
 
 /**
+ * THE MEASURED EVIDENCE STEPS, pinned exactly as the gate step is.
+ *
+ * The gate step was pinned and these were not, and the hole is the same one
+ * TL-P4-S2-R1 ruled on one level up: a law that lives in a workflow step
+ * nothing parses is a law anybody can delete, condition or neuter without a
+ * single check going red. These two steps are where P4-D, P4-F and the AR
+ * answer-equivalence verdicts come from, so a workflow that silently stops
+ * running them is a workflow whose green tick carries no budget evidence at
+ * all — and a budget nothing measured is indistinguishable from a budget that
+ * passed.
+ *
+ * They must also run BEFORE the gate step, because a failing step skips every
+ * step after it: measured first, then the equivalence, then the gate, which is
+ * the order `ci.yml` already carries and the order the slice is measured in.
+ */
+export const S4_EVIDENCE_STEPS: readonly { readonly label: string; readonly script: string; readonly command: string; readonly name: string }[] = [
+  {
+    label: 'the P4-D/P4-F measured budgets',
+    script: 'perf:phase4:s4',
+    command: 'npm run perf:phase4:s4',
+    name: 'Receivables read budgets — P4-D and P4-F, measured',
+  },
+  {
+    label: 'the set-based AR answer equivalence',
+    script: 'tests/performance/receivables-ar-setbased-equivalence.test.ts',
+    command: 'npx vitest run tests/performance/receivables-ar-setbased-equivalence.test.ts',
+    name: 'Set-based AR answer equivalence — the 0083/0084 readers against the per-invoice original',
+  },
+];
+
+/**
  * The workflow, as nested mappings and sequences. A check that GREPS the
  * workflow for a line is a check about that line's text: it cannot see two
  * steps swapped, a step moved into another job, a step re-indented into some
@@ -1016,9 +1047,45 @@ export function requiredCiProblems(text: string): string[] {
         `the P4-S4 gate step (#${step.index + 1}) is named \`${String(step.name)}\`, not \`${S4_STEP_NAME}\` — a renamed gate step is one a reader of the required job's log cannot identify as this slice's`,
       );
   }
+  const mine = here[0];
+  // The measured evidence steps carry this slice's budget and equivalence
+  // verdicts, so each is pinned the same way the gate step above is: present
+  // exactly once in the required job, unconditional, unable to fail silently,
+  // exact command, exact name, and ahead of the gate.
+  for (const ev of S4_EVIDENCE_STEPS) {
+    const found = running(ev.script);
+    if (found.length === 0) {
+      problems.push(
+        `no step of ${WORKFLOW} runs ${ev.label} (${ev.script}) — a green workflow is not evidence for a measurement the workflow never took, and a budget nothing measured is indistinguishable from a budget that passed`,
+      );
+      continue;
+    }
+    for (const stray of found.filter((s) => s.job !== REQUIRED_JOB))
+      problems.push(`${ev.label} runs in the \`${stray.job}\` job, which is not the required \`${REQUIRED_JOB}\` job`);
+    const inJob = found.filter((s) => s.job === REQUIRED_JOB);
+    if (inJob.length === 0) {
+      problems.push(`${ev.label} is in ${WORKFLOW} but not in the required \`${REQUIRED_JOB}\` job, so it measures nothing the repository requires`);
+      continue;
+    }
+    if (inJob.length > 1)
+      problems.push(`the \`${REQUIRED_JOB}\` job runs ${ev.label} ${inJob.length} times — which of them the verdict rests on is undecidable`);
+    for (const step of inJob) {
+      if (step.continueOnError)
+        problems.push(`${ev.label} (step #${step.index + 1}) carries continue-on-error, so a missed budget leaves the required job green`);
+      if (step.conditional) problems.push(`${ev.label} (step #${step.index + 1}) is conditional, so an ordinary push or pull_request can skip the measurement`);
+      if ((step.run ?? '').trim() !== ev.command) problems.push(`${ev.label} runs \`${(step.run ?? '').trim()}\`, not exactly \`${ev.command}\``);
+      if (step.name !== ev.name)
+        problems.push(
+          `${ev.label} (step #${step.index + 1}) is named \`${String(step.name)}\`, not \`${ev.name}\` — a renamed measured step is one a reader of the required job's log cannot identify as this slice's evidence`,
+        );
+      if (mine !== undefined && step.index >= mine.index)
+        problems.push(
+          `${ev.label} (step #${step.index + 1}) does not come before the P4-S4 gate step (#${mine.index + 1}) — a failing step skips every step after it, so the measurement has to be taken first`,
+        );
+    }
+  }
   // Chain composition IS the order: the predecessor runs first, in the same job.
   const predecessor = running(S3_SCRIPT).filter((s) => s.job === REQUIRED_JOB)[0];
-  const mine = here[0];
   if (predecessor === undefined)
     problems.push(
       `no step of the required \`${REQUIRED_JOB}\` job runs ${S3_SCRIPT} — chain composition inside the one required job is what TL-P4-S2-R3 authorized in place of a delta gate re-executing its predecessor`,
