@@ -1218,15 +1218,27 @@ export function phase4RoutineBody(root: string, name: string): string | null {
  * from this regex alone would leave that door open, and renaming a refund
  * relation would walk straight through it.
  */
+// WIDENED because both vocabularies were measured BLIND to the names P4-S5 is
+// most likely to use, which is a FALSE GREEN and not a false red.
+// `INVOICE_REDUCER_VOCABULARY` is anchored, so `customer_credit_notes` — the
+// name consistent with S4's own `customer_credits`/`customer_credit_applications`
+// — matched nothing and the seam would have passed cleanly while
+// `invoice_outstanding` did not read the new reducer: every invoice settled by
+// a credit note reporting itself unpaid. And `_` is a word character, so
+// `\brefunds\b` never matched `customer_refunds` — the exact mirror of the
+// existing `supplier_refunds`, and a name the estate already writes down in
+// `tests/security/settlement-s6-no-customer-payments.test.ts:76` — which left
+// TL-P4-S5-R1's permanent negative proof vacuous against the likeliest name.
+// Both reproduced by running the regexes themselves.
 export const INVOICE_REDUCER_VOCABULARY =
-  /^(payment_allocations|allocation_reversals|payment_reversals|credit_note_applications|credit_notes|customer_credit_applications|invoice_write_offs)$/;
+  /^(payment_allocations|allocation_reversals|payment_reversals|credit_note_applications|credit_notes|customer_credit_notes|customer_credit_note_applications|customer_credit_applications|invoice_write_offs|sale_returns|sales_returns|customer_returns)$/;
 
 /**
  * The names a Phase-4 CASH REFUND relation will carry. A vocabulary, not a
  * list of what the tree has: `refunds` does not exist yet, and the whole point
  * of TL-P4-S5-R1 is that the law must already be standing on the day it does.
  */
-export const REFUND_VOCABULARY = /\b(refunds|refund_allocations|refund_applications|invoice_refunds|credit_note_refunds|customer_credit_refunds)\b/i;
+export const REFUND_VOCABULARY = /\b((?:customer_|sale_|sales_|invoice_|credit_note_|customer_credit_)?refunds|refund_allocations|refund_applications)\b/i;
 
 /**
  * The routines that READ the derived invoice/customer receivable. Discovered
@@ -1290,10 +1302,28 @@ export function invoiceReducerProblems(root: string): string[] {
   // P4-AL-88 refuses the shape). Discovery by dependency needs no list: it
   // grows to cover each new reader the moment its migration exists, and it is
   // strictly wider than the name match rather than a replacement for it.
-  const callsFamily = (body: string, self: string): boolean => family.some((r) => r !== self && new RegExp(`\\b${r}\\s*\\(`, 'i').test(body));
+  //
+  // DISCOVERY IS A CLOSURE, NOT ONE HOP. A routine that calls a routine that
+  // calls the family reads the receivable just as surely as one that calls the
+  // family directly, and a one-hop rule is a list of extra names with extra
+  // steps: it closes the hole for exactly as long as nobody puts a wrapper in
+  // between. So the dependent set is grown to a FIXPOINT — anything calling
+  // anything already in the set joins it — which is strictly wider than one
+  // hop and needs no list either.
+  const callsAny = (body: string, targets: readonly string[], self: string): boolean =>
+    targets.some((r) => r !== self && new RegExp(`\\b${r}\\s*\\(`, 'i').test(body));
+  // Each body is read ONCE. `phase4RoutineBody` goes to disk over the whole
+  // migration set, and the fixpoint below asks for a body on every pass, so
+  // reading per lookup turns a few dozen reads into a few thousand and the
+  // gate — a required CI step — into a minutes-long one.
+  const bodies = new Map<string, string | null>();
+  const bodyOf = (name: string): string | null => {
+    if (!bodies.has(name)) bodies.set(name, phase4RoutineBody(root, name));
+    return bodies.get(name) ?? null;
+  };
   const dependent: string[] = [];
   for (const name of defined) {
-    const body = phase4RoutineBody(root, name);
+    const body = bodyOf(name);
     // Measured zero unreadable bodies over all 48 Phase 4 routines, so a body
     // this device cannot read is an ANOMALY and not the ordinary case. It is
     // reported for the same reason the family loop below reports one: a
@@ -1311,11 +1341,27 @@ export function invoiceReducerProblems(root: string): string[] {
         );
       continue;
     }
-    if (!family.includes(name) && callsFamily(body, name)) dependent.push(name);
+    if (!family.includes(name) && callsAny(body, family, name)) dependent.push(name);
+  }
+  // The fixpoint. Each pass adds the routines that call something already
+  // discovered; it terminates because `defined` is finite and a routine joins
+  // at most once.
+  for (let grew = true; grew; ) {
+    grew = false;
+    const known = [...family, ...dependent];
+    for (const name of defined) {
+      if (family.includes(name) || dependent.includes(name)) continue;
+      const body = bodyOf(name);
+      if (body === null) continue;
+      if (callsAny(body, known, name)) {
+        dependent.push(name);
+        grew = true;
+      }
+    }
   }
   const readers = [...family, ...dependent].sort();
   for (const name of readers) {
-    const executable = phase4RoutineBody(root, name);
+    const executable = bodyOf(name);
     // A reader this law DISCOVERED in the very text whose body it then cannot
     // read is not a reader with nothing to say: it is the body-reading device
     // disagreeing with the discovery device, and skipping it is the same

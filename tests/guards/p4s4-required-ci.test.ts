@@ -36,23 +36,38 @@
  * P4-AL-88 defect. The non-vacuity assertions are FLOORS and positions
  * RELATIVE to the predecessor's step.
  */
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { MIGRATIONS_SUBDIR } from '../../scripts/guards/phase4-rls-force';
 import {
+  CI_COMPOSITION_SUITE,
   REQUIRED_JOB,
   S3_SCRIPT,
   S4_COMMAND,
   S4_EVIDENCE_STEPS,
+  S4_GOLDEN_DIR,
   S4_SCRIPT,
   S4_STEP_NAME,
   WORKFLOW,
+  candidateMigrations,
+  evidenceCoverageProblems,
   evidenceIntegrityProblems,
   evidenceScriptBodyProblems,
+  measuredCandidateSuites,
   readWorkflow,
+  requiredJobReach,
+  workflowNamedSuites,
+  rosterFiles,
+  rosterProblems,
+  rosterRatchetProblems,
+  describeBlocks,
+  rosterRedProofProblems,
   rosterRunnerProblems,
+  rosterSuiteKind,
   requiredCiProblems,
+  ROSTER_FLOOR,
 } from '../../scripts/phase4-s4-gate';
 
 const REPO = join(__dirname, '..', '..');
@@ -84,6 +99,8 @@ function stepBlock(lines: readonly string[], command: string): [number, number] 
 }
 
 const S3_COMMAND = `npm run ${S3_SCRIPT}`;
+/** The gate's own prose-stripping, mirrored here so a proof can assert its plant survived it. */
+const stripProseForProof = (source: string): string => source.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/(^|[^:'"`\\])\/\/[^\n]*/g, '$1');
 
 // ─────────────────────────────────────────────────────────────────────────
 
@@ -506,21 +523,186 @@ describe('P4-S4 — the measured steps are judged by what they EXECUTE', () => {
     expect(evidenceIntegrityProblems(rootWithTree(() => undefined))).toEqual([]);
   });
 
-  it('RP-EI-A: `describe.skip(` inside a measured suite is caught', () => {
+  // The plant must land on a block the RUNNER EXECUTES, not on prose. A plain
+  // `text.replace('describe(', 'describe.skip(')` replaced the FIRST occurrence
+  // in the file, and in `receivables-s4-budgets.test.ts` that is the literal
+  // `describe('P4-D …')` inside its own doc comment at line 98 — a thousand
+  // lines above the first executed block at 1120. The law fired on the comment
+  // and the proof proved nothing. So the plant is anchored at a LINE START and
+  // the canary below asserts the mutation really changed the executed shape.
+
+  /** The measured suite's text with its FIRST column-0 `describe(` turned into `marker`, and the plant verified to have moved executed code. */
+  function skipTheFirstExecutedBlock(text: string, suite: string, marker: string): string {
+    const lines = text.split('\n');
+    const at = lines.findIndex((l) => /^describe\s*\(/.test(l));
+    expect(at, `${suite} holds no top-level describe( at a line start, so this plant has nothing to mutate`).toBeGreaterThan(-1);
+    // THE CANARY: the line being mutated must be executed code, not prose. It
+    // is a line start, and it is not inside a block comment — which is checked
+    // by counting unterminated `/*` openers above it.
+    const above = lines.slice(0, at).join('\n');
+    const opens = (above.match(/\/\*/g) ?? []).length;
+    const closes = (above.match(/\*\//g) ?? []).length;
+    expect(opens, `${suite}: the line chosen for the plant sits inside an unterminated block comment, so the plant would mutate PROSE`).toBe(closes);
+    expect(lines[at]?.startsWith(' '), `${suite}: the chosen line is indented, so it is not a top-level block`).toBe(false);
+    const mutated = [...lines.slice(0, at), (lines[at] ?? '').replace(/^describe\s*\(/, marker), ...lines.slice(at + 1)].join('\n');
+    expect(mutated, `${suite}: the plant "${marker}" changed nothing, so the proof would prove nothing`).not.toBe(text);
+    // And the canary that distinguishes this from the vacuous version: the
+    // mutation must survive comment-stripping, which is what the law reads.
+    expect(
+      stripProseForProof(mutated),
+      `${suite}: the plant vanishes when comments are stripped, so it landed in PROSE and the law would be firing on a comment`,
+    ).not.toBe(stripProseForProof(text));
+    return mutated;
+  }
+
+  it('RP-EI-A: `describe.skip(` on an EXECUTED block of a measured suite is caught, and the plant is shown not to be prose', () => {
     for (const ev of S4_EVIDENCE_STEPS) {
       const found = evidenceIntegrityProblems(
         rootWithTree((dir) => {
           const text = readFileSync(join(dir, ev.suite), 'utf8');
-          const mutated = text.replace('describe(', 'describe.skip(');
-          expect(mutated, `${ev.suite} holds no describe( to skip`).not.toBe(text);
-          writeFileSync(join(dir, ev.suite), mutated, 'utf8');
+          writeFileSync(join(dir, ev.suite), skipTheFirstExecutedBlock(text, ev.suite, 'describe.skip('), 'utf8');
         }),
       );
       expect(
         found.some((m) => m.includes(ev.suite) && m.includes('indistinguishable')),
-        `a skipped block in ${ev.suite} left the law silent: ${found.join(' | ')}`,
+        `a skipped EXECUTED block in ${ev.suite} left the law silent: ${found.join(' | ')}`,
       ).toBe(true);
     }
+  });
+
+  it('RP-EI-A2: the same marker written in a COMMENT is NOT a finding — the law reads code, not prose', () => {
+    // The other half of the same correction. Before it, a doc comment that
+    // merely MENTIONED `describe.skip(` reddened an honest tree; and that is
+    // why the old RP-EI-A passed over a mutation to line 98.
+    for (const ev of S4_EVIDENCE_STEPS) {
+      const found = evidenceIntegrityProblems(
+        rootWithTree((dir) => {
+          const text = readFileSync(join(dir, ev.suite), 'utf8');
+          const prose = `/**\n * A comment that names describe.skip( and it.only( and nothing else.\n */\n${text}`;
+          expect(prose).not.toBe(text);
+          writeFileSync(join(dir, ev.suite), prose, 'utf8');
+        }),
+      );
+      expect(
+        found.some((m) => m.includes(ev.suite) && m.includes('indistinguishable')),
+        `a comment that only NAMES a skip marker was reported as a skipped block in ${ev.suite}: ${found.join(' | ')}`,
+      ).toBe(false);
+    }
+  });
+
+  it('RP-EI-A3: the four skip spellings that walked through the old regexes are each caught', () => {
+    // Each of these really skips the block and matched none of the three
+    // regexes this law used to carry: the subject is now the MEMBER ACCESS,
+    // however it is spelled and whatever is done with it afterwards.
+    const spellings: readonly (readonly [string, string])[] = [
+      ["describe['skip'](", 'a bracketed member access'],
+      ['describe.skipIf(true)(', 'a conditional skip whose `skip` is not followed by `(`'],
+      ['describe.runIf(false)(', 'a conditional run the old regexes never mentioned'],
+      ['describe.concurrent.skip(', 'a skip behind an intermediate modifier'],
+    ];
+    const ev = S4_EVIDENCE_STEPS[0];
+    if (ev === undefined) throw new Error('no evidence step, so this plant is vacuous');
+    for (const [marker, why] of spellings) {
+      const found = evidenceIntegrityProblems(
+        rootWithTree((dir) => {
+          const text = readFileSync(join(dir, ev.suite), 'utf8');
+          writeFileSync(join(dir, ev.suite), skipTheFirstExecutedBlock(text, ev.suite, marker), 'utf8');
+        }),
+      );
+      expect(
+        found.some((m) => m.includes(ev.suite) && m.includes('indistinguishable')),
+        `${marker} (${why}) left the law silent: ${found.join(' | ')}`,
+      ).toBe(true);
+    }
+  });
+
+  it('RP-EI-A4: a skip marker BOUND TO A NAME before it is called is caught — the call site is not the member access', () => {
+    const ev = S4_EVIDENCE_STEPS[0];
+    if (ev === undefined) throw new Error('no evidence step, so this plant is vacuous');
+    const found = evidenceIntegrityProblems(
+      rootWithTree((dir) => {
+        const text = readFileSync(join(dir, ev.suite), 'utf8');
+        const lines = text.split('\n');
+        const at = lines.findIndex((l) => /^describe\s*\(/.test(l));
+        expect(at, 'no top-level describe( to defer').toBeGreaterThan(-1);
+        const mutated = [
+          ...lines.slice(0, at),
+          'const deferred = describe.skip;',
+          (lines[at] ?? '').replace(/^describe\s*\(/, 'deferred('),
+          ...lines.slice(at + 1),
+        ].join('\n');
+        expect(mutated).not.toBe(text);
+        writeFileSync(join(dir, ev.suite), mutated, 'utf8');
+      }),
+    );
+    expect(
+      found.some((m) => m.includes(ev.suite) && m.includes('indistinguishable')),
+      `\`const deferred = describe.skip;\` then \`deferred(…)\` left the law silent: ${found.join(' | ')}`,
+    ).toBe(true);
+  });
+
+  it('RP-EI-A5: a runner config that COMPUTES its options is a finding, because `exclude` is judged as text', () => {
+    // `const S = JSON.parse('{"exclude":[…],"passWithNoTests":true}')` then
+    // `{ ...S }` carries neither `exclude:` nor `passWithNoTests: true`
+    // anywhere in the file, so every text regex above is silent while
+    // `vitest run tests/performance/…` collects nothing and exits 0.
+    const hidden =
+      "import { defineConfig } from 'vitest/config';\n" +
+      'const S = JSON.parse(\'{"exclude":["tests/performance/**"],"passWithNoTests":true}\');\n' +
+      "export default defineConfig({ test: { ...S, include: ['tests/**/*.test.ts'] } });\n";
+    expect(/\bexclude\s*:/.test(hidden), 'the plant still states `exclude:` in text, so it would prove nothing').toBe(false);
+    expect(/passWithNoTests\s*:\s*true/.test(hidden), 'the plant still states `passWithNoTests: true` in text').toBe(false);
+    const found = evidenceIntegrityProblems(rootWithTree((dir) => writeFileSync(join(dir, 'vitest.config.ts'), hidden, 'utf8')));
+    expect(
+      found.some((m) => m.includes('vitest.config.ts') && m.includes('a computed option satisfies neither regex')),
+      `a config that hides its options from the two text regexes left the law silent: ${found.join(' | ')}`,
+    ).toBe(true);
+  });
+
+  it('RP-EI-F red: deleting a measured suite’s MEASUREMENT cases for one budget is named', () => {
+    // The hole: the step runs, the file is present, the body is pinned and
+    // nothing is skipped — and the budget is simply no longer measured.
+    const ev = S4_EVIDENCE_STEPS[0];
+    if (ev === undefined) throw new Error('no evidence step, so this plant is vacuous');
+    const ids = [...new Set([...`${ev.label} ${ev.name}`.matchAll(/\bP4-[A-Z](?:-[A-Z]+)?\b/g)].map((m) => m[0]))];
+    expect(ids.length, `${ev.label} cites no budget id, so this plant has no subject`).toBeGreaterThan(0);
+    for (const id of ids) {
+      const found = evidenceIntegrityProblems(
+        rootWithTree((dir) => {
+          const text = readFileSync(join(dir, ev.suite), 'utf8');
+          // Every RUNNABLE title naming this budget is turned into a title that
+          // does not name it. Nothing else about the file changes: it is still
+          // present, still unskipped, still named by the pinned body.
+          const stripped = text.replace(new RegExp(id.replace(/[-]/g, '[-]'), 'g'), 'THE-BUDGET-FORMERLY-NAMED');
+          expect(stripped, `${ev.suite} does not name ${id}, so this plant would prove nothing`).not.toBe(text);
+          writeFileSync(join(dir, ev.suite), stripped, 'utf8');
+        }),
+      );
+      expect(
+        found.some((m) => m.includes(ev.suite) && m.includes(`no RUNNABLE it( title naming ${id}`)),
+        `deleting every ${id} measurement case left the law silent: ${found.join(' | ')}`,
+      ).toBe(true);
+    }
+  });
+
+  it('RP-EI-G red: a measurement case that is merely SKIPPED does not satisfy the measurement law either', () => {
+    // `testTitles` reads only runnable titles, so this composes with the skip
+    // law rather than duplicating it: a `.skip`-ed MEASUREMENT is both a skip
+    // marker and an absent measurement, and both halves must name it.
+    const ev = S4_EVIDENCE_STEPS[0];
+    if (ev === undefined) throw new Error('no evidence step, so this plant is vacuous');
+    const found = evidenceIntegrityProblems(
+      rootWithTree((dir) => {
+        const text = readFileSync(join(dir, ev.suite), 'utf8');
+        const mutated = text.replace(/\bit\(/g, 'it.skip(');
+        expect(mutated, `${ev.suite} holds no it( to skip`).not.toBe(text);
+        writeFileSync(join(dir, ev.suite), mutated, 'utf8');
+      }),
+    );
+    expect(
+      found.some((m) => m.includes(ev.suite) && m.includes('no RUNNABLE it( title naming')),
+      `a suite whose every measurement case is skipped was still judged to hold its measurements: ${found.join(' | ')}`,
+    ).toBe(true);
   });
 
   it('RP-EI-B: `it.only(` and `it.todo(` inside a measured suite are caught too', () => {
@@ -616,5 +798,470 @@ describe('P4-S4 — every rostered suite is in a directory the runner runs', () 
     const dir = mkdtempSync(join(tmpdir(), 'p4s4-roster-runner-none-'));
     writeFileSync(join(dir, 'package.json'), JSON.stringify({ scripts: { test: 'echo nothing' } }, null, 2), 'utf8');
     expect(rosterRunnerProblems(dir).join(' | ')).toContain('would be vacuous');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// GAP V2 — EVERY ROSTERED FILE CARRIES THE PROOF ITS KIND OWES.
+//
+// `rosterRedProofProblems` applied its real half only where `isLaw(file)` was
+// true, and that predicate was `file.startsWith('tests/guards/')`. Measured on
+// this roster: 9 of 26 files held to a planted-defect proof, the other 17 held
+// to nothing but "holds at least one runnable `it(` title" — the security
+// suite this slice's own corrective commit was about among them. And for the 9,
+// a single title carrying the word `red` satisfied the whole file.
+//
+// The plants below are the proof that the three obligations the law now states
+// each go red on their own violation, and that the SCOPE is derived: a law
+// moved out of `tests/guards/` is still held to the law half.
+//
+// Every plant writes a MUTATED ROSTER into a temporary root. The checkout is
+// never touched. Each root carries the CI-composition suite the roster rule
+// names unconditionally, so no plant's finding can be that row's absence.
+
+/** A root whose roster is exactly `files`, plus the named CI-composition row. */
+function rootWithRoster(files: Readonly<Record<string, string>>): string {
+  const dir = mkdtempSync(join(tmpdir(), 'p4s4-red-proof-'));
+  const all: Record<string, string> = {
+    // The one named row, written as a law that satisfies every obligation, so
+    // it is never what a plant below is reported for.
+    [CI_COMPOSITION_SUITE]:
+      "import { readFileSync } from 'node:fs';\n" +
+      "import { expect, it } from 'vitest';\n" +
+      "it('red: the planted defect is refused', () => {\n" +
+      "  expect(readFileSync('/dev/null', 'utf8')).not.toEqual([]);\n" +
+      '});\n',
+    ...files,
+  };
+  for (const [rel, text] of Object.entries(all)) {
+    mkdirSync(join(dir, rel.slice(0, rel.lastIndexOf('/'))), { recursive: true });
+    writeFileSync(join(dir, rel), text, 'utf8');
+  }
+  return dir;
+}
+
+const A_TREE_READ = "import { readFileSync } from 'node:fs';\n";
+const AN_IMPORT_OF_THE_GATE = "import { requiredCiProblems } from '../../scripts/phase4-s4-gate';\n";
+
+describe('P4-S4 — every rostered file carries the falsifiability proof its KIND owes', () => {
+  it('the checkout passes, and the pass is about a roster of all three kinds and not an empty read', () => {
+    expect(rosterRedProofProblems(REPO)).toEqual([]);
+    const kinds = rosterFiles(REPO).map((f) => rosterSuiteKind(readFileSync(join(REPO, f), 'utf8'), f));
+    // FLOORS, never equalities: a later slice adds suites of every kind.
+    expect(kinds.filter((k) => k === 'law').length, 'the roster holds no law, so the law half judged nothing').toBeGreaterThan(0);
+    expect(kinds.filter((k) => k === 'golden').length, 'the roster holds no golden suite, so the golden half judged nothing').toBeGreaterThan(0);
+    expect(kinds.filter((k) => k === 'behaviour').length, 'the roster holds no behaviour suite, so the universal floor judged only laws').toBeGreaterThan(0);
+  });
+
+  it('the derived scope is WIDER than the directory rule it replaced: the tree-reading security suite is a law', () => {
+    const file = 'tests/security/p4s4-rls-quals-once-per-query.test.ts';
+    expect(rosterFiles(REPO), 'the security suite is not on the roster, so this claim has no subject').toContain(file);
+    // The predicate it replaced was `file.startsWith('tests/guards/')`, which
+    // this file does not satisfy. The derived one judges what it READS.
+    expect(file.startsWith('tests/guards/')).toBe(false);
+    expect(rosterSuiteKind(readFileSync(join(REPO, file), 'utf8'), file)).toBe('law');
+  });
+
+  it('RP-RP-A red: a block with the WORD "red" in a title and no executed refusal is refused (the exact hole closed)', () => {
+    const planted =
+      AN_IMPORT_OF_THE_GATE +
+      "import { describe, expect, it } from 'vitest';\n" +
+      // Prose announcing a plant, and an assertion of SILENCE only. Under the
+      // old law the title alone satisfied the whole file.
+      "describe('PLANTED: the law refuses the plant', () => {\n" +
+      "  it('red: the planted defect is refused', () => {\n" +
+      "    expect(requiredCiProblems('')).toEqual([]);\n" +
+      '  });\n' +
+      '});\n';
+    const dir = rootWithRoster({ 'tests/guards/p4s4-prose-only-law.test.ts': planted });
+    const found = rosterRedProofProblems(dir);
+    expect(
+      found.some((m) => m.includes('p4s4-prose-only-law.test.ts') && m.includes('never once executed its refusal')),
+      `a block that announces a red in prose and only ever asserts silence left the law silent: ${found.join(' | ')}`,
+    ).toBe(true);
+  });
+
+  it('RP-RP-A2 red: ONE block that executes a red does NOT satisfy a second block that announces one — the subject is the BLOCK', () => {
+    // The hole the challenger measured on `p4s4-command-refusal-audit-law.test.ts`:
+    // 15 titles of which one matched, passing exactly as 15 of 15 would. The
+    // first block below is a real planted-defect proof; the second announces a
+    // plant and asserts only silence. A file-level law sees one red and stops.
+    const planted =
+      AN_IMPORT_OF_THE_GATE +
+      "import { describe, expect, it } from 'vitest';\n" +
+      "describe('PLANTED: the first plant really is refused', () => {\n" +
+      "  it('red: the empty workflow is refused', () => {\n" +
+      "    expect(requiredCiProblems('')).not.toEqual([]);\n" +
+      '  });\n' +
+      '});\n' +
+      "describe('PLANTED: the second plant is announced and never executed', () => {\n" +
+      "  it('red: the second planted defect is refused', () => {\n" +
+      "    expect(requiredCiProblems('')).toEqual([]);\n" +
+      '  });\n' +
+      '});\n';
+    const rel = 'tests/guards/p4s4-two-blocks-one-red.test.ts';
+    const dir = rootWithRoster({ [rel]: planted });
+    const blocks = describeBlocks(planted);
+    expect(blocks.length, 'the plant does not hold two top-level blocks, so it would prove nothing').toBe(2);
+    const found = rosterRedProofProblems(dir);
+    // The FIRST block is not named; only the second is. That is the whole
+    // difference between a file-level and a block-level subject.
+    expect(found.filter((m) => m.includes(rel)).length, `expected exactly the second block to be named: ${found.join(' | ')}`).toBe(1);
+    expect(
+      found.some((m) => m.includes('the second plant is announced and never executed') && m.includes('never once executed its refusal')),
+      `the unexecuted second block was not named: ${found.join(' | ')}`,
+    ).toBe(true);
+    expect(
+      found.some((m) => m.includes('the first plant really is refused')),
+      'the block that DOES execute its red was named, so the law is refusing something correct',
+    ).toBe(false);
+  });
+
+  it('RP-RP-B red: a law OUTSIDE the guard directory with no planted-defect title is refused, which the directory rule alone could not do', () => {
+    const planted =
+      A_TREE_READ +
+      "import { expect, it } from 'vitest';\n" +
+      "it('the reader returns rows', () => {\n" +
+      "  expect(readFileSync('/dev/null', 'utf8')).not.toEqual([]);\n" +
+      '});\n';
+    const rel = 'tests/integration/p4s4-tree-reading-law.test.ts';
+    const dir = rootWithRoster({ [rel]: planted });
+    // The predicate that was there before was ONLY the directory, and this
+    // file does not satisfy it, so the whole law half was skipped for it.
+    expect(rel.startsWith('tests/guards/')).toBe(false);
+    expect(rosterSuiteKind(planted, rel)).toBe('law');
+    const found = rosterRedProofProblems(dir);
+    expect(
+      found.some((m) => m.includes(rel) && m.includes('no it( title announces a planted defect')),
+      `a tree-reading law outside the guard directory was held to nothing: ${found.join(' | ')}`,
+    ).toBe(true);
+  });
+
+  it('RP-RP-C: the guard directory is kept as a FLOOR, so a guard that reads nothing is still a law', () => {
+    // The union matters in BOTH directions. A file an author put in the guard
+    // directory declares itself a guard even before it reads a byte, and the
+    // derived property must not narrow the old scope while widening it.
+    const planted = "import { expect, it } from 'vitest';\nit('the scratch law holds', () => expect(2 + 2).toBe(4));\n";
+    const rel = 'tests/guards/p4s4-reads-nothing.test.ts';
+    expect(rosterSuiteKind(planted, rel), 'a file in the guard directory stopped being a law, which NARROWS the old scope').toBe('law');
+    const found = rosterRedProofProblems(rootWithRoster({ [rel]: planted }));
+    expect(
+      found.some((m) => m.includes(rel) && m.includes('no it( title announces a planted defect')),
+      `a guard that reads nothing was held to nothing: ${found.join(' | ')}`,
+    ).toBe(true);
+  });
+
+  it('RP-RP-D red: a golden suite that asserts no floor on its own recorded world is refused', () => {
+    const planted =
+      "import { expect, it } from 'vitest';\n" +
+      // A golden comparison and a negation, so the universal floor is met and
+      // the finding can only be the golden one: nothing shows the recorded
+      // world is there, so this compares nothing to nothing.
+      "it('the recorded world still holds', () => {\n" +
+      '  const rows: unknown[] = [];\n' +
+      '  expect(rows).toEqual([...rows]);\n' +
+      '  expect(rows).not.toBe(null);\n' +
+      '});\n';
+    const rel = `${S4_GOLDEN_DIR}/99-vacuous.golden.test.ts`;
+    const dir = rootWithRoster({ [rel]: planted });
+    expect(rosterSuiteKind(planted, rel)).toBe('golden');
+    const found = rosterRedProofProblems(dir);
+    expect(
+      found.some((m) => m.includes(rel) && m.includes('compares nothing to nothing')),
+      `a golden suite with no floor on its subject left the law silent: ${found.join(' | ')}`,
+    ).toBe(true);
+  });
+
+  it('RP-RP-E red: a rostered file the runner opens and finds nothing in is still refused', () => {
+    const rel = 'tests/integration/p4s4-no-titles.test.ts';
+    const dir = rootWithRoster({ [rel]: "import { expect } from 'vitest';\nexport const nothing = expect;\n" });
+    expect(rosterRedProofProblems(dir).join(' | ')).toContain('holds no runnable it( title');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// GAP V3 — THE EVIDENCE TABLE'S MEMBERSHIP IS CROSS-CHECKED AGAINST THE TREE.
+//
+// `S4_EVIDENCE_STEPS` is the whole subject of `required-ci`,
+// `evidence-script-bodies` and `evidence-integrity`, and the only floor on it
+// was that it holds at least one row. A slice that adds a third measured suite
+// and forgets the row got three green checks over two steps.
+//
+// The pins themselves cannot be derived — deriving the step name from the
+// workflow would make `required-ci` judge the workflow against itself. The
+// MEMBERSHIP can be, and is: a runnable test file in the table's own
+// directories whose text names a CANDIDATE MIGRATION. These plants prove that
+// derivation goes red in both directions and refuses to be vacuous.
+
+/** A root carrying the real manifest, workflow and migration NAMES, with `mutate` applied. */
+function rootWithEvidence(mutate: (dir: string) => void): string {
+  const dir = mkdtempSync(join(tmpdir(), 'p4s4-evidence-coverage-'));
+  writeFileSync(join(dir, 'package.json'), readFileSync(join(REPO, 'package.json'), 'utf8'), 'utf8');
+  mkdirSync(join(dir, '.github', 'workflows'), { recursive: true });
+  writeFileSync(join(dir, WORKFLOW), WORKFLOW_TEXT, 'utf8');
+  // Only the NAMES of the migrations matter to `candidateMigrations`, so the
+  // bodies are not copied: the derivation reads the file names off disk and the
+  // accepted head off the permanent prefix module.
+  mkdirSync(join(dir, MIGRATIONS_SUBDIR), { recursive: true });
+  for (const name of readdirSync(join(REPO, MIGRATIONS_SUBDIR))) if (name.endsWith('.sql')) writeFileSync(join(dir, MIGRATIONS_SUBDIR, name), '', 'utf8');
+  mkdirSync(join(dir, 'tests', 'performance'), { recursive: true });
+  for (const ev of S4_EVIDENCE_STEPS) writeFileSync(join(dir, ev.suite), readFileSync(join(REPO, ev.suite), 'utf8'), 'utf8');
+  mutate(dir);
+  return dir;
+}
+
+/** A candidate migration's number, so a plant can name one without this file writing one down. */
+function aCandidateNumber(root: string): string {
+  const candidates = candidateMigrations(root);
+  expect(candidates.length, 'no candidate migration is on disk, so every plant below would be vacuous').toBeGreaterThan(0);
+  const number = /^(\d+)/.exec(candidates[0] ?? '')?.[1];
+  expect(number, `the candidate ${String(candidates[0])} does not begin with a number`).toBeDefined();
+  return number ?? '';
+}
+
+describe("P4-S4 — the evidence table's MEMBERSHIP is derived from the tree, not taken on trust", () => {
+  it('the derivation and the table are now EQUAL — the gap this law was written for is closed, and the law that closed it stands', () => {
+    const derived = measuredCandidateSuites(REPO);
+    // FLOORS: the derivation only grows as the slice adds measurements.
+    expect(derived.length, 'the derivation found no measured suite, so the cross-check would be vacuous').toBeGreaterThan(0);
+    for (const ev of S4_EVIDENCE_STEPS) expect(derived, `${ev.suite} is a table row the derivation does not find`).toContain(ev.suite);
+    // THE FINDING, AND ITS CLOSURE. When this law was written the derivation
+    // was a strict SUPERSET of the table: `receivables-open-page-equivalence`
+    // — `0084`'s own correctness evidence, 40 KB of it — was in no row of the
+    // table, in no step of the required job, and in no `test*` script CI runs,
+    // so it had never been executed anywhere. The law found it; reading the
+    // workflow had not. It is now a table row AND a step of the required job,
+    // and what this case asserts is therefore the EQUALITY rather than the
+    // gap. The gap's falsifiability lives on in `RP-EC-A` and `RP-EC-B`, which
+    // plant a measured suite the table does not name and a table row the
+    // workflow does not run, and require the cross-check to name each.
+    const unnamed = derived.filter((f) => !S4_EVIDENCE_STEPS.some((e) => e.suite === f));
+    expect(unnamed, 'the derivation finds a measured suite of this slice that the table does not name').toEqual([]);
+    expect(evidenceCoverageProblems(REPO), 'the cross-check refuses this tree').toEqual([]);
+  });
+
+  it('RP-EC-A red: a measured suite added to the tree and NOT added to the table is named', () => {
+    const dir = rootWithEvidence((d) => {
+      const number = aCandidateNumber(d);
+      writeFileSync(
+        join(d, 'tests', 'performance', 'receivables-s4-third-budget.test.ts'),
+        `// the ${number} budget\nimport { expect, it } from 'vitest';\nit('red: the third budget is measured', () => expect([1]).not.toEqual([]));\n`,
+        'utf8',
+      );
+    });
+    const found = evidenceCoverageProblems(dir);
+    expect(
+      found.some((m) => m.includes('receivables-s4-third-budget.test.ts') && m.includes('does not name it')),
+      `a third measured suite the table does not name left the cross-check silent: ${found.join(' | ')}`,
+    ).toBe(true);
+  });
+
+  it('RP-EC-B red: a measured suite no step of the required job reaches is named, even when the table DOES name it', () => {
+    // The table's own first row, with every step that could reach it removed
+    // from the required job. The table is unchanged, so the only finding
+    // available is the reachability one.
+    const row = S4_EVIDENCE_STEPS[0];
+    expect(row, 'the table is empty, so this plant has no subject').toBeDefined();
+    const dir = rootWithEvidence((d) => {
+      const stripped = workflowWith(`every step reaching ${row?.suite ?? ''} removed`, (lines) => {
+        const [start, end] = stepBlock(lines, row?.command ?? '');
+        return [...lines.slice(0, start), ...lines.slice(end)];
+      });
+      writeFileSync(join(d, WORKFLOW), stripped, 'utf8');
+    });
+    const found = evidenceCoverageProblems(dir);
+    expect(
+      found.some((m) => m.includes(row?.suite ?? '') && m.includes(`NO step of the required \`${REQUIRED_JOB}\` job reaches it`)),
+      `a measured suite the required job no longer reaches left the cross-check silent: ${found.join(' | ')}`,
+    ).toBe(true);
+  });
+
+  it('RP-EC-C red: a table row whose suite the derivation cannot find is named — the other direction', () => {
+    const row = S4_EVIDENCE_STEPS[0];
+    const dir = rootWithEvidence((d) => {
+      // The suite is still there and still runnable; it just no longer names
+      // any candidate migration, so the derivation does not attribute it to
+      // this slice and the row's pins guard nothing.
+      writeFileSync(join(d, row?.suite ?? ''), "import { expect, it } from 'vitest';\nit('nothing of this slice', () => expect(1).toBe(1));\n", 'utf8');
+    });
+    const found = evidenceCoverageProblems(dir);
+    expect(
+      found.some((m) => m.includes(row?.suite ?? '') && m.includes('the pins on that row guard nothing')),
+      `a table row the derivation does not find left the cross-check silent: ${found.join(' | ')}`,
+    ).toBe(true);
+  });
+
+  it('RP-EC-D red: a tree with no candidate migration makes the cross-check SAY it is vacuous rather than pass', () => {
+    const dir = rootWithEvidence((d) => {
+      for (const name of readdirSync(join(d, MIGRATIONS_SUBDIR))) rmSync(join(d, MIGRATIONS_SUBDIR, name));
+    });
+    expect(candidateMigrations(dir), 'the migrations were not really removed, so this plant would prove nothing').toEqual([]);
+    expect(evidenceCoverageProblems(dir).join(' | ')).toContain('would be vacuous');
+  });
+
+  it('RP-EC-E red: a measured suite in a directory the required job reaches only through a `test*` script is NOT a finding', () => {
+    // The reachability half reads npm script BODIES, not only `run:` lines. A
+    // suite under a directory a `test*` script covers is reached, and must not
+    // be reported as unrun — otherwise the law would refuse every integration
+    // suite the moment one named a candidate migration.
+    const dir = rootWithEvidence((d) => {
+      const number = aCandidateNumber(d);
+      mkdirSync(join(d, 'tests', 'guards'), { recursive: true });
+      writeFileSync(
+        join(d, 'tests', 'guards', 'p4s4-reached-by-script.test.ts'),
+        `// the ${number} relations\nimport { expect, it } from 'vitest';\nit('red: reached', () => expect([1]).not.toEqual([]));\n`,
+        'utf8',
+      );
+    });
+    const reach = requiredJobReach(dir);
+    expect(reach.dirs, 'the required job reaches no `tests/` directory through any npm script body').toContain('tests/guards');
+    expect(
+      evidenceCoverageProblems(dir).some((m) => m.includes('p4s4-reached-by-script.test.ts') && m.includes('NO step of the required')),
+      'a suite the required job reaches through a `test*` script body was reported as unrun',
+    ).toBe(false);
+  });
+  it('RP-EC-F red: a table row NO step of the required job names is refused, even though the file is in the tree', () => {
+    // The workflow-side half of the set equality. The suite is present and
+    // still attributed to this slice; only the step that named it is gone. The
+    // directory that covers it (`perf:phase2:s8` names the whole of
+    // `tests/performance`) is run by no step of any job, which is exactly why
+    // directory reachability is not enough for a MEASURED row.
+    const row = S4_EVIDENCE_STEPS[0];
+    expect(row, 'the table is empty, so this plant has no subject').toBeDefined();
+    const dir = rootWithEvidence((d) => {
+      const stripped = workflowWith(`the step naming ${row?.suite ?? ''} removed`, (lines) => {
+        const [start, end] = stepBlock(lines, row?.command ?? '');
+        return [...lines.slice(0, start), ...lines.slice(end)];
+      });
+      writeFileSync(join(d, WORKFLOW), stripped, 'utf8');
+    });
+    const found = evidenceCoverageProblems(dir);
+    expect(
+      found.some((m) => m.includes(row?.suite ?? '') && m.includes('is not enough for a measured step')),
+      `a table row the required job no longer names left the set equality silent: ${found.join(' | ')}`,
+    ).toBe(true);
+  });
+
+  it('RP-EC-G: the set equality does NOT claim the predecessor slices’ measured steps as this slice’s evidence', () => {
+    // The required job also names `pos-s3-budgets` (P4-A/P4-B's budget) and
+    // `plan-evidence-contract` (TL-P4-S3-R4's). Neither names a candidate
+    // migration, so the attribution leaves them out — an UNRESTRICTED set
+    // equality would pin a predecessor's step as this gate's own evidence and
+    // would red the moment P4-S5 added one of its own.
+    const named = workflowNamedSuites(REPO);
+    const derived = measuredCandidateSuites(REPO);
+    const others = named.filter((f) => !derived.includes(f));
+    expect(others.length, 'the required job names no measured suite outside this slice, so this claim has no subject').toBeGreaterThan(0);
+    const problems = evidenceCoverageProblems(REPO);
+    for (const f of others)
+      expect(
+        problems.some((m) => m.includes(f)),
+        `${f} belongs to a slice behind this one and the cross-check claimed it: ${problems.join(' | ')}`,
+      ).toBe(false);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// THE ROSTER RATCHET — a suite cannot leave the derived set unnoticed.
+//
+// `roster-runner` iterates `rosterFiles(root)`, so it constrains only files
+// ALREADY on the roster and cannot see one leave. A rostered suite moved AND
+// renamed out of the basename rule drops off the roster, drops out of this
+// gate's execution, and no other check names the loss.
+
+describe('P4-S4 — the roster is a RATCHET: the derived set may grow and may not silently shrink', () => {
+  it('the checkout passes, and the floor is a floor rather than an equality', () => {
+    expect(rosterProblems(REPO)).toEqual([]);
+    expect(rosterRatchetProblems(REPO)).toEqual([]);
+    // The roster is at or above the floor, and MAY be above it: this slice is
+    // being written in several worktrees at once and an equality here would be
+    // the P4-AL-88 defect.
+    expect(rosterFiles(REPO).length).toBeGreaterThanOrEqual(26);
+  });
+
+  it('the recorded floor EQUALS the derived roster, so a roster that grew cannot leave the ratchet slack', () => {
+    // A floor left behind a grown roster still passes — and stops reporting a
+    // loss, because the loss then lands above it. Both of this law's own red
+    // proofs went silent exactly that way when the roster grew from 26 to 32
+    // and the floor stayed at 26. So the floor is required to BE the count,
+    // which makes forgetting to move it a failure instead of a relaxation.
+    expect(ROSTER_FLOOR, 'the roster moved and ROSTER_FLOOR did not — move it in the same commit, in whichever direction the roster went').toBe(
+      rosterFiles(REPO).length,
+    );
+  });
+
+  it('RP-RT-A red: a rostered suite moved AND renamed out of the rule takes the roster below the floor and is named', () => {
+    // The exact attack, on a copy of the real tests tree. The security suite
+    // is renamed so the basename rule no longer matches it — which is how a
+    // suite leaves the roster while every per-file check stays green.
+    const victim = 'tests/security/p4s4-rls-quals-once-per-query.test.ts';
+    expect(rosterFiles(REPO), 'the victim is not on the roster, so this plant has no subject').toContain(victim);
+    const dir = mkdtempSync(join(tmpdir(), 'p4s4-ratchet-'));
+    for (const file of rosterFiles(REPO)) {
+      if (file === victim) continue;
+      mkdirSync(join(dir, file.slice(0, file.lastIndexOf('/'))), { recursive: true });
+      writeFileSync(join(dir, file), readFileSync(join(REPO, file), 'utf8'), 'utf8');
+    }
+    // The victim is still IN THE TREE — it is only renamed, which is the point:
+    // nothing was deleted, and the per-file laws have nothing to say.
+    mkdirSync(join(dir, 'tests', 'security'), { recursive: true });
+    writeFileSync(join(dir, 'tests', 'security', 'rls-quals-once-per-query.test.ts'), readFileSync(join(REPO, victim), 'utf8'), 'utf8');
+    const after = rosterFiles(dir);
+    expect(after, 'the renamed suite is still being rostered, so the plant did not reproduce the attack').not.toContain(victim);
+    expect(after.length, 'the roster did not actually shrink, so this proof would prove nothing').toBeLessThan(rosterFiles(REPO).length);
+    const found = rosterRatchetProblems(dir);
+    expect(
+      found.some((m) => m.includes('a rostered suite has left the derived set')),
+      `a suite renamed out of the rule left the roster silently: ${found.join(' | ')}`,
+    ).toBe(true);
+    // The DIRECTORY arm is not this case's subject and must stay silent here:
+    // one of `tests/security`'s two rostered suites left, so the directory is
+    // not emptied, and claiming it was named would be claiming the arm fires
+    // when it should not. RP-RT-B below empties it and asserts that arm.
+    expect(
+      found.some((m) => m.includes('no longer holds a single suite')),
+      `the per-directory arm fired over a directory that still holds a suite: ${found.join(' | ')}`,
+    ).toBe(false);
+  });
+
+  it('RP-RT-B red: the LAST suite of a directory leaving is named even when the total is held up by a new sibling file', () => {
+    // The half a total floor cannot see. The security suite is renamed out of
+    // the rule AND a new integration suite is added, so the count is unchanged
+    // and only the per-directory floor can report the loss.
+    // EVERY suite of the directory leaves, not just one: the arm under test is
+    // "this directory no longer holds a single suite", and a directory holding
+    // two is not emptied by renaming one of them.
+    const victims = rosterFiles(REPO).filter((f) => f.startsWith('tests/security/'));
+    expect(victims.length, 'no rostered suite lives in tests/security, so this plant has no subject').toBeGreaterThan(0);
+    const dir = mkdtempSync(join(tmpdir(), 'p4s4-ratchet-held-'));
+    for (const file of rosterFiles(REPO)) {
+      if (victims.includes(file)) continue;
+      mkdirSync(join(dir, file.slice(0, file.lastIndexOf('/'))), { recursive: true });
+      writeFileSync(join(dir, file), readFileSync(join(REPO, file), 'utf8'), 'utf8');
+    }
+    // One new sibling per departed suite, so the TOTAL is unchanged and only
+    // the per-directory floor can report the loss.
+    mkdirSync(join(dir, 'tests', 'integration'), { recursive: true });
+    for (let i = 0; i < victims.length; i += 1) {
+      writeFileSync(
+        join(dir, 'tests', 'integration', `p4s4-a-siblings-new-suite-${i}.test.ts`),
+        "import { expect, it } from 'vitest';\nit('red: a new sibling suite', () => expect([1]).not.toEqual([]));\n",
+        'utf8',
+      );
+    }
+    const after = rosterFiles(dir);
+    expect(
+      after.length,
+      'the total did not stay at or above the floor, so the total floor would catch this and the plant proves nothing',
+    ).toBeGreaterThanOrEqual(rosterFiles(REPO).length);
+    const found = rosterRatchetProblems(dir);
+    expect(
+      found.some((m) => m.includes('a rostered suite has left the derived set')),
+      'the TOTAL floor fired, so this plant is not isolating the per-directory floor',
+    ).toBe(false);
+    expect(
+      found.some((m) => m.includes('tests/security') && m.includes('no longer holds a single suite')),
+      `the last suite of tests/security left and only the total was checked: ${found.join(' | ')}`,
+    ).toBe(true);
   });
 });

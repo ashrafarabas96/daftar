@@ -281,8 +281,24 @@ beforeAll(async () => {
   // BEFORE anything in this file alters a policy: the shape the migration
   // installed, straight out of the catalogue. Every `once-per-query` restore
   // below puts this text back, so no case can be answered by a literal.
+  //
+  // AND THE CAPTURE IS NOT TAKEN ON TRUST. Four cases below alter the SHARED
+  // database's policies and restore them in a `finally`; a run that dies
+  // between the two leaves the plant COMMITTED, and the next run would then
+  // capture the plant as "the shape the migration installed" and faithfully
+  // restore the backdoor after every case — the suite healing itself into
+  // agreement with an attack. So each captured expression is compared against
+  // this server's own rendering of the expression `0086` writes, which is
+  // produced in a probe pinned to this connection's temp schema and is
+  // therefore not something a previous run could have left behind.
+  const expected = await referenceQuals();
   for (const row of await readQuals()) {
     if (row.q === null || row.q === '') throw new Error(`${row.relname}.${row.polname} has no qual at all, so 0086 altered something that is not there`);
+    const want = expected[row.polname as (typeof REWRITTEN)[number]];
+    if (row.q !== want)
+      throw new Error(
+        `${row.relname}.${row.polname} is not the expression 0086 writes, BEFORE this file has altered anything — a previous run left a plant committed, or the migration did not install what it says. Found: ${row.q}`,
+      );
     SHIPPED.set(shippedKey(row.relname, row.polname), row.q);
   }
   if (SHIPPED.size !== RELATIONS.length * REWRITTEN.length)
@@ -380,7 +396,18 @@ afterAll(async () => {
  */
 const SNAPSHOT_FORMAT = `'%s.%s permissive=%s cmd=%s roles=%s check=%s qual=%s'`;
 
-/** A single statement that stores the CURRENT policy set where `0086-F` reads it. */
+/**
+ * A single statement that stores the CURRENT policy set where `0086-F` reads it.
+ *
+ * This statement is EXACTLY the forgery guard G-7
+ * (`scripts/guards/migration-self-capture.ts`) forbids inside a migration: one
+ * extra `set_config` of the capture GUC lets a file change what it captured
+ * and then re-capture, and a planted widening was made to apply green that
+ * way, 6 runs of 6. It is legal HERE and only here — in a test, against a
+ * block sliced off disk and run alone, to make the set comparison a
+ * deliberate no-op so that the qual law is the only thing deciding. G-7's
+ * subject is the migration text, so this helper cannot satisfy it.
+ */
 function captureStatement(): string {
   if (!text0086().includes(SNAPSHOT_FORMAT))
     throw new Error('0086 no longer aggregates its capture with the format this stand-in copies, so the stand-in must be updated with it');
@@ -641,6 +668,29 @@ describe('P4-S4 — 0086: the read quals are evaluated once per query and answer
 
       const rewrittenCheck = plant(`ALTER POLICY tenant_membership ON invoices WITH CHECK (tenant_id IS NOT NULL);`);
       await expect(db.pool.query(rewrittenCheck)).rejects.toThrow(/0086-F/);
+
+      // C-2 — THE ESCAPE LIST. `business_isolation_read` carries
+      // `current_user IN ('daftar_inventory_internal',
+      // 'daftar_accounting_internal')`, and no truth table in this file can
+      // see a name added to it: every block runs as the migrator, for whom
+      // every `current_user` test is FALSE whatever the list holds. A
+      // nine-character edit of the file's own `ALTER` — appending
+      // `'daftar_app'` — therefore applied GREEN and was measured as a real
+      // cross-business read, 0 rows before and 1 row after. So the role
+      // literals are pinned by EQUALITY, and this is that law's red proof.
+      const widenedRoles = sql.replaceAll(
+        `(SELECT current_user IN ('daftar_inventory_internal', 'daftar_accounting_internal'))`,
+        `(SELECT current_user IN ('daftar_inventory_internal', 'daftar_accounting_internal', 'daftar_app'))`,
+      );
+      expect(widenedRoles, 'the escape list is not written the way this plant expects, so it proves nothing').not.toBe(sql);
+      await expect(db.pool.query(widenedRoles)).rejects.toThrow(/0086-F\(?w?\)?: .*is entitled to exactly|0086-F: .*names the role/);
+
+      // M-3 — A NULL SCOPE COLUMN. `OR tenant_id IS NULL` admits no other
+      // scope's row and nothing with the GUC unset, so it passes the first
+      // three cases outright while admitting every row outside every scope.
+      await db.pool.query(`ALTER POLICY tenant_membership ON invoices USING (app_bypass() OR tenant_id = nullif(app_tenant(), '')::uuid OR tenant_id IS NULL)`);
+      await expect(db.pool.query(sql)).rejects.toThrow(/0086-A: .*scope column is NULL/);
+      await db.pool.query(`ALTER POLICY tenant_membership ON invoices USING (app_bypass() OR tenant_id = nullif(app_tenant(), '')::uuid)`);
 
       // And the file itself still applies, so none of the plants above left
       // the database in a state that would make a pass meaningless.

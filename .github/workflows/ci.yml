@@ -408,6 +408,16 @@ jobs:
         run: npx vitest run tests/performance/receivables-ar-setbased-equivalence.test.ts
         env:
           PG_PORT: '5432'
+      # `0084`'s own correctness evidence. It was in NO step of this job and
+      # in no `test*` script CI runs — `perf:phase2:s8` is the only script
+      # covering `tests/performance` and nothing runs it — so a 40 KB suite
+      # holding the open-invoice page's equivalence claim was never executed
+      # anywhere. That is exactly the shape the comment above describes, found
+      # by the gate's own `evidence-coverage` law rather than by reading.
+      - name: Open-invoice page equivalence — the 0084 page reader against the per-invoice original
+        run: npx vitest run tests/performance/receivables-open-page-equivalence.test.ts
+        env:
+          PG_PORT: '5432'
       # TL-P4-S2-R3, continued for P4-S4 — the customer-settlement slice.
       # The chain is composed HERE, by this job: P4-S1, P4-S2, P4-S3, then
       # P4-S4, all VISIBLE and all REQUIRED, in that order. P4-S4 is a delta

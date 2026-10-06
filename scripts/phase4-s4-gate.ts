@@ -72,6 +72,7 @@
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { testTitles } from './phase3-s8-gate';
+import { ACCEPTED as ACCEPTED_BUDGETS } from './phase4-budget-ratchet';
 import { MIGRATIONS_SUBDIR, type LiveRelation, applierRelations, livePhase4Relations, phase4RlsForceStructuralProblems } from './guards/phase4-rls-force';
 import {
   discoverSalesTables,
@@ -872,7 +873,24 @@ export function settlementContractProblems(sql: string): string[] {
 /** The three laws above over every candidate migration on disk, plus the predicate check. */
 export function newRelationCoverageProblems(root: string): string[] {
   const problems = [...predicateCoverageProblems(), ...phase4RlsForceStructuralProblems(root)];
-  const files = candidateMigrations(root);
+  // THE SUBJECT IS THIS SLICE'S MIGRATIONS, IN WHICHEVER TENSE THEY ARE IN.
+  //
+  // While P4-S4 is a candidate, its migrations are exactly the files past the
+  // accepted head, so `candidateMigrations` names them. The moment acceptance
+  // fills `S4_ACCEPTED`, the accepted head MOVES to this slice's own last
+  // migration and `candidateMigrations` stops naming them — it names the NEXT
+  // slice's file instead, which declares none of this slice's relations, and
+  // the non-vacuity guard below then refuses a tree for the sin of having
+  // moved on. That is the `gate:phase2:release` lesson exactly: a device built
+  // to refuse a vacuous pass became a device that refused forward evolution,
+  // and this block sits OUTSIDE the candidate-tense fence, so deleting the
+  // fence at acceptance would not have fixed it.
+  //
+  // So the tense decides the subject, and the tense is a fact about this file:
+  // `S4_ACCEPTED` is empty while the slice is a candidate and holds its
+  // migrations afterwards.
+  const accepted = Object.keys(S4_ACCEPTED).sort();
+  const files = accepted.length > 0 ? accepted : candidateMigrations(root);
   const surface = files.map((f) => read(root, `${MIGRATIONS_SUBDIR}/${f}`)).join('\n');
 
   // ── NON-VACUITY, ASSERTED BEFORE ANY PROPERTY IS ─────────────────────
@@ -888,14 +906,14 @@ export function newRelationCoverageProblems(root: string): string[] {
     problems.push('CONTRACT_RELATIONS is empty — the predicate-coverage law has no subject at all and could not refuse anything');
   if (files.length === 0)
     problems.push(
-      `no candidate migration is on disk, so every relation law below judged an empty set — this slice's surface is ${CONTRACT_RELATIONS.join(', ')}, and a check that discovers none of it is reporting ABSENCE, not correctness`,
+      `none of this slice's migrations is on disk, so every relation law below judged an empty set — this slice's surface is ${CONTRACT_RELATIONS.join(', ')}, and a check that discovers none of it is reporting ABSENCE, not correctness`,
     );
   else {
     const declared = discoverSalesTables(surface);
     const found = CONTRACT_RELATIONS.filter((r) => declared.includes(r));
     if (found.length === 0)
       problems.push(
-        `the candidate surface (${files.join(', ')}) declares none of ${CONTRACT_RELATIONS.join(', ')} — the RLS/FORCE, G-3 vocabulary and settlement-contract laws below all judged an empty set, so their silence is not evidence`,
+        `this slice's migration surface (${files.join(', ')}) declares none of ${CONTRACT_RELATIONS.join(', ')} — the RLS/FORCE, G-3 vocabulary and settlement-contract laws below all judged an empty set, so their silence is not evidence`,
       );
   }
 
@@ -989,6 +1007,17 @@ export const S4_EVIDENCE_STEPS: readonly {
     command: 'npx vitest run tests/performance/receivables-ar-setbased-equivalence.test.ts',
     name: 'Set-based AR answer equivalence — the 0083/0084 readers against the per-invoice original',
     suite: 'tests/performance/receivables-ar-setbased-equivalence.test.ts',
+  },
+  {
+    // Added because `evidence-coverage` refused the tree without it: this
+    // suite — the open-invoice page reader's equivalence claim, 40 KB of it —
+    // was in no step of the required job and in no `test*` script CI runs, so
+    // it had never been executed anywhere. The law found it; reading did not.
+    label: 'the open-invoice page answer equivalence',
+    script: 'tests/performance/receivables-open-page-equivalence.test.ts',
+    command: 'npx vitest run tests/performance/receivables-open-page-equivalence.test.ts',
+    name: 'Open-invoice page equivalence — the 0084 page reader against the per-invoice original',
+    suite: 'tests/performance/receivables-open-page-equivalence.test.ts',
   },
 ];
 
@@ -1320,17 +1349,42 @@ export function evidenceScriptBodyReport(root: string): string {
  */
 export function evidenceIntegrityProblems(root: string): string[] {
   const problems: string[] = [];
+  // THE SKIP SURFACE, BY MEMBER ACCESS RATHER THAN BY CALL.
+  //
+  // These were three regexes of the shape `describe\s*\.\s*skip\s*\(`, and four
+  // spellings walked straight through all three while really skipping the
+  // block:
+  //
+  //   describe['skip'](…)            — a member access, not a `.skip` token
+  //   describe.skipIf(true)(…)       — `skip` is not followed by `(`
+  //   describe.runIf(false)(…)       — never mentioned at all
+  //   const d = describe.skip; d(…)  — the call site is not the member access
+  //
+  // So the subject is the MEMBER, however it is spelled and whatever is done
+  // with it afterwards: dotted or bracketed, through any number of intermediate
+  // modifiers (`describe.concurrent.skip`), called immediately or bound to a
+  // name first. `skipIf`/`runIf` are included unconditionally, because a
+  // measured step must take its measurement on every run and a CONDITIONALLY
+  // skipped measurement is the same hole as a skipped one; `fails` is included
+  // because a budget that is expected to fail is not a budget that passed.
   const SKIPPERS = [
-    /\b(?:describe|it|test|suite)\s*\.\s*skip\s*\(/,
-    /\b(?:describe|it|test|suite)\s*\.\s*only\s*\(/,
-    /\b(?:describe|it|test|suite)\s*\.\s*todo\s*\(/,
+    /\b(?:describe|it|test|suite)(?:\s*\.\s*[A-Za-z_$][\w$]*)*\s*\.\s*(?:skip|only|todo|skipIf|runIf|fails)\b/,
+    /\b(?:describe|it|test|suite)(?:\s*\.\s*[A-Za-z_$][\w$]*)*\s*\[\s*(['"`])(?:skip|only|todo|skipIf|runIf|fails)\1\s*\]/,
   ];
   for (const ev of S4_EVIDENCE_STEPS) {
     if (!has(root, ev.suite)) {
       problems.push(`${ev.label} names the suite ${ev.suite}, which is not in the tree — the step would run nothing`);
       continue;
     }
-    const text = read(root, ev.suite);
+    // COMMENTS ARE NOT CODE. `receivables-s4-budgets.test.ts` carries the
+    // literal text `describe('P4-D …')` inside its own doc comment at line 98,
+    // 1 000 lines above the first executed block — so a law reading the raw
+    // bytes can fire on PROSE, which is both a false refusal of an honest tree
+    // and the reason RP-EI-A's plant was vacuous: it mutated the comment and
+    // the law dutifully reported it. The claim is about the block the runner
+    // executes, so the prose goes first, exactly as `closureRuleProblems` does
+    // it for the forbidden shapes.
+    const text = stripProse(read(root, ev.suite));
     for (const shape of SKIPPERS)
       if (shape.test(text))
         problems.push(
@@ -1340,6 +1394,34 @@ export function evidenceIntegrityProblems(root: string): string[] {
       problems.push(`${ev.label} runs through npm and states no script body, so what it runs is pinned only by its name`);
     if (ev.scriptBody !== undefined && !ev.scriptBody.includes(ev.suite))
       problems.push(`${ev.label}'s pinned script body does not name ${ev.suite}, so the body and the suite this law judges are not the same thing`);
+    // ── AND WHETHER THE SUITE CONTAINS THE MEASUREMENT AT ALL ────────────
+    //
+    // Everything above is about the step, the body, the file and its skip
+    // markers. None of it asks whether the suite still holds the measurement.
+    // Deleting both `it('MEASUREMENT: … P4-F …')` cases leaves this gate green,
+    // `p4s4-required-ci` green and `p4s4-budget-ratchet-law` green: the file is
+    // present, unskipped, named by the body and run by the step, and the P4-F
+    // budget is simply no longer measured — a budget nothing measured being
+    // indistinguishable from a budget that passed.
+    //
+    // So each row's own text is asked which budgets it measures, and the ids it
+    // cites are kept only where the ACCEPTED ratchet table knows them (by
+    // equality, or as the prefix of a key: `P4-F` covers `P4-F-TXN` and
+    // `P4-F-HTTP`). Nothing is listed here — the ids come from the row, the
+    // vocabulary from the budget table, and `testTitles` reads only RUNNABLE
+    // titles, so a `.skip`-ed measurement does not satisfy this either.
+    const cited = [...new Set([...`${ev.label} ${ev.name}`.matchAll(/\bP4-[A-Z](?:-[A-Z]+)?\b/g)].map((m) => m[0]))];
+    const known = cited.filter((id) => Object.keys(ACCEPTED_BUDGETS).some((k) => k === id || k.startsWith(`${id}-`)));
+    if (cited.length > 0 && known.length === 0)
+      problems.push(
+        `${ev.label} cites ${cited.join(', ')} and the accepted budget table knows none of them, so this law would judge no measurement for that row`,
+      );
+    const suiteTitles = has(root, ev.suite) ? testTitles(read(root, ev.suite)) : [];
+    for (const id of known)
+      if (!suiteTitles.some((t) => t.includes(id)))
+        problems.push(
+          `${ev.suite} holds no RUNNABLE it( title naming ${id}, which ${ev.label} says it measures — the step still runs, the file is still there and nothing is skipped, so deleting the ${id} case leaves a green step over a budget that was never measured`,
+        );
   }
   // No `pre`/`post` npm hook may wrap a pinned script: a hook runs before or
   // after the pinned body and is not the pinned body.
@@ -1374,6 +1456,30 @@ export function evidenceIntegrityProblems(root: string): string[] {
       problems.push(
         `${CONFIG} carries an \`exclude\` — a measured suite's directory can be excluded with the step, the body and the file all unchanged; a slice that genuinely needs one changes this law deliberately`,
       );
+    // THE CONFIG MUST BE READABLE AS A LITERAL.
+    //
+    // The two claims above are claims about TEXT. A config that computes its
+    // options defeats both without matching either:
+    //
+    //   const S = JSON.parse('{"exclude":["tests/**"],"passWithNoTests":true}');
+    //   export default defineConfig({ test: { ...S, include: [...] } });
+    //
+    // There is no `exclude:` and no `passWithNoTests: true` anywhere in that
+    // file, every regex above is silent, and `vitest run tests/performance/…`
+    // then exits 0 having collected nothing. A permanent law may not rest on a
+    // config whose options it cannot read, so a config that hides them is a
+    // finding in itself — the repository's own config states every option as a
+    // literal, so this costs it nothing.
+    for (const [shape, what] of [
+      [/\.\.\./, 'a spread, so an option can arrive from a value this law cannot read'],
+      [/\bJSON\s*\.\s*parse\s*\(/, 'a JSON.parse, so its options are a string this law cannot read'],
+      [/\bObject\s*\.\s*assign\s*\(/, 'an Object.assign, so an option can be merged in from a value this law cannot read'],
+      [/\brequire\s*\(|\bawait\s+import\s*\(/, 'a runtime import, so its options can come from another file entirely'],
+    ] as const)
+      if (shape.test(cfg))
+        problems.push(
+          `${CONFIG} carries ${what} — \`exclude\` and \`passWithNoTests\` are judged as TEXT above, and a computed option satisfies neither regex while still turning every measured suite into a run that collects nothing and exits 0`,
+        );
     for (const ev of S4_EVIDENCE_STEPS) {
       const dir = ev.suite.slice(0, ev.suite.indexOf('/', 'tests/'.length));
       if (!/include\s*:\s*\[\s*'tests\/\*\*\/\*\.test\.ts'\s*\]/.test(cfg))
@@ -1382,6 +1488,218 @@ export function evidenceIntegrityProblems(root: string): string[] {
     }
   }
   return problems;
+}
+
+/**
+ * ── GAP V3: THE TABLE WAS THE WHOLE SUBJECT, AND NOTHING DERIVED IT ───────
+ *
+ * `S4_EVIDENCE_STEPS` is the entire subject of `required-ci`,
+ * `evidence-script-bodies` and `evidence-integrity`. Nothing above derives it,
+ * and the guard suite's only floor on it was that it holds at least one row.
+ * So a slice that adds a THIRD measured step and forgets the row gets three
+ * green checks over two steps: the two rows it does hold are checked
+ * exhaustively and the third measurement is invisible to every one of them.
+ *
+ * ── CAN THE TABLE BE DERIVED? HONESTLY: ITS MEMBERSHIP CAN, ITS PINS CANNOT ─
+ *
+ * The per-row facts — the exact step `name`, the exact `command`, the pinned
+ * `scriptBody` — are the PINS. Deriving them from the workflow would make
+ * `required-ci` judge the workflow against itself: a renamed step would rename
+ * the expectation and the check would stay green, which is the vacuity the pins
+ * exist to prevent. Those stay written down, and they must.
+ *
+ * MEMBERSHIP is a different question, and it is fully derivable. A measured
+ * suite of THIS slice is discovered from the tree:
+ *
+ *   a runnable test file in a directory the table's own rows live in, whose
+ *   text names a CANDIDATE MIGRATION — one on disk past the accepted Phase 4
+ *   head, which `candidateMigrations` already derives.
+ *
+ * No prefix is written here, no migration number, no file name. The
+ * discriminator is the slice's own candidate surface, so it moves when the
+ * slice does, and it attributes a measurement to this slice without a list:
+ * measured on this tree it selects exactly the three receivables suites and
+ * none of the nine inherited performance suites, whose budgets belong to the
+ * accepted phases behind this one.
+ *
+ * ── THE CROSS-CHECK ──────────────────────────────────────────────────────
+ *
+ * Both directions, because both are real:
+ *
+ *  - a derived measured suite the TABLE does not name is a measurement three
+ *    checks cannot see;
+ *  - a derived measured suite the REQUIRED JOB cannot reach is a measurement
+ *    the repository carries and never takes — and a budget nothing measured is
+ *    indistinguishable from a budget that passed;
+ *  - a TABLE row whose suite the derivation does not find is a row about a
+ *    measurement this slice does not carry, so the pins guard nothing.
+ *
+ * Reachability is read off the parsed workflow, not grepped: a step of the
+ * required job reaches a suite when its `run:` names the path, or runs an npm
+ * script whose body names the path, or runs an npm script whose body names a
+ * `tests/<dir>` the suite is under.
+ */
+
+/** The directories the table's own rows live in — derived from the table, so no performance path is written down here. */
+function measuredDirs(): string[] {
+  return [...new Set(S4_EVIDENCE_STEPS.map((e) => e.suite.slice(0, e.suite.lastIndexOf('/'))).filter((d) => d.length > 0))].sort();
+}
+
+/**
+ * THIS SLICE'S MEASURED SUITES, DISCOVERED FROM THE TREE: a runnable test file
+ * in a measured directory whose text names a candidate migration.
+ */
+export function measuredCandidateSuites(root: string): string[] {
+  const numbers = candidateMigrations(root)
+    .map((f) => /^(\d+)/.exec(f)?.[1])
+    .filter((n): n is string => n !== undefined);
+  if (numbers.length === 0) return [];
+  const shapes = numbers.map((n) => new RegExp(`\\b${n}\\b`));
+  const out = new Set<string>();
+  for (const dir of measuredDirs())
+    for (const file of walk(root, dir)) {
+      if (!RUNNABLE.test(file.slice(file.lastIndexOf('/') + 1))) continue;
+      const text = read(root, file);
+      if (shapes.some((re) => re.test(text))) out.add(file);
+    }
+  return [...out].sort();
+}
+
+/** Every suite path a step of the required job reaches, directly or through an npm script body. */
+export function requiredJobReach(root: string): { readonly paths: readonly string[]; readonly dirs: readonly string[] } {
+  if (!has(root, WORKFLOW)) return { paths: [], dirs: [] };
+  let scripts: Record<string, unknown> = {};
+  if (has(root, 'package.json'))
+    try {
+      const bag = (JSON.parse(read(root, 'package.json')) as { scripts?: unknown }).scripts;
+      if (typeof bag === 'object' && bag !== null) scripts = bag as Record<string, unknown>;
+    } catch {
+      scripts = {};
+    }
+  const paths = new Set<string>();
+  const dirs = new Set<string>();
+  const harvest = (text: string): void => {
+    for (const m of text.matchAll(/\btests\/[A-Za-z0-9._/-]*\.test\.ts\b/g)) paths.add(m[0]);
+    for (const m of text.matchAll(/\btests\/[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_-]+)*(?![A-Za-z0-9._/-])/g)) dirs.add(m[0]);
+  };
+  for (const step of readWorkflow(read(root, WORKFLOW)).steps) {
+    if (step.job !== REQUIRED_JOB) continue;
+    const run = step.run ?? '';
+    harvest(run);
+    for (const m of run.matchAll(/\bnpm run ([A-Za-z0-9:_-]+)/g)) {
+      const body = scripts[m[1] ?? ''];
+      if (typeof body === 'string') harvest(body);
+    }
+  }
+  return { paths: [...paths].sort(), dirs: [...dirs].sort() };
+}
+
+/**
+ * EVERY SUITE PATH A STEP OF THE REQUIRED JOB ACTUALLY NAMES, resolved through
+ * the npm script bodies the gate already reads.
+ *
+ * `requiredJobReach` answers the weaker question "could the runner get there",
+ * which a directory-covering `test*` script satisfies. For a MEASURED step that
+ * is not enough: `perf:phase2:s8` covers the whole of `tests/performance` and
+ * no step of any job runs it, so directory coverage would call an unmeasured
+ * budget measured. This answers the exact question instead — which suite FILES
+ * the required job names — so the table can be compared with it as a SET.
+ */
+export function workflowNamedSuites(root: string): string[] {
+  if (!has(root, WORKFLOW)) return [];
+  let scripts: Record<string, unknown> = {};
+  if (has(root, 'package.json'))
+    try {
+      const bag = (JSON.parse(read(root, 'package.json')) as { scripts?: unknown }).scripts;
+      if (typeof bag === 'object' && bag !== null) scripts = bag as Record<string, unknown>;
+    } catch {
+      scripts = {};
+    }
+  const out = new Set<string>();
+  for (const step of readWorkflow(read(root, WORKFLOW)).steps) {
+    if (step.job !== REQUIRED_JOB) continue;
+    let text = step.run ?? '';
+    for (const m of (step.run ?? '').matchAll(/\bnpm run ([A-Za-z0-9:_-]+)/g)) {
+      const body = scripts[m[1] ?? ''];
+      if (typeof body === 'string') text += `\n${body}`;
+    }
+    for (const m of text.matchAll(/\btests\/[A-Za-z0-9._/-]*\.test\.ts\b/g)) out.add(m[0]);
+  }
+  return [...out].sort();
+}
+
+/** The cross-check: the table's membership against the measurements the tree carries and the required job takes. */
+export function evidenceCoverageProblems(root: string): string[] {
+  const problems: string[] = [];
+  const derived = measuredCandidateSuites(root);
+  const named = new Set(S4_EVIDENCE_STEPS.map((e) => e.suite));
+  if (S4_EVIDENCE_STEPS.length === 0)
+    problems.push('S4_EVIDENCE_STEPS is empty, so `required-ci`, `evidence-script-bodies` and `evidence-integrity` all have no subject');
+  if (derived.length === 0)
+    problems.push(
+      `no runnable test file in ${measuredDirs().join(', ') || 'any measured directory'} names a candidate migration, so this cross-check derived an empty set and would be vacuous — the candidate surface is ${
+        candidateMigrations(root).join(', ') || 'empty'
+      }`,
+    );
+  const reach = requiredJobReach(root);
+  const reached = (file: string): boolean => reach.paths.includes(file) || reach.dirs.some((d) => file === d || file.startsWith(`${d}/`));
+  for (const file of derived) {
+    if (!named.has(file))
+      problems.push(
+        `${file} is a measured suite of this slice — it is a runnable test in ${file.slice(0, file.lastIndexOf('/'))} and names a candidate migration — and S4_EVIDENCE_STEPS does not name it, so \`required-ci\`, \`evidence-script-bodies\` and \`evidence-integrity\` all judge a table that cannot see it`,
+      );
+    if (!reached(file))
+      problems.push(
+        `${file} is a measured suite of this slice and NO step of the required \`${REQUIRED_JOB}\` job reaches it, directly or through an npm script body — a measurement the repository carries and never takes, and a budget nothing measured is indistinguishable from a budget that passed`,
+      );
+  }
+  for (const ev of S4_EVIDENCE_STEPS)
+    if (!derived.includes(ev.suite))
+      problems.push(
+        `S4_EVIDENCE_STEPS names ${ev.suite} for ${ev.label} and the derivation does not find it among this slice's measured suites — either it is gone from the tree or it names no candidate migration, so the pins on that row guard nothing`,
+      );
+  // ── AND SET EQUALITY WITH THE WORKFLOW ITSELF ───────────────────────────
+  //
+  // The second derivation, from the other side. The required job's own steps
+  // name suite files; restricted to the ones the candidate surface attributes
+  // to THIS slice, that set must EQUAL the table.
+  //
+  // The restriction is not a softening and it is not a list: the required job
+  // also runs the PREDECESSOR slices' measured steps — `pos-s3-budgets` is
+  // P4-A/P4-B's budget and `plan-evidence-contract` is TL-P4-S3-R4's — and
+  // neither names a candidate migration. A gate that demanded unrestricted
+  // equality would pin its predecessor's steps as its own evidence and would
+  // red the moment P4-S5 added one of its own. The attribution is what makes
+  // the equality a statement about this slice.
+  const attributed = workflowNamedSuites(root).filter((f) => derived.includes(f));
+  for (const file of attributed)
+    if (!named.has(file))
+      problems.push(
+        `a step of the required \`${REQUIRED_JOB}\` job names ${file}, the candidate surface attributes it to this slice, and S4_EVIDENCE_STEPS does not name it — the workflow measures something the table cannot see, so none of its pins apply to it`,
+      );
+  for (const ev of S4_EVIDENCE_STEPS)
+    if (!attributed.includes(ev.suite))
+      problems.push(
+        `S4_EVIDENCE_STEPS names ${ev.suite} for ${ev.label} and NO step of the required \`${REQUIRED_JOB}\` job names that file, directly or through an npm script body — being reachable through a directory-covering \`test*\` script is not enough for a measured step, because \`perf:phase2:s8\` covers the whole directory and no step of any job runs it`,
+      );
+  return problems;
+}
+
+/** The two sides of the cross-check, printed on a PASS as well as on a FAIL. */
+export function evidenceCoverageReport(root: string): string {
+  const derived = measuredCandidateSuites(root);
+  const named = new Set(S4_EVIDENCE_STEPS.map((e) => e.suite));
+  const reach = requiredJobReach(root);
+  const reached = (f: string): boolean => reach.paths.includes(f) || reach.dirs.some((d) => f === d || f.startsWith(`${d}/`));
+  const attributed = workflowNamedSuites(root).filter((f) => derived.includes(f));
+  return `${derived.length} derived from the tree (${measuredDirs().join(', ')} ∩ the candidate surface), ${attributed.length} named by the required \`${REQUIRED_JOB}\` job and attributed to this slice, ${S4_EVIDENCE_STEPS.length} table row(s): ${
+    derived
+      .map(
+        (f) =>
+          `${f.slice(f.lastIndexOf('/') + 1)}${named.has(f) ? '' : ' NOT IN TABLE'}${attributed.includes(f) ? '' : ' NOT NAMED BY ' + REQUIRED_JOB}${reached(f) ? '' : ' UNREACHABLE'}`,
+      )
+      .join('; ') || 'none'
+  }`;
 }
 
 /** What the measured suites are, and what the runner config says, on a pass as well as a failure. */
@@ -1544,6 +1862,54 @@ export function rosterRows(root: string): readonly SuiteRow[] {
   }));
 }
 
+/**
+ * THE NON-SHRINKING RATCHET ON THE DERIVED MATCH SET.
+ *
+ * `roster-runner` constrains only files ALREADY on the roster — it iterates
+ * `rosterFiles(root)` — so it cannot see a suite leave. A rostered suite moved
+ * AND renamed out of the basename rule drops off the roster entirely: measured
+ * on this tree, renaming `tests/security/p4s4-rls-quals-once-per-query.test.ts`
+ * takes the roster from 26 files to 25, every check stays green, and nothing in
+ * `ci.yml` executes it afterwards — `test:integration` covers three directories
+ * and the measured steps name files.
+ *
+ * A FLOOR, never an equality: the roster grows as this slice is written in
+ * several worktrees at once, and an equality against today's count is exactly
+ * the P4-AL-88 defect. A slice that legitimately retires a suite lowers this
+ * number in the same commit, deliberately and visibly, which is the whole
+ * point of a ratchet.
+ *
+ * This is the ONE hand-written number this law carries, and it is here because
+ * the alternative was measured and rejected: an INVERSE content derivation —
+ * "every runnable test in a covered directory that cites a P4-S4 subject the
+ * gate discovers must be rostered" — sweeps in the estate's standing
+ * phase-wide suites. Measured against the candidate migrations it claims 6
+ * files that are not this slice's (`tests/integration/migration-portability.test.ts`,
+ * `tests/guards/phase4-deferred-seam-guard.test.ts`,
+ * `tests/guards/phase4-refund-not-a-reducer-guard.test.ts` and three goldens of
+ * the `phase2`/`phase4` directories); measured against the four contract
+ * relations it claims more than twenty, including every `settlement-s6-*`
+ * suite. Rostering those would make THIS gate execute and own suites belonging
+ * to the phase and to slices behind it, which is a worse defect than the one it
+ * would close. So the ratchet is a floor, and the gap it does not close is
+ * stated here rather than left to be discovered.
+ */
+// The ratchet's recorded count. It moves in BOTH directions and only in the
+// commit that moves the roster: lower it when a suite is retired deliberately,
+// RAISE it when one is added — a floor left behind a grown roster goes slack,
+// because a later loss then lands above it and is never reported.
+// `p4s4-required-ci` asserts this equals the derived count, so forgetting is a
+// failure rather than a silent relaxation.
+export const ROSTER_FLOOR = 32;
+
+/**
+ * The directories the roster occupied when this ratchet was written, each its
+ * own FLOOR. `tests/security` holds exactly one rostered suite, so the total
+ * floor above cannot see it leave on a day a sibling adds a suite elsewhere.
+ * A slice that deliberately empties a directory removes its row here.
+ */
+const ROSTER_DIRECTORY_FLOOR: readonly string[] = ['tests/golden-regression/phase4-s4', 'tests/guards', 'tests/integration', 'tests/security'];
+
 /** The derivation, and the three ways it can be wrong: it found nothing, it found a suite nothing runs, or the named row is gone. */
 export function rosterProblems(root: string): string[] {
   const problems: string[] = [];
@@ -1559,6 +1925,45 @@ export function rosterProblems(root: string): string[] {
   return problems;
 }
 
+/**
+ * THE RATCHET, AS ITS OWN CHECK AND NOT AS PART OF `rosterProblems`.
+ *
+ * Its subject is THE CHECKOUT — "has this repository lost a suite it had" — and
+ * that is a different claim from "is this root's derived roster coherent",
+ * which is what `rosterProblems` asks and which sibling proofs legitimately ask
+ * of two-file scratch roots. Putting the floor inside `rosterProblems` made it
+ * refuse every minimal synthetic root, including the one
+ * `tests/guards/p4s4-gate-execution.test.ts:126` builds; the claims are
+ * separate, so the checks are separate.
+ */
+export function rosterRatchetProblems(root: string): string[] {
+  const problems: string[] = [];
+  const files = rosterFiles(root);
+  const total = files.length;
+  if (total < ROSTER_FLOOR)
+    problems.push(
+      `the P4-S4 roster holds ${total} file(s) and the ratchet floor is ${ROSTER_FLOOR} — a rostered suite has left the derived set, which is exactly what a move AND rename out of the basename rule does: the file stops being rostered, stops being executed by this gate, and no other check names the loss. If a suite was retired deliberately, lower ROSTER_FLOOR in the same commit`,
+    );
+  // AND PER DIRECTORY: the last suite of a directory can leave while the total
+  // is held up by a sibling's new file. `tests/security` holds exactly one.
+  const occupied = new Set(files.map((f) => f.slice(0, f.lastIndexOf('/'))));
+  for (const dir of ROSTER_DIRECTORY_FLOOR)
+    if (!occupied.has(dir))
+      problems.push(
+        `the P4-S4 roster no longer holds a single suite under ${dir}, and it did when this law was written — the last suite of a directory can leave while the total is held up by a sibling's new file, so each occupied directory is its own floor`,
+      );
+  return problems;
+}
+
+/** The ratchet's two floors against what the tree holds today, on a PASS as well as a FAIL. */
+export function rosterRatchetReport(root: string): string {
+  const files = rosterFiles(root);
+  const occupied = new Set(files.map((f) => f.slice(0, f.lastIndexOf('/'))));
+  return `${files.length} rostered file(s) against a floor of ${ROSTER_FLOOR}; ${ROSTER_DIRECTORY_FLOOR.filter((d) => occupied.has(d)).length} of ${
+    ROSTER_DIRECTORY_FLOOR.length
+  } floored directory/ies still occupied (${ROSTER_DIRECTORY_FLOOR.map((d) => `${d}${occupied.has(d) ? '' : ' EMPTY'}`).join(', ')})`;
+}
+
 /** What the derivation found, printed on a PASS as well as on a FAIL: a roster nobody can read is a roster nobody can audit. */
 export function rosterReport(root: string): string {
   const { suites, unrunnable } = discoverS4Suites(root);
@@ -1567,8 +1972,34 @@ export function rosterReport(root: string): string {
   }`;
 }
 
-/** A rostered file that is a LAW: it reads the tree and must prove it can refuse one. */
-const isLaw = (file: string): boolean => file.startsWith('tests/guards/');
+/**
+ * ── WHAT MAKES A ROSTERED FILE A *LAW*, AND WHY A DIRECTORY IS ONLY A FLOOR ─
+ *
+ * This predicate used to be exactly `file.startsWith('tests/guards/')`, and
+ * that is a claim about where an author chose to put a file, not about what the
+ * file does. Measured on this roster it left the law half ABSENT for 17 of 26
+ * rostered files — `tests/security/p4s4-rls-quals-once-per-query.test.ts`
+ * among them, which reads the tree, judges it, and was the subject of this
+ * slice's own corrective commit. A law moved one directory sideways stopped
+ * being a law.
+ *
+ * So the guard directory is kept as a FLOOR — a file an author put there
+ * declares itself a guard, and this gate's own named CI-composition row is what
+ * states which directory that is, so no path is written down twice — and it is
+ * UNIONED with a derived property: a suite whose SUBJECT IS THE REPOSITORY. It
+ * imports a gate module out of `scripts/`, or it reads the tree itself through
+ * `node:fs`. Such a suite can construct a MUTATED COPY of its subject and feed
+ * it to the law, so nothing stops it proving it can refuse one, and it owes
+ * that proof wherever its author put it.
+ *
+ * A suite whose subject is the RUNNING SYSTEM cannot: there is no tree artifact
+ * for it to plant a defect in, and asking it for one would be asking for a
+ * token assertion rather than for evidence.
+ */
+const JUDGES_THE_TREE: readonly RegExp[] = [
+  /\bfrom\s+['"](?:\.\.\/)+scripts\/[A-Za-z0-9._-]+['"]/,
+  /\b(?:readFileSync|readdirSync|existsSync|statSync|lstatSync)\s*\(/,
+];
 
 /**
  * The shapes this repository's laws actually announce a planted defect in, read
@@ -1578,11 +2009,108 @@ const isLaw = (file: string): boolean => file.startsWith('tests/guards/');
  */
 const PLANTED_DEFECT_TITLE = /\b(?:red|planted)\b|\brule\s+\d+[a-z]?\b.*\b(?:names|name|fire|fires|satisfied|cannot)\b/i;
 
+/** The guard directory, read off this gate's own named CI-composition row rather than written down a second time. */
+const GUARD_DIR = CI_COMPOSITION_SUITE.slice(0, CI_COMPOSITION_SUITE.lastIndexOf('/'));
+
+/** The three kinds this roster actually holds, each read off the file rather than prescribed to it. */
+export type RosterKind = 'law' | 'golden' | 'behaviour';
+
 /**
- * `[[daftar-a-green-gate-must-prove-it-can-be-red]]`. A law with no planted
- * defect asserts something nobody has shown is falsifiable. Scoped to
- * `tests/guards/`: an integration suite exercises a route and a performance
- * suite measures a budget, and neither plants a defect in the tree at all.
+ * A rostered file's KIND.
+ *
+ *  - `law`       — it is in the guard directory, OR its subject is the
+ *                  repository (above). It owes a planted defect, and every
+ *                  block that announces one owes an EXECUTED refusal.
+ *  - `golden`    — it is in this slice's golden directory, which the roster
+ *                  rule already derives. Its claim is that a RECORDED world
+ *                  still holds, so what it can lose is not a refusal but the
+ *                  comparison itself: a golden read over an empty world
+ *                  compares nothing to nothing and passes.
+ *  - `behaviour` — it exercises the running system through the real command or
+ *                  route.
+ */
+export function rosterSuiteKind(source: string, file: string): RosterKind {
+  if (file.startsWith(`${GUARD_DIR}/`) || JUDGES_THE_TREE.some((re) => re.test(source))) return 'law';
+  if (file.startsWith(`${S4_GOLDEN_DIR}/`)) return 'golden';
+  return 'behaviour';
+}
+
+/**
+ * THE SHAPE OF AN EXECUTED RED.
+ *
+ * A law announces its planted defect in an `it(` title, and a title is PROSE:
+ * `PLANTED_DEFECT_TITLE` alone was satisfiable by writing the word "red", and
+ * ONE matching title satisfied the whole file however many blocks it held.
+ * `p4s4-command-refusal-audit-law.test.ts` carries 15 titles of which exactly
+ * one matches, and under the old law that passed exactly as 15 of 15 would.
+ *
+ * The half a title cannot fake is an assertion that the law ACTUALLY REFUSED
+ * the plant: that its problem list came back non-empty, that a satisfaction
+ * predicate came back false, that the refusal's own message matched, or that
+ * the planted subject differs from the real one. Each shape here is read off
+ * this estate's own planted-defect blocks rather than prescribed to them — the
+ * budget ratchet's plant refuses through `toBe(false)` and `toMatch(/is
+ * missing/)`, the workflow plants through `not.toEqual([])`, the evidence
+ * plants through `toContain(`.
+ *
+ * What is deliberately NOT here is the assertion of SILENCE (`toEqual([])`),
+ * which is the whole point: a law that only ever asserts its problem list is
+ * empty has executed its silence and never once executed its refusal.
+ */
+const EXECUTED_RED =
+  /\bnot\s*\.\s*to(?:Strict)?Equal\s*\(|\bnot\s*\.\s*toHaveLength\s*\(\s*0\s*\)|\bnot\s*\.\s*toBe\w*\s*\(|\btoBeGreaterThan\s*\(\s*0\s*\)|\btoBeGreaterThanOrEqual\s*\(\s*1\s*\)|\btoContain\w*\s*\(|\btoMatch\w*\s*\(|\btoBe\s*\(\s*false\s*\)|\btoBeFalsy\s*\(|\btoThrow\w*\s*\(|\.rejects\b/;
+
+/**
+ * THE TOP-LEVEL `describe(` BLOCKS OF A SUITE, as title and body.
+ *
+ * The SUBJECT of the planted-defect obligation is the BLOCK, not the file.
+ * Anchored at column 0 (`^describe`), which is where this estate's suites put
+ * their top-level blocks, so a nested `describe` inside one belongs to its
+ * parent's body and is judged together with it.
+ */
+export function describeBlocks(source: string): readonly { readonly title: string; readonly body: string }[] {
+  const marks: { at: number; title: string }[] = [];
+  for (const m of source.matchAll(/^describe(?:\.\w+)?\s*\(\s*(['"`])((?:\\[\s\S]|(?!\1)[^\\])*)\1/gm))
+    marks.push({ at: m.index ?? 0, title: (m[2] ?? '').replace(/\\([\s\S])/g, '$1') });
+  return marks.map((mark, i) => ({
+    title: mark.title,
+    body: source.slice(mark.at, i + 1 < marks.length ? (marks[i + 1]?.at ?? source.length) : source.length),
+  }));
+}
+
+/**
+ * `[[daftar-a-green-gate-must-prove-it-can-be-red]]`, applied to EVERY
+ * rostered file and not only to the ones in one directory.
+ *
+ * WHAT EACH KIND OWES, and why the three are not the same:
+ *
+ *  - EVERY kind owes a runnable `it(` title, and at least one DISCRIMINATING
+ *    ASSERTION (above). A file the runner opens and finds nothing in is not
+ *    evidence, and a file whose every assertion is a bare positive equality is
+ *    green when the thing it is about is deleted.
+ *
+ *  - A LAW owes, on top of that, BOTH halves of a planted-defect proof: a
+ *    title that announces the plant, so a reader of the run's log can find it,
+ *    AND an EXECUTED RED — an assertion that the law's refusal came back
+ *    non-empty. The title alone was the hole: it is prose.
+ *
+ *  - A GOLDEN suite owes, on top of the universal floor, a NON-VACUITY floor
+ *    on its own subject: a golden comparison over an empty recorded world
+ *    compares nothing to nothing. It does NOT owe a planted defect, and this
+ *    law says so rather than falling silent: its subject is a recorded run of
+ *    the real system, not a file on disk, so there is nothing in it to plant a
+ *    defect in. Both of this slice's goldens carry the estate's own idiom for
+ *    the thing they owe instead — `that law can say no: …`.
+ *
+ *  - A BEHAVIOUR suite owes the universal floor and NOTHING FURTHER, and this
+ *    law states that too. It drives the real command or route against a real
+ *    database; its subject exists only while it runs. Its falsifiability is
+ *    demonstrated by `check:roster-execution`, which hands it to a bounded
+ *    Vitest run and refuses a skipped, todo, only-marked or absent test —
+ *    not by a mutation this gate could apply to a file.
+ *
+ * Nothing here is a list of exceptions: the kind is computed from the file's
+ * own bytes and from the golden directory the roster rule already derives.
  */
 export function rosterRedProofProblems(root: string): string[] {
   const problems: string[] = [];
@@ -1591,18 +2119,58 @@ export function rosterRedProofProblems(root: string): string[] {
       problems.push(`${file} is on the roster and does not exist`);
       continue;
     }
-    const titles = testTitles(read(root, file));
+    const source = read(root, file);
+    const titles = testTitles(source);
     if (titles.length === 0) {
       problems.push(`${file} holds no runnable it( title — a file the runner opens and finds nothing in is not evidence`);
       continue;
     }
-    if (!isLaw(file)) continue;
-    if (!titles.some((t) => PLANTED_DEFECT_TITLE.test(t)))
+    const kind = rosterSuiteKind(source, file);
+    if (kind === 'law') {
+      if (!titles.some((t) => PLANTED_DEFECT_TITLE.test(t)))
+        problems.push(
+          `${file} judges the repository and no it( title announces a planted defect — a law with no demonstrated red is a law nobody has shown can refuse anything`,
+        );
+      // EVERY block that announces a plant owes an EXECUTED refusal. This is
+      // what stops ONE matching title from satisfying a whole file, and what
+      // stops the word "red" in prose from satisfying even one block.
+      for (const block of describeBlocks(source)) {
+        const announces = PLANTED_DEFECT_TITLE.test(block.title) || testTitles(block.body).some((t) => PLANTED_DEFECT_TITLE.test(t));
+        if (announces && !EXECUTED_RED.test(block.body))
+          problems.push(
+            `${file} — the block \`${block.title}\` announces a planted defect and asserts no refusal anywhere inside it: it never asserts the law's problem list came back non-empty, nor that a satisfaction predicate came back false, nor that the refusal's own message matched, nor that the planted subject differs from the real one. A title carrying the word "red" is prose; a block that only ever asserts silence has executed its silence and never once executed its refusal`,
+          );
+      }
+    }
+    if (
+      kind === 'golden' &&
+      !/\btoBeGreaterThan(?:OrEqual)?\s*\(|\bnot\s*\.\s*toHaveLength\s*\(\s*0\s*\)|\bnot\s*\.\s*to(?:Strict)?Equal\s*\(\s*\[\s*\]\s*\)/.test(source)
+    )
       problems.push(
-        `${file} is a law on this roster and no it( title announces a planted defect — a law with no demonstrated red is a law nobody has shown can refuse anything`,
+        `${file} is a golden suite and asserts no floor on its own subject — a golden comparison over an empty recorded world compares nothing to nothing and passes, so the recorded world has to be shown to be there`,
       );
   }
   return problems;
+}
+
+/** WHICH KIND EVERY ROSTERED FILE WAS JUDGED AS, printed on a PASS as well as on a FAIL: a law nobody can see the scope of is a law nobody can audit. */
+export function rosterRedProofReport(root: string): string {
+  const byKind: Record<RosterKind, string[]> = { law: [], golden: [], behaviour: [] };
+  for (const file of rosterFiles(root)) {
+    if (!has(root, file)) continue;
+    byKind[rosterSuiteKind(read(root, file), file)].push(file.slice(file.lastIndexOf('/') + 1));
+  }
+  let announcing = 0;
+  for (const file of rosterFiles(root)) {
+    if (!has(root, file)) continue;
+    const source = read(root, file);
+    if (rosterSuiteKind(source, file) !== 'law') continue;
+    for (const block of describeBlocks(source))
+      if (PLANTED_DEFECT_TITLE.test(block.title) || testTitles(block.body).some((t) => PLANTED_DEFECT_TITLE.test(t))) announcing += 1;
+  }
+  return `${(['law', 'golden', 'behaviour'] as const)
+    .map((k) => `${byKind[k].length} ${k}${k === 'behaviour' ? '' : '(s)'}: ${byKind[k].join(', ') || 'none'}`)
+    .join('; ')}; ${announcing} plant-announcing describe( block(s), each required to execute a refusal`;
 }
 
 // ───── EXECUTION ──────────────────────────────────────────────────────────
@@ -2181,6 +2749,13 @@ export const CHECKS: readonly Check[] = [
     ok: 'every measured suite is in the tree, carries no skipped, exclusive or todo block, is named by the script body that runs it, is wrapped by no npm pre/post hook, and is collected by a root config that neither excludes a directory nor passes with no tests',
   },
   {
+    id: 'evidence-coverage',
+    title: "the evidence table's MEMBERSHIP, cross-checked against the measurements the tree carries",
+    run: evidenceCoverageProblems,
+    note: evidenceCoverageReport,
+    ok: "the table equals the measured suites on BOTH derivations: every runnable test file in the table's own directories that names a candidate migration is named by S4_EVIDENCE_STEPS and reached by the required `backend` job, and the suite files that job itself names, restricted to the ones the candidate surface attributes to this slice, are exactly the table's rows — so a measured suite cannot be added to this slice, or dropped from the workflow, and stay invisible to the three checks whose only subject the table is",
+  },
+  {
     id: 'roster-runner',
     title: 'every rostered suite is in a directory the runner actually runs',
     run: rosterRunnerProblems,
@@ -2195,10 +2770,18 @@ export const CHECKS: readonly Check[] = [
     ok: 'the rule matched at least one suite, every matched file is one the root runner executes, and the CI-composition suite is present',
   },
   {
+    id: 'roster-ratchet',
+    title: 'the roster may GROW and may not silently shrink',
+    run: rosterRatchetProblems,
+    note: rosterRatchetReport,
+    ok: "the derived roster is at or above its floor and every floored directory still holds a suite, so a rostered file cannot leave the roster — and this gate's execution — by being moved and renamed out of the basename rule while every per-file check stays green",
+  },
+  {
     id: 'roster-red-proofs',
-    title: 'every rostered law carries a planted-defect proof',
+    title: 'every rostered file carries the falsifiability proof ITS KIND owes',
     run: rosterRedProofProblems,
-    ok: 'every rostered file holds runnable it( titles and every rostered law has at least one announcing the planted defect it is proved red on',
+    note: rosterRedProofReport,
+    ok: 'every rostered file holds a runnable it( title; every file whose subject is the REPOSITORY — the guard directory as a floor, UNIONED with what the file actually reads — announces a planted defect in a title AND executes a refusal in every block that announces one, so one title cannot satisfy a whole file and the word red cannot satisfy a block; every golden suite asserts a floor on its own recorded world; and a behaviour suite owes nothing further, because its subject exists only while it runs and `roster-execution` is what demonstrates it',
   },
   {
     id: 'roster-execution',

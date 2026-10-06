@@ -161,6 +161,35 @@ export function consumptionShapeProblems(source: string): string[] {
  *       checks out and then closes her till is entitled to have her own retry
  *       answered from the stored sale; refusing it is the false conflict in
  *       another spelling.
+ *   (d) THE ACTOR'S OWN AUTHORITY IS JUDGED INSIDE THE PROOF, over the STORED
+ *       sale, before every exit the proof has. The ownership half above is not
+ *       the whole of what the digest cannot carry: the route admits
+ *       `sales.create` alone (`pos-permissions.ts:100`), and a checkout also
+ *       needs the SENSITIVE `sales.discount` for a basket carrying a granted
+ *       discount and `pos.cart_remove_line` authority over the warehouse.
+ *       While both of those sat ONLY in `run()` — that is, only after
+ *       `provenReplay` had already answered — an actor holding neither, who
+ *       delivered the already-committed `saleId`, was handed the sale, its
+ *       totals, the granted discount and `cogsBaseMinor`; the identical basket
+ *       under a fresh `saleId` is `pos.cart_discount_not_permitted` or
+ *       `inventory.warehouse_out_of_scope`. It is judged INSIDE the proof and
+ *       not before the call because the basket both would otherwise be judged
+ *       against was consumed by the original checkout: the only honest subject
+ *       is the stored sale's own lines and the stored sale's own warehouse,
+ *       which is what the proof already has in hand. `run()` keeps its own two
+ *       copies over the SNAPSHOT, so (d) requires BOTH placements and accepts
+ *       neither alone.
+ *
+ * ── AND THE TWO EVASIONS OF (b)'s WINDOW, CLOSED ─────────────────────────
+ *
+ * (b) reads the lines BETWEEN the session read and the proof, so it saw
+ * neither of these, and both were measured as green against a text that
+ * breaks the ruling:
+ *
+ *   - a statement on the PROOF'S OWN LINE is below the window's end, so the
+ *     proof call is now pinned as the only statement on its line;
+ *   - a state read placed BEFORE the session read is above the window's
+ *     start, so nothing may be awaited, and no relation touched, ahead of it.
  */
 export function proofBeforeStateProblems(source: string): string[] {
   const body = code(source);
@@ -196,10 +225,85 @@ export function proofBeforeStateProblems(source: string): string[] {
     for (const line of executable)
       if (!permitted.test(line)) problems.push(`the checkout does something other than the ownership refusal between the session read and the proof: ${line}`);
   }
+  // (b, FIRST EVASION) the window above ends at the line BEFORE the proof, so
+  //     a statement sharing the proof's own line was never in it. The proof
+  //     call is therefore the ONLY statement on its line.
+  if (proof >= 0) {
+    const line = run.slice(run.lastIndexOf('\n', proof) + 1, run.indexOf('\n', proof)).trim();
+    if (!/^const \w+ = await this\.provenReplay\([^;]*\);$/.test(line))
+      problems.push(`the replay proof is not the only statement on its line, so a decision can ride beside it where the window cannot see it: ${line}`);
+  }
+  // (b, SECOND EVASION) the window above starts at the line AFTER the session
+  //     read, so a state read placed AHEAD of it was never in it either.
+  //     Nothing is awaited and no relation is touched before the session.
+  if (session >= 0) {
+    const beforeSession = run.slice(0, run.lastIndexOf('\n', session) + 1);
+    for (const touch of ['await ', 'this.db.', 'this.authorization.', 'this.sales.'])
+      if (beforeSession.includes(touch))
+        problems.push(
+          `the checkout performs "${touch.trim()}" BEFORE it reads the till session — a state read ahead of the session read is a decision the replay proof has not seen`,
+        );
+  }
   // (c) the status refusal stays after the proof, so the owner's own retry
   //     still replays once the shift is closed.
   if (proof >= 0 && notOpen >= 0 && notOpen < proof)
     problems.push('the checkout refuses pos.session_not_open BEFORE the replay proof — a cashier who closed her till could not retry her own checkout');
+  // (d) the two judgements of the ACTOR that the digest cannot carry, inside
+  //     the proof and before every exit the proof has — and still in `run()`
+  //     over the snapshot, so neither placement can stand in for the other.
+  problems.push(...replayAuthorityProblems(body, run));
+  return problems;
+}
+
+/**
+ * CLAUSE (d), as its own function over the already-stripped source.
+ *
+ * `provenReplay` has THREE exits that speak about a stored sale — the
+ * `in_session` conflict, the digest comparison and the answer itself — and all
+ * three are made on the digest and the stored rows alone. So the subject is
+ * not "before the return": it is BEFORE THE FIRST OF THEM.
+ */
+function replayAuthorityProblems(body: string, run: string): string[] {
+  const problems: string[] = [];
+  const start = body.indexOf('private async provenReplay(');
+  const end = body.indexOf('private async replayAnswer(');
+  if (start < 0 || end <= start) return ['the POS checkout has no provenReplay() to judge the actor inside'];
+  const replay = body.slice(start, end);
+  const discount = replay.indexOf("posRefusal('pos.cart_discount_not_permitted')");
+  const authority = replay.search(/this\.authorization\.authorize\(m, 'pos\.cart_remove_line'/);
+  const exits = [
+    replay.indexOf('saleCommitIntentSha256('),
+    replay.indexOf("posRefusal('pos.checkout_idempotency_conflict')"),
+    replay.indexOf('readSaleDto('),
+  ].filter((i) => i >= 0);
+  if (exits.length === 0) return ['provenReplay() has no digest, no conflict and no answer — there is no replay branch to order the actor against'];
+  const firstExit = Math.min(...exits);
+  if (discount < 0)
+    problems.push(
+      'provenReplay() never refuses pos.cart_discount_not_permitted — a stored sale carrying a granted discount would be reported to an actor who may not grant one',
+    );
+  else if (discount > firstExit)
+    problems.push(
+      'provenReplay() judges the discount permission AFTER it has already answered or conflicted on the digest — the SENSITIVE sales.discount is an argument the intent digest cannot carry and must be judged before the branch that answers on the digest alone',
+    );
+  if (authority < 0)
+    problems.push(
+      "provenReplay() establishes no pos.cart_remove_line authority over the stored sale's warehouse — the stored answer is shown only to an actor with authority over every warehouse it touches",
+    );
+  else if (authority > firstExit)
+    problems.push(
+      'provenReplay() establishes the warehouse authority AFTER it has already answered or conflicted on the digest — the actor branch scope is an argument the intent digest cannot carry and must be judged before the branch that answers on the digest alone',
+    );
+  // Neither placement replaces the other: `run()` still judges the SNAPSHOT's
+  // discount request and still authorizes the removals it is about to make.
+  if (!run.includes("posRefusal('pos.cart_discount_not_permitted')"))
+    problems.push(
+      'run() no longer refuses pos.cart_discount_not_permitted over the snapshot — the replay copy judges the STORED sale and is not a substitute for the cart',
+    );
+  if (!/this\.authorization\.authorize\(m, 'pos\.cart_remove_line'/.test(run))
+    problems.push(
+      'run() no longer authorizes pos.cart_remove_line before the removals — the replay copy judges the STORED sale and is not a substitute for the session',
+    );
   return problems;
 }
 
@@ -279,6 +383,11 @@ describe('rule 4: the owner first, then the proof, then the state', () => {
     expect(proofBeforeStateProblems(defective)).toContain(
       'the checkout judges pos.session_not_owned AFTER the replay proof — an argument the intent digest cannot carry must be judged before the branch that answers on the digest alone',
     );
+    // Beside the `toContain`, the COUNT: a plant that moved one sentence must
+    // name exactly that one problem. Without this, a rule that had started
+    // reporting its message for every text — or for none of the others — would
+    // still be green here.
+    expect(proofBeforeStateProblems(defective)).toHaveLength(1);
   });
 
   it('red: the status refusal pulled AHEAD of the proof, which breaks a closed till’s own retry', () => {
@@ -292,6 +401,12 @@ describe('rule 4: the owner first, then the proof, then the state', () => {
     expect(proofBeforeStateProblems(defective)).toContain(
       'the checkout refuses pos.session_not_open BEFORE the replay proof — a cashier who closed her till could not retry her own checkout',
     );
+    // TWO, and named: pulling the status refusal ahead also puts a second
+    // sentence inside (b)'s window, and the law reports both halves.
+    expect(proofBeforeStateProblems(defective)).toHaveLength(2);
+    expect(proofBeforeStateProblems(defective)).toContain(
+      "the checkout does something other than the ownership refusal between the session read and the proof: if (session !== null && session.status !== 'open') throw posRefusal('pos.session_not_open');",
+    );
   });
 
   it('red: a SECOND sentence smuggled between the session read and the proof', () => {
@@ -301,6 +416,138 @@ describe('rule 4: the owner first, then the proof, then the state', () => {
       "if (session !== null && session.openedBy !== m.userId) throw posRefusal('pos.session_not_owned');\n    const sneaky = await this.readCartSnapshotEarly(m, tillSessionId);",
     );
     expect(proofBeforeStateProblems(defective).join(' | ')).toContain('does something other than the ownership refusal between the session read and the proof');
+    expect(proofBeforeStateProblems(defective)).toHaveLength(1);
+  });
+
+  it('red: (d) THE SIBLING DEFECT — the discount refusal left only in run(), behind the proof', () => {
+    const real = read(SERVICE);
+    const defective = real.replace(
+      "    if (rows.rows.some((r) => parseMinor(r.discount_txn_minor) > 0n) && !hasPermission(m.roles, 'sales.discount')) {\n      throw posRefusal('pos.cart_discount_not_permitted');\n    }\n",
+      '',
+    );
+    // CANARY: the plant landed in CODE and changed the executed shape — the
+    // statement is gone from provenReplay() and still present in run().
+    expect(defective, 'the plant did not apply — the anchored statement was not found').not.toBe(real);
+    const stripped = code(defective);
+    const replayRegion = stripped.slice(stripped.indexOf('private async provenReplay('), stripped.indexOf('private async replayAnswer('));
+    expect(replayRegion, 'CANARY: the plant must remove the refusal from the replay path').not.toContain('pos.cart_discount_not_permitted');
+    expect(stripped, 'CANARY: run()’s own copy over the snapshot must survive the plant').toContain("posRefusal('pos.cart_discount_not_permitted')");
+    expect(proofBeforeStateProblems(defective)).toContain(
+      'provenReplay() never refuses pos.cart_discount_not_permitted — a stored sale carrying a granted discount would be reported to an actor who may not grant one',
+    );
+    expect(proofBeforeStateProblems(defective)).toHaveLength(1);
+  });
+
+  it('red: (d) the discount refusal moved BEHIND the digest, which is an answer made on the digest alone', () => {
+    const real = read(SERVICE);
+    const statement =
+      "    if (rows.rows.some((r) => parseMinor(r.discount_txn_minor) > 0n) && !hasPermission(m.roles, 'sales.discount')) {\n      throw posRefusal('pos.cart_discount_not_permitted');\n    }\n";
+    const digestLine = "    if (digest !== header.commit_intent_sha256) throw posRefusal('pos.checkout_idempotency_conflict');\n";
+    const defective = real.replace(statement, '').replace(digestLine, digestLine + statement);
+    expect(defective).not.toBe(real);
+    const stripped = code(defective);
+    // CANARY: the statement is STILL in the replay path (so this is an ORDER
+    // defect and not the absence plant above) and now sits after the digest.
+    const replayRegion = stripped.slice(stripped.indexOf('private async provenReplay('), stripped.indexOf('private async replayAnswer('));
+    expect(replayRegion, 'CANARY: the plant must keep the refusal inside provenReplay').toContain("posRefusal('pos.cart_discount_not_permitted')");
+    expect(
+      replayRegion.indexOf("posRefusal('pos.cart_discount_not_permitted')") > replayRegion.indexOf('saleCommitIntentSha256('),
+      'CANARY: the plant must put the refusal AFTER the digest',
+    ).toBe(true);
+    expect(proofBeforeStateProblems(defective)).toContain(
+      'provenReplay() judges the discount permission AFTER it has already answered or conflicted on the digest — the SENSITIVE sales.discount is an argument the intent digest cannot carry and must be judged before the branch that answers on the digest alone',
+    );
+    expect(proofBeforeStateProblems(defective)).toHaveLength(1);
+  });
+
+  it('red: (d) the warehouse authority dropped from the replay path', () => {
+    const real = read(SERVICE);
+    const defective = real.replace("    await this.authorization.authorize(m, 'pos.cart_remove_line', btx, [header.warehouse_id]);\n", '');
+    expect(defective, 'the plant did not apply').not.toBe(real);
+    const stripped = code(defective);
+    const replayRegion = stripped.slice(stripped.indexOf('private async provenReplay('), stripped.indexOf('private async replayAnswer('));
+    // CANARY: gone from the replay path, still there for the real removals.
+    expect(replayRegion, 'CANARY: the plant must remove the authority from the replay path').not.toContain("'pos.cart_remove_line'");
+    expect(stripped, 'CANARY: run()’s own authority for the removals must survive the plant').toContain(
+      "this.authorization.authorize(m, 'pos.cart_remove_line'",
+    );
+    expect(proofBeforeStateProblems(defective)).toContain(
+      "provenReplay() establishes no pos.cart_remove_line authority over the stored sale's warehouse — the stored answer is shown only to an actor with authority over every warehouse it touches",
+    );
+    expect(proofBeforeStateProblems(defective)).toHaveLength(1);
+  });
+
+  it('red: (d) neither copy stands in for the other — run() stripped of its own two judgements', () => {
+    const real = read(SERVICE);
+    const noDiscount = real.replace(
+      "    if (snapshot.some((l) => l.discountMinor > 0n) && !hasPermission(m.roles, 'sales.discount')) {\n      throw posRefusal('pos.cart_discount_not_permitted');\n    }\n",
+      '',
+    );
+    expect(noDiscount, 'the plant did not apply').not.toBe(real);
+    const strippedRun = (src: string): string => {
+      const b = code(src);
+      return b.slice(b.indexOf('private async run('), b.indexOf('private async consume('));
+    };
+    // CANARY: the plant emptied run() and left provenReplay() alone.
+    expect(strippedRun(noDiscount), 'CANARY: run() must lose its snapshot refusal').not.toContain('pos.cart_discount_not_permitted');
+    expect(proofBeforeStateProblems(noDiscount)).toContain(
+      'run() no longer refuses pos.cart_discount_not_permitted over the snapshot — the replay copy judges the STORED sale and is not a substitute for the cart',
+    );
+    expect(proofBeforeStateProblems(noDiscount)).toHaveLength(1);
+
+    const noAuthority = real.replace(
+      "    const removalAuthority = await this.authorization.authorize(m, 'pos.cart_remove_line', btx, [session.warehouseId]);\n",
+      "    const removalAuthority = await this.authorization.authorize(m, 'pos.cart_remove_line_but_not_really', btx, [session.warehouseId]);\n",
+    );
+    expect(noAuthority, 'the plant did not apply').not.toBe(real);
+    expect(strippedRun(noAuthority), 'CANARY: run() must lose its removal authority').not.toContain("authorize(m, 'pos.cart_remove_line',");
+    expect(proofBeforeStateProblems(noAuthority)).toContain(
+      'run() no longer authorizes pos.cart_remove_line before the removals — the replay copy judges the STORED sale and is not a substitute for the session',
+    );
+    expect(proofBeforeStateProblems(noAuthority)).toHaveLength(1);
+  });
+
+  it('red: EVASION ONE — a decision riding on the PROOF’S OWN LINE, which (b)’s window cannot see', () => {
+    const real = read(SERVICE);
+    const proofLine = '    const replay = await this.provenReplay(m, tillSessionId, input, btx);';
+    expect(real, 'the proof line is not where the plant expects it').toContain(proofLine);
+    const defective = real.replace(
+      proofLine,
+      `    const early = await this.readSessionAgain(m, tillSessionId); const replay = await this.provenReplay(m, tillSessionId, input, btx);`,
+    );
+    // CANARY: the plant is in CODE, on the proof's own line, and (b)'s window
+    // is STILL silent about it — which is exactly why the new clause exists.
+    const stripped = code(defective);
+    expect(stripped, 'CANARY: the plant must survive comment stripping').toContain(
+      'const early = await this.readSessionAgain(m, tillSessionId); const replay = await this.provenReplay(',
+    );
+    const problems = proofBeforeStateProblems(defective);
+    expect(problems.join(' | '), 'CANARY: the old between-the-lines window does not see a statement on the proof’s line').not.toContain(
+      'between the session read and the proof',
+    );
+    expect(problems.join(' | ')).toContain('the replay proof is not the only statement on its line');
+    expect(problems).toHaveLength(1);
+  });
+
+  it('red: EVASION TWO — a state read placed AHEAD of the session read, which is above (b)’s window', () => {
+    const real = read(SERVICE);
+    const sessionLine = '    const session = await this.readSession(m, tillSessionId);';
+    expect(real, 'the session read is not where the plant expects it').toContain(sessionLine);
+    const defective = real.replace(sessionLine, `    const early = await this.readSomethingFirst(m, tillSessionId);\n${sessionLine}`);
+    const stripped = code(defective);
+    // CANARY: anchored at a LINE START, in CODE, and ahead of the session read.
+    expect(stripped, 'CANARY: the plant must survive comment stripping').toContain('\n    const early = await this.readSomethingFirst(m, tillSessionId);\n');
+    expect(stripped.indexOf('this.readSomethingFirst(') < stripped.indexOf('this.readSession('), 'CANARY: the plant must sit before the session read').toBe(
+      true,
+    );
+    const problems = proofBeforeStateProblems(defective);
+    expect(problems.join(' | '), 'CANARY: the old between-the-lines window does not see a read above its start').not.toContain(
+      'between the session read and the proof',
+    );
+    expect(problems).toContain(
+      'the checkout performs "await" BEFORE it reads the till session — a state read ahead of the session read is a decision the replay proof has not seen',
+    );
+    expect(problems).toHaveLength(1);
   });
 
   it('red: the cart read pulled ahead of the proof, and a run() with no proof at all', () => {

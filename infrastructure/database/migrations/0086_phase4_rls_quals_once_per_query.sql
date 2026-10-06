@@ -111,6 +111,10 @@ DECLARE
   v_unset  BOOLEAN;
   v_snap   TEXT;
   v_check  TEXT;
+  v_roles  TEXT[];
+  v_want_roles TEXT[];
+  v_null   BOOLEAN;
+  v_n      INTEGER;
 BEGIN
   -- THE BARRIER IS ASSERTED BY EVALUATING IT, NOT BY READING IT.
   --
@@ -161,6 +165,7 @@ BEGIN
 
       -- THE MEANING, evaluated.
       v_guc := CASE v_qual WHEN 'tenant_membership' THEN 'app.tenant_id' ELSE 'app.business_id' END;
+      v_want_roles := CASE v_qual WHEN 'tenant_membership' THEN ARRAY[]::TEXT[] ELSE ARRAY['daftar_accounting_internal', 'daftar_inventory_internal'] END;
       PERFORM pg_catalog.set_config(v_guc, v_mine::text, true);
       EXECUTE pg_catalog.format('SELECT (%s) FROM (SELECT $1::uuid AS tenant_id, $1::uuid AS business_id) t', v_have)
         INTO v_admits USING v_mine;
@@ -181,6 +186,34 @@ BEGIN
       IF v_unset IS TRUE THEN
         RAISE EXCEPTION '0086-A: %.% admits a row with the scope GUC unset, so default-deny is gone: %', v_rel, v_qual, v_have;
       END IF;
+      -- C-2: THE ESCAPE LIST IS PINNED BY EQUALITY, NOT LEFT TO THE TRUTH
+      -- TABLE. `business_isolation_read` carries
+      -- `current_user IN ('daftar_inventory_internal',
+      -- 'daftar_accounting_internal')`, and the truth table above cannot see a
+      -- name added to it: this block runs as the migrator, for whom every
+      -- `current_user` test is FALSE whatever the list holds. A nine-character
+      -- edit of this file's own `ALTER` — appending `'daftar_app'` — therefore
+      -- applied GREEN and was measured as a real cross-business read: 0 rows
+      -- before, 1 row after. So the role literals in each qual are enumerated
+      -- and required to be EXACTLY the ones the clause is entitled to.
+      SELECT pg_catalog.array_agg(m[1] ORDER BY m[1]) INTO v_roles
+        FROM pg_catalog.regexp_matches(v_have, '''(daftar_[a-z_]+)''', 'g') AS m;
+      IF COALESCE(v_roles, ARRAY[]::TEXT[]) <> v_want_roles THEN
+        RAISE EXCEPTION '0086-A: %.% names the role(s) % and is entitled to exactly % — a name added to the escape list is a reader this file never granted: %',
+          v_rel, v_qual, COALESCE(v_roles, ARRAY[]::TEXT[]), v_want_roles, v_have;
+      END IF;
+
+      -- M-3: A NULL SCOPE COLUMN IS A FOURTH CASE. `OR tenant_id IS NULL`
+      -- passes every case above — it admits no OTHER scope's row and nothing
+      -- with the GUC unset — while admitting every row whose scope column is
+      -- NULL. The columns are `NOT NULL` today, which is why this is latent
+      -- rather than live, so that is asserted too and the case supplies a NULL.
+      EXECUTE pg_catalog.format('SELECT (%s) FROM (SELECT NULL::uuid AS tenant_id, NULL::uuid AS business_id) t', v_have)
+        INTO v_null;
+      IF v_null IS TRUE THEN
+        RAISE EXCEPTION '0086-A: %.% admits a row whose scope column is NULL, so a row outside every scope is readable: %', v_rel, v_qual, v_have;
+      END IF;
+
     END LOOP;
   END LOOP;
 
@@ -219,6 +252,32 @@ BEGIN
     END IF;
     IF v_unset IS TRUE THEN
       RAISE EXCEPTION '0086-A(w): %.tenant_membership WITH CHECK admits a write with app.tenant_id unset, so default-deny is gone on the write path: %', v_rel, v_check;
+    END IF;
+  END LOOP;
+
+  -- M-3, the other half: the fourth case above is only latent while the scope
+  -- columns cannot be NULL. That is a catalogue fact, so it is read rather
+  -- than assumed.
+  FOREACH v_rel IN ARRAY ARRAY['invoices', 'sales', 'payment_allocations', 'customer_credit_applications'] LOOP
+    SELECT pg_catalog.count(*) INTO v_n
+      FROM pg_catalog.pg_attribute a JOIN pg_catalog.pg_class c ON c.oid = a.attrelid
+     WHERE c.relnamespace = 'public'::regnamespace AND c.relname = v_rel
+       AND a.attname IN ('tenant_id', 'business_id') AND a.attnotnull;
+    IF v_n <> 2 THEN
+      RAISE EXCEPTION '0086-A: % has % of 2 scope columns declared NOT NULL — a NULL scope column makes the barrier a question about data rather than about the policy', v_rel, v_n;
+    END IF;
+  END LOOP;
+
+  -- M-3, the other half: the fourth case above is only latent while the scope
+  -- columns cannot be NULL. That is a catalogue fact, so it is read rather
+  -- than assumed.
+  FOREACH v_rel IN ARRAY ARRAY['invoices', 'sales', 'payment_allocations', 'customer_credit_applications'] LOOP
+    SELECT pg_catalog.count(*) INTO v_n
+      FROM pg_catalog.pg_attribute a JOIN pg_catalog.pg_class c ON c.oid = a.attrelid
+     WHERE c.relnamespace = 'public'::regnamespace AND c.relname = v_rel
+       AND a.attname IN ('tenant_id', 'business_id') AND a.attnotnull;
+    IF v_n <> 2 THEN
+      RAISE EXCEPTION '0086-F: % has % of 2 scope columns declared NOT NULL — a NULL scope column makes the barrier a question about data rather than about the policy', v_rel, v_n;
     END IF;
   END LOOP;
 
@@ -294,10 +353,15 @@ DECLARE
 BEGIN
   FOREACH v_rel IN ARRAY ARRAY['invoices', 'sales', 'payment_allocations', 'customer_credit_applications'] LOOP
 
-    -- 0086-E(1) is no longer inside this loop: it compares the WHOLE
-    -- installed expression against a reference this server renders, which is
-    -- one comparison per relation and per qual and is done in its own block
-    -- below, after this loop. See 0086-F.
+    -- 0086-E(1) is gone from this loop and this file carries no
+    -- whole-expression EQUALITY at all: the reference such a comparison needs
+    -- is a rendering by this same server, and producing one inside a migration
+    -- means creating a relation, which G-5 forbids. So the equality law lives
+    -- in `tests/security/p4s4-rls-quals-once-per-query.test.ts`, where a
+    -- `pg_temp` probe is legal, and what THIS file asserts is the truth table,
+    -- the pinned escape list and the untouched remainder of the policy set.
+    -- Stated here because an earlier version of this comment promised an
+    -- equality block below that does not exist.
 
     -- 0086-E(2). THE WRITE PATH IS UNTOUCHED. `tenant_membership` carries a
     -- WITH CHECK and this file named only USING, so the check expression must
@@ -388,6 +452,10 @@ DECLARE
   v_snap   TEXT;
   v_was    TEXT;
   v_check  TEXT;
+  v_roles  TEXT[];
+  v_want_roles TEXT[];
+  v_null   BOOLEAN;
+  v_n      INTEGER;
 BEGIN
   -- THE BARRIER IS ASSERTED BY EVALUATING IT, NOT BY READING IT.
   --
@@ -436,6 +504,7 @@ BEGIN
 
       -- THE MEANING, evaluated.
       v_guc := CASE v_qual WHEN 'tenant_membership' THEN 'app.tenant_id' ELSE 'app.business_id' END;
+      v_want_roles := CASE v_qual WHEN 'tenant_membership' THEN ARRAY[]::TEXT[] ELSE ARRAY['daftar_accounting_internal', 'daftar_inventory_internal'] END;
       PERFORM pg_catalog.set_config(v_guc, v_mine::text, true);
       EXECUTE pg_catalog.format('SELECT (%s) FROM (SELECT $1::uuid AS tenant_id, $1::uuid AS business_id) t', v_have)
         INTO v_admits USING v_mine;
@@ -456,6 +525,34 @@ BEGIN
       IF v_unset IS TRUE THEN
         RAISE EXCEPTION '0086-F: %.% admits a row with the scope GUC unset, so default-deny is gone: %', v_rel, v_qual, v_have;
       END IF;
+      -- C-2: THE ESCAPE LIST IS PINNED BY EQUALITY, NOT LEFT TO THE TRUTH
+      -- TABLE. `business_isolation_read` carries
+      -- `current_user IN ('daftar_inventory_internal',
+      -- 'daftar_accounting_internal')`, and the truth table above cannot see a
+      -- name added to it: this block runs as the migrator, for whom every
+      -- `current_user` test is FALSE whatever the list holds. A nine-character
+      -- edit of this file's own `ALTER` — appending `'daftar_app'` — therefore
+      -- applied GREEN and was measured as a real cross-business read: 0 rows
+      -- before, 1 row after. So the role literals in each qual are enumerated
+      -- and required to be EXACTLY the ones the clause is entitled to.
+      SELECT pg_catalog.array_agg(m[1] ORDER BY m[1]) INTO v_roles
+        FROM pg_catalog.regexp_matches(v_have, '''(daftar_[a-z_]+)''', 'g') AS m;
+      IF COALESCE(v_roles, ARRAY[]::TEXT[]) <> v_want_roles THEN
+        RAISE EXCEPTION '0086-F: %.% names the role(s) % and is entitled to exactly % — a name added to the escape list is a reader this file never granted: %',
+          v_rel, v_qual, COALESCE(v_roles, ARRAY[]::TEXT[]), v_want_roles, v_have;
+      END IF;
+
+      -- M-3: A NULL SCOPE COLUMN IS A FOURTH CASE. `OR tenant_id IS NULL`
+      -- passes every case above — it admits no OTHER scope's row and nothing
+      -- with the GUC unset — while admitting every row whose scope column is
+      -- NULL. The columns are `NOT NULL` today, which is why this is latent
+      -- rather than live, so that is asserted too and the case supplies a NULL.
+      EXECUTE pg_catalog.format('SELECT (%s) FROM (SELECT NULL::uuid AS tenant_id, NULL::uuid AS business_id) t', v_have)
+        INTO v_null;
+      IF v_null IS TRUE THEN
+        RAISE EXCEPTION '0086-F: %.% admits a row whose scope column is NULL, so a row outside every scope is readable: %', v_rel, v_qual, v_have;
+      END IF;
+
     END LOOP;
   END LOOP;
 

@@ -27,6 +27,7 @@ import {
 } from './guards/no-authoritative-balance';
 import { findFloatRateColumns, findInventoryNumericViolations } from './guards/no-float-rate';
 import { findDefinerSearchPathViolations } from './guards/definer-search-path';
+import { findSelfCaptureViolations, selfCaptureSurface } from './guards/migration-self-capture';
 import { findReadSurfaceViolations, readSurfaceFiles } from './guards/read-surface';
 import { findPostingSurfaceViolations } from './guards/posting-surface';
 import { checkInventoryDefinerContract, INVENTORY_INVOKER_EXCEPTIONS } from './guards/inventory-definer-contract';
@@ -676,8 +677,32 @@ for (const dir of ['apps/api/src', 'apps/web/src', 'apps/admin/src', 'packages']
   }
 }
 
+// Rule 24 — GUARD G-7: a migration that verifies itself across its own DDL
+// must not be able to forge the comparison. The only carrier a single
+// migration has for a pre-state is a transaction-local GUC — the runner gives
+// each file its own transaction and G-5 forbids creating a relation to hold
+// one — and a GUC the file can write is a comparison the file can forge.
+// Measured 6 of 6: a planted widening applied GREEN as soon as one extra
+// `set_config` of the capture GUC was placed beside it, and was refused
+// outright without it. A runtime law cannot protect itself, so the protection
+// is a property of the TEXT and is checked here, before any server exists.
+{
+  const migrations: Record<string, string> = {};
+  for (const f of walk(join(ROOT, 'infrastructure/database/migrations'), /\.sql$/).sort()) {
+    migrations[relative(ROOT, f)] = readFileSync(f, 'utf8');
+  }
+  for (const violation of findSelfCaptureViolations({ migrations })) {
+    fail('migration-self-capture', 'infrastructure/database/migrations', violation);
+  }
+  // A guard watching nothing is decorative. If the shape ever leaves the tree,
+  // this says so rather than reporting a silent pass over an empty set.
+  if (selfCaptureSurface({ migrations }).length === 0) {
+    fail('migration-self-capture', 'infrastructure/database/migrations', 'no migration carries a self-capture GUC — rule 24 is watching nothing (G-7)');
+  }
+}
+
 if (failures > 0) {
   console.error(`\nSTATIC GUARDS: FAIL (${failures})`);
   process.exit(1);
 }
-console.log('STATIC GUARDS: PASS (23 rules)');
+console.log('STATIC GUARDS: PASS (24 rules)');
