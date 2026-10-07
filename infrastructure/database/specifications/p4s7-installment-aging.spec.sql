@@ -1,6 +1,27 @@
 -- ═══════════════════════════════════════════════════════════════════════════
 -- P4-S7 — INSTALLMENT AGING GRANULARITY: THE DDL SPECIFICATION.
 --
+-- THIS PROJECTION IS TRANSACTION-CURRENCY ONLY. It allocates
+-- `outstanding_txn_minor` across the aging buckets and allocates NO base
+-- figure. That is a RULING (coordinator, ruling 2) and not an omission left
+-- to be discovered: the base column cannot be split exactly from the inputs
+-- this design is permitted, for the reason measured in section 5 below. The
+-- widening that would allow it is with the owner and must not be written
+-- until he rules.
+--
+-- THE SETTLEMENT ORDER IS A DECLARED POLICY, NOT A DERIVATION.
+-- `payment_allocations` carries `invoice_id` and no instalment reference, so
+-- nothing stored records which instalment a payment settled. The order is
+-- RULED oldest-scheduled-date-first (coordinator, ruling 1) for three
+-- recorded reasons: it is the ordinary AR convention a merchant expects;
+-- `installments_seq_uq` already makes `(due_date, seq_no)` a total order, so
+-- it is the only order the schema can reproduce deterministically without new
+-- state; and it minimises reported delinquency, so if it is wrong it errs
+-- toward understating what a customer owes rather than toward accusing them.
+-- It is one named constant, `DECLARED_SETTLEMENT_ORDER`, and `meta_6` proves
+-- every money law under BOTH conventions, so overturning the ruling is a
+-- one-constant change whose proofs still run.
+--
 -- THIS FILE IS A SPECIFICATION AND NOT A MIGRATION. It carries NO migration
 -- number, it is not in `infrastructure/database/migrations/`, and it is not in
 -- the migration manifest. `0000`-`0079` are byte-immutable and `0080`-`0086`
@@ -169,6 +190,11 @@ ALTER TABLE installments FORCE ROW LEVEL SECURITY;
 --        suffixed AS (  -- s_{i+1}: the amounts scheduled STRICTLY AFTER this row
 --          SELECT s.*, coalesce(sum(s.amount) OVER (
 --                   PARTITION BY s.invoice_id
+--                   -- DESC because the DECLARED POLICY is oldest-scheduled-
+--                   -- first: the outstanding occupies the LATEST rows, so the
+--                   -- window sums the amounts scheduled strictly after this
+--                   -- one. The other convention is this ORDER BY ascending,
+--                   -- and nothing else changes.
 --                   ORDER BY s.due_date DESC, s.seq_no DESC
 --                   ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING), 0) AS suffix_after,
 --                 sum(s.amount) OVER (PARTITION BY s.invoice_id) AS schedule_total
@@ -208,7 +234,7 @@ ALTER TABLE installments FORCE ROW LEVEL SECURITY;
 -- several contributions, so `count(*)` would report a number of instalments
 -- under a column named `invoice_count`.
 --
--- ── 5. THE `base_minor` COLUMN IS OWED, NOT GUESSED ──────────────────────
+-- ── 5. THE `base_minor` COLUMN IS RULED OUT FOR NOW, NOT GUESSED ─────────
 --
 -- The shipped `customer_ar_aging` returns `base_minor` beside `txn_minor`.
 -- The transaction-currency allocation above is EXACT and performs zero
@@ -221,5 +247,12 @@ ALTER TABLE installments FORCE ROW LEVEL SECURITY;
 -- `source_to_base_rate` under realized FX, and any per-row base figure needs
 -- either that rate (an input outside the permitted list) or that quotient (a
 -- rounded quotient fed back as an authoritative input, which is forbidden).
--- The three options and the recommendation are in the design document §5.
--- This specification therefore does NOT write a base allocation.
+-- RULED (coordinator, ruling 2): the aging projection is transaction-currency
+-- only and this specification writes NO base allocation. The recommended
+-- widening — permit `invoices.source_to_base_rate` and define the base
+-- schedule as DIFFERENCES OF THE ROUNDED CUMULATIVE CONVERSION
+-- `C_i = round(s_i * rate)`, so the row amounts telescope and exactly ONE
+-- rounding is performed, at one grain, with `outstanding_base_minor` left as
+-- the authoritative input and never recomputed — is with the OWNER, because
+-- widening the permitted input set is his. It must not be written until he
+-- rules. The three options are compared in the design document §5.

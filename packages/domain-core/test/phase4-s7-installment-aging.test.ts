@@ -55,6 +55,8 @@ import { agingBucketLabels } from '../src/invoice';
 import {
   aggregate,
   bucketOf,
+  DECLARED_SETTLEMENT_ORDER,
+  SETTLEMENT_ORDERS,
   contributionsFor,
   CORRECT_POLICY,
   epochDay,
@@ -65,6 +67,7 @@ import {
   type InstallmentPlan,
   type OpenInvoiceRow,
   type ProjectionPolicy,
+  type SettlementOrder,
 } from './phase4-s7-aging-reference-model';
 
 const REPO = join(__dirname, '..', '..', '..');
@@ -286,6 +289,28 @@ describe('PROOF 2 — no not-yet-due scheduled amount enters an overdue bucket',
     // And the amount is the real one: Oct/Nov/Dec of the plan plus both
     // instalments of the short plan.
     expect(sum(future)).toBe(500_000n);
+  });
+
+  it('KNOWN SOFT SPOT, declared: the residual is bucketed by invoices.due_date, so this law is scoped to SCHEDULE dates', () => {
+    // Stated here rather than left for a challenger to discover that the
+    // author knew. Proof 2 ranges over contributions that CARRY a schedule
+    // date. The residual (proof 4) carries `invoices.due_date` instead,
+    // because it is money the schedule never named and that is the only date
+    // with any authority over it. So if the sum law is broken AND the
+    // invoice-level due date is old, the residual lands in an overdue bucket
+    // although no scheduled date says it is overdue. The law below is
+    // therefore genuinely about scheduled money and NOT about every figure
+    // the projection emits.
+    const c = contributionsFor([SHORT_SCHEDULE_INVOICE], [SHORT_PLAN], AS_OF, THRESHOLDS);
+    const residual = c.filter((x) => x.origin === 'residual');
+    expect(residual).toHaveLength(1);
+    expect(residual[0]?.scheduleDate).toBe(SHORT_SCHEDULE_INVOICE.dueDate);
+    expect(residual[0]?.bucketNo).toBeGreaterThan(1); // in an overdue bucket
+    // Every scheduled instalment of that same plan is still not yet due.
+    for (const i of SHORT_PLAN.installments) expect(epochDay(i.dueDate)).toBeGreaterThan(epochDay(AS_OF));
+    // The honest reading: the residual is a sum-law VIOLATION signal, and
+    // ageing it at the invoice's own date is the conservative choice. It is
+    // the first item the challenger should attack.
   });
 
   it('FIRES under its mutation: bucketing by the invoice due date instead of the schedule date', () => {
@@ -851,9 +876,13 @@ describe('META — the proofs are not vacuous', () => {
   });
 
   it('meta_3: the correct policy is the one the model ships, and nothing silently differs', () => {
-    expect(CORRECT_POLICY).toEqual(
-      Object.fromEntries(POLICY_KNOBS.map((k) => [k.knob, k.correct])),
-    );
+    // Every DEFECT knob is at its correct value, and the DECLARED POLICY is
+    // at the ruled one. Both halves, so neither a silently flipped defect
+    // knob nor a silently changed convention can pass.
+    expect(CORRECT_POLICY).toEqual({
+      ...Object.fromEntries(POLICY_KNOBS.map((k) => [k.knob, k.correct])),
+      settlementOrder: DECLARED_SETTLEMENT_ORDER,
+    });
   });
 
   it('meta_4: DETERMINISM — the answer does not depend on the order the schedule or the invoices arrive in', () => {
@@ -924,5 +953,94 @@ describe('META — the proofs are not vacuous', () => {
     // Every amount the projection emits is a bigint, so no float can enter.
     const emitted = projectInvoice(PLANNED_INVOICE, PLAN, AS_OF, THRESHOLDS);
     for (const c of emitted) expect(typeof c.txnMinor).toBe('bigint');
+  });
+
+  it('meta_6: CONVENTION-INDEPENDENCE — every money law holds under BOTH settlement orders', () => {
+    // The claim «the seven proofs hold under either convention» is the reason
+    // the settlement order can be a DECLARED POLICY rather than a derivation
+    // (coordinator ruling 1). It is asserted here rather than stated, so that
+    // overturning the ruling is a one-constant change whose proofs still run.
+    const rows = [PLANNED_INVOICE, PLAINLESS_INVOICE, SHORT_SCHEDULE_INVOICE];
+    const plans = [PLAN, SHORT_PLAN];
+    const authoritative = rows.reduce((a, r) => a + r.outstandingTxnMinor, 0n);
+
+    expect(SETTLEMENT_ORDERS.length).toBe(2);
+    for (const order of SETTLEMENT_ORDERS) {
+      const policy = { ...CORRECT_POLICY, settlementOrder: order };
+      const c = contributionsFor(rows, plans, AS_OF, THRESHOLDS, policy);
+      const where = `settlementOrder=${order}`;
+
+      // PROOF 1 — the buckets total the authoritative outstanding.
+      expect(sum(c), where).toBe(authoritative);
+      for (const r of rows) {
+        const plan = plans.find((p) => p.invoiceId === r.invoiceId);
+        expect(sum(projectInvoice(r, plan, AS_OF, THRESHOLDS, policy)), where).toBe(r.outstandingTxnMinor);
+      }
+
+      // PROOF 2 — no not-yet-due scheduled amount in an overdue bucket. This
+      // holds under either order because a row is bucketed by ITS OWN date,
+      // whichever rows the convention leaves outstanding.
+      for (const x of c) {
+        if (x.scheduleDate !== null && epochDay(x.scheduleDate) >= epochDay(AS_OF)) {
+          expect(x.bucketNo, where).toBe(1);
+        }
+      }
+
+      // PROOF 3 — nothing counted twice: the keys stay unique and the arms
+      // stay a partition.
+      const keys = c.map((x) => `${x.invoiceId}|${x.origin}|${String(x.seqNo)}`);
+      expect(new Set(keys).size, where).toBe(keys.length);
+      const planned = new Set(plans.map((p) => p.invoiceId));
+      for (const x of c) if (planned.has(x.invoiceId)) expect(x.origin, where).not.toBe('whole_invoice');
+
+      // PROOF 4 — nothing disappears, including the broken sum law.
+      expect(sum(c.filter((x) => x.invoiceId === 'inv-short')), where).toBe(1_000_000n);
+      expect(sum(c.filter((x) => x.origin === 'residual')), where).toBe(800_000n);
+    }
+
+    // And the two conventions really are DIFFERENT, so this is not two runs
+    // of one thing: under newest-first the outstanding sits on the OLDEST
+    // instalments instead of the newest.
+    const oldestFirst = projectInvoice(PLANNED_INVOICE, PLAN, AS_OF, THRESHOLDS, {
+      ...CORRECT_POLICY,
+      settlementOrder: 'oldest_scheduled_first',
+    });
+    const newestFirst = projectInvoice(PLANNED_INVOICE, PLAN, AS_OF, THRESHOLDS, {
+      ...CORRECT_POLICY,
+      settlementOrder: 'newest_scheduled_first',
+    });
+    expect(oldestFirst.filter((x) => x.origin === 'installment').map((x) => x.seqNo)).toEqual([4, 5, 6, 7, 8, 9, 10, 11, 12]);
+    expect(newestFirst.filter((x) => x.origin === 'installment').map((x) => x.seqNo)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
+    // Which is exactly reason 3 of the ruling, measured: the declared order
+    // reports LESS delinquency than the alternative.
+    const overdue = (x: readonly AgingContribution[]): bigint => sum(x.filter((y) => y.bucketNo > 1));
+    expect(overdue(oldestFirst)).toBeLessThan(overdue(newestFirst));
+  });
+
+  it('meta_7: the declared policy is declared, and the defect registry cannot grow an unevaluable knob', () => {
+    // The ruling's constant is the one place the convention lives.
+    expect(DECLARED_SETTLEMENT_ORDER).toBe('oldest_scheduled_first');
+    expect(CORRECT_POLICY.settlementOrder).toBe(DECLARED_SETTLEMENT_ORDER);
+
+    // `settlementOrder` is EXCLUDED from the defect registry on purpose,
+    // because its other value is a legitimate convention and not a defect.
+    // The exclusion is asserted so it reads as deliberate rather than as an
+    // omission, and `meta_6` is what earns it.
+    const defectKnobs = POLICY_KNOBS.map((k) => k.knob);
+    expect(defectKnobs).not.toContain('settlementOrder');
+
+    // Every knob in the registry HAS a defective value. A knob added later
+    // with an empty defective list is an exemption that can never be
+    // evaluated, so it fails here rather than passing silently.
+    for (const k of POLICY_KNOBS) {
+      expect(k.defective.length, `knob ${k.knob} has no defective value`).toBeGreaterThan(0);
+      expect(k.defective, `knob ${k.knob} lists its correct value as defective`).not.toContain(k.correct);
+    }
+
+    // And the registry covers every field of the policy record except the
+    // declared policy, so a NEW field cannot be added without either a
+    // defective value or a deliberate, asserted exclusion.
+    const policyFields = Object.keys(CORRECT_POLICY).sort();
+    expect(policyFields).toEqual([...defectKnobs, 'settlementOrder'].sort());
   });
 });

@@ -1,6 +1,19 @@
 /**
  * P4-S7 — THE INSTALLMENT-AGING PROJECTION, AS A REFERENCE MODEL.
  *
+ * THIS PROJECTION IS TRANSACTION-CURRENCY ONLY. It allocates
+ * `outstanding_txn_minor` across the aging buckets and allocates NO base
+ * figure. That is a RULING (coordinator, ruling 2) and not an oversight: the
+ * base column cannot be split exactly from the inputs this design is
+ * permitted, because `invoice_outstanding`'s `paid_base_minor` is the sum of
+ * the carrying released and «never a conversion of the paid transaction
+ * amount» (`0083:277-281`), so `outstanding_base / outstanding_txn` is not
+ * the invoice's `source_to_base_rate` under realized FX. The two ways out —
+ * reading that rate, or feeding the quotient back — are a widening of the
+ * permitted input set and a forbidden rounded-quotient-as-input
+ * respectively. The widening is with the owner; until he rules, no base
+ * allocation is written. See the design document §5.
+ *
  * WHAT THIS FILE IS, AND DELIBERATELY IS NOT
  * ------------------------------------------
  * It is a REFERENCE MODEL under `test/`, imported by
@@ -129,6 +142,40 @@ export interface InstallmentPlan {
   readonly planLocalCollectedMinor?: bigint;
 }
 
+// ── THE SETTLEMENT ORDER: A DECLARED POLICY, NOT A DERIVATION ────────────
+//
+// `payment_allocations` carries `invoice_id` and NO instalment reference, and
+// under «no second AR ledger» there cannot be one. So NOTHING STORED RECORDS
+// WHICH INSTALMENT A PAYMENT SETTLED, and the order in which the schedule is
+// considered settled is a POLICY THIS PROJECTION DECLARES. It is written here
+// as one named constant, with its reasoning, so that whoever changes it later
+// changes THIS CONSTANT and re-runs the proofs, rather than discovering the
+// convention by reading the arithmetic.
+//
+// RULED (coordinator, ruling 1) — OLDEST SCHEDULED DATE FIRST. A default the
+// coordinator is SETTING, not a fact inherited from the author, and one the
+// owner may overturn. Three reasons, recorded with it:
+//
+//   1. it is the ordinary AR convention a merchant expects;
+//   2. `installments_seq_uq UNIQUE (business_id, plan_id, seq_no)` already
+//      makes `(due_date, seq_no)` a total order, so it is the only order the
+//      schema can reproduce DETERMINISTICALLY without new state;
+//   3. it minimises reported delinquency, so if it is wrong it errs toward
+//      understating what a customer owes rather than toward accusing them.
+//
+// AND THE PROPERTY IS ASSERTED, NOT MERELY STATED: `meta_6` re-runs every
+// money law under BOTH conventions and requires all of them to hold, so the
+// claim «the seven proofs hold under either convention» is a test and not a
+// sentence. `newest_scheduled_first` is therefore NOT a defect value and is
+// deliberately absent from `POLICY_KNOBS`; `meta_7` asserts that absence is
+// intentional.
+
+export const SETTLEMENT_ORDERS = ['oldest_scheduled_first', 'newest_scheduled_first'] as const;
+export type SettlementOrder = (typeof SETTLEMENT_ORDERS)[number];
+
+/** THE ONE CONSTANT TO CHANGE if the ruling is overturned. */
+export const DECLARED_SETTLEMENT_ORDER: SettlementOrder = 'oldest_scheduled_first';
+
 // ── The policy knobs, and the one correct configuration ───────────────────
 //
 // There is ONE implementation below. Every defect the seven proofs are
@@ -151,6 +198,13 @@ export interface ProjectionPolicy {
   readonly carryResidual: boolean;
   /** Correct: 'authoritative'. 'plan_local' is the parallel path. */
   readonly outstandingSource: 'authoritative' | 'plan_local';
+  /**
+   * The DECLARED POLICY, not a defect knob: both values are legitimate
+   * conventions and `meta_6` proves every money law under each. It lives in
+   * the policy record so a reviewer can re-run the whole suite under the
+   * other convention by changing `DECLARED_SETTLEMENT_ORDER` alone.
+   */
+  readonly settlementOrder: SettlementOrder;
 }
 
 export const CORRECT_POLICY: ProjectionPolicy = Object.freeze({
@@ -159,9 +213,20 @@ export const CORRECT_POLICY: ProjectionPolicy = Object.freeze({
   planlessArm: 'without_an_active_plan' as const,
   carryResidual: true,
   outstandingSource: 'authoritative' as const,
+  settlementOrder: DECLARED_SETTLEMENT_ORDER,
 });
 
-/** Every knob, with its correct value and its defective value(s). */
+/**
+ * Every DEFECT knob, with its correct value and its defective value(s).
+ *
+ * `settlementOrder` is deliberately NOT here: it is a declared policy whose
+ * other value is a legitimate convention, not a defect, and `meta_6` proves
+ * the money laws under both. `meta_7` asserts that exclusion is deliberate
+ * and that every knob listed here HAS a defective value — a knob added later
+ * with an empty defective list is itself a failure, because an exemption
+ * that cannot be evaluated is the failure shape this registry exists to
+ * prevent.
+ */
 export const POLICY_KNOBS: readonly {
   readonly knob: keyof ProjectionPolicy;
   readonly correct: unknown;
@@ -214,9 +279,17 @@ function minBig(a: bigint, b: bigint): bigint {
  *
  * Write the schedule in ascending `(due_date, seq_no)` order as rows
  * `1..m` with amounts `a_1..a_m`, and let `s_i = Σ_{j >= i} a_j` be the
- * inclusive suffix sum, so `s_{m+1} = 0`. For authoritative outstanding `O`:
+ * inclusive suffix sum, so `s_{m+1} = 0`. For authoritative outstanding `O`,
+ * under the declared OLDEST-SCHEDULED-FIRST policy:
  *
  *     alloc_i = clamp(O − s_{i+1}, 0, a_i)
+ *
+ * and under the other convention, with `p_i = Σ_{j < i} a_j` the exclusive
+ * prefix sum, `alloc_i = clamp(O − p_i, 0, a_i)`. BOTH telescope to
+ * `min(O, T)` by the same algebra — `clamp(O − x_i, 0, x_{i+1} − x_i) =
+ * min(O, x_{i+1}) − min(O, x_i)` over any monotone cut sequence — which is
+ * why every money law below is convention-independent and `meta_6` can
+ * assert it.
  *
  * Determinism. `(due_date, seq_no)` is a total order because
  * `installments_seq_uq UNIQUE (business_id, plan_id, seq_no)` makes `seq_no`
@@ -314,7 +387,14 @@ export function projectInvoice(
 
   for (let i = 0; i < rows.length; i += 1) {
     const r = rows[i] as { seqNo: number; dueDate: string; amount: bigint; origin: 'down_payment' | 'installment' };
-    const headroom = clampLow(outstanding - (suffixAfter[i + 1] as bigint));
+    // The amount that must be filled BEFORE this row takes any: the rows
+    // scheduled strictly LATER under the declared oldest-first policy, or the
+    // rows scheduled strictly EARLIER under the other convention.
+    const filledFirst =
+      policy.settlementOrder === 'oldest_scheduled_first'
+        ? (suffixAfter[i + 1] as bigint)
+        : scheduleTotal - (suffixAfter[i] as bigint);
+    const headroom = clampLow(outstanding - filledFirst);
     const alloc = policy.clampToRowAmount ? minBig(headroom, r.amount) : headroom;
     if (alloc === 0n) continue;
     out.push({
