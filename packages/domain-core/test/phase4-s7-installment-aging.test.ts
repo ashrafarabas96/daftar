@@ -2713,19 +2713,37 @@ describe('ROUND-5 CHALLENGE C1 / H4 / H6 — the policy set, the fail-closed arm
     }
   });
 
-  it('C1.a THE NO-PLAN ARM FAILS CLOSED — it is not keyed on `NOT EXISTS` alone', () => {
-    // Under row security «absent» and «invisible» are one answer. The sketch
-    // must therefore ASSERT absence through a definer guard rather than INFER
-    // it, or a caller who can see the invoice and not its plan is served the
-    // pre-S7 number silently.
+  it('C1.a THE NO-PLAN ARM FAILS CLOSED — the guard asserts its OWN READ REACH and is not an oracle (round 6 F2, F1)', () => {
+    // Under row security «absent» and «invisible» are one answer, and that is
+    // true of ANY SPELLING of the query — so a guard that COUNTS hidden plans
+    // carries the defect one level down, whosever visibility it counts under
+    // (round 6 F2: drop one policy and the owner sees zero rows too). The only
+    // honest shape short of an explicit audited bypass is to ASSERT the
+    // configuration the arm's soundness rests on and REFUSE when it cannot be
+    // confirmed. A refusal needs its own error code, and it carries no count
+    // (round 6 F1: a count is a disclosure oracle on a granted surface).
     const sketch = projectionSketch(SPEC);
-    expect(sketch).toContain('installment_plan_absence_guard(');
-    // ...and the guard is a DEFINER that raises, not a reader that returns data.
+    expect(sketch).toContain('installment_plan_visibility_assert()');
     const code = sqlCodeOnly(SPEC);
-    expect(code).toMatch(
-      /CREATE OR REPLACE FUNCTION installment_plan_absence_guard\(p_business_id UUID, p_invoice_ids UUID\[\]\)[\s\S]*?LANGUAGE plpgsql STABLE SECURITY DEFINER/,
-    );
-    expect(code).toContain('installment.plan_invisible');
+    expect(code).toMatch(/CREATE OR REPLACE FUNCTION installment_plan_visibility_assert\(\)\s+RETURNS BOOLEAN\s+LANGUAGE plpgsql STABLE SECURITY INVOKER/);
+    expect(code).toContain('installment.plan_guard_blind');
+    // F2: the OLD shape must be gone, or the repair is an addition rather than
+    // a replacement and the defective routine is still granted and callable.
+    expect(code).not.toContain('installment_plan_absence_guard');
+    expect(code).not.toContain('installment.plan_invisible');
+    // F1: NOTHING TO ASK IT ABOUT. A zero-argument INVOKER reading only
+    // pg_catalog cannot answer "does invoice X have a plan" for anybody, and
+    // that is a property of the SIGNATURE rather than of a comment.
+    expect(code).not.toMatch(/installment_plan_visibility_assert\s*\(\s*p_/);
+    // ...and no error message quotes a row count.
+    for (const m of code.matchAll(/RAISE EXCEPTION 'installment\.plan_guard_blind[^']*(?:''[^']*)*'/g)) {
+      expect(m[0]).not.toMatch(/\b(?:count|rows|hidden|number)\b/i);
+    }
+    // F2 again: the guard must actually CONFIRM its reach — the two halves of
+    // "absent and invisible are one answer" are the policies and the caller's
+    // own SELECT, and a guard that checked neither would satisfy every law above.
+    expect(code).toContain('has_table_privilege(');
+    expect(code).toMatch(/relrowsecurity[\s\S]{0,200}relforcerowsecurity/);
     // ...and the projection ITSELF stays INVOKER and STABLE: R-P4-07 makes a
     // reader run as its caller, and making the reader a DEFINER would have
     // been the other, worse repair.

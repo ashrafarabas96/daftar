@@ -235,8 +235,7 @@ beforeAll(async () => {
   }
   if (specError === null) {
     guardDefinition =
-      (await ownerPool().query<{ def: string }>(`SELECT pg_get_functiondef('installment_plan_absence_guard(uuid,uuid[])'::regprocedure) AS def`)).rows[0]
-        ?.def ?? '';
+      (await ownerPool().query<{ def: string }>(`SELECT pg_get_functiondef('installment_plan_visibility_assert()'::regprocedure) AS def`)).rows[0]?.def ?? '';
   }
   tenantId =
     (await ownerPool().query<{ t: string }>(`SELECT tenant_id::text AS t FROM invoices WHERE business_id = $1 AND id = $2`, [w.shop.businessId, invoiceId]))
@@ -248,7 +247,7 @@ afterAll(async () => {
   await p.query('DROP TABLE IF EXISTS installments').catch(() => undefined);
   await p.query('DROP TABLE IF EXISTS installment_plans').catch(() => undefined);
   await p.query('DROP FUNCTION IF EXISTS installment_schedule_verify()').catch(() => undefined);
-  await p.query('DROP FUNCTION IF EXISTS installment_plan_absence_guard(UUID, UUID[])').catch(() => undefined);
+  await p.query('DROP FUNCTION IF EXISTS installment_plan_visibility_assert()').catch(() => undefined);
   // THE RESTORE IS ASSERTED, NOT HOPED FOR (challenger M8). A `LANGUAGE sql`
   // body supplied as a string literal records NO `pg_depend` edge on the
   // relations it names, so the DROPs above succeed and leave
@@ -821,7 +820,7 @@ describe("§G ROW SECURITY, MEASURED AS A NON-SUPERUSER — and C1's negative co
     expect(sched.rows[0]?.n).toBe('2');
   });
 
-  it('C1.a THE NEGATIVE CONTROL: with the one policy removed, the arm RAISES instead of serving the old number', async () => {
+  it('C1.a THE NEGATIVE CONTROL (inventory_internal_read): the arm RAISES instead of serving the old number', async () => {
     // The estate's own idiom: remove exactly one invariant and show what then
     // happens. Here the invariant is `inventory_internal_read ON
     // installment_plans`, and removing it recreates C1's asymmetry exactly —
@@ -847,14 +846,14 @@ describe("§G ROW SECURITY, MEASURED AS A NON-SUPERUSER — and C1's negative co
         asOf,
         BUCKET_DAYS,
       ]);
-      expect(guarded.error ?? '', 'the invisible plan did not raise — the arm is open again').toContain('installment.plan_invisible');
+      expect(guarded.error ?? '', 'the invisible plan did not raise — the arm is open again').toContain('installment.plan_guard_blind');
 
       // 3. AND WITHOUT THE GUARD IT WOULD HAVE BEEN THE PRE-S7 NUMBER. The
       //    guard is replaced by a body that always permits — exactly the
       //    `NOT EXISTS`-only arm — and the answer that comes back is the
       //    defect: the whole outstanding collapsed onto ONE band.
-      await p.query(`CREATE OR REPLACE FUNCTION installment_plan_absence_guard(p_business_id UUID, p_invoice_ids UUID[])
-                     RETURNS BOOLEAN LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS 'SELECT true'`);
+      await p.query(`CREATE OR REPLACE FUNCTION installment_plan_visibility_assert()
+                     RETURNS BOOLEAN LANGUAGE sql STABLE SET search_path = pg_catalog, public, pg_temp AS 'SELECT true'`);
       try {
         const open = await asRole<{ bucket_no: number; txn_minor: string }>('daftar_inventory_internal', {}, AGING, [
           w.shop.businessId,
@@ -867,11 +866,11 @@ describe("§G ROW SECURITY, MEASURED AS A NON-SUPERUSER — and C1's negative co
         expect(BigInt(open.rows[0]?.txn_minor ?? '0'), 'the unguarded arm did not serve the WHOLE outstanding').toBe(total);
         expect(open.rows[0]?.bucket_no, 'and it served it in the oldest band, at the invoice due date').toBe(BUCKET_DAYS.length + 1);
       } finally {
-        await p.query(`DROP FUNCTION installment_plan_absence_guard(UUID, UUID[])`);
+        await p.query(`DROP FUNCTION installment_plan_visibility_assert()`);
         await p.query(guardDefinition);
-        await p.query(`ALTER FUNCTION installment_plan_absence_guard(UUID, UUID[]) OWNER TO daftar_accounting_internal`);
-        await p.query(`REVOKE ALL ON FUNCTION installment_plan_absence_guard(UUID, UUID[]) FROM PUBLIC`);
-        await p.query(`GRANT EXECUTE ON FUNCTION installment_plan_absence_guard(UUID, UUID[]) TO daftar_app, daftar_inventory_internal`);
+        await p.query(`ALTER FUNCTION installment_plan_visibility_assert() OWNER TO daftar_accounting_internal`);
+        await p.query(`REVOKE ALL ON FUNCTION installment_plan_visibility_assert() FROM PUBLIC`);
+        await p.query(`GRANT EXECUTE ON FUNCTION installment_plan_visibility_assert() TO daftar_app, daftar_inventory_internal`);
       }
     } finally {
       await p.query(`CREATE POLICY inventory_internal_read ON installment_plans
@@ -888,5 +887,156 @@ describe("§G ROW SECURITY, MEASURED AS A NON-SUPERUSER — and C1's negative co
     ]);
     expect(healthy.error, `the restored read does not work: ${healthy.error ?? ''}`).toBeNull();
     expect(healthy.rows.length, 'the restored read did not split the invoice across bands').toBeGreaterThan(1);
+  });
+
+  it('ROUND 6 F2 THE FOURTH PATH: dropping `accounting_validator` is now a REFUSAL BY NAME, not a silent pre-S7 answer', async () => {
+    // THE DEFECT THIS ARM EXISTS FOR, and it was in the repair for C1 rather
+    // than in the code C1 was about. The first guard was `SECURITY DEFINER`
+    // and COUNTED hidden plans under its OWNER's row security — and its owner
+    // reads `installment_plans` through `accounting_validator`. Drop that ONE
+    // policy and the owner saw zero rows, so the count was zero, so it
+    // returned `true`. With the caller-side asymmetry added as well,
+    // `customer_ar_aging` then returned ONE row, the OLDEST band, the whole
+    // authoritative total, WITH NO RAISE.
+    //
+    // The asymmetry was one policy wide and the halves behaved differently:
+    // dropping `inventory_internal_read` raised, and the arm above measured
+    // it; dropping `accounting_validator` was SILENT, and nothing in 126 cases
+    // measured that. This arm is that measurement.
+    const p = ownerPool();
+    const AGING = `SELECT bucket_no, txn_minor::text AS txn_minor FROM customer_ar_aging($1, $2, $3::DATE, $4::INTEGER[]) ORDER BY bucket_no`;
+    const args = [w.shop.businessId, customerId, asOf, BUCKET_DAYS];
+    await p.query(`DROP POLICY accounting_validator ON installment_plans`);
+    try {
+      // ONE fault: the healthy caller's read must ALREADY refuse, because the
+      // premise the no-plan arm rests on can no longer be confirmed. The old
+      // guard passed here.
+      const oneFault = await asRole<{ bucket_no: number }>('daftar_inventory_internal', {}, AGING, args);
+      expect(oneFault.error ?? '', 'ONE dropped policy and the read still answers — the guard is blind again').toContain('installment.plan_guard_blind');
+      // ...and it names WHICH relation's configuration failed, so an operator
+      // reading the log is told what to restore.
+      expect(oneFault.error ?? '').toContain('installment_plans');
+
+      // TWO faults — the challenger's exact reproduction. Previously this
+      // returned the pre-S7 number. It must refuse, and return no row.
+      await p.query(`DROP POLICY inventory_internal_read ON installment_plans`);
+      try {
+        const plans = await asRole<{ n: string }>('daftar_inventory_internal', {}, COUNT_PLANS);
+        const inv = await asRole<{ n: string }>('daftar_inventory_internal', {}, COUNT_INVOICE, [invoiceId]);
+        expect(inv.rows[0]?.n, 'the asymmetry is not actually set up, so this measures nothing').toBe('1');
+        expect(plans.rows[0]?.n).toBe('0');
+        const twoFaults = await asRole<{ bucket_no: number; txn_minor: string }>('daftar_inventory_internal', {}, AGING, args);
+        expect(twoFaults.error ?? '', "the challenger's two-fault case still answers").toContain('installment.plan_guard_blind');
+        expect(twoFaults.rows.length, 'and it returned a row as well as raising').toBe(0);
+      } finally {
+        await p.query(`CREATE POLICY inventory_internal_read ON installment_plans
+                         FOR SELECT TO daftar_inventory_internal USING (true)`);
+      }
+    } finally {
+      await p.query(`CREATE POLICY accounting_validator ON installment_plans
+                       FOR SELECT TO daftar_accounting_internal USING (true)`);
+    }
+    const back = await asRole<{ bucket_no: number }>('daftar_inventory_internal', {}, AGING, args);
+    expect(back.error, `the control did not restore both policies: ${back.error ?? ''}`).toBeNull();
+    expect(back.rows.length).toBeGreaterThan(1);
+  });
+
+  it('ROUND 6 F2 EVERY OTHER CONFIRMATION THE ASSERTION MAKES also refuses by name', async () => {
+    // A guard whose only measured failure is one dropped policy is a guard
+    // tested once. Each remaining confirmation is broken in turn and must
+    // refuse — otherwise the check exists and is never evaluated, which is
+    // this estate's first named failure shape.
+    const p = ownerPool();
+    const ASK = `SELECT installment_plan_visibility_assert() AS ok`;
+    const ctx = { tenant: tenantId, business: w.shop.businessId };
+    const cases: readonly { readonly label: string; readonly fault: string; readonly undo: string }[] = [
+      {
+        label: 'row security no longer FORCED',
+        fault: `ALTER TABLE installments NO FORCE ROW LEVEL SECURITY`,
+        undo: `ALTER TABLE installments FORCE ROW LEVEL SECURITY`,
+      },
+      {
+        label: 'a policy of the right NAME for the WRONG role',
+        fault: `DROP POLICY accounting_validator ON installments;
+                CREATE POLICY accounting_validator ON installments FOR SELECT TO daftar_app USING (true)`,
+        undo: `DROP POLICY accounting_validator ON installments;
+               CREATE POLICY accounting_validator ON installments FOR SELECT TO daftar_accounting_internal USING (true)`,
+      },
+      {
+        label: 'the read expression no longer matches the one public.invoices carries',
+        fault: `DROP POLICY tenant_membership ON installments;
+                CREATE POLICY tenant_membership ON installments USING (true) WITH CHECK (true)`,
+        undo: `DROP POLICY tenant_membership ON installments;
+               CREATE POLICY tenant_membership ON installments
+                 USING (app_bypass() OR tenant_id = nullif(app_tenant(), '')::uuid)
+                 WITH CHECK (app_bypass() OR tenant_id = nullif(app_tenant(), '')::uuid)`,
+      },
+      {
+        label: 'an EXTRA policy nobody declared',
+        fault: `CREATE POLICY an_extra_policy ON installments FOR SELECT TO daftar_app USING (true)`,
+        undo: `DROP POLICY an_extra_policy ON installments`,
+      },
+    ];
+    // NON-VACUITY FIRST: on a healthy database it CONFIRMS, or every refusal
+    // below is a refusal of everything.
+    const ok = await asRole<{ ok: boolean }>('daftar_app', ctx, ASK);
+    expect(ok.error, `the assertion refuses a healthy database: ${ok.error ?? ''}`).toBeNull();
+    expect(ok.rows[0]?.ok).toBe(true);
+
+    for (const c of cases) {
+      await p.query(c.fault);
+      try {
+        const r = await asRole<{ ok: boolean }>('daftar_app', ctx, ASK);
+        expect(r.error ?? '', `${c.label}: the assertion did not refuse`).toContain('installment.plan_guard_blind');
+      } finally {
+        await p.query(c.undo);
+      }
+      const after = await asRole<{ ok: boolean }>('daftar_app', ctx, ASK);
+      expect(after.error, `${c.label}: the undo did not restore the database`).toBeNull();
+    }
+  });
+
+  it('ROUND 6 F1 THE ASSERTION IS NOT AN ORACLE — no arguments, INVOKER, no count, read from the catalogue', async () => {
+    // The DEFINER predecessor was granted to `daftar_app` and took
+    // `(business_id, invoice_id[])`, so on its GRANTED SURFACE — not at its one
+    // call site — it answered `(business, invoice) -> has an active plan` about
+    // rows row security denies that role, with the COUNT in the error. Its own
+    // COMMENT argued it «is asked only about invoices that came out of the
+    // caller's own filtered read»: true of the call site, false of the
+    // function, and the grant is what an attacker holds.
+    //
+    // THE PROPERTY IS NOW IN THE SIGNATURE, so it is asserted from the
+    // catalogue instead of argued in a comment.
+    const meta = await ownerPool().query<{ nargs: number; secdef: boolean; vol: string; src: string }>(
+      `SELECT p.pronargs AS nargs, p.prosecdef AS secdef, p.provolatile::text AS vol, p.prosrc AS src
+         FROM pg_proc p WHERE p.oid = 'installment_plan_visibility_assert()'::regprocedure`,
+    );
+    expect(meta.rows[0]?.nargs, 'it takes arguments, so it can be asked about rows the caller may not see').toBe(0);
+    expect(meta.rows[0]?.secdef, "it is a DEFINER, so it lends its owner's visibility to its callers").toBe(false);
+    expect(meta.rows[0]?.vol).toBe('s');
+    const src = meta.rows[0]?.src ?? '';
+    // It reads the CATALOGUE and not the tenant relations, which is what makes
+    // "no arguments" sufficient and not merely necessary.
+    expect(src).toContain('pg_catalog.pg_policy');
+    expect(src, 'it still reads a tenant relation').not.toMatch(/FROM\s+public\.installment/);
+    // AND NO ERROR IT RAISES CARRIES A ROW COUNT. The old message carried the
+    // number of hidden plans, so an N-element probe yielded N.
+    expect(src).not.toContain('plan_invisible');
+    expect(src).not.toContain('v_hidden');
+
+    // MEASURED AS THE APPLICATION ROLE: it answers the SAME single boolean with
+    // and without app context and there is no argument to vary, so a probe
+    // learns nothing. The old one raised for a real pair and returned true for
+    // a random id — that difference was the oracle.
+    const withCtx = await asRole<{ ok: boolean }>(
+      'daftar_app',
+      { tenant: tenantId, business: w.shop.businessId },
+      `SELECT installment_plan_visibility_assert() AS ok`,
+    );
+    const without = await asRole<{ ok: boolean }>('daftar_app', {}, `SELECT installment_plan_visibility_assert() AS ok`);
+    expect(withCtx.error).toBeNull();
+    expect(without.error, 'it behaves differently with and without app context, which is itself information').toBeNull();
+    expect(withCtx.rows[0]?.ok).toBe(true);
+    expect(without.rows[0]?.ok).toBe(true);
   });
 });
