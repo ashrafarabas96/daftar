@@ -11,15 +11,17 @@
  * discovered Phase 4 migration range. What was there before, measured over the
  * tree at `phase/4-sales-pos-customers-receivables` `61677af`:
  *
- *   — `packages/domain-core/src/sale.ts:180` exports `SALE_COMMIT_LOCK_ORDER`,
+ *   — `packages/domain-core/src/sale.ts` exported `SALE_COMMIT_LOCK_ORDER`,
  *     a frozen four-entry array under the heading "The declared lock order
- *     (P4-AL-41)". It has ZERO consumers: the only occurrence of the name in
- *     the whole tree is its own declaration. It is data no check reads. It is
- *     also inaccurate as a description of acquisitions — it names `businesses`
- *     and `customers`, and `sale_commit` ROW-LOCKS NEITHER (`0078:649-667`
- *     reads both unlocked on purpose, because a locking clause needs `UPDATE`
- *     on the relation, and takes a SHARED ADVISORY lock on
- *     `daftar.customer_id` for the customer instead).
+ *     (P4-AL-41)", with ZERO consumers: the only occurrence of the name in the
+ *     whole tree was its own declaration. Data no check read, and inaccurate as
+ *     a description of acquisitions — it named `businesses` and `customers`,
+ *     and `sale_commit` ROW-LOCKS NEITHER (`0078:649-667` reads both unlocked
+ *     on purpose, because a locking clause needs `UPDATE` on the relation, and
+ *     takes a SHARED ADVISORY lock on `daftar.customer_id` for the customer
+ *     instead). DELETED rather than corrected, so `PHASE4_LOCK_ORDER` below is
+ *     the one home; `P4-AL-41` records what the name denotes, because
+ *     `0078`'s prose is byte-immutable and keeps using it.
  *   — `scripts/phase4-s4-gate.ts:692` `rowLockOnlyWriteProblems` is the only
  *     machine check in the tree that reads the two settlement routine bodies
  *     for anything lock-related, and its law is a WRITE law (`UPDATE invoices`

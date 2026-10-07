@@ -928,6 +928,14 @@ see taken.
 order that named `journal_entries` once could not describe the sale at all. Its internal order is safe
 because it is the same at every call, and it is asserted separately, once, against its body.
 
+**`SALE_COMMIT_LOCK_ORDER` means ranks 6–11 and 19 of this list.** `0078:643` and the `COMMENT ON FUNCTION`
+at `0078:1024` say `sale_commit` "takes the domain locks in `SALE_COMMIT_LOCK_ORDER`", and `0078` is
+byte-immutable, so that name is in the estate permanently. It was also, until this patch, a four-entry
+array in `packages/domain-core/src/sale.ts` that no check read and that named `businesses` and `customers`
+as acquisitions `sale_commit` does not make. The array is deleted; the name resolves here, and what it
+denotes is `daftar.sale_id` → `sales` → `daftar.customer_id` (shared) → `daftar.stock_target` (shared) →
+`products` → `stock_levels` → `invoice_sequences`. One home, and it is the one the gate arm reads.
+
 A static check reads each routine's acquisition sequence — advisory keys and row locks alike, with the
 acquisitions a routine reaches through a call to another in-range routine spliced in at the call site — and
 compares it against this list: `scripts/guards/phase4-lock-order.ts`, the `lock-order` arm of
