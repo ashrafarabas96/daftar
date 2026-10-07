@@ -846,6 +846,42 @@ performing arbitrary business writes outside its signed or structural contract.
 Any of these is a **security / data-integrity defect** and must be fixed before
 release.
 
+**The matrix has four models on the SQL leg and three plus a tripwire on the
+HTTP leg.** `apps/api/src/common/error.filter.ts:171-173` renders both `42501`
+and an unparsed `P0001` as a bare `FORBIDDEN / Access denied` with no details,
+so over HTTP a privilege refusal is **indistinguishable** from a guard denial.
+Case D's `REFUSED BY ACL` can therefore never legitimately be *observed* on the
+HTTP surface: there it survives only as a **leak tripwire** — an HTTP response
+from which a privilege refusal is readable means the filter leaked a detail it
+is built not to leak. The ACL half of the matrix is proven on the SQL leg, where
+the SQLSTATE and its privilege diagnostic are both available. This is a
+statement about where each case is *measurable*, not a collapse of the four: the
+four authority models stand, and the HTTP leg simply cannot distinguish two of
+them by design.
+
+**A correction the §14 inventory law produced on first execution.** Three of the
+thirteen recorded door attributes (`kind`, `domain`, `bindings`) had no reader
+anywhere in the suite, and the operation code was compared by gate **name** over
+a body whose literals had been blanked, so forty-five recorded operation codes
+were judged by nothing. Giving every attribute a clause found **five of the
+fifty-seven records false of the catalogue**: `accounting_open_balance_draft`
+records no payload binding at all (its gate is
+`accounting_opening_balance_authority(NULL)`, and `accounting_fingerprint` is
+called only from `0045:707` and `0046:648`), `accounting_open_balance_edit` and
+`..._discard` bind the caller's `p_id` by signed-id equality (`0047:538-540`) and
+nothing of the payload, and `accounting_open_balance_post` and
+`accounting_post_manual_adjustment` do write `accounting_source_bindings`
+through the `accounting_post_entry` they call (`0047:1001`, `0046:418` into
+`0045:795`). The records were corrected to the catalogue; none of the five is a
+cross-tenant path and none widens who can reach a door. The residue is an
+**accounting-domain question for the owner**, recorded here and not decided
+here: the opening-balance draft and edit path binds its `p_lines` by *shape*
+only, not into the signed decision, where every inventory command binds a
+payload digest. The structural guard against a recurrence is that every record
+is now handed to the law through a recording proxy and the set of fields the law
+touched must equal all thirteen, so a fourteenth attribute turns the suite red
+until a clause reads it.
+
 **Effect on P4-S4.** None by itself. The slice's migrations are not rewritten to
 narrow this, and S4 may proceed while runtime tenant isolation, cross-business
 isolation, role shape, `SET ROLE` refusal, ACL restrictions, the definer
