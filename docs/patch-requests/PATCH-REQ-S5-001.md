@@ -16,7 +16,7 @@ Add a `InventoryP4S5OperationCode` union beside the four that exist, and join it
 
 ```ts
 /** P4-S5: the returns slice — a credit note issued or voided, and a refund paid out. */
-export type InventoryP4S5OperationCode = 'customer.issue_credit_note' | 'customer.void_credit_note' | 'customer.refund';
+export type InventoryP4S5OperationCode = 'customer.issue_credit_note' | 'customer.refund';
 
 export type InventoryOperationCode =
   | …
@@ -25,7 +25,6 @@ export type InventoryOperationCode =
 
 export const INVENTORY_P4_S5_OPERATION_CODES: readonly InventoryP4S5OperationCode[] = [
   'customer.issue_credit_note',
-  'customer.void_credit_note',
   'customer.refund',
 ];
 ```
@@ -78,3 +77,19 @@ reach the one `auditThenRethrow…` composer on each of their refusal paths.
 - it must not touch `inventory_payload_digest`, the frozen `CHECK`, or any of the four
   settlement primitives in `supplier-settlement.ts`;
 - it must not move `INVENTORY_P4_S4_OPERATION_CODES` or renumber anything.
+
+## Amendment, round 3: `customer.void_credit_note` is WITHDRAWN
+
+This request asked for THREE operation codes. It now asks for TWO.
+
+`customer.void_credit_note` was unimplementable as specified: the only lawful `UPDATE` on
+`credit_notes` is the remaining pair moving down by one backed consumption (DDL specification
+§5.6), and setting a lifecycle is an `UPDATE` of a `status` column that no longer exists. The
+deeper reason is `P4-AL-46` — a commercial mistake is corrected by a NEW document — and the fact
+that unwinding the already-posted `Dr 4100 / Cr 2200` and `1200/5000` entries is a REVERSAL, which
+is S6's. See DDL specification §1.5a and `CREDIT_NOTE_HAS_NO_LIFECYCLE` in
+`packages/domain-core/src/returns.ts`.
+
+Nothing else in this request changes. The reviewer who already read the three-code form should
+re-read the array: it is the same patch with one element removed, and `inventory_payload_digest`'s
+`op_code` shape (`0054:229`) is satisfied by both remaining codes.

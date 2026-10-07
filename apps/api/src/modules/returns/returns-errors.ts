@@ -39,7 +39,7 @@ import { ReturnsPlanError } from './returns-settlement';
  *   `customer_`-prefixed singular convention (`0081:2468-2472`), NOT
  *   `P4-AL-20`'s stale bare `credit_note` / `refund`;
  * - `invctl/1` operation codes: `customer.issue_credit_note`,
- *   `customer.void_credit_note`, `customer.refund` — because
+ *   `customer.refund` — because
  *   `inventory_operation_kinds.op_code` is `CHECK (op_code ~ '^[a-z]+(\.[a-z_]+)+$')`
  *   frozen inside `inventory_payload_digest` (`0054:229`), so the FIRST SEGMENT
  *   may hold no underscore and `customer_refund.pay` is unrepresentable;
@@ -55,10 +55,6 @@ const RETURNS_STATUS = {
    * a conflict and never an acceptance.
    */
   'credit_note.idempotency_conflict': 409,
-  /** The requested lifecycle transition is not one of the three the table permits. */
-  'credit_note.lifecycle_invalid': 409,
-  /** Some part of the note has been applied or refunded, so it is corrected by a NEW document, never voided. */
-  'credit_note.already_consumed': 409,
   /** The returned-line list is not one the command could accept: too many lines, a repeated line, a non-positive quantity. */
   'credit_note.items_invalid': 400,
   /** More of a product is being returned than the invoice sold. */
@@ -87,6 +83,7 @@ const RETURNS_STATUS = {
   'credit_note.settlement_changed': 409,
   'credit_note.date_before_invoice': 422,
   'credit_note.date_in_future': 422,
+  'credit_note.date_invalid': 422,
   /**
    * The COGS reversal was not the sum of the stock writer's own stored value
    * deltas — an empty movement list, a repeated movement, or a non-positive
@@ -106,7 +103,7 @@ const RETURNS_STATUS = {
    * omitting a realized-FX line is wrong in a way no request can cause.
    */
   'credit_note.posting_incomplete': 500,
-  /** A non-zero sales tax. OD-03 is OPEN and sales tax is structurally zero in this estate. */
+  /** A non-zero sales tax. OD-03 is CLOSED for Phase 4: `tax_minor` is a STRUCTURAL ZERO, and a command attempting a non-zero tax REFUSES rather than normalizing to zero, accepting and ignoring, or posting a tax line. */
   'credit_note.tax_policy_absent': 422,
   'credit_note.not_found': 404,
   /** The source's consumers do not chain from its original to its stored remaining pair. Ours, never theirs. */
@@ -138,6 +135,7 @@ const RETURNS_STATUS = {
   'customer_refund.fx_rate_changed': 409,
   'customer_refund.date_before_source': 422,
   'customer_refund.date_in_future': 422,
+  'customer_refund.date_invalid': 422,
   'customer_refund.reference_required': 400,
   'customer_refund.not_found': 404,
 
@@ -149,6 +147,55 @@ const RETURNS_STATUS = {
 } as const satisfies Record<ReturnsRefusalCode, number>;
 
 export type ReturnsCode = keyof typeof RETURNS_STATUS;
+
+/**
+ * **The codes no shipped TypeScript can raise yet, and WHO owes each one.**
+ *
+ * A neighbouring module has just been bitten by the opposite of this table:
+ * `customer.aging_buckets_invalid` is declared in a status registry, thrown
+ * NOWHERE in the tree, and a docstring cited it as the check that justified a
+ * 500. A declared member nothing reaches is a DEAD CONFIG MEMBER, and a comment
+ * citing a check that does not exist is how a false belief ships.
+ *
+ * The honest statement about this vocabulary is not "every code is live" — it
+ * is not, because the route handler and the SQL routines are owed at levels F
+ * and G and do not exist in the tree. It is that the vocabulary PARTITIONS into
+ * exactly two sets with an authority each:
+ *
+ * - raised at a located site in live TypeScript — the plan layer, the ports, or
+ *   the `@daftar/domain-core` refusal helpers;
+ * - listed HERE, with the authority that will raise it NAMED.
+ *
+ * `tests/guards/p4s5-account-authority-mutation.test.ts` asserts the partition
+ * is exhaustive and disjoint: a code in NEITHER set fails, and a code in BOTH
+ * fails as a stale entry. So the first code to be declared and then forgotten
+ * breaks a test, and a code whose owner lands is removed from here or the suite
+ * reds. That is the whole mechanism this table exists for; it classifies no
+ * status and no behaviour depends on it.
+ *
+ * It is NOT a list of excuses: every entry is a code the contract pack and the
+ * DDL specification already design a raiser for, and the promotion gate at
+ * level F/G is where "the named authority exists" stops being a declaration and
+ * becomes a check.
+ */
+export const RETURNS_CODES_OWED_BY: Readonly<Record<string, string>> = Object.freeze({
+  // The idempotency pair: `returns_claim_intent` / the command's own key
+  // reservation, which reads the stored intent digest and conflicts. Level F.
+  'credit_note.idempotency_conflict': 'the credit-note command handler, on the stored intent digest (level F)',
+  'customer_refund.idempotency_conflict': 'the refund command handler, on the stored intent digest (level F)',
+  // The request-shape and row-state refusals, all of which need a row the plan
+  // layer never sees: the handler reads them under the command's own lock.
+  'credit_note.items_invalid': 'the credit-note command handler, validating the returned-line list before any lock (level F)',
+  'credit_note.quantity_exceeds_sold': 'the credit-note command handler, against the invoice line quantities read under lock (level F)',
+  'credit_note.customer_mismatch': 'the credit-note command handler, comparing the note customer with the invoice customer (level F)',
+  'credit_note.invoice_state_invalid': 'the credit-note command handler, on the locked invoice status (level F)',
+  'credit_note.invoice_walkin': 'the credit-note command handler, on an invoice with no customer (level F)',
+  'credit_note.not_found': 'the credit-note read and command handlers, on a tenant-scoped miss (level F)',
+  'customer_refund.customer_mismatch': 'the refund command handler, comparing the refund customer with the source customer (level F)',
+  'customer_refund.source_changed': 'the refund command handler, when the locked source remaining differs from the one the caller was shown (level F)',
+  'customer_refund.reference_required': 'the refund command handler, on a disbursement method whose payment method requires a reference (level F)',
+  'customer_refund.not_found': 'the refund read and command handlers, on a tenant-scoped miss (level F)',
+});
 
 /**
  * Every code of the domain's closed vocabulary is classified above — a COMPILE

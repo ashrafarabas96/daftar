@@ -49,9 +49,13 @@
  *    enforces: with no tax figure anywhere on the path there is nothing here
  *    that could violate one. When OD-03 is settled, these shapes are what it
  *    will have to change.
- * 6. **No shape carries a settlement STATUS of a credit note.** How much is
- *    left is `remainingAmountMinor`; a status that could disagree with it is the
- *    second truth P4-AL-14 forbids.
+ * 6. **No shape carries ANY status of a credit note** — not a settlement
+ *    status and not a lifecycle one. How much is left is
+ *    `remainingAmountMinor`; a status that could disagree with it is the second
+ *    truth P4-AL-14 forbids. The lifecycle `'draft' | 'issued' | 'void'` that
+ *    `CreditNoteDto` once carried is gone with the lifecycle itself
+ *    (`CREDIT_NOTE_HAS_NO_LIFECYCLE`), and a DTO field whose type admits one
+ *    value is not a field.
  *
  * The merchant never reads the words in this file. Every refusal renders from
  * `error.credit_note.*` and `error.customer_refund.*` in the three locale
@@ -85,20 +89,46 @@ export interface CreditNoteItemDto {
 
 /**
  * A credit note, as the API reports it: the document, its items, and both
- * halves of the remaining pair. No status beyond the lifecycle.
+ * halves of the remaining pair. **It carries no status at all** — see
+ * `CREDIT_NOTE_HAS_NO_LIFECYCLE` in `@daftar/domain-core`. A note is born
+ * issued and is thereafter only consumed, so there is no lifecycle field, and
+ * §6 of this file's header already forbade a SETTLEMENT status.
  *
- * `appliedToInvoiceMinor` is reported as the SUM OF THE STORED APPLICATION ROWS
- * and is the figure by which AR fell — once. `remainingAmountMinor` is what is
- * still refundable. The two plus nothing else account for `totalMinor`, and that
- * identity is verified by the COMMIT-time chain verifier rather than asserted by
- * a row CHECK (P4-AL-26: a derived identity is verified by reconciliation, never
- * stored as a pair of columns).
+ * ## The identity, stated correctly — it has THREE terms, not two
+ *
+ * An earlier draft of this comment said "`appliedToInvoiceMinor` and
+ * `remainingAmountMinor` plus nothing else account for `totalMinor`". That is
+ * FALSE, and it was false in the only direction that matters: it omitted the
+ * amount REFUNDED in cash. A note of 10 000 that reduced AR by 4 000 and was
+ * refunded 6 000 reports `applied = 4 000`, `remaining = 0`, and
+ * `4 000 + 0 ≠ 10 000` — so a reader who trusted the two-term identity would
+ * conclude 6 000 had gone missing, which is precisely the reconciliation
+ * failure the chain verifier exists to prevent. The identity is:
+ *
+ *     appliedToInvoiceMinor + Σ refunds against this note + remainingAmountMinor = totalMinor
+ *
+ * **Why the middle term is not a field here.** It would be a stored
+ * consumption total — a `refundedAmountMinor` by another name — which §4 of
+ * this file's header forbids and which `G-3` independently refuses as an
+ * authoritative-balance column. It is read, when a caller wants it, from the
+ * `refunds` rows that name this note as their source: the same rows the
+ * COMMIT-time chain verifier sums. That verifier is what holds the identity,
+ * not a row `CHECK` (P4-AL-26: a derived identity is verified by
+ * reconciliation, never stored as a pair of columns).
+ *
+ * **`appliedToInvoiceMinor` is therefore the ONE named exemption** to the
+ * derived-figure law of §4, and it is exempt for a reason that does not
+ * generalise: it is the figure by which AR fell — once — and a caller cannot
+ * recompute it, because the applications are not in this shape. It is reported
+ * as the SUM OF THE STORED APPLICATION ROWS and never as
+ * `total − remaining − refunded`, which would make a rounded difference
+ * authoritative. `forbiddenRefundFields` admits it by name and nothing else;
+ * any second figure of this kind is a contract change, not a convenience.
  */
 export interface CreditNoteDto {
   readonly creditNoteId: string;
   readonly creditNoteNumber: string;
   readonly customerId: string;
-  readonly status: 'draft' | 'issued' | 'void';
   readonly creditNoteDate: string;
   readonly currencyCode: string;
   readonly totalMinor: string;

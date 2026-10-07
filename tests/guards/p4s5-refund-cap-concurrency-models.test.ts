@@ -618,17 +618,28 @@ describe('P4-S5 concurrency model — race 3: a FULL refund racing a PARTIAL one
   });
 });
 
-// ── Race 4: the FX cap ─────────────────────────────────────────────────
+// ── Property 4 (NOT a race): the cap's currency ────────────────────────
 
-describe('P4-S5 concurrency model — race 4: the FX cap', () => {
+describe('P4-S5 — property 4: the cap is invariant under the disbursement rate (NOT an interleaving)', () => {
   /**
-   * The cap is in the SOURCE's currency and nothing else.
+   * **This is a PROPERTY TEST and not a race**, and the earlier title calling it
+   * "race 4: the FX cap" was wrong in a way worth correcting rather than
+   * quietly renaming: a reader counting the slice's concurrency evidence would
+   * have counted five interleavings where there are four. Nothing below
+   * interleaves two transactions. One transaction holds the lock and the cap is
+   * evaluated repeatedly against a spread of disbursement rates.
    *
-   * A refund may pay out in another currency, and the base difference is
-   * realized FX. But a rate that moved between two requests must not widen or
-   * narrow what the source can give up: the source's remaining is denominated in
-   * the source's own currency, and the disbursement's snapshot is a fact about
-   * the money leaving, not about the liability.
+   * It belongs in this file all the same, because it is the law that makes the
+   * four real races SUFFICIENT: if the cap could be widened by a rate that
+   * moved, then holding the lock and reading the remaining under it would not
+   * be enough, and every interleaving above would have a second variable in it.
+   *
+   * The law: the cap is in the SOURCE's currency and nothing else. A refund may
+   * pay out in another currency, and the base difference is realized FX. But a
+   * rate that moved between two requests must not widen or narrow what the
+   * source can give up — the source's remaining is denominated in the source's
+   * own currency, and the disbursement's snapshot is a fact about the money
+   * leaving, not about the liability.
    */
   it('the cap verdict is invariant under the disbursement rate, as a property over a spread of rates', () => {
     const w = creditNote();
@@ -760,6 +771,48 @@ describe('P4-S5 concurrency model — race 5: direct-SQL writers that never take
     );
     w.rollback('B');
     expect(w.verifyCommitted()).toBe('ok');
+  });
+
+  it('B WAITS, A ROLLS BACK, and B then commits AT THE SAME LEVEL — the wait is not a refusal', () => {
+    // L2. The test above ends with A committing, so B's level is gone and its
+    // retry is a `23505`. That is one half of the behaviour. This is the other,
+    // and it is the half that matters for liveness rather than safety: a
+    // transaction that WAITED on an uncommitted index entry and then saw the
+    // holder roll back must be able to take that level, because the level was
+    // never consumed. A model that refused here would describe a system in
+    // which one rolled-back refund burns a level forever.
+    const w = creditNote();
+    const row = (by: string): ConsumerRow => ({ by, remainingBeforeMinor: 10_000n, consumedMinor: 6_000n, releasedBaseMinor: w.releaseFor(10_000n, 6_000n) });
+
+    expect(w.insertAtLevel('A', row('A'))).toBe('ok');
+    expect(w.decrement('A', 10_000n, 6_000n)).toBe('ok');
+    // B waits. It does not read around A, and it is not refused.
+    expect(w.insertAtLevel('B', row('B'))).toBe('blocked_on_uncommitted_key');
+
+    // A is refused by a later guard and rolls back.
+    w.rollback('A');
+    // Nothing of A's survives: not the row, not the decrement.
+    expect(w.committedLevels()).toEqual([]);
+
+    // B retries at the SAME level and lands. This is the positive case the
+    // earlier draft only declared.
+    expect(w.insertAtLevel('B', row('B'))).toBe('ok');
+    expect(w.decrement('B', 10_000n, 6_000n)).toBe('ok');
+    w.commit('B');
+    expect(w.committedLevels()).toEqual([10_000n]);
+    expect(w.committedRowsBy()).toEqual(['B']);
+    expect(w.verifyCommitted()).toBe('ok');
+
+    // And the wait was real: had B been allowed through while A was still
+    // staged, BOTH rows would have reached the relation at level 10 000 and the
+    // source would have given up 12 000 of its 10 000. The model says so.
+    const overdrawn = creditNote();
+    expect(overdrawn.insertAtLevel('A', { by: 'A', remainingBeforeMinor: 10_000n, consumedMinor: 6_000n, releasedBaseMinor: overdrawn.releaseFor(10_000n, 6_000n) })).toBe('ok');
+    overdrawn.forceDecrement('A', 6_000n);
+    overdrawn.commit('A');
+    expect(overdrawn.insertAtLevel('B', { by: 'B', remainingBeforeMinor: 10_000n, consumedMinor: 6_000n, releasedBaseMinor: overdrawn.releaseFor(10_000n, 6_000n) })).toBe(
+      'duplicate_key',
+    );
   });
 
   it('a writer that FABRICATES the level dodges the index, and the deferred verifier refuses it inside its own transaction', () => {

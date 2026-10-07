@@ -52,7 +52,6 @@ invoice_id                           UUID NOT NULL        -- the note's ORIGIN i
 credit_note_number                   TEXT NOT NULL
 number_period                        TEXT NOT NULL
 number_seq                           BIGINT NOT NULL CHECK (number_seq >= 1)
-status                               TEXT NOT NULL CHECK (status IN ('draft','issued','void'))
 credit_note_date                     DATE NOT NULL
 reference                            TEXT CHECK (reference IS NULL OR (char_length(reference) BETWEEN 1 AND 100 AND reference = btrim(reference)))
 currency                             CHAR(3) NOT NULL
@@ -142,6 +141,38 @@ provenance. **That is not the AR reduction.** The AR reduction is a
 `credit_note_applications` row, at the invoice's AR LEVEL, and a note may reduce AR by less
 than its total (or by nothing at all, against an already-paid invoice). The two are different
 facts and a reader who conflates them has read `TL-P4-S5-R1` backwards.
+
+### 1.5a THERE IS NO `status` COLUMN, AND THEREFORE NO VOID
+
+An earlier draft gave `credit_notes` a `status TEXT NOT NULL CHECK (status IN
+('draft','issued','void'))` and a three-row lifecycle table, while §5.6's guard says **"UPDATE
+impossible except — on `credit_notes` alone — the remaining PAIR moving down by one backed
+consumption"**. Setting the lifecycle to `void` is an `UPDATE` of `status`, which that guard
+forbids: the whole void command, both its refusal codes, the `setLifecycle` port and even
+`draft → issued` were unimplementable as specified. The right repair is not to widen the guard.
+
+**`P4-AL-46` already answers the question the lifecycle was trying to answer.** A commercial
+mistake is corrected by a NEW document, never by editing the old one. A credit note that should not
+have been issued is therefore not voided; and unwinding the `Dr 4100 / Cr 2200` and the `1200/5000`
+COGS reversal that the issue command already posted is a REVERSAL, which `§4A` rules is S6's and
+which S5 is forbidden to design. A void that posted nothing would leave 2200 carrying a refundable
+liability for a document that no longer exists.
+
+So:
+
+- `credit_notes` has **no `status` column**. A note is born issued, by the only command that
+  creates one, and is thereafter only consumed. A one-valued `CHECK` column is a column that can
+  hold one value, which is not a column;
+- the guard wording of §5.6 stands **unchanged and is now true**: the only lawful `UPDATE` on
+  `credit_notes` is the remaining pair moving down by one backed consumption;
+- `customer.void_credit_note` is **withdrawn** from the operation-code request
+  (`PATCH-REQ-S5-001`), and `credit_note.lifecycle_invalid` and `credit_note.already_consumed`
+  leave the refusal vocabulary. A code no command can raise is a contract nobody can meet — the
+  same rule that kept `payments.reverse` out of this slice;
+- **voiding or reversing an ISSUED credit note is recorded as a predecessor assumption on S6**
+  (contract pack §2, `A-23`). S5 needs nothing from it: a note issued in error is superseded by a
+  new note, and the liability it raised is discharged by a refund or left standing, both of which
+  are representable today.
 
 ### 1.6 Indexes
 
@@ -423,6 +454,30 @@ CONSTRAINT refunds_rate_ck CHECK ((rate_source = 'base') = (fx_rate_id IS NULL A
 CONSTRAINT refunds_binding_identity_ck CHECK (binding_source_id = id)
 ```
 
+#### 4.3a THERE IS NO ROW `CHECK` FOR THE 2× RATE BOUND, AND THERE MUST NOT BE
+
+`TL-P4-S5-R3` bounds the two rates to `[0.5×, 2×]` of each other, inclusive, and that bound
+lives in `planCustomerRefund` and **nowhere in this schema**. The omission is deliberate and is
+part of the ruling rather than a gap in it.
+
+The owner's §9: the bound *"does not compute realized FX; does not modify the journal result;
+**does not cap legitimate accounting values**; does not create a gain/loss amount. It only
+prevents obviously suspicious input/rate divergence from reaching settlement."*
+
+A row `CHECK` is exactly the thing §9 forbids. Written as
+`CHECK (disbursement_base_amount_minor <= 2 * source_carrying_base_released_minor AND …)` it
+would stop being a sanity check on an INPUT and become a permanent ceiling on a STORED
+accounting value — so a rate that genuinely moved beyond 2× would make the refund
+*unrepresentable* rather than *refusable*, and a historical row would become unwritable by a
+corrective migration. `refunds_realized_ck` above is the opposite kind of constraint and is
+right: it asserts an IDENTITY between three stored columns, caps nothing, and is true of every
+lawful row whatever the rates were.
+
+So the division of labour is: the **command** refuses suspicious rate divergence with
+`customer_refund.fx_rate_changed`, a 409 whose remedy is to refresh the rate and retry; the
+**schema** asserts that whatever was stored is internally consistent. A reviewer looking for
+the 2× rule in this file should stop looking — and should not add it.
+
 `refunds_consumed_ck` is the row-level half of the cap. **It is not the cap.** It refuses a row
 that consumes more than the level it declares; the cap is the check that the level IS the
 source's locked remaining, and only `FOR UPDATE` plus the chain verifier can establish that.
@@ -574,14 +629,21 @@ is the `UUID[]` set-based overload at `0084:593`. Two consequences, in both dire
 
 ### 5.5 The new routines, and who may execute them
 
-Three commands, each an internal-owned `SECURITY DEFINER` with a pinned `search_path` and
+**TWO** commands, each an internal-owned `SECURITY DEFINER` with a pinned `search_path` and
 `REVOKE ALL … FROM PUBLIC`, following `0081`'s shape exactly:
 
 ```
 customer_issue_credit_note(...)  owner daftar_inventory_internal
-customer_void_credit_note(...)   owner daftar_inventory_internal
 customer_refund_pay(...)         owner daftar_inventory_internal
 ```
+
+An earlier draft listed a third, `customer_void_credit_note(...)`. It is withdrawn: §1.5a
+records why, and the one-line version is that its only action — an `UPDATE` of a `status`
+column — is forbidden by §5.6's guard and the column does not exist. Voiding an ISSUED note is
+a reversal (`A-23`, S6). **Two commands and three registered source types is not a
+mismatch:** `customer_issue_credit_note` writes two of the three, because the application rows
+and their `customer_credit_note_application` entry are part of issuing the note. §5.6.1 counts
+the triangle.
 
 Plus **one deferred completeness validator PER REGISTERED SOURCE TYPE — three, not two** —
 because `TL-P4-S1-R1` says "an accounting source type with no writer, no binding, no expected
@@ -657,13 +719,58 @@ assertion that makes the whole slice's claim checkable from the database alone.
 ### 5.6 Triggers
 
 ```
-credit_notes_guard            BEFORE INSERT OR UPDATE OR DELETE ON credit_notes
-credit_note_items_guard       BEFORE INSERT OR UPDATE OR DELETE ON credit_note_items
+credit_notes_guard             BEFORE INSERT OR UPDATE OR DELETE ON credit_notes
+credit_note_items_guard        BEFORE INSERT OR UPDATE OR DELETE ON credit_note_items
 credit_note_applications_guard BEFORE INSERT OR UPDATE OR DELETE ON credit_note_applications
-refunds_guard                 BEFORE INSERT OR UPDATE OR DELETE ON refunds
-credit_notes_verify           CONSTRAINT TRIGGER AFTER INSERT OR UPDATE ON credit_notes DEFERRABLE INITIALLY DEFERRED
-refunds_verify                CONSTRAINT TRIGGER AFTER INSERT ON refunds DEFERRABLE INITIALLY DEFERRED
+refunds_guard                  BEFORE INSERT OR UPDATE OR DELETE ON refunds
+
+-- the CONSUMPTION-CHAIN verifiers, on the SOURCE relations
+credit_notes_verify            CONSTRAINT TRIGGER AFTER INSERT OR UPDATE ON credit_notes DEFERRABLE INITIALLY DEFERRED
+refunds_verify                 CONSTRAINT TRIGGER AFTER INSERT ON refunds DEFERRABLE INITIALLY DEFERRED
+
+-- the ENTRY-COMPLETENESS validators, on `journal_entries`, keyed on the source
+-- type — the `0081:1725-1736` shape, verbatim in form. WITHOUT THESE THREE THE
+-- THREE FUNCTIONS OF §5.5 ARE NEVER INVOKED BY ANYTHING.
+CREATE CONSTRAINT TRIGGER journal_entries_customer_return_complete
+  AFTER INSERT ON journal_entries DEFERRABLE INITIALLY DEFERRED
+  FOR EACH ROW WHEN (NEW.source_type = 'customer_return')
+  EXECUTE FUNCTION accounting_customer_return_entry_complete();
+CREATE CONSTRAINT TRIGGER journal_entries_customer_credit_note_application_complete
+  AFTER INSERT ON journal_entries DEFERRABLE INITIALLY DEFERRED
+  FOR EACH ROW WHEN (NEW.source_type = 'customer_credit_note_application')
+  EXECUTE FUNCTION accounting_customer_credit_note_application_entry_complete();
+CREATE CONSTRAINT TRIGGER journal_entries_customer_refund_complete
+  AFTER INSERT ON journal_entries DEFERRABLE INITIALLY DEFERRED
+  FOR EACH ROW WHEN (NEW.source_type = 'customer_refund')
+  EXECUTE FUNCTION accounting_customer_refund_entry_complete();
 ```
+
+#### 5.6.1 THE REGISTRATION TRIANGLE, COUNTED
+
+An earlier draft of this section declared **two** triggers, both on the source relations and both
+calling the consumption-chain verifier, under the sentence "The two `CONSTRAINT TRIGGER`s call the
+verifiers at COMMIT" — while §5.5 named **three** entry-completeness validators and quoted
+`TL-P4-S1-R1`'s dead-concept rule at them. Three registered types, three named functions, and no
+trigger on `journal_entries` anywhere: the validators were *named, not installed*, which is the
+dead concept one level down from where it was first ruled against. A migration written to that text
+would have let a `customer_credit_note_application` entry commit with the realized-FX line omitted
+and the liability understated by the same amount, balanced, with nothing in the database objecting —
+the TypeScript assertions in `returns-settlement.ts` are its TWINS and do not run there.
+
+So the obligation is now counted rather than asserted. `TL-P4-S1-R1` gives each registered source
+type FOUR duties, and this slice registers three types, so there are **twelve** cells and every one
+must be filled by a named object in this specification:
+
+| source type | writer | binding | expected journal shape | deferred validator | the trigger that FIRES it |
+|---|---|---|---|---|---|
+| `customer_return` | `customer_issue_credit_note` (§5.5) | `credit_notes.binding_source_id` + the composite FK (§1.2) | §5.5, `Dr 4100 / Cr 2200`, no 1100 line | `accounting_customer_return_entry_complete` | `journal_entries_customer_return_complete` |
+| `customer_credit_note_application` | `customer_issue_credit_note` (the application rows are written in the same command) | `credit_note_applications.binding_source_id` + the composite FK (§3.2) | §5.5, `Dr 2200 / Cr 1100 / ± dust / ± FX` | `accounting_customer_credit_note_application_entry_complete` | `journal_entries_customer_credit_note_application_complete` |
+| `customer_refund` | `customer_refund_pay` (§5.5) | `refunds.binding_source_id` + the composite FK (§4.4) | §5.5, `Dr 2200\|2210 / Cr posting / ± FX`, no 1100 line | `accounting_customer_refund_entry_complete` | `journal_entries_customer_refund_complete` |
+
+**A count, not a list: 3 types × 4 duties = 12, and the table above has 12 filled cells plus the
+trigger column that the first draft left empty for all three.** §7 items 9 and 10 assert the
+functions and the triggers from `pg_proc` and `pg_trigger`, so the count is checked against the
+catalogue and not against this table.
 
 The `*_guard` family is `customer_credit_guard`'s shape: DELETE impossible, INSERT only from
 the command's own transaction (`business_transaction_id = inventory_business_transaction_id()`)
@@ -671,7 +778,11 @@ and born whole, UPDATE impossible except — on `credit_notes` alone — the rem
 down by one backed consumption. **`refunds` admits NO UPDATE at all**: a refund that happened
 is a fact, and a correction is a new document (P4-AL-46).
 
-The two `CONSTRAINT TRIGGER`s call the verifiers at COMMIT. They are added to the Phase 4
+The source-relation `CONSTRAINT TRIGGER`s call the CONSUMPTION-CHAIN verifier at COMMIT; the three
+`journal_entries` ones call the ENTRY-COMPLETENESS validators. They are different laws over
+different subjects and neither substitutes for the other: a chain verifier judges the source's
+levels and sees nothing of the entry, and an entry validator judges the entry's lines and sees
+nothing of the chain. All five are added to the Phase 4
 position-scoped set, not the Phase 3 one:
 `tests/security/phase3-s8-set-constraints-sweep.test.ts:32-48` scopes its catalogue equality
 BY POSITION to triggers on relations the inherited prefix created, explicitly so a later
@@ -766,7 +877,16 @@ catalogue rather than trusting that the `CREATE TABLE` ran. S5's block asserts:
    `lower_bound_policy` and each named by
    `accounting_reversals_20_domain_source_guard`'s replaced body;
 7. `daftar_app` holds exactly `SELECT` on all four and PUBLIC holds nothing;
-8. the three operation kinds are registered in `inventory_operation_kinds`.
+8. the TWO operation kinds are registered in `inventory_operation_kinds` — two, not three: `customer.void_credit_note` is withdrawn (§1.5a);
+9. **the three entry-completeness validators EXIST as functions**, from
+   `SELECT proname FROM pg_proc WHERE proname LIKE 'accounting_customer_%entry_complete'` — the
+   three of §5.5 by name, each owned by `daftar_accounting_internal` with nothing granted to
+   PUBLIC;
+10. **the three constraint triggers that FIRE them exist on `journal_entries`**, from
+    `SELECT tgname, pg_get_triggerdef(oid) FROM pg_trigger WHERE tgrelid = 'journal_entries'::regclass AND tgconstraint <> 0`,
+    each `DEFERRABLE INITIALLY DEFERRED` and each naming its own source type in its `WHEN` clause.
+    **Item 9 without item 10 is the defect §5.6.1 records**, so the block asserts the pair and
+    reports which half is missing — a function nothing invokes is not a validator.
 
 ---
 

@@ -14,14 +14,15 @@
  */
 import { describe, expect, it } from 'vitest';
 import {
-  CREDIT_NOTE_LIFECYCLE_TRANSITIONS,
   REFUND_ENTRY_ACCOUNTS,
   CREDIT_NOTE_INTENT_FIELDS,
   REFUND_INTENT_FIELDS,
   REFUND_NAMES_NO_INVOICE,
   RETURNS_DATE_COMPARISON_INSTANT,
   RETURNS_LOCK_ORDER,
+  CREDIT_NOTE_HAS_NO_LIFECYCLE,
   RETURNS_REFUSAL_CODES,
+  RETURNS_TRANSACTION_BOUNDARY,
   S5_ACCOUNTING_SOURCE_TYPES,
   S5_OPERATION_CODES,
   creditNoteCogsReversalBaseMinor,
@@ -29,9 +30,7 @@ import {
   creditNoteIntentPreimage,
   creditNoteReplayVerdict,
   creditNoteTaxRefusal,
-  creditNoteVoidRefusal,
   forbiddenRefundFields,
-  isCreditNoteLifecycleTransitionAllowed,
   isLawfulLockTrace,
   isRefundEntryAccount,
   isRepresentableOperationCode,
@@ -66,6 +65,12 @@ import {
   type ConsumableSource,
   type ReturnsEntryLine,
 } from '../../apps/api/src/modules/returns/returns-settlement';
+import {
+  assertApplicationRowAgreesWithEntry,
+  creditNoteApplicationRow,
+  type CreditNoteApplicationIdentity,
+  type CreditNoteApplicationWrite,
+} from '../../apps/api/src/modules/returns/returns-ports';
 import { RETURNS_CODES, returnsStatus } from '../../apps/api/src/modules/returns/returns-errors';
 import { RETURNS_ROUTE_AUTHORITY } from '../../apps/api/src/modules/returns/returns-permissions';
 
@@ -79,6 +84,12 @@ const source = (over: Partial<ConsumableSource> = {}): ConsumableSource => ({
   conversion: BASE,
   ...over,
 });
+
+/** 100, the `cr_rel` of a 100-unit consumption from a 1 000-at-rate-1.0 source. Named so the sign-symmetry property reads as a property. */
+const CR_REL_100 = 100n;
+
+/** The settlement module's own text, for the two assertions that hold a COMMENT to a ruling. */
+const SETTLEMENT_LAW_SOURCE = readFileSync(join(__dirname, '../../apps/api/src/modules/returns/returns-settlement.ts'), 'utf8');
 
 const codeOf = (fn: () => unknown): string => {
   try {
@@ -386,13 +397,37 @@ describe('an application reduces AR through the ONE canonical algorithm', () => 
     expect(mineLines.map((l) => `${l.side} ${l.account} ${l.baseAmountMinor}`)).toEqual(
       canonicalLines.map((l) => `${l.side} ${l.account === 'customer_credit_liability' ? 'customer_refund_liability' : l.account} ${l.baseAmountMinor}`),
     );
+    // L4: and the relabelling changed the ACCOUNT and NOTHING ELSE. The two
+    // other fields of a line are checked in both directions, because an earlier
+    // version compared only `side`, `account` and `baseAmountMinor` — so a
+    // mapper that dropped the transaction amount or mislabelled the currency
+    // would have passed.
+    expect(mineLines.map((l) => `${l.currency} ${l.txnAmountMinor}`)).toEqual(canonicalLines.map((l) => `${l.currency} ${l.txnAmountMinor}`));
+    const relabelled = mineLines.filter((l) => l.account === 'customer_refund_liability');
+    const original = canonicalLines.filter((l) => l.account === 'customer_credit_liability');
+    expect(relabelled).toHaveLength(original.length);
+    expect(relabelled.length).toBeGreaterThan(0);
+    for (let i = 0; i < relabelled.length; i += 1) {
+      const a = relabelled[i] as ReturnsEntryLine;
+      const b = original[i] as (typeof original)[number];
+      expect(a.currency).toBe(b.currency);
+      expect(a.txnAmountMinor).toBe(b.txnAmountMinor);
+      expect(a.baseAmountMinor).toBe(b.baseAmountMinor);
+      expect(a.side).toBe(b.side);
+    }
     // And the relabelling genuinely happened, so the assertion above is not vacuous.
     expect(canonicalLines.some((l) => l.account === 'customer_credit_liability')).toBe(true);
     expect(mineLines.some((l) => l.account === 'customer_refund_liability')).toBe(true);
     expect(mineLines.some((l) => l.account === 'customer_credit_liability')).toBe(false);
   });
 
-  it('yields every operand of `credit_note_applications_realized_ck`, so the row is satisfiable from the plan alone', () => {
+  it('yields a LAWFUL application ROW, every column of it, checked against the entry rather than against itself', () => {
+    // This test replaced one that asserted
+    // `realizedFxMinor === creditCarryingReleasedMinor − invoiceCarryingReleasedMinor`,
+    // which is the DEFINITION of the field restated — true of any input, and so
+    // a statement about `-` and not about the plan. The row is the real subject:
+    // fifteen command-owned `NOT NULL` columns, mapped by the shipped mapper, and judged
+    // against the entry's own lines.
     const plan = planCreditNoteApplication({
       invoice: WORKED_INVOICE,
       note: WORKED_NOTE,
@@ -400,7 +435,121 @@ describe('an application reduces AR through the ONE canonical algorithm', () => 
       consumedMinor: 3_333n,
       appliedMinor: 3_333n,
     });
-    expect(plan.realizedFxMinor).toBe(plan.creditCarryingReleasedMinor - plan.invoiceCarryingReleasedMinor);
+    const identity: CreditNoteApplicationIdentity = {
+      applicationId: 'app-1',
+      lineNo: 1,
+      creditNoteId: 'cn-1',
+      customerId: 'cus-1',
+      invoiceId: 'inv-1',
+      applicationDate: '2026-03-04',
+      creditCurrencyCode: 'USD',
+      invoiceCurrencyCode: 'USD',
+    };
+    const row = creditNoteApplicationRow(identity, plan);
+    // The three money columns, against the numbers the challenger verified BY
+    // HAND — not against the plan's own fields: rel = 3 617, cr_rel = 3 633,
+    // realized = 16.
+    expect(row.invoiceCarryingBaseReleasedMinor).toBe(3_617n);
+    expect(row.creditCarryingBaseReleasedMinor).toBe(3_633n);
+    expect(row.realizedFxGainLossMinor).toBe(16n);
+    // Every column the relation declares `NOT NULL` is present and non-empty.
+    for (const [name, value] of Object.entries(row)) {
+      expect(value, name).not.toBeUndefined();
+      if (typeof value === 'string') expect(value.length, name).toBeGreaterThan(0);
+    }
+    expect(() => assertApplicationRowAgreesWithEntry(row, plan)).not.toThrow();
+  });
+
+  it('RED PROOF — the two adjacent carrying columns CROSSED is refused, which no NOT NULL and no CHECK would catch', () => {
+    const plan = planCreditNoteApplication({ invoice: WORKED_INVOICE, note: WORKED_NOTE, sameCurrency: true, consumedMinor: 3_333n, appliedMinor: 3_333n });
+    const identity: CreditNoteApplicationIdentity = {
+      applicationId: 'app-1',
+      lineNo: 1,
+      creditNoteId: 'cn-1',
+      customerId: 'cus-1',
+      invoiceId: 'inv-1',
+      applicationDate: '2026-03-04',
+      creditCurrencyCode: 'USD',
+      invoiceCurrencyCode: 'EUR',
+    };
+    const row = creditNoteApplicationRow(identity, plan);
+    // Non-vacuity: the two columns genuinely differ in this scenario, so
+    // crossing them is a real change and not a relabelling of equals.
+    expect(row.creditCarryingBaseReleasedMinor).not.toBe(row.invoiceCarryingBaseReleasedMinor);
+    const crossed: CreditNoteApplicationWrite = {
+      ...row,
+      creditCarryingBaseReleasedMinor: row.invoiceCarryingBaseReleasedMinor,
+      invoiceCarryingBaseReleasedMinor: row.creditCarryingBaseReleasedMinor,
+    };
+    expect(codeOf(() => assertApplicationRowAgreesWithEntry(crossed, plan))).toBe('credit_note.posting_incomplete');
+  });
+
+  it('RED PROOF — an entry carrying BOTH a gain and a loss line is refused, which the conditional form could not do', () => {
+    // The coordinator's finding 2. The row guard's realized-FX expression used to
+    // read whichever of the two accounts was non-zero:
+    //
+    //     netBaseOnLines('fx_gain') === 0n ? -netBaseOnLines('fx_loss') : -netBaseOnLines('fx_gain')
+    //
+    // correct in three of the four cases and wrong in the fourth — with both
+    // lines present it dropped the loss entirely and attributed a gain the entry
+    // had not netted. It is now the negation of the SUM, and this is the case
+    // that separates the two.
+    const plan = planCreditNoteApplication({ invoice: WORKED_INVOICE, note: WORKED_NOTE, sameCurrency: true, consumedMinor: 3_333n, appliedMinor: 3_333n });
+    const identity: CreditNoteApplicationIdentity = {
+      applicationId: 'app-1',
+      lineNo: 1,
+      creditNoteId: 'cn-1',
+      customerId: 'cus-1',
+      invoiceId: 'inv-1',
+      applicationDate: '2026-03-04',
+      creditCurrencyCode: 'USD',
+      invoiceCurrencyCode: 'EUR',
+    };
+    const row = creditNoteApplicationRow(identity, plan);
+    // Non-vacuity: the lawful entry has exactly ONE FX line, a 16-minor gain.
+    expect(plan.entryLines.filter((l) => l.account === 'fx_gain' || l.account === 'fx_loss')).toHaveLength(1);
+    expect(row.realizedFxGainLossMinor).toBe(16n);
+    expect(() => assertApplicationRowAgreesWithEntry(row, plan)).not.toThrow();
+
+    // A second FX line appears on the OTHER account — the shape a sign defect in
+    // a future edit to `realizedLines` would produce.
+    const bothSides: readonly ReturnsEntryLine[] = [
+      ...plan.entryLines,
+      { account: 'fx_loss', side: 'D', currency: 'base', txnAmountMinor: 5n, baseAmountMinor: 5n },
+    ];
+    // The two expressions of the SAME quantity disagree on this entry, which is
+    // the whole finding: the sum sees 11, the conditional form saw 16.
+    const net = (account: string): bigint =>
+      bothSides.filter((l) => l.account === account).reduce((a, l) => a + (l.side === 'D' ? l.baseAmountMinor : -l.baseAmountMinor), 0n);
+    const bySum = -(net('fx_gain') + net('fx_loss'));
+    const byConditional = net('fx_gain') === 0n ? -net('fx_loss') : -net('fx_gain');
+    expect(bySum).toBe(11n);
+    expect(byConditional).toBe(16n);
+    expect(byConditional).toBe(row.realizedFxGainLossMinor); // …which is why the old form stayed GREEN here.
+
+    // And the shipped guard, reading the sum, refuses.
+    expect(codeOf(() => assertApplicationRowAgreesWithEntry(row, { ...plan, entryLines: bothSides }))).toBe('credit_note.posting_incomplete');
+  });
+
+  it('RED PROOF — the mapper refuses an UNPINNED identity, which is reachable from a legitimate handler', () => {
+    const plan = planCreditNoteApplication({ invoice: WORKED_INVOICE, note: WORKED_NOTE, sameCurrency: true, consumedMinor: 3_333n, appliedMinor: 3_333n });
+    const identity: CreditNoteApplicationIdentity = {
+      applicationId: 'app-1',
+      lineNo: 1,
+      creditNoteId: 'cn-1',
+      customerId: 'cus-1',
+      invoiceId: 'inv-1',
+      applicationDate: '2026-03-04',
+      creditCurrencyCode: 'USD',
+      invoiceCurrencyCode: 'USD',
+    };
+    // A handler that forgot to pin the customer under the rank-1 lock. The
+    // composite FK edges would otherwise report this at COMMIT, far from here.
+    expect(codeOf(() => creditNoteApplicationRow({ ...identity, customerId: '' }, plan))).toBe('customer_refund.arithmetic_invalid');
+    expect(codeOf(() => creditNoteApplicationRow({ ...identity, applicationDate: '' }, plan))).toBe('customer_refund.arithmetic_invalid');
+    expect(codeOf(() => creditNoteApplicationRow({ ...identity, lineNo: 0 }, plan))).toBe('customer_refund.arithmetic_invalid');
+    // Green on the pinned one, so the refusals above are about the omission.
+    expect(() => creditNoteApplicationRow(identity, plan)).not.toThrow();
   });
 
   it('RED PROOF — an application exceeding the invoice’s outstanding is refused in S5’s own vocabulary', () => {
@@ -558,6 +707,129 @@ describe('TL-P4-S5-R2 — the seven red proofs', () => {
     ).toBe('credit_note.posting_incomplete');
   });
 
+  it('2a — the guard’s oracle is a SECOND implementation, exercised over ties and over a spread', () => {
+    // M1. `assertCanonicalArRelease` used to call `apRelease` with the inputs
+    // `arSide` had already called it with and compare the results: `f(x) === f(x)`,
+    // mathematically unreachable in the shipped composition. It now computes
+    // `rel` from a biased-quotient HALF_EVEN written in `returns-settlement.ts`
+    // and compares BOTH against the plan and against `apRelease`.
+    //
+    // The function is deliberately not exported — nothing in the slice may round
+    // money with it — so it is exercised THROUGH the guard: every scenario below
+    // passes only if the two implementations agree, and the differential arm's
+    // message is distinct from the plan-mismatch one.
+    expect(SETTLEMENT_SOURCE).toContain('function halfEvenByBiasedQuotient');
+    // It is not a call to the accepted primitive wearing a new name.
+    const helperMatch = /function halfEvenByBiasedQuotient\(([\s\S]*?)\n\}/.exec(SETTLEMENT_SOURCE)?.[1];
+    expect(helperMatch).toBeDefined();
+    const helper = helperMatch as string;
+    expect(helper).not.toContain('roundHalfEven');
+    expect(helper).not.toContain('apRelease');
+    expect(helper).toContain('2n * n + d');
+    // And it divides on NON-NEGATIVE operands, which is the whole of its
+    // correctness on the negative half. BigInt `/` TRUNCATES toward zero; it
+    // does not floor. The biased-quotient form `q = (2n + d) / 2d` is `floor`
+    // only for a non-negative numerator — `(-9n)/(8n)` is `-1n` where the floor
+    // is `-2` — so a signed division here rounds the negative half the wrong
+    // way. The accepted `roundHalfEven` avoids it by a DIFFERENT expression
+    // (remainder comparison), which is why the two remain two implementations.
+    expect(helper).toContain('numerator < 0n ? -numerator : numerator');
+    expect(helper).toContain('denominator < 0n ? -denominator : denominator');
+
+    // A NON-TIE NEGATIVE case, which is the one case a tie-only suite cannot
+    // see: at an exact tie, truncation and floor AGREE, so every scenario
+    // above would pass over the defective form.
+    //
+    // At 10/3, `R(x) = HALF_EVEN(10x/3)`. `R(-1) = HALF_EVEN(-3.333…) = -3`,
+    // and the biased numerator is `2·(-10) + 3 = -17` over `2d = 6`: the
+    // shipped helper takes absolute values and returns `-3`; a signed division
+    // truncates `-17/6` to `-2`. So the lawful `rel(-1, 1) = R(0) − R(-1) = 3`,
+    // and the defective form computes `2`.
+    //
+    // A negative level is not reachable on the live path — `apRelease` refuses
+    // it in the inventory vocabulary, which is what this call ends up doing —
+    // and that is the point: the only thing this case can distinguish is the
+    // sign handling, before the unreachability is detected downstream.
+    const NEG_INVOICE = { totalTxnMinor: 3n, totalBaseMinor: 10n, outstandingTxnMinor: 4n, conversion: BASE };
+    let negError: unknown = null;
+    try {
+      assertCanonicalArRelease(NEG_INVOICE, { arReleasedBeforeMinor: -1n, invoiceAmountAppliedMinor: 1n, invoiceCarryingReleasedMinor: 3n });
+    } catch (e) {
+      negError = e;
+    }
+    // Non-vacuity: the call really was refused, so the assertion below is about
+    // WHICH refusal and not about a silent pass.
+    expect(negError).not.toBeNull();
+    expect(
+      negError instanceof ReturnsPlanError && /canonical release/.test((negError as Error).message),
+      'the half-even helper divided a SIGNED numerator: BigInt `/` truncates toward zero, the negative half rounds the wrong way, and no tie case can see it',
+    ).toBe(false);
+
+    // Scenarios chosen so the quotient lands ON a tie, where the two
+    // formulations are most likely to part. A base/txn pair of 30/20 makes
+    // `R(x) = HE(3x/2)`, so every ODD `x` is an exact half — and a rate of 1.5
+    // keeps `conv_R(a)` at or above one base minor unit, so the scenario is a
+    // lawful application rather than an `amount_below_base_unit` refusal.
+    const TIE_INVOICE = { totalTxnMinor: 20n, totalBaseMinor: 30n, outstandingTxnMinor: 20n, conversion: { rateR10: 15n * 10n ** 9n, txnExponent: 2, baseExponent: 2 } };
+    let ties = 0;
+    for (let applied = 1n; applied <= 20n; applied += 1n) {
+      const p = planCreditNoteApplication({
+        invoice: TIE_INVOICE,
+        note: { originalMinor: 20n, originalCarryingMinor: 30n, remainingMinor: 20n, conversion: TIE_INVOICE.conversion },
+        sameCurrency: true,
+        consumedMinor: applied,
+        appliedMinor: applied,
+      });
+      // The guard runs inside the plan; running it again here names the subject.
+      expect(() => assertCanonicalArRelease(TIE_INVOICE, p)).not.toThrow();
+      // And the release agrees with the accepted primitive at every tie.
+      expect(p.invoiceCarryingReleasedMinor).toBe(apRelease(30n, 20n, 0n, applied));
+      if (applied % 2n === 1n) ties += 1;
+    }
+    // Non-vacuity: the spread really did contain exact ties, which is the only
+    // reason to choose this pair.
+    expect(ties).toBe(10);
+
+    // A spread over the worked pair, including the full consumption.
+    for (const applied of [1n, 2n, 7n, 3_332n, 3_333n, 3_334n, 9_999n, 10_000n]) {
+      const p = planCreditNoteApplication({ invoice: WORKED_INVOICE, note: WORKED_NOTE, sameCurrency: true, consumedMinor: applied, appliedMinor: applied });
+      expect(() => assertCanonicalArRelease(WORKED_INVOICE, p)).not.toThrow();
+      expect(p.invoiceCarryingReleasedMinor).toBe(apRelease(WORKED_INVOICE.totalBaseMinor, WORKED_INVOICE.totalTxnMinor, 0n, applied));
+    }
+
+    // RED, and reachable: a plan whose level is NOT the chain position the lock
+    // returned. A handler that passed the outstanding instead of the released
+    // level reaches this with a legitimate invoice and a legitimate amount.
+    expect(
+      codeOf(() =>
+        assertCanonicalArRelease(WORKED_INVOICE, {
+          arReleasedBeforeMinor: WORKED_INVOICE.outstandingTxnMinor,
+          invoiceAmountAppliedMinor: 3_333n,
+          invoiceCarryingReleasedMinor: apRelease(WORKED_INVOICE.totalBaseMinor, WORKED_INVOICE.totalTxnMinor, WORKED_INVOICE.outstandingTxnMinor, 3_333n),
+        }),
+      ),
+    ).toBe('credit_note.posting_incomplete');
+
+    // A full release that does not release the whole carrying value, refused.
+    //
+    // Stated honestly: the FIRST check is what fires here, not the conservation
+    // arm. The conservation arm's own subject is a defect common to BOTH
+    // rounding implementations, which no plant from outside can produce — so it
+    // is a bound that cannot be driven red from here, and claiming otherwise
+    // would be the kind of overclaim this round exists to remove. It is kept
+    // because it costs nothing and is the only arm that survives a defect in the
+    // rounding boundary itself.
+    expect(
+      codeOf(() =>
+        assertCanonicalArRelease(WORKED_INVOICE, {
+          arReleasedBeforeMinor: 0n,
+          invoiceAmountAppliedMinor: WORKED_INVOICE.totalTxnMinor,
+          invoiceCarryingReleasedMinor: WORKED_INVOICE.totalBaseMinor - 1n,
+        }),
+      ),
+    ).toBe('credit_note.posting_incomplete');
+  });
+
   it('3 — a MISSING realized FX line', () => {
     const p = plan();
     // Non-vacuous: this scenario genuinely realizes FX, so there is a line to remove.
@@ -624,61 +896,130 @@ describe('TL-P4-S5-R2 — the seven red proofs', () => {
   });
 
   it('6 — a write shape unable to populate the mandatory carrying and FX fields', () => {
-    // The operands of `credit_note_applications_realized_ck`, as the DDL
-    // specification states it, plus the two level columns the chain verifier
-    // walks. Read off the SHIPPED declaration, not restated.
-    const body = /export interface CreditNoteApplicationWrite \{([\s\S]*?)\n\}/.exec(PORTS_SOURCE)?.[1];
-    expect(body).toBeDefined();
-    const fields = [...(body as string).matchAll(/^\s*(?:readonly\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*[?:]/gm)].map((m) => m[1] as string);
-    const MANDATORY = [
-      'arReleasedBeforeTxnMinor',
-      'creditRemainingBeforeMinor',
-      'creditAmountConsumedMinor',
-      'creditCarryingBaseReleasedMinor',
-      'invoiceAmountAppliedMinor',
-      'invoiceCarryingBaseReleasedMinor',
-      'realizedFxGainLossMinor',
-    ];
-    const missing = (shape: readonly string[]): readonly string[] => MANDATORY.filter((m) => !shape.includes(m));
+    // M5. The first version of this proof declared its own `MANDATORY` list of
+    // seven names and its own `missing` lambda, so it tested a filter the test
+    // had written against a list the test had chosen — and it passed while the
+    // write shape was still missing `credit_note_id`. The mandatory set is now
+    // DERIVED from §3 of the DDL specification: every column the relation
+    // declares `NOT NULL` with no `DEFAULT` and no `GENERATED` clause.
+    const DDL = readFileSync(join(__dirname, '../../docs/PHASE_4_S5_DDL_SPECIFICATION.md'), 'utf8');
+    const block = DDL.slice(DDL.indexOf('## 3. `credit_note_applications`'), DDL.indexOf('### 3.1 The level devices'));
+    const columns = [...block.matchAll(/^([a-z_]+)\s{2,}(.+)$/gm)]
+      .map(([, name, rest]) => ({ name: name as string, rest: rest as string }))
+      .filter((c) => / NOT NULL/.test(c.rest) && !/ DEFAULT /.test(c.rest) && !/GENERATED ALWAYS/.test(c.rest));
+    // Non-vacuity, counted: the reader found the real block, and the count is
+    // the number this slice is held to. A reader that found nothing would make
+    // every assertion below pass.
+    expect(columns.map((c) => c.name)).toContain('realized_fx_gain_loss_minor');
+    expect(columns).toHaveLength(20);
+
+    // The five columns the COMMAND does not supply, each with the reason it is
+    // exempt. An exemption is a sentence, not a silence.
+    const EXEMPT: Record<string, string> = {
+      tenant_id: 'ReturnsScope.tenantId — tenancy is never a per-row argument',
+      business_id: 'ReturnsScope.businessId — likewise',
+      business_transaction_id: 'ReturnsScope.businessTransactionId — one per command, shared by every row it writes',
+      created_by: 'ReturnsScope.actorUserId — the actor is the scope, not the payload',
+      binding_source_id: 'pinned by credit_note_applications_binding_identity_ck to `id`, so it IS applicationId',
+    };
+    // The snake_case → field renames, written out because two columns carry a
+    // `Code` suffix in the contract and `id` is the application's own.
+    const RENAME: Record<string, string> = { id: 'applicationId', credit_currency: 'creditCurrencyCode', invoice_currency: 'invoiceCurrencyCode' };
+    const fieldOf = (column: string): string =>
+      RENAME[column] ?? column.replace(/_([a-z])/g, (_m, c: string) => c.toUpperCase());
+    const MANDATORY = columns.filter((c) => !(c.name in EXEMPT)).map((c) => fieldOf(c.name));
+    expect(MANDATORY).toHaveLength(15);
+    expect(MANDATORY).toContain('creditNoteId');
+
+    const shapeOf = (source: string): readonly string[] => {
+      const body = /export interface CreditNoteApplicationWrite \{([\s\S]*?)\n\}/.exec(source)?.[1];
+      expect(body).toBeDefined();
+      return [...(body as string).matchAll(/^\s*(?:readonly\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*[?:]/gm)].map((m) => m[1] as string);
+    };
+    const unpopulatable = (shape: readonly string[]): readonly string[] => MANDATORY.filter((m) => !shape.includes(m));
+
     // Green on what ships.
-    expect(missing(fields)).toEqual([]);
-    // RED on the shape this slice shipped before the correction — the exact
-    // field list, reconstructed. "A relation with required financial columns
-    // that the legitimate command cannot populate is an invalid design."
-    const preCorrection = [
-      'applicationId',
-      'lineNo',
-      'invoiceId',
-      'arReleasedBeforeTxnMinor',
-      'creditAmountConsumedMinor',
-      'invoiceAmountAppliedMinor',
-      'invoiceCarryingBaseReleasedMinor',
-    ];
-    expect(missing(preCorrection)).toEqual(['creditRemainingBeforeMinor', 'creditCarryingBaseReleasedMinor', 'realizedFxGainLossMinor']);
-    // And every mandatory field is produced by the plan, so the shape is
-    // populatable in fact and not only in type.
-    const p = plan();
-    expect(p.creditCarryingReleasedMinor + p.invoiceCarryingReleasedMinor + p.realizedFxMinor).toBe(2n * p.creditCarryingReleasedMinor);
+    expect(unpopulatable(shapeOf(PORTS_SOURCE))).toEqual([]);
+
+    // RED on the shape this slice actually shipped — read out of the contract
+    // pack, where §5.1b(c) records it verbatim, not restated here. "A relation
+    // with required financial columns that the legitimate command cannot
+    // populate is an invalid design."
+    const PACK = readFileSync(join(__dirname, '../../docs/PHASE_4_S5_CONTRACT_PACK.md'), 'utf8');
+    const recorded = PACK.slice(PACK.indexOf('#### (c) The write shape that could not populate its own relation'));
+    const preCorrection = shapeOf(recorded);
+    expect(preCorrection).toHaveLength(7);
+    const gap = unpopulatable(preCorrection);
+    expect(gap.length).toBeGreaterThan(0);
+    // And it is missing exactly the money and identity columns the ruling names.
+    expect(gap).toContain('creditCarryingBaseReleasedMinor');
+    expect(gap).toContain('realizedFxGainLossMinor');
+    expect(gap).toContain('creditRemainingBeforeMinor');
+    expect(gap).toContain('creditNoteId');
+
+    // And the shape is populatable IN FACT and not only in type: the shipped
+    // mapper produces a value for every mandatory field, from a plan and an
+    // identity, with no field left undefined.
+    const row = creditNoteApplicationRow(
+      {
+        applicationId: 'app-1',
+        lineNo: 1,
+        creditNoteId: 'cn-1',
+        customerId: 'cus-1',
+        invoiceId: 'inv-1',
+        applicationDate: '2026-03-04',
+        creditCurrencyCode: 'USD',
+        invoiceCurrencyCode: 'USD',
+      },
+      plan(),
+    );
+    expect(MANDATORY.filter((m) => (row as Record<string, unknown>)[m] === undefined)).toEqual([]);
   });
 
   it('7 — TWO independent conversions of the released and the remaining carrying value', () => {
     // Structural, over the shipped text of the one function the defect lived in.
     // `TL-P4-S5-R2`: "Do not independently convert the applied amount and the
     // remaining amount and then reconcile the difference."
-    const fn = /export function planCreditNoteReversal\(([\s\S]*?)\n\}/.exec(SETTLEMENT_SOURCE)?.[1];
-    expect(fn).toBeDefined();
-    const code = (fn as string).replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
-    const conversions = [...code.matchAll(/\bconvert\(/g)];
+    const bodyOf = (source: string): string => {
+      const fn = /function planCreditNoteReversal\(([\s\S]*?)\n\}/.exec(source)?.[1];
+      expect(fn).toBeDefined();
+      return (fn as string).replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+    };
+    const code = bodyOf(SETTLEMENT_SOURCE);
     // Exactly ONE conversion, of the header total.
-    expect(conversions).toHaveLength(1);
+    expect([...code.matchAll(/\bconvert\(/g)]).toHaveLength(1);
     expect(code).toContain('convert(input.totalMinor, input.conversion)');
-    // And the reconstructed pre-correction body — the planted subject — has two.
-    const preCorrection = `
-      const totalBaseMinor = convert(input.totalMinor, input.conversion);
-      const appliedBaseMinor = input.appliedToInvoiceMinor === 0n ? 0n : convert(input.appliedToInvoiceMinor, input.conversion);
-      const liabilityBaseMinor = totalBaseMinor - appliedBaseMinor;
-    `;
-    expect([...preCorrection.matchAll(/\bconvert\(/g)]).toHaveLength(2);
+
+    // M5. The red arm was a template literal the test wrote, which proves only
+    // that the counter counts. The subject is now the REAL deleted body, read
+    // out of §5.1b(a) of the contract pack where it is recorded verbatim from
+    // `8e996c5`.
+    const PACK = readFileSync(join(__dirname, '../../docs/PHASE_4_S5_CONTRACT_PACK.md'), 'utf8');
+    const i = PACK.indexOf('#### (a) The two independent conversions');
+    expect(i).toBeGreaterThan(-1);
+    const fence = /```ts\n([\s\S]*?)```/.exec(PACK.slice(i))?.[1];
+    expect(fence).toBeDefined();
+    const deleted = (fence as string).replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+    // The recorded defect is the real one: it converts the APPLIED amount, by
+    // name, which is the operand the ruling forbids converting independently.
+    expect(deleted).toContain('convert(input.appliedToInvoiceMinor, input.conversion)');
+    expect([...deleted.matchAll(/\bconvert\(/g)]).toHaveLength(1);
+    // One in the recorded fragment plus the header conversion it reconciles
+    // against — so the counter applied to the WHOLE pre-correction function
+    // sees two, and the shipped one sees one.
+    expect([...(deleted + code).matchAll(/\bconvert\(/g)]).toHaveLength(2);
+
+    // The structural arm, which does not depend on counting anything: the input
+    // type no longer NAMES an applied amount, so the second conversion has no
+    // operand to take. This is the law, and the count above is its symptom.
+    const inputBody = /export interface CreditNoteReversalInput \{([\s\S]*?)\n\}/.exec(SETTLEMENT_SOURCE)?.[1];
+    expect(inputBody).toBeDefined();
+    expect(inputBody as string).toContain('totalMinor');
+    expect(inputBody as string).not.toContain('appliedToInvoiceMinor');
+    // And the recorded defect's operand IS a field name, so the assertion above
+    // is about an absence that was once a presence.
+    expect(deleted).toContain('input.appliedToInvoiceMinor');
+
     // The plan type cannot even carry the second conversion's result any more.
     expect(
       Object.keys(
@@ -1012,7 +1353,280 @@ describe('the date laws name their comparison instant and take it as an argument
   });
 });
 
-// ── 10b. F5: the realized FX is bounded by the liability it arises on ──
+// ── 10b. `TL-P4-S5-R3`: the SYMMETRIC 2× refund-FX SANITY bound ────────
+
+/**
+ * The project owner's rule, approved as `TL-P4-S5-R3`:
+ *
+ *     accept   0.5× ≤ current_rate / source_rate ≤ 2×     (INCLUSIVE both ends)
+ *     refuse   strictly outside that range
+ *
+ * It is a DATA-QUALITY guard. It computes no realized FX, caps no accounting
+ * value and creates no amount; `returns-settlement.ts` says so at the site, and
+ * these tests hold the behaviour to the rule at every boundary the ruling names.
+ *
+ * Eleven cases are required and all eleven are below, each labelled with the
+ * ruling's own wording so a reader can count them against it rather than trust
+ * this sentence.
+ */
+describe('TL-P4-S5-R3 — the symmetric 2× refund-FX sanity bound, at every boundary', () => {
+  // A source of 1 000 at rate 1.0, so `cr_rel` for a 100-unit consumption is
+  // exactly 100 and the disbursement's base equals its minor amount. The rate
+  // RATIO is then `db / cr_rel`, readable directly off the numbers, which is
+  // what makes the eleven cases legible as ratios rather than as amounts.
+  const flat = (over: Partial<ConsumableSource> = {}): ConsumableSource => ({
+    kind: 'credit_note',
+    originalMinor: 1_000n,
+    originalCarryingMinor: 1_000n,
+    remainingMinor: 1_000n,
+    conversion: BASE,
+    ...over,
+  });
+  const CR_REL = 100n;
+  const at = (disbursementAmountMinor: bigint, source: ConsumableSource = flat()): 'admitted' | string => {
+    try {
+      planCustomerRefund({ source, consumedMinor: 100n, sameCurrency: false, disbursementAmountMinor, disbursement: BASE });
+      return 'admitted';
+    } catch (e) {
+      return e instanceof ReturnsPlanError ? e.code : `other:${(e as Error).name}`;
+    }
+  };
+  const realizedAt = (disbursementAmountMinor: bigint): bigint =>
+    planCustomerRefund({ source: flat(), consumedMinor: 100n, sameCurrency: false, disbursementAmountMinor, disbursement: BASE }).realizedMinor;
+
+  it('the premise: `cr_rel` really is 100 here, so every ratio below is readable off the numbers', () => {
+    // Non-vacuity for all eleven cases at once. If this is wrong they all test
+    // something other than what they claim.
+    const plan = planCustomerRefund({ source: flat(), consumedMinor: 100n, sameCurrency: false, disbursementAmountMinor: 100n, disbursement: BASE });
+    expect(plan.carryingReleasedMinor).toBe(CR_REL);
+    expect(plan.disbursementBaseMinor).toBe(100n);
+  });
+
+  it('1 — SAME RATE → accept, and the realized FX is exactly zero', () => {
+    expect(at(100n)).toBe('admitted');
+    expect(realizedAt(100n)).toBe(0n);
+    // And no FX line is posted at all for a zero: a zero-amount line is not a line.
+    const plan = planCustomerRefund({ source: flat(), consumedMinor: 100n, sameCurrency: false, disbursementAmountMinor: 100n, disbursement: BASE });
+    expect(plan.entryLines.filter((l) => l.account === 'fx_gain' || l.account === 'fx_loss')).toHaveLength(0);
+  });
+
+  it('2 — +99% → accept', () => {
+    expect(at(199n)).toBe('admitted');
+    expect(realizedAt(199n)).toBe(-99n);
+  });
+
+  it('3 — EXACTLY 2× → accept, because the range is INCLUSIVE at both ends', () => {
+    expect(2n * CR_REL).toBe(200n);
+    expect(at(200n)).toBe('admitted');
+    expect(realizedAt(200n)).toBe(-100n);
+  });
+
+  it('4 — above 2× by the MINIMUM REPRESENTABLE STEP → refuse', () => {
+    // One minor unit. There is no smaller step in this estate: every amount is
+    // an integer number of minor units and nothing is a float.
+    expect(at(201n)).toBe('customer_refund.fx_rate_changed');
+    // The boundary is exactly here and nowhere near here.
+    expect(at(200n)).toBe('admitted');
+  });
+
+  it('5 — −49% → accept', () => {
+    expect(at(51n)).toBe('admitted');
+    expect(realizedAt(51n)).toBe(49n);
+  });
+
+  it('6 — EXACTLY 0.5× → accept', () => {
+    expect(at(50n)).toBe('admitted');
+    expect(realizedAt(50n)).toBe(50n);
+  });
+
+  it('7 — below 0.5× by the MINIMUM REPRESENTABLE STEP → refuse', () => {
+    expect(at(49n)).toBe('customer_refund.fx_rate_changed');
+    expect(at(50n)).toBe('admitted');
+  });
+
+  it('8 — the GAIN direction posts a credit to 4900 and nothing to 6900', () => {
+    const plan = planCustomerRefund({ source: flat(), consumedMinor: 100n, sameCurrency: false, disbursementAmountMinor: 60n, disbursement: BASE });
+    expect(plan.realizedMinor).toBe(40n);
+    const fx = plan.entryLines.filter((l) => l.account === 'fx_gain' || l.account === 'fx_loss');
+    expect(fx).toHaveLength(1);
+    expect(fx[0]?.account).toBe('fx_gain');
+    expect(fx[0]?.side).toBe('C');
+    expect(fx[0]?.baseAmountMinor).toBe(40n);
+  });
+
+  it('9 — the LOSS direction posts a debit to 6900 and nothing to 4900', () => {
+    const plan = planCustomerRefund({ source: flat(), consumedMinor: 100n, sameCurrency: false, disbursementAmountMinor: 140n, disbursement: BASE });
+    expect(plan.realizedMinor).toBe(-40n);
+    const fx = plan.entryLines.filter((l) => l.account === 'fx_gain' || l.account === 'fx_loss');
+    expect(fx).toHaveLength(1);
+    expect(fx[0]?.account).toBe('fx_loss');
+    expect(fx[0]?.side).toBe('D');
+    expect(fx[0]?.baseAmountMinor).toBe(40n);
+  });
+
+  it('10 — BASE CURRENCY = 1: the rule holds at the smallest representable liability', () => {
+    // `cr_rel = 1`, where "a factor of two" is one minor unit and the integer
+    // boundary is at its tightest. A rule that only works on large numbers is a
+    // rule that fails on the row a merchant actually complains about.
+    const one = flat({ originalMinor: 1n, originalCarryingMinor: 1n, remainingMinor: 1n });
+    const atOne = (db: bigint): string => {
+      try {
+        planCustomerRefund({ source: one, consumedMinor: 1n, sameCurrency: false, disbursementAmountMinor: db, disbursement: BASE });
+        return 'admitted';
+      } catch (e) {
+        return e instanceof ReturnsPlanError ? e.code : `other:${(e as Error).name}`;
+      }
+    };
+    expect(atOne(1n)).toBe('admitted'); // 1×
+    expect(atOne(2n)).toBe('admitted'); // exactly 2×
+    expect(atOne(3n)).toBe('customer_refund.fx_rate_changed'); // beyond 2×
+  });
+
+  it('11 — a malformed, ZERO or NEGATIVE rate is already refused UPSTREAM of this guard', () => {
+    // The guard never sees one, and this proves it rather than assuming it: a
+    // non-positive rate is refused inside the accepted conversion primitive
+    // (`convertToBase`, `packages/inventory/src/supplier-settlement.ts:80`),
+    // which raises an `InventoryError` and not an S5 refusal — so the code is
+    // NOT `fx_rate_changed`, and the distinction is the evidence.
+    for (const rateR10 of [0n, -(10n ** 10n)]) {
+      const verdict = at(100n, flat({ conversion: { rateR10, txnExponent: 2, baseExponent: 2 } }));
+      expect(verdict).not.toBe('admitted');
+      expect(verdict).not.toBe('customer_refund.fx_rate_changed');
+    }
+    // And the same for the DISBURSEMENT's own snapshot, which is the one a
+    // caller supplies and therefore the one a typo arrives on.
+    let thrown: unknown;
+    try {
+      planCustomerRefund({
+        source: flat(),
+        consumedMinor: 100n,
+        sameCurrency: false,
+        disbursementAmountMinor: 100n,
+        disbursement: { rateR10: 0n, txnExponent: 2, baseExponent: 2 },
+      });
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown).toBeDefined();
+    expect(thrown instanceof ReturnsPlanError && thrown.code === 'customer_refund.fx_rate_changed').toBe(false);
+  });
+
+  it('the guard CAPS NOTHING: an admitted plan’s realized FX is whatever the arithmetic says, untouched', () => {
+    // The ruling: "does not cap legitimate accounting values; does not create a
+    // gain/loss amount." So across the whole admitted range the realized figure
+    // must equal `cr_rel − db` exactly, with no clamping anywhere — including at
+    // the two inclusive boundaries, where a clamp would be invisible in a test
+    // that only checked the middle.
+    for (let db = 50n; db <= 200n; db += 1n) {
+      expect(at(db)).toBe('admitted');
+      expect(realizedAt(db)).toBe(CR_REL - db);
+    }
+  });
+
+  it('the refusal is a 409 the caller rebinds, with the remedy named: refresh the rate and retry', () => {
+    expect(returnsStatus('customer_refund.fx_rate_changed')).toBe(409);
+    // And the site says the policy out loud rather than apologising for it.
+    expect(SETTLEMENT_LAW_SOURCE).toContain('TL-P4-S5-R3');
+    expect(SETTLEMENT_LAW_SOURCE).toContain('REFRESH THE RATE AND');
+    expect(SETTLEMENT_LAW_SOURCE).toContain('Phase 4 policy');
+    // And it says what it is NOT, in the ruling's own terms.
+    expect(SETTLEMENT_LAW_SOURCE).toContain('does not cap a legitimate accounting value');
+    expect(SETTLEMENT_LAW_SOURCE).toContain('creates no
+  // gain or loss amount');
+  });
+});
+
+// ── 10b.1 `TL-P4-S5-R3` §16: realized FX is SIGN-SYMMETRIC ─────────────
+
+describe('TL-P4-S5-R3 §16 — realized FX is ONE signed difference, and the sign is symmetric', () => {
+  const flat = (): ConsumableSource => ({
+    kind: 'credit_note',
+    originalMinor: 1_000n,
+    originalCarryingMinor: 1_000n,
+    remainingMinor: 1_000n,
+    conversion: BASE,
+  });
+  const realized = (db: bigint): bigint =>
+    planCustomerRefund({ source: flat(), consumedMinor: 100n, sameCurrency: false, disbursementAmountMinor: db, disbursement: BASE }).realizedMinor;
+
+  it('THE PROPERTY: swapping which carrying value is larger REVERSES THE SIGN, it does not switch algorithm', () => {
+    // Stated as a property over PAIRS, not as two examples. For every offset `k`
+    // in the admitted range, the gain at `100 − k` and the loss at `100 + k` are
+    // exact negations of each other. Two separate examples would show two
+    // numbers; this shows one function.
+    for (let k = 0n; k <= 50n; k += 1n) {
+      expect(realized(CR_REL_100 - k)).toBe(-realized(CR_REL_100 + k));
+    }
+    // Non-vacuity: the range genuinely contains non-zero values of both signs,
+    // so the property is not `0 === -0` fifty-one times.
+    expect(realized(CR_REL_100 - 50n)).toBeGreaterThan(0n);
+    expect(realized(CR_REL_100 + 50n)).toBeLessThan(0n);
+  });
+
+  it('the eight required points, in ONE suite: zero, ±1 minor, a large gain, a large loss, a residue and the final release', () => {
+    expect(realized(100n)).toBe(0n); // exact zero
+    expect(realized(99n)).toBe(1n); // +1 minor
+    expect(realized(101n)).toBe(-1n); // −1 minor
+    expect(realized(51n)).toBe(49n); // a large gain, at the edge of the admitted range
+    expect(realized(199n)).toBe(-99n); // a large loss, at the other edge
+    // A ROUNDING RESIDUE: a rate that does not divide evenly, so `db` is a
+    // rounded quotient and the realized figure is the one-minor residue rather
+    // than a round number.
+    const residue = planCustomerRefund({
+      source: flat(),
+      consumedMinor: 100n,
+      sameCurrency: false,
+      disbursementAmountMinor: 67n,
+      disbursement: { rateR10: 15n * 10n ** 9n, txnExponent: 2, baseExponent: 2 },
+    });
+    // 67 × 1.5 = 100.5 → HALF_EVEN → 100, so the residue is exactly zero and
+    // the NEIGHBOURING amount is where the one-minor residue lives.
+    expect(residue.disbursementBaseMinor).toBe(100n);
+    expect(residue.realizedMinor).toBe(0n);
+    const neighbour = planCustomerRefund({
+      source: flat(),
+      consumedMinor: 100n,
+      sameCurrency: false,
+      disbursementAmountMinor: 66n,
+      disbursement: { rateR10: 15n * 10n ** 9n, txnExponent: 2, baseExponent: 2 },
+    });
+    expect(neighbour.disbursementBaseMinor).toBe(99n);
+    expect(neighbour.realizedMinor).toBe(1n);
+    // THE FINAL RELEASE: the source's whole remaining consumed at once, so the
+    // carrying released is the whole original carrying and nothing is left.
+    const final = planCustomerRefund({
+      source: flat(),
+      consumedMinor: 1_000n,
+      sameCurrency: false,
+      disbursementAmountMinor: 1_000n,
+      disbursement: BASE,
+    });
+    expect(final.carryingReleasedMinor).toBe(1_000n);
+    expect(final.remainingAfterMinor).toBe(0n);
+    expect(final.realizedMinor).toBe(0n);
+  });
+
+  it('NEITHER BRANCH IS DEAD: both accounts are reached in this suite, and each only from its own sign', () => {
+    const accountsFor = (db: bigint): readonly string[] =>
+      planCustomerRefund({ source: flat(), consumedMinor: 100n, sameCurrency: false, disbursementAmountMinor: db, disbursement: BASE })
+        .entryLines.filter((l) => l.account === 'fx_gain' || l.account === 'fx_loss')
+        .map((l) => l.account);
+    expect(accountsFor(99n)).toEqual(['fx_gain']);
+    expect(accountsFor(101n)).toEqual(['fx_loss']);
+    expect(accountsFor(100n)).toEqual([]);
+    // And the sign chooses the account, rather than the account being chosen by
+    // a branch that also computes an amount: the magnitudes match across the
+    // swap, which is only true if ONE difference was computed.
+    const gain = planCustomerRefund({ source: flat(), consumedMinor: 100n, sameCurrency: false, disbursementAmountMinor: 60n, disbursement: BASE });
+    const loss = planCustomerRefund({ source: flat(), consumedMinor: 100n, sameCurrency: false, disbursementAmountMinor: 140n, disbursement: BASE });
+    const magnitude = (p: typeof gain): bigint =>
+      p.entryLines.filter((l) => l.account === 'fx_gain' || l.account === 'fx_loss').reduce((a, l) => a + l.baseAmountMinor, 0n);
+    expect(magnitude(gain)).toBe(magnitude(loss));
+    expect(gain.realizedMinor).toBe(-loss.realizedMinor);
+  });
+});
+
+// ── 10b.2 the old F5 proofs, kept as the UNBOUNDED-defect evidence ─────
 
 describe('the realized exchange movement is BOUNDED and not merely posted', () => {
   const source = (over: Partial<ConsumableSource> = {}): ConsumableSource => ({
@@ -1033,8 +1647,12 @@ describe('the realized exchange movement is BOUNDED and not merely posted', () =
       disbursement: { rateR10: 10_901n * 10n ** 6n, txnExponent: 2, baseExponent: 2 },
     });
     expect(plan.realizedMinor).not.toBe(0n);
-    const magnitude = plan.realizedMinor < 0n ? -plan.realizedMinor : plan.realizedMinor;
-    expect(magnitude).toBeLessThanOrEqual(plan.carryingReleasedMinor);
+    // Stated as the RATE comparison `TL-P4-S5-R3` actually is, not as a ceiling
+    // on the realized amount: an earlier assertion here read
+    // `|realized| <= carryingReleased`, which described the guard as a cap on an
+    // accounting value — the one thing the ruling says it is not.
+    expect(plan.disbursementBaseMinor).toBeLessThanOrEqual(2n * plan.carryingReleasedMinor);
+    expect(plan.carryingReleasedMinor).toBeLessThanOrEqual(2n * plan.disbursementBaseMinor);
   });
 
   it('RED PROOF — a rate wrong by more than 100% posts an UNBOUNDED fx_loss line without this guard, and is refused with it', () => {
@@ -1062,8 +1680,10 @@ describe('the realized exchange movement is BOUNDED and not merely posted', () =
   });
 
   it('the bound is TIGHT, not generous: exactly twice the carrying is the last admitted disbursement', () => {
-    // At `db = 2·cr_rel` the loss equals the liability and is admitted; one
-    // minor unit more and it is refused. A bound nobody has driven to its edge
+    // Retained from round 2 and now one of `TL-P4-S5-R3`'s eleven cases (3 and
+    // 4), kept here because it is the LOSS edge the challenger recomputed by
+    // hand and signed off, and a proof somebody has verified independently is
+    // worth keeping at its original site. A bound nobody has driven to its edge
     // is a bound nobody knows the value of.
     const s = source({ originalMinor: 1_000n, originalCarryingMinor: 1_000n, remainingMinor: 1_000n, conversion: BASE });
     const at = (disbursementAmountMinor: bigint): string => {
@@ -1116,22 +1736,92 @@ describe('the lock order’s shared rank has a checked premise', () => {
   });
 });
 
-// ── 11. The credit note's lifecycle ──────────────────────────────────
+// ── 11. There is NO lifecycle, and the deletion is COMPLETE ──────────
 
-describe('the credit note is corrected by a new document, never by editing the old one', () => {
-  it('permits the three transitions and nothing else', () => {
-    expect(CREDIT_NOTE_LIFECYCLE_TRANSITIONS).toHaveLength(3);
-    expect(isCreditNoteLifecycleTransitionAllowed('draft', 'issued')).toBe(true);
-    expect(isCreditNoteLifecycleTransitionAllowed('issued', 'void')).toBe(true);
-    expect(isCreditNoteLifecycleTransitionAllowed('void', 'draft')).toBe(false);
-    expect(isCreditNoteLifecycleTransitionAllowed('void', 'issued')).toBe(false);
-    expect(isCreditNoteLifecycleTransitionAllowed('issued', 'draft')).toBe(false);
+/**
+ * H3. The specification shipped a `status TEXT NOT NULL CHECK (status IN
+ * ('draft','issued','void'))` column, a void command and two refusal codes,
+ * while the guard protecting `credit_notes` permitted exactly one `UPDATE` —
+ * the remaining pair moving down by one backed consumption. So the void
+ * command's only action was forbidden by the guard protecting the relation it
+ * acted on, and so was `draft → issued`, which means the specification could
+ * not issue a note either.
+ *
+ * The repair is the deletion, for the reasons `CREDIT_NOTE_HAS_NO_LIFECYCLE`
+ * records. These tests exist because a deletion half-done is worse than none:
+ * a refusal code left in a catalogue, a status left in a DTO or an operation
+ * code left in a patch request each promise a command that does not exist. So
+ * every place the lifecycle lived is read off disk and asserted empty, and each
+ * assertion carries a NON-VACUITY arm proving the reader can see the file at
+ * all.
+ */
+describe('H3 — the credit-note lifecycle is deleted, everywhere', () => {
+  const read = (rel: string): string => readFileSync(join(__dirname, '../..', rel), 'utf8');
+  const DEAD = ['credit_note.lifecycle_invalid', 'credit_note.already_consumed', 'customer.void_credit_note'] as const;
+
+  it('the domain states the law, and names no lifecycle symbol', () => {
+    expect(CREDIT_NOTE_HAS_NO_LIFECYCLE).toContain('voiding an issued note is a reversal');
+    const domain = read('packages/domain-core/src/returns.ts');
+    // Non-vacuity: the reader has the right file.
+    expect(domain).toContain('export const CREDIT_NOTE_HAS_NO_LIFECYCLE');
+    // The symbols are gone from the EXPORT surface. They may still be NAMED in
+    // the comment that records their deletion — that is the point of it — so
+    // the assertion is over `export`ed declarations, not over the text.
+    const exported = [...domain.matchAll(/^export (?:const|function|type|interface) ([A-Za-z_][A-Za-z0-9_]*)/gm)].map((m) => m[1] as string);
+    expect(exported.filter((n) => /[Ll]ifecycle/.test(n))).toEqual(['CREDIT_NOTE_HAS_NO_LIFECYCLE']);
+    expect(exported.filter((n) => /[Vv]oid/.test(n))).toEqual([]);
   });
 
-  it('RED PROOF — a note with ANY consumption cannot be voided, so a void can never unwind a disbursement', () => {
-    expect(creditNoteVoidRefusal('issued', 0n)).toBeNull();
-    expect(creditNoteVoidRefusal('issued', 1n)).toBe('credit_note.already_consumed');
-    expect(creditNoteVoidRefusal('void', 0n)).toBe('credit_note.lifecycle_invalid');
+  it('the refusal vocabulary and the operation codes no longer promise a void', () => {
+    for (const dead of DEAD) expect(isReturnsRefusalCode(dead)).toBe(false);
+    // Non-vacuity: the predicate does accept the codes that remain.
+    expect(isReturnsRefusalCode('credit_note.date_invalid')).toBe(true);
+    expect(RETURNS_REFUSAL_CODES.filter((c) => /lifecycle|already_consumed/.test(c))).toEqual([]);
+    expect(S5_OPERATION_CODES).toEqual(['customer.issue_credit_note', 'customer.refund']);
+    // TWO commands, counted, so a third reappearing is a failure and not a diff
+    // nobody read.
+    expect(S5_OPERATION_CODES).toHaveLength(2);
+    // And the transaction boundary no longer describes a void transaction.
+    expect(RETURNS_TRANSACTION_BOUNDARY.map((b) => b.command)).toEqual(['customer.issue_credit_note', 'customer.refund']);
+  });
+
+  it('every dead code is gone from the API status table and from all THREE locale catalogues', () => {
+    for (const dead of DEAD) {
+      expect(Object.keys(RETURNS_CODES)).not.toContain(dead);
+    }
+    // Non-vacuity: the status table is the real one and is not empty.
+    expect(RETURNS_CODES['credit_note.date_invalid']).toBe(422);
+    for (const lang of ['en', 'ar', 'tr']) {
+      const catalogue = JSON.parse(read(`apps/web/src/messages/${lang}.json`)) as Record<string, string>;
+      for (const dead of DEAD) expect(catalogue[`error.${dead}`]).toBeUndefined();
+      // The two codes that REPLACED a wrong one are present, in every locale:
+      // a code with no message renders as its own key to a merchant.
+      expect(catalogue['error.credit_note.date_invalid']).toBeTruthy();
+      expect(catalogue['error.customer_refund.date_invalid']).toBeTruthy();
+    }
+  });
+
+  it('the DDL specification declares no `status` column and no void routine, and says why', () => {
+    const ddl = read('docs/PHASE_4_S5_DDL_SPECIFICATION.md');
+    expect(ddl).toContain('THERE IS NO `status` COLUMN, AND THEREFORE NO VOID');
+    // The column declaration itself, in the shape the specification writes
+    // columns in. Non-vacuity first: the reader can find a column that IS there.
+    expect(ddl).toMatch(/^number_seq\s+BIGINT NOT NULL/m);
+    expect(ddl).not.toMatch(/^status\s+TEXT NOT NULL/m);
+    expect(ddl).not.toContain('customer_void_credit_note(...)');
+  });
+
+  it('RED PROOF — the deletion sweep can FAIL: the same readers, run over the text that shipped before it', () => {
+    // The planted subject is the real pre-correction text of each site, so this
+    // proves the four assertions above are capable of going red rather than
+    // merely passing over files that no longer mention the subject.
+    const preDdl = 'number_seq                           BIGINT NOT NULL CHECK (number_seq >= 1)\nstatus                               TEXT NOT NULL CHECK (status IN (\'draft\',\'issued\',\'void\'))\n';
+    expect(preDdl).toMatch(/^status\s+TEXT NOT NULL/m);
+    const preCatalogue = { 'error.credit_note.lifecycle_invalid': 'This return note cannot be changed that way.' } as Record<string, string>;
+    expect(preCatalogue['error.credit_note.lifecycle_invalid']).toBeTruthy();
+    const preCodes = ['customer.issue_credit_note', 'customer.void_credit_note', 'customer.refund'];
+    expect(preCodes).toHaveLength(3);
+    expect(preCodes).not.toEqual([...S5_OPERATION_CODES]);
   });
 });
 

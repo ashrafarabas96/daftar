@@ -176,14 +176,30 @@ describe('P4-S5 contract — the refund shape, read from the shipped declaration
     }
   });
 
-  it('the credit note carries the remaining PAIR and no settlement status', () => {
+  it('the credit note carries the remaining PAIR and NO status of any kind', () => {
     const fields = interfaceFields('CreditNoteDto');
     expect(fields).toContain('remainingAmountMinor');
     expect(fields).toContain('remainingCarryingBaseAmountMinor');
-    // `status` is lifecycle only; there is no `settlementState`, no `isRefunded`
-    // and no `consumed*` that could disagree with the pair.
-    expect(fields).toContain('status');
-    expect(fields.filter((f) => /settlementState|isRefunded|consumed/i.test(f))).toEqual([]);
+    // There is no `settlementState`, no `isRefunded` and no `consumed*` that
+    // could disagree with the pair — and, since round 3, no lifecycle `status`
+    // either: `CREDIT_NOTE_HAS_NO_LIFECYCLE`.
+    expect(fields.filter((f) => /settlementState|isRefunded|consumed|^status$/i.test(f))).toEqual([]);
+    // The non-vacuity arm: the extractor DOES see the fields of this interface,
+    // so the empty filter above is a fact about the shape and not about a
+    // regex that matches nothing.
+    expect(fields).toContain('creditNoteNumber');
+    expect(fields.length).toBeGreaterThan(8);
+  });
+
+  it('the credit-note identity documented in the source has three terms, and the third is not a field', () => {
+    // M4. The two-term identity this file once documented omitted the amount
+    // refunded in cash, and a reader who trusted it would conclude money had
+    // gone missing from a note that was partly applied and partly refunded.
+    const body = SOURCE.slice(SOURCE.indexOf(' * ## The identity, stated correctly'), SOURCE.indexOf('export interface CreditNoteDto'));
+    expect(body).toContain('appliedToInvoiceMinor + \u03a3 refunds against this note + remainingAmountMinor = totalMinor');
+    // And the third term must NOT have become a column while being documented:
+    // that would be the `refundedAmountMinor` of this file's header rule 4 under a new name.
+    expect(interfaceFields('CreditNoteDto').filter((f) => /refunded/i.test(f))).toEqual([]);
   });
 
   it('the tax element exists only as a structural zero, and only where the invoice has one', () => {

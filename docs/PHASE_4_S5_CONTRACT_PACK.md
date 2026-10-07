@@ -66,7 +66,7 @@ section below is an answer to one of them.
 | 6 | the chain verifier delegates to `verifyCreditChain` and adds nothing; the liability account is decided in ONE function | `verifySourceConsumptionChain`, `refundLiabilityAccount` |
 | 7 | the stock port asks the authority and reads back; it has no write method | `ReturnStockPort` |
 | 9 | no command reads the clock: the comparison instant is NAMED (`RETURNS_DATE_COMPARISON_INSTANT`) and taken as a parameter, and the module contains no `new Date`, no `Date.now` and no `now()` | `returnsDateRefusal`; `[[daftar-a-command-must-not-read-the-clock]]` |
-| 10 | the realized exchange movement is BOUNDED by the liability it arises on, so a mistyped rate cannot post an unbounded FX line that still balances | `planCustomerRefund`'s `fx_rate_changed` bound, driven to its exact edge |
+| 10 | a mistyped or stale RATE cannot reach settlement: the two rates must be within [0.5×, 2×] of each other, inclusive (`TL-P4-S5-R3`, §5.1c). It is a DATA-QUALITY check — it computes nothing, caps no accounting value and creates no amount | `planCustomerRefund`'s `fx_rate_changed` rate comparison, driven to all four boundaries, with eleven required cases and the §16 sign-symmetry property |
 | 11 | the shared lock rank's PREMISE is checked, not remembered: no command holds both source relations | `returnsLockTraceOneSource` |
 | 8 | the intent is a CLOSED ordered field list with an explicit absence encoding, compared by pre-image — for BOTH commands, since the credit note has an `idempotency_conflict` code and therefore owes a mechanism | `REFUND_INTENT_FIELDS` / `refundIntentPreimage` / `refundReplayVerdict`, and `CREDIT_NOTE_INTENT_FIELDS` / `creditNoteIntentItems` / `creditNoteIntentPreimage` / `creditNoteReplayVerdict`; the absence encoding is ONE function (`intentPreimage`), shared, not a convention written twice; `CreditNotePort.storedIntent` is the seam |
 
@@ -102,6 +102,7 @@ DDL specification.
 | **A-20** | `phase4RoutineBody` still returns the LAST definition by name at seal | `scripts/phase4-s1-gate.ts:1181-1197`. Re-measure | `PATCH-REQ-S5-007` is withdrawn. S5's design is correct either way |
 | **A-21** | **S5 needs NOTHING from S6.** No reversal relation, no reversal source type, no `void_invoice`. `payment_reversals` and `allocation_reversals` are S6's, with `void_invoice` and TD-15's supplier twin | `docs/PHASE_4_EXECUTION_PLAN.md`'s `### P4-S6` section assigns them there; S5's scope paragraph (`:187-188`) names only `credit_notes`, `credit_note_items`, `refunds`. And nothing in this slice references a reversal: no edge, no column, no routine | nothing in S5 changes. If a refund were later found to need a reversal, that is a NEW dependency on S6 and an owner decision — S5 does not build one either way |
 | **A-22** | `accounting_source_types` holds SEVENTEEN types at seal and **none is a credit note, a customer return, a customer refund or an `allocation_reversal`** | measured over every `INSERT INTO accounting_source_types` in the tree at `6587460` (eight statements, §5.1). Re-run the enumeration on the sealed tree | if a row S5 wants already exists, S5 BINDS to it instead of minting — the `0065:199` pattern — and `PATCH-REQ-S5-002` drops that row |
+| **A-23** | **S6 owns voiding or reversing an ISSUED credit note.** S5 has no void command, no `status` column and no lifecycle (`CREDIT_NOTE_HAS_NO_LIFECYCLE`). A note issued in error is superseded by a NEW note (`P4-AL-46`); unwinding the posted `Dr 4100 / Cr 2200` and `1200/5000` entries is a reversal | `docs/PHASE_4_EXECUTION_PLAN.md`'s `### P4-S6` section owns the reversal mechanism; and, on S5's side, `grep -rn 'status\|lifecycle\|void' ` over S5's own files returns only the comments that record the deletion | **nothing in S5 changes.** This is a SUCCESSION, not a dependency: S5 is complete without it, because the liability a wrong note raised is either discharged by a refund or left standing, and both are representable today. If S6 declines it, the merchant's remedy stays "issue a superseding note", which is the `P4-AL-46` answer anyway |
 
 ### 2.1 The assumptions that could NOT be confirmed from the tree at base
 
@@ -120,6 +121,13 @@ table exists to prevent.
   is the narrower claim beside it: **nothing in this slice references a reversal** — no edge, no
   column, no routine, no source type. That is verifiable by grep over S5's own files today, and
   it is the half that matters, because it means a wrong reading of the plan costs S5 nothing.
+- **A-23** is the one assumption that was ADDED rather than measured, in round 3, and it is
+  stated as a succession precisely because it cannot be confirmed: S6 is not designed. What
+  makes it safe is that S5 asks nothing of it. The deletion it follows from is checkable today
+  — no `status` column in the specification, no void routine, no lifecycle symbol exported, no
+  refusal code for either, and the two locale keys removed from all three catalogues — and
+  `tests/guards/p4s5-refund-plan-red-proofs.test.ts` §11 reads every one of those sites off
+  disk with a red proof over the pre-correction text.
 - **A-19** and **A-20** are both about files another agent may be editing right now. S5 measured
   them at base and designed so that either outcome is correct.
 - The DDL specification's **§4.6** (the dust `CHECK`'s spelling) depends on
@@ -314,7 +322,7 @@ AR effect + realized FX effect + dust/residue effect + liability effect = 0
 | one canonical algorithm | `planCreditNoteApplication` CALLS `planCustomerCreditApplication`; `assertCanonicalArRelease` recomputes `rel` with `apRelease` from the invoice's stored pair and refuses a disagreement of one minor unit | `returns-settlement.ts`; `PATCH-REQ-S5-008` deletes the one remaining relabelling |
 | one accounting event | one source type, `customer_credit_note_application`, with one deferred validator; the `customer_return` validator asserts the ABSENCE of a 1100 line by name | DDL spec §5.2, §5.5 |
 | one conversion | `planCreditNoteReversal` contains exactly ONE `convert(` call, asserted over its shipped text; the applied amount is never converted in that function at all | red proof 7 |
-| the write shape | `CreditNoteApplicationWrite` carries all seven operands, asserted against the shipped declaration read off disk | `returns-ports.ts`; red proof 6 |
+| the write shape | `CreditNoteApplicationWrite` carries every `NOT NULL`-no-default column of §3 that the command owns, and `creditNoteApplicationRow` MAPS a plan to a row whose money columns `assertApplicationRowAgreesWithEntry` checks against the entry's lines | `returns-ports.ts`; red proof 6 and the crossed-columns proof |
 | no absorbed FX | `assertApplicationEntryComplete` / `assertRefundEntryComplete` assert each TERM against the canonical number, not merely that the entry balances | red proof 5, which plants a defect that BALANCES and is still refused |
 | the identity | the four-term sum, over four scenarios including a dusty one and a full consumption | red-proof section 5a |
 
@@ -334,10 +342,219 @@ computed, or a declaration read off disk. None is a lambda written in the test b
 4. A missing dust/residue line → a scenario with a genuine second AR line, that line removed.
 5. The refund liability changed by an unposted FX difference → the FX line removed and the
    liability widened by the same amount, so the entry **still balances** and is still refused.
-6. A write shape unable to populate the mandatory fields → the pre-correction field list,
-   reconstructed, measured against the seven operands.
+6. A write shape unable to populate the mandatory fields → the MANDATORY SET DERIVED from §3
+   of the DDL specification (every `NOT NULL` column with no default and no `GENERATED`
+   clause, less an explicitly reasoned exemption per column), measured against the shipped
+   declaration; the red arm is the seven-field shape of §5.1b(c), read out of this document.
 7. Two independent conversions → the shipped text of `planCreditNoteReversal`, one `convert(`;
-   the pre-correction body, two.
+   the real deleted body of §5.1b(a), read out of this document, two. Plus a structural arm:
+   `CreditNoteReversalInput` no longer NAMES an applied amount, so the second conversion has
+   no operand to take.
+
+### 5.1b THE DELETED CODE, RECORDED VERBATIM — the subject the red proofs plant
+
+A red proof needs a subject that is REAL. Round 2 shipped two proofs whose "defect" was a
+string the test wrote into a template literal, and the challenger was right that this proves
+only that a regular expression counts occurrences in a string the test chose. The honest
+subject is the text the slice ACTUALLY SHIPPED and had to delete, so it is recorded here,
+verbatim from `8e996c5`, and red proofs 6 and 7 read it OUT OF THIS DOCUMENT rather than
+restating it.
+
+Recording it here, and not in the test, is the point: this file is reviewed, the defect is
+therefore reviewable, and a proof cannot quietly weaken by editing its own subject.
+
+#### (a) The two independent conversions — the body of `planCreditNoteReversal` as it shipped
+
+```ts
+  const appliedBaseMinor = input.appliedToInvoiceMinor === 0n ? 0n : convert(input.appliedToInvoiceMinor, input.conversion);
+  const liabilityBaseMinor = totalBaseMinor - appliedBaseMinor;
+  if (liabilityBaseMinor < 0n) refuse('customer_refund.arithmetic_invalid', 'the split of a credit note total is not a split');
+  const liabilityMinor = input.totalMinor - input.appliedToInvoiceMinor;
+```
+
+Two `convert(` calls in one function, the second of them the applied part — and the comment
+above them claimed the split was "an exact integer SPLIT of the ONE header conversion", which
+is exactly the kind of true-sounding sentence a reviewer accepts. `TL-P4-S5-R2`: **"ONE
+CONVERSION, NOT TWO. Do not independently convert the applied amount and the remaining amount
+and then reconcile the difference."**
+
+#### (b) The second AR reduction — the line the same function pushed
+
+```ts
+      account: 'accounts_receivable' as const,
+      side: 'C' as const,
+      currency: 'invoice' as const,
+      txnAmountMinor: input.appliedToInvoiceMinor,
+      baseAmountMinor: appliedBaseMinor,
+```
+
+A `customer_return` entry crediting `1100` at the NOTE's rate, for the applied part, in
+addition to the application's own AR reduction. Two AR effects for one economic event, the
+second of them converted at the wrong snapshot.
+
+#### (c) The write shape that could not populate its own relation
+
+```ts
+export interface CreditNoteApplicationWrite {
+  readonly applicationId: string;
+  readonly lineNo: number;
+  readonly invoiceId: string;
+  readonly arReleasedBeforeTxnMinor: bigint;
+  readonly creditAmountConsumedMinor: bigint;
+  readonly invoiceAmountAppliedMinor: bigint;
+  readonly invoiceCarryingBaseReleasedMinor: bigint;
+}
+```
+
+Seven fields against the **twenty** columns §3 of the DDL specification declares `NOT NULL`
+with no default and no `GENERATED` clause — fifteen of which are the command's to supply and
+five of which come from the scope or are pinned to `id`. Round 3's first widening added four of the missing
+ones and still left `credit_note_id` out — found only by DERIVING the mandatory set from §3
+instead of restating it in the test, which is why red proof 6 now does exactly that.
+
+### 5.1c `TL-P4-S5-R3` — the SYMMETRIC 2× REFUND-FX SANITY BOUND, approved
+
+The project owner's rule, recorded because it is binding and because its FRAMING is part of the
+ruling and not decoration:
+
+```
+accept   0.5× ≤ current_rate / source_rate ≤ 2×      INCLUSIVE at both ends
+refuse   strictly outside that range
+```
+
+Exactly 0.5× and exactly 2× are **accepted**. Symmetric, with no loss-only blind side.
+
+#### What the guard IS NOT — the owner's §9, which is why the wording changed
+
+> "does not compute realized FX; does not modify the journal result; **does not cap legitimate
+> accounting values**; does not create a gain/loss amount. It only prevents obviously suspicious
+> input/rate divergence from reaching settlement."
+
+The implementation was arithmetically correct before this ruling and is unchanged in behaviour.
+What changed is that it was written as `|realized| > min(cr_rel, db)`, which READS as a ceiling
+on an accounting amount — the one thing §9 says it is not. It is now written as the rate
+comparison it actually is, cross-multiplied into bigint so neither a division nor a float
+appears:
+
+```ts
+if (disbursementBaseMinor > 2n * consumed.carryingReleasedMinor || consumed.carryingReleasedMinor > 2n * disbursementBaseMinor) {
+  refuse('customer_refund.fx_rate_changed', 'the disbursement rate and the rate the liability was carried at differ by more than a factor of two');
+}
+```
+
+`db > 2·cr_rel` is `current/source > 2`; `cr_rel > 2·db` is `source/current > 2`. The strict `>`
+puts the boundary exactly where the ruling puts it, which the coordinator verified at all four
+boundaries in bigint before approving: `db = 2·cr_rel` accepted, `db = 2·cr_rel + 1` refused,
+`cr_rel = 2·db` accepted, `cr_rel = 2·db + 1` refused.
+
+#### The policy, stated rather than apologised for
+
+A genuine long-term currency move beyond a factor of two requires a **rate refresh before a
+refund**. That is **intentional under Phase 4 policy**: at this layer a rate more than 2× from
+the one the liability was carried at is indistinguishable from a typo, and refusing is the
+direction that cannot lose money. `customer_refund.fx_rate_changed` is a **409** the caller
+rebinds — never a 500 — and the operator's remedy is to refresh the rate and retry.
+
+#### The eleven required cases, all shipped
+
+`tests/guards/p4s5-refund-plan-red-proofs.test.ts` §10b, each labelled with the ruling's own
+wording so a reader can count them against it: same rate → accept (realized exactly zero, and
+**no FX line at all**); +99% → accept; exactly 2× → accept; above 2× by the minimum
+representable step (one minor unit) → refuse; −49% → accept; exactly 0.5× → accept; below 0.5×
+by the minimum representable step → refuse; the gain direction (`C 4900`, nothing on 6900); the
+loss direction (`D 6900`, nothing on 4900); base currency = 1, where "a factor of two" is one
+minor unit and the integer boundary is at its tightest; and a malformed, zero or negative rate
+shown to be refused UPSTREAM — inside `convertToBase`
+(`packages/inventory/src/supplier-settlement.ts:80`), which raises an `InventoryError` and not
+an S5 refusal, so the code is **not** `fx_rate_changed` and the distinction is the evidence.
+
+Plus one the ruling implies and does not list: **the guard caps nothing**, asserted by walking
+the whole admitted range and requiring `realized = cr_rel − db` exactly at every step,
+including at both inclusive boundaries where a clamp would be invisible to a test that only
+checked the middle.
+
+#### §16 — realized FX is ONE signed difference, and the sign is symmetric
+
+§15 is already satisfied by the implementation: `realizedMinor = carryingReleasedMinor −
+disbursementBaseMinor` is one signed difference derived once, with the side chosen afterwards
+from its sign. §16's proof is in §10b.1 of the same file and is stated **as a property over
+pairs**, not as two examples: for every offset `k` in the admitted range, the gain at `100 − k`
+and the loss at `100 + k` are exact negations, with a non-vacuity arm so it is not `0 === −0`
+fifty-one times. The eight required points are in ONE suite — exact zero, +1 minor, −1 minor, a
+large gain, a large loss, a rounding residue, the final release — and a third test shows
+neither branch is dead and that the magnitudes match across the swap, which is only true if one
+difference was computed.
+
+### 5.1d §13 and §14 — ONE canonical account authority, proved by MUTATION
+
+The owner's §13: one canonical account-id source, and *"do not fix this by making all three
+literals equal — remove duplicate authority."* §14: no missing account, no duplicate authority,
+no string-literal bypass, no second mapping table, no dead config member.
+
+`S5_ACCOUNT` in `packages/domain-core/src/returns.ts` is that source: the nine S5 account
+identifiers are spelled THERE, once, and nowhere else in the slice. `REFUND_ENTRY_ACCOUNTS`,
+`CREDIT_NOTE_ENTRY_ACCOUNTS`, `refundLiabilityAccount`, `APPLICATION_LIABILITY_ACCOUNT`, the one
+account map, every line builder and every validator in `apps/api/src/modules/returns/` DERIVE
+their strings from it. No account literal survives in code in either S5 module.
+
+**Why the source sits in the domain package and not in `returns-settlement.ts`.** An ESM
+module's own internal reads do not go through its exports, so an authority declared inside the
+settlement module could not be mutated from a test at all — the mutation would reach the ports
+and nothing else, which is exactly the half-proof round 3 shipped. Across the module boundary,
+`vi.doMock('@daftar/domain-core')` replaces the binding EVERY reader resolves, so the proof
+reaches inside the planners.
+
+**Roles stay separate; only the string is shared.** Three S5 laws name 2200 — the credit-note
+entry RAISES the liability, the application DISCHARGES it, and a refund discharges whichever of
+2200/2210 its source kind carries. Those are three decisions and they keep three named
+authorities (`planCreditNoteReversal`'s own line, `APPLICATION_LIABILITY_ACCOUNT`,
+`refundLiabilityAccount`). What they may not each own is the IDENTIFIER. Duplicate authority
+over the id is removed; duplicate authority over the decision was never there to remove.
+
+The evidence is `tests/guards/p4s5-account-authority-mutation.test.ts`, a separate file because
+it rebuilds the module graph and a reset graph is not a per-test concern:
+
+- **the live set is DISCOVERED, not listed**: every exported `plan*` of the settlement module is
+  found by reflection, and the suite asserts the covered scenario set EQUALS it, so a planner
+  added later fails until it is covered. A law that only passes where it is asked proves
+  nothing;
+- **the MUTATION MATRIX**: each of the nine canonical members is replaced in turn with a string
+  the chart does not register, and every scenario's observable behaviour is recorded as a
+  signature (its refusal code, or its accounts in order). Two statements are then asserted over
+  the whole matrix — **every member moves at least one planner** (no dead config member) and
+  **every planner is moved by some member** (no string-literal bypass: a planner that behaved
+  identically under all nine mutations is holding a literal, which is the only way that
+  happens). Each row records that the member was really replaced, read back from the module
+  graph the planners were loaded from;
+- **the pairings the ruling argued about, asserted by index**: 2200 moves the application, the
+  return entry AND the refund drawn on a credit note — the three laws that were three equal
+  literals, now all following one source — while 2210 moves ONLY the refund drawn on a customer
+  credit. The two roles agree on one source kind and DISAGREE on the other, which is why "make
+  all three literals equal" was the wrong repair;
+- **the third planner's own mechanism**: `refundLiabilityAccount` lives inside the domain
+  package, so replacing the id table does not change its answer. `planCustomerRefund` therefore
+  CHECKS the role authority's answer against the canonical table and refuses
+  `customer_refund.registry_incomplete` (500, ours) when the two disagree. That is detection for
+  the refund planner, and it is also what makes that code REACHABLE — before it, the code was
+  declared in the status table and raised nowhere;
+- **§14, stated structurally**: no account literal in code in either module (over
+  comment-stripped source, so prose cannot satisfy it); exactly ONE map takes an account
+  vocabulary to S5 accounts; the canonical table declares each id exactly once and both closed
+  entry-account lists are subsets of it; and the mutation lever is asserted to be the real
+  authority, since a matrix over a table nobody reads would detect a coincidence.
+
+### 5.1e §15 — the refusal vocabulary has no dead member either
+
+A neighbouring module has just been bitten by the inverse: `customer.aging_buckets_invalid` is
+declared in a status registry, thrown NOWHERE in the tree, and a docstring cited it as the check
+that justified a 500. The honest claim about S5's vocabulary is not that every code is live — the
+route handler and the SQL routines are owed at levels F and G — but that it PARTITIONS: raised at
+a located site in live TypeScript, or listed in `RETURNS_CODES_OWED_BY` with the authority that
+will raise it NAMED and its level given. The suite asserts the partition is exhaustive (a code in
+neither set fails) and disjoint (a code in both is a stale entry), over a scan with the two
+DECLARATION regions removed, because declaring a code is not raising it. Twelve codes are owed;
+`customer_refund.registry_incomplete` was the thirteenth until the canonical-source check gave it
+a raise site.
 
 ### 5.2 The journal shapes
 
@@ -398,7 +615,9 @@ Five decisions, each with its law:
 
 ### 5.3 Operation kinds
 
-`customer.issue_credit_note`, `customer.void_credit_note`, `customer.refund`.
+`customer.issue_credit_note`, `customer.refund`. **TWO, not three:** `customer.void_credit_note` is
+withdrawn — see the DDL specification §1.5a and `CREDIT_NOTE_HAS_NO_LIFECYCLE`. Voiding an issued
+note is a reversal, and reversals are S6 (`A-23`).
 
 Forced, not chosen: `inventory_operation_kinds.op_code` is
 `CHECK (op_code ~ '^[a-z]+(\.[a-z_]+)+$')` frozen inside `inventory_payload_digest`
@@ -541,7 +760,7 @@ statement.
   must not be reachable by a runtime principal or PUBLIC;
 - every grant goes into the REVIEWED matrix in the same change — `deviations()` (`:228`) reports
   an unreviewed grant verbatim;
-- the three commands are internal-owned `SECURITY DEFINER` with pinned `search_path` and
+- the TWO commands are internal-owned `SECURITY DEFINER` with pinned `search_path` and
   `REVOKE ALL … FROM PUBLIC`, and `REVOKE` is re-issued after every `CREATE OR REPLACE` because
   that resets a function's ACL;
 - `od03Problems` (`:174`, catalogue read `:146-160`, asserted `:534`, `:752`) reads **every**
@@ -626,6 +845,18 @@ The checks, each with what makes it non-vacuous:
    refund law blind (§5 of the DDL spec, `PATCH-REQ-S5-007`).
 10. **`payments.reverse` is the refund's permission.** It is P4-S6's. A refund is not a reversal
     (§6).
+10a. **A credit note can be VOIDED, or has a status.** It cannot, and it has none. There is no
+    `status` column, no `'draft' | 'issued' | 'void'` anywhere, no `customer.void_credit_note`
+    operation code, no `setLifecycle` port and no `credit_note.lifecycle_invalid` or
+    `credit_note.already_consumed` refusal code. A note is BORN ISSUED by the only command that
+    creates one and is thereafter only consumed. Three reasons, each sufficient: the specified
+    guard permits exactly one `UPDATE` on `credit_notes` (the remaining pair moving down by one
+    backed consumption), so the void command's only action was forbidden by the guard protecting
+    the relation it acted on, and so was `draft → issued`; `P4-AL-46` already corrects a
+    commercial mistake with a NEW document; and unwinding the posted `4100/2200` and `1200/5000`
+    entries is a REVERSAL, which is S6's (`A-23`). A reader who assumes a void exists will look
+    for a command, a code and a column that are all deliberately absent — DDL specification
+    §1.5a records the deletion.
 11. **The refund's sensitive keys will work out of the box.** They are a DEFAULT of no built-in
     role, by ruling. The write routes answer nobody until an owner grants explicitly, and that is
     correct (§6).
@@ -678,14 +909,27 @@ The checks, each with what makes it non-vacuous:
 
 ### What is DONE
 
+**Read this table as WRITTEN, not as VERIFIED.** Round 3 was carried out under an explicit
+instruction to run nothing while the integration estate held the box, so no row below has been
+re-confirmed by a runner since the round-2 commit. Every row is design and code in the tree;
+the proof is owed at Gate 0-pre.
+
+And this slice IS exposed to the hazard Gate 0-pre names — not hypothetically. Round 3 changed
+`packages/domain-core/src/returns.ts` and `packages/shared-contracts/src/returns.ts`, so the
+`grep '^packages/.*/src/'` self-check over this branch's own diff is NOT empty here, and a
+local typecheck run before the two builds would judge `apps/api` against a domain that still
+has a credit-note lifecycle in it.
+
+
 | level | deliverable | where |
 |---|---|---|
-| **A** | the pure returns domain: credit-note lifecycle, the refund source algebra, the closed 37-code refusal vocabulary, the op-code and source-type spellings with the frozen-CHECK validator, the lock order, the transaction boundary, the intent model, the cap, the structural zero, the exact-COGS rule | `packages/domain-core/src/returns.ts` |
+| **A** | the pure returns domain: **no** credit-note lifecycle and the record of why (`CREDIT_NOTE_HAS_NO_LIFECYCLE`), the refund source algebra, the closed 41-code refusal vocabulary, the op-code and source-type spellings with the frozen-CHECK validator, the lock order, the transaction boundary, the intent model, the cap, the structural zero, the exact-COGS rule | `packages/domain-core/src/returns.ts` |
 | **A** | the plan layer: `planCustomerRefund`, `planCreditNoteReversal`, `consumedSide`, `verifySourceConsumptionChain`, `assertNoReceivableLine`. **No arithmetic of its own** — the four accepted primitives and the chain verifier, imported | `apps/api/src/modules/returns/returns-settlement.ts` |
 | **B** | the contracts (8 DTOs) | `packages/shared-contracts/src/returns.ts` |
 | **B** | the repository ports, the refusal status table with its two compile-time totality checks, the route authority table | `apps/api/src/modules/returns/returns-ports.ts`, `-errors.ts`, `-permissions.ts` |
-| **C** | 49 unit tests and red proofs across 13 sections, every guard shown able to FAIL on a REAL planted subject | `tests/guards/p4s5-refund-plan-red-proofs.test.ts`, `packages/shared-contracts/test/phase4-s5-returns-contracts.test.ts` |
-| **C** | the five cap-race concurrency MODELS — deterministic, barrier-based, **no sleep, no timer** — each with a red proof that the broken protocol overdraws | `tests/guards/p4s5-refund-cap-concurrency-models.test.ts` |
+| **C** | the unit tests and red proofs across 13 sections, every guard shown able to FAIL on a REAL planted subject read off disk or recorded verbatim in §5.1b — never a value the test wrote into a template literal | `tests/guards/p4s5-refund-plan-red-proofs.test.ts`, `packages/shared-contracts/test/phase4-s5-returns-contracts.test.ts` |
+| **C** | the ONE canonical account-id source (`S5_ACCOUNT`), proved by a MUTATION MATRIX over all nine members and the DISCOVERED live planner set — every member moves a planner, every planner is moved — plus the refusal vocabulary's dead-member partition | `tests/guards/p4s5-account-authority-mutation.test.ts` |
+| **C** | the FOUR cap-race concurrency MODELS and one CAP PROPERTY (which is not a race, and no longer claims to be) — deterministic, barrier-based, **no sleep, no timer** — each with a red proof that the broken protocol overdraws | `tests/guards/p4s5-refund-cap-concurrency-models.test.ts` |
 | **D** | the API surface (7 routes), and localization in ar/en/tr (41 keys × 3; `check:localization` PASS at 956 × 3) | `-permissions.ts`; `apps/web/src/messages/{ar,en,tr}.json` |
 | **E** | the DDL **specification**: 4 relations, the full FK map, CHECKs, indexes, RLS policies, triggers, expected catalogue shape, upgrade expectations. **No `.sql`. No number.** | `docs/PHASE_4_S5_DDL_SPECIFICATION.md` |
 | — | 8 patch requests | `docs/patch-requests/PATCH-REQ-S5-001…008.md` |
@@ -696,7 +940,7 @@ Nothing on it can be done before S4 seals and this slice is promoted.
 
 **Gate 0 — the predecessor**
 - [ ] S4 SEALED. Its migration prefix is final and `frozenThrough` has advanced.
-- [ ] **Every A-1…A-20 assumption of §2 diffed against the sealed tree**, each marked CONFIRMED
+- [ ] **Every A-1…A-23 assumption of §2 diffed against the sealed tree**, each marked CONFIRMED
       or REFUTED, and every refutation's consequence worked through before any SQL is written.
       The five of §2.1 are the ones most likely to move.
 - [ ] S5 promoted, and a migration prefix ASSIGNED by the single migration owner.
@@ -704,17 +948,116 @@ Nothing on it can be done before S4 seals and this slice is promoted.
 **Gate 0a — `TL-P4-S5-R2`'s own preconditions, which are not mine to waive**
 - [x] the second AR reducer REMOVED from the design (commit on `p4s5/owner`, F1).
 - [x] the AR side derived through the canonical arithmetic by CALLING it.
-- [x] the application write shape able to persist all seven mandatory facts.
+- [x] the application write shape able to persist EVERY `NOT NULL`-no-default column of §3 the command owns — fifteen, derived from the specification rather than listed, which is how `credit_note_id` was found still missing after round 3's first widening — and a MAPPER, `creditNoteApplicationRow`, that produces a row whose money columns are checked against the entry's own lines.
 - [x] the seven red proofs written, each on a real planted subject, all green-and-provably-red.
+- [x] `TL-P4-S5-R3` implemented as the RATE comparison it is, with all eleven required cases
+      and the §16 sign-symmetry property (§5.1c).
+- [x] `TL-P4-S5-R2` §13/§14: ONE canonical account-id source (`S5_ACCOUNT` in the domain
+      package), proved by a mutation matrix over every member and the discovered live planner
+      set, plus the refusal vocabulary's dead-member partition (§5.1d, §5.1e).
 - [ ] the LIVE golden (Gate 3) — owed at level F, specified in Gate 3 above.
 - [ ] S4 SEALS.
 - [ ] the independent challenger SIGNS.
 - [ ] the coordinator has READ the actual diff.
 - [ ] the CONTRACT_DIFF against the sealed S4 is COMPLETE.
+- [x] the REGISTRATION TRIANGLE counted against itself: 3 source types × 4 duties of
+      `TL-P4-S1-R1` = **12 cells**, all 12 filled by a named object in the DDL specification,
+      plus the trigger column that the first draft left EMPTY for all three. §5.6.1 of the
+      specification holds the table; §7 items 9 and 10 check it against `pg_proc` and
+      `pg_trigger` rather than against the table, and state that **item 9 without item 10 is
+      the defect §5.6.1 records** — a validator function that no trigger fires is the dead
+      concept `TL-P4-S1-R1` named, one level down from where it was first ruled against.
 **No migration number is reserved, requested or illustrated until every line above is ticked.**
 
+**Gate 0-pre — THE BUILD ORDER, because a stale `dist/` makes a typecheck LIE**
+
+This is not a database item and it is not optional. It is the first thing to run when the box
+is released, before any typecheck, and it is recorded here because the measurement that proves
+it is a fact about this repository's module resolution and not a precaution.
+
+- `packages/domain-core/package.json` declares `"types": "dist/index.d.ts"`;
+- `tsconfig.base.json`, which `apps/api/tsconfig.json` extends, has **no `paths` block**;
+- so `apps/api` resolves `@daftar/domain-core` and `@daftar/shared-contracts` through
+  `node_modules/@daftar/*` → the package root → **`dist/`**;
+- while the ROOT `tsconfig.json` — the one that covers `tests/**` and `scripts/**` — DOES map
+  both to `./packages/*/src`.
+
+**The API typecheck and the test typecheck therefore read DIFFERENT COPIES of the domain.** The
+workspace half of `npm run typecheck` judges `apps/api` against the last BUILD; the root half
+judges `tests/**` and `scripts/**` against the new SOURCE. An untracked
+`packages/domain-core/dist/returns.d.ts` left over from before round 3 still declares
+`CreditNoteLifecycleState`, `isCreditNoteLifecycleTransitionAllowed`, `creditNoteVoidRefusal`
+and a THREE-member `S5_OPERATION_CODES` including `customer.void_credit_note`. Against that
+copy the API typechecks GREEN over an API that no longer exists — and, worse in the other
+direction, it does not yet know `credit_note.date_invalid` or `customer_refund.date_invalid`,
+so `returns-errors.ts`'s compile-time totality check over `ReturnsRefusalCode` would be judged
+against the OLD union and would report either nothing or the wrong thing. A green typecheck
+read off a stale `dist/` is worse than a red one, because it is believed. `dist/` is
+gitignored, so there is no version of it to inspect after the fact.
+
+#### THE HAZARD IS LOCAL ONLY, AND THAT IS WORSE RATHER THAN BETTER
+
+Stated because the paragraph above, left alone, would read as a defect in the pipeline, and it
+is not one. **CI does not have this defect.** `.github/workflows/ci.yml:91-93` builds
+`domain-core`, `shared-contracts` and `design-system`, then `accounting`, then `inventory`, and
+only reaches `npm run typecheck` at `:124` — so CI always typechecks against a fresh build.
+
+The hazard is entirely in the LOCAL run, which is worse, because the local run is the one a
+worker reports upward as proof and the one a coordinator would sign. CI would have caught this
+slice's stale-`dist/` green at the merge; a hand-reported local green would have carried it
+past a human first.
+
+Two corrections to the record, both of which narrow my own claim rather than widening it:
+
+- the stale `void_credit_note` declaration is **this worktree's own build output**, not the
+  main checkout's. The main tree has a `packages/domain-core/dist/` directory built
+  2026-10-07 15:40Z and no `returns.d.ts` in it at all, because that build predates the module
+  split this worktree carries. A reader must not conclude that the main checkout is sitting on
+  a stale domain;
+- the rule cuts both ways and is cheap to apply to oneself: a worker whose commits touched no
+  `packages/*/src/` file was NOT exposed, and `git diff --name-only <base>..<head> | grep
+  '^packages/.*/src/'` returning nothing is the one-line way to prove it. A clean local run is
+  trustworthy exactly when that grep is empty.
+
+So the order is fixed, and it is a STANDING ORDER for every DAFTAR worker rather than an S5
+note — with the other built packages added whenever a change reaches them (`accounting` and
+`inventory` after `domain-core`, in CI's own order):
+
+1. `npm run build -w @daftar/domain-core`
+2. `npm run build -w @daftar/shared-contracts`
+3. then `format`, `lint`, `typecheck` over the WHOLE tree, `$?` read each time
+4. then the S5 suites, `check:localization`, `gate:phase4:s4 --structural-only`
+
+**H3's sweep is recorded as DESIGN ONLY, not PROVEN BY TEST, until step 1 has happened** — and
+so is the claim that the widened identity type and the `satisfies Record<…>` surface the errors
+this slice expects. The sweep's assertions read the SOURCE through the root `tsconfig`'s
+`paths`, so they are a statement about the design that is true today; what they cannot yet
+state is that the API compiles against the same domain the tests read.
+
+**Gate 0b — the TWO confirmations owed to the DATABASE, with their exact commands**
+
+Both findings behind them stand on the specification and the type as written, which are the
+artefacts under review and are self-contained. These are the DEMONSTRATIONS, owed at level F,
+and neither may be run before the box is released and a cluster exists.
+
+- [ ] **H1, against a built cluster.** `\dft journal_entries`, plus
+
+      ```sql
+      SELECT tgname, pg_get_triggerdef(oid) FROM pg_trigger
+       WHERE tgrelid = 'journal_entries'::regclass AND tgconstraint <> 0;
+      SELECT proname FROM pg_proc WHERE proname LIKE 'accounting_customer_%entry_complete';
+      ```
+
+      The first must return THREE new rows naming the three S5 source types in their `WHEN`
+      clauses; the second must return the three functions. Three functions and two triggers is
+      a FAIL, not a rounding.
+- [ ] **H2, the insert itself.** An `INSERT INTO credit_note_applications (…)` naming only the
+      SEVEN fields of the pre-correction write shape (recorded verbatim in §5.1b(c)) must fail
+      with `null value in column "credit_currency" violates not-null constraint` — and the same
+      insert naming the fifteen fields `creditNoteApplicationRow` produces must succeed.
+
 **Gate 1 — the patch requests**
-- [ ] `PATCH-REQ-S5-001` landed (the three op codes in the inventory vocabulary).
+- [ ] `PATCH-REQ-S5-001` landed (the **TWO** op codes in the inventory vocabulary; `customer.void_credit_note` withdrawn in round 3).
 - [ ] `PATCH-REQ-S5-002` landed (three source types + the reversal guard, in ONE change).
 - [ ] `PATCH-REQ-S5-003` landed (the five `CREATE OR REPLACE`s, in a NEW migration).
 - [ ] `PATCH-REQ-S5-005` landed (`credit_note_applications` in `FINANCIAL_CORE`) **in the same
@@ -735,7 +1078,7 @@ Nothing on it can be done before S4 seals and this slice is promoted.
       **Not by a new rounding function.**
 - [ ] `cogs_reversal_base_minor` re-measured against `DERIVED_COST_COLUMN`. If it matches, the
       COLUMN is renamed; the guard is not relaxed.
-- [ ] the three commands, the two reads and the THREE deferred completeness validators written,
+- [ ] the TWO commands, the two reads, the THREE deferred completeness validators AND THE THREE `journal_entries` CONSTRAINT TRIGGERS THAT FIRE THEM written,
       each internal-owned, `search_path`-pinned, `REVOKE ALL … FROM PUBLIC`.
 - [ ] the services, the controller and the module registration, every refusal path reaching the
       ONE `auditThenRethrow…` composer (P4-AL-48 — never a second copy).
@@ -768,7 +1111,7 @@ Nothing on it can be done before S4 seals and this slice is promoted.
       `credit_note_applications` row inserted by hand**, and the seven red proofs of §5.1a
       re-run against the real relations so each is shown able to go red with a database
       underneath it.
-- [ ] the five cap races re-run **against a real database**, barrier-based and never timed, and
+- [ ] the FOUR cap races re-run **against a real database**, barrier-based and never timed, and
       each shown red without its guard.
 - [ ] the direct-SQL attack run against the real relations, at a fabricated level, refused by the
       chain verifier — the device `gate:phase4:s4` already asserts for S4's sources.

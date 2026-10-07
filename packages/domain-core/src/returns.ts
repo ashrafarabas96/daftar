@@ -4,7 +4,7 @@
  *
  * What this file is, and deliberately is not:
  *
- * - it is the credit note's lifecycle, the refund's SOURCE ALGEBRA, the closed
+ * - it is the refund's SOURCE ALGEBRA, the closed
  *   refusal vocabulary, the operation-code and source-type spellings, the lock
  *   order and the idempotency intent shape. Every export is a pure function of
  *   its arguments, reads no clock and touches no database;
@@ -32,7 +32,7 @@
  * ## The one financial law this file makes structural
  *
  * `TL-P4-S5-R1`: **a refund is not an invoice-outstanding reducer.** The
- * lifecycle is
+ * ORDER OF EFFECTS is
  *
  * ```
  *   invoice  →  the credit-note / return effect reduces AR  ONCE
@@ -52,59 +52,54 @@
  */
 import { isStructuralZeroTax } from './invoice';
 
-// ── 1. The credit note's lifecycle (the P4-AL-24 shape) ──────────────────
+// ── 1. There is NO lifecycle, and that is the correction ─────────────────
 
 /**
- * `credit_notes.status` is LIFECYCLE ONLY, the `invoices.status` precedent
- * (`./invoice`'s `INVOICE_LIFECYCLE_STATES`) and the `purchases.status` one
- * before it. There is no `refunded`, no `applied` and no `consumed` status: how
- * much of a credit note is left is the remaining pair on the row, and a status
- * that could disagree with it is the second truth P4-AL-14 forbids.
- */
-export const CREDIT_NOTE_LIFECYCLE_STATES = ['draft', 'issued', 'void'] as const;
-export type CreditNoteLifecycleState = (typeof CREDIT_NOTE_LIFECYCLE_STATES)[number];
-
-/**
- * The enumerated transitions. `void` is terminal and there is no path back to
- * `draft`: P4-AL-46 corrects a commercial mistake with a new document, never by
- * editing the old one.
+ * **`credit_notes` HAS NO `status` COLUMN AND S5 HAS NO VOID COMMAND.** An
+ * earlier draft of this module shipped `CREDIT_NOTE_LIFECYCLE_STATES =
+ * ['draft','issued','void']`, a three-row transition table,
+ * `isCreditNoteLifecycleTransitionAllowed`, `creditNoteVoidRefusal`, a
+ * `setLifecycle` port, a `customer.void_credit_note` operation code and the
+ * refusal codes `credit_note.lifecycle_invalid` and
+ * `credit_note.already_consumed`. Every one of them is deleted, and this comment
+ * is what stands in their place.
  *
- * A credit note that has been consumed at all cannot be voided — but that is
- * NOT expressed here, because it is a question about stored consumer rows and
- * this table is about the lifecycle alone. It is
- * `creditNoteVoidRefusal` below, which takes the consumption as an argument.
- */
-export const CREDIT_NOTE_LIFECYCLE_TRANSITIONS: readonly {
-  readonly from: CreditNoteLifecycleState;
-  readonly to: CreditNoteLifecycleState;
-}[] = Object.freeze([
-  Object.freeze({ from: 'draft' as const, to: 'issued' as const }),
-  Object.freeze({ from: 'draft' as const, to: 'void' as const }),
-  Object.freeze({ from: 'issued' as const, to: 'void' as const }),
-]);
-
-/** Whether the enumerated table permits this lifecycle transition. */
-export function isCreditNoteLifecycleTransitionAllowed(from: CreditNoteLifecycleState, to: CreditNoteLifecycleState): boolean {
-  return CREDIT_NOTE_LIFECYCLE_TRANSITIONS.some((t) => t.from === from && t.to === to);
-}
-
-/**
- * Why a void is refused, or `null` when the enumerated table and the stored
- * consumption both permit it.
+ * Three reasons, each decisive on its own.
  *
- * `consumedMinor` is `original − remaining` read off the row — not a stored
- * total of anything. A note any part of which has been applied to an invoice or
- * refunded is corrected by a NEW document; voiding it would silently unwind an
- * AR reduction or a disbursement that already happened.
+ * 1. **It was unimplementable.** The DDL specification's `credit_notes_guard`
+ *    permits exactly one `UPDATE` — the remaining PAIR moving down by one
+ *    backed consumption — which is `customer_credit_guard`'s accepted shape and
+ *    is right. Setting a lifecycle is an `UPDATE` of `status`, so the void
+ *    command's only action was forbidden by the guard protecting the relation it
+ *    acted on. So were `draft → issued` and therefore issuing a note at all.
+ * 2. **`P4-AL-46` already answers the question.** A commercial mistake is
+ *    corrected by a NEW document, never by editing the old one. A credit note
+ *    issued in error is superseded by another note; it is not amended into
+ *    nonexistence.
+ * 3. **A void of an ISSUED note is a REVERSAL, and reversals are S6's.** The
+ *    issue command has already posted `Dr sales_returns (4100) / Cr
+ *    customer_refund_liability (2200)` for the whole total and the `1200/5000`
+ *    COGS reversal. Unwinding those is the `reversal` source type and the
+ *    `accounting_reversals` mechanism, which the coordinator ruled S5 may not
+ *    design. A void that posted nothing would leave 2200 carrying a refundable
+ *    liability for a document that no longer exists, and 4100/1200/5000 standing
+ *    for a return that was retracted — which is strictly worse than having no
+ *    void at all.
+ *
+ * `draft` was unproduceable in any case: S5's command set creates a note and
+ * posts its entry in one transaction, and nothing in the slice ever wrote a
+ * draft. A state no command can reach and a code no command can raise are
+ * contracts nobody can meet — the same rule that kept `payments.reverse` out of
+ * this slice.
+ *
+ * **What is owed, and to whom.** Voiding or reversing an issued credit note is
+ * recorded as a predecessor assumption on S6 (`A-23` in the contract pack). S5
+ * needs nothing from it to be complete: a note issued in error is superseded by
+ * a new note, and the liability it raised is either discharged by a refund or
+ * left standing, both of which are representable today.
  */
-export function creditNoteVoidRefusal(
-  from: CreditNoteLifecycleState,
-  consumedMinor: bigint,
-): 'credit_note.lifecycle_invalid' | 'credit_note.already_consumed' | null {
-  if (!isCreditNoteLifecycleTransitionAllowed(from, 'void')) return 'credit_note.lifecycle_invalid';
-  if (consumedMinor > 0n) return 'credit_note.already_consumed';
-  return null;
-}
+export const CREDIT_NOTE_HAS_NO_LIFECYCLE =
+  'a credit note is born issued and is thereafter only consumed; voiding an issued note is a reversal, and reversals are S6';
 
 // ── 2. The refund's source algebra — `credit_note` XOR `customer_credit` ──
 
@@ -222,6 +217,67 @@ export function forbiddenRefundFields(fields: readonly string[]): readonly { rea
 // ── 3. The refund entry's account set (law 1, made structural) ───────────
 
 /**
+ * **THE ONE CANONICAL ACCOUNT-ID SOURCE of the S5 slice.**
+ *
+ * `TL-P4-S5-R2` §13, as the project owner ruled it: *"do not fix this by making
+ * all three literals equal — REMOVE DUPLICATE AUTHORITY."* Every S5 account
+ * identifier is spelled HERE, once, and nowhere else in the slice. The two
+ * closed entry-account lists below, `refundLiabilityAccount`, and every line
+ * builder, mapper and validator in `apps/api/src/modules/returns/` all DERIVE
+ * their strings from these nine members.
+ *
+ * ## Why a role is not a duplicate, and why these are keys rather than roles
+ *
+ * Three S5 laws name 2200 today, and they are three laws, not one restated:
+ * the credit-note entry RAISES the liability, the application DISCHARGES it,
+ * and a refund discharges whichever of 2200/2210 its source kind carries. Those
+ * three ROLES stay three distinct, separately named decisions — collapsing them
+ * would be the opposite error, and `refundLiabilityAccount` is exactly one such
+ * role. What they may not each own is the STRING. A role selects a member of
+ * this table; it does not re-spell one.
+ *
+ * ## What this buys that equal literals did not
+ *
+ * The identifiers are not ours. They are the chart keys
+ * `0040_accounting_chart.sql:45-66` registers, with the registry CLOSED at 21
+ * by the `DO $$` count at `0040:70-78`, plus `posting_account`, which is a
+ * placeholder and not a chart key at all (see `REFUND_ENTRY_ACCOUNTS`). When
+ * `PATCH-REQ-S5-008` moves the application's liability, or the chart renames a
+ * key, exactly one line of this estate changes and every planner follows it.
+ * With three equal literals, two of them would have stayed behind, compiled,
+ * and refused every lawful command at runtime — the M2 mechanism.
+ *
+ * The property NAMES are keys, not a second authority: a rename upstream makes
+ * `S5_ACCOUNT.CUSTOMER_REFUND_LIABILITY` a type error at the one site that
+ * declares it, not a silent `undefined` at twenty.
+ *
+ * No member is dead. Each of the nine is reachable on a live path, and
+ * `tests/guards/p4s5-account-authority-mutation.test.ts` asserts that
+ * reachability member by member against the planners' own output rather than
+ * against this docstring — because `customer.aging_buckets_invalid` is what a
+ * registry member nothing reaches looks like, and a comment is how its absence
+ * went unnoticed.
+ */
+export const S5_ACCOUNT = Object.freeze({
+  /** 4100, contra-revenue. The credit note's revenue reversal. */
+  SALES_RETURNS: 'sales_returns',
+  /** 1100. The credit-note APPLICATION is the one place AR falls. */
+  ACCOUNTS_RECEIVABLE: 'accounts_receivable',
+  /** 2200. Raised by the credit note, discharged by its application or by a refund on it. */
+  CUSTOMER_REFUND_LIABILITY: 'customer_refund_liability',
+  /** 2210. Discharged by a refund drawn on a CUSTOMER CREDIT, never by the credit-note path. */
+  CUSTOMER_CREDIT_LIABILITY: 'customer_credit_liability',
+  /** The COGS reversal's pair. */
+  INVENTORY: 'inventory',
+  COGS: 'cogs',
+  /** 4900 and 6900. The two sides of ONE signed realized difference, never two computations. */
+  FX_GAIN: 'fx_gain',
+  FX_LOSS: 'fx_loss',
+  /** NOT a chart key: a placeholder resolved at posting time from `payment_methods.posting_account_id`. */
+  POSTING_ACCOUNT: 'posting_account',
+} as const);
+
+/**
  * The system account keys a refund entry may name, and NOTHING else.
  *
  * **FOUR of the five are registered system keys; `posting_account` is not, and
@@ -246,7 +302,13 @@ export function forbiddenRefundFields(fields: readonly string[]): readonly { rea
  * P4-AL-19 and OD-03 give: no rounding account is invented to make arithmetic
  * balance, and there is no tax line in this slice.
  */
-export const REFUND_ENTRY_ACCOUNTS = ['customer_refund_liability', 'customer_credit_liability', 'fx_gain', 'fx_loss', 'posting_account'] as const;
+export const REFUND_ENTRY_ACCOUNTS = [
+  S5_ACCOUNT.CUSTOMER_REFUND_LIABILITY,
+  S5_ACCOUNT.CUSTOMER_CREDIT_LIABILITY,
+  S5_ACCOUNT.FX_GAIN,
+  S5_ACCOUNT.FX_LOSS,
+  S5_ACCOUNT.POSTING_ACCOUNT,
+] as const;
 export type RefundEntryAccount = (typeof REFUND_ENTRY_ACCOUNTS)[number];
 
 /** True only for one of the five. A test may plant `accounts_receivable` and watch this refuse it. */
@@ -260,7 +322,11 @@ export function isRefundEntryAccount(key: string): key is RefundEntryAccount {
  * it.
  */
 export function refundLiabilityAccount(kind: RefundSourceKind): Extract<RefundEntryAccount, 'customer_refund_liability' | 'customer_credit_liability'> {
-  return kind === 'credit_note' ? 'customer_refund_liability' : 'customer_credit_liability';
+  // The ROLE is decided here; the STRING comes from `S5_ACCOUNT`. The two are
+  // separate on purpose: this function is the one authority over WHICH
+  // liability a source kind discharges, and `S5_ACCOUNT` is the one authority
+  // over how that account is spelled.
+  return kind === 'credit_note' ? S5_ACCOUNT.CUSTOMER_REFUND_LIABILITY : S5_ACCOUNT.CUSTOMER_CREDIT_LIABILITY;
 }
 
 /**
@@ -277,13 +343,13 @@ export function refundLiabilityAccount(kind: RefundSourceKind): Extract<RefundEn
  * reversal's pair.
  */
 export const CREDIT_NOTE_ENTRY_ACCOUNTS = [
-  'sales_returns',
-  'accounts_receivable',
-  'customer_refund_liability',
-  'inventory',
-  'cogs',
-  'fx_gain',
-  'fx_loss',
+  S5_ACCOUNT.SALES_RETURNS,
+  S5_ACCOUNT.ACCOUNTS_RECEIVABLE,
+  S5_ACCOUNT.CUSTOMER_REFUND_LIABILITY,
+  S5_ACCOUNT.INVENTORY,
+  S5_ACCOUNT.COGS,
+  S5_ACCOUNT.FX_GAIN,
+  S5_ACCOUNT.FX_LOSS,
 ] as const;
 export type CreditNoteEntryAccount = (typeof CREDIT_NOTE_ENTRY_ACCOUNTS)[number];
 
@@ -310,7 +376,7 @@ export function isCreditNoteEntryAccount(key: string): key is CreditNoteEntryAcc
  * list is what the plan layer and the tests name, and nothing reads it as a
  * registry.
  */
-export const S5_OPERATION_CODES = ['customer.issue_credit_note', 'customer.void_credit_note', 'customer.refund'] as const;
+export const S5_OPERATION_CODES = ['customer.issue_credit_note', 'customer.refund'] as const;
 export type S5OperationCode = (typeof S5_OPERATION_CODES)[number];
 
 /** The frozen `0054:229` shape, so a proposed op code can be judged before anybody writes a migration. */
@@ -418,14 +484,16 @@ export const S5_SOURCE_TYPES_OWED_TO_REVERSAL_GUARD: readonly S5AccountingSource
  * rather than a review find.
  *
  * The asymmetry is deliberate. Only a refund has a `cap_exceeded` and a
- * `source_*`; only a credit note has an `already_consumed`, a
- * `cogs_not_exact` and a `tax_policy_absent`.
+ * `source_*`; only a credit note has a `cogs_not_exact` and a
+ * `tax_policy_absent`. Both have a `date_invalid`, because both judge a date.
+ *
+ * `credit_note.already_consumed` and `credit_note.lifecycle_invalid` were here
+ * and are gone: see `CREDIT_NOTE_HAS_NO_LIFECYCLE` above. No command can raise
+ * either, and a code no command can raise is a contract nobody can meet.
  */
 export type ReturnsRefusalCode =
   // ── The credit note ──────────────────────────────────────────────
   | 'credit_note.idempotency_conflict'
-  | 'credit_note.lifecycle_invalid'
-  | 'credit_note.already_consumed'
   | 'credit_note.items_invalid'
   | 'credit_note.quantity_exceeds_sold'
   | 'credit_note.amount_invalid'
@@ -441,6 +509,7 @@ export type ReturnsRefusalCode =
   | 'credit_note.settlement_changed'
   | 'credit_note.date_before_invoice'
   | 'credit_note.date_in_future'
+  | 'credit_note.date_invalid'
   | 'credit_note.cogs_not_exact'
   | 'credit_note.posting_incomplete'
   | 'credit_note.tax_policy_absent'
@@ -460,6 +529,7 @@ export type ReturnsRefusalCode =
   | 'customer_refund.fx_rate_changed'
   | 'customer_refund.date_before_source'
   | 'customer_refund.date_in_future'
+  | 'customer_refund.date_invalid'
   | 'customer_refund.reference_required'
   | 'customer_refund.not_found'
   // ── Ours, never theirs ───────────────────────────────────────────
@@ -470,8 +540,6 @@ export type ReturnsRefusalCode =
 /** The same union as a runtime list, for a suite that drives every code rather than trusting the type. */
 export const RETURNS_REFUSAL_CODES: readonly ReturnsRefusalCode[] = Object.freeze([
   'credit_note.idempotency_conflict',
-  'credit_note.lifecycle_invalid',
-  'credit_note.already_consumed',
   'credit_note.items_invalid',
   'credit_note.quantity_exceeds_sold',
   'credit_note.amount_invalid',
@@ -487,6 +555,7 @@ export const RETURNS_REFUSAL_CODES: readonly ReturnsRefusalCode[] = Object.freez
   'credit_note.settlement_changed',
   'credit_note.date_before_invoice',
   'credit_note.date_in_future',
+  'credit_note.date_invalid',
   'credit_note.cogs_not_exact',
   'credit_note.posting_incomplete',
   'credit_note.tax_policy_absent',
@@ -505,6 +574,7 @@ export const RETURNS_REFUSAL_CODES: readonly ReturnsRefusalCode[] = Object.freez
   'customer_refund.fx_rate_changed',
   'customer_refund.date_before_source',
   'customer_refund.date_in_future',
+  'customer_refund.date_invalid',
   'customer_refund.reference_required',
   'customer_refund.not_found',
   'customer_refund.arithmetic_invalid',
@@ -631,10 +701,6 @@ export const RETURNS_TRANSACTION_BOUNDARY: readonly {
       'post the revenue-reversal entry (4100) and the COGS-reversal entry (1200/5000)',
       'verify the invoice settlement chain and the credit-note consumption chain at COMMIT',
     ]),
-  }),
-  Object.freeze({
-    command: 'customer.void_credit_note' as const,
-    inOneTransaction: Object.freeze(['re-read the note FOR UPDATE', 'refuse when any part is consumed', 'set the lifecycle to void']),
   }),
   Object.freeze({
     command: 'customer.refund' as const,
@@ -894,13 +960,16 @@ export function returnsDateRefusal(
   | 'credit_note.date_before_invoice'
   | 'customer_refund.date_in_future'
   | 'customer_refund.date_before_source'
-  | 'credit_note.amount_invalid'
-  | 'customer_refund.amount_invalid'
+  | 'credit_note.date_invalid'
+  | 'customer_refund.date_invalid'
   | null {
   for (const d of [documentDate, originDate, businessToday]) {
-    // A malformed date is not a date comparison at all. It is refused under the
-    // domain's generic invalid code rather than silently sorting as a string.
-    if (typeof d !== 'string' || !CALENDAR_DATE.test(d)) return `${domain}.amount_invalid` as const;
+    // A malformed date is not a date comparison at all, and it is not an AMOUNT
+    // problem either: an earlier draft returned `${domain}.amount_invalid`, so a
+    // merchant who typed `2026-13-45` was told the amount was wrong and sent to
+    // look at a field that was correct. The vocabulary now carries
+    // `date_invalid` for exactly this, in both domains.
+    if (typeof d !== 'string' || !CALENDAR_DATE.test(d)) return `${domain}.date_invalid` as const;
   }
   if (documentDate > businessToday) return `${domain}.date_in_future` as const;
   if (documentDate < originDate) {

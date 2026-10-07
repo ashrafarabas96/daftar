@@ -80,10 +80,68 @@ that has to describe the transformation it tolerates is weaker than one that tol
 - `CustomerCreditApplicationInput` gains one OPTIONAL field; no existing call site changes;
 - `creditLines`' two literal `'customer_credit_liability'` occurrences become one parameter,
   used twice;
-- **no amount, no sign, no account on any existing path changes.** Called without the new
-  field, the function emits byte-identical lines, which `vectors/` and
-  `customer_credit_verify`'s expected shape both already pin;
+- **no amount, no sign, no account on any existing path in `packages/inventory` changes.**
+  Called without the new field, the function emits byte-identical lines, which `vectors/` and
+  `customer_credit_verify`'s expected shape both already pin. **This is NOT the same as
+  "change nothing else" — see the amendment below, which names the two S5 sites that must move
+  WITH this patch;**
 - `accounting_customer_credit_application_entry_complete` (`0081:1594`) is NOT touched by this
   patch: it validates `customer_credit_application` entries, and the credit-note application's
   own validator is a separate routine specified in
   `docs/PHASE_4_S5_DDL_SPECIFICATION.md` §5.5.
+
+## Amendment, round 3: the TWO S5 SITES that must move with this patch
+
+An earlier version of this request said "change nothing else. No amount, no sign, no refusal
+code, no `balanced` call." That sentence was **false in the direction that breaks production**,
+and the independent challenger was right to call it: the relabelling this patch removes is not
+inert in S5, and applying the patch alone would have made **every lawful credit-note
+application raise a 500**.
+
+Here is the mechanism, because a patch request that merely admits a mistake teaches nobody.
+`returns-settlement.ts` maps each canonical line's account to an S5 account through a map that
+was keyed on the canonical set only. Once `planCustomerCreditApplication` emits
+`customer_refund_liability` directly, the map is asked for a key it does not hold, the mapper
+refuses, and `planCreditNoteApplication` throws `credit_note.posting_incomplete` — our 500 —
+on the ordinary path. The same would then have happened in `netBaseOn`, which was called with
+the literal `'customer_credit_liability'` while the lines carried the other name, so the
+liability term of `assertApplicationEntryComplete` would have been `0` and the guard would
+have reported an incomplete entry for a complete one.
+
+### What was done about it at level A–E, so this patch becomes safe to apply alone
+
+Both sites are now written so that the patch is a NO-OP for them:
+
+1. **`apps/api/src/modules/returns/returns-settlement.ts` — `RETURNS_ACCOUNT_OF_RECEIVABLE_ACCOUNT`.**
+   The map is now TOTAL over its key type (`satisfies Record<…>`), and it already contains the
+   identity entry `customer_refund_liability: customer_refund_liability`. So after this patch
+   the lines arrive already named 2200 and pass through unchanged, rather than falling off the
+   end of a partial map.
+2. **`apps/api/src/modules/returns/returns-settlement.ts` — `APPLICATION_LIABILITY_ACCOUNT`.**
+   The liability account is now ONE constant, read both by that map and by every
+   `netBaseOn(lines, APPLICATION_LIABILITY_ACCOUNT)` call in `assertApplicationEntryComplete`.
+   The guard and the mapper can no longer disagree about which account the application's
+   liability is, because there is no second place to spell it.
+
+`posting_account: null` in that same map is deliberate and is the third part of the repair: an
+account added upstream to `ReceivableAccount` that S5 has no mapping for is now a COMPILE
+error at this map rather than a runtime 500 on a merchant's request.
+
+### The reviewer's checklist for this patch
+
+- [ ] apply the four changes under **Required change**;
+- [ ] confirm `RETURNS_ACCOUNT_OF_RECEIVABLE_ACCOUNT` still type-checks — if `ReceivableAccount`
+      gained a member S5 does not map, this is where it fails, and it must fail THERE;
+- [ ] delete the relabelling branch only after the application path is green, and keep the
+      identity entry: it is what makes the map total;
+- [ ] replace the three relabelling assertions in
+      `tests/guards/p4s5-refund-plan-red-proofs.test.ts` with the single whole-plan equality
+      shown above;
+- [ ] the `customer_refund` refund entry is NOT affected: its liability is chosen by
+      `refundLiabilityAccount` from the source kind and never came through this map.
+
+### The general lesson, recorded because it cost a Critical
+
+"Change nothing else" is a claim about the WHOLE TREE, not about the file being patched. A
+patch request may only say it when its author has looked for every consumer of the behaviour
+being changed — and the consumer here was the author's own module, two directories away.

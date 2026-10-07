@@ -38,8 +38,10 @@
  *    command before any posting (A-15). `fxRateChanged` is therefore an
  *    optimistic refusal the port REPORTS, never a re-read it performs.
  */
-import type { CreditNoteIntent, CreditNoteLifecycleState, RefundIntent, RefundSourceKind, ReturnedMovementValue } from '@daftar/domain-core';
-import type { ConsumableSource, SourceConsumerRow } from './returns-settlement';
+import { S5_ACCOUNT } from '@daftar/domain-core';
+import type { CreditNoteIntent, RefundIntent, RefundSourceKind, ReturnedMovementValue } from '@daftar/domain-core';
+import { APPLICATION_LIABILITY_ACCOUNT, ReturnsPlanError } from './returns-settlement';
+import type { ConsumableSource, CreditNoteApplicationPlan, ReturnsEntryLine, SourceConsumerRow } from './returns-settlement';
 
 /** The tenancy and actor scope every port call carries. Never defaulted and never inferred from a connection. */
 export interface ReturnsScope {
@@ -115,8 +117,9 @@ export interface RefundSourcePort {
 
 /** A credit note's row as the command reads it back, before any DTO is shaped. */
 /**
- * A credit note as a READ returns it: the lifecycle and the remaining PAIR,
- * which is what a lock is taken for and what the cap is asked against.
+ * A credit note as a READ returns it: the document and the remaining PAIR,
+ * which is what a lock is taken for and what the cap is asked against. There is
+ * no status: `CREDIT_NOTE_HAS_NO_LIFECYCLE`.
  *
  * It is NOT what an insert needs, and `CreditNoteWrite` below is. A read
  * projection doing double duty as a write shape is how a column that only a
@@ -127,7 +130,6 @@ export interface CreditNoteRow {
   readonly creditNoteId: string;
   readonly creditNoteNumber: string;
   readonly customerId: string;
-  readonly status: CreditNoteLifecycleState;
   readonly currencyCode: string;
   readonly totalMinor: bigint;
   readonly remainingMinor: bigint;
@@ -218,11 +220,16 @@ export interface CreditNotePort {
    */
   insertApplications(scope: ReturnsScope, creditNoteId: string, applications: readonly CreditNoteApplicationWrite[]): Promise<void>;
 
-  /** Lock a note and read its pair — the void command's first step. */
+  /**
+   * Lock a note and read its remaining PAIR — a refund's first step, under
+   * `FOR UPDATE`, in the refund's own transaction.
+   *
+   * It is no longer "the void command's first step": there is no void command.
+   * See `CREDIT_NOTE_HAS_NO_LIFECYCLE` in `@daftar/domain-core` for why the
+   * lifecycle, its states, its transitions, its two refusal codes and the
+   * `setLifecycle` method that was here are all deleted.
+   */
   lockCreditNote(scope: ReturnsScope, creditNoteId: string): Promise<CreditNoteRow | null>;
-
-  /** Set the lifecycle. The enumerated transitions are the domain's; a port never decides one. */
-  setLifecycle(scope: ReturnsScope, creditNoteId: string, to: CreditNoteLifecycleState): Promise<void>;
 
   /**
    * The intent stored under `creditNoteId`, or `null` if the key is unseen.
@@ -279,7 +286,59 @@ export interface CreditNoteItemWrite {
 export interface CreditNoteApplicationWrite {
   readonly applicationId: string;
   readonly lineNo: number;
+  /**
+   * The IDENTITY columns. `customer_id` is `NOT NULL` on the relation and is an
+   * operand of both composite FK edges (§3.2), which is why it is named here and
+   * not inferred by the port from a join: a port that filled it by reading
+   * `credit_notes.customer_id` would make the row's customer a second read
+   * nobody planned, and the identity pin is the command's, taken under the
+   * `customers` lock at rank 1.
+   *
+   * `creditNoteId` is here for the same reason and was missed twice: the first
+   * draft omitted it with the three carrying columns, and round 3's widening
+   * added the four columns the challenger named while leaving this one out. It
+   * was found by DERIVING the mandatory set from §3 of the DDL specification
+   * rather than restating it in a test — which is the whole argument for
+   * deriving an expected quantity from something other than the expression
+   * under test.
+   */
+  readonly creditNoteId: string;
+  readonly customerId: string;
   readonly invoiceId: string;
+  /**
+   * `application_date DATE NOT NULL`.
+   *
+   * **This field's VALIDITY is the COMMAND's, not this type's and not the
+   * mapper's.** `creditNoteApplicationRow` asserts PRESENCE only — a non-empty
+   * string — because a `NOT NULL` column with no default and an empty string are
+   * the same defect arriving at different layers. It does NOT judge the date:
+   * `'2026-13-45'` passes the mapper and is refused earlier, by
+   * `returnsDateRefusal` in `@daftar/domain-core`, which compares the document
+   * date against the origin date and the business's today and raises
+   * `credit_note.date_invalid`, `date_before_invoice` or `date_in_future`.
+   *
+   * Said explicitly because an earlier version of this comment claimed the date
+   * was "judged by `returnsDateRefusal`" HERE, which is the same overclaim as a
+   * guard that reads its expected value off its own subject. The judgment belongs
+   * in the command, where the origin date and the business day are in scope; it
+   * is never `now()` (`[[daftar-a-command-must-not-read-the-clock]]`).
+   */
+  readonly applicationDate: string;
+  /**
+   * The two CURRENCY columns, `NOT NULL` on the relation and **the two operands
+   * of `credit_note_applications_same_currency_ck`**:
+   *
+   *     CHECK (credit_currency <> invoice_currency
+   *            OR credit_amount_consumed_minor = invoice_amount_applied_minor)
+   *
+   * They are here because a CHECK whose operands the legitimate command cannot
+   * address is an invalid design. They are also already KNOWN to the command:
+   * `planCreditNoteApplication` takes `sameCurrency` as an INPUT, so the pair is
+   * a decision the plan was handed, not a fact to be rediscovered by joining the
+   * note and the invoice after the fact.
+   */
+  readonly creditCurrencyCode: string;
+  readonly invoiceCurrencyCode: string;
   /** The invoice's AR released BEFORE this application — the level, read under the invoice's lock. */
   readonly arReleasedBeforeTxnMinor: bigint;
   /** The note's remaining BEFORE this application — the note's own level, read under the note's lock. */
@@ -292,6 +351,25 @@ export interface CreditNoteApplicationWrite {
   readonly invoiceCarryingBaseReleasedMinor: bigint;
   /** `cr_rel − rel`, signed: > 0 a gain (4900), < 0 a loss (6900). Never recomputed by the port. */
   readonly realizedFxGainLossMinor: bigint;
+}
+
+/**
+ * The facts a `credit_note_applications` row needs that the PLAN cannot supply:
+ * identities, a date and the two currency codes.
+ *
+ * It exists so that `creditNoteApplicationRow` can take exactly two arguments —
+ * these, and the plan — and so that the boundary between "what the command
+ * decided" and "what the arithmetic computed" is a type and not a convention.
+ */
+export interface CreditNoteApplicationIdentity {
+  readonly applicationId: string;
+  readonly lineNo: number;
+  readonly creditNoteId: string;
+  readonly customerId: string;
+  readonly invoiceId: string;
+  readonly applicationDate: string;
+  readonly creditCurrencyCode: string;
+  readonly invoiceCurrencyCode: string;
 }
 
 // ── The refund port ─────────────────────────────────────────────────────
@@ -403,6 +481,151 @@ export interface ReturnsReadPort {
     cursor: string | null,
     limit: number,
   ): Promise<{ readonly rows: readonly RefundWrite[]; readonly nextCursor: string | null }>;
+}
+
+// -- H2: the one mapper from a PLAN to a lawful application ROW ---------
+
+/**
+ * `TL-P4-S5-R2`: **"A relation with required financial columns that the
+ * legitimate command cannot populate is an invalid design. Fix the type/port
+ * before promotion."**
+ *
+ * The first draft of `CreditNoteApplicationWrite` named SEVEN fields while
+ * `credit_note_applications` declares TWENTY `NOT NULL` columns with no default
+ * and no `GENERATED` clause — fifteen of them the command's, and nothing in the slice turned a plan into a row — so the write
+ * shape was not merely narrow, it was NEVER EXERCISED: no code path existed in
+ * which the four missing columns could be noticed as missing. The type is
+ * widened above; this function is the other half, and it is what makes the
+ * widening load-bearing rather than decorative.
+ *
+ * **The amount fields come from the PLAN by construction.** The command does
+ * not get to pass them. A command that could pass its own
+ * `realizedFxGainLossMinor` would be a second place where realized FX is
+ * decided, which is the defect `TL-P4-S5-R2` forbids one level down from where
+ * it forbade a second AR reduction.
+ *
+ * The identity fields come from the COMMAND, because they are not arithmetic:
+ * the ids are pinned under the `customers` lock at rank 1, the date is the
+ * command's date — ALREADY judged by `returnsDateRefusal` before it reaches
+ * here, since this function asserts its PRESENCE and not its validity (see
+ * `applicationDate` on the write shape above) — and the two currency codes
+ * are the operands of `credit_note_applications_same_currency_ck`, already
+ * known to the command because `sameCurrency` is an INPUT to
+ * `planCreditNoteApplication`.
+ */
+export function creditNoteApplicationRow(
+  identity: CreditNoteApplicationIdentity,
+  plan: CreditNoteApplicationPlan,
+): CreditNoteApplicationWrite {
+  for (const [name, value] of Object.entries(identity)) {
+    // A `NOT NULL` column with no default and an empty string are the same
+    // defect arriving at different layers. This refusal IS reachable from a
+    // legitimate command path: a handler that forgot to pin `customerId` under
+    // the rank-1 lock reaches it with `''`, which is exactly the mistake the
+    // composite FK edges of §3.2 would otherwise report as a foreign-key
+    // violation at COMMIT, far from its cause.
+    if (name === 'lineNo') {
+      if (typeof value !== 'number' || !Number.isInteger(value) || value < 1) {
+        throw new ReturnsPlanError('customer_refund.arithmetic_invalid', 'an application line number is a positive integer');
+      }
+      continue;
+    }
+    if (typeof value !== 'string' || value.length === 0) {
+      throw new ReturnsPlanError('customer_refund.arithmetic_invalid', `an application row needs its ${name}; a NOT NULL column is not a convention`);
+    }
+  }
+  return Object.freeze({
+    applicationId: identity.applicationId,
+    lineNo: identity.lineNo,
+    creditNoteId: identity.creditNoteId,
+    customerId: identity.customerId,
+    invoiceId: identity.invoiceId,
+    applicationDate: identity.applicationDate,
+    creditCurrencyCode: identity.creditCurrencyCode,
+    invoiceCurrencyCode: identity.invoiceCurrencyCode,
+    arReleasedBeforeTxnMinor: plan.arReleasedBeforeMinor,
+    creditRemainingBeforeMinor: plan.creditRemainingBeforeMinor,
+    creditAmountConsumedMinor: plan.creditAmountConsumedMinor,
+    creditCarryingBaseReleasedMinor: plan.creditCarryingReleasedMinor,
+    invoiceAmountAppliedMinor: plan.invoiceAmountAppliedMinor,
+    invoiceCarryingBaseReleasedMinor: plan.invoiceCarryingReleasedMinor,
+    realizedFxGainLossMinor: plan.realizedFxMinor,
+  });
+}
+
+/** The net BASE movement on one account across an entry, debits positive. Written here, not imported, so the two expressions are genuinely two. */
+function netBaseOnLines(lines: readonly ReturnsEntryLine[], account: string): bigint {
+  let net = 0n;
+  for (const l of lines) {
+    if (l.account !== account) continue;
+    net += l.side === 'D' ? l.baseAmountMinor : -l.baseAmountMinor;
+  }
+  return net;
+}
+
+/**
+ * The row and the ENTRY are the same application, so the row's financial
+ * columns must agree with the entry's lines.
+ *
+ * **Why this is not circular.** `assertApplicationEntryComplete` reads the
+ * plan's AMOUNT fields and checks the LINES; this reads the ROW's columns and
+ * checks them against the same lines by a different expression — a per-account
+ * net over the entry, summed here from `side` and `baseAmountMinor`, not read
+ * off the plan. So the expected quantity for each of the three money columns is
+ * derived from something other than the field under test:
+ *
+ * - `invoice_carrying_base_released_minor` = the net CREDIT on `1100`, which is
+ *   the principal line `conv_R(a)` PLUS its dust and therefore `rel` — the
+ *   dust decomposition is why this is a different expression and not the same
+ *   number spelled twice;
+ * - `credit_carrying_base_released_minor` = the net DEBIT on the application's
+ *   liability account, likewise principal plus dust;
+ * - `realized_fx_gain_loss_minor` = the net on `4900`/`6900`, signed as a
+ *   credit-positive gain.
+ *
+ * A mapper that crossed the two carrying columns — the single most likely
+ * hand-wiring mistake, since both are `BIGINT NOT NULL` and adjacent — passes
+ * every `NOT NULL`, passes the same-currency `CHECK` whenever the codes differ,
+ * and is caught here and only here.
+ */
+export function assertApplicationRowAgreesWithEntry(row: CreditNoteApplicationWrite, plan: CreditNoteApplicationPlan): void {
+  const lines = plan.entryLines;
+  const arNetCredit = -netBaseOnLines(lines, S5_ACCOUNT.ACCOUNTS_RECEIVABLE);
+  // The account is READ from the one constant that names it, never spelled here:
+  // a literal in this file would survive `PATCH-REQ-S5-008` moving the constant
+  // and would then net an account no line names.
+  const liabilityNetDebit = netBaseOnLines(lines, APPLICATION_LIABILITY_ACCOUNT);
+  // A gain is a CREDIT and a loss a DEBIT, so the realized amount is the
+  // negation of the SUM of both accounts' nets.
+  //
+  // Unconditional, and deliberately so. An earlier version read whichever
+  // account was non-zero, which is correct in three of the four cases and wrong
+  // in the fourth: an entry that posted BOTH a gain and a loss line dropped the
+  // loss from the expression entirely and attributed a gain the entry had not
+  // netted. `assertApplicationEntryComplete` sums both and would catch it, so
+  // the slice had no hole — but a second expression of one quantity that is less
+  // faithful than the first is the opposite of what this function claims for
+  // itself, and the sum is correct in all four cases and shorter.
+  const realizedFromLines = -(netBaseOnLines(lines, S5_ACCOUNT.FX_GAIN) + netBaseOnLines(lines, S5_ACCOUNT.FX_LOSS));
+  const bad = (message: string): never => {
+    throw new ReturnsPlanError('credit_note.posting_incomplete', message);
+  };
+  if (row.invoiceCarryingBaseReleasedMinor !== arNetCredit) {
+    bad('the row’s invoice carrying release must equal the receivable the entry releases');
+  }
+  if (row.creditCarryingBaseReleasedMinor !== liabilityNetDebit) {
+    bad('the row’s credit carrying release must equal the liability the entry discharges');
+  }
+  if (row.realizedFxGainLossMinor !== realizedFromLines) {
+    bad('the row’s realized FX must equal the realized FX the entry posts');
+  }
+  // The four-term identity of `TL-P4-S5-R2`, over the ROW's own columns, in
+  // integer minor units: what the liability gives up is what the receivable
+  // releases plus what was realized. No unexplained one-minor drift is
+  // admitted, and there is no rounding account to absorb one.
+  if (row.creditCarryingBaseReleasedMinor !== row.invoiceCarryingBaseReleasedMinor + row.realizedFxGainLossMinor) {
+    bad('the row’s carrying releases and realized FX must reconcile exactly');
+  }
 }
 
 /** The whole port surface of the slice, in one place, so a composition root names one thing. */

@@ -61,6 +61,7 @@
 import {
   type ConsumableSourceCap,
   type ReturnsRefusalCode,
+  S5_ACCOUNT,
   creditNoteCogsReversalBaseMinor,
   creditNoteTaxRefusal,
   isCreditNoteEntryAccount,
@@ -321,7 +322,26 @@ export function planCustomerRefund(input: CustomerRefundInput): CustomerRefundPl
   const disbursementBaseMinor = convert(d, input.disbursement);
   if (disbursementBaseMinor === 0n) refuse('customer_refund.amount_below_base_unit', 'the disbursement converts to less than one base minor unit');
 
+  // `refundLiabilityAccount` is the one authority over WHICH liability a source
+  // kind discharges; `S5_ACCOUNT` is the one authority over how an account is
+  // SPELLED. This planner consumes both and spells nothing itself.
+  //
+  // The check below is not decoration and it is not a second mapping table: it
+  // is how this planner CONSUMES the canonical account-id source rather than
+  // trusting a string. If the role authority ever answers with an account the
+  // canonical source does not declare — a chart rename landed in one file and
+  // not the other, `PATCH-REQ-S5-008` applied by halves — the refund refuses
+  // instead of posting a debit to an account that is not in the chart.
+  //
+  // It is `registry_incomplete` (500, ours) and not an amount refusal: no
+  // merchant input can reach it, and it is a deployment defect in exactly the
+  // sense that code is declared for. It is also what makes that code REACHABLE:
+  // a declared refusal nothing can raise is the dead registry member
+  // `customer.aging_buckets_invalid` turned out to be one module over.
   const liabilityAccount = refundLiabilityAccount(input.source.kind);
+  if (liabilityAccount !== S5_ACCOUNT.CUSTOMER_REFUND_LIABILITY && liabilityAccount !== S5_ACCOUNT.CUSTOMER_CREDIT_LIABILITY) {
+    refuse('customer_refund.registry_incomplete', 'a refund entry names only a liability the canonical account source declares');
+  }
   const lines: ReturnsEntryLine[] = [
     Object.freeze({
       account: liabilityAccount,
@@ -337,32 +357,70 @@ export function planCustomerRefund(input: CustomerRefundInput): CustomerRefundPl
   if (consumed.dustBaseMinor !== 0n) lines.push(baseLine(liabilityAccount, consumed.dustBaseMinor > 0n ? 'D' : 'C', abs(consumed.dustBaseMinor)));
   lines.push(
     Object.freeze({
-      account: 'posting_account' as const,
+      account: S5_ACCOUNT.POSTING_ACCOUNT,
       side: 'C' as const,
       currency: 'disbursement' as const,
       txnAmountMinor: d,
       baseAmountMinor: disbursementBaseMinor,
     }),
   );
-  const realizedMinor = consumed.carryingReleasedMinor - disbursementBaseMinor;
-  // F5: the realized FX is BOUNDED by the liability it arises on.
+  // `TL-P4-S5-R3`, the project owner's SYMMETRIC 2× REFUND-FX SANITY BOUND.
   //
-  // `realized = cr_rel − db`, so `|realized| ≤ max(cr_rel, db)` is arithmetic
-  // and says nothing. The bound that says something is `|realized| ≤ cr_rel`:
-  // the exchange movement on discharging a liability cannot exceed the
-  // liability. It fails exactly when `db > 2·cr_rel` — a disbursement costing
-  // more than twice the carrying base the source gives up, which is a rate
-  // wrong by over 100% and not a refund anybody meant to make. Without it the
-  // plan will post an `fx_loss` line of unbounded size from a mistyped rate and
-  // balance perfectly while doing so.
+  // ## WHAT THIS GUARD IS NOT — stated first, because an earlier wording lied about it
+  //
+  // It **does not compute realized FX**; it **does not modify the journal
+  // result**; it **does not cap a legitimate accounting value**; it **creates no
+  // gain or loss amount**. It is a DATA-QUALITY / SANITY check on the two RATES,
+  // and it either lets the transaction through untouched or refuses it whole.
+  //
+  // The realized figure is computed below, once, from the two carrying values,
+  // and this guard neither feeds it nor clamps it. An earlier draft wrote the
+  // same arithmetic as `|realized| > min(cr_rel, db)`, which READS as a ceiling
+  // on an accounting amount — the one thing the ruling says it is not. The
+  // condition is therefore written as what it actually is: the two rate ratios,
+  // cross-multiplied into bigint so no division and no float appears.
+  //
+  // ## THE RULE
+  //
+  //     accept   0.5× ≤ current/source ≤ 2×      (INCLUSIVE at both ends)
+  //     refuse   strictly outside that range
+  //
+  // Exactly 2× and exactly 0.5× are ACCEPTED. `db > 2·cr_rel` is the ratio
+  // `current/source > 2` and `cr_rel > 2·db` is `source/current > 2`, each the
+  // same comparison with the denominator multiplied out, so the strict `>` puts
+  // the boundary exactly where the ruling puts it: `db = 2·cr_rel` passes and
+  // `db = 2·cr_rel + 1` — one minimum representable step beyond — does not.
+  //
+  // ## WHY BOTH ARMS EXIST
+  //
+  // An earlier draft bounded `|realized|` by `carryingReleasedMinor` alone. With
+  // `realized = cr_rel − db` and `db > 0`, `realized > cr_rel` requires `db < 0`,
+  // so the GAIN arm of that condition was mathematically unreachable: a
+  // disbursement rate mistyped DOWNWARD was never refused however absurd. On a
+  // 100-unit liability, `db = 1` posted `Dr liability 100 / Cr posting 1 /
+  // Cr fx_gain 99` — a 99% "exchange gain" on discharging a liability, balanced
+  // and accepted, and the exact mirror of the error the bound was written for.
+  //
+  // ## THE REMEDY, AND THE POLICY
   //
   // `fx_rate_changed` rather than `arithmetic_invalid`: the arithmetic is
-  // correct, the RATE is not, and the caller's remedy is to rebind the snapshot
-  // and retry — which is a 409 and not a 500.
-  if (abs(realizedMinor) > consumed.carryingReleasedMinor) {
-    refuse('customer_refund.fx_rate_changed', 'the realized exchange movement exceeds the liability it arises on');
+  // correct, the RATE is not. The operator's remedy is to REFRESH THE RATE AND
+  // RETRY, which is a 409 the caller rebinds and never a 500.
+  //
+  // A genuine long-term currency move beyond a factor of two therefore requires
+  // a rate refresh before a refund can be posted. That is **intentional under
+  // Phase 4 policy**, not a limitation to apologise for: a rate more than 2×
+  // away from the one the liability was carried at is indistinguishable, at this
+  // layer, from a typo, and refusing is the direction that cannot lose money.
+  if (disbursementBaseMinor > 2n * consumed.carryingReleasedMinor || consumed.carryingReleasedMinor > 2n * disbursementBaseMinor) {
+    refuse('customer_refund.fx_rate_changed', 'the disbursement rate and the rate the liability was carried at differ by more than a factor of two');
   }
-  if (realizedMinor !== 0n) lines.push(baseLine(realizedMinor > 0n ? 'fx_gain' : 'fx_loss', realizedMinor > 0n ? 'C' : 'D', abs(realizedMinor)));
+  // `TL-P4-S5-R2` and `TL-P4-S5-R3` §15: ONE signed difference, derived ONCE
+  // from the two carrying values, with the SIDE chosen afterwards from its sign.
+  // Not two branches computing two amounts: swapping which carrying value is
+  // larger must REVERSE THE SIGN of one quantity, never switch algorithm.
+  const realizedMinor = consumed.carryingReleasedMinor - disbursementBaseMinor;
+  if (realizedMinor !== 0n) lines.push(baseLine(realizedMinor > 0n ? S5_ACCOUNT.FX_GAIN : S5_ACCOUNT.FX_LOSS, realizedMinor > 0n ? 'C' : 'D', abs(realizedMinor)));
 
   const entryLines = balanced(lines);
   assertNoReceivableLine(entryLines);
@@ -457,14 +515,14 @@ export function planCreditNoteReversal(input: CreditNoteReversalInput): CreditNo
 
   const revenue: ReturnsEntryLine[] = [
     Object.freeze({
-      account: 'sales_returns' as const,
+      account: S5_ACCOUNT.SALES_RETURNS,
       side: 'D' as const,
       currency: 'source' as const,
       txnAmountMinor: input.totalMinor,
       baseAmountMinor: totalBaseMinor,
     }),
     Object.freeze({
-      account: 'customer_refund_liability' as const,
+      account: S5_ACCOUNT.CUSTOMER_REFUND_LIABILITY,
       side: 'C' as const,
       currency: 'source' as const,
       txnAmountMinor: input.totalMinor,
@@ -479,7 +537,7 @@ export function planCreditNoteReversal(input: CreditNoteReversalInput): CreditNo
   if (!cogs.ok) {
     throw new ReturnsPlanError(cogs.code, 'a COGS reversal is the sum of the stored movement value deltas and nothing else');
   }
-  const cogsEntryLines = balanced([baseLine('inventory', 'D', cogs.baseMinor), baseLine('cogs', 'C', cogs.baseMinor)]);
+  const cogsEntryLines = balanced([baseLine(S5_ACCOUNT.INVENTORY, 'D', cogs.baseMinor), baseLine(S5_ACCOUNT.COGS, 'C', cogs.baseMinor)]);
   const revenueEntryLines = balanced(revenue);
   // `TL-P4-S5-R2` limb 1, asserted and not assumed: this entry reduces no
   // receivable. It is unexpressible by type and refused at runtime, and the red
@@ -570,13 +628,76 @@ export type CreditNoteApplicationPlan = Omit<CustomerCreditApplicationPlan, 'ent
   readonly entryLines: readonly ReturnsEntryLine[];
 };
 
-/** 2210 → 2200, and nothing else. `posting_account` is deliberately absent: this entry never touches it. */
+/**
+ * The ONE place the credit-note application's liability account is named, and it
+ * is EXPORTED because one of its readers is in another module.
+ *
+ * It names a ROLE and it DERIVES its string from `S5_ACCOUNT`, the one
+ * canonical account-id source (`packages/domain-core/src/returns.ts`). It
+ * spells no account itself, and neither does anything else in this module: an
+ * account literal anywhere in this file is now a defect, which
+ * `tests/guards/p4s5-account-authority-mutation.test.ts` detects by MUTATING
+ * the canonical source and watching every planner move.
+ *
+ * It is a role constant rather than literals because the relabelling is NOT
+ * inert, which an earlier draft claimed and `PATCH-REQ-S5-008` repeated. THREE
+ * shipped sites read this account to decide behaviour — the map below,
+ * `assertApplicationEntryComplete`'s `netBaseOn`, and
+ * `assertApplicationRowAgreesWithEntry` in `returns-ports.ts` — so an edit that
+ * moved one and not the others would compile and then refuse every lawful
+ * application at runtime.
+ *
+ * The third reader is why this is `export`ed and not module-private. Round 3
+ * added it as a LITERAL in the very change that argued for the constant: when
+ * `PATCH-REQ-S5-008` lands and this constant moves, the map and the entry guard
+ * follow it, and a hardcoded `'customer_refund_liability'` in the ports would
+ * silently net an account no line names, read `0n`, and refuse every lawful
+ * application with "the row's credit carrying release must equal the liability
+ * the entry discharges". That is the M2 mechanism one module over, so the
+ * constant crosses the module boundary rather than being copied across it.
+ *
+ * **It is the APPLICATION's liability and nothing else.** Two other sites name
+ * 2200 and must NOT read this constant: the `customer_return` entry's own
+ * liability line, which RAISES the liability rather than discharging it and
+ * which `PATCH-REQ-S5-008` does not touch; and the refund entry, whose
+ * liability is chosen by `refundLiabilityAccount` from the source kind and may
+ * be 2210. Three laws happen to name one account today; collapsing them into
+ * one constant would be the opposite mistake to the one this fixes.
+ *
+ * Those three ROLES stay separate; what they share is the STRING, which all
+ * three now take from `S5_ACCOUNT`. That is the distinction the owner's ruling
+ * turns on: duplicate authority over the identifier is removed, duplicate
+ * authority over the decision was never there to remove.
+ */
+export const APPLICATION_LIABILITY_ACCOUNT = S5_ACCOUNT.CUSTOMER_REFUND_LIABILITY;
+
+/**
+ * The canonical AR account vocabulary, mapped into S5's — TOTAL over
+ * `ReceivableAccount`, by `satisfies Record<…>` and not `Partial<Record<…>>`.
+ *
+ * Totality is the point. Under `Partial` an account added to `ReceivableAccount`
+ * upstream was a RUNTIME 500 here (`returnsLineOfReceivableLine` would read
+ * `undefined` and throw), where the sibling `CREDIT_NOTE_CODE_OF` map is total
+ * and makes the same upstream change a COMPILE error. There is no reason for the
+ * two to differ, and the asymmetry was undocumented.
+ *
+ * `posting_account` maps to `null`: it is REACHABLE in the type and FORBIDDEN in
+ * this entry, which is a different statement from "absent from the map", and the
+ * `null` is what makes an upstream addition a compile error rather than a
+ * silently missing key.
+ *
+ * `customer_refund_liability` maps to ITSELF, so that when `PATCH-REQ-S5-008`
+ * lands and the canonical arithmetic emits 2200 directly, this map already
+ * admits it and the patch's "change nothing else" is TRUE instead of a 500.
+ */
 const RETURNS_ACCOUNT_OF_RECEIVABLE_ACCOUNT = Object.freeze({
-  accounts_receivable: 'accounts_receivable',
-  customer_credit_liability: 'customer_refund_liability',
-  fx_gain: 'fx_gain',
-  fx_loss: 'fx_loss',
-} as const satisfies Partial<Record<ReceivableEntryLine['account'], CreditNoteEntryAccount>>);
+  accounts_receivable: S5_ACCOUNT.ACCOUNTS_RECEIVABLE,
+  customer_credit_liability: APPLICATION_LIABILITY_ACCOUNT,
+  customer_refund_liability: APPLICATION_LIABILITY_ACCOUNT,
+  fx_gain: S5_ACCOUNT.FX_GAIN,
+  fx_loss: S5_ACCOUNT.FX_LOSS,
+  posting_account: null,
+} as const satisfies Record<ReceivableEntryLine['account'] | typeof S5_ACCOUNT.CUSTOMER_REFUND_LIABILITY, CreditNoteEntryAccount | null>);
 
 /** The snapshot names, mapped. `payment` is deliberately absent: a credit-note application has no payment leg. */
 const RETURNS_CURRENCY_OF_RECEIVABLE_CURRENCY = Object.freeze({
@@ -586,9 +707,9 @@ const RETURNS_CURRENCY_OF_RECEIVABLE_CURRENCY = Object.freeze({
 } as const satisfies Partial<Record<ReceivableEntryLine['currency'], ReturnsEntryLine['currency']>>);
 
 function returnsLineOfReceivableLine(line: ReceivableEntryLine): ReturnsEntryLine {
-  const account = (RETURNS_ACCOUNT_OF_RECEIVABLE_ACCOUNT as Partial<Record<string, CreditNoteEntryAccount>>)[line.account];
+  const account = (RETURNS_ACCOUNT_OF_RECEIVABLE_ACCOUNT as Partial<Record<string, CreditNoteEntryAccount | null>>)[line.account] ?? undefined;
   const currency = (RETURNS_CURRENCY_OF_RECEIVABLE_CURRENCY as Partial<Record<string, ReturnsEntryLine['currency']>>)[line.currency];
-  if (account === undefined || currency === undefined) {
+  if (account === undefined || account === null || currency === undefined) {
     // `throw` rather than `refuse(...)`: an arrow-function `never` does not
     // narrow for the compiler, and the two `undefined`s below must be gone.
     throw new ReturnsPlanError('customer_refund.arithmetic_invalid', 'a credit note application entry names only its own accounts and snapshots');
@@ -668,6 +789,28 @@ export function planCreditNoteApplication(input: CreditNoteApplicationInput): Cr
  * functions assert each TERM separately against the canonical arithmetic that
  * produced it, which is the half a balance check cannot see.
  *
+ * ## WHAT THEY CHECK, AND WHAT THEY CANNOT — stated because an earlier draft overclaimed
+ *
+ * `assertApplicationEntryComplete` and `assertRefundEntryComplete` check that
+ * the ENTRY faithfully reports the PLAN: that every term the plan computed
+ * reaches a line, on the right account, with the right side, and that the four
+ * terms reconcile. The defect class they genuinely catch is reachable on the
+ * legitimate path and is not hypothetical — a wrong entry in
+ * `RETURNS_ACCOUNT_OF_RECEIVABLE_ACCOUNT`, a dropped dust line in a future edit
+ * to the line builders, a sign inverted in `realizedLines`, a stray balanced
+ * pair on an account this entry may not name.
+ *
+ * **They do NOT check the canonical arithmetic, and they cannot.** Their
+ * expected quantities are read off the same plan whose lines they are checking,
+ * so a wrong release, a wrong level, a wrong dust or a wrong realized FX
+ * produced INSIDE `planCustomerCreditApplication` is invisible to them. What
+ * guarantees those is the DELEGATION — S5 does not compute them, it calls the
+ * one function that does — and the only independent check of the arithmetic
+ * itself is `assertCanonicalArRelease`'s second expression of the release law.
+ * Saying otherwise was wrong, and it mattered: a guard described as checking its
+ * subject against a canonical number, while reading that number from its
+ * subject, is a guard a reviewer stops looking behind.
+ *
  * They are functions with reachable refusals rather than comments, because a
  * law with no refusal has no red proof and `[[daftar-a-green-gate-must-prove-it-can-be-red]]`.
  */
@@ -680,6 +823,37 @@ function netBaseOn(lines: readonly ReturnsEntryLine[], account: string): bigint 
     net += l.side === 'D' ? l.baseAmountMinor : -l.baseAmountMinor;
   }
   return net;
+}
+
+/**
+ * HALF_EVEN by the BIASED-QUOTIENT formulation: a SECOND implementation of the
+ * rounding rule, written so that `assertCanonicalArRelease`'s oracle is not a
+ * call to the same code it is checking.
+ *
+ * `roundHalfEven` (`packages/inventory/src/rounding.ts:29`) computes the floor
+ * quotient and then compares twice the remainder against the divisor. This adds
+ * half a unit to the numerator FIRST — `q = floor((2n + d) / 2d)` — and then
+ * corrects the one case that over-counts, an exact tie landing on an odd
+ * neighbour. The two reach the same function by different arithmetic, which is
+ * the point: an oracle that calls the implementation under test states `f(x) ===
+ * f(x)`, and that is the M1 defect this replaces.
+ *
+ * It is deliberately NOT exported. It exists to disagree with the accepted
+ * primitive if either ever moves, and nothing in this slice may compute a real
+ * amount with it: the money is rounded once, at the accepted boundary.
+ */
+function halfEvenByBiasedQuotient(numerator: bigint, denominator: bigint): bigint {
+  if (denominator === 0n) refuse('customer_refund.arithmetic_invalid', 'a carrying release divides by the invoice total, which is never zero');
+  const negative = numerator < 0n !== denominator < 0n;
+  const n = numerator < 0n ? -numerator : numerator;
+  const d = denominator < 0n ? -denominator : denominator;
+  // Non-negative operands, so bigint division is floor.
+  const biased = 2n * n + d;
+  let q = biased / (2n * d);
+  // An exact tie is `biased % 2d === 0`. The biased quotient has rounded it UP;
+  // HALF_EVEN sends it to the even neighbour, so step back when `q` came out odd.
+  if (biased % (2n * d) === 0n && q % 2n !== 0n) q -= 1n;
+  return negative ? -q : q;
 }
 
 const incomplete = (message: string): never => {
@@ -697,7 +871,7 @@ const incomplete = (message: string): never => {
  * deleted from `planCreditNoteReversal`.
  */
 export function assertReturnEntryReducesNoReceivable(lines: readonly ReturnsEntryLine[]): void {
-  if (lines.some((l) => l.account === 'accounts_receivable')) {
+  if (lines.some((l) => l.account === S5_ACCOUNT.ACCOUNTS_RECEIVABLE)) {
     refuse('customer_refund.arithmetic_invalid', 'a credit note entry raises its liability and reduces no receivable');
   }
 }
@@ -719,9 +893,40 @@ export function assertCanonicalArRelease(
   invoice: InvoiceArState,
   plan: Pick<CreditNoteApplicationPlan, 'arReleasedBeforeMinor' | 'invoiceAmountAppliedMinor' | 'invoiceCarryingReleasedMinor'>,
 ): void {
-  const canonical = apRelease(invoice.totalBaseMinor, invoice.totalTxnMinor, plan.arReleasedBeforeMinor, plan.invoiceAmountAppliedMinor);
-  if (plan.invoiceCarryingReleasedMinor !== canonical) {
+  // The INDEPENDENT oracle: `rel(X, a) = R(X + a) − R(X)` written out from the
+  // law's own definition over a SECOND rounding implementation written in this
+  // file, NOT by calling `apRelease` and NOT by calling `roundHalfEven`.
+  //
+  // An earlier draft of this function called `apRelease` with the same inputs
+  // `arSide` had called it with, and compared the result to `arSide`'s output.
+  // That is `f(x) === f(x)`: in the shipped composition its refusal was
+  // mathematically unreachable, and a defect introduced INSIDE `apRelease`
+  // would have been invisible to it, because the expected value came from the
+  // expression under test. Two expressions of one law disagree when either
+  // moves, which is the only version of this check worth running.
+  const R = (x: bigint): bigint => halfEvenByBiasedQuotient(invoice.totalBaseMinor * x, invoice.totalTxnMinor);
+  const independent = R(plan.arReleasedBeforeMinor + plan.invoiceAmountAppliedMinor) - R(plan.arReleasedBeforeMinor);
+  if (plan.invoiceCarryingReleasedMinor !== independent) {
     incomplete('the AR carrying release must be the canonical release over the invoice stored pair');
+  }
+  // The DIFFERENTIAL arm: two independent implementations of one law must agree,
+  // so a divergence is attributed rather than merely detected. If this fires and
+  // the assertion above did not, the defect is in the rounding boundary itself
+  // and not in this slice — which is a different incident, and the message says
+  // which one it is.
+  if (independent !== apRelease(invoice.totalBaseMinor, invoice.totalTxnMinor, plan.arReleasedBeforeMinor, plan.invoiceAmountAppliedMinor)) {
+    incomplete('the two expressions of the carrying-release law disagree');
+  }
+  // The CONSERVATION arm, which depends on no rounding implementation at all and
+  // is therefore immune to a defect common to both of them: a release is bounded
+  // by the whole carrying value, and releasing the entire remaining AR releases
+  // the entire remaining carrying value, exactly. `[[daftar-rounding-is-not-additive]]`
+  // is why this is stated over the TOTAL and not as a sum of parts.
+  if (independent < 0n || independent > invoice.totalBaseMinor) {
+    incomplete('a carrying release lies between zero and the whole carrying value of the invoice');
+  }
+  if (plan.arReleasedBeforeMinor + plan.invoiceAmountAppliedMinor === invoice.totalTxnMinor && independent !== invoice.totalBaseMinor - R(plan.arReleasedBeforeMinor)) {
+    incomplete('releasing the whole remaining AR releases the whole remaining carrying value');
   }
   if (plan.arReleasedBeforeMinor !== invoice.totalTxnMinor - invoice.outstandingTxnMinor) {
     incomplete('the AR level must be the invoice chain position the lock returned');
@@ -746,9 +951,9 @@ export function assertCanonicalArRelease(
  */
 export function assertApplicationEntryComplete(plan: CreditNoteApplicationPlan): void {
   const lines = plan.entryLines;
-  const arEffect = netBaseOn(lines, 'accounts_receivable');
-  const liabilityEffect = netBaseOn(lines, 'customer_refund_liability');
-  const fxEffect = netBaseOn(lines, 'fx_gain') + netBaseOn(lines, 'fx_loss');
+  const arEffect = netBaseOn(lines, S5_ACCOUNT.ACCOUNTS_RECEIVABLE);
+  const liabilityEffect = netBaseOn(lines, APPLICATION_LIABILITY_ACCOUNT);
+  const fxEffect = netBaseOn(lines, S5_ACCOUNT.FX_GAIN) + netBaseOn(lines, S5_ACCOUNT.FX_LOSS);
 
   // AR is CREDITED, so its net is negative and its magnitude is the release.
   if (arEffect !== -plan.invoiceCarryingReleasedMinor) {
@@ -758,13 +963,13 @@ export function assertApplicationEntryComplete(plan: CreditNoteApplicationPlan):
   if (liabilityEffect !== plan.creditCarryingReleasedMinor) {
     incomplete('the liability movement must equal the note carrying release, dust line included');
   }
-  const fxLines = lines.filter((l) => l.account === 'fx_gain' || l.account === 'fx_loss');
+  const fxLines = lines.filter((l) => l.account === S5_ACCOUNT.FX_GAIN || l.account === S5_ACCOUNT.FX_LOSS);
   if (plan.realizedFxMinor === 0n) {
     if (fxLines.length !== 0) incomplete('a zero realized FX posts no line');
   } else {
     if (fxLines.length !== 1) incomplete('a non-zero realized FX posts exactly one line');
     const fx = fxLines[0] as ReturnsEntryLine;
-    const expectedAccount = plan.realizedFxMinor > 0n ? 'fx_gain' : 'fx_loss';
+    const expectedAccount = plan.realizedFxMinor > 0n ? S5_ACCOUNT.FX_GAIN : S5_ACCOUNT.FX_LOSS;
     const magnitude = plan.realizedFxMinor > 0n ? plan.realizedFxMinor : -plan.realizedFxMinor;
     if (fx.account !== expectedAccount || fx.baseAmountMinor !== magnitude) {
       incomplete('the realized FX line must name the gain or loss account for exactly the realized amount');
@@ -772,6 +977,16 @@ export function assertApplicationEntryComplete(plan: CreditNoteApplicationPlan):
     // A gain is a CREDIT and a loss a DEBIT, so the net is the negation.
     if (fxEffect !== -plan.realizedFxMinor) incomplete('the realized FX line must carry the side its sign requires');
   }
+  // L5: the accounts are a CLOSED set, so a BALANCED STRAY PAIR cannot hide.
+  //
+  // The three nets above are blind to a line on any other account, and
+  // `balanced()` is satisfied by any pair that cancels — so `Dr 6100 5 / Cr 6100 5`
+  // would have passed both, which is precisely the invented rounding account
+  // P4-AL-19 forbids. The entry may name these four accounts and no others.
+  const APPLICATION_ENTRY_ACCOUNTS: readonly string[] = [S5_ACCOUNT.ACCOUNTS_RECEIVABLE, APPLICATION_LIABILITY_ACCOUNT, S5_ACCOUNT.FX_GAIN, S5_ACCOUNT.FX_LOSS];
+  const stray = lines.filter((l) => !APPLICATION_ENTRY_ACCOUNTS.includes(l.account));
+  if (stray.length !== 0) incomplete('a credit note application entry names only its four accounts');
+
   // The ruling's identity, in integer minor units, with no tolerance.
   if (arEffect + liabilityEffect + fxEffect !== 0n) {
     incomplete('AR, liability, dust and realized FX must reconcile exactly');
@@ -792,8 +1007,8 @@ export function assertApplicationEntryComplete(plan: CreditNoteApplicationPlan):
 export function assertRefundEntryComplete(plan: CustomerRefundPlan): void {
   const lines = plan.entryLines;
   const liabilityEffect = netBaseOn(lines, plan.liabilityAccount);
-  const postingEffect = netBaseOn(lines, 'posting_account');
-  const fxEffect = netBaseOn(lines, 'fx_gain') + netBaseOn(lines, 'fx_loss');
+  const postingEffect = netBaseOn(lines, S5_ACCOUNT.POSTING_ACCOUNT);
+  const fxEffect = netBaseOn(lines, S5_ACCOUNT.FX_GAIN) + netBaseOn(lines, S5_ACCOUNT.FX_LOSS);
   if (liabilityEffect !== plan.carryingReleasedMinor) {
     incomplete('the liability discharged must equal the carrying the source released, dust line included');
   }
