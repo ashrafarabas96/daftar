@@ -652,7 +652,13 @@ Those two are the invoice reducers' own command paths, which is exactly where a
 refund subtraction would do the damage P4-AL-34 forbids. The hole was over the
 most dangerous routines rather than the least. `0084`'s page reader of a
 customer's open invoices would have joined them: it reads the receivable
-through the family and carries none of the four tokens.
+through the family and carries none of the four tokens. It has: the live count
+is **49** distinct Phase 4 routine names today, not the 48 of that measurement,
+and `customer_open_invoices_page`
+(`infrastructure/database/migrations/0084_phase4_ar_fixed_cost_and_open_invoice_page.sql:795`)
+is a subject of this law by dependency, carrying none of the four name tokens —
+the prediction above is now a measurement. The 48 is kept as what was true when
+the hole was found; nothing downstream may quote it as current.
 
 **The remedy is not a list of extra names**, which would hold for exactly as
 long as nobody added a routine — the closure-rule shape P4-AL-88 refuses. It is

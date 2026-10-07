@@ -168,6 +168,19 @@ in both directions:
   definition rather than the last — which is a change to a permanent module and therefore a
   Tech Lead item, not a silent edit.
 
+**A third correction, forward-looking and verified over this tree.** `FINANCIAL_CORE`
+(`scripts/phase4-s1-gate.ts:504-505`) is the relation set on which a polymorphic foreign key
+is refused (G-19 / GOLD-74). It names `credit_notes`, `credit_note_items`,
+`customer_credits` and `customer_credit_applications` — and **not**
+`credit_note_applications`, the relation this page expects S5 to create so that
+`invoice_outstanding` can read an applied credit note. No such relation exists today
+(`CREATE TABLE` over `0074`–`0084` yields fifteen relations and that is not one of them), so
+nothing is red now and this is not an omission to fix in S4. It is a trap for the slice that
+creates it: a relation that binds a credit note to an invoice is financial core by every
+reading of P4-AL-29, and it would arrive **outside** the pattern that refuses a polymorphic
+source on the financial core. Whoever writes that migration adds the relation to
+`FINANCIAL_CORE` in the same change, or states why the financial core does not include it.
+
 ---
 
 ## 2. The S4 routines that refuse a refund drawn on a customer credit
