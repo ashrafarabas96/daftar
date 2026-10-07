@@ -1374,14 +1374,27 @@ describe('C-6 — DEADLOCK ORDERING: every relevant lock pair, in BOTH direction
         contendedWithoutCycle += 1;
       }
     }
-    // The floors. Every contending arrangement was run both ways; every
-    // cycle-capable one really did produce a 40P01 under opposition; and the
-    // three counts must add up, so an arrangement cannot fall out of the sweep
-    // by being classified into neither bucket.
-    expect(matchedRuns).toBe(28);
-    expect(opposedDeadlocks).toBe(12);
-    expect(contendedWithoutCycle).toBe(16);
-    expect(opposedDeadlocks + contendedWithoutCycle).toBe(matchedRuns);
+    // THE THREE COUNTS AS AN ASSERTED IDENTITY, not as three independent
+    // numbers. Three literals can drift apart — one is edited, the other two
+    // are not, and the sweep silently covers less than it claims. An identity
+    // cannot: each count is compared against the ENUMERATION that produced it,
+    // and the partition is required to be exhaustive, so an arrangement cannot
+    // fall out of the sweep by landing in neither bucket.
+    const canCycleCount = orderedPairs().filter(([a, b]) => canCycle(a, b)).length;
+    const contendOnlyCount = orderedPairs().filter(([a, b]) => canContend(a, b) && !canCycle(a, b)).length;
+    expect(matchedRuns, 'every CONTENDING arrangement must have been run in the matched direction').toBe(
+      orderedPairs().filter(([a, b]) => canContend(a, b)).length,
+    );
+    expect(opposedDeadlocks, 'every CYCLE-CAPABLE arrangement must have deadlocked when opposed').toBe(canCycleCount);
+    expect(contendedWithoutCycle, 'every arrangement that contends without cycling must have been run and must not have deadlocked').toBe(contendOnlyCount);
+    // Exhaustive and disjoint: the two buckets partition the contending set.
+    expect(opposedDeadlocks + contendedWithoutCycle, 'the two buckets do not partition the contending arrangements').toBe(matchedRuns);
+    // And neither bucket is empty, or one half of the claim is an empty loop.
+    expect(canCycleCount, 'no arrangement can cycle, so the deadlock half of this case proves nothing').toBeGreaterThan(0);
+    expect(contendOnlyCount, 'no arrangement contends without cycling, so the other half proves nothing').toBeGreaterThan(0);
+    // The literal census lives in ONE place — the pair-census case above — so
+    // these numbers are stated once and derived everywhere else.
+    expect(canCycleCount + contendOnlyCount).toBe(28);
   });
 
   it('PLANTED LOCK-ORDER DEFECT — the planting is in the ORDER ALONE, and it raises 40P01 on exactly one victim', () => {

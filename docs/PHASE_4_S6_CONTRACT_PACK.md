@@ -674,21 +674,43 @@ All three are `tests/**` and belong to S4's suites, so they are **patch requests
    TD-15 is specified. What remains open from that request is the **substring** hazard: three
    accepted migrations assert a substring of a refusal list, which is an assertion about the
    wording and not about the law, and the durable fix is larger than S6.
-4a. **`invoice_voids` accepted into S6's scope** (DDL spec §5.3). The execution plan names
-   `payment_reversals` and `allocation_reversals` for S6 and not this one; a command with no
-   identity row cannot satisfy law 7, so it is specified and flagged rather than assumed.
-4c. **`provider_source` / `provider_reference` accepted into S6's scope** (§7.4). The execution
-   plan names neither column in S6's scope list while making its idempotency an exit
-   condition of S6's gate, so the specification resolves that in the only direction available
-   — S6 creates it — and flags it rather than assuming it.
-4b. **The `(level, generation)` widening accepted** as the level-uniqueness replacement
-   (`docs/PHASE_4_S6_LEVEL_UNIQUENESS.md` §1A). It adds a stored column to two **S4-owned**
-   relations, which is the one part of this specification that reaches outside S6's own
-   tables and therefore wants the coordinator's word, not mine.
+4a. **`invoice_voids` is IN SCOPE — RULED.** Law 7 forces it: a void that is a second
+   statement of an existing truth is the defect. Its absence from
+   `docs/PHASE_4_EXECUTION_PLAN.md`'s S6 list is a defect in that document, which the
+   coordinator is correcting with a dated note, as S5's scope was corrected to four relations.
+   **S6 does not edit that file.**
+4c. **`provider_source` / `provider_reference` on `payment_reversals` only — RULED, as
+   specified** (§7.4, DDL spec §1A), including the partial unique index and the same
+   treatment for `payment_reversals_surplus_entry_uq`: a nullable key is sound only when NULL
+   means *no identity to protect*, and the predicate must say so rather than leaning on
+   `NULLS DISTINCT`.
+4d. **The intent hash does NOT cover the client-chosen `reversalId` — RULED, with a condition
+   that is now met.** The condition was to state and PROVE the replay LOOKUP, because removing
+   the id from the hash means a redelivery no longer matches by id either. DDL spec §1A.5
+   specifies it: the provider key first when present, `payment_reversals_payment_uq` always,
+   the stored hash compared, the original row returned — and **all of it before any read of
+   current state** (`[[daftar-registry-before-state]]`), so a stale redelivery arriving after
+   a later transition replays instead of performing a second real change or answering a false
+   `settlement_changed`. The departure from `customer_collect_payment` is recorded there with
+   that mechanism named, not merely as a difference.
+4b. **The `(level, generation)` widening — RULED ALLOWED, as a NEW APPEND-ONLY MIGRATION and
+   never an edit.** `0080`–`0086` will be byte-immutable by S6's promotion, so the change is
+   `ALTER TABLE … ADD COLUMN` plus the three wider unique indexes plus the removal of the
+   narrower ones, in S6's own migration, numbered by the single migration owner at promotion.
+   Raised as `PATCH-REQ-S6-011` so the CONTRACT_DIFF classifies it explicitly, and the backfill
+   is specified as an **EXPRESSION** over the append-only reversal rows — see item 14a below
+   for the part of that proof no migration path can make.
+4e. **The new advisory rank at the head of `P4-AL-41` raised as `PATCH-REQ-S6-012`**, not
+   edited. That request carries a finding of its own: **`P4-AL-41` ranks no advisory document
+   key at all**, although S4 already takes two (`0081:1893`, `0081:2269`), and the static
+   acquisition-order check reads **domain** acquisitions only — so it would pass a routine that
+   took S6's three advisory keys in any order. Harmless until now because no accepted routine
+   takes more than one; S6's payment reversal takes three in one transaction. The S4 exit sweep
+   wants this before it runs.
 
 **Then, in order:**
 
-5. Patch requests `-001`, `-002`, `-003`, `-006`, `-009`, `-010` applied.
+5. Patch requests `-001`, `-002`, `-003`, `-006`, `-009`, `-010`, `-011`, `-012` applied.
 6. The S6 migration written by the migration owner to
    `docs/PHASE_4_S6_DDL_SPECIFICATION.md`, with
    `docs/PHASE_4_S6_LEVEL_UNIQUENESS.md` §6's removal order and **a red proof per replaced
@@ -708,6 +730,21 @@ All three are `tests/**` and belong to S4's suites, so they are **patch requests
 9. The routes mounted in **both** Nest compositions, with the cross-tenant golden's
    ALLOW/DENY pairs at the API **and again at SQL**, and `200 []`-style content isolation for
    the read.
+8a. **The BACKFILL EXPRESSION proved with a non-zero case, and this is owed because neither
+   migration path can make it** (DDL spec §2A.2): on `check:db-from-zero` the backfill touches
+   zero rows, and on the real upgrade every correct answer is also `0`, because the reversal
+   relations are created empty in the same migration. So **both paths agree with `DEFAULT 0`
+   by construction**, which is exactly the condition under which a wrong expression ships. The
+   proof: seed a chain, reverse its tail through the command, re-run the expression, require
+   `1` at or below the freed level — **with the planted counterpart that a constant-`0`
+   backfill FAILS that assertion.** Without the counterpart the test passes against the defect
+   it exists to catch.
+8b. **The replay lookup proved, including its ORDERING** (DDL spec §1A.5): a redelivery with a
+   fresh id returning the stored rows; the same provider reference against a different payment
+   conflicting; a stale redelivery after a later transition replaying rather than refusing
+   `settlement_changed`; and the **planted counterpart for the ordering** — a variant that
+   reads state before the lookup must FAIL that last case, or the
+   `[[daftar-registry-before-state]]` claim is vacuous.
 9a. **The `provider_reference` idempotency proved AT THE DATABASE** (§7.4,
    `docs/PHASE_4_S6_DDL_SPECIFICATION.md` §1A) — the gate's own exit condition
    (`docs/PHASE_4_EXECUTION_PLAN.md:199`), which needs: the partial index present **and

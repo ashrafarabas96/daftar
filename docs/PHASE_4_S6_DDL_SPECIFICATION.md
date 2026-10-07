@@ -166,7 +166,73 @@ one the concurrency suite already provides in shape — `World.insertUnique` plu
 `indexKeyLock` — and extending it to the provider key is work for the round that has the
 column.
 
-### 1A.5 What this section does not claim
+### 1A.5 The replay LOOKUP, which the hash's composition makes load-bearing
+
+Removing the client-chosen `id` from the intent hash answers one question and opens another:
+**a redelivery no longer matches by id either, so what does it match by?** §46 separates the
+two — the id is **identity**, the hash is **intent** — and that separation is only honest if
+the lookup is specified. It is:
+
+```
+1.  advisory daftar.payment_provider_reference        (when a provider reference is present)
+1a. advisory daftar.payment_reversal_id               (the client-chosen id)
+2.  THE PRIOR-ROW LOOKUP, in this order, and BEFORE ANY READ OF CURRENT STATE:
+      a. by the provider key, when present:
+           SELECT … FROM payment_reversals
+            WHERE business_id = $b AND provider_source = $s AND provider_reference = $r
+      b. by the payment, always:
+           SELECT … FROM payment_reversals WHERE business_id = $b AND payment_id = $p
+                                                  -- payment_reversals_payment_uq
+3.  a row from EITHER lookup → compare intent_sha256:
+      equal     → EXACT REPLAY: return that row, its allocation_reversals children and their
+                  journal reversal ids. No insert, no new entry, no second audit event
+      different → payment_reversal.idempotency_conflict
+4.  no row     → only now read the payment, the invoices, the chains, and proceed
+```
+
+**Both lookups, and not one.** They answer different questions and neither covers the other:
+
+| | what it catches | what it misses alone |
+|---|---|---|
+| **by the provider key** | a redelivery with a **fresh** client id; and the same provider reference presented against a **different payment**, which is a different economic command under one key and must conflict rather than insert | a merchant-initiated reversal, which has no provider reference at all |
+| **by the payment** (`payment_reversals_payment_uq`) | every second reversal of one payment, whatever its origin — the id-path replay, and the merchant path | a provider reference reused across payments: the payments differ, so this lookup finds nothing and the insert would reach the partial unique as a `23505` |
+
+So the provider key is consulted **first** when present, the payment key **always**, and a hit
+on either compares the hash. The partial unique index remains the **physical floor** underneath
+both — for a direct-SQL writer that consulted no routine — exactly as §2A divides the labour
+for the level key: **the index is the floor, the lock is the protocol, and neither substitutes
+for the other.**
+
+**The lookup precedes every read of current state, and that ordering is the law, not a
+preference** (`[[daftar-registry-before-state]]`; the device `0081:1912-1918` already applies
+to `customer_collect_payment`). The failure it prevents is specific: a **stale redelivery**
+arriving after a later transition on the same chain — a new allocation, a void, another
+reversal. If the command read state first it would find a chain that no longer matches the
+stored reversal and could answer `settlement_changed` — **a false conflict on a correct
+replay** — or, worse, proceed and perform a second real change. With the lookup first, the
+stored intent hash is compared against the request alone, nothing about the present is read,
+and the answer is the original row. **A replay is a question about the past, so it must be
+answered before the present is consulted.**
+
+**The departure from `customer_collect_payment`, recorded with its mechanism and not only as a
+difference:** that command's intent is "the request-only intent (**id**, customer, method,
+date, …)" and its lookup is **by the id under the advisory key**, which is sound because a
+client that replays chooses the same id. S6's payment reversal cannot borrow that, because the
+party that replays is a payment provider which never saw the id. The departure is therefore:
+**the id leaves the hash, and the lookup moves from the id to the provider key and the payment
+key** — one change with two halves, and specifying only the first half would have left the
+command unable to find what it must replay. The hash covers `payment_id`, `reversal_date`,
+`reason`, `provider_source`, `provider_reference` and the ordered set of reversed allocation
+ids; the id remains the primary key and is still matched by the key lookup, so "same id,
+changed intent" conflicts, and "different id, same economic command" stays **unrepresentable**
+under `payment_reversals_payment_uq` rather than merely detected.
+
+**Owed at level F, and named so it is not mistaken for proved:** a redelivery with a fresh id
+returning the stored rows; the same provider reference against a different payment conflicting;
+a stale redelivery after a later transition replaying rather than refusing `settlement_changed`;
+and the **planted counterpart** for the ordering itself — a variant that reads state before the
+lookup must FAIL that last case, or the ordering claim is vacuous.
+### 1A.6 What this section does not claim
 
 - It does not create a provider integration, a webhook endpoint, an HTTP client or a
   credential. There is no provider in this tree (`0048:25`), and a column is not a provider.
@@ -309,10 +375,80 @@ ALTER TABLE customer_credit_applications
 |---|---|
 | **what it holds** | the number of reversal rows on that chain whose freed level is at or below (for a descending credit chain: at or above) this row's own, **as of the moment this row was written**. Derived from the append-only reversal relations and from nothing else, so every party that sees the same reversals computes the same number |
 | **why it exists** | it is the second column of the replacement UNIQUE key, which is what preserves the index's MUTUAL EXCLUSION on the unlocked path while letting a lawful successor sit at a freed level beside its immutable reversed original |
-| **backfill** | every existing row is generation `0`, because no reversal relation exists before this migration creates it. That is a fact of the tree, not an assumption |
+| **backfill** | **an EXPRESSION, never the constant `0` — see §2A.1.** Every existing row evaluates to `0` today, because no reversal relation exists before this migration creates one; but a `DEFAULT 0` taken as the backfill is silently wrong for any chain that already carries a reversal, and §2A.2 states why neither upgrade path can tell the two apart |
 | **who writes it** | the existing settlement commands, under the canonical source lock, computed from the same chain read they already make. **No new writer**, and no second source of the level |
 | **integrity** | the deferred verifier recomputes it for every ACTIVE row and refuses a disagreement — `invoice_settlement.settlement_generation_invalid`. It is therefore not a trusted client-supplied field, which is the whole difference between this and a `reversed` boolean |
 | **what it is NOT** | not a status, not a flag, not mutable. It is written once with the row and never updated; activeness remains the anti-join and nothing here brings it back as a column |
+
+### 2A.1 The backfill — an EXPRESSION, never a constant, and the ordering it forces
+
+`DEFAULT 0` is a device for **new** rows. It is not the backfill, and treating it as one is the
+failure mode of this change: a default of `0` is silently wrong for any chain that already
+carries a reversal, and nothing in the catalogue would say so.
+
+**The backfill is the generation law itself, evaluated over the append-only reversal rows and
+nothing else:**
+
+```
+UPDATE payment_allocations a
+   SET chain_generation = (
+         SELECT pg_catalog.count(*)
+           FROM public.allocation_reversals r
+           JOIN public.payment_allocations o
+             ON o.business_id = r.business_id AND o.id = r.reducer_id
+          WHERE r.business_id = a.business_id
+            AND r.invoice_id  = a.invoice_id
+            AND o.ar_released_before_txn_minor <= a.ar_released_before_txn_minor);
+```
+
+— and the mirror of it for `customer_credit_applications`' two chains, the credit one with
+`>=` over `credit_remaining_before_minor`, because that chain descends. **One expression per
+chain, and it is the same expression the deferred verifier recomputes**, so the backfill and
+the verifier cannot disagree: if they could, the migration would install data its own verifier
+rejects.
+
+**The ordering this forces, which corrects §6's step 0 as first written.** "Create the wider key
+before dropping the narrower one" was right and too coarse — the expression is not evaluable
+until the reversal relations exist, and the index must be built over backfilled values:
+
+| # | step | why this position and no other |
+|---|---|---|
+| 0a | `CREATE TABLE allocation_reversals` (and `payment_reversals`), empty | the backfill expression names `allocation_reversals`; it cannot run before the relation exists |
+| 0b | `ALTER TABLE … ADD COLUMN chain_generation BIGINT NOT NULL DEFAULT 0` | metadata-only on PostgreSQL 11+; no table rewrite |
+| 0c | **run the backfill `UPDATE`**, then **assert** that the stored value equals the expression for **every** row | the assertion is what makes the constant and the expression distinguishable at all |
+| 0d | `CREATE UNIQUE INDEX … (…, level, chain_generation)` | built over backfilled values; and still **before** any drop, so the relation is never without a unique key over the level |
+| 1–4 | the guard, the widened verifier, the catalogue reads | unchanged |
+| 5 | `DROP CONSTRAINT` the narrow level-alone keys | last, as before |
+
+### 2A.2 The two upgrade paths, and the admission that NEITHER proves the expression
+
+`§51`'s requirement, stated for both paths and then stated honestly:
+
+| path | what happens | what it proves |
+|---|---|---|
+| **fresh install** (`check:db-from-zero`) | every relation is created empty in this same migration, so the `UPDATE` touches **0 rows** and the assertion of 0c iterates over nothing | **nothing.** An assertion over an empty set passes for the same reason an empty road has no collisions. It must be declared vacuous here and not counted as evidence |
+| **real upgrade** (the accepted tree at S6's promotion) | every existing `payment_allocations` and `customer_credit_applications` row is visited, and the expression returns `0` for each — because `allocation_reversals` was created empty moments earlier and no reversal can predate the relation that records them | that the migration **applies** to real data without raising. It does **not** prove the expression, because every correct answer is also `0`: the constant and the law are indistinguishable on this data |
+
+> **So the migration cannot prove its own backfill, on either path, and saying so is part of the
+> specification.** Both paths agree with `DEFAULT 0` by construction, which is exactly the
+> condition under which a wrong expression ships unnoticed.
+
+**What does prove it** is a test that makes the non-zero case exist, and it is owed at level F:
+seed a chain, reverse its tail through the command so a real `allocation_reversals` row exists,
+then **re-run the backfill expression** over that chain and require it to return `1` for a row
+at or below the freed level and `0` for a row below it — with the planted counterpart that a
+backfill of the constant `0` **fails** that same assertion. Without the counterpart the test
+would pass against the defect it exists to catch. It is listed in the contract pack §14 beside
+the two-connection index proof, because both are claims a single-transaction, empty-table
+migration cannot make.
+
+**A second, cheaper floor the migration itself can carry:** assert that the column's
+`pg_attrdef` default is `0` **and** that `count(*) FILTER (WHERE chain_generation <> 0) = 0`
+**and** that `count(*) FROM allocation_reversals = 0`, as three readings of one claim — so a
+future migration that adds a reducer relation to a tree that *does* hold reversals, and reuses
+this shape, fails the third reading instead of inheriting the second. That is the only
+mechanism that makes the vacuity of today's path visible to the person who first makes it
+non-vacuous.
 
 The replacement keys, created **before** anything is dropped (that document's §6 step 0):
 
@@ -577,9 +713,13 @@ is the shape to follow, over these subjects:
    `docs/PHASE_4_S6_LEVEL_UNIQUENESS.md` §6 gives — step 0 first, step 5 last.
 2. **Three columns are ADDED to two existing relations** (§2A), each
    `NOT NULL DEFAULT 0`. On PostgreSQL 11+ that default is stored in the catalogue and the
-   table is not rewritten, so the add is metadata-only; the backfill value is `0` for every
-   existing row because no reversal relation exists before this migration creates one. **No
-   existing row's value changes**: `DEFAULT 0` is the value, not a replacement of one.
+   table is not rewritten, so the add is metadata-only. **The backfill is an EXPRESSION and
+   not that default** (§2A.1): it evaluates to `0` for every existing row today, because no
+   reversal relation exists before this migration creates one, but the migration **runs the
+   expression and asserts the stored value equals it** rather than trusting the constant.
+   §2A.2 states the uncomfortable half: on both the fresh-install and the real-upgrade path
+   every correct answer is also `0`, so neither path can distinguish the law from the
+   constant, and the proof is owed at level F with a planted counterpart.
 2a. **No other existing row changes.** Not one row of `payment_allocations`,
    `customer_credit_applications` or `customer_credits` is updated by this migration beyond
    the metadata-only default above; the three new relations are seeded empty. The append-only

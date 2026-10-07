@@ -968,6 +968,16 @@ export const P4_S6_REQUIRED_WIRING: readonly { readonly patchRequest: string; re
     edit: 'a RECEIVABLES_STATUS-style classification for every REVERSAL_CODES member, and one error.* entry per code per locale',
   }),
   Object.freeze({
+    patchRequest: 'PATCH-REQ-S6-011',
+    file: 'the S6 migration, against the S4-owned payment_allocations and customer_credit_applications',
+    edit: 'three chain_generation columns and three WIDER (level, generation) unique keys, created BEFORE the narrow ones are dropped, with the backfill stated as an EXPRESSION over the reversal rows and never as the DEFAULT 0 that both upgrade paths cannot distinguish from it',
+  }),
+  Object.freeze({
+    patchRequest: 'PATCH-REQ-S6-012',
+    file: 'docs/PHASE_4_ARCHITECTURE_LOCK.md + the static acquisition-order check',
+    edit: 'P4-AL-41 ranks NO advisory document key although S4 already takes two; S6 takes three in one transaction, so the advisory keys need a ranked block at the head and the checker needs to read advisory acquisitions at all',
+  }),
+  Object.freeze({
     patchRequest: 'PATCH-REQ-S6-010',
     file: 'the existing S4 suites under tests/ that S6 may not edit',
     edit: 'three test hooks, named in the contract pack §13.3, each inside a suite S4 owns',
