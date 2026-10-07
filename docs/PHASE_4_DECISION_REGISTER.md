@@ -21,7 +21,7 @@
 | `OD-03` — country tax rules. **Within Phase 4 this is the SALES TAX boundary**, and calling it "purchase tax" here is wrong | **OPEN. The only genuinely open item in Phase 4**, and it does not block Phase 4, because **structural zero is the current contract**. No tax law is researched and no VAT rate, inclusive/exclusive rule, threshold, exemption or legal invoice field is inferred or guessed. Sales tax is structurally zero; a non-zero tax is refused. It does **not** close inside Phase 4 | lock `:1646` | `invoices_tax_policy_absent_ck CHECK (tax_minor = 0)` (`0075:261`) is the structural zero; no tax code exists on the receivables surface at all (`receivables-errors.ts:23-24` states the absence as a law) |
 | `OD-P4-01` | **RULED — A** | lock `:1962` | — |
 | `OD-P4-02` / `OD-P4-03` — a customer credit limit, and an arbitrary price override | **RULED — A. There is NO customer credit limit in Phase 4 and NO arbitrary price override.** | lock `:1962` | measured: **zero** occurrences of `credit_limit` in `infrastructure/database/migrations/**` and zero of `price_override` as a column; the refusal vocabulary states the absence (`apps/api/src/modules/selling/selling-errors.ts:34-35`) |
-| `OD-P4-04` — mid-chain reversal of an allocation | **RULED — OPTION B AUTHORIZED**: append-only negative release at the chain head, telescoping proof first, **LIFO-only as the sole fallback**. Not a blocker for S4; it is P4-S6's | lock `:1962`, `:1695` | — |
+| `OD-P4-04` — mid-chain reversal of an allocation | **RULED — OPTION B AUTHORIZED**: append-only negative release at the chain head, telescoping proof first, **LIFO-only as the sole fallback**. The LIFO-only fallback is **ACTIVE** and Option B is **not revisited** — `TL-P4-S6-R1`, recorded in §13 of this register. Not a blocker for S4; it is P4-S6's | lock `:1962`, `:1695`; this register §13 | — |
 | `OD-P4-05` … `OD-P4-15` | **RULED — A** (`OD-P4-12` A measurement-triggered, `OD-P4-13` A + C) | lock `:1962-1967` | — |
 | `TL-P4-S1-R2` — the general Phase-4 RLS `ENABLE`/`FORCE` discovery law | **RULED AND DISCHARGED**, by P4-S2. Phase-4 scoped **by intent**; it is not widened into a tree-wide law, which would fail accepted non-commercial relations. **NOT an open item** | lock `:2009`, `:2229-2231` | `scripts/phase4-s4-gate.ts:278-281` asserts `relrowsecurity` and `relforcerowsecurity` per discovered relation |
 | `TL-P4-S1-R3` — `document_kind` / `credit_note` | **RULED.** `invoices.document_kind` stays `'invoice'`; **frozen `0075` is never edited**; no fake credit-note row; the widening is a **NEW migration in P4-S5**. **NOT an open decision** | lock `:2010`, `:2232-2234` | `0075:286-288` carries three uniques and no `document_kind` widening; nothing in `0080`/`0081` touches it |
@@ -739,3 +739,35 @@ claim non-vacuous, a journal read through `accounting_source_bindings` showing
 the pinned account untouched across the attempt, and a failure message on every
 assertion saying what going red means and what to do about it. The two overlap
 on the core refusal and are **owed a consolidation at acceptance**.
+
+---
+
+## 13. `TL-P4-S6-R1` — RULED. The LIFO-only fallback is ACTIVE, and Option B is not reopened
+
+**Why this section exists.** This ruling was in force and had **no written home
+anywhere in `docs/`**: a `grep` for `TL-P4-S6-R1` across the tree returned
+nothing, while the register's `OD-P4-04` row (`:24`) carried its substance
+("LIFO-only as the sole fallback") without naming the ruling that made it
+active. A Tech-Lead ruling with no written home is lost to the first reader who
+arrives without the chat, which is precisely what this register exists to
+prevent. It is recorded here in the P4-S4 seal pass so that P4-S6 inherits it
+from the tree rather than from a conversation.
+
+**The ruling, as stated by the Tech Lead.** The **LIFO-only fallback is
+ACTIVE**, and **Option B is not revisited**.
+
+**What that forbids, and this is the operative part.** P4-S6 does not re-open
+the mid-chain-reversal design question. It does not propose Option B again, does
+not ask which of the two to build, and does not carry a comparison of the two as
+an open decision. `OD-P4-04` is **RULED**, not pending: under §25 of the
+standing directive a ruled decision is never re-asked, so a P4-S6 report that
+presents the choice as open is itself the defect.
+
+**Where the design lives.** The allocation-reversal shape `OD-P4-04` authorizes
+is stated in `docs/PHASE_4_ARCHITECTURE_LOCK.md` `:1695` and `:1962`; this
+section states the **status** of the ruling and what it closes, per the contract
+at the head of this register — status here, ruling text in the lock.
+
+**Scope boundary.** This ruling is P4-S6's to implement. It gives P4-S4 no
+authority and changes nothing in this slice; recording it here is a
+documentation act, not a scope widening.
