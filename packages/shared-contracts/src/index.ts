@@ -394,6 +394,8 @@ export * from './customers';
 export * from './invoices';
 // Phase 4 (P4-S4): collecting a customer payment, and applying a customer credit.
 export * from './customer-settlement';
+// Phase 4 (P4-S6, levels A/B only): the reversal and void wire contract. No route of it is mounted yet.
+export * from './customer-reversal';
 /** RBAC permission registry (contract primitive): the exact keys the API accepts in role definitions. */
 export { PERMISSIONS } from '@daftar/domain-core';
 export type { Permission } from '@daftar/domain-core';

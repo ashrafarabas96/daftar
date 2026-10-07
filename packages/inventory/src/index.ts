@@ -24,3 +24,4 @@ export * from './payment-method-payloads';
 export * from './customer-payloads';
 export * from './sale-payloads';
 export * from './customer-settlement';
+export * from './customer-reversal';
