@@ -176,14 +176,26 @@ in a status registry at **`apps/api/src/modules/selling/selling-errors.ts:67`** 
 nowhere** — a declared code nothing raises. A docstring had cited it as the check that justified
 a 500.
 
-**Measured against the COMMITTED candidate `54a851c`, not against a working tree**, because the
-distinction turned out to matter here: at `54a851c` the identifier occurs **exactly once** in the
-whole repository — the declaration alone, with nothing throwing it and no docstring acknowledging
-the gap. My first count said "twice" and was read off the **dirty** working tree of the main
-checkout, where a neighbouring agent's **uncommitted** correction adds a second occurrence at
-`:91` saying it is *not* the code in question. That fix is in flight and **is not part of this
-candidate**. Corrected rather than left standing, because a citation taken from a tree that is
-not the candidate is the same class of error as the rest of this request.
+**Measured against committed revisions, not against a working tree**, because the distinction
+turned out to matter twice in one round:
+
+| revision | occurrences | thrown? |
+|---|---|---|
+| `54a851c` (the candidate my brief named) | **1** — the declaration alone, with nothing acknowledging the gap | **no** |
+| `f6f2e0b` (the candidate head after the bucket-fix commit landed) | **2** — the declaration plus a docstring at `:91` saying it is *not* the code in question | **no** |
+
+**The precedent holds at BOTH: the code is declared and thrown NOWHERE at either revision.** Only
+the occurrence count moves, and the `54a851c` figure is the stronger statement.
+
+Two corrections recorded rather than quietly reworded:
+
+1. my first count said "twice" and was read off the **dirty working tree**, where the bucket-fix
+   docstring was then uncommitted. **A citation taken from a tree that is not the candidate is the
+   same class of error as reading an absence as an enforcement** — both substitute what is
+   convenient to observe for what is actually claimed;
+2. that fix has since been **committed** as `f6f2e0b`, so the candidate head moved under this
+   request mid-round. **Naming the SHA beside the figure is what made that harmless instead of
+   invisible**, which is the citation law earning itself inside a single round.
 
 That is the mirror image of this request's own finding, and both are the same mistake in opposite
 directions:
