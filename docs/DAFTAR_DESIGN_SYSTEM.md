@@ -39,7 +39,14 @@ Clean · Premium · Modern · Calm · Trustworthy · Fast · Professional · Hum
 ## 3. Typography
 
 - **الخط العربي المعتمد: Tajawal** (ظاهر في الصور: "عصري · واضح · أنيق")، مرخّص (OFL) — أوزان Regular / Medium / Bold.
-- الإنجليزية/التركية: خط Sans متوافق بنفس الروح (يُحسم في Phase 1 ضمن Open Decisions، مرشّح: Inter).
+- الإنجليزية/التركية: **نفس عائلة Tajawal** مع الرجوع إلى خطوط النظام (`-apple-system`, `'Segoe UI'`, `sans-serif`) — وهو ما تَشحنه `tokens.ts:45` فعلًا.
+  <!-- TD-22(2) / P4-AL-56 (P4-S7): سابقًا كان هذا السطر يرشّح Inter، وكان `tokens.ts` يسمّي
+       `'Inter'` في الـ stack بينما لا يُحمَّل سوى `@fontsource/tajawal`
+       (`apps/web/src/app/[locale]/layout.tsx:14-16`). اسم خط غير مُحمَّل ليس احتياطيًا:
+       هو إمّا لا شيء وإمّا خط يصادف وجوده على جهاز المستخدم، أي شكلٌ غير قابل للتكرار.
+       فحُذِف الاسم من الـ stack وصُحِّح هذا السطر إلى ما يُشحن. أمّا نقص الحروف التركية
+       ğ/ş/İ في subsets الـ Tajawal المنشورة فيبقى قيدًا معروفًا تُغطّيه خطوط النظام،
+       وبوّابة المتصفح تتحقّق فقط من أنّ Tajawal هي أوّل العائلة. -->
 
 | Token | الحجم (mobile) | الوزن | الاستخدام |
 |---|---|---|---|
@@ -55,14 +62,18 @@ Clean · Premium · Modern · Calm · Trustworthy · Fast · Professional · Hum
 ## 4. Spacing / Grid / Radius / Elevation
 
 - **Spacing scale (4pt):** `space.1=4 … space.6=24, space.8=32`؛ التباعد بين البطاقات 12–16، حواف الشاشة 16 (mobile).
-- **Radius:** `radius.sm=8` (حقول صغيرة/chips)، `radius.md=12–14` (بطاقات القوائم)، `radius.lg=16–20` (البطاقات الكبيرة)، `radius.full` (pills، FAB، أزرار دائرية).
+- **Radius (المشحون، `tokens.ts:76`):** `radius.sm=6` (حقول صغيرة/chips)، `radius.md=8` (الأزرار وبطاقات القوائم)، `radius.lg=12` (البطاقات الكبيرة)، `radius.xl=16`، `radius.full` (pills، FAB، أزرار دائرية).
+  <!-- TD-22(1) / P4-AL-56 (P4-S7): كان هذا السطر يرسم السلّم درجةً أعلى ممّا يُشحن
+       (sm=8, md=12–14, lg=16–20). القاعدة في §21 أنّ الـ Tokens هي المصدر، فالوثيقة
+       هي ما صُحِّح وليست المكوّنات: تغيير حرف كل زرّ في المنتج أثناء مرحلة بيع ليس
+       إصلاحًا ضيّقًا. -->
 - **Elevation:** ظلال خفيفة جدًا: `shadow.card` = opacity ≤ 6%، blur واسع، بدون حدود قاسية؛ البطاقات قد تستغني عن الظل بحد `#F3F4F6` فاتح.
 
 ## 5. المكونات (Patterns من الصور)
 
 | المكوّن | المواصفة |
 |---|---|
-| Primary Button | أزرق `#2563EB`، نص أبيض Bold، radius 12–16، ارتفاع ≥ 48px، أيقونة يسار النص (RTL: يمين) — "إتمام البيع ✓" |
+| Primary Button | أزرق `#2563EB`، نص أبيض Bold، `radius.md` = 8، ارتفاع ≥ `TOUCH_TARGET` = 44px (`sm` = 36، `lg` = 52)، أيقونة يسار النص (RTL: يمين) — "إتمام البيع ✓". هذه هي أرقام `buttons.tsx:9-11,39` المشحونة، وبوّابة المتصفح تفرض الـ 44px كحدٍّ أدنى للمس (TD-22(1)). |
 | Secondary/Tonal Button | خلفية أزرق فاتح جدًا + نص أزرق |
 | FAB | دائري أزرق بعلامة + (المنتجات/العملاء) |
 | Cards | أبيض على `#F3F4F6`، radius lg، ظل خفيف، padding 16 |

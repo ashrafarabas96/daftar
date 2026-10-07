@@ -182,7 +182,21 @@ export async function ensureSession(): Promise<boolean> {
 // customer-payment and customer-credit refusal. A field the API attaches and
 // this list omits makes its whole code family a dead string — the P4-S2 defect
 // `test/domain-code-fields.test.ts` derives this list against.
-const DOMAIN_CODE_FIELDS = ['inventoryCode', 'purchasingCode', 'paymentMethodCode', 'catalogCode', 'sellingCode', 'receivablesCode'] as const;
+// P4-S7 adds `installmentsCode`: the field
+// `apps/api/src/modules/installments/installments-errors.ts` attaches to every
+// payment-plan and planned-payment refusal. It is a field of its own and not a
+// reuse of `receivablesCode` because the two are separate tables with separate
+// prefixes, and one channel carrying two tables' codes is how a code comes to
+// have two HTTP contracts.
+const DOMAIN_CODE_FIELDS = [
+  'inventoryCode',
+  'purchasingCode',
+  'paymentMethodCode',
+  'catalogCode',
+  'sellingCode',
+  'receivablesCode',
+  'installmentsCode',
+] as const;
 
 export class ApiError extends Error {
   constructor(

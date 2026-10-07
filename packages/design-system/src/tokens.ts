@@ -42,7 +42,15 @@ export const colors = {
 
 export const typography = {
   fontFamily: {
-    base: "'Tajawal', 'Inter', -apple-system, 'Segoe UI', sans-serif",
+    // TD-22(2) / P4-AL-56: `'Inter'` stood here and was NEVER LOADED — only
+    // `@fontsource/tajawal` is imported (`apps/web/src/app/[locale]/layout.tsx:14-16`)
+    // and the page CSP is `font-src 'self'`. An unloaded font name is not a
+    // fallback: it is either nothing, or whichever face happens to sit on the
+    // reader's machine — a shape that is not reproducible and that no gate can
+    // check. So the name is gone and the fallback is the system stack, which is
+    // what actually draws the Turkish ğ, ş and İ that the published Tajawal
+    // subsets do not cover.
+    base: "'Tajawal', -apple-system, 'Segoe UI', sans-serif",
     mono: "'IBM Plex Mono', ui-monospace, monospace",
   },
   size: {

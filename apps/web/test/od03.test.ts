@@ -213,10 +213,53 @@ describe('T-12 — OD-03: no tax element anywhere in S7', () => {
 
   const receivablesKey = (key: string): boolean => RECEIVABLES_CODES.some((code) => key === `error.${code}`);
 
-  it('no S7 screen names a customer, and no S7 key does except to answer a receivables refusal', () => {
+  /**
+   * P4-S7: THE DEBT SLICE, read the same way and exempted on the same ground.
+   *
+   * The widening above happened once already, when P4-S4 shipped the slice
+   * that COLLECTS a customer payment. P4-S7 ships the slice that SHOWS what a
+   * customer still owes — an instalment schedule, a debt list, a statement and
+   * an aging — and the law's reason reaches it unchanged: a screen about a
+   * customer's debt that may not say «customer» is not a protected screen, it
+   * is an unreadable one.
+   *
+   * What the law still refuses, and what this exemption therefore does NOT
+   * cover, is unchanged and asserted below:
+   *
+   *  - a POS key naming a customer. The till sale is a walk-in and
+   *    `customerId` is `null`;
+   *  - a stock, purchasing, supplier or catalogue key naming one;
+   *  - a VIEW outside `src/views/installments/` naming one;
+   *  - a client library naming one, with the exact-code exemption only.
+   *
+   * The exemption is held to the REGISTRY and to one DIRECTORY, never to a
+   * word: the codes are read as text out of the API's own table (so a code
+   * added there without its three catalogue entries still fails), and the
+   * directory is named in full rather than matched by a prefix.
+   */
+  const INSTALLMENTS_CODES: readonly string[] = (() => {
+    const source = readFileSync(join(__dirname, '../../api/src/modules/installments/installments-errors.ts'), 'utf8');
+    const table = /const INSTALLMENT_STATUS = \{([\s\S]*?)\n\} as const satisfies/.exec(source)?.[1] ?? '';
+    return [...table.matchAll(/^\s*'([a-z_]+\.[a-z_]+)':\s*\d{3},/gm)].map((m) => m[1] as string);
+  })();
+
+  const installmentsKey = (key: string): boolean => INSTALLMENTS_CODES.some((code) => key === `error.${code}`);
+
+  /** The debt slice's own merchant namespaces, named in full. */
+  const DEBT_SLICE_PREFIXES = ['installments.', 'debts.'] as const;
+  const DEBT_SLICE_KEYS = ['nav.installments', 'nav.debts'] as const;
+  const debtSliceKey = (key: string): boolean =>
+    DEBT_SLICE_KEYS.some((k) => key === k) || DEBT_SLICE_PREFIXES.some((prefix) => key.startsWith(prefix));
+
+  /** The one view directory the debt slice owns. Named in full, not matched by a prefix. */
+  const DEBT_SLICE_DIR = 'apps/web/src/views/installments/';
+
+  const exemptKey = (key: string): boolean => receivablesKey(key) || installmentsKey(key) || debtSliceKey(key);
+
+  it('no S7 screen names a customer, and no S7 key does except to answer a receivables refusal or to be the debt slice', () => {
     const catalogHits = Object.entries({ ar, en, tr }).flatMap(([locale, catalog]) =>
       Object.entries(catalog)
-        .filter(([key, value]) => isS7Key(key) && !receivablesKey(key) && /customer|عميل|عملاء|müşteri/i.test(`${key} ${value}`))
+        .filter(([key, value]) => isS7Key(key) && !exemptKey(key) && /customer|عميل|عملاء|müşteri/i.test(`${key} ${value}`))
         .map(([key]) => `${locale}: ${key}`),
     );
     expect(catalogHits).toEqual([]);
@@ -225,11 +268,29 @@ describe('T-12 — OD-03: no tax element anywhere in S7', () => {
     const exempted = Object.keys(en).filter((key) => isS7Key(key) && receivablesKey(key));
     expect(exempted.length, 'the exemption covers no key, so it is hiding nothing and should be deleted').toBe(RECEIVABLES_CODES.length);
     expect(RECEIVABLES_CODES.length).toBeGreaterThan(0);
-    // No SCREEN names a customer: the screen that names one ships with the
-    // customers slice, and until then no merchant surface offers the idea.
+    // The same two demands of the P4-S7 half: the registry was really read,
+    // and every code in it is keyed in every locale — so the exemption is a
+    // statement about a shipped table and not a hole shaped like one.
+    expect(INSTALLMENTS_CODES.length, 'the installments registry was not read, so its exemption covers nothing').toBeGreaterThanOrEqual(26);
+    for (const code of INSTALLMENTS_CODES)
+      for (const [locale, catalog] of Object.entries({ ar, en, tr }))
+        expect(catalog[`error.${code}`], `${locale}: error.${code}`).toBeTruthy();
+    // AND the exemption still refuses what it always refused: a POS key.
+    expect(exemptKey('pos.customerName')).toBe(false);
+    expect(exemptKey('sales.customer')).toBe(false);
+    expect(exemptKey('installments.plan.customer')).toBe(true);
+    // No SCREEN outside the debt slice names a customer: a customer's NAME on
+    // a till screen or a stock screen is still another slice's idea.
     const screens = Object.entries(s7Sources()).filter(([path]) => path.endsWith('.tsx'));
     expect(screens.length).toBeGreaterThan(10);
-    expect(screens.filter(([, src]) => /customer/i.test(stripTsComments(src))).map(([path]) => path)).toEqual([]);
+    const debtScreens = screens.filter(([path]) => path.startsWith(DEBT_SLICE_DIR));
+    expect(debtScreens.length, 'the directory exemption covers no screen, so it is hiding nothing').toBeGreaterThan(0);
+    expect(
+      screens
+        .filter(([path]) => !path.startsWith(DEBT_SLICE_DIR))
+        .filter(([, src]) => /customer/i.test(stripTsComments(src)))
+        .map(([path]) => path),
+    ).toEqual([]);
   });
 
   it('a client library may carry the walk-in customerId, and may set it from nothing but null', () => {
@@ -239,7 +300,9 @@ describe('T-12 — OD-03: no tax element anywhere in S7', () => {
     // till sale is. Any other value would be a POS screen naming a buyer,
     // which would also need `receivables.view` and a customer read that P4-S3
     // does not own.
-    const assigned = libraries.flatMap(([path, src]) => valuesUnder(src, 'customerId', CUSTOMER_ID_ALLOWED).map((value) => `${path}: ${value}`));
+    const assigned = libraries
+      .filter(([path]) => !path.startsWith(DEBT_SLICE_DIR))
+      .flatMap(([path, src]) => valuesUnder(src, 'customerId', CUSTOMER_ID_ALLOWED).map((value) => `${path}: ${value}`));
     expect(assigned).toEqual([]);
     // And no other customer vocabulary leaks into a library either: a name, a
     // balance, a credit limit or a list is the customers slice's, not this one's.
@@ -250,11 +313,19 @@ describe('T-12 — OD-03: no tax element anywhere in S7', () => {
     // `customerBalance` identifier, because the exemption is the exact
     // registered code strings and nothing else.
     const codeToken = new RegExp(`^(?:${RECEIVABLES_CODES.map((c) => c.replace(/[.]/g, '\\.')).join('|')})$`);
-    const other = libraries.flatMap(([path, src]) =>
-      [...stripTsComments(src).matchAll(/\b[Cc]ustomer\w*(?:\.[a-z_]+)?/g)]
-        .map((m) => `${path}: ${m[0]}`)
-        .filter((hit) => hit.endsWith(': customerId') === false && codeToken.test(hit.slice(hit.indexOf(': ') + 2)) === false),
-    );
+    // The debt slice's own modules are exempt by DIRECTORY, for the reason
+    // given above: a debt row carries the customer it belongs to, and a type
+    // that may not name one would describe nothing. Non-vacuity of that
+    // exemption is asserted first, so it cannot quietly cover an empty set.
+    const debtLibraries = libraries.filter(([path]) => path.startsWith(DEBT_SLICE_DIR));
+    expect(debtLibraries.length, 'the directory exemption covers no library, so it is hiding nothing').toBeGreaterThan(0);
+    const other = libraries
+      .filter(([path]) => !path.startsWith(DEBT_SLICE_DIR))
+      .flatMap(([path, src]) =>
+        [...stripTsComments(src).matchAll(/\b[Cc]ustomer\w*(?:\.[a-z_]+)?/g)]
+          .map((m) => `${path}: ${m[0]}`)
+          .filter((hit) => hit.endsWith(': customerId') === false && codeToken.test(hit.slice(hit.indexOf(': ') + 2)) === false),
+      );
     expect(other).toEqual([]);
   });
 

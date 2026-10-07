@@ -12,3 +12,6 @@ export * from './customer';
 export * from './invoice';
 // Phase 4 (P4-S2): the sale domain types and their pure rules.
 export * from './sale';
+// Phase 4 (P4-S7): the instalment schedule as pure arithmetic — a schedule over
+// an existing receivable, never a second ledger. Level A; no I/O and no clock.
+export * from './installment-schedule';
