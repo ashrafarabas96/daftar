@@ -69,6 +69,9 @@ import {
   requiredCiProblems,
   ROSTER_FLOOR,
   ROSTER_RECORDED,
+  EVIDENCE_FLOOR,
+  rosterBijectionProblems,
+  rosterRowTitles,
 } from '../../scripts/phase4-s4-gate';
 
 const REPO = join(__dirname, '..', '..');
@@ -607,7 +610,7 @@ describe('P4-S4 — the measured steps are judged by what they EXECUTE', () => {
       const found = evidenceIntegrityProblems(
         rootWithTree((dir) => {
           const text = readFileSync(join(dir, ev.suite), 'utf8');
-          writeFileSync(join(dir, ev.suite), skipTheFirstExecutedBlock(text, ev.suite, marker), 'utf8');
+          writeFileSync(join(dir, ev.suite), plantOnTheFirstExecutedBlock(text, ev.suite, marker), 'utf8');
         }),
       );
       expect(
@@ -1077,7 +1080,14 @@ describe("P4-S4 — the evidence table's MEMBERSHIP is derived from the tree, no
     ).toBe(true);
   });
 
-  it('RP-EC-C red: a table row whose suite the derivation cannot find is named — the other direction', () => {
+  it('RP-EC-C red: a table row whose suite the derivation cannot find takes the derivation below its FLOOR and is named', () => {
+    // This asserted the arm that compared the table with the derivation by
+    // EQUALITY — "a row the derivation does not find" — and that arm is gone:
+    // an accepted gate holding an equality refuses every later tree, and the
+    // acceptance commit moves the derivation's own subject. The defect is
+    // still refused, by the floor the equality was replaced with: a
+    // measurement that stops being attributed to this slice takes the derived
+    // count below EVIDENCE_FLOOR, which an EXTRA row never does.
     const row = S4_EVIDENCE_STEPS[0];
     const dir = rootWithEvidence((d) => {
       // The suite is still there and still runnable; it just no longer names
@@ -1085,10 +1095,11 @@ describe("P4-S4 — the evidence table's MEMBERSHIP is derived from the tree, no
       // this slice and the row's pins guard nothing.
       writeFileSync(join(d, row?.suite ?? ''), "import { expect, it } from 'vitest';\nit('nothing of this slice', () => expect(1).toBe(1));\n", 'utf8');
     });
+    expect(measuredCandidateSuites(dir), 'the suite is still derived, so the plant did not reproduce the loss').not.toContain(row?.suite ?? '');
     const found = evidenceCoverageProblems(dir);
     expect(
-      found.some((m) => m.includes(row?.suite ?? '') && m.includes('the pins on that row guard nothing')),
-      `a table row the derivation does not find left the cross-check silent: ${found.join(' | ')}`,
+      found.some((m) => m.includes('the accepted floor is')),
+      `a measurement that stopped being attributed to this slice left the cross-check silent: ${found.join(' | ')}`,
     ).toBe(true);
   });
 
@@ -1121,12 +1132,14 @@ describe("P4-S4 — the evidence table's MEMBERSHIP is derived from the tree, no
       'a suite the required job reaches through a `test*` script body was reported as unrun',
     ).toBe(false);
   });
-  it('RP-EC-F red: a table row NO step of the required job names is refused, even though the file is in the tree', () => {
-    // The workflow-side half of the set equality. The suite is present and
+  it('RP-EC-F red: a table row NO step of the required job names takes the derivation below its FLOOR and is refused', () => {
+    // The workflow side of the same correction. The suite is present and
     // still attributed to this slice; only the step that named it is gone. The
     // directory that covers it (`perf:phase2:s8` names the whole of
     // `tests/performance`) is run by no step of any job, which is exactly why
-    // directory reachability is not enough for a MEASURED row.
+    // directory reachability is not enough for a MEASURED row — and the floor
+    // is counted over the suites BOTH derivations agree on, so losing the step
+    // is losing a measurement.
     const row = S4_EVIDENCE_STEPS[0];
     expect(row, 'the table is empty, so this plant has no subject').toBeDefined();
     const dir = rootWithEvidence((d) => {
@@ -1136,10 +1149,11 @@ describe("P4-S4 — the evidence table's MEMBERSHIP is derived from the tree, no
       });
       writeFileSync(join(d, WORKFLOW), stripped, 'utf8');
     });
+    expect(workflowNamedSuites(dir), 'the required job still names the suite, so the plant did not reproduce the loss').not.toContain(row?.suite ?? '');
     const found = evidenceCoverageProblems(dir);
     expect(
-      found.some((m) => m.includes(row?.suite ?? '') && m.includes('is not enough for a measured step')),
-      `a table row the required job no longer names left the set equality silent: ${found.join(' | ')}`,
+      found.some((m) => m.includes('the accepted floor is')),
+      `a table row the required job no longer names left the floor silent: ${found.join(' | ')}`,
     ).toBe(true);
   });
 
@@ -1276,7 +1290,10 @@ describe('P4-S4 — the roster is a RATCHET: the derived set may grow and may no
     // round itself used: it is referenced by name nowhere else in the repo.
     const victim = 'tests/guards/p4s4-migration-self-capture-law.test.ts';
     expect(rosterFiles(REPO), 'the victim is not on the roster, so this plant has no subject').toContain(victim);
-    expect(ROSTER_RECORDED, 'the victim is not recorded, so the membership arm has nothing to miss').toContain(victim);
+    expect(
+      ROSTER_RECORDED.map((r) => r.suite),
+      'the victim is not recorded, so the membership arm has nothing to miss',
+    ).toContain(victim);
     const dir = mkdtempSync(join(tmpdir(), 'p4s4-ratchet-swap-'));
     for (const file of rosterFiles(REPO)) {
       if (file === victim) continue;
@@ -1313,7 +1330,10 @@ describe('P4-S4 — the roster is a RATCHET: the derived set may grow and may no
   it('ROSTER_RECORDED is exactly what the tree derives today, and an ADDITION is never a finding', () => {
     // Both directions, so the record cannot drift from the tree: every derived
     // file is recorded and every recorded file is derived.
-    expect([...ROSTER_RECORDED].sort()).toEqual(rosterFiles(REPO));
+    expect(
+      ROSTER_RECORDED.map((r) => r.suite).sort(),
+      'the record and the derived roster have drifted apart — a row is recorded that the rule no longer derives, or a derived suite is unrecorded',
+    ).toEqual(rosterFiles(REPO));
     // And a file the record does not name joins freely: a new suite must never
     // red the ratchet, which is what made the earlier count-only floor go
     // slack rather than loud.
@@ -1329,5 +1349,330 @@ describe('P4-S4 — the roster is a RATCHET: the derived set may grow and may no
     );
     expect(rosterFiles(dir).length).toBe(rosterFiles(REPO).length + 1);
     expect(rosterRatchetProblems(dir)).toEqual([]);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// THE ROSTER AS A BIJECTION — the inverse of every roster law above.
+//
+// Every roster law in the gate runs from the TREE towards the ROSTER:
+// `discoverS4Suites` walks `tests/` and matches a basename, and the ratchet
+// asserts `recorded ⊆ derived`. Nothing ran the other way, and two holes sat
+// in that direction: `rosterFiles` injects `CI_COMPOSITION_SUITE`
+// unconditionally, so that one row is on the roster however absent it is; and
+// a recorded row was a PATH, satisfied by any file at that path that held a
+// title. The plants below are both.
+
+/** A root holding a verbatim copy of every rostered file, with `mutate` applied. */
+function rootWithTheWholeRoster(mutate: (dir: string) => void, skip: readonly string[] = []): string {
+  const dir = mkdtempSync(join(tmpdir(), 'p4s4-bijection-'));
+  for (const file of rosterFiles(REPO)) {
+    if (skip.includes(file)) continue;
+    mkdirSync(join(dir, file.slice(0, file.lastIndexOf('/'))), { recursive: true });
+    writeFileSync(join(dir, file), readFileSync(join(REPO, file), 'utf8'), 'utf8');
+  }
+  mutate(dir);
+  return dir;
+}
+
+describe('P4-S4 — the roster is a BIJECTION with what exists, not a one-way floor', () => {
+  it('the checkout passes, and every recorded row names a distinct title', () => {
+    expect(rosterBijectionProblems(REPO)).toEqual([]);
+    expect(new Set(ROSTER_RECORDED.map((r) => r.title)).size).toBe(ROSTER_RECORDED.length);
+    // Each recorded title is really carried by the file that records it, and
+    // by no other rostered file — so no row is satisfiable by a sibling.
+    for (const row of ROSTER_RECORDED) {
+      expect(rosterRowTitles(readFileSync(join(REPO, row.suite), 'utf8')), `${row.suite} does not carry its own recorded title`).toContain(row.title);
+      for (const other of rosterFiles(REPO).filter((f) => f !== row.suite))
+        expect(rosterRowTitles(readFileSync(join(REPO, other), 'utf8')), `${other} also carries ${row.suite}'s recorded title`).not.toContain(row.title);
+    }
+  });
+
+  it('RP-RB-A red: a roster row that is LISTED and not on disk is named — and the ratchet cannot see it, by construction', () => {
+    // The injected row. `rosterFiles` adds it whatever the tree holds, so it is
+    // in the ratchet's own `derived` set and its membership arm is satisfied by
+    // the injection rather than by the file.
+    const dir = rootWithTheWholeRoster(() => undefined, [CI_COMPOSITION_SUITE]);
+    expect(rosterFiles(dir), 'the injected row left the roster, so this plant is not the attack it claims').toContain(CI_COMPOSITION_SUITE);
+    expect(
+      rosterRatchetProblems(dir).some((m) => m.includes(CI_COMPOSITION_SUITE)),
+      'the ratchet named the absent row, so this proof is not isolating the inverse direction',
+    ).toBe(false);
+    const found = rosterBijectionProblems(dir);
+    expect(
+      found.some((m) => m.includes(CI_COMPOSITION_SUITE) && m.includes('the tree does not hold it')),
+      `a roster row that is not on disk left the law silent: ${found.join(' | ')}`,
+    ).toBe(true);
+  });
+
+  it('RP-RB-B red: a recorded row whose FILE IS REPLACED by an unrelated passing suite is named, and every other roster law stays green', () => {
+    // The row was a filename, and a filename is not evidence: the path is
+    // rostered, the basename still matches the rule, the file still holds a
+    // runnable title, and the law it recorded is gone.
+    const row = ROSTER_RECORDED.find((r) => r.suite === 'tests/integration/p4s4-payment-closure.test.ts');
+    if (row === undefined) throw new Error('the victim is not recorded, so this plant has no subject');
+    const unrelated = "import { expect, it } from 'vitest';\n\nit('an unrelated case that measures nothing of this slice', () => expect(1).toBe(1));\n";
+    const dir = rootWithTheWholeRoster((at) => writeFileSync(join(at, row.suite), unrelated, 'utf8'));
+    // The three laws that could have seen it, each shown silent on the plant.
+    expect(rosterProblems(dir), 'rosterProblems saw the substitution, so the hole was not where this proof says').toEqual([]);
+    expect(rosterRatchetProblems(dir), 'the ratchet saw the substitution, so the hole was not where this proof says').toEqual([]);
+    expect(
+      rosterRedProofProblems(dir).some((m) => m.includes(row.suite)),
+      'roster-red-proofs saw the substitution, so the hole was not where this proof says',
+    ).toBe(false);
+    const found = rosterBijectionProblems(dir);
+    expect(
+      found.some((m) => m.includes(row.suite) && m.includes('no longer carries the recorded title')),
+      `a rostered file whose whole content was replaced left every roster law silent: ${found.join(' | ')}`,
+    ).toBe(true);
+  });
+
+  it('RP-RB-C red: a recorded title that survives only in a SKIPPED block does not satisfy its row', () => {
+    // `testTitles` over a whole file reports the cases inside a
+    // `describe.skip(` too, so the row has to be judged inside its own block.
+    // The victim holds three top-level blocks, so the file still carries
+    // runnable cases after the plant and the finding has to be about the ROW.
+    const row = ROSTER_RECORDED.find((r) => r.suite === 'tests/integration/p4s4-customer-identity-pin.test.ts');
+    if (row === undefined) throw new Error('the victim is not recorded, so this plant has no subject');
+    const dir = rootWithTheWholeRoster((at) => {
+      const text = readFileSync(join(at, row.suite), 'utf8');
+      const mutated = text.replace(/^describe\s*\(/m, 'describe.skip(');
+      expect(mutated, `${row.suite} holds no top-level describe( to skip, so this plant would prove nothing`).not.toBe(text);
+      // The title is STILL IN THE FILE, which is the whole point of the plant.
+      expect(mutated).toContain(row.title);
+      writeFileSync(join(at, row.suite), mutated, 'utf8');
+    });
+    const found = rosterBijectionProblems(dir);
+    expect(
+      found.some((m) => m.includes(row.suite) && m.includes('no longer carries the recorded title')),
+      `a recorded law skipped in place still satisfied its row: ${found.join(' | ')}`,
+    ).toBe(true);
+  });
+
+  it('RP-RB-D red: two rows sharing one title are named, because a shared title is one either file can satisfy', () => {
+    const [first, second] = ROSTER_RECORDED;
+    if (first === undefined || second === undefined) throw new Error('fewer than two rows, so this plant has no subject');
+    const planted = [first, { suite: second.suite, title: first.title }];
+    const found = rosterBijectionProblems(REPO, planted);
+    expect(
+      found.some((m) => m.includes(second.suite) && m.includes('both record the title')),
+      `two rows recording one title left the law silent: ${found.join(' | ')}`,
+    ).toBe(true);
+  });
+
+  it('an ADDITION is never a finding here either: a new suite joins the roster with no row of its own', () => {
+    const dir = rootWithTheWholeRoster((at) => {
+      mkdirSync(join(at, 'tests', 'guards'), { recursive: true });
+      writeFileSync(
+        join(at, 'tests', 'guards', 'p4s4-a-brand-new-suite.test.ts'),
+        "import { expect, it } from 'vitest';\nit('red: a brand new suite', () => expect([1]).not.toEqual([]));\n",
+        'utf8',
+      );
+    });
+    expect(rosterFiles(dir).length).toBe(rosterFiles(REPO).length + 1);
+    expect(rosterBijectionProblems(dir)).toEqual([]);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// THE MEASURED TABLE AS A FLOOR, AND A MEASUREMENT THAT MUST EXIST AT ALL.
+
+/** A root with the manifest, the workflow, this slice's migrations and the measured suites, with `mutate` applied. */
+function rootWithMeasurements(mutate: (dir: string) => void, skip: readonly string[] = []): string {
+  const dir = mkdtempSync(join(tmpdir(), 'p4s4-coverage-'));
+  writeFileSync(join(dir, 'package.json'), readFileSync(join(REPO, 'package.json'), 'utf8'), 'utf8');
+  writeFileSync(join(dir, 'vitest.config.ts'), readFileSync(join(REPO, 'vitest.config.ts'), 'utf8'), 'utf8');
+  mkdirSync(join(dir, WORKFLOW.slice(0, WORKFLOW.lastIndexOf('/'))), { recursive: true });
+  writeFileSync(join(dir, WORKFLOW), WORKFLOW_TEXT, 'utf8');
+  mkdirSync(join(dir, MIGRATIONS_SUBDIR), { recursive: true });
+  for (const file of candidateMigrations(REPO))
+    writeFileSync(join(dir, MIGRATIONS_SUBDIR, file), readFileSync(join(REPO, MIGRATIONS_SUBDIR, file), 'utf8'), 'utf8');
+  mkdirSync(join(dir, 'tests', 'performance'), { recursive: true });
+  for (const ev of S4_EVIDENCE_STEPS) {
+    if (skip.includes(ev.suite)) continue;
+    writeFileSync(join(dir, ev.suite), readFileSync(join(REPO, ev.suite), 'utf8'), 'utf8');
+  }
+  mutate(dir);
+  return dir;
+}
+
+describe('P4-S4 — the measured table is a FLOOR, derived from the tree, and never an equality', () => {
+  it('the checkout passes, and the derivation is at or above the floor rather than equal to the table', () => {
+    expect(evidenceCoverageProblems(REPO)).toEqual([]);
+    expect(measuredCandidateSuites(REPO).length).toBeGreaterThanOrEqual(EVIDENCE_FLOOR);
+    // An unmutated copy passes, so every plant below is about the plant.
+    expect(evidenceCoverageProblems(rootWithMeasurements(() => undefined))).toEqual([]);
+  });
+
+  it('RP-EC-A red: a measurement that LEAVES the tree takes the derivation below the floor and is named', () => {
+    const victim = S4_EVIDENCE_STEPS[S4_EVIDENCE_STEPS.length - 1];
+    if (victim === undefined) throw new Error('no evidence step, so this plant is vacuous');
+    const dir = rootWithMeasurements(() => undefined, [victim.suite]);
+    const derived = measuredCandidateSuites(dir);
+    expect(derived, 'the suite is still derived, so the plant did not reproduce the loss').not.toContain(victim.suite);
+    expect(derived.length, 'the derivation did not fall below the floor, so this proof would prove nothing').toBeLessThan(EVIDENCE_FLOOR);
+    const found = evidenceCoverageProblems(dir);
+    expect(
+      found.some((m) => m.includes('the accepted floor is')),
+      `a measurement that left the tree did not take the derivation below its floor: ${found.join(' | ')}`,
+    ).toBe(true);
+  });
+
+  it('RP-EC-B red: a table that loses a row falls below the row floor and is named', () => {
+    const found = evidenceCoverageProblems(REPO, S4_EVIDENCE_STEPS.slice(0, EVIDENCE_FLOOR - 1));
+    expect(
+      found.some((m) => m.includes('S4_EVIDENCE_STEPS holds') && m.includes('row(s) and the accepted floor is')),
+      `deleting a row from the table left the floor silent: ${found.join(' | ')}`,
+    ).toBe(true);
+  });
+
+  it('RP-EC-C: an EXTRA table row the derivation does not find is NOT a finding — that equality is what reds every later tree', () => {
+    // The removed arm. `S4_EVIDENCE_STEPS` was compared with the derivation by
+    // set equality in both directions, and the moment this slice is accepted —
+    // or a later slice adds a measurement of its own — a row the derivation no
+    // longer finds would red an ACCEPTED gate over a tree nobody touched.
+    const extra = {
+      label: 'a measurement of a slice ahead of this one',
+      script: 'tests/performance/a-later-slices-budgets.test.ts',
+      command: 'npx vitest run tests/performance/a-later-slices-budgets.test.ts',
+      name: 'A later slice’s budgets',
+      suite: 'tests/performance/a-later-slices-budgets.test.ts',
+    };
+    expect(measuredCandidateSuites(REPO), 'the extra row IS derived, so this claim has no subject').not.toContain(extra.suite);
+    const found = evidenceCoverageProblems(REPO, [...S4_EVIDENCE_STEPS, extra]);
+    expect(
+      found.some((m) => m.includes(extra.suite)),
+      `a table row the derivation does not find was refused, which is the equality this fix removed: ${found.join(' | ')}`,
+    ).toBe(false);
+    // And an extra row is not unpinned: `evidence-integrity` refuses a row
+    // whose suite is not in the tree, so a row can be extra and still cannot
+    // be fictional.
+    const pinned = evidenceIntegrityProblems(REPO, [...S4_EVIDENCE_STEPS, extra]);
+    expect(
+      pinned.some((m) => m.includes(extra.suite) && m.includes('would run nothing')),
+      `an extra row naming a suite that is not in the tree was not refused by evidence-integrity: ${pinned.join(' | ')}`,
+    ).toBe(true);
+  });
+
+  it('the derivation is TENSE-CORRECT: it reads this slice’s migrations, not whatever is past the accepted head', () => {
+    // `measuredCandidateSuites` read `candidateMigrations`, which the
+    // acceptance commit moves to the NEXT slice's files. Reading
+    // `sliceMigrations` is what keeps the derivation pointed at this slice in
+    // either tense, and it is the one place the tense decides a subject.
+    const gate = readFileSync(join(REPO, 'scripts', 'phase4-s4-gate.ts'), 'utf8');
+    const body = /export function measuredCandidateSuites\([\s\S]*?\n}/.exec(gate)?.[0] ?? '';
+    expect(body, 'measuredCandidateSuites is gone, so this claim has no subject').toContain('sliceMigrations(root)');
+    expect(body, 'the derivation reads candidateMigrations again, which the acceptance commit points at the NEXT slice').not.toContain(
+      'candidateMigrations(root)',
+    );
+  });
+});
+
+/**
+ * The measured suite's text with its FIRST column-0 `describe(` turned into
+ * `marker`, with the same canaries as the plant inside the block above: the
+ * mutated line must be executed code and must survive comment-stripping, or
+ * the plant is about PROSE and proves nothing.
+ */
+function plantOnTheFirstExecutedBlock(text: string, suite: string, marker: string): string {
+  const lines = text.split('\n');
+  const at = lines.findIndex((l) => /^describe\s*\(/.test(l));
+  expect(at, `${suite} holds no top-level describe( at a line start, so this plant has nothing to mutate`).toBeGreaterThan(-1);
+  const above = lines.slice(0, at).join('\n');
+  expect((above.match(/\/\*/g) ?? []).length, `${suite}: the chosen line sits inside an unterminated block comment`).toBe((above.match(/\*\//g) ?? []).length);
+  const mutated = [...lines.slice(0, at), (lines[at] ?? '').replace(/^describe\s*\(/, marker), ...lines.slice(at + 1)].join('\n');
+  expect(mutated, `${suite}: the plant "${marker}" changed nothing, so the proof would prove nothing`).not.toBe(text);
+  expect(stripProseForProof(mutated), `${suite}: the plant vanishes when comments are stripped, so it landed in PROSE`).not.toBe(stripProseForProof(text));
+  return mutated;
+}
+
+describe('P4-S4 — a measured suite must hold a measurement AT ALL, and the skip surface is wider than three dotted regexes', () => {
+  it('RP-EI-H red: a measured suite with no runnable case is named — the row that cites NO budget id is where that hole was', () => {
+    // The per-id arm is conditional on the row citing a budget id the accepted
+    // table knows, and the two equivalence rows cite none: `known` was empty
+    // and nothing required their suites to hold a single case.
+    const victim = S4_EVIDENCE_STEPS.find((e) => [...`${e.label} ${e.name}`.matchAll(/\bP4-[A-Z](?:-[A-Z]+)?\b/g)].length === 0);
+    if (victim === undefined) throw new Error('every row cites a budget id, so this plant has no subject');
+    const found = evidenceIntegrityProblems(rootWithTree((dir) => writeFileSync(join(dir, victim.suite), 'export {};\n', 'utf8')));
+    expect(
+      found.some((m) => m.includes(victim.suite) && m.includes('holds no RUNNABLE it( title at all')),
+      `a measured suite emptied of every case left the law silent: ${found.join(' | ')}`,
+    ).toBe(true);
+    // And the arms that existed before are each silent on this plant, which is
+    // what makes it the hole and not a duplicate: no skip marker, no missing
+    // id, the file present and the body still naming it.
+    expect(
+      found.some((m) => m.includes(victim.suite) && (m.includes('indistinguishable') || m.includes('would run nothing'))),
+      `an older arm fired on this plant, so it is not isolating the missing-measurement law: ${found.join(' | ')}`,
+    ).toBe(false);
+  });
+
+  it('RP-EI-A6: the four skip spellings that walk through the member-access regexes are each caught, and four lawful shapes are not', () => {
+    // Found by driving candidates against the law, not by reading it. Each of
+    // these really stops the measurement and matched NONE of the regexes the
+    // law carried.
+    const ev = S4_EVIDENCE_STEPS[0];
+    if (ev === undefined) throw new Error('no evidence step, so this plant is vacuous');
+    const evasions: readonly (readonly [string, string])[] = [
+      ['x' + "describe('a jest-compatible skip alias', () => {", 'the x-prefixed alias, which \\b cannot see inside'],
+      ["describe.each([])('a parameterised block over an EMPTY case list %s', () => {", 'zero cases, and no skip token anywhere'],
+      ["describe('an options-object skip', { skip: true }, () => {", 'the options-object form, which leaves the title runnable'],
+      ["describe('a runtime skip off the test context', () => { ctx.skip(); (() => {", 'the runtime context skip'],
+    ];
+    for (const [marker, why] of evasions) {
+      const found = evidenceIntegrityProblems(
+        rootWithTree((dir) => {
+          const text = readFileSync(join(dir, ev.suite), 'utf8');
+          writeFileSync(join(dir, ev.suite), plantOnTheFirstExecutedBlock(text, ev.suite, marker), 'utf8');
+        }),
+      );
+      expect(
+        found.some((m) => m.includes(ev.suite) && m.includes('indistinguishable')),
+        `${marker} (${why}) left the law silent: ${found.join(' | ')}`,
+      ).toBe(true);
+    }
+    // And the lawful shapes this estate's own suites are written in stay
+    // silent: a law that refused them would be a false refusal of an honest
+    // tree, which is the other half of every widening here.
+    for (const lawful of [
+      "it.each([[1], [2]])('MEASUREMENT: a parameterised case %s', async (n) => {",
+      "it('MEASUREMENT: a case with a longer timeout', { timeout: 60_000 }, async () => {",
+      "it('MEASUREMENT: a case that states it is not skipped', { skip: false }, async () => {",
+      "it('MEASUREMENT: a case that may be retried', { retry: 2 }, async () => {",
+    ]) {
+      const found = evidenceIntegrityProblems(
+        rootWithTree((dir) => {
+          const text = readFileSync(join(dir, ev.suite), 'utf8');
+          writeFileSync(join(dir, ev.suite), `${text}\n${lawful}\n  return undefined;\n});\n`, 'utf8');
+        }),
+      );
+      expect(
+        found.some((m) => m.includes(ev.suite) && m.includes('indistinguishable')),
+        `the lawful shape \`${lawful}\` was reported as a skipped block: ${found.join(' | ')}`,
+      ).toBe(false);
+    }
+  });
+
+  it('RP-EI-A7 red: the config smuggle through a BRACKETED member access is caught — JSON["parse"] is JSON.parse', () => {
+    // RP-EI-A5 plants the dotted spelling. The bracketed one did exactly the
+    // same thing and matched none of the four shapes, because they were all
+    // written about a dot.
+    const hidden =
+      "import { defineConfig } from 'vitest/config';\n" +
+      'const S = JSON[\'parse\'](\'{"exclude":["tests/performance/**"],"passWithNoTests":true}\');\n' +
+      "export default defineConfig({ test: Object['assign']({ include: ['tests/**/*.test.ts'] }, S) });\n";
+    for (const [shape, what] of [
+      [/\bexclude\s*:/, 'an `exclude:` in text'],
+      [/passWithNoTests\s*:\s*true/, 'a `passWithNoTests: true` in text'],
+      [/\.\.\./, 'a spread'],
+      [/\bJSON\s*\.\s*parse\s*\(/, 'a dotted JSON.parse'],
+      [/\bObject\s*\.\s*assign\s*\(/, 'a dotted Object.assign'],
+    ] as const)
+      expect(shape.test(hidden), `the plant still carries ${what}, so it would prove nothing`).toBe(false);
+    const found = evidenceIntegrityProblems(rootWithTree((dir) => writeFileSync(join(dir, 'vitest.config.ts'), hidden, 'utf8')));
+    expect(
+      found.some((m) => m.includes('vitest.config.ts') && m.includes('however it is spelled')),
+      `a config that smuggles its options in through a bracketed JSON['parse'] left the law silent: ${found.join(' | ')}`,
+    ).toBe(true);
   });
 });

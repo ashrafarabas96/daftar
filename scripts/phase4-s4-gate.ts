@@ -1008,7 +1008,7 @@ export const S3_SCRIPT = 'gate:phase4:s3';
  * step after it: measured first, then the equivalence, then the gate, which is
  * the order `ci.yml` already carries and the order the slice is measured in.
  */
-export const S4_EVIDENCE_STEPS: readonly {
+export interface EvidenceStep {
   readonly label: string;
   readonly script: string;
   readonly command: string;
@@ -1030,7 +1030,9 @@ export const S4_EVIDENCE_STEPS: readonly {
    * the budget unmeasured behind a green step.
    */
   readonly suite: string;
-}[] = [
+}
+
+export const S4_EVIDENCE_STEPS: readonly EvidenceStep[] = [
   {
     label: 'the P4-D/P4-F measured budgets',
     script: 'perf:phase4:s4',
@@ -1370,7 +1372,7 @@ export function evidenceScriptBodyReport(root: string): string {
  * WHAT THE MEASURED STEP ACTUALLY EXECUTES.
  *
  * The step is pinned, and so is the npm script body it resolves to. Neither
- * says the measurement RAN. Three ways to delete it while every other law
+ * says the measurement RAN. Five ways to delete it while every other law
  * stays silent, each found by attacking this file rather than by reading it:
  *
  *  - `describe.skip(` on the P4-F block inside the suite. The suite matches no
@@ -1381,11 +1383,17 @@ export function evidenceScriptBodyReport(root: string): string {
  *    root config: `vitest run <that path>` then exits 0 having run nothing.
  *  - a `pre<script>` npm hook, which runs before the pinned body and is not
  *    the pinned body.
+ *  - a suite that holds NO RUNNABLE CASE at all — `export {}` is collected and
+ *    exits 0 — which no arm here asked about until the measurement-existence
+ *    law below, because the per-budget arm only fires for a row that cites an
+ *    id the accepted ratchet knows and two of the three rows cite none.
+ *  - a config that computes `exclude`/`passWithNoTests` out of a value this
+ *    law cannot read, in any spelling, dotted or bracketed.
  *
  * So each evidence step names its SUITE, and this law asks of the suite what
  * the other two ask of the step.
  */
-export function evidenceIntegrityProblems(root: string): string[] {
+export function evidenceIntegrityProblems(root: string, steps: readonly EvidenceStep[] = S4_EVIDENCE_STEPS): string[] {
   const problems: string[] = [];
   // THE SKIP SURFACE, BY MEMBER ACCESS RATHER THAN BY CALL.
   //
@@ -1405,11 +1413,39 @@ export function evidenceIntegrityProblems(root: string): string[] {
   // measured step must take its measurement on every run and a CONDITIONALLY
   // skipped measurement is the same hole as a skipped one; `fails` is included
   // because a budget that is expected to fail is not a budget that passed.
+  //
+  // AND FOUR MORE, found the same way — by driving candidate evasions against
+  // the two regexes above rather than by reading them. Each really stops the
+  // measurement and matched NEITHER:
+  //
+  //   xdescribe(…) / xit(…) / xtest(…)   — Vitest's jest-compatible skip
+  //                                        aliases. `\bit` cannot match inside
+  //                                        `xit`, so the member-access regexes
+  //                                        never see them.
+  //   describe.each([])(…) / it.for([])  — a parameterised block over an EMPTY
+  //                                        case list runs zero cases. There is
+  //                                        no skip token anywhere in it.
+  //   it('…', { skip: true }, fn)        — Vitest's options-object form. The
+  //                                        title is still there, so even
+  //                                        `testTitles` still reports the
+  //                                        measurement as runnable.
+  //   it('…', (ctx) => { ctx.skip(); })  — the runtime skip off the test
+  //                                        context: the block is entered and
+  //                                        then abandoned, and the file names
+  //                                        no modifier at all.
+  //
+  // The zero-case arm is deliberately narrow — `[]` and nothing else — because
+  // `it.each([[1], [2]])` is how this estate's measured suites are written and
+  // a law that refused it would be a false refusal of an honest tree.
   const SKIPPERS = [
     /\b(?:describe|it|test|suite)(?:\s*\.\s*[A-Za-z_$][\w$]*)*\s*\.\s*(?:skip|only|todo|skipIf|runIf|fails)\b/,
     /\b(?:describe|it|test|suite)(?:\s*\.\s*[A-Za-z_$][\w$]*)*\s*\[\s*(['"`])(?:skip|only|todo|skipIf|runIf|fails)\1\s*\]/,
+    /\bx(?:describe|it|test)\s*\(/,
+    /\b(?:describe|it|test|suite)(?:\s*\.\s*[A-Za-z_$][\w$]*)*\s*\.\s*(?:each|for)\s*\(\s*\[\s*\]\s*\)/,
+    /\b(?:describe|it|test|suite)\s*\([^)]*,\s*\{[^{}]*\b(?:skip|only|todo|fails)\s*:\s*(?!false\b)\S[^,}]*/,
+    /\b[A-Za-z_$][\w$]*\s*\.\s*skip\s*\(\s*\)/,
   ];
-  for (const ev of S4_EVIDENCE_STEPS) {
+  for (const ev of steps) {
     if (!has(root, ev.suite)) {
       problems.push(`${ev.label} names the suite ${ev.suite}, which is not in the tree — the step would run nothing`);
       continue;
@@ -1455,6 +1491,27 @@ export function evidenceIntegrityProblems(root: string): string[] {
         `${ev.label} cites ${cited.join(', ')} and the accepted budget table knows none of them, so this law would judge no measurement for that row`,
       );
     const suiteTitles = has(root, ev.suite) ? testTitles(read(root, ev.suite)) : [];
+    // ── AND THAT THERE IS A MEASUREMENT AT ALL ───────────────────────────
+    //
+    // Everything above this line is CONDITIONAL on the row citing a budget id
+    // the accepted table knows: `cited` comes from the row's own words, and
+    // the two equivalence rows cite none, so `known` is empty and the loop
+    // below ran over nothing for them. Nothing anywhere required a measured
+    // suite to hold a single runnable case. Emptying
+    // `receivables-open-page-equivalence.test.ts` to a bare `export {}` left
+    // the step pinned, the body pinned, the file present, no skip marker
+    // anywhere and this check green over a suite that measures nothing —
+    // `passWithNoTests` is refused above, but `vitest run` over a file with no
+    // test is not a run that collected nothing: the file is collected and
+    // holds nothing, which exits 0.
+    //
+    // So EVERY row owes a runnable case, whether or not it cites an id. This
+    // is the floor the per-id arm sits on top of, and it is the one law here
+    // that requires the measurement to exist at all.
+    if (suiteTitles.length === 0)
+      problems.push(
+        `${ev.suite} holds no RUNNABLE it( title at all, so ${ev.label} is a pinned step over a suite that measures nothing — the file is present and unskipped and the runner exits 0 having asserted nothing`,
+      );
     for (const id of known)
       if (!suiteTitles.some((t) => t.includes(id)))
         problems.push(
@@ -1473,7 +1530,7 @@ export function evidenceIntegrityProblems(root: string): string[] {
     } catch (e) {
       problems.push(`${MANIFEST} does not parse: ${String(e)}`);
     }
-    for (const ev of S4_EVIDENCE_STEPS)
+    for (const ev of steps)
       for (const hook of [`pre${ev.script}`, `post${ev.script}`])
         if (scripts[hook] !== undefined)
           problems.push(
@@ -1508,17 +1565,33 @@ export function evidenceIntegrityProblems(root: string): string[] {
     // config whose options it cannot read, so a config that hides them is a
     // finding in itself — the repository's own config states every option as a
     // literal, so this costs it nothing.
+    //
+    // AND EACH OF THEM BY MEMBER ACCESS, NOT BY CALL. These were dotted
+    // regexes, and `JSON['parse']` walked straight through all of them while
+    // doing exactly what `JSON.parse` does — the same bracketed-member evasion
+    // the skip surface above was widened for:
+    //
+    //   const S = JSON['parse']('{"passWithNoTests":true}');
+    //   export default defineConfig({ test: Object['assign']({ include: […] }, S) });
+    //
+    // Neither `JSON.parse(` nor `Object.assign(` appears anywhere in that
+    // file, so configuration was smuggled in past a law written about the
+    // dotted spelling. The subject is the MEMBER, dotted or bracketed, exactly
+    // as it is for `describe.skip`.
     for (const [shape, what] of [
       [/\.\.\./, 'a spread, so an option can arrive from a value this law cannot read'],
-      [/\bJSON\s*\.\s*parse\s*\(/, 'a JSON.parse, so its options are a string this law cannot read'],
-      [/\bObject\s*\.\s*assign\s*\(/, 'an Object.assign, so an option can be merged in from a value this law cannot read'],
-      [/\brequire\s*\(|\bawait\s+import\s*\(/, 'a runtime import, so its options can come from another file entirely'],
+      [/\bJSON\s*(?:\.\s*parse\b|\[\s*(['"`])parse\1\s*\])/, 'a JSON.parse, however it is spelled, so its options are a string this law cannot read'],
+      [
+        /\bObject\s*(?:\.\s*assign\b|\[\s*(['"`])assign\1\s*\])/,
+        'an Object.assign, however it is spelled, so an option can be merged in from a value this law cannot read',
+      ],
+      [/\brequire\s*\(|\b(?:await\s+)?import\s*\(/, 'a runtime import, so its options can come from another file entirely'],
     ] as const)
       if (shape.test(cfg))
         problems.push(
           `${CONFIG} carries ${what} — \`exclude\` and \`passWithNoTests\` are judged as TEXT above, and a computed option satisfies neither regex while still turning every measured suite into a run that collects nothing and exits 0`,
         );
-    for (const ev of S4_EVIDENCE_STEPS) {
+    for (const ev of steps) {
       const dir = ev.suite.slice(0, ev.suite.indexOf('/', 'tests/'.length));
       if (!/include\s*:\s*\[\s*'tests\/\*\*\/\*\.test\.ts'\s*\]/.test(cfg))
         problems.push(`${CONFIG}'s \`include\` is not the ruled \`['tests/**/*.test.ts']\`, so whether ${dir} is collected at all is unstated`);
@@ -1585,10 +1658,18 @@ function measuredDirs(): string[] {
 
 /**
  * THIS SLICE'S MEASURED SUITES, DISCOVERED FROM THE TREE: a runnable test file
- * in a measured directory whose text names a candidate migration.
+ * in a measured directory whose text names one of THIS SLICE'S migrations.
+ *
+ * `sliceMigrations`, not `candidateMigrations` — the one place the tense
+ * decides a subject. This read `candidateMigrations` and that is the equality
+ * defect one level down: the moment P4-S4 is accepted, the accepted head moves
+ * to this slice's own last migration, `candidateMigrations` becomes P4-S5's
+ * files, and the derivation stops finding a single receivables suite. Every
+ * arm comparing the table with the derivation then fires, on a tree nobody
+ * touched. `[[daftar-a-closure-rule-is-not-an-invariant]]`.
  */
 export function measuredCandidateSuites(root: string): string[] {
-  const numbers = candidateMigrations(root)
+  const numbers = sliceMigrations(root)
     .map((f) => /^(\d+)/.exec(f)?.[1])
     .filter((n): n is string => n !== undefined);
   if (numbers.length === 0) return [];
@@ -1666,17 +1747,52 @@ export function workflowNamedSuites(root: string): string[] {
   return [...out].sort();
 }
 
-/** The cross-check: the table's membership against the measurements the tree carries and the required job takes. */
-export function evidenceCoverageProblems(root: string): string[] {
+/**
+ * THE MEASURED-SUITE FLOOR, in the shape `scripts/phase3-s8-gate.ts` carries
+ * for `EXPECTED_RULE_FLOOR`: the NUMBER is derived from the tree, and the
+ * hand-written constant is a FLOOR compared with `<`.
+ *
+ * `S4_EVIDENCE_STEPS` was compared with the derivation by SET EQUALITY in both
+ * directions, and an accepted gate holding an equality refuses every later
+ * tree — the defect that has already cost this slice three CI reds, and the
+ * exact one `EXPECTED_RULE_FLOOR` was written down over after Phase 4's rule
+ * 24 made an ACCEPTED gate red. The arms that fired when the TABLE held a row
+ * the derivation did not find are gone: an extra row is not a measurement this
+ * slice fails to take, and it is still pinned exhaustively by `required-ci`,
+ * `evidence-script-bodies` and `evidence-integrity`, each of which refuses a
+ * row whose suite is absent, unnamed by the workflow, skipped or empty.
+ *
+ * What remains is a FLOOR in both of the directions that are real holes:
+ *
+ *  - the derived count may not fall below this number — a measurement cannot
+ *    leave the tree, or stop being named by the required job, unnoticed;
+ *  - every suite the tree AND the required job measure for this slice must be
+ *    in the table, so a measurement cannot be added and stay invisible to the
+ *    three checks whose only subject the table is.
+ *
+ * Additions stay free in both directions, which is what makes it a ratchet
+ * rather than a pin. Move it in the same commit that moves the measurements.
+ */
+export const EVIDENCE_FLOOR = 3;
+
+/**
+ * The cross-check: the table's membership against the measurements the tree
+ * carries and the required job takes.
+ *
+ * `steps` is the table, injectable so a proof can plant a row — an EXTRA row
+ * is the shape the removed equality arms used to refuse, and a law whose only
+ * entry point reads the real const can be proved green and never proved
+ * capable of red over its own subject.
+ */
+export function evidenceCoverageProblems(root: string, steps: readonly EvidenceStep[] = S4_EVIDENCE_STEPS): string[] {
   const problems: string[] = [];
   const derived = measuredCandidateSuites(root);
-  const named = new Set(S4_EVIDENCE_STEPS.map((e) => e.suite));
-  if (S4_EVIDENCE_STEPS.length === 0)
-    problems.push('S4_EVIDENCE_STEPS is empty, so `required-ci`, `evidence-script-bodies` and `evidence-integrity` all have no subject');
+  const named = new Set(steps.map((e) => e.suite));
+  if (steps.length === 0) problems.push('S4_EVIDENCE_STEPS is empty, so `required-ci`, `evidence-script-bodies` and `evidence-integrity` all have no subject');
   if (derived.length === 0)
     problems.push(
-      `no runnable test file in ${measuredDirs().join(', ') || 'any measured directory'} names a candidate migration, so this cross-check derived an empty set and would be vacuous — the candidate surface is ${
-        candidateMigrations(root).join(', ') || 'empty'
+      `no runnable test file in ${measuredDirs().join(', ') || 'any measured directory'} names one of this slice's migrations, so this cross-check derived an empty set and would be vacuous — this slice's migration surface is ${
+        sliceMigrations(root).join(', ') || 'empty'
       }`,
     );
   const reach = requiredJobReach(root);
@@ -1691,11 +1807,6 @@ export function evidenceCoverageProblems(root: string): string[] {
         `${file} is a measured suite of this slice and NO step of the required \`${REQUIRED_JOB}\` job reaches it, directly or through an npm script body — a measurement the repository carries and never takes, and a budget nothing measured is indistinguishable from a budget that passed`,
       );
   }
-  for (const ev of S4_EVIDENCE_STEPS)
-    if (!derived.includes(ev.suite))
-      problems.push(
-        `S4_EVIDENCE_STEPS names ${ev.suite} for ${ev.label} and the derivation does not find it among this slice's measured suites — either it is gone from the tree or it names no candidate migration, so the pins on that row guard nothing`,
-      );
   // ── AND SET EQUALITY WITH THE WORKFLOW ITSELF ───────────────────────────
   //
   // The second derivation, from the other side. The required job's own steps
@@ -1715,11 +1826,18 @@ export function evidenceCoverageProblems(root: string): string[] {
       problems.push(
         `a step of the required \`${REQUIRED_JOB}\` job names ${file}, the candidate surface attributes it to this slice, and S4_EVIDENCE_STEPS does not name it — the workflow measures something the table cannot see, so none of its pins apply to it`,
       );
-  for (const ev of S4_EVIDENCE_STEPS)
-    if (!attributed.includes(ev.suite))
-      problems.push(
-        `S4_EVIDENCE_STEPS names ${ev.suite} for ${ev.label} and NO step of the required \`${REQUIRED_JOB}\` job names that file, directly or through an npm script body — being reachable through a directory-covering \`test*\` script is not enough for a measured step, because \`perf:phase2:s8\` covers the whole directory and no step of any job runs it`,
-      );
+  // ── AND THE FLOOR, DERIVED FROM THE TREE ────────────────────────────────
+  //
+  // What replaced the two arms that compared the table with the derivation by
+  // EQUALITY. The number is derived; `EVIDENCE_FLOOR` is a floor.
+  if (attributed.length < EVIDENCE_FLOOR)
+    problems.push(
+      `${attributed.length} measured suite(s) of this slice are both derived from the tree and named by a step of the required \`${REQUIRED_JOB}\` job, and the accepted floor is ${EVIDENCE_FLOOR} — a measurement has left the tree, or stopped being named by the required job, and a budget nothing measured is indistinguishable from a budget that passed. If a measurement was retired deliberately, lower EVIDENCE_FLOOR in the same commit`,
+    );
+  if (steps.length < EVIDENCE_FLOOR)
+    problems.push(
+      `S4_EVIDENCE_STEPS holds ${steps.length} row(s) and the accepted floor is ${EVIDENCE_FLOOR} — a row has been deleted from the table, which deletes the subject of \`required-ci\`, \`evidence-script-bodies\` and \`evidence-integrity\` for that measurement without deleting anything a reader would notice`,
+    );
   return problems;
 }
 
@@ -1730,7 +1848,7 @@ export function evidenceCoverageReport(root: string): string {
   const reach = requiredJobReach(root);
   const reached = (f: string): boolean => reach.paths.includes(f) || reach.dirs.some((d) => f === d || f.startsWith(`${d}/`));
   const attributed = workflowNamedSuites(root).filter((f) => derived.includes(f));
-  return `${derived.length} derived from the tree (${measuredDirs().join(', ')} ∩ the candidate surface), ${attributed.length} named by the required \`${REQUIRED_JOB}\` job and attributed to this slice, ${S4_EVIDENCE_STEPS.length} table row(s): ${
+  return `${derived.length} derived from the tree (${measuredDirs().join(', ')} ∩ this slice's migration surface), ${attributed.length} named by the required \`${REQUIRED_JOB}\` job and attributed to this slice (floor ${EVIDENCE_FLOOR}), ${S4_EVIDENCE_STEPS.length} table row(s): ${
     derived
       .map(
         (f) =>
@@ -1953,43 +2071,88 @@ export function rosterRows(root: string): readonly SuiteRow[] {
  * have named the loss either.
  *
  * So MEMBERSHIP is recorded, and the arm below is a SUBSET assertion: every
- * recorded file must still be derived. Additions stay free — a new suite is
+ * recorded file must still be derived. The unit of a row is the file AND a
+ * TITLE that file must still carry — see `rosterBijectionProblems`, which is
+ * the inverse direction: a path is not evidence, because a path is satisfied
+ * by whatever file is sitting at it. Additions stay free — a new suite is
  * never a finding — and a deliberate retirement removes its line here in the
  * same commit, which is the one place a reviewer then sees it.
  */
-export const ROSTER_RECORDED: readonly string[] = [
-  'tests/golden-regression/phase4-s4/09-settlement-last-amount-race.golden.test.ts',
-  'tests/golden-regression/phase4-s4/10-settlement-cross-currency.golden.test.ts',
-  'tests/guards/p4s4-budget-ratchet-law.test.ts',
-  'tests/guards/p4s4-command-refusal-audit-law.test.ts',
-  'tests/guards/p4s4-gate-execution.test.ts',
-  'tests/guards/p4s4-migration-self-capture-law.test.ts',
-  'tests/guards/p4s4-new-relation-coverage.test.ts',
-  'tests/guards/p4s4-payment-method-account-gap.test.ts',
-  'tests/guards/p4s4-required-ci.test.ts',
-  'tests/guards/p4s4-settlement-surface-laws.test.ts',
-  'tests/guards/p4s4-vocabulary-live-arm.test.ts',
-  'tests/guards/required-ci-chain-composition.test.ts',
-  'tests/integration/p4s4-allocation-journal-binding.test.ts',
-  'tests/integration/p4s4-cash-invoice-ar.test.ts',
-  'tests/integration/p4s4-checkout-owner-replay.test.ts',
-  'tests/integration/p4s4-checkout-permission-replay.test.ts',
-  'tests/integration/p4s4-credit-application-customer-replay.test.ts',
-  'tests/integration/p4s4-customer-identity-pin.test.ts',
-  'tests/integration/p4s4-departure-b-method-account-mutability.test.ts',
-  'tests/integration/p4s4-intent-replay.test.ts',
-  'tests/integration/p4s4-invoice-settlement-chain.test.ts',
-  'tests/integration/p4s4-nondigested-argument-controls.test.ts',
-  'tests/integration/p4s4-open-invoice-page-rows-estimate.test.ts',
-  'tests/integration/p4s4-payment-closure.test.ts',
-  'tests/integration/p4s4-payment-method-posting-lock.test.ts',
-  'tests/integration/p4s4-pos-sale-refusal-audit.test.ts',
-  'tests/integration/p4s4-refusal-audit-never-throws.test.ts',
-  'tests/integration/p4s4-refusal-audit.test.ts',
-  'tests/integration/p4s4-request-boundary.test.ts',
-  'tests/integration/p4s4-sale-commit-permission-replay.test.ts',
-  'tests/security/p4s4-rls-barrier-behaviour.test.ts',
-  'tests/security/p4s4-rls-quals-once-per-query.test.ts',
+/** One recorded roster row: the file, and a title the file itself must still carry. */
+export interface RosterRow {
+  /** The suite's path. */
+  readonly suite: string;
+  /**
+   * A title THAT FILE must still carry, as a runnable top-level `describe(`
+   * block or a runnable `it(` case. Distinct across the record, so no row can
+   * be satisfied by another row's file.
+   */
+  readonly title: string;
+}
+
+export const ROSTER_RECORDED: readonly RosterRow[] = [
+  {
+    suite: 'tests/golden-regression/phase4-s4/09-settlement-last-amount-race.golden.test.ts',
+    title: 'P4-S4 C-1 two concurrent settlements of the last remaining amount',
+  },
+  { suite: 'tests/golden-regression/phase4-s4/10-settlement-cross-currency.golden.test.ts', title: 'G-04 the payment currency is not the invoice currency' },
+  { suite: 'tests/guards/p4s4-budget-ratchet-law.test.ts', title: 'the accepted copy agrees with the lock, and the tree as it stands is clean' },
+  { suite: 'tests/guards/p4s4-command-refusal-audit-law.test.ts', title: 'P4-AL-48 — the gate law: every Phase 4 command audits its refusals' },
+  {
+    suite: 'tests/guards/p4s4-gate-execution.test.ts',
+    title: 'the roster rule derives a real set from the tree, and refuses the ways it can be empty or wrong',
+  },
+  { suite: 'tests/guards/p4s4-migration-self-capture-law.test.ts', title: 'P4-S4 — G-8: a migration cannot forge its own self-capture' },
+  { suite: 'tests/guards/p4s4-new-relation-coverage.test.ts', title: 'the shared Phase 4 predicate admits all four relations, with no registration' },
+  {
+    suite: 'tests/guards/p4s4-payment-method-account-gap.test.ts',
+    title: 'Departure B — the posting-account lock is supplier-side only (CURRENT behaviour, not an endorsement)',
+  },
+  { suite: 'tests/guards/p4s4-required-ci.test.ts', title: 'the workflow as it stands really does require this gate' },
+  {
+    suite: 'tests/guards/p4s4-settlement-surface-laws.test.ts',
+    title: 'the contract-shaped settlement text is accepted, and the silence is about real subjects',
+  },
+  {
+    suite: 'tests/guards/p4s4-vocabulary-live-arm.test.ts',
+    title: 'VL-A — the hole itself: the TEXT half is silent about a relation the vocabulary forbids by name',
+  },
+  {
+    suite: 'tests/guards/required-ci-chain-composition.test.ts',
+    title: 'the reader really reads the workflow (a parser that drops a key makes every claim below vacuous)',
+  },
+  { suite: 'tests/integration/p4s4-allocation-journal-binding.test.ts', title: 'P4-S4 one journal entry per allocation, bound by the allocation’s own id' },
+  { suite: 'tests/integration/p4s4-cash-invoice-ar.test.ts', title: 'P4-S4 a cash sale to a named customer is not a receivable' },
+  { suite: 'tests/integration/p4s4-checkout-owner-replay.test.ts', title: '§A the lawful checkout' },
+  { suite: 'tests/integration/p4s4-checkout-permission-replay.test.ts', title: '§A the lawful discounted checkout' },
+  { suite: 'tests/integration/p4s4-credit-application-customer-replay.test.ts', title: '§A the lawful application' },
+  { suite: 'tests/integration/p4s4-customer-identity-pin.test.ts', title: 'P4-S4 the customer identity pin' },
+  {
+    suite: 'tests/integration/p4s4-departure-b-method-account-mutability.test.ts',
+    title: 'P4-S4 Departure B documented — the customer-side payment-method posting account',
+  },
+  { suite: 'tests/integration/p4s4-intent-replay.test.ts', title: '§A a replay of a payment whose currency the SERVER resolved' },
+  { suite: 'tests/integration/p4s4-invoice-settlement-chain.test.ts', title: 'P4-S4 the oldest-first chain over an invoice' },
+  {
+    suite: 'tests/integration/p4s4-nondigested-argument-controls.test.ts',
+    title: '§A customer.collect_payment: customerId IS digested, so a different customer is a CONFLICT',
+  },
+  {
+    suite: 'tests/integration/p4s4-open-invoice-page-rows-estimate.test.ts',
+    title: 'P4-S4 the open-invoice page reader’s ROWS estimate — coupled to the endpoint’s limit cap',
+  },
+  { suite: 'tests/integration/p4s4-payment-closure.test.ts', title: 'P4-S4 the money closure of a customer payment' },
+  { suite: 'tests/integration/p4s4-payment-method-posting-lock.test.ts', title: 'P4-S4 the customer-side posting-account lock' },
+  { suite: 'tests/integration/p4s4-pos-sale-refusal-audit.test.ts', title: 'the cashier got the refusal they earned' },
+  { suite: 'tests/integration/p4s4-refusal-audit-never-throws.test.ts', title: '`recordRefusal` returns normally although its transaction threw' },
+  { suite: 'tests/integration/p4s4-refusal-audit.test.ts', title: 'the slice is present, so this suite has a subject' },
+  { suite: 'tests/integration/p4s4-request-boundary.test.ts', title: 'P4-S4 the collection route states no derived figure' },
+  { suite: 'tests/integration/p4s4-sale-commit-permission-replay.test.ts', title: '§A the lawful discounted sale' },
+  { suite: 'tests/security/p4s4-rls-barrier-behaviour.test.ts', title: 'P4-S4 — the policy surface the behavioural laws rest on' },
+  {
+    suite: 'tests/security/p4s4-rls-quals-once-per-query.test.ts',
+    title: 'P4-S4 — 0086: the read quals are evaluated once per query and answer identically',
+  },
 ];
 
 /** The ratchet's total floor, DERIVED from the record so one list is the single fact. */
@@ -2040,7 +2203,7 @@ export function rosterRatchetProblems(root: string): string[] {
   // AND BY MEMBERSHIP: a count cannot see a SWAP. Every file the record names
   // must still be derived; a file the record does not name is free to join.
   const derived = new Set(files);
-  const gone = ROSTER_RECORDED.filter((f) => !derived.has(f));
+  const gone = ROSTER_RECORDED.map((r) => r.suite).filter((f) => !derived.has(f));
   if (gone.length > 0)
     problems.push(
       `${gone.length} recorded P4-S4 suite(s) are no longer derived by the roster rule and this gate therefore no longer executes them: ${gone.join(', ')} — a move AND rename out of the basename rule looks like nothing to a count, because a sibling's new file holds the total up. If one was retired deliberately, remove its line from ROSTER_RECORDED in the same commit`,
@@ -2063,10 +2226,117 @@ export function rosterRatchetReport(root: string): string {
   const files = rosterFiles(root);
   const occupied = new Set(files.map((f) => f.slice(0, f.lastIndexOf('/'))));
   const derived = new Set(files);
-  const kept = ROSTER_RECORDED.filter((f) => derived.has(f)).length;
+  const kept = ROSTER_RECORDED.filter((r) => derived.has(r.suite)).length;
   return `${files.length} rostered file(s) against a floor of ${ROSTER_FLOOR}; ${kept} of ${ROSTER_RECORDED.length} recorded file(s) still derived; ${ROSTER_DIRECTORY_FLOOR.filter((d) => occupied.has(d)).length} of ${
     ROSTER_DIRECTORY_FLOOR.length
   } floored directory/ies still occupied (${ROSTER_DIRECTORY_FLOOR.map((d) => `${d}${occupied.has(d) ? '' : ' EMPTY'}`).join(', ')})`;
+}
+
+/**
+ * ── THE INVERSE OF THE ROSTER LAW: ROSTER → DISK, AND ROW → ITS OWN FILE ──
+ *
+ * WHAT THE CODE ACTUALLY DID. Every roster law in this file runs in ONE
+ * direction. `discoverS4Suites` walks `tests/` and matches a basename, so
+ * "every suite on disk that matches is rostered" is true by construction, and
+ * the ratchet asserts the other half only as `recorded ⊆ derived`. Both are
+ * floors from the tree towards the roster. Nothing stated the INVERSE:
+ *
+ *  - `rosterFiles` injects `CI_COMPOSITION_SUITE` UNCONDITIONALLY. Delete that
+ *    file and it is still on the roster, still in `derived`, so the ratchet's
+ *    membership arm is silent about it by construction — the one row that is
+ *    not derived from disk is the one row the ratchet cannot judge.
+ *  - a recorded row was SATISFIED BY A FILE THAT MERELY EXISTS. The row is a
+ *    path; the ratchet asks only whether that path is still derived, and
+ *    `roster-red-proofs` asks only whether the file holds a runnable `it(`
+ *    title. Replace the whole body of
+ *    `tests/integration/p4s4-payment-closure.test.ts` with
+ *    `it('x', () => undefined)` and every roster law in this file stays green:
+ *    the path is there, the basename matches, the file has a title. The law
+ *    was about a FILENAME, and a filename is not evidence.
+ *
+ * So the record's unit is a ROW — the file AND a title that file must still
+ * carry — and this law is the bijection the roster owes:
+ *
+ *   every file the roster LISTS is on disk; every recorded row's title is
+ *   still carried, as a RUNNABLE block or case, BY THE FILE THAT ROW NAMES;
+ *   and the recorded titles are pairwise distinct, so no row can be satisfied
+ *   by another row's file.
+ *
+ * Additions stay free, as everywhere else in this ratchet: a new suite is
+ * never a finding (P4-AL-88, and five worktrees are writing this slice).
+ */
+
+/**
+ * The titles of a suite that can SATISFY a recorded row: its runnable `it(`
+ * cases, plus the title of every top-level `describe(` block that is not
+ * skip-marked and that holds at least one runnable case.
+ *
+ * A hollowed-out block cannot satisfy a row, and neither can a skipped one:
+ * `testTitles` reads only runnable titles, so the two halves compose.
+ */
+export function rosterRowTitles(source: string): string[] {
+  const blocks = describeBlocks(source);
+  // Scoped to the block, not to the file: `testTitles` over the whole source
+  // reports the cases inside a `describe.skip(` too, so a row would have been
+  // satisfiable by a case the runner never enters.
+  const skipped = /^describe\s*(?:\.\s*[A-Za-z_$][\w$]*\s*)*\.\s*(?:skip|only|todo|skipIf|runIf|fails)\b/;
+  const out = new Set<string>(testTitles(source.slice(0, blocks[0]?.at ?? source.length)));
+  for (const block of blocks) {
+    if (skipped.test(block.body)) continue;
+    const cases = testTitles(block.body);
+    if (cases.length === 0) continue;
+    out.add(block.title);
+    for (const t of cases) out.add(t);
+  }
+  return [...out].sort();
+}
+
+/** The inverse direction, as its own law: roster → disk, and row → the file it names. */
+export function rosterBijectionProblems(root: string, rows: readonly RosterRow[] = ROSTER_RECORDED): string[] {
+  const problems: string[] = [];
+  // ROSTER → DISK. The executor is handed `rosterFiles`, injected row included.
+  for (const file of rosterFiles(root))
+    if (!has(root, file))
+      problems.push(
+        `the roster lists ${file} and the tree does not hold it — the derived half of the roster comes from disk and cannot say this, and the one row that is NAMED rather than derived (${CI_COMPOSITION_SUITE}) stays on the roster, and inside the ratchet's \`derived\` set, however absent it is`,
+      );
+  // ROW → THE FILE IT NAMES.
+  if (rows.length === 0) return [...problems, 'ROSTER_RECORDED is empty, so this law judged no row and its silence is not evidence'];
+  const seen = new Map<string, string>();
+  for (const row of rows) {
+    const owner = seen.get(row.title);
+    if (owner !== undefined)
+      problems.push(
+        `${row.suite} and ${owner} both record the title \`${row.title}\` — a title two rows share is a title either file can satisfy for the other, which is exactly the substitution this law exists to refuse`,
+      );
+    seen.set(row.title, row.suite);
+    if (!has(root, row.suite)) {
+      problems.push(`${row.suite} is a recorded roster row and is not on disk, so the row names nothing`);
+      continue;
+    }
+    const titles = rosterRowTitles(read(root, row.suite));
+    if (titles.length === 0) {
+      problems.push(
+        `${row.suite} holds no runnable block or case at all, so the recorded row \`${row.title}\` is satisfied by a file the runner finds nothing in`,
+      );
+      continue;
+    }
+    if (!titles.includes(row.title))
+      problems.push(
+        `${row.suite} no longer carries the recorded title \`${row.title}\` as a runnable describe( block or it( case — the path is on the roster, the basename still matches the rule and the file still holds some title, so every other roster law here is green over a file whose content has been replaced. A row names a LAW, not a filename`,
+      );
+  }
+  return problems;
+}
+
+/** The bijection's two sides, on a PASS as well as on a FAIL. */
+export function rosterBijectionReport(root: string): string {
+  const files = rosterFiles(root);
+  const absent = files.filter((f) => !has(root, f));
+  const kept = ROSTER_RECORDED.filter((r) => has(root, r.suite) && rosterRowTitles(read(root, r.suite)).includes(r.title)).length;
+  return `${files.length} rostered path(s), ${absent.length} not on disk (${absent.join(', ') || 'none'}); ${kept} of ${ROSTER_RECORDED.length} recorded row(s) still carry their own title; ${
+    new Set(ROSTER_RECORDED.map((r) => r.title)).size
+  } distinct recorded title(s)`;
 }
 
 /** What the derivation found, printed on a PASS as well as on a FAIL: a roster nobody can read is a roster nobody can audit. */
@@ -2173,11 +2443,12 @@ const EXECUTED_RED =
  * their top-level blocks, so a nested `describe` inside one belongs to its
  * parent's body and is judged together with it.
  */
-export function describeBlocks(source: string): readonly { readonly title: string; readonly body: string }[] {
+export function describeBlocks(source: string): readonly { readonly at: number; readonly title: string; readonly body: string }[] {
   const marks: { at: number; title: string }[] = [];
   for (const m of source.matchAll(/^describe(?:\.\w+)?\s*\(\s*(['"`])((?:\\[\s\S]|(?!\1)[^\\])*)\1/gm))
     marks.push({ at: m.index ?? 0, title: (m[2] ?? '').replace(/\\([\s\S])/g, '$1') });
   return marks.map((mark, i) => ({
+    at: mark.at,
     title: mark.title,
     body: source.slice(mark.at, i + 1 < marks.length ? (marks[i + 1]?.at ?? source.length) : source.length),
   }));
@@ -3009,7 +3280,7 @@ export const CHECKS: readonly Check[] = [
     title: "the evidence table's MEMBERSHIP, cross-checked against the measurements the tree carries",
     run: evidenceCoverageProblems,
     note: evidenceCoverageReport,
-    ok: "the table equals the measured suites on BOTH derivations: every runnable test file in the table's own directories that names a candidate migration is named by S4_EVIDENCE_STEPS and reached by the required `backend` job, and the suite files that job itself names, restricted to the ones the candidate surface attributes to this slice, are exactly the table's rows — so a measured suite cannot be added to this slice, or dropped from the workflow, and stay invisible to the three checks whose only subject the table is",
+    ok: "the table COVERS the measured suites the tree carries, as a floor and not an equality: every runnable test file in the table's own directories that names one of this slice's migrations is named by S4_EVIDENCE_STEPS and reached by the required `backend` job, and the count both derivations agree on is at or above its accepted floor — so a measured suite cannot be added to this slice, or dropped from the workflow, and stay invisible to the three checks whose only subject the table is, while an extra row and a later slice's own measurement are both free",
   },
   {
     id: 'roster-runner',
@@ -3024,6 +3295,13 @@ export const CHECKS: readonly Check[] = [
     run: rosterProblems,
     note: rosterReport,
     ok: 'the rule matched at least one suite, every matched file is one the root runner executes, and the CI-composition suite is present',
+  },
+  {
+    id: 'roster-bijection',
+    title: 'the roster is a BIJECTION with what exists: every listed file is on disk and every row is satisfied by its own file',
+    run: rosterBijectionProblems,
+    note: rosterBijectionReport,
+    ok: 'every file the roster lists is in the tree — including the one row that is named rather than derived — and every recorded row still finds its own title, as a runnable describe( block or it( case, in the file that row names, with no two rows sharing a title',
   },
   {
     id: 'roster-ratchet',
