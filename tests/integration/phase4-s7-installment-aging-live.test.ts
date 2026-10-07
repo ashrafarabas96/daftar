@@ -235,7 +235,8 @@ beforeAll(async () => {
   }
   if (specError === null) {
     guardDefinition =
-      (await ownerPool().query<{ def: string }>(`SELECT pg_get_functiondef('installment_plan_visibility_assert()'::regprocedure) AS def`)).rows[0]?.def ?? '';
+      (await ownerPool().query<{ def: string }>(`SELECT pg_get_functiondef('installment_plan_fact_assert(bigint,bigint,bigint)'::regprocedure) AS def`)).rows[0]
+        ?.def ?? '';
   }
   tenantId =
     (await ownerPool().query<{ t: string }>(`SELECT tenant_id::text AS t FROM invoices WHERE business_id = $1 AND id = $2`, [w.shop.businessId, invoiceId]))
@@ -246,8 +247,21 @@ afterAll(async () => {
   const p = ownerPool();
   await p.query('DROP TABLE IF EXISTS installments').catch(() => undefined);
   await p.query('DROP TABLE IF EXISTS installment_plans').catch(() => undefined);
+  // ROUND 7 F1 WIDENS WHAT THIS TEARDOWN OWES, AND THAT IS A SEAM, NOT A
+  // FIX. `TL-P4-COORD-R38` direction (d) puts a COLUMN and a DEFERRED
+  // CONSTRAINT TRIGGER on `public.invoices` — a PREDECESSOR relation this
+  // suite does not own. So an interrupted run of this file now leaves
+  // something behind on `invoices` and not only in two relations of its own,
+  // which makes round-7 F5's «drops first, restores second» residue worse
+  // rather than better. F5 is a LATER round and is deliberately not touched
+  // here; this comment is the disclosure, and the drops below are the
+  // teardown doing what it can.
+  await p.query('DROP TRIGGER IF EXISTS invoices_installment_fact_agrees ON invoices').catch(() => undefined);
+  await p.query('ALTER TABLE invoices DROP COLUMN IF EXISTS has_active_installment_plan').catch(() => undefined);
   await p.query('DROP FUNCTION IF EXISTS installment_schedule_verify()').catch(() => undefined);
-  await p.query('DROP FUNCTION IF EXISTS installment_plan_visibility_assert()').catch(() => undefined);
+  await p.query('DROP FUNCTION IF EXISTS installment_plan_fact_sync()').catch(() => undefined);
+  await p.query('DROP FUNCTION IF EXISTS installment_plan_fact_verify()').catch(() => undefined);
+  await p.query('DROP FUNCTION IF EXISTS installment_plan_fact_assert(bigint,bigint,bigint)').catch(() => undefined);
   // THE RESTORE IS ASSERTED, NOT HOPED FOR (challenger M8). A `LANGUAGE sql`
   // body supplied as a string literal records NO `pg_depend` edge on the
   // relations it names, so the DROPs above succeed and leave
@@ -905,15 +919,22 @@ describe("§G ROW SECURITY, MEASURED AS A NON-SUPERUSER — and C1's negative co
     expect(sched.rows[0]?.n).toBe('2');
   });
 
-  it('C1.a THE NEGATIVE CONTROL (inventory_internal_read): the arm RAISES instead of serving the old number', async () => {
+  it('C1.a THE NEGATIVE CONTROL (inventory_internal_read): the arm REFUSES BY NAME, and the column alone would have been SILENT', async () => {
     // The estate's own idiom: remove exactly one invariant and show what then
     // happens. Here the invariant is `inventory_internal_read ON
     // installment_plans`, and removing it recreates C1's asymmetry exactly —
     // the invoice visible, the plan not.
     //
-    // WITHOUT the guard this would return the WHOLE OUTSTANDING AT THE SINGLE
-    // INVOICE DUE DATE: the pre-S7 defect, silently. Both halves are measured.
-    expect(guardDefinition, 'the guard definition was never captured, so it cannot be neutralised and restored').not.toBe('');
+    // ROUND 7 F1 CHANGED WHAT THE THIRD STEP MEASURES, AND THE CHANGE IS THE
+    // POINT. Before the repair, neutralising the guard made this read serve
+    // THE WHOLE OUTSTANDING AT THE SINGLE INVOICE DUE DATE — a plausible wrong
+    // number. Arm (c) is now keyed on the INVOICE's own
+    // `has_active_installment_plan`, so with the refusal neutralised the
+    // invoice is EXCLUDED from arm (c) instead and contributes NOTHING: the
+    // wrong number is gone by construction and what is left is a SILENT
+    // OMISSION. That is quieter and still wrong, which is exactly why
+    // `installment_plan_fact_assert` exists. Both states are measured.
+    expect(guardDefinition, 'the refusal definition was never captured, so it cannot be neutralised and restored').not.toBe('');
     const p = ownerPool();
     const AGING = `SELECT bucket_no, txn_minor::text AS txn_minor FROM customer_ar_aging($1, $2, $3::DATE, $4::INTEGER[]) ORDER BY bucket_no`;
     await p.query(`DROP POLICY inventory_internal_read ON installment_plans`);
@@ -924,20 +945,20 @@ describe("§G ROW SECURITY, MEASURED AS A NON-SUPERUSER — and C1's negative co
       expect(inv.rows[0]?.n).toBe('1');
       expect(plans.rows[0]?.n, 'dropping the policy did not actually hide the plan, so this control measures nothing').toBe('0');
 
-      // 2. AND THE READ FAILS CLOSED.
+      // 2. AND THE READ FAILS CLOSED, BY NAME.
       const guarded = await asRole<{ bucket_no: number; txn_minor: string }>('daftar_inventory_internal', {}, AGING, [
         w.shop.businessId,
         customerId,
         asOf,
         BUCKET_DAYS,
       ]);
-      expect(guarded.error ?? '', 'the invisible plan did not raise — the arm is open again').toContain('installment.plan_guard_blind');
+      expect(guarded.error ?? '', 'the invisible plan did not raise — the arm is open again').toContain('installment.plan_fact_unreadable');
+      expect(guarded.rows.length, 'and it returned a row as well as raising').toBe(0);
 
-      // 3. AND WITHOUT THE GUARD IT WOULD HAVE BEEN THE PRE-S7 NUMBER. The
-      //    guard is replaced by a body that always permits — exactly the
-      //    `NOT EXISTS`-only arm — and the answer that comes back is the
-      //    defect: the whole outstanding collapsed onto ONE band.
-      await p.query(`CREATE OR REPLACE FUNCTION installment_plan_visibility_assert()
+      // 3. AND WITH THE REFUSAL NEUTRALISED IT IS AN OMISSION AND NOT A WRONG
+      //    NUMBER. The column has already removed the pre-S7 answer; this is
+      //    what the three counts are for.
+      await p.query(`CREATE OR REPLACE FUNCTION installment_plan_fact_assert(BIGINT, BIGINT, BIGINT)
                      RETURNS BOOLEAN LANGUAGE sql STABLE SET search_path = pg_catalog, public, pg_temp AS 'SELECT true'`);
       try {
         const open = await asRole<{ bucket_no: number; txn_minor: string }>('daftar_inventory_internal', {}, AGING, [
@@ -947,15 +968,13 @@ describe("§G ROW SECURITY, MEASURED AS A NON-SUPERUSER — and C1's negative co
           BUCKET_DAYS,
         ]);
         expect(open.error, `the unguarded read failed for an unrelated reason: ${open.error ?? ''}`).toBeNull();
-        expect(open.rows.length, 'the unguarded arm did not collapse the invoice onto one band').toBe(1);
-        expect(BigInt(open.rows[0]?.txn_minor ?? '0'), 'the unguarded arm did not serve the WHOLE outstanding').toBe(total);
-        expect(open.rows[0]?.bucket_no, 'and it served it in the oldest band, at the invoice due date').toBe(BUCKET_DAYS.length + 1);
+        expect(open.rows.length, 'the unguarded arm served a number for an invoice whose plan it cannot see').toBe(0);
       } finally {
-        await p.query(`DROP FUNCTION installment_plan_visibility_assert()`);
+        await p.query(`DROP FUNCTION installment_plan_fact_assert(BIGINT, BIGINT, BIGINT)`);
         await p.query(guardDefinition);
-        await p.query(`ALTER FUNCTION installment_plan_visibility_assert() OWNER TO daftar_accounting_internal`);
-        await p.query(`REVOKE ALL ON FUNCTION installment_plan_visibility_assert() FROM PUBLIC`);
-        await p.query(`GRANT EXECUTE ON FUNCTION installment_plan_visibility_assert() TO daftar_app, daftar_inventory_internal`);
+        await p.query(`ALTER FUNCTION installment_plan_fact_assert(BIGINT, BIGINT, BIGINT) OWNER TO daftar_accounting_internal`);
+        await p.query(`REVOKE ALL ON FUNCTION installment_plan_fact_assert(BIGINT, BIGINT, BIGINT) FROM PUBLIC`);
+        await p.query(`GRANT EXECUTE ON FUNCTION installment_plan_fact_assert(BIGINT, BIGINT, BIGINT) TO daftar_app, daftar_inventory_internal`);
       }
     } finally {
       await p.query(`CREATE POLICY inventory_internal_read ON installment_plans
@@ -974,36 +993,34 @@ describe("§G ROW SECURITY, MEASURED AS A NON-SUPERUSER — and C1's negative co
     expect(healthy.rows.length, 'the restored read did not split the invoice across bands').toBeGreaterThan(1);
   });
 
-  it('ROUND 6 F2 THE FOURTH PATH: dropping `accounting_validator` is now a REFUSAL BY NAME, not a silent pre-S7 answer', async () => {
-    // THE DEFECT THIS ARM EXISTS FOR, and it was in the repair for C1 rather
-    // than in the code C1 was about. The first guard was `SECURITY DEFINER`
-    // and COUNTED hidden plans under its OWNER's row security — and its owner
-    // reads `installment_plans` through `accounting_validator`. Drop that ONE
-    // policy and the owner saw zero rows, so the count was zero, so it
-    // returned `true`. With the caller-side asymmetry added as well,
-    // `customer_ar_aging` then returned ONE row, the OLDEST band, the whole
-    // authoritative total, WITH NO RAISE.
+  it('ROUND 7 F1 THE READ NO LONGER DEPENDS ON THE WHOLE POLICY SET — one dropped policy that hides NOTHING is no longer a refusal', async () => {
+    // ROUND 6's F2 arm asserted that dropping `accounting_validator ON
+    // installment_plans` ALONE made this read refuse. That was true of the
+    // retired guard, which compared the declared policy NAME SET from
+    // `pg_policy` — and it is DELIBERATELY NO LONGER TRUE. The read does not
+    // consult the catalogue, so a policy whose absence hides no row from THIS
+    // caller is not the read's business: `daftar_inventory_internal` still
+    // sees every plan through `inventory_internal_read`.
     //
-    // The asymmetry was one policy wide and the halves behaved differently:
-    // dropping `inventory_internal_read` raised, and the arm above measured
-    // it; dropping `accounting_validator` was SILENT, and nothing in 126 cases
-    // measured that. This arm is that measurement.
+    // THAT IS THE TRADE `TL-P4-COORD-R38` MAKES, AND IT IS STATED RATHER THAN
+    // DISCOVERED: the whole-policy-set assertion moves to APPLY TIME, in §2b's
+    // `DO $end$` block, where it reads the live catalogue once and cannot be
+    // satisfied by a substring; at READ time the only thing that refuses is a
+    // DISAGREEMENT BETWEEN TWO READINGS OF DATA. A read that refused on a
+    // policy change that hid nothing would be refusing on a proxy, which is
+    // the whole class of defect this direction retires.
     const p = ownerPool();
     const AGING = `SELECT bucket_no, txn_minor::text AS txn_minor FROM customer_ar_aging($1, $2, $3::DATE, $4::INTEGER[]) ORDER BY bucket_no`;
     const args = [w.shop.businessId, customerId, asOf, BUCKET_DAYS];
     await p.query(`DROP POLICY accounting_validator ON installment_plans`);
     try {
-      // ONE fault: the healthy caller's read must ALREADY refuse, because the
-      // premise the no-plan arm rests on can no longer be confirmed. The old
-      // guard passed here.
+      // ONE fault that hides nothing from this caller: the read must ANSWER,
+      // and answer CORRECTLY.
       const oneFault = await asRole<{ bucket_no: number }>('daftar_inventory_internal', {}, AGING, args);
-      expect(oneFault.error ?? '', 'ONE dropped policy and the read still answers — the guard is blind again').toContain('installment.plan_guard_blind');
-      // ...and it names WHICH relation's configuration failed, so an operator
-      // reading the log is told what to restore.
-      expect(oneFault.error ?? '').toContain('installment_plans');
+      expect(oneFault.error, `a policy change that hides nothing made the read refuse: ${oneFault.error ?? ''}`).toBeNull();
+      expect(oneFault.rows.length, 'and the answer is still the schedule, across bands').toBeGreaterThan(1);
 
-      // TWO faults — the challenger's exact reproduction. Previously this
-      // returned the pre-S7 number. It must refuse, and return no row.
+      // TWO faults — now the caller really is blind, and the read REFUSES.
       await p.query(`DROP POLICY inventory_internal_read ON installment_plans`);
       try {
         const plans = await asRole<{ n: string }>('daftar_inventory_internal', {}, COUNT_PLANS);
@@ -1011,7 +1028,7 @@ describe("§G ROW SECURITY, MEASURED AS A NON-SUPERUSER — and C1's negative co
         expect(inv.rows[0]?.n, 'the asymmetry is not actually set up, so this measures nothing').toBe('1');
         expect(plans.rows[0]?.n).toBe('0');
         const twoFaults = await asRole<{ bucket_no: number; txn_minor: string }>('daftar_inventory_internal', {}, AGING, args);
-        expect(twoFaults.error ?? '', "the challenger's two-fault case still answers").toContain('installment.plan_guard_blind');
+        expect(twoFaults.error ?? '', "the challenger's two-fault case still answers").toContain('installment.plan_fact_unreadable');
         expect(twoFaults.rows.length, 'and it returned a row as well as raising').toBe(0);
       } finally {
         await p.query(`CREATE POLICY inventory_internal_read ON installment_plans
@@ -1026,103 +1043,136 @@ describe("§G ROW SECURITY, MEASURED AS A NON-SUPERUSER — and C1's negative co
     expect(back.rows.length).toBeGreaterThan(1);
   });
 
-  it('ROUND 6 F2 EVERY OTHER CONFIRMATION THE ASSERTION MAKES also refuses by name', async () => {
-    // A guard whose only measured failure is one dropped policy is a guard
-    // tested once. Each remaining confirmation is broken in turn and must
-    // refuse — otherwise the check exists and is never evaluated, which is
-    // this estate's first named failure shape.
+  it('ROUND 7 F1 WHAT REFUSES AT READ TIME IS A HIDDEN ROW, AND A WIDENING IS NOT A DEFECT', async () => {
+    // Round 6's «every other confirmation refuses» arm walked four CATALOGUE
+    // faults — row security no longer FORCED, a policy of the right name for
+    // the wrong role, a read expression that no longer matches the one
+    // `public.invoices` carries, an extra policy nobody declared — and
+    // asserted that the guard refused each. Those are gone WITH the guard, and
+    // they are asserted at APPLY TIME by §2b instead.
+    //
+    // So this arm measures the thing that is actually load-bearing now: a
+    // state that HIDES A ROW refuses, and a state that merely WIDENS does not.
+    // The second half is the round-7 challenger's own preserved negative — a
+    // bypassing or over-sighted caller is MORE-sighted, which makes the
+    // comparison of the two readings correct rather than wrong — and a law
+    // that refused a widening would be refusing on a proxy again.
     const p = ownerPool();
-    const ASK = `SELECT installment_plan_visibility_assert() AS ok`;
     const ctx = { tenant: tenantId, business: w.shop.businessId };
-    const cases: readonly { readonly label: string; readonly fault: string; readonly undo: string }[] = [
+    const AGING = `SELECT bucket_no, txn_minor::text AS txn_minor FROM customer_ar_aging($1, $2, $3::DATE, $4::INTEGER[]) ORDER BY bucket_no`;
+    const args = [w.shop.businessId, customerId, asOf, BUCKET_DAYS];
+
+    // NON-VACUITY FIRST: on a healthy database the read ANSWERS, or every
+    // refusal below is a refusal of everything.
+    const ok = await asRole<{ bucket_no: number }>('daftar_app', ctx, AGING, args);
+    expect(ok.error, `the read refuses a healthy database: ${ok.error ?? ''}`).toBeNull();
+    expect(ok.rows.length).toBeGreaterThan(1);
+
+    const hides: readonly { readonly label: string; readonly code: string; readonly fault: string; readonly undo: string }[] = [
+      {
+        label: 'the plan relation hidden from the caller',
+        code: 'installment.plan_fact_unreadable',
+        fault: `DROP POLICY business_isolation_read ON installment_plans;
+                CREATE POLICY business_isolation_read ON installment_plans AS RESTRICTIVE FOR SELECT USING (false)`,
+        undo: `DROP POLICY business_isolation_read ON installment_plans;
+               CREATE POLICY business_isolation_read ON installment_plans AS RESTRICTIVE FOR SELECT
+                 USING (app_bypass() OR current_user IN ('daftar_inventory_internal', 'daftar_accounting_internal')
+                        OR business_id = nullif(app_business(), '')::uuid)`,
+      },
+      {
+        label: 'the SCHEDULE relation hidden while the plan stays visible',
+        code: 'installment.plan_schedule_unreadable',
+        fault: `DROP POLICY business_isolation_read ON installments;
+                CREATE POLICY business_isolation_read ON installments AS RESTRICTIVE FOR SELECT USING (false)`,
+        undo: `DROP POLICY business_isolation_read ON installments;
+               CREATE POLICY business_isolation_read ON installments AS RESTRICTIVE FOR SELECT
+                 USING (app_bypass() OR current_user IN ('daftar_inventory_internal', 'daftar_accounting_internal')
+                        OR business_id = nullif(app_business(), '')::uuid)`,
+      },
+    ];
+    for (const c of hides) {
+      await p.query(c.fault);
+      try {
+        const r = await asRole<{ bucket_no: number }>('daftar_app', ctx, AGING, args);
+        expect(r.error ?? '', `${c.label}: the read did not refuse`).toContain(c.code);
+      } finally {
+        await p.query(c.undo);
+      }
+      const after = await asRole<{ bucket_no: number }>('daftar_app', ctx, AGING, args);
+      expect(after.error, `${c.label}: the undo did not restore the database`).toBeNull();
+      expect(after.rows.length, `${c.label}: the undo restored the policy but not the answer`).toBeGreaterThan(1);
+    }
+
+    // AND THE WIDENINGS, which must NOT refuse.
+    const widenings: readonly { readonly label: string; readonly fault: string; readonly undo: string }[] = [
       {
         label: 'row security no longer FORCED',
         fault: `ALTER TABLE installments NO FORCE ROW LEVEL SECURITY`,
         undo: `ALTER TABLE installments FORCE ROW LEVEL SECURITY`,
       },
       {
-        label: 'a policy of the right NAME for the WRONG role',
-        fault: `DROP POLICY accounting_validator ON installments;
-                CREATE POLICY accounting_validator ON installments FOR SELECT TO daftar_app USING (true)`,
-        undo: `DROP POLICY accounting_validator ON installments;
-               CREATE POLICY accounting_validator ON installments FOR SELECT TO daftar_accounting_internal USING (true)`,
-      },
-      {
-        label: 'the read expression no longer matches the one public.invoices carries',
-        fault: `DROP POLICY tenant_membership ON installments;
-                CREATE POLICY tenant_membership ON installments USING (true) WITH CHECK (true)`,
-        undo: `DROP POLICY tenant_membership ON installments;
-               CREATE POLICY tenant_membership ON installments
-                 USING (app_bypass() OR tenant_id = nullif(app_tenant(), '')::uuid)
-                 WITH CHECK (app_bypass() OR tenant_id = nullif(app_tenant(), '')::uuid)`,
-      },
-      {
-        label: 'an EXTRA policy nobody declared',
-        fault: `CREATE POLICY an_extra_policy ON installments FOR SELECT TO daftar_app USING (true)`,
-        undo: `DROP POLICY an_extra_policy ON installments`,
+        label: 'an EXTRA permissive policy nobody declared',
+        fault: `CREATE POLICY an_extra_policy ON installment_plans FOR SELECT TO daftar_app USING (true)`,
+        undo: `DROP POLICY an_extra_policy ON installment_plans`,
       },
     ];
-    // NON-VACUITY FIRST: on a healthy database it CONFIRMS, or every refusal
-    // below is a refusal of everything.
-    const ok = await asRole<{ ok: boolean }>('daftar_app', ctx, ASK);
-    expect(ok.error, `the assertion refuses a healthy database: ${ok.error ?? ''}`).toBeNull();
-    expect(ok.rows[0]?.ok).toBe(true);
-
-    for (const c of cases) {
+    for (const c of widenings) {
       await p.query(c.fault);
       try {
-        const r = await asRole<{ ok: boolean }>('daftar_app', ctx, ASK);
-        expect(r.error ?? '', `${c.label}: the assertion did not refuse`).toContain('installment.plan_guard_blind');
+        const r = await asRole<{ bucket_no: number }>('daftar_app', ctx, AGING, args);
+        expect(r.error, `${c.label}: a WIDENING made the read refuse, which is refusing on a proxy: ${r.error ?? ''}`).toBeNull();
+        expect(r.rows.length, `${c.label}: the answer changed under a widening`).toBe(ok.rows.length);
       } finally {
         await p.query(c.undo);
       }
-      const after = await asRole<{ ok: boolean }>('daftar_app', ctx, ASK);
-      expect(after.error, `${c.label}: the undo did not restore the database`).toBeNull();
     }
   });
 
-  it('ROUND 6 F1 THE ASSERTION IS NOT AN ORACLE — no arguments, INVOKER, no count, read from the catalogue', async () => {
-    // The DEFINER predecessor was granted to `daftar_app` and took
-    // `(business_id, invoice_id[])`, so on its GRANTED SURFACE — not at its one
-    // call site — it answered `(business, invoice) -> has an active plan` about
-    // rows row security denies that role, with the COUNT in the error. Its own
-    // COMMENT argued it «is asked only about invoices that came out of the
-    // caller's own filtered read»: true of the call site, false of the
-    // function, and the grant is what an attacker holds.
+  it('ROUND 7 F1 THE REFUSAL IS NOT AN ORACLE — it is TOLD three numbers, reads nothing, and is INVOKER', async () => {
+    // Round 6's DEFINER predecessor took `(business_id, invoice_id[])`, so on
+    // its GRANTED SURFACE — not at its one call site — it answered
+    // `(business, invoice) -> has an active plan` about rows row security
+    // denies that role, with the COUNT in the error. Round 6 replaced it with
+    // a zero-argument catalogue reader and pinned `pronargs = 0`.
     //
-    // THE PROPERTY IS NOW IN THE SIGNATURE, so it is asserted from the
-    // catalogue instead of argued in a comment.
-    const meta = await ownerPool().query<{ nargs: number; secdef: boolean; vol: string; src: string }>(
-      `SELECT p.pronargs AS nargs, p.prosecdef AS secdef, p.provolatile::text AS vol, p.prosrc AS src
-         FROM pg_proc p WHERE p.oid = 'installment_plan_visibility_assert()'::regprocedure`,
+    // THIS ONE TAKES THREE ARGUMENTS AND IS STILL NOT AN ORACLE, and the
+    // reason is structural rather than rhetorical: the arguments are three
+    // `bigint`s, which NAME NO ROW, and the body reads NOTHING AT ALL — no
+    // relation and no catalogue — so a caller learns only what it already
+    // supplied. `pronargs = 0` is replaced by a pin on the argument TYPES.
+    const meta = await ownerPool().query<{ argtypes: string; nargs: number; secdef: boolean; vol: string; src: string }>(
+      `SELECT p.proargtypes::text AS argtypes, p.pronargs AS nargs, p.prosecdef AS secdef, p.provolatile::text AS vol, p.prosrc AS src
+         FROM pg_proc p WHERE p.oid = 'installment_plan_fact_assert(bigint,bigint,bigint)'::regprocedure`,
     );
-    expect(meta.rows[0]?.nargs, 'it takes arguments, so it can be asked about rows the caller may not see').toBe(0);
+    // oid 20 is `bigint`. Three numbers name no row, no business and no tenant.
+    expect(meta.rows[0]?.argtypes, 'it can be asked about something other than three numbers').toBe('20 20 20');
+    expect(meta.rows[0]?.nargs).toBe(3);
     expect(meta.rows[0]?.secdef, "it is a DEFINER, so it lends its owner's visibility to its callers").toBe(false);
     expect(meta.rows[0]?.vol).toBe('s');
     const src = meta.rows[0]?.src ?? '';
-    // It reads the CATALOGUE and not the tenant relations, which is what makes
-    // "no arguments" sufficient and not merely necessary.
-    expect(src).toContain('pg_catalog.pg_policy');
-    expect(src, 'it still reads a tenant relation').not.toMatch(/FROM\s+public\.installment/);
-    // AND NO ERROR IT RAISES CARRIES A ROW COUNT. The old message carried the
-    // number of hidden plans, so an N-element probe yielded N.
-    expect(src).not.toContain('plan_invisible');
-    expect(src).not.toContain('v_hidden');
+    // IT READS NOTHING. That is what makes "three bigints" sufficient and not
+    // merely necessary, and it is the difference between this and every
+    // previous version.
+    expect(src, 'it reads a tenant relation').not.toMatch(/FROM\s+public\./);
+    expect(src, 'it reads the policy catalogue, which is the retired mechanism').not.toContain('pg_policy');
+    expect(src, 'it asks about the caller rather than being told').not.toContain('has_table_privilege');
+    expect(src).not.toContain('current_user');
+    expect(src).not.toContain('SELECT');
 
-    // MEASURED AS THE APPLICATION ROLE: it answers the SAME single boolean with
-    // and without app context and there is no argument to vary, so a probe
-    // learns nothing. The old one raised for a real pair and returned true for
-    // a random id — that difference was the oracle.
-    const withCtx = await asRole<{ ok: boolean }>(
-      'daftar_app',
-      { tenant: tenantId, business: w.shop.businessId },
-      `SELECT installment_plan_visibility_assert() AS ok`,
-    );
-    const without = await asRole<{ ok: boolean }>('daftar_app', {}, `SELECT installment_plan_visibility_assert() AS ok`);
+    // MEASURED AS THE APPLICATION ROLE: the same three numbers give the same
+    // answer with and without app context, because there is nothing in it that
+    // depends on the session at all.
+    const ASK = `SELECT installment_plan_fact_assert(0::BIGINT, 0::BIGINT, 0::BIGINT) AS ok`;
+    const withCtx = await asRole<{ ok: boolean }>('daftar_app', { tenant: tenantId, business: w.shop.businessId }, ASK);
+    const without = await asRole<{ ok: boolean }>('daftar_app', {}, ASK);
     expect(withCtx.error).toBeNull();
     expect(without.error, 'it behaves differently with and without app context, which is itself information').toBeNull();
     expect(withCtx.rows[0]?.ok).toBe(true);
     expect(without.rows[0]?.ok).toBe(true);
+    // ...and it refuses on a non-zero count it was TOLD, which is the only
+    // input it has.
+    const told = await asRole<{ ok: boolean }>('daftar_app', {}, `SELECT installment_plan_fact_assert(1::BIGINT, 0::BIGINT, 0::BIGINT) AS ok`);
+    expect(told.error ?? '', 'it does not refuse the count it is told').toContain('installment.plan_fact_unreadable');
   });
 });
 
@@ -1174,7 +1224,15 @@ describe('§H "ONCE PER CALL" — the claim that reached TL-P4-COORD-R31 out of 
       expect(sale.status, `credit sale ${String(n)} for the three-invoice customer: ${JSON.stringify(sale.body)}`).toBeLessThan(300);
     }
     guardOid =
-      (await ownerPool().query<{ oid: string }>(`SELECT 'public.installment_plan_visibility_assert()'::regprocedure::oid::text AS oid`)).rows[0]?.oid ?? '';
+      (
+        await ownerPool().query<{ oid: string }>(
+          // ROUND 7 F1: the routine this arm counts is the read-time refusal of
+          // `TL-P4-COORD-R38` direction (d). Only the SUBJECT moves here —
+          // round-6 F3's reasoning about WHY it is once per call is a LATER
+          // round's and is deliberately left exactly as it was written.
+          `SELECT 'public.installment_plan_fact_assert(bigint,bigint,bigint)'::regprocedure::oid::text AS oid`,
+        )
+      ).rows[0]?.oid ?? '';
     expect(guardOid, 'the guard has no oid, so there is nothing to count').not.toBe('');
   }, 300_000);
 

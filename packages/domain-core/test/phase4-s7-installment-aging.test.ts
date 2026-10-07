@@ -955,7 +955,10 @@ describe('PROOF 3 [proof_3] — no amount is counted twice', () => {
     // And the SQL agrees by construction: its plan-less arm keys off the PLAN
     // row's existence, not the instalment rows'.
     const sketch = sqlSchemaOnly(projectionSketch(SPEC));
-    expect(sketch).toMatch(/WHERE NOT EXISTS \(SELECT 1 FROM active_plan ap WHERE ap\.invoice_id = oi\.invoice_id\)/);
+    // ROUND 7 F1: arm (c) is no longer keyed on what the caller can SEE in
+    // `installment_plans`. It is keyed on the invoice's own column, so the
+    // partition of the open invoices is now between flagged and unflagged.
+    expect(sketch).toMatch(/FROM open_invoice oi\n\s*WHERE NOT oi\.flagged/);
     expect(sketch).toMatch(/FROM public\.installment_plans p/);
     // The state is ALSO made unreachable at commit, so this is closed from
     // both ends rather than only from the model's.
@@ -1747,7 +1750,7 @@ describe('PROOF 8 [proof_8] — the clock guard, widened and red-capable (p_as_o
     // any guard. It is now REAL function DDL rather than a commented sketch
     // (challenger C-2), so the guard reads the SQL that will be transcribed.
     expect(sketch).toMatch(/CREATE OR REPLACE FUNCTION customer_ar_aging/);
-    expect(sketch).toMatch(/WITH open_invoice AS \(/);
+    expect(sketch).toMatch(/WITH invoice_fact AS \(/);
     expect(sketch).toMatch(/public\.invoice_outstanding\(/);
     expect(sketch).toMatch(/p_as_of/);
     expect(sketch.split('\n').length).toBeGreaterThan(40);
@@ -2080,8 +2083,17 @@ describe('PROOF 9 [proof_9] — a broken sum law is SIGNALLED in both directions
     // DELETING a row, so a verifier that fired only on INSERT and UPDATE would
     // make one of the three directions unenforceable whatever the prose says.
     const ddl = sqlSchemaOnly(SPEC);
-    const triggers = [...ddl.matchAll(/CREATE CONSTRAINT TRIGGER\s+(\w+)\s+([\s\S]*?)EXECUTE FUNCTION\s+(\w+)/gi)];
+    const allConstraintTriggers = [...ddl.matchAll(/CREATE CONSTRAINT TRIGGER\s+(\w+)\s+([\s\S]*?)EXECUTE FUNCTION\s+(\w+)/gi)];
+    // ROUND 7 F1 added two MORE deferred constraint triggers, for the invoice-
+    // borne fact (specification §3a). THIS law is about the SCHEDULE verifier's
+    // pair, so it selects them by the function they execute rather than by
+    // counting every constraint trigger in the file — which would otherwise
+    // turn a later slice's trigger into a failure of the sum law.
+    const triggers = allConstraintTriggers.filter((t) => (t[3] ?? '') === 'installment_schedule_verify');
     expect(triggers.length).toBe(2);
+    // ...and the fact's own pair is there too, so this selection is a filter
+    // and not a way of not looking.
+    expect(allConstraintTriggers.filter((t) => (t[3] ?? '') === 'installment_plan_fact_verify')).toHaveLength(2);
     const onRelation = new Map(triggers.map((t) => [/\bON\s+(\w+)/i.exec(t[2] ?? '')?.[1] ?? '?', { events: t[2] ?? '', fn: t[3] ?? '' }]));
     // Both relations of the schedule, both judged by the ONE verifier.
     expect([...onRelation.keys()].sort()).toEqual(['installment_plans', 'installments']);
@@ -2713,37 +2725,90 @@ describe('ROUND-5 CHALLENGE C1 / H4 / H6 — the policy set, the fail-closed arm
     }
   });
 
-  it('C1.a THE NO-PLAN ARM FAILS CLOSED — the guard asserts its OWN READ REACH and is not an oracle (round 6 F2, F1)', () => {
-    // Under row security «absent» and «invisible» are one answer, and that is
-    // true of ANY SPELLING of the query — so a guard that COUNTS hidden plans
-    // carries the defect one level down, whosever visibility it counts under
-    // (round 6 F2: drop one policy and the owner sees zero rows too). The only
-    // honest shape short of an explicit audited bypass is to ASSERT the
-    // configuration the arm's soundness rests on and REFUSE when it cannot be
-    // confirmed. A refusal needs its own error code, and it carries no count
-    // (round 6 F1: a count is a disclosure oracle on a granted surface).
+  it('C1.a THE NO-PLAN ARM IS KEYED ON THE INVOICE ROW, and no routine certifies its own read reach (round 7 F1)', () => {
+    // THIRD ROUND OF ONE DEFECT. `NOT EXISTS` through the caller's row
+    // security; then a `SECURITY DEFINER` count whose own blindness read as
+    // zero; then a `pg_policy` assertion whose checked properties were not the
+    // properties that decide whether a role can see a row — satisfied by
+    // `tenant_membership` re-created with every token it looked for plus one
+    // extra conjunct, which excluded every row.
+    //
+    // `TL-P4-COORD-R38`: A READER CANNOT CERTIFY ITS OWN VISIBILITY. So the
+    // fact lives on the invoice row (specification §2c) and the arm reads it
+    // from there. The DATABASE half of this law — the three attacks
+    // reproduced and then closed on one fixture — is
+    // `tests/integration/phase4-s7-installment-fact-db.test.ts` §E. This is
+    // its text-level twin, and the text is the subject that can be edited
+    // without a database.
     const sketch = projectionSketch(SPEC);
-    expect(sketch).toContain('installment_plan_visibility_assert()');
     const code = sqlCodeOnly(SPEC);
-    expect(code).toMatch(/CREATE OR REPLACE FUNCTION installment_plan_visibility_assert\(\)\s+RETURNS BOOLEAN\s+LANGUAGE plpgsql STABLE SECURITY INVOKER/);
-    expect(code).toContain('installment.plan_guard_blind');
-    // F2: the OLD shape must be gone, or the repair is an addition rather than
-    // a replacement and the defective routine is still granted and callable.
+
+    // THE RETIRED GUARD IS DELETED, not weakened and not kept beside the
+    // column: a retired guard left in place is a second answer to a question
+    // with one answer, and the next author would believe the wrong one.
+    expect(code).not.toMatch(/CREATE OR REPLACE FUNCTION installment_plan_visibility_assert/);
+    expect(code).not.toContain('installment.plan_guard_blind');
     expect(code).not.toContain('installment_plan_absence_guard');
     expect(code).not.toContain('installment.plan_invisible');
-    // F1: NOTHING TO ASK IT ABOUT. A zero-argument INVOKER reading only
-    // pg_catalog cannot answer "does invoice X have a plan" for anybody, and
-    // that is a property of the SIGNATURE rather than of a comment.
-    expect(code).not.toMatch(/installment_plan_visibility_assert\s*\(\s*p_/);
-    // ...and no error message quotes a row count.
-    for (const m of code.matchAll(/RAISE EXCEPTION 'installment\.plan_guard_blind[^']*(?:''[^']*)*'/g)) {
-      expect(m[0]).not.toMatch(/\b(?:count|rows|hidden|number)\b/i);
-    }
-    // F2 again: the guard must actually CONFIRM its reach — the two halves of
-    // "absent and invisible are one answer" are the policies and the caller's
-    // own SELECT, and a guard that checked neither would satisfy every law above.
-    expect(code).toContain('has_table_privilege(');
-    expect(code).toMatch(/relrowsecurity[\s\S]{0,200}relforcerowsecurity/);
+    // AND NOTHING READS `pg_policy` AT READ TIME ANY MORE. The whole family of
+    // repairs this closes is "inspect the policy catalogue from inside the
+    // reader", so its absence from the read path is the law.
+    // ...and the absence is judged over CODE. `projectionSketch` strips only a
+    // comment that starts at column 0, so the body's own indented `--`
+    // sentences survive — and this law's first version went red on its own
+    // explanation of why there is no `pg_policy` read. The subject of a code
+    // law is code: the fifth occurrence of this file's oldest lesson, now in a
+    // law written to retire a guard.
+    const sketchCode = sketch
+      .split('\n')
+      .map((l) => l.replace(/^\s*--.*$/, ''))
+      .join('\n');
+    expect(sketchCode).toContain('customer_ar_aging');
+    expect(sketchCode).not.toContain('pg_policy');
+    expect(sketchCode).not.toContain('polroles');
+    expect(sketchCode).not.toContain('has_table_privilege(');
+
+    // THE ARM IS KEYED ON THE COLUMN, and the `NOT EXISTS` it replaced is gone
+    // from the arm. Keeping both would reintroduce the relation whose
+    // invisibility is the defect.
+    expect(sketchCode).toContain('WHERE NOT oi.flagged');
+    expect(sketchCode).toContain('x.has_active_installment_plan AS flagged');
+    // ...over CODE again, and this is the SECOND time inside this one law: the
+    // `no_plan` CTE's own comment QUOTES the `NOT EXISTS` it replaced, because
+    // recording what was removed is how the next author learns not to put it
+    // back. A law that read that sentence as the thing itself would force the
+    // explanation out of the file.
+    expect(sketchCode).not.toMatch(/NOT EXISTS \(SELECT 1 FROM active_plan/);
+
+    // THE THREE REFUSALS THAT REMAIN, each with its own name — a law that
+    // asserts "it refused" rather than "it refused THIS" is satisfied by a
+    // routine that refuses everything.
+    expect(code).toContain('installment.plan_fact_unreadable');
+    expect(code).toContain('installment.plan_fact_unflagged');
+    expect(code).toContain('installment.plan_schedule_unreadable');
+    expect(sketch).toContain('installment_plan_fact_assert(');
+
+    // AND THE REFUSAL IS TOLD THREE NUMBERS, never asked about a row. Round 6
+    // pinned `pronargs = 0` for that reason; this pins the TYPES instead,
+    // because three `bigint`s name no row, no business and no tenant.
+    expect(code).toMatch(
+      /CREATE OR REPLACE FUNCTION installment_plan_fact_assert\(p_unreadable_plan BIGINT,\s*p_unflagged_plan BIGINT,\s*p_unreadable_schedule BIGINT\)\s*RETURNS BOOLEAN\s*LANGUAGE plpgsql STABLE SECURITY INVOKER/,
+    );
+    expect(code).not.toMatch(/installment_plan_fact_assert\s*\([^)]*UUID/);
+    expect(code).toContain("p.proargtypes = ARRAY['bigint'::regtype, 'bigint'::regtype, 'bigint'::regtype]::oidvector");
+
+    // THE FACT IS MAINTAINED AND VERIFIED BY THIS SLICE, on both sides, and
+    // the verifier is DEFERRED while the writer is NOT.
+    expect(code).toMatch(/CREATE TRIGGER installment_plans_fact_sync\s+AFTER INSERT OR UPDATE OR DELETE ON installment_plans\s+FOR EACH ROW/);
+    expect(code).toMatch(/CREATE CONSTRAINT TRIGGER installment_plans_fact_agrees[\s\S]{0,200}DEFERRABLE INITIALLY DEFERRED/);
+    expect(code).toMatch(/CREATE CONSTRAINT TRIGGER invoices_installment_fact_agrees\s+AFTER INSERT OR UPDATE OF has_active_installment_plan ON invoices/);
+    expect(code).toContain('installment.plan_fact_desynchronised');
+    expect(code).toContain('installment.plan_fact_unwritable');
+
+    // THE WRITE AUTHORITY IS ONE COLUMN AND ONE PRINCIPAL.
+    expect(code).toContain('GRANT UPDATE (has_active_installment_plan) ON invoices TO daftar_accounting_internal;');
+    expect(code).not.toMatch(/GRANT UPDATE ON invoices/);
+
     // ...and the projection ITSELF stays INVOKER and STABLE: R-P4-07 makes a
     // reader run as its caller, and making the reader a DEFINER would have
     // been the other, worse repair.
@@ -2876,15 +2941,23 @@ describe('ROUND-5 CHALLENGE C1 / H4 / H6 — the policy set, the fail-closed arm
     // permanent widening of a role's authority over the schema.
     expect(transfers.length, 'no owner transfer in the specification at all').toBeGreaterThan(0);
     expect(lends.length, 'the lends and the take-backs are not balanced').toBe(takebacks.length);
-    expect(lends.length).toBe(transfers.length);
-    // ...and each transfer sits INSIDE its own bracket, and AFTER that
-    // function's REVOKE and COMMENT.
+    // ROUND 7 F1: ONE bracket may now hold SEVERAL transfers — §3a lends once
+    // and hands over both fact routines — so the k-th transfer is no longer
+    // the k-th bracket. The law's content is unchanged and is asserted
+    // directly instead of through that coincidence: every transfer is inside
+    // an OPEN bracket (the nearest lend before it is later than the nearest
+    // take-back before it) and that bracket is closed afterwards.
+    expect(lends.length, 'a bracket holds no transfer at all').toBeLessThanOrEqual(transfers.length);
+    const lendIdx = lends.map((m) => m.index ?? -1);
+    const backIdx = takebacks.map((m) => m.index ?? -1);
     for (let k = 0; k < transfers.length; k += 1) {
       const t = transfers[k]?.index ?? -1;
-      const open = lends[k]?.index ?? -1;
-      const close = takebacks[k]?.index ?? -1;
+      const open = Math.max(...lendIdx.filter((x) => x < t), -1);
+      const closedBefore = Math.max(...backIdx.filter((x) => x < t), -1);
+      const close = Math.min(...backIdx.filter((x) => x > t), Number.MAX_SAFE_INTEGER);
       const name = transfers[k]?.[1] ?? '?';
       expect(open, `${name}'s transfer is not inside a lend`).toBeLessThan(t);
+      expect(closedBefore, `${name}'s transfer sits outside its bracket — the lend before it was already taken back`).toBeLessThan(open);
       expect(close, `${name}'s lend is never taken back after the transfer`).toBeGreaterThan(t);
       const revoke = code.indexOf(`REVOKE ALL ON FUNCTION ${name}(`);
       const comment = code.indexOf(`COMMENT ON FUNCTION ${name}(`);
