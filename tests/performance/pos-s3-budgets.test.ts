@@ -10,10 +10,12 @@
  *   GATES — deterministic properties of the QUERY. The index reach of every
  *   one of the five prefix arms, the absence of a sequential scan on the
  *   catalogue relations, the absence of `OFFSET`, a statement count
- *   independent of the row count, and the host-independent RATIO
+ *   independent of the row count, and the host-SPEED-NORMALISED RATIO
  *   `p95(50 rows) ≤ 1.6 × p95(10 rows)`. These fail on a bad query on any
  *   host, fast or slow, and they are the cases that make this file RED-capable
- *   from its first commit (P4-AL-72).
+ *   from its first commit (P4-AL-72). The ratio divides out how FAST the host
+ *   is; it does NOT divide out how NOISY the host is, and it is not
+ *   host-independent. See the ratio GATE below for the asymmetry that leaves.
  *
  *   A MEASUREMENT — the millisecond figure. P4-A's ceiling (p95 ≤ 150 ms) is
  *   asserted, with the budget written as a constant beside where it came from
@@ -110,7 +112,11 @@ import { Database, type Scope } from '../../apps/api/src/infra/database';
 const BUDGET = { A_POS_SEARCH_P95: 150, B_POS_CART_P95: 60 } as const;
 
 /**
- * P4-AL-72's host-independent ratio for this read.
+ * P4-AL-72's host-SPEED-NORMALISED ratio for this read — NOT, as this comment
+ * said until now, a host-INDEPENDENT one. Dividing two figures taken on the
+ * same host cancels the host's SPEED. It does not cancel the host's NOISE, and
+ * the assertion is one-sided, so a stall in the TEN-row arm raises the
+ * DENOMINATOR and makes the ratio pass. See the ratio GATE below.
  *
  * The keyset reads get `p95(page 20) ≤ 1.2 × p95(page 1)`; this read has no
  * page two, so the comparable property is how its cost grows with the PAGE
@@ -119,7 +125,8 @@ const BUDGET = { A_POS_SEARCH_P95: 150, B_POS_CART_P95: 60 } as const;
  * five times the time — if it does, the arms are not early-terminating and
  * something is scanning. `1.6` is the slack a bounded sort of 255 rows instead
  * of 55 may take; it is a property of the query, measured on the same host in
- * the same run, so it carries no millisecond.
+ * the same run, so it carries no millisecond. It does carry that host's noise,
+ * which is a different and unclosed claim.
  */
 const RATIO_50_OVER_10 = 1.6;
 
@@ -686,7 +693,28 @@ describe(`P4-A — the POS type-ahead (scale ${SCALE}, ${SCALE === 1 ? 'acceptan
     expect(one.length, 'the facts statement and the search statement, and nothing per row').toBe(2);
   });
 
-  /** GATE. Host-independent: the shape of the growth, measured on this host in this run. */
+  /**
+   * GATE. Host-SPEED-normalised: the shape of the growth, measured on this host
+   * in this run. NOT host-noise-independent, and the gap is recorded here
+   * rather than left for a reader to discover from a green run:
+   *
+   *   - the assertion is ONE-SIDED (`fifty.p95 / ten.p95 <= 1.6`), so anything
+   *     that raises `ten.p95` buys slack. At `RUNS = 20` with this file's
+   *     percentile (`:423`, `ceil(q·n) - 1`), `p95` is index 18 — the
+   *     SECOND-WORST of twenty — so ONE stalled iteration in the ten-row arm
+   *     can decide the denominator, and the case passes while the product is
+   *     slower. Nothing in the output says it happened;
+   *   - the two arms are also TEMPORALLY ASYMMETRIC: the ten-row arm is
+   *     measured to completion and only then the fifty-row arm, so any drift in
+   *     host conditions across the case (cold page cache early, background load
+   *     early) biases the denominator UP systematically rather than randomly.
+   *
+   * The owner of budget P4-A holds the fix. Interleaving the two arms closes
+   * the second bullet and NOT the first; closing the first needs the ratio
+   * taken PAIRWISE over back-to-back samples instead of as a ratio of two
+   * independently computed p95s. Neither is done here, and neither the 1.6, the
+   * 150 ms, `RUNS`, `WARMUP` nor the percentile is to be moved to make it pass.
+   */
   it('GATE: fifty rows cost no more than 1.6× ten rows — the arms terminate early', async () => {
     const ten = await measure('POS search, 10 rows', null, searchPath('pos-', 10));
     const fifty = await measure('POS search, 50 rows', null, searchPath('pos-', 50));
