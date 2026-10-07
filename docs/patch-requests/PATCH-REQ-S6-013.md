@@ -125,9 +125,17 @@ When the named tax refusal is registered, **assert that something REACHES it.**
 
 The precedent is live and in a neighbouring module. `customer.aging_buckets_invalid` is declared
 in a status registry at **`apps/api/src/modules/selling/selling-errors.ts:67`** and is **thrown
-nowhere in the tree** — the identifier occurs exactly twice in the whole repository, both in that
-one file, the second being the docstring that now says it is *not* the code in question. A
-docstring had cited it as the check that justified a 500.
+nowhere** — a declared code nothing raises. A docstring had cited it as the check that justified
+a 500.
+
+**Measured against the COMMITTED candidate `54a851c`, not against a working tree**, because the
+distinction turned out to matter here: at `54a851c` the identifier occurs **exactly once** in the
+whole repository — the declaration alone, with nothing throwing it and no docstring acknowledging
+the gap. My first count said "twice" and was read off the **dirty** working tree of the main
+checkout, where a neighbouring agent's **uncommitted** correction adds a second occurrence at
+`:91` saying it is *not* the code in question. That fix is in flight and **is not part of this
+candidate**. Corrected rather than left standing, because a citation taken from a tree that is
+not the candidate is the same class of error as the rest of this request.
 
 That is the mirror image of this request's own finding, and both are the same mistake in opposite
 directions:
