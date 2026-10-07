@@ -1122,15 +1122,22 @@ export const P4_S6_REQUIRED_WIRING: readonly { readonly patchRequest: string; re
     file: 'the existing S4 suites under tests/ that S6 may not edit',
     edit: 'three test hooks, named in the contract pack §13.3, each inside a suite S4 owns',
   }),
-  // OD-03 is CLOSED: tax is a structural zero and a non-zero tax must REFUSE.
-  // This slice's shapes carry no tax field, which settles the COMPILE-time
-  // question and not the runtime one — a JSON body carrying a tax field meets a
-  // non-strict validator and is silently stripped, which is the accept-then-
-  // ignore the ruling forbids, reached THROUGH the absence rather than in spite
-  // of it. The refusal is a validator's act, not a type's silence.
+  // `[[daftar-a-refusal-is-a-validators-act-not-a-types-silence]]`, a law this
+  // request's reasoning was adopted as. OD-03 is CLOSED: tax is a structural
+  // zero and a non-zero tax must REFUSE. This slice's shapes carry no tax
+  // field, which settles the COMPILE-time question and settles NOTHING at
+  // runtime — a JSON body carrying one meets a non-strict validator and is
+  // silently stripped, which is the accept-then-ignore the closure forbids,
+  // reached THROUGH the absence rather than through any line of code.
+  //
+  // RULED PROSPECTIVE, NOT A LIVE DEFECT: there is no customer-reversal route,
+  // no `returns` module, and no non-strict request schema in the live tree, so
+  // there is no reachable path today and none of this counts against the
+  // candidate. The row is owed by the slice that first ships the route, and the
+  // law is stated over the LIVE SET rather than per route.
   Object.freeze({
     patchRequest: 'PATCH-REQ-S6-013',
-    file: 'the request validator that mounts the S6 shapes (apps/api/src/modules/receivables, schema layer)',
-    edit: 'reject UNKNOWN KEYS on every S6 request schema so a body carrying a tax field is REFUSED by name rather than stripped, with a red proof beside a tax-free counterpart that must be accepted',
+    file: 'the slice that first ships a customer-reversal / credit-note route, in the request schema layer under apps/api/src',
+    edit: 'state over the LIVE SET that every Phase 4 request body schema refuses unknown keys, derived from the tree and not from a hand-kept list, with the red proof that removing the refusal from ANY ONE member reddens — plus a NAMED domain refusal for the tax case, which is the message rather than the floor, proved REACHABLE from a request and not merely declared',
   }),
 ]);

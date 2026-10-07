@@ -25,10 +25,23 @@
  *   `"taxMinor": "500"` meets a non-strict validator, passes, and is silently
  *   dropped — which is exactly the accept-then-ignore the ruling forbids, and
  *   it would be reached through the absence rather than in spite of it. The
- *   refusal is therefore a RUNTIME obligation on the validator that mounts
- *   these shapes: the schema must reject unknown keys, and it is OWED, not
- *   done. `PATCH-REQ-S6-013`, and `P4_S6_REQUIRED_WIRING` carries the row.
- *   Until it lands, this slice's tax position is SPECIFIED and NOT ENFORCED.
+ *   refusal is therefore a RUNTIME obligation on the validator, not a property
+ *   of these types: **a refusal is a validator's act, not a type's silence**
+ *   (a project law as of 2026-10-07).
+ *
+ *   `PATCH-REQ-S6-013` carries it, and `P4_S6_REQUIRED_WIRING` the row. Two
+ *   things about its status, both ruled: it is owed in the STRONG form — over
+ *   the LIVE SET, every Phase 4 request body schema refusing unknown keys, with
+ *   a red proof that removing the refusal from ANY ONE of them reddens, plus a
+ *   NAMED domain refusal for tax because bare "unrecognised key" is a poor
+ *   merchant outcome (the two are floor and message, not alternatives) — and it
+ *   is PROSPECTIVE rather than a live defect, because no route here is mounted
+ *   and the live tree shows no non-strict request schema. It is therefore
+ *   BLOCKED on the slice that first ships the route and counts against this
+ *   candidate not at all.
+ *
+ *   Until then this slice's tax position is SPECIFIED and NOT ENFORCED, and is
+ *   counted as a proof nowhere — not as "specified and therefore safe".
  *
  * ## No request in this file carries an amount
  *

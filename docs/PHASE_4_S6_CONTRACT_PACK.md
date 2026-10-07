@@ -763,15 +763,28 @@ All three are `tests/**` and belong to S4's suites, so they are **patch requests
 
 **Then, in order:**
 
-5. Patch requests `-001`, `-002`, `-003`, `-006`, `-009`, `-010`, `-011`, `-012`, `-013`
-   applied. **`-013` is new in round 6 and corrects a defect in this slice's own reasoning:**
-   OD-03 is **CLOSED** (the wire contract said "OPEN" and has been fixed), tax is a structural
-   zero, and a non-zero tax must **REFUSE**. The shapes carry no tax field, which settles the
-   COMPILE-time question and settles nothing at runtime — a JSON body carrying a tax field
-   meets a non-strict validator and is silently stripped, which is the **accept-then-ignore**
-   the ruling forbids, reached THROUGH the absence rather than in spite of it. A refusal is a
-   validator's act, not a type's silence. **S6's tax position is therefore SPECIFIED AND NOT
-   ENFORCED**, and is not counted as a proof anywhere.
+5. Patch requests `-001`, `-002`, `-003`, `-006`, `-009`, `-010`, `-011`, `-012` applied.
+
+   **`-013` is NOT in that list, and that is a ruling.** It is new in round 6 and corrects a
+   defect in this slice's own reasoning: OD-03 is **CLOSED** (the wire contract said "OPEN" and
+   has been fixed), tax is a structural zero, and a non-zero tax must **REFUSE**. The shapes
+   carry no tax field, which settles the COMPILE-time question and settles nothing at runtime —
+   a JSON body carrying one meets a non-strict validator and is silently stripped, which is the
+   **accept-then-ignore** the closure forbids, reached THROUGH the absence rather than through
+   any line of code. **A refusal is a validator's act, not a type's silence**, now a project
+   law.
+
+   **Ruled PROSPECTIVE and NOT a live defect** (coordinator, 2026-10-07, re-verified by grep
+   against `54a851c`): no customer-reversal or credit-note route exists, there is no
+   `apps/api/src/modules/returns/`, `packages/shared-contracts/src/customer-reversal.ts` exists
+   only in the S6 worktree, and all twelve `*.schemas.ts` under `apps/api/src` show
+   `.strict()` occurrences ≥ `.object(` occurrences. **No reachable path today**, so it is
+   `BLOCKED` on the slice that first ships the route and **counts against this candidate not at
+   all.** It is also **not an OD-03 question** — enforcement of a closed policy is the
+   coordinator's to rule, and it is ruled.
+
+   **S6's tax position is SPECIFIED AND NOT ENFORCED**, and is counted as a proof nowhere — not
+   as "specified and therefore safe", which is the error the request exists to name.
 6. The S6 migration written by the migration owner to
    `docs/PHASE_4_S6_DDL_SPECIFICATION.md`, with
    `docs/PHASE_4_S6_LEVEL_UNIQUENESS.md` §6's removal order and **a red proof per replaced
