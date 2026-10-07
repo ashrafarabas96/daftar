@@ -12,3 +12,6 @@ export * from './customer';
 export * from './invoice';
 // Phase 4 (P4-S2): the sale domain types and their pure rules.
 export * from './sale';
+// Phase 4 (P4-S5, level A): the returns domain — credit notes, refunds and the
+// structural half of TL-P4-S5-R1. No schema, no migration, no second truth.
+export * from './returns';

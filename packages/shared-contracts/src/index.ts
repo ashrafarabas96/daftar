@@ -811,3 +811,6 @@ export interface AccountingBalanceListDto {
 export * from './sales';
 // Phase 4 (P4-S3): the POS read contract (the product type-ahead).
 export * from './pos';
+// Phase 4 (P4-S5, level B): the credit-note and refund contract. A refund names
+// no invoice and no payment, and there is no stored consumption total.
+export * from './returns';
