@@ -189,7 +189,7 @@ async function withMutatedMember(member: string): Promise<{ readonly settlement:
   vi.resetModules();
   const domain: Domain = await import('@daftar/domain-core');
   const settlement: Settlement = await import('../../apps/api/src/modules/returns/returns-settlement');
-  return { settlement, observed: (domain.S5_ACCOUNT as Record<string, unknown>)[member] };
+  return { settlement, observed: (domain.S5_ACCOUNT as unknown as Record<string, unknown>)[member] };
 }
 
 describe('P4-S5 §13 — every planner in the LIVE SET follows the canonical account-id source, under mutation', () => {
@@ -225,8 +225,8 @@ describe('P4-S5 §13 — every planner in the LIVE SET follows the canonical acc
     }
     // NO MISSING ACCOUNT: every account the four lawful plans name is a member
     // of the canonical table — nothing is conjured outside it.
-    const canonical = new Set(Object.values(domain.S5_ACCOUNT));
-    for (const a of named) expect(canonical.has(a as never), `${a} is named by a live plan but is not in the canonical account-id source`).toBe(true);
+    const canonical: ReadonlySet<string> = new Set<string>(Object.values(domain.S5_ACCOUNT));
+    for (const a of named) expect(canonical.has(a), `${a} is named by a live plan but is not in the canonical account-id source`).toBe(true);
     // And the four lawful plans between them reach most of the table, which is
     // the premise the matrix's dead-member claim is measured against: a member
     // no lawful plan can reach could not be moved by any mutation either.
@@ -410,7 +410,7 @@ describe('P4-S5 §14 — no duplicate authority, no second mapping table, no dea
     expect(new Set(ids).size).toBe(ids.length);
     // The two closed entry-account lists are DERIVED, not restated: every
     // member of each is a member of the canonical table.
-    const canonical = new Set(ids);
+    const canonical: ReadonlySet<string> = new Set<string>(ids);
     for (const a of domain.REFUND_ENTRY_ACCOUNTS) expect(canonical.has(a), `${a} is in REFUND_ENTRY_ACCOUNTS but not in the canonical table`).toBe(true);
     for (const a of domain.CREDIT_NOTE_ENTRY_ACCOUNTS) expect(canonical.has(a), `${a} is in CREDIT_NOTE_ENTRY_ACCOUNTS but not in the canonical table`).toBe(true);
     // And the ROLE authority's answers are members too, for both kinds — the
