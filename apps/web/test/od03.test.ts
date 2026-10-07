@@ -248,8 +248,7 @@ describe('T-12 — OD-03: no tax element anywhere in S7', () => {
   /** The debt slice's own merchant namespaces, named in full. */
   const DEBT_SLICE_PREFIXES = ['installments.', 'debts.'] as const;
   const DEBT_SLICE_KEYS = ['nav.installments', 'nav.debts'] as const;
-  const debtSliceKey = (key: string): boolean =>
-    DEBT_SLICE_KEYS.some((k) => key === k) || DEBT_SLICE_PREFIXES.some((prefix) => key.startsWith(prefix));
+  const debtSliceKey = (key: string): boolean => DEBT_SLICE_KEYS.some((k) => key === k) || DEBT_SLICE_PREFIXES.some((prefix) => key.startsWith(prefix));
 
   /** The one view directory the debt slice owns. Named in full, not matched by a prefix. */
   const DEBT_SLICE_DIR = 'apps/web/src/views/installments/';
@@ -274,7 +273,7 @@ describe('T-12 — OD-03: no tax element anywhere in S7', () => {
     expect(INSTALLMENTS_CODES.length, 'the installments registry was not read, so its exemption covers nothing').toBeGreaterThanOrEqual(26);
     for (const code of INSTALLMENTS_CODES)
       for (const [locale, catalog] of Object.entries({ ar, en, tr }))
-        expect(catalog[`error.${code}`], `${locale}: error.${code}`).toBeTruthy();
+        expect((catalog as Record<string, string | undefined>)[`error.${code}`], `${locale}: error.${code}`).toBeTruthy();
     // AND the exemption still refuses what it always refused: a POS key.
     expect(exemptKey('pos.customerName')).toBe(false);
     expect(exemptKey('sales.customer')).toBe(false);
