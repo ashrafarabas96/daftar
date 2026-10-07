@@ -133,6 +133,7 @@ import {
   bucketIndexByBand,
   bucketIndexByBinarySearch,
   auditProofFile,
+  alterDropColumns,
   canonicalReducerRegistry,
   lastEffectiveRoutineDefinition,
   proofLedger,
@@ -281,7 +282,7 @@ const MANDATORY: readonly MandatoryProof[] = Object.freeze([
   Object.freeze({ id: 'proof_3', armTitleContains: 'FIRES', arms: 1, requiresInArm: ["mutate('planlessArm'"], minAssertions: 3, file: 'phase4-s7-installment-aging.test.ts' }),
   Object.freeze({ id: 'proof_4', armTitleContains: 'FIRES', arms: 1, requiresInArm: ["mutate('carryResidual'"], minAssertions: 3, file: 'phase4-s7-installment-aging.test.ts' }),
   Object.freeze({ id: 'proof_5', armTitleContains: 'FIRES', arms: 1, requiresInArm: ["mutate('outstandingSource'"], minAssertions: 3, file: 'phase4-s7-installment-aging.test.ts' }),
-  Object.freeze({ id: 'proof_6', armTitleContains: 'FIRES', arms: 3, requiresInArm: ['journalFindings(', 'relationsRead('], minAssertions: 3, file: 'phase4-s7-installment-aging.test.ts' }),
+  Object.freeze({ id: 'proof_6', armTitleContains: 'FIRES', arms: 4, requiresInArm: ['journalFindings(', 'relationsRead(', 'canonicalReducerRegistry('], minAssertions: 3, file: 'phase4-s7-installment-aging.test.ts' }),
   Object.freeze({ id: 'proof_7', armTitleContains: 'FIRES', arms: 2, requiresInArm: ['findAuthoritativeSalesColumns('], minAssertions: 3, file: 'phase4-s7-installment-aging.test.ts' }),
   Object.freeze({ id: 'proof_8', armTitleContains: 'FIRES', arms: 1, requiresInArm: ['FINANCIAL_TIME'], minAssertions: 3, file: 'phase4-s7-installment-aging.test.ts' }),
   Object.freeze({ id: 'proof_9', armTitleContains: 'FIRES', arms: 1, requiresInArm: ['OVER_SCHEDULED'], minAssertions: 3, file: 'phase4-s7-installment-aging.test.ts' }),
@@ -1499,6 +1500,92 @@ describe('PROOF 6 [proof_6] — no installment journal, and no new reducer branc
     recordProof('proof_6', 3, 'FIRES arm ran: a planted reducer branch is seen in every shape; the live set is exactly two');
   });
 
+  it('FIRES under its mutation: S7-5 — RENAME COLUMN, RENAME TABLE and DROP COLUMN, the four shapes that escaped', () => {
+    // CHALLENGER S7-5. The registry consumed `findColumnDeclarations` and
+    // honoured `DROP TABLE`, and nothing else — one of five mutating
+    // statements. Four escapes remained, using readers the same file already
+    // imported:
+    //
+    //   RENAME COLUMN x TO invoice_amount_applied_minor  — RECALL
+    //   RENAME COLUMN invoice_amount_applied_minor TO y  — PRECISION
+    //   DROP COLUMN invoice_amount_applied_minor         — PRECISION
+    //   ALTER TABLE t RENAME TO u                        — RECALL
+    //
+    // AND THE MATRIX VARIES THE STATEMENT SHAPE, which is what the detector
+    // now depends on — not the alias and not the qualification, which §7.0 of
+    // the design document records it demonstrably no longer does. A matrix
+    // shaped to the detector is how the `public.` hole survived a four-way
+    // matrix for two rounds.
+    const base = canonicalReducerRegistry(MIGRATIONS);
+    expect([...base]).toEqual(['customer_credit_applications', 'payment_allocations']);
+
+    const synthetic = (sql: string): readonly { readonly name: string; readonly sql: string }[] => [
+      ...MIGRATIONS,
+      { name: '9999_synthetic.sql', sql },
+    ];
+
+    // (1) RECALL — a relation that NEVER declares the column at CREATE time
+    //     and acquires it by rename. Under the old registry it never entered.
+    const renamedIn = canonicalReducerRegistry(
+      synthetic(
+        'CREATE TABLE sale_installment_collections (business_id UUID NOT NULL, invoice_id UUID NOT NULL, applied_minor BIGINT NOT NULL);\n' +
+          'ALTER TABLE sale_installment_collections RENAME COLUMN applied_minor TO invoice_amount_applied_minor;\n',
+      ),
+    );
+    expect(renamedIn, 'RENAME COLUMN into the reducer column still escapes').toContain('sale_installment_collections');
+
+    // (2) PRECISION — a real reducer renames the column AWAY, so it is no
+    //     longer a reducer and must leave the registry.
+    const renamedOut = canonicalReducerRegistry(
+      synthetic('ALTER TABLE payment_allocations RENAME COLUMN invoice_amount_applied_minor TO legacy_applied_minor;\n'),
+    );
+    expect(renamedOut, 'RENAME COLUMN out of the reducer column still escapes').not.toContain('payment_allocations');
+    // ...and the OTHER reducer is untouched, so the removal is targeted.
+    expect(renamedOut).toContain('customer_credit_applications');
+
+    // (3) PRECISION — the column is dropped outright.
+    const dropped = canonicalReducerRegistry(
+      synthetic('ALTER TABLE customer_credit_applications DROP COLUMN invoice_amount_applied_minor;\n'),
+    );
+    expect(dropped, 'DROP COLUMN still escapes').not.toContain('customer_credit_applications');
+    expect(dropped).toContain('payment_allocations');
+
+    // (4) RECALL — the relation is renamed, so the registry would otherwise
+    //     hold a name no `CREATE TABLE` ever wrote again (`sql-schema.ts`'s
+    //     own L-3 lesson). Membership is CARRIED, not dropped.
+    const tableRenamed = canonicalReducerRegistry(
+      synthetic('ALTER TABLE payment_allocations RENAME TO invoice_payment_allocations;\n'),
+    );
+    expect(tableRenamed).toContain('invoice_payment_allocations');
+    expect(tableRenamed).not.toContain('payment_allocations');
+
+    // (5) THE EXEMPTION IS EVALUATED, NOT DECLARED. The real tree contains
+    //     ZERO `RENAME COLUMN` and ZERO `ALTER TABLE … RENAME TO`, and its
+    //     only `DROP COLUMN`s touch relations that never declared the reducer
+    //     column — so the four passes are INERT on the shipped tree, which is
+    //     exactly the «exemption that is never evaluated» trap. The synthetic
+    //     migrations above are what evaluate them, and this arm asserts the
+    //     inertness is a FACT about the tree rather than an assumption.
+    const tree = MIGRATIONS.map((m) => m.sql).join('\n');
+    expect(tree).not.toMatch(/RENAME\s+COLUMN/i);
+    expect(tree).not.toMatch(/ALTER\s+TABLE[^;]*?\bRENAME\s+TO\b/i);
+    const treeDrops = MIGRATIONS.flatMap((m) => alterDropColumns(m.sql));
+    expect(treeDrops.length, 'the tree has no DROP COLUMN at all — then this check is vacuous').toBeGreaterThan(0);
+    expect(treeDrops.filter((d) => d.column === 'invoice_amount_applied_minor')).toEqual([]);
+
+    // (6) PRECISION against the near-miss statement: `DROP CONSTRAINT` is not
+    //     a column drop, and a reader that read the next identifier would
+    //     think a column named `CONSTRAINT` had been dropped.
+    expect(alterDropColumns('ALTER TABLE t DROP CONSTRAINT t_pk;')).toEqual([]);
+    expect(alterDropColumns('ALTER TABLE t ALTER COLUMN c DROP NOT NULL;')).toEqual([]);
+    expect(alterDropColumns('ALTER TABLE t DROP COLUMN IF EXISTS "c" CASCADE;')).toEqual([{ table: 't', column: 'c' }]);
+    // ...and the supplier side is still a different side.
+    expect(base).not.toContain('purchase_payment_allocations');
+    expect(PURCHASE_REDUCER_COLUMN).not.toBe(INVOICE_REDUCER_COLUMN);
+
+    recordProof('proof_6', 16, 'FIRES arm ran: S7-5 four statement-shape escapes closed, recall and precision both');
+  });
+
   it('FIRES under its mutation: a NEW reducer relation, discovered by its SHAPE and not its name', () => {
     // A later slice's reducer, named nothing this file could have guessed.
     const planted = `CREATE TABLE zzz_whatever_we_call_it_next (
@@ -2191,7 +2278,10 @@ describe('META — the proofs are not vacuous', () => {
     //      measured, and the reason the count is DECLARED rather than
     //      counted. Losing one red arm is losing one mutation.
     const six = MANDATORY.find((m) => m.id === 'proof_6');
-    expect(six?.arms).toBe(3);
+    // FOUR since the S7-5 repair added a fourth statement-shape arm. The
+    // declared count moves with the file IN THE SAME CHANGE, which is the
+    // discipline the fail-closed coupling requires (design document §17.8).
+    expect(six?.arms).toBe(4);
     const sixArm = SELF.indexOf("  it('FIRES under its mutation: a NEW reducer relation, discovered by its SHAPE and not its name'");
     expect(sixArm).toBeGreaterThan(-1);
     const sixEnd = SELF.indexOf('\n  });', sixArm) + '\n  });'.length;

@@ -74,7 +74,10 @@ import { readFileSync } from 'node:fs';
 import {
   QUALIFIED_NAME,
   findColumnDeclarations,
+  findColumnRenames,
+  findTableRenames,
   stripComments,
+  stripNonSchema,
   unquote,
 } from '../../../scripts/guards/sql-schema';
 import { agingBucketLabels } from '../src/invoice';
@@ -495,14 +498,87 @@ export function loadMigrations(dir: string, files: readonly string[]): readonly 
 export function canonicalReducerRegistry(migrations: readonly MigrationFile[]): readonly string[] {
   const live = new Set<string>();
   for (const m of migrations) {
+    // (1) DECLARED — `CREATE TABLE` and `ALTER TABLE … ADD COLUMN`, both of
+    //     which `findColumnDeclarations` already reads.
     for (const c of findColumnDeclarations(m.sql)) {
       if (c.column === INVOICE_REDUCER_COLUMN) live.add(c.table);
     }
+    // (2) RENAMED INTO or OUT OF the reducer column. INTO is a RECALL gap —
+    //     the relation never entered the registry — and OUT OF is a
+    //     PRECISION gap — it stayed in it. Both use the estate's own
+    //     `findColumnRenames`, which already refuses `RENAME CONSTRAINT`.
+    for (const r of findColumnRenames(m.sql)) {
+      if (r.to === INVOICE_REDUCER_COLUMN) live.add(r.table);
+      else if (r.from === INVOICE_REDUCER_COLUMN) live.delete(r.table);
+    }
+    // (3) DROPPED COLUMN — a PRECISION gap, and the one statement shape the
+    //     estate's schema reader has no function for, so the scan is here.
+    for (const d of alterDropColumns(m.sql)) {
+      if (d.column === INVOICE_REDUCER_COLUMN) live.delete(d.table);
+    }
+    // (4) RENAMED RELATION — a RECALL gap: the registry would hold a name no
+    //     `CREATE TABLE` ever wrote again. Membership is CARRIED ACROSS the
+    //     rename rather than dropped, because the relation is the same
+    //     relation and still declares the column.
+    for (const t of findTableRenames(m.sql)) {
+      if (live.delete(t.from)) live.add(t.to);
+    }
+    // (5) DROPPED RELATION — the original discipline, kept.
     const drop = new RegExp(String.raw`DROP\s+TABLE\s+(?:IF\s+EXISTS\s+)?${QUALIFIED_NAME}`, 'gi');
     for (const d of m.sql.matchAll(drop)) live.delete(unquote(d[1] ?? ''));
   }
   return Object.freeze([...live].sort());
 }
+
+export interface DroppedColumn {
+  readonly table: string;
+  readonly column: string;
+}
+
+/**
+ * Every `ALTER TABLE t DROP [COLUMN] c`, bare or quoted, with `IF EXISTS` and
+ * a trailing `CASCADE`/`RESTRICT` tolerated. `DROP CONSTRAINT` is refused
+ * explicitly: it is a different statement that happens to start with the same
+ * word, which is the kind of near-miss this file exists to be careful about.
+ *
+ * It lives here rather than in `sql-schema.ts` because that file is the
+ * estate's and not this slice's; promoting it is a patch request (PR-7), and
+ * until then a local reader that says it is local is better than editing a
+ * shared file this slice does not own.
+ */
+export function alterDropColumns(sql: string): readonly DroppedColumn[] {
+  const out: DroppedColumn[] = [];
+  const alter = new RegExp(
+    String.raw`ALTER\s+TABLE\s+(?:IF\s+EXISTS\s+)?(?:ONLY\s+)?(?:IF\s+EXISTS\s+)?${QUALIFIED_NAME}\s*\*?([\s\S]*?);`,
+    'gi',
+  );
+  for (const m of stripNonSchema(sql).matchAll(alter)) {
+    const table = unquote(m[1] ?? '');
+    const actions = m[2] ?? '';
+    const dropColumn = /DROP\s+(?:COLUMN\s+)?(?:IF\s+EXISTS\s+)?("[^"]+"|[A-Za-z_][\w$]*)/gi;
+    for (const d of actions.matchAll(dropColumn)) {
+      const name = unquote(d[1] ?? '');
+      // `DROP CONSTRAINT x` would otherwise read as dropping a column called
+      // `CONSTRAINT`. Same for the other things an ALTER can drop.
+      if (/^(CONSTRAINT|DEFAULT|NOT|IDENTITY|EXPRESSION|GENERATED)$/i.test(name)) continue;
+      out.push({ table, column: name });
+    }
+  }
+  return Object.freeze(out);
+}
+
+/**
+ * THE ORDERING LIMITATION, STATED RATHER THAN DISCOVERED.
+ *
+ * The five passes above run per FILE and not interleaved by POSITION inside
+ * the file, so a migration that drops the column and re-adds it in that order
+ * within one file is read as a declaration followed by a drop. The routine
+ * mechanism in part 4 DOES interleave by position, because `0084` drops at
+ * :488 and recreates at :593 and the order decides there. Here it does not
+ * yet, and the honest claim is the weaker one: a file that both adds and
+ * removes the reducer column is OUTSIDE what this registry establishes, and
+ * no such file exists in the tree today.
+ */
 
 // ═══════════════════════════════════════════════════════════════════════════
 // PART 4 — THE LAST EFFECTIVE ROUTINE DEFINITION IN THE MIGRATION PREFIX

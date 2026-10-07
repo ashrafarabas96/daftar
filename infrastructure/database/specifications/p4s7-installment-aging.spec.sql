@@ -34,11 +34,25 @@
 -- │ TABLE` list at all — that is a 42P13 — so the claim was false. §25       │
 -- │ requires the shape be KEPT, and it is.                                   │
 -- │                                                                          │
--- │ WHAT STILL BLOCKS THIS FILE: it has no migration number, it is not in    │
--- │ `migrations/`, it is not in the manifest, and S7 is CHALLENGER REJECTED  │
--- │ with `READY_TO_PROMOTE = NO`. It also needs one authority change that is │
--- │ NOT the author's to make — patch request PR-6, the `GRANT EXECUTE` on    │
--- │ `supplier_ap_release` — stated in section 5.                             │
+-- │ WHAT STILL BLOCKS THIS FILE, AND S7-1 IS THE BIGGEST OF IT:             │
+-- │                                                                          │
+-- │  * EVERY STATEMENT BELOW IS `SPEC ONLY`. This file has never been        │
+-- │    applied to a cluster, never parsed by PostgreSQL and never executed.  │
+-- │    The suite that judges it reads it with `readFileSync` and analyses it │
+-- │    as TEXT. So the two constraint triggers have never fired,             │
+-- │    `installment_schedule_verify()` has never been compiled by the        │
+-- │    parser, and «at the DATABASE level, not in TypeScript only» is NOT    │
+-- │    MET. The 265-day golden is proved against the reference model, not    │
+-- │    against this routine. A SPECIFICATION IS DESIGN UNTIL A PARSER HAS    │
+-- │    HAD AN OPINION (challenger S7-1, CRITICAL). The author has been       │
+-- │    careful about the one trap this estate records — `pg_catalog.coalesce`│
+-- │    is impossible, because `COALESCE` is syntax and cannot be             │
+-- │    schema-qualified — and care is not a substitute for the parser.       │
+-- │  * no migration number, not in `migrations/`, not in the manifest, and   │
+-- │    S7 is CHALLENGER REJECTED with `READY_TO_PROMOTE = NO`.               │
+-- │  * TWO authority/command changes that are NOT the author's to make:      │
+-- │    PR-6, the `GRANT EXECUTE` on `supplier_ap_release` (section 5), and   │
+-- │    PR-8, the plan-creation status precondition (section 3(f)).           │
 -- └─────────────────────────────────────────────────────────────────────────┘
 --
 -- THE SETTLEMENT ORDER IS A DECLARED POLICY, NOT A DERIVATION.
@@ -238,6 +252,76 @@ ALTER TABLE installments FORCE ROW LEVEL SECURITY;
 --       one-constant change. The alternative — stating that there is no
 --       ceiling — is refused here because an unbounded schedule is an
 --       unbounded read on the `P4-H` budget path and the index that serves it.
+--
+--   (f) THE THIRD DIRECTION — `invoices.total_txn_minor` ITSELF — IS GUARDED
+--       BY A PREDECESSOR, AND THE CONDITIONAL IS STATED AND NOT HIDDEN.
+--
+--       Both triggers above are on the PLAN side. The invariant is an
+--       equality between a sum over `installments` and a column on
+--       `invoices`, and the `invoices` side has no trigger of this slice's.
+--       The challenger raised that as S7-2 and declined to reason it into a
+--       verdict, which was right. IT IS CLOSED BY A PREDECESSOR MIGRATION,
+--       not by this slice, and by THREE independent mechanisms. Cited so a
+--       later reader does not have to re-derive them:
+--
+--       1. NO ROLE HOLDS THE PRIVILEGE TO WRITE THE COLUMN AT ALL, AND THIS
+--          IS THE STRONGEST OF THE THREE. The only UPDATE grant on `invoices`
+--          anywhere in the tree is `GRANT UPDATE (status) ON invoices TO
+--          daftar_inventory_internal` (`0081:660`) — a COLUMN-LEVEL grant on
+--          `status` alone. `daftar_app` holds `SELECT` only (`0075:494`).
+--          Nobody holds UPDATE on `total_txn_minor`, `total_base_minor`,
+--          `subtotal_txn_minor`, `discount_txn_minor`, `tax_minor`, the
+--          currency or any rate column, IN ANY STATUS. A privilege check
+--          happens BEFORE a BEFORE-UPDATE trigger runs, so this closes the
+--          direction even where the trigger below declines to look.
+--
+--       2. THE LIFECYCLE GUARD, as a second bound if a grant is ever widened.
+--          `invoices_lifecycle_guard()` (`0075:546`), attached as
+--          `CREATE TRIGGER invoices_lifecycle_guard BEFORE UPDATE ON invoices
+--          FOR EACH ROW` (`0075:637`), raises
+--          `invoice.posted_amount_immutable` — «the amounts of a posted
+--          invoice are final», `P4-AL-46` — when any of those columns changes
+--          AND `OLD.status <> 'draft'` (`0075:561`).
+--
+--       3. NO PATH PRODUCES A DRAFT INVOICE, which is what makes clause 2's
+--          conditional harmless. `status` admits `'draft'`
+--          (`0075:257`), and `invoices_binding_owed_ck` (`0075:300`) permits
+--          it because `binding_source_id` is nullable (`0075:280`) — so a
+--          draft is not structurally impossible. But the ONLY `INSERT INTO
+--          invoices` in the entire migration tree is `0078:974`, which writes
+--          the literal `'open'`, and `0078:969-973` states the reason in its
+--          own words: the guard «is BEFORE UPDATE only (`0075:553`), so an
+--          INSERT in the posted state is permitted and a draft nobody asked
+--          for is not created». `GRANT INSERT ON invoices` goes to
+--          `daftar_inventory_internal` alone (`0078:264`), so no application
+--          path can insert one either.
+--
+--       SO: CAN AN INSTALLMENT PLAN REFERENCE A DRAFT INVOICE? Not today —
+--       no path creates one. And were one to exist, its total still could not
+--       be amended, because of clause 1. The answer the challenger asked for
+--       is therefore YES, CLOSED, and the mechanism is a column-level
+--       PRIVILEGE rather than the CHECK or the FK he suggested looking for.
+--
+--       WHAT IS NOT CLOSED, STATED AS AN EXPOSURE RATHER THAN LEFT TO BE
+--       FOUND. The chain above rests on clause 1, and clause 1 is a GRANT —
+--       one line in a future migration widens it. If `GRANT UPDATE ON
+--       invoices` is ever written without a column list, then clause 2's
+--       `OLD.status <> 'draft'` conditional becomes reachable the moment
+--       clause 3 also changes, and a draft invoice whose plan was built
+--       against an old total could be amended and then promoted
+--       `draft -> open` (a transition `0075:584` permits) with the plan-side
+--       triggers never re-firing. THIS SLICE THEREFORE OWES A STATUS
+--       PRECONDITION ON PLAN CREATION: the creating routine must refuse an
+--       invoice whose status is not `'open'`. It cannot be a FOREIGN KEY —
+--       `status` is mutable (`draft -> open -> void`), so an FK onto a
+--       filtered view would be a second truth that the view's own definition
+--       would have to keep — and it cannot be a column `CHECK`, because the
+--       status lives on the other relation. It is an obligation on the
+--       command, and it is PATCH REQUEST PR-8, routed with PR-6.
+--
+--       `open -> void` needs no guard: voiding does not change the total, and
+--       the projection reads only `status = 'open'` invoices, so a voided
+--       invoice leaves the aging entirely.
 --
 -- The projection does NOT depend on (a), (b), (c) or (d) FOR ITS TOTALS: it
 -- totals the authoritative outstanding whatever the data says (proofs 1 and
