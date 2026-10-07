@@ -40,9 +40,11 @@ import {
   returnsLockRank,
   type RefundIntent,
 } from '@daftar/domain-core';
+import { planCustomerCreditApplication } from '@daftar/inventory';
 import {
   ReturnsPlanError,
   assertNoReceivableLine,
+  planCreditNoteApplication,
   planCreditNoteReversal,
   planCustomerRefund,
   verifySourceConsumptionChain,
@@ -262,51 +264,217 @@ describe('the FX behaviour of a refund', () => {
   });
 });
 
-// ── 5. The credit note: AR falls once, revenue reverses to 4100 ────────
+// ── 5. The credit note: AR falls in ONE place, through ONE algorithm ───
 
-describe('the credit note reduces AR exactly once', () => {
-  it('reverses revenue to 4100, credits AR for the applied part and the liability for the rest', () => {
+/**
+ * The invoice of the challenge's worked scenario: 10 000 in its own currency,
+ * 10 853 carrying base, nothing released yet. Its stored rate is therefore
+ * 1.0853 — the rate the invoice was BORN at, which is the only rate its own AR
+ * may be released at.
+ */
+const WORKED_INVOICE = {
+  totalTxnMinor: 10_000n,
+  totalBaseMinor: 10_853n,
+  outstandingTxnMinor: 10_000n,
+  conversion: { rateR10: 10_853n * 10n ** 6n, txnExponent: 2, baseExponent: 2 },
+} as const;
+
+/** The credit note, issued LATER and so carrying a DIFFERENT snapshot: 1.0901. */
+const WORKED_NOTE = {
+  originalMinor: 10_000n,
+  originalCarryingMinor: 10_901n,
+  remainingMinor: 10_000n,
+  conversion: { rateR10: 10_901n * 10n ** 6n, txnExponent: 2, baseExponent: 2 },
+} as const;
+
+describe('the credit note entry raises a liability and touches NO receivable', () => {
+  it('reverses the whole total to 4100 against 2200, at ONE conversion', () => {
     const plan = planCreditNoteReversal({
       totalMinor: 1_000n,
       conversion: BASE,
       taxMinor: '0',
-      appliedToInvoiceMinor: 600n,
       returnedMovements: [{ movementId: 'm1', valueDeltaBaseMinor: 450n }],
     });
     expect(plan.revenueEntryLines.map((l) => `${l.side} ${l.account} ${l.txnAmountMinor}`)).toEqual([
       'D sales_returns 1000',
-      'C accounts_receivable 600',
-      'C customer_refund_liability 400',
+      'C customer_refund_liability 1000',
     ]);
-    // Exactly ONE AR line, for exactly the applied part.
-    expect(plan.revenueEntryLines.filter((l) => l.account === 'accounts_receivable')).toHaveLength(1);
     expect(plan.cogsEntryLines.map((l) => `${l.side} ${l.account} ${l.baseAmountMinor}`)).toEqual(['D inventory 450', 'C cogs 450']);
   });
 
-  it('a credit note against an already-paid invoice reduces NO AR and is refundable in full', () => {
-    const plan = planCreditNoteReversal({
-      totalMinor: 1_000n,
-      conversion: BASE,
-      taxMinor: '0',
-      appliedToInvoiceMinor: 0n,
-      returnedMovements: [{ movementId: 'm1', valueDeltaBaseMinor: 450n }],
+  it('carries no `accounts_receivable` line and no invoice, whatever the numbers', () => {
+    // Driven over a spread of totals and rates rather than one: the claim is
+    // that the SHAPE has no AR line, not that one example happened not to.
+    for (const totalMinor of [1n, 7n, 999n, 1_000n, 123_456n]) {
+      for (const rateR10 of [10n ** 10n, 10_853n * 10n ** 6n, 3n * 10n ** 10n]) {
+        const plan = planCreditNoteReversal({
+          totalMinor,
+          conversion: { rateR10, txnExponent: 2, baseExponent: 2 },
+          taxMinor: '0',
+          returnedMovements: [{ movementId: 'm1', valueDeltaBaseMinor: 1n }],
+        });
+        expect(plan.revenueEntryLines.some((l) => l.account === 'accounts_receivable')).toBe(false);
+      }
+    }
+    // And the input shape cannot even be handed an invoice to fall against.
+    const reversalInputKeys = ['totalMinor', 'conversion', 'taxMinor', 'returnedMovements'];
+    const INVOICE_SHAPED = /outstanding|applied|carrying/i;
+    // The regex is shown able to MATCH on a shape that genuinely carries an
+    // invoice's AR state, so its failure to match below is a fact about the
+    // reversal input and not about the regex.
+    expect(Object.keys(WORKED_INVOICE).some((k) => INVOICE_SHAPED.test(k))).toBe(true);
+    expect(reversalInputKeys.some((k) => INVOICE_SHAPED.test(k))).toBe(false);
+  });
+});
+
+describe('an application reduces AR through the ONE canonical algorithm', () => {
+  it('releases AR at the INVOICE’s stored pair (3 617), not at the note’s snapshot (3 633)', () => {
+    const plan = planCreditNoteApplication({
+      invoice: WORKED_INVOICE,
+      note: WORKED_NOTE,
+      sameCurrency: true,
+      consumedMinor: 3_333n,
+      appliedMinor: 3_333n,
     });
-    expect(plan.revenueEntryLines.map((l) => l.account)).toEqual(['sales_returns', 'customer_refund_liability']);
-    expect(plan.liabilityBaseMinor).toBe(1_000n);
+    // `rel = R(X + a) − R(X)` over the INVOICE's own (10 000, 10 853) pair.
+    expect(plan.invoiceCarryingReleasedMinor).toBe(3_617n);
+    // `cr_rel = g(rb) − g(rb − c)` over the NOTE's own (10 000, 10 901) pair.
+    expect(plan.creditCarryingReleasedMinor).toBe(3_633n);
+    // The 16-minor gap is REALIZED FX and not revenue, and not a rounding.
+    expect(plan.realizedFxMinor).toBe(16n);
+    // The level the chain verifier walks, stored and not derived.
+    expect(plan.arReleasedBeforeMinor).toBe(0n);
+    expect(plan.creditRemainingBeforeMinor).toBe(10_000n);
+    expect(plan.entryLines.map((l) => `${l.side} ${l.account} ${l.baseAmountMinor}`)).toEqual([
+      'D customer_refund_liability 3633',
+      'C accounts_receivable 3617',
+      'C fx_gain 16',
+    ]);
   });
 
-  it('RED PROOF — an applied part exceeding the total is refused, so AR cannot fall by more than the note', () => {
+  it('is the canonical plan with ONE account relabelled — 2210 becomes 2200 and nothing else moves', () => {
+    const args = { invoice: WORKED_INVOICE, credit: WORKED_NOTE, sameCurrency: true, consumedMinor: 3_333n, appliedMinor: 3_333n } as const;
+    const canonical = planCustomerCreditApplication(args);
+    const mine = planCreditNoteApplication({
+      invoice: args.invoice,
+      note: args.credit,
+      sameCurrency: args.sameCurrency,
+      consumedMinor: args.consumedMinor,
+      appliedMinor: args.appliedMinor,
+    });
+    // Every AMOUNT is identical: this is not a second algorithm agreeing, it is
+    // the same algorithm's output passed through.
+    const { entryLines: canonicalLines, ...canonicalAmounts } = canonical;
+    const { entryLines: mineLines, ...mineAmounts } = mine;
+    expect(mineAmounts).toEqual(canonicalAmounts);
+    // Every LINE is identical but for the liability account's name.
+    expect(mineLines.map((l) => `${l.side} ${l.account} ${l.baseAmountMinor}`)).toEqual(
+      canonicalLines.map((l) => `${l.side} ${l.account === 'customer_credit_liability' ? 'customer_refund_liability' : l.account} ${l.baseAmountMinor}`),
+    );
+    // And the relabelling genuinely happened, so the assertion above is not vacuous.
+    expect(canonicalLines.some((l) => l.account === 'customer_credit_liability')).toBe(true);
+    expect(mineLines.some((l) => l.account === 'customer_refund_liability')).toBe(true);
+    expect(mineLines.some((l) => l.account === 'customer_credit_liability')).toBe(false);
+  });
+
+  it('yields every operand of `credit_note_applications_realized_ck`, so the row is satisfiable from the plan alone', () => {
+    const plan = planCreditNoteApplication({
+      invoice: WORKED_INVOICE,
+      note: WORKED_NOTE,
+      sameCurrency: true,
+      consumedMinor: 3_333n,
+      appliedMinor: 3_333n,
+    });
+    expect(plan.realizedFxMinor).toBe(plan.creditCarryingReleasedMinor - plan.invoiceCarryingReleasedMinor);
+  });
+
+  it('RED PROOF — an application exceeding the invoice’s outstanding is refused in S5’s own vocabulary', () => {
     expect(
       codeOf(() =>
-        planCreditNoteReversal({
-          totalMinor: 1_000n,
-          conversion: BASE,
-          taxMinor: '0',
-          appliedToInvoiceMinor: 1_001n,
-          returnedMovements: [{ movementId: 'm1', valueDeltaBaseMinor: 1n }],
+        planCreditNoteApplication({
+          invoice: { ...WORKED_INVOICE, outstandingTxnMinor: 3_000n },
+          note: WORKED_NOTE,
+          sameCurrency: true,
+          consumedMinor: 3_333n,
+          appliedMinor: 3_333n,
         }),
       ),
-    ).toBe('credit_note.amount_mismatch');
+    ).toBe('credit_note.amount_exceeds_outstanding');
+  });
+
+  it('RED PROOF — an application exceeding the note’s remaining is refused, so AR cannot fall by more than the note', () => {
+    expect(
+      codeOf(() =>
+        planCreditNoteApplication({
+          invoice: WORKED_INVOICE,
+          note: { ...WORKED_NOTE, remainingMinor: 3_000n },
+          sameCurrency: true,
+          consumedMinor: 3_333n,
+          appliedMinor: 3_333n,
+        }),
+      ),
+    ).toBe('credit_note.amount_exceeds_note');
+  });
+
+  it('RED PROOF — an exhausted note is refused, and under its own code rather than a bad-amount code', () => {
+    expect(
+      codeOf(() =>
+        planCreditNoteApplication({
+          invoice: WORKED_INVOICE,
+          note: { ...WORKED_NOTE, remainingMinor: 0n },
+          sameCurrency: true,
+          consumedMinor: 1n,
+          appliedMinor: 1n,
+        }),
+      ),
+    ).toBe('credit_note.note_exhausted');
+  });
+
+  it('RED PROOF — a stale read of the invoice becomes `settlement_changed`, not a merchant-facing amount refusal', () => {
+    // `outstanding > total` is impossible in a consistent read: the caller is
+    // holding figures from before something else moved. The canonical arithmetic
+    // raises `customer_payment.arithmetic_invalid` for it, and the translation
+    // must not report that as the merchant's bad amount.
+    expect(
+      codeOf(() =>
+        planCreditNoteApplication({
+          invoice: { ...WORKED_INVOICE, outstandingTxnMinor: 10_001n },
+          note: WORKED_NOTE,
+          sameCurrency: true,
+          consumedMinor: 1_000n,
+          appliedMinor: 1_000n,
+        }),
+      ),
+    ).toBe('credit_note.settlement_changed');
+  });
+
+  it('RED PROOF — no `customer_credit_application.*` code can escape onto an S5 route', () => {
+    const escaped: string[] = [];
+    const attempts: (() => unknown)[] = [
+      () => planCreditNoteApplication({ invoice: WORKED_INVOICE, note: WORKED_NOTE, sameCurrency: true, consumedMinor: 0n, appliedMinor: 0n }),
+      () =>
+        planCreditNoteApplication({
+          invoice: WORKED_INVOICE,
+          note: WORKED_NOTE,
+          sameCurrency: true,
+          consumedMinor: 3_333n,
+          appliedMinor: 3_332n,
+        }),
+      () =>
+        planCreditNoteApplication({
+          invoice: { ...WORKED_INVOICE, conversion: { rateR10: 4n * 10n ** 9n, txnExponent: 2, baseExponent: 2 } },
+          note: WORKED_NOTE,
+          sameCurrency: true,
+          consumedMinor: 1n,
+          appliedMinor: 1n,
+        }),
+    ];
+    for (const attempt of attempts) {
+      const code = codeOf(attempt);
+      if (!isReturnsRefusalCode(code)) escaped.push(code);
+      if (code.startsWith('customer_credit_application.') || code.startsWith('customer_payment.')) escaped.push(code);
+    }
+    expect(escaped).toEqual([]);
   });
 });
 
@@ -333,9 +501,9 @@ describe('the COGS reversal takes the stored movement deltas and nothing else', 
 
   it('RED PROOF — an EMPTY movement list is refused, so a reversal computed from nothing cannot be posted', () => {
     expect(creditNoteCogsReversalBaseMinor([])).toEqual({ ok: false, code: 'credit_note.cogs_not_exact' });
-    expect(
-      codeOf(() => planCreditNoteReversal({ totalMinor: 1_000n, conversion: BASE, taxMinor: '0', appliedToInvoiceMinor: 0n, returnedMovements: [] })),
-    ).toBe('credit_note.cogs_not_exact');
+    expect(codeOf(() => planCreditNoteReversal({ totalMinor: 1_000n, conversion: BASE, taxMinor: '0', returnedMovements: [] }))).toBe(
+      'credit_note.cogs_not_exact',
+    );
   });
 
   it('RED PROOF — the input shape has no quantity and no unit cost, so `qty × average` is unexpressible', () => {
@@ -366,7 +534,6 @@ describe('OD-03 — sales tax is structurally zero and S5 does not reopen it', (
           totalMinor: 1_000n,
           conversion: BASE,
           taxMinor: '150',
-          appliedToInvoiceMinor: 0n,
           returnedMovements: [{ movementId: 'm1', valueDeltaBaseMinor: 1n }],
         }),
       ),

@@ -145,9 +145,18 @@ export interface CreditNotePort {
    * Insert the applications that reduce AR — at most one per invoice, each at
    * the invoice's own AR level.
    *
-   * **This is the ONE place AR falls in this slice**, and it falls once. The
-   * level (`arReleasedBeforeTxnMinor`) is read under the invoice's lock in this
-   * same transaction, and the level `UNIQUE` on the relation is the fast
+   * **This is the ONE place AR falls in this slice**, and it falls once — a
+   * claim that is now true of the code and not only of this comment. The credit
+   * note's OWN entry (`planCreditNoteReversal`) carries no `accounts_receivable`
+   * line at all: it raises the liability for the note's whole total. Every
+   * reduction of AR is a row of THIS relation, and every amount on that row is
+   * produced by `planCreditNoteApplication`, which delegates to the canonical
+   * `planCustomerCreditApplication` — so there is one algorithm for how far AR
+   * falls, at the INVOICE's stored snapshot, with its dust line and its
+   * realized-FX line, and not a second one at the note's snapshot.
+   *
+   * The level (`arReleasedBeforeTxnMinor`) is read under the invoice's lock in
+   * this same transaction, and the level `UNIQUE` on the relation is the fast
    * per-relation backstop — not the invariant. The invariant is
    * `invoice_settlement_verify` at COMMIT (P4-AL-22).
    */
@@ -172,15 +181,44 @@ export interface CreditNoteItemWrite {
   readonly cogsReversalBaseMinor: bigint;
 }
 
+/**
+ * One `credit_note_applications` row.
+ *
+ * **Every operand of `credit_note_applications_realized_ck` is here**, which is
+ * the point: the CHECK is
+ *
+ *     realized_fx_gain_loss_minor
+ *       = credit_carrying_base_released_minor − invoice_carrying_base_released_minor
+ *
+ * so a write shape missing either carrying column, or the realized column,
+ * cannot satisfy a constraint it cannot address — the row would have to be
+ * completed by something other than the plan, which is a second place the
+ * number is decided. All seven come out of `planCreditNoteApplication`, which
+ * is `planCustomerCreditApplication` relabelled, so they come out of the ONE
+ * canonical AR algorithm and are consistent by construction rather than by a
+ * caller remembering to subtract.
+ *
+ * The two level columns are the pair P4-AL-22's chain verifier walks:
+ * `arReleasedBeforeTxnMinor` is the invoice's `X = T − O` and
+ * `creditRemainingBeforeMinor` is the note's `rb`. Neither is derivable after
+ * the fact, which is why both are stored.
+ */
 export interface CreditNoteApplicationWrite {
   readonly applicationId: string;
   readonly lineNo: number;
   readonly invoiceId: string;
   /** The invoice's AR released BEFORE this application — the level, read under the invoice's lock. */
   readonly arReleasedBeforeTxnMinor: bigint;
+  /** The note's remaining BEFORE this application — the note's own level, read under the note's lock. */
+  readonly creditRemainingBeforeMinor: bigint;
   readonly creditAmountConsumedMinor: bigint;
+  /** `cr_rel = g(rb) − g(rb − c)`: the carrying base the NOTE gives up. */
+  readonly creditCarryingBaseReleasedMinor: bigint;
   readonly invoiceAmountAppliedMinor: bigint;
+  /** `rel = R(X + a) − R(X)`: the carrying base the INVOICE releases. */
   readonly invoiceCarryingBaseReleasedMinor: bigint;
+  /** `cr_rel − rel`, signed: > 0 a gain (4900), < 0 a loss (6900). Never recomputed by the port. */
+  readonly realizedFxGainLossMinor: bigint;
 }
 
 // ── The refund port ─────────────────────────────────────────────────────

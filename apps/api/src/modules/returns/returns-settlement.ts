@@ -71,7 +71,20 @@ import {
   type RefundEntryAccount,
   type ReturnedMovementValue,
 } from '@daftar/domain-core';
-import { VALUE_LIMIT_MINOR, convertToBase, creditRelease, creditRemainingCarrying, verifyCreditChain } from '@daftar/inventory';
+import {
+  VALUE_LIMIT_MINOR,
+  convertToBase,
+  creditRelease,
+  creditRemainingCarrying,
+  ReceivableArithmeticError,
+  planCustomerCreditApplication,
+  verifyCreditChain,
+  type CustomerCreditApplicationPlan,
+  type CustomerCreditState,
+  type InvoiceArState,
+  type ReceivableArithmeticCode,
+  type ReceivableEntryLine,
+} from '@daftar/inventory';
 
 /**
  * A refusal of the plan layer. A plain class carrying one code of the closed
@@ -354,22 +367,14 @@ export interface CreditNoteReversalInput {
   readonly conversion: ReturnsConversion;
   /** Structural zero (OD-03 OPEN). Any other value is refused here and by `CHECK (tax_minor = 0)` in the row. */
   readonly taxMinor: string;
-  /**
-   * The part of the total that reduces AR on an invoice, as the SUM OF THE
-   * STORED APPLICATION ROWS. `0n` is lawful: a credit note issued against an
-   * already-paid invoice reduces no AR and is refundable in full.
-   */
-  readonly appliedToInvoiceMinor: bigint;
   /** The return's stock movements, with their EXACT stored value deltas. Never a quantity and an average. */
   readonly returnedMovements: readonly ReturnedMovementValue[];
 }
 
 export interface CreditNoteReversalPlan {
   readonly totalBaseMinor: bigint;
-  readonly appliedBaseMinor: bigint;
-  readonly liabilityBaseMinor: bigint;
   readonly cogsReversalBaseMinor: bigint;
-  /** The revenue-reversal entry: 4100 debited, AR and/or 2200 credited. */
+  /** The revenue-reversal entry: 4100 debited, 2200 credited, for the WHOLE total. */
   readonly revenueEntryLines: readonly ReturnsEntryLine[];
   /** The COGS-reversal entry: 1200 debited, 5000 credited, at the exact stored deltas. */
   readonly cogsEntryLines: readonly ReturnsEntryLine[];
@@ -380,8 +385,7 @@ export interface CreditNoteReversalPlan {
  *
  * ```
  *   revenue reversal   Dr sales_returns (4100)   total, in the note's currency
- *                         Cr accounts_receivable (1100)   the applied part
- *                         Cr customer_refund_liability (2200)   the rest
+ *                         Cr customer_refund_liability (2200)   the same total
  *
  *   COGS reversal      Dr inventory (1200)       Σ exact stored value deltas
  *                         Cr cogs (5000)
@@ -394,10 +398,17 @@ export interface CreditNoteReversalPlan {
  *    "4100 is the RETURN account and belongs to P4-S5". A contra-revenue account
  *    exists so that returns are visible rather than netted away, and a negative
  *    line is refused by `balanced` anyway.
- * 2. **AR is credited EXACTLY ONCE, and only for the applied part.** This is
- *    the one place in the slice where AR moves. The remainder becomes the refund
- *    liability, and it is that liability a refund later consumes — which is why
- *    the refund has no AR line and needs none.
+ * 2. **THIS ENTRY CARRIES NO `accounts_receivable` LINE, AND NO INVOICE.**
+ *    Issuing a credit note creates a liability for its whole total; whether and
+ *    how much of that liability is then set against an invoice is the business
+ *    of `planCreditNoteApplication` below, one row of
+ *    `credit_note_applications` at a time, through the canonical AR arithmetic.
+ *    Splitting the total here would be a SECOND place AR falls and a second
+ *    algorithm for how far it falls — computed, moreover, at the NOTE's FX
+ *    snapshot rather than the invoice's, which is not what the invoice's stored
+ *    `(total, carrying)` pair says. So the note's own entry converts the total
+ *    ONCE and stops, and the comment below about "one header conversion" is
+ *    true because there is now exactly one conversion in this function.
  * 3. **The COGS reversal has no rounding, because it has no arithmetic.** Its
  *    amount is `creditNoteCogsReversalBaseMinor`, the sum of the stock writer's
  *    own stored integers. There is no `quantity`, no `unitCost` and no
@@ -412,25 +423,15 @@ export function planCreditNoteReversal(input: CreditNoteReversalInput): CreditNo
   if (typeof input.totalMinor !== 'bigint' || input.totalMinor <= 0n || input.totalMinor > VALUE_LIMIT_MINOR) {
     refuse('credit_note.amount_invalid', 'a credit note total must be positive');
   }
-  if (typeof input.appliedToInvoiceMinor !== 'bigint' || input.appliedToInvoiceMinor < 0n)
-    refuse('credit_note.amount_invalid', 'an applied amount must not be negative');
-  if (input.appliedToInvoiceMinor > input.totalMinor) refuse('credit_note.amount_mismatch', 'the applied part exceeds the credit note total');
 
+  // The ONE conversion of this function. The note's total becomes base at the
+  // note's own stored snapshot, and nothing else in this entry is converted —
+  // so the second HALF_EVEN rounding that `[[daftar-rounding-is-not-additive]]`
+  // warns about, and the worked example at
+  // `packages/accounting/src/sale-posting.ts:44-59`, is unexpressible here
+  // rather than merely avoided.
   const totalBaseMinor = convert(input.totalMinor, input.conversion);
   if (totalBaseMinor === 0n) refuse('credit_note.amount_below_base_unit', 'the credit note total converts to less than one base minor unit');
-  // The applied part and the liability part are an exact integer SPLIT of the
-  // ONE header conversion, never two independent conversions. Two HALF_EVEN
-  // roundings at two grains disagree by construction
-  // (`[[daftar-rounding-is-not-additive]]`, and the worked example at
-  // `packages/accounting/src/sale-posting.ts:44-59`), and the difference would
-  // be revenue invented by a rounding.
-  const appliedBaseMinor = input.appliedToInvoiceMinor === 0n ? 0n : convert(input.appliedToInvoiceMinor, input.conversion);
-  const liabilityBaseMinor = totalBaseMinor - appliedBaseMinor;
-  if (liabilityBaseMinor < 0n) refuse('customer_refund.arithmetic_invalid', 'the split of a credit note total is not a split');
-  const liabilityMinor = input.totalMinor - input.appliedToInvoiceMinor;
-  if (liabilityMinor > 0n && liabilityBaseMinor === 0n) {
-    refuse('credit_note.residue_below_base_unit', 'the refundable remainder converts to less than one base minor unit');
-  }
 
   const revenue: ReturnsEntryLine[] = [
     Object.freeze({
@@ -440,29 +441,14 @@ export function planCreditNoteReversal(input: CreditNoteReversalInput): CreditNo
       txnAmountMinor: input.totalMinor,
       baseAmountMinor: totalBaseMinor,
     }),
+    Object.freeze({
+      account: 'customer_refund_liability' as const,
+      side: 'C' as const,
+      currency: 'source' as const,
+      txnAmountMinor: input.totalMinor,
+      baseAmountMinor: totalBaseMinor,
+    }),
   ];
-  if (input.appliedToInvoiceMinor > 0n) {
-    revenue.push(
-      Object.freeze({
-        account: 'accounts_receivable' as const,
-        side: 'C' as const,
-        currency: 'invoice' as const,
-        txnAmountMinor: input.appliedToInvoiceMinor,
-        baseAmountMinor: appliedBaseMinor,
-      }),
-    );
-  }
-  if (liabilityMinor > 0n) {
-    revenue.push(
-      Object.freeze({
-        account: 'customer_refund_liability' as const,
-        side: 'C' as const,
-        currency: 'source' as const,
-        txnAmountMinor: liabilityMinor,
-        baseAmountMinor: liabilityBaseMinor,
-      }),
-    );
-  }
 
   const cogs = creditNoteCogsReversalBaseMinor(input.returnedMovements);
   // `throw` rather than `refuse(...)`, so the discriminated union narrows for the
@@ -478,12 +464,152 @@ export function planCreditNoteReversal(input: CreditNoteReversalInput): CreditNo
   }
   return Object.freeze({
     totalBaseMinor,
-    appliedBaseMinor,
-    liabilityBaseMinor,
     cogsReversalBaseMinor: cogs.baseMinor,
     revenueEntryLines,
     cogsEntryLines,
   });
+}
+
+// ── (b2) One application of a credit note to an invoice ─────────────────
+
+/**
+ * The ONE place in this slice where `accounts_receivable` falls, and it does
+ * not compute how far.
+ *
+ * ## Why this delegates instead of implementing
+ *
+ * «ONE canonical algorithm for AR.» An application of a credit note to an
+ * invoice is arithmetically the SAME operation as an application of a customer
+ * credit to an invoice: a consumer with a stored `(original, original_carrying,
+ * remaining)` triple and its own FX snapshot releases `c` against an invoice
+ * with its own stored `(total, carrying)` pair and snapshot, at the invoice's
+ * level `X = T − O`. Every number — the level, the AR release `rel = R(X + a) −
+ * R(X)`, the converted principal `conv_R(a)`, the dust `rel − conv_R(a)` on the
+ * SAME account, the consumer's `cr_rel`, and the realized FX `cr_rel − rel` —
+ * is a number `planCustomerCreditApplication`
+ * (`packages/inventory/src/customer-settlement.ts:593`) already computes, and
+ * its `CustomerCreditApplicationPlan extends ArSide, CreditSide` carries
+ * exactly the seven amounts `credit_note_applications` stores and its
+ * `*_realized_ck` constrains.
+ *
+ * It delegates rather than calling the pieces because the pieces are not
+ * callable: `arSide` (`:312`), `arLines` (`:441`), `creditSide` (`:360`),
+ * `creditLines` (`:457`), `realizedLines` (`:479`) and `balanced` (`:420`) are
+ * all MODULE-PRIVATE in that file, and `packages/inventory` is single-owner in
+ * this phase, so widening their visibility is a patch request and not an edit I
+ * may make (and a widening that only one caller wants is a poor trade anyway).
+ * The single canonical statement is therefore:
+ *
+ *   **A credit-note application IS a customer-credit application with one
+ *   account relabelled.**
+ *
+ * ## The one difference, and its scope
+ *
+ * `creditLines` hardcodes `customer_credit_liability` (2210) because a customer
+ * credit IS that liability. A credit note's liability is
+ * `customer_refund_liability` (2200) — the one `planCreditNoteReversal` raised
+ * above. So the plan's lines are passed through `returnsLineOfReceivableLine`,
+ * which relabels 2210 → 2200 and leaves every other account, every side and
+ * every amount untouched, and the result is re-run through this module's own
+ * `balanced` so the relabelling is PROVED not to have disturbed the entry
+ * rather than assumed not to have. `PATCH-REQ-S5-008` is the request to
+ * parameterize that account at promotion, after which the relabelling
+ * disappears and the delegation is total.
+ *
+ * The refusal codes are translated by `CREDIT_NOTE_CODE_OF` — a TOTAL map over
+ * the seven `customer_credit_application.*` members of
+ * `ReceivableArithmeticCode`, so a code added upstream fails to compile here
+ * instead of leaking an S4 vocabulary word onto an S5 route.
+ */
+export interface CreditNoteApplicationInput {
+  /** The invoice's stored pair and snapshot, read under ITS lock. Never the note's snapshot standing in for it. */
+  readonly invoice: InvoiceArState;
+  /** The note's remaining pair and its own stored snapshot, read under the note's lock. */
+  readonly note: CustomerCreditState;
+  /** The note's currency is the invoice's, so `c = a` (A-10). */
+  readonly sameCurrency: boolean;
+  /** `c` > 0, in the note's currency, ≤ the locked remaining. */
+  readonly consumedMinor: bigint;
+  /** `a` > 0, in the invoice's currency, ≤ `O`. */
+  readonly appliedMinor: bigint;
+}
+
+/**
+ * Every amount one `credit_note_applications` row stores — the canonical plan's
+ * own field set, unchanged, with only the entry's account vocabulary narrowed
+ * to S5's. `Omit` rather than a restatement: a restated field list is a second
+ * declaration of the same truth, and would go stale silently.
+ */
+export type CreditNoteApplicationPlan = Omit<CustomerCreditApplicationPlan, 'entryLines'> & {
+  readonly entryLines: readonly ReturnsEntryLine[];
+};
+
+/** 2210 → 2200, and nothing else. `posting_account` is deliberately absent: this entry never touches it. */
+const RETURNS_ACCOUNT_OF_RECEIVABLE_ACCOUNT = Object.freeze({
+  accounts_receivable: 'accounts_receivable',
+  customer_credit_liability: 'customer_refund_liability',
+  fx_gain: 'fx_gain',
+  fx_loss: 'fx_loss',
+} as const satisfies Partial<Record<ReceivableEntryLine['account'], CreditNoteEntryAccount>>);
+
+/** The snapshot names, mapped. `payment` is deliberately absent: a credit-note application has no payment leg. */
+const RETURNS_CURRENCY_OF_RECEIVABLE_CURRENCY = Object.freeze({
+  invoice: 'invoice',
+  credit: 'source',
+  base: 'base',
+} as const satisfies Partial<Record<ReceivableEntryLine['currency'], ReturnsEntryLine['currency']>>);
+
+function returnsLineOfReceivableLine(line: ReceivableEntryLine): ReturnsEntryLine {
+  const account = (RETURNS_ACCOUNT_OF_RECEIVABLE_ACCOUNT as Partial<Record<string, CreditNoteEntryAccount>>)[line.account];
+  const currency = (RETURNS_CURRENCY_OF_RECEIVABLE_CURRENCY as Partial<Record<string, ReturnsEntryLine['currency']>>)[line.currency];
+  if (account === undefined || currency === undefined) {
+    // `throw` rather than `refuse(...)`: an arrow-function `never` does not
+    // narrow for the compiler, and the two `undefined`s below must be gone.
+    throw new ReturnsPlanError('customer_refund.arithmetic_invalid', 'a credit note application entry names only its own accounts and snapshots');
+  }
+  return Object.freeze({ account, side: line.side, currency, txnAmountMinor: line.txnAmountMinor, baseAmountMinor: line.baseAmountMinor });
+}
+
+/**
+ * The S5 code for each refusal the canonical AR arithmetic raises on this path.
+ *
+ * Total over the `customer_credit_application.*` half of
+ * `ReceivableArithmeticCode` by construction. The `customer_payment.*` half is
+ * reachable too — `arSide` raises `customer_payment.arithmetic_invalid` for an
+ * outstanding that exceeds the total, and `creditSide` for a remaining that
+ * exceeds the original — and those are defects of the CALLER's read, so they
+ * land on `credit_note.settlement_changed`: the invoice or the note moved under
+ * the lock the caller thought it held.
+ */
+const CREDIT_NOTE_CODE_OF = Object.freeze({
+  'customer_credit_application.amount_invalid': 'credit_note.amount_invalid',
+  'customer_credit_application.amount_exceeds_outstanding': 'credit_note.amount_exceeds_outstanding',
+  'customer_credit_application.amount_below_base_unit': 'credit_note.amount_below_base_unit',
+  'customer_credit_application.amount_mismatch': 'credit_note.amount_mismatch',
+  'customer_credit_application.residue_below_base_unit': 'credit_note.residue_below_base_unit',
+  'customer_credit_application.credit_exhausted': 'credit_note.note_exhausted',
+  'customer_credit_application.amount_exceeds_credit': 'credit_note.amount_exceeds_note',
+} as const satisfies Record<Extract<ReceivableArithmeticCode, `customer_credit_application.${string}`>, ReturnsRefusalCode>);
+
+export function planCreditNoteApplication(input: CreditNoteApplicationInput): CreditNoteApplicationPlan {
+  let canonical: CustomerCreditApplicationPlan;
+  try {
+    canonical = planCustomerCreditApplication({
+      invoice: input.invoice,
+      credit: input.note,
+      sameCurrency: input.sameCurrency,
+      consumedMinor: input.consumedMinor,
+      appliedMinor: input.appliedMinor,
+    });
+  } catch (err) {
+    if (!(err instanceof ReceivableArithmeticError)) throw err;
+    const mapped = (CREDIT_NOTE_CODE_OF as Partial<Record<string, ReturnsRefusalCode>>)[err.code];
+    // A `customer_payment.*` code on this path is the caller's stale read, not
+    // a merchant's bad amount: the document moved under the lock.
+    throw new ReturnsPlanError(mapped ?? 'credit_note.settlement_changed', 'the canonical AR arithmetic refused this credit note application');
+  }
+  const { entryLines: canonicalLines, ...amounts } = canonical;
+  return Object.freeze({ ...amounts, entryLines: balanced(canonicalLines.map(returnsLineOfReceivableLine)) });
 }
 
 // ── (c) The consumption chain of a source, verified ─────────────────────

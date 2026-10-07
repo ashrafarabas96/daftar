@@ -68,6 +68,16 @@ const RETURNS_STATUS = {
   /** The application would leave the invoice or the note a remaining amount converting to less than one base minor unit. */
   'credit_note.residue_below_base_unit': 422,
   'credit_note.amount_mismatch': 422,
+  /**
+   * The application exceeds what the invoice still owes, or what the note
+   * still has. Both are 422 and not 409: the figure the caller was shown is
+   * the figure the lock returned, so this is a bad amount and not a race —
+   * a race is `settlement_changed`.
+   */
+  'credit_note.amount_exceeds_outstanding': 422,
+  'credit_note.amount_exceeds_note': 422,
+  /** The note has nothing left to apply. 409: the note's state, not the request's amount. */
+  'credit_note.note_exhausted': 409,
   'credit_note.customer_mismatch': 409,
   /** The invoice is a draft or void: neither owes anything, so neither can be credited. */
   'credit_note.invoice_state_invalid': 409,

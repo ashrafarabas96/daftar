@@ -583,17 +583,62 @@ customer_void_credit_note(...)   owner daftar_inventory_internal
 customer_refund_pay(...)         owner daftar_inventory_internal
 ```
 
-Plus the two deferred completeness validators the registered source types require —
-`TL-P4-S1-R1`: "an accounting source type with no writer, no binding, no expected journal
-shape and no deferred completeness validator is a dead concept":
+Plus **one deferred completeness validator PER REGISTERED SOURCE TYPE — three, not two** —
+because `TL-P4-S1-R1` says "an accounting source type with no writer, no binding, no expected
+journal shape and no deferred completeness validator is a dead concept", and S5 registers
+three types (§5.2): `customer_return`, `customer_credit_note_application` and
+`customer_refund`:
 
 ```
 accounting_customer_return_entry_complete(...)
+accounting_customer_credit_note_application_entry_complete(...)
 accounting_customer_refund_entry_complete(...)
 ```
 
 Each compares `array_agg(... ORDER BY ...)` on both sides, so it pins a SORTED MULTISET and is
 order-insensitive, the `0081:1594` shape.
+
+**The `customer_return` validator's expected shape — the note's OWN entry:**
+
+```
+Dr sales_returns (4100)                 the note's total, at the note's ONE conversion
+   Cr customer_refund_liability (2200)  the same total, the same base
+```
+
+and, separately, the COGS reversal at its own grain:
+
+```
+Dr inventory (1200)   Σ stock_movements.value_delta_base_minor, exactly
+   Cr cogs (5000)
+```
+
+**This validator asserts the ABSENCE of a line on `accounts_receivable` (1100), by name**, for
+the same reason the refund validator does. Issuing a credit note raises a liability for the
+whole total and reduces no receivable; whether any of it is then set against an invoice is a
+`credit_note_applications` row and nothing else. Two places that could reduce AR would be two
+answers to "by how much", and — because the note's snapshot and the invoice's differ — two
+DIFFERENT answers: 3 633 at a note issued at 1.0901 against 3 617 at an invoice born at
+1.0853, on the same 3 333 applied. The 16 is realized FX, not revenue, and only the invoice's
+own stored pair can say so.
+
+**The `customer_credit_note_application` validator's expected shape — the ONE AR reducer:**
+
+```
+Dr customer_refund_liability (2200)   c, at conv_Rn(c)
+   ± the note dust, on the SAME liability account, never on 6100
+   Cr accounts_receivable (1100)      a, at conv_R(a) — the INVOICE's snapshot
+   ± the AR dust, on `accounts_receivable` itself, never on 6100
+   ± realized FX = cr_rel − rel — Cr 4900 on a gain, Dr 6900 on a loss
+```
+
+This is `accounting_customer_credit_application_entry_complete`'s shape (`0081:1594`) with
+`customer_credit_liability` (2210) read as `customer_refund_liability` (2200), which is the
+structural statement of the application plan's delegation: one AR algorithm, one account
+substituted. The validator must therefore pin `credit_carrying_base_released_minor` and
+`invoice_carrying_base_released_minor` as the two carrying operands and `realized_fx_gain_loss_minor`
+as their difference — the same three columns `credit_note_applications_realized_ck` (§3.1)
+constrains inside the row, asserted here against the ENTRY so a row that satisfies its own
+CHECK but posts something else cannot commit.
 
 **The refund validator's expected shape, stated so the validator cannot be written loosely:**
 

@@ -423,6 +423,9 @@ export type ReturnsRefusalCode =
   | 'credit_note.amount_below_base_unit'
   | 'credit_note.residue_below_base_unit'
   | 'credit_note.amount_mismatch'
+  | 'credit_note.amount_exceeds_outstanding'
+  | 'credit_note.amount_exceeds_note'
+  | 'credit_note.note_exhausted'
   | 'credit_note.customer_mismatch'
   | 'credit_note.invoice_state_invalid'
   | 'credit_note.invoice_walkin'
@@ -465,6 +468,9 @@ export const RETURNS_REFUSAL_CODES: readonly ReturnsRefusalCode[] = Object.freez
   'credit_note.amount_below_base_unit',
   'credit_note.residue_below_base_unit',
   'credit_note.amount_mismatch',
+  'credit_note.amount_exceeds_outstanding',
+  'credit_note.amount_exceeds_note',
+  'credit_note.note_exhausted',
   'credit_note.customer_mismatch',
   'credit_note.invoice_state_invalid',
   'credit_note.invoice_walkin',

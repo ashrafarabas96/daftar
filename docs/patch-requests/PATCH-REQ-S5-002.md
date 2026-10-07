@@ -77,7 +77,7 @@ ones. The replacement keeps the surrounding
 nothing else, and it re-issues `REVOKE ALL … FROM PUBLIC` because `CREATE OR REPLACE` resets a
 function's ACL.
 
-**(c) Ship the two deferred completeness validators** in the same migration, because
+**(c) Ship the THREE deferred completeness validators** — one per registered type — in the same migration, because
 `TL-P4-S1-R1` is that *"an accounting source type with no writer, no binding, no expected
 journal shape and no deferred completeness validator is a dead concept"*.
 

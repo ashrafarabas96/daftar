@@ -18,7 +18,7 @@ Companion documents, both written by this slice:
 - `docs/PHASE_4_S5_DDL_SPECIFICATION.md` — level E. The DDL **specification**: four relations,
   their FK map, CHECKs, indexes, RLS, triggers, expected catalogue shape and upgrade
   expectations. **No `.sql` file. No number.**
-- `docs/patch-requests/PATCH-REQ-S5-001.md` … `-007.md` — one per shared-file change S5 needs
+- `docs/patch-requests/PATCH-REQ-S5-001.md` … `-008.md` — one per shared-file change S5 needs
   and may not make itself.
 
 Required prior reading, read in full before anything here was designed:
@@ -58,6 +58,7 @@ section below is an answer to one of them.
 | law | the structure that enforces it | where |
 |---|---|---|
 | 1 | a refund's shape has no field that could name an invoice, and its entry's account set excludes `accounts_receivable` by a CLOSED union | `REFUND_NAMES_NO_INVOICE`, `REFUND_ENTRY_ACCOUNTS`, `assertNoReceivableLine` |
+| 1a | AR has ONE home and ONE algorithm: the credit note's own entry has no `accounts_receivable` line and its input shape cannot be handed an invoice, so every AR reduction is a `credit_note_applications` row produced by the canonical `planCustomerCreditApplication` at the INVOICE's stored snapshot | `planCreditNoteReversal` (no invoice, no AR line, ONE conversion), `planCreditNoteApplication` (delegates; `PATCH-REQ-S5-008` removes the one relabelling) |
 | 2 | two nullable `*_id` columns, each with a real composite FK, plus `CHECK (num_nonnulls(...) = 1)`. The kind is DERIVED, never stored | `resolveRefundSource`; DDL spec §4.2, §4.4 |
 | 3 | the cap function takes the LOCKED remaining as an argument, so the question cannot be asked without the lock; no column name in the slice can carry a total | `refundCapRefusal`, `consumedSide`; `FORBIDDEN_REFUND_FIELD_NAMES` |
 | 4 | the plan layer imports the four accepted primitives and contains no `HALF_EVEN`, no rounding function and no `10n ** 18n`; the COGS input shape has no quantity and no unit cost | `returns-settlement.ts`; `creditNoteCogsReversalBaseMinor` |
@@ -269,12 +270,18 @@ Lead rules, the lock's enumeration is not it.** `PATCH-REQ-S5-002`.
 ### 5.2 The journal shapes
 
 ```
-customer_return                        Dr sales_returns (4100)            total, note currency
-                                               Cr accounts_receivable (1100)   the APPLIED part — AR falls ONCE
-                                               Cr customer_refund_liability (2200)   the rest
+customer_return                              Dr sales_returns (4100)               the WHOLE total, note currency
+                                               Cr customer_refund_liability (2200) the same total, ONE conversion
+                                             — and NO accounts_receivable line —
 
-the same command's COGS entry                Dr inventory (1200)               Σ EXACT stored value deltas
+the same command's COGS entry                Dr inventory (1200)                   Σ EXACT stored value deltas
                                                Cr cogs (5000)
+
+customer_credit_note_application             Dr customer_refund_liability (2200)   c, at conv_Rn(c)
+   — the ONE AR reducer —                      ± the note dust, SAME liability account
+                                               Cr accounts_receivable (1100)       a, at conv_R(a) — the INVOICE's snapshot
+                                               ± the AR dust, on 1100 itself
+                                               ± realized FX = cr_rel − rel — Cr 4900 gain / Dr 6900 loss
 
 customer_refund, source = credit_note        Dr customer_refund_liability (2200)
 customer_refund, source = customer_credit    Dr customer_credit_liability (2210)
@@ -283,8 +290,21 @@ customer_refund, source = customer_credit    Dr customer_credit_liability (2210)
                                                ± realized FX — Cr 4900 gain / Dr 6900 loss
 ```
 
-Four decisions, each with its law:
+Five decisions, each with its law:
 
+- **AR falls in ONE relation, and the amount is the INVOICE's, not the note's.** The note's own
+  entry raises the liability for its whole total and carries no `accounts_receivable` line at
+  all; every reduction of AR is a `credit_note_applications` row, and every amount on that row
+  comes out of the canonical AR arithmetic
+  (`planCustomerCreditApplication`, `packages/inventory/src/customer-settlement.ts:593`) reached
+  through `planCreditNoteApplication`, which substitutes 2210 for 2200 and changes no number.
+  The reason this matters is arithmetic and not stylistic: a note issued at 1.0901 against an
+  invoice born at 1.0853 gives `cr_rel = 3 633` and `rel = 3 617` on the same 3 333 applied, and
+  only the invoice's own stored `(total, carrying)` pair may say how far ITS receivable falls.
+  The 16-minor difference is REALIZED FX on its own line, which is exactly the fact a second AR
+  home would have silently booked as revenue. One canonical algorithm for AR, and the AR dust
+  line and the realized-FX line that come with it, are therefore present on the application
+  entry and unexpressible on the note's;
 - **the revenue reversal debits 4100, not a negative 4000.**
   `packages/accounting/src/sale-posting.ts:31` records in its own words that "4100 is the RETURN
   account and belongs to P4-S5". A contra-revenue account exists so returns are VISIBLE rather
@@ -342,9 +362,9 @@ recorded — and `payments.reverse` is P4-S6's.
 
 ## 7. Refusal codes
 
-37 codes, closed union, in `@daftar/domain-core`'s `ReturnsRefusalCode`; classified by an
+40 codes, closed union, in `@daftar/domain-core`'s `ReturnsRefusalCode`; classified by an
 EXPLICIT TABLE in `apps/api/src/modules/returns/returns-errors.ts`; rendered from
-`error.credit_note.*` and `error.customer_refund.*` in all three locale catalogues (952 keys ×
+`error.credit_note.*` and `error.customer_refund.*` in all three locale catalogues (955 keys ×
 3, `npm run check:localization` PASS).
 
 **Both directions are compile errors, not tests.** `satisfies Record<ReturnsRefusalCode, number>`
@@ -594,9 +614,9 @@ The checks, each with what makes it non-vacuous:
 | **B** | the repository ports, the refusal status table with its two compile-time totality checks, the route authority table | `apps/api/src/modules/returns/returns-ports.ts`, `-errors.ts`, `-permissions.ts` |
 | **C** | 49 unit tests and red proofs across 13 sections, every guard shown able to FAIL on a REAL planted subject | `tests/guards/p4s5-refund-plan-red-proofs.test.ts`, `packages/shared-contracts/test/phase4-s5-returns-contracts.test.ts` |
 | **C** | the five cap-race concurrency MODELS — deterministic, barrier-based, **no sleep, no timer** — each with a red proof that the broken protocol overdraws | `tests/guards/p4s5-refund-cap-concurrency-models.test.ts` |
-| **D** | the API surface (7 routes), and localization in ar/en/tr (37 keys × 3; `check:localization` PASS at 952 × 3) | `-permissions.ts`; `apps/web/src/messages/{ar,en,tr}.json` |
+| **D** | the API surface (7 routes), and localization in ar/en/tr (40 keys × 3; `check:localization` PASS at 955 × 3) | `-permissions.ts`; `apps/web/src/messages/{ar,en,tr}.json` |
 | **E** | the DDL **specification**: 4 relations, the full FK map, CHECKs, indexes, RLS policies, triggers, expected catalogue shape, upgrade expectations. **No `.sql`. No number.** | `docs/PHASE_4_S5_DDL_SPECIFICATION.md` |
-| — | 7 patch requests | `docs/patch-requests/PATCH-REQ-S5-001…007.md` |
+| — | 8 patch requests | `docs/patch-requests/PATCH-REQ-S5-001…008.md` |
 
 ### The checklist that would make it YES
 
@@ -619,6 +639,9 @@ Nothing on it can be done before S4 seals and this slice is promoted.
       script + measured budgets) — (b) and (c) together or neither.
 - [ ] `PATCH-REQ-S5-007` landed or formally withdrawn as already fixed.
 - [ ] `PATCH-REQ-S5-004` applied (the plan layer relocated, with its vectors file).
+- [ ] `PATCH-REQ-S5-008` applied (the liability account parameterized in `creditLines`), after
+      which `planCreditNoteApplication`'s relabelling of 2210 to 2200 is deleted and its
+      delegation to the canonical AR arithmetic is total.
 
 **Gate 2 — level F, the real DB binding**
 - [ ] the migration written by the single migration owner, from the §E specification, under the
@@ -628,7 +651,7 @@ Nothing on it can be done before S4 seals and this slice is promoted.
       **Not by a new rounding function.**
 - [ ] `cogs_reversal_base_minor` re-measured against `DERIVED_COST_COLUMN`. If it matches, the
       COLUMN is renamed; the guard is not relaxed.
-- [ ] the three commands, the two reads and the two deferred completeness validators written,
+- [ ] the three commands, the two reads and the THREE deferred completeness validators written,
       each internal-owned, `search_path`-pinned, `REVOKE ALL … FROM PUBLIC`.
 - [ ] the services, the controller and the module registration, every refusal path reaching the
       ONE `auditThenRethrow…` composer (P4-AL-48 — never a second copy).
