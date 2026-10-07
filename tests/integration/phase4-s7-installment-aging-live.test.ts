@@ -1125,3 +1125,157 @@ describe("§G ROW SECURITY, MEASURED AS A NON-SUPERUSER — and C1's negative co
     expect(without.rows[0]?.ok).toBe(true);
   });
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+describe('§H "ONCE PER CALL" — the claim that reached TL-P4-COORD-R31 out of my report, now MEASURED (round 6 F5)', () => {
+  /**
+   * F5 WAS AS MUCH THE COORDINATOR'S AS MINE, AND IT IS THE CHEAPEST KIND OF
+   * DEFECT TO LET THROUGH. My round-5 report said the guard was "asked ONCE
+   * PER CALL about the whole set"; that sentence was written into a ruling and
+   * nothing in any suite had ever counted a call. It sat in the INDICATIVE
+   * inside a section headed "NOT MEASURED", which is the worst place for it.
+   *
+   * It also mattered. A guard evaluated PER ROW on a customer with a thousand
+   * open invoices is a thousand catalogue scans inside a reader, and the whole
+   * reason the round-6 shape is safe to put in the hot path is that it runs
+   * once.
+   *
+   * SO IT IS COUNTED, BY POSTGRESQL, AND THE FIXTURE DISCRIMINATES. A
+   * measurement that only ever looks at ONE no-plan invoice cannot tell "once
+   * per call" from "once per row" — the two answers coincide at one row, which
+   * is exactly the shape of a matrix built to the detector. So two customers
+   * are read: one with ONE open invoice and one with THREE, and the row counts
+   * are asserted to differ before the call counts are compared. Per call, both
+   * are 1; per row, they would be 1 and 3.
+   *
+   * THE INSTRUMENT is `pg_stat_user_functions.calls` with `track_functions`,
+   * reset precisely with `pg_stat_reset_single_function_counters(oid)` rather
+   * than `pg_stat_reset()`, which would clear the whole cluster's statistics
+   * for everything else running here.
+   */
+  let manyCustomer = '';
+  let oneCustomer = '';
+  let guardOid = '';
+
+  beforeAll(async () => {
+    oneCustomer = customerId;
+    manyCustomer = await newCustomer(w);
+    for (let n = 0; n < 3; n += 1) {
+      const saleId = randomUUID();
+      const sale = await confirmSale(w.t, w.headers, {
+        saleId,
+        customerId: manyCustomer,
+        warehouseId: w.shop.w1,
+        branchId: w.shop.branchX,
+        occurredOn: w.day,
+        dueDate: w.day,
+        lines: [{ productId: w.shop.piece.productId, quantity: '3' }],
+      });
+      expect(sale.status, `credit sale ${String(n)} for the three-invoice customer: ${JSON.stringify(sale.body)}`).toBeLessThan(300);
+    }
+    guardOid =
+      (await ownerPool().query<{ oid: string }>(`SELECT 'public.installment_plan_visibility_assert()'::regprocedure::oid::text AS oid`)).rows[0]?.oid ?? '';
+    expect(guardOid, 'the guard has no oid, so there is nothing to count').not.toBe('');
+  }, 300_000);
+
+  it('the guard is evaluated ONCE PER CALL and not once per no-plan invoice', async () => {
+    const c = await ownerPool().connect();
+    try {
+      // `track_functions` is session-settable by a superuser, and this is why
+      // the arm holds ONE client rather than borrowing from the pool: a `SET`
+      // on a connection that goes back to the pool measures the wrong session.
+      await c.query(`SET track_functions = 'pl'`);
+      // `SHOW` names its own column, so the reading is taken through
+      // `current_setting`: a `SHOW` read as `{ s }` comes back UNDEFINED, and
+      // the assertion below then fails for the wrong reason — which is how a
+      // non-vacuity check turns into noise about itself.
+      const setting = await c.query<{ s: string }>(`SELECT pg_catalog.current_setting('track_functions') AS s`);
+      expect(setting.rows[0]?.s, 'function statistics are not being collected, so every count below would be zero').toBe('pl');
+
+      const countFor = async (customer: string): Promise<{ calls: number; invoices: number }> => {
+        await c.query(`SELECT pg_stat_reset_single_function_counters($1::oid)`, [guardOid]);
+        const r = await c.query<AgingRow>(`SELECT * FROM customer_ar_aging($1, $2, $3::DATE, $4::INTEGER[])`, [w.shop.businessId, customer, asOf, BUCKET_DAYS]);
+        // THE FLUSH IS FORCED, AND THE FIRST VERSION OF THIS ARM DID NOT DO
+        // IT AND READ ZERO. A backend accumulates its function statistics
+        // locally and flushes them to shared memory at transaction end, but
+        // subsequent flushes are RATE-LIMITED, so the reading taken
+        // immediately afterwards saw nothing and the non-vacuity check
+        // correctly refused to call that a measurement.
+        // `pg_stat_force_next_flush()` removes the rate limit for this
+        // backend's next flush.
+        await c.query(`SELECT pg_stat_force_next_flush()`);
+        const s = await c.query<{ calls: string | null }>(`SELECT calls::text AS calls FROM pg_stat_user_functions WHERE funcid = $1::oid`, [guardOid]);
+        // THE ROW COUNT IS NOT THE SUBJECT, AND THE FIRST FIXTURE GOT THIS
+        // WRONG. Three invoices sharing one due date fall in ONE band, so the
+        // reader returns one row for one invoice and one row for three — and
+        // "more rows" was therefore false of a fixture that really does differ.
+        // What a per-row evaluation would scale with is the number of NO-PLAN
+        // INVOICES reaching arm (c), and the return shape carries exactly that
+        // in `invoice_count`.
+        const invoices = r.rows.reduce((t, x) => t + Number(x.invoice_count), 0);
+        return { calls: Number(s.rows[0]?.calls ?? '0'), invoices };
+      };
+
+      // NON-VACUITY FIRST: the instrument must be able to see a call at all,
+      // or "exactly 1" is indistinguishable from "statistics are off".
+      const one = await countFor(oneCustomer);
+      expect(one.calls, 'the counter saw NO call, so this arm measures the instrument and not the guard').toBeGreaterThan(0);
+
+      const many = await countFor(manyCustomer);
+      // THE FIXTURE DISCRIMINATES, asserted BEFORE the counts are compared:
+      // one no-plan invoice against three, read by the routine itself.
+      expect(one.invoices, 'the one-invoice customer is not serving one no-plan invoice').toBe(1);
+      expect(many.invoices, 'the three-invoice customer is not serving three no-plan invoices, so the fixture cannot tell per-call from per-row').toBe(3);
+      const invoices = await ownerPool().query<{ n: string }>(
+        `SELECT count(*)::text AS n FROM invoices WHERE business_id = $1 AND customer_id = $2 AND status = 'open'`,
+        [w.shop.businessId, manyCustomer],
+      );
+      expect(invoices.rows[0]?.n, 'the three-invoice customer does not have three open invoices').toBe('3');
+
+      // THE LAW.
+      expect(one.calls, 'the guard is called more than once for a single call of the reader').toBe(1);
+      expect(many.calls, 'THE GUARD IS EVALUATED PER ROW: the claim written into TL-P4-COORD-R31 is false').toBe(1);
+
+      // THE INSTRUMENT CAN SAY MORE THAN ONE, and without this the law above
+      // is a counter that only ever reads 1.
+      //
+      // I TRIED THE OBVIOUS MUTANT FIRST AND IT DID NOT DISCRIMINATE. Moving
+      // the call from `CROSS JOIN (SELECT assert()) g WHERE g.ok` into the
+      // row qualification itself — `WHERE assert()` over `no_plan` — still
+      // read exactly 1, because a row-INDEPENDENT qualification is a one-time
+      // filter to the planner. So "once per call" is NOT a property of this
+      // spelling; it is a property of the SIGNATURE, and it is the
+      // zero-argument shape F1 required that makes a per-row evaluation
+      // INEXPRESSIBLE. §2b refuses `pronargs <> 0` at apply time, which is
+      // therefore also what keeps this reading true.
+      //
+      // Which leaves one thing still to measure: that `calls` would have
+      // reported a per-row evaluation had there been one. A one-argument
+      // STABLE probe — the shape the guard is forbidden to have — called with
+      // a value from each row, counted the same way:
+      await c.query(
+        `CREATE FUNCTION pg_temp.s7_percall_probe(p UUID) RETURNS BOOLEAN
+         LANGUAGE plpgsql STABLE AS $probe$ BEGIN RETURN p IS NOT NULL; END; $probe$`,
+      );
+      const probeOid = (await c.query<{ oid: string }>(`SELECT 'pg_temp.s7_percall_probe(uuid)'::regprocedure::oid::text AS oid`)).rows[0]?.oid ?? '';
+      expect(probeOid, 'the probe has no oid, so the control below counts nothing').not.toBe('');
+      await c.query(`SELECT pg_stat_reset_single_function_counters($1::oid)`, [probeOid]);
+      const probed = await c.query<{ n: string }>(
+        `SELECT count(*)::text AS n FROM invoices i
+          WHERE i.business_id = $1 AND i.customer_id = $2 AND i.status = 'open' AND pg_temp.s7_percall_probe(i.id)`,
+        [w.shop.businessId, manyCustomer],
+      );
+      await c.query(`SELECT pg_stat_force_next_flush()`);
+      const probeCalls = await c.query<{ calls: string | null }>(`SELECT calls::text AS calls FROM pg_stat_user_functions WHERE funcid = $1::oid`, [probeOid]);
+      expect(probed.rows[0]?.n, 'the probe did not see the three rows it was supposed to be called on').toBe('3');
+      expect(
+        Number(probeCalls.rows[0]?.calls ?? '0'),
+        'THE INSTRUMENT CANNOT COUNT PAST ONE: the law above is a counter that only ever reads 1, so it measures nothing',
+      ).toBe(3);
+      await c.query(`DROP FUNCTION pg_temp.s7_percall_probe(UUID)`);
+    } finally {
+      await c.query(`RESET track_functions`).catch(() => undefined);
+      c.release();
+    }
+  }, 180_000);
+});
