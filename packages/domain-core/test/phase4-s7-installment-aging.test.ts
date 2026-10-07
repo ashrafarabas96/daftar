@@ -85,7 +85,6 @@ import {
   type OpenInvoiceRow,
   type ProjectionPolicy,
   type ReleaseFn,
-  type SettlementOrder,
 } from './phase4-s7-aging-reference-model';
 
 const REPO = join(__dirname, '..', '..', '..');
@@ -139,6 +138,7 @@ import {
   proofLedger,
   recordProof,
   relationsTouched,
+  scheduleInvariantAccepts,
   scheduleInvariantVerdict,
   unpaidDuePortion,
 } from './phase4-s7-proof-oracles';
@@ -220,8 +220,14 @@ function sqlCodeOnly(sql: string): string {
       // literal so the statement's SHAPE survives and its prose does not.
       let j = i + 1;
       while (j < src.length) {
-        if (src[j] === "'" && src[j + 1] === "'") { j += 2; continue; }
-        if (src[j] === "'") { j += 1; break; }
+        if (src[j] === "'" && src[j + 1] === "'") {
+          j += 2;
+          continue;
+        }
+        if (src[j] === "'") {
+          j += 1;
+          break;
+        }
         j += 1;
       }
       out += "''";
@@ -277,28 +283,97 @@ function projectionSketch(sql: string): string {
  * working, not a defect in the proof.
  */
 const MANDATORY: readonly MandatoryProof[] = Object.freeze([
-  Object.freeze({ id: 'proof_1', armTitleContains: 'FIRES', arms: 2, requiresInArm: ["mutate('clampToRowAmount'"], minAssertions: 3, file: 'phase4-s7-installment-aging.test.ts' }),
-  Object.freeze({ id: 'proof_2', armTitleContains: 'FIRES', arms: 3, requiresInArm: ["mutate('bucketBy'", 'BUCKET_MUTANTS'], minAssertions: 3, file: 'phase4-s7-installment-aging.test.ts' }),
-  Object.freeze({ id: 'proof_3', armTitleContains: 'FIRES', arms: 1, requiresInArm: ["mutate('planlessArm'"], minAssertions: 3, file: 'phase4-s7-installment-aging.test.ts' }),
-  Object.freeze({ id: 'proof_4', armTitleContains: 'FIRES', arms: 1, requiresInArm: ["mutate('carryResidual'"], minAssertions: 3, file: 'phase4-s7-installment-aging.test.ts' }),
-  Object.freeze({ id: 'proof_5', armTitleContains: 'FIRES', arms: 1, requiresInArm: ["mutate('outstandingSource'"], minAssertions: 3, file: 'phase4-s7-installment-aging.test.ts' }),
-  Object.freeze({ id: 'proof_6', armTitleContains: 'FIRES', arms: 4, requiresInArm: ['journalFindings(', 'relationsRead(', 'canonicalReducerRegistry('], minAssertions: 3, file: 'phase4-s7-installment-aging.test.ts' }),
-  Object.freeze({ id: 'proof_7', armTitleContains: 'FIRES', arms: 2, requiresInArm: ['findAuthoritativeSalesColumns('], minAssertions: 3, file: 'phase4-s7-installment-aging.test.ts' }),
-  Object.freeze({ id: 'proof_8', armTitleContains: 'FIRES', arms: 1, requiresInArm: ['FINANCIAL_TIME'], minAssertions: 3, file: 'phase4-s7-installment-aging.test.ts' }),
-  Object.freeze({ id: 'proof_9', armTitleContains: 'FIRES', arms: 2, requiresInArm: ['OVER_SCHEDULED', 'unpaidDuePortion('], minAssertions: 3, file: 'phase4-s7-installment-aging.test.ts' }),
-  Object.freeze({ id: 'proof_10', armTitleContains: 'FIRES', arms: 1, requiresInArm: ["mutate('baseAllocation'"], minAssertions: 3, file: 'phase4-s7-installment-aging.test.ts' }),
+  Object.freeze({
+    id: 'proof_1',
+    armTitleContains: 'FIRES',
+    arms: 2,
+    requiresInArm: ["mutate('clampToRowAmount'"],
+    minAssertions: 3,
+    file: 'phase4-s7-installment-aging.test.ts',
+  }),
+  Object.freeze({
+    id: 'proof_2',
+    armTitleContains: 'FIRES',
+    arms: 3,
+    requiresInArm: ["mutate('bucketBy'", 'BUCKET_MUTANTS'],
+    minAssertions: 3,
+    file: 'phase4-s7-installment-aging.test.ts',
+  }),
+  Object.freeze({
+    id: 'proof_3',
+    armTitleContains: 'FIRES',
+    arms: 1,
+    requiresInArm: ["mutate('planlessArm'"],
+    minAssertions: 3,
+    file: 'phase4-s7-installment-aging.test.ts',
+  }),
+  Object.freeze({
+    id: 'proof_4',
+    armTitleContains: 'FIRES',
+    arms: 1,
+    requiresInArm: ["mutate('carryResidual'"],
+    minAssertions: 3,
+    file: 'phase4-s7-installment-aging.test.ts',
+  }),
+  Object.freeze({
+    id: 'proof_5',
+    armTitleContains: 'FIRES',
+    arms: 1,
+    requiresInArm: ["mutate('outstandingSource'"],
+    minAssertions: 3,
+    file: 'phase4-s7-installment-aging.test.ts',
+  }),
+  Object.freeze({
+    id: 'proof_6',
+    armTitleContains: 'FIRES',
+    arms: 4,
+    requiresInArm: ['journalFindings(', 'relationsRead(', 'canonicalReducerRegistry('],
+    minAssertions: 3,
+    file: 'phase4-s7-installment-aging.test.ts',
+  }),
+  Object.freeze({
+    id: 'proof_7',
+    armTitleContains: 'FIRES',
+    arms: 2,
+    requiresInArm: ['findAuthoritativeSalesColumns('],
+    minAssertions: 3,
+    file: 'phase4-s7-installment-aging.test.ts',
+  }),
+  Object.freeze({
+    id: 'proof_8',
+    armTitleContains: 'FIRES',
+    arms: 1,
+    requiresInArm: ['FINANCIAL_TIME'],
+    minAssertions: 3,
+    file: 'phase4-s7-installment-aging.test.ts',
+  }),
+  Object.freeze({
+    id: 'proof_9',
+    armTitleContains: 'FIRES',
+    arms: 2,
+    requiresInArm: ['OVER_SCHEDULED', 'unpaidDuePortion('],
+    minAssertions: 3,
+    file: 'phase4-s7-installment-aging.test.ts',
+  }),
+  Object.freeze({
+    id: 'proof_10',
+    armTitleContains: 'FIRES',
+    arms: 1,
+    requiresInArm: ["mutate('baseAllocation'"],
+    minAssertions: 3,
+    file: 'phase4-s7-installment-aging.test.ts',
+  }),
 ]);
 
-const MUTATIONS_EXERCISED: readonly { readonly proof: string; readonly knob: keyof ProjectionPolicy; readonly to: unknown }[] =
-  Object.freeze([
-    Object.freeze({ proof: 'proof_1', knob: 'clampToRowAmount' as const, to: false }),
-    Object.freeze({ proof: 'proof_2', knob: 'bucketBy' as const, to: 'invoice_due_date' }),
-    Object.freeze({ proof: 'proof_3', knob: 'planlessArm' as const, to: 'every_invoice' }),
-    Object.freeze({ proof: 'proof_4', knob: 'carryResidual' as const, to: false }),
-    Object.freeze({ proof: 'proof_5', knob: 'outstandingSource' as const, to: 'plan_local' }),
-    Object.freeze({ proof: 'proof_2', knob: 'scheduleDateShiftDays' as const, to: -200 }),
-    Object.freeze({ proof: 'proof_10', knob: 'baseAllocation' as const, to: 'per_row_conversion' }),
-  ]);
+const MUTATIONS_EXERCISED: readonly { readonly proof: string; readonly knob: keyof ProjectionPolicy; readonly to: unknown }[] = Object.freeze([
+  Object.freeze({ proof: 'proof_1', knob: 'clampToRowAmount' as const, to: false }),
+  Object.freeze({ proof: 'proof_2', knob: 'bucketBy' as const, to: 'invoice_due_date' }),
+  Object.freeze({ proof: 'proof_3', knob: 'planlessArm' as const, to: 'every_invoice' }),
+  Object.freeze({ proof: 'proof_4', knob: 'carryResidual' as const, to: false }),
+  Object.freeze({ proof: 'proof_5', knob: 'outstandingSource' as const, to: 'plan_local' }),
+  Object.freeze({ proof: 'proof_2', knob: 'scheduleDateShiftDays' as const, to: -200 }),
+  Object.freeze({ proof: 'proof_10', knob: 'baseAllocation' as const, to: 'per_row_conversion' }),
+]);
 
 function mutate(knob: keyof ProjectionPolicy, to: unknown): ProjectionPolicy {
   return { ...CORRECT_POLICY, [knob]: to } as ProjectionPolicy;
@@ -346,9 +421,7 @@ const BOUNDARY_PLAN: InstallmentPlan = Object.freeze({
   installments: Object.freeze(
     // Ascending by date, so `seq_no` and `due_date` agree and the settlement
     // order is unambiguous: the oldest ages first.
-    [...BOUNDARY_AGES]
-      .sort((a, b) => b - a)
-      .map((age, i) => Object.freeze({ seqNo: i + 1, dueDate: daysBefore(age), amountTxnMinor: 100_000n })),
+    [...BOUNDARY_AGES].sort((a, b) => b - a).map((age, i) => Object.freeze({ seqNo: i + 1, dueDate: daysBefore(age), amountTxnMinor: 100_000n })),
   ),
 });
 
@@ -467,12 +540,8 @@ function sum(xs: readonly { readonly txnMinor: bigint }[]): bigint {
 describe('P4-S7 the defect, stated and fixed', () => {
   it('the shipped granularity really is the defect: one invoice, one date, the whole value over 90 days', () => {
     // The status-quo behaviour, reached by the `invoice_due_date` knob.
-    const today = aggregate(
-      contributionsFor([PLANNED_INVOICE], [PLAN], AS_OF, THRESHOLDS, mutate('bucketBy', 'invoice_due_date')),
-    );
-    expect(today).toEqual([
-      { bucketNo: 4, currencyCode: 'SAR', txnMinor: 900_000n, baseMinor: 761_251n, invoiceCount: 1 },
-    ]);
+    const today = aggregate(contributionsFor([PLANNED_INVOICE], [PLAN], AS_OF, THRESHOLDS, mutate('bucketBy', 'invoice_due_date')));
+    expect(today).toEqual([{ bucketNo: 4, currencyCode: 'SAR', txnMinor: 900_000n, baseMinor: 761_251n, invoiceCount: 1 }]);
 
     // The fix. Each instalment ages on its own date — and the base carrying
     // portion travels with it, by the canonical cumulative law (proof 10).
@@ -487,8 +556,10 @@ describe('P4-S7 the defect, stated and fixed', () => {
     ]);
     // The regrouping is value-preserving on BOTH columns, which is the
     // granularity claim stated as an equation rather than as a picture.
-    expect(today[0]!.txnMinor).toBe(900_000n);
-    expect(today[0]!.baseMinor).toBe(761_251n);
+    const onlyBand = today[0];
+    expect(onlyBand, 'the defect reading produced NO bucket, so the equation below has no subject').toBeDefined();
+    expect(onlyBand?.txnMinor).toBe(900_000n);
+    expect(onlyBand?.baseMinor).toBe(761_251n);
   });
 
   it('settlement is oldest-scheduled-first, so the three collected instalments are the three earliest', () => {
@@ -542,9 +613,7 @@ describe('PROOF 1 [proof_1] — the sum of the aging buckets equals the authorit
     // guard — «an AP release exceeds the purchase total»
     // (`supplier-settlement.ts:94`) — refuses it. The defect cannot even
     // produce a number.
-    expect(() => projectCustomerAging(rows, plans, AS_OF, THRESHOLDS, mutate('clampToRowAmount', false))).toThrow(
-      /AP release exceeds the purchase total/,
-    );
+    expect(() => projectCustomerAging(rows, plans, AS_OF, THRESHOLDS, mutate('clampToRowAmount', false))).toThrow(/AP release exceeds the purchase total/);
     // THE DATA FLOW TO THE META GATE: recorded AFTER the assertions, so a
     // proof that does not RUN does not record and the gate goes red. A tag in
     // a comment cannot satisfy this; `describe.skip` cannot satisfy it.
@@ -566,7 +635,14 @@ describe('PROOF 1 [proof_1] — the sum of the aging buckets equals the authorit
     // to be red-capable on its own terms, not only via someone else's throw.
     const permissive: ReleaseFn = (B, T, X, a) => (T === 0n ? 0n : (B * (X + a)) / T - (B * X) / T);
     const good = rows.flatMap((r) =>
-      projectInvoice(r, plans.find((p) => p.invoiceId === r.invoiceId), AS_OF, THRESHOLDS, CORRECT_POLICY, permissive),
+      projectInvoice(
+        r,
+        plans.find((p) => p.invoiceId === r.invoiceId),
+        AS_OF,
+        THRESHOLDS,
+        CORRECT_POLICY,
+        permissive,
+      ),
     );
     expect(sum(good)).toBe(authoritative);
     const bad = rows.flatMap((r) =>
@@ -620,11 +696,7 @@ describe('PROOF 2 [proof_2] — no not-yet-due scheduled amount enters an overdu
   }
 
   /** Contributions whose DECLARED date has not arrived at `p_as_of`. */
-  function notYetDueByPlan(
-    cs: readonly AgingContribution[],
-    plan: InstallmentPlan,
-    row: OpenInvoiceRow,
-  ): readonly AgingContribution[] {
+  function notYetDueByPlan(cs: readonly AgingContribution[], plan: InstallmentPlan, row: OpenInvoiceRow): readonly AgingContribution[] {
     return cs.filter((c) => {
       const d = declaredDate(c, plan, row);
       return d !== null && epochDay(d) >= epochDay(AS_OF);
@@ -648,9 +720,7 @@ describe('PROOF 2 [proof_2] — no not-yet-due scheduled amount enters an overdu
       // into intervals and asks which interval contains the age. The
       // projection counts thresholds. Two algorithmic paths; the law is a
       // claim again instead of `f(x) === f(x)`.
-      expect(x.bucketNo, `seq ${String(x.seqNo)}`).toBe(
-        bucketIndexByBand(AS_OF, declaredDate(x, PLAN, PLANNED_INVOICE), THRESHOLDS),
-      );
+      expect(x.bucketNo, `seq ${String(x.seqNo)}`).toBe(bucketIndexByBand(AS_OF, declaredDate(x, PLAN, PLANNED_INVOICE), THRESHOLDS));
     }
     // And the law really does range over several distinct buckets, so it is
     // not satisfied by everything landing in one.
@@ -663,9 +733,7 @@ describe('PROOF 2 [proof_2] — no not-yet-due scheduled amount enters an overdu
     const c = projectInvoice(BOUNDARY_INVOICE, BOUNDARY_PLAN, AS_OF, THRESHOLDS);
     expect(c.length).toBeGreaterThan(0);
     for (const x of c) {
-      expect(x.bucketNo, `seq ${String(x.seqNo)}`).toBe(
-        bucketIndexByBand(AS_OF, declaredDate(x, BOUNDARY_PLAN, BOUNDARY_INVOICE), THRESHOLDS),
-      );
+      expect(x.bucketNo, `seq ${String(x.seqNo)}`).toBe(bucketIndexByBand(AS_OF, declaredDate(x, BOUNDARY_PLAN, BOUNDARY_INVOICE), THRESHOLDS));
     }
     // Every band is reached, so no band is asserted vacuously. The three
     // oldest rows (400, 300, 200 days) are what the 300 000 already paid
@@ -705,9 +773,7 @@ describe('PROOF 2 [proof_2] — no not-yet-due scheduled amount enters an overdu
           expect(x.bucketNo, `${name}: out of range`).toBeLessThanOrEqual(THRESHOLDS.length + 1);
         }
         if (sum(c) !== row.outstandingTxnMinor) moneyMoved = true;
-        disagreements += c.filter(
-          (x) => x.bucketNo !== bucketIndexByBand(AS_OF, declaredDate(x, plan, row), THRESHOLDS),
-        ).length;
+        disagreements += c.filter((x) => x.bucketNo !== bucketIndexByBand(AS_OF, declaredDate(x, plan, row), THRESHOLDS)).length;
       }
       expect(moneyMoved).toBe(false);
       // ...and the band oracle refuses it. A non-zero count is the proof that
@@ -719,18 +785,15 @@ describe('PROOF 2 [proof_2] — no not-yet-due scheduled amount enters an overdu
     // the round monthly one, so on the design fixture alone this law would
     // have been green for want of a case.
     const inclusive = BUCKET_MUTANTS.find((m) => m.name === 'boundary_inclusive');
-    expect(inclusive).toBeDefined();
-    const onRound = projectInvoice(PLANNED_INVOICE, PLAN, AS_OF, THRESHOLDS, CORRECT_POLICY, CANONICAL_RELEASE, inclusive!.fn);
+    // A `??` FALLBACK HERE WOULD BE THE DEFECT. Substituting the correct
+    // bucket function for a missing mutant makes the two readings below agree
+    // and the arm green for want of a mutant. So: refuse, loudly.
+    if (inclusive === undefined) throw new Error('NO SUBJECT: BUCKET_MUTANTS no longer carries boundary_inclusive');
+    const onRound = projectInvoice(PLANNED_INVOICE, PLAN, AS_OF, THRESHOLDS, CORRECT_POLICY, CANONICAL_RELEASE, inclusive.fn);
+    expect(onRound.filter((x) => x.bucketNo !== bucketIndexByBand(AS_OF, declaredDate(x, PLAN, PLANNED_INVOICE), THRESHOLDS))).toHaveLength(0);
+    const onBoundary = projectInvoice(BOUNDARY_INVOICE, BOUNDARY_PLAN, AS_OF, THRESHOLDS, CORRECT_POLICY, CANONICAL_RELEASE, inclusive.fn);
     expect(
-      onRound.filter((x) => x.bucketNo !== bucketIndexByBand(AS_OF, declaredDate(x, PLAN, PLANNED_INVOICE), THRESHOLDS)),
-    ).toHaveLength(0);
-    const onBoundary = projectInvoice(
-      BOUNDARY_INVOICE, BOUNDARY_PLAN, AS_OF, THRESHOLDS, CORRECT_POLICY, CANONICAL_RELEASE, inclusive!.fn,
-    );
-    expect(
-      onBoundary.filter(
-        (x) => x.bucketNo !== bucketIndexByBand(AS_OF, declaredDate(x, BOUNDARY_PLAN, BOUNDARY_INVOICE), THRESHOLDS),
-      ).length,
+      onBoundary.filter((x) => x.bucketNo !== bucketIndexByBand(AS_OF, declaredDate(x, BOUNDARY_PLAN, BOUNDARY_INVOICE), THRESHOLDS)).length,
     ).toBeGreaterThan(0);
     recordProof('proof_2', 5, 'five banding mutants refused; `>=` shown inert on the round fixture');
   });
@@ -881,9 +944,7 @@ describe('PROOF 3 [proof_3] — no amount is counted twice', () => {
     });
     const c = projectInvoice(row, emptyPlan, AS_OF, THRESHOLDS);
     // The PLAN arm: the down payment at its own future date, bucket 1.
-    expect(c.map((x) => [x.origin, x.seqNo, x.scheduleDate, x.bucketNo, x.txnMinor])).toEqual([
-      ['down_payment', 0, '2027-06-01', 1, 400n],
-    ]);
+    expect(c.map((x) => [x.origin, x.seqNo, x.scheduleDate, x.bucketNo, x.txnMinor])).toEqual([['down_payment', 0, '2027-06-01', 1, 400n]]);
     // NOT the plan-less arm, which would put the whole 400 at the invoice's
     // long-past due date in the oldest bucket — the opposite end of the aging.
     expect(c.some((x) => x.origin === 'whole_invoice')).toBe(false);
@@ -903,15 +964,11 @@ describe('PROOF 3 [proof_3] — no amount is counted twice', () => {
 
   it('two active plans on one invoice are REFUSED rather than silently counted twice', () => {
     const twin: InstallmentPlan = { ...PLAN, invoiceId: 'inv-plan' };
-    expect(() => contributionsFor([PLANNED_INVOICE], [PLAN, twin], AS_OF, THRESHOLDS)).toThrow(
-      /installment_plan\.more_than_one_active/,
-    );
+    expect(() => contributionsFor([PLANNED_INVOICE], [PLAN, twin], AS_OF, THRESHOLDS)).toThrow(/installment_plan\.more_than_one_active/);
   });
 
   it('the specification forbids it structurally, with a partial unique index', () => {
-    expect(SPEC).toMatch(
-      /CREATE\s+UNIQUE\s+INDEX\s+\w+\s+ON\s+installment_plans\s*\(\s*business_id\s*,\s*invoice_id\s*\)\s*WHERE\s+status\s*=\s*'active'/i,
-    );
+    expect(SPEC).toMatch(/CREATE\s+UNIQUE\s+INDEX\s+\w+\s+ON\s+installment_plans\s*\(\s*business_id\s*,\s*invoice_id\s*\)\s*WHERE\s+status\s*=\s*'active'/i);
   });
 
   it('FIRES under its mutation: the plan-less arm stops excluding planned invoices', () => {
@@ -1001,10 +1058,7 @@ describe('PROOF 4 [proof_4] — no amount disappears', () => {
       if (O === 50_000n || O === 150_000n || O === 350_000n || O === T || O === 0n) {
         for (const x of c) {
           if (x.origin === 'residual') continue;
-          const declared =
-            x.origin === 'down_payment'
-              ? plan.downPaymentMinor
-              : (inst.find((i) => i.seqNo === x.seqNo)?.amountTxnMinor as bigint);
+          const declared = x.origin === 'down_payment' ? plan.downPaymentMinor : (inst.find((i) => i.seqNo === x.seqNo)?.amountTxnMinor as bigint);
           expect(x.txnMinor, `partial row at exact boundary O=${String(O)}`).toBe(declared);
         }
       }
@@ -1061,7 +1115,7 @@ describe('PROOF 4 [proof_4] — no amount disappears', () => {
     let rng = 0x9e3779b9 | 0;
     const next = (n: number): number => {
       rng = (Math.imul(rng, 1664525) + 1013904223) | 0;
-      return ((rng >>> 1) % n + n) % n;
+      return (((rng >>> 1) % n) + n) % n;
     };
     const seenN = new Set<number>();
     const seenMonth = new Set<number>();
@@ -1132,9 +1186,7 @@ describe('PROOF 4 [proof_4] — no amount disappears', () => {
 
       const got = projectInvoice(row, plan, AS_OF, THRESHOLDS);
       const gotAlloc = new Map(got.filter((x) => x.origin !== 'residual').map((x) => [x.seqNo as number, x.txnMinor]));
-      expect([...gotAlloc.entries()].sort((a, b) => a[0] - b[0])).toEqual(
-        [...simAlloc.entries()].sort((a, b) => a[0] - b[0]),
-      );
+      expect([...gotAlloc.entries()].sort((a, b) => a[0] - b[0])).toEqual([...simAlloc.entries()].sort((a, b) => a[0] - b[0]));
       expect(sum(got.filter((x) => x.origin === 'residual'))).toBe(simResidual);
       expect(sum(got)).toBe(O);
     }
@@ -1145,18 +1197,14 @@ describe('PROOF 4 [proof_4] — no amount disappears', () => {
   });
 
   it('FIRES under its mutation: the residual is dropped', () => {
-    const got = sum(
-      projectInvoice(SHORT_SCHEDULE_INVOICE, SHORT_PLAN, AS_OF, THRESHOLDS, mutate('carryResidual', false)),
-    );
+    const got = sum(projectInvoice(SHORT_SCHEDULE_INVOICE, SHORT_PLAN, AS_OF, THRESHOLDS, mutate('carryResidual', false)));
     expect(got).not.toBe(SHORT_SCHEDULE_INVOICE.outstandingTxnMinor);
     expect(got).toBe(200_000n); // 8,000.00 has vanished
     // THE DATA FLOW TO THE META GATE: recorded AFTER the assertions, so a
     // proof that does not RUN does not record and the gate goes red. A tag in
     // a comment cannot satisfy this; `describe.skip` cannot satisfy it.
     // THE DISCRIMINATION: unmutated, the same fixture loses nothing.
-    expect(sum(contributionsFor([SHORT_SCHEDULE_INVOICE], [SHORT_PLAN], AS_OF, THRESHOLDS))).toBe(
-      SHORT_SCHEDULE_INVOICE.outstandingTxnMinor,
-    );
+    expect(sum(contributionsFor([SHORT_SCHEDULE_INVOICE], [SHORT_PLAN], AS_OF, THRESHOLDS))).toBe(SHORT_SCHEDULE_INVOICE.outstandingTxnMinor);
     recordProof('proof_4', 3, 'FIRES arm ran: the residual is dropped and 8,000.00 vanishes; unmutated loses nothing');
   });
 });
@@ -1174,15 +1222,11 @@ describe('PROOF 4(b) — no amount disappears AT THE API READ EITHER (a defect f
   // `agingBucketLabels` returns `k+1` labels at indices `0..k`
   // (`packages/domain-core/src/invoice.ts:169-180`). The read surface indexes
   // the label array with the raw bucket number.
-  const READ_SURFACE = readFileSync(
-    join(REPO, 'apps', 'api', 'src', 'modules', 'selling', 'customer-reads.ts'),
-    'utf8',
-  );
+  const READ_SURFACE = readFileSync(join(REPO, 'apps', 'api', 'src', 'modules', 'selling', 'customer-reads.ts'), 'utf8');
   const DAYS = [30, 60, 90] as const;
 
   /** A civil date `n` days before `AS_OF`, so the ages are derived and not hand-picked. */
-  const daysBefore = (n: number): string =>
-    new Date((epochDay(AS_OF) - n) * 86_400_000).toISOString().slice(0, 10);
+  const daysBefore = (n: number): string => new Date((epochDay(AS_OF) - n) * 86_400_000).toISOString().slice(0, 10);
 
   it('the SQL bucket number is one-based and tops out at k+1', () => {
     expect(bucketOf(AS_OF, daysBefore(0), DAYS)).toBe(1); // not yet due / due today
@@ -1276,19 +1320,13 @@ describe('PROOF 5 [proof_5] — a payment or a reversal changes the projection T
     expect(sum(b) - sum(a)).toBe(100_000n);
     // And it settles the OLDEST outstanding instalment, April, which was in
     // the over-90 bucket — so the over-90 bucket is what shrinks.
-    const bucket4 = (x: readonly { bucketNo: number; txnMinor: bigint }[]): bigint =>
-      x.filter((y) => y.bucketNo === 4).reduce((s, y) => s + y.txnMinor, 0n);
+    const bucket4 = (x: readonly { bucketNo: number; txnMinor: bigint }[]): bigint => x.filter((y) => y.bucketNo === 4).reduce((s, y) => s + y.txnMinor, 0n);
     expect(bucket4(b) - bucket4(a)).toBe(100_000n);
   });
 
   it('a reversal returns the projection EXACTLY to where it was', () => {
     const b = projectCustomerAging([before], [PLAN], AS_OF, THRESHOLDS);
-    const reversed = projectCustomerAging(
-      [{ ...PLANNED_INVOICE }],
-      [PLAN],
-      AS_OF,
-      THRESHOLDS,
-    );
+    const reversed = projectCustomerAging([{ ...PLANNED_INVOICE }], [PLAN], AS_OF, THRESHOLDS);
     expect(reversed).toEqual(b);
   });
 
@@ -1435,10 +1473,7 @@ describe('PROOF 6 [proof_6] — no installment journal, and no new reducer branc
 
   it('FIRES under its mutation: an installment journal planted into the specification', () => {
     const planted = `${SPEC}\nALTER TABLE installments ADD COLUMN accounting_source_type TEXT GENERATED ALWAYS AS ('installment') STORED;\nINSERT INTO accounting_source_bindings (source_type) VALUES ('installment');\n`;
-    expect(journalFindings(planted)).toEqual([
-      'declares an accounting_source_type',
-      'registers an accounting source binding',
-    ]);
+    expect(journalFindings(planted)).toEqual(['declares an accounting_source_type', 'registers an accounting source binding']);
     const plantedRelation = `${SPEC}\nCREATE TABLE installment_journal_lines (business_id UUID NOT NULL, id UUID NOT NULL);\n`;
     expect(journalFindings(plantedRelation)).toContain('creates a journal relation: installment_journal_lines');
     // THE DATA FLOW TO THE META GATE: recorded AFTER the assertions, so a
@@ -1484,9 +1519,7 @@ describe('PROOF 6 [proof_6] — no installment journal, and no new reducer branc
     for (const shape of shapes) {
       const planted = `${live.body}\n            UNION ALL\n            SELECT invoice_id, amount, rel ${shape.sql}\n`;
       expect(planted).not.toBe(live.body);
-      const reducers = relationsRead(planted).filter(
-        (t) => SETTLING_RELATION.test(t) || t === 'installment_collections',
-      );
+      const reducers = relationsRead(planted).filter((t) => SETTLING_RELATION.test(t) || t === 'installment_collections');
       expect(reducers, `missed with ${shape.name}`).toContain('installment_collections');
     }
     // THE DATA FLOW TO THE META GATE: recorded AFTER the assertions, so a
@@ -1494,9 +1527,11 @@ describe('PROOF 6 [proof_6] — no installment journal, and no new reducer branc
     // a comment cannot satisfy this; `describe.skip` cannot satisfy it.
     // THE DISCRIMINATION: the LIVE body's own reducer set is exactly the two
     // canonical ones, so a planted third is a real change and not noise.
-    expect(relationsRead(live.body).filter((t) => reducerRelationsInTree().includes(t)).sort()).toEqual(
-      [...reducerRelationsInTree()].sort(),
-    );
+    expect(
+      relationsRead(live.body)
+        .filter((t) => reducerRelationsInTree().includes(t))
+        .sort(),
+    ).toEqual([...reducerRelationsInTree()].sort());
     recordProof('proof_6', 3, 'FIRES arm ran: a planted reducer branch is seen in every shape; the live set is exactly two');
   });
 
@@ -1519,10 +1554,7 @@ describe('PROOF 6 [proof_6] — no installment journal, and no new reducer branc
     const base = canonicalReducerRegistry(MIGRATIONS);
     expect([...base]).toEqual(['customer_credit_applications', 'payment_allocations']);
 
-    const synthetic = (sql: string): readonly { readonly name: string; readonly sql: string }[] => [
-      ...MIGRATIONS,
-      { name: '9999_synthetic.sql', sql },
-    ];
+    const synthetic = (sql: string): readonly { readonly name: string; readonly sql: string }[] => [...MIGRATIONS, { name: '9999_synthetic.sql', sql }];
 
     // (1) RECALL — a relation that NEVER declares the column at CREATE time
     //     and acquires it by rename. Under the old registry it never entered.
@@ -1544,18 +1576,14 @@ describe('PROOF 6 [proof_6] — no installment journal, and no new reducer branc
     expect(renamedOut).toContain('customer_credit_applications');
 
     // (3) PRECISION — the column is dropped outright.
-    const dropped = canonicalReducerRegistry(
-      synthetic('ALTER TABLE customer_credit_applications DROP COLUMN invoice_amount_applied_minor;\n'),
-    );
+    const dropped = canonicalReducerRegistry(synthetic('ALTER TABLE customer_credit_applications DROP COLUMN invoice_amount_applied_minor;\n'));
     expect(dropped, 'DROP COLUMN still escapes').not.toContain('customer_credit_applications');
     expect(dropped).toContain('payment_allocations');
 
     // (4) RECALL — the relation is renamed, so the registry would otherwise
     //     hold a name no `CREATE TABLE` ever wrote again (`sql-schema.ts`'s
     //     own L-3 lesson). Membership is CARRIED, not dropped.
-    const tableRenamed = canonicalReducerRegistry(
-      synthetic('ALTER TABLE payment_allocations RENAME TO invoice_payment_allocations;\n'),
-    );
+    const tableRenamed = canonicalReducerRegistry(synthetic('ALTER TABLE payment_allocations RENAME TO invoice_payment_allocations;\n'));
     expect(tableRenamed).toContain('invoice_payment_allocations');
     expect(tableRenamed).not.toContain('payment_allocations');
 
@@ -1625,16 +1653,7 @@ describe('PROOF 7 [proof_7] — no stored installment outstanding', () => {
   it('NON-COINCIDENCE: the legitimate columns are not flagged, and the forbidden ones are', () => {
     // If this arm were missing, proof 7 could be passing because the
     // predicate flags nothing at all.
-    for (const ok of [
-      'down_payment_minor',
-      'down_payment_due_date',
-      'installment_count',
-      'amount_txn_minor',
-      'due_date',
-      'seq_no',
-      'status',
-      'plan_id',
-    ]) {
+    for (const ok of ['down_payment_minor', 'down_payment_due_date', 'installment_count', 'amount_txn_minor', 'due_date', 'seq_no', 'status', 'plan_id']) {
       expect(isAuthoritativeSalesColumn(ok)).toBe(false);
     }
     for (const bad of [
@@ -1654,7 +1673,7 @@ describe('PROOF 7 [proof_7] — no stored installment outstanding', () => {
 
   it('FIRES under its mutation: the two columns P4-AL-06 names planted into the specification', () => {
     const planted = SPEC.replace(
-      /  amount_txn_minor BIGINT NOT NULL CHECK \(amount_txn_minor >= 1\),/,
+      / {2}amount_txn_minor BIGINT NOT NULL CHECK \(amount_txn_minor >= 1\),/,
       '  amount_txn_minor BIGINT NOT NULL CHECK (amount_txn_minor >= 1),\n  outstanding_minor BIGINT NOT NULL DEFAULT 0,\n  settled_minor    BIGINT NOT NULL DEFAULT 0,',
     );
     expect(planted).not.toBe(SPEC); // the mutation really applied
@@ -1672,9 +1691,7 @@ describe('PROOF 7 [proof_7] — no stored installment outstanding', () => {
 
   it('FIRES under its mutation: a plan-level remaining added by ALTER', () => {
     const planted = `${SPEC}\nALTER TABLE installment_plans ADD COLUMN outstanding_txn_minor BIGINT NOT NULL DEFAULT 0;\n`;
-    expect(findAuthoritativeSalesColumns(planted, WATCHED)).toEqual([
-      { table: 'installment_plans', column: 'outstanding_txn_minor' },
-    ]);
+    expect(findAuthoritativeSalesColumns(planted, WATCHED)).toEqual([{ table: 'installment_plans', column: 'outstanding_txn_minor' }]);
     // THE DATA FLOW TO THE META GATE: recorded AFTER the assertions, so a
     // proof that does not RUN does not record and the gate goes red. A tag in
     // a comment cannot satisfy this; `describe.skip` cannot satisfy it.
@@ -1712,10 +1729,7 @@ describe('PROOF 8 [proof_8] — the clock guard, widened and red-capable (p_as_o
 
   it('the SHIPPED aging routine reads p_as_of and no clock — the previous round diagnosis was wrong and is not reopened', () => {
     const shipped = readFileSync(SHIPPED_AGING_PATH, 'utf8');
-    const body = routineBody(
-      shipped,
-      'CREATE FUNCTION customer_ar_aging(p_business_id UUID, p_customer_id UUID, p_as_of DATE, p_bucket_days INTEGER[])',
-    );
+    const body = routineBody(shipped, 'CREATE FUNCTION customer_ar_aging(p_business_id UUID, p_customer_id UUID, p_as_of DATE, p_bucket_days INTEGER[])');
     expect(body).toMatch(/p_as_of/);
     expect(FINANCIAL_TIME.test(body)).toBe(false);
   });
@@ -1752,13 +1766,9 @@ describe('PROOF 8 [proof_8] — the clock guard, widened and red-capable (p_as_o
     expect(sketch).not.toMatch(/\bIMMUTABLE\b/); // and it is not that
     // The signature really is unchanged, which is what makes CREATE OR
     // REPLACE legal: all five shipped columns, in order (challenger C-2).
-    expect(sketch).toMatch(
-      /RETURNS TABLE \(bucket_no INTEGER, currency_code TEXT, txn_minor BIGINT, base_minor BIGINT, invoice_count INTEGER\)/,
-    );
+    expect(sketch).toMatch(/RETURNS TABLE \(bucket_no INTEGER, currency_code TEXT, txn_minor BIGINT, base_minor BIGINT, invoice_count INTEGER\)/);
     const shipped = readFileSync(SHIPPED_AGING_PATH, 'utf8');
-    expect(shipped).toMatch(
-      /RETURNS TABLE \(bucket_no INTEGER, currency_code TEXT, txn_minor BIGINT, base_minor BIGINT, invoice_count INTEGER\)/,
-    );
+    expect(shipped).toMatch(/RETURNS TABLE \(bucket_no INTEGER, currency_code TEXT, txn_minor BIGINT, base_minor BIGINT, invoice_count INTEGER\)/);
   });
 
   it('C-2: the DDL is complete and transcribable, and the structural block is LIFTED BY A RULING', () => {
@@ -1775,9 +1785,7 @@ describe('PROOF 8 [proof_8] — the clock guard, widened and red-capable (p_as_o
     // §25 requires the return shape be KEPT, and `CREATE OR REPLACE FUNCTION`
     // cannot change a `RETURNS TABLE` list at all (42P13), so a design that
     // dropped `base_minor` was never available.
-    expect(sketch).toMatch(
-      /RETURNS TABLE \(bucket_no INTEGER, currency_code TEXT, txn_minor BIGINT, base_minor BIGINT, invoice_count INTEGER\)/,
-    );
+    expect(sketch).toMatch(/RETURNS TABLE \(bucket_no INTEGER, currency_code TEXT, txn_minor BIGINT, base_minor BIGINT, invoice_count INTEGER\)/);
     // ...and the shape is read off the LIVE shipped definition rather than
     // retyped from memory — the shape of the LAST `customer_ar_aging` in the
     // tree, which is the one the database holds (challenger C-1).
@@ -1788,15 +1796,23 @@ describe('PROOF 8 [proof_8] — the clock guard, widened and red-capable (p_as_o
     const defs = MIGRATIONS.flatMap((m) =>
       [...m.sql.matchAll(/CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+customer_ar_aging\(/gi)].map((x) => ({
         name: m.name,
-        tail: m.sql.slice(x.index!),
+        // `matchAll` always sets `index`; a 0 fallback would silently make the
+        // tail the WHOLE FILE and the return shape below the first one in it.
+        tail: x.index === undefined ? '' : m.sql.slice(x.index),
       })),
     );
     expect(defs.length, 'no customer_ar_aging definition in the tree').toBeGreaterThan(0);
-    const live = defs[defs.length - 1]!;
+    expect(
+      defs.every((d) => d.tail !== ''),
+      'a match without an index — the tail would be the wrong body',
+    ).toBe(true);
+    const live = defs.at(-1);
+    if (live === undefined) throw new Error('NO SUBJECT: no customer_ar_aging definition in the tree');
     expect(live.name).toBe('0084_phase4_ar_fixed_cost_and_open_invoice_page.sql');
     const shape = /RETURNS TABLE \(([^)]*)\)/.exec(live.tail)?.[1];
     expect(shape, 'the shipped return shape was not found').toBeDefined();
-    expect(sketch).toContain(`RETURNS TABLE (${shape!})`);
+    if (shape === undefined) throw new Error('NO SUBJECT: the shipped return shape was not found');
+    expect(sketch).toContain(`RETURNS TABLE (${shape})`);
     // And the DDL a migration owner needs really is here — `LANGUAGE`,
     // `RETURNS`, `GRANT`, `REVOKE` each appeared ZERO times in the first
     // round, so there was no function DDL to transcribe at all.
@@ -1807,7 +1823,9 @@ describe('PROOF 8 [proof_8] — the clock guard, widened and red-capable (p_as_o
     // migration number, not in `migrations/`, not in the manifest, and one
     // authority change that is not the author's to make.
     expect(SPEC_PATH).not.toMatch(/\/migrations\//);
-    expect(/^\d{4}_/.test(SPEC_PATH.split('/').pop()!)).toBe(false);
+    const specBasename = SPEC_PATH.split('/').pop() ?? '';
+    expect(specBasename, 'the specification path has no basename, so the numbering law has no subject').not.toBe('');
+    expect(/^\d{4}_/.test(specBasename)).toBe(false);
     expect(SPEC).toMatch(/PR-6/);
     expect(SPEC).toMatch(/GRANT EXECUTE ON FUNCTION supplier_ap_release\(BIGINT, BIGINT, BIGINT, BIGINT\) TO daftar_app/);
   });
@@ -1919,9 +1937,7 @@ describe('PROOF 9 [proof_9] — a broken sum law is SIGNALLED in both directions
     // signalled.
     expect(epochDay(AS_OF) - epochDay('2026-01-15')).toBe(265);
     const c = projectInvoice(OVER_SCHEDULED_INVOICE, OVER_SCHEDULED_PLAN, AS_OF, THRESHOLDS);
-    expect(c.map((x) => [x.origin, x.seqNo, x.scheduleDate, x.bucketNo, x.txnMinor])).toEqual([
-      ['installment', 1, '2026-01-15', 4, 900_000n],
-    ]);
+    expect(c.map((x) => [x.origin, x.seqNo, x.scheduleDate, x.bucketNo, x.txnMinor])).toEqual([['installment', 1, '2026-01-15', 4, 900_000n]]);
     // The whole balance is in the OLDEST bucket, where a 265-day-overdue
     // receivable belongs, and nothing is in the not-yet-due bucket.
     expect(sum(c.filter((x) => x.bucketNo === 1))).toBe(0n);
@@ -1967,9 +1983,7 @@ describe('PROOF 9 [proof_9] — a broken sum law is SIGNALLED in both directions
       const scheduled = plan.downPaymentMinor + plan.installments.reduce((a, i) => a + i.amountTxnMinor, 0n);
       // NON-VACUITY: the equality below is only a theorem while this holds, so
       // the premise is measured and not assumed.
-      expect(scheduled, `${label} must obey the sum law, or the oracle is not exact on it`).toBe(
-        invoice.paidTxnMinor + invoice.outstandingTxnMinor,
-      );
+      expect(scheduled, `${label} must obey the sum law, or the oracle is not exact on it`).toBe(invoice.paidTxnMinor + invoice.outstandingTxnMinor);
       const contributions = projectInvoice(invoice, plan, AS_OF, THRESHOLDS);
       // THE SUBJECT IS THE SCHEDULE DATE, NOT THE BUCKET ORDINAL — and that
       // distinction is a finding this arm made on its first run. Bucket 1 is
@@ -1989,10 +2003,7 @@ describe('PROOF 9 [proof_9] — a broken sum law is SIGNALLED in both directions
       // everything in an OVERDUE band is fallen-due money, so it cannot
       // exceed the fallen-due total. This is the one-sided reading of
       // proof 2's law, measured against a second implementation.
-      expect(
-        sum(contributions.filter((x) => x.bucketNo > 1)) <= oracle,
-        `${label}: an overdue band carries more than has fallen due`,
-      ).toBe(true);
+      expect(sum(contributions.filter((x) => x.bucketNo > 1)) <= oracle, `${label}: an overdue band carries more than has fallen due`).toBe(true);
     }
 
     // WHERE THE SUM LAW IS BROKEN ABOVE, AND THE OVER-SCHEDULED MONEY HAS
@@ -2022,9 +2033,7 @@ describe('PROOF 9 [proof_9] — a broken sum law is SIGNALLED in both directions
     // and conservation is NOT sacrificed to make the oracle happy: proof 1's
     // law still holds on the broken input, which is the whole reason the
     // overstatement lands on the oracle rather than on the projection.
-    expect(sum(projectInvoice(OVER_SCHEDULED_INVOICE, bothOverdue, AS_OF, THRESHOLDS))).toBe(
-      OVER_SCHEDULED_INVOICE.outstandingTxnMinor,
-    );
+    expect(sum(projectInvoice(OVER_SCHEDULED_INVOICE, bothOverdue, AS_OF, THRESHOLDS))).toBe(OVER_SCHEDULED_INVOICE.outstandingTxnMinor);
     recordProof('proof_9', 14, 'FIRES arm ran: the independent overdue oracle agrees where the sum law holds');
   });
 
@@ -2073,9 +2082,7 @@ describe('PROOF 9 [proof_9] — a broken sum law is SIGNALLED in both directions
     const ddl = sqlSchemaOnly(SPEC);
     const triggers = [...ddl.matchAll(/CREATE CONSTRAINT TRIGGER\s+(\w+)\s+([\s\S]*?)EXECUTE FUNCTION\s+(\w+)/gi)];
     expect(triggers.length).toBe(2);
-    const onRelation = new Map(
-      triggers.map((t) => [/\bON\s+(\w+)/i.exec(t[2] ?? '')?.[1] ?? '?', { events: t[2] ?? '', fn: t[3] ?? '' }]),
-    );
+    const onRelation = new Map(triggers.map((t) => [/\bON\s+(\w+)/i.exec(t[2] ?? '')?.[1] ?? '?', { events: t[2] ?? '', fn: t[3] ?? '' }]));
     // Both relations of the schedule, both judged by the ONE verifier.
     expect([...onRelation.keys()].sort()).toEqual(['installment_plans', 'installments']);
     for (const [rel, t] of onRelation) {
@@ -2086,7 +2093,9 @@ describe('PROOF 9 [proof_9] — a broken sum law is SIGNALLED in both directions
     }
     // The row relation must also fire on DELETE — that is the direction a
     // prose-only law would have left open.
-    expect(onRelation.get('installments')!.events).toMatch(/DELETE/i);
+    const rowTrigger = onRelation.get('installments');
+    expect(rowTrigger, 'there is no constraint trigger on installments at all').toBeDefined();
+    expect(rowTrigger?.events).toMatch(/DELETE/i);
   });
 
   it('the DECLARED schedule that has fallen due is read from the plan, never from the projection', () => {
@@ -2127,9 +2136,7 @@ describe('PROOF 10 [proof_10] — the base conservation law, as a CONSEQUENCE of
       const plan = plans.find((p) => p.invoiceId === r.invoiceId);
       expect(sumBase(projectInvoice(r, plan, AS_OF, THRESHOLDS)), r.invoiceId).toBe(r.outstandingBaseMinor);
     }
-    expect(sumBase(contributionsFor(rows, plans, AS_OF, THRESHOLDS))).toBe(
-      rows.reduce((a, r) => a + r.outstandingBaseMinor, 0n),
-    );
+    expect(sumBase(contributionsFor(rows, plans, AS_OF, THRESHOLDS))).toBe(rows.reduce((a, r) => a + r.outstandingBaseMinor, 0n));
   });
 
   it('the rounding is REAL on these fixtures, so the law is not passing on exact ratios', () => {
@@ -2167,10 +2174,7 @@ describe('PROOF 10 [proof_10] — the base conservation law, as a CONSEQUENCE of
         const B = r.paidBaseMinor + r.outstandingBaseMinor;
         const Tot = r.paidTxnMinor + r.outstandingTxnMinor;
         // Conservation against THAT R's own endpoints: R(Tot) − R(P).
-        const expected =
-          plan === undefined || r.outstandingTxnMinor <= 0n
-            ? r.outstandingBaseMinor
-            : fn(B, Tot, 0n, Tot) - fn(B, Tot, 0n, r.paidTxnMinor);
+        const expected = plan === undefined || r.outstandingTxnMinor <= 0n ? r.outstandingBaseMinor : fn(B, Tot, 0n, Tot) - fn(B, Tot, 0n, r.paidTxnMinor);
         expect(sumBase(c), `${name} / ${r.invoiceId}`).toBe(expected);
       }
     }
@@ -2178,9 +2182,7 @@ describe('PROOF 10 [proof_10] — the base conservation law, as a CONSEQUENCE of
     // figures, which is the whole point of the ruling.
     const B = PLANNED_INVOICE.paidBaseMinor + PLANNED_INVOICE.outstandingBaseMinor;
     const Tot = PLANNED_INVOICE.paidTxnMinor + PLANNED_INVOICE.outstandingTxnMinor;
-    expect(apRelease(B, Tot, 0n, Tot) - apRelease(B, Tot, 0n, PLANNED_INVOICE.paidTxnMinor)).toBe(
-      PLANNED_INVOICE.outstandingBaseMinor,
-    );
+    expect(apRelease(B, Tot, 0n, Tot) - apRelease(B, Tot, 0n, PLANNED_INVOICE.paidTxnMinor)).toBe(PLANNED_INVOICE.outstandingBaseMinor);
   });
 
   it('`source_to_base_rate` appears in NO arithmetic, anywhere in this design', () => {
@@ -2256,7 +2258,10 @@ describe('META — the proofs are not vacuous', () => {
     // It is replaced by TWO relationships, neither of them prose, and
     // `meta_9` proves both are red-capable.
     for (const m of MUTATIONS_EXERCISED) {
-      expect(MANDATORY.some((x) => x.id === m.proof), `proof ${m.proof} is not declared mandatory`).toBe(true);
+      expect(
+        MANDATORY.some((x) => x.id === m.proof),
+        `proof ${m.proof} is not declared mandatory`,
+      ).toBe(true);
     }
 
     // ── (b) EACH KNOB IS ACTUALLY MUTATED SOMEWHERE IN THIS FILE ────────
@@ -2293,15 +2298,17 @@ describe('META — the proofs are not vacuous', () => {
     for (const m of MANDATORY) {
       const entry = led.get(m.id);
       expect(entry, `${m.id} never recorded — it did not run, or it did not reach its record`).toBeDefined();
-      expect(entry!.assertions, `${m.id} recorded ${String(entry!.assertions)} assertions`).toBeGreaterThanOrEqual(
-        m.minAssertions,
-      );
-      expect(entry!.detail.length).toBeGreaterThan(10);
+      if (entry === undefined) throw new Error(`${m.id} never recorded — it did not run, or it did not reach its record`);
+      expect(entry.assertions, `${m.id} recorded ${String(entry.assertions)} assertions`).toBeGreaterThanOrEqual(m.minAssertions);
+      expect(entry.detail.length).toBeGreaterThan(10);
     }
     // Every ledger entry belongs to a declared proof, so a proof cannot
     // record itself into existence under a name nothing requires.
     for (const id of led.keys()) {
-      expect(MANDATORY.some((m) => m.id === id), `${id} recorded but is not mandatory`).toBe(true);
+      expect(
+        MANDATORY.some((m) => m.id === id),
+        `${id} recorded but is not mandatory`,
+      ).toBe(true);
     }
     expect(led.size).toBeGreaterThanOrEqual(MANDATORY.length);
   });
@@ -2345,9 +2352,8 @@ describe('META — the proofs are not vacuous', () => {
 
     // (iii) THE HOLLOWED BODY: the arm exists, is live, is named right, and
     //       asserts only literals.
-    const hollow = SELF.slice(0, armAt) +
-      "  it('FIRES under its mutation: the residual is dropped', () => {\n    expect(true).toBe(true);\n  });" +
-      SELF.slice(armEnd);
+    const hollow =
+      SELF.slice(0, armAt) + "  it('FIRES under its mutation: the residual is dropped', () => {\n    expect(true).toBe(true);\n  });" + SELF.slice(armEnd);
     const hollowKinds = auditProofFile(hollow, MANDATORY).map((f) => f.kind);
     expect(hollowKinds.some((k) => k === 'unconditional_pass' || k === 'too_few_assertions' || k === 'call_site_missing')).toBe(true);
 
@@ -2378,19 +2384,10 @@ describe('META — the proofs are not vacuous', () => {
     // the upper-clamp mutation bite at all; without it that mutation is
     // measurably INERT, which is this very law's job to catch.
     const baseline = JSON.stringify(
-      projectCustomerAging(rows, plans, AS_OF, THRESHOLDS).map((b) => [
-        b.bucketNo,
-        b.currencyCode,
-        String(b.txnMinor),
-        b.invoiceCount,
-        String(b.baseMinor),
-      ]),
+      projectCustomerAging(rows, plans, AS_OF, THRESHOLDS).map((b) => [b.bucketNo, b.currencyCode, String(b.txnMinor), b.invoiceCount, String(b.baseMinor)]),
     );
     for (const m of MUTATIONS_EXERCISED) {
-      const plan5 =
-        m.knob === 'outstandingSource'
-          ? [{ ...PLAN, planLocalCollectedMinor: 300_000n }, SHORT_PLAN, OVER_SCHEDULED_PLAN]
-          : plans;
+      const plan5 = m.knob === 'outstandingSource' ? [{ ...PLAN, planLocalCollectedMinor: 300_000n }, SHORT_PLAN, OVER_SCHEDULED_PLAN] : plans;
       // A mutation that REFUSES has changed the output as surely as one that
       // returns different numbers — `clampToRowAmount` is refused by the
       // canonical release law's own guard (proof 1).
@@ -2615,8 +2612,8 @@ describe('META — the proofs are not vacuous', () => {
     // answer is known, so a future "fix" that widens the stripping is caught
     // here rather than by a green proof over an empty string.
     const fixture = [
-      "-- a comment naming accounting_source_type and now() and source_to_base_rate",
-      "CREATE TABLE t (created_at TIMESTAMPTZ NOT NULL DEFAULT now());",
+      '-- a comment naming accounting_source_type and now() and source_to_base_rate',
+      'CREATE TABLE t (created_at TIMESTAMPTZ NOT NULL DEFAULT now());',
       "COMMENT ON TABLE t IS 'prose naming accounting_source_type, now() and source_to_base_rate; it''s data.';",
       'CREATE FUNCTION f() RETURNS BIGINT LANGUAGE sql AS $fn$ SELECT public.supplier_ap_release(1, 2, 0, 1) $fn$;',
     ].join('\n');
@@ -2680,7 +2677,7 @@ describe('ROUND-5 CHALLENGE C1 / H4 / H6 — the policy set, the fail-closed arm
     return { ordinary: grab('c_ordinary'), source: grab('c_source') };
   }
 
-  it('C1.b THE POLICY-NAME SET IS `0075`\'s OWN `c_source`, DERIVED AND NOT ENUMERATED, on BOTH relations', () => {
+  it("C1.b THE POLICY-NAME SET IS `0075`'s OWN `c_source`, DERIVED AND NOT ENUMERATED, on BOTH relations", () => {
     // THE DEFECT THIS ARM EXISTS FOR. The first version of §2a shipped SIX
     // policies per relation — `c_source` minus `inventory_internal_read` — a
     // set matching NEITHER shape `0075` declares, with the omitted name taken
@@ -2697,9 +2694,7 @@ describe('ROUND-5 CHALLENGE C1 / H4 / H6 — the policy set, the fail-closed arm
 
     const ddl = sqlSchemaOnly(SPEC);
     for (const relation of ['installment_plans', 'installments']) {
-      const names = [...ddl.matchAll(new RegExp(`CREATE POLICY\\s+(\\w+)\\s+ON\\s+${relation}\\b`, 'g'))]
-        .map((m) => m[1] as string)
-        .sort();
+      const names = [...ddl.matchAll(new RegExp(`CREATE POLICY\\s+(\\w+)\\s+ON\\s+${relation}\\b`, 'g'))].map((m) => m[1] as string).sort();
       expect(names, `the policies on ${relation} are not 0075's declared c_source set`).toEqual([...source]);
     }
   });
@@ -2713,10 +2708,7 @@ describe('ROUND-5 CHALLENGE C1 / H4 / H6 — the policy set, the fail-closed arm
       ['accounting_validator', 'daftar_accounting_internal'],
     ] as const) {
       const hits = [...ddl.matchAll(new RegExp(`CREATE POLICY\\s+${policy}\\s+ON\\s+(\\w+)\\s+FOR SELECT TO\\s+(\\w+)\\s+USING \\(true\\)`, 'g'))];
-      expect(hits.map((m) => m[1]).sort(), `${policy} is not on both relations in the unconditional form`).toEqual([
-        'installment_plans',
-        'installments',
-      ]);
+      expect(hits.map((m) => m[1]).sort(), `${policy} is not on both relations in the unconditional form`).toEqual(['installment_plans', 'installments']);
       for (const m of hits) expect(m[2], `${policy} names the wrong role`).toBe(role);
     }
   });
@@ -2730,7 +2722,9 @@ describe('ROUND-5 CHALLENGE C1 / H4 / H6 — the policy set, the fail-closed arm
     expect(sketch).toContain('installment_plan_absence_guard(');
     // ...and the guard is a DEFINER that raises, not a reader that returns data.
     const code = sqlCodeOnly(SPEC);
-    expect(code).toMatch(/CREATE OR REPLACE FUNCTION installment_plan_absence_guard\(p_business_id UUID, p_invoice_ids UUID\[\]\)[\s\S]*?LANGUAGE plpgsql STABLE SECURITY DEFINER/);
+    expect(code).toMatch(
+      /CREATE OR REPLACE FUNCTION installment_plan_absence_guard\(p_business_id UUID, p_invoice_ids UUID\[\]\)[\s\S]*?LANGUAGE plpgsql STABLE SECURITY DEFINER/,
+    );
     expect(code).toContain('installment.plan_invisible');
     // ...and the projection ITSELF stays INVOKER and STABLE: R-P4-07 makes a
     // reader run as its caller, and making the reader a DEFINER would have
@@ -2739,7 +2733,7 @@ describe('ROUND-5 CHALLENGE C1 / H4 / H6 — the policy set, the fail-closed arm
     expect(sketch).not.toContain('SECURITY DEFINER');
   });
 
-  it('C1 obligation (e): a plan whose tenant is not its invoice\'s is refused, which is where the asymmetry came from', () => {
+  it("C1 obligation (e): a plan whose tenant is not its invoice's is refused, which is where the asymmetry came from", () => {
     const code = sqlCodeOnly(SPEC);
     expect(code).toContain('(e) the plan tenant');
     expect(code).toContain('(e) % instalments do not carry the plan tenant');
@@ -2768,6 +2762,99 @@ describe('ROUND-5 CHALLENGE C1 / H4 / H6 — the policy set, the fail-closed arm
     expect(SPEC).toContain('ORDER_NOTE');
   });
 
+  it('THE ADOPTED ONE-SIDED MUTANTS ARE EVALUATED — the exact invariant refuses what each half accepts', () => {
+    // FOUND BY LINT, WHICH IS WHY THE RULE IS NOT NOISE.
+    // `@typescript-eslint/no-unused-vars` reported `ONE_SIDED_INVARIANTS` and
+    // `scheduleInvariantVerdict` imported and never used: an oracle ADOPTED
+    // from the proof engineer and never wired. That is the estate's named
+    // failure shape — AN EXEMPTION THAT IS NEVER EVALUATED — sitting in an
+    // import list, and silencing it with a `_` prefix would have preserved it
+    // exactly. So it is wired, not quieted.
+    //
+    // The DATABASE half of this law is the one that matters and it is measured
+    // in `tests/integration/phase4-s7-installment-aging-live.test.ts` §B1/§B2,
+    // where the real verifier's single `<>` refuses below and above at COMMIT.
+    // This is its model-level twin: the two one-directional verifiers each
+    // accept a case the exact one refuses, in OPPOSITE directions, so neither
+    // inequality can be relaxed without a case going green.
+    expect(ONE_SIDED_INVARIANTS.map((m) => m.name)).toEqual(['at_most_total', 'at_least_total']);
+
+    const exactTotal = PLANNED_INVOICE.paidTxnMinor + PLANNED_INVOICE.outstandingTxnMinor;
+    // THE EXACT CASE: everything accepts it, which is precisely why a one-sided
+    // verifier looks correct on every well-formed fixture.
+    expect(scheduleInvariantVerdict(PLAN, exactTotal).verdict).toBe('exact');
+    expect(scheduleInvariantVerdict(PLAN, exactTotal).excessTxnMinor).toBe(0n);
+    for (const m of ONE_SIDED_INVARIANTS) expect(m.fn(PLAN, exactTotal), `${m.name} refuses the exact schedule`).toBe(true);
+    expect(scheduleInvariantAccepts(PLAN, exactTotal)).toBe(true);
+
+    // ABOVE: the challenger's own counterexample. `at_most_total` refuses it;
+    // `at_least_total` ACCEPTS it, and that acceptance is the defect.
+    const overTotal = OVER_SCHEDULED_INVOICE.paidTxnMinor + OVER_SCHEDULED_INVOICE.outstandingTxnMinor;
+    const above = scheduleInvariantVerdict(OVER_SCHEDULED_PLAN, overTotal);
+    expect(above.verdict).toBe('above');
+    expect(above.excessTxnMinor).toBe(900_000n);
+    expect(scheduleInvariantAccepts(OVER_SCHEDULED_PLAN, overTotal), 'the EXACT invariant must refuse it').toBe(false);
+    expect(ONE_SIDED_INVARIANTS[1]?.fn(OVER_SCHEDULED_PLAN, overTotal), 'at_least_total must ACCEPT the over-scheduled plan').toBe(true);
+    expect(ONE_SIDED_INVARIANTS[0]?.fn(OVER_SCHEDULED_PLAN, overTotal)).toBe(false);
+
+    // BELOW: the mirror. `at_least_total` refuses it; `at_most_total` ACCEPTS
+    // it, and the shortfall is then carried silently as residual.
+    const under: InstallmentPlan = Object.freeze({
+      ...PLAN,
+      installments: Object.freeze(PLAN.installments.slice(0, -1)),
+    });
+    const below = scheduleInvariantVerdict(under, exactTotal);
+    expect(below.verdict).toBe('below');
+    expect(below.excessTxnMinor).toBe(-100_000n);
+    expect(scheduleInvariantAccepts(under, exactTotal), 'the EXACT invariant must refuse it').toBe(false);
+    expect(ONE_SIDED_INVARIANTS[0]?.fn(under, exactTotal), 'at_most_total must ACCEPT the under-scheduled plan').toBe(true);
+    expect(ONE_SIDED_INVARIANTS[1]?.fn(under, exactTotal)).toBe(false);
+
+    // AND THE TWO DIRECTIONS ARE REALLY OPPOSITE — each mutant is defeated by
+    // exactly one of the two cases, so one comparison cannot cover both and
+    // the verifier's `<>` is load-bearing rather than stylistic.
+    const defeatedBy = ONE_SIDED_INVARIANTS.map((m) => [m.fn(OVER_SCHEDULED_PLAN, overTotal), m.fn(under, exactTotal)].filter((ok) => !ok).length);
+    expect(defeatedBy).toEqual([1, 1]);
+  });
+
+  it('H3 THE CREATE BRACKET IS PRESENT AND BALANCED, and the owner transfer is LAST', () => {
+    // TWO MORE DEFECTS THE EXECUTOR FOUND, and neither is visible to a
+    // superuser — which is the whole of challenger H3. Applied by the real
+    // deployment principal `daftar_migrator`:
+    //   * `ALTER FUNCTION ... OWNER TO r` requires `r` to hold CREATE on the
+    //     schema, and `daftar_accounting_internal` holds only USAGE
+    //     (`bootstrap.sql:198`) -> `42501 permission denied for schema public`;
+    //   * and with the transfer issued BEFORE the function's own `REVOKE` and
+    //     `COMMENT`, the applier is no longer the owner and may not issue them
+    //     -> `42501 must be owner of function installment_schedule_verify`.
+    // Three rounds of applying this file as `postgres` could not see either.
+    const code = sqlCodeOnly(SPEC);
+    const lends = [...code.matchAll(/GRANT CREATE ON SCHEMA public TO daftar_accounting_internal;/g)];
+    const takebacks = [...code.matchAll(/REVOKE CREATE ON SCHEMA public FROM daftar_accounting_internal;/g)];
+    const transfers = [...code.matchAll(/ALTER FUNCTION (\w+)\([^)]*\) OWNER TO daftar_accounting_internal;/g)];
+    // Every transfer is bracketed, and a bracket that only opens is a
+    // permanent widening of a role's authority over the schema.
+    expect(transfers.length, 'no owner transfer in the specification at all').toBeGreaterThan(0);
+    expect(lends.length, 'the lends and the take-backs are not balanced').toBe(takebacks.length);
+    expect(lends.length).toBe(transfers.length);
+    // ...and each transfer sits INSIDE its own bracket, and AFTER that
+    // function's REVOKE and COMMENT.
+    for (let k = 0; k < transfers.length; k += 1) {
+      const t = transfers[k]?.index ?? -1;
+      const open = lends[k]?.index ?? -1;
+      const close = takebacks[k]?.index ?? -1;
+      const name = transfers[k]?.[1] ?? '?';
+      expect(open, `${name}'s transfer is not inside a lend`).toBeLessThan(t);
+      expect(close, `${name}'s lend is never taken back after the transfer`).toBeGreaterThan(t);
+      const revoke = code.indexOf(`REVOKE ALL ON FUNCTION ${name}(`);
+      const comment = code.indexOf(`COMMENT ON FUNCTION ${name}(`);
+      expect(revoke, `${name} has no REVOKE ALL ... FROM PUBLIC`).toBeGreaterThan(-1);
+      expect(comment, `${name} has no COMMENT`).toBeGreaterThan(-1);
+      expect(revoke, `${name}'s REVOKE is after its owner transfer, which the applier may not issue`).toBeLessThan(t);
+      expect(comment, `${name}'s COMMENT is after its owner transfer, which the applier may not issue`).toBeLessThan(t);
+    }
+  });
+
   it('H4 THE END-STATE BLOCK IS PRESENT and reads the LIVE CATALOGUE, not this file', () => {
     // Eleven predecessors ship one; `0075:838-945` is the worked example. A
     // `DO $end$` block travels inside the migration: no gate row, no CI step,
@@ -2787,8 +2874,7 @@ describe('ROUND-5 CHALLENGE C1 / H4 / H6 — the policy set, the fail-closed arm
       const theirs = new RegExp(`${name}\\s+CONSTANT TEXT\\[\\] := ARRAY\\[([\\s\\S]*?)\\];`).exec(predecessor);
       expect(mine, `the end-state block does not declare ${name}`).not.toBeNull();
       expect(theirs, `0075 no longer declares ${name}`).not.toBeNull();
-      const words = (m: RegExpExecArray | null): readonly string[] =>
-        [...(m?.[1] ?? '').matchAll(/'([^']+)'/g)].map((x) => x[1] as string).sort();
+      const words = (m: RegExpExecArray | null): readonly string[] => [...(m?.[1] ?? '').matchAll(/'([^']+)'/g)].map((x) => x[1] as string).sort();
       expect(words(mine), `${name} diverges from 0075's own declared list`).toEqual([...words(theirs)]);
     }
     // 8 runtime principals x 6 privileges, not the 3 x 3 the first version

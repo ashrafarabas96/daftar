@@ -370,7 +370,10 @@ export function cteNames(sql: string): ReadonlySet<string> {
   const out = new Set<string>();
   // `WITH [RECURSIVE] a AS (...) , b AS (...)` — and a CTE name is also
   // introduced after each top-level comma that closes a previous CTE body.
-  const re = new RegExp(String.raw`(?:\bWITH\s+(?:RECURSIVE\s+)?|,\s*)("[^"]+"|[A-Za-z_][\w$]*)\s*(?:\([^)]*\)\s*)?AS\s*(?:MATERIALIZED\s+|NOT\s+MATERIALIZED\s+)?\(`, 'gi');
+  const re = new RegExp(
+    String.raw`(?:\bWITH\s+(?:RECURSIVE\s+)?|,\s*)("[^"]+"|[A-Za-z_][\w$]*)\s*(?:\([^)]*\)\s*)?AS\s*(?:MATERIALIZED\s+|NOT\s+MATERIALIZED\s+)?\(`,
+    'gi',
+  );
   for (const m of sql.matchAll(re)) out.add(unquote(m[1] ?? ''));
   return out;
 }
@@ -548,10 +551,7 @@ export interface DroppedColumn {
  */
 export function alterDropColumns(sql: string): readonly DroppedColumn[] {
   const out: DroppedColumn[] = [];
-  const alter = new RegExp(
-    String.raw`ALTER\s+TABLE\s+(?:IF\s+EXISTS\s+)?(?:ONLY\s+)?(?:IF\s+EXISTS\s+)?${QUALIFIED_NAME}\s*\*?([\s\S]*?);`,
-    'gi',
-  );
+  const alter = new RegExp(String.raw`ALTER\s+TABLE\s+(?:IF\s+EXISTS\s+)?(?:ONLY\s+)?(?:IF\s+EXISTS\s+)?${QUALIFIED_NAME}\s*\*?([\s\S]*?);`, 'gi');
   for (const m of stripNonSchema(sql).matchAll(alter)) {
     const table = unquote(m[1] ?? '');
     const actions = m[2] ?? '';
@@ -616,11 +616,7 @@ export interface RoutineHistory {
  * TAG to its own closing tag (never the first `$$` that happens to appear
  * later in the file), and tracks DROPs. That is all a body claim needs.
  */
-export function lastEffectiveRoutineDefinition(
-  migrations: readonly MigrationFile[],
-  header: string,
-  dropPattern: RegExp,
-): RoutineHistory {
+export function lastEffectiveRoutineDefinition(migrations: readonly MigrationFile[], header: string, dropPattern: RegExp): RoutineHistory {
   let live: RoutineDefinition | null = null;
   const superseded: RoutineDefinition[] = [];
   const dropped: string[] = [];
@@ -1145,43 +1141,42 @@ function armSpan(source: string, proofId: string, fragment: string): { start: nu
  * actually changed the source — a mutation that does not change the text
  * proves nothing, and that is itself a canary.
  */
-export const PROOF_MUTATIONS: readonly { readonly name: string; readonly apply: ProofSourceMutator }[] =
-  Object.freeze([
-    Object.freeze({
-      name: 'remove the proof',
-      apply: ((source, id) => {
-        const s = describeSpan(source, id);
-        return `${source.slice(0, s.start)}${source.slice(s.end)}`;
-      }) as ProofSourceMutator,
-    }),
-    Object.freeze({
-      name: 'rename the proof so discovery misses it',
-      apply: ((source, id) => {
-        const s = describeSpan(source, id);
-        const head = source.slice(s.start, s.end).replace(`[${id}]`, `[${id}_renamed]`);
-        return `${source.slice(0, s.start)}${head}${source.slice(s.end)}`;
-      }) as ProofSourceMutator,
-    }),
-    Object.freeze({
-      name: 'skip the proof',
-      apply: ((source, id) => {
-        const s = describeSpan(source, id);
-        return `${source.slice(0, s.start)}describe.skip(${source.slice(s.start + 'describe('.length)}`;
-      }) as ProofSourceMutator,
-    }),
-    Object.freeze({
-      name: 'comment out the proof',
-      apply: ((source, id) => {
-        const s = describeSpan(source, id);
-        const body = source
-          .slice(s.start, s.end)
-          .split('\n')
-          .map((l) => `// ${l}`)
-          .join('\n');
-        return `${source.slice(0, s.start)}${body}${source.slice(s.end)}`;
-      }) as ProofSourceMutator,
-    }),
-  ]);
+export const PROOF_MUTATIONS: readonly { readonly name: string; readonly apply: ProofSourceMutator }[] = Object.freeze([
+  Object.freeze({
+    name: 'remove the proof',
+    apply: ((source, id) => {
+      const s = describeSpan(source, id);
+      return `${source.slice(0, s.start)}${source.slice(s.end)}`;
+    }) as ProofSourceMutator,
+  }),
+  Object.freeze({
+    name: 'rename the proof so discovery misses it',
+    apply: ((source, id) => {
+      const s = describeSpan(source, id);
+      const head = source.slice(s.start, s.end).replace(`[${id}]`, `[${id}_renamed]`);
+      return `${source.slice(0, s.start)}${head}${source.slice(s.end)}`;
+    }) as ProofSourceMutator,
+  }),
+  Object.freeze({
+    name: 'skip the proof',
+    apply: ((source, id) => {
+      const s = describeSpan(source, id);
+      return `${source.slice(0, s.start)}describe.skip(${source.slice(s.start + 'describe('.length)}`;
+    }) as ProofSourceMutator,
+  }),
+  Object.freeze({
+    name: 'comment out the proof',
+    apply: ((source, id) => {
+      const s = describeSpan(source, id);
+      const body = source
+        .slice(s.start, s.end)
+        .split('\n')
+        .map((l) => `// ${l}`)
+        .join('\n');
+      return `${source.slice(0, s.start)}${body}${source.slice(s.end)}`;
+    }) as ProofSourceMutator,
+  }),
+]);
 
 /** Mutations that need the arm's title, applied to one mandatory proof. */
 export const ARM_MUTATIONS: readonly {
@@ -1199,7 +1194,9 @@ export const ARM_MUTATIONS: readonly {
     name: 'replace the arm body with an unconditional pass',
     apply: (source: string, id: string, fragment: string): string => {
       const s = armSpan(source, id, fragment);
-      const title = maskSource(source).slice(s.start, s.end).match(/^it\(\s*(['"`])([\s\S]*?)\1/);
+      const title = maskSource(source)
+        .slice(s.start, s.end)
+        .match(/^it\(\s*(['"`])([\s\S]*?)\1/);
       const t = title === null ? 'arm' : (title[2] as string);
       return `${source.slice(0, s.start)}it('${t.replace(/'/g, "\\'")}', () => { expect(true).toBe(true); });${source.slice(s.end)}`;
     },
