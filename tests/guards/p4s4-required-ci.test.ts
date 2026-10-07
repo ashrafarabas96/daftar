@@ -1252,6 +1252,73 @@ describe('P4-S4 — the roster is a RATCHET: the derived set may grow and may no
     rmSync(dir, { recursive: true, force: true });
   });
 
+  it('every recorded case floor is above one, so hollowing a block to a single trivial case cannot satisfy its row', () => {
+    // Non-vacuity first: a floor of 1 is no floor at all, because
+    // `rosterRowTitles` already requires one runnable case before it will add
+    // a block's title. And a row carrying no floor at all must be naming an
+    // it( case, which is satisfied only by itself.
+    const floored = ROSTER_RECORDED.filter((r) => r.cases !== undefined);
+    expect(floored.length, 'no row carries a case floor, so the arm below judges nothing and its silence is not evidence').toBeGreaterThan(0);
+    for (const row of floored)
+      expect(
+        row.cases,
+        `${row.suite}: the floor on \`${row.title}\` is ${row.cases}, and a floor of one is what the title check already demands`,
+      ).toBeGreaterThan(1);
+    // And every floor is met by the tree it was recorded from.
+    expect(rosterBijectionProblems(REPO)).toEqual([]);
+  });
+
+  it('RP-RT-E red: a recorded block HOLLOWED to one trivial case keeps its title and is caught only by the floor', () => {
+    // The attack an independent challenge executed against this gate. Five
+    // rows recorded for this slice's ruling sentinels named describe( BLOCKS,
+    // and `rosterRowTitles` adds a block's title as soon as the block holds
+    // ONE runnable case — so each could be reduced to `it('x', () => undefined)`
+    // with every roster law silent: the paths never move, so no count, floor
+    // or directory arm can see it either. The two rows added to stop the
+    // matrix being DELETED had only moved the vacuity from the whole file to
+    // the whole block.
+    const victim = 'tests/security/p4s4-rls-barrier-behaviour.test.ts';
+    const law = 'P4-S4 — THE PERMANENT FOUR-WAY AUTHORITY MATRIX (TL-P4-RLS-INT-01)';
+    const row = ROSTER_RECORDED.find((r) => r.suite === victim && r.title === law);
+    expect(row?.cases, 'the matrix row carries no floor, so this plant has no subject').toBeGreaterThan(1);
+    const dir = mkdtempSync(join(tmpdir(), 'p4s4-hollow-'));
+    for (const file of rosterFiles(REPO)) {
+      mkdirSync(join(dir, dirname(file)), { recursive: true });
+      writeFileSync(join(dir, file), readFileSync(join(REPO, file), 'utf8'));
+    }
+    expect(rosterBijectionProblems(dir), 'the copy is not a faithful one, so what follows would prove nothing').toEqual([]);
+    // Hollow the block: keep the describe( and its title, replace its body
+    // with the one trivial case that used to be enough.
+    const src = readFileSync(join(dir, victim), 'utf8');
+    const at = src.indexOf(`describe('${law}'`);
+    expect(at, 'the block is not in the file under that exact title').toBeGreaterThan(-1);
+    const rest = src.slice(at);
+    const open = rest.indexOf('{');
+    let depth = 0;
+    let end = -1;
+    for (let k = open; k < rest.length; k++) {
+      if (rest[k] === '{') depth += 1;
+      else if (rest[k] === '}') {
+        depth -= 1;
+        if (depth === 0) {
+          end = k;
+          break;
+        }
+      }
+    }
+    expect(end, 'the block did not close, so the plant is not the one this proof describes').toBeGreaterThan(open);
+    writeFileSync(join(dir, victim), `${src.slice(0, at)}describe('${law}', () => {\n  it('x', () => undefined);\n}${rest.slice(end + 1)}`);
+    // The title survives — which is precisely why the title check cannot see this.
+    expect(rosterRowTitles(readFileSync(join(dir, victim), 'utf8')), 'the hollowed block lost its title, so this proof is about something else').toContain(law);
+    expect(rosterRatchetProblems(dir), 'a count saw the hollowing, so the hole was not where this proof says').toEqual([]);
+    const found = rosterBijectionProblems(dir);
+    expect(
+      found.some((m) => m.includes(law) && m.includes('runnable case')),
+      `the floor missed the hollowed block: ${JSON.stringify(found)}`,
+    ).toBe(true);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
   it('RP-RT-A red: a rostered suite moved AND renamed out of the rule takes the roster below the floor and is named', () => {
     // The exact attack, on a copy of the real tests tree. The security suite
     // is renamed so the basename rule no longer matches it — which is how a

@@ -2130,6 +2130,27 @@ export interface RosterRow {
    * be satisfied by another row's file.
    */
   readonly title: string;
+  /**
+   * When `title` names a `describe(` BLOCK, the minimum number of runnable
+   * cases that block must still hold.
+   *
+   * WHY THIS FIELD EXISTS, measured. `rosterRowTitles` adds a block's title to
+   * the satisfied set as soon as the block holds ONE runnable case, so a row
+   * naming a describe was satisfied by `it('x', () => undefined)`. An
+   * independent challenge executed that: five rows recorded for this slice's
+   * ruling sentinels — the four-way authority matrix, its reopening-condition
+   * red proofs, both CASE C blocks and the live §17 plants — were each reduced
+   * to one trivial case with `rosterBijectionProblems` still returning `[]`,
+   * every path unchanged and therefore every count and floor silent too. The
+   * two rows added to stop the matrix being DELETED had only moved the
+   * vacuity from the whole file to the whole block.
+   *
+   * The floor closes that. It is the count the extractor sees TODAY, recorded
+   * by hand, and a block that loses a case goes red naming what it held. It is
+   * a floor, so adding cases is free. A row naming an `it(` case needs none,
+   * because such a row is already satisfied only by that case.
+   */
+  readonly cases?: number;
 }
 
 export const ROSTER_RECORDED: readonly RosterRow[] = [
@@ -2201,14 +2222,17 @@ export const ROSTER_RECORDED: readonly RosterRow[] = [
   {
     suite: 'tests/security/p4s4-internal-authority-shape.test.ts',
     title: 'TL-P4-RLS-INT-01 §11 — the live catalogue of a database built from the migrations',
+    cases: 8,
   },
   {
     suite: 'tests/security/p4s4-internal-authority-shape.test.ts',
     title: 'TL-P4-RLS-INT-01 §12 — no runtime credential can assume either authority, measured live',
+    cases: 5,
   },
   {
     suite: 'tests/security/p4s4-internal-authority-shape.test.ts',
     title: 'TL-P4-RLS-INT-01 §17 — the reopening conditions, planted live and put back',
+    cases: 3,
   },
   { suite: 'tests/security/p4s4-rls-barrier-behaviour.test.ts', title: 'P4-S4 — the policy surface the behavioural laws rest on' },
   {
@@ -2224,6 +2248,7 @@ export const ROSTER_RECORDED: readonly RosterRow[] = [
   {
     suite: 'tests/security/p4s4-rls-barrier-behaviour.test.ts',
     title: 'P4-S4 — THE PERMANENT FOUR-WAY AUTHORITY MATRIX (TL-P4-RLS-INT-01)',
+    cases: 2,
   },
   // CASE C of the same matrix, and a DIFFERENT authority model from the three
   // above it: a real merchant credential exercising a real route, refused by the
@@ -2233,14 +2258,17 @@ export const ROSTER_RECORDED: readonly RosterRow[] = [
   {
     suite: 'tests/security/p4s4-cross-tenant-command-refusal.test.ts',
     title: '§16 CASE C — the eight Phase 4 command surfaces, each REFUSED with no effect in B',
+    cases: 11,
   },
   {
     suite: 'tests/security/p4s4-cross-tenant-command-refusal.test.ts',
     title: '§16 CASE C — THE RED PROOFS: each law is shown to be able to fail, against a real subject',
+    cases: 7,
   },
   {
     suite: 'tests/security/p4s4-rls-barrier-behaviour.test.ts',
     title: "P4-S4 — THE RED PROOFS for the four-way matrix: §17's three reopening conditions (TL-P4-RLS-INT-01)",
+    cases: 4,
   },
 ];
 
@@ -2425,6 +2453,25 @@ export function rosterBijectionProblems(root: string, rows: readonly RosterRow[]
       problems.push(
         `${row.suite} no longer carries the recorded title \`${row.title}\` as a runnable describe( block or it( case — the path is on the roster, the basename still matches the rule and the file still holds some title, so every other roster law here is green over a file whose content has been replaced. A row names a LAW, not a filename`,
       );
+    // AND THE BLOCK'S CASE FLOOR. A row naming a describe( is satisfied by one
+    // runnable case, so the title surviving is not the law surviving. An
+    // independent challenge hollowed five of this slice's recorded blocks to
+    // `it('x', () => undefined)` and this function returned [] over all of
+    // them. The floor is the count recorded by hand; losing a case is red.
+    if (row.cases !== undefined) {
+      const block = describeBlocks(read(root, row.suite)).find((b) => b.title === row.title);
+      if (block === undefined)
+        problems.push(
+          `${row.suite} records a case floor of ${row.cases} for \`${row.title}\`, and that title is not a describe( BLOCK in the file — a floor over a single it( case is a floor over nothing, so either the row names the wrong thing or the block became a case`,
+        );
+      else {
+        const held = testTitles(block.body).length;
+        if (held < row.cases)
+          problems.push(
+            `${row.suite}: the block \`${row.title}\` holds ${held} runnable case(s) and its recorded floor is ${row.cases} — the title is still here and the law inside it is not, which is exactly the hollowing a title-presence check cannot see. If a case was retired deliberately, lower the floor in the same commit`,
+          );
+      }
+    }
   }
   return problems;
 }
