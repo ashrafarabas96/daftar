@@ -1,21 +1,52 @@
 /**
  * P4-S7 — THE INSTALLMENT-AGING PROJECTION, AS A REFERENCE MODEL.
  *
- * THIS PROJECTION IS TRANSACTION-CURRENCY ONLY. It allocates
- * `outstanding_txn_minor` across the aging buckets and allocates NO base
- * figure. That is a RULING (coordinator, ruling 2) and not an oversight: the
- * base column cannot be split exactly from the inputs this design is
- * permitted, because `invoice_outstanding`'s `paid_base_minor` is the sum of
- * the carrying released and never a conversion of the paid transaction
+ * IT ALLOCATES BOTH COLUMNS, AND THE BASE COLUMN COMES FROM A RULING.
+ *
+ * Round 2 allocated the transaction currency only and left the base figure
+ * unallocated, on the coordinator's ruling 2, because the base column cannot
+ * be split from a quotient: `invoice_outstanding`'s `paid_base_minor` is the
+ * sum of the CARRYING RELEASED and never a conversion of the paid transaction
  * amount — read in the LIVE body at `0084:614` as
  * `pg_catalog.sum(d.rel) AS paid_base` over
- * `invoice_carrying_base_released_minor`, and re-verified by the coordinator
- * against that same live body — so `outstanding_base / outstanding_txn` is not
- * the invoice's `source_to_base_rate` under realized FX. The two ways out —
- * reading that rate, or feeding the quotient back — are a widening of the
- * permitted input set and a forbidden rounded-quotient-as-input
- * respectively. The widening is with the owner; until he rules, no base
- * allocation is written. See the design document §5.
+ * `invoice_carrying_base_released_minor` — so `outstanding_base_minor /
+ * outstanding_txn_minor` is NOT the invoice's `source_to_base_rate` under
+ * realized FX. That measurement still stands.
+ *
+ * THE OWNER RULED (TL Ashraf, S7 §21). `source_to_base_rate` must NOT become
+ * a second arithmetic authority and must NOT be injected into a signature to
+ * reach this arithmetic. The invoice already carries an immutable
+ * authoritative monetary PAIR, `total_txn_minor` and `total_base_minor`. The
+ * base portion of a schedule boundary is THE CANONICAL CUMULATIVE
+ * CARRYING-VALUE LAW over that pair, differenced between the schedule's
+ * cumulative levels:
+ *
+ *     base_i = R(L_i) − R(L_{i−1})   where R(x) = HALF_EVEN(B·x, T)
+ *            = apRelease(B, T, L_{i−1}, L_i − L_{i−1})               (R-61)
+ *
+ * The levels partition `[paid, T]`, so the portions telescope and
+ *
+ *     Σ base_i = R(T) − R(paid) = B − paid_base = outstanding_base_minor
+ *
+ * EXACTLY, because `R(T) = B` with no residue. §29's conservation law is
+ * therefore a CONSEQUENCE of differencing one cumulative function and not a
+ * coincidence anything polices — which is how the owner asked for it to be
+ * proved, and proof 10 proves it that way, including against adversarial
+ * rounding functions that show the property belongs to TELESCOPING and not to
+ * HALF_EVEN.
+ *
+ * R-81 — THE ARITHMETIC IS REUSED, NEVER RE-IMPLEMENTED. This file IMPORTS
+ * `apRelease` from `packages/inventory/src/supplier-settlement.ts:89` and the
+ * SQL CALLS `public.supplier_ap_release` (`0067:683`). There is no third copy
+ * and no `roundHalfEven` here: a third copy would be a third truth.
+ *
+ * §21 ASKED FOR A COUNTEREXAMPLE IF THE RAW RATE WERE REQUIRED. THERE IS
+ * NONE. The only thing the allocation needs from the FX side is the RATIO
+ * `B/T` of two stored authoritative integers, applied ONCE per cumulative
+ * level inside ONE `HALF_EVEN`; no per-instalment conversion is performed, so
+ * no per-instalment rate is referenced, and the endpoint identity `R(T) = B`
+ * holds exactly, which no independent per-row conversion by a rate can
+ * guarantee. A read creates no realized FX. See the design document §5.
  *
  * WHAT THIS FILE IS, AND DELIBERATELY IS NOT
  * ------------------------------------------
@@ -75,6 +106,17 @@
  * structurally unavoidable and is therefore left OWED rather than guessed.
  */
 
+import { apRelease } from '../../inventory/src/supplier-settlement';
+
+/**
+ * The cumulative carrying-value law, as a seam. The DEFAULT is the canonical
+ * `apRelease` and nothing else is used in anger; proof 10 injects adversarial
+ * alternatives to show the conservation law is a property of DIFFERENCING one
+ * function and not of HALF_EVEN.
+ */
+export type ReleaseFn = (totalBase: bigint, totalTxn: bigint, before: bigint, applied: bigint) => bigint;
+export const CANONICAL_RELEASE: ReleaseFn = apRelease;
+
 // ── Civil dates ───────────────────────────────────────────────────────────
 //
 // `G-13` requires a civil DATE and never a timestamp, so a date here is
@@ -124,14 +166,16 @@ export interface OpenInvoiceRow {
    * other half of the pair `invoice_outstanding` already returns, and
    * `paid + outstanding = total` (`R-SAL-02`, `P4-AL-26`).
    *
-   * THE ALLOCATION NEVER READS IT. It exists only for the sum-law coherence
-   * signal below, and `scheduleCoherenceFindings` is the only function that
-   * touches it — because detecting an OVER-SCHEDULED plan is impossible from
-   * the outstanding figure alone, and the challenger's M-11 showed that the
-   * over-scheduled direction produces no signal at all while the aging reads
-   * zero overdue on a fully overdue invoice.
+   * IT IS NOW LOAD-BEARING FOR THE ALLOCATION, and that is forced by the
+   * ruling rather than chosen: the base levels must be anchored at the PAID
+   * level, because `outstanding_base = R(Tot) − R(P)`. Anchoring there also
+   * repairs the SUBSTANCE of the challenger's M-11 — see `projectInvoice`.
    */
   readonly paidTxnMinor: bigint;
+  /** `paid_base_minor` from the same authoritative row: the carrying released. */
+  readonly paidBaseMinor: bigint;
+  /** `outstanding_base_minor` from the same authoritative row. */
+  readonly outstandingBaseMinor: bigint;
 }
 
 /** One scheduled instalment: a date and an amount, and nothing derived. */
@@ -222,6 +266,13 @@ export interface ProjectionPolicy {
   /** Correct: 'authoritative'. 'plan_local' is the parallel path. */
   readonly outstandingSource: 'authoritative' | 'plan_local';
   /**
+   * Correct: 'cumulative_difference' — `R(L_i) − R(L_{i−1})`, which
+   * telescopes. 'per_row_conversion' converts each row independently, which
+   * is the second rounding at the second grain this design exists to refuse:
+   * the per-row figures do not sum to the authoritative base.
+   */
+  readonly baseAllocation: 'cumulative_difference' | 'per_row_conversion';
+  /**
    * Correct: 0. A non-zero value shifts every schedule date by that many days
    * INSIDE the allocation and reports the shifted date as the contribution's
    * own, so the output stays self-consistent while every instalment ages
@@ -246,6 +297,7 @@ export const CORRECT_POLICY: ProjectionPolicy = Object.freeze({
   planlessArm: 'without_an_active_plan' as const,
   carryResidual: true,
   outstandingSource: 'authoritative' as const,
+  baseAllocation: 'cumulative_difference' as const,
   scheduleDateShiftDays: 0,
   settlementOrder: DECLARED_SETTLEMENT_ORDER,
 });
@@ -272,6 +324,11 @@ export const POLICY_KNOBS: readonly {
   Object.freeze({ knob: 'carryResidual' as const, correct: true, defective: Object.freeze([false]) }),
   Object.freeze({ knob: 'outstandingSource' as const, correct: 'authoritative', defective: Object.freeze(['plan_local']) }),
   Object.freeze({ knob: 'scheduleDateShiftDays' as const, correct: 0, defective: Object.freeze([-200]) }),
+  Object.freeze({
+    knob: 'baseAllocation' as const,
+    correct: 'cumulative_difference',
+    defective: Object.freeze(['per_row_conversion']),
+  }),
 ]);
 
 // ── Output ────────────────────────────────────────────────────────────────
@@ -287,6 +344,8 @@ export interface AgingContribution {
   readonly currencyCode: string;
   readonly bucketNo: number;
   readonly txnMinor: bigint;
+  /** The carrying portion, by the canonical cumulative law. */
+  readonly baseMinor: bigint;
   /** Where this money came from, for the proofs. Not part of the SQL output. */
   readonly origin: 'down_payment' | 'installment' | 'residual' | 'whole_invoice';
   /** The schedule date this money was bucketed by; null for a NULL invoice due date. */
@@ -311,56 +370,88 @@ function minBig(a: bigint, b: bigint): bigint {
   return a < b ? a : b;
 }
 
+function maxBig(a: bigint, b: bigint): bigint {
+  return a > b ? a : b;
+}
+
 /**
  * THE ALLOCATION RULE, in one sentence: an instalment schedule is settled
- * OLDEST SCHEDULED DATE FIRST, so the invoice's authoritative outstanding
- * occupies a SUFFIX of the schedule, and each schedule row's share is a
- * closed-form clamp of that outstanding against the amounts scheduled after
- * it.
+ * OLDEST SCHEDULED DATE FIRST out of the money ALREADY COLLECTED, so the
+ * authoritative paid figure consumes a PREFIX of the schedule and each row's
+ * share is the step the cumulative settlement level takes across it.
  *
- * Write the schedule in ascending `(due_date, seq_no)` order as rows
- * `1..m` with amounts `a_1..a_m`, and let `s_i = Σ_{j >= i} a_j` be the
- * inclusive suffix sum, so `s_{m+1} = 0`. For authoritative outstanding `O`,
- * under the declared OLDEST-SCHEDULED-FIRST policy:
+ * Write the schedule in ascending `(due_date, seq_no)` order as rows `1..m`
+ * with amounts `a_1..a_m`, and let `c_i = Σ_{j <= i} a_j` be the inclusive
+ * PREFIX sum, `c_0 = 0`. Let `P = paid_txn_minor`, `O =
+ * outstanding_txn_minor`, `T = P + O` — all three authoritative, read from
+ * `invoice_outstanding` and never recomputed. The SETTLEMENT LEVEL is
  *
- *     alloc_i = clamp(O − s_{i+1}, 0, a_i)
+ *     L(x) = min(max(x, P), T)        so L(c_0) = P and L(c_m) <= T
  *
- * and under the other convention, with `p_i = Σ_{j < i} a_j` the exclusive
- * prefix sum, `alloc_i = clamp(O − p_i, 0, a_i)`. BOTH telescope to
- * `min(O, T)` by the same algebra — `clamp(O − x_i, 0, x_{i+1} − x_i) =
- * min(O, x_{i+1}) − min(O, x_i)` over any monotone cut sequence — which is
- * why every money law below is convention-independent and `meta_6` can
- * assert it.
+ * and the share is `alloc_i = L(c_i) − L(c_{i−1})`.
+ *
+ * WHY ANCHORED AT `P` AND NOT AT `O`. Round 2 anchored on the outstanding
+ * against the schedule's SUFFIX — `alloc_i = clamp(O − s_{i+1}, 0, a_i)` —
+ * which is the same arithmetic wherever `Σ a_i = T`, and the two agree
+ * exactly on every schedule that obeys `R-SAL-06` (a law asserts this). They
+ * disagree where the sum law is broken, and the challenger's M-11 is where:
+ * an OVER-scheduled plan put an unpaid balance in the LATEST row, reporting a
+ * 265-day-overdue receivable as not yet due, with no bound on the
+ * understatement. Anchoring at the paid figure makes that answer
+ * INEXPRESSIBLE rather than merely signalled — the earliest rows are the ones
+ * nothing has paid for — and the 265-day case is a permanent deterministic
+ * golden, never replaced by random coverage.
+ *
+ * Both anchors are instances of one identity,
+ *
+ *     clamp(V − x_i, 0, x_{i+1} − x_i) = min(V, x_{i+1}) − min(V, x_i)
+ *
+ * over any monotone cut sequence, which is why every money law below is
+ * convention-independent and `meta_6` can ASSERT that rather than state it:
+ * the other settlement convention is this ordering reversed and nothing else.
  *
  * Determinism. `(due_date, seq_no)` is a total order because
  * `installments_seq_uq UNIQUE (business_id, plan_id, seq_no)` makes `seq_no`
- * unique within the plan, and the down payment takes `seq_no = 0`. The
- * formula is CLOSED — no accumulator, no loop-carried state — so there is no
- * order of evaluation to get wrong and no partial-sum to depend on.
+ * unique within the plan, and the down payment takes `seq_no = 0`. `L` is a
+ * closed form of one cut point, so a row's share depends on nothing but the
+ * two cut points beside it — no accumulator whose order of evaluation could
+ * be got wrong.
  *
- * Exactness. `clamp(O − s_{i+1}, 0, s_i − s_{i+1}) = min(O, s_i) − min(O, s_{i+1})`,
- * so the allocation TELESCOPES:
+ * Exactness, transaction side. The levels telescope:
  *
- *     Σ_i alloc_i = min(O, s_1) − min(O, s_{m+1}) = min(O, T)   where T = s_1
+ *     Σ_i alloc_i = L(c_m) − L(c_0) = L(c_m) − P
  *
- * exactly, in integers, for every `O >= 0`. This is why proof 1 is a theorem
- * and not a hope, and why there is no residue to distribute: a pro-rata rule
- * would need one and would have to round it.
+ * exactly, in integers, for every input. ZERO roundings are performed here.
  *
- * Totality. The leftover is given its OWN CLOSED FORM
+ * Exactness, base side. EXACTLY ONE rounding, and it is not this file's: the
+ * base share is `apRelease(B, T, L(c_{i−1}), alloc_i)` = `R(L(c_i)) −
+ * R(L(c_{i−1}))`, consumed from the canonical law. Rounding is not additive,
+ * so the count matters: one rounding at one grain, never a second at a second
+ * grain to be reconciled with the first. Proof 10's mutant converts each row
+ * on its own and drifts by 4 minor units on the design fixture — small, which
+ * is exactly why a law that did not assert EXACT equality would never have
+ * found it.
  *
- *     residual = O − min(max(O, 0), T)
+ * Totality. The leftover is given its OWN CLOSED FORM, anchored on the
+ * DECLARED schedule sum `S = Σ a_i`:
  *
- * and NOT `O − Σ alloc_i`. Defining it as the difference against the realised
- * sum would make proof 1 compare an expression with itself and prove nothing;
- * defining it against `min(max(O,0), T)` leaves proof 1 a real claim about
- * the telescoping identity, which the `clampToRowAmount` mutant breaks.
+ *     residual = T − L(S)        and base = apRelease(B, T, L(S), residual)
+ *
+ * and NOT `O − Σ alloc_i`, and NOT `T − L(c_m)`. ROUND 3 CAUGHT ITSELF HERE:
+ * the first draft anchored the residual on the REALISED last level, which made
+ * `Σ alloc + residual = (L − P) + (T − L) = T − P = O` hold IDENTICALLY
+ * whatever the allocation did. Proof 1 was a tautology and the
+ * `clampToRowAmount` mutation was measurably INERT — `meta_2` is what caught
+ * it. Anchored on the DECLARED sum, `L(S) = L(c_m)` only when the schedule is
+ * complete, so proof 1 is a real claim about the telescoping identity again
+ * and the mutant breaks it.
+ *
  * `residual` carries the money the schedule does not account for — a broken
  * `Σ instalments + down = invoice total` (`P4-AL-13`, `R-SAL-06`), or a
- * negative outstanding — and is bucketed by `invoices.due_date`, which is the
- * only date with any authority over it. So the buckets total the authoritative
- * outstanding EVEN WHEN the sum law is violated, instead of silently losing
- * the difference.
+ * negative outstanding — and is bucketed by `invoices.due_date`, the only
+ * date with any authority over an amount the schedule never declared. So the
+ * buckets total the authoritative outstanding EVEN WHEN the sum law is
+ * violated, instead of silently losing the difference.
  */
 export function projectInvoice(
   row: OpenInvoiceRow,
@@ -368,33 +459,22 @@ export function projectInvoice(
   asOf: string,
   thresholds: readonly number[],
   policy: ProjectionPolicy = CORRECT_POLICY,
+  release: ReleaseFn = CANONICAL_RELEASE,
 ): readonly AgingContribution[] {
-  // M-9: `installments.length > 0` used to be a condition here, and the SQL
-  // sketch's plan-less arm had no such condition — so an active plan with no
-  // instalment rows took OPPOSITE arms in the model and in the SQL, and gave
-  // opposite buckets on one input. The SQL is right: an active plan is a
-  // plan, and its down payment is a schedule row with a date of its own. The
-  // row count is no longer consulted, so the two agree by construction; and
-  // the DDL specification makes the zero-row state unreachable at commit with
-  // a DEFERRED schedule verifier, so the disagreement is closed from both
-  // ends rather than only from this one.
   const planApplies = plan !== undefined && plan.status === 'active';
-
-  // The plan-less arm. Under the correct policy an invoice reaches it ONLY
-  // when no active plan covers it, so the two arms PARTITION the open
-  // invoices and no invoice is read by both. The 'every_invoice' mutant makes
-  // the arms overlap, which is the double count proof 3 is about.
   const planlessReached = policy.planlessArm === 'every_invoice' || !planApplies;
 
+  const O = row.outstandingTxnMinor;
   const out: AgingContribution[] = [];
 
   if (planlessReached) {
-    if (row.outstandingTxnMinor !== 0n) {
+    if (O !== 0n) {
       out.push({
         invoiceId: row.invoiceId,
         currencyCode: row.currencyCode,
         bucketNo: bucketOf(asOf, row.dueDate, thresholds),
-        txnMinor: row.outstandingTxnMinor,
+        txnMinor: O,
+        baseMinor: row.outstandingBaseMinor,
         origin: 'whole_invoice',
         scheduleDate: row.dueDate,
         seqNo: null,
@@ -403,138 +483,181 @@ export function projectInvoice(
     if (!planApplies) return out;
   }
 
-  // From here the plan applies. `plan` is defined because `planApplies`.
   const p = plan as InstallmentPlan;
 
-  // The ordered schedule: the down payment first at seq 0, then the
-  // instalments, in ascending (due_date, seq_no).
-  const rows: readonly { seqNo: number; dueDate: string; amount: bigint; origin: 'down_payment' | 'installment' }[] =
-    [
-      {
-        seqNo: 0,
-        dueDate: shiftDate(p.downPaymentDueDate, policy.scheduleDateShiftDays),
-        amount: p.downPaymentMinor,
-        origin: 'down_payment' as const,
-      },
-      ...p.installments.map((i) => ({
-        seqNo: i.seqNo,
-        dueDate: shiftDate(i.dueDate, policy.scheduleDateShiftDays),
-        amount: i.amountTxnMinor,
-        origin: 'installment' as const,
-      })),
-    ].sort((x, y) => epochDay(x.dueDate) - epochDay(y.dueDate) || x.seqNo - y.seqNo);
+  // THE AUTHORITATIVE PAIR, or the parallel path proof 5 refuses. `P` is the
+  // settled level and `totalTxn`/`totalBase` the invoice's immutable pair —
+  // all three off the SAME row of the SAME reader (`0084:593`). The
+  // 'plan_local' mutant replaces them with a plan-local collected total that
+  // no payment and no reversal updates, because nothing writes it.
+  const scheduleSum = p.downPaymentMinor + p.installments.reduce((a, i) => a + i.amountTxnMinor, 0n);
+  const authoritative = policy.outstandingSource === 'authoritative';
+  const P = authoritative ? row.paidTxnMinor : (p.planLocalCollectedMinor ?? 0n);
+  const totalTxn = authoritative ? row.paidTxnMinor + O : scheduleSum;
+  const totalBase = authoritative ? row.paidBaseMinor + row.outstandingBaseMinor : scheduleSum;
 
-  // THE AUTHORITATIVE OUTSTANDING, or the parallel path proof 5 refuses.
-  const outstanding =
-    policy.outstandingSource === 'authoritative'
-      ? row.outstandingTxnMinor
-      : // The second ledger: a plan-local collected total, which no payment
-        // and no reversal updates, because nothing writes it.
-        rows.reduce((a, r) => a + r.amount, 0n) - (p.planLocalCollectedMinor ?? 0n);
+  const rows: readonly { seqNo: number; dueDate: string; amount: bigint; origin: 'down_payment' | 'installment' }[] = [
+    {
+      seqNo: 0,
+      dueDate: shiftDate(p.downPaymentDueDate, policy.scheduleDateShiftDays),
+      amount: p.downPaymentMinor,
+      origin: 'down_payment' as const,
+    },
+    ...p.installments.map((i) => ({
+      seqNo: i.seqNo,
+      dueDate: shiftDate(i.dueDate, policy.scheduleDateShiftDays),
+      amount: i.amountTxnMinor,
+      origin: 'installment' as const,
+    })),
+  ].sort((x, y) => epochDay(x.dueDate) - epochDay(y.dueDate) || x.seqNo - y.seqNo);
 
-  // Inclusive suffix sums `s_i`, computed once. `suffixAfter[i] = s_{i+1}`.
-  const suffixAfter: bigint[] = new Array<bigint>(rows.length + 1).fill(0n);
-  for (let i = rows.length - 1; i >= 0; i -= 1) {
-    suffixAfter[i] = (suffixAfter[i + 1] as bigint) + (rows[i] as { amount: bigint }).amount;
+  // A degenerate invoice (nothing outstanding, or a negative outstanding that
+  // no CHECK permits) carries wholly as residual. Totality before cleverness.
+  if (O <= 0n || totalTxn <= 0n || totalBase <= 0n) {
+    if (O !== 0n) {
+      out.push({
+        invoiceId: row.invoiceId,
+        currencyCode: row.currencyCode,
+        bucketNo: bucketOf(asOf, row.dueDate, thresholds),
+        txnMinor: O,
+        baseMinor: row.outstandingBaseMinor,
+        origin: 'residual',
+        scheduleDate: row.dueDate,
+        seqNo: null,
+      });
+    }
+    return out;
   }
-  const scheduleTotal = suffixAfter[0] as bigint;
 
-  for (let i = 0; i < rows.length; i += 1) {
-    const r = rows[i] as { seqNo: number; dueDate: string; amount: bigint; origin: 'down_payment' | 'installment' };
-    // The amount that must be filled BEFORE this row takes any: the rows
-    // scheduled strictly LATER under the declared oldest-first policy, or the
-    // rows scheduled strictly EARLIER under the other convention.
-    const filledFirst =
-      policy.settlementOrder === 'oldest_scheduled_first'
-        ? (suffixAfter[i + 1] as bigint)
-        : scheduleTotal - (suffixAfter[i] as bigint);
-    const headroom = clampLow(outstanding - filledFirst);
-    const alloc = policy.clampToRowAmount ? minBig(headroom, r.amount) : headroom;
-    if (alloc === 0n) continue;
+  // The order in which the schedule is CONSIDERED SETTLED. Oldest-scheduled-
+  // first means the paid amount covers the earliest rows, so the cumulative
+  // levels run in ascending schedule order (ruling 1).
+  const levelOrder = policy.settlementOrder === 'oldest_scheduled_first' ? rows : [...rows].reverse();
+
+  // THE CUMULATIVE LEVELS, CLAMPED INTO THE SETTLED-TO-TOTAL WINDOW.
+  //
+  //     c_i = Σ_{j ≤ i} a_j            (inclusive, in settlement order)
+  //     L_i = min(max(c_i, P), Tot)
+  //     alloc_i  = L_i − L_{i−1}
+  //     base_i   = R(L_i) − R(L_{i−1}) = release(B, Tot, L_{i−1}, alloc_i)
+  //
+  // ANCHORING AT `P` IS FORCED BY THE RULING, because the conservation law is
+  // `Σ base = R(Tot) − R(P) = total_base − paid_base = outstanding_base`, and
+  // that only telescopes if the first level IS `P`.
+  //
+  // IT ALSO REPAIRS THE SUBSTANCE OF THE CHALLENGER'S M-11. The previous form
+  // anchored on the OUTSTANDING against the schedule's suffix, so an
+  // OVER-SCHEDULED plan pushed the whole balance onto the latest row and
+  // reported a 265-day-overdue receivable as entirely not yet due. Anchored at
+  // what was actually PAID, the same input allocates to the earliest UNPAID
+  // row, which is the overdue one — so the understatement is no longer
+  // expressible, rather than merely signalled. The two forms agree exactly
+  // wherever `Σ instalments + down = invoice total` holds.
+  let prevLevel = minBig(clampLow(P), totalTxn);
+  const firstLevel = prevLevel;
+  const alloc = new Map<number, { txn: bigint; base: bigint }>();
+  let cumulative = 0n;
+  for (const r of levelOrder) {
+    cumulative += r.amount;
+    const raw = clampLow(cumulative < P ? P : cumulative);
+    // The upper clamp at the invoice total. Without it a schedule row absorbs
+    // past the end of the invoice and the buckets overshoot the authoritative
+    // outstanding, which is the defect proof 1 is about.
+    const level = policy.clampToRowAmount ? minBig(raw, totalTxn) : raw;
+    const txn = level - prevLevel;
+    if (txn > 0n) {
+      const base =
+        policy.baseAllocation === 'cumulative_difference'
+          ? release(totalBase, totalTxn, prevLevel, txn)
+          : // The refused form: each row converted on its own, at the row
+            // grain, so the per-row figures do not sum to the authoritative
+            // base. Two grains, two roundings, disagreement by construction.
+            release(totalBase, totalTxn, 0n, txn);
+      alloc.set(r.seqNo, { txn, base });
+    }
+    prevLevel = level;
+  }
+  const lastLevel = prevLevel;
+
+  for (const r of rows) {
+    const a = alloc.get(r.seqNo);
+    if (a === undefined) continue;
     out.push({
       invoiceId: row.invoiceId,
       currencyCode: row.currencyCode,
       bucketNo: bucketOf(asOf, policy.bucketBy === 'schedule_date' ? r.dueDate : row.dueDate, thresholds),
-      txnMinor: alloc,
+      txnMinor: a.txn,
+      baseMinor: a.base,
       origin: r.origin,
       scheduleDate: policy.bucketBy === 'schedule_date' ? r.dueDate : row.dueDate,
       seqNo: r.seqNo,
     });
   }
 
-  // The residual, by its own closed form — never `outstanding − Σ alloc`.
+  // THE RESIDUAL, BY ITS OWN CLOSED FORM OVER THE *DECLARED* SCHEDULE SUM —
+  // not over the level the loop happened to reach.
+  //
+  //     residual = Tot − min(max(scheduleSum, P), Tot)
+  //
+  // This matters and it was caught by `meta_2`. Anchoring the residual on
+  // `lastLevel` made `Σ alloc + residual = (lastLevel − P) + (Tot − lastLevel)
+  // = Tot − P = O` hold IDENTICALLY, whatever the allocation did — a
+  // tautology, and proof 1 would have proved nothing while reading as though
+  // it did. The `clampToRowAmount` mutation was measurably INERT under it,
+  // because the residual silently absorbed the overshoot.
+  //
+  // Anchored on the DECLARED schedule sum, proof 1 is a theorem again: it
+  // holds only because `lastLevel` really does equal
+  // `min(max(scheduleSum, P), Tot)`, which is exactly the clamp's
+  // correctness. Remove the clamp and the buckets overshoot by the whole
+  // over-scheduled excess.
   if (policy.carryResidual) {
-    const residual = outstanding - minBig(clampLow(outstanding), scheduleTotal);
-    if (residual !== 0n) {
+    const declaredEnd = minBig(maxBig(scheduleSum, P), totalTxn);
+    const residualTxn = totalTxn - declaredEnd;
+    if (residualTxn !== 0n) {
       out.push({
         invoiceId: row.invoiceId,
         currencyCode: row.currencyCode,
         bucketNo: bucketOf(asOf, row.dueDate, thresholds),
-        txnMinor: residual,
+        txnMinor: residualTxn,
+        baseMinor: release(totalBase, totalTxn, declaredEnd, residualTxn),
         origin: 'residual',
         scheduleDate: row.dueDate,
         seqNo: null,
       });
     }
+    void firstLevel;
+    void lastLevel;
   }
 
   return out;
 }
 
-// ── THE SUM-LAW COHERENCE SIGNAL (challenger M-11) ───────────────────────
+// ── PR-5, RESOLVED BY DELETION: THE VERIFIER IS THE WHOLE BOUND ─────────
 //
-// `P4-AL-13` and `R-SAL-06` require `Σ instalments + down = invoice total`.
-// The projection must total the authoritative outstanding WHATEVER the data
-// says, so it absorbs a violation rather than refusing — which is right for
-// proofs 1 and 4, and leaves a hole the challenger measured:
+// Round 2 added `scheduleCoherenceFindings`, a pure function that detected a
+// broken `Σ instalments + down = invoice total` in both directions. The
+// coordinator's objection was exact and is this estate's recorded defect
+// class: A NAME EXISTED AND NO EVIDENCE READ IT. Nothing called it, and it was
+// offered as the bound on ruling 1 — so there were two homes for the bound and
+// the unwired one was the one being believed.
 //
-//   * UNDER-scheduled (`T < total`) surfaces as a non-zero `residual`
-//     contribution, so it is visible in the output;
-//   * OVER-scheduled (`T > total`) surfaces as NOTHING. The residual is zero
-//     and every one of the seven laws holds, while the aging can report the
-//     whole receivable of a 265-day-overdue invoice in the NOT-YET-DUE
-//     bucket, because the implied payment is deemed under the declared
-//     oldest-first policy to have settled the instalments that fell due.
+// It is DELETED, and the DEFERRED SCHEDULE VERIFIER is the whole bound. Two
+// things make that sound rather than merely tidy:
 //
-// AND IT CANNOT BE DETECTED FROM THE OUTSTANDING FIGURE ALONE: `T = 1 800 000`
-// with `O = 900 000` is indistinguishable from a legitimate plan half paid.
-// Detecting it needs the invoice TOTAL, which is `paid + outstanding` — the
-// other half of the pair the SAME authoritative reader already returns. So
-// the signal costs no new input and no new relation, and the ALLOCATION still
-// never reads `paid`.
+//   * a DEFERRABLE INITIALLY DEFERRED constraint trigger fires at COMMIT on
+//     every INSERT, UPDATE and DELETE whoever writes, so a direct write does
+//     not bypass it — only disabling triggers or `session_replication_role`
+//     does, and neither is reachable by `daftar_app`; and
+//   * the allocation no longer DEPENDS on the sum law for a sane answer.
+//     Anchoring the cumulative levels at the paid level means an
+//     over-scheduled plan allocates to the earliest unpaid row, so the
+//     unbounded understatement M-11 found is no longer expressible. The
+//     verifier bounds the DATA; it is no longer propping up the ARITHMETIC.
 //
-// This is a DIAGNOSTIC and not money: it emits no contribution, so proof 1 is
-// untouched. The real repair is the DEFERRED schedule verifier in the DDL
-// specification, which makes the state unreachable at commit; this signal is
-// what makes it visible if the verifier is ever absent, deferred past a read,
-// or bypassed by a direct write.
-
-export type ScheduleCoherence = 'over_scheduled' | 'under_scheduled';
-
-export interface ScheduleCoherenceFinding {
-  readonly invoiceId: string;
-  readonly kind: ScheduleCoherence;
-  /** `Σ instalments + down − (paid + outstanding)`; positive when over-scheduled. */
-  readonly excessTxnMinor: bigint;
-}
-
-/** The sum-law violations of one customer's open invoices. An empty array is a pass. */
-export function scheduleCoherenceFindings(
-  rows: readonly OpenInvoiceRow[],
-  plans: readonly InstallmentPlan[],
-): readonly ScheduleCoherenceFinding[] {
-  const out: ScheduleCoherenceFinding[] = [];
-  for (const r of rows) {
-    const p = plans.find((x) => x.invoiceId === r.invoiceId && x.status === 'active');
-    if (p === undefined) continue;
-    const scheduled = p.installments.reduce((a, i) => a + i.amountTxnMinor, 0n) + p.downPaymentMinor;
-    const total = r.paidTxnMinor + r.outstandingTxnMinor;
-    const excess = scheduled - total;
-    if (excess > 0n) out.push({ invoiceId: r.invoiceId, kind: 'over_scheduled', excessTxnMinor: excess });
-    else if (excess < 0n) out.push({ invoiceId: r.invoiceId, kind: 'under_scheduled', excessTxnMinor: excess });
-  }
-  return Object.freeze(out);
-}
+// Per the owner's §26 the sum law is owed AT DB LEVEL in all three directions
+// — below total refused, equal accepted, above total refused — which is a
+// cluster run and is owed to the box, not asserted here in TypeScript.
 
 /**
  * The amount of the DECLARED schedule that had fallen due at `asOf`, read from
@@ -555,6 +678,14 @@ export interface AgingBucket {
   readonly bucketNo: number;
   readonly currencyCode: string;
   readonly txnMinor: bigint;
+  /**
+   * The base-currency carrying portion of the bucket (R-61 / Ashraf's §21
+   * ruling). It is the sum of differences of ONE cumulative function, so the
+   * buckets total `outstanding_base_minor` exactly by telescoping rather than
+   * by a residue someone distributes. Column four of the shipped return
+   * shape, which §25 requires be kept.
+   */
+  readonly baseMinor: bigint;
   readonly invoiceCount: number;
 }
 
@@ -602,15 +733,16 @@ export function contributionsFor(
 
 /** Group contributions into buckets, counting distinct invoices. */
 export function aggregate(contributions: readonly AgingContribution[]): readonly AgingBucket[] {
-  const acc = new Map<string, { bucketNo: number; currencyCode: string; txnMinor: bigint; invoices: Set<string> }>();
+  const acc = new Map<string, { bucketNo: number; currencyCode: string; txnMinor: bigint; baseMinor: bigint; invoices: Set<string> }>();
   for (const c of contributions) {
     const key = `${c.bucketNo}\u0000${c.currencyCode}`;
-    const cur = acc.get(key) ?? { bucketNo: c.bucketNo, currencyCode: c.currencyCode, txnMinor: 0n, invoices: new Set<string>() };
+    const cur = acc.get(key) ?? { bucketNo: c.bucketNo, currencyCode: c.currencyCode, txnMinor: 0n, baseMinor: 0n, invoices: new Set<string>() };
     cur.txnMinor += c.txnMinor;
+    cur.baseMinor += c.baseMinor;
     cur.invoices.add(c.invoiceId);
     acc.set(key, cur);
   }
   return [...acc.values()]
-    .map((v) => ({ bucketNo: v.bucketNo, currencyCode: v.currencyCode, txnMinor: v.txnMinor, invoiceCount: v.invoices.size }))
+    .map((v) => ({ bucketNo: v.bucketNo, currencyCode: v.currencyCode, txnMinor: v.txnMinor, baseMinor: v.baseMinor, invoiceCount: v.invoices.size }))
     .sort((a, b) => a.bucketNo - b.bucketNo || a.currencyCode.localeCompare(b.currencyCode));
 }

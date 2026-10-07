@@ -2,24 +2,43 @@
 -- P4-S7 — INSTALLMENT AGING GRANULARITY: THE DDL SPECIFICATION.
 --
 -- ┌─────────────────────────────────────────────────────────────────────────┐
--- │ THIS SLICE CANNOT SHIP AS IT STANDS, AND THE BLOCK IS DELIBERATE.       │
+-- │ THE `base_minor` OWED IS CLOSED, AND BY A RULING, NOT BY AN INVENTION.  │
 -- │                                                                          │
--- │ The projection below is TRANSACTION-CURRENCY ONLY. `customer_ar_aging`   │
--- │ returns five columns and the fourth is `base_minor` (live definition     │
--- │ `0084:701`), and this design CANNOT COMPUTE IT: see section 5. The       │
--- │ function body therefore carries the literal token                        │
--- │ `__OWED_BASE_ALLOCATION__` where that expression belongs. That token is  │
--- │ not valid SQL, so PostgreSQL REFUSES this definition at CREATE time —    │
--- │ `LANGUAGE sql` bodies are parsed when the function is created — and the  │
--- │ file cannot be transcribed into a migration by accident. Replacing the   │
--- │ token is the owner's ruling (section 5), not the author's choice.        │
+-- │ Round 2 shipped this file with the literal token                        │
+-- │ `__OWED_BASE_ALLOCATION__` in the function body, deliberately chosen     │
+-- │ because it is not valid SQL: `LANGUAGE sql` bodies are parsed at CREATE  │
+-- │ time, so PostgreSQL REFUSED the definition and the file could not be     │
+-- │ transcribed into a migration by accident. The token held the hole open   │
+-- │ for a ruling instead of guessing.                                        │
 -- │                                                                          │
--- │ Three live consumers read `base_minor`, and `totalBaseMinor` in          │
--- │ `CustomerAgingDto` is built from it alone, so dropping the column is not │
--- │ available either. The first round's sketch emitted four columns and      │
--- │ claimed "same signature"; `CREATE OR REPLACE FUNCTION` may not change a  │
--- │ `RETURNS TABLE` list at all — that is a 42P13 — so the claim was false.  │
--- │ All five columns are carried here and the signature really is unchanged. │
+-- │ THE RULING CAME (TL Ashraf, §21/§25). `invoices.source_to_base_rate` is  │
+-- │ NOT the authoritative carrying-allocation primitive and must not become  │
+-- │ a second arithmetic authority. The base portion of a schedule boundary   │
+-- │ comes from THE CANONICAL CUMULATIVE CARRYING-VALUE LAW over the stored   │
+-- │ authoritative pair `(total_txn_minor, total_base_minor)`, differenced    │
+-- │ between the schedule's cumulative levels. That law is already shipped,   │
+-- │ ONCE, as `supplier_ap_release(B, T, X, a)` (`0067:683`, R-61, R-81), so  │
+-- │ the body below CALLS IT and does not re-implement it: a third copy of    │
+-- │ the arithmetic would be a third truth.                                   │
+-- │                                                                          │
+-- │ §21 asked for a counterexample if the raw rate were mathematically       │
+-- │ REQUIRED. THERE IS NONE, and section 5 gives the argument rather than    │
+-- │ the assertion. The token is gone; the body is now valid SQL and the      │
+-- │ block it enforced is lifted.                                             │
+-- │                                                                          │
+-- │ ALL FIVE COLUMNS ARE CARRIED, and the signature really is unchanged.     │
+-- │ Three live consumers read `base_minor` and `totalBaseMinor` in           │
+-- │ `CustomerAgingDto` is built from it alone, so dropping the column was    │
+-- │ never available. The first round's sketch emitted four and claimed "same │
+-- │ signature"; `CREATE OR REPLACE FUNCTION` may not change a `RETURNS       │
+-- │ TABLE` list at all — that is a 42P13 — so the claim was false. §25       │
+-- │ requires the shape be KEPT, and it is.                                   │
+-- │                                                                          │
+-- │ WHAT STILL BLOCKS THIS FILE: it has no migration number, it is not in    │
+-- │ `migrations/`, it is not in the manifest, and S7 is CHALLENGER REJECTED  │
+-- │ with `READY_TO_PROMOTE = NO`. It also needs one authority change that is │
+-- │ NOT the author's to make — patch request PR-6, the `GRANT EXECUTE` on    │
+-- │ `supplier_ap_release` — stated in section 5.                             │
 -- └─────────────────────────────────────────────────────────────────────────┘
 --
 -- THE SETTLEMENT ORDER IS A DECLARED POLICY, NOT A DERIVATION.
@@ -126,7 +145,9 @@ CREATE TABLE installments (
 );
 
 -- The one index the schedule read needs (budget `P4-H`, p95 <= 50 ms): the
--- projection's window order is exactly this index's order, descending.
+-- projection's window order is exactly this index's order, ASCENDING — the
+-- levels are PREFIX sums anchored at the paid figure (section 6), so the read
+-- walks the index forward and needs no sort.
 CREATE INDEX installments_plan_schedule_idx ON installments (business_id, plan_id, due_date, seq_no);
 
 ALTER TABLE installment_plans ENABLE ROW LEVEL SECURITY;
@@ -145,9 +166,18 @@ ALTER TABLE installments FORCE ROW LEVEL SECURITY;
 -- IT CARRIES THREE OBLIGATIONS, AND EACH ONE CLOSES A MEASURED HOLE:
 --
 --   (a) `Σ amount_txn_minor + down_payment_minor = invoices.total_txn_minor`
---       for every ACTIVE plan — `R-SAL-06`, and the BOUND on ruling 1's
---       third reason. Without it the over-scheduled direction makes the
---       understatement unbounded (challenger M-11).
+--       for every ACTIVE plan — `R-SAL-06`. OWED TO THE BOX, and owed in ALL
+--       THREE DIRECTIONS at DB level (owner §26), not in TypeScript and not
+--       in the UI:
+--         * a schedule summing below total REFUSED at COMMIT;
+--         * a schedule summing equal to total ACCEPTED;
+--         * a schedule summing above total REFUSED at COMMIT.
+--       Both refusals are reachable by a DELETE as well as by an INSERT,
+--       which is why BOTH triggers fire on DELETE too and proof 9 asserts
+--       that over the DDL rather than over this sentence.
+--       The projection no longer DEPENDS on this for a sane answer — see the
+--       paid-anchored levels in section 6 — so the verifier bounds the DATA
+--       rather than propping up the arithmetic.
 --   (b) AT LEAST ONE `installments` row per active plan. Without it an active
 --       plan with zero rows is reachable, and the reference model and this
 --       projection took OPPOSITE arms on it and gave opposite buckets
@@ -158,9 +188,14 @@ ALTER TABLE installments FORCE ROW LEVEL SECURITY;
 --       column `CHECK`.
 --
 -- The projection does NOT depend on any of the three: it totals the
--- authoritative outstanding whatever the data says (proofs 1 and 4), and
--- `scheduleCoherenceFindings` SIGNALS a violation in both directions if the
--- verifier is ever absent, deferred past a read, or bypassed.
+-- authoritative outstanding whatever the data says (proofs 1 and 4).
+--
+-- PR-5, RESOLVED BY DELETION. Round 2 also carried a pure TypeScript
+-- `scheduleCoherenceFindings` that signalled the same violation and that
+-- NOTHING READ. The coordinator refused to leave it: «either wire it into a
+-- read path or a gate, or delete it and say the verifier is the whole bound.
+-- Do not leave it as a third state.» It is DELETED. THIS VERIFIER IS THE
+-- WHOLE BOUND, and a bound with one home cannot be believed in the wrong one.
 
 CREATE CONSTRAINT TRIGGER installment_plans_schedule_complete
   AFTER INSERT OR UPDATE ON installment_plans
@@ -203,27 +238,94 @@ CREATE CONSTRAINT TRIGGER installments_schedule_complete
 --   * NO second AR ledger. The projection's only money input from outside the
 --     schedule is `invoice_outstanding`'s authoritative figure.
 
--- ── 5. THE `base_minor` COLUMN: WHY IT IS A BLOCKING OWED ────────────────
+-- ── 5. THE `base_minor` COLUMN: THE RULING, AND WHY NO RATE IS NEEDED ────
 --
--- The transaction-currency allocation is EXACT and performs zero roundings.
--- The base column cannot be split exactly from the inputs this design is
--- permitted, and the reason is MEASURED in the live body rather than assumed:
--- `0084:614` computes `pg_catalog.sum(d.rel) AS paid_base` where `d.rel` is
--- `invoice_carrying_base_released_minor` — THE CARRYING RELEASED, and never a
--- conversion of the paid transaction amount. So
+-- The transaction-currency allocation is EXACT and performs ZERO roundings.
+-- The base side performs EXACTLY ONE, and it is not this file's rounding: it
+-- is consumed from the canonical law.
+--
+-- WHAT WAS MEASURED, AND IS STILL TRUE. `0084:614` computes
+-- `pg_catalog.sum(d.rel) AS paid_base` where `d.rel` is
+-- `invoice_carrying_base_released_minor` — THE CARRYING RELEASED, never a
+-- conversion of the paid transaction amount. So the quotient
 -- `outstanding_base_minor / outstanding_txn_minor` is NOT the invoice's
--- `source_to_base_rate` under realized FX, and any per-row base figure needs
--- either that rate (an input outside the permitted set) or that quotient (a
--- rounded quotient fed back as an authoritative input, forbidden by name).
+-- `source_to_base_rate`, and round 2 was right to refuse to improvise from it.
+-- A rounded quotient fed back as an authoritative input is forbidden by name.
 --
--- RULED (coordinator, ruling 2): no base allocation is written here. The
--- recommended widening — permit `invoices.source_to_base_rate` and define the
--- base schedule as DIFFERENCES OF THE ROUNDED CUMULATIVE CONVERSION
--- `C_i = round(s_i * rate)`, so the row amounts telescope and exactly ONE
--- rounding is performed, at one grain, with `outstanding_base_minor` left as
--- the authoritative input and never recomputed — is with the OWNER, because
--- widening the permitted input set is his. Until he rules, the body below
--- carries `__OWED_BASE_ALLOCATION__` and will not create.
+-- THE RULING (TL Ashraf, §21). Do NOT add `source_to_base_rate` as a new
+-- authoritative financial input to S7 aging or schedule arithmetic. The
+-- invoice already carries an immutable authoritative monetary PAIR,
+-- `total_txn_minor` and `total_base_minor`, and settlement already carries the
+-- exact `invoice_carrying_base_released_minor`. Those are the carrying-value
+-- truth. The rate remains valid immutable invoice metadata for display, audit
+-- explanation, traceability and source-rate evidence, and is NOT the
+-- carrying-allocation primitive.
+--
+-- WHAT THE BODY DOES INSTEAD. For a cumulative settlement level `X` and an
+-- allocation `a` above it:
+--
+--     base(X, a) = supplier_ap_release(B, T, X, a)
+--                = HALF_EVEN(B·(X+a), T) − HALF_EVEN(B·X, T)          (R-61)
+--
+-- with `T = paid_txn_minor + outstanding_txn_minor` and
+-- `B = paid_base_minor + outstanding_base_minor`, BOTH read off the one
+-- authoritative call. The schedule's consecutive levels `L_0 … L_n` and the
+-- residual's `L_n … T` partition `[paid, T]`, so the base portions are
+-- consecutive differences of ONE cumulative function and
+--
+--     Σ base portions = HALF_EVEN(B·T, T) − HALF_EVEN(B·paid, T)
+--                     = B − paid_base_minor = outstanding_base_minor
+--
+-- EXACTLY, because `HALF_EVEN(B·T, T) = B` with no residue. The §29
+-- conservation law is therefore a CONSEQUENCE of telescoping and not a
+-- coincidence anything has to police, which is how the owner asked for it to
+-- be proved. Proof 10 proves it that way; proof 10's mutant replaces the
+-- cumulative difference with a per-row conversion and the equality breaks.
+--
+-- §21 ASKED FOR A COUNTEREXAMPLE IF THE RAW RATE WERE MATHEMATICALLY
+-- REQUIRED. THERE IS NONE, and the argument is this rather than an assertion:
+-- the only quantity the allocation ever needs from the FX side is the RATIO
+-- `B/T` of two stored authoritative integers, applied ONCE per cumulative
+-- level inside ONE `HALF_EVEN`. No per-installment conversion is performed,
+-- so no per-installment rate is referenced; and because the law is applied to
+-- cumulative levels and then differenced, the endpoint identity `R(T) = B`
+-- holds exactly, which no independent per-row conversion by a rate can
+-- guarantee. A read creates no realized FX. If a later slice believes a
+-- counterexample exists, it goes to the owner as an architecture issue before
+-- any contract changes; it does not get a second truth quietly.
+--
+-- R-81 — THE ARITHMETIC IS REUSED, NEVER RE-IMPLEMENTED. The law is shipped
+-- ONCE, at `0067:683`, with a TypeScript twin at
+-- `packages/inventory/src/supplier-settlement.ts:89` (`apRelease`) that the
+-- reference model IMPORTS rather than copies. This body CALLS
+-- `public.supplier_ap_release` and holds no HALF_EVEN of its own. Proof 10
+-- asserts that over this file's SQL, with comments stripped, because the
+-- estate's recorded failure is a law whose subject is a textual coincidence.
+--
+-- PATCH REQUEST PR-6, AND IT IS NOT THE AUTHOR'S TO MAKE. `0067:1250` is
+-- `REVOKE ALL ON FUNCTION supplier_ap_release(BIGINT,BIGINT,BIGINT,BIGINT)
+-- FROM PUBLIC` and `0067:1311` sets `OWNER TO daftar_inventory_internal`, and
+-- NO `GRANT EXECUTE` to `daftar_app` exists anywhere in the tree — every
+-- shipped call site is inside a DEFINER routine owned by an internal role.
+-- `customer_ar_aging` is SECURITY INVOKER by standing (`R-P4-07`), so as it
+-- stands this body raises `42501 permission denied for function
+-- supplier_ap_release` when `daftar_app` calls it. THE FIX IS ONE LINE AND
+-- BELONGS TO THE MIGRATION OWNER:
+--
+--     GRANT EXECUTE ON FUNCTION supplier_ap_release(BIGINT, BIGINT, BIGINT, BIGINT) TO daftar_app;
+--
+-- It grants no new data authority: the function is pure arithmetic over four
+-- BIGINTs, reads no relation, and is already hash-pinned in the registry
+-- (`0067:1818`). Making `customer_ar_aging` DEFINER instead would be the wrong
+-- repair — it would bypass the caller's row security on `invoices` to buy a
+-- multiplication. This is OWED and the file does not pretend otherwise.
+--
+-- THE LAW'S OWN PRECONDITION, stated rather than discovered: it refuses
+-- `p_total_base <= 0`. Every invoice that can be settled at all already
+-- satisfies it, because `0081:1035` calls the same function with the same
+-- `total_base_minor` on EVERY customer payment allocation, so an invoice with
+-- a non-positive base total cannot be paid today. The precondition is
+-- estate-wide and not new here.
 
 -- ── 6. THE PROJECTION ────────────────────────────────────────────────────
 --
@@ -257,7 +359,15 @@ CREATE OR REPLACE FUNCTION customer_ar_aging(p_business_id UUID, p_customer_id U
 RETURNS TABLE (bucket_no INTEGER, currency_code TEXT, txn_minor BIGINT, base_minor BIGINT, invoice_count INTEGER)
 LANGUAGE sql STABLE SET search_path = pg_catalog, public, pg_temp AS $fn$
   WITH open_invoice AS (
-    SELECT o.invoice_id, o.currency_code, o.due_date, o.outstanding_txn_minor
+    -- THE ONE AUTHORITATIVE MONEY INPUT, and one call for the whole customer.
+    -- `T` and `B` are the stored authoritative PAIR recomposed from the figures
+    -- this call already returns, which is why no `JOIN public.invoices` is
+    -- needed for them and why `0084:593-596`'s appended `currency_code` and
+    -- `due_date` are read straight off it.
+    SELECT o.invoice_id, o.currency_code, o.due_date,
+           o.paid_txn_minor, o.outstanding_txn_minor, o.outstanding_base_minor,
+           (o.paid_txn_minor + o.outstanding_txn_minor)::BIGINT   AS total_txn_minor,
+           (o.paid_base_minor + o.outstanding_base_minor)::BIGINT AS total_base_minor
       FROM public.invoice_outstanding(
              p_business_id,
              (SELECT pg_catalog.array_agg(x.id)
@@ -272,6 +382,8 @@ LANGUAGE sql STABLE SET search_path = pg_catalog, public, pg_temp AS $fn$
        AND p.invoice_id IN (SELECT oi.invoice_id FROM open_invoice oi)
   ),
   sched AS (
+    -- The down payment is schedule row 0, dated by its OWN column. It is not
+    -- an instalment and it is not the invoice due date.
     SELECT ap.invoice_id, 0 AS seq_no, ap.down_payment_due_date AS due_date, ap.down_payment_minor AS amount
       FROM active_plan ap
      UNION ALL
@@ -279,41 +391,90 @@ LANGUAGE sql STABLE SET search_path = pg_catalog, public, pg_temp AS $fn$
       FROM active_plan ap
       JOIN public.installments n ON n.business_id = p_business_id AND n.plan_id = ap.id
   ),
-  suffixed AS (
-    -- `suffix_after` = the amounts scheduled STRICTLY LATER than this row.
-    -- DESC because the DECLARED POLICY is oldest-scheduled-first, so the
-    -- outstanding occupies the LATEST rows. The other convention is this
-    -- ORDER BY ascending, and nothing else changes.
-    SELECT s.invoice_id, s.seq_no, s.due_date, s.amount,
-           pg_catalog.coalesce(pg_catalog.sum(s.amount) OVER (
-             PARTITION BY s.invoice_id ORDER BY s.due_date DESC, s.seq_no DESC
-             ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING), 0) AS suffix_after,
-           pg_catalog.sum(s.amount) OVER (PARTITION BY s.invoice_id) AS schedule_total
+  prefixed AS (
+    -- PREFIX sums of the schedule in SETTLEMENT ORDER. `(due_date, seq_no)` is
+    -- a total order because `installments_seq_uq` makes `seq_no` unique in the
+    -- plan, so two instalments on one date still have one answer.
+    --
+    -- ASCENDING, because the DECLARED POLICY is oldest-scheduled-first and the
+    -- levels below are anchored at the PAID figure: money already collected
+    -- settles the EARLIEST rows and the outstanding occupies the latest. The
+    -- other convention is this ORDER BY descending, in both windows, and
+    -- nothing else in this body changes — which proof 3's convention law
+    -- asserts rather than states.
+    SELECT s.invoice_id, s.seq_no, s.due_date,
+           coalesce(pg_catalog.sum(s.amount) OVER w_before, 0)::BIGINT AS c_before,
+           (pg_catalog.sum(s.amount) OVER w_at)::BIGINT                           AS c_at,
+           (pg_catalog.sum(s.amount) OVER (PARTITION BY s.invoice_id))::BIGINT     AS schedule_total
       FROM sched s
+    WINDOW w_before AS (PARTITION BY s.invoice_id ORDER BY s.due_date, s.seq_no
+                        ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING),
+           w_at     AS (PARTITION BY s.invoice_id ORDER BY s.due_date, s.seq_no
+                        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
   ),
-  contribution AS (
-    -- (a) the schedule rows: the closed-form clamp.
-    SELECT x.invoice_id, oi.currency_code, x.due_date AS bucket_date,
-           least(greatest(oi.outstanding_txn_minor - x.suffix_after, 0), x.amount)::BIGINT AS txn_minor
-      FROM suffixed x
+  levelled AS (
+    -- THE SETTLEMENT LEVEL the schedule has reached at this row:
+    --
+    --     L(c) = least(greatest(c, paid), T)
+    --
+    -- The `greatest` anchors at the authoritative PAID figure, so no scheduled
+    -- amount the customer has already covered is allocated again; the `least`
+    -- refuses to allocate more than the invoice is worth, which is what makes
+    -- an OVER-SCHEDULED plan harmless instead of an overstatement.
+    SELECT x.invoice_id, x.seq_no, x.due_date, x.schedule_total,
+           least(greatest(x.c_before, oi.paid_txn_minor), oi.total_txn_minor)::BIGINT AS lvl_before,
+           least(greatest(x.c_at,     oi.paid_txn_minor), oi.total_txn_minor)::BIGINT AS lvl_at,
+           oi.currency_code, oi.total_txn_minor, oi.total_base_minor
+      FROM prefixed x
       JOIN open_invoice oi ON oi.invoice_id = x.invoice_id
-     UNION ALL
-    -- (b) the residual, by its OWN closed form, bucketed at the invoice's due
-    --     date. NEVER `outstanding - sum(alloc)`: that would make the sum law
-    --     a comparison of an expression with itself.
+  ),
+  residual AS (
+    -- The residual's OWN closed form, anchored on the DECLARED schedule sum.
+    -- NEVER `outstanding − Σ allocations`: that would make the sum law a
+    -- comparison of an expression with itself, and round 3 caught exactly
+    -- that in its own first draft, where the residual was anchored on the
+    -- REALIZED last level and proof 1 held identically whatever the
+    -- allocation did. `declared_end` equals `L(schedule_total)`, so the
+    -- schedule's levels and this one partition `[paid, T]` with no gap and no
+    -- overlap — proofs 3 and 4.
     SELECT oi.invoice_id, oi.currency_code, oi.due_date,
-           (oi.outstanding_txn_minor
-              - least(greatest(oi.outstanding_txn_minor, 0), t.schedule_total))::BIGINT
+           oi.total_txn_minor, oi.total_base_minor,
+           least(greatest(t.schedule_total, oi.paid_txn_minor), oi.total_txn_minor)::BIGINT AS declared_end
       FROM open_invoice oi
       JOIN (SELECT y.invoice_id, pg_catalog.max(y.schedule_total) AS schedule_total
-              FROM suffixed y GROUP BY y.invoice_id) t ON t.invoice_id = oi.invoice_id
+              FROM prefixed y GROUP BY y.invoice_id) t ON t.invoice_id = oi.invoice_id
+  ),
+  contribution AS (
+    -- (a) THE SCHEDULE ROWS. The transaction allocation is a difference of two
+    --     consecutive levels — exact integers, zero roundings — and the base
+    --     portion is the CANONICAL CUMULATIVE CARRYING-VALUE LAW across the
+    --     same two levels (R-61, R-81, owner §21). One rounding, consumed from
+    --     `supplier_ap_release` and not re-implemented here. Both telescope,
+    --     which is the whole of proofs 1 and 10.
+    SELECT v.invoice_id, v.currency_code, v.due_date AS bucket_date,
+           (v.lvl_at - v.lvl_before)::BIGINT AS txn_minor,
+           public.supplier_ap_release(v.total_base_minor, v.total_txn_minor,
+                                      v.lvl_before, v.lvl_at - v.lvl_before) AS base_minor
+      FROM levelled v
      UNION ALL
-    -- (c) the invoices with NO active plan: the whole figure, as today. The
-    --     three arms PARTITION the open invoices — (a) and (b) read only
-    --     invoices in `active_plan`, (c) only those not in it — and an active
-    --     plan with no `installments` rows is served by (a) and (b), which the
-    --     reference model now agrees with and section 3(b) makes unreachable.
-    SELECT oi.invoice_id, oi.currency_code, oi.due_date, oi.outstanding_txn_minor
+    -- (b) THE RESIDUAL, bucketed at the invoice's own due date: an amount the
+    --     schedule does not declare has no scheduled date to be aged at, and
+    --     inventing one would be the design choosing a date.
+    SELECT r.invoice_id, r.currency_code, r.due_date,
+           (r.total_txn_minor - r.declared_end)::BIGINT,
+           public.supplier_ap_release(r.total_base_minor, r.total_txn_minor,
+                                      r.declared_end, r.total_txn_minor - r.declared_end)
+      FROM residual r
+     UNION ALL
+    -- (c) THE INVOICES WITH NO ACTIVE PLAN: the whole figure at the invoice due
+    --     date, exactly as today, and the base is the AUTHORITATIVE
+    --     `outstanding_base_minor` rather than a recomputation of it. The three
+    --     arms PARTITION the open invoices — (a) and (b) read only invoices in
+    --     `active_plan`, (c) only those not in it — and an active plan with no
+    --     `installments` rows is served by (a) and (b), which the reference
+    --     model agrees with and section 3(b) makes unreachable.
+    SELECT oi.invoice_id, oi.currency_code, oi.due_date,
+           oi.outstanding_txn_minor, oi.outstanding_base_minor
       FROM open_invoice oi
      WHERE NOT EXISTS (SELECT 1 FROM active_plan ap WHERE ap.invoice_id = oi.invoice_id)
   )
@@ -321,8 +482,8 @@ LANGUAGE sql STABLE SET search_path = pg_catalog, public, pg_temp AS $fn$
                  FROM pg_catalog.unnest(p_bucket_days) AS t(threshold)
                 WHERE c.bucket_date IS NOT NULL AND (p_as_of - c.bucket_date) > t.threshold))::INTEGER AS bucket_no,
          c.currency_code,
-         pg_catalog.sum(c.txn_minor)::BIGINT AS txn_minor,
-         __OWED_BASE_ALLOCATION__ AS base_minor,
+         pg_catalog.sum(c.txn_minor)::BIGINT  AS txn_minor,
+         pg_catalog.sum(c.base_minor)::BIGINT AS base_minor,
          pg_catalog.count(DISTINCT c.invoice_id)::INTEGER AS invoice_count
     FROM contribution c
    WHERE c.txn_minor <> 0
@@ -333,7 +494,7 @@ $fn$;
 REVOKE ALL ON FUNCTION customer_ar_aging(UUID, UUID, DATE, INTEGER[]) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION customer_ar_aging(UUID, UUID, DATE, INTEGER[]) TO daftar_app, daftar_inventory_internal;
 COMMENT ON FUNCTION customer_ar_aging(UUID, UUID, DATE, INTEGER[]) IS
-  'P4-S1, replaced by P4-S4 (0083, 0084) and by P4-S7 (P4-AL-05, P4-AL-13): the aging of a customer receivable, computed from the open invoices and a supplied as-of date. Since P4-S7 an invoice under an ACTIVE installment plan is aged ACROSS ITS SCHEDULE instead of at its single invoice due date: the authoritative outstanding is allocated by a closed-form clamp over the schedule ordered oldest-scheduled-date-first, which telescopes so the buckets total that outstanding exactly, in integers, with no rounding and no residue to distribute. The settlement order is a DECLARED POLICY and not a derivation, because no allocation references an instalment. There is no materialised aging table (P4-AL-06), no stored installment balance, no installment journal and no new reducer: an instalment collection is an ordinary payment allocated to the invoice. The routine does not read the clock (P4-AL-30) and is not IMMUTABLE, because the label is not a guard. INVOKER, reads through the caller''s row security, writes nothing. EXECUTE: daftar_app and daftar_inventory_internal.';
+  'P4-S1, replaced by P4-S4 (0083, 0084) and by P4-S7 (P4-AL-05, P4-AL-13): the aging of a customer receivable, computed from the open invoices and a supplied as-of date. Since P4-S7 an invoice under an ACTIVE installment plan is aged ACROSS ITS SCHEDULE instead of at its single invoice due date. The schedule is ordered oldest-scheduled-date-first — a DECLARED POLICY and not a derivation, because nothing stored records which instalment a payment settled — and its PREFIX sums are turned into cumulative settlement levels anchored at the authoritative paid figure and clamped at the invoice total: L(c) = least(greatest(c, paid), total). Each row''s transaction share is the difference of two consecutive levels, so the shares are exact integers, no rounding is performed on the transaction side, there is no residue to distribute, and the shares total the authoritative outstanding by telescoping rather than by reconciliation. Each row''s base carrying share is the SAME difference taken through supplier_ap_release(total_base, total_txn, level, share), the canonical cumulative carrying-value law (R-61, R-81, 0067:683) consumed and never re-implemented, so the base shares likewise total outstanding_base_minor EXACTLY and no per-instalment FX conversion and no source_to_base_rate is read: a read creates no realized FX (TL S7 §21). An amount the schedule does not declare is a residual aged at the invoice''s own due date, by its own closed form and never as outstanding minus the allocations. An invoice may now appear in SEVERAL buckets, so invoice_count is count(DISTINCT invoice_id) and the sum of invoice_count over the buckets may exceed the number of open invoices. There is no materialised aging table (P4-AL-06), no stored installment balance, no installment journal and no new reducer: an instalment collection is an ordinary payment allocated to the invoice. The routine does not read the clock (P4-AL-30) and is not IMMUTABLE, because the label is not a guard. INVOKER, reads through the caller''s row security, writes nothing. EXECUTE: daftar_app and daftar_inventory_internal; this body also requires EXECUTE on supplier_ap_release, which patch request PR-6 owes.';
 
 -- `count(DISTINCT c.invoice_id)` and not `count(*)`: an invoice now makes
 -- several contributions, so `count(*)` would report a number of instalments

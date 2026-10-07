@@ -66,8 +66,10 @@ import {
   isForbiddenSalesTable,
 } from '../../../scripts/guards/no-authoritative-balance';
 import { agingBucketLabels } from '../src/invoice';
+import { apRelease } from '../../inventory/src/supplier-settlement';
 import {
   aggregate,
+  CANONICAL_RELEASE,
   bucketOf,
   DECLARED_SETTLEMENT_ORDER,
   SETTLEMENT_ORDERS,
@@ -77,12 +79,12 @@ import {
   POLICY_KNOBS,
   projectCustomerAging,
   projectInvoice,
-  scheduleCoherenceFindings,
   scheduledDueBy,
   type AgingContribution,
   type InstallmentPlan,
   type OpenInvoiceRow,
   type ProjectionPolicy,
+  type ReleaseFn,
   type SettlementOrder,
 } from './phase4-s7-aging-reference-model';
 
@@ -131,6 +133,59 @@ function sqlSchemaOnly(sql: string): string {
 }
 
 /**
+ * THE SUBJECT OF A CODE LAW IS CODE, AND A STRING LITERAL IS NOT CODE.
+ *
+ * THE FIFTH OCCURRENCE OF THE SAME LESSON, and it is kept in the file for the
+ * same reason the coordinator kept the first: the next author will write the
+ * same prose. Rounds 1 and 2 saw proofs 6 and 8 go red on the specification's
+ * own `--` sentences (twice) and then on the sketch's inline comments. Round 3
+ * saw it again from a new direction: `COMMENT ON FUNCTION ... IS '...'` is
+ * REAL DDL, so `sqlSchemaOnly` correctly keeps it — and the documentation
+ * string says «an invoice may now appear in SEVERAL buckets» and names
+ * `source_to_base_rate` as metadata, which made the clock law and proof 10's
+ * rate law both go red on a COMMENT.
+ *
+ * Ducking it by rewording the COMMENT would leave the trap armed. So the
+ * subject is refined instead: single-quoted literals outside a dollar-quoted
+ * body are DATA and are blanked, while the dollar-quoted function body — the
+ * thing a code law is actually about — is passed through untouched.
+ * `meta_8` proves this function is not simply deleting everything.
+ */
+function sqlCodeOnly(sql: string): string {
+  const src = sqlSchemaOnly(sql);
+  let out = '';
+  let i = 0;
+  while (i < src.length) {
+    const tag = /^\$[A-Za-z_]*\$/.exec(src.slice(i));
+    if (tag !== null) {
+      // A dollar-quoted body: executable SQL, kept verbatim, including its
+      // closing tag, so the projection is still judged in full.
+      const close = src.indexOf(tag[0], i + tag[0].length);
+      const stop = close === -1 ? src.length : close + tag[0].length;
+      out += src.slice(i, stop);
+      i = stop;
+      continue;
+    }
+    if (src[i] === "'") {
+      // A single-quoted literal, `''` doubling and all. Blanked to an empty
+      // literal so the statement's SHAPE survives and its prose does not.
+      let j = i + 1;
+      while (j < src.length) {
+        if (src[j] === "'" && src[j + 1] === "'") { j += 2; continue; }
+        if (src[j] === "'") { j += 1; break; }
+        j += 1;
+      }
+      out += "''";
+      i = j;
+      continue;
+    }
+    out += src[i];
+    i += 1;
+  }
+  return out;
+}
+
+/**
  * The projection SQL the specification is judged on: the block between its
  * two explicit markers, with the comment prefix removed. The sketch lives
  * inside comments because this slice writes no migration, so the block must
@@ -158,6 +213,7 @@ const MUTATIONS_EXERCISED: readonly { readonly proof: string; readonly knob: key
     Object.freeze({ proof: 'proof_4', knob: 'carryResidual' as const, to: false }),
     Object.freeze({ proof: 'proof_5', knob: 'outstandingSource' as const, to: 'plan_local' }),
     Object.freeze({ proof: 'proof_2', knob: 'scheduleDateShiftDays' as const, to: -200 }),
+    Object.freeze({ proof: 'proof_10', knob: 'baseAllocation' as const, to: 'per_row_conversion' }),
   ]);
 
 function mutate(knob: keyof ProjectionPolicy, to: unknown): ProjectionPolicy {
@@ -181,8 +237,15 @@ const PLANNED_INVOICE: OpenInvoiceRow = Object.freeze({
   currencyCode: 'SAR',
   dueDate: '2026-01-15',
   outstandingTxnMinor: 900_000n,
-  // The other half of the same authoritative row: three instalments collected.
+  // The other halves of the SAME authoritative row: three instalments
+  // collected, and the carrying released for them. `total_base_minor` is
+  // 1 015 001 against a `total_txn_minor` of 1 200 000 — deliberately not a
+  // round ratio, so the HALF_EVEN cumulative law does real rounding:
+  // `R(300 000) = HALF_EVEN(1 015 001 x 300 000 / 1 200 000)
+  //            = HALF_EVEN(253 750.25) = 253 750`.
   paidTxnMinor: 300_000n,
+  paidBaseMinor: 253_750n,
+  outstandingBaseMinor: 761_251n,
 });
 
 const SCHEDULE = Object.freeze(
@@ -210,6 +273,8 @@ const PLAINLESS_INVOICE: OpenInvoiceRow = Object.freeze({
   dueDate: '2026-05-01',
   outstandingTxnMinor: 250_000n,
   paidTxnMinor: 0n,
+  paidBaseMinor: 0n,
+  outstandingBaseMinor: 211_251n,
 });
 
 /**
@@ -224,6 +289,8 @@ const SHORT_SCHEDULE_INVOICE: OpenInvoiceRow = Object.freeze({
   dueDate: '2026-02-01',
   outstandingTxnMinor: 1_000_000n,
   paidTxnMinor: 0n,
+  paidBaseMinor: 0n,
+  outstandingBaseMinor: 845_003n,
 });
 const SHORT_PLAN: InstallmentPlan = Object.freeze({
   invoiceId: 'inv-short',
@@ -249,6 +316,8 @@ const OVER_SCHEDULED_INVOICE: OpenInvoiceRow = Object.freeze({
   dueDate: '2026-01-15',
   outstandingTxnMinor: 900_000n,
   paidTxnMinor: 0n,
+  paidBaseMinor: 0n,
+  outstandingBaseMinor: 760_501n,
 });
 const OVER_SCHEDULED_PLAN: InstallmentPlan = Object.freeze({
   invoiceId: 'inv-over',
@@ -272,15 +341,25 @@ describe('P4-S7 the defect, stated and fixed', () => {
     const today = aggregate(
       contributionsFor([PLANNED_INVOICE], [PLAN], AS_OF, THRESHOLDS, mutate('bucketBy', 'invoice_due_date')),
     );
-    expect(today).toEqual([{ bucketNo: 4, currencyCode: 'SAR', txnMinor: 900_000n, invoiceCount: 1 }]);
-
-    // The fix. Each instalment ages on its own date.
-    expect(projectCustomerAging([PLANNED_INVOICE], [PLAN], AS_OF, THRESHOLDS)).toEqual([
-      { bucketNo: 1, currencyCode: 'SAR', txnMinor: 400_000n, invoiceCount: 1 },
-      { bucketNo: 2, currencyCode: 'SAR', txnMinor: 100_000n, invoiceCount: 1 },
-      { bucketNo: 3, currencyCode: 'SAR', txnMinor: 100_000n, invoiceCount: 1 },
-      { bucketNo: 4, currencyCode: 'SAR', txnMinor: 300_000n, invoiceCount: 1 },
+    expect(today).toEqual([
+      { bucketNo: 4, currencyCode: 'SAR', txnMinor: 900_000n, baseMinor: 761_251n, invoiceCount: 1 },
     ]);
+
+    // The fix. Each instalment ages on its own date — and the base carrying
+    // portion travels with it, by the canonical cumulative law (proof 10).
+    // 338 334 + 84 583 + 84 584 + 253 750 = 761 251, the authoritative
+    // outstanding base, EXACTLY: the sum is unchanged by the regrouping
+    // because the four figures are differences of ONE cumulative function.
+    expect(projectCustomerAging([PLANNED_INVOICE], [PLAN], AS_OF, THRESHOLDS)).toEqual([
+      { bucketNo: 1, currencyCode: 'SAR', txnMinor: 400_000n, baseMinor: 338_334n, invoiceCount: 1 },
+      { bucketNo: 2, currencyCode: 'SAR', txnMinor: 100_000n, baseMinor: 84_583n, invoiceCount: 1 },
+      { bucketNo: 3, currencyCode: 'SAR', txnMinor: 100_000n, baseMinor: 84_584n, invoiceCount: 1 },
+      { bucketNo: 4, currencyCode: 'SAR', txnMinor: 300_000n, baseMinor: 253_750n, invoiceCount: 1 },
+    ]);
+    // The regrouping is value-preserving on BOTH columns, which is the
+    // granularity claim stated as an equation rather than as a picture.
+    expect(today[0]!.txnMinor).toBe(900_000n);
+    expect(today[0]!.baseMinor).toBe(761_251n);
   });
 
   it('settlement is oldest-scheduled-first, so the three collected instalments are the three earliest', () => {
@@ -293,8 +372,11 @@ describe('P4-S7 the defect, stated and fixed', () => {
 
   it('an invoice with no plan is bucketed exactly as before', () => {
     expect(projectCustomerAging([PLAINLESS_INVOICE], [], AS_OF, THRESHOLDS)).toEqual([
-      { bucketNo: 4, currencyCode: 'SAR', txnMinor: 250_000n, invoiceCount: 1 },
+      // The base is the AUTHORITATIVE `outstanding_base_minor` passed through,
+      // not a recomputation of it: the plan-less arm performs no arithmetic.
+      { bucketNo: 4, currencyCode: 'SAR', txnMinor: 250_000n, baseMinor: 211_251n, invoiceCount: 1 },
     ]);
+    expect(PLAINLESS_INVOICE.outstandingBaseMinor).toBe(211_251n);
   });
 });
 
@@ -303,8 +385,12 @@ describe('PROOF 1 [proof_1] — the sum of the aging buckets equals the authorit
   // The SUBJECT is the authoritative figure, taken from the fixture and never
   // from the projection, over a portfolio that mixes a planned invoice, a
   // plan-less invoice and a broken sum law.
-  const rows = [PLANNED_INVOICE, PLAINLESS_INVOICE, SHORT_SCHEDULE_INVOICE];
-  const plans = [PLAN, SHORT_PLAN];
+  // The portfolio spans all three schedule shapes: well-formed, UNDER-scheduled
+  // and OVER-scheduled. The over-scheduled one is what makes the upper clamp
+  // bite — without it the `clampToRowAmount` mutation is INERT, which `meta_2`
+  // would then catch as a mutation that proves nothing.
+  const rows = [PLANNED_INVOICE, PLAINLESS_INVOICE, SHORT_SCHEDULE_INVOICE, OVER_SCHEDULED_INVOICE];
+  const plans = [PLAN, SHORT_PLAN, OVER_SCHEDULED_PLAN];
   const authoritative = rows.reduce((a, r) => a + r.outstandingTxnMinor, 0n);
 
   it('holds over the portfolio, and per invoice', () => {
@@ -321,10 +407,40 @@ describe('PROOF 1 [proof_1] — the sum of the aging buckets equals the authorit
     }
   });
 
-  it('FIRES under its mutation: a schedule row allowed to absorb more than its own amount', () => {
-    const got = sum(projectCustomerAging(rows, plans, AS_OF, THRESHOLDS, mutate('clampToRowAmount', false)));
-    expect(got).not.toBe(authoritative);
-    expect(got).toBeGreaterThan(authoritative);
+  it('FIRES under its mutation: THE CANONICAL LAW ITSELF REFUSES a level past the invoice total', () => {
+    // The strongest outcome available: removing the upper clamp lets a
+    // cumulative level run past the invoice total, and `apRelease`'s own
+    // guard — «an AP release exceeds the purchase total»
+    // (`supplier-settlement.ts:94`) — refuses it. The defect cannot even
+    // produce a number.
+    expect(() => projectCustomerAging(rows, plans, AS_OF, THRESHOLDS, mutate('clampToRowAmount', false))).toThrow(
+      /AP release exceeds the purchase total/,
+    );
+  });
+
+  it('FIRES under its mutation: and the overshoot is MEASURED, with the guard stood down', () => {
+    // A permissive release, so the arithmetic proceeds and the damage is a
+    // number rather than an exception. This is what proof 1 would have been
+    // asserting if the canonical law carried no guard — so the law is shown
+    // to be red-capable on its own terms, not only via someone else's throw.
+    const permissive: ReleaseFn = (B, T, X, a) => (T === 0n ? 0n : (B * (X + a)) / T - (B * X) / T);
+    const good = rows.flatMap((r) =>
+      projectInvoice(r, plans.find((p) => p.invoiceId === r.invoiceId), AS_OF, THRESHOLDS, CORRECT_POLICY, permissive),
+    );
+    expect(sum(good)).toBe(authoritative);
+    const bad = rows.flatMap((r) =>
+      projectInvoice(
+        r,
+        plans.find((p) => p.invoiceId === r.invoiceId),
+        AS_OF,
+        THRESHOLDS,
+        mutate('clampToRowAmount', false),
+        permissive,
+      ),
+    );
+    expect(sum(bad)).not.toBe(authoritative);
+    // The overshoot is exactly the over-scheduled excess: 1 800 000 − 900 000.
+    expect(sum(bad) - authoritative).toBe(900_000n);
   });
 });
 
@@ -424,11 +540,10 @@ describe('PROOF 2 [proof_2] — no not-yet-due scheduled amount enters an overdu
     expect(residual[0]?.bucketNo).toBeGreaterThan(1);
     for (const i of SHORT_PLAN.installments) expect(epochDay(i.dueDate)).toBeGreaterThan(epochDay(AS_OF));
     // The honest reading: a sum-law VIOLATION signal, aged conservatively at
-    // the invoice's own date. The violation itself is now SIGNALLED too —
-    // proof 9.
-    expect(scheduleCoherenceFindings([SHORT_SCHEDULE_INVOICE], [SHORT_PLAN])).toEqual([
-      { invoiceId: 'inv-short', kind: 'under_scheduled', excessTxnMinor: -800_000n },
-    ]);
+    // the invoice's own date. The violation itself is bounded by the DEFERRED
+    // verifier (proof 9), which is now its only home.
+    expect(SHORT_PLAN.installments.reduce((a, i) => a + i.amountTxnMinor, 0n)).toBe(200_000n);
+    expect(SHORT_SCHEDULE_INVOICE.paidTxnMinor + SHORT_SCHEDULE_INVOICE.outstandingTxnMinor).toBe(1_000_000n);
   });
 
   it('FIRES under its mutation: bucketing by the invoice due date instead of the schedule date', () => {
@@ -512,6 +627,8 @@ describe('PROOF 3 [proof_3] — no amount is counted twice', () => {
       dueDate: '2026-01-15', // long past
       outstandingTxnMinor: 400n,
       paidTxnMinor: 0n,
+      paidBaseMinor: 0n,
+      outstandingBaseMinor: 338n,
     });
     const c = projectInvoice(row, emptyPlan, AS_OF, THRESHOLDS);
     // The PLAN arm: the down payment at its own future date, bucket 1.
@@ -576,7 +693,11 @@ describe('PROOF 4 [proof_4] — no amount disappears', () => {
   });
 
   it('a negative outstanding is carried too, rather than clamped away', () => {
-    const over: OpenInvoiceRow = { ...PLANNED_INVOICE, outstandingTxnMinor: -5_000n };
+    const over: OpenInvoiceRow = {
+      ...PLANNED_INVOICE,
+      outstandingTxnMinor: -5_000n,
+      outstandingBaseMinor: -4_200n,
+    };
     expect(sum(projectInvoice(over, PLAN, AS_OF, THRESHOLDS))).toBe(-5_000n);
   });
 
@@ -601,8 +722,11 @@ describe('PROOF 4 [proof_4] — no amount disappears', () => {
       installments: inst,
     };
     const T = 650_000n; // 50 000 + 100 000 + 200 000 + 300 000
-    // Every inclusive suffix sum of the ordered schedule, plus the endpoints.
-    const boundaries: readonly bigint[] = [0n, 300_000n, 500_000n, 600_000n, T, T + 1n, -1n];
+    // Every inclusive PREFIX sum of the ordered schedule, plus the endpoints.
+    // Prefix and not suffix: the cumulative levels are anchored at the PAID
+    // level and run forward, so these are the points at which the cut falls
+    // BETWEEN rows and no row is partially allocated.
+    const boundaries: readonly bigint[] = [0n, 50_000n, 150_000n, 350_000n, T, T + 1n, -1n];
     for (const O of boundaries) {
       const row: OpenInvoiceRow = {
         invoiceId: 'inv-b',
@@ -610,12 +734,14 @@ describe('PROOF 4 [proof_4] — no amount disappears', () => {
         dueDate: '2026-02-01',
         outstandingTxnMinor: O,
         paidTxnMinor: 0n,
+        paidBaseMinor: 0n,
+        outstandingBaseMinor: O > 0n ? O - O / 8n : O,
       };
       const c = projectInvoice(row, plan, AS_OF, THRESHOLDS);
       expect(sum(c), `boundary O=${String(O)}`).toBe(O);
       // At an exact suffix sum the cut falls BETWEEN rows, so no row is
       // partially allocated — the case a pro-rata rule would have to round.
-      if (O === 300_000n || O === 500_000n || O === 600_000n || O === T || O === 0n) {
+      if (O === 50_000n || O === 150_000n || O === 350_000n || O === T || O === 0n) {
         for (const x of c) {
           if (x.origin === 'residual') continue;
           const declared =
@@ -640,6 +766,8 @@ describe('PROOF 4 [proof_4] — no amount disappears', () => {
         dueDate: '2026-02-01',
         outstandingTxnMinor: BigInt(n) * 50_000n,
         paidTxnMinor: 0n,
+        paidBaseMinor: 0n,
+        outstandingBaseMinor: BigInt(n) * 42_131n,
       };
       expect(sum(projectInvoice(row, pl, AS_OF, THRESHOLDS)), `n=${n}`).toBe(BigInt(n) * 50_000n);
     }
@@ -659,6 +787,8 @@ describe('PROOF 4 [proof_4] — no amount disappears', () => {
       dueDate: '2026-02-01',
       outstandingTxnMinor: 100_000n,
       paidTxnMinor: 0n,
+      paidBaseMinor: 0n,
+      outstandingBaseMinor: 84_503n,
     };
     const zc = projectInvoice(zrow, withZero, AS_OF, THRESHOLDS);
     expect(sum(zc)).toBe(100_000n);
@@ -694,12 +824,16 @@ describe('PROOF 4 [proof_4] — no amount disappears', () => {
       const total = down + inst.reduce((a, i) => a + i.amountTxnMinor, 0n);
       // Reach past both ends, so over- and under-coverage both occur.
       const O = BigInt(next(Number(total) + 40_000) - 10_000);
+      const P = BigInt(next(20_000));
+      const totalTxn = P + O;
       const row: OpenInvoiceRow = {
         invoiceId: 'r',
         currencyCode: 'SAR',
         dueDate: '2026-06-01',
         outstandingTxnMinor: O,
-        paidTxnMinor: 0n,
+        paidTxnMinor: P,
+        paidBaseMinor: P > 0n ? P - P / 8n : 0n,
+        outstandingBaseMinor: O > 0n ? O - O / 8n : O,
       };
       const plan: InstallmentPlan = {
         invoiceId: 'r',
@@ -713,22 +847,31 @@ describe('PROOF 4 [proof_4] — no amount disappears', () => {
         { seqNo: 0, dueDate: '2026-01-02', amount: down },
         ...inst.map((i) => ({ seqNo: i.seqNo, dueDate: i.dueDate, amount: i.amountTxnMinor })),
       ].sort((a, b) => epochDay(a.dueDate) - epochDay(b.dueDate) || a.seqNo - b.seqNo);
-      let rem = O > 0n ? O : 0n;
+      // PREFIX-ANCHORED, matching the paid-anchored levels: skip the part of
+      // the schedule the payment covers, then fill forward while outstanding
+      // capacity remains. A loop with two accumulators, structurally unlike
+      // the closed form.
+      let skip = P;
+      let capacity = totalTxn - P;
       const simAlloc = new Map<number, bigint>();
-      for (let i = ordered.length - 1; i >= 0; i -= 1) {
-        const r = ordered[i] as { seqNo: number; amount: bigint };
-        const a = rem < r.amount ? rem : r.amount;
-        if (a !== 0n) simAlloc.set(r.seqNo, a);
-        rem -= a;
+      for (const r of ordered) {
+        const covered = skip < r.amount ? skip : r.amount;
+        skip -= covered;
+        const free = r.amount - covered;
+        const a = free < capacity ? free : capacity;
+        if (a > 0n) simAlloc.set(r.seqNo, a);
+        capacity -= a;
       }
 
-      // M-8: THE RESIDUAL GETS AN INDEPENDENT COMPUTATION. The first round's
-      // `O − (max(O,0) − rem)` was algebraically `O − Σ alloc`, and the
-      // allocations were asserted equal the line before, so the residual line
-      // was implied and proved nothing. This is a CASE ANALYSIS — structurally
-      // different from the model's clamp `O − min(max(O,0), T)` — and it
-      // mentions neither `rem` nor `simAlloc`.
-      const simResidual = O > total ? O - total : O < 0n ? O : 0n;
+      // M-8: THE RESIDUAL GETS AN INDEPENDENT COMPUTATION. A CASE ANALYSIS
+      // over where the schedule's last level falls, mentioning neither
+      // `capacity` nor `simAlloc`, so the law is not `O − Σ alloc` restated.
+      const lastLevel = total > P ? (total < totalTxn ? total : totalTxn) : P;
+      // The degenerate branch: nothing outstanding, or an outstanding no
+      // CHECK permits, carries wholly as residual and allocates nothing.
+      const degenerate = O <= 0n || totalTxn <= 0n;
+      const simResidual = degenerate ? O : totalTxn - lastLevel;
+      if (degenerate) simAlloc.clear();
 
       const got = projectInvoice(row, plan, AS_OF, THRESHOLDS);
       const gotAlloc = new Map(got.filter((x) => x.origin !== 'residual').map((x) => [x.seqNo as number, x.txnMinor]));
@@ -838,7 +981,15 @@ describe('PROOF 5 [proof_5] — a payment or a reversal changes the projection T
   // `outstandingTxnMinor`, which is what `invoice_outstanding` returns
   // (`0083:295`) — there is no other input to move.
   const before: OpenInvoiceRow = PLANNED_INVOICE; // 9,000.00 outstanding
-  const afterPayment: OpenInvoiceRow = { ...PLANNED_INVOICE, outstandingTxnMinor: 800_000n };
+  const afterPayment: OpenInvoiceRow = {
+    ...PLANNED_INVOICE,
+    outstandingTxnMinor: 800_000n,
+    paidTxnMinor: 400_000n,
+    // `R(400 000) = HALF_EVEN(1 015 001 x 400 000 / 1 200 000)
+    //            = HALF_EVEN(338 333.67) = 338 334`.
+    paidBaseMinor: 338_334n,
+    outstandingBaseMinor: 676_667n,
+  };
 
   /** The plan, with the forbidden plan-local field made COUNTABLE. */
   function countingPlan(): { plan: InstallmentPlan; reads: () => number } {
@@ -868,7 +1019,7 @@ describe('PROOF 5 [proof_5] — a payment or a reversal changes the projection T
   it('a reversal returns the projection EXACTLY to where it was', () => {
     const b = projectCustomerAging([before], [PLAN], AS_OF, THRESHOLDS);
     const reversed = projectCustomerAging(
-      [{ ...PLANNED_INVOICE, outstandingTxnMinor: 900_000n }],
+      [{ ...PLANNED_INVOICE }],
       [PLAN],
       AS_OF,
       THRESHOLDS,
@@ -1226,18 +1377,55 @@ describe('PROOF 8 [proof_8] — the clock guard, widened and red-capable (p_as_o
     );
   });
 
-  it('C-2: the specification CANNOT be transcribed while base is unallocated, and the block is structural', () => {
-    // Not a sentence asking a reader to remember: the body carries a token
-    // that is not valid SQL, and `LANGUAGE sql` bodies are parsed at CREATE
-    // time, so the definition cannot be applied by accident.
-    expect(sqlSchemaOnly(projectionSketch(SPEC))).toMatch(/__OWED_BASE_ALLOCATION__ AS base_minor/);
-    expect(SPEC).toMatch(/THIS SLICE CANNOT SHIP AS IT STANDS/);
-    // And the DDL a migration owner needs really is here now — `LANGUAGE`,
+  it('C-2: the DDL is complete and transcribable, and the structural block is LIFTED BY A RULING', () => {
+    // Round 2's block was a token that is not valid SQL — `LANGUAGE sql`
+    // bodies are parsed at CREATE time, so the definition could not be
+    // applied by accident. It held the hole open for a ruling instead of
+    // guessing. THE RULING CAME (owner §21), so the token is GONE and the
+    // expression it stood in for is the canonical cumulative law.
+    const sketch = sqlCodeOnly(projectionSketch(SPEC));
+    expect(sketch).not.toMatch(/__OWED_BASE_ALLOCATION__/);
+    expect(sketch).toMatch(/public\.supplier_ap_release\(/);
+    expect(SPEC).not.toMatch(/THIS SLICE CANNOT SHIP AS IT STANDS/);
+    // All five columns, in the shipped order and with the shipped types —
+    // §25 requires the return shape be KEPT, and `CREATE OR REPLACE FUNCTION`
+    // cannot change a `RETURNS TABLE` list at all (42P13), so a design that
+    // dropped `base_minor` was never available.
+    expect(sketch).toMatch(
+      /RETURNS TABLE \(bucket_no INTEGER, currency_code TEXT, txn_minor BIGINT, base_minor BIGINT, invoice_count INTEGER\)/,
+    );
+    // ...and the shape is read off the LIVE shipped definition rather than
+    // retyped from memory — the shape of the LAST `customer_ar_aging` in the
+    // tree, which is the one the database holds (challenger C-1).
+    // The LAST definition across the whole tree in apply order — `0075`
+    // created it, `0083` replaced it and `0084:488` DROPs `0083`'s and
+    // recreates it with a bare `CREATE FUNCTION`, so neither a chosen file nor
+    // a fixed `CREATE OR REPLACE` spelling is a safe subject (challenger C-1).
+    const defs = MIGRATIONS.flatMap((m) =>
+      [...m.sql.matchAll(/CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+customer_ar_aging\(/gi)].map((x) => ({
+        name: m.name,
+        tail: m.sql.slice(x.index!),
+      })),
+    );
+    expect(defs.length, 'no customer_ar_aging definition in the tree').toBeGreaterThan(0);
+    const live = defs[defs.length - 1]!;
+    expect(live.name).toBe('0084_phase4_ar_fixed_cost_and_open_invoice_page.sql');
+    const shape = /RETURNS TABLE \(([^)]*)\)/.exec(live.tail)?.[1];
+    expect(shape, 'the shipped return shape was not found').toBeDefined();
+    expect(sketch).toContain(`RETURNS TABLE (${shape!})`);
+    // And the DDL a migration owner needs really is here — `LANGUAGE`,
     // `RETURNS`, `GRANT`, `REVOKE` each appeared ZERO times in the first
     // round, so there was no function DDL to transcribe at all.
     for (const token of ['LANGUAGE', 'RETURNS TABLE', 'GRANT EXECUTE', 'REVOKE ALL', 'COMMENT ON FUNCTION']) {
       expect(SPEC, `the spec has no ${token}`).toContain(token);
     }
+    // WHAT STILL BLOCKS IT, named rather than left to be discovered: no
+    // migration number, not in `migrations/`, not in the manifest, and one
+    // authority change that is not the author's to make.
+    expect(SPEC_PATH).not.toMatch(/\/migrations\//);
+    expect(/^\d{4}_/.test(SPEC_PATH.split('/').pop()!)).toBe(false);
+    expect(SPEC).toMatch(/PR-6/);
+    expect(SPEC).toMatch(/GRANT EXECUTE ON FUNCTION supplier_ap_release\(BIGINT, BIGINT, BIGINT, BIGINT\) TO daftar_app/);
   });
 
   it('M-12: the projection reads currency and due date OFF THE CALL, and joins invoices back on nowhere', () => {
@@ -1246,7 +1434,11 @@ describe('PROOF 8 [proof_8] — the clock guard, widened and red-capable (p_as_o
     // `invoices` back onto the call; the first round's sketch joined it back
     // on and undid a measured optimisation on the `P4-D` path.
     const sketch = sqlSchemaOnly(projectionSketch(SPEC));
-    expect(sketch).toMatch(/SELECT o\.invoice_id, o\.currency_code, o\.due_date, o\.outstanding_txn_minor/);
+    expect(sketch).toMatch(/SELECT o\.invoice_id, o\.currency_code, o\.due_date,/);
+    // And the authoritative PAIR is recomposed from the same call, which is
+    // what lets the base allocation need no `invoices` join either.
+    expect(sketch).toMatch(/o\.paid_txn_minor \+ o\.outstanding_txn_minor/);
+    expect(sketch).toMatch(/o\.paid_base_minor \+ o\.outstanding_base_minor/);
     expect(sketch).not.toMatch(/JOIN\s+public\.invoices/i);
     // The shipped routine does the same, which is the precedent.
     expect(readFileSync(SHIPPED_AGING_PATH, 'utf8')).toMatch(/o\.due_date IS NOT NULL/);
@@ -1254,9 +1446,34 @@ describe('PROOF 8 [proof_8] — the clock guard, widened and red-capable (p_as_o
     expect([...sketch.matchAll(/public\.invoices\b/g)]).toHaveLength(1);
   });
 
-  it('L-16: catalogue functions are pg_catalog-qualified, as every shipped AR routine qualifies them', () => {
+  it('L-16: catalogue FUNCTIONS are pg_catalog-qualified; SQL CONSTRUCTS cannot be, and are not', () => {
     const sketch = sqlSchemaOnly(projectionSketch(SPEC));
-    for (const fn of ['sum', 'count', 'unnest', 'array_agg', 'max', 'coalesce']) {
+    // ROUND 3 CORRECTION, AND IT WAS A REAL DEFECT IN THIS FILE'S OWN LAW.
+    // Round 2 listed `coalesce` here, and the sketch duly wrote
+    // `pg_catalog.coalesce(...)`. `COALESCE` is SQL SYNTAX, not a catalogue
+    // function, and cannot be schema-qualified at all — so the law was
+    // DEMANDING A SYNTAX ERROR, and the body it certified could never have
+    // been created. Measured rather than recalled: `pg_catalog.coalesce`
+    // appears ZERO times in the whole migration tree and `0084` alone writes
+    // bare `coalesce(` seven times, and `0084:810` states the rule outright
+    // for `GREATEST`. The same holds for `least`, `greatest` and `nullif`,
+    // which is why they were never in the list.
+    const CONSTRUCTS = ['coalesce', 'least', 'greatest', 'nullif'];
+    for (const c of CONSTRUCTS) {
+      const qualified = new RegExp(`pg_catalog\\.${c}\\s*\\(`, 'gi');
+      expect([...sketch.matchAll(qualified)], `pg_catalog.${c}( is not creatable SQL`).toHaveLength(0);
+      // Over SCHEMA, not prose — this very check first went red on
+      // `0084:810`'s own comment, which is the estate recording the SAME
+      // lesson in words: «`GREATEST` is a SQL CONSTRUCT and not a function,
+      // so it is NOT schema qualified: `pg_catalog.greatest(...)` does not
+      // resolve». The exemption is therefore not the author's invention.
+      const treeUses = MIGRATIONS.reduce((a, m) => a + [...sqlSchemaOnly(m.sql).matchAll(qualified)].length, 0);
+      expect(treeUses, `the tree qualifies ${c}, so this exemption is wrong`).toBe(0);
+    }
+    // At least one of them really is used bare in the projection, so the
+    // exemption above is EVALUATED and not merely declared.
+    expect(sketch).toMatch(/(?<![.\w])coalesce\s*\(/);
+    for (const fn of ['sum', 'count', 'unnest', 'array_agg', 'max']) {
       const bare = new RegExp(`(?<![.\\w])${fn}\\s*\\(`, 'g');
       expect([...sketch.matchAll(bare)], `bare ${fn}( is unqualified`).toHaveLength(0);
       expect(sketch, `${fn} is never used`).toContain(`pg_catalog.${fn}(`);
@@ -1269,7 +1486,7 @@ describe('PROOF 8 [proof_8] — the clock guard, widened and red-capable (p_as_o
     // not a figure the aging reads, so the law is scoped to the PROJECTION
     // and the DDL arm is asserted separately: the only clock use in the
     // schema is a DEFAULT on an `_at` column.
-    const schema = sqlSchemaOnly(SPEC);
+    const schema = sqlCodeOnly(SPEC);
     expect(schema).toMatch(/created_at\s+TIMESTAMPTZ NOT NULL DEFAULT now\(\)/);
     const clockLines = schema.split('\n').filter((l) => FINANCIAL_TIME.test(l));
     expect(clockLines.length).toBeGreaterThan(0);
@@ -1299,60 +1516,104 @@ describe('PROOF 9 [proof_9] — a broken sum law is SIGNALLED in both directions
   // hole: UNDER-scheduled surfaces as a non-zero residual, OVER-scheduled
   // surfaces as nothing at all.
 
-  it('the over-scheduled case really does report a fully overdue receivable as not yet due', () => {
-    // Reproduced from the challenger's PROBE D, as a permanent fixture so the
-    // behaviour cannot drift back to being undocumented.
+  it('THE 265-DAY GOLDEN: the over-scheduled case is now allocated to the EARLIEST UNPAID row, and reports as overdue', () => {
+    // The challenger's PROBE D, kept as a PERMANENT DETERMINISTIC GOLDEN
+    // (owner §26: never replaced by random-only coverage).
+    //
+    // In round 2 this input put the whole 900 000 on instalment 2, dated
+    // 2027-01-15, and reported a 265-day-overdue receivable as ENTIRELY NOT
+    // YET DUE. Anchoring the cumulative levels at the PAID level — which the
+    // base ruling forces — allocates to the earliest UNPAID row instead, so
+    // the understatement is no longer EXPRESSIBLE rather than merely
+    // signalled.
+    expect(epochDay(AS_OF) - epochDay('2026-01-15')).toBe(265);
     const c = projectInvoice(OVER_SCHEDULED_INVOICE, OVER_SCHEDULED_PLAN, AS_OF, THRESHOLDS);
     expect(c.map((x) => [x.origin, x.seqNo, x.scheduleDate, x.bucketNo, x.txnMinor])).toEqual([
-      ['installment', 2, '2027-01-15', 1, 900_000n],
+      ['installment', 1, '2026-01-15', 4, 900_000n],
     ]);
-    // Instalment 1 — 900 000, due 2026-01-15, 265 days before as-of — got
-    // nothing, because the declared oldest-first policy deems the implied
-    // payment to have settled it. The merchant sees ZERO overdue.
-    expect(sum(c.filter((x) => x.bucketNo > 1))).toBe(0n);
-    expect(epochDay(AS_OF) - epochDay('2026-01-15')).toBe(265);
-    // And every one of the seven laws still holds, which is exactly why a
-    // law over the projection's own output cannot catch this.
+    // The whole balance is in the OLDEST bucket, where a 265-day-overdue
+    // receivable belongs, and nothing is in the not-yet-due bucket.
+    expect(sum(c.filter((x) => x.bucketNo === 1))).toBe(0n);
     expect(sum(c)).toBe(OVER_SCHEDULED_INVOICE.outstandingTxnMinor);
+    // Nothing paid, so nothing may be treated as settled.
+    expect(OVER_SCHEDULED_INVOICE.paidTxnMinor).toBe(0n);
   });
 
-  it('and it CANNOT be detected from the outstanding figure alone — which is why the signal reads the authoritative pair', () => {
-    // `Σ schedule = 1 800 000` with `O = 900 000` is indistinguishable from a
-    // legitimate plan half paid. Same schedule, same outstanding, different
-    // `paid`: one is a violation and one is not.
-    const legitimate: OpenInvoiceRow = { ...OVER_SCHEDULED_INVOICE, invoiceId: 'inv-ok', paidTxnMinor: 900_000n };
-    const legitimatePlan: InstallmentPlan = { ...OVER_SCHEDULED_PLAN, invoiceId: 'inv-ok' };
-    expect(legitimate.outstandingTxnMinor).toBe(OVER_SCHEDULED_INVOICE.outstandingTxnMinor);
-    expect(scheduleCoherenceFindings([legitimate], [legitimatePlan])).toEqual([]);
-    expect(scheduleCoherenceFindings([OVER_SCHEDULED_INVOICE], [OVER_SCHEDULED_PLAN])).toEqual([
-      { invoiceId: 'inv-over', kind: 'over_scheduled', excessTxnMinor: 900_000n },
-    ]);
+  it('FIRES: the round-2 anchor is what produced the understatement, and it no longer exists', () => {
+    // The old form anchored on the OUTSTANDING against the schedule's SUFFIX.
+    // Reconstructed here from the fixture alone, to show the repair is a real
+    // change of answer and not a re-labelling.
+    const T = OVER_SCHEDULED_PLAN.installments.reduce((a, i) => a + i.amountTxnMinor, 0n);
+    const O = OVER_SCHEDULED_INVOICE.outstandingTxnMinor;
+    expect(T).toBe(1_800_000n);
+    // Suffix-anchored: instalment 2's share was `clamp(O - 0, 0, a_2)` = all of it.
+    const suffixAnchoredSeq2 = O < 1_800_000n - 900_000n ? O : 900_000n;
+    expect(suffixAnchoredSeq2).toBe(900_000n);
+    expect(bucketOf(AS_OF, '2027-01-15', THRESHOLDS)).toBe(1); // ...in bucket 1
+    // Paid-anchored puts it in bucket 4 instead.
+    const got = projectInvoice(OVER_SCHEDULED_INVOICE, OVER_SCHEDULED_PLAN, AS_OF, THRESHOLDS);
+    expect(got.every((x) => x.bucketNo === 4)).toBe(true);
   });
 
-  it('the signal is clean on a well-formed plan, so it is not simply always firing', () => {
-    // NON-VACUITY, the other way round: the design fixture obeys the sum law
-    // (`300 000 paid + 900 000 outstanding = 1 200 000 = 12 x 100 000`).
+  it('the two anchors AGREE exactly wherever the sum law holds, so the repair costs nothing', () => {
+    // The design fixture obeys the sum law: 300 000 paid + 900 000 outstanding
+    // = 1 200 000 = 12 x 100 000.
     expect(PLANNED_INVOICE.paidTxnMinor + PLANNED_INVOICE.outstandingTxnMinor).toBe(1_200_000n);
-    expect(scheduleCoherenceFindings([PLANNED_INVOICE], [PLAN])).toEqual([]);
-    // And an invoice with no plan is not judged at all.
-    expect(scheduleCoherenceFindings([PLAINLESS_INVOICE], [])).toEqual([]);
+    const c = projectInvoice(PLANNED_INVOICE, PLAN, AS_OF, THRESHOLDS);
+    // Instalments 4..12 outstanding, 1..3 settled — the same answer round 1
+    // and round 2 gave, reached from the other end.
+    expect(c.filter((x) => x.origin === 'installment').map((x) => x.seqNo)).toEqual([4, 5, 6, 7, 8, 9, 10, 11, 12]);
   });
 
-  it('the ALLOCATION never reads `paid` — counted, so the signal cannot leak into the money', () => {
-    let reads = 0;
-    const row = { ...PLANNED_INVOICE } as Record<string, unknown>;
-    Object.defineProperty(row, 'paidTxnMinor', {
-      get: () => {
-        reads += 1;
-        return 300_000n;
-      },
-      enumerable: true,
-    });
-    projectInvoice(row as unknown as OpenInvoiceRow, PLAN, AS_OF, THRESHOLDS);
-    expect(reads).toBe(0);
-    // ...and the signal does read it, so the counter is live.
-    scheduleCoherenceFindings([row as unknown as OpenInvoiceRow], [PLAN]);
-    expect(reads).toBeGreaterThan(0);
+  it('PR-5 RESOLVED BY DELETION: the unwired signal is gone and the verifier is the whole bound', () => {
+    // The coordinator's objection was this estate's recorded defect class — a
+    // name existed and no evidence read it — and it was worse than usual
+    // because the unwired function was offered as the bound on ruling 1.
+    // Two homes for a bound, one of them believed. Now one.
+    const model = readFileSync(join(__dirname, 'phase4-s7-aging-reference-model.ts'), 'utf8');
+    const code = model
+      .split('\n')
+      .filter((l) => !/^\s*(\*|\/\*|\/\/)/.test(l))
+      .join('\n');
+    expect(code).not.toMatch(/scheduleCoherenceFindings/);
+    expect(model).toMatch(/PR-5, RESOLVED BY DELETION/);
+    // And the bound that remains is a DEFERRED constraint trigger, which fires
+    // at COMMIT whoever writes.
+    expect(SPEC).toMatch(/installment_plans_schedule_complete/);
+    expect(SPEC).toMatch(/DEFERRABLE INITIALLY DEFERRED/);
+    expect(SPEC).toMatch(/R-SAL-06/);
+  });
+
+  it('the sum law is owed AT DB LEVEL in all three directions, and the specification says which', () => {
+    // Owner §26: below total refused, equal accepted, above total refused —
+    // not TypeScript-only and not UI-only. It is a cluster run, so it is OWED
+    // and named rather than asserted here.
+    expect(SPEC).toMatch(/below total REFUSED/);
+    expect(SPEC).toMatch(/equal to total ACCEPTED/);
+    expect(SPEC).toMatch(/above total REFUSED/);
+    expect(SPEC).toMatch(/OWED TO THE BOX/);
+    // ...and the part that is NOT prose. A prose sentence is the failure shape
+    // this estate is named for, so the reachability of both directions is
+    // asserted over the DDL: a schedule can be pushed below the total by
+    // DELETING a row, so a verifier that fired only on INSERT and UPDATE would
+    // make one of the three directions unenforceable whatever the prose says.
+    const ddl = sqlSchemaOnly(SPEC);
+    const triggers = [...ddl.matchAll(/CREATE CONSTRAINT TRIGGER\s+(\w+)\s+([\s\S]*?)EXECUTE FUNCTION\s+(\w+)/gi)];
+    expect(triggers.length).toBe(2);
+    const onRelation = new Map(
+      triggers.map((t) => [/\bON\s+(\w+)/i.exec(t[2])?.[1] ?? '?', { events: t[2], fn: t[3] }]),
+    );
+    // Both relations of the schedule, both judged by the ONE verifier.
+    expect([...onRelation.keys()].sort()).toEqual(['installment_plans', 'installments']);
+    for (const [rel, t] of onRelation) {
+      expect(t.fn, rel).toBe('installment_schedule_verify');
+      expect(t.events, rel).toMatch(/DEFERRABLE INITIALLY DEFERRED/i);
+      expect(t.events, rel).toMatch(/AFTER[\s\S]*INSERT/i);
+      expect(t.events, rel).toMatch(/AFTER[\s\S]*UPDATE/i);
+    }
+    // The row relation must also fire on DELETE — that is the direction a
+    // prose-only law would have left open.
+    expect(onRelation.get('installments')!.events).toMatch(/DELETE/i);
   });
 
   it('the DECLARED schedule that has fallen due is read from the plan, never from the projection', () => {
@@ -1365,6 +1626,126 @@ describe('PROOF 9 [proof_9] — a broken sum law is SIGNALLED in both directions
     expect(SPEC).toMatch(/installment_plans_schedule_complete/);
     expect(SPEC).toMatch(/DEFERRABLE INITIALLY DEFERRED/);
     expect(SPEC).toMatch(/R-SAL-06/);
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════════
+describe('PROOF 10 [proof_10] — the base conservation law, as a CONSEQUENCE of differencing one cumulative function', () => {
+  // THE OWNER'S RULING (TL, S7 §21/§25). `source_to_base_rate` must NOT become
+  // a second arithmetic authority. The base portion of a schedule boundary is
+  // the canonical cumulative carrying-value law over the invoice's stored
+  // monetary PAIR, differenced between the schedule's cumulative levels:
+  //
+  //     base_i = R(L_i) − R(L_{i−1}) = apRelease(B, Tot, L_{i−1}, alloc_i)
+  //
+  // The owner named the property this buys and asked for it to be proved that
+  // way: the levels telescope, so
+  //
+  //     Σ base_i + residual_base = R(Tot) − R(P) = B − paid_base
+  //                              = outstanding_base_minor
+  //
+  // EXACTLY — and not as a coincidence anyone has to police.
+  const rows = [PLANNED_INVOICE, PLAINLESS_INVOICE, SHORT_SCHEDULE_INVOICE, OVER_SCHEDULED_INVOICE];
+  const plans = [PLAN, SHORT_PLAN, OVER_SCHEDULED_PLAN];
+  const sumBase = (xs: readonly AgingContribution[]): bigint => xs.reduce((a, x) => a + x.baseMinor, 0n);
+
+  it('holds EXACTLY, per invoice and over the portfolio, against the authoritative base', () => {
+    for (const r of rows) {
+      const plan = plans.find((p) => p.invoiceId === r.invoiceId);
+      expect(sumBase(projectInvoice(r, plan, AS_OF, THRESHOLDS)), r.invoiceId).toBe(r.outstandingBaseMinor);
+    }
+    expect(sumBase(contributionsFor(rows, plans, AS_OF, THRESHOLDS))).toBe(
+      rows.reduce((a, r) => a + r.outstandingBaseMinor, 0n),
+    );
+  });
+
+  it('the rounding is REAL on these fixtures, so the law is not passing on exact ratios', () => {
+    // `total_base 1 015 001` against `total_txn 1 200 000` is deliberately not
+    // a round ratio. If it were, every per-row figure would come out exact and
+    // the conservation law would hold for the WRONG reason.
+    const B = PLANNED_INVOICE.paidBaseMinor + PLANNED_INVOICE.outstandingBaseMinor;
+    const T = PLANNED_INVOICE.paidTxnMinor + PLANNED_INVOICE.outstandingTxnMinor;
+    expect(B).toBe(1_015_001n);
+    expect(T).toBe(1_200_000n);
+    expect((B * 100_000n) % T).not.toBe(0n); // a per-instalment conversion rounds
+    // And the paid level really is the cumulative release of the paid amount,
+    // which is the identity the writers enforce (`0084`'s own note).
+    expect(apRelease(B, T, 0n, PLANNED_INVOICE.paidTxnMinor)).toBe(PLANNED_INVOICE.paidBaseMinor);
+    // R(Tot) = B exactly: the final cumulative release is the whole base.
+    expect(apRelease(B, T, 0n, T)).toBe(B);
+  });
+
+  it('IT IS A PROPERTY OF TELESCOPING, NOT OF HALF_EVEN — proved with adversarial rounding functions', () => {
+    // The owner asked for it this way. Any cumulative `R` differenced between
+    // the same levels conserves, so the law does not depend on the canonical
+    // law's rounding at all — which is why the canonical law can be CONSUMED
+    // rather than re-stated, and why no counterexample requiring the raw rate
+    // exists (§21).
+    const adversarial: readonly { readonly name: string; readonly fn: ReleaseFn }[] = [
+      { name: 'floor', fn: (B, T, X, a) => (B * (X + a)) / T - (B * X) / T },
+      { name: 'ceil-ish', fn: (B, T, X, a) => (B * (X + a) + T - 1n) / T - (B * X + T - 1n) / T },
+      { name: 'always zero', fn: () => 0n },
+      { name: 'wildly nonlinear', fn: (B, T, X, a) => ((X + a) * (X + a)) / (T === 0n ? 1n : T) - (X * X) / (T === 0n ? 1n : T) },
+    ];
+    for (const { name, fn } of adversarial) {
+      for (const r of rows) {
+        const plan = plans.find((p) => p.invoiceId === r.invoiceId);
+        const c = projectInvoice(r, plan, AS_OF, THRESHOLDS, CORRECT_POLICY, fn);
+        const B = r.paidBaseMinor + r.outstandingBaseMinor;
+        const Tot = r.paidTxnMinor + r.outstandingTxnMinor;
+        // Conservation against THAT R's own endpoints: R(Tot) − R(P).
+        const expected =
+          plan === undefined || r.outstandingTxnMinor <= 0n
+            ? r.outstandingBaseMinor
+            : fn(B, Tot, 0n, Tot) - fn(B, Tot, 0n, r.paidTxnMinor);
+        expect(sumBase(c), `${name} / ${r.invoiceId}`).toBe(expected);
+      }
+    }
+    // ...and with the CANONICAL law those endpoints ARE the authoritative
+    // figures, which is the whole point of the ruling.
+    const B = PLANNED_INVOICE.paidBaseMinor + PLANNED_INVOICE.outstandingBaseMinor;
+    const Tot = PLANNED_INVOICE.paidTxnMinor + PLANNED_INVOICE.outstandingTxnMinor;
+    expect(apRelease(B, Tot, 0n, Tot) - apRelease(B, Tot, 0n, PLANNED_INVOICE.paidTxnMinor)).toBe(
+      PLANNED_INVOICE.outstandingBaseMinor,
+    );
+  });
+
+  it('`source_to_base_rate` appears in NO arithmetic, anywhere in this design', () => {
+    const model = readFileSync(join(__dirname, 'phase4-s7-aging-reference-model.ts'), 'utf8');
+    const code = model
+      .split('\n')
+      .filter((l) => !/^\s*(\*|\/\*|\/\/)/.test(l))
+      .join('\n');
+    expect(code).not.toMatch(/source_to_base_rate|sourceToBaseRate/);
+    expect(sqlCodeOnly(SPEC)).not.toMatch(/source_to_base_rate/);
+    // It is named in prose only — valid immutable invoice metadata for
+    // display, audit and traceability, and never a carrying-allocation
+    // primitive.
+    expect(SPEC).toMatch(/source_to_base_rate/);
+  });
+
+  it('the canonical law is CONSUMED, never re-implemented — R-81, and the owner said so', () => {
+    expect(CANONICAL_RELEASE).toBe(apRelease);
+    const model = readFileSync(join(__dirname, 'phase4-s7-aging-reference-model.ts'), 'utf8');
+    expect(model).not.toMatch(/function\s+roundHalfEven/);
+    // And the SQL calls the SQL twin rather than restating it.
+    const sketch = sqlSchemaOnly(projectionSketch(SPEC));
+    expect(sketch).toMatch(/public\.supplier_ap_release\(/);
+    expect(sketch).not.toMatch(/inventory_half_even/);
+    expect(SPEC).toMatch(/0067:683/);
+  });
+
+  it('FIRES under its mutation: each row converted on its own, at the row grain', () => {
+    // The second rounding at the second grain this design exists to refuse.
+    const m = mutate('baseAllocation', 'per_row_conversion');
+    const c = projectInvoice(PLANNED_INVOICE, PLAN, AS_OF, THRESHOLDS, m);
+    expect(sumBase(c)).not.toBe(PLANNED_INVOICE.outstandingBaseMinor);
+    // Nine instalments, each rounded down by the same fraction: the drift is
+    // small, which is exactly why a law that did not assert EXACT equality
+    // would never have found it.
+    expect(PLANNED_INVOICE.outstandingBaseMinor - sumBase(c)).toBe(4n);
+    // The txn side is untouched, so only the base law can see this.
+    expect(sum(c)).toBe(PLANNED_INVOICE.outstandingTxnMinor);
   });
 });
 
@@ -1409,21 +1790,42 @@ describe('META — the proofs are not vacuous', () => {
   });
 
   it('meta_2: every mutation actually CHANGES the output — an inert mutation proves nothing', () => {
-    const rows = [PLANNED_INVOICE, PLAINLESS_INVOICE, SHORT_SCHEDULE_INVOICE];
-    const plans = [PLAN, SHORT_PLAN];
+    const rows = [PLANNED_INVOICE, PLAINLESS_INVOICE, SHORT_SCHEDULE_INVOICE, OVER_SCHEDULED_INVOICE];
+    const plans = [PLAN, SHORT_PLAN, OVER_SCHEDULED_PLAN];
+    // The over-scheduled fixture is in the portfolio because it is what makes
+    // the upper-clamp mutation bite at all; without it that mutation is
+    // measurably INERT, which is this very law's job to catch.
     const baseline = JSON.stringify(
-      projectCustomerAging(rows, plans, AS_OF, THRESHOLDS).map((b) => [b.bucketNo, b.currencyCode, String(b.txnMinor), b.invoiceCount]),
+      projectCustomerAging(rows, plans, AS_OF, THRESHOLDS).map((b) => [
+        b.bucketNo,
+        b.currencyCode,
+        String(b.txnMinor),
+        b.invoiceCount,
+        String(b.baseMinor),
+      ]),
     );
     for (const m of MUTATIONS_EXERCISED) {
-      const plan5 = m.knob === 'outstandingSource' ? [{ ...PLAN, planLocalCollectedMinor: 300_000n }, SHORT_PLAN] : plans;
-      const got = JSON.stringify(
-        projectCustomerAging(rows, plan5, AS_OF, THRESHOLDS, mutate(m.knob, m.to)).map((b) => [
-          b.bucketNo,
-          b.currencyCode,
-          String(b.txnMinor),
-          b.invoiceCount,
-        ]),
-      );
+      const plan5 =
+        m.knob === 'outstandingSource'
+          ? [{ ...PLAN, planLocalCollectedMinor: 300_000n }, SHORT_PLAN, OVER_SCHEDULED_PLAN]
+          : plans;
+      // A mutation that REFUSES has changed the output as surely as one that
+      // returns different numbers — `clampToRowAmount` is refused by the
+      // canonical release law's own guard (proof 1).
+      let got: string;
+      try {
+        got = JSON.stringify(
+          projectCustomerAging(rows, plan5, AS_OF, THRESHOLDS, mutate(m.knob, m.to)).map((b) => [
+            b.bucketNo,
+            b.currencyCode,
+            String(b.txnMinor),
+            b.invoiceCount,
+            String(b.baseMinor),
+          ]),
+        );
+      } catch {
+        got = 'REFUSED';
+      }
       expect(got, `mutation ${m.knob} -> ${String(m.to)} was inert`).not.toBe(baseline);
     }
   });
@@ -1455,7 +1857,15 @@ describe('META — the proofs are not vacuous', () => {
         { seqNo: 2, dueDate: '2026-03-01', amountTxnMinor: 40_000n },
       ],
     };
-    const tiedRow: OpenInvoiceRow = { invoiceId: 'inv-tie', currencyCode: 'SAR', dueDate: '2026-03-01', outstandingTxnMinor: 50_000n };
+    const tiedRow: OpenInvoiceRow = {
+      invoiceId: 'inv-tie',
+      currencyCode: 'SAR',
+      dueDate: '2026-03-01',
+      outstandingTxnMinor: 50_000n,
+      paidTxnMinor: 50_000n,
+      paidBaseMinor: 42_251n,
+      outstandingBaseMinor: 42_252n,
+    };
     const a = projectInvoice(tiedRow, tied, AS_OF, THRESHOLDS);
     const b = projectInvoice(tiedRow, { ...tied, installments: [...tied.installments].reverse() }, AS_OF, THRESHOLDS);
     expect(a).toEqual(b);
@@ -1485,13 +1895,33 @@ describe('META — the proofs are not vacuous', () => {
     expect(from).toBeGreaterThan(-1);
     expect(to).toBeGreaterThan(from);
     const allocation = strip(model.slice(from, to));
-    expect(allocation).toMatch(/suffixAfter/); // the subject is really the allocation
+    expect(allocation).toMatch(/cumulative \+= r\.amount/); // really the allocation
     expect(allocation).not.toMatch(/Math\.(round|floor|ceil|trunc)/);
     expect(allocation).not.toMatch(/\btoFixed\b/);
     expect(allocation).not.toMatch(/Number\(/);
-    // No division at all over money: there is no ratio, no proration and so
-    // no residue to distribute and no quotient to round.
+    // No division at all over money in the TXN allocation: no ratio, no
+    // proration, no residue to distribute, no quotient to round.
     expect([...allocation.matchAll(/[^*/\n]\/[^*/\n]/g)].map((m) => m[0])).toEqual([]);
+
+    // THE BASE SIDE HAS EXACTLY ONE ROUNDING AND THIS FILE DOES NOT WRITE IT.
+    // It is `apRelease`'s HALF_EVEN, consumed from
+    // `packages/inventory/src/supplier-settlement.ts:89` — «the twin of
+    // `supplier_ap_release`» — because a second body would be a second
+    // financial truth (R-81, and the owner's ruling). The allocation calls
+    // `release(...)` and states no rounding of its own.
+    expect(allocation).toMatch(/release\(totalBase, totalTxn,/);
+    expect(model).toMatch(/import \{ apRelease \} from '\.\.\/\.\.\/inventory\/src\/supplier-settlement'/);
+    const modelCode = strip(model);
+    expect(modelCode).not.toMatch(/function\s+roundHalfEven/);
+    // THE SIXTH OCCURRENCE OF THE SAME LESSON, kept for the same reason as the
+    // other five: this assertion read the WHOLE FILE, so the moment the
+    // header stated the law as `R(x) = HALF_EVEN(B·x, T)` — which is what
+    // documenting a consumed law looks like — a law about implementation went
+    // red on a definition. The subject is CODE. Prose may name the law; code
+    // may not restate it.
+    expect(modelCode).not.toMatch(/HALF_EVEN/);
+    expect(model).toMatch(/HALF_EVEN\(B/); // and the prose really does name it
+    expect(CANONICAL_RELEASE).toBe(apRelease);
 
     // The ONE rounding in the file, stated rather than hidden: `epochDay`
     // normalises a civil date to whole days. It rounds a DATE and never an
@@ -1595,5 +2025,60 @@ describe('META — the proofs are not vacuous', () => {
     // defective value or a deliberate, asserted exclusion.
     const policyFields = Object.keys(CORRECT_POLICY).sort();
     expect(policyFields).toEqual([...defectKnobs, 'settlementOrder'].sort());
+  });
+
+  it('meta_8: the SUBJECT EXTRACTORS are not quietly deleting the evidence', () => {
+    // A law whose subject extractor returns nothing passes for free, and this
+    // file now has three extractors. Each is measured against a fixture whose
+    // answer is known, so a future "fix" that widens the stripping is caught
+    // here rather than by a green proof over an empty string.
+    const fixture = [
+      "-- a comment naming accounting_source_type and now() and source_to_base_rate",
+      "CREATE TABLE t (created_at TIMESTAMPTZ NOT NULL DEFAULT now());",
+      "COMMENT ON TABLE t IS 'prose naming accounting_source_type, now() and source_to_base_rate; it''s data.';",
+      'CREATE FUNCTION f() RETURNS BIGINT LANGUAGE sql AS $fn$ SELECT public.supplier_ap_release(1, 2, 0, 1) $fn$;',
+    ].join('\n');
+
+    // `sqlSchemaOnly` drops the `--` comment and keeps both statements.
+    const schema = sqlSchemaOnly(fixture);
+    expect(schema).not.toMatch(/a comment naming/);
+    expect(schema).toMatch(/DEFAULT now\(\)/);
+    expect(schema).toMatch(/COMMENT ON TABLE/); // the literal is still there
+
+    // `sqlCodeOnly` additionally blanks the literal — and KEEPS the
+    // dollar-quoted body, which is the half that matters.
+    const code = sqlCodeOnly(fixture);
+    expect(code).not.toMatch(/prose naming/);
+    expect(code).not.toMatch(/source_to_base_rate/);
+    expect(code).not.toMatch(/accounting_source_type/);
+    expect(code).toMatch(/COMMENT ON TABLE t IS ''/); // the SHAPE survives
+    expect(code).toMatch(/DEFAULT now\(\)/); // real DDL outside a literal
+    expect(code).toMatch(/SELECT public\.supplier_ap_release\(1, 2, 0, 1\)/);
+    expect(code).toMatch(/\$fn\$/);
+    // It is not a `.replace(/.*/, '')`. The specification is mostly `--`
+    // prose, so a FRACTION of the file is the wrong measure; the right one is
+    // that every executable statement survives intact.
+    const specCode = sqlCodeOnly(SPEC);
+    expect(sqlCodeOnly(projectionSketch(SPEC))).toContain('public.supplier_ap_release(');
+    for (const stmt of [
+      'CREATE OR REPLACE FUNCTION customer_ar_aging',
+      'public.supplier_ap_release(',
+      'CREATE TABLE installment_plans',
+      'CREATE TABLE installments',
+      'CREATE UNIQUE INDEX installment_plans_one_active_per_invoice_uq',
+      'CREATE CONSTRAINT TRIGGER installments_schedule_complete',
+      'ALTER TABLE installments ENABLE ROW LEVEL SECURITY',
+      'GRANT EXECUTE ON FUNCTION customer_ar_aging',
+    ]) {
+      expect(specCode, `sqlCodeOnly dropped ${stmt}`).toContain(stmt);
+    }
+
+    // `projectionSketch` returns the whole delimited body and nothing else.
+    const sketch = projectionSketch(SPEC);
+    expect(sketch).toMatch(/^\s*CREATE OR REPLACE FUNCTION customer_ar_aging/);
+    expect(sketch.trimEnd()).toMatch(/\$fn\$;$/);
+    expect(sketch).not.toMatch(/CREATE TABLE/); // the DDL above the markers
+    expect(sketch).not.toMatch(/COMMENT ON FUNCTION/); // the prose below them
+    expect(sketch.length).toBeGreaterThan(2_000);
   });
 });
