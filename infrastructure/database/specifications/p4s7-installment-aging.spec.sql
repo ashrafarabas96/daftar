@@ -192,7 +192,32 @@ ALTER TABLE installments FORCE ROW LEVEL SECURITY;
 --
 -- No privilege here is a widening: `installment_plans` and `installments` are
 -- created by THIS specification, so their policies and grants are its own to
--- declare. The shapes are `0075:443-458`'s, relation for relation.
+-- declare.
+--
+-- THE POLICY-NAME SET IS `c_source`, SEVEN NAMES PER RELATION — and the first
+-- version of this block shipped SIX, which was `c_source` minus
+-- `inventory_internal_read` and therefore a set matching NEITHER of the two
+-- shapes `0075` declares for itself (challenger C1.b). `0075` does not merely
+-- contain policies; its own end-state block asserts the NAME SET from the live
+-- catalogue — `c_ordinary` six names, `c_source` seven, compared at
+-- `0075:912`. The omitted name is at `0075:455-456`, INSIDE the range this
+-- comment cites and immediately above the `accounting_validator` at `:457-458`
+-- that the first version did copy. Section 20 of the design records what that
+-- omission cost; section 2b's `DO $end$` block is what makes it unrepeatable.
+--
+-- TWO CITATION HONESTIES, because the first version claimed more than it did
+-- (challenger L11):
+--   * `0075:443-458` is `0075`'s HEADER-relation block (`invoices`). `0075`
+--     gives a DETAIL relation (`invoice_items`, `0075:459+`) a NARROWER
+--     restrictive read — `current_user = 'daftar_inventory_internal'` alone —
+--     and NO `accounting_validator`. Giving `installments` the header shape is
+--     therefore a deliberate WIDENING relative to the cited range, and the
+--     reason is specific: unlike `invoice_items`, `installments` is read
+--     DIRECTLY by `installment_schedule_verify()` as
+--     `daftar_accounting_internal`, so the validator policy is load-bearing on
+--     the detail relation here and is not on `invoice_items`.
+--   * So this is not «relation for relation»; it is the header shape, applied
+--     to both relations, for a stated reason.
 CREATE POLICY tenant_membership ON installment_plans
   USING      (app_bypass() OR tenant_id = nullif(app_tenant(), '')::uuid)
   WITH CHECK (app_bypass() OR tenant_id = nullif(app_tenant(), '')::uuid);
@@ -206,6 +231,15 @@ CREATE POLICY business_isolation_update ON installment_plans AS RESTRICTIVE FOR 
   WITH CHECK (app_bypass() OR business_id = nullif(app_business(), '')::uuid);
 CREATE POLICY business_isolation_delete ON installment_plans AS RESTRICTIVE FOR DELETE
   USING      (app_bypass() OR business_id = nullif(app_business(), '')::uuid);
+-- `0075:455-456`'s EXACT SHAPE. Without it, the only permissive policy
+-- reaching `daftar_inventory_internal` is `tenant_membership`, which needs
+-- `app_bypass()` or a matching `app.tenant_id`; `app_tenant()` is
+-- `current_setting('app.tenant_id', true)` (`0006_rls.sql:5-7`), NULL when
+-- unset, so the comparison is NULL and not true. That principal holds an
+-- unconditional read on `invoices` (`0075:455-456`) and would have held NO
+-- read here — the exact visibility ASYMMETRY section 6a refuses.
+CREATE POLICY inventory_internal_read ON installment_plans
+  FOR SELECT TO daftar_inventory_internal USING (true);
 -- The verifier's own way in, named for what it is, on the `accounting_validator`
 -- precedent of `0075:457-458`.
 CREATE POLICY accounting_validator ON installment_plans
@@ -224,6 +258,8 @@ CREATE POLICY business_isolation_update ON installments AS RESTRICTIVE FOR UPDAT
   WITH CHECK (app_bypass() OR business_id = nullif(app_business(), '')::uuid);
 CREATE POLICY business_isolation_delete ON installments AS RESTRICTIVE FOR DELETE
   USING      (app_bypass() OR business_id = nullif(app_business(), '')::uuid);
+CREATE POLICY inventory_internal_read ON installments
+  FOR SELECT TO daftar_inventory_internal USING (true);
 CREATE POLICY accounting_validator ON installments
   FOR SELECT TO daftar_accounting_internal USING (true);
 
@@ -399,6 +435,13 @@ GRANT SELECT ON installment_plans, installments TO daftar_accounting_internal;
 -- WHOLE BOUND, and a bound with one home cannot be believed in the wrong one.
 
 -- ═════════════════════════════════════════════════════════════════════════
+-- ORDER_NOTE (challenger H6: this block is DOCUMENTATION, and the law it
+-- documents is asserted executably — by the ordering assertion in
+-- `packages/domain-core/test/phase4-s7-installment-aging.test.ts`, and by the
+-- `pg_trigger` arm of section 2b, which can only be satisfied if these three
+-- blocks really were applied in this order. The design claimed for one round
+-- that this comment ITSELF prevented a reordering. A comment prevents nothing.)
+--
 -- THE ORDER OF THESE THREE BLOCKS IS LOAD-BEARING, AND THE PARSER TAUGHT ME
 -- THAT RATHER THAN A REVIEW.
 --
@@ -461,6 +504,9 @@ DECLARE
   v_rows       INTEGER;
   v_max_seq    INTEGER;
   v_distinct   INTEGER;
+  v_plan_tenant     UUID;
+  v_invoice_tenant  UUID;
+  v_tenant_mismatch INTEGER;
 BEGIN
   -- WHICH PLAN THIS ROW IMPLICATES. Both relations are judged by this one
   -- routine, so the plan key is taken from whichever relation fired, and from
@@ -474,8 +520,8 @@ BEGIN
     v_plan     := coalesce(NEW.plan_id, OLD.plan_id);
   END IF;
 
-  SELECT p.status, p.down_payment_minor, p.invoice_id
-    INTO v_status, v_down, v_invoice
+  SELECT p.status, p.down_payment_minor, p.invoice_id, p.tenant_id
+    INTO v_status, v_down, v_invoice, v_plan_tenant
     FROM public.installment_plans p
    WHERE p.business_id = v_business AND p.id = v_plan;
 
@@ -488,7 +534,7 @@ BEGIN
   -- binding it would refuse a legitimate cancellation.
   IF v_status <> 'active' THEN RETURN NULL; END IF;
 
-  SELECT i.total_txn_minor INTO v_total
+  SELECT i.total_txn_minor, i.tenant_id INTO v_total, v_invoice_tenant
     FROM public.invoices i
    WHERE i.business_id = v_business AND i.id = v_invoice;
   IF NOT FOUND THEN
@@ -529,6 +575,37 @@ BEGIN
   IF v_max_seq <> v_rows OR v_distinct <> v_rows THEN
     RAISE EXCEPTION 'installment.schedule_incomplete: (c) seq_no is not contiguous from 1 (% rows, max %)',
       v_rows, v_max_seq USING ERRCODE = 'P0001';
+  END IF;
+
+  -- (e) THE TENANT OF THE PLAN IS THE TENANT OF ITS INVOICE, AND THE TENANT OF
+  --     EVERY INSTALMENT IS THE TENANT OF ITS PLAN. Added for challenger C1:
+  --     this is not tidiness, it is the SOURCE of the only visibility
+  --     asymmetry `daftar_app` can suffer.
+  --
+  --     `installment_plans_invoice_fk` ties `business_id` to the invoice's, so
+  --     the business can never diverge. `tenant_id` is tied to NOTHING: it is
+  --     a supplied column, and `invoices` carries no unique key on
+  --     `(tenant_id, business_id, id)` for a composite foreign key to name
+  --     (and this specification may not add one to a predecessor's relation).
+  --     So a plan written with the WRONG tenant is expressible — and every
+  --     policy on these relations is keyed on `tenant_id`. The consequence is
+  --     the one section 6a exists to make unreachable: a caller who CAN see
+  --     the invoice (its tenant matches) CANNOT see the plan (its tenant does
+  --     not), so the no-plan arm of the projection serves the whole
+  --     outstanding at the single invoice due date — the pre-S7 defect, with
+  --     no error. A deferred cross-row obligation is the only place this can
+  --     be enforced without a key on somebody else's table, and the verifier
+  --     is already here, already DEFINER and already reading the invoice.
+  IF v_plan_tenant IS DISTINCT FROM v_invoice_tenant THEN
+    RAISE EXCEPTION 'installment.schedule_incomplete: (e) the plan tenant % is not the invoice tenant %',
+      v_plan_tenant, v_invoice_tenant USING ERRCODE = 'P0001';
+  END IF;
+  SELECT pg_catalog.count(*) INTO v_tenant_mismatch
+    FROM public.installments n
+   WHERE n.business_id = v_business AND n.plan_id = v_plan AND n.tenant_id IS DISTINCT FROM v_plan_tenant;
+  IF v_tenant_mismatch > 0 THEN
+    RAISE EXCEPTION 'installment.schedule_incomplete: (e) % instalments do not carry the plan tenant %',
+      v_tenant_mismatch, v_plan_tenant USING ERRCODE = 'P0001';
   END IF;
 
   -- (d) THE SCHEDULE LENGTH CEILING. See section 3(e): this is a DECLARED
@@ -699,6 +776,67 @@ COMMENT ON FUNCTION installment_schedule_verify() IS
 -- (`projectInvoice`), and that file's header states why the TypeScript is a
 -- reference model and not a second implementation (`P4-AL-07`).
 
+-- ── 6a. THE NO-PLAN ARM MUST FAIL CLOSED — challenger C1.a ───────────────
+--
+-- THE DEFECT THE FIRST VERSION SHIPPED. Arm (c) of the projection was keyed on
+-- `WHERE NOT EXISTS (SELECT 1 FROM active_plan …)`. `customer_ar_aging` is
+-- `SECURITY INVOKER` (`R-P4-07`, and it must stay so), so `active_plan` is read
+-- THROUGH THE CALLER'S ROW SECURITY. Under row security, «absent» and
+-- «invisible» are the same answer, and `NOT EXISTS` asks the question that
+-- cannot tell them apart. A caller who could see the invoice and not its plan
+-- was therefore served THE WHOLE OUTSTANDING AT THE SINGLE INVOICE DUE DATE —
+-- the exact pre-S7 defect this slice exists to repair, with no error, no empty
+-- result and no `42501`. A plausible wrong number a merchant would believe.
+--
+-- THE REPAIR HAS TWO HALVES, and the first is the one that matters.
+--
+--   1. REMOVE EVERY ASYMMETRY. The projection reads `public.invoices` through
+--      the same row security, so for a caller whose visibility of the two
+--      relations agrees, hiding the plan hides the invoice too and the result
+--      is NO ROW rather than a wrong row. Two asymmetries existed and both are
+--      now closed at their source: `daftar_inventory_internal` holds an
+--      unconditional read on `invoices` (`0075:455-456`) and now holds one
+--      here (section 2a); and a plan whose `tenant_id` differed from its
+--      invoice's was expressible, which obligation (e) of section 3 now
+--      refuses at COMMIT.
+--
+--   2. AND THEN FAIL CLOSED ANYWAY. An argument that an asymmetry is
+--      unreachable is still an argument. This guard turns any residual one
+--      into a REFUSAL rather than a wrong number, which is the only direction
+--      a financial read may fail in.
+--
+-- WHY THIS IS NOT A SECOND READER, AND LEAKS NOTHING. It returns no amount, no
+-- date and no count — one boolean, or an exception. It is asked only about
+-- invoice ids that CAME OUT OF the caller's own row-security-filtered read of
+-- `public.invoices`, so it can confirm nothing the caller cannot already see.
+-- It is `STABLE`, so it is callable from the `STABLE` projection; it is
+-- DEFINER because a guard that ran under the caller's visibility would be the
+-- defect it exists to catch.
+CREATE OR REPLACE FUNCTION installment_plan_absence_guard(p_business_id UUID, p_invoice_ids UUID[])
+RETURNS BOOLEAN
+LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $fn$
+DECLARE
+  v_hidden INTEGER;
+BEGIN
+  SELECT pg_catalog.count(*) INTO v_hidden
+    FROM public.installment_plans p
+   WHERE p.business_id = p_business_id
+     AND p.status = 'active'
+     AND p.invoice_id = ANY (p_invoice_ids);
+  IF v_hidden > 0 THEN
+    RAISE EXCEPTION 'installment.plan_invisible: % of the invoices served without a schedule do have an active plan this caller cannot see',
+      v_hidden USING ERRCODE = 'P0001';
+  END IF;
+  RETURN true;
+END;
+$fn$;
+
+ALTER FUNCTION installment_plan_absence_guard(UUID, UUID[]) OWNER TO daftar_accounting_internal;
+REVOKE ALL ON FUNCTION installment_plan_absence_guard(UUID, UUID[]) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION installment_plan_absence_guard(UUID, UUID[]) TO daftar_app, daftar_inventory_internal;
+COMMENT ON FUNCTION installment_plan_absence_guard(UUID, UUID[]) IS
+  'P4-S7 (challenger C1.a). The no-plan arm of customer_ar_aging fails CLOSED. Given the invoice ids the INVOKER projection is about to serve without a schedule, it raises installment.plan_invisible if any of them does have an active plan, judged WITHOUT the caller''s row security. Under row security "absent" and "invisible" are one answer, and the arm keyed on NOT EXISTS served the whole outstanding at the single invoice due date — the pre-S7 defect — to any caller whose visibility of the plan and of its invoice disagreed. It returns no amount, no date and no count, only a boolean or an exception, and it is asked only about invoices that came out of the caller''s own filtered read, so it confirms nothing the caller cannot already see. STABLE, internal-owned DEFINER, pinned search_path, reads only.';
+
 -- >>> P4S7 PROJECTION SKETCH BEGIN
 CREATE OR REPLACE FUNCTION customer_ar_aging(p_business_id UUID, p_customer_id UUID, p_as_of DATE, p_bucket_days INTEGER[])
 RETURNS TABLE (bucket_no INTEGER, currency_code TEXT, txn_minor BIGINT, base_minor BIGINT, invoice_count INTEGER)
@@ -789,6 +927,15 @@ LANGUAGE sql STABLE SET search_path = pg_catalog, public, pg_temp AS $fn$
       JOIN (SELECT y.invoice_id, pg_catalog.max(y.schedule_total) AS schedule_total
               FROM prefixed y GROUP BY y.invoice_id) t ON t.invoice_id = oi.invoice_id
   ),
+  no_plan AS (
+    -- The open invoices the caller sees NO active plan for. Named as its own
+    -- CTE so the guard of section 6a can be asked about the SET once, instead
+    -- of once per row, and so arm (c) below reads one relation and not two.
+    SELECT oi.invoice_id, oi.currency_code, oi.due_date,
+           oi.outstanding_txn_minor, oi.outstanding_base_minor
+      FROM open_invoice oi
+     WHERE NOT EXISTS (SELECT 1 FROM active_plan ap WHERE ap.invoice_id = oi.invoice_id)
+  ),
   contribution AS (
     -- (a) THE SCHEDULE ROWS. The transaction allocation is a difference of two
     --     consecutive levels — exact integers, zero roundings — and the base
@@ -818,10 +965,19 @@ LANGUAGE sql STABLE SET search_path = pg_catalog, public, pg_temp AS $fn$
     --     `active_plan`, (c) only those not in it — and an active plan with no
     --     `installments` rows is served by (a) and (b), which the reference
     --     model agrees with and section 3(b) makes unreachable.
-    SELECT oi.invoice_id, oi.currency_code, oi.due_date,
-           oi.outstanding_txn_minor, oi.outstanding_base_minor
-      FROM open_invoice oi
-     WHERE NOT EXISTS (SELECT 1 FROM active_plan ap WHERE ap.invoice_id = oi.invoice_id)
+    --
+    --     AND IT FAILS CLOSED (challenger C1.a, section 6a). `NOT EXISTS`
+    --     cannot distinguish a plan that is ABSENT from one that is INVISIBLE,
+    --     and the invisible case served the pre-S7 number silently. The guard
+    --     is asked ONCE about the whole set rather than once per row, and it
+    --     returns a boolean or raises `installment.plan_invisible`.
+    SELECT n.invoice_id, n.currency_code, n.due_date,
+           n.outstanding_txn_minor, n.outstanding_base_minor
+      FROM no_plan n
+     CROSS JOIN (SELECT public.installment_plan_absence_guard(
+                          p_business_id,
+                          coalesce((SELECT pg_catalog.array_agg(y.invoice_id) FROM no_plan y), ARRAY[]::UUID[])) AS ok) g
+     WHERE g.ok
   )
   SELECT (1 + (SELECT pg_catalog.count(*)
                  FROM pg_catalog.unnest(p_bucket_days) AS t(threshold)
@@ -847,3 +1003,244 @@ COMMENT ON FUNCTION customer_ar_aging(UUID, UUID, DATE, INTEGER[]) IS
 -- invoice may now appear in SEVERAL buckets, so the sum of `invoice_count`
 -- over the buckets exceeds the number of open invoices, which it never did
 -- before. That is section 11 item 2 of the design document.
+
+
+-- ── 2b. P4S7-E: THE END STATE, READ FROM THE LIVE CATALOGUES ─────────────
+--       (`R-P4-08`; the worked example is `0075:838-945`, and eleven
+--       predecessors ship one: `0061`-`0069`, `0072`, `0075`.)
+--
+-- CHALLENGER H4. The first version of this specification shipped NO end-state
+-- self-check: `grep 'DO \$'` over it returned nothing. Everything it claimed
+-- about its own policies, grants and DML-emptiness was asserted by a TypeScript
+-- suite that no gate, no npm script and no CI workflow names — and challenger
+-- C1.b was a policy MISSING from a set that two rounds of readers compared
+-- against prose instead of against `0075`'s own declared constant.
+--
+-- WHY THIS BLOCK AND NOT ANOTHER TEST. A `DO $end$` block travels INSIDE the
+-- migration. It needs no gate row, no CI step, no roster entry and no runner
+-- window; it refuses AT APPLY TIME, on every cluster, forever, and it reads the
+-- LIVE CATALOGUE rather than this file's own statements. It is therefore the
+-- one device that converts C1.b, H4, H5 and the structural half of H3 from
+-- «asserted by a suite somebody must remember to run» into «cannot be
+-- deployed». It is not a substitute for the gates; it is what holds when they
+-- are absent.
+--
+-- THE CLOSED LISTS BELOW ARE COPIED VERBATIM FROM `0075:841-851`, and that is
+-- the point of challenger H5: the first version hand-wrote 3 roles x 3
+-- privileges where the predecessor declares 8 x 6, omitting `public`, five
+-- runtime principals, and `TRUNCATE`, `REFERENCES` and `TRIGGER` — the last
+-- being the exact privilege the design's own "the verifier cannot be bypassed"
+-- argument depends on, since disabling a trigger requires it. A derived or
+-- copied list; never a fresh enumeration.
+DO $end$
+DECLARE
+  c_relations CONSTANT TEXT[] := ARRAY['installment_plans', 'installments'];
+  -- `0075:843-846` verbatim. SEVEN names: both relations take the shape of an
+  -- accounting-source relation because both are read by a DEFINER validator
+  -- (section 2a states why the detail relation takes the header shape here).
+  c_source    CONSTANT TEXT[] := ARRAY['accounting_validator', 'business_isolation_delete', 'business_isolation_insert',
+                                       'business_isolation_read', 'business_isolation_update', 'inventory_internal_read',
+                                       'tenant_membership'];
+  -- `0075:848-850` verbatim.
+  c_runtime   CONSTANT TEXT[] := ARRAY['daftar_app', 'daftar_platform', 'daftar_worker', 'daftar_identity', 'daftar_resolver',
+                                       'daftar_provisioner', 'daftar_reconciler', 'public'];
+  c_dml       CONSTANT TEXT[] := ARRAY['INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER'];
+  c_column_dml CONSTANT TEXT[] := ARRAY['INSERT', 'UPDATE', 'REFERENCES'];
+  -- `0075:862-864` verbatim: `P4-AL-06`'s vocabulary. On these two relations it
+  -- is proof 7 — NO STORED INSTALMENT OUTSTANDING — refused at apply time
+  -- rather than asserted by a reading of the file.
+  c_forbidden CONSTANT TEXT := '(^|_)(balance|outstanding|paid|unpaid|due|owed|payable|receivable|settled|refunded|collected|allocated)($|_)';
+  c_instant   CONSTANT TEXT := '_(id|ids|at|date|by|status|kind|type|code|name|currency|seq)$';
+  c_derived   CONSTANT TEXT := '(^|_)(settled|paid|collected|allocated|refunded)_(at|date)($|_)';
+  v_name      TEXT;
+  v_role      TEXT;
+  v_priv      TEXT;
+  v_n         INTEGER;
+  v_actual    TEXT[];
+BEGIN
+  -- 1. BOTH RELATIONS EXIST, row security ENABLED AND FORCED on both, and each
+  --    carries tenant_id and business_id as NOT NULL columns (P4-AL-08).
+  SELECT count(*) INTO v_n FROM pg_class c
+   WHERE c.oid = ANY (SELECT ('public.' || x)::regclass FROM unnest(c_relations) x)
+     AND c.relkind = 'r' AND c.relrowsecurity AND c.relforcerowsecurity;
+  IF v_n <> 2 THEN
+    RAISE EXCEPTION 'installment.migration_end_state_invalid: row security is not enabled and forced on both P4-S7 relations (found %)', v_n
+      USING ERRCODE = 'P0001';
+  END IF;
+  FOREACH v_name IN ARRAY c_relations LOOP
+    IF (SELECT count(*) FROM pg_attribute a
+         WHERE a.attrelid = ('public.' || v_name)::regclass AND a.attnum > 0 AND NOT a.attisdropped
+           AND a.attname IN ('tenant_id', 'business_id') AND a.attnotnull) <> 2 THEN
+      RAISE EXCEPTION 'installment.migration_end_state_invalid: % does not carry tenant_id and business_id as NOT NULL columns', v_name
+        USING ERRCODE = 'P0001';
+    END IF;
+    -- PROOF 7, AT APPLY TIME. No stored instalment balance, outstanding, paid
+    -- or settled figure, on either relation, ever.
+    IF EXISTS (SELECT 1 FROM pg_attribute a
+                WHERE a.attrelid = ('public.' || v_name)::regclass AND a.attnum > 0 AND NOT a.attisdropped
+                  AND (a.attname ~ c_derived
+                       OR (a.attname ~ c_forbidden AND a.attname !~ c_instant))) THEN
+      RAISE EXCEPTION 'installment.derived_truth_stored: % carries a column of the vocabulary P4-AL-06 refuses', v_name
+        USING ERRCODE = 'P0001';
+    END IF;
+    -- No floating point anywhere in Phase 4 (P4-AL-15b): money is minor units.
+    IF EXISTS (SELECT 1 FROM pg_attribute a
+                WHERE a.attrelid = ('public.' || v_name)::regclass AND a.attnum > 0 AND NOT a.attisdropped
+                  AND a.atttypid IN ('real'::regtype, 'double precision'::regtype)) THEN
+      RAISE EXCEPTION 'installment.migration_end_state_invalid: % carries a floating-point column', v_name USING ERRCODE = 'P0001';
+    END IF;
+    -- No counter and no sequence (R-P4-03).
+    IF EXISTS (SELECT 1 FROM pg_depend d JOIN pg_class s ON s.oid = d.objid AND s.relkind = 'S'
+                WHERE d.refclassid = 'pg_class'::regclass AND d.refobjid = ('public.' || v_name)::regclass) THEN
+      RAISE EXCEPTION 'installment.migration_end_state_invalid: % is backed by a sequence', v_name USING ERRCODE = 'P0001';
+    END IF;
+  END LOOP;
+
+  -- 2. THE POLICY INVENTORY, read from pg_policy and compared to the WHOLE
+  --    declared name set. This is challenger C1.b: a set that is `c_source`
+  --    minus one name is not «nearly right», it is a different set, and the
+  --    missing name was the one that made a principal's visibility asymmetric.
+  FOREACH v_name IN ARRAY c_relations LOOP
+    SELECT array_agg(p.polname::TEXT ORDER BY p.polname) INTO v_actual
+      FROM pg_policy p WHERE p.polrelid = ('public.' || v_name)::regclass;
+    IF v_actual IS DISTINCT FROM c_source THEN
+      RAISE EXCEPTION 'installment.migration_end_state_invalid: the policies on % are %, not the accepted set %', v_name, v_actual, c_source
+        USING ERRCODE = 'P0001';
+    END IF;
+  END LOOP;
+  -- The tenant policy takes the DIRECT form of `0052` on both, not a
+  -- correlated subselect into `businesses` (`0075:921-928`'s law).
+  IF (SELECT count(*) FROM pg_policy p
+       WHERE p.polrelid = ANY (SELECT ('public.' || x)::regclass FROM unnest(c_relations) x)
+         AND p.polname = 'tenant_membership'
+         AND pg_get_expr(p.polqual, p.polrelid) LIKE '%tenant_id%'
+         AND pg_get_expr(p.polqual, p.polrelid) NOT LIKE '%businesses%') <> 2 THEN
+    RAISE EXCEPTION 'installment.migration_end_state_invalid: a tenant_membership policy is not the direct tenant_id form of 0052'
+      USING ERRCODE = 'P0001';
+  END IF;
+  -- AND THE TWO UNCONDITIONAL READS REACH THE PRINCIPALS THEY ARE FOR — the
+  -- half challenger C1.c is about. A policy of the right NAME granted to the
+  -- wrong role would satisfy the inventory above and leave the asymmetry.
+  IF (SELECT count(*) FROM pg_policy p
+       WHERE p.polrelid = ANY (SELECT ('public.' || x)::regclass FROM unnest(c_relations) x)
+         AND ((p.polname = 'inventory_internal_read'
+               -- `pg_policy.polroles` is `oid[]`, not `regrole[]`: the first
+               -- version of this block compared the two and PostgreSQL refused
+               -- it with `42883 operator does not exist: oid[] = regrole[]`.
+               -- The parser's opinion again, on the very block written to make
+               -- the parser the authority.
+               AND p.polroles = ARRAY['daftar_inventory_internal'::regrole::oid])
+           OR (p.polname = 'accounting_validator'
+               AND p.polroles = ARRAY['daftar_accounting_internal'::regrole::oid]))
+         AND p.polcmd = 'r' AND pg_get_expr(p.polqual, p.polrelid) = 'true') <> 4 THEN
+    RAISE EXCEPTION 'installment.migration_end_state_invalid: the two unconditional SELECT policies are not both present, on both relations, for their own roles'
+      USING ERRCODE = 'P0001';
+  END IF;
+
+  -- 3. PRIVILEGES. `daftar_app` and both internal principals READ; no runtime
+  --    principal and not `public` holds any DML, at either grain (P4-AL-38).
+  FOREACH v_name IN ARRAY c_relations LOOP
+    FOREACH v_role IN ARRAY ARRAY['daftar_app', 'daftar_inventory_internal', 'daftar_accounting_internal'] LOOP
+      IF NOT has_table_privilege(v_role, 'public.' || v_name, 'SELECT') THEN
+        RAISE EXCEPTION 'installment.migration_end_state_invalid: % cannot read %', v_role, v_name USING ERRCODE = 'P0001';
+      END IF;
+    END LOOP;
+    FOREACH v_role IN ARRAY c_runtime LOOP
+      FOREACH v_priv IN ARRAY c_dml LOOP
+        IF has_table_privilege(v_role, 'public.' || v_name, v_priv)
+           OR (v_priv = ANY (c_column_dml) AND has_any_column_privilege(v_role, 'public.' || v_name, v_priv)) THEN
+          RAISE EXCEPTION 'installment.authority_leak: % holds % on %, and this slice ships no writer',
+            v_role, v_priv, v_name USING ERRCODE = 'P0001';
+        END IF;
+      END LOOP;
+    END LOOP;
+  END LOOP;
+
+  -- 4. THE TWO CONSTRAINT TRIGGERS, from pg_trigger — which is also the only
+  --    thing that can be true if section 3's statements were ordered correctly
+  --    (challenger H6's consequence; the TEXT order is asserted by the suite).
+  --    DEFERRED, both on the one verifier, and `installments` ON DELETE.
+  IF (SELECT count(*) FROM pg_trigger t
+       WHERE t.tgrelid = ANY (SELECT ('public.' || x)::regclass FROM unnest(c_relations) x)
+         AND NOT t.tgisinternal
+         AND t.tgconstraint <> 0 AND t.tgdeferrable AND t.tginitdeferred
+         AND t.tgfoid = 'public.installment_schedule_verify()'::regprocedure) <> 2 THEN
+    RAISE EXCEPTION 'installment.migration_end_state_invalid: the two deferred constraint triggers on installment_schedule_verify() are not both present'
+      USING ERRCODE = 'P0001';
+  END IF;
+  -- `tgtype` bit 3 (value 8) is DELETE. The DELETE direction is the one a
+  -- prose-only law leaves open, and a schedule can be pushed below the total
+  -- by deleting a row.
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger t
+                  WHERE t.tgrelid = 'public.installments'::regclass AND NOT t.tgisinternal
+                    AND t.tgconstraint <> 0 AND (t.tgtype & 8) = 8) THEN
+    RAISE EXCEPTION 'installment.migration_end_state_invalid: the installments constraint trigger does not fire on DELETE'
+      USING ERRCODE = 'P0001';
+  END IF;
+
+  -- 5. THE TWO DEFINERS: internal NOLOGIN owner, DEFINER, pinned path. The
+  --    verifier has NO EXECUTE grantee beyond its owner; the absence guard is
+  --    granted to the two principals that execute the projection and to
+  --    nobody else (the P3-S8 definer law, T-05).
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_proc p JOIN pg_roles r ON r.oid = p.proowner
+     WHERE p.oid = 'public.installment_schedule_verify()'::regprocedure
+       AND r.rolname = 'daftar_accounting_internal' AND NOT r.rolcanlogin
+       AND p.prosecdef AND p.prorettype = 'trigger'::regtype
+       AND p.proconfig IS NOT DISTINCT FROM ARRAY['search_path=pg_catalog, public, pg_temp']
+  ) THEN
+    RAISE EXCEPTION 'installment.migration_end_state_invalid: installment_schedule_verify() is not an internal-owned definer trigger function with the pinned path'
+      USING ERRCODE = 'P0001';
+  END IF;
+  SELECT array_agg(x.grantee::regrole::TEXT ORDER BY 1) INTO v_actual
+    FROM pg_proc p, aclexplode(p.proacl) x
+   WHERE p.oid = 'public.installment_schedule_verify()'::regprocedure AND x.grantee <> p.proowner;
+  IF v_actual IS NOT NULL THEN
+    RAISE EXCEPTION 'installment.authority_leak: installment_schedule_verify() has EXECUTE grantees % beyond its owner', v_actual
+      USING ERRCODE = 'P0001';
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_proc p JOIN pg_roles r ON r.oid = p.proowner
+     WHERE p.oid = 'public.installment_plan_absence_guard(uuid,uuid[])'::regprocedure
+       AND r.rolname = 'daftar_accounting_internal' AND NOT r.rolcanlogin
+       AND p.prosecdef AND p.provolatile = 's'
+       AND p.proconfig IS NOT DISTINCT FROM ARRAY['search_path=pg_catalog, public, pg_temp']
+  ) THEN
+    RAISE EXCEPTION 'installment.migration_end_state_invalid: installment_plan_absence_guard is not a STABLE internal-owned definer with the pinned path'
+      USING ERRCODE = 'P0001';
+  END IF;
+
+  -- 6. THE READER OF RECORD IS STILL A READER. `customer_ar_aging` keeps its
+  --    exact identity and its exact return shape (section 5.6: `CREATE OR
+  --    REPLACE` cannot change a `RETURNS TABLE` at all, so this is belt and
+  --    braces against a future DROP-and-CREATE), and it stays INVOKER and
+  --    STABLE — never DEFINER, because `R-P4-07` says a reader runs as its
+  --    caller, and never IMMUTABLE, because the label is not a clock guard.
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_proc p
+     WHERE p.oid = 'public.customer_ar_aging(uuid,uuid,date,integer[])'::regprocedure
+       AND NOT p.prosecdef AND p.provolatile = 's'
+       AND pg_get_function_result(p.oid) = 'TABLE(bucket_no integer, currency_code text, txn_minor bigint, base_minor bigint, invoice_count integer)'
+  ) THEN
+    RAISE EXCEPTION 'installment.migration_end_state_invalid: customer_ar_aging is not a STABLE INVOKER with the five-column return shape'
+      USING ERRCODE = 'P0001';
+  END IF;
+  -- AND IT HOLDS NO ROUNDING OF ITS OWN: one rounding, consumed from the
+  -- canonical law and never re-implemented (R-61, R-81, owner section 21).
+  IF EXISTS (SELECT 1 FROM pg_proc p
+              WHERE p.oid = 'public.customer_ar_aging(uuid,uuid,date,integer[])'::regprocedure
+                AND (p.prosrc NOT LIKE '%supplier_ap_release(%' OR p.prosrc LIKE '%half_even%')) THEN
+    RAISE EXCEPTION 'installment.migration_end_state_invalid: customer_ar_aging does not consume the canonical release law, or holds a rounding of its own'
+      USING ERRCODE = 'P0001';
+  END IF;
+  -- AND THE NO-PLAN ARM FAILS CLOSED (challenger C1.a): the installed body
+  -- really calls the absence guard. An arm keyed on NOT EXISTS alone cannot
+  -- tell «absent» from «invisible» and served the pre-S7 number silently.
+  IF NOT EXISTS (SELECT 1 FROM pg_proc p
+                  WHERE p.oid = 'public.customer_ar_aging(uuid,uuid,date,integer[])'::regprocedure
+                    AND p.prosrc LIKE '%installment_plan_absence_guard(%') THEN
+    RAISE EXCEPTION 'installment.migration_end_state_invalid: customer_ar_aging does not guard its no-plan arm against row-security invisibility'
+      USING ERRCODE = 'P0001';
+  END IF;
+END
+$end$;

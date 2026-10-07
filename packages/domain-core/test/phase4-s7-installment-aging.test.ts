@@ -2664,3 +2664,141 @@ describe('META — the proofs are not vacuous', () => {
     expect(sketch.length).toBeGreaterThan(2_000);
   });
 });
+
+// ═════════════════════════════════════════════════════════════════════════
+describe('ROUND-5 CHALLENGE C1 / H4 / H6 — the policy set, the fail-closed arm, and the ORDER law', () => {
+  /** `0075`'s own declared policy-name sets, PARSED OUT OF `0075`, never typed here. */
+  function declaredPolicySets(): { readonly ordinary: readonly string[]; readonly source: readonly string[] } {
+    const predecessor = MIGRATIONS.find((m) => m.name.startsWith('0075_'));
+    expect(predecessor, 'NO SUBJECT: 0075 is not on disk, so there is nothing to derive from').toBeDefined();
+    const sql = predecessor?.sql ?? '';
+    const grab = (name: string): readonly string[] => {
+      const m = new RegExp(`${name}\\s+CONSTANT TEXT\\[\\] := ARRAY\\[([\\s\\S]*?)\\];`).exec(sql);
+      expect(m, `0075 no longer declares ${name}, so this law has lost its oracle`).not.toBeNull();
+      return [...(m?.[1] ?? '').matchAll(/'([^']+)'/g)].map((x) => x[1] as string).sort();
+    };
+    return { ordinary: grab('c_ordinary'), source: grab('c_source') };
+  }
+
+  it('C1.b THE POLICY-NAME SET IS `0075`\'s OWN `c_source`, DERIVED AND NOT ENUMERATED, on BOTH relations', () => {
+    // THE DEFECT THIS ARM EXISTS FOR. The first version of §2a shipped SIX
+    // policies per relation — `c_source` minus `inventory_internal_read` — a
+    // set matching NEITHER shape `0075` declares, with the omitted name taken
+    // from INSIDE the range §2a cites and immediately above the one it copied.
+    // Three readers compared the block against prose. Nothing compared it
+    // against `0075`'s own constant, which is what this does.
+    const { ordinary, source } = declaredPolicySets();
+    expect(source.length).toBe(7);
+    expect(ordinary.length).toBe(6);
+    // NON-VACUITY: the two sets really differ by the one name, or "equals
+    // c_source" would be satisfied by "equals c_ordinary" too.
+    expect(source.filter((n) => !ordinary.includes(n))).toEqual(['accounting_validator']);
+    expect(ordinary.filter((n) => !source.includes(n))).toEqual([]);
+
+    const ddl = sqlSchemaOnly(SPEC);
+    for (const relation of ['installment_plans', 'installments']) {
+      const names = [...ddl.matchAll(new RegExp(`CREATE POLICY\\s+(\\w+)\\s+ON\\s+${relation}\\b`, 'g'))]
+        .map((m) => m[1] as string)
+        .sort();
+      expect(names, `the policies on ${relation} are not 0075's declared c_source set`).toEqual([...source]);
+    }
+  });
+
+  it('C1.c the two UNCONDITIONAL reads name their own roles, so no principal is left asymmetric', () => {
+    const ddl = sqlSchemaOnly(SPEC);
+    // A policy of the right NAME granted to the wrong role satisfies the
+    // inventory above and leaves the asymmetry the inventory exists to close.
+    for (const [policy, role] of [
+      ['inventory_internal_read', 'daftar_inventory_internal'],
+      ['accounting_validator', 'daftar_accounting_internal'],
+    ] as const) {
+      const hits = [...ddl.matchAll(new RegExp(`CREATE POLICY\\s+${policy}\\s+ON\\s+(\\w+)\\s+FOR SELECT TO\\s+(\\w+)\\s+USING \\(true\\)`, 'g'))];
+      expect(hits.map((m) => m[1]).sort(), `${policy} is not on both relations in the unconditional form`).toEqual([
+        'installment_plans',
+        'installments',
+      ]);
+      for (const m of hits) expect(m[2], `${policy} names the wrong role`).toBe(role);
+    }
+  });
+
+  it('C1.a THE NO-PLAN ARM FAILS CLOSED — it is not keyed on `NOT EXISTS` alone', () => {
+    // Under row security «absent» and «invisible» are one answer. The sketch
+    // must therefore ASSERT absence through a definer guard rather than INFER
+    // it, or a caller who can see the invoice and not its plan is served the
+    // pre-S7 number silently.
+    const sketch = projectionSketch(SPEC);
+    expect(sketch).toContain('installment_plan_absence_guard(');
+    // ...and the guard is a DEFINER that raises, not a reader that returns data.
+    const code = sqlCodeOnly(SPEC);
+    expect(code).toMatch(/CREATE OR REPLACE FUNCTION installment_plan_absence_guard\(p_business_id UUID, p_invoice_ids UUID\[\]\)[\s\S]*?LANGUAGE plpgsql STABLE SECURITY DEFINER/);
+    expect(code).toContain('installment.plan_invisible');
+    // ...and the projection ITSELF stays INVOKER and STABLE: R-P4-07 makes a
+    // reader run as its caller, and making the reader a DEFINER would have
+    // been the other, worse repair.
+    expect(sketch).toMatch(/customer_ar_aging\([\s\S]*?LANGUAGE sql STABLE/);
+    expect(sketch).not.toContain('SECURITY DEFINER');
+  });
+
+  it('C1 obligation (e): a plan whose tenant is not its invoice\'s is refused, which is where the asymmetry came from', () => {
+    const code = sqlCodeOnly(SPEC);
+    expect(code).toContain('(e) the plan tenant');
+    expect(code).toContain('(e) % instalments do not carry the plan tenant');
+    // The verifier really reads the invoice's tenant, or (e) compares a value
+    // with itself.
+    expect(code).toMatch(/SELECT i\.total_txn_minor, i\.tenant_id INTO v_total, v_invoice_tenant/);
+    expect(code).toMatch(/v_plan_tenant IS DISTINCT FROM v_invoice_tenant/);
+  });
+
+  it('H6 THE ORDER LAW IS EXECUTABLE — the verifier is DEFINED ABOVE the triggers that execute it', () => {
+    // §20.1 claimed an `ORDER_NOTE` comment meant "the next editor cannot
+    // reorder them back". A comment cannot do that. `CREATE CONSTRAINT
+    // TRIGGER` resolves `EXECUTE FUNCTION` AT CREATE TIME and the file is one
+    // implicit transaction, so the reversed order applied NOTHING (42883).
+    const fn = SPEC.indexOf('CREATE OR REPLACE FUNCTION installment_schedule_verify()');
+    const trg = SPEC.indexOf('CREATE CONSTRAINT TRIGGER');
+    const own = SPEC.indexOf('ALTER FUNCTION installment_schedule_verify() OWNER TO');
+    expect(fn, 'the verifier definition is not in the specification at all').toBeGreaterThan(-1);
+    expect(trg, 'no constraint trigger is in the specification at all').toBeGreaterThan(-1);
+    expect(own, 'the authority transfer is not in the specification at all').toBeGreaterThan(-1);
+    // function, THEN triggers, THEN the authority transfer — `0075:632-634`.
+    expect(fn).toBeLessThan(trg);
+    expect(trg).toBeLessThan(own);
+    // and the note that explains why is still there, as documentation of a
+    // law that is now asserted rather than as the law itself.
+    expect(SPEC).toContain('ORDER_NOTE');
+  });
+
+  it('H4 THE END-STATE BLOCK IS PRESENT and reads the LIVE CATALOGUE, not this file', () => {
+    // Eleven predecessors ship one; `0075:838-945` is the worked example. A
+    // `DO $end$` block travels inside the migration: no gate row, no CI step,
+    // no roster entry, no runner window — it refuses at apply time.
+    expect(SPEC).toContain('DO $end$');
+    const block = SPEC.slice(SPEC.indexOf('DO $end$'));
+    expect(block).toContain('migration_end_state_invalid');
+    // It must read catalogues. A block that re-read this file's own statements
+    // would be the file agreeing with itself.
+    for (const cat of ['pg_class', 'pg_attribute', 'pg_policy', 'pg_trigger', 'pg_proc', 'has_table_privilege']) {
+      expect(block, `the end-state block never consults ${cat}`).toContain(cat);
+    }
+    // H5: the closed lists are the PREDECESSOR'S, not this file's idea of them.
+    const predecessor = MIGRATIONS.find((m) => m.name.startsWith('0075_'))?.sql ?? '';
+    for (const name of ['c_runtime', 'c_dml', 'c_column_dml']) {
+      const mine = new RegExp(`${name}\\s+CONSTANT TEXT\\[\\] := ARRAY\\[([\\s\\S]*?)\\];`).exec(block);
+      const theirs = new RegExp(`${name}\\s+CONSTANT TEXT\\[\\] := ARRAY\\[([\\s\\S]*?)\\];`).exec(predecessor);
+      expect(mine, `the end-state block does not declare ${name}`).not.toBeNull();
+      expect(theirs, `0075 no longer declares ${name}`).not.toBeNull();
+      const words = (m: RegExpExecArray | null): readonly string[] =>
+        [...(m?.[1] ?? '').matchAll(/'([^']+)'/g)].map((x) => x[1] as string).sort();
+      expect(words(mine), `${name} diverges from 0075's own declared list`).toEqual([...words(theirs)]);
+    }
+    // 8 runtime principals x 6 privileges, not the 3 x 3 the first version
+    // hand-wrote — and `TRIGGER` is in it, which is the privilege the design's
+    // own "the verifier cannot be bypassed" argument depends on.
+    const runtime = [...(/c_runtime\s+CONSTANT TEXT\[\] := ARRAY\[([\s\S]*?)\];/.exec(block)?.[1] ?? '').matchAll(/'([^']+)'/g)];
+    const dml = [...(/c_dml\s+CONSTANT TEXT\[\] := ARRAY\[([\s\S]*?)\];/.exec(block)?.[1] ?? '').matchAll(/'([^']+)'/g)];
+    expect(runtime.length).toBe(8);
+    expect(dml.length).toBe(6);
+    expect(dml.map((m) => m[1])).toContain('TRIGGER');
+    expect(runtime.map((m) => m[1])).toContain('public');
+  });
+});
