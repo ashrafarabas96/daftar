@@ -583,4 +583,46 @@ describe('P4-S4 — the acceptance commit leaves a tree that compiles (planted-d
     const report = GATE.slice(GATE.indexOf('export function newRelationReport'));
     expect(report.slice(0, report.indexOf('\n}\n'))).toContain('sliceMigrations(root)');
   });
+  it('the real gate calls candidateMigrations ONLY inside a fence or from sliceMigrations', () => {
+    // The positional law, on the file as it is: silence here is the claim that
+    // no permanent derivation will lose its subject when the slice is sealed.
+    expect(fenceDeletionProblemsIn(GATE, {}).filter((p) => p.includes('candidateMigrations()'))).toEqual([]);
+    // Non-vacuity: the call sites exist, so the law judged something.
+    const sites = [...GATE.matchAll(/\bcandidateMigrations\s*\(/g)];
+    expect(sites.length, 'candidateMigrations is never called, so the positional law judged nothing').toBeGreaterThan(1);
+  });
+
+  it('PLANTED: a permanent derivation that reads candidateMigrations is refused — the seal would empty its surface', () => {
+    // This is the defect as it actually occurred. `evidenceCoverageProblems`
+    // derived its surface from `candidateMigrations`, which names nothing once
+    // the acceptance commit freezes every candidate, so seven findings fired
+    // on the sealed tree from one empty set — and no gate run could ever have
+    // seen it, because every check runs while the slice is a candidate.
+    const planted = `${GATE}\nexport function aPermanentDerivation(root: string): string[] {\n  return candidateMigrations(root);\n}\n`;
+    const problems = fenceDeletionProblemsIn(planted, {}).join('\n');
+    expect(problems).toMatch(/candidateMigrations\(\) is called outside every candidate-tense fence and outside sliceMigrations/);
+    expect(problems).toMatch(/derives an empty set in the sealed tree/);
+    // And it points at the planted line, not at one of the legitimate ones.
+    const at = Number(/phase4-s4-gate\.ts:(\d+): candidateMigrations/.exec(problems)?.[1]);
+    expect(planted.split('\n')[at - 1]).toContain('return candidateMigrations(root);');
+  });
+
+  it('the positional law is about POSITION: the same call inside a fence is allowed, outside it is not', () => {
+    // The identical text judged both ways, so the verdict is the fence and not
+    // the call. A reader kept with the candidate tense is deleted with it and
+    // can never empty anything.
+    const inside = GATE.replace(
+      '// ───── end CANDIDATE-TENSE (P4-AL-61) ─────────────────────────────────────',
+      'export function aCandidateOnlyReader(root: string): string[] {\n  return candidateMigrations(root);\n}\n// ───── end CANDIDATE-TENSE (P4-AL-61) ─────────────────────────────────────',
+    );
+    expect(inside).not.toBe(GATE);
+    expect(fenceDeletionProblemsIn(inside, {}).filter((p) => p.includes('candidateMigrations()'))).toEqual([]);
+    const outside = `${GATE}\nexport function anAcceptedTenseReader(root: string): string[] {\n  return candidateMigrations(root);\n}\n`;
+    expect(fenceDeletionProblemsIn(outside, {}).filter((p) => p.includes('candidateMigrations()'))).toHaveLength(1);
+  });
+
+  it('the measured-suite surface reads sliceMigrations, which is what made the sealed gate pass', () => {
+    const body = GATE.slice(GATE.indexOf('export function measuredCandidateSuites'));
+    expect(body.slice(0, body.indexOf('\n}\n'))).toContain('sliceMigrations(root)');
+  });
 });

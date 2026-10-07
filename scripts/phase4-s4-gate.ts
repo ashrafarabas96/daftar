@@ -1588,7 +1588,15 @@ function measuredDirs(): string[] {
  * in a measured directory whose text names a candidate migration.
  */
 export function measuredCandidateSuites(root: string): string[] {
-  const numbers = candidateMigrations(root)
+  // `sliceMigrations`, not `candidateMigrations`: the acceptance commit moves
+  // every candidate into the manifest, after which `candidateMigrations` names
+  // NOTHING and this whole cross-check derived an empty surface and refused
+  // the tree as vacuous — seven findings from one empty set, discovered by
+  // rehearsing the seal rather than by any gate run, because every check runs
+  // in the candidate tense. The slice's measured suites are a permanent
+  // question about this slice, so the subject is the slice's migrations in
+  // whichever tense it is in.
+  const numbers = sliceMigrations(root)
     .map((f) => /^(\d+)/.exec(f)?.[1])
     .filter((n): n is string => n !== undefined);
   if (numbers.length === 0) return [];
@@ -1675,8 +1683,8 @@ export function evidenceCoverageProblems(root: string): string[] {
     problems.push('S4_EVIDENCE_STEPS is empty, so `required-ci`, `evidence-script-bodies` and `evidence-integrity` all have no subject');
   if (derived.length === 0)
     problems.push(
-      `no runnable test file in ${measuredDirs().join(', ') || 'any measured directory'} names a candidate migration, so this cross-check derived an empty set and would be vacuous — the candidate surface is ${
-        candidateMigrations(root).join(', ') || 'empty'
+      `no runnable test file in ${measuredDirs().join(', ') || 'any measured directory'} names a migration of this slice, so this cross-check derived an empty set and would be vacuous — the slice surface is ${
+        sliceMigrations(root).join(', ') || 'empty'
       }`,
     );
   const reach = requiredJobReach(root);
@@ -1684,7 +1692,7 @@ export function evidenceCoverageProblems(root: string): string[] {
   for (const file of derived) {
     if (!named.has(file))
       problems.push(
-        `${file} is a measured suite of this slice — it is a runnable test in ${file.slice(0, file.lastIndexOf('/'))} and names a candidate migration — and S4_EVIDENCE_STEPS does not name it, so \`required-ci\`, \`evidence-script-bodies\` and \`evidence-integrity\` all judge a table that cannot see it`,
+        `${file} is a measured suite of this slice — it is a runnable test in ${file.slice(0, file.lastIndexOf('/'))} and names a migration of this slice — and S4_EVIDENCE_STEPS does not name it, so \`required-ci\`, \`evidence-script-bodies\` and \`evidence-integrity\` all judge a table that cannot see it`,
       );
     if (!reached(file))
       problems.push(
@@ -1694,7 +1702,7 @@ export function evidenceCoverageProblems(root: string): string[] {
   for (const ev of S4_EVIDENCE_STEPS)
     if (!derived.includes(ev.suite))
       problems.push(
-        `S4_EVIDENCE_STEPS names ${ev.suite} for ${ev.label} and the derivation does not find it among this slice's measured suites — either it is gone from the tree or it names no candidate migration, so the pins on that row guard nothing`,
+        `S4_EVIDENCE_STEPS names ${ev.suite} for ${ev.label} and the derivation does not find it among this slice's measured suites — either it is gone from the tree or it names no migration of this slice, so the pins on that row guard nothing`,
       );
   // ── AND SET EQUALITY WITH THE WORKFLOW ITSELF ───────────────────────────
   //
@@ -1730,7 +1738,7 @@ export function evidenceCoverageReport(root: string): string {
   const reach = requiredJobReach(root);
   const reached = (f: string): boolean => reach.paths.includes(f) || reach.dirs.some((d) => f === d || f.startsWith(`${d}/`));
   const attributed = workflowNamedSuites(root).filter((f) => derived.includes(f));
-  return `${derived.length} derived from the tree (${measuredDirs().join(', ')} ∩ the candidate surface), ${attributed.length} named by the required \`${REQUIRED_JOB}\` job and attributed to this slice, ${S4_EVIDENCE_STEPS.length} table row(s): ${
+  return `${derived.length} derived from the tree (${measuredDirs().join(', ')} ∩ the slice surface), ${attributed.length} named by the required \`${REQUIRED_JOB}\` job and attributed to this slice, ${S4_EVIDENCE_STEPS.length} table row(s): ${
     derived
       .map(
         (f) =>
@@ -2396,6 +2404,41 @@ export function fenceDeletionProblemsIn(text: string, accepted: Readonly<Record<
     else if (!new RegExp(String.raw`export (?:function|const) ${name}\b`).test(text))
       out.push(`${SELF}: ${name} is not declared at all, so this law cannot tell which side of the fence it is on`);
   }
+  // ── AND THE SUBJECT A PERMANENT CHECK WILL STILL HAVE ──────────────────
+  //
+  // A tree that COMPILES after the fence deletion is not a tree whose checks
+  // still have subjects. `candidateMigrations` returns the files numbered past
+  // the last ACCEPTED one, so the acceptance commit — which moves every
+  // candidate into the manifest — makes it name NOTHING. Any permanent
+  // derivation reading it therefore derives an empty set the instant the slice
+  // is sealed, and a check whose surface is empty either refuses the tree as
+  // vacuous or passes over nothing. Both are the acceptance commit breaking a
+  // law that was green for the whole slice.
+  //
+  // This was not a hypothesis: `evidence-coverage` did exactly that, and
+  // rehearsing the seal was the only thing that found it, because every check
+  // in this gate runs while the slice is still a candidate. So the law is
+  // POSITIONAL — `candidateMigrations` may be read only from inside a fenced
+  // region, where the accepted tense will not keep it, or by `sliceMigrations`,
+  // which is the one place the tense is allowed to pick a subject.
+  const sliceChooser = /export function sliceMigrations[\s\S]*?\n\}/.exec(remainder);
+  const inChooser = (at: number): boolean => sliceChooser !== null && at >= sliceChooser.index && at < sliceChooser.index + sliceChooser[0].length;
+  for (const m of remainder.matchAll(/\bcandidateMigrations\s*\(/g)) {
+    if (inChooser(m.index)) continue;
+    // Its own declaration is not a reader of itself.
+    if (/export function candidateMigrations\b/.test(remainder.slice(Math.max(0, m.index - 40), m.index + 21))) continue;
+    const line = remainder.slice(0, m.index).split('\n').length;
+    out.push(
+      `${SELF}:${line}: candidateMigrations() is called outside every candidate-tense fence and outside sliceMigrations — the acceptance commit freezes every candidate, so this call derives an empty set in the sealed tree and whatever it feeds is vacuous or red. Read sliceMigrations() instead, or move this call inside a fence`,
+    );
+  }
+  // NON-VACUITY of this arm: if the name is never called at all, its silence
+  // says nothing, and if `sliceMigrations` has gone the skip above is a hole.
+  if ([...remainder.matchAll(/\bcandidateMigrations\s*\(/g)].length === 0)
+    out.push(`${SELF}: candidateMigrations is never called outside the fences, not even by sliceMigrations, so the positional law judged nothing`);
+  if (sliceChooser === null)
+    out.push(`${SELF}: sliceMigrations is not declared outside the fences, so the one place allowed to read candidateMigrations does not exist`);
+
   // NON-VACUITY: a fenced region that declares nothing would make the
   // reference sweep above pass over an empty set of names.
   if (declared.size === 0)
