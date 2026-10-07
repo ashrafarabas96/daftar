@@ -2,7 +2,10 @@
 
 - **Raised by:** `p4s4c/exit-criteria` (P4-S4 exit-criteria stream)
 - **Target file:** `docs/PHASE_4_ARCHITECTURE_LOCK.md`, `P4-AL-41`, the numbered list at lines 869–885
-- **Status:** OPEN — documentary correction, owner's edit
+- **Status:** APPLIED on `p4s4c/al41-lock-order` — superseded in scope: `P4-AL-41` was not
+  swapped but **replaced** by one ranked sequence covering row locks and advisory keys
+  together, because `sale_commit` interleaves the two kinds and a head block of advisory
+  ranks would have declared an order it does not follow. See the CORRECTION below.
 
 ---
 
@@ -24,12 +27,28 @@ Two further corrections belong with it:
 
 - **`customer_apply_credit` takes the consumed source BEFORE `customers`.** After the swap
   its order reads `invoices` (2) → `customer_credits` (4) → `customers` (3), which still
-  inverts 3/4. Either the list must rank the consumed source above `customers`, or
-  `P4-AL-41` must state that `customers` is acquired last among the three — the latter is
-  what BOTH settlement routines actually do, so the honest list is
+  inverts 3/4. So the list must rank the consumed source above `customers`:
   `invoices` → consumed source → `customers`.
-- **`sale_commit` row-locks neither `businesses` nor `customers`,** so the list should say
-  which of its entries are row locks. `0078:649-667` is explicit that both are READ
+
+  **CORRECTION (re-measured, `p4s4c/al41-lock-order`).** This bullet originally said that
+  `invoices` → consumed source → `customers` is "what BOTH settlement routines actually
+  do". **It is not, and the error is in both halves of the claim.** Measured over the
+  live definitions, `customer_collect_payment` takes
+  `@daftar.payment_id` → `invoices FOR UPDATE` → `customers FOR SHARE` →
+  `payment_methods FOR SHARE`: it row-locks **no consumed source at all** — the `payments`
+  row is serialised by the exclusive advisory key, never by a row lock — and the only
+  relation it takes **after** `customers` is `payment_methods`, which the declared order
+  ranked nowhere. The sentence was therefore true of `customer_apply_credit` only.
+
+  The resolution is not to re-rank anything twice: **`payment_methods` is a lookup, not a
+  consumed source.** It has no rank at all in the pre-patch list, and its correct rank is
+  **AFTER `customers`** — which is where the adopted `P4-AL-41` list puts it (rank 17), with
+  `customer_credits` (rank 15) above `customers` (rank 16) for `customer_apply_credit`'s
+  sake. With `payment_methods` ranked there, **both** routines are monotone over the new
+  order, which is the whole requirement. `payments` is recorded under P4-AL-41's
+  read-unlocked list and carries no rank, because nothing acquires it.
+- **`sale_commit` row-locks neither `businesses` nor `customers`,** so the list must say
+  which of its entries are row locks and which are advisory keys. `0078:649-667` is explicit that both are READ
   UNLOCKED on purpose — a locking clause requires `UPDATE` on the relation, and granting
   the inventory writer `UPDATE` on `businesses` is a larger authority than the lock is
   worth — and the customer takes a **shared advisory** lock on `daftar.customer_id`

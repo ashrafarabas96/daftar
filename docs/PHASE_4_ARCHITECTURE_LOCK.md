@@ -869,22 +869,70 @@ in the service layer.
 **P4-AL-41 — One declared lock order for the whole of Phase 4, statically checked, with a permanent
 deadlock proof.**
 
-1. `businesses` (the scope row, shared)
-2. `customers` — the customer whose balance is affected
-3. `invoices` — ascending by `id` where several are touched
-4. `payments` / `credit_notes` / `customer_credits` — the consumed source
-5. `stock_levels` — ascending by `(warehouse_id, variant_id)`
-6. `installment_plans`
-7. `invoice_sequences` — **last of the domain locks** (P4-AL-32)
+ONE sequence, covering **row locks and advisory keys together**, in the order the shipped tree takes them.
+Every rank below was measured from the migrations, not remembered. `kind` is part of each rank: an advisory
+lock conflicts only with other advisory locks on the same key and a row lock only with other row locks on
+the same row, so the two are different lock **spaces** and a list that named one as the other would have
+merged them. Sharing one sequence says nothing about the two kinds conflicting with each other — it says
+only that every transaction moves through this list in one direction, which is the whole of what deadlock
+freedom needs.
+
+| # | resource | kind | notes |
+|---|---|---|---|
+| 1 | `daftar.pos_till_session_actor` | advisory, exclusive | `pos_till_session_open`, first of three keys it takes consecutively |
+| 2 | `daftar.pos_till_terminal` | advisory, exclusive | the same routine, second |
+| 3 | `daftar.pos_till_session_id` | advisory, exclusive | the same routine, third |
+| 4 | `pos_till_sessions` | row | the till row, after the three till keys |
+| 5 | `pos_cart_lines` | row | `pos_cart_set_line` takes the till row first and the line second |
+| 6 | `daftar.sale_id` | advisory, exclusive | `sale_commit`'s per-document key, before everything else it takes |
+| 7 | `sales` | row | `sale_commit`, after its own document key |
+| 8 | `daftar.customer_id` | advisory, **shared** | `sale_commit`, **after** `sales` — the interleave that forbids an advisory block at the head of this list |
+| 9 | `daftar.stock_target` | advisory, shared | taken inside `sale_lock_commit_targets`, which `sale_commit` calls |
+| 10 | `products` | row | the same routine, `FOR SHARE` per product, ascending by `id` |
+| 11 | `stock_levels` | row | `FOR UPDATE` ascending by `(warehouse_id, variant_id)`, inside the one frozen stock writer `sale_commit` calls — outside the migration range the static check reads, and marked as such in it |
+| 12 | `daftar.payment_id` | advisory, exclusive | `customer_collect_payment`'s per-document key. It is also what serialises the `payments` row, which is never row-locked |
+| 13 | `daftar.customer_credit_application_id` | advisory, exclusive | `customer_apply_credit`'s per-document key. Never held together with 12, so 12/13 is a free choice |
+| 14 | `invoices` | row | **the cap lock**, `FOR UPDATE`, ascending by `id` — FIRST among the row locks of both settlement routines |
+| 15 | `customer_credits` | row | `customer_apply_credit`'s consumed source, after `invoices` and before `customers` |
+| 16 | `customers` | row | `FOR SHARE`, and **last** of the row locks the two settlement routines share |
+| 17 | `payment_methods` | row | `customer_collect_payment` takes it `FOR SHARE` **after** `customers`. A lookup, not a consumed source — which is why it ranks here and not with 15 |
+| 18 | `accounting_opening_balances` | row | `FOR NO KEY UPDATE` in the reversal domain-source guard; no other Phase 4 routine takes it, so its rank is a free choice |
+| 19 | `invoice_sequences` | row | **last of the domain locks** (P4-AL-32) |
+
+Where two resources are never held together, their relative rank here is a free choice and is marked as
+one: deadlock freedom needs **one** consistent order, not a particular one. Where they are held together,
+this list follows the routine.
+
+**Relations a Phase 4 command names and deliberately does NOT row-lock**, which therefore carry no rank,
+because a rank is a position in an acquisition order and an unlocked read makes no acquisition to position:
+
+- `businesses` and `customers`, in `sale_commit`. Every PostgreSQL locking clause — `FOR UPDATE`,
+  `FOR NO KEY UPDATE`, `FOR SHARE` and `FOR KEY SHARE` alike — requires `UPDATE` on the relation, so
+  `SELECT … FOR SHARE` on the tenancy root would mean granting the inventory writer the right to **write**
+  `businesses`. That is a larger authority than the lock is worth and no law in the slice rests on it.
+  `sale_commit` takes the **shared advisory** key 8 on the customer instead, which `PUBLIC` may execute and
+  which therefore adds no privilege at all. Rank 16 is the settlement routines' `customers` row lock;
+  `sale_commit` does not take it.
+- `payments`, in `customer_collect_payment`: serialised by the exclusive advisory key 12, not by a row lock.
+
+**How a later slice extends this list.** A slice that ships a routine taking a resource this list does not
+rank adds that rank **in the same change as the migration that takes it**, at the position its own routine
+takes it, with its kind. No slice ranks a resource no migration acquires: such a rank is a permanent module
+bounding the future (P4-AL-60, `[[daftar-a-closure-rule-is-not-an-invariant]]`) and it is unfalsifiable,
+because nothing can be shown to obey it. The static check enforces that rule in **both** directions — it
+refuses an acquisition no rank governs, and it refuses a rank it declares exercised that the sweep does not
+see taken.
 
 `accounting_post_entry` takes its own locks, in its own fixed internal order, at each call. It is therefore
 **not** a position in this list: a sale calls it twice (the COGS entry, then the revenue entry), so a linear
-order that named `journal_entries` once could not describe the sale at all. The order above is the order of
-the **domain** rows, and the routine's internal order is safe because it is the same at every call. The
-static acquisition-order check reads the domain acquisitions and compares them to this list; the routine's
-own order is asserted separately, once, against its body.
+order that named `journal_entries` once could not describe the sale at all. Its internal order is safe
+because it is the same at every call, and it is asserted separately, once, against its body.
 
-A static check reads each routine's acquisition sequence and compares it against this list;
+A static check reads each routine's acquisition sequence — advisory keys and row locks alike, with the
+acquisitions a routine reaches through a call to another in-range routine spliced in at the call site — and
+compares it against this list: `scripts/guards/phase4-lock-order.ts`, the `lock-order` arm of
+`gate:phase4:s4`, over a sweep of the whole Phase 4 migration range discovered from disk, with
+`tests/guards/p4s4-lock-order-law.test.ts` as its red proofs. Separately,
 `gate:phase4:s8` runs every pair of lock-taking commands in both orders N times and requires zero
 deadlocks. `[[daftar-lock-order-not-retry]]`: two connections used in sequence are not contention, so a
 deadlock is a lock-order defect and is fixed by changing the order — never by a retry loop, never by
