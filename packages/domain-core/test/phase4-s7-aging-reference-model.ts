@@ -140,6 +140,8 @@ export function epochDay(civil: string): number {
  * requires each day in 1..MAX). A NULL date lands in bucket 1, which is the
  * shipped behaviour (`due_date IS NOT NULL AND ...`).
  */
+export type BucketFn = (asOf: string, date: string | null, thresholds: readonly number[]) => number;
+
 export function bucketOf(asOf: string, date: string | null, thresholds: readonly number[]): number {
   if (date === null) return 1;
   const overdueDays = epochDay(asOf) - epochDay(date);
@@ -460,6 +462,17 @@ export function projectInvoice(
   thresholds: readonly number[],
   policy: ProjectionPolicy = CORRECT_POLICY,
   release: ReleaseFn = CANONICAL_RELEASE,
+  // THE BANDING IS INJECTABLE, and that is a repair, not a convenience. Proof
+  // 2's round-3 form asserted `bucketNo === bucketOf(...)` while the
+  // projection produced `bucketNo` BY CALLING `bucketOf`, so over the banding
+  // the law stated `f(x) === f(x)` and its refusal was unreachable — the
+  // estate's first named failure shape, found by the proof engineer in the
+  // one law that had already been repaired once for being true by
+  // construction. The law now compares against an INDEPENDENT oracle derived
+  // from `agingBucketLabels` by interval containment, and the five planted
+  // mutants of the banding are injected HERE so they run through the real
+  // projection rather than through a lookalike.
+  bucket: BucketFn = bucketOf,
 ): readonly AgingContribution[] {
   const planApplies = plan !== undefined && plan.status === 'active';
   const planlessReached = policy.planlessArm === 'every_invoice' || !planApplies;
@@ -472,7 +485,7 @@ export function projectInvoice(
       out.push({
         invoiceId: row.invoiceId,
         currencyCode: row.currencyCode,
-        bucketNo: bucketOf(asOf, row.dueDate, thresholds),
+        bucketNo: bucket(asOf, row.dueDate, thresholds),
         txnMinor: O,
         baseMinor: row.outstandingBaseMinor,
         origin: 'whole_invoice',
@@ -518,7 +531,7 @@ export function projectInvoice(
       out.push({
         invoiceId: row.invoiceId,
         currencyCode: row.currencyCode,
-        bucketNo: bucketOf(asOf, row.dueDate, thresholds),
+        bucketNo: bucket(asOf, row.dueDate, thresholds),
         txnMinor: O,
         baseMinor: row.outstandingBaseMinor,
         origin: 'residual',
@@ -585,7 +598,7 @@ export function projectInvoice(
     out.push({
       invoiceId: row.invoiceId,
       currencyCode: row.currencyCode,
-      bucketNo: bucketOf(asOf, policy.bucketBy === 'schedule_date' ? r.dueDate : row.dueDate, thresholds),
+      bucketNo: bucket(asOf, policy.bucketBy === 'schedule_date' ? r.dueDate : row.dueDate, thresholds),
       txnMinor: a.txn,
       baseMinor: a.base,
       origin: r.origin,
@@ -618,7 +631,7 @@ export function projectInvoice(
       out.push({
         invoiceId: row.invoiceId,
         currencyCode: row.currencyCode,
-        bucketNo: bucketOf(asOf, row.dueDate, thresholds),
+        bucketNo: bucket(asOf, row.dueDate, thresholds),
         txnMinor: residualTxn,
         baseMinor: release(totalBase, totalTxn, declaredEnd, residualTxn),
         origin: 'residual',
@@ -705,8 +718,10 @@ export function projectCustomerAging(
   asOf: string,
   thresholds: readonly number[],
   policy: ProjectionPolicy = CORRECT_POLICY,
+  release: ReleaseFn = CANONICAL_RELEASE,
+  bucket: BucketFn = bucketOf,
 ): readonly AgingBucket[] {
-  return aggregate(contributionsFor(rows, plans, asOf, thresholds, policy));
+  return aggregate(contributionsFor(rows, plans, asOf, thresholds, policy, release, bucket));
 }
 
 /** Every contribution, unaggregated — what the proofs assert over. */
@@ -716,6 +731,8 @@ export function contributionsFor(
   asOf: string,
   thresholds: readonly number[],
   policy: ProjectionPolicy = CORRECT_POLICY,
+  release: ReleaseFn = CANONICAL_RELEASE,
+  bucket: BucketFn = bucketOf,
 ): readonly AgingContribution[] {
   const byInvoice = new Map<string, InstallmentPlan>();
   for (const p of plans) {
@@ -728,7 +745,7 @@ export function contributionsFor(
     }
     byInvoice.set(p.invoiceId, p);
   }
-  return rows.flatMap((r) => projectInvoice(r, byInvoice.get(r.invoiceId), asOf, thresholds, policy));
+  return rows.flatMap((r) => projectInvoice(r, byInvoice.get(r.invoiceId), asOf, thresholds, policy, release, bucket));
 }
 
 /** Group contributions into buckets, counting distinct invoices. */

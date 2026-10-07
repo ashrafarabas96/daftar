@@ -113,8 +113,10 @@ CREATE TABLE installment_plans (
 -- STORED COUNT OF ROWS IN ANOTHER RELATION: nothing keeps it right, nothing
 -- reads it, and the deferred verifier below asserts schedule completeness from
 -- the rows themselves. It is deleted rather than blessed (challenger M-10). A
--- ceiling on the schedule length, if the owner wants one, belongs in the
--- verifier where it can be checked against the rows.
+-- ceiling on the schedule length belongs in the verifier where it can be
+-- checked against the rows, and section 3(e) now DECLARES it there, at 60.
+-- Until round 4 it was undeclared, which is how a convention becomes a
+-- belief.
 
 -- AT MOST ONE ACTIVE PLAN PER INVOICE. Two active plans would make the
 -- projection read one invoice's authoritative outstanding twice and report it
@@ -187,8 +189,59 @@ ALTER TABLE installments FORCE ROW LEVEL SECURITY;
 --   (c) `seq_no` CONTIGUOUS from 1, which crosses rows and so cannot be a
 --       column `CHECK`.
 --
--- The projection does NOT depend on any of the three: it totals the
--- authoritative outstanding whatever the data says (proofs 1 and 4).
+--   (d) WHY (a) IS LOAD-BEARING AND NOT TIDINESS — THE TELESCOPING ARGUMENT.
+--
+--       The projection totals the authoritative outstanding whatever the data
+--       says (proofs 1 and 4), so for a long time this verifier looked like
+--       hygiene. IT IS NOT. The OVERDUE reading is what depends on it.
+--
+--       Under oldest-scheduled-first with the levels of section 6, the amount
+--       the projection reports as overdue at `p_as_of` is the sum of the
+--       level steps across the rows already due. Write `D` for the DECLARED
+--       amount that has fallen due — `down + Σ a_i` over the rows dated on or
+--       before `p_as_of` — and `P` for the authoritative paid figure. Because
+--       the levels are `L(x) = min(max(x, P), T)` and they telescope, the
+--       steps over the due prefix sum to
+--
+--           L(D) − L(0) = min(max(D, P), T) − P
+--
+--       and WHEN (a) HOLDS, so that the declared schedule sums to `T`, that
+--       is exactly `max(0, D − P)`: THE DECLARED AMOUNT THAT HAS FALLEN DUE
+--       AND IS NOT YET PAID. That identity is the whole meaning of the
+--       overdue column, and it is an identity only while `Σ = T`.
+--
+--       Break (a) upward and the identity breaks with it: `D` may exceed `T`,
+--       the clamp absorbs the excess, and the reported overdue figure is no
+--       longer the unpaid due portion of anything. So the aging is exact
+--       BECAUSE the invariant holds, and the invariant is owed in BOTH
+--       directions for that reason — not for symmetry's sake. The 265-day
+--       counterexample of the design document §2.0 is this failure made
+--       concrete: schedule `900 000 @ 2026-01-15` plus `900 000 @
+--       2027-01-15` against a total of `900 000`. The EXACT invariant refuses
+--       it (`above, +900 000`); a `Σ <= total` variant ACCEPTS it. That is
+--       why the comparison above is `<>` and not `>`.
+--
+--   (e) THE SCHEDULE LENGTH CEILING IS DECLARED HERE, AT 60, AND IT WAS
+--       UNDECLARED UNTIL ROUND 4.
+--
+--       `installment_count INTEGER NOT NULL CHECK (BETWEEN 1 AND 60)` was
+--       deleted as a stored count of another relation's rows (M-10),
+--       correctly — and the ceiling went with it, leaving 60 as a figure the
+--       prep document named and nothing enforced. The proof engineer
+--       exercised 60 and FLAGGED IT AS UNDECLARED rather than treating it as
+--       a contract, which was the right call: an undeclared ceiling exercised
+--       as though it were one is how a convention becomes a belief.
+--
+--       SO IT IS DECLARED. Sixty instalments, five years monthly, checked
+--       against the ROWS rather than stored beside them, in one constant in
+--       one routine. It is a policy and not a derivation: raising it is a
+--       one-constant change. The alternative — stating that there is no
+--       ceiling — is refused here because an unbounded schedule is an
+--       unbounded read on the `P4-H` budget path and the index that serves it.
+--
+-- The projection does NOT depend on (a), (b), (c) or (d) FOR ITS TOTALS: it
+-- totals the authoritative outstanding whatever the data says (proofs 1 and
+-- 4). It depends on (a) for its OVERDUE SPLIT, per (d) above.
 --
 -- PR-5, RESOLVED BY DELETION. Round 2 also carried a pure TypeScript
 -- `scheduleCoherenceFindings` that signalled the same violation and that
@@ -207,11 +260,120 @@ CREATE CONSTRAINT TRIGGER installments_schedule_complete
   DEFERRABLE INITIALLY DEFERRED
   FOR EACH ROW EXECUTE FUNCTION installment_schedule_verify();
 
--- `installment_schedule_verify()` is owned by `daftar_accounting_internal` on
--- the `invoices_walkin_no_ar` precedent (`0075`), SECURITY DEFINER with a
--- pinned `search_path`, and raises `installment.schedule_incomplete` naming
--- which of (a), (b), (c) failed. Its body is transcribed at promotion; it
--- performs no allocation and reads no aging.
+-- ROUND 4: THE BODY IS WRITTEN HERE, BECAUSE «TRANSCRIBED AT PROMOTION» IS
+-- NOT A BOUND.
+--
+-- The previous text said the body would be transcribed at promotion. The S7
+-- proof engineer measured the consequence: NO migration in the tree contains
+-- `installment_schedule_verify`, so the invariant existed in PROSE ONLY and
+-- nothing executable said no in either direction. That is this estate's
+-- recorded failure shape — a name that exists and no evidence behind it — and
+-- it was worse here than usual, because the AGING'S OWN CORRECTNESS IS
+-- CONDITIONAL ON THIS EXACT INVARIANT (section 3(d) below).
+--
+-- Owner, standing and search_path follow the `invoices_walkin_no_ar`
+-- precedent (`0075`). IT READS NO CLOCK: every comparison below is against a
+-- supplied or stored civil DATE or a stored integer, and the routine never
+-- names a time function — section 6's clock law reads this text too.
+
+CREATE OR REPLACE FUNCTION installment_schedule_verify() RETURNS TRIGGER
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $fn$
+DECLARE
+  v_business   UUID;
+  v_plan       UUID;
+  v_invoice    UUID;
+  v_status     TEXT;
+  v_down       BIGINT;
+  v_total      BIGINT;
+  v_sched      BIGINT;
+  v_rows       INTEGER;
+  v_max_seq    INTEGER;
+  v_distinct   INTEGER;
+BEGIN
+  -- WHICH PLAN THIS ROW IMPLICATES. Both relations are judged by this one
+  -- routine, so the plan key is taken from whichever relation fired, and from
+  -- OLD on a DELETE because NEW is null there — the DELETE direction is the
+  -- one a prose-only law would have left open.
+  IF TG_TABLE_NAME = 'installment_plans' THEN
+    v_business := coalesce(NEW.business_id, OLD.business_id);
+    v_plan     := coalesce(NEW.id, OLD.id);
+  ELSE
+    v_business := coalesce(NEW.business_id, OLD.business_id);
+    v_plan     := coalesce(NEW.plan_id, OLD.plan_id);
+  END IF;
+
+  SELECT p.status, p.down_payment_minor, p.invoice_id
+    INTO v_status, v_down, v_invoice
+    FROM public.installment_plans p
+   WHERE p.business_id = v_business AND p.id = v_plan;
+
+  -- A plan deleted inside this transaction implicates nothing: there is no
+  -- schedule left to be incomplete. Not a silent pass — an empty subject.
+  IF NOT FOUND THEN RETURN NULL; END IF;
+
+  -- ONLY AN ACTIVE PLAN IS BOUND. A completed or cancelled plan is history and
+  -- the projection does not read it (`active_plan` filters on status), so
+  -- binding it would refuse a legitimate cancellation.
+  IF v_status <> 'active' THEN RETURN NULL; END IF;
+
+  SELECT i.total_txn_minor INTO v_total
+    FROM public.invoices i
+   WHERE i.business_id = v_business AND i.id = v_invoice;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'installment.schedule_incomplete: (a) the plan names no invoice of this business'
+      USING ERRCODE = 'P0001';
+  END IF;
+
+  SELECT coalesce(pg_catalog.sum(n.amount_txn_minor), 0), pg_catalog.count(*),
+         coalesce(pg_catalog.max(n.seq_no), 0), pg_catalog.count(DISTINCT n.seq_no)
+    INTO v_sched, v_rows, v_max_seq, v_distinct
+    FROM public.installments n
+   WHERE n.business_id = v_business AND n.plan_id = v_plan;
+
+  -- (a) THE EXACT SUM LAW, IN BOTH DIRECTIONS AT ONCE — `R-SAL-06`.
+  --     `<>` and not `>`: a schedule summing BELOW the total is refused and a
+  --     schedule summing ABOVE it is refused, by the same comparison, so
+  --     neither direction can be lost by someone relaxing one inequality. A
+  --     `<=` variant would accept the 265-day counterexample of section 3(d).
+  IF v_down + v_sched <> v_total THEN
+    RAISE EXCEPTION 'installment.schedule_incomplete: (a) the schedule sums to % and the invoice total is %',
+      v_down + v_sched, v_total USING ERRCODE = 'P0001';
+  END IF;
+
+  -- (b) AT LEAST ONE INSTALMENT ROW. Without it an active plan with zero rows
+  --     is reachable, and the reference model and the projection took OPPOSITE
+  --     arms on it (challenger M-9). The model no longer consults the row
+  --     count, so the two agree either way; this makes the state unreachable
+  --     as well, closing the disagreement from both ends.
+  IF v_rows < 1 THEN
+    RAISE EXCEPTION 'installment.schedule_incomplete: (b) an active plan has no instalments'
+      USING ERRCODE = 'P0001';
+  END IF;
+
+  -- (c) `seq_no` CONTIGUOUS FROM 1. It crosses rows, so it cannot be a column
+  --     CHECK. `installments_seq_uq` already makes `seq_no` unique in the
+  --     plan, so distinct = count; the maximum equalling the count is then
+  --     exactly contiguity from 1, given the column's own `>= 1` CHECK.
+  IF v_max_seq <> v_rows OR v_distinct <> v_rows THEN
+    RAISE EXCEPTION 'installment.schedule_incomplete: (c) seq_no is not contiguous from 1 (% rows, max %)',
+      v_rows, v_max_seq USING ERRCODE = 'P0001';
+  END IF;
+
+  -- (d) THE SCHEDULE LENGTH CEILING. See section 3(e): this is a DECLARED
+  --     policy with one constant, not a convention anybody inferred.
+  IF v_rows > 60 THEN
+    RAISE EXCEPTION 'installment.schedule_incomplete: (d) a schedule of % instalments exceeds the declared ceiling of 60',
+      v_rows USING ERRCODE = 'P0001';
+  END IF;
+
+  RETURN NULL;
+END;
+$fn$;
+
+ALTER FUNCTION installment_schedule_verify() OWNER TO daftar_accounting_internal;
+REVOKE ALL ON FUNCTION installment_schedule_verify() FROM PUBLIC;
+COMMENT ON FUNCTION installment_schedule_verify() IS
+  'P4-S7 (P4-AL-13, R-SAL-06). At COMMIT, for every ACTIVE installment plan touched: down_payment_minor plus the sum of its installments equals the invoice total EXACTLY — one <> comparison, so below and above are refused together and neither direction can be lost by relaxing one inequality; at least one installment row; seq_no contiguous from 1; and at most the declared ceiling of 60 installments. Otherwise installment.schedule_incomplete, naming which of (a) to (d) failed. It fires on DELETE as well as INSERT and UPDATE, because a schedule can be pushed below the total by deleting a row. It performs NO allocation, reads NO aging, stores nothing, and reads no clock. DEFERRABLE INITIALLY DEFERRED, so a long schedule may be written row by row inside one transaction and is judged once. Internal-owned DEFINER, pinned search_path, no grant; reads only.';
 
 -- ── 4. WHAT THIS SPECIFICATION DELIBERATELY DOES NOT CREATE ──────────────
 --

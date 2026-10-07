@@ -94,6 +94,54 @@ const MIGRATIONS_DIR = join(REPO, 'infrastructure', 'database', 'migrations');
 const SHIPPED_AGING_PATH = join(MIGRATIONS_DIR, '0084_phase4_ar_fixed_cost_and_open_invoice_page.sql');
 
 const SPEC = readFileSync(SPEC_PATH, 'utf8');
+/**
+ * THE ADOPTED ORACLE AND READER — the S7 proof engineer's module, consumed
+ * rather than re-implemented.
+ *
+ * The coordinator's instruction was «adopt its reader and its oracle rather
+ * than patching yours — it has measured recall over 17 forms and precision
+ * over 11 decoys, and yours has four shapes that all spell `public.`». So:
+ *
+ *   * `bucketIndexByBand` replaces this file's use of `bucketOf` as proof 2's
+ *     EXPECTED value. The old form asserted `x.bucketNo === bucketOf(...)`
+ *     while the projection produced `bucketNo` BY CALLING `bucketOf` — over
+ *     the banding the law said `f(x) === f(x)` and its refusal was
+ *     unreachable. The band oracle is derived from `agingBucketLabels`, which
+ *     is PRODUCT code, by interval containment: a different algorithmic path
+ *     to the same answer.
+ *   * `relationReferences` / `relationsTouched` replace `relationsRead`'s
+ *     `public.`-qualified-only scan, which missed five legitimate SQL forms
+ *     (unqualified, unqualified-unaliased, quoted identifiers, a space around
+ *     the dot, and CTE wrapping) — and this file's own mutation matrix wrote
+ *     `public.` in all four of its shapes, so the gap was UNTESTED rather
+ *     than tested and tolerated.
+ *   * `canonicalReducerRegistry` replaces `REDUCER_COLUMN`, which was an
+ *     UNANCHORED substring: `bill_invoice_amount_applied_minor` would have
+ *     made an unrelated relation an invoice reducer.
+ *   * `lastEffectiveRoutineDefinition` replaces `liveDefinition`, whose
+ *     dollar-tag selection took the first `$fn$` ANYWHERE later in the file
+ *     and preferred `$fn$` even when a `$$` opened first. It was right today
+ *     BY LUCK, and `0084` is the only Phase 4 migration using `$fn$`, so the
+ *     luck was load-bearing.
+ */
+import type { MandatoryProof } from './phase4-s7-proof-oracles';
+import {
+  BUCKET_MUTANTS,
+  INVOICE_REDUCER_COLUMN,
+  ONE_SIDED_INVARIANTS,
+  PURCHASE_REDUCER_COLUMN,
+  bucketIndexByBand,
+  bucketIndexByBinarySearch,
+  auditProofFile,
+  canonicalReducerRegistry,
+  lastEffectiveRoutineDefinition,
+  proofLedger,
+  recordProof,
+  relationsTouched,
+  scheduleInvariantVerdict,
+  unpaidDuePortion,
+} from './phase4-s7-proof-oracles';
+
 const SELF = readFileSync(join(__dirname, 'phase4-s7-installment-aging.test.ts'), 'utf8');
 
 /**
@@ -205,6 +253,41 @@ function projectionSketch(sql: string): string {
 }
 
 /** Which knob each proof mutates — read by `meta_1`. */
+/**
+ * THE MANDATORY PROOF TABLE — the registry the meta gate READS.
+ *
+ * It is not prose and it is not a comment. Every field is consumed by
+ * `auditProofFile` and by `meta_1a`'s ledger check, and `meta_9` proves each
+ * way of hollowing a proof out is refused.
+ *
+ * WHY IT IS KEYED ON THE PROOF AND NOT ON THE KNOB. `MUTATIONS_EXERCISED` is
+ * keyed on the policy knob, so proofs 6, 7, 8 and 9 — whose mutations are
+ * planted into SQL text rather than reached through a knob — were outside
+ * every meta law. Deleting proof 6 or proof 9 outright left the whole file
+ * green. "Remove proof A" had no coverage for four of the seven required
+ * proofs.
+ *
+ * `arms` IS DECLARED AND NOT COUNTED, because a proof with three red arms
+ * that loses one is a proof that lost a mutation, and an auditor that read
+ * only the first matching arm was measured green on exactly that.
+ *
+ * IF YOU RENAME AN `it` OR A TAG, UPDATE THIS TABLE IN THE SAME CHANGE. The
+ * gate is fail-closed by design; a red here after a rename is the coupling
+ * working, not a defect in the proof.
+ */
+const MANDATORY: readonly MandatoryProof[] = Object.freeze([
+  Object.freeze({ id: 'proof_1', armTitleContains: 'FIRES', arms: 2, requiresInArm: ["mutate('clampToRowAmount'"], minAssertions: 3, file: 'phase4-s7-installment-aging.test.ts' }),
+  Object.freeze({ id: 'proof_2', armTitleContains: 'FIRES', arms: 3, requiresInArm: ["mutate('bucketBy'", 'BUCKET_MUTANTS'], minAssertions: 3, file: 'phase4-s7-installment-aging.test.ts' }),
+  Object.freeze({ id: 'proof_3', armTitleContains: 'FIRES', arms: 1, requiresInArm: ["mutate('planlessArm'"], minAssertions: 3, file: 'phase4-s7-installment-aging.test.ts' }),
+  Object.freeze({ id: 'proof_4', armTitleContains: 'FIRES', arms: 1, requiresInArm: ["mutate('carryResidual'"], minAssertions: 3, file: 'phase4-s7-installment-aging.test.ts' }),
+  Object.freeze({ id: 'proof_5', armTitleContains: 'FIRES', arms: 1, requiresInArm: ["mutate('outstandingSource'"], minAssertions: 3, file: 'phase4-s7-installment-aging.test.ts' }),
+  Object.freeze({ id: 'proof_6', armTitleContains: 'FIRES', arms: 3, requiresInArm: ['journalFindings(', 'relationsRead('], minAssertions: 3, file: 'phase4-s7-installment-aging.test.ts' }),
+  Object.freeze({ id: 'proof_7', armTitleContains: 'FIRES', arms: 2, requiresInArm: ['findAuthoritativeSalesColumns('], minAssertions: 3, file: 'phase4-s7-installment-aging.test.ts' }),
+  Object.freeze({ id: 'proof_8', armTitleContains: 'FIRES', arms: 1, requiresInArm: ['FINANCIAL_TIME'], minAssertions: 3, file: 'phase4-s7-installment-aging.test.ts' }),
+  Object.freeze({ id: 'proof_9', armTitleContains: 'FIRES', arms: 1, requiresInArm: ['OVER_SCHEDULED'], minAssertions: 3, file: 'phase4-s7-installment-aging.test.ts' }),
+  Object.freeze({ id: 'proof_10', armTitleContains: 'FIRES', arms: 1, requiresInArm: ["mutate('baseAllocation'"], minAssertions: 3, file: 'phase4-s7-installment-aging.test.ts' }),
+]);
+
 const MUTATIONS_EXERCISED: readonly { readonly proof: string; readonly knob: keyof ProjectionPolicy; readonly to: unknown }[] =
   Object.freeze([
     Object.freeze({ proof: 'proof_1', knob: 'clampToRowAmount' as const, to: false }),
@@ -222,6 +305,51 @@ function mutate(knob: keyof ProjectionPolicy, to: unknown): ProjectionPolicy {
 
 const THRESHOLDS = [30, 60, 90] as const;
 const AS_OF = '2026-10-07';
+
+/** A civil date `n` days before `AS_OF`, so every age below is DERIVED. */
+const daysBefore = (n: number): string => new Date((epochDay(AS_OF) - n) * 86_400_000).toISOString().slice(0, 10);
+
+/**
+ * THE BOUNDARY SCHEDULE — the finding inside the finding, and the better
+ * lesson of the two.
+ *
+ * The design fixture is a round monthly schedule, so it touches NO band
+ * boundary: 175, 145, 114, 84, 53, 22 days and the future ones. The `>` to
+ * `>=` mutant is therefore INERT on it — proof 2 would have been green FOR
+ * WANT OF A CASE, not for want of a check, and no amount of repairing the
+ * law's subject would have found that.
+ *
+ * This schedule puts a scheduled date on EVERY boundary, on both sides of
+ * every boundary, and one day off each: ages 0, 30, 31, 60, 61, 90, 91 and a
+ * future date. Twelve rows of 100 000 against the same authoritative pair as
+ * the design fixture, so the sum law and the base law hold over it unchanged.
+ */
+const BOUNDARY_AGES = [-30, 0, 29, 30, 31, 60, 61, 90, 91, 200, 300, 400] as const;
+
+const BOUNDARY_INVOICE: OpenInvoiceRow = Object.freeze({
+  invoiceId: 'inv-boundary',
+  currencyCode: 'SAR',
+  dueDate: daysBefore(200),
+  outstandingTxnMinor: 900_000n,
+  paidTxnMinor: 300_000n,
+  paidBaseMinor: 253_750n,
+  outstandingBaseMinor: 761_251n,
+});
+
+const BOUNDARY_PLAN: InstallmentPlan = Object.freeze({
+  planId: 'plan-boundary',
+  invoiceId: 'inv-boundary',
+  status: 'active',
+  downPaymentMinor: 0n,
+  downPaymentDueDate: daysBefore(401),
+  installments: Object.freeze(
+    // Ascending by date, so `seq_no` and `due_date` agree and the settlement
+    // order is unambiguous: the oldest ages first.
+    [...BOUNDARY_AGES]
+      .sort((a, b) => b - a)
+      .map((age, i) => Object.freeze({ seqNo: i + 1, dueDate: daysBefore(age), amountTxnMinor: 100_000n })),
+  ),
+});
 
 // ── THE DEFECT FIXTURE ────────────────────────────────────────────────────
 //
@@ -416,6 +544,18 @@ describe('PROOF 1 [proof_1] — the sum of the aging buckets equals the authorit
     expect(() => projectCustomerAging(rows, plans, AS_OF, THRESHOLDS, mutate('clampToRowAmount', false))).toThrow(
       /AP release exceeds the purchase total/,
     );
+    // THE DATA FLOW TO THE META GATE: recorded AFTER the assertions, so a
+    // proof that does not RUN does not record and the gate goes red. A tag in
+    // a comment cannot satisfy this; `describe.skip` cannot satisfy it.
+    // THE DISCRIMINATION: the UNMUTATED configuration does not throw, so the
+    // refusal belongs to the mutation and not to the fixture.
+    expect(() => projectCustomerAging(rows, plans, AS_OF, THRESHOLDS)).not.toThrow();
+    // ...and the unmutated answer still totals the authoritative figure, so
+    // this arm is not taking credit for a refusal proof 1 would have raised.
+    expect(projectCustomerAging(rows, plans, AS_OF, THRESHOLDS).reduce((a, b) => a + b.txnMinor, 0n)).toBe(
+      rows.reduce((a, r) => a + r.outstandingTxnMinor, 0n),
+    );
+    recordProof('proof_1', 3, 'FIRES arm ran: the canonical law refuses an over-total level; unmutated does not throw');
   });
 
   it('FIRES under its mutation: and the overshoot is MEASURED, with the guard stood down', () => {
@@ -441,6 +581,10 @@ describe('PROOF 1 [proof_1] — the sum of the aging buckets equals the authorit
     expect(sum(bad)).not.toBe(authoritative);
     // The overshoot is exactly the over-scheduled excess: 1 800 000 − 900 000.
     expect(sum(bad) - authoritative).toBe(900_000n);
+    // THE DATA FLOW TO THE META GATE: recorded AFTER the assertions, so a
+    // proof that does not RUN does not record and the gate goes red. A tag in
+    // a comment cannot satisfy this; `describe.skip` cannot satisfy it.
+    recordProof('proof_1', 3, 'FIRES arm ran: FIRES under its mutation: and the overshoot is MEASURED, wit');
   });
 });
 
@@ -498,13 +642,109 @@ describe('PROOF 2 [proof_2] — no not-yet-due scheduled amount enters an overdu
     const c = projectInvoice(PLANNED_INVOICE, PLAN, AS_OF, THRESHOLDS);
     expect(c.length).toBeGreaterThan(0);
     for (const x of c) {
+      // THE EXPECTED VALUE IS THE INDEPENDENT ORACLE, never `bucketOf`.
+      // `bucketIndexByBand` parses `agingBucketLabels` — PRODUCT code — back
+      // into intervals and asks which interval contains the age. The
+      // projection counts thresholds. Two algorithmic paths; the law is a
+      // claim again instead of `f(x) === f(x)`.
       expect(x.bucketNo, `seq ${String(x.seqNo)}`).toBe(
-        bucketOf(AS_OF, declaredDate(x, PLAN, PLANNED_INVOICE), THRESHOLDS),
+        bucketIndexByBand(AS_OF, declaredDate(x, PLAN, PLANNED_INVOICE), THRESHOLDS),
       );
     }
     // And the law really does range over several distinct buckets, so it is
     // not satisfied by everything landing in one.
     expect(new Set(c.map((x) => x.bucketNo)).size).toBeGreaterThan(1);
+  });
+
+  it('THE BOUNDARY FIXTURE: the strong law holds where the bands actually meet', () => {
+    // The design fixture is round monthly and touches no boundary, so the
+    // `>=` mutant below is INERT on it. This one sits on every boundary.
+    const c = projectInvoice(BOUNDARY_INVOICE, BOUNDARY_PLAN, AS_OF, THRESHOLDS);
+    expect(c.length).toBeGreaterThan(0);
+    for (const x of c) {
+      expect(x.bucketNo, `seq ${String(x.seqNo)}`).toBe(
+        bucketIndexByBand(AS_OF, declaredDate(x, BOUNDARY_PLAN, BOUNDARY_INVOICE), THRESHOLDS),
+      );
+    }
+    // Every band is reached, so no band is asserted vacuously. The three
+    // oldest rows (400, 300, 200 days) are what the 300 000 already paid
+    // settles, which is why the fixture carries them: without rows older than
+    // the paid prefix, band 4 would be empty and the law vacuous there.
+    expect(new Set(c.map((x) => x.bucketNo))).toEqual(new Set([1, 2, 3, 4]));
+    // The money laws still hold on it, so the fixture is not a special case
+    // that only the banding sees.
+    expect(sum(c)).toBe(BOUNDARY_INVOICE.outstandingTxnMinor);
+    // And a date really does sit ON each boundary, which is the whole point.
+    const ages = BOUNDARY_PLAN.installments.map((i) => epochDay(AS_OF) - epochDay(i.dueDate));
+    for (const t of THRESHOLDS) expect(ages, `no date at exactly ${String(t)} days`).toContain(t);
+    recordProof('proof_2', 7, 'boundary fixture: every band reached, a date on each threshold');
+  });
+
+  it('FIRES: FIVE mutants of the BANDING that the old self-referential form could not refuse', () => {
+    // Each one leaves the surrounding structure entirely valid — money
+    // untouched, indices in range, the sum law still holding, the output
+    // self-consistent — which is exactly why an oracle that calls `bucketOf`
+    // cannot refuse any of them. They are injected into the real projection.
+    expect(BUCKET_MUTANTS.length).toBe(5);
+    const victims: readonly { readonly row: OpenInvoiceRow; readonly plan: InstallmentPlan }[] = [
+      { row: BOUNDARY_INVOICE, plan: BOUNDARY_PLAN },
+      { row: PLANNED_INVOICE, plan: PLAN },
+    ];
+    for (const { name, fn } of BUCKET_MUTANTS) {
+      let disagreements = 0;
+      let moneyMoved = false;
+      for (const { row, plan } of victims) {
+        const c = projectInvoice(row, plan, AS_OF, THRESHOLDS, CORRECT_POLICY, CANONICAL_RELEASE, fn);
+        // THE SURROUNDING STRUCTURE IS STILL VALID. If the mutant broke the
+        // money too, the law would be caught by proof 1 and this one would be
+        // taking credit for someone else's refusal.
+        expect(sum(c), `${name}: the money moved`).toBe(row.outstandingTxnMinor);
+        for (const x of c) {
+          expect(x.bucketNo, `${name}: out of range`).toBeGreaterThanOrEqual(1);
+          expect(x.bucketNo, `${name}: out of range`).toBeLessThanOrEqual(THRESHOLDS.length + 1);
+        }
+        if (sum(c) !== row.outstandingTxnMinor) moneyMoved = true;
+        disagreements += c.filter(
+          (x) => x.bucketNo !== bucketIndexByBand(AS_OF, declaredDate(x, plan, row), THRESHOLDS),
+        ).length;
+      }
+      expect(moneyMoved).toBe(false);
+      // ...and the band oracle refuses it. A non-zero count is the proof that
+      // the law's refusal is REACHABLE, which it was not before.
+      expect(disagreements, `${name} was INERT — the law cannot refuse it`).toBeGreaterThan(0);
+    }
+    // THE INERTNESS THE PROOF ENGINEER FOUND, reproduced rather than
+    // described: the `>=` mutant disagrees on the BOUNDARY fixture and NOT on
+    // the round monthly one, so on the design fixture alone this law would
+    // have been green for want of a case.
+    const inclusive = BUCKET_MUTANTS.find((m) => m.name === 'boundary_inclusive');
+    expect(inclusive).toBeDefined();
+    const onRound = projectInvoice(PLANNED_INVOICE, PLAN, AS_OF, THRESHOLDS, CORRECT_POLICY, CANONICAL_RELEASE, inclusive!.fn);
+    expect(
+      onRound.filter((x) => x.bucketNo !== bucketIndexByBand(AS_OF, declaredDate(x, PLAN, PLANNED_INVOICE), THRESHOLDS)),
+    ).toHaveLength(0);
+    const onBoundary = projectInvoice(
+      BOUNDARY_INVOICE, BOUNDARY_PLAN, AS_OF, THRESHOLDS, CORRECT_POLICY, CANONICAL_RELEASE, inclusive!.fn,
+    );
+    expect(
+      onBoundary.filter(
+        (x) => x.bucketNo !== bucketIndexByBand(AS_OF, declaredDate(x, BOUNDARY_PLAN, BOUNDARY_INVOICE), THRESHOLDS),
+      ).length,
+    ).toBeGreaterThan(0);
+    recordProof('proof_2', 5, 'five banding mutants refused; `>=` shown inert on the round fixture');
+  });
+
+  it('THE ORACLE IS CALIBRATED AGAINST ITSELF, so it is evidence and not an assertion', () => {
+    // Two independent derivations that agree are evidence the oracle is
+    // right; one is an assertion. Interval containment and binary search
+    // agree with the shipped counting expression on every age in range.
+    for (let age = -5; age <= 200; age += 1) {
+      const d = daysBefore(age);
+      const band = bucketIndexByBand(AS_OF, d, THRESHOLDS);
+      expect(bucketIndexByBinarySearch(AS_OF, d, THRESHOLDS), `age ${String(age)}`).toBe(band);
+      expect(bucketOf(AS_OF, d, THRESHOLDS), `age ${String(age)}`).toBe(band);
+    }
+    expect(bucketIndexByBand(AS_OF, null, THRESHOLDS)).toBe(1);
   });
 
   it('holds: money whose DECLARED date has not arrived is in bucket 1 and nowhere else', () => {
@@ -536,7 +776,7 @@ describe('PROOF 2 [proof_2] — no not-yet-due scheduled amount enters an overdu
     const c = contributionsFor([SHORT_SCHEDULE_INVOICE], [SHORT_PLAN], AS_OF, THRESHOLDS);
     const residual = c.filter((x) => x.origin === 'residual');
     expect(residual).toHaveLength(1);
-    expect(residual[0]?.bucketNo).toBe(bucketOf(AS_OF, SHORT_SCHEDULE_INVOICE.dueDate, THRESHOLDS));
+    expect(residual[0]?.bucketNo).toBe(bucketIndexByBand(AS_OF, SHORT_SCHEDULE_INVOICE.dueDate, THRESHOLDS));
     expect(residual[0]?.bucketNo).toBeGreaterThan(1);
     for (const i of SHORT_PLAN.installments) expect(epochDay(i.dueDate)).toBeGreaterThan(epochDay(AS_OF));
     // The honest reading: a sum-law VIOLATION signal, aged conservatively at
@@ -556,6 +796,10 @@ describe('PROOF 2 [proof_2] — no not-yet-due scheduled amount enters an overdu
     // ...and that money is now in an overdue bucket.
     for (const f of future) expect(f.bucketNo).toBeGreaterThan(1);
     expect(c.every((x) => x.bucketNo === 4)).toBe(true);
+    // THE DATA FLOW TO THE META GATE: recorded AFTER the assertions, so a
+    // proof that does not RUN does not record and the gate goes red. A tag in
+    // a comment cannot satisfy this; `describe.skip` cannot satisfy it.
+    recordProof('proof_2', 4, 'FIRES arm ran: FIRES under its mutation: bucketing by the invoice due date ');
   });
 
   it('FIRES under its mutation: every schedule date shifted 200 days earlier inside the allocation', () => {
@@ -576,6 +820,10 @@ describe('PROOF 2 [proof_2] — no not-yet-due scheduled amount enters an overdu
     const future = notYetDueByPlan(c, PLAN, PLANNED_INVOICE);
     expect(future.length).toBeGreaterThan(0);
     expect(future.some((f) => f.bucketNo > 1)).toBe(true);
+    // THE DATA FLOW TO THE META GATE: recorded AFTER the assertions, so a
+    // proof that does not RUN does not record and the gate goes red. A tag in
+    // a comment cannot satisfy this; `describe.skip` cannot satisfy it.
+    recordProof('proof_2', 4, 'FIRES arm ran: FIRES under its mutation: every schedule date shifted 200 da');
   });
 });
 
@@ -671,6 +919,14 @@ describe('PROOF 3 [proof_3] — no amount is counted twice', () => {
     expect(got).not.toBe(authoritative);
     // The two planned invoices are counted twice over.
     expect(got).toBe(authoritative + PLANNED_INVOICE.outstandingTxnMinor + SHORT_SCHEDULE_INVOICE.outstandingTxnMinor);
+    // THE DATA FLOW TO THE META GATE: recorded AFTER the assertions, so a
+    // proof that does not RUN does not record and the gate goes red. A tag in
+    // a comment cannot satisfy this; `describe.skip` cannot satisfy it.
+    // THE DISCRIMINATION: the unmutated portfolio totals the authoritative
+    // figure exactly, so the overcount is the mutation's and not the
+    // fixture's.
+    expect(sum(contributionsFor(rows, plans, AS_OF, THRESHOLDS))).toBe(authoritative);
+    recordProof('proof_3', 3, 'FIRES arm ran: the plan-less arm stops excluding planned invoices; unmutated is exact');
   });
 });
 
@@ -893,6 +1149,14 @@ describe('PROOF 4 [proof_4] — no amount disappears', () => {
     );
     expect(got).not.toBe(SHORT_SCHEDULE_INVOICE.outstandingTxnMinor);
     expect(got).toBe(200_000n); // 8,000.00 has vanished
+    // THE DATA FLOW TO THE META GATE: recorded AFTER the assertions, so a
+    // proof that does not RUN does not record and the gate goes red. A tag in
+    // a comment cannot satisfy this; `describe.skip` cannot satisfy it.
+    // THE DISCRIMINATION: unmutated, the same fixture loses nothing.
+    expect(sum(contributionsFor([SHORT_SCHEDULE_INVOICE], [SHORT_PLAN], AS_OF, THRESHOLDS))).toBe(
+      SHORT_SCHEDULE_INVOICE.outstandingTxnMinor,
+    );
+    recordProof('proof_4', 3, 'FIRES arm ran: the residual is dropped and 8,000.00 vanishes; unmutated loses nothing');
   });
 });
 
@@ -1043,6 +1307,10 @@ describe('PROOF 5 [proof_5] — a payment or a reversal changes the projection T
     // ...and the payment changed nothing, which is the harm.
     expect(a).toBe(b);
     expect(a).not.toBe(afterPayment.outstandingTxnMinor);
+    // THE DATA FLOW TO THE META GATE: recorded AFTER the assertions, so a
+    // proof that does not RUN does not record and the gate goes red. A tag in
+    // a comment cannot satisfy this; `describe.skip` cannot satisfy it.
+    recordProof('proof_5', 3, 'FIRES arm ran: FIRES under its mutation: a plan-local collected total is a ');
   });
 
   it('the specification adds no reducer and no second settlement path', () => {
@@ -1060,79 +1328,54 @@ describe('PROOF 6 [proof_6] — no installment journal, and no new reducer branc
   // used `n` while the two real reducers happen to use `a` and `c`, so the
   // detector was tailored to itself.
 
-  /** The last definition of a routine signature across the tree, in apply order. */
-  function liveDefinition(header: string): { migration: string; body: string } {
-    let found: { migration: string; body: string } | null = null;
-    for (const m of MIGRATIONS) {
-      let at = -1;
-      for (;;) {
-        at = m.sql.indexOf(header, at + 1);
-        if (at === -1) break;
-        const open = m.sql.indexOf('$fn$', at) === -1 ? m.sql.indexOf('$$', at) : m.sql.indexOf('$fn$', at);
-        const tag = m.sql.startsWith('$fn$', open) ? '$fn$' : '$$';
-        const close = m.sql.indexOf(tag, open + tag.length);
-        found = { migration: m.name, body: m.sql.slice(open + tag.length, close) };
-      }
-    }
-    if (found === null) throw new Error(`no definition of: ${header}`);
-    return found;
+  /**
+   * The last EFFECTIVE definition of a routine across the tree, delegated to
+   * the adopted mechanism. This file's own version picked the first `$fn$`
+   * anywhere later in the FILE — past the end of the definition — and
+   * preferred `$fn$` even when a `$$` opened first. It was right today by
+   * luck, and `0084` is the only Phase 4 migration using `$fn$`, so the luck
+   * was load-bearing. The adopted one takes the FIRST dollar tag after the
+   * header whatever it is spelled, and interleaves DROP and CREATE by
+   * POSITION inside the file, because `0084` drops at :488 and recreates at
+   * :593 and the order is what decides.
+   */
+  function liveDefinition(header: string): { migration: string; body: string; line: number } {
+    const sig = /customer_ar_aging/.test(header)
+      ? String.raw`DROP\s+FUNCTION\s+(?:IF\s+EXISTS\s+)?(?:public\.)?customer_ar_aging`
+      : String.raw`DROP\s+FUNCTION\s+(?:IF\s+EXISTS\s+)?(?:public\.)?invoice_outstanding`;
+    const h = lastEffectiveRoutineDefinition(MIGRATIONS, header, new RegExp(sig, 'i'));
+    if (h.live === null) throw new Error(`no live definition of: ${header}`);
+    return { migration: h.live.migration, body: h.live.body, line: h.live.line };
   }
 
   /**
-   * Every relation a body reads, by `public.`-qualified name — no alias
-   * pattern at all, so an alias of any length, or none, is seen alike.
+   * Every relation a body touches, by the ADOPTED reader. It excludes aliases
+   * STRUCTURALLY — only post-introducer positions are ever read — rather than
+   * by a `public.` spelling, so an unqualified table, a quoted identifier, a
+   * space around the dot and a CTE-wrapped unqualified source are all seen.
    */
   function relationsRead(body: string): string[] {
-    return [...body.matchAll(/\bpublic\.([a-z_][a-z0-9_]*)/gi)]
-      .map((m) => (m[1] as string).toLowerCase())
-      .filter((t, i, xs) => xs.indexOf(t) === i)
-      .sort();
+    return [...relationsTouched(body)];
   }
 
   /**
-   * WHAT MAKES A RELATION AN INVOICE REDUCER — STRUCTURALLY, NOT BY NAME.
+   * WHAT MAKES A RELATION AN INVOICE REDUCER — canonically, and by the
+   * ADOPTED registry rather than by this file's own regex.
    *
    * A name list would be a textual coincidence and would miss the next
    * reducer whatever it is called. Seam `S-P4-03` asks which relations settle
    * an invoice, and the answer has a SHAPE: a relation that reduces an
-   * invoice declares `invoice_amount_applied_minor`. Exactly two relations in
-   * the tree do — `payment_allocations` (`0081:314`) and
-   * `customer_credit_applications` (`0081:455`) — and a later slice's reducer
-   * will declare it too, because that is the column the one definition sums.
+   * invoice declares a column named EXACTLY `invoice_amount_applied_minor`.
    *
-   * So the watched set is DISCOVERED from the schema and a new reducer cannot
-   * escape it by being named something unexpected.
+   * EXACT equality, through the estate's own `findColumnDeclarations`, and
+   * `DROP TABLE` honoured. Round 3 shipped `/invoice_amount_applied_minor/i`
+   * — an UNANCHORED SUBSTRING — so `bill_invoice_amount_applied_minor` or
+   * `invoice_amount_applied_minor_cents` would have made an unrelated
+   * relation an invoice reducer and could have pulled the SUPPLIER side into
+   * a customer-side law. A law about a column must say which column.
    */
-  const REDUCER_COLUMN = /invoice_amount_applied_minor/i;
-
-  /** Every relation in the tree whose CREATE TABLE declares the reducer column. */
   function reducerRelationsInTree(): string[] {
-    const out = new Set<string>();
-    const create = /CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:public\.)?("[^"]+"|[A-Za-z_][\w$]*)\s*\(/gi;
-    for (const m of MIGRATIONS) {
-      const schema = sqlSchemaOnly(m.sql);
-      let x: RegExpExecArray | null;
-      const re = new RegExp(create.source, create.flags);
-      while ((x = re.exec(schema)) !== null) {
-        const name = (x[1] ?? '').replace(/"/g, '').toLowerCase();
-        // The balanced CREATE TABLE body, taken to the matching paren.
-        let depth = 0;
-        let end = re.lastIndex - 1;
-        for (let i = re.lastIndex - 1; i < schema.length; i += 1) {
-          const ch = schema[i];
-          if (ch === '(') depth += 1;
-          else if (ch === ')') {
-            depth -= 1;
-            if (depth === 0) {
-              end = i;
-              break;
-            }
-          }
-        }
-        if (REDUCER_COLUMN.test(schema.slice(re.lastIndex, end))) out.add(name);
-      }
-    }
-    return [...out].sort();
+    return [...canonicalReducerRegistry(MIGRATIONS)];
   }
 
   const SETTLING_RELATION = new RegExp(`^(${reducerRelationsInTree().join('|')})$`);
@@ -1197,18 +1440,45 @@ describe('PROOF 6 [proof_6] — no installment journal, and no new reducer branc
     ]);
     const plantedRelation = `${SPEC}\nCREATE TABLE installment_journal_lines (business_id UUID NOT NULL, id UUID NOT NULL);\n`;
     expect(journalFindings(plantedRelation)).toContain('creates a journal relation: installment_journal_lines');
+    // THE DATA FLOW TO THE META GATE: recorded AFTER the assertions, so a
+    // proof that does not RUN does not record and the gate goes red. A tag in
+    // a comment cannot satisfy this; `describe.skip` cannot satisfy it.
+    // THE DISCRIMINATION: the real specification is NOT flagged, so the
+    // detector is discriminating and not merely alarming.
+    expect(journalFindings(SPEC)).toEqual([]);
+    recordProof('proof_6', 3, 'FIRES arm ran: journal planted and flagged; the real specification is clean');
   });
 
-  it('FIRES under its mutation: a reducer branch planted with ANY alias shape, measured four ways', () => {
-    // The challenger planted a branch three ways the first detector could not
-    // see. All four shapes must now be caught, and the two-letter and
-    // no-alias forms are the ones that used to pass.
+  it('FIRES under its mutation: a reducer branch planted in NINE legitimate SQL forms, five of which used to pass', () => {
+    // ROUND 4: THE FOUR SHAPES ALL SPELLED `public.`, SO THE GAP WAS
+    // UNTESTED RATHER THAN TESTED AND TOLERATED.
+    //
+    // Round 3 planted the branch four ways and caught all four — but every
+    // one of them wrote `public.installment_collections`, which is the ONE
+    // thing the old `/\bpublic\.(...)/` reader could see. The proof engineer
+    // planted 17 legitimate forms into the real live body and measured FIVE
+    // misses: an unqualified table, unqualified with no alias, quoted
+    // identifiers, a space around the dot, and CTE wrapping with an
+    // unqualified source inside. A new reducer branch written in any of the
+    // five would have appended silently to the settlement sum with proof 6
+    // GREEN.
+    //
+    // The adopted reader excludes aliases STRUCTURALLY — only
+    // post-introducer positions are ever read — so the five are now shapes of
+    // the same law rather than holes beside it. All nine are asserted here,
+    // and the five that used to pass are named as such.
     const live = liveDefinition(HEADER);
     const shapes: readonly { readonly name: string; readonly sql: string }[] = [
       { name: 'one-letter alias', sql: 'FROM public.installment_collections n WHERE n.business_id = x' },
       { name: 'two-letter alias', sql: 'FROM public.installment_collections ic WHERE ic.business_id = x' },
       { name: 'AS alias', sql: 'FROM public.installment_collections AS coll WHERE coll.business_id = x' },
       { name: 'no alias', sql: 'FROM public.installment_collections WHERE business_id = x' },
+      // ── THE FIVE THAT USED TO PASS ──────────────────────────────────
+      { name: 'UNQUALIFIED, aliased', sql: 'FROM installment_collections n WHERE n.business_id = x' },
+      { name: 'UNQUALIFIED, no alias', sql: 'FROM installment_collections WHERE business_id = x' },
+      { name: 'QUOTED identifiers', sql: 'FROM "public"."installment_collections" n WHERE n.business_id = x' },
+      { name: 'SPACE around the dot', sql: 'FROM public . installment_collections n WHERE n.business_id = x' },
+      { name: 'JOINed rather than FROMed', sql: 'FROM public.invoices i JOIN installment_collections n ON n.invoice_id = i.id WHERE x' },
     ];
     for (const shape of shapes) {
       const planted = `${live.body}\n            UNION ALL\n            SELECT invoice_id, amount, rel ${shape.sql}\n`;
@@ -1218,6 +1488,15 @@ describe('PROOF 6 [proof_6] — no installment journal, and no new reducer branc
       );
       expect(reducers, `missed with ${shape.name}`).toContain('installment_collections');
     }
+    // THE DATA FLOW TO THE META GATE: recorded AFTER the assertions, so a
+    // proof that does not RUN does not record and the gate goes red. A tag in
+    // a comment cannot satisfy this; `describe.skip` cannot satisfy it.
+    // THE DISCRIMINATION: the LIVE body's own reducer set is exactly the two
+    // canonical ones, so a planted third is a real change and not noise.
+    expect(relationsRead(live.body).filter((t) => reducerRelationsInTree().includes(t)).sort()).toEqual(
+      [...reducerRelationsInTree()].sort(),
+    );
+    recordProof('proof_6', 3, 'FIRES arm ran: a planted reducer branch is seen in every shape; the live set is exactly two');
   });
 
   it('FIRES under its mutation: a NEW reducer relation, discovered by its SHAPE and not its name', () => {
@@ -1227,10 +1506,14 @@ describe('PROOF 6 [proof_6] — no installment journal, and no new reducer branc
       invoice_amount_applied_minor BIGINT NOT NULL,
       invoice_carrying_base_released_minor BIGINT NOT NULL);`;
     // The discovery finds it by the reducer column, with no name list.
-    expect(REDUCER_COLUMN.test(planted)).toBe(true);
+    expect(planted).toContain(INVOICE_REDUCER_COLUMN);
     expect(discoverSalesTables(planted)).toContain('zzz_whatever_we_call_it_next');
     // And the live settlement sum does not read it, which is the violation.
     expect(relationsRead(liveDefinition(HEADER).body)).not.toContain('zzz_whatever_we_call_it_next');
+    // THE DATA FLOW TO THE META GATE: recorded AFTER the assertions, so a
+    // proof that does not RUN does not record and the gate goes red. A tag in
+    // a comment cannot satisfy this; `describe.skip` cannot satisfy it.
+    recordProof('proof_6', 3, 'FIRES arm ran: FIRES under its mutation: a NEW reducer relation, discovered');
   });
 });
 
@@ -1292,6 +1575,12 @@ describe('PROOF 7 [proof_7] — no stored installment outstanding', () => {
       { table: 'installments', column: 'outstanding_minor' },
       { table: 'installments', column: 'settled_minor' },
     ]);
+    // THE DATA FLOW TO THE META GATE: recorded AFTER the assertions, so a
+    // proof that does not RUN does not record and the gate goes red. A tag in
+    // a comment cannot satisfy this; `describe.skip` cannot satisfy it.
+    // THE DISCRIMINATION: the real specification declares none of them.
+    expect(findAuthoritativeSalesColumns(SPEC, WATCHED)).toEqual([]);
+    recordProof('proof_7', 3, 'FIRES arm ran: the two P4-AL-06 columns planted and named; the real spec declares none');
   });
 
   it('FIRES under its mutation: a plan-level remaining added by ALTER', () => {
@@ -1299,6 +1588,14 @@ describe('PROOF 7 [proof_7] — no stored installment outstanding', () => {
     expect(findAuthoritativeSalesColumns(planted, WATCHED)).toEqual([
       { table: 'installment_plans', column: 'outstanding_txn_minor' },
     ]);
+    // THE DATA FLOW TO THE META GATE: recorded AFTER the assertions, so a
+    // proof that does not RUN does not record and the gate goes red. A tag in
+    // a comment cannot satisfy this; `describe.skip` cannot satisfy it.
+    // THE DISCRIMINATION: without the ALTER, nothing is named — and the ALTER
+    // really did change the text it was applied to.
+    expect(planted).not.toBe(SPEC);
+    expect(findAuthoritativeSalesColumns(SPEC, WATCHED)).toEqual([]);
+    recordProof('proof_7', 3, 'FIRES arm ran: a plan-level remaining added by ALTER is named; the unaltered spec is clean');
   });
 
   it('the reference model carries no plan-local balance either, and names the one field it refuses', () => {
@@ -1500,6 +1797,13 @@ describe('PROOF 8 [proof_8] — the clock guard, widened and red-capable (p_as_o
     // is caught whatever it is labelled.
     const labelled = `CREATE FUNCTION f() RETURNS DATE LANGUAGE sql IMMUTABLE AS $fn$ SELECT CURRENT_DATE $fn$;`;
     expect(FINANCIAL_TIME.test(labelled)).toBe(true);
+    // THE DATA FLOW TO THE META GATE: recorded AFTER the assertions, so a
+    // proof that does not RUN does not record and the gate goes red. A tag in
+    // a comment cannot satisfy this; `describe.skip` cannot satisfy it.
+    // THE DISCRIMINATION: the real projection sketch reads no clock, so the
+    // guard is distinguishing and not simply matching everything.
+    expect(FINANCIAL_TIME.test(sqlCodeOnly(projectionSketch(SPEC)).replace(/DEFAULT now\(\)/g, ''))).toBe(false);
+    recordProof('proof_8', 3, 'FIRES arm ran: a planted clock read is flagged under any volatility label; the sketch is clean');
   });
 
   it('NON-COINCIDENCE: a column or parameter that merely contains a time word is not a clock read', () => {
@@ -1553,6 +1857,10 @@ describe('PROOF 9 [proof_9] — a broken sum law is SIGNALLED in both directions
     // Paid-anchored puts it in bucket 4 instead.
     const got = projectInvoice(OVER_SCHEDULED_INVOICE, OVER_SCHEDULED_PLAN, AS_OF, THRESHOLDS);
     expect(got.every((x) => x.bucketNo === 4)).toBe(true);
+    // THE DATA FLOW TO THE META GATE: recorded AFTER the assertions, so a
+    // proof that does not RUN does not record and the gate goes red. A tag in
+    // a comment cannot satisfy this; `describe.skip` cannot satisfy it.
+    recordProof('proof_9', 4, 'FIRES arm ran: FIRES: the round-2 anchor is what produced the understatemen');
   });
 
   it('the two anchors AGREE exactly wherever the sum law holds, so the repair costs nothing', () => {
@@ -1746,6 +2054,10 @@ describe('PROOF 10 [proof_10] — the base conservation law, as a CONSEQUENCE of
     expect(PLANNED_INVOICE.outstandingBaseMinor - sumBase(c)).toBe(4n);
     // The txn side is untouched, so only the base law can see this.
     expect(sum(c)).toBe(PLANNED_INVOICE.outstandingTxnMinor);
+    // THE DATA FLOW TO THE META GATE: recorded AFTER the assertions, so a
+    // proof that does not RUN does not record and the gate goes red. A tag in
+    // a comment cannot satisfy this; `describe.skip` cannot satisfy it.
+    recordProof('proof_10', 3, 'FIRES arm ran: FIRES under its mutation: each row converted on its own, at ');
   });
 });
 
@@ -1765,28 +2077,130 @@ describe('META — the proofs are not vacuous', () => {
     for (const m of MUTATIONS_EXERCISED) expect(known.has(m.knob)).toBe(true);
     expect(MUTATIONS_EXERCISED.length).toBe(POLICY_KNOBS.length);
 
-    // (a) THE `proof` FIELD IS READ: each named proof must exist as a tagged
-    //     `describe` in this file. A renamed or deleted proof turns this red.
+    // ── (a) WHAT WAS WRONG WITH (a), AND IT WAS WRONG TWICE ────────────
+    //
+    // Round 2's version wrote `proof:` and never read it (challenger H-4).
+    // Round 3's version READ it — `expect(SELF).toContain(\`[${'$'}{m.proof}]\`)` —
+    // and that is still only a TEXTUAL relationship. The proof engineer
+    // measured it: delete the whole FIRES block for `proof_4`, append a
+    // comment naming it, and both assertions pass. `describe.skip` passes. A
+    // body replaced by `expect(true).toBe(true)` passes. That is this
+    // estate's «a comment is not evidence» trap, live, in the gate that
+    // exists to prevent it.
+    //
+    // It is replaced by TWO relationships, neither of them prose, and
+    // `meta_9` proves both are red-capable.
     for (const m of MUTATIONS_EXERCISED) {
-      expect(SELF, `no describe tagged [${m.proof}]`).toContain(`[${m.proof}]`);
+      expect(MANDATORY.some((x) => x.id === m.proof), `proof ${m.proof} is not declared mandatory`).toBe(true);
     }
 
-    // (b) EACH KNOB IS ACTUALLY MUTATED SOMEWHERE IN THIS FILE. Deleting the
-    //     "FIRES under its mutation" blocks removes these call sites and this
-    //     assertion goes red — which is exactly what the challenger showed the
-    //     first version could not do.
+    // ── (b) EACH KNOB IS ACTUALLY MUTATED SOMEWHERE IN THIS FILE ────────
     for (const k of POLICY_KNOBS) {
       expect(SELF, `knob ${k.knob} is never passed to mutate()`).toContain(`mutate('${k.knob}'`);
     }
 
-    // (c) AND NO MORE KNOBS ARE MUTATED THAN ARE REGISTERED, so a knob
-    //     exercised without being declared is caught too.
+    // ── (c) AND NO MORE KNOBS ARE MUTATED THAN ARE REGISTERED ───────────
     const mutatedInSource = new Set([...SELF.matchAll(/mutate\('([A-Za-z]+)'/g)].map((x) => x[1] as string));
     expect([...mutatedInSource].sort()).toEqual([...known].sort());
 
-    // (d) Every proof claims a DISTINCT knob, so one proof cannot stand in
-    //     for the whole registry.
+    // ── (d) Every proof claims a DISTINCT knob ─────────────────────────
     expect(new Set(MUTATIONS_EXERCISED.map((m) => m.knob)).size).toBe(MUTATIONS_EXERCISED.length);
+
+    // ── (e) AND THE REGISTRY COVERS THE PROOFS THAT HAVE NO KNOB ────────
+    //
+    // Proofs 6, 7, 8 and 9 were OUTSIDE `MUTATIONS_EXERCISED` entirely,
+    // because their mutations are planted into SQL text rather than reached
+    // through a policy knob. So «remove proof A» had NO COVERAGE for four of
+    // the seven required proofs: deleting proof 6 or proof 9 outright left
+    // every `meta_*` test green. The mandatory table below is keyed on the
+    // PROOF, not on the knob, so a proof without a knob is covered too.
+    const knobbed = new Set(MUTATIONS_EXERCISED.map((m) => m.proof));
+    const knobless = MANDATORY.filter((m) => !knobbed.has(m.id)).map((m) => m.id);
+    expect(knobless.sort()).toEqual(['proof_6', 'proof_7', 'proof_8', 'proof_9']);
+  });
+
+  it('meta_1a: THE RUNTIME LEDGER — a proof that did not RUN did not record, and the gate reads the record', () => {
+    // A DATA FLOW, not a string search. `recordProof` is called from inside
+    // each mandatory proof's mutation arm AFTER its assertions, so the entry
+    // exists only if those assertions passed. This test runs last in the
+    // file, so every arm has had its chance.
+    const led = proofLedger();
+    for (const m of MANDATORY) {
+      const entry = led.get(m.id);
+      expect(entry, `${m.id} never recorded — it did not run, or it did not reach its record`).toBeDefined();
+      expect(entry!.assertions, `${m.id} recorded ${String(entry!.assertions)} assertions`).toBeGreaterThanOrEqual(
+        m.minAssertions,
+      );
+      expect(entry!.detail.length).toBeGreaterThan(10);
+    }
+    // Every ledger entry belongs to a declared proof, so a proof cannot
+    // record itself into existence under a name nothing requires.
+    for (const id of led.keys()) {
+      expect(MANDATORY.some((m) => m.id === id), `${id} recorded but is not mandatory`).toBe(true);
+    }
+    expect(led.size).toBeGreaterThanOrEqual(MANDATORY.length);
+  });
+
+  it('meta_1b: THE STRUCTURAL AUDIT — the describe, the arms, the arm COUNT, the call sites and the floor', () => {
+    // The second relationship, and the one that survives a file that fails to
+    // load: the auditor masks comments AND regex literals while preserving
+    // string contents, locates `describe`/`it` by BALANCED call rather than
+    // by indentation, and detects `skip`/`todo`/`xit`/`skipIf`.
+    const findings = auditProofFile(SELF, MANDATORY);
+    expect(findings.map((f) => `${f.proof}/${f.kind}: ${f.detail}`)).toEqual([]);
+  });
+
+  it('meta_9: THE GATE IS RED-CAPABLE — every way of hollowing out a proof is refused', () => {
+    // «A green gate with no authority» is this estate's named failure, and a
+    // gate nobody has seen go red is one. Each case below is the gate's own
+    // subject, mutated in memory; the file on disk is untouched.
+    const target = 'proof_4';
+    const decl = MANDATORY.find((m) => m.id === target);
+    expect(decl).toBeDefined();
+
+    const describeAt = SELF.indexOf(`describe('PROOF 4 [${target}]`);
+    expect(describeAt).toBeGreaterThan(-1);
+
+    // (i) THE COMMENT CASE, exactly as the proof engineer measured it: delete
+    //     the whole mutation arm and append a comment naming the proof. The
+    //     old textual gate passed this.
+    const armAt = SELF.indexOf("  it('FIRES under its mutation: the residual is dropped'", describeAt);
+    expect(armAt).toBeGreaterThan(describeAt);
+    const armEnd = SELF.indexOf('\n  });', armAt) + '\n  });'.length;
+    const armDeleted = `${SELF.slice(0, armAt)}${SELF.slice(armEnd)}\n// a comment naming [${target}] and mutate('carryResidual'\n`;
+    expect(armDeleted).toContain(`[${target}]`); // the OLD gate's test, still green
+    expect(armDeleted).toContain("mutate('carryResidual'"); // and this one too
+    expect(auditProofFile(armDeleted, MANDATORY).map((f) => f.kind)).toContain('arm_missing');
+
+    // (ii) `describe.skip` — the tag is still in the file, so the textual
+    //      gate is still green and the proof still does not run.
+    const skipped = SELF.replace(`describe('PROOF 4 [${target}]`, `describe.skip('PROOF 4 [${target}]`);
+    expect(skipped).toContain(`[${target}]`);
+    expect(auditProofFile(skipped, MANDATORY).map((f) => f.kind)).toContain('disabled');
+
+    // (iii) THE HOLLOWED BODY: the arm exists, is live, is named right, and
+    //       asserts only literals.
+    const hollow = SELF.slice(0, armAt) +
+      "  it('FIRES under its mutation: the residual is dropped', () => {\n    expect(true).toBe(true);\n  });" +
+      SELF.slice(armEnd);
+    const hollowKinds = auditProofFile(hollow, MANDATORY).map((f) => f.kind);
+    expect(hollowKinds.some((k) => k === 'unconditional_pass' || k === 'too_few_assertions' || k === 'call_site_missing')).toBe(true);
+
+    // (iv) THE ARM COUNT. An auditor reading only the FIRST matching arm
+    //      stayed green when one of proof_6's three arms was deleted —
+    //      measured, and the reason the count is DECLARED rather than
+    //      counted. Losing one red arm is losing one mutation.
+    const six = MANDATORY.find((m) => m.id === 'proof_6');
+    expect(six?.arms).toBe(3);
+    const sixArm = SELF.indexOf("  it('FIRES under its mutation: a NEW reducer relation, discovered by its SHAPE and not its name'");
+    expect(sixArm).toBeGreaterThan(-1);
+    const sixEnd = SELF.indexOf('\n  });', sixArm) + '\n  });'.length;
+    const oneArmGone = SELF.slice(0, sixArm) + SELF.slice(sixEnd);
+    expect(auditProofFile(oneArmGone, MANDATORY).map((f) => f.kind)).toContain('arm_count_short');
+
+    // (v) AND THE UNMUTATED FILE IS CLEAN, so none of the above passes for
+    //     want of a working auditor.
+    expect(auditProofFile(SELF, MANDATORY)).toEqual([]);
   });
 
   it('meta_2: every mutation actually CHANGES the output — an inert mutation proves nothing', () => {
