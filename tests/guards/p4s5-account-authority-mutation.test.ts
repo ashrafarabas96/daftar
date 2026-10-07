@@ -926,10 +926,28 @@ describe('P4-S5 §15 — the refusal vocabulary has NO DEAD MEMBER either', () =
     // held to their subjects here, because a comment is how a false belief
     // ships and nothing else in the tree would notice.
     const errorsSource = readSource('apps/api/src/modules/returns/returns-errors.ts');
-    // OD-03 is CLOSED for Phase 4. An earlier draft of this very file said
-    // OPEN, which is the kind of stale claim this assertion exists to catch.
-    expect(errorsSource).not.toMatch(/OD-03 is OPEN/);
-    expect(errorsSource).toContain('OD-03 is CLOSED for Phase 4');
+    // OD-03's STATUS, held across the code and the documents that state it.
+    //
+    // This assertion previously demanded the text `OD-03 is CLOSED for Phase 4`
+    // and forbade `OPEN`, and it was WRONG IN THE SAME WAY as the comment it
+    // was meant to police: the DDL specification §9 and the contract pack both
+    // say OD-03 is OPEN and the owner's alone, so a test was pinning the one
+    // place that disagreed with all three. The two claims are separate — the
+    // POLICY is open, the PHASE 4 BEHAVIOUR is a structural zero — so both are
+    // asserted, and so is the agreement.
+    expect(errorsSource).not.toMatch(/OD-03 is CLOSED/);
+    expect(errorsSource).toMatch(/`OD-03` ITSELF\n\s*\* IS OPEN and the owner's alone/);
+    expect(errorsSource).toContain('STRUCTURAL ZERO');
+    expect(errorsSource).toContain('REFUSES with this code rather than');
+    for (const doc of ['docs/PHASE_4_S5_DDL_SPECIFICATION.md', 'docs/PHASE_4_S5_CONTRACT_PACK.md']) {
+      const text = readSource(doc);
+      // Matched loosely on purpose: the two documents spell it differently
+      // (`**`OD-03`.** OPEN, and the owner's alone` and `(`OD-03`, OPEN, the
+      // owner's alone)`), and the claim under test is the STATUS, not a
+      // house style for punctuating it.
+      expect(text).toMatch(/OD-03[^\n]{0,40}OPEN/);
+      expect(text).not.toMatch(/OD-03 is CLOSED/);
+    }
     // And the claim that replaced the deleted one is held to ITS subject: the
     // owed entry must name an authority that is not another read of
     // `S5_ACCOUNT`. Asserted on the text of the entry, because that text is the

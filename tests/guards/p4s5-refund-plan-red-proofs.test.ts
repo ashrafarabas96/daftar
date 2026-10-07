@@ -2025,3 +2025,109 @@ describe('the refusal vocabulary and the route authority', () => {
     expect(reads.map((r) => r.path).some((p) => p.includes('refunds'))).toBe(true);
   });
 });
+
+/**
+ * H1 — THE THREE `*_entry_complete` VALIDATORS ARE INSTALLED, NOT MERELY NAMED.
+ *
+ * The last open challenger finding against S5, and the DEAD-CONCEPT defect one
+ * level below where `TL-P4-S1-R1` first ruled against it. §5.5 of the DDL
+ * specification named three deferred completeness validators; §5.6 declared
+ * TWO triggers, both on the SOURCE relations and both calling the
+ * consumption-chain verifier; and §7's end-state block asserted nothing about
+ * the three functions or about any trigger that would fire them. Three named
+ * functions, no trigger on `journal_entries`: validators *named, not
+ * installed*. A migration written to that text would have let a
+ * `customer_credit_note_application` entry commit with the realized-FX line
+ * omitted and the liability understated by exactly that amount — BALANCED, so
+ * the one check the ledger does make would have passed, and the TypeScript
+ * assertions in `returns-settlement.ts` are that validator's twins and do not
+ * run in the database.
+ *
+ * WHAT THIS BLOCK IS AND IS NOT. The validators and their triggers will exist
+ * as catalogue objects only when the Migration Owner writes the migration at
+ * promotion, so «the trigger fires» is PROVEN BY DATABASE CATALOGUE and is not
+ * proven here and must not be read as if it were. What IS proven here, in a
+ * suite the runner executes, is the SPECIFICATION's completeness and the thing
+ * that actually failed: the pair. The subject is derived from
+ * `S5_ACCOUNTING_SOURCE_TYPES` and not from a list written in this file, so a
+ * fourth registered source type reds this block until it too has a validator,
+ * a trigger that fires it, and both halves of §7's assertion. That is the
+ * dead-registry test applied to the one registry H1 is about.
+ */
+describe('H1 — every registered S5 source type has a validator AND the trigger that FIRES it', () => {
+  const DDL = readFileSync(join(__dirname, '../../docs/PHASE_4_S5_DDL_SPECIFICATION.md'), 'utf8');
+  /** `accounting_customer_<type minus its `customer_` prefix>_entry_complete`, the `0081:1594` naming. */
+  const validatorOf = (type: string): string => `accounting_${type}_entry_complete`;
+  /** `journal_entries_<type>_complete`, the `0081:1725-1736` naming. */
+  const triggerOf = (type: string): string => `journal_entries_${type}_complete`;
+
+  it('the premise: three registered types, and the derivation is the subject rather than a list in this file', () => {
+    expect(S5_ACCOUNTING_SOURCE_TYPES).toHaveLength(3);
+    expect([...S5_ACCOUNTING_SOURCE_TYPES]).toEqual(['customer_return', 'customer_credit_note_application', 'customer_refund']);
+    // The specification exists and is the subject a red below would be about.
+    expect(DDL).toContain('### 5.6 Triggers');
+    expect(DDL).toContain('## 7. Expected catalogue shape, as an end-state block');
+  });
+
+  it('each type has a NAMED validator function in §5.5', () => {
+    for (const type of S5_ACCOUNTING_SOURCE_TYPES) expect(DDL).toContain(`${validatorOf(type)}(`);
+  });
+
+  it('AND each type has a CONSTRAINT TRIGGER on `journal_entries` that executes exactly that validator, keyed on that type', () => {
+    for (const type of S5_ACCOUNTING_SOURCE_TYPES) {
+      const declaration = new RegExp(
+        [
+          `CREATE CONSTRAINT TRIGGER ${triggerOf(type)}`,
+          `\\s+AFTER INSERT ON journal_entries DEFERRABLE INITIALLY DEFERRED`,
+          `\\s+FOR EACH ROW WHEN \\(NEW\\.source_type = '${type}'\\)`,
+          `\\s+EXECUTE FUNCTION ${validatorOf(type)}\\(\\);`,
+        ].join(''),
+      );
+      expect(DDL).toMatch(declaration);
+    }
+  });
+
+  it('§7 asserts BOTH halves from the catalogue — the function from `pg_proc` and the trigger from `pg_trigger` — and says which half is the defect', () => {
+    expect(DDL).toContain("FROM pg_proc WHERE proname LIKE 'accounting_customer_%entry_complete'");
+    expect(DDL).toContain('FROM pg_trigger WHERE tgrelid =');
+    expect(DDL).toContain("'journal_entries'::regclass");
+    expect(DDL).toContain('tgconstraint <> 0');
+    // The sentence that names the defect, so a later editor cannot delete item
+    // 10 and leave item 9 reading as though it were sufficient.
+    expect(DDL).toContain('Item 9 without item 10 is the defect');
+    expect(DDL).toContain('a function nothing invokes is not a validator');
+  });
+
+  it('RED PROOF: strike one trigger declaration from the text and the pair law refuses, naming the type whose validator nothing would invoke', () => {
+    const type = 'customer_credit_note_application';
+    const struck = DDL.replace(new RegExp(`CREATE CONSTRAINT TRIGGER ${triggerOf(type)}[\\s\\S]*?${validatorOf(type)}\\(\\);`), '');
+    // The mutation really occurred, and it removed the trigger WITHOUT
+    // removing the validator — which is precisely the shipped shape.
+    expect(struck).not.toBe(DDL);
+    expect(struck).toContain(`${validatorOf(type)}(`);
+    const missing = S5_ACCOUNTING_SOURCE_TYPES.filter((t) => !struck.includes(`CREATE CONSTRAINT TRIGGER ${triggerOf(t)}`));
+    expect(missing).toEqual([type]);
+    // And the law over the live text finds nothing missing, so the red above
+    // is the mutation and not a defect that is simply there.
+    expect(S5_ACCOUNTING_SOURCE_TYPES.filter((t) => !DDL.includes(`CREATE CONSTRAINT TRIGGER ${triggerOf(t)}`))).toEqual([]);
+  });
+
+  it('RED PROOF: a FOURTH registered source type reds this block until it has both halves, so the obligation is counted and not listed', () => {
+    const invented = 'customer_restocking_fee';
+    const registry = [...S5_ACCOUNTING_SOURCE_TYPES, invented];
+    const incomplete = registry.filter((t) => !DDL.includes(`${validatorOf(t)}(`) || !DDL.includes(`CREATE CONSTRAINT TRIGGER ${triggerOf(t)}`));
+    expect(incomplete).toEqual([invented]);
+    // The twelve-cell triangle is a COUNT in the specification, so the count
+    // is read back here rather than taken on trust.
+    expect(DDL).toContain('3 types × 4 duties = 12');
+  });
+
+  it('and the two SOURCE-relation verifiers are not mistaken for these three: different subjects, neither substituting for the other', () => {
+    expect(DDL).toContain('credit_notes_verify');
+    expect(DDL).toContain('refunds_verify');
+    expect(DDL).not.toContain('credit_note_applications_verify');
+    expect(DDL).toContain('neither substitutes for the other');
+    // Five deferred triggers in all: two chain verifiers plus three entry validators.
+    expect(DDL).toContain('All five are added to the Phase 4');
+  });
+});

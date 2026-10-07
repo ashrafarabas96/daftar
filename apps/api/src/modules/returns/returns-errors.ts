@@ -103,7 +103,22 @@ const RETURNS_STATUS = {
    * omitting a realized-FX line is wrong in a way no request can cause.
    */
   'credit_note.posting_incomplete': 500,
-  /** A non-zero sales tax. OD-03 is CLOSED for Phase 4: `tax_minor` is a STRUCTURAL ZERO, and a command attempting a non-zero tax REFUSES rather than normalizing to zero, accepting and ignoring, or posting a tax line. */
+  /**
+   * A non-zero sales tax.
+   *
+   * TWO CLAIMS, AND ONLY ONE OF THEM IS THIS SLICE'S TO MAKE. `OD-03` ITSELF
+   * IS OPEN and the owner's alone — no rate, no jurisdiction, no exemption, no
+   * threshold, no legal invoice field, no non-zero tax path — exactly as
+   * `docs/PHASE_4_S5_DDL_SPECIFICATION.md` §9 and the contract pack both say.
+   * An earlier revision of this comment called OD-03 settled for Phase 4, which
+   * overstated it and contradicted three documents while a test pinned THIS
+   * side of the contradiction; that is the correction.
+   *
+   * What IS decided, and is all that is decided, is the PHASE 4 BEHAVIOUR: a
+   * STRUCTURAL ZERO. `tax_minor` is zero by a single-column CHECK, and a
+   * command attempting a non-zero tax REFUSES with this code rather than
+   * normalizing to zero, accepting and ignoring, or posting a tax line.
+   */
   'credit_note.tax_policy_absent': 422,
   'credit_note.not_found': 404,
   /** The source's consumers do not chain from its original to its stored remaining pair. Ours, never theirs. */

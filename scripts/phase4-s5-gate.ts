@@ -41,7 +41,8 @@
  * `^describe(` with a regex and `testTitles` matches `it(`/`test(` with a
  * regex — and neither parses. Run both over the real broken text recovered
  * from `6613b98` and they report TWENTY-ONE top-level blocks and NINETY-TWO
- * runnable cases: exactly the numbers this file records below. A floor at
+ * runnable cases — every block and every case this file recorded for it before
+ * H1 was added below. A floor at
  * those numbers is SATISFIED BY THE FILE THAT DOES NOT COMPILE. A non-
  * compiling file does not report zero cases; it reports all of them.
  *
@@ -152,7 +153,7 @@ export interface RosterRow {
  * THE RECORD: every top-level `describe(` block of all four P4-S5 suites, with
  * the case count the EXTRACTOR SEES TODAY, recorded by hand.
  *
- * 35 blocks, 14 + 92 + 19 + 11 + 17 = 153 cases, and the extractor's view and the
+ * 36 blocks, 14 + 99 + 19 + 11 + 17 = 160 cases, and the extractor's view and the
  * runner's view agree exactly on every one of the five files — measured, not
  * assumed: a brace-walking counter that read RAW source reported 85 for the
  * 92-case file, because braces inside string literals fooled it, which is the
@@ -181,7 +182,7 @@ export const ROSTER_RECORDED: readonly RosterRow[] = [
     title: 'P4-S5 §15 — the refusal vocabulary has NO DEAD MEMBER either',
     cases: 4,
   },
-  // ── tests/guards/p4s5-refund-plan-red-proofs.test.ts — 21 blocks, 92 ─────
+  // ── tests/guards/p4s5-refund-plan-red-proofs.test.ts — 22 blocks, 99 ─────
   { suite: 'tests/guards/p4s5-refund-plan-red-proofs.test.ts', title: 'TL-P4-S5-R1 — a refund is not an invoice-outstanding reducer', cases: 3 },
   { suite: 'tests/guards/p4s5-refund-plan-red-proofs.test.ts', title: 'a refund draws on EXACTLY ONE source', cases: 2 },
   { suite: 'tests/guards/p4s5-refund-plan-red-proofs.test.ts', title: 'the refund cap', cases: 3 },
@@ -221,6 +222,13 @@ export const ROSTER_RECORDED: readonly RosterRow[] = [
   { suite: 'tests/guards/p4s5-refund-plan-red-proofs.test.ts', title: 'H3 — the credit-note lifecycle is deleted, everywhere', cases: 5 },
   { suite: 'tests/guards/p4s5-refund-plan-red-proofs.test.ts', title: 'the source consumption chain', cases: 3 },
   { suite: 'tests/guards/p4s5-refund-plan-red-proofs.test.ts', title: 'the refusal vocabulary and the route authority', cases: 3 },
+  // H1, the last open challenger finding: the pair law over the DDL
+  // specification — a validator and the trigger that fires it.
+  {
+    suite: 'tests/guards/p4s5-refund-plan-red-proofs.test.ts',
+    title: 'H1 \u2014 every registered S5 source type has a validator AND the trigger that FIRES it',
+    cases: 7,
+  },
   // ── tests/guards/p4s5-refund-cap-concurrency-models.test.ts — 6, 19 ──────
   { suite: 'tests/guards/p4s5-refund-cap-concurrency-models.test.ts', title: 'P4-S5 concurrency model — race 1: refund vs refund on one source', cases: 3 },
   {

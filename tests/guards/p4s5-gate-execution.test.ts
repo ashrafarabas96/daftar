@@ -114,9 +114,13 @@ describe('P4-S5 §A — the PARSE arm reds on a file that does not compile, and 
     const mutated = source.replace(/toContain\('([^'\n]{8})/, "toContain('$1\n");
     // The textual extractors the recorded floor is built on, over text that
     // does not compile. This is the claim a reader must not have to re-derive.
-    expect(describeBlocks(mutated)).toHaveLength(describeBlocks(source).length);
-    expect(describeBlocks(source)).toHaveLength(21);
-    expect(testTitles(mutated)).toHaveLength(92);
+    // Both counts DERIVED from the same file, never anchored at a hardcoded
+    // number: a stale anchor against a derived count is one of the nine
+    // defects the first execution of these suites found.
+    expect(describeBlocks(mutated).length).toBe(describeBlocks(source).length);
+    expect(describeBlocks(source).length).toBeGreaterThan(20);
+    expect(testTitles(mutated).length).toBe(testTitles(source).length);
+    expect(testTitles(source).length).toBeGreaterThan(90);
     const root = scratchRoot({ [BROKEN_SUBJECT]: mutated, [S5_NAMED_SUITES[0] as string]: read(S5_NAMED_SUITES[0] as string) });
     const rows = ROSTER_RECORDED.filter((r) => r.suite === BROKEN_SUBJECT);
     expect(rows.length).toBeGreaterThan(0);
