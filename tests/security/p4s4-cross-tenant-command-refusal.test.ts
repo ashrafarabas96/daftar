@@ -435,20 +435,50 @@ function expectNoEffectInB(before: TableDigest, after: TableDigest, what: string
   expect(problems, `${what}: B's state is not byte-identical — ${problems.join('; ')}`).toEqual([]);
 }
 
-/** The seventh clause: NO INAPPROPRIATE DATA RETURNED — not one identifier of B is anywhere in the body. */
-function expectNothingOfBReturned(res: Response, what: string): void {
+/**
+ * EVERY IDENTIFIER OF B, DERIVED FROM THE FIXTURE AND NEVER LISTED.
+ *
+ * A HAND-MAINTAINED LIST IS THE BLIND SPOT THIS FUNCTION EXISTS TO CLOSE.
+ * The list this replaced named nine of B's identifiers and omitted
+ * `openInvoiceId`, `paidInvoiceId` and `paymentMethodId` — three identifiers
+ * the cases above hand to the API as the cross-tenant field itself, so a
+ * refusal body that echoed B's open invoice or B's payment method back would
+ * have been judged clean. The set is therefore read off `Shop`'s own fields:
+ * a field a later slice adds to the fixture is scanned for on the day it
+ * lands, and a field cannot be dropped from the scan without being dropped
+ * from the fixture that the subject law above proves exists.
+ */
+function identifiersOfB(source: Readonly<Record<string, unknown>> = B as unknown as Readonly<Record<string, unknown>>): readonly (readonly [string, string])[] {
+  return Object.entries(source)
+    .filter((e): e is [string, string] => typeof e[1] === 'string' && /^[0-9a-f-]{36}$/.test(e[1]))
+    .sort((x, y) => x[0].localeCompare(y[0]));
+}
+
+/** Which of `ids` the body actually carries, by field name. */
+function leakedIdentifiersOfB(res: Response, ids: readonly (readonly [string, string])[] = identifiersOfB()): string[] {
   const text = JSON.stringify(res.body ?? {});
-  const leaked = [
-    ['businessId', B.businessId],
-    ['tenantId', B.tenantId],
-    ['customerId', B.customerId],
-    ['paymentId', B.paymentId],
-    ['creditId', B.creditId],
-    ['saleId', B.saleId],
-    ['warehouseId', B.warehouseId],
-    ['productId', B.productId],
-    ['branchId', B.branchId],
-  ].filter(([, id]) => typeof id === 'string' && id.length === 36 && text.includes(id));
+  return ids.filter(([, id]) => text.includes(id)).map(([k]) => k);
+}
+
+/** The seventh clause: NO INAPPROPRIATE DATA RETURNED — not one identifier of B is anywhere in the body. */
+function expectNothingOfBReturned(res: Response, what: string, ids: readonly (readonly [string, string])[] = identifiersOfB()): void {
+  const text = JSON.stringify(res.body ?? {});
+  // NON-VACUITY, BEFORE THE VERDICT. A scan over an empty set of identifiers
+  // passes over every body there is, so the set is required to be the WHOLE
+  // of the fixture: every field of B, with none dropped. An `ids` that has
+  // been pruned — by hand, by a refactor, or by a fixture field losing its
+  // value — fails here rather than reporting a clean body.
+  const all = identifiersOfB();
+  expect(ids.length, `${what}: the response-leak law scans no identifier of B at all, so its silence is vacuous`).toBeGreaterThan(0);
+  expect(
+    ids.map(([k]) => k),
+    `${what}: the response-leak law scans ${ids.length} of B's ${all.length} identifiers. A hand-pruned scan cannot see the identifiers it dropped, which is exactly how openInvoiceId, paidInvoiceId and paymentMethodId went unscanned`,
+  ).toEqual(all.map(([k]) => k));
+  expect(
+    all.map(([k]) => k),
+    'the fixture no longer carries every field of B as an identifier, so the derived scan has silently narrowed',
+  ).toEqual(Object.keys(B).sort((x, y) => x.localeCompare(y)));
+  const leaked = ids.filter(([, id]) => text.includes(id));
   expect(
     leaked.map(([k]) => k),
     `${what}: «no inappropriate data returned» is BROKEN — the refusal's own body carries B's ${leaked.map(([k]) => k).join(', ')}`,
@@ -775,9 +805,10 @@ describe('§16 CASE C — the subject, and the authority the attacker really hol
 describe('§16 CASE C — the eight Phase 4 command surfaces, each REFUSED with no effect in B', () => {
   it('SALE — POST /v1/sales under A’s own header, naming B’s customer, warehouse and product', async () => {
     const got = await caseC({
-      what: 'the sale command over B’s customer, warehouse and product',
-      subject: { relation: 'customers', id: B.customerId },
       /**
+       * THE SUBJECT IS THE WAREHOUSE, AND THAT IS THE WHOLE POINT OF THIS
+       * CASE'S SHAPE.
+       *
        * MEASURED, AND WORTH RECORDING: the composite form is refused by
        * `inventory.warehouse_not_found` — the FIRST of the three cross-tenant
        * ids the command resolves, which is the warehouse and not the
@@ -785,7 +816,18 @@ describe('§16 CASE C — the eight Phase 4 command surfaces, each REFUSED with 
        * that the FIRST of them was bound; the remaining two are never
        * reached. That is exactly why the SURGICAL case below exists, and why
        * a composite DENY on its own is a weaker law than it looks.
+       *
+       * AND THEREFORE THE EXISTENCE AND INVISIBILITY LEGS ARE MEASURED ON
+       * `warehouses`, NOT ON `customers`. They were measured on B's customer
+       * while the refusal pinned was the warehouse's: the case asserted that
+       * one object was invisible and that a DIFFERENT object's lookup had
+       * failed, which proves neither about either. The subject of the
+       * measurement and the subject of the refusal are now the same row.
+       * B's customer is not left unmeasured — the SURGICAL case below is
+       * exactly that object, with `sale.customer_not_found` pinned on it.
        */
+      what: 'the sale command over B’s warehouse (with B’s customer and product beside it)',
+      subject: { relation: 'warehouses', id: B.warehouseId },
       code: /^inventory\.warehouse_not_found$/,
       attempt: () =>
         confirmSale(t, hdr(merchantA, A.businessId), {
@@ -1345,5 +1387,42 @@ describe('§16 CASE C — THE RED PROOFS: each law is shown to be able to fail, 
     const own = await t.request.get(`/v1/customer-payments/${B.paymentId}`).set(hdr(merchantB, B.businessId));
     expect(own.status, 'B cannot read its own payment, so this red proof has no subject').toBe(200);
     expect(() => expectNothingOfBReturned(own, 'RP-6')).toThrow(/no inappropriate data returned/);
+  });
+
+  it('RP-9 the response-leak law’s identifier set is NOT hand-maintainable: the three identifiers a hand-written list omitted are caught, and an emptied set fails', async () => {
+    // THE SUBJECT IS REAL AND THE LEAK IS REAL: B's own merchant reading B's
+    // own OPEN invoice, which legitimately renders B's `openInvoiceId` — the
+    // very identifier the cases above substitute into A's requests as the
+    // cross-tenant field, and one of the three the previous hand-written list
+    // did not scan for.
+    const own = await t.request.get(`/v1/invoices/${B.openInvoiceId}`).set(hdr(merchantB, B.businessId));
+    expect(own.status, `B cannot read its own open invoice, so this red proof has no subject: ${JSON.stringify(own.body)}`).toBe(200);
+    expect(JSON.stringify(own.body).includes(B.openInvoiceId), 'B’s own invoice read does not carry B’s invoice id, so there is no leak to catch').toBe(true);
+
+    // (a) THE DERIVED SET NAMES IT, and the law fires.
+    expect(leakedIdentifiersOfB(own), 'the derived identifier set does not see B’s open invoice id in a body that carries it').toContain('openInvoiceId');
+    expect(() => expectNothingOfBReturned(own, 'RP-9')).toThrow(/no inappropriate data returned/);
+
+    // (b) THE HAND-WRITTEN SET THIS REPLACED IS BLIND TO IT. These are the
+    // nine field names the list held, reproduced here as the thing being
+    // refuted — and over the SAME body they report no `openInvoiceId`,
+    // `paidInvoiceId` or `paymentMethodId` at all, which is the finding.
+    const theNine: readonly string[] = ['businessId', 'tenantId', 'customerId', 'paymentId', 'creditId', 'saleId', 'warehouseId', 'productId', 'branchId'];
+    const pruned = identifiersOfB().filter(([k]) => theNine.includes(k));
+    expect(pruned.length, 'the nine-field list this red proof refutes no longer matches the fixture, so it is not the list that was there').toBe(9);
+    for (const blind of ['openInvoiceId', 'paidInvoiceId', 'paymentMethodId'])
+      expect(leakedIdentifiersOfB(own, pruned), `the hand-written nine-field list reports ${blind}, so it was not blind to it after all`).not.toContain(blind);
+
+    // (c) AND A PRUNED SET IS REFUSED AS VACUOUS rather than reporting a
+    // clean body: this is what makes the scan non-hand-maintainable.
+    expect(() => expectNothingOfBReturned(own, 'RP-9 pruned', pruned)).toThrow(/A hand-pruned scan cannot see the identifiers it dropped/);
+    // (d) …and an EMPTIED set — the limit case of hand maintenance — fails
+    // too, over a refusal body that really is clean, so the failure is the
+    // emptiness and not the leak.
+    const refusal = await t.request.get(`/v1/invoices/${B.openInvoiceId}`).set(hdr(merchantA, A.businessId));
+    expect(classify(refusal), 'the cross-tenant invoice read is no longer a barrier refusal, so this leg has no clean body to use').toBe('tenant_barrier');
+    expect(leakedIdentifiersOfB(refusal), 'the refusal body carries an identifier of B, which is a finding of its own').toEqual([]);
+    expect(() => expectNothingOfBReturned(refusal, 'RP-9 clean')).not.toThrow();
+    expect(() => expectNothingOfBReturned(refusal, 'RP-9 empty', [])).toThrow(/scans no identifier of B at all/);
   });
 });

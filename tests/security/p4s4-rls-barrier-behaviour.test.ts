@@ -1673,8 +1673,50 @@ async function viewSurface(c: Client): Promise<{ relname: string; owner: string;
   return r.rows.map((x) => ({ relname: x.relname, owner: x.owner, invoker: x.invoker, appSelect: x.appselect }));
 }
 
-/** Every SECURITY DEFINER routine `daftar_app` may execute whose body names one of the four relations. */
+/**
+ * THE ONE NAMED INDIRECTION, AND WHY THE CLOSURE HAS TO SEE THROUGH IT.
+ *
+ * A textual closure over `prosrc` sees a routine that writes `invoices` and
+ * is blind to one that writes `invoice_outstanding(…)` — the word `invoices`
+ * does not occur in that call at all, so `\minvoices\M` does not match it.
+ * And `invoice_outstanding` is SECURITY INVOKER, so when a SECURITY DEFINER
+ * routine owned by an escape-list role calls it, the row security it is read
+ * under is the DEFINER's, not the caller's: one level of indirection is a
+ * complete read bypass that a direct-mention closure cannot see.
+ *
+ * So the closure is widened by exactly ONE named level: every routine of
+ * `public` whose own body names one of the four relations becomes a NAME the
+ * closure also matches on. That set is DERIVED from the catalogue, never
+ * listed, so a reader a later slice adds is inside the closure on the day it
+ * lands — and the boundary is then stated as a checked law (`lawDefinerSurface`
+ * asserts the indirection is real and names `invoice_outstanding`) rather
+ * than left as an accident of the pattern.
+ *
+ * THE BOUNDARY IS ONE LEVEL, DELIBERATELY, AND IT IS WRITTEN DOWN: a routine
+ * that reaches the relations at TWO removes — through a routine that is
+ * itself only an indirect reader — is outside this closure. Widening further
+ * is a transitive fixpoint over `prosrc`, which is a different law; what this
+ * one owes a reader is to say where it stops.
+ */
+async function definerReaderNames(c: Client): Promise<string[]> {
+  const r = await c.query<{ proname: string }>(
+    `SELECT DISTINCT p.proname::text AS proname
+       FROM pg_proc p
+      WHERE p.pronamespace = 'public'::regnamespace AND p.prokind IN ('f', 'p')
+        AND EXISTS (SELECT 1 FROM unnest($1::text[]) AS t(rel) WHERE coalesce(p.prosrc, '') ~ ('\\m' || t.rel || '\\M'))
+      ORDER BY 1`,
+    [[...RELATIONS]],
+  );
+  return r.rows.map((x) => x.proname);
+}
+
+/**
+ * Every SECURITY DEFINER routine `daftar_app` may execute whose body names one
+ * of the four relations — DIRECTLY, or through one of the named readers of
+ * those relations (`definerReaderNames`).
+ */
 async function definerSurface(c: Client): Promise<{ proname: string; owner: string; args: string }[]> {
+  const through = await definerReaderNames(c);
   const r = await c.query<{ proname: string; owner: string; args: string }>(
     `SELECT p.proname::text AS proname, pg_get_userbyid(p.proowner)::text AS owner,
             (SELECT coalesce(string_agg(format('NULL::%s', format_type(t, NULL)), ', ' ORDER BY ord), '')
@@ -1684,34 +1726,90 @@ async function definerSurface(c: Client): Promise<{ proname: string; owner: stri
         AND has_function_privilege('daftar_app', p.oid, 'EXECUTE')
         AND EXISTS (SELECT 1 FROM unnest($1::text[]) AS t(rel) WHERE coalesce(p.prosrc, '') ~ ('\\m' || t.rel || '\\M'))
       ORDER BY 1`,
-    [[...RELATIONS]],
+    [[...RELATIONS, ...through]],
   );
   return r.rows;
 }
 
 /**
- * THE FOUR COMMANDS, AND WHY THIS SET HAS TO BE CLOSED.
+ * The same surface with the closure NOT widened: direct mentions only. Kept
+ * so the one-level widening can be shown to buy something real rather than
+ * asserted to.
+ */
+async function directDefinerSurface(c: Client): Promise<string[]> {
+  const r = await c.query<{ proname: string }>(
+    `SELECT p.proname::text AS proname
+       FROM pg_proc p
+      WHERE p.pronamespace = 'public'::regnamespace AND p.prokind = 'f' AND p.prosecdef
+        AND has_function_privilege('daftar_app', p.oid, 'EXECUTE')
+        AND EXISTS (SELECT 1 FROM unnest($1::text[]) AS t(rel) WHERE coalesce(p.prosrc, '') ~ ('\\m' || t.rel || '\\M'))
+      ORDER BY 1`,
+    [[...RELATIONS]],
+  );
+  return r.rows.map((x) => x.proname);
+}
+
+/**
+ * THE SEVEN COMMANDS, AND WHY THIS SET HAS TO BE CLOSED.
  *
  * Each is SECURITY DEFINER, each is executable by `daftar_app`, and each is
  * owned by a role that `business_isolation_read` NAMES IN ITS ESCAPE LIST. So
- * on these four paths the read barrier admits every row of every business by
+ * on these seven paths the read barrier admits every row of every business by
  * construction, and what keeps a caller inside its own business is the
  * routine's own gate — a signed assertion, whose business the routine reads
  * out of the assertion and never out of its arguments or the scope GUCs.
  *
  * That is a sound design and it is proved elsewhere. What is NOT proved
- * anywhere is that this set is CLOSED: a fifth routine, SECURITY DEFINER,
+ * anywhere is that this set is CLOSED: one more routine, SECURITY DEFINER,
  * owned by either internal role, granted to `daftar_app` and carrying no
  * assertion gate, is a complete read bypass of all four relations that no law
  * about the POLICIES could ever see — the policies would be perfect and the
- * data would still be out. The red proof below plants exactly that.
+ * data would still be out. The red proofs below plant exactly that, once
+ * naming a relation outright and once reaching it only through
+ * `invoice_outstanding(…)`.
+ *
+ * MEASURED, AND THE CORRECTION THIS SET CARRIES. While the closure matched
+ * DIRECT mentions only, this list held FOUR names. The three accounting
+ * posting commands below reach the four relations through
+ * `accounting_post_entry` and name none of them in their own bodies, so they
+ * were outside a surface they have always been inside: each is SECURITY
+ * DEFINER, owned by `daftar_accounting_internal`, and executable by
+ * `daftar_app`. They are gated exactly as the other four are — the gate arm
+ * below holds over all seven — so this is a widening of the LAW to what is
+ * true of the catalogue, and not a finding against the product.
  */
 const DEFINER_SURFACE: readonly string[] = [
+  'accounting_open_balance_post owned by daftar_accounting_internal',
   'accounting_post_entry owned by daftar_accounting_internal',
+  'accounting_post_manual_adjustment owned by daftar_accounting_internal',
+  'accounting_post_reversal owned by daftar_accounting_internal',
   'customer_apply_credit owned by daftar_inventory_internal',
   'customer_collect_payment owned by daftar_inventory_internal',
   'sale_commit owned by daftar_inventory_internal',
 ];
+
+/**
+ * THE REFUSAL LAW S MEANS, AND NOTHING ELSE.
+ *
+ * MEASURED on the shipped catalogue: called with all-NULL arguments by
+ * `daftar_app`, every one of the seven refuses with SQLSTATE `P0001` and a
+ * message that is its AUTHORITY GATE speaking —
+ * `inventory.assertion_missing: this inventory command requires a
+ * server-minted inventory assertion` for the four inventory-owned commands,
+ * `accounting.assertion_missing: posting requires a server-minted accounting
+ * assertion` for the three accounting ones.
+ *
+ * Excluding two SQLSTATEs and accepting every other is not that law. A
+ * `42601` syntax error, a `23502` NOT NULL violation, a `22P02` bad cast — a
+ * routine that fell over on its arguments BEFORE consulting any gate — would
+ * all have satisfied it, and "the gate stopped it" would have been read off a
+ * failure that says nothing about any gate. So the refusal is pinned to the
+ * state AND the words the gate raises, and the red proof below plants a real
+ * ungated routine whose refusal is neither `42883` nor `42501` to show that
+ * the narrowing is what catches it.
+ */
+const GATE_SQLSTATE = 'P0001';
+const GATE_REFUSAL = /^[a-z_]+\.assertion_missing: /;
 
 /**
  * LAW V (THE VIEW SURFACE): no view over any of the four relations exists, so
@@ -1726,10 +1824,46 @@ async function lawViewSurface(c: Client): Promise<void> {
 }
 
 /**
- * LAW S (THE DEFINER SURFACE IS CLOSED): exactly the four commands are
+ * THE GATE ARM OF LAW S, callable on its own over any set of routines so a
+ * red proof can put ONE planted routine through it.
+ *
+ * Called with no assertion at all, every member refuses — and the refusal is
+ * required to be the AUTHORITY GATE's. `42883` would mean the call never
+ * resolved, `42501` that the grant stopped it, and a `23502`/`22P02`/`42601`
+ * that the body fell over on its arguments: not one of those is a statement
+ * about any gate, and a law that accepted them would pass for the wrong
+ * reason. So the state must be `P0001` AND the message must be the gate's own
+ * `<domain>.assertion_missing`.
+ */
+async function assertDefinerGates(c: Client, w: World, fns: readonly { proname: string; args: string }[]): Promise<string[]> {
+  const lines: string[] = [];
+  const wrong: string[] = [];
+  for (const f of fns) {
+    const r = await asRole(c, READER, { tenantId: w.A.tenantId, businessId: w.A.businessId }, () => attempt(c, `SELECT * FROM ${f.proname}(${f.args})`));
+    lines.push(`${f.proname}: ${r.ok ? 'TAKEN' : `refused ${r.code} — ${r.message.split('\n')[0] ?? ''}`}`);
+    if (r.ok) continue;
+    if (r.code !== GATE_SQLSTATE || !GATE_REFUSAL.test(r.message))
+      wrong.push(
+        `${f.proname} refused with ${r.code} ${JSON.stringify(r.message.split('\n')[0] ?? '')}, which is not an authority-gate refusal (${GATE_SQLSTATE} + ${String(GATE_REFUSAL)})`,
+      );
+  }
+  expect(
+    lines.filter((l) => l.includes('TAKEN')),
+    'a SECURITY DEFINER routine over these relations took an ungated call',
+  ).toEqual([]);
+  expect(
+    wrong,
+    'a SECURITY DEFINER routine over these relations refused for a reason that is NOT its authority gate. A refusal the routine raised before reaching its gate — a missing function, a privilege, a NOT NULL, a cast — says nothing about whether the gate is there, so it may not be read as "the gate stopped it"',
+  ).toEqual([]);
+  return lines;
+}
+
+/**
+ * LAW S (THE DEFINER SURFACE IS CLOSED): exactly the seven commands are
  * SECURITY DEFINER, executable by the application role and over these
- * relations — and each of them refuses an ungated caller at its own gate,
- * which is where the barrier for those paths actually is.
+ * relations — reached directly or through one named indirection — and each of
+ * them refuses an ungated caller at its own gate, which is where the barrier
+ * for those paths actually is.
  */
 async function lawDefinerSurface(c: Client, w: World): Promise<void> {
   const fns = await definerSurface(c);
@@ -1738,24 +1872,31 @@ async function lawDefinerSurface(c: Client, w: World): Promise<void> {
     'the set of SECURITY DEFINER routines the application role may execute over these four relations has changed. Each one runs as a role the read barrier admits everything to, so a new member is a new read path with no policy behind it',
   ).toEqual([...DEFINER_SURFACE]);
 
-  // AND EACH ONE IS GATED. Called with no assertion at all, every one of them
-  // refuses — and the refusal is the ROUTINE's, not the signature's and not
-  // the grant's, which is what says the call was admitted and the gate is
-  // what stopped it. `42883` would mean the call never resolved and `42501`
-  // that the grant stopped it; either would make this leg vacuous.
-  const lines: string[] = [];
-  for (const f of fns) {
-    const r = await asRole(c, READER, { tenantId: w.A.tenantId, businessId: w.A.businessId }, () => attempt(c, `SELECT * FROM ${f.proname}(${f.args})`));
-    lines.push(`${f.proname}: ${r.ok ? 'TAKEN' : `refused ${r.code}`}`);
-    if (!r.ok) {
-      expect(r.code, `${f.proname}: the call never resolved, so its refusal says nothing about the routine's gate`).not.toBe('42883');
-      expect(r.code, `${f.proname}: the GRANT refused the call, so its refusal says nothing about the routine's gate`).not.toBe('42501');
-    }
-  }
+  // THE CLOSURE'S BOUNDARY, AS A CHECKED LAW. The one named indirection is
+  // real: the reader set is non-empty, it names `invoice_outstanding` — the
+  // routine through which `invoices` is read without the word `invoices`
+  // occurring — and widening by it strictly ENLARGES the surface over the
+  // direct-mention one. If any of the three stops holding, the closure has
+  // quietly become textual again and this law says so instead of passing.
+  const through = await definerReaderNames(c);
+  expect(through, 'no routine in the catalogue reads the four relations, so the one-level closure is matching on nothing').not.toEqual([]);
   expect(
-    lines.filter((l) => l.includes('TAKEN')),
-    'a SECURITY DEFINER routine over these relations took an ungated call',
+    through,
+    'the named-reader set no longer holds invoice_outstanding, so a routine reading `invoices` only through invoice_outstanding(…) is outside this closure again',
+  ).toContain('invoice_outstanding');
+  const direct = await directDefinerSurface(c);
+  const widened = fns.map((f) => f.proname).filter((n) => !direct.includes(n));
+  expect(
+    widened.length,
+    `the one-level closure adds nothing to the direct-mention surface, so it is not being exercised and the pattern's boundary is untested. Direct: ${direct.join(', ')}`,
+  ).toBeGreaterThan(0);
+  expect(
+    direct.filter((n) => !fns.some((f) => f.proname === n)),
+    'the widened closure LOST a routine the direct-mention closure saw, so it is not a widening',
   ).toEqual([]);
+
+  // AND EACH ONE IS GATED.
+  await assertDefinerGates(c, w, fns);
 }
 
 // ── THE SUITE: PART TWO ───────────────────────────────────────────────────
@@ -1790,7 +1931,7 @@ describe('P4-S4 — the barrier on EVERY path the relation is reachable by', () 
     }
   }, 120_000);
 
-  it('the SECURITY DEFINER surface over these relations is exactly the four commands, and each refuses an ungated caller at its own gate', async () => {
+  it('the SECURITY DEFINER surface over these relations is exactly the seven commands — direct or at one named remove — and each refuses an ungated caller at its own gate', async () => {
     await inCase(async (c, w) => {
       await lawDefinerSurface(c, w);
     });
@@ -1952,6 +2093,147 @@ describe('P4-S4 — THE RED PROOFS for the reachability half', () => {
       expect(
         (await definerSurface(c)).map((f) => `${f.proname} owned by ${f.owner}`),
         'the planted routine outlived its savepoint',
+      ).toEqual([...DEFINER_SURFACE]);
+    });
+  }, 300_000);
+
+  it('a SECURITY DEFINER routine that reads `invoices` ONLY through invoice_outstanding(…) leaks every business, and the ONE-LEVEL closure of LAW S names it', async () => {
+    await inCase(async (c, w) => {
+      // THE INDIRECTION ATTACK. The planted routine never writes the word
+      // `invoices`: it asks `invoice_outstanding(business, invoice)`, which is
+      // SECURITY INVOKER and therefore reads under whatever role is current —
+      // here the DEFINER, `daftar_inventory_internal`, which the read escape
+      // list names. A direct-mention closure sees nothing at all.
+      const fn = `p4s4_indirect_${randomUUID().replace(/-/g, '')}`;
+      const sp = `i_${randomUUID().replace(/-/g, '')}`;
+      await c.query(`SAVEPOINT ${sp}`);
+      try {
+        await c.query(
+          `CREATE FUNCTION ${fn}(p_business_id uuid, p_invoice_id uuid) RETURNS bigint LANGUAGE sql STABLE SECURITY DEFINER
+             SET search_path = pg_catalog, public
+             AS $body$ SELECT o.outstanding_txn_minor FROM public.invoice_outstanding(p_business_id, p_invoice_id) o $body$`,
+        );
+        await c.query(`ALTER FUNCTION ${fn}(uuid, uuid) OWNER TO ${WRITER}`);
+        await c.query(`GRANT EXECUTE ON FUNCTION ${fn}(uuid, uuid) TO ${READER}`);
+        // THE PLANT REALLY IS INDIRECT: its own body names none of the four
+        // relations, so the closure as it was before this law could not have
+        // seen it. Asserted out of the catalogue, not out of the string above.
+        expect(
+          await directDefinerSurface(c),
+          'the planted routine names one of the four relations outright, so this red proof is about a DIRECT mention and proves nothing about the indirection',
+        ).not.toContain(fn);
+
+        // THE CONSEQUENCE, FIRST, AND MEASURED AGAINST THE REFUSAL IT
+        // REPLACES. Called DIRECTLY by the application role, the reader of
+        // record refuses another business's invoice — `invoice_outstanding`
+        // is SECURITY INVOKER, so under `daftar_app` the barrier applies and
+        // the routine raises `invoice.not_found`. Through the plant, the SAME
+        // call answers, with the figure the OWNER sees. The leak is therefore
+        // a change from a refusal to an answer, and not two equal zeros.
+        const asOwner = async (biz: Biz): Promise<string> =>
+          String(
+            (
+              await c.query<{ n: string }>(`SELECT o.outstanding_txn_minor::text AS n FROM public.invoice_outstanding($1::uuid, $2::uuid) o`, [
+                biz.businessId,
+                biz.subject.invoices,
+              ])
+            ).rows[0]?.n ?? '(none)',
+          );
+        const directly = async (biz: Biz): Promise<Attempt> =>
+          asRole(c, READER, { tenantId: w.A.tenantId, businessId: w.A.businessId }, () =>
+            attempt(c, `SELECT o.outstanding_txn_minor FROM public.invoice_outstanding($1::uuid, $2::uuid) o`, [biz.businessId, biz.subject.invoices]),
+          );
+        const through = async (biz: Biz): Promise<string> =>
+          asRole(c, READER, { tenantId: w.A.tenantId, businessId: w.A.businessId }, async () =>
+            String(
+              (await c.query<{ n: string }>(`SELECT ${fn}($1::uuid, $2::uuid)::text AS n`, [biz.businessId, biz.subject.invoices])).rows[0]?.n ?? '(none)',
+            ),
+          );
+        for (const [label, biz] of [
+          ['another business of my own tenant', w.A2],
+          ['the other TENANT', w.B],
+        ] as const) {
+          const refused = await directly(biz);
+          expect(
+            `${String(refused.ok)} ${refused.message.split('\n')[0] ?? ''}`,
+            `called directly by ${READER}, the reader of record does NOT refuse ${label}'s invoice, so there is no barrier here for the plant to defeat`,
+          ).toMatch(/^false .*invoice\.not_found/);
+          expect(await through(biz), `the planted indirect routine did NOT leak ${label}, so this red proof would be about nothing`).toBe(await asOwner(biz));
+        }
+
+        await mustGoRed(
+          `CREATE FUNCTION ${fn}(uuid, uuid) … SECURITY DEFINER owned by ${WRITER}, reading invoices ONLY through invoice_outstanding(…)`,
+          'the set of SECURITY DEFINER routines the application role may execute over these four relations has changed',
+          () => lawDefinerSurface(c, w),
+        );
+      } finally {
+        await c.query(`ROLLBACK TO SAVEPOINT ${sp}`);
+      }
+      expect(
+        (await definerSurface(c)).map((f) => `${f.proname} owned by ${f.owner}`),
+        'the planted indirect routine outlived its savepoint',
+      ).toEqual([...DEFINER_SURFACE]);
+    });
+  }, 300_000);
+
+  it('an UNGATED definer routine whose refusal is not its authority gate is refused by LAW S — a refusal that is neither 42883 nor 42501 is not a gate', async () => {
+    await inCase(async (c, w) => {
+      // THE NARROWING, PROVED. The plant is a REAL routine of the catalogue:
+      // SECURITY DEFINER, owned by the writer principal, granted to the
+      // application role, naming `invoices` — so it is a real member of the
+      // surface — and carrying NO assertion gate at all. What refuses the
+      // all-NULL call is its own body falling over arithmetically (no invoice
+      // has the NULL id, so the divisor is zero), which is exactly the class
+      // of refusal a law that merely excluded `42883` and `42501` would have
+      // accepted as "the gate stopped it".
+      const fn = `p4s4_ungated_${randomUUID().replace(/-/g, '')}`;
+      const sp = `u_${randomUUID().replace(/-/g, '')}`;
+      await c.query(`SAVEPOINT ${sp}`);
+      try {
+        await c.query(
+          `CREATE FUNCTION ${fn}(p_business_id uuid) RETURNS bigint LANGUAGE sql STABLE SECURITY DEFINER
+             SET search_path = pg_catalog, public
+             AS $body$ SELECT (SELECT count(*) FROM invoices) / (SELECT count(*) FROM invoices WHERE id = p_business_id) $body$`,
+        );
+        await c.query(`ALTER FUNCTION ${fn}(uuid) OWNER TO ${WRITER}`);
+        await c.query(`GRANT EXECUTE ON FUNCTION ${fn}(uuid) TO ${READER}`);
+        const planted = (await definerSurface(c)).filter((f) => f.proname === fn);
+        expect(planted, 'the planted ungated routine is not on the surface at all, so there is nothing for the gate arm to judge').toHaveLength(1);
+
+        // WHAT THE OLD, WIDE PREDICATE WOULD HAVE MADE OF IT: the call
+        // resolved (not `42883`) and the grant admitted it (not `42501`), so
+        // the two exclusions do not fire and the refusal would have counted
+        // as the routine's gate. Measured, not asserted.
+        const r = await asRole(c, READER, { tenantId: w.A.tenantId, businessId: w.A.businessId }, () =>
+          attempt(c, `SELECT * FROM ${fn}(${must(planted[0], 'planted routine').args})`),
+        );
+        expect(r.ok, 'the ungated plant was TAKEN, which is a different finding and not this red proof').toBe(false);
+        expect(r.code, 'the planted call did not resolve, so the old exclusion 42883 would have caught it and the narrowing proves nothing').not.toBe('42883');
+        expect(r.code, 'the GRANT refused the planted call, so the old exclusion 42501 would have caught it and the narrowing proves nothing').not.toBe(
+          '42501',
+        );
+        expect(r.code, 'the planted refusal is the authority gate after all, so this routine is not ungated').not.toBe(GATE_SQLSTATE);
+
+        // AND THE NARROWED LAW REFUSES IT, over the planted routine alone, so
+        // the failure is the GATE arm's and not the closure arm's.
+        await mustGoRed(
+          `CREATE FUNCTION ${fn}(uuid) … SECURITY DEFINER owned by ${WRITER} with NO assertion gate, refusing with ${r.code}`,
+          'refused for a reason that is NOT its authority gate',
+          () => assertDefinerGates(c, w, planted).then(() => undefined),
+        );
+        // …and the whole of LAW S refuses it too, which is how it is reached
+        // in the suite.
+        await mustGoRed(
+          `CREATE FUNCTION ${fn}(uuid) … on the surface, ungated (whole of LAW S)`,
+          'the set of SECURITY DEFINER routines the application role may execute over these four relations has changed',
+          () => lawDefinerSurface(c, w),
+        );
+      } finally {
+        await c.query(`ROLLBACK TO SAVEPOINT ${sp}`);
+      }
+      expect(
+        (await definerSurface(c)).map((f) => `${f.proname} owned by ${f.owner}`),
+        'the planted ungated routine outlived its savepoint',
       ).toEqual([...DEFINER_SURFACE]);
     });
   }, 300_000);
@@ -2363,17 +2645,22 @@ function signature(r: AuthorityRow): string {
  * reviewer who merged CASE B and CASE D into "the other tenant is invisible"
  * would be writing a true sentence and losing the only fact that matters —
  * that B is refused with the privilege in hand and D is refused for want of it.
+ *
+ * IT TAKES THE MATRIX AS AN ARGUMENT, and that is not a convenience: a red
+ * proof that only compared the SIGNATURES of a collapsed copy would be
+ * asserting its own arithmetic and never running the arm it claims to prove.
+ * The copy is put through THIS function, and the function has to refuse it.
  */
-function assertCasesDoNotCollapse(): void {
-  const ids = [...new Set(AUTHORITY_MATRIX.map((r) => r.caseId))].sort();
+function assertCasesDoNotCollapse(matrix: readonly AuthorityRow[] = AUTHORITY_MATRIX): void {
+  const ids = [...new Set(matrix.map((r) => r.caseId))].sort();
   expect(ids, `this matrix owns exactly CASES A, B and D. ${CASE_C_NOT_OURS}`).toEqual(['A', 'B', 'D']);
   expect(
-    AUTHORITY_MATRIX.map((r) => r.caseId),
+    matrix.map((r) => r.caseId),
     `no row of this matrix may claim CASE C. ${CASE_C_NOT_OURS}`,
   ).not.toContain('C');
 
   const byCase = new Map<string, Set<string>>();
-  for (const r of AUTHORITY_MATRIX) {
+  for (const r of matrix) {
     const s = byCase.get(r.caseId) ?? new Set<string>();
     s.add(signature(r));
     byCase.set(r.caseId, s);
@@ -2395,7 +2682,7 @@ function assertCasesDoNotCollapse(): void {
   // case refused by the PRIVILEGE while the POLICY admits it. If either row
   // disappears, the matrix has stopped proving ACL and RLS separately.
   const b = must(
-    AUTHORITY_MATRIX.find((r) => r.caseId === 'B'),
+    matrix.find((r) => r.caseId === 'B'),
     'CASE B row',
   );
   expect(
@@ -2403,14 +2690,14 @@ function assertCasesDoNotCollapse(): void {
     `CASE B is the POLICY refusal: the privilege is held and the policy refuses. Losing that shape loses half of §13's separation (${RULING})`,
   ).toBe('REFUSED BY RLS POLICY acl=true rls=false');
   const d = must(
-    AUTHORITY_MATRIX.find((r) => r.caseId === 'D'),
+    matrix.find((r) => r.caseId === 'D'),
     'CASE D row',
   );
   expect(
     `${d.tenant} acl=${String(d.aclSelect)} rls=${String(d.rlsAdmitsAcrossTheTenant)}`,
     `CASE D is the ACL refusal: the POLICY ADMITS ${PLATFORM} and the SQL table privilege does not exist. A matrix that recorded this as a policy refusal — or as a usable bypass — would be wrong in both directions (${RULING})`,
   ).toBe('REFUSED BY ACL acl=false rls=true');
-  const a = AUTHORITY_MATRIX.filter((r) => r.caseId === 'A');
+  const a = matrix.filter((r) => r.caseId === 'A');
   expect(a.length, `CASE A must name the internal identities it is about (${RULING})`).toBeGreaterThan(1);
   for (const row of a) {
     expect(row.verdict, `CASE A is INTENTIONAL and must be asserted as the intended outcome, never as a tolerated one (${RULING})`).toContain(
@@ -2691,8 +2978,57 @@ describe("P4-S4 — THE RED PROOFS for the four-way matrix: §17's three reopeni
     expect(shapes.size, 'CASE D restated in CASE B’s words must become indistinguishable from it — that is what makes the non-collapse arm necessary').toBe(1);
     const live = new Set(AUTHORITY_MATRIX.filter((r) => r.caseId === 'B' || r.caseId === 'D').map((r) => signature(r)));
     expect(live.size, `as shipped, CASE B and CASE D are two different statements (${RULING})`).toBe(2);
+
+    // AND THE ARM IS ACTUALLY RUN OVER THE COLLAPSED COPY. Comparing the two
+    // signature sets above is this proof's own arithmetic; it is not the law.
+    // The law is `assertCasesDoNotCollapse`, and it has to REFUSE the copy —
+    // in the words §16 requires, naming the ruling.
+    let refusal = '';
+    try {
+      assertCasesDoNotCollapse(collapsed);
+    } catch (e) {
+      refusal = e instanceof Error ? e.message : String(e);
+    }
+    expect(
+      refusal,
+      'RED PROOF FAILED: the non-collapse arm ACCEPTED a matrix in which CASE D had been restated in CASE B’s words, so it cannot see the collapse it exists to forbid',
+    ).not.toBe('');
+    expect(refusal, 'the non-collapse arm refused the collapsed matrix for some other reason than the two cases having become one statement').toContain(
+      'CASES A, B and D must be three DIFFERENT statements',
+    );
+    expect(refusal, 'the refusal does not name the ruling it enforces').toContain(RULING);
+    // …and it ACCEPTS the shipped matrix, so the refusal above is about the
+    // collapse and not about the function being broken.
+    expect(() => assertCasesDoNotCollapse(AUTHORITY_MATRIX), 'the non-collapse arm refuses the SHIPPED matrix, so its refusal proves nothing').not.toThrow();
+
+    // THE OTHER COLLAPSE §16 FORBIDS BY NAME: a row claiming CASE C, which is
+    // a command-gate authority model and not this matrix's to assert. The arm
+    // must refuse that copy too.
+    // `caseId` is typed 'A' | 'B' | 'D', so the TYPE already forbids this row
+    // and the cast is what lets the RUNTIME law be shown to forbid it too —
+    // the type cannot help a matrix edited in JavaScript, in a migration, or
+    // by a reviewer who widened the union.
+    const claimsC: readonly AuthorityRow[] = [
+      ...AUTHORITY_MATRIX,
+      {
+        ...must(
+          AUTHORITY_MATRIX.find((r) => r.caseId === 'B'),
+          'CASE B row',
+        ),
+        caseId: 'C',
+      } as unknown as AuthorityRow,
+    ];
+    let cRefusal = '';
+    try {
+      assertCasesDoNotCollapse(claimsC);
+    } catch (e) {
+      cRefusal = e instanceof Error ? e.message : String(e);
+    }
+    expect(cRefusal, 'RED PROOF FAILED: the non-collapse arm ACCEPTED a matrix row claiming CASE C').not.toBe('');
+    expect(cRefusal, 'the refusal does not say that CASE C is not this matrix to make').toContain(CASE_C_NOT_OURS);
+
     record(
-      `CASE D restated as CASE B ("the other tenant is invisible", privilege held, policy refusing) collapses the two signatures to one; the shipped matrix keeps them at two, and the non-collapse arm of ${RULING} refuses the collapsed form`,
+      `CASE D restated as CASE B ("the other tenant is invisible", privilege held, policy refusing) collapses the two signatures to one; assertCasesDoNotCollapse() run over that very copy REFUSES it — "${refusal.split('\n')[0] ?? ''}" — and refuses a copy claiming CASE C as well, while accepting the shipped matrix (${RULING})`,
     );
   });
 });
