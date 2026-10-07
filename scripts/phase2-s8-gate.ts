@@ -74,11 +74,33 @@ import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 import { stripComments } from './guards/sql-schema';
+import { PREDECESSOR_ARGS, decideMode, compositionOutcome, laneBNotice, verdictSuffix, type LaneB } from './guards/gate-composition';
+import { accountingContractProblems } from './guards/performance-contract';
 import { PHASE2_PREFIX_END } from './phase2-prefix';
 import { canaryRefusal } from './runner-canary';
 
 const ARGV = process.argv.slice(2);
 const LIST_ONLY = ARGV.includes('--list');
+
+/**
+ * THE LANE THIS RUN IS IN (TL-P4-GATE-COMP-01).
+ *
+ * `--composition` says: you are a PREDECESSOR inside a later gate, so take
+ * every Lane A verdict and leave the host-sensitive timing to the step that
+ * owns it. The flag is read here, strictly: an undeclared `--` token is a
+ * refusal rather than a silent fall back to either mode, because the
+ * dangerous mistake is a run that stops measuring something and says nothing.
+ *
+ * The visible direct CI step — `Phase 2 slice gate — P2-S8` — passes NO
+ * arguments, so it stays in direct mode and keeps measuring Tier 1 exactly as
+ * it did before. Nothing here downgrades that step's performance verdict.
+ */
+const MODE_DECISION = decideMode(ARGV, [{ flag: '--list' }, { flag: '--structural-only' }, { flag: '--root', takesValue: true }]);
+if (MODE_DECISION.refusal !== null) {
+  console.error(`P2-S8 GATE: FAIL — ${MODE_DECISION.refusal}`);
+  process.exit(1);
+}
+const MODE = MODE_DECISION.mode;
 
 /**
  * ── Why this gate can be pointed at a directory that is not this repository ─
@@ -1143,11 +1165,47 @@ function checkRunnerGuardIsInstalled(): void {
   }
 }
 
-const STEPS: { name: string; cmd: string; args: string[]; env?: Record<string, string> }[] = [
+// ── 11. The performance CONTRACT, checked in every lane ───────────────────
+/**
+ * LANE A, AND THE WHOLE REASON LANE B MAY BE SKIPPED (TL-P4-GATE-COMP-01 §4).
+ *
+ * «CONTRACT SHAPE IS COMPOSABLE; RUNTIME LATENCY VERDICT IS NOT.» This check
+ * runs before the mode is consulted and therefore in EVERY lane, including
+ * every composed invocation of this gate inside P3-S1 … P3-S8, the Phase 3
+ * corrective gate and P4-S1. It is what makes composition mode something
+ * other than a weaker gate: a composed P2-S8 still goes red if the 15 ms
+ * ceiling becomes 20, if 200 samples become 20, if `p95` becomes `p50`, if
+ * COMMIT leaves A's timed region, if the suite is deleted, or if the
+ * dedicated performance evidence step disappears or becomes a comment — and
+ * it reaches all of those verdicts WITHOUT executing the benchmark, so no
+ * amount of load on the executing machine can change its answer.
+ *
+ * It replaces nothing and removes nothing: the budgets are still measured, in
+ * direct mode here and in the dedicated CI step. What it adds is the ability
+ * to refuse a WEAKENED budget from inside a composed chain, which is precisely
+ * the authority a plain skip would have thrown away.
+ */
+function checkPerformanceContract(): void {
+  console.log('P2-S8 GATE — the performance contract: shape, thresholds and wiring (TL-P4-GATE-COMP-01 §4)');
+  const problems = accountingContractProblems(ROOT);
+  for (const p of problems) fail(p.code, p.detail);
+  if (problems.length === 0) {
+    ok(
+      'Accounting A…F: the six accepted ceilings, 200 samples for A and B, the p95 verdict, COMMIT inside A\u2019s timed region, and a real dedicated evidence step',
+    );
+  }
+}
+
+type Step = { name: string; cmd: string; args: string[]; env?: Record<string, string> } & Partial<LaneB>;
+
+const STEPS: Step[] = [
   { name: 'migration manifest', cmd: npm, args: ['run', 'check:migrations'] },
   { name: 'static guards (G-1…G-6)', cmd: npm, args: ['run', 'check:guards'] },
   { name: 'supply-chain hygiene (§47, f §22)', cmd: npm, args: ['run', 'check:supply-chain'] },
-  { name: 'P2-S7 gate (permanent predecessor, composes P2-S6…P2-S1 and Phase 1)', cmd: npm, args: ['run', 'gate:phase2:s7'] },
+  // A predecessor is ALWAYS composed in composition mode, whichever lane THIS
+  // run is in: a gate reached through another gate must not take a latency
+  // verdict, and that is a property of being reached, not of the caller.
+  { name: 'P2-S7 gate (permanent predecessor, composes P2-S6…P2-S1 and Phase 1)', cmd: npm, args: ['run', 'gate:phase2:s7', ...PREDECESSOR_ARGS] },
   {
     name: 'P2-S8 authority, isolation, planted-discrepancy, failure-injection, redaction and reconciliation suites',
     cmd: 'npx',
@@ -1169,11 +1227,28 @@ const STEPS: { name: string; cmd: string; args: string[]; env?: Record<string, s
    * or a failing security suite should be reported in minutes rather than
    * behind a measurement.
    */
+  /**
+   * LANE B (TL-P4-GATE-COMP-01). This is the step the ruling is about.
+   *
+   * It stays exactly as it was in DIRECT mode: same command, same tier, same
+   * six ceilings, same place in the order. f §5 is still satisfied — the
+   * documentation calls Tier 1 a per-push measurement and the visible
+   * `Phase 2 slice gate — P2-S8` CI step still takes it on every push.
+   *
+   * What changes is that when THIS gate is a predecessor — reached through
+   * P3-S1 … P3-S8, the Phase 3 corrective gate and P4-S1 — the step is not
+   * executed. Before this marker existed, one `gate:phase4:s1` executed this
+   * benchmark SEVEN times in one job (once directly and six times through
+   * composition), and any one of those seven could turn a correctness gate
+   * red from contention it had itself created.
+   */
   {
     name: 'the six budgets at Tier 1, measured in this run (f §5, §12)',
     cmd: 'npx',
     args: ['vitest', 'run', 'tests/performance/accounting-budgets.test.ts'],
     env: { P2S8_PERF_TIER: '1' },
+    hostSensitive: true,
+    measuredBy: 'the `Phase 2 slice gate — P2-S8` step of the required `backend` CI job, which runs this gate in direct mode',
   },
 ];
 
@@ -1202,8 +1277,11 @@ function checkRunnerReportsFailure(): void {
   ok(`the test runner reports failure (canary exited ${res.status ?? 'on a signal'})`);
 }
 
+/** The Lane B steps this run did not execute, named, for the verdict line. */
+const laneBSkipped: string[] = [];
+
 function runSteps(): void {
-  console.log('P2-S8 GATE — composed regression matrix');
+  console.log(`P2-S8 GATE — composed regression matrix (${MODE} mode)`);
   // Only the canary's OWN verdict may stop the matrix here. Counting every
   // failure recorded so far would let an unrelated finding — a missed
   // performance budget, say — print the sentence "the test runner cannot
@@ -1215,12 +1293,27 @@ function runSteps(): void {
     console.error('\nP2-S8 GATE: FAIL — the test runner cannot report failure; refusing to run the regression matrix');
     process.exit(1);
   }
+  let executed = 0;
   for (const step of STEPS) {
+    if (MODE === 'composition' && step.hostSensitive === true) {
+      laneBSkipped.push(step.name);
+      console.log(laneBNotice(step.name, step.measuredBy ?? ''));
+      continue;
+    }
+    executed += 1;
     const started = Date.now();
     const res = spawnSync(step.cmd, [...step.args], { cwd: ROOT, encoding: 'utf8', stdio: 'inherit', env: { ...process.env, ...(step.env ?? {}) } });
     const ms = Date.now() - started;
     if (res.status !== 0) fail('regression', `${step.name} failed (exit ${res.status ?? 'signal'}) after ${ms}ms`);
     else ok(`${step.name} (${ms}ms)`);
+  }
+  // RED PROOF (J). "I skipped everything and found nothing wrong" is the one
+  // failure mode this mechanism could introduce, so an empty composed subject
+  // is a FAILURE and not a pass.
+  const emptySubject = compositionOutcome('P2-S8 GATE', executed, laneBSkipped.length);
+  if (emptySubject !== null) {
+    console.error(`\n${emptySubject}`);
+    process.exit(1);
   }
 }
 
@@ -1243,7 +1336,12 @@ if (LIST_ONLY) {
   console.log('  structural: every behavioural claim has a suite, and the open findings are recorded as debt');
   console.log('  structural: vitest.config.ts installs the exit-code guard through globalSetup, and the guard is CALLED (f §17, §18)');
   console.log('  structural: nothing above reads release/ — this gate runs on a clean checkout (f §4 LEVEL A)');
-  for (const s of STEPS) console.log(`  command:    ${s.cmd} ${s.args.join(' ')}`);
+  console.log('  structural: the performance CONTRACT — the six ceilings, 200 samples, the p95 verdict, COMMIT in A’s timed region, real evidence wiring');
+  console.log(`  lane:       ${MODE}`);
+  for (const s of STEPS) {
+    if (MODE === 'composition' && s.hostSensitive === true) console.log(`  NOT RUN:    ${s.cmd} ${s.args.join(' ')}   [lane-b: ${s.measuredBy ?? ''}]`);
+    else console.log(`  command:    ${s.cmd} ${s.args.join(' ')}`);
+  }
   process.exit(0);
 }
 
@@ -1259,6 +1357,7 @@ checkNoTestSeamInProduction();
 checkPrivilegeModel();
 checkClaimsHaveSuites();
 checkRunnerGuardIsInstalled();
+checkPerformanceContract();
 
 // `--structural-only`: every refusal above has been made, and nothing below
 // would be a statement about this tree. It exists so f §24's tamper proofs
@@ -1281,7 +1380,7 @@ if (failures > 0) {
 runSteps();
 
 if (failures > 0) {
-  console.error(`\nP2-S8 GATE: FAIL (${failures})`);
+  console.error(`\nP2-S8 GATE: FAIL (${failures})${verdictSuffix(MODE, laneBSkipped)}`);
   process.exit(1);
 }
-console.log('\nP2-S8 GATE: PASS');
+console.log(`\nP2-S8 GATE: PASS${verdictSuffix(MODE, laneBSkipped)}`);

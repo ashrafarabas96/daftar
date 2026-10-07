@@ -42,6 +42,8 @@ import { join, relative, resolve } from 'node:path';
 import { PHASE2_PREFIX_END } from './phase2-prefix';
 import { inventoryRoutineDefinitions } from './guards/inventory-definer-contract';
 import { stockTablesWritten } from './guards/inventory-writer-authority';
+import { PREDECESSOR_ARGS, decideMode, compositionOutcome, laneBNotice, verdictSuffix, type GateMode, type LaneB } from './guards/gate-composition';
+import { accountingContractProblems } from './guards/performance-contract';
 
 /** The last file P3-S7 accepted: S7 shipped no migration (S7 accepted gate, `S7_MIGRATIONS = []`). */
 export const S7_BOUNDARY = '0068_supplier_settlement_commands.sql';
@@ -584,7 +586,9 @@ export function premortemMatrixProblems(root: string, matrix?: unknown): string[
 
 const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 
-function runGate(root: string, listOnly: boolean, structuralOnly: boolean): void {
+function runGate(root: string, listOnly: boolean, structuralOnly: boolean, mode: GateMode): void {
+  /** The Lane B steps this run did not execute, named, for the verdict line. */
+  const laneBSkipped: string[] = [];
   const MIGRATIONS_DIR = join(root, 'infrastructure/database/migrations');
   const read = (path: string): string => readFileSync(join(root, path), 'utf8');
   const has = (path: string): boolean => existsSync(join(root, path));
@@ -838,31 +842,57 @@ function runGate(root: string, listOnly: boolean, structuralOnly: boolean): void
   function checkBudgets(): void {
     console.log('P3-S8 GATE — budgets (A-17)');
     const mark = failures;
-    const accounting = has(ACCOUNTING_BUDGETS) ? read(ACCOUNTING_BUDGETS) : '';
-    if (!/\bA_POST_P95:\s*15,/.test(accounting)) fail('perf', `Budget A is not 15 ms in ${ACCOUNTING_BUDGETS} — it is never raised`);
-    if (!/\bB_ADJUSTMENT_ENDPOINT_P95:\s*60,/.test(accounting)) fail('perf', `Budget B is not 60 ms in ${ACCOUNTING_BUDGETS} — it is never raised`);
+    /**
+     * TL-P4-GATE-COMP-01 §4. The two lines that used to live here were
+     * `/\bA_POST_P95:\s*15,/` and its twin — and they were satisfiable by a
+     * COMMENT, by a dead constant, and by a duplicate unused threshold, none
+     * of which is the contract. They are replaced by the structural analyzer,
+     * which reads the ceilings out of ONE brace-matched object literal in
+     * comment-stripped source and additionally pins the sample counts, the
+     * p95 verdict, COMMIT inside A's timed region and the dedicated evidence
+     * wiring. This gate still asserts the budgets are never raised; it now
+     * asserts it in a way prose cannot satisfy.
+     */
+    for (const p of accountingContractProblems(root)) fail('perf', p.detail);
     const t13 = has(BUDGET_SUITE) ? read(BUDGET_SUITE) : '';
     for (const id of ['S8-R1', 'S8-R2', 'S8-V', 'S8-B', 'S8-M']) if (!t13.includes(`'${id}'`)) fail('perf', `${BUDGET_SUITE} does not measure ${id}`);
-    if (failures === mark) ok('Budget A 15 ms and B 60 ms unchanged; T-13 measures S8-R1, R2, V, B and M');
+    if (failures === mark)
+      ok('the accounting performance contract is intact (ceilings, samples, p95, COMMIT scope, evidence wiring); T-13 measures S8-R1, R2, V, B and M');
   }
 
   // ── Runtime ───────────────────────────────────────────────────────────────
-  const STEPS = (): { name: string; area: string; cmd: string; args: string[] }[] => [
+  type Step = { name: string; area: string; cmd: string; args: string[] } & Partial<LaneB>;
+  const STEPS = (): Step[] => [
     {
       name: 'P3-S7 gate (permanent predecessor; composes P3-S6 … P3-S1, P2-S8 … P2-S1 and Phase 1)',
       area: 'predecessor',
       cmd: npm,
-      args: ['run', 'gate:phase3:s7'],
+      // A predecessor is ALWAYS composed in composition mode (TL-P4-GATE-COMP-01).
+      args: ['run', 'gate:phase3:s7', ...PREDECESSOR_ARGS],
     },
     { name: '@daftar/accounting unit suite (T-15a, R-INV definitions)', area: 'suites', cmd: npm, args: ['run', 'test', '-w', '@daftar/accounting'] },
     { name: '@daftar/inventory unit suite', area: 'suites', cmd: npm, args: ['run', 'test', '-w', '@daftar/inventory'] },
     { name: 'S8 functional suites (T-01 … T-12, T-14 … T-19)', area: 'suites', cmd: 'npx', args: ['vitest', 'run', ...functionalSuites()] },
-    { name: 'T-13 Tier 1 budgets, alone', area: 'perf', cmd: 'npx', args: ['vitest', 'run', BUDGET_SUITE] },
+    {
+      name: 'T-13 Tier 1 budgets, alone',
+      area: 'perf',
+      cmd: 'npx',
+      args: ['vitest', 'run', BUDGET_SUITE],
+      // LANE B (TL-P4-GATE-COMP-01). Five ABSOLUTE wall-clock ceilings
+      // (20 s … 240 s) over a seeded GL/ledger dataset. Its only CI path was
+      // recursive — through the Phase 3 corrective gate and P4-S1 — so
+      // suppressing it needed a named step of its own, which this row names.
+      hostSensitive: true,
+      measuredBy: 'the dedicated `P3-S8 budgets — T-13, measured` step of the required `backend` CI job',
+    },
     {
       name: `Budget A${B1_RULING === 'R-B1a' ? ' and B (the R-B1a guard fires at a manual adjustment’s COMMIT)' : ''} in isolation, last`,
       area: 'perf',
       cmd: 'npx',
       args: ['vitest', 'run', ACCOUNTING_BUDGETS],
+      // LANE B: the FIFTH direct spawn of the same accepted budget file.
+      hostSensitive: true,
+      measuredBy: 'the `Phase 2 slice gate — P2-S8` step of the required `backend` CI job, which runs that gate in direct mode',
     },
   ];
 
@@ -919,24 +949,46 @@ function runGate(root: string, listOnly: boolean, structuralOnly: boolean): void
     process.exitCode = 1;
     return;
   }
+  let executed = 0;
   for (const step of STEPS()) {
+    if (mode === 'composition' && step.hostSensitive === true) {
+      laneBSkipped.push(step.name);
+      console.log(laneBNotice(step.name, step.measuredBy ?? ''));
+      continue;
+    }
+    executed += 1;
     const started = Date.now();
     const res = spawnSync(step.cmd, [...step.args], { cwd: root, encoding: 'utf8', stdio: 'inherit', env: process.env });
     const ms = Date.now() - started;
     if (res.status !== 0) fail(step.area, `${step.name} failed (exit ${res.status ?? 'signal'}) after ${ms}ms`);
     else ok(`${step.name} (${ms}ms)`);
   }
-  if (failures > 0) {
-    console.error(`\nP3-S8 GATE: FAIL (${failures})`);
+  // RED PROOF (J): an empty composed subject is a FAILURE, never a pass.
+  const emptySubject = compositionOutcome('P3-S8 GATE', executed, laneBSkipped.length);
+  if (emptySubject !== null) {
+    console.error(`\n${emptySubject}`);
     process.exitCode = 1;
     return;
   }
-  console.log('\nP3-S8 GATE: PASS');
+  if (failures > 0) {
+    console.error(`\nP3-S8 GATE: FAIL (${failures})${verdictSuffix(mode, laneBSkipped)}`);
+    process.exitCode = 1;
+    return;
+  }
+  console.log(`\nP3-S8 GATE: PASS${verdictSuffix(mode, laneBSkipped)}`);
 }
 
 if (require.main === module) {
   const argv = process.argv.slice(2);
   const rootFlag = argv.indexOf('--root');
   const root = rootFlag >= 0 ? resolve(argv[rootFlag + 1] ?? '.') : join(__dirname, '..');
-  runGate(root, argv.includes('--list'), argv.includes('--structural-only'));
+  // TL-P4-GATE-COMP-01: the lane, read strictly from the arguments. An
+  // undeclared `--` token is a refusal, not a guess.
+  const decision = decideMode(argv, [{ flag: '--list' }, { flag: '--structural-only' }, { flag: '--root', takesValue: true }]);
+  if (decision.refusal !== null) {
+    console.error(`P3-S8 GATE: FAIL — ${decision.refusal}`);
+    process.exitCode = 1;
+  } else {
+    runGate(root, argv.includes('--list'), argv.includes('--structural-only'), decision.mode);
+  }
 }
