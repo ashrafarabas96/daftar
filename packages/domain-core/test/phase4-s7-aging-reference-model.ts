@@ -6,8 +6,11 @@
  * figure. That is a RULING (coordinator, ruling 2) and not an oversight: the
  * base column cannot be split exactly from the inputs this design is
  * permitted, because `invoice_outstanding`'s `paid_base_minor` is the sum of
- * the carrying released and «never a conversion of the paid transaction
- * amount» (`0083:277-281`), so `outstanding_base / outstanding_txn` is not
+ * the carrying released and never a conversion of the paid transaction
+ * amount — read in the LIVE body at `0084:614` as
+ * `pg_catalog.sum(d.rel) AS paid_base` over
+ * `invoice_carrying_base_released_minor`, and re-verified by the coordinator
+ * against that same live body — so `outstanding_base / outstanding_txn` is not
  * the invoice's `source_to_base_rate` under realized FX. The two ways out —
  * reading that rate, or feeding the quotient back — are a widening of the
  * permitted input set and a forbidden rounded-quotient-as-input
@@ -49,9 +52,15 @@
  *
  * NO SECOND AR LEDGER. The projection reads exactly four things: the schedule
  * dates, the schedule amounts, the supplied `p_as_of`, and the AUTHORITATIVE
- * invoice outstanding from `invoice_outstanding(UUID, UUID[])`
- * (`infrastructure/database/migrations/0083_phase4_ar_outstanding_set_based.sql:295`
- * — «THE ONE DEFINITION of the settlement sum»). It stores nothing, caches
+ * invoice outstanding from `invoice_outstanding(UUID, UUID[])`.
+ *
+ * THE LIVE DEFINITION IS `0084:593`, NOT `0083:295`. `0083` created that
+ * signature; `0084:488` DROPs it and `0084:593` recreates it with
+ * `currency_code TEXT, due_date DATE` appended, and it is `0084:649`'s COMMENT
+ * that carries the «appends one UNION ALL branch» licence. The first round of
+ * this design cited `0083` throughout and therefore reasoned about a body the
+ * database does not hold (challenger C-1). Every citation here now names the
+ * body that is live after the last migration. It stores nothing, caches
  * nothing, and holds no plan-local balance. A payment or a reversal reaches it
  * only by changing that one authoritative figure.
  *
@@ -109,6 +118,20 @@ export interface OpenInvoiceRow {
   /** `invoices.due_date`; NULL is permitted by the shipped column. */
   readonly dueDate: string | null;
   readonly outstandingTxnMinor: bigint;
+  /**
+   * `paid_txn_minor` from the SAME row of the SAME authoritative reader
+   * (`0084:593`). It is NOT a new input and NOT a second truth: it is the
+   * other half of the pair `invoice_outstanding` already returns, and
+   * `paid + outstanding = total` (`R-SAL-02`, `P4-AL-26`).
+   *
+   * THE ALLOCATION NEVER READS IT. It exists only for the sum-law coherence
+   * signal below, and `scheduleCoherenceFindings` is the only function that
+   * touches it — because detecting an OVER-SCHEDULED plan is impossible from
+   * the outstanding figure alone, and the challenger's M-11 showed that the
+   * over-scheduled direction produces no signal at all while the aging reads
+   * zero overdue on a fully overdue invoice.
+   */
+  readonly paidTxnMinor: bigint;
 }
 
 /** One scheduled instalment: a date and an amount, and nothing derived. */
@@ -199,6 +222,16 @@ export interface ProjectionPolicy {
   /** Correct: 'authoritative'. 'plan_local' is the parallel path. */
   readonly outstandingSource: 'authoritative' | 'plan_local';
   /**
+   * Correct: 0. A non-zero value shifts every schedule date by that many days
+   * INSIDE the allocation and reports the shifted date as the contribution's
+   * own, so the output stays self-consistent while every instalment ages
+   * wrongly. The challenger demonstrated this defect was reachable by no knob
+   * (H-3) and that proof 2 stayed green under it, because proof 2 judged the
+   * bucket against the date the projection said it used. Proof 2's subject is
+   * now the PLAN's declared dates and this knob is what proves it.
+   */
+  readonly scheduleDateShiftDays: number;
+  /**
    * The DECLARED POLICY, not a defect knob: both values are legitimate
    * conventions and `meta_6` proves every money law under each. It lives in
    * the policy record so a reviewer can re-run the whole suite under the
@@ -213,6 +246,7 @@ export const CORRECT_POLICY: ProjectionPolicy = Object.freeze({
   planlessArm: 'without_an_active_plan' as const,
   carryResidual: true,
   outstandingSource: 'authoritative' as const,
+  scheduleDateShiftDays: 0,
   settlementOrder: DECLARED_SETTLEMENT_ORDER,
 });
 
@@ -237,6 +271,7 @@ export const POLICY_KNOBS: readonly {
   Object.freeze({ knob: 'planlessArm' as const, correct: 'without_an_active_plan', defective: Object.freeze(['every_invoice']) }),
   Object.freeze({ knob: 'carryResidual' as const, correct: true, defective: Object.freeze([false]) }),
   Object.freeze({ knob: 'outstandingSource' as const, correct: 'authoritative', defective: Object.freeze(['plan_local']) }),
+  Object.freeze({ knob: 'scheduleDateShiftDays' as const, correct: 0, defective: Object.freeze([-200]) }),
 ]);
 
 // ── Output ────────────────────────────────────────────────────────────────
@@ -261,6 +296,12 @@ export interface AgingContribution {
 }
 
 // ── The projection ────────────────────────────────────────────────────────
+
+/** A civil date moved by whole days. Used only by the `scheduleDateShiftDays` defect knob. */
+function shiftDate(civil: string, days: number): string {
+  if (days === 0) return civil;
+  return new Date((epochDay(civil) + days) * 86_400_000).toISOString().slice(0, 10);
+}
 
 function clampLow(v: bigint): bigint {
   return v < 0n ? 0n : v;
@@ -328,8 +369,16 @@ export function projectInvoice(
   thresholds: readonly number[],
   policy: ProjectionPolicy = CORRECT_POLICY,
 ): readonly AgingContribution[] {
-  const planApplies =
-    plan !== undefined && plan.status === 'active' && plan.installments.length > 0;
+  // M-9: `installments.length > 0` used to be a condition here, and the SQL
+  // sketch's plan-less arm had no such condition — so an active plan with no
+  // instalment rows took OPPOSITE arms in the model and in the SQL, and gave
+  // opposite buckets on one input. The SQL is right: an active plan is a
+  // plan, and its down payment is a schedule row with a date of its own. The
+  // row count is no longer consulted, so the two agree by construction; and
+  // the DDL specification makes the zero-row state unreachable at commit with
+  // a DEFERRED schedule verifier, so the disagreement is closed from both
+  // ends rather than only from this one.
+  const planApplies = plan !== undefined && plan.status === 'active';
 
   // The plan-less arm. Under the correct policy an invoice reaches it ONLY
   // when no active plan covers it, so the two arms PARTITION the open
@@ -361,10 +410,15 @@ export function projectInvoice(
   // instalments, in ascending (due_date, seq_no).
   const rows: readonly { seqNo: number; dueDate: string; amount: bigint; origin: 'down_payment' | 'installment' }[] =
     [
-      { seqNo: 0, dueDate: p.downPaymentDueDate, amount: p.downPaymentMinor, origin: 'down_payment' as const },
+      {
+        seqNo: 0,
+        dueDate: shiftDate(p.downPaymentDueDate, policy.scheduleDateShiftDays),
+        amount: p.downPaymentMinor,
+        origin: 'down_payment' as const,
+      },
       ...p.installments.map((i) => ({
         seqNo: i.seqNo,
-        dueDate: i.dueDate,
+        dueDate: shiftDate(i.dueDate, policy.scheduleDateShiftDays),
         amount: i.amountTxnMinor,
         origin: 'installment' as const,
       })),
@@ -425,6 +479,75 @@ export function projectInvoice(
   }
 
   return out;
+}
+
+// ── THE SUM-LAW COHERENCE SIGNAL (challenger M-11) ───────────────────────
+//
+// `P4-AL-13` and `R-SAL-06` require `Σ instalments + down = invoice total`.
+// The projection must total the authoritative outstanding WHATEVER the data
+// says, so it absorbs a violation rather than refusing — which is right for
+// proofs 1 and 4, and leaves a hole the challenger measured:
+//
+//   * UNDER-scheduled (`T < total`) surfaces as a non-zero `residual`
+//     contribution, so it is visible in the output;
+//   * OVER-scheduled (`T > total`) surfaces as NOTHING. The residual is zero
+//     and every one of the seven laws holds, while the aging can report the
+//     whole receivable of a 265-day-overdue invoice in the NOT-YET-DUE
+//     bucket, because the implied payment is deemed under the declared
+//     oldest-first policy to have settled the instalments that fell due.
+//
+// AND IT CANNOT BE DETECTED FROM THE OUTSTANDING FIGURE ALONE: `T = 1 800 000`
+// with `O = 900 000` is indistinguishable from a legitimate plan half paid.
+// Detecting it needs the invoice TOTAL, which is `paid + outstanding` — the
+// other half of the pair the SAME authoritative reader already returns. So
+// the signal costs no new input and no new relation, and the ALLOCATION still
+// never reads `paid`.
+//
+// This is a DIAGNOSTIC and not money: it emits no contribution, so proof 1 is
+// untouched. The real repair is the DEFERRED schedule verifier in the DDL
+// specification, which makes the state unreachable at commit; this signal is
+// what makes it visible if the verifier is ever absent, deferred past a read,
+// or bypassed by a direct write.
+
+export type ScheduleCoherence = 'over_scheduled' | 'under_scheduled';
+
+export interface ScheduleCoherenceFinding {
+  readonly invoiceId: string;
+  readonly kind: ScheduleCoherence;
+  /** `Σ instalments + down − (paid + outstanding)`; positive when over-scheduled. */
+  readonly excessTxnMinor: bigint;
+}
+
+/** The sum-law violations of one customer's open invoices. An empty array is a pass. */
+export function scheduleCoherenceFindings(
+  rows: readonly OpenInvoiceRow[],
+  plans: readonly InstallmentPlan[],
+): readonly ScheduleCoherenceFinding[] {
+  const out: ScheduleCoherenceFinding[] = [];
+  for (const r of rows) {
+    const p = plans.find((x) => x.invoiceId === r.invoiceId && x.status === 'active');
+    if (p === undefined) continue;
+    const scheduled = p.installments.reduce((a, i) => a + i.amountTxnMinor, 0n) + p.downPaymentMinor;
+    const total = r.paidTxnMinor + r.outstandingTxnMinor;
+    const excess = scheduled - total;
+    if (excess > 0n) out.push({ invoiceId: r.invoiceId, kind: 'over_scheduled', excessTxnMinor: excess });
+    else if (excess < 0n) out.push({ invoiceId: r.invoiceId, kind: 'under_scheduled', excessTxnMinor: excess });
+  }
+  return Object.freeze(out);
+}
+
+/**
+ * The amount of the DECLARED schedule that had fallen due at `asOf`, read from
+ * the plan and not from the projection. The converse law of proof 2 is stated
+ * against this (`test`: proof 2's plan-subject arm), so a projection cannot
+ * satisfy the law by relabelling its own output.
+ */
+export function scheduledDueBy(plan: InstallmentPlan, asOf: string): bigint {
+  const rows = [
+    { dueDate: plan.downPaymentDueDate, amount: plan.downPaymentMinor },
+    ...plan.installments.map((i) => ({ dueDate: i.dueDate, amount: i.amountTxnMinor })),
+  ];
+  return rows.filter((r) => epochDay(r.dueDate) <= epochDay(asOf)).reduce((a, r) => a + r.amount, 0n);
 }
 
 /** One aggregated bucket, the shape `customer_ar_aging` returns. */
