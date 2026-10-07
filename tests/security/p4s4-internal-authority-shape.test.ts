@@ -1,6 +1,47 @@
 /**
- * P4-S4 — THE SHAPE OF THE TWO INTERNAL AUTHORITIES, AND THEIR UNREACHABILITY
+ * P4-S4 — THE SHAPE OF EVERY INTERNAL AUTHORITY, AND THEIR UNREACHABILITY
  * FROM RUNTIME (Tech Lead ruling TL-P4-RLS-INT-01 §11, §12, §17).
+ *
+ * ── WHY THIS FILE STOPPED NAMING TWO ROLES (A5) ─────────────────────────────
+ *
+ * The first draft of this file judged TWO roles BY NAME, the two the ruling's
+ * own text names. The catalogue holds FOUR internal NOLOGIN authorities:
+ * `infrastructure/database/bootstrap.sql:156-183` creates
+ * `daftar_accounting_internal`, `daftar_inventory_internal`,
+ * `daftar_catalog_internal` and `daftar_provisioning_internal`, each with the
+ * SAME `NOLOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION
+ * NOBYPASSRLS` clause and `PASSWORD NULL` re-asserted on every run. MEASURED
+ * on a from-zero build of the 87 migrations: all four carry the identical
+ * accepted shape, all four have exactly `daftar_migrator` as their single
+ * member WITH INHERIT FALSE / SET TRUE / no ADMIN, all four are members of
+ * nothing, and no runtime login reaches any of the four by MEMBER, USAGE or
+ * SET.
+ *
+ * A pinned pair of names inside a permanent law makes the unnamed subjects
+ * DORMANT FOREVER: a §17 reopening condition arriving on the catalogue or
+ * provisioning authority would have turned nothing red here. So the ROSTER is
+ * now DERIVED from the catalogue by a stated rule and the EXPECTATION stays
+ * hand-written, and the two are asserted EQUAL in both directions — a FIFTH
+ * authority is NAMED by a failure instead of being silently judged or
+ * silently skipped.
+ *
+ * WHAT WAS ALREADY TRUE, measured rather than taken from the brief: the two
+ * newly covered roles were NOT entirely unjudged. `p3c-td18-definer-ownership`
+ * holds a shape case for them (tests/security/p3c-td18-definer-ownership.test.ts:185-201)
+ * and one `SET ROLE` refusal from `daftar_app`
+ * (tests/security/p3c-td18-definer-ownership.test.ts:415-416). That case
+ * collapses the seven attributes into ONE boolean named `bad`, so its failure
+ * names no attribute, no §17 condition and no ruling; it never reads
+ * `rolpassword`; and its refusal sweep is one principal of seven. What is new
+ * here is a per-attribute, ruling-citing judgement of ALL FOUR, the full
+ * runtime × authority `SET ROLE` sweep, and the derived roster.
+ *
+ * TWO CLAUSES THAT DO NOT EXTEND, RECORDED RATHER THAN ASSERTED AWAY (§11,
+ * §13 below carry the full text): `daftar_provisioning_internal` is named by
+ * NO policy at all, so it is not a cross-tenant READER and §13's "has a
+ * policy admission" clause is FALSE of it; and the catalogue and provisioning
+ * authorities own NO INVOKER routine, so the `<role>=X/<role>` INVOKER-ACL
+ * clause has no subject for them. Both are stated as what the rows support.
  *
  * WHAT WAS RULED, AND WHY THIS FILE IS NOT A NARROWING OF IT.
  *
@@ -116,9 +157,43 @@ import { Client } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createScratchDb, type ScratchDb, type ScratchRole } from '../helpers/scratch-db';
 
-/** The two authorities TL-P4-RLS-INT-01 is about. */
-const INTERNAL_ROLES = ['daftar_accounting_internal', 'daftar_inventory_internal'] as const;
+/**
+ * THE HAND-WRITTEN ROSTER of internal authorities (§11's subject set).
+ *
+ * Written out BY HAND, which is the point: the live arm DERIVES the same set
+ * from the catalogue and asserts the two are equal in BOTH directions. A
+ * roster read out of the catalogue it judges would move with the attack, and
+ * a roster that is only hand-written goes dormant the day a migration adds a
+ * fifth authority. Both halves together are what names a new subject.
+ */
+const INTERNAL_ROLES = ['daftar_accounting_internal', 'daftar_catalog_internal', 'daftar_inventory_internal', 'daftar_provisioning_internal'] as const;
 type InternalRole = (typeof INTERNAL_ROLES)[number];
+
+/**
+ * The two authorities TL-P4-RLS-INT-01's own text names. The DERIVED roster
+ * must CONTAIN them: a derivation that stopped matching the ruling's own
+ * subjects is judging something else, and a ruling whose subject is gone is
+ * itself a finding.
+ */
+const RULING_NAMED_AUTHORITIES = ['daftar_accounting_internal', 'daftar_inventory_internal'] as const;
+
+/**
+ * THE STATED DERIVATION RULE: a non-superuser role whose name is the
+ * project's internal-authority naming. The estate already derives this set
+ * the same way (tests/security/search-path-shadowing.test.ts:684 matches
+ * `daftar\_%\_internal`), and `bootstrap.sql:156-183` is where the names
+ * come from.
+ *
+ * `rolcanlogin = false` is DELIBERATELY NOT part of the rule, although it is
+ * the shape of every member. Filtering on it would make the derivation move
+ * with the attack in the worst possible way: an authority that GAINED LOGIN —
+ * the §17 R1 condition this file exists for — would drop OUT of the derived
+ * roster and the LOGIN flag would turn nothing red. NOLOGIN is judged as a
+ * LAW below (REQUIRED_SHAPE.rolcanlogin), never used as a filter. The
+ * derivation at search-path-shadowing.test.ts:684 does filter on it, and
+ * would lose an authority exactly when it mattered.
+ */
+const INTERNAL_AUTHORITY_NAME = /^daftar_[a-z0-9_]+_internal$/;
 
 /** The ruling every failure message cites, so a red run is actionable without this file open. */
 const RULING = 'TL-P4-RLS-INT-01';
@@ -176,7 +251,14 @@ interface ShapeRow {
 export function shapeProblems(rows: readonly ShapeRow[]): string[] {
   const problems: string[] = [];
   const byName = new Map(rows.map((r) => [r.rolname, r]));
-  for (const role of INTERNAL_ROLES) {
+  // The subjects are the hand-written roster UNION anything the caller found
+  // that the derivation rule calls an internal authority. The union, not the
+  // roster, is what keeps a FIFTH authority from being handed in and skipped:
+  // it is judged on the six attributes here AND named by the roster law
+  // below. Absence from the roster is a roster finding; absence from the
+  // catalogue is a §11 finding; both are reported.
+  const subjects = [...new Set([...INTERNAL_ROLES, ...rows.map((r) => r.rolname).filter((n) => INTERNAL_AUTHORITY_NAME.test(n))])].sort();
+  for (const role of subjects) {
     const row = byName.get(role);
     if (row === undefined) {
       problems.push(
@@ -198,9 +280,45 @@ export function shapeProblems(rows: readonly ShapeRow[]): string[] {
       );
   }
   for (const row of rows)
-    if (!(INTERNAL_ROLES as readonly string[]).includes(row.rolname))
+    if (!INTERNAL_AUTHORITY_NAME.test(row.rolname))
       problems.push(
-        `${row.rolname} was handed to the ${RULING} §11 shape law, which judges only ${INTERNAL_ROLES.join(' and ')} — the caller read the wrong rows`,
+        `${row.rolname} was handed to the ${RULING} §11 shape law, which judges internal authorities (the stated derivation rule is ${INTERNAL_AUTHORITY_NAME.source}) — the caller read the wrong rows`,
+      );
+  return problems;
+}
+
+/**
+ * THE ROSTER LAW (§11's subject set). The catalogue's own answer to "which
+ * internal authorities exist" must be NON-EMPTY, must CONTAIN the roles the
+ * ruling names, and must EQUAL the hand-written roster. Each of the four ways
+ * it can be wrong carries its own message, because they are four different
+ * defects:
+ *
+ *   - nothing derived            — the law has no subject, which is not a pass
+ *   - a ruling-named role absent — the ruling's own subject is gone
+ *   - a derived role unrostered  — a NEW authority nobody has judged
+ *   - a rostered role undervied  — a RETIRED authority whose laws judge nothing
+ */
+export function authorityRosterProblems(derived: readonly string[]): string[] {
+  const problems: string[] = [];
+  if (derived.length === 0)
+    problems.push(
+      `the ${RULING} §11 internal-authority derivation (${INTERNAL_AUTHORITY_NAME.source}, non-superuser) matched NO role in the catalogue — a derivation with no subject is NOT a pass, it is a law that judges nothing`,
+    );
+  for (const named of RULING_NAMED_AUTHORITIES)
+    if (!derived.includes(named))
+      problems.push(
+        `${named} is named by ${RULING} itself and the catalogue derivation did not find it — either the authority is gone (and the ruling resting on it is gone with it) or the derivation stopped matching it, and both are SECURITY findings`,
+      );
+  for (const found of derived)
+    if (!(INTERNAL_ROLES as readonly string[]).includes(found))
+      problems.push(
+        `${found} is an internal NOLOGIN authority the catalogue holds and the hand-written ${RULING} §11 roster does not name — until it is rostered, nothing had decided what its shape or its runtime reachability must be. Add it to INTERNAL_ROLES, hand-write what it may hold, and re-run: this is how a FIFTH authority gets NAMED instead of silently judged or silently skipped`,
+      );
+  for (const expected of INTERNAL_ROLES)
+    if (!derived.includes(expected))
+      problems.push(
+        `${expected} is on the hand-written ${RULING} §11 roster and the catalogue derivation did not find it — the authority was retired or renamed, so every §11/§12/§17 law about it is now judging nothing`,
       );
   return problems;
 }
@@ -252,7 +370,9 @@ export function reachProblems(rows: readonly ReachRow[]): string[] {
   const seen = new Set<string>();
   for (const row of rows) {
     if (!(INTERNAL_ROLES as readonly string[]).includes(row.authority)) {
-      problems.push(`${row.authority} is not one of the two ${RULING} internal authorities — the caller handed the §12 law the wrong subject`);
+      problems.push(
+        `${row.authority} is not on the ${RULING} internal-authority roster (${INTERNAL_ROLES.join(', ')}) — the caller handed the §12 law the wrong subject`,
+      );
       continue;
     }
     seen.add(`${row.principal}\u0000${row.authority}`);
@@ -310,27 +430,51 @@ export function rosterProblems(loginRoles: readonly string[]): string[] {
 
 let db: ScratchDb;
 
-/** Every pg_authid fact §11 asks for, for the two authorities, from the live catalogue. */
-async function liveShape(): Promise<ShapeRow[]> {
+/**
+ * THE DERIVED ROSTER: every non-superuser role the stated naming rule calls
+ * an internal authority. Read from `pg_authid` (not `pg_roles`) so the same
+ * read that finds the subject can also see whether it holds a password, and
+ * NOT filtered on `rolcanlogin` — see INTERNAL_AUTHORITY_NAME for why a
+ * filter there would lose the subject exactly when §17 R1 fires.
+ */
+async function liveInternalAuthorities(): Promise<string[]> {
+  const { rows } = await db.pool.query<{ r: string }>(`SELECT rolname::text AS r FROM pg_authid WHERE NOT rolsuper AND rolname ~ $1 ORDER BY 1`, [
+    INTERNAL_AUTHORITY_NAME.source,
+  ]);
+  return rows.map((x) => x.r);
+}
+
+/**
+ * Every pg_authid fact §11 asks for, for the authorities named in `names`,
+ * from the live catalogue. The live arm hands it the DERIVED roster, so a
+ * role the hand-written roster never heard of is still judged on the six
+ * attributes rather than merely counted.
+ */
+async function liveShape(names: readonly string[] = INTERNAL_ROLES): Promise<ShapeRow[]> {
   const { rows } = await db.pool.query<ShapeRow>(
     `SELECT rolname::text AS "rolname", rolcanlogin AS "rolcanlogin", rolsuper AS "rolsuper", rolbypassrls AS "rolbypassrls",
             rolcreatedb AS "rolcreatedb", rolcreaterole AS "rolcreaterole", rolreplication AS "rolreplication",
             rolinherit AS "rolinherit", (rolpassword IS NULL) AS "noPassword"
        FROM pg_authid WHERE rolname = ANY($1::text[]) ORDER BY rolname`,
-    [[...INTERNAL_ROLES]],
+    [[...names]],
   );
   return rows;
 }
 
-/** pg_has_role for every (principal, authority) pair of `principals`. */
-async function liveReach(principals: readonly string[]): Promise<ReachRow[]> {
+/**
+ * pg_has_role for every (principal, authority) pair of `principals` ×
+ * `authorities`. The live sweep hands it the DERIVED roster, so an authority
+ * the hand-written roster never heard of is still swept — `reachProblems`
+ * then names it as a subject §12 never decided about.
+ */
+async function liveReach(principals: readonly string[], authorities: readonly string[] = INTERNAL_ROLES): Promise<ReachRow[]> {
   const { rows } = await db.pool.query<ReachRow>(
     `SELECT p AS "principal", a AS "authority",
             pg_has_role(p, a, 'MEMBER') AS "member",
             pg_has_role(p, a, 'USAGE')  AS "usage",
             pg_has_role(p, a, 'SET')    AS "set"
        FROM unnest($1::text[]) p, unnest($2::text[]) a ORDER BY p, a`,
-    [[...principals], [...INTERNAL_ROLES]],
+    [[...principals], [...authorities]],
   );
   return rows;
 }
@@ -454,8 +598,29 @@ describe('TL-P4-RLS-INT-01 §11 — the shape law is able to say no', () => {
     expect(problems[0]).toContain('daftar_inventory_internal is absent from pg_authid');
   });
 
-  it('no rows at all is red twice, not green', () => {
-    expect(shapeProblems([])).toHaveLength(2);
+  it('no rows at all is red once per rostered authority, not green', () => {
+    expect(shapeProblems([])).toHaveLength(INTERNAL_ROLES.length);
+  });
+
+  it('a FIFTH internal authority handed in is JUDGED on the six attributes, not skipped', () => {
+    // The roster law below NAMES it; this law must also JUDGE it, or a new
+    // authority would be reported as unrostered and still have its shape
+    // unexamined. A synthesized record, with a defect planted in it.
+    const fifth: ShapeRow = {
+      rolname: 'daftar_receivables_internal',
+      rolcanlogin: true,
+      rolsuper: false,
+      rolbypassrls: false,
+      rolcreatedb: false,
+      rolcreaterole: false,
+      rolreplication: false,
+      rolinherit: false,
+      noPassword: true,
+    };
+    const problems = shapeProblems([...GOOD_SHAPE, fifth]);
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain('daftar_receivables_internal.rolcanlogin is true');
+    expect(problems[0]).toContain('R1 an internal authority can LOGIN');
   });
 
   it('a row that is not an internal authority is red — the law refuses a subject it does not judge', () => {
@@ -532,7 +697,42 @@ describe('TL-P4-RLS-INT-01 §12 — the reachability law is able to say no', () 
   it('a fact about something that is not an internal authority is refused, not judged', () => {
     const problems = reachProblems([...GOOD_REACH, { principal: 'daftar_app', authority: 'daftar_platform', member: true, usage: true, set: true }]);
     expect(problems).toHaveLength(1);
-    expect(problems[0]).toContain('is not one of the two');
+    expect(problems[0]).toContain('is not on the TL-P4-RLS-INT-01 internal-authority roster');
+  });
+});
+
+describe('TL-P4-RLS-INT-01 §11 — the internal-authority roster law is able to say no', () => {
+  it('is silent when the derivation and the hand-written roster agree', () => {
+    expect(authorityRosterProblems([...INTERNAL_ROLES])).toEqual([]);
+  });
+
+  it('a derivation that found NOTHING is red — a law with no subject is not a pass', () => {
+    const problems = authorityRosterProblems([]);
+    // Empty, so: the derivation itself, both ruling-named roles, and every
+    // rostered role missing.
+    expect(problems).toHaveLength(1 + RULING_NAMED_AUTHORITIES.length + INTERNAL_ROLES.length);
+    expect(problems[0]).toContain('matched NO role in the catalogue');
+    expect(problems[0]).toContain('a derivation with no subject is NOT a pass');
+  });
+
+  it('a FIFTH internal authority the roster does not name is NAMED, with what to do about it', () => {
+    const problems = authorityRosterProblems([...INTERNAL_ROLES, 'daftar_receivables_internal']);
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain('daftar_receivables_internal is an internal NOLOGIN authority the catalogue holds');
+    expect(problems[0]).toContain('Add it to INTERNAL_ROLES');
+  });
+
+  it.each(INTERNAL_ROLES)('a RETIRED authority (%s gone from the catalogue) is red — its laws would judge nothing', (role) => {
+    const problems = authorityRosterProblems(INTERNAL_ROLES.filter((r) => r !== role));
+    const expected = (RULING_NAMED_AUTHORITIES as readonly string[]).includes(role) ? 2 : 1;
+    expect(problems, role).toHaveLength(expected);
+    expect(problems.join('\n')).toContain(`${role} is on the hand-written`);
+    expect(problems.join('\n')).toContain('now judging nothing');
+  });
+
+  it.each(RULING_NAMED_AUTHORITIES)('a derivation that stopped matching %s, the RULING\u2019s own subject, is red for that reason too', (role) => {
+    const problems = authorityRosterProblems(INTERNAL_ROLES.filter((r) => r !== role));
+    expect(problems.join('\n')).toContain(`${role} is named by TL-P4-RLS-INT-01 itself`);
   });
 });
 
@@ -560,14 +760,26 @@ describe('TL-P4-RLS-INT-01 §11 — the live catalogue of a database built from 
     ).toBe(true);
   });
 
-  it('both authorities exist and the hand-written shape law is silent on them', async () => {
-    const rows = await liveShape();
+  it('the DERIVED roster is non-empty, contains the roles the ruling names, and EQUALS the hand-written roster', async () => {
+    const derived = await liveInternalAuthorities();
+    // NON-VACUITY FIRST: a derivation that matched nothing would make every
+    // law below a law about an empty set.
+    expect(derived.length, `the ${RULING} §11 derivation must have a subject`).toBeGreaterThan(0);
+    for (const named of RULING_NAMED_AUTHORITIES) expect(derived, `${named} is named by ${RULING} itself and must be derived`).toContain(named);
+    // AND EQUAL, in both directions, so a fifth authority is NAMED.
+    expect(authorityRosterProblems(derived)).toEqual([]);
+    expect(derived, 'the catalogue holds exactly the internal authorities this file hand-wrote').toEqual([...INTERNAL_ROLES]);
+  });
+
+  it('every authority on the DERIVED roster exists in pg_authid and the hand-written shape law is silent on all of them', async () => {
+    const rows = await liveShape(await liveInternalAuthorities());
     expect(rows.map((r) => r.rolname)).toEqual([...INTERNAL_ROLES]);
     expect(shapeProblems(rows)).toEqual([]);
   });
 
-  it('the six §11 attributes and the password are asserted literally, for both roles and identically', async () => {
-    const rows = await liveShape();
+  it('the six §11 attributes and the password are asserted literally, for every authority and identically', async () => {
+    const rows = await liveShape(await liveInternalAuthorities());
+    expect(rows.length, 'the literal assertion below must have run on every derived authority').toBe(INTERNAL_ROLES.length);
     for (const row of rows) {
       const { rolname, noPassword, ...attributes } = row;
       expect(attributes, `${rolname} must hold the accepted internal-authority shape (${RULING} §11)`).toEqual(REQUIRED_SHAPE);
@@ -620,12 +832,20 @@ describe('TL-P4-RLS-INT-01 §11 — the live catalogue of a database built from 
       // below, which were DERIVED from the built catalogue and not assumed.
       expect(rows.length, `${role} holds a table privilege somewhere — otherwise §13's policy/privilege split has nothing to tell apart`).toBeGreaterThan(0);
 
-      // MEASURED, AND IT CONTRADICTED THE FIRST DRAFT OF THIS FILE. Both
+      // MEASURED, AND IT CONTRADICTED THE FIRST DRAFT OF THIS FILE. The
       // authorities DO hold DELETE: `daftar_accounting_internal` on
       // accounting_assertion_uses, accounting_opening_balances and
       // accounting_opening_balance_lines; `daftar_inventory_internal` on
       // branch_warehouses, inventory_assertion_uses, payment_method_names,
-      // purchase_lines and the two purchase_landed_cost* relations. A law
+      // purchase_lines and the two purchase_landed_cost* relations. The two
+      // authorities added to this roster by A5 hold DELETE as well, and the
+      // SAME invariant holds of them — measured on the from-zero build:
+      // `daftar_catalog_internal` holds DELETE,INSERT,SELECT on
+      // `catalog_identifiers` and nothing else at all;
+      // `daftar_provisioning_internal` holds INSERT,SELECT,UPDATE on
+      // `provisioning_assertion_keys` and DELETE,INSERT,SELECT on
+      // `provisioning_assertion_uses`. Every DELETE is paired with an INSERT
+      // on all four, and no authority holds TRUNCATE anywhere. A law
       // forbidding DELETE would have been a narrowing of the accepted model
       // dressed as an invariant, which TL-P4-RLS-INT-01 forbids. The real
       // invariant the rows support is this: an authority never holds DELETE
@@ -659,6 +879,15 @@ describe('TL-P4-RLS-INT-01 §11 — the live catalogue of a database built from 
       // The owner of a SECURITY DEFINER routine IS the authority its body
       // runs with, and that is the whole mechanism the ruling is about, so
       // the claim is about their shape, not their count.
+      // MEASURED per authority on the from-zero build: accounting and
+      // inventory own many, `daftar_catalog_internal` owns exactly ONE
+      // (`catalog_identifiers_sync()`) and `daftar_provisioning_internal`
+      // owns THREE (`provision_actor`, `provision_assertion_key_install`,
+      // `provision_assertion_key_retire`). The claim is "at least one", not a
+      // count: a count here would be a closure rule wearing an invariant's
+      // clothes. What matters is that every rostered authority really IS a
+      // DEFINER identity, so none of them is a role with no mechanism behind
+      // it that the §12 sweep then guards for nothing.
       expect(
         rows.length,
         `${role} must own at least one SECURITY DEFINER routine — it is the DEFINER identity the ruled cross-tenant read runs under`,
@@ -680,6 +909,19 @@ describe('TL-P4-RLS-INT-01 §11 — the live catalogue of a database built from 
     // Measured ACL on every one of the 19: `<role>=X/<role>` — EXECUTE
     // revoked from PUBLIC and held by the owning authority and nobody else.
     // That is the law.
+    //
+    // A5: AND IT DOES NOT EXTEND TO ALL FOUR, which is recorded rather than
+    // asserted away. Measured on the from-zero build, the INVOKER routines
+    // each rostered authority owns are: accounting 17, inventory 2
+    // (`product_variants_10_base_variant_authority()` and
+    // `products_10_inventory_config_authority()`), catalog 0, provisioning 0.
+    // So for the two roles A5 added the `<role>=X/<role>` clause has NO
+    // SUBJECT — it is vacuously true of them, and this file says so instead
+    // of claiming it proved something about them. What IS asserted for all
+    // four is the counts-with-a-subject guard below: the clause must really
+    // have judged something SOMEWHERE, or the whole case is a green that
+    // proves nothing.
+    const invokerCounts = new Map<string, number>();
     for (const role of INTERNAL_ROLES) {
       const { rows } = await db.pool.query<{ sig: string; acl: string | null }>(
         `SELECT p.oid::regprocedure::text AS sig, array_to_string(p.proacl, ',') AS acl
@@ -687,6 +929,7 @@ describe('TL-P4-RLS-INT-01 §11 — the live catalogue of a database built from 
           WHERE o.rolname = $1 AND p.pronamespace = 'public'::regnamespace AND NOT p.prosecdef ORDER BY 1`,
         [role],
       );
+      invokerCounts.set(role, rows.length);
       for (const r of rows) {
         // A null ACL is PostgreSQL's default, which is PUBLIC EXECUTE. An
         // authority-owned routine must have been revoked explicitly.
@@ -697,23 +940,44 @@ describe('TL-P4-RLS-INT-01 §11 — the live catalogue of a database built from 
           expect(r.acl ?? '', `RUNTIME principal ${principal} must hold no EXECUTE on the authority-owned helper ${r.sig}`).not.toContain(`${principal}=`);
       }
     }
+    // NON-VACUITY. The ACL clause above is a loop over rows; with no rows
+    // anywhere it would be a green case that judged nothing, which is the
+    // failure mode this estate refuses. At least one rostered authority must
+    // really own an INVOKER routine for the clause to have been exercised,
+    // and the per-authority counts are RECORDED so a role whose count drops
+    // to zero is readable here rather than invisible.
+    const judged = [...invokerCounts.entries()].filter(([, n]) => n > 0);
+    expect(
+      judged.length,
+      `the ${RULING} §11 INVOKER-ACL clause judged no routine at all (counts: ${[...invokerCounts.entries()].map(([r, n]) => `${r}=${n}`).join(', ')}) — a loop over an empty set is not a pass`,
+    ).toBeGreaterThan(0);
   });
 });
 
+// The title of this block (and of the two below) is RECORDED BY NAME in
+// scripts/phase4-s4-gate.ts ROSTER_RECORDED, which this file does not own, so
+// it is left WORD FOR WORD although the roster is now four authorities rather
+// than "either". The subject is every rostered authority; the sweeps below
+// derive it.
 describe('TL-P4-RLS-INT-01 §12 — no runtime credential can assume either authority, measured live', () => {
   it('the catalogue roster holds no login role the hand-written §12 roster does not name', async () => {
     expect(rosterProblems(await liveLoginRoles())).toEqual([]);
   });
 
-  it('the catalogue-DERIVED roster is swept, not just the hand-written one', async () => {
+  it('the catalogue-DERIVED roster is swept on BOTH axes, not just the hand-written ones', async () => {
     const derived = (await liveLoginRoles()).filter((r) => r !== DEPLOYMENT_AUTHORITY);
-    // The derivation must really have found the named principals, or the
+    const authorities = await liveInternalAuthorities();
+    // Both derivations must really have found their named subjects, or the
     // sweep below is over a smaller set than the ruling names.
     for (const named of NAMED_RUNTIME_PRINCIPALS) expect(derived, `${named} must be a login role of the built database`).toContain(named);
-    expect(reachProblems([...(await liveReach(derived)), ...(await liveReach([DEPLOYMENT_AUTHORITY]))])).toEqual([]);
+    for (const named of RULING_NAMED_AUTHORITIES) expect(authorities, `${named} must be a derived internal authority`).toContain(named);
+    expect(derived.length * authorities.length, 'the swept product must be non-empty on both axes').toBeGreaterThan(0);
+    const rows = [...(await liveReach(derived, authorities)), ...(await liveReach([DEPLOYMENT_AUTHORITY], authorities))];
+    expect(rows.length, 'every (principal, authority) pair of the derived product was really read').toBe((derived.length + 1) * authorities.length);
+    expect(reachProblems(rows)).toEqual([]);
   });
 
-  it.each(NAMED_RUNTIME_PRINCIPALS)('a real %s connection is refused SET ROLE into BOTH authorities', async (role) => {
+  it.each(NAMED_RUNTIME_PRINCIPALS)('a real %s connection is refused SET ROLE into EVERY internal authority', async (role) => {
     await asLogin(role as ScratchRole, async (c) => {
       for (const authority of INTERNAL_ROLES) {
         const message = await refusal(() => c.query(`SET ROLE ${authority}`));
@@ -728,7 +992,7 @@ describe('TL-P4-RLS-INT-01 §12 — no runtime credential can assume either auth
     });
   });
 
-  it('the DEPLOYMENT credential, by contrast, CAN assume both — deployment authority is not runtime authority', async () => {
+  it('the DEPLOYMENT credential, by contrast, CAN assume every one of them — deployment authority is not runtime authority', async () => {
     await asLogin('daftar_migrator', async (c) => {
       for (const authority of INTERNAL_ROLES) {
         await c.query('BEGIN');
@@ -766,48 +1030,99 @@ describe('TL-P4-RLS-INT-01 §12 — no runtime credential can assume either auth
 /* ───────── THE LIVE RED PROOFS: the laws really bind THIS database ───────── */
 
 describe('TL-P4-RLS-INT-01 §17 — the reopening conditions, planted live and put back', () => {
-  it('R1 + R2: ALTER ROLE … LOGIN BYPASSRLS turns §11 red naming both conditions, and reverting turns it green', async () => {
-    const role = 'daftar_inventory_internal';
-    expect(shapeProblems(await liveShape()), 'green before the plant').toEqual([]);
+  it.each(INTERNAL_ROLES)('R1 + R2 on %s: ALTER ROLE … LOGIN BYPASSRLS turns §11 red naming both conditions, and reverting turns it green', async (role) => {
+    // EVERY rostered authority gets its own live plant, because the whole
+    // defect this file closed was a law that was alive for two roles and
+    // dormant for the rest. The plant is a REAL ALTER on a real role of a
+    // throwaway database, and it is both PROVEN TO HAVE TAKEN EFFECT (the
+    // re-read row carries the flags) and PROVEN RESTORED.
+    const derived = await liveInternalAuthorities();
+    expect(derived, `${role} must be a real role of this database for the plant to be a real plant`).toContain(role);
+    expect(shapeProblems(await liveShape(derived)), 'green before the plant').toEqual([]);
     await db.pool.query(`ALTER ROLE ${role} LOGIN BYPASSRLS`);
     try {
-      const problems = shapeProblems(await liveShape());
+      // The plant really took: the catalogue now says so.
+      const planted = (await liveShape([role]))[0];
+      expect(planted?.rolcanlogin, 'the plant must have taken effect').toBe(true);
+      expect(planted?.rolbypassrls, 'the plant must have taken effect').toBe(true);
+      // And the role is STILL DERIVED although it can now log in — which is
+      // the reason INTERNAL_AUTHORITY_NAME does not filter on rolcanlogin. A
+      // derivation that filtered it out would have gone green on R1.
+      expect(await liveInternalAuthorities(), 'an authority that gained LOGIN must not drop out of the derived roster').toContain(role);
+      const problems = shapeProblems(await liveShape(await liveInternalAuthorities()));
       expect(problems).toHaveLength(2);
+      expect(problems.join('\n')).toContain(`${role}.rolcanlogin is true`);
       expect(problems.join('\n')).toContain('R1 an internal authority can LOGIN');
       expect(problems.join('\n')).toContain('R2 an internal authority holds BYPASSRLS');
       expect(problems.every((p) => p.includes(RULING))).toBe(true);
     } finally {
       await db.pool.query(`ALTER ROLE ${role} NOLOGIN NOBYPASSRLS`);
     }
-    expect(shapeProblems(await liveShape()), 'green again after the revert').toEqual([]);
+    const restored = (await liveShape([role]))[0];
+    expect(restored?.rolcanlogin, 'the plant must have been restored').toBe(false);
+    expect(restored?.rolbypassrls, 'the plant must have been restored').toBe(false);
+    expect(shapeProblems(await liveShape(await liveInternalAuthorities())), 'green again after the revert').toEqual([]);
   });
 
-  it('R3: GRANT the authority to daftar_app WITH SET TRUE turns §12 red, and the refused SET ROLE really succeeds', async () => {
-    const authority = 'daftar_inventory_internal';
+  it.each([
+    ['daftar_app', 'daftar_accounting_internal'],
+    ['daftar_app', 'daftar_inventory_internal'],
+    ['daftar_platform', 'daftar_catalog_internal'],
+    ['daftar_worker', 'daftar_provisioning_internal'],
+  ] as const)('R3: GRANT %s the authority %s WITH SET TRUE turns §12 red, and the refused SET ROLE really succeeds', async (principal, authority) => {
+    // One pair per rostered authority, each with a DIFFERENT runtime
+    // principal, so the proof is not an accident of one credential. The
+    // grant is real, the §12 law is shown red on it, the SET ROLE that was
+    // refused a moment earlier really succeeds (without this the earlier
+    // refusal could be an artefact of the harness and not the grant model),
+    // and the grant is revoked and the refusal re-measured.
     const sweep = async (): Promise<string[]> => reachProblems([...(await liveReach(NAMED_RUNTIME_PRINCIPALS)), ...(await liveReach([DEPLOYMENT_AUTHORITY]))]);
     expect(await sweep(), 'green before the plant').toEqual([]);
-    // Before: a real daftar_app connection is refused.
-    expect(await asLogin('daftar_app', (c) => refusal(() => c.query(`SET ROLE ${authority}`)))).toMatch(/permission denied to set role/i);
-    await db.pool.query(`GRANT ${authority} TO daftar_app WITH INHERIT FALSE, SET TRUE`);
+    expect(await asLogin(principal as ScratchRole, (c) => refusal(() => c.query(`SET ROLE ${authority}`)))).toMatch(/permission denied to set role/i);
+    await db.pool.query(`GRANT ${authority} TO ${principal} WITH INHERIT FALSE, SET TRUE`);
     try {
       const problems = await sweep();
       // MEMBER and SET both become true; INHERIT FALSE keeps USAGE false.
       expect(problems).toHaveLength(2);
-      expect(problems.join('\n')).toContain(`RUNTIME principal daftar_app may SET ROLE to ${authority}`);
+      expect(problems.join('\n')).toContain(`RUNTIME principal ${principal} may SET ROLE to ${authority}`);
       expect(problems.join('\n')).toContain('R3 a RUNTIME credential can SET ROLE');
-      // AND THE DATA PATH IS REALLY OPEN: the same statement the law was
-      // measuring now succeeds. Without this, the earlier refusal could have
-      // been an artefact of the harness rather than the grant model.
-      const opened = await asLogin('daftar_app', async (c) => {
+      const opened = await asLogin(principal as ScratchRole, async (c) => {
         await c.query(`SET ROLE ${authority}`);
         return (await c.query<{ u: string }>(`SELECT current_user::text AS u`)).rows[0]?.u;
       });
-      expect(opened).toBe(authority);
+      expect(opened, 'the data path really opened — the law was measuring the GRANT model, not the harness').toBe(authority);
     } finally {
-      await db.pool.query(`REVOKE ${authority} FROM daftar_app`);
+      await db.pool.query(`REVOKE ${authority} FROM ${principal}`);
     }
     expect(await sweep(), 'green again after the revoke').toEqual([]);
-    expect(await asLogin('daftar_app', (c) => refusal(() => c.query(`SET ROLE ${authority}`)))).toMatch(/permission denied to set role/i);
+    expect(await asLogin(principal as ScratchRole, (c) => refusal(() => c.query(`SET ROLE ${authority}`)))).toMatch(/permission denied to set role/i);
+  });
+
+  it('a FIFTH internal authority created live is seen by the roster law, and NAMED', async () => {
+    // A REAL subject: a role that really exists in the catalogue, matching the
+    // stated derivation rule, with the accepted shape — so the shape law has
+    // nothing to say about it and ONLY the roster law speaks. That is the
+    // dormancy this file closed: a new authority is named, not skipped.
+    const probe = 'daftar_a5probe_internal';
+    expect(authorityRosterProblems(await liveInternalAuthorities()), 'green before the plant').toEqual([]);
+    await db.pool.query(`CREATE ROLE ${probe} NOLOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS`);
+    try {
+      const derived = await liveInternalAuthorities();
+      expect(derived, 'the plant must have taken effect').toContain(probe);
+      const problems = authorityRosterProblems(derived);
+      expect(problems).toHaveLength(1);
+      expect(problems[0]).toContain(`${probe} is an internal NOLOGIN authority the catalogue holds`);
+      expect(problems[0]).toContain('Add it to INTERNAL_ROLES');
+      // And the §11 shape law is SILENT on it — it carries the accepted shape.
+      // The two laws are separate on purpose: unrostered is a roster finding,
+      // a bad attribute is a shape finding, and a role can be either.
+      expect(shapeProblems(await liveShape(derived))).toEqual([]);
+    } finally {
+      await db.pool.query(`DROP ROLE ${probe}`);
+    }
+    const after = await liveInternalAuthorities();
+    expect(after, 'the plant must have been restored').not.toContain(probe);
+    expect(authorityRosterProblems(after), 'green again after the drop').toEqual([]);
   });
 
   it('a login role added later is seen by the roster law, live, and named', async () => {
@@ -848,12 +1163,57 @@ describe('TL-P4-RLS-INT-01 §13 — the policy admission and the GRANT, told apa
     return new Set(rows.map((r) => r.t));
   }
 
-  it.each(INTERNAL_ROLES)('%s really is admitted BY NAME by a permissive policy — the ruled visibility has a subject', async (role) => {
+  /** Every SECURITY DEFINER routine `role` owns — what makes a non-reader still an authority. */
+  async function definerCount(role: string): Promise<number> {
+    const { rows } = await db.pool.query<{ n: string }>(
+      `SELECT count(*)::text AS n FROM pg_proc p JOIN pg_roles o ON o.oid = p.proowner
+        WHERE o.rolname = $1 AND p.pronamespace = 'public'::regnamespace AND p.prosecdef`,
+      [role],
+    );
+    return Number(rows[0]?.n ?? '0');
+  }
+
+  it.each(RULING_NAMED_AUTHORITIES)('%s really is admitted BY NAME by a permissive policy — the ruled visibility has a subject', async (role) => {
     const admitted = await policyAdmitted(role);
     expect(
       admitted.length,
       `${role} is named by no permissive policy, so there is no "intentional internal authority visibility" left for ${RULING} to be about — the ruling's subject is gone, which is itself a finding`,
     ).toBeGreaterThan(0);
+  });
+
+  it('MEASURED: not every internal authority is a cross-tenant READER, and the law says what the rows support', async () => {
+    // A5, AND THIS IS THE CLAUSE THAT DID NOT EXTEND. The case above was
+    // written `it.each(INTERNAL_ROLES)` when the roster was two names. Run
+    // over all four it is simply FALSE: measured on the from-zero build,
+    // `daftar_provisioning_internal` is named by NO policy at all — not
+    // permissive, not restrictive. It is a DEFINER-WRITE authority (three
+    // SECURITY DEFINER routines, INSERT/SELECT/UPDATE on
+    // `provisioning_assertion_keys`, DELETE/INSERT/SELECT on
+    // `provisioning_assertion_uses`), not a cross-tenant reader, and
+    // `daftar_catalog_internal` is admitted on exactly one relation
+    // (`catalog_identifiers`).
+    //
+    // So "every internal authority is policy-admitted" would have been the
+    // invariant that sounds strongest and is false. The invariant the rows
+    // support, and the one asserted here, is: an internal authority is a
+    // cross-tenant reader OR a definer-write authority, never a role with
+    // neither — and the roles the RULING is about are readers, because that
+    // is what the ruling is about.
+    const admitted = new Map<string, string[]>();
+    for (const role of INTERNAL_ROLES) admitted.set(role, await policyAdmitted(role));
+    const readers = INTERNAL_ROLES.filter((r) => (admitted.get(r) ?? []).length > 0);
+    const nonReaders = INTERNAL_ROLES.filter((r) => (admitted.get(r) ?? []).length === 0);
+    // NON-VACUITY: the §13 policy/privilege split below must have a subject.
+    expect(readers.length, `no internal authority is policy-admitted anywhere, so ${RULING} §13 has nothing to tell apart`).toBeGreaterThan(0);
+    // The ruling's own subjects must be among the readers.
+    for (const named of RULING_NAMED_AUTHORITIES)
+      expect(readers, `${named} is what ${RULING} calls the intentional cross-tenant read — it must be policy-admitted`).toContain(named);
+    // And a non-reader is still a real authority, not a dangling role.
+    for (const role of nonReaders)
+      expect(
+        await definerCount(role),
+        `${role} is named by no policy AND owns no SECURITY DEFINER routine — it is an internal authority with no mechanism behind it, which is a role nobody needs and a ${RULING} §11 finding`,
+      ).toBeGreaterThan(0);
   });
 
   it.each(INTERNAL_ROLES)('%s: the POLICY admission and the TABLE PRIVILEGE are asserted separately, never conflated', async (role) => {
@@ -867,10 +1227,18 @@ describe('TL-P4-RLS-INT-01 §13 — the policy admission and the GRANT, told apa
     // missing GRANT. Reporting one of those as a usable cross-tenant data
     // path would be a false positive, so they are counted and named, not
     // asserted away.
-    expect(
-      usable.length,
-      `${role} holds SELECT on none of the ${admitted.length} relation(s) a permissive policy admits it on — then the ruled read is not a data path at all, and ${RULING}'s premise needs re-reading`,
-    ).toBeGreaterThan(0);
+    // GUARDED BY THE MEASUREMENT ABOVE, not by wishful thinking: an authority
+    // no policy admits (`daftar_provisioning_internal`) has no admission to
+    // turn into a data path, and demanding one of it would be this file
+    // narrowing the accepted model. For an authority that IS admitted, at
+    // least one admission must be backed by the GRANT, or the ruled read is
+    // not a data path at all.
+    if (admitted.length > 0)
+      expect(
+        usable.length,
+        `${role} holds SELECT on none of the ${admitted.length} relation(s) a permissive policy admits it on — then the ruled read is not a data path at all, and ${RULING}'s premise needs re-reading`,
+      ).toBeGreaterThan(0);
+    else expect(usable, `${role} is admitted by no policy, so it can have no usable admission either`).toEqual([]);
     // And a dead admission is never counted as a path.
     for (const t of deadAdmissions)
       expect(
