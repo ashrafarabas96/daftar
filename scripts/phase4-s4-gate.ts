@@ -2205,6 +2205,19 @@ export const ROSTER_RECORDED: readonly RosterRow[] = [
     suite: 'tests/security/p4s4-rls-barrier-behaviour.test.ts',
     title: 'P4-S4 — THE PERMANENT FOUR-WAY AUTHORITY MATRIX (TL-P4-RLS-INT-01)',
   },
+  // CASE C of the same matrix, and a DIFFERENT authority model from the three
+  // above it: a real merchant credential exercising a real route, refused by the
+  // barrier, with the other tenant's state proven byte-identical afterwards.
+  // Recorded by its two load-bearing titles because a count cannot see either
+  // leave while the other holds the file on the roster.
+  {
+    suite: 'tests/security/p4s4-cross-tenant-command-refusal.test.ts',
+    title: '§16 CASE C — the eight Phase 4 command surfaces, each REFUSED with no effect in B',
+  },
+  {
+    suite: 'tests/security/p4s4-cross-tenant-command-refusal.test.ts',
+    title: '§16 CASE C — THE RED PROOFS: each law is shown to be able to fail, against a real subject',
+  },
   {
     suite: 'tests/security/p4s4-rls-barrier-behaviour.test.ts',
     title: "P4-S4 — THE RED PROOFS for the four-way matrix: §17's three reopening conditions (TL-P4-RLS-INT-01)",
