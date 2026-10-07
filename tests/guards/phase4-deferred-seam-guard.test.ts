@@ -56,10 +56,12 @@ import {
   DEFERRED_SEAMS,
   deferredSeamProblems,
   INVOICE_REDUCER_VOCABULARY,
+  liveRoutineBodiesIn,
   phase4Migrations,
-  phase4RoutineBody,
   phase4Sql,
   readTables,
+  routineBodiesIn,
+  routineSignature,
 } from '../../scripts/phase4-s1-gate';
 
 const REPO = join(__dirname, '..', '..');
@@ -72,14 +74,25 @@ const temporaries: string[] = [];
  * the repository, so only the DDL differs.
  */
 /*
- * The planted file's NAME IS LOAD-BEARING, and it sorts last on purpose.
- * `phase4RoutineBody` takes the LAST definition of a routine across the
- * Phase 4 DDL in file order, because a routine REPLACED by a later migration
- * is the one that runs. A plant numbered 0076 therefore stopped being the
- * body under test the moment a real migration after it redefined the
- * routine — which `0080` does for `invoice_outstanding`. Three proofs in this
- * file silently became proofs about `0080`'s body instead of the plant's
- * (P4-S4). `9999_` keeps the plant last whatever the tree grows.
+ * The planted file's NAME IS LOAD-BEARING, and it sorts last on purpose. A
+ * routine REPLACED by a later migration is not the one that runs, so a plant
+ * numbered 0076 stopped being the definition under test the moment a real
+ * migration after it redefined the routine — which `0080` does for
+ * `invoice_outstanding`. Three proofs in this file silently became proofs
+ * about `0080`'s body instead of the plant's (P4-S4). `9999_` keeps the plant
+ * last whatever the tree grows.
+ *
+ * AND "THE LAST DEFINITION" IS NOT "THE ONE THAT RUNS" — the correction this
+ * comment owes. `phase4RoutineBody` matched `CREATE … FUNCTION <name> (` on
+ * the NAME ALONE, with no signature discrimination, and returned the LAST
+ * textual match. PostgreSQL overloads on the parameter list, so a name can
+ * carry several LIVE routines at once: `invoice_outstanding` carries two, and
+ * the scalar `(UUID, UUID)` form at `0084:526` was judged by NOTHING because
+ * the array form at `0084:593` comes after it. This comment described that
+ * behaviour as if it were benign. It was a hole, measured and closed under
+ * TL-P4-S5-R1: a NEGATIVE law reads `phase4RoutineBodies` and judges EVERY
+ * definition, and this POSITIVE seam reads the LIVE set — the last definition
+ * of each distinct SIGNATURE.
  */
 function rootWith(planted: string, name = '9999_planted.sql'): string {
   const root = mkdtempSync(join(tmpdir(), 'p4-seam-'));
@@ -151,8 +164,11 @@ describe('the seams are declared, and the registry is the gate’s subject', () 
   it('the tree as it stands is safe: every seam is silent, and that silence is about the real DDL', () => {
     expect(deferredSeamProblems(REPO)).toEqual([]);
     // The silence is not the silence of a missing subject: 0075 really does
-    // define the routine S-P4-03 watches.
-    expect(phase4RoutineBody(REPO, 'invoice_outstanding')).not.toBeNull();
+    // define the routine S-P4-03 watches — and the seam's subject is the LIVE
+    // SET of that name, every definition of which this gate can read.
+    const { live, unplaceable } = liveRoutineBodiesIn(phase4Sql(REPO), 'invoice_outstanding');
+    expect(live.length, 'the seam has no live definition of invoice_outstanding to judge').toBeGreaterThan(0);
+    expect(unplaceable, 'a definition whose signature this gate cannot place is a definition it cannot judge').toBe(0);
   });
 });
 
@@ -458,6 +474,168 @@ describe('S-P4-03 — the reader-of-record reads every relation that settles an 
       PRIMARY KEY (business_id, id)
     );
   `;
+
+  /**
+   * ── THE POSITIVE LAW'S SUBJECT IS THE DEFINITION SET ────────────────────
+   *
+   * `invoice_outstanding` carries TWO LIVE SIGNATURES: the scalar
+   * `(UUID, UUID)` last written at `0084:526` and the set-based
+   * `(UUID, UUID[])` last written at `0084:593`. Until TL-P4-S5-R1 this seam
+   * read the LAST definition of the NAME and required it to name every
+   * settling relation — and `0084:510-520` says in so many words that the
+   * migrations are ARRANGED around that behaviour: «R-100 requires the array
+   * form to be the last definition of `invoice_outstanding` for seam
+   * S-P4-03». `0083` is arranged the same way.
+   *
+   * That makes a FRAGILE STATEMENT-ORDERING ASSUMPTION load-bearing prose in
+   * a migration comment. Pointing the seam at every definition instead would
+   * be a FALSE RED — the wrapper legitimately names no relation, because it
+   * delegates — so the law is stated over the SET: every live definition
+   * either names the settling relations ITSELF, or DELEGATES to another
+   * definition of the same name that does. The ordering is then CHECKED
+   * rather than trusted, and the delegation it relies on has to be real.
+   *
+   * `0075:722` is why the subject is the LIVE set and not every definition:
+   * it predates every reducer relation, names none of them and delegates to
+   * nothing, so a law over all seven definitions would be red on the accepted
+   * tree.
+   */
+  /** The set-based form, reading every reducer the TREE creates — DISCOVERED, so no relation name is written here. */
+  const compliantArrayForm = (): string => `
+CREATE FUNCTION invoice_outstanding(p_business_id UUID, p_invoice_ids UUID[])
+RETURNS TABLE (invoice_id UUID, paid_txn_minor BIGINT, paid_base_minor BIGINT,
+               outstanding_txn_minor BIGINT, outstanding_base_minor BIGINT,
+               currency_code TEXT, due_date DATE)
+LANGUAGE plpgsql STABLE SET search_path = pg_catalog, public, pg_temp AS $ar$
+BEGIN
+  RETURN QUERY
+    SELECT i.id, 0::BIGINT, 0::BIGINT, i.total_txn_minor, i.total_base_minor, i.currency_code::TEXT, i.due_date
+      FROM public.invoices i
+${[...new Set(reducerRelations(REPO))].map((n) => `      LEFT JOIN public.${n} ${n}_r ON ${n}_r.invoice_id = i.id`).join('\n')}
+     WHERE i.business_id = p_business_id AND i.id = ANY(p_invoice_ids);
+END;
+$ar$;
+`;
+
+  /** A scalar form with `body` for its `RETURN QUERY`, so what differs between a RED and a GREEN plant is only whether it delegates. */
+  const scalarForm = (body: string): string => `
+CREATE OR REPLACE FUNCTION invoice_outstanding(p_business_id UUID, p_invoice_id UUID)
+RETURNS TABLE (paid_txn_minor BIGINT, paid_base_minor BIGINT, outstanding_txn_minor BIGINT, outstanding_base_minor BIGINT)
+LANGUAGE plpgsql STABLE SET search_path = pg_catalog, public, pg_temp AS $sc$
+BEGIN
+  RETURN QUERY
+${body}
+END;
+$sc$;
+`;
+
+  it('P1 non-vacuity: the name carries TWO live signatures, and the array form is the last definition of the NAME', () => {
+    const defs = routineBodiesIn(phase4Sql(REPO), 'invoice_outstanding');
+    expect(defs.length, 'invoice_outstanding has one definition, so the definition-set arms below would pass for want of a subject').toBeGreaterThan(1);
+    const { live, unplaceable } = liveRoutineBodiesIn(phase4Sql(REPO), 'invoice_outstanding');
+    expect(unplaceable, 'a definition whose signature this gate cannot place is not a subject it can judge').toBe(0);
+    expect(live, 'the reader-of-record has exactly the two live forms 0084 writes').toHaveLength(2);
+    expect(live.map((d) => routineSignature(d, 'invoice_outstanding')).sort()).toEqual(['uuid,uuid', 'uuid,uuid[]']);
+    // The ordering the migrations are arranged around, asserted rather than
+    // read out of a comment: the array form really is last.
+    expect(routineSignature(defs[defs.length - 1] ?? '', 'invoice_outstanding')).toBe('uuid,uuid[]');
+  });
+
+  it('NOT A FINDING P2: the wrapper names NO reducer and the seam is silent BECAUSE it delegates to a definition that does', () => {
+    const reducers = reducerRelations(REPO);
+    expect(reducers.length, 'the tree creates no reducer, so this claim would be vacuous').toBeGreaterThan(0);
+    const { live } = liveRoutineBodiesIn(phase4Sql(REPO), 'invoice_outstanding');
+    const wrapper = live.find((d) => routineSignature(d, 'invoice_outstanding') === 'uuid,uuid') ?? '';
+    const setBased = live.find((d) => routineSignature(d, 'invoice_outstanding') === 'uuid,uuid[]') ?? '';
+    expect(wrapper, 'the scalar form is live').not.toBe('');
+    expect(setBased, 'the set-based form is live').not.toBe('');
+    // The wrapper names none of them — so a law that required every definition
+    // to name them would be red here, which is why it does not.
+    for (const name of reducers) expect(new RegExp(`\\b${name}\\b`).test(wrapper), `the wrapper does not name ${name}, and need not`).toBe(false);
+    // Its delegation is REAL: it calls another definition of the same name.
+    expect(
+      /\b(?:public\.)?invoice_outstanding\s*\(/i.test(wrapper.replace(/^CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+invoice_outstanding\s*/i, '')),
+      'the wrapper really calls another definition of invoice_outstanding',
+    ).toBe(true);
+    // And the definition it delegates to names every one of them.
+    for (const name of reducers) expect(new RegExp(`\\b${name}\\b`).test(setBased), `the set-based form reads ${name}`).toBe(true);
+    expect(deferredSeamProblems(REPO)).toEqual([]);
+  });
+
+  it('RED P3: a wrapper whose DELEGATION IS FAKE is a finding — the statement-ordering assumption is CHECKED, not trusted', () => {
+    // The plant is the real file's geometry with the wrapper's delegation
+    // removed: a scalar form that neither names a settling relation nor calls
+    // another definition of `invoice_outstanding`, with a compliant array form
+    // written AFTER it exactly as `0084` orders them. The LAST definition of
+    // the name is therefore clean, which is why the signature-blind seam was
+    // silent on this — asserted below, not described.
+    const root = rootWith(
+      `${scalarForm(`    SELECT 0::BIGINT, 0::BIGINT, i.total_txn_minor, i.total_base_minor
+      FROM public.invoices i
+     WHERE i.business_id = p_business_id AND i.id = p_invoice_id;`)}${compliantArrayForm()}`,
+      '9999_planted_fake_delegation.sql',
+    );
+    const reducers = reducerRelations(REPO);
+    const last = routineBodiesIn(phase4Sql(root), 'invoice_outstanding').slice(-1)[0] ?? '';
+    expect(routineSignature(last, 'invoice_outstanding'), 'the last definition of the name is the compliant array form').toBe('uuid,uuid[]');
+    for (const name of reducers) expect(new RegExp(`\\b${name}\\b`).test(last), `the last definition reads ${name}, so the OLD seam was green`).toBe(true);
+    const problems = deferredSeamProblems(root);
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain('S-P4-03');
+    expect(problems[0], 'the finding names WHICH live definition is stranded').toContain('uuid,uuid');
+    expect(problems[0]).toContain('delegates');
+    for (const name of reducers) expect(problems[0]).toContain(name);
+  });
+
+  it('NOT A FINDING P4: a planted wrapper that DOES delegate to a compliant definition is green', () => {
+    // The same plant as P3 differing only in whether the delegation is there,
+    // so what the law judges is the delegation and not the shape of the plant.
+    const root = rootWith(
+      `${scalarForm(`    SELECT o.paid_txn_minor, o.paid_base_minor, o.outstanding_txn_minor, o.outstanding_base_minor
+      FROM public.invoice_outstanding(p_business_id, ARRAY[p_invoice_id]) o;`)}${compliantArrayForm()}`,
+      '9999_planted_real_delegation.sql',
+    );
+    expect(deferredSeamProblems(root)).toEqual([]);
+  });
+
+  it('RED P5: a THIRD overload that neither names a settling relation nor delegates is judged too', () => {
+    const third = `
+CREATE FUNCTION invoice_outstanding(p_business_id UUID, p_invoice_id UUID, p_as_of DATE)
+RETURNS BIGINT
+LANGUAGE sql STABLE SET search_path = pg_catalog, public, pg_temp AS $th$
+  SELECT i.total_txn_minor FROM public.invoices i WHERE i.business_id = p_business_id AND i.id = p_invoice_id;
+$th$;
+`;
+    const root = rootWith(
+      `${scalarForm(`    SELECT o.paid_txn_minor, o.paid_base_minor, o.outstanding_txn_minor, o.outstanding_base_minor
+      FROM public.invoice_outstanding(p_business_id, ARRAY[p_invoice_id]) o;`)}${third}${compliantArrayForm()}`,
+      '9999_planted_third_overload.sql',
+    );
+    expect(liveRoutineBodiesIn(phase4Sql(root), 'invoice_outstanding').live, 'the plant really does add a third live signature').toHaveLength(3);
+    const problems = deferredSeamProblems(root);
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain('S-P4-03');
+    expect(problems[0]).toContain('uuid,uuid,date');
+  });
+
+  it('RED P6: a wrapper that calls ITSELF has delegated to nothing, and the seam says so', () => {
+    // The evasion the delegation check would otherwise accept: a scalar form
+    // that names no settling relation and satisfies "it calls
+    // invoice_outstanding" by calling ITSELF. The pass-through shape — its own
+    // parameter names, in order — is refused. The real wrapper passes
+    // `ARRAY[p_invoice_id]`, which is how it reaches the other signature, so
+    // the two plants differ only in the one argument.
+    const root = rootWith(
+      `${scalarForm(`    SELECT o.paid_txn_minor, o.paid_base_minor, o.outstanding_txn_minor, o.outstanding_base_minor
+      FROM public.invoice_outstanding(p_business_id, p_invoice_id) o;`)}${compliantArrayForm()}`,
+      '9999_planted_self_delegation.sql',
+    );
+    const problems = deferredSeamProblems(root);
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain('S-P4-03');
+    expect(problems[0]).toContain('uuid,uuid');
+    expect(problems[0]).toContain('delegates');
+  });
 
   it('RED A: a future reducer relation lands and the routine does not account for it — the finding names it', () => {
     const both = `${ALLOCATIONS}${WRITE_OFFS}
