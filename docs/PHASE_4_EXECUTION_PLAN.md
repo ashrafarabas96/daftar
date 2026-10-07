@@ -202,18 +202,42 @@ concurrency; cross-currency caps in the source's own currency.
 **Blocked by.** Nothing. `OD-P4-13` is RULED (A + C) and governs its acceptance.
 
 ### P4-S6 — Reversals, void, and TD-15
-**Scope.** `payment_reversals`, `allocation_reversals`; the `void_invoice` compound command and the refusal of
-the direct path; and **TD-15's supplier twin closed in the same transaction shape**, with AP preserved exactly.
+**Scope.** `payment_reversals`, `allocation_reversals`, **`invoice_voids`**; the `void_invoice` compound
+command and the refusal of the direct path; and **TD-15's supplier twin closed in the same transaction
+shape**, with AP preserved exactly.
+
+> **Correction, 2026-10-07 (coordinator).** `invoice_voids` was absent from this scope line, and the
+> omission was this document's, not the slice's. `P4-AL-07` (law 7 — one statement of a truth) makes the
+> relation necessary the moment `void_invoice` exists: a void whose record is a flag on `invoices`, or a
+> status recomputed from the journal, is a second statement of the same truth. The relation is therefore
+> **in scope by necessity**, together with the `invoice_void.idempotency_conflict` and
+> `invoice_void.date_invalid` members of the closed refusal set. Recorded as a scope correction rather
+> than a scope widening: nothing new is being asked of the slice, and the two relations the plan did name
+> cannot carry the void record between them.
+
 **Gate.** `gate:phase4:s6` — composes s5; reversal and refund proven to be two operations by the merged-path
 red proof; a second reversal refused; the multi-currency reversal using the original snapshots; no stale
 allocation after a payment reversal; `provider_reference` idempotency at the database.
 **Exit.** G-05, G-10, G-11 green; TD-15 closed with its `TECHNICAL_DEBT.md` reference corrected; gate and CI
 green.
-**Blocked by.** Nothing. `OD-P4-04` is RULED: **OPTION B AUTHORIZED** — an append-only negative release /
-reducer at the current chain head, history never rewritten. The telescoping identity
-`rel(X, a) = R(X + a) − R(X)` and `rel(S, −a) = R(S − a) − R(S)` must be proved **before** any reversal product
-code is written, with the ten required test cases; if the proof fails, the only permitted fallback is
-OPTION A / LIFO-only.
+**Blocked by.** Nothing.
+
+> **Correction, 2026-10-07 (coordinator).** This paragraph used to read "`OD-P4-04` is RULED: **OPTION B
+> AUTHORIZED** … if the proof fails, the only permitted fallback is OPTION A / LIFO-only", and it had gone
+> stale. The fallback is no longer a conditional: **`TL-P4-S6-R1` is RULED and the LIFO-only model is
+> ACTIVE**, and Option B — a signed-negative ordinary reducer — **is not reopened**. The register carries
+> the ruling in full at §13 and in its `OD-P4-04` row; per the live-state rule, the Decision Register wins
+> for current status and this plan was the document that was behind. Left as prose rather than deleted,
+> because a plan that silently loses a superseded instruction teaches the next reader nothing about why
+> the current one is current.
+>
+> What S6 must therefore prove, in place of the telescoping identity the superseded option needed: a
+> reversal is permitted only when the original reducer is the **last active settlement reducer on every
+> chain it affects**, established under lock; the original row is immutable; the reversal is a separate
+> append-only row; there is no `reversed` boolean, no mutation, no delete and no signed-negative ordinary
+> reducer; the journal reversal is the exact inverse of the original **stored** financial effect; and
+> historical carrying release is never recomputed. "LIFO" here names the last active settlement reducer
+> and has nothing to do with inventory costing.
 
 ### P4-S7 — Debts, statements, installments, and the narrow TD-22 repayment
 **Scope.** `installment_plans`, `installments`; the statement, the debts and aging reads; the schedule as a
@@ -331,8 +355,8 @@ migration owner writes them.
 | S2 | `sales`, `sale_items` (with `UNIQUE (business_id, sale_id, id)` for the bridge's line FK); the `sale.commit` operation kind **alone** (`TL-P4-S2-K1`: `sale.void` is P4-S6's command and `sale.return` is P4-S5's, and an `inventory_operation_kinds` row is a registration of AUTHORITY, so registering them here would create live authority with no writer — the same reasoning `TL-P4-S1-R1` applied to the `invoice` source type); **the `invoice` accounting source type with its operation kinds, both bindings and its deferred completeness validator, moved here by `TL-P4-S1-R1`**; the `sale` accounting source type with both bindings and its validator; **the `stock_source_types` row and the whole `stock_source_bridge_sale` apparatus** — bridge table, generated constant, binding FK, line FK, RLS enable+force plus **six** policies (`TL-P4-S1-C2`; the accepted `stock_source_bridge_purchase` carries `tenant_membership`, four RESTRICTIVE per-command isolation policies and `inventory_internal_read` at `0063:555-568`, not five — the bridge is not an accounting-source relation, so no `accounting_validator`), append-only trigger, deferred binding trigger, recorded `prosrc` digests, and the migration's own assertion that `inventory_stock_source_guard_gaps()` returns no row (P4-AL-29b); the sale commit routine; `sales_walkin_no_ar` |
 | S3 | `pos_till_sessions` and `pos_cart_lines`; no accounting object |
 | S4 | `payments`, `payment_allocations`, `customer_credits`, `customer_credit_applications` (**not** `payment_methods`, which `0067:284` already created); the level-uniqueness constraints **and** the deferred chain verifier; the carrying-release routine; the `payment_allocation` source type |
-| S5 | `credit_notes`, `credit_note_items`, `refunds` with the one-non-null-source `CHECK`; the `credit_note` and `refund` source types |
-| S6 | `payment_reversals`, `allocation_reversals`; the `allocation_reversal` source type; the void-path refusal trigger; the shape `OD-P4-04` decides |
+| S5 | `credit_notes`, `credit_note_items`, **`credit_note_applications`** (the ONE AR reducer — see the dated scope correction above), `refunds` with the one-non-null-source `CHECK`; the `customer_return`, `customer_credit_note_application` and `customer_refund` source types, each owing a writer, a binding, an expected journal shape AND a deferred completeness validator; **two PARTIAL level unique indexes** on `refunds`, one per source, because a single `UNIQUE` over a nullable discriminator is green and vacuous for every NULL row |
+| S6 | `payment_reversals`, `allocation_reversals`, `invoice_voids`; the void-path refusal trigger; the `(level, generation)` widening of the S4-owned level keys as a NEW append-only migration; the shape `TL-P4-S6-R1` fixes (LIFO-only; Option B not reopened). The `allocation_reversal` source type is **withdrawn** (2026-10-07); the reason and the shape that replaces it are the S6 contract pack's, and `PATCH-REQ-S6-008` remains OPEN for the rest of its body |
 | S7 | `installment_plans`, `installments` with the sum constraint |
 | S8 | possibly none; any index a measured budget proves necessary, with its plan assertion |
 | S9 | **none** |

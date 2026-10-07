@@ -1668,6 +1668,80 @@ function measuredDirs(): string[] {
  * arm comparing the table with the derivation then fires, on a tree nobody
  * touched. `[[daftar-a-closure-rule-is-not-an-invariant]]`.
  */
+/**
+ * A TypeScript source with its comments removed and its string literals kept.
+ *
+ * `measuredCandidateSuites` used to test the WHOLE file text, so a suite that
+ * merely MENTIONED a migration number in a prose comment claimed to be one of
+ * this slice's measurements. P4-S7's performance suite did exactly that and
+ * reddened this gate twice on a tree that measured nothing of S4's. The
+ * failure mode is not only availability: a derivation that over-collects
+ * forces the measured-suite table to list suites that measure nothing, after
+ * which the table states which files mention a number rather than which files
+ * exercise a migration, and an attribute nobody judges decays into a false
+ * claim (`[[daftar-an-unjudged-attribute-becomes-false]]`).
+ *
+ * String literals are KEPT deliberately: the honest way a suite names the
+ * migration it exercises is a path or an identifier in code, and that is
+ * exactly what must still match.
+ *
+ * THE THIRD COPY IN THE TREE, knowingly. `scripts/guards/merchant-jargon.ts`
+ * and `scripts/guards/inventory-arithmetic.ts` each export a
+ * `stripTsComments` of their own, both regex-based, and neither tracks a
+ * string literal properly: a `//` inside one is kept only when the character
+ * before it happens to be in a hand-written exclusion set, and a block comment
+ * inside a literal is blanked. That is tolerable for their subjects — jargon
+ * words and arithmetic shapes — and not for this one, where the text being
+ * protected IS a path containing slashes. Consolidating the three means
+ * editing a module two other guards import, which is not a change to make
+ * during an acceptance transition; it is recorded as owed to P4-S8, which owns
+ * guard completeness. Until then this copy is the one with the stated
+ * contract, and its proof is
+ * `tests/guards/p4s4-gate-execution.test.ts`'s red limb.
+ */
+export function stripTsComments(src: string): string {
+  let out = '';
+  let i = 0;
+  let quote: string | null = null;
+  while (i < src.length) {
+    const c = src.charAt(i);
+    const next = src.charAt(i + 1);
+    if (quote !== null) {
+      out += c;
+      if (c === '\\') {
+        out += next;
+        i += 2;
+        continue;
+      }
+      if (c === quote) quote = null;
+      i += 1;
+      continue;
+    }
+    if (c === "'" || c === '"' || c === '`') {
+      quote = c;
+      out += c;
+      i += 1;
+      continue;
+    }
+    if (c === '/' && next === '/') {
+      while (i < src.length && src.charAt(i) !== '\n') i += 1;
+      continue;
+    }
+    if (c === '/' && next === '*') {
+      i += 2;
+      while (i < src.length && !(src.charAt(i) === '*' && src.charAt(i + 1) === '/')) i += 1;
+      i += 2;
+      // A block comment may have spanned lines; keep a newline so line-based
+      // readers downstream do not see two statements joined into one.
+      out += '\n';
+      continue;
+    }
+    out += c;
+    i += 1;
+  }
+  return out;
+}
+
 export function measuredCandidateSuites(root: string): string[] {
   // `sliceMigrations`, not `candidateMigrations`: the acceptance commit moves
   // every candidate into the manifest, after which `candidateMigrations` names
@@ -1681,12 +1755,24 @@ export function measuredCandidateSuites(root: string): string[] {
     .map((f) => /^(\d+)/.exec(f)?.[1])
     .filter((n): n is string => n !== undefined);
   if (numbers.length === 0) return [];
-  const shapes = numbers.map((n) => new RegExp(`\\b${n}\\b`));
+  // `(?<![0-9])N(?![0-9])`, never `\bN\b`: `_` is a WORD character, so a word
+  // boundary after the number fails for `0084_phase4_ar_fixed_cost…` — the
+  // migration's own filename, which is the honest way a suite names what it
+  // exercises. Under the old shape the only text that matched was a BARE
+  // number with punctuation both sides, which in practice meant prose. The two
+  // defects compounded: the derivation read comments, and it could not read a
+  // path, so it selected suites by their sentences and missed the ones that
+  // named their subject properly. Digit-neighbour exclusion matches `0084`,
+  // `0084_…`, `0084:365` and `…/0084_x.sql`, and refuses `10084` and `00841`.
+  const shapes = numbers.map((n) => new RegExp(`(?<![0-9])${n}(?![0-9])`));
   const out = new Set<string>();
   for (const dir of measuredDirs())
     for (const file of walk(root, dir)) {
       if (!RUNNABLE.test(file.slice(file.lastIndexOf('/') + 1))) continue;
-      const text = read(root, file);
+      // Comments stripped, string literals kept: a suite is one of this
+      // slice's measurements when its CODE names the migration, never when its
+      // prose mentions the number.
+      const text = stripTsComments(read(root, file));
       if (shapes.some((re) => re.test(text))) out.add(file);
     }
   return [...out].sort();
@@ -2164,6 +2250,11 @@ export const ROSTER_RECORDED: readonly RosterRow[] = [
   {
     suite: 'tests/guards/p4s4-gate-execution.test.ts',
     title: 'the roster rule derives a real set from the tree, and refuses the ways it can be empty or wrong',
+  },
+  {
+    suite: 'tests/guards/p4s4-gate-execution.test.ts',
+    title: 'a suite is one of this slice\u2019s measurements when its CODE names the migration, not when its PROSE mentions the number',
+    cases: 4,
   },
   { suite: 'tests/guards/p4s4-migration-self-capture-law.test.ts', title: 'P4-S4 — G-8: a migration cannot forge its own self-capture' },
   { suite: 'tests/guards/p4s4-new-relation-coverage.test.ts', title: 'the shared Phase 4 predicate admits all four relations, with no registration' },

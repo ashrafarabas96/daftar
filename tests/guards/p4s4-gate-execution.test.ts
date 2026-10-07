@@ -44,6 +44,7 @@ import {
   rosterRedProofProblems,
   rosterRows,
   S4_GOLDEN_DIR,
+  stripTsComments,
 } from '../../scripts/phase4-s4-gate';
 
 const REPO = join(__dirname, '..', '..');
@@ -236,5 +237,83 @@ describe('the gate reads a SQL statement to its real end, not to the first semic
     expect(readSqlStatement("INSERT INTO t (d) VALUES ('unclosed literal;", 0)).toBeNull();
     // An unclosed block comment likewise.
     expect(readSqlStatement('INSERT INTO t (d) VALUES /* unclosed; ', 0)).toBeNull();
+  });
+});
+
+describe('a suite is one of this slice’s measurements when its CODE names the migration, not when its PROSE mentions the number', () => {
+  // TWO defects, found together and compounding, in the derivation that decides
+  // which suites measure this slice.
+  //
+  // The first: the derivation tested the WHOLE file text, comments included, so
+  // a suite that merely wrote a migration number in a sentence claimed to be
+  // one of this slice's measurements. P4-S7's performance suite did exactly
+  // that and reddened this gate twice on a tree that measured nothing of S4's.
+  //
+  // The second, found by writing the proof of the first: the shape was
+  // `\bN\b`, and `_` is a WORD character, so a word boundary after the number
+  // FAILS for `0084_phase4_ar_fixed_cost…` — the migration's own filename, and
+  // the honest way a suite names what it exercises. The only text the old shape
+  // could match was a bare number with punctuation on both sides, which in
+  // practice meant prose. So the derivation read sentences and could not read a
+  // path: it selected suites by what they talked about and missed the ones that
+  // named their subject. All three of S4's measured suites matched through a
+  // comment. The answer happened to be right; it was not right by construction.
+  //
+  // The quiet half is the one that matters at acceptance: a derivation that
+  // over-collects forces the evidence table to list suites that measure
+  // nothing, after which the table states which files mention a number rather
+  // than which files exercise a migration
+  // (`[[daftar-an-unjudged-attribute-becomes-false]]`).
+  const SHAPE = /(?<![0-9])0084(?![0-9])/;
+  const OLD_SHAPE = /\b0084\b/;
+
+  it('the OLD word-boundary shape could not see a migration FILENAME, which is the defect', () => {
+    const named = "const M = 'infrastructure/database/migrations/0084_phase4_ar_fixed_cost_and_open_invoice_page.sql';";
+    // The subject of the claim, and it must still be wrong: `4` and `_` are
+    // both word characters, so there is no boundary between them.
+    expect(OLD_SHAPE.test(named), 'the old shape is the subject here and must still fail to match a filename').toBe(false);
+    // The corrected shape reads it.
+    expect(SHAPE.test(named)).toBe(true);
+    // And it is not merely looser: a longer number is still not this one.
+    expect(SHAPE.test("'…/10084_x.sql'")).toBe(false);
+    expect(SHAPE.test("'…/00841_x.sql'")).toBe(false);
+    // A reference by line, the other spelling a suite uses, is read too.
+    expect(SHAPE.test('// see 0084:365')).toBe(true);
+  });
+
+  it('a number written only in PROSE does not make a suite a measurement of this slice', () => {
+    const prose = [
+      '// The open-invoice page arrived in 0084 and this suite predates it.',
+      '/* Historically 0084 carried the fixed-cost column; it no longer matters here. */',
+      "it('measures nothing of that migration', () => expect(1).toBe(1));",
+    ].join('\n');
+    // The subject: the whole-text reader counts it.
+    expect(SHAPE.test(prose), 'the naive whole-text reader is the subject here and must still match').toBe(true);
+    // The corrected reader does not.
+    expect(SHAPE.test(stripTsComments(prose))).toBe(false);
+  });
+
+  it('a number named in CODE still makes a suite a measurement — so the fix buys discrimination, not silence', () => {
+    const real = [
+      '// This suite measures the open-invoice page.',
+      "const MIGRATION = 'infrastructure/database/migrations/0084_phase4_ar_fixed_cost_and_open_invoice_page.sql';",
+      'it(`reads ${MIGRATION}`, () => expect(1).toBe(1));',
+    ].join('\n');
+    expect(SHAPE.test(stripTsComments(real))).toBe(true);
+  });
+
+  it('red: the stripper keeps string literals, template literals and escapes, so it cannot silence a real name', () => {
+    // A `//` or `/*` INSIDE a literal is not a comment. A stripper that treated
+    // it as one would delete the rest of the line and could drop the very path
+    // that proves a suite measures this slice — the dangerous direction,
+    // because the result is a real measurement that stops being counted.
+    expect(stripTsComments("const u = 'https://example.test/0084_x.sql';")).toContain('0084');
+    expect(stripTsComments('const t = `a /* 0084 */ b`;')).toContain('0084');
+    expect(stripTsComments("const q = 'it\\'s 0084';")).toContain('0084');
+    // And a comment really is removed, in both spellings, so the limbs above
+    // are not passing because the stripper is the identity function.
+    expect(stripTsComments('// 0084\nconst x = 1;')).not.toContain('0084');
+    expect(stripTsComments('/* 0084 */ const x = 1;')).not.toContain('0084');
+    expect(stripTsComments('/* 0084 */ const x = 1;')).toContain('const x = 1');
   });
 });
