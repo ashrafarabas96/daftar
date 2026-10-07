@@ -106,6 +106,34 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 
 const ROOT = resolve(join(__dirname, '..', '..'));
+/**
+ * The identity of the lockfile this audit actually read: the commit that last
+ * touched `package-lock.json`, plus a marker when the lockfile has
+ * uncommitted changes.
+ *
+ * A verdict about a DIRTY lockfile is not a verdict about any commit, so the
+ * marker is part of the identity rather than a footnote — the same reason a
+ * timing result carries its SHA. `undefined` when git cannot answer (an
+ * exported tree, no git), and the caller says "an unknown commit" rather than
+ * inventing one.
+ */
+function lockHeadSha(): string | undefined {
+  const log = spawnSync('git', ['log', '-1', '--format=%H', '--', 'package-lock.json'], {
+    cwd: ROOT,
+    encoding: 'utf8',
+  });
+  if (log.status !== 0) return undefined;
+  const sha = log.stdout.trim();
+  if (!/^[0-9a-f]{40}$/.test(sha)) return undefined;
+  const dirty = spawnSync('git', ['status', '--porcelain', '--', 'package-lock.json'], {
+    cwd: ROOT,
+    encoding: 'utf8',
+  });
+  if (dirty.status === 0 && dirty.stdout.trim() !== '') {
+    return `${sha} PLUS UNCOMMITTED lockfile changes (this verdict names no commit)`;
+  }
+  return sha;
+}
 
 // ── the declared constants: every threshold has a name and a reason ────────
 
@@ -890,6 +918,21 @@ function main(): void {
   console.log(`P15_DEPENDENCY_AUDIT: ${JSON.stringify({ ...summary, findings: summary.findings.length })}`);
   if (result === 'UNMEASURED') console.log(`PHASE 15 DEPENDENCY AUDIT: UNMEASURED — ${un.map((x) => x.name).join(', ')}`);
   else console.log(`PHASE 15 DEPENDENCY AUDIT: ${result}`);
+  // ── THE SCOPE OF THIS VERDICT, printed on PASS as well as on FAIL ─────────
+  //
+  // Every arm above reads THIS working tree's `package-lock.json` and the
+  // dependency set npm resolved from it. A branch that pins a package
+  // differently has a different answer, and this verdict says nothing about
+  // it. A Phase 15 preparation branch cut from `main` is not the integration
+  // tree, so a finding here is a LEAD for that tree's owner — the package, the
+  // advisory and the resolved version — and never a verdict about their
+  // lockfile. (Measured case: this branch resolved `sharp@0.35.4`, inside
+  // GHSA-wq5f-xc86-pv6w's range, while the Phase 4 tree pins `0.35.5` under
+  // TL-P4-S4-SEC-01 and audits clean. Both measurements were correct about
+  // different trees; quoting one as the other's state was not.)
+  console.log(
+    `  scope: this verdict is about the lockfile in ${ROOT} at ${lockHeadSha() ?? 'an unknown commit'} — another branch's pins give another answer, and a finding here is a lead for that tree's owner, not a verdict about it`,
+  );
   process.exit(result === 'PASS' ? 0 : 1);
 }
 
