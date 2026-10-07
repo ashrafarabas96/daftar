@@ -992,3 +992,1033 @@ async function deleteReach(c: Client, w: World, rel: Relation): Promise<string> 
     await c.query(`ROLLBACK TO SAVEPOINT ${sp}`);
   }
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PART TWO — REACHABILITY: THE BARRIER ON EVERY PATH, NOT ON ONE STATEMENT
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// WHAT PART ONE ABOVE ESTABLISHES, AND WHERE IT STOPS. Part one reads each
+// relation with `SELECT id … WHERE id = ANY (…)` and with `count(*)`. That is
+// ONE statement form. A row-level policy is not attached to a statement form
+// — it is attached to the relation — but WHICH policy the executor applies,
+// and AS WHOM, is decided by the path the relation is reached by:
+//
+//   — a VIEW's row security is evaluated as the VIEW'S OWNER, not as the
+//     caller, unless the view carries `security_invoker`. A view over
+//     `invoices` owned by a superuser hands every row to anybody who may
+//     select from it, and no policy on `invoices` is consulted at all;
+//   — a SECURITY DEFINER routine's row security is evaluated as the
+//     ROUTINE'S OWNER. Four such routines over these relations are executable
+//     by `daftar_app`, and every one of them is owned by a role that
+//     `business_isolation_read` NAMES IN ITS ESCAPE LIST — so for those paths
+//     the read barrier admits everything by construction;
+//   — the five READERS OF RECORD (`invoice_outstanding`,
+//     `customer_ar_outstanding`, `customer_ar_aging`,
+//     `customer_open_invoices_page`, `invoice_settlement_state`) take the
+//     business as an ARGUMENT. A caller scoped to one business may name
+//     another business's id in the call, and nothing in the argument list
+//     stops it;
+//   — and the quals `0086` rewrote are now scalar subselects, which are
+//     `InitPlan`s evaluated once per EXECUTION. A plan is cached and reused
+//     across executions, so "once per query" has to mean once per execution
+//     and not once per PLAN, or a prepared statement would carry the scope it
+//     was first planned under.
+//
+// None of those five paths is a `SELECT … WHERE id = ANY (…)`, and none of
+// them was asserted anywhere. The laws below assert them, and they assert
+// them the only way that distinguishes a barrier from an accident: every
+// probe is run FOUR times — as the owner, who is subject to no policy; as
+// the reader in its own scope on its own row; as the same reader on the other
+// business's row; and as the same reader on an id that does not exist at all.
+//
+// AN EMPTY RESULT SET IS NOT A REFUSAL. `owner = reached` says the row is
+// there and the path reaches it. `mine = reached` says the reader's scope is
+// live and the path works for the reader. `absent = not reached` says what
+// absence looks like on this path. Only with those three in hand does
+// `otherBusiness = not reached` mean the barrier refused, rather than the
+// relation being empty, the scope being NULL or the statement being broken.
+
+/** The three internal principals the four relations grant anything to, beside the application role. */
+const ACCOUNTING_READER = 'daftar_accounting_internal';
+
+/**
+ * THE ESCAPE LIST, AS AN ENTITLEMENT AND NOT AS A DERIVATION.
+ *
+ * `0086` writes two literals into `business_isolation_read` and the pre- and
+ * post-state blocks of the migration pin that TEXT. This is the same claim
+ * made of BEHAVIOUR, and it is deliberately written down here rather than
+ * read out of the catalogue: a law that derived its expectation from the
+ * policy it is judging would move with an attack. A role added to the escape
+ * list — the exact attack `0086-A`'s literal enumeration exists to catch —
+ * must change what some principal can READ, and this is where that shows.
+ */
+const ENTITLED_PAST_THE_BUSINESS_BARRIER: readonly string[] = [ACCOUNTING_READER, WRITER];
+
+/** One way of reaching a relation, asked whether it reveals one row. */
+interface ReadPath {
+  readonly name: string;
+  /** Did this path reveal anything at all about the row `id` of `rel`? */
+  reveals(c: Client, rel: Relation, id: string): Promise<boolean>;
+}
+
+const nonEmpty = async (c: Client, sql: string, params: unknown[]): Promise<boolean> => (await c.query(sql, params)).rows.length > 0;
+
+/**
+ * EVERY PATH A READER HOLDING `SELECT` CAN REACH ONE OF THESE RELATIONS BY.
+ *
+ * Each one answers the same question — "does this statement reveal the row
+ * `id`?" — so the whole set can be run as one matrix and compared against one
+ * expectation. They are not stylistic variations: each puts the relation in a
+ * different place in the plan (a driving scan, an inner side, a subquery, a
+ * CTE boundary, a grouping input, a cursor's portal, a locked row, an
+ * ANTI-join), and the question is whether the policy follows the relation
+ * into all of them.
+ *
+ * Three shapes are absent for a reason rather than by oversight, and the
+ * reason is the same one each time — a path the reader cannot take is not a
+ * path. `COPY … TO STDOUT` needs a protocol-level stream this repository
+ * installs no package for; a temporary table needs `TEMPORARY` on the
+ * database, which `bootstrap.sql` revokes from every runtime principal; and a
+ * LOCKING clause (`FOR SHARE`, `FOR UPDATE`) needs a write privilege on the
+ * relation, so `daftar_app` is refused it by the GRANT before any policy is
+ * reached — measured here as `permission denied for table sales` on
+ * `SELECT id FROM sales WHERE id = $1 FOR SHARE`.
+ */
+const READ_PATHS: readonly ReadPath[] = [
+  {
+    name: 'SELECT id … WHERE id = $1',
+    reveals: (c, rel, id) => nonEmpty(c, `SELECT id FROM ${rel} WHERE id = $1`, [id]),
+  },
+  {
+    name: 'SELECT * — every column, not the key alone',
+    reveals: (c, rel, id) => nonEmpty(c, `SELECT * FROM ${rel} WHERE id = $1`, [id]),
+  },
+  {
+    name: 'an UNFILTERED scan of the whole relation',
+    reveals: async (c, rel, id) => (await c.query<{ id: string }>(`SELECT id::text AS id FROM ${rel}`)).rows.some((r) => r.id === id),
+  },
+  {
+    name: 'count(*) as an existence oracle',
+    reveals: async (c, rel, id) =>
+      Number(must((await c.query<{ n: string }>(`SELECT count(*)::text AS n FROM ${rel} WHERE id = $1`, [id])).rows[0], 'n').n) > 0,
+  },
+  {
+    name: 'EXISTS — a boolean that carries no row',
+    reveals: async (c, rel, id) =>
+      must((await c.query<{ yes: boolean }>(`SELECT EXISTS (SELECT 1 FROM ${rel} WHERE id = $1) AS yes`, [id])).rows[0], 'exists').yes,
+  },
+  {
+    name: 'NOT IN — the ANTI-join, where a refusal could leak as an absence',
+    reveals: async (c, rel, id) =>
+      (await c.query(`SELECT u.id FROM unnest(ARRAY[$1]::uuid[]) AS u(id) WHERE u.id NOT IN (SELECT id FROM ${rel})`, [id])).rows.length === 0,
+  },
+  {
+    name: 'an AGGREGATE over a value column — the scope column itself',
+    reveals: async (c, rel, id) =>
+      must((await c.query<{ v: string | null }>(`SELECT max(business_id::text) AS v FROM ${rel} WHERE id = $1`, [id])).rows[0], 'max').v !== null,
+  },
+  {
+    name: 'GROUP BY over the whole relation',
+    reveals: (c, rel, id) => nonEmpty(c, `SELECT g.id FROM (SELECT id FROM ${rel} GROUP BY id) AS g WHERE g.id = $1`, [id]),
+  },
+  {
+    name: 'a WINDOW function over the whole relation',
+    reveals: (c, rel, id) => nonEmpty(c, `SELECT z.id FROM (SELECT id, row_number() OVER (ORDER BY id) AS rn FROM ${rel}) AS z WHERE z.id = $1`, [id]),
+  },
+  {
+    name: 'a JOIN driven from a source carrying no policy',
+    reveals: (c, rel, id) => nonEmpty(c, `SELECT r.id FROM unnest(ARRAY[$1]::uuid[]) AS u(id) JOIN ${rel} r ON r.id = u.id`, [id]),
+  },
+  {
+    name: 'a SELF-JOIN — the relation on both sides',
+    reveals: (c, rel, id) => nonEmpty(c, `SELECT a.id FROM ${rel} a JOIN ${rel} b ON b.id = a.id WHERE a.id = $1`, [id]),
+  },
+  {
+    name: 'IN (subquery)',
+    reveals: (c, rel, id) => nonEmpty(c, `SELECT u.id FROM unnest(ARRAY[$1]::uuid[]) AS u(id) WHERE u.id IN (SELECT id FROM ${rel})`, [id]),
+  },
+  {
+    name: 'a CORRELATED EXISTS subquery',
+    reveals: (c, rel, id) => nonEmpty(c, `SELECT u.id FROM unnest(ARRAY[$1]::uuid[]) AS u(id) WHERE EXISTS (SELECT 1 FROM ${rel} r WHERE r.id = u.id)`, [id]),
+  },
+  {
+    name: 'a LATERAL subquery',
+    reveals: (c, rel, id) =>
+      nonEmpty(c, `SELECT x.id FROM unnest(ARRAY[$1]::uuid[]) AS u(id), LATERAL (SELECT r.id FROM ${rel} r WHERE r.id = u.id) AS x`, [id]),
+  },
+  {
+    name: 'a MATERIALIZED CTE — an optimisation fence',
+    reveals: (c, rel, id) => nonEmpty(c, `WITH m AS MATERIALIZED (SELECT id FROM ${rel}) SELECT id FROM m WHERE id = $1`, [id]),
+  },
+  {
+    name: 'a NOT MATERIALIZED CTE — inlined into the outer plan',
+    reveals: (c, rel, id) => nonEmpty(c, `WITH m AS NOT MATERIALIZED (SELECT id FROM ${rel}) SELECT id FROM m WHERE id = $1`, [id]),
+  },
+  {
+    name: 'UNION ALL — two scans of the relation in one statement',
+    reveals: (c, rel, id) => nonEmpty(c, `SELECT id FROM ${rel} WHERE id = $1 UNION ALL SELECT id FROM ${rel} WHERE id = $1`, [id]),
+  },
+  {
+    name: 'INTERSECT against a source carrying no policy',
+    reveals: (c, rel, id) => nonEmpty(c, `SELECT id FROM ${rel} INTERSECT SELECT u.id FROM unnest(ARRAY[$1]::uuid[]) AS u(id)`, [id]),
+  },
+  {
+    name: 'a SYSTEM column (ctid), which no policy names',
+    reveals: (c, rel, id) => nonEmpty(c, `SELECT ctid::text FROM ${rel} WHERE id = $1`, [id]),
+  },
+  {
+    name: 'a SCALAR SUBQUERY in the target list, where no row is projected at all',
+    reveals: async (c, rel, id) =>
+      must((await c.query<{ n: string }>(`SELECT (SELECT count(*) FROM ${rel} WHERE id = $1)::text AS n`, [id])).rows[0], 'scalar subquery').n !== '0',
+  },
+  {
+    name: 'a RECURSIVE CTE, whose working table is filled from the relation',
+    reveals: (c, rel, id) =>
+      nonEmpty(
+        c,
+        `WITH RECURSIVE walk(id) AS (SELECT id FROM ${rel} WHERE id = $1 UNION ALL SELECT r.id FROM walk w JOIN ${rel} r ON false) SELECT id FROM walk`,
+        [id],
+      ),
+  },
+  {
+    name: 'EXCEPT — the relation as the SUBTRAHEND of a set difference',
+    reveals: async (c, rel, id) => (await c.query(`SELECT u.id FROM unnest(ARRAY[$1]::uuid[]) AS u(id) EXCEPT SELECT id FROM ${rel}`, [id])).rows.length === 0,
+  },
+  {
+    name: 'row_to_json over the whole row',
+    reveals: (c, rel, id) => nonEmpty(c, `SELECT row_to_json(r.*) AS j FROM ${rel} r WHERE r.id = $1`, [id]),
+  },
+  {
+    name: 'a CURSOR, fetched row by row out of a portal',
+    reveals: async (c, rel, id) => {
+      const cur = `cur_${randomUUID().replace(/-/g, '')}`;
+      await c.query(`DECLARE ${cur} NO SCROLL CURSOR FOR SELECT id FROM ${rel} WHERE id = $1`, [id]);
+      try {
+        return (await c.query(`FETCH ALL FROM ${cur}`)).rows.length > 0;
+      } finally {
+        await c.query(`CLOSE ${cur}`);
+      }
+    },
+  },
+];
+
+/** One row of the reachability matrix: what each of the four legs answered. */
+interface MatrixRow {
+  readonly path: string;
+  readonly owner: boolean;
+  readonly mine: boolean;
+  readonly otherBusiness: boolean;
+  readonly otherTenant: boolean;
+  readonly absent: boolean;
+}
+
+/**
+ * Run every path four times over, and report what each answered.
+ *
+ * The matrix is the evidence. A law that asserted only `otherBusiness =
+ * false` could be satisfied by a broken statement, an empty relation or a
+ * NULL scope; the other three legs are what make the `false` mean the barrier
+ * refused, and they are carried into the failure message rather than checked
+ * and thrown away.
+ */
+async function reachabilityMatrix(c: Client, w: World, rel: Relation): Promise<MatrixRow[]> {
+  const mine = w.A.subject[rel];
+  const otherBusiness = w.A2.subject[rel];
+  const otherTenant = w.B.subject[rel];
+  const absent = randomUUID();
+  const inMyScope: Scope = { tenantId: w.A.tenantId, businessId: w.A.businessId };
+  // The scope that leaves the TENANT barrier standing alone: the business GUC
+  // names the other tenant's own business, so `business_isolation_read`
+  // admits the row and only `tenant_membership` refuses it.
+  const acrossTheTenant: Scope = { tenantId: w.A.tenantId, businessId: w.B.businessId };
+  const out: MatrixRow[] = [];
+  for (const p of READ_PATHS) {
+    out.push({
+      path: p.name,
+      owner: await p.reveals(c, rel, otherBusiness),
+      mine: await asRole(c, READER, inMyScope, () => p.reveals(c, rel, mine)),
+      otherBusiness: await asRole(c, READER, inMyScope, () => p.reveals(c, rel, otherBusiness)),
+      otherTenant: await asRole(c, READER, acrossTheTenant, () => p.reveals(c, rel, otherTenant)),
+      absent: await asRole(c, READER, inMyScope, () => p.reveals(c, rel, absent)),
+    });
+  }
+  return out;
+}
+
+const renderMatrix = (rows: readonly MatrixRow[]): string =>
+  rows.map((r) => `${r.path} → owner=${r.owner} mine=${r.mine} otherBusiness=${r.otherBusiness} otherTenant=${r.otherTenant} absent=${r.absent}`).join('\n');
+
+/**
+ * LAW P (PATHS): on every path the relation is reachable by, the reader
+ * scoped to one business reaches its own row and NOT the other business's,
+ * and not the other tenant's — while the owner reaches all of them and an id
+ * that does not exist is reached by nobody.
+ */
+async function lawPaths(c: Client, w: World, rel: Relation): Promise<void> {
+  const rows = await reachabilityMatrix(c, w, rel);
+  expect(rows, `${rel}: READ_PATHS is empty, so this matrix judged nothing`).not.toHaveLength(0);
+  expect(renderMatrix(rows), `${rel}: the reachability matrix is not the barrier's`).toBe(
+    READ_PATHS.map((p) => `${p.name} → owner=true mine=true otherBusiness=false otherTenant=false absent=false`).join('\n'),
+  );
+}
+
+/**
+ * LAW G (GENERIC PLAN): the rewritten quals are evaluated once per
+ * EXECUTION, never once per PLAN.
+ *
+ * `0086` turned the row-invariant parts of both read quals into scalar
+ * subselects so the executor runs them as an `InitPlan`. A prepared statement
+ * is PLANNED once and EXECUTED many times, and after five executions
+ * PostgreSQL may switch to a generic plan it keeps. If the scope were folded
+ * into that plan, the sixth and every later execution would answer with the
+ * scope the statement was first planned under — which is a cross-business
+ * disclosure that no single-statement test can see, because it needs a
+ * statement to be executed twice under two scopes.
+ *
+ * So: the same prepared statement, executed past the generic-plan threshold
+ * in one business's scope and then again in another's, must answer each
+ * execution with the scope THAT execution holds. Both plan-cache modes are
+ * forced, because leaving the choice to the planner would leave which plan
+ * was actually used unknown.
+ */
+async function lawGenericPlan(c: Client, w: World, rel: Relation): Promise<void> {
+  const mine = w.A.subject[rel];
+  const theirs = w.A2.subject[rel];
+  for (const mode of ['force_custom_plan', 'force_generic_plan'] as const) {
+    const name = `p4s4_${randomUUID().replace(/-/g, '')}`;
+    const answers: string[] = [];
+    await asRole(c, READER, { tenantId: w.A.tenantId, businessId: w.A.businessId }, async () => {
+      await c.query(`SET LOCAL plan_cache_mode = ${mode}`);
+      await c.query(`PREPARE ${name} AS SELECT id::text AS id FROM ${rel} WHERE id = ANY ($1::uuid[]) ORDER BY 1`);
+      try {
+        // `EXECUTE` is a utility statement, and PostgreSQL takes no bind
+        // parameters on one — `EXECUTE … ($1)` is refused with "prepared
+        // statement \"\" requires 0 parameters". The two ids are
+        // `randomUUID()` values from the fixture, so they go into the text.
+        const run = async (): Promise<string> =>
+          (await c.query<{ id: string }>(`EXECUTE ${name} (ARRAY['${mine}', '${theirs}']::uuid[])`)).rows
+            .map((r) => (r.id === mine ? 'mine' : r.id === theirs ? 'THEIRS' : 'other'))
+            .join(',') || 'nothing';
+        // Past the five-execution threshold at which PostgreSQL may adopt a
+        // generic plan and keep it.
+        for (let i = 0; i < 7; i += 1) answers.push(`exec${i + 1} ${await run()}`);
+        // The same statement, the same plan, the OTHER business's scope.
+        await c.query(`SELECT set_config('app.business_id', $1, true)`, [w.A2.businessId]);
+        answers.push(`after the scope moved to the other business: ${await run()}`);
+        await c.query(`SELECT set_config('app.business_id', $1, true)`, [w.A.businessId]);
+        answers.push(`and back: ${await run()}`);
+      } finally {
+        await c.query(`DEALLOCATE ${name}`);
+        await c.query(`SET LOCAL plan_cache_mode = auto`);
+      }
+    });
+    expect(answers.join('\n'), `${rel} [${mode}]: a prepared statement answered with a scope it no longer holds`).toBe(
+      [...Array.from({ length: 7 }, (_unused, i) => `exec${i + 1} mine`), 'after the scope moved to the other business: THEIRS', 'and back: mine'].join('\n'),
+    );
+  }
+}
+
+// ── THE READERS OF RECORD, CALLED WITH ANOTHER BUSINESS'S ID ──────────────
+
+/**
+ * The value, and the cast, each reader-of-record parameter takes — keyed on
+ * the PARAMETER NAME, so the call is synthesised for whatever routines the
+ * catalogue holds rather than written out per routine. A reader carrying a
+ * parameter this map does not name is a FINDING: it is a new path into one of
+ * these relations that this law would otherwise skip in silence.
+ */
+interface ReaderArgs {
+  readonly businessId: string;
+  readonly customerId: string;
+  readonly invoiceId: string;
+}
+function readerArgument(param: string, a: ReaderArgs): { cast: string; value: unknown } {
+  switch (param) {
+    case 'p_business_id':
+      return { cast: 'uuid', value: a.businessId };
+    case 'p_customer_id':
+      return { cast: 'uuid', value: a.customerId };
+    case 'p_invoice_id':
+      return { cast: 'uuid', value: a.invoiceId };
+    case 'p_invoice_ids':
+      return { cast: 'uuid[]', value: [a.invoiceId] };
+    case 'p_as_of':
+      return { cast: 'date', value: null };
+    case 'p_after_issue_date':
+      return { cast: 'date', value: null };
+    case 'p_after_id':
+      return { cast: 'uuid', value: null };
+    case 'p_bucket_days':
+      return { cast: 'integer[]', value: [30, 60, 90] };
+    case 'p_limit':
+      return { cast: 'integer', value: 50 };
+    default:
+      throw new Error(
+        `the reader of record carries a parameter this law cannot supply: ${param}. A NEW reader over one of the four relations is a NEW path into them, and it has to be given an argument here before this law covers it`,
+      );
+  }
+}
+
+interface ReaderOfRecord {
+  readonly proname: string;
+  readonly params: readonly string[];
+}
+
+/**
+ * THE READERS OF RECORD, DERIVED FROM THE CATALOGUE.
+ *
+ * A routine in `public` that `daftar_app` may execute, that is SECURITY
+ * INVOKER — so the policies are evaluated as the CALLER and the barrier is
+ * the one this file is about — whose body names one of the four relations,
+ * and that takes the business as a parameter. That last condition is what
+ * makes it a path worth probing: the caller names the business it is asking
+ * about, and no argument list can tell whether that business is its own.
+ */
+async function readersOfRecord(c: Client): Promise<ReaderOfRecord[]> {
+  const r = await c.query<{ proname: string; params: string[] }>(
+    `SELECT p.proname::text AS proname,
+            (SELECT coalesce(array_agg(n ORDER BY ord), ARRAY[]::text[])
+               FROM unnest(p.proargnames) WITH ORDINALITY AS u(n, ord)
+              WHERE ord <= p.pronargs) AS params
+       FROM pg_proc p
+      WHERE p.pronamespace = 'public'::regnamespace AND p.prokind = 'f' AND NOT p.prosecdef
+        AND has_function_privilege('daftar_app', p.oid, 'EXECUTE')
+        AND 'p_business_id' = ANY (p.proargnames)
+        AND EXISTS (SELECT 1 FROM unnest($1::text[]) AS t(rel) WHERE coalesce(p.prosrc, '') ~ ('\\m' || t.rel || '\\M'))
+      ORDER BY 1`,
+    [[...RELATIONS]],
+  );
+  return r.rows;
+}
+
+const UUID_SHAPED = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g;
+
+/**
+ * One reader's WHOLE answer, as a comparable string: its rows as JSON, or the
+ * refusal it raised instead.
+ *
+ * These readers do not answer an unknown document with an empty set — they
+ * RAISE (`invoice.not_found: the invoice does not exist in this business`),
+ * which is this estate's Zero Silent Errors rule and which makes the
+ * comparison below sharper rather than weaker: the question becomes whether a
+ * foreign business is refused IN THE SAME WORDS as a business that does not
+ * exist. If it were refused differently, the reader would be an existence
+ * oracle for other businesses' documents even while handing over no row.
+ *
+ * Ids are normalised out of the refusal text. A message that quoted the id it
+ * was asked about would differ between two calls for the trivial reason that
+ * they asked about different ids, and that difference carries no information
+ * about what was disclosed.
+ */
+async function readerAnswer(c: Client, reader: ReaderOfRecord, a: ReaderArgs): Promise<string> {
+  const args = reader.params.map((p) => readerArgument(p, a));
+  const placeholders = args.map((x, i) => `$${i + 1}::${x.cast}`).join(', ');
+  const sql = `SELECT coalesce(jsonb_agg(to_jsonb(t) ORDER BY to_jsonb(t)::text), '[]'::jsonb) AS j FROM ${reader.proname}(${placeholders}) AS t`;
+  const sp = `rd_${randomUUID().replace(/-/g, '')}`;
+  await c.query(`SAVEPOINT ${sp}`);
+  try {
+    const r = await c.query<{ j: unknown }>(
+      sql,
+      args.map((x) => x.value),
+    );
+    return `rows ${JSON.stringify(must(r.rows[0], `${reader.proname} answer`).j)}`;
+  } catch (e) {
+    const err = e as { code?: string; message?: string };
+    return `refused ${err.code ?? ''} ${(err.message ?? String(e)).replace(UUID_SHAPED, '<uuid>')}`;
+  } finally {
+    await c.query(`ROLLBACK TO SAVEPOINT ${sp}`);
+  }
+}
+
+/**
+ * AN OPEN CREDIT INVOICE, SO THE CUSTOMER-LEVEL READERS HAVE SOMETHING TO
+ * READ.
+ *
+ * `invoice_outstanding` reports ZERO for an invoice that is not `open` and
+ * zero for one whose sale settled in CASH (`0084:605`, the `0080` rule), and
+ * `customer_ar_outstanding` and `customer_ar_aging` then drop the row on
+ * their own `HAVING sum(…) <> 0`. The part-one fixture seeds DRAFT invoices
+ * on CASH sales deliberately — it is a scope fixture and the value arithmetic
+ * is not its subject — so those three readers answer a real customer exactly
+ * as they answer a customer who does not exist, and the discrimination this
+ * law rests on would be an equality between two empty answers.
+ *
+ * Measured, before this existed: `customer_ar_aging`,
+ * `customer_ar_outstanding` and `customer_open_invoices_page` each reported
+ * `the owner's answer about the other business differs from absence: false`.
+ * The non-vacuity leg caught it. Seeding the subject is the fix, not dropping
+ * the leg.
+ *
+ * So one credit sale and one OPEN invoice on it, for the business's own
+ * customer, inserted by the owner inside the caller's savepoint. The deferred
+ * constraint triggers that judge settlement VALUE fire at COMMIT, and no case
+ * in this file commits.
+ */
+async function openCreditInvoice(c: Client, b: Biz): Promise<string> {
+  const saleId = randomUUID();
+  await c.query(
+    `INSERT INTO sales (tenant_id, business_id, id, customer_id, customer_name_snapshot, branch_id, warehouse_id, status, settlement_mode,
+                        document_date, currency_code, subtotal_txn_minor, discount_txn_minor, total_txn_minor, total_base_minor,
+                        source_to_base_rate, rate_source, rate_timestamp, commit_intent_sha256, business_transaction_id, created_by)
+     VALUES ($1, $2, $3, $4, 'Subject', $5, $6, 'draft', 'credit', CURRENT_DATE, 'ILS', 1000, 0, 1000, 1000, 1, 'base',
+             date_trunc('second', now()), $7, $8, $9)`,
+    [b.tenantId, b.businessId, saleId, b.customerId, b.branchId, b.warehouseId, SHA, btid, seedUserId],
+  );
+  const invoiceId = randomUUID();
+  await c.query(
+    `INSERT INTO invoices (tenant_id, business_id, id, sale_id, customer_id, branch_id, document_kind, document_number, number_seq, period,
+                           issue_date, due_date, currency_code, status, subtotal_txn_minor, discount_txn_minor, total_txn_minor, total_base_minor,
+                           source_to_base_rate, rate_source, rate_timestamp, customer_name_snapshot, issue_intent_sha256,
+                           business_transaction_id, created_by, binding_source_id)
+     VALUES ($1, $2, $3, $4, $5, $6, 'invoice', $7, 7, to_char(CURRENT_DATE, 'YYYY'), CURRENT_DATE, CURRENT_DATE + 1, 'ILS', 'open',
+             1000, 0, 1000, 1000, 1, 'base', date_trunc('second', now()), 'Subject', $8, $9, $10, $3)`,
+    [b.tenantId, b.businessId, invoiceId, saleId, b.customerId, b.branchId, `INV-OPEN-${b.label}`, SHA, btid, seedUserId],
+  );
+  return invoiceId;
+}
+
+/**
+ * LAW X (THE READERS OF RECORD): a reader scoped to one business, calling a
+ * reader of record with ANOTHER business's id, gets the answer it would get
+ * for a business that does not exist — and the proof that this is a refusal
+ * and not an absence is that the OWNER's answer to the same call is
+ * different, and that the same reader's answer in its OWN scope is different
+ * too.
+ *
+ * No figure is written down here. The law is three inequalities and one
+ * equality between answers the database produced, which is what lets it hold
+ * over a fixture whose amounts nobody has to maintain.
+ */
+async function lawReadersOfRecord(c: Client, w: World): Promise<void> {
+  const readers = await readersOfRecord(c);
+  expect(
+    readers.map((x) => x.proname),
+    'the reader-of-record set is derived from the catalogue and came back empty, so this law judged nothing',
+  ).not.toEqual([]);
+  const sp = `rr_${randomUUID().replace(/-/g, '')}`;
+  await c.query(`SAVEPOINT ${sp}`);
+  try {
+    await lawReadersOfRecordBody(c, w, readers);
+  } finally {
+    await c.query(`ROLLBACK TO SAVEPOINT ${sp}`);
+  }
+}
+
+async function lawReadersOfRecordBody(c: Client, w: World, readers: readonly ReaderOfRecord[]): Promise<void> {
+  const mineArgs: ReaderArgs = { businessId: w.A.businessId, customerId: w.A.customerId, invoiceId: await openCreditInvoice(c, w.A) };
+  const theirArgs: ReaderArgs = { businessId: w.A2.businessId, customerId: w.A2.customerId, invoiceId: await openCreditInvoice(c, w.A2) };
+  const nowhere: ReaderArgs = { businessId: randomUUID(), customerId: randomUUID(), invoiceId: randomUUID() };
+  const inMyScope: Scope = { tenantId: w.A.tenantId, businessId: w.A.businessId };
+  const verdicts: string[] = [];
+  for (const reader of readers) {
+    // What ABSENCE looks like on this path: the same call, about a business
+    // that is not there, made by the same reader under the same scope.
+    const absent = await asRole(c, READER, inMyScope, () => readerAnswer(c, reader, nowhere));
+    // The row IS there and the path DOES reach it — established by the owner,
+    // who is subject to no policy. Without this leg the equality below could
+    // be the equality of two empty answers.
+    const byOwner = await readerAnswer(c, reader, theirArgs);
+    // The path is LIVE for this reader under this scope, on its own business.
+    const own = await asRole(c, READER, inMyScope, () => readerAnswer(c, reader, mineArgs));
+    // And the same call, same reader, same scope, the OTHER business's id.
+    const cross = await asRole(c, READER, inMyScope, () => readerAnswer(c, reader, theirArgs));
+    verdicts.push(
+      [
+        `${reader.proname}(${reader.params.join(', ')})`,
+        `  the owner's answer about the other business differs from absence: ${byOwner !== absent}`,
+        `  my own answer about my own business differs from absence: ${own !== absent}`,
+        `  my answer about the OTHER business is exactly absence: ${cross === absent}`,
+      ].join('\n'),
+    );
+  }
+  expect(verdicts.join('\n'), 'a reader of record answered a cross-business call with something, or answered an in-scope call with nothing').toBe(
+    readers
+      .map((reader) =>
+        [
+          `${reader.proname}(${reader.params.join(', ')})`,
+          `  the owner's answer about the other business differs from absence: true`,
+          `  my own answer about my own business differs from absence: true`,
+          `  my answer about the OTHER business is exactly absence: true`,
+        ].join('\n'),
+      )
+      .join('\n'),
+  );
+}
+
+// ── WHO IS ADMITTED, AND WHERE ────────────────────────────────────────────
+
+/** What one principal's attempt to read a foreign-scope row actually did. */
+type Verdict = 'ADMITTED' | 'refused by the barrier' | 'refused by the grant';
+
+async function readVerdict(c: Client, role: string, scope: Scope, rel: Relation, id: string): Promise<Verdict> {
+  const r = await asRole(c, role, scope, () => attempt(c, `SELECT id FROM ${rel} WHERE id = $1`, [id]));
+  if (!r.ok) {
+    if (r.code === '42501') return 'refused by the grant';
+    throw new Error(`${role} reading ${rel} failed in a way this law cannot classify (${r.code}): ${r.message}`);
+  }
+  return r.rows > 0 ? 'ADMITTED' : 'refused by the barrier';
+}
+
+/**
+ * LAW E (THE ESCAPE LIST, BY BEHAVIOUR): of every principal in the cluster,
+ * exactly the two `0086` names reach past the business barrier — and the
+ * principal `app_bypass()` names reaches nothing at all, because it holds no
+ * `SELECT` on any of these four relations.
+ *
+ * The roster is DERIVED: every non-superuser role in `pg_roles` that is not
+ * one of PostgreSQL's own predefined `pg_*` roles. A role added to the
+ * cluster is probed without this law being edited, and a role added to the
+ * escape list changes its verdict here.
+ *
+ * `daftar_platform` is the interesting row and the reason a presence law
+ * cannot answer this question. `app_bypass()` is true for it — part one
+ * asserts that by execution — and the first disjunct of BOTH read quals is
+ * therefore satisfied for it on all four relations. It still reaches no row,
+ * because the bypass is only half of a path: the other half is a `GRANT`
+ * nobody ever made. That is a fact about the shipped system that no reading
+ * of the policy text can produce.
+ */
+async function lawEscapeList(c: Client, w: World, rel: Relation): Promise<void> {
+  const roles = (
+    await c.query<{ rolname: string }>(`SELECT rolname::text AS rolname FROM pg_roles WHERE NOT rolsuper AND rolname NOT LIKE 'pg\\_%' ORDER BY 1`)
+  ).rows.map((r) => r.rolname);
+  expect(roles, 'the role roster is derived from pg_roles and came back empty').not.toEqual([]);
+  expect(roles, 'the two principals this law is about must be in the derived roster').toEqual(expect.arrayContaining([...ENTITLED_PAST_THE_BUSINESS_BARRIER]));
+
+  const inMyScope: Scope = { tenantId: w.A.tenantId, businessId: w.A.businessId };
+  const acrossTheTenant: Scope = { tenantId: w.A.tenantId, businessId: w.B.businessId };
+  const lines: string[] = [];
+  for (const role of roles) {
+    const business = await readVerdict(c, role, inMyScope, rel, w.A2.subject[rel]);
+    const tenant = await readVerdict(c, role, acrossTheTenant, rel, w.B.subject[rel]);
+    lines.push(`${role}: another business of my tenant → ${business}; another tenant → ${tenant}`);
+  }
+  // THE ENTITLEMENT. The two internal readers carry `USING (true)` PERMISSIVE
+  // read policies of their own (`inventory_internal_read`,
+  // `accounting_validator`), and PostgreSQL OR-s permissive policies — so
+  // their escape is a TOTAL read escape and reaches across the tenant
+  // boundary as well. That is the shipped design, and writing it down as
+  // "ADMITTED to both" is the only honest expectation: a law that expected
+  // them to be refused across tenants would be red on a correct database.
+  expect(lines.join('\n'), `${rel}: some principal is admitted past the business barrier that 0086 does not name, or one it names is not`).toBe(
+    roles
+      .map((role) =>
+        ENTITLED_PAST_THE_BUSINESS_BARRIER.includes(role)
+          ? `${role}: another business of my tenant → ADMITTED; another tenant → ADMITTED`
+          : `${role}: another business of my tenant → ${role === READER ? 'refused by the barrier' : 'refused by the grant'}; another tenant → ${
+              role === READER ? 'refused by the barrier' : 'refused by the grant'
+            }`,
+      )
+      .join('\n'),
+  );
+}
+
+/**
+ * LAW E(w) (THE ESCAPE IS A READ ESCAPE): the two principals the escape list
+ * names are admitted past the BUSINESS barrier ON `SELECT` AND NOWHERE ELSE.
+ *
+ * `business_isolation_read` is `FOR SELECT`. The insert, update and delete
+ * restrictives name no role at all, and `tenant_membership`'s `WITH CHECK`
+ * carries no escape either — so an escaping reader is still refused every
+ * write outside its scope. This asserts that by execution, and it separates
+ * the two reasons a write can be refused: `daftar_accounting_internal` holds
+ * no `INSERT` at all and is stopped by the grant, `daftar_inventory_internal`
+ * holds it and is stopped by the policy.
+ */
+async function lawEscapeIsReadOnly(c: Client, w: World, rel: Relation): Promise<void> {
+  const lines: string[] = [];
+  for (const role of ENTITLED_PAST_THE_BUSINESS_BARRIER) {
+    // The row it may READ: another business of its own tenant — admitted, and
+    // asserted here so the refusals below are known to be about the WRITE.
+    const canRead = await readVerdict(c, role, { tenantId: w.A.tenantId, businessId: w.A.businessId }, rel, w.A2.subject[rel]);
+    const probe = writeProbe(rel, w.A2, seedUserId);
+    const wrote = await asRole(c, role, { tenantId: w.A.tenantId, businessId: w.A.businessId }, () => attempt(c, probe.sql, probe.params));
+    const why = wrote.ok ? 'TAKEN' : wrote.message.includes('violates row-level security policy') ? 'refused by the barrier' : 'refused by the grant';
+    lines.push(`${role}: reads the other business's row → ${canRead}; writes a row into it → ${why}`);
+  }
+  expect(lines.join('\n'), `${rel}: a principal on the read escape list used it to WRITE outside its scope`).toBe(
+    [
+      `${ACCOUNTING_READER}: reads the other business's row → ADMITTED; writes a row into it → refused by the grant`,
+      `${WRITER}: reads the other business's row → ADMITTED; writes a row into it → refused by the barrier`,
+    ].join('\n'),
+  );
+}
+
+// ── THE PATHS WHOSE ROW SECURITY IS NOT THE CALLER'S ──────────────────────
+
+/**
+ * Every VIEW and MATERIALIZED VIEW in `public` that depends on one of the
+ * four relations, with its owner and whether it carries `security_invoker`.
+ *
+ * A view's row security is evaluated as the view's OWNER unless
+ * `security_invoker = true`. A view over `invoices` owned by the schema owner
+ * is therefore a path on which NO policy of `invoices` is consulted for the
+ * caller at all — and it is a path no law about the policies of `invoices`
+ * can see, because there is nothing wrong with those policies.
+ */
+async function viewSurface(c: Client): Promise<{ relname: string; owner: string; invoker: boolean; appSelect: boolean }[]> {
+  const r = await c.query<{ relname: string; owner: string; invoker: boolean; appselect: boolean }>(
+    `SELECT c.relname::text AS relname, pg_get_userbyid(c.relowner)::text AS owner,
+            coalesce((SELECT o = 'security_invoker=true' FROM unnest(coalesce(c.reloptions, ARRAY[]::text[])) AS t(o) WHERE o LIKE 'security_invoker=%'), false)
+              AS invoker,
+            has_table_privilege('daftar_app', c.oid, 'SELECT') AS appselect
+       FROM pg_class c
+      WHERE c.relnamespace = 'public'::regnamespace AND c.relkind IN ('v', 'm')
+        AND EXISTS (SELECT 1 FROM pg_depend d JOIN pg_rewrite rw ON rw.oid = d.objid JOIN pg_class t ON t.oid = d.refobjid
+                     WHERE rw.ev_class = c.oid AND d.classid = 'pg_rewrite'::regclass AND d.refclassid = 'pg_class'::regclass
+                       AND t.relname = ANY ($1::text[]))
+      ORDER BY 1`,
+    [[...RELATIONS]],
+  );
+  return r.rows.map((x) => ({ relname: x.relname, owner: x.owner, invoker: x.invoker, appSelect: x.appselect }));
+}
+
+/** Every SECURITY DEFINER routine `daftar_app` may execute whose body names one of the four relations. */
+async function definerSurface(c: Client): Promise<{ proname: string; owner: string; args: string }[]> {
+  const r = await c.query<{ proname: string; owner: string; args: string }>(
+    `SELECT p.proname::text AS proname, pg_get_userbyid(p.proowner)::text AS owner,
+            (SELECT coalesce(string_agg(format('NULL::%s', format_type(t, NULL)), ', ' ORDER BY ord), '')
+               FROM unnest(p.proargtypes) WITH ORDINALITY AS u(t, ord)) AS args
+       FROM pg_proc p
+      WHERE p.pronamespace = 'public'::regnamespace AND p.prokind = 'f' AND p.prosecdef
+        AND has_function_privilege('daftar_app', p.oid, 'EXECUTE')
+        AND EXISTS (SELECT 1 FROM unnest($1::text[]) AS t(rel) WHERE coalesce(p.prosrc, '') ~ ('\\m' || t.rel || '\\M'))
+      ORDER BY 1`,
+    [[...RELATIONS]],
+  );
+  return r.rows;
+}
+
+/**
+ * THE FOUR COMMANDS, AND WHY THIS SET HAS TO BE CLOSED.
+ *
+ * Each is SECURITY DEFINER, each is executable by `daftar_app`, and each is
+ * owned by a role that `business_isolation_read` NAMES IN ITS ESCAPE LIST. So
+ * on these four paths the read barrier admits every row of every business by
+ * construction, and what keeps a caller inside its own business is the
+ * routine's own gate — a signed assertion, whose business the routine reads
+ * out of the assertion and never out of its arguments or the scope GUCs.
+ *
+ * That is a sound design and it is proved elsewhere. What is NOT proved
+ * anywhere is that this set is CLOSED: a fifth routine, SECURITY DEFINER,
+ * owned by either internal role, granted to `daftar_app` and carrying no
+ * assertion gate, is a complete read bypass of all four relations that no law
+ * about the POLICIES could ever see — the policies would be perfect and the
+ * data would still be out. The red proof below plants exactly that.
+ */
+const DEFINER_SURFACE: readonly string[] = [
+  'accounting_post_entry owned by daftar_accounting_internal',
+  'customer_apply_credit owned by daftar_inventory_internal',
+  'customer_collect_payment owned by daftar_inventory_internal',
+  'sale_commit owned by daftar_inventory_internal',
+];
+
+/**
+ * LAW V (THE VIEW SURFACE): no view over any of the four relations exists, so
+ * no reader reaches them as somebody else.
+ */
+async function lawViewSurface(c: Client): Promise<void> {
+  const views = await viewSurface(c);
+  expect(
+    views.map((v) => `${v.relname} owned by ${v.owner} security_invoker=${v.invoker} daftar_app may select=${v.appSelect}`),
+    "a view over one of the four relations exists. A view's row security is evaluated as the VIEW'S OWNER unless it carries security_invoker=true, so unless this view is security_invoker AND the owner is subject to the same policies, it is a path on which no policy of the underlying relation is consulted for the caller",
+  ).toEqual([]);
+}
+
+/**
+ * LAW S (THE DEFINER SURFACE IS CLOSED): exactly the four commands are
+ * SECURITY DEFINER, executable by the application role and over these
+ * relations — and each of them refuses an ungated caller at its own gate,
+ * which is where the barrier for those paths actually is.
+ */
+async function lawDefinerSurface(c: Client, w: World): Promise<void> {
+  const fns = await definerSurface(c);
+  expect(
+    fns.map((f) => `${f.proname} owned by ${f.owner}`),
+    'the set of SECURITY DEFINER routines the application role may execute over these four relations has changed. Each one runs as a role the read barrier admits everything to, so a new member is a new read path with no policy behind it',
+  ).toEqual([...DEFINER_SURFACE]);
+
+  // AND EACH ONE IS GATED. Called with no assertion at all, every one of them
+  // refuses — and the refusal is the ROUTINE's, not the signature's and not
+  // the grant's, which is what says the call was admitted and the gate is
+  // what stopped it. `42883` would mean the call never resolved and `42501`
+  // that the grant stopped it; either would make this leg vacuous.
+  const lines: string[] = [];
+  for (const f of fns) {
+    const r = await asRole(c, READER, { tenantId: w.A.tenantId, businessId: w.A.businessId }, () => attempt(c, `SELECT * FROM ${f.proname}(${f.args})`));
+    lines.push(`${f.proname}: ${r.ok ? 'TAKEN' : `refused ${r.code}`}`);
+    if (!r.ok) {
+      expect(r.code, `${f.proname}: the call never resolved, so its refusal says nothing about the routine's gate`).not.toBe('42883');
+      expect(r.code, `${f.proname}: the GRANT refused the call, so its refusal says nothing about the routine's gate`).not.toBe('42501');
+    }
+  }
+  expect(
+    lines.filter((l) => l.includes('TAKEN')),
+    'a SECURITY DEFINER routine over these relations took an ungated call',
+  ).toEqual([]);
+}
+
+// ── THE SUITE: PART TWO ───────────────────────────────────────────────────
+
+describe('P4-S4 — the barrier on EVERY path the relation is reachable by', () => {
+  for (const rel of RELATIONS) {
+    it(`${rel}: on all ${READ_PATHS.length} read paths, another business's row is refused and my own is not — and the owner reaches both`, async () => {
+      await inCase(async (c, w) => {
+        await lawPaths(c, w, rel);
+      });
+    }, 600_000);
+
+    it(`${rel}: a PREPARED statement answers with the scope each execution holds, under a forced generic plan as well as a custom one`, async () => {
+      await inCase(async (c, w) => {
+        await lawGenericPlan(c, w, rel);
+      });
+    }, 300_000);
+  }
+
+  it('the readers of record refuse a cross-business call, and the refusal is told apart from an absence', async () => {
+    await inCase(async (c, w) => {
+      await lawReadersOfRecord(c, w);
+    });
+  }, 600_000);
+
+  it('no VIEW over any of the four relations exists, so no reader reaches them as somebody else', async () => {
+    const c = await connect();
+    try {
+      await lawViewSurface(c);
+    } finally {
+      await c.end();
+    }
+  }, 120_000);
+
+  it('the SECURITY DEFINER surface over these relations is exactly the four commands, and each refuses an ungated caller at its own gate', async () => {
+    await inCase(async (c, w) => {
+      await lawDefinerSurface(c, w);
+    });
+  }, 300_000);
+});
+
+describe('P4-S4 — WHO is admitted past the barrier, and WHERE', () => {
+  for (const rel of RELATIONS) {
+    it(`${rel}: of every principal in the cluster, exactly the two the escape list names read past the business barrier`, async () => {
+      await inCase(async (c, w) => {
+        await lawEscapeList(c, w, rel);
+      });
+    }, 300_000);
+
+    it(`${rel}: and their escape is a READ escape — neither may write outside its own business`, async () => {
+      await inCase(async (c, w) => {
+        await lawEscapeIsReadOnly(c, w, rel);
+      });
+    }, 300_000);
+  }
+});
+
+describe('P4-S4 — THE RED PROOFS for the reachability half', () => {
+  it('a blanket read barrier leaks on EVERY ONE of the read paths, so no path in the matrix is decorative', async () => {
+    await inCase(async (c, w) => {
+      for (const rel of RELATIONS) {
+        await withPlant(c, rel, [`ALTER POLICY business_isolation_read ON ${rel} USING (true)`], async () => {
+          await mustGoRed(`ALTER POLICY business_isolation_read ON ${rel} USING (true)`, `${rel}: the reachability matrix is not the barrier's`, () =>
+            lawPaths(c, w, rel),
+          );
+          // AND EVERY PATH FLIPPED. A law that goes red because ONE of its
+          // twenty-one paths saw the attack would leave the other twenty
+          // unproven — each of them could be reading nothing for a reason of
+          // its own and nobody would know. So the matrix is taken again under
+          // the plant and every row is required to have turned.
+          const leaked = await reachabilityMatrix(c, w, rel);
+          const blind = leaked.filter((r) => !r.otherBusiness).map((r) => r.path);
+          expect(blind, `${rel}: these read paths did NOT see the other business's row even with the read barrier removed, so they prove nothing`).toEqual([]);
+          record(`a blanket business_isolation_read on ${rel} leaked the other business's row on all ${leaked.length} read paths`);
+        });
+      }
+    });
+  }, 900_000);
+
+  it('BOTH read barriers blanket leaks the other TENANT too, on every read path', async () => {
+    // The whole read surface lifted at once, which is what `ALTER TABLE …
+    // DISABLE ROW LEVEL SECURITY` would be — and that statement cannot be
+    // used here: the seeding transaction holds deferred constraint trigger
+    // events and PostgreSQL refuses `ALTER TABLE` on a relation with pending
+    // ones ("cannot ALTER TABLE \"invoices\" because it has pending trigger
+    // events"). Two `ALTER POLICY` statements reach the same state without
+    // touching the relation, and `§91`'s ENABLED/FORCED flags have their own
+    // law in part one.
+    await inCase(async (c, w) => {
+      for (const rel of RELATIONS) {
+        await withPlant(
+          c,
+          rel,
+          [`ALTER POLICY business_isolation_read ON ${rel} USING (true)`, `ALTER POLICY tenant_membership ON ${rel} USING (true)`],
+          async () => {
+            await mustGoRed(
+              `ALTER POLICY business_isolation_read ON ${rel} USING (true) + ALTER POLICY tenant_membership ON ${rel} USING (true)`,
+              `${rel}: the reachability matrix is not the barrier's`,
+              () => lawPaths(c, w, rel),
+            );
+            const leaked = await reachabilityMatrix(c, w, rel);
+            const held = leaked.filter((r) => !r.otherBusiness || !r.otherTenant).map((r) => r.path);
+            expect(held, `${rel}: these read paths refused a row with BOTH read barriers blanket, which no path should`).toEqual([]);
+            record(`both read barriers blanket on ${rel}: all ${leaked.length} read paths leaked the other business AND the other tenant`);
+          },
+        );
+      }
+    });
+  }, 900_000);
+
+  it('a blanket read barrier makes the readers of record answer a cross-business call, and LAW X refuses it', async () => {
+    await inCase(async (c, w) => {
+      for (const rel of RELATIONS) await c.query(`ALTER POLICY business_isolation_read ON ${rel} USING (true)`);
+      await mustGoRed(
+        'ALTER POLICY business_isolation_read ON all four relations USING (true)',
+        'a reader of record answered a cross-business call with something',
+        () => lawReadersOfRecord(c, w),
+      );
+    });
+  }, 600_000);
+
+  it('a VIEW over the relation hands another business’s rows to the application role, and LAW V names it', async () => {
+    await inCase(async (c, w) => {
+      const view = `p4s4_view_${randomUUID().replace(/-/g, '')}`;
+      const sp = `v_${randomUUID().replace(/-/g, '')}`;
+      await c.query(`SAVEPOINT ${sp}`);
+      try {
+        // A view owned by the schema owner, with no `security_invoker`: the
+        // policies of `invoices` are evaluated as the OWNER, who is subject to
+        // none of them.
+        await c.query(`CREATE VIEW ${view} AS SELECT id, business_id FROM invoices`);
+        await c.query(`GRANT SELECT ON ${view} TO ${READER}`);
+        const seen = await asRole(c, READER, { tenantId: w.A.tenantId, businessId: w.A.businessId }, async () =>
+          (await c.query<{ id: string }>(`SELECT id::text AS id FROM ${view} WHERE id = $1`, [w.A2.subject.invoices])).rows.map((r) => r.id),
+        );
+        // THE CONSEQUENCE, FIRST: this is not a presence finding dressed up.
+        // The row of another business really is handed over.
+        expect(seen, 'the planted view did NOT leak, so this red proof would be about nothing').toEqual([w.A2.subject.invoices]);
+        // And the reader scoped to its own business sees the OTHER TENANT's
+        // rows through it as well, which is the whole relation.
+        const everything = await asRole(c, READER, { tenantId: w.A.tenantId, businessId: w.A.businessId }, async () =>
+          (await c.query<{ id: string }>(`SELECT id::text AS id FROM ${view} WHERE id = $1`, [w.B.subject.invoices])).rows.map((r) => r.id),
+        );
+        expect(everything, 'and the planted view reaches across the tenant boundary too').toEqual([w.B.subject.invoices]);
+        await mustGoRed(
+          `CREATE VIEW ${view} AS SELECT id, business_id FROM invoices (owned by the schema owner, no security_invoker)`,
+          'a view over one of the four relations exists',
+          () => lawViewSurface(c),
+        );
+      } finally {
+        await c.query(`ROLLBACK TO SAVEPOINT ${sp}`);
+      }
+      // And the surface is empty again, so the plant left nothing behind.
+      expect(await viewSurface(c), 'the planted view outlived its savepoint').toEqual([]);
+    });
+  }, 300_000);
+
+  it('a SECURITY DEFINER routine owned by a role on the escape list reads every business, and LAW S names it', async () => {
+    await inCase(async (c, w) => {
+      const fn = `p4s4_leak_${randomUUID().replace(/-/g, '')}`;
+      const sp = `s_${randomUUID().replace(/-/g, '')}`;
+      await c.query(`SAVEPOINT ${sp}`);
+      try {
+        await c.query(
+          `CREATE FUNCTION ${fn}(p_business_id uuid) RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER
+             SET search_path = pg_catalog, public AS $body$ SELECT id FROM invoices WHERE business_id = p_business_id $body$`,
+        );
+        await c.query(`ALTER FUNCTION ${fn}(uuid) OWNER TO ${WRITER}`);
+        await c.query(`GRANT EXECUTE ON FUNCTION ${fn}(uuid) TO ${READER}`);
+        // WHAT THE OWNER SEES, so the leak is compared against the whole
+        // truth of that business rather than against one id this proof
+        // happened to remember.
+        const allOf = async (businessId: string): Promise<string[]> =>
+          (await c.query<{ id: string }>(`SELECT id::text AS id FROM invoices WHERE business_id = $1 ORDER BY 1`, [businessId])).rows.map((r) => r.id);
+        const through = async (businessId: string): Promise<string[]> =>
+          asRole(c, READER, { tenantId: w.A.tenantId, businessId: w.A.businessId }, async () =>
+            (await c.query<{ id: string }>(`SELECT ${fn}($1)::text AS id`, [businessId])).rows.map((r) => r.id).sort(),
+          );
+        const theirs = await allOf(w.A2.businessId);
+        expect(theirs, 'the other business holds no invoice, so this red proof would be about nothing').not.toEqual([]);
+        expect(await through(w.A2.businessId), 'the planted definer routine did NOT leak the other business').toEqual(theirs);
+        expect(
+          await through(w.B.businessId),
+          'and it reaches the other TENANT as well, because its owner is on the escape list and no tenant policy applies to a routine running as that owner',
+        ).toEqual(await allOf(w.B.businessId));
+        await mustGoRed(
+          `CREATE FUNCTION ${fn}(uuid) … SECURITY DEFINER owned by ${WRITER}, granted to ${READER}`,
+          'the set of SECURITY DEFINER routines the application role may execute over these four relations has changed',
+          () => lawDefinerSurface(c, w),
+        );
+      } finally {
+        await c.query(`ROLLBACK TO SAVEPOINT ${sp}`);
+      }
+      expect(
+        (await definerSurface(c)).map((f) => `${f.proname} owned by ${f.owner}`),
+        'the planted routine outlived its savepoint',
+      ).toEqual([...DEFINER_SURFACE]);
+    });
+  }, 300_000);
+
+  it('a THIRD name on the escape list is admitted, and LAW E names it — but only once the GRANT is there too', async () => {
+    await inCase(async (c, w) => {
+      const rel: Relation = 'invoices';
+      const intruder = 'daftar_worker';
+      // The widened qual is WRITTEN, not patched out of the catalogue's own
+      // rendering: `current_user IN (…)` renders as `CURRENT_USER = ANY
+      // (ARRAY[…::name])`, so a textual substitution of the source spelling
+      // finds nothing and plants nothing. `withPlant` asserts the catalogue
+      // actually moved, which is what catches a plant that did not land.
+      const widened = `(SELECT app_bypass()) OR (SELECT current_user IN ('${WRITER}', '${ACCOUNTING_READER}', '${intruder}')) OR business_id = (SELECT nullif(app_business(), '')::uuid)`;
+
+      // THE POLICY ALONE IS NOT ENOUGH, AND SAYING SO IS PART OF THE
+      // EVIDENCE. `daftar_worker` holds no SELECT on these relations, so a
+      // name added to the escape list reaches no row until a GRANT is added
+      // beside it — and LAW E is therefore SILENT on the policy-only plant.
+      // A reviewer who did not know that would read the silence as the law
+      // failing to see the attack.
+      await withPlant(c, rel, [`ALTER POLICY business_isolation_read ON ${rel} USING (${widened})`], async () => {
+        await lawEscapeList(c, w, rel);
+        record(
+          `the escape list of ${rel}.business_isolation_read widened with '${intruder}' and NO grant: LAW E is silent, because ${intruder} holds no SELECT on ${rel} — the escape is half a path`,
+        );
+        const sp = `g_${randomUUID().replace(/-/g, '')}`;
+        await c.query(`SAVEPOINT ${sp}`);
+        try {
+          await c.query(`GRANT SELECT ON ${rel} TO ${intruder}`);
+          await mustGoRed(
+            `ALTER POLICY business_isolation_read ON ${rel} with '${intruder}' on the escape list + GRANT SELECT ON ${rel} TO ${intruder}`,
+            `${rel}: some principal is admitted past the business barrier that 0086 does not name`,
+            () => lawEscapeList(c, w, rel),
+          );
+        } finally {
+          await c.query(`ROLLBACK TO SAVEPOINT ${sp}`);
+        }
+      });
+    });
+  }, 600_000);
+
+  it('a TENANT escape for the internal reader is admitted on the write side, and LAW E(w) names it', async () => {
+    await inCase(async (c, w) => {
+      for (const rel of RELATIONS) {
+        const check = must(
+          (await policyState(c)).find((r) => r.relname === rel && r.polname === 'tenant_membership')?.wc,
+          `${rel}.tenant_membership WITH CHECK`,
+        );
+        // The business restrictive is what refuses the escaping reader's
+        // write; lift it and the escape becomes a write escape.
+        await withPlant(c, rel, [`ALTER POLICY business_isolation_insert ON ${rel} WITH CHECK (true)`], async () => {
+          expect(check, 'the tenant WITH CHECK is untouched by this plant').toBe(
+            must((await policyState(c)).find((r) => r.relname === rel && r.polname === 'tenant_membership')?.wc, 'check'),
+          );
+          await mustGoRed(
+            `ALTER POLICY business_isolation_insert ON ${rel} WITH CHECK (true)`,
+            `${rel}: a principal on the read escape list used it to WRITE outside its scope`,
+            () => lawEscapeIsReadOnly(c, w, rel),
+          );
+        });
+      }
+    });
+  }, 600_000);
+});
+
+/** Every red proof this file executed, printed once at the end so the evidence is in one place. */
+afterAll(() => {
+  if (redProofs.length > 0) console.log(`\n  ${redProofs.length} RED PROOF(S) EXECUTED:\n${redProofs.map((l, i) => `   ${i + 1}. ${l}`).join('\n')}\n`);
+});
