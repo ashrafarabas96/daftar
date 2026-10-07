@@ -763,7 +763,15 @@ All three are `tests/**` and belong to S4's suites, so they are **patch requests
 
 **Then, in order:**
 
-5. Patch requests `-001`, `-002`, `-003`, `-006`, `-009`, `-010`, `-011`, `-012` applied.
+5. Patch requests `-001`, `-002`, `-003`, `-006`, `-009`, `-010`, `-011`, `-012`, `-013`
+   applied. **`-013` is new in round 6 and corrects a defect in this slice's own reasoning:**
+   OD-03 is **CLOSED** (the wire contract said "OPEN" and has been fixed), tax is a structural
+   zero, and a non-zero tax must **REFUSE**. The shapes carry no tax field, which settles the
+   COMPILE-time question and settles nothing at runtime — a JSON body carrying a tax field
+   meets a non-strict validator and is silently stripped, which is the **accept-then-ignore**
+   the ruling forbids, reached THROUGH the absence rather than in spite of it. A refusal is a
+   validator's act, not a type's silence. **S6's tax position is therefore SPECIFIED AND NOT
+   ENFORCED**, and is not counted as a proof anywhere.
 6. The S6 migration written by the migration owner to
    `docs/PHASE_4_S6_DDL_SPECIFICATION.md`, with
    `docs/PHASE_4_S6_LEVEL_UNIQUENESS.md` §6's removal order and **a red proof per replaced
@@ -777,6 +785,19 @@ All three are `tests/**` and belong to S4's suites, so they are **patch requests
    unlocked inserts at the same freed level, the second required to BLOCK on the first's index
    entry and then raise `23505`.** A single-transaction red proof cannot see a two-transaction
    race, which is how the first draft's replacement passed review (§2A, F1).
+
+   **ROUND 6: the two-connection case is WRITTEN and has NOT BEEN RUN.** `L-F2a` of
+   `tests/integration/p4s6-level-f-spec-executed.test.ts` is exactly the case this item names,
+   and the blocking half is an ASSERTION and not an elapsed time: `expectBlockedOnLock` polls
+   `pg_stat_activity` for the second writer to appear with `wait_event_type = 'Lock'` and
+   **fails the case if it never does**, so a writer that did not queue cannot pass
+   (`[[daftar-a-test-whose-verdict-is-the-machines-speed]]`). `L-F2b` is its non-vacuous
+   counterpart (a successor beside its reversed original must NOT block), `L-F2c` records the
+   index's stated limit (a fabricated generation escapes the index and is caught by the
+   verifier, which is level E), `L-F3a`/`L-F3b` carry F-C6's credit double-spend, and `L-F4`
+   measures the cross-relation seam F-C5 withdrew the false claim about. **Status: BLOCKED on a
+   runner window.** Until it runs, §8.3's models remain the only concurrency evidence and are
+   labelled as models, which is what they are.
 8. The owed goldens: reversal and refund proven to be **two** operations by the merged-path
    red proof; a second reversal refused; the multi-currency reversal using the **original**
    snapshots; **no stale allocation after a payment reversal**.
@@ -797,6 +818,18 @@ All three are `tests/**` and belong to S4's suites, so they are **patch requests
    level C — `packages/inventory/test/customer-reversal-generation.test.ts`, 29 cases, with
    every row's generation written out by hand — and what remains owed is only that PostgreSQL
    evaluates these `UPDATE`s that way over real rows.
+
+   **ROUND 6: the suite is WRITTEN and has NOT BEEN RUN.**
+   `tests/integration/p4s6-level-f-spec-executed.test.ts` carries it as cases `L-F1a`–`L-F1d`,
+   with both planted counterparts this item demands: `L-F1b` is round 4's expression and
+   `L-F1c` is the constant `0`, and each is required to FAIL the assertion `L-F1a` passes. The
+   suite does not transcribe the SQL — it **extracts the statements from DDL spec §2A.1 and
+   executes that text**, and `extractOne` reddens on a zero or multiple match, so the subject
+   of the case is the specification itself and a document edited away from what is proved here
+   cannot stay green. What is still outside the proof, stated rather than hidden, is that the
+   eventual migration file transcribes these same statements — the migration owner's checkable
+   obligation at promotion. **Status: BLOCKED on a runner window; no figure from it is claimed
+   anywhere.**
 8b. **The replay lookup proved, including its ORDERING** (DDL spec §1A.5): a redelivery with a
    fresh id returning the stored rows; the same provider reference against a different payment
    conflicting; a stale redelivery after a later transition replaying rather than refusing

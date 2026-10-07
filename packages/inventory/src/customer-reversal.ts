@@ -1122,4 +1122,15 @@ export const P4_S6_REQUIRED_WIRING: readonly { readonly patchRequest: string; re
     file: 'the existing S4 suites under tests/ that S6 may not edit',
     edit: 'three test hooks, named in the contract pack §13.3, each inside a suite S4 owns',
   }),
+  // OD-03 is CLOSED: tax is a structural zero and a non-zero tax must REFUSE.
+  // This slice's shapes carry no tax field, which settles the COMPILE-time
+  // question and not the runtime one — a JSON body carrying a tax field meets a
+  // non-strict validator and is silently stripped, which is the accept-then-
+  // ignore the ruling forbids, reached THROUGH the absence rather than in spite
+  // of it. The refusal is a validator's act, not a type's silence.
+  Object.freeze({
+    patchRequest: 'PATCH-REQ-S6-013',
+    file: 'the request validator that mounts the S6 shapes (apps/api/src/modules/receivables, schema layer)',
+    edit: 'reject UNKNOWN KEYS on every S6 request schema so a body carrying a tax field is REFUSED by name rather than stripped, with a red proof beside a tax-free counterpart that must be accepted',
+  }),
 ]);

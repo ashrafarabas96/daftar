@@ -13,10 +13,22 @@
  *   idempotency key: resending the same command answers the stored result with
  *   `replayed: true`, and the same id with a different command is
  *   `….idempotency_conflict` (409);
- * - tax: `OD-03` is OPEN and sales tax is structurally ZERO in this estate, so
- *   nothing here carries a tax field. A reversal of an entry that has no tax
- *   line cannot acquire one, because the reversal's amounts are not stated on
- *   the wire at all — see the next paragraph.
+ * - tax: **`OD-03` is CLOSED for Phase 4.** Sales tax is a STRUCTURAL ZERO,
+ *   `tax_minor = 0`, and a command attempting a non-zero tax must **REFUSE** —
+ *   never normalise it to zero, never accept it and ignore it, and never create
+ *   a tax journal line. An earlier revision of this comment said "OD-03 is
+ *   OPEN"; it was stale and is corrected here.
+ *
+ *   **And the absence of a field is NOT that refusal.** No request below
+ *   carries a tax field, which settles what a TypeScript caller can express at
+ *   COMPILE time and settles nothing about a JSON body. A body carrying
+ *   `"taxMinor": "500"` meets a non-strict validator, passes, and is silently
+ *   dropped — which is exactly the accept-then-ignore the ruling forbids, and
+ *   it would be reached through the absence rather than in spite of it. The
+ *   refusal is therefore a RUNTIME obligation on the validator that mounts
+ *   these shapes: the schema must reject unknown keys, and it is OWED, not
+ *   done. `PATCH-REQ-S6-013`, and `P4_S6_REQUIRED_WIRING` carries the row.
+ *   Until it lands, this slice's tax position is SPECIFIED and NOT ENFORCED.
  *
  * ## No request in this file carries an amount
  *
