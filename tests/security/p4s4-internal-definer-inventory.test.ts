@@ -97,6 +97,49 @@
  *                   principal. Recorded as `guc` so that a future grant of
  *                   one of them to a login role is a visible change.
  *
+ * ── EVERY RECORDED ATTRIBUTE IS JUDGED ────────────────────────────────────
+ *
+ * A recorded attribute NO LAW READS is worse than no attribute, because the
+ * record then looks complete. `kind`, `domain` and `bindings` were in that
+ * state — read by nothing — and `tenant`, `business`, `callerIds` and
+ * `permission` were compared only to EACH OTHER. Each now has a clause that
+ * derives it from the live signature, body or owner and compares, and
+ * `no recorded attribute is decorative` proves the coverage by handing every
+ * door to the law through a recording proxy: the fields the law touched must
+ * be ALL thirteen.
+ *
+ * Two of those clauses are the sharp ones:
+ *
+ *   - the ASSERTION SOURCE is compared as the gate AND THE OPERATION CODE IT
+ *     SIGNS, not merely the gate name. The old clause checked only the text
+ *     before the `(`, so a migration could have changed
+ *     `accounting_period_reopen`'s gate from
+ *     `accounting_control_actor(ARRAY['period_reopen'])` to
+ *     `ARRAY['period_create']` — a signed decision an ordinary request can
+ *     obtain for CREATING a period opening REOPENING one, §17 condition 2
+ *     almost verbatim — and this suite stayed green. Scoped honestly: the
+ *     assertion still binds tenant, business and actor, so that is
+ *     INTRA-TENANT OPERATION CONFUSION, not a cross-tenant path. The defect
+ *     was that §14 CLAIMED to be the sentinel for the authority proof and
+ *     was not.
+ *   - `bindings` records the structural contract §17's last condition is
+ *     about — "an internal writer writing outside its signed or structural
+ *     contract" — so it is compared to the binding tables the body writes,
+ *     and, where the record says `(via X)`, to what X writes, X being on the
+ *     door's call path. A door recording `none` may not call a binding
+ *     writer at all.
+ *
+ * Giving `callerIds` a clause measured three records FALSE: the accounting
+ * opening-balance draft, edit and discard recorded a signed payload
+ * fingerprint that no routine on their path computes
+ * (`accounting_fingerprint` is called only by `accounting_post_entry` and
+ * `accounting_post_reversal`). What `edit` and `discard` really bind is
+ * `p_id`, which the gate refuses unless it equals the decision's `source_id`,
+ * and `draft` binds nothing caller-supplied at all — its `p_lines` is checked
+ * for SHAPE only. The records now say that, and `signed-id-equality` is read
+ * one hop INTO the gate so the recorded comparison is one that exists.
+ * Removing a false claim is removing a false claim, not weakening a law.
+ *
  * ── T-05's SCOPE IS RESPECTED ─────────────────────────────────────────────
  *
  * T-05's owner / `search_path` / not-the-applier clauses bind DEFINER
@@ -138,7 +181,7 @@ type Owner = 'inventory' | 'accounting';
 type Kind = 'command' | 'read' | 'key-lifecycle';
 type Source = 'signed' | 'guc' | 'caller-argument' | 'none';
 type Permission = 'signed-op' | 'execute-acl';
-type CallerIds = 'payload-digest' | 'payload-fingerprint' | 'guc-equality' | 'unbound' | 'none';
+type CallerIds = 'payload-digest' | 'payload-fingerprint' | 'signed-id-equality' | 'guc-equality' | 'unbound' | 'none';
 
 /** One door: §14's fourteen attributes, less the two this suite asserts as set-wide clauses (`search_path` and PUBLIC EXECUTE). */
 interface Door {
@@ -246,7 +289,7 @@ const DOORS: readonly Door[] = [
     business: 'signed',
     assertion: 'accounting_opening_balance_authority()',
     permission: 'signed-op',
-    callerIds: 'payload-fingerprint',
+    callerIds: 'signed-id-equality',
     bindings: 'none',
     reads: true,
     writes: true,
@@ -261,7 +304,7 @@ const DOORS: readonly Door[] = [
     business: 'signed',
     assertion: 'accounting_opening_balance_authority()',
     permission: 'signed-op',
-    callerIds: 'payload-fingerprint',
+    callerIds: 'none',
     bindings: 'none',
     reads: true,
     writes: true,
@@ -276,7 +319,7 @@ const DOORS: readonly Door[] = [
     business: 'signed',
     assertion: 'accounting_opening_balance_authority()',
     permission: 'signed-op',
-    callerIds: 'payload-fingerprint',
+    callerIds: 'signed-id-equality',
     bindings: 'none',
     reads: true,
     writes: true,
@@ -292,7 +335,7 @@ const DOORS: readonly Door[] = [
     assertion: 'accounting_opening_balance_authority()',
     permission: 'signed-op',
     callerIds: 'payload-fingerprint',
-    bindings: 'none',
+    bindings: 'accounting_source_bindings (via accounting_post_entry)',
     reads: true,
     writes: true,
   },
@@ -367,7 +410,7 @@ const DOORS: readonly Door[] = [
     assertion: "accounting_actor(ARRAY['post'])",
     permission: 'signed-op',
     callerIds: 'payload-fingerprint',
-    bindings: 'none',
+    bindings: 'accounting_source_bindings (via accounting_post_entry)',
     reads: true,
     writes: true,
   },
@@ -1219,6 +1262,10 @@ interface Row {
   acl_null: boolean;
   trigger: boolean;
   code: string;
+  /** the body with COMMENTS removed but LITERALS KEPT — the only place an operation code survives */
+  text: string;
+  /** declared parameter names, as `proargnames` has them */
+  args: string[];
 }
 
 /**
@@ -1239,13 +1286,36 @@ async function liveDefiners(q: Pick<PoolClient, 'query'>): Promise<Row[]> {
                                WHERE a.privilege_type = 'EXECUTE' AND a.grantee <> p.proowner) z)::text[], ARRAY[]::text[]) AS grantees,
             p.proacl IS NULL                                           AS acl_null,
             p.prorettype = 'trigger'::regtype                          AS trigger,
-            p.prosrc                                                   AS code
+            p.prosrc                                                   AS code,
+            coalesce(p.proargnames, ARRAY[]::text[])                    AS args
        FROM pg_proc p JOIN pg_roles o ON o.oid = p.proowner
       WHERE p.prosecdef AND o.rolname IN ($1, $2)
       ORDER BY 1`,
     [INVENTORY, ACCOUNTING],
   );
-  return r.rows.map((x) => ({ ...x, code: strip(x.code) }));
+  return r.rows.map((x) => ({ ...x, code: strip(x.code), text: stripComments(x.code) }));
+}
+
+/**
+ * Every routine of either internal principal, DEFINER or INVOKER, by NAME,
+ * with its declared parameter names and its comment-stripped body.
+ *
+ * Used for ONE purpose: to read the body of the verifier gate a door hands a
+ * caller-supplied id to, and confirm the gate really compares it to the
+ * decision it verified — `accounting_opening_balance_authority` is INVOKER,
+ * so `liveDefiners` does not see it. Nothing here JUDGES an INVOKER routine:
+ * T-05's owner, `search_path` and not-the-applier clauses bind DEFINER
+ * routines only (`purchase_ap_outstanding` being the precedent), and this
+ * suite's roster stays `prosecdef` only.
+ */
+async function internalRoutines(q: Pick<PoolClient, 'query'>): Promise<Map<string, { args: string[]; text: string }>> {
+  const r = await q.query<{ name: string; args: string[]; src: string }>(
+    `SELECT p.proname::text AS name, coalesce(p.proargnames, ARRAY[]::text[]) AS args, p.prosrc AS src
+       FROM pg_proc p JOIN pg_roles o ON o.oid = p.proowner
+      WHERE o.rolname IN ($1, $2)`,
+    [INVENTORY, ACCOUNTING],
+  );
+  return new Map(r.rows.map((x) => [x.name, { args: x.args, text: stripComments(x.src) }]));
 }
 
 /** `--` and `/* *\/` comments, `'…'` literals and `$tag$…$tag$` blocks removed. */
@@ -1294,6 +1364,202 @@ export function strip(src: string): string {
   return out;
 }
 
+/**
+ * `--` and `/* *\/` comments and `$tag$…$tag$` blocks removed, LITERALS KEPT.
+ *
+ * `strip` above blanks the quoted literals, which is what the gate-NAME and
+ * DML-verb readers want — a routine that merely names a gate in its prose is
+ * not credited with calling one. But the OPERATION CODE a gate is called with
+ * *is* a literal, and it is the whole of what distinguishes
+ * `accounting_control_actor(ARRAY['period_reopen'])` from
+ * `accounting_control_actor(ARRAY['period_create'])`. A gate name alone is
+ * not the authority proof: a signed decision an ordinary request can obtain
+ * for ONE operation must not open a DIFFERENT one. So the operation reader
+ * gets a body whose literals survive, and still no comments — a commented-out
+ * gate call names no operation.
+ */
+export function stripComments(src: string): string {
+  let out = '';
+  let i = 0;
+  while (i < src.length) {
+    if (src.startsWith('--', i)) {
+      const n = src.indexOf('\n', i);
+      i = n < 0 ? src.length : n;
+      continue;
+    }
+    if (src.startsWith('/*', i)) {
+      const n = src.indexOf('*/', i + 2);
+      i = n < 0 ? src.length : n + 2;
+      out += ' ';
+      continue;
+    }
+    if (src[i] === "'") {
+      out += "'";
+      i += 1;
+      while (i < src.length) {
+        if (src[i] === "'" && src[i + 1] === "'") {
+          out += "''";
+          i += 2;
+          continue;
+        }
+        if (src[i] === "'") {
+          out += "'";
+          i += 1;
+          break;
+        }
+        out += src[i];
+        i += 1;
+      }
+      continue;
+    }
+    const dollar = /^\$[A-Za-z_]*\$/.exec(src.slice(i));
+    if (dollar !== null) {
+      const tag = dollar[0];
+      const n = src.indexOf(tag, i + tag.length);
+      i = n < 0 ? src.length : n + tag.length;
+      out += ' $$ ';
+      continue;
+    }
+    out += src[i];
+    i += 1;
+  }
+  return out;
+}
+
+/** One `gate(…)` call site: the gate, the operation code its FIRST argument names (`null` when that argument is not a literal), and that argument when it is a bare identifier. */
+interface GateCall {
+  readonly gate: string;
+  readonly op: string | null;
+  readonly arg: string | null;
+}
+
+/**
+ * Every verifier-gate call site in `text`, WITH its operation code. The same
+ * parser reads the live body and the recorded `assertion` string, so the two
+ * are compared on one footing and the record cannot be written in a shape the
+ * reader happens to accept.
+ *
+ * The three argument shapes present are `gate('op', …)`,
+ * `gate(ARRAY['op', …])` and `gate(<non-literal>)` — the last being
+ * `accounting_opening_balance_authority`, which carries no operation code at
+ * all and is recorded, and read back, as the empty one.
+ */
+function gateCalls(text: string): GateCall[] {
+  const out: GateCall[] = [];
+  for (const gate of GATES) {
+    const re = new RegExp(`\\b${gate}\\s*\\(`, 'g');
+    let m: RegExpExecArray | null = re.exec(text);
+    while (m !== null) {
+      const rest = text.slice(m.index + m[0].length);
+      const lit = /^\s*(?:ARRAY\s*\[\s*)?'((?:[^']|'')*)'/.exec(rest);
+      const ident = /^\s*([A-Za-z_][A-Za-z0-9_]*)\s*[),]/.exec(rest);
+      out.push({ gate, op: lit?.[1] === undefined ? null : lit[1].replace(/''/g, "'"), arg: ident?.[1] ?? null });
+      m = re.exec(text);
+    }
+  }
+  return out;
+}
+
+/** The gate-and-operation pairs a text names, as one sorted, deduplicated comparison key. */
+const gateOpKeys = (text: string): string[] => [...new Set(gateCalls(text).map((c) => `${c.gate}(${c.op === null ? '' : `'${c.op}'`})`))].sort();
+
+/**
+ * The structural binding tables §17's LAST condition is about — "an internal
+ * writer writing outside its signed or structural contract". A door's
+ * `bindings` attribute names the binding it writes, and `(via X)` names the
+ * one internal helper it writes it through; both halves are compared to the
+ * bodies below.
+ */
+const BINDING_TABLES = ['accounting_source_bindings', 'stock_source_bindings'] as const;
+
+/** Which structural binding tables a body INSERTs into, read from the body. */
+const bindingsIn = (code: string): string[] => BINDING_TABLES.filter((t) => new RegExp(`INSERT\\s+INTO\\s+(?:public\\.)?${t}\\b`, 'i').test(code));
+
+/** A recorded `bindings` value, parsed: `'none'`, `'<table>'` or `'<table> (via <helper>)'`. */
+function parseBindings(recorded: string): { readonly tables: readonly string[]; readonly via: string | null } | null {
+  if (recorded === 'none') return { tables: [], via: null };
+  const m = /^([a-z_]+)(?: \(via ([a-z_]+)\))?$/.exec(recorded);
+  if (m?.[1] === undefined || !(BINDING_TABLES as readonly string[]).includes(m[1])) return null;
+  return { tables: [m[1]], via: m[2] ?? null };
+}
+
+/** What binds a caller-supplied id, read from the body and the declared parameter names. */
+const DIGEST = /\binventory_claimed_payload_digest\s*\(/;
+/**
+ * A payload fingerprint, as the accounting side actually performs it: either a
+ * `*fingerprint(` helper the body calls, or the `posting_fingerprint` the
+ * verified actor carries out of the HMAC check and the body compares to what
+ * is stored (`0047:887`). There is deliberately no `p_fingerprint` parameter
+ * anywhere — a fingerprint the caller could choose is one the caller controls.
+ */
+const FINGERPRINT = /\baccounting_[a-z_]*fingerprint\s*\(|\bposting_fingerprint\b/;
+/**
+ * The two recorded posting primitives that verify the signed payload
+ * fingerprint over the lines handed to them (`0045:707`, `0046:648`). A door
+ * that hands its caller's payload to one of these binds that payload through
+ * it — the same ONE explicit hop the `bindings` attribute records as `(via X)`.
+ */
+const FINGERPRINT_PRIMITIVES = ['accounting_post_entry', 'accounting_post_reversal'] as const;
+const BUSINESS_GUC = /current_setting\s*\(\s*'app\.business_id'/;
+const callsFingerprintPrimitive = (code: string): boolean => FINGERPRINT_PRIMITIVES.some((n) => new RegExp(`\\b${n}\\s*\\(`).test(code));
+
+/**
+ * The `callerIds` the CATALOGUE says, never read out of the record. The order
+ * is the order of strength: a payload digest or fingerprint binds the caller's
+ * ids into the signed decision; a GUC equality only narrows the scope of
+ * already-elevated code; a `p_business_id` parameter with neither binds
+ * nothing at all.
+ */
+const callerIdsFromCatalogue = (args: readonly string[], text: string): CallerIds =>
+  DIGEST.test(text)
+    ? 'payload-digest'
+    : FINGERPRINT.test(text) || callsFingerprintPrimitive(text)
+      ? 'payload-fingerprint'
+      : BUSINESS_GUC.test(text)
+        ? 'guc-equality'
+        : gateCalls(text).some((c) => c.arg !== null && args.includes(c.arg))
+          ? 'signed-id-equality'
+          : args.includes('p_business_id')
+            ? 'unbound'
+            : 'none';
+
+/** The tenant/business `Source` the CATALOGUE says: a gate signs them, a GUC narrows them, a parameter supplies them, or there are none. */
+const sourceFromCatalogue = (args: readonly string[], text: string, hasGate: boolean): Source =>
+  hasGate ? 'signed' : BUSINESS_GUC.test(text) ? 'guc' : args.includes('p_business_id') ? 'caller-argument' : 'none';
+
+/** The `kind` the SIGNATURE and the body say: the two key-lifecycle names, else whether it writes. */
+const kindFromCatalogue = (sig: string, code: string): Kind =>
+  /_assertion_key_(?:install|retire)\(/.test(sig) ? 'key-lifecycle' : writesIn(code) ? 'command' : 'read';
+
+/** The operation families, and the §14 domain each belongs to. Hand-written; the operation code itself comes from the body. */
+const OP_FAMILY_DOMAIN: Readonly<Record<string, string>> = {
+  customer: 'receivables',
+  inventory: 'inventory',
+  payment: 'payments',
+  pos: 'pos',
+  purchase: 'purchasing',
+  sale: 'sales',
+  structure: 'structure',
+  supplier: 'payables',
+};
+/** A door whose body names no dotted operation code belongs to its owner's own domain. */
+const OWNER_DOMAIN: Readonly<Record<Owner, string>> = { inventory: 'inventory', accounting: 'accounting' };
+
+/** The `domain` the CATALOGUE says: the family of the operation code the BODY signs, or, for a door that signs none, the owning principal's. */
+function domainFromCatalogue(owner: Owner, text: string): string {
+  const families = [
+    ...new Set(
+      gateCalls(text)
+        .map((c) => c.op)
+        .filter((o): o is string => o !== null && o.includes('.'))
+        .map((o) => o.slice(0, o.indexOf('.'))),
+    ),
+  ].sort();
+  if (families.length === 0) return OWNER_DOMAIN[owner];
+  if (families.length > 1) return `«${families.join('+')} — a door signing more than one operation family has no single domain»`;
+  return OP_FAMILY_DOMAIN[families[0] as string] ?? `«unknown operation family ${families[0] as string}»`;
+}
+
 const writesIn = (code: string): boolean => /\b(?:INSERT\s+INTO|UPDATE\s+(?!SET\b)[a-z_"]|DELETE\s+FROM)/i.test(code);
 const readsIn = (code: string): boolean => /\bSELECT\b/i.test(code);
 const gatesIn = (code: string): string[] => GATES.filter((g) => new RegExp(`\\b${g}\\s*\\(`).test(code));
@@ -1308,10 +1574,11 @@ async function loginRoles(q: Pick<PoolClient, 'query'>): Promise<Set<string>> {
  * THE LAW, as a list of findings. Empty is green. Each finding opens with the
  * §17 condition or the §14 standard it trips, so a red test names the ruling.
  */
-export async function inventoryFindings(q: Pick<PoolClient, 'query'>, logins: Set<string>): Promise<string[]> {
+export async function inventoryFindings(q: Pick<PoolClient, 'query'>, logins: Set<string>, roster: readonly Door[] = DOORS): Promise<string[]> {
   const findings: string[] = [];
   const live = await liveDefiners(q);
-  const doors = new Map(DOORS.map((d) => [d.sig, d]));
+  const routines = await internalRoutines(q);
+  const doors = new Map(roster.map((d) => [d.sig, d]));
   const sealed = new Map(SEALED.map((s) => [s[0], s]));
   const seen = new Set<string>();
 
@@ -1352,16 +1619,119 @@ export async function inventoryFindings(q: Pick<PoolClient, 'query'>, logins: Se
     if (writesIn(row.code) !== door.writes)
       findings.push(`${CHANGED}: ${row.sig} ${writesIn(row.code) ? 'writes' : 'does not write'}, recorded writes=${door.writes}`);
 
+    // ── §14's attributes, EACH compared to the catalogue or the body ───────
+    //
+    // `kind`, `domain` and `bindings` were recorded and judged by nothing.
+    // A recorded attribute no law reads is worse than no attribute, because
+    // the record then LOOKS complete; each is now derived from the live
+    // signature, body or owner and compared. `no recorded attribute is
+    // decorative` below holds this honest by probing which fields the law
+    // actually reads.
+    const derivedKind = kindFromCatalogue(row.sig, row.code);
+    if (door.kind !== derivedKind) findings.push(`${CHANGED}: ${row.sig} is a ${derivedKind} by its signature and body, recorded kind=${door.kind}`);
+
+    const derivedDomain = domainFromCatalogue(door.owner, row.text);
+    if (door.domain !== derivedDomain)
+      findings.push(`${CHANGED}: ${row.sig} belongs to ${derivedDomain} by the operation code its body signs, recorded domain=${door.domain}`);
+
+    // §17's LAST condition — "an internal writer writing outside its signed
+    // or structural contract". `bindings` records that contract, so the
+    // contract is compared to the writes: the binding the door's OWN body
+    // makes, and, where the record says `(via X)`, the binding X makes, X
+    // being on the door's call path. One hop — the hop the record claims —
+    // and no further: a door that binds nothing may not reach a binding
+    // writer at all.
+    const recordedBindings = parseBindings(door.bindings);
+    if (recordedBindings === null)
+      findings.push(`${CHANGED}: ${row.sig} records bindings ${JSON.stringify(door.bindings)}, which names no structural binding table the law knows`);
+    else {
+      const direct = bindingsIn(row.code);
+      const expected = [...recordedBindings.tables].sort();
+      const via = recordedBindings.via;
+      if (via === null) {
+        if (JSON.stringify(direct.sort()) !== JSON.stringify(expected))
+          findings.push(`${CHANGED}: ${row.sig} writes the structural bindings ${direct.join(',') || 'none'}, recorded bindings=${door.bindings}`);
+      } else {
+        if (direct.length > 0) findings.push(`${CHANGED}: ${row.sig} records its binding written via ${via} but its own body inserts into ${direct.join(',')}`);
+        if (!new RegExp(`\\b${via}\\s*\\(`).test(row.code))
+          findings.push(`${CHANGED}: ${row.sig} records its binding written via ${via} but its body does not call ${via}`);
+        const helper = live.find((x) => x.sig.startsWith(`${via}(`));
+        if (helper === undefined)
+          findings.push(`${CHANGED}: ${row.sig} records its binding written via ${via}, which is no SECURITY DEFINER routine of an internal principal`);
+        else if (JSON.stringify(bindingsIn(helper.code).sort()) !== JSON.stringify(expected))
+          findings.push(`${CHANGED}: ${row.sig} records bindings=${door.bindings} but ${helper.sig} writes ${bindingsIn(helper.code).join(',') || 'none'}`);
+      }
+      if (expected.length === 0)
+        for (const writer of live.filter((x) => bindingsIn(x.code).length > 0 && x.sig !== row.sig))
+          if (new RegExp(`\\b${writer.sig.slice(0, writer.sig.indexOf('('))}\\s*\\(`).test(row.code))
+            findings.push(
+              `${CHANGED}: ${row.sig} records bindings=none but its body calls ${writer.sig}, which writes ${bindingsIn(writer.code).join(',')} — record the structural contract`,
+            );
+    }
+
     // §17 condition 2 — the recorded authority proof is the one the body performs.
     const gates = gatesIn(row.code);
+    // `tenant`, `business` and `callerIds` were compared only to EACH OTHER.
+    // Each is now derived from the body and the declared parameter names.
+    const derivedSource = sourceFromCatalogue(row.args, row.text, gates.length > 0);
+    if (door.tenant !== derivedSource)
+      findings.push(`${CHANGED}: ${row.sig} takes its tenant from ${derivedSource} by its body and parameters, recorded tenant=${door.tenant}`);
+    if (door.business !== derivedSource)
+      findings.push(`${CHANGED}: ${row.sig} takes its business from ${derivedSource} by its body and parameters, recorded business=${door.business}`);
+    const derivedCallerIds = callerIdsFromCatalogue(row.args, row.text);
+    if (door.callerIds !== derivedCallerIds)
+      findings.push(
+        `${CHANGED}: ${row.sig} binds its caller-supplied ids by ${derivedCallerIds} by its body and parameters, recorded callerIds=${door.callerIds}`,
+      );
+
+    // `signed-id-equality` is not taken on the door's word either: the door
+    // hands one of its own parameters to a verifier gate, and the GATE must
+    // compare it to the decision it verified. Read one hop, into the gate's
+    // own body, so the record states a comparison that exists.
+    if (derivedCallerIds === 'signed-id-equality' || door.callerIds === 'signed-id-equality')
+      for (const call of gateCalls(row.text)) {
+        if (call.arg === null || !row.args.includes(call.arg)) continue;
+        const gate = routines.get(call.gate);
+        if (gate === undefined) {
+          findings.push(`${COND_2}: ${row.sig} hands ${call.arg} to ${call.gate}, which is no routine of an internal principal`);
+          continue;
+        }
+        const param = gate.args[0];
+        if (param === undefined || !new RegExp(`IS\\s+DISTINCT\\s+FROM\\s+${param}\\b|\\b${param}\\s+IS\\s+DISTINCT\\s+FROM`, 'i').test(gate.text))
+          findings.push(
+            `${COND_2}: ${row.sig} binds ${call.arg} by handing it to ${call.gate}, but ${call.gate} never compares its ${param ?? 'argument'} to the decision it verified`,
+          );
+      }
+
+    // §17 condition 1 — a door that binds NO caller-supplied id takes a
+    // business id from its caller with no GUC equality and no signed proof,
+    // so nothing but the EXECUTE ACL stands between a caller and the
+    // internal principal's cross-tenant reach. TL-P4-RLS-INT-01 makes that
+    // reach intentional; it does NOT make it reachable. The ruling holds
+    // only while every grantee is a NOLOGIN internal principal, and no
+    // login role is admitted here — `daftar_app` and the two ops
+    // credentials included.
+    if (derivedCallerIds === 'unbound' || door.callerIds === 'unbound')
+      for (const g of row.grantees)
+        if (g === 'PUBLIC' || logins.has(g))
+          findings.push(
+            `${COND_1}: ${row.sig} binds no caller-supplied id — it takes a business id from its caller with no GUC equality and no signed proof — and grants EXECUTE to the login principal ${g}`,
+          );
+
     if (door.permission === 'signed-op') {
       if (door.tenant !== 'signed' || door.business !== 'signed')
         findings.push(`${COND_2}: ${row.sig} records a signed decision but takes its tenant from ${door.tenant} and its business from ${door.business}`);
-      const recorded = GATES.find((g) => door.assertion.startsWith(`${g}(`));
-      if (recorded === undefined)
+      // The recorded OPERATION CODE, not merely the gate NAME. A gate name
+      // alone is no authority proof: a signed decision an ordinary request
+      // can obtain for one operation must not open a different one, which is
+      // §17 condition 2 — "a caller reaches a definer without the REQUIRED
+      // authority proof". Record and body are read by the one parser.
+      const recordedOps = gateOpKeys(door.assertion);
+      const bodyOps = gateOpKeys(row.text);
+      if (recordedOps.length === 0)
         findings.push(`${COND_2}: ${row.sig} records permission=signed-op but its assertion source ${JSON.stringify(door.assertion)} names no verifier gate`);
-      else if (!gates.includes(recorded))
-        findings.push(`${COND_2}: ${row.sig} records the gate ${recorded} but its body calls ${gates.join(',') || 'no gate at all'}`);
+      else if (JSON.stringify(bodyOps) !== JSON.stringify(recordedOps))
+        findings.push(`${COND_2}: ${row.sig} records the gate ${recordedOps.join(' + ')} but its body calls ${bodyOps.join(' + ') || 'no gate at all'}`);
     } else {
       if (gates.length > 0) findings.push(`${CHANGED}: ${row.sig} is recorded as acl-only but its body calls ${gates.join(',')} — record the gate`);
       for (const g of row.grantees) {
@@ -1411,8 +1781,72 @@ describe('TL-P4-RLS-INT-01 §14 — the internal SECURITY DEFINER inventory is C
     expect(live, UNDOCUMENTED).toEqual(recorded);
   });
 
-  it('every recorded attribute still matches the catalogue, and no §17 condition is tripped', async () => {
+  it('every recorded attribute — all thirteen — still matches the catalogue, the body or the signature, and no §17 condition is tripped', async () => {
     expect(await inventoryFindings(ownerPool(), logins)).toEqual([]);
+  });
+
+  /**
+   * The title above was once false of six of the thirteen recorded
+   * attributes: `kind`, `domain` and `bindings` were read by no law at all,
+   * and `tenant`, `business`, `callerIds` and `permission` were compared only
+   * to EACH OTHER. A title that overstates its body is the defect this
+   * project keeps paying for, so the coverage is itself a law: every field of
+   * every door is handed to the law through a recording proxy, and the fields
+   * the law touched must be ALL of them. Add a fourteenth attribute and this
+   * goes red until a clause reads it.
+   */
+  it('no recorded attribute is decorative: the law reads EVERY field of the record', async () => {
+    const touched = new Set<string>();
+    const probed = DOORS.map(
+      (d) =>
+        new Proxy(d, {
+          get(target, key) {
+            if (typeof key === 'string') touched.add(key);
+            return target[key as keyof Door];
+          },
+        }),
+    );
+    expect(await inventoryFindings(ownerPool(), logins, probed)).toEqual([]);
+    expect([...touched].sort(), 'a §14 attribute no clause reads is a claim the inventory does not keep — give it a law or remove it from the record').toEqual([
+      'assertion',
+      'bindings',
+      'business',
+      'callerIds',
+      'domain',
+      'grantees',
+      'kind',
+      'owner',
+      'permission',
+      'reads',
+      'sig',
+      'tenant',
+      'writes',
+    ]);
+  });
+
+  /**
+   * §17 condition 1, for the doors that have NOTHING but their EXECUTE ACL.
+   * `TL-P4-RLS-INT-01` makes the internal principals' cross-tenant READ
+   * intentional, which moves the whole boundary onto REACHABILITY. These four
+   * take a business id straight from their caller — no GUC equality, no
+   * signed proof — so for them the ACL *is* the boundary. Written by hand:
+   * every grantee is a NOLOGIN internal principal, and the law reddens the
+   * moment one of them is granted to a role that can log in.
+   */
+  it('a door that binds NO caller-supplied id is reachable only by a NOLOGIN internal principal — §17 condition 1', async () => {
+    const unbound = DOORS.filter((d) => d.callerIds === 'unbound');
+    expect(unbound.length, 'no door binds nothing, so this clause has no subject').toBeGreaterThan(0);
+    expect(unbound.map((d) => `${d.sig} → ${d.grantees.join(',')}`).sort(), COND_1).toEqual([
+      'accounting_purchase_entry_id(uuid,uuid) → daftar_inventory_internal',
+      'inventory_business_has_stock_movements(uuid) → daftar_accounting_internal',
+      'inventory_business_stock_value_equals(uuid,numeric) → daftar_accounting_internal',
+      'inventory_sale_cost_base_minor(uuid,uuid) → daftar_accounting_internal',
+    ]);
+    for (const d of unbound)
+      expect(
+        d.grantees.filter((g) => logins.has(g)),
+        `${COND_1}: ${d.sig}`,
+      ).toEqual([]);
   });
 
   it('every door granted to the one ordinary runtime credential (daftar_app) is gated by a signed server decision — §17 condition 2', async () => {
@@ -1613,13 +2047,202 @@ describe('TL-P4-RLS-INT-01 §14 RED PROOF — the completeness law can fail, and
       ],
       async () => {
         const f = await inventoryFindings(owner, logins);
-        expect(f).toContain(
-          `${COND_2}: ${door.sig} records the gate ${GATES.find((g) => door.assertion.startsWith(`${g}(`)) ?? '?'} but its body calls no gate at all`,
-        );
+        expect(f).toContain(`${COND_2}: ${door.sig} records the gate ${gateOpKeys(door.assertion).join(' + ')} but its body calls no gate at all`);
       },
     );
     expect(await inventoryFindings(owner, logins)).toEqual([]);
   }, 120_000);
+
+  /**
+   * The SHARP plant. The coarse one above removes the gate entirely; this one
+   * leaves the gate exactly where it is and changes only the OPERATION CODE
+   * it signs — `accounting_control_actor(ARRAY['period_reopen'])` becomes
+   * `ARRAY['period_create']`, so a signed decision an ordinary request can
+   * obtain for CREATING a period would open REOPENING one. That is §17
+   * condition 2 almost verbatim, it is intra-tenant (the assertion still
+   * binds tenant, business and actor), and before this clause the law stayed
+   * green through it.
+   */
+  it("RED: a REAL door's recorded OPERATION CODE is compared to the one its body signs — an operation swap is caught and NAMED", async () => {
+    const door = DOORS.find((d) => d.sig.startsWith('accounting_period_reopen('));
+    if (door === undefined) throw new Error('accounting_period_reopen is not recorded, so there is no subject for an operation swap');
+    const def = (await owner.query<{ d: string }>(`SELECT pg_get_functiondef($1::regprocedure) AS d`, [door.sig])).rows[0]?.d;
+    if (def === undefined) throw new Error(`${door.sig} is not in the catalogue`);
+    const swapped = def.replace(`accounting_control_actor(ARRAY['period_reopen'])`, `accounting_control_actor(ARRAY['period_create'])`);
+    expect(swapped, 'the plant did not actually change the gate call, so it would prove nothing').not.toBe(def);
+
+    await rolledBack([swapped, `ALTER FUNCTION ${door.sig} OWNER TO ${OWNER_ROLE[door.owner]}`], async () => {
+      const f = await inventoryFindings(owner, logins);
+      expect(f).toContain(
+        `${COND_2}: ${door.sig} records the gate accounting_control_actor('period_reopen') but its body calls accounting_control_actor('period_create')`,
+      );
+      expect(f.filter((x) => x.includes(door.sig))[0]).toContain(RULING);
+    });
+    expect(await inventoryFindings(owner, logins)).toEqual([]);
+  }, 120_000);
+
+  /**
+   * The same swap ACROSS operation families, which moves the door's §14
+   * `domain` too: `sale.commit` → `purchase.draft`. Both the operation-code
+   * clause and the domain clause must name it.
+   */
+  it('RED: an operation swap across families is reported as a changed operation AND a changed domain', async () => {
+    const door = DOORS.find((d) => d.sig.startsWith('sale_commit('));
+    if (door === undefined) throw new Error('sale_commit is not recorded');
+    const def = (await owner.query<{ d: string }>(`SELECT pg_get_functiondef($1::regprocedure) AS d`, [door.sig])).rows[0]?.d;
+    if (def === undefined) throw new Error(`${door.sig} is not in the catalogue`);
+    const swapped = def.replace(`inventory_assertion_consume('sale.commit'`, `inventory_assertion_consume('purchase.draft'`);
+    expect(swapped, 'the plant did not actually change the gate call').not.toBe(def);
+
+    await rolledBack([swapped, `ALTER FUNCTION ${door.sig} OWNER TO ${OWNER_ROLE[door.owner]}`], async () => {
+      const f = await inventoryFindings(owner, logins);
+      expect(f).toContain(
+        `${COND_2}: ${door.sig} records the gate inventory_assertion_consume('sale.commit') but its body calls inventory_assertion_consume('purchase.draft')`,
+      );
+      expect(f).toContain(`${CHANGED}: ${door.sig} belongs to purchasing by the operation code its body signs, recorded domain=sales`);
+    });
+    expect(await inventoryFindings(owner, logins)).toEqual([]);
+  }, 120_000);
+
+  /**
+   * §17's last condition, on the real structural contract: the helper the
+   * nine stock commands record their binding as written VIA stops writing it.
+   * Every door recording `(via inventory_apply_stock_movements)` must say so.
+   */
+  it('RED: the structural binding a door records as written VIA a helper is compared to what that helper writes', async () => {
+    const via = 'inventory_apply_stock_movements';
+    const viaDoors = DOORS.filter((d) => d.bindings.includes(`(via ${via})`));
+    expect(viaDoors.length, 'no door records a binding written via a helper, so this clause has no subject').toBeGreaterThan(0);
+    const sealSig = SEALED.find((x) => x[0].startsWith(`${via}(`))?.[0];
+    if (sealSig === undefined) throw new Error(`${via} is not recorded, so there is no helper to plant on`);
+    const def = (await owner.query<{ d: string }>(`SELECT pg_get_functiondef($1::regprocedure) AS d`, [sealSig])).rows[0]?.d;
+    if (def === undefined) throw new Error(`${sealSig} is not in the catalogue`);
+    const gutted = def.replace(/INSERT INTO stock_source_bindings/g, 'INSERT INTO stock_source_bindings_withdrawn');
+    expect(gutted, 'the plant did not actually remove the structural binding write').not.toBe(def);
+
+    await rolledBack([`SET LOCAL check_function_bodies = off`, gutted, `ALTER FUNCTION ${sealSig} OWNER TO ${INVENTORY}`], async () => {
+      const f = await inventoryFindings(owner, logins);
+      for (const d of viaDoors) expect(f).toContain(`${CHANGED}: ${d.sig} records bindings=${d.bindings} but ${sealSig} writes none`);
+    });
+    expect(await inventoryFindings(owner, logins)).toEqual([]);
+  }, 180_000);
+
+  /**
+   * §17 condition 1 on the four doors that bind NOTHING. Their only grantee
+   * is a NOLOGIN internal principal today, and the ruling makes their
+   * cross-tenant read intentional on exactly that basis — so a login grantee
+   * must redden the law, `daftar_app` included.
+   */
+  it('RED: an UNBOUND door granted to an ordinary runtime credential is reported as §17 condition 1', async () => {
+    const door = DOORS.find((d) => d.callerIds === 'unbound');
+    if (door === undefined) throw new Error('no door binds nothing, so there is nothing to widen');
+    await rolledBack([`GRANT EXECUTE ON FUNCTION ${door.sig} TO daftar_app`], async () => {
+      const f = await inventoryFindings(owner, logins);
+      expect(f).toContain(
+        `${COND_1}: ${door.sig} binds no caller-supplied id — it takes a business id from its caller with no GUC equality and no signed proof — and grants EXECUTE to the login principal daftar_app`,
+      );
+    });
+    expect(await inventoryFindings(owner, logins)).toEqual([]);
+  }, 120_000);
+
+  /**
+   * `kind`, `bindings`, `callerIds`, `tenant` and `business` compared to a
+   * REAL body that has changed under them. `inventory_business_has_stock_movements`
+   * is recorded as an unbound `read` that binds nothing; replaced by a writer,
+   * and then by one that narrows on the business GUC, every one of those
+   * clauses must name it.
+   */
+  it('RED: kind, bindings, callerIds, tenant and business are compared to the body — a changed body is reported', async () => {
+    const door = DOORS.find((d) => d.sig === 'inventory_business_has_stock_movements(uuid)');
+    if (door === undefined) throw new Error('inventory_business_has_stock_movements is not recorded');
+
+    await rolledBack(
+      [
+        `SET LOCAL check_function_bodies = off`,
+        `CREATE OR REPLACE FUNCTION inventory_business_has_stock_movements(p_business_id uuid) RETURNS boolean
+           LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp
+           AS $probe$ BEGIN INSERT INTO stock_source_bindings (tenant_id) VALUES (p_business_id); RETURN true; END $probe$`,
+        `ALTER FUNCTION ${door.sig} OWNER TO ${INVENTORY}`,
+      ],
+      async () => {
+        const f = await inventoryFindings(owner, logins);
+        expect(f).toContain(`${CHANGED}: ${door.sig} is a command by its signature and body, recorded kind=read`);
+        expect(f).toContain(`${CHANGED}: ${door.sig} writes, recorded writes=false`);
+        expect(f).toContain(`${CHANGED}: ${door.sig} writes the structural bindings stock_source_bindings, recorded bindings=none`);
+      },
+    );
+
+    await rolledBack(
+      [
+        `CREATE OR REPLACE FUNCTION inventory_business_has_stock_movements(p_business_id uuid) RETURNS boolean
+           LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp
+           AS $probe$ SELECT p_business_id = nullif(current_setting('app.business_id', true), '')::uuid $probe$`,
+        `ALTER FUNCTION ${door.sig} OWNER TO ${INVENTORY}`,
+      ],
+      async () => {
+        const f = await inventoryFindings(owner, logins);
+        expect(f).toContain(`${CHANGED}: ${door.sig} takes its tenant from guc by its body and parameters, recorded tenant=caller-argument`);
+        expect(f).toContain(`${CHANGED}: ${door.sig} takes its business from guc by its body and parameters, recorded business=caller-argument`);
+        expect(f).toContain(`${CHANGED}: ${door.sig} binds its caller-supplied ids by guc-equality by its body and parameters, recorded callerIds=unbound`);
+      },
+    );
+    expect(await inventoryFindings(owner, logins)).toEqual([]);
+  }, 180_000);
+
+  /**
+   * `signed-id-equality` — the binding the accounting opening-balance family
+   * actually performs — is proved from both ends: the door must hand its own
+   * parameter to the gate, and the GATE must compare it to the decision it
+   * verified. Each half is removed from a REAL body in turn.
+   */
+  it('RED: a signed-id equality is proved from both ends — the id the door hands over, and the comparison the gate makes', async () => {
+    const door = DOORS.find((d) => d.callerIds === 'signed-id-equality');
+    if (door === undefined) throw new Error('no door records a signed-id equality, so there is nothing to prove');
+    const gate = 'accounting_opening_balance_authority';
+
+    // (i) the door stops handing its id over: nothing is bound any more.
+    const def = (await owner.query<{ d: string }>(`SELECT pg_get_functiondef($1::regprocedure) AS d`, [door.sig])).rows[0]?.d;
+    if (def === undefined) throw new Error(`${door.sig} is not in the catalogue`);
+    const unhanded = def.replace(`${gate}(p_id)`, `${gate}(NULL)`);
+    expect(unhanded, 'the plant did not actually stop the id being handed to the gate').not.toBe(def);
+    await rolledBack([unhanded, `ALTER FUNCTION ${door.sig} OWNER TO ${OWNER_ROLE[door.owner]}`], async () => {
+      const f = await inventoryFindings(owner, logins);
+      expect(f).toContain(`${CHANGED}: ${door.sig} binds its caller-supplied ids by none by its body and parameters, recorded callerIds=signed-id-equality`);
+    });
+
+    // (ii) the gate keeps taking the id and stops comparing it. The gate is
+    // INVOKER, so no DEFINER clause of this suite judges it — its body is
+    // only READ, to see whether the comparison the record claims exists.
+    const gateDef = (await owner.query<{ d: string }>(`SELECT pg_get_functiondef(p.oid) AS d FROM pg_proc p WHERE p.proname = $1`, [gate])).rows[0]?.d;
+    if (gateDef === undefined) throw new Error(`${gate} is not in the catalogue`);
+    const uncompared = gateDef.replace('v_actor.source_id IS DISTINCT FROM p_id', 'v_actor.source_id IS DISTINCT FROM v_actor.source_id');
+    expect(uncompared, 'the plant did not actually remove the comparison').not.toBe(gateDef);
+    await rolledBack([uncompared, `ALTER FUNCTION ${gate}(uuid) OWNER TO ${ACCOUNTING}`], async () => {
+      const f = await inventoryFindings(owner, logins);
+      expect(f).toContain(`${COND_2}: ${door.sig} binds p_id by handing it to ${gate}, but ${gate} never compares its p_id to the decision it verified`);
+    });
+    expect(await inventoryFindings(owner, logins)).toEqual([]);
+  }, 180_000);
+
+  it('the operation reader is not vacuous: it reads the code a gate SIGNS, in each shape, and not one inside a comment', () => {
+    expect(gateOpKeys(stripComments(`BEGIN v := inventory_assertion_consume('sale.commit', d); END`))).toEqual([`inventory_assertion_consume('sale.commit')`]);
+    expect(gateOpKeys(stripComments(`BEGIN v := accounting_control_actor(ARRAY['period_reopen']); END`))).toEqual([
+      `accounting_control_actor('period_reopen')`,
+    ]);
+    expect(gateOpKeys(stripComments(`BEGIN v := accounting_opening_balance_authority(p_id); END`))).toEqual(['accounting_opening_balance_authority()']);
+    expect(gateOpKeys(stripComments(`BEGIN -- inventory_assertion_consume('sale.commit')\n NULL; END`))).toEqual([]);
+    // The record and the body are read by the ONE parser, so a recorded
+    // assertion and the call it describes produce the same key.
+    expect(gateOpKeys(`accounting_control_actor(ARRAY['period_reopen'])`)).toEqual([`accounting_control_actor('period_reopen')`]);
+    expect(gateOpKeys('none')).toEqual([]);
+    // A swap is a DIFFERENT key — which is the whole point of the clause.
+    expect(gateOpKeys(`accounting_control_actor(ARRAY['period_create'])`)).not.toEqual([`accounting_control_actor('period_reopen')`]);
+    // And the operation reader keeps the literals `strip` blanks.
+    expect(stripComments(`v := f('sale.commit') -- f('x')`)).toBe(`v := f('sale.commit') `);
+    expect(strip(`v := f('sale.commit')`)).not.toContain('sale.commit');
+    expect(bindingsIn(`INSERT INTO stock_source_bindings (a) VALUES (1)`)).toEqual(['stock_source_bindings']);
+    expect(bindingsIn(`INSERT INTO stock_source_bindings_withdrawn (a) VALUES (1)`)).toEqual([]);
+  });
 
   it('the body reader is not vacuous: it sees a real gate call and a real DML verb, and not one inside a comment or a literal', () => {
     expect(gatesIn(strip(`BEGIN v := inventory_assertion_consume('x','y'); END`))).toEqual(['inventory_assertion_consume']);

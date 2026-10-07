@@ -128,7 +128,7 @@ The §14 attributes an accepted invariant already asserts are cited, not rebuilt
 | trigger functions keep no grantee | `tests/security/phase3-s8-definer-law.test.ts:156`, `tests/security/search-path-shadowing.test.ts:631` |
 | no runtime role reaches a routine through a membership | `tests/security/search-path-shadowing.test.ts:693` |
 | assertion source, per routine | `tests/security/stock-ledger-authority.test.ts:695-967` (T-16) and `tests/security/accounting-posting-authority.test.ts:87-348` (matrix 3) — behaviourally, routine by routine |
-| operation/domain, tenant source, business source, permission source, caller-controlled ids, structural bindings, reads, writes | **nowhere as a property of the set** — recorded here |
+| operation/domain, tenant source, business source, permission source, caller-controlled ids, structural bindings, reads, writes | **nowhere as a property of the set** — recorded here, and each one **compared** to the live signature, body or owner by a named clause of the law (see "every attribute is judged" below) |
 
 The three gaps this page and its law close:
 
@@ -147,6 +147,85 @@ The three gaps this page and its law close:
    assertion. Nothing said that *every* door a login credential can open needs
    one.
 
+## Every attribute is judged, and the operation code is compared
+
+A recorded attribute that **no law reads** is worse than no attribute, because
+the record then *looks* complete. Three of this page's attributes were in that
+state — `operation` (kind), `domain` and `structural bindings` were read by
+nothing at all — and four more (`tenant source`, `business source`,
+`caller-controlled ids`, `permission source`) were compared only to *each
+other*, never to the catalogue. Each now has a clause that derives it from the
+live catalogue and compares:
+
+| attribute | derived from | clause |
+| --------- | ------------ | ------ |
+| `operation` (kind) | the two `*_assertion_key_(install\|retire)` names, else whether the body writes | `kind` compared to `kindFromCatalogue` |
+| `domain` | the **family of the operation code the body signs** (`purchase.receive` → purchasing), or, for a door that signs none, the owning principal | `domain` compared to `domainFromCatalogue` |
+| `assertion source` | **the gate AND the operation code it signs**, read out of the body with literals intact | see below |
+| `tenant` / `business source` | a gate call ⇒ signed; an `app.business_id` equality ⇒ GUC; a `p_business_id` parameter ⇒ caller argument; else none | compared to `sourceFromCatalogue` |
+| `caller-controlled ids` | a payload digest or fingerprint call, the `posting_fingerprint` the verified actor carries, a posting primitive the body hands its payload to, an `app.business_id` equality, a parameter handed to a gate, or a bare `p_business_id` | compared to `callerIdsFromCatalogue`, and a `signed-id-equality` is read **one hop into the gate** to confirm the gate really compares it |
+| `structural bindings` | the binding tables the body `INSERT`s into, plus, where the record says `(via X)`, the ones `X` inserts into — and a door recording `none` may not **call** a binding writer at all | compared to `bindingsIn` |
+
+The suite also proves this coverage is real rather than asserted: every door is
+handed to the law through a recording proxy, and the fields the law touched must
+be **all thirteen**. Add a fourteenth attribute and the suite is red until a
+clause reads it.
+
+### The operation code, not the gate name
+
+A door's recorded assertion source used to be checked only as far as the text
+before its `(` — the gate **name**. Roughly 45 distinct operation codes were
+recorded and none was compared to anything. A migration could have changed
+`accounting_period_reopen`'s gate from
+`accounting_control_actor(ARRAY['period_reopen'])` to `ARRAY['period_create']`
+and this page would have stayed green: a signed decision an ordinary request
+can obtain for **creating** a period would have opened **reopening** one — a
+signed proof for a *different* operation, which is §17 condition 2 almost
+verbatim.
+
+Scoped honestly: the assertion still binds tenant, business and actor, so that
+is **intra-tenant operation confusion, not a cross-tenant path**. The defect was
+that §14 *claimed* to be the sentinel for the authority proof and was not. The
+record and the body are now read by **one parser**, so
+`accounting_control_actor(ARRAY['period_reopen'])` and the body's call produce
+the same comparison key, and a swap produces a different one. The red proof
+plants exactly that swap in the real `accounting_period_reopen`, rolled back,
+and asserts the law names it.
+
+### What the record claimed and the catalogue does not
+
+Giving `caller-controlled ids` a clause measured three rows false, which is the
+reason an unjudged attribute is a liability:
+
+| door | recorded | measured |
+| ---- | -------- | -------- |
+| `accounting_open_balance_draft(date,jsonb)` | bound by the signed payload fingerprint | **no fingerprint on that path at all.** The gate is `accounting_opening_balance_authority(NULL)`; `p_lines` is checked for *shape* by `accounting_opening_balance_check_payload` and is not bound into the signed decision. `accounting_fingerprint` is called only by `accounting_post_entry` (`0045:707`) and `accounting_post_reversal` (`0046:648`). |
+| `accounting_open_balance_edit(uuid,date,jsonb)` | bound by the signed payload fingerprint | `p_id` **is** bound — the gate refuses it unless it equals the decision's `source_id` (`0047:538-540`) — but `p_lines` is shape-checked only. Recorded now as a signed-id equality. |
+| `accounting_open_balance_discard(uuid)` | bound by the signed payload fingerprint | a signed-id equality on `p_id`, no payload at all. |
+
+Two more rows under-recorded their structural contract:
+`accounting_open_balance_post(uuid,text,text)` and
+`accounting_post_manual_adjustment(date,text,text,text,jsonb)` both recorded
+`none` while writing `accounting_source_bindings` through the
+`accounting_post_entry` they call. Both now record
+`accounting_source_bindings (via accounting_post_entry)`, and the law compares
+that claim to what `accounting_post_entry` writes.
+
+None of the five is a cross-tenant path, and none widens who can reach a door.
+What changed is that the page now records what the catalogue does instead of
+what it was believed to do. **Removing a false claim is removing a false claim,
+not weakening a law** — before these clauses existed, every one of these cells
+was decoration.
+
+### The unbound doors carry a clause of their own
+
+The four doors whose business id is a bare caller argument were compared only
+to each other. The law now reddens if **any** of them is granted `EXECUTE` to a
+role that can log in — `daftar_app` and the two ops credentials included —
+because for a door that binds nothing the `EXECUTE` ACL *is* the whole
+boundary, and that is §17 condition 1. The red proof grants one of them to
+`daftar_app` inside a rolled-back transaction and asserts the law names it.
+
 ## Part A — the 57 doors
 
 Every `SECURITY DEFINER` routine of either internal principal that any
@@ -161,15 +240,15 @@ the same everywhere.
 | 2 | `accounting_assertion_key_retire(text)` | `daftar_accounting_internal` | yes | `pg_catalog, public, pg_temp` | `daftar_platform` | none | key-lifecycle / accounting | none | none | none | the EXECUTE ACL alone | none | none | no | yes |
 | 3 | `accounting_fx_rate_enter(text,text,text,timestamp with time zone,text)` | `daftar_accounting_internal` | yes | `pg_catalog, public, pg_temp` | `daftar_app` | none | command / accounting | signed claim | signed claim | `accounting_control_actor(ARRAY['fx_rate_enter'])` | signed server decision (the assertion’s operation claim) | bound by the signed payload fingerprint | none | yes | yes |
 | 4 | `accounting_inventory_opening_position(uuid)` | `daftar_accounting_internal` | yes | `pg_catalog, public, pg_temp` | `daftar_inventory_internal` | none | read / accounting | `app.business_id` equality (scope narrowing, not authority) | `app.business_id` equality (scope narrowing, not authority) | none | the EXECUTE ACL alone | business id must equal `app.business_id` | none | yes | no |
-| 5 | `accounting_open_balance_discard(uuid)` | `daftar_accounting_internal` | yes | `pg_catalog, public, pg_temp` | `daftar_app` | none | command / accounting | signed claim | signed claim | `accounting_opening_balance_authority()` | signed server decision (the assertion’s operation claim) | bound by the signed payload fingerprint | none | yes | yes |
-| 6 | `accounting_open_balance_draft(date,jsonb)` | `daftar_accounting_internal` | yes | `pg_catalog, public, pg_temp` | `daftar_app` | none | command / accounting | signed claim | signed claim | `accounting_opening_balance_authority()` | signed server decision (the assertion’s operation claim) | bound by the signed payload fingerprint | none | yes | yes |
-| 7 | `accounting_open_balance_edit(uuid,date,jsonb)` | `daftar_accounting_internal` | yes | `pg_catalog, public, pg_temp` | `daftar_app` | none | command / accounting | signed claim | signed claim | `accounting_opening_balance_authority()` | signed server decision (the assertion’s operation claim) | bound by the signed payload fingerprint | none | yes | yes |
-| 8 | `accounting_open_balance_post(uuid,text,text)` | `daftar_accounting_internal` | yes | `pg_catalog, public, pg_temp` | `daftar_app` | none | command / accounting | signed claim | signed claim | `accounting_opening_balance_authority()` | signed server decision (the assertion’s operation claim) | bound by the signed payload fingerprint | none | yes | yes |
+| 5 | `accounting_open_balance_discard(uuid)` | `daftar_accounting_internal` | yes | `pg_catalog, public, pg_temp` | `daftar_app` | none | command / accounting | signed claim | signed claim | `accounting_opening_balance_authority()` | signed server decision (the assertion’s operation claim) | `p_id` compared to the signed decision’s source id, inside `accounting_opening_balance_authority` | none | yes | yes |
+| 6 | `accounting_open_balance_draft(date,jsonb)` | `daftar_accounting_internal` | yes | `pg_catalog, public, pg_temp` | `daftar_app` | none | command / accounting | signed claim | signed claim | `accounting_opening_balance_authority()` | signed server decision (the assertion’s operation claim) | none — `p_lines` is checked for SHAPE only (`accounting_opening_balance_check_payload`) and is NOT bound into the signed decision | none | yes | yes |
+| 7 | `accounting_open_balance_edit(uuid,date,jsonb)` | `daftar_accounting_internal` | yes | `pg_catalog, public, pg_temp` | `daftar_app` | none | command / accounting | signed claim | signed claim | `accounting_opening_balance_authority()` | signed server decision (the assertion’s operation claim) | `p_id` compared to the signed decision’s source id, inside `accounting_opening_balance_authority`; `p_lines` checked for SHAPE only | none | yes | yes |
+| 8 | `accounting_open_balance_post(uuid,text,text)` | `daftar_accounting_internal` | yes | `pg_catalog, public, pg_temp` | `daftar_app` | none | command / accounting | signed claim | signed claim | `accounting_opening_balance_authority()` | signed server decision (the assertion’s operation claim) | bound by the signed payload fingerprint | `accounting_source_bindings (via accounting_post_entry)` | yes | yes |
 | 9 | `accounting_period_close(uuid,text)` | `daftar_accounting_internal` | yes | `pg_catalog, public, pg_temp` | `daftar_app` | none | command / accounting | signed claim | signed claim | `accounting_control_actor(ARRAY['period_close'])` | signed server decision (the assertion’s operation claim) | bound by the signed payload fingerprint | none | yes | yes |
 | 10 | `accounting_period_create(uuid,date,date,text)` | `daftar_accounting_internal` | yes | `pg_catalog, public, pg_temp` | `daftar_app` | none | command / accounting | signed claim | signed claim | `accounting_control_actor(ARRAY['period_create'])` | signed server decision (the assertion’s operation claim) | bound by the signed payload fingerprint | none | yes | yes |
 | 11 | `accounting_period_reopen(uuid,text,text)` | `daftar_accounting_internal` | yes | `pg_catalog, public, pg_temp` | `daftar_app` | none | command / accounting | signed claim | signed claim | `accounting_control_actor(ARRAY['period_reopen'])` | signed server decision (the assertion’s operation claim) | bound by the signed payload fingerprint | none | yes | yes |
 | 12 | `accounting_post_entry(date,text,text,jsonb)` | `daftar_accounting_internal` | yes | `pg_catalog, public, pg_temp` | `daftar_app` | none | command / accounting | signed claim | signed claim | `accounting_actor(ARRAY['post'])` | signed server decision (the assertion’s operation claim) | bound by the signed payload fingerprint | `accounting_source_bindings` | yes | yes |
-| 13 | `accounting_post_manual_adjustment(date,text,text,text,jsonb)` | `daftar_accounting_internal` | yes | `pg_catalog, public, pg_temp` | `daftar_app` | none | command / accounting | signed claim | signed claim | `accounting_actor(ARRAY['post'])` | signed server decision (the assertion’s operation claim) | bound by the signed payload fingerprint | none | yes | yes |
+| 13 | `accounting_post_manual_adjustment(date,text,text,text,jsonb)` | `daftar_accounting_internal` | yes | `pg_catalog, public, pg_temp` | `daftar_app` | none | command / accounting | signed claim | signed claim | `accounting_actor(ARRAY['post'])` | signed server decision (the assertion’s operation claim) | bound by the signed payload fingerprint | `accounting_source_bindings (via accounting_post_entry)` | yes | yes |
 | 14 | `accounting_post_reversal(uuid,date,text,text)` | `daftar_accounting_internal` | yes | `pg_catalog, public, pg_temp` | `daftar_app` | none | command / accounting | signed claim | signed claim | `accounting_actor(ARRAY['reverse'])` | signed server decision (the assertion’s operation claim) | bound by the signed payload fingerprint | `accounting_source_bindings` | yes | yes |
 | 15 | `accounting_purchase_entry_id(uuid,uuid)` | `daftar_accounting_internal` | yes | `pg_catalog, public, pg_temp` | `daftar_inventory_internal` | none | read / accounting | caller argument, unchecked | caller argument, unchecked | none | the EXECUTE ACL alone | UNBOUND — any id of any tenant | none | yes | no |
 | 16 | `accounting_purchase_fx_rate(uuid,character,timestamp with time zone)` | `daftar_accounting_internal` | yes | `pg_catalog, public, pg_temp` | `daftar_inventory_internal` | none | read / accounting | `app.business_id` equality (scope narrowing, not authority) | `app.business_id` equality (scope narrowing, not authority) | none | the EXECUTE ACL alone | business id must equal `app.business_id` | none | yes | no |
