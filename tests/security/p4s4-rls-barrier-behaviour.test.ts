@@ -2018,6 +2018,685 @@ describe('P4-S4 — THE RED PROOFS for the reachability half', () => {
   }, 600_000);
 });
 
+// ── THE PERMANENT FOUR-WAY AUTHORITY MATRIX (TL-P4-RLS-INT-01) ────────────
+
+/**
+ * THE RULING THIS MATRIX IS THE PERMANENT HOME OF.
+ *
+ * `TL-P4-RLS-INT-01` holds that the four P4-S4 relations carry FOUR DIFFERENT
+ * AUTHORITY MODELS, and that stating them as one sentence — "the relations are
+ * tenant-isolated" — is false of three of the four. The matrix below keeps them
+ * apart, names each one, and refuses to let any two be restated as each other.
+ *
+ * THE TWO SEPARATIONS THE MATRIX IS BUILT ON (§13). A principal reaching a row
+ * has to pass TWO INDEPENDENT GATES, and they refuse with different voices:
+ *
+ *   1. THE RLS POLICY — the DISJUNCTION of every applicable PERMISSIVE qual,
+ *      AND-ed with every applicable RESTRICTIVE one. Its refusal is SILENT: a
+ *      `SELECT` succeeds and hands back zero rows.
+ *   2. THE SQL TABLE PRIVILEGE (the ACL) — `has_table_privilege(role, rel,
+ *      'SELECT')`. Its refusal is LOUD: SQLSTATE 42501, "permission denied for
+ *      table".
+ *
+ * The ACL is checked FIRST, so when it refuses, the policy's verdict is never
+ * observable through a `SELECT` at all. That is the precise trap the Tech Lead
+ * named: `daftar_platform` satisfies the FIRST DISJUNCT of both read quals on
+ * all four relations, because `app_bypass()` is literally `CURRENT_USER =
+ * 'daftar_platform'` — and it still reaches no row, because it holds no
+ * privilege on any of them. A POLICY EXPRESSION ALONE DOES NOT GRANT TABLE
+ * ACCESS, so a theoretical policy bypass is NOT a usable data path, and this
+ * matrix reports it as what it is: REFUSED BY ACL.
+ *
+ * To say that honestly the matrix measures BOTH HALVES SEPARATELY, per
+ * principal and per relation:
+ *
+ *   - `rlsAdmits*` is computed by EVALUATING THE LIVE QUALS — the exact
+ *     expressions `pg_get_expr(polqual, polrelid)` renders, assembled with
+ *     PostgreSQL's own PERMISSIVE/RESTRICTIVE algebra and executed AS THE
+ *     PRINCIPAL over the subject row's `(tenant_id, business_id)`. It needs no
+ *     table privilege, so it answers for a principal the ACL would stop;
+ *   - `aclSelect` is the privilege itself;
+ *   - the CELL is what a real `SELECT` of a real row did, in a vocabulary that
+ *     cannot blur the two refusals (`REFUSED BY RLS POLICY` vs `REFUSED BY
+ *     ACL`).
+ *
+ * THE FOUR CASES, AND WHY THEY CANNOT BE COLLAPSED (§16).
+ *
+ *   CASE A — the internal NOLOGIN identities `daftar_inventory_internal` and
+ *     `daftar_accounting_internal` read EVERY business of EVERY tenant.
+ *     This is EXPECTED AND INTENTIONAL. It is the ruling itself. It is not a
+ *     defect, not a tolerated exception, and not technical debt: these are
+ *     passwordless identities with no login path, reached only by `SET ROLE`
+ *     from a principal that already owns the schema, and their cross-tenant
+ *     read is granted by a PERMISSIVE policy that is written down in
+ *     `pg_policy` and auditable there (`inventory_internal_read` and
+ *     `accounting_validator`, both `USING (true)`). PostgreSQL OR-s PERMISSIVE
+ *     policies, so a relation's read barrier is the DISJUNCTION of all of them
+ *     and these two identities are admitted past both barriers by construction.
+ *     The matrix asserts this AS THE INTENDED OUTCOME.
+ *   CASE B — `daftar_app`, the runtime login credential the application holds,
+ *     in a Tenant A context reading a Tenant B row: DENIED / INVISIBLE, and
+ *     denied BY THE POLICY — the `SELECT` succeeds and returns nothing.
+ *   CASE C — a Tenant A merchant attempting an operation on a Tenant B object
+ *     through a product command. NOT THIS MATRIX'S CASE. It is a different
+ *     authority model (an application-level command gate, not a database
+ *     barrier), it is owned by another law, and `assertCaseCIsNotOurs` below
+ *     asserts this matrix never claims it.
+ *   CASE D — `daftar_platform`, where the SELECT privilege DOES NOT EXIST:
+ *     REFUSED BY ACL. Specifically by the ACL and NOT by the policy, which
+ *     admits it. This is the one row of the matrix where the two gates
+ *     disagree, and it is the whole reason the two have to be told apart.
+ *
+ * A and D are not the same statement; B and D are not the same statement. A is
+ * admitted past both barriers; B is refused by the policy with the privilege in
+ * hand; D is refused by the privilege with the policy in its favour. The
+ * signature arm below asserts those three shapes are PAIRWISE DISTINCT, so no
+ * future edit can restate one case in another's words and still pass.
+ *
+ * WHY THE EXPECTATION IS HAND-WRITTEN AND THE ROSTER IS NOT. The admission set
+ * is typed out below by hand. A law that read its expectation out of the policy
+ * it judges would move with the attack. The ROSTER, by contrast, is derived
+ * from `pg_roles`, so a principal added to the cluster is judged without this
+ * law being edited — and every principal the matrix does not name must be
+ * refused, with the matrix saying by WHICH gate.
+ */
+const RULING = 'TL-P4-RLS-INT-01';
+
+/** The platform credential `app_bypass()` names, and CASE D's whole subject. */
+const PLATFORM = 'daftar_platform';
+
+/**
+ * CASE C, written down so this file's silence about it is DELIBERATE and
+ * visible rather than an omission a reader has to notice.
+ */
+const CASE_C_NOT_OURS =
+  'CASE C — a Tenant A merchant attempting an operation on a Tenant B object through a product command — is a COMMAND-GATE authority model, not a database barrier; it is owned by another law and this matrix must never assert it';
+
+/**
+ * What one principal's attempt on one relation actually did, in a vocabulary
+ * that keeps the two refusals apart. `REFUSED BY RLS POLICY` is a successful
+ * `SELECT` that returned nothing; `REFUSED BY ACL` is SQLSTATE 42501 whose text
+ * is PostgreSQL's privilege diagnostic.
+ */
+type Cell = 'ADMITTED' | 'REFUSED BY RLS POLICY' | 'REFUSED BY ACL';
+
+/** One hand-written row of the matrix: a case, a principal, and both gates. */
+interface AuthorityRow {
+  readonly caseId: 'A' | 'B' | 'D';
+  readonly principal: string;
+  /** The authority MODEL, which is the thing §16 forbids collapsing. */
+  readonly authority: string;
+  /** Whether the principal can log in at all — part of why CASE A is intentional. */
+  readonly canLogin: boolean;
+  /** The TENANT barrier, alone: scope = my tenant + the other tenant's business, subject = that other tenant's row. */
+  readonly tenant: Cell;
+  /** The BUSINESS barrier, alone: scope = my tenant + my business, subject = another business of my own tenant. */
+  readonly business: Cell;
+  /** The RLS POLICY's own verdict on each barrier's subject, evaluated from the live quals and NOT inferred from the cell. */
+  readonly rlsAdmitsAcrossTheTenant: boolean;
+  readonly rlsAdmitsPastTheBusiness: boolean;
+  /** The SQL TABLE PRIVILEGE, which is the other half of every path. */
+  readonly aclSelect: boolean;
+  /** The ruling's verdict on this row, in the words §16 requires. */
+  readonly verdict: string;
+}
+
+/**
+ * THE MATRIX. Written by hand, per barrier, per gate. Changing a cell here is
+ * changing the ruling, which is the point: there is one place to do it.
+ */
+const AUTHORITY_MATRIX: readonly AuthorityRow[] = [
+  {
+    caseId: 'A',
+    principal: WRITER,
+    authority: 'internal NOLOGIN identity — no password, no login path, reached only by SET ROLE from the schema owner',
+    canLogin: false,
+    tenant: 'ADMITTED',
+    business: 'ADMITTED',
+    rlsAdmitsAcrossTheTenant: true,
+    rlsAdmitsPastTheBusiness: true,
+    aclSelect: true,
+    verdict: `EXPECTED / INTENTIONAL (${RULING}) — admitted by the PERMISSIVE policy inventory_internal_read USING (true), which PostgreSQL OR-s into the read barrier`,
+  },
+  {
+    caseId: 'A',
+    principal: ACCOUNTING_READER,
+    authority: 'internal NOLOGIN identity — no password, no login path, reached only by SET ROLE from the schema owner',
+    canLogin: false,
+    tenant: 'ADMITTED',
+    business: 'ADMITTED',
+    rlsAdmitsAcrossTheTenant: true,
+    rlsAdmitsPastTheBusiness: true,
+    aclSelect: true,
+    verdict: `EXPECTED / INTENTIONAL (${RULING}) — admitted by the PERMISSIVE policy accounting_validator USING (true), which PostgreSQL OR-s into the read barrier`,
+  },
+  {
+    caseId: 'B',
+    principal: READER,
+    authority: 'runtime login credential — the password the application process holds and a request is served under',
+    canLogin: true,
+    tenant: 'REFUSED BY RLS POLICY',
+    business: 'REFUSED BY RLS POLICY',
+    rlsAdmitsAcrossTheTenant: false,
+    rlsAdmitsPastTheBusiness: false,
+    aclSelect: true,
+    verdict: 'DENIED / INVISIBLE — the privilege IS held, the policy refuses, and the refusal is silent: the SELECT succeeds and hands back nothing',
+  },
+  {
+    caseId: 'D',
+    principal: PLATFORM,
+    authority: 'platform login credential — the one principal app_bypass() names, so the first disjunct of BOTH read quals is satisfied for it',
+    canLogin: true,
+    tenant: 'REFUSED BY ACL',
+    business: 'REFUSED BY ACL',
+    rlsAdmitsAcrossTheTenant: true,
+    rlsAdmitsPastTheBusiness: true,
+    aclSelect: false,
+    verdict:
+      'REFUSED BY ACL — and specifically by the ACL, not by the policy: the policy ADMITS it and the SQL table privilege does not exist, so the app_bypass() escape is half a path and reaches no row. NOT a usable data path',
+  },
+];
+
+/** Every principal the matrix names, for the coverage arm. */
+const MATRIX_PRINCIPALS: readonly string[] = AUTHORITY_MATRIX.map((r) => r.principal);
+
+/**
+ * The derived roster: every non-superuser role in the cluster that is not one
+ * of PostgreSQL's own predefined `pg_*` roles. DERIVED, never typed out, so a
+ * role added to the cluster is judged here without this law being edited.
+ */
+async function derivedRoster(c: Client): Promise<string[]> {
+  const r = await c.query<{ rolname: string }>(`SELECT rolname::text AS rolname FROM pg_roles WHERE NOT rolsuper AND rolname NOT LIKE 'pg\\_%' ORDER BY 1`);
+  const roles = r.rows.map((x) => x.rolname);
+  expect(roles, 'the role roster is derived from pg_roles and came back empty, so every verdict below would be vacuous').not.toEqual([]);
+  expect(roles, 'every principal the hand-written matrix names must be in the DERIVED roster, or the matrix judges a role that does not exist').toEqual(
+    expect.arrayContaining([...MATRIX_PRINCIPALS]),
+  );
+  return roles;
+}
+
+/** `rolbypassrls` / `rolcanlogin` for the whole derived roster, as the catalogue holds them now. */
+async function roleAttributes(c: Client): Promise<Map<string, { bypassrls: boolean; canLogin: boolean }>> {
+  const r = await c.query<{ rolname: string; b: boolean; l: boolean }>(
+    `SELECT rolname::text AS rolname, rolbypassrls AS b, rolcanlogin AS l FROM pg_roles WHERE NOT rolsuper AND rolname NOT LIKE 'pg\\_%'`,
+  );
+  return new Map(r.rows.map((x) => [x.rolname, { bypassrls: x.b, canLogin: x.l }]));
+}
+
+/**
+ * THE RLS HALF, EVALUATED AND NOT READ.
+ *
+ * PostgreSQL's read decision for `role` on `rel` is
+ *
+ *     (OR of every applicable PERMISSIVE qual) AND (every applicable
+ *     RESTRICTIVE qual)
+ *
+ * where "applicable" means the policy's command covers `SELECT` (`polcmd` is
+ * `*` or `r`) and its role list is either empty — `TO PUBLIC` — or names a role
+ * the principal is a member of. This assembles exactly that expression out of
+ * the LIVE `pg_get_expr` renderings and executes it AS THE PRINCIPAL over the
+ * subject row's two scope columns, supplied by a derived table.
+ *
+ * It therefore needs NO privilege on the relation, which is the entire reason
+ * it exists: it is the only way to observe the policy's verdict for a principal
+ * the ACL stops before the policy is ever consulted.
+ */
+async function rlsAdmits(c: Client, role: string, rel: Relation, scope: Scope, row: { tenantId: string; businessId: string }): Promise<boolean> {
+  const policies = (await policyState(c)).filter((p) => p.relname === rel && (p.polcmd === '*' || p.polcmd === 'r') && p.q !== null);
+  const membership = new Map(
+    (await c.query<{ r: string; m: boolean }>(`SELECT r.rolname::text AS r, pg_has_role($1, r.oid, 'USAGE') AS m FROM pg_roles r`, [role])).rows.map((x) => [
+      x.r,
+      x.m,
+    ]),
+  );
+  const applies = (roles: readonly string[]): boolean => roles.length === 0 || roles.some((r) => membership.get(r) === true);
+  const permissive = policies.filter((p) => p.polpermissive && applies(p.roles)).map((p) => `(${String(p.q)})`);
+  const restrictive = policies.filter((p) => !p.polpermissive && applies(p.roles)).map((p) => `(${String(p.q)})`);
+  // No applicable PERMISSIVE policy means no row is admitted at all, and
+  // asserting that here rather than letting an empty `OR` render as SQL keeps
+  // the expression from becoming a syntax error that reads like a refusal.
+  if (permissive.length === 0) return false;
+  const expr = `(${permissive.join(' OR ')})${restrictive.length > 0 ? ` AND ${restrictive.join(' AND ')}` : ''}`;
+  return await asRole(c, role, scope, async () => {
+    const r = await c.query<{ admits: boolean | null }>(`SELECT (${expr}) AS admits FROM (SELECT $1::uuid AS tenant_id, $2::uuid AS business_id) AS t`, [
+      row.tenantId,
+      row.businessId,
+    ]);
+    // A NULL is not an admission: PostgreSQL treats a qual that is not TRUE as
+    // a refusal, so `coalesce(..., false)` is the executor's own rule.
+    return must(r.rows[0], `${role}'s policy verdict on ${rel}`).admits === true;
+  });
+}
+
+/**
+ * THE ACL HALF AND THE OBSERVED CELL, told apart by WHICH GATE SPOKE.
+ *
+ * A `SELECT` that succeeds and returns nothing is the POLICY refusing — RLS
+ * filters, it never raises. SQLSTATE 42501 on a `SELECT` is the ACL refusing,
+ * and the diagnostic text is required to say so, so a future SQLSTATE reuse
+ * cannot be read as a policy refusal.
+ */
+async function observedCell(c: Client, role: string, scope: Scope, rel: Relation, id: string): Promise<Cell> {
+  const r = await asRole(c, role, scope, () => attempt(c, `SELECT id FROM ${rel} WHERE id = $1`, [id]));
+  if (r.ok) return r.rows > 0 ? 'ADMITTED' : 'REFUSED BY RLS POLICY';
+  if (r.code === '42501' && /permission denied for (table|relation|view)/.test(r.message)) return 'REFUSED BY ACL';
+  throw new Error(`${role} reading ${rel} failed in a way the matrix cannot classify as either gate (${r.code}): ${r.message}`);
+}
+
+/**
+ * THE THREE REOPENING CONDITIONS OF §17, detected from the live cluster rather
+ * than from this file's expectations — so the message a failure carries NAMES
+ * the condition and the ruling, instead of leaving a reader to work out which
+ * of the three moved.
+ */
+async function reopeningConditions(c: Client, rel: Relation): Promise<string[]> {
+  const found: string[] = [];
+  const attrs = await roleAttributes(c);
+  const internal = [WRITER, ACCOUNTING_READER];
+  for (const role of internal) {
+    const bypass = attrs.get(role)?.bypassrls === true;
+    const active = await asRole(c, role, { tenantId: null, businessId: null }, async () => {
+      const r = await c.query<{ a: boolean }>(`SELECT row_security_active($1::regclass) AS a`, [rel]);
+      return must(r.rows[0], 'row_security_active').a;
+    });
+    if (bypass || !active)
+      found.push(
+        `REOPENING CONDITION 1 — the internal NOLOGIN identity ${role} now bypasses row security altogether (rolbypassrls=${String(bypass)}, row_security_active(${rel})=${String(active)}). CASE A's cross-tenant read is INTENTIONAL only while it is granted by a PERMISSIVE policy that is written down in pg_policy and auditable there; a role attribute is invisible to every policy audit. The ruling ${RULING} is REOPENED`,
+      );
+  }
+  const admittedSomewhere = (await c.query<{ ok: boolean }>(`SELECT has_table_privilege($1, $2::regclass, 'SELECT') AS ok`, [PLATFORM, rel])).rows[0];
+  if (must(admittedSomewhere, 'platform privilege').ok)
+    found.push(
+      `REOPENING CONDITION 3 — ${PLATFORM} has acquired the SELECT privilege on ${rel} that it must not hold. app_bypass() already satisfies the first disjunct of BOTH read quals for it, so the half-path of CASE D is now a WHOLE path and the policy escape has become a usable cross-tenant data path. The ruling ${RULING} is REOPENED`,
+    );
+  return found;
+}
+
+/**
+ * CONDITION 2 is a BEHAVIOURAL fact about the runtime credential, so it is
+ * detected from the cells rather than from the catalogue: if `daftar_app` was
+ * admitted past either barrier, a runtime credential can read cross-tenant.
+ */
+function condition2(cells: { readonly tenant: Cell; readonly business: Cell }): string[] {
+  if (cells.tenant === 'ADMITTED' || cells.business === 'ADMITTED')
+    return [
+      `REOPENING CONDITION 2 — the runtime login credential ${READER} is ADMITTED past a barrier (tenant → ${cells.tenant}; business → ${cells.business}). A credential a request is served under can now read another tenant's rows, which is CASE B inverted and the one outcome ${RULING} never licensed. The ruling ${RULING} is REOPENED`,
+    ];
+  return [];
+}
+
+/** How one row of the matrix renders, so expectation and observation are compared as text a human can read. */
+function renderRow(r: {
+  caseId: string;
+  principal: string;
+  authority: string;
+  canLogin: boolean;
+  tenant: Cell;
+  business: Cell;
+  rlsAdmitsAcrossTheTenant: boolean;
+  rlsAdmitsPastTheBusiness: boolean;
+  aclSelect: boolean;
+  verdict: string;
+}): string {
+  return [
+    `CASE ${r.caseId} — ${r.principal} (${r.authority}, canLogin=${String(r.canLogin)})`,
+    `  TENANT barrier:   cell=${r.tenant} | RLS policy admits=${String(r.rlsAdmitsAcrossTheTenant)} | ACL SELECT=${String(r.aclSelect)}`,
+    `  BUSINESS barrier: cell=${r.business} | RLS policy admits=${String(r.rlsAdmitsPastTheBusiness)} | ACL SELECT=${String(r.aclSelect)}`,
+    `  verdict: ${r.verdict}`,
+  ].join('\n');
+}
+
+/**
+ * The SIGNATURE of a case: the shape of its authority, with the principal's
+ * name and prose stripped out. Two cases with the same signature are the same
+ * statement, which is exactly what §16 forbids.
+ */
+function signature(r: AuthorityRow): string {
+  return `tenant=${r.tenant} business=${r.business} rlsT=${String(r.rlsAdmitsAcrossTheTenant)} rlsB=${String(r.rlsAdmitsPastTheBusiness)} acl=${String(r.aclSelect)}`;
+}
+
+/**
+ * THE NON-COLLAPSE ARM: the three cases this matrix owns are three different
+ * statements, and CASE C is not among them.
+ *
+ * This is a law about the hand-written matrix itself and needs no database: a
+ * reviewer who merged CASE B and CASE D into "the other tenant is invisible"
+ * would be writing a true sentence and losing the only fact that matters —
+ * that B is refused with the privilege in hand and D is refused for want of it.
+ */
+function assertCasesDoNotCollapse(): void {
+  const ids = [...new Set(AUTHORITY_MATRIX.map((r) => r.caseId))].sort();
+  expect(ids, `this matrix owns exactly CASES A, B and D. ${CASE_C_NOT_OURS}`).toEqual(['A', 'B', 'D']);
+  expect(
+    AUTHORITY_MATRIX.map((r) => r.caseId),
+    `no row of this matrix may claim CASE C. ${CASE_C_NOT_OURS}`,
+  ).not.toContain('C');
+
+  const byCase = new Map<string, Set<string>>();
+  for (const r of AUTHORITY_MATRIX) {
+    const s = byCase.get(r.caseId) ?? new Set<string>();
+    s.add(signature(r));
+    byCase.set(r.caseId, s);
+  }
+  // Within a case the signature is ONE shape: the two internal identities of
+  // CASE A hold the same authority, and a day on which they diverge is a day
+  // CASE A has become two cases.
+  for (const [id, shapes] of byCase)
+    expect([...shapes], `CASE ${id} must be ONE authority shape; it now holds more than one, so it is no longer one case (${RULING})`).toHaveLength(1);
+  // Across cases the shapes are PAIRWISE DISTINCT.
+  const shapes = [...byCase.entries()].map(([id, s]) => `${id}: ${[...s][0] ?? ''}`);
+  expect(
+    new Set(shapes.map((s) => s.slice(s.indexOf(': ') + 2))).size,
+    `CASES A, B and D must be three DIFFERENT statements, and two of them now have the same authority shape, so one has been restated in the other's words (${RULING}):\n${shapes.join('\n')}`,
+  ).toBe(3);
+
+  // AND THE TWO SEPARATIONS OF §13, as claims about the matrix's own content:
+  // there is a case refused by the POLICY while holding the PRIVILEGE, and a
+  // case refused by the PRIVILEGE while the POLICY admits it. If either row
+  // disappears, the matrix has stopped proving ACL and RLS separately.
+  const b = must(
+    AUTHORITY_MATRIX.find((r) => r.caseId === 'B'),
+    'CASE B row',
+  );
+  expect(
+    `${b.tenant} acl=${String(b.aclSelect)} rls=${String(b.rlsAdmitsAcrossTheTenant)}`,
+    `CASE B is the POLICY refusal: the privilege is held and the policy refuses. Losing that shape loses half of §13's separation (${RULING})`,
+  ).toBe('REFUSED BY RLS POLICY acl=true rls=false');
+  const d = must(
+    AUTHORITY_MATRIX.find((r) => r.caseId === 'D'),
+    'CASE D row',
+  );
+  expect(
+    `${d.tenant} acl=${String(d.aclSelect)} rls=${String(d.rlsAdmitsAcrossTheTenant)}`,
+    `CASE D is the ACL refusal: the POLICY ADMITS ${PLATFORM} and the SQL table privilege does not exist. A matrix that recorded this as a policy refusal — or as a usable bypass — would be wrong in both directions (${RULING})`,
+  ).toBe('REFUSED BY ACL acl=false rls=true');
+  const a = AUTHORITY_MATRIX.filter((r) => r.caseId === 'A');
+  expect(a.length, `CASE A must name the internal identities it is about (${RULING})`).toBeGreaterThan(1);
+  for (const row of a) {
+    expect(row.verdict, `CASE A is INTENTIONAL and must be asserted as the intended outcome, never as a tolerated one (${RULING})`).toContain(
+      'EXPECTED / INTENTIONAL',
+    );
+    expect(row.canLogin, `CASE A is intentional partly BECAUSE the identity has no login path; ${row.principal} must be NOLOGIN (${RULING})`).toBe(false);
+  }
+}
+
+/**
+ * THE MATRIX LAW: for one relation, every principal in the DERIVED roster is
+ * probed on BOTH barriers and at BOTH gates, and the result must be the
+ * hand-written matrix — with every principal the matrix does not name refused,
+ * and the matrix saying which gate refused it.
+ */
+async function lawAuthorityMatrix(c: Client, w: World, rel: Relation): Promise<void> {
+  assertCasesDoNotCollapse();
+  const roster = await derivedRoster(c);
+  const attrs = await roleAttributes(c);
+
+  const inMyScope: Scope = { tenantId: w.A.tenantId, businessId: w.A.businessId };
+  const acrossTheTenant: Scope = { tenantId: w.A.tenantId, businessId: w.B.businessId };
+  const businessSubject = { tenantId: w.A.tenantId, businessId: w.A2.businessId };
+  const tenantSubject = { tenantId: w.tenantB, businessId: w.B.businessId };
+
+  // Non-vacuity: the two subject rows exist, as the owner, before any verdict
+  // about seeing them means anything.
+  expect(
+    await visible(c, rel, [w.A2.subject[rel], w.B.subject[rel]]),
+    `${rel}: the matrix's two subject rows must exist, or every refusal below is a refusal about nothing`,
+  ).toEqual([w.A2.subject[rel], w.B.subject[rel]].sort());
+
+  const observed: string[] = [];
+  const unnamed: string[] = [];
+  let readerCells: { tenant: Cell; business: Cell } = { tenant: 'REFUSED BY RLS POLICY', business: 'REFUSED BY RLS POLICY' };
+
+  for (const role of roster) {
+    const aclSelect = must(
+      (await c.query<{ ok: boolean }>(`SELECT has_table_privilege($1, $2::regclass, 'SELECT') AS ok`, [role, rel])).rows[0],
+      'acl answer',
+    ).ok;
+    const tenant = await observedCell(c, role, acrossTheTenant, rel, w.B.subject[rel]);
+    const business = await observedCell(c, role, inMyScope, rel, w.A2.subject[rel]);
+    const rlsT = await rlsAdmits(c, role, rel, acrossTheTenant, tenantSubject);
+    const rlsB = await rlsAdmits(c, role, rel, inMyScope, businessSubject);
+    if (role === READER) readerCells = { tenant, business };
+
+    const named = AUTHORITY_MATRIX.find((r) => r.principal === role);
+    if (named !== undefined) {
+      observed.push(
+        renderRow({
+          caseId: named.caseId,
+          principal: role,
+          authority: named.authority,
+          canLogin: attrs.get(role)?.canLogin === true,
+          tenant,
+          business,
+          rlsAdmitsAcrossTheTenant: rlsT,
+          rlsAdmitsPastTheBusiness: rlsB,
+          aclSelect,
+          verdict: named.verdict,
+        }),
+      );
+    } else {
+      // A principal the matrix does not name. It must be refused on both
+      // barriers — and the matrix states WHICH gate did it, because "refused
+      // by the ACL while the policy would also refuse" is a different fact
+      // from CASE D, where the policy ADMITS and only the ACL refuses.
+      unnamed.push(
+        `${role}: tenant=${tenant} business=${business} | RLS policy admits tenant=${String(rlsT)} business=${String(rlsB)} | ACL SELECT=${String(aclSelect)}`,
+      );
+    }
+  }
+
+  const diagnosis = [...(await reopeningConditions(c, rel)), ...condition2(readerCells)];
+  const why =
+    diagnosis.length > 0
+      ? `\n\nTHE REOPENING CONDITIONS §17 NAMES, AS THE LIVE CLUSTER NOW STANDS:\n${diagnosis.join('\n')}`
+      : `\n\n(None of §17's three reopening conditions is detected, so this is a movement the ruling ${RULING} did not anticipate and it needs a ruling of its own.)`;
+
+  expect(
+    observed.join('\n'),
+    `THE FOUR-WAY AUTHORITY MATRIX of ${RULING} has MOVED on ${rel}. The four authority models it keeps apart — CASE A the internal NOLOGIN identities (intentional), CASE B the runtime credential (denied by the policy), CASE D ${PLATFORM} (refused by the ACL, not by the policy), and CASE C which is not this matrix's — are no longer as the ruling states them.${why}`,
+    // The expectation is rendered in the DERIVED ROSTER's order, not in the
+    // order the matrix happens to be typed in: the roster is `pg_roles`
+    // alphabetical, and a law that compared two orderings would be red on a
+    // correct database for a reason that is not about authority at all.
+  ).toBe(
+    roster
+      .map((role) => AUTHORITY_MATRIX.find((r) => r.principal === role))
+      .filter((r): r is AuthorityRow => r !== undefined)
+      .map((r) =>
+        renderRow({
+          caseId: r.caseId,
+          principal: r.principal,
+          authority: r.authority,
+          canLogin: r.canLogin,
+          tenant: r.tenant,
+          business: r.business,
+          rlsAdmitsAcrossTheTenant: r.rlsAdmitsAcrossTheTenant,
+          rlsAdmitsPastTheBusiness: r.rlsAdmitsPastTheBusiness,
+          aclSelect: r.aclSelect,
+          verdict: r.verdict,
+        }),
+      )
+      .join('\n'),
+  );
+
+  // THE CLOSURE ARM. Every principal the matrix does not name is refused on
+  // both barriers, by the ACL, with the policy refusing it too — which is the
+  // row shape that distinguishes an ordinary unprivileged principal from CASE
+  // D. A principal that drifts into any other shape joins the matrix or ends
+  // the ruling.
+  expect(
+    unnamed.join('\n'),
+    `${rel}: a principal the four-way matrix does not name reached a row, or was refused by a gate the matrix did not expect. ${RULING} names FOUR authority models and this is a fifth.${why}`,
+  ).toBe(
+    roster
+      .filter((role) => !MATRIX_PRINCIPALS.includes(role))
+      .map((role) => `${role}: tenant=REFUSED BY ACL business=REFUSED BY ACL | RLS policy admits tenant=false business=false | ACL SELECT=false`)
+      .join('\n'),
+  );
+
+  // AND THE MECHANISM OF CASE A, asserted as itself: the admission is a POLICY
+  // admission. Row security is ACTIVE for both internal identities and neither
+  // holds BYPASSRLS, so their cross-tenant read is the auditable PERMISSIVE
+  // policy the ruling licenses and not a role attribute no policy audit sees.
+  const mechanism: string[] = [];
+  for (const role of [ACCOUNTING_READER, WRITER]) {
+    const active = await asRole(c, role, inMyScope, async () => {
+      const r = await c.query<{ a: boolean }>(`SELECT row_security_active($1::regclass) AS a`, [rel]);
+      return must(r.rows[0], 'row_security_active').a;
+    });
+    mechanism.push(`${role}: rolbypassrls=${String(attrs.get(role)?.bypassrls === true)} row_security_active(${rel})=${String(active)}`);
+  }
+  expect(mechanism.join('\n'), `${rel}: CASE A is INTENTIONAL only while the internal identities read across tenants BY POLICY. ${why}`).toBe(
+    [ACCOUNTING_READER, WRITER].map((role) => `${role}: rolbypassrls=false row_security_active(${rel})=true`).join('\n'),
+  );
+}
+
+/** A plant on a ROLE attribute, with the catalogue state it must be restored to. */
+async function withRolePlant(c: Client, plant: readonly string[], fn: () => Promise<void>): Promise<void> {
+  const render = async (): Promise<string> => JSON.stringify([...(await roleAttributes(c))].sort((a, b) => a[0].localeCompare(b[0])));
+  const before = await render();
+  const sp = `rp_${randomUUID().replace(/-/g, '')}`;
+  await c.query(`SAVEPOINT ${sp}`);
+  try {
+    for (const sql of plant) await c.query(sql);
+    if ((await render()) === before) throw new Error(`the role plant changed nothing in pg_authid, so it proves nothing: ${plant.join('; ')}`);
+    await fn();
+  } finally {
+    await c.query(`ROLLBACK TO SAVEPOINT ${sp}`);
+  }
+  expect(await render(), 'the role attributes are back to the state captured before the plant').toBe(before);
+}
+
+/** A plant on a table ACL, with the privilege state it must be restored to. */
+async function withGrantPlant(c: Client, rel: Relation, plant: readonly string[], fn: () => Promise<void>): Promise<void> {
+  const render = async (): Promise<string> =>
+    JSON.stringify(
+      (
+        await c.query<{ rolname: string; ok: boolean }>(
+          `SELECT rolname::text AS rolname, has_table_privilege(oid, $1::regclass, 'SELECT') AS ok
+             FROM pg_roles WHERE NOT rolsuper AND rolname NOT LIKE 'pg\\_%' ORDER BY 1`,
+          [rel],
+        )
+      ).rows,
+    );
+  const before = await render();
+  const sp = `gp_${randomUUID().replace(/-/g, '')}`;
+  await c.query(`SAVEPOINT ${sp}`);
+  try {
+    for (const sql of plant) await c.query(sql);
+    if ((await render()) === before) throw new Error(`the grant plant changed no privilege on ${rel}, so it proves nothing: ${plant.join('; ')}`);
+    await fn();
+  } finally {
+    await c.query(`ROLLBACK TO SAVEPOINT ${sp}`);
+  }
+  expect(await render(), `the SELECT privileges on ${rel} are back to the state captured before the plant`).toBe(before);
+}
+
+describe('P4-S4 — THE PERMANENT FOUR-WAY AUTHORITY MATRIX (TL-P4-RLS-INT-01)', () => {
+  it('CASES A, B and D are three DIFFERENT statements, and CASE C is not this matrix to make', () => {
+    assertCasesDoNotCollapse();
+  });
+
+  for (const rel of RELATIONS) {
+    it(`${rel}: of every principal in the cluster, CASE A is INTENTIONAL, CASE B is DENIED by the policy, CASE D is REFUSED BY ACL`, async () => {
+      await inCase(async (c, w) => {
+        await lawAuthorityMatrix(c, w, rel);
+      });
+    }, 600_000);
+  }
+});
+
+describe("P4-S4 — THE RED PROOFS for the four-way matrix: §17's three reopening conditions (TL-P4-RLS-INT-01)", () => {
+  it(`REOPENING CONDITION 1 — an internal NOLOGIN identity gains BYPASSRLS, and the matrix names the condition and ${RULING}`, async () => {
+    await inCase(async (c, w) => {
+      const rel: Relation = 'invoices';
+      // THE REAL CASE, PLANTED. `daftar_inventory_internal` is a principal of
+      // the shipped cluster and CASE A is about it; granting it BYPASSRLS is
+      // exactly the change §17 says reopens the ruling, because the admission
+      // stops being a PERMISSIVE policy a reviewer can read in `pg_policy` and
+      // becomes a role attribute no policy audit can see.
+      await withRolePlant(c, [`ALTER ROLE ${WRITER} BYPASSRLS`], async () => {
+        await mustGoRed(
+          `ALTER ROLE ${WRITER} BYPASSRLS (§17 reopening condition 1)`,
+          `REOPENING CONDITION 1 — the internal NOLOGIN identity ${WRITER} now bypasses row security altogether`,
+          () => lawAuthorityMatrix(c, w, rel),
+        );
+      });
+    });
+  }, 600_000);
+
+  it(`REOPENING CONDITION 2 — the runtime credential becomes able to read cross-tenant, and the matrix names the condition and ${RULING}`, async () => {
+    await inCase(async (c, w) => {
+      const rel: Relation = 'invoices';
+      // The TENANT barrier alone, blanketed. Under the scope the matrix reads
+      // the tenant cell under — my tenant, the other tenant's business — the
+      // RESTRICTIVE business policy already admits the row, so `tenant_membership`
+      // is the only thing refusing it and this plant is the minimal change that
+      // makes `daftar_app` read another tenant's row. The business barrier is
+      // untouched, which is why the two barriers are stated separately.
+      await withPlant(c, rel, [`ALTER POLICY tenant_membership ON ${rel} USING ((SELECT app_bypass()) OR tenant_id IS NOT NULL)`], async () => {
+        await mustGoRed(
+          `ALTER POLICY tenant_membership ON ${rel} USING ((SELECT app_bypass()) OR tenant_id IS NOT NULL) (§17 reopening condition 2)`,
+          `REOPENING CONDITION 2 — the runtime login credential ${READER} is ADMITTED past a barrier`,
+          () => lawAuthorityMatrix(c, w, rel),
+        );
+      });
+    });
+  }, 600_000);
+
+  it(`REOPENING CONDITION 3 — ${PLATFORM} acquires the SELECT it must not hold, and the half-path of CASE D becomes a whole one`, async () => {
+    await inCase(async (c, w) => {
+      const rel: Relation = 'invoices';
+      // THE §13 TRAP, MADE REAL. Nothing about the POLICY changes here: every
+      // qual on `invoices` is byte-identical before and after, and
+      // `app_bypass()` was already true for `daftar_platform`. The ONLY change
+      // is the SQL table privilege — the other half of the path — and the
+      // matrix flips CASE D from REFUSED BY ACL to ADMITTED on BOTH barriers.
+      // That is the proof that the matrix's CASE D row is a claim about the
+      // ACL and not a restatement of the policy.
+      const qualsBefore = JSON.stringify((await policyState(c)).filter((p) => p.relname === rel));
+      await withGrantPlant(c, rel, [`GRANT SELECT ON ${rel} TO ${PLATFORM}`], async () => {
+        expect(
+          JSON.stringify((await policyState(c)).filter((p) => p.relname === rel)),
+          'this plant must change the ACL and NOTHING about the policy, or it is not a proof about the ACL',
+        ).toBe(qualsBefore);
+        await mustGoRed(
+          `GRANT SELECT ON ${rel} TO ${PLATFORM} — the policy untouched (§17 reopening condition 3)`,
+          `REOPENING CONDITION 3 — ${PLATFORM} has acquired the SELECT privilege on ${rel} that it must not hold`,
+          () => lawAuthorityMatrix(c, w, rel),
+        );
+      });
+    });
+  }, 600_000);
+
+  it('the matrix cannot be satisfied by collapsing CASE B and CASE D into one statement', async () => {
+    // A LAW ABOUT THE LAW. §16 forbids restating one case in another's words,
+    // and the way that happens in practice is a reviewer noticing that both
+    // CASE B and CASE D "cannot see the other tenant" and writing one row for
+    // both. This plants that edit on a copy of the matrix and shows the
+    // non-collapse arm refusing it.
+    const collapsed: AuthorityRow[] = AUTHORITY_MATRIX.map((r) =>
+      r.caseId === 'D'
+        ? {
+            ...r,
+            tenant: 'REFUSED BY RLS POLICY',
+            business: 'REFUSED BY RLS POLICY',
+            aclSelect: true,
+            rlsAdmitsAcrossTheTenant: false,
+            rlsAdmitsPastTheBusiness: false,
+          }
+        : r,
+    );
+    const shapes = new Set(collapsed.filter((r) => r.caseId === 'B' || r.caseId === 'D').map((r) => signature(r)));
+    expect(shapes.size, 'CASE D restated in CASE B’s words must become indistinguishable from it — that is what makes the non-collapse arm necessary').toBe(1);
+    const live = new Set(AUTHORITY_MATRIX.filter((r) => r.caseId === 'B' || r.caseId === 'D').map((r) => signature(r)));
+    expect(live.size, `as shipped, CASE B and CASE D are two different statements (${RULING})`).toBe(2);
+    record(
+      `CASE D restated as CASE B ("the other tenant is invisible", privilege held, policy refusing) collapses the two signatures to one; the shipped matrix keeps them at two, and the non-collapse arm of ${RULING} refuses the collapsed form`,
+    );
+  });
+});
+
 /** Every red proof this file executed, printed once at the end so the evidence is in one place. */
 afterAll(() => {
   if (redProofs.length > 0) console.log(`\n  ${redProofs.length} RED PROOF(S) EXECUTED:\n${redProofs.map((l, i) => `   ${i + 1}. ${l}`).join('\n')}\n`);
