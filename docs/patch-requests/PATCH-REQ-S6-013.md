@@ -89,13 +89,61 @@ Note also that **nesting matters**: a non-strict nested object strips unknown ke
 body just as a non-strict top-level one does. The live set is every object in a request body
 schema, not only the outermost.
 
+### 3.2 THE TREE ALREADY CONTAINS BOTH FORMS OF THE ARGUMENT, AND THAT IS THE BEST CASE FOR §4
+
+Found while auditing my own citations against the candidate under the citation law. **All figures
+below are read at `54a851c` with `git show`/`git grep`, not from the checkout.**
+
+Two live schema files state the same tax policy with **different justifications**, and the
+difference is exactly the one this request is about:
+
+**THE STRONG FORM, already in the tree** — `apps/api/src/modules/selling/selling.schemas.ts:33-36`
+@ `54a851c`:
+
+> "any tax field. While sales tax is structurally zero (P4-AL-44, OD-03 open) there is no rate,
+> no exemption, no threshold and no registration number to state, so a `taxRate` or `taxExempt`
+> key is **refused as unknown rather than validated to zero**."
+
+That invokes the **validator**. It is the correct argument, it was already written here, and it
+is the form §4 generalises. This request is therefore not importing a new idea into the tree — it
+is making an argument the tree already makes in one place true everywhere, by a check.
+
+**THE WEAK FORM** — `apps/api/src/modules/receivables/receivables.schemas.ts:39-40` @ `54a851c`:
+
+> "no tax field. OD-03 is OPEN and sales tax is structurally zero (P4-AL-44); a settlement does
+> not touch tax at all."
+
+That is the argument from **absence** — the same shape as my own defect in §2, in live code.
+
+**AND THERE IS NO LIVE DEFECT, WHICH IS THE POINT.** Measured at `54a851c`,
+`receivables.schemas.ts` has **3** `.object(` and **4** `.strict()`: it **is** strict, so a tax
+key **is** refused in fact. The enforcement is present; only the stated reason does not mention
+it.
+
+**That gap is the whole argument for a check that parses.** In `selling.schemas.ts` the
+comment names strictness, so removing `.strict()` would contradict a comment a reviewer can
+read. In `receivables.schemas.ts` the comment names only the absent field, so removing
+`.strict()` would contradict **nothing written there** — the file would still read as correct
+while silently stripping `"taxMinor"`. A justification that does not name its mechanism cannot
+notice the mechanism's removal.
+
+So §4's red proof — remove the refusal from **any one** member and the check must redden — is not
+belt-and-braces over a tree that already passes. It is the only thing standing between the
+present correct behaviour and a future silent regression **in the one file whose own docstring
+would not object.**
+
 ---
 
 ## 4. THE EDIT REQUESTED, IN THE STRONG FORM THE RULING SETS
 
 **Not a per-route patch.** The law is stated over the **LIVE SET**:
 
-> **Every Phase 4 request body schema refuses unknown keys.**
+> **Every object in every Phase 4 request body schema refuses unknown keys — nested objects
+> included, not only the outermost.**
+
+The nesting half is the coordinator's addition and is the half I had implicit: a non-strict
+**nested** object strips unknown keys exactly as a top-level one does, so `"taxMinor"` inside a
+line item is stripped just as silently as one at the root.
 
 With the red proof that makes it non-vacuous:
 

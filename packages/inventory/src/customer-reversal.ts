@@ -1138,6 +1138,6 @@ export const P4_S6_REQUIRED_WIRING: readonly { readonly patchRequest: string; re
   Object.freeze({
     patchRequest: 'PATCH-REQ-S6-013',
     file: 'the slice that first ships a customer-reversal / credit-note route, in the request schema layer under apps/api/src',
-    edit: 'state over the LIVE SET that every Phase 4 request body schema refuses unknown keys, derived from the tree and not from a hand-kept list, with the red proof that removing the refusal from ANY ONE member reddens — plus a NAMED domain refusal for the tax case, which is the message rather than the floor, proved REACHABLE from a request and not merely declared',
+    edit: 'state over the LIVE SET that EVERY OBJECT in every Phase 4 request body schema refuses unknown keys — nested objects included, since a non-strict nested object strips an unknown key exactly as a top-level one does — derived from the tree by a check that PARSES and not from a hand-kept list, with the red proof that removing the refusal from ANY ONE member reddens; plus a NAMED domain refusal for the tax case, which is the message rather than the floor, proved REACHABLE from a request and not merely declared',
   }),
 ]);
