@@ -37,11 +37,22 @@
  * file transcribes these same statements. That is the migration owner's
  * checkable obligation at promotion, not a claim made here.
  *
- * ## Running it
+ * ## Running it, and the REAL reason it is opt-in
  *
- * Needs a cluster, so it is opt-in and SKIPS by default — a suite that silently
- * needs a server is a suite that silently fails to run. Set `P4S6_LEVEL_F=1`
- * with a `PG_DIR`/`PG_PORT` pair nobody else holds:
+ * NOT cluster availability. `vitest.config.ts` includes `tests/**` and its
+ * `globalSetup` calls `ensurePostgres()`, so the root project ALWAYS has a
+ * cluster and an "it needs a server" rationale would be false. The gate is
+ * about the LEVEL GRANT: the coordinator's standing ruling puts this slice at
+ * levels A-E, and a level-F suite running green in ordinary CI would assert a
+ * maturity level nobody granted. So the DB cases are opt-in and the slice's
+ * default verdict stays honest about what it has proved.
+ *
+ * What is NOT opt-in, deliberately, is the EXTRACTION GUARD: the `extractOne`
+ * calls are top-level and the first two cases are unconditional, so a document
+ * edited away from what this file proves reddens on every ordinary run, with no
+ * cluster involved and no flag set.
+ *
+ * Set `P4S6_LEVEL_F=1` with a `PG_DIR`/`PG_PORT` pair nobody else holds:
  *
  *   P4S6_LEVEL_F=1 PG_DIR=/tmp/daftar-pg-p4s6f PG_PORT=56861 \
  *     npx vitest run tests/integration/p4s6-level-f-spec-executed.test.ts
