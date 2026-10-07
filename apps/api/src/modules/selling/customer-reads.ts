@@ -125,6 +125,135 @@ export function customerDto(row: CustomerRow, contacts: readonly CustomerContact
   };
 }
 
+/**
+ * One row of `customer_ar_aging(...)` as this module selects it: the SQL
+ * function's `RETURNS TABLE` (`0084`, §6) with the two money columns cast to
+ * text, because a cumulative receivable exceeds 2^53 long before it exceeds
+ * what a merchant can earn.
+ */
+export interface CustomerAgingSqlRow {
+  /**
+   * **1-BASED.** `customer_ar_aging` computes `1 + <count of supplied
+   * thresholds the invoice's days-past-due exceeds>`, so for
+   * `bucketDays = [30, 60, 90]` the four bands arrive as 1, 2, 3, 4 — and 4 is
+   * the oldest band, `over-90`, not an overflow.
+   */
+  bucket_no: number;
+  currency_code: string | null;
+  txn_minor: string | null;
+  base_minor: string;
+  invoice_count: number;
+}
+
+/** The bucket SHAPE a fold folds into: the labels and the boundaries they came from. */
+export interface CustomerAgingShape {
+  /** `agingBucketLabels(bucketDays)` — length is `bucketDays.length + 1`. */
+  readonly labels: readonly string[];
+  /** The caller's supplied, ascending boundaries. */
+  readonly bucketDays: readonly number[];
+}
+
+/**
+ * The SQL rows of `customer_ar_aging(...)` folded into the DTO's buckets and
+ * the one total the screen shows as the customer's aged debt.
+ *
+ * ── THE ORDINAL BASE, WHICH IS THE WHOLE POINT OF THIS FUNCTION ──────────
+ *
+ * `bucket_no` is 1-BASED and `labels` is a 0-based array, so the mapping is
+ * `bucketIndex = bucket_no - 1`. It used to be written `buckets[r.bucket_no]`
+ * followed by `if (bucket === undefined) continue`, and that was a financial
+ * defect in two directions at once:
+ *
+ *   1. the OLDEST band — `bucket_no = bucketDays.length + 1` — indexed one
+ *      past the end of `labels` and was SILENTLY SKIPPED. Its money left
+ *      `baseMinor`, its invoices left `invoiceCount` and its amount left
+ *      `totalBaseMinor`, so a customer whose whole debt sat in that band had
+ *      an aged debt that read as ZERO — reported as not existing, not as
+ *      current;
+ *   2. index 0 — the FIRST band, which holds invoices up to `bucketDays[0]`
+ *      days past due AND, because `customer_ar_aging` computes
+ *      `1 + count(thresholds where (p_as_of - due_date) > threshold)` and
+ *      days-past-due goes negative, those not yet due as well — was
+ *      UNREACHABLE, because the SQL's smallest `bucket_no` is 1. So no band
+ *      ever held its own money: every surviving band carried the PREVIOUS
+ *      band's.
+ *
+ * ── AND WHY THERE IS NO `continue` HERE ──────────────────────────────────
+ *
+ * «It can drop money from the report with no sound, and that is unacceptable»
+ * (TL, this fix). A read that cannot place a row has met a disagreement
+ * between the SQL function's ordinal base and this module's, which is a
+ * DEFECT and not a merchant outcome, so it is refused as
+ * `customer.aging_bucket_mapping_invalid` — a 500 through this module's one
+ * refusal channel, `sellingRefusal`, exactly as the cart's internal
+ * invariants are (TL-P4-S2-R5). Loud and short is the only acceptable
+ * failure mode for a figure a merchant chases a customer with.
+ *
+ * ── AND THE SHAPE INVARIANT, BECAUSE THIS FUNCTION IS PUBLIC ─────────────
+ *
+ * `labels.length` MUST be `bucketDays.length + 1`. `agingBucketLabels` always
+ * produces exactly that, so `aging()` cannot break it — but this function is
+ * EXPORTED, and a caller passing a longer `labels` used to read
+ * `bucketDays[i - 1]` past the end and emit **`fromDays: NaN` into a money
+ * DTO**: `undefined + 1` is `NaN`, `NaN` leaves `JSON.stringify` as `null`,
+ * and a band whose lower bound is missing is a band no merchant can read.
+ *
+ * The two `as number` casts that used to sit on those reads are GONE. They
+ * defeated `noUncheckedIndexedAccess` at precisely the two places it would
+ * have caught this, and a cast is the kind of thing a reviewer does not look
+ * behind. The boundaries are now read, checked, and used — the compiler's
+ * objection answered rather than asserted away.
+ *
+ * Four invariants per ROW, before anything is added: `bucket_no` is an
+ * integer, it is `>= 1`, it is `<= buckets.length`, and the bucket the mapped
+ * index names exists. The fourth is not redundant with the third — the
+ * compiler is right that an array read can answer `undefined`, and a HOLE in
+ * a sparse `labels` is exactly that while leaving `length` intact.
+ *
+ * PURE: no database, no Nest, no clock, no module state. It is called once by
+ * `CustomerReadService.aging` and is otherwise exercised directly by
+ * `tests/guards/p4s4-customer-aging-bucket-mapping.test.ts`.
+ */
+export function foldCustomerAging(
+  rows: readonly CustomerAgingSqlRow[],
+  shape: CustomerAgingShape,
+): { buckets: CustomerAgingBucketDto[]; totalBaseMinor: string } {
+  if (shape.labels.length !== shape.bucketDays.length + 1) {
+    throw sellingRefusal('customer.aging_bucket_mapping_invalid');
+  }
+
+  const buckets: CustomerAgingBucketDto[] = shape.labels.map((label, i) => {
+    const previousBoundary = i === 0 ? null : shape.bucketDays[i - 1];
+    const upperBoundary = i < shape.bucketDays.length ? shape.bucketDays[i] : null;
+    if (previousBoundary === undefined || upperBoundary === undefined) {
+      throw sellingRefusal('customer.aging_bucket_mapping_invalid');
+    }
+    return {
+      label,
+      fromDays: previousBoundary === null ? 0 : previousBoundary + 1,
+      toDays: upperBoundary,
+      baseMinor: '0',
+      byCurrency: [],
+      invoiceCount: 0,
+    };
+  });
+
+  let totalBaseMinor = 0n;
+  for (const r of rows) {
+    if (!Number.isInteger(r.bucket_no) || r.bucket_no < 1 || r.bucket_no > buckets.length) {
+      throw sellingRefusal('customer.aging_bucket_mapping_invalid');
+    }
+    const bucket = buckets[r.bucket_no - 1];
+    if (bucket === undefined) throw sellingRefusal('customer.aging_bucket_mapping_invalid');
+    bucket.baseMinor = (BigInt(bucket.baseMinor) + BigInt(r.base_minor)).toString();
+    bucket.invoiceCount += r.invoice_count;
+    totalBaseMinor += BigInt(r.base_minor);
+    if (r.currency_code !== null && r.txn_minor !== null) bucket.byCurrency.push({ currency: r.currency_code, txnMinor: r.txn_minor });
+  }
+
+  return { buckets, totalBaseMinor: totalBaseMinor.toString() };
+}
+
 @Injectable()
 export class CustomerReadService {
   constructor(@Inject(Database) private readonly db: Database) {}
@@ -232,13 +361,7 @@ export class CustomerReadService {
     if (row === null) throw sellingRefusal('customer.not_found');
     const baseCurrency = await readBaseCurrency(this.db, this.scope(m));
     const labels = agingBucketLabels(q.bucketDays);
-    const found = await this.db.scoped<{
-      bucket_no: number;
-      currency_code: string | null;
-      txn_minor: string | null;
-      base_minor: string;
-      invoice_count: number;
-    }>(
+    const found = await this.db.scoped<CustomerAgingSqlRow & QueryResultRow>(
       this.scope(m),
       `SELECT a.bucket_no, a.currency_code, a.txn_minor::text AS txn_minor, a.base_minor::text AS base_minor, a.invoice_count
          FROM customer_ar_aging($1::uuid, $2::uuid, $3::date, $4::integer[]) a
@@ -246,26 +369,12 @@ export class CustomerReadService {
       [m.businessId, customerId, q.asOf, q.bucketDays],
     );
 
-    const buckets: CustomerAgingBucketDto[] = labels.map((label, i) => ({
-      label,
-      fromDays: i === 0 ? 0 : (q.bucketDays[i - 1] as number) + 1,
-      toDays: i < q.bucketDays.length ? (q.bucketDays[i] as number) : null,
-      baseMinor: '0',
-      byCurrency: [],
-      invoiceCount: 0,
-    }));
+    // The fold — and the 1-based → 0-based mapping — lives in
+    // `foldCustomerAging` above, which is pure and is exercised without a
+    // database. This method holds the query and the envelope only.
+    const { buckets, totalBaseMinor } = foldCustomerAging(found.rows, { labels, bucketDays: q.bucketDays });
 
-    let totalBaseMinor = 0n;
-    for (const r of found.rows) {
-      const bucket = buckets[r.bucket_no];
-      if (bucket === undefined) continue;
-      bucket.baseMinor = (BigInt(bucket.baseMinor) + BigInt(r.base_minor)).toString();
-      bucket.invoiceCount += r.invoice_count;
-      totalBaseMinor += BigInt(r.base_minor);
-      if (r.currency_code !== null && r.txn_minor !== null) bucket.byCurrency.push({ currency: r.currency_code, txnMinor: r.txn_minor });
-    }
-
-    return { customerId, asOf: q.asOf, baseCurrency, bucketDays: [...q.bucketDays], buckets, totalBaseMinor: totalBaseMinor.toString() };
+    return { customerId, asOf: q.asOf, baseCurrency, bucketDays: [...q.bucketDays], buckets, totalBaseMinor };
   }
 
   /**

@@ -65,6 +65,49 @@ const SELLING_STATUS = {
   /** An aging or open-invoice read whose supplied as-of date is not a usable horizon. */
   'customer.as_of_invalid': 400,
   'customer.aging_buckets_invalid': 400,
+  /**
+   * AN INTERNAL INVARIANT — 500, AND NEVER A MERCHANT OUTCOME (TL-P4-S2-R5).
+   *
+   * `customer_ar_aging(...)` returns `bucket_no = 1 + <thresholds exceeded>`
+   * (`0084`, §6), so a well-formed answer is a 1-BASED ordinal in
+   * `[1, labels.length]`. `foldCustomerAging` refuses anything else — a
+   * non-integer, a 0, a value past the last label — instead of skipping the
+   * row. It carries the SHAPE invariant too: `labels.length` must be
+   * `bucketDays.length + 1`, because a longer `labels` made the band
+   * construction read a boundary past the end and emit `fromDays: NaN` into a
+   * money DTO.
+   *
+   * It is 500 and not 400 because it is not the caller's mistake: the supplied
+   * boundaries were already judged by `CustomerAgingQuerySchema`'s
+   * `bucketDays` pipe (`selling.schemas.ts:178-189`), which enforces the
+   * `^\d{1,4}(,\d{1,4}){0,5}$` shape, then integer, `min 1`, `max
+   * MAX_AGING_BUCKET_DAY`, between 1 and `MAX_AGING_BUCKETS` entries, and a
+   * `.refine` for STRICTLY ASCENDING. Strictly ascending is what makes
+   * duplicate boundaries — and therefore an empty band with
+   * `fromDays > toDays` — unreachable. So a bucket number outside the range
+   * those boundaries define means the SQL function and this module disagree
+   * about the ordinal base. That is a defect.
+   *
+   * NOT `customer.aging_buckets_invalid`: that code is DECLARED in this
+   * registry and thrown NOWHERE in the tree, so it judges nothing and must
+   * not be cited as the check that does.
+   *
+   * The behaviour it replaces — `if (bucket === undefined) continue` —
+   * dropped the row's money out of `baseMinor`, out of `invoiceCount` and out
+   * of `totalBaseMinor` with no sound at all, so a customer whose debt sat in
+   * the oldest band had an aged debt that read as ZERO — reported as not
+   * existing, not as current. And index 0 — the FIRST band, which holds
+   * invoices up to `bucketDays[0]` days past due AND, because days-past-due
+   * goes negative, those not yet due as well — was UNREACHABLE, because the
+   * SQL's smallest `bucket_no` is 1: so every band that did land carried the
+   * PREVIOUS band's money.
+   *
+   * Deliberately NOT spelled `customer.aging_bucket*s*_invalid`: that code is
+   * a 400 about the boundaries the caller supplied, and one letter between a
+   * merchant outcome and a defect is how a defect comes to be read as an
+   * outcome.
+   */
+  'customer.aging_bucket_mapping_invalid': 500,
   /** A read that sums across branches, asked by an actor limited to some of them. */
   'customer.business_wide_scope_required': 403,
 
