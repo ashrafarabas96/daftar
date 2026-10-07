@@ -587,9 +587,26 @@ export const SETTLEMENT_SOURCE_TYPES: readonly string[] = ['customer_payment_all
  * role a one-column `GRANT UPDATE (status)` on each — `0075:495` already
  * supplied the SELECT half.
  *
- * That grant is SAFE ONLY BECAUSE NEITHER ROUTINE WRITES EITHER TABLE. The
- * invoice's status is advanced by the sale and void paths of `0078`, and a
- * customer's by `0075`; a settlement routine that began to UPDATE one would
+ * That grant is SAFE ONLY BECAUSE NEITHER ROUTINE WRITES EITHER TABLE.
+ *
+ * CORRECTED 2026-10-07, and the correction makes the grant safer than this
+ * law used to claim. The sentence here used to read "The invoice's status is
+ * advanced by the sale and void paths of `0078`, and a customer's by `0075`",
+ * and that was measured FALSE: there is no `UPDATE invoices` and no
+ * `UPDATE customers` DML anywhere in this tree, not in a migration and not in
+ * application code. Every textual hit is a COMMENT describing what the
+ * transition trigger refuses. So the grant is safe for a stronger reason than
+ * a division of ownership — today nothing writes either table at all, the
+ * status domain is `draft|open|void` (`0075:257`) and a direct transition is
+ * refused by the trigger at `0075:585`. The void path that would advance a
+ * status is P4-S6's and does not exist yet, which is the condition that makes
+ * this safe and the condition to re-read when S6 lands it. The verdict was
+ * never affected — this law is a prohibition and nothing violates it — but a
+ * reviewer reaches the conclusion "the lock grant is safe" THROUGH this
+ * paragraph, and a measured-false justification has already led a reviewer
+ * wrong once in this estate (`09-settlement-last-amount-race.golden.test.ts:270-289`).
+ *
+ * A settlement routine that began to UPDATE one would
  * be writing a lifecycle it does not own, and the ACL it was handed for a lock
  * would silently have become a write capability. The comment at `0081:620-659`
  * says so, and `[[a wrapper is not an invariant]]` applies to a comment just
@@ -664,7 +681,21 @@ export function stripSqlComments(sql: string): string {
  * an unreadable body is never "nothing to check".
  */
 export function routineBody(sql: string, fn: string): string | null {
-  const head = new RegExp(String.raw`create\s+(?:or\s+replace\s+)?function\s+(?:public\s*\.\s*)?${fn}\b`, 'i').exec(sql);
+  // The LAST definition, never the first. A routine this estate redefines by
+  // forward `CREATE OR REPLACE` in a later migration has as many definitions
+  // in the joined surface as migrations that wrote it, and only the last one
+  // is installed. `.exec` returns the first, so this function used to hand
+  // every caller a body that no longer exists: measured on the `0074`-`0086`
+  // surface, `customer_collect_payment` came back as `0081`'s 24 690 bytes
+  // while `0085`'s live body is 25 577. `settlementContractProblems` and
+  // `rowLockOnlyWriteProblems` were therefore green over a routine that is
+  // not in the catalogue, which is the same defect as reading a migration
+  // instead of the live catalogue (`[[daftar-the-live-catalogue-is-the-policy]]`).
+  // Correct only while callers join migrations in migration order, which they
+  // do; a caller that sorts differently would be asking a different question
+  // and must say so.
+  const heads = [...sql.matchAll(new RegExp(String.raw`create\s+(?:or\s+replace\s+)?function\s+(?:public\s*\.\s*)?${fn}\b`, 'gi'))];
+  const head = heads.length === 0 ? null : (heads[heads.length - 1] as RegExpMatchArray & { index: number });
   if (head === null) return null;
   const open = /\$([A-Za-z_][A-Za-z0-9_]*)?\$/.exec(sql.slice(head.index));
   if (open === undefined || open === null) return null;
@@ -2256,6 +2287,11 @@ export const ROSTER_RECORDED: readonly RosterRow[] = [
     title: 'a suite is one of this slice\u2019s measurements when its CODE names the migration, not when its PROSE mentions the number',
     cases: 4,
   },
+  {
+    suite: 'tests/guards/p4s4-gate-execution.test.ts',
+    title: 'a routine read off the migration surface is the LAST definition, because that is the one installed',
+    cases: 4,
+  },
   { suite: 'tests/guards/p4s4-migration-self-capture-law.test.ts', title: 'P4-S4 — G-8: a migration cannot forge its own self-capture' },
   { suite: 'tests/guards/p4s4-new-relation-coverage.test.ts', title: 'the shared Phase 4 predicate admits all four relations, with no registration' },
   {
@@ -2371,6 +2407,31 @@ export const ROSTER_RECORDED: readonly RosterRow[] = [
     suite: 'tests/security/p4s4-rls-barrier-behaviour.test.ts',
     title: "P4-S4 — THE RED PROOFS for the four-way matrix: §17's three reopening conditions (TL-P4-RLS-INT-01)",
     cases: 4,
+  },
+  {
+    suite: 'tests/golden-regression/phase4-s4/11-partial-payment.golden.test.ts',
+    title: 'P4-S4 G-14 partial payment: the recorded walk of one invoice from open to paid',
+    cases: 9,
+  },
+  {
+    suite: 'tests/golden-regression/phase4-s4/12-overpayment-customer-credit.golden.test.ts',
+    title: 'P4-S4 G-15 overpayment becomes a customer credit, consumed onto a later invoice',
+    cases: 10,
+  },
+  {
+    suite: 'tests/guards/p4s4-lock-order-law.test.ts',
+    title: 'P4-AL-41 the static acquisition-order check: it reads the LIVE definition',
+    cases: 3,
+  },
+  {
+    suite: 'tests/guards/p4s4-lock-order-law.test.ts',
+    title: 'P4-AL-41 the declared order: the routines agree with each other, and the LOCK\u2019s text is the side that is wrong',
+    cases: 4,
+  },
+  {
+    suite: 'tests/guards/p4s4-lock-order-law.test.ts',
+    title: 'P4-AL-41 the advisory keys: ranked for this slice, discovered for the whole phase',
+    cases: 6,
   },
 ];
 

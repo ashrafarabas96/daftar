@@ -30,7 +30,7 @@
  * real roster inside a test would take the gate's own runtime twice over and
  * would prove nothing this does not.
  */
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
@@ -43,6 +43,7 @@ import {
   rosterProblems,
   rosterRedProofProblems,
   rosterRows,
+  routineBody,
   S4_GOLDEN_DIR,
   stripTsComments,
 } from '../../scripts/phase4-s4-gate';
@@ -315,5 +316,58 @@ describe('a suite is one of this slice’s measurements when its CODE names the 
     expect(stripTsComments('// 0084\nconst x = 1;')).not.toContain('0084');
     expect(stripTsComments('/* 0084 */ const x = 1;')).not.toContain('0084');
     expect(stripTsComments('/* 0084 */ const x = 1;')).toContain('const x = 1');
+  });
+});
+
+describe('a routine read off the migration surface is the LAST definition, because that is the one installed', () => {
+  // This estate corrects a shipped routine by forward `CREATE OR REPLACE` in a
+  // NEW migration, never by editing the frozen file that first defined it. So
+  // the joined migration surface holds as many definitions of a corrected
+  // routine as migrations that wrote it, and only the last is in the
+  // catalogue. `routineBody` used `.exec`, which returns the FIRST, so every
+  // caller was handed a body that no longer exists: `settlementContractProblems`
+  // and `rowLockOnlyWriteProblems` were green over `0081`'s superseded
+  // `customer_collect_payment` while `0085`'s is the installed one. Both laws
+  // still hold over the live body -- the subject was wrong, not the verdict --
+  // which is exactly why nothing went red to reveal it.
+  const FIRST = ['create function f() returns void as $$ FIRST BODY $$ language sql;'].join('\n');
+  const SECOND = ['create or replace function f() returns void as $$ SECOND BODY $$ language sql;'].join('\n');
+
+  it('two definitions in migration order: the SECOND is returned', () => {
+    expect(routineBody([FIRST, SECOND].join('\n'), 'f')?.trim()).toBe('SECOND BODY');
+    // The subject of the claim, and it must still be wrong: a first-match
+    // reader returns the superseded body over the same text.
+    const naive = /create\s+(?:or\s+replace\s+)?function\s+f\b[\s\S]*?\$\$([\s\S]*?)\$\$/i.exec([FIRST, SECOND].join('\n'));
+    expect(naive?.[1]?.trim(), 'the first-match reader is the subject here and must still return the stale body').toBe('FIRST BODY');
+  });
+
+  it('a routine defined ONCE is unaffected, so the fix buys correctness and not a behaviour change', () => {
+    expect(routineBody(FIRST, 'f')?.trim()).toBe('FIRST BODY');
+    expect(routineBody(SECOND, 'f')?.trim()).toBe('SECOND BODY');
+    expect(routineBody(FIRST, 'nosuchroutine')).toBeNull();
+  });
+
+  it('a name that is a PREFIX of another routine does not steal its definition', () => {
+    // `\b` on the name: `f` must not match `f_helper`, or the last definition
+    // of an unrelated routine would be returned as this one's body.
+    const other = 'create or replace function f_helper() returns void as $$ HELPER $$ language sql;';
+    expect(routineBody([SECOND, other].join('\n'), 'f')?.trim()).toBe('SECOND BODY');
+    expect(routineBody([SECOND, other].join('\n'), 'f_helper')?.trim()).toBe('HELPER');
+  });
+
+  it('red: over the REAL migration surface the two bodies differ, so this is not a hypothetical', () => {
+    // A real subject, not a planted one: `customer_collect_payment` is defined
+    // in 0081 and redefined in 0085, and the two bodies are different sizes.
+    const dir = join(REPO, 'infrastructure/database/migrations');
+    const files = readdirSync(dir)
+      .filter((f) => /^00(?:7[4-9]|8[0-6])_.*\.sql$/.test(f))
+      .sort();
+    expect(files.length, 'the Phase 4 migration window matched nothing, so this proof has no subject').toBeGreaterThan(0);
+    const bodies = files.map((f) => routineBody(readFileSync(join(dir, f), 'utf8'), 'customer_collect_payment')).filter((b): b is string => b !== null);
+    expect(bodies.length, 'the routine is no longer defined more than once; this proof needs re-aiming').toBeGreaterThanOrEqual(2);
+    expect(new Set(bodies.map((b) => b.length)).size, 'the definitions are identical, so the first/last distinction would be invisible').toBeGreaterThan(1);
+    // And the joined surface yields the LAST of them.
+    const joined = files.map((f) => readFileSync(join(dir, f), 'utf8')).join('\n');
+    expect(routineBody(joined, 'customer_collect_payment')?.length).toBe(bodies[bodies.length - 1]?.length);
   });
 });
