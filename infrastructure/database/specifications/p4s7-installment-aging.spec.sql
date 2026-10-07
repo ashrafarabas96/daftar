@@ -491,6 +491,20 @@ GRANT SELECT ON installment_plans, installments TO daftar_accounting_internal;
 -- supplied or stored civil DATE or a stored integer, and the routine never
 -- names a time function — section 6's clock law reads this text too.
 
+-- THE CREATE BRACKET, AND IT IS NOT DECORATION (found by the executor, third
+-- finding). `ALTER FUNCTION ... OWNER TO r` requires `r` to hold CREATE on the
+-- containing schema. `daftar_accounting_internal` holds only USAGE
+-- (`bootstrap.sql:198`), so applied by the DEPLOYMENT PRINCIPAL this file
+-- failed with `42501 permission denied for schema public` — and NOTHING of the
+-- slice applied, because the file is one implicit transaction. A SUPERUSER
+-- never sees it, which is exactly why three rounds of applying it as
+-- `postgres` could not. `bootstrap.sql:210-216` states the mechanism in the
+-- estate's own words — «migration 0040 and the eight files after it lend
+-- `CREATE ON SCHEMA public` to the role they are about to make owner and take
+-- it back in the same transaction» — and `0075:657` / `0075:695` is the worked
+-- bracket this one copies. Lend, create, transfer, take back.
+GRANT CREATE ON SCHEMA public TO daftar_accounting_internal;
+
 CREATE OR REPLACE FUNCTION installment_schedule_verify() RETURNS TRIGGER
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $fn$
 DECLARE
@@ -512,12 +526,36 @@ BEGIN
   -- routine, so the plan key is taken from whichever relation fired, and from
   -- OLD on a DELETE because NEW is null there — the DELETE direction is the
   -- one a prose-only law would have left open.
+  -- `TG_OP` AND NOT `coalesce(NEW.x, OLD.x)` (challenger L12). On a DELETE the
+  -- `NEW` record is not assigned, and a field access on an unassigned trigger
+  -- record can raise `55000 record "new" is not assigned yet` rather than
+  -- yielding NULL. The estate-standard idiom removes the question for free,
+  -- and a `55000` here would have surfaced as "the DELETE arm does not refuse"
+  -- rather than as a defect in this line.
+  -- AND A `CASE` OVER A RECORD'S FIELDS IS NOT A GUARD (found by the executor,
+  -- fifth finding). The first attempt at this repair wrote
+  -- `CASE WHEN TG_TABLE_NAME = 'installment_plans' THEN NEW.id ELSE NEW.plan_id END`
+  -- and every write failed with `record "new" has no field "plan_id"`: plpgsql
+  -- resolves a record field reference when the expression is evaluated, and a
+  -- `CASE` evaluates its type-level references regardless of which branch
+  -- wins. The relation must therefore be the OUTER branch, as it was before,
+  -- with `TG_OP` inside it.
   IF TG_TABLE_NAME = 'installment_plans' THEN
-    v_business := coalesce(NEW.business_id, OLD.business_id);
-    v_plan     := coalesce(NEW.id, OLD.id);
+    IF TG_OP = 'DELETE' THEN
+      v_business := OLD.business_id;
+      v_plan     := OLD.id;
+    ELSE
+      v_business := NEW.business_id;
+      v_plan     := NEW.id;
+    END IF;
   ELSE
-    v_business := coalesce(NEW.business_id, OLD.business_id);
-    v_plan     := coalesce(NEW.plan_id, OLD.plan_id);
+    IF TG_OP = 'DELETE' THEN
+      v_business := OLD.business_id;
+      v_plan     := OLD.plan_id;
+    ELSE
+      v_business := NEW.business_id;
+      v_plan     := NEW.plan_id;
+    END IF;
   END IF;
 
   SELECT p.status, p.down_payment_minor, p.invoice_id, p.tenant_id
@@ -629,10 +667,23 @@ CREATE CONSTRAINT TRIGGER installments_schedule_complete
   DEFERRABLE INITIALLY DEFERRED
   FOR EACH ROW EXECUTE FUNCTION installment_schedule_verify();
 
-ALTER FUNCTION installment_schedule_verify() OWNER TO daftar_accounting_internal;
+-- THE PRIVILEGE WORK HAPPENS WHILE THE APPLIER STILL OWNS THE FUNCTION, and
+-- the OWNER TRANSFER IS LAST (found by the executor, fourth finding). With
+-- the transfer first, the deployment principal met
+-- `42501 must be owner of function installment_schedule_verify` on its own
+-- `REVOKE` and `COMMENT`: once ownership moves, the applier may no longer
+-- change the function's grants or its comment. `0075:686-695` is the order
+-- that works — REVOKE, GRANT EXECUTE to the role about to own it, COMMENT,
+-- CREATE TRIGGER, and only then `ALTER FUNCTION ... OWNER TO`. A superuser
+-- never meets this either.
 REVOKE ALL ON FUNCTION installment_schedule_verify() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION installment_schedule_verify() TO daftar_accounting_internal;
 COMMENT ON FUNCTION installment_schedule_verify() IS
   'P4-S7 (P4-AL-13, R-SAL-06). At COMMIT, for every ACTIVE installment plan touched: down_payment_minor plus the sum of its installments equals the invoice total EXACTLY — one <> comparison, so below and above are refused together and neither direction can be lost by relaxing one inequality; at least one installment row; seq_no contiguous from 1; and at most the declared ceiling of 60 installments. Otherwise installment.schedule_incomplete, naming which of (a) to (d) failed. It fires on DELETE as well as INSERT and UPDATE, because a schedule can be pushed below the total by deleting a row. It performs NO allocation, reads NO aging, stores nothing, and reads no clock. DEFERRABLE INITIALLY DEFERRED, so a long schedule may be written row by row inside one transaction and is judged once. Internal-owned DEFINER, pinned search_path, no grant; reads only.';
+
+ALTER FUNCTION installment_schedule_verify() OWNER TO daftar_accounting_internal;
+
+REVOKE CREATE ON SCHEMA public FROM daftar_accounting_internal;
 
 
 -- ── 4. WHAT THIS SPECIFICATION DELIBERATELY DOES NOT CREATE ──────────────
@@ -812,6 +863,11 @@ COMMENT ON FUNCTION installment_schedule_verify() IS
 -- It is `STABLE`, so it is callable from the `STABLE` projection; it is
 -- DEFINER because a guard that ran under the caller's visibility would be the
 -- defect it exists to catch.
+-- Its own CREATE bracket, for the same reason as section 3's: this guard is
+-- transferred to `daftar_accounting_internal` too, and a transfer to a role
+-- without CREATE on the schema is `42501`.
+GRANT CREATE ON SCHEMA public TO daftar_accounting_internal;
+
 CREATE OR REPLACE FUNCTION installment_plan_absence_guard(p_business_id UUID, p_invoice_ids UUID[])
 RETURNS BOOLEAN
 LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $fn$
@@ -831,11 +887,15 @@ BEGIN
 END;
 $fn$;
 
-ALTER FUNCTION installment_plan_absence_guard(UUID, UUID[]) OWNER TO daftar_accounting_internal;
 REVOKE ALL ON FUNCTION installment_plan_absence_guard(UUID, UUID[]) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION installment_plan_absence_guard(UUID, UUID[]) TO daftar_app, daftar_inventory_internal;
 COMMENT ON FUNCTION installment_plan_absence_guard(UUID, UUID[]) IS
   'P4-S7 (challenger C1.a). The no-plan arm of customer_ar_aging fails CLOSED. Given the invoice ids the INVOKER projection is about to serve without a schedule, it raises installment.plan_invisible if any of them does have an active plan, judged WITHOUT the caller''s row security. Under row security "absent" and "invisible" are one answer, and the arm keyed on NOT EXISTS served the whole outstanding at the single invoice due date — the pre-S7 defect — to any caller whose visibility of the plan and of its invoice disagreed. It returns no amount, no date and no count, only a boolean or an exception, and it is asked only about invoices that came out of the caller''s own filtered read, so it confirms nothing the caller cannot already see. STABLE, internal-owned DEFINER, pinned search_path, reads only.';
+
+-- ...and the transfer last, for the reason section 3 records.
+ALTER FUNCTION installment_plan_absence_guard(UUID, UUID[]) OWNER TO daftar_accounting_internal;
+
+REVOKE CREATE ON SCHEMA public FROM daftar_accounting_internal;
 
 -- >>> P4S7 PROJECTION SKETCH BEGIN
 CREATE OR REPLACE FUNCTION customer_ar_aging(p_business_id UUID, p_customer_id UUID, p_as_of DATE, p_bucket_days INTEGER[])
