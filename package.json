@@ -31,6 +31,8 @@
     "check:migrations": "tsx scripts/check-migration-manifest.ts",
     "check:supply-chain": "tsx scripts/check-supply-chain.ts",
     "scan:secrets:phase3": "tsx scripts/phase3-secret-scan.ts",
+    "audit:deps:phase15": "tsx scripts/phase15/dependency-audit.ts",
+    "scan:secrets:release": "tsx scripts/phase15/release-secret-scan.ts",
     "dr:proof": "tsx scripts/phase15/backup-restore-proof.ts",
     "dr:proof:prove": "tsx scripts/phase15/backup-restore-proof.ts --prove-detection",
     "evidence:phase2:s8": "tsx scripts/phase2-s8-evidence.ts",
