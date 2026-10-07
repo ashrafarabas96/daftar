@@ -420,7 +420,7 @@
     },
     {
       "file": ".github/workflows/ci.yml",
-      "line": 457,
+      "line": 467,
       "phase": "cross-phase",
       "signals": ["plan-shape-word"],
       "kind": "mention",
@@ -428,7 +428,7 @@
     },
     {
       "file": ".github/workflows/ci.yml",
-      "line": 460,
+      "line": 470,
       "phase": "cross-phase",
       "signals": ["collation-dependent-range"],
       "kind": "assertion",
@@ -436,7 +436,7 @@
     },
     {
       "file": ".github/workflows/ci.yml",
-      "line": 462,
+      "line": 472,
       "phase": "cross-phase",
       "signals": ["collation-dependent-range"],
       "kind": "mention",
@@ -444,7 +444,7 @@
     },
     {
       "file": ".github/workflows/ci.yml",
-      "line": 463,
+      "line": 473,
       "phase": "cross-phase",
       "signals": ["plan-shape-word"],
       "kind": "mention",
@@ -452,7 +452,7 @@
     },
     {
       "file": ".github/workflows/ci.yml",
-      "line": 482,
+      "line": 492,
       "phase": "cross-phase",
       "signals": ["collation-dependent-range"],
       "kind": "mention",
@@ -460,7 +460,7 @@
     },
     {
       "file": ".github/workflows/ci.yml",
-      "line": 485,
+      "line": 495,
       "phase": "cross-phase",
       "signals": ["plan-shape-word"],
       "kind": "mention",
