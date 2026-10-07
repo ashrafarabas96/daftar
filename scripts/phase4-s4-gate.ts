@@ -2263,7 +2263,7 @@ export const ROSTER_RECORDED: readonly RosterRow[] = [
   {
     suite: 'tests/security/p4s4-cross-tenant-command-refusal.test.ts',
     title: '§16 CASE C — THE RED PROOFS: each law is shown to be able to fail, against a real subject',
-    cases: 7,
+    cases: 8,
   },
   {
     suite: 'tests/security/p4s4-rls-barrier-behaviour.test.ts',
