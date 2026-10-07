@@ -285,7 +285,7 @@ const MANDATORY: readonly MandatoryProof[] = Object.freeze([
   Object.freeze({ id: 'proof_6', armTitleContains: 'FIRES', arms: 4, requiresInArm: ['journalFindings(', 'relationsRead(', 'canonicalReducerRegistry('], minAssertions: 3, file: 'phase4-s7-installment-aging.test.ts' }),
   Object.freeze({ id: 'proof_7', armTitleContains: 'FIRES', arms: 2, requiresInArm: ['findAuthoritativeSalesColumns('], minAssertions: 3, file: 'phase4-s7-installment-aging.test.ts' }),
   Object.freeze({ id: 'proof_8', armTitleContains: 'FIRES', arms: 1, requiresInArm: ['FINANCIAL_TIME'], minAssertions: 3, file: 'phase4-s7-installment-aging.test.ts' }),
-  Object.freeze({ id: 'proof_9', armTitleContains: 'FIRES', arms: 1, requiresInArm: ['OVER_SCHEDULED'], minAssertions: 3, file: 'phase4-s7-installment-aging.test.ts' }),
+  Object.freeze({ id: 'proof_9', armTitleContains: 'FIRES', arms: 2, requiresInArm: ['OVER_SCHEDULED', 'unpaidDuePortion('], minAssertions: 3, file: 'phase4-s7-installment-aging.test.ts' }),
   Object.freeze({ id: 'proof_10', armTitleContains: 'FIRES', arms: 1, requiresInArm: ["mutate('baseAllocation'"], minAssertions: 3, file: 'phase4-s7-installment-aging.test.ts' }),
 ]);
 
@@ -1950,6 +1950,84 @@ describe('PROOF 9 [proof_9] — a broken sum law is SIGNALLED in both directions
     recordProof('proof_9', 4, 'FIRES arm ran: FIRES: the round-2 anchor is what produced the understatemen');
   });
 
+  it('FIRES: the INDEPENDENT OVERDUE ORACLE agrees exactly where the sum law holds, and overstates where it is broken', () => {
+    // THE SECOND MEASUREMENT OF THE OVERDUE COLUMN, and it is a second
+    // IMPLEMENTATION rather than `f(x) === f(x)`. `unpaidDuePortion` is
+    // `max(0, D - P)` over a PREFIX of the declared schedule with ONE clamp;
+    // the projection is a per-row suffix-telescoping allocation with a clamp
+    // per level. They share no code path, no intermediate and no helper, and
+    // the projection never calls the oracle.
+    //
+    // WHERE THE SCHEDULE OBEYS THE SUM LAW, the telescoping identity makes the
+    // two provably identical, so this is an equality and not a tolerance.
+    for (const [label, invoice, plan] of [
+      ['the design fixture', PLANNED_INVOICE, PLAN],
+      ['the boundary fixture', BOUNDARY_INVOICE, BOUNDARY_PLAN],
+    ] as const) {
+      const scheduled = plan.downPaymentMinor + plan.installments.reduce((a, i) => a + i.amountTxnMinor, 0n);
+      // NON-VACUITY: the equality below is only a theorem while this holds, so
+      // the premise is measured and not assumed.
+      expect(scheduled, `${label} must obey the sum law, or the oracle is not exact on it`).toBe(
+        invoice.paidTxnMinor + invoice.outstandingTxnMinor,
+      );
+      const contributions = projectInvoice(invoice, plan, AS_OF, THRESHOLDS);
+      // THE SUBJECT IS THE SCHEDULE DATE, NOT THE BUCKET ORDINAL — and that
+      // distinction is a finding this arm made on its first run. Bucket 1 is
+      // the `0-30` band: it holds the NOT-YET-DUE rows AND the rows up to
+      // thirty days past due, so `bucketNo > 1` is not «overdue» and summing
+      // it against `max(0, D - P)` compared two different quantities (500 000
+      // against 600 000 on the design fixture). The oracle's subject is money
+      // whose DECLARED DATE has arrived, so the projection's matching subject
+      // is its contributions' own `scheduleDate` — which also keeps this law
+      // independent of `bucketOf` entirely.
+      const projectedDue = sum(contributions.filter((x) => x.scheduleDate !== null && x.scheduleDate <= AS_OF));
+      const oracle = unpaidDuePortion(plan, AS_OF, invoice.paidTxnMinor);
+      expect(projectedDue, `${label}: the fallen-due allocation must equal max(0, D - P)`).toBe(oracle);
+      // ...and the oracle is not trivially zero, or the equality is 0 === 0.
+      expect(oracle > 0n, `${label}: NO SUBJECT — nothing has fallen due`).toBe(true);
+      // THE BAND-LEVEL CONSEQUENCE, which is the half a reader cares about:
+      // everything in an OVERDUE band is fallen-due money, so it cannot
+      // exceed the fallen-due total. This is the one-sided reading of
+      // proof 2's law, measured against a second implementation.
+      expect(
+        sum(contributions.filter((x) => x.bucketNo > 1)) <= oracle,
+        `${label}: an overdue band carries more than has fallen due`,
+      ).toBe(true);
+    }
+
+    // WHERE THE SUM LAW IS BROKEN ABOVE, AND THE OVER-SCHEDULED MONEY HAS
+    // FALLEN DUE, the two part company — and they must. The oracle counts the
+    // DECLARED dates and is bounded by nothing; the projection is bounded by
+    // the authoritative outstanding and cannot report money the invoice does
+    // not owe. So the disagreement is the DETECTOR of a broken schedule, and
+    // the database-level verifier is what makes the state unreachable rather
+    // than merely detectable (obligation (a), measured firing in
+    // tests/integration/phase4-s7-installment-aging-live.test.ts §B).
+    const bothOverdue: InstallmentPlan = Object.freeze({
+      ...OVER_SCHEDULED_PLAN,
+      installments: Object.freeze([
+        Object.freeze({ seqNo: 1, dueDate: '2026-01-15', amountTxnMinor: 900_000n }),
+        Object.freeze({ seqNo: 2, dueDate: '2026-02-15', amountTxnMinor: 900_000n }),
+      ]),
+    });
+    const brokenOracle = unpaidDuePortion(bothOverdue, AS_OF, OVER_SCHEDULED_INVOICE.paidTxnMinor);
+    const brokenProjected = sum(
+      projectInvoice(OVER_SCHEDULED_INVOICE, bothOverdue, AS_OF, THRESHOLDS).filter((x) => x.scheduleDate !== null && x.scheduleDate <= AS_OF),
+    );
+    expect(brokenOracle).toBe(1_800_000n);
+    // The projection reports the AUTHORITATIVE outstanding and not a penny more.
+    expect(brokenProjected).toBe(OVER_SCHEDULED_INVOICE.outstandingTxnMinor);
+    expect(brokenProjected).toBe(900_000n);
+    expect(brokenOracle === brokenProjected, 'a broken schedule must be VISIBLE as a disagreement, not absorbed').toBe(false);
+    // and conservation is NOT sacrificed to make the oracle happy: proof 1's
+    // law still holds on the broken input, which is the whole reason the
+    // overstatement lands on the oracle rather than on the projection.
+    expect(sum(projectInvoice(OVER_SCHEDULED_INVOICE, bothOverdue, AS_OF, THRESHOLDS))).toBe(
+      OVER_SCHEDULED_INVOICE.outstandingTxnMinor,
+    );
+    recordProof('proof_9', 14, 'FIRES arm ran: the independent overdue oracle agrees where the sum law holds');
+  });
+
   it('the two anchors AGREE exactly wherever the sum law holds, so the repair costs nothing', () => {
     // The design fixture obeys the sum law: 300 000 paid + 900 000 outstanding
     // = 1 200 000 = 12 x 100 000.
@@ -1996,7 +2074,7 @@ describe('PROOF 9 [proof_9] — a broken sum law is SIGNALLED in both directions
     const triggers = [...ddl.matchAll(/CREATE CONSTRAINT TRIGGER\s+(\w+)\s+([\s\S]*?)EXECUTE FUNCTION\s+(\w+)/gi)];
     expect(triggers.length).toBe(2);
     const onRelation = new Map(
-      triggers.map((t) => [/\bON\s+(\w+)/i.exec(t[2])?.[1] ?? '?', { events: t[2], fn: t[3] }]),
+      triggers.map((t) => [/\bON\s+(\w+)/i.exec(t[2] ?? '')?.[1] ?? '?', { events: t[2] ?? '', fn: t[3] ?? '' }]),
     );
     // Both relations of the schedule, both judged by the ONE verifier.
     expect([...onRelation.keys()].sort()).toEqual(['installment_plans', 'installments']);

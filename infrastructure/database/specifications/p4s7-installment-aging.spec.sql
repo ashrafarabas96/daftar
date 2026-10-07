@@ -171,6 +171,70 @@ ALTER TABLE installment_plans FORCE ROW LEVEL SECURITY;
 ALTER TABLE installments ENABLE ROW LEVEL SECURITY;
 ALTER TABLE installments FORCE ROW LEVEL SECURITY;
 
+-- ── 2a. THE POLICIES AND THE PRIVILEGES ──────────────────────────────────
+--
+-- FOUND BY THE EXECUTOR, NOT BY A READER (S7-1, second finding). The two
+-- relations above were created with RLS ENABLED and FORCED and with NO policy
+-- and NO grant to anybody. The first `INSERT INTO installment_plans` attempted
+-- through a real transaction did not reach the verifier at all: it failed with
+--
+--     42501  permission denied for table installment_plans
+--
+-- raised INSIDE `installment_schedule_verify()`, because that routine is a
+-- SECURITY DEFINER owned by `daftar_accounting_internal` and that role held no
+-- SELECT on the relations it was written to judge. A schedule verifier that
+-- cannot read the schedule does not refuse incomplete schedules — IT REFUSES
+-- EVERY SCHEDULE, which is a law that discriminates nothing while looking
+-- strict. The sibling hazard is recorded in the estate's own words at
+-- `0075:439-441`: granting too little «would make the deferred completeness
+-- validator read zero rows and pass vacuously: a green gate over an unchecked
+-- invariant». This is the same mistake in its louder direction.
+--
+-- No privilege here is a widening: `installment_plans` and `installments` are
+-- created by THIS specification, so their policies and grants are its own to
+-- declare. The shapes are `0075:443-458`'s, relation for relation.
+CREATE POLICY tenant_membership ON installment_plans
+  USING      (app_bypass() OR tenant_id = nullif(app_tenant(), '')::uuid)
+  WITH CHECK (app_bypass() OR tenant_id = nullif(app_tenant(), '')::uuid);
+CREATE POLICY business_isolation_read ON installment_plans AS RESTRICTIVE FOR SELECT
+  USING      (app_bypass() OR current_user IN ('daftar_inventory_internal', 'daftar_accounting_internal')
+              OR business_id = nullif(app_business(), '')::uuid);
+CREATE POLICY business_isolation_insert ON installment_plans AS RESTRICTIVE FOR INSERT
+  WITH CHECK (app_bypass() OR business_id = nullif(app_business(), '')::uuid);
+CREATE POLICY business_isolation_update ON installment_plans AS RESTRICTIVE FOR UPDATE
+  USING      (app_bypass() OR business_id = nullif(app_business(), '')::uuid)
+  WITH CHECK (app_bypass() OR business_id = nullif(app_business(), '')::uuid);
+CREATE POLICY business_isolation_delete ON installment_plans AS RESTRICTIVE FOR DELETE
+  USING      (app_bypass() OR business_id = nullif(app_business(), '')::uuid);
+-- The verifier's own way in, named for what it is, on the `accounting_validator`
+-- precedent of `0075:457-458`.
+CREATE POLICY accounting_validator ON installment_plans
+  FOR SELECT TO daftar_accounting_internal USING (true);
+
+CREATE POLICY tenant_membership ON installments
+  USING      (app_bypass() OR tenant_id = nullif(app_tenant(), '')::uuid)
+  WITH CHECK (app_bypass() OR tenant_id = nullif(app_tenant(), '')::uuid);
+CREATE POLICY business_isolation_read ON installments AS RESTRICTIVE FOR SELECT
+  USING      (app_bypass() OR current_user IN ('daftar_inventory_internal', 'daftar_accounting_internal')
+              OR business_id = nullif(app_business(), '')::uuid);
+CREATE POLICY business_isolation_insert ON installments AS RESTRICTIVE FOR INSERT
+  WITH CHECK (app_bypass() OR business_id = nullif(app_business(), '')::uuid);
+CREATE POLICY business_isolation_update ON installments AS RESTRICTIVE FOR UPDATE
+  USING      (app_bypass() OR business_id = nullif(app_business(), '')::uuid)
+  WITH CHECK (app_bypass() OR business_id = nullif(app_business(), '')::uuid);
+CREATE POLICY business_isolation_delete ON installments AS RESTRICTIVE FOR DELETE
+  USING      (app_bypass() OR business_id = nullif(app_business(), '')::uuid);
+CREATE POLICY accounting_validator ON installments
+  FOR SELECT TO daftar_accounting_internal USING (true);
+
+-- READ ONLY, to every principal. P4-AL-38: `daftar_app` holds no DML on any
+-- Phase 4 relation, and this specification ships no writer — the command that
+-- creates a plan is a later slice's, and until it exists nothing but a
+-- migration-level principal can write these rows at all.
+GRANT SELECT ON installment_plans, installments TO daftar_app;
+GRANT SELECT ON installment_plans, installments TO daftar_inventory_internal;
+GRANT SELECT ON installment_plans, installments TO daftar_accounting_internal;
+
 -- ── 3. THE DEFERRED SCHEDULE VERIFIER — `R-SAL-06`, AND THE POLICY'S BOUND ─
 --
 -- `Σ instalments + down = invoice total` spans three relations, so a column
@@ -334,15 +398,39 @@ ALTER TABLE installments FORCE ROW LEVEL SECURITY;
 -- Do not leave it as a third state.» It is DELETED. THIS VERIFIER IS THE
 -- WHOLE BOUND, and a bound with one home cannot be believed in the wrong one.
 
-CREATE CONSTRAINT TRIGGER installment_plans_schedule_complete
-  AFTER INSERT OR UPDATE ON installment_plans
-  DEFERRABLE INITIALLY DEFERRED
-  FOR EACH ROW EXECUTE FUNCTION installment_schedule_verify();
-
-CREATE CONSTRAINT TRIGGER installments_schedule_complete
-  AFTER INSERT OR UPDATE OR DELETE ON installments
-  DEFERRABLE INITIALLY DEFERRED
-  FOR EACH ROW EXECUTE FUNCTION installment_schedule_verify();
+-- ═════════════════════════════════════════════════════════════════════════
+-- THE ORDER OF THESE THREE BLOCKS IS LOAD-BEARING, AND THE PARSER TAUGHT ME
+-- THAT RATHER THAN A REVIEW.
+--
+-- Round 4 shipped this file with the two CONSTRAINT TRIGGERS ABOVE the
+-- function they execute. PostgreSQL resolves the function AT
+-- `CREATE TRIGGER` time, so the first trigger raised
+--
+--     42883: function installment_schedule_verify() does not exist
+--
+-- and, the whole file being one implicit transaction, NOTHING of this slice
+-- was applied. THE SPECIFICATION COULD NEVER HAVE BEEN CREATED AS WRITTEN.
+-- That is this estate's own recorded failure mode, named in the brief, and
+-- three rounds of text-reading laws did not find it — including an
+-- independent challenger who checked for the one instance of it the estate
+-- had recorded (`pg_catalog.coalesce`) and correctly found it absent. ONLY
+-- THE PARSER FOUND IT. It is the whole argument for challenger S7-1 and it is
+-- kept here, like the five prose lessons, because the next author will write
+-- the blocks in the order that reads well rather than the order that applies.
+--
+-- The order below is `0075`'s own, and `0075:632-634` states the second half
+-- of the reason: «The triggers are created while the migrator still owns the
+-- functions (a non-superuser must hold EXECUTE on a function to create a
+-- trigger on it).» So:
+--
+--   1. the function, owned by whoever is applying the migration;
+--   2. the triggers, created while that owner still holds EXECUTE;
+--   3. the authority transfer, last.
+--
+-- Applying as a superuser hides step 2's constraint, which is why the order
+-- follows the predecessor's precedent rather than only what the parser
+-- happened to refuse today.
+-- ═════════════════════════════════════════════════════════════════════════
 
 -- ROUND 4: THE BODY IS WRITTEN HERE, BECAUSE «TRANSCRIBED AT PROMOTION» IS
 -- NOT A BOUND.
@@ -454,10 +542,21 @@ BEGIN
 END;
 $fn$;
 
+CREATE CONSTRAINT TRIGGER installment_plans_schedule_complete
+  AFTER INSERT OR UPDATE ON installment_plans
+  DEFERRABLE INITIALLY DEFERRED
+  FOR EACH ROW EXECUTE FUNCTION installment_schedule_verify();
+
+CREATE CONSTRAINT TRIGGER installments_schedule_complete
+  AFTER INSERT OR UPDATE OR DELETE ON installments
+  DEFERRABLE INITIALLY DEFERRED
+  FOR EACH ROW EXECUTE FUNCTION installment_schedule_verify();
+
 ALTER FUNCTION installment_schedule_verify() OWNER TO daftar_accounting_internal;
 REVOKE ALL ON FUNCTION installment_schedule_verify() FROM PUBLIC;
 COMMENT ON FUNCTION installment_schedule_verify() IS
   'P4-S7 (P4-AL-13, R-SAL-06). At COMMIT, for every ACTIVE installment plan touched: down_payment_minor plus the sum of its installments equals the invoice total EXACTLY — one <> comparison, so below and above are refused together and neither direction can be lost by relaxing one inequality; at least one installment row; seq_no contiguous from 1; and at most the declared ceiling of 60 installments. Otherwise installment.schedule_incomplete, naming which of (a) to (d) failed. It fires on DELETE as well as INSERT and UPDATE, because a schedule can be pushed below the total by deleting a row. It performs NO allocation, reads NO aging, stores nothing, and reads no clock. DEFERRABLE INITIALLY DEFERRED, so a long schedule may be written row by row inside one transaction and is judged once. Internal-owned DEFINER, pinned search_path, no grant; reads only.';
+
 
 -- ── 4. WHAT THIS SPECIFICATION DELIBERATELY DOES NOT CREATE ──────────────
 --
