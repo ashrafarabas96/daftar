@@ -1014,13 +1014,31 @@ function rootWithEvidence(mutate: (dir: string) => void): string {
   return dir;
 }
 
-/** A candidate migration's number, so a plant can name one without this file writing one down. */
-function aCandidateNumber(root: string): string {
+/**
+ * A candidate migration's FILENAME, which is how a plant names its subject
+ * HONESTLY (TL-P4-S4-EVID-01).
+ *
+ * The plants below used to put the bare number in a `//` comment, and that was
+ * the only reason they qualified as measured suites. The derivation has since
+ * been corrected twice — it strips comments before matching, because a suite
+ * that merely TALKS about a migration does not measure it, and it matches
+ * `(?<![0-9])N(?![0-9])` rather than `\bN\b`, because `_` is a word character
+ * so a word boundary FAILS against `0084_phase4_…`, the migration's own
+ * filename. A comment-only plant therefore stopped qualifying, which turned
+ * RP-EC-A red and — worse, because nothing reported it — made RP-EC-E green
+ * over a subject the derivation no longer found at all.
+ *
+ * So a plant names the real filename in CODE. That is an honest signal under
+ * the evidence-ownership rule, and it exercises the digit-neighbour case the
+ * word-boundary shape could not read, so the two corrections are proved by the
+ * plants that depend on them rather than only by their own red proofs.
+ */
+function aCandidateFile(root: string): string {
   const candidates = candidateMigrations(root);
   expect(candidates.length, 'no candidate migration is on disk, so every plant below would be vacuous').toBeGreaterThan(0);
-  const number = /^(\d+)/.exec(candidates[0] ?? '')?.[1];
-  expect(number, `the candidate ${String(candidates[0])} does not begin with a number`).toBeDefined();
-  return number ?? '';
+  const file = candidates[0] ?? '';
+  expect(/^\d+_/.test(file), `the candidate ${file} is not <number>_<name>, so it cannot exercise the underscore case`).toBe(true);
+  return file;
 }
 
 describe("P4-S4 — the evidence table's MEMBERSHIP is derived from the tree, not taken on trust", () => {
@@ -1045,14 +1063,18 @@ describe("P4-S4 — the evidence table's MEMBERSHIP is derived from the tree, no
   });
 
   it('RP-EC-A red: a measured suite added to the tree and NOT added to the table is named', () => {
+    let planted = '';
     const dir = rootWithEvidence((d) => {
-      const number = aCandidateNumber(d);
-      writeFileSync(
-        join(d, 'tests', 'performance', 'receivables-s4-third-budget.test.ts'),
-        `// the ${number} budget\nimport { expect, it } from 'vitest';\nit('red: the third budget is measured', () => expect([1]).not.toEqual([]));\n`,
-        'utf8',
-      );
+      // Named by its real migration PATH, in code, not in a comment: see
+      // `aCandidateFile`. The two assertions after the plant pin both halves,
+      // so this proof cannot go quietly vacuous again.
+      planted = `import { expect, it } from 'vitest';\nconst MIGRATION = 'infrastructure/database/migrations/${aCandidateFile(d)}';\nit('red: the third budget is measured', () => expect([MIGRATION]).not.toEqual([]));\n`;
+      writeFileSync(join(d, 'tests', 'performance', 'receivables-s4-third-budget.test.ts'), planted, 'utf8');
     });
+    expect(planted.includes('//'), 'the plant must not name its subject in a comment — a comment does not qualify a suite').toBe(false);
+    expect(measuredCandidateSuites(dir), 'the plant is not derived as a measured suite at all, so the finding below would be about nothing').toContain(
+      'tests/performance/receivables-s4-third-budget.test.ts',
+    );
     const found = evidenceCoverageProblems(dir);
     expect(
       found.some((m) => m.includes('receivables-s4-third-budget.test.ts') && m.includes('does not name it')),
@@ -1111,27 +1133,45 @@ describe("P4-S4 — the evidence table's MEMBERSHIP is derived from the tree, no
     expect(evidenceCoverageProblems(dir).join(' | ')).toContain('would be vacuous');
   });
 
-  it('RP-EC-E red: a measured suite in a directory the required job reaches only through a `test*` script is NOT a finding', () => {
-    // The reachability half reads npm script BODIES, not only `run:` lines. A
-    // suite under a directory a `test*` script covers is reached, and must not
-    // be reported as unrun — otherwise the law would refuse every integration
-    // suite the moment one named a candidate migration.
-    const dir = rootWithEvidence((d) => {
-      const number = aCandidateNumber(d);
-      mkdirSync(join(d, 'tests', 'guards'), { recursive: true });
-      writeFileSync(
-        join(d, 'tests', 'guards', 'p4s4-reached-by-script.test.ts'),
-        `// the ${number} relations\nimport { expect, it } from 'vitest';\nit('red: reached', () => expect([1]).not.toEqual([]));\n`,
-        'utf8',
-      );
-    });
-    const reach = requiredJobReach(dir);
-    expect(reach.dirs, 'the required job reaches no `tests/` directory through any npm script body').toContain('tests/guards');
+  it('RP-EC-E: the script-body branch of reachability has NO measured subject on this tree, and that is asserted rather than assumed', () => {
+    // WHAT THIS CASE USED TO DO, AND WHY IT PROVED NOTHING (TL-P4-S4-EVID-01).
+    // It planted a suite in `tests/guards`, which a `test*` script body covers,
+    // and asserted the cross-check did NOT report it as unrun — meaning to show
+    // that reachability reads script BODIES and not only `run:` lines.
+    //
+    // But `measuredDirs()` is derived from `S4_EVIDENCE_STEPS`, and every row of
+    // that table lives in `tests/performance`. `tests/guards` is therefore not a
+    // measured directory, the plant was never a measured suite, and a suite the
+    // derivation does not find is not reported as unrun either. The assertion
+    // was true of nothing. It was ALSO naming its migration in a comment, so
+    // the comment-stripping correction left it doubly empty — and because its
+    // assertion is a negative, nothing went red to say so.
+    //
+    // The two sides are DISJOINT on this tree, and that is the honest statement:
+    // the directories a script body reaches are `tests/golden-regression`,
+    // `tests/guards`, `tests/integration` and `tests/security`, and the only
+    // measured directory is `tests/performance`, which no script body covers —
+    // every measured suite is reached by an explicitly named step path instead.
+    // So the script-body branch of `reached()` is live code with no measured
+    // subject, and it cannot be exercised by a plant without moving a table row
+    // or a workflow step, neither of which a proof may do.
+    //
+    // This case therefore asserts the EMPTY INTERSECTION. It goes red the moment
+    // a table row lands in a script-reached directory — which is exactly when
+    // the proof that used to be claimed here becomes writable and is owed.
+    const measured = [...new Set(S4_EVIDENCE_STEPS.map((e) => e.suite.slice(0, e.suite.lastIndexOf('/'))))].sort();
+    const reach = requiredJobReach(REPO);
+    expect(measured.length, 'the table is empty, so there is no measured directory to reason about').toBeGreaterThan(0);
+    expect(reach.dirs.length, 'the required job reaches no directory through any npm script body, so the branch does not exist at all').toBeGreaterThan(0);
     expect(
-      evidenceCoverageProblems(dir).some((m) => m.includes('p4s4-reached-by-script.test.ts') && m.includes('NO step of the required')),
-      'a suite the required job reaches through a `test*` script body was reported as unrun',
-    ).toBe(false);
+      measured.filter((d) => reach.dirs.includes(d)),
+      'a measured directory is now reached through a `test*` script body, so the script-body branch HAS a subject and the red proof this case stands in for is owed: plant a measured suite in that directory and require the cross-check not to report it unrun',
+    ).toEqual([]);
+    // And the measured suites are reached, by named step paths rather than by a
+    // directory — so the disjointness above is not a coverage hole.
+    for (const ev of S4_EVIDENCE_STEPS) expect(reach.paths, `${ev.suite} is a table row no step of the required job names by path`).toContain(ev.suite);
   });
+
   it('RP-EC-F red: a table row NO step of the required job names takes the derivation below its FLOOR and is refused', () => {
     // The workflow side of the same correction. The suite is present and
     // still attributed to this slice; only the step that named it is gone. The
